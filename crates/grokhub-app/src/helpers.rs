@@ -21,6 +21,16 @@ pub fn next_maximized(currently: bool) -> bool {
     !currently
 }
 
+/// Whether the cabin is maximized now. Windows maximizes the undecorated window by
+/// hand to the work area, so winit keeps reporting `false` there; trust our flag.
+pub fn maximized_now(reported: Option<bool>, ours: bool) -> bool {
+    if cfg!(windows) {
+        ours
+    } else {
+        reported.unwrap_or(ours)
+    }
+}
+
 pub fn cabin_menu_should_dismiss(ignore: bool, outside_click: bool) -> bool {
     !ignore && outside_click
 }
@@ -45,6 +55,21 @@ pub fn expand_home(p: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[cfg(windows)]
+    fn maximize_restores_on_windows_though_winit_says_not_maximized() {
+        assert!(!next_maximized(maximized_now(Some(false), true)));
+        assert!(next_maximized(maximized_now(Some(false), false)));
+    }
+
+    #[test]
+    #[cfg(not(windows))]
+    fn maximize_follows_the_window_manager_off_windows() {
+        assert!(!next_maximized(maximized_now(Some(true), false)));
+        assert!(next_maximized(maximized_now(Some(false), true)));
+        assert!(!next_maximized(maximized_now(None, true)));
+    }
 
     #[test]
     fn maximize_toggles_restore() {

@@ -49,7 +49,7 @@ pub fn rotate_trajectory(raw: &str, max_bytes: usize) -> String {
     if raw.len() <= max_bytes {
         return raw.to_string();
     }
-    let keep_from = raw.len().saturating_sub(max_bytes / 2);
+    let keep_from = raw.ceil_char_boundary(raw.len().saturating_sub(max_bytes / 2));
     if let Some(i) = raw[keep_from..].find('\n') {
         raw[keep_from + i + 1..].to_string()
     } else if let Some(i) = raw[..keep_from].rfind('\n') {
@@ -119,6 +119,14 @@ mod tests {
         assert!(kept.contains("line-19"), "{kept}");
         assert!(!kept.contains("line-00"), "{kept}");
         assert!(kept.len() < raw.len(), "{} vs {}", kept.len(), raw.len());
+    }
+
+    #[test]
+    fn rotate_cuts_on_a_char_boundary() {
+        // One line, so the cut falls back to the raw keep_from offset.
+        let raw = format!("x{}y", "é".repeat(50));
+        let kept = rotate_trajectory(&raw, 40);
+        assert_eq!(kept, format!("{}y", "é".repeat(9)));
     }
 
     #[test]

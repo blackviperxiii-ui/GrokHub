@@ -230,7 +230,7 @@ pub fn build_review_digest(input: &ReviewDigest) -> String {
         }
     }
     if out.len() > DIGEST_CHAR_CAP {
-        out.truncate(DIGEST_CHAR_CAP);
+        out.truncate(out.floor_char_boundary(DIGEST_CHAR_CAP));
         out.push_str("\n…\n");
     }
     out
@@ -815,6 +815,22 @@ mod tests {
             minute: 0,
             now_ms: 1,
         }
+    }
+
+    #[test]
+    fn digest_cap_cuts_on_a_char_boundary() {
+        let input = ReviewDigest {
+            user_md: "é".repeat(3_000),
+            ..Default::default()
+        };
+        let digest = build_review_digest(&input);
+        assert!(digest.starts_with("USER.md:\néé"), "{}", &digest[..20]);
+        assert!(
+            digest.ends_with("é\n…\n"),
+            "{:?}",
+            &digest[digest.len() - 12..]
+        );
+        assert_eq!(digest.len(), 5_999 + "\n…\n".len());
     }
 
     #[test]

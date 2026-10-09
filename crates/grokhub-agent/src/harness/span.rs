@@ -320,40 +320,87 @@ fn now_ms() -> u64 {
 
 /// Redact common secret-shaped values in tool args before span write.
 pub fn redact_args(raw: &str) -> String {
-    let mut out = raw.to_string();
+    let mut out = grokhub_core::redact_secrets(raw);
     for key in [
         "password",
         "passwd",
         "passcode",
         "verification_code",
         "api_key",
+        "api-key",
         "apikey",
         "secret",
         "token",
         "authorization",
         "private_key",
     ] {
-        // Crude JSON string value wipe: "password":"…value…" → "password":"%redacted%"
-        let patterns = [
-            format!("\"{key}\":\""),
-            format!("\"{key}\": \""),
-            format!("{key}="),
-        ];
-        for pat in patterns {
-            if let Some(i) = out.to_ascii_lowercase().find(&pat.to_ascii_lowercase()) {
-                let start = i + pat.len();
+        // A key suffix counts too (`access_token`, `client_secret`, `x-api-key`).
+        for (pat, form) in [
+            (format!("{key}\":\""), ValueForm::Json),
+            (format!("{key}\": \""), ValueForm::Json),
+            (format!("{key}\\\":\\\""), ValueForm::EscapedJson),
+            (format!("{key}\\\": \\\""), ValueForm::EscapedJson),
+            (format!("{key}="), ValueForm::Bare),
+            (format!("{key}: "), ValueForm::Bare),
+        ] {
+            let mut from = 0;
+            while let Some(i) = out[from..].to_ascii_lowercase().find(&pat) {
+                let mut start = from + i + pat.len();
+                if key == "authorization" && form == ValueForm::Bare {
+                    let scheme = out[start..]
+                        .split_whitespace()
+                        .next()
+                        .unwrap_or("")
+                        .to_ascii_lowercase();
+                    if matches!(scheme.as_str(), "bearer" | "basic" | "token") {
+                        start += scheme.len() + 1;
+                    }
+                }
                 let rest = &out[start..];
-                let end = if pat.ends_with('=') {
-                    rest.find(|c: char| c.is_whitespace() || c == '&' || c == '"')
-                        .unwrap_or(rest.len())
-                } else {
-                    rest.find('"').unwrap_or(rest.len())
-                };
+                if rest.starts_with("[redacted]") {
+                    from = start;
+                    continue;
+                }
+                let end = form.value_len(rest);
                 out.replace_range(start..start + end, "%redacted%");
+                from = start + "%redacted%".len();
             }
         }
     }
     out
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ValueForm {
+    /// `"key":"value"`, ends at the closing quote, past `\"` escapes.
+    Json,
+    /// `\"key\":\"value\"` inside a JSON string, ends at `\"`.
+    EscapedJson,
+    /// `key=value` or a `key: value` header, ends at whitespace or a quote.
+    Bare,
+}
+
+impl ValueForm {
+    fn value_len(self, rest: &str) -> usize {
+        match self {
+            Self::Json => {
+                let mut escaped = false;
+                for (i, c) in rest.char_indices() {
+                    match c {
+                        _ if escaped => escaped = false,
+                        '\\' => escaped = true,
+                        '"' => return i,
+                        _ => {}
+                    }
+                }
+                rest.len()
+            }
+            Self::EscapedJson => rest.find("\\\"").unwrap_or(rest.len()),
+            Self::Bare => rest
+                .find(|c: char| c.is_whitespace() || matches!(c, '&' | '"' | '\'' | '\\'))
+                .unwrap_or(rest.len()),
+        }
+    }
 }
 
 /// Chat turn the cabin is on, shared with the `--mcp-desktop` process so its
@@ -527,6 +574,27 @@ mod tests {
         assert_eq!(long.claim.chars().count(), CLAIM_CAP);
         let r = redact_args(r#"{"passcode":"9911","verification_code":"424242"}"#);
         assert!(!r.contains("9911") && !r.contains("424242"), "{r}");
+    }
+
+    #[test]
+    fn redact_args_catches_headers_suffixed_keys_and_every_match() {
+        let cmd = r#"{"command":"curl -H 'Authorization: Bearer abcdefghijklmnop1234' -H 'x-api-key: k3y-value-77' https://api.example.com"}"#;
+        let r = redact_args(cmd);
+        assert_eq!(
+            r,
+            r#"{"command":"curl -H 'Authorization: [redacted]' -H 'x-api-key: %redacted%' https://api.example.com"}"#
+        );
+        let r = redact_args(
+            r#"{"access_token":"at-1111","refresh_token":"rt-2222","client_secret":"cs-3333","password":"one","nested":{"password":"two"}}"#,
+        );
+        assert_eq!(
+            r,
+            r#"{"access_token":"%redacted%","refresh_token":"%redacted%","client_secret":"%redacted%","password":"%redacted%","nested":{"password":"%redacted%"}}"#
+        );
+        let r = redact_args(r#"{"password":"ab\"cd-tail"}"#);
+        assert_eq!(r, r#"{"password":"%redacted%"}"#);
+        let r = redact_args(r#"{"args":"{\"token\":\"tk-4444\"}"}"#);
+        assert_eq!(r, r#"{"args":"{\"token\":\"%redacted%\"}"}"#);
     }
 
     #[test]

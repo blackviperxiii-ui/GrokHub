@@ -273,21 +273,24 @@ fn file_uri_path(uri: &str) -> Result<std::path::PathBuf, String> {
     let rest = uri
         .strip_prefix("file://")
         .ok_or_else(|| format!("Screenshot URI is not a local file ({uri})."))?;
-    let mut out = String::new();
+    let mut out = Vec::with_capacity(rest.len());
     let bytes = rest.as_bytes();
     let mut i = 0;
     while i < bytes.len() {
         if bytes[i] == b'%' && i + 2 < bytes.len() {
             let hex = std::str::from_utf8(&bytes[i + 1..i + 3]).unwrap_or("");
             if let Ok(value) = u8::from_str_radix(hex, 16) {
-                out.push(value as char);
+                out.push(value);
                 i += 3;
                 continue;
             }
         }
-        out.push(bytes[i] as char);
+        out.push(bytes[i]);
         i += 1;
     }
+    // Escapes are UTF-8 bytes, not Latin-1 chars: jos%C3%A9 is josé.
+    let out = String::from_utf8(out)
+        .map_err(|_| format!("Screenshot URI is not valid UTF-8 ({uri})."))?;
     Ok(std::path::PathBuf::from(out))
 }
 
@@ -359,6 +362,16 @@ fn run_bin(bin: &str, args: &[String], ms: u64) -> Result<std::process::Output, 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn file_uri_path_decodes_utf8_escapes() {
+        let path =
+            file_uri_path("file:///home/jos%C3%A9/Im%C3%A1genes/Screenshot%20x.png").unwrap();
+        assert_eq!(
+            path,
+            std::path::PathBuf::from("/home/josé/Imágenes/Screenshot x.png")
+        );
+    }
 
     struct Script {
         name: &'static str,

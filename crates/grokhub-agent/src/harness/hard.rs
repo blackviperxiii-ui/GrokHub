@@ -118,7 +118,7 @@ pub fn classify_ask(title: &str, action: &str) -> HardHit {
     if let Some(rule) = ask_click(title, action) {
         return HardHit::Class(rule.class);
     }
-    let slug = title.trim().to_ascii_lowercase().replace([' ', '-'], "_");
+    let slug = title.trim().replace([' ', '-'], "_");
     let typing = field_words(title).iter().any(|w| matches!(w.as_str(), "type" | "typing" | "fill" | "input"));
     if typing && (credential_hint(title) || credential_hint(action)) {
         return HardHit::Class(HardClass::Credentials);
@@ -189,7 +189,7 @@ pub fn desk_classify(tool: &str, args: &serde_json::Value) -> HardHit {
             None => HardHit::None,
         },
         // `delete_files` and any later named tool: the same name words as MCP tools.
-        other => match name_class(&other.to_ascii_lowercase()) {
+        other => match name_class(other) {
             Some(class) => HardHit::Class(class),
             None => HardHit::None,
         },
@@ -499,7 +499,31 @@ fn head_at(words: &[String]) -> Option<usize> {
     while i < words.len() {
         let w = leaf(&words[i]).to_ascii_lowercase();
         match w.as_str() {
-            "sudo" | "doas" | "nohup" | "command" | "exec" => i += 1,
+            "sudo" | "doas" | "nohup" | "command" | "exec" | "time" | "pkexec" | "busybox"
+            | "setsid" => i += 1,
+            // `env FOO=1 reboot`, `nice -n 10 rm`, `timeout -s KILL 5 rm`
+            "env" => {
+                i += 1;
+                while words
+                    .get(i)
+                    .is_some_and(|n| n.starts_with('-') || n.contains('='))
+                {
+                    i += 1;
+                }
+            }
+            "nice" | "ionice" | "timeout" => {
+                i += 1;
+                while let Some(flag) = words.get(i).filter(|n| n.starts_with('-')) {
+                    i += if matches!(flag.as_str(), "-n" | "-c" | "-p" | "-s" | "-k") {
+                        2
+                    } else {
+                        1
+                    };
+                }
+                if w == "timeout" {
+                    i += 1;
+                }
+            }
             "xargs" => {
                 i += 1;
                 while words.get(i).is_some_and(|n| n.starts_with('-')) {
@@ -1059,12 +1083,22 @@ pub fn hard_class(name: &str, arguments: &str) -> Option<HardClass> {
     {
         return Some(HardClass::Credentials);
     }
-    name_class(&lower)
+    name_class(name)
 }
 
 /// Named tools (native, MCP `server__tool`, and the spike stubs).
-fn name_class(name: &str) -> Option<HardClass> {
-    let leaf = name.rsplit("__").next().unwrap_or(name);
+fn name_class(raw: &str) -> Option<HardClass> {
+    let raw_leaf = raw.rsplit("__").next().unwrap_or(raw);
+    // Whole words of an MCP `server__tool` name, so camelCase and hyphens count
+    // (`sendMessage`, `send-email`). Not bare names: a `reply` span is the chat answer.
+    let words = if raw.contains("__") {
+        field_words(raw_leaf)
+    } else {
+        Vec::new()
+    };
+    let word = |set: &[&str]| words.iter().any(|w| set.contains(&w.as_str()));
+    let name = raw.to_ascii_lowercase();
+    let leaf = name.rsplit("__").next().unwrap_or(&name);
     let has = |words: &[&str]| words.iter().any(|w| leaf.contains(w));
     if leaf.starts_with("hard_") {
         return match leaf {
@@ -1075,13 +1109,18 @@ fn name_class(name: &str) -> Option<HardClass> {
             _ => None,
         };
     }
-    if has(MONEY_NAMES) {
+    if has(MONEY_NAMES) || word(MONEY_WORDS) {
         return Some(HardClass::Money);
     }
-    if has(SEND_NAMES) || leaf == "send" || leaf.ends_with("_send") {
+    if has(SEND_NAMES)
+        || leaf == "send"
+        || leaf.ends_with("_send")
+        || word(SEND_WORDS)
+        || words.first().is_some_and(|w| w == "post")
+    {
         return Some(HardClass::Send);
     }
-    if has(DELETE_NAMES) {
+    if has(DELETE_NAMES) || word(DELETE_WORDS) {
         return Some(HardClass::Delete);
     }
     if has(CREDENTIAL_NAMES) {
@@ -1098,6 +1137,13 @@ const SEND_NAMES: &[&str] = &[
 ];
 const DELETE_NAMES: &[&str] = &["delete", "trash", "remove_file", "purge"];
 const CREDENTIAL_NAMES: &[&str] = &["password", "credential", "secret", "api_key", "token_write"];
+/// Whole words in a tool name, for names the phrases above miss (`gmail__reply`,
+/// `stripe__create_charge`, `db__drop_table`). GB rules can't match words; see [`GB_DENY_GAPS`].
+const MONEY_WORDS: &[&str] = &[
+    "buy", "purchase", "pay", "money", "charge", "refund", "transfer",
+];
+const SEND_WORDS: &[&str] = &["send", "reply", "forward", "tweet", "sms", "publish"];
+const DELETE_WORDS: &[&str] = &["drop", "destroy", "erase", "wipe"];
 
 /// Shell command heads per hard class (the first word of a segment, after `sudo` / `doas`).
 const IRREVERSIBLE_HEADS: &[&str] = &[
@@ -1117,8 +1163,10 @@ const CREDENTIAL_PHRASES_SH: &[&str] = &["secret-tool", "gpg --export-secret", "
 const DELETE_PHRASES: &[&str] = &["gio trash", "gio remove", "trash:/", "sendtorecyclebin", "-exec rm ", "-execdir rm "];
 
 fn command_class(cmd: &str) -> Option<HardClass> {
+    // A newline, `$(...)`, `<(...)` and backticks start another command too.
+    let cmd = cmd.replace("$(", ";").replace("<(", ";").replace(">(", ";");
     let segs: Vec<&str> = cmd
-        .split([';', '|', '&'])
+        .split([';', '|', '&', '\n', '\r', '`'])
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .collect();
@@ -1486,6 +1534,77 @@ mod tests {
         assert_eq!(hard_class("run_terminal_command", &sh("sudo reboot")), Some(HardClass::IrreversibleOs));
         assert_eq!(hard_class("run_terminal_command", &sh("cargo test")), None);
         assert_eq!(hard_class("grep", r#"{"pattern":"password"}"#), None);
+    }
+
+    #[test]
+    fn shell_class_sees_past_newlines_substitutions_and_wrappers() {
+        for (cmd, class) in [
+            ("ls\nrm notes.txt", HardClass::Delete),
+            ("ls\r\nrm notes.txt", HardClass::Delete),
+            ("echo $(rm notes.txt)", HardClass::Delete),
+            ("echo `rm notes.txt`", HardClass::Delete),
+            ("diff <(rm a) b", HardClass::Delete),
+            ("env shutdown -h now", HardClass::IrreversibleOs),
+            ("env LANG=C FOO=1 reboot", HardClass::IrreversibleOs),
+            ("time reboot", HardClass::IrreversibleOs),
+            ("pkexec rm -rf /home/u/x", HardClass::Delete),
+            ("busybox rm notes.txt", HardClass::Delete),
+            ("nice -n 10 rm notes.txt", HardClass::Delete),
+            ("timeout 5 shutdown now", HardClass::IrreversibleOs),
+            ("timeout -s KILL 5s rm notes.txt", HardClass::Delete),
+        ] {
+            assert_eq!(
+                hard_class("run_terminal_command", &sh(cmd)),
+                Some(class),
+                "{cmd:?}"
+            );
+            assert_eq!(
+                classify_ask("Run command", cmd),
+                HardHit::Class(class),
+                "ask {cmd:?}"
+            );
+        }
+        for cmd in [
+            "ls\ncargo test",
+            "echo $(date)",
+            "env cargo build",
+            "time cargo test",
+            "timeout 5 ls",
+        ] {
+            assert_eq!(
+                hard_class("run_terminal_command", &sh(cmd)),
+                None,
+                "{cmd:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn mcp_names_with_send_money_and_delete_verbs_are_hard() {
+        for (tool, class) in [
+            ("gmail__reply", HardClass::Send),
+            ("gmail__forward", HardClass::Send),
+            ("twilio__send_sms", HardClass::Send),
+            ("slack__sendMessage", HardClass::Send),
+            ("mail__send-email", HardClass::Send),
+            ("x__post_tweet", HardClass::Send),
+            ("paypal__send_money", HardClass::Money),
+            ("stripe__create_charge", HardClass::Money),
+            ("shop__buy", HardClass::Money),
+            ("bank__transfer", HardClass::Money),
+            ("db__drop_table", HardClass::Delete),
+            ("s3__destroyBucket", HardClass::Delete),
+        ] {
+            assert_eq!(hard_class(tool, "{}"), Some(class), "{tool}");
+        }
+        for tool in [
+            "gmail__list_messages",
+            "slack__get_channel",
+            "github__search_issues",
+            "stripe__list_charges",
+        ] {
+            assert_eq!(hard_class(tool, "{}"), None, "{tool}");
+        }
     }
 
     #[test]
