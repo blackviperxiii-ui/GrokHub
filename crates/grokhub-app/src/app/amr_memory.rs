@@ -11,13 +11,47 @@
 //!   durable chip fields once (deterministic ids, so a rerun adds nothing).
 //! - M3: once a night, after the review, the dream tidies the store
 //!   (`AmrStore::dream_once`). `/memory dream` shows the latest report.
+//! - Retention (card 12): once a day, apart from the dream, notes past
+//!   Settings → Memory retention that are unsure and unlinked are retired
+//!   (`AmrStore::prune_stale`). `/memory prune` runs it now.
 //! - M4 (Spike-3a): a turn with harness spans leaves one `trail` node
 //!   (`harness_turn_end` → `write_turn_trail`); a fact learned from that turn
 //!   links to it with `learned_from_span`.
 
 use super::*;
 
-use grokhub_core::amr::{AmrError, AmrStore, LineWrite, Remembered};
+use grokhub_core::amr::{AmrError, AmrStore, LineWrite, PruneReport, Remembered};
+
+/// A retention pass in flight: the chat that asked, and its answer.
+type PruneLive = (Option<String>, mpsc::Receiver<Result<PruneReport, AmrError>>);
+
+/// Memory retention: the local day it last ran this session and the pass in
+/// flight, with the chat that asked (`/memory prune`) or `None` (the daily run).
+#[derive(Default)]
+pub(super) struct AmrPrune {
+    day: Option<String>,
+    live: Option<PruneLive>,
+}
+
+/// Retention days as the dream's TTL: 0 keeps everything, so no TTL.
+pub(super) fn retention_ttl_days(days: u32) -> u64 {
+    if days == 0 {
+        u64::MAX
+    } else {
+        u64::from(days)
+    }
+}
+
+/// The Settings choices, in days (0 keeps everything).
+pub(super) const RETENTION_CHOICES: [u32; 6] = [30, 60, 90, 180, 365, 0];
+
+pub(super) fn retention_label(days: u32) -> String {
+    if days == 0 {
+        "Keep everything".into()
+    } else {
+        format!("{days} days")
+    }
+}
 
 /// `{config}/amr` with the learned-tier key for private nodes.
 pub(super) fn amr_store_at(dir: &std::path::Path) -> AmrStore {
@@ -342,14 +376,96 @@ impl Cabin {
         }
         let store = self.amr_store(false);
         let today = today.to_string();
+        let ttl_days = retention_ttl_days(self.cfg.amr_retention_days);
         Some(std::thread::spawn(move || {
             let opts = grokhub_core::amr::DreamOpts {
                 date: Some(today),
+                ttl_days,
                 user_md: Some(config::read_memory("USER.md")),
                 ..Default::default()
             };
             let _ = store.dream_once(now, &opts);
         }))
+    }
+}
+
+impl Cabin {
+    /// Once a local day, any hour and apart from the dream: retire unsure,
+    /// unlinked notes past Memory retention. Off the UI thread.
+    pub(super) fn tick_amr_retention(&mut self, today: &str) {
+        if !self.amr_on() || self.amr_prune.day.as_deref() == Some(today) || self.amr_prune.live.is_some() {
+            return;
+        }
+        self.amr_prune.day = Some(today.to_string());
+        self.start_amr_prune(None);
+    }
+
+    /// Settings → Behavior → Memory retention.
+    pub(super) fn ui_memory_retention_row(&mut self, ui: &mut egui::Ui) {
+        let labels: Vec<String> = RETENTION_CHOICES.iter().map(|d| retention_label(*d)).collect();
+        let hint = "Unsure memory notes nothing links to are retired after this long, once a day. Retired notes stay on disk, marked forgotten. /memory prune runs it now.";
+        let current = retention_label(self.cfg.amr_retention_days);
+        if let Some(i) = crate::cards::settings_dropdown(ui, "Memory retention", hint, &current, &labels) {
+            self.cfg.amr_retention_days = RETENTION_CHOICES[i];
+            self.persist_cfg();
+            self.status = format!("Memory retention: {}", retention_label(self.cfg.amr_retention_days));
+        }
+    }
+
+    /// `/memory prune`: run retention now and say what it did in this chat.
+    pub(super) fn run_memory_prune(&mut self) {
+        if !self.amr_on() {
+            self.status = "Memory retention runs in memory repo mode only.".into();
+            return;
+        }
+        if self.amr_prune.live.is_some() {
+            self.status = "Memory retention is already running.".into();
+            return;
+        }
+        let chat = self.visible_thread_id();
+        self.start_amr_prune(Some(chat));
+        self.status = "Running memory retention…".into();
+    }
+
+    fn start_amr_prune(&mut self, chat: Option<String>) {
+        let store = self.amr_store(false);
+        let days = u64::from(self.cfg.amr_retention_days);
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(store.prune_stale(now_ms(), days, grokhub_core::amr::DREAM_STALE_BELOW));
+        });
+        self.amr_prune.live = Some((chat, rx));
+    }
+
+    /// The daily run speaks only when it retired something; `/memory prune` always answers.
+    pub(super) fn poll_amr_prune(&mut self) {
+        let Some((chat, rx)) = self.amr_prune.live.take() else {
+            return;
+        };
+        let done = match rx.try_recv() {
+            Ok(done) => done,
+            Err(mpsc::TryRecvError::Empty) => {
+                self.amr_prune.live = Some((chat, rx));
+                return;
+            }
+            Err(mpsc::TryRecvError::Disconnected) => Err(AmrError::Io("the retention pass stopped".into())),
+        };
+        self.finish_amr_prune(chat.as_deref(), done);
+    }
+
+    pub(super) fn finish_amr_prune(&mut self, chat: Option<&str>, done: Result<PruneReport, AmrError>) {
+        let line = match &done {
+            Ok(report) => report.status_line(),
+            Err(err) => format!("Memory retention didn't run: {err}"),
+        };
+        match chat {
+            Some(chat) => {
+                self.post_into_chat(chat, mark_slash_result(&line));
+                self.status = line;
+            }
+            None if done.as_ref().is_ok_and(|r| !r.retired.is_empty()) => self.status = line,
+            None => {}
+        }
     }
 }
 

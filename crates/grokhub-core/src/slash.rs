@@ -37,6 +37,8 @@ pub enum Slash {
     MemoryShow,
     /// `/memory dream`: the latest AMR dream report, as chat text.
     MemoryDream,
+    /// `/memory prune`: run memory retention now and say what it retired.
+    MemoryPrune,
     Recall(String),
     Board,
     Imagine(String),
@@ -197,6 +199,9 @@ pub fn parse_slash(line: &str) -> Option<Slash> {
             }
             if rest.eq_ignore_ascii_case("dream") {
                 return Some(Slash::MemoryDream);
+            }
+            if rest.eq_ignore_ascii_case("prune") {
+                return Some(Slash::MemoryPrune);
             }
             let note = rest
                 .strip_prefix("note")
@@ -430,6 +435,7 @@ pub fn slash_kind(s: &Slash) -> &'static str {
         Slash::MemoryNote(_) => "memory",
         Slash::MemoryShow => "memory_show",
         Slash::MemoryDream => "memory_dream",
+        Slash::MemoryPrune => "memory_prune",
         Slash::Recall(_) => "recall",
         Slash::Board => "board",
         Slash::Imagine(_) => "imagine",
@@ -762,6 +768,7 @@ pub fn slash_help() -> String {
         "/skill <name> — run a skill",
         "/memory note <fact> — write MEMORY.md",
         "/memory dream — show the last overnight memory tidy (memory repo only)",
+        "/memory prune — retire unsure notes older than Memory retention now (memory repo only)",
         "/learn — reflect this chat into MEMORY.md (alias /learn reflect)",
         "/recall <q> — search memory, learned insights, and chats",
         "/forget <topic> — drop memory lines that mention the topic (whole words)",
@@ -851,6 +858,7 @@ mod tests {
             Some(Slash::MemoryNote("prefer nvim".into()))
         );
         assert_eq!(parse_slash("/memory dream"), Some(Slash::MemoryDream));
+        assert_eq!(parse_slash("/memory prune"), Some(Slash::MemoryPrune));
         assert_eq!(parse_slash("/dream"), Some(Slash::Dream), "/dream stays the Imagine prompt");
         assert_eq!(parse_slash("/recall pi"), Some(Slash::Recall("pi".into())));
         assert_eq!(parse_slash("/forget wifi"), Some(Slash::Forget(Some("wifi".into()))));

@@ -205,6 +205,32 @@ impl DreamReport {
 }
 
 /// The newest `dreams/YYYY-MM-DD.md` under `amr_root` as `(date, text)`.
+/// What one retention pass did (Card 12: on its own schedule, not the dream's).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PruneReport {
+    /// Retention in days; 0 keeps everything.
+    pub days: u64,
+    pub retired: Vec<DreamRetire>,
+    /// Live notes left as they are.
+    pub kept: usize,
+}
+
+impl PruneReport {
+    /// One line for chat or a status bar.
+    pub fn status_line(&self) -> String {
+        if self.days == 0 {
+            return format!("Memory retention: keeping everything ({} notes).", self.kept);
+        }
+        let notes = if self.retired.len() == 1 { "note" } else { "notes" };
+        format!(
+            "Memory retention: retired {} unsure {notes} not updated in {} days, kept {}.",
+            self.retired.len(),
+            self.days,
+            self.kept
+        )
+    }
+}
+
 /// Import reports are not dreams. Creates nothing.
 pub fn latest_dream(amr_root: &Path) -> Option<(String, String)> {
     let read = fs::read_dir(amr_root.join("dreams")).ok()?;
@@ -332,29 +358,8 @@ enum Linked {
 }
 
 impl AmrStore {
-    /// One dream pass at `now_ms` (see the module docs). Deterministic for the
-    /// same store and clock. Refuses scratch before any read. Writes edges,
-    /// tombstones, and `dreams/<date>.md`; never removes a file. A second pass
-    /// the same day that changes nothing leaves that day's report as it is;
-    /// one that does change something appends to it.
-    pub fn dream_once(&self, now_ms: u64, opts: &DreamOpts) -> Result<DreamReport, AmrError> {
-        if self.is_scratch() {
-            return Err(AmrError::Scratch);
-        }
-        let stamp =
-            |days: u64| crate::oauth::unix_ms_to_rfc3339(now_ms.saturating_sub(days * DAY_MS));
-        let recent_cut = stamp(opts.recent_days);
-        let ttl_cut = stamp(opts.ttl_days);
-        let date = opts
-            .date
-            .clone()
-            .unwrap_or_else(|| day_of(&crate::oauth::unix_ms_to_rfc3339(now_ms)).to_string());
-
-        let loaded = self.load_live();
-        let mut nodes = loaded.nodes;
-        // Spike-8a: indexer facts belong to their scope ("Forget these"), not the dream.
-        nodes.retain(|n| !n.source.starts_with(super::SCOPE_SOURCE_PREFIX));
-        nodes.sort_by(rank);
+    /// How every node is linked, from the edge list (trail links don't count).
+    fn link_map(&self) -> Result<BTreeMap<String, Linked>, AmrError> {
         let mut links: BTreeMap<String, Linked> = BTreeMap::new();
         for edge in self.edges()? {
             // Spike-3a trail links say where a note came up, not what it
@@ -378,6 +383,71 @@ impl AmrStore {
             };
             links.insert(edge.to.clone(), Linked::Other);
         }
+        Ok(links)
+    }
+
+    /// The retention pass: tombstone every live note older than `days` with
+    /// confidence below `stale_below` and no edges, the same rule as the
+    /// dream's step 4, without the rest of the dream. `days == 0` keeps
+    /// everything. Indexer scope notes belong to their scope. Never removes a
+    /// file; refuses scratch.
+    pub fn prune_stale(&self, now_ms: u64, days: u64, stale_below: f32) -> Result<PruneReport, AmrError> {
+        if self.is_scratch() {
+            return Err(AmrError::Scratch);
+        }
+        let mut nodes = self.load_live().nodes;
+        nodes.retain(|n| !n.source.starts_with(super::SCOPE_SOURCE_PREFIX));
+        let mut report = PruneReport { days, kept: nodes.len(), ..PruneReport::default() };
+        if days == 0 {
+            return Ok(report);
+        }
+        let cut = crate::oauth::unix_ms_to_rfc3339(now_ms.saturating_sub(days.saturating_mul(DAY_MS)));
+        let date = day_of(&crate::oauth::unix_ms_to_rfc3339(now_ms)).to_string();
+        let links = self.link_map()?;
+        for n in &nodes {
+            if n.confidence >= stale_below || n.updated >= cut || links.contains_key(&n.id) {
+                continue;
+            }
+            let id = NodeId::parse(&n.id)?;
+            report.retired.push(DreamRetire {
+                id: n.id.clone(),
+                quote: quote(n, self.is_sealed(&id)),
+                because: format!("unsure (confidence {}), not updated since {}", n.confidence, day_of(&n.updated)),
+            });
+        }
+        report.retired.sort_by(|a, b| a.id.cmp(&b.id));
+        for r in &report.retired {
+            let id = NodeId::parse(&r.id)?;
+            self.write_tombstone(&id, now_ms, &format!("by: retention {date}\nretired: older than {days} days\n"))?;
+        }
+        report.kept -= report.retired.len();
+        Ok(report)
+    }
+
+    /// One dream pass at `now_ms` (see the module docs). Deterministic for the
+    /// same store and clock. Refuses scratch before any read. Writes edges,
+    /// tombstones, and `dreams/<date>.md`; never removes a file. A second pass
+    /// the same day that changes nothing leaves that day's report as it is;
+    /// one that does change something appends to it.
+    pub fn dream_once(&self, now_ms: u64, opts: &DreamOpts) -> Result<DreamReport, AmrError> {
+        if self.is_scratch() {
+            return Err(AmrError::Scratch);
+        }
+        let stamp =
+            |days: u64| crate::oauth::unix_ms_to_rfc3339(now_ms.saturating_sub(days.saturating_mul(DAY_MS)));
+        let recent_cut = stamp(opts.recent_days);
+        let ttl_cut = stamp(opts.ttl_days);
+        let date = opts
+            .date
+            .clone()
+            .unwrap_or_else(|| day_of(&crate::oauth::unix_ms_to_rfc3339(now_ms)).to_string());
+
+        let loaded = self.load_live();
+        let mut nodes = loaded.nodes;
+        // Spike-8a: indexer facts belong to their scope ("Forget these"), not the dream.
+        nodes.retain(|n| !n.source.starts_with(super::SCOPE_SOURCE_PREFIX));
+        nodes.sort_by(rank);
+        let links = self.link_map()?;
         let link_of = |id: &str| links.get(id).copied().unwrap_or(Linked::None);
         let sealed: Vec<bool> = nodes
             .iter()
@@ -750,6 +820,55 @@ mod tests {
         assert!(store.is_forgotten("old-guess"), "a stale note a trail mentions is still retired");
         assert!(store.is_forgotten("learned"), "a stale fact learned in the turn is still retired");
         assert!(!store.is_forgotten(&trail_id), "the trail stays");
+    }
+
+    /// Card 12 retention: notes older than N days that are unsure and unlinked
+    /// are retired, newer ones kept, with no dream run and no dream report;
+    /// 0 keeps everything.
+    #[test]
+    fn retention_prunes_old_unsure_notes_on_its_own_and_keeps_newer_ones() {
+        let tmp = Tmp::new("retention");
+        let store = fixture(&tmp.0);
+        let middle = node("middle-guess", "Perhaps the tram runs late", 0.2, MIDDLE, &["guess"]);
+        store.remember(&middle).unwrap();
+        let before_files = store.node_file_count();
+
+        let keep = store.prune_stale(NOW, 0, DREAM_STALE_BELOW).unwrap();
+        assert_eq!((keep.retired.len(), keep.kept), (0, 21));
+        assert_eq!(keep.status_line(), "Memory retention: keeping everything (21 notes).");
+
+        // 2026-03-01 is 220 days back, 2026-08-01 is 67: at 90 days only the old ones go.
+        let report = store.prune_stale(NOW, 90, DREAM_STALE_BELOW).unwrap();
+        let ids: Vec<&str> = report.retired.iter().map(|r| r.id.as_str()).collect();
+        assert_eq!(ids, vec!["stale-ferry", "stale-kite"]);
+        assert_eq!(report.kept, 19);
+        assert_eq!(report.status_line(), "Memory retention: retired 2 unsure notes not updated in 90 days, kept 19.");
+        assert_eq!(report.retired[0].because, "unsure (confidence 0.2), not updated since 2026-03-01");
+        assert!(store.is_forgotten("stale-ferry") && store.is_forgotten("stale-kite"));
+        assert!(!store.is_forgotten("stale-linked"), "a linked note stays");
+        assert!(!store.is_forgotten("middle-guess"), "67 days old is inside 90");
+        assert!(!store.is_forgotten("dup-b"), "duplicates are the dream's job");
+        assert_eq!(fs::read_dir(tmp.0.join("dreams")).map(|d| d.count()).unwrap_or(0), 0, "no dream ran");
+        assert_eq!(store.node_file_count(), before_files, "nothing is removed from disk");
+        let stone = fs::read_to_string(tmp.0.join("nodes/stale-ferry.tombstone")).unwrap();
+        assert!(stone.contains("by: retention 2026-10-07\nretired: older than 90 days\n"), "{stone}");
+
+        // Shorter retention reaches the 67-day note; a second pass finds nothing new.
+        let short = store.prune_stale(NOW, 30, DREAM_STALE_BELOW).unwrap();
+        assert_eq!(short.retired.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(), vec!["middle-guess"]);
+        assert_eq!(store.prune_stale(NOW, 30, DREAM_STALE_BELOW).unwrap().retired.len(), 0);
+    }
+
+    /// "Keep everything" reaches the dream as an endless TTL: nothing is retired.
+    #[test]
+    fn an_endless_ttl_retires_nothing() {
+        let tmp = Tmp::new("endless-ttl");
+        let store = AmrStore::at(&tmp.0);
+        store.init().unwrap();
+        store.remember(&node("old-guess", "Maybe the ferry leaves at six", 0.1, OLD, &[])).unwrap();
+        let report = store.dream_once(NOW, &DreamOpts { ttl_days: u64::MAX, ..DreamOpts::default() }).unwrap();
+        assert_eq!(report.retired.len(), 0);
+        assert!(!store.is_forgotten("old-guess"));
     }
 
     #[test]

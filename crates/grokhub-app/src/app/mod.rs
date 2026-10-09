@@ -834,6 +834,8 @@ pub struct Cabin {
     amr_imported: bool,
     /// The local day the AMR dream ran or was skipped (Halt), this session.
     dream_day: Option<String>,
+    /// Memory retention: the day it last ran this session and the pass in flight.
+    amr_prune: amr_memory::AmrPrune,
     session_show_rx: Option<(String, mpsc::Receiver<String>)>,
     import_rx: Option<mpsc::Receiver<ImportOpenclawOut>>,
     inspect_text: String,
@@ -1406,6 +1408,7 @@ impl Cabin {
             reflect_rx: None,
             amr_imported: false,
             dream_day: None,
+            amr_prune: amr_memory::AmrPrune::default(),
             session_show_rx: None,
             import_rx: None,
             inspect_text: String::new(),
@@ -1852,6 +1855,7 @@ impl Cabin {
             reflect_rx: None,
             amr_imported: false,
             dream_day: None,
+            amr_prune: amr_memory::AmrPrune::default(),
             session_show_rx: None,
             import_rx: None,
             inspect_text: String::new(),
@@ -3508,6 +3512,7 @@ impl Cabin {
                     }
                 }
                 HeartbeatAct::Review => {
+                    self.tick_amr_retention(&Self::local_day());
                     if !night_fired && !self.running {
                         self.tick_review();
                         self.tick_night_passes();
@@ -5096,6 +5101,7 @@ impl eframe::App for Cabin {
         self.poll_screen_recording(ctx);
         self.poll_screen_diagnosis();
         self.poll_audio_check(ctx);
+        self.poll_amr_prune();
         self.poll_native_memory();
         self.drain_native_unattended_usage();
         self.poll_sync();
