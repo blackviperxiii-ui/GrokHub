@@ -37,6 +37,10 @@ const DRAG_STEPS: i32 = 8;
 
 /// What a backend says when it cannot open, focus, or list windows here.
 pub const APPS_MSG: &str = "Opening and focusing apps is not available on this desktop.";
+/// What a backend says when it cannot read or change a window's size and place.
+pub const GEOMETRY_MSG: &str = "Reading or changing window size and position is not available on this desktop.";
+/// Largest window side `set_window_geometry` takes, in pixels.
+pub const WINDOW_SIDE_MAX: i64 = 16_384;
 /// What a backend says when it has no trash or Recycle Bin route.
 pub const TRASH_MSG: &str = "Moving to the trash is not available on this desktop.";
 /// Most paths one `delete_files` call may name.
@@ -418,6 +422,17 @@ pub trait DesktopBackend {
     fn list_windows(&mut self) -> Result<DesktopWindows, String> {
         Err(APPS_MSG.into())
     }
+    /// Where the first window whose title contains `title` (any case) is and
+    /// how big it is, in desktop pixels.
+    fn window_geometry(&mut self, title: &str) -> Result<WindowGeom, String> {
+        let _ = title;
+        Err(GEOMETRY_MSG.into())
+    }
+    /// Move and resize that window. Returns its title.
+    fn set_window_geometry(&mut self, title: &str, geom: &WindowGeom) -> Result<String, String> {
+        let _ = (title, geom);
+        Err(GEOMETRY_MSG.into())
+    }
     /// Move these paths to the trash (Linux) or the Recycle Bin (Windows).
     fn trash(&mut self, paths: &[std::path::PathBuf]) -> Result<(), String> {
         let _ = paths;
@@ -437,6 +452,15 @@ pub trait DesktopBackend {
 pub struct ClickTarget {
     pub label: String,
     pub role: String,
+}
+
+/// One window's place and size in desktop pixels (origin may be negative).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WindowGeom {
+    pub x: i32,
+    pub y: i32,
+    pub width: u32,
+    pub height: u32,
 }
 
 /// Top-level windows and the focused one, for the before/after check of
@@ -482,6 +506,7 @@ pub struct DesktopServer<B: DesktopBackend> {
     version: String,
     backend: B,
     shots: HashMap<String, ShotGeom>,
+    watches: crate::file_watch::FileWatches,
 }
 
 impl<B: DesktopBackend> DesktopServer<B> {
@@ -490,6 +515,7 @@ impl<B: DesktopBackend> DesktopServer<B> {
             version: version.into(),
             backend,
             shots: HashMap::new(),
+            watches: crate::file_watch::FileWatches::default(),
         }
     }
 
@@ -646,6 +672,11 @@ impl<B: DesktopBackend> DesktopServer<B> {
             "open_app" => self.tool_open_app(args),
             "focus_window" => self.tool_focus_window(args),
             "delete_files" => self.tool_delete_files(args),
+            "get_window_geometry" => self.tool_get_window_geometry(args),
+            "set_window_geometry" => self.tool_set_window_geometry(args),
+            "watch_path" => self.tool_watch_path(args),
+            "watch_events" => self.tool_watch_events(args),
+            "unwatch_path" => self.tool_unwatch_path(args),
             other => Err(format!("Unknown tool \"{other}\".")),
         }
     }
@@ -804,6 +835,64 @@ impl<B: DesktopBackend> DesktopServer<B> {
         Ok(text_ok(&format!("focused {got}")))
     }
 
+    fn tool_get_window_geometry(&mut self, args: &Value) -> Result<Value, String> {
+        let title = title_arg(args, "get_window_geometry")?;
+        let g = self.backend.window_geometry(title)?;
+        Ok(json!({
+            "content": [{ "type": "text", "text": format!("{title}: {}x{} at {},{}", g.width, g.height, g.x, g.y) }],
+            "structuredContent": { "x": g.x, "y": g.y, "width": g.width, "height": g.height },
+            "isError": false,
+        }))
+    }
+
+    /// Move and resize a window. Soft like `focus_window`: it changes nothing
+    /// that can't be put back, and the lock and switch gates still apply.
+    fn tool_set_window_geometry(&mut self, args: &Value) -> Result<Value, String> {
+        let title = title_arg(args, "set_window_geometry")?;
+        let geom = window_geom_arg(args)?;
+        let got = self.backend.set_window_geometry(title, &geom)?;
+        Ok(text_ok(&format!("moved {got} to {}x{} at {},{}", geom.width, geom.height, geom.x, geom.y)))
+    }
+
+    fn tool_watch_path(&mut self, args: &Value) -> Result<Value, String> {
+        let path = args.get("path").and_then(Value::as_str).unwrap_or("");
+        if path.trim().is_empty() {
+            return Err("watch_path needs path.".into());
+        }
+        let w = self.watches.watch(path)?;
+        let more = if w.truncated { format!(" (only the first {})", crate::file_watch::WATCH_ENTRIES_MAX) } else { String::new() };
+        Ok(json!({
+            "content": [{ "type": "text", "text": format!("watching {} as {} ({} entries{more}); call watch_events with this id", w.path.display(), w.id, w.entries) }],
+            "structuredContent": { "id": w.id, "path": w.path.display().to_string(), "entries": w.entries, "truncated": w.truncated },
+            "isError": false,
+        }))
+    }
+
+    fn tool_watch_events(&mut self, args: &Value) -> Result<Value, String> {
+        let id = args.get("id").and_then(Value::as_str).unwrap_or("");
+        let events = self.watches.events(id)?;
+        let rows: Vec<Value> = events
+            .iter()
+            .map(|e| json!({ "kind": e.kind.as_str(), "path": e.path.display().to_string() }))
+            .collect();
+        let text = if events.is_empty() {
+            "no changes since the last look".to_string()
+        } else {
+            events.iter().map(|e| format!("{} {}", e.kind.as_str(), e.path.display())).collect::<Vec<_>>().join("\n")
+        };
+        Ok(json!({
+            "content": [{ "type": "text", "text": text }],
+            "structuredContent": { "events": rows },
+            "isError": false,
+        }))
+    }
+
+    fn tool_unwatch_path(&mut self, args: &Value) -> Result<Value, String> {
+        let id = args.get("id").and_then(Value::as_str).unwrap_or("");
+        let path = self.watches.unwatch(id)?;
+        Ok(text_ok(&format!("stopped watching {}", path.display())))
+    }
+
     /// The real delete behind a hard card (Spike-1b). Every path is checked
     /// before anything is touched, so a bad path deletes nothing. Folders must
     /// be empty: the card names each path, never what is inside one.
@@ -847,7 +936,34 @@ impl<B: DesktopBackend> DesktopServer<B> {
 }
 
 fn is_input_tool(name: &str) -> bool {
-    matches!(name, "click" | "move" | "drag" | "scroll" | "type" | "key" | "open_app" | "focus_window")
+    matches!(name, "click" | "move" | "drag" | "scroll" | "type" | "key" | "open_app" | "focus_window" | "set_window_geometry")
+}
+
+fn title_arg<'a>(args: &'a Value, tool: &str) -> Result<&'a str, String> {
+    args.get("title")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|t| !t.is_empty())
+        .ok_or_else(|| format!("{tool} needs title."))
+}
+
+/// `x`, `y`, `width` and `height`, all whole numbers; a side is 1 to [`WINDOW_SIDE_MAX`].
+fn window_geom_arg(args: &Value) -> Result<WindowGeom, String> {
+    let num = |k: &str| {
+        args.get(k)
+            .and_then(|v| v.as_i64().or_else(|| v.as_f64().filter(|f| f.fract() == 0.0).map(|f| f as i64)))
+            .ok_or_else(|| format!("set_window_geometry needs a whole-number {k}."))
+    };
+    let (x, y, w, h) = (num("x")?, num("y")?, num("width")?, num("height")?);
+    let side = |n: i64, k: &str| {
+        if (1..=WINDOW_SIDE_MAX).contains(&n) {
+            Ok(n as u32)
+        } else {
+            Err(format!("{k} must be 1 to {WINDOW_SIDE_MAX} pixels."))
+        }
+    };
+    let place = |n: i64, k: &str| i32::try_from(n).map_err(|_| format!("{k} is off the desktop."));
+    Ok(WindowGeom { x: place(x, "x")?, y: place(y, "y")?, width: side(w, "width")?, height: side(h, "height")? })
 }
 
 /// `delete_files` paths: 1 to [`DELETE_FILES_CAP`], absolute, no repeats, each
@@ -1089,6 +1205,42 @@ fn tool_schemas() -> Vec<Value> {
                 "to_trash": { "type": "boolean", "description": "Move to the trash or Recycle Bin instead of deleting." },
             }),
             &["paths"],
+        ),
+        tool(
+            "get_window_geometry",
+            "Where the first window whose title contains this text is and how big it is, in desktop pixels.",
+            json!({ "title": { "type": "string" } }),
+            &["title"],
+        ),
+        tool(
+            "set_window_geometry",
+            "Move and resize the first window whose title contains this text. x and y are its top-left corner in desktop pixels.",
+            json!({
+                "title": { "type": "string" },
+                "x": { "type": "integer" },
+                "y": { "type": "integer" },
+                "width": { "type": "integer", "minimum": 1 },
+                "height": { "type": "integer", "minimum": 1 },
+            }),
+            &["title", "x", "y", "width", "height"],
+        ),
+        tool(
+            "watch_path",
+            "Start watching a file or folder (full path; a folder is watched 4 levels down). Returns an id for watch_events.",
+            json!({ "path": { "type": "string" } }),
+            &["path"],
+        ),
+        tool(
+            "watch_events",
+            "What was created, modified or deleted under a watched path since the last watch_events call (or since watch_path).",
+            json!({ "id": { "type": "string" } }),
+            &["id"],
+        ),
+        tool(
+            "unwatch_path",
+            "Stop a watch started with watch_path.",
+            json!({ "id": { "type": "string" } }),
+            &["id"],
         ),
     ]
 }
@@ -1827,6 +1979,7 @@ mod tests {
         log: Vec<String>,
         fail_moves_while_down: bool,
         down: bool,
+        window: Option<WindowGeom>,
     }
 
     impl DesktopBackend for Fake {
@@ -1899,6 +2052,18 @@ mod tests {
         fn focus_window(&mut self, title: &str) -> Result<String, String> {
             self.log.push(format!("focus:{title}"));
             Ok(format!("{title} — Editor"))
+        }
+        fn window_geometry(&mut self, title: &str) -> Result<WindowGeom, String> {
+            self.log.push(format!("geom:{title}"));
+            match self.window {
+                Some(g) if "notes — editor".contains(&title.to_lowercase()) => Ok(g),
+                _ => Err(format!("No window title has \"{title}\" in it.")),
+            }
+        }
+        fn set_window_geometry(&mut self, title: &str, geom: &WindowGeom) -> Result<String, String> {
+            self.log.push(format!("set-geom:{title}"));
+            self.window = Some(*geom);
+            Ok("notes — Editor".into())
         }
         fn trash(&mut self, paths: &[std::path::PathBuf]) -> Result<(), String> {
             self.log.push(format!("trash:{}", paths.len()));
@@ -1983,6 +2148,11 @@ mod tests {
             "open_app",
             "focus_window",
             "delete_files",
+            "get_window_geometry",
+            "set_window_geometry",
+            "watch_path",
+            "watch_events",
+            "unwatch_path",
         ];
         assert_eq!(tools.len(), names.len());
         for (tool, name) in tools.iter().zip(names) {
@@ -2812,6 +2982,82 @@ mod tests {
         s.backend_mut().locked = true;
         let locked = call(&mut s, on(), "focus_window", json!({ "title": "notes" }));
         assert_eq!(locked["content"][0]["text"], LOCK_MSG);
+    }
+
+    /// Card 12 parity: window geometry reads and round-trips through set,
+    /// bad sizes are refused before the backend, and set waits on the lock
+    /// screen and the switch like the other input tools.
+    #[test]
+    fn window_geometry_round_trips_and_set_is_gated() {
+        let mut s = server();
+        s.backend_mut().window = Some(WindowGeom { x: 10, y: 20, width: 800, height: 600 });
+        let got = call(&mut s, on(), "get_window_geometry", json!({ "title": "Notes" }));
+        assert_eq!(got["content"][0]["text"], "Notes: 800x600 at 10,20");
+        assert_eq!(got["structuredContent"], json!({ "x": 10, "y": 20, "width": 800, "height": 600 }));
+
+        let set = call(&mut s, on(), "set_window_geometry", json!({ "title": "notes", "x": -1900, "y": 0, "width": 1280, "height": 720 }));
+        assert_eq!(set["content"][0]["text"], "moved notes — Editor to 1280x720 at -1900,0");
+        let back = call(&mut s, on(), "get_window_geometry", json!({ "title": "notes" }));
+        assert_eq!(back["structuredContent"], json!({ "x": -1900, "y": 0, "width": 1280, "height": 720 }));
+
+        let before = s.backend_mut().log.len();
+        let zero = call(&mut s, on(), "set_window_geometry", json!({ "title": "notes", "x": 0, "y": 0, "width": 0, "height": 10 }));
+        assert_eq!(zero["content"][0]["text"], "width must be 1 to 16384 pixels.");
+        let half = call(&mut s, on(), "set_window_geometry", json!({ "title": "notes", "x": 0.5, "y": 0, "width": 10, "height": 10 }));
+        assert_eq!(half["content"][0]["text"], "set_window_geometry needs a whole-number x.");
+        let untitled = call(&mut s, on(), "get_window_geometry", json!({ "title": " " }));
+        assert_eq!(untitled["content"][0]["text"], "get_window_geometry needs title.");
+        assert_eq!(s.backend_mut().log.len(), before, "bad args never reach the backend");
+        let missing = call(&mut s, on(), "get_window_geometry", json!({ "title": "Dolphin" }));
+        assert_eq!(missing["content"][0]["text"], "No window title has \"Dolphin\" in it.");
+
+        s.backend_mut().locked = true;
+        let locked = call(&mut s, on(), "set_window_geometry", json!({ "title": "notes", "x": 0, "y": 0, "width": 10, "height": 10 }));
+        assert_eq!(locked["content"][0]["text"], LOCK_MSG);
+        s.backend_mut().locked = false;
+        let off = call(&mut s, CallGate { enabled: false, halted: false }, "set_window_geometry", json!({ "title": "notes", "x": 0, "y": 0, "width": 10, "height": 10 }));
+        assert_eq!(off["content"][0]["text"], OFF_MSG);
+        assert_eq!(s.backend_mut().window, Some(WindowGeom { x: -1900, y: 0, width: 1280, height: 720 }), "refused calls change nothing");
+    }
+
+    /// Card 12 parity: a watch over the MCP tools reports a create, a modify
+    /// and a delete in a temp folder once each, then stops on unwatch.
+    #[test]
+    fn file_watch_tools_report_create_modify_and_delete() {
+        let dir = scratch("watch");
+        std::fs::write(dir.join("a.txt"), "1").unwrap();
+        std::fs::write(dir.join("b.txt"), "2").unwrap();
+        let mut s = server();
+        let started = call(&mut s, on(), "watch_path", json!({ "path": dir.to_str().unwrap() }));
+        assert_eq!(started["structuredContent"]["id"], "w1");
+        assert_eq!(started["structuredContent"]["entries"], 3);
+        let quiet = call(&mut s, on(), "watch_events", json!({ "id": "w1" }));
+        assert_eq!(quiet["content"][0]["text"], "no changes since the last look");
+
+        std::fs::write(dir.join("c.txt"), "3").unwrap();
+        std::fs::write(dir.join("a.txt"), "one more").unwrap();
+        std::fs::remove_file(dir.join("b.txt")).unwrap();
+        let got = call(&mut s, on(), "watch_events", json!({ "id": "w1" }));
+        let p = |n: &str| dir.join(n).display().to_string();
+        assert_eq!(
+            got["structuredContent"]["events"],
+            json!([
+                { "kind": "modified", "path": p("a.txt") },
+                { "kind": "created", "path": p("c.txt") },
+                { "kind": "deleted", "path": p("b.txt") },
+            ])
+        );
+        assert_eq!(got["content"][0]["text"], format!("modified {}\ncreated {}\ndeleted {}", p("a.txt"), p("c.txt"), p("b.txt")));
+
+        let off = call(&mut s, CallGate { enabled: false, halted: false }, "watch_events", json!({ "id": "w1" }));
+        assert_eq!(off["content"][0]["text"], OFF_MSG);
+        let stopped = call(&mut s, on(), "unwatch_path", json!({ "id": "w1" }));
+        assert_eq!(stopped["content"][0]["text"], format!("stopped watching {}", dir.display()));
+        let gone = call(&mut s, on(), "watch_events", json!({ "id": "w1" }));
+        assert_eq!(gone["content"][0]["text"], "No watch \"w1\".");
+        let rel = call(&mut s, on(), "watch_path", json!({ "path": "notes" }));
+        assert_eq!(rel["content"][0]["text"], "\"notes\" is not a full path.");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

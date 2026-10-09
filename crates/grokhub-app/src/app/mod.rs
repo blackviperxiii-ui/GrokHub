@@ -184,6 +184,8 @@ mod model_download_ui;
 mod budget_ui;
 mod provider_ui;
 mod repair_ui;
+mod screen_record_ui;
+mod audio_check_ui;
 mod scope_ui;
 mod indexer_ui;
 mod skill_undo;
@@ -802,6 +804,10 @@ pub struct Cabin {
     permission_mode: PermissionMode,
     /// Spike-0 harness: Full grant, parked hard-class cards, path C hits.
     harness: harness_ui::HarnessState,
+    /// A screen recording in progress (`/record`), with its Stop flag.
+    screen_rec: Option<screen_record_ui::LiveRecording>,
+    screen_diag_rx: Option<mpsc::Receiver<screen_record_ui::DiagDone>>,
+    audio_check: Option<audio_check_ui::LiveAudioCheck>,
     /// Spike-6b: candidates waiting for the ceiling, today's auto budget,
     /// and the ledger lines auto-acts wrote.
     auto_act: proactive_auto::AutoState,
@@ -828,6 +834,8 @@ pub struct Cabin {
     amr_imported: bool,
     /// The local day the AMR dream ran or was skipped (Halt), this session.
     dream_day: Option<String>,
+    /// Memory retention: the day it last ran this session and the pass in flight.
+    amr_prune: amr_memory::AmrPrune,
     session_show_rx: Option<(String, mpsc::Receiver<String>)>,
     import_rx: Option<mpsc::Receiver<ImportOpenclawOut>>,
     inspect_text: String,
@@ -1400,6 +1408,7 @@ impl Cabin {
             reflect_rx: None,
             amr_imported: false,
             dream_day: None,
+            amr_prune: amr_memory::AmrPrune::default(),
             session_show_rx: None,
             import_rx: None,
             inspect_text: String::new(),
@@ -1415,6 +1424,9 @@ impl Cabin {
             grok_ext_q: Vec::new(),
             connector_note: String::new(),
             mcp_doctor_rx: None,
+            screen_rec: None,
+            screen_diag_rx: None,
+            audio_check: None,
             mcp_status: HashMap::new(),
             scroll_to_hooks: false,
             composer_geom: None,
@@ -1843,6 +1855,7 @@ impl Cabin {
             reflect_rx: None,
             amr_imported: false,
             dream_day: None,
+            amr_prune: amr_memory::AmrPrune::default(),
             session_show_rx: None,
             import_rx: None,
             inspect_text: String::new(),
@@ -1858,6 +1871,9 @@ impl Cabin {
             grok_ext_q: Vec::new(),
             connector_note: String::new(),
             mcp_doctor_rx: None,
+            screen_rec: None,
+            screen_diag_rx: None,
+            audio_check: None,
             mcp_status: HashMap::new(),
             scroll_to_hooks: false,
             composer_geom: None,
@@ -2942,6 +2958,14 @@ impl Cabin {
     }
 
     fn doctor_text(&self) -> String {
+        self.doctor_checks()
+            .into_iter()
+            .map(|l| format!("{} {}", if l.ok { "ok" } else { "ERR" }, l.text))
+            .collect::<Vec<_>>()
+            .join(" · ")
+    }
+
+    fn doctor_checks(&self) -> Vec<grokhub_core::DoctorLine> {
         let mut lines = grokhub_core::doctor_lines(self.llm_ready(), true, HUB_KIND);
         lines.extend(grokhub_core::doctor_extras(
             self.last_receipt_ok,
@@ -2950,10 +2974,33 @@ impl Cabin {
         let (ok, text) = grokhub_acp::doctor_grok_line(grokhub_acp::find_grok().as_deref());
         lines.push(grokhub_core::DoctorLine { ok, text });
         lines
-            .into_iter()
-            .map(|l| format!("{} {}", if l.ok { "ok" } else { "ERR" }, l.text))
-            .collect::<Vec<_>>()
-            .join(" · ")
+    }
+
+    /// `/health` from what this session already knows: the last update probe,
+    /// the doctor checks, failing automations, MCP servers and the newest dream.
+    fn health_input(&self) -> grokhub_core::health::HealthInput {
+        let checks = self.doctor_checks();
+        let mut failed: Vec<String> =
+            checks.iter().filter(|l| !l.ok).map(|l| l.text.clone()).collect();
+        for a in &self.automations {
+            if let Some(line) = grokhub_core::automation_health_line(a) {
+                failed.push(format!("Automation {}: {line}", a.name));
+            }
+        }
+        let (servers, server_errs) = crate::native_mcp::health_rows();
+        failed.extend(server_errs);
+        let cli_newer =
+            should_update_cli_alpha(self.cli_installed.as_deref(), self.cli_alpha.as_deref());
+        grokhub_core::health::HealthInput {
+            cabin_update: self
+                .cabin_update_available()
+                .then(|| self.cabin_latest.clone())
+                .flatten(),
+            cli_update: cli_newer.then(|| self.cli_alpha.clone()).flatten(),
+            failed,
+            checked: checks.len() + self.automations.len() + servers,
+            last_dream: grokhub_core::amr::latest_dream(&config::config_dir().join("amr")),
+        }
     }
 
     fn visible_host_receipts(&self) -> Vec<(String, bool)> {
@@ -3465,6 +3512,7 @@ impl Cabin {
                     }
                 }
                 HeartbeatAct::Review => {
+                    self.tick_amr_retention(&Self::local_day());
                     if !night_fired && !self.running {
                         self.tick_review();
                         self.tick_night_passes();
@@ -5050,6 +5098,10 @@ impl eframe::App for Cabin {
         self.poll_privacy();
         self.poll_why();
         self.poll_diagnose();
+        self.poll_screen_recording(ctx);
+        self.poll_screen_diagnosis();
+        self.poll_audio_check(ctx);
+        self.poll_amr_prune();
         self.poll_native_memory();
         self.drain_native_unattended_usage();
         self.poll_sync();
@@ -5279,6 +5331,8 @@ impl eframe::App for Cabin {
         if self.palette_open {
             self.ui_palette(&ctx);
         }
+        self.paint_record_indicator(&ctx);
+        self.paint_listen_indicator(&ctx);
         if self.confirm.as_ref().is_some_and(|c| c.paints_overlay()) {
             self.paint_confirm_overlay(&ctx);
         }

@@ -1,10 +1,11 @@
 //! Streamable HTTP and legacy SSE. Synchronous `ureq` only.
 //!
-//! TODO(oauth): the browser OAuth flow (dynamic client registration, PKCE,
-//! refresh) is not implemented. Requests send only the `Authorization` header
-//! already stored on the server entry (`headers.Authorization` or
-//! `bearerToken` / `bearer_token`). This client does not read credential
-//! files, invent tokens, or open a browser.
+//! Requests send the `Authorization` header the caller hands in: the one on
+//! the server entry (`headers.Authorization`, `bearerToken` / `bearer_token`,
+//! a sealed `tokenRef`), else the server's browser sign-in (`oauth`). This
+//! client does not read credential files or invent tokens. A 401 comes back
+//! as an `HTTP 401` error ([`is_unauthorized`]) so the caller can refresh or
+//! ask for a sign-in.
 
 use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader, Read};
@@ -313,7 +314,7 @@ impl Drop for HttpConn {
     }
 }
 
-fn guard_handshake(url: &str) -> Result<(), String> {
+pub(super) fn guard_handshake(url: &str) -> Result<(), String> {
     crate::harness::guard_quiet(&crate::perm::config_dir(), &crate::harness::EgressReq::new(url, &[]))
 }
 
@@ -336,7 +337,7 @@ fn list_tools(conn: &mut HttpConn, timeout: Duration) -> Result<Vec<RawTool>, St
     Ok(all)
 }
 
-fn agent(read: Duration) -> ureq::Agent {
+pub(super) fn agent(read: Duration) -> ureq::Agent {
     let read = if read.is_zero() {
         Duration::from_secs(60)
     } else {
@@ -415,8 +416,7 @@ fn post_value(
     })
 }
 
-/// User headers from the server entry, then the session id.
-/// `Authorization` is whatever the entry already stored. See the oauth TODO above.
+/// User headers from the server entry (with the sign-in's bearer, if any), then the session id.
 fn apply_headers(
     mut req: ureq::Request,
     headers: &BTreeMap<String, String>,
@@ -430,6 +430,11 @@ fn apply_headers(
         req = req.set("Mcp-Session-Id", sid);
     }
     req
+}
+
+/// The server refused the credentials (or had none): the error [`http_err`] gives a 401.
+pub(super) fn is_unauthorized(err: &str) -> bool {
+    err.contains("HTTP 401")
 }
 
 fn http_err(code: u16, resp: ureq::Response) -> String {

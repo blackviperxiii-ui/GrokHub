@@ -86,6 +86,7 @@ impl Cabin {
                 self.nav = Nav::Memory;
                 self.status = "Memory".into();
             }
+            Slash::MemoryPrune => self.run_memory_prune(),
             Slash::MemoryDream => {
                 let text = amr_memory::memory_dream_text(&config::config_dir());
                 self.live_mut().push(("assistant".into(), mark_slash_result(&text)));
@@ -415,9 +416,12 @@ impl Cabin {
                 }
             }
             Slash::Health => {
-                self.nav = Nav::Settings;
-                self.settings_sec = health_settings_sec();
-                self.status = self.doctor_text();
+                let health = self.health_input();
+                let text = grokhub_core::health::health_block(&health);
+                self.live_mut().push(("assistant".into(), mark_slash_result(&text)));
+                self.stamp_current_access();
+                self.persist();
+                self.status = grokhub_core::health::health_status(&health);
             }
             Slash::Fix => {
                 self.halt_work("Stopped");
@@ -675,6 +679,9 @@ impl Cabin {
             Slash::WhyModels => self.run_why(true),
             Slash::WhyTable => self.run_why_table(),
             Slash::Diagnose => self.run_diagnose(Vec::new(), true),
+            Slash::Record(note) => self.start_screen_recording(note),
+            Slash::RecordStop => self.stop_screen_recording(),
+            Slash::AudioCheck(want) => self.start_audio_check(want),
             Slash::Hub => {
                 self.nav = Nav::Devices;
                 self.status = if self.hub_on {
