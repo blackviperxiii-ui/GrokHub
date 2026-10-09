@@ -15,6 +15,7 @@ use std::time::Duration;
 use serde_json::{json, Value};
 
 use crate::gate::Decision;
+use crate::skills::clip_chars;
 
 const CONTEXT_CAP: usize = 2_000;
 const REASON_CAP: usize = 500;
@@ -297,10 +298,6 @@ pub fn on_session_start(session: &str, workspace: &Path, source: &str) {
     observe(session, workspace, "SessionStart", source, "", "", false);
 }
 
-pub fn on_session_end(session: &str, workspace: &Path, reason: &str) {
-    observe(session, workspace, "SessionEnd", reason, "", "", false);
-}
-
 pub fn on_subagent_start(session: &str, workspace: &Path, name: &str) {
     observe(session, workspace, "SubagentStart", name, "", "", false);
 }
@@ -413,7 +410,7 @@ pub fn after_tool(
                 .as_ref()
                 .and_then(json_deny_reason)
                 .filter(|text| !text.is_empty())
-                .unwrap_or_else(|| clip(proc.stderr.trim(), REASON_CAP));
+                .unwrap_or_else(|| clip_chars(proc.stderr.trim(), REASON_CAP));
             push_note(&mut extra, &fallback(reason));
             continue;
         }
@@ -599,7 +596,7 @@ fn interpret(proc: &crate::tools::shell::HookProc, prompt_or_stop: bool) -> Verd
             .as_ref()
             .and_then(json_deny_reason)
             .filter(|text| !text.is_empty())
-            .unwrap_or_else(|| clip(proc.stderr.trim(), REASON_CAP));
+            .unwrap_or_else(|| clip_chars(proc.stderr.trim(), REASON_CAP));
         return Verdict::Deny {
             reason: fallback(reason),
         };
@@ -679,7 +676,7 @@ fn reason_of(value: &Value) -> String {
         .filter(|text| !text.is_empty())
         .or_else(|| value.get("reason").and_then(|item| item.as_str()))
         .unwrap_or("");
-    clip(text, REASON_CAP)
+    clip_chars(text, REASON_CAP)
 }
 
 fn context_of(value: &Value) -> String {
@@ -688,7 +685,7 @@ fn context_of(value: &Value) -> String {
         .and_then(|item| item.get("additionalContext"));
     let raw = specific.or_else(|| value.get("additionalContext"));
     match raw {
-        Some(Value::String(text)) => clip(text, CONTEXT_CAP),
+        Some(Value::String(text)) => clip_chars(text, CONTEXT_CAP),
         _ => String::new(),
     }
 }
@@ -793,13 +790,6 @@ fn push_note(out: &mut String, text: &str) {
         out.push('\n');
     }
     out.push_str(text);
-}
-
-fn clip(text: &str, max: usize) -> String {
-    if text.chars().count() <= max {
-        return text.to_string();
-    }
-    text.chars().take(max).collect()
 }
 
 fn extract_json(stdout: &str) -> Option<Value> {

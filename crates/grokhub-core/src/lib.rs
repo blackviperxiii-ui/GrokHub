@@ -44,8 +44,10 @@ pub mod xai_signin;
 pub mod imagine_auth;
 pub mod inhabit;
 pub mod learning;
+pub mod local_setup;
 pub mod md;
 pub mod model_registry;
+pub mod model_download;
 pub mod models;
 pub mod oauth;
 pub mod openclaw;
@@ -159,7 +161,6 @@ pub use md::{
 pub use chat_bubble::{
     bubble_max_width, bubble_outer_height, bubble_outer_width, bubble_wrap_width,
     clamp_bubble_outer, clamp_row_width, BUBBLE_MAX_FRAC, BUBBLE_PAD_X, BUBBLE_PAD_Y,
-    BUBBLE_RADIUS,
 };
 pub use chat_job::{
     apply_job_error, apply_stream_snapshot, chat_run_action, chat_run_dot_alpha, chat_run_hint,
@@ -205,7 +206,7 @@ pub use consult::{format_consult_reply, parse_consult};
 pub use context::{
     context_percent, estimate_messages, estimate_messages_from, estimate_tokens, is_result_turn,
     should_auto_compact, should_auto_compact_now, should_trim_result_bodies, trim_result_bodies,
-    trim_result_bodies_in_place, CONTEXT_BUDGET_TOKENS, RECENT_MIN_MESSAGES, RESULT_TRIM_KEEP_HOPS,
+    trim_result_bodies_in_place, CONTEXT_BUDGET_TOKENS, RESULT_TRIM_KEEP_HOPS,
     RESULT_TRIM_THRESHOLD,
 };
 pub use desktop_entry::{desktop_bin_path, desktop_entry_uses_prefix_bin, rewrite_desktop_entry};
@@ -234,7 +235,7 @@ pub use goal::{
     is_auto_continue_prompt, looks_incomplete, next_goal_prompt, parse_fast_topics,
     parse_goal_outcome, reply_needs_followup, should_auto_continue_goal, should_name_thread,
     thread_goal_prompt, visible_goal_step_on_continue, ThreadGoal, FOLLOWUP_MAX_STEPS,
-    FOLLOWUP_PROMPT, GOAL_DROP_AFTER, GOAL_MAX_STEPS,
+    FOLLOWUP_PROMPT, GOAL_DROP_AFTER,
 };
 pub use greeting::{
     classify_greeting, clean_project_title, greeting_fingerprint, greeting_name, greeting_prompt,
@@ -271,7 +272,7 @@ pub use history::{
 pub use host_cite::{host_status_line, last_host_line, summarize_write, unified_diff_cite};
 pub use host_plan::{
     approved_cmds, explain_host_risk, host_risk, move_step, parse_host_plan, plan_from_text,
-    retain_held_plan, step_from_cmd, strip_host_cmd_line, yolo_plan_split, HostPlanStep, HostRisk,
+    retain_held_plan, step_from_cmd, strip_host_cmd_line, HostPlanStep, HostRisk,
 };
 pub use host_safety::{forbidden_reason, mint_host_halt, recall_hits};
 pub use amr::{
@@ -289,7 +290,7 @@ pub use imagine::{
     imagine_image_quality, imagine_image_resolution, imagine_image_shaped,
     imagine_is_network_stall, imagine_is_video_path, imagine_media_click,
     imagine_moderation_blocked, imagine_network_hint, imagine_receipt_path, imagine_request_body,
-    imagine_result_fit, imagine_should_retry_model, imagine_shows_result_above, imagine_slug,
+    imagine_result_fit, imagine_should_retry_model, imagine_slug,
     imagine_stage_h, imagine_stage_visible, imagine_style_label, imagine_toolbox_dock,
     imagine_toolbox_shows_title, imagine_toolbox_top, imagine_video_dur_label,
     imagine_video_duration_secs, imagine_video_fallback_model, imagine_video_poster_args,
@@ -349,12 +350,12 @@ pub use openclaw::{
     default_openclaw_paths, import_memory_file, is_openclaw_workspace, merge_imported_memory,
 };
 pub use organs::{
-    cap_from_text, cap_label, clipboard_context_block, daily_units_blocked, date_out_from,
+    cap_from_text, cap_label, daily_units_blocked, date_out_from,
     greet_from_last_job, last_user_scan, last_user_text, normalize_hm, on_wheel_grab,
     parse_local_clock, passenger_label, plan_room, presence_orb_state, presence_should_stream,
     quiet_hours_active, quiet_hours_choice_label, quiet_hours_menu, redirect_prompt,
-    replay_frame_delay, should_keep_frame, thread_host_receipts, thread_host_receipts_from,
-    LocalClock, MidThoughtGreet, RoomPlan, WallClock, PRESENCE_RING_MS, PRESENCE_WIPE_MS,
+    should_keep_frame, thread_host_receipts, thread_host_receipts_from,
+    LocalClock, MidThoughtGreet, RoomPlan, WallClock, PRESENCE_RING_MS,
 };
 pub use pair::{
     devices_shows_pair_code, hub_pair_url, lan_bind_in_use, make_pair_code, normalize_code,
@@ -368,7 +369,7 @@ pub use paths::{
 };
 pub use project::{
     add_to_folder, clean_project_name, create_folder, create_project, drop_node, drop_selected,
-    expand_host_path_token, expand_project_root, folder_choices, host_cmd_leaves_project,
+    expand_project_root, folder_choices, host_cmd_leaves_project,
     host_hour_blocked, is_under_project, normalize_host_path, project_menu_acts,
     project_menu_label, project_name_from_path, project_slug, project_work_path,
     refund_host_reserved, rename_node, resolve_acp_cwd, resolve_bind_path, restore_bound_path,
@@ -396,7 +397,7 @@ pub use review::{
     build_review_digest, cabin_real_text, dedupe_suggestions, digest_line_from,
     drop_echoed_suggestions,
     dismiss_accepted_auto, merge_suggestion_store, parse_suggest_lines, parse_suggest_skill_patches,
-    partition_suggestions, prune_live_suggestions, review_due, review_status_line,
+    dream_time_line, hour_label, partition_suggestions, prune_live_suggestions, review_due, review_status_line,
     review_system_prompt, skill_from_suggestion, suggestions_from_sessions, DigestLine,
     LearnedSuggestion, ReviewDigest, SkillPatch, SuggestionKind, SuggestionStore,
     CABIN_GITHUB_TOOLS, DIGEST_LINE_CAP, REVIEW_NIGHT_HOUR, SUGGEST_CAP,
@@ -455,7 +456,7 @@ pub use turn_timeline::{
     tool_status_failed, tool_status_running, turn_needs_timeline, turn_says, views_up_to_last_user,
     LiveBlock, LiveKind, ToolRow, TurnPart,
 };
-pub use update::{fetch_channel_tips, switch_clone_to_main, ls_remote_channel_tips, parse_ls_remote_tips, remote_tracking_tips, 
+pub use update::{fetch_channel_tips, switch_clone_to_main, parse_ls_remote_tips, remote_tracking_tips, 
     cabin_overlay_step, cabin_update_notice, cabin_version_newer, cli_alpha_is_newer,
     cli_update_notice, combined_update_cmds, combined_update_cmds_for_host,
     combined_update_cmds_for_host_in, combined_update_cmds_in, combined_update_hint,
@@ -466,10 +467,10 @@ pub use update::{fetch_channel_tips, switch_clone_to_main, ls_remote_channel_tip
     overlay_update_progress, parse_cabin_semver, parse_github_latest_tag,
     parse_installed_cli_version, parse_published_cli_alpha, pending_for_manual_update,
     pending_from_versions, pending_on_channel, restart_acts,
-    restart_argv, restart_bin, settings_update_action_hint, settings_update_hint,
+    restart_argv, restart_bin, settings_update_hint,
     settings_update_label, settings_update_note,
     should_notify_cabin_update, should_show_cli_alpha_update, should_update_cli_alpha,
-    stale_github_origin, systemd_user_restart_args, systemd_user_stop_args, unix_grok_update_cmd,
+    systemd_user_restart_args, systemd_user_stop_args, unix_grok_update_cmd,
     update_check_due, update_chip_label, update_cmds, update_cmds_for, update_cmds_for_host,
     update_cmds_for_host_in, update_cmds_in,
     update_pending, update_plan_steps, update_progress_pct, update_step_label, update_wipes_config,
@@ -488,7 +489,7 @@ pub use verify::{
     verify_script_path, VerifyResult,
 };
 pub use voice::{
-    cabin_eyes_for_turn, dedicated_voice_model, encode_input_audio_append, encode_session_update, hey_grok_on_press,
+    cabin_eyes_for_turn, dedicated_voice_model, encode_session_update, hey_grok_on_press,
     hey_grok_route, hey_grok_starts_ptt, is_voice_error, live_pcm_argv, live_pcm_frame_bytes,
     parse_realtime_event, parse_stt_text, parse_voice_event_text,
     pcm_from_capture, ptt_after_speak, ptt_after_stt, realtime_can_connect,
@@ -520,7 +521,7 @@ pub use update_feed::{
     IDEA_MODIFIED_MAX,
     board_covers_topic, live_generated_ideas, post_generated_ideas, purge_one_off_ideas, purge_template_ideas,
     automation_failed_card,
-    archive_digest, archived_digests, automate_offer_card, automation_done_card, card_matches,
+    archive_digest, archived_digests, automate_offer_card, automation_done_card,
     digest_card, digest_topic_refused, discuss_context, short_takeaway, TAKEAWAY_MAX,
     dismiss_idea, dismiss_update, dismiss_update_at,
     collapse_feed, expire_ideas,
@@ -553,37 +554,6 @@ pub const PRESENCE_PUSH_MIN_MS: u64 = 400;
 
 pub fn should_push_presence(now: u64, last_push_at: u64, min_ms: u64) -> bool {
     now.saturating_sub(last_push_at) >= min_ms
-}
-
-pub fn cap_history_images<T: Clone>(
-    messages: &[T],
-    images_of: impl Fn(&T) -> Option<Vec<String>>,
-    with_images: impl Fn(&T, Option<Vec<String>>) -> T,
-    max: usize,
-) -> Vec<T> {
-    let mut kept = 0usize;
-    let mut out = messages.to_vec();
-    for i in (0..out.len()).rev() {
-        let Some(imgs) = images_of(&out[i]) else {
-            continue;
-        };
-        if imgs.is_empty() {
-            continue;
-        }
-        if kept >= max {
-            out[i] = with_images(&out[i], None);
-            continue;
-        }
-        let room = max - kept;
-        if imgs.len() > room {
-            let slice = imgs[imgs.len() - room..].to_vec();
-            out[i] = with_images(&out[i], Some(slice));
-            kept = max;
-        } else {
-            kept += imgs.len();
-        }
-    }
-    out
 }
 
 pub fn next_failover_tier(tier: &str) -> &'static str {

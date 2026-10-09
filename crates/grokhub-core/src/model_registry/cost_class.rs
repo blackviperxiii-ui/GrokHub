@@ -53,8 +53,6 @@ impl CostClass {
 pub const DEFAULT_CEILING_USD_PER_M: f64 = 15.0;
 /// A `-fast` row priced at least this many times its base is a Fast variant.
 pub const FAST_PRICE_RATIO: f64 = 1.5;
-/// The US regional endpoint's markup (+10%), for the premium card.
-pub const US_ENDPOINT_MARKUP_PCT: u32 = 10;
 
 /// How a route is sent, beyond the model. All off is the plain global route.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]

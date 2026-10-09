@@ -982,7 +982,7 @@ impl Cabin {
             .max(p.last_ideas_ms)
     }
 
-    // ------------------------------------------------------------ ranking inputs
+    // ranking inputs
 
     fn pulse_ledger(&mut self) -> Vec<LedgerEntry> {
         let stale = self
@@ -1062,7 +1062,7 @@ impl Cabin {
             .collect()
     }
 
-    // ------------------------------------------------------------ feed view
+    // feed view
 
     pub(super) fn ui_pulse_feed(&mut self, ui: &mut egui::Ui) {
         let now = now_ms();
@@ -1162,7 +1162,7 @@ impl Cabin {
             .contains(&pc::image_cache_name(url))
     }
 
-    // ------------------------------------------------------------ real images
+    // real images
 
     #[cfg(test)]
     pub(super) fn pulse_view_texture_size(&self, url: &str) -> Option<[usize; 2]> {
@@ -1262,7 +1262,7 @@ impl Cabin {
         }
     }
 
-    // ------------------------------------------------------------ keyboard
+    // keyboard
 
     /// One key on the Ideas view. Up/Down (or J/K) move the focused row; R runs
     /// it in the background, S snoozes, D dismisses, N is Not this, Enter opens,
@@ -1378,7 +1378,7 @@ impl Cabin {
         self.pulse_view.title_hover = title;
     }
 
-    // ------------------------------------------------------------ buttons
+    // buttons
 
     pub(super) fn apply_pulse_act(&mut self, act: PulseAct) {
         match act {
@@ -1561,7 +1561,7 @@ impl Cabin {
         }
     }
 
-    // ------------------------------------------------------------ feed instructions
+    // feed instructions
 
     pub(super) fn open_feed_instructions(&mut self) {
         let text = pc::feed_instructions_or_default(&self.cfg.feed_instructions).to_string();
@@ -1735,7 +1735,7 @@ impl Cabin {
         }
     }
 
-    // ------------------------------------------------------------ migration
+    // migration
 
     /// Once: the old Home deck and Ideas board move into Pulse. Every card,
     /// pin, and reaction is kept; ideas get a category; an older digest brief

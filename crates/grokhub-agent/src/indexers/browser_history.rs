@@ -18,8 +18,6 @@ use super::fs::IndexFs;
 use super::paths::BrowserKind;
 use super::{date_of, index_excluded, Fact};
 
-/// The only tables an indexer may read.
-pub const HISTORY_TABLES: &[&str] = &["moz_places", "urls"];
 /// Most rows read from one profile.
 const ROWS_MAX: u32 = 5000;
 /// Most hosts kept from one browser.

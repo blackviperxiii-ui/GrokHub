@@ -283,14 +283,6 @@ pub fn parse_realtime_event(v: &Value) -> Option<VoiceEvent> {
     }
 }
 
-pub fn encode_input_audio_append(b64_pcm: &str) -> String {
-    serde_json::json!({
-        "type": "input_audio_buffer.append",
-        "audio": b64_pcm,
-    })
-    .to_string()
-}
-
 pub fn redact_cabin_from_memory(text: &str) -> String {
     let mut s = text.to_string();
     for n in ["faces", "webcam", "face"] {

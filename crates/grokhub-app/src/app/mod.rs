@@ -7,7 +7,7 @@ use crate::desktop::{
 };
 use crate::helpers::{
     cabin_menu_should_dismiss, click_project_opens_board, collect_other_chip_threads, expand_home,
-    next_maximized, wants_live_repaint,
+    maximized_now, next_maximized, wants_live_repaint,
 };
 use crate::host::{host_working_dir, resolve_host_cite_path, run_host, run_host_stream};
 use crate::secrets::{self, Secrets};
@@ -138,7 +138,7 @@ use grokhub_core::{
     CHAT_TAIL_FRAMES, CHAT_TAIL_SLACK, CHIP_VISIBLE_MAX, CONTEXT_BUDGET_TOKENS,
     FRAME_CAP, GOAL_DROP_AFTER, HEARTBEAT_MS, HUB_KIND,
     IDLE_REFLECT_MS, IMAGE_FILE_CAP, IMAGINE_ASPECTS, IMAGINE_STYLES, IMAGINE_WALL_GAP, LOOP_MAX,
-    PRESENCE_RING_MS, RESULT_TRIM_KEEP_HOPS, REVIEW_NIGHT_HOUR, SKILL_SAVED_MARK, SKILL_SAVED_NOTE,
+    PRESENCE_RING_MS, RESULT_TRIM_KEEP_HOPS, SKILL_SAVED_MARK, SKILL_SAVED_NOTE,
     TEXT_FILE_CAP, THOUGHT_ROW_LABEL, TRANSCRIBERS, UPDATE_CHECK_EVERY, WALL_GIF_EVERY_MS,
     WALL_GIF_MAX,
 };
@@ -178,6 +178,9 @@ mod inbox_ui;
 mod episode_ui;
 mod privacy_ui;
 mod router_ui;
+mod local_ai_ui;
+mod setup_wizard;
+mod model_download_ui;
 mod budget_ui;
 mod provider_ui;
 mod repair_ui;
@@ -418,6 +421,10 @@ pub struct Cabin {
     persist_idle_key: String,
     persist_rx: Option<mpsc::Receiver<()>>,
     persist_io: Arc<Mutex<()>>,
+    /// The first-run setup wizard (welcome, app setup, on-device model).
+    setup: setup_wizard::SetupWizard,
+    /// Last settings or key write that failed, for the status line.
+    persist_err: Arc<Mutex<Option<String>>>,
     /// Generation of the newest full snapshot handed to a persist worker.
     persist_gen: u64,
     /// What the persist workers have written, so an older snapshot that takes
@@ -1045,6 +1052,8 @@ impl Cabin {
             persist_idle_key: String::new(),
             persist_rx: None,
             persist_io: Arc::new(Mutex::new(())),
+            setup: setup_wizard::SetupWizard::default(),
+            persist_err: Arc::new(Mutex::new(None)),
             persist_gen: 0,
             persist_mark: Arc::new(Mutex::new(PersistMark::default())),
             cfg_slot,
@@ -1498,6 +1507,8 @@ impl Cabin {
             persist_idle_key: String::new(),
             persist_rx: None,
             persist_io: Arc::new(Mutex::new(())),
+            setup: setup_wizard::SetupWizard::default(),
+            persist_err: Arc::new(Mutex::new(None)),
             persist_gen: 0,
             persist_mark: Arc::new(Mutex::new(PersistMark::default())),
             cfg_slot: Arc::new(Mutex::new(CfgSlot { gen: 0, cfg })),
@@ -1920,13 +1931,7 @@ impl Cabin {
             return;
         };
         let size = inner.map(|r| r.size()).unwrap_or(outer.size());
-        #[cfg(windows)]
-        let maximized = {
-            let _ = egui_max;
-            self.win_max
-        };
-        #[cfg(not(windows))]
-        let maximized = egui_max.unwrap_or(self.win_max);
+        let maximized = maximized_now(egui_max, self.win_max);
         if let Some(g) = crate::window::remember_geom(
             self.window_visible,
             maximized,
@@ -3314,6 +3319,19 @@ impl Cabin {
         }
     }
 
+    /// The local time zone's short name (`CDT`) for Settings, read once off
+    /// the UI thread. Empty until then, and on Windows.
+    fn local_zone() -> String {
+        static ZONE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+        static ASKED: std::sync::Once = std::sync::Once::new();
+        ASKED.call_once(|| {
+            std::thread::spawn(|| {
+                let _ = ZONE.set(Self::date_out("+%Z"));
+            });
+        });
+        ZONE.get().cloned().unwrap_or_default()
+    }
+
     fn local_clock() -> LocalClock {
         if let Ok(g) = LAST_CLOCK.lock() {
             if let Some((at, clock, inflight)) = g.as_ref() {
@@ -3449,8 +3467,7 @@ impl Cabin {
                 HeartbeatAct::Review => {
                     if !night_fired && !self.running {
                         self.tick_review();
-                        self.tick_self_review();
-                        self.tick_dream();
+                        self.tick_night_passes();
                     }
                 }
                 HeartbeatAct::Wall => self.tick_wall(),
@@ -4963,18 +4980,26 @@ impl eframe::App for Cabin {
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
         // No background `grok -p` outlives the cabin.
         self.kill_bg_runs();
-        grokhub_agent::halt_all_sessions();
-        self.stop_native_unattended();
-        grokhub_agent::mcp::shutdown_all();
         // The close frame spawned a persist. Wait for it: the process exits right after this,
         // and two writers of app.json share one temp file.
-        let _io = self.persist_io.lock();
-        let mut cfg = self.cfg.clone();
-        cfg.api_key.clear();
-        let _ = crate::config::save(&cfg);
+        {
+            let _io = self.persist_io.lock();
+            let mut cfg = self.cfg.clone();
+            cfg.api_key.clear();
+            let _ = crate::config::save(&cfg);
+        }
         if let Some(tray) = self.tray.take() {
             crate::tray::drop_tray(tray);
         }
+        // A pid file left behind names a pid Windows soon reuses; the next
+        // launch would read it as a running cabin and exit with no window.
+        crate::tray::release_cabin_claim();
+        // `shutdown_all` waits for each MCP server's lock, which a tool call or a
+        // slow server start holds for up to a minute. Settings are saved above.
+        crate::tray::finish_within(Duration::from_secs(2), || {
+            grokhub_agent::halt_all_sessions();
+            grokhub_agent::mcp::shutdown_all();
+        });
     }
 
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
@@ -4988,6 +5013,7 @@ impl eframe::App for Cabin {
             }
         }
         self.poll_job();
+        self.poll_persist_err();
         self.poll_imagine_save();
         self.poll_host_diff();
         self.poll_acp();
@@ -5257,6 +5283,8 @@ impl eframe::App for Cabin {
             self.paint_confirm_overlay(&ctx);
         }
         self.paint_shortcuts(&ctx);
+        self.tick_setup_wizard();
+        self.paint_setup_wizard(&ctx);
         self.ui_plus_overlays(&ctx);
         self.ui_imagine_overlays(&ctx);
         self.ui_project_overlays(&ctx);

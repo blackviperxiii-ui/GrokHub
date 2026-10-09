@@ -18,6 +18,7 @@ use security_findings::{BashSecurityAssessment, ClassifierSecurityFinding};
 
 use crate::gate::{self, Decision, DeskFlags, Gate};
 use crate::perm::{self, Facts};
+use crate::skills::clip_chars;
 use crate::{
     CancelToken, ClientError, ContentPart, InputItem, ModelClient, ResponsesRequest, TurnOutput,
     Usage, DEFAULT_MODEL,
@@ -211,7 +212,7 @@ pub(crate) fn build_judge_request(
             ))],
         });
     }
-    let args = neutralize_headings(&take_chars(arguments, ARG_CHARS));
+    let args = neutralize_headings(&clip_chars(arguments, ARG_CHARS));
     let tool = neutralize_headings(name);
     let transcript = transcript_tail(history);
     input.push(InputItem::Message {
@@ -472,7 +473,7 @@ fn parse_json_value(text: &str) -> Option<Parsed> {
 }
 
 fn clean_reason(raw: &str) -> String {
-    take_chars(
+    clip_chars(
         &raw.split_whitespace().collect::<Vec<_>>().join(" "),
         REASON_MAX,
     )
@@ -491,7 +492,7 @@ fn transcript_tail(history: &[InputItem]) -> String {
         if used >= TAIL_CHARS {
             break;
         }
-        let clipped = take_chars(part, TAIL_CHARS - used);
+        let clipped = clip_chars(part, TAIL_CHARS - used);
         if clipped.is_empty() {
             break;
         }
@@ -519,7 +520,7 @@ fn render_item(item: &InputItem) -> Option<String> {
                 .join("\n");
             format!(
                 "{role}: {}",
-                neutralize_headings(&take_chars(&body, TAIL_CHARS))
+                neutralize_headings(&clip_chars(&body, TAIL_CHARS))
             )
         }
         InputItem::FunctionCall {
@@ -527,13 +528,13 @@ fn render_item(item: &InputItem) -> Option<String> {
         } => {
             format!(
                 "tool {name} {}",
-                neutralize_headings(&take_chars(arguments, 500))
+                neutralize_headings(&clip_chars(arguments, 500))
             )
         }
         InputItem::FunctionCallOutput { output, .. } => {
             format!(
                 "tool result {}",
-                neutralize_headings(&take_chars(output, 500))
+                neutralize_headings(&clip_chars(output, 500))
             )
         }
         _ => return None,
@@ -559,10 +560,6 @@ fn neutralize_headings(text: &str) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n")
-}
-
-fn take_chars(text: &str, max: usize) -> String {
-    text.chars().take(max).collect()
 }
 
 #[cfg(test)]

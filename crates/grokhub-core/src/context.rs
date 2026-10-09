@@ -6,7 +6,6 @@ pub const RESULT_TRIM_THRESHOLD: f32 = 0.50;
 pub const RESULT_TRIM_KEEP_HOPS: usize = 4;
 const RESULT_TRIM_HEAD: usize = 6;
 const RESULT_TRIM_TAIL: usize = 6;
-pub const RECENT_MIN_MESSAGES: usize = 8;
 
 pub fn estimate_tokens(text: &str) -> u32 {
     if text.is_empty() {

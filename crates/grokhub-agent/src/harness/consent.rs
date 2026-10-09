@@ -21,6 +21,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use grokhub_core::now_ms;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -288,13 +289,6 @@ impl ConsentLedger {
 
 pub fn consent_path(config_dir: &Path) -> PathBuf {
     config_dir.join(CONSENT_FILE)
-}
-
-fn now_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0)
 }
 
 fn grant_id(seed: &str) -> String {

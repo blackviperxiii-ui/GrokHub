@@ -555,7 +555,7 @@ impl Cabin {
         let hit = shot
             .action
             .as_deref()
-            .is_some_and(|a| a.trim() == action.trim() || action.contains(a.trim()));
+            .is_some_and(|a| oneshot_covers(a, action));
         if hit {
             shot.action = None;
             shot.step = None;
@@ -1645,9 +1645,38 @@ pub(super) fn paint_click_marker(ui: &egui::Ui, cards: &[&ToolCard]) {
     }
 }
 
+/// The one approved action covers an ask for exactly it, or for a wrapper
+/// around it that adds nothing hard (`rm -f a.md; rm -rf ~` is not covered).
+fn oneshot_covers(approved: &str, action: &str) -> bool {
+    let approved = approved.trim();
+    if approved == action.trim() {
+        return true;
+    }
+    if approved.is_empty() || !action.contains(approved) {
+        return false;
+    }
+    let rest = action.replacen(approved, " ", 1);
+    matches!(hx::classify_ask("", &rest), hx::HardHit::None)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn oneshot_covers_the_approved_action_and_nothing_hard_beside_it() {
+        assert!(oneshot_covers("rm -f draft.md", "rm -f draft.md"));
+        assert!(oneshot_covers("rm -f draft.md", "Run `rm -f draft.md`"));
+        assert!(!oneshot_covers(
+            "rm -f draft.md",
+            "rm -f draft.md; rm -rf ~/Projects"
+        ));
+        assert!(!oneshot_covers(
+            "rm -f draft.md",
+            "rm -f draft.md && shutdown now"
+        ));
+        assert!(!oneshot_covers("rm -f draft.md", "rm -f other.md"));
+    }
 
     fn ask(title: &str, action: &str) -> grokhub_acp::PermissionAsk {
         grokhub_acp::PermissionAsk {

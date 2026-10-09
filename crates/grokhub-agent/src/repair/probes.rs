@@ -192,11 +192,6 @@ fn powershell(id: ProbeId, script: &str) -> ProbeSpec {
     ProbeSpec::new(id, "powershell", &["-NoProfile", "-NonInteractive", "-Command", script])
 }
 
-/// The spec for `id` on `os`, looking up package managers on PATH.
-pub fn probe_spec(id: ProbeId, os: Os) -> Option<ProbeSpec> {
-    probe_spec_with(id, os, &on_path)
-}
-
 /// The spec for `id` on `os`. `has_bin` answers whether a program is on PATH.
 /// `None` when the id isn't for this OS or no known package manager is there.
 pub fn probe_spec_with(id: ProbeId, os: Os, has_bin: &dyn Fn(&str) -> bool) -> Option<ProbeSpec> {
