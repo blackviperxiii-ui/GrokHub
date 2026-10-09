@@ -364,4 +364,35 @@ mod tests {
             PathBuf::from("/tmp/custom.sock")
         );
     }
+
+    /// KWin grants ScreenShot2 only when the `.desktop` Exec resolves to the
+    /// running binary, so both PKGBUILDs must rewrite the relative Exec.
+    #[test]
+    fn pkgbuilds_install_desktop_entry_with_absolute_exec() {
+        let rewrite = "sed -e 's|^Exec=grokhub$|Exec=/usr/bin/grokhub|' \\\n      -e 's|^TryExec=grokhub$|TryExec=/usr/bin/grokhub|' \\\n      packaging/grokhub.desktop >";
+        for (name, pkg, dest) in [
+            (
+                "packaging/PKGBUILD",
+                include_str!("../../../packaging/PKGBUILD"),
+                "\"$pkgdir/usr/share/applications/grokhub.desktop\"",
+            ),
+            (
+                "packaging/aur/PKGBUILD",
+                include_str!("../../../packaging/aur/PKGBUILD"),
+                "\"${pkgdir}/usr/share/applications/grokhub.desktop\"",
+            ),
+        ] {
+            let pkg = pkg.replace("\r\n", "\n");
+            assert!(pkg.contains(&format!("{rewrite}{dest}\n")), "{name} must write Exec=/usr/bin/grokhub");
+            assert!(
+                !pkg.contains("install -Dm644 packaging/grokhub.desktop"),
+                "{name} must not install the relative-Exec .desktop unchanged"
+            );
+        }
+        let desktop = include_str!("../../../packaging/grokhub.desktop").replace("\r\n", "\n");
+        let lines: Vec<&str> = desktop.lines().collect();
+        assert!(lines.contains(&"X-KDE-DBUS-Restricted-Interfaces=org.kde.KWin.ScreenShot2"));
+        assert!(lines.contains(&"Exec=grokhub"), "the PKGBUILD sed matches this exact line");
+        assert!(lines.contains(&"TryExec=grokhub"));
+    }
 }
