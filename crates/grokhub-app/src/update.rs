@@ -693,7 +693,7 @@ mod tests {
         assert_eq!(parsed.channel, build_channel());
         let base = parsed.version.trim_end_matches("-beta");
         assert_eq!(base, env!("CARGO_PKG_VERSION"));
-        assert!(line.starts_with("GrokHub 2.10."), "{line}");
+        assert!(line.starts_with(&format!("GrokHub {}", env!("CARGO_PKG_VERSION"))), "{line}");
         assert_eq!(parsed.branch, env!("GROKHUB_BUILD_BRANCH"));
         assert_eq!(parsed.sha, env!("GROKHUB_BUILD_SHA"));
     }
