@@ -352,8 +352,9 @@ pub struct AppConfig {
     /// that once, and it is never written back.
     #[serde(default, rename = "reasoningEffort", skip_serializing)]
     pub legacy_reasoning_effort: Option<String>,
-    /// Router R3a: the on-device model route (`localModel`). Off by default and
-    /// with no runtime; no Settings row or slash command turns it on.
+    /// Router R3a: the on-device model route for background tasks
+    /// (`localModel`). Off by default; Settings → Cabin defaults turns it on.
+    /// It routes nothing until a local runtime is installed.
     #[serde(default)]
     pub local_model: bool,
     /// Router R3b: the model on a provider you added (`<provider>/<model>`)
@@ -1076,6 +1077,9 @@ mod tests {
         assert!(!loaded.local_model && body.contains("\"localModel\": false"), "{body}");
         let old: AppConfig = serde_json::from_str("{}").expect("empty config");
         assert!(!old.local_model);
+        let on: AppConfig = serde_json::from_str(r#"{"localModel":true}"#).expect("localModel on");
+        assert!(on.local_model);
+        assert!(serde_json::to_string(&on).expect("json").contains("\"localModel\":true"));
         assert!(
             !body.contains("xai-test") && !body.to_ascii_lowercase().contains("apikey"),
             "app.json must omit the leftover console-key field: {body}"

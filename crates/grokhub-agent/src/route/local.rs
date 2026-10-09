@@ -1,16 +1,19 @@
-//! Router R3a: plumbing for an on-device model (§13). It is **off** and has
-//! **no runtime**. `localModel` in `app.json` is `false` by default, and no
-//! Settings row or slash command turns it on; turning it on needs Jeremy's go
-//! and a separate PR that brings a runtime. While it is off the registry has
-//! no `local:*` rows ([`LocalSource`] lists nothing) and [`super::Router::choose`]
-//! drops any `local:*` id, so no route can pick one.
+//! Router R3a: plumbing for an on-device model (§13). It is **off** by
+//! default. `localModel` in `app.json` is `false` until you turn on Settings →
+//! Cabin defaults → "On-device model for background tasks". The route goes
+//! live only while that toggle is on **and** a runtime is [`installed`]; this
+//! build has no runtime (the download lands later), so the toggle alone routes
+//! nothing. While the route is off the registry has no `local:*` rows
+//! ([`LocalSource`] lists nothing) and [`super::Router::choose`] drops any
+//! `local:*` id, so no route can pick one.
 //!
-//! When it is on (only tests switch it on, with a fake [`LocalRuntime`]):
+//! When it is on (tests switch it on with a fake [`LocalRuntime`]):
 //! - a `local:<tier>` route has cost class `included`, no effort menu and a
 //!   context cap of [`LOCAL_CTX_CAP`];
 //! - it is eligible only for [`LOCAL_CLASSES`] (`background:` classify, triage,
 //!   redact, summarize) and as the difficulty estimator, never for
-//!   `prepare:hard` or a step offering a send, delete or credential tool;
+//!   `prepare:hard`, a user-facing class or a step offering a send, delete or
+//!   credential tool;
 //! - with sensitive data and no cloud grant it is the only route ([`privacy_only`]);
 //! - the downshift ladder (battery, low-end device) only changes which tier is live;
 //! - PII is found by regex first, the model second ([`scan_pii`]).
@@ -44,13 +47,21 @@ pub const NO_RUNTIME_MSG: &str = "The on-device model isn't installed.";
 static ENABLED: AtomicBool = AtomicBool::new(false);
 static TIER: AtomicUsize = AtomicUsize::new(0);
 
-/// The cabin sets this from `app.json` `localModel` (default `false`) at start.
+/// The cabin sets this from `app.json` `localModel` (default `false`) every
+/// tick, so the Settings toggle takes effect without a restart.
 pub fn set_enabled(on: bool) {
     ENABLED.store(on, Ordering::SeqCst);
 }
 
+/// The route is live: the toggle is on and a runtime is [`installed`].
 pub fn enabled() -> bool {
-    ENABLED.load(Ordering::SeqCst) || test_on()
+    (ENABLED.load(Ordering::SeqCst) && installed()) || test_on()
+}
+
+/// An on-device runtime and model are present. None in this build, so the
+/// toggle on its own never sends background work to a model that isn't there.
+pub fn installed() -> bool {
+    test_runtime().is_some()
 }
 
 pub fn is_local(id: &str) -> bool {
@@ -200,6 +211,26 @@ impl ForceOn {
         TEST_ON.with(|c| c.set(true));
         TEST_RT.with(|r| *r.borrow_mut() = rt);
         Self
+    }
+}
+
+/// Tests only: a fake runtime installed for this thread, with the flag left to
+/// [`set_enabled`]. Dropping it uninstalls the runtime.
+#[cfg(test)]
+pub(crate) struct Installed;
+
+#[cfg(test)]
+impl Installed {
+    pub(crate) fn with(rt: Arc<dyn LocalRuntime>) -> Self {
+        TEST_RT.with(|r| *r.borrow_mut() = Some(rt));
+        Self
+    }
+}
+
+#[cfg(test)]
+impl Drop for Installed {
+    fn drop(&mut self) {
+        TEST_RT.with(|r| *r.borrow_mut() = None);
     }
 }
 

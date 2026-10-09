@@ -732,6 +732,7 @@ impl Cabin {
                                                             ) {
                                                                 self.refresh_models_now();
                                                             }
+                                                            self.ui_local_model_rows(ui);
                                                             self.ui_provider_rows(ui);
                                                             crate::cards::settings_note(ui, &self.how_auto_picks_lines());
                                                             self.ui_spend_rows(ui);
