@@ -17,7 +17,7 @@ use grokhub_core::outcome::{append_outcome, OutcomeResult, TaskOutcome};
 use super::difficulty::{difficulty, estimate, DifficultyInput};
 use super::ladder::{routine_rung, rung, Band};
 use super::learn::{self, load_state, tuning_path, write_tuning, TuningFile, NEEDS_DATA};
-use super::local::{self, Device, ForceOn, LocalGate, LocalRuntime, LocalSource};
+use super::local::{self, Device, ForceOn, Installed, LocalGate, LocalRuntime, LocalSource};
 use super::log::{Chosen, RouteOutcome, RouteRecord, RouteSignals, ROUTE_TRACE};
 use super::policy::class_row;
 use super::signals::{LedgerOutcomeSource, SpanVerifySource, StubSource};
@@ -314,6 +314,32 @@ fn with_the_flag_on_only_background_work_goes_local_and_sensitive_data_stays_on_
     assert_eq!(estimate(&DifficultyInput { text: "x", ..DifficultyInput::default() }, local::runtime().as_deref()), 0.42);
     let scan = local::scan_pii("mail alice@example.com or call +1 555 010 9999, Alice said", local::runtime().as_deref());
     assert_eq!((scan.redacted.as_str(), scan.regex_hits, scan.model_flag), ("mail [redacted] or call [redacted], Alice said", 2, Some(true)));
+}
+
+#[test]
+fn the_settings_toggle_routes_local_only_while_a_runtime_is_installed() {
+    let reg = fleet();
+    let profiles: BTreeMap<String, ModelProfile> = BTreeMap::new();
+    let table = RoutingTable::default();
+    let pick = |class: &str| Router::choose(&ask(class, LocalGate::now(false, false, false)), &reg, &profiles, &table, 10).model;
+    // Toggle on with nothing installed (this build): the route stays off and background work stays in the cloud.
+    local::set_enabled(true);
+    assert!(!local::installed() && !local::enabled());
+    assert!(LocalSource.fetch().is_err());
+    assert_eq!(pick("background:summarize"), "grok-4.7");
+    // A runtime installed: the toggle goes live for background work only, never for chat.
+    let rt = Installed::with(Arc::new(FakeRt));
+    assert!(local::installed() && local::enabled());
+    assert_eq!(LocalSource.fetch().map(|l| l.models.len()), Ok(2));
+    assert_eq!(pick("background:summarize"), "local:small");
+    assert_eq!(pick("background:triage"), "local:small");
+    assert_eq!(pick("chat:default"), "grok-4.7");
+    // Toggle off: back to the cloud on the next call.
+    local::set_enabled(false);
+    assert!(local::installed() && !local::enabled());
+    assert_eq!(pick("background:summarize"), "grok-4.7");
+    drop(rt);
+    assert!(!local::installed());
 }
 
 #[test]
