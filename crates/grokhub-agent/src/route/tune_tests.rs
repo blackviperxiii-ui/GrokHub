@@ -279,3 +279,20 @@ fn the_live_table_merges_tuned_orders_and_a_rebuild_cannot_drop_them() {
     assert_eq!(order, vec!["b", "a"]);
     assert_eq!(t.rows("chat:default")[0].model, "a", "the saved table is untouched");
 }
+
+#[test]
+fn the_why_card_names_the_model_the_class_the_scores_and_the_day() {
+    let mut c = canary("c");
+    assert_eq!(why_card_text(&c), None, "nothing to explain before a promotion");
+    c.stage = Stage::Watch;
+    // 2026-10-06 15:00 UTC.
+    c.promoted_at = Some(1_791_298_800_000);
+    c.baseline = Some(snap(400, 85.0, 4.0, 0.0100, 2_000));
+    c.promoted_snap = Some(snap(60, 92.0, 3.0, 0.0088, 1_600));
+    let (title, body) = why_card_text(&c).unwrap();
+    assert_eq!(title, "Why grok-4.6 for everyday chat: 92% pass vs 85%, promoted Oct 6");
+    assert_eq!(body, "Auto now runs everyday chat with grok-4.6 first: 12% cheaper and 20% faster over 60 canary steps. Info only; Auto keeps tuning on its own.");
+
+    c.change = Some(Change::Start { effort: "medium".into() });
+    assert_eq!(why_card_text(&c).unwrap().0, "Why Medium for everyday chat: 92% pass vs 85%, promoted Oct 6");
+}
