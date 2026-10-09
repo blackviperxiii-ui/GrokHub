@@ -10,7 +10,7 @@ use grokhub_agent::route::guard::{run_guard, GuardRun};
 use grokhub_agent::route::learn::{self, TuneRun};
 use grokhub_agent::route::local::LocalSource;
 use grokhub_agent::route::signals::{LedgerOutcomeSource, SpanVerifySource};
-use grokhub_agent::route::heal::{heal_messages, joined_messages, pause_msg, HealMsg, HealNotes, Heard, Tier};
+use grokhub_agent::route::heal::{heal_messages, joined_messages, HealMsg, HealNotes, Heard, Tier};
 use grokhub_agent::route::refresh::{fold_health, probe_next, run_refresh, RefreshDone, RefreshJob};
 use grokhub_agent::route::sources::{probe_model, rebuild_table, GrokBuildSource, XaiApiSource};
 use grokhub_core::model_registry::RegistryEvent;
@@ -77,6 +77,8 @@ pub(super) struct RouterUi {
     pub budget: super::budget_ui::BudgetUi,
     /// Router R3b: the "Add a provider" fields and the provider pick the router last heard.
     pub providers: super::provider_ui::ProviderUi,
+    /// A no-route pause waiting on its own for a model to answer.
+    pub wait: super::model_wait_ui::ModelWaitUi,
 }
 
 impl Cabin {
@@ -141,9 +143,10 @@ impl Cabin {
         self.sync_router_pin();
         self.sync_spend();
         self.poll_route_asks();
-        if let Some((_, model, why)) = grokhub_agent::route::live::take_no_route() {
-            self.deliver_heal(HealOut { msgs: vec![pause_msg(&model, &why, &[])], cleared: Vec::new() });
+        if let Some((class, model, _)) = grokhub_agent::route::live::take_no_route() {
+            self.start_model_wait(&class, &model, now_ms());
         }
+        self.poll_model_wait(halted);
         if halted || self.scratch() {
             return;
         }

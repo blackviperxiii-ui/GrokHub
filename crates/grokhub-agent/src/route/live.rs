@@ -207,8 +207,9 @@ fn provider_pick() -> String {
     PROVIDER_PICK.lock().unwrap_or_else(|e| e.into_inner()).clone()
 }
 
-/// The text a call that paused returns: no healthy, included model could take it.
-pub const NO_ROUTE_MSG: &str = "No model in your plan is answering right now, so GrokHub paused this step. Home has what failed and your options.";
+/// The text a call that paused returns: no healthy, included model could take
+/// it. The cabin waits and resumes it on its own ([`super::wait`]).
+pub const NO_ROUTE_MSG: &str = "No model in your plan is answering right now. GrokHub keeps checking and picks this back up on its own once one answers; Home shows which models it's waiting on.";
 
 /// A pause the cabin hasn't shown yet: (class, model, what failed).
 static NO_ROUTE: Mutex<Option<(String, String, String)>> = Mutex::new(None);

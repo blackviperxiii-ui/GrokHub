@@ -254,6 +254,8 @@ pub(super) enum FeedAct {
     Retry(String),
     /// Delete recording on a screen recording card.
     DeleteRecording(String),
+    /// Retry now on a no-route wait card.
+    RetryNow,
 }
 
 /// Done-for-you cards carry a white rule down the left edge, the cabin's
@@ -887,6 +889,7 @@ impl Cabin {
             Some(FeedAct::NeverAgain(id)) => self.done_for_you_never(&id),
             Some(FeedAct::Retry(id)) => self.crash_retry(&id),
             Some(FeedAct::DeleteRecording(id)) => self.arm_delete_recording(&id),
+            Some(FeedAct::RetryNow) => self.retry_model_wait_now(),
             Some(FeedAct::Link(url)) => {
                 self.follow_update_action(Some(UpdateAction::DeepLink { href: url }));
             }
@@ -1829,6 +1832,7 @@ fn paint_full_feed_card(
                             super::pulse_ui::FeedPostAct::DeleteRecording => {
                                 FeedAct::DeleteRecording(card.id.clone())
                             }
+                            super::pulse_ui::FeedPostAct::RetryNow => FeedAct::RetryNow,
                         });
                     }
                 });

@@ -12,7 +12,7 @@ use serde_json::Value;
 
 use grokhub_core::model_registry::cost_class::CostClass;
 use grokhub_core::model_registry::discover::{gb_listing, parse_xai_catalog, CatalogSource, Listing};
-use grokhub_core::model_registry::probe::{run_probe, ProbeCall, ProbeEnv, ProbeReply, ProbeTransport};
+use grokhub_core::model_registry::probe::{run_probe, speed_call, ProbeCall, ProbeEnv, ProbeReply, ProbeTransport};
 use grokhub_core::model_registry::profile::ProbeResult;
 use grokhub_core::model_registry::{ModelMeta, SourceKind};
 
@@ -218,6 +218,22 @@ pub fn probe_model(config_dir: &Path, bearer: &str, meta: &ModelMeta, cost: Cost
         let _ = append_span(config_dir, &probe_span(call, reply));
     };
     run_probe(meta, cost, ProbeEnv { transport: &mut transport, guard: &mut guard_fn, wait: &mut wait, on_call: &mut on_call })
+}
+
+/// One small call to `meta`, for a no-route wait ([`super::wait`]): true when
+/// it answered. Guarded and spanned like the probe; a plan sign-in only.
+pub fn ping_model(config_dir: &Path, bearer: &str, meta: &ModelMeta) -> bool {
+    let _origin = OriginScope::enter(Origin::SelfManage);
+    if guard(config_dir, RESPONSES_URL).is_err() {
+        return false;
+    }
+    let call = speed_call(&meta.id, None);
+    let mut transport = XaiProbeTransport { bearer: bearer.to_string() };
+    let Ok(reply) = transport.send(&call) else {
+        return false;
+    };
+    let _ = append_span(config_dir, &probe_span(&call, &reply));
+    (200..300).contains(&reply.status) && !reply.timed_out
 }
 
 /// Rebuild the routing table when the model list or a profile changed
