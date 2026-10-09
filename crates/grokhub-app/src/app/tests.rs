@@ -16834,6 +16834,7 @@ fn quiet_cabin() -> Cabin {
         mcp_doctor_rx: None,
         screen_rec: None,
         screen_diag_rx: None,
+        audio_check: None,
         mcp_status: HashMap::new(),
         scroll_to_hooks: false,
         composer_geom: None,

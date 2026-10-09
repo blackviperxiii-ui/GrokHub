@@ -2581,6 +2581,32 @@ pub fn screen_recording_dir(card: &UpdateCard) -> Option<&str> {
         .filter(|d| !d.is_empty())
 }
 
+/// An audio check. The title names the input and the problem ("Audio check:
+/// Yeti input clipping at -0.2 dBFS"); the body is the first fix and the
+/// default output. A new check of the same input replaces the card. Open
+/// goes to the full report in its chat.
+pub fn audio_check_card(input: &str, title: &str, summary: &str, thread_id: &str, created_at: u64) -> UpdateCard {
+    let title = clip_line(title, TITLE_CHARS);
+    let summary = clip_line(summary, BODY_CHARS);
+    let input = input.trim();
+    let source = format!("audiocheck:{}", if input.is_empty() { "default" } else { input });
+    let mut card = blank_card(
+        feed_card_id("audiocheck", &source, &title, created_at, true),
+        UpdateKind::AutomationDone,
+        title,
+        (!summary.is_empty()).then_some(summary),
+        created_at,
+    );
+    if !thread_id.trim().is_empty() {
+        card.action = Some(UpdateAction::OpenSession {
+            thread_id: thread_id.trim().to_string(),
+        });
+    }
+    card.source_id = source;
+    refresh_event_why(&mut card);
+    card
+}
+
 /// User saved a clock job or an interval loop.
 /// Home update for a change GrokHub made on its own (Spike-5b): "GrokHub
 /// added connection notes". `kind` is `skill`, `connection`, or
@@ -4101,6 +4127,25 @@ https://xstack.grok.me/post ZEPHYRTAIL"
         assert_eq!(screen_recording_dir(&c), Some("/home/ada/GrokHub/recordings/r1"));
         assert!(!is_crash_card(&c));
         assert_eq!(screen_recording_dir(&crash_card("t1", "Index", "t1", "/retry", 5)), None);
+    }
+
+    #[test]
+    fn an_audio_check_card_names_the_input_and_replaces_the_last_check_of_it() {
+        let c = audio_check_card(
+            "alsa_input.usb-Yeti",
+            "Audio check: Yeti input clipping at -0.2 dBFS",
+            "Lower Yeti's input volume. Default output: HDMI.",
+            "t4",
+            7,
+        );
+        assert_eq!(c.title, "Audio check: Yeti input clipping at -0.2 dBFS");
+        assert_eq!(c.body.as_deref(), Some("Lower Yeti's input volume. Default output: HDMI."));
+        assert_eq!(c.action, Some(UpdateAction::OpenSession { thread_id: "t4".into() }));
+        assert_eq!(c.source_id, "audiocheck:alsa_input.usb-Yeti");
+        assert_eq!(c.id, "audiocheck-audiocheck:alsa_input.usb-Yeti");
+        assert_eq!(audio_check_card("alsa_input.usb-Yeti", "Audio check: later", "", "", 9).id, c.id);
+        assert_eq!(audio_check_card("", "Audio check: x", "", "", 9).source_id, "audiocheck:default");
+        assert_eq!(audio_check_card("", "Audio check: x", "", "", 9).action, None);
     }
 
     #[test]
