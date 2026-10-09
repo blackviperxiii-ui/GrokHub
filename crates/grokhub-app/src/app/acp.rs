@@ -561,6 +561,9 @@ impl Cabin {
                         self.kick_model(false);
                         continue;
                     }
+                    if grokhub_acp::is_sigterm_status(&e) {
+                        self.post_turn_crash();
+                    }
                     self.scheduled_perm = false;
                     // A native engine turn never ran session/new; keep its own error.
                     let e = if native { e } else { grokhub_acp::explain_handshake_error(&e, &self.grok_cwd()) };
@@ -845,6 +848,7 @@ impl Cabin {
                         if paints {
                             self.status.clear();
                         }
+                        self.post_turn_crash();
                         self.abandon_turn_card();
                         self.chat_job_thread = None;
                         self.persist();
