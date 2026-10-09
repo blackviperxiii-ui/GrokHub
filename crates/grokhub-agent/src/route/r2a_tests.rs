@@ -382,6 +382,13 @@ fn the_live_path_keeps_an_episode_on_its_model_and_pauses_with_no_route() {
     let (class, model, why) = live::take_no_route().unwrap();
     assert_eq!((class.as_str(), model.as_str()), ("chat:default", "grok-4.7"));
     assert_eq!(why, "It failed 3 times in a row (server errors or timeouts), so it rests for a while.");
+    // The wait's check finds grok-4.6 answering again: the paused step goes out on it, unasked.
+    let back = super::wait::recheck(&dir, "grok-4.7", NOW + 60_000, &mut |m| m.id == "grok-4.6");
+    assert_eq!(back.as_deref(), Some("grok-4.6"));
+    let f = std::fs::File::options().write(true).open(grokhub_core::model_registry::store::registry_path(&dir)).unwrap();
+    f.set_modified(std::time::SystemTime::now() + std::time::Duration::from_secs(40)).unwrap();
+    assert_eq!(send("grok-4.7", "one more").unwrap(), "grok-4.6");
+    assert_eq!(live::take_no_route(), None);
     let _ = std::fs::remove_dir_all(dir);
 }
 

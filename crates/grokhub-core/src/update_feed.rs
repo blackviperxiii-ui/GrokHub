@@ -2678,6 +2678,14 @@ pub fn self_change_card(kind: &str, name: &str, verb: &str, reason: &str, create
     card
 }
 
+/// A router card whose source starts with this is a no-route wait: it names
+/// the models and the paused step, and carries a Retry now pill.
+pub const MODEL_WAIT_SOURCE_PREFIX: &str = "modelwait:";
+
+pub fn is_model_wait_card(card: &UpdateCard) -> bool {
+    card.source_id.starts_with(MODEL_WAIT_SOURCE_PREFIX)
+}
+
 /// Home update from the router (R2a): a model fell back, was retired, or
 /// joined your plan. Tell-only; `source_id` keys it so one incident posts once.
 pub fn router_update_card(source_id: &str, title: &str, body: &str, created_at: u64) -> UpdateCard {
