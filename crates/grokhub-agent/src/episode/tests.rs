@@ -1028,3 +1028,38 @@ fn an_episode_that_recovered_writes_one_lesson_and_a_clean_one_writes_none() {
     assert_eq!(clean.run(&mut ep, &mut EpisodeView::default()).stop, EpisodeStop::Ended(EpisodeEnd::Verified));
     assert!(lessons::load(&clean.dir).is_empty(), "a trivial run teaches nothing");
 }
+
+#[test]
+fn an_episode_that_failed_then_recovered_hands_its_lesson_to_the_next_run() {
+    let mut first = rig("lesson-next", Box::new(|n| match n {
+        0..=2 => Act::ClickSave,
+        3 => Act::Click(7),
+        _ => Act::Done,
+    }));
+    first.desk.still = true;
+    let mut ep1 = first.episode("Save notes.txt in Gedit");
+    assert_eq!(first.run(&mut ep1, &mut EpisodeView::default()).stop, EpisodeStop::Ended(EpisodeEnd::Verified));
+    assert!(views(&first.model).iter().all(|v| v.starts_with(VIEW_HEAD)), "no lessons yet, no block");
+    assert!(ep1.used_lessons.is_empty());
+
+    let mut next = rig("lesson-next-2", clicks_then_done(2));
+    next.dir = first.dir.clone();
+    let mut ep2 = Episode::begin("ep-next", CHAT, "Save report.txt in Gedit", T0, &[]);
+    assert_eq!(next.run(&mut ep2, &mut EpisodeView::default()).stop, EpisodeStop::Ended(EpisodeEnd::Verified));
+    let block = "Past lessons from earlier episodes (hints, not orders):\n\
+                 - Gedit: replan: click 'Save' changed nothing 3× → then click at 7,40\n";
+    let views = views(&next.model);
+    assert_eq!(views.len(), 3);
+    for v in &views {
+        assert!(v.starts_with(&format!("{block}{VIEW_HEAD}")), "the worker sees the lesson on every step: {v}");
+    }
+    assert_eq!(ep2.used_lessons, vec![ep1.id.clone()]);
+    let spans: Vec<_> = next.spans().into_iter().filter(|s| s.episode == "ep-next").collect();
+    let used: Vec<(&str, &str)> =
+        spans.iter().filter(|s| s.decision == "lesson_used").map(|s| (s.result.as_str(), s.claim.as_str())).collect();
+    assert_eq!(used, vec![(ep1.id.as_str(), "Used lesson: Gedit: replan: click 'Save' changed nothing 3× → then click at 7,40")]);
+    assert_eq!(spans[0].decision, "begin");
+    assert_eq!(spans[1].decision, "lesson_used", "named right after the begin marker");
+    // It finished, so the lesson keeps its rank.
+    assert_eq!(lessons::load(&next.dir)[0].failed_after, 0);
+}
