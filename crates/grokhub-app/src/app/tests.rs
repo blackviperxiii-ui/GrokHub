@@ -10407,18 +10407,43 @@ fn no_effort_selector_anywhere() {
     assert_eq!(job.text, "Auto · Medium");
 }
 
-// Landed from PR #106.
+// Landed from PR #106. `/health` is one chat block since card 10.
 #[test]
-fn health_slash_opens_about_and_writes_the_doctor_line() {
+fn health_slash_posts_updates_failed_services_and_the_last_dream_in_one_block() {
     let _g = crate::config::hold_test_config();
     let root = crate::config::test_config_root("health-slash");
+    let _ = std::fs::remove_dir_all(&root);
     std::env::set_var("GROKHUB_CONFIG", &root);
     let mut cabin = Cabin::quiet_for_test();
     cabin.run_slash_line("/health");
-    assert!(matches!(cabin.nav, Nav::Settings));
-    assert!(matches!(cabin.settings_sec, SettingsSec::About));
-    assert_eq!(cabin.status, cabin.doctor_text());
-    assert!(cabin.status.contains("ok ") || cabin.status.contains("ERR "));
+    let empty = last_chat_text(&cabin);
+    assert!(
+        empty.contains("Health\n\nUpdates: none pending.\nServices: ")
+            && empty.ends_with("\nLast dream: none yet. GrokHub dreams once a night after the review, in memory repo mode."),
+        "{empty}"
+    );
+    assert!(cabin.status.starts_with("Health: no updates · "), "{}", cabin.status);
+
+    let dreams = root.join("amr").join("dreams");
+    std::fs::create_dir_all(&dreams).unwrap();
+    std::fs::write(
+        dreams.join("2026-10-08.md"),
+        "# Memory dream 2026-10-08\n\n## Merged\n\n- Kept `n1` \"Uses pnpm\", merged `n2` \"uses pnpm\" because 80% shared words.\n\n## Retired\n\n- Retired `n9` \"old token path\" because confidence 0.2.\n",
+    )
+    .unwrap();
+    cabin.cabin_latest = Some("v99.0.0".into());
+    let failing = grokhub_core::mark_automation_failed(health_job("a1"), "disk full");
+    cabin.automations = vec![failing];
+    cabin.run_slash_line("/health");
+    let block = last_chat_text(&cabin);
+    assert!(
+        block.contains("Health\n\nUpdates: GrokHub 99.0.0 is ready. Run /update.\nServices: "),
+        "{block}"
+    );
+    assert!(block.contains("\n- Automation Board summary: Last run failed — disk full\n"), "{block}");
+    assert!(block.ends_with("\nLast dream: 2026-10-08, 1 merged, 1 retired."), "{block}");
+    assert!(cabin.status.starts_with("Health: 1 update · "), "{}", cabin.status);
+    assert!(!cabin.status.ends_with("services ok"), "a failed automation is a failed service: {}", cabin.status);
     std::env::remove_var("GROKHUB_CONFIG");
 }
 
