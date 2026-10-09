@@ -74,6 +74,7 @@ pub(crate) fn set_window_geometry(_title: &str, _geom: &WindowGeom) -> Result<St
 
 /// The KWin script body that moves and resizes the first window whose
 /// caption holds `title` (any case).
+#[cfg(target_os = "linux")]
 pub(crate) fn kwin_geometry_script(title: &str, g: &grokhub_core::desktop_mcp::WindowGeom) -> Result<String, String> {
     let want = serde_json::to_string(&title.to_lowercase()).map_err(|e| e.to_string())?;
     Ok(format!(
@@ -590,6 +591,7 @@ mod tests {
         assert!(windows_changed(&before, &focused));
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn the_kwin_geometry_script_matches_the_caption_and_sets_the_frame() {
         let g = grokhub_core::desktop_mcp::WindowGeom { x: -20, y: 40, width: 800, height: 600 };
