@@ -415,9 +415,12 @@ impl Cabin {
                 }
             }
             Slash::Health => {
-                self.nav = Nav::Settings;
-                self.settings_sec = health_settings_sec();
-                self.status = self.doctor_text();
+                let health = self.health_input();
+                let text = grokhub_core::health::health_block(&health);
+                self.live_mut().push(("assistant".into(), mark_slash_result(&text)));
+                self.stamp_current_access();
+                self.persist();
+                self.status = grokhub_core::health::health_status(&health);
             }
             Slash::Fix => {
                 self.halt_work("Stopped");
