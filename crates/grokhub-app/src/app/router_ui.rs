@@ -246,8 +246,7 @@ impl Cabin {
                 }
                 let now = now_ms();
                 for (class, text) in run.reverted {
-                    let card = grokhub_core::suggestion_card(&format!("router-guard:{class}"), "Auto now thinks harder here", &text, now);
-                    grokhub_core::post_update(&mut self.updates, card);
+                    grokhub_core::post_update(&mut self.updates, guard_card(&class, &text, now));
                 }
                 self.persist_updates();
             }
@@ -348,7 +347,7 @@ impl Cabin {
 
     /// Work-tree lines, Home updates and pauses, by tier. Home updates go
     /// through the feed, which holds them in quiet hours.
-    fn deliver_heal(&mut self, heal: HealOut) {
+    pub(super) fn deliver_heal(&mut self, heal: HealOut) {
         let router = &mut self.harness.router;
         router.rows.retain(|(k, _)| !heal.cleared.contains(k));
         router.paused.retain(|k| !heal.cleared.contains(k));
@@ -433,6 +432,13 @@ impl Cabin {
     }
 }
 
+/// The Pulse Suggestion for a class the accuracy guard reverted. The title
+/// names the kind of step ("Auto now thinks harder on everyday chat").
+pub(super) fn guard_card(class: &str, text: &str, now: u64) -> grokhub_core::UpdateCard {
+    let plain = grokhub_agent::route::policy::class_row(class).map_or(class, |row| row.plain);
+    grokhub_core::suggestion_card(&format!("router-guard:{class}"), &format!("Auto now thinks harder on {plain}"), text, now)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -459,10 +465,10 @@ mod tests {
             cleared: Vec::new(),
         });
         assert_eq!(app.harness.router.rows, vec![("unhealthy:grok-4.6".to_string(), row.to_string())]);
-        assert_eq!(app.status, "Paused: no model in your plan is answering");
+        assert_eq!(app.status, "Paused: grok-4.7 isn't answering");
         let titles: Vec<&str> = app.updates.iter().map(|c| c.title.as_str()).collect();
         assert_eq!(titles.len(), 2, "{titles:?}");
-        assert!(titles.contains(&"title retired:grok-4.3") && titles.contains(&"Paused: no model in your plan is answering"));
+        assert!(titles.contains(&"title retired:grok-4.3") && titles.contains(&"Paused: grok-4.7 isn't answering"));
         // The same pause again says nothing; the model answering again clears the row and the pause.
         app.deliver_heal(HealOut { msgs: vec![pause_msg("grok-4.7", "It failed.", &[])], cleared: Vec::new() });
         assert_eq!(app.updates.len(), 2);
