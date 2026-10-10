@@ -66,10 +66,14 @@ struct ScanModel {
     seen: Mutex<String>,
 }
 
+/// The shell call's arguments: `command` run with the fake host first on PATH.
+fn on_host(bin: &str, command: &str) -> String {
+    json!({ "command": format!("PATH='{bin}':\"$PATH\" {command}") }).to_string()
+}
+
 impl ScanModel {
     fn sh(&self, id: &str, command: &str) -> crate::client::FunctionCall {
-        let command = format!("PATH='{}':\"$PATH\" {command}", self.bin);
-        call(id, "run_terminal_command", &json!({ "command": command }).to_string())
+        call(id, "run_terminal_command", &on_host(&self.bin, command))
     }
 }
 
@@ -156,6 +160,13 @@ pub(super) fn system_scan_native() -> (&'static str, u32) {
     if write_host(&bin).is_err() {
         return ("failed: scratch", 0);
     }
+    // The PATH prefix must not hide the command from the hard classes, or
+    // "no card" below would prove nothing.
+    let probe = |cmd| crate::harness::classify("run_terminal_command", &on_host(&bin.to_string_lossy(), cmd));
+    if probe("sudo reboot") == crate::harness::HardHit::None || probe("sudo systemctl --failed") != crate::harness::HardHit::None {
+        let _ = std::fs::remove_dir_all(&dir);
+        return ("failed: PATH prefix hides the command", 0);
+    }
     let model = ScanModel { bin: bin.to_string_lossy().into_owned(), n: AtomicUsize::new(0), seen: Mutex::new(String::new()) };
     let cards = CountCards(AtomicU32::new(0));
     let session = format!("eval-scan-{}", std::process::id());
@@ -219,3 +230,4 @@ pub(super) fn system_scan_native() -> (&'static str, u32) {
         ("covered", turns)
     }
 }
+
