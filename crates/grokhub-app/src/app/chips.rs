@@ -294,7 +294,7 @@ impl Cabin {
         if self.greeting_busy {
             return;
         }
-        if self.cfg.native_engine {
+        if self.cfg.native_engine() {
             self.spawn_native_greeting(prompt);
             return;
         }
@@ -582,7 +582,7 @@ impl Cabin {
         if self.chip_busy {
             return;
         }
-        if self.cfg.native_engine {
+        if self.cfg.native_engine() {
             self.spawn_native_chips();
             return;
         }

@@ -245,7 +245,7 @@ impl Cabin {
     /// `automation`. The job id only, never its instructions.
     pub(super) fn automation_span(&self, trace: &str, job: &str) {
         let args = serde_json::json!({ "job": job }).to_string();
-        let driver = if self.cfg.native_engine { "native" } else { "grok_build" };
+        let driver = if self.cfg.native_engine() { "native" } else { "grok_build" };
         let span = hx::Span::soft_allow(trace, AUTOMATION_TOOL, &args, "started", "scheduled run", self.access_mode(), driver)
             .from_origin(hx::Origin::Automation)
             .on_path("automation");
@@ -264,7 +264,7 @@ impl Cabin {
     }
 
     fn native_bg_target(&self, thread_id: &str) -> bool {
-        self.cfg.native_engine && self.threads.iter().any(|t| t.id == thread_id && t.native)
+        self.cfg.native_engine() && self.threads.iter().any(|t| t.id == thread_id)
     }
 
     fn native_bg_gate(&self) -> grokhub_agent::Gate {

@@ -149,7 +149,7 @@ impl Sandbox {
     fn cabin(&self) -> Cabin {
         let mut cabin = Cabin::quiet_for_test();
         cabin.secrets = crate::secrets::load();
-        cabin.cfg.native_engine = true;
+        cabin.cfg.grok_build_engine = false;
         let mut thread = crate::threads::ChatThread::new("Lab chat", false);
         thread.native = true;
         thread.grok_cwd = Some(self.root.join("work").display().to_string());
@@ -365,7 +365,7 @@ fn native_signin_missing_gives_exact_message() {
     let err = cabin.native_cred().unwrap_err();
     assert_eq!(
         err,
-        "Lab mode uses GrokHub's sign-in, not the Grok CLI's. Sign in with Grok in Settings → Account, or add an API key."
+        "GrokHub signs in on its own now, not through the Grok CLI. Sign in with Grok in Settings → Account, or add an API key."
     );
     assert_eq!(err, NATIVE_NEEDS_CABIN_SIGNIN);
     assert!(!err.contains("test-cli-token"));
@@ -450,7 +450,7 @@ fn imagine_cred_reuses_account_oauth_without_imagine_keychain() {
         future_ms()
     ));
     let mut cabin = sb.cabin();
-    cabin.cfg.native_engine = false;
+    cabin.cfg.grok_build_engine = true;
     assert!(
         cabin.imagine_native.tokens.is_none(),
         "Imagine keychain empty"
@@ -499,7 +499,7 @@ fn kick_imagine_with_account_oauth_starts_without_second_signin() {
         future_ms()
     ));
     let mut cabin = sb.cabin();
-    cabin.cfg.native_engine = false;
+    cabin.cfg.grok_build_engine = true;
     cabin.imagine_native.tokens = None;
     cabin.imagine_prompt = "harbor at dusk".into();
     // Force-key path off; no console key. Account alone must be enough to leave
@@ -537,4 +537,73 @@ fn imagine_need_signin_message_points_at_account_settings() {
         !grokhub_core::IMAGINE_NEED_SIGNIN.contains("for Imagine"),
         "must not push a second Imagine-only sign-in"
     );
+}
+
+fn wait_done(cabin: &Cabin) {
+    let handle = cabin.acp.as_ref().expect("native handle");
+    let start = std::time::Instant::now();
+    loop {
+        assert!(start.elapsed() < Duration::from_secs(20), "no Done");
+        match handle.try_recv() {
+            Ok(grokhub_acp::AcpEvent::Err(e)) => panic!("native turn failed: {e}"),
+            Ok(grokhub_acp::AcpEvent::Done { .. }) => return,
+            Ok(_) => {}
+            Err(_) => std::thread::sleep(Duration::from_millis(10)),
+        }
+    }
+}
+
+#[test]
+fn a_cli_era_chat_moves_to_the_native_engine_with_a_recap_once() {
+    let sb = Sandbox::new("native-adopt");
+    let server = FakeXai::start();
+    set_responses_url_for_test(Some(&format!("{}/v1/responses", server.base)));
+    sb.write_signin(&format!(
+        r#"{{"accessToken":"test-access-token","refreshToken":"test-refresh-token","expiresAt":{},"connectedAt":1}}"#,
+        future_ms()
+    ));
+    let mut cabin = sb.cabin();
+    let turns: Vec<(String, String)> = [
+        ("user", "plan the harbor walk"),
+        ("assistant", "Start at the north pier."),
+        ("user", "what about lunch"),
+    ]
+    .iter()
+    .map(|(r, t)| (r.to_string(), t.to_string()))
+    .collect();
+    {
+        // A chat from the CLI days: a CLI session id and no native flag.
+        let thread = cabin.threads.last_mut().unwrap();
+        thread.native = false;
+        thread.grok_session = Some("cli-sess-7".into());
+        thread.messages = Arc::new(turns.clone());
+    }
+    cabin.messages = Arc::new(turns);
+    assert!(cabin.native_engine_for_current());
+
+    assert!(cabin.kick_native_turn("what about lunch", None, "what about lunch", "Lab chat"));
+    wait_done(&cabin);
+    let thread = cabin.threads.last().unwrap();
+    assert!(thread.native);
+    assert!(!thread.native_carry);
+    assert_eq!(thread.retired_sessions, vec!["cli-sess-7".to_string()]);
+    let sid = thread.grok_session.clone().unwrap();
+    assert!(sid.starts_with("native-"), "{sid}");
+    let sent = server.responses();
+    assert_eq!(sent.len(), 1, "{sent:?}");
+    let body = &sent[0].body;
+    assert!(body.contains("Earlier in this chat (before GrokHub ran it natively):"), "{body}");
+    assert!(body.contains("User: plan the harbor walk"), "{body}");
+    assert!(body.contains("You: Start at the north pier."), "{body}");
+    assert_eq!(body.matches("what about lunch").count(), 1, "{body}");
+
+    assert!(cabin.kick_native_turn("and dinner", None, "and dinner", "Lab chat"));
+    wait_done(&cabin);
+    let sent = server.responses();
+    assert_eq!(sent.len(), 2, "{sent:?}");
+    assert!(sent[1].body.contains("and dinner"), "{}", sent[1].body);
+    // The second request replays the first turn from the session, recap included,
+    // but no new recap is added.
+    assert_eq!(sent[1].body.matches("Earlier in this chat").count(), 1, "{}", sent[1].body);
+    assert_eq!(cabin.threads.last().unwrap().grok_session.as_deref(), Some(sid.as_str()));
 }

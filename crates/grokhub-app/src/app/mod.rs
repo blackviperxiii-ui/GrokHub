@@ -1497,7 +1497,12 @@ impl Cabin {
     pub(super) fn quiet_for_test() -> Self {
         crate::config::use_test_key_store();
         let (grok_sessions_tx, grok_sessions_rx) = mpsc::channel();
-        let cfg = AppConfig::default();
+        let cfg = AppConfig {
+            // Test cabins keep the legacy CLI path these tests were written for;
+            // a native test turns it off. The shipping default is native.
+            grok_build_engine: true,
+            ..AppConfig::default()
+        };
         Self {
             nav: Nav::Chat,
             cfg: cfg.clone(),
@@ -2142,7 +2147,7 @@ impl Cabin {
         self.harness_watch_end();
         self.halt_hard_parks();
         self.withdraw_perm_asks();
-        if self.cfg.native_engine {
+        if self.cfg.native_engine() {
             grokhub_agent::halt_all_sessions();
             self.stop_native_unattended();
         }
@@ -4758,7 +4763,7 @@ impl Cabin {
         if !self.hub_on
             || self.running
             || self.pending_hub_task.is_some()
-            || !inbox_claim_ready(self.can_agent()) && !self.cfg.native_engine
+            || !inbox_claim_ready(self.can_agent()) && !self.cfg.native_engine()
         {
             return;
         }
@@ -4780,7 +4785,7 @@ impl Cabin {
             self.pending_hub_task = Some(t.id.clone());
             self.land_on_real_chat();
             self.send_scheduled_chat(format!("[from {}] {}", t.from_name, t.prompt));
-            if self.cfg.native_engine
+            if self.cfg.native_engine()
                 && !self.running
                 && self.pending_kick.is_none()
                 && self.grok_p_rx.is_none()

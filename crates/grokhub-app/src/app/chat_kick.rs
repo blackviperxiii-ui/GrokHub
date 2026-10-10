@@ -32,15 +32,12 @@ impl Cabin {
             return;
         }
         self.begin_turn_origin();
-        let thread_native = self
-            .threads
-            .get(self.thread_idx)
-            .is_some_and(|thread| thread.native);
+        let thread_native = self.threads.get(self.thread_idx).is_some();
         if self.apply_unparsed_native_slash(&text) {
             return;
         }
         if let Some(recipe) =
-            grokhub_agent::native_deep_research_prompt(self.cfg.native_engine, thread_native, &text)
+            grokhub_agent::native_deep_research_prompt(self.cfg.native_engine(), thread_native, &text)
         {
             text = recipe;
         }
@@ -112,11 +109,11 @@ impl Cabin {
             Self::local_clock().hour as u8,
         );
         remember_home_surface(&mut self.chip_memory, "chat", now_ms());
-        if !persist_user_turn(self.can_agent() || (self.cfg.native_engine && self.scheduled_perm)) {
+        if !persist_user_turn(self.agent_ready()) {
             self.hands_attach = false;
             self.eyes_attach = false;
             self.speak_next = false;
-            self.status = "Install Grok Build (x.ai/cli) or Connect Grok in Settings".into();
+            self.status = self.no_agent_note().into();
             return;
         }
         if let Some(name) = self.attach_name.clone() {
@@ -206,10 +203,10 @@ impl Cabin {
         // A card from an attempt that never reached Done (error, retry, halt)
         // must not land under this reply.
         self.harness.pending_findings = None;
-        if !self.can_agent() && !(self.cfg.native_engine && self.scheduled_perm) {
+        if !self.agent_ready() {
             self.running = false;
             self.chat_job_thread = None;
-            self.status = "Install Grok Build (x.ai/cli) or Connect Grok in Settings".into();
+            self.status = self.no_agent_note().into();
             return;
         }
         if !self.kick_skip
@@ -427,7 +424,7 @@ impl Cabin {
             .get(idx)
             .map(|t| t.grok_worktree)
             .unwrap_or(false);
-        if self.cfg.native_engine && self.scheduled_perm {
+        if self.cfg.native_engine() && self.scheduled_perm {
             self.start_native_scheduled(
                 &last_user,
                 cwd,

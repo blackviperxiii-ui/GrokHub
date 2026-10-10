@@ -1,4 +1,4 @@
-//! Route unattended cabin work onto the native engine when Settings → Labs is on.
+//! Route unattended cabin work onto the native engine unless Settings → Labs picks the legacy CLI.
 //! The CLI path stays in the existing runners. This file only changes the transport.
 
 use std::path::{Path, PathBuf};
@@ -324,7 +324,7 @@ impl Cabin {
 
     /// Drop one-shot native receivers on Halt and quit. Flag off leaves the CLI receivers alone.
     pub(super) fn stop_native_unattended(&mut self) {
-        if !self.cfg.native_engine {
+        if !self.cfg.native_engine() {
             return;
         }
         grokhub_agent::halt_all_sessions();
@@ -712,12 +712,12 @@ mod tests {
     }
 
     #[test]
-    fn native_engine_defaults_off_and_each_runner_keeps_its_cli_path() {
-        assert!(!AppConfig::default().native_engine);
+    fn native_engine_is_the_default_and_each_runner_keeps_its_legacy_cli_path() {
+        assert_eq!(AppConfig::default().engine(), crate::config::EngineKind::Native);
         let kick = fn_body(include_str!("chat_kick.rs"), "kick_model");
         assert!(kick.contains("spawn_grok_p_stream"));
         let native_at = kick
-            .find("cfg.native_engine && self.scheduled_perm")
+            .find("!self.agent_ready()")
             .expect("native branch");
         let spawn_at = kick.find("spawn_grok_p_stream").expect("cli spawn");
         assert!(native_at < spawn_at);
@@ -727,9 +727,10 @@ mod tests {
         assert!(kick.contains("scheduled_flags"));
         assert!(kick.contains("fail_ask_without_acp"));
         let send = fn_body(include_str!("chat_kick.rs"), "send_chat");
-        assert!(send.contains("persist_user_turn"));
-        assert!(send.contains("self.can_agent()"));
-        assert!(send.contains("cfg.native_engine && self.scheduled_perm"));
+        assert!(send.contains("persist_user_turn(self.agent_ready())"));
+        let ready = fn_body(include_str!("native_engine.rs"), "agent_ready");
+        assert!(ready.contains("self.can_agent()"));
+        assert!(ready.contains("self.scheduled_perm"));
 
         let fire = fn_body(include_str!("night.rs"), "fire_loop");
         assert!(fire.contains("grok_user_stdout_wait"));
@@ -872,7 +873,7 @@ mod tests {
         });
         set_unattended_client_for_test(Some(say.clone()));
         let mut cabin = Cabin::quiet_for_test();
-        cabin.cfg.native_engine = true;
+        cabin.cfg.grok_build_engine = false;
         let mut row = new_loop("30m".into(), "Write a status report".into(), now_ms());
         row.id = "loop-a".into();
         cabin.grok_loops.push(row.clone());
@@ -1018,7 +1019,7 @@ mod tests {
         });
         set_unattended_client_for_test(Some(say.clone()));
         let mut cabin = Cabin::quiet_for_test();
-        cabin.cfg.native_engine = true;
+        cabin.cfg.grok_build_engine = false;
         cabin.permission_mode = PermissionMode::Ask;
         let work = root.join("work");
         std::fs::create_dir_all(&work).unwrap();
@@ -1111,7 +1112,7 @@ mod tests {
         });
         set_unattended_client_for_test(Some(hold.clone()));
         let mut cabin = Cabin::quiet_for_test();
-        cabin.cfg.native_engine = true;
+        cabin.cfg.grok_build_engine = false;
         cabin.permission_mode = PermissionMode::Ask;
         let work = root.join("work");
         std::fs::create_dir_all(&work).unwrap();
@@ -1177,7 +1178,7 @@ mod tests {
         });
         set_unattended_client_for_test(Some(say.clone()));
         let mut cabin = Cabin::quiet_for_test();
-        cabin.cfg.native_engine = true;
+        cabin.cfg.grok_build_engine = false;
         cabin.cfg.feed_instructions = "Keep my feed short.".into();
         cabin.updates = vec![
             grokhub_core::digest_card("d1", "Rust 1.92 ships", "Faster builds.", 1),
@@ -1260,7 +1261,7 @@ mod tests {
         });
         set_unattended_client_for_test(Some(say.clone()));
         let mut cabin = Cabin::quiet_for_test();
-        cabin.cfg.native_engine = true;
+        cabin.cfg.grok_build_engine = false;
         cabin.updates.clear();
         cabin.maybe_suggest_ideas(true);
         wait_until(|| {

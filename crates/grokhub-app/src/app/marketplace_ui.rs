@@ -220,7 +220,7 @@ impl Cabin {
         if snap.busy {
             ui.ctx().request_repaint_after(std::time::Duration::from_millis(200));
         }
-        if !self.cfg.native_engine {
+        if !self.cfg.native_engine() {
             crate::cards::settings_note(
                 ui,
                 "Installed connectors are used by native chats. Turn on the native engine in Settings, Labs to use them.",

@@ -938,14 +938,14 @@ impl Cabin {
                                                             }
                                                             if crate::cards::settings_toggle(
                                                                 ui,
-                                                                "Native engine (no Grok CLI)",
-                                                                "New chats talk to xAI directly. Tools stay read-only.",
-                                                                &mut self.cfg.native_engine,
+                                                                "Legacy Grok Build CLI engine",
+                                                                "Off: GrokHub talks to xAI itself. On: chats run through the Grok Build CLI, which is going away.",
+                                                                &mut self.cfg.grok_build_engine,
                                                             ) {
                                                                 self.persist_cfg();
                                                                 self.status = "Saved".into();
                                                             }
-                                                            if self.cfg.native_engine {
+                                                            if self.cfg.native_engine() {
                                                                 crate::cards::settings_note(
                                                                     ui,
                                                                     "This cabin's MCP servers are in Settings, Connectors.",
