@@ -681,7 +681,6 @@ mod tests {
                 Nav::Night => "night",
                 Nav::History => "history",
                 Nav::Command => "command",
-                Nav::Connectors => "connectors",
                 Nav::Agents => "agents",
                 Nav::Settings => "settings",
             }
@@ -697,11 +696,10 @@ mod tests {
             Nav::Night,
             Nav::History,
             Nav::Command,
-            Nav::Connectors,
             Nav::Agents,
             Nav::Settings,
         ];
-        assert_eq!(all.len(), 13);
+        assert_eq!(all.len(), 12);
         assert!(all.iter().all(|n| !page(*n).contains("inbox")));
         let cards: Vec<_> = [InboxKey::Hard(0), InboxKey::Ask(0), InboxKey::Soft(0), InboxKey::Full, InboxKey::Elicit]
             .into_iter()

@@ -60,10 +60,10 @@ fn cached_merged_rows(ui: &egui::Ui) -> Vec<grokhub_agent::HistoryRow> {
 }
 
 impl Cabin {
-    /// Extra History section. Absent unless Settings → Labs native engine is on,
+    /// Extra History section. Absent only on the legacy CLI engine (Settings → Labs),
     /// so the CLI history page stays as it is.
     pub(super) fn paint_native_history_merge(&mut self, ui: &mut egui::Ui) {
-        if !self.cfg.native_engine {
+        if !self.cfg.native_engine() {
             return;
         }
         // Retired ids include background work filed on the hidden Background chat.
