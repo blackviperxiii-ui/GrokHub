@@ -773,12 +773,11 @@ impl Cabin {
                                                             ) {
                                                                 let on = self.cfg.desktop_control;
                                                                 self.persist_cfg();
-                                                                self.status = if on {
-                                                                    "Registering desktop tools...".into()
-                                                                } else {
-                                                                    "Removing desktop tools...".into()
-                                                                };
-                                                                crate::desktop_mcp::spawn_register(on);
+                                                                self.status = crate::desktop_mcp::desktop_switch_note(on, self.cfg.grok_build_engine).into();
+                                                                if self.cfg.grok_build_engine {
+                                                                    crate::desktop_mcp::spawn_register(on);
+                                                                }
+                                                                crate::desktop_mcp::sync_native_cua(&self.cfg);
                                                                 crate::desktop_mcp::set_desktop_enabled(on);
                                                             }
                                                             crate::cards::settings_note(

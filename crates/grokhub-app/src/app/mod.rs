@@ -1468,10 +1468,13 @@ impl Cabin {
             c.last_update_probe = Some(Instant::now());
             c.update_probe_rx = Some(crate::update::begin_update_probe());
             c.open_fresh_home();
+            // Only the legacy CLI engine needs GrokHub's servers registered in Grok Build.
+            // The native engine runs desktop tools in-process and Cua as its own MCP server.
             #[cfg(not(test))]
-            crate::desktop_mcp::maybe_register_on_start(c.cfg.desktop_control);
-            #[cfg(not(test))]
-            crate::self_mcp::maybe_register_on_start();
+            if c.cfg.grok_build_engine {
+                crate::desktop_mcp::maybe_register_on_start(c.cfg.desktop_control);
+                crate::self_mcp::maybe_register_on_start();
+            }
             #[cfg(not(test))]
             crate::desktop_mcp::set_desktop_enabled(c.cfg.desktop_control);
         }

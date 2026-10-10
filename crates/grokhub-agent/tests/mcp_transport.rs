@@ -686,3 +686,33 @@ fn write_status(sock: &mut TcpStream, code: u16, extra: &str, body: &str) {
     );
     let _ = sock.flush();
 }
+
+struct NoCabinCua;
+
+impl Drop for NoCabinCua {
+    fn drop(&mut self) {
+        mcp::set_cabin_cua(None);
+    }
+}
+
+#[test]
+fn the_cabin_cua_gate_is_a_native_server_only_while_the_cabin_sets_it() {
+    let bin = env!("CARGO_BIN_EXE_fake_mcp");
+    let (dir, _clean, _guard) = scratch("cabin-cua");
+    let _reset = NoCabinCua;
+    // A user entry under the cabin's name is never honored.
+    let doc = json!({"mcpServers": {"grokhub-cua": {"command": "/bin/false"}}});
+    std::fs::write(dir.join("mcp.json"), doc.to_string()).unwrap();
+    assert!(mcp::doctor().iter().all(|row| row.name != "grokhub-cua"));
+
+    mcp::set_cabin_cua(Some(PathBuf::from(bin)));
+    let rows = mcp::doctor();
+    let row = rows.iter().find(|row| row.name == "grokhub-cua").expect("cabin Cua server");
+    assert_eq!((row.status.as_str(), row.tool_count), ("connected", 1), "{rows:?}");
+    assert_eq!(row.detail, format!("{bin} --mcp-cua"), "{rows:?}");
+    let text = std::fs::read_to_string(dir.join("mcp.json")).unwrap();
+    assert!(!text.contains("--mcp-cua"), "never written to mcp.json: {text}");
+
+    mcp::set_cabin_cua(None);
+    assert!(mcp::doctor().iter().all(|row| row.name != "grokhub-cua"));
+}
