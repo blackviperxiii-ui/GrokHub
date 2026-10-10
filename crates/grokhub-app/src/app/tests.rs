@@ -1680,7 +1680,7 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             settings.contains("cabin_update_notice")
                 && !settings.contains("cli_update_notice")
                 && !settings.contains("should_update_cli_alpha")
-                && settings.contains("queue_combined_update")
+                && settings.contains("queue_cabin_update")
                 && settings.contains("settings_update_label")
                 && settings.contains("settings_update_hint"),
             "Settings Update stays visible; titlebar chip still hides when current: {settings}"
@@ -3676,7 +3676,7 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             .and_then(|s| s.split("fn restart_after_update").next())
             .expect("queue_update");
         assert!(
-            queued.contains("queue_combined_update")
+            queued.contains("queue_cabin_update")
                 && !queued.contains("update_cmds_for")
                 && !queued.contains("config::save")
                 && !queued.contains("persist_snap"),
@@ -3684,28 +3684,26 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
         );
         assert!(
             src.contains("settings_update_hint")
-                && src.contains("queue_combined_update")
+                && src.contains("queue_cabin_update")
                 && src.contains("UPDATE_CHECK_EVERY"),
-            "one Update control must describe CLI-then-cabin and recheck on the 2h interval: {src}"
+            "one Update control must describe the cabin update and recheck on the 2h interval: {src}"
         );
         for gone in ["Install Grok Build CLI", "queue_grok_cli_install", "begin_grok_install"] {
             assert!(!src.contains(gone), "GrokHub never installs the Grok Build CLI: {gone}");
         }
         let queued_cli = src
-            .split("fn queue_combined_update(")
+            .split("fn queue_cabin_update(")
             .nth(1)
-            .and_then(|s| s.split("fn note_combined_update_landed(").next())
-            .expect("queue_combined_update");
+            .and_then(|s| s.split("fn note_cabin_update_landed(").next())
+            .expect("queue_cabin_update");
         assert!(
-            queued_cli.contains("combined_update_cmds")
+            queued_cli.contains("update_cmds_for_host_in(src.as_deref(), cfg!(windows), channel)")
                 && queued_cli.contains("start_overlay_update")
-                && queued_cli.contains("pending_for_manual_update")
-                && queued_cli.contains("UpdatePending::Cli")
-                && queued_cli.contains("UpdatePending::Both")
-                && queued_cli.contains("cabin_skipped")
+                && !queued_cli.contains("UpdatePending")
+                && !queued_cli.contains("grok update")
                 && queued_cli.contains("self.open_update_overlay()")
                 && queued_cli.find("self.open_update_overlay()").unwrap()
-                    < queued_cli.find("combined_update_cmds").unwrap()
+                    < queued_cli.find("update_cmds_for_host_in").unwrap()
                 && queued_cli.contains("self.persist_cfg()")
                 && queued_cli.contains("overlay_clone_usable")
                 && !queued_cli.contains("config::save")
@@ -3713,8 +3711,8 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
                 && !queued_cli.contains("Set Settings → source")
                 && !queued_cli.contains("--stable")
                 && !queued_cli.contains("begin_grok_install")
-                && !queued_cli.contains("combined_update_hint(UpdatePending::None)"),
-            "the one Update control runs pending steps, or both when the probe missed: {queued_cli}"
+                && !queued_cli.contains("update_hint(UpdatePending::None)"),
+            "the one Update control overlays the cabin, even when the probe missed: {queued_cli}"
         );
         let overlay = src
             .split("fn start_overlay_update(")
@@ -3736,12 +3734,12 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             .expect("Cabin::new");
         assert!(
             boot.contains("begin_update_probe"),
-            "boot must check GitHub Latest and CLI alpha for the in-app chip: {boot}"
+            "boot must check GitHub Latest for the in-app chip: {boot}"
         );
         assert!(
             src.contains("titlebar_update_chip")
                 && src.contains("update_chip_label")
-                && src.contains("queue_combined_update")
+                && src.contains("queue_cabin_update")
                 && !src.contains(concat!("Update ", "available")),
             "the titlebar chip names CLI, cabin, or both and runs that update: {src}"
         );
@@ -18667,19 +18665,19 @@ fn palette_search_poll_clears_on_drop() {
 // Folded from PR #446, plus the two commands that do flip it (idle-only would
 // pass against a stub).
 #[test]
-fn note_combined_update_landed_flips_only_for_its_steps() {
+fn note_cabin_update_landed_flips_only_for_its_steps() {
     let mut cabin = Cabin::quiet_for_test();
     assert!(cabin.last_host.is_empty());
-    cabin.note_combined_update_landed();
+    cabin.note_cabin_update_landed();
     assert!(!cabin.cabin_overlay_done);
     cabin.last_host = vec!["ls -la".into()];
-    cabin.note_combined_update_landed();
+    cabin.note_cabin_update_landed();
     assert!(!cabin.cabin_overlay_done);
     cabin.last_host = vec!["grok update".into()];
-    cabin.note_combined_update_landed();
+    cabin.note_cabin_update_landed();
     assert!(!cabin.cabin_overlay_done, "a CLI update is not the cabin's step");
     cabin.last_host = vec!["git -C ~/GrokHub pull --ff-only".into()];
-    cabin.note_combined_update_landed();
+    cabin.note_cabin_update_landed();
     assert!(cabin.cabin_overlay_done);
     assert!(!cabin.running);
     assert!(cabin.chat_job_thread.is_none());

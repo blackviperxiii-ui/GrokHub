@@ -230,7 +230,7 @@ pub use desktop_mcp::{
 };
 pub use diagnostics::diagnostics_bundle;
 pub use doctor::{
-    doctor_cabin_line, doctor_extras, doctor_grok_cli_line, doctor_hands_line, doctor_lines,
+    doctor_cabin_line, doctor_extras, doctor_hands_line, doctor_lines,
     doctor_ok, hub_kind_from_health, DoctorLine,
 };
 pub use feel::{
@@ -348,14 +348,10 @@ pub use learning::{
 };
 pub use models::{catalog_line, sanitize_chat_model, MODEL_CATALOG};
 pub use oauth::{
-    apply_profile, auth_bearer, chat_bearer, cli_auth_record, cli_auth_slot_key,
-    cli_channel_is_alpha, get_started_oauth_error, has_auth, jwt_exp_ms, merge_cli_auth_json,
+    apply_profile, auth_bearer, chat_bearer, get_started_oauth_error, has_auth, jwt_exp_ms,
     merge_refreshed, next_oauth_poll_secs, oauth_access_live, oauth_error_status,
-    parse_cli_config_channel, parse_cli_update_check_channel, parse_device_start,
-    parse_poll_result, parse_token_json, parse_userinfo_profile, realtime_bearer,
-    should_kick_alpha_install, should_show_cli_install_wait, should_show_get_started,
-    should_show_get_started_now, should_show_manual_cli_install, should_switch_cli_to_alpha,
-    should_sync_cli_auth, token_needs_refresh, trusted_profile_photo_url, trusted_xai_url,
+    parse_device_start, parse_poll_result, parse_token_json, parse_userinfo_profile,
+    realtime_bearer, token_needs_refresh, trusted_profile_photo_url, trusted_xai_url,
     unix_ms_to_rfc3339, DeviceCodeStart, OAuthProfile, PollResult, PollStatus, XaiOAuthTokens,
     TOKEN_REFRESH_SKEW_MS, XAI_DEVICE_CODE_GRANT, XAI_OAUTH_CLIENT_ID, XAI_OAUTH_DISCOVERY,
     XAI_OAUTH_ISSUER, XAI_OAUTH_SCOPE, XAI_OAUTH_USERINFO,
@@ -470,28 +466,21 @@ pub use turn_timeline::{
     tool_status_failed, tool_status_running, turn_needs_timeline, turn_says, views_up_to_last_user,
     LiveBlock, LiveKind, ToolRow, TurnPart,
 };
-pub use update::{fetch_channel_tips, switch_clone_to_main, parse_ls_remote_tips, remote_tracking_tips, 
-    cabin_overlay_step, cabin_update_notice, cabin_version_newer, cli_alpha_is_newer,
-    cli_update_notice, combined_update_cmds, combined_update_cmds_for_host,
-    combined_update_cmds_for_host_in, combined_update_cmds_in, combined_update_hint,
-    discover_source, grok_cli_alpha_update_cmd, grok_cli_alpha_update_cmds, grok_cli_update_cmd,
-    is_grokhub_source, origin_needs_retarget, overlay_clone_usable, overlay_clone_usable_in,
-    overlay_stop_targets,
-    overlay_update_begin, overlay_update_can_restart, overlay_update_finish,
-    overlay_update_progress, parse_cabin_semver, parse_github_latest_tag,
-    parse_installed_cli_version, parse_published_cli_alpha, pending_for_manual_update,
-    pending_from_versions, pending_on_channel, restart_acts,
-    restart_argv, restart_bin, settings_update_hint,
-    settings_update_label, settings_update_note,
-    should_notify_cabin_update, should_show_cli_alpha_update, should_update_cli_alpha,
-    systemd_user_restart_args, systemd_user_stop_args, unix_grok_update_cmd,
-    update_check_due, update_chip_label, update_cmds, update_cmds_for, update_cmds_for_host,
-    update_cmds_for_host_in, update_cmds_in,
-    update_pending, update_plan_steps, update_progress_pct, update_step_label, update_wipes_config,
-    walk_up_source, windows_grok_update_cmd, windows_release_overlay_cmd,
-    windows_release_update_cmds, CombinedUpdatePlan, OverlayUpdateView, RestartAct, UpdatePending,
-    CLI_ALPHA_VERSION_FALLBACK, CLI_ALPHA_VERSION_URL, GITHUB_LATEST_API, GITHUB_REMOTE_URL,
-    ORIGIN_REMOTE_URL, UPDATE_CHECK_EVERY,
+pub use update::{
+    cabin_overlay_step, cabin_update_notice, cabin_version_newer, discover_source,
+    fetch_channel_tips, is_grokhub_source, origin_needs_retarget, overlay_clone_usable,
+    overlay_clone_usable_in, overlay_stop_targets, overlay_update_begin,
+    overlay_update_can_restart, overlay_update_finish, overlay_update_progress,
+    parse_cabin_semver, parse_github_latest_tag, parse_ls_remote_tips, pending_for_manual_update,
+    pending_from_versions, pending_on_channel, remote_tracking_tips, restart_acts, restart_argv,
+    restart_bin, settings_update_hint, settings_update_label, settings_update_note,
+    should_notify_cabin_update, switch_clone_to_main, systemd_user_restart_args,
+    systemd_user_stop_args, update_check_due, update_chip_label, update_cmds, update_cmds_for,
+    update_cmds_for_host, update_cmds_for_host_in, update_cmds_in, update_hint,
+    update_plan_steps, update_progress_pct, update_step_label, update_wipes_config,
+    walk_up_source, windows_release_overlay_cmd, windows_release_update_cmds, OverlayUpdateView,
+    RestartAct, UpdatePending, GITHUB_LATEST_API, GITHUB_REMOTE_URL, ORIGIN_REMOTE_URL,
+    UPDATE_CHECK_EVERY,
 };
 pub use usage::{
     add_tokens, budget_holds_scheduled, budget_level, budget_line, bump_usage, roll_usage_day,

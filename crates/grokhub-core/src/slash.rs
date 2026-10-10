@@ -126,7 +126,8 @@ pub enum Slash {
     GrokConnectors,
     /// `/hooks` — Connectors tab, Hooks section.
     GrokHooks,
-    /// Empty `/workflow` and `/workflows` — Skills tab, Workflows section.
+    /// Empty `/workflow` and `/workflows`. Workflows were a CLI feature; the
+    /// cabin answers that they are gone.
     GrokWorkflows,
     Model(String),
     ImagineVideo(String),
@@ -134,7 +135,7 @@ pub enum Slash {
     Workflow(String),
     /// `/workflow pause|resume|stop <name-or-run-id>`.
     WorkflowCtl { verb: WorkflowVerb, target: String },
-    /// `/workflow pause|resume|stop` with no target. Not forwarded.
+    /// `/workflow pause|resume|stop` with no target.
     WorkflowUsage,
     RewindFiles,
     Worktree,
@@ -378,8 +379,8 @@ fn parse_workflow_arg(rest: &str) -> Slash {
     }
 }
 
-/// Retired cabin-only slashes. Grok Build skills (`/create-skill`) and CLI
-/// builtins the cabin does not handle must reach `grok -p`.
+/// Retired cabin-only slashes. Skill slashes (`/create-skill`) and engine
+/// builtins the cabin does not handle go to the engine as a turn.
 pub fn unknown_cabin_slash(line: &str) -> bool {
     let t = line.trim();
     if !t.starts_with('/') {
@@ -533,7 +534,7 @@ pub const SLASH_COMMANDS: &[SlashDef] = &[
     SlashDef { cmd: "/scratch", hint: "New scratch chat (no memory)", insert: "/scratch", run_on_pick: true },
     SlashDef { cmd: "/clear", hint: "Clear current chat", insert: "/clear", run_on_pick: true },
     SlashDef { cmd: "/compact", hint: "Compact Grok context", insert: "/compact", run_on_pick: true },
-    SlashDef { cmd: "/context", hint: "Show Grok Build context", insert: "/context", run_on_pick: true },
+    SlashDef { cmd: "/context", hint: "Show context use", insert: "/context", run_on_pick: true },
     SlashDef { cmd: "/health", hint: "Updates, failed services and the last dream", insert: "/health", run_on_pick: true },
     SlashDef { cmd: "/fix", hint: "Self-heal stuck UI + health pass", insert: "/fix", run_on_pick: true },
     SlashDef { cmd: "/memory", hint: "Show memory files", insert: "/memory ", run_on_pick: false },
@@ -578,10 +579,6 @@ pub const SLASH_COMMANDS: &[SlashDef] = &[
     SlashDef { cmd: "/queue", hint: "Send after the live reply…", insert: "/queue ", run_on_pick: false },
     SlashDef { cmd: "/view-plan", hint: "Show the plan from Plan mode", insert: "/view-plan", run_on_pick: true },
     SlashDef { cmd: "/worktree", hint: "Next chat in a git worktree", insert: "/worktree", run_on_pick: true },
-    SlashDef { cmd: "/workflow", hint: "Launch a Grok workflow…", insert: "/workflow ", run_on_pick: false },
-    SlashDef { cmd: "/workflow pause", hint: "Pause a Grok workflow run…", insert: "/workflow pause ", run_on_pick: false },
-    SlashDef { cmd: "/workflow resume", hint: "Resume a Grok workflow run…", insert: "/workflow resume ", run_on_pick: false },
-    SlashDef { cmd: "/workflow stop", hint: "Stop a Grok workflow run…", insert: "/workflow stop ", run_on_pick: false },
     SlashDef { cmd: "/room", hint: "Speak the room — stage a project", insert: "/room ", run_on_pick: false },
     SlashDef { cmd: "/dream", hint: "Imagine last night’s job", insert: "/dream", run_on_pick: true },
     SlashDef { cmd: "/inhabit", hint: "Hand this Grok to another box", insert: "/inhabit ", run_on_pick: false },
@@ -591,22 +588,22 @@ pub const SLASH_COMMANDS: &[SlashDef] = &[
     SlashDef { cmd: "/usage", hint: "Today's usage + Grok spend", insert: "/usage", run_on_pick: true },
     SlashDef { cmd: "/models", hint: "Grok catalog", insert: "/models", run_on_pick: true },
     SlashDef { cmd: "/palette", hint: "Command palette", insert: "/palette", run_on_pick: true },
-    SlashDef { cmd: "/plan", hint: "Grok Build plan mode", insert: "/plan", run_on_pick: true },
+    SlashDef { cmd: "/plan", hint: "Plan mode", insert: "/plan", run_on_pick: true },
     SlashDef { cmd: "/always-approve", hint: "Skip Grok tool prompts", insert: "/always-approve", run_on_pick: true },
-    SlashDef { cmd: "/sessions", hint: "List Grok Build sessions", insert: "/sessions", run_on_pick: true },
-    SlashDef { cmd: "/resume", hint: "Resume a Grok Build session", insert: "/resume", run_on_pick: true },
-    SlashDef { cmd: "/inspect", hint: "Inspect Grok Build config", insert: "/inspect", run_on_pick: true },
+    SlashDef { cmd: "/sessions", hint: "Open History", insert: "/sessions", run_on_pick: true },
+    SlashDef { cmd: "/resume", hint: "Resume a session", insert: "/resume", run_on_pick: true },
+    SlashDef { cmd: "/inspect", hint: "Inspect this chat's session", insert: "/inspect", run_on_pick: true },
     SlashDef { cmd: "/loop", hint: "Schedule a Grok /loop…", insert: "/loop ", run_on_pick: false },
-    SlashDef { cmd: "/skills", hint: "Grok Build skills", insert: "/skills", run_on_pick: true },
+    SlashDef { cmd: "/skills", hint: "Skills", insert: "/skills", run_on_pick: true },
     SlashDef { cmd: "/skills changes", hint: "What GrokHub changed in your skills", insert: "/skills changes", run_on_pick: true },
     SlashDef { cmd: "/skills undo", hint: "Undo the newest change to a skill…", insert: "/skills undo ", run_on_pick: false },
     SlashDef { cmd: "/skills restore", hint: "Bring back a removed skill…", insert: "/skills restore ", run_on_pick: false },
     SlashDef { cmd: "/connections changes", hint: "What GrokHub changed in your connections", insert: "/connections changes", run_on_pick: true },
     SlashDef { cmd: "/automations changes", hint: "What GrokHub changed in your automations", insert: "/automations changes", run_on_pick: true },
-    SlashDef { cmd: "/plugins", hint: "Grok Build plugins and marketplace", insert: "/plugins", run_on_pick: true },
-    SlashDef { cmd: "/mcps", hint: "Grok Build MCP servers", insert: "/mcps", run_on_pick: true },
-    SlashDef { cmd: "/hooks", hint: "Grok Build hooks", insert: "/hooks", run_on_pick: true },
-    SlashDef { cmd: "/model", hint: "Set grok -p --model…", insert: "/model ", run_on_pick: false },
+    SlashDef { cmd: "/plugins", hint: "Plugins and marketplace", insert: "/plugins", run_on_pick: true },
+    SlashDef { cmd: "/mcps", hint: "MCP servers", insert: "/mcps", run_on_pick: true },
+    SlashDef { cmd: "/hooks", hint: "Hooks", insert: "/hooks", run_on_pick: true },
+    SlashDef { cmd: "/model", hint: "Set the chat model…", insert: "/model ", run_on_pick: false },
     SlashDef { cmd: "/imagine-video", hint: "Open Imagine video", insert: "/imagine-video ", run_on_pick: false },
     SlashDef { cmd: "/goal", hint: "Pin a Grok goal…", insert: "/goal ", run_on_pick: false },
 ];
@@ -682,7 +679,7 @@ pub fn grok_command_hits(names: &[String]) -> Vec<SlashHit> {
             continue;
         }
         out.push(SlashHit {
-            hint: "Grok Build".into(),
+            hint: "Skill".into(),
             insert: format!("{cmd} "),
             cmd,
             run_on_pick: false,
@@ -728,25 +725,25 @@ pub fn resolve_mode_arg(arg: &str) -> Option<String> {
 pub fn slash_help() -> String {
     [
         "/help — this list",
-        "/new — new chat (reuse empty draft; new Grok Build session)",
+        "/new — new chat (reuse empty draft; new session)",
         "/scratch — new scratch chat (no memory; /forget and Memory Save stay off)",
         "/clear — clear this chat",
         "/compact — compact Grok context (also trims the painted pane)",
         "/undo — rewind Grok conversation (alias /rewind)",
         "/retry — re-send last user prompt",
-        "/stop — halt the current Grok Build turn",
+        "/stop — halt the current turn",
         "/sh <cmd> — run a local shell (you, not the agent)",
-        "/host — Grok Build CLI status",
-        "/plan — plan mode (Grok Build)",
+        "/host — desktop host status",
+        "/plan — plan mode",
         "/always-approve — skip tool permission prompts",
         "/auto — auto-approve safe tools",
         "/effort — effort is automatic now (the Auto chip shows the current level); see /why",
-        "/sessions — Grok Build sessions",
+        "/sessions — open History",
         "/resume — same as /sessions (Grok /resume)",
-        "/inspect — grok inspect --json against ~/.grok",
-        "/loop [30m] <prompt> — Grok Build interval scheduler",
+        "/inspect — this chat's session: model, tools, MCP servers",
+        "/loop [30m] <prompt> — interval scheduler",
         "every weekday at 9, <task> — clock job on Automations; saving it posts a schedule card on the home update feed",
-        "/skills — skills catalog: cabin skills and the Grok Build list",
+        "/skills — skills catalog: cabin skills and project and user skills",
         "/skills changes — what GrokHub changed in your skills on its own, each with Undo",
         "/skills undo <name> — put back the version before the newest change (typed by you or clicked; a removed skill comes back)",
         "/skills restore <name> — bring back a skill that was removed, from its kept copy",
@@ -754,11 +751,11 @@ pub fn slash_help() -> String {
         "/automations changes — automations GrokHub made or changed on its own, each with Undo",
         "/plugins /marketplace /mcps — connectors",
         "/hooks — open Connectors with the Hooks section in view",
-        "/model <id> — grok -p --model",
+        "/model <id> — chat model for this cabin",
         "/imagine-video <prompt> — Imagine video",
         "/goal <objective> — pin a Grok goal",
-        "Grok skill slashes such as /create-skill go to grok -p.",
-        "/project bind <path> — bound tree is the world (ACP cwd)",
+        "Skill slashes such as /create-skill run that skill in chat.",
+        "/project bind <path> — bound tree is the world (the engine's working folder)",
         "/project new <name> — create a chat folder (stays on chat)",
         "/project folder <name> — create a sidebar folder",
         "/project rename <name> — rename the selected project",
@@ -774,9 +771,9 @@ pub fn slash_help() -> String {
         "/forget <topic> — drop memory lines that mention the topic (whole words)",
         "/imagine <prompt>",
         if cfg!(windows) {
-            "/update — only what is newer, or both when Settings → Update or /update runs and the probe found nothing. CLI first (`grok update --alpha`) when a newer alpha exists, then the latest GitHub Windows zip into %LOCALAPPDATA%\\Programs\\GrokHub when the cabin is newer. A leftover clone (not main) uses the zip. A source clone on main overlays with install-windows.ps1. A current alpha is left alone unless that manual check overlays. Restart on Settings. Settings → Update stays visible. The titlebar chip notifies in-app (Update CLI, Update cabin, or Update CLI and cabin) every 2 hours."
+            "/update — the latest GitHub Windows zip into %LOCALAPPDATA%\\Programs\\GrokHub when the cabin is newer, or anyway when Settings → Update or /update runs and the probe found nothing. A leftover clone (not main) uses the zip. A source clone on main overlays with install-windows.ps1. Restart on Settings. Settings → Update stays visible. The titlebar chip notifies in-app (Update cabin) every 2 hours."
         } else {
-            "/update — only what is newer, or both when Settings → Update or /update runs and the probe found nothing. CLI first (`grok update --alpha`, PATH prepends ~/.grok/bin and ~/.local/bin) when a newer alpha exists, then overlay install when the cabin is newer. A current alpha is left alone unless that manual check overlays. Restart on Settings. Settings → Update stays visible. The titlebar chip notifies in-app (Update CLI, Update cabin, or Update CLI and cabin) every 2 hours."
+            "/update — overlay install when the cabin is newer, or anyway when Settings → Update or /update runs and the probe found nothing. Restart on Settings. Settings → Update stays visible. The titlebar chip notifies in-app (Update cabin) every 2 hours."
         },
         "/send <task> — task this box",
         "/sync — merge chats and memory with paired computers (asks first unless Settings → Permissions allows it)",
@@ -794,15 +791,13 @@ pub fn slash_help() -> String {
         "Typing while a reply runs steers it: Enter stops the turn where it is, keeps what it said and did, and carries on with your message folded in. Alt+Enter queues instead. Sending in another chat moves a running reply to the background instead of stopping it.",
         "/view-plan — show the plan from Plan mode (/show-plan and /plan-view too)",
         "/worktree — next chat starts in a git worktree",
-        "/workflow <name> — launch a Grok Build workflow",
-        "/workflow pause|resume|stop <name-or-run-id> — pause, resume, or stop that run",
-        "/workflows — open Skills with the Workflows section in view",
+        "/workflow — workflows were a Grok Build CLI feature and are not in GrokHub",
         "/room <name> — speak the room",
         "/export — write this chat as markdown (/export html or /export json for those)",
         "/rename <title> — name this chat (permanent)",
         "/pin — pin or unpin this chat",
         "/delete — delete this chat tab",
-        "/context — Grok Build context (server tokens + reasoning; visible turns as fallback)",
+        "/context — context use (server tokens + reasoning; visible turns as fallback)",
         "/health — updates, failed services, last dream",
         "/fix — halt + doctor",
         "/remember <fact> — write MEMORY.md",
@@ -811,20 +806,20 @@ pub fn slash_help() -> String {
         "/tools — same as /host",
         "/import — OpenClaw workspace",
         "/consult <q> — one-shot consult",
-        "/usage — today's cabin buckets, tokens spent today, and the last Grok Build turn",
+        "/usage — today's cabin buckets, tokens spent today, and the last turn",
         "/models — Grok catalog",
         "/palette — command palette. Search walks nested files in the bound project (or ~/GrokHub-Work), not only the top of that folder.",
         "Enter sends; Ctrl+Enter newline. Composer Stop is a disc with a small rounded mark. Idle Stop and the idle mic sit still; they ease while hovered, pressed, listening, speaking, or a reply is running. The transcript Running row has no Stop. The changing status text above the composer is gone. The context usage bar stays. No live dot or Thinking label sits on the turn; the composer glow shows a running reply, and Stop's hover names the current action.",
-        "The Ask card names the command, path, or site. Always on that card confirms skip every tool prompt this launch; night / loop / /send inherit --always-approve until quit. Composer Always and a destructive host command reuse that confirm sheet (title, consequence, Confirm or Run, Cancel). Enter / Esc stay Allow / Deny on the Ask card; overlay confirm uses them only when the composer is empty. Live secrets stay redacted. Naming a schedule teaches that routine on Automations and leaves the rewind snapshot out. History is the cabin's own chats (headless grok -p on the thread). Background jobs such as workboard summarize stay off that list. Same on Linux and Windows. History offers a Last you point when that marker exists.",
-        "Mode pill: Chat / Plan / btw. Permission: Ask / Auto / Always-approve. Both pills are remembered; Always-approve resets to Ask on the next launch. Effort is automatic: GrokHub picks how hard to think on each step, and the Auto chip shows the level. Say \"think hard\" or \"keep it quick\" to steer one task; /why shows the reasons. Default model is grok-4.7. Hover a composer pill for what it does. Grok Build runs the agent.",
+        "The Ask card names the command, path, or site. Always on that card confirms skip every tool prompt this launch; night / loop / /send inherit Always until quit. Composer Always and a destructive host command reuse that confirm sheet (title, consequence, Confirm or Run, Cancel). Enter / Esc stay Allow / Deny on the Ask card; overlay confirm uses them only when the composer is empty. Live secrets stay redacted. Naming a schedule teaches that routine on Automations and leaves the rewind snapshot out. History is the cabin's own chats. Background jobs such as workboard summarize stay off that list. Same on Linux and Windows. History offers a Last you point when that marker exists.",
+        "Mode pill: Chat / Plan / btw. Permission: Ask / Auto / Always-approve. Both pills are remembered; Always-approve resets to Ask on the next launch. Effort is automatic: GrokHub picks how hard to think on each step, and the Auto chip shows the level. Say \"think hard\" or \"keep it quick\" to steer one task; /why shows the reasons. Default model is grok-4.7. Hover a composer pill for what it does. GrokHub's own engine runs the agent.",
         "Settings → Behavior: close to tray, living wall, and a quiet hours dropdown. Picking a window saves it. A Quiet until chip shows on the titlebar only while that window is active. Signed-in empty home shows an update feed in the gap under the composer when a card is undismissed, and hides that slot when the feed is empty. A finished /loop posts automation_done from poll_grok_loop. Saving a schedule posts schedule_created. Cards stay until opened or dismissed. A device glance appears only when hub share or a last frame is bound; click opens Devices.",
         "History search drops stale hits when the box changes. Re-opening the memory file already in the editor keeps unsaved typing.",
-        "Appearance: Dark, Light, System. Ask permission is grok agent stdio (ACP) so Allow / Deny can show; if ACP is down the turn is denied. Auto and Always stay on grok -p and inherit the PermissionMode pill. `/workflow` `/compact` `/rewind` honor that same pill — Ask fail-closed if ACP is down, Auto/Always keep session mode. btw (saved as ask) is a side ask: a live run keeps going and the question waits, then sends look-safe on grok -p (`--permission-mode default`, no desktop-do-the-work). Idle btw sends that same look-safe ask. Night/inbox/anticipate inherit scheduled_args like loops — Ask is fail-closed, no ACP. Halt is session/cancel.",
-        "Voice: Ara. Hey Grok is push-to-talk STT into chat, then TTS of the reply body (not the thought process). Same on Linux and Windows. While live, Listening / Speaking / Ready sits above the composer with Stop. The strip stays up while Listening or Speaking and auto-hides about a second after Ready. Stop, the live mic, or Ctrl+G / Super+G leave. Failed STT shows Ready, not Listening. Desktop control is Grok Build computer-use — Halt cancels the ACP turn.",
+        "Appearance: Dark, Light, System. Ask permission shows Allow / Deny before each step that changes something. Auto and Always follow the PermissionMode pill, and `/compact` and `/rewind` honor that same pill. btw (saved as ask) is a side ask: a live run keeps going and the question waits, then sends read-only (no desktop-do-the-work). Idle btw sends that same read-only ask. Night, inbox, and anticipate runs are unattended: they inherit the pill, and Ask fails closed. Halt cancels the turn.",
+        "Voice: Ara. Hey Grok is push-to-talk STT into chat, then TTS of the reply body (not the thought process). Same on Linux and Windows. While live, Listening / Speaking / Ready sits above the composer with Stop. The strip stays up while Listening or Speaking and auto-hides about a second after Ready. Stop, the live mic, or Ctrl+G / Super+G leave. Failed STT shows Ready, not Listening. Desktop control runs through the cabin's own desktop tools; Halt cancels the turn.",
         if cfg!(windows) {
-            "First-time install and reinstall (Windows Setup + first cabin launch) automatically install Grok Build CLI alpha from https://x.ai/cli (GROK_CHANNEL=alpha). UAC on first run is expected. First run is Get Started — Super Grok OAuth signs in grok too. Get Started shows live device-code / OAuth failures, not leftover wall or install status. The Install control is hidden when grok is already present or an alpha install is already running. Settings → Connect writes CLI auth when grok is not already connected. One Update control checks every 2 hours for a newer Grok Build CLI alpha and a newer GitHub Latest cabin. Settings → Update stays visible for a manual check. The titlebar chip says Update CLI, Update cabin, or Update CLI and cabin and notifies in-app, not a web page. Acting on it runs only what is pending: grok update --alpha first, then the cabin (GitHub zip when there is no clone or the leftover clone is not main). A click when the probe found nothing still overlays both. A working alpha install is updated only when a newer alpha exists unless that manual check overlays. It does not switch the CLI to stable. If grok is on stable after an upgrade, the cabin switches it back to alpha. Settings About shows grok --version."
+            "First run is Get Started: Super Grok OAuth signs GrokHub in, and that sign-in stays with GrokHub. Get Started shows live device-code / OAuth failures, not leftover wall status. One Update control checks GitHub Latest every 2 hours. Settings → Update stays visible for a manual check. The titlebar chip says Update cabin and notifies in-app, not a web page. Acting on it takes the GitHub zip when there is no clone or the leftover clone is not main. A click when the probe found nothing still overlays."
         } else {
-            "First-time install and reinstall (install.sh, AUR, first cabin launch) automatically install Grok Build CLI alpha from https://x.ai/cli (GROK_CHANNEL=alpha). First run is Get Started — Super Grok OAuth signs in grok too. Get Started shows live device-code / OAuth failures, not leftover wall or install status. The Install control is hidden when grok is already present or an alpha install is already running. Settings → Connect writes CLI auth when grok is not already connected. One Update control checks every 2 hours for a newer Grok Build CLI alpha and a newer GitHub Latest cabin (PATH prepends ~/.grok/bin and ~/.local/bin). Settings → Update stays visible for a manual check. The titlebar chip says Update CLI, Update cabin, or Update CLI and cabin and notifies in-app, not a web page. Acting on it runs only what is pending: grok update --alpha first, then the cabin. A click when the probe found nothing still overlays both. A working alpha install is updated only when a newer alpha exists unless that manual check overlays. It does not switch the CLI to stable. If grok is on stable after an upgrade, the cabin switches it back to alpha. It does not yank a working alpha install."
+            "First run is Get Started: Super Grok OAuth signs GrokHub in, and that sign-in stays with GrokHub. Get Started shows live device-code / OAuth failures, not leftover wall status. One Update control checks GitHub Latest every 2 hours. Settings → Update stays visible for a manual check. The titlebar chip says Update cabin and notifies in-app, not a web page. A click when the probe found nothing still overlays."
         },
         "× to tray; a pinned taskbar click or second grokhub raises the cabin.",
         "Pulse every 15s. Hidden idle waits for the pulse.",
@@ -919,7 +914,7 @@ mod tests {
         assert!(!unknown_cabin_slash("hello"));
         assert!(
             !unknown_cabin_slash("/create-skill"),
-            "Grok skill slashes must reach grok -p"
+            "skill slashes must reach the engine"
         );
         assert!(!unknown_cabin_slash("/workflow runs"));
         assert_eq!(parse_slash("/loop 30m check deploy").as_ref().map(slash_kind), Some("loop"));
@@ -1014,19 +1009,18 @@ mod tests {
             "{}",
             slash_help()
         );
-        assert!(slash_help().contains("Grok Build computer-use"));
-        assert!(slash_help().contains("inherit the PermissionMode pill"));
-        assert!(slash_help().contains("Ask is fail-closed, no ACP"));
+        assert!(slash_help().contains("Desktop control runs through the cabin's own desktop tools"));
+        assert!(slash_help().contains("they inherit the pill, and Ask fails closed"));
+        assert!(!slash_help().contains("grok -p") && !slash_help().contains("ACP"));
         assert!(slash_help().contains("Devices pair URL is a LAN IPv4"));
         assert!(slash_help().contains("Mode pill: Chat / Plan / btw"));
         assert!(slash_help().contains("/view-plan"));
         assert!(slash_help().contains("/btw — side ask"));
         assert!(
-            slash_help().contains("Ask permission is grok agent stdio")
-                && slash_help().contains("if ACP is down the turn is denied")
+            slash_help().contains("Ask permission shows Allow / Deny")
                 && slash_help().contains("btw (saved as ask) is a side ask")
-                && slash_help().contains("Night/inbox/anticipate inherit scheduled_args")
-                && slash_help().contains("`/workflow` `/compact` `/rewind` honor that same pill"),
+                && slash_help().contains("Night, inbox, and anticipate runs are unattended")
+                && slash_help().contains("`/compact` and `/rewind` honor that same pill"),
             "{}",
             slash_help()
         );
@@ -1087,44 +1081,19 @@ mod tests {
         assert!(slash_help().contains("/skill <name> — run a skill"));
         assert!(slash_help().contains("/sync — merge chats and memory"));
         assert!(slash_help().contains("Expired pair codes hide and rotate"));
-        assert!(slash_help().contains("x.ai/cli"));
+        assert!(!slash_help().contains("x.ai/cli") && !slash_help().contains("GROK_CHANNEL"));
+        assert!(slash_help().contains("Get Started"), "{}", slash_help());
         assert!(
-            slash_help().contains("GROK_CHANNEL=alpha") && slash_help().contains("Get Started"),
-            "{}",
+            !slash_help().contains("grok update")
+                && slash_help().contains("notifies in-app")
+                && slash_help().contains("Update cabin")
+                && slash_help().contains("every 2 hours")
+                && slash_help().contains("Settings → Update stays visible"),
+            "/update overlays the cabin only and notifies in-app: {}",
             slash_help()
         );
         #[cfg(windows)]
-        {
-            assert!(
-                slash_help().contains("grok update --alpha")
-                    && slash_help().contains("LOCALAPPDATA")
-                    && slash_help().contains("notifies in-app")
-                    && slash_help().contains("Update CLI and cabin")
-                    && slash_help().contains("every 2 hours")
-                    && slash_help().contains("Settings → Update stays visible"),
-                "{}",
-                slash_help()
-            );
-            assert!(
-                !slash_help().contains("current channel"),
-                "Windows /update is alpha, not current-channel: {}",
-                slash_help()
-            );
-        }
-        #[cfg(unix)]
-        {
-            assert!(
-                slash_help().contains("grok update --alpha")
-                    && !slash_help().contains("current channel")
-                    && !slash_help().contains("Linux does not pass --alpha")
-                    && slash_help().contains("notifies in-app")
-                    && slash_help().contains("Update CLI and cabin")
-                    && slash_help().contains("every 2 hours")
-                    && slash_help().contains("Settings → Update stays visible"),
-                "Linux /update must pin grok to alpha and notify in-app: {}",
-                slash_help()
-            );
-        }
+        assert!(slash_help().contains("LOCALAPPDATA"), "{}", slash_help());
         assert!(slash_help().contains("pinned taskbar click"));
         assert_eq!(parse_slash("/plan"), Some(Slash::Plan));
         assert_eq!(parse_slash("/always-approve"), Some(Slash::AlwaysApprove));
@@ -1205,21 +1174,15 @@ mod tests {
         assert_eq!(WorkflowVerb::Pause.as_str(), "pause");
         assert_eq!(WorkflowVerb::Resume.as_str(), "resume");
         assert_eq!(WorkflowVerb::Stop.as_str(), "stop");
-        for cmd in ["/workflow pause", "/workflow resume", "/workflow stop"] {
-            let hit = SLASH_COMMANDS
-                .iter()
-                .find(|s| s.cmd == cmd)
-                .unwrap_or_else(|| panic!("missing palette hint {cmd}"));
-            assert!(!hit.run_on_pick, "{cmd} must not run on pick");
-            assert!(hit.insert.ends_with(' '), "{cmd} insert leaves room for a target");
-        }
-        let hits = filter_slash_commands("/workflow pause");
         assert!(
-            hits.iter().any(|s| s.cmd == "/workflow pause" && !s.run_on_pick),
-            "{hits:?}"
+            !SLASH_COMMANDS.iter().any(|s| s.cmd.starts_with("/workflow")),
+            "the palette does not offer workflows"
         );
-        assert!(slash_help().contains("/workflow pause|resume|stop <name-or-run-id>"));
-        assert!(slash_help().contains("/workflows — open Skills with the Workflows section in view"));
+        assert!(filter_slash_commands("/workflow").iter().all(|s| !s.cmd.starts_with("/workflow")));
+        assert!(slash_help().contains(
+            "/workflow — workflows were a Grok Build CLI feature and are not in GrokHub"
+        ));
+        // Still parsed, so a typed /workflow gets that answer instead of going to the engine.
         assert!(!unknown_cabin_slash("/workflow pause review-changes-2"));
         assert!(!unknown_cabin_slash("/workflow pause"));
     }

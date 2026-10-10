@@ -30,7 +30,7 @@ pub struct ChatThread {
     /// Worktree this Grok session was created in. Resume must load here, not the currently bound tree.
     #[serde(default)]
     pub grok_cwd: Option<String>,
-    /// Resume from ~/.grok (TUI session) instead of cabin GROK_HOME.
+    /// A CLI-era chat whose saved transcript lives under ~/.grok (read only).
     #[serde(default)]
     pub grok_user_home: bool,
     /// Sidebar project folder. `None` is a global chat.
@@ -626,7 +626,7 @@ pub fn park_follow_up_chats(threads: &mut [ChatThread], linked: &[String]) -> bo
 pub const BACKGROUND_THREAD_TITLE: &str = "Background";
 
 /// Sessions that background work wrote (a `/bg` run's fork, a loop, a fast
-/// `grok -p`) are filed on the hidden Background chat as retired ids. Startup
+/// one-shot run) are filed on the hidden Background chat as retired ids. Startup
 /// adoption and the Grok session list then treat them as known, so they never
 /// come back as History rows. Ids a chat already holds are left alone.
 /// Returns true when something was filed.

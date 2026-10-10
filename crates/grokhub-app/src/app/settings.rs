@@ -962,7 +962,7 @@ impl Cabin {
             self.clear_profile_picture();
         }
         if update {
-            self.queue_combined_update();
+            self.queue_cabin_update();
         }
         if restart {
             self.restart_after_update(ctx);

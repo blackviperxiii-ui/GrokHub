@@ -341,20 +341,6 @@ mod tests {
                 && win_cli.contains("https://x.ai/cli/install.ps1"),
             "Windows Setup must run the official alpha installer, not assume grok is on PATH: {iss}"
         );
-        let overlay = include_str!("../../../crates/grokhub-core/src/update.rs");
-        let unix_update = overlay
-            .split("pub fn unix_grok_update_cmd(")
-            .nth(1)
-            .and_then(|s| s.split("pub fn update_plan_steps(").next())
-            .expect("unix_grok_update_cmd");
-        assert!(
-            unix_update.contains("$HOME/.grok/bin")
-                && unix_update.contains("grok update --alpha")
-                && unix_update.contains("Do not pass --stable")
-                && unix_update.contains("unix_grok_update_cmd()")
-                && !unix_update.contains("do not force --alpha here on Unix"),
-            "Linux cabin /update must pin grok to alpha and put ~/.grok/bin on PATH: {unix_update}"
-        );
         assert_eq!(
             ydotool_socket_path(None, Some("/run/user/1000")),
             PathBuf::from("/run/user/1000/ydotool.sock")
