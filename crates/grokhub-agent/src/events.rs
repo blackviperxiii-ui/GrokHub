@@ -562,6 +562,7 @@ fn to_acp(ev: LoopEvent, kind: AuthKind, session: &str, used: u64, limit: u64) -
         LoopEvent::Meter { .. } | LoopEvent::Compact { .. } => return None,
         LoopEvent::Task { id, title, done } => AcpEvent::Task { id, title, done },
         LoopEvent::Plan(text) => AcpEvent::Plan(text),
+        LoopEvent::Findings(body) => AcpEvent::Findings(body),
         LoopEvent::Permission {
             id,
             name,

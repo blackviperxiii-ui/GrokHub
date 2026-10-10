@@ -1588,7 +1588,7 @@ pub fn get_started_panel(
         );
         ui.add_space(12.0);
         ui.label(
-            RichText::new("Connect your Super Grok account. This signs in GrokHub and the Grok Build CLI together.")
+            RichText::new("Connect your Super Grok account. GrokHub signs in on its own; the Grok Build CLI is not needed.")
                 .size(15.0)
                 .color(crate::theme::muted()),
         );
@@ -3278,18 +3278,16 @@ mod tests {
             "a tile row must stretch short cards up to the tallest neighbor: {row}"
         );
         let pages = include_str!("app/pages.rs");
-        let connectors = pages
-            .split("fn ui_connectors(")
+        let skills = pages
+            .split("fn ui_skills(")
             .nth(1)
-            .expect("ui_connectors");
+            .and_then(|s| s.split("fn tick_history_search(").next())
+            .expect("ui_skills");
         assert!(
-            connectors.contains("self.ui_skills(ui)"),
-            "connectors must reuse the skills grid: {connectors}"
+            !skills.contains("tab_pill(ui, \"Connectors\"") && skills.contains("self.open_connectors()"),
+            "Skills has no Connectors tab; its Connectors pill opens Settings: {skills}"
         );
-        assert!(
-            pages.contains("GITHUB_TILES") && pages.contains("grok_tile("),
-            "connector cards must be grok_tile"
-        );
+        assert!(skills.contains("grok_tile("), "skill cards stay grok_tile");
         let empty = src
             .split("pub fn empty_prompt_tile(")
             .nth(1)
@@ -4402,8 +4400,9 @@ mod tests {
             "Get Started must use cabin device-code OAuth and surface errors: {app}"
         );
         assert!(
-            app.contains("Also signs in the Grok Build CLI if it is not already connected"),
-            "settings Connect must say it also signs the CLI in: {app}"
+            app.contains("GrokHub keeps this sign-in to itself.")
+                && !app.contains("Also signs in the Grok Build CLI"),
+            "settings Connect must say the sign-in stays with GrokHub: {app}"
         );
     }
 

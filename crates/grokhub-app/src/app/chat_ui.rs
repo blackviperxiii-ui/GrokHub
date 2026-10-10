@@ -1194,6 +1194,7 @@ impl Cabin {
                         let mut collapse_session = false;
                         let mut privacy_revoke: Option<String> = None;
                         let mut skill_hit: Option<super::skill_undo::SkillRow> = None;
+                        let mut findings_hit: Option<(super::findings_ui::FindingsAct, String)> = None;
                         let mut change_hit: Option<(super::change_undo::ChangeRow, super::change_undo::ChangeAct)> = None;
                         {
                             let thread_id = fold_thread.clone();
@@ -1223,6 +1224,12 @@ impl Cabin {
                                 None => Vec::new(),
                             };
                             let change_at = change_at.map(|(i, _)| i);
+                            // The newest findings card gets a pill per fix.
+                            let findings = super::findings_ui::newest_findings_row(
+                                &self.chat_views,
+                                &self.harness.findings_dismissed,
+                            );
+                            let findings_at = findings.as_ref().map(|(i, _)| *i);
                             let (views, keys) = (&self.chat_views, &self.chat_view_keys);
                             let shown = if live {
                                 views_up_to_last_user(views)
@@ -1299,7 +1306,8 @@ impl Cabin {
                                         .any(|v| v.kind == ChatKind::Assistant);
                                 let privacy_here = (privacy_at == Some(i) && !privacy_grants.is_empty())
                                     || (skill_at == Some(i) && !skill_rows.is_empty())
-                                    || (change_at == Some(i) && !change_rows.is_empty());
+                                    || (change_at == Some(i) && !change_rows.is_empty())
+                                    || findings_at == Some(i);
                                 let painted = ui
                                     .push_id(chat_row_id_salt(&thread_id, i), |ui| {
                                         let mut p = paint_chat_block_with(
@@ -1314,6 +1322,9 @@ impl Cabin {
                                             if skill_at == Some(i) {
                                                 skill_hit =
                                                     super::skill_undo::paint_skill_undo_rows(ui, &skill_rows);
+                                            } else if let Some((_, card)) = findings.as_ref().filter(|_| findings_at == Some(i)) {
+                                                findings_hit = super::findings_ui::paint_findings_fixes(ui, card)
+                                                    .map(|act| (act, block.body.clone()));
                                             } else if change_at == Some(i) {
                                                 change_hit = super::change_undo::paint_change_rows(
                                                     ui,
@@ -1386,6 +1397,9 @@ impl Cabin {
                         }
                         if let Some((row, act)) = change_hit {
                             self.change_row_clicked(&row, act);
+                        }
+                        if let Some((act, body)) = findings_hit {
+                            self.findings_clicked(act, &body);
                         }
                         if jumped_you || no_turn_row {
                             self.jump_last_you = false;
@@ -2412,6 +2426,10 @@ impl Cabin {
             for slot in composer_stack_order() {
                 match slot {
                     ComposerStackSlot::AuthBanner => {
+                        if self.cfg.native_engine() {
+                            self.ui_native_auth_banner(ui);
+                            continue;
+                        }
                         let grok_missing = grokhub_acp::find_grok().is_none();
                         let need_login = grokhub_acp::grok_cli_key().is_none() && !self.has_key();
                         let cabin_oauth = self

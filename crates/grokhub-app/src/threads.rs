@@ -54,9 +54,13 @@ pub struct ChatThread {
     /// and must not become extra History rows.
     #[serde(default)]
     pub retired_sessions: Vec<String>,
-    /// Opened while Settings → Labs native engine was on. Old rows stay on the CLI.
+    /// The session id belongs to the native engine. A CLI-era thread flips on its
+    /// next native turn; its old CLI session is retired, never resumed.
     #[serde(default)]
     pub native: bool,
+    /// Adopted from the CLI and not yet given a recap of its earlier turns.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub native_carry: bool,
 }
 
 impl ChatThread {
@@ -82,6 +86,7 @@ impl ChatThread {
             plan_body: String::new(),
             retired_sessions: Vec::new(),
             native: false,
+            native_carry: false,
         }
     }
 
@@ -89,6 +94,52 @@ impl ChatThread {
     pub fn messages_mut(&mut self) -> &mut Vec<(String, String)> {
         Arc::make_mut(&mut self.messages)
     }
+}
+
+/// Hand a CLI-era thread to the native engine: its CLI session id is retired
+/// (History keeps it read-only) and the next turn carries a recap. Returns
+/// false for a thread that was already native.
+pub fn adopt_native(thread: &mut ChatThread) -> bool {
+    if thread.native {
+        return false;
+    }
+    if let Some(id) = thread.grok_session.take().filter(|id| !id.trim().is_empty()) {
+        if !thread.retired_sessions.iter().any(|s| s == &id) {
+            thread.retired_sessions.push(id);
+        }
+    }
+    thread.native = true;
+    thread.native_carry = !thread.messages.is_empty();
+    true
+}
+
+/// Earlier turns for the first native prompt on an adopted thread, newest kept.
+/// The last message is the user turn being sent, so it is left out.
+pub fn native_carry_recap(messages: &[(String, String)]) -> String {
+    const TURNS: usize = 12;
+    const PER_TURN: usize = 600;
+    let earlier = &messages[..messages.len().saturating_sub(1)];
+    let start = earlier.len().saturating_sub(TURNS);
+    let mut lines = Vec::new();
+    for (role, text) in &earlier[start..] {
+        let text = text.trim();
+        if text.is_empty() || !matches!(role.as_str(), "user" | "assistant") {
+            continue;
+        }
+        let who = if role == "user" { "User" } else { "You" };
+        let mut cut: String = text.chars().take(PER_TURN).collect();
+        if cut.len() < text.len() {
+            cut.push('…');
+        }
+        lines.push(format!("{who}: {cut}"));
+    }
+    if lines.is_empty() {
+        return String::new();
+    }
+    format!(
+        "Earlier in this chat (before GrokHub ran it natively):\n{}\n\n",
+        lines.join("\n")
+    )
 }
 
 /// Highest `accessed_ms`. Skip scratch when another thread exists.
@@ -1952,5 +2003,44 @@ mod tests {
             vec!["sess-b".to_string()]
         );
         assert!(sessions_deleted_with_chat(None, &["  ".into()]).is_empty());
+    }
+
+    #[test]
+    fn adopting_a_cli_thread_retires_its_session_and_asks_for_one_recap() {
+        let mut t = ChatThread::new("Chat", false);
+        t.grok_session = Some("cli-sess-1".into());
+        t.messages_mut().push(("user".into(), "hi".into()));
+        assert!(adopt_native(&mut t));
+        assert!(t.native);
+        assert!(t.native_carry);
+        assert_eq!(t.grok_session, None);
+        assert_eq!(t.retired_sessions, vec!["cli-sess-1".to_string()]);
+        assert!(!adopt_native(&mut t), "a native thread is left alone");
+        assert_eq!(t.retired_sessions, vec!["cli-sess-1".to_string()]);
+
+        let mut empty = ChatThread::new("Chat", false);
+        assert!(adopt_native(&mut empty));
+        assert!(!empty.native_carry, "nothing to recap");
+        assert!(empty.retired_sessions.is_empty());
+    }
+
+    #[test]
+    fn the_native_recap_keeps_recent_turns_and_drops_the_one_being_sent() {
+        let long = "x".repeat(700);
+        let mut msgs: Vec<(String, String)> = vec![("system".into(), "card".into())];
+        for i in 0..14 {
+            msgs.push(("user".into(), format!("ask {i}")));
+        }
+        msgs.push(("assistant".into(), long));
+        msgs.push(("user".into(), "now".into()));
+        let recap = native_carry_recap(&msgs);
+        assert!(recap.starts_with("Earlier in this chat (before GrokHub ran it natively):\n"));
+        assert!(recap.ends_with("…\n\n"), "{recap}");
+        assert!(!recap.contains("ask 2\n"), "only the last 12 turns: {recap}");
+        assert!(recap.contains("User: ask 3\n"), "{recap}");
+        assert!(recap.contains(&format!("You: {}…", "x".repeat(600))));
+        assert!(!recap.contains("now"));
+        assert!(!recap.contains("card"));
+        assert_eq!(native_carry_recap(&[("user".into(), "only".into())]), "");
     }
 }
