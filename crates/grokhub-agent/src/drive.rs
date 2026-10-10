@@ -29,8 +29,9 @@ pub enum Verdict {
 }
 
 pub struct Drive {
-    /// Ids completed before this run (a "continue" keeps earlier work).
-    done_at_start: Vec<String>,
+    /// Items (id and text) completed before this run, so a "continue"
+    /// keeps earlier work but a replaced list reusing an id does not.
+    done_at_start: Vec<(String, String)>,
     last_left: Vec<String>,
     evidence_at_push: usize,
     stalls: u32,
@@ -39,7 +40,7 @@ pub struct Drive {
 impl Drive {
     pub fn new(start: &[TodoItem]) -> Self {
         Self {
-            done_at_start: start.iter().filter(|t| t.status == "completed").map(|t| t.id.clone()).collect(),
+            done_at_start: start.iter().filter(|t| t.status == "completed").map(|t| (t.id.clone(), t.content.clone())).collect(),
             last_left: Vec::new(),
             evidence_at_push: 0,
             stalls: 0,
@@ -51,7 +52,9 @@ impl Drive {
     pub fn check(&mut self, now: &[TodoItem], evidence: usize) -> Verdict {
         let open: Vec<&TodoItem> = now.iter().filter(|t| matches!(t.status.as_str(), "pending" | "in_progress")).collect();
         let unproven: Vec<&TodoItem> = if evidence == 0 {
-            now.iter().filter(|t| t.status == "completed" && !self.done_at_start.contains(&t.id)).collect()
+            now.iter()
+                .filter(|t| t.status == "completed" && !self.done_at_start.iter().any(|(id, content)| *id == t.id && *content == t.content))
+                .collect()
         } else {
             Vec::new()
         };
@@ -133,6 +136,12 @@ mod tests {
         assert_eq!(drive.check(&now, 1), Verdict::End);
         // Work finished in an earlier run needs no new check.
         assert_eq!(Drive::new(&[item("old", "completed")]).check(&[item("old", "completed")], 0), Verdict::End);
+        // A replaced list that reuses an id for new work needs a check.
+        let reused = TodoItem { id: "old".into(), content: "firewall".into(), status: "completed".into() };
+        assert_eq!(
+            Drive::new(&[item("old", "completed")]).check(&[reused], 0),
+            Verdict::Push("Marked completed without any check this run: \"firewall\". Run a check that shows each one before you finish.".into())
+        );
     }
 
     #[test]
