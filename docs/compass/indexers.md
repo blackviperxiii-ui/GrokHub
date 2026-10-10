@@ -21,7 +21,7 @@
 ## What depends on it
 - Settings → Permissions scope rows and `/privacy`; the AMR store and its dream (which skips `SCOPE_SOURCE_PREFIX` nodes); Spike-6a cards (`ScopeAsks`) and Spike-8b diagnose (`snapshot`).
 ## Non-obvious
-- Calendar and mail are grant rows only: no cabin-owned reader exists (Grok Build's connectors are outside the cabin, D1), so `has_reader` is false and no ask card is offered for them.
+- Calendar and mail are grant rows only: no cabin-owned reader exists (D1), so `has_reader` is false and no ask card is offered for them.
 - App launch counts come only from the cabin's own `APP_LAUNCH_LOG`; nothing writes it yet. A forgotten fact keeps its tombstone, so the same item is never written again.
 - Tags and spans carry the scope kind only (`scope:files`), never the folder path; `node_id` hashes key and item. `RESCAN_MS` paces each scope; battery and quiet hours skip the tick before any read.
 ## See also

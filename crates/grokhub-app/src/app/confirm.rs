@@ -83,10 +83,7 @@ pub(super) enum ConfirmKind {
         title: String,
     },
     /// Settings → Connectors Disconnect: the server and its sign-in go.
-    Disconnect {
-        name: String,
-        source: super::connectors_ui::ConnectorSource,
-    },
+    Disconnect { name: String },
     /// Marketplace: seal the key typed for `name`. The key stays in the
     /// Marketplace field, never in this card.
     SaveKey { name: String, label: String },
@@ -299,10 +296,10 @@ impl Cabin {
             ConfirmKind::DeleteRecording { dir, title, .. } => {
                 (delete_recording_spec(), format!("Delete {title}?"), dir.clone())
             }
-            ConfirmKind::Disconnect { name, source } => (
+            ConfirmKind::Disconnect { name } => (
                 disconnect_spec(),
                 super::connectors_ui::disconnect_question(name),
-                super::connectors_ui::disconnect_detail(*source).to_string(),
+                super::connectors_ui::DISCONNECT_DETAIL.to_string(),
             ),
             ConfirmKind::SaveKey { label, .. } => (
                 save_key_spec(),
@@ -356,7 +353,7 @@ impl Cabin {
             ConfirmKind::DeleteRecording { card_id, dir, title } => {
                 self.delete_recording(&card_id, &dir, &title)
             }
-            ConfirmKind::Disconnect { name, source } => self.disconnect_confirmed(&name, source),
+            ConfirmKind::Disconnect { name } => self.disconnect_confirmed(&name),
             ConfirmKind::SaveKey { name, .. } => self.save_key_confirmed(&name),
         }
     }
@@ -393,7 +390,6 @@ impl Cabin {
             self.halt_in_flight();
         }
         self.acp = None;
-        self.acp_spawn_rx = None;
         if let Some(t) = self.threads.get_mut(self.thread_idx) {
             t.grok_session = None;
         }
@@ -518,7 +514,6 @@ mod tests {
         assert!(
             !arm.contains("halt_in_flight")
                 && !arm.contains("self.acp = None")
-                && !arm.contains("acp_spawn_rx")
                 && !arm.contains("grok_session"),
             "Cancel must not tear down ACP/grok before confirm: {arm}"
         );

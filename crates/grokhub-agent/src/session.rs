@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 
-use grokhub_acp::GrokSession;
+use grokhub_core::cli_history::GrokSession;
 use serde_json::{json, Value};
 
 use crate::{CancelToken, ContentPart, InputItem, Usage};

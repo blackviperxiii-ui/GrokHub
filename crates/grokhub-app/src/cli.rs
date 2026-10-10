@@ -120,7 +120,7 @@ mod tests {
 
     #[test]
     fn cabin_reports_version() {
-        assert_eq!(env!("CARGO_PKG_VERSION"), "2.13.0");
+        assert_eq!(env!("CARGO_PKG_VERSION"), "2.13.1");
     }
 
     #[test]
@@ -145,8 +145,8 @@ mod tests {
             "grokhub --doctor must report whether the cabin process is alive: {doctor}"
         );
         assert!(
-            doctor.contains("doctor_grok_line_blocking") && doctor.contains("find_grok"),
-            "grokhub --doctor must report grok CLI using the same locate path as the cabin: {doctor}"
+            !doctor.contains("doctor_grok_line") && !doctor.contains("find_grok"),
+            "grokhub --doctor checks GrokHub alone, never the Grok Build CLI: {doctor}"
         );
     }
 }

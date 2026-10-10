@@ -1,7 +1,7 @@
 # Compass: router (R0 model registry, R1 automatic effort, R2a model healing, R2b cost classes, R3a learning, R3b providers)
 
 ## Owns
-- The model registry in `{config}/models/registry.json`: which Grok models exist, which this plan or key can use, and their state (`ModelState`: probing, live, degraded, quarantined, not_in_plan, redirected, ghost, retired, pruned). Sources share one `CatalogSource` trait; `XaiApiSource` and `GrokBuildSource` are the only router code that touches the network or runs `grok`.
+- The model registry in `{config}/models/registry.json`: which Grok models exist, which this plan or key can use, and their state (`ModelState`: probing, live, degraded, quarantined, not_in_plan, redirected, ghost, retired, pruned). Sources share one `CatalogSource` trait; `XaiApiSource` and `ProviderSource` are the only router code that touches the network.
 - Passive health from real calls (`Observation` lines in `models/health.jsonl`, folded by `fold_health`). No health probes; the onboarding probe (`run_probe`) is the only one, and it only runs on `included` routes.
 - Model profiles in `models/model_profiles/` (`ModelProfile`, versioned, last 3 kept) and `RuntimeSettings::from_profile`, which fill the route record's `settings`.
 - `Router::choose` (pure: inputs, registry and profiles passed in, `now_ms` as the clock) and the `RouteRecord` on each `model-calls` span.
@@ -29,7 +29,7 @@
 - R3a fills DE2 and joins route records with `outcomes.jsonl` by episode. R3b's `new_provider` routes ride the same `Spend` and `harness::decide`.
 ## Non-obvious
 - `harness::decide` stays the only approval gate: the router picks how to think, never whether to act. A GB-only model gets a metadata-only profile (`not_run: gb_only`); a queued probe is not usable yet.
-- Grok Build turns are logged at send (`provider` `grok_build`, no outcome, no health): GB owns those calls and its effort is set at spawn. Live ACP `set_config_option` is not verified (R0 Step-0), so an ACP session runs at everyday chat's start and `/why` notes when the router would have picked otherwise; a headless `grok -p` turn spawns at the router's pick for that turn.
+- `PROVIDER_GROK_BUILD` (`grok_build`) is left from the CLI path: a call logged under it gets no outcome and no health (`crates/grokhub-agent/src/route/live.rs`). No CLI turn runs now; chat, background, and scheduled turns are native.
 - The ladder's state is in memory per episode and class; tool errors reach it through a thread-local (`note_tool_error`), so the next routed call on the same thread reads them.
 ## See also
 - [harness](harness.md), [grokhub-agent](grokhub-agent.md), [heartbeat](heartbeat.md), [self-improve](self-improve.md)

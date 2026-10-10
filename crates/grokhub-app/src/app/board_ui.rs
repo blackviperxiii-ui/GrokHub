@@ -633,10 +633,10 @@ impl Cabin {
             self.board_view.note = Some((id.to_string(), "Finish the open chat first".into()));
             return false;
         }
-        if !self.can_agent() {
+        if !self.agent_ready() {
             self.board_view.note = Some((
                 id.to_string(),
-                "Install Grok Build (x.ai/cli) or Connect Grok in Settings".into(),
+                self.no_agent_note().into(),
             ));
             return false;
         }
@@ -673,7 +673,6 @@ impl Cabin {
         };
         // Notes and a Follow up card's newest report go with this message, once each.
         self.card_notes_follow = grokhub_core::take_card_notes_block(&mut self.board, &thread_id);
-        self.bg.steer_follow = None;
         self.bg.results_follow = None;
         if let Some(c) = self.board.iter_mut().find(|c| c.id == id) {
             c.notes_sent = grokhub_core::card_notes_hash(&c.notes);

@@ -12,9 +12,16 @@
 
 use grokhub_core::host_safety;
 
-/// Spike-1c path D `--deny` rules for GB's own computer-use tools. They live
-/// in `grokhub_acp` next to `apply_desktop_spawn_args`, which adds them.
-pub use grokhub_acp::BUILTIN_CU_DENY;
+/// Spike-1c path D: the computer-use tool names an outside agent may bring,
+/// in rule form. Every name that is not GrokHub's own desktop server.
+pub const BUILTIN_CU_DENY: &[&str] = &[
+    "MCPTool(computer__*)",
+    "MCPTool(computer-use__*)",
+    "MCPTool(computer_use__*)",
+    "MCPTool(*__computer_*)",
+    "MCPTool(*__mouse_*)",
+    "MCPTool(*__keyboard_*)",
+];
 
 /// Hard class: Always / Auto / Full cannot skip. Parks a Jeremy approval card.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

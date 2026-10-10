@@ -9,7 +9,6 @@ The format follows Meta's "compass, not encyclopedia" write-up (Engineering at M
 | [grokhub-core](grokhub-core.md) | `crates/grokhub-core/`: the shared brain, re-exports, script-text tests |
 | [amr](amr.md) | `crates/grokhub-core/src/amr/`: agent memory repo M0 and `/recall` |
 | [slash](slash.md) | slash parsing (core), dispatch (app), native parity (agent) |
-| [grokhub-acp](grokhub-acp.md) | `crates/grokhub-acp/`: the `grok` CLI client, ACP, headless `grok -p`, cabin `GROK_HOME` |
 | [grokhub-agent](grokhub-agent.md) | `crates/grokhub-agent/`: the native Lab engine |
 | [harness](harness.md) | `crates/grokhub-agent/src/harness/`: Spike-0 approval gate, paths A/B/C/E |
 | [repair](repair.md) | `crates/grokhub-agent/src/repair/`: Spike-8b read-only diagnose, `/diagnose`, apply later |

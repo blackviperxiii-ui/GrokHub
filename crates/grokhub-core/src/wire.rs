@@ -80,67 +80,10 @@ impl PermissionMode {
         matches!(self, Self::AlwaysApprove | Self::Auto)
     }
 
-    /// Ask needs a live ACP session so Allow / Deny can show.
-    /// Auto and Always stay on headless `grok -p`. Agent stdio against
-    /// `~/.grok` is SIGTERM'd (exit 143) while MCP servers start, and retrying
-    /// that path leaves the cabin on Thinking.
-    pub fn uses_acp(self) -> bool {
-        matches!(self, Self::Ask)
-    }
-
-    /// Ask requires approval before shell, edit, or write. Same modes as
-    /// [`Self::uses_acp`]. An unwatched run cannot show Allow / Deny.
+    /// Ask requires approval before shell, edit, or write. An unwatched run
+    /// cannot show Allow / Deny.
     pub fn needs_approval(self) -> bool {
-        self.uses_acp()
-    }
-
-    /// Composer `grok -p` for Auto and Always. Interactive Ask uses ACP
-    /// (`uses_acp`) and does not reach this. Ask matches [`Self::scheduled_flags`]
-    /// so a skipped ACP arm cannot pass `--always-approve`.
-    pub fn composer_headless_flags(self) -> (bool, bool) {
-        match self {
-            Self::Auto => (false, true),
-            Self::AlwaysApprove => (true, false),
-            Self::Ask => (false, false),
-        }
-    }
-
-    /// Scheduled / night / `/send` tasks inherit the composer PermissionMode pill.
-    /// Ask is fail-closed (no silent `--always-approve`). Interactive Ask uses ACP.
-    pub fn scheduled_flags(self) -> (bool, bool) {
-        match self {
-            Self::AlwaysApprove => (true, false),
-            Self::Auto => (false, true),
-            Self::Ask => (false, false),
-        }
-    }
-
-    /// CLI argv for a scheduled `grok -p` that must honor the PermissionMode pill.
-    pub fn scheduled_args(self) -> Vec<String> {
-        let (always, auto) = self.scheduled_flags();
-        let mut a = Vec::new();
-        if always {
-            a.push("--always-approve".into());
-        } else if auto {
-            a.push("--permission-mode".into());
-            a.push("auto".into());
-        }
-        a
-    }
-}
-
-/// User-visible Ask deny when `grok agent stdio` cannot start or has died.
-/// Do not fall through to headless `grok -p --sandbox off`.
-pub const ASK_ACP_DOWN: &str =
-    "Ask is fail-closed: Allow / Deny needs a live Grok Build agent. Turn denied. Install Grok Build CLI or Start agent in Settings → Update.";
-
-/// Ask fail-closed copy. Empty detail keeps the gate line; extra text is appended.
-pub fn ask_denied_without_acp(detail: &str) -> String {
-    let detail = detail.trim();
-    if detail.is_empty() {
-        ASK_ACP_DOWN.to_string()
-    } else {
-        format!("{ASK_ACP_DOWN} {detail}")
+        matches!(self, Self::Ask)
     }
 }
 
@@ -1293,6 +1236,91 @@ pub fn elicit_cancel(id: Value) -> JsonRpc {
 }
 
 
+/// One finished turn of a background or night run: its session, reply, thinking and usage.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SingleTurn {
+    pub session_id: String,
+    pub text: String,
+    pub thought: String,
+    pub usage: GrokUsage,
+    pub stop_reason: String,
+}
+
+/// One event from a running turn: streamed text, a tool card, usage, the end.
+#[derive(Debug, Clone, PartialEq)]
+pub enum GrokPEvent {
+    Thought(String),
+    Text(String),
+    Tool(ToolCard),
+    Usage(GrokUsage),
+    Plan(String),
+    Compact {
+        started: bool,
+        usage: GrokUsage,
+        error: Option<String>,
+    },
+    Commands(Vec<String>),
+    Task { id: String, title: String, done: bool },
+    Recovering(String),
+    End(SingleTurn),
+    Err(String),
+}
+
+/// One finished unattended turn as JSON: `sessionId`, `text`, `thought`,
+/// `stopReason`, and usage. Leading log lines before the object are skipped.
+pub fn parse_single_turn(stdout: &str) -> Result<SingleTurn, String> {
+    let trimmed = stdout.trim();
+    let json = if let Some(i) = trimmed.find('{') {
+        &trimmed[i..]
+    } else {
+        trimmed
+    };
+    let v: Value = serde_json::from_str(json).map_err(|e| format!("turn json: {e}"))?;
+    let session_id = v
+        .get("sessionId")
+        .or_else(|| v.get("session_id"))
+        .and_then(|x| x.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if session_id.is_empty() {
+        return Err("turn missing sessionId".into());
+    }
+    let text = v
+        .get("text")
+        .and_then(|x| x.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    let thought = v
+        .get("thought")
+        .and_then(|x| x.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if text.is_empty() && thought.is_empty() {
+        return Err("turn empty reply".into());
+    }
+    let mut usage = parse_usage(&v);
+    if usage.stop_reason.is_empty() {
+        usage.stop_reason = v
+            .get("stopReason")
+            .or_else(|| v.get("stop_reason"))
+            .and_then(|x| x.as_str())
+            .unwrap_or("")
+            .trim()
+            .to_string();
+    }
+    let stop_reason = usage.stop_reason.clone();
+    Ok(SingleTurn {
+        session_id,
+        text,
+        thought,
+        usage,
+        stop_reason,
+    })
+}
+
 /// Server-reported spend and context. Grok Build 1.0.12+ includes reasoning.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct GrokUsage {
@@ -1649,6 +1677,36 @@ mod tests {
     use super::*;
 
     #[test]
+    fn parse_single_turn_stamps_session_and_text() {
+        let raw = r#"{
+            "text": "pong",
+            "stopReason": "end_turn",
+            "sessionId": "01a024f8-7606-74a2-8331-57a5177822eb",
+            "thought": "say pong"
+        }"#;
+        let t = parse_single_turn(raw).expect("json");
+        assert_eq!(t.session_id, "01a024f8-7606-74a2-8331-57a5177822eb");
+        assert_eq!(t.text, "pong");
+        assert_eq!(t.thought, "say pong");
+        let spent = parse_single_turn(
+            r#"{
+            "text": "pong",
+            "stopReason": "end_turn",
+            "sessionId": "01a024f8-7606-74a2-8331-57a5177822eb",
+            "usage": {"input_tokens": 18007, "output_tokens": 45, "reasoning_tokens": 40, "total_tokens": 18052},
+            "num_turns": 1
+        }"#,
+        )
+        .expect("usage");
+        assert_eq!(spent.usage.reasoning_tokens, 40);
+        assert_eq!(spent.usage.total_tokens, 18052);
+        assert_eq!(spent.stop_reason, "end_turn");
+        let noisy = format!("debug line\n{raw}\n");
+        assert_eq!(parse_single_turn(&noisy).unwrap().text, "pong");
+        assert!(parse_single_turn("{}").is_err());
+    }
+
+    #[test]
     fn auth_prefers_cached_without_key() {
         let methods = json!([{ "id": "xai.api_key" }, { "id": "cached_token" }]);
         assert_eq!(
@@ -1892,59 +1950,9 @@ mod tests {
         assert!(PermissionMode::AlwaysApprove.auto_allows());
         assert!(PermissionMode::Auto.auto_allows());
         assert!(!PermissionMode::Ask.auto_allows());
-        assert!(PermissionMode::Ask.uses_acp());
-        assert!(!PermissionMode::Auto.uses_acp());
-        assert!(!PermissionMode::AlwaysApprove.uses_acp());
-        let down = ask_denied_without_acp("");
-        assert!(
-            down.contains("Allow / Deny")
-                && down.to_ascii_lowercase().contains("turn denied")
-                && down.contains("Install Grok Build")
-                && down.contains("Start agent"),
-            "{down}"
-        );
-        assert!(
-            !down.contains("sandbox") && !down.contains("grok -p"),
-            "Ask deny must not mention a headless fallthrough: {down}"
-        );
-        let with = ask_denied_without_acp("handshake refused");
-        assert!(
-            with.contains("Allow / Deny") && with.contains("handshake refused"),
-            "{with}"
-        );
-        assert_eq!(
-            PermissionMode::Ask.composer_headless_flags(),
-            (false, false),
-            "composer Ask must not yolo --always-approve"
-        );
-        assert_eq!(PermissionMode::Auto.composer_headless_flags(), (false, true));
-        assert_eq!(
-            PermissionMode::AlwaysApprove.composer_headless_flags(),
-            (true, false)
-        );
-        assert_eq!(
-            PermissionMode::Ask.scheduled_flags(),
-            (false, false),
-            "scheduled Ask must not silent always-approve"
-        );
-        assert_eq!(PermissionMode::Auto.scheduled_flags(), (false, true));
-        assert_eq!(
-            PermissionMode::AlwaysApprove.scheduled_flags(),
-            (true, false)
-        );
-        assert!(
-            PermissionMode::Ask.scheduled_args().is_empty(),
-            "{:?}",
-            PermissionMode::Ask.scheduled_args()
-        );
-        assert_eq!(
-            PermissionMode::Auto.scheduled_args(),
-            vec!["--permission-mode".to_string(), "auto".into()]
-        );
-        assert_eq!(
-            PermissionMode::AlwaysApprove.scheduled_args(),
-            vec!["--always-approve".to_string()]
-        );
+        assert!(PermissionMode::Ask.needs_approval());
+        assert!(!PermissionMode::Auto.needs_approval());
+        assert!(!PermissionMode::AlwaysApprove.needs_approval());
     }
 
     #[test]
