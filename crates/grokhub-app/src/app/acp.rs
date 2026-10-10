@@ -16,10 +16,6 @@ impl Cabin {
         self.maybe_continue_ptt();
     }
 
-    pub(super) fn ensure_acp(&mut self) -> Result<(), String> {
-        self.ensure_native_engine()
-    }
-
     pub(super) fn poll_acp(&mut self) {
         let evs = {
             let Some(h) = &self.acp else { return };
@@ -693,25 +689,6 @@ impl Cabin {
             self.status = footer;
         }
         self.drain_followup_queue();
-    }
-
-    /// A typed CLI slash (`/rewind`, `/workflow …`) goes to the native engine as a turn.
-    pub(super) fn send_grok_slash(&mut self, cmd: &str) {
-        if self.acp.is_none() {
-            if let Err(e) = self.ensure_acp() {
-                self.fail_turn_start(&e);
-                return;
-            }
-        }
-        let sent = self.acp.as_ref().map(|h| h.prompt(cmd));
-        match sent {
-            Some(Ok(())) => self.running = true,
-            Some(Err(e)) => {
-                self.acp = None;
-                self.fail_turn_start(&e);
-            }
-            None => self.fail_turn_start("native engine is not running"),
-        }
     }
 
     pub(super) fn apply_grok_commands(&mut self, cmds: Vec<String>) {

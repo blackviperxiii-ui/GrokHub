@@ -41,8 +41,6 @@ pub struct ChatThread {
     pub background: bool,
     #[serde(default)]
     pub grok_fork: bool,
-    #[serde(default)]
-    pub grok_worktree: bool,
     /// Session show has not filled this row. Pin and rename must not store `messages: []`
     /// as if that were the transcript.
     #[serde(default)]
@@ -79,7 +77,6 @@ impl ChatThread {
             grok_cwd: None,
             grok_user_home: false,
             grok_fork: false,
-            grok_worktree: false,
             grok_show_pending: false,
             project_id: None,
             background: false,

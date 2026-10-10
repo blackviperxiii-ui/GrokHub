@@ -4,6 +4,12 @@ use super::*;
 
 /// Workflows ran inside the Grok Build CLI, which GrokHub no longer uses.
 const WORKFLOWS_GONE: &str = "Workflows were a Grok Build CLI feature and are not in GrokHub";
+/// `--worktree` was a Grok Build CLI flag; the engine works in the bound folder.
+const WORKTREE_GONE: &str =
+    "Worktrees were a Grok Build CLI feature; chats run in the bound project folder";
+/// Native sessions are append-only JSONL: dropping only the bubble would leave
+/// the reply in the model's history.
+const REWIND_NA: &str = "N/A on native threads: the session is append-only.";
 
 /// Memory lines for `/recall` when `memory_backend` is `amr`. The cabin
 /// opens the store (and runs the one-time import) before this thread starts.
@@ -223,14 +229,7 @@ impl Cabin {
                 self.status = WORKFLOWS_GONE.into();
             }
             Slash::Worktree => {
-                if let Some(t) = self.threads.get_mut(self.thread_idx) {
-                    t.grok_worktree = !t.grok_worktree;
-                    self.status = if t.grok_worktree {
-                        "Next chat uses --worktree".into()
-                    } else {
-                        "Worktree off".into()
-                    };
-                }
+                self.status = WORKTREE_GONE.into();
             }
             Slash::Btw => {
                 self.set_session_mode(SessionMode::Ask);
@@ -306,14 +305,8 @@ impl Cabin {
                     self.halt_in_flight();
                     self.finish_hub_dispatch("Undid in-flight reply", false);
                     self.status = "Undid in-flight reply".into();
-                } else if let Some(i) = self.messages.iter().rposition(|m| m.0 == "assistant") {
-                    self.live_mut().remove(i);
-                    self.followup_step = 0;
-                    self.active_skill_follow = None;
-                    self.stamp_current_access();
-                    self.persist();
-                    self.send_grok_slash("/rewind");
-                    self.status = "Rewinding Grok conversation…".into();
+                } else if self.messages.iter().any(|m| m.0 == "assistant") {
+                    self.status = REWIND_NA.into();
                 } else {
                     self.status = "Nothing to undo".into();
                 }
@@ -570,14 +563,7 @@ impl Cabin {
             }
             Slash::Inhabit(peer) => self.queue_inhabit(peer),
             Slash::Rewind => {
-                self.send_grok_slash("/rewind");
-                if !self.running {
-                    return;
-                }
-                if let Some(i) = self.messages.iter().rposition(|m| m.0 == "assistant") {
-                    self.live_mut().remove(i);
-                }
-                self.status = "Rewinding Grok conversation…".into();
+                self.status = REWIND_NA.into();
             }
             Slash::Room(name) => {
                 let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
@@ -827,11 +813,7 @@ impl Cabin {
                 true
             }
             Slash::Rewind => {
-                // Native sessions are append-only JSONL. Dropping only the bubble would
-                // leave the reply in the model's history, so this says so instead.
-                self.status =
-                    "N/A on native threads: the session is append-only."
-                        .into();
+                self.status = REWIND_NA.into();
                 true
             }
             Slash::Usage => {

@@ -64,7 +64,7 @@ impl Cabin {
         let ready = self.ensure_native_engine();
         self.side_ask_kick = false;
         if let Err(err) = ready {
-            self.fail_native(&err);
+            self.fail_turn_start(&err);
             return true;
         }
         let carried = self.take_native_carry(last_user);
@@ -77,8 +77,8 @@ impl Cabin {
                 self.episode_resume_sent();
                 self.note_inflight_card(raw_ask, thread_label);
             }
-            Some(Err(err)) => self.fail_native(&err),
-            None => self.fail_native("native engine is not running"),
+            Some(Err(err)) => self.fail_turn_start(&err),
+            None => self.fail_turn_start("native engine is not running"),
         }
         true
     }
@@ -184,14 +184,6 @@ impl Cabin {
         let id = format!("native-{}", grokhub_core::uid("n"));
         thread.grok_session = Some(id.clone());
         (id, true)
-    }
-
-    fn fail_native(&mut self, err: &str) {
-        self.abandon_turn_card();
-        self.running = false;
-        self.scheduled_perm = false;
-        self.status = self.apply_job_fail(err);
-        self.chat_job_thread = None;
     }
 
     pub(super) fn native_workspace(&self) -> std::path::PathBuf {
