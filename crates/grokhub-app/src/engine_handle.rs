@@ -197,6 +197,14 @@ impl AcpHandle {
             .map_err(|e| e.to_string())
     }
 
+    /// A handle whose engine is gone: every send fails.
+    #[cfg(test)]
+    pub fn dead(cwd: PathBuf, session_id: String) -> AcpHandle {
+        let (cmd, _) = mpsc::channel();
+        let (_, events) = mpsc::channel();
+        AcpHandle { cmd, events, session_id, cwd }
+    }
+
     pub fn try_recv(&self) -> Result<AcpEvent, TryRecvError> {
         self.events.try_recv()
     }

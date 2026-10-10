@@ -67,7 +67,7 @@ impl Cabin {
             self.fail_turn_start(&err);
             return true;
         }
-        let carried = self.take_native_carry(last_user);
+        let (carried, carry_idx) = self.native_carry(last_user);
         let prompted = self
             .acp
             .as_ref()
@@ -75,6 +75,7 @@ impl Cabin {
         match prompted {
             Some(Ok(())) => {
                 self.episode_resume_sent();
+                self.clear_native_carry(carry_idx);
                 self.note_inflight_card(raw_ask, thread_label);
             }
             Some(Err(err)) => self.fail_turn_start(&err),
@@ -115,25 +116,32 @@ impl Cabin {
     }
 
     /// The first native turn on a thread adopted from the CLI carries its earlier
-    /// turns, once. Every other turn goes out as typed.
-    fn take_native_carry(&mut self, last_user: &str) -> String {
+    /// turns, once. Every other turn goes out as typed. The index names the
+    /// thread whose carry the turn used; it is cleared only once the send is
+    /// accepted, so a failed first send carries the recap on the retry.
+    fn native_carry(&self, last_user: &str) -> (String, Option<usize>) {
         let idx = self
             .chat_job_thread
             .as_deref()
             .and_then(|id| self.threads.iter().position(|t| t.id == id))
             .unwrap_or(self.thread_idx);
-        let visible = idx == self.thread_idx;
-        let Some(thread) = self.threads.get_mut(idx).filter(|t| t.native_carry) else {
-            return last_user.to_string();
+        let Some(thread) = self.threads.get(idx).filter(|t| t.native_carry) else {
+            return (last_user.to_string(), None);
         };
-        thread.native_carry = false;
-        let recap = if visible {
+        let recap = if idx == self.thread_idx {
             threads::native_carry_recap(&self.messages)
         } else {
             threads::native_carry_recap(&thread.messages)
         };
+        (format!("{recap}{last_user}"), Some(idx))
+    }
+
+    fn clear_native_carry(&mut self, idx: Option<usize>) {
+        let Some(thread) = idx.and_then(|idx| self.threads.get_mut(idx)) else {
+            return;
+        };
+        thread.native_carry = false;
         self.persist();
-        format!("{recap}{last_user}")
     }
 
     pub(super) fn ensure_native_engine(&mut self) -> Result<(), String> {
