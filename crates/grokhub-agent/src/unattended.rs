@@ -5,7 +5,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use grokhub_acp::{AcpEvent, GrokUsage};
+use grokhub_core::wire::{AcpEvent, GrokUsage};
 
 use crate::gate::{ClosedPermits, Gate, PermMode};
 use crate::tools::DesktopOps;
