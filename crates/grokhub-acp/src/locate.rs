@@ -1774,12 +1774,8 @@ mod tests {
             "The code execution cannot proceed because vcruntime140.dll was not found"
         ));
         assert!(!is_cli_hard_failure(Some(1), "usage: grok --help"));
+        // The loader MessageBox silencing is checked in core `proc_util.rs`.
         let src = include_str!("locate.rs");
-        assert!(
-            src.contains("SetErrorMode") && src.contains("SEM_FAILCRITICALERRORS")
-                || src.contains("0x0001"),
-            "Windows must silence the loader MessageBox: {src}"
-        );
         assert!(
             src.contains("grok_marked_unusable") && src.contains("doctor_broken_hint"),
             "a broken grok.exe must not be spawned again: {src}"

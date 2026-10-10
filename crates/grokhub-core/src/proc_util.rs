@@ -83,6 +83,18 @@ mod tests {
     use super::*;
 
     #[test]
+    fn windows_hard_errors_are_silenced_with_set_error_mode() {
+        let src = include_str!("proc_util.rs");
+        let body = src
+            .split(concat!("pub fn silence_windows_", "hard_errors"))
+            .nth(1)
+            .and_then(|s| s.split("\n}").next())
+            .expect("silence_windows_hard_errors");
+        assert!(body.contains(concat!("SetError", "Mode(MODE)")), "{body}");
+        assert!(body.contains(concat!("SEM_FAILCRITICAL", "ERRORS | ")), "{body}");
+    }
+
+    #[test]
     fn kill_pid_stops_a_running_child() {
         #[cfg(windows)]
         let mut child = Command::new("ping")
