@@ -10,7 +10,7 @@
 ## Key files
 - `crates/grokhub-acp/src/client.rs`: `SpawnOpts`, `connect`, `AcpHandle`, `spawn_grok_p_stream`, `run_single_turn_full`, session listing.
 - `crates/grokhub-acp/src/locate.rs`: `find_grok`, `cabin_grok_home`, `cabin_leader_socket`, `with_ask_deny`, `with_hard_deny`, `CLI_CREDENTIAL_DENY`, `register_desktop_mcp`.
-- `crates/grokhub-acp/src/protocol.rs`: JSON-RPC shapes, `AcpEvent`, `PermissionMode::uses_acp` / `scheduled_args`, `ASK_ACP_DOWN`.
+- `crates/grokhub-core/src/wire.rs` (re-exported here as `protocol`): JSON-RPC shapes, `AcpEvent`, `PermissionMode::uses_acp` / `scheduled_args`, `ASK_ACP_DOWN`, `GrokUsage`. `crates/grokhub-core/src/proc_util.rs`: `hide_windows_console`, `kill_pid`, `is_sigterm_status`.
 - `crates/grokhub-acp/src/stream.rs` (streaming-json events) and `crates/grokhub-acp/src/install.rs` (alpha install).
 ## Change recipe
 - New spawn option: add the field to `SpawnOpts`, then fill it in every struct literal, including `fake_opts` in `crates/grokhub-acp/tests/fake_agent.rs` and the app callers.

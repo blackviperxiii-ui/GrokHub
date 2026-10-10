@@ -1,4 +1,5 @@
 use std::io::Read;
+use grokhub_core::proc_util::{hide_windows_console};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{mpsc, Mutex, OnceLock};
@@ -45,47 +46,6 @@ pub fn find_grok() -> Option<PathBuf> {
 fn grok_bin_cache() -> &'static Mutex<GrokBinCache> {
     static C: OnceLock<Mutex<GrokBinCache>> = OnceLock::new();
     C.get_or_init(|| Mutex::new(None))
-}
-
-/// Hide a Windows console for spawned CLI tools (`grok.exe`, powershell).
-///
-/// `grokhub.exe` is `windows_subsystem = "windows"`. Spawning a console-subsystem
-/// binary without `CREATE_NO_WINDOW` allocates a visible terminal. Closing that
-/// window kills the child with `STATUS_CONTROL_C_EXIT`.
-///
-/// Also silences the loader MessageBox (missing DLL / bad image) so a broken
-/// `grok.exe` becomes one cabin error instead of a looping system dialog.
-pub fn hide_windows_console(cmd: &mut Command) {
-    silence_windows_hard_errors();
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        cmd.creation_flags(CREATE_NO_WINDOW);
-    }
-    let _ = cmd;
-}
-
-/// Process-wide: do not show Windows critical-error / missing-DLL dialogs.
-/// Children inherit this. Safe to call from any thread, including Linux (no-op).
-pub fn silence_windows_hard_errors() {
-    #[cfg(windows)]
-    {
-        const SEM_FAILCRITICALERRORS: u32 = 0x0001;
-        const SEM_NOGPFAULTERRORBOX: u32 = 0x0002;
-        const SEM_NOOPENFILEERRORBOX: u32 = 0x8000;
-        const MODE: u32 = SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX;
-        #[link(name = "kernel32")]
-        extern "system" {
-            fn SetErrorMode(u_mode: u32) -> u32;
-            fn SetThreadErrorMode(dw_new_mode: u32, lp_old_mode: *mut u32) -> i32;
-        }
-        unsafe {
-            SetErrorMode(MODE);
-            let mut old = 0u32;
-            let _ = SetThreadErrorMode(MODE, &mut old);
-        }
-    }
 }
 
 /// NTSTATUS / Win32 codes and spawn text that mean "do not spawn this grok again".
