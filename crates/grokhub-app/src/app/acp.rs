@@ -434,6 +434,7 @@ impl Cabin {
                     // Path D: a stopped turn's later events find `running` off.
                     self.harness_watch_cu(&watched, true);
                 }
+                AcpEvent::Findings(body) => self.harness.pending_findings = Some(body),
                 AcpEvent::Plan(t) => {
                     // Plan text only. No approve / request-changes / comment RPC on this tip:
                     // session/request_permission is tool Allow/Deny, and /approve does not parse.
@@ -513,9 +514,11 @@ impl Cabin {
                 AcpEvent::Done { stop_reason } => {
                     self.sync_native_title_from_store();
                     self.episode_turn_done(&stop_reason);
+                    let findings = self.harness.pending_findings.take();
                     if stop_reason.eq_ignore_ascii_case("cancelled") || !self.running {
                         continue;
                     }
+                    let origin = self.chat_job_thread.clone();
                     let thought = std::mem::take(&mut self.thought_buf);
                     let stream = std::mem::take(&mut self.stream_buf);
                     let text = if thought.is_empty() {
@@ -530,6 +533,9 @@ impl Cabin {
                     let turn = self.turn_no();
                     self.harness_watch_end();
                     self.finish_acp_turn(text);
+                    if let Some(body) = findings {
+                        self.post_findings(origin, &body);
+                    }
                     self.harness_turn_end_last_reply(turn);
                     self.drain_followup_queue();
                 }
