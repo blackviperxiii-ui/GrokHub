@@ -234,10 +234,10 @@ impl Cabin {
     }
 
     pub(super) fn ui_hooks_section(&mut self, ui: &mut egui::Ui, q: &str) {
-        if self.cfg.native_engine {
+        if self.cfg.native_engine() {
             self.ensure_native_listing();
         }
-        let native = self.cfg.native_engine;
+        let native = self.cfg.native_engine();
         let native_rows: Vec<grokhub_acp::GrokHookRow> = if native {
             self.native_hooks
                 .iter()
@@ -413,7 +413,7 @@ impl Cabin {
                     .get(self.thread_idx)
                     .and_then(|thread| thread.grok_session.clone())
                     .unwrap_or_default();
-                let todos = if self.cfg.native_engine {
+                let todos = if self.cfg.native_engine() {
                     grokhub_agent::todos_for(&todo_session)
                 } else {
                     Vec::new()
@@ -1429,7 +1429,7 @@ impl Cabin {
     }
 
     pub(super) fn ui_skills(&mut self, ui: &mut egui::Ui) {
-        if self.cfg.native_engine {
+        if self.cfg.native_engine() {
             self.ensure_native_listing();
         }
         if !self.grok_catalog_loaded && self.grok_catalog_rx.is_none() {
@@ -1439,7 +1439,7 @@ impl Cabin {
             .frame(egui::Frame::NONE.fill(crate::theme::bg()).inner_margin(egui::Margin::same(24)))
             .show(ui, |ui| {
             if crate::cards::page_header(ui, "Skills", "Refresh") {
-                if self.cfg.native_engine {
+                if self.cfg.native_engine() {
                     self.native_listing_cwd.clear();
                     self.ensure_native_listing();
                 }
@@ -1607,7 +1607,7 @@ impl Cabin {
             }
             ui.add_space(16.0);
             crate::cards::section_label(ui, "Grok Build skills");
-            if self.cfg.native_engine {
+            if self.cfg.native_engine() {
                 crate::cards::help_text(
                     ui,
                     "Skills discovered for the native engine. Use in chat sends /name.",

@@ -9336,12 +9336,10 @@ fn send_from_composer_runs_help_and_refuses_without_grok() {
     cabin.send_from_composer("paint the harbor".into());
     assert!(
         !cabin.running,
-        "no grok binary must refuse before a run starts"
+        "no sign-in must refuse before a run starts"
     );
-    assert_eq!(
-        cabin.status,
-        "Install Grok Build (x.ai/cli) or Connect Grok in Settings"
-    );
+    // The booted cabin is on the native engine, so it names GrokHub's own sign-in.
+    assert_eq!(cabin.status, "Sign in with Grok or add an API key.");
     assert_eq!(
         cabin.messages.len(),
         before,
@@ -16532,7 +16530,12 @@ fn finish_staged_folder_renames_it() {
 // Landed from PR #197.
 #[allow(clippy::too_many_lines)]
 fn quiet_cabin() -> Cabin {
-    let cfg = crate::config::AppConfig::default();
+    let cfg = crate::config::AppConfig {
+        // Test cabins keep the legacy CLI path these tests were written for;
+        // a native test turns it off. The shipping default is native.
+        grok_build_engine: true,
+        ..AppConfig::default()
+    };
     let (grok_sessions_tx, grok_sessions_rx) = std::sync::mpsc::channel();
     Cabin {
         nav: super::Nav::Chat,
@@ -23893,10 +23896,22 @@ fn native_skills_hooks_settings_listing_comes_from_discovery() {
 }
 
 #[test]
-fn native_flag_off_cli_path_is_unchanged() {
-    assert!(!AppConfig::default().native_engine);
+fn native_is_the_default_and_the_legacy_cli_path_is_unchanged() {
+    use crate::config::EngineKind;
+    assert_eq!(AppConfig::default().engine(), EngineKind::Native);
     let absent: AppConfig = serde_json::from_str(r#"{"deviceName":"cabin"}"#).unwrap();
-    assert!(!absent.native_engine);
+    assert_eq!(absent.engine(), EngineKind::Native);
+    // A config saved while the CLI was the default still says `nativeEngine: false`.
+    let old: AppConfig =
+        serde_json::from_str(r#"{"deviceName":"cabin","nativeEngine":false}"#).unwrap();
+    assert_eq!(old.engine(), EngineKind::Native);
+    let legacy: AppConfig =
+        serde_json::from_str(r#"{"deviceName":"cabin","grokBuildEngine":true}"#).unwrap();
+    assert_eq!(legacy.engine(), EngineKind::GrokBuild);
+    assert!(!legacy.native_engine());
+    let saved = serde_json::to_value(AppConfig::default()).unwrap();
+    assert!(saved.get("grokBuildEngine").is_none(), "{saved}");
+    assert!(saved.get("nativeEngine").is_none(), "{saved}");
     let acp = include_str!("acp.rs");
     let spawn = acp
         .split("build_agent::spawn_session(")
@@ -25364,7 +25379,7 @@ fn native_bg_ask_refuses_a_write_without_prompting() {
     let _g = crate::config::hold_test_config();
     let (root, mut cabin) = isolated_cabin("native-bg-ask");
     let _ = std::fs::create_dir_all(&root);
-    cabin.cfg.native_engine = true;
+    cabin.cfg.grok_build_engine = false;
     cabin.permission_mode = PermissionMode::Ask;
     cabin.session_mode = SessionMode::Chat;
     cabin.threads = vec![crate::threads::ChatThread::new("Chat", false)];
@@ -27182,7 +27197,7 @@ fn pulse_suggest_signed_out_says_how_to_sign_in_and_loading_shows_placeholder_ro
     let cabin = &mut quiet.cabin;
     cabin.updates.clear();
     cabin.board.clear();
-    cabin.cfg.native_engine = false;
+    cabin.cfg.grok_build_engine = true;
     cabin.pulse_view.tab = super::pulse_ui::PulseTab::Ideas;
     let empty = pulse_texts(cabin, 900.0);
     assert!(
@@ -27213,10 +27228,10 @@ fn pulse_suggest_signed_out_says_how_to_sign_in_and_loading_shows_placeholder_ro
         );
     }
     // PI-05: once signed in (native here), the amber line clears without another press.
-    cabin.cfg.native_engine = true;
+    cabin.cfg.grok_build_engine = false;
     let _ = pulse_texts(cabin, 900.0);
     assert!(!cabin.pulse_view.signin_note);
-    cabin.cfg.native_engine = false;
+    cabin.cfg.grok_build_engine = true;
     // While a suggestion call runs: placeholder rows, and no empty line beside them.
     let (_tx, rx) = mpsc::channel::<String>();
     cabin.ideas_rx = Some((rx, Default::default()));

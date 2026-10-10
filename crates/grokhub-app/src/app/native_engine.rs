@@ -1,4 +1,5 @@
-//! Native engine thread. The CLI launch path stays in `acp` and `chat_kick`.
+//! Native engine thread, the default. The legacy CLI launch path stays in `acp`
+//! and `chat_kick` until it is removed, picked only by Settings → Labs.
 
 use super::*;
 use grokhub_acp::{ExternalCmd, NativePerm};
@@ -23,9 +24,9 @@ struct LiveCfg {
     episode: Option<grokhub_agent::EpisodeSeed>,
 }
 
-/// The Grok CLI is signed in but GrokHub is not. Lab mode only uses GrokHub's own sign-in.
+/// The Grok CLI is signed in but GrokHub is not. The native engine only uses GrokHub's own sign-in.
 pub(super) const NATIVE_NEEDS_CABIN_SIGNIN: &str =
-    "Lab mode uses GrokHub's sign-in, not the Grok CLI's. Sign in with Grok in Settings → Account, or add an API key.";
+    "GrokHub signs in on its own now, not through the Grok CLI. Sign in with Grok in Settings → Account, or add an API key.";
 
 fn live_map() -> &'static Mutex<HashMap<String, LiveCfg>> {
     static MAP: OnceLock<Mutex<HashMap<String, LiveCfg>>> = OnceLock::new();
@@ -46,28 +47,18 @@ impl Cabin {
         }
     }
 
+    /// Under the native engine every thread runs native. A thread from the CLI
+    /// days is adopted on its next turn (`bind_native_session_id`).
     pub(super) fn native_engine_for_current(&self) -> bool {
-        if !self.cfg.native_engine {
-            return false;
-        }
-        let idx = self
-            .chat_job_thread
-            .as_deref()
-            .and_then(|id| self.threads.iter().position(|t| t.id == id))
-            .unwrap_or(self.thread_idx);
-        self.threads.get(idx).is_some_and(|t| t.native)
+        self.cfg.native_engine()
     }
 
-    /// `/compact` on a native thread while Settings → Labs is on.
-    /// Lab off, or a CLI thread, returns false so the CLI command stays as it is.
+    /// The legacy CLI engine returns false so the CLI command stays as it is.
     /// The job thread is bound after the engine, so the session id stays on this tab.
     /// `running` stays false: the compact `Done` must not append an assistant bubble.
     pub(super) fn native_compact_if_current(&mut self) -> bool {
-        let thread_native = self
-            .threads
-            .get(self.thread_idx)
-            .is_some_and(|thread| thread.native);
-        if !grokhub_agent::manual_compact_targets_native(self.cfg.native_engine, thread_native) {
+        let thread_native = self.threads.get(self.thread_idx).is_some();
+        if !grokhub_agent::manual_compact_targets_native(self.cfg.native_engine(), thread_native) {
             return false;
         }
         if let Err(err) = self.ensure_native_engine() {
@@ -103,10 +94,11 @@ impl Cabin {
             self.fail_native(&err);
             return true;
         }
+        let carried = self.take_native_carry(last_user);
         let prompted = self
             .acp
             .as_ref()
-            .map(|handle| handle.prompt_with_image(last_user, image));
+            .map(|handle| handle.prompt_with_image(&carried, image));
         match prompted {
             Some(Ok(())) => {
                 self.episode_resume_sent();
@@ -122,11 +114,8 @@ impl Cabin {
     /// following `Done` does not append an assistant bubble, and the job thread
     /// stays clear so the composer does not look busy.
     pub(super) fn prompt_native_memory(&mut self, command: &str, status: &str) -> bool {
-        let thread_native = self
-            .threads
-            .get(self.thread_idx)
-            .is_some_and(|thread| thread.native);
-        if !grokhub_agent::manual_compact_targets_native(self.cfg.native_engine, thread_native) {
+        let thread_native = self.threads.get(self.thread_idx).is_some();
+        if !grokhub_agent::manual_compact_targets_native(self.cfg.native_engine(), thread_native) {
             return false;
         }
         if let Err(err) = self.ensure_native_engine() {
@@ -140,6 +129,48 @@ impl Cabin {
             None => self.status = "native engine is not running".into(),
         }
         true
+    }
+
+    /// Can a chat turn start? The native engine needs GrokHub's own sign-in or an
+    /// API key (an unattended run carries its own); the legacy path needs the CLI or a key.
+    pub(super) fn agent_ready(&self) -> bool {
+        if !self.cfg.native_engine() {
+            return self.can_agent();
+        }
+        self.scheduled_perm || self.has_key() || self.imagine_native.tokens.is_some()
+    }
+
+    /// Why a turn did not start, naming the engine's own missing piece.
+    pub(super) fn no_agent_note(&self) -> &'static str {
+        if !self.cfg.native_engine() {
+            return "Install Grok Build (x.ai/cli) or Connect Grok in Settings";
+        }
+        if self.secrets.oauth.is_none() && self.grok_cli_login_present() {
+            return NATIVE_NEEDS_CABIN_SIGNIN;
+        }
+        grokhub_core::XAI_NEED_SIGNIN
+    }
+
+    /// The first native turn on a thread adopted from the CLI carries its earlier
+    /// turns, once. Every other turn goes out as typed.
+    fn take_native_carry(&mut self, last_user: &str) -> String {
+        let idx = self
+            .chat_job_thread
+            .as_deref()
+            .and_then(|id| self.threads.iter().position(|t| t.id == id))
+            .unwrap_or(self.thread_idx);
+        let visible = idx == self.thread_idx;
+        let Some(thread) = self.threads.get_mut(idx).filter(|t| t.native_carry) else {
+            return last_user.to_string();
+        };
+        thread.native_carry = false;
+        let recap = if visible {
+            threads::native_carry_recap(&self.messages)
+        } else {
+            threads::native_carry_recap(&thread.messages)
+        };
+        self.persist();
+        format!("{recap}{last_user}")
     }
 
     pub(super) fn ensure_native_engine(&mut self) -> Result<(), String> {
@@ -172,10 +203,10 @@ impl Cabin {
             .and_then(|id| self.threads.iter().position(|t| t.id == id))
             .unwrap_or(self.thread_idx);
         let cwd_text = cwd.display().to_string();
-        let Some(thread) = self.threads.get_mut(idx).filter(|thread| thread.native) else {
+        let Some(thread) = self.threads.get_mut(idx) else {
             return (format!("native-{}", grokhub_core::uid("n")), false);
         };
-        let mut changed = false;
+        let mut changed = threads::adopt_native(thread);
         if thread.grok_cwd.as_deref().unwrap_or("").trim().is_empty() {
             thread.grok_cwd = Some(cwd_text);
             changed = true;
@@ -287,7 +318,7 @@ impl Cabin {
         self.native_listing_cwd = cwd;
     }
 
-    /// Lab mode's bearer, in this order: the Imagine sign-in, the Settings → Account
+    /// The native engine's bearer, in this order: the Imagine sign-in, the Settings → Account
     /// "Sign in with Grok" (the sign-in the CLI path and the rest of the cabin use),
     /// then the console API key. The Grok CLI's own login file is never read here.
     pub(super) fn native_cred(&mut self) -> Result<(String, AuthKind), String> {
@@ -361,14 +392,11 @@ impl Cabin {
     }
 
     pub(super) fn paint_native_badge(&mut self, ui: &mut egui::Ui) {
-        if !self.cfg.native_engine {
+        if !self.cfg.native_engine() {
             return;
         }
         let checked_id = ui.id().with("native-usage-sid");
-        let native = self
-            .threads
-            .get(self.thread_idx)
-            .is_some_and(|thread| thread.native);
+        let native = self.threads.get(self.thread_idx).is_some();
         if !native {
             let checked = ui
                 .data(|data| data.get_temp::<String>(checked_id))
