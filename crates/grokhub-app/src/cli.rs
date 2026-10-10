@@ -74,16 +74,16 @@ mod tests {
             parse_args(&args(&["grokhub", "--hub", "--mcp-desktop"])),
             Launch::McpDesktop
         );
-        let oauth = include_str!("main.rs")
+        let sign_in_fn = include_str!("main.rs")
             .split("fn run_oauth_cli(")
             .nth(1)
             .and_then(|s| s.split("fn probe_hub_health_body(").next())
             .expect("run_oauth_cli");
         assert!(
-            oauth.contains("secrets::save(&s)")
-                && !oauth.contains("write_cli_auth_if_needed")
-                && !oauth.contains("grokhub_acp"),
-            "grokhub --oauth keeps the sign-in to GrokHub and never writes the CLI's login: {oauth}"
+            sign_in_fn.contains("secrets::save(&s)")
+                && !sign_in_fn.contains("write_cli_auth_if_needed")
+                && !sign_in_fn.contains("grokhub_acp"),
+            "grokhub --oauth keeps the sign-in to GrokHub and never writes the CLI's login (see run_oauth_cli in main.rs)"
         );
         assert_eq!(parse_args(&args(&["grokhub", "-V"])), Launch::Version);
         assert_eq!(parse_args(&args(&["grokhub", "--version"])), Launch::Version);
@@ -120,7 +120,7 @@ mod tests {
 
     #[test]
     fn cabin_reports_version() {
-        assert_eq!(env!("CARGO_PKG_VERSION"), "2.12.0");
+        assert_eq!(env!("CARGO_PKG_VERSION"), "2.12.1");
     }
 
     #[test]
