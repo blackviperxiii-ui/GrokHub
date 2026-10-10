@@ -5,7 +5,8 @@ mod client;
 mod install;
 mod locate;
 mod stream;
-pub mod protocol;
+pub use grokhub_core::wire as protocol;
+pub use grokhub_core::proc_util::{hide_windows_console, is_sigterm_status, silence_windows_hard_errors};
 
 pub use catalog::{
     inspect_advisory, load_grok_catalog, parse_inspect_hooks, parse_inspect_project_trusted,
@@ -18,7 +19,7 @@ pub use client::{
     use_user_grok_home, HANDSHAKE_TIMEOUT,
     ensure_session_cwd, load_session_signals, session_id_in_home, session_resume_is_missing,
     explain_handshake_error, inspect_json, is_placeholder_session_title, is_session_cwd_error,
-    is_sigterm_status, jsonrpc_error_text, list_sessions, merge_grok_sessions, parse_session_list,
+    jsonrpc_error_text, list_sessions, merge_grok_sessions, parse_session_list,
     history_label_after_plan, parse_session_markdown, parse_single_turn, preferred_history_title,
     title_after_selecting_plan,
     grok_p_argv, run_single_turn_full, spawn_grok_p_stream, session_usage, GrokPAttach,
@@ -40,10 +41,10 @@ pub use locate::{
     doctor_line_busy, doctor_missing_hint, find_grok, grok_auth_path, grok_bin_looks_complete,
     grok_cli_channel, grok_cli_is_runnable, grok_cli_key, grok_cli_known_good, grok_home,
     grok_marked_unusable, grok_stdout, grok_stdout_timeout, grok_user_stdout_allow_fail,
-    grok_user_stdout_timeout, grok_user_stdout_wait, grok_version, hide_windows_console,
+    grok_user_stdout_timeout, grok_user_stdout_wait, grok_version,
     invalidate_grok_bin_cache, invalidate_grok_key_cache, is_cli_hard_failure, mark_grok_unusable,
     parse_grok_auth_key, prepare_cabin_grok_home, register_cua_mcp, register_desktop_mcp, register_self_mcp, self_mcp_add_argv,
-    silence_windows_hard_errors, single_turn_args, single_turn_args_full, unregister_cua_mcp, unregister_desktop_mcp, with_ask_deny,
+    single_turn_args, single_turn_args_full, unregister_cua_mcp, unregister_desktop_mcp, with_ask_deny,
     with_hard_deny, which,
     write_cli_auth_if_needed, builtin_cu_denied, ASK_DENY_RULES, BUILTIN_CU_DENY, CLI_CREDENTIAL_DENY,
 };

@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use grokhub_acp::{AcpEvent, ElicitAsk, GrokUsage, PermissionAsk, ToolCard};
+use grokhub_core::wire::{AcpEvent, ElicitAsk, GrokUsage, PermissionAsk, ToolCard};
 
 use crate::gate::{Gate, PermitWait};
 use crate::tools::DesktopOps;

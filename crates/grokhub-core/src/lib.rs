@@ -67,6 +67,7 @@ pub mod pulse;
 pub mod recipe;
 pub mod pii;
 pub mod pkce;
+pub mod proc_util;
 pub mod proactive_auto;
 pub mod redact;
 pub mod reflect;
@@ -94,6 +95,7 @@ pub mod usage;
 pub mod verify;
 pub mod voice;
 pub mod windshield;
+pub mod wire;
 pub mod workboard;
 
 pub use appearance::{
