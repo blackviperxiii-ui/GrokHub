@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Connectors now live in Settings → Connectors. Each connector is a row with a status chip (Connected, Needs sign-in, Error with the error named, Off or Not checked), its account when known, and Connect, Reconnect, Sign out, Turn on/off or Disconnect. Disconnect always asks first; for this cabin's own servers it removes the entry and deletes its sign-in and saved token, and `/connections` can bring the entry back. GitHub, hooks and plugins moved there too. The Skills page keeps workflows and skills and has a Connectors button; `/connectors`, `/mcps`, `/hooks` and the rail's old Connectors link open the new page.
 - The eval suite has a new `system-scan` item that replays the 2026-10-09 beta scan against a fake host (failed nextdns, systemd-resolved on port 53, 6 packages with missing files, boot errors). It passes only when Always Allow shows no permission card, an early "it's resolved" is sent back to the open checklist items, every item ends covered, and the findings card names systemd-resolved and offers the 4 fixes. It runs in CI with the workspace tests; on Windows it reports skipped because the fake host needs a Unix shell.
 - Hard classes now see past leading variable assignments: `PATH=/x sudo reboot` or `LANG=C dd of=/dev/sda` is classified by its real command, so Always Allow still stops for it.
 - Browser sign-in (OpenRouter, MCP servers) no longer misses the callback when the browser sends the request in pieces.

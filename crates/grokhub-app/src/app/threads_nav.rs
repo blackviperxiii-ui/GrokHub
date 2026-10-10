@@ -564,7 +564,8 @@ impl Cabin {
             "agents" | "queue" => Nav::Agents,
             "devices" => Nav::Devices,
             "memory" => Nav::Memory,
-            "connectors" => Nav::Connectors,
+            // Connectors moved into Settings; a saved page reopens on Skills.
+            "connectors" => Nav::Skills,
             "command" => Nav::Command,
             "chat" => Nav::Chat,
             _ => Nav::Chat,
