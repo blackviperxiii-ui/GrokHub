@@ -283,8 +283,8 @@ impl Cabin {
             self.halt_in_flight();
         }
         let keep_run = self.running && !halt;
-        // grok -p, including the hidden background thread, is not the ACP
-        // session. Drop a stale handle without SIGTERM of that process.
+        // A one-shot run, including the hidden background thread, is not the
+        // chat engine. Drop a stale handle without stopping that run.
         let keep_acp = self.background_tasks_open()
             || (keep_run && self.grok_p_rx.is_none() && !self.job_on_background_thread());
         self.attach_url = None;

@@ -372,8 +372,8 @@ pub fn parse_llm_greeting(raw: &str) -> Option<String> {
 }
 
 /// A line where the model talks about the task instead of doing it
-/// ("I'll use the user's name if known. The greeting should…"). Plain `grok -p`
-/// prints that reasoning into the reply, so it must never reach the screen.
+/// ("I'll use the user's name if known. The greeting should…"). A plain one-shot
+/// turn prints that reasoning into the reply, so it must never reach the screen.
 pub fn is_model_planning(line: &str) -> bool {
     let t = line.trim().trim_start_matches(['-', '*', '>', ' ']).to_ascii_lowercase();
     if t.is_empty() {

@@ -122,7 +122,7 @@ impl Cabin {
             });
         if run_pending_update {
             self.open_update_overlay();
-            self.queue_combined_update();
+            self.queue_cabin_update();
         }
     }
 

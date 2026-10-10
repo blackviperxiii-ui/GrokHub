@@ -85,12 +85,12 @@ fn main() {
         Launch::Help => {
             #[cfg(windows)]
             eprint!(
-                "grokhub {} — native cabin\n\n  grokhub           cabin (close stays in the tray)\n  grokhub --agent   cabin in the tray, window hidden\n  grokhub --hub     LAN hub only\n  grokhub --mcp-desktop  desktop tools on stdin (no window)\n  grokhub --mcp-cua      Cua Driver gate on stdin (Linux, spike flag)\n  grokhub --mcp-self  Grok's skill, connection, and automation tools on stdin (no window)\n  grokhub --oauth   xAI device-code (Grok)\n  grokhub --update  only what is newer: grok update --alpha, then GitHub zip or source overlay\n  grokhub --doctor  auth / memory / hub kind\n  grokhub --version\n",
+                "grokhub {} — native cabin\n\n  grokhub           cabin (close stays in the tray)\n  grokhub --agent   cabin in the tray, window hidden\n  grokhub --hub     LAN hub only\n  grokhub --mcp-desktop  desktop tools on stdin (no window)\n  grokhub --mcp-cua      Cua Driver gate on stdin (Linux, spike flag)\n  grokhub --mcp-self  Grok's skill, connection, and automation tools on stdin (no window)\n  grokhub --oauth   xAI device-code (Grok)\n  grokhub --update  when the cabin is newer: GitHub zip or source overlay\n  grokhub --doctor  auth / memory / hub kind\n  grokhub --version\n",
                 env!("CARGO_PKG_VERSION")
             );
             #[cfg(not(windows))]
             eprint!(
-                "grokhub {} — native cabin\n\n  grokhub           cabin (close stays in the tray)\n  grokhub --agent   cabin in the tray, window hidden\n  grokhub --hub     LAN hub only\n  grokhub --mcp-desktop  desktop tools on stdin (no window)\n  grokhub --mcp-cua      Cua Driver gate on stdin (Linux, spike flag)\n  grokhub --mcp-self  Grok's skill, connection, and automation tools on stdin (no window)\n  grokhub --oauth   xAI device-code (Grok)\n  grokhub --update  only what is newer: grok update --alpha, then git pull + install.sh --user\n  grokhub --doctor  auth / memory / hub kind\n  grokhub --version\n",
+                "grokhub {} — native cabin\n\n  grokhub           cabin (close stays in the tray)\n  grokhub --agent   cabin in the tray, window hidden\n  grokhub --hub     LAN hub only\n  grokhub --mcp-desktop  desktop tools on stdin (no window)\n  grokhub --mcp-cua      Cua Driver gate on stdin (Linux, spike flag)\n  grokhub --mcp-self  Grok's skill, connection, and automation tools on stdin (no window)\n  grokhub --oauth   xAI device-code (Grok)\n  grokhub --update  when the cabin is newer: git pull + install.sh --user\n  grokhub --doctor  auth / memory / hub kind\n  grokhub --version\n",
                 env!("CARGO_PKG_VERSION")
             );
         }
@@ -207,67 +207,40 @@ fn run_update_cli() {
     let channel = update::installed_channel();
     let probe = update::blocking_update_probe();
     let pending = grokhub_core::pending_on_channel(
-        grokhub_core::pending_from_versions(
-            env!("CARGO_PKG_VERSION"),
-            probe.cabin_tag.as_deref(),
-            None,
-            None,
-        ),
+        grokhub_core::pending_from_versions(env!("CARGO_PKG_VERSION"), probe.cabin_tag.as_deref()),
         channel,
     );
     if pending == grokhub_core::UpdatePending::None {
-        println!("{}", grokhub_core::combined_update_hint(pending));
+        println!("{}", grokhub_core::update_hint(pending));
         return;
     }
-    if pending != grokhub_core::UpdatePending::Cli
-        && src
-            .as_ref()
-            .is_some_and(|p| grokhub_core::overlay_clone_usable_in(p, channel))
+    if let Some(src) = src
+        .as_ref()
+        .filter(|p| grokhub_core::overlay_clone_usable_in(p, channel))
     {
-        if let Some(src) = src.as_ref() {
-            update::remember_source(src);
-        }
+        update::remember_source(src);
     }
-    let plan = match grokhub_core::combined_update_cmds_in(src.as_deref(), pending, channel) {
-        Ok(plan) => plan,
-        Err(e) if pending == grokhub_core::UpdatePending::Both => {
-            match grokhub_core::combined_update_cmds_in(
-                src.as_deref(),
-                grokhub_core::UpdatePending::Cli,
-                channel,
-            ) {
-                Ok(mut plan) => {
-                    plan.cabin_skipped = Some(e);
-                    plan
-                }
-                Err(cli_e) => {
-                    eprintln!("{cli_e}");
-                    std::process::exit(1);
-                }
-            }
-        }
+    let cmds = match grokhub_core::update_cmds_for_host_in(src.as_deref(), cfg!(windows), channel) {
+        Ok(cmds) => cmds,
         Err(e) => {
             eprintln!("{e}");
             std::process::exit(1);
         }
     };
-    if let Some(note) = &plan.cabin_skipped {
-        eprintln!("{note}");
-    }
     if let Some(note) = update::stray_beta_receipt_note() {
         eprintln!("{note}");
     }
-    if grokhub_core::update_wipes_config(&plan.cmds) {
+    if grokhub_core::update_wipes_config(&cmds) {
         eprintln!("refusing an update that would wipe config");
         std::process::exit(1);
     }
-    match update::run_update_cmds(&plan.cmds) {
+    match update::run_update_cmds(&cmds) {
         Ok(out) => {
-            update::log_update_attempt(channel, &plan.cmds, true, &out);
+            update::log_update_attempt(channel, &cmds, true, &out);
             print!("{out}")
         }
         Err(e) => {
-            update::log_update_attempt(channel, &plan.cmds, false, &e);
+            update::log_update_attempt(channel, &cmds, false, &e);
             eprintln!("{e}");
             eprintln!(
                 "{}",
@@ -489,18 +462,15 @@ mod tests {
             .and_then(|s| s.split("fn run_hub(").next())
             .expect("run_update_cli");
         assert!(
-            upd.contains("combined_update_cmds")
+            upd.contains("update_cmds_for_host_in(src.as_deref(), cfg!(windows), channel)")
                 && upd.contains("pending_from_versions")
                 && upd.contains("pending_on_channel")
-                && upd.contains("combined_update_hint")
+                && upd.contains("update_hint")
                 && upd.contains("overlay_clone_usable")
-                && upd.contains("UpdatePending::Cli")
-                && upd.contains("UpdatePending::Both")
                 && !upd.contains("pending_for_manual_update")
-                && !upd.contains("update_cmds_for")
                 && !upd.contains("no GrokHub source tree")
-                && !upd.contains("--stable"),
-            "grokhub --update runs only what is newer and does not require a Windows clone: {upd}"
+                && !upd.contains("grok update"),
+            "grokhub --update runs only when the cabin is newer, takes the Windows zip without a clone, and never updates the CLI: {upd}"
         );
     }
 

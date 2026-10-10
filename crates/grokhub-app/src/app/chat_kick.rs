@@ -1,4 +1,4 @@
-//! Composer send and the grok -p / ACP kick.
+//! Composer send and the native turn kick.
 
 use super::*;
 use grokhub_core::{live_send, LiveSend};

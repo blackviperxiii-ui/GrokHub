@@ -1,4 +1,3 @@
-param([switch]$SkipGrok)
 $ErrorActionPreference = 'Stop'
 $Root = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 Set-Location $Root
@@ -14,15 +13,6 @@ New-Item -ItemType Directory -Path $Stage | Out-Null
 Copy-Item 'target/release/grokhub.exe' $Stage
 Copy-Item 'target/release/grokhub-hub.exe' $Stage
 Copy-Item 'LICENSE' $Stage
-$art = Join-Path $Root 'scripts/grok-windows-artifact.ps1'
-if ($SkipGrok) {
-  & $art -DestDir $Stage -AllowSkip
-} else {
-  & $art -DestDir $Stage
-}
-if (-not $SkipGrok -and -not (Test-Path (Join-Path $Stage 'grok.exe'))) {
-  throw "missing grok.exe in stage"
-}
 New-Item -ItemType Directory -Path (Join-Path $Root 'dist-release') -Force | Out-Null
 $candidates = @(
   "$env:ProgramFiles\Inno Setup 6\ISCC.exe",
