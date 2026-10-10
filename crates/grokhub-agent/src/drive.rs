@@ -12,7 +12,7 @@ use crate::session_tools::TodoItem;
 pub const STALL_LIMIT: u32 = 3;
 
 /// Tools that change the checklist or the session, not the task.
-const SESSION_TOOLS: &[&str] = &["todo_write", "ask_user_question", "enter_plan_mode", "exit_plan_mode"];
+const SESSION_TOOLS: &[&str] = &["todo_write", "ask_user_question", "report_findings", "enter_plan_mode", "exit_plan_mode"];
 
 pub fn is_session_tool(name: &str) -> bool {
     SESSION_TOOLS.contains(&name)

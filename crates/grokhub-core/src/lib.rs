@@ -27,6 +27,7 @@ pub mod diagnostics;
 pub mod doctor;
 pub mod export;
 pub mod feel;
+pub mod findings;
 pub mod frame;
 pub mod goal;
 pub mod greeting;
