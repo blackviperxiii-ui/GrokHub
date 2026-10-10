@@ -829,6 +829,7 @@ thread_local! {
 impl Cabin {
     pub fn new(hidden: bool) -> Self {
         crate::desktop_mcp::process_started_ms();
+        let mut steps = crate::startup::Steps::new();
         let mut cfg = config::load();
         if cfg.device_name.trim().is_empty() {
             cfg.device_name = config::default_device_name();
@@ -923,6 +924,7 @@ impl Cabin {
                 .unwrap_or(0);
             (threads, dropped_leftover, thread_idx)
         };
+        steps.mark("startup:new:config");
         #[cfg(test)]
         let (threads, dropped_leftover, thread_idx, quiet) =
             if let Some((threads, idx)) = QUIET_THREADS.with(|slot| slot.borrow_mut().take()) {
@@ -959,6 +961,7 @@ impl Cabin {
                 cfg.source_dir = src.display().to_string();
             }
         }
+        steps.mark("startup:new:threads");
         let mut projects = crate::store::load_projects();
         let sidebar_file = crate::store::projects_path().exists();
         let home = std::env::var("HOME").ok();
@@ -974,9 +977,11 @@ impl Cabin {
             .find(|n| n.kind == ProjectKind::Project && expand_home(&n.path) == cfg.project_dir)
             .or_else(|| projects.iter().find(|n| n.kind == ProjectKind::Project))
             .map(|n| n.id.clone());
+        steps.mark("startup:new:projects");
         let mut secrets = secrets::load();
         secrets::migrate_console_key(&mut cfg, &mut secrets);
         secrets::ensure_private();
+        steps.mark("startup:new:secrets");
         let win_max = cfg.window.maximized;
         let cfg_auto_cap = cfg.daily_auto_cap;
         let cfg_host_cap = cfg.host_hour_cap;
@@ -1353,33 +1358,65 @@ impl Cabin {
             scroll_to_hooks: false,
             composer_geom: None,
         };
+        steps.mark("startup:new:fields");
         if !quiet {
             c.imagine_native.auth_rx = Some(crate::imagine_auth::begin_load());
-            if let Ok(mgr) = GlobalHotKeyManager::new() {
-                let hey = HotKey::new(Some(Modifiers::SUPER), Code::KeyG);
-                let halt = HotKey::new(Some(Modifiers::SUPER | Modifiers::SHIFT), Code::Escape);
-                let hey_id = hey.id();
-                let halt_id = halt.id();
-                if mgr.register(hey).is_ok() && mgr.register(halt).is_ok() {
-                    c.hotkey_hey = hey_id;
-                    c.hotkey_halt = halt_id;
-                    c.hotkeys = Some(mgr);
-                }
+            steps.mark("startup:new:imagine");
+            // Registering takes ~50 ms on X11, so a shown window registers
+            // after its first frame; a hidden one has no frame to wait for.
+            if hidden {
+                c.register_hotkeys_once();
             }
+            steps.mark("startup:new:hotkeys");
             if dropped_leftover {
                 c.persist_bg();
             }
             // Once: Home deck and Ideas board data move into Pulse.
             c.migrate_pulse_store();
+            steps.mark("startup:new:pulse_store");
             c.ensure_useful_ideas();
+            steps.mark("startup:new:pulse");
             grokhub_core::proc_util::silence_windows_hard_errors();
             c.last_update_probe = Some(Instant::now());
             c.update_probe_rx = Some(crate::update::begin_update_probe());
             c.open_fresh_home();
             #[cfg(not(test))]
             crate::desktop_mcp::set_desktop_enabled(c.cfg.desktop_control);
+            steps.mark("startup:new:home");
         }
         c
+    }
+
+    /// Fill the local clock and the desktop theme while the window is being
+    /// created, so the first frame reads them from cache instead of running
+    /// `date` and `gsettings` on the UI thread.
+    pub fn warm_startup_caches() {
+        std::thread::spawn(|| {
+            let _ = Self::local_clock();
+        });
+        std::thread::spawn(|| {
+            let _ = crate::theme::desktop_prefers_dark();
+        });
+    }
+
+    /// Super+G and Super+Shift+Esc, once per process.
+    fn register_hotkeys_once(&mut self) {
+        static TRIED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        if TRIED.swap(true, std::sync::atomic::Ordering::SeqCst) {
+            return;
+        }
+        let Ok(mgr) = GlobalHotKeyManager::new() else {
+            return;
+        };
+        let hey = HotKey::new(Some(Modifiers::SUPER), Code::KeyG);
+        let halt = HotKey::new(Some(Modifiers::SUPER | Modifiers::SHIFT), Code::Escape);
+        let hey_id = hey.id();
+        let halt_id = halt.id();
+        if mgr.register(hey).is_ok() && mgr.register(halt).is_ok() {
+            self.hotkey_hey = hey_id;
+            self.hotkey_halt = halt_id;
+            self.hotkeys = Some(mgr);
+        }
     }
 
     /// A cabin with the given chats already loaded. No install, update probe, or
@@ -4798,6 +4835,10 @@ impl eframe::App for Cabin {
     }
 
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        #[cfg(not(test))]
+        if crate::startup::painted() {
+            self.register_hotkeys_once();
+        }
         #[cfg(feature = "fx")]
         {
             let glow_line = crate::fx::on_frame();
@@ -5077,6 +5118,13 @@ impl eframe::App for Cabin {
                 });
         }
         self.sync_idea_card_actions();
+        // The pass after this one grabs the hotkeys in `logic`, which runs
+        // even while the window is covered or minimized.
+        #[cfg(not(test))]
+        if !crate::startup::painted() {
+            crate::startup::first_frame();
+            ctx.request_repaint();
+        }
     }
 }
 
