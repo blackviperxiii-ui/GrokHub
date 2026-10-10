@@ -2,8 +2,13 @@
 
 ## Unreleased
 
+## 2.13.1 — 2026-10-10
+
 - Fixed: an unfinished checklist from an earlier request no longer takes over the next, unrelated message in the same chat. A checklist drives a reply only after that reply works on it. Fixed: when the first send of a chat carried over from the CLI days failed, its recap of the earlier turns was lost; it now goes out with the retry.
 - GrokHub no longer needs, installs or updates the Grok Build CLI. The legacy CLI engine and its Labs switch are gone, along with the `grokhub-acp` crate. The Linux installer, release tarball, PKGBUILD, AUR package and Windows Setup stop installing `grok`, and Windows Setup no longer adds `~/.grok\bin` to PATH. Update, `/update` and `grokhub --update` update only the cabin, and the titlebar chip only says Update cabin. `/rewind`, and `/undo` once a reply has finished, now say the native session is append-only. `/worktree` says worktrees were a CLI feature. A CI test fails if code outside the Google Marketplace check looks for the CLI, or if packaging installs it again. An existing CLI install is left alone, and Google's Marketplace connectors still use it when it is there.
+
+- Linux: `grokhub-linux-v2.13.1.tar.gz` and AUR `pkgver=2.13.1`.
+- Windows: `GrokHub-Setup-2.13.1.exe` and `grokhub-windows-v2.13.1.zip`.
 
 ## 2.13.0 — 2026-10-10
 
