@@ -31,6 +31,7 @@ mod skills;
 mod slash_parity;
 mod sse;
 mod subagent;
+pub mod sudo_pass;
 pub mod tasks;
 pub mod timing;
 pub mod tokens;
