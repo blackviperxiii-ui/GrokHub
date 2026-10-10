@@ -169,7 +169,7 @@ pub fn find_cua_driver(override_path: &str) -> Option<PathBuf> {
 pub fn verify_cua_driver(bin: &Path) -> Result<(), String> {
     let mut cmd = Command::new(bin);
     cmd.arg("--version").stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
-    grokhub_acp::hide_windows_console(&mut cmd);
+    grokhub_core::proc_util::hide_windows_console(&mut cmd);
     let mut child = cmd.spawn().map_err(|e| format!("GrokHub could not run Cua Driver: {e}"))?;
     let start = Instant::now();
     loop {
@@ -289,7 +289,7 @@ pub fn spawn_cua_child(bin: &Path, config_dir: &Path) -> Result<StdioChild, Stri
     for k in CUA_ENV_REMOVE {
         cmd.env_remove(k);
     }
-    grokhub_acp::hide_windows_console(&mut cmd);
+    grokhub_core::proc_util::hide_windows_console(&mut cmd);
     let mut child = cmd.spawn().map_err(|e| format!("GrokHub could not start Cua Driver: {e}"))?;
     let stdin = child.stdin.take().ok_or("Cua Driver has no stdin")?;
     let stdout = child.stdout.take().ok_or("Cua Driver has no stdout")?;
