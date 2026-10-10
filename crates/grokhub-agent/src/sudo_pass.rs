@@ -90,6 +90,20 @@ pub fn dialog_argv(kde: bool, has: &dyn Fn(&str) -> bool) -> Option<(String, Vec
     order.into_iter().find(|(bin, _)| has(bin)).map(|(bin, args)| (bin.to_string(), args))
 }
 
+/// Words an agent command may not use: the helper's env var, its flag and
+/// its directory. Only `sudo` itself runs the helper; a command that names it
+/// is reaching for the password, so it is refused before it runs.
+const HELPER_MARKERS: &[&str] = &["SUDO_ASKPASS", "--askpass", "grokhub-askpass-"];
+
+/// What an agent command that names the sudo helper gets instead of running.
+pub const HELPER_REFUSAL: &str = "This command reaches GrokHub's sudo password helper directly. Run `sudo <command>` and GrokHub asks for the password itself.";
+
+/// True when an agent command names the sudo helper (see [`HELPER_MARKERS`]).
+pub fn names_helper(command: &str) -> bool {
+    let upper = command.to_ascii_uppercase();
+    HELPER_MARKERS.iter().any(|m| upper.contains(&m.to_ascii_uppercase()))
+}
+
 #[cfg(target_os = "linux")]
 pub use linux::{client, install, shell_env};
 
@@ -262,13 +276,47 @@ mod linux {
         if own != exe {
             return None;
         }
-        let out = std::fs::read_link(format!("/proc/{pid}/fd/1")).ok()?;
-        if !out.to_string_lossy().starts_with("pipe:") {
+        let out = std::fs::read_link(format!("/proc/{pid}/fd/1")).ok()?.to_string_lossy().into_owned();
+        if !out.starts_with("pipe:") {
             return None;
         }
         let ppid = proc_ppid(pid)?;
         let comm = std::fs::read_to_string(format!("/proc/{ppid}/comm")).ok()?;
-        (comm.trim() == "sudo" && proc_euid(ppid)? == 0).then_some(ppid)
+        if comm.trim() != "sudo" || proc_euid(ppid)? != 0 {
+            return None;
+        }
+        // sudo's own prompt reads the helper through a pipe only that root
+        // `sudo` holds. `sudo -u "$USER" "$SUDO_ASKPASS"` instead hands the
+        // helper sudo's stdout, which a process of ours reads (GrokHub's tool
+        // output, `cat`, ...): any such reader means no answer.
+        (!pipe_held_elsewhere(pid, &out)?).then_some(ppid)
+    }
+
+    /// Whether a process of this user other than `pid` holds `pipe` (a
+    /// `pipe:[inode]` link). `None` when `/proc` can't be read: fail closed.
+    pub(super) fn pipe_held_elsewhere(pid: u32, pipe: &str) -> Option<bool> {
+        // SAFETY: getuid has no preconditions.
+        let me = unsafe { libc::getuid() };
+        for entry in std::fs::read_dir("/proc").ok()?.flatten() {
+            let Some(other) = entry.file_name().to_str().and_then(|n| n.parse::<u32>().ok()) else {
+                continue;
+            };
+            if other == pid || proc_uid(other) != Some(me) {
+                continue;
+            }
+            let Ok(fds) = std::fs::read_dir(format!("/proc/{other}/fd")) else {
+                continue;
+            };
+            if fds.flatten().any(|fd| std::fs::read_link(fd.path()).is_ok_and(|l| l.to_string_lossy() == pipe)) {
+                return Some(true);
+            }
+        }
+        Some(false)
+    }
+
+    fn proc_uid(pid: u32) -> Option<u32> {
+        let status = std::fs::read_to_string(format!("/proc/{pid}/status")).ok()?;
+        status.lines().find_map(|l| l.strip_prefix("Uid:"))?.split_whitespace().next()?.parse().ok()
     }
 
     fn proc_ppid(pid: u32) -> Option<u32> {
@@ -315,6 +363,29 @@ mod linux {
         }
 
         #[test]
+        fn a_pipe_that_grokhub_or_another_program_reads_gets_no_password() {
+            // `sudo -u "$USER" "$SUDO_ASKPASS"` in an agent command: the helper's
+            // stdout is the pipe GrokHub reads for tool output. Here a child
+            // writes into a pipe this test process reads, as GrokHub would.
+            let mut child = std::process::Command::new("sleep").arg("5").stdout(std::process::Stdio::piped()).spawn().unwrap();
+            let pid = child.id();
+            let link = std::fs::read_link(format!("/proc/{pid}/fd/1")).unwrap().to_string_lossy().into_owned();
+            assert!(link.starts_with("pipe:"), "{link}");
+            assert_eq!(pipe_held_elsewhere(pid, &link), Some(true));
+            // `... | cat`: another program of ours reads it.
+            let mut cat = std::process::Command::new("cat").stdin(child.stdout.take().unwrap()).stdout(std::process::Stdio::null()).spawn().unwrap();
+            assert_eq!(pipe_held_elsewhere(pid, &link), Some(true));
+            let exe = std::fs::read_link(format!("/proc/{pid}/exe")).unwrap();
+            assert_eq!(sudo_parent(pid, &exe), None);
+            // A pipe no process of ours holds (sudo's own, read by root) passes.
+            assert_eq!(pipe_held_elsewhere(pid, "pipe:[0]"), Some(false));
+            let _ = child.kill();
+            let _ = cat.kill();
+            let _ = child.wait();
+            let _ = cat.wait();
+        }
+
+        #[test]
         fn the_helper_dir_holds_a_socket_and_the_script_and_no_password() {
             let exe = PathBuf::from("/opt/Grok Hub/grokhub");
             install(exe.clone()).unwrap();
@@ -357,6 +428,24 @@ mod linux {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn agent_commands_that_name_the_helper_are_refused() {
+        for cmd in [
+            r#"sudo -u "$USER" "$SUDO_ASKPASS""#,
+            "$SUDO_ASKPASS",
+            r#""${SUDO_ASKPASS}" | cat"#,
+            "echo $sudo_askpass",
+            "printenv SUDO_ASKPASS",
+            "/run/user/1000/grokhub-askpass-42/askpass",
+            "grokhub --askpass /run/user/1000/grokhub-askpass-42/s",
+        ] {
+            assert!(names_helper(cmd), "{cmd}");
+        }
+        for cmd in ["sudo pacman -Syu", "sudo -u postgres psql", "ls ~/.ssh", "echo ask pass"] {
+            assert!(!names_helper(cmd), "{cmd}");
+        }
+    }
 
     fn typed(pw: &str) -> Option<Zeroizing<String>> {
         Some(Zeroizing::new(pw.to_string()))
