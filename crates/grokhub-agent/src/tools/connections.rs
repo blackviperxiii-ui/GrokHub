@@ -441,4 +441,44 @@ mod tests {
         let refused = ctx_run(&root, "connection_add", r#"{"name":"grokhub-desktop","command":"x","reason":"y"}"#);
         assert_eq!(refused.text, "grokhub-desktop is the cabin's own desktop server");
     }
+
+    /// Settings → Connectors Disconnect: the entry, its sealed token, and its
+    /// sign-in go; the ledger line is the user's (no Work-tree row), and
+    /// `/connections` undo brings the entry back.
+    #[test]
+    fn a_user_disconnect_removes_the_entry_token_and_sign_in() {
+        let root = crate::harness::test_dir("conn-disconnect");
+        crate::harness::use_key_store_for(&root, std::sync::Arc::new(crate::harness::MemoryKeyStore::new()));
+        let _guard = crate::perm::ConfigGuard::set(&root);
+        let mcp = root.join("mcp.json");
+        std::fs::write(
+            &mcp,
+            r#"{"mcpServers":{"linear":{"url":"https://mcp.linear.app/mcp","tokenRef":"linear"},"notes":{"command":"notes-mcp"}}}"#,
+        )
+        .unwrap();
+        crate::harness::seal_connection_token(&root, "linear", FAKE_TOKEN).unwrap();
+        crate::harness::seal_mcp_signin(&root, "linear", r#"{"access_token":"x"}"#).unwrap();
+        assert!(crate::harness::open_mcp_signin(&root, "linear").is_some());
+
+        assert_eq!(crate::mcp::disconnect("linear").unwrap(), "Disconnected linear");
+
+        let names: Vec<String> = crate::mcp::load_servers().into_keys().collect();
+        assert_eq!(names, ["notes"]);
+        assert_eq!(crate::harness::open_connection_token(&root, "linear"), None);
+        assert_eq!(crate::harness::open_mcp_signin(&root, "linear"), None);
+        let ledger = ChangeLedger::load_kind(&root, ChangeKind::Connection);
+        let c = &ledger.all()[0];
+        assert_eq!(
+            (c.id.as_str(), c.op.as_str(), c.origin.as_str(), c.reason.as_str()),
+            ("linear", "delete", "user", "disconnected in Settings")
+        );
+        assert!(crate::harness::take_self_changes(&root).is_empty(), "a user's own disconnect posts no Work-tree row");
+        assert_eq!(
+            crate::mcp::disconnect("linear").unwrap_err(),
+            "linear isn't one of this cabin's connections"
+        );
+        crate::harness::undo_connection(&root, &mcp, "linear", UndoAsk::from_click()).unwrap();
+        let names: Vec<String> = crate::mcp::load_servers().into_keys().collect();
+        assert_eq!(names, ["linear", "notes"]);
+    }
 }

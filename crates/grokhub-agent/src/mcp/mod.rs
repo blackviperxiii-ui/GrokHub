@@ -322,6 +322,29 @@ pub fn sign_out(name: &str) -> String {
     format!("Signed out of {name}")
 }
 
+/// Settings → Connectors Disconnect, after the user confirmed it. The entry
+/// leaves `mcp.json` through the ChangeLedger (origin user, so `/connections`
+/// can undo it), and its sign-in and sealed token go too. A plugin's server
+/// is not in `mcp.json` and is refused.
+pub fn disconnect(name: &str) -> Result<String, String> {
+    let config = crate::perm::config_dir();
+    let path = config::config_file();
+    let target = crate::harness::McpFile { path: &path, name };
+    let done = crate::harness::record_change(
+        &config,
+        &target,
+        crate::harness::Origin::User,
+        "disconnected in Settings",
+        || crate::harness::ChangeTarget::put(&target, None),
+    )?;
+    if done.is_none() {
+        return Err(format!("{name} isn't one of this cabin's connections"));
+    }
+    crate::harness::forget_connection_token(&config, name);
+    invalidate();
+    Ok(format!("Disconnected {name}"))
+}
+
 /// MCP schemas for the native engine. `native` is how many desktop tools
 /// it registers beside them; past [`DEFER_AFTER`] in all, MCP tools hide
 /// behind `search_tool` and `use_tool`.

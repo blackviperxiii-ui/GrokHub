@@ -52,7 +52,7 @@ pub(super) fn catalog_stale_line(status: &str, total: usize) -> Option<&'static 
     }
 }
 
-fn paint_catalog_stale(ui: &mut egui::Ui, status: &str, total: usize) {
+pub(super) fn paint_catalog_stale(ui: &mut egui::Ui, status: &str, total: usize) {
     let Some(line) = catalog_stale_line(status, total) else {
         return;
     };
@@ -220,12 +220,7 @@ impl Cabin {
             });
     }
 
-    pub(super) fn ui_connectors(&mut self, ui: &mut egui::Ui) {
-        self.skills_tab_connectors = true;
-        self.ui_skills(ui);
-    }
-
-    fn ui_connector_home_note(&self, ui: &mut egui::Ui) {
+    pub(super) fn ui_connector_home_note(&self, ui: &mut egui::Ui) {
         let path = grokhub_acp::cabin_grok_home()
             .map(|p| p.display().to_string())
             .unwrap_or_else(|| "the cabin Grok home".to_string());
@@ -238,7 +233,7 @@ impl Cabin {
         );
     }
 
-    fn ui_hooks_section(&mut self, ui: &mut egui::Ui, q: &str) {
+    pub(super) fn ui_hooks_section(&mut self, ui: &mut egui::Ui, q: &str) {
         if self.cfg.native_engine {
             self.ensure_native_listing();
         }
@@ -388,30 +383,6 @@ impl Cabin {
         if self.scroll_to_hooks {
             hooks_section.scroll_to_me(Some(egui::Align::TOP));
             self.scroll_to_hooks = false;
-        }
-    }
-
-    fn ui_mcp_row_status(
-        &self,
-        ui: &mut egui::Ui,
-        name: &str,
-        status: &grokhub_acp::McpDoctorStatus,
-    ) {
-        let color = match status {
-            grokhub_acp::McpDoctorStatus::Connected => crate::theme::live(),
-            grokhub_acp::McpDoctorStatus::NeedsSignIn | grokhub_acp::McpDoctorStatus::Error(_) => {
-                crate::theme::setup()
-            }
-        };
-        ui.label(RichText::new(status.label()).size(12.0).color(color));
-        if matches!(status, grokhub_acp::McpDoctorStatus::NeedsSignIn) {
-            ui.label(
-                RichText::new(format!(
-                    "Sign in from Grok Build: run grok, open /mcps, press i on {name}"
-                ))
-                .size(12.0)
-                .color(crate::theme::muted()),
-            );
         }
     }
 
@@ -1467,7 +1438,7 @@ impl Cabin {
         egui::CentralPanel::default()
             .frame(egui::Frame::NONE.fill(crate::theme::bg()).inner_margin(egui::Margin::same(24)))
             .show(ui, |ui| {
-            if crate::cards::page_header(ui, "Skills and Connectors", "Refresh") {
+            if crate::cards::page_header(ui, "Skills", "Refresh") {
                 if self.cfg.native_engine {
                     self.native_listing_cwd.clear();
                     self.ensure_native_listing();
@@ -1477,13 +1448,8 @@ impl Cabin {
             }
             ui.add_space(10.0);
             ui.horizontal(|ui| {
-                if crate::cards::tab_pill(ui, "Skills", !self.skills_tab_connectors) {
-                    self.skills_tab_connectors = false;
-                    self.nav = Nav::Skills;
-                }
-                if crate::cards::tab_pill(ui, "Connectors", self.skills_tab_connectors) {
-                    self.skills_tab_connectors = true;
-                    self.nav = Nav::Connectors;
+                if crate::cards::ghost_pill(ui, "Connectors") {
+                    self.open_connectors();
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     crate::cards::search_field(ui, &mut self.skill_q);
@@ -1494,272 +1460,7 @@ impl Cabin {
             let mut use_skill: Option<String> = None;
             let mut workflow_verb: Option<WorkflowVerb> = None;
             let mut use_cabin_skill: Option<(String, String)> = None;
-            let mut run_gh: Option<String> = None;
-            let mut save_pat = false;
-            let mut mcp_toggle: Option<(String, bool)> = None;
-            let mut mcp_remove: Option<String> = None;
-            let mut plugin_toggle: Option<(String, bool)> = None;
-            let mut plugin_install: Option<String> = None;
-            let mut plugin_uninstall: Option<String> = None;
             egui::ScrollArea::vertical().show(ui, |ui| {
-            if self.skills_tab_connectors {
-                if !self.connector_note.is_empty() {
-                    ui.label(
-                        RichText::new(&self.connector_note)
-                            .size(12.0)
-                            .color(crate::theme::muted()),
-                    );
-                    ui.add_space(12.0);
-                }
-                self.ui_connector_home_note(ui);
-                ui.add_space(12.0);
-                crate::cards::section_label(ui, "GitHub");
-                ui.label(
-                    RichText::new("Read-only. Who am I and List repos use the PAT via run_connector. No writes. No other websites.")
-                        .size(12.0)
-                        .color(crate::theme::muted()),
-                );
-                ui.add_space(8.0);
-                crate::cards::settings_field(
-                    ui,
-                    "Personal access token",
-                    "Classic or fine-grained PAT with repo read. Stored in secrets.json.",
-                    &mut self.secrets.github_token,
-                    true,
-                );
-                if crate::cards::white_pill(ui, "Save PAT") {
-                    save_pat = true;
-                }
-                ui.add_space(8.0);
-                crate::cards::tile_row(ui, crate::cards::GITHUB_TILES.len(), |ui, i| {
-                    let (title, body, tool) = crate::cards::GITHUB_TILES[i];
-                    if matches!(
-                        crate::cards::grok_tile(
-                            ui,
-                            crate::icons::TileIcon::Github,
-                            title,
-                            body,
-                            Some("Run"),
-                            false,
-                        ),
-                        crate::cards::TileHit::Add | crate::cards::TileHit::Body
-                    ) {
-                        run_gh = Some((*tool).to_string());
-                    }
-                });
-                ui.add_space(20.0);
-                ui.horizontal(|ui| {
-                    crate::cards::section_label(ui, "MCP servers");
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if crate::cards::ghost_pill(ui, "Doctor") {
-                            self.run_mcp_doctor();
-                            ui.ctx().request_repaint();
-                        }
-                        if crate::cards::white_pill(ui, "Add MCP") {
-                            self.mcp_compose = true;
-                        }
-                    });
-                });
-                crate::cards::help_text(ui, "Grok Build `grok mcp` — add, enable, disable, or remove servers.");
-                if self.mcp_compose {
-                    ui.add_space(8.0);
-                    ui.add(
-                        egui::TextEdit::singleline(&mut self.mcp_nl)
-                            .hint_text(crate::theme::hint("name npx -y package   or   remove name"))
-                            .desired_width(f32::INFINITY),
-                    );
-                    ui.horizontal(|ui| {
-                        if crate::cards::white_pill(ui, "Run") {
-                            let line = std::mem::take(&mut self.mcp_nl);
-                            self.submit_mcp_line(&line);
-                            self.mcp_compose = false;
-                        }
-                        if crate::cards::ghost_pill(ui, "Cancel") {
-                            self.mcp_compose = false;
-                        }
-                    });
-                }
-                ui.add_space(8.0);
-                let mcp: Vec<_> = self
-                    .grok_catalog
-                    .mcp
-                    .iter()
-                    .filter(|s| {
-                        q.is_empty()
-                            || s.name.to_ascii_lowercase().contains(&q)
-                            || s.target.to_ascii_lowercase().contains(&q)
-                    })
-                    .map(|s| {
-                        let status = self.mcp_status.get(&s.name).cloned();
-                        (s.clone(), status)
-                    })
-                    .collect();
-                if mcp.is_empty() {
-                    ui.label(
-                        RichText::new(catalog_empty_line(
-                            self.grok_catalog_rx.is_some(),
-                            &q,
-                            self.grok_catalog.mcp.len(),
-                            "No MCP servers in ~/.grok — add one with grok mcp add.",
-                            &self.status,
-                        ))
-                        .color(crate::theme::muted()),
-                    );
-                } else {
-                    paint_catalog_stale(ui, &self.status, self.grok_catalog.mcp.len());
-                    crate::cards::tile_row(ui, mcp.len(), |ui, i| {
-                        let (s, status) = &mcp[i];
-                        let add = if s.enabled { "Disable" } else { "Enable" };
-                        let body = if s.target.is_empty() {
-                            if s.enabled { "Enabled" } else { "Disabled" }.into()
-                        } else {
-                            s.target.clone()
-                        };
-                        let hit = crate::cards::grok_tile(
-                            ui,
-                            crate::icons::TileIcon::List,
-                            &s.name,
-                            &body,
-                            Some(add),
-                            s.enabled,
-                        );
-                        if hit == crate::cards::TileHit::Add {
-                            mcp_toggle = Some((s.name.clone(), !s.enabled));
-                        }
-                        if crate::cards::ghost_pill(ui, "Remove") {
-                            mcp_remove = Some(s.name.clone());
-                        }
-                        if let Some(status) = status {
-                            ui.add_space(4.0);
-                            self.ui_mcp_row_status(ui, &s.name, status);
-                        }
-                    });
-                }
-                ui.add_space(20.0);
-                self.ui_hooks_section(ui, &q);
-                ui.add_space(20.0);
-                ui.horizontal(|ui| {
-                    crate::cards::section_label(ui, "Plugins");
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if crate::cards::ghost_pill(ui, "Update") {
-                            self.run_grok_user_cmd(vec!["plugin".into(), "update".into()]);
-                        }
-                    });
-                });
-                crate::cards::help_text(ui, "Installed from the Grok Build marketplace (`grok plugin list`).");
-                ui.add_space(8.0);
-                let installed: Vec<_> = self
-                    .grok_catalog
-                    .plugins
-                    .iter()
-                    .filter(|p| p.status != "available")
-                    .filter(|p| {
-                        q.is_empty()
-                            || p.name.to_ascii_lowercase().contains(&q)
-                            || p.marketplace.to_ascii_lowercase().contains(&q)
-                    })
-                    .cloned()
-                    .collect();
-                if installed.is_empty() {
-                    let installed_total = self
-                        .grok_catalog
-                        .plugins
-                        .iter()
-                        .filter(|p| p.status != "available")
-                        .count();
-                    ui.label(
-                        RichText::new(catalog_empty_line(
-                            self.grok_catalog_rx.is_some(),
-                            &q,
-                            installed_total,
-                            "No plugins installed yet — browse Marketplace below.",
-                            &self.status,
-                        ))
-                        .color(crate::theme::muted()),
-                    );
-                } else {
-                    paint_catalog_stale(ui, &self.status, installed.len());
-                    crate::cards::tile_row(ui, installed.len(), |ui, i| {
-                        let p = &installed[i];
-                        let add = if p.enabled { "Disable" } else { "Enable" };
-                        let body = if p.marketplace.is_empty() {
-                            p.source.clone()
-                        } else {
-                            p.marketplace.clone()
-                        };
-                        let hit = crate::cards::grok_tile(
-                            ui,
-                            crate::icons::TileIcon::Bolt,
-                            &p.name,
-                            &body,
-                            Some(add),
-                            p.enabled,
-                        );
-                        if hit == crate::cards::TileHit::Add {
-                            plugin_toggle = Some((p.name.clone(), !p.enabled));
-                        }
-                        if crate::cards::ghost_pill(ui, "Uninstall") {
-                            plugin_uninstall = Some(p.name.clone());
-                        }
-                    });
-                }
-                ui.add_space(20.0);
-                crate::cards::section_label(ui, "Marketplace");
-                crate::cards::help_text(ui, "xAI Official and other sources (`grok plugin marketplace`).");
-                ui.add_space(8.0);
-                let market: Vec<_> = self
-                    .grok_catalog
-                    .plugins
-                    .iter()
-                    .filter(|p| p.status == "available")
-                    .filter(|p| {
-                        q.is_empty()
-                            || p.name.to_ascii_lowercase().contains(&q)
-                            || p.description.to_ascii_lowercase().contains(&q)
-                            || p.marketplace.to_ascii_lowercase().contains(&q)
-                    })
-                    .cloned()
-                    .collect();
-                if market.is_empty() {
-                    let market_total = self
-                        .grok_catalog
-                        .plugins
-                        .iter()
-                        .filter(|p| p.status == "available")
-                        .count();
-                    ui.label(
-                        RichText::new(catalog_empty_line(
-                            self.grok_catalog_rx.is_some(),
-                            &q,
-                            market_total,
-                            "No marketplace plugins to install.",
-                            &self.status,
-                        ))
-                        .color(crate::theme::muted()),
-                    );
-                } else {
-                    paint_catalog_stale(ui, &self.status, market.len());
-                    crate::cards::tile_row(ui, market.len(), |ui, i| {
-                        let p = &market[i];
-                        let body = if p.description.is_empty() {
-                            p.marketplace.clone()
-                        } else {
-                            p.description.clone()
-                        };
-                        if crate::cards::grok_tile(
-                            ui,
-                            crate::icons::TileIcon::Bolt,
-                            &p.name,
-                            &body,
-                            Some("Install"),
-                            false,
-                        ) == crate::cards::TileHit::Add
-                        {
-                            plugin_install = Some(p.name.clone());
-                        }
-                    });
-                }
-            } else {
             let workflows: Vec<_> = self
                 .grok_catalog
                 .workflows
@@ -2011,7 +1712,6 @@ impl Cabin {
                 });
             }
             }
-            }
             });
             if let Some(name) = use_skill {
                 self.nav = Nav::Chat;
@@ -2020,45 +1720,6 @@ impl Cabin {
             if let Some((slash, name)) = use_cabin_skill {
                 self.nav = Nav::Chat;
                 self.send_chat(skill_use_in_chat_prompt(&slash, &name));
-            }
-            if save_pat {
-                self.persist_secrets();
-                self.status = if self.secrets.github_token.trim().is_empty() {
-                    "GitHub PAT cleared".into()
-                } else {
-                    "GitHub PAT saved".into()
-                };
-            }
-            if let Some(tool) = run_gh {
-                self.nav = Nav::Chat;
-                self.run_connector("github", &tool, "");
-            }
-            if let Some((name, on)) = mcp_toggle {
-                let cmd = if on { "enable" } else { "disable" };
-                self.run_grok_user_cmd(vec!["mcp".into(), cmd.into(), name]);
-            }
-            if let Some(name) = mcp_remove {
-                self.run_grok_user_cmd(vec!["mcp".into(), "remove".into(), name]);
-            }
-            if let Some((name, on)) = plugin_toggle {
-                let cmd = if on { "enable" } else { "disable" };
-                self.run_grok_user_cmd(vec!["plugin".into(), cmd.into(), name]);
-            }
-            if let Some(name) = plugin_uninstall {
-                self.run_grok_user_cmd(vec![
-                    "plugin".into(),
-                    "uninstall".into(),
-                    name,
-                    "--confirm".into(),
-                ]);
-            }
-            if let Some(name) = plugin_install {
-                self.run_grok_user_cmd(vec![
-                    "plugin".into(),
-                    "install".into(),
-                    name,
-                    "--trust".into(),
-                ]);
             }
         });
     }
@@ -2312,8 +1973,14 @@ mod tests {
             .and_then(|s| s.split("fn open_history_hit(").next())
             .expect("ui_skills");
         assert!(
-            skills_ui.matches("paint_catalog_stale(").count() >= 4,
-            "skills and connectors tile lists paint the stale line: {skills_ui}"
+            skills_ui.contains("paint_catalog_stale("),
+            "the skills list paints the stale line: {skills_ui}"
+        );
+        let connectors = include_str!("connectors_ui.rs");
+        assert_eq!(
+            connectors.split("#[cfg(test)]").next().expect("body").matches("paint_catalog_stale(").count(),
+            3,
+            "the Grok Build server, plugin, and marketplace lists paint the stale line"
         );
     }
 }
