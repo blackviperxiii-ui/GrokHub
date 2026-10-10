@@ -82,6 +82,11 @@ pub(super) enum ConfirmKind {
         dir: String,
         title: String,
     },
+    /// Settings → Connectors Disconnect: the server and its sign-in go.
+    Disconnect {
+        name: String,
+        source: super::connectors_ui::ConnectorSource,
+    },
 }
 
 impl ConfirmKind {
@@ -91,7 +96,8 @@ impl ConfirmKind {
             | Self::DestructiveHost { .. }
             | Self::RemoveJob { .. }
             | Self::LastRun { .. }
-            | Self::DeleteRecording { .. } => true,
+            | Self::DeleteRecording { .. }
+            | Self::Disconnect { .. } => true,
         }
     }
 }
@@ -142,6 +148,15 @@ pub(super) fn delete_recording_spec() -> ConfirmSpec {
         title: "Delete recording",
         consequence: "The stills are deleted from this computer. This can't be undone.",
         primary: "Delete",
+        danger: true,
+    }
+}
+
+pub(super) fn disconnect_spec() -> ConfirmSpec {
+    ConfirmSpec {
+        title: "Disconnect",
+        consequence: "GrokHub stops using this connector and forgets its sign-in.",
+        primary: "Disconnect",
         danger: true,
     }
 }
@@ -271,6 +286,11 @@ impl Cabin {
             ConfirmKind::DeleteRecording { dir, title, .. } => {
                 (delete_recording_spec(), format!("Delete {title}?"), dir.clone())
             }
+            ConfirmKind::Disconnect { name, source } => (
+                disconnect_spec(),
+                super::connectors_ui::disconnect_question(name),
+                super::connectors_ui::disconnect_detail(*source).to_string(),
+            ),
         };
         let overlay_open = self.palette_open || self.nav == Nav::Settings || self.find.focused;
         let steal = confirm_key(
@@ -313,6 +333,7 @@ impl Cabin {
             ConfirmKind::DeleteRecording { card_id, dir, title } => {
                 self.delete_recording(&card_id, &dir, &title)
             }
+            ConfirmKind::Disconnect { name, source } => self.disconnect_confirmed(&name, source),
         }
     }
 

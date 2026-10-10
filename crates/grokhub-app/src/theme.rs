@@ -403,7 +403,7 @@ pub const GROK_NAV: &[(&str, &str)] = &[
     ("chat", "Chat"),
     ("imagine", "Imagine"),
     ("automations", "Automations"),
-    ("skills", "Skills and Connectors"),
+    ("skills", "Skills"),
     ("workboard", "Workboards"),
     ("pulse", "Pulse"),
 ];
@@ -1291,7 +1291,7 @@ mod tests {
         assert_eq!(
             GROK_NAV.get(skills + 1),
             Some(&("workboard", "Workboards")),
-            "Workboards sits immediately under Skills and Connectors"
+            "Workboards sits immediately under Skills"
         );
         assert_eq!(CABIN_MENU, &[("settings", "Settings")]);
         for gone in [

@@ -1,8 +1,8 @@
-//! Native MCP servers in Labs. Import and status run off the UI thread.
+//! The cabin's own MCP servers (Settings → Connectors). Import, status,
+//! sign-in and Disconnect run off the UI thread.
 
 use std::path::{Component, Path};
 use std::sync::{Mutex, OnceLock};
-use std::time::Duration;
 
 use serde_json::{json, Map, Value};
 
@@ -45,94 +45,41 @@ fn servers_health(rows: &[grokhub_agent::mcp::DoctorRow]) -> (usize, Vec<String>
     (on, failed)
 }
 
-enum Job {
+/// Work on the cabin's own MCP servers, run off the UI thread.
+pub enum Job {
     Import,
     Doctor,
     Restart(String),
     SignIn(String),
     SignOut(String),
+    /// Settings → Connectors Disconnect, after the confirm sheet.
+    Disconnect(String),
 }
 
-pub fn paint(ui: &mut eframe::egui::Ui) {
-    ui.add_space(12.0);
-    crate::cards::section_label(ui, "Native MCP");
-    crate::cards::help_text(
-        ui,
-        "Servers for the native engine. Import copies MCP server definitions from the cabin home. Refresh checks status away from this thread.",
-    );
-    ui.add_space(6.0);
-    {
-        let mut held = paint_state().lock().unwrap_or_else(|err| err.into_inner());
-        if !held.seeded {
-            held.rows = grokhub_agent::mcp::configured();
-            held.seeded = true;
-        }
+/// What Settings → Connectors paints: the last rows, the last job's note,
+/// and whether a job is still running.
+pub struct Snapshot {
+    pub rows: Vec<grokhub_agent::mcp::DoctorRow>,
+    pub note: String,
+    pub busy: bool,
+}
+
+/// The cached rows (read from the config the first time; nothing is pinged).
+pub fn snapshot() -> Snapshot {
+    let mut held = paint_state().lock().unwrap_or_else(|err| err.into_inner());
+    if !held.seeded {
+        held.rows = grokhub_agent::mcp::configured();
+        held.seeded = true;
     }
-    let (busy, note, rows) = {
-        let held = paint_state().lock().unwrap_or_else(|err| err.into_inner());
-        (held.busy, held.note.clone(), held.rows.clone())
-    };
-    if !note.is_empty() {
-        crate::cards::settings_note(ui, &note);
-    }
-    if crate::cards::settings_action(
-        ui,
-        "Import servers",
-        "Copy server definitions. Existing names stay.",
-        "Import",
-    ) {
-        spawn(Job::Import);
-    }
-    if crate::cards::settings_action(ui, "Status", "Connect and count tools.", "Refresh") {
-        spawn(Job::Doctor);
-    }
-    if rows.is_empty() {
-        crate::cards::settings_note(ui, "No native MCP servers");
-    }
-    for row in &rows {
-        let hint = row_hint(row);
-        if crate::cards::settings_action(ui, &row.name, &hint, "Restart") {
-            spawn(Job::Restart(row.name.clone()));
-        }
-        if let Some((hint, button, job)) = sign_in_action(row) {
-            if crate::cards::settings_action(ui, &format!("{} sign-in", row.name), &hint, button) {
-                spawn(job);
-            }
-        }
-    }
-    if busy {
-        ui.ctx().request_repaint_after(Duration::from_millis(200));
+    Snapshot {
+        rows: held.rows.clone(),
+        note: held.note.clone(),
+        busy: held.busy,
     }
 }
 
-fn row_hint(row: &grokhub_agent::mcp::DoctorRow) -> String {
-    let mut hint = if row.detail.is_empty() {
-        format!("{} · {} tools", row.status, row.tool_count)
-    } else {
-        format!("{} · {} · {} tools", row.detail, row.status, row.tool_count)
-    };
-    if !row.last_error.is_empty() {
-        hint.push_str(" · ");
-        hint.push_str(&row.last_error);
-    }
-    hint
-}
-
-/// The sign-in row under a remote server: Sign in, or the account and Sign out.
-fn sign_in_action(row: &grokhub_agent::mcp::DoctorRow) -> Option<(String, &'static str, Job)> {
-    use grokhub_agent::mcp::SignIn;
-    match &row.sign_in {
-        SignIn::NotOffered => None,
-        SignIn::SignedOut => Some((
-            format!("Sign in to {} in your browser. The token is sealed on this device.", row.name),
-            "Sign in",
-            Job::SignIn(row.name.clone()),
-        )),
-        SignIn::SignedIn(line) => Some((line.clone(), "Sign out", Job::SignOut(row.name.clone()))),
-    }
-}
-
-fn spawn(job: Job) {
+/// Run `job` on a thread. One at a time: a second job while one runs is dropped.
+pub fn spawn(job: Job) {
     {
         let mut held = paint_state().lock().unwrap_or_else(|err| err.into_inner());
         if held.busy {
@@ -155,7 +102,7 @@ fn spawn(job: Job) {
             Job::Doctor => (grokhub_agent::mcp::doctor(), String::new()),
             Job::Restart(name) => {
                 let note = match grokhub_agent::mcp::restart(&name) {
-                    Ok(()) => format!("Restarted {name}"),
+                    Ok(()) => format!("Reconnected {name}"),
                     Err(err) => err,
                 };
                 (grokhub_agent::mcp::doctor(), note)
@@ -169,6 +116,13 @@ fn spawn(job: Job) {
             }
             Job::SignOut(name) => {
                 let note = grokhub_agent::mcp::sign_out(&name);
+                (grokhub_agent::mcp::configured(), note)
+            }
+            Job::Disconnect(name) => {
+                let note = match grokhub_agent::mcp::disconnect(&name) {
+                    Ok(line) => line,
+                    Err(err) => err,
+                };
                 (grokhub_agent::mcp::configured(), note)
             }
         };
@@ -426,27 +380,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn remote_rows_offer_sign_in_then_name_the_account_and_sign_out() {
-        use grokhub_agent::mcp::{DoctorRow, SignIn};
-        let row = |sign_in| DoctorRow {
-            name: "linear".into(),
-            status: "error".into(),
-            tool_count: 0,
-            last_error: String::new(),
-            detail: "http https://mcp.linear.app/mcp".into(),
-            sign_in,
-        };
-        assert!(sign_in_action(&row(SignIn::NotOffered)).is_none());
-        let (hint, button, job) = sign_in_action(&row(SignIn::SignedOut)).unwrap();
-        assert_eq!(hint, "Sign in to linear in your browser. The token is sealed on this device.");
-        assert_eq!(button, "Sign in");
-        assert!(matches!(job, Job::SignIn(name) if name == "linear"));
-        let (hint, button, job) = sign_in_action(&row(SignIn::SignedIn("Signed in to linear as ada@example.com".into()))).unwrap();
-        assert_eq!((hint.as_str(), button), ("Signed in to linear as ada@example.com", "Sign out"));
-        assert!(matches!(job, Job::SignOut(name) if name == "linear"));
-    }
-
-    #[test]
     fn health_counts_servers_that_are_on_and_names_each_one_in_error() {
         use grokhub_agent::mcp::{DoctorRow, SignIn};
         let row = |name: &str, status: &str, err: &str| DoctorRow {
@@ -527,26 +460,5 @@ Authorization = "Bearer in-entry"
         assert!(!saved.contains("secretcli"), "{saved}");
         let _ = std::fs::remove_dir_all(&cfg);
         let _ = std::fs::remove_dir_all(&home);
-    }
-
-    #[test]
-    fn native_mcp_settings_are_behind_the_labs_toggle() {
-        let settings = include_str!("app/settings.rs");
-        // The display-name arm is `SettingsSec::Labs => "Labs"`. The body arm
-        // is the one that opens a block and paints MCP only while the Labs
-        // native-engine toggle is on.
-        let start = settings.find("SettingsSec::Labs => {").expect("labs body");
-        let arm = settings[start..]
-            .split("SettingsSec::")
-            .nth(1)
-            .expect("labs arm");
-        assert!(arm.contains("self.cfg.native_engine"), "{arm}");
-        let guard = arm
-            .find("if self.cfg.native_engine")
-            .expect("native engine guard");
-        let paint = arm.find("native_mcp::paint").expect("mcp paint");
-        assert!(paint > guard, "{arm}");
-        let chat = include_str!("app/chat_ui.rs");
-        assert!(!chat.contains("native_mcp"));
     }
 }

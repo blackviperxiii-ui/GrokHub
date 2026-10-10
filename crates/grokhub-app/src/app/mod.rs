@@ -173,6 +173,7 @@ mod ideas_ui;
 mod pulse_ui;
 mod board_ui;
 mod confirm;
+mod connectors_ui;
 mod harness_ui;
 mod inbox_ui;
 mod episode_ui;
@@ -257,7 +258,6 @@ enum Nav {
     Night,
     History,
     Command,
-    Connectors,
     Agents,
     Settings,
 }
@@ -272,6 +272,7 @@ enum SettingsSec {
     Defaults,
     Labs,
     Permissions,
+    Connectors,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -641,7 +642,6 @@ pub struct Cabin {
     greeting_busy: bool,
     greeting_llm_at: u64,
     continue_hint: String,
-    skills_tab_connectors: bool,
     skill_q: String,
     mcp_nl: String,
     mcp_compose: bool,
@@ -1255,7 +1255,6 @@ impl Cabin {
             greeting_busy: false,
             greeting_llm_at: 0,
             continue_hint: String::new(),
-            skills_tab_connectors: false,
             skill_q: String::new(),
             mcp_nl: String::new(),
             mcp_compose: false,
@@ -1705,7 +1704,6 @@ impl Cabin {
             greeting_busy: false,
             greeting_llm_at: 0,
             continue_hint: String::new(),
-            skills_tab_connectors: false,
             skill_q: String::new(),
             mcp_nl: String::new(),
             mcp_compose: false,
@@ -5320,7 +5318,6 @@ impl eframe::App for Cabin {
                 Nav::Night => self.ui_night(ui),
                 Nav::History => self.ui_history(ui),
                 Nav::Command => self.ui_command(ui),
-                Nav::Connectors => self.ui_connectors(ui),
                 Nav::Agents => self.ui_agents(ui),
                 Nav::Settings => self.ui_chat(ui),
             }

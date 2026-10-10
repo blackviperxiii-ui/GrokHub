@@ -162,7 +162,6 @@ impl Cabin {
             }
             Slash::GrokSkills => {
                 self.nav = Nav::Skills;
-                self.skills_tab_connectors = false;
                 self.reload_grok_catalog();
             }
             Slash::SkillChanges => self.run_skill_changes(),
@@ -172,18 +171,15 @@ impl Cabin {
             Slash::AutomationChanges => self.run_change_report(grokhub_agent::harness::ChangeKind::Automation),
             Slash::GrokWorkflows => {
                 self.nav = Nav::Skills;
-                self.skills_tab_connectors = false;
                 self.scroll_to_workflows = true;
                 self.reload_grok_catalog();
             }
             Slash::GrokConnectors => {
-                self.nav = Nav::Connectors;
-                self.skills_tab_connectors = true;
+                self.open_connectors();
                 self.reload_grok_catalog();
             }
             Slash::GrokHooks => {
-                self.nav = Nav::Connectors;
-                self.skills_tab_connectors = true;
+                self.open_connectors();
                 self.scroll_to_hooks = true;
                 self.reload_grok_catalog();
             }
@@ -559,7 +555,7 @@ impl Cabin {
                 };
             }
             Slash::Inspect => {
-                self.nav = Nav::Connectors;
+                self.open_connectors();
                 if let Some(bin) = grokhub_acp::find_grok() {
                     let cwd = self.grok_cwd();
                     if self.inspect_rx.is_none() {
@@ -1173,7 +1169,7 @@ impl Cabin {
             lines.push(format!("  {} {}", row.name, row.status));
         }
         self.inspect_text = lines.join("\n");
-        self.nav = Nav::Connectors;
+        self.open_connectors();
         self.status = "Native session".into();
     }
 

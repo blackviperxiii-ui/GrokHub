@@ -3278,18 +3278,16 @@ mod tests {
             "a tile row must stretch short cards up to the tallest neighbor: {row}"
         );
         let pages = include_str!("app/pages.rs");
-        let connectors = pages
-            .split("fn ui_connectors(")
+        let skills = pages
+            .split("fn ui_skills(")
             .nth(1)
-            .expect("ui_connectors");
+            .and_then(|s| s.split("fn tick_history_search(").next())
+            .expect("ui_skills");
         assert!(
-            connectors.contains("self.ui_skills(ui)"),
-            "connectors must reuse the skills grid: {connectors}"
+            !skills.contains("tab_pill(ui, \"Connectors\"") && skills.contains("self.open_connectors()"),
+            "Skills has no Connectors tab; its Connectors pill opens Settings: {skills}"
         );
-        assert!(
-            pages.contains("GITHUB_TILES") && pages.contains("grok_tile("),
-            "connector cards must be grok_tile"
-        );
+        assert!(skills.contains("grok_tile("), "skill cards stay grok_tile");
         let empty = src
             .split("pub fn empty_prompt_tile(")
             .nth(1)
