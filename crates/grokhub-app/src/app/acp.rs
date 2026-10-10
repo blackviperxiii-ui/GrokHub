@@ -164,7 +164,13 @@ impl Cabin {
         self.running = false;
         self.pending_kick = None;
         self.scheduled_perm = false;
-        self.status = self.apply_job_fail(&ask_denied_without_acp(detail));
+        // The native engine has no Grok Build agent to start; its own reason stands.
+        let why = if self.native_engine_for_current() {
+            detail.to_string()
+        } else {
+            ask_denied_without_acp(detail)
+        };
+        self.status = self.apply_job_fail(&why);
         self.chat_job_thread = None;
         self.persist();
         self.maybe_continue_ptt();
@@ -390,7 +396,7 @@ impl Cabin {
                     }
                 }
                 AcpEvent::Tool(mut card) => {
-                    if self.cfg.native_engine && card.status == "completed" {
+                    if self.cfg.native_engine() && card.status == "completed" {
                         let sid = self
                             .acp
                             .as_ref()
@@ -862,7 +868,7 @@ impl Cabin {
                 } else {
                     self.scheduled_perm = false;
                     let status = self.apply_job_fail(&rewrite_truncation_error(&e));
-                    if self.cfg.native_engine {
+                    if self.cfg.native_engine() {
                         self.finish_hub_dispatch(&status, false);
                     }
                     if paints || self.chat_job_thread.is_none() {
@@ -898,7 +904,7 @@ impl Cabin {
                     self.scheduled_perm = false;
                     let paints = self.stream_here();
                     let status = self.apply_job_fail("Grok Build session missing");
-                    if self.cfg.native_engine {
+                    if self.cfg.native_engine() {
                         self.finish_hub_dispatch(&status, false);
                     }
                     if paints || self.chat_job_thread.is_none() {
@@ -1100,7 +1106,7 @@ impl Cabin {
     /// Background subagents emit cards after the parent turn has returned.
     /// The CLI path never queues these, and this poll runs only while the native engine is on.
     pub(super) fn poll_native_side_events(&mut self) {
-        if !self.cfg.native_engine {
+        if !self.cfg.native_engine() {
             return;
         }
         let here = self

@@ -151,7 +151,7 @@ impl Cabin {
 
     /// "Suggest ideas" in the header: ask the model now, or say how to sign in.
     pub(super) fn suggest_ideas_pressed(&mut self) {
-        let ready = self.llm_ready() || self.cfg.native_engine;
+        let ready = self.llm_ready() || self.cfg.native_engine();
         self.suggest_ideas_with(ready);
     }
 

@@ -617,7 +617,7 @@ impl Cabin {
             self.status = format!("Night skipped {} (quiet/policy)", a.name);
             return;
         }
-        if night_unauth_should_skip(self.llm_ready()) && !self.cfg.native_engine {
+        if night_unauth_should_skip(self.llm_ready()) && !self.cfg.native_engine() {
             self.mark_auto_skipped(&a.id, now_ms);
             self.status = "Connect Grok OAuth in Settings".into();
             self.note_auto_failed(&a.id, "Not signed in — Connect Grok in Settings");
@@ -629,7 +629,7 @@ impl Cabin {
             self.mark_auto_skipped(&a.id, now_ms);
             return;
         }
-        if replay.is_none() && !self.can_agent() && !self.cfg.native_engine {
+        if replay.is_none() && !self.can_agent() && !self.cfg.native_engine() {
             self.mark_auto_skipped(&a.id, now_ms);
             self.status = "Install Grok Build (x.ai/cli) or Connect Grok in Settings".into();
             self.note_auto_failed(&a.id, "Grok Build is not installed or not connected");
@@ -668,7 +668,7 @@ impl Cabin {
     /// that chat's session, so runs never write into each other or into yours.
     fn start_scheduled_run(&mut self, a: &Automation) -> Result<String, String> {
         let idx = self.ensure_background_history_thread();
-        let native = self.cfg.native_engine;
+        let native = self.cfg.native_engine();
         let Some(thread) = self.threads.get_mut(idx) else {
             return Err("The run did not start".into());
         };
@@ -763,7 +763,7 @@ impl Cabin {
         if self.budget_holds_scheduled() {
             return false;
         }
-        if !self.cfg.native_engine && grokhub_acp::find_grok().is_none() {
+        if !self.cfg.native_engine() && grokhub_acp::find_grok().is_none() {
             return false;
         }
         let due = due_loops(&self.grok_loops, now_ms());
@@ -816,7 +816,7 @@ impl Cabin {
         }
         self.persist_loops();
         self.automation_span(super::background::LOOP_TRACE, &row.id);
-        if self.cfg.native_engine {
+        if self.cfg.native_engine() {
             self.spawn_native_loop(row);
             return;
         }
@@ -935,7 +935,7 @@ impl Cabin {
         ) {
             return;
         }
-        if !self.llm_ready() && !self.cfg.native_engine {
+        if !self.llm_ready() && !self.cfg.native_engine() {
             return;
         }
         if !grokhub_core::review_worth_tokens(
@@ -1001,7 +1001,7 @@ impl Cabin {
         if self.review_busy {
             return;
         }
-        if self.cfg.native_engine {
+        if self.cfg.native_engine() {
             self.spawn_native_review();
             return;
         }
