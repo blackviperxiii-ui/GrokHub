@@ -29,6 +29,7 @@ These rules apply to every contributor and every bot (Cursor, Claude, GrokHub). 
 
 - CI runs `cargo nextest run --workspace --locked --profile ci` (each test in its own process, in parallel), `cargo test --doc --workspace --locked`, and `cargo clippy --workspace --all-targets -- -D warnings` on Linux and Windows.
 - Locally, set `GROKHUB_CONFIG` to a temp dir and run only the tests you touched.
+- Without nextest, `cargo test --workspace --locked` runs one test at a time in each test binary (`.cargo/config.toml`), so it needs no extra flags.
 - Tests assert literal expected values. Never skip, ignore, delete, or loosen a test to get green.
 - Format only the lines you touch; don't mass `cargo fmt`.
 
