@@ -1,5 +1,6 @@
-//! Agent loop. Turns stop when the model stops calling tools, or at the
-//! caller's turn cap (`max_turns` 0 means none).
+//! Agent loop. Turns stop when the model stops calling tools and the goal
+//! checklist has nothing open ([`crate::drive`]), or at the caller's turn cap
+//! (`max_turns` 0 means none).
 
 use std::collections::{HashMap, VecDeque};
 use std::path::Path;
@@ -202,6 +203,10 @@ pub fn run_loop(
     let mut did_compact = false;
     let mut repeats: HashMap<String, u32> = HashMap::new();
     let mut stop_hook_active = false;
+    // A subagent's checklist belongs to its parent; plan mode can't do the work.
+    let mut drive = (input.depth == 0 && !plan_at_start && !input.conversation_id.is_empty())
+        .then(|| crate::drive::Drive::new(&crate::session_tools::todos_for(input.conversation_id)));
+    let mut evidence = 0usize;
     match crate::hooks::on_user_prompt(input.conversation_id, input.workspace, user_text) {
         crate::hooks::PromptHook::Block { reason } => {
             history.pop();
@@ -339,6 +344,22 @@ pub fn run_loop(
         if turn.calls.is_empty() {
             let notes = input.steer.drain();
             if notes.is_empty() {
+                if let Some(drive) = drive.as_mut().filter(|_| !crate::session_tools::plan_on(input.conversation_id)) {
+                    match drive.check(&crate::session_tools::todos_for(input.conversation_id), evidence) {
+                        crate::drive::Verdict::Push(note) => {
+                            history.push(user_message(&note, None));
+                            continue;
+                        }
+                        crate::drive::Verdict::Blocked(text) => {
+                            on_event(LoopEvent::Text(format!("\n\n{text}")));
+                            history.push(InputItem::Message {
+                                role: "assistant".into(),
+                                content: vec![ContentPart::InputText(text)],
+                            });
+                        }
+                        crate::drive::Verdict::End => {}
+                    }
+                }
                 if !stop_hook_active {
                     if let Some(reason) =
                         crate::hooks::on_stop(input.conversation_id, input.workspace, "Stop", false)
@@ -556,6 +577,9 @@ pub fn run_loop(
             }
             let cancelled = input.cancel.is_cancelled();
             let halted = stop_for_halt(input);
+            if !output.failed && !crate::drive::is_session_tool(&call.name) {
+                evidence += 1;
+            }
             push_output(history, call, output);
             if cancelled {
                 return finish(input, StopReason::Cancelled, usage, did_compact, true);
@@ -2210,5 +2234,129 @@ mod tests {
         drop(allow);
         let _ = std::fs::remove_dir_all(&dir);
     }
-}
 
+    fn run_drive(script: &Script, dir: &std::path::Path, conv: &str) -> (LoopOut, Vec<InputItem>, Vec<LoopEvent>) {
+        let (cancel, steer) = (CancelToken::new(), SteerQueue::new());
+        let input = LoopIn {
+            client: script,
+            workspace: dir,
+            model: "grok-4.7",
+            effort: Some("low"),
+            system: "sys",
+            conversation_id: conv,
+            max_turns: 0,
+            usage_base: Usage::default(),
+            cancel: &cancel,
+            steer: &steer,
+            halt: &NeverHalt,
+            gate: Gate::phase_readonly(),
+            desktop: None,
+            permits: &gate::ClosedPermits,
+            perms: None,
+            context_length: 0,
+            tasks: None,
+            depth: 0,
+            agent_id: None,
+            shared_client: None,
+            shared_permits: None,
+            shared_desktop: None,
+        };
+        let mut history = Vec::new();
+        let mut events = Vec::new();
+        let out = run_loop(&input, &mut history, "scan my computer", None, &mut |ev| events.push(ev));
+        (out, history, events)
+    }
+
+    fn turn(text: &str, calls: Vec<FunctionCall>) -> ScriptTurn {
+        ScriptTurn { text: text.into(), calls, usage: Usage::default() }
+    }
+
+    fn user_texts(history: &[InputItem]) -> Vec<String> {
+        history
+            .iter()
+            .filter_map(|item| match item {
+                InputItem::Message { role, content } if role == "user" => match content.first() {
+                    Some(ContentPart::InputText(t)) => Some(t.clone()),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_run_that_stops_early_is_driven_until_the_checklist_is_covered() {
+        let dir = workspace("drive");
+        let conv = format!("drive-{}", std::process::id());
+        let todos = r#"{"todos":[{"id":"svc","content":"failed services","status":"completed"},{"id":"ports","content":"open ports","status":"pending"}]}"#;
+        let script = Script {
+            turns: Mutex::new(vec![
+                turn("", vec![call("t1", "todo_write", todos), call("r1", "read_file", r#"{"target_file":"note.txt"}"#)]),
+                // Claims it's resolved with "open ports" still open.
+                turn("It's resolved.", Vec::new()),
+                turn("", vec![call("r2", "list_dir", "{}"), call("t2", "todo_write", r#"{"merge":true,"todos":[{"id":"ports","status":"completed"}]}"#)]),
+                turn("All covered.", Vec::new()),
+            ]),
+            seen: Mutex::new(Vec::new()),
+            cancel_on_text: false,
+            steer: None,
+        };
+        let (out, history, _) = run_drive(&script, &dir, &conv);
+        assert_eq!(out.stop, StopReason::EndTurn);
+        assert_eq!(script.seen.lock().unwrap().len(), 4);
+        assert_eq!(
+            user_texts(&history),
+            [
+                "scan my computer".to_string(),
+                "Not done yet: \"open ports\". Continue with the next open item. Mark an item completed only after a tool result shows it. If one is truly blocked (a hard approval was refused, hardware or access is missing, or every approach failed), mark it cancelled and say why.".to_string(),
+            ]
+        );
+        crate::session_tools::invalidate_todos(&conv);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_checklist_marked_done_without_any_check_is_pushed_back() {
+        let dir = workspace("drive-proof");
+        let conv = format!("drive-proof-{}", std::process::id());
+        let todos = r#"{"todos":[{"id":"fw","content":"firewall","status":"completed"}]}"#;
+        let script = Script {
+            turns: Mutex::new(vec![
+                turn("", vec![call("t1", "todo_write", todos)]),
+                turn("Firewall is fine.", Vec::new()),
+                turn("", vec![call("r1", "read_file", r#"{"target_file":"note.txt"}"#)]),
+                turn("Checked: fine.", Vec::new()),
+            ]),
+            seen: Mutex::new(Vec::new()),
+            cancel_on_text: false,
+            steer: None,
+        };
+        let (out, history, _) = run_drive(&script, &dir, &conv);
+        assert_eq!(out.stop, StopReason::EndTurn);
+        assert_eq!(script.seen.lock().unwrap().len(), 4);
+        assert_eq!(
+            user_texts(&history)[1],
+            "Marked completed without any check this run: \"firewall\". Run a check that shows each one before you finish."
+        );
+        crate::session_tools::invalidate_todos(&conv);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_truly_stuck_run_ends_naming_what_is_blocked() {
+        let dir = workspace("drive-stuck");
+        let conv = format!("drive-stuck-{}", std::process::id());
+        let todos = r#"{"todos":[{"id":"bt","content":"bluetooth errors","status":"pending"}]}"#;
+        let mut turns = vec![turn("", vec![call("t1", "todo_write", todos)])];
+        turns.extend((0..=crate::drive::STALL_LIMIT).map(|_| turn("I can't.", Vec::new())));
+        let script = Script { turns: Mutex::new(turns), seen: Mutex::new(Vec::new()), cancel_on_text: false, steer: None };
+        let (out, history, events) = run_drive(&script, &dir, &conv);
+        assert_eq!(out.stop, StopReason::EndTurn);
+        assert_eq!(script.seen.lock().unwrap().len(), 5);
+        let said = "Stopped with these still open: \"bluetooth errors\". No approach worked after 3 re-plans.";
+        assert!(events.iter().any(|ev| matches!(ev, LoopEvent::Text(t) if t == &format!("\n\n{said}"))));
+        assert!(matches!(history.last(), Some(InputItem::Message { role, content }) if role == "assistant" && content.first() == Some(&ContentPart::InputText(said.into()))));
+        crate::session_tools::invalidate_todos(&conv);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
