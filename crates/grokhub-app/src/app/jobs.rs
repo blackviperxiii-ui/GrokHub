@@ -501,7 +501,7 @@ impl Cabin {
 
     pub(super) fn run_consult(&mut self, q: String) {
         if !self.llm_ready() {
-            self.status = "Run grok login, or Connect Grok in Settings.".into();
+            self.status = grokhub_core::XAI_NEED_SIGNIN.into();
             return;
         }
         if self.running {
