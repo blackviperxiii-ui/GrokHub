@@ -458,10 +458,6 @@ pub struct AppConfig {
     /// Expiry sweep, quiet release, and the digest clock. No settings panel.
     #[serde(default, skip_serializing_if = "FeedPulse::is_background_default")]
     pub feed_pulse: FeedPulse,
-    /// Settings → Labs. The legacy Grok Build CLI launch path, on only by choice.
-    /// The old `nativeEngine` key is ignored, so every cabin starts on the native engine.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub grok_build_engine: bool,
     /// Pulse → Feed → Feed instructions. Plain text that steers future posts;
     /// the cabin rewrites it after likes and dislikes. Empty means our default.
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -577,34 +573,11 @@ fn default_cabin_lane() -> String {
 
 /// Always is session-only. Disk and relaunch keep Ask or Auto, never Always.
 pub fn persistable_permission_mode(raw: &str) -> String {
-    match grokhub_acp::PermissionMode::parse(raw) {
-        Some(grokhub_acp::PermissionMode::Auto) => {
-            grokhub_acp::PermissionMode::Auto.as_str().to_string()
+    match grokhub_core::wire::PermissionMode::parse(raw) {
+        Some(grokhub_core::wire::PermissionMode::Auto) => {
+            grokhub_core::wire::PermissionMode::Auto.as_str().to_string()
         }
-        _ => grokhub_acp::PermissionMode::Ask.as_str().to_string(),
-    }
-}
-
-/// The one engine switch. Every chat, background, night and slash path asks this.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum EngineKind {
-    /// GrokHub talks to xAI itself (`grokhub-agent`).
-    Native,
-    /// The legacy Grok Build CLI over ACP, kept only until the CLI code is removed.
-    GrokBuild,
-}
-
-impl AppConfig {
-    pub fn engine(&self) -> EngineKind {
-        if self.grok_build_engine {
-            EngineKind::GrokBuild
-        } else {
-            EngineKind::Native
-        }
-    }
-
-    pub fn native_engine(&self) -> bool {
-        self.engine() == EngineKind::Native
+        _ => grokhub_core::wire::PermissionMode::Ask.as_str().to_string(),
     }
 }
 
@@ -662,7 +635,6 @@ impl Default for AppConfig {
             profile_picture: String::new(),
             digest_brief: String::new(),
             feed_pulse: FeedPulse::default(),
-            grok_build_engine: false,
             feed_instructions: String::new(),
             home_deck: false,
             memory_backend: grokhub_core::amr::MemoryBackend::Legacy,
@@ -709,6 +681,12 @@ pub fn config_dir() -> PathBuf {
     dirs_fallback()
 }
 
+/// The Grok home GrokHub kept for CLI-era chats. Read for History import and
+/// MCP import only.
+pub fn cabin_grok_home() -> PathBuf {
+    config_dir().join("grok-home")
+}
+
 fn dirs_fallback() -> PathBuf {
     if cfg!(windows) {
         if let Ok(app) = std::env::var("APPDATA") {
@@ -741,7 +719,7 @@ fn hostname_cmd() -> Option<String> {
     let mut cmd = std::process::Command::new("hostname");
     cmd.stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null());
-    grokhub_acp::hide_windows_console(&mut cmd);
+    grokhub_core::proc_util::hide_windows_console(&mut cmd);
     let mut child = cmd.spawn().ok()?;
     let start = Instant::now();
     loop {
@@ -788,8 +766,8 @@ pub fn load() -> AppConfig {
         cfg.device_name = default_device_name();
     }
     drop_saved_effort(&mut cfg, &config_dir());
-    cfg.session_mode = grokhub_acp::SessionMode::parse(&cfg.session_mode)
-        .unwrap_or(grokhub_acp::SessionMode::Chat)
+    cfg.session_mode = grokhub_core::wire::SessionMode::parse(&cfg.session_mode)
+        .unwrap_or(grokhub_core::wire::SessionMode::Chat)
         .as_str()
         .to_string();
     // Always-approve is a per-run choice, same as the yolo reset above: a cabin must not

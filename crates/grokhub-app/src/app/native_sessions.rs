@@ -29,8 +29,8 @@ enum NativeHistAct {
 /// CLI sessions from `discover_session_files_in`, then native JSONL sessions.
 pub(super) fn merged_native_history(cli_home: Option<&Path>) -> Vec<grokhub_agent::HistoryRow> {
     let cli = match cli_home {
-        Some(home) => grokhub_acp::discover_session_files_in(home),
-        None => grokhub_acp::discover_session_files(),
+        Some(home) => grokhub_core::cli_history::discover_session_files_in(home),
+        None => grokhub_core::cli_history::discover_session_files(),
     };
     let native = grokhub_agent::list_sessions();
     grokhub_agent::merge_history(&cli, &native)
@@ -60,12 +60,8 @@ fn cached_merged_rows(ui: &egui::Ui) -> Vec<grokhub_agent::HistoryRow> {
 }
 
 impl Cabin {
-    /// Extra History section. Absent only on the legacy CLI engine (Settings → Labs),
-    /// so the CLI history page stays as it is.
+    /// Extra History section: native sessions and read-only CLI chats.
     pub(super) fn paint_native_history_merge(&mut self, ui: &mut egui::Ui) {
-        if !self.cfg.native_engine() {
-            return;
-        }
         // Retired ids include background work filed on the hidden Background chat.
         let bound: HashSet<String> = self
             .threads
@@ -244,7 +240,7 @@ impl Cabin {
             .iter()
             .any(|session| session.id == row.id)
         {
-            self.grok_sessions.push(grokhub_acp::GrokSession {
+            self.grok_sessions.push(grokhub_core::cli_history::GrokSession {
                 id: row.id.clone(),
                 title: row.title.clone(),
                 path: row.path.clone(),
@@ -496,38 +492,22 @@ mod tests {
             .nth(1)
             .and_then(|src| src.split("Slash::Skill").next())
             .expect("Compact");
-        let native_at = compact
-            .find("native_compact_if_current")
-            .expect("native hook");
-        let cli_at = compact
-            .find("send_grok_slash(\"/compact\")")
-            .expect("cli compact");
-        assert!(native_at < cli_at, "{compact}");
-        assert!(
-            compact.contains("compact_keep_start_from") && !compact.contains("content.clone()"),
-            "{compact}"
-        );
-        assert!(
-            compact.contains("stamp_current_access") || compact.contains("accessed_ms"),
-            "{compact}"
-        );
+        assert!(compact.contains("native_compact_if_current"), "{compact}");
+        assert!(!compact.contains("send_grok_slash"), "{compact}");
+        assert!(compact.contains("stamp_current_access"), "{compact}");
         let engine = include_str!("native_engine.rs");
         let body = engine
             .split("fn native_compact_if_current")
             .nth(1)
             .and_then(|src| src.split("fn kick_native_turn").next())
             .expect("native_compact_if_current");
-        assert!(body.contains("manual_compact_targets_native"));
-        assert!(body.contains("self.cfg.native_engine"));
+        assert!(body.contains("handle.prompt(\"/compact\")"));
         assert!(body.contains("ensure_native_engine"));
         assert!(body.contains("\"Compacting…\""));
         assert!(!body.contains("self.running = true"));
         let ensure_at = body.find("ensure_native_engine").unwrap();
         let job_at = body.find("chat_job_thread").unwrap();
         assert!(ensure_at < job_at, "{body}");
-        assert!(grokhub_agent::manual_compact_targets_native(true, true));
-        assert!(!grokhub_agent::manual_compact_targets_native(false, true));
-        assert!(!grokhub_agent::manual_compact_targets_native(true, false));
     }
 
     #[test]

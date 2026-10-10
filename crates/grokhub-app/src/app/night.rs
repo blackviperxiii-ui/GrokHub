@@ -617,22 +617,10 @@ impl Cabin {
             self.status = format!("Night skipped {} (quiet/policy)", a.name);
             return;
         }
-        if night_unauth_should_skip(self.llm_ready()) && !self.cfg.native_engine() {
-            self.mark_auto_skipped(&a.id, now_ms);
-            self.status = "Connect Grok OAuth in Settings".into();
-            self.note_auto_failed(&a.id, "Not signed in — Connect Grok in Settings");
-            return;
-        }
         let replay =
             replay_automation_target(&a.instructions).map(|id| self.replay_saved_recipe(id));
         if !night_counts_run(replay) {
             self.mark_auto_skipped(&a.id, now_ms);
-            return;
-        }
-        if replay.is_none() && !self.can_agent() && !self.cfg.native_engine() {
-            self.mark_auto_skipped(&a.id, now_ms);
-            self.status = "Install Grok Build (x.ai/cli) or Connect Grok in Settings".into();
-            self.note_auto_failed(&a.id, "Grok Build is not installed or not connected");
             return;
         }
         // Nothing on screen while it runs: no status line, no glow, no strip.
@@ -668,11 +656,10 @@ impl Cabin {
     /// that chat's session, so runs never write into each other or into yours.
     fn start_scheduled_run(&mut self, a: &Automation) -> Result<String, String> {
         let idx = self.ensure_background_history_thread();
-        let native = self.cfg.native_engine();
         let Some(thread) = self.threads.get_mut(idx) else {
             return Err("The run did not start".into());
         };
-        thread.native = native;
+        thread.native = true;
         let thread_id = thread.id.clone();
         let task = self.scheduled_task_text(&a.instructions);
         self.start_bg_task(&task, &thread_id, BgOrigin::Scheduled)?;
@@ -763,9 +750,6 @@ impl Cabin {
         if self.budget_holds_scheduled() {
             return false;
         }
-        if !self.cfg.native_engine() && grokhub_acp::find_grok().is_none() {
-            return false;
-        }
         let due = due_loops(&self.grok_loops, now_ms());
         let Some(row) = due.into_iter().next() else {
             return false;
@@ -787,7 +771,7 @@ impl Cabin {
                     .find(|x| x.id == id)
                     .map(|r| r.prompt.clone())
                     .unwrap_or_default();
-                let summary = if let Ok(turn) = grokhub_acp::parse_single_turn(&text) {
+                let summary = if let Ok(turn) = grokhub_core::wire::parse_single_turn(&text) {
                     super::background::hide_background_session(&turn.session_id);
                     if let Some(row) = self.grok_loops.iter_mut().find(|x| x.id == id) {
                         row.session_id = Some(turn.session_id);
@@ -816,57 +800,7 @@ impl Cabin {
         }
         self.persist_loops();
         self.automation_span(super::background::LOOP_TRACE, &row.id);
-        if self.cfg.native_engine() {
-            self.spawn_native_loop(row);
-            return;
-        }
-        let Some(bin) = grokhub_acp::find_grok() else {
-            self.status = build_agent::grok_banner();
-            return;
-        };
-        bump_usage(&mut self.usage, "automation");
-        self.daily_auto_used = self.usage.automation;
-        self.daily_auto_day = self.usage.day.clone();
-        self.persist_usage();
-        let cwd = self.grok_cwd();
-        let prompt = row.prompt.clone();
-        let resume = row.session_id.clone().filter(|s| !s.is_empty());
-        let perm_args = grokhub_acp::apply_desktop_spawn_args(
-            grokhub_acp::with_ask_deny(
-                self.permission_mode.scheduled_args(),
-                self.permission_mode.needs_approval(),
-            ),
-            self.permission_mode,
-            self.session_mode,
-            self.cfg.desktop_control,
-        );
-        // Always its own `grok -p`, never your chat's Grok session: a loop on that
-        // session made your chat look busy and held your next message behind it.
-        let (tx, rx) = mpsc::channel();
-        self.grok_loop_rx = Some((row.id.clone(), rx));
-        std::thread::spawn(move || {
-            let mut args = vec![
-                "--no-auto-update".into(),
-                "-p".into(),
-                prompt,
-                "--verbatim".into(),
-                "--cwd".into(),
-                cwd.display().to_string(),
-                "--output-format".into(),
-                "json".into(),
-                "--reasoning-effort".into(),
-                grokhub_core::BACKGROUND_EFFORT.into(),
-            ];
-            args.extend(perm_args);
-            if let Some(id) = resume {
-                args.push("--resume".into());
-                args.push(id);
-            }
-            let refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
-            let text =
-                grokhub_acp::grok_user_stdout_wait(&bin, &cwd, &refs).unwrap_or_else(|e| e);
-            let _ = tx.send(text);
-        });
+        self.spawn_native_loop(row);
     }
 
     pub(super) fn tick_session_suggestions(&mut self) {
@@ -935,9 +869,6 @@ impl Cabin {
         ) {
             return;
         }
-        if !self.llm_ready() && !self.cfg.native_engine() {
-            return;
-        }
         if !grokhub_core::review_worth_tokens(
             self.learning.total_turns,
             self.learning.reviewed_turns,
@@ -1001,69 +932,7 @@ impl Cabin {
         if self.review_busy {
             return;
         }
-        if self.cfg.native_engine() {
-            self.spawn_native_review();
-            return;
-        }
-        let key = self.bearer();
-        if key.trim().is_empty() {
-            return;
-        }
-        let mem_name = self.mem_name.clone();
-        let mem_body = self.mem_body.clone();
-        let (thread_lines, host_receipts) = self.review_chat_digest();
-        let insight = insight_pin(&self.learning);
-        let skill_names: Vec<String> = self.skill_list.iter().map(|s| s.name.clone()).collect();
-        let automation_names: Vec<String> =
-            self.automations.iter().map(|a| a.name.clone()).collect();
-        let github_pat = !self.secrets.github_token.trim().is_empty();
-        let turned_down: Vec<String> = self
-            .cfg
-            .feed_pulse
-            .turned_down
-            .iter()
-            .rev()
-            .cloned()
-            .collect();
-        let chip_habits = top_habit_labels(&self.chip_memory, 6);
-        let now = now_ms();
-        let model = model_for_mode("balanced").to_string();
-        let prompt = review_system_prompt().to_string();
-        let (tx, rx) = mpsc::channel();
-        self.review_rx = Some(rx);
-        self.review_busy = true;
-        std::thread::spawn(move || {
-            let _origin = grokhub_agent::harness::OriginScope::enter(grokhub_agent::harness::Origin::Proactive);
-            if config::read_memory(&mem_name) != mem_body {
-                let _ = config::write_memory(&mem_name, &mem_body);
-            }
-            let digest = build_review_digest(&ReviewDigest {
-                insight_pin: insight,
-                user_md: config::read_memory("USER.md"),
-                memory_md: config::read_memory("MEMORY.md"),
-                skill_names,
-                automation_names,
-                turned_down,
-                github_pat,
-                host_receipts,
-                chip_habits,
-                thread_lines,
-                trajectory: summarize_trajectory(
-                    &parse_trajectory_jsonl(&crate::store::read_trajectory()),
-                    yesterday_ms(now),
-                    12,
-                ),
-            });
-            let messages = [("system".into(), prompt), ("user".into(), digest)];
-            let out = grok_chat(
-                &key,
-                &model,
-                &messages,
-                None,
-                Some(grokhub_core::BACKGROUND_EFFORT),
-            );
-            let _ = tx.send(out);
-        });
+        self.spawn_native_review();
     }
 
     pub(super) fn poll_review(&mut self) {
