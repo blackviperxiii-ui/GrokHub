@@ -170,6 +170,19 @@ fn doc_table_split_match_and_severity() {
             "run_terminal_command",
             &shell("git status && rm -rf /")
         ),
+        // Always Allow runs a dangerous command here; the floor refuses this
+        // one before the engine (`always_allow_stops_only_for_hard_classes`).
+        Decision::Run
+    );
+    assert_eq!(
+        at(
+            &allow_git,
+            PermMode::Ask,
+            true,
+            false,
+            "run_terminal_command",
+            &shell("git status && rm -rf /")
+        ),
         Decision::Ask
     );
     assert_eq!(
@@ -194,6 +207,17 @@ fn doc_table_split_match_and_severity() {
             PermMode::Always,
             true,
             true,
+            "run_terminal_command",
+            &shell("rm -rf /")
+        ),
+        Decision::Run
+    );
+    assert_eq!(
+        at(
+            &allow_rm,
+            PermMode::Ask,
+            true,
+            false,
             "run_terminal_command",
             &shell("rm -rf /")
         ),
@@ -802,6 +826,66 @@ fn allow_always_remembers_a_grant_for_the_next_turn() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+/// Card 34 PR A on the real loop: under Always a `chmod` and a `sudo` step
+/// run with no card, and only the bootloader step asks.
+#[test]
+fn always_allow_loop_asks_only_for_the_hard_step() {
+    let root = ws_file("always-loop");
+    let project = root.join("proj");
+    std::fs::create_dir_all(&project).unwrap();
+    std::fs::write(project.join("marker.txt"), "x").unwrap();
+    let _guard = ConfigGuard::set(root.join("cfg"));
+    let permits = Answer { answer: crate::gate::PermAnswer::Deny, asks: AtomicUsize::new(0) };
+    let call = |id: &str, command: &str| FunctionCall { call_id: id.into(), name: "run_terminal_command".into(), arguments: shell(command) };
+    let client = Script {
+        calls: Mutex::new(vec![
+            call("a1", "chmod 600 marker.txt && echo chmod-ran"),
+            call("a2", "sudo -n true >/dev/null 2>&1; echo sudo-ran"),
+            call("a3", "sudo grub-install --target=x86_64-efi /dev/sdb; echo grub-ran"),
+        ]),
+        sent: AtomicBool::new(false),
+    };
+    let policy = Policy::load(&project);
+    let input = LoopIn {
+        client: &client,
+        workspace: &project,
+        model: "grok-4.7",
+        effort: None,
+        system: "",
+        conversation_id: "c",
+        max_turns: 2,
+        usage_base: Usage::default(),
+        cancel: &CancelToken::new(),
+        steer: &crate::SteerQueue::new(),
+        halt: &Quiet,
+        gate: gate(PermMode::Always, true),
+        desktop: None,
+        permits: &permits,
+        perms: Some(&policy),
+        context_length: 0,
+        tasks: None,
+        depth: 0,
+        agent_id: None,
+        shared_client: None,
+        shared_permits: None,
+        shared_desktop: None,
+    };
+    let mut history = Vec::new();
+    run_loop(&input, &mut history, "scan my computer", None, &mut |_| {});
+    let outputs: Vec<String> = history
+        .iter()
+        .filter_map(|item| match item {
+            crate::InputItem::FunctionCallOutput { output, .. } => Some(output.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(permits.asks.load(Ordering::SeqCst), 1, "only the bootloader step asks: {outputs:?}");
+    assert!(outputs[0].contains("chmod-ran"), "{outputs:?}");
+    assert!(outputs[1].contains("sudo-ran"), "{outputs:?}");
+    assert!(!outputs[2].contains("grub-ran") && outputs[2].contains("User rejected"), "{outputs:?}");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 #[test]
 fn unattended_refuses_dangerous_and_unsplittable_in_every_mode() {
     let wide = policy_of(&[("Bash(*)", Action::Allow)], &["rm -rf /", "sudo ls"]);
@@ -821,10 +905,18 @@ fn unattended_refuses_dangerous_and_unsplittable_in_every_mode() {
                     Decision::Refuse(gate::unattended_deny("run_terminal_command")),
                     "unattended {mode:?} must refuse {command:?}"
                 );
+                // Attended: Always Allow (or a latched Always) runs it; the
+                // hard classes and the floor are checked before this engine.
                 assert_eq!(
                     at(policy, mode, true, true, "run_terminal_command", &shell(command)),
-                    Decision::Ask,
-                    "attended {mode:?} must ask for {command:?}"
+                    Decision::Run,
+                    "attended latched {mode:?} runs {command:?}"
+                );
+                let want = if mode == PermMode::Always { Decision::Run } else { Decision::Ask };
+                assert_eq!(
+                    at(policy, mode, true, false, "run_terminal_command", &shell(command)),
+                    want,
+                    "attended {mode:?} for {command:?}"
                 );
             }
         }
@@ -873,4 +965,78 @@ fn grants_file_with_a_bom_survives_a_new_grant() {
         Some(&vec!["npm test".to_string()])
     );
     assert_eq!(all.len(), 2);
+}
+
+/// Card 34 PR A: Always Allow shows a card only for a hard class. Admin work
+/// (sudo, pacman, systemctl) runs; disk, bootloader, deleting files, sending
+/// and money still park; the floor and deny rules still refuse.
+#[test]
+fn always_allow_stops_only_for_hard_classes() {
+    let policy = policy_of(&[("Bash(systemctl stop nextdns)", Action::Deny), ("Bash(journalctl *)", Action::Ask)], &[]);
+    let decide = |mode: PermMode, name: &str, arguments: &str| {
+        gate::decide_with(&gate(mode, true), name, arguments, false, None, Path::new("/work"), Some(&policy))
+    };
+    for command in [
+        "sudo journalctl -b -p err",
+        "journalctl -b -p err",
+        "sudo pacman -Qk",
+        "systemctl restart nextdns",
+        "sudo pacman -S amd-ucode",
+        "sudo pacman -Syu --noconfirm",
+        "sudo systemctl enable --now nextdns",
+        "ss -ltnp | grep :53",
+        "sudo fdisk -l",
+        "sudo parted /dev/nvme0n1 print",
+        "bootctl status",
+        "efibootmgr -v",
+        "cat /boot/loader/entries/linux-cachyos.conf",
+        "cp /boot/grub/grub.cfg ./grub.cfg.bak",
+        "for u in $(systemctl --failed --plain --no-legend | cut -d' ' -f1); do systemctl status $u; done",
+    ] {
+        assert_eq!(decide(PermMode::Always, "run_terminal_command", &shell(command)), Decision::Run, "Always runs {command:?}");
+    }
+    // Supervised keeps asking for the same admin steps.
+    for command in ["sudo journalctl -b -p err", "sudo pacman -S amd-ucode", "systemctl restart nextdns"] {
+        assert_eq!(decide(PermMode::Ask, "run_terminal_command", &shell(command)), Decision::Ask, "Supervised asks {command:?}");
+    }
+    // Hard classes park a card in every mode, Always included.
+    for command in [
+        "sudo grub-install --target=x86_64-efi",
+        "sudo grub-mkconfig -o /boot/grub/grub.cfg",
+        "sudo parted /dev/sdb mklabel gpt",
+        "sudo fdisk /dev/sdb",
+        "sudo sgdisk -o /dev/sdb",
+        "sudo efibootmgr -b 0003 -B",
+        "sudo bootctl install",
+        "sudo mkinitcpio -P",
+        "echo 'timeout 3' | sudo tee /boot/loader/loader.conf",
+        "sudo cp linux.efi /efi/EFI/Linux/",
+        "echo x > /boot/test",
+        "rm -rf ~/Documents",
+        "shred -u notes.txt",
+        "sendmail viper@example.com < report.txt",
+        "secret-tool lookup service nextdns",
+        "cat ~/.local/share/keyrings/login.keyring",
+    ] {
+        for mode in [PermMode::Always, PermMode::Ask] {
+            assert_eq!(decide(mode, "run_terminal_command", &shell(command)), Decision::Ask, "{mode:?} parks {command:?}");
+            assert!(crate::harness::hard_class("run_terminal_command", &shell(command)).is_some(), "hard class: {command:?}");
+        }
+    }
+    for tool in ["shop__purchase", "gmail__send_email"] {
+        assert_eq!(decide(PermMode::Always, tool, "{}"), Decision::Ask, "Always parks {tool}");
+    }
+    // The floor refuses outright; a deny rule beats Always.
+    for command in ["sudo mkfs.ext4 /dev/sdb1", "dd if=x.img of=/dev/sdb", "cat /etc/shadow"] {
+        assert!(matches!(decide(PermMode::Always, "run_terminal_command", &shell(command)), Decision::Refuse(_)), "floor: {command:?}");
+    }
+    assert_eq!(
+        decide(PermMode::Always, "run_terminal_command", &shell("systemctl stop nextdns")),
+        Decision::Refuse(gate::unattended_deny("run_terminal_command"))
+    );
+    // Nobody there: Always still refuses what it would otherwise have asked about.
+    assert_eq!(
+        gate::decide_with(&gate(PermMode::Always, false), "run_terminal_command", &shell("sudo pacman -Qk"), false, None, Path::new("/work"), Some(&policy)),
+        Decision::Refuse(gate::unattended_deny("run_terminal_command"))
+    );
 }

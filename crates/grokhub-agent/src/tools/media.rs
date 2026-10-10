@@ -1179,8 +1179,19 @@ pub(crate) mod tests {
         );
         assert_eq!(allowed, Decision::Run);
 
-        let asked = decide_with(
+        // Always Allow runs past an ask rule (only hard classes stop it); Supervised asks.
+        let always = decide_with(
             &chat(true, PermMode::Always, false),
+            "image_generate",
+            args,
+            false,
+            None,
+            ws,
+            Some(&policy(vec![ask.clone()])),
+        );
+        assert_eq!(always, Decision::Run);
+        let asked = decide_with(
+            &chat(true, PermMode::Ask, false),
             "image_generate",
             args,
             false,
