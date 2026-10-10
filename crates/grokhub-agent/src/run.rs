@@ -66,6 +66,9 @@ pub enum LoopEvent {
     },
     /// Plan text for the existing plan card. `replace` is always true on the wire.
     Plan(String),
+    /// A findings card body ([`grokhub_core::findings::Findings::to_body`]),
+    /// shown after the reply.
+    Findings(String),
 }
 
 #[derive(Clone)]
@@ -2357,6 +2360,35 @@ mod tests {
         assert!(events.iter().any(|ev| matches!(ev, LoopEvent::Text(t) if t == &format!("\n\n{said}"))));
         assert!(matches!(history.last(), Some(InputItem::Message { role, content }) if role == "assistant" && content.first() == Some(&ContentPart::InputText(said.into()))));
         crate::session_tools::invalidate_todos(&conv);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn report_findings_posts_the_card_after_the_reply() {
+        let dir = workspace("findings");
+        let conv = format!("findings-{}", std::process::id());
+        let args = r#"{"findings":[{"severity":"high","text":"nextdns can't bind port 53: systemd-resolved owns it"}],"fixes":[{"label":"Fix port 53 conflict","goal":"Free port 53 for nextdns."}]}"#;
+        let script = Script {
+            turns: Mutex::new(vec![
+                turn("", vec![call("f1", "report_findings", args), call("f2", "report_findings", r#"{"findings":[]}"#)]),
+                turn("Found one problem.", Vec::new()),
+            ]),
+            seen: Mutex::new(Vec::new()),
+            cancel_on_text: false,
+            steer: None,
+        };
+        let (out, history, events) = run_drive(&script, &dir, &conv);
+        assert_eq!(out.stop, StopReason::EndTurn);
+        let cards: Vec<&String> = events.iter().filter_map(|ev| match ev { LoopEvent::Findings(b) => Some(b), _ => None }).collect();
+        assert_eq!(
+            cards,
+            ["Findings from this run\n\n- High: nextdns can't bind port 53: systemd-resolved owns it\n\nOne-tap fixes\n\n- Fix port 53 conflict: Free port 53 for nextdns."]
+        );
+        let outputs: Vec<&str> = history
+            .iter()
+            .filter_map(|i| match i { InputItem::FunctionCallOutput { output, .. } => Some(output.as_str()), _ => None })
+            .collect();
+        assert_eq!(outputs, ["Findings card posted: 1 findings, 1 one-tap fixes. It shows after your reply.", "give 1 to 30 findings"]);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
