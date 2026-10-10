@@ -3,8 +3,11 @@
 //! Permission engine. Deny beats ask, and ask beats allow.
 //! The engine only loosens gate v0 when an explicit allow rule matches a
 //! non-dangerous command, or when every segment is on the read-only list.
-//! Dangerous commands still prompt. Unattended mode still denies everything
-//! else. Remembered grants apply only while someone is there to have approved them.
+//! Dangerous commands, unsplittable commands and ask rules prompt, except
+//! under an attended Always Allow: the hard classes and the floor are settled
+//! before this engine runs, so Always only stops for those and deny rules.
+//! Unattended mode still denies everything else. Remembered grants apply only
+//! while someone is there to have approved them.
 
 mod claude;
 mod matchers;
@@ -15,7 +18,7 @@ mod store;
 
 use std::path::Path;
 
-use crate::gate::{self, Decision, Gate};
+use crate::gate::{self, Decision, Gate, PermMode};
 
 pub use claude::{import_claude_json, load_project as load_claude_project};
 pub use rules::{parse_rule, Action, PatMode, Rule, RuleParseError, Tool};
@@ -68,6 +71,8 @@ pub fn govern(
     {
         return base;
     }
+    // `base` is Run for a mutating tool only under Always or a latched Always.
+    let always = gate.attended && (gate.mode == PermMode::Always || (base == Decision::Run && !gate::is_readonly(name)));
     if name == "monitor" {
         if let Some(command) = command_arg(arguments) {
             let facts = split::analyze(&command);
@@ -79,10 +84,10 @@ pub fn govern(
         return base;
     }
     if name == "web_fetch" {
-        return govern_fetch(base, gate, arguments, policy);
+        return govern_fetch(base, gate, arguments, policy, always);
     }
     if gate::is_media(name) {
-        return govern_media(base, gate, name, policy);
+        return govern_media(base, gate, name, policy, always);
     }
     let Some(kind) = tool_kind(name) else {
         return base;
@@ -101,11 +106,8 @@ pub fn govern(
         if rule_hit(policy, Action::Deny, kind, &texts) {
             return Decision::Refuse(gate::unattended_deny(name));
         }
-        if facts.segments.is_none() || facts.dangerous {
-            return prompt(gate, name);
-        }
-        if rule_hit(policy, Action::Ask, kind, &texts) {
-            return prompt(gate, name);
+        if facts.segments.is_none() || facts.dangerous || rule_hit(policy, Action::Ask, kind, &texts) {
+            return ask(gate, name, always);
         }
         if allow_bash(policy, &facts) {
             return Decision::Run;
@@ -122,7 +124,7 @@ pub fn govern(
         return Decision::Refuse(gate::unattended_deny(name));
     }
     if rule_hit_paths(policy, Action::Ask, kind, workspace, &paths) {
-        return prompt(gate, name);
+        return ask(gate, name, always);
     }
     if allow_paths(policy, kind, workspace, &paths) {
         return Decision::Run;
@@ -210,7 +212,7 @@ pub(crate) fn explicit_ask(policy: &Policy, name: &str, arguments: &str, workspa
     rule_hit_paths(policy, Action::Ask, kind, workspace, &paths)
 }
 
-fn govern_fetch(base: Decision, gate: &Gate, arguments: &str, policy: &Policy) -> Decision {
+fn govern_fetch(base: Decision, gate: &Gate, arguments: &str, policy: &Policy, always: bool) -> Decision {
     let url = url_arg(arguments);
     if policy
         .rules
@@ -224,7 +226,7 @@ fn govern_fetch(base: Decision, gate: &Gate, arguments: &str, policy: &Policy) -
         .iter()
         .any(|rule| rule.action == Action::Ask && webfetch_matches(rule, &url))
     {
-        return prompt(gate, "web_fetch");
+        return ask(gate, "web_fetch", always);
     }
     if policy
         .rules
@@ -239,7 +241,7 @@ fn govern_fetch(base: Decision, gate: &Gate, arguments: &str, policy: &Policy) -
 /// Media tools have no tool prefix in the rule parser. A rule matches only
 /// when it is `Tool::Any` and the pattern is blank, `*`, or the tool name.
 /// Bash and edit rules do not reach these tools.
-fn govern_media(base: Decision, gate: &Gate, name: &str, policy: &Policy) -> Decision {
+fn govern_media(base: Decision, gate: &Gate, name: &str, policy: &Policy, always: bool) -> Decision {
     if policy
         .rules
         .iter()
@@ -252,7 +254,7 @@ fn govern_media(base: Decision, gate: &Gate, name: &str, policy: &Policy) -> Dec
         .iter()
         .any(|rule| rule.action == Action::Ask && media_rule_matches(rule, name))
     {
-        return prompt(gate, name);
+        return ask(gate, name, always);
     }
     if policy
         .rules
@@ -286,8 +288,11 @@ fn url_arg(arguments: &str) -> String {
         .to_string()
 }
 
-fn prompt(gate: &Gate, name: &str) -> Decision {
-    if gate.attended {
+/// A soft ask: it runs under an attended Always Allow, else prompts (or refuses unattended).
+fn ask(gate: &Gate, name: &str, always: bool) -> Decision {
+    if always {
+        Decision::Run
+    } else if gate.attended {
         Decision::Ask
     } else {
         Decision::Refuse(gate::unattended_deny(name))
