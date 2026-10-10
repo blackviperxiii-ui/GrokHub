@@ -315,7 +315,7 @@ impl Cabin {
             self.ui_marketplace(ui);
             return;
         }
-        if self.cfg.native_engine {
+        if self.cfg.native_engine() {
             self.ensure_native_listing();
         }
         if !self.grok_catalog_loaded && self.grok_catalog_rx.is_none() {
@@ -325,7 +325,7 @@ impl Cabin {
             crate::cards::search_field(ui, &mut self.skill_q);
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if crate::cards::ghost_pill(ui, "Refresh") {
-                    if self.cfg.native_engine {
+                    if self.cfg.native_engine() {
                         self.native_listing_cwd.clear();
                         self.ensure_native_listing();
                         crate::native_mcp::spawn(crate::native_mcp::Job::Doctor);
@@ -337,7 +337,7 @@ impl Cabin {
         ui.add_space(12.0);
         let q = self.skill_q.to_ascii_lowercase();
         let mut picked: Option<(ConnectorRow, ConnectorAct)> = None;
-        if self.cfg.native_engine {
+        if self.cfg.native_engine() {
             let snap = crate::native_mcp::snapshot();
             ui.horizontal(|ui| {
                 crate::cards::section_label(ui, "This cabin");

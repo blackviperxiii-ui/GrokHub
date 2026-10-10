@@ -946,11 +946,8 @@ impl Cabin {
     /// Native-thread handlers. Returns false so the existing match still runs
     /// when the lab flag is off or the thread is a CLI thread.
     fn dispatch_native_slash(&mut self, slash: &Slash) -> bool {
-        let thread_native = self
-            .threads
-            .get(self.thread_idx)
-            .is_some_and(|thread| thread.native);
-        if !grokhub_agent::manual_compact_targets_native(self.cfg.native_engine, thread_native) {
+        let thread_native = self.threads.get(self.thread_idx).is_some();
+        if !grokhub_agent::manual_compact_targets_native(self.cfg.native_engine(), thread_native) {
             return false;
         }
         match slash {
@@ -1019,11 +1016,8 @@ impl Cabin {
 
     /// CLI slashes the cabin parser does not own. Native threads only.
     pub(super) fn apply_unparsed_native_slash(&mut self, text: &str) -> bool {
-        let thread_native = self
-            .threads
-            .get(self.thread_idx)
-            .is_some_and(|thread| thread.native);
-        if !grokhub_agent::manual_compact_targets_native(self.cfg.native_engine, thread_native) {
+        let thread_native = self.threads.get(self.thread_idx).is_some();
+        if !grokhub_agent::manual_compact_targets_native(self.cfg.native_engine(), thread_native) {
             return false;
         }
         let Some(cmd) = grokhub_agent::unparsed_native_slash(text) else {
