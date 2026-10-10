@@ -17,7 +17,7 @@
 - If it should count as a home habit, map its kind in `home_slash_cmd` (`crates/grokhub-core/src/chips.rs`).
 ## What breaks it
 - Renaming a `slash_kind` string: it is the input to `home_slash_cmd`, so home habits stop counting.
-- Claiming a verb Grok Build owns: unknown slashes and CLI skills such as `/create-skill` must still reach `grok -p`. Only retired verbs (`/approve`, `/project binding`) are rejected locally.
+- Claiming a skill verb: unknown slashes and skill slashes such as `/create-skill` must still go to the native engine as a turn (`unknown_cabin_slash`). Only retired verbs (`/approve`, `/project binding`) are rejected locally.
 - Changing `/help` or `/models` text: `is_cabin_slash_turn` keeps those dumps out of the next model kick by matching their first lines (`/help — this list`, model ids).
 ## What depends on it
 - The composer picker (`filter_slash_hits` merges cabin rows with Grok extras from `grok_command_hits`), `/recall` and AMR, and `/workflow` forwarding.

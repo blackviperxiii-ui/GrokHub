@@ -14,7 +14,7 @@ use grokhub_core::{
     dismiss_update_at, feed_ideas, feed_visible, file_idea_todo, hold_if_quiet,
     unpin_feed_idea,
     idea_todo_title,
-    links_from_research, mark_update_opened, parse_lookup, post_help, post_update,
+    mark_update_opened, parse_lookup, post_help, post_update,
     quiet_hours_active, remember_dismissed_source, route_schedule,
     schedule_created_card, tick_feed_pulse, visible_digests,
     DigestEdition, DigestMaterial, PausedJob, PulseNow, RepeatedAction,
@@ -648,43 +648,12 @@ impl Cabin {
             || self.cfg.feed_pulse.paused_seen != seen_before
     }
 
-    /// One lookup a day, off the UI thread. A missing key waits and does not stamp a search.
-    /// Unit tests never start it: this machine's Grok login would spend a real call.
+    /// One lookup a day, off the UI thread, on the native engine.
     pub(super) fn follow_feed_lookup(&mut self) {
         if !self.digest_wants_lookup || self.digest_busy || self.digest_pending.is_some() {
             return;
         }
-        if self.cfg.native_engine() {
-            self.spawn_native_digest();
-            return;
-        }
-        if cfg!(test) {
-            return;
-        }
-        let key = self.bearer();
-        if key.trim().is_empty() {
-            return;
-        }
-        let prompt = grokhub_core::pulse::feed_prompt(&self.digest_steer, &self.cfg.feed_instructions);
-        let model = CABIN_FAST_MODEL.to_string();
-        let (tx, rx) = mpsc::channel();
-        self.digest_rx = Some(rx);
-        self.digest_busy = true;
-        std::thread::spawn(move || {
-            let messages = [("user".into(), prompt)];
-            let effort = Some(grokhub_core::BACKGROUND_EFFORT);
-            // The completion has no live search, so a URL it gives is only a claim:
-            // keep the ones that answer.
-            let reply = grok_chat(&key, &model, &messages, None, effort).map(|text| {
-                let dead: Vec<String> = links_from_research(&text)
-                    .into_iter()
-                    .map(|link| link.url)
-                    .filter(|url| !crate::xai::url_answers(url))
-                    .collect();
-                grokhub_core::drop_dead_links(&text, &dead)
-            });
-            let _ = tx.send(reply);
-        });
+        self.spawn_native_digest();
     }
 
     pub(super) fn poll_digest_lookup(&mut self) {
@@ -699,7 +668,7 @@ impl Cabin {
             Ok(Err(err)) => {
                 self.digest_busy = false;
                 self.digest_pending = Some("NONE".into());
-                if self.cfg.native_engine() && !err.is_empty() {
+                if !err.is_empty() {
                     self.status = err;
                 }
             }
@@ -1004,7 +973,7 @@ impl Cabin {
     /// than a handful of generated ideas and the last ask is hours old, never in
     /// quiet hours or over the token budget. `force` is the Suggest ideas button.
     pub(super) fn maybe_suggest_ideas(&mut self, force: bool) {
-        if self.ideas_rx.is_some() || (!self.llm_ready() && !self.cfg.native_engine()) {
+        if self.ideas_rx.is_some() {
             return;
         }
         let now = now_ms();
@@ -1025,15 +994,7 @@ impl Cabin {
         self.persist_cfg();
         let (tx, rx) = mpsc::channel();
         self.ideas_rx = Some((rx, inputs));
-        if self.cfg.native_engine() {
-            self.spawn_native_ideas(prompt, tx);
-            return;
-        }
-        let key = self.bearer();
-        std::thread::spawn(move || {
-            let _origin = grokhub_agent::harness::OriginScope::enter(grokhub_agent::harness::Origin::Proactive);
-            let _ = tx.send(cabin_fast_llm(key, prompt));
-        });
+        self.spawn_native_ideas(prompt, tx);
     }
 
     /// The prompt plus what the reply must not copy (their own lines) or repeat,

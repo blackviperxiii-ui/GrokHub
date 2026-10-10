@@ -181,10 +181,7 @@ pub fn install_line(label: &str, done: &grokhub_agent::mcp::Installed) -> String
 }
 
 pub fn import_from_cabin() -> Result<String, String> {
-    let Some(home) = grokhub_acp::cabin_grok_home() else {
-        return Err("cabin home is not available".into());
-    };
-    import_from_dir(&home)
+    import_from_dir(&crate::config::cabin_grok_home())
 }
 
 /// Copy `mcpServers` from JSON files and `[mcp_servers.*]` tables in the cabin

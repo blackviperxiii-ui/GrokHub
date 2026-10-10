@@ -151,8 +151,7 @@ impl Cabin {
 
     /// "Suggest ideas" in the header: ask the model now, or say how to sign in.
     pub(super) fn suggest_ideas_pressed(&mut self) {
-        let ready = self.llm_ready() || self.cfg.native_engine();
-        self.suggest_ideas_with(ready);
+        self.suggest_ideas_with(self.agent_ready());
     }
 
     /// The press itself, with sign-in known. The sign-in line goes once a
@@ -456,10 +455,10 @@ impl Cabin {
             self.idea_board.note = Some((id.to_string(), "Finish the open chat first".into()));
             return;
         }
-        if !self.can_agent() {
+        if !self.agent_ready() {
             self.idea_board.note = Some((
                 id.to_string(),
-                "Install Grok Build (x.ai/cli) or Connect Grok in Settings".into(),
+                self.no_agent_note().into(),
             ));
             return;
         }
@@ -478,7 +477,6 @@ impl Cabin {
         self.idea_board.composers.remove(id);
         // Notes from the last Chat send must not ride along into this card's chat.
         self.card_notes_follow = None;
-        self.bg.steer_follow = None;
         self.bg.results_follow = None;
         self.chat_job_thread = Some(thread_id);
         self.push_bound_msg("user", text);
@@ -605,8 +603,8 @@ impl Cabin {
         if self.running {
             return Err("Finish the open chat first".into());
         }
-        if !self.can_agent() {
-            return Err("Install Grok Build (x.ai/cli) or Connect Grok in Settings".into());
+        if !self.agent_ready() {
+            return Err(self.no_agent_note().into());
         }
         self.new_thread(false);
         self.nav = Nav::Chat;

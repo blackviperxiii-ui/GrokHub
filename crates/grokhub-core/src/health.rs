@@ -9,8 +9,6 @@ use crate::what_changed;
 pub struct HealthInput {
     /// Newer GrokHub release, when one is waiting.
     pub cabin_update: Option<String>,
-    /// Newer Grok Build CLI alpha, when one is waiting.
-    pub cli_update: Option<String>,
     /// Each failed check or service, named.
     pub failed: Vec<String>,
     /// How many checks and services were looked at.
@@ -23,17 +21,9 @@ pub const NO_DREAM_LINE: &str =
     "Last dream: none yet. GrokHub dreams once a night after the review, in memory repo mode.";
 
 fn updates_line(h: &HealthInput) -> String {
-    let named: Vec<String> = [
-        h.cabin_update.as_deref().map(|v| format!("GrokHub {}", v.trim_start_matches('v'))),
-        h.cli_update.as_deref().map(|v| format!("Grok Build CLI {v}")),
-    ]
-    .into_iter()
-    .flatten()
-    .collect();
-    match named.len() {
-        0 => "Updates: none pending.".into(),
-        1 => format!("Updates: {} is ready. Run /update.", named[0]),
-        _ => format!("Updates: {} are ready. Run /update.", named.join(" and ")),
+    match h.cabin_update.as_deref() {
+        None => "Updates: none pending.".into(),
+        Some(v) => format!("Updates: GrokHub {} is ready. Run /update.", v.trim_start_matches('v')),
     }
 }
 
@@ -76,11 +66,7 @@ pub fn health_block(h: &HealthInput) -> String {
 
 /// One status-line summary of the same block.
 pub fn health_status(h: &HealthInput) -> String {
-    let updates = match (h.cabin_update.is_some(), h.cli_update.is_some()) {
-        (false, false) => "no updates",
-        (true, true) => "2 updates",
-        _ => "1 update",
-    };
+    let updates = if h.cabin_update.is_some() { "1 update" } else { "no updates" };
     let failed = match h.failed.len() {
         0 => "services ok".to_string(),
         n => format!("{n} failed"),
@@ -98,7 +84,6 @@ mod tests {
     fn health_names_updates_failed_services_and_the_last_dream() {
         let h = HealthInput {
             cabin_update: Some("v2.10.99".into()),
-            cli_update: Some("0.1.80".into()),
             failed: vec![
                 "xAI auth missing — Connect Grok OAuth in Settings".into(),
                 "MCP github: error, timed out".into(),
@@ -108,9 +93,9 @@ mod tests {
         };
         assert_eq!(
             health_block(&h),
-            "Health\n\nUpdates: GrokHub 2.10.99 and Grok Build CLI 0.1.80 are ready. Run /update.\nServices: 2 of 6 failed\n- xAI auth missing — Connect Grok OAuth in Settings\n- MCP github: error, timed out\nLast dream: 2026-10-08, 1 merged, 1 retired."
+            "Health\n\nUpdates: GrokHub 2.10.99 is ready. Run /update.\nServices: 2 of 6 failed\n- xAI auth missing — Connect Grok OAuth in Settings\n- MCP github: error, timed out\nLast dream: 2026-10-08, 1 merged, 1 retired."
         );
-        assert_eq!(health_status(&h), "Health: 2 updates · 2 failed");
+        assert_eq!(health_status(&h), "Health: 1 update · 2 failed");
     }
 
     #[test]
@@ -125,14 +110,14 @@ mod tests {
         );
         assert_eq!(health_status(&h), "Health: no updates · services ok");
         let quiet = HealthInput {
-            cli_update: Some("0.1.80".into()),
+            cabin_update: Some("2.12.0".into()),
             checked: 4,
             last_dream: Some(("2026-10-07".into(), "# Memory dream 2026-10-07\n\n## Merged\n\nNo duplicates found.\n".into())),
             ..Default::default()
         };
         assert_eq!(
             health_block(&quiet),
-            "Health\n\nUpdates: Grok Build CLI 0.1.80 is ready. Run /update.\nServices: all 4 ok.\nLast dream: 2026-10-07, nothing changed."
+            "Health\n\nUpdates: GrokHub 2.12.0 is ready. Run /update.\nServices: all 4 ok.\nLast dream: 2026-10-07, nothing changed."
         );
         assert_eq!(health_status(&quiet), "Health: 1 update · services ok");
     }

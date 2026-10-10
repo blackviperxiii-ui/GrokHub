@@ -786,11 +786,6 @@ mod tests {
         let body = r#"{"input":[{"content":[{"text":"hi","type":"input_text"}],"role":"user","type":"message"}],"model":"grok-4.7","reasoning":{"effort":"low"},"stream":true,"tools":[{"type":"web_search"},{"type":"x_search"}]}"#;
         live::stream_routed(&echo, &req("grok-4.7", Some("low"), "golden-session", "hi"), &CancelToken::new(), &mut |_| {}, CLASS_COMPACT).unwrap();
         assert_eq!(crate::client::responses_body(echo.0.lock().unwrap().last().unwrap()).to_string(), body);
-        assert_eq!(
-            grokhub_acp::agent_args(false, Some("high")),
-            vec!["--no-auto-update", "agent", "--reasoning-effort", "high", "stdio"]
-        );
-        assert_eq!(grokhub_acp::agent_args(true, None), vec!["--no-auto-update", "agent", "--always-approve", "stdio"]);
         let _ = std::fs::remove_dir_all(dir);
     }
 

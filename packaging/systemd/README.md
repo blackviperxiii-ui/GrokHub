@@ -26,4 +26,4 @@ systemctl --user enable --now grokhub-hub.service
 ```
 
 Requires `grokhub` / `grokhub-hub` on `PATH` (`~/.local/bin` or `/usr/bin`).
-Desktop control is Grok Build computer-use. Halt on the tray cancels the ACP turn.
+Desktop control is the cabin's own `grokhub-desktop` MCP. Halt on the tray stops the running turn.

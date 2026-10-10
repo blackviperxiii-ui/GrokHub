@@ -21,7 +21,7 @@ cargo test --doc --workspace --locked
 cargo clippy --workspace --all-targets -- -D warnings
 ```
 
-- nextest runs each test in its own process, in parallel (`.config/nextest.toml`). Without nextest, `cargo test --workspace --locked -- --test-threads=1` runs the same tests. A test that only fails side by side goes in the `serial` group with a comment, never skipped.
+- nextest runs each test in its own process, in parallel (`.config/nextest.toml`). Without nextest, `cargo test --workspace --locked` runs the same tests one at a time (`.cargo/config.toml` sets `RUST_TEST_THREADS=1`). A test that only fails side by side goes in the `serial` group with a comment, never skipped.
 
 - A full local `cargo test` can touch the real `~/.grok` and `~/.config/GrokHub`. Set `GROKHUB_CONFIG` to a temp dir, run only the crate or test you changed, or rely on CI.
 - **Test shape:** assert literal expected values, no tautologies (would it still pass if the code returned a default or stub?). Never skip, `#[ignore]`, delete, or loosen a test to get green; fix the code and report suspect tests. Don't add `#[allow(dead_code)]`; delete dead code.

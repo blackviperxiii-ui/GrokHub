@@ -427,39 +427,6 @@ pub fn parse_poll_result(ok: bool, json: &Value, now_ms: u64) -> PollResult {
     }
 }
 
-pub fn should_show_get_started(
-    grok_present: bool,
-    cabin_oauth: bool,
-    get_started_done: bool,
-    cli_connected: bool,
-) -> bool {
-    should_show_get_started_now(
-        grok_present,
-        cabin_oauth,
-        get_started_done,
-        cli_connected,
-        false,
-    )
-}
-
-/// Official-install session still opens Get Started after grok lands; leftover
-/// `auth.json` / `get_started_done` cannot skip it. Cabin OAuth already connected wins.
-pub fn should_show_get_started_now(
-    grok_present: bool,
-    cabin_oauth: bool,
-    get_started_done: bool,
-    cli_connected: bool,
-    official_install_session: bool,
-) -> bool {
-    grok_present
-        && !cabin_oauth
-        && (official_install_session || (!get_started_done && !cli_connected))
-}
-
-pub fn should_sync_cli_auth(cli_connected: bool) -> bool {
-    !cli_connected
-}
-
 /// First-run Get Started may only show device-code failures.
 /// Leftover cabin status (wall cover, install, Saved) must not paint on the sheet.
 pub fn get_started_oauth_error(status: &str) -> Option<&str> {
@@ -507,82 +474,6 @@ pub fn oauth_error_status(msg: impl AsRef<str>) -> String {
     }
 }
 
-pub fn should_kick_alpha_install(grok_present: bool) -> bool {
-    !grok_present
-}
-
-/// Settings / Get Started **Install Grok Build CLI** — hide when grok is ready or an install is already running.
-pub fn should_show_manual_cli_install(grok_ready: bool, install_in_progress: bool) -> bool {
-    !grok_ready && !install_in_progress
-}
-
-/// Full-screen wait for this session's official install (or a failed install).
-pub fn should_show_cli_install_wait(official_wait: bool, has_err: bool) -> bool {
-    has_err || official_wait
-}
-
-/// Cabin stays on Grok Build CLI alpha. Only the `alpha` channel counts.
-pub fn cli_channel_is_alpha(channel: &str) -> bool {
-    channel.trim().eq_ignore_ascii_case("alpha")
-}
-
-/// Switch when the CLI reported a non-alpha channel. `None` means the probe
-/// failed — do not yank a working install.
-pub fn should_switch_cli_to_alpha(channel: Option<&str>) -> bool {
-    match channel {
-        Some(ch) => !cli_channel_is_alpha(ch),
-        None => false,
-    }
-}
-
-/// `grok update --check --json` → `channel`.
-pub fn parse_cli_update_check_channel(json: &str) -> Option<String> {
-    let v: Value = serde_json::from_str(json.trim()).ok()?;
-    let ch = v.get("channel").and_then(|x| x.as_str())?.trim();
-    if ch.is_empty() {
-        None
-    } else {
-        Some(ch.to_string())
-    }
-}
-
-/// `~/.grok/config.toml` `[cli] channel`.
-pub fn parse_cli_config_channel(toml: &str) -> Option<String> {
-    let mut in_cli = false;
-    for raw in toml.lines() {
-        let line = raw.trim();
-        if line.is_empty() || line.starts_with('#') {
-            continue;
-        }
-        if line.starts_with('[') {
-            in_cli = line == "[cli]";
-            continue;
-        }
-        if !in_cli {
-            continue;
-        }
-        let Some((key, val)) = line.split_once('=') else {
-            continue;
-        };
-        if key.trim() != "channel" {
-            continue;
-        }
-        let v = val
-            .trim()
-            .trim_start_matches(['"', '\''])
-            .trim_end_matches(['"', '\''])
-            .trim();
-        if !v.is_empty() {
-            return Some(v.to_string());
-        }
-    }
-    None
-}
-
-pub fn cli_auth_slot_key(client_id: &str) -> String {
-    format!("{XAI_OAUTH_ISSUER}::{client_id}")
-}
-
 pub fn unix_ms_to_rfc3339(ms: u64) -> String {
     let secs = (ms / 1000) as i64;
     let days = secs.div_euclid(86_400);
@@ -606,47 +497,6 @@ fn civil_from_unix_days(days: i64) -> (i32, u32, u32) {
     let m = (if mp < 10 { mp + 3 } else { mp - 9 }) as u32;
     let y = if m <= 2 { y + 1 } else { y };
     (y, m, d)
-}
-
-pub fn cli_auth_record(tokens: &XaiOAuthTokens) -> Value {
-    let mut rec = serde_json::Map::new();
-    rec.insert("auth_mode".into(), Value::String("oidc".into()));
-    rec.insert("key".into(), Value::String(tokens.access_token.clone()));
-    rec.insert(
-        "oidc_client_id".into(),
-        Value::String(XAI_OAUTH_CLIENT_ID.into()),
-    );
-    if let Some(rt) = tokens
-        .refresh_token
-        .as_ref()
-        .map(|s| s.trim())
-        .filter(|s| !s.is_empty())
-    {
-        rec.insert("refresh_token".into(), Value::String(rt.to_string()));
-    }
-    if let Some(ms) = tokens.expires_at.filter(|n| *n > 0) {
-        rec.insert("expires_at".into(), Value::String(unix_ms_to_rfc3339(ms)));
-    }
-    Value::Object(rec)
-}
-
-pub fn merge_cli_auth_json(existing: &str, tokens: &XaiOAuthTokens) -> Result<String, String> {
-    if tokens.access_token.trim().is_empty() {
-        return Err("OAuth access token empty".into());
-    }
-    let mut root = if existing.trim().is_empty() {
-        Value::Object(serde_json::Map::new())
-    } else {
-        serde_json::from_str(existing).map_err(|e| e.to_string())?
-    };
-    let obj = root
-        .as_object_mut()
-        .ok_or_else(|| "auth.json must be a JSON object".to_string())?;
-    obj.insert(
-        cli_auth_slot_key(XAI_OAUTH_CLIENT_ID),
-        cli_auth_record(tokens),
-    );
-    serde_json::to_string_pretty(&root).map_err(|e| e.to_string())
 }
 
 fn b64url_decode(s: &str) -> Option<Vec<u8>> {
@@ -962,65 +812,7 @@ mod tests {
     }
 
     #[test]
-    fn missing_starts_alpha_install_present_and_in_progress_hide_control() {
-        assert!(
-            should_kick_alpha_install(false),
-            "missing → starts alpha install"
-        );
-        assert!(
-            !should_kick_alpha_install(true),
-            "present → do not start a second install"
-        );
-        assert!(
-            !should_show_manual_cli_install(true, false),
-            "present → no Install control"
-        );
-        assert!(
-            !should_show_manual_cli_install(false, true),
-            "install-in-progress → no duplicate control"
-        );
-        assert!(
-            should_show_manual_cli_install(false, false),
-            "missing and idle → Install (retry) is allowed"
-        );
-        assert!(
-            should_show_cli_install_wait(true, false),
-            "official install this session → wait sheet"
-        );
-        assert!(
-            !should_show_cli_install_wait(false, false),
-            "present grok keep-alpha must not cover the cabin with the wait sheet"
-        );
-        assert!(should_show_cli_install_wait(false, true));
-        assert!(should_show_cli_install_wait(true, true));
-    }
-
-    #[test]
-    fn get_started_and_cli_sync_predicates() {
-        assert!(should_show_get_started(true, false, false, false));
-        assert!(
-            !should_show_get_started(false, false, false, false),
-            "wait for grok alpha before Get Started"
-        );
-        assert!(!should_show_get_started(true, true, false, false));
-        assert!(!should_show_get_started(true, false, true, false));
-        assert!(
-            !should_show_get_started(true, false, false, true),
-            "existing grok login must not block upgrades"
-        );
-        assert!(
-            should_show_get_started_now(true, false, true, true, true),
-            "official install this session must still open Get Started after grok lands"
-        );
-        assert!(
-            !should_show_get_started_now(true, true, false, false, true),
-            "cabin OAuth already connected must not reopen Get Started"
-        );
-        assert!(should_sync_cli_auth(false));
-        assert!(
-            !should_sync_cli_auth(true),
-            "Settings reconnect must not overwrite grok login"
-        );
+    fn get_started_shows_only_oauth_failures() {
         assert!(get_started_oauth_error("Grok OAuth failed to start").is_some());
         assert!(get_started_oauth_error("oauth error (access_denied)").is_some());
         assert!(get_started_oauth_error("access_denied").is_some());
@@ -1042,95 +834,13 @@ mod tests {
             get_started_oauth_error("Wall cover held — Connect Grok in Settings").is_none(),
             "leftover wall status must not paint on Get Started"
         );
-        assert!(get_started_oauth_error("Grok Build CLI (alpha) installed").is_none());
         assert!(get_started_oauth_error("Saved").is_none());
         assert!(get_started_oauth_error("").is_none());
-        assert!(should_kick_alpha_install(false));
-        assert!(!should_kick_alpha_install(true));
-        assert!(should_show_manual_cli_install(false, false));
-        assert!(!should_show_manual_cli_install(true, false));
-        assert!(!should_show_manual_cli_install(false, true));
-        assert!(!should_show_manual_cli_install(true, true));
-        assert!(cli_channel_is_alpha("alpha"));
-        assert!(cli_channel_is_alpha("Alpha"));
-        assert!(!cli_channel_is_alpha("stable"));
-        assert!(!cli_channel_is_alpha("unknown"));
-        assert!(
-            !should_switch_cli_to_alpha(Some("alpha")),
-            "do not yank a working alpha install"
-        );
-        assert!(should_switch_cli_to_alpha(Some("stable")));
-        assert!(should_switch_cli_to_alpha(Some("enterprise")));
-        assert!(
-            !should_switch_cli_to_alpha(None),
-            "a failed channel probe must not reinstall grok"
-        );
-        assert_eq!(
-            parse_cli_update_check_channel(
-                r#"{"currentVersion":"1.0.25","latestVersion":"1.0.25","channel":"stable"}"#
-            )
-            .as_deref(),
-            Some("stable")
-        );
-        assert_eq!(
-            parse_cli_update_check_channel(
-                r#"{"currentVersion":"1.0.30","latestVersion":"1.0.30","channel":"alpha"}"#
-            )
-            .as_deref(),
-            Some("alpha")
-        );
-        // Live unpackaged 1.0.38: version is alpha, update channel is still stable
-        // until config / `grok update --alpha`. Version number is not the channel.
-        // latestVersion is npm latest (1.0.34).
-        let unpackaged_1038 = parse_cli_update_check_channel(
-            r#"{"currentVersion":"1.0.38","latestVersion":"1.0.34","updateAvailable":false,"installer":"internal","channel":"stable","autoUpdate":null,"error":null}"#,
-        );
-        assert_eq!(unpackaged_1038.as_deref(), Some("stable"));
-        assert!(should_switch_cli_to_alpha(unpackaged_1038.as_deref()));
-        assert_eq!(
-            parse_cli_config_channel("[ui]\ntheme = \"dark\"\n[cli]\nchannel = \"alpha\"\n"),
-            Some("alpha".into())
-        );
-        assert_eq!(
-            parse_cli_config_channel("[cli.foo]\nchannel = \"stable\"\n[cli]\nchannel = 'stable'\n"),
-            Some("stable".into())
-        );
-        assert!(parse_cli_config_channel("[ui]\nchannel = \"alpha\"\n").is_none());
     }
 
     #[test]
-    fn cli_auth_json_uses_cabin_client_slot() {
-        let tokens = XaiOAuthTokens {
-            access_token: "cabin-access".into(),
-            refresh_token: Some("cabin-refresh".into()),
-            expires_at: Some(1_767_225_600_000),
-            ..Default::default()
-        };
-        let slot = cli_auth_slot_key(XAI_OAUTH_CLIENT_ID);
-        assert_eq!(slot, format!("https://auth.x.ai::{XAI_OAUTH_CLIENT_ID}"));
-        let merged = merge_cli_auth_json("{}", &tokens).unwrap();
-        let v: Value = serde_json::from_str(&merged).unwrap();
-        let rec = v.get(&slot).unwrap();
-        assert_eq!(rec.get("auth_mode").and_then(|x| x.as_str()), Some("oidc"));
-        assert_eq!(rec.get("key").and_then(|x| x.as_str()), Some("cabin-access"));
-        assert_eq!(
-            rec.get("refresh_token").and_then(|x| x.as_str()),
-            Some("cabin-refresh")
-        );
-        assert_eq!(
-            rec.get("oidc_client_id").and_then(|x| x.as_str()),
-            Some(XAI_OAUTH_CLIENT_ID)
-        );
-        assert_eq!(
-            rec.get("expires_at").and_then(|x| x.as_str()),
-            Some("2026-01-01T00:00:00Z")
-        );
-        let keep = merge_cli_auth_json(
-            r#"{"https://auth.x.ai::other":{"auth_mode":"oidc","key":"keep-me"}}"#,
-            &tokens,
-        )
-        .unwrap();
-        assert!(keep.contains("keep-me") && keep.contains("cabin-access"));
+    fn unix_ms_formats_as_utc_rfc3339() {
         assert_eq!(unix_ms_to_rfc3339(0), "1970-01-01T00:00:00Z");
+        assert_eq!(unix_ms_to_rfc3339(1_767_225_600_000), "2026-01-01T00:00:00Z");
     }
 }
