@@ -1,319 +1,19 @@
-//! Grok Build ACP session spawn, poll, and `grok -p` stream.
+//! The native engine's event stream: the live chat handle and one-shot
+//! unattended receivers.
 
 use super::*;
-use grokhub_acp::ask_denied_without_acp;
-
-
-pub(super) type McpStatusMap = HashMap<String, grokhub_acp::McpDoctorStatus>;
-pub(super) type McpDoctorMsg = (String, Option<McpStatusMap>);
-
-pub(super) enum GrokSessMsg {
-    Listed {
-        gen: u64,
-        rows: Vec<grokhub_acp::GrokSession>,
-        done: Vec<String>,
-        error: Option<String>,
-    },
-}
-
-
-pub(super) fn grok_session_rows(listed: Vec<String>, cwd: PathBuf) -> Vec<grokhub_acp::GrokSession> {
-    listed
-        .into_iter()
-        .map(|r| {
-            let mut s = grokhub_acp::split_session_row(&r);
-            s.cwd = Some(cwd.clone());
-            s.cabin = false;
-            s
-        })
-        .collect()
-}
-
-
-pub(super) fn hide_pending_grok_sessions(
-    rows: Vec<grokhub_acp::GrokSession>,
-    pending: &HashSet<String>,
-) -> Vec<grokhub_acp::GrokSession> {
-    if pending.is_empty() {
-        return rows;
-    }
-    rows.into_iter()
-        .filter(|s| !pending.contains(&s.id))
-        .collect()
-}
-
-/// Skills must not sit on Loading… while catalog commands run.
-/// A healthy load finishes under this. Past it the page settles (last catalog
-/// kept) and Refresh can start again.
-pub(super) const GROK_CATALOG_SETTLE: Duration = Duration::from_secs(18);
-
-/// Debug builds honor `GROKHUB_CATALOG_SETTLE_MS` so a shot can force the timeout
-/// without waiting the full 18s. Release stays on [`GROK_CATALOG_SETTLE`].
-pub(super) fn grok_catalog_settle() -> Duration {
-    #[cfg(debug_assertions)]
-    if let Some(ms) = std::env::var("GROKHUB_CATALOG_SETTLE_MS")
-        .ok()
-        .and_then(|raw| raw.parse::<u64>().ok())
-        .filter(|ms| *ms > 0)
-    {
-        return Duration::from_millis(ms);
-    }
-    GROK_CATALOG_SETTLE
-}
-
-/// Status once [`GROK_CATALOG_SETTLE`] passes with no catalog reply.
-pub(super) const GROK_CATALOG_TIMEOUT: &str = "Could not load Grok Build catalog (timed out)";
 
 impl Cabin {
 
-    pub(super) fn poll_acp_spawn(&mut self) {
-        let Some(rx) = self.acp_spawn_rx.take() else {
-            return;
-        };
-        match rx.try_recv() {
-            Ok(Ok(h)) => {
-                let sid = h.session_id.clone();
-                let cwd = h.cwd.display().to_string();
-                if !sid.trim().is_empty() {
-                    let job = self.chat_job_thread.clone();
-                    let idx = job
-                        .as_deref()
-                        .and_then(|id| self.threads.iter().position(|t| t.id == id))
-                        .unwrap_or(self.thread_idx);
-                    let title = self
-                        .threads
-                        .get(idx)
-                        .map(|t| t.title.clone())
-                        .unwrap_or_default();
-                    let allow_fresh = self.threads.get(idx).is_some_and(|t| {
-                        t.grok_session
-                            .as_deref()
-                            .map(str::trim)
-                            .filter(|s| !s.is_empty())
-                            .is_none()
-                            || t.messages.len() <= 1
-                    });
-                    let open = self.bind_reported_grok_session(idx, &sid, allow_fresh, false);
-                    if let Some(t) = self.threads.get_mut(idx) {
-                        if t.grok_cwd
-                            .as_deref()
-                            .map(str::trim)
-                            .filter(|s| !s.is_empty())
-                            .is_none()
-                        {
-                            t.grok_cwd = Some(cwd.clone());
-                        }
-                    }
-                    self.record_prompt_history(
-                        idx,
-                        open.as_deref(),
-                        &sid,
-                        &title,
-                        Some(std::path::PathBuf::from(cwd)),
-                    );
-                    self.request_grok_sessions_refresh();
-                }
-                self.acp = Some(h);
-                self.persist();
-                if self.workflow_ctl_await_acp {
-                    self.workflow_ctl_await_acp = false;
-                }
-            }
-            Ok(Err(e)) => {
-                if self.permission_mode.uses_acp() {
-                    self.fail_ask_without_acp(&e);
-                } else {
-                    self.running = false;
-                    self.pending_kick = None;
-                    self.scheduled_perm = false;
-                    self.status = self.apply_job_fail(&e);
-                    self.abandon_turn_card();
-                    self.chat_job_thread = None;
-                    self.persist();
-                }
-                if self.workflow_ctl_await_acp {
-                    self.workflow_ctl_await_acp = false;
-                    self.workflow_ctl_queue.clear();
-                }
-            }
-            Err(mpsc::TryRecvError::Empty) => {
-                self.acp_spawn_rx = Some(rx);
-            }
-            Err(mpsc::TryRecvError::Disconnected) => {
-                if self.permission_mode.uses_acp() {
-                    self.fail_ask_without_acp("Grok Build session missing");
-                } else {
-                    self.running = false;
-                    self.pending_kick = None;
-                    self.scheduled_perm = false;
-                    self.status = self.apply_job_fail("Grok Build session missing");
-                    self.abandon_turn_card();
-                    self.chat_job_thread = None;
-                    self.persist();
-                }
-                if self.workflow_ctl_await_acp {
-                    self.workflow_ctl_await_acp = false;
-                    self.workflow_ctl_queue.clear();
-                }
-            }
-        }
-    }
-
-    pub(super) fn fail_ask_without_acp(&mut self, detail: &str) {
+    pub(super) fn fail_turn_start(&mut self, detail: &str) {
         self.abandon_turn_card();
         self.running = false;
         self.pending_kick = None;
         self.scheduled_perm = false;
-        // The native engine has no Grok Build agent to start; its own reason stands.
-        let why = if self.native_engine_for_current() {
-            detail.to_string()
-        } else {
-            ask_denied_without_acp(detail)
-        };
-        self.status = self.apply_job_fail(&why);
+        self.status = self.apply_job_fail(detail);
         self.chat_job_thread = None;
         self.persist();
         self.maybe_continue_ptt();
-    }
-
-    pub(super) fn ensure_acp(&mut self) -> Result<(), String> {
-        if self.native_engine_for_current() {
-            return self.ensure_native_engine();
-        }
-        if grokhub_acp::find_grok().is_none() {
-            return Err("Grok Build CLI is not on PATH".into());
-        }
-        if self.background_tasks_open() && self.acp.is_some() {
-            return Ok(());
-        }
-        let idx = self
-            .chat_job_thread
-            .as_deref()
-            .and_then(|id| self.threads.iter().position(|t| t.id == id))
-            .unwrap_or(self.thread_idx);
-        let bound = self.grok_cwd();
-        let cwd = self
-            .threads
-            .get(idx)
-            .and_then(|t| t.grok_cwd.clone())
-            .filter(|s| !s.trim().is_empty())
-            .map(std::path::PathBuf::from)
-            .unwrap_or_else(|| bound.clone());
-        let resume = self
-            .threads
-            .get(idx)
-            .and_then(|t| t.grok_session.clone())
-            .filter(|s| !s.trim().is_empty());
-        if let Some(h) = &self.acp {
-            if h.cwd == cwd {
-                match resume.as_deref() {
-                    Some(id) if h.session_id != id => {}
-                    _ => return Ok(()),
-                }
-            }
-        }
-        if self.acp_spawn_rx.is_some() {
-            return Ok(());
-        }
-        self.acp = None;
-        let grok_login = grokhub_acp::grok_cli_key()
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty());
-        let console = self.console_key().trim();
-        let console_env = if !console.is_empty() && !grokhub_acp::protocol::is_jwt_api_key(console)
-        {
-            Some(console.to_string())
-        } else {
-            None
-        };
-        // A leftover Settings console key must not override grok login on the child.
-        let (auth_key, xai_env) = if grok_login.is_some() {
-            (grok_login, None)
-        } else {
-            (console_env.clone(), console_env)
-        };
-        let perm = self.permission_mode;
-        let mode = self.session_mode;
-        // Grok Build takes effort per episode at spawn (R0 Step-0: live set is not
-        // verified), so a session starts at everyday chat's start.
-        let reasoning_effort =
-            grokhub_agent::route::live::start_effort(grokhub_agent::route::live::DEFAULT_CLASS);
-        let foreign = self
-            .threads
-            .get(idx)
-            .and_then(|t| t.grok_cwd.as_ref())
-            .map(|p| *p != bound)
-            .unwrap_or(false);
-        let unknown_cwd = self
-            .threads
-            .get(idx)
-            .map(|t| {
-                t.grok_cwd
-                    .as_ref()
-                    .map(|s| s.trim().is_empty())
-                    .unwrap_or(true)
-            })
-            .unwrap_or(true);
-        // Agent stdio must not inherit ~/.grok. That home loads chrome-devtools
-        // and the leader SIGTERMs the child. Imported CLI chats opt in.
-        let user_home = self
-            .threads
-            .get(idx)
-            .map(|t| t.grok_user_home)
-            .unwrap_or(false);
-        let worktree = self
-            .threads
-            .get(idx)
-            .map(|t| t.grok_worktree)
-            .unwrap_or(false);
-        // The open chat already has dialogue. session/new would be another History row.
-        let continuing = self.threads.get(idx).is_some_and(|t| {
-            t.grok_session
-                .as_deref()
-                .is_some_and(|s| !s.trim().is_empty())
-                && t.messages.len() > 1
-        });
-        let (tx, rx) = mpsc::channel();
-        self.acp_spawn_rx = Some(rx);
-        std::thread::spawn(move || {
-            if unknown_cwd && resume.as_ref().is_some() {
-                let _ = tx.send(Err(grokhub_acp::explain_handshake_error(
-                    "session/load refused: History session has no worktree",
-                    &cwd,
-                )));
-                return;
-            }
-            let spawn = |resume: Option<String>| {
-                build_agent::spawn_session(
-                    cwd.clone(),
-                    auth_key.clone(),
-                    xai_env.clone(),
-                    perm,
-                    mode,
-                    reasoning_effort.clone(),
-                    resume,
-                    user_home,
-                    worktree,
-                )
-            };
-            let out = match spawn(resume.clone()) {
-                Ok(h) => Ok(h),
-                Err(e) => {
-                    let retry_fresh = resume.is_some()
-                        && !foreign
-                        && !unknown_cwd
-                        && !continuing
-                        && !grokhub_acp::is_session_cwd_error(&e);
-                    if retry_fresh {
-                        spawn(None).map_err(|e2| grokhub_acp::explain_handshake_error(&e2, &cwd))
-                    } else {
-                        Err(grokhub_acp::explain_handshake_error(&e, &cwd))
-                    }
-                }
-            };
-            let _ = tx.send(out);
-        });
-        Ok(())
     }
 
     pub(super) fn poll_acp(&mut self) {
@@ -396,7 +96,7 @@ impl Cabin {
                     }
                 }
                 AcpEvent::Tool(mut card) => {
-                    if self.cfg.native_engine() && card.status == "completed" {
+                    if card.status == "completed" {
                         let sid = self
                             .acp
                             .as_ref()
@@ -565,28 +265,22 @@ impl Cabin {
                         }
                     }
                     self.running = false;
-                    let native = self.acp.as_ref().is_some_and(|h| h.session_id.starts_with("native-"));
                     self.acp = None;
-                    if grokhub_acp::is_sigterm_status(&e) && !self.turn_retried {
+                    if grokhub_core::proc_util::is_sigterm_status(&e) && !self.turn_retried {
                         self.turn_retried = true;
                         self.status = "Retrying…".into();
                         self.kick_model(false);
                         continue;
                     }
-                    if grokhub_acp::is_sigterm_status(&e) {
+                    if grokhub_core::proc_util::is_sigterm_status(&e) {
                         self.post_turn_crash();
                     }
                     self.scheduled_perm = false;
-                    // A native engine turn never ran session/new; keep its own error.
-                    let e = if native { e } else { grokhub_acp::explain_handshake_error(&e, &self.grok_cwd()) };
                     self.status = self.apply_job_fail(&e);
                     self.abandon_turn_card();
                     self.chat_job_thread = None;
                     self.persist();
                     self.maybe_continue_ptt();
-                    if !self.running {
-                        self.release_workflow_ctl_queue();
-                    }
                 }
             }
         }
@@ -595,7 +289,7 @@ impl Cabin {
     /// Put a new Ask on the card, or queue it behind the one already there. A
     /// parallel tool call can ask while a card is up; cancelling either would read
     /// to Grok as "User cancelled".
-    pub(super) fn show_perm_ask(&mut self, p: grokhub_acp::PermissionAsk) {
+    pub(super) fn show_perm_ask(&mut self, p: grokhub_core::wire::PermissionAsk) {
         if self.perm_ask.is_some() {
             self.perm_queue.push_back(p);
             return;
@@ -705,7 +399,6 @@ impl Cabin {
                 self.start_agent_bg_tasks(&strip_thinking(&text), id);
             }
         }
-        self.bg.steer_follow = None;
         self.bg.results_follow = None;
         if here && self.speak_next {
             self.speak_next = false;
@@ -834,7 +527,6 @@ impl Cabin {
                 self.grok_p_rx = Some(rx);
             }
             Ok(GrokPEvent::End(turn)) => {
-                self.grok_p_pid = None;
                 let turn_no = self.turn_no();
                 self.apply_single_turn(turn);
                 self.harness_watch_end();
@@ -843,11 +535,10 @@ impl Cabin {
                 self.drain_followup_queue();
             }
             Ok(GrokPEvent::Err(e)) => {
-                self.grok_p_pid = None;
                 self.running = false;
                 self.pending_kick = None;
                 let paints = self.stream_here();
-                if grokhub_acp::is_sigterm_status(&e) {
+                if grokhub_core::proc_util::is_sigterm_status(&e) {
                     let empty = self.stream_buf.is_empty() && self.thought_buf.is_empty();
                     if empty && !self.turn_retried {
                         self.turn_retried = true;
@@ -868,9 +559,7 @@ impl Cabin {
                 } else {
                     self.scheduled_perm = false;
                     let status = self.apply_job_fail(&rewrite_truncation_error(&e));
-                    if self.cfg.native_engine() {
-                        self.finish_hub_dispatch(&status, false);
-                    }
+                    self.finish_hub_dispatch(&status, false);
                     if paints || self.chat_job_thread.is_none() {
                         self.status = status;
                     }
@@ -879,15 +568,11 @@ impl Cabin {
                     self.persist();
                 }
                 self.maybe_continue_ptt();
-                if !self.running {
-                    self.release_workflow_ctl_queue();
-                }
             }
             Err(mpsc::TryRecvError::Empty) => {
                 self.grok_p_rx = Some(rx);
             }
             Err(mpsc::TryRecvError::Disconnected) => {
-                self.grok_p_pid = None;
                 self.running = false;
                 self.pending_kick = None;
                 let streamed = !self.stream_buf.is_empty() || !self.thought_buf.is_empty();
@@ -903,10 +588,8 @@ impl Cabin {
                 } else {
                     self.scheduled_perm = false;
                     let paints = self.stream_here();
-                    let status = self.apply_job_fail("Grok Build session missing");
-                    if self.cfg.native_engine() {
-                        self.finish_hub_dispatch(&status, false);
-                    }
+                    let status = self.apply_job_fail("The engine stopped without a reply");
+                    self.finish_hub_dispatch(&status, false);
                     if paints || self.chat_job_thread.is_none() {
                         self.status = status;
                     }
@@ -914,14 +597,11 @@ impl Cabin {
                     self.chat_job_thread = None;
                     self.persist();
                 }
-                if !self.running {
-                    self.release_workflow_ctl_queue();
-                }
             }
         }
     }
 
-    pub(super) fn apply_single_turn(&mut self, turn: grokhub_acp::SingleTurn) {
+    pub(super) fn apply_single_turn(&mut self, turn: grokhub_core::wire::SingleTurn) {
         let job = self.chat_job_thread.clone();
         let idx = job
             .as_deref()
@@ -1011,104 +691,12 @@ impl Cabin {
         self.drain_followup_queue();
     }
 
-    pub(super) fn send_grok_slash(&mut self, cmd: &str) {
-        if self.permission_mode.uses_acp() {
-            if self.acp.is_none() {
-                if let Err(e) = self.ensure_acp() {
-                    self.fail_ask_without_acp(&e);
-                    return;
-                }
-            }
-            if let Some(h) = &self.acp {
-                match h.prompt(cmd) {
-                    Ok(()) => self.running = true,
-                    Err(e) => {
-                        self.acp = None;
-                        self.fail_ask_without_acp(&e);
-                    }
-                }
-                return;
-            }
-            // Handshake in flight or ACP still down — fail-closed, no yolo grok -p.
-            self.fail_ask_without_acp("");
-            return;
-        }
-        let idx = self.thread_idx;
-        let cwd = self
-            .threads
-            .get(idx)
-            .and_then(|t| t.grok_cwd.clone())
-            .filter(|s| !s.trim().is_empty())
-            .map(std::path::PathBuf::from)
-            .unwrap_or_else(|| self.grok_cwd());
-        let resume = self
-            .threads
-            .get(idx)
-            .and_then(|t| t.grok_session.clone())
-            .filter(|s| !s.trim().is_empty());
-        let resume_in_cabin = resume
-            .as_deref()
-            .is_some_and(grokhub_acp::cabin_has_session);
-        let user_home = grokhub_acp::use_user_grok_home(
-            self.threads
-                .get(idx)
-                .map(|t| t.grok_user_home)
-                .unwrap_or(false),
-            resume_in_cabin,
-        );
-        if let Some(t) = self.threads.get_mut(idx) {
-            t.grok_user_home = user_home;
-        }
-        let worktree = self
-            .threads
-            .get(idx)
-            .map(|t| t.grok_worktree)
-            .unwrap_or(false);
-        let (yolo, auto) = self.permission_mode.composer_headless_flags();
-        match grokhub_acp::spawn_grok_p_stream(
-            cmd,
-            &cwd,
-            resume.as_deref(),
-            yolo,
-            auto,
-            None,
-            None,
-            self.session_mode,
-            grokhub_acp::GrokPAttach {
-                image: None,
-                learned: &grokhub_core::brief_for(&self.learning, "chat"),
-                deny: self.permission_mode.needs_approval(),
-                desktop: self.cfg.desktop_control,
-                hard_deny: &grokhub_agent::harness::HEADLESS_DENY_RULES,
-            },
-            false,
-            user_home,
-            worktree,
-        ) {
-            Ok((pid, rx)) => {
-                self.grok_p_pid = Some(pid);
-                self.grok_p_rx = Some(rx);
-                self.running = true;
-            }
-            Err(e) => {
-                self.grok_p_pid = None;
-                self.grok_p_rx = None;
-                self.running = false;
-                self.status = format!("Grok Build could not start: {e}");
-            }
-        }
-    }
-
     pub(super) fn apply_grok_commands(&mut self, cmds: Vec<String>) {
         self.grok_commands = grok_command_hits(&cmds);
     }
 
     /// Background subagents emit cards after the parent turn has returned.
-    /// The CLI path never queues these, and this poll runs only while the native engine is on.
     pub(super) fn poll_native_side_events(&mut self) {
-        if !self.cfg.native_engine() {
-            return;
-        }
         let here = self
             .acp
             .as_ref()
@@ -1173,45 +761,7 @@ impl Cabin {
         }
     }
 
-    /// One queued verb after the turn is gone, including Stop. Skips an ACP handshake.
-    pub(super) fn release_workflow_ctl_if_idle(&mut self) {
-        if self.running || self.workflow_ctl_queue.is_empty() || self.acp_spawn_rx.is_some() {
-            return;
-        }
-        self.release_workflow_ctl_queue();
-    }
-
-    /// One queued workflow verb, before chat follow-ups. A live send stops the drain.
-    /// Never pops during a handshake.
-    pub(super) fn release_workflow_ctl_queue(&mut self) {
-        if self.running || self.acp_spawn_rx.is_some() {
-            return;
-        }
-        let Some(cmd) = self.workflow_ctl_queue.first().cloned() else {
-            return;
-        };
-        self.workflow_ctl_queue.remove(0);
-        let Some(Slash::WorkflowCtl { verb, target }) = parse_slash(&cmd) else {
-            return;
-        };
-        // Ask with no agent re-queues at the back. Put this verb back at the front.
-        let queued = self.workflow_ctl_queue.len();
-        self.send_workflow_ctl(verb, &target);
-        if self.workflow_ctl_await_acp
-            && self.workflow_ctl_queue.len() == queued + 1
-            && self.workflow_ctl_queue.last().is_some_and(|s| s == &cmd)
-        {
-            if let Some(held) = self.workflow_ctl_queue.pop() {
-                self.workflow_ctl_queue.insert(0, held);
-            }
-        }
-    }
-
     pub(super) fn drain_followup_queue(&mut self) {
-        if self.running {
-            return;
-        }
-        self.release_workflow_ctl_queue();
         if self.running {
             return;
         }
@@ -1233,7 +783,7 @@ impl Cabin {
     pub(super) fn send_queued_side_ask(&mut self, text: String) {
         self.side_ask_kick = true;
         self.send_chat(text);
-        if !self.running && self.pending_kick.is_none() && self.acp_spawn_rx.is_none() {
+        if !self.running && self.pending_kick.is_none() {
             self.side_ask_kick = false;
         }
     }
@@ -1249,169 +799,6 @@ impl Cabin {
 
     pub(super) fn upsert_stream_assistant(&mut self) {
         self.apply_live_assistant();
-    }
-
-    pub(super) fn sync_unlocked_titles_from_sessions(&mut self) {
-        let mut changed = false;
-        for t in &mut self.threads {
-            if t.title_locked {
-                continue;
-            }
-            let Some(id) = t.grok_session.as_deref() else {
-                continue;
-            };
-            let Some(s) = self.grok_sessions.iter().find(|s| s.id == id) else {
-                continue;
-            };
-            if grokhub_acp::is_placeholder_session_title(&s.title) || s.title == s.id {
-                continue;
-            }
-            if t.title != s.title {
-                t.title = s.title.clone();
-                changed = true;
-            }
-        }
-        if changed {
-            self.persist();
-        }
-    }
-
-    pub(super) fn forget_grok_build_session(&mut self, id: &str, also: &[String]) {
-        let mut ids = Vec::new();
-        let id = id.trim();
-        if !id.is_empty() {
-            ids.push(id.to_string());
-        }
-        for extra in also {
-            let extra = extra.trim();
-            if !extra.is_empty() && !ids.iter().any(|s| s == extra) {
-                ids.push(extra.to_string());
-            }
-        }
-        if ids.is_empty() {
-            return;
-        }
-        for id in &ids {
-            self.pending_grok_deletes.insert(id.clone());
-            self.grok_sessions.retain(|s| s.id != *id);
-        }
-        self.grok_list_gen = self.grok_list_gen.wrapping_add(1);
-        let gen = self.grok_list_gen;
-        self.grok_sessions_inflight = self.grok_sessions_inflight.saturating_add(1);
-        let bin = grokhub_acp::find_grok();
-        let cwd = self.grok_cli_cwd();
-        let tx = self.grok_sessions_tx.clone();
-        std::thread::spawn(move || {
-            let error = match bin.as_ref() {
-                Some(bin) => {
-                    let mut err = None;
-                    for id in &ids {
-                        if let Err(e) = grokhub_acp::delete_session(bin, &cwd, id) {
-                            if err.is_none() {
-                                err = Some(e);
-                            }
-                        }
-                    }
-                    err
-                }
-                None => Some("Grok Build CLI missing".into()),
-            };
-            let listed = match bin.as_ref() {
-                Some(bin) => grokhub_acp::list_sessions(bin, &cwd).unwrap_or_default(),
-                None => Vec::new(),
-            };
-            let rows = grok_session_rows(listed, cwd);
-            let _ = tx.send(GrokSessMsg::Listed {
-                gen,
-                rows,
-                done: ids,
-                error,
-            });
-        });
-    }
-
-    pub(super) fn reload_grok_sessions(&mut self) {
-        if self.grok_sessions_inflight > 0 {
-            self.grok_sessions_refresh_pending = true;
-            return;
-        }
-        self.grok_list_gen = self.grok_list_gen.wrapping_add(1);
-        let gen = self.grok_list_gen;
-        self.grok_sessions_inflight = self.grok_sessions_inflight.saturating_add(1);
-        self.grok_sessions_refresh_pending = false;
-        let bin = grokhub_acp::find_grok();
-        let cwd = self.grok_cli_cwd();
-        let tx = self.grok_sessions_tx.clone();
-        std::thread::spawn(move || {
-            let listed = if let Some(bin) = bin {
-                grokhub_acp::list_sessions(&bin, &cwd).unwrap_or_default()
-            } else {
-                Vec::new()
-            };
-            let rows = grok_session_rows(listed, cwd);
-            let _ = tx.send(GrokSessMsg::Listed {
-                gen,
-                rows,
-                done: Vec::new(),
-                error: None,
-            });
-        });
-    }
-
-    pub(super) fn poll_grok_sessions(&mut self) {
-        loop {
-            match self.grok_sessions_rx.try_recv() {
-                Ok(msg) => self.apply_grok_sess_msg(msg),
-                Err(mpsc::TryRecvError::Empty) => break,
-                Err(mpsc::TryRecvError::Disconnected) => break,
-            }
-        }
-    }
-
-    pub(super) fn apply_grok_sess_msg(&mut self, msg: GrokSessMsg) {
-        self.grok_sessions_inflight = self.grok_sessions_inflight.saturating_sub(1);
-        let GrokSessMsg::Listed {
-            gen,
-            rows,
-            done,
-            error,
-        } = msg;
-        for id in &done {
-            self.pending_grok_deletes.remove(id);
-        }
-        let delete_failed = error.is_some();
-        if let Some(e) = error {
-            let e = e.trim();
-            self.status = if e.is_empty() {
-                "Could not delete session".into()
-            } else {
-                format!("Could not delete session: {e}")
-            };
-        } else if done.len() == 1 {
-            self.status = "Deleted session".into();
-        } else if done.len() > 1 {
-            self.status = "Deleted sessions".into();
-        }
-        if gen != self.grok_list_gen {
-            return;
-        }
-        self.grok_sessions = hide_pending_grok_sessions(rows, &self.pending_grok_deletes);
-        let retired: Vec<String> = self
-            .threads
-            .iter()
-            .flat_map(|t| t.retired_sessions.iter().cloned())
-            .collect();
-        self.grok_sessions
-            .retain(|s| !retired.iter().any(|id| id == &s.id));
-        self.grok_sessions_loaded = true;
-        self.last_grok_list_at = Instant::now();
-        self.sync_unlocked_titles_from_sessions();
-        if self.nav == Nav::History && done.is_empty() && !delete_failed {
-            self.status = format!("{} Grok sessions", self.grok_sessions.len());
-        }
-        if self.grok_sessions_refresh_pending && self.grok_sessions_inflight == 0 {
-            self.request_grok_sessions_refresh();
-        }
     }
 
     /// Keep the open id on a continuing follow-up. Fork and a fresh session/new
@@ -1499,7 +886,7 @@ impl Cabin {
             if !title.is_empty()
                 && (s.title.is_empty()
                     || s.title == s.id
-                    || grokhub_acp::is_placeholder_session_title(&s.title))
+                    || grokhub_core::cli_history::is_placeholder_session_title(&s.title))
             {
                 s.title = title.to_string();
             }
@@ -1510,7 +897,7 @@ impl Cabin {
         }
         self.grok_sessions.insert(
             0,
-            grokhub_acp::GrokSession {
+            grokhub_core::cli_history::GrokSession {
                 id: id.to_string(),
                 title: if title.trim().is_empty() {
                     id.to_string()
@@ -1524,245 +911,6 @@ impl Cabin {
         );
     }
 
-    pub(super) fn request_grok_sessions_refresh(&mut self) {
-        self.grok_sessions_loaded = false;
-        if self.grok_sessions_inflight > 0 {
-            self.grok_list_gen = self.grok_list_gen.wrapping_add(1);
-            self.grok_sessions_refresh_pending = true;
-            return;
-        }
-        self.reload_grok_sessions();
-    }
-
-    pub(super) fn reload_grok_catalog(&mut self) {
-        if self.grok_catalog_rx.is_some() {
-            return;
-        }
-        let Some(bin) = grokhub_acp::find_grok() else {
-            self.status = build_agent::grok_banner();
-            self.grok_catalog_loaded = true;
-            self.grok_catalog_started = None;
-            return;
-        };
-        let cwd = self.grok_cwd();
-        let (tx, rx) = mpsc::channel();
-        self.grok_catalog_rx = Some(rx);
-        self.grok_catalog_started = Some(Instant::now());
-        self.status = "Loading Grok Build catalog…".into();
-        std::thread::spawn(move || {
-            let _ = tx.send(grokhub_acp::load_grok_catalog(&bin, &cwd));
-        });
-    }
-
-    pub(super) fn poll_grok_catalog(&mut self) {
-        let Some(rx) = self.grok_catalog_rx.take() else {
-            return;
-        };
-        match rx.try_recv() {
-            Ok(Ok(cat)) => {
-                self.grok_catalog = cat;
-                self.grok_catalog_loaded = true;
-                self.grok_catalog_started = None;
-                self.status = format!(
-                    "{} skills · {} MCP · {} hooks · {} plugins · {} workflows",
-                    self.grok_catalog.skills.len(),
-                    self.grok_catalog.mcp.len(),
-                    self.grok_catalog.hooks.len(),
-                    self.grok_catalog.plugins.len(),
-                    self.grok_catalog.workflows.len()
-                );
-            }
-            Ok(Err(e)) => {
-                self.grok_catalog_loaded = true;
-                self.grok_catalog_started = None;
-                self.status = e;
-            }
-            Err(mpsc::TryRecvError::Empty) => {
-                let started = *self.grok_catalog_started.get_or_insert_with(Instant::now);
-                if started.elapsed() >= grok_catalog_settle() {
-                    self.grok_catalog_loaded = true;
-                    self.grok_catalog_started = None;
-                    self.status = GROK_CATALOG_TIMEOUT.into();
-                } else {
-                    self.grok_catalog_rx = Some(rx);
-                }
-            }
-            Err(mpsc::TryRecvError::Disconnected) => {
-                self.grok_catalog_loaded = true;
-                self.grok_catalog_started = None;
-            }
-        }
-    }
-
-    pub(super) fn submit_mcp_line(&mut self, line: &str) {
-        let t = line.trim();
-        if t.is_empty() {
-            return;
-        }
-        let lower = t.to_ascii_lowercase();
-        if let Some(name) = lower
-            .strip_prefix("remove ")
-            .or_else(|| lower.strip_prefix("rm "))
-        {
-            let name = name.trim();
-            if !name.is_empty() {
-                self.run_grok_user_cmd(vec!["mcp".into(), "remove".into(), name.to_string()]);
-            }
-            return;
-        }
-        let mut parts = t.split_whitespace();
-        let Some(name) = parts.next() else {
-            return;
-        };
-        let rest: Vec<String> = parts.map(|s| s.to_string()).collect();
-        let mut args = vec![
-            "mcp".into(),
-            "add".into(),
-            "--scope".into(),
-            "user".into(),
-            name.to_string(),
-        ];
-        if !rest.is_empty() {
-            args.push("--".into());
-            args.extend(rest);
-        }
-        self.run_grok_user_cmd(args);
-    }
-
-    pub(super) fn run_grok_user_cmd(&mut self, args: Vec<String>) {
-        if self.grok_ext_rx.is_some() {
-            let line = format!("grok {}", args.join(" "));
-            self.grok_ext_q.push(args);
-            self.connector_note = format!("Queued {line}");
-            return;
-        }
-        self.spawn_grok_user_cmd(args);
-    }
-
-    fn spawn_grok_user_cmd(&mut self, args: Vec<String>) {
-        let Some(bin) = grokhub_acp::find_grok() else {
-            self.status = build_agent::grok_banner();
-            self.connector_note = build_agent::grok_banner();
-            return;
-        };
-        let cwd = self.grok_cwd();
-        let (tx, rx) = mpsc::channel();
-        self.grok_ext_rx = Some(rx);
-        let shown = format!("grok {}", args.join(" "));
-        self.status = shown.clone();
-        self.connector_note = shown;
-        std::thread::spawn(move || {
-            let refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
-            let text = grokhub_acp::grok_user_stdout_timeout(&bin, &cwd, &refs, 120)
-                .unwrap_or_else(|e| e);
-            let _ = tx.send(text);
-        });
-    }
-
-    pub(super) fn poll_grok_ext(&mut self) {
-        let Some(rx) = self.grok_ext_rx.take() else {
-            return;
-        };
-        match rx.try_recv() {
-            Ok(text) => {
-                self.connector_note = text.clone();
-                let clip: String = text.chars().take(160).collect();
-                if !clip.is_empty() {
-                    self.status = clip;
-                }
-                self.reload_grok_catalog();
-                if !self.grok_ext_q.is_empty() {
-                    let next = self.grok_ext_q.remove(0);
-                    self.spawn_grok_user_cmd(next);
-                }
-            }
-            Err(mpsc::TryRecvError::Empty) => {
-                self.grok_ext_rx = Some(rx);
-            }
-            Err(mpsc::TryRecvError::Disconnected) => {}
-        }
-    }
-
-    pub(super) fn run_mcp_doctor(&mut self) {
-        if self.mcp_doctor_rx.is_some() {
-            return;
-        }
-        let Some(bin) = grokhub_acp::find_grok() else {
-            self.status = build_agent::grok_banner();
-            self.connector_note = build_agent::grok_banner();
-            return;
-        };
-        let cwd = self.grok_cwd();
-        let (tx, rx) = mpsc::channel();
-        self.mcp_doctor_rx = Some(rx);
-        let shown = "grok mcp doctor --json".to_string();
-        self.status = shown.clone();
-        self.connector_note = shown;
-        std::thread::spawn(move || {
-            let text = grokhub_acp::grok_user_stdout_allow_fail(
-                &bin,
-                &cwd,
-                &["mcp", "doctor", "--json"],
-                120,
-            )
-            .unwrap_or_else(|e| e);
-            let parsed = grokhub_acp::parse_mcp_doctor(&text);
-            let _ = tx.send((text, parsed));
-        });
-    }
-
-    pub(super) fn apply_mcp_doctor_result(
-        &mut self,
-        text: String,
-        parsed: Option<McpStatusMap>,
-    ) {
-        self.connector_note = text.clone();
-        let clip: String = text.chars().take(160).collect();
-        if !clip.is_empty() {
-            self.status = clip;
-        }
-        if let Some(map) = parsed {
-            self.mcp_status = map;
-        }
-    }
-
-    pub(super) fn poll_mcp_doctor(&mut self) {
-        let Some(rx) = self.mcp_doctor_rx.take() else {
-            return;
-        };
-        match rx.try_recv() {
-            Ok((text, parsed)) => {
-                self.apply_mcp_doctor_result(text, parsed);
-                self.reload_grok_catalog();
-            }
-            Err(mpsc::TryRecvError::Empty) => {
-                self.mcp_doctor_rx = Some(rx);
-            }
-            Err(mpsc::TryRecvError::Disconnected) => {}
-        }
-    }
-
-    pub(super) fn poll_inspect(&mut self) {
-        let Some(rx) = self.inspect_rx.take() else {
-            return;
-        };
-        match rx.try_recv() {
-            Ok(text) => {
-                self.inspect_text = text.clone();
-                if self.nav == Nav::Chat {
-                    self.live_mut()
-                        .push(("assistant".into(), mark_slash_result(&text)));
-                    self.stamp_current_access();
-                    self.persist_idle_key = self.persist_idle_now();
-                }
-            }
-            Err(mpsc::TryRecvError::Empty) => {
-                self.inspect_rx = Some(rx);
-            }
-            Err(mpsc::TryRecvError::Disconnected) => {}
-        }
-    }
-
     pub(super) fn poll_session_show(&mut self) {
         let Some((id, rx)) = self.session_show_rx.take() else {
             return;
@@ -1772,7 +920,7 @@ impl Cabin {
                 if text.trim().is_empty() {
                     return;
                 }
-                let msgs = grokhub_acp::parse_session_markdown(&text);
+                let msgs = grokhub_core::cli_history::parse_session_markdown(&text);
                 if msgs.is_empty() {
                     return;
                 }
@@ -1842,7 +990,7 @@ impl Cabin {
         self.persist();
     }
 
-    /// Fetch a Grok transcript into an empty cabin thread. Pin and rename can bind the
+    /// Load a CLI-era transcript into an empty cabin thread. Pin and rename can bind the
     /// session before it is opened; that empty row is not the transcript.
     pub(super) fn kick_session_show(&mut self, id: &str) {
         let id = id.trim();
@@ -1866,33 +1014,14 @@ impl Cabin {
         }
         let sess = self.grok_sessions.iter().find(|s| s.id == id).cloned();
         let path = sess.as_ref().and_then(|s| s.path.clone());
-        let cwd = sess
-            .as_ref()
-            .and_then(|s| s.cwd.clone())
-            .or_else(|| {
-                self.thread_for_grok(id).and_then(|i| {
-                    self.threads.get(i).and_then(|t| {
-                        t.grok_cwd
-                            .as_ref()
-                            .filter(|s| !s.is_empty())
-                            .map(|s| std::path::PathBuf::from(s.as_str()))
-                    })
-                })
-            })
-            .unwrap_or_else(|| self.grok_cwd());
         let sid = id.to_string();
         let (tx, rx) = mpsc::channel();
         self.session_show_rx = Some((sid.clone(), rx));
+        // Read-only: the CLI's saved transcript file, never the CLI itself.
         std::thread::spawn(move || {
-            let mut text = String::new();
-            if let Some(path) = path {
-                text = config::read_file_capped(&path, config::MEMORY_FILE_CAP);
-            }
-            if text.trim().is_empty() {
-                if let Some(bin) = grokhub_acp::find_grok() {
-                    text = grokhub_acp::show_session(&bin, &cwd, &sid).unwrap_or_default();
-                }
-            }
+            let text = path
+                .map(|path| config::read_file_capped(&path, config::MEMORY_FILE_CAP))
+                .unwrap_or_default();
             let _ = tx.send(text);
         });
     }

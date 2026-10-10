@@ -265,40 +265,6 @@ fn emit(line: &str) {
     let _ = out.flush();
 }
 
-/// Register `grokhub-self` in the cabin Grok home once per binary path (an
-/// update can move the exe). Never `~/.grok`. Runs on a thread; a failure
-/// only goes to stderr, and the next start tries again.
-#[cfg(not(test))]
-pub(crate) fn maybe_register_on_start() {
-    let Ok(exe) = std::env::current_exe() else {
-        return;
-    };
-    if registered_here(&exe) {
-        return;
-    }
-    std::thread::spawn(move || {
-        let Some(bin) = grokhub_acp::find_grok() else {
-            return;
-        };
-        if let Err(e) = grokhub_acp::register_self_mcp(&bin, &crate::config::config_dir(), &exe) {
-            eprintln!("self-mcp: could not register: {e}");
-        }
-    });
-}
-
-#[cfg(not(test))]
-fn registered_here(exe: &Path) -> bool {
-    let Some(home) = grokhub_acp::cabin_grok_home() else {
-        return false;
-    };
-    let raw = exe.display().to_string();
-    // TOML basic strings double the backslashes in a Windows path.
-    let escaped = raw.replace('\\', "\\\\");
-    std::fs::read_to_string(home.join("config.toml")).ok().is_some_and(|text| {
-        text.contains(SELF_MCP_SERVER) && text.contains("--mcp-self") && (text.contains(&raw) || text.contains(&escaped))
-    })
-}
-
 pub fn run_stdio() -> i32 {
     let started = crate::desktop_mcp::process_started_ms();
     let dir = crate::config::config_dir();

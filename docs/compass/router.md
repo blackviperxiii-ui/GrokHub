@@ -1,7 +1,7 @@
 # Compass: router (R0 model registry, R1 automatic effort, R2a model healing, R2b cost classes, R3a learning, R3b providers)
 
 ## Owns
-- The model registry in `{config}/models/registry.json`: which Grok models exist, which this plan or key can use, and their state (`ModelState`: probing, live, degraded, quarantined, not_in_plan, redirected, ghost, retired, pruned). Sources share one `CatalogSource` trait; `XaiApiSource` and `GrokBuildSource` are the only router code that touches the network or runs `grok`.
+- The model registry in `{config}/models/registry.json`: which Grok models exist, which this plan or key can use, and their state (`ModelState`: probing, live, degraded, quarantined, not_in_plan, redirected, ghost, retired, pruned). Sources share one `CatalogSource` trait; `XaiApiSource` and `ProviderSource` are the only router code that touches the network.
 - Passive health from real calls (`Observation` lines in `models/health.jsonl`, folded by `fold_health`). No health probes; the onboarding probe (`run_probe`) is the only one, and it only runs on `included` routes.
 - Model profiles in `models/model_profiles/` (`ModelProfile`, versioned, last 3 kept) and `RuntimeSettings::from_profile`, which fill the route record's `settings`.
 - `Router::choose` (pure: inputs, registry and profiles passed in, `now_ms` as the clock) and the `RouteRecord` on each `model-calls` span.

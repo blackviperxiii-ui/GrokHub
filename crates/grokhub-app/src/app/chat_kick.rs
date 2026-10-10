@@ -8,7 +8,6 @@ impl Cabin {
     pub(super) fn send_chat(&mut self, text: String) {
         // Alt+Enter or `/queue`: wait for the live reply instead of steering it.
         let queue_asked = std::mem::take(&mut self.bg.queue_next);
-        self.workflow_status_live = false;
         self.turn_retried = false;
         let mut text = text.trim().to_string();
         if text.is_empty() {
@@ -32,12 +31,11 @@ impl Cabin {
             return;
         }
         self.begin_turn_origin();
-        let thread_native = self.threads.get(self.thread_idx).is_some();
         if self.apply_unparsed_native_slash(&text) {
             return;
         }
         if let Some(recipe) =
-            grokhub_agent::native_deep_research_prompt(self.cfg.native_engine(), thread_native, &text)
+            grokhub_agent::native_deep_research_prompt(&text)
         {
             text = recipe;
         }
@@ -49,7 +47,6 @@ impl Cabin {
             );
             return;
         }
-        let mut steer = None;
         match chat_send_kind(
             self.chat_job_thread.as_deref(),
             &self.visible_thread_id(),
@@ -70,11 +67,8 @@ impl Cabin {
                             return;
                         }
                         LiveSend::Steer => {
-                            if self.native_engine_for_current() {
-                                self.steer_native_live(text);
-                                return;
-                            }
-                            steer = Some(self.stop_turn_for_steer());
+                            self.steer_native_live(text);
+                            return;
                         }
                     }
                 } else {
@@ -92,12 +86,8 @@ impl Cabin {
                         self.status = format!("Queued ({})", self.followup_queue.len());
                         return;
                     }
-                    // The other chat's reply keeps going in the background
-                    // instead of being cut off by this send.
-                    if !self.move_turn_to_background() {
-                        self.halt_in_flight();
-                        self.finish_hub_dispatch("Interrupted", false);
-                    }
+                    self.halt_in_flight();
+                    self.finish_hub_dispatch("Interrupted", false);
                 }
             }
         }
@@ -138,14 +128,12 @@ impl Cabin {
         if self.card_notes_follow.is_some() {
             self.flush_board();
         }
-        // Background results that landed since this chat's last turn, and the
-        // progress of a turn this message just steered.
+        // Background results that landed since this chat's last turn.
         self.bg.results_follow = if self.scheduled_perm {
             None
         } else {
             self.take_bg_results_follow(&notes_thread)
         };
-        self.bg.steer_follow = steer;
         let matched = match_skill(&text, &self.skill_list).map(|sk| {
             (
                 sk.name.clone(),
@@ -186,13 +174,10 @@ impl Cabin {
 
     /// Night, anticipate, and `/send` tasks enqueue through `send_chat` so they
     /// share the composer PermissionMode pill — not a separate always-yolo path.
-    /// `scheduled_perm` makes `kick_model` skip ACP and honor `scheduled_flags`
-    /// / `scheduled_args` (Ask is fail-closed, no `--always-approve`).
+    /// `scheduled_perm` runs the native turn unattended (`native_gate`), so Ask
+    /// is fail-closed and nothing is always-approved behind the user's back.
     pub(super) fn send_scheduled_chat(&mut self, text: String) {
-        // kick_model honors scheduled_flags / scheduled_args while scheduled_perm.
         self.scheduled_perm = true;
-        let _ = self.permission_mode.scheduled_args();
-        let _ = self.permission_mode.scheduled_flags();
         self.send_chat(text);
         if !self.running && self.pending_kick.is_none() {
             self.scheduled_perm = false;
@@ -293,26 +278,10 @@ impl Cabin {
         };
         let with_notes = apply_skill_follow(&raw_ask, self.card_notes_follow.as_deref());
         let with_bg = apply_skill_follow(&with_notes, self.bg.results_follow.as_deref());
-        let with_steer = apply_skill_follow(&with_bg, self.bg.steer_follow.as_deref());
-        let with_skill = apply_skill_follow(&with_steer, self.active_skill_follow.as_deref());
+        let with_skill = apply_skill_follow(&with_bg, self.active_skill_follow.as_deref());
         let last_user = apply_skill_follow(&with_skill, self.idea_talk_brief().as_deref());
         if self.grok_p_rx.is_some() {
             return;
-        }
-        if self.acp_spawn_rx.is_some() {
-            self.pending_kick = Some(consume_attach);
-            return;
-        }
-        self.drop_stale_native_handle();
-        if !self.scheduled_perm && self.permission_mode.uses_acp() && self.acp.is_none() {
-            if let Err(e) = self.ensure_acp() {
-                self.fail_ask_without_acp(&e);
-                return;
-            }
-            if self.acp.is_none() {
-                self.pending_kick = Some(consume_attach);
-                return;
-            }
         }
         let cabin = self.kick_frame.take();
         self.kick_skip = false;
@@ -344,146 +313,15 @@ impl Cabin {
         } else {
             None
         };
-        if self.kick_native_turn(&last_user, image.as_deref(), &raw_ask, &thread_label) {
-            return;
-        }
-        if !self.scheduled_perm && self.permission_mode.uses_acp() {
-            self.side_ask_kick = false;
-            let prompt_err = self
-                .acp
-                .as_ref()
-                .map(|h| h.prompt_with_image(&last_user, image.as_deref()));
-            match prompt_err {
-                Some(Ok(())) => {
-                    // GB runs this turn at the effort the session spawned with (per episode at spawn).
-                    let spawned = grokhub_agent::route::live::start_effort(grokhub_agent::route::live::DEFAULT_CLASS);
-                    let thread = self.threads.get(self.thread_idx).map(|t| t.id.clone()).unwrap_or_default();
-                    grokhub_agent::route::live::route_gb_turn(&crate::config::config_dir(), self.cfg.model.trim(), !self.cfg.model.trim().is_empty(), Some(spawned.as_deref()), &thread, &last_user, self.harness.turn_origin);
-                    self.note_inflight_card(&raw_ask, &thread_label)
-                }
-                Some(Err(e)) => {
-                    self.acp = None;
-                    self.fail_ask_without_acp(&e);
-                }
-                None => self.fail_ask_without_acp(""),
-            }
-            return;
-        }
-        let idx = self
-            .chat_job_thread
-            .as_deref()
-            .and_then(|id| self.threads.iter().position(|t| t.id == id))
-            .unwrap_or(self.thread_idx);
-        let cwd = self
-            .threads
-            .get(idx)
-            .and_then(|t| t.grok_cwd.clone())
-            .filter(|s| !s.trim().is_empty())
-            .map(std::path::PathBuf::from)
-            .unwrap_or_else(|| self.grok_cwd());
-        // A follow-up resumes the open chat. Dropping --resume here started a
-        // new Grok session and History gained a row per prompt.
-        let resume = self.threads.get(idx).and_then(|t| {
-            t.grok_session.clone().filter(|s| !s.trim().is_empty())
-        });
-        let (yolo, auto) = if self.scheduled_perm {
-            self.permission_mode.scheduled_flags()
-        } else {
-            self.permission_mode.composer_headless_flags()
-        };
-        let model = grokhub_core::cabin_spawn_model(&self.cfg.model).to_string();
-        // Automations, loops, and /send tasks run unwatched: always low effort.
-        // A chat you type spawns at the router's pick for this turn (grok -p is one episode).
-        // Auto spawns on the router's model pick; a pin is kept while it is listed.
-        let (model, effort): (String, Option<String>) = if self.scheduled_perm {
-            (model, Some(grokhub_core::BACKGROUND_EFFORT.to_string()))
-        } else {
-            let thread = self.threads.get(idx).map(|t| t.id.clone()).unwrap_or_default();
-            let pinned = !self.cfg.model.trim().is_empty();
-            grokhub_agent::route::live::route_gb_turn(&crate::config::config_dir(), &model, pinned, None, &thread, &last_user, self.harness.turn_origin)
-        };
-        let resume_in_cabin = resume
-            .as_deref()
-            .is_some_and(grokhub_acp::cabin_has_session);
-        let user_home = grokhub_acp::use_user_grok_home(
-            self.threads
-                .get(idx)
-                .map(|t| t.grok_user_home)
-                .unwrap_or(false),
-            resume_in_cabin,
-        );
-        let fork = self.threads.get(idx).map(|t| t.grok_fork).unwrap_or(false);
-        let mode = if self.side_ask_kick {
-            SessionMode::Ask
-        } else {
-            self.session_mode
-        };
-        self.side_ask_kick = false;
-        let worktree = self
-            .threads
-            .get(idx)
-            .map(|t| t.grok_worktree)
-            .unwrap_or(false);
-        if self.cfg.native_engine() && self.scheduled_perm {
-            self.start_native_scheduled(
-                &last_user,
-                cwd,
-                &model,
-                effort,
-                mode,
-                image,
-            );
-            if self.grok_p_rx.is_some() {
-                self.note_inflight_card(&raw_ask, &thread_label);
-            }
-            return;
-        }
-        match grokhub_acp::spawn_grok_p_stream(
-            &last_user,
-            &cwd,
-            resume.as_deref(),
-            yolo,
-            auto,
-            Some(model.as_str()),
-            effort.as_deref(),
-            mode,
-            grokhub_acp::GrokPAttach {
-                image: image.as_deref(),
-                learned: &grokhub_core::brief_for(&self.learning, "chat"),
-                deny: self.permission_mode.needs_approval(),
-                desktop: self.cfg.desktop_control,
-                hard_deny: &grokhub_agent::harness::HEADLESS_DENY_RULES,
-            },
-            fork,
-            user_home,
-            worktree,
-        ) {
-            Ok((pid, rx)) => {
-                self.grok_p_pid = Some(pid);
-                self.grok_p_rx = Some(rx);
-                if let Some(t) = self.threads.get_mut(idx) {
-                    t.grok_user_home = user_home;
-                }
-                self.note_inflight_card(&raw_ask, &thread_label);
-            }
-            Err(e) => {
-                self.abandon_turn_card();
-                self.running = false;
-                self.scheduled_perm = false;
-                self.status = self.apply_job_fail(&e);
-                self.chat_job_thread = None;
-            }
-        }
+        self.kick_native_turn(&last_user, image.as_deref(), &raw_ask, &thread_label);
     }
 
     pub(super) fn kick_model_retry(&mut self, t: String) {
         self.try_again = false;
-        // A retry re-runs the same ask: keep its steer and background notes,
-        // which halting clears and `send_chat` will not set again.
-        let steer = self.bg.steer_follow.take();
+        // A retry re-runs the same ask: keep its background notes, which
+        // halting clears and `send_chat` will not set again.
         let results = self.bg.results_follow.take();
         self.halt_in_flight();
-        self.bg.steer_follow = steer;
         self.bg.results_follow = results;
         self.active_skill_follow = None;
         if let Some(sk) = match_skill(&t, &self.skill_list) {
@@ -498,7 +336,7 @@ impl Cabin {
         let Some(consume) = self.pending_kick else {
             return;
         };
-        if self.acp_spawn_rx.is_some() || self.grok_p_rx.is_some() {
+        if self.grok_p_rx.is_some() {
             return;
         }
         if self.kick_frame.is_some()

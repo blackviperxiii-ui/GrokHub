@@ -126,12 +126,8 @@ impl Cabin {
             Some(e) => e.last_ms = now,
             None => {
                 let e = EpisodeUi::new(&trace, now);
-                let native = self.native_engine_for_current();
-                self.harness.episode = Some(e);
                 // The native kernel writes its own begin marker.
-                if !native {
-                    self.write_episode_marker("begin", "open", "goal: your message");
-                }
+                self.harness.episode = Some(e);
             }
         }
     }
@@ -144,16 +140,12 @@ impl Cabin {
         if self.running {
             return;
         }
-        let native = self.native_engine_for_current();
         let Some(e) = self.harness.episode.as_mut() else {
             self.send_chat(RESUME_TEXT.into());
             return;
         };
         e.resume = true;
         e.last_ms = now_ms();
-        if !native {
-            self.write_episode_marker("resume", "continue", "you approved; the run goes on");
-        }
         self.send_chat(RESUME_TEXT.into());
     }
 
@@ -170,7 +162,7 @@ impl Cabin {
         let Some(e) = self.harness.episode.clone() else {
             return;
         };
-        let kernel_writes = self.running && self.native_engine_for_current() && why != ep::EpisodeEnd::Idle;
+        let kernel_writes = self.running && why != ep::EpisodeEnd::Idle;
         if !kernel_writes {
             let mut span = hx::Span::deny(&e.chat_id, ep::EPISODE_TOOL, "{}", why.as_str(), "soft");
             span.decision = "end".into();
@@ -216,13 +208,6 @@ impl Cabin {
         self.harness.park.iter().chain(self.harness.queue.iter()).any(|p| self.episode_park(p))
     }
 
-    fn write_episode_marker(&self, decision: &str, result: &str, claim: &str) {
-        let mut span = hx::Span::deny(&self.trace_id(), ep::EPISODE_TOOL, "{}", result, "soft");
-        span.decision = decision.into();
-        span.claim = claim.into();
-        self.write_span(span, "E");
-    }
-
     /// Throttled from `poll_harness`: the idle end and the header's step count.
     pub(super) fn poll_episode(&mut self) {
         let now = now_ms();
@@ -260,7 +245,7 @@ impl Cabin {
     /// A native turn ended: read how (`Done` stop reason) and the kernel's
     /// newest ladder pause span.
     pub(super) fn episode_turn_done(&mut self, stop_reason: &str) {
-        if self.harness.episode.is_none() || !self.native_engine_for_current() {
+        if self.harness.episode.is_none() {
             return;
         }
         if let Some(e) = self.harness.episode.as_mut() {
@@ -381,7 +366,8 @@ mod tests {
             .filter(|s| s.tool == ep::EPISODE_TOOL)
             .map(|s| (s.decision.as_str(), s.result.as_str()))
             .collect();
-        assert_eq!(marks, vec![("begin", "open"), ("end", "halt")]);
+        // The native kernel writes the begin marker when the turn runs.
+        assert_eq!(marks, vec![("end", "halt")]);
         // With desktop control off, a message opens nothing.
         cabin.cfg.desktop_control = false;
         cabin.harness_user_sent();
@@ -468,15 +454,13 @@ mod tests {
     #[test]
     fn approving_the_last_pause_with_no_reply_running_resumes_and_never_mid_turn() {
         let (_pin, root) = pinned("episode-approve-resume");
-        let _hide = crate::app::tests::HideGrok::arm();
         let mut cabin = desk_cabin();
         cabin.harness_user_sent();
         soft_park(&mut cabin);
         soft_park(&mut cabin);
         cabin.answer_soft_park(0, true, "");
-        assert_eq!(resume_marks(&root), 0, "one pause is still open");
+        assert!(!cabin.episode_here().unwrap().resume, "one pause is still open");
         cabin.answer_soft_park(0, true, "");
-        assert_eq!(resume_marks(&root), 1, "the last Approve resumes the run");
         assert!(cabin.episode_here().unwrap().resume);
         assert_eq!(cabin.status, "Resumed");
         // Mid-turn the live run picks the answer up: nothing is sent twice.
@@ -486,7 +470,6 @@ mod tests {
         cabin.grok_p_rx = Some(rx);
         cabin.running = true;
         cabin.answer_soft_park(0, true, "");
-        assert_eq!(resume_marks(&root), 1);
         assert!(!cabin.episode_here().unwrap().resume);
         // Deny is unchanged: the episode stays open and nothing resumes.
         cabin.running = false;
@@ -494,14 +477,14 @@ mod tests {
         soft_park(&mut cabin);
         cabin.answer_soft_park(0, false, "Denied");
         assert_eq!(cabin.status, "Stopped that step");
-        assert_eq!(resume_marks(&root), 1);
+        assert!(!cabin.episode_here().unwrap().resume);
         assert!(cabin.harness.episode.is_some());
+        assert_eq!(resume_marks(&root), 0, "the native kernel writes the resume marker");
     }
 
     #[test]
     fn approving_a_kernel_park_after_the_turn_ended_goes_on() {
         let (_pin, root) = pinned("episode-park-resume");
-        let _hide = crate::app::tests::HideGrok::arm();
         let mut cabin = desk_cabin();
         cabin.harness_user_sent();
         let eid = cabin.episode_span_id();
@@ -519,7 +502,6 @@ mod tests {
         cabin.resolve_hard_park(true, "");
         assert_eq!(hx::take_answer(&root, &id), Some(true), "the kernel reads the Approve");
         assert_eq!(cabin.status, "Approved once · Send · going on");
-        assert_eq!(resume_marks(&root), 1);
         assert!(cabin.episode_here().unwrap().resume);
         // With a reply running the live kernel runs it; no second send.
         cabin.episode_resume_sent();
@@ -532,7 +514,7 @@ mod tests {
         cabin.resolve_hard_park(true, "");
         assert_eq!(hx::take_answer(&root, &id), Some(true));
         assert_eq!(cabin.status, "Approved once · Send");
-        assert_eq!(resume_marks(&root), 1);
+        assert_eq!(resume_marks(&root), 0, "the native kernel writes the resume marker");
         assert!(!cabin.episode_here().unwrap().resume);
     }
 

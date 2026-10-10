@@ -285,11 +285,6 @@ pub enum CompleteError {
     Forbidden,
 }
 
-/// Do not claim a queued `/send` task when chat cannot run.
-pub fn inbox_claim_ready(has_key: bool) -> bool {
-    has_key
-}
-
 /// Drop `pending_hub_task` only when the inbox row is gone or completed.
 pub fn clear_pending_after_complete(err: Option<CompleteError>) -> bool {
     match err {
@@ -707,11 +702,6 @@ mod tests {
             st.enqueue_local("local", &format!("do {i}")).unwrap();
         }
         assert_eq!(st.inbox.len(), 80);
-        assert!(inbox_claim_ready(true));
-        assert!(
-            !inbox_claim_ready(false),
-            "do not claim a queued task when chat cannot run"
-        );
         let mut stuck = HubState::empty();
         let hub = stuck.device_id.clone();
         let mut row = HubTask::enqueue(&hub, "cabin", &hub, "Flash", "flash the pi", 1);

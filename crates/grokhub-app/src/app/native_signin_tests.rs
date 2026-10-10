@@ -130,7 +130,6 @@ impl Sandbox {
             prev.push((key, std::env::var_os(key)));
             std::env::set_var(key, root.join(dir));
         }
-        grokhub_acp::invalidate_grok_key_cache();
         crate::oauth::set_token_url_for_test(None);
         set_responses_url_for_test(None);
         Self {
@@ -149,7 +148,6 @@ impl Sandbox {
     fn cabin(&self) -> Cabin {
         let mut cabin = Cabin::quiet_for_test();
         cabin.secrets = crate::secrets::load();
-        cabin.cfg.grok_build_engine = false;
         let mut thread = crate::threads::ChatThread::new("Lab chat", false);
         thread.native = true;
         thread.grok_cwd = Some(self.root.join("work").display().to_string());
@@ -169,7 +167,6 @@ impl Drop for Sandbox {
                 None => std::env::remove_var(key),
             }
         }
-        grokhub_acp::invalidate_grok_key_cache();
         let _ = std::fs::remove_dir_all(&self.root);
     }
 }
@@ -187,9 +184,9 @@ fn run_turn(cabin: &mut Cabin, prompt: &str) -> String {
             "no Done; text so far: {text}"
         );
         match handle.try_recv() {
-            Ok(grokhub_acp::AcpEvent::Text(t)) => text.push_str(&t),
-            Ok(grokhub_acp::AcpEvent::Err(e)) => panic!("native turn failed: {e}"),
-            Ok(grokhub_acp::AcpEvent::Done { .. }) => break,
+            Ok(grokhub_core::wire::AcpEvent::Text(t)) => text.push_str(&t),
+            Ok(grokhub_core::wire::AcpEvent::Err(e)) => panic!("native turn failed: {e}"),
+            Ok(grokhub_core::wire::AcpEvent::Done { .. }) => break,
             Ok(_) => {}
             Err(_) => std::thread::sleep(Duration::from_millis(10)),
         }
@@ -361,7 +358,6 @@ fn native_signin_missing_gives_exact_message() {
         r#"{"https://auth.x.ai::fake":{"key":"test-cli-token"}}"#,
     )
     .unwrap();
-    grokhub_acp::invalidate_grok_key_cache();
     let err = cabin.native_cred().unwrap_err();
     assert_eq!(err, "Sign in with Grok or add an API key.");
     assert_eq!(cabin.bearer(), "", "the chips and Imagine bearer ignores the CLI login too");
@@ -372,9 +368,6 @@ fn native_signin_missing_gives_exact_message() {
     cabin.cfg.get_started_done = true;
     assert!(!cabin.ui_wants_get_started(), "a finished Get Started stays finished");
     cabin.cfg.get_started_done = false;
-    cabin.cfg.grok_build_engine = true;
-    assert!(!cabin.ui_wants_get_started(), "the legacy engine keeps its own rules");
-    cabin.cfg.grok_build_engine = false;
 
     // An API key stays a working alternative.
     cabin.secrets.api_key = "test-console-key".into();
@@ -456,7 +449,6 @@ fn imagine_cred_reuses_account_oauth_without_imagine_keychain() {
         future_ms()
     ));
     let mut cabin = sb.cabin();
-    cabin.cfg.grok_build_engine = true;
     assert!(
         cabin.imagine_native.tokens.is_none(),
         "Imagine keychain empty"
@@ -505,7 +497,6 @@ fn kick_imagine_with_account_oauth_starts_without_second_signin() {
         future_ms()
     ));
     let mut cabin = sb.cabin();
-    cabin.cfg.grok_build_engine = true;
     cabin.imagine_native.tokens = None;
     cabin.imagine_prompt = "harbor at dusk".into();
     // Force-key path off; no console key. Account alone must be enough to leave
@@ -551,8 +542,8 @@ fn wait_done(cabin: &Cabin) {
     loop {
         assert!(start.elapsed() < Duration::from_secs(20), "no Done");
         match handle.try_recv() {
-            Ok(grokhub_acp::AcpEvent::Err(e)) => panic!("native turn failed: {e}"),
-            Ok(grokhub_acp::AcpEvent::Done { .. }) => return,
+            Ok(grokhub_core::wire::AcpEvent::Err(e)) => panic!("native turn failed: {e}"),
+            Ok(grokhub_core::wire::AcpEvent::Done { .. }) => return,
             Ok(_) => {}
             Err(_) => std::thread::sleep(Duration::from_millis(10)),
         }
@@ -585,7 +576,6 @@ fn a_cli_era_chat_moves_to_the_native_engine_with_a_recap_once() {
         thread.messages = Arc::new(turns.clone());
     }
     cabin.messages = Arc::new(turns);
-    assert!(cabin.native_engine_for_current());
 
     assert!(cabin.kick_native_turn("what about lunch", None, "what about lunch", "Lab chat"));
     wait_done(&cabin);

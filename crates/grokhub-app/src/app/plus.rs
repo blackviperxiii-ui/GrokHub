@@ -298,7 +298,6 @@ impl Cabin {
         self.last_receipt_ok = None;
         if !keep_acp {
             self.acp = None;
-            self.acp_spawn_rx = None;
             self.perm_ask = None;
             self.perm_queue.clear();
             self.perm_always_confirm = None;

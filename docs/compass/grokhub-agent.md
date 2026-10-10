@@ -1,8 +1,8 @@
 # Compass: grokhub-agent (native Lab engine)
 
 ## Owns
-- The native xAI Responses engine used when Settings → Labs turns on `native_engine`: sync HTTP client, agent loop, tools, permission gate and rule engine, MCP client, hooks, skills, plugins, subagents, memory, sessions, unattended runs, and the dry-run eval.
-- Off (the default) keeps the Grok CLI launch path in grokhub-acp; this crate is then mostly idle.
+- The native xAI Responses engine: sync HTTP client, agent loop, tools, permission gate and rule engine, MCP client, hooks, skills, plugins, subagents, memory, sessions, unattended runs, and the dry-run eval.
+- It is the only engine: every chat, background, and scheduled turn runs here; nothing launches the Grok Build CLI.
 ## Quick commands
 - `cargo test -p grokhub-agent --locked -- --test-threads=1`
 - `cargo test -p grokhub-agent --test mcp_transport` (spawns the `fake_mcp` bin)
@@ -28,4 +28,4 @@
 - No tokio: MCP uses one worker thread per stdio child or HTTP read.
 - MCP browser sign-in (`crates/grokhub-agent/src/mcp/oauth.rs`, pure parts in `crates/grokhub-core/src/mcp_oauth.rs`, PKCE in `crates/grokhub-core/src/pkce.rs`): a remote server with no `Authorization` on its entry signs in from its Native MCP row. The sign-in is sealed by `seal_mcp_signin` (keyring key, next to the connection tokens), refreshed a minute before expiry, and refreshed once on a 401 before the row asks for a new sign-in. An entry that carries its own header or `tokenRef` never uses it.
 ## See also
-- [harness](harness.md), [grokhub-acp](grokhub-acp.md), [slash](slash.md), [app-config](app-config.md)
+- [harness](harness.md), [desktop-mcp](desktop-mcp.md), [slash](slash.md), [app-config](app-config.md)

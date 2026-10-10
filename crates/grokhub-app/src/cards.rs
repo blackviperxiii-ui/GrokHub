@@ -4394,7 +4394,7 @@ mod tests {
         );
         assert!(
             app.contains("ui_get_started")
-                && app.contains("should_show_get_started")
+                && app.contains("ui_wants_get_started")
                 && app.contains("start_oauth")
                 && app.contains("oauth_err"),
             "Get Started must use cabin device-code OAuth and surface errors: {app}"

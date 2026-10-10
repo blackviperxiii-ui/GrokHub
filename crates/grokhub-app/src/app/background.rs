@@ -1,21 +1,19 @@
 //! Background runs beside the chat, and steering a live reply.
 //!
-//! The composer owns one live turn (`grok_p_rx` / ACP). A background run is a
-//! separate headless `grok -p` with its own receiver: `/bg <task>`, a
-//! `BACKGROUND_TASK:` line in Grok's reply, or a live reply moved off the
-//! composer. It forks the chat's session instead of writing into it, and its
+//! The composer owns one live turn. A background run is a separate native
+//! engine session with its own receiver: `/bg <task>` or a `BACKGROUND_TASK:`
+//! line in Grok's reply. It forks the chat's session instead of writing into it, and its
 //! reply is posted on the chat that started it once that chat is not mid-turn.
 //!
-//! Steering is a message typed while this chat's reply runs: the turn stops
-//! where it is, what it said stays in the transcript, and the next turn carries
-//! the new message with a note of the progress (`steer_follow_block`).
+//! Steering is a message typed while this chat's reply runs: the engine takes
+//! it at the next tool boundary and the turn keeps going.
 
 use super::*;
 use grokhub_agent::harness as hx;
 use grokhub_agent::Engine;
 use grokhub_core::{
     bg_elapsed_label, bg_result_note, bg_result_post, bg_results_follow, bg_task_prompt,
-    bg_task_title, can_detach_turn, chat_run_dot_alpha, extract_background_tasks, steer_follow_block,
+    bg_task_title, chat_run_dot_alpha, extract_background_tasks,
     BgEnd, BgOrigin, BG_TASK_MAX,
 };
 
@@ -53,13 +51,12 @@ pub(super) fn hide_background_session(id: &str) {
     }
 }
 
-/// One background `grok -p`. Not saved: the child dies with the cabin.
+/// One background engine run. Not saved: it stops with the cabin.
 pub(super) struct BgRun {
     pub id: u64,
     pub thread_id: String,
     pub title: String,
     pub origin: BgOrigin,
-    pub pid: Option<u32>,
     pub rx: Option<mpsc::Receiver<GrokPEvent>>,
     /// Reply text so far (not thoughts).
     pub say: String,
@@ -74,7 +71,7 @@ pub(super) struct BgRun {
     /// This run set `grok_fork` on its chat so the next composer turn forks
     /// instead of writing the same session at the same time.
     pub fork_hold: bool,
-    /// Native `/bg` session. Halt and delete cancel this engine. CLI runs leave it empty.
+    /// Native `/bg` session. Halt and delete cancel this engine.
     pub native_session: Option<String>,
     /// The automation a scheduled run settles when it ends.
     pub automation: Option<String>,
@@ -101,8 +98,6 @@ pub(super) struct BgWork {
     pub unread: Vec<(String, String)>,
     /// Background results for the turn being kicked. Set on each send.
     pub results_follow: Option<String>,
-    /// Steer context for the turn being kicked. Set on each send.
-    pub steer_follow: Option<String>,
     /// Alt+Enter (or `/queue`): this send waits for the live reply instead of steering it.
     pub queue_next: bool,
 }
@@ -171,81 +166,14 @@ impl Cabin {
                 "{BG_TASK_MAX} background tasks are already running — stop one first"
             ));
         }
-        if self.native_bg_target(thread_id) {
-            return self.start_native_bg(task, thread_id, origin);
-        }
-        if !self.can_agent() {
-            return Err("Install Grok Build (x.ai/cli) or Connect Grok in Settings".into());
-        }
-        let idx = self.threads.iter().position(|t| t.id == thread_id);
-        let thread = idx.and_then(|i| self.threads.get(i));
-        let cwd = thread
-            .and_then(|t| t.grok_cwd.clone())
-            .filter(|s| !s.trim().is_empty())
-            .map(std::path::PathBuf::from)
-            .unwrap_or_else(|| self.grok_cwd());
-        let resume = thread
-            .and_then(|t| t.grok_session.clone())
-            .filter(|s| !s.trim().is_empty());
-        let resume_in_cabin = resume
-            .as_deref()
-            .is_some_and(grokhub_acp::cabin_has_session);
-        let user_home = grokhub_acp::use_user_grok_home(
-            thread.map(|t| t.grok_user_home).unwrap_or(false),
-            resume_in_cabin,
-        );
-        let worktree = thread.map(|t| t.grok_worktree).unwrap_or(false);
-        let (yolo, auto) = self.permission_mode.scheduled_flags();
-        let model = grokhub_core::cabin_spawn_model(&self.cfg.model).to_string();
-        let effort = self.bg_effort(origin);
-        let prompt = bg_task_prompt(task);
-        let (pid, rx) = grokhub_acp::spawn_grok_p_stream(
-            &prompt,
-            &cwd,
-            resume.as_deref(),
-            yolo,
-            auto,
-            Some(model.as_str()),
-            effort.as_deref(),
-            self.session_mode,
-            grokhub_acp::GrokPAttach {
-                image: None,
-                learned: &grokhub_core::brief_for(&self.learning, "chat"),
-                deny: self.permission_mode.needs_approval(),
-                desktop: self.cfg.desktop_control,
-                hard_deny: &grokhub_agent::harness::HEADLESS_DENY_RULES,
-            },
-            resume.is_some(),
-            user_home,
-            worktree,
-        )?;
-        let title = bg_task_title(task);
-        self.bg.next_id += 1;
-        self.bg.runs.push(BgRun {
-            id: self.bg.next_id,
-            thread_id: thread_id.to_string(),
-            title: title.clone(),
-            origin,
-            pid: Some(pid),
-            rx: Some(rx),
-            say: String::new(),
-            action: String::new(),
-            started: Instant::now(),
-            end: None,
-            session: String::new(),
-            resumed: resume,
-            fork_hold: false,
-            native_session: None,
-            automation: None,
-        });
-        Ok(title)
+        self.start_native_bg(task, thread_id, origin)
     }
 
     /// A scheduled job or `/loop` run started (Spike-4c): one span with origin
     /// `automation`. The job id only, never its instructions.
     pub(super) fn automation_span(&self, trace: &str, job: &str) {
         let args = serde_json::json!({ "job": job }).to_string();
-        let driver = if self.cfg.native_engine() { "native" } else { "grok_build" };
+        let driver = "native";
         let span = hx::Span::soft_allow(trace, AUTOMATION_TOOL, &args, "started", "scheduled run", self.access_mode(), driver)
             .from_origin(hx::Origin::Automation)
             .on_path("automation");
@@ -263,19 +191,15 @@ impl Cabin {
         }
     }
 
-    fn native_bg_target(&self, thread_id: &str) -> bool {
-        self.cfg.native_engine() && self.threads.iter().any(|t| t.id == thread_id)
-    }
-
-    fn native_bg_gate(&self) -> grokhub_agent::Gate {
+    pub(super) fn native_bg_gate(&self) -> grokhub_agent::Gate {
         let readonly = matches!(
             self.session_mode,
-            grokhub_acp::SessionMode::Plan | grokhub_acp::SessionMode::Ask
+            grokhub_core::wire::SessionMode::Plan | grokhub_core::wire::SessionMode::Ask
         );
         let mode = match self.permission_mode {
-            grokhub_acp::PermissionMode::Ask => grokhub_agent::PermMode::Ask,
-            grokhub_acp::PermissionMode::Auto => grokhub_agent::PermMode::Auto,
-            grokhub_acp::PermissionMode::AlwaysApprove => grokhub_agent::PermMode::Always,
+            grokhub_core::wire::PermissionMode::Ask => grokhub_agent::PermMode::Ask,
+            grokhub_core::wire::PermissionMode::Auto => grokhub_agent::PermMode::Auto,
+            grokhub_core::wire::PermissionMode::AlwaysApprove => grokhub_agent::PermMode::Always,
         };
         grokhub_agent::Gate {
             mode,
@@ -319,7 +243,7 @@ impl Cabin {
         crate::desktop_mcp::sync_native_cua(&self.cfg);
         let model = grokhub_core::cabin_spawn_model(&self.cfg.model).to_string();
         let effort = self.bg_effort(origin);
-        let rules = grokhub_acp::cabin_rules_for(
+        let rules = grokhub_core::cabin_rules::cabin_rules_for(
             &grokhub_core::brief_for(&self.learning, "chat"),
             self.cfg.desktop_control,
         );
@@ -346,7 +270,6 @@ impl Cabin {
             thread_id: thread_id.to_string(),
             title: title.clone(),
             origin,
-            pid: None,
             rx: Some(rx),
             say: String::new(),
             action: String::new(),
@@ -404,106 +327,6 @@ impl Cabin {
                 (n, m) => format!("Grok started {n} background tasks · {m} not started"),
             };
         }
-    }
-
-    /// A plain headless chat turn that could keep running without the composer.
-    /// Ask is not part of this: the pill hides the move, and the caller says why.
-    fn headless_turn_can_detach(&self) -> bool {
-        let headless = self.grok_p_rx.is_some() && self.grok_p_pid.is_some();
-        let side_work = self.pending_kick.is_some()
-            || self.kick_cap_rx.is_some()
-            || self.verify_rx.is_some()
-            || self.host_diff_rx.is_some()
-            || self.background_tasks_open()
-            || self.job_on_background_thread()
-            || self.job_is_idea_talk();
-        self.running
-            && self.chat_job_thread.is_some()
-            && self.bg.live_count() < BG_TASK_MAX
-            && can_detach_turn(headless, self.acp.is_some(), self.scheduled_perm, side_work)
-    }
-
-    /// The live reply is a plain headless chat turn that can keep running without
-    /// the composer, and there is room for one more background run. Ask cannot
-    /// move it: a background run has nobody to approve a tool.
-    pub(super) fn can_move_turn_to_background(&self) -> bool {
-        self.headless_turn_can_detach() && !self.permission_mode.needs_approval()
-    }
-
-    /// Hand the live `grok -p` child to a background run without killing it and
-    /// free the composer. Its reply posts on the same chat when it ends.
-    pub(super) fn move_turn_to_background(&mut self) -> bool {
-        if !self.can_move_turn_to_background() {
-            return false;
-        }
-        let Some(thread_id) = self.chat_job_thread.clone() else {
-            return false;
-        };
-        let (Some(rx), Some(pid)) = (self.grok_p_rx.take(), self.grok_p_pid.take()) else {
-            return false;
-        };
-        let mut title = bg_task_title(&self.last_ask_on(&thread_id));
-        if title.is_empty() {
-            title = "Reply".into();
-        }
-        let action = self
-            .turn_log
-            .iter()
-            .rev()
-            .find(|b| b.kind == LiveKind::Tool && !b.tool_title.is_empty())
-            .map(|b| b.tool_title.clone())
-            .unwrap_or_default();
-        let mut resumed = None;
-        let mut fork_hold = false;
-        if let Some(t) = self.threads.iter_mut().find(|t| t.id == thread_id) {
-            resumed = t.grok_session.clone().filter(|s| !s.trim().is_empty());
-            if resumed.is_some() && !t.grok_fork {
-                t.grok_fork = true;
-                fork_hold = true;
-            }
-        }
-        self.bg.next_id += 1;
-        self.bg.runs.push(BgRun {
-            id: self.bg.next_id,
-            thread_id: thread_id.clone(),
-            title: title.clone(),
-            origin: BgOrigin::Detached,
-            pid: Some(pid),
-            rx: Some(rx),
-            say: std::mem::take(&mut self.stream_buf),
-            action,
-            started: Instant::now(),
-            end: None,
-            session: String::new(),
-            resumed,
-            fork_hold,
-            native_session: None,
-            automation: None,
-        });
-        // The Doing card stays up: the work goes on. The run settles it.
-        self.inflight_open = false;
-        self.running = false;
-        self.turn_retried = false;
-        self.speak_next = false;
-        self.followup_step = 0;
-        self.active_skill_follow = None;
-        self.thought_buf.clear();
-        self.turn_log.clear();
-        self.thought_seam = false;
-        self.say_seam = false;
-        if thread_id == self.visible_thread_id() {
-            self.tool_cards.clear();
-            self.live_blocks.clear();
-            if self.messages.last().is_some_and(|m| m.0 == "assistant") {
-                self.live_mut().pop();
-            }
-        } else if let Some(t) = self.threads.iter_mut().find(|t| t.id == thread_id) {
-            drop_trailing_assistant(t.messages_mut());
-        }
-        self.chat_job_thread = None;
-        self.status = format!("Moved to background · {title}");
-        self.persist();
-        true
     }
 
     /// File the sessions headless work reported on the hidden Background chat.
@@ -578,7 +401,7 @@ impl Cabin {
                     Ok(GrokPEvent::Err(e)) => {
                         // Stop drops the receiver first, so a SIGTERM that
                         // reaches here came from outside GrokHub.
-                        run.end = Some(if grokhub_acp::is_sigterm_status(&e) {
+                        run.end = Some(if grokhub_core::proc_util::is_sigterm_status(&e) {
                             crashed.push(bg_crash_card(run));
                             BgEnd::Stopped
                         } else {
@@ -602,8 +425,6 @@ impl Cabin {
             }
             if keep {
                 run.rx = Some(rx);
-            } else {
-                run.pid = None;
             }
         }
         for card in crashed {
@@ -754,9 +575,6 @@ impl Cabin {
     pub(super) fn stop_bg_run(&mut self, id: u64) {
         if let Some(run) = self.bg.runs.iter_mut().find(|r| r.id == id && r.live()) {
             run.stop_native();
-            if let Some(pid) = run.pid.take() {
-                kill_pid(pid);
-            }
             run.rx = None;
             run.end = Some(BgEnd::Stopped);
         }
@@ -786,9 +604,6 @@ impl Cabin {
             let mut run = self.bg.runs.remove(i);
             n += 1;
             run.stop_native();
-            if let Some(pid) = run.pid.take() {
-                kill_pid(pid);
-            }
             run.rx = None;
             if run.origin == BgOrigin::Detached {
                 detached = true;
@@ -805,9 +620,6 @@ impl Cabin {
     pub(super) fn kill_bg_runs(&mut self) {
         for run in self.bg.runs.iter_mut() {
             run.stop_native();
-            if let Some(pid) = run.pid.take() {
-                kill_pid(pid);
-            }
             run.rx = None;
         }
         self.bg.runs.clear();
@@ -838,9 +650,7 @@ impl Cabin {
             && !self.job_is_idea_talk()
     }
 
-    /// Stop this tab's live turn for a steering message. What it already said
-    /// stays in the transcript. Returns the context block for the next turn.
-    /// Native steer lands at the next tool boundary. The live turn keeps running.
+    /// A steering message lands at the next tool boundary. The live turn keeps running.
     pub(super) fn steer_native_live(&mut self, text: String) {
         let text = text.trim().to_string();
         if text.is_empty() {
@@ -853,61 +663,11 @@ impl Cabin {
         self.status = "Steering…".into();
     }
 
-    pub(super) fn stop_turn_for_steer(&mut self) -> String {
-        let prev = last_user_scan(self.messages.iter().map(|m| (m.0.as_str(), m.1.as_str())))
-            .unwrap_or_default();
-        let tools: Vec<String> = self
-            .turn_log
-            .iter()
-            .filter(|b| b.kind == LiveKind::Tool)
-            .map(|b| b.tool_title.clone())
-            .collect();
-        let block = steer_follow_block(&prev, &self.stream_buf, &tools);
-        // What the stopped turn showed, with tools that were still running marked
-        // cancelled so the transcript does not hold a spinner forever.
-        let kept = self
-            .messages
-            .last()
-            .filter(|m| m.0 == "assistant" && !m.1.trim().is_empty())
-            .map(|m| {
-                let mut log = self.turn_log.clone();
-                for b in log.iter_mut().filter(|b| {
-                    b.kind == LiveKind::Tool
-                        && grokhub_core::turn_timeline::tool_status_running(&b.tool_status)
-                }) {
-                    b.tool_status = "cancelled".into();
-                }
-                if turn_needs_timeline(&log) {
-                    take_ui_text(encode_turn(&log), TEXT_FILE_CAP as u64)
-                } else {
-                    m.1.clone()
-                }
-            })
-            .filter(|body| !body.trim().is_empty());
-        // A steerable turn is never a scheduled one, so no automation settles here.
-        // Parked cards and their spans outlive the steer (Spike-1a).
-        let parks = self.take_parks_for_steer();
-        self.halt_in_flight();
-        self.restore_parks_after_steer(parks);
-        if let Some(body) = kept {
-            let body = self.scrub_transcript(body);
-            self.live_mut().push(("assistant".into(), body));
-        }
-        self.status = "Steering…".into();
-        block
-    }
-
     /// `/bg`, `/bg stop`, `/bg <task>`.
     pub(super) fn run_bg_slash(&mut self, arg: &str) {
         let arg = arg.trim();
         if arg.is_empty() {
-            if self.permission_mode.needs_approval() && self.headless_turn_can_detach() {
-                self.status = BG_ASK_OFF.into();
-                return;
-            }
-            if self.move_turn_to_background() {
-                self.drain_followup_queue();
-            } else if self.running {
+            if self.running {
                 self.status = if self.bg.live_count() >= BG_TASK_MAX {
                     format!("{BG_TASK_MAX} background tasks are already running — stop one first")
                 } else {
@@ -915,7 +675,6 @@ impl Cabin {
                 };
             } else {
                 self.status = match self.bg.live_count() {
-                    0 if self.permission_mode.needs_approval() => BG_ASK_OFF.into(),
                     0 => "No background tasks — /bg <task> starts one".into(),
                     n => format!("{n} background running"),
                 };
@@ -931,10 +690,6 @@ impl Cabin {
             return;
         }
         let visible = self.visible_thread_id();
-        if self.permission_mode.needs_approval() && !self.native_bg_target(&visible) {
-            self.status = BG_ASK_OFF.into();
-            return;
-        }
         match self.start_bg_task(arg, &visible, BgOrigin::User) {
             Ok(title) => self.status = format!("Background · {title}"),
             Err(e) => self.status = e,
@@ -1181,7 +936,7 @@ fn run_native_bg(
             let _ = tx.send(GrokPEvent::Err(err));
         }
         AcpEvent::Done { stop_reason } => {
-            let _ = tx.send(GrokPEvent::End(grokhub_acp::SingleTurn {
+            let _ = tx.send(GrokPEvent::End(grokhub_core::wire::SingleTurn {
                 session_id: session.clone(),
                 text: say.clone(),
                 thought: String::new(),

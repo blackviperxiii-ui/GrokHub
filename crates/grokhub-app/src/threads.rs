@@ -41,8 +41,6 @@ pub struct ChatThread {
     pub background: bool,
     #[serde(default)]
     pub grok_fork: bool,
-    #[serde(default)]
-    pub grok_worktree: bool,
     /// Session show has not filled this row. Pin and rename must not store `messages: []`
     /// as if that were the transcript.
     #[serde(default)]
@@ -79,7 +77,6 @@ impl ChatThread {
             grok_cwd: None,
             grok_user_home: false,
             grok_fork: false,
-            grok_worktree: false,
             grok_show_pending: false,
             project_id: None,
             background: false,
@@ -361,12 +358,10 @@ pub fn grok_session_homes() -> Vec<(std::path::PathBuf, bool)> {
     #[cfg(not(test))]
     {
         let mut homes = Vec::new();
-        if let Some(home) = grokhub_acp::grok_home() {
+        if let Some(home) = grokhub_core::cli_history::grok_home() {
             homes.push((home, true));
         }
-        if let Some(home) = grokhub_acp::cabin_grok_home() {
-            homes.push((home, false));
-        }
+        homes.push((crate::config::cabin_grok_home(), false));
         homes
     }
 }
