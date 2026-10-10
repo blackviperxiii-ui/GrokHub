@@ -1456,14 +1456,18 @@ impl Cabin {
             c.migrate_pulse_store();
             c.ensure_useful_ideas();
             grokhub_acp::silence_windows_hard_errors();
-            // Official alpha when missing/unusable; pin a working CLI. UAC is expected on Windows.
-            c.grok_install_wait =
-                grokhub_core::should_kick_alpha_install(grokhub_acp::find_grok().is_some());
-            c.official_cli_session = c.grok_install_wait;
-            c.grok_install_rx = Some(grokhub_acp::begin_ensure_grok_alpha());
-            c.sync_cli_auth_from_oauth();
-            if grokhub_acp::grok_cli_key().is_some() && !c.official_cli_session {
-                c.mark_get_started_done();
+            // The legacy CLI engine alone installs the CLI and shares the sign-in with it.
+            // The native engine never installs, runs or signs in the CLI.
+            if c.cfg.grok_build_engine {
+                // Official alpha when missing/unusable; pin a working CLI. UAC is expected on Windows.
+                c.grok_install_wait =
+                    grokhub_core::should_kick_alpha_install(grokhub_acp::find_grok().is_some());
+                c.official_cli_session = c.grok_install_wait;
+                c.grok_install_rx = Some(grokhub_acp::begin_ensure_grok_alpha());
+                c.sync_cli_auth_from_oauth();
+                if grokhub_acp::grok_cli_key().is_some() && !c.official_cli_session {
+                    c.mark_get_started_done();
+                }
             }
             c.last_update_probe = Some(Instant::now());
             c.update_probe_rx = Some(crate::update::begin_update_probe());
@@ -2489,10 +2493,9 @@ impl Cabin {
         build_agent::can_agent(self.has_key())
     }
 
+    /// GrokHub's own sign-in or key. Only the legacy CLI engine counts the CLI.
     fn llm_ready(&self) -> bool {
-        self.has_key()
-            || grokhub_acp::find_grok().is_some()
-            || grokhub_acp::grok_cli_key().is_some()
+        self.has_key() || (self.cfg.grok_build_engine && grokhub_acp::find_grok().is_some())
     }
 
     fn grok_cwd(&self) -> std::path::PathBuf {
@@ -2609,26 +2612,8 @@ impl Cabin {
         }
     }
 
+    /// GrokHub's own sign-in or console key. The Grok CLI's login is never read.
     fn bearer(&mut self) -> String {
-        if let Some(k) = grokhub_acp::grok_cli_key() {
-            if !k.trim().is_empty() {
-                let exp = grokhub_core::jwt_exp_ms(&k);
-                let stale = exp
-                    .map(|exp| exp.saturating_sub(grokhub_core::TOKEN_REFRESH_SKEW_MS) < now_ms())
-                    .unwrap_or(false);
-                if stale {
-                    if let Some(fresh) = crate::oauth::refresh_grok_login() {
-                        return fresh;
-                    }
-                    let hard_expired = exp.map(|e| e < now_ms()).unwrap_or(false);
-                    if !hard_expired {
-                        return k;
-                    }
-                } else {
-                    return k;
-                }
-            }
-        }
         let mut oauth_usable = false;
         if let Some(tok) = self.secrets.oauth.clone() {
             let mut tok = tok;
@@ -2657,7 +2642,6 @@ impl Cabin {
             &secrets::access_token(&self.secrets),
             oauth_usable,
         )
-        .or_else(grokhub_acp::grok_cli_key)
         .unwrap_or_default()
     }
 
@@ -3039,7 +3023,7 @@ impl Cabin {
 
     fn run_dream(&mut self) {
         if !self.llm_ready() {
-            self.status = "Run grok login, or Connect Grok in Settings.".into();
+            self.status = grokhub_core::XAI_NEED_SIGNIN.into();
             return;
         }
         if self.running {
@@ -3832,12 +3816,6 @@ impl Cabin {
             .oauth
             .as_ref()
             .is_some_and(|t| !t.access_token.trim().is_empty())
-            || grokhub_acp::grok_cli_key().is_some()
-    }
-
-    /// Presence only. Lab mode never uses this token; it only picks the clearer message.
-    fn grok_cli_login_present(&self) -> bool {
-        grokhub_acp::grok_cli_key().is_some()
     }
 
     fn has_real_history(&self) -> bool {

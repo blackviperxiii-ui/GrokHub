@@ -898,8 +898,9 @@ mod tests {
         let start = include_str!("../app/mod.rs").replace("\r\n", "\n");
         let gated = start
             .split("if c.cfg.grok_build_engine {")
-            .nth(1)
-            .and_then(|rest| rest.split("\n            }").next())
+            .skip(1)
+            .filter_map(|rest| rest.split("\n            }").next())
+            .find(|block| block.contains("maybe_register_on_start"))
             .expect("startup registration is gated on the legacy engine");
         assert!(gated.contains("desktop_mcp::maybe_register_on_start"), "{gated}");
         assert!(gated.contains("self_mcp::maybe_register_on_start"), "{gated}");

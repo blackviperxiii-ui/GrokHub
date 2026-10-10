@@ -143,9 +143,6 @@ fn run_oauth_cli() {
                         eprintln!("{e}");
                         std::process::exit(1);
                     }
-                    if let Err(e) = grokhub_acp::write_cli_auth_if_needed(&tokens) {
-                        eprintln!("grok auth.json: {e}");
-                    }
                     let who = tokens
                         .name
                         .as_deref()

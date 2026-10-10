@@ -2426,6 +2426,10 @@ impl Cabin {
             for slot in composer_stack_order() {
                 match slot {
                     ComposerStackSlot::AuthBanner => {
+                        if self.cfg.native_engine() {
+                            self.ui_native_auth_banner(ui);
+                            continue;
+                        }
                         let grok_missing = grokhub_acp::find_grok().is_none();
                         let need_login = grokhub_acp::grok_cli_key().is_none() && !self.has_key();
                         let cabin_oauth = self
