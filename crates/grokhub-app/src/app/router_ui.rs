@@ -12,7 +12,7 @@ use grokhub_agent::route::local::LocalSource;
 use grokhub_agent::route::signals::{LedgerOutcomeSource, SpanVerifySource};
 use grokhub_agent::route::heal::{heal_messages, joined_messages, HealMsg, HealNotes, Heard, Tier};
 use grokhub_agent::route::refresh::{fold_health, probe_next, run_refresh, RefreshDone, RefreshJob};
-use grokhub_agent::route::sources::{probe_model, rebuild_table, GrokBuildSource, XaiApiSource};
+use grokhub_agent::route::sources::{probe_model, rebuild_table, XaiApiSource};
 use grokhub_core::model_registry::RegistryEvent;
 use grokhub_agent::AuthKind;
 use grokhub_core::model_registry::profile::read_profiles;
@@ -172,10 +172,9 @@ impl Cabin {
         }
         let stamp = self.router_auth_stamp();
         let idle = !self.running && !self.heartbeat_busy();
-        let gb_version = self.cli_installed.clone();
         let clock = self.harness.router.clock.get_or_insert_with(|| RefreshClock::new(now));
-        if clock.due(now, idle, gb_version.as_deref(), &stamp).is_some() && self.harness.router.rx.is_none() {
-            clock.ran(now, gb_version.as_deref(), &stamp);
+        if clock.due(now, idle, None, &stamp).is_some() && self.harness.router.rx.is_none() {
+            clock.ran(now, None, &stamp);
             self.start_model_refresh(now);
             return;
         }
@@ -200,13 +199,6 @@ impl Cabin {
             Ok((b, AuthKind::ApiKey)) => (Some(b), Credential::ApiKey),
             Err(_) => (None, Credential::None),
         };
-        // The native engine lists models from xAI alone; `grok models` feeds only the legacy CLI engine.
-        let gb = self
-            .cfg
-            .grok_build_engine
-            .then(grokhub_acp::find_grok)
-            .flatten()
-            .map(|bin| GrokBuildSource { bin, cwd: self.grok_cwd() });
         let named = self.router_named_models();
         let default_model = grokhub_agent::DEFAULT_MODEL.to_string();
         let pin = self.cfg.model.trim().to_string();
@@ -219,9 +211,6 @@ impl Cabin {
             let mut sources: Vec<&dyn CatalogSource> = Vec::new();
             if let Some(a) = api.as_ref() {
                 sources.push(a);
-            }
-            if let Some(g) = gb.as_ref() {
-                sources.push(g);
             }
             // Lists nothing while `localModel` is off (the default).
             sources.push(&LocalSource);

@@ -3,80 +3,6 @@
 use super::*;
 
 
-pub(super) fn cabin_fast_llm(key: String, prompt: String) -> String {
-    if !key.trim().is_empty() {
-        let primary = grok_chat(
-            &key,
-            CABIN_FAST_MODEL,
-            &[("user".into(), prompt.clone())],
-            None,
-            Some(grokhub_core::BACKGROUND_EFFORT),
-        )
-        .unwrap_or_default();
-        if !primary.trim().is_empty() {
-            return primary;
-        }
-        return grok_chat(
-            &key,
-            CABIN_FAST_FALLBACK,
-            &[("user".into(), prompt)],
-            None,
-            Some(grokhub_core::BACKGROUND_EFFORT),
-        )
-        .unwrap_or_default();
-    }
-    let Some(bin) = grokhub_acp::find_grok() else {
-        return String::new();
-    };
-    let home = std::env::var("HOME").ok();
-    let profile = std::env::var("USERPROFILE").ok();
-    let session = grokhub_core::session_home(cfg!(windows), home.as_deref(), profile.as_deref());
-    let work = grokhub_core::cabin_work_root(cfg!(windows), home.as_deref(), profile.as_deref());
-    let picked = resolve_acp_cwd("", session.as_deref(), &work);
-    let path = std::path::PathBuf::from(picked);
-    let cwd = grokhub_acp::ensure_session_cwd(&path).unwrap_or(path);
-    for model in [CABIN_FAST_MODEL, CABIN_FAST_FALLBACK] {
-        let argv = grokhub_acp::apply_desktop_spawn_args(
-            vec![
-                "--no-auto-update".into(),
-                "--model".into(),
-                model.into(),
-                "--reasoning-effort".into(),
-                grokhub_core::BACKGROUND_EFFORT.into(),
-                "--output-format".into(),
-                "streaming-json".into(),
-                "-p".into(),
-                prompt.clone(),
-            ],
-            grokhub_acp::PermissionMode::Ask,
-            grokhub_acp::SessionMode::Chat,
-            false,
-        );
-        let refs: Vec<&str> = argv.iter().map(String::as_str).collect();
-        let out = grokhub_acp::grok_stdout(&bin, &cwd, &refs).unwrap_or_default();
-        if let Ok(turn) = grokhub_acp::fold_stream(&out) {
-            super::background::hide_background_session(&turn.session_id);
-        }
-        let text = fast_reply_text(&out);
-        if !text.trim().is_empty() {
-            return text;
-        }
-    }
-    String::new()
-}
-
-/// The reply only. Plain `grok -p` mixes the model's reasoning into stdout
-/// (a greeting once painted "I'll use the user's name if known…"), so the fast
-/// path asks for streaming-json and keeps the text events, never the thought.
-pub(super) fn fast_reply_text(stdout: &str) -> String {
-    match grokhub_acp::fold_stream(stdout) {
-        Ok(turn) => turn.text,
-        // An older CLI without streaming-json prints plain text.
-        Err(_) if !stdout.trim_start().starts_with('{') => stdout.to_string(),
-        Err(_) => String::new(),
-    }
-}
-
 impl Cabin {
 
     /// Chat pairs for chip rebuild: scan a 4KB prefix so an 8MB complete
@@ -289,21 +215,7 @@ impl Cabin {
         if self.greeting_busy {
             return;
         }
-        if self.cfg.native_engine() {
-            self.spawn_native_greeting(prompt);
-            return;
-        }
-        let key = self.bearer();
-        if key.trim().is_empty() && grokhub_acp::find_grok().is_none() {
-            return;
-        }
-        let (tx, rx) = mpsc::channel();
-        self.greeting_rx = Some(rx);
-        self.greeting_busy = true;
-        std::thread::spawn(move || {
-            let raw = cabin_fast_llm(key, prompt);
-            let _ = tx.send(raw);
-        });
+        self.spawn_native_greeting(prompt);
     }
 
     pub(super) fn poll_goals(&mut self) {
@@ -577,44 +489,7 @@ impl Cabin {
         if self.chip_busy {
             return;
         }
-        if self.cfg.native_engine() {
-            self.spawn_native_chips();
-            return;
-        }
-        let key = self.bearer();
-        if key.trim().is_empty() && grokhub_acp::find_grok().is_none() {
-            return;
-        }
-        let chat = self.chip_chat_pairs();
-        let title = self
-            .threads
-            .get(self.thread_idx)
-            .map(|t| t.title.clone())
-            .unwrap_or_default();
-        let habits = top_habit_labels(&self.chip_memory, 6);
-        let others = self.other_chip_threads();
-        let mut dismissed = self.chip_dismissed.clone();
-        for hit in &self.chip_memory.hits {
-            if hit.dismisses >= 1 {
-                dismissed.push(hit.value.clone());
-                dismissed.push(hit.label.clone());
-            }
-        }
-        let prompt = chip_suggest_prompt(
-            &chat,
-            &title,
-            &self.composer,
-            &habits,
-            &dismissed,
-            &others,
-        );
-        let (tx, rx) = mpsc::channel();
-        self.chip_rx = Some(rx);
-        self.chip_busy = true;
-        std::thread::spawn(move || {
-            let chips = parse_llm_chips(&cabin_fast_llm(key, prompt));
-            let _ = tx.send(chips);
-        });
+        self.spawn_native_chips();
     }
 
     /// Ranked composer chips. Empty home and mid-thread share `visible_chips`

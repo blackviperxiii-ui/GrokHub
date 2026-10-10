@@ -296,19 +296,15 @@ fn spawn(job: Job) {
 #[cfg(test)]
 mod tests {
     #[test]
-    fn native_plugins_settings_are_behind_the_labs_toggle() {
+    fn native_plugins_settings_live_in_labs_for_every_cabin() {
         let settings = include_str!("app/settings.rs");
         let start = settings.find("SettingsSec::Labs => {").expect("labs body");
         let arm = settings[start..]
             .split("SettingsSec::")
             .nth(1)
             .expect("labs arm");
-        assert!(arm.contains("self.cfg.native_engine"), "{arm}");
-        let guard = arm
-            .find("if self.cfg.native_engine")
-            .expect("native engine guard");
-        let paint = arm.find("native_plugins::paint").expect("plugins paint");
-        assert!(paint > guard, "{arm}");
+        assert!(arm.contains("native_plugins::paint"), "{arm}");
+        assert!(!arm.contains("native_engine"), "plugins are not behind an engine switch: {arm}");
         let chat = include_str!("app/chat_ui.rs");
         assert!(!chat.contains("native_plugins"));
     }

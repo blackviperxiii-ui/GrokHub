@@ -1,6 +1,7 @@
 //! Phase 16 eval harness. Dry-run is the default and uses scripted model clients
 //! plus the fake CLI agent. `--live` is refused before any client is built.
 
+use grokhub_core::wire::AcpEvent;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
@@ -8,7 +9,6 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use grokhub_acp::{connect, wait_event, AcpEvent, SessionMode, SpawnOpts};
 use serde_json::{json, Value};
 
 use crate::client::{
@@ -37,10 +37,7 @@ pub const SUITE_ITEMS: [&str; 8] = [
 ];
 
 const SKIP_XVFB: &str = "skipped: no Xvfb";
-const NO_FAKE_ACP: &str = "not verified: fake_acp binary not found";
 const NO_FAKE_MCP: &str = "not verified: fake_mcp binary not found";
-/// The completion drive and the findings card live in the native engine only.
-const NATIVE_ONLY: &str = "not verified: native engine only";
 const IMAGINE_PROMPT: &str = "a red square";
 const LIVE_KEY: &str = "GROKHUB_EVAL_API_KEY";
 const ERR_NO_KEY: &str = "refusing --live: GROKHUB_EVAL_API_KEY is not set";
@@ -59,7 +56,6 @@ pub struct Opts {
     /// Whole cents. `20` is the $0.20 cap. Empty unless `--budget-usd` parsed.
     pub budget_cents: Option<u32>,
     pub out: Option<PathBuf>,
-    pub fake_acp: Option<PathBuf>,
 }
 
 pub struct ItemResult {
@@ -92,7 +88,6 @@ fn parse_args_with_key(args: &[String], key: Option<&str>) -> Result<Opts, Strin
     let mut dry = false;
     let mut budget: Option<Result<u32, String>> = None;
     let mut out = None;
-    let mut fake_acp = None;
     let mut i = 0;
     while i < args.len() {
         let arg = &args[i];
@@ -102,7 +97,7 @@ fn parse_args_with_key(args: &[String], key: Option<&str>) -> Result<Opts, Strin
             dry = true;
         } else if arg == "--help" || arg == "-h" {
             return Err(help_text());
-        } else if arg == "--budget-usd" || arg == "--out" || arg == "--fake-acp" {
+        } else if arg == "--budget-usd" || arg == "--out" {
             let Some(value) = args.get(i + 1) else {
                 return Err(missing_value(arg, live));
             };
@@ -113,15 +108,12 @@ fn parse_args_with_key(args: &[String], key: Option<&str>) -> Result<Opts, Strin
             match arg.as_str() {
                 "--budget-usd" => budget = Some(parse_budget_token(value)),
                 "--out" => out = Some(PathBuf::from(value)),
-                "--fake-acp" => fake_acp = Some(PathBuf::from(value)),
                 _ => {}
             }
         } else if let Some(value) = arg.strip_prefix("--budget-usd=") {
             budget = Some(parse_budget_token(value));
         } else if let Some(value) = arg.strip_prefix("--out=") {
             out = Some(PathBuf::from(value));
-        } else if let Some(value) = arg.strip_prefix("--fake-acp=") {
-            fake_acp = Some(PathBuf::from(value));
         } else {
             return Err(format!("unknown argument: {arg}"));
         }
@@ -146,7 +138,6 @@ fn parse_args_with_key(args: &[String], key: Option<&str>) -> Result<Opts, Strin
         live,
         budget_cents: budget.and_then(|item| item.ok()),
         out,
-        fake_acp,
     })
 }
 
@@ -171,34 +162,15 @@ pub fn run_suite(opts: &Opts) -> Vec<ItemResult> {
     let _guard = cfg.as_ref().map(ConfigGuard::set);
     // Router R0: eval runs log their shadow routes under their own class.
     let _class = crate::route::live::ClassScope::enter(EVAL_CLASS);
-    let fake_acp = locate_fake_acp(opts.fake_acp.as_deref());
-    let mut items = Vec::with_capacity(SUITE_ITEMS.len() * 2);
+    let mut items = Vec::with_capacity(SUITE_ITEMS.len());
     items.push(measure("xvfb-desktop", "native", desktop_item));
-    items.push(measure("xvfb-desktop", "cli", desktop_item));
     items.push(measure("repo-bugfix", "native", repo_bugfix_native));
-    items.push(measure("repo-bugfix", "cli", || {
-        repo_bugfix_cli(fake_acp.as_deref())
-    }));
     items.push(measure("ask-refusal", "native", ask_native));
-    items.push(measure("ask-refusal", "cli", || {
-        ask_cli(fake_acp.as_deref())
-    }));
     items.push(measure("background-halt", "native", background_halt_native));
-    items.push(measure("background-halt", "cli", || {
-        background_halt_cli(fake_acp.as_deref())
-    }));
     items.push(measure("mcp-tool", "native", || mcp_native(cfg.as_deref())));
-    items.push(measure("mcp-tool", "cli", || mcp_cli(fake_acp.as_deref())));
     items.push(measure("compaction", "native", compact_native));
-    items.push(measure("compaction", "cli", || {
-        compact_cli(fake_acp.as_deref())
-    }));
     items.push(measure("imagine", "native", imagine_native));
-    items.push(measure("imagine", "cli", || {
-        imagine_cli(fake_acp.as_deref())
-    }));
     items.push(measure("system-scan", "native", system_scan_native));
-    items.push(measure("system-scan", "cli", || (NATIVE_ONLY, 0)));
     cleanup_sessions();
     if let Some(dir) = cfg {
         let _ = std::fs::remove_dir_all(dir);
@@ -211,10 +183,9 @@ pub fn render_report(items: &[ItemResult]) -> String {
     out.push_str("# Native parity v1\n\n");
     out.push_str("## Method\n\n");
     out.push_str(
-        "Phase 16 runs one fixed suite against the native engine and the CLI engine. \
+        "Phase 16 runs one fixed suite against the native engine. \
 Dry-run is the default (`--dry-run`, and the mode when no mode flag is given). \
-The native engine uses scripted fake model clients. The CLI engine is the \
-`grokhub-fake-acp` binary driven with no API key and without a cabin home. \
+The native engine uses scripted fake model clients. \
 Dry-run uses no network and no credentials.\n\n",
     );
     out.push_str(
@@ -271,7 +242,7 @@ pub fn credential_boundary() -> String {
 }
 
 fn help_text() -> String {
-    "eval [--dry-run] [--live --budget-usd AMOUNT] [--out PATH] [--fake-acp PATH]\n\
+    "eval [--dry-run] [--live --budget-usd AMOUNT] [--out PATH]\n\
 dry-run is the default and uses no network\n\
 --live requires GROKHUB_EVAL_API_KEY and 0 < --budget-usd <= 0.20"
         .into()
@@ -381,13 +352,12 @@ fn verified_of(status: &str) -> bool {
 }
 
 /// Gaps that hold for every dry-run, whatever the rows say.
-pub const STANDING_GAPS: [&str; 3] = [
+pub const STANDING_GAPS: [&str; 2] = [
     "- live: `--live` is a stub. It refuses to start without GROKHUB_EVAL_API_KEY and a budget of $0.20 or less, and even with both it only prints \"live mode is not implemented in this build\" and exits non-zero. No live eval has been run, so nothing in this report measures a real model's success, turns, wall time, pool % or cost.",
-    "- cli engine: every CLI row ran against grokhub-fake-acp, which replays scripted events. Those rows show that the ACP client handles each scenario, not what the real Grok CLI does, so CLI-versus-native parity is not verified for any item.",
     "- pool % and cost: written as 0 for every dry-run row. They were not measured.",
 ];
 
-const DESKTOP_PROBE_GAP: &str = "- xvfb-desktop: the probe only checks that an X display answers (`xdpyinfo`), the same check for both engines. Neither engine's desktop tools were driven.";
+const DESKTOP_PROBE_GAP: &str = "- xvfb-desktop: the probe only checks that an X display answers (`xdpyinfo`). The desktop tools were not driven.";
 
 fn gap_lines(items: &[ItemResult]) -> Vec<String> {
     let mut lines: Vec<String> = STANDING_GAPS.iter().map(|line| line.to_string()).collect();
@@ -405,14 +375,7 @@ fn gap_lines(items: &[ItemResult]) -> Vec<String> {
             lines.push(format!("- {name}: missing native result"));
             continue;
         };
-        let Some(cli) = items
-            .iter()
-            .find(|item| item.item == name && item.engine == "cli")
-        else {
-            lines.push(format!("- {name}: missing cli result"));
-            continue;
-        };
-        if native.status == SKIP_XVFB && cli.status == SKIP_XVFB {
+        if native.status == SKIP_XVFB {
             lines.push(format!("- {name}: {SKIP_XVFB}"));
             continue;
         }
@@ -421,11 +384,6 @@ fn gap_lines(items: &[ItemResult]) -> Vec<String> {
             parts.push(format!("native {}", native.status));
         } else if !native.success {
             parts.push(format!("native failed ({})", native.status));
-        }
-        if !cli.verified {
-            parts.push(format!("cli {}", cli.status));
-        } else if !cli.success {
-            parts.push(format!("cli failed ({})", cli.status));
         }
         if !parts.is_empty() {
             lines.push(format!("- {name}: {}", parts.join("; ")));
@@ -524,33 +482,6 @@ fn repo_bugfix_native() -> (&'static str, u32) {
     }
 }
 
-fn repo_bugfix_cli(program: Option<&Path>) -> (&'static str, u32) {
-    let Some(program) = program else {
-        return (NO_FAKE_ACP, 0);
-    };
-    let Some(dir) = scratch("bugfix-cli") else {
-        return ("failed: scratch", 0);
-    };
-    let done = cli_turn(
-        program,
-        &dir,
-        vec![("FAKE_ACP_TEXT".into(), "bugfix-dry-run".into())],
-        SessionMode::Chat,
-        true,
-        false,
-        "fix the failing test",
-        CliAct::None,
-    );
-    let _ = std::fs::remove_dir_all(&dir);
-    match done {
-        Ok(done) if done.stop == "end_turn" && done.text.contains("bugfix-dry-run") => {
-            ("scripted reply", 1)
-        }
-        Ok(_) => ("failed: cli", 1),
-        Err(()) => ("failed: cli", 0),
-    }
-}
-
 fn ask_native() -> (&'static str, u32) {
     let Some(dir) = scratch("ask") else {
         return ("failed: scratch", 0);
@@ -569,34 +500,6 @@ fn ask_native() -> (&'static str, u32) {
         ("refused", turns)
     } else {
         ("failed: deny", turns)
-    }
-}
-
-fn ask_cli(program: Option<&Path>) -> (&'static str, u32) {
-    let Some(program) = program else {
-        return (NO_FAKE_ACP, 0);
-    };
-    let Some(dir) = scratch("ask-cli") else {
-        return ("failed: scratch", 0);
-    };
-    let done = cli_turn(
-        program,
-        &dir,
-        vec![("FAKE_ACP_PERMISSION".into(), "1".into())],
-        SessionMode::Ask,
-        false,
-        false,
-        "write the secret",
-        CliAct::Reject,
-    );
-    let leaked = dir.join("secret.txt").exists();
-    let _ = std::fs::remove_dir_all(&dir);
-    match done {
-        Ok(done) if !leaked && done.text == "perm:selected:reject-once" && done.perms == 1 => {
-            ("refused", 1)
-        }
-        Ok(_) => ("failed: cli", 1),
-        Err(()) => ("failed: cli", 0),
     }
 }
 
@@ -663,31 +566,6 @@ fn background_halt_native() -> (&'static str, u32) {
     }
 }
 
-fn background_halt_cli(program: Option<&Path>) -> (&'static str, u32) {
-    let Some(program) = program else {
-        return (NO_FAKE_ACP, 0);
-    };
-    let Some(dir) = scratch("halt-cli") else {
-        return ("failed: scratch", 0);
-    };
-    let done = cli_turn(
-        program,
-        &dir,
-        vec![("FAKE_ACP_BLOCK_UNTIL_CANCEL".into(), "1".into())],
-        SessionMode::Chat,
-        true,
-        false,
-        "run in the background",
-        CliAct::CancelAfterThought,
-    );
-    let _ = std::fs::remove_dir_all(&dir);
-    match done {
-        Ok(done) if done.stop == "cancelled" => ("halted", 1),
-        Ok(_) => ("failed: cli", 1),
-        Err(()) => ("failed: cli", 0),
-    }
-}
-
 fn mcp_native(cfg: Option<&Path>) -> (&'static str, u32) {
     let Some(cfg) = cfg else {
         return ("failed: scratch", 0);
@@ -723,10 +601,6 @@ fn mcp_native(cfg: Option<&Path>) -> (&'static str, u32) {
     } else {
         ("failed: mcp", turns)
     }
-}
-
-fn mcp_cli(program: Option<&Path>) -> (&'static str, u32) {
-    scripted_tool(program, "evalmcp__echo", "mcp-dry-run")
 }
 
 fn compact_native() -> (&'static str, u32) {
@@ -769,33 +643,6 @@ fn compact_native() -> (&'static str, u32) {
     }
 }
 
-fn compact_cli(program: Option<&Path>) -> (&'static str, u32) {
-    let Some(program) = program else {
-        return (NO_FAKE_ACP, 0);
-    };
-    let Some(dir) = scratch("compact-cli") else {
-        return ("failed: scratch", 0);
-    };
-    let done = cli_turn(
-        program,
-        &dir,
-        vec![("FAKE_ACP_COMPACT".into(), "1".into())],
-        SessionMode::Chat,
-        true,
-        false,
-        "continue",
-        CliAct::None,
-    );
-    let _ = std::fs::remove_dir_all(&dir);
-    match done {
-        Ok(done) if done.compact_started && done.compact_done && done.stop == "end_turn" => {
-            ("compacted", 1)
-        }
-        Ok(_) => ("failed: cli", 1),
-        Err(()) => ("failed: cli", 0),
-    }
-}
-
 fn imagine_native() -> (&'static str, u32) {
     let api = NopImagine;
     let before = imagine_send_count();
@@ -809,44 +656,6 @@ fn imagine_native() -> (&'static str, u32) {
             ("request built", 1)
         }
         _ => ("failed: imagine", 1),
-    }
-}
-
-fn imagine_cli(program: Option<&Path>) -> (&'static str, u32) {
-    scripted_tool(program, "image_generate", "imagine-dry-run")
-}
-
-fn scripted_tool(program: Option<&Path>, tool: &str, text: &str) -> (&'static str, u32) {
-    let Some(program) = program else {
-        return (NO_FAKE_ACP, 0);
-    };
-    let Some(dir) = scratch("tool") else {
-        return ("failed: scratch", 0);
-    };
-    let done = cli_turn(
-        program,
-        &dir,
-        vec![
-            ("FAKE_ACP_TOOL".into(), tool.to_string()),
-            ("FAKE_ACP_TEXT".into(), text.to_string()),
-        ],
-        SessionMode::Chat,
-        true,
-        false,
-        "use the tool",
-        CliAct::None,
-    );
-    let _ = std::fs::remove_dir_all(&dir);
-    match done {
-        Ok(done)
-            if done.stop == "end_turn"
-                && done.tools.iter().any(|title| title == tool)
-                && done.text.contains(text) =>
-        {
-            ("scripted tool", 1)
-        }
-        Ok(_) => ("failed: cli", 1),
-        Err(()) => ("failed: cli", 0),
     }
 }
 
@@ -1390,131 +1199,6 @@ fn cleanup_sessions() {
     crate::mcp::shutdown_all();
 }
 
-struct CliDone {
-    text: String,
-    stop: String,
-    tools: Vec<String>,
-    perms: u32,
-    compact_started: bool,
-    compact_done: bool,
-}
-
-enum CliAct {
-    None,
-    Reject,
-    CancelAfterThought,
-}
-
-fn cli_turn(
-    program: &Path,
-    cwd: &Path,
-    extra: Vec<(String, String)>,
-    mode: SessionMode,
-    always_approve: bool,
-    auto: bool,
-    prompt: &str,
-    act: CliAct,
-) -> Result<CliDone, ()> {
-    let _ = std::fs::create_dir_all(cwd);
-    let handle = connect(SpawnOpts {
-        program: program.to_path_buf(),
-        args: Vec::new(),
-        cwd: cwd.to_path_buf(),
-        api_key: None,
-        xai_api_key: None,
-        always_approve,
-        auto,
-        session_mode: mode,
-        reasoning_effort: None,
-        extra_env: extra,
-        handshake_timeout: Some(Duration::from_secs(5)),
-        resume: None,
-        skip_cabin_home: true,
-        worktree: false,
-    })
-    .map_err(|_| ())?;
-    handle.prompt(prompt).map_err(|_| ())?;
-    let mut done = CliDone {
-        text: String::new(),
-        stop: String::new(),
-        tools: Vec::new(),
-        perms: 0,
-        compact_started: false,
-        compact_done: false,
-    };
-    let deadline = Instant::now() + Duration::from_secs(8);
-    let mut acted = false;
-    while Instant::now() < deadline {
-        let left = deadline.saturating_duration_since(Instant::now());
-        if left.is_zero() {
-            break;
-        }
-        match wait_event(&handle.events, left.min(Duration::from_secs(2))) {
-            Ok(AcpEvent::Ready { .. }) | Ok(AcpEvent::Usage(_)) => {}
-            Ok(AcpEvent::Thought(_)) => {
-                if matches!(act, CliAct::CancelAfterThought) && !acted {
-                    acted = true;
-                    let _ = handle.cancel();
-                }
-            }
-            Ok(AcpEvent::Text(text)) => done.text.push_str(&text),
-            Ok(AcpEvent::Tool(card)) => done.tools.push(card.title),
-            Ok(AcpEvent::Permission(ask)) => {
-                done.perms = done.perms.saturating_add(1);
-                if matches!(act, CliAct::Reject) {
-                    let _ = handle.reject_permission(&ask);
-                }
-            }
-            Ok(AcpEvent::Compact {
-                started: true,
-                error: None,
-                ..
-            }) => done.compact_started = true,
-            Ok(AcpEvent::Compact {
-                started: false,
-                error: None,
-                ..
-            }) => done.compact_done = true,
-            Ok(AcpEvent::Done { stop_reason }) => {
-                done.stop = stop_reason;
-                return Ok(done);
-            }
-            Ok(AcpEvent::Err(_)) => return Err(()),
-            Ok(_) => {}
-            Err(_) => {
-                if !done.stop.is_empty() {
-                    return Ok(done);
-                }
-            }
-        }
-    }
-    if done.stop.is_empty() {
-        Err(())
-    } else {
-        Ok(done)
-    }
-}
-
-fn locate_fake_acp(explicit: Option<&Path>) -> Option<PathBuf> {
-    if let Some(path) = explicit {
-        return path.is_file().then(|| path.to_path_buf());
-    }
-    if let Some(path) = env_file("GROKHUB_EVAL_FAKE_ACP") {
-        return Some(path);
-    }
-    sibling_bin("grokhub-fake-acp")
-}
-
-fn env_file(key: &str) -> Option<PathBuf> {
-    let raw = std::env::var(key).ok()?;
-    let raw = raw.trim();
-    if raw.is_empty() {
-        return None;
-    }
-    let path = PathBuf::from(raw);
-    path.is_file().then_some(path)
-}
-
 fn sibling_bin(name: &str) -> Option<PathBuf> {
     let exe = std::env::current_exe().ok()?;
     let file = format!("{name}{}", std::env::consts::EXE_SUFFIX);
@@ -1675,13 +1359,12 @@ mod tests {
         let report = render_report(&first);
         let again = render_report(&second);
         assert_eq!(report.as_bytes(), again.as_bytes());
-        assert_eq!(first.len(), SUITE_ITEMS.len() * 2);
+        assert_eq!(first.len(), SUITE_ITEMS.len());
         for name in SUITE_ITEMS {
             let needle_native = format!("| {name} | native |");
-            let needle_cli = format!("| {name} | cli |");
             assert_eq!(report.matches(&needle_native).count(), 1, "{report}");
-            assert_eq!(report.matches(&needle_cli).count(), 1, "{report}");
         }
+        assert!(!report.contains("| cli |") && !report.contains("fake-acp"), "{report}");
         assert!(report.contains("## GAPS\n"));
         let gaps = report.split("## GAPS\n\n").nth(1).expect("gaps body");
         for line in STANDING_GAPS {
@@ -1714,33 +1397,15 @@ mod tests {
         assert!(report.contains("| mcp-tool | native | yes |"), "{report}");
         if cfg!(unix) {
             assert!(report.contains("| system-scan | native | yes | 6 |"), "{report}");
-            assert!(report.contains("- system-scan: cli not verified: native engine only\n"), "{report}");
+            assert!(!report.contains("- system-scan:"), "{report}");
         } else {
             assert!(
-                report.contains("- system-scan: native skipped: the fake host needs a Unix shell; cli not verified: native engine only\n"),
+                report.contains("- system-scan: native skipped: the fake host needs a Unix shell\n"),
                 "{report}"
             );
         }
         if report.contains(SKIP_XVFB) {
             assert!(report.contains("- xvfb-desktop: skipped: no Xvfb\n"));
-        }
-        let ci = std::env::var("CI").ok().as_deref() == Some("true");
-        if ci {
-            assert!(
-                !report.contains(NO_FAKE_ACP),
-                "CI requires the grokhub-fake-acp binary\n{report}"
-            );
-        }
-        if !report.contains(NO_FAKE_ACP) {
-            assert!(report.contains("| repo-bugfix | cli | yes |"), "{report}");
-            assert!(report.contains("| ask-refusal | cli | yes |"), "{report}");
-            assert!(
-                report.contains("| background-halt | cli | yes |"),
-                "{report}"
-            );
-            assert!(report.contains("| mcp-tool | cli | yes |"), "{report}");
-            assert!(report.contains("| compaction | cli | yes |"), "{report}");
-            assert!(report.contains("| imagine | cli | yes |"), "{report}");
         }
     }
 }

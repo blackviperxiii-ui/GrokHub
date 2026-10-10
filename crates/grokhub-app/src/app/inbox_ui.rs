@@ -120,7 +120,7 @@ pub(super) fn hard_words(class: HardClass, tool: &str, action: &str, held: &[Str
 }
 
 /// A Grok Build ask in plain words.
-pub(super) fn ask_words(p: &grokhub_acp::PermissionAsk, held: &[String]) -> String {
+pub(super) fn ask_words(p: &grokhub_core::wire::PermissionAsk, held: &[String]) -> String {
     let (title, action) = (scrub(&p.title, held), scrub(&p.action, held));
     let (title, action) = (title.trim(), action.trim());
     let text = if super::harness_ui::is_desktop_ask(p) {
@@ -380,8 +380,8 @@ mod tests {
     use super::*;
     use crate::app::harness_ui::SoftPark;
 
-    fn ask(title: &str, action: &str) -> grokhub_acp::PermissionAsk {
-        grokhub_acp::PermissionAsk {
+    fn ask(title: &str, action: &str) -> grokhub_core::wire::PermissionAsk {
+        grokhub_core::wire::PermissionAsk {
             rpc_id: serde_json::json!(7),
             session_id: "s".into(),
             title: title.into(),

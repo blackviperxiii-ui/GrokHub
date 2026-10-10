@@ -290,13 +290,8 @@ impl Cabin {
         let mut clear_picture = false;
         let mut name_dirty = false;
         let mut update = false;
-        let mut install_cli = false;
         let mut restart = false;
         let mut copy_diag = false;
-        let cli_ready = grokhub_acp::find_grok().is_some() || grokhub_acp::grok_cli_known_good();
-        let cli_installing = self.grok_install_rx.is_some();
-        let show_cli_install =
-            grokhub_core::should_show_manual_cli_install(cli_ready, cli_installing);
         let pending_update = self.update_pending_now();
         let update_label = settings_update_label(pending_update);
         let update_hint = settings_update_hint(pending_update);
@@ -306,21 +301,6 @@ impl Cabin {
             .as_deref()
             .filter(|_| cabin_notify)
             .map(|tag| cabin_update_notice(env!("CARGO_PKG_VERSION"), tag));
-        let cli_notice = match (self.cli_installed.as_deref(), self.cli_alpha.as_deref()) {
-            (Some(installed), Some(alpha))
-                if should_update_cli_alpha(Some(installed), Some(alpha)) =>
-            {
-                Some(cli_update_notice(installed, alpha))
-            }
-            _ => None,
-        };
-        let cli_install_hint = if cli_installing {
-            "Installing Grok Build CLI alpha (GROK_CHANNEL=alpha)…"
-        } else if !self.grok_install_err.is_empty() {
-            "Grok is missing or broken. Installs Grok Build CLI alpha from x.ai/cli."
-        } else {
-            "Installs Grok Build CLI alpha (GROK_CHANNEL=alpha / https://x.ai/cli/alpha) when grok is missing or broken."
-        };
         self.pull_account_oauth_from_disk();
         let account_auth = account_connect_chrome(self.secrets.oauth.as_ref());
         let picture_set = !self.cfg.profile_picture.trim().is_empty();
@@ -628,25 +608,11 @@ impl Cabin {
                                                             self.ui_home_learned(ui);
                                                         }
                                                         SettingsSec::Update => {
-                                                            if let Some(notice) = cli_notice.as_deref() {
-                                                                crate::cards::settings_note(ui, notice);
-                                                            }
                                                             if let Some(notice) = cabin_notice.as_deref() {
                                                                 crate::cards::settings_note(ui, notice);
                                                             }
                                                             if let Some(note) = self.update_cabin_note.as_deref() {
                                                                 crate::cards::settings_note(ui, note);
-                                                            }
-                                                            if show_cli_install
-                                                                && crate::cards::settings_action(
-                                                                    ui,
-                                                                    "Install Grok Build CLI",
-                                                                    cli_install_hint,
-                                                                    if cli_installing { "Installing…" } else { "Install" },
-                                                                )
-                                                                && !cli_installing
-                                                            {
-                                                                install_cli = true;
                                                             }
                                                             if crate::cards::settings_action(
                                                                 ui,
@@ -689,7 +655,6 @@ impl Cabin {
                                                             );
                                                             ui.add_space(6.0);
                                                             crate::cards::settings_note(ui, "Native Grok Build cabin.");
-                                                            crate::cards::settings_note(ui, &build_agent::grok_banner());
                                                             crate::cards::settings_note(ui, &doctor);
                                                             if crate::cards::settings_action(ui, "Diagnostics", "Copy a redacted bundle. No secrets.", "Copy") {
                                                                 copy_diag = true;
@@ -773,10 +738,7 @@ impl Cabin {
                                                             ) {
                                                                 let on = self.cfg.desktop_control;
                                                                 self.persist_cfg();
-                                                                self.status = crate::desktop_mcp::desktop_switch_note(on, self.cfg.grok_build_engine).into();
-                                                                if self.cfg.grok_build_engine {
-                                                                    crate::desktop_mcp::spawn_register(on);
-                                                                }
+                                                                self.status = crate::desktop_mcp::desktop_switch_note(on).into();
                                                                 crate::desktop_mcp::sync_native_cua(&self.cfg);
                                                                 crate::desktop_mcp::set_desktop_enabled(on);
                                                             }
@@ -935,23 +897,12 @@ impl Cabin {
                                                                     );
                                                                 }
                                                             }
-                                                            if crate::cards::settings_toggle(
+                                                            crate::cards::settings_note(
                                                                 ui,
-                                                                "Legacy Grok Build CLI engine",
-                                                                "Off: GrokHub talks to xAI itself. On: chats run through the Grok Build CLI, which is going away.",
-                                                                &mut self.cfg.grok_build_engine,
-                                                            ) {
-                                                                self.persist_cfg();
-                                                                self.status = "Saved".into();
-                                                            }
-                                                            if self.cfg.native_engine() {
-                                                                crate::cards::settings_note(
-                                                                    ui,
-                                                                    "This cabin's MCP servers are in Settings, Connectors.",
-                                                                );
-                                                                let cwd = self.grok_cwd();
-                                                                crate::native_plugins::paint(ui, &cwd);
-                                                            }
+                                                                "This cabin's MCP servers are in Settings, Connectors.",
+                                                            );
+                                                            let cwd = self.grok_cwd();
+                                                            crate::native_plugins::paint(ui, &cwd);
                                                             ui.add_space(12.0);
                                                             ui.label(
                                                                 egui::RichText::new("Desktop-agent cursor (preview)")
@@ -1012,9 +963,6 @@ impl Cabin {
         }
         if update {
             self.queue_combined_update();
-        }
-        if install_cli {
-            self.queue_grok_cli_install();
         }
         if restart {
             self.restart_after_update(ctx);
@@ -1189,7 +1137,6 @@ impl Cabin {
             self.halt_in_flight();
         }
         self.acp = None;
-        self.acp_spawn_rx = None;
         if let Some(t) = self.threads.get_mut(self.thread_idx) {
             t.grok_session = None;
         }
@@ -1233,7 +1180,6 @@ impl Cabin {
                 self.halt_in_flight();
             }
             self.acp = None;
-            self.acp_spawn_rx = None;
             if let Some(t) = self.threads.get_mut(self.thread_idx) {
                 t.grok_cwd = None;
                 t.grok_session = None;

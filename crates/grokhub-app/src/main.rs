@@ -6,7 +6,7 @@
 #![cfg_attr(not(test), windows_subsystem = "windows")]
 
 mod app;
-mod build_agent;
+mod engine_handle;
 mod helpers;
 mod titlebar;
 mod cards;
@@ -20,6 +20,7 @@ mod fx;
 mod desktop;
 mod desktop_mcp;
 mod github;
+mod google_mcp_via_cli;
 mod host;
 mod markdown;
 mod native_mcp;
@@ -52,7 +53,7 @@ use app::Cabin;
 use cli::{parse_args, Launch};
 use eframe::egui;
 use grokhub_core::{
-    doctor_cabin_line, doctor_grok_cli_line, doctor_lines, doctor_ok, hub_kind_from_health,
+    doctor_cabin_line, doctor_lines, doctor_ok, hub_kind_from_health,
     DEFAULT_PORT,
 };
 use std::env;
@@ -63,7 +64,7 @@ fn main() {
     if let Some(socket) = cli::askpass_socket(&args) {
         std::process::exit(grokhub_agent::sudo_pass::client(socket));
     }
-    grokhub_acp::silence_windows_hard_errors();
+    grokhub_core::proc_util::silence_windows_hard_errors();
     // Spike-4b: the learned-tier key lives in the OS keyring (asked lazily, never at start).
     grokhub_agent::harness::use_os_keyring();
     grokhub_agent::route::providers::use_os_vault();
@@ -191,9 +192,6 @@ fn run_doctor() {
     let kind = hub_kind_from_health(probe_hub_health_body().as_deref());
     let mut lines = doctor_lines(authed, mem_ok, &kind);
     lines.extend(grokhub_core::doctor_extras(None, crate::skills::list_skills().len()));
-    let (grok_ok, grok_text) =
-        grokhub_acp::doctor_grok_line_blocking(grokhub_acp::find_grok().as_deref());
-    lines.push(doctor_grok_cli_line(grok_ok, grok_text));
     lines.push(doctor_cabin_line(cabin_running()));
     for l in &lines {
         println!("{} {}", if l.ok { "ok " } else { "ERR" }, l.text);
@@ -212,8 +210,8 @@ fn run_update_cli() {
         grokhub_core::pending_from_versions(
             env!("CARGO_PKG_VERSION"),
             probe.cabin_tag.as_deref(),
-            probe.cli_installed.as_deref(),
-            probe.cli_alpha.as_deref(),
+            None,
+            None,
         ),
         channel,
     );

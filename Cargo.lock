@@ -1939,21 +1939,11 @@ dependencies = [
 ]
 
 [[package]]
-name = "grokhub-acp"
-version = "2.12.1"
-dependencies = [
- "grokhub-core",
- "serde",
- "serde_json",
-]
-
-[[package]]
 name = "grokhub-agent"
 version = "2.12.1"
 dependencies = [
  "base64",
  "globset",
- "grokhub-acp",
  "grokhub-core",
  "ignore",
  "image",
@@ -1978,7 +1968,6 @@ dependencies = [
  "eframe",
  "evdev",
  "global-hotkey",
- "grokhub-acp",
  "grokhub-agent",
  "grokhub-core",
  "grokhub-hub",

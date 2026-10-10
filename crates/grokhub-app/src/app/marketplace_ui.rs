@@ -72,7 +72,7 @@ pub(super) fn google_via(cli_found: bool) -> GoogleVia {
 
 /// The only Grok Build CLI use the Marketplace makes: is it there?
 fn grok_cli_found() -> bool {
-    grokhub_acp::find_grok().is_some()
+    crate::google_mcp_via_cli::cli_installed()
 }
 
 pub(super) const USES_GROK_CLI: &str = "Uses your Grok Build CLI";
@@ -82,18 +82,8 @@ pub(super) fn grok_google_steps(name: &str) -> [String; 3] {
     [
         "Run grok in a terminal and open /mcps.".to_string(),
         format!("Press i on {name} and sign in with your Google account."),
-        "Chats that run through Grok Build can use it then. Its status shows under Grok Build in the Installed tab.".to_string(),
+        "Grok Build can use it then.".to_string(),
     ]
-}
-
-/// Grok Build's own entry for a catalog entry: same name, or same URL.
-pub(super) fn grok_row_for<'a>(
-    rows: &'a [grokhub_acp::GrokMcpRow],
-    e: &CatalogEntry,
-) -> Option<&'a grokhub_acp::GrokMcpRow> {
-    let url = e.url.trim_end_matches('/');
-    rows.iter()
-        .find(|r| r.name == e.id || (!url.is_empty() && r.target.trim_end_matches('/') == url))
 }
 
 /// The badge chip on a Marketplace row: installed or not.
@@ -219,12 +209,6 @@ impl Cabin {
         let snap = crate::native_mcp::snapshot();
         if snap.busy {
             ui.ctx().request_repaint_after(std::time::Duration::from_millis(200));
-        }
-        if !self.cfg.native_engine() {
-            crate::cards::settings_note(
-                ui,
-                "Installed connectors are used by native chats. Turn on the native engine in Settings, Labs to use them.",
-            );
         }
         if !snap.note.is_empty() {
             crate::cards::settings_note(ui, &snap.note);
@@ -367,24 +351,6 @@ impl Cabin {
     /// and status, and how to sign in there. Nothing here runs the CLI.
     fn ui_google_via_grok(&mut self, ui: &mut egui::Ui, e: &CatalogEntry) {
         crate::cards::help_text(ui, &format!("{USES_GROK_CLI}, which signs in to Google for you."));
-        match grok_row_for(&self.grok_catalog.mcp, e) {
-            Some(row) => {
-                let rows = super::connectors_ui::grok_connector_rows(std::slice::from_ref(row), &self.mcp_status);
-                if let Some(r) = rows.first() {
-                    let (label, tone) = r.state.chip();
-                    ui.horizontal(|ui| {
-                        ui.label(RichText::new(format!("Grok Build has {}", r.name)).size(13.0).color(crate::theme::fg()));
-                        crate::cards::status_chip(ui, label, tone);
-                    });
-                }
-            }
-            None => {
-                crate::cards::help_text(
-                    ui,
-                    &format!("Grok Build doesn't list {} yet. Update Grok Build, then press Refresh in the Installed tab.", e.name),
-                );
-            }
-        }
         for (i, step) in grok_google_steps(&e.name).iter().enumerate() {
             crate::cards::help_text(ui, &format!("{}. {step}", i + 1));
         }
@@ -440,25 +406,14 @@ mod tests {
         assert_eq!(google_via(false), GoogleVia::Manual);
         assert_eq!(USES_GROK_CLI, "Uses your Grok Build CLI");
         assert_eq!(grok_google_steps("Gmail")[1], "Press i on Gmail and sign in with your Google account.");
-        let gmail = entry("gmail");
-        let row = |name: &str, target: &str| grokhub_acp::GrokMcpRow { name: name.into(), enabled: true, target: target.into() };
-        let rows = [row("context7", "npx -y @upstash/context7-mcp"), row("mail", "https://gmailmcp.googleapis.com/mcp/v1/")];
-        assert_eq!(grok_row_for(&rows, &gmail).map(|r| r.name.as_str()), Some("mail"), "matched by URL");
-        assert!(grok_row_for(&rows[..1], &gmail).is_none());
-        assert_eq!(grok_row_for(&[row("gmail", "x")], &gmail).map(|r| r.name.as_str()), Some("gmail"), "matched by name");
+        assert_eq!(grok_google_steps("Gmail")[2], "Grok Build can use it then.");
     }
 
     #[test]
     fn the_grok_cli_is_only_looked_for_never_run() {
         let src = include_str!("marketplace_ui.rs").replace("\r\n", "\n");
         let code = &src[..src.find("#[cfg(test)]").unwrap()];
-        assert_eq!(
-            code.matches("grokhub_acp::").count(),
-            code.matches("grokhub_acp::find_grok()").count() + code.matches("grokhub_acp::GrokMcpRow").count(),
-            "the Marketplace touches the CLI crate only for find_grok and the GrokMcpRow type"
-        );
-        assert_eq!(code.matches("grokhub_acp::find_grok()").count(), 1);
-        assert!(code.contains("grokhub_acp::find_grok().is_some()"));
+        assert_eq!(code.matches("google_mcp_via_cli::cli_installed()").count(), 1);
         for spawn in ["run_grok_user_cmd", "Command::new", "grok_user_stdout", "spawn_grok"] {
             assert!(!code.contains(spawn), "the Marketplace must not run the CLI: {spawn}");
         }

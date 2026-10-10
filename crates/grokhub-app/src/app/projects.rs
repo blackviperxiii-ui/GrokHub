@@ -66,7 +66,6 @@ impl Cabin {
                 self.halt_in_flight();
             }
             self.acp = None;
-            self.acp_spawn_rx = None;
             self.persist();
         } else {
             self.persist_cfg();
@@ -122,7 +121,6 @@ impl Cabin {
                 self.halt_in_flight();
             }
             self.acp = None;
-            self.acp_spawn_rx = None;
             if let Some(t) = self.threads.get_mut(self.thread_idx) {
                 t.grok_cwd = None;
                 t.grok_session = None;

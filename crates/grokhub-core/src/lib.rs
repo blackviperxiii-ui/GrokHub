@@ -4,6 +4,7 @@ pub mod amr;
 pub mod appearance;
 pub mod attach;
 pub mod audio_check;
+pub mod cabin_rules;
 pub mod automation;
 pub mod autonomy;
 pub mod bg_task;
@@ -16,6 +17,7 @@ pub mod chat_view;
 pub mod cabin_engine;
 pub mod channel;
 pub mod chips;
+pub mod cli_history;
 pub mod connector;
 pub mod consult;
 pub mod context;
@@ -117,7 +119,7 @@ pub use automation::{
     automation_blocked_by_policy, automation_schedule_label, automation_summary_line,
     chat_may_save_automation, compute_next_run, due_automations, ensure_automation_schedule,
     mark_automation_ran, mark_automation_skipped, night_check_command, night_check_exit_code,
-    night_check_may_fire, night_check_stdout, night_counts_run, night_unauth_should_skip,
+    night_check_may_fire, night_check_stdout, night_counts_run,
     parse_clock_token, parse_nl_automation, replay_automation_target, route_schedule,
     skip_automation, skip_night_check_receipt, teach_routine, teachable_steps,
     user_asked_to_schedule, watch_once_keeps_running, Automation, ScheduleRoute,
@@ -437,7 +439,7 @@ pub use slash::{
     SLASH_RESULT_PREFIX,
 };
 pub use state::{
-    clear_pending_after_complete, inbox_claim_ready, load_hub_state, merge_put_snapshot,
+    clear_pending_after_complete, load_hub_state, merge_put_snapshot,
     is_phone_name, save_hub_state, state_for_disk, CompleteError, HubState, PairError,
     DEFAULT_PORT, HUB_KIND,
 };
