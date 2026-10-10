@@ -345,6 +345,69 @@ pub fn disconnect(name: &str) -> Result<String, String> {
     Ok(format!("Disconnected {name}"))
 }
 
+/// What [`install`] did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Installed {
+    Added,
+    /// The same entry was already there; nothing was written.
+    AlreadyThere,
+}
+
+/// Marketplace Install, from the user's own click: `entry` (an `mcpServers`
+/// value with no credentials) lands in `mcp.json` through the ChangeLedger
+/// (origin user, so `/connections` can undo it). Installing the same entry
+/// again writes nothing; a different entry under the name is refused, so a
+/// connector the user set up is never overwritten.
+pub fn install(name: &str, entry: &Value) -> Result<Installed, String> {
+    let obj = entry.as_object().ok_or("a connector entry must be a JSON object")?;
+    if ["headers", "env", "bearerToken", "bearer_token", "tokenRef"].iter().any(|k| obj.contains_key(*k)) {
+        return Err(format!("{name}'s entry carries credentials; a key is saved separately"));
+    }
+    let config = crate::perm::config_dir();
+    let path = config::config_file();
+    let target = crate::harness::McpFile { path: &path, name };
+    if let Some(cur) = crate::harness::ChangeTarget::read(&target)? {
+        let cur: Value = serde_json::from_slice(&cur).map_err(|e| e.to_string())?;
+        let mut bare = cur.as_object().cloned().unwrap_or_default();
+        bare.remove("tokenRef");
+        if Value::Object(bare) == *entry {
+            return Ok(Installed::AlreadyThere);
+        }
+        return Err(format!("A connector named {name} is already set up differently; disconnect it first"));
+    }
+    let bytes = serde_json::to_vec_pretty(entry).map_err(|e| e.to_string())?;
+    crate::harness::record_change(&config, &target, crate::harness::Origin::User, "installed from Marketplace", || {
+        crate::harness::ChangeTarget::put(&target, Some(&bytes))
+    })?;
+    invalidate();
+    Ok(Installed::Added)
+}
+
+/// Save a key the user typed for an installed connector, after they approved
+/// it. The key is sealed with the keyring key and the entry only names it
+/// (`tokenRef`): an HTTP server sends it as a bearer header, a stdio server
+/// gets it in its `tokenEnv` variable.
+pub fn save_key(name: &str, key: &str) -> Result<String, String> {
+    let key = key.trim();
+    if key.is_empty() {
+        return Err("No key was typed, so nothing was saved".into());
+    }
+    let config = crate::perm::config_dir();
+    let path = config::config_file();
+    let target = crate::harness::McpFile { path: &path, name };
+    let cur = crate::harness::ChangeTarget::read(&target)?
+        .ok_or_else(|| format!("{name} isn't installed, so it has nowhere to keep a key"))?;
+    let mut entry: serde_json::Map<String, Value> = serde_json::from_slice(&cur).map_err(|e| e.to_string())?;
+    crate::harness::seal_connection_token(&config, name, key)?;
+    entry.insert("tokenRef".into(), json!(name));
+    let bytes = serde_json::to_vec_pretty(&entry).map_err(|e| e.to_string())?;
+    crate::harness::record_change(&config, &target, crate::harness::Origin::User, "key saved in Settings", || {
+        crate::harness::ChangeTarget::put(&target, Some(&bytes))
+    })?;
+    invalidate();
+    Ok(format!("Saved the key for {name}"))
+}
+
 /// MCP schemas for the native engine. `native` is how many desktop tools
 /// it registers beside them; past [`DEFER_AFTER`] in all, MCP tools hide
 /// behind `search_tool` and `use_tool`.
@@ -718,8 +781,14 @@ fn open_def(name: &str, def: &ServerDef, workspace: &Path) -> Result<(Conn, Vec<
             cwd,
         } => {
             let dir = stdio::workspace_or(cwd.clone(), workspace);
+            let mut env = env.clone();
+            if let (Some(token_name), Some(var)) = (&def.token_ref, &def.token_env) {
+                let token = crate::harness::open_connection_token(&perm::config_dir(), token_name)
+                    .ok_or("its key is missing or locked: save it again in Settings, Connectors")?;
+                env.insert(var.clone(), token);
+            }
             let (conn, tools) =
-                stdio::connect(name, command, args, env, &dir, def.startup_timeout)?;
+                stdio::connect(name, command, args, &env, &dir, def.startup_timeout)?;
             Ok((Conn::Stdio(conn), tools))
         }
         TransportDef::Http { url, sse } => {

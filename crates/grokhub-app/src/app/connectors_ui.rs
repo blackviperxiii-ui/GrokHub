@@ -310,6 +310,11 @@ impl Cabin {
 
     /// The Connectors section of Settings. Settings owns the scroll area.
     pub(super) fn ui_settings_connectors(&mut self, ui: &mut egui::Ui) {
+        self.ui_connectors_tabs(ui);
+        if self.market.tab == super::marketplace_ui::ConnectorsTab::Marketplace {
+            self.ui_marketplace(ui);
+            return;
+        }
         if self.cfg.native_engine {
             self.ensure_native_listing();
         }

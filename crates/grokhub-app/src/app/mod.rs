@@ -174,6 +174,7 @@ mod pulse_ui;
 mod board_ui;
 mod confirm;
 mod connectors_ui;
+mod marketplace_ui;
 mod harness_ui;
 mod inbox_ui;
 mod episode_ui;
@@ -659,6 +660,8 @@ pub struct Cabin {
     imagine_want_focus: bool,
     composer_want_focus: bool,
     settings_sec: SettingsSec,
+    /// Settings → Connectors tab and Marketplace view state.
+    market: marketplace_ui::MarketState,
     settings_back: Nav,
     imagine_aspect: u8,
     imagine_quality: bool,
@@ -1272,6 +1275,7 @@ impl Cabin {
             imagine_want_focus: false,
             composer_want_focus: false,
             settings_sec: SettingsSec::Account,
+            market: Default::default(),
             settings_back: Nav::Chat,
             imagine_aspect: 0,
             imagine_quality: true,
@@ -1721,6 +1725,7 @@ impl Cabin {
             imagine_want_focus: false,
             composer_want_focus: false,
             settings_sec: SettingsSec::Account,
+            market: Default::default(),
             settings_back: Nav::Chat,
             imagine_aspect: 0,
             imagine_quality: false,

@@ -87,6 +87,9 @@ pub(super) enum ConfirmKind {
         name: String,
         source: super::connectors_ui::ConnectorSource,
     },
+    /// Marketplace: seal the key typed for `name`. The key stays in the
+    /// Marketplace field, never in this card.
+    SaveKey { name: String, label: String },
 }
 
 impl ConfirmKind {
@@ -97,7 +100,8 @@ impl ConfirmKind {
             | Self::RemoveJob { .. }
             | Self::LastRun { .. }
             | Self::DeleteRecording { .. }
-            | Self::Disconnect { .. } => true,
+            | Self::Disconnect { .. }
+            | Self::SaveKey { .. } => true,
         }
     }
 }
@@ -158,6 +162,15 @@ pub(super) fn disconnect_spec() -> ConfirmSpec {
         consequence: "GrokHub stops using this connector and forgets its sign-in.",
         primary: "Disconnect",
         danger: true,
+    }
+}
+
+pub(super) fn save_key_spec() -> ConfirmSpec {
+    ConfirmSpec {
+        title: "Save key",
+        consequence: "GrokHub seals this key with your keychain key and sends it only to this connector.",
+        primary: "Save key",
+        danger: false,
     }
 }
 
@@ -291,6 +304,11 @@ impl Cabin {
                 super::connectors_ui::disconnect_question(name),
                 super::connectors_ui::disconnect_detail(*source).to_string(),
             ),
+            ConfirmKind::SaveKey { label, .. } => (
+                save_key_spec(),
+                format!("Save the key for {label}?"),
+                "Grok never sees it, and the connector's entry only names it. Disconnect deletes it.".to_string(),
+            ),
         };
         let overlay_open = self.palette_open || self.nav == Nav::Settings || self.find.focused;
         let steal = confirm_key(
@@ -316,7 +334,12 @@ impl Cabin {
             });
         match act {
             Some(ConfirmAct::Confirm) => self.take_confirm(kind),
-            Some(ConfirmAct::Cancel) => self.confirm = None,
+            Some(ConfirmAct::Cancel) => {
+                if matches!(kind, ConfirmKind::SaveKey { .. }) {
+                    self.market.key.clear();
+                }
+                self.confirm = None;
+            }
             None => {}
         }
     }
@@ -334,6 +357,7 @@ impl Cabin {
                 self.delete_recording(&card_id, &dir, &title)
             }
             ConfirmKind::Disconnect { name, source } => self.disconnect_confirmed(&name, source),
+            ConfirmKind::SaveKey { name, .. } => self.save_key_confirmed(&name),
         }
     }
 
