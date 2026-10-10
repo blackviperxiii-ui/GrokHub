@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 2.13.0 — 2026-10-10
+
 - Fixed: on Linux, an agent command could read the saved sudo password by running GrokHub's password helper itself (for example `sudo -u "$USER" "$SUDO_ASKPASS"`). The helper now answers only when the pipe it writes to is read by `sudo` alone, never by GrokHub's tool output or another program, and agent commands that name the helper are refused before they run.
 - Signing in no longer touches the Grok Build CLI. GrokHub never reads, refreshes or writes the CLI's login (`~/.grok/auth.json`); Connect Super Grok and `grokhub --oauth` keep the sign-in in GrokHub only, and chips, greetings, Imagine and chats use GrokHub's sign-in or your API key. Get Started shows GrokHub's own sign-in sheet even when the CLI is logged in, and never waits on a CLI install. Without a sign-in, chat shows "Sign in with Grok in Settings → Account, or add an API key." with a Settings button. The model list no longer asks Grok Build for its models. The legacy CLI engine keeps its old behavior until it is removed.
 - Desktop control no longer goes through the Grok Build CLI. GrokHub stops adding its desktop, Cua and self-management tools to Grok Build at startup and when the desktop switch changes; the switch now just says "Desktop control is on/off". GrokHub drives the screen itself, and on Linux with the Cua Driver flag on, GrokHub runs its own Cua gate as one of its MCP servers, with every action checked by the same rules as before.
@@ -15,6 +17,9 @@
 - A scan, diagnosis or review now ends with a findings card under the reply. It lists what Grok found, most severe first, each naming the service, package or error source, with a button for each one-tap fix (for example "Fix port 53 conflict" or "Reinstall 6 packages"). Tapping one starts that fix in the same chat, still asking for anything that needs your approval. Dismiss hides the buttons and keeps the report.
 - A chat or shell run no longer ends when the model says it's done while parts of the task are left. For a task with several parts, Grok writes a checklist first, and GrokHub sends it back to the open items until each one is checked with a real result or marked blocked with a reason. Saying "continue" picks the same checklist up. If Grok is truly stuck, the run ends saying which items are still open.
 - On Linux, `sudo` in GrokHub's commands now asks for your password once per session, in a system password dialog (KDE's own on Plasma, else zenity, qarma or yad), never as a GrokHub permission card. GrokHub keeps the password in memory only until it closes and never writes it to disk. A wrong password asks again, and Cancel makes `sudo` steps fail straight away for 5 minutes instead of asking over and over. Only GrokHub's own helper, started by a real `sudo`, gets the password; a program run by hand gets nothing. Commands no longer wait on a terminal nobody can see.
+
+- Linux: `grokhub-linux-v2.13.0.tar.gz` and AUR `pkgver=2.13.0`.
+- Windows: `GrokHub-Setup-2.13.0.exe` and `grokhub-windows-v2.13.0.zip`.
 
 ## 2.12.1 — 2026-10-09
 
