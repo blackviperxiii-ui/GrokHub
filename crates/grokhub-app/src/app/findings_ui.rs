@@ -131,7 +131,10 @@ mod tests {
         assert_eq!(cabin.harness.findings_dismissed, std::slice::from_ref(&body));
         // A fix goes down the typed-send path; with no engine here, that path
         // stops at the sign-in line instead of writing a turn.
+        cabin.harness.pending_findings = Some(body.clone());
         cabin.findings_clicked(FindingsAct::Run(card().fixes[0].prompt()), &body);
+        // Starting the next run drops a card left by one that never finished.
+        assert_eq!(cabin.harness.pending_findings, None);
         assert_eq!(cabin.status, "Install Grok Build (x.ai/cli) or Connect Grok in Settings");
         assert_eq!(cabin.harness.findings_dismissed, [body.clone(), body.clone()]);
     }

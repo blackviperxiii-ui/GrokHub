@@ -470,6 +470,7 @@ impl Cabin {
     /// before it sent; anything else is the user's.
     pub(super) fn begin_turn_origin(&mut self) {
         self.harness.turn_origin = self.harness.next_origin.take().unwrap_or_default();
+        self.harness.pending_findings = None;
     }
 
     pub(super) fn write_span(&self, span: hx::Span, path: &str) {
