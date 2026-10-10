@@ -21,7 +21,7 @@
 - Editing the `cabin_reports_version` literal outside a release bump.
 ## What depends on it
 - Users and packaging: `scripts/install.sh`, `scripts/install-windows.ps1`, `packaging/grokhub.desktop`, `packaging/systemd/grokhub.service`, and CI's binary-exists checks.
-- Grok Build runs `grokhub --mcp-desktop` as its desktop MCP server.
+- The native engine never loads `grokhub --mcp-desktop` from `mcp.json` (`the_cabin_desktop_server_is_never_loaded_or_imported`); it calls its own desktop tools. `--mcp-cua` is the one the engine starts itself (`set_cabin_cua`).
 ## Non-obvious
 - It is a binary crate (no `lib.rs`): every test is an in-crate unit test, so `pub(crate)` is enough and integration tests cannot reach it.
 - Default feature `fx` pulls `eframe/wgpu` for the composer glow shader (`crates/grokhub-app/src/fx/composer_glow.wgsl`).

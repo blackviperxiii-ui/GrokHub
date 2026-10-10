@@ -29,7 +29,7 @@
 - R3a fills DE2 and joins route records with `outcomes.jsonl` by episode. R3b's `new_provider` routes ride the same `Spend` and `harness::decide`.
 ## Non-obvious
 - `harness::decide` stays the only approval gate: the router picks how to think, never whether to act. A GB-only model gets a metadata-only profile (`not_run: gb_only`); a queued probe is not usable yet.
-- Grok Build turns are logged at send (`provider` `grok_build`, no outcome, no health): GB owns those calls and its effort is set at spawn. Live ACP `set_config_option` is not verified (R0 Step-0), so an ACP session runs at everyday chat's start and `/why` notes when the router would have picked otherwise; a headless `grok -p` turn spawns at the router's pick for that turn.
+- `PROVIDER_GROK_BUILD` (`grok_build`) is left from the CLI path: a call logged under it gets no outcome and no health (`crates/grokhub-agent/src/route/live.rs`). No CLI turn runs now; chat, background, and scheduled turns are native.
 - The ladder's state is in memory per episode and class; tool errors reach it through a thread-local (`note_tool_error`), so the next routed call on the same thread reads them.
 ## See also
 - [harness](harness.md), [grokhub-agent](grokhub-agent.md), [heartbeat](heartbeat.md), [self-improve](self-improve.md)

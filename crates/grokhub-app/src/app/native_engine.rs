@@ -1,5 +1,5 @@
-//! Native engine thread, the default. The legacy CLI launch path stays in `acp`
-//! and `chat_kick` until it is removed, picked only by Settings → Labs.
+//! Native engine thread: every chat turn starts here (`kick_native_turn`) and
+//! streams back through `poll_acp`.
 
 use super::*;
 use crate::engine_handle::{ExternalCmd, NativePerm};

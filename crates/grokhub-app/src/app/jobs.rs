@@ -239,7 +239,7 @@ impl Cabin {
                     )
                 };
                 if ok {
-                    self.note_combined_update_landed();
+                    self.note_cabin_update_landed();
                 }
             }
             Ok(JobOut::Err(e)) => {

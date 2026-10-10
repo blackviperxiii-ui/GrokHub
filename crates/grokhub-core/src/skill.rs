@@ -207,7 +207,7 @@ pub fn skill_use_in_chat_prompt(slash: &str, name: &str) -> String {
     }
 }
 
-/// Prepend the active skill follow so grok -p / ACP sees the steps.
+/// Prepend the active skill follow so the engine sees the steps.
 pub fn apply_skill_follow(prompt: &str, follow: Option<&str>) -> String {
     match follow.map(str::trim).filter(|s| !s.is_empty()) {
         Some(block) => format!("{block}\n\n{prompt}"),
