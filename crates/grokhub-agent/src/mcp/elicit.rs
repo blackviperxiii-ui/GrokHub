@@ -273,7 +273,7 @@ fn view_for(server: &str, id: &Value, params: &Value) -> ElicitView {
         obj.entry("serverName".to_string())
             .or_insert_with(|| json!(server));
     }
-    let parsed = grokhub_acp::protocol::parse_elicit(Value::String(wait_id.clone()), &shaped);
+    let parsed = grokhub_core::wire::parse_elicit(Value::String(wait_id.clone()), &shaped);
     ElicitView {
         id: wait_id,
         server_name: if parsed.server_name.is_empty() {

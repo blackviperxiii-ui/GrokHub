@@ -1,3 +1,6 @@
+//! Chat wire types shared by the native engine and the app: turn events,
+//! tool cards, permission and form asks, session modes and usage.
+
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
@@ -216,12 +219,12 @@ pub enum AcpEvent {
     Permission(PermissionAsk),
     Elicit(ElicitAsk),
     ElicitComplete { elicitation_id: String, server_name: String },
-    Usage(crate::stream::GrokUsage),
+    Usage(GrokUsage),
     Commands(Vec<String>),
     Task { id: String, title: String, done: bool },
     Compact {
         started: bool,
-        usage: crate::stream::GrokUsage,
+        usage: GrokUsage,
         error: Option<String>,
     },
     Done { stop_reason: String },
@@ -600,7 +603,7 @@ pub fn merge_tool_card(old: ToolCard, new: ToolCard) -> ToolCard {
         }
     } else if new.detail.is_empty()
         && status_flipped
-        && grokhub_core::tool_detail_is_status(&old.detail)
+        && crate::tool_detail_is_status(&old.detail)
     {
         String::new()
     } else if new.detail.is_empty() {
@@ -826,7 +829,7 @@ pub fn parse_session_update(params: &Value) -> Option<AcpEvent> {
             }
         }
         "usage_update" | "turn_completed" => {
-            let u = crate::stream::parse_usage(update);
+            let u = parse_usage(update);
             if u.is_empty() {
                 None
             } else {
@@ -898,12 +901,12 @@ pub fn parse_session_update(params: &Value) -> Option<AcpEvent> {
         }
         "auto_compact_started" => Some(AcpEvent::Compact {
             started: true,
-            usage: crate::stream::parse_usage(update),
+            usage: parse_usage(update),
             error: None,
         }),
         "auto_compact_completed" => Some(AcpEvent::Compact {
             started: false,
-            usage: crate::stream::parse_usage(update),
+            usage: parse_usage(update),
             error: None,
         }),
         "auto_compact_failed" => {
@@ -917,7 +920,7 @@ pub fn parse_session_update(params: &Value) -> Option<AcpEvent> {
                 .to_string();
             Some(AcpEvent::Compact {
                 started: false,
-                usage: crate::stream::parse_usage(update),
+                usage: parse_usage(update),
                 error: Some(if msg.is_empty() {
                     "Compact failed".into()
                 } else {
@@ -1287,6 +1290,358 @@ pub fn elicit_decline(id: Value) -> JsonRpc {
 
 pub fn elicit_cancel(id: Value) -> JsonRpc {
     response(id, json!({ "outcome": "cancel" }))
+}
+
+
+/// Server-reported spend and context. Grok Build 1.0.12+ includes reasoning.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct GrokUsage {
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub reasoning_tokens: u64,
+    pub cache_read_input_tokens: u64,
+    pub cache_creation_input_tokens: u64,
+    pub total_tokens: u64,
+    pub num_turns: u32,
+    pub context_tokens_used: u64,
+    pub context_window_tokens: u64,
+    pub stop_reason: String,
+    /// Millionths of a dollar, when the native engine reported a cost. Zero for the CLI.
+    pub cost_in_usd_ticks: i64,
+    /// "SuperGrok pool" or "API credits" from the native engine. Empty on the CLI path.
+    pub meter: String,
+}
+
+impl GrokUsage {
+    pub fn is_empty(&self) -> bool {
+        self.input_tokens == 0
+            && self.output_tokens == 0
+            && self.reasoning_tokens == 0
+            && self.total_tokens == 0
+            && self.context_tokens_used == 0
+            && self.context_window_tokens == 0
+    }
+
+    pub fn context_used(&self) -> u64 {
+        if self.context_tokens_used > 0 {
+            self.context_tokens_used
+        } else {
+            self.context_total()
+        }
+    }
+
+    pub fn context_window(&self) -> u64 {
+        if self.context_window_tokens > 0 {
+            self.context_window_tokens
+        } else {
+            500_000
+        }
+    }
+
+    pub fn context_total(&self) -> u64 {
+        if self.total_tokens > 0 {
+            self.total_tokens
+        } else {
+            self.input_tokens
+                + self.cache_read_input_tokens
+                + self.cache_creation_input_tokens
+                + self.output_tokens
+        }
+    }
+
+    pub fn merge(&mut self, other: &GrokUsage) {
+        if other.input_tokens > 0 {
+            self.input_tokens = other.input_tokens;
+        }
+        if other.output_tokens > 0 {
+            self.output_tokens = other.output_tokens;
+        }
+        if other.reasoning_tokens > 0 {
+            self.reasoning_tokens = other.reasoning_tokens;
+        }
+        if other.cache_read_input_tokens > 0 {
+            self.cache_read_input_tokens = other.cache_read_input_tokens;
+        }
+        if other.cache_creation_input_tokens > 0 {
+            self.cache_creation_input_tokens = other.cache_creation_input_tokens;
+        }
+        if other.total_tokens > 0 {
+            self.total_tokens = other.total_tokens;
+        }
+        if other.num_turns > 0 {
+            self.num_turns = other.num_turns;
+        }
+        if other.context_tokens_used > 0 {
+            self.context_tokens_used = other.context_tokens_used;
+        }
+        if other.context_window_tokens > 0 {
+            self.context_window_tokens = other.context_window_tokens;
+        }
+        if !other.stop_reason.is_empty() {
+            self.stop_reason = other.stop_reason.clone();
+        }
+        if other.cost_in_usd_ticks != 0 {
+            self.cost_in_usd_ticks = other.cost_in_usd_ticks;
+        }
+        if !other.meter.is_empty() {
+            self.meter = other.meter.clone();
+        }
+    }
+}
+
+pub fn grok_context_line(u: &GrokUsage) -> String {
+    if u.is_empty() {
+        return String::new();
+    }
+    let used = u.context_used();
+    let window = u.context_window();
+    let pct = (used.min(window) * 100).checked_div(window).unwrap_or(100) as u32;
+    let mut s = format!("{pct}% · {}/{}", compact_k(used), compact_k(window));
+    if u.reasoning_tokens > 0 {
+        s.push_str(&format!(" · {} think", compact_k(u.reasoning_tokens)));
+    }
+    if !s.is_empty() && !u.meter.is_empty() {
+        s.push_str(" · ");
+        s.push_str(&u.meter);
+    }
+    s
+}
+
+pub fn grok_usage_line(u: &GrokUsage) -> String {
+    if u.is_empty() {
+        return String::new();
+    }
+    let mut s = format!(
+        "grok {} in / {} out",
+        compact_k(u.input_tokens),
+        compact_k(u.output_tokens)
+    );
+    if u.reasoning_tokens > 0 {
+        s.push_str(&format!(" / {} think", compact_k(u.reasoning_tokens)));
+    }
+    if u.cache_read_input_tokens > 0 {
+        s.push_str(&format!(" / {} cache", compact_k(u.cache_read_input_tokens)));
+    }
+    s
+}
+
+pub fn turn_footer(stop_reason: &str, usage: &GrokUsage) -> String {
+    let reason = stop_reason.trim();
+    let ctx = grok_context_line(usage);
+    let head = match reason {
+        "" | "end_turn" => {
+            if ctx.is_empty() {
+                return String::new();
+            }
+            "Done"
+        }
+        "cancelled" | "canceled" => "Cancelled",
+        "max_tokens" => "Truncated — Grok is continuing",
+        "max_turn_requests" | "max_turns_reached" => "Max turns",
+        "refusal" => "Refused",
+        other => other,
+    };
+    if ctx.is_empty() {
+        head.to_string()
+    } else {
+        format!("{head} · {ctx}")
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StreamErrorKind {
+    Fatal,
+    Transient,
+    TruncationContinue,
+    CreditLimit,
+}
+
+pub fn classify_stream_error(msg: &str) -> StreamErrorKind {
+    let l = msg.to_ascii_lowercase();
+    if l.contains("credit")
+        || l.contains("quota")
+        || l.contains("usage limit")
+        || l.contains("upgrade tier")
+        || (l.contains("limit") && (l.contains("upsell") || l.contains("out of")))
+    {
+        StreamErrorKind::CreditLimit
+    } else if l.contains("shorter answer")
+        || l.contains("max_output")
+        || l.contains("max_tokens")
+        || (l.contains("truncat") && (l.contains("output") || l.contains("response") || l.contains("token")))
+    {
+        StreamErrorKind::TruncationContinue
+    } else if ["500", "502", "503", "504"].iter().any(|c| {
+        l.split(|ch: char| !ch.is_ascii_digit()).any(|w| w == *c)
+    }) || l.contains("5xx")
+        || l.contains("stall")
+        || l.contains("dropped")
+        || l.contains("timed out")
+        || l.contains("timeout")
+        || l.contains("unavailable")
+        || l.contains("connection reset")
+        || l.contains("econnreset")
+        || l.contains("temporarily")
+        || l.contains("try again later")
+        || l.contains("unreachable")
+        || l.contains("coordinator")
+    {
+        StreamErrorKind::Transient
+    } else {
+        StreamErrorKind::Fatal
+    }
+}
+
+pub fn retry_status_line(msg: &str) -> String {
+    let t = msg.trim();
+    if t.is_empty() {
+        return "Retrying…".into();
+    }
+    let l = t.to_ascii_lowercase();
+    if l.starts_with("retry") {
+        t.to_string()
+    } else {
+        format!("Retry: {t}")
+    }
+}
+
+pub fn rewrite_truncation_error(msg: &str) -> String {
+    match classify_stream_error(msg) {
+        StreamErrorKind::TruncationContinue => {
+            "Output hit the token limit. Grok is continuing automatically.".into()
+        }
+        StreamErrorKind::CreditLimit => {
+            "Credit limit reached. Try Again retries the last prompt.".into()
+        }
+        StreamErrorKind::Transient => {
+            let l = msg.to_ascii_lowercase();
+            if l.contains("unreachable") || l.contains("coordinator") {
+                "Subagent coordinator busy — retrying.".into()
+            } else {
+                "Grok hit a transient inference error and is retrying.".into()
+            }
+        }
+        StreamErrorKind::Fatal => msg.to_string(),
+    }
+}
+
+fn compact_k(n: u64) -> String {
+    if n >= 1000 {
+        format!("{}k", (n + 500) / 1000)
+    } else {
+        n.to_string()
+    }
+}
+
+pub fn parse_usage(v: &Value) -> GrokUsage {
+    let body = v.get("usage").unwrap_or(v);
+    let mut u = GrokUsage {
+        input_tokens: json_u64(body, &["input_tokens", "inputTokens"]),
+        output_tokens: json_u64(body, &["output_tokens", "outputTokens"]),
+        reasoning_tokens: json_u64(body, &["reasoning_tokens", "reasoningTokens"]),
+        cache_read_input_tokens: json_u64(
+            body,
+            &["cache_read_input_tokens", "cacheReadInputTokens", "cachedReadTokens"],
+        ),
+        cache_creation_input_tokens: json_u64(
+            body,
+            &[
+                "cache_creation_input_tokens",
+                "cacheCreationInputTokens",
+                "cacheCreationTokens",
+            ],
+        ),
+        total_tokens: json_u64(body, &["total_tokens", "totalTokens"]),
+        num_turns: json_u64(v, &["num_turns", "numTurns"]).min(u32::MAX as u64) as u32,
+        context_tokens_used: json_u64(
+            v,
+            &["context_tokens_used", "contextTokensUsed", "tokens_used", "tokensUsed"],
+        ),
+        context_window_tokens: json_u64(
+            v,
+            &[
+                "context_window_tokens",
+                "contextWindowTokens",
+                "context_window",
+                "contextWindow",
+            ],
+        ),
+        stop_reason: json_str(v, &["stopReason", "stop_reason"]),
+        cost_in_usd_ticks: json_i64(body, &["cost_in_usd_ticks", "costInUsdTicks"]),
+        meter: json_str(body, &["meter"]),
+    };
+    if u.num_turns == 0 {
+        u.num_turns = json_u64(body, &["num_turns", "numTurns", "modelCalls"]).min(u32::MAX as u64) as u32;
+    }
+    if u.context_tokens_used == 0 {
+        u.context_tokens_used = json_u64(body, &["context_tokens_used", "contextTokensUsed"]);
+    }
+    if u.context_window_tokens == 0 {
+        u.context_window_tokens = json_u64(body, &["context_window", "contextWindow", "contextWindowTokens"]);
+    }
+    if u.stop_reason.is_empty() {
+        u.stop_reason = json_str(body, &["stopReason", "stop_reason"]);
+    }
+    if u.total_tokens == 0 {
+        u.total_tokens = u.context_total();
+    }
+    u
+}
+
+pub fn parse_signals_json(raw: &str) -> Option<GrokUsage> {
+    let v: Value = serde_json::from_str(raw).ok()?;
+    let u = GrokUsage {
+        context_tokens_used: json_u64(&v, &["contextTokensUsed", "context_tokens_used"]),
+        context_window_tokens: json_u64(&v, &["contextWindowTokens", "context_window_tokens"]),
+        num_turns: json_u64(&v, &["turnCount", "turn_count"]).min(u32::MAX as u64) as u32,
+        ..GrokUsage::default()
+    };
+    if u.context_tokens_used == 0 && u.context_window_tokens == 0 {
+        None
+    } else {
+        Some(u)
+    }
+}
+
+fn json_u64(v: &Value, keys: &[&str]) -> u64 {
+    for k in keys {
+        let Some(x) = v.get(*k) else { continue };
+        if let Some(n) = x.as_u64() {
+            return n;
+        }
+        if let Some(n) = x.as_i64() {
+            return n.max(0) as u64;
+        }
+        if let Some(n) = x.as_f64() {
+            return n.max(0.0) as u64;
+        }
+    }
+    0
+}
+
+fn json_i64(v: &Value, keys: &[&str]) -> i64 {
+    for k in keys {
+        let Some(x) = v.get(*k) else { continue };
+        if let Some(n) = x.as_i64() {
+            return n;
+        }
+        if let Some(n) = x.as_u64() {
+            return n as i64;
+        }
+        if let Some(n) = x.as_f64() {
+            return n as i64;
+        }
+    }
+    0
+}
+
+fn json_str(v: &Value, keys: &[&str]) -> String {
+    for k in keys {
+        if let Some(s) = v.get(*k).and_then(|x| x.as_str()).map(str::trim).filter(|s| !s.is_empty()) {
+            return s.to_string();
+        }
+    }
+    String::new()
 }
 
 #[cfg(test)]

@@ -5,6 +5,7 @@ use crate::protocol::{
     prompt_params_with_image, request, response, session_load_params, session_new_params, AcpEvent,
     JsonRpc, PermissionAsk,
 };
+pub use grokhub_core::proc_util::is_sigterm_status;
 use crate::protocol::{PermissionMode, SessionMode};
 use crate::{
     agent_args, cabin_grok_home, cabin_leader_socket, find_grok, grok_home, grok_stdout_timeout,
@@ -348,15 +349,6 @@ fn format_exit_status(st: ExitStatus) -> String {
         }
     }
     st.to_string()
-}
-
-/// SIGTERM (128+15). The GUI/leader kills `grok agent stdio` this way.
-pub fn is_sigterm_status(s: &str) -> bool {
-    let l = s.to_ascii_lowercase();
-    l.contains("exit 143")
-        || l.contains("signal 15")
-        || l.contains("sigterm")
-        || (l.contains("agent closed") && l.contains("143"))
 }
 
 fn wait_status_text(child: &Arc<Mutex<Option<Child>>>) -> Option<String> {

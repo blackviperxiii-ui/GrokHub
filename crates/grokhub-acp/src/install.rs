@@ -6,7 +6,7 @@ use crate::locate::{
     grok_user_stdout_timeout, invalidate_grok_bin_cache,
 };
 #[cfg(windows)]
-use crate::locate::hide_windows_console;
+use grokhub_core::proc_util::hide_windows_console;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
