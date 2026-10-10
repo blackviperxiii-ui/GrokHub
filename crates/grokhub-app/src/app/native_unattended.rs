@@ -362,6 +362,7 @@ impl Cabin {
         let (session_id, resume) = scheduled_session(self);
         let gate = scheduled_gate(self, mode);
         let system = native_rules(self, &cwd);
+        crate::desktop_mcp::sync_native_cua(&self.cfg);
         let job = Prepared {
             ready,
             workspace: cwd,

@@ -316,6 +316,7 @@ impl Cabin {
         }
         let (client, auth_kind, bearer) = native_bg_model(self)?;
         let gate = self.native_bg_gate();
+        crate::desktop_mcp::sync_native_cua(&self.cfg);
         let model = grokhub_core::cabin_spawn_model(&self.cfg.model).to_string();
         let effort = self.bg_effort(origin);
         let rules = grokhub_acp::cabin_rules_for(

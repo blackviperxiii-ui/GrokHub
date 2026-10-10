@@ -254,6 +254,7 @@ impl Cabin {
 
     fn publish_native_cfg_for(&mut self, session_id: &str) -> Result<(), String> {
         let (bearer, auth_kind) = self.native_cred()?;
+        crate::desktop_mcp::sync_native_cua(&self.cfg);
         let workspace = self.native_workspace();
         let model = grokhub_core::cabin_spawn_model(&self.cfg.model).to_string();
         // The router picks each call's effort; this is only the fallback for an unlisted class.
