@@ -1588,7 +1588,7 @@ pub fn get_started_panel(
         );
         ui.add_space(12.0);
         ui.label(
-            RichText::new("Connect your Super Grok account. This signs in GrokHub and the Grok Build CLI together.")
+            RichText::new("Connect your Super Grok account. GrokHub signs in on its own; the Grok Build CLI is not needed.")
                 .size(15.0)
                 .color(crate::theme::muted()),
         );
@@ -4400,8 +4400,9 @@ mod tests {
             "Get Started must use cabin device-code OAuth and surface errors: {app}"
         );
         assert!(
-            app.contains("Also signs in the Grok Build CLI if it is not already connected"),
-            "settings Connect must say it also signs the CLI in: {app}"
+            app.contains("GrokHub keeps this sign-in to itself.")
+                && !app.contains("Also signs in the Grok Build CLI"),
+            "settings Connect must say the sign-in stays with GrokHub: {app}"
         );
     }
 

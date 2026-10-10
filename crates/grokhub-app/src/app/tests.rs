@@ -2373,8 +2373,8 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             .and_then(|s| s.split("fn mode_status_line(").next())
             .expect("cabin_fast_llm");
         assert!(
-            fast.contains("CABIN_FAST_MODEL") && fast.contains("grok_cli_key"),
-            "chips/greeting use grok-4.7 via grok login: {fast}"
+            fast.contains("CABIN_FAST_MODEL") && !fast.contains("grok_cli_key"),
+            "chips/greeting use grok-4.7 with GrokHub's own key, never the CLI login: {fast}"
         );
         assert!(
             fast.contains("CABIN_FAST_FALLBACK"),
@@ -2486,22 +2486,8 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
         );
         let bearer = fn_src(&src, "bearer");
         assert!(
-            bearer.contains("grok_cli_key")
-                && bearer.find("grok_cli_key").unwrap()
-                    < bearer.find("oauth_usable").unwrap_or(usize::MAX),
-            "Imagine/ACP bearer prefers grok login over cabin OAuth: {bearer}"
-        );
-        assert!(
-            bearer.contains("refresh_grok_login"),
-            "grok login JWT must refresh before Imagine 401s: {bearer}"
-        );
-        assert!(
-            bearer.contains("} else {") && bearer.contains("return k;"),
-            "a dead grok login JWT must fall through to console key, not keep the expired token: {bearer}"
-        );
-        assert!(
-            bearer.contains("hard_expired"),
-            "skew-stale grok login must still be used while refresh is off the UI thread: {bearer}"
+            !bearer.contains("grok_cli_key") && !bearer.contains("refresh_grok_login"),
+            "the Imagine/chips bearer never reads or refreshes the Grok CLI login: {bearer}"
         );
         assert!(
             bearer.contains("refresh_cabin_oauth") && !bearer.contains("ensure_access"),
@@ -10551,7 +10537,7 @@ fn fix_opens_about_and_dream_refuses_without_login() {
     cabin.run_slash_line("/dream");
     assert_eq!(
         cabin.status,
-        "Run grok login, or Connect Grok in Settings."
+        "Sign in with Grok or add an API key."
     );
     assert!(matches!(cabin.nav, Nav::Settings));
     assert!(!cabin.imagine_want_focus);
@@ -10803,7 +10789,7 @@ fn import_without_openclaw_and_consult_without_login() {
     cabin.run_slash_line("/consult harbor");
     assert_eq!(
         cabin.status,
-        "Run grok login, or Connect Grok in Settings."
+        "Sign in with Grok or add an API key."
     );
     assert!(!cabin.running);
     std::env::remove_var("GROKHUB_CONFIG");

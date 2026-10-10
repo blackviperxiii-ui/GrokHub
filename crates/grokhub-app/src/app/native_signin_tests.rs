@@ -2,7 +2,7 @@
 //! Every credential here is a fake string in a temp HOME / GROKHUB_CONFIG, and
 //! every request goes to a loopback fake server. Nothing reaches xAI.
 
-use super::native_engine::{set_responses_url_for_test, NATIVE_NEEDS_CABIN_SIGNIN};
+use super::native_engine::set_responses_url_for_test;
 use super::*;
 use grokhub_agent::AuthKind;
 use std::io::{BufRead, BufReader, Read, Write};
@@ -350,8 +350,8 @@ fn native_signin_missing_gives_exact_message() {
     );
     assert_eq!(server.token_calls.load(Ordering::SeqCst), 0);
 
-    // Only the Grok CLI is signed in ($HOME/.grok): say which sign-in Lab mode needs.
-    // The CLI's token is never used or echoed. GROK_HOME points elsewhere and changes nothing.
+    // Only the Grok CLI is signed in ($HOME/.grok): GrokHub never looks at it and
+    // asks for its own sign-in. GROK_HOME points elsewhere and changes nothing.
     std::fs::remove_file(crate::secrets::secrets_path()).unwrap();
     cabin.secrets = crate::secrets::load();
     let cli = sb.root.join("home/.grok");
@@ -363,12 +363,18 @@ fn native_signin_missing_gives_exact_message() {
     .unwrap();
     grokhub_acp::invalidate_grok_key_cache();
     let err = cabin.native_cred().unwrap_err();
-    assert_eq!(
-        err,
-        "GrokHub signs in on its own now, not through the Grok CLI. Sign in with Grok in Settings → Account, or add an API key."
-    );
-    assert_eq!(err, NATIVE_NEEDS_CABIN_SIGNIN);
-    assert!(!err.contains("test-cli-token"));
+    assert_eq!(err, "Sign in with Grok or add an API key.");
+    assert_eq!(cabin.bearer(), "", "the chips and Imagine bearer ignores the CLI login too");
+    assert!(!cabin.llm_ready());
+    // The CLI login does not skip GrokHub's own Get Started sheet either.
+    cabin.cfg.get_started_done = false;
+    assert!(cabin.ui_wants_get_started());
+    cabin.cfg.get_started_done = true;
+    assert!(!cabin.ui_wants_get_started(), "a finished Get Started stays finished");
+    cabin.cfg.get_started_done = false;
+    cabin.cfg.grok_build_engine = true;
+    assert!(!cabin.ui_wants_get_started(), "the legacy engine keeps its own rules");
+    cabin.cfg.grok_build_engine = false;
 
     // An API key stays a working alternative.
     cabin.secrets.api_key = "test-console-key".into();

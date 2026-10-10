@@ -24,10 +24,6 @@ struct LiveCfg {
     episode: Option<grokhub_agent::EpisodeSeed>,
 }
 
-/// The Grok CLI is signed in but GrokHub is not. The native engine only uses GrokHub's own sign-in.
-pub(super) const NATIVE_NEEDS_CABIN_SIGNIN: &str =
-    "GrokHub signs in on its own now, not through the Grok CLI. Sign in with Grok in Settings → Account, or add an API key.";
-
 fn live_map() -> &'static Mutex<HashMap<String, LiveCfg>> {
     static MAP: OnceLock<Mutex<HashMap<String, LiveCfg>>> = OnceLock::new();
     MAP.get_or_init(|| Mutex::new(HashMap::new()))
@@ -144,9 +140,6 @@ impl Cabin {
     pub(super) fn no_agent_note(&self) -> &'static str {
         if !self.cfg.native_engine() {
             return "Install Grok Build (x.ai/cli) or Connect Grok in Settings";
-        }
-        if self.secrets.oauth.is_none() && self.grok_cli_login_present() {
-            return NATIVE_NEEDS_CABIN_SIGNIN;
         }
         grokhub_core::XAI_NEED_SIGNIN
     }
@@ -343,9 +336,6 @@ impl Cabin {
         let key = self.console_key().trim();
         if !key.is_empty() {
             return Ok((key.to_string(), AuthKind::ApiKey));
-        }
-        if self.secrets.oauth.is_none() && self.grok_cli_login_present() {
-            return Err(NATIVE_NEEDS_CABIN_SIGNIN.into());
         }
         Err(grokhub_core::XAI_NEED_SIGNIN.into())
     }
