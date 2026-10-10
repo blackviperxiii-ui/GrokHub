@@ -1186,6 +1186,14 @@ fn extra_deny_rules() -> Vec<String> {
         out.push(format!("Bash(*\\{head}.exe *)"));
     }
     out.push("Bash(*\\format.com *)".into());
+    for head in DISK_BOOT_HEADS {
+        for form in HEAD_FORMS {
+            out.push(format!("Bash({form}{head}*)"));
+        }
+    }
+    for phrase in &CREDENTIAL_PHRASES_SH[3..] {
+        out.push(format!("Bash(*{phrase}*)"));
+    }
     for head in WRAPPED_HEADS {
         for wrap in WRAPPERS {
             for quote in ["", "\"", "'"] {
@@ -1227,6 +1235,7 @@ pub const GB_DENY_GAPS: &[(&str, &str)] = &[
         "a click on a Send, Pay, Delete, or Reset control (the label under the click point, not the tool name)",
     ),
     ("grokhub-self__connection_add", "a connection with needs_token (args, not the name); same for connection_modify"),
+    ("cp linux.efi /boot/efi/EFI/Linux/", "a copy, move or write into /boot or the ESP (the target path, not the head)"),
 ];
 
 /// Floor for shell commands: host_safety paths, rm -rf /, fork bomb, mkfs, dd to a disk,
@@ -1409,9 +1418,80 @@ const SEND_HEADS: &[&str] = &["sendmail", "mail", "mutt"];
 const CREDENTIAL_HEADS: &[&str] = &["passwd", "chpasswd"];
 /// Phrases anywhere in a segment.
 const IRREVERSIBLE_PHRASES: &[&str] = &["systemctl poweroff", "systemctl reboot"];
-const CREDENTIAL_PHRASES_SH: &[&str] = &["secret-tool", "gpg --export-secret", "security find-generic-password"];
+const CREDENTIAL_PHRASES_SH: &[&str] = &[
+    "secret-tool", "gpg --export-secret", "security find-generic-password", "keyrings/", "kwalletd", ".password-store",
+];
 /// Trash and Recycle Bin moves, anywhere in a segment.
 const DELETE_PHRASES: &[&str] = &["gio trash", "gio remove", "trash:/", "sendtorecyclebin", "-exec rm ", "-execdir rm "];
+
+/// Partition tools, the bootloader and the files early boot reads. Each one
+/// changes whether the computer starts, unless its words only list or print
+/// ([`disk_boot_reads_only`]): `fdisk -l` and `bootctl status` are scan steps.
+const DISK_BOOT_HEADS: &[&str] = &[
+    "fdisk", "sfdisk", "cfdisk", "gdisk", "sgdisk", "parted", "grub-install", "grub2-install", "grub-mkconfig",
+    "grub2-mkconfig", "update-grub", "bootctl", "efibootmgr", "mkinitcpio", "dracut", "update-initramfs", "kernelstub",
+];
+/// Where the bootloader, kernels and initramfs live.
+const BOOT_DIRS: &[&str] = &["/boot", "/efi"];
+/// Heads whose last path is where they write.
+const COPY_HEADS: &[&str] = &["cp", "mv", "install", "ln", "rsync"];
+/// Heads that write every path they name.
+const WRITE_HEADS: &[&str] = &["tee", "truncate", "touch"];
+
+fn in_boot_dir(word: &str) -> bool {
+    BOOT_DIRS.iter().any(|d| word == *d || word.starts_with(&format!("{d}/")))
+}
+
+/// `fdisk -l`, `parted -l`, `parted /dev/sda print`, `sgdisk -p`, `bootctl status`,
+/// plain `efibootmgr` (`-v`), and `--help` / `--version` on any of them. The
+/// words are lowercase already, so a flag whose capital differs (`sgdisk -O`
+/// prints, `-o` wipes) is never on a list here.
+fn disk_boot_reads_only(head: &str, args: &[String]) -> bool {
+    let flags: Vec<&str> = args.iter().filter(|a| a.starts_with('-')).map(|a| a.split('=').next().unwrap_or(a)).collect();
+    let plain: Vec<&str> = args.iter().filter(|a| !a.starts_with('-')).map(String::as_str).collect();
+    let only = |allowed: &[&str]| flags.iter().all(|f| allowed.contains(f));
+    if !args.is_empty() && only(&["-h", "--help", "--version"]) && plain.is_empty() {
+        return true;
+    }
+    match head {
+        "fdisk" | "gdisk" => flags.iter().any(|f| matches!(*f, "-l" | "--list")) && only(&["-l", "--list", "-u", "--units", "-b"]),
+        "sfdisk" => !flags.is_empty() && only(&["-l", "--list", "-d", "--dump", "--list-free", "--verify", "-s", "--show-size"]),
+        "sgdisk" => !flags.is_empty() && only(&["-p", "--print", "-i", "--info", "-v", "--verify", "--print-mbr"]),
+        "parted" => {
+            let listing = flags.iter().any(|f| matches!(*f, "-l" | "--list"));
+            let printing = plain.iter().skip(1).all(|w| matches!(*w, "print" | "free" | "all" | "devices" | "list"))
+                && plain.get(1) == Some(&"print");
+            (listing || printing) && only(&["-l", "--list", "-s", "--script", "-m", "--machine"])
+        }
+        "bootctl" => plain.first().is_none_or(|w| matches!(*w, "status" | "list" | "is-installed")),
+        "efibootmgr" => plain.is_empty() && only(&["-v", "--verbose"]),
+        _ => false,
+    }
+}
+
+/// A partition, bootloader or initramfs change, or a write into `/boot` or the ESP.
+fn changes_boot(seg: &str, words: &[String], at: Option<usize>) -> bool {
+    let squashed = seg.replace(">>", ">");
+    if BOOT_DIRS.iter().any(|d| squashed.contains(&format!(">{d}/")) || squashed.contains(&format!("> {d}/"))) {
+        return true;
+    }
+    let Some(at) = at else {
+        return false;
+    };
+    let head = leaf(&words[at]);
+    let args = &words[at + 1..];
+    if DISK_BOOT_HEADS.contains(&head) {
+        return !disk_boot_reads_only(head, args);
+    }
+    let paths: Vec<&String> = args.iter().filter(|a| !a.starts_with('-')).collect();
+    if COPY_HEADS.contains(&head) {
+        return paths.len() >= 2 && paths.last().is_some_and(|p| in_boot_dir(p));
+    }
+    if WRITE_HEADS.contains(&head) || (head == "sed" && args.iter().any(|a| a.starts_with("-i") || a == "--in-place")) {
+        return paths.iter().any(|p| in_boot_dir(p));
+    }
+    false
+}
 
 fn command_class(cmd: &str) -> Option<HardClass> {
     // A newline, `$(...)`, `<(...)` and backticks start another command too.
@@ -1433,6 +1513,7 @@ fn command_class(cmd: &str) -> Option<HardClass> {
         if encoded_pwsh(&words)
             || IRREVERSIBLE_HEADS.contains(&h)
             || IRREVERSIBLE_PHRASES.iter().any(|p| seg.contains(p))
+            || changes_boot(seg, &words, head_at(&words))
         {
             return Some(HardClass::IrreversibleOs);
         }
@@ -1538,6 +1619,19 @@ mod tests {
                 assert!(gb_denies("Bash", &cmd), "no GB deny rule for `{cmd}`");
             }
         }
+        assert_eq!(DISK_BOOT_HEADS.len(), 17);
+        for h in DISK_BOOT_HEADS {
+            for cmd in [
+                format!("{h} /dev/sdb"),
+                format!("sudo {h} /dev/sdb"),
+                format!("cd /tmp; {h} /dev/sdb"),
+                format!("make && {h} /dev/sdb"),
+                format!("yes | {h} /dev/sdb"),
+            ] {
+                assert_eq!(classify("run_terminal_command", &sh(&cmd)), HardHit::Class(HardClass::IrreversibleOs), "classifier: {cmd}");
+                assert!(gb_denies("Bash", &cmd), "no GB deny rule for `{cmd}`");
+            }
+        }
         for phrase in [IRREVERSIBLE_PHRASES, CREDENTIAL_PHRASES_SH, DELETE_PHRASES].concat() {
             let cmd = format!("cd /tmp && {phrase} x");
             assert!(hard_shell(&cmd) && gb_denies("Bash", &cmd), "{cmd}");
@@ -1609,7 +1703,7 @@ mod tests {
     /// Card 29 part 3: case, full paths, wrappers and encoded PowerShell on path C.
     #[test]
     fn gb_rules_see_case_full_paths_wrappers_and_encoded_powershell() {
-        assert_eq!(HEADLESS_DENY_RULES.len(), 635);
+        assert_eq!(HEADLESS_DENY_RULES.len(), 723);
         let argv: usize = HEADLESS_DENY_RULES.iter().map(|r| "--deny".len() + r.len() + 4).sum();
         assert!(argv < 24_000, "a Windows command line holds 32,767 chars: {argv}");
         // G1: Windows reads these heads in any case.
@@ -1729,7 +1823,7 @@ mod tests {
 
     #[test]
     fn gb_deny_gaps_are_hard_but_no_rule_can_match_them() {
-        assert_eq!(GB_DENY_GAPS.len(), 10);
+        assert_eq!(GB_DENY_GAPS.len(), 11);
         for (sample, _) in &GB_DENY_GAPS[..5] {
             assert!(hard_shell(sample), "classifier: {sample}");
             assert!(!gb_denies("Bash", sample), "now covered, drop it from the gaps: {sample}");
@@ -1753,6 +1847,8 @@ mod tests {
             Some(HardClass::Credentials)
         );
         assert_eq!(hard_class(GB_DENY_GAPS[9].0, r#"{"name":"crm","url":"http://127.0.0.1:9/mcp"}"#), None);
+        // A write into /boot is hard by its target path; `cp` itself is soft work.
+        assert!(hard_shell(GB_DENY_GAPS[10].0) && !gb_denies("Bash", GB_DENY_GAPS[10].0));
         assert_eq!(
             desk_classify("type", &serde_json::json!({ "text": "hunter22", "label": "Password" })),
             HardHit::Class(HardClass::Credentials)
@@ -1889,6 +1985,67 @@ mod tests {
         assert_eq!(hard_class("run_terminal_command", &sh("sudo reboot")), Some(HardClass::IrreversibleOs));
         assert_eq!(hard_class("run_terminal_command", &sh("cargo test")), None);
         assert_eq!(hard_class("grep", r#"{"pattern":"password"}"#), None);
+    }
+
+    /// Card 34: partitions, the bootloader and /boot are irreversible OS;
+    /// listing them is a scan step and stays soft.
+    #[test]
+    fn disk_and_boot_changes_are_hard_and_listing_them_is_not() {
+        let class = |cmd: &str| hard_class("run_terminal_command", &sh(cmd));
+        for cmd in [
+            "sudo fdisk -l",
+            "fdisk --list /dev/nvme0n1",
+            "sudo sfdisk --dump /dev/sda",
+            "sudo sgdisk -p /dev/sda",
+            "sudo gdisk -l /dev/sda",
+            "sudo parted -l",
+            "sudo parted -s /dev/sda print free",
+            "bootctl",
+            "bootctl status",
+            "bootctl list",
+            "efibootmgr",
+            "efibootmgr -v",
+            "grub-install --version",
+            "mkinitcpio --help",
+            "ls -la /boot",
+            "cat /boot/grub/grub.cfg",
+            "cp /boot/grub/grub.cfg /tmp/grub.cfg",
+            "sed -n 1,20p /boot/loader/loader.conf",
+            "sudo pacman -S amd-ucode",
+            "systemctl restart nextdns",
+        ] {
+            assert_eq!(class(cmd), None, "soft: {cmd}");
+        }
+        for cmd in [
+            "sudo fdisk /dev/sdb",
+            "sudo sfdisk /dev/sdb < layout",
+            "sudo sgdisk -o /dev/sdb",
+            "sudo sgdisk --zap-all /dev/sdb",
+            "sudo cfdisk",
+            "sudo parted /dev/sdb mklabel gpt",
+            "sudo parted /dev/sdb print rm 2",
+            "sudo grub-install --target=x86_64-efi --efi-directory=/boot/efi",
+            "sudo grub-mkconfig -o /boot/grub/grub.cfg",
+            "sudo update-grub",
+            "sudo bootctl install",
+            "sudo bootctl update",
+            "sudo efibootmgr -o 0001,0002",
+            "sudo efibootmgr -b 0003 -B",
+            "sudo mkinitcpio -P",
+            "sudo dracut --force",
+            "echo 'default arch' | sudo tee /boot/loader/loader.conf",
+            "echo x >> /boot/loader/loader.conf",
+            "echo x>/efi/startup.nsh",
+            "sudo cp vmlinuz /boot/",
+            "sudo mv linux.efi /efi/EFI/Linux/linux.efi",
+            "sudo sed -i s/quiet// /boot/loader/entries/arch.conf",
+            "sudo touch /boot/x",
+        ] {
+            assert_eq!(class(cmd), Some(HardClass::IrreversibleOs), "hard: {cmd}");
+        }
+        for cmd in ["secret-tool lookup service x", "cat ~/.local/share/keyrings/login.keyring", "ls ~/.local/share/kwalletd", "pass show x; ls ~/.password-store"] {
+            assert_eq!(class(cmd), Some(HardClass::Credentials), "credentials: {cmd}");
+        }
     }
 
     #[test]
