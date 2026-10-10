@@ -593,7 +593,7 @@ fn relative_when(then_ms: u64, clock: LocalClock) -> String {
 }
 
 /// 12-hour clock: "7:30 AM", "12:00 PM". Minutes stay two digits.
-fn format_ampm(tod_min: u32) -> String {
+pub fn format_ampm(tod_min: u32) -> String {
     let h24 = tod_min / 60;
     let m = tod_min % 60;
     let (h12, half) = if h24 == 0 {

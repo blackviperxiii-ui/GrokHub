@@ -2,12 +2,12 @@
 
 Native Rust cabin. No Electron. No Tauri. One repo, one `main`, one version — two ship artifacts.
 
-**v2.12.0** — Unsure actions become one-tap suggestion cards, keyboard sends and checkouts need a hard approval, desktop sessions write and reuse recovery lessons, failed screenshots fall back through every capture backend, and an unanswered hard step waits instead of ending the session.
+**v2.12.1** — Always Allow stops only for money, sending, deleting, credentials and irreversible system changes; a no-model pause keeps retrying and resumes on its own; and every feed card names its item.
 
 | Platform | Artifact | Latest |
 |----------|----------|--------|
-| **Linux** (Arch / CachyOS) | `grokhub-linux-v2.12.0.tar.gz`, AUR | **v2.12.0** |
-| **Windows** (x86_64) | `GrokHub-Setup-2.12.0.exe`, `grokhub-windows-v2.12.0.zip` | **v2.12.0** |
+| **Linux** (Arch / CachyOS) | `grokhub-linux-v2.12.1.tar.gz`, AUR | **v2.12.1** |
+| **Windows** (x86_64) | `GrokHub-Setup-2.12.1.exe`, `grokhub-windows-v2.12.1.zip` | **v2.12.1** |
 
 Windows vs Linux in the cabin is `cfg(windows)` / `cfg(unix)`. The older [GrokHub-Windows](https://github.com/blackviperxiii-ui/GrokHub-Windows) fork is an archive source — new cabin work lands here.
 
@@ -50,7 +50,7 @@ Projects sit in the left rail. `+` makes a one-level folder. It does not create 
 
 History search runs as you type across SOUL/USER/MEMORY and every chat; a new query drops the previous needle's hits so a late walk cannot open the wrong thread. A hit is a door — click a memory line to open that file in the editor, a chat line to open that thread. Re-opening the memory file already in the editor keeps unsaved typing. Below the search, History is the cabin's own chats (newest used, pins on top). Headless `grok -p` keeps the session on that chat. Background runs such as “summarize the workboard” are not rows. Right-click **Delete** or the History-page Delete button removes the cabin chat and its Grok Build session. Transcripts stay on the chat until you delete it. The cabin stays on Grok Build CLI **alpha** (`grok update --alpha`). It does not switch off alpha.
 
-Imagine stills use dedicated **`grok-imagine-image-2.0`** (falls back to `grok-imagine-image` on timeout). Video kind calls **`grok-imagine-video-1.5`**. Auth is `grok login` first, then a console key / cabin OAuth. Hey Grok: push-to-talk STT into chat, then TTS of the reply body (not thinking). Same on Linux and Windows. Desktop control is **Grok Build computer-use** — the cabin keeps tool cards, diffs, and computer-use frames in a collapsed Work tree in chat. No Desk / Take over menu. The shipped `grokhub-desktop` MCP is the desktop tool path on Linux and Windows. In front of it and every Grok Build tool call, the cabin runs a stricter pre-check that never loosens the permission pill: a hard floor deny, a white hard-class card even under Always (money, send, delete, credentials, irreversible OS), and Settings → *Let Grok control the desktop* as Access. Full is an inline Grant full card in the Work tree. Halt / Stop / tray Halt / Ctrl+Alt+H SIGTERM the `grok -p` child. Stream buffers clip at `IMAGE_FILE_CAP` / `TEXT_FILE_CAP`. Desk frames drop above `FRAME_CAP`. Titlebar × unmaps to tray. Plus-button stills ride `--prompt-json` image blocks.
+Imagine stills use dedicated **`grok-imagine-image-2.0`** (falls back to `grok-imagine-image` on timeout). Video kind calls **`grok-imagine-video-1.5`**. Auth is `grok login` first, then a console key / cabin OAuth. Hey Grok: push-to-talk STT into chat, then TTS of the reply body (not thinking). Same on Linux and Windows. Desktop control is **Grok Build computer-use** — the cabin keeps tool cards, diffs, and computer-use frames in a collapsed Work tree in chat. No Desk / Take over menu. The shipped `grokhub-desktop` MCP is the desktop tool path on Linux and Windows. In front of it and every Grok Build tool call, the cabin runs a stricter pre-check that never loosens the permission pill: a hard floor deny, a white hard-class card even under Always (money, send, delete, credentials, irreversible OS: partitions, the bootloader and writes into `/boot` or the ESP), and Settings → *Let Grok control the desktop* as Access. Full is an inline Grant full card in the Work tree. With Always on, nothing else asks: `sudo`, package admin (`pacman -S`, `systemctl restart`), commands the engine can't split, and your own ask rules run without a card; deny rules and the floor still refuse. Halt / Stop / tray Halt / Ctrl+Alt+H SIGTERM the `grok -p` child. Stream buffers clip at `IMAGE_FILE_CAP` / `TEXT_FILE_CAP`. Desk frames drop above `FRAME_CAP`. Titlebar × unmaps to tray. Plus-button stills ride `--prompt-json` image blocks.
 
 Settings → **Account** is Super Grok device-code OAuth only — **Connect** / **Sign out** (or `grokhub --oauth`). That also writes `~/.grok/auth.json` when the Grok Build CLI is not already connected. Tokens live in `~/.config/GrokHub/secrets.json` (mode 0600; Windows user-only DACL), never in markdown. Settings → Appearance is **Dark**, **Light**, or **System**. Settings → Behavior holds close-to-tray, the living wall, and one **quiet hours** dropdown (Off / common windows). Picking a window saves it. Settings → **Cabin defaults** pins the chat model, reasoning effort, Ask or Auto, and Chat / Plan / btw in `app.json`, plus **Always collapse**. Auto model saves an empty pin. Always is not written from that page. Close-to-tray still hides the cabin; the desktop tip is once, and only when quiet hours allow it. GitHub PAT is not a Settings page — the connector owns that.
 
@@ -77,14 +77,14 @@ There are two channels. **Stable** builds `main`, where releases are cut. **Beta
 ```bash
 ./scripts/install.sh --user --channel beta     # fetch origin, check out beta, build, install
 ./scripts/install.sh --user --channel stable   # back to main
-grokhub --version                              # GrokHub 2.12.0-beta (beta @ abc1234) or GrokHub 2.12.0 (main @ f7dcf9a)
+grokhub --version                              # GrokHub 2.12.1-beta (beta @ abc1234) or GrokHub 2.12.1 (main @ f7dcf9a)
 ```
 
 `--channel` fetches `origin`, checks out the branch (creating a local tracking branch the first time, and fast-forwarding it after that), then builds and installs. Stable follows `main`, not the latest release tag, because the in-app Update already pulls `main`. The switch refuses to run over uncommitted changes, and it stops instead of resetting when your local branch has commits that aren't on `origin`.
 
 The channel is saved to `~/.config/GrokHub/channel` (or `$GROKHUB_CONFIG/channel`), next to the `source` receipt. A plain `./scripts/install.sh --user` keeps the saved channel and builds whatever is checked out; it doesn't move git. Settings → **Update**, `/update`, and `grokhub --update` read the receipt: a beta install pulls `origin beta` and never `origin main`. If the clone isn't on the channel's branch, Update stops and says which command to run. `./scripts/install.sh --dry-run` prints the channel, branch, and receipt it would use, and exits.
 
-`--version` comes from `crates/grokhub-app/build.rs`, which reads the branch and short SHA from git at build time. A beta build adds `-beta` to the version; the Cargo version itself never changes. A build made without git shows just `GrokHub 2.12.0`.
+`--version` comes from `crates/grokhub-app/build.rs`, which reads the branch and short SHA from git at build time. A beta build adds `-beta` to the version; the Cargo version itself never changes. A build made without git shows just `GrokHub 2.12.1`.
 
 Limits: channels are Linux-only for now. `scripts/install-windows.ps1` has no `-Channel`, and Windows Setup always installs stable releases (a beta receipt on Windows never falls back to the stable release zip). The Update chip still only notices new releases, so on beta, use Settings → **Update** to pull new beta commits.
 

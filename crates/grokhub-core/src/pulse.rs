@@ -390,14 +390,17 @@ pub fn i_can_title(card: &UpdateCard) -> String {
     if lower.starts_with("i can ") && title.chars().count() <= I_CAN_MAX {
         return title.to_string();
     }
-    // A proactive suggestion's title is the item itself ("Tidy the board").
-    let suggests = card
-        .pulse
-        .proactive
-        .as_ref()
-        .is_some_and(|p| p.route == crate::proactive::ProactiveRoute::Suggest);
-    if suggests && title.chars().count() <= I_CAN_MAX {
-        return title.to_string();
+    // A suggestion's title already names its item: a proactive one is the
+    // step ("Tidy the board"), a situation, router or review one is its own
+    // line ("Paused: Fix the tray icon"). "I can paused: …" read as nonsense.
+    let suggests = card.kind == UpdateKind::Suggestion
+        && card
+            .pulse
+            .proactive
+            .as_ref()
+            .is_none_or(|p| p.route == crate::proactive::ProactiveRoute::Suggest);
+    if suggests {
+        return clip_words(title, I_CAN_MAX);
     }
     let action = card.idea_action();
     let action = one_line(&action);

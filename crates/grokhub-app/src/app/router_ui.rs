@@ -10,7 +10,7 @@ use grokhub_agent::route::guard::{run_guard, GuardRun};
 use grokhub_agent::route::learn::{self, TuneRun};
 use grokhub_agent::route::local::LocalSource;
 use grokhub_agent::route::signals::{LedgerOutcomeSource, SpanVerifySource};
-use grokhub_agent::route::heal::{heal_messages, joined_messages, pause_msg, HealMsg, HealNotes, Heard, Tier};
+use grokhub_agent::route::heal::{heal_messages, joined_messages, HealMsg, HealNotes, Heard, Tier};
 use grokhub_agent::route::refresh::{fold_health, probe_next, run_refresh, RefreshDone, RefreshJob};
 use grokhub_agent::route::sources::{probe_model, rebuild_table, GrokBuildSource, XaiApiSource};
 use grokhub_core::model_registry::RegistryEvent;
@@ -77,6 +77,8 @@ pub(super) struct RouterUi {
     pub budget: super::budget_ui::BudgetUi,
     /// Router R3b: the "Add a provider" fields and the provider pick the router last heard.
     pub providers: super::provider_ui::ProviderUi,
+    /// A no-route pause waiting on its own for a model to answer.
+    pub wait: super::model_wait_ui::ModelWaitUi,
 }
 
 impl Cabin {
@@ -141,9 +143,10 @@ impl Cabin {
         self.sync_router_pin();
         self.sync_spend();
         self.poll_route_asks();
-        if let Some((_, model, why)) = grokhub_agent::route::live::take_no_route() {
-            self.deliver_heal(HealOut { msgs: vec![pause_msg(&model, &why, &[])], cleared: Vec::new() });
+        if let Some((class, model, _)) = grokhub_agent::route::live::take_no_route() {
+            self.start_model_wait(&class, &model, now_ms());
         }
+        self.poll_model_wait(halted);
         if halted || self.scratch() {
             return;
         }
@@ -246,8 +249,7 @@ impl Cabin {
                 }
                 let now = now_ms();
                 for (class, text) in run.reverted {
-                    let card = grokhub_core::suggestion_card(&format!("router-guard:{class}"), "Auto now thinks harder here", &text, now);
-                    grokhub_core::post_update(&mut self.updates, card);
+                    grokhub_core::post_update(&mut self.updates, guard_card(&class, &text, now));
                 }
                 self.persist_updates();
             }
@@ -348,7 +350,7 @@ impl Cabin {
 
     /// Work-tree lines, Home updates and pauses, by tier. Home updates go
     /// through the feed, which holds them in quiet hours.
-    fn deliver_heal(&mut self, heal: HealOut) {
+    pub(super) fn deliver_heal(&mut self, heal: HealOut) {
         let router = &mut self.harness.router;
         router.rows.retain(|(k, _)| !heal.cleared.contains(k));
         router.paused.retain(|k| !heal.cleared.contains(k));
@@ -433,6 +435,13 @@ impl Cabin {
     }
 }
 
+/// The Pulse Suggestion for a class the accuracy guard reverted. The title
+/// names the kind of step ("Auto now thinks harder on everyday chat").
+pub(super) fn guard_card(class: &str, text: &str, now: u64) -> grokhub_core::UpdateCard {
+    let plain = grokhub_agent::route::policy::class_row(class).map_or(class, |row| row.plain);
+    grokhub_core::suggestion_card(&format!("router-guard:{class}"), &format!("Auto now thinks harder on {plain}"), text, now)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -459,10 +468,10 @@ mod tests {
             cleared: Vec::new(),
         });
         assert_eq!(app.harness.router.rows, vec![("unhealthy:grok-4.6".to_string(), row.to_string())]);
-        assert_eq!(app.status, "Paused: no model in your plan is answering");
+        assert_eq!(app.status, "Paused: grok-4.7 isn't answering");
         let titles: Vec<&str> = app.updates.iter().map(|c| c.title.as_str()).collect();
         assert_eq!(titles.len(), 2, "{titles:?}");
-        assert!(titles.contains(&"title retired:grok-4.3") && titles.contains(&"Paused: no model in your plan is answering"));
+        assert!(titles.contains(&"title retired:grok-4.3") && titles.contains(&"Paused: grok-4.7 isn't answering"));
         // The same pause again says nothing; the model answering again clears the row and the pause.
         app.deliver_heal(HealOut { msgs: vec![pause_msg("grok-4.7", "It failed.", &[])], cleared: Vec::new() });
         assert_eq!(app.updates.len(), 2);
