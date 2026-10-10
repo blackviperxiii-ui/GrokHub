@@ -41,6 +41,9 @@ pub fn run(workspace: &Path, args: &Value, stop: &dyn Fn() -> bool) -> ToolOutpu
     if command.is_empty() {
         return ToolOutput::err("command is required");
     }
+    if crate::sudo_pass::names_helper(&command) {
+        return ToolOutput::err(crate::sudo_pass::HELPER_REFUSAL);
+    }
     let timeout_ms = timeout_ms(args);
     let cwd = match workspace.canonicalize() {
         Ok(path) => path,
@@ -228,6 +231,9 @@ fn bash(cwd: &Path, command: &str) -> std::process::Command {
 pub(crate) fn spawn_background(cwd: &Path, command: &str) -> Result<BgProc, String> {
     use std::sync::atomic::AtomicBool;
     use std::sync::{Arc, Mutex};
+    if crate::sudo_pass::names_helper(command) {
+        return Err(crate::sudo_pass::HELPER_REFUSAL.to_string());
+    }
 
     let mut child = bash(cwd, command)
         .spawn()
@@ -576,6 +582,17 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[test]
+    fn commands_that_call_the_sudo_helper_never_run() {
+        let dir = scratch("askpass");
+        let out = run(&dir, &json!({"command": "sudo -u \"$USER\" \"$SUDO_ASKPASS\""}), &|| false);
+        assert!(out.failed);
+        assert_eq!(out.text, crate::sudo_pass::HELPER_REFUSAL);
+        #[cfg(unix)]
+        assert_eq!(super::spawn_background(&dir, "echo \"$SUDO_ASKPASS\"").err().as_deref(), Some(crate::sudo_pass::HELPER_REFUSAL));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
