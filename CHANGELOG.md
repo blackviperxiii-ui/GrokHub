@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## 2.12.1 — 2026-10-09
+
+- Always Allow now means it: GrokHub only stops for money, sending, deleting your data, credentials and irreversible system changes. Admin work such as `sudo journalctl`, `sudo pacman -Qk`, `sudo pacman -S amd-ucode` or `systemctl restart nextdns` runs without a permission card, and so do commands GrokHub can't split and your own ask rules. Partitioning a disk, installing or changing the bootloader, rebuilding the initramfs and writing into `/boot` or the EFI partition now count as irreversible and always show the white approval card, while listing them (`fdisk -l`, `parted -l`, `bootctl status`, `efibootmgr -v`) stays a normal step. Reading your keyrings or password store is a credentials step. Ask mode keeps asking as before, deny rules still win, and nothing runs this way while nobody is there.
+- When no model in your plan answers, GrokHub no longer stops and waits for you. It keeps checking on its own (after 15 s, 30 s, 1 m and 2 m, then every 5 minutes, with no limit) and resumes the paused chat turn as soon as a model answers, with one quiet note: "Back on grok-4.6; resumed: Summarize inbox". While it waits, Home shows an information card naming the models and the step ("Waiting for a model: grok-4.7 … “Summarize inbox” picks up on its own once one answers.") with a Retry now button and nothing to approve. It only ever tries models in your plan, so waiting never spends money. The budget pause is unchanged and still waits for you.
+- Every card on your feed now names the thing it's about. A card that can't name its item isn't posted at all, so you won't see a bare "Automation finished" or "Pick that job back up?". The router's cards name the model or step: "Paused: grok-4.7 isn't answering", "Your plan no longer includes grok-4.3", "Auto now thinks harder on everyday chat". A paused job's idea no longer says "That job is still paused". On the Ideas board, situation and router suggestions keep their own title instead of reading "I can paused: …". Crash, screen-recording and audio-check cards no longer say "Your automation … finished". Settings → Permissions now says calendar and mail are read through Grok Build's Google Calendar and Gmail connectors.
+
+- Linux: `grokhub-linux-v2.12.1.tar.gz` and AUR `pkgver=2.12.1`.
+- Windows: `GrokHub-Setup-2.12.1.exe` and `grokhub-windows-v2.12.1.zip`.
+
 ## 2.12.0 — 2026-10-09
 
 - When GrokHub isn't sure you'd want something done on its own, it now shows a one-tap suggestion that names the item ("Tidy Downloads: move 14 installers to ~/Downloads/old") with a Do it button, instead of asking "Should I …?". Do it runs it once through the normal checks. Dismiss is quiet: no prompt, the topic stays off your feed for the rest of the day, and GrokHub counts it as a mild no. "Don't do this again" now also means it won't suggest it again. Sending, paying, deleting, credentials and irreversible system steps still wait on the white approval card.

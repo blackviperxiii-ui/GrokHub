@@ -52,10 +52,11 @@ fn scope_reads(kind: &str) -> &'static str {
         "files" => "A folder you pick. Never your whole home folder, keys or logins.",
         "apps" => "Installed apps and how often you open them.",
         "browser_history" => "Pages you visited in one browser. Never cookies or saved logins.",
-        // SB-10 TODO: name the calendar source and the mail account once a
-        // cabin-owned reader exists (Spike-8a has none: GB's connectors are outside, D1).
-        "calendar" => "Your calendar events.",
-        "mail" => "Your mail.",
+        // Calendar and mail stay on Grok Build's connectors (decided 2026-10-09):
+        // GrokHub has no reader of its own and never reads Grok Build's config,
+        // so the line names the connector, not the account.
+        "calendar" => "Your calendar events, read through Grok Build's Google Calendar connector.",
+        "mail" => "Your mail, read through Grok Build's Gmail connector.",
         "system_state" => "Disk, services, logs and updates. Read only.",
         _ => "",
     }

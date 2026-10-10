@@ -25,6 +25,7 @@ pub mod spend;
 pub mod sources;
 pub mod table;
 pub mod tune;
+pub mod wait;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;

@@ -178,6 +178,7 @@ mod inbox_ui;
 mod episode_ui;
 mod privacy_ui;
 mod router_ui;
+mod model_wait_ui;
 mod local_ai_ui;
 mod setup_wizard;
 mod model_download_ui;
@@ -4199,6 +4200,7 @@ impl Cabin {
     }
 
     fn apply_job_fail(&mut self, err: &str) -> String {
+        self.note_no_route_turn(err);
         if grokhub_acp::is_sigterm_status(err) {
             return "Stopped".into();
         }
