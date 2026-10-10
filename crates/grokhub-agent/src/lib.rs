@@ -3,6 +3,7 @@
 mod auto_review;
 mod client;
 mod compact;
+mod drive;
 pub mod episode;
 mod eval;
 mod events;
