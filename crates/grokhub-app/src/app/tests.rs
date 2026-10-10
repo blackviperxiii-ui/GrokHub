@@ -27,6 +27,8 @@ fn cabin_src() -> String {
         include_str!("chat_ui.rs"),
         include_str!("sidebar.rs"),
         include_str!("pages.rs"),
+        include_str!("connectors_ui.rs"),
+        include_str!("marketplace_ui.rs"),
         include_str!("jobs.rs"),
         include_str!("chips.rs"),
         include_str!("voice.rs"),
@@ -2371,8 +2373,8 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             .and_then(|s| s.split("fn mode_status_line(").next())
             .expect("cabin_fast_llm");
         assert!(
-            fast.contains("CABIN_FAST_MODEL") && fast.contains("grok_cli_key"),
-            "chips/greeting use grok-4.7 via grok login: {fast}"
+            fast.contains("CABIN_FAST_MODEL") && !fast.contains("grok_cli_key"),
+            "chips/greeting use grok-4.7 with GrokHub's own key, never the CLI login: {fast}"
         );
         assert!(
             fast.contains("CABIN_FAST_FALLBACK"),
@@ -2484,22 +2486,8 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
         );
         let bearer = fn_src(&src, "bearer");
         assert!(
-            bearer.contains("grok_cli_key")
-                && bearer.find("grok_cli_key").unwrap()
-                    < bearer.find("oauth_usable").unwrap_or(usize::MAX),
-            "Imagine/ACP bearer prefers grok login over cabin OAuth: {bearer}"
-        );
-        assert!(
-            bearer.contains("refresh_grok_login"),
-            "grok login JWT must refresh before Imagine 401s: {bearer}"
-        );
-        assert!(
-            bearer.contains("} else {") && bearer.contains("return k;"),
-            "a dead grok login JWT must fall through to console key, not keep the expired token: {bearer}"
-        );
-        assert!(
-            bearer.contains("hard_expired"),
-            "skew-stale grok login must still be used while refresh is off the UI thread: {bearer}"
+            !bearer.contains("grok_cli_key") && !bearer.contains("refresh_grok_login"),
+            "the Imagine/chips bearer never reads or refreshes the Grok CLI login: {bearer}"
         );
         assert!(
             bearer.contains("refresh_cabin_oauth") && !bearer.contains("ensure_access"),
@@ -7044,37 +7032,41 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             .nth(1)
             .and_then(|s| s.split("fn tick_history_search(").next())
             .expect("ui_skills");
+        assert!(skills.contains("Grok Build skills"), "Skills must show Grok Build skills: {skills}");
+        let connectors = include_str!("connectors_ui.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .expect("connectors body");
         assert!(
-            skills.contains("Marketplace")
-                && skills.contains("MCP servers")
-                && skills.contains("Grok Build skills"),
-            "Skills and Connectors must show Grok Build skills, MCP, and marketplace: {skills}"
+            connectors.contains("\"Plugin marketplace\"") && connectors.contains("\"Grok Build\""),
+            "Settings, Connectors must show Grok Build MCP servers and the plugin marketplace"
         );
         assert!(
-            skills.contains("plugin install") || skills.contains("\"install\""),
-            "Marketplace Install must call grok plugin install: {skills}"
+            connectors.contains("\"install\""),
+            "Marketplace Install must call grok plugin install"
         );
         assert!(
-            skills.contains("mcp") && skills.contains("add") && skills.contains("doctor"),
-            "Connectors must expose grok mcp add/doctor: {skills}"
+            connectors.contains("\"Add MCP\"") && connectors.contains("run_mcp_doctor()"),
+            "Connectors must expose grok mcp add/doctor"
         );
         assert!(
-            skills.contains("uninstall") && skills.contains("plugin") && skills.contains("update"),
-            "Connectors must expose grok plugin uninstall/update: {skills}"
+            connectors.contains("\"uninstall\"") && connectors.contains("\"update\""),
+            "Connectors must expose grok plugin uninstall/update"
         );
         assert!(
             !skills.contains("merge_suggested_skills") && !skills.contains("add_suggested_skill"),
             "Suggested skills live on the Ideas board, not the Skills page: {skills}"
         );
+        let github = fn_src(&src, "ui_github_connector");
         assert!(
-            skills.contains("GITHUB_TILES")
-                && skills.contains("Save PAT")
-                && skills.contains("run_connector")
-                && skills.contains("github_token")
-                && !skills.contains("create_pr")
-                && !skills.contains("outlook")
-                && !skills.contains("gmail"),
-            "Connectors GitHub tiles + PAT must stay read-only: {skills}"
+            github.contains("GITHUB_TILES")
+                && github.contains("Save PAT")
+                && github.contains("run_connector")
+                && github.contains("github_token")
+                && !github.contains("create_pr")
+                && !github.contains("outlook")
+                && !github.contains("gmail"),
+            "Connectors GitHub tiles + PAT must stay read-only: {github}"
         );
         let add_skill = fn_src(&src, "add_suggested_skill");
         assert!(
@@ -9330,12 +9322,10 @@ fn send_from_composer_runs_help_and_refuses_without_grok() {
     cabin.send_from_composer("paint the harbor".into());
     assert!(
         !cabin.running,
-        "no grok binary must refuse before a run starts"
+        "no sign-in must refuse before a run starts"
     );
-    assert_eq!(
-        cabin.status,
-        "Install Grok Build (x.ai/cli) or Connect Grok in Settings"
-    );
+    // The booted cabin is on the native engine, so it names GrokHub's own sign-in.
+    assert_eq!(cabin.status, "Sign in with Grok or add an API key.");
     assert_eq!(
         cabin.messages.len(),
         before,
@@ -10547,7 +10537,7 @@ fn fix_opens_about_and_dream_refuses_without_login() {
     cabin.run_slash_line("/dream");
     assert_eq!(
         cabin.status,
-        "Run grok login, or Connect Grok in Settings."
+        "Sign in with Grok or add an API key."
     );
     assert!(matches!(cabin.nav, Nav::Settings));
     assert!(!cabin.imagine_want_focus);
@@ -10799,7 +10789,7 @@ fn import_without_openclaw_and_consult_without_login() {
     cabin.run_slash_line("/consult harbor");
     assert_eq!(
         cabin.status,
-        "Run grok login, or Connect Grok in Settings."
+        "Sign in with Grok or add an API key."
     );
     assert!(!cabin.running);
     std::env::remove_var("GROKHUB_CONFIG");
@@ -11531,13 +11521,12 @@ fn skills_connectors_and_sessions_without_grok() {
     let mut cabin = Cabin::quiet_for_test();
     cabin.run_slash_line("/skills");
     assert!(matches!(cabin.nav, Nav::Skills));
-    assert!(!cabin.skills_tab_connectors);
     assert_eq!(cabin.status, crate::build_agent::grok_banner());
     assert!(cabin.grok_catalog_loaded);
     assert!(cabin.grok_catalog_rx.is_none());
     cabin.run_slash_line("/connectors");
-    assert!(matches!(cabin.nav, Nav::Connectors));
-    assert!(cabin.skills_tab_connectors);
+    assert!(matches!(cabin.nav, Nav::Settings));
+    assert_eq!(cabin.settings_sec, SettingsSec::Connectors);
     assert_eq!(cabin.status, crate::build_agent::grok_banner());
     cabin.run_slash_line("/dashboard");
     assert!(matches!(cabin.nav, Nav::History));
@@ -12722,7 +12711,7 @@ fn models_and_inspect_without_grok() {
     assert!(cabin.inspect_rx.is_none());
     assert!(!cabin.running);
     cabin.run_slash_line("/inspect");
-    assert!(matches!(cabin.nav, Nav::Connectors));
+    assert!(matches!(cabin.nav, Nav::Settings));
     assert_eq!(cabin.status, crate::build_agent::grok_banner());
     assert_eq!(cabin.inspect_text, crate::build_agent::grok_banner());
     assert!(cabin.inspect_rx.is_none());
@@ -13661,7 +13650,6 @@ fn set_nav_id_opens_each_page() {
 
     cabin.set_nav_id("skills");
     assert!(matches!(cabin.nav, super::Nav::Skills));
-    assert!(!cabin.skills_tab_connectors);
     assert!(!cabin.running);
 
     cabin.set_nav_id("automations");
@@ -13685,8 +13673,8 @@ fn set_nav_id_opens_each_page() {
     assert!(!cabin.running);
 
     cabin.set_nav_id("connectors");
-    assert!(matches!(cabin.nav, super::Nav::Connectors));
-    assert!(cabin.skills_tab_connectors);
+    assert!(matches!(cabin.nav, super::Nav::Settings));
+    assert_eq!(cabin.settings_sec, SettingsSec::Connectors);
     assert!(!cabin.running);
 
     let threads_before = cabin.threads.len();
@@ -13970,30 +13958,27 @@ fn workflow_usage_and_workflows_slash_do_not_forward() {
     assert!(cabin.running, "a missing target must not touch the live turn");
 
     cabin.running = false;
-    cabin.skills_tab_connectors = true;
     cabin.run_slash_line("/workflows");
     assert!(matches!(cabin.nav, Nav::Skills));
-    assert!(!cabin.skills_tab_connectors);
     assert!(cabin.scroll_to_workflows);
     assert!(cabin.workflow_ctl_queue.is_empty());
     assert!(!cabin.running);
 
     cabin.run_slash_line("/workflow");
     assert!(matches!(cabin.nav, Nav::Skills));
-    assert!(!cabin.skills_tab_connectors);
     assert!(cabin.scroll_to_workflows);
 
     cabin.run_slash_line("/mcps");
-    assert!(matches!(cabin.nav, Nav::Connectors));
-    assert!(cabin.skills_tab_connectors);
+    assert!(matches!(cabin.nav, Nav::Settings));
+    assert_eq!(cabin.settings_sec, SettingsSec::Connectors);
     cabin.run_slash_line("/plugins");
-    assert!(matches!(cabin.nav, Nav::Connectors));
+    assert!(matches!(cabin.nav, Nav::Settings));
     cabin.run_slash_line("/marketplace");
-    assert!(matches!(cabin.nav, Nav::Connectors));
+    assert!(matches!(cabin.nav, Nav::Settings));
     cabin.run_slash_line("/connectors");
-    assert!(matches!(cabin.nav, Nav::Connectors));
+    assert!(matches!(cabin.nav, Nav::Settings));
     cabin.run_slash_line("/hooks");
-    assert!(matches!(cabin.nav, Nav::Connectors));
+    assert!(matches!(cabin.nav, Nav::Settings));
     assert!(cabin.workflow_ctl_queue.is_empty());
     assert!(!cabin.running);
 
@@ -14012,21 +13997,21 @@ fn hooks_slash_opens_connectors_on_the_hooks_section() {
 
     let mut cabin = Cabin::quiet_for_test();
     cabin.run_slash_line("/mcps");
-    assert!(matches!(cabin.nav, Nav::Connectors));
-    assert!(cabin.skills_tab_connectors);
+    assert!(matches!(cabin.nav, Nav::Settings));
+    assert_eq!(cabin.settings_sec, SettingsSec::Connectors);
     assert!(!cabin.scroll_to_hooks);
     cabin.run_slash_line("/plugins");
-    assert!(matches!(cabin.nav, Nav::Connectors));
+    assert!(matches!(cabin.nav, Nav::Settings));
     assert!(!cabin.scroll_to_hooks);
     cabin.run_slash_line("/marketplace");
-    assert!(matches!(cabin.nav, Nav::Connectors));
+    assert!(matches!(cabin.nav, Nav::Settings));
     assert!(!cabin.scroll_to_hooks);
     cabin.run_slash_line("/connectors");
-    assert!(matches!(cabin.nav, Nav::Connectors));
+    assert!(matches!(cabin.nav, Nav::Settings));
     assert!(!cabin.scroll_to_hooks);
     cabin.run_slash_line("/hooks");
-    assert!(matches!(cabin.nav, Nav::Connectors));
-    assert!(cabin.skills_tab_connectors);
+    assert!(matches!(cabin.nav, Nav::Settings));
+    assert_eq!(cabin.settings_sec, SettingsSec::Connectors);
     assert!(cabin.scroll_to_hooks);
 
     std::env::remove_var("GROKHUB_GROK");
@@ -14085,7 +14070,7 @@ fn connectors_hooks_and_doctor_do_not_write_grok_home() {
     for name in [
         "ui_connector_home_note",
         "ui_hooks_section",
-        "ui_mcp_row_status",
+        "ui_settings_connectors",
         "run_mcp_doctor",
         "apply_mcp_doctor_result",
         "poll_mcp_doctor",
@@ -14114,9 +14099,9 @@ fn connectors_hooks_and_doctor_do_not_write_grok_home() {
     assert!(hooks.contains("scroll_to_me") && hooks.contains("scroll_to_hooks"));
     assert!(hooks.contains("Align::TOP"));
     assert!(!hooks.contains("ghost_pill") && !hooks.contains("white_pill"));
-    let status = fn_src(&src, "ui_mcp_row_status");
-    assert!(status.contains("Sign in from Grok Build: run grok, open /mcps, press i on {name}"));
-    assert!(!status.contains("open_url"));
+    let rows = fn_src(&src, "grok_connector_rows");
+    assert!(rows.contains("Sign in from Grok Build: run grok, open /mcps, press i on {}"));
+    assert!(!rows.contains("open_url"));
     let home = fn_src(&src, "ui_connector_home_note");
     assert!(home.contains("cabin_grok_home") && home.contains("~/.grok"));
     let doctor = fn_src(&src, "run_mcp_doctor");
@@ -14141,8 +14126,8 @@ fn connectors_hooks_and_doctor_do_not_write_grok_home() {
         live.contains("mcp_doctor_rx.is_some()"),
         "doctor must keep repainting until the status lands: {live}"
     );
-    let skills = fn_src(&src, "ui_skills");
-    let doctor_btn = skills
+    let connectors = fn_src(&src, "ui_settings_connectors");
+    let doctor_btn = connectors
         .split("ghost_pill(ui, \"Doctor\")")
         .nth(1)
         .expect("Doctor button");
@@ -16531,7 +16516,12 @@ fn finish_staged_folder_renames_it() {
 // Landed from PR #197.
 #[allow(clippy::too_many_lines)]
 fn quiet_cabin() -> Cabin {
-    let cfg = crate::config::AppConfig::default();
+    let cfg = crate::config::AppConfig {
+        // Test cabins keep the legacy CLI path these tests were written for;
+        // a native test turns it off. The shipping default is native.
+        grok_build_engine: true,
+        ..AppConfig::default()
+    };
     let (grok_sessions_tx, grok_sessions_rx) = std::sync::mpsc::channel();
     Cabin {
         nav: super::Nav::Chat,
@@ -16743,7 +16733,6 @@ fn quiet_cabin() -> Cabin {
         greeting_busy: false,
         greeting_llm_at: 0,
         continue_hint: String::new(),
-        skills_tab_connectors: false,
         skill_q: String::new(),
         mcp_nl: String::new(),
         mcp_compose: false,
@@ -16761,6 +16750,7 @@ fn quiet_cabin() -> Cabin {
         imagine_want_focus: false,
         composer_want_focus: false,
         settings_sec: super::SettingsSec::Account,
+        market: Default::default(),
         settings_back: super::Nav::Chat,
         imagine_aspect: 0,
         imagine_quality: false,
@@ -23892,10 +23882,22 @@ fn native_skills_hooks_settings_listing_comes_from_discovery() {
 }
 
 #[test]
-fn native_flag_off_cli_path_is_unchanged() {
-    assert!(!AppConfig::default().native_engine);
+fn native_is_the_default_and_the_legacy_cli_path_is_unchanged() {
+    use crate::config::EngineKind;
+    assert_eq!(AppConfig::default().engine(), EngineKind::Native);
     let absent: AppConfig = serde_json::from_str(r#"{"deviceName":"cabin"}"#).unwrap();
-    assert!(!absent.native_engine);
+    assert_eq!(absent.engine(), EngineKind::Native);
+    // A config saved while the CLI was the default still says `nativeEngine: false`.
+    let old: AppConfig =
+        serde_json::from_str(r#"{"deviceName":"cabin","nativeEngine":false}"#).unwrap();
+    assert_eq!(old.engine(), EngineKind::Native);
+    let legacy: AppConfig =
+        serde_json::from_str(r#"{"deviceName":"cabin","grokBuildEngine":true}"#).unwrap();
+    assert_eq!(legacy.engine(), EngineKind::GrokBuild);
+    assert!(!legacy.native_engine());
+    let saved = serde_json::to_value(AppConfig::default()).unwrap();
+    assert!(saved.get("grokBuildEngine").is_none(), "{saved}");
+    assert!(saved.get("nativeEngine").is_none(), "{saved}");
     let acp = include_str!("acp.rs");
     let spawn = acp
         .split("build_agent::spawn_session(")
@@ -25363,7 +25365,7 @@ fn native_bg_ask_refuses_a_write_without_prompting() {
     let _g = crate::config::hold_test_config();
     let (root, mut cabin) = isolated_cabin("native-bg-ask");
     let _ = std::fs::create_dir_all(&root);
-    cabin.cfg.native_engine = true;
+    cabin.cfg.grok_build_engine = false;
     cabin.permission_mode = PermissionMode::Ask;
     cabin.session_mode = SessionMode::Chat;
     cabin.threads = vec![crate::threads::ChatThread::new("Chat", false)];
@@ -27181,7 +27183,7 @@ fn pulse_suggest_signed_out_says_how_to_sign_in_and_loading_shows_placeholder_ro
     let cabin = &mut quiet.cabin;
     cabin.updates.clear();
     cabin.board.clear();
-    cabin.cfg.native_engine = false;
+    cabin.cfg.grok_build_engine = true;
     cabin.pulse_view.tab = super::pulse_ui::PulseTab::Ideas;
     let empty = pulse_texts(cabin, 900.0);
     assert!(
@@ -27212,10 +27214,10 @@ fn pulse_suggest_signed_out_says_how_to_sign_in_and_loading_shows_placeholder_ro
         );
     }
     // PI-05: once signed in (native here), the amber line clears without another press.
-    cabin.cfg.native_engine = true;
+    cabin.cfg.grok_build_engine = false;
     let _ = pulse_texts(cabin, 900.0);
     assert!(!cabin.pulse_view.signin_note);
-    cabin.cfg.native_engine = false;
+    cabin.cfg.grok_build_engine = true;
     // While a suggestion call runs: placeholder rows, and no empty line beside them.
     let (_tx, rx) = mpsc::channel::<String>();
     cabin.ideas_rx = Some((rx, Default::default()));
@@ -28106,7 +28108,6 @@ fn spike3a_adds_no_nav_page() {
         Nav::Night,
         Nav::History,
         Nav::Command,
-        Nav::Connectors,
         Nav::Agents,
         Nav::Settings,
     ];
@@ -28123,12 +28124,11 @@ fn spike3a_adds_no_nav_page() {
             Nav::Night => "night",
             Nav::History => "history",
             Nav::Command => "command",
-            Nav::Connectors => "connectors",
             Nav::Agents => "agents",
             Nav::Settings => "settings",
         })
         .collect();
-    assert_eq!(named.len(), 13);
+    assert_eq!(named.len(), 12);
     let _g = crate::config::hold_test_config();
     let root = crate::config::test_config_root("spike3a-nav");
     std::env::set_var("GROKHUB_CONFIG", &root);

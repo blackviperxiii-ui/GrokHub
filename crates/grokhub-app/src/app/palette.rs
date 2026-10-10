@@ -30,7 +30,7 @@ impl Cabin {
             "nav:night" => self.nav = Nav::Night,
             "nav:history" => self.nav = Nav::History,
             "nav:devices" => self.nav = Nav::Devices,
-            "nav:connectors" => self.nav = Nav::Connectors,
+            "nav:connectors" => self.open_connectors(),
             "nav:command" => self.nav = Nav::Command,
             "nav:agents" => self.nav = Nav::Agents,
             "nav:eyes" => {

@@ -24,6 +24,9 @@ pub struct ServerDef {
     /// A token sealed in the cabin (`tokenRef`), added as a bearer header
     /// when the server connects. The entry never holds the value.
     pub token_ref: Option<String>,
+    /// A stdio server's env var that gets the sealed `tokenRef` token at
+    /// start (`tokenEnv`, e.g. `BRAVE_API_KEY`). The entry never holds it.
+    pub token_env: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -205,6 +208,9 @@ fn server_to_json(def: &ServerDef) -> Option<Value> {
     if let Some(name) = &def.token_ref {
         spec.insert("tokenRef".into(), json!(name));
     }
+    if let Some(var) = &def.token_env {
+        spec.insert("tokenEnv".into(), json!(var));
+    }
     if !def.enabled {
         spec.insert("enabled".into(), json!(false));
     }
@@ -276,12 +282,15 @@ fn parse_server(spec: &Value) -> Option<ServerDef> {
                 .map(PathBuf::from),
         }
     };
-    let token_ref = kept
-        .get("tokenRef")
-        .and_then(|v| v.as_str())
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(str::to_string);
+    let text_field = |key: &str| {
+        kept.get(key)
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+    };
+    let token_ref = text_field("tokenRef");
+    let token_env = text_field("tokenEnv");
     Some(ServerDef {
         transport,
         enabled,
@@ -289,6 +298,7 @@ fn parse_server(spec: &Value) -> Option<ServerDef> {
         tool_timeout,
         headers,
         token_ref,
+        token_env,
     })
 }
 
@@ -310,6 +320,7 @@ fn keep_server_fields(spec: &Map<String, Value>) -> Map<String, Value> {
         "bearerToken",
         "bearer_token",
         "tokenRef",
+        "tokenEnv",
     ];
     let mut out = Map::new();
     for key in KEYS {

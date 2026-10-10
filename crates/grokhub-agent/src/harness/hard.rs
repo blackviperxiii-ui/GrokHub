@@ -658,6 +658,11 @@ const PWSH_VALUE_FLAGS: &[&str] = &[
 fn head_at(words: &[String]) -> Option<usize> {
     let mut i = 0;
     while i < words.len() {
+        // `PATH=/x FOO=1 sudo reboot`: leading assignments are not the head.
+        if is_assignment(&words[i]) {
+            i += 1;
+            continue;
+        }
         let w = leaf(&words[i]).to_ascii_lowercase();
         match w.as_str() {
             "sudo" | "doas" | "nohup" | "command" | "exec" | "time" | "pkexec" | "busybox"
@@ -710,6 +715,14 @@ fn head_at(words: &[String]) -> Option<usize> {
         }
     }
     None
+}
+
+/// A shell variable assignment word (`NAME=value`).
+fn is_assignment(word: &str) -> bool {
+    word.split_once('=').is_some_and(|(name, _)| {
+        name.chars().next().is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+            && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+    })
 }
 
 /// Whole words that mark a credential field in an AX role or label, a field
@@ -1296,8 +1309,8 @@ fn command_floor(cmd: &str) -> Option<String> {
         return Some("hard floor: mkfs".into());
     }
     if squashed.split([';', '&', '|']).any(|seg| {
-        let seg = seg.trim();
-        (seg.starts_with("dd ") || seg.starts_with("sudo dd ")) && seg.contains("of=/dev/")
+        let words = shell_words(seg);
+        head_at(&words).is_some_and(|at| leaf(&words[at]) == "dd") && seg.contains("of=/dev/")
     }) {
         return Some("hard floor: dd to a disk".into());
     }
@@ -1985,6 +1998,20 @@ mod tests {
         assert_eq!(hard_class("run_terminal_command", &sh("sudo reboot")), Some(HardClass::IrreversibleOs));
         assert_eq!(hard_class("run_terminal_command", &sh("cargo test")), None);
         assert_eq!(hard_class("grep", r#"{"pattern":"password"}"#), None);
+    }
+
+    /// Leading `NAME=value` words are not the command head.
+    #[test]
+    fn env_assignments_do_not_hide_the_command() {
+        assert_eq!(hard_class("run_terminal_command", &sh("PATH='/x/bin':\"$PATH\" sudo reboot")), Some(HardClass::IrreversibleOs));
+        assert_eq!(hard_class("run_terminal_command", &sh("FOO=1 _B2=x rm notes.txt")), Some(HardClass::Delete));
+        assert_eq!(
+            hard_floor("run_terminal_command", &sh("LANG=C sudo dd if=/dev/zero of=/dev/sda")),
+            Some(HardFloor { reason: "hard floor: dd to a disk".into() })
+        );
+        assert_eq!(hard_class("run_terminal_command", &sh("PATH=/x sudo systemctl --failed")), None);
+        // A word with `=` that is not a name is the head.
+        assert_eq!(hard_class("run_terminal_command", &sh("1x=2 rm notes.txt")), None);
     }
 
     /// Card 34: partitions, the bootloader and /boot are irreversible OS;

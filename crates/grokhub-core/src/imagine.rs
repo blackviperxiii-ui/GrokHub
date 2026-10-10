@@ -156,7 +156,7 @@ pub fn imagine_network_hint(err: &str) -> String {
         || e.contains("bad credentials")
         || e.contains("unauthenticated")
     {
-        return "Imagine auth failed (HTTP 401). Add an xAI console API key in Settings, or run grok login.".into();
+        return "Imagine auth failed (HTTP 401). Sign in with Grok in Settings → Account, or add an xAI console API key.".into();
     }
     if e.contains("http 403") {
         return format!(

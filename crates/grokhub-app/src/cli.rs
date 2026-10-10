@@ -13,6 +13,14 @@ pub enum Launch {
     McpSelf,
 }
 
+/// `grokhub --askpass <socket> [prompt]`: `sudo` runs this through the helper script.
+pub fn askpass_socket(args: &[String]) -> Option<&str> {
+    match args {
+        [_, flag, socket, ..] if flag == "--askpass" => Some(socket),
+        _ => None,
+    }
+}
+
 pub fn parse_args(args: &[String]) -> Launch {
     let mut out = Launch::Cabin;
     for a in args.iter().skip(1) {
@@ -42,6 +50,14 @@ mod tests {
     }
 
     #[test]
+    fn askpass_takes_the_socket_and_only_as_the_first_flag() {
+        assert_eq!(askpass_socket(&args(&["grokhub", "--askpass", "/run/user/1000/grokhub-askpass-9/s", "[sudo] password for j: "])), Some("/run/user/1000/grokhub-askpass-9/s"));
+        assert_eq!(askpass_socket(&args(&["grokhub", "--askpass"])), None);
+        assert_eq!(askpass_socket(&args(&["grokhub", "--hub", "--askpass", "/x"])), None);
+        assert_eq!(parse_args(&args(&["grokhub", "--askpass", "/x"])), Launch::Cabin);
+    }
+
+    #[test]
     fn flags() {
         assert_eq!(parse_args(&args(&["grokhub"])), Launch::Cabin);
         assert_eq!(parse_args(&args(&["grokhub", "--hub"])), Launch::Hub);
@@ -64,8 +80,10 @@ mod tests {
             .and_then(|s| s.split("fn probe_hub_health_body(").next())
             .expect("run_oauth_cli");
         assert!(
-            oauth.contains("write_cli_auth_if_needed"),
-            "grokhub --oauth must sign in the CLI: {oauth}"
+            oauth.contains("secrets::save(&s)")
+                && !oauth.contains("write_cli_auth_if_needed")
+                && !oauth.contains("grokhub_acp"),
+            "grokhub --oauth keeps the sign-in to GrokHub and never writes the CLI's login: {oauth}"
         );
         assert_eq!(parse_args(&args(&["grokhub", "-V"])), Launch::Version);
         assert_eq!(parse_args(&args(&["grokhub", "--version"])), Launch::Version);

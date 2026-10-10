@@ -1,6 +1,6 @@
 // Portions derived from xai-org/grok-build (Apache-2.0, © SpaceXAI), commit 2bdd1d6a; modified.
 
-//! Todos, questions, and plan mode.
+//! Todos, questions, plan mode, and the findings card.
 //! `todo_write` replaces the list unless `merge` is true. Open rows survive compaction
 //! because the function call is stored on the session. Plan mode stays read-only until
 //! the person approves `exit_plan_mode`. An unattended run cannot wait or leave plan mode.
@@ -103,6 +103,42 @@ pub fn schemas() -> Vec<Value> {
         }),
         json!({
             "type": "function",
+            "name": "report_findings",
+            "description": "At the end of a scan, diagnosis or review, post the findings card: each finding names the specific item and its root cause, with severity high, medium, low or info. Fixes are one-tap follow-ups the person can start (label up to 40 characters with no colon, goal is what the follow-up run does), e.g. \"Fix port 53 conflict\", \"Reinstall 6 packages\", \"Explain all\".",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "findings": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "severity": {"type": "string", "enum": ["high", "medium", "low", "info"]},
+                                "text": {"type": "string"}
+                            },
+                            "required": ["severity", "text"],
+                            "additionalProperties": false
+                        }
+                    },
+                    "fixes": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "label": {"type": "string"},
+                                "goal": {"type": "string"}
+                            },
+                            "required": ["label", "goal"],
+                            "additionalProperties": false
+                        }
+                    }
+                },
+                "required": ["findings"],
+                "additionalProperties": false
+            }
+        }),
+        json!({
+            "type": "function",
             "name": "enter_plan_mode",
             "description": "Make this session read-only so the next edits wait for an approved plan.",
             "parameters": {"type": "object", "properties": {}, "additionalProperties": false}
@@ -127,6 +163,7 @@ pub fn try_run(call: SessionCall<'_>) -> Option<(ToolOutput, Usage)> {
     let output = match call.name {
         "todo_write" => todo_write(call.session, call.arguments),
         "ask_user_question" => ask(call),
+        "report_findings" => report_findings(call.arguments, call.on_event),
         "enter_plan_mode" => enter_plan(call.session, call.gate),
         "exit_plan_mode" => exit_plan(call),
         _ => return None,
@@ -302,6 +339,23 @@ fn apply_todos(todos: &mut Vec<TodoItem>, value: &Value) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+fn report_findings(arguments: &str, on_event: &mut dyn FnMut(LoopEvent)) -> ToolOutput {
+    let card = serde_json::from_str::<Value>(arguments)
+        .map_err(|_| "report_findings arguments must be a JSON object".to_string())
+        .and_then(|value| grokhub_core::findings::Findings::from_json(&value));
+    match card {
+        Ok(card) => {
+            on_event(LoopEvent::Findings(card.to_body()));
+            ToolOutput::ok(format!(
+                "Findings card posted: {} findings, {} one-tap fixes. It shows after your reply.",
+                card.items.len(),
+                card.fixes.len()
+            ))
+        }
+        Err(err) => ToolOutput::err(err),
+    }
 }
 
 fn render_todos(todos: &[TodoItem]) -> String {
