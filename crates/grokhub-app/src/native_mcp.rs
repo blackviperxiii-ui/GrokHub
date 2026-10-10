@@ -54,6 +54,17 @@ pub enum Job {
     SignOut(String),
     /// Settings → Connectors Disconnect, after the confirm sheet.
     Disconnect(String),
+    /// Marketplace Install: write `entry` under `name` (`label` is the
+    /// catalog name for the note), then open its browser sign-in when
+    /// `sign_in` is set.
+    Install {
+        name: String,
+        label: String,
+        entry: serde_json::Value,
+        sign_in: bool,
+    },
+    /// Seal a key the user typed, after the confirm sheet approved it.
+    SaveKey { name: String, key: String },
 }
 
 /// What Settings → Connectors paints: the last rows, the last job's note,
@@ -86,8 +97,10 @@ pub fn spawn(job: Job) {
             return;
         }
         held.busy = true;
-        if let Job::SignIn(name) = &job {
-            held.note = format!("Finish signing in to {name} in your browser");
+        match &job {
+            Job::SignIn(name) => held.note = format!("Finish signing in to {name} in your browser"),
+            Job::Install { label, .. } => held.note = format!("Installing {label}"),
+            _ => {}
         }
     }
     std::thread::spawn(move || {
@@ -125,6 +138,27 @@ pub fn spawn(job: Job) {
                 };
                 (grokhub_agent::mcp::configured(), note)
             }
+            Job::Install { name, label, entry, sign_in } => {
+                let note = match grokhub_agent::mcp::install(&name, &entry) {
+                    Ok(done) if sign_in => {
+                        set_note(&format!("{}. Finish signing in to {label} in your browser", install_line(&label, &done)));
+                        match grokhub_agent::mcp::sign_in(&name, &|url| crate::oauth::open_browser(url)) {
+                            Ok(line) => format!("{}. {line}", install_line(&label, &done)),
+                            Err(err) => format!("{}. {err}", install_line(&label, &done)),
+                        }
+                    }
+                    Ok(done) => install_line(&label, &done),
+                    Err(err) => err,
+                };
+                (grokhub_agent::mcp::configured(), note)
+            }
+            Job::SaveKey { name, key } => {
+                let note = match grokhub_agent::mcp::save_key(&name, &key) {
+                    Ok(line) => line,
+                    Err(err) => err,
+                };
+                (grokhub_agent::mcp::configured(), note)
+            }
         };
         let mut held = paint_state().lock().unwrap_or_else(|err| err.into_inner());
         held.rows = rows;
@@ -132,6 +166,18 @@ pub fn spawn(job: Job) {
         held.busy = false;
         held.seeded = true;
     });
+}
+
+fn set_note(note: &str) {
+    paint_state().lock().unwrap_or_else(|err| err.into_inner()).note = note.to_string();
+}
+
+/// "Installed Playwright" or "Playwright was already installed".
+pub fn install_line(label: &str, done: &grokhub_agent::mcp::Installed) -> String {
+    match done {
+        grokhub_agent::mcp::Installed::Added => format!("Installed {label}"),
+        grokhub_agent::mcp::Installed::AlreadyThere => format!("{label} was already installed"),
+    }
 }
 
 pub fn import_from_cabin() -> Result<String, String> {

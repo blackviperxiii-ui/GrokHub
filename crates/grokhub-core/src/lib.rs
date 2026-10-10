@@ -49,6 +49,7 @@ pub mod imagine_auth;
 pub mod inhabit;
 pub mod learning;
 pub mod local_setup;
+pub mod mcp_catalog;
 pub mod mcp_oauth;
 pub mod md;
 pub mod model_registry;
