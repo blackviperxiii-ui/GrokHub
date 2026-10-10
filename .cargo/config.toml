@@ -1,0 +1,7 @@
+# Plain `cargo test` runs one test at a time in each test binary. Many tests
+# set process-wide state (GROKHUB_CONFIG, the MCP registry, statics, the fake
+# model client) and timing budgets, so side by side in one process they fail
+# on a clean machine. CI runs cargo-nextest, which gives every test its own
+# process and ignores this.
+[env]
+RUST_TEST_THREADS = "1"
