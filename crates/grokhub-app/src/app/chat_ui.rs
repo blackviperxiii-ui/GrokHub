@@ -2425,44 +2425,7 @@ impl Cabin {
             ui.set_max_width(col_w);
             for slot in composer_stack_order() {
                 match slot {
-                    ComposerStackSlot::AuthBanner => {
-                        if self.cfg.native_engine() {
-                            self.ui_native_auth_banner(ui);
-                            continue;
-                        }
-                        let grok_missing = grokhub_acp::find_grok().is_none();
-                        let need_login = grokhub_acp::grok_cli_key().is_none() && !self.has_key();
-                        let cabin_oauth = self
-                            .secrets
-                            .oauth
-                            .as_ref()
-                            .is_some_and(|t| !t.access_token.trim().is_empty());
-                        let get_started = grokhub_core::should_show_get_started_now(
-                            !grok_missing,
-                            cabin_oauth,
-                            self.cfg.get_started_done,
-                            grokhub_acp::grok_cli_key().is_some(),
-                            self.official_cli_session,
-                        );
-                        if !get_started
-                            && !self.grok_install_wait
-                            && (grok_missing || need_login)
-                        {
-                            ui.horizontal(|ui| {
-                                crate::cards::settings_note(
-                                    ui,
-                                    if grok_missing {
-                                        "Install Grok Build (x.ai/cli), then grok login."
-                                    } else {
-                                        "Run grok login. Chat, Imagine, and Fast chips use that token."
-                                    },
-                                );
-                                if crate::cards::ghost_pill(ui, "Settings") {
-                                    self.nav = Nav::Settings;
-                                }
-                            });
-                        }
-                    }
+                    ComposerStackSlot::AuthBanner => self.ui_native_auth_banner(ui),
                     ComposerStackSlot::ContextBar => {
                         if !self.grok_usage.is_empty() {
                             ui.horizontal(|ui| {
@@ -2615,7 +2578,6 @@ impl Cabin {
                         }
                         self.set_session_mode(m);
                         self.acp = None;
-                        self.acp_spawn_rx = None;
                         if let Some(t) = self.threads.get_mut(self.thread_idx) {
                             t.grok_session = None;
                         }
@@ -2641,7 +2603,6 @@ impl Cabin {
                     }
                     self.set_permission_mode(p);
                     self.acp = None;
-                    self.acp_spawn_rx = None;
                     if let Some(t) = self.threads.get_mut(self.thread_idx) {
                         t.grok_session = None;
                     }

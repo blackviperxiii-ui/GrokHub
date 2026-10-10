@@ -228,9 +228,6 @@ impl Cabin {
                             self.oauth_photo = None;
                             self.oauth_photo_key.clear();
                             self.status = "Grok OAuth connected".into();
-                            if self.cfg.grok_build_engine {
-                                self.sync_cli_auth_from_oauth();
-                            }
                             self.mark_get_started_done();
                         }
                     }

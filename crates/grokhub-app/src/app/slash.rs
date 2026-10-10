@@ -2,6 +2,15 @@
 
 use super::*;
 
+/// Workflows ran inside the Grok Build CLI, which GrokHub no longer uses.
+const WORKFLOWS_GONE: &str = "Workflows were a Grok Build CLI feature and are not in GrokHub";
+/// `--worktree` was a Grok Build CLI flag; the engine works in the bound folder.
+const WORKTREE_GONE: &str =
+    "Worktrees were a Grok Build CLI feature; chats run in the bound project folder";
+/// Native sessions are append-only JSONL: dropping only the bubble would leave
+/// the reply in the model's history.
+const REWIND_NA: &str = "N/A on native threads: the session is append-only.";
+
 /// Memory lines for `/recall` when `memory_backend` is `amr`. The cabin
 /// opens the store (and runs the one-time import) before this thread starts.
 /// Private notes (`nodes/<id>.sealed`) open with the learned-tier key; when
@@ -162,26 +171,17 @@ impl Cabin {
             }
             Slash::GrokSkills => {
                 self.nav = Nav::Skills;
-                self.reload_grok_catalog();
+                self.native_listing_cwd.clear();
             }
             Slash::SkillChanges => self.run_skill_changes(),
             Slash::SkillUndo(name) => self.run_skill_undo(&name),
             Slash::SkillRestore(name) => self.run_skill_restore(&name),
             Slash::ConnectionChanges => self.run_change_report(grokhub_agent::harness::ChangeKind::Connection),
             Slash::AutomationChanges => self.run_change_report(grokhub_agent::harness::ChangeKind::Automation),
-            Slash::GrokWorkflows => {
-                self.nav = Nav::Skills;
-                self.scroll_to_workflows = true;
-                self.reload_grok_catalog();
-            }
-            Slash::GrokConnectors => {
-                self.open_connectors();
-                self.reload_grok_catalog();
-            }
+            Slash::GrokConnectors => self.open_connectors(),
             Slash::GrokHooks => {
                 self.open_connectors();
                 self.scroll_to_hooks = true;
-                self.reload_grok_catalog();
             }
             Slash::Model(name) => {
                 let name = name.trim();
@@ -225,26 +225,11 @@ impl Cabin {
                     self.kick_imagine();
                 }
             }
-            Slash::Workflow(name) => {
-                self.send_grok_slash(&format!("/workflow {name}"));
-                self.status = format!("Workflow {name}");
-            }
-            Slash::WorkflowCtl { verb, target } => {
-                self.send_workflow_ctl(verb, &target);
-            }
-            Slash::WorkflowUsage => {
-                self.workflow_status_live = true;
-                self.status = "Usage: /workflow <verb> <name-or-run-id>".into();
+            Slash::Workflow(_) | Slash::WorkflowCtl { .. } | Slash::WorkflowUsage | Slash::GrokWorkflows => {
+                self.status = WORKFLOWS_GONE.into();
             }
             Slash::Worktree => {
-                if let Some(t) = self.threads.get_mut(self.thread_idx) {
-                    t.grok_worktree = !t.grok_worktree;
-                    self.status = if t.grok_worktree {
-                        "Next chat uses --worktree".into()
-                    } else {
-                        "Worktree off".into()
-                    };
-                }
+                self.status = WORKTREE_GONE.into();
             }
             Slash::Btw => {
                 self.set_session_mode(SessionMode::Ask);
@@ -271,33 +256,7 @@ impl Cabin {
                 if self.native_compact_if_current() {
                     self.stamp_current_access();
                     self.persist();
-                    return;
                 }
-                self.send_grok_slash("/compact");
-                if !self.running {
-                    return;
-                }
-                let pin = self.cfg.goal_pin.trim().to_string();
-                let start = compact_keep_start_from(
-                    self.messages.iter().map(|m| (m.0.as_str(), m.1.as_str())),
-                    8,
-                );
-                if start > 0 {
-                    self.live_mut().drain(..start);
-                }
-                if !pin.is_empty() {
-                    let marked = format!("GOAL PIN: {pin}");
-                    if !self
-                        .messages
-                        .iter()
-                        .any(|m| m.1 == marked || m.1.starts_with(&format!("{marked}\n")))
-                    {
-                        self.live_mut().insert(0, ("system".into(), marked));
-                    }
-                }
-                self.stamp_current_access();
-                self.persist();
-                self.status = "Compacting Grok context…".into();
             }
             Slash::Skill(name) => {
                 if let Some(s) = self
@@ -346,14 +305,8 @@ impl Cabin {
                     self.halt_in_flight();
                     self.finish_hub_dispatch("Undid in-flight reply", false);
                     self.status = "Undid in-flight reply".into();
-                } else if let Some(i) = self.messages.iter().rposition(|m| m.0 == "assistant") {
-                    self.live_mut().remove(i);
-                    self.followup_step = 0;
-                    self.active_skill_follow = None;
-                    self.stamp_current_access();
-                    self.persist();
-                    self.send_grok_slash("/rewind");
-                    self.status = "Rewinding Grok conversation…".into();
+                } else if self.messages.iter().any(|m| m.0 == "assistant") {
+                    self.status = REWIND_NA.into();
                 } else {
                     self.status = "Nothing to undo".into();
                 }
@@ -376,7 +329,11 @@ impl Cabin {
             Slash::Queue(text) => self.queue_or_send(text),
             Slash::Sh(cmd) => self.queue_sh(cmd),
             Slash::HostStatus => {
-                self.status = build_agent::grok_banner();
+                self.status = if self.agent_ready() {
+                    "GrokHub's own engine is ready".into()
+                } else {
+                    self.no_agent_note().into()
+                };
             }
             Slash::Rename(title) => self.rename_thread(self.thread_idx, &title),
             Slash::Pin => self.pin_thread(self.thread_idx),
@@ -448,51 +405,12 @@ impl Cabin {
                 } else {
                     format!("{cabin} · {grok}")
                 };
-                let sid = self
-                    .threads
-                    .get(self.thread_idx)
-                    .and_then(|t| t.grok_session.clone())
-                    .filter(|s| !s.trim().is_empty());
-                if let (Some(bin), Some(id)) = (grokhub_acp::find_grok(), sid) {
-                    if self.inspect_rx.is_none() {
-                        let cwd = self.grok_cli_cwd();
-                        let (tx, rx) = mpsc::channel();
-                        self.inspect_rx = Some(rx);
-                        self.status = format!("{} · grok usage…", self.status);
-                        std::thread::spawn(move || {
-                            let text =
-                                grokhub_acp::session_usage(&bin, &cwd, &id).unwrap_or_else(|e| e);
-                            let _ = tx.send(text);
-                        });
-                    }
-                }
             }
             Slash::Models => {
-                if let Some(bin) = grokhub_acp::find_grok() {
-                    let cwd = self.grok_cwd();
-                    if self.inspect_rx.is_none() {
-                        let (tx, rx) = mpsc::channel();
-                        self.inspect_rx = Some(rx);
-                        self.status = "grok models".into();
-                        std::thread::spawn(move || {
-                            let text =
-                                grokhub_acp::grok_user_stdout_timeout(&bin, &cwd, &["models"], 20)
-                                    .unwrap_or_else(|e| e);
-                            let ids = grokhub_acp::parse_models_list(&text);
-                            let body = if ids.is_empty() {
-                                text
-                            } else {
-                                format!("{}\n\n{}", ids.join("\n"), text)
-                            };
-                            let _ = tx.send(body);
-                        });
-                    }
-                } else {
-                    self.live_mut()
-                        .push(("assistant".into(), mark_slash_result(&catalog_line())));
-                    self.stamp_current_access();
-                    self.persist();
-                }
+                self.live_mut()
+                    .push(("assistant".into(), mark_slash_result(&catalog_line())));
+                self.stamp_current_access();
+                self.persist();
             }
             Slash::Palette => self.open_palette(),
             Slash::Plan => {
@@ -501,7 +419,6 @@ impl Cabin {
                 }
                 self.set_session_mode(SessionMode::Plan);
                 self.acp = None;
-                self.acp_spawn_rx = None;
                 self.hold_chat_name_for_plan();
                 if let Some(t) = self.threads.get_mut(self.thread_idx) {
                     t.grok_session = None;
@@ -517,7 +434,6 @@ impl Cabin {
                         self.halt_in_flight();
                     }
                     self.acp = None;
-                    self.acp_spawn_rx = None;
                     if let Some(t) = self.threads.get_mut(self.thread_idx) {
                         t.grok_session = None;
                     }
@@ -534,7 +450,6 @@ impl Cabin {
                     self.halt_in_flight();
                 }
                 self.acp = None;
-                self.acp_spawn_rx = None;
                 if let Some(t) = self.threads.get_mut(self.thread_idx) {
                     t.grok_session = None;
                 }
@@ -546,45 +461,9 @@ impl Cabin {
             }
             Slash::Sessions => {
                 self.nav = Nav::History;
-                self.grok_sessions_loaded = false;
-                self.reload_grok_sessions();
-                self.status = if grokhub_acp::find_grok().is_some() {
-                    "Listing Grok sessions…".into()
-                } else {
-                    build_agent::grok_banner()
-                };
+                self.status = "History".into();
             }
-            Slash::Inspect => {
-                self.open_connectors();
-                if let Some(bin) = grokhub_acp::find_grok() {
-                    let cwd = self.grok_cwd();
-                    if self.inspect_rx.is_none() {
-                        let (tx, rx) = mpsc::channel();
-                        self.inspect_rx = Some(rx);
-                        self.inspect_text = "Inspecting…".into();
-                        self.status = "Grok inspect".into();
-                        std::thread::spawn(move || {
-                            let text = match grokhub_acp::inspect_json(&bin, &cwd) {
-                                Ok(v) => {
-                                    let note = inspect_advisory(&v);
-                                    let pretty = serde_json::to_string_pretty(&v)
-                                        .unwrap_or_else(|_| v.to_string());
-                                    if note.is_empty() {
-                                        pretty
-                                    } else {
-                                        format!("{note}\n\n{pretty}")
-                                    }
-                                }
-                                Err(e) => e,
-                            };
-                            let _ = tx.send(text);
-                        });
-                    }
-                } else {
-                    self.inspect_text = build_agent::grok_banner();
-                    self.status = self.inspect_text.clone();
-                }
-            }
+            Slash::Inspect => self.open_connectors(),
             Slash::ProjectBind(path) => {
                 let raw = path.unwrap_or_else(|| self.cfg.project_dir.clone());
                 let home = std::env::var("HOME").ok();
@@ -606,7 +485,6 @@ impl Cabin {
                     self.halt_in_flight();
                 }
                 self.acp = None;
-                self.acp_spawn_rx = None;
                 if tree_changed {
                     if let Some(t) = self.threads.get_mut(self.thread_idx) {
                         t.grok_cwd = None;
@@ -617,7 +495,6 @@ impl Cabin {
                     self.flush_projects();
                     self.persist_cfg();
                 }
-                self.grok_sessions_loaded = false;
                 self.status = format!("Bound {p}");
             }
             Slash::ProjectClear => {
@@ -627,12 +504,10 @@ impl Cabin {
                     self.halt_in_flight();
                 }
                 self.acp = None;
-                self.acp_spawn_rx = None;
                 if let Some(t) = self.threads.get_mut(self.thread_idx) {
                     t.grok_cwd = None;
                     t.grok_session = None;
                 }
-                self.grok_sessions_loaded = false;
                 self.touch_projects();
                 self.persist();
                 self.status = "Unbound — full desktop".into();
@@ -688,14 +563,7 @@ impl Cabin {
             }
             Slash::Inhabit(peer) => self.queue_inhabit(peer),
             Slash::Rewind => {
-                self.send_grok_slash("/rewind");
-                if !self.running {
-                    return;
-                }
-                if let Some(i) = self.messages.iter().rposition(|m| m.0 == "assistant") {
-                    self.live_mut().remove(i);
-                }
-                self.status = "Rewinding Grok conversation…".into();
+                self.status = REWIND_NA.into();
             }
             Slash::Room(name) => {
                 let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
@@ -713,7 +581,6 @@ impl Cabin {
                     self.halt_in_flight();
                 }
                 self.acp = None;
-                self.acp_spawn_rx = None;
                 if tree_changed {
                     if let Some(t) = self.threads.get_mut(self.thread_idx) {
                         t.grok_cwd = None;
@@ -855,48 +722,6 @@ impl Cabin {
         }
     }
 
-    /// Forward `/workflow <verb> <target>` through `send_grok_slash`.
-    /// A live turn queues it. Ask with no agent waits out the ACP handshake.
-    pub(super) fn send_workflow_ctl(&mut self, verb: WorkflowVerb, target: &str) {
-        let target = target.trim();
-        self.workflow_status_live = true;
-        if target.is_empty() {
-            self.status = "Usage: /workflow <verb> <name-or-run-id>".into();
-            return;
-        }
-        let cmd = format!("/workflow {} {}", verb.as_str(), target);
-        if self.running {
-            self.workflow_ctl_queue.push(cmd);
-            self.status = format!(
-                "Workflow {} {} — queued until the current turn ends",
-                verb.as_str(),
-                target
-            );
-            return;
-        }
-        if self.permission_mode.uses_acp() && self.acp.is_none() {
-            if self.acp_spawn_rx.is_none() {
-                if let Err(e) = self.ensure_acp() {
-                    self.status = format!("Workflow {} {} — sent", verb.as_str(), target);
-                    self.fail_ask_without_acp(&e);
-                    return;
-                }
-            }
-            if self.acp.is_none() {
-                self.workflow_ctl_queue.push(cmd);
-                self.workflow_ctl_await_acp = true;
-                self.status = format!(
-                    "Workflow {} {} — queued until Grok Build connects",
-                    verb.as_str(),
-                    target
-                );
-                return;
-            }
-        }
-        self.status = format!("Workflow {} {} — sent", verb.as_str(), target);
-        self.send_grok_slash(&cmd);
-    }
-
     pub(super) fn run_slash_line(&mut self, line: &str) {
         if let Some(s) = parse_slash(line) {
             self.run_slash(s);
@@ -947,7 +772,7 @@ impl Cabin {
     /// when the lab flag is off or the thread is a CLI thread.
     fn dispatch_native_slash(&mut self, slash: &Slash) -> bool {
         let thread_native = self.threads.get(self.thread_idx).is_some();
-        if !grokhub_agent::manual_compact_targets_native(self.cfg.native_engine(), thread_native) {
+        if !thread_native {
             return false;
         }
         match slash {
@@ -988,11 +813,7 @@ impl Cabin {
                 true
             }
             Slash::Rewind => {
-                // Native sessions are append-only JSONL. Dropping only the bubble would
-                // leave the reply in the model's history, so this says so instead.
-                self.status =
-                    "N/A on native threads: the session is append-only."
-                        .into();
+                self.status = REWIND_NA.into();
                 true
             }
             Slash::Usage => {
@@ -1006,8 +827,8 @@ impl Cabin {
                 self.persist();
                 true
             }
-            Slash::Workflow(_) | Slash::WorkflowCtl { .. } => {
-                self.status = "N/A: workflows stay on the Grok CLI".into();
+            Slash::Workflow(_) | Slash::WorkflowCtl { .. } | Slash::WorkflowUsage | Slash::GrokWorkflows => {
+                self.status = WORKFLOWS_GONE.into();
                 true
             }
             _ => false,
@@ -1017,7 +838,7 @@ impl Cabin {
     /// CLI slashes the cabin parser does not own. Native threads only.
     pub(super) fn apply_unparsed_native_slash(&mut self, text: &str) -> bool {
         let thread_native = self.threads.get(self.thread_idx).is_some();
-        if !grokhub_agent::manual_compact_targets_native(self.cfg.native_engine(), thread_native) {
+        if !thread_native {
             return false;
         }
         let Some(cmd) = grokhub_agent::unparsed_native_slash(text) else {
@@ -1162,8 +983,10 @@ impl Cabin {
         for row in rows.iter().take(8) {
             lines.push(format!("  {} {}", row.name, row.status));
         }
-        self.inspect_text = lines.join("\n");
-        self.open_connectors();
+        self.live_mut()
+            .push(("assistant".into(), mark_slash_result(&lines.join("\n"))));
+        self.stamp_current_access();
+        self.persist();
         self.status = "Native session".into();
     }
 

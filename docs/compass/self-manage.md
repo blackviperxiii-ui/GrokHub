@@ -17,7 +17,7 @@
 ## What breaks it
 - A side path around `harness::decide`: the classes live in `hard_class` / `hard_floor` (`crates/grokhub-agent/src/harness/hard.rs`), so paths A, B, C, and E agree.
 - A token in args, a span, the ledger, a park file, or `mcp.json`. It comes only from the elicit card and is sealed by `seal_connection_token`; the entry keeps `tokenRef`.
-- Registering into the user's `~/.grok`: `register_self_mcp` targets the cabin `GROK_HOME` only.
+- Writing into the user's `~/.grok`: GrokHub never touches the Grok Build CLI's config or credentials.
 - Building an `UndoAsk` here: no tool can undo; Undo stays a click or typing (`only_typing_or_a_click_builds_an_undo_ask`).
 ## What depends on it
 - The cabin's hard cards and park files (`crates/grokhub-app/src/app/harness_ui.rs`), the Work-tree rows (`poll_self_changes`), and the native loop (`dispatch` in `crates/grokhub-agent/src/tools/mod.rs`).

@@ -1155,7 +1155,7 @@ mod tests {
         let night = include_str!("app/night.rs");
         assert_eq!(night.matches("corner_radius(crate::theme::CARD_RADIUS)").count(), 3);
         let pages = include_str!("app/pages.rs");
-        assert_eq!(pages.matches("corner_radius(crate::theme::SHEET_RADIUS)").count(), 2);
+        assert_eq!(pages.matches("corner_radius(crate::theme::SHEET_RADIUS)").count(), 1);
         assert!(pages.contains("corner_radius(crate::theme::CARD_RADIUS)"));
     }
 

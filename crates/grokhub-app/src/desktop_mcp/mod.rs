@@ -28,7 +28,6 @@ mod capture;
 mod broker;
 
 use std::io::{BufRead, Write};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Mutex};
 
 use grokhub_core::desktop_mcp::{
@@ -38,8 +37,6 @@ use grokhub_core::desktop_mcp::{
 const LINE_CAP: usize = 1 << 20;
 const PNG_JPEG_AT: usize = 1_400_000;
 
-static REG_BUSY: AtomicBool = AtomicBool::new(false);
-static REG_RX: Mutex<Option<mpsc::Receiver<String>>> = Mutex::new(None);
 
 pub fn run_stdio() -> i32 {
     #[cfg(windows)]
@@ -132,18 +129,6 @@ pub(crate) fn cua_wanted(desktop_control: bool, cua_flag: bool) -> bool {
         == grokhub_agent::harness::ComputerUseBackend::CuaDriver
 }
 
-/// Add or remove `grokhub-cua` in the cabin `GROK_HOME` to match `want`.
-fn sync_cua(bin: &std::path::Path, cwd: &std::path::Path, want: bool) -> Result<(), String> {
-    if want {
-        let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-        grokhub_acp::register_cua_mcp(bin, cwd, &exe).map(|_| ())
-    } else if cabin_server_registered(grokhub_core::CUA_MCP_SERVER, false) {
-        grokhub_acp::unregister_cua_mcp(bin, cwd).map(|_| ())
-    } else {
-        Ok(())
-    }
-}
-
 fn emit(line: &str) {
     let mut out = std::io::stdout().lock();
     let _ = writeln!(out, "{line}");
@@ -231,69 +216,24 @@ pub(crate) fn read_halt_stamp() -> Option<u64> {
     text.trim().parse().ok()
 }
 
-pub(crate) fn reg_busy() -> bool {
-    REG_BUSY.load(Ordering::SeqCst)
-}
-
-pub(crate) fn take_reg_status() -> Option<String> {
-    let mut guard = REG_RX.lock().ok()?;
-    let rx = guard.as_mut()?;
-    match rx.try_recv() {
-        Ok(msg) => {
-            *guard = None;
-            Some(msg)
-        }
-        Err(mpsc::TryRecvError::Empty) => None,
-        Err(mpsc::TryRecvError::Disconnected) => {
-            *guard = None;
-            None
-        }
-    }
-}
-
-/// Status after the Settings desktop switch. The legacy CLI engine registers
-/// the cabin's tools in Grok Build; the native engine needs no registration.
-pub(crate) fn desktop_switch_note(on: bool, grok_build: bool) -> &'static str {
-    match (grok_build, on) {
-        (true, true) => "Registering desktop tools...",
-        (true, false) => "Removing desktop tools...",
-        (false, true) => "Desktop control is on.",
-        (false, false) => "Desktop control is off.",
+/// Status after the Settings desktop switch.
+pub(crate) fn desktop_switch_note(on: bool) -> &'static str {
+    if on {
+        "Desktop control is on."
+    } else {
+        "Desktop control is off."
     }
 }
 
 /// The native engine's Cua server follows the desktop switch and the
-/// `cuaDriver` flag (Linux only). Nothing is registered with Grok Build.
+/// `cuaDriver` flag (Linux only).
 pub(crate) fn sync_native_cua(cfg: &crate::config::AppConfig) {
     let exe = native_cua_wanted(cfg).then(|| std::env::current_exe().ok()).flatten();
     grokhub_agent::mcp::set_cabin_cua(exe);
 }
 
 fn native_cua_wanted(cfg: &crate::config::AppConfig) -> bool {
-    cfg.native_engine() && cua_wanted(cfg.desktop_control, cfg.cua_driver)
-}
-
-pub(crate) fn spawn_register(on: bool) {
-    start_register(on, true);
-}
-
-#[cfg(not(test))]
-pub(crate) fn maybe_register_on_start(enabled: bool) {
-    if enabled && !cabin_server_registered(grokhub_core::DESKTOP_MCP_SERVER, true) {
-        // `run_register` brings the Cua proxy in line too.
-        start_register(true, false);
-        return;
-    }
-    let want_cua = cua_wanted(enabled, crate::config::load().cua_driver);
-    if want_cua != cabin_server_registered(grokhub_core::CUA_MCP_SERVER, true) {
-        std::thread::spawn(move || {
-            if let Some(bin) = grokhub_acp::find_grok() {
-                if let Err(e) = sync_cua(&bin, &crate::config::config_dir(), want_cua) {
-                    eprintln!("cua-mcp: {e}");
-                }
-            }
-        });
-    }
+    cua_wanted(cfg.desktop_control, cfg.cua_driver)
 }
 
 static PROCESS_STARTED_MS: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
@@ -459,82 +399,6 @@ pub(crate) fn set_desktop_enabled(on: bool) {
 pub(crate) fn note_halt() {
     #[cfg(all(target_os = "linux", not(test)))]
     broker::note_halt();
-}
-
-fn start_register(on: bool, announce: bool) {
-    if REG_BUSY.swap(true, Ordering::SeqCst) {
-        return;
-    }
-    let (tx, rx) = mpsc::channel();
-    if let Ok(mut slot) = REG_RX.lock() {
-        *slot = Some(rx);
-    }
-    std::thread::spawn(move || {
-        let msg = run_register(on);
-        if announce || msg.starts_with("Could not") {
-            let _ = tx.send(msg);
-        }
-        REG_BUSY.store(false, Ordering::SeqCst);
-    });
-}
-
-fn run_register(on: bool) -> String {
-    let Some(bin) = grokhub_acp::find_grok() else {
-        return "Could not register desktop tools: Grok Build CLI is not installed.".into();
-    };
-    let cwd = crate::config::config_dir();
-    let result = if on {
-        match std::env::current_exe() {
-            Ok(exe) => grokhub_acp::register_desktop_mcp(&bin, &cwd, &exe),
-            Err(e) => Err(e.to_string()),
-        }
-    } else {
-        grokhub_acp::unregister_desktop_mcp(&bin, &cwd)
-    };
-    let want_cua = cua_wanted(on, crate::config::load().cua_driver);
-    if let Err(e) = sync_cua(&bin, &cwd, want_cua) {
-        return format!("Could not register Cua Driver tools: {e}");
-    }
-    match result {
-        Ok(text) => {
-            let trimmed = text.trim();
-            if trimmed.is_empty() {
-                if on {
-                    "Desktop tools registered.".into()
-                } else {
-                    "Desktop tools removed.".into()
-                }
-            } else {
-                trimmed.chars().take(240).collect()
-            }
-        }
-        Err(e) => format!("Could not register desktop tools: {e}"),
-    }
-}
-
-/// `server` is in the cabin `config.toml`; with `this_exe`, only when it
-/// points at this exact binary.
-fn cabin_server_registered(server: &str, this_exe: bool) -> bool {
-    let Some(home) = grokhub_acp::cabin_grok_home() else {
-        return false;
-    };
-    let Ok(text) = std::fs::read_to_string(home.join("config.toml")) else {
-        return false;
-    };
-    if !text.contains(server) {
-        return false;
-    }
-    if !this_exe {
-        return true;
-    }
-    // An update can move the exe. Re-register unless this exact binary is listed.
-    let Ok(exe) = std::env::current_exe() else {
-        return false;
-    };
-    let raw = exe.display().to_string();
-    // TOML basic strings double the backslashes in a Windows path; literal strings do not.
-    let escaped = raw.replace('\\', "\\\\");
-    text.contains(&raw) || text.contains(&escaped)
 }
 
 struct LiveBackend {
@@ -888,31 +752,13 @@ mod tests {
         assert!(!native_cua_wanted(&no_flag));
         let switch_off = crate::config::AppConfig { desktop_control: false, ..on.clone() };
         assert!(!native_cua_wanted(&switch_off));
-        let legacy = crate::config::AppConfig { grok_build_engine: true, ..on.clone() };
-        assert!(!native_cua_wanted(&legacy), "the legacy engine keeps its Grok Build entry");
-
-        assert_eq!(desktop_switch_note(true, false), "Desktop control is on.");
-        assert_eq!(desktop_switch_note(false, false), "Desktop control is off.");
-        assert_eq!(desktop_switch_note(true, true), "Registering desktop tools...");
+        assert_eq!(desktop_switch_note(true), "Desktop control is on.");
+        assert_eq!(desktop_switch_note(false), "Desktop control is off.");
 
         let start = include_str!("../app/mod.rs").replace("\r\n", "\n");
-        let gated = start
-            .split("if c.cfg.grok_build_engine {")
-            .skip(1)
-            .filter_map(|rest| rest.split("\n            }").next())
-            .find(|block| block.contains("maybe_register_on_start"))
-            .expect("startup registration is gated on the legacy engine");
-        assert!(gated.contains("desktop_mcp::maybe_register_on_start"), "{gated}");
-        assert!(gated.contains("self_mcp::maybe_register_on_start"), "{gated}");
-        assert_eq!(start.matches("maybe_register_on_start(").count(), 2, "no ungated registration");
-
+        assert!(!start.contains("maybe_register_on_start("), "nothing registers in Grok Build at startup");
         let settings = include_str!("../app/settings.rs").replace("\r\n", "\n");
-        let switch = settings
-            .split("desktop_switch_note(on, self.cfg.grok_build_engine)")
-            .nth(1)
-            .expect("desktop switch");
-        let register_at = switch.find("spawn_register(on)").expect("legacy registration");
-        assert!(switch[..register_at].contains("if self.cfg.grok_build_engine {"), "{switch}");
+        let switch = settings.split("desktop_switch_note(on)").nth(1).expect("desktop switch");
         assert!(switch.contains("sync_native_cua(&self.cfg)"));
     }
 }

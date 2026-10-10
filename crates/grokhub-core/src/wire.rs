@@ -1293,6 +1293,91 @@ pub fn elicit_cancel(id: Value) -> JsonRpc {
 }
 
 
+/// One finished turn of a background or night run: its session, reply, thinking and usage.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SingleTurn {
+    pub session_id: String,
+    pub text: String,
+    pub thought: String,
+    pub usage: GrokUsage,
+    pub stop_reason: String,
+}
+
+/// One event from a running turn: streamed text, a tool card, usage, the end.
+#[derive(Debug, Clone, PartialEq)]
+pub enum GrokPEvent {
+    Thought(String),
+    Text(String),
+    Tool(ToolCard),
+    Usage(GrokUsage),
+    Plan(String),
+    Compact {
+        started: bool,
+        usage: GrokUsage,
+        error: Option<String>,
+    },
+    Commands(Vec<String>),
+    Task { id: String, title: String, done: bool },
+    Recovering(String),
+    End(SingleTurn),
+    Err(String),
+}
+
+/// One finished unattended turn as JSON: `sessionId`, `text`, `thought`,
+/// `stopReason`, and usage. Leading log lines before the object are skipped.
+pub fn parse_single_turn(stdout: &str) -> Result<SingleTurn, String> {
+    let trimmed = stdout.trim();
+    let json = if let Some(i) = trimmed.find('{') {
+        &trimmed[i..]
+    } else {
+        trimmed
+    };
+    let v: Value = serde_json::from_str(json).map_err(|e| format!("turn json: {e}"))?;
+    let session_id = v
+        .get("sessionId")
+        .or_else(|| v.get("session_id"))
+        .and_then(|x| x.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if session_id.is_empty() {
+        return Err("turn missing sessionId".into());
+    }
+    let text = v
+        .get("text")
+        .and_then(|x| x.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    let thought = v
+        .get("thought")
+        .and_then(|x| x.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if text.is_empty() && thought.is_empty() {
+        return Err("turn empty reply".into());
+    }
+    let mut usage = parse_usage(&v);
+    if usage.stop_reason.is_empty() {
+        usage.stop_reason = v
+            .get("stopReason")
+            .or_else(|| v.get("stop_reason"))
+            .and_then(|x| x.as_str())
+            .unwrap_or("")
+            .trim()
+            .to_string();
+    }
+    let stop_reason = usage.stop_reason.clone();
+    Ok(SingleTurn {
+        session_id,
+        text,
+        thought,
+        usage,
+        stop_reason,
+    })
+}
+
 /// Server-reported spend and context. Grok Build 1.0.12+ includes reasoning.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct GrokUsage {
@@ -1647,6 +1732,36 @@ fn json_str(v: &Value, keys: &[&str]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parse_single_turn_stamps_session_and_text() {
+        let raw = r#"{
+            "text": "pong",
+            "stopReason": "end_turn",
+            "sessionId": "01a024f8-7606-74a2-8331-57a5177822eb",
+            "thought": "say pong"
+        }"#;
+        let t = parse_single_turn(raw).expect("json");
+        assert_eq!(t.session_id, "01a024f8-7606-74a2-8331-57a5177822eb");
+        assert_eq!(t.text, "pong");
+        assert_eq!(t.thought, "say pong");
+        let spent = parse_single_turn(
+            r#"{
+            "text": "pong",
+            "stopReason": "end_turn",
+            "sessionId": "01a024f8-7606-74a2-8331-57a5177822eb",
+            "usage": {"input_tokens": 18007, "output_tokens": 45, "reasoning_tokens": 40, "total_tokens": 18052},
+            "num_turns": 1
+        }"#,
+        )
+        .expect("usage");
+        assert_eq!(spent.usage.reasoning_tokens, 40);
+        assert_eq!(spent.usage.total_tokens, 18052);
+        assert_eq!(spent.stop_reason, "end_turn");
+        let noisy = format!("debug line\n{raw}\n");
+        assert_eq!(parse_single_turn(&noisy).unwrap().text, "pong");
+        assert!(parse_single_turn("{}").is_err());
+    }
 
     #[test]
     fn auth_prefers_cached_without_key() {
