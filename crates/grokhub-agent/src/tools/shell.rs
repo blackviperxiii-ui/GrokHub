@@ -584,13 +584,13 @@ mod tests {
         dir
     }
 
+    #[cfg(unix)]
     #[test]
     fn commands_that_call_the_sudo_helper_never_run() {
         let dir = scratch("askpass");
         let out = run(&dir, &json!({"command": "sudo -u \"$USER\" \"$SUDO_ASKPASS\""}), &|| false);
         assert!(out.failed);
         assert_eq!(out.text, crate::sudo_pass::HELPER_REFUSAL);
-        #[cfg(unix)]
         assert_eq!(super::spawn_background(&dir, "echo \"$SUDO_ASKPASS\"").err().as_deref(), Some(crate::sudo_pass::HELPER_REFUSAL));
         let _ = std::fs::remove_dir_all(&dir);
     }
