@@ -46,6 +46,42 @@ pub fn invalidate() {
     GEN.fetch_add(1, Ordering::Relaxed);
 }
 
+fn cabin_cua() -> &'static Mutex<Option<PathBuf>> {
+    static CUA: OnceLock<Mutex<Option<PathBuf>>> = OnceLock::new();
+    CUA.get_or_init(|| Mutex::new(None))
+}
+
+/// The cabin's own Cua gate (`<exe> --mcp-cua`) as a native MCP server while
+/// the cabin wants it (Linux, desktop switch and `cuaDriver` flag on); `None`
+/// takes it away. That process runs every call through `harness::decide`
+/// before the pinned `cua-driver` child sees it. It is never written to
+/// `mcp.json`, so user config can neither add nor route around it.
+pub fn set_cabin_cua(exe: Option<PathBuf>) {
+    let mut held = cabin_cua().lock().unwrap_or_else(|err| err.into_inner());
+    if *held != exe {
+        *held = exe;
+        invalidate();
+    }
+}
+
+fn cabin_cua_def() -> Option<ServerDef> {
+    let exe = cabin_cua().lock().unwrap_or_else(|err| err.into_inner()).clone()?;
+    Some(ServerDef {
+        transport: TransportDef::Stdio {
+            command: exe.display().to_string(),
+            args: vec!["--mcp-cua".into()],
+            env: BTreeMap::new(),
+            cwd: None,
+        },
+        enabled: true,
+        startup_timeout: std::time::Duration::from_secs(15),
+        tool_timeout: std::time::Duration::from_secs(60),
+        headers: BTreeMap::new(),
+        token_ref: None,
+        token_env: None,
+    })
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DoctorRow {
     pub name: String,
@@ -727,7 +763,11 @@ fn load_slots() -> (BTreeMap<String, std::sync::Arc<Mutex<SlotInner>>>, PathBuf)
             lock_slot(slot).conn.take();
         }
         held.slots.clear();
-        for (name, def) in config::load_servers_for(&workspace) {
+        let mut servers = config::load_servers_for(&workspace);
+        if let Some(def) = cabin_cua_def() {
+            servers.insert(grokhub_core::CUA_MCP_SERVER.to_string(), def);
+        }
+        for (name, def) in servers {
             held.slots.insert(
                 name.clone(),
                 std::sync::Arc::new(Mutex::new(SlotInner::new(name, def))),

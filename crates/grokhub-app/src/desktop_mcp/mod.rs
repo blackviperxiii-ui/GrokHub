@@ -251,6 +251,28 @@ pub(crate) fn take_reg_status() -> Option<String> {
     }
 }
 
+/// Status after the Settings desktop switch. The legacy CLI engine registers
+/// the cabin's tools in Grok Build; the native engine needs no registration.
+pub(crate) fn desktop_switch_note(on: bool, grok_build: bool) -> &'static str {
+    match (grok_build, on) {
+        (true, true) => "Registering desktop tools...",
+        (true, false) => "Removing desktop tools...",
+        (false, true) => "Desktop control is on.",
+        (false, false) => "Desktop control is off.",
+    }
+}
+
+/// The native engine's Cua server follows the desktop switch and the
+/// `cuaDriver` flag (Linux only). Nothing is registered with Grok Build.
+pub(crate) fn sync_native_cua(cfg: &crate::config::AppConfig) {
+    let exe = native_cua_wanted(cfg).then(|| std::env::current_exe().ok()).flatten();
+    grokhub_agent::mcp::set_cabin_cua(exe);
+}
+
+fn native_cua_wanted(cfg: &crate::config::AppConfig) -> bool {
+    cfg.native_engine() && cua_wanted(cfg.desktop_control, cfg.cua_driver)
+}
+
 pub(crate) fn spawn_register(on: bool) {
     start_register(on, true);
 }
@@ -852,5 +874,44 @@ mod tests {
         assert!(text
             .lines()
             .any(|line| line == "X-KDE-DBUS-Restricted-Interfaces=org.kde.KWin.ScreenShot2"));
+    }
+    #[test]
+    fn the_native_engine_runs_cua_itself_and_registers_nothing_in_grok_build() {
+        let on = crate::config::AppConfig {
+            desktop_control: true,
+            cua_driver: true,
+            ..crate::config::AppConfig::default()
+        };
+        // Cua is a Linux-only spike; elsewhere the native engine never starts it.
+        assert_eq!(native_cua_wanted(&on), cfg!(target_os = "linux"));
+        let no_flag = crate::config::AppConfig { cua_driver: false, ..on.clone() };
+        assert!(!native_cua_wanted(&no_flag));
+        let switch_off = crate::config::AppConfig { desktop_control: false, ..on.clone() };
+        assert!(!native_cua_wanted(&switch_off));
+        let legacy = crate::config::AppConfig { grok_build_engine: true, ..on.clone() };
+        assert!(!native_cua_wanted(&legacy), "the legacy engine keeps its Grok Build entry");
+
+        assert_eq!(desktop_switch_note(true, false), "Desktop control is on.");
+        assert_eq!(desktop_switch_note(false, false), "Desktop control is off.");
+        assert_eq!(desktop_switch_note(true, true), "Registering desktop tools...");
+
+        let start = include_str!("../app/mod.rs").replace("\r\n", "\n");
+        let gated = start
+            .split("if c.cfg.grok_build_engine {")
+            .nth(1)
+            .and_then(|rest| rest.split("\n            }").next())
+            .expect("startup registration is gated on the legacy engine");
+        assert!(gated.contains("desktop_mcp::maybe_register_on_start"), "{gated}");
+        assert!(gated.contains("self_mcp::maybe_register_on_start"), "{gated}");
+        assert_eq!(start.matches("maybe_register_on_start(").count(), 2, "no ungated registration");
+
+        let settings = include_str!("../app/settings.rs").replace("\r\n", "\n");
+        let switch = settings
+            .split("desktop_switch_note(on, self.cfg.grok_build_engine)")
+            .nth(1)
+            .expect("desktop switch");
+        let register_at = switch.find("spawn_register(on)").expect("legacy registration");
+        assert!(switch[..register_at].contains("if self.cfg.grok_build_engine {"), "{switch}");
+        assert!(switch.contains("sync_native_cua(&self.cfg)"));
     }
 }
