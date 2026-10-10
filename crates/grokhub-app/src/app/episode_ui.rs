@@ -670,7 +670,6 @@ mod tests {
             Nav::Night,
             Nav::History,
             Nav::Command,
-            Nav::Connectors,
             Nav::Agents,
             Nav::Settings,
         ];
@@ -687,11 +686,10 @@ mod tests {
                 | Nav::Night
                 | Nav::History
                 | Nav::Command
-                | Nav::Connectors
                 | Nav::Agents
                 | Nav::Settings => {}
             }
         }
-        assert_eq!(all.len(), 13);
+        assert_eq!(all.len(), 12);
     }
 }

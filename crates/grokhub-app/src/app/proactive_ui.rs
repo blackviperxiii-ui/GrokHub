@@ -476,7 +476,6 @@ mod tests {
                 | Nav::Night
                 | Nav::History
                 | Nav::Command
-                | Nav::Connectors
                 | Nav::Agents
                 | Nav::Settings => true,
             }

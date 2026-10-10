@@ -29,6 +29,7 @@ pub(super) fn settings_sec_title(sec: SettingsSec) -> &'static str {
         SettingsSec::Defaults => "Cabin defaults",
         SettingsSec::Labs => "Labs",
         SettingsSec::Permissions => "Permissions",
+        SettingsSec::Connectors => "Connectors",
     }
 }
 
@@ -379,6 +380,7 @@ impl Cabin {
                                                     (SettingsSec::Appearance, "Appearance"),
                                                     (SettingsSec::Behavior, "Behavior"),
                                                     (SettingsSec::Permissions, "Permissions"),
+                                                    (SettingsSec::Connectors, "Connectors"),
                                                     (SettingsSec::Defaults, "Cabin defaults"),
                                                     (SettingsSec::Labs, "Labs"),
                                                 ] {
@@ -944,7 +946,10 @@ impl Cabin {
                                                                 self.status = "Saved".into();
                                                             }
                                                             if self.cfg.native_engine {
-                                                                crate::native_mcp::paint(ui);
+                                                                crate::cards::settings_note(
+                                                                    ui,
+                                                                    "This cabin's MCP servers are in Settings, Connectors.",
+                                                                );
                                                                 let cwd = self.grok_cwd();
                                                                 crate::native_plugins::paint(ui, &cwd);
                                                             }
@@ -972,6 +977,7 @@ impl Cabin {
                                                             }
                                                         }
                                                         SettingsSec::Permissions => self.ui_permission_editor(ui),
+                                                        SettingsSec::Connectors => self.ui_settings_connectors(ui),
                                                     }
                                                 });
                                             });
