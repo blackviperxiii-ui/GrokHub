@@ -18,55 +18,6 @@ pub(super) fn queue_task_label(title: &str, done: bool) -> &'static str {
     }
 }
 
-/// Shown when the catalog timed out and the list is empty.
-pub(super) const CATALOG_TIMEOUT_EMPTY: &str =
-    "Grok Build didn't answer. Refresh to try again.";
-
-/// Shown above tiles when a timeout kept the previous list.
-pub(super) const CATALOG_TIMEOUT_STALE: &str =
-    "Showing the last list — Grok Build timed out.";
-
-/// Empty catalog copy. Loading wins, then a search that filtered a non-empty list.
-/// A timed-out empty list is not "none found".
-pub(super) fn catalog_empty_line<'a>(
-    loading: bool,
-    query: &str,
-    total: usize,
-    empty_text: &'a str,
-    status: &str,
-) -> &'a str {
-    if loading {
-        "Loading…"
-    } else if !query.is_empty() && total > 0 {
-        "None matched."
-    } else if status == super::acp::GROK_CATALOG_TIMEOUT && total == 0 {
-        CATALOG_TIMEOUT_EMPTY
-    } else {
-        empty_text
-    }
-}
-
-/// One muted line above tiles when the timeout kept a non-empty list.
-pub(super) fn catalog_stale_line(status: &str, total: usize) -> Option<&'static str> {
-    if status == super::acp::GROK_CATALOG_TIMEOUT && total > 0 {
-        Some(CATALOG_TIMEOUT_STALE)
-    } else {
-        None
-    }
-}
-
-pub(super) fn paint_catalog_stale(ui: &mut egui::Ui, status: &str, total: usize) {
-    let Some(line) = catalog_stale_line(status, total) else {
-        return;
-    };
-    ui.label(
-        RichText::new(line)
-            .size(crate::theme::FONT_BODY)
-            .color(crate::theme::muted()),
-    );
-    ui.add_space(6.0);
-}
-
 pub(super) enum BoardAct {
     Add,
     Save(String),
@@ -223,65 +174,15 @@ impl Cabin {
             });
     }
 
-    pub(super) fn ui_connector_home_note(&self, ui: &mut egui::Ui) {
-        let path = grokhub_acp::cabin_grok_home()
-            .map(|p| p.display().to_string())
-            .unwrap_or_else(|| "the cabin Grok home".to_string());
-        ui.label(
-            RichText::new(format!(
-                "MCP servers and hooks here come from your Grok Build home (~/.grok). Ask chats run in the cabin's own Grok home ({path}), so they don't see these yet."
-            ))
-            .size(12.0)
-            .color(crate::theme::muted()),
-        );
-    }
-
     pub(super) fn ui_hooks_section(&mut self, ui: &mut egui::Ui, q: &str) {
-        if self.cfg.native_engine() {
-            self.ensure_native_listing();
-        }
-        let native = self.cfg.native_engine();
-        let native_rows: Vec<grokhub_acp::GrokHookRow> = if native {
-            self.native_hooks
-                .iter()
-                .map(|hook| grokhub_acp::GrokHookRow {
-                    event: hook.event.clone(),
-                    hook_type: hook.kind.clone(),
-                    target: hook.command.clone(),
-                    origin: match hook.origin {
-                        grokhub_agent::HookOrigin::User => grokhub_acp::HookOrigin::User,
-                        grokhub_agent::HookOrigin::Project => grokhub_acp::HookOrigin::Project,
-                        grokhub_agent::HookOrigin::Plugin => grokhub_acp::HookOrigin::Other,
-                    },
-                    path: hook.path.display().to_string(),
-                    matcher: if hook.matcher.is_empty() {
-                        None
-                    } else {
-                        Some(hook.matcher.clone())
-                    },
-                })
-                .collect()
-        } else {
-            Vec::new()
-        };
+        self.ensure_native_listing();
         let hooks_section = ui
             .vertical(|ui| {
                 crate::cards::section_label(ui, "Hooks");
-                if !native && self.grok_catalog.project_trusted == Some(false) {
-                    ui.label(
-                        RichText::new(
-                            "Project hooks stay hidden until this folder is trusted in Grok Build (/hooks-trust).",
-                        )
-                        .size(12.0)
-                        .color(crate::theme::muted()),
-                    );
-                    ui.add_space(6.0);
-                }
-                let native_project_hooks = native
-                    && self
-                        .native_hooks
-                        .iter()
-                        .any(|hook| hook.origin == grokhub_agent::HookOrigin::Project);
+                let native_project_hooks = self
+                    .native_hooks
+                    .iter()
+                    .any(|hook| hook.origin == grokhub_agent::HookOrigin::Project);
                 if native_project_hooks {
                     let trusted = self.native_hooks_trusted;
                     let note = if trusted {
@@ -304,39 +205,18 @@ impl Cabin {
                     }
                     ui.add_space(6.0);
                 }
-                let hooks: Vec<grokhub_acp::GrokHookRow> = if native {
-                    native_rows
-                        .iter()
-                        .filter(|h| {
-                            q.is_empty()
-                                || h.event.to_ascii_lowercase().contains(q)
-                                || h.target.to_ascii_lowercase().contains(q)
-                                || h.matcher
-                                    .as_ref()
-                                    .is_some_and(|m| m.to_ascii_lowercase().contains(q))
-                        })
-                        .cloned()
-                        .collect()
-                } else {
-                    self.grok_catalog
-                        .hooks
-                        .iter()
-                        .filter(|h| {
-                            q.is_empty()
-                                || h.event.to_ascii_lowercase().contains(q)
-                                || h.target.to_ascii_lowercase().contains(q)
-                                || h.matcher
-                                    .as_ref()
-                                    .is_some_and(|m| m.to_ascii_lowercase().contains(q))
-                        })
-                        .cloned()
-                        .collect()
-                };
-                let none = if native {
-                    self.native_hooks.is_empty()
-                } else {
-                    self.grok_catalog.hooks.is_empty()
-                };
+                let hooks: Vec<grokhub_agent::HookInfo> = self
+                    .native_hooks
+                    .iter()
+                    .filter(|h| {
+                        q.is_empty()
+                            || h.event.to_ascii_lowercase().contains(q)
+                            || h.command.to_ascii_lowercase().contains(q)
+                            || h.matcher.to_ascii_lowercase().contains(q)
+                    })
+                    .cloned()
+                    .collect();
+                let none = self.native_hooks.is_empty();
                 if none {
                     ui.label(
                         RichText::new(
@@ -350,11 +230,11 @@ impl Cabin {
                     for h in &hooks {
                         ui.add_space(8.0);
                         ui.label(RichText::new(&h.event).size(14.0).color(crate::theme::fg()));
-                        let target_line = match (h.hook_type.is_empty(), h.target.is_empty()) {
+                        let target_line = match (h.kind.is_empty(), h.command.is_empty()) {
                             (true, true) => String::new(),
-                            (true, false) => h.target.clone(),
-                            (false, true) => h.hook_type.clone(),
-                            (false, false) => format!("{} {}", h.hook_type, h.target),
+                            (true, false) => h.command.clone(),
+                            (false, true) => h.kind.clone(),
+                            (false, false) => format!("{} {}", h.kind, h.command),
                         };
                         if !target_line.is_empty() {
                             ui.label(
@@ -363,17 +243,18 @@ impl Cabin {
                                     .color(crate::theme::fg()),
                             );
                         }
-                        let origin = if h.path.is_empty() {
+                        let path = h.path.display().to_string();
+                        let origin = if path.is_empty() {
                             h.origin.as_str().to_string()
                         } else {
-                            format!("{} · {}", h.origin.as_str(), h.path)
+                            format!("{} · {}", h.origin.as_str(), path)
                         };
                         ui.label(
                             RichText::new(origin)
                                 .size(12.0)
                                 .color(crate::theme::muted()),
                         );
-                        let matcher = h.matcher.as_deref().unwrap_or("any");
+                        let matcher = if h.matcher.is_empty() { "any" } else { h.matcher.as_str() };
                         ui.label(
                             RichText::new(format!("matcher {matcher}"))
                                 .size(12.0)
@@ -416,11 +297,7 @@ impl Cabin {
                     .get(self.thread_idx)
                     .and_then(|thread| thread.grok_session.clone())
                     .unwrap_or_default();
-                let todos = if self.cfg.native_engine() {
-                    grokhub_agent::todos_for(&todo_session)
-                } else {
-                    Vec::new()
-                };
+                let todos = grokhub_agent::todos_for(&todo_session);
                 if !self.grok_tasks.is_empty() {
                     crate::cards::section_label(ui, "Grok tasks");
                     ui.add_space(8.0);
@@ -502,7 +379,6 @@ impl Cabin {
         if !tid.is_empty() {
             self.chat_job_thread = Some(tid);
         }
-        self.bg.steer_follow = None;
         self.bg.results_follow = None;
         self.push_bound_msg("user", p);
         self.persist();
@@ -722,7 +598,7 @@ impl Cabin {
             .oauth
             .as_ref()
             .is_some_and(|t| !t.access_token.trim().is_empty());
-        self.cfg.native_engine() && !cabin_oauth && !self.cfg.get_started_done
+        !cabin_oauth && !self.cfg.get_started_done
     }
 
     /// The native engine needs GrokHub's own sign-in or a key, never the CLI.
@@ -739,82 +615,8 @@ impl Cabin {
     }
 
     pub(super) fn ui_get_started(&mut self, ui: &mut egui::Ui) -> bool {
-        let grok_present = !self.cfg.native_engine() && grokhub_acp::find_grok().is_some();
-        let installing = self.grok_install_rx.is_some();
-        let (show_oauth, show_install) = if self.cfg.native_engine() {
-            (self.ui_wants_get_started(), false)
-        } else {
-            let cabin_oauth = self
-                .secrets
-                .oauth
-                .as_ref()
-                .is_some_and(|t| !t.access_token.trim().is_empty());
-            let show_oauth = grokhub_core::should_show_get_started_now(
-                grok_present,
-                cabin_oauth,
-                self.cfg.get_started_done,
-                grokhub_acp::grok_cli_key().is_some(),
-                self.official_cli_session,
-            );
-            let show_install = grokhub_core::should_show_cli_install_wait(
-                self.grok_install_wait,
-                !self.grok_install_err.is_empty(),
-            );
-            (show_oauth, show_install)
-        };
-        if !show_oauth && !show_install {
+        if !self.ui_wants_get_started() {
             return false;
-        }
-        if show_install {
-            let body = if !installing && !self.grok_install_err.is_empty() {
-                let cmd = grokhub_acp::grok_cli_install_cmd();
-                // Some install errors already end with the command; do not print it twice.
-                if self.grok_install_err.contains(cmd.trim()) {
-                    self.grok_install_err.clone()
-                } else {
-                    format!("{}\n{}", self.grok_install_err, cmd)
-                }
-            } else {
-                "Installing Grok Build CLI (alpha)…".to_string()
-            };
-            let show_retry = grokhub_core::should_show_manual_cli_install(grok_present, installing)
-                && !self.grok_install_err.is_empty();
-            let mut retry = false;
-            egui::CentralPanel::default()
-                .frame(egui::Frame::NONE.fill(crate::theme::bg()))
-                .show(ui, |ui| {
-                    ui.centered_and_justified(|ui| {
-                        egui::Frame::NONE
-                            .fill(crate::theme::panel())
-                            .corner_radius(crate::theme::SHEET_RADIUS)
-                            .stroke(egui::Stroke::new(1.0_f32, crate::theme::border()))
-                            .inner_margin(egui::Margin::same(24))
-                            .show(ui, |ui| {
-                                ui.set_max_width(520.0);
-                                ui.vertical_centered(|ui| {
-                                    ui.add_space(24.0);
-                                    ui.label(
-                                        egui::RichText::new("Get Started")
-                                            .font(crate::theme::title_font(
-                                                crate::theme::GREET_HERO,
-                                            ))
-                                            .color(crate::theme::fg()),
-                                    );
-                                    ui.add_space(12.0);
-                                    crate::cards::settings_note(ui, &body);
-                                    if show_retry {
-                                        ui.add_space(12.0);
-                                        retry =
-                                            crate::cards::white_pill(ui, "Install Grok Build CLI");
-                                    }
-                                });
-                            });
-                    });
-                });
-            if retry {
-                self.queue_grok_cli_install();
-            }
-            return true;
         }
         let pending = self
             .oauth_pending
@@ -1460,21 +1262,13 @@ impl Cabin {
     }
 
     pub(super) fn ui_skills(&mut self, ui: &mut egui::Ui) {
-        if self.cfg.native_engine() {
-            self.ensure_native_listing();
-        }
-        if !self.grok_catalog_loaded && self.grok_catalog_rx.is_none() {
-            self.reload_grok_catalog();
-        }
+        self.ensure_native_listing();
         egui::CentralPanel::default()
             .frame(egui::Frame::NONE.fill(crate::theme::bg()).inner_margin(egui::Margin::same(24)))
             .show(ui, |ui| {
             if crate::cards::page_header(ui, "Skills", "Refresh") {
-                if self.cfg.native_engine() {
-                    self.native_listing_cwd.clear();
-                    self.ensure_native_listing();
-                }
-                self.reload_grok_catalog();
+                self.native_listing_cwd.clear();
+                self.ensure_native_listing();
                 self.skill_list = skills::list_skills();
             }
             ui.add_space(10.0);
@@ -1489,99 +1283,8 @@ impl Cabin {
             ui.add_space(16.0);
             let q = self.skill_q.to_ascii_lowercase();
             let mut use_skill: Option<String> = None;
-            let mut workflow_verb: Option<WorkflowVerb> = None;
             let mut use_cabin_skill: Option<(String, String)> = None;
             egui::ScrollArea::vertical().show(ui, |ui| {
-            let workflows: Vec<_> = self
-                .grok_catalog
-                .workflows
-                .iter()
-                .filter(|w| {
-                    q.is_empty()
-                        || w.name.to_ascii_lowercase().contains(&q)
-                        || w.description.to_ascii_lowercase().contains(&q)
-                })
-                .cloned()
-                .collect();
-            let workflows_section = ui
-                .vertical(|ui| {
-                    crate::cards::section_label(ui, "Workflows");
-                    crate::cards::help_text(ui, "Grok Build `/workflow` skills and `*.rhai` under ~/.grok/workflows.");
-                    ui.add_space(8.0);
-                    if !workflows.is_empty() {
-                        crate::cards::tile_row(ui, workflows.len(), |ui, i| {
-                            let w = &workflows[i];
-                            match crate::cards::grok_tile(
-                                ui,
-                                crate::icons::TileIcon::Bolt,
-                                &w.name,
-                                &format!("{} · {}", w.source, w.description),
-                                Some("Use in chat"),
-                                false,
-                            ) {
-                                crate::cards::TileHit::Add => use_skill = Some(w.name.clone()),
-                                crate::cards::TileHit::Body => {
-                                    self.workflow_target = w.name.clone();
-                                }
-                                crate::cards::TileHit::None => {}
-                            }
-                        });
-                        ui.add_space(8.0);
-                    }
-                    ui.label(
-                        RichText::new("Runs")
-                            .size(13.0)
-                            .strong()
-                            .color(crate::theme::subtle()),
-                    );
-                    ui.add_space(6.0);
-                    ui.horizontal(|ui| {
-                        let field_w = (ui.available_width() - 248.0).clamp(180.0, 420.0);
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.workflow_target)
-                                .hint_text(crate::theme::hint("Workflow name or run id"))
-                                .desired_width(field_w),
-                        );
-                        let ready = !self.workflow_target.trim().is_empty();
-                        ui.add_enabled_ui(ready, |ui| {
-                            if crate::cards::ghost_pill(ui, "Pause") {
-                                workflow_verb = Some(WorkflowVerb::Pause);
-                            }
-                            if crate::cards::ghost_pill(ui, "Resume") {
-                                workflow_verb = Some(WorkflowVerb::Resume);
-                            }
-                            if crate::cards::ghost_pill(ui, "Stop") {
-                                workflow_verb = Some(WorkflowVerb::Stop);
-                            }
-                        });
-                    });
-                    if let Some(verb) = workflow_verb.take() {
-                        let target = self.workflow_target.trim().to_string();
-                        self.send_workflow_ctl(verb, &target);
-                    }
-                    ui.add_space(6.0);
-                    if self.workflow_status_live && !self.status.is_empty() {
-                        ui.label(
-                            RichText::new(self.status.as_str())
-                                .size(13.0)
-                                .color(crate::theme::fg()),
-                        );
-                        ui.add_space(6.0);
-                    }
-                    ui.label(
-                        RichText::new(
-                            "Grok Build doesn't list live runs to the cabin yet — type a workflow name or run id.",
-                        )
-                        .size(12.0)
-                        .color(crate::theme::muted()),
-                    );
-                    ui.add_space(16.0);
-                })
-                .response;
-            if self.scroll_to_workflows {
-                workflows_section.scroll_to_me(Some(egui::Align::TOP));
-                self.scroll_to_workflows = false;
-            }
             let cabin_skills: Vec<_> = self
                 .skill_list
                 .iter()
@@ -1637,111 +1340,54 @@ impl Cabin {
                 });
             }
             ui.add_space(16.0);
-            crate::cards::section_label(ui, "Grok Build skills");
-            if self.cfg.native_engine() {
-                crate::cards::help_text(
-                    ui,
-                    "Skills discovered for the native engine. Use in chat sends /name.",
-                );
-                ui.add_space(8.0);
-                let skills: Vec<_> = self
-                    .native_skills
-                    .iter()
-                    .filter(|s| {
-                        q.is_empty()
-                            || s.name.to_ascii_lowercase().contains(&q)
-                            || s.description.to_ascii_lowercase().contains(&q)
-                            || s.path.display().to_string().to_ascii_lowercase().contains(&q)
-                    })
-                    .cloned()
-                    .collect();
-                if skills.is_empty() {
-                    ui.label(
-                        RichText::new(if q.is_empty() {
-                            "None found in this project or the user skills directory."
-                        } else {
-                            "None matched."
-                        })
-                        .size(crate::theme::FONT_BODY)
-                        .color(crate::theme::muted()),
-                    );
-                } else {
-                    crate::cards::tile_row(ui, skills.len(), |ui, i| {
-                        let s = &skills[i];
-                        let src = format!("{} · {}", s.source.as_str(), s.path.display());
-                        let body = if s.description.is_empty() {
-                            src
-                        } else {
-                            format!("{src} · {}", s.description)
-                        };
-                        if crate::cards::grok_tile(
-                            ui,
-                            crate::icons::icon_for_label(&s.name),
-                            &s.name,
-                            &body,
-                            Some("Use in chat"),
-                            false,
-                        ) == crate::cards::TileHit::Add
-                        {
-                            use_skill = Some(s.name.clone());
-                        }
-                    });
-                }
-            } else {
-            crate::cards::help_text(ui, "Bundled skills and plugin skills from `grok inspect`. Use in chat sends /name.");
+            crate::cards::section_label(ui, "Project and user skills");
+            crate::cards::help_text(
+                ui,
+                "Skills discovered for the native engine. Use in chat sends /name.",
+            );
             ui.add_space(8.0);
             let skills: Vec<_> = self
-                .grok_catalog
-                .skills
+                .native_skills
                 .iter()
                 .filter(|s| {
                     q.is_empty()
                         || s.name.to_ascii_lowercase().contains(&q)
                         || s.description.to_ascii_lowercase().contains(&q)
-                        || s.plugin.to_ascii_lowercase().contains(&q)
+                        || s.path.display().to_string().to_ascii_lowercase().contains(&q)
                 })
                 .cloned()
                 .collect();
             if skills.is_empty() {
                 ui.label(
-                    RichText::new(catalog_empty_line(
-                        self.grok_catalog_rx.is_some(),
-                        &q,
-                        self.grok_catalog.skills.len(),
-                        "None found. Refresh after installing a plugin.",
-                        &self.status,
-                    ))
+                    RichText::new(if q.is_empty() {
+                        "None found in this project or the user skills directory."
+                    } else {
+                        "None matched."
+                    })
                     .size(crate::theme::FONT_BODY)
                     .color(crate::theme::muted()),
                 );
             } else {
-                paint_catalog_stale(ui, &self.status, self.grok_catalog.skills.len());
                 crate::cards::tile_row(ui, skills.len(), |ui, i| {
                     let s = &skills[i];
-                    let src = grokhub_acp::skill_source_label(s);
+                    let src = format!("{} · {}", s.source.as_str(), s.path.display());
                     let body = if s.description.is_empty() {
                         src
                     } else {
                         format!("{src} · {}", s.description)
-                    };
-                    let add = if s.user_invocable {
-                        Some("Use in chat")
-                    } else {
-                        None
                     };
                     if crate::cards::grok_tile(
                         ui,
                         crate::icons::icon_for_label(&s.name),
                         &s.name,
                         &body,
-                        add,
+                        Some("Use in chat"),
                         false,
                     ) == crate::cards::TileHit::Add
                     {
                         use_skill = Some(s.name.clone());
                     }
                 });
-            }
             }
             });
             if let Some(name) = use_skill {
@@ -1949,69 +1595,3 @@ impl Cabin {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn catalog_empty_line_distinguishes_loading_search_and_empty() {
-        let mcp = "No MCP servers in ~/.grok — add one with grok mcp add.";
-        let plugins = "No plugins installed yet — browse Marketplace below.";
-        let market = "No marketplace plugins to install.";
-        let skills = "None found. Refresh after installing a plugin.";
-        assert_eq!(catalog_empty_line(true, "", 0, mcp, ""), "Loading…");
-        assert_eq!(catalog_empty_line(true, "grok", 4, plugins, ""), "Loading…");
-        assert_eq!(catalog_empty_line(false, "zzz", 3, market, ""), "None matched.");
-        assert_eq!(catalog_empty_line(false, "zzz", 0, skills, ""), skills);
-        assert_eq!(catalog_empty_line(false, "", 0, mcp, ""), mcp);
-        assert_eq!(catalog_empty_line(false, "", 2, plugins, ""), plugins);
-        assert_eq!(catalog_empty_line(false, "  ", 2, skills, ""), "None matched.");
-    }
-
-    #[test]
-    fn catalog_timeout_copy_names_a_missed_answer_and_a_stale_list() {
-        let skills = "None found. Refresh after installing a plugin.";
-        let timeout = crate::app::acp::GROK_CATALOG_TIMEOUT;
-        assert_eq!(
-            CATALOG_TIMEOUT_EMPTY,
-            "Grok Build didn't answer. Refresh to try again."
-        );
-        assert_eq!(
-            CATALOG_TIMEOUT_STALE,
-            "Showing the last list — Grok Build timed out."
-        );
-        assert_eq!(
-            catalog_empty_line(false, "", 0, skills, timeout),
-            "Grok Build didn't answer. Refresh to try again."
-        );
-        assert_eq!(
-            catalog_empty_line(false, "zzz", 0, skills, timeout),
-            "Grok Build didn't answer. Refresh to try again."
-        );
-        assert_eq!(catalog_empty_line(true, "", 0, skills, timeout), "Loading…");
-        assert_eq!(catalog_empty_line(false, "", 0, skills, "Harbor"), skills);
-        assert_eq!(catalog_empty_line(false, "", 2, skills, timeout), skills);
-        assert_eq!(
-            catalog_stale_line(timeout, 3),
-            Some("Showing the last list — Grok Build timed out.")
-        );
-        assert_eq!(catalog_stale_line(timeout, 0), None);
-        assert_eq!(catalog_stale_line("Harbor", 4), None);
-        let ui = include_str!("pages.rs");
-        let skills_ui = ui
-            .split("fn ui_skills(")
-            .nth(1)
-            .and_then(|s| s.split("fn open_history_hit(").next())
-            .expect("ui_skills");
-        assert!(
-            skills_ui.contains("paint_catalog_stale("),
-            "the skills list paints the stale line: {skills_ui}"
-        );
-        let connectors = include_str!("connectors_ui.rs");
-        assert_eq!(
-            connectors.split("#[cfg(test)]").next().expect("body").matches("paint_catalog_stale(").count(),
-            3,
-            "the Grok Build server, plugin, and marketplace lists paint the stale line"
-        );
-    }
-}

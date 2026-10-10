@@ -43,7 +43,7 @@ mod tests {
         walk(root);
         let extra = [
             include_str!("../../grokhub-app/src/app/native_engine.rs"),
-            include_str!("../../grokhub-app/src/build_agent.rs"),
+            include_str!("../../grokhub-app/src/engine_handle.rs"),
             include_str!("../../grokhub-core/src/xai_signin.rs"),
         ];
         for text in extra {

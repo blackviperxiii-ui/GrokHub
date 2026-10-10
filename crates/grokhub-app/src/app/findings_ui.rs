@@ -135,7 +135,7 @@ mod tests {
         cabin.findings_clicked(FindingsAct::Run(card().fixes[0].prompt()), &body);
         // Starting the next run drops a card left by one that never finished.
         assert_eq!(cabin.harness.pending_findings, None);
-        assert_eq!(cabin.status, "Install Grok Build (x.ai/cli) or Connect Grok in Settings");
+        assert_eq!(cabin.status, grokhub_core::XAI_NEED_SIGNIN);
         assert_eq!(cabin.harness.findings_dismissed, [body.clone(), body.clone()]);
     }
 }

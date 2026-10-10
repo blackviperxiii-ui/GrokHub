@@ -97,7 +97,7 @@ pub(super) fn grant_full_card_on() -> bool {
 #[derive(Debug, Clone, PartialEq)]
 pub(super) enum ParkSource {
     /// Path B / E: a Grok Build permission ask waiting on its RPC.
-    Ask(grokhub_acp::PermissionAsk),
+    Ask(grokhub_core::wire::PermissionAsk),
     /// Path A: the `--mcp-desktop` process is blocked on this park id. Path E:
     /// a cabin-owned send (Spike-4c `guard_or_park`) waits on it the same way.
     Desk(String),
@@ -307,13 +307,13 @@ pub(super) fn access_for(desktop_control: bool, full: bool) -> AccessMode {
 
 /// Grok Build computer use reaches the cabin as the `grokhub-desktop` MCP
 /// (or the Spike-2a `grokhub-cua` proxy).
-pub(super) fn is_desktop_ask(p: &grokhub_acp::PermissionAsk) -> bool {
+pub(super) fn is_desktop_ask(p: &grokhub_core::wire::PermissionAsk) -> bool {
     let hay = format!("{} {}", p.title, p.action).to_ascii_lowercase();
     grokhub_core::CABIN_CU_SERVERS.iter().any(|s| hay.contains(s))
 }
 
 /// Permission-card eyebrow: the kind of ask, not the decision count.
-pub(super) fn perm_card_eyebrow(p: &grokhub_acp::PermissionAsk) -> &'static str {
+pub(super) fn perm_card_eyebrow(p: &grokhub_core::wire::PermissionAsk) -> &'static str {
     if is_desktop_ask(p) { "Desktop" } else { "Tool" }
 }
 
@@ -496,17 +496,17 @@ impl Cabin {
     /// Path B: runs before Grok Build's own Ask / Auto / Always answer.
     pub(super) fn harness_precheck(
         &mut self,
-        p: grokhub_acp::PermissionAsk,
-    ) -> Option<grokhub_acp::PermissionAsk> {
+        p: grokhub_core::wire::PermissionAsk,
+    ) -> Option<grokhub_core::wire::PermissionAsk> {
         self.harness_precheck_on(p, "B")
     }
 
     /// Returns the ask untouched when the harness has nothing stricter to say.
     pub(super) fn harness_precheck_on(
         &mut self,
-        p: grokhub_acp::PermissionAsk,
+        p: grokhub_core::wire::PermissionAsk,
         path: &'static str,
-    ) -> Option<grokhub_acp::PermissionAsk> {
+    ) -> Option<grokhub_core::wire::PermissionAsk> {
         let trace = self.trace_id();
         if !p.tool_call_id.is_empty() {
             self.harness.asked.insert(p.tool_call_id.clone());
@@ -857,17 +857,12 @@ impl Cabin {
         self.harness.queue = keep;
     }
 
-    /// A Steer stops the turn, not the decisions on screen (Spike-1a). Take the
-    /// hard parks out before the halt: a park holding the stopped turn's GB ask
+    /// A stop ends the turn, not the decisions on screen (Spike-1a). Take the
+    /// hard parks out before the halt: a park holding the stopped turn's ask
     /// or desktop call is denied there with a span (that call is gone) and
     /// kept as a held card that re-runs the step once on Approve. Path C and
     /// egress cards hold nothing and keep as they are. Ladder pauses are not
-    /// touched by a halt.
-    pub(super) fn take_parks_for_steer(&mut self) -> VecDeque<HardParkUi> {
-        self.take_parks_for_stop("turn steered — the call is gone, the card stays for a fresh approval")
-    }
-
-    /// [`Self::take_parks_for_steer`] with the reason the deny spans give.
+    /// touched by a halt. `why` is the reason the deny spans give.
     fn take_parks_for_stop(&mut self, why: &str) -> VecDeque<HardParkUi> {
         let dir = crate::config::config_dir();
         let trace = self.trace_id();
@@ -1704,8 +1699,8 @@ mod tests {
         assert!(!oneshot_covers("rm -f draft.md", "rm -f other.md"));
     }
 
-    fn ask(title: &str, action: &str) -> grokhub_acp::PermissionAsk {
-        grokhub_acp::PermissionAsk {
+    fn ask(title: &str, action: &str) -> grokhub_core::wire::PermissionAsk {
+        grokhub_core::wire::PermissionAsk {
             rpc_id: serde_json::json!(7),
             session_id: "s".into(),
             title: title.into(),
@@ -1961,7 +1956,7 @@ mod tests {
     }
 
     #[test]
-    fn parked_cards_and_spans_survive_a_steer_and_a_queued_message() {
+    fn parked_cards_and_spans_survive_a_steer_a_stop_and_a_queued_message() {
         let (_pin, root) = pinned("harness-steer");
         let _grok = NoGrok::set(&root);
         let mut cabin = Cabin::quiet_for_test();
@@ -1992,13 +1987,21 @@ mod tests {
         assert_eq!(cabin.decisions_waiting(), 4);
         let before = decisions(&root);
 
-        // A Steer: the live turn on this chat stops and carries the new message.
+        // A Steer: the live turn keeps running and takes the message at its next
+        // tool boundary. No card is answered and no span is written.
         let (_tx, rx) = mpsc::channel();
         cabin.grok_p_rx = Some(rx);
         cabin.running = true;
         cabin.chat_job_thread = Some(cabin.visible_thread_id());
         assert!(cabin.can_steer_live_turn());
         cabin.send_from_composer("go left instead".into());
+        assert!(cabin.running && cabin.grok_p_rx.is_some(), "a steer keeps the turn");
+        assert_eq!(cabin.status, "Steering…");
+        assert_eq!(cabin.decisions_waiting(), 4);
+        assert_eq!(decisions(&root), before, "a steer writes no span");
+
+        // A stopped turn: the calls are gone, the cards stay for a fresh approval.
+        cabin.stop_turn_unasked();
         assert!(cabin.grok_p_rx.is_none(), "the old turn stopped");
 
         assert_eq!(cabin.hard_waiting(), 3, "every hard card is still parked");
@@ -2010,7 +2013,7 @@ mod tests {
             .map(|p| p.source.clone())
             .collect();
         assert_eq!(sources, vec![ParkSource::Held, ParkSource::Held, ParkSource::Headless]);
-        assert_eq!(cabin.harness.soft_parks.len(), 1, "a Steer does not answer a pause");
+        assert_eq!(cabin.harness.soft_parks.len(), 1, "a stop does not answer a pause");
         assert_eq!(cabin.decisions_waiting(), 4);
         assert_eq!(hx::take_answer(&root, "d9"), Some(false), "the stopped desk call was denied");
         let after = decisions(&root);
@@ -2028,7 +2031,7 @@ mod tests {
         assert!(hx::approval_gate_violation(&spans).is_empty());
         assert_eq!(
             spans[before.len()].result,
-            "turn steered — the call is gone, the card stays for a fresh approval"
+            "turn stopped by the path D check — the card stays for a fresh approval"
         );
 
         // A queued message runs after the reply: the cards and the pause stay,
@@ -2342,52 +2345,23 @@ mod tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
-    /// `grokhub-fake-acp`, built next to this test binary by
-    /// `cargo test --workspace` (grokhub-acp's integration tests need it).
-    fn fake_acp() -> std::path::PathBuf {
-        let file = format!("grokhub-fake-acp{}", std::env::consts::EXE_SUFFIX);
-        let exe = std::env::current_exe().expect("test exe");
-        exe.ancestors()
-            .take(4)
-            .map(|dir| dir.join(&file))
-            .find(|p| p.is_file())
-            .unwrap_or_else(|| panic!("{file} not built: run `cargo build -p grokhub-acp --bin grokhub-fake-acp` (cargo test --workspace builds it)"))
-    }
-
-    /// A live ACP session on the fake agent under Always, prompted once, with
-    /// the cabin mid-turn. The fake replays one tool frame per `env`.
-    fn fake_turn(cabin: &mut Cabin, env: &[(&str, &str)]) {
-        let opts = grokhub_acp::SpawnOpts {
-            program: fake_acp(),
-            args: vec![],
-            cwd: std::env::temp_dir(),
-            api_key: None,
-            xai_api_key: None,
-            always_approve: true,
-            auto: false,
-            session_mode: SessionMode::Chat,
-            reasoning_effort: None,
-            extra_env: env.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(),
-            handshake_timeout: None,
-            resume: None,
-            skip_cabin_home: false,
-            worktree: false,
-        };
-        let h = grokhub_acp::connect(opts).expect("connect fake acp");
-        h.prompt("do it").expect("prompt");
-        cabin.acp = Some(h);
+    /// One finished built-in computer-use frame mid-turn under Always, parsed
+    /// by the wire layer (which keeps field words, never typed text) and fed
+    /// through the watchdog `poll_acp` runs on every tool frame.
+    fn unasked_frame(cabin: &mut Cabin, tool: &str, raw: &str, image: Option<&str>) -> bool {
         cabin.running = true;
         cabin.permission_mode = PermissionMode::AlwaysApprove;
-    }
-
-    /// Poll the real ACP event loop until the fake's turn is over.
-    fn drive(cabin: &mut Cabin, until: impl Fn(&Cabin) -> bool) {
-        let t = Instant::now();
-        while !until(cabin) {
-            assert!(t.elapsed() < Duration::from_secs(20), "fake ACP turn did not finish");
-            cabin.poll_acp();
-            std::thread::sleep(Duration::from_millis(20));
-        }
+        let raw: serde_json::Value = serde_json::from_str(raw).expect("raw input json");
+        let mut frame = grokhub_core::wire::parse_tool_card(&serde_json::json!({
+            "sessionUpdate": "tool_call",
+            "toolCallId": "tool-1",
+            "title": tool,
+            "kind": "other",
+            "status": "completed",
+            "rawInput": raw,
+        }));
+        frame.image_data_url = image.map(|b64| format!("data:image/png;base64,{b64}"));
+        cabin.harness_watch_cu(&frame, true)
     }
 
     fn path_d(root: &std::path::Path) -> Vec<hx::Span> {
@@ -2400,11 +2374,7 @@ mod tests {
         let mut cabin = Cabin::quiet_for_test();
         cabin.cfg.desktop_control = true;
         cabin.harness.last_cu_frame = Some(frame_hash("data:image/jpeg;base64,AAAA"));
-        fake_turn(
-            &mut cabin,
-            &[("FAKE_ACP_TOOL", "computer_click"), ("FAKE_ACP_RAW_INPUT", r#"{"x":5,"y":6}"#), ("FAKE_ACP_IMAGE", "QQ==")],
-        );
-        drive(&mut cabin, |c| !c.running);
+        assert!(!unasked_frame(&mut cabin, "computer_click", r#"{"x":5,"y":6}"#, Some("QQ==")));
         let spans = path_d(&root);
         assert_eq!(spans.len(), 1, "{spans:?}");
         let s = &spans[0];
@@ -2422,14 +2392,7 @@ mod tests {
         let (_pin, root) = pinned("path-d-hard");
         let mut cabin = Cabin::quiet_for_test();
         cabin.cfg.desktop_control = true;
-        fake_turn(
-            &mut cabin,
-            &[
-                ("FAKE_ACP_TOOL", "computer_type"),
-                ("FAKE_ACP_RAW_INPUT", r#"{"label":"Password","text":"hunter2222"}"#),
-            ],
-        );
-        drive(&mut cabin, |c| c.harness.park.is_some());
+        assert!(unasked_frame(&mut cabin, "computer_type", r#"{"label":"Password","text":"hunter2222"}"#, None));
         assert!(!cabin.running, "the turn stops at once");
         let park = cabin.harness.park.clone().unwrap();
         assert_eq!(park.source, ParkSource::Unasked);
@@ -2528,11 +2491,8 @@ mod tests {
         let (_pin, root) = pinned("path-d-readonly");
         let mut cabin = Cabin::quiet_for_test();
         assert_eq!(cabin.access_mode(), AccessMode::Readonly);
-        fake_turn(
-            &mut cabin,
-            &[("FAKE_ACP_TOOL", "computer_click"), ("FAKE_ACP_RAW_INPUT", r#"{"x":1,"y":2}"#), ("FAKE_ACP_BLOCK_UNTIL_CANCEL", "1")],
-        );
-        drive(&mut cabin, |c| !c.running);
+        assert!(unasked_frame(&mut cabin, "computer_click", r#"{"x":1,"y":2}"#, None));
+        assert!(!cabin.running, "the turn stops");
         assert!(cabin.harness.park.is_none(), "Readonly refuses with no card");
         assert_eq!(cabin.hard_waiting(), 0);
         let spans = path_d(&root);

@@ -419,7 +419,7 @@ $toast = [Windows.UI.Notifications.ToastNotification]::new($xml)
     .stdin(std::process::Stdio::null())
     .stdout(std::process::Stdio::null())
     .stderr(std::process::Stdio::null());
-    grokhub_acp::hide_windows_console(&mut cmd);
+    grokhub_core::proc_util::hide_windows_console(&mut cmd);
     let _ = cmd.spawn();
 }
 

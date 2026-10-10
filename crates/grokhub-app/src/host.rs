@@ -4,7 +4,7 @@ use std::path::Path;
 use std::process::{Child, Command, Stdio};
 
 pub(crate) fn hide_windows_console(cmd: &mut Command) {
-    grokhub_acp::hide_windows_console(cmd);
+    grokhub_core::proc_util::hide_windows_console(cmd);
 }
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;

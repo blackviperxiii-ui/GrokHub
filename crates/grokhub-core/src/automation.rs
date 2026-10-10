@@ -287,11 +287,6 @@ pub fn night_counts_run(replay_started: Option<bool>) -> bool {
     !matches!(replay_started, Some(false))
 }
 
-/// Missing OAuth must leave the due set, same as quiet/policy — not hammer every tick.
-pub fn night_unauth_should_skip(has_key: bool) -> bool {
-    !has_key
-}
-
 /// A finished night check must not halt a live chat/update job.
 pub fn night_check_may_fire(running: bool) -> bool {
     !running
@@ -1029,11 +1024,6 @@ mod tests {
             !night_counts_run(Some(false)),
             "a missing recipe must not consume the night slot"
         );
-        assert!(
-            night_unauth_should_skip(false),
-            "no key must skip the night slot so tick_night stops re-firing"
-        );
-        assert!(!night_unauth_should_skip(true));
         assert!(
             !night_check_may_fire(true),
             "a passing check must wait until the cabin is idle"

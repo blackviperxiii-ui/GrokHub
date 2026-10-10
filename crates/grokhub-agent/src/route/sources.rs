@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 use serde_json::Value;
 
 use grokhub_core::model_registry::cost_class::CostClass;
-use grokhub_core::model_registry::discover::{gb_listing, parse_xai_catalog, CatalogSource, Listing};
+use grokhub_core::model_registry::discover::{parse_xai_catalog, CatalogSource, Listing};
 use grokhub_core::model_registry::probe::{run_probe, speed_call, ProbeCall, ProbeEnv, ProbeReply, ProbeTransport};
 use grokhub_core::model_registry::profile::ProbeResult;
 use grokhub_core::model_registry::{ModelMeta, SourceKind};
@@ -83,29 +83,6 @@ impl CatalogSource for XaiApiSource {
         }
         let rows = parse_xai_catalog(models.as_deref().ok(), language.as_deref().ok())?;
         Ok(Listing::new(SourceKind::XaiApi, rows))
-    }
-}
-
-/// `grok models` in the cabin Grok home (plan scoped). Ids only.
-pub struct GrokBuildSource {
-    pub bin: PathBuf,
-    pub cwd: PathBuf,
-}
-
-impl CatalogSource for GrokBuildSource {
-    fn kind(&self) -> SourceKind {
-        SourceKind::GrokBuild
-    }
-
-    fn fetch(&self) -> Result<Listing, String> {
-        let text = grokhub_acp::grok_stdout_timeout(&self.bin, &self.cwd, &["models"], 20)?;
-        let ids = grokhub_acp::parse_models_list(&text);
-        if ids.is_empty() {
-            return Err("grok models listed nothing".into());
-        }
-        let version = grokhub_acp::grok_stdout_timeout(&self.bin, &self.cwd, &["--version"], 10).ok();
-        let version = version.as_deref().map(str::trim).map(|v| v.strip_prefix("grok ").unwrap_or(v));
-        Ok(gb_listing(&ids, version))
     }
 }
 

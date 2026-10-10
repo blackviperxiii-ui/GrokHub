@@ -145,8 +145,8 @@ mod tests {
             "grokhub --doctor must report whether the cabin process is alive: {doctor}"
         );
         assert!(
-            doctor.contains("doctor_grok_line_blocking") && doctor.contains("find_grok"),
-            "grokhub --doctor must report grok CLI using the same locate path as the cabin: {doctor}"
+            !doctor.contains("doctor_grok_line") && !doctor.contains("find_grok"),
+            "grokhub --doctor checks GrokHub alone, never the Grok Build CLI: {doctor}"
         );
     }
 }

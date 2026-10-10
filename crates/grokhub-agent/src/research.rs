@@ -1,14 +1,6 @@
-//! `/deep-research` on a native thread is one normal turn with a research recipe.
-//! The cabin slash list is unchanged, so a CLI thread still sends the typed line.
+//! `/deep-research` is one normal turn with a research recipe.
 
-pub fn native_deep_research_prompt(
-    engine_on: bool,
-    thread_native: bool,
-    line: &str,
-) -> Option<String> {
-    if !engine_on || !thread_native {
-        return None;
-    }
+pub fn native_deep_research_prompt(line: &str) -> Option<String> {
     let query = command_query(line.trim())?;
     Some(recipe(query))
 }
@@ -48,21 +40,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn deep_research_prompt_is_native_only() {
-        assert!(native_deep_research_prompt(false, true, "/deep-research cats").is_none());
-        assert!(native_deep_research_prompt(true, false, "/deep-research cats").is_none());
-        assert!(native_deep_research_prompt(true, true, "/deep-research-extra cats").is_none());
-        assert!(native_deep_research_prompt(true, true, "deep-research cats").is_none());
-        let text = native_deep_research_prompt(true, true, "/deep-research cats").unwrap();
+    fn deep_research_prompt_wraps_only_the_command() {
+        assert!(native_deep_research_prompt("/deep-research-extra cats").is_none());
+        assert!(native_deep_research_prompt("deep-research cats").is_none());
+        let text = native_deep_research_prompt("/deep-research cats").unwrap();
         assert!(text.contains("web_search"), "{text}");
         assert!(text.contains("x_search"), "{text}");
         assert!(text.contains("web_fetch"), "{text}");
         assert!(text.to_ascii_lowercase().contains("plan"), "{text}");
         assert!(text.to_ascii_lowercase().contains("cited"), "{text}");
         assert!(text.contains("cats"), "{text}");
-        let upper = native_deep_research_prompt(true, true, "/Deep-Research  harbor").unwrap();
+        let upper = native_deep_research_prompt("/Deep-Research  harbor").unwrap();
         assert!(upper.contains("harbor"), "{upper}");
-        let empty = native_deep_research_prompt(true, true, "/deep-research").unwrap();
+        let empty = native_deep_research_prompt("/deep-research").unwrap();
         assert!(empty.contains("web_fetch"), "{empty}");
     }
 }

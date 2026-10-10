@@ -164,57 +164,6 @@ fn execute(job: Prepared) -> grokhub_agent::UnattendedDone {
     })
 }
 
-fn grok_usage_of(done: &grokhub_agent::UnattendedDone) -> GrokUsage {
-    GrokUsage {
-        input_tokens: done.usage.input_tokens,
-        output_tokens: done.usage.output_tokens,
-        reasoning_tokens: done.usage.reasoning_tokens,
-        total_tokens: done
-            .usage
-            .input_tokens
-            .saturating_add(done.usage.output_tokens)
-            .saturating_add(done.usage.reasoning_tokens),
-        cost_in_usd_ticks: done.usage.cost_in_usd_ticks,
-        meter: done.meter.clone(),
-        context_tokens_used: done.context_tokens_used,
-        context_window_tokens: done.context_window_tokens,
-        stop_reason: done.stop_reason.clone(),
-        ..GrokUsage::default()
-    }
-}
-
-fn emit_grok_p(tx: &mpsc::Sender<GrokPEvent>, done: grokhub_agent::UnattendedDone) {
-    if done.stop_reason == "halted" || done.stop_reason == "cancelled" {
-        return;
-    }
-    if !done.thought.is_empty() {
-        let _ = tx.send(GrokPEvent::Thought(done.thought.clone()));
-    }
-    if !done.text.is_empty() {
-        let _ = tx.send(GrokPEvent::Text(done.text.clone()));
-    }
-    let usage = grok_usage_of(&done);
-    if !usage.is_empty() {
-        let _ = tx.send(GrokPEvent::Usage(usage.clone()));
-    }
-    if done.stop_reason == "error" && done.text.trim().is_empty() {
-        let err = if done.error.is_empty() {
-            "unattended run failed".to_string()
-        } else {
-            done.error
-        };
-        let _ = tx.send(GrokPEvent::Err(err));
-        return;
-    }
-    let _ = tx.send(GrokPEvent::End(grokhub_acp::SingleTurn {
-        session_id: done.session_id,
-        text: done.text,
-        thought: done.thought,
-        usage,
-        stop_reason: done.stop_reason,
-    }));
-}
-
 pub(super) fn single_turn_json(done: &grokhub_agent::UnattendedDone) -> String {
     serde_json::json!({
         "sessionId": done.session_id,
@@ -280,29 +229,11 @@ fn fast_text(ready: &ReadyModel, workspace: &Path, prompt: &str) -> Result<Strin
 }
 
 fn native_rules(cabin: &Cabin, workspace: &std::path::Path) -> String {
-    let rules = grokhub_acp::cabin_rules_for(
+    let rules = grokhub_core::cabin_rules::cabin_rules_for(
         &grokhub_core::brief_for(&cabin.learning, "chat"),
         cabin.cfg.desktop_control,
     );
     grokhub_agent::system_prompt(&rules, workspace)
-}
-
-fn scheduled_session(cabin: &Cabin) -> (String, bool) {
-    let idx = cabin
-        .chat_job_thread
-        .as_deref()
-        .and_then(|id| cabin.threads.iter().position(|t| t.id == id))
-        .unwrap_or(cabin.thread_idx);
-    let existing = cabin
-        .threads
-        .get(idx)
-        .and_then(|t| t.grok_session.clone())
-        .unwrap_or_default();
-    if existing.starts_with("native-") {
-        (existing, true)
-    } else {
-        (format!("native-u-{}", uid("u")), false)
-    }
 }
 
 impl Cabin {
@@ -322,11 +253,8 @@ impl Cabin {
         self.persist_usage();
     }
 
-    /// Drop one-shot native receivers on Halt and quit. Flag off leaves the CLI receivers alone.
+    /// Drop one-shot native receivers on Halt and quit.
     pub(super) fn stop_native_unattended(&mut self) {
-        if !self.cfg.native_engine() {
-            return;
-        }
         grokhub_agent::halt_all_sessions();
         grokhub_agent::mcp::shutdown_all();
         self.grok_loop_rx = None;
@@ -339,48 +267,6 @@ impl Cabin {
         self.chip_busy = false;
         self.greeting_busy = false;
         self.digest_busy = false;
-    }
-
-    pub(super) fn start_native_scheduled(
-        &mut self,
-        prompt: &str,
-        cwd: PathBuf,
-        model: &str,
-        effort: Option<String>,
-        mode: SessionMode,
-        image: Option<String>,
-    ) {
-        let ready = match unattended_model(self) {
-            Ok(ready) => ready,
-            Err(err) => {
-                let (tx, rx) = mpsc::channel();
-                let _ = tx.send(GrokPEvent::Err(err));
-                self.grok_p_rx = Some(rx);
-                return;
-            }
-        };
-        let (session_id, resume) = scheduled_session(self);
-        let gate = scheduled_gate(self, mode);
-        let system = native_rules(self, &cwd);
-        crate::desktop_mcp::sync_native_cua(&self.cfg);
-        let job = Prepared {
-            ready,
-            workspace: cwd,
-            model: model.to_string(),
-            effort,
-            system,
-            session_id,
-            resume,
-            gate,
-            prompt: prompt.to_string(),
-            image,
-        };
-        let (tx, rx) = mpsc::channel();
-        self.grok_p_rx = Some(rx);
-        std::thread::spawn(move || {
-            let done = execute(job);
-            emit_grok_p(&tx, done);
-        });
     }
 
     pub(super) fn spawn_native_loop(&mut self, row: GrokLoop) {
@@ -713,79 +599,27 @@ mod tests {
     }
 
     #[test]
-    fn native_engine_is_the_default_and_each_runner_keeps_its_legacy_cli_path() {
-        assert_eq!(AppConfig::default().engine(), crate::config::EngineKind::Native);
-        let kick = fn_body(include_str!("chat_kick.rs"), "kick_model");
-        assert!(kick.contains("spawn_grok_p_stream"));
-        let native_at = kick
-            .find("!self.agent_ready()")
-            .expect("native branch");
-        let spawn_at = kick.find("spawn_grok_p_stream").expect("cli spawn");
-        assert!(native_at < spawn_at);
-        let sched = kick.find("!self.scheduled_perm").expect("sched");
-        let acp = kick.find("uses_acp").expect("acp");
-        assert!(sched < acp && acp < spawn_at);
-        assert!(kick.contains("scheduled_flags"));
-        assert!(kick.contains("fail_ask_without_acp"));
-        let send = fn_body(include_str!("chat_kick.rs"), "send_chat");
-        assert!(send.contains("persist_user_turn(self.agent_ready())"));
-        let ready = fn_body(include_str!("native_engine.rs"), "agent_ready");
-        assert!(ready.contains("self.can_agent()"));
-        assert!(ready.contains("self.scheduled_perm"));
-
-        let fire = fn_body(include_str!("night.rs"), "fire_loop");
-        assert!(fire.contains("grok_user_stdout_wait"));
-        assert!(fire.contains("-p"));
-        assert!(fire.contains("scheduled_args"));
-        assert!(fire.contains("self.cfg.native_engine"));
-        assert!(!fire.contains("\"--always-approve\""));
-        let tick = fn_body(include_str!("night.rs"), "tick_loops");
-        assert!(tick.contains("find_grok()"));
-        assert!(tick.contains("self.cfg.native_engine"));
+    fn every_runner_goes_native_with_no_cli_path() {
+        for (src, name, native) in [
+            (include_str!("chat_kick.rs"), "kick_model", "kick_native_turn"),
+            (include_str!("night.rs"), "fire_loop", "native_loop"),
+            (include_str!("night.rs"), "start_scheduled_run", "start_bg_task"),
+            (include_str!("night.rs"), "spawn_review", "native_review"),
+            (include_str!("mod.rs"), "drain_inbox", "send_scheduled_chat"),
+            (include_str!("feed_ui.rs"), "maybe_suggest_ideas", "native_ideas"),
+            (include_str!("feed_ui.rs"), "follow_feed_lookup", "native_digest"),
+            (include_str!("chips.rs"), "spawn_chip_llm", "native_chips"),
+            (include_str!("chips.rs"), "spawn_greeting_llm", "native_greeting"),
+        ] {
+            let body = fn_body(src, name);
+            assert!(body.contains(native), "{name}: {body}");
+            for gone in ["find_grok", "spawn_grok_p_stream", "grok_user_stdout_wait", "cabin_fast_llm", "native_engine()"] {
+                assert!(!body.contains(gone), "{name} still has {gone}");
+            }
+        }
         let night = fn_body(include_str!("night.rs"), "fire_night");
         assert!(night.contains("start_scheduled_run"));
-        assert!(night.contains("night_unauth_should_skip"));
-        assert!(night.contains("self.can_agent()"));
-        assert!(night.contains("Night skipped {} ({why})"));
-        let start = fn_body(include_str!("night.rs"), "start_scheduled_run");
-        assert!(start.contains("self.cfg.native_engine"));
-        assert!(start.contains("start_bg_task"));
-        assert!(start.contains("The run did not start"));
-        let review = fn_body(include_str!("night.rs"), "spawn_review");
-        assert!(review.contains("grok_chat"));
-        assert!(review.contains("model_for_mode(\"balanced\")"));
-        assert!(review.contains("self.cfg.native_engine"));
-        let review_tick = fn_body(include_str!("night.rs"), "tick_review");
-        assert!(review_tick.contains("self.llm_ready()"));
-        assert!(!review_tick.contains("send_chat"));
-
-        let drain = fn_body(include_str!("mod.rs"), "drain_inbox");
-        assert!(drain.contains("send_scheduled_chat"));
-        assert!(drain.contains("self.can_agent()"));
-        assert!(!drain.contains("self.llm_ready()"));
-        assert!(drain.contains("self.cfg.native_engine"));
-
-        let ideas = fn_body(include_str!("feed_ui.rs"), "maybe_suggest_ideas");
-        assert!(ideas.contains("cabin_fast_llm"));
-        assert!(ideas.contains("self.cfg.native_engine"));
-        let digest = fn_body(include_str!("feed_ui.rs"), "follow_feed_lookup");
-        assert!(digest.contains("grok_chat"));
-        assert!(digest.contains("BACKGROUND_EFFORT"));
-        assert!(digest.contains("self.cfg.native_engine"));
-        let native_at = digest
-            .find("self.cfg.native_engine")
-            .expect("digest native");
-        let test_at = digest.find("cfg!(test)").expect("digest test gate");
-        assert!(native_at < test_at);
-
-        let chips = fn_body(include_str!("chips.rs"), "spawn_chip_llm");
-        assert!(chips.contains("cabin_fast_llm"));
-        assert!(chips.contains("find_grok"));
-        assert!(chips.contains("self.cfg.native_engine"));
-        let greet = fn_body(include_str!("chips.rs"), "spawn_greeting_llm");
-        assert!(greet.contains("cabin_fast_llm"));
-        assert!(greet.contains("find_grok"));
-        assert!(greet.contains("self.cfg.native_engine"));
+        assert!(!night.contains("can_agent"));
 
         let here = include_str!("native_unattended.rs")
             // Not "\n#[cfg(test)]\n...": a Windows checkout has CRLF line endings.
@@ -828,7 +662,7 @@ mod tests {
             permission_cards: 0,
             elicit_cards: 0,
         };
-        let turn = grokhub_acp::parse_single_turn(&single_turn_json(&done)).expect("json");
+        let turn = grokhub_core::wire::parse_single_turn(&single_turn_json(&done)).expect("json");
         assert_eq!(turn.session_id, "native-loop-shape");
         assert_eq!(turn.text, "Loop report is ready");
         assert_eq!(turn.usage.input_tokens, 4);
@@ -874,7 +708,6 @@ mod tests {
         });
         set_unattended_client_for_test(Some(say.clone()));
         let mut cabin = Cabin::quiet_for_test();
-        cabin.cfg.grok_build_engine = false;
         let mut row = new_loop("30m".into(), "Write a status report".into(), now_ms());
         row.id = "loop-a".into();
         cabin.grok_loops.push(row.clone());
@@ -1012,164 +845,6 @@ mod tests {
     }
 
     #[test]
-    fn native_scheduled_run_ends_like_the_cli_stream() {
-        let (_lock, root, _env) = isolated("native-scheduled");
-        let say = Arc::new(Say {
-            text: std::sync::Mutex::new("Automation report".into()),
-            calls: AtomicUsize::new(0),
-        });
-        set_unattended_client_for_test(Some(say.clone()));
-        let mut cabin = Cabin::quiet_for_test();
-        cabin.cfg.grok_build_engine = false;
-        cabin.permission_mode = PermissionMode::Ask;
-        let work = root.join("work");
-        std::fs::create_dir_all(&work).unwrap();
-        cabin.start_native_scheduled(
-            "write the report",
-            work,
-            "grok-4.7",
-            None,
-            SessionMode::Chat,
-            None,
-        );
-        let rx = cabin.grok_p_rx.take().expect("native stream");
-        let mut text = String::new();
-        let mut ended = None;
-        let start = Instant::now();
-        while ended.is_none() && start.elapsed() < Duration::from_secs(4) {
-            match rx.recv_timeout(Duration::from_millis(50)) {
-                Ok(GrokPEvent::Text(t)) => text.push_str(&t),
-                Ok(GrokPEvent::End(turn)) => ended = Some(turn),
-                Ok(GrokPEvent::Err(err)) => panic!("{err}"),
-                _ => {}
-            }
-        }
-        let turn = ended.expect("End event");
-        assert_eq!(text, "Automation report");
-        assert_eq!(turn.text, "Automation report");
-        assert!(
-            turn.session_id.starts_with("native-"),
-            "{}",
-            turn.session_id
-        );
-        assert_eq!(turn.usage.input_tokens, 4);
-        assert_eq!(say.calls.load(Ordering::SeqCst), 1);
-
-        set_unattended_client_for_test(None);
-        cabin.start_native_scheduled(
-            "again",
-            root.clone(),
-            "grok-4.7",
-            None,
-            SessionMode::Chat,
-            None,
-        );
-        let rx = cabin.grok_p_rx.take().expect("error stream");
-        match rx.recv_timeout(Duration::from_secs(1)) {
-            Ok(GrokPEvent::Err(err)) => assert_eq!(err, grokhub_core::XAI_NEED_SIGNIN),
-            _ => panic!("missing credential must fail with a clear status"),
-        }
-        let _ = std::fs::remove_dir_all(&root);
-    }
-
-    struct HoldUntilCancel {
-        started: std::sync::atomic::AtomicBool,
-        saw_cancel: std::sync::atomic::AtomicBool,
-        session: std::sync::Mutex<String>,
-        calls: AtomicUsize,
-    }
-
-    impl ModelClient for HoldUntilCancel {
-        fn stream(
-            &self,
-            req: &grokhub_agent::ResponsesRequest,
-            cancel: &grokhub_agent::CancelToken,
-            _sink: &mut dyn FnMut(StreamEvent),
-        ) -> Result<TurnOutput, ClientError> {
-            self.calls.fetch_add(1, Ordering::SeqCst);
-            *self.session.lock().unwrap_or_else(|err| err.into_inner()) =
-                req.conversation_id.clone();
-            self.started.store(true, Ordering::SeqCst);
-            let start = Instant::now();
-            while start.elapsed() < Duration::from_secs(5) {
-                if cancel.is_cancelled() {
-                    self.saw_cancel.store(true, Ordering::SeqCst);
-                    return Err(ClientError::Cancelled);
-                }
-                std::thread::sleep(Duration::from_millis(5));
-            }
-            Err(ClientError::Protocol("halt never arrived".into()))
-        }
-    }
-
-    #[test]
-    fn halt_stops_an_in_flight_native_scheduled_run() {
-        let (_lock, root, _env) = isolated("native-halt");
-        let hold = Arc::new(HoldUntilCancel {
-            started: std::sync::atomic::AtomicBool::new(false),
-            saw_cancel: std::sync::atomic::AtomicBool::new(false),
-            session: std::sync::Mutex::new(String::new()),
-            calls: AtomicUsize::new(0),
-        });
-        set_unattended_client_for_test(Some(hold.clone()));
-        let mut cabin = Cabin::quiet_for_test();
-        cabin.cfg.grok_build_engine = false;
-        cabin.permission_mode = PermissionMode::Ask;
-        let work = root.join("work");
-        std::fs::create_dir_all(&work).unwrap();
-        cabin.start_native_scheduled(
-            "long chore",
-            work,
-            "grok-4.7",
-            None,
-            SessionMode::Chat,
-            None,
-        );
-        let rx = cabin.grok_p_rx.take().expect("native stream");
-        wait_until(|| hold.started.load(Ordering::SeqCst));
-        let session = hold
-            .session
-            .lock()
-            .unwrap_or_else(|err| err.into_inner())
-            .clone();
-        assert!(session.starts_with("native-"), "{session}");
-        assert!(grokhub_agent::session_is_live(&session), "run is in flight");
-
-        cabin.halt_in_flight();
-
-        let start = Instant::now();
-        loop {
-            match rx.recv_timeout(Duration::from_millis(50)) {
-                Ok(GrokPEvent::End(turn)) => panic!("a halted run must not finish: {}", turn.text),
-                Ok(GrokPEvent::Text(text)) => panic!("a halted run must not reply: {text}"),
-                Ok(_) => {}
-                Err(mpsc::RecvTimeoutError::Disconnected) => break,
-                Err(mpsc::RecvTimeoutError::Timeout) => {
-                    assert!(
-                        start.elapsed() < Duration::from_secs(4),
-                        "run thread did not stop"
-                    );
-                }
-            }
-        }
-        assert!(
-            hold.saw_cancel.load(Ordering::SeqCst),
-            "Halt reached the model call"
-        );
-        assert_eq!(hold.calls.load(Ordering::SeqCst), 1, "no turn after Halt");
-        assert!(
-            !grokhub_agent::session_is_live(&session),
-            "no running task is left"
-        );
-        assert!(cabin.grok_p_rx.is_none());
-        assert!(!cabin.running);
-        set_unattended_client_for_test(None);
-        let _ = std::fs::remove_dir_all(&root);
-    }
-
-    /// Pulse: three likes and dislikes and the cabin rewrites the Feed
-    /// instructions itself, on the fake model.
-    #[test]
     fn pulse_rewrites_feed_instructions_after_likes_and_dislikes() {
         let (_lock, root, _env) = isolated("pulse-rewrite");
         let after = "Keep my feed short.\n\nShow more of:\n- Rust and egui releases.\n\nShow less of:\n- Crypto price swings.";
@@ -1179,7 +854,6 @@ mod tests {
         });
         set_unattended_client_for_test(Some(say.clone()));
         let mut cabin = Cabin::quiet_for_test();
-        cabin.cfg.grok_build_engine = false;
         cabin.cfg.feed_instructions = "Keep my feed short.".into();
         cabin.updates = vec![
             grokhub_core::digest_card("d1", "Rust 1.92 ships", "Faster builds.", 1),
@@ -1262,7 +936,6 @@ mod tests {
         });
         set_unattended_client_for_test(Some(say.clone()));
         let mut cabin = Cabin::quiet_for_test();
-        cabin.cfg.grok_build_engine = false;
         cabin.updates.clear();
         cabin.maybe_suggest_ideas(true);
         wait_until(|| {
