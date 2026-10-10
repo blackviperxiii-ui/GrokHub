@@ -351,7 +351,7 @@ mod tests {
 
     #[test]
     fn installing_asks_nothing() {
-        let src = include_str!("marketplace_ui.rs");
+        let src = include_str!("marketplace_ui.rs").replace("\r\n", "\n");
         let body = src.split("fn market_install(").nth(1).unwrap();
         let body = &body[..body.find("\n    }\n").unwrap()];
         assert!(body.contains("Job::Install") && !body.contains("confirm"), "{body}");
