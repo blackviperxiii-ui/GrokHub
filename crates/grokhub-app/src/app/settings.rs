@@ -29,6 +29,7 @@ pub(super) fn settings_sec_title(sec: SettingsSec) -> &'static str {
         SettingsSec::Defaults => "Cabin defaults",
         SettingsSec::Labs => "Labs",
         SettingsSec::Permissions => "Permissions",
+        SettingsSec::Connectors => "Connectors",
     }
 }
 
@@ -379,6 +380,7 @@ impl Cabin {
                                                     (SettingsSec::Appearance, "Appearance"),
                                                     (SettingsSec::Behavior, "Behavior"),
                                                     (SettingsSec::Permissions, "Permissions"),
+                                                    (SettingsSec::Connectors, "Connectors"),
                                                     (SettingsSec::Defaults, "Cabin defaults"),
                                                     (SettingsSec::Labs, "Labs"),
                                                 ] {
@@ -771,12 +773,11 @@ impl Cabin {
                                                             ) {
                                                                 let on = self.cfg.desktop_control;
                                                                 self.persist_cfg();
-                                                                self.status = if on {
-                                                                    "Registering desktop tools...".into()
-                                                                } else {
-                                                                    "Removing desktop tools...".into()
-                                                                };
-                                                                crate::desktop_mcp::spawn_register(on);
+                                                                self.status = crate::desktop_mcp::desktop_switch_note(on, self.cfg.grok_build_engine).into();
+                                                                if self.cfg.grok_build_engine {
+                                                                    crate::desktop_mcp::spawn_register(on);
+                                                                }
+                                                                crate::desktop_mcp::sync_native_cua(&self.cfg);
                                                                 crate::desktop_mcp::set_desktop_enabled(on);
                                                             }
                                                             crate::cards::settings_note(
@@ -936,15 +937,18 @@ impl Cabin {
                                                             }
                                                             if crate::cards::settings_toggle(
                                                                 ui,
-                                                                "Native engine (no Grok CLI)",
-                                                                "New chats talk to xAI directly. Tools stay read-only.",
-                                                                &mut self.cfg.native_engine,
+                                                                "Legacy Grok Build CLI engine",
+                                                                "Off: GrokHub talks to xAI itself. On: chats run through the Grok Build CLI, which is going away.",
+                                                                &mut self.cfg.grok_build_engine,
                                                             ) {
                                                                 self.persist_cfg();
                                                                 self.status = "Saved".into();
                                                             }
-                                                            if self.cfg.native_engine {
-                                                                crate::native_mcp::paint(ui);
+                                                            if self.cfg.native_engine() {
+                                                                crate::cards::settings_note(
+                                                                    ui,
+                                                                    "This cabin's MCP servers are in Settings, Connectors.",
+                                                                );
                                                                 let cwd = self.grok_cwd();
                                                                 crate::native_plugins::paint(ui, &cwd);
                                                             }
@@ -972,6 +976,7 @@ impl Cabin {
                                                             }
                                                         }
                                                         SettingsSec::Permissions => self.ui_permission_editor(ui),
+                                                        SettingsSec::Connectors => self.ui_settings_connectors(ui),
                                                     }
                                                 });
                                             });

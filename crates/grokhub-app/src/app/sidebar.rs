@@ -626,7 +626,6 @@ impl Cabin {
             Nav::Agents => "queue",
             Nav::Devices => "devices",
             Nav::Memory => "memory",
-            Nav::Connectors => "connectors",
         }
     }
 
@@ -646,10 +645,7 @@ impl Cabin {
                 self.settings_sec = SettingsSec::Account;
                 Nav::Settings
             }
-            "skills" => {
-                self.skills_tab_connectors = false;
-                Nav::Skills
-            }
+            "skills" => Nav::Skills,
             "automations" => Nav::Night,
             "command" => Nav::Command,
             "queue" => Nav::Agents,
@@ -660,8 +656,8 @@ impl Cabin {
                 Nav::Chat
             }
             "connectors" => {
-                self.skills_tab_connectors = true;
-                Nav::Connectors
+                self.open_connectors();
+                Nav::Settings
             }
             "chat" => {
                 self.new_thread(false);

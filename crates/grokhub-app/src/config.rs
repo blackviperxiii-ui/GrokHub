@@ -458,9 +458,10 @@ pub struct AppConfig {
     /// Expiry sweep, quiet release, and the digest clock. No settings panel.
     #[serde(default, skip_serializing_if = "FeedPulse::is_background_default")]
     pub feed_pulse: FeedPulse,
-    /// Settings → Labs. Off keeps the Grok CLI launch path.
-    #[serde(default)]
-    pub native_engine: bool,
+    /// Settings → Labs. The legacy Grok Build CLI launch path, on only by choice.
+    /// The old `nativeEngine` key is ignored, so every cabin starts on the native engine.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub grok_build_engine: bool,
     /// Pulse → Feed → Feed instructions. Plain text that steers future posts;
     /// the cabin rewrites it after likes and dislikes. Empty means our default.
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -584,6 +585,29 @@ pub fn persistable_permission_mode(raw: &str) -> String {
     }
 }
 
+/// The one engine switch. Every chat, background, night and slash path asks this.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EngineKind {
+    /// GrokHub talks to xAI itself (`grokhub-agent`).
+    Native,
+    /// The legacy Grok Build CLI over ACP, kept only until the CLI code is removed.
+    GrokBuild,
+}
+
+impl AppConfig {
+    pub fn engine(&self) -> EngineKind {
+        if self.grok_build_engine {
+            EngineKind::GrokBuild
+        } else {
+            EngineKind::Native
+        }
+    }
+
+    pub fn native_engine(&self) -> bool {
+        self.engine() == EngineKind::Native
+    }
+}
+
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
@@ -638,7 +662,7 @@ impl Default for AppConfig {
             profile_picture: String::new(),
             digest_brief: String::new(),
             feed_pulse: FeedPulse::default(),
-            native_engine: false,
+            grok_build_engine: false,
             feed_instructions: String::new(),
             home_deck: false,
             memory_backend: grokhub_core::amr::MemoryBackend::Legacy,

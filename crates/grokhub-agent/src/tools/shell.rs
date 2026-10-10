@@ -41,6 +41,9 @@ pub fn run(workspace: &Path, args: &Value, stop: &dyn Fn() -> bool) -> ToolOutpu
     if command.is_empty() {
         return ToolOutput::err("command is required");
     }
+    if crate::sudo_pass::names_helper(&command) {
+        return ToolOutput::err(crate::sudo_pass::HELPER_REFUSAL);
+    }
     let timeout_ms = timeout_ms(args);
     let cwd = match workspace.canonicalize() {
         Ok(path) => path,
@@ -187,20 +190,52 @@ impl Drop for BgProc {
     }
 }
 
+/// Bash for one agent command in its own process group, so a stop kills the
+/// whole tree. On Linux it is also its own session with no terminal, so
+/// `sudo` asks GrokHub's helper ([`crate::sudo_pass`]) through the OS
+/// password dialog, never a terminal nobody is looking at.
 #[cfg(unix)]
-pub(crate) fn spawn_background(cwd: &Path, command: &str) -> Result<BgProc, String> {
-    use std::os::unix::process::CommandExt;
+fn bash(cwd: &Path, command: &str) -> std::process::Command {
     use std::process::{Command, Stdio};
-    use std::sync::atomic::AtomicBool;
-    use std::sync::{Arc, Mutex};
 
-    let mut child = Command::new("bash")
-        .args(["--noprofile", "--norc", "-c", command])
+    let mut cmd = Command::new("bash");
+    cmd.args(["--noprofile", "--norc", "-c", command])
         .current_dir(cwd)
+        .envs(crate::sudo_pass::shell_env())
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .process_group(0)
+        .stderr(Stdio::piped());
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::unix::process::CommandExt;
+        // SAFETY: `setsid` is async-signal-safe and only changes the child.
+        // The new session's process group id is the child's pid, as before.
+        unsafe {
+            cmd.pre_exec(|| {
+                if libc::setsid() < 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        use std::os::unix::process::CommandExt;
+        cmd.process_group(0);
+    }
+    cmd
+}
+
+#[cfg(unix)]
+pub(crate) fn spawn_background(cwd: &Path, command: &str) -> Result<BgProc, String> {
+    use std::sync::atomic::AtomicBool;
+    use std::sync::{Arc, Mutex};
+    if crate::sudo_pass::names_helper(command) {
+        return Err(crate::sudo_pass::HELPER_REFUSAL.to_string());
+    }
+
+    let mut child = bash(cwd, command)
         .spawn()
         .map_err(|err| format!("could not start bash: {err}"))?;
     let pgid = child.id() as i32;
@@ -261,17 +296,9 @@ fn merge_output(stdout: Vec<u8>, stderr: Vec<u8>) -> Vec<u8> {
 
 #[cfg(unix)]
 fn spawn_and_wait(cwd: &Path, command: &str, timeout_ms: u64, stop: &dyn Fn() -> bool) -> Result<ToolOutput, String> {
-    use std::os::unix::process::CommandExt;
-    use std::process::{Command, Stdio};
     use std::thread;
 
-    let mut child = Command::new("bash")
-        .args(["--noprofile", "--norc", "-c", command])
-        .current_dir(cwd)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .process_group(0)
+    let mut child = bash(cwd, command)
         .spawn()
         .map_err(|err| format!("could not start bash: {err}"))?;
     let pgid = child.id() as i32;
@@ -555,6 +582,17 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn commands_that_call_the_sudo_helper_never_run() {
+        let dir = scratch("askpass");
+        let out = run(&dir, &json!({"command": "sudo -u \"$USER\" \"$SUDO_ASKPASS\""}), &|| false);
+        assert!(out.failed);
+        assert_eq!(out.text, crate::sudo_pass::HELPER_REFUSAL);
+        assert_eq!(super::spawn_background(&dir, "echo \"$SUDO_ASKPASS\"").err().as_deref(), Some(crate::sudo_pass::HELPER_REFUSAL));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

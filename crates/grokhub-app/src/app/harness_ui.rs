@@ -250,6 +250,10 @@ pub(super) struct HarnessState {
     /// Undo / Restore rows under the newest `/skills changes` bubble, as last
     /// read from the ChangeLedger. `None` means read it again.
     pub skill_rows: Option<Vec<super::skill_undo::SkillRow>>,
+    /// A findings card from this turn's `report_findings`, posted after the reply.
+    pub pending_findings: Option<String>,
+    /// Findings bubbles whose pills were tapped or dismissed (by body).
+    pub findings_dismissed: Vec<String>,
     /// Undo rows under the newest `/connections changes` or `/automations
     /// changes` bubble, for that kind. `None` means read it again.
     pub change_rows: Option<(hx::ChangeKind, Vec<super::change_undo::ChangeRow>)>,
@@ -466,6 +470,7 @@ impl Cabin {
     /// before it sent; anything else is the user's.
     pub(super) fn begin_turn_origin(&mut self) {
         self.harness.turn_origin = self.harness.next_origin.take().unwrap_or_default();
+        self.harness.pending_findings = None;
     }
 
     pub(super) fn write_span(&self, span: hx::Span, path: &str) {

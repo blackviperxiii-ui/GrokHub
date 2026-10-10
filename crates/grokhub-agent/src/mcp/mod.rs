@@ -46,6 +46,42 @@ pub fn invalidate() {
     GEN.fetch_add(1, Ordering::Relaxed);
 }
 
+fn cabin_cua() -> &'static Mutex<Option<PathBuf>> {
+    static CUA: OnceLock<Mutex<Option<PathBuf>>> = OnceLock::new();
+    CUA.get_or_init(|| Mutex::new(None))
+}
+
+/// The cabin's own Cua gate (`<exe> --mcp-cua`) as a native MCP server while
+/// the cabin wants it (Linux, desktop switch and `cuaDriver` flag on); `None`
+/// takes it away. That process runs every call through `harness::decide`
+/// before the pinned `cua-driver` child sees it. It is never written to
+/// `mcp.json`, so user config can neither add nor route around it.
+pub fn set_cabin_cua(exe: Option<PathBuf>) {
+    let mut held = cabin_cua().lock().unwrap_or_else(|err| err.into_inner());
+    if *held != exe {
+        *held = exe;
+        invalidate();
+    }
+}
+
+fn cabin_cua_def() -> Option<ServerDef> {
+    let exe = cabin_cua().lock().unwrap_or_else(|err| err.into_inner()).clone()?;
+    Some(ServerDef {
+        transport: TransportDef::Stdio {
+            command: exe.display().to_string(),
+            args: vec!["--mcp-cua".into()],
+            env: BTreeMap::new(),
+            cwd: None,
+        },
+        enabled: true,
+        startup_timeout: std::time::Duration::from_secs(15),
+        tool_timeout: std::time::Duration::from_secs(60),
+        headers: BTreeMap::new(),
+        token_ref: None,
+        token_env: None,
+    })
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DoctorRow {
     pub name: String,
@@ -320,6 +356,92 @@ pub fn sign_out(name: &str) -> String {
         inner.tools.clear();
     }
     format!("Signed out of {name}")
+}
+
+/// Settings → Connectors Disconnect, after the user confirmed it. The entry
+/// leaves `mcp.json` through the ChangeLedger (origin user, so `/connections`
+/// can undo it), and its sign-in and sealed token go too. A plugin's server
+/// is not in `mcp.json` and is refused.
+pub fn disconnect(name: &str) -> Result<String, String> {
+    let config = crate::perm::config_dir();
+    let path = config::config_file();
+    let target = crate::harness::McpFile { path: &path, name };
+    let done = crate::harness::record_change(
+        &config,
+        &target,
+        crate::harness::Origin::User,
+        "disconnected in Settings",
+        || crate::harness::ChangeTarget::put(&target, None),
+    )?;
+    if done.is_none() {
+        return Err(format!("{name} isn't one of this cabin's connections"));
+    }
+    crate::harness::forget_connection_token(&config, name);
+    invalidate();
+    Ok(format!("Disconnected {name}"))
+}
+
+/// What [`install`] did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Installed {
+    Added,
+    /// The same entry was already there; nothing was written.
+    AlreadyThere,
+}
+
+/// Marketplace Install, from the user's own click: `entry` (an `mcpServers`
+/// value with no credentials) lands in `mcp.json` through the ChangeLedger
+/// (origin user, so `/connections` can undo it). Installing the same entry
+/// again writes nothing; a different entry under the name is refused, so a
+/// connector the user set up is never overwritten.
+pub fn install(name: &str, entry: &Value) -> Result<Installed, String> {
+    let obj = entry.as_object().ok_or("a connector entry must be a JSON object")?;
+    if ["headers", "env", "bearerToken", "bearer_token", "tokenRef"].iter().any(|k| obj.contains_key(*k)) {
+        return Err(format!("{name}'s entry carries credentials; a key is saved separately"));
+    }
+    let config = crate::perm::config_dir();
+    let path = config::config_file();
+    let target = crate::harness::McpFile { path: &path, name };
+    if let Some(cur) = crate::harness::ChangeTarget::read(&target)? {
+        let cur: Value = serde_json::from_slice(&cur).map_err(|e| e.to_string())?;
+        let mut bare = cur.as_object().cloned().unwrap_or_default();
+        bare.remove("tokenRef");
+        if Value::Object(bare) == *entry {
+            return Ok(Installed::AlreadyThere);
+        }
+        return Err(format!("A connector named {name} is already set up differently; disconnect it first"));
+    }
+    let bytes = serde_json::to_vec_pretty(entry).map_err(|e| e.to_string())?;
+    crate::harness::record_change(&config, &target, crate::harness::Origin::User, "installed from Marketplace", || {
+        crate::harness::ChangeTarget::put(&target, Some(&bytes))
+    })?;
+    invalidate();
+    Ok(Installed::Added)
+}
+
+/// Save a key the user typed for an installed connector, after they approved
+/// it. The key is sealed with the keyring key and the entry only names it
+/// (`tokenRef`): an HTTP server sends it as a bearer header, a stdio server
+/// gets it in its `tokenEnv` variable.
+pub fn save_key(name: &str, key: &str) -> Result<String, String> {
+    let key = key.trim();
+    if key.is_empty() {
+        return Err("No key was typed, so nothing was saved".into());
+    }
+    let config = crate::perm::config_dir();
+    let path = config::config_file();
+    let target = crate::harness::McpFile { path: &path, name };
+    let cur = crate::harness::ChangeTarget::read(&target)?
+        .ok_or_else(|| format!("{name} isn't installed, so it has nowhere to keep a key"))?;
+    let mut entry: serde_json::Map<String, Value> = serde_json::from_slice(&cur).map_err(|e| e.to_string())?;
+    crate::harness::seal_connection_token(&config, name, key)?;
+    entry.insert("tokenRef".into(), json!(name));
+    let bytes = serde_json::to_vec_pretty(&entry).map_err(|e| e.to_string())?;
+    crate::harness::record_change(&config, &target, crate::harness::Origin::User, "key saved in Settings", || {
+        crate::harness::ChangeTarget::put(&target, Some(&bytes))
+    })?;
+    invalidate();
+    Ok(format!("Saved the key for {name}"))
 }
 
 /// MCP schemas for the native engine. `native` is how many desktop tools
@@ -641,7 +763,11 @@ fn load_slots() -> (BTreeMap<String, std::sync::Arc<Mutex<SlotInner>>>, PathBuf)
             lock_slot(slot).conn.take();
         }
         held.slots.clear();
-        for (name, def) in config::load_servers_for(&workspace) {
+        let mut servers = config::load_servers_for(&workspace);
+        if let Some(def) = cabin_cua_def() {
+            servers.insert(grokhub_core::CUA_MCP_SERVER.to_string(), def);
+        }
+        for (name, def) in servers {
             held.slots.insert(
                 name.clone(),
                 std::sync::Arc::new(Mutex::new(SlotInner::new(name, def))),
@@ -695,8 +821,14 @@ fn open_def(name: &str, def: &ServerDef, workspace: &Path) -> Result<(Conn, Vec<
             cwd,
         } => {
             let dir = stdio::workspace_or(cwd.clone(), workspace);
+            let mut env = env.clone();
+            if let (Some(token_name), Some(var)) = (&def.token_ref, &def.token_env) {
+                let token = crate::harness::open_connection_token(&perm::config_dir(), token_name)
+                    .ok_or("its key is missing or locked: save it again in Settings, Connectors")?;
+                env.insert(var.clone(), token);
+            }
             let (conn, tools) =
-                stdio::connect(name, command, args, env, &dir, def.startup_timeout)?;
+                stdio::connect(name, command, args, &env, &dir, def.startup_timeout)?;
             Ok((Conn::Stdio(conn), tools))
         }
         TransportDef::Http { url, sse } => {

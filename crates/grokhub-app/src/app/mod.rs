@@ -173,6 +173,8 @@ mod ideas_ui;
 mod pulse_ui;
 mod board_ui;
 mod confirm;
+mod connectors_ui;
+mod marketplace_ui;
 mod harness_ui;
 mod inbox_ui;
 mod episode_ui;
@@ -192,6 +194,7 @@ mod indexer_ui;
 mod skill_undo;
 mod self_review_ui;
 mod change_undo;
+mod findings_ui;
 mod proactive_auto;
 mod glance;
 mod sidebar;
@@ -256,7 +259,6 @@ enum Nav {
     Night,
     History,
     Command,
-    Connectors,
     Agents,
     Settings,
 }
@@ -271,6 +273,7 @@ enum SettingsSec {
     Defaults,
     Labs,
     Permissions,
+    Connectors,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -640,7 +643,6 @@ pub struct Cabin {
     greeting_busy: bool,
     greeting_llm_at: u64,
     continue_hint: String,
-    skills_tab_connectors: bool,
     skill_q: String,
     mcp_nl: String,
     mcp_compose: bool,
@@ -658,6 +660,8 @@ pub struct Cabin {
     imagine_want_focus: bool,
     composer_want_focus: bool,
     settings_sec: SettingsSec,
+    /// Settings → Connectors tab and Marketplace view state.
+    market: marketplace_ui::MarketState,
     settings_back: Nav,
     imagine_aspect: u8,
     imagine_quality: bool,
@@ -1254,7 +1258,6 @@ impl Cabin {
             greeting_busy: false,
             greeting_llm_at: 0,
             continue_hint: String::new(),
-            skills_tab_connectors: false,
             skill_q: String::new(),
             mcp_nl: String::new(),
             mcp_compose: false,
@@ -1272,6 +1275,7 @@ impl Cabin {
             imagine_want_focus: false,
             composer_want_focus: false,
             settings_sec: SettingsSec::Account,
+            market: Default::default(),
             settings_back: Nav::Chat,
             imagine_aspect: 0,
             imagine_quality: true,
@@ -1452,22 +1456,29 @@ impl Cabin {
             c.migrate_pulse_store();
             c.ensure_useful_ideas();
             grokhub_acp::silence_windows_hard_errors();
-            // Official alpha when missing/unusable; pin a working CLI. UAC is expected on Windows.
-            c.grok_install_wait =
-                grokhub_core::should_kick_alpha_install(grokhub_acp::find_grok().is_some());
-            c.official_cli_session = c.grok_install_wait;
-            c.grok_install_rx = Some(grokhub_acp::begin_ensure_grok_alpha());
-            c.sync_cli_auth_from_oauth();
-            if grokhub_acp::grok_cli_key().is_some() && !c.official_cli_session {
-                c.mark_get_started_done();
+            // The legacy CLI engine alone installs the CLI and shares the sign-in with it.
+            // The native engine never installs, runs or signs in the CLI.
+            if c.cfg.grok_build_engine {
+                // Official alpha when missing/unusable; pin a working CLI. UAC is expected on Windows.
+                c.grok_install_wait =
+                    grokhub_core::should_kick_alpha_install(grokhub_acp::find_grok().is_some());
+                c.official_cli_session = c.grok_install_wait;
+                c.grok_install_rx = Some(grokhub_acp::begin_ensure_grok_alpha());
+                c.sync_cli_auth_from_oauth();
+                if grokhub_acp::grok_cli_key().is_some() && !c.official_cli_session {
+                    c.mark_get_started_done();
+                }
             }
             c.last_update_probe = Some(Instant::now());
             c.update_probe_rx = Some(crate::update::begin_update_probe());
             c.open_fresh_home();
+            // Only the legacy CLI engine needs GrokHub's servers registered in Grok Build.
+            // The native engine runs desktop tools in-process and Cua as its own MCP server.
             #[cfg(not(test))]
-            crate::desktop_mcp::maybe_register_on_start(c.cfg.desktop_control);
-            #[cfg(not(test))]
-            crate::self_mcp::maybe_register_on_start();
+            if c.cfg.grok_build_engine {
+                crate::desktop_mcp::maybe_register_on_start(c.cfg.desktop_control);
+                crate::self_mcp::maybe_register_on_start();
+            }
             #[cfg(not(test))]
             crate::desktop_mcp::set_desktop_enabled(c.cfg.desktop_control);
         }
@@ -1493,7 +1504,12 @@ impl Cabin {
     pub(super) fn quiet_for_test() -> Self {
         crate::config::use_test_key_store();
         let (grok_sessions_tx, grok_sessions_rx) = mpsc::channel();
-        let cfg = AppConfig::default();
+        let cfg = AppConfig {
+            // Test cabins keep the legacy CLI path these tests were written for;
+            // a native test turns it off. The shipping default is native.
+            grok_build_engine: true,
+            ..AppConfig::default()
+        };
         Self {
             nav: Nav::Chat,
             cfg: cfg.clone(),
@@ -1704,7 +1720,6 @@ impl Cabin {
             greeting_busy: false,
             greeting_llm_at: 0,
             continue_hint: String::new(),
-            skills_tab_connectors: false,
             skill_q: String::new(),
             mcp_nl: String::new(),
             mcp_compose: false,
@@ -1722,6 +1737,7 @@ impl Cabin {
             imagine_want_focus: false,
             composer_want_focus: false,
             settings_sec: SettingsSec::Account,
+            market: Default::default(),
             settings_back: Nav::Chat,
             imagine_aspect: 0,
             imagine_quality: false,
@@ -2138,7 +2154,7 @@ impl Cabin {
         self.harness_watch_end();
         self.halt_hard_parks();
         self.withdraw_perm_asks();
-        if self.cfg.native_engine {
+        if self.cfg.native_engine() {
             grokhub_agent::halt_all_sessions();
             self.stop_native_unattended();
         }
@@ -2477,10 +2493,9 @@ impl Cabin {
         build_agent::can_agent(self.has_key())
     }
 
+    /// GrokHub's own sign-in or key. Only the legacy CLI engine counts the CLI.
     fn llm_ready(&self) -> bool {
-        self.has_key()
-            || grokhub_acp::find_grok().is_some()
-            || grokhub_acp::grok_cli_key().is_some()
+        self.has_key() || (self.cfg.grok_build_engine && grokhub_acp::find_grok().is_some())
     }
 
     fn grok_cwd(&self) -> std::path::PathBuf {
@@ -2597,26 +2612,8 @@ impl Cabin {
         }
     }
 
+    /// GrokHub's own sign-in or console key. The Grok CLI's login is never read.
     fn bearer(&mut self) -> String {
-        if let Some(k) = grokhub_acp::grok_cli_key() {
-            if !k.trim().is_empty() {
-                let exp = grokhub_core::jwt_exp_ms(&k);
-                let stale = exp
-                    .map(|exp| exp.saturating_sub(grokhub_core::TOKEN_REFRESH_SKEW_MS) < now_ms())
-                    .unwrap_or(false);
-                if stale {
-                    if let Some(fresh) = crate::oauth::refresh_grok_login() {
-                        return fresh;
-                    }
-                    let hard_expired = exp.map(|e| e < now_ms()).unwrap_or(false);
-                    if !hard_expired {
-                        return k;
-                    }
-                } else {
-                    return k;
-                }
-            }
-        }
         let mut oauth_usable = false;
         if let Some(tok) = self.secrets.oauth.clone() {
             let mut tok = tok;
@@ -2645,7 +2642,6 @@ impl Cabin {
             &secrets::access_token(&self.secrets),
             oauth_usable,
         )
-        .or_else(grokhub_acp::grok_cli_key)
         .unwrap_or_default()
     }
 
@@ -3027,7 +3023,7 @@ impl Cabin {
 
     fn run_dream(&mut self) {
         if !self.llm_ready() {
-            self.status = "Run grok login, or Connect Grok in Settings.".into();
+            self.status = grokhub_core::XAI_NEED_SIGNIN.into();
             return;
         }
         if self.running {
@@ -3820,12 +3816,6 @@ impl Cabin {
             .oauth
             .as_ref()
             .is_some_and(|t| !t.access_token.trim().is_empty())
-            || grokhub_acp::grok_cli_key().is_some()
-    }
-
-    /// Presence only. Lab mode never uses this token; it only picks the clearer message.
-    fn grok_cli_login_present(&self) -> bool {
-        grokhub_acp::grok_cli_key().is_some()
     }
 
     fn has_real_history(&self) -> bool {
@@ -4754,7 +4744,7 @@ impl Cabin {
         if !self.hub_on
             || self.running
             || self.pending_hub_task.is_some()
-            || !inbox_claim_ready(self.can_agent()) && !self.cfg.native_engine
+            || !inbox_claim_ready(self.can_agent()) && !self.cfg.native_engine()
         {
             return;
         }
@@ -4776,7 +4766,7 @@ impl Cabin {
             self.pending_hub_task = Some(t.id.clone());
             self.land_on_real_chat();
             self.send_scheduled_chat(format!("[from {}] {}", t.from_name, t.prompt));
-            if self.cfg.native_engine
+            if self.cfg.native_engine()
                 && !self.running
                 && self.pending_kick.is_none()
                 && self.grok_p_rx.is_none()
@@ -5319,7 +5309,6 @@ impl eframe::App for Cabin {
                 Nav::Night => self.ui_night(ui),
                 Nav::History => self.ui_history(ui),
                 Nav::Command => self.ui_command(ui),
-                Nav::Connectors => self.ui_connectors(ui),
                 Nav::Agents => self.ui_agents(ui),
                 Nav::Settings => self.ui_chat(ui),
             }

@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
 use std::time::Duration;
 
-use grokhub_acp::{ElicitAsk, PermissionAsk};
+use grokhub_core::wire::{ElicitAsk, PermissionAsk};
 use serde_json::{json, Value};
 
 use crate::gate::{Gate, PermitWait};
