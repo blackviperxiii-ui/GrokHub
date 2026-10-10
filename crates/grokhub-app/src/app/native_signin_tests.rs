@@ -622,21 +622,22 @@ fn a_failed_first_native_send_keeps_the_recap_for_the_retry() {
     .iter()
     .map(|(r, t)| (r.to_string(), t.to_string()))
     .collect();
+    // A chat already adopted from the CLI days, its recap not yet sent.
+    let cwd = cabin.native_workspace();
     {
         let thread = cabin.threads.last_mut().unwrap();
-        thread.native = false;
-        thread.grok_session = Some("cli-sess-8".into());
         thread.messages = Arc::new(turns.clone());
+        thread.grok_session = Some("cli-sess-8".into());
+        thread.native = false;
+        assert!(threads::adopt_native(thread));
+        thread.grok_session = Some("native-retry-8".into());
+        thread.grok_cwd = Some(cwd.display().to_string());
     }
     cabin.messages = Arc::new(turns);
 
-    // The engine for this session is gone, so the first send fails.
-    cabin.ensure_native_engine().unwrap();
-    let (cwd, sid) = {
-        let handle = cabin.acp.as_ref().unwrap();
-        (handle.cwd.clone(), handle.session_id.clone())
-    };
-    cabin.acp = Some(crate::engine_handle::AcpHandle::dead(cwd, sid));
+    // The engine for this session is gone, so the first send fails. No live
+    // engine runs first: its shutdown would race the retry's config.
+    cabin.acp = Some(crate::engine_handle::AcpHandle::dead(cwd, "native-retry-8".into()));
     assert!(cabin.kick_native_turn("what about lunch", None, "what about lunch", "Lab chat"));
     assert!(!cabin.running);
     assert!(cabin.threads.last().unwrap().native_carry, "a failed send must keep the recap");
