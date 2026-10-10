@@ -142,6 +142,9 @@ mod tests {
         // Grabbing the hotkeys takes ~50 ms on X11: a shown window does it after its first frame.
         assert!(!new.contains("GlobalHotKeyManager::new"), "{new}");
         assert!(new.contains("if hidden {\n                c.register_hotkeys_once();"), "{new}");
+        // ...in `logic`, which eframe runs even while the window is covered.
+        let logic = src.split("fn logic(&mut self").nth(1).and_then(|s| s.split("self.poll_job();").next()).expect("logic");
+        assert!(logic.contains("self.register_hotkeys_once();"), "{logic}");
         // The local clock runs `date` and the theme probe runs `gsettings`.
         for blocking in ["local_clock(", "desktop_prefers_dark(", "Command::new("] {
             assert!(!new.contains(blocking), "{blocking} in Cabin::new");

@@ -4835,6 +4835,10 @@ impl eframe::App for Cabin {
     }
 
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        #[cfg(not(test))]
+        if crate::startup::painted() {
+            self.register_hotkeys_once();
+        }
         #[cfg(feature = "fx")]
         {
             let glow_line = crate::fx::on_frame();
@@ -5114,10 +5118,10 @@ impl eframe::App for Cabin {
                 });
         }
         self.sync_idea_card_actions();
+        // The pass after this one grabs the hotkeys in `logic`, which runs
+        // even while the window is covered or minimized.
         #[cfg(not(test))]
-        if crate::startup::painted() {
-            self.register_hotkeys_once();
-        } else {
+        if !crate::startup::painted() {
             crate::startup::first_frame();
             ctx.request_repaint();
         }
