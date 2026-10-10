@@ -2369,8 +2369,7 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
     #[test]
     fn grok_login_powers_history_and_imagine() {
         let src = cabin_src();
-        let ensure = fn_src(&src, "ensure_acp");
-        assert!(ensure.contains("ensure_native_engine"), "{ensure}");
+        assert!(!src.contains("fn ensure_acp("), "the engine starts through ensure_native_engine only");
         let bearer = fn_src(&src, "bearer");
         assert!(
             !bearer.contains("grok_cli_key") && !bearer.contains("refresh_grok_login"),
@@ -2579,7 +2578,7 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
         let saved = src
             .split("fn apply_single_turn(")
             .nth(1)
-            .and_then(|s| s.split("fn send_grok_slash(").next())
+            .and_then(|s| s.split("\n    pub(super) fn ").next())
             .expect("apply_single_turn");
         assert!(
             saved.contains("session_saved")
@@ -3304,10 +3303,10 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             halt.contains("scheduled_perm = false"),
             "Stop must drop scheduled_perm: {halt}"
         );
-        let kick_err = fn_src(&native_src, "fail_native");
+        let kick_err = fn_src(&native_src, "kick_native_turn");
         assert!(
-            kick_err.contains("scheduled_perm = false"),
-            "a native turn that fails to start must drop scheduled_perm: {kick_err}"
+            kick_err.matches("self.fail_turn_start(").count() == 3,
+            "a native turn that fails to start drops scheduled_perm and resumes PTT: {kick_err}"
         );
         let poll_acp = fn_src(&src, "poll_acp");
         let err = poll_acp
@@ -4738,12 +4737,11 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             .and_then(|s| s.split("Slash::Retry =>").next())
             .expect("Undo");
         assert!(
-            undo.contains("followup_step = 0") && undo.contains("active_skill_follow = None"),
-            "/undo must reset followup budget like /clear: {undo}"
-        );
-        assert!(
-            undo.contains("stamp_current_access") || undo.contains("accessed_ms"),
-            "/undo must bump accessed_ms or /sync LWW can restore the undone turn: {undo}"
+            undo.contains("halt_in_flight")
+                && undo.contains("REWIND_NA")
+                && !undo.contains("live_mut().remove")
+                && !undo.contains("send_grok_slash"),
+            "/undo stops a live reply; a finished one stays, since the native session is append-only: {undo}"
         );
         let forget = src
             .split("Slash::Forget")
@@ -6529,7 +6527,7 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
         let note_at = kick.find("note_inflight_card").expect("run start files a Workboards card");
         assert!(prompt_at < note_at, "Doing card is filed only after the prompt succeeds: {kick}");
         assert!(
-            fn_src(&native_src, "fail_native").contains("abandon_turn_card")
+            kick.contains("self.fail_turn_start(")
                 && fn_src(&src, "fail_turn_start").contains("abandon_turn_card")
                 && fn_src(&src, "poll_acp").contains("abandon_turn_card")
                 && fn_src(&src, "poll_single").contains("abandon_turn_card"),
@@ -6706,14 +6704,9 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
                 && add_skill.contains("thread::spawn"),
             "Suggested Add must write SKILL.md off the UI thread: {add_skill}"
         );
-        let slash = fn_src(&src, "send_grok_slash");
         assert!(
-            slash.contains("ensure_acp")
-                && slash.contains("h.prompt(cmd)")
-                && slash.contains("fail_turn_start")
-                && !slash.contains("spawn_grok_p_stream")
-                && !slash.contains("find_grok"),
-            "/rewind goes to the native engine as a turn, never grok -p: {slash}"
+            !src.contains("fn send_grok_slash("),
+            "no slash is sent to the engine as a literal CLI command"
         );
         let skills = src
             .split("fn ui_skills(")
@@ -10099,18 +10092,21 @@ fn scratch_btw_worktree_and_plan() {
     assert!(cabin.scratch());
     assert!(cabin.composer_want_focus);
     cabin.run_slash_line("/worktree");
-    assert_eq!(cabin.status, "Next chat uses --worktree");
-    assert!(cabin.threads[cabin.thread_idx].grok_worktree);
-    cabin.run_slash_line("/worktree");
-    assert_eq!(cabin.status, "Worktree off");
-    assert!(!cabin.threads[cabin.thread_idx].grok_worktree);
+    assert_eq!(
+        cabin.status,
+        "Worktrees were a Grok Build CLI feature; chats run in the bound project folder"
+    );
     cabin.threads[cabin.thread_idx].grok_session = Some("sess-harbor".into());
     let (count, idx) = (cabin.threads.len(), cabin.thread_idx);
     cabin.run_slash_line("/fork");
     assert_eq!(cabin.threads.len(), count, "/fork no longer opens a chat");
     assert_eq!(cabin.thread_idx, idx);
     assert!(!cabin.threads[idx].grok_fork);
-    assert_eq!(cabin.status, "Worktree off", "/fork leaves the status alone");
+    assert_eq!(
+        cabin.status,
+        "Worktrees were a Grok Build CLI feature; chats run in the bound project folder",
+        "/fork leaves the status alone"
+    );
     cabin.threads[cabin.thread_idx].plan_body = "harbor steps".into();
     cabin.run_slash_line("/view-plan");
     assert!(cabin.plan_open);
@@ -11977,7 +11973,10 @@ fn rewind_and_compact_stay_closed_without_grok() {
         cabin.messages
     );
     assert!(!cabin.running);
-    assert_eq!(cabin.status, grokhub_core::XAI_NEED_SIGNIN, "rewind needs a signed-in engine");
+    assert_eq!(
+        cabin.status, "N/A on native threads: the session is append-only.",
+        "rewind is not offered on native threads"
+    );
     assert_ne!(cabin.status, "Rewinding Grok conversation…");
     cabin.live_mut().clear();
     for i in 0..9 {
@@ -13474,22 +13473,16 @@ fn worktree_stays_off_a_send() {
     seeded.grok_session = Some("sess".into());
 
     cabin.run_slash(super::Slash::Worktree);
-    let worked = cabin
-        .threads
-        .get(cabin.thread_idx)
-        .expect("worktree chat");
-    assert!(worked.grok_worktree);
-    assert_eq!(cabin.status, "Next chat uses --worktree");
+    assert_eq!(
+        cabin.status,
+        "Worktrees were a Grok Build CLI feature; chats run in the bound project folder"
+    );
     assert!(!cabin.running);
-
-    cabin.run_slash(super::Slash::Worktree);
-    let off = cabin
-        .threads
-        .get(cabin.thread_idx)
-        .expect("worktree chat");
-    assert!(!off.grok_worktree);
-    assert_eq!(cabin.status, "Worktree off");
-    assert!(!cabin.running);
+    assert_eq!(
+        cabin.threads[cabin.thread_idx].grok_session.as_deref(),
+        Some("sess"),
+        "/worktree leaves the chat's session alone"
+    );
 }
 
 // Landed from PR #161.
