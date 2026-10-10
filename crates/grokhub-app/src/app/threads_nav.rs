@@ -165,7 +165,7 @@ impl Cabin {
                 t.grok_session = None;
                 t.grok_cwd = None;
                 t.project_id = want_project.clone();
-                t.native = self.cfg.native_engine();
+                t.native = true;
             }
             self.stamp_current_access();
             self.persist();
@@ -184,7 +184,7 @@ impl Cabin {
         let title = if scratch { "Scratch" } else { "Chat" };
         let mut created = ChatThread::new(title, scratch);
         created.project_id = want_project;
-        created.native = self.cfg.native_engine();
+        created.native = true;
         self.threads.push(created);
         self.thread_idx = self.threads.len() - 1;
         self.messages = Arc::new(Vec::new());
@@ -442,17 +442,13 @@ impl Cabin {
             self.halt_in_flight();
             self.acp = None;
         }
-        let mut cli_ids = Vec::new();
+        // CLI-era sessions stay in ~/.grok untouched: GrokHub only reads them.
         for id in &ids {
             if native || id.starts_with("native-") {
                 let _ = grokhub_agent::delete_session(id);
-            } else {
-                cli_ids.push(id.clone());
             }
         }
-        if let Some((first, rest)) = cli_ids.split_first() {
-            self.forget_grok_build_session(first, rest);
-        }
+        self.grok_sessions.retain(|s| !ids.contains(&s.id));
         self.rename_idx = None;
         self.persist();
     }
@@ -464,31 +460,22 @@ impl Cabin {
             self.drop_bg_runs_for(id);
         }
         self.finish_hub_dispatch("Chats deleted", false);
-        let mut ids: Vec<String> = Vec::new();
         let mut native_ids: Vec<String> = Vec::new();
         for t in &self.threads {
             let native_thread = t.native;
             for id in
                 threads::sessions_deleted_with_chat(t.grok_session.as_deref(), &t.retired_sessions)
             {
-                if native_thread || id.starts_with("native-") {
-                    if !native_ids.iter().any(|s| s == &id) {
-                        native_ids.push(id);
-                    }
-                } else if !ids.iter().any(|s| s == &id) {
-                    ids.push(id);
+                if (native_thread || id.starts_with("native-"))
+                    && !native_ids.iter().any(|s| s == &id)
+                {
+                    native_ids.push(id);
                 }
             }
         }
         for s in &self.grok_sessions {
-            if s.id.starts_with("native-") {
-                if !native_ids.iter().any(|id| id == &s.id) {
-                    native_ids.push(s.id.clone());
-                }
-                continue;
-            }
-            if !ids.iter().any(|id| id == &s.id) {
-                ids.push(s.id.clone());
+            if s.id.starts_with("native-") && !native_ids.iter().any(|id| id == &s.id) {
+                native_ids.push(s.id.clone());
             }
         }
         if let Some(id) = self
@@ -505,39 +492,7 @@ impl Cabin {
         for id in &native_ids {
             let _ = grokhub_agent::delete_session(id);
         }
-        for id in &ids {
-            self.pending_grok_deletes.insert(id.clone());
-        }
         self.grok_sessions.clear();
-        self.grok_list_gen = self.grok_list_gen.wrapping_add(1);
-        let gen = self.grok_list_gen;
-        self.grok_sessions_inflight = self.grok_sessions_inflight.saturating_add(1);
-        let bin = grokhub_acp::find_grok();
-        let cwd = self.grok_cli_cwd();
-        let tx = self.grok_sessions_tx.clone();
-        std::thread::spawn(move || {
-            let mut error = None;
-            if let Some(bin) = bin.as_ref() {
-                for id in &ids {
-                    if let Err(e) = grokhub_acp::delete_session(bin, &cwd, id) {
-                        if error.is_none() {
-                            error = Some(e);
-                        }
-                    }
-                }
-            }
-            let listed = match bin.as_ref() {
-                Some(bin) => grokhub_acp::list_sessions(bin, &cwd).unwrap_or_default(),
-                None => Vec::new(),
-            };
-            let rows = grok_session_rows(listed, cwd);
-            let _ = tx.send(GrokSessMsg::Listed {
-                gen,
-                rows,
-                done: ids,
-                error,
-            });
-        });
         self.threads.clear();
         self.threads.push(ChatThread::new("Chat", false));
         self.thread_idx = 0;
@@ -581,7 +536,6 @@ impl Cabin {
         }
         self.set_session_mode(SessionMode::Plan);
         self.acp = None;
-        self.acp_spawn_rx = None;
         self.hold_chat_name_for_plan();
         if let Some(t) = self.threads.get_mut(self.thread_idx) {
             t.grok_session = None;
@@ -596,7 +550,7 @@ impl Cabin {
         let Some(t) = self.threads.get(idx) else {
             return;
         };
-        let kept = grokhub_acp::title_after_selecting_plan(&t.title);
+        let kept = grokhub_core::cli_history::title_after_selecting_plan(&t.title);
         if t.title != kept {
             return;
         }
@@ -606,7 +560,7 @@ impl Cabin {
             return;
         };
         if let Some(s) = self.grok_sessions.iter_mut().find(|s| s.id == id) {
-            s.title = grokhub_acp::history_label_after_plan(&shown, &s.title);
+            s.title = grokhub_core::cli_history::history_label_after_plan(&shown, &s.title);
         }
     }
 
@@ -620,7 +574,7 @@ impl Cabin {
                 .find(|s| s.id == id)
                 .map(|s| s.title.as_str())
         });
-        grokhub_acp::preferred_history_title(
+        grokhub_core::cli_history::preferred_history_title(
             &t.title,
             t.title_locked,
             grok_title,

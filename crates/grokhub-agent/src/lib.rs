@@ -44,7 +44,7 @@ pub use client::{
     ContentPart, FunctionCall, InputItem, ModelClient, ResponsesRequest, StreamEvent, TurnOutput,
     Usage, XaiClient, DEFAULT_MODEL, RESPONSES_URL, USER_AGENT,
 };
-pub use compact::{estimate_input_tokens, manual_compact_targets_native, message_text};
+pub use compact::{estimate_input_tokens, message_text};
 pub use eval::{parse_args, reject_live, render_report, run_suite, ItemResult, Opts, SUITE_ITEMS};
 pub use events::{Engine, EngineParts, EpisodeSeed, NativeEngine, StampHalt};
 pub use gate::{ClosedPermits, Gate, PermAnswer, PermMode, PermitInbox, PermitNote, PermitWait};

@@ -11,12 +11,6 @@ use crate::CancelToken;
 /// Auto-compact fires at this percent of the context window, inclusive.
 pub const AUTO_COMPACT_PERCENT: u8 = 85;
 
-/// `true` when `/compact` should run on the native engine.
-/// The lab flag off, or a CLI thread, keeps the existing CLI command.
-pub fn manual_compact_targets_native(native_engine_on: bool, thread_native: bool) -> bool {
-    native_engine_on && thread_native
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OpenTodo {
     pub id: String,
@@ -554,11 +548,7 @@ mod tests {
     }
 
     #[test]
-    fn manual_compact_is_native_only() {
-        assert!(manual_compact_targets_native(true, true));
-        assert!(!manual_compact_targets_native(false, true));
-        assert!(!manual_compact_targets_native(true, false));
-        assert!(!manual_compact_targets_native(false, false));
+    fn manual_compact_is_the_bare_command() {
         assert!(is_manual_compact_command(" /compact "));
         assert!(!is_manual_compact_command("/compact now"));
     }

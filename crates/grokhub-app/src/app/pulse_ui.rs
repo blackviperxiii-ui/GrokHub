@@ -948,9 +948,8 @@ impl Cabin {
                 .size(crate::theme::FONT_BODY)
                 .color(crate::theme::muted()),
         );
-        // PI-05: clear the signed-out note once Account (or native) is signed in.
-        // CLI-on-PATH alone is not "signed in to Grok" for this line.
-        if self.pulse_view.signin_note && (self.has_key() || self.cfg.native_engine()) {
+        // PI-05: clear the signed-out note once GrokHub's own sign-in or key is there.
+        if self.pulse_view.signin_note && self.agent_ready() {
             self.pulse_view.signin_note = false;
         }
         if self.pulse_view.tab == PulseTab::Ideas && self.pulse_view.signin_note {
@@ -1783,20 +1782,8 @@ impl Cabin {
         }
         let prompt = pc::rewrite_prompt(&self.cfg.feed_instructions, &taste);
         let (tx, rx) = mpsc::channel();
-        if self.cfg.native_engine() {
-            self.pulse_view.rewrite_rx = Some(rx);
-            self.spawn_native_ideas(prompt, tx);
-            return;
-        }
-        // Unit tests never start it: this machine's Grok login would spend a real call.
-        if cfg!(test) || !self.llm_ready() {
-            return;
-        }
-        let key = self.bearer();
         self.pulse_view.rewrite_rx = Some(rx);
-        std::thread::spawn(move || {
-            let _ = tx.send(cabin_fast_llm(key, prompt));
-        });
+        self.spawn_native_ideas(prompt, tx);
     }
 
     pub(super) fn poll_pulse_rewrite(&mut self) {

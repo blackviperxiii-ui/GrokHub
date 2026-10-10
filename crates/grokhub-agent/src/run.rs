@@ -2364,6 +2364,33 @@ mod tests {
     }
 
     #[test]
+    fn an_open_checklist_from_an_earlier_run_does_not_take_over_the_next_ask() {
+        let dir = workspace("drive-bleed");
+        let conv = format!("drive-bleed-{}", std::process::id());
+        let todos = r#"{"todos":[{"id":"bt","content":"bluetooth errors","status":"pending"}]}"#;
+        let mut turns = vec![turn("", vec![call("t1", "todo_write", todos)])];
+        turns.extend((0..=crate::drive::STALL_LIMIT).map(|_| turn("I can't.", Vec::new())));
+        let script = Script { turns: Mutex::new(turns), seen: Mutex::new(Vec::new()), cancel_on_text: false, steer: None };
+        let (out, _, _) = run_drive(&script, &dir, &conv);
+        assert_eq!(out.stop, StopReason::EndTurn);
+        assert_eq!(script.seen.lock().unwrap().len(), 5);
+
+        // The checklist is still open; the next, unrelated ask is answered once.
+        let script = Script {
+            turns: Mutex::new(vec![turn("It is 4 pm.", Vec::new()), turn("unused", Vec::new())]),
+            seen: Mutex::new(Vec::new()),
+            cancel_on_text: false,
+            steer: None,
+        };
+        let (out, history, _) = run_drive(&script, &dir, &conv);
+        assert_eq!(out.stop, StopReason::EndTurn);
+        assert_eq!(script.seen.lock().unwrap().len(), 1);
+        assert_eq!(user_texts(&history), ["scan my computer"]);
+        crate::session_tools::invalidate_todos(&conv);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn report_findings_posts_the_card_after_the_reply() {
         let dir = workspace("findings");
         let conv = format!("findings-{}", std::process::id());

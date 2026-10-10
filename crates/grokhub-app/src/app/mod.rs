@@ -1,4 +1,3 @@
-use crate::build_agent;
 use crate::config::{self, AppConfig};
 use crate::desktop::{
     capture_data_url, capture_webcam, clipboard_image, collect_rows, first_bin,
@@ -24,10 +23,10 @@ use global_hotkey::{
     hotkey::{Code, HotKey, Modifiers},
     GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState,
 };
-use grokhub_acp::{
-    classify_stream_error, grok_context_line, grok_usage_line, inspect_advisory, kill_pid,
-    merge_tool_card, retry_status_line, rewrite_truncation_error, turn_footer, AcpEvent,
-    GrokPEvent, GrokUsage, PermissionMode, SessionMode, StreamErrorKind, ToolCard,
+use grokhub_core::wire::{
+    classify_stream_error, grok_context_line, grok_usage_line, merge_tool_card, retry_status_line,
+    rewrite_truncation_error, turn_footer, AcpEvent, GrokPEvent, GrokUsage, PermissionMode,
+    SessionMode, StreamErrorKind, ToolCard,
 };
 use grokhub_core::{
     add_to_folder, add_tokens, anticipate_consumes_slot, anticipated_need, appearance_choices,
@@ -43,8 +42,8 @@ use grokhub_core::{
     chat_attach_status, chat_bearer, chat_run_action, chat_run_hint,
     chat_run_phase, chat_send_kind, chat_shows_thinking, chat_stream_is_visible,
     chip_scan, chip_suggest_prompt, clamp_bubble_outer, clamp_row_width,
-    clear_pending_after_complete, cli_update_notice, cluster_gap, combined_update_cmds_in,
-    compact_keep_start_from, compose_imagine_prompt, composer_enter,
+    clear_pending_after_complete, cluster_gap,
+    compose_imagine_prompt, composer_enter,
     composer_go, composer_go_tip, computer_cmd_line, context_fingerprint, context_percent,
     create_folder, create_project, daily_units_blocked, dedicated_imagine_model,
     dedupe_hits, dedupe_suggestions, default_openclaw_paths, delete_thread,
@@ -58,7 +57,7 @@ use grokhub_core::{
     filter_slash_hits, flush_visible_goal, folder_choices, forbidden_reason,
     forget_topic, format_consult_reply, frame_bytes,
     greet_from_last_job, greeting_fingerprint, greeting_name,
-    greeting_prompt, grok_cli_update_cmd, grok_command_hits, halt_when_leaving_tab, has_auth,
+    greeting_prompt, grok_command_hits, halt_when_leaving_tab, has_auth,
     heartbeat_acts, heartbeat_due, heartbeat_repaint_ms, hey_grok_on_press, hey_grok_route,
     home_slash_cmd, home_surface_from_nav, host_cmd_leaves_project,
     host_hour_blocked, host_risk, host_status_line, hub_dispatch_ok, hub_kind_from_health,
@@ -66,7 +65,7 @@ use grokhub_core::{
     imagine_ref_status, imagine_stage_h, imagine_stage_visible, imagine_style_label,
     imagine_toolbox_dock, imagine_toolbox_shows_title, imagine_toolbox_top,
     imagine_video_dur_label, imagine_video_duration_secs, imagine_video_res_label,
-    imagine_video_resolution, imagine_wall_bounds, import_memory_file, inbox_claim_ready,
+    imagine_video_resolution, imagine_wall_bounds, import_memory_file,
     inhabit_ready, insight_pin, is_cabin_first_run, is_hard_run,
     is_openclaw_workspace, is_plain_text, is_rewind_copy_cmd, is_rewind_copy_cmd_in,
     is_thinking_status, is_voice_error, is_workload_user, job_error_goes_to_chat, job_is_scratch,
@@ -78,12 +77,12 @@ use grokhub_core::{
     merge_suggestion_store, merge_thinking_capped, mint_host_halt, mode_from_chip_value,
     model_for_mode, nav_from_chip_value, new_loop, next_chat_image,
     next_heartbeat_wait_ms, night_check_command, night_check_exit_code, night_check_may_fire,
-    night_counts_run, night_unauth_should_skip, normalize_hm, now_ms, oauth_access_live,
+    night_counts_run, normalize_hm, now_ms, oauth_access_live,
     overlay_update_begin, overlay_update_finish, pair_code_is_live, parse_computer_op,
     parse_fast_topics, parse_hostname_i, parse_llm_chips,
     parse_local_clock, parse_slash, parse_suggest_lines, parse_suggest_skill_patches,
     parse_theme, parse_trajectory_jsonl, partition_suggestions, patch_skill,
-    pending_for_manual_update, perm_key,
+    perm_key,
     palette_file_shown, palette_forget_stale_walk, palette_row_action,
     palette_search_is_saved, persist_user_turn, pick_fresh_seed, pick_greeting_against,
     pick_lan_ipv4, plan_room,
@@ -95,7 +94,7 @@ use grokhub_core::{
     refresh_last_stretch, refund_host_reserved,
     remember_chip_click, remember_chip_dismiss, remember_chip_outcome, remember_home_slash,
     remember_home_surface, remember_typed_prompt, rename_node, replay_automation_target,
-    replay_ops, resolve_acp_cwd, resolve_bind_path, resolve_chat_model,
+    replay_ops, resolve_bind_path, resolve_chat_model,
     resolve_dark, restore_bound_path, retain_held_plan, reuse_empty_thread_idx, review_due,
     review_system_prompt, rewind_allowed, rewind_blocked_reason,
     rewind_copy_cmd, rewind_dest, rewind_restore_matches, rewind_snapshot_ready, roll_usage_day,
@@ -106,7 +105,7 @@ use grokhub_core::{
     should_capture_before_chat, should_idle_reflect, should_keep_frame,
     should_name_thread, should_notify_cabin_update, should_paint_greeting, should_refresh_greeting,
     should_refresh_llm, should_seed_sidebar, should_send_screenshot, should_trim_result_bodies,
-    should_update_cli_alpha, apply_skill_follow, skill_follow_block, skill_from_suggestion,
+    apply_skill_follow, skill_follow_block, skill_from_suggestion,
     skill_offer_chip, skill_use_in_chat_prompt,
     skip_night_check_receipt, slash_help, slash_kind, start_hub_rotates_pair,
     state_for_disk, stretch_saved_skill, strip_thinking, summarize_trajectory, summarize_write,
@@ -115,7 +114,7 @@ use grokhub_core::{
     thought_shows_acts, thought_shows_label, thread_goal_prompt, thread_host_receipts,
     thread_host_receipts_from, toggle_pin, token_delta, top_habit_labels,
     trajectory_jsonl_line, transcribe_route, trim_result_bodies_in_place, uid, unified_diff_cite,
-    unknown_cabin_slash, update_check_due, update_chip_label, update_pending, update_wipes_config,
+    unknown_cabin_slash, update_check_due, update_chip_label, update_cmds_for_host_in, update_wipes_config,
     upsert_assistant_turn, upsert_bound, usage_line, user_pref_facts,
     verify_ok_after_user_turn, views_up_to_last_user, visible_chat_refs,
     visible_tree, visible_turn_count, visible_turn_count_from,
@@ -133,7 +132,7 @@ use grokhub_core::{
     ProjectMenuAct, ProjectNode, PttLine, QuickChip, Recipe, ReplayOp, ReviewDigest, RewindRecord,
     ScheduleRoute, SkillMd, Slash, SlashHit, SuggestionStore, ThreadReuseView,
     ThreadTab, ThoughtFold, TranscribeRoute, UpdatePending, UsageDay, VerifyResult,
-    VoiceState, WallGif, WorkflowVerb, BUBBLE_PAD_X, BUBBLE_PAD_Y, CABIN_FAST_FALLBACK,
+    VoiceState, WallGif, BUBBLE_PAD_X, BUBBLE_PAD_Y, CABIN_FAST_FALLBACK,
     CABIN_FAST_MODEL, CABIN_GITHUB_TOOLS,
     CHAT_TAIL_FRAMES, CHAT_TAIL_SLACK, CHIP_VISIBLE_MAX, CONTEXT_BUDGET_TOKENS,
     FRAME_CAP, GOAL_DROP_AFTER, HEARTBEAT_MS, HUB_KIND,
@@ -213,7 +212,6 @@ mod native_signin_tests;
 #[cfg(test)]
 mod self_review_tests;
 
-use acp::*;
 use chat_ui::*;
 use background::BgWork;
 
@@ -232,7 +230,6 @@ pub(super) fn token_budget_notice(
         _ => ("Token budget at 80%", format!("{line}.")),
     }
 }
-use chips::*;
 use imagine::*;
 use oauth::*;
 use plus::*;
@@ -644,8 +641,6 @@ pub struct Cabin {
     greeting_llm_at: u64,
     continue_hint: String,
     skill_q: String,
-    mcp_nl: String,
-    mcp_compose: bool,
     pending_connectors: Vec<(String, String, String)>,
     auto_compose: bool,
     board_compose: bool,
@@ -728,17 +723,7 @@ pub struct Cabin {
     profile_pick_rx: Option<mpsc::Receiver<(u64, ProfilePick)>>,
     profile_pick_token: Arc<AtomicU64>,
     profile_file_io: Arc<Mutex<()>>,
-    grok_install_rx: Option<mpsc::Receiver<Result<std::path::PathBuf, String>>>,
-    grok_install_err: String,
-    /// Official alpha install this session (missing/unusable at boot or retry).
-    grok_install_wait: bool,
-    /// Stay on Get Started after this session's official install lands.
-    official_cli_session: bool,
     cabin_latest: Option<String>,
-    /// Published Grok Build CLI alpha (`x.ai/cli/alpha`), not the stable channel.
-    cli_alpha: Option<String>,
-    /// `grok --version` from the last probe. Missing means Install, not Update.
-    cli_installed: Option<String>,
     last_update_probe: Option<Instant>,
     update_probe_rx: Option<mpsc::Receiver<crate::update::UpdateProbe>>,
     /// Cabin files were just overlaid. The running binary is still old until Restart.
@@ -747,10 +732,8 @@ pub struct Cabin {
     queued_overlay: Option<Vec<String>>,
     /// Both was pending and the cabin half could not be built. CLI still runs.
     update_cabin_note: Option<String>,
-    acp: Option<grokhub_acp::AcpHandle>,
-    acp_spawn_rx: Option<mpsc::Receiver<Result<grokhub_acp::AcpHandle, String>>>,
+    acp: Option<crate::engine_handle::AcpHandle>,
     grok_p_rx: Option<mpsc::Receiver<GrokPEvent>>,
-    grok_p_pid: Option<u32>,
     grok_usage: GrokUsage,
     /// Last Grok token totals already banked into `usage.json`.
     tokens_seen: (u64, u64, u64),
@@ -758,15 +741,6 @@ pub struct Cabin {
     grok_tasks: Vec<(String, String, bool)>,
     followup_queue: Vec<String>,
     /// `/workflow pause|resume|stop` waiting until the live turn ends. Not saved.
-    workflow_ctl_queue: Vec<String>,
-    /// Skills → Workflows name or run id. Not saved.
-    workflow_target: String,
-    /// Scroll the Skills page to Workflows once.
-    scroll_to_workflows: bool,
-    /// Skills Runs strip mirrors `status` until the next chat send. Not saved.
-    workflow_status_live: bool,
-    /// Queued verb is waiting on an Ask ACP handshake, not a live turn. Not saved.
-    workflow_ctl_await_acp: bool,
     /// btw questions waiting until the live turn ends. They do not cancel it.
     side_ask_queue: Vec<String>,
     /// Background runs beside the chat, and the steer / results blocks for the next turn.
@@ -787,10 +761,10 @@ pub struct Cabin {
     thought_seam: bool,
     say_seam: bool,
     desk_frame: Option<String>,
-    perm_ask: Option<grokhub_acp::PermissionAsk>,
+    perm_ask: Option<grokhub_core::wire::PermissionAsk>,
     /// Asks that came in while `perm_ask` was on screen, oldest first. Each waits
     /// its turn on the card; none is answered for you.
-    perm_queue: VecDeque<grokhub_acp::PermissionAsk>,
+    perm_queue: VecDeque<grokhub_core::wire::PermissionAsk>,
     /// Ask-card Always second beat for this `rpc_id` only. Not the composer pill.
     perm_always_confirm: Option<serde_json::Value>,
     /// Session Always escalate / destructive host. Ask Always stays on `perm_always_confirm`.
@@ -801,7 +775,7 @@ pub struct Cabin {
     jump_turn: Option<u32>,
     /// Ctrl+F in the open chat.
     find: ChatFind,
-    elicit_ask: Option<grokhub_acp::ElicitAsk>,
+    elicit_ask: Option<grokhub_core::wire::ElicitAsk>,
     elicit_draft: String,
     /// Secret values typed into an elicit. Memory only — never persisted.
     secret_hold: Vec<String>,
@@ -818,16 +792,7 @@ pub struct Cabin {
     auto_act: proactive_auto::AutoState,
     /// Night / loop / `/send` tasks inherit the composer PermissionMode pill.
     scheduled_perm: bool,
-    grok_sessions: Vec<grokhub_acp::GrokSession>,
-    grok_sessions_loaded: bool,
-    grok_sessions_tx: mpsc::Sender<GrokSessMsg>,
-    grok_sessions_rx: mpsc::Receiver<GrokSessMsg>,
-    grok_list_gen: u64,
-    grok_sessions_inflight: u32,
-    grok_sessions_refresh_pending: bool,
-    last_grok_list_at: Instant,
-    pending_grok_deletes: HashSet<String>,
-    inspect_rx: Option<mpsc::Receiver<String>>,
+    grok_sessions: Vec<grokhub_core::cli_history::GrokSession>,
     history_rx: Option<HistoryHitsRx>,
     mem_restore_rx: Option<mpsc::Receiver<(String, Result<String, String>)>>,
     mem_file_rx: Option<(String, mpsc::Receiver<(u64, String)>)>,
@@ -843,26 +808,12 @@ pub struct Cabin {
     amr_prune: amr_memory::AmrPrune,
     session_show_rx: Option<(String, mpsc::Receiver<String>)>,
     import_rx: Option<mpsc::Receiver<ImportOpenclawOut>>,
-    inspect_text: String,
-    grok_catalog: grokhub_acp::GrokCatalog,
-    grok_catalog_loaded: bool,
-    grok_catalog_rx: Option<mpsc::Receiver<Result<grokhub_acp::GrokCatalog, String>>>,
-    /// When the in-flight catalog channel opened. Empty past the settle deadline
-    /// drops the channel so Skills is not stuck on Loading….
-    grok_catalog_started: Option<Instant>,
     native_skills: Vec<grokhub_agent::Skill>,
     native_hooks: Vec<grokhub_agent::HookInfo>,
     native_listing_cwd: String,
     native_hooks_trusted: bool,
-    grok_ext_rx: Option<mpsc::Receiver<String>>,
-    /// Connector commands waiting while one `grok mcp` / `grok plugin` is running.
-    grok_ext_q: Vec<Vec<String>>,
     /// Last connector command output, shown on the Connectors page.
     connector_note: String,
-    /// Doctor output waiting to land on MCP rows. Not saved.
-    mcp_doctor_rx: Option<mpsc::Receiver<acp::McpDoctorMsg>>,
-    /// Per-server doctor status. Not saved. Survives a catalog reload.
-    mcp_status: acp::McpStatusMap,
     /// Scroll the Connectors page to Hooks once.
     scroll_to_hooks: bool,
     /// Last frame's composer pill, mic, and Send/Stop disc. Not saved.
@@ -1034,7 +985,6 @@ impl Cabin {
         let boot_session = SessionMode::parse(&cfg.session_mode).unwrap_or(SessionMode::Chat);
         let boot_perm = PermissionMode::parse(&cfg.permission_mode).unwrap_or(PermissionMode::Ask);
         let goal_step = threads.get(thread_idx).map(|t| t.goal.step).unwrap_or(0);
-        let (grok_sessions_tx, grok_sessions_rx) = mpsc::channel();
         let cfg_slot = Arc::new(Mutex::new(CfgSlot {
             gen: 0,
             cfg: cfg.clone(),
@@ -1259,8 +1209,6 @@ impl Cabin {
             greeting_llm_at: 0,
             continue_hint: String::new(),
             skill_q: String::new(),
-            mcp_nl: String::new(),
-            mcp_compose: false,
             pending_connectors: vec![],
             auto_compose: false,
             board_compose: false,
@@ -1339,32 +1287,19 @@ impl Cabin {
             profile_pick_rx: None,
             profile_pick_token: Arc::new(AtomicU64::new(0)),
             profile_file_io: Arc::new(Mutex::new(())),
-            grok_install_rx: None,
-            grok_install_err: String::new(),
-            grok_install_wait: false,
-            official_cli_session: false,
             cabin_latest: None,
-            cli_alpha: None,
-            cli_installed: None,
             last_update_probe: None,
             update_probe_rx: None,
             cabin_overlay_done: false,
             queued_overlay: None,
             update_cabin_note: None,
             acp: None,
-            acp_spawn_rx: None,
             grok_p_rx: None,
-            grok_p_pid: None,
             grok_usage: GrokUsage::default(),
             tokens_seen: (0, 0, 0),
             grok_commands: Vec::new(),
             grok_tasks: Vec::new(),
             followup_queue: Vec::new(),
-            workflow_ctl_queue: Vec::new(),
-            workflow_target: String::new(),
-            scroll_to_workflows: false,
-            workflow_status_live: false,
-            workflow_ctl_await_acp: false,
             side_ask_queue: Vec::new(),
             bg: BgWork::default(),
             side_ask_kick: false,
@@ -1395,15 +1330,6 @@ impl Cabin {
             auto_act: Default::default(),
             scheduled_perm: false,
             grok_sessions: Vec::new(),
-            grok_sessions_loaded: false,
-            grok_sessions_tx,
-            grok_sessions_rx,
-            grok_list_gen: 0,
-            grok_sessions_inflight: 0,
-            grok_sessions_refresh_pending: false,
-            last_grok_list_at: Instant::now(),
-            pending_grok_deletes: HashSet::new(),
-            inspect_rx: None,
             history_rx: None,
             mem_restore_rx: None,
             mem_file_rx: None,
@@ -1416,23 +1342,14 @@ impl Cabin {
             amr_prune: amr_memory::AmrPrune::default(),
             session_show_rx: None,
             import_rx: None,
-            inspect_text: String::new(),
-            grok_catalog: grokhub_acp::GrokCatalog::default(),
-            grok_catalog_loaded: false,
-            grok_catalog_rx: None,
-            grok_catalog_started: None,
             native_skills: Vec::new(),
             native_hooks: Vec::new(),
             native_listing_cwd: String::new(),
             native_hooks_trusted: false,
-            grok_ext_rx: None,
-            grok_ext_q: Vec::new(),
             connector_note: String::new(),
-            mcp_doctor_rx: None,
             screen_rec: None,
             screen_diag_rx: None,
             audio_check: None,
-            mcp_status: HashMap::new(),
             scroll_to_hooks: false,
             composer_geom: None,
         };
@@ -1455,30 +1372,10 @@ impl Cabin {
             // Once: Home deck and Ideas board data move into Pulse.
             c.migrate_pulse_store();
             c.ensure_useful_ideas();
-            grokhub_acp::silence_windows_hard_errors();
-            // The legacy CLI engine alone installs the CLI and shares the sign-in with it.
-            // The native engine never installs, runs or signs in the CLI.
-            if c.cfg.grok_build_engine {
-                // Official alpha when missing/unusable; pin a working CLI. UAC is expected on Windows.
-                c.grok_install_wait =
-                    grokhub_core::should_kick_alpha_install(grokhub_acp::find_grok().is_some());
-                c.official_cli_session = c.grok_install_wait;
-                c.grok_install_rx = Some(grokhub_acp::begin_ensure_grok_alpha());
-                c.sync_cli_auth_from_oauth();
-                if grokhub_acp::grok_cli_key().is_some() && !c.official_cli_session {
-                    c.mark_get_started_done();
-                }
-            }
+            grokhub_core::proc_util::silence_windows_hard_errors();
             c.last_update_probe = Some(Instant::now());
             c.update_probe_rx = Some(crate::update::begin_update_probe());
             c.open_fresh_home();
-            // Only the legacy CLI engine needs GrokHub's servers registered in Grok Build.
-            // The native engine runs desktop tools in-process and Cua as its own MCP server.
-            #[cfg(not(test))]
-            if c.cfg.grok_build_engine {
-                crate::desktop_mcp::maybe_register_on_start(c.cfg.desktop_control);
-                crate::self_mcp::maybe_register_on_start();
-            }
             #[cfg(not(test))]
             crate::desktop_mcp::set_desktop_enabled(c.cfg.desktop_control);
         }
@@ -1503,13 +1400,7 @@ impl Cabin {
     #[cfg(test)]
     pub(super) fn quiet_for_test() -> Self {
         crate::config::use_test_key_store();
-        let (grok_sessions_tx, grok_sessions_rx) = mpsc::channel();
-        let cfg = AppConfig {
-            // Test cabins keep the legacy CLI path these tests were written for;
-            // a native test turns it off. The shipping default is native.
-            grok_build_engine: true,
-            ..AppConfig::default()
-        };
+        let cfg = AppConfig::default();
         Self {
             nav: Nav::Chat,
             cfg: cfg.clone(),
@@ -1721,8 +1612,6 @@ impl Cabin {
             greeting_llm_at: 0,
             continue_hint: String::new(),
             skill_q: String::new(),
-            mcp_nl: String::new(),
-            mcp_compose: false,
             pending_connectors: Vec::new(),
             auto_compose: false,
             board_compose: false,
@@ -1801,32 +1690,19 @@ impl Cabin {
             profile_pick_rx: None,
             profile_pick_token: Arc::new(AtomicU64::new(0)),
             profile_file_io: Arc::new(Mutex::new(())),
-            grok_install_rx: None,
-            grok_install_err: String::new(),
-            grok_install_wait: false,
-            official_cli_session: false,
             cabin_latest: None,
-            cli_alpha: None,
-            cli_installed: None,
             last_update_probe: None,
             update_probe_rx: None,
             cabin_overlay_done: false,
             queued_overlay: None,
             update_cabin_note: None,
             acp: None,
-            acp_spawn_rx: None,
             grok_p_rx: None,
-            grok_p_pid: None,
             grok_usage: Default::default(),
             tokens_seen: (0, 0, 0),
             grok_commands: Vec::new(),
             grok_tasks: Vec::new(),
             followup_queue: Vec::new(),
-            workflow_ctl_queue: Vec::new(),
-            workflow_target: String::new(),
-            scroll_to_workflows: false,
-            workflow_status_live: false,
-            workflow_ctl_await_acp: false,
             side_ask_queue: Vec::new(),
             bg: BgWork::default(),
             side_ask_kick: false,
@@ -1854,15 +1730,6 @@ impl Cabin {
             auto_act: Default::default(),
             scheduled_perm: false,
             grok_sessions: Vec::new(),
-            grok_sessions_loaded: false,
-            grok_sessions_tx,
-            grok_sessions_rx,
-            grok_list_gen: 0,
-            grok_sessions_inflight: 0,
-            grok_sessions_refresh_pending: false,
-            last_grok_list_at: Instant::now(),
-            pending_grok_deletes: HashSet::new(),
-            inspect_rx: None,
             history_rx: None,
             mem_restore_rx: None,
             mem_file_rx: None,
@@ -1875,23 +1742,14 @@ impl Cabin {
             amr_prune: amr_memory::AmrPrune::default(),
             session_show_rx: None,
             import_rx: None,
-            inspect_text: String::new(),
-            grok_catalog: Default::default(),
-            grok_catalog_loaded: false,
-            grok_catalog_rx: None,
-            grok_catalog_started: None,
             native_skills: Vec::new(),
             native_hooks: Vec::new(),
             native_listing_cwd: String::new(),
             native_hooks_trusted: false,
-            grok_ext_rx: None,
-            grok_ext_q: Vec::new(),
             connector_note: String::new(),
-            mcp_doctor_rx: None,
             screen_rec: None,
             screen_diag_rx: None,
             audio_check: None,
-            mcp_status: HashMap::new(),
             scroll_to_hooks: false,
             composer_geom: None,
         }
@@ -2146,7 +2004,6 @@ impl Cabin {
 
     fn halt_in_flight(&mut self) {
         // A stopped turn's steer and background notes must not ride into another chat.
-        self.bg.steer_follow = None;
         self.bg.results_follow = None;
         crate::desktop_mcp::write_halt_stamp();
         crate::desktop_mcp::note_halt();
@@ -2154,10 +2011,8 @@ impl Cabin {
         self.harness_watch_end();
         self.halt_hard_parks();
         self.withdraw_perm_asks();
-        if self.cfg.native_engine() {
-            grokhub_agent::halt_all_sessions();
-            self.stop_native_unattended();
-        }
+        grokhub_agent::halt_all_sessions();
+        self.stop_native_unattended();
         if let Some(h) = &self.acp {
             self.perm_always_confirm = None;
             self.confirm = None;
@@ -2191,10 +2046,6 @@ impl Cabin {
         self.kick_cap_rx = None;
         self.kick_frame = None;
         self.kick_skip = false;
-        self.acp_spawn_rx = None;
-        if let Some(pid) = self.grok_p_pid.take() {
-            kill_pid(pid);
-        }
         self.grok_p_rx = None;
         self.recipe_cap_rx = None;
         self.recipe_desk_rx = None;
@@ -2489,13 +2340,9 @@ impl Cabin {
         secrets::console_key(&self.secrets, &self.cfg.api_key)
     }
 
-    fn can_agent(&self) -> bool {
-        build_agent::can_agent(self.has_key())
-    }
-
-    /// GrokHub's own sign-in or key. Only the legacy CLI engine counts the CLI.
+    /// GrokHub's own sign-in or key.
     fn llm_ready(&self) -> bool {
-        self.has_key() || (self.cfg.grok_build_engine && grokhub_acp::find_grok().is_some())
+        self.has_key()
     }
 
     fn grok_cwd(&self) -> std::path::PathBuf {
@@ -2507,12 +2354,6 @@ impl Cabin {
             home.as_deref(),
             profile.as_deref(),
         ))
-    }
-
-    /// `grok sessions list` returns only sessions stored under its cwd.
-    /// That directory is the chat `--cwd`, not HOME and not the install dir.
-    fn grok_cli_cwd(&self) -> std::path::PathBuf {
-        self.grok_cwd()
     }
 
     fn poll_history_search(&mut self) {
@@ -2968,8 +2809,6 @@ impl Cabin {
             self.last_receipt_ok,
             self.skill_list.len(),
         ));
-        let (ok, text) = grokhub_acp::doctor_grok_line(grokhub_acp::find_grok().as_deref());
-        lines.push(grokhub_core::DoctorLine { ok, text });
         lines
     }
 
@@ -2986,14 +2825,11 @@ impl Cabin {
         }
         let (servers, server_errs) = crate::native_mcp::health_rows();
         failed.extend(server_errs);
-        let cli_newer =
-            should_update_cli_alpha(self.cli_installed.as_deref(), self.cli_alpha.as_deref());
         grokhub_core::health::HealthInput {
             cabin_update: self
                 .cabin_update_available()
                 .then(|| self.cabin_latest.clone())
                 .flatten(),
-            cli_update: cli_newer.then(|| self.cli_alpha.clone()).flatten(),
             failed,
             checked: checks.len() + self.automations.len() + servers,
             last_dream: grokhub_core::amr::latest_dream(&config::config_dir().join("amr")),
@@ -3571,7 +3407,7 @@ impl Cabin {
         if self.budget_holds_scheduled() {
             return;
         }
-        if !anticipate_consumes_slot(self.can_agent()) {
+        if !anticipate_consumes_slot(self.agent_ready()) {
             return;
         }
         if !self.heartbeat_may(grokhub_core::ProactiveAct::Anticipate, now_ms()) {
@@ -3869,20 +3705,7 @@ impl Cabin {
         bits.join(" · ").chars().take(80).collect()
     }
 
-    fn sync_cli_auth_from_oauth(&self) {
-        let Some(tokens) = self.secrets.oauth.clone() else {
-            return;
-        };
-        std::thread::spawn(
-            move || match grokhub_acp::write_cli_auth_if_needed(&tokens) {
-                Ok(_) => {}
-                Err(e) => eprintln!("grok auth.json: {e}"),
-            },
-        );
-    }
-
     fn mark_get_started_done(&mut self) {
-        self.official_cli_session = false;
         if self.cfg.get_started_done {
             return;
         }
@@ -3890,30 +3713,13 @@ impl Cabin {
         self.persist_cfg();
     }
 
-    fn queue_grok_cli_install(&mut self) {
-        if self.grok_install_rx.is_some() {
-            return;
-        }
-        self.grok_install_err.clear();
-        self.grok_install_wait = true;
-        self.official_cli_session = true;
-        self.status = "Installing Grok Build CLI (alpha)…".into();
-        self.grok_install_rx = Some(grokhub_acp::begin_grok_install_force());
-    }
-
-    /// GitHub Latest and Grok Build CLI alpha. First check is at launch; then every 2 hours.
+    /// GitHub Latest. First check is at launch; then every 2 hours.
     fn poll_update_probe(&mut self, ctx: &egui::Context) {
         if let Some(rx) = self.update_probe_rx.take() {
             match rx.try_recv() {
                 Ok(probe) => {
                     if let Some(tag) = probe.cabin_tag {
                         self.cabin_latest = Some(tag);
-                    }
-                    if let Some(alpha) = probe.cli_alpha {
-                        self.cli_alpha = Some(alpha);
-                    }
-                    if let Some(installed) = probe.cli_installed {
-                        self.cli_installed = Some(installed);
                     }
                 }
                 Err(mpsc::TryRecvError::Empty) => {
@@ -3942,8 +3748,11 @@ impl Cabin {
     }
 
     fn update_pending_now(&self) -> UpdatePending {
-        let cli = should_update_cli_alpha(self.cli_installed.as_deref(), self.cli_alpha.as_deref());
-        update_pending(cli, self.cabin_update_available())
+        if self.cabin_update_available() {
+            UpdatePending::Cabin
+        } else {
+            UpdatePending::None
+        }
     }
 
     fn open_update_overlay(&mut self) {
@@ -4008,93 +3817,41 @@ impl Cabin {
         self.settings_sec = SettingsSec::Labs;
     }
 
-    /// One control: CLI alpha first when it is newer, then the cabin when it is newer.
-    /// A Settings / `/update` click with nothing pending still overlays both.
-    fn queue_combined_update(&mut self) {
+    /// One control. A Settings / `/update` click with nothing pending still overlays.
+    fn queue_cabin_update(&mut self) {
         self.open_update_overlay();
-        let pending = pending_for_manual_update(self.update_pending_now());
         let src = resolve_source(&self.cfg.source_dir);
         let channel = crate::update::installed_channel();
-        if pending != UpdatePending::Cli
-            && src
-                .as_ref()
-                .is_some_and(|p| grokhub_core::overlay_clone_usable_in(p, channel))
+        if let Some(src) = src
+            .as_ref()
+            .filter(|p| grokhub_core::overlay_clone_usable_in(p, channel))
         {
-            if let Some(src) = src.as_ref() {
-                self.cfg.source_dir = src.display().to_string();
-                remember_source(src);
-                self.persist_cfg();
-            }
+            self.cfg.source_dir = src.display().to_string();
+            remember_source(src);
+            self.persist_cfg();
         }
-        let plan = match combined_update_cmds_in(src.as_deref(), pending, channel) {
-            Ok(plan) => plan,
-            Err(e) if pending == UpdatePending::Both => {
-                match combined_update_cmds_in(src.as_deref(), UpdatePending::Cli, channel) {
-                    Ok(mut plan) => {
-                        plan.cabin_skipped = Some(e);
-                        plan
-                    }
-                    Err(cli_e) => {
-                        self.open_update_overlay();
-                        self.status = cli_e;
-                        return;
-                    }
-                }
-            }
+        let cmds = match update_cmds_for_host_in(src.as_deref(), cfg!(windows), channel) {
+            Ok(cmds) => cmds,
             Err(e) => {
-                self.open_update_overlay();
                 self.status = e;
                 return;
             }
         };
-        if update_wipes_config(&plan.cmds) {
-            self.open_update_overlay();
+        if update_wipes_config(&cmds) {
             self.status = "refusing an update that would wipe config".into();
             return;
         }
         // Windows: a stray beta receipt updates as stable and says why.
-        self.update_cabin_note = match (plan.cabin_skipped, crate::update::stray_beta_receipt_note()) {
-            (Some(skip), Some(note)) => Some(format!("{note} {skip}")),
-            (skip, note) => skip.or_else(|| note.map(String::from)),
-        };
-        self.start_overlay_update(plan.cmds);
+        self.update_cabin_note = crate::update::stray_beta_receipt_note().map(String::from);
+        self.start_overlay_update(cmds);
     }
 
-    fn note_combined_update_landed(&mut self) {
-        if self.last_host.iter().any(|c| grok_cli_update_cmd(c)) {
-            if let Some(alpha) = self.cli_alpha.clone() {
-                self.cli_installed = Some(alpha);
-            }
-        }
+    fn note_cabin_update_landed(&mut self) {
         if self.last_host.iter().any(|c| cabin_overlay_step(c)) {
             self.cabin_overlay_done = true;
         }
         // After a successful cabin/channel update on beta, flip to stable when beta caught up to main.
         self.maybe_auto_off_beta_channel(true);
-    }
-
-    fn poll_grok_install(&mut self) {
-        let Some(rx) = self.grok_install_rx.take() else {
-            return;
-        };
-        match rx.try_recv() {
-            Ok(Ok(_)) => {
-                grokhub_acp::clear_grok_unusable();
-                grokhub_acp::invalidate_grok_bin_cache();
-                self.grok_install_err.clear();
-                self.grok_install_wait = false;
-                self.status = "Grok Build CLI (alpha) installed".into();
-            }
-            Ok(Err(e)) => {
-                self.grok_install_err = e.clone();
-                self.grok_install_wait = true;
-                self.status = e;
-            }
-            Err(mpsc::TryRecvError::Empty) => {
-                self.grok_install_rx = Some(rx);
-            }
-            Err(mpsc::TryRecvError::Disconnected) => {}
-        }
     }
 
     fn capture_cabin_frame_this_turn(&mut self) -> Option<String> {
@@ -4184,14 +3941,14 @@ impl Cabin {
     /// A native `/compact` does not set `running`. Drop the job slot when it finishes
     /// so the meter status stays and the composer does not keep a stream.
     fn release_native_compact_slot(&mut self) {
-        if !self.running && self.native_engine_for_current() {
+        if !self.running {
             self.chat_job_thread = None;
         }
     }
 
     fn apply_job_fail(&mut self, err: &str) -> String {
         self.note_no_route_turn(err);
-        if grokhub_acp::is_sigterm_status(err) {
+        if grokhub_core::proc_util::is_sigterm_status(err) {
             return "Stopped".into();
         }
         if classify_stream_error(err) == StreamErrorKind::CreditLimit {
@@ -4229,7 +3986,7 @@ impl Cabin {
     }
 
     fn queue_update(&mut self) {
-        self.queue_combined_update();
+        self.queue_cabin_update();
     }
 
     fn restart_after_update(&mut self, ctx: &egui::Context) {
@@ -4744,7 +4501,6 @@ impl Cabin {
         if !self.hub_on
             || self.running
             || self.pending_hub_task.is_some()
-            || !inbox_claim_ready(self.can_agent()) && !self.cfg.native_engine()
         {
             return;
         }
@@ -4766,8 +4522,7 @@ impl Cabin {
             self.pending_hub_task = Some(t.id.clone());
             self.land_on_real_chat();
             self.send_scheduled_chat(format!("[from {}] {}", t.from_name, t.prompt));
-            if self.cfg.native_engine()
-                && !self.running
+            if !self.running
                 && self.pending_kick.is_none()
                 && self.grok_p_rx.is_none()
             {
@@ -5018,7 +4773,7 @@ impl Cabin {
 
 impl eframe::App for Cabin {
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
-        // No background `grok -p` outlives the cabin.
+        // No background run outlives the cabin.
         self.kill_bg_runs();
         // The close frame spawned a persist. Wait for it: the process exits right after this,
         // and two writers of app.json share one temp file.
@@ -5077,11 +4832,6 @@ impl eframe::App for Cabin {
         self.poll_grok_loop();
         self.poll_wall();
         self.poll_persist();
-        self.poll_grok_sessions();
-        self.poll_inspect();
-        self.poll_grok_catalog();
-        self.poll_grok_ext();
-        self.poll_mcp_doctor();
         self.poll_history_search();
         self.poll_palette_search();
         self.poll_mem_restore();
@@ -5101,7 +4851,6 @@ impl eframe::App for Cabin {
         self.poll_reflect();
         self.poll_session_show();
         self.poll_import_openclaw();
-        self.poll_acp_spawn();
         self.poll_single();
         self.poll_bg_runs();
         self.poll_native_automations();
@@ -5143,17 +4892,10 @@ impl eframe::App for Cabin {
                 self.geom_dirty = false;
             }
         }
-        self.poll_grok_install();
-        if let Some(msg) = crate::desktop_mcp::take_reg_status() {
-            self.status = msg;
-        }
         if let Some(msg) = crate::desktop_mcp::take_desktop_test_status() {
             self.status = msg;
         }
         self.poll_update_probe(ctx);
-        if self.grok_install_rx.is_some() {
-            ctx.request_repaint_after(Duration::from_millis(250));
-        }
         if self.oauth_pending.is_some()
             || self.oauth_start_rx.is_some()
             || self.oauth_poll_rx.is_some()
@@ -5199,12 +4941,7 @@ impl eframe::App for Cabin {
                 || self.recipe_desk_rx.is_some()
                 || self.host_diff_rx.is_some()
                 || self.verify_rx.is_some()
-                || self.grok_sessions_inflight > 0
                 || self.persist_rx.is_some()
-                || self.inspect_rx.is_some()
-                || self.grok_catalog_rx.is_some()
-                || self.grok_ext_rx.is_some()
-                || self.mcp_doctor_rx.is_some()
                 || self.grok_loop_rx.is_some()
                 || self.history_rx.is_some()
                 || self.mem_restore_rx.is_some()
@@ -5218,7 +4955,6 @@ impl eframe::App for Cabin {
                 || self.reflect_rx.is_some()
                 || self.session_show_rx.is_some()
                 || self.import_rx.is_some()
-                || self.acp_spawn_rx.is_some()
                 || self.grok_p_rx.is_some()
                 || self.bg.busy()
                 || self.pick_rx.is_some()
@@ -5228,9 +4964,7 @@ impl eframe::App for Cabin {
                 || self.oauth_start_rx.is_some()
                 || self.oauth_poll_rx.is_some()
                 || self.night_check_rx.is_some()
-                || self.eyes_cap_rx.is_some()
-                || grokhub_acp::doctor_line_busy()
-                || crate::desktop_mcp::reg_busy(),
+                || self.eyes_cap_rx.is_some(),
             self.hub_on,
             self.window_visible,
             self.page_nav() == Nav::Imagine,
@@ -5283,7 +5017,6 @@ impl eframe::App for Cabin {
         // occluded, so these keep ticking from the tray. `ui` runs them again
         // after a painted frame's clicks.
         self.sync_idea_card_actions();
-        self.release_workflow_ctl_if_idle();
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
@@ -5344,7 +5077,6 @@ impl eframe::App for Cabin {
                 });
         }
         self.sync_idea_card_actions();
-        self.release_workflow_ctl_if_idle();
     }
 }
 

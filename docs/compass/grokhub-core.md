@@ -17,7 +17,7 @@
 - New helper: write it in its module with a literal-value test, then add it to that module's `pub use` block in `lib.rs`; grokhub-app imports flat names (`use grokhub_core::{...}`).
 - New module: `pub mod x;` in `lib.rs` plus its re-exports. Keep it free of network and egui; outside tests only `update.rs` spawns a process (`git`).
 ## What breaks it
-- Renaming a re-exported item: it breaks grokhub-app, grokhub-hub, grokhub-acp, and grokhub-agent in one go. Grep the workspace first.
+- Renaming a re-exported item: it breaks grokhub-app, grokhub-hub, and grokhub-agent in one go. Grep the workspace first.
 - Editing scripts or packaging: `hands.rs`, `desktop_entry.rs`, `update.rs`, and `channel.rs` tests read `scripts/` and `packaging/` and assert on their text.
 ## What depends on it
 - Every other crate in the workspace `Cargo.toml`. The hub serves `HubState`.
