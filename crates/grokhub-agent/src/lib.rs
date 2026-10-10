@@ -3,6 +3,7 @@
 mod auto_review;
 mod client;
 mod compact;
+mod drive;
 pub mod episode;
 mod eval;
 mod events;
@@ -31,6 +32,7 @@ mod skills;
 mod slash_parity;
 mod sse;
 mod subagent;
+pub mod sudo_pass;
 pub mod tasks;
 pub mod timing;
 pub mod tokens;
