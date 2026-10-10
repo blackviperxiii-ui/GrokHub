@@ -52,6 +52,50 @@ pub(super) const GOOGLE_MANUAL_STEPS: &[&str] = &[
     "Install here, then press Connect on its row in the Installed tab.",
 ];
 
+/// How a Google entry connects. With the Grok Build CLI found (a read-only
+/// look on PATH; it is never installed or run for this), Google goes
+/// through Grok Build's own Google sign-in; otherwise the manual Google
+/// Cloud steps show.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum GoogleVia {
+    GrokBuild,
+    Manual,
+}
+
+pub(super) fn google_via(cli_found: bool) -> GoogleVia {
+    if cli_found {
+        GoogleVia::GrokBuild
+    } else {
+        GoogleVia::Manual
+    }
+}
+
+/// The only Grok Build CLI use the Marketplace makes: is it there?
+fn grok_cli_found() -> bool {
+    grokhub_acp::find_grok().is_some()
+}
+
+pub(super) const USES_GROK_CLI: &str = "Uses your Grok Build CLI";
+
+/// Signing in to a Google entry through Grok Build.
+pub(super) fn grok_google_steps(name: &str) -> [String; 3] {
+    [
+        "Run grok in a terminal and open /mcps.".to_string(),
+        format!("Press i on {name} and sign in with your Google account."),
+        "Chats that run through Grok Build can use it then. Its status shows under Grok Build in the Installed tab.".to_string(),
+    ]
+}
+
+/// Grok Build's own entry for a catalog entry: same name, or same URL.
+pub(super) fn grok_row_for<'a>(
+    rows: &'a [grokhub_acp::GrokMcpRow],
+    e: &CatalogEntry,
+) -> Option<&'a grokhub_acp::GrokMcpRow> {
+    let url = e.url.trim_end_matches('/');
+    rows.iter()
+        .find(|r| r.name == e.id || (!url.is_empty() && r.target.trim_end_matches('/') == url))
+}
+
 /// The badge chip on a Marketplace row: installed or not.
 pub(super) fn market_chip(installed: bool) -> Option<(&'static str, ChipTone)> {
     installed.then_some(("Installed", ChipTone::Live))
@@ -75,7 +119,7 @@ enum RowHit {
     Install,
 }
 
-fn paint_market_row(ui: &mut egui::Ui, e: &CatalogEntry, installed: bool) -> Option<RowHit> {
+fn paint_market_row(ui: &mut egui::Ui, e: &CatalogEntry, installed: bool, via_cli: bool) -> Option<RowHit> {
     let mut hit = None;
     egui::Frame::NONE
         .fill(crate::theme::elevated())
@@ -93,6 +137,9 @@ fn paint_market_row(ui: &mut egui::Ui, e: &CatalogEntry, installed: bool) -> Opt
                         if let Some((label, tone)) = market_chip(installed) {
                             crate::cards::status_chip(ui, label, tone);
                         }
+                        if via_cli {
+                            crate::cards::status_chip(ui, USES_GROK_CLI, ChipTone::Mute);
+                        }
                     });
                     ui.label(
                         RichText::new(format!("{} · {}", e.publisher, e.category))
@@ -105,7 +152,7 @@ fn paint_market_row(ui: &mut egui::Ui, e: &CatalogEntry, installed: bool) -> Opt
                     if crate::cards::ghost_pill(ui, "Details") {
                         hit = Some(RowHit::Open);
                     }
-                    if !installed && crate::cards::white_pill(ui, "Install") {
+                    if !installed && !via_cli && crate::cards::white_pill(ui, "Install") {
                         hit = Some(RowHit::Install);
                     }
                 });
@@ -207,8 +254,10 @@ impl Cabin {
             crate::cards::settings_note(ui, "No connector matched. Try another word, or pick All.");
         }
         let mut install = None;
+        let cli = grok_cli_found();
         for e in shown {
-            match paint_market_row(ui, e, installed.contains(&e.id)) {
+            let via_cli = e.auth == CatalogAuth::Google && google_via(cli) == GoogleVia::GrokBuild;
+            match paint_market_row(ui, e, installed.contains(&e.id), via_cli) {
                 Some(RowHit::Open) => self.market.detail = Some(e.id.clone()),
                 Some(RowHit::Install) => install = Some(e.clone()),
                 None => {}
@@ -220,6 +269,7 @@ impl Cabin {
     }
 
     fn ui_market_detail(&mut self, ui: &mut egui::Ui, e: &CatalogEntry, installed: bool) {
+        let via_cli = e.auth == CatalogAuth::Google && google_via(grok_cli_found()) == GoogleVia::GrokBuild;
         if crate::cards::ghost_pill(ui, "Back") {
             self.market.detail = None;
             self.market.key.clear();
@@ -235,6 +285,9 @@ impl Cabin {
                     if let Some((label, tone)) = market_chip(installed) {
                         crate::cards::status_chip(ui, label, tone);
                     }
+                    if via_cli {
+                        crate::cards::status_chip(ui, USES_GROK_CLI, ChipTone::Mute);
+                    }
                 });
                 ui.label(
                     RichText::new(format!("{} · {}", e.publisher, e.category))
@@ -243,7 +296,7 @@ impl Cabin {
                 );
             });
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if !installed && crate::cards::white_pill(ui, "Install") {
+                if !installed && !via_cli && crate::cards::white_pill(ui, "Install") {
                     self.market_install(e);
                 }
             });
@@ -260,9 +313,18 @@ impl Cabin {
         crate::cards::help_text(ui, &e.permissions);
         ui.add_space(12.0);
         crate::cards::section_label(ui, "Sign-in");
-        crate::cards::help_text(ui, &sign_in_line(e));
-        if installed {
-            self.ui_market_sign_in(ui, e);
+        if via_cli {
+            self.ui_google_via_grok(ui, e);
+        } else {
+            crate::cards::help_text(ui, &sign_in_line(e));
+            if e.auth == CatalogAuth::Google {
+                for (i, step) in GOOGLE_MANUAL_STEPS.iter().enumerate() {
+                    crate::cards::help_text(ui, &format!("{}. {step}", i + 1));
+                }
+            }
+            if installed {
+                self.ui_market_sign_in(ui, e);
+            }
         }
         ui.add_space(12.0);
         crate::cards::section_label(ui, "Runs");
@@ -297,11 +359,34 @@ impl Cabin {
                     }
                 });
             }
-            CatalogAuth::Google => {
-                for (i, step) in GOOGLE_MANUAL_STEPS.iter().enumerate() {
-                    crate::cards::help_text(ui, &format!("{}. {step}", i + 1));
+            CatalogAuth::Google => {}
+        }
+    }
+
+    /// A Google entry with the Grok Build CLI found: Grok Build's own entry
+    /// and status, and how to sign in there. Nothing here runs the CLI.
+    fn ui_google_via_grok(&mut self, ui: &mut egui::Ui, e: &CatalogEntry) {
+        crate::cards::help_text(ui, &format!("{USES_GROK_CLI}, which signs in to Google for you."));
+        match grok_row_for(&self.grok_catalog.mcp, e) {
+            Some(row) => {
+                let rows = super::connectors_ui::grok_connector_rows(std::slice::from_ref(row), &self.mcp_status);
+                if let Some(r) = rows.first() {
+                    let (label, tone) = r.state.chip();
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new(format!("Grok Build has {}", r.name)).size(13.0).color(crate::theme::fg()));
+                        crate::cards::status_chip(ui, label, tone);
+                    });
                 }
             }
+            None => {
+                crate::cards::help_text(
+                    ui,
+                    &format!("Grok Build doesn't list {} yet. Update Grok Build, then press Refresh in the Installed tab.", e.name),
+                );
+            }
+        }
+        for (i, step) in grok_google_steps(&e.name).iter().enumerate() {
+            crate::cards::help_text(ui, &format!("{}. {step}", i + 1));
         }
     }
 }
@@ -347,6 +432,39 @@ mod tests {
         let cancel = &cancel[..cancel.find("None => {}").unwrap()];
         assert!(cancel.contains("ConfirmKind::SaveKey") && cancel.contains("self.market.key.clear()"), "{cancel}");
         assert!(!format!("{:?}", cabin.confirm).contains("sk-abc"), "the key never rides on the card");
+    }
+
+    #[test]
+    fn google_uses_the_grok_cli_when_found_and_manual_steps_when_not() {
+        assert_eq!(google_via(true), GoogleVia::GrokBuild);
+        assert_eq!(google_via(false), GoogleVia::Manual);
+        assert_eq!(USES_GROK_CLI, "Uses your Grok Build CLI");
+        assert_eq!(grok_google_steps("Gmail")[1], "Press i on Gmail and sign in with your Google account.");
+        let gmail = entry("gmail");
+        let row = |name: &str, target: &str| grokhub_acp::GrokMcpRow { name: name.into(), enabled: true, target: target.into() };
+        let rows = [row("context7", "npx -y @upstash/context7-mcp"), row("mail", "https://gmailmcp.googleapis.com/mcp/v1/")];
+        assert_eq!(grok_row_for(&rows, &gmail).map(|r| r.name.as_str()), Some("mail"), "matched by URL");
+        assert!(grok_row_for(&rows[..1], &gmail).is_none());
+        assert_eq!(grok_row_for(&[row("gmail", "x")], &gmail).map(|r| r.name.as_str()), Some("gmail"), "matched by name");
+    }
+
+    #[test]
+    fn the_grok_cli_is_only_looked_for_never_run() {
+        let src = include_str!("marketplace_ui.rs").replace("\r\n", "\n");
+        let code = &src[..src.find("#[cfg(test)]").unwrap()];
+        assert_eq!(
+            code.matches("grokhub_acp::").count(),
+            code.matches("grokhub_acp::find_grok()").count() + code.matches("grokhub_acp::GrokMcpRow").count(),
+            "the Marketplace touches the CLI crate only for find_grok and the GrokMcpRow type"
+        );
+        assert_eq!(code.matches("grokhub_acp::find_grok()").count(), 1);
+        assert!(code.contains("grokhub_acp::find_grok().is_some()"));
+        for spawn in ["run_grok_user_cmd", "Command::new", "grok_user_stdout", "spawn_grok"] {
+            assert!(!code.contains(spawn), "the Marketplace must not run the CLI: {spawn}");
+        }
+        let body = src.split("fn ui_google_via_grok(").nth(1).unwrap();
+        let body = &body[..body.find("\n    }\n").unwrap()];
+        assert!(!body.contains("market_install"), "via the CLI there is no cabin install");
     }
 
     #[test]
