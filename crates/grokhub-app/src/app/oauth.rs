@@ -131,7 +131,7 @@ pub(super) fn account_connect_chrome(
     let Some(tokens) = oauth.filter(|t| !t.access_token.trim().is_empty()) else {
         return AccountConnectChrome {
             title: "Connect Grok",
-            hint: "Device-code OAuth. Also signs in the Grok Build CLI if it is not already connected."
+            hint: "Device-code OAuth. GrokHub keeps this sign-in to itself."
                 .into(),
             action: "Sign in with Grok",
             connected: false,
@@ -228,7 +228,9 @@ impl Cabin {
                             self.oauth_photo = None;
                             self.oauth_photo_key.clear();
                             self.status = "Grok OAuth connected".into();
-                            self.sync_cli_auth_from_oauth();
+                            if self.cfg.grok_build_engine {
+                                self.sync_cli_auth_from_oauth();
+                            }
                             self.mark_get_started_done();
                         }
                     }

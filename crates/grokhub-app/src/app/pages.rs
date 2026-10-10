@@ -2,6 +2,9 @@
 
 use super::*;
 
+/// Native engine, no GrokHub sign-in and no key yet.
+const NATIVE_SIGNIN_NOTE: &str = "Sign in with Grok in Settings → Account, or add an API key.";
+
 /// Queue tile status. A finished task is done. A live task whose title starts
 /// with "failed" is failed. Every other live task is running.
 pub(super) fn queue_task_label(title: &str, done: bool) -> &'static str {
@@ -711,26 +714,54 @@ impl Cabin {
             });
     }
 
-    pub(super) fn ui_get_started(&mut self, ui: &mut egui::Ui) -> bool {
-        let grok_present = grokhub_acp::find_grok().is_some();
+    /// The native engine's first run: GrokHub's own sign-in sheet until it is
+    /// signed in or Get Started was finished. The CLI plays no part.
+    pub(super) fn ui_wants_get_started(&self) -> bool {
         let cabin_oauth = self
             .secrets
             .oauth
             .as_ref()
             .is_some_and(|t| !t.access_token.trim().is_empty());
-        let cli_connected = grokhub_acp::grok_cli_key().is_some();
+        self.cfg.native_engine() && !cabin_oauth && !self.cfg.get_started_done
+    }
+
+    /// The native engine needs GrokHub's own sign-in or a key, never the CLI.
+    pub(super) fn ui_native_auth_banner(&mut self, ui: &mut egui::Ui) {
+        if self.has_key() || self.imagine_native.tokens.is_some() || self.ui_wants_get_started() {
+            return;
+        }
+        ui.horizontal(|ui| {
+            crate::cards::settings_note(ui, NATIVE_SIGNIN_NOTE);
+            if crate::cards::ghost_pill(ui, "Settings") {
+                self.nav = Nav::Settings;
+            }
+        });
+    }
+
+    pub(super) fn ui_get_started(&mut self, ui: &mut egui::Ui) -> bool {
+        let grok_present = !self.cfg.native_engine() && grokhub_acp::find_grok().is_some();
         let installing = self.grok_install_rx.is_some();
-        let show_oauth = grokhub_core::should_show_get_started_now(
-            grok_present,
-            cabin_oauth,
-            self.cfg.get_started_done,
-            cli_connected,
-            self.official_cli_session,
-        );
-        let show_install = grokhub_core::should_show_cli_install_wait(
-            self.grok_install_wait,
-            !self.grok_install_err.is_empty(),
-        );
+        let (show_oauth, show_install) = if self.cfg.native_engine() {
+            (self.ui_wants_get_started(), false)
+        } else {
+            let cabin_oauth = self
+                .secrets
+                .oauth
+                .as_ref()
+                .is_some_and(|t| !t.access_token.trim().is_empty());
+            let show_oauth = grokhub_core::should_show_get_started_now(
+                grok_present,
+                cabin_oauth,
+                self.cfg.get_started_done,
+                grokhub_acp::grok_cli_key().is_some(),
+                self.official_cli_session,
+            );
+            let show_install = grokhub_core::should_show_cli_install_wait(
+                self.grok_install_wait,
+                !self.grok_install_err.is_empty(),
+            );
+            (show_oauth, show_install)
+        };
         if !show_oauth && !show_install {
             return false;
         }

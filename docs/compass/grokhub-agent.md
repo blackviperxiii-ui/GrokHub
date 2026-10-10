@@ -17,7 +17,7 @@
 - Ported code: keep the `// Portions derived from xai-org/grok-build ...` header and add a line to `crates/grokhub-agent/NOTICE`.
 ## What breaks it
 - Loosening a deny: perm rules are deny > ask > allow; hooks can deny or ask but never turn a gate deny or ask into allow; a hook timeout is no decision.
-- Reading the Grok CLI's credentials: Lab mode uses GrokHub's own sign-in (`NATIVE_NEEDS_CABIN_SIGNIN` in `crates/grokhub-app/src/app/native_engine.rs`).
+- Reading the Grok CLI's credentials: Lab mode uses GrokHub's own sign-in (`XAI_NEED_SIGNIN` in `crates/grokhub-core/src/xai_signin.rs`).
 ## What depends on it
 - grokhub-app: `crates/grokhub-app/src/app/native_engine.rs`, `crates/grokhub-app/src/app/native_sessions.rs`, `crates/grokhub-app/src/app/native_unattended.rs`, `crates/grokhub-app/src/native_mcp.rs`, `crates/grokhub-app/src/native_plugins.rs`, plus the harness and `ToolOutput` in the desktop MCP.
 ## Non-obvious

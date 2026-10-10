@@ -80,8 +80,10 @@ mod tests {
             .and_then(|s| s.split("fn probe_hub_health_body(").next())
             .expect("run_oauth_cli");
         assert!(
-            oauth.contains("write_cli_auth_if_needed"),
-            "grokhub --oauth must sign in the CLI: {oauth}"
+            oauth.contains("secrets::save(&s)")
+                && !oauth.contains("write_cli_auth_if_needed")
+                && !oauth.contains("grokhub_acp"),
+            "grokhub --oauth keeps the sign-in to GrokHub and never writes the CLI's login: {oauth}"
         );
         assert_eq!(parse_args(&args(&["grokhub", "-V"])), Launch::Version);
         assert_eq!(parse_args(&args(&["grokhub", "--version"])), Launch::Version);

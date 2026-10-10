@@ -200,7 +200,13 @@ impl Cabin {
             Ok((b, AuthKind::ApiKey)) => (Some(b), Credential::ApiKey),
             Err(_) => (None, Credential::None),
         };
-        let gb = grokhub_acp::find_grok().map(|bin| GrokBuildSource { bin, cwd: self.grok_cwd() });
+        // The native engine lists models from xAI alone; `grok models` feeds only the legacy CLI engine.
+        let gb = self
+            .cfg
+            .grok_build_engine
+            .then(grokhub_acp::find_grok)
+            .flatten()
+            .map(|bin| GrokBuildSource { bin, cwd: self.grok_cwd() });
         let named = self.router_named_models();
         let default_model = grokhub_agent::DEFAULT_MODEL.to_string();
         let pin = self.cfg.model.trim().to_string();

@@ -4,11 +4,6 @@ use super::*;
 
 
 pub(super) fn cabin_fast_llm(key: String, prompt: String) -> String {
-    let key = if key.trim().is_empty() {
-        grokhub_acp::grok_cli_key().unwrap_or_default()
-    } else {
-        key
-    };
     if !key.trim().is_empty() {
         let primary = grok_chat(
             &key,

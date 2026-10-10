@@ -150,54 +150,6 @@ pub fn refresh_tokens(refresh_token: &str) -> Result<XaiOAuthTokens, String> {
     parse_token_json(&v, grokhub_core::now_ms())
 }
 
-/// Refresh a `grok login` JWT (CLI client id, not cabin OAuth) and write it back.
-struct GrokLoginRefresh {
-    fail_at: Option<Instant>,
-    inflight: bool,
-    ready: Option<String>,
-}
-
-fn grok_login_refresh_state() -> &'static Mutex<GrokLoginRefresh> {
-    static C: OnceLock<Mutex<GrokLoginRefresh>> = OnceLock::new();
-    C.get_or_init(|| {
-        Mutex::new(GrokLoginRefresh {
-            fail_at: None,
-            inflight: false,
-            ready: None,
-        })
-    })
-}
-
-pub fn refresh_grok_login() -> Option<String> {
-    let mut held = grok_login_refresh_state().lock().ok()?;
-    if let Some(tok) = held.ready.take() {
-        return Some(tok);
-    }
-    if let Some(at) = held.fail_at {
-        if at.elapsed() < Duration::from_secs(30) {
-            return None;
-        }
-    }
-    if held.inflight {
-        return None;
-    }
-    held.inflight = true;
-    drop(held);
-    std::thread::spawn(|| {
-        let out = refresh_grok_login_now();
-        if let Ok(mut held) = grok_login_refresh_state().lock() {
-            held.inflight = false;
-            if out.is_some() {
-                held.ready = out;
-                held.fail_at = None;
-            } else {
-                held.fail_at = Some(Instant::now());
-            }
-        }
-    });
-    None
-}
-
 struct CabinOauthRefresh {
     fail_at: Option<Instant>,
     inflight: bool,
@@ -279,100 +231,6 @@ pub fn ensure_access_with_backoff(tokens: &XaiOAuthTokens) -> Option<XaiOAuthTok
             None
         }
     }
-}
-
-fn refresh_grok_login_now() -> Option<String> {
-    let path = grokhub_acp::grok_auth_path()?;
-    let mut raw = String::new();
-    std::fs::File::open(&path)
-        .ok()?
-        .take(TEXT_FILE_CAP as u64)
-        .read_to_string(&mut raw)
-        .ok()?;
-    if raw.is_empty() {
-        return None;
-    }
-    let mut v: Value = serde_json::from_str(&raw).ok()?;
-    let obj = v.as_object_mut()?;
-    let mut slot: Option<String> = None;
-    let mut refresh = String::new();
-    let mut client_id = String::new();
-    let mut best_exp = String::new();
-    for (k, rec) in obj.iter() {
-        let rt = rec
-            .get("refresh_token")
-            .and_then(|x| x.as_str())
-            .unwrap_or("")
-            .trim();
-        if rt.is_empty() {
-            continue;
-        }
-        let exp = rec
-            .get("expires_at")
-            .and_then(|x| x.as_str())
-            .unwrap_or("")
-            .to_string();
-        let take = slot.is_none() || exp > best_exp;
-        if take {
-            best_exp = exp;
-            refresh = rt.to_string();
-            client_id = rec
-                .get("oidc_client_id")
-                .and_then(|x| x.as_str())
-                .unwrap_or("")
-                .to_string();
-            if client_id.is_empty() {
-                if let Some((_, id)) = k.rsplit_once("::") {
-                    client_id = id.to_string();
-                }
-            }
-            slot = Some(k.clone());
-        }
-    }
-    let slot = slot?;
-    if client_id.is_empty() || refresh.is_empty() {
-        return None;
-    }
-    let d = discovery().ok()?;
-    let body = form(&[
-        ("grant_type", "refresh_token"),
-        ("client_id", &client_id),
-        ("refresh_token", &refresh),
-    ]);
-    let (ok, tok) = post_form(&d.token, &body).ok()?;
-    if !ok {
-        return None;
-    }
-    let access = tok.get("access_token")?.as_str()?.trim().to_string();
-    if access.is_empty() {
-        return None;
-    }
-    if let Some(rec) = v.get_mut(&slot).and_then(|x| x.as_object_mut()) {
-        rec.insert("key".into(), Value::String(access.clone()));
-        if let Some(rt) = tok.get("refresh_token").and_then(|x| x.as_str()) {
-            if !rt.trim().is_empty() {
-                rec.insert("refresh_token".into(), Value::String(rt.to_string()));
-            }
-        }
-    }
-    let out = serde_json::to_string_pretty(&v).ok()?;
-    // `auth.json` belongs to the Grok CLI and holds its refresh token. `fs::write` would
-    // create the temp — and then the renamed destination — 0644, permanently downgrading
-    // a credential file the cabin does not own.
-    let tmp = path.with_extension("json.tmp");
-    {
-        use std::io::Write;
-        let mut f = crate::config::create_private(&tmp).ok()?;
-        if f.write_all(out.as_bytes()).is_err() || f.sync_all().is_err() {
-            let _ = std::fs::remove_file(&tmp);
-            return None;
-        }
-    }
-    if std::fs::rename(&tmp, &path).is_err() {
-        let _ = std::fs::remove_file(&tmp);
-        return None;
-    }
-    Some(access)
 }
 
 pub fn ensure_access(tokens: &XaiOAuthTokens) -> Result<(String, XaiOAuthTokens, bool), String> {
@@ -673,34 +531,16 @@ mod tests {
     }
 
     #[test]
-    fn grok_login_refresh_does_not_hammer_the_ui_thread() {
-        let src = include_str!("oauth.rs");
-        let wrap = src
-            .split("pub fn refresh_grok_login(")
-            .nth(1)
-            .and_then(|s| s.split("fn refresh_grok_login_now(").next())
-            .expect("refresh_grok_login");
+    fn cabin_oauth_refresh_does_not_hammer_the_ui_thread() {
+        let src = include_str!("oauth.rs").replace("\r\n", "\n");
         assert!(
-            wrap.contains("elapsed") && wrap.contains("from_secs(30)"),
-            "a failed grok login refresh must not retry every chip/Imagine paint: {wrap}"
-        );
-        assert!(
-            wrap.contains("thread::spawn") && wrap.contains("refresh_grok_login_now"),
-            "grok login refresh HTTP must leave the UI thread: {wrap}"
-        );
-        let now = src
-            .split("fn refresh_grok_login_now(")
-            .nth(1)
-            .and_then(|s| s.split("pub fn ensure_access(").next())
-            .expect("refresh_grok_login_now");
-        assert!(
-            now.contains("TEXT_FILE_CAP") && now.contains(".take(") && !now.contains("read_to_string(&path)"),
-            "grok login refresh must not slurp a huge auth.json: {now}"
+            !src.contains(concat!("grok", "_auth_path")) && !src.contains(concat!("oidc", "_client_id")),
+            "GrokHub never reads or refreshes the Grok CLI login"
         );
         let cabin = src
             .split("pub fn refresh_cabin_oauth(")
             .nth(1)
-            .and_then(|s| s.split("fn refresh_grok_login_now(").next())
+            .and_then(|s| s.split("pub fn ensure_access_with_backoff(").next())
             .expect("refresh_cabin_oauth");
         assert!(
             cabin.contains("thread::spawn") && cabin.contains("ensure_access"),
