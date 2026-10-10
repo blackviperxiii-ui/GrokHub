@@ -603,3 +603,55 @@ fn a_cli_era_chat_moves_to_the_native_engine_with_a_recap_once() {
     assert_eq!(sent[1].body.matches("Earlier in this chat").count(), 1, "{}", sent[1].body);
     assert_eq!(cabin.threads.last().unwrap().grok_session.as_deref(), Some(sid.as_str()));
 }
+
+#[test]
+fn a_failed_first_native_send_keeps_the_recap_for_the_retry() {
+    let sb = Sandbox::new("native-adopt-retry");
+    let server = FakeXai::start();
+    set_responses_url_for_test(Some(&format!("{}/v1/responses", server.base)));
+    sb.write_signin(&format!(
+        r#"{{"accessToken":"test-access-token","refreshToken":"test-refresh-token","expiresAt":{},"connectedAt":1}}"#,
+        future_ms()
+    ));
+    let mut cabin = sb.cabin();
+    let turns: Vec<(String, String)> = [
+        ("user", "plan the harbor walk"),
+        ("assistant", "Start at the north pier."),
+        ("user", "what about lunch"),
+    ]
+    .iter()
+    .map(|(r, t)| (r.to_string(), t.to_string()))
+    .collect();
+    // A chat already adopted from the CLI days, its recap not yet sent.
+    let cwd = cabin.native_workspace();
+    {
+        let thread = cabin.threads.last_mut().unwrap();
+        thread.messages = Arc::new(turns.clone());
+        thread.grok_session = Some("cli-sess-8".into());
+        thread.native = false;
+        assert!(threads::adopt_native(thread));
+        thread.grok_session = Some("native-retry-8".into());
+        thread.grok_cwd = Some(cwd.display().to_string());
+    }
+    cabin.messages = Arc::new(turns);
+
+    // The engine for this session is gone, so the first send fails. No live
+    // engine runs first: its shutdown would race the retry's config.
+    cabin.acp = Some(crate::engine_handle::AcpHandle::dead(cwd, "native-retry-8".into()));
+    assert!(cabin.kick_native_turn("what about lunch", None, "what about lunch", "Lab chat"));
+    assert!(!cabin.running);
+    assert!(cabin.threads.last().unwrap().native_carry, "a failed send must keep the recap");
+    assert!(server.responses().is_empty());
+
+    cabin.acp = None;
+    assert!(cabin.kick_native_turn("what about lunch", None, "what about lunch", "Lab chat"));
+    wait_done(&cabin);
+    assert!(!cabin.threads.last().unwrap().native_carry);
+    let sent = server.responses();
+    assert_eq!(sent.len(), 1, "{sent:?}");
+    let body = &sent[0].body;
+    assert!(body.contains("Earlier in this chat (before GrokHub ran it natively):"), "{body}");
+    assert!(body.contains("User: plan the harbor walk"), "{body}");
+    assert!(body.contains("You: Start at the north pier."), "{body}");
+    assert_eq!(body.matches("what about lunch").count(), 1, "{body}");
+}
