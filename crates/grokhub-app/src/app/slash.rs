@@ -5,6 +5,9 @@ use super::*;
 /// Workflows ran inside the Grok Build CLI, which GrokHub no longer uses.
 const WORKFLOWS_GONE: &str = "Workflows were a Grok Build CLI feature and are not in GrokHub";
 
+/// `--worktree` was a Grok Build CLI spawn flag; native turns never read it.
+const WORKTREE_GONE: &str = "Worktree was a Grok Build CLI feature and is not in GrokHub";
+
 /// Memory lines for `/recall` when `memory_backend` is `amr`. The cabin
 /// opens the store (and runs the one-time import) before this thread starts.
 /// Private notes (`nodes/<id>.sealed`) open with the learned-tier key; when
@@ -222,16 +225,7 @@ impl Cabin {
             Slash::Workflow(_) | Slash::WorkflowCtl { .. } | Slash::WorkflowUsage | Slash::GrokWorkflows => {
                 self.status = WORKFLOWS_GONE.into();
             }
-            Slash::Worktree => {
-                if let Some(t) = self.threads.get_mut(self.thread_idx) {
-                    t.grok_worktree = !t.grok_worktree;
-                    self.status = if t.grok_worktree {
-                        "Next chat uses --worktree".into()
-                    } else {
-                        "Worktree off".into()
-                    };
-                }
-            }
+            Slash::Worktree => self.status = WORKTREE_GONE.into(),
             Slash::Btw => {
                 self.set_session_mode(SessionMode::Ask);
                 self.status = if self.running {
@@ -306,14 +300,8 @@ impl Cabin {
                     self.halt_in_flight();
                     self.finish_hub_dispatch("Undid in-flight reply", false);
                     self.status = "Undid in-flight reply".into();
-                } else if let Some(i) = self.messages.iter().rposition(|m| m.0 == "assistant") {
-                    self.live_mut().remove(i);
-                    self.followup_step = 0;
-                    self.active_skill_follow = None;
-                    self.stamp_current_access();
-                    self.persist();
-                    self.send_grok_slash("/rewind");
-                    self.status = "Rewinding Grok conversation…".into();
+                } else if self.messages.iter().any(|m| m.0 == "assistant") {
+                    self.status = "N/A on native threads: the session is append-only.".into();
                 } else {
                     self.status = "Nothing to undo".into();
                 }

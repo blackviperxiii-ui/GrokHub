@@ -4740,12 +4740,8 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             .and_then(|s| s.split("Slash::Retry =>").next())
             .expect("Undo");
         assert!(
-            undo.contains("followup_step = 0") && undo.contains("active_skill_follow = None"),
-            "/undo must reset followup budget like /clear: {undo}"
-        );
-        assert!(
-            undo.contains("stamp_current_access") || undo.contains("accessed_ms"),
-            "/undo must bump accessed_ms or /sync LWW can restore the undone turn: {undo}"
+            undo.contains("append-only") && !undo.contains("send_grok_slash"),
+            "/undo on native must not drop the bubble or send /rewind as a turn: {undo}"
         );
         let forget = src
             .split("Slash::Forget")
@@ -10101,10 +10097,7 @@ fn scratch_btw_worktree_and_plan() {
     assert!(cabin.scratch());
     assert!(cabin.composer_want_focus);
     cabin.run_slash_line("/worktree");
-    assert_eq!(cabin.status, "Next chat uses --worktree");
-    assert!(cabin.threads[cabin.thread_idx].grok_worktree);
-    cabin.run_slash_line("/worktree");
-    assert_eq!(cabin.status, "Worktree off");
+    assert_eq!(cabin.status, "Worktree was a Grok Build CLI feature and is not in GrokHub");
     assert!(!cabin.threads[cabin.thread_idx].grok_worktree);
     cabin.threads[cabin.thread_idx].grok_session = Some("sess-harbor".into());
     let (count, idx) = (cabin.threads.len(), cabin.thread_idx);
@@ -10112,7 +10105,7 @@ fn scratch_btw_worktree_and_plan() {
     assert_eq!(cabin.threads.len(), count, "/fork no longer opens a chat");
     assert_eq!(cabin.thread_idx, idx);
     assert!(!cabin.threads[idx].grok_fork);
-    assert_eq!(cabin.status, "Worktree off", "/fork leaves the status alone");
+    assert_eq!(cabin.status, "Worktree was a Grok Build CLI feature and is not in GrokHub", "/fork leaves the status alone");
     cabin.threads[cabin.thread_idx].plan_body = "harbor steps".into();
     cabin.run_slash_line("/view-plan");
     assert!(cabin.plan_open);
@@ -13480,17 +13473,8 @@ fn worktree_stays_off_a_send() {
         .threads
         .get(cabin.thread_idx)
         .expect("worktree chat");
-    assert!(worked.grok_worktree);
-    assert_eq!(cabin.status, "Next chat uses --worktree");
-    assert!(!cabin.running);
-
-    cabin.run_slash(super::Slash::Worktree);
-    let off = cabin
-        .threads
-        .get(cabin.thread_idx)
-        .expect("worktree chat");
-    assert!(!off.grok_worktree);
-    assert_eq!(cabin.status, "Worktree off");
+    assert!(!worked.grok_worktree);
+    assert_eq!(cabin.status, "Worktree was a Grok Build CLI feature and is not in GrokHub");
     assert!(!cabin.running);
 }
 
