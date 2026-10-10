@@ -3,7 +3,8 @@
 //! tools, [`Drive::check`] names what is left and the loop goes on. An item
 //! marked completed this run counts only once a real tool result exists.
 //! A model that stops again and again without progress ends with the open
-//! items named as blocked.
+//! items named as blocked. A checklist left open by an earlier run drives
+//! nothing until this run changes it, so it can't take over an unrelated ask.
 
 use crate::session_tools::TodoItem;
 
@@ -29,6 +30,8 @@ pub enum Verdict {
 }
 
 pub struct Drive {
+    /// The checklist as the run found it.
+    start: Vec<TodoItem>,
     /// Items (id and text) completed before this run, so a "continue"
     /// keeps earlier work but a replaced list reusing an id does not.
     done_at_start: Vec<(String, String)>,
@@ -40,6 +43,7 @@ pub struct Drive {
 impl Drive {
     pub fn new(start: &[TodoItem]) -> Self {
         Self {
+            start: start.to_vec(),
             done_at_start: start.iter().filter(|t| t.status == "completed").map(|t| (t.id.clone(), t.content.clone())).collect(),
             last_left: Vec::new(),
             evidence_at_push: 0,
@@ -50,6 +54,9 @@ impl Drive {
     /// `now` is the checklist as the model left it; `evidence` counts tool
     /// calls (not [`is_session_tool`]) that ran without failing this run.
     pub fn check(&mut self, now: &[TodoItem], evidence: usize) -> Verdict {
+        if now == self.start.as_slice() {
+            return Verdict::End;
+        }
         let open: Vec<&TodoItem> = now.iter().filter(|t| matches!(t.status.as_str(), "pending" | "in_progress")).collect();
         let unproven: Vec<&TodoItem> = if evidence == 0 {
             now.iter()
@@ -141,6 +148,19 @@ mod tests {
         assert_eq!(
             Drive::new(&[item("old", "completed")]).check(&[reused], 0),
             Verdict::Push("Marked completed without any check this run: \"firewall\". Run a check that shows each one before you finish.".into())
+        );
+    }
+
+    #[test]
+    fn a_checklist_left_open_by_an_earlier_run_does_not_drive_a_new_ask() {
+        let earlier = [item("a", "completed"), item("b", "pending")];
+        // The new run never touches the list: it ends, with no evidence needed.
+        assert_eq!(Drive::new(&earlier).check(&earlier, 0), Verdict::End);
+        // Once the run works the list, its open items drive it again.
+        let worked = [item("a", "completed"), item("b", "in_progress")];
+        assert_eq!(
+            Drive::new(&earlier).check(&worked, 1),
+            Verdict::Push("Not done yet: \"check b\". Continue with the next open item. Mark an item completed only after a tool result shows it. If one is truly blocked (a hard approval was refused, hardware or access is missing, or every approach failed), mark it cancelled and say why.".into())
         );
     }
 
