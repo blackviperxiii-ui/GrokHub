@@ -1,9 +1,9 @@
-//! Headless `grokhub --mcp-self` stdio server (Spike-5c). Grok Build sees it
+//! Headless `grokhub --mcp-self` stdio server (Spike-5c). An MCP client sees it
 //! as `grokhub-self`: Grok's own tools for its skills, connections, and
 //! automations. Stdout is JSON-RPC only. Logs go to stderr.
 //!
 //! Path A: every `tools/call` asks `harness::decide` first, on every OS and
-//! under Always too. Soft calls run (Grok Build's own pill already asked).
+//! under Always too. Soft calls run (the client already asked).
 //! Delete and credentials park a hard card through the same park files as
 //! `--mcp-desktop` and wait (TTL, halt, or a closed cabin ⇒ Deny). A target
 //! under harness policy, consent, egress, or Access is refused with a finding

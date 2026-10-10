@@ -602,22 +602,11 @@ mod tests {
                 .unwrap()
                 .success());
         }
-        let plan = grokhub_core::combined_update_cmds_in(
-            Some(&root),
-            grokhub_core::UpdatePending::Cabin,
-            receipt_channel(),
-        )
-        .expect("beta plan");
-        assert!(
-            plan.cmds[0].ends_with(" pull --ff-only origin beta"),
-            "{:?}",
-            plan.cmds
-        );
-        assert!(
-            !plan.cmds.iter().any(|c| c.contains("origin main")),
-            "{:?}",
-            plan.cmds
-        );
+        let plan =
+            grokhub_core::update_cmds_for_host_in(Some(&root), cfg!(windows), receipt_channel())
+                .expect("beta plan");
+        assert!(plan[0].ends_with(" pull --ff-only origin beta"), "{plan:?}");
+        assert!(!plan.iter().any(|c| c.contains("origin main")), "{plan:?}");
         fs::write(cfg.join(CHANNEL_RECEIPT), Channel::Stable.receipt()).unwrap();
         assert_eq!(fs::read_to_string(cfg.join("channel")).unwrap(), "stable\n");
         assert_eq!(installed_channel(), Channel::Stable);
@@ -701,24 +690,15 @@ mod tests {
         git(&["push", "-u", "origin", "main"]);
         remember_source(&root);
         let mut cmds = grokhub_core::update_cmds(&root).expect("cmds");
+        assert!(!cmds.iter().any(|c| c.contains("grok update")), "{cmds:?}");
         #[cfg(windows)]
         {
-            assert!(
-                cmds.last().is_some_and(|c| c.contains("grok update --alpha")),
-                "{cmds:?}"
-            );
             fs::write(
                 root.join("scripts/install-windows.ps1"),
                 "Set-Content -Path (Join-Path $PSScriptRoot '..\\overlay.ok') -Value overlay-ok\n",
             )
             .unwrap();
         }
-        #[cfg(unix)]
-        assert_eq!(
-            cmds.last().map(String::as_str),
-            Some(grokhub_core::unix_grok_update_cmd())
-        );
-        cmds.pop();
         cmds.retain(|c| !c.contains("remote set-url") && !c.contains("remote add"));
         let out = run_update_cmds(&cmds).expect("update");
         assert!(out.contains("exit 0"), "{out}");

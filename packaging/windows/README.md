@@ -15,11 +15,7 @@ Per-user install (no admin): `%LOCALAPPDATA%\Programs\GrokHub`
 pwsh -File scripts/make-windows-release.ps1
 ```
 
-Stages `target/release/grokhub.exe` + `grokhub-hub.exe`, downloads Grok Build CLI **alpha** into the stage, then runs ISCC. Missing `grok.exe` fails the pack. Setup still runs `install-grok-alpha.ps1` (`GROK_CHANNEL=alpha` / `https://x.ai/cli/install.ps1`) so grok is not assumed on PATH. First cabin launch does the same if grok is missing or unusable. Offline:
-
-```powershell
-pwsh -File scripts/make-windows-release.ps1 -SkipGrok
-```
+Stages `target/release/grokhub.exe` + `grokhub-hub.exe`, then runs ISCC. Setup installs only the cabin and hub. It does not install the Grok Build CLI or change PATH for it.
 
 ## Outputs (`dist-release/`)
 
@@ -28,9 +24,9 @@ pwsh -File scripts/make-windows-release.ps1 -SkipGrok
 | Inno installer | `GrokHub-Setup-<version>.exe` |
 | Portable zip | `grokhub-windows-v<version>.zip` |
 
-Missing `grokhub.exe` / `grokhub-hub.exe` is fatal. Grok download failure is fatal unless `-SkipGrok`.
+Missing `grokhub.exe` / `grokhub-hub.exe` is fatal.
 
-In-app **Settings → Update**, `/update`, and `grokhub --update` run only what is newer. When the cabin is newer and there is no source clone, they download that zip from the latest GitHub Release into `%LOCALAPPDATA%\Programs\GrokHub`. A source clone on `main` overlays with `scripts/install-windows.ps1` instead. When the CLI alpha is newer they run `grok update --alpha` (first, when both are newer). A current alpha is left alone.
+In-app **Settings → Update**, `/update`, and `grokhub --update` update only the cabin. When the cabin is newer and there is no source clone, they download that zip from the latest GitHub Release into `%LOCALAPPDATA%\Programs\GrokHub`. A source clone on `main` overlays with `scripts/install-windows.ps1` instead.
 
 ## Lock test (no Windows build)
 

@@ -1,5 +1,5 @@
-//! Route unattended cabin work onto the native engine unless Settings → Labs picks the legacy CLI.
-//! The CLI path stays in the existing runners. This file only changes the transport.
+//! Route unattended cabin work (scheduled, night, `/send`, `/bg`) onto the native
+//! engine. Ask fails closed here because nobody can answer a card.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;

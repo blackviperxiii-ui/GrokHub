@@ -42,7 +42,7 @@ use grokhub_core::{
     chat_attach_status, chat_bearer, chat_run_action, chat_run_hint,
     chat_run_phase, chat_send_kind, chat_shows_thinking, chat_stream_is_visible,
     chip_scan, chip_suggest_prompt, clamp_bubble_outer, clamp_row_width,
-    clear_pending_after_complete, cluster_gap, combined_update_cmds_in,
+    clear_pending_after_complete, cluster_gap,
     compose_imagine_prompt, composer_enter,
     composer_go, composer_go_tip, computer_cmd_line, context_fingerprint, context_percent,
     create_folder, create_project, daily_units_blocked, dedicated_imagine_model,
@@ -82,7 +82,7 @@ use grokhub_core::{
     parse_fast_topics, parse_hostname_i, parse_llm_chips,
     parse_local_clock, parse_slash, parse_suggest_lines, parse_suggest_skill_patches,
     parse_theme, parse_trajectory_jsonl, partition_suggestions, patch_skill,
-    pending_for_manual_update, perm_key,
+    perm_key,
     palette_file_shown, palette_forget_stale_walk, palette_row_action,
     palette_search_is_saved, persist_user_turn, pick_fresh_seed, pick_greeting_against,
     pick_lan_ipv4, plan_room,
@@ -114,7 +114,7 @@ use grokhub_core::{
     thought_shows_acts, thought_shows_label, thread_goal_prompt, thread_host_receipts,
     thread_host_receipts_from, toggle_pin, token_delta, top_habit_labels,
     trajectory_jsonl_line, transcribe_route, trim_result_bodies_in_place, uid, unified_diff_cite,
-    unknown_cabin_slash, update_check_due, update_chip_label, update_pending, update_wipes_config,
+    unknown_cabin_slash, update_check_due, update_chip_label, update_cmds_for_host_in, update_wipes_config,
     upsert_assistant_turn, upsert_bound, usage_line, user_pref_facts,
     verify_ok_after_user_turn, views_up_to_last_user, visible_chat_refs,
     visible_tree, visible_turn_count, visible_turn_count_from,
@@ -2830,7 +2830,6 @@ impl Cabin {
                 .cabin_update_available()
                 .then(|| self.cabin_latest.clone())
                 .flatten(),
-            cli_update: None,
             failed,
             checked: checks.len() + self.automations.len() + servers,
             last_dream: grokhub_core::amr::latest_dream(&config::config_dir().join("amr")),
@@ -3749,7 +3748,11 @@ impl Cabin {
     }
 
     fn update_pending_now(&self) -> UpdatePending {
-        update_pending(false, self.cabin_update_available())
+        if self.cabin_update_available() {
+            UpdatePending::Cabin
+        } else {
+            UpdatePending::None
+        }
     }
 
     fn open_update_overlay(&mut self) {
@@ -3814,59 +3817,36 @@ impl Cabin {
         self.settings_sec = SettingsSec::Labs;
     }
 
-    /// One control: CLI alpha first when it is newer, then the cabin when it is newer.
-    /// A Settings / `/update` click with nothing pending still overlays both.
-    fn queue_combined_update(&mut self) {
+    /// One control. A Settings / `/update` click with nothing pending still overlays.
+    fn queue_cabin_update(&mut self) {
         self.open_update_overlay();
-        let pending = pending_for_manual_update(self.update_pending_now());
         let src = resolve_source(&self.cfg.source_dir);
         let channel = crate::update::installed_channel();
-        if pending != UpdatePending::Cli
-            && src
-                .as_ref()
-                .is_some_and(|p| grokhub_core::overlay_clone_usable_in(p, channel))
+        if let Some(src) = src
+            .as_ref()
+            .filter(|p| grokhub_core::overlay_clone_usable_in(p, channel))
         {
-            if let Some(src) = src.as_ref() {
-                self.cfg.source_dir = src.display().to_string();
-                remember_source(src);
-                self.persist_cfg();
-            }
+            self.cfg.source_dir = src.display().to_string();
+            remember_source(src);
+            self.persist_cfg();
         }
-        let plan = match combined_update_cmds_in(src.as_deref(), pending, channel) {
-            Ok(plan) => plan,
-            Err(e) if pending == UpdatePending::Both => {
-                match combined_update_cmds_in(src.as_deref(), UpdatePending::Cli, channel) {
-                    Ok(mut plan) => {
-                        plan.cabin_skipped = Some(e);
-                        plan
-                    }
-                    Err(cli_e) => {
-                        self.open_update_overlay();
-                        self.status = cli_e;
-                        return;
-                    }
-                }
-            }
+        let cmds = match update_cmds_for_host_in(src.as_deref(), cfg!(windows), channel) {
+            Ok(cmds) => cmds,
             Err(e) => {
-                self.open_update_overlay();
                 self.status = e;
                 return;
             }
         };
-        if update_wipes_config(&plan.cmds) {
-            self.open_update_overlay();
+        if update_wipes_config(&cmds) {
             self.status = "refusing an update that would wipe config".into();
             return;
         }
         // Windows: a stray beta receipt updates as stable and says why.
-        self.update_cabin_note = match (plan.cabin_skipped, crate::update::stray_beta_receipt_note()) {
-            (Some(skip), Some(note)) => Some(format!("{note} {skip}")),
-            (skip, note) => skip.or_else(|| note.map(String::from)),
-        };
-        self.start_overlay_update(plan.cmds);
+        self.update_cabin_note = crate::update::stray_beta_receipt_note().map(String::from);
+        self.start_overlay_update(cmds);
     }
 
-    fn note_combined_update_landed(&mut self) {
+    fn note_cabin_update_landed(&mut self) {
         if self.last_host.iter().any(|c| cabin_overlay_step(c)) {
             self.cabin_overlay_done = true;
         }
@@ -4006,7 +3986,7 @@ impl Cabin {
     }
 
     fn queue_update(&mut self) {
-        self.queue_combined_update();
+        self.queue_cabin_update();
     }
 
     fn restart_after_update(&mut self, ctx: &egui::Context) {
@@ -4793,7 +4773,7 @@ impl Cabin {
 
 impl eframe::App for Cabin {
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
-        // No background `grok -p` outlives the cabin.
+        // No background run outlives the cabin.
         self.kill_bg_runs();
         // The close frame spawned a persist. Wait for it: the process exits right after this,
         // and two writers of app.json share one temp file.

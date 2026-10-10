@@ -1,5 +1,5 @@
 # Overlay /update on Windows: build the cabin and copy into the per-user prefix.
-# Does not run Linux install.sh. Does not force GROK_CHANNEL on Linux.
+# Does not run Linux install.sh.
 param(
   [string]$Prefix = ""
 )

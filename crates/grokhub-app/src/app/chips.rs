@@ -590,7 +590,7 @@ impl Cabin {
         });
     }
 
-    /// Run start. `kick_model` calls this after the prompt or `grok -p` spawn succeeds.
+    /// Run start. `kick_native_turn` calls this after the prompt succeeds.
     /// A Doing card is filed only when the ask is a task. Ordinary chat does not.
     /// Writes `workboard.json` through `flush_board` when the card changes.
     pub(super) fn note_inflight_card(&mut self, ask: &str, thread_label: &str) {
