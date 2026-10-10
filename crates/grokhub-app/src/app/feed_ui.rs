@@ -954,7 +954,7 @@ impl Cabin {
             return;
         }
         self.ideas_filled = true;
-        let (_, inputs) = self.idea_request();
+        let inputs = self.idea_inputs();
         let ground = grokhub_core::IdeaGround {
             asks: &inputs.asks,
             lasting: &inputs.lasting,
@@ -1000,6 +1000,16 @@ impl Cabin {
     /// The prompt plus what the reply must not copy (their own lines) or repeat,
     /// and what an idea has to stand on.
     pub(super) fn idea_request(&self) -> (String, IdeaInputs) {
+        self.idea_parts(true)
+    }
+
+    /// What an idea is checked against, without the prompt (which reads the
+    /// local clock through `date` on Linux).
+    pub(super) fn idea_inputs(&self) -> IdeaInputs {
+        self.idea_parts(false).1
+    }
+
+    fn idea_parts(&self, with_prompt: bool) -> (String, IdeaInputs) {
         let user_md = crate::config::read_memory("USER.md");
         let memory_md = crate::config::read_memory("MEMORY.md");
         // Enough history to tell a routine from a one-time job.
@@ -1028,28 +1038,32 @@ impl Cabin {
             .collect();
         // Newest first, what they said no to ahead of the rest: the prompt shows only 12.
         let rejected = grokhub_core::turned_down_titles(&self.cfg.feed_pulse, &existing);
-        let clock = Self::local_clock();
-        let weekday = match clock.weekday {
-            0 => "Sunday",
-            1 => "Monday",
-            2 => "Tuesday",
-            3 => "Wednesday",
-            4 => "Thursday",
-            5 => "Friday",
-            _ => "Saturday",
+        let prompt = if !with_prompt {
+            String::new()
+        } else {
+            let clock = Self::local_clock();
+            let weekday = match clock.weekday {
+                0 => "Sunday",
+                1 => "Monday",
+                2 => "Tuesday",
+                3 => "Wednesday",
+                4 => "Thursday",
+                5 => "Friday",
+                _ => "Saturday",
+            };
+            grokhub_core::idea_prompt(&grokhub_core::IdeaContext {
+                user_md: &user_md,
+                memory_md: &memory_md,
+                recent_asks: &asks,
+                open_cards: &open_cards,
+                automations: &automations,
+                skills: &skills,
+                existing: &existing,
+                rejected: &rejected,
+                hour: clock.hour as u8,
+                weekday,
+            })
         };
-        let prompt = grokhub_core::idea_prompt(&grokhub_core::IdeaContext {
-            user_md: &user_md,
-            memory_md: &memory_md,
-            recent_asks: &asks,
-            open_cards: &open_cards,
-            automations: &automations,
-            skills: &skills,
-            existing: &existing,
-            rejected: &rejected,
-            hour: clock.hour as u8,
-            weekday,
-        });
         let memory_lines: Vec<String> = user_md
             .lines()
             .chain(memory_md.lines())

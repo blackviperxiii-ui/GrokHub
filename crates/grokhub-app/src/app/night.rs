@@ -956,7 +956,7 @@ impl Cabin {
     /// A skill or automation from the review needs the same reason an idea does:
     /// work they repeat, or lasting context. One per topic.
     pub(super) fn keep_reasoned_suggestions(&self, items: &mut Vec<grokhub_core::LearnedSuggestion>) {
-        let (_, inputs) = self.idea_request();
+        let inputs = self.idea_inputs();
         let ground = grokhub_core::IdeaGround {
             asks: &inputs.asks,
             lasting: &inputs.lasting,

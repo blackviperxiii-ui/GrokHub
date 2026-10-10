@@ -37,6 +37,7 @@ mod imagine_auth;
 mod secrets;
 mod self_mcp;
 mod skills;
+mod startup;
 mod threads;
 mod tray;
 mod window;
@@ -59,6 +60,7 @@ use grokhub_core::{
 use std::env;
 
 fn main() {
+    startup::begin();
     // `sudo`'s helper (card 34): answer it and leave before anything else starts.
     let args: Vec<String> = env::args().collect();
     if let Some(socket) = cli::askpass_socket(&args) {
@@ -353,6 +355,8 @@ fn run_cabin(hidden: bool) -> eframe::Result<()> {
         env::var_os("WAYLAND_DISPLAY").is_some() || env::var_os("WAYLAND_SOCKET").is_some(),
     );
     let geom = window::clamp_geom(config::load().window);
+    startup::mark("startup:config");
+    Cabin::warm_startup_caches();
     let mut viewport = egui::ViewportBuilder::default()
         .with_inner_size(window::launch_size(&geom))
         .with_min_inner_size([window::WIN_MIN_W, window::WIN_MIN_H])
@@ -383,8 +387,12 @@ fn run_cabin(hidden: bool) -> eframe::Result<()> {
             "GrokHub",
             opts,
             Box::new(move |cc| {
+                startup::mark("startup:window");
                 crate::theme::install_fonts(&cc.egui_ctx);
-                Ok(Box::new(Cabin::new(hidden)))
+                startup::mark("startup:fonts");
+                let cabin = Cabin::new(hidden);
+                startup::mark("startup:cabin");
+                Ok(Box::new(cabin))
             }),
         )
     }
@@ -414,8 +422,12 @@ fn run_cabin_with_fx(hidden: bool, viewport: egui::ViewportBuilder) -> eframe::R
                     };
                     crate::fx::install(state);
                 }
+                startup::mark("startup:window");
                 crate::theme::install_fonts(&cc.egui_ctx);
-                Ok(Box::new(Cabin::new(hidden)))
+                startup::mark("startup:fonts");
+                let cabin = Cabin::new(hidden);
+                startup::mark("startup:cabin");
+                Ok(Box::new(cabin))
             }),
         );
         match result {
