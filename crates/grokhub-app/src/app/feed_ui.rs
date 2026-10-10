@@ -654,7 +654,7 @@ impl Cabin {
         if !self.digest_wants_lookup || self.digest_busy || self.digest_pending.is_some() {
             return;
         }
-        if self.cfg.native_engine {
+        if self.cfg.native_engine() {
             self.spawn_native_digest();
             return;
         }
@@ -699,7 +699,7 @@ impl Cabin {
             Ok(Err(err)) => {
                 self.digest_busy = false;
                 self.digest_pending = Some("NONE".into());
-                if self.cfg.native_engine && !err.is_empty() {
+                if self.cfg.native_engine() && !err.is_empty() {
                     self.status = err;
                 }
             }
@@ -1004,7 +1004,7 @@ impl Cabin {
     /// than a handful of generated ideas and the last ask is hours old, never in
     /// quiet hours or over the token budget. `force` is the Suggest ideas button.
     pub(super) fn maybe_suggest_ideas(&mut self, force: bool) {
-        if self.ideas_rx.is_some() || (!self.llm_ready() && !self.cfg.native_engine) {
+        if self.ideas_rx.is_some() || (!self.llm_ready() && !self.cfg.native_engine()) {
             return;
         }
         let now = now_ms();
@@ -1025,7 +1025,7 @@ impl Cabin {
         self.persist_cfg();
         let (tx, rx) = mpsc::channel();
         self.ideas_rx = Some((rx, inputs));
-        if self.cfg.native_engine {
+        if self.cfg.native_engine() {
             self.spawn_native_ideas(prompt, tx);
             return;
         }

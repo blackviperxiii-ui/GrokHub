@@ -22,7 +22,10 @@ use crate::{
     AuthKind, CancelToken, EngineParts, HaltCheck, ModelClient, NativeEngine, SteerQueue, Usage,
 };
 
-pub const SUITE_ITEMS: [&str; 7] = [
+#[cfg(unix)]
+mod scan;
+
+pub const SUITE_ITEMS: [&str; 8] = [
     "xvfb-desktop",
     "repo-bugfix",
     "ask-refusal",
@@ -30,11 +33,14 @@ pub const SUITE_ITEMS: [&str; 7] = [
     "mcp-tool",
     "compaction",
     "imagine",
+    "system-scan",
 ];
 
 const SKIP_XVFB: &str = "skipped: no Xvfb";
 const NO_FAKE_ACP: &str = "not verified: fake_acp binary not found";
 const NO_FAKE_MCP: &str = "not verified: fake_mcp binary not found";
+/// The completion drive and the findings card live in the native engine only.
+const NATIVE_ONLY: &str = "not verified: native engine only";
 const IMAGINE_PROMPT: &str = "a red square";
 const LIVE_KEY: &str = "GROKHUB_EVAL_API_KEY";
 const ERR_NO_KEY: &str = "refusing --live: GROKHUB_EVAL_API_KEY is not set";
@@ -191,6 +197,8 @@ pub fn run_suite(opts: &Opts) -> Vec<ItemResult> {
     items.push(measure("imagine", "cli", || {
         imagine_cli(fake_acp.as_deref())
     }));
+    items.push(measure("system-scan", "native", system_scan_native));
+    items.push(measure("system-scan", "cli", || (NATIVE_ONLY, 0)));
     cleanup_sessions();
     if let Some(dir) = cfg {
         let _ = std::fs::remove_dir_all(dir);
@@ -364,6 +372,7 @@ fn success_of(status: &str) -> bool {
             | "scripted reply"
             | "scripted tool"
             | "probe ok"
+            | "covered"
     )
 }
 
@@ -423,6 +432,14 @@ fn gap_lines(items: &[ItemResult]) -> Vec<String> {
         }
     }
     lines
+}
+
+#[cfg(unix)]
+use scan::system_scan_native;
+
+#[cfg(not(unix))]
+fn system_scan_native() -> (&'static str, u32) {
+    ("skipped: the fake host needs a Unix shell", 0)
 }
 
 fn desktop_item() -> (&'static str, u32) {
@@ -1695,6 +1712,15 @@ mod tests {
         );
         assert!(report.contains("| compaction | native | yes |"), "{report}");
         assert!(report.contains("| mcp-tool | native | yes |"), "{report}");
+        if cfg!(unix) {
+            assert!(report.contains("| system-scan | native | yes | 6 |"), "{report}");
+            assert!(report.contains("- system-scan: cli not verified: native engine only\n"), "{report}");
+        } else {
+            assert!(
+                report.contains("- system-scan: native skipped: the fake host needs a Unix shell; cli not verified: native engine only\n"),
+                "{report}"
+            );
+        }
         if report.contains(SKIP_XVFB) {
             assert!(report.contains("- xvfb-desktop: skipped: no Xvfb\n"));
         }

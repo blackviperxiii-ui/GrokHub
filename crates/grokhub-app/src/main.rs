@@ -58,13 +58,18 @@ use grokhub_core::{
 use std::env;
 
 fn main() {
+    // `sudo`'s helper (card 34): answer it and leave before anything else starts.
+    let args: Vec<String> = env::args().collect();
+    if let Some(socket) = cli::askpass_socket(&args) {
+        std::process::exit(grokhub_agent::sudo_pass::client(socket));
+    }
     grokhub_acp::silence_windows_hard_errors();
     // Spike-4b: the learned-tier key lives in the OS keyring (asked lazily, never at start).
     grokhub_agent::harness::use_os_keyring();
     grokhub_agent::route::providers::use_os_vault();
     #[cfg(windows)]
     ensure_windows_home();
-    let launch = parse_args(&env::args().collect::<Vec<_>>());
+    let launch = parse_args(&args);
     match launch {
         Launch::Cabin | Launch::Agent | Launch::McpDesktop | Launch::McpCua | Launch::McpSelf => {}
         Launch::Hub => attach_cli_console(true),
@@ -137,9 +142,6 @@ fn run_oauth_cli() {
                     if let Err(e) = secrets::save(&s) {
                         eprintln!("{e}");
                         std::process::exit(1);
-                    }
-                    if let Err(e) = grokhub_acp::write_cli_auth_if_needed(&tokens) {
-                        eprintln!("grok auth.json: {e}");
                     }
                     let who = tokens
                         .name
@@ -371,6 +373,10 @@ fn run_cabin(hidden: bool) -> eframe::Result<()> {
     #[cfg(windows)]
     crate::win_native::set_app_user_model_id();
     tray::pin_session_bus();
+    // `sudo` in agent commands asks once per session through the OS dialog.
+    if let Ok(exe) = env::current_exe() {
+        let _ = grokhub_agent::sudo_pass::install(exe);
+    }
     tray::force_x11_for_close_to_tray(
         env::var_os("DISPLAY").is_some(),
         env::var_os("WAYLAND_DISPLAY").is_some() || env::var_os("WAYLAND_SOCKET").is_some(),
