@@ -192,6 +192,7 @@ impl Cabin {
         self.scheduled_perm = false;
         self.status = self.apply_job_fail(err);
         self.chat_job_thread = None;
+        self.maybe_continue_ptt();
     }
 
     pub(super) fn native_workspace(&self) -> std::path::PathBuf {
