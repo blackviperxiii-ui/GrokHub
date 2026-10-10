@@ -481,4 +481,69 @@ mod tests {
         let names: Vec<String> = crate::mcp::load_servers().into_keys().collect();
         assert_eq!(names, ["linear", "notes"]);
     }
+
+    #[test]
+    fn a_marketplace_install_is_idempotent_and_never_overwrites() {
+        let root = crate::harness::test_dir("conn-install");
+        let _guard = crate::perm::ConfigGuard::set(&root);
+        let mcp = root.join("mcp.json");
+        std::fs::write(&mcp, r#"{"mcpServers":{"notes":{"command":"notes-mcp"}}}"#).unwrap();
+        let entry = json!({"command": "npx", "args": ["-y", "@playwright/mcp@latest"]});
+
+        assert_eq!(crate::mcp::install("playwright", &entry).unwrap(), crate::mcp::Installed::Added);
+        let saved: Value = serde_json::from_str(&std::fs::read_to_string(&mcp).unwrap()).unwrap();
+        assert_eq!(saved["mcpServers"]["playwright"], entry);
+        assert_eq!(saved["mcpServers"]["notes"], json!({"command": "notes-mcp"}));
+        assert_eq!(crate::mcp::install("playwright", &entry).unwrap(), crate::mcp::Installed::AlreadyThere);
+        let ledger = ChangeLedger::load_kind(&root, ChangeKind::Connection);
+        assert_eq!(ledger.all().len(), 1, "a second install writes no ledger line");
+        let c = &ledger.all()[0];
+        assert_eq!(
+            (c.id.as_str(), c.op.as_str(), c.origin.as_str(), c.reason.as_str()),
+            ("playwright", "create", "user", "installed from Marketplace")
+        );
+        assert!(crate::harness::take_self_changes(&root).is_empty());
+
+        assert_eq!(
+            crate::mcp::install("notes", &json!({"command": "other"})).unwrap_err(),
+            "A connector named notes is already set up differently; disconnect it first"
+        );
+        assert_eq!(
+            crate::mcp::install("exa", &json!({"url": "https://mcp.exa.ai/mcp", "headers": {"x-api-key": "k"}})).unwrap_err(),
+            "exa's entry carries credentials; a key is saved separately"
+        );
+        let names: Vec<String> = crate::mcp::load_servers().into_keys().collect();
+        assert_eq!(names, ["notes", "playwright"]);
+    }
+
+    #[test]
+    fn a_saved_key_is_sealed_and_named_by_the_entry() {
+        let root = crate::harness::test_dir("conn-save-key");
+        crate::harness::use_key_store_for(&root, std::sync::Arc::new(crate::harness::MemoryKeyStore::new()));
+        let _guard = crate::perm::ConfigGuard::set(&root);
+        let mcp = root.join("mcp.json");
+        let entry = json!({"command": "npx", "args": ["-y", "brave-search-mcp"], "tokenEnv": "BRAVE_API_KEY"});
+        crate::mcp::install("brave", &entry).unwrap();
+        assert_eq!(
+            crate::mcp::save_key("missing", FAKE_TOKEN).unwrap_err(),
+            "missing isn't installed, so it has nowhere to keep a key"
+        );
+        assert_eq!(crate::mcp::save_key("brave", "  ").unwrap_err(), "No key was typed, so nothing was saved");
+
+        assert_eq!(crate::mcp::save_key("brave", FAKE_TOKEN).unwrap(), "Saved the key for brave");
+
+        let text = std::fs::read_to_string(&mcp).unwrap();
+        assert!(!text.contains(FAKE_TOKEN), "{text}");
+        let saved: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(saved["mcpServers"]["brave"]["tokenRef"], json!("brave"));
+        assert_eq!(saved["mcpServers"]["brave"]["tokenEnv"], json!("BRAVE_API_KEY"));
+        assert_eq!(crate::harness::open_connection_token(&root, "brave").as_deref(), Some(FAKE_TOKEN));
+        let def = &crate::mcp::load_servers()["brave"];
+        assert_eq!((def.token_ref.as_deref(), def.token_env.as_deref()), (Some("brave"), Some("BRAVE_API_KEY")));
+        assert_eq!(
+            crate::mcp::install("brave", &entry).unwrap(),
+            crate::mcp::Installed::AlreadyThere,
+            "installing again keeps the saved key"
+        );
+    }
 }
