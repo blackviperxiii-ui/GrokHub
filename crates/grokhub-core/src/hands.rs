@@ -245,31 +245,14 @@ mod tests {
             "sidecar prefix must be first: {dirs:?}"
         );
         assert_eq!(dirs[1], PathBuf::from("/usr/lib/grokhub/bin"));
-        let grok_cli = include_str!("../../../scripts/install-grok-cli.sh");
-        assert!(
-            grok_cli.contains("https://x.ai/cli/install.sh")
-                && grok_cli.contains("Grok Build CLI")
-                && grok_cli.contains("cabin install continues"),
-            "install-grok-cli.sh must run the official Grok Build installer without failing the cabin"
-        );
-        assert!(
-            grok_cli.contains("GROK_CHANNEL=alpha")
-                && grok_cli.contains("https://x.ai/cli/install.sh")
-                && !grok_cli.contains("GROK_CHANNEL=stable")
-                && grok_cli.contains("grok update --alpha")
-                && grok_cli.contains("grok_on_alpha"),
-            "first-time grok install is alpha; overlay switches stable→alpha: {grok_cli}"
-        );
         let sh = include_str!("../../../scripts/install.sh");
         assert!(
             !sh.contains("build-hands.sh")
                 && !sh.contains("ydotoold")
-                && sh.contains("install-grok-cli.sh")
                 && sh.contains("alsa-utils")
                 && sh.contains("enable grokhub.service")
-                && sh.contains("enable --now grokhub-hub.service")
-                && sh.contains("x.ai/cli"),
-            "clone install must skip grim/ydotool sidecars and install Grok Build CLI: {sh}"
+                && sh.contains("enable --now grokhub-hub.service"),
+            "clone install must skip grim/ydotool sidecars and enable cabin/hub: {sh}"
         );
         assert!(
             !sh.contains("sudo pacman -S --needed ydotool"),
@@ -289,9 +272,9 @@ mod tests {
             !local_pkg.contains("build-hands.sh")
                 && !local_pkg.contains("'python-atspi'")
                 && !local_pkg.contains("ydotoold.service")
-                && local_pkg.contains("install-grok-cli.sh")
+                && local_pkg.contains("grokhub-hub.service")
                 && !local_pkg.contains("slurp"),
-            "clone makepkg must not build grim/ydotool sidecars and must ship the Grok CLI helper"
+            "clone makepkg must not build grim/ydotool sidecars"
         );
         assert!(
             PYATSPI_MISSING.contains("python-atspi") && PYATSPI_MISSING.contains("wmctrl"),
@@ -301,45 +284,25 @@ mod tests {
         assert!(
             !bundle.contains("build-hands.sh")
                 && !bundle.contains("ydotoold.service")
-                && bundle.contains("install-grok-cli.sh")
                 && bundle.contains("grokhub-hub.service")
-                && bundle.contains("enable --now grokhub-hub.service")
-                && bundle.contains("x.ai/cli"),
-            "release tarball install must skip sidecars, install Grok Build CLI, and keep cabin/hub: {bundle}"
+                && bundle.contains("enable --now grokhub-hub.service"),
+            "release tarball install must skip sidecars and keep cabin/hub: {bundle}"
         );
         assert!(
             !bundle.contains("sudo pacman -S --needed ydotool"),
             "release tarball must not hard-require pacman ydotool"
         );
-        assert!(
-            sh.contains("GROK_CHANNEL=alpha") && bundle.contains("GROK_CHANNEL=alpha"),
-            "clone and tarball fallbacks must name alpha, not bare install.sh"
-        );
-        assert!(
-            sh.contains("| GROK_CHANNEL=alpha bash")
-                && bundle.contains("| GROK_CHANNEL=alpha bash")
-                && grok_cli.contains("| GROK_CHANNEL=alpha bash")
-                && !sh.contains("GROK_CHANNEL=alpha curl")
-                && !bundle.contains("GROK_CHANNEL=alpha curl")
-                && !grok_cli.contains("GROK_CHANNEL=alpha curl"),
-            "fallback one-liners must put GROK_CHANNEL on bash, not only curl"
-        );
         let aur_install = include_str!("../../../packaging/aur/grokhub.install");
         assert!(
-            aur_install.contains("GROK_CHANNEL=alpha")
-                && aur_install.contains("| GROK_CHANNEL=alpha bash"),
-            "AUR post_install must install grok alpha: {aur_install}"
+            aur_install.contains("update-desktop-database")
+                && aur_install.contains("Run:    grokhub"),
+            "AUR post_install refreshes the menu and names the cabin: {aur_install}"
         );
         let iss = include_str!("../../../packaging/windows/grokhub.iss");
-        let win_cli = include_str!("../../../packaging/windows/install-grok-alpha.ps1");
         assert!(
-            iss.contains("install-grok-alpha.ps1")
-                && iss.contains("waituntilterminated")
-                && iss.contains("Installing Grok Build CLI (alpha)")
-                && win_cli.contains("GROK_CHANNEL")
-                && win_cli.contains("alpha")
-                && win_cli.contains("https://x.ai/cli/install.ps1"),
-            "Windows Setup must run the official alpha installer, not assume grok is on PATH: {iss}"
+            iss.contains(r#"Source: "stage\grokhub.exe"; DestDir: "{app}""#)
+                && iss.contains(r#"Source: "stage\grokhub-hub.exe"; DestDir: "{app}""#),
+            "Windows Setup installs the cabin and hub: {iss}"
         );
         assert_eq!(
             ydotool_socket_path(None, Some("/run/user/1000")),

@@ -654,7 +654,7 @@ impl Cabin {
                                                                 .color(crate::theme::fg()),
                                                             );
                                                             ui.add_space(6.0);
-                                                            crate::cards::settings_note(ui, "Native Grok Build cabin.");
+                                                            crate::cards::settings_note(ui, "Runs on GrokHub's own engine.");
                                                             crate::cards::settings_note(ui, &doctor);
                                                             if crate::cards::settings_action(ui, "Diagnostics", "Copy a redacted bundle. No secrets.", "Copy") {
                                                                 copy_diag = true;

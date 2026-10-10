@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Install grokhub + grokhub-hub + Grok Build CLI from this clone.
+# Install grokhub + grokhub-hub from this clone.
 #   --channel beta    fetch origin, check out the beta branch, build, install
 #   --channel stable  same for main (stable = main)
 # The channel is remembered in $GROKHUB_CONFIG/channel (the install receipt),
@@ -169,7 +169,7 @@ try_pkgs() {
   fi
 }
 
-# Voice / Imagine still need ffmpeg and alsa. Grok Build owns computer-use — no grim/ydotool sidecars.
+# Voice / Imagine still need ffmpeg and alsa.
 if command -v pacman >/dev/null; then
   try_pkgs pacman pacman -S --needed ffmpeg alsa-utils
 elif command -v apt-get >/dev/null; then
@@ -184,9 +184,6 @@ if command -v systemctl >/dev/null && [[ "$SYSTEM" -eq 0 ]]; then
   systemctl --user enable --now grokhub-hub.service >/dev/null 2>&1 || true
 fi
 
-PREFIX="$PREFIX" bash "$ROOT/scripts/install-grok-cli.sh" \
-  || echo "grok: install-grok-cli.sh continued"
-
 mkdir -p "$CONFIG_DIR"
 printf '%s\n' "$ROOT" > "$CONFIG_DIR/source"
 printf '%s\n' "$CHANNEL" > "$RECEIPT"
@@ -198,11 +195,6 @@ fi
 
 echo "installed $PREFIX/bin/grokhub ($("$PREFIX/bin/grokhub" --version 2>/dev/null || echo "channel $CHANNEL"))"
 echo "installed $PREFIX/bin/grokhub-hub"
-if [[ -x "$PREFIX/bin/grok" || -x "$HOME/.grok/bin/grok" ]] || command -v grok >/dev/null 2>&1; then
-  echo "installed Grok Build CLI (grok)"
-else
-  echo "grok: Grok Build CLI not on PATH — curl -fsSL https://x.ai/cli/install.sh | GROK_CHANNEL=alpha bash"
-fi
 if [[ "$SYSTEM" -eq 0 ]]; then
   echo "ensure $PREFIX/bin is on PATH"
 fi

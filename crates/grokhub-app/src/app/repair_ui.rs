@@ -7,7 +7,7 @@
 //! Spike-9: findings with a safe fix get one proposal card each on the
 //! approval stack (What's wrong / What I'll do / Why / How to undo / Risk).
 //! Fix it is a click, never Enter. The cabin never runs a step itself: soft
-//! steps go to Grok Build one at a time under the pill, hard ones park the
+//! steps go to the engine one at a time under the pill, hard ones park the
 //! hard card, and hard-floor steps are only guidance. Then the finding's probe
 //! runs again, and the result card offers Undo fix (`UndoAsk::from_click`).
 

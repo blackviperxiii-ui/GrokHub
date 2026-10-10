@@ -9,7 +9,7 @@
 - `cargo run -p grokhub-agent --example eval` (dry-run; `--live` is refused)
 ## Key files
 - `crates/grokhub-agent/src/lib.rs`: module list and the public surface the app uses.
-- `crates/grokhub-agent/src/run.rs` (`run_loop`) and `crates/grokhub-agent/src/events.rs` (loop events to ACP-shaped `AcpEvent`s).
+- `crates/grokhub-agent/src/run.rs` (`run_loop`) and `crates/grokhub-agent/src/events.rs` (loop events to the `AcpEvent`s the cabin polls in `poll_acp`).
 - `crates/grokhub-agent/src/gate.rs` (gate v0) and `crates/grokhub-agent/src/perm/mod.rs` (rule engine).
 - `crates/grokhub-agent/src/tools/mod.rs`: `tool_schemas`, `schemas_for`, `execute` (read-only), `dispatch` (gated set).
 ## Change recipe
@@ -17,7 +17,7 @@
 - Ported code: keep the `// Portions derived from xai-org/grok-build ...` header and add a line to `crates/grokhub-agent/NOTICE`.
 ## What breaks it
 - Loosening a deny: perm rules are deny > ask > allow; hooks can deny or ask but never turn a gate deny or ask into allow; a hook timeout is no decision.
-- Reading the Grok CLI's credentials: Lab mode uses GrokHub's own sign-in (`XAI_NEED_SIGNIN` in `crates/grokhub-core/src/xai_signin.rs`).
+- Reading the Grok CLI's credentials (`~/.grok/auth.json`): the engine uses GrokHub's own sign-in (`XAI_NEED_SIGNIN` in `crates/grokhub-core/src/xai_signin.rs`).
 ## What depends on it
 - grokhub-app: `crates/grokhub-app/src/app/native_engine.rs`, `crates/grokhub-app/src/app/native_sessions.rs`, `crates/grokhub-app/src/app/native_unattended.rs`, `crates/grokhub-app/src/native_mcp.rs`, `crates/grokhub-app/src/native_plugins.rs`, plus the harness and `ToolOutput` in the desktop MCP.
 ## Non-obvious
