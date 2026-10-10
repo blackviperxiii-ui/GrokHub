@@ -418,7 +418,10 @@ fn decide_mcp(gate: &Gate, name: &str, latched_always: bool, policy: Option<&Pol
             return Decision::Refuse(gate::mcp_policy_deny(name));
         }
         if rule(policy, name, Action::Ask) {
-            return if gate.attended {
+            // Always Allow: an ask rule is not a hard class, so it runs.
+            return if gate.attended && (gate.mode == PermMode::Always || latched_always) {
+                Decision::Run
+            } else if gate.attended {
                 Decision::Ask
             } else {
                 Decision::Refuse(gate::mcp_policy_deny(name))
@@ -983,6 +986,7 @@ mod tests {
         assert!(matches!(decision, Decision::Refuse(ref msg) if msg.contains("deny rule on mcp")));
 
         let ask = policy(&[("MCPTool(box__echo)", Action::Ask)]);
+        // Always Allow runs past an ask rule (only hard classes stop it); Supervised asks.
         assert_eq!(
             decide_with(
                 &gate(PermMode::Always, false, true),
@@ -993,6 +997,10 @@ mod tests {
                 ws,
                 Some(&ask)
             ),
+            Decision::Run
+        );
+        assert_eq!(
+            decide_with(&gate(PermMode::Ask, false, true), "box__echo", "{}", false, None, ws, Some(&ask)),
             Decision::Ask
         );
         let away = decide_with(

@@ -599,19 +599,53 @@ fn sort_feed(cards: &mut [UpdateCard]) {
     cards.sort_by(|a, b| b.created_at.cmp(&a.created_at).then(b.id.cmp(&a.id)));
 }
 
-pub fn post_update(cards: &mut Vec<UpdateCard>, card: UpdateCard) {
+/// Titles a card falls back to when the thing it is about has no name.
+const UNNAMED_TITLES: [&str; 7] = [
+    "Automation finished",
+    "Automation failed",
+    "Scheduled",
+    "Suggestion",
+    "Idea",
+    "Digest",
+    AUTOMATE_OFFER_LINE,
+];
+
+/// Words that stand in for a job's name instead of giving it.
+pub const VAGUE_SUBJECTS: [&str; 4] = ["that job", "this task", "this job", "that task"];
+
+/// The card names the thing it is about: its title is not a bare fallback
+/// and does not open on "It", and neither line says "that job" or "this task".
+pub fn names_its_item(card: &UpdateCard) -> bool {
+    let title = card.title.trim();
+    if title.is_empty() || UNNAMED_TITLES.contains(&title) {
+        return false;
+    }
+    let lower = title.to_ascii_lowercase();
+    if lower == "it" || lower.starts_with("it ") || lower.starts_with("it's ") {
+        return false;
+    }
+    let text = format!("{lower} {}", card.body.as_deref().unwrap_or("").to_ascii_lowercase());
+    !VAGUE_SUBJECTS.iter().any(|vague| text.contains(vague))
+}
+
+/// Post `card`, or merge it into its group. A card that names nothing posts
+/// nothing: false, and the feed is left as it was.
+pub fn post_update(cards: &mut Vec<UpdateCard>, card: UpdateCard) -> bool {
+    if !names_its_item(&card) {
+        return false;
+    }
     let now = card.created_at;
     if let Some(key) = feed_group_key(&card) {
         if let Some(existing) = take_live_group(cards, &key) {
             cards.retain(|c| !is_group_tombstone(c, &key));
             cards.push(merge_event(existing, card));
             trim_feed_store(cards, now);
-            return;
+            return true;
         }
         let fresh_tombstone = cards.iter().any(|c| is_group_tombstone(c, &key) && tombstone_fresh(c, now));
         if fresh_tombstone && !card_is_failure(&card) {
             trim_feed_store(cards, now);
-            return;
+            return false;
         }
         cards.retain(|c| !is_group_tombstone(c, &key));
     }
@@ -619,6 +653,7 @@ pub fn post_update(cards: &mut Vec<UpdateCard>, card: UpdateCard) {
     cards.retain(|c| c.id != id);
     cards.push(card);
     trim_feed_store(cards, now);
+    true
 }
 
 fn is_group_tombstone(card: &UpdateCard, key: &str) -> bool {
@@ -754,6 +789,12 @@ fn automation_display_name(card: &UpdateCard) -> String {
 
 /// Fixed why line for a run, a failure, or a saved schedule. Other kinds keep `why`.
 pub fn refresh_event_why(card: &mut UpdateCard) {
+    // A crash, screen recording or audio check shares the kind but is not an
+    // automation: "Your automation “Crashed: …” finished" named the wrong thing.
+    if is_crash_card(card) || screen_recording_dir(card).is_some() || card.source_id.starts_with(AUDIO_CHECK_SOURCE_PREFIX) {
+        card.why = None;
+        return;
+    }
     let name = automation_display_name(card);
     match card.kind {
         UpdateKind::AutomationDone if failed_run(card) => {
@@ -1603,7 +1644,9 @@ fn post_useful_idea(
         why.trim().to_string()
     });
     let kept = card.title.clone();
-    post_update(cards, card);
+    if !post_update(cards, card) {
+        return false;
+    }
     remember_idea_title(pulse, &kept);
     true
 }
@@ -2581,6 +2624,8 @@ pub fn screen_recording_dir(card: &UpdateCard) -> Option<&str> {
         .filter(|d| !d.is_empty())
 }
 
+const AUDIO_CHECK_SOURCE_PREFIX: &str = "audiocheck:";
+
 /// An audio check. The title names the input and the problem ("Audio check:
 /// Yeti input clipping at -0.2 dBFS"); the body is the first fix and the
 /// default output. A new check of the same input replaces the card. Open
@@ -2589,7 +2634,7 @@ pub fn audio_check_card(input: &str, title: &str, summary: &str, thread_id: &str
     let title = clip_line(title, TITLE_CHARS);
     let summary = clip_line(summary, BODY_CHARS);
     let input = input.trim();
-    let source = format!("audiocheck:{}", if input.is_empty() { "default" } else { input });
+    let source = format!("{AUDIO_CHECK_SOURCE_PREFIX}{}", if input.is_empty() { "default" } else { input });
     let mut card = blank_card(
         feed_card_id("audiocheck", &source, &title, created_at, true),
         UpdateKind::AutomationDone,
@@ -2631,6 +2676,14 @@ pub fn self_change_card(kind: &str, name: &str, verb: &str, reason: &str, create
     }
     card.source_id = source;
     card
+}
+
+/// A router card whose source starts with this is a no-route wait: it names
+/// the models and the paused step, and carries a Retry now pill.
+pub const MODEL_WAIT_SOURCE_PREFIX: &str = "modelwait:";
+
+pub fn is_model_wait_card(card: &UpdateCard) -> bool {
+    card.source_id.starts_with(MODEL_WAIT_SOURCE_PREFIX)
 }
 
 /// Home update from the router (R2a): a model fell back, was retired, or
@@ -2744,19 +2797,17 @@ pub fn suggestion_card(source_id: &str, title: &str, body: &str, created_at: u64
     card
 }
 
+const AUTOMATE_OFFER_LINE: &str = "Want me to automate this and notify you here when done?";
+
 /// Typed offer. Accept stays `commit_schedule`. It does not file a Todo.
 pub fn automate_offer_card(source_id: &str, title: &str, created_at: u64) -> UpdateCard {
     let title = clip_line(title, TITLE_CHARS);
-    let title = if title.is_empty() {
-        "Want me to automate this and notify you here when done?".to_string()
-    } else {
-        title
-    };
+    let title = if title.is_empty() { AUTOMATE_OFFER_LINE.to_string() } else { title };
     let mut card = blank_card(
         feed_card_id("offer", source_id, &title, created_at, true),
         UpdateKind::AutomateOffer,
         title,
-        Some("Want me to automate this and notify you here when done?".into()),
+        Some(AUTOMATE_OFFER_LINE.into()),
         created_at,
     );
     card.source_id = source_id.trim().to_string();
@@ -2949,7 +3000,7 @@ pub fn post_help(
             now,
             &source,
             &title,
-            "That job is still paused. I can pick it up when you say.",
+            "Still paused. I can pick it back up when you say.",
             &[],
             false,
             lessons,
@@ -4306,6 +4357,186 @@ https://xstack.grok.me/post ZEPHYRTAIL"
             for vague in ["that job", "this task", "this job", "that task"] {
                 assert!(!text.contains(vague), "{vague:?} in {text:?}");
             }
+        }
+    }
+
+    /// Every feed card names the thing it is about. One row per post site:
+    /// the card that site builds from a fixture and the name it must carry.
+    fn feed_card_rows() -> Vec<(&'static str, UpdateCard, &'static str)> {
+        use crate::proactive::{proactive_card, Candidate, CandidateSource, ProactiveRoute};
+        let at = 1_000;
+        let done = DoneForYou {
+            kind: "connection".into(),
+            target: "notes".into(),
+            undo_ref: 4,
+            mind_key: "proactive:connection_disable".into(),
+            answered: false,
+        };
+        let standup = Candidate::soft(CandidateSource::SystemState, "get standup prep ready", "standup prep", 0.8, 0.9, "Standup is at 9.");
+        let mut rows = vec![
+            ("automation_done_card", automation_done_card("a1", "Nightly backup", "Copied 3 files.", at), "Nightly backup"),
+            ("automation_failed_card", automation_failed_card("a1", "Nightly backup", "The disk is full.", at), "Nightly backup"),
+            ("crash_card", crash_card("job-1", "Index ~/Projects", "t1", "/retry", at), "Index ~/Projects"),
+            (
+                "screen_recording_card",
+                screen_recording_card("/rec/1", "Screen recording 0:42: video stutters on 4K", "Likely the GPU driver.", "t1", at),
+                "video stutters on 4K",
+            ),
+            (
+                "audio_check_card",
+                audio_check_card("Yeti", "Audio check: Yeti input clipping at -0.2 dBFS", "Lower the gain.", "t1", at),
+                "Yeti",
+            ),
+            ("self_change_card", self_change_card("connection", "notes", "added", "", at), "notes"),
+            ("router_update_card", router_update_card("retired:grok-4.3", "grok-4.3 was retired by xAI", "Using grok-4.7.", at), "grok-4.3"),
+            ("done_for_you_card", done_for_you_card("Turned off the notes connection", "", done, at), "notes connection"),
+            ("schedule_created_card", schedule_created_card("s1", "Morning brief", "every day at 8:00", at), "Morning brief"),
+            ("suggestion_card", suggestion_card("s1", "Paused: Fix the tray icon", "Paused 2 hours ago.", at), "Fix the tray icon"),
+            ("automate_offer_card", automate_offer_card("o1", "Sweep the inbox every hour", at), "Sweep the inbox"),
+            ("idea_card", idea_card("i1", "Flash the pi", "Write the new image to the SD card.", at), "Flash the pi"),
+            ("digest_card", digest_card("edition", "Rust 1.99 ships async closures", "What changed.", at), "Rust 1.99"),
+            ("proactive_card", proactive_card(&standup, ProactiveRoute::Suggest, at), "standup prep"),
+            ("proactive_card", proactive_card(&standup, ProactiveRoute::ICan, at), "standup prep"),
+            ("proactive_card", proactive_card(&standup, ProactiveRoute::Prepare, at), "standup prep"),
+        ];
+        let links = [CitedLink { url: "https://blog.rust-lang.org/1.99".into(), label: "Rust blog".into() }];
+        let material = DigestMaterial { brief: "", user_md: "", memory_md: "", soul_md: "", links: &links, taste: &[], edition: None };
+        let edition = DigestEdition { found: true, refused: false, title: "Rust 1.99 ships async closures", body: "Async closures are stable." };
+        rows.push(("tick_feed_pulse", compose_digest(&[], at, material, edition).expect("digest"), "Rust 1.99"));
+        // The sites that post through `post_update` themselves.
+        let mut cards = Vec::new();
+        let mut pulse = FeedPulse::default();
+        let paused = [PausedJob { id: "job-1", title: "Ship the harbor", detail: "Paused. This is where to resume." }];
+        post_help(&mut cards, &mut pulse, 0, false, true, &paused, &[], "");
+        post_help(&mut cards, &mut pulse, PAUSE_OFFER_MS, false, true, &paused, &[], "");
+        let situation = cards.iter().find(|c| c.kind == UpdateKind::Suggestion).cloned().expect("situation");
+        rows.push(("post_situation", situation, "Ship the harbor"));
+        let paused_idea = cards.iter().find(|c| c.kind == UpdateKind::Idea).cloned().expect("paused idea");
+        rows.push(("post_useful_idea", paused_idea, "Ship the harbor"));
+        let seed = crate::ideas::IdeaSeed {
+            kind: crate::ideas::IdeaKind::Automation,
+            title: "Back up ~/Notes nightly".into(),
+            body: "Copy the notes folder to the NAS each night.".into(),
+            details: String::new(),
+            prompt: "Back up ~/Notes to the NAS every night".into(),
+            reason: String::new(),
+        };
+        let mut cards = Vec::new();
+        assert_eq!(post_generated_ideas(&mut cards, &mut FeedPulse::default(), at, &[seed], &[], ""), 1);
+        rows.push(("post_useful_idea", cards.remove(0), "Back up ~/Notes"));
+        let mut cards = vec![crash_card("a", "Index ~/Projects", "t1", "/retry", at), crash_card("b", "Sync ~/Photos", "t2", "/retry", at)];
+        for card in &mut cards {
+            card.held = true;
+        }
+        let (_, id) = crate::pulse::release_quiet_batch(&mut cards, at + 1);
+        let id = id.expect("quiet digest");
+        let quiet = cards.iter().find(|c| c.id == id).cloned().expect("quiet digest card");
+        rows.push(("release_quiet_batch", quiet, "Sync ~/Photos"));
+        rows
+    }
+
+    /// Fns in this crate's live code that build or post a feed card.
+    fn feed_post_sites() -> std::collections::BTreeSet<String> {
+        let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut sites = std::collections::BTreeSet::new();
+        let mut dirs = vec![src];
+        while let Some(dir) = dirs.pop() {
+            for entry in std::fs::read_dir(&dir).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    dirs.push(path);
+                    continue;
+                }
+                let name = path.file_name().unwrap().to_string_lossy().to_string();
+                if !name.ends_with(".rs") || name.ends_with("tests.rs") {
+                    continue;
+                }
+                let text = std::fs::read_to_string(&path).unwrap().replace("\r\n", "\n");
+                let live = text.split("\n#[cfg(test)]\nmod ").next().unwrap();
+                let mut current = String::new();
+                for line in live.lines() {
+                    let decl = line.trim_start().trim_start_matches("pub(crate) ").trim_start_matches("pub ");
+                    if let Some(rest) = decl.strip_prefix("fn ") {
+                        current = rest.chars().take_while(|c| c.is_alphanumeric() || *c == '_').collect();
+                    }
+                    let posts = line.contains("post_update(") && !decl.starts_with("fn post_update(");
+                    if posts || line.contains("-> UpdateCard") {
+                        sites.insert(current.clone());
+                    }
+                }
+            }
+        }
+        // The empty shell every builder fills, and the merge of a repeat into its named card.
+        for helper in ["blank_card", "merge_event", "compose_digest"] {
+            sites.remove(helper);
+        }
+        sites
+    }
+
+    #[test]
+    fn every_feed_card_names_its_item() {
+        let rows = feed_card_rows();
+        for (site, card, name) in &rows {
+            let text = format!("{} {}", card.title, card.body.as_deref().unwrap_or(""));
+            assert!(text.contains(name), "{site}: {name:?} not in {text:?}");
+            assert!(names_its_item(card), "{site}: {card:?}");
+            let lower = format!("{text} {}", card.why.as_deref().unwrap_or("")).to_ascii_lowercase();
+            for vague in VAGUE_SUBJECTS {
+                assert!(!lower.contains(vague), "{site}: {vague:?} in {text:?}");
+            }
+            let mut feed = Vec::new();
+            assert!(post_update(&mut feed, card.clone()), "{site}: the feed refused a named card");
+            // The Ideas row's bold line names it too ("I can paused: …" did not).
+            // The quiet-hours batch names its items in the body, under its header.
+            if matches!(card.kind, UpdateKind::Idea | UpdateKind::Suggestion) && card.title.contains(name) {
+                let line = crate::pulse::i_can_title(card);
+                assert!(line.to_ascii_lowercase().contains(&name.to_ascii_lowercase()), "{site}: {name:?} not in Ideas line {line:?}");
+                assert!(!line.to_ascii_lowercase().starts_with("i can paused"), "{site}: {line:?}");
+            }
+        }
+        let situation = &rows.iter().find(|(site, ..)| *site == "post_situation").expect("situation row").1;
+        assert_eq!(crate::pulse::i_can_title(situation), "Paused: Ship the harbor");
+        let covered: std::collections::BTreeSet<String> = rows.iter().map(|(site, ..)| site.to_string()).collect();
+        let missing: Vec<String> = feed_post_sites().difference(&covered).cloned().collect();
+        assert!(missing.is_empty(), "feed post sites with no row in feed_card_rows: {missing:?}");
+    }
+
+    /// A crash, recording or audio check is not an automation, so its why
+    /// line does not call it one.
+    #[test]
+    fn only_automation_cards_say_your_automation_finished() {
+        let at = 1_000;
+        assert_eq!(
+            automation_done_card("a1", "Nightly backup", "Copied 3 files.", at).why.as_deref(),
+            Some("Your automation “Nightly backup” finished.")
+        );
+        for card in [
+            crash_card("job-1", "Index ~/Projects", "t1", "/retry", at),
+            screen_recording_card("/rec/1", "Screen recording 0:42: video stutters on 4K", "Likely the GPU driver.", "t1", at),
+            audio_check_card("Yeti", "Audio check: Yeti input clipping at -0.2 dBFS", "Lower the gain.", "t1", at),
+        ] {
+            assert_eq!(card.why, None, "{}", card.title);
+        }
+    }
+
+    #[test]
+    fn a_card_that_names_nothing_posts_nothing() {
+        let at = 1_000;
+        for card in [
+            automation_done_card("a1", "", "Copied 3 files.", at),
+            automation_failed_card("a1", "", "", at),
+            schedule_created_card("s1", "", "every day at 8:00", at),
+            suggestion_card("s1", "", "Want me to pick it back up?", at),
+            automate_offer_card("o1", "", at),
+            idea_card("i1", "", "Write the new image.", at),
+            digest_card("d1", "", "What changed.", at),
+            suggestion_card("s1", "Pick that job back up?", "Paused 2 hours ago.", at),
+            suggestion_card("s1", "Fix the tray icon", "Want me to resume this task?", at),
+            router_update_card("r1", "It stopped answering", "", at),
+        ] {
+            let mut feed = vec![idea_card("i0", "Flash the pi", "Write the new image.", 10)];
+            assert!(!post_update(&mut feed, card.clone()), "{card:?}");
+            assert_eq!(feed.iter().map(|c| c.title.as_str()).collect::<Vec<_>>(), ["Flash the pi"]);
         }
     }
 

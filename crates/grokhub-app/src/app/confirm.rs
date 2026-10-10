@@ -19,7 +19,8 @@
 use super::*;
 
 /// Ask-card Always second beat. Named so tests can lock the inherit line.
-pub(super) const ALWAYS_CONFIRM_LINE1: &str = "Skip every tool prompt this launch.";
+pub(super) const ALWAYS_CONFIRM_LINE1: &str =
+    "Skip every tool prompt this launch. GrokHub only stops for money, sending, deleting your data, credentials and irreversible system changes.";
 pub(super) const ALWAYS_CONFIRM_LINE2: &str =
     "Night, loops, and /send inherit --always-approve until quit.";
 
@@ -370,9 +371,11 @@ mod tests {
 
     #[test]
     fn always_confirm_names_session_skip_and_scheduled_inherit() {
-        assert!(ALWAYS_CONFIRM_LINE1
-            .to_ascii_lowercase()
-            .contains("skip every tool prompt this launch"));
+        assert_eq!(
+            ALWAYS_CONFIRM_LINE1,
+            "Skip every tool prompt this launch. GrokHub only stops for money, sending, deleting your data, credentials and irreversible system changes."
+        );
+        assert!(crate::cards::composer_perm_tip("always-approve").is_some_and(|(_, tip)| tip.contains("money, sending, deleting your data, credentials and irreversible system changes")));
         assert!(
             ALWAYS_CONFIRM_LINE2.contains("--always") && ALWAYS_CONFIRM_LINE2.contains("approve")
         );

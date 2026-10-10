@@ -1230,7 +1230,7 @@ fn empty_grok_usage() -> GrokUsage {
 
 /// The crash card for a background run killed from outside. A moved-off chat
 /// turn retries in its chat; any other run starts again with `/bg`.
-fn bg_crash_card(run: &BgRun) -> grokhub_core::UpdateCard {
+pub(super) fn bg_crash_card(run: &BgRun) -> grokhub_core::UpdateCard {
     let retry = if run.origin == BgOrigin::Detached {
         "/retry".to_string()
     } else {
