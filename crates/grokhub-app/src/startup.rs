@@ -133,7 +133,8 @@ mod tests {
 
     #[test]
     fn building_the_cabin_runs_no_subprocess_or_hotkey_grab() {
-        let src = include_str!("app/mod.rs");
+        let src = include_str!("app/mod.rs").replace("\r\n", "\n");
+        // A Windows checkout has CRLF line endings.
         let new = src
             .split("pub fn new(hidden: bool) -> Self {")
             .nth(1)
@@ -149,14 +150,14 @@ mod tests {
         for blocking in ["local_clock(", "desktop_prefers_dark(", "Command::new("] {
             assert!(!new.contains(blocking), "{blocking} in Cabin::new");
         }
-        let feed = include_str!("app/feed_ui.rs");
+        let feed = include_str!("app/feed_ui.rs").replace("\r\n", "\n");
         let ensure = feed
             .split("fn ensure_useful_ideas(")
             .nth(1)
             .and_then(|s| s.split("\n    }\n").next())
             .expect("ensure_useful_ideas");
         assert!(ensure.contains("self.idea_inputs()") && !ensure.contains("idea_request"), "{ensure}");
-        let main = include_str!("main.rs");
+        let main = include_str!("main.rs").replace("\r\n", "\n");
         let run = main.split("fn run_cabin(").nth(1).expect("run_cabin");
         assert!(
             run.find("Cabin::warm_startup_caches()").expect("warm") < run.find("eframe::run_native").expect("run"),
