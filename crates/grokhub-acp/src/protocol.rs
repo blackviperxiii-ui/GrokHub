@@ -211,6 +211,8 @@ pub enum AcpEvent {
     Text(String),
     Tool(ToolCard),
     Plan(String),
+    /// A findings card body (`grokhub_core::findings`), shown after the reply.
+    Findings(String),
     Permission(PermissionAsk),
     Elicit(ElicitAsk),
     ElicitComplete { elicitation_id: String, server_name: String },

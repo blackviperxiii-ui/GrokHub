@@ -50,6 +50,7 @@ const LOOP_ONLY: &[&str] = &[
     "send_subagent_message",
     "todo_write",
     "ask_user_question",
+    "report_findings",
     "enter_plan_mode",
     "exit_plan_mode",
 ];

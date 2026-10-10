@@ -203,6 +203,9 @@ impl Cabin {
     }
 
     pub(super) fn kick_model(&mut self, consume_attach: bool) {
+        // A card from an attempt that never reached Done (error, retry, halt)
+        // must not land under this reply.
+        self.harness.pending_findings = None;
         if !self.can_agent() && !(self.cfg.native_engine && self.scheduled_perm) {
             self.running = false;
             self.chat_job_thread = None;
