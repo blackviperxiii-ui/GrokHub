@@ -2194,6 +2194,8 @@ impl Cabin {
         self.scheduled_perm = false;
         self.stream_buf.clear();
         self.thought_buf.clear();
+        // Stop does not deliver Done, so the scan's card must not stay queued.
+        self.harness.pending_findings = None;
         self.perm_ask = None;
         self.perm_queue.clear();
         self.perm_always_confirm = None;
