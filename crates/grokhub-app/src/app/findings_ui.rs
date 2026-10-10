@@ -135,4 +135,130 @@ mod tests {
         assert_eq!(cabin.status, "Install Grok Build (x.ai/cli) or Connect Grok in Settings");
         assert_eq!(cabin.harness.findings_dismissed, [body.clone(), body.clone()]);
     }
+
+    fn pinned(label: &str) -> (crate::config::TestConfigDir, std::path::PathBuf) {
+        let root = crate::config::test_config_root(label);
+        let _ = std::fs::create_dir_all(&root);
+        (crate::config::TestConfigDir::set(root.clone()), root)
+    }
+
+    fn open_chat(label: &str) -> (crate::config::TestConfigDir, Cabin, String) {
+        let (pin, _root) = pinned(label);
+        let mut cabin = Cabin::quiet_for_test();
+        cabin.threads.push(crate::threads::ChatThread::new("Chat", false));
+        cabin.thread_idx = cabin.threads.len() - 1;
+        let id = cabin.visible_thread_id();
+        cabin.chat_job_thread = Some(id.clone());
+        (pin, cabin, id)
+    }
+
+    fn attach(cabin: &mut Cabin) -> std::sync::mpsc::Sender<grokhub_acp::AcpEvent> {
+        let (handle, _cmds, tx) =
+            grokhub_acp::AcpHandle::external(std::env::temp_dir(), "sess-findings".into());
+        cabin.acp = Some(handle);
+        tx
+    }
+
+    fn finding_bodies(cabin: &Cabin) -> Vec<String> {
+        cabin
+            .messages
+            .iter()
+            .filter(|m| m.1.contains("nextdns can't bind port 53"))
+            .map(|m| m.1.clone())
+            .collect()
+    }
+
+    /// The next reply after an abort. Posts whatever card is still pending.
+    fn finish_next_reply(
+        cabin: &mut Cabin,
+        id: &str,
+        tx: &std::sync::mpsc::Sender<grokhub_acp::AcpEvent>,
+    ) {
+        cabin.running = true;
+        cabin.chat_job_thread = Some(id.to_string());
+        tx.send(grokhub_acp::AcpEvent::Text("newer reply".into())).unwrap();
+        tx.send(grokhub_acp::AcpEvent::Done {
+            stop_reason: "end_turn".into(),
+        })
+        .unwrap();
+        cabin.poll_acp();
+    }
+
+    #[test]
+    fn a_stopped_turn_does_not_post_its_findings_under_the_next_reply() {
+        let (_pin, mut cabin, id) = open_chat("findings-halt");
+        let body = card().to_body();
+        cabin.running = true;
+        cabin.harness.pending_findings = Some(body.clone());
+        cabin.halt_in_flight();
+        assert_eq!(cabin.harness.pending_findings, None);
+
+        let tx = attach(&mut cabin);
+        cabin.running = false;
+        tx.send(grokhub_acp::AcpEvent::Findings(body)).unwrap();
+        cabin.poll_acp();
+        assert_eq!(cabin.harness.pending_findings, None);
+
+        finish_next_reply(&mut cabin, &id, &tx);
+        assert_eq!(finding_bodies(&cabin), Vec::<String>::new());
+        assert!(
+            cabin.messages.iter().any(|m| m.1.contains("newer reply")),
+            "the next reply still lands: {:?}",
+            cabin.messages.iter().map(|m| m.1.as_str()).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn a_fatal_or_sigterm_turn_does_not_post_its_findings_under_the_next_reply() {
+        let (_pin, mut cabin, id) = open_chat("findings-err");
+        let body = card().to_body();
+
+        cabin.running = true;
+        let tx = attach(&mut cabin);
+        tx.send(grokhub_acp::AcpEvent::Findings(body.clone())).unwrap();
+        tx.send(grokhub_acp::AcpEvent::Err("model exploded".into())).unwrap();
+        cabin.poll_acp();
+        assert_eq!(cabin.harness.pending_findings, None);
+        assert_eq!(finding_bodies(&cabin), Vec::<String>::new());
+
+        let tx = attach(&mut cabin);
+        finish_next_reply(&mut cabin, &id, &tx);
+        assert_eq!(finding_bodies(&cabin), Vec::<String>::new());
+
+        // The one automatic SIGTERM retry starts a new turn. The old card
+        // must not ride along, and kick must not spawn a real agent.
+        cabin.running = true;
+        cabin.turn_retried = false;
+        cabin.chat_job_thread = Some(id.clone());
+        let (_kick_tx, kick_rx) = std::sync::mpsc::channel();
+        cabin.acp_spawn_rx = Some(kick_rx);
+        let tx = attach(&mut cabin);
+        tx.send(grokhub_acp::AcpEvent::Findings(body)).unwrap();
+        tx.send(grokhub_acp::AcpEvent::Err("exit 143".into())).unwrap();
+        cabin.poll_acp();
+        assert_eq!(cabin.harness.pending_findings, None);
+        assert_eq!(finding_bodies(&cabin), Vec::<String>::new());
+        cabin.acp_spawn_rx = None;
+        cabin.pending_kick = None;
+
+        let tx = attach(&mut cabin);
+        finish_next_reply(&mut cabin, &id, &tx);
+        assert_eq!(finding_bodies(&cabin), Vec::<String>::new());
+    }
+
+    #[test]
+    fn a_transient_error_keeps_this_turns_findings() {
+        let (_pin, mut cabin, _id) = open_chat("findings-transient");
+        let body = card().to_body();
+        let marked = grokhub_core::mark_slash_result(&body);
+        cabin.running = true;
+        let tx = attach(&mut cabin);
+        tx.send(grokhub_acp::AcpEvent::Findings(body.clone())).unwrap();
+        tx.send(grokhub_acp::AcpEvent::Err("connection reset".into())).unwrap();
+        cabin.poll_acp();
+        assert_eq!(cabin.harness.pending_findings.as_deref(), Some(body.as_str()));
+        tx.send(grokhub_acp::AcpEvent::Done { stop_reason: "end_turn".into() }).unwrap();
+        cabin.poll_acp();
+        assert_eq!(finding_bodies(&cabin), vec![marked]);
+    }
 }

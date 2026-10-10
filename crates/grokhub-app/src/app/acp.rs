@@ -434,7 +434,14 @@ impl Cabin {
                     // Path D: a stopped turn's later events find `running` off.
                     self.harness_watch_cu(&watched, true);
                 }
-                AcpEvent::Findings(body) => self.harness.pending_findings = Some(body),
+                AcpEvent::Findings(body) => {
+                    // Thought and Text already ignore a stopped turn. A card
+                    // kept here would post under the next reply's Done.
+                    if !self.running {
+                        continue;
+                    }
+                    self.harness.pending_findings = Some(body);
+                }
                 AcpEvent::Plan(t) => {
                     // Plan text only. No approve / request-changes / comment RPC on this tip:
                     // session/request_permission is tool Allow/Deny, and /approve does not parse.
@@ -550,6 +557,9 @@ impl Cabin {
                         }
                         StreamErrorKind::CreditLimit | StreamErrorKind::Fatal => {}
                     }
+                    // No Done is coming. Drop the scan before a SIGTERM retry
+                    // or the next successful reply can post it.
+                    self.harness.pending_findings = None;
                     self.withdraw_perm_asks();
                     self.perm_always_confirm = None;
                     self.confirm = None;
