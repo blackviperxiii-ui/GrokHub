@@ -221,6 +221,17 @@ pub fn format_full_report(bench: &BenchReport, eval: &EvalReport) -> String {
     format!("{}\n\n{}", bench.summary_lines(), eval.summary_lines())
 }
 
+/// Feed bench/eval numbers into [`super::local::tier_meta`] / the router (PR E).
+/// Eval pass rate is quality telemetry only — it does not unlock `tool_calling`.
+pub fn apply_caps(bench: &BenchReport, eval: &EvalReport) {
+    super::local::set_caps(super::local::TierCaps {
+        context: super::local::ctx_cap(),
+        eval_pass_rate: eval.pass_rate(),
+        tokens_per_sec: Some(bench.tokens_per_sec),
+        first_token_ms: Some(bench.first_token_ms),
+    });
+}
+
 /// Production CLI: start the sidecar (if assets exist), bench + eval, print, exit code.
 pub fn run_cli() -> i32 {
     let dir = crate::perm::config_dir();
@@ -246,6 +257,7 @@ pub fn run_cli() -> i32 {
     match run_bench(rt.as_ref(), &hw, load_ms, "llama-server") {
         Ok(bench) => {
             let eval = run_eval(rt.as_ref());
+            apply_caps(&bench, &eval);
             println!("{}", format_full_report(&bench, &eval));
             if eval.pass_rate() + f64::EPSILON < CI_MIN_EVAL_PASS_RATE {
                 eprintln!("eval below pass floor");
@@ -276,6 +288,7 @@ pub fn run_for_ui() -> Result<String, String> {
     };
     let bench = run_bench(rt.as_ref(), &hw, load_ms, "llama-server")?;
     let eval = run_eval(rt.as_ref());
+    apply_caps(&bench, &eval);
     Ok(format_full_report(&bench, &eval))
 }
 

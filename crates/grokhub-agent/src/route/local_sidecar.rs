@@ -433,6 +433,10 @@ pub mod fake_server {
         while !stop.load(AtomicOrdering::SeqCst) {
             match listener.accept() {
                 Ok((mut stream, _)) => {
+                    // Accepted sockets inherit nonblocking on Windows; force blocking
+                    // or the first read can WouldBlock and we drop with no response
+                    // (client sees WSAECONNABORTED / os error 10053).
+                    stream.set_nonblocking(false).ok();
                     let _ = handle_one(&mut stream, &token, &hits);
                     if let Some(n) = exit_after {
                         if hits.load(AtomicOrdering::SeqCst) >= n {
@@ -448,39 +452,69 @@ pub mod fake_server {
         }
     }
 
-    /// The whole request: headers and a `Content-Length` body can arrive in
-    /// separate reads, and a body cut short makes the reply pick the wrong shape.
-    fn read_request(stream: &mut TcpStream) -> Result<String, ()> {
-        // An accepted socket inherits non-blocking from the listener on Windows.
-        stream.set_nonblocking(false).ok();
-        stream.set_read_timeout(Some(Duration::from_millis(500))).ok();
-        let mut raw = Vec::new();
-        let mut buf = [0u8; 8192];
-        loop {
-            let n = stream.read(&mut buf).map_err(|_| ())?;
+    fn read_exactish(stream: &mut TcpStream, chunk: &mut [u8]) -> Result<usize, ()> {
+        for _ in 0..50 {
+            match stream.read(chunk) {
+                Ok(n) => return Ok(n),
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock || e.kind() == std::io::ErrorKind::Interrupted => {
+                    // Should be rare after set_nonblocking(false); retry briefly.
+                    std::thread::sleep(Duration::from_millis(2));
+                }
+                Err(_) => return Err(()),
+            }
+        }
+        Err(())
+    }
+
+    /// Read one HTTP/1.1 request (headers + Content-Length body). Windows often
+    /// delivers headers and body in separate TCP packets; a single `read` is not enough.
+    fn read_http_request(stream: &mut TcpStream) -> Result<String, ()> {
+        stream.set_read_timeout(Some(Duration::from_millis(2_000))).ok();
+        let mut raw = Vec::with_capacity(4096);
+        let mut chunk = [0u8; 4096];
+        let header_end = loop {
+            let n = read_exactish(stream, &mut chunk)?;
+            if n == 0 {
+                break None;
+            }
+            raw.extend_from_slice(&chunk[..n]);
+            if let Some(pos) = raw.windows(4).position(|w| w == b"\r\n\r\n") {
+                break Some(pos + 4);
+            }
+            if raw.len() > 256 * 1024 {
+                return Err(());
+            }
+        };
+        let Some(header_end) = header_end else {
+            return Ok(String::from_utf8_lossy(&raw).into_owned());
+        };
+        let headers = String::from_utf8_lossy(&raw[..header_end]);
+        let content_len = headers
+            .lines()
+            .find_map(|l| {
+                let (k, v) = l.split_once(':')?;
+                if k.eq_ignore_ascii_case("content-length") {
+                    v.trim().parse::<usize>().ok()
+                } else {
+                    None
+                }
+            })
+            .unwrap_or(0);
+        while raw.len() < header_end + content_len {
+            let n = read_exactish(stream, &mut chunk)?;
             if n == 0 {
                 break;
             }
-            raw.extend_from_slice(&buf[..n]);
-            let text = String::from_utf8_lossy(&raw);
-            if let Some(end) = text.find("\r\n\r\n") {
-                let want = text[..end]
-                    .lines()
-                    .find_map(|l| {
-                        let (k, v) = l.split_once(':')?;
-                        k.trim().eq_ignore_ascii_case("content-length").then(|| v.trim().parse::<usize>().ok())?
-                    })
-                    .unwrap_or(0);
-                if raw.len() >= end + 4 + want {
-                    break;
-                }
+            raw.extend_from_slice(&chunk[..n]);
+            if raw.len() > 256 * 1024 {
+                return Err(());
             }
         }
         Ok(String::from_utf8_lossy(&raw).into_owned())
     }
 
     fn handle_one(stream: &mut TcpStream, token: &str, hits: &std::sync::Arc<AtomicUsize>) -> Result<(), ()> {
-        let req = read_request(stream)?;
+        let req = read_http_request(stream)?;
         let first = req.lines().next().unwrap_or("");
         let auth_ok = req.lines().any(|l| l.eq_ignore_ascii_case(&format!("Authorization: Bearer {token}")));
         if first.starts_with("GET /health") {
@@ -495,7 +529,8 @@ pub mod fake_server {
                 return Ok(());
             }
             hits.fetch_add(1, AtomicOrdering::SeqCst);
-            let inner = if req.contains("at most") || req.contains("summary") {
+            // Match helper prompts from the body (must be fully read — see read_http_request).
+            let inner = if req.contains("\"summary\"") || req.contains("at most") {
                 serde_json::json!({"summary": "fake summary"})
             } else if req.contains("difficulty") {
                 serde_json::json!({"d": 0.5})
@@ -528,6 +563,8 @@ pub mod fake_server {
         );
         let _ = stream.write_all(resp.as_bytes());
         let _ = stream.flush();
+        // Prefer FIN over RST so ureq finishes reading the status line on Windows.
+        let _ = stream.shutdown(Shutdown::Write);
     }
 }
 
