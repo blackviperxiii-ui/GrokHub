@@ -966,3 +966,137 @@ fn a_chat_note_runs_on_one_chat_in_five_is_kept_on_fewer_steps_and_protected_tar
     assert!(hx::read_egress(&root).is_empty(), "no request left the cabin during the pass and the trial");
     let _ = std::fs::remove_dir_all(&root);
 }
+
+/// Card 32 PR D: a code-change idea is a card the user saves or copies. It
+/// changes nothing, the copy has no home path, email or key, and no request
+/// leaves the cabin.
+#[test]
+fn a_code_idea_is_saved_or_copied_redacted_never_applied_and_nothing_leaves() {
+    let _g = crate::config::hold_test_config();
+    let (_pin, root) = pin("code-idea");
+    let now = grokhub_core::now_ms();
+    skills::save_skill(&skill("weekly-report", "1. Open report.md\n2. click Save")).unwrap();
+    let skill_md = root.join("skills").join("weekly-report").join("SKILL.md");
+    let before = std::fs::read_to_string(&skill_md).ok();
+    recorded(&root, "weekly-report", "w:1", false, now - 2 * DAY, &["click"]);
+    let calls = fake(
+        "CODE_IDEA: Wait for the Save dialog | The save click lands before the dialog opens on /home/viper/Documents/report.md | 1 of 1 weekly-report runs failed; viper@example.com saw it\n\
+         CODE_IDEA: Retry rate limits | A 429 ends the run (key sk-abcdefghijklmnopqrstuv) | 1 run\n\
+         CODE_IDEA: A third idea | p | e\n",
+    );
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.skill_list = skills::list_skills();
+    cabin.run_self_review_now(now);
+    wait_pass(&mut cabin);
+    let cards = self_review_cards(&cabin);
+    let sources: Vec<&str> = cards.iter().map(|c| c.source_id.as_str()).collect();
+    assert_eq!(sources, vec!["self-review:code:wait-for-the-save-dialog", "self-review:code:retry-rate-limits"]);
+    assert_eq!(cards[0].title, "Wait for the Save dialog");
+
+    cabin.apply_pulse_act(super::pulse_ui::PulseAct::CopyIssue(cards[0].id.clone()));
+    let issue = cabin.harness.self_review.copy_out.take().expect("issue text for the clipboard");
+    let version = crate::update::build_version_line();
+    assert_eq!(
+        issue,
+        format!(
+            "## Wait for the Save dialog\n\nProblem: The save click lands before the dialog opens on ~/Documents/report.md\n\n\
+             Evidence: 1 of 1 weekly-report runs failed; [email] saw it\n\n---\n\
+             Found by the weekly self-review in {version}. Paths, emails and keys were removed before copying.\n"
+        )
+    );
+    cabin.copy_code_idea(&cards[1].id);
+    let second = cabin.harness.self_review.copy_out.take().unwrap();
+    assert!(!second.contains("sk-abcdefghijklmnopqrstuv"), "{second}");
+    assert!(cabin.updates.iter().any(|c| c.id == cards[0].id && c.status != UpdateStatus::Dismissed), "copy leaves the card");
+
+    cabin.pulse_accept(&cards[0].id, "2026-10-11");
+    let saved = super::self_review_ui::load_state().saved_ideas;
+    assert_eq!(saved.len(), 1);
+    assert_eq!(
+        (saved[0].title.as_str(), saved[0].text.as_str()),
+        (
+            "Wait for the Save dialog",
+            "Problem: The save click lands before the dialog opens on /home/viper/Documents/report.md\n\nEvidence: 1 of 1 weekly-report runs failed; viper@example.com saw it"
+        )
+    );
+    assert!(cabin.updates.iter().any(|c| c.id == cards[0].id && c.status == UpdateStatus::Dismissed));
+    assert_eq!(std::fs::read_to_string(&skill_md).ok(), before, "a code idea changes no skill");
+    assert!(hx::read_versions(&root).is_empty(), "and starts no trial");
+    assert_eq!(calls.load(Ordering::SeqCst), 1, "the weekly pass was the only model call");
+    assert!(hx::read_egress(&root).is_empty(), "no request left the cabin");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// Settings history: newest first, status words, Revert only on the newest
+/// kept version of a target, and the Revert puts the skill back.
+#[test]
+fn the_change_history_lists_versions_newest_first_and_reverts_a_kept_skill() {
+    use super::change_history_ui::history_rows;
+    let v = |version: &str, id: &str, status: hx::VersionStatus, label: &str, note: &str, at: u64| hx::Version {
+        version: version.into(),
+        kind: "skill".into(),
+        id: id.into(),
+        label: label.into(),
+        diff: "+1 -2 lines".into(),
+        status,
+        note: note.into(),
+        started_at: at,
+        at,
+        ..Default::default()
+    };
+    let now = 10 * DAY;
+    let versions = vec![
+        v("skill:a@1", "a", hx::VersionStatus::Kept, "Old a", "Kept: Old a, 10% fewer steps over 10 runs", DAY),
+        v("skill:b@1", "b", hx::VersionStatus::RolledBack, "Try b", "Rolled back: Try b, 5% more steps over 10 runs", 2 * DAY),
+        v("skill:a@2", "a", hx::VersionStatus::Kept, "New a", "", 8 * DAY),
+        v("skill:c@1", "c", hx::VersionStatus::Canary, "Try c", "", 9 * DAY),
+    ];
+    let rows = history_rows(&versions, now);
+    let shown: Vec<(&str, &str, Option<&str>)> =
+        rows.iter().map(|r| (r.title.as_str(), r.hint.as_str(), r.revert.as_deref())).collect();
+    assert_eq!(
+        shown,
+        vec![
+            ("Trying: Try c", "+1 -2 lines · 1d ago", None),
+            ("Kept: New a", "+1 -2 lines · 2d ago", Some("skill:a@2")),
+            ("Rolled back: Try b", "Rolled back: Try b, 5% more steps over 10 runs · +1 -2 lines · 8d ago", None),
+            ("Kept: Old a", "Kept: Old a, 10% fewer steps over 10 runs · +1 -2 lines · 9d ago", None),
+        ]
+    );
+
+    let _g = crate::config::hold_test_config();
+    let (_pin, root) = pin("history-revert");
+    let old = skill("weekly-report", "1. Open report.md\n2. click Save");
+    skills::save_skill(&old).unwrap();
+    let skill_md = root.join("skills").join("weekly-report").join("SKILL.md");
+    let v1 = std::fs::read_to_string(&skill_md).unwrap();
+    let new = skill("weekly-report", "1. Open report.md\n2. press ctrl+s");
+    let change = skills::save_skill_versioned(&new, hx::Origin::SelfManage, "weekly self-review: Use ctrl+s").unwrap().unwrap();
+    let v2 = std::fs::read_to_string(&skill_md).unwrap();
+    let trial = hx::start_trial(&root, &change, "skill:weekly-report", "Use ctrl+s in weekly-report", hx::Metric::Steps, &v1, &v2).unwrap();
+    let t = trial.started_at;
+    let runs: Vec<run_metrics::RunMetrics> = (0..22u64)
+        .map(|i| {
+            let arm = if i < 12 { run_metrics::Arm::Canary } else { run_metrics::Arm::Control };
+            run_metrics::RunMetrics {
+                run: format!("chat:{i}"),
+                class: trial.class.clone(),
+                result: OutcomeResult::Success,
+                steps: if arm == run_metrics::Arm::Canary { 2 } else { 4 },
+                version: trial.version.clone(),
+                arm: Some(arm),
+                finished_at: t + 1 + i,
+                at: t + 1 + i,
+                ..Default::default()
+            }
+        })
+        .collect();
+    assert_eq!(hx::settle_trials(&root, &skills::skills_dir(), &runs, t + 100)[0].status, hx::VersionStatus::Kept);
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.revert_kept_version(&trial.version);
+    assert_eq!(cabin.status, "Reverted by you: Use ctrl+s in weekly-report");
+    assert_eq!(std::fs::read_to_string(&skill_md).unwrap(), v1, "the skill is back to the version before");
+    let rows = history_rows(&hx::read_versions(&root), t + 200);
+    assert_eq!((rows[0].title.as_str(), rows[0].revert.as_deref()), ("Reverted: Use ctrl+s in weekly-report", None));
+    let _ = std::fs::remove_dir_all(&root);
+}

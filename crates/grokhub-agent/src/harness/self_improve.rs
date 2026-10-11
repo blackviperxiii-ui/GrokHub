@@ -342,6 +342,8 @@ pub fn patch_marks(config_dir: &Path) -> Vec<PatchMark> {
 pub struct WeeklyPass {
     pub kept: Vec<RankedProposal>,
     pub refused: Vec<RejectedProposal>,
+    /// Code-change ideas for a person to make (card 32 PR D); never applied.
+    pub ideas: Vec<grokhub_core::self_review::CodeIdea>,
     pub tokens: CallTokens,
 }
 
@@ -384,13 +386,14 @@ pub fn run_weekly(
     );
     let routed = call_model(client, &call, cancel)?;
     let (kept, refused) = rank_proposals(parse_self_review(&routed.out.text), stats);
+    let ideas = grokhub_core::self_review::rank_code_ideas(grokhub_core::self_review::parse_code_ideas(&routed.out.text), stats);
     for r in &refused {
         crate::harness::changes::note_proposal_finding(config_dir, &r.target, &r.why);
     }
     let mut span = Span::soft_allow(
         SELF_REVIEW_SESSION,
         SELF_REVIEW_TOOL,
-        &serde_json::json!({ "kept": kept.len(), "refused": refused.len() }).to_string(),
+        &serde_json::json!({ "kept": kept.len(), "refused": refused.len(), "ideas": ideas.len() }).to_string(),
         "ok",
         "",
         crate::harness::AccessMode::Supervised,
@@ -407,6 +410,7 @@ pub fn run_weekly(
     Ok(WeeklyPass {
         kept,
         refused,
+        ideas,
         tokens: routed.tokens,
     })
 }
@@ -712,6 +716,7 @@ mod tests {
             "crates/grokhub-core/src/outcome.rs",
             "crates/grokhub-app/src/app/self_review_ui.rs",
             "crates/grokhub-app/src/app/canary_ui.rs",
+            "crates/grokhub-app/src/app/change_history_ui.rs",
         ];
         let banned = [
             "ureq", "reqwest", "hyper::", "tungstenite", "TcpStream", "UdpSocket", "std::net", "curl", "http://", "https://",

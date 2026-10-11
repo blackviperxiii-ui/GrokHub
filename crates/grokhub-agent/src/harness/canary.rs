@@ -25,7 +25,8 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::harness::changes::{
-    rollback_change, Change, ChangeKind, ChangeLedger, ChangeTarget, SkillTarget, SnippetTarget, CHANGES_DIR,
+    rollback_change, undo_change, Change, ChangeKind, ChangeLedger, ChangeTarget, SkillTarget, SnippetTarget, UndoAsk,
+    CHANGES_DIR,
 };
 
 pub const VERSIONS_FILE: &str = "changes.jsonl";
@@ -91,6 +92,8 @@ pub enum VersionStatus {
     RolledBack,
     /// The target changed again before the trial ended (an edit or an undo).
     Ended,
+    /// The user put a kept version back from Settings (card 32 PR D).
+    Reverted,
 }
 
 impl VersionStatus {
@@ -100,6 +103,7 @@ impl VersionStatus {
             Self::Kept => "kept",
             Self::RolledBack => "rolled back",
             Self::Ended => "ended",
+            Self::Reverted => "reverted",
         }
     }
 }
@@ -382,6 +386,34 @@ fn target_of<'a>(v: &'a Version, config_dir: &'a Path, skills_dir: &'a Path) -> 
     }
 }
 
+/// Settings → Self-improvement: the user reverts a kept version with a click.
+/// Only the newest change on its target can go back; the ledger undoes it.
+pub fn revert_version(
+    config_dir: &Path,
+    skills_dir: &Path,
+    version: &str,
+    ask: UndoAsk,
+    now: u64,
+) -> Result<Version, String> {
+    let v = read_versions(config_dir)
+        .into_iter()
+        .find(|v| v.version == version)
+        .ok_or_else(|| "That change is not in the history".to_string())?;
+    if v.status != VersionStatus::Kept {
+        return Err(format!("Only a kept change can be reverted; this one is {}", v.status.label()));
+    }
+    let kind = ChangeKind::parse(&v.kind).ok_or_else(|| format!("{} can't be reverted here", v.kind))?;
+    if ChangeLedger::load_kind(config_dir, kind).undo_target(&v.id).map(|c| c.seq) != Some(v.seq) {
+        return Err(format!("{} changed again since; undo the newer change first", v.id));
+    }
+    let target = target_of(&v, config_dir, skills_dir).ok_or_else(|| format!("{} can't be reverted here", v.kind))?;
+    undo_change(config_dir, target.as_ref(), ask)?;
+    // The revert line must win over the kept line, whatever the clocks say.
+    let line = v.closed(VersionStatus::Reverted, format!("Reverted by you: {}", v.label), now.max(v.at + 1));
+    append_version(config_dir, &line)?;
+    Ok(line)
+}
+
 /// Judge every open trial and close the ones that are due: keep, or roll
 /// back through the ledger. A trial whose target changed again since ends
 /// with no note. Returns the closing lines, newest state.
@@ -584,6 +616,53 @@ mod tests {
         assert_eq!(md(&skills), V2, "kept: the new bytes stay");
         assert_eq!(read_versions(&root)[0].status, VersionStatus::Kept);
         assert_eq!(open_trial(&root, "skill:save-page"), None);
+    }
+
+    #[test]
+    fn a_kept_version_is_reverted_by_the_users_click_and_only_once() {
+        let (root, skills) = dirs("canary-revert");
+        let v = trial(&root, &skills);
+        let ask = || UndoAsk::from_click();
+        assert_eq!(
+            revert_version(&root, &skills, &v.version, ask(), v.at + 1).unwrap_err(),
+            "Only a kept change can be reverted; this one is canary"
+        );
+        let t = v.started_at;
+        let mut runs: Vec<RunMetrics> =
+            (0..12).map(|i| run(&v, i, Some(Arm::Canary), 9, OutcomeResult::Success, t + 1 + i as u64)).collect();
+        runs.extend((20..30).map(|i| run(&v, i, Some(Arm::Control), 11, OutcomeResult::Success, t + 1 + i as u64)));
+        assert_eq!(settle_trials(&root, &skills, &runs, t + 100)[0].status, VersionStatus::Kept);
+        let line = revert_version(&root, &skills, &v.version, ask(), t + 200).unwrap();
+        assert_eq!((line.status, line.note.as_str()), (VersionStatus::Reverted, "Reverted by you: Use ctrl+s in save-page"));
+        assert_eq!(md(&skills), V1, "the version before is back, byte for byte");
+        assert_eq!(read_versions(&root)[0].status, VersionStatus::Reverted);
+        assert_eq!(
+            revert_version(&root, &skills, &v.version, ask(), t + 300).unwrap_err(),
+            "Only a kept change can be reverted; this one is reverted"
+        );
+        assert_eq!(
+            revert_version(&root, &skills, "skill:nope@000000000000", ask(), t + 300).unwrap_err(),
+            "That change is not in the history"
+        );
+    }
+
+    #[test]
+    fn a_kept_version_that_changed_again_is_not_reverted() {
+        let (root, skills) = dirs("canary-revert-stale");
+        let v = trial(&root, &skills);
+        let t = v.started_at;
+        let runs: Vec<RunMetrics> = (0..12)
+            .map(|i| run(&v, i, Some(Arm::Canary), 9, OutcomeResult::Success, t + 1 + i as u64))
+            .chain((20..30).map(|i| run(&v, i, Some(Arm::Control), 11, OutcomeResult::Success, t + 1 + i as u64)))
+            .collect();
+        settle_trials(&root, &skills, &runs, t + 100);
+        record_skill_change(&root, &skills, "save-page", Origin::User, "edited", || put(&skills, "mine\n")).unwrap();
+        assert_eq!(
+            revert_version(&root, &skills, &v.version, UndoAsk::from_click(), t + 200).unwrap_err(),
+            "save-page changed again since; undo the newer change first"
+        );
+        assert_eq!(md(&skills), "mine\n", "the user's newer edit stays");
+        assert_eq!(read_versions(&root)[0].status, VersionStatus::Kept);
     }
 
     #[test]

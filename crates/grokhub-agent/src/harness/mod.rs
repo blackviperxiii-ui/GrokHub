@@ -101,7 +101,7 @@ pub use cua::{
     CUA_MISSING_MSG, CUA_OFF_MSG, CUA_PERMISSION_MODE, CUA_TOOLS,
 };
 pub use canary::{
-    diff_stat, judge, open_trial, pick_arm, read_versions, settle_trials, start_trial, versions_path, Judged, Metric,
+    diff_stat, judge, open_trial, pick_arm, read_versions, revert_version, settle_trials, start_trial, versions_path, Judged, Metric,
     Version, VersionStatus, ALL_RUNS, CANARY_MAX_MS, CANARY_RUNS, CANARY_SHARE_PCT, VERSIONS_FILE,
 };
 pub use changes::{

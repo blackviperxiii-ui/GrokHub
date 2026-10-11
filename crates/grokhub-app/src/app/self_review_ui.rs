@@ -39,6 +39,9 @@ pub(super) struct SelfReviewFile {
     /// Suggestions quiet mode logged instead of posting, newest last.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub quiet_log: Vec<sr::QuietEntry>,
+    /// Code-change ideas the user saved from their cards, newest last.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub saved_ideas: Vec<super::change_history_ui::SavedIdea>,
 }
 
 /// What one card says and what its Apply writes.
@@ -63,6 +66,8 @@ pub(super) struct SelfReviewState {
     pub trial: Option<super::canary_ui::TrialPick>,
     /// The local day open trials were last judged on the clock.
     pub settled_day: Option<String>,
+    /// A code idea's issue text for the clipboard on the next frame.
+    pub copy_out: Option<String>,
 }
 
 fn state_path() -> std::path::PathBuf {
@@ -76,7 +81,7 @@ pub(super) fn load_state() -> SelfReviewFile {
         .unwrap_or_default()
 }
 
-fn save_state(s: &SelfReviewFile) {
+pub(super) fn save_state(s: &SelfReviewFile) {
     if let Ok(text) = serde_json::to_string_pretty(s) {
         let _ = std::fs::write(state_path(), text);
     }
@@ -435,7 +440,28 @@ impl Cabin {
             };
             self.post_self_review_card(card, now);
         }
+        for idea in pass.ideas {
+            self.post_code_idea_card(&idea, now);
+        }
         self.persist_updates();
+    }
+
+    /// A code-change idea from the weekly pass: Save keeps it, Copy as
+    /// GitHub issue copies it redacted. GrokHub never makes the change.
+    pub(super) fn post_code_idea_card(&mut self, idea: &sr::CodeIdea, now: u64) {
+        let text = idea.text();
+        let details = format!(
+            "{text}\n\nGrokHub never changes its own code. Save idea keeps this in Settings → Behavior; Copy as GitHub issue puts it on the clipboard with home paths, emails and keys taken out, for you to paste."
+        );
+        let card = ProposalCard {
+            source: sr::code_source(&idea.slug),
+            skill: &idea.slug,
+            title: &idea.title,
+            body: &idea.evidence,
+            details,
+            md: &text,
+        };
+        self.post_self_review_card(card, now);
     }
 
     /// Router R3a in the weekly pass: at most two cost-raising tuning cards
@@ -511,7 +537,7 @@ impl Cabin {
         let Some(target) = sr::card_target(&card.source_id) else {
             return false;
         };
-        let mut state = load_state();
+        let state = load_state();
         let Some(pending) = state
             .pending
             .iter()
@@ -523,6 +549,7 @@ impl Cabin {
         let (dir, skills_dir) = (config::config_dir(), skills::skills_dir());
         let done = match target {
             CardTarget::Snippet(name) => self.apply_snippet(&name, &card.title, &pending.md),
+            CardTarget::Code(_) => self.save_code_idea(&card.title, &pending.md),
             CardTarget::Router(candidate) => match grokhub_agent::route::learn::accept_card(&dir, &candidate, grokhub_core::now_ms()) {
                 Ok(msg) => {
                     self.status = msg;
@@ -590,6 +617,8 @@ impl Cabin {
             }
         };
         if done {
+            // Reloaded: a saved code idea wrote the file since.
+            let mut state = load_state();
             state.pending.retain(|p| p.source != card.source_id);
             save_state(&state);
             grokhub_core::dismiss_update_at(&mut self.updates, id, grokhub_core::now_ms());
