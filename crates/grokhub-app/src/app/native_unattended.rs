@@ -54,9 +54,40 @@ fn test_client() -> Option<Arc<dyn grokhub_agent::ModelClient + Send + Sync>> {
 static EPHEMERAL_SPENT: std::sync::Mutex<Option<grokhub_agent::Usage>> =
     std::sync::Mutex::new(None);
 
-/// Count a one-shot run's tokens toward today's usage, then delete its session
-/// file so these runs don't fill History.
-fn settle_ephemeral(done: &grokhub_agent::UnattendedDone) {
+/// Tokens background jobs spent off the UI thread, by governor kind. The cabin
+/// frame charges them to the governor's per-day budgets.
+static GOVERNED_SPENT: std::sync::Mutex<Vec<(JobKind, u64)>> =
+    std::sync::Mutex::new(Vec::new());
+
+/// Input, output and reasoning tokens of one usage.
+fn usage_tokens(u: &grokhub_agent::Usage) -> u64 {
+    u.input_tokens
+        .saturating_add(u.output_tokens)
+        .saturating_add(u.reasoning_tokens)
+}
+
+/// A background job of `kind` spent `tokens` off the UI thread.
+fn note_governed_spend(kind: JobKind, tokens: u64) {
+    if tokens == 0 {
+        return;
+    }
+    GOVERNED_SPENT
+        .lock()
+        .unwrap_or_else(|err| err.into_inner())
+        .push((kind, tokens));
+}
+
+fn take_governed_spent() -> Vec<(JobKind, u64)> {
+    std::mem::take(&mut *GOVERNED_SPENT.lock().unwrap_or_else(|err| err.into_inner()))
+}
+
+/// Count a one-shot run's tokens toward today's usage, and toward its governor
+/// kind when a background job ran it, then delete its session file so these
+/// runs don't fill History.
+fn settle_ephemeral(done: &grokhub_agent::UnattendedDone, kind: Option<JobKind>) {
+    if let Some(kind) = kind {
+        note_governed_spend(kind, usage_tokens(&done.usage));
+    }
     if done.usage != grokhub_agent::Usage::default() {
         let mut spent = EPHEMERAL_SPENT
             .lock()
@@ -189,6 +220,7 @@ fn fast_once(
     workspace: &Path,
     prompt: &str,
     model: &str,
+    kind: Option<JobKind>,
 ) -> Result<String, String> {
     let done = execute(Prepared {
         ready: ReadyModel {
@@ -206,7 +238,7 @@ fn fast_once(
         prompt: prompt.to_string(),
         image: None,
     });
-    settle_ephemeral(&done);
+    settle_ephemeral(&done, kind);
     if done.stop_reason == "halted" || done.stop_reason == "cancelled" {
         return Err(done.stop_reason);
     }
@@ -220,12 +252,17 @@ fn fast_once(
     Ok(done.text)
 }
 
-fn fast_text(ready: &ReadyModel, workspace: &Path, prompt: &str) -> Result<String, String> {
-    let primary = fast_once(ready, workspace, prompt, CABIN_FAST_MODEL)?;
+fn fast_text(
+    ready: &ReadyModel,
+    workspace: &Path,
+    prompt: &str,
+    kind: Option<JobKind>,
+) -> Result<String, String> {
+    let primary = fast_once(ready, workspace, prompt, CABIN_FAST_MODEL, kind)?;
     if !primary.trim().is_empty() {
         return Ok(primary);
     }
-    fast_once(ready, workspace, prompt, CABIN_FAST_FALLBACK)
+    fast_once(ready, workspace, prompt, CABIN_FAST_FALLBACK, kind)
 }
 
 fn native_rules(cabin: &Cabin, workspace: &std::path::Path) -> String {
@@ -240,6 +277,9 @@ fn native_rules(cabin: &Cabin, workspace: &std::path::Path) -> String {
 impl Cabin {
     /// Add one-shot native runs' tokens to today's usage. Flag off: nothing to drain.
     pub(super) fn drain_native_unattended_usage(&mut self) {
+        for (kind, tokens) in take_governed_spent() {
+            self.governor_charge(kind, tokens);
+        }
         let Some(spent) = take_ephemeral_spent() else {
             return;
         };
@@ -313,7 +353,17 @@ impl Cabin {
         };
         std::thread::spawn(move || {
             let _origin = grokhub_agent::harness::OriginScope::enter(grokhub_agent::harness::Origin::Automation);
+            // A resumed loop reports its session's totals: charge only this run.
+            let before = if job.resume {
+                grokhub_agent::load_session(&job.session_id)
+                    .map(|info| usage_tokens(&info.usage))
+                    .unwrap_or(0)
+            } else {
+                0
+            };
             let done = execute(job);
+            let spent = usage_tokens(&done.usage).saturating_sub(before);
+            note_governed_spend(JobKind::Automations, spent);
             if done.stop_reason == "halted" || done.stop_reason == "cancelled" {
                 return;
             }
@@ -397,7 +447,7 @@ impl Cabin {
                 prompt: digest,
                 image: None,
             });
-            settle_ephemeral(&done);
+            settle_ephemeral(&done, Some(JobKind::Review));
             let out = if done.stop_reason == "halted" || done.stop_reason == "cancelled" {
                 Err(done.stop_reason)
             } else if done.stop_reason == "error" && done.text.trim().is_empty() {
@@ -443,7 +493,7 @@ impl Cabin {
         self.chip_rx = Some(rx);
         self.chip_busy = true;
         std::thread::spawn(move || {
-            let text = fast_text(&ready, &workspace, &prompt).unwrap_or_default();
+            let text = fast_text(&ready, &workspace, &prompt, None).unwrap_or_default();
             let _ = tx.send(parse_llm_chips(&text));
         });
     }
@@ -461,12 +511,18 @@ impl Cabin {
         self.greeting_rx = Some(rx);
         self.greeting_busy = true;
         std::thread::spawn(move || {
-            let text = fast_text(&ready, &workspace, &prompt).unwrap_or_default();
+            let text = fast_text(&ready, &workspace, &prompt, None).unwrap_or_default();
             let _ = tx.send(text);
         });
     }
 
-    pub(super) fn spawn_native_ideas(&mut self, prompt: String, tx: mpsc::Sender<String>) {
+    /// `kind` is the governor job this ask is charged to; None for an ask you made.
+    pub(super) fn spawn_native_ideas(
+        &mut self,
+        prompt: String,
+        tx: mpsc::Sender<String>,
+        kind: Option<JobKind>,
+    ) {
         let ready = match unattended_model(self) {
             Ok(ready) => ready,
             Err(err) => {
@@ -478,7 +534,7 @@ impl Cabin {
         let workspace = self.grok_cwd();
         std::thread::spawn(move || {
             let _origin = grokhub_agent::harness::OriginScope::enter(grokhub_agent::harness::Origin::Proactive);
-            let text = fast_text(&ready, &workspace, &prompt).unwrap_or_default();
+            let text = fast_text(&ready, &workspace, &prompt, kind).unwrap_or_default();
             let _ = tx.send(text);
         });
     }
@@ -499,7 +555,8 @@ impl Cabin {
         self.digest_rx = Some(rx);
         self.digest_busy = true;
         std::thread::spawn(move || {
-            let out = fast_once(&ready, &workspace, &prompt, CABIN_FAST_MODEL);
+            let digest = Some(JobKind::Digest);
+            let out = fast_once(&ready, &workspace, &prompt, CABIN_FAST_MODEL, digest);
             let _ = tx.send(out);
         });
     }
