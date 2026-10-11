@@ -179,6 +179,23 @@ pub fn layer(personality: &Personality, rules: &str) -> String {
     format!("{block}\n\n{rules}")
 }
 
+/// What "Try it" in Settings asks a preset. It names no real build, so the preview shows
+/// the voice without the model inventing a cause.
+pub const TRY_IT_PROMPT: &str =
+    "Say hi in one short sentence, then tell me in one more how you'd break the news that a build failed. There is no real build, so don't name a cause.";
+
+/// Rules under a "Try it" preview, in place of the cabin rules.
+pub const TRY_IT_RULES: &str =
+    "This is a two-sentence preview of a reply voice. You have not run anything; don't claim you did.";
+
+/// The messages "Try it" sends: the preset's block, the preview rules, then the canned ask.
+pub fn try_it_messages(personality: &Personality) -> Vec<(String, String)> {
+    vec![
+        ("system".into(), layer(personality, TRY_IT_RULES)),
+        ("user".into(), TRY_IT_PROMPT.into()),
+    ]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -284,5 +301,18 @@ mod tests {
         let dup = format!("{0}\n{0}", "[[preset]]\nid = \"a\"\nname = \"A\"\ndescription = \"x\"\ntone_rules = \"Be a.\"\nemoji = \"none\"\nverbosity = \"normal\"\n");
         assert_eq!(parse(&dup), Err("Personality id a appears twice.".into()));
         assert!(parse("[[preset]]\nid = \"a\"\nmood = \"sunny\"\n").is_err(), "unknown fields are refused");
+    }
+
+    #[test]
+    fn try_it_sends_the_voice_then_the_preview_rules_then_the_canned_ask() {
+        let pirate = builtin("pirate");
+        let msgs = try_it_messages(&pirate);
+        assert_eq!(msgs.len(), 2);
+        assert_eq!(msgs[0].0, "system");
+        assert!(msgs[0].1.starts_with("Personality: Pirate. "), "{}", msgs[0].1);
+        assert!(msgs[0].1.ends_with(&format!("{SAFETY_LINE}\n\n{TRY_IT_RULES}")), "{}", msgs[0].1);
+        assert_eq!(msgs[1], ("user".to_string(), TRY_IT_PROMPT.to_string()));
+        let plain = try_it_messages(&builtin(DEFAULT_ID));
+        assert_eq!(plain[0], ("system".to_string(), TRY_IT_RULES.to_string()));
     }
 }

@@ -15436,6 +15436,7 @@ fn quiet_cabin() -> Cabin {
         composer_want_focus: false,
         settings_sec: super::SettingsSec::Account,
         market: Default::default(),
+        try_voice: Default::default(),
         settings_back: super::Nav::Chat,
         imagine_aspect: 0,
         imagine_quality: false,

@@ -30,6 +30,7 @@ pub(super) fn settings_sec_title(sec: SettingsSec) -> &'static str {
         SettingsSec::Labs => "Labs",
         SettingsSec::Permissions => "Permissions",
         SettingsSec::Connectors => "Connectors",
+        SettingsSec::Personality => "Personality",
     }
 }
 
@@ -358,6 +359,7 @@ impl Cabin {
                                                 for (s, label) in [
                                                     (SettingsSec::Account, "Account"),
                                                     (SettingsSec::Appearance, "Appearance"),
+                                                    (SettingsSec::Personality, "Personality"),
                                                     (SettingsSec::Behavior, "Behavior"),
                                                     (SettingsSec::Permissions, "Permissions"),
                                                     (SettingsSec::Connectors, "Connectors"),
@@ -928,6 +930,7 @@ impl Cabin {
                                                         }
                                                         SettingsSec::Permissions => self.ui_permission_editor(ui),
                                                         SettingsSec::Connectors => self.ui_settings_connectors(ui),
+                                                        SettingsSec::Personality => self.ui_settings_personality(ui),
                                                     }
                                                 });
                                             });
