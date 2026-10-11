@@ -105,6 +105,7 @@ pub(super) enum PulseAct {
     Retry(String),
     DeleteRecording(String),
     RetryNow,
+    Source(String, SourceAct),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -591,6 +592,15 @@ pub(super) enum FeedPostAct {
     DeleteRecording,
     /// No-route wait card: check the models now.
     RetryNow,
+    /// Save / Not interested / More like this on a source post.
+    Source(SourceAct),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum SourceAct {
+    Save,
+    NotInterested,
+    MoreLike,
 }
 
 /// Open and Retry on a crash card (a run killed from outside, exit 143).
@@ -716,7 +726,11 @@ pub(super) fn paint_post_body(
     ui.add_space(2.0);
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 14.0;
-        if paint_heart_button(ui, card.reaction == Some(CardReaction::Up)) {
+        if grokhub_core::pulse_sources::is_source_post(card) {
+            if let Some(did) = paint_source_actions(ui, card) {
+                act = Some(FeedPostAct::Source(did));
+            }
+        } else if paint_heart_button(ui, card.reaction == Some(CardReaction::Up)) {
             act = Some(FeedPostAct::Like);
         }
         if matches!(card.kind, UpdateKind::Digest | UpdateKind::Suggestion) {
@@ -741,6 +755,36 @@ pub(super) fn paint_post_body(
     }
     if let Some(wait) = paint_model_wait(ui, card) {
         act = Some(wait);
+    }
+    act
+}
+
+/// Save, Not interested and More like this under a source post. Save reads Saved
+/// once the post is in Saved Finds.
+fn paint_source_actions(ui: &mut egui::Ui, card: &UpdateCard) -> Option<SourceAct> {
+    let saved = card.reaction == Some(CardReaction::Up);
+    let mut act = None;
+    for (label, did) in [
+        (if saved { "Saved" } else { "Save" }, SourceAct::Save),
+        ("Not interested", SourceAct::NotInterested),
+        ("More like this", SourceAct::MoreLike),
+    ] {
+        let color = if did == SourceAct::Save && saved {
+            crate::theme::fg()
+        } else {
+            crate::theme::muted()
+        };
+        let button = ui.add(
+            egui::Button::new(RichText::new(label).size(crate::theme::FONT_TIP).color(color))
+                .frame(false)
+                .min_size(egui::vec2(0.0, 24.0)),
+        );
+        if button.hovered() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        }
+        if button.clicked() {
+            act = Some(did);
+        }
     }
     act
 }
@@ -1221,6 +1265,7 @@ impl Cabin {
                         FeedPostAct::Retry => PulseAct::Retry(card.id.clone()),
                         FeedPostAct::DeleteRecording => PulseAct::DeleteRecording(card.id.clone()),
                         FeedPostAct::RetryNow => PulseAct::RetryNow,
+                        FeedPostAct::Source(did) => PulseAct::Source(card.id.clone(), did),
                     });
                 }
             });
@@ -1493,6 +1538,7 @@ impl Cabin {
             PulseAct::Retry(id) => self.crash_retry(&id),
             PulseAct::DeleteRecording(id) => self.arm_delete_recording(&id),
             PulseAct::RetryNow => self.retry_model_wait_now(),
+            PulseAct::Source(id, did) => self.source_post_act(&id, did),
             PulseAct::Link(url) => {
                 self.follow_update_action(Some(UpdateAction::DeepLink { href: url }))
             }
@@ -1501,7 +1547,7 @@ impl Cabin {
 
     /// One structured line in MEMORY.md. Likes and dislikes count toward the
     /// next rewrite of the feed instructions.
-    fn pulse_note(&mut self, title: &str, reason: LedgerReason, day: &str) {
+    pub(super) fn pulse_note(&mut self, title: &str, reason: LedgerReason, day: &str) {
         let line = pc::ledger_line(day, title, reason);
         if let Err(err) = crate::config::append_memory("MEMORY.md", &line) {
             self.status = err;
@@ -1515,7 +1561,7 @@ impl Cabin {
         }
     }
 
-    fn pulse_card(&self, id: &str) -> Option<UpdateCard> {
+    pub(super) fn pulse_card(&self, id: &str) -> Option<UpdateCard> {
         self.updates.iter().find(|c| c.id == id).cloned()
     }
 
@@ -1554,7 +1600,7 @@ impl Cabin {
         until
     }
 
-    fn pulse_remove(&mut self, card: &UpdateCard) {
+    pub(super) fn pulse_remove(&mut self, card: &UpdateCard) {
         if card.kind == UpdateKind::Idea {
             self.delete_idea(&card.id);
         } else {

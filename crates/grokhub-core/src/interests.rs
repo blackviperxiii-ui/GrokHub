@@ -72,6 +72,8 @@ pub enum InterestSignal {
     Accepted,
     Dismissed,
     NotInterested,
+    /// More like this on a Pulse post.
+    MoreLikeThis,
 }
 
 impl InterestSignal {
@@ -82,6 +84,7 @@ impl InterestSignal {
             Self::Accepted => 8,
             Self::Dismissed => -6,
             Self::NotInterested => -15,
+            Self::MoreLikeThis => 12,
         }
     }
 }

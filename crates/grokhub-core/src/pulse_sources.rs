@@ -199,6 +199,15 @@ pub const SEEN_MAX: usize = 600;
 pub const SUMMARY_CHARS: usize = 280;
 pub const CACHE_FILE: &str = "pulse-sources.json";
 
+/// Extension point, off: X and general web through xAI's paid live search. The app
+/// owner chose free sources only (2026-10-09), so nothing builds or sends these
+/// requests. Turning it on needs their OK on the spend, an adapter that builds the
+/// request beside `requests`, and a Settings switch in place of the disabled row.
+pub const PAID_SEARCH_ENABLED: bool = false;
+/// The disabled row's label in Settings → Pulse → Sources.
+pub const PAID_SEARCH_LABEL: &str = "X and web search (xAI, paid)";
+pub const PAID_SEARCH_NOTE: &str = "Off. Pulse uses free sources only for now.";
+
 /// The form an entry is stored in, from what a person might paste.
 pub fn canonical_entry(kind: SourceKind, raw: &str) -> Result<String, String> {
     let raw = raw.trim();
@@ -815,6 +824,64 @@ pub fn canonical_url(url: &str) -> String {
     out
 }
 
+/// More like this: a search for a post's own words on the next check, scored
+/// for the interest the post was for.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Related {
+    pub query: String,
+    #[serde(default)]
+    pub topic: Option<String>,
+}
+
+/// Searches queued by More like this, kept until the next check runs them.
+pub const RELATED_MAX: usize = 5;
+const RELATED_WORDS: usize = 6;
+
+/// A post title's main words, in order, for a related search.
+pub fn related_query(title: &str) -> String {
+    let mut seen = std::collections::BTreeSet::new();
+    title
+        .split(|c: char| !c.is_alphanumeric() && c != '.' && c != '-')
+        .map(|w| w.trim_matches(|c: char| c == '.' || c == '-'))
+        .filter(|w| w.len() > 2 && !TITLE_STOP.contains(&w.to_lowercase().as_str()))
+        .filter(|w| seen.insert(w.to_lowercase()))
+        .take(RELATED_WORDS)
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Hacker News and Reddit searches for queued More like this asks. Sources that are
+/// off are not searched.
+pub fn related_requests(s: &SourceSettings, related: &[Related], now_ms: u64) -> Vec<SourceReq> {
+    let mut out = Vec::new();
+    for r in related.iter().filter(|r| !r.query.trim().is_empty()) {
+        if s.hacker_news {
+            let since = now_ms.saturating_sub(SEARCH_WINDOW_MS) / 1000;
+            out.push(SourceReq {
+                kind: SourceKind::HackerNews,
+                url: format!(
+                    "https://hn.algolia.com/api/v1/search?query={}&tags=story&numericFilters=created_at_i%3E{since}&hitsPerPage=10",
+                    query_value(&r.query)
+                ),
+                name: "Hacker News".into(),
+                topic: r.topic.clone(),
+            });
+        }
+        if s.reddit {
+            out.push(SourceReq {
+                kind: SourceKind::Reddit,
+                url: format!(
+                    "https://www.reddit.com/search.json?q={}&sort=top&t=week&limit=10&raw_json=1",
+                    query_value(&r.query)
+                ),
+                name: "Reddit".into(),
+                topic: r.topic.clone(),
+            });
+        }
+    }
+    out
+}
+
 /// What the app's fetch returned.
 pub enum Fetched {
     Body { body: String, etag: Option<String>, last_modified: Option<String> },
@@ -848,6 +915,12 @@ pub struct SourceCache {
     pub summary_day: u64,
     #[serde(default)]
     pub summary_calls: u32,
+    /// Not interested (−1) and More like this (+1) per source name, −4 to 4.
+    #[serde(default)]
+    pub source_bias: BTreeMap<String, i32>,
+    /// More like this searches for the next check.
+    #[serde(default)]
+    pub related: Vec<Related>,
 }
 
 impl SourceCache {
@@ -857,6 +930,35 @@ impl SourceCache {
             self.summary_calls
         } else {
             0
+        }
+    }
+
+    /// Not interested lowers a source a step, More like this raises it.
+    pub fn nudge_source(&mut self, source_name: &str, step: i32) {
+        let name = source_name.trim();
+        if name.is_empty() {
+            return;
+        }
+        let bias = self.source_bias.entry(name.to_string()).or_insert(0);
+        *bias = (*bias + step).clamp(-SOURCE_BIAS_MAX, SOURCE_BIAS_MAX);
+        if *bias == 0 {
+            self.source_bias.remove(name);
+        }
+    }
+
+    /// Queue a related search for the next check. The oldest drops past `RELATED_MAX`.
+    pub fn queue_related(&mut self, query: &str, topic: Option<&str>) {
+        let query = query.trim();
+        if query.is_empty() || self.related.iter().any(|r| r.query.eq_ignore_ascii_case(query)) {
+            return;
+        }
+        self.related.push(Related {
+            query: query.to_string(),
+            topic: topic.map(str::to_string),
+        });
+        if self.related.len() > RELATED_MAX {
+            let drop = self.related.len() - RELATED_MAX;
+            self.related.drain(..drop);
         }
     }
 
@@ -1017,6 +1119,21 @@ fn quality(item: &SourceItem) -> u32 {
 /// Score every item. Muted interests, items past ITEM_MAX_AGE_MS and anything under
 /// RANK_MIN drop out. Highest first.
 pub fn rank(items: &[SourceItem], profile: &crate::interests::InterestProfile, now_ms: u64) -> Vec<Ranked> {
+    rank_with(items, profile, &BTreeMap::new(), now_ms)
+}
+
+/// Most steps Not interested or More like this moves one source.
+pub const SOURCE_BIAS_MAX: i32 = 4;
+/// What one step is worth, in percent of an item's score.
+const SOURCE_BIAS_STEP_PCT: i32 = 15;
+
+/// `rank`, with each source's score moved 15% a step by Not interested / More like this.
+pub fn rank_with(
+    items: &[SourceItem],
+    profile: &crate::interests::InterestProfile,
+    bias: &BTreeMap<String, i32>,
+    now_ms: u64,
+) -> Vec<Ranked> {
     let muted: Vec<&str> = profile.topics.iter().filter(|t| t.muted).map(|t| t.topic.as_str()).collect();
     let mut out: Vec<Ranked> = items
         .iter()
@@ -1028,6 +1145,9 @@ pub fn rank(items: &[SourceItem], profile: &crate::interests::InterestProfile, n
         .filter_map(|i| {
             let (rel, because) = relevance(i, profile);
             let score = rel * freshness(i, now_ms) * quality(i) / 10_000;
+            let step = bias.get(&i.source_name).copied().unwrap_or(0).clamp(-SOURCE_BIAS_MAX, SOURCE_BIAS_MAX);
+            let pct = u32::try_from(100 + step * SOURCE_BIAS_STEP_PCT).unwrap_or(100);
+            let score = score * pct / 100;
             (score >= RANK_MIN).then(|| Ranked { item: i.clone(), score, because })
         })
         .collect();
@@ -1167,6 +1287,69 @@ pub fn item_card(ranked: &Ranked, now_ms: u64) -> UpdateCard {
     card.pulse.image_urls = item.image.iter().cloned().collect();
     card.pulse.because = ranked.because.clone();
     card
+}
+
+/// A Feed post made from a source item (it gets Save / Not interested / More like this).
+pub fn is_source_post(card: &UpdateCard) -> bool {
+    card.source_id.starts_with("source:")
+}
+
+/// Saved Finds: posts kept with Save, newest first, in `{config}/saved-finds.json`.
+pub const SAVED_FILE: &str = "saved-finds.json";
+pub const SAVED_MAX: usize = 200;
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SavedFind {
+    pub title: String,
+    pub url: String,
+    #[serde(default)]
+    pub source_name: String,
+    #[serde(default)]
+    pub summary: String,
+    #[serde(default)]
+    pub because: Option<String>,
+    pub saved_ms: u64,
+}
+
+/// A source post as a Saved Find. None for a card with no link.
+pub fn saved_from_card(card: &UpdateCard, now_ms: u64) -> Option<SavedFind> {
+    let url = card.citations.first()?.clone();
+    Some(SavedFind {
+        title: card.title.clone(),
+        url,
+        source_name: card.pulse.source_name.clone().unwrap_or_default(),
+        summary: card.body.clone().unwrap_or_default(),
+        because: card.pulse.because.clone(),
+        saved_ms: now_ms,
+    })
+}
+
+/// Add a find to the front. False when the same link is already saved.
+pub fn save_find(list: &mut Vec<SavedFind>, find: SavedFind) -> bool {
+    let key = canonical_url(&find.url);
+    if list.iter().any(|f| canonical_url(&f.url) == key) {
+        return false;
+    }
+    list.insert(0, find);
+    list.truncate(SAVED_MAX);
+    true
+}
+
+pub fn load_saved(path: &std::path::Path) -> Vec<SavedFind> {
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|t| serde_json::from_str(&t).ok())
+        .unwrap_or_default()
+}
+
+pub fn save_saved(path: &std::path::Path, list: &[SavedFind]) -> Result<(), String> {
+    let text = serde_json::to_string_pretty(list).map_err(|e| format!("Saved finds: {e}"))?;
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| format!("Saved finds: {e}"))?;
+    }
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, text).map_err(|e| format!("Saved finds: {e}"))?;
+    std::fs::rename(&tmp, path).map_err(|e| format!("Saved finds: {e}"))
 }
 
 #[cfg(test)]
@@ -1549,5 +1732,90 @@ mod tests {
         assert_eq!(picks[1].item.summary, "Six quiet units. Tested at home.");
         assert_eq!(picks[0].item.summary, "812 points on Hacker News.");
         assert_eq!(apply_summaries(&mut picks, "Sorry, I can't."), 0);
+    }
+
+    #[test]
+    fn more_like_this_queues_a_search_for_the_posts_own_words() {
+        assert_eq!(related_query("Rust 1.99 ships async closures for the web"), "Rust 1.99 ships async closures web");
+        assert_eq!(related_query("The new: the NEW thing"), "thing");
+        let mut cache = SourceCache::default();
+        cache.queue_related("Rust async closures", Some("Rust"));
+        cache.queue_related("rust ASYNC closures", Some("Rust"));
+        assert_eq!(cache.related.len(), 1);
+        for n in 0..6 {
+            cache.queue_related(&format!("query {n}"), None);
+        }
+        assert_eq!(cache.related.len(), RELATED_MAX);
+        assert_eq!(cache.related[0].query, "query 1");
+        let one = [Related { query: "Rust async closures".into(), topic: Some("Rust".into()) }];
+        let reqs = related_requests(&SourceSettings::default(), &one, NOW);
+        let got: Vec<(SourceKind, Option<String>, bool)> = reqs
+            .iter()
+            .map(|r| (r.kind, r.topic.clone(), r.url.contains("Rust%20async%20closures")))
+            .collect();
+        assert_eq!(
+            got,
+            vec![
+                (SourceKind::HackerNews, Some("Rust".into()), true),
+                (SourceKind::Reddit, Some("Rust".into()), true),
+            ]
+        );
+        let no_hn = SourceSettings {
+            hacker_news: false,
+            reddit: false,
+            ..Default::default()
+        };
+        assert!(related_requests(&no_hn, &one, NOW).is_empty());
+    }
+
+    #[test]
+    fn source_bias_moves_a_sources_score_in_steps() {
+        let mut cache = SourceCache::default();
+        cache.nudge_source("feed.test", -1);
+        cache.nudge_source("feed.test", -1);
+        assert_eq!(cache.source_bias.get("feed.test"), Some(&-2));
+        for _ in 0..9 {
+            cache.nudge_source("feed.test", 1);
+        }
+        assert_eq!(cache.source_bias.get("feed.test"), Some(&SOURCE_BIAS_MAX));
+        for _ in 0..4 {
+            cache.nudge_source("feed.test", -1);
+        }
+        assert_eq!(cache.source_bias.get("feed.test"), None);
+        cache.nudge_source("  ", 1);
+        assert!(cache.source_bias.is_empty());
+
+        // A followed source's fresh item: 35 × 100 × 100 / 10 000 = 35.
+        let followed = item("Shop notes", "https://feed.test/1", NOW - 60_000);
+        let p = profile(&[]);
+        let score = |bias: i32| {
+            let map: BTreeMap<String, i32> = [("feed.test".to_string(), bias)].into_iter().collect();
+            rank_with(std::slice::from_ref(&followed), &p, &map, NOW).first().map(|r| r.score)
+        };
+        assert_eq!(score(0), Some(35));
+        assert_eq!(score(1), Some(40));
+        assert_eq!(score(-2), Some(24));
+        assert_eq!(score(-4), Some(14));
+    }
+
+    #[test]
+    fn saved_finds_keep_one_entry_per_link_newest_first() {
+        let mut card = item_card(&ranked(item("Rust 1.99 released", "https://a.test/1?utm_source=x", NOW)), NOW);
+        card.pulse.because = Some("Rust".into());
+        let first = saved_from_card(&card, NOW).expect("has a link");
+        assert_eq!(first.url, "https://a.test/1?utm_source=x");
+        assert_eq!(first.because.as_deref(), Some("Rust"));
+        let mut list = Vec::new();
+        assert!(save_find(&mut list, first));
+        let mut again = saved_from_card(&card, NOW + 1).expect("has a link");
+        again.url = "https://www.a.test/1".into();
+        assert!(!save_find(&mut list, again));
+        let other = saved_from_card(&item_card(&ranked(item("Other", "https://b.test/2", NOW)), NOW), NOW + 2).expect("link");
+        assert!(save_find(&mut list, other));
+        let titles: Vec<&str> = list.iter().map(|f| f.title.as_str()).collect();
+        assert_eq!(titles, vec!["Other", "Rust 1.99 released"]);
+        card.citations.clear();
+        assert_eq!(saved_from_card(&card, NOW), None);
+        assert!(is_source_post(&item_card(&ranked(item("x", "https://c.test/3", NOW)), NOW)));
     }
 }

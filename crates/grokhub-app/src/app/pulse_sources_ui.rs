@@ -7,7 +7,10 @@
 
 use super::*;
 use grokhub_agent::harness::DataClass;
-use grokhub_core::pulse_sources::{self as ps, Fetched, Ranked, SourceItem, SourceKind, SourceReq};
+use super::pulse_ui::SourceAct;
+use grokhub_core::interests::InterestSignal;
+use grokhub_core::pulse::LedgerReason;
+use grokhub_core::pulse_sources::{self as ps, Fetched, Ranked, SavedFind, SourceItem, SourceKind, SourceReq};
 use std::io::Read as _;
 
 /// Largest reply read from one source.
@@ -24,6 +27,8 @@ pub(super) struct SourcesState {
     pub opened: bool,
     /// Today's summary calls as (UTC day, count), read from the cache file once.
     pub budget: Option<(u64, u32)>,
+    /// Saved Finds, read from disk the first time anything needs them.
+    pub saved: Option<Vec<SavedFind>>,
     /// The Add box for each list, by `SourceKind::key`.
     pub drafts: std::collections::BTreeMap<&'static str, String>,
     /// What the last run did, for Settings.
@@ -46,6 +51,13 @@ pub(super) struct SourceRun {
 pub(super) fn sources_cache_path() -> std::path::PathBuf {
     crate::config::config_dir().join(ps::CACHE_FILE)
 }
+
+pub(super) fn saved_finds_path() -> std::path::PathBuf {
+    crate::config::config_dir().join(ps::SAVED_FILE)
+}
+
+/// Saved Finds listed in Settings before "and N more".
+const SAVED_SHOWN: usize = 20;
 
 fn user_agent() -> String {
     format!(
@@ -241,7 +253,17 @@ impl Cabin {
             self.seed_interests(&user_md, &memory_md);
         }
         let topics = self.source_topics();
-        let reqs = ps::requests(&self.cfg.pulse_sources, &topics, now);
+        let mut reqs = ps::requests(&self.cfg.pulse_sources, &topics, now);
+        // More like this asks run once, on this check.
+        let path = sources_cache_path();
+        let mut cache = ps::load_cache(&path);
+        if !cache.related.is_empty() {
+            reqs.extend(ps::related_requests(&self.cfg.pulse_sources, &cache.related, now));
+            cache.related.clear();
+            if let Err(err) = ps::save_cache(&path, &cache) {
+                self.status = err;
+            }
+        }
         // Counted as a run either way, so an empty setup does not retry every tick.
         self.sources.last_run_ms = Some(now);
         if reqs.is_empty() {
@@ -303,8 +325,8 @@ impl Cabin {
     /// today's budget has room, else they post with the sources' own text. Returns how
     /// many posted now.
     pub(super) fn post_source_run(&mut self, run: SourceRun) -> usize {
-        let ranked = ps::rank(&run.items, self.interests_now(), run.at_ms);
         let cache = ps::load_cache(&sources_cache_path());
+        let ranked = ps::rank_with(&run.items, self.interests_now(), &cache.source_bias, run.at_ms);
         let posted_urls: Vec<String> = self
             .updates
             .iter()
@@ -406,6 +428,140 @@ impl Cabin {
         added
     }
 
+    pub(super) fn saved_now(&mut self) -> &mut Vec<SavedFind> {
+        self.sources
+            .saved
+            .get_or_insert_with(|| ps::load_saved(&saved_finds_path()))
+    }
+
+    fn persist_saved(&mut self) {
+        let list = self.saved_now().clone();
+        if let Err(err) = ps::save_saved(&saved_finds_path(), &list) {
+            self.status = err;
+        }
+    }
+
+    /// The interest a post was for moves too when its title doesn't name it.
+    fn post_topic_feedback(&mut self, card: &grokhub_core::UpdateCard, signal: InterestSignal) {
+        if let Some(topic) = card.pulse.because.as_deref() {
+            if !grokhub_core::interests::names_topic(&card.title, topic) {
+                self.interests_feedback(topic, signal);
+            }
+        }
+    }
+
+    fn nudge_post_source(&mut self, card: &grokhub_core::UpdateCard, step: i32, related: bool) {
+        let path = sources_cache_path();
+        let mut cache = ps::load_cache(&path);
+        cache.nudge_source(card.pulse.source_name.as_deref().unwrap_or(""), step);
+        if related {
+            cache.queue_related(&ps::related_query(&card.title), card.pulse.because.as_deref());
+        }
+        if let Err(err) = ps::save_cache(&path, &cache) {
+            self.status = err;
+        }
+    }
+
+    /// Save keeps the post in Saved Finds and raises its interest. Not interested
+    /// quietly removes it and lowers its interest and source. More like this raises
+    /// both and searches the post's own words on the next check.
+    pub(super) fn source_post_act(&mut self, id: &str, did: SourceAct) {
+        let Some(card) = self.pulse_card(id) else {
+            return;
+        };
+        let day = Self::local_day();
+        match did {
+            SourceAct::Save => {
+                let Some(find) = ps::saved_from_card(&card, now_ms()) else {
+                    return;
+                };
+                if ps::save_find(self.saved_now(), find) {
+                    self.persist_saved();
+                }
+                self.status = "Saved to Saved Finds in Settings → Pulse.".into();
+                if card.reaction == Some(grokhub_core::CardReaction::Up) {
+                    return;
+                }
+                if let Some(c) = self.updates.iter_mut().find(|c| c.id == id) {
+                    c.reaction = Some(grokhub_core::CardReaction::Up);
+                }
+                self.persist_updates();
+                self.pulse_note(&card.title, LedgerReason::Liked, &day);
+                self.post_topic_feedback(&card, InterestSignal::Saved);
+            }
+            SourceAct::NotInterested => {
+                self.pulse_note(&card.title, LedgerReason::NotThis, &day);
+                self.post_topic_feedback(&card, InterestSignal::NotInterested);
+                self.nudge_post_source(&card, -1, false);
+                self.pulse_remove(&card);
+                self.heartbeat_card_dismissed();
+            }
+            SourceAct::MoreLike => {
+                let text = format!("{} {}", card.title, card.pulse.because.as_deref().unwrap_or(""));
+                self.interests_feedback(&text, InterestSignal::MoreLikeThis);
+                self.nudge_post_source(&card, 1, true);
+                self.status = "More like this on the next check.".into();
+            }
+        }
+    }
+
+    /// Settings → Pulse → Saved Finds: newest first, each opens its link.
+    fn ui_saved_finds(&mut self, ui: &mut egui::Ui) {
+        ui.label(
+            RichText::new("Saved Finds")
+                .size(crate::theme::FONT_BODY)
+                .strong()
+                .color(crate::theme::fg()),
+        );
+        ui.add_space(4.0);
+        let list = self.saved_now().clone();
+        if list.is_empty() {
+            crate::cards::settings_note(ui, "Nothing saved yet. Save on a Feed post keeps it here.");
+            return;
+        }
+        let mut open: Option<String> = None;
+        let mut remove: Option<String> = None;
+        for find in list.iter().take(SAVED_SHOWN) {
+            ui.horizontal(|ui| {
+                let link = ui.add(
+                    egui::Label::new(
+                        RichText::new(&find.title)
+                            .size(crate::theme::FONT_BODY)
+                            .color(crate::theme::link()),
+                    )
+                    .sense(egui::Sense::click())
+                    .truncate(),
+                );
+                if link.hovered() {
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                }
+                if link.clicked() {
+                    open = Some(find.url.clone());
+                }
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if crate::cards::ghost_pill(ui, "Remove") {
+                        remove = Some(find.url.clone());
+                    }
+                    ui.label(
+                        RichText::new(&find.source_name)
+                            .size(crate::theme::FONT_TIP)
+                            .color(crate::theme::muted()),
+                    );
+                });
+            });
+        }
+        if list.len() > SAVED_SHOWN {
+            crate::cards::settings_note(ui, &format!("And {} more in {}.", list.len() - SAVED_SHOWN, ps::SAVED_FILE));
+        }
+        if let Some(url) = open {
+            self.follow_update_action(Some(grokhub_core::UpdateAction::DeepLink { href: url }));
+        }
+        if let Some(url) = remove {
+            self.saved_now().retain(|f| f.url != url);
+            self.persist_saved();
+        }
+    }
+
     pub(super) fn ui_pulse_sources(&mut self, ui: &mut egui::Ui) {
         self.poll_source_fetch();
         if self.sources_busy() {
@@ -438,6 +594,20 @@ impl Cabin {
             }
             ui.add_space(6.0);
         }
+        // The paid search extension point, shown off and not clickable.
+        let mut paid = ps::PAID_SEARCH_ENABLED;
+        ui.add_enabled(
+            ps::PAID_SEARCH_ENABLED,
+            egui::Checkbox::new(&mut paid, RichText::new(ps::PAID_SEARCH_LABEL).size(crate::theme::FONT_BODY)),
+        );
+        ui.indent("pulse-paid-search", |ui| {
+            ui.label(
+                RichText::new(ps::PAID_SEARCH_NOTE)
+                    .size(crate::theme::FONT_TIP)
+                    .color(crate::theme::muted()),
+            );
+        });
+        ui.add_space(6.0);
         ui.add_space(4.0);
         ui.horizontal(|ui| {
             ui.label(RichText::new("Check every").size(crate::theme::FONT_BODY).color(crate::theme::fg()));
@@ -493,6 +663,8 @@ impl Cabin {
                 .wrap(),
             );
         }
+        ui.add_space(16.0);
+        self.ui_saved_finds(ui);
     }
 
     /// The followed list under a source, with Remove and an Add box. True when it changed.
@@ -765,6 +937,66 @@ mod tests {
             cabin.follow_source_fetch();
             assert_eq!(cabin.sources.note, "");
         }
+    }
+
+    #[test]
+    fn save_not_interested_and_more_like_this_move_the_profile_sources_and_saved_finds() {
+        let (_lock, _root, mut cabin) = cabin();
+        cabin.updates.clear();
+        cabin.add_interest("Rust");
+        let now = now_ms();
+        let added = cabin.post_source_run(one_item_run(
+            vec![
+                item("Rust 1.99 released", "https://blog.rust-lang.org/1.99", now),
+                item("Rust in the kernel", "https://lwn.test/rust", now),
+                item("Rust async book", "https://book.test/async", now),
+            ],
+            now,
+        ));
+        assert_eq!(added, 3);
+        let id = |cabin: &Cabin, title: &str| cabin.updates.iter().find(|c| c.title == title).map(|c| c.id.clone()).expect("posted");
+        let weight = |cabin: &mut Cabin| cabin.interests_now().find("Rust").map(|t| t.weight).expect("topic");
+        assert_eq!(weight(&mut cabin), 70);
+
+        let saved = id(&cabin, "Rust 1.99 released");
+        cabin.source_post_act(&saved, SourceAct::Save);
+        cabin.source_post_act(&saved, SourceAct::Save);
+        assert_eq!(cabin.status, "Saved to Saved Finds in Settings → Pulse.");
+        let on_disk = ps::load_saved(&saved_finds_path());
+        let rows: Vec<(&str, &str, &str, Option<&str>)> = on_disk
+            .iter()
+            .map(|f| (f.title.as_str(), f.url.as_str(), f.source_name.as_str(), f.because.as_deref()))
+            .collect();
+        assert_eq!(rows, vec![("Rust 1.99 released", "https://blog.rust-lang.org/1.99", "Hacker News", Some("Rust"))]);
+        let card = cabin.updates.iter().find(|c| c.id == saved).expect("still up");
+        assert_eq!(card.reaction, Some(grokhub_core::CardReaction::Up));
+        assert_eq!(weight(&mut cabin), 80);
+
+        cabin.status.clear();
+        let gone = id(&cabin, "Rust in the kernel");
+        cabin.source_post_act(&gone, SourceAct::NotInterested);
+        assert!(
+            !cabin.updates.iter().any(|c| c.id == gone && c.status != grokhub_core::UpdateStatus::Dismissed),
+            "Not interested takes the post down"
+        );
+        assert_eq!(cabin.status, "", "Not interested is quiet");
+        assert_eq!(weight(&mut cabin), 65);
+        let cache = ps::load_cache(&sources_cache_path());
+        assert_eq!(cache.source_bias.get("Hacker News"), Some(&-1));
+
+        let more = id(&cabin, "Rust async book");
+        cabin.source_post_act(&more, SourceAct::MoreLike);
+        assert_eq!(cabin.status, "More like this on the next check.");
+        assert_eq!(weight(&mut cabin), 77);
+        let cache = ps::load_cache(&sources_cache_path());
+        assert_eq!(cache.source_bias.get("Hacker News"), None);
+        assert_eq!(
+            cache.related,
+            vec![ps::Related {
+                query: "Rust async book".into(),
+                topic: Some("Rust".into())
+            }]
+        );
     }
 
     #[test]
