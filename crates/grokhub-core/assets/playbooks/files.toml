@@ -1,0 +1,56 @@
+# GrokHub playbook: move, rename, sort or clean up files.
+#
+# Copy this file to `playbooks/` in the settings folder (Settings → Playbooks →
+# Duplicate does it for you) to change it. A file there with the same id
+# replaces the shipped one; Reset puts the shipped one back.
+#
+# Look steps only read. Safe steps can be undone. Risky steps ask you first,
+# every time; a playbook can never make GrokHub skip an approval.
+
+id = "files"
+name = "Files"
+summary = "List what will change before touching anything, move instead of copy-and-delete, and send removals to the Trash."
+
+checklist = ["files in place", "nothing lost"]
+backup = "Before moving or renaming, write down the list of files and where each one goes, so every move can be put back."
+verify = "After each batch, list the folders again and check every file from the list is where it should be and none is missing."
+rollback = "Move the files back using the list kept before the change, and restore anything from the Trash."
+give_up = [
+  "a hard approval was refused",
+  "hardware, access or a sign-in is missing",
+  "every approach in the playbook failed and was checked",
+]
+
+[applies_when]
+intent = ["task"]
+domain = ["files"]
+
+[[phase]]
+name = "Look"
+tier = "read_only"
+
+[[phase.step]]
+name = "List the files that will change and where each one goes (a dry run)"
+
+[[phase.step]]
+name = "Check there is enough free space for copies"
+
+[[phase]]
+name = "Change"
+tier = "safe"
+
+[[phase.step]]
+name = "Move or rename in small batches, never overwriting a file with the same name"
+
+[[phase.step]]
+name = "List the folders again after each batch"
+
+[[phase]]
+name = "Remove"
+tier = "risky"
+
+[[phase.step]]
+name = "Send files to the Trash instead of deleting them"
+
+[[phase.step]]
+name = "Empty the Trash or delete outright, only when asked"

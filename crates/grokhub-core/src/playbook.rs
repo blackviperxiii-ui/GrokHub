@@ -13,9 +13,15 @@ pub const BUILTIN: &[&str] = &[
     include_str!("../assets/playbooks/task-general.toml"),
     include_str!("../assets/playbooks/repair-linux.toml"),
     include_str!("../assets/playbooks/repair-windows.toml"),
+    include_str!("../assets/playbooks/code-dev.toml"),
+    include_str!("../assets/playbooks/files.toml"),
+    include_str!("../assets/playbooks/research.toml"),
+    include_str!("../assets/playbooks/desktop.toml"),
 ];
 
-pub const DOMAINS: &[&str] = &["system", "code", "files", "web", "media", "general"];
+pub const DOMAINS: &[&str] = &[
+    "system", "code", "files", "desktop", "web", "media", "general",
+];
 pub const OSES: &[&str] = &["linux", "windows", "macos"];
 pub const ID_MAX: usize = 48;
 pub const NAME_MAX: usize = 60;
@@ -295,7 +301,18 @@ mod tests {
     #[test]
     fn the_shipped_playbooks_parse() {
         let ids: Vec<String> = BUILTIN.iter().map(|t| parse(t).unwrap().id).collect();
-        assert_eq!(ids, vec!["task-general", "repair-linux", "repair-windows"]);
+        assert_eq!(
+            ids,
+            vec![
+                "task-general",
+                "repair-linux",
+                "repair-windows",
+                "code-dev",
+                "files",
+                "research",
+                "desktop"
+            ]
+        );
         let p = parse(BUILTIN[0]).unwrap();
         assert_eq!(
             p.steps()
