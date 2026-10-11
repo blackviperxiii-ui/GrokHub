@@ -712,7 +712,8 @@ mod tests {
                     cost_in_usd_ticks: 1_200,
                     cached_tokens: 640,
                 },
-            })
+            ..Default::default()
+        })
         }
     }
 

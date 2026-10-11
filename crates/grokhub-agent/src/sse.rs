@@ -11,7 +11,13 @@ pub enum SseEvent {
     TextDelta(String),
     ReasoningDelta(String),
     FunctionCall(FunctionCall),
-    Completed(Usage),
+    /// Stream finished. `incomplete` is set for `response.incomplete` or a
+    /// final response with `status: "incomplete"` (output-token cut-off).
+    Completed {
+        usage: Usage,
+        incomplete: bool,
+        incomplete_reason: Option<String>,
+    },
     Error(String),
 }
 
@@ -101,7 +107,12 @@ impl SseParser {
                 }
             }
             note_served_model(&v);
-            out.push(SseEvent::Completed(parse_usage_value(&v)));
+            let (incomplete, incomplete_reason) = incomplete_of(kind, &v);
+            out.push(SseEvent::Completed {
+                usage: parse_usage_value(&v),
+                incomplete,
+                incomplete_reason,
+            });
             return out;
         }
         if kind == "error" || kind == "response.failed" || kind == "response.error" {
@@ -249,6 +260,27 @@ fn error_message(v: &Value) -> String {
         .to_string()
 }
 
+/// `response.incomplete` always counts; `response.completed` only when the
+/// body says `status: "incomplete"`. Reason comes from `incomplete_details`.
+fn incomplete_of(kind: &str, v: &Value) -> (bool, Option<String>) {
+    let response = v.get("response").unwrap_or(v);
+    let status_incomplete = response
+        .get("status")
+        .and_then(|s| s.as_str())
+        .is_some_and(|s| s == "incomplete");
+    let incomplete = kind == "response.incomplete" || status_incomplete;
+    if !incomplete {
+        return (false, None);
+    }
+    let reason = response
+        .get("incomplete_details")
+        .and_then(|d| d.get("reason"))
+        .and_then(|r| r.as_str())
+        .map(str::to_string)
+        .filter(|r| !r.is_empty());
+    (true, reason)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -289,7 +321,8 @@ mod tests {
         ));
         assert!(matches!(
             &done[0],
-            SseEvent::Completed(u) if u.input_tokens == 10 && u.output_tokens == 4 && u.reasoning_tokens == 2 && u.cost_in_usd_ticks == 100
+            SseEvent::Completed { usage: u, incomplete: false, incomplete_reason: None }
+                if u.input_tokens == 10 && u.output_tokens == 4 && u.reasoning_tokens == 2 && u.cost_in_usd_ticks == 100
         ));
         p.finish().unwrap();
 
@@ -301,6 +334,56 @@ mod tests {
         let mut drop_p = SseParser::new();
         let _ = drop_p.push("data: {\"type\":\"response.output_text.delta\",\"delta\":\"x\"}\n\n");
         assert!(matches!(drop_p.finish(), Err(ClientError::Disconnect)));
+    }
+
+    #[test]
+    fn sse_incomplete_marks_truncated_and_keeps_calls() {
+        let mut p = SseParser::new();
+        let ev = p.push(&frame(
+            r#"{"type":"response.incomplete","response":{"status":"incomplete","incomplete_details":{"reason":"max_output_tokens"},"usage":{"input_tokens":3,"output_tokens":9},"output":[{"type":"function_call","call_id":"w1","name":"write","arguments":"{\"path\":\"a.rs\",\"contents\":\"partial\"}"}]}}"#,
+        ));
+        assert_eq!(
+            ev[0],
+            SseEvent::FunctionCall(FunctionCall {
+                call_id: "w1".into(),
+                name: "write".into(),
+                arguments: "{\"path\":\"a.rs\",\"contents\":\"partial\"}".into(),
+            })
+        );
+        assert_eq!(
+            ev[1],
+            SseEvent::Completed {
+                usage: Usage {
+                    input_tokens: 3,
+                    output_tokens: 9,
+                    ..Usage::default()
+                },
+                incomplete: true,
+                incomplete_reason: Some("max_output_tokens".into()),
+            }
+        );
+        p.finish().unwrap();
+    }
+
+    #[test]
+    fn sse_completed_with_incomplete_status_is_truncated() {
+        let mut p = SseParser::new();
+        let ev = p.push(&frame(
+            r#"{"type":"response.completed","response":{"status":"incomplete","incomplete_details":{"reason":"max_output_tokens"},"usage":{"input_tokens":1,"output_tokens":2},"output":[]}}"#,
+        ));
+        assert_eq!(
+            ev,
+            vec![SseEvent::Completed {
+                usage: Usage {
+                    input_tokens: 1,
+                    output_tokens: 2,
+                    ..Usage::default()
+                },
+                incomplete: true,
+                incomplete_reason: Some("max_output_tokens".into()),
+            }]
+        );
+        p.finish().unwrap();
     }
 
     #[test]
