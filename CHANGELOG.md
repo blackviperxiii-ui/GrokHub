@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- The router knows the on-device model's strengths: bench results fill its capability metadata (context, tool reliability, tokens/s), a failed verify on a local answer escalates to a cloud model with a quiet note naming both, hard or long work stays off local when online, and when every plan model is down an eligible step can fall back to local instead of pausing forever.
+- The router knows the on-device model's strengths: bench results fill its capability metadata (context, eval pass rate, tokens/s) without claiming tool-calling (the on-device path still returns no tool calls), a failed verify on a local answer escalates to a cloud model with a quiet note naming both, hard or long work stays off local when online, and when every plan model is down an eligible step can fall back to local instead of pausing forever (including after a verify escalate that finds no healthy cloud route).
 - Fixed: when a model reply is cut off at its length limit, GrokHub no longer runs the half-written tool calls in it; the agent is told to resend smaller steps.
 - Security: text from web pages, connectors, screen reading and research queries is now marked as outside data (`<<<UNTRUSTED …>>>` fences with a per-run nonce) before the agent sees it, so instructions hidden in a page can't pose as you or the system. Workspace file reads stay plain for coding.
 - `grokhub bench local` (and Settings → Local speed → Test speed) measures the on-device model: first-token latency, tokens/s, load time, RAM/VRAM peaks, plus a small eval (chat, summarize, classify, a two-step tool turn). CI checks the report schema and eval pass rate against a fake server so regressions fail without a GPU.

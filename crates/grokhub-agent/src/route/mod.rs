@@ -504,6 +504,17 @@ impl Router {
                 rules.push("local:escalate_verify".into());
                 pick.replaced = Some(local_tier);
                 local::note_local_verify_failed(false);
+            } else if pick.no_route && local::eligible(&input.local, input.class, input.ctx_tokens) {
+                // Every plan model down: fall back to local and clear the sticky flag.
+                if let Some(id) = ids.iter().find(|id| local::is_local(id)) {
+                    rules.push("local:cloud_down".into());
+                    pick = ModelPick {
+                        model: id.to_string(),
+                        no_route: false,
+                        replaced: Some(input.current_model.trim().to_string()),
+                    };
+                    local::note_local_verify_failed(false);
+                }
             }
             pick
         } else {

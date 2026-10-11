@@ -132,8 +132,8 @@ pub fn live_tier() -> &'static str {
 #[derive(Debug, Clone, PartialEq)]
 pub struct TierCaps {
     pub context: u64,
-    /// Fraction of the local eval set that passed (0.0–1.0).
-    pub tool_reliability: f64,
+    /// Fraction of the local eval set that passed (0.0–1.0). Not function-calling.
+    pub eval_pass_rate: f64,
     pub tokens_per_sec: Option<f64>,
     pub first_token_ms: Option<u64>,
 }
@@ -142,7 +142,7 @@ impl Default for TierCaps {
     fn default() -> Self {
         Self {
             context: LOCAL_CTX_CAP,
-            tool_reliability: 0.0,
+            eval_pass_rate: 0.0,
             tokens_per_sec: None,
             first_token_ms: None,
         }
@@ -269,13 +269,15 @@ pub struct LocalSource;
 
 pub fn tier_meta(id: &str) -> ModelMeta {
     let c = caps();
-    let tools_ok = c.tool_reliability >= 0.75;
     let mut notice = None;
     if let Some(tps) = c.tokens_per_sec {
         let ft = c.first_token_ms.unwrap_or(0);
         notice = Some(grokhub_core::model_registry::Notice {
             severity: "info".into(),
-            text: format!("local bench ≈ {tps:.1} tok/s, first token {ft} ms, tools {:.0}%", c.tool_reliability * 100.0),
+            text: format!(
+                "local bench ≈ {tps:.1} tok/s, first token {ft} ms, eval {:.0}%",
+                c.eval_pass_rate * 100.0
+            ),
         });
     }
     ModelMeta {
@@ -283,7 +285,8 @@ pub fn tier_meta(id: &str) -> ModelMeta {
         context_length: Some(ctx_cap().max(c.context)),
         // No effort menu: a local route sends no effort.
         efforts: Some(Vec::new()),
-        tool_calling: Some(tools_ok),
+        // `serve` returns empty `calls` today — never claim tools from eval pass rate.
+        tool_calling: Some(false),
         prices: Prices { prompt: Some(0), cached: Some(0), completion: Some(0), ..Prices::default() },
         notice,
         ..ModelMeta::default()

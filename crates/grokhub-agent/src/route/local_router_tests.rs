@@ -55,18 +55,20 @@ fn ask<'a>(class: &'a str, gate: LocalGate) -> RouteInput<'a> {
 }
 
 #[test]
-fn tier_meta_carries_bench_caps_and_tool_flag() {
+fn tier_meta_carries_bench_caps_without_claiming_tools() {
     local::set_caps(TierCaps {
         context: 8_192,
-        tool_reliability: 1.0,
+        eval_pass_rate: 1.0,
         tokens_per_sec: Some(42.0),
         first_token_ms: Some(120),
     });
     let m = local::tier_meta("local:small");
     assert_eq!(m.context_length, Some(8_192));
-    assert_eq!(m.tool_calling, Some(true));
+    // Eval pass rate must not unlock tool_calling — serve returns empty calls.
+    assert_eq!(m.tool_calling, Some(false));
     let n = m.notice.expect("notice");
-    assert!(n.text.contains("42.0") && n.text.contains("120"), "{}", n.text);
+    assert!(n.text.contains("42.0") && n.text.contains("120") && n.text.contains("eval"), "{}", n.text);
+    assert!(!n.text.contains("tools "), "{}", n.text);
     local::set_caps(TierCaps::default());
 }
 
@@ -106,6 +108,27 @@ fn cloud_down_falls_back_to_local_when_eligible() {
     assert_eq!(r.model, "local:small");
     assert!(r.rule_ids.contains(&"local:cloud_down".into()), "{:?}", r.rule_ids);
     assert_eq!(r.provider, local::PROVIDER_LOCAL);
+}
+
+#[test]
+fn escalate_verify_falls_back_to_local_when_cloud_down() {
+    let mut reg = fleet();
+    if let Some(row) = reg.models.get_mut("grok-4.7") {
+        row.state = ModelState::Quarantined;
+    }
+    let _on = ForceOn::with(Some(Arc::new(FakeRt)));
+    local::note_local_verify_failed(true);
+    let mut gate = LocalGate::now(false, false, false);
+    gate.offline = false;
+    gate.local_verify_failed = true;
+    let profiles: BTreeMap<String, ModelProfile> = BTreeMap::new();
+    let table = RoutingTable::default();
+    // Chat is not local-eligible online — use background so cloud_down can fire.
+    let r = Router::choose(&ask("background:summarize", gate), &reg, &profiles, &table, 10);
+    assert_eq!(r.model, "local:small");
+    assert!(r.rule_ids.contains(&"local:cloud_down".into()), "{:?}", r.rule_ids);
+    assert!(!r.rule_ids.contains(&"local:escalate_verify".into()), "{:?}", r.rule_ids);
+    assert!(!local::local_verify_failed(), "flag cleared after cloud_down fallback");
 }
 
 #[test]

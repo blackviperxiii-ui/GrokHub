@@ -222,10 +222,11 @@ pub fn format_full_report(bench: &BenchReport, eval: &EvalReport) -> String {
 }
 
 /// Feed bench/eval numbers into [`super::local::tier_meta`] / the router (PR E).
+/// Eval pass rate is quality telemetry only — it does not unlock `tool_calling`.
 pub fn apply_caps(bench: &BenchReport, eval: &EvalReport) {
     super::local::set_caps(super::local::TierCaps {
         context: super::local::ctx_cap(),
-        tool_reliability: eval.pass_rate(),
+        eval_pass_rate: eval.pass_rate(),
         tokens_per_sec: Some(bench.tokens_per_sec),
         first_token_ms: Some(bench.first_token_ms),
     });
