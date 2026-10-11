@@ -418,6 +418,10 @@ pub struct AppConfig {
     /// (Settings shows the newest) instead of posting Pulse cards. Off by default.
     #[serde(default)]
     pub self_improve_quiet: bool,
+    /// Settings → Personality: the preset id (`grokhub_core::personality`). Empty is the
+    /// default voice. Tone only; approvals and safety rules never change.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub personality: String,
     /// Settings → Memory retention: unsure, unlinked AMR notes not updated in
     /// this many days are retired once a day, apart from dream. 0 keeps all.
     #[serde(default = "default_amr_retention_days", deserialize_with = "de_amr_retention_days")]
@@ -617,6 +621,7 @@ impl Default for AppConfig {
             desktop_control: false,
             screen_record: false,
             self_improve_quiet: false,
+            personality: String::new(),
             amr_retention_days: default_amr_retention_days(),
             cua_driver: false,
             cua_driver_path: String::new(),
