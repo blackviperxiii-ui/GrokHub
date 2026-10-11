@@ -22,8 +22,9 @@
 //!
 //! Production runtime (offline card PR A): a llama.cpp `llama-server` sidecar
 //! on 127.0.0.1 ([`super::local_sidecar`]) behind [`super::local_http::HttpLocalRuntime`].
-//! Assets come from `GROKHUB_LLAMA_SERVER` / `GROKHUB_LOCAL_MODEL` or
-//! `{GROKHUB_CONFIG}/bin` + `{GROKHUB_CONFIG}/models/*.gguf`.
+//! Assets come from `GROKHUB_LLAMA_SERVER` / `GROKHUB_LOCAL_MODEL`, or
+//! `{GROKHUB_CONFIG}/bin` plus a GGUF from `~/GrokHub/models` (`installed.json`)
+//! or `{GROKHUB_CONFIG}/models`.
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};

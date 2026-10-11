@@ -181,7 +181,9 @@ pub fn health_ok(host: &str, port: u16, token: &str, timeout: Duration) -> bool 
 ///
 /// - `GROKHUB_LLAMA_SERVER`: path to `llama-server`
 /// - `GROKHUB_LOCAL_MODEL`: path to a `.gguf`
-/// - else: `{config}/bin/llama-server` and the first `*.gguf` under `{config}/models`
+/// - binary else: `{config}/bin/llama-server`
+/// - model else: `model_download::installed` under `~/GrokHub/models` (or
+///   `{config}/models`), then the first `*.gguf` in those folders
 pub fn resolve_paths(config_dir: &Path) -> Option<SidecarPaths> {
     let binary = std::env::var_os("GROKHUB_LLAMA_SERVER")
         .map(PathBuf::from)
@@ -193,8 +195,28 @@ pub fn resolve_paths(config_dir: &Path) -> Option<SidecarPaths> {
     let model = std::env::var_os("GROKHUB_LOCAL_MODEL")
         .map(PathBuf::from)
         .filter(|p| p.is_file())
-        .or_else(|| first_gguf(&config_dir.join("models")))?;
+        .or_else(|| resolve_model_file(config_dir))?;
     Some(SidecarPaths { binary, model })
+}
+
+fn user_models_dir() -> Option<PathBuf> {
+    Some(grokhub_core::paths::user_home()?.join("GrokHub").join("models"))
+}
+
+fn resolve_model_file(config_dir: &Path) -> Option<PathBuf> {
+    let dirs = [user_models_dir(), Some(config_dir.join("models"))];
+    for dir in dirs.into_iter().flatten() {
+        if let Some(rec) = grokhub_core::model_download::installed(&dir) {
+            let path = dir.join(&rec.file);
+            if path.is_file() {
+                return Some(path);
+            }
+        }
+        if let Some(p) = first_gguf(&dir) {
+            return Some(p);
+        }
+    }
+    None
 }
 
 fn llama_server_name() -> &'static str {
@@ -462,6 +484,26 @@ mod tests {
         let p = resolve_paths(&dir).expect("paths");
         assert!(p.binary.ends_with(llama_server_name()));
         assert!(p.model.ends_with("a.gguf"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn resolve_paths_prefers_model_download_installed_json() {
+        let dir = std::env::temp_dir().join(format!("gh-sidecar-inst-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("bin")).unwrap();
+        std::fs::create_dir_all(dir.join("models")).unwrap();
+        std::fs::write(dir.join("bin").join(llama_server_name()), b"x").unwrap();
+        let gguf = dir.join("models").join("picked.gguf");
+        std::fs::write(&gguf, b"1234567890").unwrap(); // 10 bytes
+        std::fs::write(
+            dir.join("models").join("installed.json"),
+            r#"{"id":"qwen","file":"picked.gguf","sha256":"abc","bytes":10}"#,
+        )
+        .unwrap();
+        std::fs::write(dir.join("models").join("other.gguf"), b"other").unwrap();
+        let p = resolve_paths(&dir).expect("paths");
+        assert!(p.model.ends_with("picked.gguf"), "{}", p.model.display());
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
