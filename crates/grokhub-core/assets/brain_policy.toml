@@ -1,0 +1,124 @@
+# Brain mode policy: what kind of ask (intent) and how much care it needs
+# map to how a run behaves. Rows from the GrokHub Brain design v1.
+#
+# Copy this file to `brain/brain_policy.toml` in the settings folder to edit
+# it. A row there with the same intent and care replaces the shipped one; a
+# new pair adds a row. "any" matches every intent or care.
+#
+# Safety and approval rules are not here and can't be: hard approvals
+# (money, send, delete, credentials, irreversible system actions) always ask.
+# A file that names an approval, permission or safety key is ignored whole.
+#
+# goal is one of speed, quality, cost, balanced.
+
+[[row]]
+intent = "chat"
+care = "casual"
+goal = "speed"
+reason = "small talk, fast reply matters most"
+depth = "none"
+ask = "act"
+stop = "answered"
+talk = "brief, personality on"
+
+[[row]]
+intent = "question"
+care = "careful"
+goal = "quality"
+reason = "user will rely on this"
+depth = "verify facts, cite"
+ask = "act"
+stop = "answered + sources"
+talk = "concise, sources"
+
+[[row]]
+intent = "task"
+care = "careful"
+goal = "balanced"
+reason = "escalate on failure"
+depth = "full checklist"
+ask = "act; hard classes ask"
+stop = "checklist done or truly blocked"
+talk = "short progress notes"
+
+[[row]]
+intent = "repair"
+care = "critical"
+goal = "quality"
+reason = "mistakes can break the system"
+depth = "wide scan + root cause per finding"
+ask = "act on safe/reversible steps; backup first; hard classes ask"
+stop = "checklist covered + verified, or truly blocked"
+talk = "progress + findings card with one-tap fixes"
+
+[[row]]
+intent = "research"
+care = "careful"
+goal = "quality"
+reason = "quality for synthesis, speed for fetching"
+depth = "multiple sources, dedupe"
+ask = "act"
+stop = "coverage met"
+talk = "summary + links"
+
+[[row]]
+intent = "background"
+care = "any"
+goal = "cost"
+reason = "user isn't waiting"
+depth = "as playbook says"
+ask = "never interrupt; queue suggestions"
+stop = "done"
+talk = "quiet; one-tap cards only"
+
+# Defaults: any care of a known intent, then anything at all.
+
+[[row]]
+intent = "question"
+care = "any"
+goal = "speed"
+reason = "a quick answer"
+depth = "none"
+ask = "act"
+stop = "answered"
+talk = "concise"
+
+[[row]]
+intent = "task"
+care = "any"
+goal = "balanced"
+reason = "do the asked change and check it"
+depth = "full checklist"
+ask = "act; hard classes ask"
+stop = "checklist done or truly blocked"
+talk = "short progress notes"
+
+[[row]]
+intent = "creative"
+care = "any"
+goal = "quality"
+reason = "the draft is the product"
+depth = "none"
+ask = "act"
+stop = "draft delivered"
+talk = "the draft, then one line"
+
+[[row]]
+intent = "any"
+care = "critical"
+goal = "quality"
+reason = "hard to undo"
+depth = "full checklist, verify each change"
+ask = "act on safe/reversible steps; backup first; hard classes ask"
+stop = "checklist covered + verified, or truly blocked"
+talk = "progress notes"
+
+[[row]]
+intent = "any"
+care = "any"
+goal = "balanced"
+reason = "no closer row"
+depth = "as needed"
+ask = "act; hard classes ask"
+stop = "done or truly blocked"
+talk = "concise"

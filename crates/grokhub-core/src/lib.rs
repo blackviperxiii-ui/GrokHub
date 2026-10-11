@@ -10,6 +10,7 @@ pub mod cabin_rules;
 pub mod automation;
 pub mod autonomy;
 pub mod bg_task;
+pub mod brain_policy;
 pub mod browser;
 pub mod capture;
 pub mod chat;
