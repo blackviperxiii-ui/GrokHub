@@ -17,12 +17,20 @@ pub struct PolicyPick {
     pub row: String,
     pub goal: String,
     pub reason: String,
+    /// The row's talk column (Brain 5 picks the turn's talk style from it).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub talk: String,
 }
 
 impl PolicyPick {
     /// "repair × critical, goal quality (mistakes can break the system)"
     pub fn label(&self) -> String {
         format!("{}, goal {} ({})", self.row, self.goal, self.reason)
+    }
+
+    /// How the turn talks ([`grokhub_core::talk`]).
+    pub fn style(&self) -> grokhub_core::talk::TalkStyle {
+        grokhub_core::talk::TalkStyle::of(&self.talk)
     }
 }
 
@@ -49,6 +57,7 @@ pub fn pick_policy(rows: &[PolicyRow], brief: &Brief) -> Option<PolicyPick> {
         row: r.key(),
         goal: r.goal.clone(),
         reason: r.reason.clone(),
+        talk: r.talk.clone(),
     })
 }
 
@@ -62,6 +71,7 @@ mod tests {
         let brief = super::super::rules(&super::super::BriefInput { text: "hi", ..Default::default() }).unwrap();
         let shipped = pick_policy(&load_policy(&dir).0, &brief).unwrap();
         assert_eq!(shipped.label(), "chat × casual, goal speed (small talk, fast reply matters most)");
+        assert_eq!((shipped.talk.as_str(), shipped.style()), ("brief, personality on", grokhub_core::talk::TalkStyle::Short));
         assert_eq!(load_policy(&dir).1, None);
         std::fs::create_dir_all(policy_path(&dir).parent().unwrap()).unwrap();
         std::fs::write(
