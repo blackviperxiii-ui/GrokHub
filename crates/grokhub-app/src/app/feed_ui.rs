@@ -256,6 +256,8 @@ pub(super) enum FeedAct {
     DeleteRecording(String),
     /// Retry now on a no-route wait card.
     RetryNow,
+    /// Save / Not interested / More like this on a source post.
+    Source(String, super::pulse_ui::SourceAct),
 }
 
 /// Done-for-you cards carry a white rule down the left edge, the cabin's
@@ -870,6 +872,7 @@ impl Cabin {
             Some(FeedAct::Open(id)) => self.open_feed_card(&id),
             Some(FeedAct::Discuss(id)) => self.discuss_card(&id),
             Some(FeedAct::Like(id)) => self.pulse_like(&id, &Self::local_day()),
+            Some(FeedAct::Source(id, did)) => self.source_post_act(&id, did),
             Some(FeedAct::Undo(id)) => self.done_for_you_undo(&id),
             Some(FeedAct::NeverAgain(id)) => self.done_for_you_never(&id),
             Some(FeedAct::Retry(id)) => self.crash_retry(&id),
@@ -1827,6 +1830,7 @@ fn paint_full_feed_card(
                                 FeedAct::DeleteRecording(card.id.clone())
                             }
                             super::pulse_ui::FeedPostAct::RetryNow => FeedAct::RetryNow,
+                            super::pulse_ui::FeedPostAct::Source(did) => FeedAct::Source(card.id.clone(), did),
                         });
                     }
                 });
