@@ -384,7 +384,12 @@ impl Cabin {
             return;
         };
         let pass = match rx.try_recv() {
-            Ok(Ok(pass)) => pass,
+            Ok(Ok(pass)) => {
+                let t = &pass.tokens;
+                let tokens = t.input.saturating_add(t.out).saturating_add(t.reasoning);
+                self.governor_charge(grokhub_core::JobKind::NightPasses, tokens);
+                pass
+            }
             Ok(Err(e)) => {
                 self.status = format!("Weekly self-review held: {e}");
                 self.persist_updates();

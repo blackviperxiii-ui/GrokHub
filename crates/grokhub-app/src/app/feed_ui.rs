@@ -472,9 +472,9 @@ impl Cabin {
         quiet_hours_active(&clock.hm(), &self.cfg.quiet_start, &self.cfg.quiet_end)
     }
 
-    /// Housekeep: idea expiry, quiet release, digest clock. Not the nightly review.
+    /// The governor's Pulse refresh job: idea expiry, quiet release, digest
+    /// clock. Not the nightly review, and not the ideas ask (its own job).
     pub(super) fn tick_feed_pulse(&mut self) {
-        self.maybe_suggest_ideas(false);
         let now = now_ms();
         let quiet = self.quiet_now();
         let pulse = self.cfg.feed_pulse.clone();
@@ -967,7 +967,7 @@ impl Cabin {
     }
 
     /// Once per launch: purge template idea cards. The automatic model ask comes
-    /// from the heartbeat (`tick_feed_pulse` → `maybe_suggest_ideas`).
+    /// from the governor's Ideas job (`maybe_suggest_ideas`).
     pub(super) fn ensure_useful_ideas(&mut self) {
         if self.ideas_filled {
             return;
@@ -998,8 +998,8 @@ impl Cabin {
         let now = now_ms();
         if !force {
             let live = grokhub_core::live_generated_ideas(&self.updates);
+            // The governor's Ideas job: it never runs in quiet hours.
             if !grokhub_core::ideas_refresh_due(self.cfg.feed_pulse.last_ideas_ms, now, live)
-                || self.quiet_now()
                 || self.budget_holds_scheduled()
             {
                 return;
@@ -1013,7 +1013,7 @@ impl Cabin {
         self.persist_cfg();
         let (tx, rx) = mpsc::channel();
         self.ideas_rx = Some((rx, inputs));
-        self.spawn_native_ideas(prompt, tx);
+        self.spawn_native_ideas(prompt, tx, (!force).then_some(JobKind::Ideas));
     }
 
     /// The prompt plus what the reply must not copy (their own lines) or repeat,
