@@ -212,7 +212,8 @@ impl NativeEngine {
                 (ctx.chat_id, ctx.turn)
             }
         };
-        let line = crate::brain::BriefLine { at: grokhub_core::now_ms(), session: self.conversation_id.clone(), chat_id, turn, brief };
+        let policy = crate::brain::pick_policy(&crate::brain::load_policy(&dir).0, &brief);
+        let line = crate::brain::BriefLine { at: grokhub_core::now_ms(), session: self.conversation_id.clone(), chat_id, turn, brief, policy };
         let _ = crate::brain::record_brief(&dir, &line);
     }
 
@@ -885,12 +886,28 @@ mod tests {
         assert_eq!(client.briefs.load(std::sync::atomic::Ordering::SeqCst), 1);
         assert_eq!(client.chat.load(std::sync::atomic::Ordering::SeqCst), 2);
         let stored = crate::brain::read_briefs(&dir);
-        let got: Vec<(String, u32, String, String)> = stored.iter().map(|l| (l.chat_id.clone(), l.turn, l.brief.label(), l.brief.by.clone())).collect();
+        let got: Vec<(String, u32, Vec<String>, String)> = stored.iter().map(|l| (l.chat_id.clone(), l.turn, l.lines(), l.brief.by.clone())).collect();
         assert_eq!(
             got,
             vec![
-                ("chat-1".into(), 2, "repair × critical, done = services, packages, boot errors, ports".into(), "rules".into()),
-                ("chat-1".into(), 2, "task × careful, done = files in place, nothing lost".into(), "model".into()),
+                (
+                    "chat-1".into(),
+                    2,
+                    vec![
+                        "Brief: repair × critical, done = services, packages, boot errors, ports".into(),
+                        "Policy: repair × critical, goal quality (mistakes can break the system)".into(),
+                    ],
+                    "rules".into()
+                ),
+                (
+                    "chat-1".into(),
+                    2,
+                    vec![
+                        "Brief: task × careful, done = files in place, nothing lost".into(),
+                        "Policy: task × careful, goal balanced (escalate on failure)".into(),
+                    ],
+                    "model".into()
+                ),
             ]
         );
         // Off (the default): an unclear ask makes no extra request.
