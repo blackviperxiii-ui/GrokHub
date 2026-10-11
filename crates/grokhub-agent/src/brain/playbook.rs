@@ -297,7 +297,7 @@ mod tests {
         let (all, problems) = load(&dir);
         assert_eq!(
             (all.len(), all[0].source, problems.len()),
-            (3, Source::Shipped, 0)
+            (7, Source::Shipped, 0)
         );
         // Edit the shipped one: it is now yours, and Reset puts it back.
         let edited = all[0]
@@ -327,6 +327,10 @@ mod tests {
                 (SHIPPED, Source::Edited),
                 ("repair-linux", Source::Shipped),
                 ("repair-windows", Source::Shipped),
+                ("code-dev", Source::Shipped),
+                ("files", Source::Shipped),
+                ("research", Source::Shipped),
+                ("desktop", Source::Shipped),
                 ("task-general-copy", Source::Yours),
                 ("task-general-copy-2", Source::Yours)
             ]
@@ -344,6 +348,10 @@ mod tests {
                 (SHIPPED, Source::Shipped),
                 ("repair-linux", Source::Shipped),
                 ("repair-windows", Source::Shipped),
+                ("code-dev", Source::Shipped),
+                ("files", Source::Shipped),
+                ("research", Source::Shipped),
+                ("desktop", Source::Shipped),
                 ("task-general-copy", Source::Yours)
             ]
         );
@@ -363,7 +371,7 @@ mod tests {
         )
         .unwrap();
         let (all, problems) = load(&dir);
-        assert_eq!(all.len(), 4);
+        assert_eq!(all.len(), 8);
         assert_eq!(
             problems,
             vec![
@@ -402,7 +410,16 @@ mod tests {
             Some("repair-code-test")
         );
         assert_eq!(id("repair", "system", "macos").as_deref(), Some(SHIPPED));
-        assert_eq!(id("task", "code", "linux").as_deref(), Some(SHIPPED));
+        assert_eq!(id("task", "code", "linux").as_deref(), Some("code-dev"));
+        assert_eq!(id("repair", "code", "windows").as_deref(), Some("code-dev"));
+        assert_eq!(id("task", "files", "linux").as_deref(), Some("files"));
+        assert_eq!(
+            id("research", "web", "windows").as_deref(),
+            Some("research")
+        );
+        assert_eq!(id("research", "code", "linux").as_deref(), Some("research"));
+        assert_eq!(id("task", "desktop", "linux").as_deref(), Some("desktop"));
+        assert_eq!(id("task", "general", "linux").as_deref(), Some(SHIPPED));
         assert_eq!(id("chat", "general", "linux"), None);
         let _ = std::fs::remove_dir_all(dir);
     }
