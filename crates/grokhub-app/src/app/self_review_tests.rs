@@ -7,6 +7,7 @@ use super::self_review_ui::set_self_review_fake;
 use super::*;
 use grokhub_agent::harness as hx;
 use grokhub_core::outcome::{self as oc, OutcomeResult, OutcomeSignals, TaskOutcome};
+use grokhub_core::run_metrics;
 use grokhub_core::{UpdateCard, UpdateKind, UpdateStatus};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -166,6 +167,26 @@ fn a_turn_end_writes_one_outcome_and_a_later_undo_supersedes_it() {
     assert_eq!(all[0].reasons, vec!["verify_ok".to_string()]);
     assert_eq!(all[0].span_ids.len(), 2, "the verify step and the reply");
     assert_eq!(all[0].span_ids[0], v.span_ref());
+    let runs = run_metrics::read_runs(&root);
+    assert_eq!(runs.len(), 1, "one metrics line per finished run");
+    assert_eq!(
+        (
+            runs[0].run.as_str(),
+            runs[0].class.as_str(),
+            runs[0].result,
+            runs[0].verified,
+            runs[0].steps,
+            runs[0].undos
+        ),
+        (
+            format!("{trace}:1").as_str(),
+            "skill:weekly-report",
+            OutcomeResult::Success,
+            true,
+            0,
+            0
+        )
+    );
 
     // GrokHub changes the skill, then the user undoes it within the day.
     let mut v2 = v1.clone();
@@ -183,6 +204,12 @@ fn a_turn_end_writes_one_outcome_and_a_later_undo_supersedes_it() {
         2,
         "the undo is a superseding line"
     );
+    let runs = run_metrics::read_runs(&root);
+    assert_eq!(
+        (runs.len(), runs[0].result, runs[0].undos, runs[0].corrections),
+        (1, OutcomeResult::Failure, 1, 0)
+    );
+    assert_eq!(run_metrics::read_run_lines(&root).len(), 2);
     let _ = std::fs::remove_dir_all(&root);
 }
 
@@ -207,12 +234,19 @@ fn a_correction_after_the_turn_makes_it_a_failure() {
     );
     cabin.outcome_user_said("thanks, now April");
     assert_eq!(oc::read_outcome_lines(&root).len(), 1, "not a correction");
+    assert_eq!(run_metrics::read_run_lines(&root).len(), 1);
     cabin.outcome_user_said("No, that's the wrong sheet");
     let all = oc::read_outcomes(&root);
     assert_eq!(all.len(), 1);
     assert_eq!(
         (all[0].result, all[0].reasons.clone()),
         (OutcomeResult::Failure, vec!["correction".to_string()])
+    );
+    let runs = run_metrics::read_runs(&root);
+    assert_eq!(
+        (runs.len(), runs[0].steps, runs[0].result, runs[0].corrections, runs[0].undos),
+        (1, 1, OutcomeResult::Failure, 1, 0),
+        "the click counts as a step; the correction is a newer line"
     );
     let _ = std::fs::remove_dir_all(&root);
 }

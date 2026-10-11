@@ -108,7 +108,7 @@ pub use changes::{
 };
 pub(crate) use changes::private_write;
 pub use self_improve::{
-    last_recorded_run, outcome_from_spans, patch_marks, reject_live_replay, replay_gate, replay_patch, run_weekly,
+    last_recorded_run, outcome_from_spans, patch_marks, run_metrics_from_spans, reject_live_replay, replay_gate, replay_patch, run_weekly,
     spans_for, ReplayOpts, WeeklyPass, REPLAY_LIVE_REFUSED, REPLAY_TOOL, SELF_REVIEW_SESSION, SELF_REVIEW_TOOL,
 };
 pub use self_manage::{

@@ -11,6 +11,7 @@
 use std::path::Path;
 
 use grokhub_core::outcome::{OutcomeResult, OutcomeSignals, OutcomeTokens, TaskOutcome};
+use grokhub_core::run_metrics::RunMetrics;
 use grokhub_core::self_review::{
     build_self_review_digest, parse_self_review, rank_proposals, self_review_system_prompt,
     PatchMark, RankedProposal, RejectedProposal, SkillStats, SELF_REVIEW_CLASS,
@@ -19,6 +20,7 @@ use grokhub_core::self_review::{
 use crate::client::{ClientError, ContentPart, InputItem, ModelClient};
 use crate::harness::changes::{ChangeKind, ChangeLedger, ChangeOp};
 use crate::harness::detect::{span_kind, verify_passed, SpanKind};
+use crate::harness::ladder::Rung;
 use crate::harness::span::{append_span, read_spans, Origin, Span};
 use crate::route::{call_model, CallTokens, ModelCall};
 use crate::CancelToken;
@@ -89,6 +91,37 @@ pub fn outcome_from_spans(
         .with_spans(spans.iter().map(Span::span_ref))
         .in_episode(episode)
         .with_tokens(tokens)
+}
+
+/// The run's metrics line: `outcome` plus step, recovery and replan counts,
+/// a passed verify, wall time and the last model from its spans.
+pub fn run_metrics_from_spans(outcome: &TaskOutcome, spans: &[Span]) -> RunMetrics {
+    let model = spans
+        .iter()
+        .rev()
+        .filter_map(|s| s.tokens.as_ref())
+        .find(|t| !t.model.is_empty())
+        .map(|t| t.model.as_str())
+        .unwrap_or("");
+    let mut m = RunMetrics::from_outcome(outcome).with_model(model);
+    // A failed run can still have passed its verify; the outcome's reasons drop it.
+    m.verified = m.verified || spans.iter().any(verify_passed);
+    for s in spans {
+        match span_kind(s) {
+            SpanKind::Act | SpanKind::Step => m.steps += 1,
+            SpanKind::Recovery => {
+                m.recoveries += 1;
+                if s.decision == Rung::Replan.as_str() {
+                    m.replans += 1;
+                }
+            }
+            _ => {}
+        }
+    }
+    let first = spans.iter().map(|s| s.ts_ms).min().unwrap_or(0);
+    let last = spans.iter().map(|s| s.ts_ms).max().unwrap_or(0);
+    m.wall_ms = last.saturating_sub(first);
+    m
 }
 
 /// The spans of the newest successful recorded run of `skill`, oldest first.
@@ -368,6 +401,7 @@ mod tests {
     use super::*;
     use crate::client::{StreamEvent, TurnOutput, Usage};
     use crate::harness::detect::fixture_span;
+    use crate::harness::ladder::RECOVERY_TOOL;
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -478,6 +512,40 @@ mod tests {
                 ]
             )
         );
+    }
+
+    #[test]
+    fn run_metrics_count_steps_recoveries_replans_wall_time_and_the_last_model() {
+        let call = |model: &str, input: u64, ticks: i64| CallTokens {
+            model: model.into(),
+            input,
+            out: 5,
+            cost_ticks: ticks,
+            ..Default::default()
+        };
+        let mut click = fixture_span(1_000, "click", "{}", "allow", "clicked", Some(true), "");
+        click.tokens = Some(call("grok-4", 100, 30_000));
+        let bash = fixture_span(1_400, "bash", "{}", "allow", "ok", None, "");
+        let deny = fixture_span(1_500, "bash", "{}", "deny", "denied", None, "");
+        let retry = fixture_span(2_000, RECOVERY_TOOL, "{}", "retry", "retry", None, "");
+        let replan = fixture_span(2_500, RECOVERY_TOOL, "{}", "replan", "replan", None, "");
+        let mut verify = fixture_span(4_200, "verify_script", "{}", "allow", "pass", None, "");
+        verify.tokens = Some(call("grok-4-fast", 40, 10_000));
+        let mut say = fixture_span(4_300, crate::harness::span::REPLY_TOOL, "{}", "say", "", None, "done");
+        say.tokens = Some(call("", 1, 0));
+        let spans = [click, bash, deny, retry, replan, verify, say];
+        let o = outcome_from_spans("chat-a:2", "skill:weekly-report", &spans, &[], false, 4_400);
+        let m = run_metrics_from_spans(&o, &spans);
+        assert_eq!(
+            (m.run.as_str(), m.class.as_str(), m.result, m.verified),
+            ("chat-a:2", "skill:weekly-report", OutcomeResult::Failure, true)
+        );
+        assert_eq!((m.steps, m.recoveries, m.replans, m.wall_ms), (2, 2, 1, 3_300));
+        assert_eq!((m.tokens.input, m.tokens.out, m.tokens.cost_ticks), (141, 15, 40_000));
+        assert_eq!((m.cost_usd, m.model.as_str()), (0.000004, "grok-4-fast"));
+        assert_eq!((m.corrections, m.undos, m.finished_at), (0, 0, 4_400));
+        let none = run_metrics_from_spans(&o, &[]);
+        assert_eq!((none.steps, none.wall_ms, none.model.as_str()), (0, 0, ""));
     }
 
     #[test]
