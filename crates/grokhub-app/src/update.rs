@@ -352,7 +352,11 @@ pub fn run_update_cmds_with_progress(
             return Err(why.to_string());
         }
         on_progress(update_progress_pct(i, total), update_step_label(c));
-        let chunk = run_host(c, host_timeout_for(c));
+        let chunk = if c == grokhub_core::release_verify::RELEASE_INSTALL_STEP {
+            crate::release_update::release_step_receipt(crate::release_update::install_release(installed_channel(), cfg!(windows)))
+        } else {
+            run_host(c, host_timeout_for(c))
+        };
         out.push_str(&chunk);
         out.push('\n');
         if host_receipt_failed(&chunk) {
