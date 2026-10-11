@@ -2647,6 +2647,8 @@ pub fn recovered_card(r: &crate::recovered::Recovered, created_at: u64) -> Updat
         created_at,
     );
     card.source_id = source;
+    // Pulse names the source line from this; the kind alone reads "Automation run".
+    card.pulse.source_name = Some("Recovered file".into());
     refresh_event_why(&mut card);
     card
 }

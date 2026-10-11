@@ -148,6 +148,7 @@ mod tests {
         );
         assert!(crate::names_its_item(&card));
         assert_eq!(card.why, None, "not an automation");
+        assert_eq!(card.pulse.source_name.as_deref(), Some("Recovered file"));
         assert_eq!(card.id, crate::recovered_card(&r, 99).id, "one card per kept copy");
     }
 

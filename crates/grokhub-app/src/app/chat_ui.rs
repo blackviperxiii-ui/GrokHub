@@ -474,6 +474,7 @@ pub(super) fn paint_speech_bubble(
             })
             .inner;
     }
+    // Assistant row: the mark sits at the top left, beside the bubble.
     ui.scope(|ui| {
         ui.set_max_width(avail);
         ui.horizontal_top(|ui| {

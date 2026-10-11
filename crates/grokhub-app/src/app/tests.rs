@@ -1074,7 +1074,7 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             "a measured-height lock clips markdown: {bubble_fn}"
         );
         let assistant = src
-            .split("return resp.expect(\"speech bubble\");")
+            .split("// Assistant row: the mark sits at the top left")
             .nth(1)
             .and_then(|s| s.split("fn paint_msg_acts").next())
             .expect("assistant bubble");
