@@ -13,6 +13,8 @@ serde_json.workspace = true
 getrandom.workspace = true
 hex.workspace = true
 sha2 = "0.10"
+# Release updates: verify `SHA256SUMS.minisig` against the shipped public key. No deps.
+minisign-verify = "0.3"
 # Personality presets (`assets/personalities.toml`, user copies in `{config}/personalities/`).
 toml = "1"
 # Pulse source feeds (RSS, Atom, GitHub releases, YouTube). Already in the tree.

@@ -42,6 +42,7 @@ mod startup;
 mod threads;
 mod tray;
 mod window;
+mod release_update;
 mod update;
 mod xai;
 #[cfg(windows)]
