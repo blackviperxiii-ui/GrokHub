@@ -27,7 +27,7 @@
 //! or `{GROKHUB_CONFIG}/models`.
 
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use regex::Regex;
@@ -41,8 +41,20 @@ use crate::client::{ClientError, TurnOutput, Usage};
 
 pub const PROVIDER_LOCAL: &str = "local";
 pub const LOCAL_PREFIX: &str = "local:";
-/// The on-device model's context cap (2–4k), in tokens.
+/// Floor for the on-device context cap (raised per device by [`set_ctx_cap`] / PR C).
 pub const LOCAL_CTX_CAP: u64 = 4_096;
+
+static CTX_CAP: AtomicU64 = AtomicU64::new(LOCAL_CTX_CAP);
+
+/// Live context cap for eligibility and registry metadata (at least [`LOCAL_CTX_CAP`]).
+pub fn ctx_cap() -> u64 {
+    CTX_CAP.load(Ordering::SeqCst).max(LOCAL_CTX_CAP)
+}
+
+/// Raise (or reset) the on-device context cap after a hardware probe.
+pub fn set_ctx_cap(cap: u64) {
+    CTX_CAP.store(cap.max(LOCAL_CTX_CAP), Ordering::SeqCst);
+}
 /// The classes a local route may take while online (background helpers).
 pub const LOCAL_CLASSES: &[&str] = &["background:classify", "background:triage", "background:redact", "background:summarize"];
 /// Extra classes allowed on-device while offline (chat + summaries; not cloud-only).
@@ -161,7 +173,7 @@ pub fn eligible(gate: &LocalGate, class: &str, ctx_tokens: u64) -> bool {
     if super::connectivity::is_cloud_only(class) {
         return false;
     }
-    gate.enabled && !gate.hard_tool && class != PREPARE_HARD && allowed_classes(gate).contains(&class) && ctx_tokens <= LOCAL_CTX_CAP
+    gate.enabled && !gate.hard_tool && class != PREPARE_HARD && allowed_classes(gate).contains(&class) && ctx_tokens <= ctx_cap()
 }
 
 /// `id` may serve this step: the live tier, and [`eligible`].
@@ -185,7 +197,7 @@ pub struct LocalSource;
 pub fn tier_meta(id: &str) -> ModelMeta {
     ModelMeta {
         id: id.into(),
-        context_length: Some(LOCAL_CTX_CAP),
+        context_length: Some(ctx_cap()),
         // No effort menu: a local route sends no effort.
         efforts: Some(Vec::new()),
         tool_calling: Some(false),

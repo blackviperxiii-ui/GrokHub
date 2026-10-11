@@ -37,6 +37,9 @@ pub struct Sidecar {
     pub binary: PathBuf,
     pub model: PathBuf,
     restarts: AtomicU64,
+    /// Unix seconds of the last successful use (idle unload).
+    last_used_secs: AtomicU64,
+    idle_unload_secs: u64,
 }
 
 impl std::fmt::Debug for Sidecar {
@@ -48,8 +51,13 @@ impl std::fmt::Debug for Sidecar {
             .field("binary", &self.binary)
             .field("model", &self.model)
             .field("restarts", &self.restart_count())
+            .field("idle_unload_secs", &self.idle_unload_secs)
             .finish()
     }
+}
+
+fn unix_secs() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
 }
 
 impl Sidecar {
@@ -129,9 +137,21 @@ pub fn is_loopback_host(host: &str) -> bool {
     matches!(host, "127.0.0.1" | "localhost" | "::1" | "[::1]")
 }
 
-/// Command line for llama-server: host locked to loopback, API key required.
+/// Command line for llama-server: host locked to loopback, API key required,
+/// plus hardware-aware perf flags from [`super::local_perf`].
 pub fn llama_args(model: &Path, host: &str, port: u16, token: &str) -> Vec<String> {
-    vec![
+    llama_args_with_perf(model, host, port, token, &super::local_perf::current_defaults())
+}
+
+/// Same as [`llama_args`] with an explicit [`super::local_perf::RuntimeDefaults`].
+pub fn llama_args_with_perf(
+    model: &Path,
+    host: &str,
+    port: u16,
+    token: &str,
+    perf: &super::local_perf::RuntimeDefaults,
+) -> Vec<String> {
+    let mut args = vec![
         "-m".into(),
         model.display().to_string(),
         "--host".into(),
@@ -140,7 +160,9 @@ pub fn llama_args(model: &Path, host: &str, port: u16, token: &str) -> Vec<Strin
         port.to_string(),
         "--api-key".into(),
         token.into(),
-    ]
+    ];
+    args.extend(super::local_perf::llama_perf_args(perf));
+    args
 }
 
 fn spawn_llama(binary: &Path, model: &Path, host: &str, port: u16, token: &str) -> Result<Child, String> {
@@ -178,6 +200,7 @@ pub fn start(paths: &SidecarPaths) -> Result<Sidecar, String> {
     let port = free_loopback_port()?;
     let token = random_token();
     let child = spawn_llama(&paths.binary, &paths.model, &host, port, &token)?;
+    let idle = super::local_perf::current_defaults().idle_unload_secs;
     let side = Sidecar {
         child: Mutex::new(child),
         host,
@@ -186,6 +209,8 @@ pub fn start(paths: &SidecarPaths) -> Result<Sidecar, String> {
         binary: paths.binary.clone(),
         model: paths.model.clone(),
         restarts: AtomicU64::new(0),
+        last_used_secs: AtomicU64::new(unix_secs()),
+        idle_unload_secs: idle,
     };
     side.wait_healthy()?;
     Ok(side)
@@ -274,10 +299,12 @@ fn global_slot() -> &'static Mutex<Option<Sidecar>> {
 
 /// Ensure a healthy global sidecar when assets exist under `config_dir`.
 pub fn ensure_global(config_dir: &Path) -> Result<(), String> {
+    tick_idle_unload();
     let paths = resolve_paths(config_dir).ok_or_else(|| "local model binary or GGUF is not installed".to_string())?;
     let mut slot = global_slot().lock().expect("sidecar global");
     if let Some(side) = slot.as_ref() {
         side.ensure_alive()?;
+        side.last_used_secs.store(unix_secs(), Ordering::SeqCst);
         return Ok(());
     }
     *slot = Some(start(&paths)?);
@@ -286,8 +313,31 @@ pub fn ensure_global(config_dir: &Path) -> Result<(), String> {
 
 /// Base URL + token for the global sidecar, when running.
 pub fn global_endpoint() -> Option<(String, String)> {
+    tick_idle_unload();
     let slot = global_slot().lock().expect("sidecar global");
     slot.as_ref().map(|s| (s.base_url(), s.token.clone()))
+}
+
+/// Mark the global sidecar as just used (keeps it warm).
+pub fn touch_global() {
+    let slot = global_slot().lock().expect("sidecar global");
+    if let Some(side) = slot.as_ref() {
+        side.last_used_secs.store(unix_secs(), Ordering::SeqCst);
+    }
+}
+
+/// Stop the sidecar when it has been idle longer than its unload timeout.
+pub fn tick_idle_unload() {
+    let mut slot = global_slot().lock().expect("sidecar global");
+    let Some(side) = slot.as_ref() else {
+        return;
+    };
+    let last = side.last_used_secs.load(Ordering::SeqCst);
+    if super::local_perf::idle_unload_due(last, unix_secs(), side.idle_unload_secs) {
+        if let Some(side) = slot.take() {
+            side.stop();
+        }
+    }
 }
 
 /// Stop the global sidecar (tests / quit).
@@ -466,6 +516,23 @@ mod tests {
         assert!(args.windows(2).any(|w| w == ["--port", "4711"]));
         assert!(args.windows(2).any(|w| w == ["--api-key", "tok"]));
         assert!(args.windows(2).any(|w| w == ["-m", "/m.gguf"]));
+        // Perf defaults (PR C) ride along even with the CPU floor.
+        assert!(args.windows(2).any(|w| w[0] == "-ngl"));
+        assert!(args.iter().any(|a| a == "--cache-prompt"));
+    }
+
+    #[test]
+    fn llama_args_with_perf_include_gpu_defaults() {
+        let perf = super::super::local_perf::defaults_for(&grokhub_core::local_setup::Hardware {
+            gpu: "AMD Radeon RX 9070 XT".into(),
+            vram_mb: 16_384,
+            ram_mb: 32_768,
+            free_disk_mb: 100_000,
+        });
+        let args = llama_args_with_perf(Path::new("/m.gguf"), "127.0.0.1", 9, "tok", &perf);
+        assert!(args.windows(2).any(|w| w == ["-ngl", "99"]));
+        assert!(args.windows(2).any(|w| w == ["-c", "16384"]));
+        assert!(args.iter().any(|a| a == "--flash-attn"));
     }
 
     #[test]
