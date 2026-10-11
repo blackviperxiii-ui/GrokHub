@@ -56,6 +56,7 @@ impl HttpLocalRuntime {
         if !self.loopback_ok() {
             return Err("local model URL must be loopback (127.0.0.1 / localhost)".into());
         }
+        super::local_sidecar::touch_global();
         let body = json!({
             "model": self.model,
             "stream": stream,
