@@ -21274,6 +21274,7 @@ fn only_typing_or_a_click_builds_an_undo_ask() {
     assert_eq!(
         hits,
         vec![
+            "grokhub-app/src/app/change_history_ui.rs: UndoAsk::from_click(",
             "grokhub-app/src/app/change_undo.rs: UndoAsk::from_click(",
             "grokhub-app/src/app/chat_ui.rs: typed_send = true",
             "grokhub-app/src/app/repair_ui.rs: UndoAsk::from_click(",

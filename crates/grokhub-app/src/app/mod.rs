@@ -196,6 +196,7 @@ mod indexer_ui;
 mod skill_undo;
 mod self_review_ui;
 mod canary_ui;
+mod change_history_ui;
 mod change_undo;
 mod findings_ui;
 mod proactive_auto;
@@ -4881,6 +4882,9 @@ impl eframe::App for Cabin {
         self.poll_chips();
         self.poll_review();
         self.poll_self_review();
+        if let Some(issue) = self.harness.self_review.copy_out.take() {
+            ctx.copy_text(issue);
+        }
         self.poll_digest_lookup();
         self.poll_source_fetch();
         self.window_focused = ctx.input(|i| i.viewport().focused.unwrap_or(false));
