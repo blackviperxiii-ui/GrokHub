@@ -234,6 +234,23 @@ pub fn run_episode(
             Err(err) => return run.out(EpisodeStop::Error(err), String::new()),
         };
         on_event(LoopEvent::Usage(run.usage.clone()));
+        if turn.truncated {
+            let reason = turn
+                .truncate_reason
+                .as_deref()
+                .unwrap_or("max_output_tokens");
+            let args = serde_json::json!({ "reason": reason }).to_string();
+            run.write(
+                crate::harness::Span::deny(&run.ep.chat_id, "turn_truncated", &args, reason, "soft")
+                    .in_turn(&run.ep.chat_id, run.ep.turn),
+            );
+            for call in &turn.calls {
+                emit(on_event, call, "failed", crate::run::TRUNCATED_TOOL, None);
+            }
+            // Worker starts fresh each step; tell it to resend smaller calls.
+            run.ep.note = Some(crate::run::TRUNCATED_TOOL.into());
+            continue;
+        }
         if turn.calls.is_empty() {
             match run.claim(&turn.text) {
                 Some(stop) => {

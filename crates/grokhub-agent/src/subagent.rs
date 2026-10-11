@@ -1017,6 +1017,7 @@ mod tests {
             reasoning: String::new(),
             calls: Vec::new(),
             usage,
+            ..Default::default()
         }
     }
 
@@ -1026,6 +1027,7 @@ mod tests {
             reasoning: String::new(),
             calls,
             usage,
+            ..Default::default()
         }
     }
 

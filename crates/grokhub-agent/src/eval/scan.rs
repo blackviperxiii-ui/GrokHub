@@ -82,7 +82,13 @@ fn call(id: &str, name: &str, arguments: &str) -> crate::client::FunctionCall {
 }
 
 fn calls(calls: Vec<crate::client::FunctionCall>) -> TurnOutput {
-    TurnOutput { text: String::new(), reasoning: String::new(), calls, usage: Usage::default() }
+    TurnOutput {
+        text: String::new(),
+        reasoning: String::new(),
+        calls,
+        usage: Usage::default(),
+        ..Default::default()
+    }
 }
 
 fn done(todos: &[&str]) -> crate::client::FunctionCall {
