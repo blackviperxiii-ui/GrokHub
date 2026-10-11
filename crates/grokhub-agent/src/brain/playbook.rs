@@ -511,7 +511,7 @@ mod tests {
             parse(&wrong).unwrap_err(),
             "step \"Check memory\": no Linux probe `volumes` (one of disk_usage, memory, failed_services, boot_errors, network_links, dns, package_health, pending_updates)"
         );
-        let any_os = linux.replacen("os = [\"linux\"]\n", "", 1);
+        let any_os = linux.replacen("os = [\"linux\"]", "", 1);
         assert_eq!(
             parse(&any_os).unwrap_err(),
             "step \"List failed services\" names a probe, so applies_when.os must list only linux or windows"
