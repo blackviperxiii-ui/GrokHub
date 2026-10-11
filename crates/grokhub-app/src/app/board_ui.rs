@@ -219,10 +219,13 @@ fn paint_status_chip(ui: &mut egui::Ui, status: BoardStatus) {
         .corner_radius(999.0)
         .inner_margin(egui::Margin::symmetric(8, 3))
         .show(ui, |ui| {
-            ui.label(
-                RichText::new(board_status_label(status))
-                    .size(crate::theme::FONT_TIP)
-                    .color(fg),
+            ui.add(
+                egui::Label::new(
+                    RichText::new(board_status_label(status))
+                        .size(crate::theme::FONT_TIP)
+                        .color(fg),
+                )
+                .truncate(),
             );
         });
 }
@@ -390,53 +393,52 @@ impl Cabin {
                 ui.horizontal(|ui| {
                     paint_grip(ui);
                     paint_board_progress_ring(ui, filled, total);
-                    let chip_w = if chips.is_empty() {
+                    let gap = ui.spacing().item_spacing.x;
+                    let stack_w = if chips.is_empty() {
                         0.0
                     } else {
                         BOARD_CHIP_SIZE
                             + (BOARD_CHIP_SIZE - 7.0) * (chips.len().saturating_sub(1) as f32)
                             + 4.0
                     };
-                    let mid_w = (ui.available_width() - chip_w).max(48.0);
-                    ui.allocate_ui_with_layout(
-                        egui::vec2(mid_w, BOARD_RING_SIZE.max(36.0)),
-                        egui::Layout::top_down(egui::Align::Min),
-                        |ui| {
-                            ui.set_max_width(mid_w);
-                            ui.spacing_mut().item_spacing.y = 4.0;
-                            ui.horizontal(|ui| {
-                                if card.fresh {
-                                    fresh_badge(ui);
-                                }
+                    let show_stack = !chips.is_empty() && ui.available_width() >= stack_w + gap;
+                    let reserved = if show_stack { stack_w + gap } else { 0.0 };
+                    let mid_w = (ui.available_width() - reserved).max(0.0);
+                    ui.vertical(|ui| {
+                        ui.set_width(mid_w);
+                        ui.spacing_mut().item_spacing.y = 4.0;
+                        ui.horizontal(|ui| {
+                            if card.fresh {
+                                fresh_badge(ui);
+                            }
+                            ui.add(
+                                egui::Label::new(
+                                    RichText::new(&card.title)
+                                        .size(crate::theme::FONT_BODY)
+                                        .strong()
+                                        .color(crate::theme::fg()),
+                                )
+                                .truncate()
+                                .selectable(false),
+                            );
+                        });
+                        ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing.x = 8.0;
+                            paint_status_chip(ui, card.status);
+                            if !meta.is_empty() {
                                 ui.add(
                                     egui::Label::new(
-                                        RichText::new(&card.title)
-                                            .size(crate::theme::FONT_BODY)
-                                            .strong()
-                                            .color(crate::theme::fg()),
+                                        RichText::new(&meta)
+                                            .size(crate::theme::FONT_TIP)
+                                            .color(crate::theme::subtle()),
                                     )
                                     .truncate()
                                     .selectable(false),
                                 );
-                            });
-                            ui.horizontal(|ui| {
-                                ui.spacing_mut().item_spacing.x = 8.0;
-                                paint_status_chip(ui, card.status);
-                                if !meta.is_empty() {
-                                    ui.add(
-                                        egui::Label::new(
-                                            RichText::new(&meta)
-                                                .size(crate::theme::FONT_TIP)
-                                                .color(crate::theme::subtle()),
-                                        )
-                                        .truncate()
-                                        .selectable(false),
-                                    );
-                                }
-                            });
-                        },
-                    );
-                    if !chips.is_empty() {
+                            }
+                        });
+                    });
+                    if show_stack {
                         paint_presence_stack(ui, &chips);
                     }
                 });
