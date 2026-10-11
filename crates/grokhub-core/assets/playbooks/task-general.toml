@@ -1,0 +1,44 @@
+# GrokHub playbook: how a kind of work is done, step by step.
+#
+# Copy this file to `playbooks/` in the settings folder (Settings → Playbooks →
+# Duplicate does it for you) to change it. A file there with the same id
+# replaces the shipped one; Reset puts the shipped one back.
+#
+# Phases go from read-only (look), to safe (reversible changes), to risky.
+# A step that runs a hard-class command (money, send, delete, credentials,
+# irreversible system actions) must be risky, and it still asks you first.
+# A playbook can never make GrokHub skip an approval.
+
+id = "task-general"
+name = "Any task"
+summary = "Look first, change in small reversible steps, check each change, and stop only when truly blocked."
+
+checklist = ["the asked change is made", "result checked"]
+backup = "Before changing a file or setting, keep a copy of how it was (a .bak next to it, or note the old value)."
+verify = "After each change, look again: re-read the file, run the tests or build, or check the setting took."
+rollback = "If a check fails, put the copy back and say what went wrong."
+give_up = [
+  "a hard approval was refused",
+  "hardware, access or a sign-in is missing",
+  "every approach in the playbook failed and was checked",
+]
+
+[applies_when]
+intent = ["task", "repair"]
+
+[[phase]]
+name = "Look"
+tier = "read_only"
+
+[[phase.step]]
+name = "Read what is there before changing it"
+
+[[phase]]
+name = "Change"
+tier = "safe"
+
+[[phase.step]]
+name = "Make one small change at a time, with its copy kept"
+
+[[phase.step]]
+name = "Check the change before the next one"
