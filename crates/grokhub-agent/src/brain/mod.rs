@@ -1,7 +1,7 @@
 //! Brain 1: before a run starts, a short Brief says what kind of ask it is,
 //! how careful the run must be, and what "done" means, and the mode policy
-//! table names the row it matches. Phase 1 only records them (the trail and
-//! `/why` show them); nothing reads them to change a reply yet.
+//! table names the row it matches. The trail and `/why` show them; the row's
+//! goal and reason steer the turn's routing (Brain 2, `route::goal`).
 
 mod brief;
 mod policy;
