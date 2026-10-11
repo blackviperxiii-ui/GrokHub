@@ -210,6 +210,10 @@ pub fn run_loop(
     let mut drive = (input.depth == 0 && !plan_at_start && !input.conversation_id.is_empty())
         .then(|| crate::drive::Drive::new(&crate::session_tools::todos_for(input.conversation_id)));
     let mut evidence = 0usize;
+    // Brain 2: the turn's Brief and the changes still waiting on a check.
+    let brief = drive.as_ref().and_then(|_| crate::checkpoint::turn_brief(input.conversation_id));
+    let mut fresh = crate::checkpoint::Fresh::default();
+    let (mut checkpoint_at, mut checkpoint_due) = (0usize, Vec::<String>::new());
     match crate::hooks::on_user_prompt(input.conversation_id, input.workspace, user_text) {
         crate::hooks::PromptHook::Block { reason } => {
             history.pop();
@@ -348,7 +352,9 @@ pub fn run_loop(
             let notes = input.steer.drain();
             if notes.is_empty() {
                 if let Some(drive) = drive.as_mut().filter(|_| !crate::session_tools::plan_on(input.conversation_id)) {
-                    match drive.check(&crate::session_tools::todos_for(input.conversation_id), evidence) {
+                    let todos = crate::session_tools::todos_for(input.conversation_id);
+                    let gaps = crate::checkpoint::Gaps::of(brief.as_ref(), &todos, evidence, &fresh);
+                    match drive.check_with(&todos, evidence, &gaps) {
                         crate::drive::Verdict::Push(note) => {
                             history.push(user_message(&note, None));
                             continue;
@@ -582,6 +588,7 @@ pub fn run_loop(
             let halted = stop_for_halt(input);
             if !output.failed && !crate::drive::is_session_tool(&call.name) {
                 evidence += 1;
+                fresh.note(&call.name, &serde_json::from_str(&call.arguments).unwrap_or_default());
             }
             push_output(history, call, output);
             if cancelled {
@@ -590,6 +597,16 @@ pub fn run_loop(
             if halted {
                 return finish(input, StopReason::Halted, usage, did_compact, true);
             }
+        }
+        if drive.is_some() && evidence >= checkpoint_at + crate::checkpoint::CHECKPOINT_EVERY {
+            // A checkpoint between phases: name the Brief's done items still uncovered, once per change.
+            checkpoint_at = evidence;
+            let due = crate::checkpoint::uncovered(brief.as_ref(), &crate::session_tools::todos_for(input.conversation_id), evidence);
+            if !due.is_empty() && due != checkpoint_due {
+                let gaps = crate::checkpoint::Gaps { uncovered: due.clone(), ..Default::default() };
+                history.push(user_message(&format!("Checkpoint: {}", gaps.note()), None));
+            }
+            checkpoint_due = due;
         }
         for note in input.steer.drain() {
             history.push(user_message(&note, None));
@@ -2239,6 +2256,10 @@ mod tests {
     }
 
     fn run_drive(script: &Script, dir: &std::path::Path, conv: &str) -> (LoopOut, Vec<InputItem>, Vec<LoopEvent>) {
+        run_drive_in(script, dir, conv, Gate::phase_readonly())
+    }
+
+    fn run_drive_in(script: &Script, dir: &std::path::Path, conv: &str, gate: Gate) -> (LoopOut, Vec<InputItem>, Vec<LoopEvent>) {
         let (cancel, steer) = (CancelToken::new(), SteerQueue::new());
         let input = LoopIn {
             client: script,
@@ -2252,7 +2273,7 @@ mod tests {
             cancel: &cancel,
             steer: &steer,
             halt: &NeverHalt,
-            gate: Gate::phase_readonly(),
+            gate,
             desktop: None,
             permits: &gate::ClosedPermits,
             perms: None,
@@ -2416,6 +2437,93 @@ mod tests {
             .filter_map(|i| match i { InputItem::FunctionCallOutput { output, .. } => Some(output.as_str()), _ => None })
             .collect();
         assert_eq!(outputs, ["Findings card posted: 1 findings, 1 one-tap fixes. It shows after your reply.", "give 1 to 30 findings"]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn brief(intent: crate::brain::Intent, care: crate::brain::Care, done: &[&str]) -> crate::brain::Brief {
+        crate::brain::Brief { intent, care, done: done.iter().map(|d| d.to_string()).collect(), ..Default::default() }
+    }
+
+    fn scripted(turns: Vec<ScriptTurn>) -> Script {
+        Script { turns: Mutex::new(turns), seen: Mutex::new(Vec::new()), cancel_on_text: false, steer: None }
+    }
+
+    #[test]
+    fn an_edit_then_stop_is_pushed_back_until_it_is_checked() {
+        let dir = workspace("verify-stop");
+        let conv = format!("verify-stop-{}", std::process::id());
+        crate::checkpoint::set_turn_brief(&conv, brief(crate::brain::Intent::Task, crate::brain::Care::Casual, &[]));
+        let script = scripted(vec![
+            turn("", vec![call("w1", "write", r#"{"path":"notes.txt","content":"hi"}"#)]),
+            turn("Done.", Vec::new()),
+            turn("", vec![call("r1", "read_file", r#"{"target_file":"notes.txt"}"#)]),
+            turn("Checked: it says hi.", Vec::new()),
+        ]);
+        let (out, history, _) = run_drive_in(&script, &dir, &conv, chat(gate::PermMode::Always, true, false));
+        assert_eq!(out.stop, StopReason::EndTurn);
+        assert_eq!(script.seen.lock().unwrap().len(), 4);
+        assert_eq!(
+            user_texts(&history),
+            [
+                "scan my computer".to_string(),
+                "Not verified since your last change to notes.txt. Check it (run the tests or build, re-read the file, look at the result) before you finish.".to_string(),
+            ]
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_edit_then_a_test_run_then_stop_ends() {
+        let dir = workspace("verify-tests");
+        let conv = format!("verify-tests-{}", std::process::id());
+        crate::checkpoint::set_turn_brief(&conv, brief(crate::brain::Intent::Task, crate::brain::Care::Casual, &[]));
+        let script = scripted(vec![
+            turn("", vec![call("w1", "write", r#"{"path":"notes.txt","content":"hi"}"#)]),
+            turn("", vec![call("s1", "run_terminal_command", r#"{"command":"echo test ok"}"#)]),
+            turn("Done, and the test run passed.", Vec::new()),
+            turn("unused", Vec::new()),
+        ]);
+        let (out, history, _) = run_drive_in(&script, &dir, &conv, chat(gate::PermMode::Always, true, false));
+        assert_eq!(out.stop, StopReason::EndTurn);
+        assert_eq!(script.seen.lock().unwrap().len(), 3);
+        assert_eq!(user_texts(&history), ["scan my computer"]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_careful_repair_must_cover_its_brief_done_list_or_end_naming_it() {
+        let dir = workspace("brief-done");
+        let conv = format!("brief-done-{}", std::process::id());
+        let b = brief(crate::brain::Intent::Repair, crate::brain::Care::Careful, &["the error is gone", "it works again"]);
+        crate::checkpoint::set_turn_brief(&conv, b.clone());
+        // Covers the list: ends after one push.
+        let todos = r#"{"todos":[{"id":"e","content":"Confirm the error is gone","status":"completed"},{"id":"w","content":"It works again after restart","status":"completed"}]}"#;
+        let script = scripted(vec![
+            turn("", vec![call("r1", "read_file", r#"{"target_file":"note.txt"}"#)]),
+            turn("Fixed.", Vec::new()),
+            turn("", vec![call("t1", "todo_write", todos), call("r2", "list_dir", "{}")]),
+            turn("Both checked.", Vec::new()),
+        ]);
+        let (out, history, _) = run_drive(&script, &dir, &conv);
+        assert_eq!(out.stop, StopReason::EndTurn);
+        assert_eq!(script.seen.lock().unwrap().len(), 4);
+        assert_eq!(
+            user_texts(&history)[1],
+            "This ask is done only when it shows \"the error is gone\", \"it works again\". Put each in your checklist (todo_write) and mark it completed once a tool result shows it, or cancelled with the reason it is blocked."
+        );
+        crate::session_tools::invalidate_todos(&conv);
+        // Truly blocked: ends naming what is still open.
+        let conv = format!("brief-stuck-{}", std::process::id());
+        crate::checkpoint::set_turn_brief(&conv, b);
+        let mut turns = vec![turn("", vec![call("r1", "read_file", r#"{"target_file":"note.txt"}"#)])];
+        turns.extend((0..=crate::drive::STALL_LIMIT).map(|_| turn("I can't.", Vec::new())));
+        let script = scripted(turns);
+        let (out, history, _) = run_drive(&script, &dir, &conv);
+        assert_eq!(out.stop, StopReason::EndTurn);
+        assert_eq!(script.seen.lock().unwrap().len(), 5);
+        let said = "Stopped with these still open: \"the error is gone\", \"it works again\". No approach worked after 3 re-plans.";
+        assert!(matches!(history.last(), Some(InputItem::Message { role, content }) if role == "assistant" && content.first() == Some(&ContentPart::InputText(said.into()))));
+        crate::session_tools::invalidate_todos(&conv);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
