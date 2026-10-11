@@ -184,9 +184,15 @@ pub fn run_loop(
     let first_turn = history.is_empty();
     // Brain 5: the turn's talk style sits in the system prompt's volatile tail.
     let style = (input.depth == 0).then(|| crate::checkpoint::turn_style(input.conversation_id)).flatten();
+    // Brain 3: so does the playbook the turn's Brief picked.
+    let playbook = (input.depth == 0).then(|| crate::checkpoint::turn_playbook(input.conversation_id)).flatten();
     if first_turn {
         let base = style.map(|s| grokhub_core::talk::restyle(input.system, s));
         let base = base.as_deref().unwrap_or(input.system);
+        let base = match &playbook {
+            Some(block) => grokhub_core::playbook::with_playbook(base, Some(block)),
+            None => base.to_string(),
+        };
         let system = match crate::memory::first_turn_injection(input.workspace, user_text) {
             Some(block) if base.trim().is_empty() => block,
             Some(block) => format!("{base}\n\n{block}"),
@@ -198,8 +204,13 @@ pub fn run_loop(
                 content: vec![ContentPart::InputText(system)],
             });
         }
-    } else if let Some(style) = style {
-        restyle_history(history, style);
+    } else {
+        if let Some(style) = style {
+            restyle_history(history, style);
+        }
+        if input.depth == 0 {
+            replaybook_history(history, playbook.as_deref());
+        }
     }
     history.push(user_message(user_text, image));
     // Spike-4c: a tool call that carries a recalled line is personal egress.
@@ -669,6 +680,16 @@ fn restyle_history(history: &mut [InputItem], style: grokhub_core::talk::TalkSty
     if let Some(InputItem::Message { role, content }) = history.first_mut() {
         if let Some(ContentPart::InputText(text)) = content.first_mut().filter(|_| role == "system") {
             *text = grokhub_core::talk::restyle(text, style);
+        }
+    }
+}
+
+/// A later turn's playbook replaces the earlier one in the stored system
+/// prompt; a turn with none drops it.
+fn replaybook_history(history: &mut [InputItem], block: Option<&str>) {
+    if let Some(InputItem::Message { role, content }) = history.first_mut() {
+        if let Some(ContentPart::InputText(text)) = content.first_mut().filter(|_| role == "system") {
+            *text = grokhub_core::playbook::with_playbook(text, block);
         }
     }
 }
@@ -2891,6 +2912,39 @@ mod tests {
         assert_eq!(user_texts(&history), ["scan my computer"]);
         crate::session_tools::invalidate_todos(&conv);
         crate::checkpoint::set_turn_style(&conv, None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_picked_playbook_reaches_the_prompt_and_a_later_turn_swaps_or_drops_it() {
+        use grokhub_core::playbook::{parse, with_playbook, BUILTIN};
+        let dir = workspace("playbook-prompt");
+        let conv = format!("playbook-prompt-{}", std::process::id());
+        let system = format!("CABIN RULES\n\n{}", grokhub_core::talk::VOLATILE_SAFETY_CLOSER);
+        let code = parse(BUILTIN[3]).unwrap().prompt_block();
+        let files = parse(BUILTIN[4]).unwrap().prompt_block();
+        let allow = Answer { answer: PermAnswer::Allow, asks: AtomicUsize::new(0) };
+        let script = scripted(vec![turn("One.", Vec::new()), turn("Two.", Vec::new()), turn("Three.", Vec::new())]);
+        let mut history = Vec::new();
+        let mut ask = |block: Option<&String>, text: &str| {
+            crate::checkpoint::set_turn_playbook(&conv, block.cloned());
+            talk_turn(&script, &dir, &conv, &system, chat(gate::PermMode::Ask, true, false), &allow, &mut history, text);
+        };
+        ask(Some(&code), "add a retry to fetch() in src/net.rs");
+        ask(Some(&files), "move my photos into folders by year");
+        ask(None, "thanks");
+        let seen = script.seen.lock().unwrap();
+        let prompts: Vec<String> = seen.iter().map(|h| system_text(h)).collect();
+        assert_eq!(
+            prompts,
+            vec![
+                format!("CABIN RULES\n\n{code}\n\n{}", grokhub_core::talk::VOLATILE_SAFETY_CLOSER),
+                format!("CABIN RULES\n\n{files}\n\n{}", grokhub_core::talk::VOLATILE_SAFETY_CLOSER),
+                system.clone(),
+            ]
+        );
+        assert_eq!(prompts[1], with_playbook(&prompts[0], Some(&files)));
+        crate::checkpoint::set_turn_playbook(&conv, None);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
