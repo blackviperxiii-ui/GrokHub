@@ -20,6 +20,7 @@
 ## What depends on it
 - In-app Update and `grokhub --update` (`install.sh --user`), the Labs beta toggle (`channel_switch_cmds` in `crates/grokhub-app/src/update.rs` adds `--channel`), and the README install docs.
 ## Non-obvious
+- `packaging/release-binary-size-ceiling` caps `target/release/grokhub`; `make-release-bundle.sh` and `make-windows-release.tests.ps1` fail when the binary is over it.
 - The `--dry-run` line (`channel=… branch=… switch=… prefix=… receipt=…`) is asserted literally by `install_sh_parses_channel_flags_and_follows_the_receipt`, which runs the real script on unix.
 - No `--channel`: the receipt wins, missing means stable (`main`). `--channel` refuses a dirty tree and only fast-forwards the local branch.
 - `GROKHUB_CHANNEL` is exported into `cargo build` so `crates/grokhub-app/build.rs` labels the binary.
