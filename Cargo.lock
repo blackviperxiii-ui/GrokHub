@@ -1996,6 +1996,7 @@ version = "2.13.1"
 dependencies = [
  "getrandom 0.2.17",
  "hex",
+ "quick-xml",
  "rusqlite",
  "serde",
  "serde_json",

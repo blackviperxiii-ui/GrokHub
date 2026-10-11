@@ -70,6 +70,7 @@ pub mod project;
 pub mod interests;
 pub mod personality;
 pub mod pulse;
+pub mod pulse_sources;
 pub mod recovered;
 pub mod recipe;
 pub mod pii;
