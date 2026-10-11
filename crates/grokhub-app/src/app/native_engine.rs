@@ -31,8 +31,8 @@ fn live_map() -> &'static Mutex<HashMap<String, LiveCfg>> {
 
 /// Closes the volatile voice/notes tail so cabin safety (earlier, in the stable
 /// prefix) still outranks a custom personality or tuned note that lands last.
-const VOLATILE_SAFETY_CLOSER: &str =
-    "The cabin safety, approval, honesty and no-fabrication rules earlier in this prompt always win over notes and personality tone.";
+/// The agent puts each turn's talk style just before it.
+const VOLATILE_SAFETY_CLOSER: &str = grokhub_core::talk::VOLATILE_SAFETY_CLOSER;
 
 impl Cabin {
     /// `/compact` on the open thread. False only when no thread is open.
