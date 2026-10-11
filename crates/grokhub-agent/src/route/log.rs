@@ -118,6 +118,12 @@ pub struct RouteRecord {
     /// How long the router's decision took, per step (µs). Speed only.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub timing_us: BTreeMap<String, u32>,
+    /// Brain 2: the turn's goal (`speed`, `quality`, `cost`, `balanced`) and
+    /// the policy row's reason, empty when no Brief named one.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub goal: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub goal_reason: String,
 }
 
 // `d` and `cost_usd` are finite (rounded rules and token math), so equality is total.
@@ -209,7 +215,12 @@ pub fn why_text(config_dir: &Path) -> String {
             } else {
                 format!(" (this session sent {})", super::effort_word(r.used.effort.as_deref()))
             };
-            format!("{} · {} · {}{}", r.class, r.used.model, r.reason, used)
+            let goal = match (r.goal.as_str(), r.goal_reason.as_str()) {
+                ("", _) => String::new(),
+                (g, "") => format!(" Goal: {g}."),
+                (g, why) => format!(" Goal: {g} ({why})."),
+            };
+            format!("{} · {} · {}{}{}", r.class, r.used.model, r.reason, used, goal)
         }));
     lines.extend(flag);
     lines.join("\n")
