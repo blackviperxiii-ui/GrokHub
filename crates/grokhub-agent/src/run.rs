@@ -19,6 +19,9 @@ const REPEAT_LIMIT: u32 = 3;
 pub const REPEAT_REPLAN: &str = "not run: the same call already ran twice. Stop repeating it. \
 Re-read the goal, say in one line what you tried, then pick a different approach \
 (another tool, another route or a smaller sub-step) and go on.";
+/// Tool calls from a length-truncated model reply are failed unexecuted.
+pub const TRUNCATED_TOOL: &str =
+    "not run: your reply was cut off at the output limit; resend smaller steps";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StopReason {
@@ -206,6 +209,7 @@ pub fn run_loop(
     let mut did_compact = false;
     let mut repeats: HashMap<String, u32> = HashMap::new();
     let mut stop_hook_active = false;
+    let mut truncated_streak = 0u32;
     // A subagent's checklist belongs to its parent; plan mode can't do the work.
     let mut drive = (input.depth == 0 && !plan_at_start && !input.conversation_id.is_empty())
         .then(|| crate::drive::Drive::new(&crate::session_tools::todos_for(input.conversation_id)));
@@ -348,6 +352,29 @@ pub fn run_loop(
                 content: vec![ContentPart::InputText(turn.text)],
             });
         }
+        if turn.truncated {
+            truncated_streak = truncated_streak.saturating_add(1);
+            record_turn_truncated(
+                input.conversation_id,
+                turn.truncate_reason.as_deref(),
+                truncated_streak,
+            );
+            for call in &turn.calls {
+                history.push(InputItem::FunctionCall {
+                    call_id: call.call_id.clone(),
+                    name: call.name.clone(),
+                    arguments: call.arguments.clone(),
+                });
+                emit_tool(on_event, &tool_id(call), call, "failed", TRUNCATED_TOOL, None);
+                // Do not note a tool error: truncation is not a failed tool run.
+                history.push(InputItem::FunctionCallOutput {
+                    call_id: call.call_id.clone(),
+                    output: TRUNCATED_TOOL.into(),
+                });
+            }
+            continue;
+        }
+        truncated_streak = 0;
         if turn.calls.is_empty() {
             let notes = input.steer.drain();
             if notes.is_empty() {
@@ -674,6 +701,19 @@ fn push_output(history: &mut Vec<InputItem>, call: &FunctionCall, output: ToolOu
     }
 }
 
+/// Trail span for a length-truncated model reply (`turn_truncated`).
+fn record_turn_truncated(conversation_id: &str, reason: Option<&str>, streak: u32) {
+    let reason = reason.unwrap_or("max_output_tokens");
+    let args = serde_json::json!({
+        "reason": reason,
+        "streak": streak,
+    })
+    .to_string();
+    let span = crate::harness::Span::deny(conversation_id, "turn_truncated", &args, reason, "soft")
+        .in_turn(conversation_id, 0);
+    let _ = crate::harness::append_span(&crate::perm::config_dir(), &span);
+}
+
 fn emit_tool(
     on_event: &mut dyn FnMut(LoopEvent),
     id: &str,
@@ -910,6 +950,36 @@ mod tests {
         text: String,
         calls: Vec<FunctionCall>,
         usage: Usage,
+        truncated: bool,
+    }
+
+    impl ScriptTurn {
+        fn text(text: impl Into<String>) -> Self {
+            Self {
+                text: text.into(),
+                calls: Vec::new(),
+                usage: Usage::default(),
+                truncated: false,
+            }
+        }
+
+        fn calls(calls: Vec<FunctionCall>, usage: Usage) -> Self {
+            Self {
+                text: String::new(),
+                calls,
+                usage,
+                truncated: false,
+            }
+        }
+
+        fn truncated_calls(calls: Vec<FunctionCall>) -> Self {
+            Self {
+                text: String::new(),
+                calls,
+                usage: Usage::default(),
+                truncated: true,
+            }
+        }
     }
 
     impl ModelClient for Script {
@@ -934,11 +1004,7 @@ mod tests {
             let turn = {
                 let mut turns = self.turns.lock().unwrap();
                 if turns.is_empty() {
-                    ScriptTurn {
-                        text: String::new(),
-                        calls: Vec::new(),
-                        usage: Usage::default(),
-                    }
+                    ScriptTurn::text("")
                 } else {
                     turns.remove(0)
                 }
@@ -951,6 +1017,10 @@ mod tests {
                 reasoning: String::new(),
                 calls: turn.calls,
                 usage: turn.usage,
+                truncated: turn.truncated,
+                truncate_reason: turn
+                    .truncated
+                    .then(|| "max_output_tokens".into()),
             })
         }
     }
@@ -990,7 +1060,8 @@ mod tests {
                     arguments: format!(r#"{{"path":"p{n}"}}"#),
                 }],
                 usage: Usage::default(),
-            })
+            ..Default::default()
+        })
         }
     }
 
@@ -1059,6 +1130,99 @@ mod tests {
     }
 
     #[test]
+    fn truncated_turn_does_not_run_tool_calls() {
+        let dir = workspace("trunc");
+        let config = dir.join("config");
+        std::fs::create_dir_all(&config).unwrap();
+        let _guard = crate::perm::ConfigGuard::set(&config);
+        let script = Script {
+            turns: Mutex::new(vec![
+                ScriptTurn::truncated_calls(vec![call(
+                    "w1",
+                    "write",
+                    r#"{"path":"big.rs","content":"partial"}"#,
+                )]),
+                ScriptTurn::text("rewrote in smaller pieces"),
+            ]),
+            seen: Mutex::new(Vec::new()),
+            cancel_on_text: false,
+            steer: None,
+        };
+        let (out, history, events) = run(
+            &script,
+            &dir,
+            0,
+            &CancelToken::new(),
+            &SteerQueue::new(),
+            &NeverHalt,
+        );
+        assert_eq!(out.stop, StopReason::EndTurn);
+        let outputs: Vec<_> = history
+            .iter()
+            .filter_map(|i| match i {
+                InputItem::FunctionCallOutput { output, .. } => Some(output.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(outputs, [TRUNCATED_TOOL]);
+        assert!(events.iter().any(|ev| matches!(
+            ev,
+            LoopEvent::Tool { status, detail, .. }
+                if status == "failed" && detail.contains("cut off at the output limit")
+        )));
+        // write never ran: the file is absent.
+        assert!(!dir.join("big.rs").exists());
+        let spans = std::fs::read_to_string(crate::harness::span_path(&config, "conv")).unwrap();
+        assert!(spans.contains("turn_truncated"), "{spans}");
+        assert!(spans.contains("max_output_tokens"), "{spans}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn completed_tool_turn_still_runs_as_before() {
+        let dir = workspace("trunc-ok");
+        let script = Script {
+            turns: Mutex::new(vec![
+                ScriptTurn::calls(
+                    vec![call("w1", "write", r#"{"path":"ok.rs","content":"full"}"#)],
+                    Usage::default(),
+                ),
+                ScriptTurn::text("done"),
+            ]),
+            seen: Mutex::new(Vec::new()),
+            cancel_on_text: false,
+            steer: None,
+        };
+        let permits = Answer {
+            answer: PermAnswer::Allow,
+            asks: AtomicUsize::new(0),
+        };
+        let (out, history, _events) = once(
+            &script,
+            &dir,
+            chat(gate::PermMode::Always, true, false),
+            None,
+            &permits,
+        );
+        assert_eq!(out.stop, StopReason::EndTurn);
+        let outputs: Vec<_> = history
+            .iter()
+            .filter_map(|i| match i {
+                InputItem::FunctionCallOutput { output, .. } => Some(output.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            outputs
+                .iter()
+                .all(|o| !o.contains("cut off at the output limit")),
+            "{outputs:?}"
+        );
+        assert_eq!(std::fs::read_to_string(dir.join("ok.rs")).unwrap(), "full");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn no_turn_cap_runs_past_fifty_tool_turns_to_the_reply() {
         let dir = workspace("nocap");
         let mut turns: Vec<ScriptTurn> = (0..80)
@@ -1066,9 +1230,12 @@ mod tests {
                 text: String::new(),
                 calls: vec![call(&format!("t{n}"), "list_dir", &format!(r#"{{"path":"p{n}"}}"#))],
                 usage: Usage::default(),
+                truncated: false,
             })
             .collect();
-        turns.push(ScriptTurn { text: "all done".into(), calls: Vec::new(), usage: Usage::default() });
+        turns.push(ScriptTurn { text: "all done".into(), calls: Vec::new(), usage: Usage::default(),
+                truncated: false,
+            });
         let script = Script {
             turns: Mutex::new(turns),
             seen: Mutex::new(Vec::new()),
@@ -1096,12 +1263,14 @@ mod tests {
                         call("b", "list_dir", "{}"),
                     ],
                     usage: usage(10, 5, 2, 100),
-                },
+                truncated: false,
+            },
                 ScriptTurn {
                     text: "done".into(),
                     calls: Vec::new(),
                     usage: usage(7, 3, 1, 50),
-                },
+                truncated: false,
+            },
             ]),
             seen: Mutex::new(Vec::new()),
             cancel_on_text: false,
@@ -1143,12 +1312,14 @@ mod tests {
                     text: String::new(),
                     calls: vec![call("w", "write", r#"{"path":"x"}"#)],
                     usage: Usage::default(),
-                },
+                truncated: false,
+            },
                 ScriptTurn {
                     text: "stopped".into(),
                     calls: Vec::new(),
                     usage: Usage::default(),
-                },
+                truncated: false,
+            },
             ]),
             seen: Mutex::new(Vec::new()),
             cancel_on_text: false,
@@ -1169,12 +1340,14 @@ mod tests {
                     text: String::new(),
                     calls: vec![call("r", "read_file", r#"{"target_file":"missing.txt"}"#)],
                     usage: Usage::default(),
-                },
+                truncated: false,
+            },
                 ScriptTurn {
                     text: "after steer".into(),
                     calls: Vec::new(),
                     usage: Usage::default(),
-                },
+                truncated: false,
+            },
             ]),
             seen: Mutex::new(Vec::new()),
             cancel_on_text: false,
@@ -1192,17 +1365,20 @@ mod tests {
                     text: String::new(),
                     calls: vec![call("1", "read_file", r#"{"target_file":"note.txt"}"#)],
                     usage: Usage::default(),
-                },
+                truncated: false,
+            },
                 ScriptTurn {
                     text: String::new(),
                     calls: vec![call("2", "read_file", r#"{"target_file":"note.txt"}"#)],
                     usage: Usage::default(),
-                },
+                truncated: false,
+            },
                 ScriptTurn {
                     text: String::new(),
                     calls: vec![call("3", "read_file", r#"{"target_file":"note.txt"}"#)],
                     usage: Usage::default(),
-                },
+                truncated: false,
+            },
             ]),
             seen: Mutex::new(Vec::new()),
             cancel_on_text: false,
@@ -1233,6 +1409,7 @@ mod tests {
                 text: "nope".into(),
                 calls: Vec::new(),
                 usage: Usage::default(),
+                truncated: false,
             }]),
             seen: Mutex::new(Vec::new()),
             cancel_on_text: true,
@@ -1253,6 +1430,7 @@ mod tests {
                 text: String::new(),
                 calls: vec![call("h", "read_file", r#"{"target_file":"note.txt"}"#)],
                 usage: Usage::default(),
+                truncated: false,
             }]),
             seen: Mutex::new(Vec::new()),
             cancel_on_text: false,
@@ -1393,12 +1571,14 @@ mod tests {
             text: String::new(),
             calls: vec![call(id, "write", &format!(r#"{{"path":"{path}","content":"yes"}}"#))],
             usage: Usage::default(),
-        };
+                truncated: false,
+            };
         let done = ScriptTurn {
             text: "done".into(),
             calls: Vec::new(),
             usage: Usage::default(),
-        };
+                truncated: false,
+            };
 
         let allow = Answer { answer: PermAnswer::Allow, asks: AtomicUsize::new(0) };
         let asking = Script {
@@ -1479,12 +1659,14 @@ mod tests {
                     text: String::new(),
                     calls: vec![call("e", "write", r#"{"path":"../nope.txt","content":"x"}"#)],
                     usage: Usage::default(),
-                },
+                truncated: false,
+            },
                 ScriptTurn {
                     text: "done".into(),
                     calls: Vec::new(),
                     usage: Usage::default(),
-                },
+                truncated: false,
+            },
             ]),
             seen: Mutex::new(Vec::new()),
             cancel_on_text: false,
@@ -1511,10 +1693,12 @@ mod tests {
                     call("2", "write", r#"{"path":"b.txt","content":"b"}"#),
                 ],
                 usage: Usage::default(),
+                truncated: false,
             }, ScriptTurn {
                 text: "done".into(),
                 calls: Vec::new(),
                 usage: Usage::default(),
+                truncated: false,
             }]),
             seen: Mutex::new(Vec::new()),
             cancel_on_text: false,
@@ -1544,8 +1728,11 @@ mod tests {
                         call("4", "type", r#"{"text":"thanks"}"#),
                     ],
                     usage: Usage::default(),
-                },
-                ScriptTurn { text: "done".into(), calls: Vec::new(), usage: Usage::default() },
+                truncated: false,
+            },
+                ScriptTurn { text: "done".into(), calls: Vec::new(), usage: Usage::default(),
+                truncated: false,
+            },
             ]),
             seen: Mutex::new(Vec::new()),
             cancel_on_text: false,
@@ -1605,8 +1792,12 @@ mod tests {
         let dir = workspace("enter-slack");
         let script = || Script {
             turns: Mutex::new(vec![
-                ScriptTurn { text: String::new(), calls: vec![call("1", "key", r#"{"keys":"Return"}"#)], usage: Usage::default() },
-                ScriptTurn { text: "done".into(), calls: Vec::new(), usage: Usage::default() },
+                ScriptTurn { text: String::new(), calls: vec![call("1", "key", r#"{"keys":"Return"}"#)], usage: Usage::default(),
+                truncated: false,
+            },
+                ScriptTurn { text: "done".into(), calls: Vec::new(), usage: Usage::default(),
+                truncated: false,
+            },
             ]),
             seen: Mutex::new(Vec::new()),
             cancel_on_text: false,
@@ -1637,12 +1828,14 @@ mod tests {
             text: String::new(),
             calls: vec![call(id, "screenshot", "{}")],
             usage: Usage::default(),
-        };
+                truncated: false,
+            };
         let done = ScriptTurn {
             text: "done".into(),
             calls: Vec::new(),
             usage: Usage::default(),
-        };
+                truncated: false,
+            };
         let permits = Answer { answer: PermAnswer::Allow, asks: AtomicUsize::new(0) };
 
         let off_script = Script {
@@ -1822,7 +2015,8 @@ mod tests {
                 reasoning: String::new(),
                 calls,
                 usage: Usage::default(),
-            })
+            ..Default::default()
+        })
         }
     }
 
@@ -1889,12 +2083,14 @@ mod tests {
                     text: String::new(),
                     calls: vec![call("r", "read_file", r#"{"target_file":"note.txt"}"#)],
                     usage: Usage::default(),
-                },
+                truncated: false,
+            },
                 ScriptTurn {
                     text: "after steer".into(),
                     calls: Vec::new(),
                     usage: Usage::default(),
-                },
+                truncated: false,
+            },
             ]),
             seen: Mutex::new(Vec::new()),
             cancel_on_text: false,
@@ -1951,6 +2147,7 @@ mod tests {
                 text: String::new(),
                 calls: vec![call("r", "read_file", r#"{"target_file":"note.txt"}"#)],
                 usage: Usage::default(),
+                truncated: false,
             }]),
             seen: Mutex::new(Vec::new()),
             cancel_on_text: false,
@@ -2047,12 +2244,14 @@ mod tests {
                         call("m", "monitor", r#"{"command":"echo hi"}"#),
                     ],
                     usage: Usage::default(),
-                },
+                truncated: false,
+            },
                 ScriptTurn {
                     text: "done".into(),
                     calls: Vec::new(),
                     usage: Usage::default(),
-                },
+                truncated: false,
+            },
             ]),
             seen: Mutex::new(Vec::new()),
             cancel_on_text: false,
@@ -2136,12 +2335,14 @@ mod tests {
                     text: String::new(),
                     calls: vec![call("w", "write", r#"{"path":"out.txt","content":"yes"}"#)],
                     usage: Usage::default(),
-                },
+                truncated: false,
+            },
                 ScriptTurn {
                     text: "done".into(),
                     calls: Vec::new(),
                     usage: Usage::default(),
-                },
+                truncated: false,
+            },
             ]),
             seen: Mutex::new(Vec::new()),
             cancel_on_text: false,
@@ -2202,12 +2403,14 @@ mod tests {
                     text: String::new(),
                     calls: vec![call("w", "write", r#"{"path":"out.txt","content":"yes"}"#)],
                     usage: Usage::default(),
-                },
+                truncated: false,
+            },
                 ScriptTurn {
                     text: "done".into(),
                     calls: Vec::new(),
                     usage: Usage::default(),
-                },
+                truncated: false,
+            },
             ]),
             seen: Mutex::new(Vec::new()),
             cancel_on_text: false,
@@ -2292,7 +2495,12 @@ mod tests {
     }
 
     fn turn(text: &str, calls: Vec<FunctionCall>) -> ScriptTurn {
-        ScriptTurn { text: text.into(), calls, usage: Usage::default() }
+        ScriptTurn {
+            text: text.into(),
+            calls,
+            usage: Usage::default(),
+            truncated: false,
+        }
     }
 
     fn user_texts(history: &[InputItem]) -> Vec<String> {

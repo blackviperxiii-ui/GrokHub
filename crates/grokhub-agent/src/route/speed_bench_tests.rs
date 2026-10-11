@@ -104,10 +104,14 @@ impl ModelClient for Stub {
         let usage = Usage { input_tokens: 9_000, cached_tokens: 8_000, output_tokens: 300, ..Usage::default() };
         if n % (self.tool_steps + 1) < self.tool_steps {
             let call = FunctionCall { call_id: format!("c{n}"), name: "list_dir".into(), arguments: format!(r#"{{"path":".","n":{n}}}"#) };
-            return Ok(TurnOutput { text: String::new(), reasoning: String::new(), calls: vec![call], usage });
+            return Ok(TurnOutput { text: String::new(), reasoning: String::new(), calls: vec![call], usage,
+            ..Default::default()
+        });
         }
         sink(StreamEvent::TextDelta("done".into()));
-        Ok(TurnOutput { text: "done".into(), reasoning: String::new(), calls: Vec::new(), usage })
+        Ok(TurnOutput { text: "done".into(), reasoning: String::new(), calls: Vec::new(), usage,
+            ..Default::default()
+        })
     }
 }
 

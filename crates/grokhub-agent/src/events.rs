@@ -718,7 +718,8 @@ mod tests {
                     cost_in_usd_ticks: 9,
                     cached_tokens: 0,
                 },
-            })
+            ..Default::default()
+        })
         }
     }
 
@@ -821,7 +822,8 @@ mod tests {
                         cost_in_usd_ticks: 3,
                         cached_tokens: 0,
                     },
-                });
+            ..Default::default()
+        });
             }
             Ok(crate::TurnOutput {
                 text: "hello".into(),
@@ -834,7 +836,8 @@ mod tests {
                     cost_in_usd_ticks: 1,
                     cached_tokens: 0,
                 },
-            })
+            ..Default::default()
+        })
         }
     }
 
@@ -860,7 +863,9 @@ mod tests {
                 sink(crate::StreamEvent::TextDelta("hello".into()));
                 "hello"
             };
-            Ok(crate::TurnOutput { text: text.into(), reasoning: String::new(), calls: Vec::new(), usage: Usage::default() })
+            Ok(crate::TurnOutput { text: text.into(), reasoning: String::new(), calls: Vec::new(), usage: Usage::default(),
+            ..Default::default()
+        })
         }
     }
 
