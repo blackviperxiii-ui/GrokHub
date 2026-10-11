@@ -495,8 +495,64 @@ impl Router {
                     ModelPick { model: input.current_model.trim().to_string(), no_route: true, replaced: None }
                 }
             }
+        } else if local::escalate_after_verify(&input.local) {
+            // PR E: on-device answer failed verify — pick cloud and name both models.
+            let local_tier = input.local.tier.clone();
+            let cloud_ids: Vec<&str> = ids.iter().copied().filter(|id| !local::is_local(id)).collect();
+            let mut pick = Self::pick_model(input, reg, &cloud_ids, table, e2, &mut rules);
+            if !pick.no_route && !local::is_local(&pick.model) {
+                rules.push("local:escalate_verify".into());
+                pick.replaced = Some(local_tier);
+                local::note_local_verify_failed(false);
+            } else if pick.no_route && local::eligible(&input.local, input.class, input.ctx_tokens) {
+                // Every plan model down: fall back to local and clear the sticky flag.
+                if let Some(id) = ids.iter().find(|id| local::is_local(id)) {
+                    rules.push("local:cloud_down".into());
+                    pick = ModelPick {
+                        model: id.to_string(),
+                        no_route: false,
+                        replaced: Some(input.current_model.trim().to_string()),
+                    };
+                    local::note_local_verify_failed(false);
+                }
+            }
+            pick
         } else {
-            Self::pick_model(input, reg, &ids, table, e2, &mut rules)
+            let mut pick = Self::pick_model(input, reg, &ids, table, e2, &mut rules);
+            let too_hard = local::too_hard_for_local(input.class, input.ctx_tokens, input.d);
+            let elig = local::eligible(&input.local, input.class, input.ctx_tokens);
+            let cloud_ids: Vec<&str> = ids.iter().copied().filter(|id| !local::is_local(id)).collect();
+            // Cloud pool empty + local already won (cheapest/table): retag as cloud_down.
+            // Do not fire when a healthy cloud id remains — local may win online on purpose.
+            let cloud_pool_empty_local = !input.local.offline
+                && !pick.no_route
+                && local::is_local(&pick.model)
+                && cloud_ids.is_empty()
+                && elig;
+            // Online: hard/long work must not stay on local if pick_model somehow chose it.
+            if !input.local.offline
+                && !pick.no_route
+                && local::is_local(&pick.model)
+                && too_hard
+            {
+                rules.push("local:escalate_hard".into());
+                let from = pick.model.clone();
+                pick = Self::pick_model(input, reg, &cloud_ids, table, e2, &mut rules);
+                if !pick.no_route {
+                    pick.replaced = Some(from);
+                }
+            } else if (pick.no_route && elig) || cloud_pool_empty_local {
+                // Plan models down / no healthy cloud route: fall back to local when eligible.
+                if let Some(id) = ids.iter().find(|id| local::is_local(id)) {
+                    rules.push("local:cloud_down".into());
+                    pick = ModelPick {
+                        model: id.to_string(),
+                        no_route: false,
+                        replaced: Some(input.current_model.trim().to_string()),
+                    };
+                }
+            }
+            pick
         };
         let provider = match split_provider_model(&chosen.model) {
             _ if local::is_local(&chosen.model) && !chosen.no_route => local::PROVIDER_LOCAL,
@@ -583,6 +639,13 @@ impl Router {
                 fast_fallback.as_deref().unwrap_or_default()
             ),
             _ if rules.iter().any(|r| r == "provider:picked") => format!("Using {model} at {}: you picked it in Settings.", effort_word(effort.as_deref())),
+            (Some(from), _) if rules.iter().any(|r| r == "local:escalate_verify") => local::escalate_note(from, &model),
+            (Some(from), _) if rules.iter().any(|r| r == "local:escalate_hard") => {
+                format!("Using {model}: {from} (local) is too small for this step.")
+            }
+            (Some(from), _) if rules.iter().any(|r| r == "local:cloud_down") => {
+                format!("Using {model} (local): {from} isn't answering.")
+            }
             (Some(from), _) if rules.iter().any(|r| r == "provider:ungranted") => {
                 format!("Using {model} at {}: {from} needs its key and your OK in Settings first.", effort_word(effort.as_deref()))
             }
@@ -629,6 +692,9 @@ mod goal_tests;
 
 #[cfg(test)]
 mod speed_bench_tests;
+
+#[cfg(test)]
+mod local_router_tests;
 
 #[cfg(test)]
 mod tests {
