@@ -139,6 +139,43 @@ pub fn parse_memsize_bytes(text: &str) -> Option<u64> {
     text.trim().parse::<u64>().ok().map(|b| b / (1_024 * 1_024))
 }
 
+/// Linux DRM `mem_info_vram_total` (bytes as a decimal string) → MB.
+///
+/// Used for AMD (and other DRM) GPUs when `nvidia-smi` is missing.
+pub fn parse_drm_vram_total_bytes(text: &str) -> Option<u64> {
+    let bytes: u64 = text.trim().parse().ok()?;
+    (bytes > 0).then_some(bytes / (1_024 * 1_024))
+}
+
+/// Best VRAM MB from several DRM `mem_info_vram_total` file bodies (one per card).
+pub fn max_drm_vram_mb(files: &[&str]) -> Option<u64> {
+    files.iter().filter_map(|t| parse_drm_vram_total_bytes(t)).max()
+}
+
+/// Windows DXGI / CIM CSV: `Name,DedicatedVideoMemory` (bytes) → (name, MB).
+///
+/// First row with a positive dedicated size wins (same shape as `nvidia-smi` CSV).
+pub fn parse_dxgi_dedicated_mb(text: &str) -> Option<(String, u64)> {
+    for line in text.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.to_ascii_lowercase().starts_with("name") {
+            continue;
+        }
+        let Some((name, mem)) = line.rsplit_once(',') else {
+            continue;
+        };
+        let name = name.trim().trim_matches('"');
+        let Ok(bytes) = mem.trim().trim_matches('"').parse::<u64>() else {
+            continue;
+        };
+        if bytes == 0 || name.is_empty() {
+            continue;
+        }
+        return Some((name.into(), bytes / (1_024 * 1_024)));
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -209,5 +246,14 @@ mod tests {
         assert_eq!(parse_df_avail_mb("Filesystem 1024-blocks\n"), None);
         assert_eq!(parse_memsize_bytes("17179869184\n"), Some(16_384));
         assert_eq!(parse_memsize_bytes("n/a"), None);
+        // RDNA4-class 16 GB as DRM bytes.
+        assert_eq!(parse_drm_vram_total_bytes("17179869184\n"), Some(16_384));
+        assert_eq!(parse_drm_vram_total_bytes("0\n"), None);
+        assert_eq!(max_drm_vram_mb(&["8589934592", "17179869184", "bad"]), Some(16_384));
+        assert_eq!(
+            parse_dxgi_dedicated_mb("Name,DedicatedVideoMemory\n\"AMD Radeon RX 9070 XT\",17179869184\n"),
+            Some(("AMD Radeon RX 9070 XT".into(), 16_384))
+        );
+        assert_eq!(parse_dxgi_dedicated_mb("Name,DedicatedVideoMemory\nIntel UHD,0\n"), None);
     }
 }
