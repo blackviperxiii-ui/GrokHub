@@ -107,7 +107,7 @@ pub struct Brief {
 impl Brief {
     /// "repair × critical, done = services, packages, boot errors, ports"
     pub fn label(&self) -> String {
-        let done = if self.done.is_empty() { "nothing to check".to_string() } else { self.done.join(", ") };
+        let done = if self.done.is_empty() { "answered".to_string() } else { self.done.join(", ") };
         format!("{} × {}, done = {}", self.intent.as_str(), self.care.as_str(), done)
     }
 }
@@ -136,7 +136,11 @@ const REPAIR_WORDS: &[&str] = &[
     "fix", "broken", "broke", "crash", "crashes", "crashed", "crashing", "error", "errors", "fails", "failed",
     "failing", "bug", "debug", "freeze", "freezes", "frozen", "hangs", "stuck", "repair",
 ];
-const REPAIR_PHRASES: &[&str] = &["not working", "won't", "doesn't work", "stopped working", "can't start"];
+const REPAIR_PHRASES: &[&str] = &["not working", "won't", "doesn't work", "stopped working", "can't start", "health check"];
+/// Diagnostics is repair work: the design's "repair/diagnostics" intent.
+const DIAGNOSE_WORDS: &[&str] = &["scan", "diagnose", "diagnostics", "troubleshoot", "checkup"];
+/// The machine as a whole: the system domain, without being a change to it.
+const MACHINE_WORDS: &[&str] = &["computer", "pc", "laptop", "machine", "os", "windows", "linux"];
 const CREATIVE_WORDS: &[&str] = &[
     "poem", "story", "lyrics", "song", "draw", "sketch", "logo", "image", "picture", "imagine", "haiku", "slogan",
     "wallpaper",
@@ -186,11 +190,11 @@ fn done_for(intent: Intent, domain: &str) -> Vec<String> {
         (Intent::Task, "files") => &["files in place", "nothing lost"],
         (Intent::Task, "code") => &["it builds", "tests pass"],
         (Intent::Task, _) => &["the asked change is made", "result checked"],
-        (Intent::Question, _) => &["a direct answer"],
+        (Intent::Question, _) => &["answered"],
         (Intent::Research, _) => &["sources named", "answer summarized"],
         (Intent::Creative, _) => &["draft delivered"],
         (Intent::Background, _) => &["job finished"],
-        (Intent::Chat, _) => &[],
+        (Intent::Chat, _) => &["answered"],
     };
     list.iter().map(|s| s.to_string()).collect()
 }
@@ -208,9 +212,10 @@ fn mood_of(raw: &str, ws: &[&str]) -> &'static str {
 }
 
 fn domain_of(t: &str, ws: &[&str], input: &BriefInput<'_>, intent: Intent, system: bool) -> &'static str {
-    let code = t.contains("```") || ws.iter().any(|w| w.ends_with(".rs") || w.ends_with(".py") || w.ends_with(".js")) || any_word(ws, CODE_WORDS);
+    let source = |w: &str| [".rs", ".py", ".js", ".ts", ".go", ".c", ".cpp"].iter().any(|e| w.trim_end_matches([',', '.', ')']).ends_with(e));
+    let code = t.contains("```") || t.contains("()") || t.split_whitespace().any(source) || any_word(ws, CODE_WORDS);
     let files = input.files > 0 || any_word(ws, &["file", "files", "folder", "folders", "downloads", "documents"]);
-    if system {
+    if system || any_word(ws, MACHINE_WORDS) {
         "system"
     } else if code {
         "code"
@@ -242,7 +247,7 @@ pub fn rules(input: &BriefInput<'_>) -> Option<Brief> {
         rest = rest.strip_prefix(p).map(str::trim_start).unwrap_or(rest);
     }
     let first = words(rest).first().copied().unwrap_or_default();
-    let repair = any_word(&ws, REPAIR_WORDS) || any_phrase(&t, REPAIR_PHRASES);
+    let repair = any_word(&ws, REPAIR_WORDS) || any_word(&ws, DIAGNOSE_WORDS) || any_phrase(&t, REPAIR_PHRASES);
     let intent = if input.background {
         Intent::Background
     } else if repair {
@@ -399,6 +404,8 @@ mod tests {
             ("write a poem about autumn", Intent::Creative, Care::Casual, "media", "calm"),
             ("compare the latest mid-range laptops", Intent::Research, Care::Careful, "web", "calm"),
             ("open port 8080 on the firewall", Intent::Task, Care::Critical, "system", "calm"),
+            ("scan my computer", Intent::Repair, Care::Critical, "system", "calm"),
+            ("add a retry to fetch() in src/net.rs", Intent::Task, Care::Careful, "code", "calm"),
         ];
         for (text, intent, care, domain, mood) in cases {
             let b = rules(&input(text)).unwrap_or_else(|| panic!("{text}: rules gave no brief"));
@@ -407,7 +414,7 @@ mod tests {
         }
         let repair = rules(&input("the printer service won't start after the update")).unwrap();
         assert_eq!(repair.label(), "repair × critical, done = services, packages, boot errors, ports");
-        assert_eq!(rules(&input("hi there")).unwrap().label(), "chat × casual, done = nothing to check");
+        assert_eq!(rules(&input("hi there")).unwrap().label(), "chat × casual, done = answered");
         let attached = BriefInput { text: "these", files: 1, ..Default::default() };
         assert_eq!(rules(&attached).unwrap().intent, Intent::Task);
         let bg = BriefInput { text: "summarize my inbox", background: true, ..Default::default() };
@@ -492,7 +499,7 @@ mod tests {
         assert_eq!(brief_for_turn(&dir, "chat-1", 2), Some(b));
         assert_eq!(brief_for_turn(&dir, "chat-1", 9), None);
         assert_eq!(brief_for_turn(&dir, "", 2), None);
-        assert_eq!(why_line(&dir).as_deref(), Some("Brief: chat × casual, done = nothing to check"));
+        assert_eq!(why_line(&dir).as_deref(), Some("Brief: chat × casual, done = answered"));
         for i in 0..BRIEF_TRIM_AT as u64 {
             record_brief(&dir, &BriefLine { at: 10 + i, session: "s".into(), brief: other.clone(), ..Default::default() }).unwrap();
         }
