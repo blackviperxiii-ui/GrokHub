@@ -33,6 +33,20 @@ pub const RELEASE_PUBKEY: Option<&str> = None;
 /// instead of handing it to a shell.
 pub const RELEASE_INSTALL_STEP: &str = "grokhub: install the verified release";
 
+const RELEASE_SWITCH_HEAD: &str = "grokhub: switch to the ";
+const RELEASE_SWITCH_TAIL: &str = " release";
+
+/// The Labs channel-switch step without a source clone: install `target`'s
+/// verified release, then write its channel receipt.
+pub fn release_switch_step(target: Channel) -> String {
+    format!("{RELEASE_SWITCH_HEAD}{}{RELEASE_SWITCH_TAIL}", target.as_str())
+}
+
+/// The target channel of a [`release_switch_step`].
+pub fn parse_release_switch_step(cmd: &str) -> Option<Channel> {
+    Channel::parse(cmd.strip_prefix(RELEASE_SWITCH_HEAD)?.strip_suffix(RELEASE_SWITCH_TAIL)?)
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReleaseAsset {
     pub name: String,
@@ -44,6 +58,8 @@ pub struct Release {
     pub tag: String,
     pub prerelease: bool,
     pub draft: bool,
+    /// `created_at` (RFC 3339, UTC): the tagged commit's time, so it orders builds.
+    pub created: String,
     pub assets: Vec<ReleaseAsset>,
 }
 
@@ -95,6 +111,7 @@ pub fn parse_releases(body: &str) -> Vec<Release> {
                 tag,
                 prerelease: r.get("prerelease").and_then(|b| b.as_bool()).unwrap_or(false),
                 draft: r.get("draft").and_then(|b| b.as_bool()).unwrap_or(false),
+                created: r.get("created_at").and_then(|c| c.as_str()).unwrap_or("").to_string(),
                 assets,
             })
         })
@@ -102,15 +119,23 @@ pub fn parse_releases(body: &str) -> Vec<Release> {
 }
 
 /// Stable takes the newest full release (`v*`); beta the newest beta
-/// pre-release (`beta-v*`). GitHub lists newest first.
+/// pre-release (`beta-v*`). The list isn't reliably in build order (a slow
+/// build publishes after a newer one), so the latest `created_at` wins and
+/// list order only breaks ties.
 pub fn pick_release(releases: &[Release], channel: Channel) -> Option<&Release> {
-    releases.iter().find(|r| {
-        !r.draft
-            && match channel {
-                Channel::Stable => !r.prerelease && r.tag.starts_with('v'),
-                Channel::Beta => r.prerelease && r.tag.starts_with("beta-v"),
-            }
-    })
+    releases
+        .iter()
+        .filter(|r| {
+            !r.draft
+                && match channel {
+                    Channel::Stable => !r.prerelease && r.tag.starts_with('v'),
+                    Channel::Beta => r.prerelease && r.tag.starts_with("beta-v"),
+                }
+        })
+        .fold(None, |best: Option<&Release>, r| match best {
+            Some(b) if r.created <= b.created => Some(b),
+            _ => Some(r),
+        })
 }
 
 fn semver_name(name: &str, prefix: &str, suffix: &str) -> bool {
@@ -250,8 +275,12 @@ mod tests {
     }
 
     fn release(tag: &str, prerelease: bool) -> String {
+        release_at(tag, prerelease, "2026-10-11T18:00:00Z")
+    }
+
+    fn release_at(tag: &str, prerelease: bool, created: &str) -> String {
         format!(
-            r#"{{"tag_name":"{tag}","prerelease":{prerelease},"draft":false,"assets":[
+            r#"{{"tag_name":"{tag}","prerelease":{prerelease},"draft":false,"created_at":"{created}","assets":[
               {{"name":"grokhub-linux-v2.13.1.tar.gz","browser_download_url":"https://github.com/blackviperxiii-ui/GrokHub/releases/download/{tag}/grokhub-linux-v2.13.1.tar.gz"}},
               {{"name":"grokhub-windows-v2.13.1.zip","browser_download_url":"https://github.com/blackviperxiii-ui/GrokHub/releases/download/{tag}/grokhub-windows-v2.13.1.zip"}},
               {{"name":"GrokHub-Setup-2.13.1.exe","browser_download_url":"https://github.com/blackviperxiii-ui/GrokHub/releases/download/{tag}/GrokHub-Setup-2.13.1.exe"}},
@@ -298,6 +327,30 @@ mod tests {
                 ("a82d46432d0f6baa57ebb1b0e8a03307df6724580cc316c763e61ae1bfe8cccf".to_string(), "bin.zip".to_string()),
             ]
         );
+    }
+
+    #[test]
+    fn beta_takes_the_newest_build_even_when_an_older_one_published_last() {
+        // As on 2026-10-11: d2efb8d's run finished after 29e8ac5's and GitHub listed it first.
+        let body = format!(
+            "[{},{},{}]",
+            release_at("beta-v2.13.1-d2efb8d", true, "2026-10-11T18:20:03Z"),
+            release_at("beta-v2.13.1-29e8ac5", true, "2026-10-11T18:33:17Z"),
+            release_at("v2.13.1", false, "2026-10-10T20:44:35Z")
+        );
+        let all = parse_releases(&body);
+        assert_eq!(pick_release(&all, Channel::Beta).unwrap().tag, "beta-v2.13.1-29e8ac5");
+        assert_eq!(pick_release(&all, Channel::Stable).unwrap().tag, "v2.13.1");
+    }
+
+    #[test]
+    fn the_switch_step_names_its_channel_and_parses_back() {
+        assert_eq!(release_switch_step(Channel::Beta), "grokhub: switch to the beta release");
+        assert_eq!(release_switch_step(Channel::Stable), "grokhub: switch to the stable release");
+        assert_eq!(parse_release_switch_step("grokhub: switch to the beta release"), Some(Channel::Beta));
+        assert_eq!(parse_release_switch_step("grokhub: switch to the stable release"), Some(Channel::Stable));
+        assert_eq!(parse_release_switch_step(RELEASE_INSTALL_STEP), None);
+        assert_eq!(parse_release_switch_step("grokhub: switch to the nightly release"), None);
     }
 
     #[test]
