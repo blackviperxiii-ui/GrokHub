@@ -39,6 +39,11 @@ pub const PATCH_PREFIX: &str = "PATCH_SKILL:";
 pub const TUNE_PREFIX: &str = "TUNE_SNIPPET:";
 /// At most this many chat notes a week, inside [`SELF_REVIEW_CAP`].
 pub const SNIPPETS_PER_PASS: usize = 1;
+/// The code-change idea line the model writes (card 32 PR D). GrokHub never
+/// makes these changes; the user may save the idea or copy it as an issue.
+pub const CODE_PREFIX: &str = "CODE_IDEA:";
+/// At most this many code-change ideas a week, inside [`SELF_REVIEW_CAP`].
+pub const CODE_IDEAS_PER_PASS: usize = 2;
 /// Source ids of self-review cards start with this.
 pub const CARD_SOURCE_PREFIX: &str = "self-review:";
 /// Digest lines kept.
@@ -46,6 +51,9 @@ const DIGEST_SKILLS_CAP: usize = 20;
 /// Longest steps text kept from a proposal, in chars.
 const STEPS_MAX: usize = 1_200;
 const TITLE_MAX: usize = 80;
+/// Longest problem or evidence text of a code idea, in chars.
+const IDEA_MAX: usize = 400;
+const IDEA_SLUG_MAX: usize = 40;
 
 /// The weekly pass is due: Sunday, at or after the review hour, not run today.
 pub fn self_review_due(
@@ -132,9 +140,11 @@ pub fn self_review_system_prompt() -> &'static str {
      PATCH_SKILL: skill:<name> | <short title> | <the full new steps, numbered, on one line>\n\
      When the failures share a cause no single skill fixes, you may add one general note for chat replies:\n\
      TUNE_SNIPPET: snippet:<short-name> | <short title> | <one or two sentences, at most 300 characters>\n\
+     When a failure needs a change to GrokHub's own code, describe it for its developers, at most 2:\n\
+     CODE_IDEA: <short title> | <the problem, in a sentence> | <the evidence from the numbers above>\n\
      Only skills listed may be patched. Never propose changes to permissions, approval rules, \
-     the hard-action list, consent, network access, honesty rules, GrokHub's code, or how changes are reviewed. \
-     Write nothing else."
+     the hard-action list, consent, network access, honesty rules, GrokHub's code, or how changes are reviewed; \
+     a CODE_IDEA only describes a problem and changes nothing. Write nothing else."
 }
 
 /// One proposal from the weekly model call, before the rules run.
@@ -270,6 +280,149 @@ pub fn rank_proposals(
     kept.sort_by(|a, b| a.snippet.cmp(&b.snippet).then(b.failures.cmp(&a.failures)).then(a.skill.cmp(&b.skill)));
     kept.truncate(SELF_REVIEW_CAP);
     (kept, refused)
+}
+
+/// A code change the weekly pass thinks would help, for a person to make.
+/// GrokHub never applies one: the card saves it locally or copies it.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct CodeIdea {
+    pub slug: String,
+    pub title: String,
+    pub problem: String,
+    pub evidence: String,
+}
+
+impl CodeIdea {
+    /// The idea's text on its card and in the saved list.
+    pub fn text(&self) -> String {
+        format!("Problem: {}\n\nEvidence: {}", self.problem, self.evidence)
+    }
+}
+
+/// `CODE_IDEA: <title> | <problem> | <evidence>` lines, redacted.
+pub fn parse_code_ideas(raw: &str) -> Vec<CodeIdea> {
+    raw.lines()
+        .filter_map(|l| {
+            let rest = l.trim().strip_prefix(CODE_PREFIX)?;
+            let mut parts = rest.splitn(3, '|').map(str::trim);
+            let title: String = parts.next()?.chars().take(TITLE_MAX).collect();
+            let problem: String = parts.next().unwrap_or("").chars().take(IDEA_MAX).collect();
+            let evidence: String = parts.next().unwrap_or("").chars().take(IDEA_MAX).collect();
+            let slug = idea_slug(&title);
+            (!slug.is_empty() && !problem.is_empty()).then(|| CodeIdea {
+                slug,
+                title: redact_secrets(&title),
+                problem: redact_secrets(&problem),
+                evidence: redact_secrets(&evidence),
+            })
+        })
+        .collect()
+}
+
+/// Ideas only in a week with failures, one per slug, at most [`CODE_IDEAS_PER_PASS`].
+pub fn rank_code_ideas(ideas: Vec<CodeIdea>, stats: &[SkillStats]) -> Vec<CodeIdea> {
+    if week_numbers(stats).0 == 0 {
+        return Vec::new();
+    }
+    let mut out: Vec<CodeIdea> = Vec::new();
+    for i in ideas {
+        if out.len() < CODE_IDEAS_PER_PASS && !out.iter().any(|o| o.slug == i.slug) {
+            out.push(i);
+        }
+    }
+    out
+}
+
+/// The week's numbers line for a code-idea card.
+pub fn week_line(stats: &[SkillStats]) -> String {
+    week_numbers(stats).1
+}
+
+fn idea_slug(title: &str) -> String {
+    let words: Vec<String> = title
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|w| !w.is_empty())
+        .map(str::to_ascii_lowercase)
+        .collect();
+    let mut slug = String::new();
+    for w in words {
+        if slug.len() + w.len() + 1 > IDEA_SLUG_MAX {
+            break;
+        }
+        if !slug.is_empty() {
+            slug.push('-');
+        }
+        slug.push_str(&w);
+    }
+    slug
+}
+
+/// A code idea as a GitHub issue body the user pastes by hand. Home paths
+/// become `~`, emails `[email]`, and keys are redacted; nothing is sent.
+pub fn issue_text(title: &str, text: &str, version: &str, home: Option<&str>) -> String {
+    let body = format!(
+        "## {}\n\n{}\n\n---\nFound by the weekly self-review in {}. Paths, emails and keys were removed before copying.\n",
+        title.trim(),
+        text.trim(),
+        version.trim()
+    );
+    redact_for_issue(&body, home)
+}
+
+/// [`redact_secrets`], then home folders as `~` and email addresses as `[email]`.
+pub fn redact_for_issue(text: &str, home: Option<&str>) -> String {
+    let mut out = redact_secrets(text);
+    if let Some(home) = home.map(|h| h.trim_end_matches(['/', '\\'])).filter(|h| h.len() > 1) {
+        out = out.replace(home, "~");
+    }
+    for root in ["/home/", "/Users/", "\\Users\\"] {
+        out = strip_user_dirs(&out, root);
+    }
+    redact_emails(&out)
+}
+
+/// `/home/<name>` (and `C:\Users\<name>`) as `~`.
+fn strip_user_dirs(text: &str, root: &str) -> String {
+    let mut out = String::new();
+    let mut rest = text;
+    while let Some(at) = rest.find(root) {
+        let mut start = at;
+        // A drive letter before `\Users\` goes too.
+        let head = &rest[..at];
+        if root.starts_with('\\') && head.len() >= 2 && head.ends_with(':') {
+            start = at - 2;
+        }
+        out.push_str(&rest[..start]);
+        let after = &rest[at + root.len()..];
+        let name_end = after.find(|c: char| c == '/' || c == '\\' || c.is_whitespace()).unwrap_or(after.len());
+        out.push('~');
+        rest = &after[name_end..];
+    }
+    out.push_str(rest);
+    out
+}
+
+fn redact_emails(text: &str) -> String {
+    let local = |c: char| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '%' | '+' | '-');
+    let domain = |c: char| c.is_ascii_alphanumeric() || matches!(c, '.' | '-');
+    let mut out = String::new();
+    let mut rest = text;
+    while let Some(at) = rest.find('@') {
+        let start = rest[..at].rfind(|c: char| !local(c)).map_or(0, |i| i + rest[i..].chars().next().map_or(1, char::len_utf8));
+        let after = &rest[at + 1..];
+        let end = after.find(|c: char| !domain(c)).unwrap_or(after.len());
+        let host = after[..end].trim_end_matches('.');
+        if start < at && host.contains('.') && !host.starts_with('.') {
+            out.push_str(&rest[..start]);
+            out.push_str("[email]");
+            rest = &after[host.len()..];
+        } else {
+            out.push_str(&rest[..=at]);
+            rest = after;
+        }
+    }
+    out.push_str(rest);
+    out
 }
 
 /// Tasks no skill covers yet, done the same way often enough to be one.
@@ -505,6 +658,10 @@ pub fn snippet_source(name: &str) -> String {
     format!("{CARD_SOURCE_PREFIX}snippet:{name}")
 }
 
+pub fn code_source(slug: &str) -> String {
+    format!("{CARD_SOURCE_PREFIX}code:{slug}")
+}
+
 pub fn draft_source(name: &str) -> String {
     format!("{CARD_SOURCE_PREFIX}draft:{name}")
 }
@@ -528,6 +685,8 @@ pub enum CardTarget {
     Router(String),
     /// A chat note in `tunable/`: Apply writes it and puts it on trial.
     Snippet(String),
+    /// A code-change idea: Save keeps it locally; nothing is applied.
+    Code(String),
 }
 
 pub fn card_target(source_id: &str) -> Option<CardTarget> {
@@ -540,6 +699,7 @@ pub fn card_target(source_id: &str) -> Option<CardTarget> {
         "revert" => Some(CardTarget::Revert(name)),
         "router" => Some(CardTarget::Router(name)),
         "snippet" => Some(CardTarget::Snippet(name)),
+        "code" => Some(CardTarget::Code(name)),
         _ => None,
     }
 }
@@ -921,5 +1081,50 @@ mod tests {
         assert_eq!(log.len(), QUIET_LOG_CAP);
         assert_eq!(log.first().map(|e| e.source.as_str()), Some("s10"));
         assert_eq!(quiet_log_lines(&log, 1), vec!["2026-10-18 · t59".to_string()]);
+    }
+
+    #[test]
+    fn code_ideas_come_only_in_a_week_with_failures_two_at_most_and_redacted() {
+        let raw = "PATCH_SKILL: skill:inbox | x | 1. a\n\
+                   CODE_IDEA: Wait for the Save dialog | The save step clicks before the dialog opens | 3 of 5 inbox runs needed a fix\n\
+                   CODE_IDEA: wait for the save dialog! | dup | dup\n\
+                   CODE_IDEA: Retry on 429 | Rate limits end the run with key sk-abcdefghijklmnopqrstuv | 2 runs\n\
+                   CODE_IDEA: Third one | p | e\n\
+                   CODE_IDEA: No problem |  | e";
+        let ideas = parse_code_ideas(raw);
+        assert_eq!(ideas.len(), 4);
+        assert_eq!(ideas[0].slug, "wait-for-the-save-dialog");
+        assert!(!ideas[2].problem.contains("sk-abcdefghijklmnopqrstuv"), "{}", ideas[2].problem);
+        let failing = vec![SkillStats { skill: "inbox".into(), runs: 5, failures: 3, reasons: BTreeMap::new() }];
+        let kept = rank_code_ideas(ideas.clone(), &failing);
+        let slugs: Vec<&str> = kept.iter().map(|i| i.slug.as_str()).collect();
+        assert_eq!(slugs, vec!["wait-for-the-save-dialog", "retry-on-429"]);
+        assert_eq!(
+            kept[0].text(),
+            "Problem: The save step clicks before the dialog opens\n\nEvidence: 3 of 5 inbox runs needed a fix"
+        );
+        let clean = vec![SkillStats { skill: "inbox".into(), runs: 5, failures: 0, reasons: BTreeMap::new() }];
+        assert_eq!(rank_code_ideas(ideas, &clean), Vec::<CodeIdea>::new());
+        assert_eq!(card_target(&code_source("retry-on-429")), Some(CardTarget::Code("retry-on-429".into())));
+        assert!(self_review_system_prompt().contains("CODE_IDEA: <short title> | <the problem, in a sentence>"));
+    }
+
+    #[test]
+    fn an_issue_copy_drops_home_paths_emails_and_keys() {
+        let text = "Problem: /home/user/.config/GrokHub/skills/inbox failed for viper.x+gh@mail.example.com\n\n\
+                    Evidence: C:\\Users\\Viper\\AppData\\GrokHub and /Users/jo/notes; key sk-abcdefghijklmnopqrstuv; \
+                    at @home and a@b stay";
+        let out = issue_text("Wait for the Save dialog", text, "GrokHub 2.11.0-beta", Some("/home/user/"));
+        assert_eq!(
+            out,
+            format!(
+                "## Wait for the Save dialog\n\nProblem: ~/.config/GrokHub/skills/inbox failed for [email]\n\n\
+                 Evidence: ~\\AppData\\GrokHub and ~/notes; key {}; at @home and a@b stay\n\n---\n\
+                 Found by the weekly self-review in GrokHub 2.11.0-beta. Paths, emails and keys were removed before copying.\n",
+                redact_secrets("sk-abcdefghijklmnopqrstuv")
+            )
+        );
+        assert!(!out.contains("viper"));
+        assert!(!out.contains("sk-abcdefghijklmnopqrstuv"));
     }
 }

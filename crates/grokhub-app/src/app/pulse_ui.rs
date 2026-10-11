@@ -104,6 +104,8 @@ pub(super) enum PulseAct {
     NeverAgain(String),
     Retry(String),
     DeleteRecording(String),
+    /// A code-idea card's Copy as GitHub issue (card 32 PR D).
+    CopyIssue(String),
     RetryNow,
     Source(String, SourceAct),
 }
@@ -395,11 +397,15 @@ fn pulse_menu(
         act,
     );
     if let Some(target) = self_review {
-        let label = match target {
+        let label = match &target {
             grokhub_core::self_review::CardTarget::Revert(_) => "Revert",
+            grokhub_core::self_review::CardTarget::Code(_) => "Save idea",
             _ => "Apply change",
         };
         pick(ui, label, "", PulseAct::Accept(id.clone()), act);
+        if matches!(target, grokhub_core::self_review::CardTarget::Code(_)) {
+            pick(ui, "Copy as GitHub issue", "", PulseAct::CopyIssue(id.clone()), act);
+        }
     } else if kind == PulseType::Learn {
         pick(
             ui,
@@ -1537,6 +1543,7 @@ impl Cabin {
             PulseAct::NeverAgain(id) => self.done_for_you_never(&id),
             PulseAct::Retry(id) => self.crash_retry(&id),
             PulseAct::DeleteRecording(id) => self.arm_delete_recording(&id),
+            PulseAct::CopyIssue(id) => self.copy_code_idea(&id),
             PulseAct::RetryNow => self.retry_model_wait_now(),
             PulseAct::Source(id, did) => self.source_post_act(&id, did),
             PulseAct::Link(url) => {
