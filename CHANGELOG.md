@@ -2,11 +2,8 @@
 
 ## Unreleased
 
-<<<<<<< HEAD
 - Auto router picks the strongest reasoning model on your plan for real work and keeps background jobs on the fast tier, with a reason for every pick.
-=======
 - Updater recovers diverged or dirty installs (backup branch), stops prompting sudo on every update, and the Beta switch works on any clone.
->>>>>>> origin/beta
 - Fixed: when a model reply is cut off at its length limit, GrokHub no longer runs the half-written tool calls in it; the agent is told to resend smaller steps.
 - Security: text from web pages, connectors, screen reading and research queries is now marked as outside data (`<<<UNTRUSTED …>>>` fences with a per-run nonce) before the agent sees it, so instructions hidden in a page can't pose as you or the system. Workspace file reads stay plain for coding.
 - `grokhub bench local` (and Settings → Local speed → Test speed) measures the on-device model: first-token latency, tokens/s, load time, RAM/VRAM peaks, plus a small eval (chat, summarize, classify, a two-step tool turn). CI checks the report schema and eval pass rate against a fake server so regressions fail without a GPU.
