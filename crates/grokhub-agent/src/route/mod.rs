@@ -884,6 +884,13 @@ mod tests {
         let why = why_text(&dir);
         assert_eq!(why.lines().count(), 10);
         assert_eq!(why.lines().next(), Some("background:judge · grok-4.7 · Low: an independent check."));
+        // Brain 1: the newest Brief leads, and the list stays at ten lines.
+        let brief = crate::brain::rules(&crate::brain::BriefInput { text: "the printer service won't start", ..Default::default() }).unwrap();
+        crate::brain::record_brief(&dir, &crate::brain::BriefLine { at: 1, session: "ep-9".into(), brief, ..Default::default() }).unwrap();
+        let why = why_text(&dir);
+        assert_eq!(why.lines().count(), 10);
+        assert_eq!(why.lines().next(), Some("Brief: repair × critical, done = services, packages, boot errors, ports"));
+        assert_eq!(why.lines().nth(1), Some("background:judge · grok-4.7 · Low: an independent check."));
         let health = std::fs::read_to_string(grokhub_core::model_registry::store::health_path(&dir)).unwrap();
         assert_eq!(health.lines().count(), 14);
         let _ = std::fs::remove_dir_all(dir);
