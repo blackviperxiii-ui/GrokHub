@@ -93,6 +93,7 @@ pub mod situation;
 pub mod slash;
 pub mod state;
 pub mod stream;
+pub mod talk;
 pub mod task;
 pub mod thread_tab;
 pub mod tui_gaps;

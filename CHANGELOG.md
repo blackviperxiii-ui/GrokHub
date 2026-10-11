@@ -35,6 +35,7 @@
 - Fixed: Paste an image works on Windows (the PNG or bitmap on the clipboard) and on KDE Wayland, where `wl-paste` now gets the Wayland socket that startup drops. Before, both said to pick a file or copy something first.
 - Fixed: on Windows, Devices now finds the LAN address by reading the network adapters, picking the home or office network over VPN and virtual adapters the same way Linux does. Before, it ran a Linux-only `hostname -I` that always failed and fell back to whichever address the default route used.
 - The cabin opens faster: on a fresh Linux profile the first frame now paints in about 97 ms instead of 175 ms (median of 5 cold starts). Global hotkeys are grabbed right after the first frame instead of before it (a hidden `--hidden` start still grabs them at once), and the clock and theme probes run while the window is created. Each launch adds a line to `startup.jsonl` in the config folder with the time each stage was reached (newest 20 kept).
+- How GrokHub talks now fits the kind of ask. Casual chat stays short, a long task shows a brief "Done: … Next: …" note between steps (at most one every three tool calls), and a careful repair or research run ends with a findings card that names each item, with a one-tap fix for what is left (built from its checklist if the run gets stuck before posting one). A personality still changes only the tone, and approval cards read the same in every style.
 
 ## 2.13.1 — 2026-10-10
 
