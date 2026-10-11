@@ -1043,6 +1043,7 @@ impl grokhub_agent::ModelClient for BgFake {
                     arguments: r#"{"path":"written-by-bg.txt","content":"nope"}"#.into(),
                 }],
                 usage: grokhub_agent::Usage::default(),
+                ..Default::default()
             })
         } else {
             sink(grokhub_agent::StreamEvent::TextDelta("bg finished".into()));
@@ -1051,6 +1052,7 @@ impl grokhub_agent::ModelClient for BgFake {
                 reasoning: String::new(),
                 calls: Vec::new(),
                 usage: grokhub_agent::Usage::default(),
+                ..Default::default()
             })
         }
     }

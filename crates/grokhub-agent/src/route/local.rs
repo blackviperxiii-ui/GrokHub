@@ -342,11 +342,15 @@ pub fn serve(class: &str, text: &str) -> Result<TurnOutput, ClientError> {
             .chat_stream(&[ChatMessage { role: "user".into(), content: text.into() }], &mut |d| deltas.push_str(d))
             .map_err(ClientError::Protocol)?;
         let text = if out.is_empty() { deltas } else { out };
-        return Ok(TurnOutput { text, reasoning: String::new(), calls: Vec::new(), usage: Usage::default() });
+        return Ok(TurnOutput { text, reasoning: String::new(), calls: Vec::new(), usage: Usage::default(),
+            ..Default::default()
+        });
     }
     let answer = if class == "background:summarize" { rt.summarize(text, 60) } else { rt.classify(text, CLASS_LABELS) };
     let v = answer.map_err(ClientError::Protocol)?;
-    Ok(TurnOutput { text: v.to_string(), reasoning: String::new(), calls: Vec::new(), usage: Usage::default() })
+    Ok(TurnOutput { text: v.to_string(), reasoning: String::new(), calls: Vec::new(), usage: Usage::default(),
+            ..Default::default()
+        })
 }
 
 /// What [`scan_pii`] found.

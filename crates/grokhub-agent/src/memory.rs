@@ -998,7 +998,8 @@ mod tests {
                     output_tokens: 7,
                     ..crate::Usage::default()
                 },
-            })
+            ..Default::default()
+        })
         }
     }
 

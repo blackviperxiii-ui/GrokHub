@@ -106,12 +106,17 @@ pub enum StreamEvent {
     ReasoningDelta(String),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct TurnOutput {
     pub text: String,
     pub reasoning: String,
     pub calls: Vec<FunctionCall>,
     pub usage: Usage,
+    /// True when the stream ended as `response.incomplete` (or status
+    /// incomplete). Tool calls in this turn must not run.
+    pub truncated: bool,
+    /// Provider reason for truncation, when present (e.g. `max_output_tokens`).
+    pub truncate_reason: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -545,6 +550,8 @@ fn read_sse<R: Read>(
     let mut reasoning = String::new();
     let mut calls = Vec::new();
     let mut usage = Usage::default();
+    let mut truncated = false;
+    let mut truncate_reason = None;
     loop {
         if cancel.is_cancelled() {
             drop(reader);
@@ -563,7 +570,16 @@ fn read_sse<R: Read>(
             }
         };
         let chunk = String::from_utf8_lossy(&buf[..n]);
-        fold_events(parser.push(&chunk), sink, &mut text, &mut reasoning, &mut calls, &mut usage)?;
+        fold_events(
+            parser.push(&chunk),
+            sink,
+            &mut text,
+            &mut reasoning,
+            &mut calls,
+            &mut usage,
+            &mut truncated,
+            &mut truncate_reason,
+        )?;
     }
     fold_events(
         parser.finish()?,
@@ -572,8 +588,17 @@ fn read_sse<R: Read>(
         &mut reasoning,
         &mut calls,
         &mut usage,
+        &mut truncated,
+        &mut truncate_reason,
     )?;
-    Ok(TurnOutput { text, reasoning, calls, usage })
+    Ok(TurnOutput {
+        text,
+        reasoning,
+        calls,
+        usage,
+        truncated,
+        truncate_reason,
+    })
 }
 
 fn fold_events(
@@ -583,6 +608,8 @@ fn fold_events(
     reasoning: &mut String,
     calls: &mut Vec<FunctionCall>,
     usage: &mut Usage,
+    truncated: &mut bool,
+    truncate_reason: &mut Option<String>,
 ) -> Result<(), ClientError> {
     for ev in events {
         match ev {
@@ -595,7 +622,19 @@ fn fold_events(
                 sink(StreamEvent::ReasoningDelta(delta));
             }
             SseEvent::FunctionCall(call) => calls.push(call),
-            SseEvent::Completed(next) => *usage = next,
+            SseEvent::Completed {
+                usage: next,
+                incomplete,
+                incomplete_reason,
+            } => {
+                *usage = next;
+                if incomplete {
+                    *truncated = true;
+                    if let Some(reason) = incomplete_reason {
+                        *truncate_reason = Some(reason);
+                    }
+                }
+            }
             SseEvent::Error(message) => return Err(ClientError::Protocol(message)),
         }
     }

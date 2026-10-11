@@ -319,7 +319,9 @@ struct Echo(Mutex<Vec<ResponsesRequest>>);
 impl ModelClient for Echo {
     fn stream(&self, req: &ResponsesRequest, _cancel: &CancelToken, _sink: &mut dyn FnMut(StreamEvent)) -> Result<TurnOutput, ClientError> {
         self.0.lock().unwrap().push(req.clone());
-        Ok(TurnOutput { text: "ok".into(), reasoning: String::new(), calls: Vec::new(), usage: Usage { input_tokens: 900, cached_tokens: 800, ..Usage::default() } })
+        Ok(TurnOutput { text: "ok".into(), reasoning: String::new(), calls: Vec::new(), usage: Usage { input_tokens: 900, cached_tokens: 800, ..Usage::default() },
+            ..Default::default()
+        })
     }
 }
 
