@@ -73,6 +73,22 @@ impl Cabin {
         self.write_pace_span("halt", "hold", "halted");
     }
 
+    /// A background kind spent today's budget: the governor's note goes on the
+    /// status line once, and the trace gets the kind and the reason, no content.
+    pub(super) fn governor_note(&mut self, note: &grokhub_core::GovernorNote) {
+        self.status = note.text.clone();
+        let act = format!("governor.{}", note.kind.as_str());
+        self.write_pace_span(&act, "hold", grokhub_core::JobHold::BudgetSpent.reason());
+    }
+
+    /// Charge tokens a background job spent to its governor kind for today.
+    pub(super) fn governor_charge(&mut self, kind: JobKind, tokens: u64) {
+        if tokens == 0 {
+            return;
+        }
+        self.governor.charge(kind, tokens, &Self::local_day());
+    }
+
     fn trace_pace(&mut self, act: ProactiveAct, gate: PaceGate) {
         let reason = gate.reason();
         let acted = gate == PaceGate::Act;

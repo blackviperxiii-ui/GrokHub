@@ -1,4 +1,4 @@
-use grokhub_core::{is_plain_text, BoardCard, FeedPulse, HeartbeatPace};
+use grokhub_core::{is_plain_text, BackgroundBudgets, BoardCard, FeedPulse, HeartbeatPace};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::{Read, Write};
@@ -387,6 +387,10 @@ pub struct AppConfig {
     /// hold. Omitted from `app.json` while it stays default.
     #[serde(default, skip_serializing_if = "HeartbeatPace::is_default")]
     pub heartbeat: HeartbeatPace,
+    /// `app.json` only for now. Per-day token budgets for background jobs, by
+    /// kind (`grokhub_core::governor`). Omitted while it stays default.
+    #[serde(default, skip_serializing_if = "BackgroundBudgets::is_default")]
+    pub background: BackgroundBudgets,
     /// Router R2b: Settings → "Use Grok 4.7 Fast when you're waiting". On by default.
     #[serde(default = "default_fast_when_waiting")]
     pub fast_when_waiting: bool,
@@ -614,6 +618,7 @@ impl Default for AppConfig {
             daily_token_budget: 0,
             budget_pauses_scheduled: default_budget_pause(),
             heartbeat: HeartbeatPace::default(),
+            background: BackgroundBudgets::default(),
             fast_when_waiting: default_fast_when_waiting(),
             weekly_spend_cap_usd: 0,
             price_ceiling_usd_per_m: default_price_ceiling(),
@@ -1027,6 +1032,18 @@ mod tests {
             saved.contains(r#""heartbeat":{"minIntervalMin":30,"maxPerHour":1,"maxPerDay":8,"backoffAfter":2,"backoffMaxMin":240,"haltHoldMin":15}"#),
             "a tuned pace is saved camelCase: {saved}"
         );
+    }
+
+    #[test]
+    fn background_budgets_default_omitted_and_overrides_parse() {
+        let json = serde_json::to_string(&AppConfig::default()).unwrap();
+        assert!(!json.contains("\"background\""), "a default save must not grow a background key: {json}");
+        let tuned: AppConfig =
+            serde_json::from_str(r#"{"deviceName":"cabin","background":{"dailyTokens":{"review":500}}}"#).unwrap();
+        assert_eq!(tuned.background.daily_tokens(grokhub_core::JobKind::Review), 500);
+        assert_eq!(tuned.background.daily_tokens(grokhub_core::JobKind::Ideas), 100_000);
+        let saved = serde_json::to_string(&tuned).unwrap();
+        assert!(saved.contains(r#""background":{"dailyTokens":{"review":500}}"#), "{saved}");
     }
 
     #[test]

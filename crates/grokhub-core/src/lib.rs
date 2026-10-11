@@ -36,6 +36,7 @@ pub mod feel;
 pub mod findings;
 pub mod frame;
 pub mod goal;
+pub mod governor;
 pub mod greeting;
 pub mod grok_loop;
 pub mod hands;
@@ -282,6 +283,10 @@ pub use heartbeat::{
     heartbeat_acts, heartbeat_due, heartbeat_repaint_ms, next_heartbeat_wait_ms, HeartbeatAct,
     HEARTBEAT_MS,
 };
+pub use governor::{
+    cabin_jobs, BackgroundBudgets, BudgetClass, Governor, GovernorNote, JobHold, JobKind, JobSpec,
+    QuietRule, TickCtx, TickPlan,
+};
 pub use heartbeat_throttle::{
     ActOutcome, HeartbeatPace, HeartbeatThrottle, PaceGate, PaceHold, ProactiveAct, PACE_NORMAL,
 };
@@ -478,20 +483,20 @@ pub use turn_timeline::{
     LiveBlock, LiveKind, ToolRow, TurnPart,
 };
 pub use update::{
-    cabin_overlay_step, cabin_update_notice, cabin_version_newer, discover_source,
-    fetch_channel_tips, is_grokhub_source, origin_needs_retarget, overlay_clone_usable,
-    overlay_clone_usable_in, overlay_stop_targets, overlay_update_begin,
-    overlay_update_can_restart, overlay_update_finish, overlay_update_progress,
-    parse_cabin_semver, parse_github_latest_tag, parse_ls_remote_tips, pending_for_manual_update,
-    pending_from_versions, pending_on_channel, remote_tracking_tips, restart_acts, restart_argv,
-    restart_bin, settings_update_hint, settings_update_label, settings_update_note,
-    should_notify_cabin_update, switch_clone_to_main, systemd_user_restart_args,
-    systemd_user_stop_args, update_check_due, update_chip_label, update_cmds, update_cmds_for,
-    update_cmds_for_host, update_cmds_for_host_in, update_cmds_in, update_hint,
-    update_plan_steps, update_progress_pct, update_step_label, update_wipes_config,
-    walk_up_source, release_update_cmds, OverlayUpdateView,
-    RestartAct, UpdatePending, GITHUB_LATEST_API, GITHUB_REMOTE_URL, ORIGIN_REMOTE_URL,
-    UPDATE_CHECK_EVERY,
+    cabin_overlay_step, cabin_update_notice, cabin_version_newer, clone_needs_recover,
+    clone_recover_step, discover_source, fetch_channel_tips, is_grokhub_source,
+    origin_needs_retarget, overlay_clone_usable, overlay_clone_usable_in, overlay_stop_targets,
+    overlay_update_begin, overlay_update_can_restart, overlay_update_finish,
+    overlay_update_progress, parse_cabin_semver, parse_clone_recover_step, parse_github_latest_tag,
+    parse_ls_remote_tips, pending_for_manual_update, pending_from_versions, pending_on_channel,
+    recover_clone_if_needed, remote_tracking_tips, restart_acts, restart_argv, restart_bin,
+    settings_update_hint, settings_update_label, settings_update_note, should_notify_cabin_update,
+    switch_clone_to_main, systemd_user_restart_args, systemd_user_stop_args, update_check_due,
+    update_chip_label, update_cmds, update_cmds_for, update_cmds_for_host, update_cmds_for_host_in,
+    update_cmds_in, update_hint, update_plan_steps, update_progress_pct, update_step_label,
+    update_wipes_config, walk_up_source, release_update_cmds, OverlayUpdateView, RestartAct,
+    UpdatePending, CLONE_RECOVER_STEP_PREFIX, GITHUB_LATEST_API, GITHUB_REMOTE_URL,
+    ORIGIN_REMOTE_URL, UPDATE_CHECK_EVERY,
 };
 pub use usage::{
     add_tokens, budget_holds_scheduled, budget_level, budget_line, bump_usage, roll_usage_day,

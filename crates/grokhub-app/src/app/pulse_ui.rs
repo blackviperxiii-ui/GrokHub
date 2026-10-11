@@ -1851,7 +1851,7 @@ impl Cabin {
         let prompt = pc::rewrite_prompt(&self.cfg.feed_instructions, &taste);
         let (tx, rx) = mpsc::channel();
         self.pulse_view.rewrite_rx = Some(rx);
-        self.spawn_native_ideas(prompt, tx);
+        self.spawn_native_ideas(prompt, tx, None);
     }
 
     pub(super) fn poll_pulse_rewrite(&mut self) {
