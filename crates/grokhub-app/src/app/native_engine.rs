@@ -29,6 +29,11 @@ fn live_map() -> &'static Mutex<HashMap<String, LiveCfg>> {
     MAP.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+/// Closes the volatile voice/notes tail so cabin safety (earlier, in the stable
+/// prefix) still outranks a custom personality or tuned note that lands last.
+const VOLATILE_SAFETY_CLOSER: &str =
+    "The cabin safety, approval, honesty and no-fabrication rules earlier in this prompt always win over notes and personality tone.";
+
 impl Cabin {
     /// `/compact` on the open thread. False only when no thread is open.
     /// The job thread is bound after the engine, so the session id stays on this tab.
@@ -261,16 +266,21 @@ impl Cabin {
     }
 
     /// Stable cabin safety/approval rules, then volatile personality / notes / brief.
+    /// When voice or notes are present, a short closer reasserts that the earlier
+    /// cabin safety rules win (so a rogue tone cannot outrank them by landing last).
     pub(super) fn chat_prompt_parts(&self) -> (String, String) {
         let stable = grokhub_core::cabin_rules::cabin_static_rules(self.cfg.desktop_control);
         let mut parts: Vec<String> = Vec::new();
+        let mut needs_safety_closer = false;
         let voice = self.chat_personality().prompt_block();
         if !voice.is_empty() {
             parts.push(voice);
+            needs_safety_closer = true;
         }
         let notes = self.tuned_notes();
         if !notes.is_empty() {
             parts.push(notes);
+            needs_safety_closer = true;
         }
         let learned = grokhub_core::cabin_rules::cabin_learned_tail(&grokhub_core::brief_for(
             &self.learning,
@@ -278,6 +288,9 @@ impl Cabin {
         ));
         if !learned.is_empty() {
             parts.push(learned);
+        }
+        if needs_safety_closer {
+            parts.push(VOLATILE_SAFETY_CLOSER.to_string());
         }
         (stable, parts.join("\n\n"))
     }

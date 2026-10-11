@@ -81,31 +81,42 @@ fn skill_root_mtime(root: &Path) -> Option<SystemTime> {
         return None;
     }
     let mut newest = meta.modified().ok();
-    let Ok(entries) = fs::read_dir(root) else {
-        return newest;
+    walk_skill_mtimes(root, 0, &mut newest);
+    newest
+}
+
+/// Newest mtime under a skills root, matching [`walk_skills`] depth so a nested
+/// `SKILL.md` edit busts the discover cache.
+fn walk_skill_mtimes(dir: &Path, depth: usize, newest: &mut Option<SystemTime>) {
+    if depth > WALK_DEPTH || !real_dir(dir) {
+        return;
+    }
+    let Ok(rd) = fs::read_dir(dir) else {
+        return;
     };
-    for entry in entries.flatten() {
-        let path = entry.path();
+    for ent in rd.flatten() {
+        let path = ent.path();
+        let name = ent.file_name();
+        let name = name.to_string_lossy();
+        if name.starts_with('.') {
+            continue;
+        }
         let Ok(meta) = fs::symlink_metadata(&path) else {
             continue;
         };
         if let Ok(mtime) = meta.modified() {
-            newest = Some(match newest {
+            *newest = Some(match *newest {
                 Some(prev) if prev >= mtime => prev,
                 _ => mtime,
             });
         }
-        let skill_md = path.join("SKILL.md");
-        if let Ok(meta) = fs::symlink_metadata(&skill_md) {
-            if let Ok(mtime) = meta.modified() {
-                newest = Some(match newest {
-                    Some(prev) if prev >= mtime => prev,
-                    _ => mtime,
-                });
-            }
+        if name == "SKILL.md" {
+            continue;
+        }
+        if meta.file_type().is_dir() {
+            walk_skill_mtimes(&path, depth + 1, newest);
         }
     }
-    newest
 }
 
 fn discover_cache_key(
@@ -845,6 +856,44 @@ mod tests {
         assert_eq!(
             again.iter().find(|s| s.name == "demo").unwrap().description,
             "second description"
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn discover_cache_invalidates_when_nested_skill_md_changes() {
+        let root = scratch("cache-nested");
+        let repo = root.join("repo");
+        let home = root.join("empty-home");
+        fs::create_dir_all(&home).unwrap();
+        // Nested under pack/demo so a shallow root-only mtime would miss it.
+        let dir = repo.join(".grok/skills/pack/demo");
+        skill_md(
+            &dir,
+            "---\nname: nested-demo\ndescription: nested first\n---\nFirst nested.\n",
+        );
+        let first = discover(&repo, Some(&home), &[]);
+        assert_eq!(
+            first
+                .iter()
+                .find(|s| s.name == "nested-demo")
+                .unwrap()
+                .description,
+            "nested first"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        skill_md(
+            &dir,
+            "---\nname: nested-demo\ndescription: nested second\n---\nSecond nested.\n",
+        );
+        let second = discover(&repo, Some(&home), &[]);
+        assert_eq!(
+            second
+                .iter()
+                .find(|s| s.name == "nested-demo")
+                .unwrap()
+                .description,
+            "nested second"
         );
         let _ = fs::remove_dir_all(&root);
     }
