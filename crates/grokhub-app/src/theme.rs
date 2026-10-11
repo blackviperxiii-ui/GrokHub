@@ -1080,7 +1080,10 @@ fn mark_image() -> &'static ColorImage {
     static IMG: OnceLock<ColorImage> = OnceLock::new();
     IMG.get_or_init(|| {
         let bytes = include_bytes!("../assets/grokhub-32.png");
-        let img = image::load_from_memory(bytes).expect("grokhub mark");
+        // A blank mark beats a crash if the bundled PNG ever stops decoding.
+        let Ok(img) = image::load_from_memory(bytes) else {
+            return ColorImage::new([1, 1], vec![Color32::TRANSPARENT]);
+        };
         let rgba = img.to_rgba8();
         let size = [rgba.width() as usize, rgba.height() as usize];
         ColorImage::from_rgba_unmultiplied(size, rgba.as_raw())
@@ -1100,6 +1103,11 @@ pub fn mark(ctx: &egui::Context) -> TextureHandle {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_bundled_mark_decodes() {
+        assert_eq!(mark_image().size, [32, 32], "a 1x1 blank means the PNG stopped decoding");
+    }
 
     #[test]
     fn light_edges_and_selection_stay_visible() {

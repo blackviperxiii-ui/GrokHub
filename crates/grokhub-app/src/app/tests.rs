@@ -1074,7 +1074,7 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             "a measured-height lock clips markdown: {bubble_fn}"
         );
         let assistant = src
-            .split("return resp.expect(\"speech bubble\");")
+            .split("// Assistant row: the mark sits at the top left")
             .nth(1)
             .and_then(|s| s.split("fn paint_msg_acts").next())
             .expect("assistant bubble");
@@ -16890,6 +16890,10 @@ fn every_home_card_the_cabin_posts_names_its_item() {
     cabin.live_mut().push(("user".into(), "Summarize inbox".into()));
     cabin.start_model_wait("chat:default", "grok-4.7", now);
     rows.push(("start_model_wait", posted_card(&cabin, "start_model_wait", grokhub_core::is_model_wait_card), "grok-4.7"));
+    std::fs::write(root.join("projects.json"), "{\"torn").unwrap();
+    let _: Vec<serde_json::Value> = config::load_json(&root.join("projects.json"), config::JSON_STORE_CAP);
+    cabin.poll_recovered_stores();
+    rows.push(("poll_recovered_stores", posted_card(&cabin, "poll_recovered_stores", |c| c.source_id.starts_with("recovered:")), "Projects list"));
     rows.push(("model_wait_card", super::model_wait_ui::model_wait_card(&["grok-4.6".into()], "grok-4.6", "9:05 PM", "dream time", now), "grok-4.6"));
     // Sites a test cabin can't reach without a live run: the card from the same call.
     let guard_text = "Auto was succeeding less on everyday chat, so it now starts that work one step higher.";
@@ -16952,6 +16956,57 @@ fn every_home_card_the_cabin_posts_names_its_item() {
     let covered: std::collections::BTreeSet<String> = rows.iter().map(|(site, ..)| site.to_string()).collect();
     let missing: Vec<String> = app_feed_post_sites().difference(&covered).cloned().collect();
     assert!(missing.is_empty(), "Home card sites with no row in this test: {missing:?}");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// Corrupt settings, keys, Home feed and hub files: each loads defaults, keeps its
+/// bytes in a `.corrupt-<ms>` copy, and gets one Home card naming it and the copy.
+#[test]
+fn corrupt_stores_load_defaults_keep_a_copy_and_post_a_named_card() {
+    let _g = config::hold_test_config();
+    let root = config::test_config_root("corrupt-stores");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let _pin = config::TestConfigDir::set(root.clone());
+    let mut cabin = Cabin::quiet_for_test();
+    let _ = grokhub_core::recovered::drain();
+    let files = [
+        ("app.json", "{\"deviceName\": \"cab", "Settings file"),
+        ("secrets.json", "\u{0}\u{1}garbage", "Keys file"),
+        ("updates.json", "[{\"id\": 3,", "Home feed"),
+        ("hub-state.json", "not json", "Hub pairing file"),
+    ];
+    for (name, bytes, _) in files {
+        std::fs::write(root.join(name), bytes).unwrap();
+    }
+
+    let cfg = config::load();
+    assert_eq!(cfg.device_name, config::default_device_name(), "settings fell back to defaults");
+    assert_eq!(crate::secrets::load().api_key, "", "keys fell back to empty");
+    assert!(crate::feed::load().is_empty(), "the feed fell back to empty");
+    assert!(grokhub_core::load_hub_state(&config::hub_state_path()).is_none());
+    cabin.poll_recovered_stores();
+
+    for (name, bytes, label) in files {
+        assert!(!root.join(name).exists(), "{name} was moved aside");
+        let copies: Vec<std::path::PathBuf> = std::fs::read_dir(&root)
+            .unwrap()
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.starts_with(&format!("{name}.corrupt-"))))
+            .collect();
+        assert_eq!(copies.len(), 1, "{name}: {copies:?}");
+        assert_eq!(std::fs::read_to_string(&copies[0]).unwrap(), bytes, "{name}: the copy keeps the bytes");
+        let title = format!("{label} was unreadable");
+        let cards: Vec<&UpdateCard> = cabin.updates.iter().filter(|c| c.title == title).collect();
+        assert_eq!(cards.len(), 1, "{name}: {:?}", cabin.updates);
+        let body = format!("Restored defaults, kept a copy at {}.", grokhub_core::recovered::home_short(&copies[0]));
+        assert_eq!(cards[0].body.as_deref(), Some(body.as_str()), "{name}");
+    }
+    // Draining again posts nothing new.
+    let before = cabin.updates.len();
+    cabin.poll_recovered_stores();
+    assert_eq!(cabin.updates.len(), before);
     let _ = std::fs::remove_dir_all(&root);
 }
 

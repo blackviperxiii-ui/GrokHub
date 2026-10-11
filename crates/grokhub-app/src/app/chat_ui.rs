@@ -454,24 +454,27 @@ pub(super) fn paint_speech_bubble(
         });
         ui.add_space(BUBBLE_PAD_Y);
     };
-    let mut resp = None;
     if user {
-        ui.scope(|ui| {
-            ui.set_max_width(avail);
-            ui.horizontal(|ui| {
+        return ui
+            .scope(|ui| {
                 ui.set_max_width(avail);
-                let lead = (avail - outer_w).max(0.0);
-                if lead > 0.0 {
-                    ui.add_space(lead);
-                }
-                ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {
-                    ui.set_max_width(outer_w);
-                    resp = Some(frame.show(ui, paint_inner).response);
-                });
-            });
-        });
-        return resp.expect("speech bubble");
+                ui.horizontal(|ui| {
+                    ui.set_max_width(avail);
+                    let lead = (avail - outer_w).max(0.0);
+                    if lead > 0.0 {
+                        ui.add_space(lead);
+                    }
+                    ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {
+                        ui.set_max_width(outer_w);
+                        frame.show(ui, paint_inner).response
+                    })
+                    .inner
+                })
+                .inner
+            })
+            .inner;
     }
+    // Assistant row: the mark sits at the top left, beside the bubble.
     ui.scope(|ui| {
         ui.set_max_width(avail);
         ui.horizontal_top(|ui| {
@@ -488,11 +491,13 @@ pub(super) fn paint_speech_bubble(
             );
             ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {
                 ui.set_max_width(outer_w);
-                resp = Some(frame.show(ui, paint_inner).response);
-            });
-        });
-    });
-    resp.expect("speech bubble")
+                frame.show(ui, paint_inner).response
+            })
+            .inner
+        })
+        .inner
+    })
+    .inner
 }
 
 pub(super) struct MsgActsPaint {
@@ -638,32 +643,30 @@ pub(super) fn paint_thought_bubble(ui: &mut egui::Ui, body: &str) -> egui::Respo
     let frame = egui::Frame::NONE
         .fill(egui::Color32::TRANSPARENT)
         .inner_margin(egui::Margin::symmetric(0, 2));
-    let mut resp = None;
     ui.scope(|ui| {
         ui.set_max_width(avail);
         ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {
             ui.set_max_width(avail);
-            resp = Some(
-                frame
-                    .show(ui, |ui| {
-                        ui.set_max_width(wrap);
-                        ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Wrap);
-                        ui.add(
-                            egui::Label::new(
-                                RichText::new(body)
-                                    .size(crate::theme::FONT_META)
-                                    .italics()
-                                    .color(crate::theme::subtle()),
-                            )
-                            .wrap()
-                            .selectable(true),
-                        );
-                    })
-                    .response,
-            );
-        });
-    });
-    resp.expect("thought bubble")
+            frame
+                .show(ui, |ui| {
+                    ui.set_max_width(wrap);
+                    ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Wrap);
+                    ui.add(
+                        egui::Label::new(
+                            RichText::new(body)
+                                .size(crate::theme::FONT_META)
+                                .italics()
+                                .color(crate::theme::subtle()),
+                        )
+                        .wrap()
+                        .selectable(true),
+                    );
+                })
+                .response
+        })
+        .inner
+    })
+    .inner
 }
 
 /// Temp-data key for per-row heights. Pane width is part of the key so a

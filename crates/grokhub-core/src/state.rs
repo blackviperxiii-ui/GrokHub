@@ -427,11 +427,7 @@ pub fn is_phone_name(name: &str) -> bool {
 }
 
 fn quarantine_hub_state(path: &std::path::Path) {
-    let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
-        return;
-    };
-    let stamp = crate::now_ms();
-    let _ = std::fs::rename(path, path.with_file_name(format!("{name}.corrupt-{stamp}")));
+    let _ = crate::recovered::quarantine(path, crate::recovered::RESTORED_DEFAULTS);
 }
 
 fn hostname() -> String {
