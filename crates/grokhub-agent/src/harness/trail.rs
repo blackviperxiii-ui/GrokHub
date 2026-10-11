@@ -177,11 +177,11 @@ pub fn trail_draft(spans: &[Span], chat_id: &str, turn: u32, held: &[String], no
     })
 }
 
-/// Brain 1: the turn's Brief goes on the line after the trail's head line,
-/// still within [`TRAIL_BODY_CAP`] (the span refs at the end give way).
-fn with_brief(body: &str, label: &str) -> String {
+/// Brain 1: the turn's Brief (and policy row) go after the trail's head
+/// line, still within [`TRAIL_BODY_CAP`] (the span refs at the end give way).
+fn with_brief(body: &str, lines: &[String]) -> String {
     let (head, rest) = body.split_once('\n').unwrap_or((body, ""));
-    let out = format!("{head}\nBrief: {label}\n{rest}");
+    let out = format!("{head}\n{}\n{rest}", lines.join("\n"));
     out.chars().take(TRAIL_BODY_CAP).collect()
 }
 
@@ -206,8 +206,8 @@ pub fn write_trail(
     let Some(mut draft) = trail_draft(&spans, chat_id, turn, held, now_ms) else {
         return Ok(None);
     };
-    if let Some(brief) = crate::brain::brief_for_turn(config_dir, chat_id, turn) {
-        draft.body = with_brief(&draft.body, &brief.label());
+    if let Some(line) = crate::brain::brief_for_turn(config_dir, chat_id, turn) {
+        draft.body = with_brief(&draft.body, &line.lines());
     }
     let sealed = draft.sensitivity.sealed();
     let new = match store.remember(&draft) {
@@ -359,7 +359,8 @@ mod tests {
         click = at(click.with_ui_changed(Some(true)), 2001, 4);
         append_span(&dir, &click).unwrap();
         let brief = crate::brain::rules(&crate::brain::BriefInput { text: "the printer service won't start", ..Default::default() }).unwrap();
-        let line = crate::brain::BriefLine { at: 1, session: "s".into(), chat_id: "chat-7".into(), turn: 4, brief };
+        let policy = crate::brain::pick_policy(&crate::brain::load_policy(&dir).0, &brief);
+        let line = crate::brain::BriefLine { at: 1, session: "s".into(), chat_id: "chat-7".into(), turn: 4, brief, policy };
         crate::brain::record_brief(&dir, &line).unwrap();
         let other = crate::brain::BriefLine { turn: 5, brief: crate::brain::rules(&crate::brain::BriefInput { text: "hi", ..Default::default() }).unwrap(), ..line.clone() };
         crate::brain::record_brief(&dir, &other).unwrap();
@@ -370,9 +371,9 @@ mod tests {
         let body = md.split("---\n").nth(2).unwrap();
         assert_eq!(
             body,
-            "Turn 4: 1 step.\nBrief: repair × critical, done = services, packages, boot errors, ports\nTools: click x1\nDecisions: allow 1\nScreen changed: yes 1, no 0\nFindings: none\nVerify: none\nSpans: chat-7:2001\n"
+            "Turn 4: 1 step.\nBrief: repair × critical, done = services, packages, boot errors, ports\nPolicy: repair × critical, goal quality (mistakes can break the system)\nTools: click x1\nDecisions: allow 1\nScreen changed: yes 1, no 0\nFindings: none\nVerify: none\nSpans: chat-7:2001\n"
         );
-        assert_eq!(with_brief(&"x".repeat(TRAIL_BODY_CAP), "chat × casual").chars().count(), TRAIL_BODY_CAP);
+        assert_eq!(with_brief(&"x".repeat(TRAIL_BODY_CAP), &["Brief: chat × casual".into()]).chars().count(), TRAIL_BODY_CAP);
         let _ = std::fs::remove_dir_all(dir);
     }
 

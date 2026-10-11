@@ -330,6 +330,18 @@ pub struct BriefLine {
     #[serde(default)]
     pub turn: u32,
     pub brief: Brief,
+    /// The mode policy row the Brief matched.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub policy: Option<super::PolicyPick>,
+}
+
+impl BriefLine {
+    /// "Brief: …" and, when a row matched, "Policy: …".
+    pub fn lines(&self) -> Vec<String> {
+        let mut out = vec![format!("Brief: {}", self.brief.label())];
+        out.extend(self.policy.as_ref().map(|p| format!("Policy: {}", p.label())));
+        out
+    }
 }
 
 fn briefs_path(config_dir: &Path) -> PathBuf {
@@ -365,16 +377,21 @@ pub fn read_briefs(config_dir: &Path) -> Vec<BriefLine> {
 }
 
 /// The newest Brief for one chat turn (the trail shows it).
-pub fn brief_for_turn(config_dir: &Path, chat_id: &str, turn: u32) -> Option<Brief> {
+pub fn brief_for_turn(config_dir: &Path, chat_id: &str, turn: u32) -> Option<BriefLine> {
     if chat_id.is_empty() {
         return None;
     }
-    read_briefs(config_dir).into_iter().rev().find(|l| l.chat_id == chat_id && l.turn == turn).map(|l| l.brief)
+    read_briefs(config_dir).into_iter().rev().find(|l| l.chat_id == chat_id && l.turn == turn)
 }
 
-/// `/why`'s first line: the newest Brief.
-pub fn why_line(config_dir: &Path) -> Option<String> {
-    read_briefs(config_dir).pop().map(|l| format!("Brief: {}", l.brief.label()))
+/// `/why`'s first lines: the newest Brief and its policy row, and a note
+/// when the user's policy file is being ignored.
+pub fn why_lines(config_dir: &Path) -> Vec<String> {
+    let mut out = read_briefs(config_dir).pop().map(|l| l.lines()).unwrap_or_default();
+    if let (_, Some(why)) = super::load_policy(config_dir) {
+        out.push(format!("Policy file ignored ({why}); using the shipped rows."));
+    }
+    out
 }
 
 #[cfg(test)]
@@ -488,18 +505,18 @@ mod tests {
     fn briefs_are_stored_without_the_ask_and_found_by_turn() {
         let dir = std::env::temp_dir().join(format!("gh-brief-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
-        assert_eq!(why_line(&dir), None);
+        assert!(why_lines(&dir).is_empty());
         let text = "the printer service won't start, my password is hunter2";
         let b = rules(&input(text)).unwrap();
-        record_brief(&dir, &BriefLine { at: 1, session: "s1".into(), chat_id: "chat-1".into(), turn: 2, brief: b.clone() }).unwrap();
+        record_brief(&dir, &BriefLine { at: 1, session: "s1".into(), chat_id: "chat-1".into(), turn: 2, brief: b.clone(), policy: None }).unwrap();
         let other = rules(&input("hi")).unwrap();
-        record_brief(&dir, &BriefLine { at: 2, session: "s1".into(), chat_id: "chat-1".into(), turn: 3, brief: other.clone() }).unwrap();
+        record_brief(&dir, &BriefLine { at: 2, session: "s1".into(), chat_id: "chat-1".into(), turn: 3, brief: other.clone(), policy: None }).unwrap();
         let raw = fs::read_to_string(briefs_path(&dir)).unwrap();
         assert!(!raw.contains("hunter2") && !raw.contains("printer"), "{raw}");
-        assert_eq!(brief_for_turn(&dir, "chat-1", 2), Some(b));
+        assert_eq!(brief_for_turn(&dir, "chat-1", 2).map(|l| l.brief), Some(b));
         assert_eq!(brief_for_turn(&dir, "chat-1", 9), None);
         assert_eq!(brief_for_turn(&dir, "", 2), None);
-        assert_eq!(why_line(&dir).as_deref(), Some("Brief: chat × casual, done = answered"));
+        assert_eq!(why_lines(&dir), vec!["Brief: chat × casual, done = answered".to_string()]);
         for i in 0..BRIEF_TRIM_AT as u64 {
             record_brief(&dir, &BriefLine { at: 10 + i, session: "s".into(), brief: other.clone(), ..Default::default() }).unwrap();
         }

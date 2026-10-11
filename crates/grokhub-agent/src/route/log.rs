@@ -186,20 +186,20 @@ pub fn episode_cache_pct(routes: &[(u64, RouteRecord)]) -> Option<(String, u64)>
 /// multi-turn task got less than [`CACHE_FLOOR_PCT`] of its prompt from the
 /// cache, the oldest line makes room for that flag.
 pub fn why_text(config_dir: &Path) -> String {
-    let brief = crate::brain::why_line(config_dir);
+    let brief = crate::brain::why_lines(config_dir);
     let scanned = scanned_routes(config_dir);
     let mut routes = last_routes(config_dir);
     if routes.is_empty() {
         let none = "No routed model calls yet. Effort is automatic: each step's reason shows here once it runs.";
-        return brief.map_or_else(|| none.to_string(), |b| format!("{b}\n{none}"));
+        return brief.into_iter().chain([none.to_string()]).collect::<Vec<_>>().join("\n");
     }
     let flag = episode_cache_pct(&scanned).filter(|(_, pct)| *pct < CACHE_FLOOR_PCT).map(|(_, pct)| {
         format!("Cache: the last multi-turn task got {pct}% of its prompt from the cache (under {CACHE_FLOOR_PCT}%), so it paid for more of it.")
     });
-    while !routes.is_empty() && routes.len() + usize::from(flag.is_some()) + usize::from(brief.is_some()) > WHY_LINES {
+    while !routes.is_empty() && routes.len() + usize::from(flag.is_some()) + brief.len() > WHY_LINES {
         routes.remove(0);
     }
-    let mut lines: Vec<String> = brief.into_iter().collect();
+    let mut lines: Vec<String> = brief;
     lines.extend(routes
         .iter()
         .map(|(_, r)| {
