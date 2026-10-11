@@ -15333,6 +15333,7 @@ fn quiet_cabin() -> Cabin {
         digest_pending: None,
         digest_wants_lookup: false,
         digest_steer: String::new(),
+        digest_interests: String::new(),
         situation_ping: None,
         window_focused: true,
         offer_repeated: false,
@@ -15437,6 +15438,7 @@ fn quiet_cabin() -> Cabin {
         settings_sec: super::SettingsSec::Account,
         market: Default::default(),
         picker: Default::default(),
+        interests: Default::default(),
         settings_back: super::Nav::Chat,
         imagine_aspect: 0,
         imagine_quality: false,
@@ -24617,7 +24619,7 @@ fn pulse_feed_instructions_sheet_edits_the_prompt_for_future_posts() {
         cabin.cfg.feed_instructions,
         "Only Rust and egui news. No crypto."
     );
-    let prompt = grokhub_core::pulse::feed_prompt("steer", &cabin.cfg.feed_instructions);
+    let prompt = grokhub_core::pulse::feed_prompt("steer", "", &cabin.cfg.feed_instructions);
     assert!(
         prompt.ends_with("Only Rust and egui news. No crypto."),
         "{prompt}"
@@ -24629,7 +24631,7 @@ fn pulse_feed_instructions_sheet_edits_the_prompt_for_future_posts() {
     );
     let native = include_str!("native_unattended.rs");
     assert!(native.contains(
-        "grokhub_core::pulse::feed_prompt(&self.digest_steer, &self.cfg.feed_instructions)"
+        "grokhub_core::pulse::feed_prompt(&self.digest_steer, &self.digest_interests, &self.cfg.feed_instructions)"
     ));
 }
 

@@ -490,6 +490,9 @@ impl Cabin {
         } else {
             (String::new(), String::new(), String::new(), Vec::new())
         };
+        if want_digest && !quiet {
+            self.seed_interests(&user_md, &memory_md);
+        }
         let project = self.cfg.project_dir.clone();
         let steer = if want_digest && !quiet {
             grokhub_core::digest_steer(&self.cfg.digest_brief, &user_md, &memory_md, &project)
@@ -529,6 +532,7 @@ impl Cabin {
         self.digest_wants_lookup = tick.digest_needs_lookup;
         if tick.digest_needs_lookup {
             self.digest_steer = steer;
+            self.digest_interests = self.interests_prompt();
         }
         self.note_finished_card_uses();
         let help_changed = self.note_help_offers(now, quiet);
@@ -1295,6 +1299,9 @@ impl Cabin {
         }
         if !mark_update_opened(&mut self.updates, id) {
             return;
+        }
+        if let Some(title) = self.updates.iter().find(|c| c.id == id).map(|c| c.title.clone()) {
+            self.interests_feedback(&title, grokhub_core::interests::InterestSignal::Opened);
         }
         let (action, board_card) = self
             .updates

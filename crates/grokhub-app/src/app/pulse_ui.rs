@@ -1495,6 +1495,9 @@ impl Cabin {
             self.status = err;
         }
         self.pulse_view.ledger_at = None;
+        if let Some(signal) = interests_ui::ledger_signal(reason) {
+            self.interests_feedback(title, signal);
+        }
         if reason.is_taste() {
             self.pulse_taste_tick();
         }
