@@ -72,6 +72,7 @@ pub mod personality;
 pub mod pulse;
 pub mod pulse_sources;
 pub mod recovered;
+pub mod run_metrics;
 pub mod recipe;
 pub mod pii;
 pub mod pkce;

@@ -10,6 +10,7 @@ use std::sync::mpsc;
 use eframe::egui;
 use grokhub_agent::harness as hx;
 use grokhub_core::outcome::{self as oc, TaskOutcome};
+use grokhub_core::run_metrics;
 use grokhub_core::self_review::{self as sr, CardTarget};
 use grokhub_core::what_changed as wc;
 use serde::{Deserialize, Serialize};
@@ -186,6 +187,8 @@ impl Cabin {
             grokhub_core::now_ms(),
         );
         let _ = oc::append_outcome(&dir, &outcome);
+        let metrics = hx::run_metrics_from_spans(&outcome, &spans);
+        let _ = run_metrics::append_run(&dir, &metrics, self.cfg.amr_retention_days);
         self.harness.self_review.last_outcome = Some(outcome);
     }
 
@@ -204,7 +207,11 @@ impl Cabin {
             return;
         }
         let late = last.superseded(oc::REASON_CORRECTION, grokhub_core::now_ms());
-        let _ = oc::append_outcome(&config::config_dir(), &late);
+        let dir = config::config_dir();
+        let _ = oc::append_outcome(&dir, &late);
+        if let Some(run) = run_metrics::find_run(&dir, &late.task) {
+            let _ = run_metrics::append_run(&dir, &run.corrected(late.at), self.cfg.amr_retention_days);
+        }
         self.harness.self_review.last_outcome = Some(late);
     }
 
@@ -215,6 +222,9 @@ impl Cabin {
         let sig = oc::skill_signature(&grokhub_core::skill_dir_name(skill));
         for late in oc::undo_supersedes(&oc::read_outcomes(&dir), &sig, now) {
             let _ = oc::append_outcome(&dir, &late);
+            if let Some(run) = run_metrics::find_run(&dir, &late.task) {
+                let _ = run_metrics::append_run(&dir, &run.undone(now), self.cfg.amr_retention_days);
+            }
         }
     }
 
