@@ -4473,6 +4473,17 @@ https://xstack.grok.me/post ZEPHYRTAIL"
         let id = id.expect("quiet digest");
         let quiet = cards.iter().find(|c| c.id == id).cloned().expect("quiet digest card");
         rows.push(("release_quiet_batch", quiet, "Sync ~/Photos"));
+        let item = crate::pulse_sources::SourceItem {
+            title: "Rust 1.99.0".into(),
+            url: "https://github.com/rust-lang/rust/releases/tag/1.99.0".into(),
+            kind: crate::pulse_sources::SourceKind::GithubReleases,
+            source_name: "rust-lang/rust on GitHub".into(),
+            published_ms: at,
+            summary: "Async closures are stable.".into(),
+            image: None,
+            topic: None,
+        };
+        rows.push(("item_card", crate::pulse_sources::item_card(&item, at), "Rust 1.99.0"));
         rows
     }
 

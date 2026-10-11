@@ -152,7 +152,6 @@ impl Cabin {
                 ui,
                 "No topics yet. Add a few, or let the first feed lookup pick some from your memory and chats.",
             );
-            return;
         }
         // Pinned, then live by weight, then muted at the bottom.
         rows.sort_by(|a, b| {
@@ -202,6 +201,8 @@ impl Cabin {
         if let Some((topic, act)) = act {
             self.act_on_interest(&topic, act);
         }
+        ui.add_space(16.0);
+        self.ui_pulse_sources(ui);
     }
 }
 
