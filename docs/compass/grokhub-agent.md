@@ -12,8 +12,10 @@
 - `crates/grokhub-agent/src/run.rs` (`run_loop`) and `crates/grokhub-agent/src/events.rs` (loop events to the `AcpEvent`s the cabin polls in `poll_acp`).
 - `crates/grokhub-agent/src/gate.rs` (gate v0) and `crates/grokhub-agent/src/perm/mod.rs` (rule engine).
 - `crates/grokhub-agent/src/tools/mod.rs`: `tool_schemas`, `schemas_for`, `execute` (read-only), `dispatch` (gated set).
+- `crates/grokhub-agent/src/tools/fence.rs`: untrusted-content fences for web_fetch, MCP text, desktop screenshot text, research queries, and out-of-workspace reads (`<<<UNTRUSTED …>>>` with a per-run nonce).
 ## Change recipe
 - New tool: add a module under `crates/grokhub-agent/src/tools/`, register its schema in `schemas_for` on the right side of the `readonly_session` / `desktop` checks, dispatch it, and make sure `gate::decide` and the harness see it.
+- Outside data returned to the model: wrap with `tools::fence::fence(source, text)` (or `fence_if_outside` for path-gated reads).
 - Ported code: keep the `// Portions derived from xai-org/grok-build ...` header and add a line to `crates/grokhub-agent/NOTICE`.
 ## What breaks it
 - Loosening a deny: perm rules are deny > ask > allow; hooks can deny or ask but never turn a gate deny or ask into allow; a hook timeout is no decision.
