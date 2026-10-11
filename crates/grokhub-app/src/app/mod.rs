@@ -176,6 +176,7 @@ mod confirm;
 mod connectors_ui;
 mod marketplace_ui;
 mod personality_ui;
+mod playbook_ui;
 mod interests_ui;
 mod pulse_sources_ui;
 mod harness_ui;
@@ -278,6 +279,7 @@ enum SettingsSec {
     Permissions,
     Connectors,
     Personality,
+    Playbooks,
     Pulse,
 }
 
@@ -669,6 +671,8 @@ pub struct Cabin {
     market: marketplace_ui::MarketState,
     /// Settings → Personality: presets on disk, the Try it preview and the editor.
     picker: personality_ui::PickerState,
+    /// Settings → Playbooks: the playbooks on disk and the editor.
+    playbooks: playbook_ui::PlaybookState,
     /// Settings → Pulse: the interest profile and its Add box.
     interests: interests_ui::InterestsState,
     /// Free Pulse sources: the running fetch and Settings drafts.
@@ -1246,6 +1250,7 @@ impl Cabin {
             settings_sec: SettingsSec::Account,
             market: Default::default(),
             picker: Default::default(),
+            playbooks: Default::default(),
             interests: Default::default(),
             sources: Default::default(),
             settings_back: Nav::Chat,
@@ -1684,6 +1689,7 @@ impl Cabin {
             settings_sec: SettingsSec::Account,
             market: Default::default(),
             picker: Default::default(),
+            playbooks: Default::default(),
             interests: Default::default(),
             sources: Default::default(),
             settings_back: Nav::Chat,
