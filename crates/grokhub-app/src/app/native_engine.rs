@@ -505,6 +505,9 @@ fn serve_native(session_id: String, ext_rx: std::sync::mpsc::Receiver<ExternalCm
         engine.set_origin(cfg.origin);
         engine.set_episode(cfg.episode.clone());
         engine.set_imagine_bearer(&cfg.bearer);
+        // Brain 1: an unclear ask's Brief costs one fast call. App tests
+        // script each reply, so they keep the rules-only default.
+        engine.set_brief_model(!cfg!(test));
         let client = XaiClient::new(cfg.bearer, cfg.auth_kind, Duration::from_secs(120));
         #[cfg(test)]
         let client = match test_responses_url() {
