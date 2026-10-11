@@ -43,8 +43,18 @@ pub const PROVIDER_LOCAL: &str = "local";
 pub const LOCAL_PREFIX: &str = "local:";
 /// The on-device model's context cap (2–4k), in tokens.
 pub const LOCAL_CTX_CAP: u64 = 4_096;
-/// The classes a local route may take.
+/// The classes a local route may take while online (background helpers).
 pub const LOCAL_CLASSES: &[&str] = &["background:classify", "background:triage", "background:redact", "background:summarize"];
+/// Extra classes allowed on-device while offline (chat + summaries; not cloud-only).
+pub const OFFLINE_CLASSES: &[&str] = &[
+    "background:classify",
+    "background:triage",
+    "background:redact",
+    "background:summarize",
+    "chat:quick",
+    "chat:default",
+    "desktop:soft",
+];
 /// Tiers, strongest first. The downshift ladder moves down this list.
 pub const TIERS: &[&str] = &["local:small", "local:tiny"];
 /// What a local route returns while no runtime is installed.
@@ -118,20 +128,40 @@ pub struct LocalGate {
     pub cloud_grant: bool,
     /// The step offers a send, delete or credential tool.
     pub hard_tool: bool,
+    /// Connectivity is offline (PR B): chat may go local too.
+    pub offline: bool,
 }
 
 impl LocalGate {
     /// The flag and the live tier as set now.
     pub fn now(sensitive: bool, cloud_grant: bool, hard_tool: bool) -> Self {
-        Self { enabled: enabled(), tier: live_tier().into(), sensitive, cloud_grant, hard_tool }
+        Self {
+            enabled: enabled(),
+            tier: live_tier().into(),
+            sensitive,
+            cloud_grant,
+            hard_tool,
+            offline: super::connectivity::state().prefer_local(),
+        }
     }
 }
 
-/// The local route may take this step: the flag is on, the class is one of
-/// [`LOCAL_CLASSES`], the step fits the context cap, and it is not hard.
+fn allowed_classes(gate: &LocalGate) -> &'static [&'static str] {
+    if gate.offline {
+        OFFLINE_CLASSES
+    } else {
+        LOCAL_CLASSES
+    }
+}
+
+/// The local route may take this step: the flag is on, the class is allowed
+/// for this connectivity, the step fits the context cap, and it is not hard.
 pub fn eligible(gate: &LocalGate, class: &str, ctx_tokens: u64) -> bool {
     let class = class_row(class).map(|r| r.class).unwrap_or(class.trim());
-    gate.enabled && !gate.hard_tool && class != PREPARE_HARD && LOCAL_CLASSES.contains(&class) && ctx_tokens <= LOCAL_CTX_CAP
+    if super::connectivity::is_cloud_only(class) {
+        return false;
+    }
+    gate.enabled && !gate.hard_tool && class != PREPARE_HARD && allowed_classes(gate).contains(&class) && ctx_tokens <= LOCAL_CTX_CAP
 }
 
 /// `id` may serve this step: the live tier, and [`eligible`].
@@ -142,6 +172,11 @@ pub fn admits(gate: &LocalGate, id: &str, class: &str, ctx_tokens: u64) -> bool 
 /// Sensitive data with no cloud grant: the local route is the only route.
 pub fn privacy_only(gate: &LocalGate) -> bool {
     gate.enabled && gate.sensitive && !gate.cloud_grant
+}
+
+/// Offline with a live on-device runtime: prefer local for eligible classes.
+pub fn offline_only(gate: &LocalGate) -> bool {
+    gate.enabled && gate.offline
 }
 
 /// The registry source for local tiers. Lists nothing (a no-op) while the flag is off.
@@ -289,6 +324,14 @@ pub fn serve(class: &str, text: &str) -> Result<TurnOutput, ClientError> {
         return Err(ClientError::Protocol(NO_RUNTIME_MSG.into()));
     };
     let class = class_row(class).map(|r| r.class).unwrap_or(class);
+    if matches!(class, "chat:quick" | "chat:default" | "desktop:soft") {
+        let mut deltas = String::new();
+        let out = rt
+            .chat_stream(&[ChatMessage { role: "user".into(), content: text.into() }], &mut |d| deltas.push_str(d))
+            .map_err(ClientError::Protocol)?;
+        let text = if out.is_empty() { deltas } else { out };
+        return Ok(TurnOutput { text, reasoning: String::new(), calls: Vec::new(), usage: Usage::default() });
+    }
     let answer = if class == "background:summarize" { rt.summarize(text, 60) } else { rt.classify(text, CLASS_LABELS) };
     let v = answer.map_err(ClientError::Protocol)?;
     Ok(TurnOutput { text: v.to_string(), reasoning: String::new(), calls: Vec::new(), usage: Usage::default() })

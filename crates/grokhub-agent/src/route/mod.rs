@@ -15,6 +15,7 @@ pub mod guard;
 pub mod heal;
 pub mod ladder;
 pub mod learn;
+pub mod connectivity;
 pub mod local;
 pub mod local_http;
 pub mod local_sidecar;
@@ -474,6 +475,21 @@ impl Router {
                 }
                 None => {
                     rules.push("privacy:no_local".into());
+                    ModelPick { model: input.current_model.trim().to_string(), no_route: true, replaced: None }
+                }
+            }
+        } else if connectivity::is_cloud_only(input.class) && input.local.offline {
+            // Image / web / hard prepare wait for the cloud (named queue note in the cabin).
+            rules.push("offline:cloud_queued".into());
+            ModelPick { model: input.current_model.trim().to_string(), no_route: true, replaced: None }
+        } else if local::offline_only(&input.local) && local::eligible(&input.local, input.class, input.ctx_tokens) {
+            match ids.iter().find(|id| local::is_local(id)) {
+                Some(id) => {
+                    rules.push("offline:local".into());
+                    ModelPick { model: id.to_string(), no_route: false, replaced: None }
+                }
+                None => {
+                    rules.push("offline:no_local".into());
                     ModelPick { model: input.current_model.trim().to_string(), no_route: true, replaced: None }
                 }
             }
@@ -1042,3 +1058,6 @@ mod tests {
 
 #[cfg(test)]
 mod r3a_tests;
+
+#[cfg(test)]
+mod offline_tests;
