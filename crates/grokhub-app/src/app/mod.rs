@@ -23,6 +23,7 @@ use global_hotkey::{
     hotkey::{Code, HotKey, Modifiers},
     GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState,
 };
+use grokhub_core::JobKind;
 use grokhub_core::wire::{
     classify_stream_error, grok_context_line, grok_usage_line, merge_tool_card, retry_status_line,
     rewrite_truncation_error, turn_footer, AcpEvent, GrokPEvent, GrokUsage, PermissionMode,
@@ -532,8 +533,8 @@ pub struct Cabin {
     slash_filter_first: String,
     last_window_title: String,
     voice_orb: String,
-    last_night_tick: Instant,
-    last_auto_tick: Instant,
+    /// Brain 4: the one scheduler for background work. The pulse is its clock.
+    governor: grokhub_core::Governor,
     last_heartbeat: Instant,
     /// Heartbeat throttle state: budget, backoff streak, Halt hold.
     pace: grokhub_core::HeartbeatThrottle,
@@ -1130,8 +1131,7 @@ impl Cabin {
             slash_filter_first: String::new(),
             last_window_title: String::new(),
             voice_orb: "idle".into(),
-            last_night_tick: Instant::now(),
-            last_auto_tick: Instant::now(),
+            governor: grokhub_core::Governor::cabin(),
             last_heartbeat: Instant::now(),
             pace: Default::default(),
             pace_traced: Vec::new(),
@@ -1570,8 +1570,7 @@ impl Cabin {
             slash_filter_first: String::new(),
             last_window_title: String::new(),
             voice_orb: String::new(),
-            last_night_tick: Instant::now(),
-            last_auto_tick: Instant::now(),
+            governor: grokhub_core::Governor::cabin(),
             last_heartbeat: Instant::now(),
             pace: Default::default(),
             pace_traced: Vec::new(),
@@ -3194,6 +3193,11 @@ impl Cabin {
         }
         self.tokens_seen = now;
         add_tokens(&mut self.usage, spent.0, spent.1, spent.2);
+        // A live anticipate turn the pulse started is the governor's Anticipate job.
+        if self.running && self.pace.pending() == Some(grokhub_core::ProactiveAct::Anticipate) {
+            let tokens = spent.0.saturating_add(spent.1).saturating_add(spent.2);
+            self.governor_charge(JobKind::Anticipate, tokens);
+        }
         self.note_token_budget();
         self.persist_usage();
     }
@@ -3378,8 +3382,8 @@ impl Cabin {
         }
         self.last_heartbeat = Instant::now();
         // Halt holds every organ that starts work; local upkeep still runs.
-        let halted = self.heartbeat_halted(now_ms());
-        let mut night_fired = false;
+        let now = now_ms();
+        let halted = self.heartbeat_halted(now);
         for act in heartbeat_acts() {
             if halted && !act.runs_while_halted() {
                 continue;
@@ -3387,74 +3391,121 @@ impl Cabin {
             match act {
                 HeartbeatAct::Housekeep => {
                     self.roll_today();
-                    self.tick_feed_pulse();
-                    if !halted {
-                        self.follow_feed_lookup();
-                        self.follow_source_fetch();
-                    }
                     self.release_situation_ping();
-                    if !halted {
-                        self.tick_indexers();
-                    }
-                    self.tick_model_registry(halted);
                     if self.last_persist.elapsed() > Duration::from_secs(2) {
                         self.persist_bg();
                     }
                 }
                 HeartbeatAct::Inbox => self.drain_inbox(),
-                HeartbeatAct::Night => {
-                    // Grok `/loop` intervals and clock-time cabin automations both live on
-                    // this slot. Loops go first; automations still get the pulse when no
-                    // loop is due, so a 09:00 job is not starved by an idle loop list.
-                    night_fired = self.tick_loops();
-                    if !night_fired {
-                        night_fired = self.tick_night();
-                    }
-                }
-                HeartbeatAct::Review => {
-                    self.tick_amr_retention(&Self::local_day());
-                    if !night_fired && !self.running {
-                        self.tick_review();
-                        self.tick_night_passes();
-                    }
-                }
+                // Everything that is not your turn runs from the governor's one queue.
+                HeartbeatAct::Background => self.run_background(now, halted),
                 HeartbeatAct::Wall => self.tick_wall(),
                 HeartbeatAct::MidThought => self.tick_mid_thought(),
-                HeartbeatAct::Reflect => {
-                    if should_idle_reflect(
-                        self.last_activity.elapsed().as_millis() as u64,
-                        self.running,
-                        IDLE_REFLECT_MS,
-                    ) && !self.reflected_idle
-                        && !self.scratch()
-                        && !self.heartbeat_busy()
-                    {
-                        self.reflected_idle = true;
-                        self.run_reflect();
-                    }
-                }
-                HeartbeatAct::Anticipate => self.tick_anticipate(),
             }
         }
     }
 
-    fn tick_anticipate(&mut self) {
+    /// One governor beat: the queue of due jobs, highest priority first. Halt,
+    /// quiet hours and spent budgets are already held out of it.
+    fn run_background(&mut self, now: u64, halted: bool) {
+        let day = Self::local_day();
+        let hm = Self::local_clock().hm();
+        let plan = self.governor.tick(&grokhub_core::TickCtx {
+            now_ms: now,
+            day: &day,
+            hm: &hm,
+            quiet_start: &self.cfg.quiet_start,
+            quiet_end: &self.cfg.quiet_end,
+            halted,
+            hold_heavy: false,
+            budgets: &self.cfg.background,
+        });
+        for note in &plan.new_notes {
+            self.governor_note(note);
+        }
+        let mut night_fired = false;
+        for job in plan.run.iter().copied() {
+            night_fired |= self.run_job(job, plan.quiet, halted, &day, night_fired);
+        }
+    }
+
+    /// Run one job the governor handed out. True when a scheduled run fired,
+    /// so the review waits for the next beat.
+    fn run_job(
+        &mut self,
+        job: JobKind,
+        quiet: bool,
+        halted: bool,
+        day: &str,
+        night_fired: bool,
+    ) -> bool {
+        match job {
+            JobKind::Automations => {
+                // Grok `/loop` intervals and clock-time cabin automations share this job.
+                // Loops go first; automations still run when no loop is due, so a
+                // 09:00 job is not starved by an idle loop list.
+                return self.tick_loops() || self.tick_night();
+            }
+            JobKind::PulseRefresh => self.tick_feed_pulse(),
+            JobKind::ModelRegistry => self.tick_model_registry(halted),
+            JobKind::Proactive => self.tick_proactive_cards(quiet),
+            JobKind::Ideas => self.maybe_suggest_ideas(false),
+            JobKind::Anticipate => self.tick_anticipate(),
+            JobKind::Digest => {
+                self.follow_feed_lookup();
+                self.follow_source_fetch();
+            }
+            JobKind::Review => {
+                if !night_fired && !self.running {
+                    self.tick_review();
+                }
+            }
+            JobKind::NightPasses => {
+                if !night_fired && !self.running {
+                    self.tick_night_passes();
+                }
+            }
+            JobKind::MemoryRetention => self.tick_amr_retention(day),
+            JobKind::Reflect => {
+                if should_idle_reflect(
+                    self.last_activity.elapsed().as_millis() as u64,
+                    self.running,
+                    IDLE_REFLECT_MS,
+                ) && !self.reflected_idle
+                    && !self.scratch()
+                    && !self.heartbeat_busy()
+                {
+                    self.reflected_idle = true;
+                    self.run_reflect();
+                }
+            }
+            JobKind::Indexers => self.tick_indexers(quiet),
+        }
+        false
+    }
+
+    /// Spike-6a cards and admitted Spike-6b auto-acts. Quiet hours only queue.
+    fn tick_proactive_cards(&mut self, quiet: bool) {
         if self.scratch() {
             return;
         }
         self.tick_auto_act();
-        let clock = Self::local_clock();
-        let quiet = quiet_hours_active(&clock.hm(), &self.cfg.quiet_start, &self.cfg.quiet_end);
-        // Spike-6a cards: busy is should_anticipate's seat check plus a card
-        // waiting on you; quiet hours only queue.
+        // Busy is should_anticipate's seat check plus a card waiting on you.
         let busy = !should_anticipate(self.running, self.review_busy, self.composer.trim().is_empty(), false)
             || self.heartbeat_busy();
         self.tick_proactive(now_ms(), quiet, busy);
+    }
+
+    /// A follow-skill turn in the chat. The governor holds it in quiet hours.
+    fn tick_anticipate(&mut self) {
+        if self.scratch() {
+            return;
+        }
         if !should_anticipate(
             self.running,
             self.review_busy,
             self.composer.trim().is_empty(),
-            quiet,
+            false,
         ) {
             return;
         }
