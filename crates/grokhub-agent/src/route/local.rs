@@ -28,7 +28,7 @@
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, OnceLock};
 
 use regex::Regex;
 use serde_json::Value;
@@ -128,6 +128,57 @@ pub fn live_tier() -> &'static str {
     TIERS[TIER.load(Ordering::SeqCst).min(TIERS.len() - 1)]
 }
 
+/// Capability snapshot from the last local bench / eval (PR E).
+#[derive(Debug, Clone, PartialEq)]
+pub struct TierCaps {
+    pub context: u64,
+    /// Fraction of the local eval set that passed (0.0–1.0). Not function-calling.
+    pub eval_pass_rate: f64,
+    pub tokens_per_sec: Option<f64>,
+    pub first_token_ms: Option<u64>,
+}
+
+impl Default for TierCaps {
+    fn default() -> Self {
+        Self {
+            context: LOCAL_CTX_CAP,
+            eval_pass_rate: 0.0,
+            tokens_per_sec: None,
+            first_token_ms: None,
+        }
+    }
+}
+
+fn caps_slot() -> &'static Mutex<TierCaps> {
+    static S: OnceLock<Mutex<TierCaps>> = OnceLock::new();
+    S.get_or_init(|| Mutex::new(TierCaps::default()))
+}
+
+/// Store bench/eval numbers so [`tier_meta`] and the router can use them.
+pub fn set_caps(caps: TierCaps) {
+    if caps.context > 0 {
+        set_ctx_cap(caps.context);
+    }
+    *caps_slot().lock().expect("local caps") = caps;
+}
+
+/// Latest capability snapshot (defaults until a bench runs).
+pub fn caps() -> TierCaps {
+    caps_slot().lock().expect("local caps").clone()
+}
+
+/// Remember that the last on-device answer failed VerifyGate (escalate next online turn).
+static LOCAL_VERIFY_FAILED: AtomicBool = AtomicBool::new(false);
+
+/// Cabin / live path: set after a local turn's verify outcome.
+pub fn note_local_verify_failed(failed: bool) {
+    LOCAL_VERIFY_FAILED.store(failed, Ordering::SeqCst);
+}
+
+pub fn local_verify_failed() -> bool {
+    LOCAL_VERIFY_FAILED.load(Ordering::SeqCst)
+}
+
 /// What a route may do with the local model for one call.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct LocalGate {
@@ -142,6 +193,8 @@ pub struct LocalGate {
     pub hard_tool: bool,
     /// Connectivity is offline (PR B): chat may go local too.
     pub offline: bool,
+    /// Last on-device answer failed a verify check (PR E): escalate to cloud when online.
+    pub local_verify_failed: bool,
 }
 
 impl LocalGate {
@@ -154,6 +207,7 @@ impl LocalGate {
             cloud_grant,
             hard_tool,
             offline: super::connectivity::state().prefer_local(),
+            local_verify_failed: local_verify_failed(),
         }
     }
 }
@@ -191,17 +245,50 @@ pub fn offline_only(gate: &LocalGate) -> bool {
     gate.enabled && gate.offline
 }
 
+/// Online after a failed on-device verify: leave local and pick a cloud model.
+pub fn escalate_after_verify(gate: &LocalGate) -> bool {
+    gate.enabled && !gate.offline && gate.local_verify_failed
+}
+
+/// Hard or long work should stay on the cloud when online (PR E).
+pub fn too_hard_for_local(class: &str, ctx_tokens: u64, d: f64) -> bool {
+    let class = class_row(class).map(|r| r.class).unwrap_or(class.trim());
+    class == PREPARE_HARD
+        || class.starts_with("repair:")
+        || d > 0.7
+        || ctx_tokens > ctx_cap().saturating_mul(3) / 4
+}
+
+/// Quiet note when escalating from local to cloud (names both models).
+pub fn escalate_note(local_model: &str, cloud_model: &str) -> String {
+    format!("Switched from {local_model} (local) to {cloud_model}: the on-device answer failed a check.")
+}
+
 /// The registry source for local tiers. Lists nothing (a no-op) while the flag is off.
 pub struct LocalSource;
 
 pub fn tier_meta(id: &str) -> ModelMeta {
+    let c = caps();
+    let mut notice = None;
+    if let Some(tps) = c.tokens_per_sec {
+        let ft = c.first_token_ms.unwrap_or(0);
+        notice = Some(grokhub_core::model_registry::Notice {
+            severity: "info".into(),
+            text: format!(
+                "local bench ≈ {tps:.1} tok/s, first token {ft} ms, eval {:.0}%",
+                c.eval_pass_rate * 100.0
+            ),
+        });
+    }
     ModelMeta {
         id: id.into(),
-        context_length: Some(ctx_cap()),
+        context_length: Some(ctx_cap().max(c.context)),
         // No effort menu: a local route sends no effort.
         efforts: Some(Vec::new()),
+        // `serve` returns empty `calls` today — never claim tools from eval pass rate.
         tool_calling: Some(false),
         prices: Prices { prompt: Some(0), cached: Some(0), completion: Some(0), ..Prices::default() },
+        notice,
         ..ModelMeta::default()
     }
 }
