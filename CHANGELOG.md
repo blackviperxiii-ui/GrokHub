@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Fixed: channel switch no longer force-moves a local `main`/`beta` that is ahead of origin (fast-forward or refuse); Update recover resets to `origin/main`/`origin/beta` (not an old release tag); backup commits ignore GPG signing.
 - Updater recovers diverged or dirty installs (backup branch), stops prompting sudo on every update, and the Beta switch works on any clone.
 - Fixed: when a model reply is cut off at its length limit, GrokHub no longer runs the half-written tool calls in it; the agent is told to resend smaller steps.
 - Security: text from web pages, connectors, screen reading and research queries is now marked as outside data (`<<<UNTRUSTED …>>>` fences with a per-run nonce) before the agent sees it, so instructions hidden in a page can't pose as you or the system. Workspace file reads stay plain for coding.

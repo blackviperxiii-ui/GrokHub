@@ -22,7 +22,7 @@
 ## Non-obvious
 - `packaging/release-binary-size-ceiling` caps `target/release/grokhub`; `make-release-bundle.sh` and `make-windows-release.tests.ps1` fail when the binary is over it.
 - The `--dry-run` line (`channel=… branch=… switch=… prefix=… receipt=…`) is asserted literally by `install_sh_parses_channel_flags_and_follows_the_receipt`, which runs the real script on unix.
-- No `--channel`: the receipt wins, missing means stable (`main`). `--channel` refuses a dirty tree (except a lone Cargo.lock), fetches `origin/$BRANCH` by refspec, and `checkout -B --track` so single-branch clones work.
+- No `--channel`: the receipt wins, missing means stable (`main`). `--channel` refuses a dirty tree (except a lone Cargo.lock), fetches `origin/$BRANCH` by refspec, `checkout -B --track` when the local branch is missing, and otherwise fast-forwards only (refuses when local is ahead).
 - `GROKHUB_CHANNEL` is exported into `cargo build` so `crates/grokhub-app/build.rs` labels the binary.
 - The desktop entry's `Exec=grokhub` is rewritten to the absolute prefix path, so launch works without `~/.local/bin` on PATH.
 - Windows Setup ships only `grokhub.exe` and `grokhub-hub.exe` and leaves PATH alone; `hands.rs` asserts both `Source:` lines in `packaging/windows/grokhub.iss`.
