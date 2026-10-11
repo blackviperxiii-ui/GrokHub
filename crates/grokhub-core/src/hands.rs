@@ -285,8 +285,20 @@ mod tests {
             !bundle.contains("build-hands.sh")
                 && !bundle.contains("ydotoold.service")
                 && bundle.contains("grokhub-hub.service")
-                && bundle.contains("enable --now grokhub-hub.service"),
-            "release tarball install must skip sidecars and keep cabin/hub: {bundle}"
+                && bundle.contains("enable --now grokhub-hub.service")
+                && bundle.contains("release-binary-size-ceiling"),
+            "release tarball install must skip sidecars, keep cabin/hub, and size-check: {bundle}"
+        );
+        let ceiling = include_str!("../../../packaging/release-binary-size-ceiling");
+        let ceiling_bytes: u64 = ceiling
+            .lines()
+            .map(str::trim)
+            .find(|line| !line.is_empty() && !line.starts_with('#'))
+            .and_then(|line| line.parse().ok())
+            .expect("packaging/release-binary-size-ceiling must name a byte count");
+        assert!(
+            (1_048_576..=209_715_200).contains(&ceiling_bytes),
+            "release size ceiling must stay a plausible binary size: {ceiling_bytes}"
         );
         assert!(
             !bundle.contains("sudo pacman -S --needed ydotool"),
