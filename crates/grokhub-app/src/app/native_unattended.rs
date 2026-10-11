@@ -543,6 +543,7 @@ mod tests {
                     cost_in_usd_ticks: 5,
                     cached_tokens: 0,
                 },
+                ..Default::default()
             })
         }
     }

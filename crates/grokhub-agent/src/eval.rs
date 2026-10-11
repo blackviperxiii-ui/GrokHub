@@ -915,6 +915,7 @@ fn tool_turn(id: &str, name: &str, arguments: &str) -> TurnOutput {
             arguments: arguments.to_string(),
         }],
         usage: Usage::default(),
+        ..Default::default()
     }
 }
 
@@ -924,6 +925,7 @@ fn text_turn(text: &str) -> TurnOutput {
         reasoning: String::new(),
         calls: Vec::new(),
         usage: Usage::default(),
+        ..Default::default()
     }
 }
 

@@ -703,6 +703,7 @@ impl ModelClient for Script {
             reasoning: String::new(),
             calls,
             usage: Usage::default(),
+            ..Default::default()
         })
     }
 }

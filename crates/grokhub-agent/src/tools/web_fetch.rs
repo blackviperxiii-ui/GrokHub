@@ -930,7 +930,8 @@ mod tests {
                     reasoning: String::new(),
                     calls: Vec::new(),
                     usage: Usage::default(),
-                })
+            ..Default::default()
+        })
             }
         }
         let client = AllowJudge;
