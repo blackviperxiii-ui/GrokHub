@@ -175,6 +175,7 @@ mod confirm;
 mod connectors_ui;
 mod marketplace_ui;
 mod personality_ui;
+mod interests_ui;
 mod harness_ui;
 mod inbox_ui;
 mod episode_ui;
@@ -273,6 +274,7 @@ enum SettingsSec {
     Permissions,
     Connectors,
     Personality,
+    Pulse,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -542,6 +544,8 @@ pub struct Cabin {
     digest_pending: Option<String>,
     digest_wants_lookup: bool,
     digest_steer: String,
+    /// The interests section the next lookup carries. Set with `digest_steer`.
+    digest_interests: String,
     situation_ping: Option<(String, String)>,
     /// True until a frame reports the cabin window is away. Tests stay silent.
     window_focused: bool,
@@ -661,6 +665,8 @@ pub struct Cabin {
     market: marketplace_ui::MarketState,
     /// Settings → Personality: presets on disk, the Try it preview and the editor.
     picker: personality_ui::PickerState,
+    /// Settings → Pulse: the interest profile and its Add box.
+    interests: interests_ui::InterestsState,
     settings_back: Nav,
     imagine_aspect: u8,
     imagine_quality: bool,
@@ -1130,6 +1136,7 @@ impl Cabin {
             digest_pending: None,
             digest_wants_lookup: false,
             digest_steer: String::new(),
+            digest_interests: String::new(),
             situation_ping: None,
             window_focused: true,
             offer_repeated: false,
@@ -1234,6 +1241,7 @@ impl Cabin {
             settings_sec: SettingsSec::Account,
             market: Default::default(),
             picker: Default::default(),
+            interests: Default::default(),
             settings_back: Nav::Chat,
             imagine_aspect: 0,
             imagine_quality: true,
@@ -1566,6 +1574,7 @@ impl Cabin {
             digest_pending: None,
             digest_wants_lookup: false,
             digest_steer: String::new(),
+            digest_interests: String::new(),
             situation_ping: None,
             window_focused: true,
             offer_repeated: false,
@@ -1670,6 +1679,7 @@ impl Cabin {
             settings_sec: SettingsSec::Account,
             market: Default::default(),
             picker: Default::default(),
+            interests: Default::default(),
             settings_back: Nav::Chat,
             imagine_aspect: 0,
             imagine_quality: false,
