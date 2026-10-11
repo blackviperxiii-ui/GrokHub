@@ -1,6 +1,6 @@
 //! Spike-8a: the local indexers in the cabin.
 //!
-//! The heartbeat's Housekeep slot calls [`Cabin::tick_indexers`]: one
+//! The governor's Indexers job calls [`Cabin::tick_indexers`]: one
 //! `Scheduler::tick` at a time on a low-priority worker, never while halted or
 //! in scratch. The worker hands back the scheduler and, after a write or an
 //! unlock, a fresh in-memory [`ScopeIndex`]. Settings → Permissions lists what
@@ -72,8 +72,9 @@ fn paint_facts(ui: &mut egui::Ui, source: &str, facts: &[IndexedFact], locked: b
 }
 
 impl Cabin {
-    /// Heartbeat: collect a finished tick, or start the next one.
-    pub(super) fn tick_indexers(&mut self) {
+    /// The governor's Indexers job: collect a finished tick, or start the next
+    /// one. The governor holds it in quiet hours, so `quiet` is the beat's own.
+    pub(super) fn tick_indexers(&mut self, quiet: bool) {
         let ui = &mut self.harness.indexer;
         if let Some(rx) = ui.rx.take() {
             match rx.try_recv() {
@@ -100,8 +101,6 @@ impl Cabin {
         if self.scratch() {
             return;
         }
-        let clock = Self::local_clock();
-        let quiet = quiet_hours_active(&clock.hm(), &self.cfg.quiet_start, &self.cfg.quiet_end);
         let ui = &mut self.harness.indexer;
         let mut sched = std::mem::take(&mut ui.sched);
         let reload = !ui.loaded;

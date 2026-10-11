@@ -4,7 +4,8 @@
 //! acts that spend tokens or put something in front of the user (`ProactiveAct`)
 //! ask this gate first. Pure and clock-injected: every call takes `now_ms`, so
 //! tests drive a fake clock. Scheduled automations and loops are not budgeted
-//! here; they run as background runs on their own clock. Halt holds them too.
+//! here; they run from the governor's Automations job (`crate::governor`), which
+//! gives them a daily token budget. Halt holds them too.
 
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
