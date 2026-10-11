@@ -67,6 +67,7 @@ pub mod pair;
 pub mod paths;
 pub mod proactive;
 pub mod project;
+pub mod interests;
 pub mod personality;
 pub mod pulse;
 pub mod recovered;
