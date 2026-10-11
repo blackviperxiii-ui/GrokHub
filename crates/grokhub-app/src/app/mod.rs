@@ -2,7 +2,7 @@ use crate::config::{self, AppConfig};
 use crate::desktop::{
     capture_data_url, capture_webcam, clipboard_image, collect_rows, first_bin,
     load_image_data_url, lock_titles, pick_file, play_audio, read_text_capped,
-    record_once, run_computer_op_cancel, run_limited, transcribe_local,
+    record_once, run_computer_op_cancel, transcribe_local,
 };
 use crate::helpers::{
     cabin_menu_should_dismiss, click_project_opens_board, collect_other_chip_threads, expand_home,
@@ -3230,7 +3230,7 @@ impl Cabin {
         {
             let mut cmd = std::process::Command::new("date");
             cmd.arg(fmt);
-            run_limited(cmd, Duration::from_millis(400))
+            crate::desktop::run_limited(cmd, Duration::from_millis(400))
                 .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
                 .unwrap_or_default()
         }
@@ -5515,19 +5515,33 @@ fn hostname_i() -> String {
 }
 
 fn hostname_i_now() -> String {
-    let mut cmd = std::process::Command::new("hostname");
-    cmd.arg("-I");
-    let out = run_limited(cmd, Duration::from_millis(400))
-        .filter(|o| o.status.success())
-        .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
-        .unwrap_or_default();
+    let out = lan_candidates_now();
     let addrs = parse_hostname_i(&out);
     let refs: Vec<&str> = addrs.iter().map(|s| s.as_str()).collect();
     if pick_lan_ipv4(&refs).is_some() {
         return out;
     }
-    // Windows and macOS have no `hostname -I`, so Devices showed another computer 127.0.0.1.
+    // No candidate (macOS has no `hostname -I`): the address outbound traffic leaves from.
     routed_ipv4().unwrap_or(out)
+}
+
+/// Space-separated local IPv4 addresses, in `hostname -I`'s format.
+#[cfg(not(windows))]
+fn lan_candidates_now() -> String {
+    let mut cmd = std::process::Command::new("hostname");
+    cmd.arg("-I");
+    crate::desktop::run_limited(cmd, Duration::from_millis(400))
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+        .unwrap_or_default()
+}
+
+/// Windows has no `hostname -I` (its `hostname` treats `-I` as an error), so read the
+/// adapters directly instead of spawning a process that always fails.
+#[cfg(windows)]
+fn lan_candidates_now() -> String {
+    let ips: Vec<String> = crate::win_native::adapter_ipv4s().iter().map(|ip| ip.to_string()).collect();
+    ips.join(" ")
 }
 
 /// The local address the OS would route outbound traffic from. A UDP connect sends nothing;

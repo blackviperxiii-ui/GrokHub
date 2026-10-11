@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Fixed: on Windows, Devices now finds the LAN address by reading the network adapters, picking the home or office network over VPN and virtual adapters the same way Linux does. Before, it ran a Linux-only `hostname -I` that always failed and fell back to whichever address the default route used.
 - The cabin opens faster: on a fresh Linux profile the first frame now paints in about 97 ms instead of 175 ms (median of 5 cold starts). Global hotkeys are grabbed right after the first frame instead of before it (a hidden `--hidden` start still grabs them at once), and the clock and theme probes run while the window is created. Each launch adds a line to `startup.jsonl` in the config folder with the time each stage was reached (newest 20 kept).
 
 ## 2.13.1 — 2026-10-10
