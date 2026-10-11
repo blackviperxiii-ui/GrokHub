@@ -59,6 +59,10 @@ pub struct ChatThread {
     /// Adopted from the CLI and not yet given a recap of its earlier turns.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub native_carry: bool,
+    /// This chat's own personality id, picked in the chat header. Empty follows the
+    /// default in Settings.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub personality: String,
 }
 
 impl ChatThread {
@@ -84,6 +88,7 @@ impl ChatThread {
             retired_sessions: Vec::new(),
             native: false,
             native_carry: false,
+            personality: String::new(),
         }
     }
 
