@@ -19,3 +19,14 @@ serde = { version = "1", features = ["derive", "rc"] }
 serde_json = "1"
 getrandom = "0.2"
 hex = "0.4"
+
+# Smaller, faster release binaries. Thin LTO + one codegen unit; strip symbols
+# (keep the binary runnable; crash UI cards do not need DWARF). Panic stays unwind.
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
+
+# Quicker local/CI debug links. Matches CI's CARGO_PROFILE_DEV_DEBUG.
+[profile.dev]
+debug = "line-tables-only"
