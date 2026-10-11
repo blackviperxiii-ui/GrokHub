@@ -2,6 +2,7 @@
 
 mod auto_review;
 pub mod brain;
+mod checkpoint;
 mod client;
 mod compact;
 mod drive;

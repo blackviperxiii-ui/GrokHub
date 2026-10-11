@@ -6,6 +6,7 @@
 //! items named as blocked. A checklist left open by an earlier run drives
 //! nothing until this run changes it, so it can't take over an unrelated ask.
 
+use crate::checkpoint::Gaps;
 use crate::session_tools::TodoItem;
 
 /// Stops in a row with no new tool result and the same open items before the
@@ -53,22 +54,32 @@ impl Drive {
 
     /// `now` is the checklist as the model left it; `evidence` counts tool
     /// calls (not [`is_session_tool`]) that ran without failing this run.
+    #[cfg(test)]
     pub fn check(&mut self, now: &[TodoItem], evidence: usize) -> Verdict {
-        if now == self.start.as_slice() {
-            return Verdict::End;
-        }
-        let open: Vec<&TodoItem> = now.iter().filter(|t| matches!(t.status.as_str(), "pending" | "in_progress")).collect();
-        let unproven: Vec<&TodoItem> = if evidence == 0 {
+        self.check_with(now, evidence, &Gaps::default())
+    }
+
+    /// [`Drive::check`] plus what the run still owes beyond its checklist
+    /// ([`crate::checkpoint`]): an unchecked change, the Brief's done items, a backup.
+    pub fn check_with(&mut self, now: &[TodoItem], evidence: usize, gaps: &Gaps) -> Verdict {
+        let untouched = now == self.start.as_slice();
+        let open: Vec<&TodoItem> = if untouched {
+            Vec::new()
+        } else {
+            now.iter().filter(|t| matches!(t.status.as_str(), "pending" | "in_progress")).collect()
+        };
+        let unproven: Vec<&TodoItem> = if evidence == 0 && !untouched {
             now.iter()
                 .filter(|t| t.status == "completed" && !self.done_at_start.iter().any(|(id, content)| *id == t.id && *content == t.content))
                 .collect()
         } else {
             Vec::new()
         };
-        if open.is_empty() && unproven.is_empty() {
+        if open.is_empty() && unproven.is_empty() && gaps.is_empty() {
             return Verdict::End;
         }
-        let left: Vec<String> = open.iter().chain(unproven.iter()).map(|t| t.id.clone()).collect();
+        let mut left: Vec<String> = open.iter().chain(unproven.iter()).map(|t| t.id.clone()).collect();
+        left.extend(gaps.keys());
         if left == self.last_left && evidence == self.evidence_at_push {
             self.stalls += 1;
         } else {
@@ -77,14 +88,17 @@ impl Drive {
         self.last_left = left;
         self.evidence_at_push = evidence;
         if self.stalls >= STALL_LIMIT {
-            let names = list(open.iter().chain(unproven.iter()).copied());
+            let mut names: Vec<String> = open.iter().chain(unproven.iter()).map(|t| format!("\"{}\"", t.content)).collect();
+            names.extend(gaps.names());
             return Verdict::Blocked(format!(
-                "Stopped with these still open: {names}. No approach worked after {STALL_LIMIT} re-plans."
+                "Stopped with these still open: {}. No approach worked after {STALL_LIMIT} re-plans.",
+                names.join(", ")
             ));
         }
         let mut note = String::new();
         if self.stalls > 0 {
-            let first = open.first().or(unproven.first()).map(|t| t.content.as_str()).unwrap_or("");
+            let first = open.first().or(unproven.first()).map(|t| t.content.clone()).or_else(|| gaps.names().into_iter().next()).unwrap_or_default();
+            let first = first.trim_matches('"');
             note.push_str(&format!(
                 "You stopped again without progress. Take a different approach for \"{first}\" (another tool, another route or a smaller sub-step), or mark it cancelled with the reason. "
             ));
@@ -103,6 +117,12 @@ impl Drive {
                 "Marked completed without any check this run: {}. Run a check that shows each one before you finish.",
                 list(unproven.iter().copied())
             ));
+        }
+        if !gaps.is_empty() {
+            if !open.is_empty() || !unproven.is_empty() {
+                note.push(' ');
+            }
+            note.push_str(&gaps.note());
         }
         Verdict::Push(note)
     }
