@@ -1,11 +1,10 @@
 //! Router R3a: plumbing for an on-device model (§13). It is **off** by
 //! default. `localModel` in `app.json` is `false` until you turn on Settings →
 //! Cabin defaults → "On-device model for background tasks". The route goes
-//! live only while that toggle is on **and** a runtime is [`installed`]; this
-//! build has no runtime (the download lands later), so the toggle alone routes
-//! nothing. While the route is off the registry has no `local:*` rows
-//! ([`LocalSource`] lists nothing) and [`super::Router::choose`] drops any
-//! `local:*` id, so no route can pick one.
+//! live only while that toggle is on **and** a runtime is [`installed`]
+//! (llama-server binary + GGUF, or a test fake). While the route is off the
+//! registry has no `local:*` rows ([`LocalSource`] lists nothing) and
+//! [`super::Router::choose`] drops any `local:*` id, so no route can pick one.
 //!
 //! When it is on (tests switch it on with a fake [`LocalRuntime`]):
 //! - a `local:<tier>` route has cost class `included`, no effort menu and a
@@ -20,7 +19,14 @@
 //!
 //! A local call never leaves the device: [`serve`] calls the runtime directly
 //! and writes no egress line.
+//!
+//! Production runtime (offline card PR A): a llama.cpp `llama-server` sidecar
+//! on 127.0.0.1 ([`super::local_sidecar`]) behind [`super::local_http::HttpLocalRuntime`].
+//! Assets come from `GROKHUB_LLAMA_SERVER` / `GROKHUB_LOCAL_MODEL`, or
+//! `{GROKHUB_CONFIG}/bin` plus a GGUF from `~/GrokHub/models` (`installed.json`)
+//! or `{GROKHUB_CONFIG}/models`.
 
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 
@@ -58,10 +64,20 @@ pub fn enabled() -> bool {
     (ENABLED.load(Ordering::SeqCst) && installed()) || test_on()
 }
 
-/// An on-device runtime and model are present. None in this build, so the
-/// toggle on its own never sends background work to a model that isn't there.
+/// An on-device runtime and model are present: a test fake, or a binary + GGUF
+/// under the config dir / env overrides.
 pub fn installed() -> bool {
-    test_runtime().is_some()
+    test_runtime().is_some() || production_assets_present()
+}
+
+fn production_assets_present() -> bool {
+    config_dir()
+        .map(|d| super::local_sidecar::assets_present(&d))
+        .unwrap_or(false)
+}
+
+fn config_dir() -> Option<PathBuf> {
+    std::env::var_os("GROKHUB_CONFIG").map(PathBuf::from).filter(|p| !p.as_os_str().is_empty())
 }
 
 pub fn is_local(id: &str) -> bool {
@@ -156,8 +172,14 @@ impl CatalogSource for LocalSource {
     }
 }
 
-/// An on-device model. Every answer is JSON-shaped. There is no real
-/// runtime in this build; tests install a fake.
+/// One chat message for [`LocalRuntime::chat_stream`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChatMessage {
+    pub role: String,
+    pub content: String,
+}
+
+/// An on-device model. Background helpers return JSON; chat may stream text.
 pub trait LocalRuntime: Send + Sync {
     /// `{"label": "<one of labels>", "score": 0.0..1.0}`.
     fn classify(&self, text: &str, labels: &[&str]) -> Result<Value, String>;
@@ -165,14 +187,30 @@ pub trait LocalRuntime: Send + Sync {
     fn summarize(&self, text: &str, max_words: u32) -> Result<Value, String>;
     /// `{"d": 0.0..1.0}`.
     fn difficulty(&self, text: &str) -> Result<Value, String>;
+    /// OpenAI-style chat with optional streaming deltas. Default: unsupported.
+    fn chat_stream(&self, messages: &[ChatMessage], on_delta: &mut dyn FnMut(&str)) -> Result<String, String> {
+        let _ = (messages, on_delta);
+        Err("local chat is not available on this runtime".into())
+    }
 }
 
-/// The installed runtime. This build has none: only a test's fake answers.
+/// The installed runtime: test fake, else HTTP client to a loopback sidecar.
 pub fn runtime() -> Option<Arc<dyn LocalRuntime>> {
     if !enabled() {
         return None;
     }
-    test_runtime()
+    if let Some(rt) = test_runtime() {
+        return Some(rt);
+    }
+    ensure_production_runtime();
+    super::local_http::from_global_sidecar()
+}
+
+fn ensure_production_runtime() {
+    let Some(dir) = config_dir() else {
+        return;
+    };
+    let _ = super::local_sidecar::ensure_global(&dir);
 }
 
 #[cfg(not(test))]
