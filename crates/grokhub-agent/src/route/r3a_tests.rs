@@ -271,7 +271,14 @@ fn the_local_flag_is_off_by_default_and_no_route_picks_local_in_1000_random_inpu
     for _ in 0..1000 {
         x = x.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1_442_695_040_888_963_407);
         let class = classes[(x >> 33) as usize % classes.len()];
-        let gate = LocalGate { enabled: local::enabled(), tier: local::live_tier().into(), sensitive: x & 1 == 1, cloud_grant: x & 2 == 2, hard_tool: x & 4 == 4 };
+        let gate = LocalGate {
+            enabled: local::enabled(),
+            tier: local::live_tier().into(),
+            sensitive: x & 1 == 1,
+            cloud_grant: x & 2 == 2,
+            hard_tool: x & 4 == 4,
+            offline: false,
+        };
         let mut input = ask(class, gate);
         input.ctx_tokens = (x >> 40) % 8_000;
         let r = Router::choose(&input, &reg, &BTreeMap::new(), &RoutingTable::default(), 10);
