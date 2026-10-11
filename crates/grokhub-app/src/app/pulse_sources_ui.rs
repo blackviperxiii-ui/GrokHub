@@ -1,11 +1,13 @@
 //! Free Pulse sources: the background fetch, the Feed posts it makes, and
-//! Settings → Pulse → Sources. Every post names its item and source and links to it;
-//! no model writes any of it. The cache, last run and already-posted links live in
+//! Settings → Pulse → Sources. Every post names its item and source and links to it.
+//! Everything is fetched and ranked locally; only a run's top picks go to the fast
+//! model, in one call, for short summaries, and a run with nothing new calls no model.
+//! The cache, last run, already-posted links and today's model calls live in
 //! `{config}/pulse-sources.json`.
 
 use super::*;
 use grokhub_agent::harness::DataClass;
-use grokhub_core::pulse_sources::{self as ps, Fetched, SourceItem, SourceKind, SourceReq};
+use grokhub_core::pulse_sources::{self as ps, Fetched, Ranked, SourceItem, SourceKind, SourceReq};
 use std::io::Read as _;
 
 /// Largest reply read from one source.
@@ -16,6 +18,12 @@ const REDIRECTS_MAX: usize = 3;
 #[derive(Default)]
 pub(super) struct SourcesState {
     pub rx: Option<mpsc::Receiver<SourceRun>>,
+    /// A run's picks waiting on the fast model's summaries.
+    pub summary_rx: Option<mpsc::Receiver<Summarized>>,
+    /// The check after launch has been considered.
+    pub opened: bool,
+    /// Today's summary calls as (UTC day, count), read from the cache file once.
+    pub budget: Option<(u64, u32)>,
     /// The Add box for each list, by `SourceKind::key`.
     pub drafts: std::collections::BTreeMap<&'static str, String>,
     /// What the last run did, for Settings.
@@ -23,6 +31,9 @@ pub(super) struct SourcesState {
     /// From the cache file the first time it is needed.
     pub last_run_ms: Option<u64>,
 }
+
+/// A run, its picks, and the fast model's reply.
+pub(super) type Summarized = (SourceRun, Vec<Ranked>, Result<String, String>);
 
 pub(super) struct SourceRun {
     pub items: Vec<SourceItem>,
@@ -139,6 +150,25 @@ fn fetch_source(req: &SourceReq, have: Option<&ps::CacheEntry>) -> Fetched {
     Fetched::Failed("too many redirects".into())
 }
 
+const BUDGET_USED: &str = "Today's summary budget is used, so they show the sources' own text.";
+
+fn plural(n: usize) -> &'static str {
+    if n == 1 {
+        "post"
+    } else {
+        "posts"
+    }
+}
+
+/// "1 h", "90 min", for the Check every buttons.
+fn every_label(mins: u32) -> String {
+    if mins.is_multiple_of(60) {
+        format!("{} h", mins / 60)
+    } else {
+        format!("{mins} min")
+    }
+}
+
 /// "just now", "12 min ago", "3 h ago", for the Settings note.
 fn ago_label(ms: u64, now: u64) -> String {
     let mins = now.saturating_sub(ms) / 60_000;
@@ -168,23 +198,40 @@ impl Cabin {
         at
     }
 
-    /// Housekeeping: run the sources on the feed clock, never in quiet hours.
+    /// Housekeeping: run the sources every 90 minutes (Settings: 1–4 hours) and once
+    /// when the app opens, never in quiet hours.
     pub(super) fn follow_source_fetch(&mut self) {
-        let pulse = &self.cfg.feed_pulse;
-        if self.sources.rx.is_some() || !pulse.digest_on || self.quiet_now() {
+        let just_opened = !std::mem::replace(&mut self.sources.opened, true);
+        if self.sources_busy() || !self.cfg.feed_pulse.digest_on || self.quiet_now() {
             return;
         }
-        let every = pulse.digest_ms;
-        let now = now_ms();
-        if now.saturating_sub(self.sources_last_run()) < every {
+        let every = self.cfg.pulse_sources.every_ms();
+        if !ps::check_due(self.sources_last_run(), now_ms(), every, just_opened) {
             return;
         }
         self.kick_source_fetch();
     }
 
+    fn summary_calls_today(&mut self, now: u64) -> u32 {
+        let (summary_day, summary_calls) = *self.sources.budget.get_or_insert_with(|| {
+            let cache = ps::load_cache(&sources_cache_path());
+            (cache.summary_day, cache.summary_calls)
+        });
+        ps::SourceCache {
+            summary_day,
+            summary_calls,
+            ..Default::default()
+        }
+        .calls_today(now)
+    }
+
+    fn sources_busy(&self) -> bool {
+        self.sources.rx.is_some() || self.sources.summary_rx.is_some()
+    }
+
     /// Fetch every enabled source now, in the background.
     pub(super) fn kick_source_fetch(&mut self) {
-        if self.sources.rx.is_some() {
+        if self.sources_busy() {
             return;
         }
         let now = now_ms();
@@ -221,6 +268,7 @@ impl Cabin {
     }
 
     pub(super) fn poll_source_fetch(&mut self) {
+        self.poll_source_summaries();
         let Some(rx) = self.sources.rx.take() else {
             return;
         };
@@ -235,12 +283,28 @@ impl Cabin {
         }
     }
 
-    /// New items become Feed posts; everything posted is remembered so a dismissed
-    /// post never comes back. Returns how many posted.
+    fn poll_source_summaries(&mut self) {
+        let Some(rx) = self.sources.summary_rx.take() else {
+            return;
+        };
+        match rx.try_recv() {
+            Ok((run, picks, reply)) => {
+                self.finish_source_run(run, picks, Some(reply));
+            }
+            Err(mpsc::TryRecvError::Empty) => self.sources.summary_rx = Some(rx),
+            Err(mpsc::TryRecvError::Disconnected) => {
+                self.sources.note = "The summary step stopped before it finished.".into();
+            }
+        }
+    }
+
+    /// Rank a run locally and pick at most five new items. Nothing new: no model call.
+    /// Otherwise the picks go to the fast model in one call when Grok is connected and
+    /// today's budget has room, else they post with the sources' own text. Returns how
+    /// many posted now.
     pub(super) fn post_source_run(&mut self, run: SourceRun) -> usize {
         let ranked = ps::rank(&run.items, self.interests_now(), run.at_ms);
-        let path = sources_cache_path();
-        let mut cache = ps::load_cache(&path);
+        let cache = ps::load_cache(&sources_cache_path());
         let posted_urls: Vec<String> = self
             .updates
             .iter()
@@ -253,14 +317,67 @@ impl Cabin {
             .filter(|c| c.status != grokhub_core::UpdateStatus::Dismissed)
             .map(|c| c.title.clone())
             .collect();
-        let fresh = ps::pick_new(&ranked, &cache, &posted_urls, &posted_titles);
+        let picks = ps::pick_new(&ranked, &cache, &posted_urls, &posted_titles);
+        let Some(messages) = ps::summary_messages(&picks) else {
+            return self.finish_source_run(run, picks, None);
+        };
+        if !self.llm_ready() {
+            return self.finish_source_run(run, picks, None);
+        }
+        let path = sources_cache_path();
+        let mut cache = cache;
+        let spent = cache.take_summary_call(run.at_ms);
+        self.sources.budget = Some((cache.summary_day, cache.summary_calls));
+        if !spent {
+            return self.finish_source_run(run, picks, Some(Err(BUDGET_USED.into())));
+        }
+        if let Err(err) = ps::save_cache(&path, &cache) {
+            self.status = err;
+        }
+        let key = self.bearer();
+        let model = model_for_mode("fast").to_string();
+        let (tx, rx) = mpsc::channel();
+        self.sources.summary_rx = Some(rx);
+        self.sources.note = format!("Summarizing {} new {}…", picks.len(), plural(picks.len()));
+        std::thread::spawn(move || {
+            let reply = grok_chat(&key, &model, &messages, None, Some(grokhub_core::BACKGROUND_EFFORT));
+            let _ = tx.send((run, picks, reply));
+        });
+        0
+    }
+
+    /// Post the picks, with the model's summaries where it gave them, and remember
+    /// them so a dismissed post never comes back. Returns how many posted.
+    pub(super) fn finish_source_run(
+        &mut self,
+        run: SourceRun,
+        mut picks: Vec<Ranked>,
+        reply: Option<Result<String, String>>,
+    ) -> usize {
+        let mut summary_note = String::new();
+        match reply {
+            Some(Ok(text)) => {
+                if ps::apply_summaries(&mut picks, &text) == 0 {
+                    summary_note = " Grok's summaries didn't come back usable, so they show the sources' own text.".into();
+                }
+            }
+            Some(Err(err)) if err == BUDGET_USED => {
+                summary_note = format!(" {BUDGET_USED}");
+            }
+            Some(Err(err)) => {
+                summary_note = format!(" Summaries failed ({err}), so they show the sources' own text.");
+            }
+            None => {}
+        }
+        let path = sources_cache_path();
+        let mut cache = ps::load_cache(&path);
         let mut added = 0;
-        for item in &fresh {
+        for item in &picks {
             if grokhub_core::post_update(&mut self.updates, ps::item_card(item, run.at_ms)) {
                 added += 1;
             }
         }
-        ps::mark_seen(&mut cache, &fresh);
+        ps::mark_seen(&mut cache, &picks);
         cache.last_run_ms = run.at_ms;
         if let Err(err) = ps::save_cache(&path, &cache) {
             self.status = err;
@@ -268,13 +385,14 @@ impl Cabin {
         if added > 0 {
             self.persist_updates();
         }
-        let mut note = format!(
-            "Checked {} sources ({} from the network), {} new {}.",
-            run.asked,
-            run.fetched,
-            added,
-            if added == 1 { "post" } else { "posts" }
-        );
+        let mut note = format!("Checked {} sources ({} from the network).", run.asked, run.fetched);
+        if added == 0 {
+            note.push(' ');
+            note.push_str(grokhub_core::update_feed::HONEST_EMPTY);
+        } else {
+            note.push_str(&format!(" {added} new {}.", plural(added)));
+            note.push_str(&summary_note);
+        }
         if let Some(first) = run.errors.first() {
             let more = run.errors.len() - 1;
             note.push_str(&format!(" Failed: {first}"));
@@ -290,7 +408,7 @@ impl Cabin {
 
     pub(super) fn ui_pulse_sources(&mut self, ui: &mut egui::Ui) {
         self.poll_source_fetch();
-        if self.sources.rx.is_some() {
+        if self.sources_busy() {
             ui.ctx().request_repaint_after(std::time::Duration::from_millis(300));
         }
         ui.label(
@@ -320,11 +438,40 @@ impl Cabin {
             }
             ui.add_space(6.0);
         }
+        ui.add_space(4.0);
+        ui.horizontal(|ui| {
+            ui.label(RichText::new("Check every").size(crate::theme::FONT_BODY).color(crate::theme::fg()));
+            for mins in ps::EVERY_CHOICES {
+                let label = every_label(mins);
+                let picked = if self.cfg.pulse_sources.every_mins == mins {
+                    crate::cards::white_pill(ui, &label)
+                } else {
+                    crate::cards::ghost_pill(ui, &label)
+                };
+                if picked && self.cfg.pulse_sources.every_mins != mins {
+                    self.cfg.pulse_sources.every_mins = mins;
+                    changed = true;
+                }
+            }
+        });
+        crate::cards::help_text(
+            ui,
+            "Also once when GrokHub opens, and never in quiet hours. Sources are fetched and ranked on this computer; only each check's top five new posts go to Grok's fast model, in one call, for short summaries.",
+        );
+        let today = self.summary_calls_today(now_ms());
+        ui.label(
+            RichText::new(format!(
+                "Model calls today: {today} of {}",
+                ps::SUMMARY_CALLS_PER_DAY
+            ))
+            .size(crate::theme::FONT_TIP)
+            .color(crate::theme::muted()),
+        );
         if changed {
             self.persist_cfg();
         }
         ui.add_space(4.0);
-        if self.sources.rx.is_none() && crate::cards::white_pill(ui, "Check now") {
+        if !self.sources_busy() && crate::cards::white_pill(ui, "Check now") {
             self.kick_source_fetch();
         }
         ui.add_space(4.0);
@@ -460,7 +607,7 @@ mod tests {
         assert_eq!(added, 1);
         assert_eq!(
             cabin.sources.note,
-            "Checked 4 sources (3 from the network), 1 new post. Failed: r/rust: HTTP 429."
+            "Checked 4 sources (3 from the network). 1 new post. Failed: r/rust: HTTP 429."
         );
         let card = cabin
             .updates
@@ -507,6 +654,117 @@ mod tests {
         cabin.kick_source_fetch();
         assert!(cabin.sources.rx.is_none());
         assert_eq!(cabin.sources.note, "Nothing to check yet. Add an interest or a source.");
+    }
+
+    fn one_item_run(items: Vec<SourceItem>, now: u64) -> SourceRun {
+        SourceRun {
+            items,
+            errors: Vec::new(),
+            fetched: 1,
+            asked: 1,
+            at_ms: now,
+        }
+    }
+
+    #[test]
+    fn nothing_new_calls_no_model_and_says_so() {
+        let (_lock, _root, mut cabin) = cabin();
+        cabin.updates.clear();
+        cabin.secrets.api_key = "sk-abcdefghijklmnopqrstuv".into();
+        assert!(cabin.llm_ready());
+        cabin.add_interest("crypto");
+        cabin.interests_now().set_muted("crypto", true);
+        let now = now_ms();
+        let added = cabin.post_source_run(one_item_run(vec![item("Crypto exchange collapses", "https://news.test/c", now)], now));
+        assert_eq!(added, 0);
+        assert!(cabin.sources.summary_rx.is_none());
+        assert_eq!(cabin.summary_calls_today(now), 0);
+        assert_eq!(
+            cabin.sources.note,
+            "Checked 1 sources (1 from the network). I looked and did not find a source worth your time."
+        );
+    }
+
+    #[test]
+    fn a_spent_budget_posts_the_sources_own_text_without_a_model_call() {
+        let (_lock, _root, mut cabin) = cabin();
+        cabin.updates.clear();
+        cabin.secrets.api_key = "sk-abcdefghijklmnopqrstuv".into();
+        cabin.add_interest("Rust");
+        let now = now_ms();
+        let mut cache = ps::SourceCache::default();
+        for _ in 0..ps::SUMMARY_CALLS_PER_DAY {
+            assert!(cache.take_summary_call(now));
+        }
+        ps::save_cache(&sources_cache_path(), &cache).unwrap();
+        let added = cabin.post_source_run(one_item_run(vec![item("Rust 1.99 released", "https://blog.rust-lang.org/1.99", now)], now));
+        assert_eq!(added, 1);
+        assert!(cabin.sources.summary_rx.is_none());
+        assert_eq!(cabin.summary_calls_today(now), 16);
+        assert_eq!(
+            cabin.sources.note,
+            "Checked 1 sources (1 from the network). 1 new post. Today's summary budget is used, so they show the sources' own text."
+        );
+        let card = cabin.updates.iter().find(|c| c.title == "Rust 1.99 released").expect("posted");
+        assert_eq!(card.body.as_deref(), Some("812 points, 301 comments on Hacker News."));
+    }
+
+    #[test]
+    fn model_summaries_replace_the_source_text_on_the_picks_they_name() {
+        let (_lock, _root, mut cabin) = cabin();
+        cabin.updates.clear();
+        cabin.add_interest("Rust");
+        let now = now_ms();
+        let run = one_item_run(Vec::new(), now);
+        let picks = ps::rank(
+            &[
+                item("Rust 1.99 released", "https://blog.rust-lang.org/1.99", now),
+                item("Rust in the kernel", "https://lwn.test/rust", now),
+            ],
+            cabin.interests_now(),
+            now,
+        );
+        let reply = r#"Here you go: [{"n":1,"summary":"Rust 1.99 is out. It adds async closures."}]"#;
+        assert_eq!(cabin.finish_source_run(run, picks, Some(Ok(reply.into()))), 2);
+        let body = |title: &str| {
+            cabin.updates.iter().find(|c| c.title == title).and_then(|c| c.body.clone()).expect("posted")
+        };
+        assert_eq!(body("Rust 1.99 released"), "Rust 1.99 is out. It adds async closures.");
+        assert_eq!(body("Rust in the kernel"), "812 points, 301 comments on Hacker News.");
+        assert_eq!(cabin.sources.note, "Checked 1 sources (1 from the network). 2 new posts.");
+    }
+
+    #[test]
+    fn the_background_check_runs_on_open_then_on_its_clock() {
+        let (_lock, _root, mut cabin) = cabin();
+        cabin.cfg.feed_pulse.digest_on = true;
+        cabin.cfg.quiet_start.clear();
+        cabin.cfg.quiet_end.clear();
+        cabin.interests.profile = Some(Default::default());
+        cabin.cfg.pulse_sources = ps::SourceSettings::default();
+        // Last check 20 minutes ago: the first tick after launch runs it anyway.
+        let now = now_ms();
+        cabin.sources.last_run_ms = Some(now - 20 * 60_000);
+        cabin.follow_source_fetch();
+        assert!(cabin.sources.last_run_ms.unwrap() >= now, "ran on open");
+        assert_eq!(cabin.sources.note, "Nothing to check yet. Add an interest or a source.");
+        // Not again until 90 minutes pass.
+        cabin.sources.note.clear();
+        cabin.sources.last_run_ms = Some(now - 20 * 60_000);
+        cabin.follow_source_fetch();
+        assert_eq!(cabin.sources.note, "");
+        cabin.sources.last_run_ms = Some(now - 91 * 60_000);
+        cabin.follow_source_fetch();
+        assert_eq!(cabin.sources.note, "Nothing to check yet. Add an interest or a source.");
+        // Never in quiet hours, however overdue.
+        cabin.sources.note.clear();
+        cabin.sources.last_run_ms = Some(now - 5 * 60 * 60_000);
+        cabin.cfg.quiet_start = "00:00".into();
+        cabin.cfg.quiet_end = "23:59".into();
+        if cabin.quiet_now() {
+            cabin.follow_source_fetch();
+            assert_eq!(cabin.sources.note, "");
+        }
     }
 
     #[test]

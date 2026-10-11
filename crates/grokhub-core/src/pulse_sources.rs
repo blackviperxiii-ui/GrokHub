@@ -52,6 +52,10 @@ fn yes() -> bool {
     true
 }
 
+fn every_default() -> u32 {
+    EVERY_DEFAULT_MINS
+}
+
 /// Settings → Pulse → Sources. Each source can be off; the lists are what to follow.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -78,6 +82,9 @@ pub struct SourceSettings {
     /// YouTube channel ids (`UC…`).
     #[serde(default)]
     pub channels: Vec<String>,
+    /// Minutes between background checks, one of `EVERY_CHOICES`.
+    #[serde(default = "every_default")]
+    pub every_mins: u32,
 }
 
 impl Default for SourceSettings {
@@ -92,11 +99,19 @@ impl Default for SourceSettings {
             repos: Vec::new(),
             subreddits: Vec::new(),
             channels: Vec::new(),
+            every_mins: EVERY_DEFAULT_MINS,
         }
     }
 }
 
 impl SourceSettings {
+    /// How often the background check runs, held to 1–4 hours.
+    pub fn every_ms(&self) -> u64 {
+        let lo = EVERY_CHOICES[0];
+        let hi = EVERY_CHOICES[EVERY_CHOICES.len() - 1];
+        u64::from(self.every_mins.clamp(lo, hi)) * 60 * 1000
+    }
+
     pub fn on(&self, kind: SourceKind) -> bool {
         match kind {
             SourceKind::HackerNews => self.hacker_news,
@@ -143,6 +158,28 @@ impl SourceSettings {
         list.push(entry.clone());
         Ok(entry)
     }
+}
+
+/// Settings → Pulse → Check every, in minutes.
+pub const EVERY_CHOICES: [u32; 5] = [60, 90, 120, 180, 240];
+pub const EVERY_DEFAULT_MINS: u32 = 90;
+/// When the app opens, a check runs if the last one is at least this old.
+pub const OPEN_DEBOUNCE_MS: u64 = 10 * 60 * 1000;
+/// Fast-model calls a day for post summaries. One call covers a whole run, so the
+/// default 90-minute clock (16 runs a day) never runs out.
+pub const SUMMARY_CALLS_PER_DAY: u32 = 16;
+/// What a model summary may hold: two or three short sentences.
+pub const MODEL_SUMMARY_CHARS: usize = 300;
+const DAY_MS: u64 = 24 * 60 * 60 * 1000;
+
+/// Is a background check due? Never run: yes. Otherwise once the interval passed,
+/// or right after the app opened when the last check is more than a few minutes old.
+pub fn check_due(last_run_ms: u64, now_ms: u64, every_ms: u64, just_opened: bool) -> bool {
+    if last_run_ms == 0 {
+        return true;
+    }
+    let since = now_ms.saturating_sub(last_run_ms);
+    since >= every_ms || (just_opened && since >= OPEN_DEBOUNCE_MS)
 }
 
 /// Most entries one source list holds.
@@ -806,6 +843,33 @@ pub struct SourceCache {
     pub seen: Vec<String>,
     #[serde(default)]
     pub last_run_ms: u64,
+    /// The UTC day (`ms / DAY_MS`) `summary_calls` counts.
+    #[serde(default)]
+    pub summary_day: u64,
+    #[serde(default)]
+    pub summary_calls: u32,
+}
+
+impl SourceCache {
+    /// Summary calls made today.
+    pub fn calls_today(&self, now_ms: u64) -> u32 {
+        if self.summary_day == now_ms / DAY_MS {
+            self.summary_calls
+        } else {
+            0
+        }
+    }
+
+    /// Spend one summary call. False when today's budget is used up.
+    pub fn take_summary_call(&mut self, now_ms: u64) -> bool {
+        let used = self.calls_today(now_ms);
+        if used >= SUMMARY_CALLS_PER_DAY {
+            return false;
+        }
+        self.summary_day = now_ms / DAY_MS;
+        self.summary_calls = used + 1;
+        true
+    }
 }
 
 pub fn load_cache(path: &std::path::Path) -> SourceCache {
@@ -1035,8 +1099,60 @@ pub fn mark_seen(cache: &mut SourceCache, posted: &[Ranked]) {
     }
 }
 
+const SUMMARY_RULES: &str = "You write the summaries on a news feed. For each numbered item, write two or three short sentences, under 220 characters in all, saying what it is and why it matters. Use only the text given: never add facts, names, numbers or links that are not there. If an item says too little, say what it is in one sentence. Reply with JSON only, like [{\"n\":1,\"summary\":\"...\"}].";
+
+/// One fast-model ask that summarizes a run's picks. None when nothing cleared the
+/// threshold: then no model is called.
+pub fn summary_messages(picks: &[Ranked]) -> Option<Vec<(String, String)>> {
+    if picks.is_empty() {
+        return None;
+    }
+    let mut ask = String::new();
+    for (i, r) in picks.iter().enumerate() {
+        let text = one_line(&r.item.summary, SUMMARY_CHARS);
+        ask.push_str(&format!("{}. {} ({})\n{}\n\n", i + 1, r.item.title, r.item.source_name, text));
+    }
+    Some(vec![
+        ("system".into(), SUMMARY_RULES.into()),
+        ("user".into(), ask.trim_end().to_string()),
+    ])
+}
+
+#[derive(Deserialize)]
+struct SummaryRow {
+    n: usize,
+    summary: String,
+}
+
+/// Put the model's summaries on the picks they name. Returns how many changed.
+/// A reply that is not the JSON asked for changes nothing.
+pub fn apply_summaries(picks: &mut [Ranked], reply: &str) -> usize {
+    let (Some(start), Some(end)) = (reply.find('['), reply.rfind(']')) else {
+        return 0;
+    };
+    if end <= start {
+        return 0;
+    }
+    let Ok(rows) = serde_json::from_str::<Vec<SummaryRow>>(&reply[start..=end]) else {
+        return 0;
+    };
+    let mut changed = 0;
+    for row in rows {
+        let text = one_line(&row.summary, MODEL_SUMMARY_CHARS);
+        if text.is_empty() || row.n == 0 {
+            continue;
+        }
+        if let Some(r) = picks.get_mut(row.n - 1) {
+            r.item.summary = text;
+            changed += 1;
+        }
+    }
+    changed
+}
+
 /// A Feed post for one item: its own title, the source's name, a working link,
-/// the source's image when it has one, and the interest it matched. No model wrote any of it.
+/// the source's image when it has one, and the interest it matched. The summary is the
+/// source's own text, or the fast model's when the run was summarized.
 pub fn item_card(ranked: &Ranked, now_ms: u64) -> UpdateCard {
     let item = &ranked.item;
     let created = if item.published_ms > 0 && item.published_ms <= now_ms {
@@ -1374,5 +1490,64 @@ mod tests {
         assert!(crate::update_feed::names_its_item(&card));
         // A future date from a bad feed clock posts as now.
         assert_eq!(item_card(&ranked(item("Later", "https://a.test/l", NOW + 5)), NOW).created_at, NOW);
+    }
+
+    #[test]
+    fn the_clock_runs_every_interval_and_once_on_open() {
+        let s = SourceSettings::default();
+        assert_eq!(s.every_ms(), 90 * 60_000);
+        let mut far = s.clone();
+        far.every_mins = 999;
+        assert_eq!(far.every_ms(), 240 * 60_000);
+        far.every_mins = 5;
+        assert_eq!(far.every_ms(), 60 * 60_000);
+        let every = s.every_ms();
+        assert!(check_due(0, NOW, every, false));
+        assert!(!check_due(NOW - 89 * 60_000, NOW, every, false));
+        assert!(check_due(NOW - 90 * 60_000, NOW, every, false));
+        // Opening the app runs a check unless one ran in the last ten minutes.
+        assert!(check_due(NOW - 11 * 60_000, NOW, every, true));
+        assert!(!check_due(NOW - 9 * 60_000, NOW, every, true));
+        let old: SourceSettings = serde_json::from_str("{}").unwrap();
+        assert_eq!(old.every_mins, 90);
+    }
+
+    #[test]
+    fn the_daily_summary_budget_resets_each_day() {
+        let mut cache = SourceCache::default();
+        for _ in 0..SUMMARY_CALLS_PER_DAY {
+            assert!(cache.take_summary_call(NOW));
+        }
+        assert_eq!(cache.calls_today(NOW), 16);
+        assert!(!cache.take_summary_call(NOW));
+        assert_eq!(cache.calls_today(NOW), 16);
+        let tomorrow = NOW + DAY_MS;
+        assert_eq!(cache.calls_today(tomorrow), 0);
+        assert!(cache.take_summary_call(tomorrow));
+        assert_eq!(cache.calls_today(tomorrow), 1);
+    }
+
+    #[test]
+    fn only_the_picks_go_to_the_model_and_nothing_new_asks_nothing() {
+        assert_eq!(summary_messages(&[]), None);
+        let mut a = ranked(item("Rust 1.99 released", "https://a.test/1", NOW));
+        a.item.summary = "812 points on Hacker News.".into();
+        let mut b = ranked(item("Quiet compressors", "https://b.test/2", NOW));
+        b.item.source_name = "Shop Notes".into();
+        b.item.summary = "Six   new units\nunder 60 dB.".into();
+        let msgs = summary_messages(&[a.clone(), b.clone()]).expect("asks");
+        assert_eq!(msgs.len(), 2);
+        assert_eq!(msgs[0].0, "system");
+        assert!(msgs[0].1.contains("Use only the text given"), "{}", msgs[0].1);
+        assert_eq!(
+            msgs[1].1,
+            "1. Rust 1.99 released (feed.test)\n812 points on Hacker News.\n\n2. Quiet compressors (Shop Notes)\nSix new units under 60 dB."
+        );
+        let mut picks = vec![a, b];
+        let reply = "```json\n[{\"n\":2,\"summary\":\"  Six quiet units.  Tested at home. \"},{\"n\":7,\"summary\":\"no such item\"},{\"n\":1,\"summary\":\"\"}]\n```";
+        assert_eq!(apply_summaries(&mut picks, reply), 1);
+        assert_eq!(picks[1].item.summary, "Six quiet units. Tested at home.");
+        assert_eq!(picks[0].item.summary, "812 points on Hacker News.");
+        assert_eq!(apply_summaries(&mut picks, "Sorry, I can't."), 0);
     }
 }
