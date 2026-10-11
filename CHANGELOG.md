@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Fixed: a damaged settings, keys, Home feed, hub or other GrokHub file no longer resets without a word. GrokHub still keeps a copy beside it (`app.json.corrupt-<time>`) and loads defaults, and now also posts one Home card naming the file and the copy, for example "Settings file was unreadable" with "Restored defaults, kept a copy at ~/.config/GrokHub/app.json.corrupt-1760160000000." A memory note that has stopped parsing is moved aside the same way instead of being skipped on every recall.
+- Fixed: the LAN hub answers a request body that isn't JSON with a 400 and "Request body isn't valid JSON." Before, it read it as an empty body and answered with the wrong error, such as "Pairing code does not match." A request that crashed while holding the hub's state no longer makes every later request drop its connection.
 - Fixed: on KDE Plasma, the System appearance follows the Plasma color scheme. It reads `kdeglobals` (window color first, then the scheme name), so Breeze Light no longer shows the cabin dark.
 - Fixed: on KDE Wayland, `focus_window` and `set_window_geometry` say "No window title has … in it." when no window matched. Before, they reported success. The KWin script now calls back over D-Bus with what it found.
 - Fixed: on KDE Wayland, the desktop tools can list windows through KWin. The safety gate now knows the focused window, so Enter in a chat app or Delete in Dolphin is treated as a hard action there too.

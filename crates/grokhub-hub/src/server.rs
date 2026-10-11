@@ -87,12 +87,15 @@ fn handle(state: &Arc<Mutex<HubState>>, mut req: Request) -> Result<(), ()> {
         return send(req, 204, "text/plain", b"");
     }
     if method == Method::Get && (path == "/v1/health" || path == "/health") {
-        let name = state.lock().ok().map(|s| s.device_name.clone()).unwrap_or_default();
+        let name = lock(state).device_name.clone();
         return send_json(req, 200, json!({ "ok": true, "kind": HUB_KIND, "name": name }));
     }
     if method == Method::Post && path == "/v1/pair" {
-        let body = read_json(&mut req);
-        let mut st = state.lock().map_err(|_| ())?;
+        let body = match read_json(&mut req) {
+            Ok(body) => body,
+            Err(e) => return reject_body(req, e),
+        };
+        let mut st = lock(state);
         let code = body.get("code").and_then(|v| v.as_str()).unwrap_or("");
         let device_id = body.get("deviceId").and_then(|v| v.as_str()).unwrap_or("");
         let device_name = body.get("deviceName").and_then(|v| v.as_str()).unwrap_or("Computer");
@@ -135,7 +138,7 @@ fn handle(state: &Arc<Mutex<HubState>>, mut req: Request) -> Result<(), ()> {
     }
 
     let token = bearer(&req);
-    let mut st = state.lock().map_err(|_| ())?;
+    let mut st = lock(state);
     if st.peer_for_token(&token).is_none() {
         drop(st);
         return send_json(
@@ -180,15 +183,18 @@ fn handle(state: &Arc<Mutex<HubState>>, mut req: Request) -> Result<(), ()> {
     }
     if method == Method::Put && path == "/v1/snapshot" {
         drop(st);
-        let body = read_json(&mut req);
+        let body = match read_json(&mut req) {
+            Ok(body) => body,
+            Err(e) => return reject_body(req, e),
+        };
         let snap = body.get("snapshot").cloned().unwrap_or(body);
         let local = {
-            let st = state.lock().map_err(|_| ())?;
+            let st = lock(state);
             st.snapshot.clone()
         };
         match grokhub_core::merge_put_snapshot(local.as_deref(), snap) {
             Ok(merged) => {
-                let mut st = state.lock().map_err(|_| ())?;
+                let mut st = lock(state);
                 st.snapshot = Some(std::sync::Arc::new(merged));
                 st.last_incoming_at = grokhub_core::now_ms();
                 drop(st);
@@ -200,7 +206,10 @@ fn handle(state: &Arc<Mutex<HubState>>, mut req: Request) -> Result<(), ()> {
 
     if method == Method::Post && path == "/v1/inhabit" {
         drop(st);
-        let body = read_json(&mut req);
+        let body = match read_json(&mut req) {
+            Ok(body) => body,
+            Err(e) => return reject_body(req, e),
+        };
         let raw = body.get("bundle").cloned().unwrap_or(body);
         let bundle: InhabitBundle = match serde_json::from_value(raw) {
             Ok(b) if grokhub_core::inhabit_bundle_usable(&b) => b,
@@ -212,7 +221,7 @@ fn handle(state: &Arc<Mutex<HubState>>, mut req: Request) -> Result<(), ()> {
                 );
             }
         };
-        let mut st = state.lock().map_err(|_| ())?;
+        let mut st = lock(state);
         st.store_inhabit(bundle, &peer);
         drop(st);
         return send_json(req, 200, json!({ "ok": true }));
@@ -229,7 +238,10 @@ fn handle(state: &Arc<Mutex<HubState>>, mut req: Request) -> Result<(), ()> {
 
     if method == Method::Post && path == "/v1/frame" {
         drop(st);
-        let body = read_json(&mut req);
+        let body = match read_json(&mut req) {
+            Ok(body) => body,
+            Err(e) => return reject_body(req, e),
+        };
         let url = body
             .get("dataUrl")
             .or_else(|| body.get("jpeg"))
@@ -237,7 +249,7 @@ fn handle(state: &Arc<Mutex<HubState>>, mut req: Request) -> Result<(), ()> {
             .unwrap_or("")
             .to_string();
         let frame = grokhub_core::store_frame(&url, grokhub_core::now_ms());
-        let mut st = state.lock().map_err(|_| ())?;
+        let mut st = lock(state);
         if let Some(f) = frame {
             st.install_frame(f);
         }
@@ -285,27 +297,42 @@ fn bearer(req: &Request) -> String {
         .unwrap_or_default()
 }
 
-fn read_json(req: &mut Request) -> Value {
+/// The hub state, even after a handler panicked holding it: one bad request must not
+/// turn every later one into a dropped connection.
+fn lock(state: &Mutex<HubState>) -> std::sync::MutexGuard<'_, HubState> {
+    state.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// The body as JSON. An empty body reads as `{}`; anything else that isn't JSON is a 400.
+fn read_json(req: &mut Request) -> Result<Value, &'static str> {
     let mut buf = Vec::new();
-    let _ = req.as_reader().take(MAX_BODY as u64).read_to_end(&mut buf);
-    serde_json::from_slice(&buf).unwrap_or(json!({}))
+    if req.as_reader().take(MAX_BODY as u64 + 1).read_to_end(&mut buf).is_err() {
+        return Err("Couldn't read the request body.");
+    }
+    if buf.len() > MAX_BODY {
+        return Err("Request body is too large.");
+    }
+    if buf.iter().all(u8::is_ascii_whitespace) {
+        return Ok(json!({}));
+    }
+    serde_json::from_slice(&buf).map_err(|_| "Request body isn't valid JSON.")
+}
+
+/// The 400 for a body `read_json` refused. Sent before the handler takes the hub lock.
+fn reject_body(req: Request, error: &str) -> Result<(), ()> {
+    send_json(req, 400, json!({ "ok": false, "error": error }))
 }
 
 fn cors_headers() -> Vec<Header> {
-    vec![
-        Header::from_bytes(&b"access-control-allow-origin"[..], &b"*"[..]).unwrap(),
-        Header::from_bytes(
-            &b"access-control-allow-headers"[..],
-            &b"authorization, content-type"[..],
-        )
-        .unwrap(),
-        Header::from_bytes(
-            &b"access-control-allow-methods"[..],
-            &b"GET,POST,PUT,OPTIONS"[..],
-        )
-        .unwrap(),
-        Header::from_bytes(&b"cache-control"[..], &b"no-store"[..]).unwrap(),
+    [
+        ("access-control-allow-origin", "*"),
+        ("access-control-allow-headers", "authorization, content-type"),
+        ("access-control-allow-methods", "GET,POST,PUT,OPTIONS"),
+        ("cache-control", "no-store"),
     ]
+    .into_iter()
+    .filter_map(|(k, v)| Header::from_bytes(k.as_bytes(), v.as_bytes()).ok())
+    .collect()
 }
 
 fn send_json(req: Request, status: u16, body: impl Serialize) -> Result<(), ()> {
@@ -520,7 +547,7 @@ mod tests {
 
     /// Pair `name` under `id` on a fresh code; the status and the token, if any.
     fn pair_as(state: &Arc<Mutex<HubState>>, port: u16, id: &str, name: &str) -> (u16, Option<String>) {
-        let code = state.lock().unwrap().rotate_pair().code;
+        let code = lock(state).rotate_pair().code;
         let body = format!(r#"{{"code":"{code}","deviceId":"{id}","deviceName":"{name}"}}"#);
         let req = format!(
             "POST /v1/pair HTTP/1.0\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
@@ -677,7 +704,7 @@ mod tests {
             "POST frame must not read a JPEG while holding the hub lock: {post_frame}"
         );
         let parse = post_frame.find("store_frame").expect("POST parses the JPEG");
-        let relock = post_frame.rfind("state.lock()").expect("POST re-locks to install");
+        let relock = post_frame.rfind("lock(state)").expect("POST re-locks to install");
         assert!(
             read_at < parse && parse < relock && post_frame.contains("install_frame"),
             "POST frame must not decode a 400KB JPEG under hub.lock(): {post_frame}"
@@ -755,6 +782,83 @@ mod tests {
             serve.contains("accept_loop") && !serve.contains("handle("),
             "LAN serve must not handle on the accept thread: {serve}"
         );
+    }
+
+    /// Garbage from the LAN gets a 4xx and a JSON error, never a panic or a dropped
+    /// connection, and a bad snapshot PUT leaves the stored snapshot alone.
+    #[test]
+    fn malformed_requests_get_a_4xx_not_a_panic() {
+        let (state, port) = hub();
+        let token = pair_as(&state, port, "d-cabin", "cabin-2").1.expect("pairs");
+        state.lock().unwrap().snapshot = Some(Arc::new(json!({ "kept": true })));
+        let bodies: [&[u8]; 6] = [
+            b"{",
+            b"not json at all",
+            b"{\"code\":",
+            b"[1,2,",
+            b"\xff\xfe\x00garbage",
+            b"{\"snapshot\": {\"a\": 1}} trailing",
+        ];
+        for (method, path) in [
+            ("POST", "/v1/pair"),
+            ("PUT", "/v1/snapshot"),
+            ("POST", "/v1/inhabit"),
+            ("POST", "/v1/frame"),
+        ] {
+            for body in bodies {
+                let mut req = format!(
+                    "{method} {path} HTTP/1.0\r\nHost: 127.0.0.1\r\nAuthorization: Bearer {token}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
+                    body.len()
+                )
+                .into_bytes();
+                req.extend_from_slice(body);
+                let mut s = TcpStream::connect(("127.0.0.1", port)).unwrap();
+                s.write_all(&req).unwrap();
+                let mut out = Vec::new();
+                s.read_to_end(&mut out).unwrap();
+                let text = String::from_utf8_lossy(&out);
+                assert!(
+                    text.starts_with("HTTP/1.0 400") || text.starts_with("HTTP/1.1 400"),
+                    "{method} {path} {:?}: {text}",
+                    String::from_utf8_lossy(body)
+                );
+                assert!(
+                    text.ends_with(r#"{"error":"Request body isn't valid JSON.","ok":false}"#),
+                    "{method} {path}: {text}"
+                );
+            }
+        }
+        assert_eq!(
+            state.lock().unwrap().snapshot.as_deref(),
+            Some(&json!({ "kept": true })),
+            "a bad PUT must not replace the snapshot"
+        );
+        assert_eq!(state.lock().unwrap().peers.len(), 1, "a bad pair registers nobody");
+        // A bare request line with no headers and an unknown method still gets an answer.
+        let (status, _, _) = http(port, "BREW /v1/pair HTTP/1.0\r\n\r\n");
+        assert!((400..500).contains(&status), "{status}");
+    }
+
+    /// A handler that panicked holding the hub lock poisons it; later requests still answer.
+    #[test]
+    fn a_poisoned_hub_lock_still_answers() {
+        let (state, port) = hub();
+        let held = state.clone();
+        let _ = std::thread::spawn(move || {
+            let _guard = held.lock().unwrap();
+            panic!("handler blew up holding the lock");
+        })
+        .join();
+        assert!(state.is_poisoned());
+        let (status, _, body) = http(port, "GET /v1/health HTTP/1.0\r\nHost: 127.0.0.1\r\n\r\n");
+        assert_eq!(status, 200, "{}", String::from_utf8_lossy(&body));
+        let token = pair_as(&state, port, "d-cabin", "cabin-2");
+        assert_eq!(token.0, 200);
+        let (status, _, _) = http(
+            port,
+            &format!("GET /v1/status HTTP/1.0\r\nHost: 127.0.0.1\r\nAuthorization: Bearer {}\r\n\r\n", token.1.unwrap()),
+        );
+        assert_eq!(status, 200);
     }
 
     #[test]

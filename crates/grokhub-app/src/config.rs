@@ -181,16 +181,9 @@ fn read_store(path: &Path, cap: usize) -> StoreRead {
 ///
 /// Without this the caller falls back to a default value that the next persist tick
 /// writes straight back over the original file, turning one unreadable store into
-/// permanent data loss.
+/// permanent data loss. The move is noted so the cabin posts a Home card naming the file.
 pub fn quarantine(path: &Path) -> Option<PathBuf> {
-    let name = path.file_name().and_then(|s| s.to_str())?;
-    let stamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis())
-        .unwrap_or(0);
-    let aside = path.with_file_name(format!("{name}.corrupt-{stamp}"));
-    fs::rename(path, &aside).ok()?;
-    Some(aside)
+    grokhub_core::recovered::quarantine(path, grokhub_core::recovered::RESTORED_DEFAULTS)
 }
 
 /// Load a JSON store, quarantining it rather than silently returning `fallback` over data
