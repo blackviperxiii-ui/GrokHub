@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Fixed: on KDE Plasma, the System appearance follows the Plasma color scheme. It reads `kdeglobals` (window color first, then the scheme name), so Breeze Light no longer shows the cabin dark.
+- Fixed: on KDE Wayland, `focus_window` and `set_window_geometry` say "No window title has … in it." when no window matched. Before, they reported success. The KWin script now calls back over D-Bus with what it found.
+- Fixed: on KDE Wayland, the desktop tools can list windows through KWin. The safety gate now knows the focused window, so Enter in a chat app or Delete in Dolphin is treated as a hard action there too.
 - Fixed: on Windows, Devices now finds the LAN address by reading the network adapters, picking the home or office network over VPN and virtual adapters the same way Linux does. Before, it ran a Linux-only `hostname -I` that always failed and fell back to whichever address the default route used.
 - The cabin opens faster: on a fresh Linux profile the first frame now paints in about 97 ms instead of 175 ms (median of 5 cold starts). Global hotkeys are grabbed right after the first frame instead of before it (a hidden `--hidden` start still grabs them at once), and the clock and theme probes run while the window is created. Each launch adds a line to `startup.jsonl` in the config folder with the time each stage was reached (newest 20 kept).
 
