@@ -31,6 +31,7 @@ pub(super) fn settings_sec_title(sec: SettingsSec) -> &'static str {
         SettingsSec::Permissions => "Permissions",
         SettingsSec::Connectors => "Connectors",
         SettingsSec::Personality => "Personality",
+        SettingsSec::Playbooks => "Playbooks",
         SettingsSec::Pulse => "Pulse",
     }
 }
@@ -361,6 +362,7 @@ impl Cabin {
                                                     (SettingsSec::Account, "Account"),
                                                     (SettingsSec::Appearance, "Appearance"),
                                                     (SettingsSec::Personality, "Personality"),
+                                                    (SettingsSec::Playbooks, "Playbooks"),
                                                     (SettingsSec::Pulse, "Pulse"),
                                                     (SettingsSec::Behavior, "Behavior"),
                                                     (SettingsSec::Permissions, "Permissions"),
@@ -924,6 +926,7 @@ impl Cabin {
                                                         SettingsSec::Permissions => self.ui_permission_editor(ui),
                                                         SettingsSec::Connectors => self.ui_settings_connectors(ui),
                                                         SettingsSec::Personality => self.ui_settings_personality(ui),
+                                                        SettingsSec::Playbooks => self.ui_settings_playbooks(ui),
                                                         SettingsSec::Pulse => self.ui_settings_pulse(ui),
                                                     }
                                                 });
