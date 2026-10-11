@@ -3,6 +3,7 @@
 pub(crate) mod connections;
 pub(crate) mod control;
 mod desktop;
+pub(crate) mod fence;
 mod glob;
 mod grep;
 mod html_md;
@@ -159,7 +160,7 @@ pub fn dispatch(ctx: &ToolCtx<'_>, name: &str, arguments: &str) -> ToolOutput {
             media::run_with_ports(name, &args, ctx.stop)
         }
         "screenshot" | "click" | "move" | "drag" | "scroll" | "type" | "key" => match ctx.desktop {
-            Some(desktop) => desktop.call(name, &args),
+            Some(desktop) => fence_desktop(name, desktop.call(name, &args)),
             None => ToolOutput::err(grokhub_core::desktop_mcp::OFF_MSG),
         },
         other => ToolOutput::err(gate::readonly_refusal(other)),
@@ -218,6 +219,18 @@ fn dispatch_readonly(ctx: &ToolCtx<'_>, name: &str, args: &Value) -> ToolOutput 
         "diagnose" => crate::repair::tool_run(args),
         other => ToolOutput::err(format!("{READ_ONLY_PHASE}: `{other}` is not available.")),
     }
+}
+
+/// Screenshot (and other desktop reads that return screen / AX text) are
+/// outside data. Short click/type acks stay plain.
+fn fence_desktop(name: &str, mut out: ToolOutput) -> ToolOutput {
+    if out.failed || out.text.is_empty() {
+        return out;
+    }
+    if name == "screenshot" || out.text.len() > 80 {
+        out.text = fence::fence("desktop", &out.text);
+    }
+    out
 }
 
 fn parse_args(arguments: &str) -> Result<Value, ToolOutput> {
