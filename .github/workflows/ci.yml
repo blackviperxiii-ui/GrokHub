@@ -134,6 +134,21 @@ jobs:
       # must be deleted, not allowed.
       - run: cargo clippy --workspace --all-targets -- -D warnings
 
+  # Supply chain: known advisories (RustSec), licenses, wildcard deps and
+  # crate sources, per deny.toml.
+  deny:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny
+      - run: cargo deny --locked check
+
   windows:
     needs: changes
     if: needs.changes.outputs.code == 'true'
