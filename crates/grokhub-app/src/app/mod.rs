@@ -195,6 +195,7 @@ mod scope_ui;
 mod indexer_ui;
 mod skill_undo;
 mod self_review_ui;
+mod canary_ui;
 mod change_undo;
 mod findings_ui;
 mod proactive_auto;

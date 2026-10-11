@@ -16956,6 +16956,21 @@ fn every_home_card_the_cabin_posts_names_its_item() {
         label: String::new(),
     };
     rows.push(("model_change_note", super::change_undo::model_change_note(&change), "chat:default"));
+    let trial = grokhub_agent::harness::Version {
+        version: "skill:save-page@0123456789ab".into(),
+        label: "Use ctrl+s in save-page".into(),
+        diff: "+1 -3 lines".into(),
+        share_pct: 20,
+        min_runs: 10,
+        status: grokhub_agent::harness::VersionStatus::Kept,
+        note: "Kept: Use ctrl+s in save-page, 18% fewer steps over 12 runs".into(),
+        at: now,
+        ..Default::default()
+    };
+    cabin.post_trial_note(&trial);
+    rows.push(("post_trial_note", posted_card(&cabin, "post_trial_note", |c| c.source_id.starts_with("canary:")), "save-page"));
+    let trying = grokhub_agent::harness::Version { status: grokhub_agent::harness::VersionStatus::Canary, note: String::new(), ..trial };
+    rows.push(("trial_card", super::canary_ui::trial_card(&trying), "save-page"));
     rows.push(("poll_self_changes", grokhub_core::self_change_card("skill", "inbox-zero", "added", "", now), "inbox-zero"));
     let done = grokhub_core::DoneForYou {
         kind: "connection".into(),

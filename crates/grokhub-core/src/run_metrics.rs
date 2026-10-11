@@ -55,9 +55,23 @@ pub struct RunMetrics {
     /// The model of the run's last routed call. Empty when it made none.
     #[serde(default)]
     pub model: String,
+    /// The self-change version on trial for this run's class (card 32 PR B),
+    /// and which side of the trial the run was on. Empty and `None` otherwise.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub version: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub arm: Option<Arm>,
     pub finished_at: u64,
     /// When this line was written. A later line for the same run wins.
     pub at: u64,
+}
+
+/// The side of a canary trial a run was on: the new version, or its parent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Arm {
+    Canary,
+    Control,
 }
 
 impl RunMetrics {

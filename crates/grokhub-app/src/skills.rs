@@ -102,10 +102,15 @@ pub fn save_skill(s: &SkillMd) -> Result<PathBuf, String> {
 /// kept and the write is logged, so `/skills undo` can put it back. For
 /// writes GrokHub makes on its own (`Origin::SelfManage`) and Suggested Add.
 pub fn save_skill_logged(s: &SkillMd, origin: Origin, reason: &str) -> Result<(), String> {
+    save_skill_versioned(s, origin, reason).map(|_| ())
+}
+
+/// [`save_skill_logged`], returning the ledger line (`None` when the bytes
+/// did not change), so the weekly pass can put the change on trial.
+pub fn save_skill_versioned(s: &SkillMd, origin: Origin, reason: &str) -> Result<Option<hx::Change>, String> {
     hx::record_skill_change(&config::config_dir(), &skills_dir(), &s.name, origin, reason, || {
         save_skill(s).map(|_| ())
     })
-    .map(|_| ())
 }
 
 /// After an undo or restore put `SKILL.md` back byte for byte, its verify
