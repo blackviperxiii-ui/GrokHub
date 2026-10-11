@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Fixed: on KDE Plasma, the System appearance follows the Plasma color scheme. It reads `kdeglobals` (window color first, then the scheme name), so Breeze Light no longer shows the cabin dark.
+- Fixed: on KDE Wayland, `focus_window` and `set_window_geometry` say "No window title has … in it." when no window matched. Before, they reported success. The KWin script now calls back over D-Bus with what it found.
+- Fixed: on KDE Wayland, the desktop tools can list windows through KWin. The safety gate now knows the focused window, so Enter in a chat app or Delete in Dolphin is treated as a hard action there too.
 - Fixed: on Windows, Eyes, the live room and replay take screenshots again. They use the same screen grabber as the desktop tools; before, every frame failed because they looked for Linux capture tools.
 - Fixed: on Windows, COMPUTER_CMD click, double-click, move, type, key and scroll drive the desktop through SendInput. Before, they tried xdotool and replied with Linux install steps.
 - Fixed: Paste an image works on Windows (the PNG or bitmap on the clipboard) and on KDE Wayland, where `wl-paste` now gets the Wayland socket that startup drops. Before, both said to pick a file or copy something first.

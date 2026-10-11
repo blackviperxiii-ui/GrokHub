@@ -71,6 +71,36 @@ pub fn os_prefers_dark(color_scheme: &str, gtk_theme: &str, xfce_theme: &str) ->
     true
 }
 
+/// Whether a KDE Plasma `kdeglobals` file sets a dark scheme. The window
+/// background (`[Colors:Window] BackgroundNormal=r,g,b`) decides, since a
+/// custom scheme can be named anything; the `[General] ColorScheme` name
+/// decides when there is no color (Breeze and BreezeLight are light).
+/// `None` when the file sets neither.
+pub fn kde_prefers_dark(kdeglobals: &str) -> Option<bool> {
+    let mut section = "";
+    let mut scheme = None;
+    for line in kdeglobals.lines().map(str::trim) {
+        if let Some(name) = line.strip_prefix('[').and_then(|l| l.strip_suffix(']')) {
+            section = name;
+            continue;
+        }
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+        match (section, key.trim()) {
+            ("Colors:Window", "BackgroundNormal") => {
+                let rgb: Vec<f32> = value.split(',').filter_map(|c| c.trim().parse().ok()).collect();
+                if let [r, g, b] = rgb[..] {
+                    return Some(0.2126 * r + 0.7152 * g + 0.0722 * b < 128.0);
+                }
+            }
+            ("General", "ColorScheme") if !value.trim().is_empty() => scheme = Some(looks_dark(value)),
+            _ => {}
+        }
+    }
+    scheme
+}
+
 fn looks_light(s: &str) -> bool {
     let t = s.to_ascii_lowercase();
     t.contains("light")
@@ -129,5 +159,22 @@ mod tests {
         assert!(os_prefers_dark("prefer-dark", "Adwaita", ""));
         assert!(os_prefers_dark("default", "Adwaita-dark", ""));
         assert!(os_prefers_dark("", "", ""));
+    }
+
+    #[test]
+    fn kde_scheme_reads_from_kdeglobals() {
+        let light = "[General]\nColorScheme=BreezeLight\n\n[Colors:Window]\nBackgroundNormal=239,240,241\n";
+        let dark = "[General]\nColorScheme=BreezeDark\n\n[Colors:Window]\nBackgroundNormal=32,35,38\n";
+        assert_eq!(kde_prefers_dark(light), Some(false));
+        assert_eq!(kde_prefers_dark(dark), Some(true));
+        // A custom name goes by the window color, not the name.
+        assert_eq!(kde_prefers_dark("[General]\nColorScheme=Nordic\n[Colors:Window]\nBackgroundNormal=46,52,64\n"), Some(true));
+        assert_eq!(kde_prefers_dark("[General]\nColorScheme=MyDarkish\n[Colors:Window]\nBackgroundNormal=250,250,250\n"), Some(false));
+        // No colors: the name decides. Plain Breeze is light.
+        assert_eq!(kde_prefers_dark("[General]\nColorScheme=Breeze\n"), Some(false));
+        assert_eq!(kde_prefers_dark("[General]\nColorScheme=BreezeDark\n"), Some(true));
+        // BackgroundNormal in another section is not the window.
+        assert_eq!(kde_prefers_dark("[Colors:View]\nBackgroundNormal=10,10,10\n"), None);
+        assert_eq!(kde_prefers_dark(""), None);
     }
 }

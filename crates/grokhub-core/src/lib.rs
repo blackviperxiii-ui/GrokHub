@@ -101,7 +101,7 @@ pub mod wire;
 pub mod workboard;
 
 pub use appearance::{
-    appearance_choices, appearance_hint, os_prefers_dark, parse_theme, pick_theme, resolve_dark,
+    appearance_choices, appearance_hint, kde_prefers_dark, os_prefers_dark, parse_theme, pick_theme, resolve_dark,
     theme_id, theme_label, ThemeChoice,
 };
 pub use attach::{
