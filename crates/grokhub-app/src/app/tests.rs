@@ -16916,7 +16916,7 @@ fn every_home_card_the_cabin_posts_names_its_item() {
         asked: 1,
         at_ms: now,
     });
-    rows.push(("post_source_run", posted_card(&cabin, "post_source_run", |c| c.source_id.starts_with("source:")), "Rust 1.99"));
+    rows.push(("finish_source_run", posted_card(&cabin, "finish_source_run", |c| c.source_id.starts_with("source:")), "Rust 1.99"));
     rows.push(("model_wait_card", super::model_wait_ui::model_wait_card(&["grok-4.6".into()], "grok-4.6", "9:05 PM", "dream time", now), "grok-4.6"));
     // Sites a test cabin can't reach without a live run: the card from the same call.
     let guard_text = "Auto was succeeding less on everyday chat, so it now starts that work one step higher.";
