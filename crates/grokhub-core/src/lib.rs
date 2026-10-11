@@ -284,8 +284,9 @@ pub use heartbeat::{
     HEARTBEAT_MS,
 };
 pub use governor::{
-    cabin_jobs, BackgroundBudgets, BudgetClass, Governor, GovernorNote, JobHold, JobKind, JobSpec,
-    QuietRule, TickCtx, TickPlan,
+    cabin_jobs, runs_cheap, user_active, BackgroundBudgets, BudgetClass, Governor, GovernorNote,
+    JobHold, JobKind, JobSpec, JobStatus, QuietRule, TickCtx, TickPlan, ACTIVE_GOAL,
+    ACTIVE_REASON, ACTIVE_WINDOW_MS,
 };
 pub use heartbeat_throttle::{
     ActOutcome, HeartbeatPace, HeartbeatThrottle, PaceGate, PaceHold, ProactiveAct, PACE_NORMAL,

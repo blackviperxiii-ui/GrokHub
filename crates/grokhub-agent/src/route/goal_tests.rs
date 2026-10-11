@@ -6,7 +6,7 @@
 use grokhub_core::model_registry::store::save_registry;
 use grokhub_core::model_registry::{Credential, Listing, ModelMeta, Registry, SourceKind};
 
-use super::goal::{set_goal, RouteGoal};
+use super::goal::{pin_goal, set_goal, RouteGoal};
 use super::guard::in_holdout;
 use super::ladder::note_tool_error;
 use super::live::{self, RouteCall, RouteDone};
@@ -105,5 +105,32 @@ fn a_goal_start_still_escalates_on_failure_and_drops_back_after_clean_steps() {
     }
     // The E1 step went fine too, so the third clean step after it drops back.
     assert_eq!(seen, vec!["xhigh", "xhigh", "high"], "DE1 drops back after three clean steps");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn a_background_runs_cost_goal_is_logged_but_never_moves_its_effort() {
+    let dir = crate::harness::test_dir("brain4-goal");
+    let _cfg = crate::perm::ConfigGuard::set(&dir);
+    save_registry(&dir, &fleet()).unwrap();
+    let (s, ep) = ("b4-s-active", "b4-ep-active");
+    assert!(!in_holdout(s) && !in_holdout(ep), "pick another name");
+    pin_goal(s, Some(RouteGoal::of("cost", "user active").unwrap()));
+    // The unattended class has no table row: the call's own model and effort go out.
+    let bg = RouteCall { class: crate::unattended::UNATTENDED_CLASS, effort: Some("low"), ..call(s, "", "summarize the feed") };
+    let d = live::decide(&dir, &bg, NOW);
+    assert_eq!(d.goal, RouteGoal::of("cost", "user active"));
+    assert_eq!((d.send_model("grok-3-mini-fast"), d.send_effort(Some("low"))), ("grok-3-mini-fast".to_string(), Some("low".to_string())));
+    let rec = live::route_log(&dir, &bg, &d, &ok());
+    assert_eq!((rec.goal.as_str(), rec.goal_reason.as_str()), ("cost", "user active"));
+    // A listed background class keeps its own start: the goal does not move it.
+    let sum = RouteCall { class: "background:summarize", ..call(s, ep, "summarize the feed") };
+    let d = live::decide(&dir, &sum, NOW);
+    assert!(!d.route.rule_ids.iter().any(|r| r.starts_with("goal:")), "{:?}", d.route.rule_ids);
+    pin_goal(s, None);
+    // The Brief's own background row stays out of a background call's record, as before.
+    set_goal(s, Some(RouteGoal::of("cost", "user isn't waiting").unwrap()));
+    assert_eq!(live::decide(&dir, &bg, NOW).goal, None);
+    set_goal(s, None);
     let _ = std::fs::remove_dir_all(dir);
 }

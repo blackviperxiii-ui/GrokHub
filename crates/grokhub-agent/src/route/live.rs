@@ -441,7 +441,15 @@ pub fn decide(config_dir: &Path, call: &RouteCall<'_>, now_ms: u64) -> Decision 
     laps.mark("route:tune");
     let turn = turn_hash(call.text);
     // Brain 2: the goal the turn's Brief named; user-facing steps only, never the holdout.
-    let goal = if facing && !holdout { super::goal::goal_for(&[call.session, call.episode]) } else { None };
+    // Brain 4: a goal the cabin pinned on a background run (cost while you're active) is
+    // logged with it; only user-facing steps move by a goal.
+    let goal = if holdout {
+        None
+    } else if facing {
+        super::goal::goal_for(&[call.session, call.episode])
+    } else {
+        super::goal::pinned_for(&[call.session, call.episode])
+    };
     let mut routine = None;
     let pick = match row {
         Some(_) if holdout => Some(Pick { rung: rung(HOLDOUT_EFFORT).unwrap_or(0), rules: vec!["holdout".into()], ..Pick::default() }),
