@@ -143,7 +143,16 @@ Pair code `ABC-234`. Devices paints a real LAN IPv4 (`http://192.168.x.x:18766`)
 | `%APPDATA%\GrokHub` | Windows user data |
 
 Linux tarball: `grokhub-linux-v*.tar.gz` from `./scripts/make-release-bundle.sh`.  
-Windows installer: `GrokHub-Setup-<version>.exe` from `./scripts/make-windows-release.ps1` (Inno Setup). A tag publishes both.
+Windows installer: `GrokHub-Setup-<version>.exe` from `./scripts/make-windows-release.ps1` (Inno Setup). A `v*` tag publishes both as a release; each push to `beta` publishes them as a pre-release named `beta-v<version>-<sha>`.
+
+Every release and pre-release also carries `SHA256SUMS` (the SHA-256 of each file) and `SHA256SUMS.minisig`, a [minisign](https://jedisct1.github.io/minisign/) signature of it. The public key is [`packaging/minisign.pub`](../packaging/minisign.pub); the private key exists only as the `MINISIGN_SECRET_KEY` Actions secret. To check a download by hand:
+
+```bash
+minisign -V -p packaging/minisign.pub -m SHA256SUMS
+sha256sum -c SHA256SUMS --ignore-missing
+```
+
+Setting up the key (owner, once): `minisign -G -W -p minisign.pub -s minisign.key` makes an unencrypted pair (the secret store is its protection; CI can't type a password). Paste all of `minisign.key` into the repo's `MINISIGN_SECRET_KEY` secret, commit `minisign.pub` as `packaging/minisign.pub`, then delete `minisign.key` or keep it offline. Without the secret, releases ship `SHA256SUMS` unsigned with a warning, and the updater refuses them.
 
 Arch notes: [`packaging/README-ARCH.md`](../packaging/README-ARCH.md).
 
