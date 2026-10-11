@@ -213,6 +213,10 @@ impl NativeEngine {
             }
         };
         let policy = crate::brain::pick_policy(&crate::brain::load_policy(&dir).0, &brief);
+        // Brain 2: the row's goal steers this turn's routing (inside each class's band).
+        if let Some(goal) = policy.as_ref().and_then(|p| crate::route::goal::RouteGoal::of(&p.goal, &p.reason)) {
+            crate::route::goal::set_goal(&self.conversation_id, goal);
+        }
         let line = crate::brain::BriefLine { at: grokhub_core::now_ms(), session: self.conversation_id.clone(), chat_id, turn, brief, policy };
         let _ = crate::brain::record_brief(&dir, &line);
     }
