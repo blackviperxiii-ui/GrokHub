@@ -67,12 +67,17 @@ const GOALS_CAP: usize = 256;
 
 static GOALS: Mutex<BTreeMap<String, RouteGoal>> = Mutex::new(BTreeMap::new());
 
-/// The turn's goal for a chat session, set when its Brief is written.
-pub fn set_goal(session: &str, goal: RouteGoal) {
+/// The turn's goal for a chat session, set when its Brief is written. `None`
+/// (no policy row matched) clears the last turn's goal.
+pub fn set_goal(session: &str, goal: Option<RouteGoal>) {
     if session.is_empty() {
         return;
     }
     let mut g = GOALS.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(goal) = goal else {
+        g.remove(session);
+        return;
+    };
     if g.len() >= GOALS_CAP && !g.contains_key(session) {
         g.clear();
     }
@@ -142,9 +147,12 @@ mod tests {
         assert_eq!(RouteGoal::of("fastest", "x"), None);
         let g = RouteGoal::of("Quality", " mistakes can break the system ").unwrap();
         assert_eq!(g.label(), "goal quality (mistakes can break the system)");
-        set_goal("goal-test-a", g.clone());
-        set_goal("", goal("cost"));
+        set_goal("goal-test-a", Some(g.clone()));
+        set_goal("", Some(goal("cost")));
         assert_eq!(goal_for(&["", "goal-test-missing", "goal-test-a"]), Some(g));
         assert_eq!(goal_for(&["goal-test-missing"]), None);
+        // A turn with no policy row clears the last turn's goal.
+        set_goal("goal-test-a", None);
+        assert_eq!(goal_for(&["goal-test-a"]), None);
     }
 }

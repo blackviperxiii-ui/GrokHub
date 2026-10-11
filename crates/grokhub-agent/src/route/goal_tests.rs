@@ -45,10 +45,10 @@ fn the_goal_changes_the_effort_for_the_same_class_and_the_reason_is_logged() {
     for ep in ["g2-ep-none", "g2-ep-q1", "g2-ep-speed", "g2-ep-cost", "g2-ep-st1"] {
         assert!(!in_holdout(ep), "{ep} sits in the holdout; pick another name");
     }
-    set_goal("g2-s-quality", RouteGoal::of("quality", "mistakes can break the system").unwrap());
-    set_goal("g2-s-speed", RouteGoal::of("speed", "a quick answer").unwrap());
-    set_goal("g2-s-cost", RouteGoal::of("cost", "routine work").unwrap());
-    set_goal("g2-s-steer", RouteGoal::of("cost", "routine work").unwrap());
+    set_goal("g2-s-quality", Some(RouteGoal::of("quality", "mistakes can break the system").unwrap()));
+    set_goal("g2-s-speed", Some(RouteGoal::of("speed", "a quick answer").unwrap()));
+    set_goal("g2-s-cost", Some(RouteGoal::of("cost", "routine work").unwrap()));
+    set_goal("g2-s-steer", Some(RouteGoal::of("cost", "routine work").unwrap()));
     let effort = |s: &str, ep: &str, text: &str| {
         let d = live::decide(&dir, &call(s, ep, text), NOW);
         (d.route.effort.clone().unwrap_or_default(), d.route.rule_ids.clone(), d)
@@ -87,7 +87,7 @@ fn a_goal_start_still_escalates_on_failure_and_drops_back_after_clean_steps() {
     save_registry(&dir, &fleet()).unwrap();
     let (s, ep) = ("g2-s-ladder", "g2-ep-ladder");
     assert!(!in_holdout(ep));
-    set_goal(s, RouteGoal::of("quality", "mistakes can break the system").unwrap());
+    set_goal(s, Some(RouteGoal::of("quality", "mistakes can break the system").unwrap()));
     let c = call(s, ep, "debug and refactor the config");
     let step = || {
         let d = live::decide(&dir, &c, NOW);

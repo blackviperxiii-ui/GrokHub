@@ -214,9 +214,10 @@ impl NativeEngine {
         };
         let policy = crate::brain::pick_policy(&crate::brain::load_policy(&dir).0, &brief);
         // Brain 2: the row's goal steers this turn's routing (inside each class's band).
-        if let Some(goal) = policy.as_ref().and_then(|p| crate::route::goal::RouteGoal::of(&p.goal, &p.reason)) {
-            crate::route::goal::set_goal(&self.conversation_id, goal);
-        }
+        // Desktop episode steps route with the chat id as their session, so it gets the goal too.
+        let goal = policy.as_ref().and_then(|p| crate::route::goal::RouteGoal::of(&p.goal, &p.reason));
+        crate::route::goal::set_goal(&chat_id, goal.clone());
+        crate::route::goal::set_goal(&self.conversation_id, goal);
         let line = crate::brain::BriefLine { at: grokhub_core::now_ms(), session: self.conversation_id.clone(), chat_id, turn, brief, policy };
         let _ = crate::brain::record_brief(&dir, &line);
     }
@@ -879,6 +880,10 @@ mod tests {
         .unwrap();
         assert_eq!(texts, vec!["hello".to_string()]);
         assert_eq!(client.briefs.load(std::sync::atomic::Ordering::SeqCst), 0);
+        // Brain 2: the row's goal steers this chat's routing, desktop episode steps (chat id) included.
+        let quality = crate::route::goal::RouteGoal::of("quality", "mistakes can break the system");
+        assert_eq!(crate::route::goal::goal_for(&["brief-1"]), quality);
+        assert_eq!(crate::route::goal::goal_for(&["chat-1"]), quality);
         // Unclear: exactly one Brief call, and the chat still sees only its reply.
         eng.prompt("the thing from yesterday", None, &mut |ev| {
             if let AcpEvent::Text(t) = ev {
