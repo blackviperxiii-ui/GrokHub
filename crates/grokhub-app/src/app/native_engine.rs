@@ -254,7 +254,7 @@ impl Cabin {
             &grokhub_core::brief_for(&self.learning, "chat"),
             self.cfg.desktop_control,
         );
-        grokhub_core::personality::layer(&grokhub_core::personality::builtin(&self.personality_id()), &rules)
+        grokhub_core::personality::layer(&self.chat_personality(), &rules)
     }
 
     fn native_gate(&self) -> Gate {
