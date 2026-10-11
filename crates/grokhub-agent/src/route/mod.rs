@@ -17,6 +17,7 @@ pub mod ladder;
 pub mod learn;
 pub mod connectivity;
 pub mod local;
+pub mod local_bench;
 pub mod local_http;
 pub mod local_perf;
 pub mod local_sidecar;

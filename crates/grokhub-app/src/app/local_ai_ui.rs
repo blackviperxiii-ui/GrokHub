@@ -49,7 +49,7 @@ impl Cabin {
         self.status = local_model_status(on, installed, local::live_tier());
     }
 
-    /// The Settings → Cabin defaults rows: the toggle, and Set up while nothing is installed.
+    /// The Settings → Cabin defaults rows: the toggle, Set up, and Test speed.
     pub(super) fn ui_local_model_rows(&mut self, ui: &mut egui::Ui) {
         let installed = local::installed();
         let mut on = self.cfg.local_model;
@@ -60,11 +60,33 @@ impl Cabin {
         if !installed && crate::cards::settings_action(ui, "Local model", &self.local_model_row_hint(), "Set up") {
             self.open_local_setup();
         }
+        if installed
+            && crate::cards::settings_action(
+                ui,
+                "Local speed",
+                "Tokens/s, first-token latency, load time and a small on-device eval. Same as `grokhub bench local`.",
+                "Test speed",
+            )
+        {
+            self.run_local_speed_test();
+        }
     }
 
     /// Set up: the setup wizard's on-device model step.
     pub(super) fn open_local_setup(&mut self) {
         self.open_setup(super::setup_wizard::SetupStep::LocalAi);
+    }
+
+    /// Run the on-device bench + eval; the status line gets the first report line.
+    pub(super) fn run_local_speed_test(&mut self) {
+        if !local::installed() {
+            self.status = "Local speed: install a local model first.".into();
+            return;
+        }
+        self.status = match grokhub_agent::route::local_bench::run_for_ui() {
+            Ok(report) => report.lines().next().unwrap_or("Local speed: done").to_string(),
+            Err(e) => format!("Local speed: {e}"),
+        };
     }
 }
 
