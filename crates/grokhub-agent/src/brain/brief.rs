@@ -15,7 +15,7 @@ pub const BRIEF_CLASS: &str = "background:classify";
 /// The fallback call's instructions: a tiny JSON answer, nothing else.
 pub const BRIEF_PROMPT: &str = "Sort the user's request. Reply with one line of JSON and nothing else: \
 {\"intent\":\"chat|question|task|repair|creative|research|background\",\"care\":\"casual|careful|critical\",\
-\"mood\":\"calm|urgent|frustrated\",\"domain\":\"system|code|files|web|media|general\"}";
+\"mood\":\"calm|urgent|frustrated\",\"domain\":\"system|code|files|desktop|web|media|general\"}";
 
 /// Lines kept in `briefs.jsonl`; older ones are dropped when it passes [`BRIEF_TRIM_AT`].
 const BRIEF_KEEP: usize = 400;
@@ -98,7 +98,7 @@ pub struct Brief {
     pub mood: String,
     /// What the run checks before it calls the ask done.
     pub done: Vec<String>,
-    /// `system`, `code`, `files`, `web`, `media` or `general`.
+    /// `system`, `code`, `files`, `desktop`, `web`, `media` or `general`.
     pub domain: String,
     /// `rules`, `model`, or `default` (unclear and no model call).
     pub by: String,
@@ -150,7 +150,7 @@ const RESEARCH_PHRASES: &[&str] = &["look up", "find out"];
 const TASK_VERBS: &[&str] = &[
     "make", "build", "create", "set", "install", "move", "rename", "delete", "remove", "organize", "automate", "open",
     "run", "add", "update", "convert", "write", "send", "download", "clean", "sort", "copy", "schedule", "edit",
-    "change", "turn", "close", "start", "stop", "restart",
+    "change", "turn", "close", "start", "stop", "restart", "click",
 ];
 const QUESTION_WORDS: &[&str] = &[
     "what", "why", "how", "when", "where", "who", "which", "is", "are", "can", "could", "does", "do", "should", "will",
@@ -161,6 +161,8 @@ const FOLLOW_UPS: &[&str] = &["yes", "yeah", "yep", "go", "do it", "ok", "okay",
 const POLITE: &[&str] = &["please", "can you", "could you", "would you", "will you", "i want you to", "i need you to"];
 const DESTRUCTIVE_WORDS: &[&str] = &["delete", "remove", "wipe", "erase", "format", "rm", "password", "payment", "bank"];
 const CODE_WORDS: &[&str] = &["code", "function", "compile", "cargo", "git", "script", "python", "rust", "javascript"];
+/// Working an app on screen: clicks, windows, buttons.
+const DESKTOP_WORDS: &[&str] = &["click", "window", "screen", "desktop", "app", "button", "taskbar"];
 const URGENT_WORDS: &[&str] = &["asap", "urgent", "urgently", "quick", "quickly", "now"];
 const FRUSTRATED_WORDS: &[&str] = &["ugh", "wtf", "again", "still", "seriously", "annoying"];
 
@@ -189,6 +191,7 @@ fn done_for(intent: Intent, domain: &str) -> Vec<String> {
         (Intent::Task, "system") => &["change applied", "service running", "undo noted"],
         (Intent::Task, "files") => &["files in place", "nothing lost"],
         (Intent::Task, "code") => &["it builds", "tests pass"],
+        (Intent::Task, "desktop") => &["the asked change is made", "result checked on screen"],
         (Intent::Task, _) => &["the asked change is made", "result checked"],
         (Intent::Question, _) => &["answered"],
         (Intent::Research, _) => &["sources named", "answer summarized"],
@@ -219,6 +222,8 @@ fn domain_of(t: &str, ws: &[&str], input: &BriefInput<'_>, intent: Intent, syste
         "system"
     } else if code {
         "code"
+    } else if any_word(ws, DESKTOP_WORDS) {
+        "desktop"
     } else if files {
         "files"
     } else if intent == Intent::Research {
@@ -294,7 +299,7 @@ fn parse_model(reply: &str) -> Option<(Intent, Care, String, String)> {
     let care = Care::parse(&word("care")?)?;
     let mood = word("mood").filter(|m| ["calm", "urgent", "frustrated"].contains(&m.as_str())).unwrap_or_else(|| "calm".into());
     let domain = word("domain")
-        .filter(|d| ["system", "code", "files", "web", "media", "general"].contains(&d.as_str()))
+        .filter(|d| grokhub_core::playbook::DOMAINS.contains(&d.as_str()))
         .unwrap_or_else(|| "general".into());
     Some((intent, care, mood, domain))
 }
@@ -333,13 +338,19 @@ pub struct BriefLine {
     /// The mode policy row the Brief matched.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub policy: Option<super::PolicyPick>,
+    /// The playbook the Brief picked, by name.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub playbook: String,
 }
 
 impl BriefLine {
-    /// "Brief: …" and, when a row matched, "Policy: …".
+    /// "Brief: …" and, when they matched, "Policy: …" and "Playbook: …".
     pub fn lines(&self) -> Vec<String> {
         let mut out = vec![format!("Brief: {}", self.brief.label())];
         out.extend(self.policy.as_ref().map(|p| format!("Policy: {}", p.label())));
+        if !self.playbook.is_empty() {
+            out.push(format!("Playbook: {}", self.playbook));
+        }
         out
     }
 }
@@ -423,6 +434,8 @@ mod tests {
             ("open port 8080 on the firewall", Intent::Task, Care::Critical, "system", "calm"),
             ("scan my computer", Intent::Repair, Care::Critical, "system", "calm"),
             ("add a retry to fetch() in src/net.rs", Intent::Task, Care::Careful, "code", "calm"),
+            ("click the save button in the settings window", Intent::Task, Care::Careful, "desktop", "calm"),
+            ("open the mail app and archive the top message", Intent::Task, Care::Careful, "desktop", "calm"),
         ];
         for (text, intent, care, domain, mood) in cases {
             let b = rules(&input(text)).unwrap_or_else(|| panic!("{text}: rules gave no brief"));
@@ -508,9 +521,9 @@ mod tests {
         assert!(why_lines(&dir).is_empty());
         let text = "the printer service won't start, my password is hunter2";
         let b = rules(&input(text)).unwrap();
-        record_brief(&dir, &BriefLine { at: 1, session: "s1".into(), chat_id: "chat-1".into(), turn: 2, brief: b.clone(), policy: None }).unwrap();
+        record_brief(&dir, &BriefLine { at: 1, session: "s1".into(), chat_id: "chat-1".into(), turn: 2, brief: b.clone(), policy: None, playbook: String::new() }).unwrap();
         let other = rules(&input("hi")).unwrap();
-        record_brief(&dir, &BriefLine { at: 2, session: "s1".into(), chat_id: "chat-1".into(), turn: 3, brief: other.clone(), policy: None }).unwrap();
+        record_brief(&dir, &BriefLine { at: 2, session: "s1".into(), chat_id: "chat-1".into(), turn: 3, brief: other.clone(), policy: None, playbook: String::new() }).unwrap();
         let raw = fs::read_to_string(briefs_path(&dir)).unwrap();
         assert!(!raw.contains("hunter2") && !raw.contains("printer"), "{raw}");
         assert_eq!(brief_for_turn(&dir, "chat-1", 2).map(|l| l.brief), Some(b));
