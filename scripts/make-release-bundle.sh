@@ -13,6 +13,16 @@ fi
 cd "$ROOT"
 cargo build --release --locked -p grokhub-app -p grokhub-hub
 
+CEILING_FILE="$ROOT/packaging/release-binary-size-ceiling"
+CEILING="$(grep -vE '^\s*(#|$)' "$CEILING_FILE" | head -1 | tr -d '[:space:]')"
+BIN="$ROOT/target/release/grokhub"
+SIZE="$(stat -c '%s' "$BIN")"
+if [[ -z "$CEILING" || "$SIZE" -gt "$CEILING" ]]; then
+  echo "error: grokhub is $SIZE bytes; ceiling is ${CEILING:-missing} ($CEILING_FILE)" >&2
+  exit 1
+fi
+echo "release binary size ok: $SIZE <= $CEILING"
+
 STAGE="$ROOT/dist-release/grokhub-linux"
 rm -rf "$STAGE"
 mkdir -p "$STAGE"
