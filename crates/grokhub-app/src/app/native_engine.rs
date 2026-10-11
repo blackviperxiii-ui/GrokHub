@@ -222,11 +222,7 @@ impl Cabin {
         let model = grokhub_core::cabin_spawn_model(&self.cfg.model).to_string();
         // The router picks each call's effort; this is only the fallback for an unlisted class.
         let effort = grokhub_agent::route::live::start_effort(grokhub_agent::route::live::DEFAULT_CLASS);
-        let rules = grokhub_core::cabin_rules::cabin_rules_for(
-            &grokhub_core::brief_for(&self.learning, "chat"),
-            self.cfg.desktop_control,
-        );
-        let system = grokhub_agent::system_prompt(&rules, &workspace);
+        let system = grokhub_agent::system_prompt(&self.chat_rules(), &workspace);
         // A side question stays read-only even in plan mode, so it never gets plan approval.
         grokhub_agent::set_plan_session(
             session_id,
@@ -248,6 +244,17 @@ impl Cabin {
             .unwrap_or_else(|err| err.into_inner())
             .insert(session_id.to_string(), cfg);
         Ok(())
+    }
+
+    /// The cabin rules for a reply shown in chat (a chat turn or a `/bg` run): the
+    /// chosen personality's tone first, then the cabin's safety and approval rules.
+    /// Night jobs use the plain rules (`native_unattended`).
+    pub(super) fn chat_rules(&self) -> String {
+        let rules = grokhub_core::cabin_rules::cabin_rules_for(
+            &grokhub_core::brief_for(&self.learning, "chat"),
+            self.cfg.desktop_control,
+        );
+        grokhub_core::personality::layer(&grokhub_core::personality::builtin(&self.cfg.personality), &rules)
     }
 
     fn native_gate(&self) -> Gate {
