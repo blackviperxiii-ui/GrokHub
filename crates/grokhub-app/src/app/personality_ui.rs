@@ -713,6 +713,43 @@ mod tests {
     }
 
     #[test]
+    fn live_prompt_parts_put_safety_first_and_close_the_voice_tail() {
+        let (_lock, _root, mut cabin) = cabin_with_chat();
+        cabin.set_chat_personality("pirate");
+        let (stable, volatile) = cabin.chat_prompt_parts();
+        assert!(
+            stable.contains("Ask only before"),
+            "cabin safety stays in the stable prefix: {stable}"
+        );
+        assert!(
+            !stable.contains("Personality: Pirate"),
+            "voice must not bust the stable prefix: {stable}"
+        );
+        assert!(
+            volatile.contains("Personality: Pirate"),
+            "voice lives in the volatile tail: {volatile}"
+        );
+        assert!(
+            volatile.contains("earlier in this prompt always win"),
+            "closer reasserts cabin safety after the voice: {volatile}"
+        );
+        assert!(
+            volatile.find("Personality: Pirate").unwrap()
+                < volatile.find("earlier in this prompt always win").unwrap(),
+            "closer is last: {volatile}"
+        );
+        let (plain_stable, plain_volatile) = {
+            cabin.set_chat_personality("default");
+            cabin.chat_prompt_parts()
+        };
+        assert_eq!(plain_stable, stable, "default voice keeps the same stable prefix");
+        assert!(
+            !plain_volatile.contains("earlier in this prompt always win"),
+            "no closer when there is no voice or notes: {plain_volatile}"
+        );
+    }
+
+    #[test]
     fn a_chat_pick_survives_a_save_and_reload() {
         let mut thread = threads::ChatThread::new("a", false);
         thread.personality = "genie".into();

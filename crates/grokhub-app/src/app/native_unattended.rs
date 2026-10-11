@@ -229,11 +229,12 @@ fn fast_text(ready: &ReadyModel, workspace: &Path, prompt: &str) -> Result<Strin
 }
 
 fn native_rules(cabin: &Cabin, workspace: &std::path::Path) -> String {
-    let rules = grokhub_core::cabin_rules::cabin_rules_for(
-        &grokhub_core::brief_for(&cabin.learning, "chat"),
-        cabin.cfg.desktop_control,
-    );
-    grokhub_agent::system_prompt(&rules, workspace)
+    let stable = grokhub_core::cabin_rules::cabin_static_rules(cabin.cfg.desktop_control);
+    let volatile = grokhub_core::cabin_rules::cabin_learned_tail(&grokhub_core::brief_for(
+        &cabin.learning,
+        "chat",
+    ));
+    grokhub_agent::system_prompt_parts(&stable, &volatile, workspace)
 }
 
 impl Cabin {
