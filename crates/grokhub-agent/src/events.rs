@@ -220,7 +220,12 @@ impl NativeEngine {
         crate::route::goal::set_goal(&self.conversation_id, goal);
         // Brain 2: the run's checkpoints read the done list and care.
         crate::checkpoint::set_turn_brief(&self.conversation_id, brief.clone());
-        let line = crate::brain::BriefLine { at: grokhub_core::now_ms(), session: self.conversation_id.clone(), chat_id, turn, brief, policy };
+        // Brain 3: the Brief's intent, domain and this computer's OS pick the playbook.
+        let (books, _) = crate::brain::playbook::load(&dir);
+        let playbook = crate::brain::playbook::pick(&books, brief.intent.as_str(), &brief.domain, crate::brain::playbook::host_os())
+            .map(|p| p.name.clone())
+            .unwrap_or_default();
+        let line = crate::brain::BriefLine { at: grokhub_core::now_ms(), session: self.conversation_id.clone(), chat_id, turn, brief, policy, playbook };
         let _ = crate::brain::record_brief(&dir, &line);
     }
 
@@ -912,6 +917,8 @@ mod tests {
                     vec![
                         "Brief: repair × critical, done = services, packages, boot errors, ports".into(),
                         "Policy: repair × critical, goal quality (mistakes can break the system)".into(),
+                        // The repair playbook for the OS the test runs on (CI runs Linux and Windows).
+                        if cfg!(windows) { "Playbook: Repair Windows".into() } else { "Playbook: Repair Linux".into() },
                     ],
                     "rules".into()
                 ),
@@ -921,6 +928,7 @@ mod tests {
                     vec![
                         "Brief: task × careful, done = files in place, nothing lost".into(),
                         "Policy: task × careful, goal balanced (escalate on failure)".into(),
+                        "Playbook: Files".into(),
                     ],
                     "model".into()
                 ),

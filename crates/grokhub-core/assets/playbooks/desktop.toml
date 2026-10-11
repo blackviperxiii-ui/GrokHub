@@ -1,0 +1,56 @@
+# GrokHub playbook: work an app on the desktop (click, type, open windows).
+#
+# Copy this file to `playbooks/` in the settings folder (Settings → Playbooks →
+# Duplicate does it for you) to change it. A file there with the same id
+# replaces the shipped one; Reset puts the shipped one back.
+#
+# Look steps only read. Safe steps can be undone. Risky steps ask you first,
+# every time; a playbook can never make GrokHub skip an approval.
+
+id = "desktop"
+name = "Desktop apps"
+summary = "Look at the screen before each action, do one click or keystroke at a time, and look again to check it worked."
+
+checklist = ["the asked change is made", "result checked on screen"]
+backup = "Before changing a document or setting in an app, save it or note how it was, so the change can be put back."
+verify = "Take a screenshot after each action and check the window shows what was expected before the next one."
+rollback = "Undo in the app (Ctrl+Z or the old setting) and say what the screen showed when it went wrong."
+give_up = [
+  "a hard approval was refused",
+  "hardware, access or a sign-in is missing",
+  "every approach in the playbook failed and was checked",
+]
+
+[applies_when]
+intent = ["task"]
+domain = ["desktop"]
+
+[[phase]]
+name = "Look"
+tier = "read_only"
+
+[[phase.step]]
+name = "Take a screenshot and find the right window"
+
+[[phase.step]]
+name = "Read the window before clicking anything"
+
+[[phase]]
+name = "Act"
+tier = "safe"
+
+[[phase.step]]
+name = "Do one click or keystroke at a time"
+
+[[phase.step]]
+name = "Take a screenshot after each action and check it worked"
+
+[[phase]]
+name = "Risky actions"
+tier = "risky"
+
+[[phase.step]]
+name = "Send, post, buy or sign in"
+
+[[phase.step]]
+name = "Close a window with unsaved work or delete something"
