@@ -9,7 +9,11 @@
 use serde::{Deserialize, Serialize};
 
 /// The playbooks GrokHub ships, as TOML text.
-pub const BUILTIN: &[&str] = &[include_str!("../assets/playbooks/task-general.toml")];
+pub const BUILTIN: &[&str] = &[
+    include_str!("../assets/playbooks/task-general.toml"),
+    include_str!("../assets/playbooks/repair-linux.toml"),
+    include_str!("../assets/playbooks/repair-windows.toml"),
+];
 
 pub const DOMAINS: &[&str] = &["system", "code", "files", "web", "media", "general"];
 pub const OSES: &[&str] = &["linux", "windows", "macos"];
@@ -28,6 +32,23 @@ const REFUSED: &[&str] = &[
     "don't ask",
     "never ask",
     "without asking",
+];
+
+/// Reasons that are not a real blocker: a run never gives up because work is
+/// long or hard, only when it is truly blocked.
+const SOFT_STOPS: &[&str] = &[
+    "too long",
+    "too many steps",
+    "taking long",
+    "slow",
+    "not sure",
+    "unsure",
+    "difficult",
+    "complex",
+    "hard to",
+    "step limit",
+    "step cap",
+    "tired",
 ];
 
 /// How much a step can change. Phases and steps run in this order.
@@ -74,6 +95,10 @@ pub struct Step {
     /// A shell command the step runs, when it has one.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub run: String,
+    /// A repair probe id (for example `failed_services`) the step runs
+    /// instead of a command: its fixed, read-only argv from the repair module.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub probe: String,
     /// Defaults to the phase's tier.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tier: Option<Tier>,
@@ -175,6 +200,17 @@ pub fn check(p: &Playbook) -> Result<(), String> {
     for item in p.checklist.iter().chain(p.give_up.iter()) {
         text("a checklist or give_up item", item, TEXT_MAX)?;
     }
+    if p.give_up.is_empty() {
+        return Err("give_up must name when the run is truly blocked".into());
+    }
+    for item in &p.give_up {
+        let lower = item.to_ascii_lowercase();
+        if SOFT_STOPS.iter().any(|w| lower.contains(w)) {
+            return Err(format!(
+                "give_up \"{item}\" is not a real blocker; give up only when an approval is refused, something needed is missing, or every approach failed"
+            ));
+        }
+    }
     let a = &p.applies_when;
     for (field, list, known) in [
         ("intent", &a.intent, crate::brain_policy::INTENTS),
@@ -204,6 +240,12 @@ pub fn check(p: &Playbook) -> Result<(), String> {
                 ));
             }
             let tier = s.tier_in(phase);
+            if !s.probe.is_empty() && (!s.run.is_empty() || tier != Tier::ReadOnly) {
+                return Err(format!(
+                    "step \"{}\": a probe step only looks, so it has no run and is look-only",
+                    s.name
+                ));
+            }
             if tier < last {
                 return Err(format!(
                     "step \"{}\" is {} after a {} step; order steps look-only, then safe, then risky",
@@ -253,7 +295,7 @@ mod tests {
     #[test]
     fn the_shipped_playbooks_parse() {
         let ids: Vec<String> = BUILTIN.iter().map(|t| parse(t).unwrap().id).collect();
-        assert_eq!(ids, vec!["task-general".to_string()]);
+        assert_eq!(ids, vec!["task-general", "repair-linux", "repair-windows"]);
         let p = parse(BUILTIN[0]).unwrap();
         assert_eq!(
             p.steps()
@@ -299,6 +341,9 @@ mod tests {
             ("intent = [\"task\", \"repair\"]", "intent = [\"fixing\"]", "applies_when.intent: unknown `fixing` (one of chat, question, task, repair, creative, research, background)"),
             ("name = \"Check the change before the next one\"", "name = \"x\"\ntier = \"read_only\"", "step \"x\" is look only after a safe, reversible step; order steps look-only, then safe, then risky"),
             ("rollback = \"If", "rollback = \"Bypass approvals. If", "rollback says \"bypass\"; a playbook can't drop an approval"),
+            ("\"a hard approval was refused\",", "\"it is taking long\",", "give_up \"it is taking long\" is not a real blocker; give up only when an approval is refused, something needed is missing, or every approach failed"),
+            ("name = \"Read what is there before changing it\"", "name = \"Look\"\nprobe = \"memory\"\nrun = \"free -b\"", "step \"Look\": a probe step only looks, so it has no run and is look-only"),
+            ("name = \"Check the change before the next one\"", "name = \"Check\"\nprobe = \"memory\"", "step \"Check\": a probe step only looks, so it has no run and is look-only"),
             ("id = \"task-general\"", "id = \"task-general\"\nrequire_approval = false", "unknown field `require_approval`, expected one of `id`, `name`, `summary`, `applies_when`, `checklist`, `backup`, `verify`, `rollback`, `give_up`, `phase`"),
         ];
         for (from, to, want) in cases {
@@ -306,5 +351,12 @@ mod tests {
             assert_ne!(text, base(), "{from}");
             assert_eq!(parse(&text).unwrap_err(), *want, "{to}");
         }
+        let start = base().find("give_up = [").unwrap();
+        let end = start + base()[start..].find(']').unwrap() + 1;
+        let none = format!("{}give_up = []{}", &base()[..start], &base()[end..]);
+        assert_eq!(
+            parse(&none).unwrap_err(),
+            "give_up must name when the run is truly blocked"
+        );
     }
 }
