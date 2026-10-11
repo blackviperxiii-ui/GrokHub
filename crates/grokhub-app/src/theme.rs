@@ -102,6 +102,11 @@ fn tok(dark: Color32, light: Color32) -> Color32 {
     }
 }
 
+/// Pick a dark/light pair for the active paint mode (workboard chips, etc.).
+pub fn tok_pair(dark: Color32, light: Color32) -> Color32 {
+    tok(dark, light)
+}
+
 pub fn bg() -> Color32 {
     tok(BG, LIGHT_BG)
 }
