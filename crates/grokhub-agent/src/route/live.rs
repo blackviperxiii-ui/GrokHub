@@ -486,6 +486,15 @@ pub fn decide(config_dir: &Path, call: &RouteCall<'_>, now_ms: u64) -> Decision 
     let recover = pick.as_ref().is_some_and(|p| p.recover);
     let class_key = format!("{key}\u{1f}{}", row.map(|r| r.class).unwrap_or(call.class));
     let sticky = if key.is_empty() { None } else { episode_model(&class_key, turn) };
+    // PR E: a failed verify on an on-device turn asks the next online pick to escalate.
+    if rejects.unwrap_or(0) > 0 && !verify_ok {
+        let was_local = sticky.as_deref().is_some_and(super::local::is_local)
+            || super::local::is_local(call.model)
+            || call.provider == super::local::PROVIDER_LOCAL;
+        if was_local {
+            super::local::note_local_verify_failed(true);
+        }
+    }
     let base_table = table_snapshot(config_dir);
     let table: Arc<RoutingTable> = match (&st.canary_order, tuned.tuning.orders.is_empty()) {
         (None, true) => base_table,
