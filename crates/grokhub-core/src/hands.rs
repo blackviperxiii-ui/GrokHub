@@ -297,7 +297,7 @@ mod tests {
             .and_then(|line| line.parse().ok())
             .expect("packaging/release-binary-size-ceiling must name a byte count");
         assert!(
-            ceiling_bytes >= 1_048_576 && ceiling_bytes <= 209_715_200,
+            (1_048_576..=209_715_200).contains(&ceiling_bytes),
             "release size ceiling must stay a plausible binary size: {ceiling_bytes}"
         );
         assert!(
