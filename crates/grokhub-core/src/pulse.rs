@@ -32,6 +32,9 @@ pub struct PulseMeta {
     /// Where a Feed post came from, shown above its headline.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_name: Option<String>,
+    /// The interest a source post matched, painted as "Why: …" under its summary.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub because: Option<String>,
     /// Released from quiet hours inside one digest card: no ping of its own.
     #[serde(default, skip_serializing_if = "is_false")]
     pub quiet_batched: bool,

@@ -150,17 +150,13 @@ fn ago_label(ms: u64, now: u64) -> String {
 }
 
 impl Cabin {
-    /// Interest topics to search, strongest first, and the muted ones.
-    fn source_topics(&mut self) -> (Vec<String>, Vec<String>) {
-        let profile = self.interests_now();
-        let live = profile.ranked().into_iter().map(|t| t.topic.clone()).collect();
-        let muted = profile
-            .topics
-            .iter()
-            .filter(|t| t.muted)
+    /// Interest topics to search, strongest first, muted ones left out.
+    fn source_topics(&mut self) -> Vec<String> {
+        self.interests_now()
+            .ranked()
+            .into_iter()
             .map(|t| t.topic.clone())
-            .collect();
-        (live, muted)
+            .collect()
     }
 
     fn sources_last_run(&mut self) -> u64 {
@@ -197,7 +193,7 @@ impl Cabin {
             let memory_md = crate::config::read_memory("MEMORY.md");
             self.seed_interests(&user_md, &memory_md);
         }
-        let (topics, _) = self.source_topics();
+        let topics = self.source_topics();
         let reqs = ps::requests(&self.cfg.pulse_sources, &topics, now);
         // Counted as a run either way, so an empty setup does not retry every tick.
         self.sources.last_run_ms = Some(now);
@@ -242,15 +238,22 @@ impl Cabin {
     /// New items become Feed posts; everything posted is remembered so a dismissed
     /// post never comes back. Returns how many posted.
     pub(super) fn post_source_run(&mut self, run: SourceRun) -> usize {
-        let (_, muted) = self.source_topics();
+        let ranked = ps::rank(&run.items, self.interests_now(), run.at_ms);
         let path = sources_cache_path();
         let mut cache = ps::load_cache(&path);
-        let posted: Vec<String> = self
+        let posted_urls: Vec<String> = self
             .updates
             .iter()
             .flat_map(|c| c.citations.iter().cloned())
             .collect();
-        let fresh = ps::pick_new(&run.items, &cache, &muted, &posted, run.at_ms);
+        // Live posts only: a dismissed story may come back from a different outlet.
+        let posted_titles: Vec<String> = self
+            .updates
+            .iter()
+            .filter(|c| c.status != grokhub_core::UpdateStatus::Dismissed)
+            .map(|c| c.title.clone())
+            .collect();
+        let fresh = ps::pick_new(&ranked, &cache, &posted_urls, &posted_titles);
         let mut added = 0;
         for item in &fresh {
             if grokhub_core::post_update(&mut self.updates, ps::item_card(item, run.at_ms)) {
@@ -433,6 +436,7 @@ mod tests {
             summary: "812 points, 301 comments on Hacker News.".into(),
             image: None,
             topic: Some("Rust".into()),
+            engagement: 0,
         }
     }
 
@@ -440,6 +444,7 @@ mod tests {
     fn a_run_posts_named_linked_feed_cards_once() {
         let (_lock, _root, mut cabin) = cabin();
         cabin.updates.clear();
+        cabin.add_interest("Rust");
         let now = now_ms();
         let run = |items: Vec<SourceItem>| SourceRun {
             items,
@@ -465,6 +470,8 @@ mod tests {
             .expect("posted");
         assert_eq!(card.citations, vec!["https://blog.rust-lang.org/1.99".to_string()]);
         assert_eq!(card.pulse.source_name.as_deref(), Some("Hacker News"));
+        assert_eq!(card.pulse.because.as_deref(), Some("Rust"));
+        assert_eq!(super::super::pulse_ui::why_line("Rust"), "Why: Rust");
         // It shows on Pulse → Feed.
         let inputs = grokhub_core::pulse::PulseInputs {
             now_ms: now,
