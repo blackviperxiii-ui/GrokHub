@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use grokhub_core::release_verify::{
-    download_url_ok, host_asset, parse_releases, pick_release, refusal_note, verify_asset, Refusal, GITHUB_RELEASES_API,
+    download_url_ok, host_asset, parse_releases, pick_release, refusal_note, verify_asset, Refusal, releases_api,
     RELEASE_PUBKEY, SIG_NAME, SUMS_NAME,
 };
 use grokhub_core::Channel;
@@ -153,7 +153,7 @@ pub(crate) fn swap_in(dest: &Path, files: &[(PathBuf, &str)]) -> Result<(), Stri
 pub(crate) fn install_release(channel: Channel, windows: bool) -> Result<String, String> {
     let mut version = String::new();
     let run = (|| -> Result<String, Refusal> {
-        let releases = parse_releases(&fetch_text(GITHUB_RELEASES_API)?);
+        let releases = parse_releases(&fetch_text(releases_api(channel))?);
         let rel = pick_release(&releases, channel).ok_or(Refusal::NoRelease)?;
         version = rel.version();
         let asset = host_asset(rel, windows).ok_or(Refusal::NoAsset)?;

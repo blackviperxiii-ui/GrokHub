@@ -11,6 +11,16 @@ use crate::Channel;
 
 /// Newest first, drafts hidden for anonymous reads.
 pub const GITHUB_RELEASES_API: &str = "https://api.github.com/repos/blackviperxiii-ui/GrokHub/releases?per_page=30";
+
+/// Where the channel's release is listed. Stable asks for `releases/latest`
+/// (never a pre-release), so a run of beta pre-releases can't push the
+/// newest stable off the first page of the list.
+pub fn releases_api(channel: Channel) -> &'static str {
+    match channel {
+        Channel::Stable => crate::update::GITHUB_LATEST_API,
+        Channel::Beta => GITHUB_RELEASES_API,
+    }
+}
 pub const SUMS_NAME: &str = "SHA256SUMS";
 pub const SIG_NAME: &str = "SHA256SUMS.minisig";
 
@@ -164,6 +174,11 @@ pub fn refusal_note(version: &str, why: &Refusal) -> String {
     format!("Update {version} not installed: {}", why.reason())
 }
 
+/// The [`refusal_note`] line in an update's output, if the release step refused.
+pub fn refusal_line(output: &str) -> Option<&str> {
+    output.lines().map(str::trim).find(|l| l.starts_with("Update ") && l.contains(" not installed: "))
+}
+
 /// `sha256sum` lines: `<64 hex>  <name>` (or `*<name>` for binary mode).
 pub fn parse_sums(text: &str) -> Vec<(String, String)> {
     text.lines()
@@ -283,6 +298,16 @@ mod tests {
                 ("a82d46432d0f6baa57ebb1b0e8a03307df6724580cc316c763e61ae1bfe8cccf".to_string(), "bin.zip".to_string()),
             ]
         );
+    }
+
+    #[test]
+    fn stable_asks_for_the_latest_release_and_refusals_are_found_in_the_output() {
+        assert_eq!(releases_api(Channel::Stable), "https://api.github.com/repos/blackviperxiii-ui/GrokHub/releases/latest");
+        assert_eq!(releases_api(Channel::Beta), "https://api.github.com/repos/blackviperxiii-ui/GrokHub/releases?per_page=30");
+        let out = format!("$ {RELEASE_INSTALL_STEP}\nexit 1\n{}", refusal_note("2.13.2", &Refusal::NoSums));
+        assert_eq!(refusal_line(&out), Some("Update 2.13.2 not installed: the release has no SHA256SUMS"));
+        assert_eq!(refusal_line("$ git pull\nexit 1\nfatal: unable to access"), None);
+        assert!(crate::update::cabin_overlay_step(RELEASE_INSTALL_STEP), "the release step marks the cabin updated");
     }
 
     #[test]

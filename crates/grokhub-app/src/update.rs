@@ -313,6 +313,8 @@ pub fn log_update_attempt(channel: Channel, cmds: &[String], ok: bool, output: &
 pub fn update_failure_status(output: &str, channel_switch: bool, log: &std::path::Path) -> String {
     let hint = if channel_switch {
         channel_switch_fail_hint(output)
+    } else if let Some(line) = grokhub_core::release_verify::refusal_line(output) {
+        line
     } else {
         update_fail_hint(output)
     };
@@ -1265,6 +1267,11 @@ mod tests {
         assert_eq!(
             update_failure_status("exit 1 · 5ms\nfatal: unable to access", false, log),
             "Update failed. Details: /home/u/.config/GrokHub/update.log"
+        );
+        let refused = "$ grokhub: install the verified release\nexit 1\nUpdate 2.13.2 not installed: the download's checksum didn't match";
+        assert_eq!(
+            update_failure_status(refused, false, log),
+            "Update 2.13.2 not installed: the download's checksum didn't match. Details: /home/u/.config/GrokHub/update.log"
         );
         assert_eq!(
             update_failure_status("exit 1 · 5ms\nfatal: unable to access", true, log),

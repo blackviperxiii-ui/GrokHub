@@ -503,8 +503,7 @@ pub fn cabin_overlay_step(cmd: &str) -> bool {
         || cmd.contains("remote add")
         || cmd.contains("install.sh")
         || cmd.contains("install-windows.ps1")
-        || cmd.contains("releases/latest")
-        || cmd.contains("grokhub-windows-v")
+        || cmd == crate::release_verify::RELEASE_INSTALL_STEP
 }
 
 fn overlay_install_cmd(source: &Path, src_quoted: &str, windows: bool) -> String {
