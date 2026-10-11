@@ -638,6 +638,48 @@ pub fn adapter_ipv4s() -> Vec<std::net::Ipv4Addr> {
     Vec::new()
 }
 
+/// The clipboard's image: the registered "PNG" format when an app put one
+/// there (browsers, Snipping Tool), else the `CF_DIB` bitmap every copied
+/// image has. `true` when the bytes are already PNG.
+pub fn clipboard_image() -> Option<(Vec<u8>, bool)> {
+    use windows_sys::Win32::System::DataExchange::{
+        CloseClipboard, GetClipboardData, IsClipboardFormatAvailable, OpenClipboard, RegisterClipboardFormatW,
+    };
+    use windows_sys::Win32::System::Memory::{GlobalLock, GlobalSize, GlobalUnlock};
+    // CF_DIB; a const here keeps the Win32_System_Ole feature out.
+    const CF_DIB: u32 = 8;
+    // A 4K screen as a 32-bit DIB is about 33 MB; anything far past that is not a screenshot.
+    const CAP: usize = 128 * 1024 * 1024;
+    let png_name = wide("PNG");
+    // SAFETY: the clipboard is opened and closed on this thread; the global
+    // memory is read only between its lock and unlock, within GlobalSize.
+    unsafe {
+        if OpenClipboard(ptr::null_mut()) == 0 {
+            return None;
+        }
+        let png = RegisterClipboardFormatW(png_name.as_ptr());
+        let pick = [(png, true), (CF_DIB, false)]
+            .into_iter()
+            .find(|(f, _)| *f != 0 && IsClipboardFormatAvailable(*f) != 0);
+        let got = pick.and_then(|(format, is_png)| {
+            let handle = GetClipboardData(format);
+            if handle.is_null() {
+                return None;
+            }
+            let len = GlobalSize(handle);
+            let at = GlobalLock(handle);
+            if at.is_null() {
+                return None;
+            }
+            let bytes = (len > 0 && len <= CAP).then(|| std::slice::from_raw_parts(at.cast::<u8>(), len).to_vec());
+            GlobalUnlock(handle);
+            bytes.map(|b| (b, is_png))
+        });
+        CloseClipboard();
+        got
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
