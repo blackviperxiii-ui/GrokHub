@@ -994,7 +994,8 @@ mod tests {
     }
 
     /// Approval cards, park titles and other hard text never see the personality: only
-    /// the chat rules read it. A new reader has to be added here on purpose.
+    /// the chat rules and the picker read it (a `personality::` call or a `.personality`
+    /// field). A new reader has to be added here on purpose.
     #[test]
     fn only_the_chat_rules_read_the_personality() {
         let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
@@ -1013,13 +1014,16 @@ mod tests {
                 }
                 let text = std::fs::read_to_string(&path).unwrap().replace("\r\n", "\n");
                 let live = text.split("\n#[cfg(test)]\nmod tests").next().unwrap();
-                if live.contains("personality") {
+                let reads_field = live.match_indices(".personality").any(|(at, m)| {
+                    !live[at + m.len()..].starts_with(|c: char| c.is_ascii_alphanumeric() || c == '_')
+                });
+                if live.contains("personality::") || reads_field {
                     readers.insert(path.strip_prefix(&src).unwrap().to_string_lossy().replace('\\', "/"));
                 }
             }
         }
         let want: std::collections::BTreeSet<String> =
-            ["app/native_engine.rs", "config.rs"].iter().map(|s| s.to_string()).collect();
+            ["app/native_engine.rs", "app/personality_ui.rs"].iter().map(|s| s.to_string()).collect();
         assert_eq!(readers, want);
     }
 }

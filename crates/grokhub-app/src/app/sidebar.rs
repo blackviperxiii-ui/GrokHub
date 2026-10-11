@@ -101,6 +101,7 @@ impl Cabin {
                         }
                         // RTL: allocated after minimize, so it sits immediately to its left.
                         let _ = self.paint_session_actions_menu(ui);
+                        self.paint_personality_switch(ui);
                         let (_rect, drag) = ui.allocate_exact_size(
                             ui.available_size(),
                             egui::Sense::click_and_drag(),
