@@ -213,13 +213,23 @@ pub fn release_channel_switch_cmds(target: Channel) -> Vec<String> {
     vec![grokhub_core::release_verify::release_switch_step(target)]
 }
 
-/// Runs the release step for the plan runner: `install` is the installed
-/// channel's release, a switch installs its target and then writes the
-/// receipt. `None` for any other step.
+/// Runs the release or clone-recover step for the plan runner: `install` is
+/// the installed channel's release, a switch installs its target and then
+/// writes the receipt, and recover saves a dirty/diverged clone onto a
+/// backup branch before hard-reset. `None` for any other step.
 fn run_release_step(cmd: &str) -> Option<String> {
     use crate::release_update::{install_release, release_step_receipt_for};
     if cmd == grokhub_core::release_verify::RELEASE_INSTALL_STEP {
         return Some(release_step_receipt_for(cmd, install_release(installed_channel(), cfg!(windows))));
+    }
+    if let Some((channel, path)) = grokhub_core::parse_clone_recover_step(cmd) {
+        let result = grokhub_core::recover_clone_if_needed(&path, channel).map(|bak| {
+            match bak {
+                Some(name) => format!("Saved prior state on {name}; clone reset to the channel tip."),
+                None => "Clone already matched the channel tip — no backup needed.".into(),
+            }
+        });
+        return Some(release_step_receipt_for(cmd, result));
     }
     let target = grokhub_core::release_verify::parse_release_switch_step(cmd)?;
     let result = install_release(target, cfg!(windows)).and_then(|line| {
