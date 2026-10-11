@@ -483,7 +483,7 @@ impl Cabin {
     }
 
     pub(super) fn spawn_native_digest(&mut self) {
-        let prompt = grokhub_core::pulse::feed_prompt(&self.digest_steer, &self.cfg.feed_instructions);
+        let prompt = grokhub_core::pulse::feed_prompt(&self.digest_steer, &self.digest_interests, &self.cfg.feed_instructions);
         let ready = match unattended_model(self) {
             Ok(ready) => ready,
             Err(err) => {
@@ -898,7 +898,7 @@ mod tests {
             assert!(memory.contains(line), "{line} in {memory}");
         }
         // The next lookup carries the rewritten text.
-        let prompt = grokhub_core::pulse::feed_prompt("Rust", &cabin.cfg.feed_instructions);
+        let prompt = grokhub_core::pulse::feed_prompt("Rust", "", &cabin.cfg.feed_instructions);
         assert!(prompt.ends_with("- Crypto price swings."), "{prompt}");
         // A reply that is not instructions keeps the current text.
         say.text

@@ -913,9 +913,14 @@ pub fn instructions_from_brief(brief: &str) -> String {
     format!("{DEFAULT_FEED_INSTRUCTIONS}\n\nFocus: {brief}")
 }
 
-/// The digest lookup with the person's instructions. They decide what belongs.
-pub fn feed_prompt(steer: &str, instructions: &str) -> String {
-    let base = crate::update_feed::digest_lookup_prompt(steer);
+/// The digest lookup with the person's interests and instructions. They decide what belongs.
+pub fn feed_prompt(steer: &str, interests: &str, instructions: &str) -> String {
+    let mut base = crate::update_feed::digest_lookup_prompt(steer);
+    let interests = interests.trim();
+    if !interests.is_empty() {
+        base.push_str("\n\n");
+        base.push_str(interests);
+    }
     let text: String = feed_instructions_or_default(instructions)
         .trim()
         .chars()
@@ -1658,7 +1663,10 @@ mod tests {
             instructions_from_brief("Rust and Linux gaming"),
             format!("{DEFAULT_FEED_INSTRUCTIONS}\n\nFocus: Rust and Linux gaming")
         );
-        let prompt = feed_prompt("Rust news", "Only Rust.\nNo sports.");
+        let prompt = feed_prompt("Rust news", "", "Only Rust.\nNo sports.");
+        assert!(!prompt.contains("\n\n\n"), "{prompt}");
+        let with = feed_prompt("Rust news", "Their interests, strongest first: Rust.", "Only Rust.");
+        assert!(with.contains("NONE. Do not invent a source, a count, or a fact. Do not offer to send, pay, delete, or publish anything.\n\nTheir interests, strongest first: Rust.\n\nFeed instructions"), "{with}");
         assert!(prompt.ends_with("Feed instructions from the person (follow them; they apply to this and future posts):\nOnly Rust.\nNo sports."), "{prompt}");
         let taste = parse_ledger(
             "- [2026-10-04] pulse: liked \"Rust 1.95 ships\" reason=liked\n- [2026-10-04] pulse: dismissed \"NFL scores\" reason=not-this\n- [2026-10-04] pulse: dismissed \"Old card\" reason=dismiss\n",
