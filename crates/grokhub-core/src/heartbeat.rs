@@ -1,4 +1,5 @@
-//! Cabin pulse. Every 15s the organs that give the app autonomy run.
+//! Cabin pulse. Every 15s the organs that give the app autonomy run. The pulse
+//! is also the background governor's clock (`crate::governor`).
 
 pub const HEARTBEAT_MS: u64 = 15_000;
 
@@ -6,34 +7,33 @@ pub const HEARTBEAT_MS: u64 = 15_000;
 pub enum HeartbeatAct {
     Housekeep,
     Inbox,
-    Night,
-    Review,
+    /// The governor's queue (`crate::governor`): every background job that is
+    /// due this beat, highest priority first. The governor holds the ones Halt,
+    /// quiet hours or a spent budget stop.
+    Background,
     Wall,
     MidThought,
-    Reflect,
-    Anticipate,
 }
 
 impl HeartbeatAct {
     /// After Halt, only local upkeep with no model call and nothing new started:
-    /// Housekeep (persist, expiry; its ideas ask meets the throttle) and MidThought.
+    /// Housekeep (persist, day roll), MidThought, and the governor's queue,
+    /// which runs only its jobs registered to run while halted.
     pub fn runs_while_halted(self) -> bool {
-        matches!(self, Self::Housekeep | Self::MidThought)
+        matches!(self, Self::Housekeep | Self::Background | Self::MidThought)
     }
 }
 
-/// Every organ wakes each pulse. The proactive ones (anticipate, the ideas ask,
-/// the nightly review) spend from `crate::heartbeat_throttle` before they act.
+/// Every organ wakes each pulse. Background work runs only from the governor's
+/// queue; the proactive acts in it (anticipate, the ideas ask, the nightly
+/// review) also spend from `crate::heartbeat_throttle` before they act.
 pub fn heartbeat_acts() -> Vec<HeartbeatAct> {
     vec![
         HeartbeatAct::Housekeep,
         HeartbeatAct::Inbox,
-        HeartbeatAct::Night,
-        HeartbeatAct::Review,
+        HeartbeatAct::Background,
         HeartbeatAct::Wall,
         HeartbeatAct::MidThought,
-        HeartbeatAct::Reflect,
-        HeartbeatAct::Anticipate,
     ]
 }
 
@@ -79,12 +79,9 @@ mod tests {
             vec![
                 HeartbeatAct::Housekeep,
                 HeartbeatAct::Inbox,
-                HeartbeatAct::Night,
-                HeartbeatAct::Review,
+                HeartbeatAct::Background,
                 HeartbeatAct::Wall,
                 HeartbeatAct::MidThought,
-                HeartbeatAct::Reflect,
-                HeartbeatAct::Anticipate,
             ]
         );
     }
@@ -95,7 +92,16 @@ mod tests {
             .into_iter()
             .filter(|a| a.runs_while_halted())
             .collect();
-        assert_eq!(kept, vec![HeartbeatAct::Housekeep, HeartbeatAct::MidThought]);
+        assert_eq!(
+            kept,
+            vec![
+                HeartbeatAct::Housekeep,
+                HeartbeatAct::Background,
+                HeartbeatAct::MidThought
+            ]
+        );
+        assert!(!HeartbeatAct::Inbox.runs_while_halted());
+        assert!(!HeartbeatAct::Wall.runs_while_halted());
     }
 
     #[test]
