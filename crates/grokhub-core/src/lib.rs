@@ -66,6 +66,7 @@ pub mod outcome;
 pub mod pair;
 pub mod paths;
 pub mod proactive;
+pub mod protected_surface;
 pub mod project;
 pub mod interests;
 pub mod personality;

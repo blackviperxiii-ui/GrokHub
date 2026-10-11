@@ -102,18 +102,19 @@ pub use cua::{
 };
 pub use canary::{
     diff_stat, judge, open_trial, pick_arm, read_versions, settle_trials, start_trial, versions_path, Judged, Metric,
-    Version, VersionStatus, CANARY_MAX_MS, CANARY_RUNS, CANARY_SHARE_PCT, VERSIONS_FILE,
+    Version, VersionStatus, ALL_RUNS, CANARY_MAX_MS, CANARY_RUNS, CANARY_SHARE_PCT, VERSIONS_FILE,
 };
 pub use changes::{
     accept_change, kept_bytes, change_id, note_proposal_finding, content_hash, entry_id, findings_path, history_dir, ledger_path, read_scope_findings,
     record_change, record_skill_change, restore_change, restore_skill, scope_guard, skill_history_dir,
     skill_ledger_path, take_self_changes, undo_change, undo_skill_change, Change, ChangeKind, ChangeLedger,
-    ChangeOp, ChangeTarget, Reverted, ScopeFinding, SkillTarget, UndoAsk, AUTOMATION_LEDGER_FILE, CHANGES_DIR,
+    ChangeOp, ChangeTarget, Reverted, ScopeFinding, SkillTarget, SnippetTarget, UndoAsk, AUTOMATION_LEDGER_FILE, CHANGES_DIR,
     CONNECTION_LEDGER_FILE, FINDINGS_FILE, HISTORY_CAP, LEDGER_LINE_CAP, LEDGER_SCOPE_VIOLATION, MODEL_LEDGER_FILE, SKILL_LEDGER_FILE,
+    SNIPPET_LEDGER_FILE, snippet_path,
 };
 pub(crate) use changes::private_write;
 pub use self_improve::{
-    last_recorded_run, outcome_from_spans, patch_marks, run_metrics_from_spans, reject_live_replay, replay_gate, replay_patch, run_weekly,
+    guard_span, last_recorded_run, outcome_from_spans, patch_marks, run_metrics_from_spans, GUARD_TOOL, reject_live_replay, replay_gate, replay_patch, run_weekly,
     spans_for, ReplayOpts, WeeklyPass, REPLAY_LIVE_REFUSED, REPLAY_TOOL, SELF_REVIEW_SESSION, SELF_REVIEW_TOOL,
 };
 pub use self_manage::{
