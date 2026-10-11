@@ -98,6 +98,7 @@ impl grokhub_agent::ModelClient for Fake {
             reasoning: String::new(),
             calls: Vec::new(),
             usage: grokhub_agent::Usage::default(),
+            ..Default::default()
         })
     }
 }

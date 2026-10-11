@@ -773,7 +773,8 @@ pub fn parse_openai_reply(body: &str) -> Result<TurnOutput, ClientError> {
             cached_tokens: u64_at(u, &["prompt_tokens_details", "cached_tokens"]),
             cost_in_usd_ticks: u["cost"].as_f64().map(|c| (c * 1e10).round() as i64).unwrap_or(0),
         },
-    })
+            ..Default::default()
+        })
 }
 
 /// A `/v1/messages` answer as a turn.
@@ -782,7 +783,9 @@ pub fn parse_anthropic_reply(body: &str) -> Result<TurnOutput, ClientError> {
     let Some(blocks) = v["content"].as_array() else {
         return Err(ClientError::Protocol("provider reply has no content".into()));
     };
-    let mut out = TurnOutput { text: String::new(), reasoning: String::new(), calls: Vec::new(), usage: Usage::default() };
+    let mut out = TurnOutput { text: String::new(), reasoning: String::new(), calls: Vec::new(), usage: Usage::default(),
+            ..Default::default()
+        };
     for b in blocks {
         match b["type"].as_str() {
             Some("text") => out.text.push_str(b["text"].as_str().unwrap_or("")),

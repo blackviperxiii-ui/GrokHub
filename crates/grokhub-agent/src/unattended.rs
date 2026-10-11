@@ -246,7 +246,8 @@ mod tests {
                     reasoning: String::new(),
                     calls: Vec::new(),
                     usage: Usage::default(),
-                });
+            ..Default::default()
+        });
             }
             let n = self.n.fetch_add(1, Ordering::SeqCst);
             if n == 0 {
@@ -291,7 +292,8 @@ mod tests {
                         },
                     ],
                     usage: Usage::default(),
-                });
+            ..Default::default()
+        });
             }
             *self
                 .final_blob
@@ -309,7 +311,8 @@ mod tests {
                     cost_in_usd_ticks: 1,
                     cached_tokens: 0,
                 },
-            })
+            ..Default::default()
+        })
         }
     }
 
@@ -426,7 +429,8 @@ mod tests {
                     reasoning: String::new(),
                     calls: Vec::new(),
                     usage: Usage::default(),
-                });
+            ..Default::default()
+        });
             }
             let n = self.n.fetch_add(1, Ordering::SeqCst);
             if n == 0 {
@@ -439,7 +443,8 @@ mod tests {
                         arguments: r#"{"path":"note.txt","content":"yes"}"#.into(),
                     }],
                     usage: Usage::default(),
-                });
+            ..Default::default()
+        });
             }
             *self
                 .final_blob
@@ -451,7 +456,8 @@ mod tests {
                 reasoning: String::new(),
                 calls: Vec::new(),
                 usage: Usage::default(),
-            })
+            ..Default::default()
+        })
         }
     }
 
@@ -552,7 +558,8 @@ mod tests {
                     cost_in_usd_ticks: 42,
                     cached_tokens: 0,
                 },
-            })
+            ..Default::default()
+        })
         }
     }
 
@@ -572,7 +579,8 @@ mod tests {
                 reasoning: String::new(),
                 calls: Vec::new(),
                 usage: Usage::default(),
-            })
+            ..Default::default()
+        })
         }
     }
 
@@ -727,7 +735,8 @@ mod tests {
                         arguments: format!(r#"{{"path":"{path}"}}"#),
                     }],
                     usage: Usage::default(),
-                });
+            ..Default::default()
+        });
             }
             sink(StreamEvent::TextDelta("chore done".into()));
             Ok(TurnOutput {
@@ -735,7 +744,8 @@ mod tests {
                 reasoning: String::new(),
                 calls: Vec::new(),
                 usage: Usage::default(),
-            })
+            ..Default::default()
+        })
         }
     }
 
