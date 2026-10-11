@@ -15438,6 +15438,7 @@ fn quiet_cabin() -> Cabin {
         settings_sec: super::SettingsSec::Account,
         market: Default::default(),
         picker: Default::default(),
+        playbooks: Default::default(),
         interests: Default::default(),
         sources: Default::default(),
         settings_back: super::Nav::Chat,
