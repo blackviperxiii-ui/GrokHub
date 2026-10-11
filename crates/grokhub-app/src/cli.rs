@@ -11,6 +11,8 @@ pub enum Launch {
     McpDesktop,
     McpCua,
     McpSelf,
+    /// `grokhub bench local` — on-device speed + eval (offline card PR D).
+    BenchLocal,
 }
 
 /// `grokhub --askpass <socket> [prompt]`: `sudo` runs this through the helper script.
@@ -22,6 +24,10 @@ pub fn askpass_socket(args: &[String]) -> Option<&str> {
 }
 
 pub fn parse_args(args: &[String]) -> Launch {
+    // Positional: `grokhub bench local` (offline card PR D).
+    if args.get(1).map(String::as_str) == Some("bench") && args.get(2).map(String::as_str) == Some("local") {
+        return Launch::BenchLocal;
+    }
     let mut out = Launch::Cabin;
     for a in args.iter().skip(1) {
         match a.as_str() {
@@ -87,6 +93,8 @@ mod tests {
         );
         assert_eq!(parse_args(&args(&["grokhub", "-V"])), Launch::Version);
         assert_eq!(parse_args(&args(&["grokhub", "--version"])), Launch::Version);
+        assert_eq!(parse_args(&args(&["grokhub", "bench", "local"])), Launch::BenchLocal);
+        assert_eq!(parse_args(&args(&["grokhub", "bench"])), Launch::Cabin);
     }
 
     #[test]
