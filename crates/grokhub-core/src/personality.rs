@@ -2,7 +2,7 @@
 //! (`assets/personalities.toml`). It only changes how replies sound; the cabin's safety,
 //! approval and honesty rules come after it in the system prompt and always win.
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 const BUILTIN: &str = include_str!("../assets/personalities.toml");
 
@@ -19,7 +19,7 @@ pub const NAME_MAX: usize = 32;
 pub const SAFETY_LINE: &str =
     "Personality affects tone only. Safety, approval, honesty and no-fabrication rules above all else.";
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Emoji {
     None,
@@ -27,7 +27,7 @@ pub enum Emoji {
     Heavy,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Verbosity {
     Terse,
@@ -35,7 +35,7 @@ pub enum Verbosity {
     Chatty,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Personality {
     pub id: String,
@@ -48,10 +48,11 @@ pub struct Personality {
     pub emoji: Emoji,
     pub verbosity: Verbosity,
     /// How it addresses the user ("sir"), if it does.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub address: Option<String>,
-    /// A TTS voice id or style note for voice mode.
-    #[serde(default)]
+    /// A TTS voice id or style note for voice mode. Only a voice in
+    /// [`crate::voice::TTS_VOICES`] changes the voice; anything else speaks in the default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub voice_hint: Option<String>,
     /// Light teasing allowed.
     #[serde(default)]
@@ -59,9 +60,12 @@ pub struct Personality {
     /// Profanity allowed; the picker tags it Explicit.
     #[serde(default)]
     pub explicit: bool,
+    /// Loaded from the user's `{config}/personalities/`, not shipped with the build.
+    #[serde(skip)]
+    pub custom: bool,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct PresetFile {
     preset: Vec<Personality>,
@@ -150,14 +154,109 @@ fn neutral() -> Personality {
         voice_hint: None,
         roast: false,
         explicit: false,
+        custom: false,
     }
 }
 
 /// The built-in preset with `id` (parsed once), or the default voice.
 pub fn builtin(id: &str) -> Personality {
-    static ALL: std::sync::OnceLock<Vec<Personality>> = std::sync::OnceLock::new();
-    find(ALL.get_or_init(builtins), id)
+    find(builtins_cached(), id)
 }
+
+/// Every preset the picker offers: the built-ins, then the user's own from `dir`
+/// (`{config}/personalities/*.toml`, the same `[[preset]]` format). A file that doesn't
+/// parse, or reuses an id already taken, is left out and named in the second list.
+pub fn load_all(dir: &std::path::Path) -> (Vec<Personality>, Vec<String>) {
+    let mut all = builtins();
+    let mut problems = Vec::new();
+    let mut files: Vec<std::path::PathBuf> = std::fs::read_dir(dir)
+        .map(|rd| rd.flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|x| x == "toml")).collect())
+        .unwrap_or_default();
+    files.sort();
+    for path in files {
+        let name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+        let parsed = std::fs::read_to_string(&path).map_err(|e| e.to_string()).and_then(|text| parse(&text));
+        match parsed {
+            Ok(presets) => {
+                for mut p in presets {
+                    if all.iter().any(|q| q.id == p.id) {
+                        problems.push(format!("{name}: the id {} is already taken.", p.id));
+                        continue;
+                    }
+                    p.custom = true;
+                    all.push(p);
+                }
+            }
+            Err(err) => problems.push(format!("{name}: {err}")),
+        }
+    }
+    (all, problems)
+}
+
+/// The preset with `id` among the built-ins and the user's own in `dir`, or the default voice.
+pub fn lookup(dir: &std::path::Path, id: &str) -> Personality {
+    let id = id.trim();
+    if id.is_empty() || id == DEFAULT_ID || builtins_cached().iter().any(|p| p.id == id) {
+        return builtin(id);
+    }
+    find(&load_all(dir).0, id)
+}
+
+/// A new custom preset copied from `base`: a fresh id (`<id>-copy`, `<id>-copy-2`, …)
+/// and "<name> copy". Everything else, explicit included, carries over.
+pub fn duplicate(base: &Personality, taken: &[Personality]) -> Personality {
+    let root = if base.id == DEFAULT_ID { "my-voice".to_string() } else { format!("{}-copy", base.id) };
+    let mut id = root.clone();
+    let mut n = 2;
+    while taken.iter().any(|p| p.id == id) {
+        id = format!("{root}-{n}");
+        n += 1;
+    }
+    let mut name = format!("{} copy", base.name.trim());
+    if name.chars().count() > NAME_MAX {
+        name = name.chars().take(NAME_MAX).collect::<String>().trim_end().to_string();
+    }
+    let mut copy = base.clone();
+    copy.id = id;
+    copy.name = name;
+    copy.custom = true;
+    if copy.tone_rules.trim().is_empty() {
+        copy.tone_rules = "Brief, warm and plain.".into();
+    }
+    copy
+}
+
+/// Where a custom preset lives.
+pub fn custom_path(dir: &std::path::Path, id: &str) -> std::path::PathBuf {
+    dir.join(format!("{id}.toml"))
+}
+
+/// Check and write a custom preset to `dir/<id>.toml`. Built-in ids are refused.
+pub fn save_custom(dir: &std::path::Path, p: &Personality) -> Result<std::path::PathBuf, String> {
+    p.check()?;
+    if p.id == DEFAULT_ID || builtins_cached().iter().any(|b| b.id == p.id) {
+        return Err(format!("{} is a built-in personality; duplicate it to make your own.", p.name));
+    }
+    let text = toml::to_string(&PresetFile { preset: vec![p.clone()] }).map_err(|e| format!("Personalities: {e}"))?;
+    std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    let path = custom_path(dir, &p.id);
+    std::fs::write(&path, text).map_err(|e| e.to_string())?;
+    Ok(path)
+}
+
+/// Remove a custom preset's file. Built-ins have none, so this never touches them.
+pub fn delete_custom(dir: &std::path::Path, id: &str) -> Result<(), String> {
+    if builtins_cached().iter().any(|b| b.id == id) {
+        return Err("Built-in personalities can't be deleted.".into());
+    }
+    std::fs::remove_file(custom_path(dir, id)).map_err(|e| e.to_string())
+}
+
+fn builtins_cached() -> &'static [Personality] {
+    static ALL: std::sync::OnceLock<Vec<Personality>> = std::sync::OnceLock::new();
+    ALL.get_or_init(builtins)
+}
+
 
 /// The preset with `id`, or the default voice when no preset has it.
 pub fn find(presets: &[Personality], id: &str) -> Personality {
@@ -314,5 +413,77 @@ mod tests {
         assert_eq!(msgs[1], ("user".to_string(), TRY_IT_PROMPT.to_string()));
         let plain = try_it_messages(&builtin(DEFAULT_ID));
         assert_eq!(plain[0], ("system".to_string(), TRY_IT_RULES.to_string()));
+    }
+
+    fn scratch(label: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("grokhub-personality-{label}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        dir
+    }
+
+    #[test]
+    fn duplicate_edit_save_reload_and_delete_round_trip() {
+        let dir = scratch("round-trip");
+        let (all, problems) = load_all(&dir);
+        assert_eq!((all.len(), problems.len()), (21, 0), "no folder yet: built-ins only");
+        let mut mine = duplicate(&builtin("butler"), &all);
+        assert_eq!(mine.id, "butler-copy");
+        assert_eq!(mine.name, "Butler copy");
+        assert_eq!(mine.address.as_deref(), Some("sir"));
+        assert_eq!(mine.voice_hint.as_deref(), Some("rex"));
+        assert!(mine.custom);
+        mine.name = "Jeeves".into();
+        mine.address = Some("madam".into());
+        mine.tone_rules = "Formal and discreet. Never more than three sentences.".into();
+        let path = save_custom(&dir, &mine).expect("saves");
+        assert_eq!(path, dir.join("butler-copy.toml"));
+
+        let (all, problems) = load_all(&dir);
+        assert!(problems.is_empty(), "{problems:?}");
+        assert_eq!(all.len(), 22);
+        let back = find(&all, "butler-copy");
+        assert_eq!(back, mine, "the saved file reads back field for field");
+        assert_eq!(lookup(&dir, "butler-copy").name, "Jeeves");
+        assert!(lookup(&dir, "butler-copy").prompt_block().contains("Address the user as \"madam\""));
+        assert_eq!(duplicate(&builtin("butler"), &all).id, "butler-copy-2");
+
+        delete_custom(&dir, "butler-copy").expect("deletes");
+        assert_eq!(load_all(&dir).0.len(), 21);
+        assert_eq!(lookup(&dir, "butler-copy").id, DEFAULT_ID, "a deleted preset falls back to the default");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn custom_presets_cannot_take_or_remove_a_built_in() {
+        let dir = scratch("built-in");
+        let mut fake = duplicate(&builtin("pirate"), &builtins());
+        fake.id = "pirate".into();
+        assert!(save_custom(&dir, &fake).unwrap_err().contains("built-in"));
+        assert!(delete_custom(&dir, "pirate").is_err());
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("a.toml"), "[[preset]]\nid = \"genie\"\nname = \"G\"\ndescription = \"d\"\ntone_rules = \"x\"\nemoji = \"none\"\nverbosity = \"terse\"\n").unwrap();
+        std::fs::write(dir.join("b.toml"), "not toml [").unwrap();
+        let (all, problems) = load_all(&dir);
+        assert_eq!(all.len(), 21);
+        assert_eq!(problems.len(), 2, "{problems:?}");
+        assert_eq!(problems[0], "a.toml: the id genie is already taken.");
+        assert!(problems[1].starts_with("b.toml: Personalities:"), "{problems:?}");
+        assert_eq!(lookup(&dir, "genie").name, "Genie");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_invalid_edit_is_refused_with_the_reason() {
+        let dir = scratch("invalid");
+        let mut mine = duplicate(&builtin("surfer"), &builtins());
+        mine.tone_rules = "x".repeat(TONE_RULES_MAX + 1);
+        assert_eq!(
+            save_custom(&dir, &mine).unwrap_err(),
+            format!("Personality surfer-copy: tone rules are over {TONE_RULES_MAX} characters.")
+        );
+        assert!(!dir.join("surfer-copy.toml").exists());
+        let default_copy = duplicate(&builtin(DEFAULT_ID), &builtins());
+        assert_eq!(default_copy.id, "my-voice");
+        assert!(default_copy.check().is_ok(), "a copy of the default has tone rules to edit");
     }
 }

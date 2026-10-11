@@ -659,8 +659,8 @@ pub struct Cabin {
     settings_sec: SettingsSec,
     /// Settings → Connectors tab and Marketplace view state.
     market: marketplace_ui::MarketState,
-    /// Settings → Personality: the "Try it" preview.
-    try_voice: personality_ui::TryVoice,
+    /// Settings → Personality: presets on disk, the Try it preview and the editor.
+    picker: personality_ui::PickerState,
     settings_back: Nav,
     imagine_aspect: u8,
     imagine_quality: bool,
@@ -1233,7 +1233,7 @@ impl Cabin {
             composer_want_focus: false,
             settings_sec: SettingsSec::Account,
             market: Default::default(),
-            try_voice: Default::default(),
+            picker: Default::default(),
             settings_back: Nav::Chat,
             imagine_aspect: 0,
             imagine_quality: true,
@@ -1669,7 +1669,7 @@ impl Cabin {
             composer_want_focus: false,
             settings_sec: SettingsSec::Account,
             market: Default::default(),
-            try_voice: Default::default(),
+            picker: Default::default(),
             settings_back: Nav::Chat,
             imagine_aspect: 0,
             imagine_quality: false,
@@ -4445,6 +4445,7 @@ impl Cabin {
         }
         let text = text[..end].to_string();
         let hold = self.voice_is_on();
+        let voice = self.speech_voice();
         let tx = if hold {
             let (tx, rx) = mpsc::channel();
             self.voice_hold_rx = Some(rx);
@@ -4453,7 +4454,7 @@ impl Cabin {
             None
         };
         std::thread::spawn(move || {
-            if let Ok(bytes) = grok_tts(&key, &text) {
+            if let Ok(bytes) = grok_tts(&key, &text, voice) {
                 let path = std::env::temp_dir().join("grokhub-speak.mp3");
                 if std::fs::write(&path, bytes).is_ok() {
                     let _ = play_audio(&path);

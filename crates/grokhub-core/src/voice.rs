@@ -38,6 +38,14 @@ pub enum HeyGrokRoute {
 pub const DEFAULT_VOICE_MODEL: &str = "grok-voice-think-fast-2.0";
 /// xAI realtime `session.voice` and TTS `voice_id`. Cabin voice mode is Ara.
 pub const DEFAULT_VOICE: &str = "ara";
+/// TTS voices a personality's `voice_hint` can pick.
+pub const TTS_VOICES: &[&str] = &["ara", "eve", "leo", "rex", "sal"];
+
+/// The TTS voice for a personality's hint: a listed voice id (any case), else the default.
+pub fn tts_voice(hint: Option<&str>) -> &'static str {
+    let hint = hint.map(|h| h.trim().to_ascii_lowercase()).unwrap_or_default();
+    TTS_VOICES.iter().copied().find(|v| *v == hint).unwrap_or(DEFAULT_VOICE)
+}
 
 /// Hide the voice strip this long after Ready. Listening / Speaking stay up.
 pub const VOICE_READY_HIDE_MS: u64 = 1000;
@@ -458,7 +466,7 @@ pub fn tts_url() -> String {
     format!("{XAI_BASE}/tts")
 }
 
-pub fn tts_request_body(text: &str) -> Value {
+pub fn tts_request_body(text: &str, voice: &str) -> Value {
     let mut end = TEXT_FILE_CAP.min(text.len());
     while end > 0 && !text.is_char_boundary(end) {
         end -= 1;
@@ -466,7 +474,7 @@ pub fn tts_request_body(text: &str) -> Value {
     let text = &text[..end];
     json!({
         "text": text,
-        "voice_id": DEFAULT_VOICE,
+        "voice_id": voice,
         "language": "en",
     })
 }
@@ -533,7 +541,7 @@ mod tests {
     #[test]
     fn tts_request_body_caps_text() {
         let huge = "a".repeat(TEXT_FILE_CAP + 8);
-        let body = tts_request_body(&huge);
+        let body = tts_request_body(&huge, DEFAULT_VOICE);
         let text = body.get("text").and_then(|v| v.as_str()).unwrap();
         assert!(
             text.len() <= TEXT_FILE_CAP,
@@ -627,7 +635,7 @@ mod tests {
             "transcript": "hey grok"
         });
         assert_eq!(parse_voice_event_text(&ev).as_deref(), Some("hey grok"));
-        let tts = tts_request_body("hello");
+        let tts = tts_request_body("hello", DEFAULT_VOICE);
         assert_eq!(tts["voice_id"], "ara");
         assert_eq!(tts["text"], "hello");
         assert_eq!(DEFAULT_VOICE, "ara");
@@ -884,5 +892,15 @@ mod tests {
         wav.extend_from_slice(&[0u8; 40]);
         assert_eq!(pcm_from_capture(&wav), &wav[44..]);
         assert_eq!(pcm_from_capture(b"RIFF????"), b"RIFF????");
+    }
+
+    #[test]
+    fn a_voice_hint_picks_a_listed_voice_or_falls_back_to_ara() {
+        assert_eq!(tts_voice(Some("rex")), "rex");
+        assert_eq!(tts_voice(Some(" Eve ")), "eve");
+        assert_eq!(tts_voice(Some("deep and gravelly")), DEFAULT_VOICE);
+        assert_eq!(tts_voice(Some("")), DEFAULT_VOICE);
+        assert_eq!(tts_voice(None), DEFAULT_VOICE);
+        assert_eq!(tts_request_body("hi", tts_voice(Some("sal")))["voice_id"], "sal");
     }
 }
