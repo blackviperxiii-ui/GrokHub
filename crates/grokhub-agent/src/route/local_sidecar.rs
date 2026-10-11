@@ -448,11 +448,55 @@ pub mod fake_server {
         }
     }
 
+    /// Read one HTTP/1.1 request (headers + Content-Length body). Windows often
+    /// delivers headers and body in separate TCP packets; a single `read` is not enough.
+    fn read_http_request(stream: &mut TcpStream) -> Result<String, ()> {
+        stream.set_read_timeout(Some(Duration::from_millis(2_000))).ok();
+        let mut raw = Vec::with_capacity(4096);
+        let mut chunk = [0u8; 4096];
+        let header_end = loop {
+            let n = stream.read(&mut chunk).map_err(|_| ())?;
+            if n == 0 {
+                break None;
+            }
+            raw.extend_from_slice(&chunk[..n]);
+            if let Some(pos) = raw.windows(4).position(|w| w == b"\r\n\r\n") {
+                break Some(pos + 4);
+            }
+            if raw.len() > 256 * 1024 {
+                return Err(());
+            }
+        };
+        let Some(header_end) = header_end else {
+            return Ok(String::from_utf8_lossy(&raw).into_owned());
+        };
+        let headers = String::from_utf8_lossy(&raw[..header_end]);
+        let content_len = headers
+            .lines()
+            .find_map(|l| {
+                let (k, v) = l.split_once(':')?;
+                if k.eq_ignore_ascii_case("content-length") {
+                    v.trim().parse::<usize>().ok()
+                } else {
+                    None
+                }
+            })
+            .unwrap_or(0);
+        while raw.len() < header_end + content_len {
+            let n = stream.read(&mut chunk).map_err(|_| ())?;
+            if n == 0 {
+                break;
+            }
+            raw.extend_from_slice(&chunk[..n]);
+            if raw.len() > 256 * 1024 {
+                return Err(());
+            }
+        }
+        Ok(String::from_utf8_lossy(&raw).into_owned())
+    }
+
     fn handle_one(stream: &mut TcpStream, token: &str, hits: &std::sync::Arc<AtomicUsize>) -> Result<(), ()> {
-        stream.set_read_timeout(Some(Duration::from_millis(500))).ok();
-        let mut buf = [0u8; 8192];
-        let n = stream.read(&mut buf).map_err(|_| ())?;
-        let req = String::from_utf8_lossy(&buf[..n]);
+        let req = read_http_request(stream)?;
         let first = req.lines().next().unwrap_or("");
         let auth_ok = req.lines().any(|l| l.eq_ignore_ascii_case(&format!("Authorization: Bearer {token}")));
         if first.starts_with("GET /health") {
@@ -467,7 +511,8 @@ pub mod fake_server {
                 return Ok(());
             }
             hits.fetch_add(1, AtomicOrdering::SeqCst);
-            let inner = if req.contains("at most") || req.contains("summary") {
+            // Match helper prompts from the body (must be fully read — see read_http_request).
+            let inner = if req.contains("\"summary\"") || req.contains("at most") {
                 serde_json::json!({"summary": "fake summary"})
             } else if req.contains("difficulty") {
                 serde_json::json!({"d": 0.5})
