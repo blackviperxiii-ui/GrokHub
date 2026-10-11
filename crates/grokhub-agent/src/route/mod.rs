@@ -342,7 +342,7 @@ fn successor(reg: &Registry, id: &str, ids: &[&str]) -> Option<String> {
 }
 
 impl Router {
-    fn pick_model(input: &RouteInput<'_>, reg: &Registry, ids: &[&str], table: &RoutingTable, e2: bool, rules: &mut Vec<String>) -> ModelPick {
+    fn pick_model(input: &RouteInput<'_>, reg: &Registry, profiles: &BTreeMap<String, ModelProfile>, ids: &[&str], table: &RoutingTable, e2: bool, rules: &mut Vec<String>) -> ModelPick {
         let current = input.current_model.trim();
         let gb = input.provider == live::PROVIDER_GROK_BUILD;
         let keep = |m: &str| ModelPick { model: m.to_string(), no_route: false, replaced: None };
@@ -359,10 +359,18 @@ impl Router {
             // Over your $/M ceiling and not approved: stand in, and the cabin asks once.
             rules.push("cost:premium_ungranted".into());
         }
+        let tier = table::SpeedQuality::of(input.class);
+        // Quality Auto pool: reasoning models only (pins / Settings pick still use `ids`).
+        let auto_ok = |m: &str| local::is_local(m) || !tier.needs_reasoning() || table::is_reasoning_model(reg, profiles, m);
         // R3b: a provider you added is never a stand-in or a fallback, and never
         // the cheapest pick: only a pin or the class preference (a table row) takes it.
-        let own: Vec<&str> = ids.iter().copied().filter(|m| !policy::is_new_provider(reg, m)).collect();
-        let preferred: Vec<&str> = ids.iter().copied().filter(|m| !policy::is_new_provider(reg, m) || table.row(input.class, m).is_some()).collect();
+        let own: Vec<&str> = ids.iter().copied().filter(|m| !policy::is_new_provider(reg, m)).filter(|m| auto_ok(m)).collect();
+        let preferred: Vec<&str> = ids
+            .iter()
+            .copied()
+            .filter(|m| !policy::is_new_provider(reg, m) || table.row(input.class, m).is_some())
+            .filter(|m| auto_ok(m) || table.row(input.class, m).is_some())
+            .collect();
         // A degraded model is still eligible, but a pin or an episode leaves it
         // when a healthy one can take over.
         let healthy: Vec<&str> = own.iter().copied().filter(|m| reg.get(m).is_some_and(|r| r.state != ModelState::Degraded)).collect();
@@ -449,7 +457,10 @@ impl Router {
         let mut rules: Vec<String> = Vec::new();
         let provider = if input.provider.is_empty() { PROVIDER_XAI } else { input.provider };
         let fit = policy::Fit { needs_image: input.needs_image, needs_tools: input.needs_tools, ctx_tokens: input.ctx_tokens, grok_build: provider == live::PROVIDER_GROK_BUILD };
+        let tier = table::SpeedQuality::of(input.class);
         // A local route only while the flag is on, for an eligible class, on the live tier.
+        // Pins and a Settings pick may still name any fitting model; Auto's quality pool
+        // drops non-reasoning ones in [`Self::pick_model`].
         let ids: Vec<&str> = reg
             .models
             .keys()
@@ -496,7 +507,7 @@ impl Router {
                 }
             }
         } else {
-            Self::pick_model(input, reg, &ids, table, e2, &mut rules)
+            Self::pick_model(input, reg, profiles, &ids, table, e2, &mut rules)
         };
         let provider = match split_provider_model(&chosen.model) {
             _ if local::is_local(&chosen.model) && !chosen.no_route => local::PROVIDER_LOCAL,
@@ -575,26 +586,33 @@ impl Router {
         }
         let what = row.map(|r| r.plain).unwrap_or("this step");
         let clause = if row.is_some() { why_clause(what, &rules[effort_rules_at..]) } else { format!("{what} keeps its set effort") };
+        // One-line pick reason: tier, effort, why. `/why` and the Auto chip put class and model in front.
+        let tier_word = tier.word();
         let reason = match (&chosen.replaced, rules.iter().any(|r| r == "table")) {
-            _ if base.is_some() => format!("Using {model} at {}: you're waiting, so the faster model is worth it.", effort_word(effort.as_deref())),
+            _ if base.is_some() => format!("{tier_word} · {}: you're waiting, so the faster model is worth it.", effort_word(effort.as_deref())),
             _ if fast_fallback.is_some() => format!(
-                "Using {model} at {}: this week's budget is tight, so not {}.",
+                "{tier_word} · {}: this week's budget is tight, so not {}.",
                 effort_word(effort.as_deref()),
                 fast_fallback.as_deref().unwrap_or_default()
             ),
-            _ if rules.iter().any(|r| r == "provider:picked") => format!("Using {model} at {}: you picked it in Settings.", effort_word(effort.as_deref())),
+            _ if rules.iter().any(|r| r == "provider:picked") => {
+                format!("{tier_word} · {}: you picked it in Settings.", effort_word(effort.as_deref()))
+            }
             (Some(from), _) if rules.iter().any(|r| r == "provider:ungranted") => {
-                format!("Using {model} at {}: {from} needs its key and your OK in Settings first.", effort_word(effort.as_deref()))
+                format!("{tier_word} · {}: {from} needs its key and your OK in Settings first.", effort_word(effort.as_deref()))
             }
             (Some(from), _) if rules.iter().any(|r| r == "cost:premium_ungranted") => {
-                format!("Using {model} at {}: {from} costs more than your price limit, so it needs your OK first.", effort_word(effort.as_deref()))
+                format!(
+                    "{tier_word} · {}: {from} costs more than your price limit, so it needs your OK first.",
+                    effort_word(effort.as_deref())
+                )
             }
-            (Some(from), _) => format!("Using {model} at {}: {from} isn't answering.", effort_word(effort.as_deref())),
+            (Some(from), _) => format!("{tier_word} · {}: {from} isn't answering.", effort_word(effort.as_deref())),
             (None, true) if model != input.current_model.trim() || input.episode_model.is_none() => {
                 let why = table.row(input.class, &model).map(|r| r.why.clone()).unwrap_or_default();
-                format!("Using {model} at {}: it's {why}.", effort_word(effort.as_deref()))
+                format!("{tier_word} · {}: {why}.", effort_word(effort.as_deref()))
             }
-            _ => format!("{}: {clause}.", effort_word(effort.as_deref())),
+            _ => format!("{tier_word} · {}: {clause}.", effort_word(effort.as_deref())),
         };
         let settings = profiles.get(&model).map(|p| RuntimeSettings::from_profile(p, input.class));
         let cost_class = policy::route_class(reg, &model, gb, &input.spend);
@@ -614,6 +632,9 @@ impl Router {
         }
     }
 }
+
+#[cfg(test)]
+mod auto_tests;
 
 #[cfg(test)]
 mod r2a_tests;
@@ -728,12 +749,12 @@ mod tests {
         let a = Router::choose(&input("chat:default", "grok-4.7", 0.5), &reg, &none, &no_table(), 10);
         assert_eq!(a, Router::choose(&input("chat:default", "grok-4.7", 0.5), &reg, &none, &no_table(), 10));
         assert_eq!((a.model.as_str(), a.effort.as_deref()), ("grok-4.7", Some("medium")));
-        assert_eq!(a.reason, "Medium: everyday chat.");
+        assert_eq!(a.reason, "quality · Medium: everyday chat.");
         // No table yet: equal prices, so the session's own model wins the tie.
         assert_eq!(a.rule_ids, vec!["model:cheapest".to_string(), "class:chat:default".into()]);
         assert_eq!(a.candidates_n, 2);
         let easy = Router::choose(&input("chat:default", "grok-4.7", 0.1), &reg, &none, &no_table(), 10);
-        assert_eq!((easy.effort.as_deref(), easy.reason.as_str()), (Some("low"), "Low: everyday chat, and this looks routine."));
+        assert_eq!((easy.effort.as_deref(), easy.reason.as_str()), (Some("low"), "quality · Low: everyday chat, and this looks routine."));
         // d > 0.7 goes up one rung but never past high on its own; the menu clamps xhigh anyway.
         let hard = Router::choose(&input("plan", "grok-4.7", 0.9), &reg, &none, &no_table(), 10);
         assert_eq!(hard.effort.as_deref(), Some("high"));
@@ -760,7 +781,7 @@ mod tests {
         pin.current_model = "grok-4.5";
         let r = Router::choose(&pin, &reg, &none, &no_table(), 10);
         assert_eq!((r.model.as_str(), r.rule_ids[0].as_str(), r.replaced.as_deref()), ("grok-4.7", "pin:fallback", Some("grok-4.5")));
-        assert_eq!(r.reason, "Using grok-4.7 at Medium: grok-4.5 isn't answering.");
+        assert_eq!(r.reason, "quality · Medium: grok-4.5 isn't answering.");
         let mut profiles = BTreeMap::new();
         let meta = reg.get("grok-4.7").unwrap().meta.clone();
         let mut bad = ProbeResult::status("failed");
@@ -845,7 +866,7 @@ mod tests {
         // E3: a correction starts the next turn one higher than its start (low → medium).
         assert_eq!(sent_effort(&echo, &req("grok-4.7", None, &s, "no, wrong file"), "chat:default").as_deref(), Some("medium"));
         let (effort, reason) = live::last_user_pick().unwrap();
-        assert_eq!((effort.as_deref(), reason.as_str()), (Some("medium"), "Medium: you corrected the last answer."));
+        assert_eq!((effort.as_deref(), reason.as_str()), (Some("medium"), "quality · Medium: you corrected the last answer."));
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -860,7 +881,7 @@ mod tests {
         let rec: crate::harness::Span = serde_json::from_str(raw.lines().last().unwrap()).unwrap();
         let route = rec.route.unwrap();
         assert!(route.holdout && !route.shadow);
-        assert_eq!(route.reason, "High: everyday chat.");
+        assert_eq!(route.reason, "quality · High: everyday chat.");
         assert!(!why_text(&dir).to_ascii_lowercase().contains("holdout"));
         // prepare:hard is never held out.
         let hard = (0..).map(|i| format!("hard-{i}")).find(|s| guard::in_holdout(s)).unwrap();
@@ -915,14 +936,14 @@ mod tests {
         assert_eq!(route.span_id, rec.span_ref());
         let why = why_text(&dir);
         assert_eq!(why.lines().count(), 10);
-        assert_eq!(why.lines().next(), Some("background:judge · grok-4.7 · Low: an independent check."));
+        assert_eq!(why.lines().next(), Some("background:judge · grok-4.7 · quality · Low: an independent check."));
         // Brain 1: the newest Brief leads, and the list stays at ten lines.
         let brief = crate::brain::rules(&crate::brain::BriefInput { text: "the printer service won't start", ..Default::default() }).unwrap();
         crate::brain::record_brief(&dir, &crate::brain::BriefLine { at: 1, session: "ep-9".into(), brief, ..Default::default() }).unwrap();
         let why = why_text(&dir);
         assert_eq!(why.lines().count(), 10);
         assert_eq!(why.lines().next(), Some("Brief: repair × critical, done = services, packages, boot errors, ports"));
-        assert_eq!(why.lines().nth(1), Some("background:judge · grok-4.7 · Low: an independent check."));
+        assert_eq!(why.lines().nth(1), Some("background:judge · grok-4.7 · quality · Low: an independent check."));
         let health = std::fs::read_to_string(grokhub_core::model_registry::store::health_path(&dir)).unwrap();
         assert_eq!(health.lines().count(), 14);
         let _ = std::fs::remove_dir_all(dir);
@@ -1043,18 +1064,19 @@ mod tests {
         assert!(reg.listed("grok-4.7"));
     }
 
-    /// The 2.10.96 chain: grok-4.7 missing from the registry, Auto lands on a
-    /// non-reasoning model, and the request it sends carries no effort.
+    /// Quality never lands on a non-reasoning model. When that is the only
+    /// listed model, Auto pauses instead of sending it (wait/retry owns the rest).
+    /// A non-reasoning request still carries no effort on the wire.
     #[test]
-    fn the_2_10_96_chain_sends_no_effort_to_the_non_reasoning_pick() {
+    fn quality_pauses_instead_of_picking_a_lone_non_reasoning_model() {
         let reg = xai_listed(&[NON_REASONING[0]]);
         let none = BTreeMap::new();
         let r = Router::choose(&input("chat:default", "grok-4.7", 0.5), &reg, &none, &no_table(), 10);
-        assert_eq!((r.model.as_str(), r.effort.as_deref()), (NON_REASONING[0], None));
-        let body = crate::client::responses_body(&req(&r.model, r.effort.as_deref(), "s", "hi"));
+        assert_ne!(r.model, NON_REASONING[0]);
+        assert!(r.no_route, "{r:?}");
+        let body = crate::client::responses_body(&req(NON_REASONING[0], None, "s", "hi"));
         assert_eq!(body.get("reasoning"), None);
-        // Even a caller's own effort doesn't reach the wire.
-        let body = crate::client::responses_body(&req(&r.model, Some("high"), "s", "hi"));
+        let body = crate::client::responses_body(&req(NON_REASONING[0], Some("high"), "s", "hi"));
         assert_eq!(body.get("reasoning"), None);
     }
 }
