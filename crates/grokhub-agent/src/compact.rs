@@ -323,7 +323,39 @@ fn take_tool_suffix(items: &[InputItem], budget: u64) -> Vec<InputItem> {
     while i > 0 {
         i -= 1;
         match &items[i] {
-            InputItem::FunctionCall { .. } | InputItem::FunctionCallOutput { .. } => {
+            InputItem::FunctionCallOutput { call_id, .. } => {
+                let end = i;
+                let start = match i.checked_sub(1) {
+                    Some(prev) => match &items[prev] {
+                        InputItem::FunctionCall {
+                            call_id: cid, ..
+                        } if cid == call_id => prev,
+                        _ => continue,
+                    },
+                    None => continue,
+                };
+                let slice = &items[start..=end];
+                let cost = estimate_input_tokens(slice);
+                if used.saturating_add(cost) > budget {
+                    break;
+                }
+                used = used.saturating_add(cost);
+                // Accumulate reverse so the final acc.reverse() restores chronology.
+                acc.extend(slice.iter().rev().cloned());
+                i = start;
+            }
+            InputItem::FunctionCall { call_id, .. } => {
+                // Paired call+output is handled when we see the output.
+                if i + 1 < items.len()
+                    && matches!(
+                        &items[i + 1],
+                        InputItem::FunctionCallOutput {
+                            call_id: oid, ..
+                        } if oid == call_id
+                    )
+                {
+                    continue;
+                }
                 let cost = estimate_input_tokens(std::slice::from_ref(&items[i]));
                 if used.saturating_add(cost) > budget {
                     break;
@@ -1020,6 +1052,32 @@ mod tests {
         assert!(message_text(&history[0]).contains("kept the quay"));
         drop(_guard);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn take_tool_suffix_keeps_call_and_output_as_one_pair() {
+        let call = InputItem::FunctionCall {
+            call_id: "c1".into(),
+            name: "read_file".into(),
+            arguments: r#"{"path":"a.rs"}"#.into(),
+        };
+        let output = InputItem::FunctionCallOutput {
+            call_id: "c1".into(),
+            output: "ok".into(),
+        };
+        let pair_cost = estimate_input_tokens(&[call.clone(), output.clone()]);
+        let items = vec![call.clone(), output.clone()];
+        let kept = take_tool_suffix(&items, pair_cost);
+        assert_eq!(kept.len(), 2, "pair fits as a unit");
+        assert!(matches!(&kept[0], InputItem::FunctionCall { call_id, .. } if call_id == "c1"));
+        assert!(matches!(&kept[1], InputItem::FunctionCallOutput { call_id, .. } if call_id == "c1"));
+        let half = pair_cost.saturating_sub(1).max(1);
+        if half < pair_cost {
+            assert!(
+                take_tool_suffix(&items, half).is_empty(),
+                "budget below the pair keeps neither half"
+            );
+        }
     }
 
     #[test]

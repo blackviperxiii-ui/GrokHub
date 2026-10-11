@@ -342,7 +342,7 @@ pub fn run_loop(
                     turns_since_compact = 0;
                 }
                 CompactPass::Cancelled => {
-                    return finish(input, StopReason::Cancelled, usage, false, true);
+                    return finish(input, StopReason::Cancelled, usage, compacted_once, true);
                 }
                 CompactPass::Failed => {}
             }
