@@ -134,10 +134,11 @@ impl Cabin {
         } else {
             self.take_bg_results_follow(&notes_thread)
         };
-        let matched = match_skill(&text, &self.skill_list).map(|sk| {
+        let matched = match_skill(&text, &self.skill_list).cloned().map(|sk| {
+            let follow = self.trial_follow(&sk);
             (
                 sk.name.clone(),
-                self.policy().injects_skill().then(|| skill_follow_block(sk)),
+                self.policy().injects_skill().then(|| skill_follow_block(&follow)),
             )
         });
         if let Some((skill_ran, follow)) = matched {

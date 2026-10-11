@@ -905,6 +905,43 @@ pub fn restore_change(config_dir: &Path, target: &dyn ChangeTarget, _ask: UndoAs
     Ok(done)
 }
 
+/// Put a canary the evaluator judged no better back to the bytes it
+/// replaced: one `undo` line by GrokHub (`origin: self_manage`). Only the
+/// evaluator holds a [`Verdict`](crate::harness::canary::Verdict). Refused
+/// when line `seq` is no longer the change in effect on this target.
+pub(crate) fn rollback_change(
+    config_dir: &Path,
+    target: &dyn ChangeTarget,
+    seq: u64,
+    why: &str,
+    _verdict: &crate::harness::canary::Verdict,
+) -> Result<Reverted, String> {
+    guard(config_dir, target)?;
+    let _held = LEDGER_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let (kind, id) = (target.kind(), target.id()?);
+    let ledger = ChangeLedger::load_kind(config_dir, kind);
+    let line = ledger
+        .undo_target(&id)
+        .filter(|c| c.seq == seq)
+        .cloned()
+        .ok_or_else(|| format!("{} changed since #{seq}", shown_id(target, &id)))?;
+    let bytes = if line.before_hash.is_empty() {
+        None
+    } else {
+        Some(kept_version(config_dir, kind, &id, &line.before_hash)?)
+    };
+    let mut change = new_change_for(kind, &id, ChangeOp::Undo, Origin::SelfManage, &format!("canary rollback #{seq}: {why}"), now_ms());
+    change.undoes = Some(seq);
+    let mut done = put_back(config_dir, target, bytes, change)?;
+    done.reverted = Some(line);
+    Ok(done)
+}
+
+/// The kept bytes of one version (a canary's parent for its control runs).
+pub fn kept_bytes(config_dir: &Path, kind: ChangeKind, id: &str, hash: &str) -> Result<Vec<u8>, String> {
+    kept_version(config_dir, kind, id, hash)
+}
+
 /// Keep a change GrokHub made: one `accept` line by the user. Nothing on
 /// disk changes; it lifts the new-automation cap and clears the row.
 pub fn accept_change(config_dir: &Path, kind: ChangeKind, name: &str, _ask: UndoAsk) -> Result<Change, String> {
