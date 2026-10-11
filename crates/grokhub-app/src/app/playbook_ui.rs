@@ -60,7 +60,11 @@ fn fits_line(l: &Loaded) -> String {
 
 /// "3 steps, up to Safe, reversible"
 fn steps_line(l: &Loaded) -> String {
-    let tiers: Vec<_> = l.playbook.steps().map(|(phase, s)| s.tier_in(phase)).collect();
+    let tiers: Vec<_> = l
+        .playbook
+        .steps()
+        .map(|(phase, s)| s.tier_in(phase))
+        .collect();
     let top = tiers.iter().max();
     let n = tiers.len();
     let noun = if n == 1 { "step" } else { "steps" };
@@ -284,12 +288,20 @@ mod tests {
     fn a_refused_save_keeps_the_editor_open_and_a_good_one_shows_as_edited() {
         let (_lock, _root, mut cabin) = cabin();
         cabin.reload_playbooks();
-        assert_eq!(cabin.playbooks.all.len(), 1);
+        assert_eq!(cabin.playbooks.all.len(), 3);
         assert_eq!(
             steps_line(&cabin.playbooks.all[0]),
             "3 steps, up to Safe, reversible"
         );
         assert_eq!(fits_line(&cabin.playbooks.all[0]), "Fits task, repair");
+        assert_eq!(
+            fits_line(&cabin.playbooks.all[1]),
+            "Fits repair · system · linux"
+        );
+        assert_eq!(
+            steps_line(&cabin.playbooks.all[1]),
+            "18 steps, up to Risky, asks first"
+        );
         cabin.act_on_playbook(PlaybookAct::Edit, "task-general");
         let draft = cabin.playbooks.draft.as_mut().unwrap();
         let good = draft
@@ -334,6 +346,8 @@ mod tests {
             rows,
             vec![
                 ("task-general", "Any task", Source::Shipped),
+                ("repair-linux", "Repair Linux", Source::Shipped),
+                ("repair-windows", "Repair Windows", Source::Shipped),
                 ("task-general-copy", "Any job (copy)", Source::Yours)
             ]
         );
