@@ -4482,8 +4482,10 @@ https://xstack.grok.me/post ZEPHYRTAIL"
             summary: "Async closures are stable.".into(),
             image: None,
             topic: None,
+            engagement: 0,
         };
-        rows.push(("item_card", crate::pulse_sources::item_card(&item, at), "Rust 1.99.0"));
+        let ranked = crate::pulse_sources::Ranked { item, score: 40, because: Some("Rust".into()) };
+        rows.push(("item_card", crate::pulse_sources::item_card(&ranked, at), "Rust 1.99.0"));
         rows
     }
 

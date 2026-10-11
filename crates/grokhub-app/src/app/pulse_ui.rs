@@ -684,6 +684,13 @@ pub(super) fn paint_post_body(
             3,
         );
     }
+    if let Some(topic) = card.pulse.because.as_deref() {
+        ui.label(
+            RichText::new(why_line(topic))
+                .size(crate::theme::FONT_TIP)
+                .color(crate::theme::subtle()),
+        );
+    }
     if let Some(url) = card.citations.first() {
         let host = pc::source_host(url).unwrap_or_else(|| url.clone());
         let link = ui.add(
@@ -736,6 +743,11 @@ pub(super) fn paint_post_body(
         act = Some(wait);
     }
     act
+}
+
+/// "Why: air compressors", under a source post's summary.
+pub(super) fn why_line(topic: &str) -> String {
+    format!("Why: {}", topic.trim())
 }
 
 /// Where a post came from, for the line under its headline.
