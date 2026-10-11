@@ -16,6 +16,8 @@ pub mod heal;
 pub mod ladder;
 pub mod learn;
 pub mod local;
+pub mod local_http;
+pub mod local_sidecar;
 pub mod log;
 pub mod policy;
 pub mod providers;
