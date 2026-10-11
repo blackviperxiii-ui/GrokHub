@@ -61,9 +61,10 @@ pub struct Catalog {
     pub entries: Vec<CatalogEntry>,
 }
 
-/// The catalog shipped with this build.
+/// The catalog shipped with this build. A test pins that it parses; if it ever
+/// didn't, Marketplace shows an empty list rather than taking the app down.
 pub fn bundled() -> Catalog {
-    parse(BUNDLED).expect("data/mcp_catalog.json parses")
+    parse(BUNDLED).unwrap_or(Catalog { entries: Vec::new() })
 }
 
 pub fn parse(text: &str) -> Result<Catalog, String> {

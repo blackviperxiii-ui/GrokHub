@@ -340,6 +340,18 @@ impl Cabin {
         self.post_feed_card(card);
     }
 
+    /// One Home card per store that would not load and was moved aside: a settings or
+    /// feed file (`config::quarantine`), the hub state, or a damaged memory note.
+    /// Notes for files outside this cabin's config folder are dropped.
+    pub(super) fn poll_recovered_stores(&mut self) {
+        let dir = crate::config::config_dir();
+        for r in grokhub_core::recovered::drain() {
+            if r.path.starts_with(&dir) {
+                self.post_feed_card(grokhub_core::recovered_card(&r, now_ms()));
+            }
+        }
+    }
+
     /// `commit_schedule` calls this after a clock job or interval loop is saved.
     pub(super) fn note_schedule_created(&mut self, source_id: &str, title: &str, when_label: &str) {
         if title.trim().is_empty() && when_label.trim().is_empty() {

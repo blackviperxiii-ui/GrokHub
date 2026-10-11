@@ -4850,6 +4850,7 @@ impl eframe::App for Cabin {
         }
         self.poll_job();
         self.poll_persist_err();
+        self.poll_recovered_stores();
         self.poll_imagine_save();
         self.poll_host_diff();
         self.poll_acp();
