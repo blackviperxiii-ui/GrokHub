@@ -10,6 +10,7 @@
 pub mod budget;
 pub mod cabin;
 pub mod difficulty;
+pub mod goal;
 pub mod guard;
 pub mod heal;
 pub mod ladder;
@@ -259,6 +260,9 @@ pub struct RouteInput<'a> {
     /// R3b: the provider model you picked in Settings for this (your own) chat.
     /// Taken only while it is a candidate (its key and a grant covering the data).
     pub prefer: Option<&'a str>,
+    /// Brain 2: the turn's goal and reason from the policy row. Moves a
+    /// user-facing step's starting effort inside its band ([`goal::goal_start`]).
+    pub goal: Option<goal::RouteGoal>,
 }
 
 /// The pick: provider, model, effort, one plain sentence, and the rules that fired.
@@ -297,7 +301,7 @@ pub fn effort_word(e: Option<&str>) -> &'static str {
 
 /// The plain clause for the rule that moved effort last.
 fn why_clause(plain: &str, rules: &[String]) -> String {
-    const MOVES: &[&str] = &["E1", "E2", "E3", "E4", "E5", "DE1", "DE2", "DE3", "steer:harder", "steer:quicker", "d<0.3", "d>0.7"];
+    const MOVES: &[&str] = &["E1", "E2", "E3", "E4", "E5", "DE1", "DE2", "DE3", "steer:harder", "steer:quicker", "d<0.3", "d>0.7", "goal:quality", "goal:speed", "goal:cost"];
     let last = rules.iter().rev().find(|r| MOVES.contains(&r.as_str()));
     match last.map(String::as_str) {
         Some("E1") => "a tool failed, so it thinks harder".into(),
@@ -312,6 +316,9 @@ fn why_clause(plain: &str, rules: &[String]) -> String {
         Some("steer:quicker") => "you asked to keep it quick".into(),
         Some("d<0.3") => format!("{plain}, and this looks routine"),
         Some("d>0.7") => format!("{plain}, and this looks hard"),
+        Some("goal:quality") => format!("{plain}, and this one needs care"),
+        Some("goal:speed") => format!("{plain}, and a fast reply matters here"),
+        Some("goal:cost") => format!("{plain}, kept cheap"),
         _ => plain.to_string(),
     }
 }
@@ -449,7 +456,8 @@ impl Router {
         let band = row.map(|r| ladder::Band::tuned(r, input.bump, input.start));
         let pick = match (row, band) {
             (Some(row), Some(band)) => Some(input.pick.clone().unwrap_or_else(|| {
-                let start = ladder::start_rung(band, input.d, input.steer, ladder::user_facing(row.class));
+                let user = ladder::user_facing(row.class);
+                let start = goal::goal_start(band, ladder::start_rung(band, input.d, input.steer, user), input.steer, input.goal.as_ref().filter(|_| user));
                 ladder::advance(None, row.class, band, start, &ladder::Obs { new_turn: true, routine: input.routine, ..ladder::Obs::default() }).1
             })),
             _ => None,
@@ -595,6 +603,9 @@ mod r2b_tests;
 
 #[cfg(test)]
 mod r3b_tests;
+
+#[cfg(test)]
+mod goal_tests;
 
 #[cfg(test)]
 mod speed_bench_tests;
