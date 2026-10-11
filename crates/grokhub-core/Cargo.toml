@@ -5,6 +5,7 @@ rust-version.workspace = true
 edition.workspace = true
 license.workspace = true
 description = "Shared GrokHub brain — pair, tasks, frames, inhabit. No HTTP."
+publish = false
 
 [dependencies]
 serde.workspace = true

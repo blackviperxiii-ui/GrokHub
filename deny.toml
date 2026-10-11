@@ -1,0 +1,44 @@
+# Supply-chain check run by CI (`cargo deny check`): known advisories,
+# licenses, banned dependency shapes and where crates come from.
+
+[advisories]
+version = 2
+ignore = [
+    # proc-macro-error is unmaintained. It is a build-time macro dependency of
+    # glib-macros (gtk-rs 0.18), pulled in by tray-icon's Linux tray; no
+    # runtime code. Drop this once tray-icon moves off gtk-rs 0.18.
+    { id = "RUSTSEC-2024-0370", reason = "build-time only, via tray-icon -> gtk 0.18" },
+]
+
+[licenses]
+version = 2
+# Permissive licenses, plus MPL-2.0 (file-level copyleft, used unchanged by
+# option-ext via dirs) and the OFL / Ubuntu font licenses for egui's bundled fonts.
+allow = [
+    "0BSD",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "BSL-1.0",
+    "CDLA-Permissive-2.0",
+    "ISC",
+    "MIT",
+    "MPL-2.0",
+    "OFL-1.1",
+    "Ubuntu-font-1.0",
+    "Unicode-3.0",
+    "Unlicense",
+    "Zlib",
+]
+confidence-threshold = 0.9
+
+[bans]
+multiple-versions = "allow"
+wildcards = "deny"
+# The workspace crates depend on each other by path; they are not published.
+allow-wildcard-paths = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
