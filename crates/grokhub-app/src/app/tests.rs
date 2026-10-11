@@ -17784,6 +17784,36 @@ fn board_drop_moves_to_another_column_only() {
 }
 
 #[test]
+fn workboard_flo_card_progress_labels_and_presence_chips() {
+    use grokhub_core::{BoardCard, BoardStatus};
+    use super::board_ui::{
+        board_card_progress, board_presence_chips, board_status_label, BOARD_PILL_RADIUS,
+    };
+    assert_eq!(BOARD_PILL_RADIUS, 22.0);
+    assert_eq!(board_status_label(BoardStatus::Todo), "To do");
+    assert_eq!(board_status_label(BoardStatus::InProgress), "In progress");
+    assert_eq!(board_status_label(BoardStatus::Blocked), "Blocked");
+    assert_eq!(board_status_label(BoardStatus::Done), "Done");
+    assert_eq!(board_status_label(BoardStatus::FollowUp), "Follow up");
+    assert_eq!(board_card_progress(BoardStatus::Todo), (0, 4));
+    assert_eq!(board_card_progress(BoardStatus::InProgress), (2, 4));
+    assert_eq!(board_card_progress(BoardStatus::Blocked), (1, 4));
+    assert_eq!(board_card_progress(BoardStatus::FollowUp), (3, 4));
+    assert_eq!(board_card_progress(BoardStatus::Done), (4, 4));
+    let mut card = BoardCard::new("Onboarding flow", "Ship the welcome path", "");
+    card.status = BoardStatus::InProgress;
+    assert!(board_presence_chips(&card).is_empty(), "plain cards show no presence chips");
+    card.thread_id = Some("t1".into());
+    card.notes = "Keep the copy short".into();
+    card.automation = Some("auto-1".into());
+    let chips = board_presence_chips(&card);
+    assert_eq!(
+        chips.iter().map(|(c, _, _)| *c).collect::<Vec<_>>(),
+        vec!['C', 'N', 'A']
+    );
+}
+
+#[test]
 fn token_budget_warns_once_and_holds_scheduled_work() {
     let root = config::test_config_root("token-budget");
     let _ = std::fs::remove_dir_all(&root);
@@ -18503,6 +18533,14 @@ fn board_cards_open_on_click_fold_on_drag_and_chat_like_the_chat_page() {
     assert!(
         !compact.contains("white_pill") && !compact.contains("ghost_pill"),
         "a small card has no buttons: {compact}"
+    );
+    assert!(
+        compact.contains("BOARD_PILL_RADIUS")
+            && compact.contains("paint_board_progress_ring")
+            && compact.contains("paint_status_chip")
+            && compact.contains("paint_presence_stack")
+            && compact.contains("sheet_shadow"),
+        "compact cards keep the Flo project-card chrome: {compact}"
     );
     let say = fn_src(&src, "say_on_card");
     assert!(say.contains("take_card_notes_block") && say.contains("kick_model"), "{say}");
