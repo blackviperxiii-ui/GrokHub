@@ -1599,7 +1599,6 @@ mod tests {
 #[cfg(test)]
 mod channel_tip_tests {
     use super::*;
-    use std::fs;
 
     /// Temp fixture: a bare `origin` with `main` and `beta` (both at a seed
     /// commit), a `work` clone that moves them, and a GrokHub-shaped `client`
@@ -1887,10 +1886,11 @@ mod channel_tip_tests {
             .expect("recover")
             .expect("backup");
         assert_eq!(git_out(&fx.client, &["rev-parse", "HEAD"]), tip);
-        assert_eq!(
-            std::fs::read_to_string(fx.client.join("Cargo.toml")).unwrap(),
-            "[workspace]\n"
-        );
+        // Windows checkouts may rewrite LF → CRLF; assert the dirty edit is gone.
+        let cargo = std::fs::read_to_string(fx.client.join("Cargo.toml"))
+            .unwrap()
+            .replace("\r\n", "\n");
+        assert_eq!(cargo, "[workspace]\n");
         assert!(!fx.client.join("untracked.txt").exists());
         // Backup tip has the saved dirty commit.
         let tree = git_out(&fx.client, &["ls-tree", "-r", "--name-only", bak.as_str()]);
@@ -1989,29 +1989,28 @@ mod channel_tip_tests {
                 .unwrap()
                 .as_nanos()
         ));
-        let _ = fs::remove_dir_all(&base);
+        let _ = std::fs::remove_dir_all(&base);
         let bin = base.join("bin");
         let cfg = base.join("cfg");
-        fs::create_dir_all(&bin).unwrap();
-        fs::create_dir_all(&cfg).unwrap();
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::create_dir_all(&cfg).unwrap();
         // Shim pacman: -Q succeeds (packages present); -S would write a marker.
-        fs::write(
+        std::fs::write(
             bin.join("pacman"),
             "#!/bin/sh\nif [ \"$1\" = -Q ]; then exit 0; fi\necho PACMAN \"$*\" >>\"$GROKHUB_PKG_LOG\"\nexit 0\n",
         )
         .unwrap();
-        fs::write(
+        std::fs::write(
             bin.join("sudo"),
             "#!/bin/sh\necho SUDO \"$*\" >>\"$GROKHUB_PKG_LOG\"\nexec \"$@\"\n",
         )
         .unwrap();
-        #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
             for name in ["pacman", "sudo"] {
-                let mut perms = fs::metadata(bin.join(name)).unwrap().permissions();
+                let mut perms = std::fs::metadata(bin.join(name)).unwrap().permissions();
                 perms.set_mode(0o755);
-                fs::set_permissions(bin.join(name), perms).unwrap();
+                std::fs::set_permissions(bin.join(name), perms).unwrap();
             }
         }
         // Extract and run only the package block via a tiny harness: dry-run
@@ -2026,7 +2025,7 @@ mod channel_tip_tests {
             .map(|i| start + i)
             .expect("end of package block");
         let block = &install_text[start..end];
-        fs::write(
+        std::fs::write(
             &harness,
             format!(
                 "#!/usr/bin/env bash\nset -euo pipefail\nGROKHUB_CONFIG=\"{cfg}\"\nexport GROKHUB_CONFIG\n{block}\n",
@@ -2050,16 +2049,16 @@ mod channel_tip_tests {
             String::from_utf8_lossy(&out.stderr)
         );
         assert!(
-            !log.exists() || fs::read_to_string(&log).unwrap().is_empty(),
+            !log.exists() || std::fs::read_to_string(&log).unwrap().is_empty(),
             "no sudo when packages present"
         );
         // Missing packages + no TTY → note, no sudo.
-        fs::write(
+        std::fs::write(
             bin.join("pacman"),
             "#!/bin/sh\nif [ \"$1\" = -Q ]; then exit 1; fi\necho PACMAN \"$*\" >>\"$GROKHUB_PKG_LOG\"\nexit 0\n",
         )
         .unwrap();
-        let _ = fs::remove_file(&log);
+        let _ = std::fs::remove_file(&log);
         let out = Command::new("bash")
             .arg(&harness)
             .env("PATH", &path)
@@ -2079,9 +2078,9 @@ mod channel_tip_tests {
             "stdout={stdout} stderr={stderr}"
         );
         assert!(
-            !log.exists() || !fs::read_to_string(&log).unwrap().contains("SUDO"),
+            !log.exists() || !std::fs::read_to_string(&log).unwrap().contains("SUDO"),
             "no sudo without TTY"
         );
-        let _ = fs::remove_dir_all(&base);
+        let _ = std::fs::remove_dir_all(&base);
     }
 }
