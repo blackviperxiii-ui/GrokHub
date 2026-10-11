@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Fixed: on Windows, Eyes, the live room and replay take screenshots again. They use the same screen grabber as the desktop tools; before, every frame failed because they looked for Linux capture tools.
+- Fixed: on Windows, COMPUTER_CMD click, double-click, move, type, key and scroll drive the desktop through SendInput. Before, they tried xdotool and replied with Linux install steps.
+- Fixed: Paste an image works on Windows (the PNG or bitmap on the clipboard) and on KDE Wayland, where `wl-paste` now gets the Wayland socket that startup drops. Before, both said to pick a file or copy something first.
 - Fixed: on Windows, Devices now finds the LAN address by reading the network adapters, picking the home or office network over VPN and virtual adapters the same way Linux does. Before, it ran a Linux-only `hostname -I` that always failed and fell back to whichever address the default route used.
 - The cabin opens faster: on a fresh Linux profile the first frame now paints in about 97 ms instead of 175 ms (median of 5 cold starts). Global hotkeys are grabbed right after the first frame instead of before it (a hidden `--hidden` start still grabs them at once), and the clock and theme probes run while the window is created. Each launch adds a line to `startup.jsonl` in the config folder with the time each stage was reached (newest 20 kept).
 
