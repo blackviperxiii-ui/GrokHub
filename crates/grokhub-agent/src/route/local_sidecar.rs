@@ -448,11 +448,39 @@ pub mod fake_server {
         }
     }
 
-    fn handle_one(stream: &mut TcpStream, token: &str, hits: &std::sync::Arc<AtomicUsize>) -> Result<(), ()> {
+    /// The whole request: headers and a `Content-Length` body can arrive in
+    /// separate reads, and a body cut short makes the reply pick the wrong shape.
+    fn read_request(stream: &mut TcpStream) -> Result<String, ()> {
+        // An accepted socket inherits non-blocking from the listener on Windows.
+        stream.set_nonblocking(false).ok();
         stream.set_read_timeout(Some(Duration::from_millis(500))).ok();
+        let mut raw = Vec::new();
         let mut buf = [0u8; 8192];
-        let n = stream.read(&mut buf).map_err(|_| ())?;
-        let req = String::from_utf8_lossy(&buf[..n]);
+        loop {
+            let n = stream.read(&mut buf).map_err(|_| ())?;
+            if n == 0 {
+                break;
+            }
+            raw.extend_from_slice(&buf[..n]);
+            let text = String::from_utf8_lossy(&raw);
+            if let Some(end) = text.find("\r\n\r\n") {
+                let want = text[..end]
+                    .lines()
+                    .find_map(|l| {
+                        let (k, v) = l.split_once(':')?;
+                        k.trim().eq_ignore_ascii_case("content-length").then(|| v.trim().parse::<usize>().ok())?
+                    })
+                    .unwrap_or(0);
+                if raw.len() >= end + 4 + want {
+                    break;
+                }
+            }
+        }
+        Ok(String::from_utf8_lossy(&raw).into_owned())
+    }
+
+    fn handle_one(stream: &mut TcpStream, token: &str, hits: &std::sync::Arc<AtomicUsize>) -> Result<(), ()> {
+        let req = read_request(stream)?;
         let first = req.lines().next().unwrap_or("");
         let auth_ok = req.lines().any(|l| l.eq_ignore_ascii_case(&format!("Authorization: Bearer {token}")));
         if first.starts_with("GET /health") {
