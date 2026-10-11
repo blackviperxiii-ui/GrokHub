@@ -2,20 +2,48 @@
 
 use std::fs::File;
 use std::io::Read;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+use std::time::{Instant, SystemTime};
 
 use crate::episode::clip_bytes;
 
 const TEMPLATE: &str = include_str!("prompt_template.md");
 const AGENTS_CAP: usize = 64 * 1024;
 
-pub fn system_prompt(cabin_rules: &str, workspace: &Path) -> String {
-    compose(cabin_rules, workspace, grokhub_core::user_home().as_deref())
+struct AgentsCache {
+    key: Vec<(PathBuf, Option<SystemTime>)>,
+    text: Option<String>,
 }
 
-fn compose(cabin_rules: &str, workspace: &Path, home: Option<&Path>) -> String {
+static AGENTS_CACHE: Mutex<Option<AgentsCache>> = Mutex::new(None);
+
+/// Legacy entry: the whole `cabin_rules` blob is treated as the stable prefix
+/// (no volatile tail). Prefer [`system_prompt_parts`] for cache-friendly order.
+pub fn system_prompt(cabin_rules: &str, workspace: &Path) -> String {
+    compose(cabin_rules, "", workspace, grokhub_core::user_home().as_deref())
+}
+
+/// Cache-friendly system prompt: stable rules + disk blocks first, volatile
+/// personality / tuned notes / learned brief last.
+pub fn system_prompt_parts(stable_rules: &str, volatile_tail: &str, workspace: &Path) -> String {
+    compose(
+        stable_rules,
+        volatile_tail,
+        workspace,
+        grokhub_core::user_home().as_deref(),
+    )
+}
+
+fn compose(
+    stable_rules: &str,
+    volatile_tail: &str,
+    workspace: &Path,
+    home: Option<&Path>,
+) -> String {
+    let started = Instant::now();
     let mut out = template_body();
-    let rules = cabin_rules.trim();
+    let rules = stable_rules.trim();
     if !rules.is_empty() {
         out.push_str("\n\n");
         out.push_str(rules);
@@ -36,6 +64,16 @@ fn compose(cabin_rules: &str, workspace: &Path, home: Option<&Path>) -> String {
         out.push_str("\n\n");
         out.push_str(&extras);
     }
+    let tail = volatile_tail.trim();
+    if !tail.is_empty() {
+        out.push_str("\n\n");
+        out.push_str(tail);
+    }
+    let ms = started.elapsed().as_secs_f64() * 1000.0;
+    if cfg!(debug_assertions) {
+        // Local compose cost only; provider cache hits are Usage.cached_tokens.
+        eprintln!("grokhub prompt_compose_ms={ms:.3} bytes={}", out.len());
+    }
     out
 }
 
@@ -49,19 +87,62 @@ fn template_body() -> String {
     text.to_string()
 }
 
-fn layered_agents(workspace: &Path, home: Option<&Path>) -> Option<String> {
-    let mut parts: Vec<String> = Vec::new();
+fn agents_paths(workspace: &Path, home: Option<&Path>) -> Vec<PathBuf> {
+    let mut paths = Vec::new();
     if let Some(home) = home {
-        push_md(&mut parts, &home.join(".grok").join("AGENTS.md"));
-        push_md(&mut parts, &home.join(".grok").join("CLAUDE.md"));
-        push_md(&mut parts, &home.join(".claude").join("AGENTS.md"));
-        push_md(&mut parts, &home.join(".claude").join("CLAUDE.md"));
+        paths.push(home.join(".grok").join("AGENTS.md"));
+        paths.push(home.join(".grok").join("CLAUDE.md"));
+        paths.push(home.join(".claude").join("AGENTS.md"));
+        paths.push(home.join(".claude").join("CLAUDE.md"));
     }
     for dir in crate::skills::project_chain(workspace) {
-        push_md(&mut parts, &dir.join("AGENTS.md"));
-        push_md(&mut parts, &dir.join("CLAUDE.md"));
-        push_md(&mut parts, &dir.join(".claude").join("CLAUDE.md"));
-        push_md(&mut parts, &dir.join(".claude").join("AGENTS.md"));
+        paths.push(dir.join("AGENTS.md"));
+        paths.push(dir.join("CLAUDE.md"));
+        paths.push(dir.join(".claude").join("CLAUDE.md"));
+        paths.push(dir.join(".claude").join("AGENTS.md"));
+    }
+    paths
+}
+
+fn path_mtime(path: &Path) -> Option<SystemTime> {
+    std::fs::symlink_metadata(path)
+        .ok()
+        .and_then(|m| m.modified().ok())
+}
+
+fn agents_cache_key(workspace: &Path, home: Option<&Path>) -> Vec<(PathBuf, Option<SystemTime>)> {
+    agents_paths(workspace, home)
+        .into_iter()
+        .map(|p| {
+            let mtime = path_mtime(&p);
+            (p, mtime)
+        })
+        .collect()
+}
+
+fn layered_agents(workspace: &Path, home: Option<&Path>) -> Option<String> {
+    let key = agents_cache_key(workspace, home);
+    if let Ok(guard) = AGENTS_CACHE.lock() {
+        if let Some(cache) = guard.as_ref() {
+            if cache.key == key {
+                return cache.text.clone();
+            }
+        }
+    }
+    let text = layered_agents_uncached(workspace, home);
+    if let Ok(mut guard) = AGENTS_CACHE.lock() {
+        *guard = Some(AgentsCache {
+            key,
+            text: text.clone(),
+        });
+    }
+    text
+}
+
+fn layered_agents_uncached(workspace: &Path, home: Option<&Path>) -> Option<String> {
+    let mut parts: Vec<String> = Vec::new();
+    for path in agents_paths(workspace, home) {
+        push_md(&mut parts, &path);
     }
     if parts.is_empty() {
         return None;
@@ -150,9 +231,67 @@ mod tests {
         let cwd_at = layered.find("CWD_MARK").unwrap();
         assert!(global_at < root_at && root_at < cwd_at, "{layered}");
         assert!(layered.len() <= AGENTS_CAP, "{}", layered.len());
-        let full = compose("Cabin rule line.", &cwd, Some(&home));
+        let full = compose("Cabin rule line.", "", &cwd, Some(&home));
         assert!(full.find("Cabin rule line.").unwrap() < full.find("GLOBAL_MARK").unwrap());
         assert!(full.contains("<agents>"));
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn compose_stable_prefix_byte_identical_when_only_tail_changes() {
+        let dir = std::env::temp_dir().join(format!(
+            "gh-prompt-stable-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("AGENTS.md"), "Stable agents line.\n").unwrap();
+        let base = compose("STABLE_RULES", "", &dir, None);
+        let again = compose("STABLE_RULES", "", &dir, None);
+        assert_eq!(base, again, "same inputs must be byte-identical");
+        let with_a = compose("STABLE_RULES", "VOLATILE_A", &dir, None);
+        let with_b = compose("STABLE_RULES", "VOLATILE_B", &dir, None);
+        assert!(with_a.starts_with(&base), "volatile A must only extend the stable prefix");
+        assert!(with_b.starts_with(&base), "volatile B must only extend the stable prefix");
+        assert!(with_a.ends_with("VOLATILE_A"));
+        assert!(with_b.ends_with("VOLATILE_B"));
+        assert_ne!(with_a, with_b);
+        assert!(
+            base.find("STABLE_RULES").unwrap() < base.find("Stable agents line").unwrap(),
+            "safety/static rules stay before agents: {base}"
+        );
+        assert!(
+            with_a.find("<agents>").unwrap() < with_a.find("VOLATILE_A").unwrap(),
+            "volatile tail stays after disk blocks: {with_a}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn agents_cache_invalidates_when_agents_md_changes() {
+        let dir = std::env::temp_dir().join(format!(
+            "gh-agents-cache-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("AGENTS.md");
+        std::fs::write(&path, "FIRST\n").unwrap();
+        let first = layered_agents(&dir, None).unwrap();
+        assert!(first.contains("FIRST"));
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        std::fs::write(&path, "SECOND\n").unwrap();
+        let second = layered_agents(&dir, None).unwrap();
+        assert!(second.contains("SECOND"), "{second}");
+        assert!(!second.contains("FIRST"), "{second}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

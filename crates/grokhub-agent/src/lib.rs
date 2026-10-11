@@ -67,7 +67,7 @@ pub use models::{
     context_length_for, parse_listed_models, parse_xai_models, pick_model, ListedModel,
     GROK_47_CONTEXT_LENGTH, XAI_MODELS_URL,
 };
-pub use prompt::system_prompt;
+pub use prompt::{system_prompt, system_prompt_parts};
 pub use research::native_deep_research_prompt;
 pub use retry::{
     decide_retry, jitter_backoff, resolve_max_retries_with_env, retry_after_or_backoff,
