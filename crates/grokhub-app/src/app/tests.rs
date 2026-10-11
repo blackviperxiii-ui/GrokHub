@@ -3046,32 +3046,39 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
     #[test]
     fn the_night_slot_runs_loops_and_clock_time_automations() {
         let src = cabin_src();
-        let beat = src
-            .split("fn tick_heartbeat")
+        let job = src
+            .split("JobKind::Automations =>")
             .nth(1)
-            .and_then(|s| s.split("fn tick_anticipate").next())
-            .expect("tick_heartbeat");
+            .and_then(|s| s.split("JobKind::PulseRefresh =>").next())
+            .expect("automations job");
         assert!(
-            beat.contains("self.tick_loops()") && beat.contains("self.tick_night()"),
-            "the Night slot owns both schedulers — a 09:00 automation must still fire: {beat}"
+            job.contains("self.tick_loops() || self.tick_night()"),
+            "the Automations job owns both schedulers, loops first, and a 09:00 automation \
+             still fires when no loop is due: {job}"
         );
+        // The governor sets the cadence: neither keeps a private clock, so an idle
+        // loop list cannot starve automations and nothing is scheduled twice.
         let night = src
             .split("fn tick_night(")
             .nth(1)
             .and_then(|s| s.split("fn poll_night_check(").next())
             .expect("tick_night");
-        assert!(
-            night.contains("last_auto_tick") && !night.contains("last_night_tick"),
-            "automations need their own debounce or an idle loop list starves them: {night}"
-        );
         let loops = src
             .split("fn tick_loops(")
             .nth(1)
             .and_then(|s| s.split("fn poll_grok_loop(").next())
             .expect("tick_loops");
+        for body in [night, loops] {
+            assert!(
+                !body.contains("last_auto_tick")
+                    && !body.contains("last_night_tick")
+                    && !body.contains(".elapsed()"),
+                "no self-timing left in the night schedulers: {body}"
+            );
+        }
         assert!(
-            loops.contains("last_night_tick") && !loops.contains("last_auto_tick"),
-            "loops keep their own debounce: {loops}"
+            !src.contains("last_auto_tick") && !src.contains("last_night_tick"),
+            "the old debounce clocks are gone"
         );
     }
 
@@ -6926,9 +6933,9 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             "sitting on a chat is not activity and must not move that History row: {house}"
         );
         let idle = src
-            .split("HeartbeatAct::Reflect =>")
+            .split("JobKind::Reflect =>")
             .nth(1)
-            .and_then(|s| s.split("HeartbeatAct::Anticipate =>").next())
+            .and_then(|s| s.split("JobKind::Indexers =>").next())
             .expect("idle reflect");
         assert!(
             idle.contains("scratch()"),
@@ -7253,9 +7260,15 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
         .nth(1)
         .and_then(|s| s.split("HeartbeatAct::Inbox =>").next())
         .expect("housekeep");
+    assert!(!house.contains("stamp_current_access"), "{house}");
+    let pulse = src
+        .split("JobKind::PulseRefresh =>")
+        .nth(1)
+        .and_then(|s| s.split("JobKind::ModelRegistry =>").next())
+        .expect("pulse refresh job");
     assert!(
-        house.contains("tick_feed_pulse") && !house.contains("stamp_current_access"),
-        "expiry, quiet release, and the digest clock run on Housekeep without moving History: {house}"
+        pulse.contains("tick_feed_pulse") && !pulse.contains("stamp_current_access"),
+        "expiry, quiet release, and the digest clock run on the Pulse refresh job without moving History: {pulse}"
     );
     let tick = src
         .split("fn tick_review(")
@@ -15318,8 +15331,7 @@ fn quiet_cabin() -> Cabin {
         slash_filter_first: String::new(),
         last_window_title: String::new(),
         voice_orb: String::new(),
-        last_night_tick: std::time::Instant::now(),
-        last_auto_tick: std::time::Instant::now(),
+        governor: grokhub_core::Governor::cabin(),
         last_heartbeat: std::time::Instant::now(),
         pace: Default::default(),
         pace_traced: Vec::new(),
@@ -25387,10 +25399,18 @@ fn heartbeat_halt_skips_every_organ_that_starts_work() {
         beat.contains("heartbeat_halted(") && beat.contains("runs_while_halted()"),
         "Halt must hold the pulse before any organ runs: {beat}"
     );
+    let digest = beat
+        .split("JobKind::Digest =>")
+        .nth(1)
+        .and_then(|s| s.split("JobKind::Review =>").next())
+        .expect("digest job");
     assert!(
-        beat.contains("if !halted {\n                        self.follow_feed_lookup();"),
-        "the digest lookup is a model call and waits out a Halt: {beat}"
+        digest.contains("self.follow_feed_lookup();") && beat.contains("self.governor.tick("),
+        "the digest lookup runs only from the governor's queue: {beat}"
     );
+    let spec = grokhub_core::Governor::cabin();
+    let spec = spec.spec(grokhub_core::JobKind::Digest).expect("digest spec");
+    assert!(!spec.while_halted, "the digest lookup is a model call and waits out a Halt");
     let anticipate = fn_src(&src, "tick_anticipate");
     let gate = anticipate.find("heartbeat_may(").expect("anticipate meets the pace gate");
     let fire = anticipate.find("send_scheduled_chat(").expect("anticipate send");
@@ -26207,4 +26227,64 @@ fn a_killed_reply_retries_once_quietly_and_a_second_kill_posts_one_crash_card() 
     assert_eq!(cards[0].prompt.as_deref(), Some("/retry"));
     assert!(!cabin.running);
     release_isolated(&root, cabin);
+}
+
+/// Brain 4: every background job is started from exactly one place, its
+/// governor arm, so nothing is scheduled twice after the migration.
+#[test]
+fn each_background_job_runs_only_from_its_governor_arm() {
+    let src = cabin_src()
+        + &[
+            include_str!("feed_ui.rs"),
+            include_str!("indexer_ui.rs"),
+            include_str!("self_review_ui.rs"),
+            include_str!("amr_memory.rs"),
+            include_str!("router_ui.rs"),
+            include_str!("proactive_auto.rs"),
+            include_str!("proactive_ui.rs"),
+            include_str!("pulse_sources_ui.rs"),
+            include_str!("heartbeat_gate.rs"),
+            include_str!("native_unattended.rs"),
+        ]
+        .concat()
+        .replace("\r\n", "\n");
+    let arm = |kind: &str| -> String {
+        let start = format!("JobKind::{kind} =>");
+        let rest = src.split(start.as_str()).nth(1).unwrap_or_else(|| panic!("no arm for {kind}"));
+        let end = rest
+            .find("\n            JobKind::")
+            .or_else(|| rest.find("\n        }\n"))
+            .unwrap_or(rest.len());
+        rest[..end].to_string()
+    };
+    for (kind, call) in [
+        ("Automations", "self.tick_loops("),
+        ("Automations", "self.tick_night("),
+        ("PulseRefresh", "self.tick_feed_pulse("),
+        ("ModelRegistry", "self.tick_model_registry("),
+        ("Proactive", "self.tick_proactive_cards("),
+        ("Ideas", "self.maybe_suggest_ideas(false)"),
+        ("Anticipate", "self.tick_anticipate("),
+        ("Digest", "self.follow_feed_lookup("),
+        ("Digest", "self.follow_source_fetch("),
+        ("Review", "self.tick_review("),
+        ("NightPasses", "self.tick_night_passes("),
+        ("MemoryRetention", "self.tick_amr_retention("),
+        ("Indexers", "self.tick_indexers("),
+    ] {
+        assert_eq!(src.matches(call).count(), 1, "{call} is started from one place only");
+        assert!(arm(kind).contains(call), "{call} runs from the {kind} arm: {}", arm(kind));
+    }
+    // Every registered kind has exactly one arm, and the pulse reaches them only
+    // through the governor's queue.
+    let kinds = grokhub_core::Governor::cabin().kinds();
+    assert_eq!(kinds.len(), 12);
+    for kind in kinds {
+        let name = format!("{kind:?}");
+        assert_eq!(src.matches(&format!("JobKind::{name} =>")).count(), 1, "{name} has one arm");
+    }
+    let beat = fn_src(&src, "tick_heartbeat");
+    assert!(beat.contains("HeartbeatAct::Background => self.run_background(now, halted)"), "{beat}");
+    let run = fn_src(&src, "run_background");
+    assert!(run.contains("self.governor.tick(") && run.contains("for job in plan.run"), "{run}");
 }

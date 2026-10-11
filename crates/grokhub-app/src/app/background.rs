@@ -370,6 +370,7 @@ impl Cabin {
             return;
         }
         let mut crashed: Vec<grokhub_core::UpdateCard> = Vec::new();
+        let mut scheduled_tokens = 0u64;
         for run in self.bg.runs.iter_mut() {
             let Some(rx) = run.rx.take() else {
                 continue;
@@ -387,6 +388,12 @@ impl Cabin {
                     }
                     Ok(GrokPEvent::Recovering(_)) => run.action = "Retrying…".into(),
                     Ok(GrokPEvent::End(turn)) => {
+                        if run.origin == BgOrigin::Scheduled {
+                            scheduled_tokens = scheduled_tokens
+                                .saturating_add(turn.usage.input_tokens)
+                                .saturating_add(turn.usage.output_tokens)
+                                .saturating_add(turn.usage.reasoning_tokens);
+                        }
                         if run.say.trim().is_empty() {
                             run.say = turn.text;
                         }
@@ -427,6 +434,8 @@ impl Cabin {
         for card in crashed {
             self.post_feed_card(card);
         }
+        // Scheduled runs are the governor's Automations job.
+        self.governor_charge(JobKind::Automations, scheduled_tokens);
         self.post_finished_bg_runs();
     }
 
@@ -914,9 +923,14 @@ fn run_native_bg(
     });
     engine.set_imagine_bearer(&bearer);
     engine.set_reopen_tasks(false);
+    // The engine reports the session's totals; the run's end carries only
+    // what this run spent, for the governor's budget.
+    let mut before = grokhub_agent::Usage::default();
     if let Ok(info) = grokhub_agent::load_session(&session) {
+        before = info.usage.clone();
         engine.resume(info.input(), info.usage);
     }
+    let mut spent = empty_grok_usage();
     let mut say = String::new();
     let _ = engine.prompt(&prompt, None, &mut |ev| match ev {
         AcpEvent::Text(text) => {
@@ -932,12 +946,13 @@ fn run_native_bg(
         AcpEvent::Err(err) => {
             let _ = tx.send(GrokPEvent::Err(err));
         }
+        AcpEvent::Usage(total) => spent = usage_since(&before, &total),
         AcpEvent::Done { stop_reason } => {
             let _ = tx.send(GrokPEvent::End(grokhub_core::wire::SingleTurn {
                 session_id: session.clone(),
                 text: say.clone(),
                 thought: String::new(),
-                usage: empty_grok_usage(),
+                usage: spent.clone(),
                 stop_reason,
             }));
         }
@@ -960,6 +975,16 @@ fn apply_automation_changes(
             }
             grokhub_agent::AutomationChange::Delete(id) => list.retain(|item| item.id != id),
         }
+    }
+}
+
+/// Session totals minus what the session had before this run.
+fn usage_since(before: &grokhub_agent::Usage, total: &GrokUsage) -> GrokUsage {
+    GrokUsage {
+        input_tokens: total.input_tokens.saturating_sub(before.input_tokens),
+        output_tokens: total.output_tokens.saturating_sub(before.output_tokens),
+        reasoning_tokens: total.reasoning_tokens.saturating_sub(before.reasoning_tokens),
+        ..empty_grok_usage()
     }
 }
 

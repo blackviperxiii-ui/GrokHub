@@ -600,12 +600,12 @@ mod tests {
         let mut r = rig("dfy-ttl", &["notes"]);
         approve_history(&r.root, 1);
         r.cabin.auto_act.queue.push_back(reply_to_sam());
-        r.cabin.tick_anticipate();
+        r.cabin.tick_proactive_cards(false);
         assert!(r.cabin.harness.park.is_some());
         if let Some(p) = r.cabin.harness.park.as_mut() {
             p.parked_at = Instant::now() - hx::APPROVAL_TTL - Duration::from_secs(1);
         }
-        r.cabin.tick_anticipate();
+        r.cabin.tick_proactive_cards(false);
         assert!(r.cabin.harness.park.is_none());
         let deny = proactive_spans(&r.root).into_iter().rfind(|s| s.decision == "deny").expect("deny span");
         assert_eq!(deny.result, "timed out — fail-closed Deny");

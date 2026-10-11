@@ -35,6 +35,7 @@ pub mod feel;
 pub mod findings;
 pub mod frame;
 pub mod goal;
+pub mod governor;
 pub mod greeting;
 pub mod grok_loop;
 pub mod hands;
@@ -280,6 +281,10 @@ pub use hands::{
 pub use heartbeat::{
     heartbeat_acts, heartbeat_due, heartbeat_repaint_ms, next_heartbeat_wait_ms, HeartbeatAct,
     HEARTBEAT_MS,
+};
+pub use governor::{
+    cabin_jobs, BackgroundBudgets, BudgetClass, Governor, GovernorNote, JobHold, JobKind, JobSpec,
+    QuietRule, TickCtx, TickPlan,
 };
 pub use heartbeat_throttle::{
     ActOutcome, HeartbeatPace, HeartbeatThrottle, PaceGate, PaceHold, ProactiveAct, PACE_NORMAL,
