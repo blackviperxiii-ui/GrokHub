@@ -245,6 +245,214 @@ pub fn switch_clone_to_main(source: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// Plan step the cabin runs itself: save a dirty or diverged clone onto a
+/// `grokhub-backup/…` branch, then hard-reset to the channel tip.
+pub const CLONE_RECOVER_STEP_PREFIX: &str = "grokhub: recover dirty or diverged clone · ";
+
+/// Encode a recover step for the update plan runner.
+pub fn clone_recover_step(source: &Path, channel: Channel) -> String {
+    format!(
+        "{CLONE_RECOVER_STEP_PREFIX}{} · {}",
+        channel.as_str(),
+        source.display()
+    )
+}
+
+/// Parse [`clone_recover_step`]. `None` when the line is not a recover step.
+pub fn parse_clone_recover_step(cmd: &str) -> Option<(Channel, PathBuf)> {
+    let rest = cmd.strip_prefix(CLONE_RECOVER_STEP_PREFIX)?;
+    let (ch, path) = rest.split_once(" · ")?;
+    let channel = Channel::parse(ch)?;
+    if path.is_empty() {
+        return None;
+    }
+    Some((channel, PathBuf::from(path)))
+}
+
+fn backup_branch_name_now() -> String {
+    let ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    let rfc = crate::oauth::unix_ms_to_rfc3339(ms);
+    let digits: String = rfc.chars().filter(|c| c.is_ascii_digit()).collect();
+    let stamp = if digits.len() >= 14 {
+        format!("{}-{}", &digits[..8], &digits[8..14])
+    } else {
+        ms.to_string()
+    };
+    format!("grokhub-backup/{stamp}")
+}
+
+fn git_is_dirty(source: &Path) -> Result<bool, String> {
+    let (ok, out) = git_stdout(source, &["status", "--porcelain"])?;
+    if !ok {
+        return Err("git status failed".into());
+    }
+    Ok(!out.trim().is_empty())
+}
+
+/// Whether HEAD is not an ancestor of `tip` (diverged, or tip missing).
+fn git_is_diverged_from(source: &Path, tip: &str) -> Result<bool, String> {
+    if git_rev_parse(source, tip).is_err() {
+        return Ok(false);
+    }
+    let (ok, _) = git_stdout(source, &["merge-base", "--is-ancestor", "HEAD", tip])?;
+    Ok(!ok)
+}
+
+/// True when the clone has a dirty tree or a history that cannot fast-forward
+/// onto the cached `origin/<branch>` tip. A missing remote-tracking tip is
+/// not diverged — the pull step still fetches.
+pub fn clone_needs_recover(source: &Path, channel: Channel) -> Result<bool, String> {
+    let tip = format!("origin/{}", channel.branch());
+    Ok(git_is_dirty(source)? || git_is_diverged_from(source, &tip)?)
+}
+
+fn fetch_channel_tip(source: &Path, channel: Channel) -> Result<(), String> {
+    let want = channel.branch();
+    let refspec = format!("+refs/heads/{want}:refs/remotes/origin/{want}");
+    // Stable resets to the newest v* tag when one exists.
+    let (ok, _) = if matches!(channel, Channel::Stable) {
+        git_stdout_within(
+            source,
+            &["fetch", "--quiet", "--tags", "origin", &refspec],
+            Duration::from_secs(60),
+        )?
+    } else {
+        git_stdout_within(
+            source,
+            &["fetch", "--quiet", "origin", &refspec],
+            Duration::from_secs(60),
+        )?
+    };
+    if !ok {
+        return Err(format!("git fetch origin {want} failed"));
+    }
+    Ok(())
+}
+
+/// Tip the recover step resets to: `origin/beta`, or the newest `vX.Y.Z` tag
+/// on stable (falling back to `origin/main`).
+fn resolve_channel_tip(source: &Path, channel: Channel) -> Result<String, String> {
+    match channel {
+        Channel::Beta => {
+            let tip = "origin/beta".to_string();
+            git_rev_parse(source, &tip)?;
+            Ok(tip)
+        }
+        Channel::Stable => {
+            let (ok, out) = git_stdout(
+                source,
+                &["tag", "-l", "v[0-9]*", "--sort=-v:refname"],
+            )?;
+            if ok {
+                for line in out.lines() {
+                    let tag = line.trim();
+                    if tag.is_empty() {
+                        continue;
+                    }
+                    // Prefer plain vX.Y.Z release tags, not -beta / -rc.
+                    let rest = tag.strip_prefix('v').unwrap_or(tag);
+                    if rest.split('.').count() == 3
+                        && rest
+                            .bytes()
+                            .all(|b| b.is_ascii_digit() || b == b'.')
+                    {
+                        return Ok(tag.to_string());
+                    }
+                }
+            }
+            let tip = "origin/main".to_string();
+            git_rev_parse(source, &tip)?;
+            Ok(tip)
+        }
+    }
+}
+
+/// When the clone is dirty or diverged from the channel tip, commit the
+/// current state onto a local `grokhub-backup/<YYYYMMDD-HHMMSS>` branch
+/// (never pushed) and `reset --hard` to that tip. Returns the backup branch
+/// name, or `None` when a plain fast-forward is enough.
+pub fn recover_clone_if_needed(source: &Path, channel: Channel) -> Result<Option<String>, String> {
+    if !is_grokhub_source(source) {
+        return Err(
+            "GrokHub can't find its source folder (~/GrokHub or ~/.config/GrokHub/source).".into(),
+        );
+    }
+    let want = channel.branch();
+    let branch = git_head_branch(source)?;
+    if branch != want {
+        return Err(match channel {
+            Channel::Stable => format!("source clone is on {branch} — checkout main, then Update"),
+            Channel::Beta => format!(
+                "source clone is on {branch} — run ./scripts/install.sh --user --channel beta, then Update"
+            ),
+        });
+    }
+    fetch_channel_tip(source, channel)?;
+    let tip = resolve_channel_tip(source, channel)?;
+    let dirty = git_is_dirty(source)?;
+    let diverged = git_is_diverged_from(source, &tip)?;
+    if !dirty && !diverged {
+        return Ok(None);
+    }
+    let old_head = git_rev_parse(source, "HEAD")?;
+    if dirty {
+        let (ok, _) = git_stdout(source, &["add", "-A"])?;
+        if !ok {
+            return Err("git add failed while saving the clone".into());
+        }
+        let bak_msg = format!("GrokHub update backup before reset to {tip}");
+        let (ok, _) = git_stdout_within(
+            source,
+            &[
+                "-c",
+                "user.email=cabin@local",
+                "-c",
+                "user.name=GrokHub",
+                "commit",
+                "--no-verify",
+                "-m",
+                &bak_msg,
+            ],
+            Duration::from_secs(30),
+        )?;
+        if !ok {
+            return Err("git commit failed while saving the clone".into());
+        }
+    }
+    let mut bak = backup_branch_name_now();
+    // A same-second retry: append a short suffix so `git branch` never clashes.
+    for n in 0..8u32 {
+        let name = if n == 0 {
+            bak.clone()
+        } else {
+            format!("{bak}-{n}")
+        };
+        let (ok, _) = git_stdout(source, &["branch", &name, "HEAD"])?;
+        if ok {
+            bak = name;
+            break;
+        }
+        if n == 7 {
+            return Err(format!("could not create backup branch {bak}"));
+        }
+    }
+    let (ok, _) = git_stdout_within(
+        source,
+        &["reset", "--hard", &tip],
+        Duration::from_secs(60),
+    )?;
+    if !ok {
+        return Err(format!(
+            "git reset --hard {tip} failed — prior state is on {bak} ({})",
+            &old_head[..old_head.len().min(7)]
+        ));
+    }
+    Ok(Some(bak))
+}
+
 /// Overlay pulls this GitHub remote until Cursor Origin is live.
 pub const GITHUB_REMOTE_URL: &str = "https://github.com/blackviperxiii-ui/GrokHub.git";
 /// Leftover Cursor Origin clone — retarget to GitHub.
@@ -318,7 +526,12 @@ fn update_cmds_on(source: &Path, windows: bool, channel: Channel) -> Result<Vec<
             ));
         }
     }
-    cmds.push(format!("git -C {src} pull --ff-only origin {want}"));
+    if clone_needs_recover(source, channel)? {
+        // Fetch + backup branch + hard reset; the cabin runs this step itself.
+        cmds.push(clone_recover_step(source, channel));
+    } else {
+        cmds.push(format!("git -C {src} pull --ff-only origin {want}"));
+    }
     cmds.push(overlay_install_cmd(source, &src, windows));
     Ok(cmds)
 }
@@ -503,6 +716,7 @@ pub fn cabin_overlay_step(cmd: &str) -> bool {
         || cmd.contains("install-windows.ps1")
         || cmd == crate::release_verify::RELEASE_INSTALL_STEP
         || crate::release_verify::parse_release_switch_step(cmd).is_some()
+        || parse_clone_recover_step(cmd).is_some()
 }
 
 fn overlay_install_cmd(source: &Path, src_quoted: &str, windows: bool) -> String {
@@ -531,6 +745,15 @@ pub fn update_plan_steps(cmds: Vec<String>) -> Vec<HostPlanStep> {
                 "fast-forward origin/beta — config stays".into()
             } else if cmd.contains("pull --ff-only") {
                 "fast-forward origin/main — config stays".into()
+            } else if let Some((channel, _)) = parse_clone_recover_step(&cmd) {
+                match channel {
+                    Channel::Beta => {
+                        "save dirty or diverged work on a grokhub-backup/… branch, reset to origin/beta — config stays".into()
+                    }
+                    Channel::Stable => {
+                        "save dirty or diverged work on a grokhub-backup/… branch, reset to the latest release tag — config stays".into()
+                    }
+                }
             } else if cmd.contains("remote set-url") || cmd.contains("remote add") {
                 "point origin at GitHub — Cursor Origin is not live yet".into()
             } else if cmd == crate::release_verify::RELEASE_INSTALL_STEP {
@@ -579,6 +802,8 @@ pub fn update_step_label(cmd: &str) -> &'static str {
         "Pulling origin/beta…"
     } else if cmd.contains("pull --ff-only") {
         "Pulling origin/main…"
+    } else if parse_clone_recover_step(cmd).is_some() {
+        "Saving prior clone, resetting…"
     } else if cmd.contains("remote set-url") || cmd.contains("remote add") {
         "Retargeting origin…"
     } else if cmd == crate::release_verify::RELEASE_INSTALL_STEP {
@@ -1594,5 +1819,268 @@ mod channel_tip_tests {
             parse_ls_remote_tips("deadbeef refs/heads/beta\n"),
             ("deadbeef".into(), String::new())
         );
+    }
+
+    #[test]
+    fn parse_clone_recover_step_reads_channel_and_path() {
+        let step = clone_recover_step(Path::new("/tmp/GrokHub"), Channel::Beta);
+        assert_eq!(
+            parse_clone_recover_step(&step),
+            Some((Channel::Beta, PathBuf::from("/tmp/GrokHub")))
+        );
+        assert!(parse_clone_recover_step("git pull").is_none());
+        assert!(cabin_overlay_step(&step));
+        assert_eq!(update_step_label(&step), "Saving prior clone, resetting…");
+    }
+
+    #[test]
+    fn recover_diverged_clone_saves_old_head_on_backup_and_resets() {
+        let fx = TipsFixture::new("recover-diverged");
+        git_ok(&fx.client, &["config", "user.email", "cabin@test"]);
+        git_ok(&fx.client, &["config", "user.name", "Cabin"]);
+        git_ok(&fx.client, &["config", "commit.gpgsign", "false"]);
+        // Advance origin/main past the client, then give the client its own commit.
+        fx.commit_on("main", "upstream.txt");
+        let tip = git_out(&fx.work, &["rev-parse", "origin/main"]);
+        git_ok(&fx.client, &["checkout", "-q", "main"]);
+        std::fs::write(fx.client.join("local-only.txt"), "mine").unwrap();
+        git_ok(&fx.client, &["add", "."]);
+        git_ok(&fx.client, &["commit", "-q", "-m", "local diverge"]);
+        let old = git_out(&fx.client, &["rev-parse", "HEAD"]);
+        assert!(clone_needs_recover(&fx.client, Channel::Stable).unwrap());
+        let bak = recover_clone_if_needed(&fx.client, Channel::Stable)
+            .expect("recover")
+            .expect("backup branch");
+        assert!(bak.starts_with("grokhub-backup/"), "{bak}");
+        assert_eq!(git_out(&fx.client, &["rev-parse", bak.as_str()]), old);
+        assert_eq!(git_out(&fx.client, &["rev-parse", "HEAD"]), tip);
+        assert!(!clone_needs_recover(&fx.client, Channel::Stable).unwrap());
+        let plan = update_cmds_in(&fx.client, Channel::Stable).unwrap();
+        assert!(
+            plan.iter().any(|c| c.contains("pull --ff-only origin main")),
+            "clean after recover uses pull: {plan:?}"
+        );
+        assert!(plan.iter().all(|c| parse_clone_recover_step(c).is_none()), "{plan:?}");
+    }
+
+    #[test]
+    fn recover_dirty_clone_keeps_changes_on_backup_branch() {
+        let fx = TipsFixture::new("recover-dirty");
+        git_ok(&fx.client, &["config", "user.email", "cabin@test"]);
+        git_ok(&fx.client, &["config", "user.name", "Cabin"]);
+        git_ok(&fx.client, &["config", "commit.gpgsign", "false"]);
+        fx.commit_on("main", "upstream.txt");
+        let tip = git_out(&fx.work, &["rev-parse", "origin/main"]);
+        git_ok(&fx.client, &["fetch", "-q", "origin"]);
+        git_ok(&fx.client, &["checkout", "-q", "main"]);
+        // Still at seed tip locally until recover fetches; make the tree dirty.
+        std::fs::write(fx.client.join("Cargo.toml"), "[workspace] # dirty\n").unwrap();
+        std::fs::write(fx.client.join("untracked.txt"), "new").unwrap();
+        assert!(clone_needs_recover(&fx.client, Channel::Stable).unwrap());
+        let plan = update_cmds_in(&fx.client, Channel::Stable).unwrap();
+        assert!(
+            plan.iter().any(|c| parse_clone_recover_step(c).is_some()),
+            "dirty plan uses recover step: {plan:?}"
+        );
+        let bak = recover_clone_if_needed(&fx.client, Channel::Stable)
+            .expect("recover")
+            .expect("backup");
+        assert_eq!(git_out(&fx.client, &["rev-parse", "HEAD"]), tip);
+        // Windows checkouts may rewrite LF → CRLF; assert the dirty edit is gone.
+        let cargo = std::fs::read_to_string(fx.client.join("Cargo.toml"))
+            .unwrap()
+            .replace("\r\n", "\n");
+        assert_eq!(cargo, "[workspace]\n");
+        assert!(!fx.client.join("untracked.txt").exists());
+        // Backup tip has the saved dirty commit.
+        let tree = git_out(&fx.client, &["ls-tree", "-r", "--name-only", bak.as_str()]);
+        assert!(tree.contains("untracked.txt"), "{tree}");
+        let show = git_out(&fx.client, &["show", &format!("{bak}:Cargo.toml")]);
+        assert!(show.contains("dirty"), "{show}");
+    }
+
+    #[test]
+    fn clean_clone_update_plan_stays_on_fast_forward() {
+        let fx = TipsFixture::new("recover-clean");
+        git_ok(&fx.client, &["checkout", "-q", "main"]);
+        assert!(!clone_needs_recover(&fx.client, Channel::Stable).unwrap());
+        assert_eq!(
+            recover_clone_if_needed(&fx.client, Channel::Stable).unwrap(),
+            None
+        );
+        let plan = update_cmds_in(&fx.client, Channel::Stable).unwrap();
+        assert!(
+            plan.iter().any(|c| c.contains("pull --ff-only origin main")),
+            "{plan:?}"
+        );
+        assert!(plan.iter().all(|c| parse_clone_recover_step(c).is_none()), "{plan:?}");
+        let branches = git_out(&fx.client, &["branch", "--list", "grokhub-backup/*"]);
+        assert!(branches.trim().is_empty(), "no backup on clean: {branches}");
+    }
+
+    #[test]
+    fn single_branch_clone_can_switch_to_beta_and_back() {
+        let fx = TipsFixture::new("single-branch");
+        let single = fx.base.join("single");
+        git_ok(
+            &fx.base,
+            &[
+                "clone",
+                "-q",
+                "--single-branch",
+                "-b",
+                "main",
+                "origin.git",
+                "single",
+            ],
+        );
+        git_ok(&single, &["config", "user.email", "cabin@test"]);
+        git_ok(&single, &["config", "user.name", "Cabin"]);
+        git_ok(&single, &["config", "commit.gpgsign", "false"]);
+        // No local beta yet — same failure mode as a --single-branch user clone.
+        assert!(!Command::new("git")
+            .args(["show-ref", "--verify", "--quiet", "refs/heads/beta"])
+            .current_dir(&single)
+            .status()
+            .unwrap()
+            .success());
+        // Mirror install.sh: add fetch refspec, fetch, checkout -B --track.
+        git_ok(
+            &single,
+            &[
+                "config",
+                "--add",
+                "remote.origin.fetch",
+                "+refs/heads/beta:refs/remotes/origin/beta",
+            ],
+        );
+        git_ok(
+            &single,
+            &[
+                "fetch",
+                "-q",
+                "origin",
+                "+refs/heads/beta:refs/remotes/origin/beta",
+            ],
+        );
+        git_ok(
+            &single,
+            &["checkout", "-q", "-B", "beta", "--track", "origin/beta"],
+        );
+        assert_eq!(git_out(&single, &["symbolic-ref", "--short", "HEAD"]), "beta");
+        assert_eq!(
+            git_out(&single, &["rev-parse", "--abbrev-ref", "beta@{upstream}"]),
+            "origin/beta"
+        );
+        let tips = fetch_channel_tips(&single).expect("fetch tips");
+        switch_clone_to_main(&single).expect("back to main");
+        assert_eq!(git_out(&single, &["symbolic-ref", "--short", "HEAD"]), "main");
+        assert_eq!(git_out(&single, &["rev-parse", "HEAD"]), tips.main_sha);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn install_sh_skips_sudo_when_packages_present_or_no_tty() {
+        let base = std::env::temp_dir().join(format!(
+            "grokhub-pkg-skip-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = std::fs::remove_dir_all(&base);
+        let bin = base.join("bin");
+        let cfg = base.join("cfg");
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::create_dir_all(&cfg).unwrap();
+        // Shim pacman: -Q succeeds (packages present); -S would write a marker.
+        std::fs::write(
+            bin.join("pacman"),
+            "#!/bin/sh\nif [ \"$1\" = -Q ]; then exit 0; fi\necho PACMAN \"$*\" >>\"$GROKHUB_PKG_LOG\"\nexit 0\n",
+        )
+        .unwrap();
+        std::fs::write(
+            bin.join("sudo"),
+            "#!/bin/sh\necho SUDO \"$*\" >>\"$GROKHUB_PKG_LOG\"\nexec \"$@\"\n",
+        )
+        .unwrap();
+        {
+            use std::os::unix::fs::PermissionsExt;
+            for name in ["pacman", "sudo"] {
+                let mut perms = std::fs::metadata(bin.join(name)).unwrap().permissions();
+                perms.set_mode(0o755);
+                std::fs::set_permissions(bin.join(name), perms).unwrap();
+            }
+        }
+        // Extract and run only the package block via a tiny harness: dry-run
+        // never reaches try_pkgs, so the test runs that section on its own.
+        let harness = base.join("pkg-harness.sh");
+        let install_text = include_str!("../../../scripts/install.sh");
+        let start = install_text
+            .find("PKG_SKIP_FILE=")
+            .expect("PKG_SKIP_FILE in install.sh");
+        let end = install_text[start..]
+            .find("\nif command -v systemctl")
+            .map(|i| start + i)
+            .expect("end of package block");
+        let block = &install_text[start..end];
+        std::fs::write(
+            &harness,
+            format!(
+                "#!/usr/bin/env bash\nset -euo pipefail\nGROKHUB_CONFIG=\"{cfg}\"\nexport GROKHUB_CONFIG\n{block}\n",
+                cfg = cfg.display()
+            ),
+        )
+        .unwrap();
+        let log = base.join("pkg.log");
+        let path = format!("{}:{}", bin.display(), std::env::var("PATH").unwrap_or_default());
+        // Packages present → pacman -Q succeeds → no sudo.
+        let out = Command::new("bash")
+            .arg(&harness)
+            .env("PATH", &path)
+            .env("GROKHUB_PKG_LOG", &log)
+            .env("HOME", &base)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "stderr={}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(
+            !log.exists() || std::fs::read_to_string(&log).unwrap().is_empty(),
+            "no sudo when packages present"
+        );
+        // Missing packages + no TTY → note, no sudo.
+        std::fs::write(
+            bin.join("pacman"),
+            "#!/bin/sh\nif [ \"$1\" = -Q ]; then exit 1; fi\necho PACMAN \"$*\" >>\"$GROKHUB_PKG_LOG\"\nexit 0\n",
+        )
+        .unwrap();
+        let _ = std::fs::remove_file(&log);
+        let out = Command::new("bash")
+            .arg(&harness)
+            .env("PATH", &path)
+            .env("GROKHUB_PKG_LOG", &log)
+            .env("HOME", &base)
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            out.status.success(),
+            "stderr={stderr}"
+        );
+        assert!(
+            stdout.contains("pkgs: skipped (no TTY)") || stderr.contains("pkgs: skipped (no TTY)"),
+            "stdout={stdout} stderr={stderr}"
+        );
+        assert!(
+            !log.exists() || !std::fs::read_to_string(&log).unwrap().contains("SUDO"),
+            "no sudo without TTY"
+        );
+        let _ = std::fs::remove_dir_all(&base);
     }
 }
