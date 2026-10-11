@@ -860,7 +860,8 @@ mod tests {
         let _cfg = crate::perm::ConfigGuard::set(&dir);
         assert_eq!(why_text(&dir), "No routed model calls yet. Effort is automatic: each step's reason shows here once it runs.");
         let echo = Echo(Mutex::new(Vec::new()));
-        let secret = "PROMPT-FIXTURE my bank PIN is 4512 and sk-abcdefghijklmnopqrstuv";
+        // No bare digits: "4512" matched a `ts_ms` and failed a clean run.
+        let secret = "PROMPT-FIXTURE my bank PIN is QZXW-PIN and sk-abcdefghijklmnopqrstuv";
         let input = vec![InputItem::Message { role: "user".into(), content: vec![ContentPart::InputText(secret.into())] }];
         for _ in 0..14 {
             let call = ModelCall::xai("grok-4.7", Some("low"), CLASS_JUDGE, "ep-9", input.clone());
@@ -868,7 +869,7 @@ mod tests {
         }
         let raw = std::fs::read_to_string(crate::harness::span_path(&dir, log::ROUTE_TRACE)).unwrap();
         assert_eq!(raw.lines().count(), 14);
-        for needle in ["PROMPT-FIXTURE", "4512", "sk-abc", "bank"] {
+        for needle in ["PROMPT-FIXTURE", "QZXW-PIN", "sk-abc", "bank"] {
             assert!(!raw.contains(needle), "{needle} leaked: {raw}");
         }
         let rec: crate::harness::Span = serde_json::from_str(raw.lines().next().unwrap()).unwrap();

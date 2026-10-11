@@ -699,6 +699,37 @@ Glow stays white.
         assert!(store.recall("not a node").is_empty());
     }
 
+    /// A node file that sat untouched and still won't parse is moved aside and noted for
+    /// a Home card. One written seconds ago may be mid-write, so it stays put.
+    #[test]
+    fn a_settled_malformed_node_is_moved_aside_and_noted() {
+        let tmp = Tmp::new("corrupt");
+        let store = AmrStore::at(&tmp.path);
+        store.init().unwrap();
+        store.remember(&draft("good", "keepword\n")).unwrap();
+        let old = tmp.path.join("nodes").join("broken.md");
+        let fresh = tmp.path.join("nodes").join("writing.md");
+        std::fs::write(&old, "not a node\n").unwrap();
+        std::fs::write(&fresh, "").unwrap();
+        let hour_ago = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+        std::fs::File::options().write(true).open(&old).unwrap().set_modified(hour_ago).unwrap();
+
+        assert_eq!(store.recall("keepword").len(), 1);
+        assert!(!old.exists(), "the damaged node is moved out of nodes/*.md");
+        assert!(fresh.exists(), "a file still being written is left alone");
+        let noted: Vec<_> = crate::recovered::drain().into_iter().filter(|r| r.path == old).collect();
+        assert_eq!(noted.len(), 1);
+        assert_eq!(noted[0].restored, crate::recovered::LEFT_OUT);
+        assert_eq!(std::fs::read_to_string(&noted[0].aside).unwrap(), "not a node\n");
+        let card = crate::recovered_card(&noted[0], 7);
+        assert_eq!(card.title, "Memory note broken.md was unreadable");
+        assert!(
+            card.body.as_deref().unwrap_or("").starts_with("Left it out of memory, kept a copy at "),
+            "{:?}",
+            card.body
+        );
+    }
+
     /// A stand-in sealer for core tests (the real one is ChaCha20-Poly1305 in
     /// grokhub-agent): hex with a label, refusing a wrong label or when "locked".
     struct FakeSealer {

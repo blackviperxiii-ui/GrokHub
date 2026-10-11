@@ -789,9 +789,13 @@ fn automation_display_name(card: &UpdateCard) -> String {
 
 /// Fixed why line for a run, a failure, or a saved schedule. Other kinds keep `why`.
 pub fn refresh_event_why(card: &mut UpdateCard) {
-    // A crash, screen recording or audio check shares the kind but is not an
+    // A crash, screen recording, audio check or recovered store shares the kind but is not an
     // automation: "Your automation “Crashed: …” finished" named the wrong thing.
-    if is_crash_card(card) || screen_recording_dir(card).is_some() || card.source_id.starts_with(AUDIO_CHECK_SOURCE_PREFIX) {
+    if is_crash_card(card)
+        || screen_recording_dir(card).is_some()
+        || card.source_id.starts_with(AUDIO_CHECK_SOURCE_PREFIX)
+        || card.source_id.starts_with(RECOVERED_SOURCE_PREFIX)
+    {
         card.why = None;
         return;
     }
@@ -2624,6 +2628,31 @@ pub fn screen_recording_dir(card: &UpdateCard) -> Option<&str> {
         .filter(|d| !d.is_empty())
 }
 
+pub const RECOVERED_SOURCE_PREFIX: &str = "recovered:";
+
+/// A store that would not load and was moved aside. The title names the file
+/// ("Settings file was unreadable"); the body says what GrokHub did and where
+/// the copy is ("Restored defaults, kept a copy at ~/.config/GrokHub/app.json.corrupt-1012.").
+/// One card per kept copy.
+pub fn recovered_card(r: &crate::recovered::Recovered, created_at: u64) -> UpdateCard {
+    let title = clip_line(&format!("{} was unreadable", crate::recovered::store_label(&r.path)), TITLE_CHARS);
+    let aside = crate::recovered::home_short(&r.aside);
+    let body = format!("{}, kept a copy at {aside}.", r.restored);
+    let source = format!("{RECOVERED_SOURCE_PREFIX}{}", r.aside.to_string_lossy());
+    let mut card = blank_card(
+        feed_card_id("recovered", &source, &title, created_at, true),
+        UpdateKind::AutomationDone,
+        title,
+        Some(body),
+        created_at,
+    );
+    card.source_id = source;
+    // Pulse names the source line from this; the kind alone reads "Automation run".
+    card.pulse.source_name = Some("Recovered file".into());
+    refresh_event_why(&mut card);
+    card
+}
+
 const AUDIO_CHECK_SOURCE_PREFIX: &str = "audiocheck:";
 
 /// An audio check. The title names the input and the problem ("Audio check:
@@ -4375,6 +4404,18 @@ https://xstack.grok.me/post ZEPHYRTAIL"
         let standup = Candidate::soft(CandidateSource::SystemState, "get standup prep ready", "standup prep", 0.8, 0.9, "Standup is at 9.");
         let mut rows = vec![
             ("automation_done_card", automation_done_card("a1", "Nightly backup", "Copied 3 files.", at), "Nightly backup"),
+            (
+                "recovered_card",
+                recovered_card(
+                    &crate::recovered::Recovered {
+                        path: "/c/secrets.json".into(),
+                        aside: "/c/secrets.json.corrupt-9".into(),
+                        restored: crate::recovered::RESTORED_DEFAULTS,
+                    },
+                    at,
+                ),
+                "Keys file",
+            ),
             ("automation_failed_card", automation_failed_card("a1", "Nightly backup", "The disk is full.", at), "Nightly backup"),
             ("crash_card", crash_card("job-1", "Index ~/Projects", "t1", "/retry", at), "Index ~/Projects"),
             (

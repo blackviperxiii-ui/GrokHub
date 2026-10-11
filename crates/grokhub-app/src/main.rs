@@ -4,6 +4,7 @@
 //! kills the cabin. CLI flags attach the parent console when there is one.
 
 #![cfg_attr(not(test), windows_subsystem = "windows")]
+#![cfg_attr(not(test), warn(clippy::unwrap_used, clippy::expect_used))]
 
 mod app;
 mod engine_handle;
