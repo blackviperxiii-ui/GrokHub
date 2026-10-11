@@ -243,11 +243,7 @@ impl Cabin {
         crate::desktop_mcp::sync_native_cua(&self.cfg);
         let model = grokhub_core::cabin_spawn_model(&self.cfg.model).to_string();
         let effort = self.bg_effort(origin);
-        let rules = grokhub_core::cabin_rules::cabin_rules_for(
-            &grokhub_core::brief_for(&self.learning, "chat"),
-            self.cfg.desktop_control,
-        );
-        let system = grokhub_agent::system_prompt(&rules, &workspace);
+        let system = grokhub_agent::system_prompt(&self.chat_rules(), &workspace);
         let prompt = bg_task_prompt(task);
         let cancel = grokhub_agent::CancelToken::new();
         let _ = grokhub_agent::hub_for(&child_id);

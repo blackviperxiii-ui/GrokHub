@@ -974,4 +974,52 @@ mod tests {
         set_unattended_client_for_test(None);
         let _ = std::fs::remove_dir_all(&root);
     }
+
+    /// A chat reply takes the chosen personality's tone ahead of the cabin rules; a
+    /// night job stays in the plain voice.
+    #[test]
+    fn personality_reaches_chat_replies_but_not_night_jobs() {
+        let (_lock, root, _env) = isolated("personality-rules");
+        let mut cabin = Cabin::quiet_for_test();
+        let plain = cabin.chat_rules();
+        assert!(!plain.contains("Personality:"), "{plain}");
+        cabin.cfg.personality = "pirate".into();
+        let chat = cabin.chat_rules();
+        assert!(chat.starts_with("Personality: Pirate. Talk like a cheerful pirate"), "{chat}");
+        assert!(chat.ends_with(&plain), "the cabin rules still come last: {chat}");
+        let night = native_rules(&cabin, &root);
+        assert!(!night.contains("Personality:"), "night jobs stay neutral: {night}");
+        assert!(night.contains(grokhub_core::cabin_rules::CABIN_DESKTOP_RULES));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Approval cards, park titles and other hard text never see the personality: only
+    /// the chat rules read it. A new reader has to be added here on purpose.
+    #[test]
+    fn only_the_chat_rules_read_the_personality() {
+        let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut readers = std::collections::BTreeSet::new();
+        let mut dirs = vec![src.clone()];
+        while let Some(dir) = dirs.pop() {
+            for entry in std::fs::read_dir(&dir).unwrap().flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    dirs.push(path);
+                    continue;
+                }
+                let name = path.file_name().unwrap().to_string_lossy().to_string();
+                if !name.ends_with(".rs") || name == "tests.rs" {
+                    continue;
+                }
+                let text = std::fs::read_to_string(&path).unwrap().replace("\r\n", "\n");
+                let live = text.split("\n#[cfg(test)]\nmod tests").next().unwrap();
+                if live.contains("personality") {
+                    readers.insert(path.strip_prefix(&src).unwrap().to_string_lossy().replace('\\', "/"));
+                }
+            }
+        }
+        let want: std::collections::BTreeSet<String> =
+            ["app/native_engine.rs", "config.rs"].iter().map(|s| s.to_string()).collect();
+        assert_eq!(readers, want);
+    }
 }
