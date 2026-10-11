@@ -313,6 +313,8 @@ pub fn log_update_attempt(channel: Channel, cmds: &[String], ok: bool, output: &
 pub fn update_failure_status(output: &str, channel_switch: bool, log: &std::path::Path) -> String {
     let hint = if channel_switch {
         channel_switch_fail_hint(output)
+    } else if let Some(line) = grokhub_core::release_verify::refusal_line(output) {
+        line
     } else {
         update_fail_hint(output)
     };
@@ -352,7 +354,11 @@ pub fn run_update_cmds_with_progress(
             return Err(why.to_string());
         }
         on_progress(update_progress_pct(i, total), update_step_label(c));
-        let chunk = run_host(c, host_timeout_for(c));
+        let chunk = if c == grokhub_core::release_verify::RELEASE_INSTALL_STEP {
+            crate::release_update::release_step_receipt(crate::release_update::install_release(installed_channel(), cfg!(windows)))
+        } else {
+            run_host(c, host_timeout_for(c))
+        };
         out.push_str(&chunk);
         out.push('\n');
         if host_receipt_failed(&chunk) {
@@ -1261,6 +1267,11 @@ mod tests {
         assert_eq!(
             update_failure_status("exit 1 · 5ms\nfatal: unable to access", false, log),
             "Update failed. Details: /home/u/.config/GrokHub/update.log"
+        );
+        let refused = "$ grokhub: install the verified release\nexit 1\nUpdate 2.13.2 not installed: the download's checksum didn't match";
+        assert_eq!(
+            update_failure_status(refused, false, log),
+            "Update 2.13.2 not installed: the download's checksum didn't match. Details: /home/u/.config/GrokHub/update.log"
         );
         assert_eq!(
             update_failure_status("exit 1 · 5ms\nfatal: unable to access", true, log),
