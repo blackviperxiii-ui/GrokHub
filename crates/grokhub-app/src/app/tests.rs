@@ -25225,6 +25225,7 @@ fn labs_beta_channel_toggle_is_wired() {
     assert!(
         settings.contains("Beta channel")
             && settings.contains("queue_channel_switch")
+            && settings.contains("queue_release_channel_switch")
             && settings.contains("channel_labs_status")
             && settings.contains("channel_windows_note")
             && settings.contains("maybe_auto_off_beta_channel")
@@ -25234,6 +25235,8 @@ fn labs_beta_channel_toggle_is_wired() {
     let app = include_str!("mod.rs");
     assert!(
         app.contains("fn queue_channel_switch")
+            && app.contains("fn queue_release_channel_switch")
+            && app.contains("release_channel_switch_cmds")
             && app.contains("channel_switch_cmds")
             && app.contains("SettingsSec::Labs")
             && app.contains("fn maybe_auto_off_beta_channel")

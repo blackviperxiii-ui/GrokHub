@@ -70,7 +70,11 @@ Config and memory: `~/.config/GrokHub` (`app.json`, `projects.json`, `updates.js
 
 ## Channels: stable and beta
 
-There are two channels. **Stable** builds `main`, where releases are cut. **Beta** builds the `beta` branch, where new features and fixes land first. Switch on Linux with one command from your clone:
+There are two channels. **Stable** is `main`, where releases are cut. **Beta** is the `beta` branch, where new features and fixes land first. Every push to `beta` publishes a pre-release named `beta-v<version>-<sha>` with the same Linux and Windows files and `SHA256SUMS` as a release.
+
+**Without a source clone** (every Windows Setup install, and a Linux install from the release tarball), turn Settings → Labs → **Beta channel** on or off. GrokHub downloads the newest beta pre-release (or the latest stable release), checks it against its `SHA256SUMS`, swaps `grokhub` and `grokhub-hub` in (keeping the old ones as `.old`), and only then saves the new channel. A download that doesn't check out leaves you on the channel you had. Update on a channel works the same way: Beta takes the newest pre-release by build time.
+
+**From a source clone** (the developer path), switch on Linux with one command; it builds from source:
 
 ```bash
 ./scripts/install.sh --user --channel beta     # fetch origin, check out beta, build, install
@@ -84,7 +88,7 @@ The channel is saved to `~/.config/GrokHub/channel` (or `$GROKHUB_CONFIG/channel
 
 `--version` comes from `crates/grokhub-app/build.rs`, which reads the branch and short SHA from git at build time. A beta build adds `-beta` to the version; the Cargo version itself never changes. A build made without git shows just `GrokHub 2.13.1`.
 
-Limits: channels are Linux-only for now. `scripts/install-windows.ps1` has no `-Channel`, and Windows Setup always installs stable releases (a beta receipt on Windows never falls back to the stable release zip). The Update chip still only notices new releases, so on beta, use Settings → **Update** to pull new beta commits.
+Limits: building beta from a clone is Linux-only (`scripts/install-windows.ps1` has no `-Channel`); Windows gets Beta from the signed pre-releases. Beta turns itself off when beta catches up to main only on a Linux clone, because that check reads the clone's branches; elsewhere, turn it off in Labs. The Update chip still only notices new stable releases, so on beta, use Settings → **Update** to take the newest beta build.
 
 ## First run
 
