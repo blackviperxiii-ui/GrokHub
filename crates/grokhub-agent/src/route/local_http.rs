@@ -12,11 +12,21 @@ use serde_json::{json, Value};
 use super::local::{ChatMessage, LocalRuntime};
 
 /// Runtime that posts to `{base}/v1/chat/completions`.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct HttpLocalRuntime {
     base_url: String,
     token: String,
     model: String,
+}
+
+impl std::fmt::Debug for HttpLocalRuntime {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("HttpLocalRuntime")
+            .field("base_url", &self.base_url)
+            .field("token", &"[redacted]")
+            .field("model", &self.model)
+            .finish()
+    }
 }
 
 impl HttpLocalRuntime {
@@ -208,5 +218,12 @@ mod tests {
         let rt = HttpLocalRuntime::new(fake.base_url(), fake.token.clone());
         let d = rt.difficulty("hard bug").expect("d");
         assert_eq!(d["d"], 0.5);
+    }
+
+    #[test]
+    fn http_runtime_debug_redacts_token() {
+        let dbg = format!("{:?}", HttpLocalRuntime::new("http://127.0.0.1:9", "super-secret-token"));
+        assert!(dbg.contains("[redacted]"), "{dbg}");
+        assert!(!dbg.contains("super-secret-token"), "{dbg}");
     }
 }

@@ -27,7 +27,8 @@ pub struct SidecarPaths {
 }
 
 /// Live child: loopback host, port, token.
-#[derive(Debug)]
+///
+/// `Debug` redacts the bearer token so it never lands in logs.
 pub struct Sidecar {
     child: Mutex<Child>,
     pub host: String,
@@ -36,6 +37,19 @@ pub struct Sidecar {
     pub binary: PathBuf,
     pub model: PathBuf,
     restarts: AtomicU64,
+}
+
+impl std::fmt::Debug for Sidecar {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Sidecar")
+            .field("host", &self.host)
+            .field("port", &self.port)
+            .field("token", &"[redacted]")
+            .field("binary", &self.binary)
+            .field("model", &self.model)
+            .field("restarts", &self.restart_count())
+            .finish()
+    }
 }
 
 impl Sidecar {
@@ -132,6 +146,19 @@ pub fn llama_args(model: &Path, host: &str, port: u16, token: &str) -> Vec<Strin
 fn spawn_llama(binary: &Path, model: &Path, host: &str, port: u16, token: &str) -> Result<Child, String> {
     if !is_loopback_host(host) {
         return Err(format!("local model server must bind loopback, not {host}"));
+    }
+    // Only the known server name — env overrides must still be llama-server.
+    let name = binary.file_name().and_then(|n| n.to_str()).unwrap_or("");
+    if name != llama_server_name() {
+        return Err(format!("local model binary must be named {}, not {name}", llama_server_name()));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(binary).map_err(|e| format!("local model binary: {e}"))?.permissions().mode();
+        if mode & 0o111 == 0 {
+            return Err(format!("local model binary is not executable: {}", binary.display()));
+        }
     }
     let mut cmd = Command::new(binary);
     cmd.args(llama_args(model, host, port, token)).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
@@ -276,17 +303,16 @@ pub fn assets_present(config_dir: &Path) -> bool {
     resolve_paths(config_dir).is_some()
 }
 
-/// Tiny token (32 hex chars) without pulling a new crate.
+/// 128-bit bearer token from the process CSPRNG (`ring`), hex-encoded.
 mod rand_token {
-    use std::time::{SystemTime, UNIX_EPOCH};
+    use ring::rand::{SecureRandom, SystemRandom};
 
     pub fn random_token() -> String {
-        let t = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(1);
-        let mut x = t ^ 0x9e37_79b9_7f4a_7c15;
+        let mut bytes = [0u8; 16];
+        let _ = SystemRandom::new().fill(&mut bytes);
         let mut out = String::with_capacity(32);
-        for _ in 0..8 {
-            x = x.wrapping_mul(0x2545_f491_4f6c_dd1d).wrapping_add(1);
-            out.push_str(&format!("{:08x}", (x >> 32) as u32));
+        for b in bytes {
+            out.push_str(&format!("{b:02x}"));
         }
         out
     }
@@ -440,6 +466,36 @@ mod tests {
         assert!(args.windows(2).any(|w| w == ["--port", "4711"]));
         assert!(args.windows(2).any(|w| w == ["--api-key", "tok"]));
         assert!(args.windows(2).any(|w| w == ["-m", "/m.gguf"]));
+    }
+
+    #[test]
+    fn spawn_rejects_wrong_binary_name_and_non_loopback() {
+        let dir = std::env::temp_dir().join(format!("gh-sidecar-name-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let evil = dir.join("not-llama");
+        std::fs::write(&evil, b"x").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut p = std::fs::metadata(&evil).unwrap().permissions();
+            p.set_mode(0o755);
+            std::fs::set_permissions(&evil, p).unwrap();
+        }
+        let err = spawn_llama(&evil, Path::new("/m.gguf"), "127.0.0.1", 9, "tok").unwrap_err();
+        assert!(err.contains("must be named"), "{err}");
+        let named = dir.join(llama_server_name());
+        std::fs::write(&named, b"x").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut p = std::fs::metadata(&named).unwrap().permissions();
+            p.set_mode(0o755);
+            std::fs::set_permissions(&named, p).unwrap();
+        }
+        let err = spawn_llama(&named, Path::new("/m.gguf"), "0.0.0.0", 9, "tok").unwrap_err();
+        assert!(err.contains("loopback"), "{err}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
