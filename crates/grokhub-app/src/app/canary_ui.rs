@@ -144,14 +144,14 @@ fn parent_skill(dir: &std::path::Path, v: &hx::Version) -> Option<SkillMd> {
 const NOTES_MAX: usize = 5;
 /// The line above the chat notes in the cabin rules.
 pub(super) const NOTES_HEAD: &str =
-    "Notes from GrokHub's weekly review of its own runs. They shape how you work; the rules after them always win:";
+    "Notes from GrokHub's weekly review of its own runs. They shape how you work; the cabin safety and approval rules always win:";
 
 impl Cabin {
     /// A chat-note proposal from the weekly pass: one Suggestion card whose
     /// Apply writes `tunable/<name>.md` and puts it on trial.
     pub(super) fn post_snippet_card(&mut self, p: &grokhub_core::self_review::RankedProposal, now: u64) {
         let details = format!(
-            "{}.\n\nApply adds this note to the instructions of every chat, before the safety and approval rules, which still win:\n\n“{}”\n\nOne chat in five tries it first; GrokHub keeps it only if those runs take fewer steps.",
+            "{}.\n\nApply adds this note to the instructions of every chat; the cabin safety and approval rules still win:\n\n“{}”\n\nOne chat in five tries it first; GrokHub keeps it only if those runs take fewer steps.",
             p.numbers, p.steps
         );
         let card = super::self_review_ui::ProposalCard {

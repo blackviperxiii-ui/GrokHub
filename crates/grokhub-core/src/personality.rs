@@ -1,6 +1,7 @@
 //! Personalities: tone and style presets for the cabin's replies. A preset is data
 //! (`assets/personalities.toml`). It only changes how replies sound; the cabin's safety,
-//! approval and honesty rules come after it in the system prompt and always win.
+//! approval and honesty rules always win (live publishes keep them in the stable
+//! prefix and close the volatile voice with a short reminder).
 
 use serde::{Deserialize, Serialize};
 

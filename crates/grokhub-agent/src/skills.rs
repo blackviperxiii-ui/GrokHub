@@ -10,10 +10,19 @@
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+use std::time::SystemTime;
 
 use serde_json::{json, Value};
 
 use crate::tools::{confine, str_field, ToolOutput};
+
+struct DiscoverCache {
+    key: Vec<(PathBuf, Option<SystemTime>)>,
+    skills: Vec<Skill>,
+}
+
+static DISCOVER_CACHE: Mutex<Option<DiscoverCache>> = Mutex::new(None);
 
 const MAX_NAME: usize = 64;
 const DESC_CAP: usize = 200;
@@ -66,7 +75,94 @@ pub fn schema() -> Value {
     })
 }
 
+fn skill_root_mtime(root: &Path) -> Option<SystemTime> {
+    let meta = fs::symlink_metadata(root).ok()?;
+    if !meta.file_type().is_dir() {
+        return None;
+    }
+    let mut newest = meta.modified().ok();
+    walk_skill_mtimes(root, 0, &mut newest);
+    newest
+}
+
+/// Newest mtime under a skills root, matching [`walk_skills`] depth so a nested
+/// `SKILL.md` edit busts the discover cache.
+fn walk_skill_mtimes(dir: &Path, depth: usize, newest: &mut Option<SystemTime>) {
+    if depth > WALK_DEPTH || !real_dir(dir) {
+        return;
+    }
+    let Ok(rd) = fs::read_dir(dir) else {
+        return;
+    };
+    for ent in rd.flatten() {
+        let path = ent.path();
+        let name = ent.file_name();
+        let name = name.to_string_lossy();
+        if name.starts_with('.') {
+            continue;
+        }
+        let Ok(meta) = fs::symlink_metadata(&path) else {
+            continue;
+        };
+        if let Ok(mtime) = meta.modified() {
+            *newest = Some(match *newest {
+                Some(prev) if prev >= mtime => prev,
+                _ => mtime,
+            });
+        }
+        if name == "SKILL.md" {
+            continue;
+        }
+        if meta.file_type().is_dir() {
+            walk_skill_mtimes(&path, depth + 1, newest);
+        }
+    }
+}
+
+fn discover_cache_key(
+    workspace: &Path,
+    home: Option<&Path>,
+    plugin_dirs: &[PathBuf],
+) -> Vec<(PathBuf, Option<SystemTime>)> {
+    let mut keys = Vec::new();
+    for dir in project_chain(workspace) {
+        let grok = dir.join(".grok").join("skills");
+        let claude = dir.join(".claude").join("skills");
+        keys.push((grok.clone(), skill_root_mtime(&grok)));
+        keys.push((claude.clone(), skill_root_mtime(&claude)));
+    }
+    if let Some(home) = home {
+        let grok = home.join(".grok").join("skills");
+        let claude = home.join(".claude").join("skills");
+        keys.push((grok.clone(), skill_root_mtime(&grok)));
+        keys.push((claude.clone(), skill_root_mtime(&claude)));
+    }
+    for dir in plugin_dirs {
+        keys.push((dir.clone(), skill_root_mtime(dir)));
+    }
+    keys
+}
+
 pub fn discover(workspace: &Path, home: Option<&Path>, plugin_dirs: &[PathBuf]) -> Vec<Skill> {
+    let key = discover_cache_key(workspace, home, plugin_dirs);
+    if let Ok(guard) = DISCOVER_CACHE.lock() {
+        if let Some(cache) = guard.as_ref() {
+            if cache.key == key {
+                return cache.skills.clone();
+            }
+        }
+    }
+    let skills = discover_uncached(workspace, home, plugin_dirs);
+    if let Ok(mut guard) = DISCOVER_CACHE.lock() {
+        *guard = Some(DiscoverCache {
+            key,
+            skills: skills.clone(),
+        });
+    }
+    skills
+}
+
+fn discover_uncached(workspace: &Path, home: Option<&Path>, plugin_dirs: &[PathBuf]) -> Vec<Skill> {
     let mut found: Vec<Found> = Vec::new();
     let mut rank = 0u32;
     for dir in project_chain(workspace) {
@@ -731,5 +827,74 @@ mod tests {
         assert!(text.contains("(user)"));
         assert!(text.len() <= REMINDER_CAP + 20, "{}", text.len());
         assert!(!text.contains(&"d".repeat(400)));
+    }
+
+    #[test]
+    fn discover_cache_invalidates_when_skill_md_changes() {
+        let root = scratch("cache-mtime");
+        let repo = root.join("repo");
+        let home = root.join("empty-home");
+        fs::create_dir_all(&home).unwrap();
+        let dir = repo.join(".grok/skills/demo");
+        skill_md(
+            &dir,
+            "---\nname: demo\ndescription: first description\n---\nFirst body.\n",
+        );
+        let first = discover(&repo, Some(&home), &[]);
+        let demo = first.iter().find(|s| s.name == "demo").unwrap();
+        assert_eq!(demo.description, "first description");
+        // Coarse filesystems (Windows CI) may keep the same second for mtime.
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        skill_md(
+            &dir,
+            "---\nname: demo\ndescription: second description\n---\nSecond body.\n",
+        );
+        let second = discover(&repo, Some(&home), &[]);
+        let demo = second.iter().find(|s| s.name == "demo").unwrap();
+        assert_eq!(demo.description, "second description");
+        let again = discover(&repo, Some(&home), &[]);
+        assert_eq!(
+            again.iter().find(|s| s.name == "demo").unwrap().description,
+            "second description"
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn discover_cache_invalidates_when_nested_skill_md_changes() {
+        let root = scratch("cache-nested");
+        let repo = root.join("repo");
+        let home = root.join("empty-home");
+        fs::create_dir_all(&home).unwrap();
+        // Nested under pack/demo so a shallow root-only mtime would miss it.
+        let dir = repo.join(".grok/skills/pack/demo");
+        skill_md(
+            &dir,
+            "---\nname: nested-demo\ndescription: nested first\n---\nFirst nested.\n",
+        );
+        let first = discover(&repo, Some(&home), &[]);
+        assert_eq!(
+            first
+                .iter()
+                .find(|s| s.name == "nested-demo")
+                .unwrap()
+                .description,
+            "nested first"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        skill_md(
+            &dir,
+            "---\nname: nested-demo\ndescription: nested second\n---\nSecond nested.\n",
+        );
+        let second = discover(&repo, Some(&home), &[]);
+        assert_eq!(
+            second
+                .iter()
+                .find(|s| s.name == "nested-demo")
+                .unwrap()
+                .description,
+            "nested second"
+        );
+        let _ = fs::remove_dir_all(&root);
     }
 }

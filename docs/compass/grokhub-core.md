@@ -22,6 +22,7 @@
 ## What depends on it
 - Every other crate in the workspace `Cargo.toml`. The hub serves `HubState`.
 ## Non-obvious
+- `cabin_static_rules` / `cabin_learned_tail` (`cabin_rules.rs`) split the prompt-cache prefix from the volatile brief; the app joins them via `system_prompt_parts`.
 - `now_ms`, `user_home`, `redact_secrets`, and `redact_recall` (secrets + PII, `crates/grokhub-core/src/pii.rs`) live here; reuse them instead of re-deriving HOME, time, or redaction.
 - `state_for_disk` strips the live frame before `hub-state.json` is written (`disk_omits_frame`); old files with phone rows still load (`old_hub_state_with_phone_rows_still_loads`).
 - Some modules assert on their own source with `include_str!` (`chips.rs`, `state.rs`, `update.rs`); a reworded string or moved fn can fail a test.
