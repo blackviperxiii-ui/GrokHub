@@ -77,6 +77,7 @@ pub use retry::{
 };
 pub use run::{
     run_loop, HaltCheck, LoopEvent, LoopIn, LoopOut, SteerQueue, StopReason, REPEAT_REPLAN,
+    TRUNCATED_TOOL,
 };
 pub use session::{
     attach_run, cancel_session, delete_session, export_markdown, fork_session, format_cost_ticks,

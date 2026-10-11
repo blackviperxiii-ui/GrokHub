@@ -581,7 +581,8 @@ mod tests {
                         reasoning: String::new(),
                         calls: Vec::new(),
                         usage: Usage::default(),
-                    })
+            ..Default::default()
+        })
                 } else {
                     turns.remove(0)
                 }
@@ -661,13 +662,15 @@ mod tests {
                     reasoning: String::new(),
                     calls: Vec::new(),
                     usage: usage(11, 4, 5),
-                }),
+            ..Default::default()
+        }),
                 Ok(TurnOutput {
                     text: "done".into(),
                     reasoning: String::new(),
                     calls: Vec::new(),
                     usage: usage(3, 1, 2),
-                }),
+            ..Default::default()
+        }),
             ]),
             seen: Mutex::new(Vec::new()),
         };
@@ -699,7 +702,8 @@ mod tests {
                 reasoning: String::new(),
                 calls: Vec::new(),
                 usage: usage(1, 1, 1),
-            })]),
+            ..Default::default()
+        })]),
             seen: Mutex::new(Vec::new()),
         };
         let mut history = vec![text_message("user", "short")];
@@ -727,7 +731,8 @@ mod tests {
                     reasoning: String::new(),
                     calls: Vec::new(),
                     usage: usage(2, 2, 4),
-                }),
+            ..Default::default()
+        }),
             ]),
             seen: Mutex::new(Vec::new()),
         };
@@ -775,7 +780,8 @@ mod tests {
                     arguments: "{}".into(),
                 }],
                 usage: usage(6, 2, 8),
-            })]),
+            ..Default::default()
+        })]),
             seen: Mutex::new(Vec::new()),
         };
         let last = text_message("user", "last turn");
@@ -846,7 +852,8 @@ mod tests {
                     reasoning: String::new(),
                     calls: Vec::new(),
                     usage: Usage::default(),
-                })
+            ..Default::default()
+        })
             }
         }
         let mut history = vec![text_message("user", "keep the quay lantern")];

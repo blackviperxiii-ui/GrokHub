@@ -724,7 +724,8 @@ mod tests {
                 reasoning: String::new(),
                 calls: Vec::new(),
                 usage: self.usage.clone(),
-            })
+            ..Default::default()
+        })
         }
     }
 
@@ -1187,7 +1188,8 @@ mod tests {
                     reasoning: String::new(),
                     calls: Vec::new(),
                     usage: self.judge_usage.clone(),
-                });
+            ..Default::default()
+        });
             }
             let turn = {
                 let mut turns = self.turns.lock().unwrap();
@@ -1209,7 +1211,8 @@ mod tests {
                 reasoning: String::new(),
                 calls: turn.calls,
                 usage: turn.usage,
-            })
+            ..Default::default()
+        })
         }
     }
 

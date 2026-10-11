@@ -1495,7 +1495,8 @@ mod tests {
                 reasoning: String::new(),
                 calls: Vec::new(),
                 usage: crate::Usage::default(),
-            })
+            ..Default::default()
+        })
         }
     }
 
