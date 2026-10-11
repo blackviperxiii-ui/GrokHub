@@ -1,0 +1,63 @@
+# GrokHub playbook: change or fix code in a project.
+#
+# Copy this file to `playbooks/` in the settings folder (Settings → Playbooks →
+# Duplicate does it for you) to change it. A file there with the same id
+# replaces the shipped one; Reset puts the shipped one back.
+#
+# Look steps only read. Safe steps can be undone. Risky steps ask you first,
+# every time; a playbook can never make GrokHub skip an approval.
+
+id = "code-dev"
+name = "Code changes"
+summary = "Read the code and run the tests before editing, change one thing at a time, and run the build and tests after each change."
+
+checklist = ["read before edit", "it builds", "tests pass"]
+backup = "Check the working tree is committed or note what was already changed (git status) before the first edit, so each change can be undone on its own."
+verify = "After each change, build and run the tests that cover it; a change is done only when they pass."
+rollback = "Undo the change that broke the build or tests (restore the file from git or the kept copy) and say what failed."
+give_up = [
+  "a hard approval was refused",
+  "hardware, access or a sign-in is missing",
+  "every approach in the playbook failed and was checked",
+]
+
+[applies_when]
+intent = ["task", "repair"]
+domain = ["code"]
+
+[[phase]]
+name = "Look"
+tier = "read_only"
+
+[[phase.step]]
+name = "See what is already changed"
+run = "git status"
+
+[[phase.step]]
+name = "Read the files and the tests around the change"
+
+[[phase.step]]
+name = "Run the tests once first to know what already fails"
+
+[[phase]]
+name = "Change"
+tier = "safe"
+
+[[phase.step]]
+name = "Make one small edit at a time"
+
+[[phase.step]]
+name = "Add or update a test for the change"
+
+[[phase.step]]
+name = "Build and run the tests after each edit"
+
+[[phase]]
+name = "Bigger changes"
+tier = "risky"
+
+[[phase.step]]
+name = "Delete files or folders the change no longer needs"
+
+[[phase.step]]
+name = "Push, publish or deploy the change"
