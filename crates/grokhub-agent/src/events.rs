@@ -220,6 +220,8 @@ impl NativeEngine {
         crate::route::goal::set_goal(&self.conversation_id, goal);
         // Brain 2: the run's checkpoints read the done list and care.
         crate::checkpoint::set_turn_brief(&self.conversation_id, brief.clone());
+        // Brain 5: the row's talk column sets the turn's talk style.
+        crate::checkpoint::set_turn_style(&self.conversation_id, policy.as_ref().map(crate::brain::PolicyPick::style));
         // Brain 3: the Brief's intent, domain and this computer's OS pick the playbook.
         let (books, _) = crate::brain::playbook::load(&dir);
         let playbook = crate::brain::playbook::pick(&books, brief.intent.as_str(), &brief.domain, crate::brain::playbook::host_os())
