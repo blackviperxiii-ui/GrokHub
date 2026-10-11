@@ -586,9 +586,71 @@ pub fn apps_use_light_theme() -> Option<bool> {
     }
 }
 
+/// IPv4 addresses on network adapters that are up, read with GetAdaptersAddresses.
+/// Windows has no `hostname -I`, and this needs no subprocess.
+pub fn adapter_ipv4s() -> Vec<std::net::Ipv4Addr> {
+    use windows_sys::Win32::Foundation::{ERROR_BUFFER_OVERFLOW, NO_ERROR};
+    use windows_sys::Win32::NetworkManagement::IpHelper::{
+        GetAdaptersAddresses, GAA_FLAG_SKIP_ANYCAST, GAA_FLAG_SKIP_DNS_SERVER,
+        GAA_FLAG_SKIP_FRIENDLY_NAME, GAA_FLAG_SKIP_MULTICAST, IP_ADAPTER_ADDRESSES_LH,
+    };
+    use windows_sys::Win32::NetworkManagement::Ndis::IfOperStatusUp;
+    use windows_sys::Win32::Networking::WinSock::{AF_INET, SOCKADDR_IN};
+    let flags = GAA_FLAG_SKIP_ANYCAST
+        | GAA_FLAG_SKIP_MULTICAST
+        | GAA_FLAG_SKIP_DNS_SERVER
+        | GAA_FLAG_SKIP_FRIENDLY_NAME;
+    // 15 KB is Microsoft's suggested first size; u64s keep the buffer aligned for the structs.
+    let mut size: u32 = 15_000;
+    for _ in 0..3 {
+        let mut buf = vec![0u64; (size as usize).div_ceil(8)];
+        let head = buf.as_mut_ptr().cast::<IP_ADAPTER_ADDRESSES_LH>();
+        let rc = unsafe { GetAdaptersAddresses(u32::from(AF_INET), flags, ptr::null(), head, &mut size) };
+        if rc == ERROR_BUFFER_OVERFLOW {
+            continue;
+        }
+        if rc != NO_ERROR {
+            return Vec::new();
+        }
+        let mut out = Vec::new();
+        let mut adapter = head.cast_const();
+        // SAFETY: on NO_ERROR the buffer holds a linked list of adapters and their unicast
+        // addresses, all inside `buf`, which outlives this walk.
+        unsafe {
+            while let Some(a) = adapter.as_ref() {
+                if a.OperStatus == IfOperStatusUp {
+                    let mut uni = a.FirstUnicastAddress.cast_const();
+                    while let Some(u) = uni.as_ref() {
+                        let sa = u.Address.lpSockaddr;
+                        if !sa.is_null() && (*sa).sa_family == AF_INET {
+                            let sin = &*sa.cast::<SOCKADDR_IN>();
+                            // S_addr is in network byte order, so its bytes in memory are the octets.
+                            out.push(std::net::Ipv4Addr::from(sin.sin_addr.S_un.S_addr.to_ne_bytes()));
+                        }
+                        uni = u.Next.cast_const();
+                    }
+                }
+                adapter = a.Next.cast_const();
+            }
+        }
+        return out;
+    }
+    Vec::new()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn adapter_ipv4s_lists_the_machines_addresses() {
+        // A CI runner has at least one adapter up with an IPv4 address.
+        let ips = adapter_ipv4s();
+        assert!(!ips.is_empty(), "no IPv4 adapters found");
+        let text: Vec<String> = ips.iter().map(|ip| ip.to_string()).collect();
+        let refs: Vec<&str> = text.iter().map(String::as_str).collect();
+        assert!(grokhub_core::pair::pick_lan_ipv4(&refs).is_some(), "{text:?}");
+    }
 
     #[test]
     fn toast_sanitizes_injection_chars() {

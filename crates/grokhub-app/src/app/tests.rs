@@ -296,6 +296,19 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             pick < routed,
             "Windows and macOS have no `hostname -I`; Devices must still show a LAN address: {now}"
         );
+        // Windows reads its adapters instead of running a `hostname -I` that always fails.
+        let unix = src
+            .split("#[cfg(not(windows))]\nfn lan_candidates_now()")
+            .nth(1)
+            .and_then(|s| s.split("\n}\n").next())
+            .expect("unix lan_candidates_now");
+        assert!(unix.contains(r#"cmd.arg("-I")"#), "{unix}");
+        let win = src
+            .split("#[cfg(windows)]\nfn lan_candidates_now()")
+            .nth(1)
+            .and_then(|s| s.split("\n}\n").next())
+            .expect("windows lan_candidates_now");
+        assert!(win.contains("win_native::adapter_ipv4s()") && !win.contains("Command::new"), "{win}");
     }
 
     #[test]
@@ -22497,10 +22510,12 @@ fn kick_local_day_stays_off_network() {
 // Folded from PR #401.
 #[test]
 fn hostname_i_now_returns_string() {
-    // Free fn: shells `hostname -I` (empty String if it fails). Hostname OK; stay off network/xAI/bind.
+    // `hostname -I` on Linux, the adapter list on Windows, or the routed address: every
+    // word is an IP address (IPv6 included on Linux). Stays off the network.
     let out = hostname_i_now();
-    // Empty is valid when the shell fails; otherwise UTF-8 stdout from `hostname -I`.
-    let _: &str = out.as_str();
+    for word in out.split_whitespace() {
+        assert!(word.parse::<std::net::IpAddr>().is_ok(), "{word:?} in {out:?}");
+    }
 }
 
 // Folded from PR #402.
