@@ -433,6 +433,10 @@ pub mod fake_server {
         while !stop.load(AtomicOrdering::SeqCst) {
             match listener.accept() {
                 Ok((mut stream, _)) => {
+                    // Accepted sockets inherit nonblocking on Windows; force blocking
+                    // or the first read can WouldBlock and we drop with no response
+                    // (client sees WSAECONNABORTED / os error 10053).
+                    stream.set_nonblocking(false).ok();
                     let _ = handle_one(&mut stream, &token, &hits);
                     if let Some(n) = exit_after {
                         if hits.load(AtomicOrdering::SeqCst) >= n {
@@ -448,6 +452,20 @@ pub mod fake_server {
         }
     }
 
+    fn read_exactish(stream: &mut TcpStream, chunk: &mut [u8]) -> Result<usize, ()> {
+        for _ in 0..50 {
+            match stream.read(chunk) {
+                Ok(n) => return Ok(n),
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock || e.kind() == std::io::ErrorKind::Interrupted => {
+                    // Should be rare after set_nonblocking(false); retry briefly.
+                    std::thread::sleep(Duration::from_millis(2));
+                }
+                Err(_) => return Err(()),
+            }
+        }
+        Err(())
+    }
+
     /// Read one HTTP/1.1 request (headers + Content-Length body). Windows often
     /// delivers headers and body in separate TCP packets; a single `read` is not enough.
     fn read_http_request(stream: &mut TcpStream) -> Result<String, ()> {
@@ -455,7 +473,7 @@ pub mod fake_server {
         let mut raw = Vec::with_capacity(4096);
         let mut chunk = [0u8; 4096];
         let header_end = loop {
-            let n = stream.read(&mut chunk).map_err(|_| ())?;
+            let n = read_exactish(stream, &mut chunk)?;
             if n == 0 {
                 break None;
             }
@@ -483,7 +501,7 @@ pub mod fake_server {
             })
             .unwrap_or(0);
         while raw.len() < header_end + content_len {
-            let n = stream.read(&mut chunk).map_err(|_| ())?;
+            let n = read_exactish(stream, &mut chunk)?;
             if n == 0 {
                 break;
             }
@@ -545,6 +563,8 @@ pub mod fake_server {
         );
         let _ = stream.write_all(resp.as_bytes());
         let _ = stream.flush();
+        // Prefer FIN over RST so ureq finishes reading the status line on Windows.
+        let _ = stream.shutdown(Shutdown::Write);
     }
 }
 
