@@ -174,6 +174,66 @@ fn finish(
     }
 }
 
+enum CompactPass {
+    Ok,
+    Cancelled,
+    Failed,
+}
+
+fn run_compact_pass(
+    input: &LoopIn<'_>,
+    history: &mut Vec<InputItem>,
+    modified_paths: &[String],
+    usage: &mut Usage,
+    on_event: &mut dyn FnMut(LoopEvent),
+) -> CompactPass {
+    on_event(LoopEvent::Compact {
+        started: true,
+        usage: usage.clone(),
+        error: None,
+    });
+    crate::hooks::on_compact(input.conversation_id, input.workspace, true);
+    let compact_result = crate::compact::compact_after_flush(
+        input.workspace,
+        input.client,
+        input.cancel,
+        input.model,
+        input.effort,
+        input.conversation_id,
+        history,
+        modified_paths,
+    );
+    crate::hooks::on_compact(input.conversation_id, input.workspace, false);
+    match compact_result {
+        Ok(extra) => {
+            usage.add(&extra);
+            on_event(LoopEvent::Compact {
+                started: false,
+                usage: usage.clone(),
+                error: None,
+            });
+            emit_usage(on_event, usage, history, input.context_length);
+            CompactPass::Ok
+        }
+        Err(crate::compact::CompactError::Cancelled) => {
+            on_event(LoopEvent::Compact {
+                started: false,
+                usage: usage.clone(),
+                error: Some("cancelled".into()),
+            });
+            CompactPass::Cancelled
+        }
+        Err(crate::compact::CompactError::Failed(message)) => {
+            on_event(LoopEvent::Compact {
+                started: false,
+                usage: usage.clone(),
+                error: Some(message),
+            });
+            CompactPass::Failed
+        }
+    }
+}
+
 pub fn run_loop(
     input: &LoopIn<'_>,
     history: &mut Vec<InputItem>,
@@ -206,7 +266,10 @@ pub fn run_loop(
     if plan_at_start {
         gate.readonly_session = true;
     }
-    let mut did_compact = false;
+    let mut compacted_once = false;
+    let mut turns_since_compact = 0u32;
+    let mut overflow_compacted = false;
+    let mut modified_paths: Vec<String> = Vec::new();
     let mut repeats: HashMap<String, u32> = HashMap::new();
     let mut stop_hook_active = false;
     let mut truncated_streak = 0u32;
@@ -225,7 +288,7 @@ pub fn run_loop(
                 input,
                 StopReason::Error(format!("Prompt blocked by hook: {reason}")),
                 usage,
-                did_compact,
+                compacted_once,
                 true,
             );
         }
@@ -243,15 +306,15 @@ pub fn run_loop(
     let mut turns = 0u32;
     loop {
         if input.max_turns != 0 && turns >= input.max_turns {
-            return finish(input, StopReason::MaxTurns, usage, did_compact, true);
+            return finish(input, StopReason::MaxTurns, usage, compacted_once, true);
         }
         turns = turns.saturating_add(1);
         let turn_top = crate::timing::lap("loop:pre_request");
         if input.cancel.is_cancelled() {
-            return finish(input, StopReason::Cancelled, usage, did_compact, true);
+            return finish(input, StopReason::Cancelled, usage, compacted_once, true);
         }
         if stop_for_halt(input) {
-            return finish(input, StopReason::Halted, usage, did_compact, true);
+            return finish(input, StopReason::Halted, usage, compacted_once, true);
         }
         inject_notices(input, history);
         if let Some(tasks) = &input.tasks {
@@ -261,52 +324,27 @@ pub fn run_loop(
                 emit_usage(on_event, &usage, history, input.context_length);
             }
         }
-        // Compact before the context fills, or before a request would cross the
-        // model's long-context threshold (billed at about twice the price there).
+        // Compact when the context fills (or before a long-context price step).
+        // Re-arm after at least one new turn since the last successful compact.
         let long = crate::route::live::crosses_long_context(&crate::perm::config_dir(), input.model, crate::compact::estimate_input_tokens(history));
-        if !did_compact && (crate::compact::needs_auto_compact(history, input.context_length) || long) {
-            on_event(LoopEvent::Compact {
-                started: true,
-                usage: usage.clone(),
-                error: None,
-            });
-            crate::hooks::on_compact(input.conversation_id, input.workspace, true);
-            let compact_result = crate::compact::compact_after_flush(
-                input.workspace,
-                input.client,
-                input.cancel,
-                input.model,
-                input.effort,
-                input.conversation_id,
+        let over = crate::compact::needs_auto_compact(history, input.context_length) || long;
+        let may_compact = over && (!compacted_once || turns_since_compact >= 1);
+        if may_compact {
+            match run_compact_pass(
+                input,
                 history,
-            );
-            crate::hooks::on_compact(input.conversation_id, input.workspace, false);
-            match compact_result {
-                Ok(extra) => {
-                    usage.add(&extra);
-                    did_compact = true;
-                    on_event(LoopEvent::Compact {
-                        started: false,
-                        usage: usage.clone(),
-                        error: None,
-                    });
-                    emit_usage(on_event, &usage, history, input.context_length);
+                &modified_paths,
+                &mut usage,
+                on_event,
+            ) {
+                CompactPass::Ok => {
+                    compacted_once = true;
+                    turns_since_compact = 0;
                 }
-                Err(crate::compact::CompactError::Cancelled) => {
-                    on_event(LoopEvent::Compact {
-                        started: false,
-                        usage: usage.clone(),
-                        error: Some("cancelled".into()),
-                    });
+                CompactPass::Cancelled => {
                     return finish(input, StopReason::Cancelled, usage, false, true);
                 }
-                Err(crate::compact::CompactError::Failed(message)) => {
-                    on_event(LoopEvent::Compact {
-                        started: false,
-                        usage: usage.clone(),
-                        error: Some(message),
-                    });
-                }
+                CompactPass::Failed => {}
             }
         }
         let mut wire = history.clone();
@@ -329,21 +367,62 @@ pub fn run_loop(
             StreamEvent::TextDelta(text) => on_event(LoopEvent::Text(text)),
             StreamEvent::ReasoningDelta(text) => on_event(LoopEvent::Thought(text)),
         }, class) {
-            Ok(turn) => turn,
+            Ok(turn) => {
+                overflow_compacted = false;
+                turn
+            }
             Err(ClientError::Cancelled) => {
-                return finish(input, StopReason::Cancelled, usage, did_compact, true);
+                return finish(input, StopReason::Cancelled, usage, compacted_once, true);
+            }
+            Err(err) if err.is_context_length() => {
+                if overflow_compacted {
+                    return finish(
+                        input,
+                        StopReason::Error(crate::compact::CONTEXT_STILL_TOO_LARGE.into()),
+                        usage,
+                        compacted_once,
+                        true,
+                    );
+                }
+                match run_compact_pass(
+                    input,
+                    history,
+                    &modified_paths,
+                    &mut usage,
+                    on_event,
+                ) {
+                    CompactPass::Ok => {
+                        compacted_once = true;
+                        turns_since_compact = 0;
+                        overflow_compacted = true;
+                        continue;
+                    }
+                    CompactPass::Cancelled => {
+                        return finish(input, StopReason::Cancelled, usage, compacted_once, true);
+                    }
+                    CompactPass::Failed => {
+                        return finish(
+                            input,
+                            StopReason::Error(err.to_string()),
+                            usage,
+                            compacted_once,
+                            true,
+                        );
+                    }
+                }
             }
             Err(err) => {
                 return finish(
                     input,
                     StopReason::Error(err.to_string()),
                     usage,
-                    did_compact,
+                    compacted_once,
                     true,
                 );
             }
         };
         step_ended = Some(std::time::Instant::now());
+        turns_since_compact = turns_since_compact.saturating_add(1);
         usage.add(&turn.usage);
         emit_usage(on_event, &usage, history, input.context_length);
         if !turn.text.is_empty() {
@@ -407,9 +486,9 @@ pub fn run_loop(
                         ));
                         continue;
                     }
-                    return finish(input, StopReason::EndTurn, usage, did_compact, false);
+                    return finish(input, StopReason::EndTurn, usage, compacted_once, false);
                 }
-                return finish(input, StopReason::EndTurn, usage, did_compact, true);
+                return finish(input, StopReason::EndTurn, usage, compacted_once, true);
             }
             for note in notes {
                 history.push(user_message(&note, None));
@@ -428,10 +507,10 @@ pub fn run_loop(
         let mut batch_failed = false;
         for call in &turn.calls {
             if input.cancel.is_cancelled() {
-                return finish(input, StopReason::Cancelled, usage, did_compact, true);
+                return finish(input, StopReason::Cancelled, usage, compacted_once, true);
             }
             if stop_for_halt(input) {
-                return finish(input, StopReason::Halted, usage, did_compact, true);
+                return finish(input, StopReason::Halted, usage, compacted_once, true);
             }
             if batch_failed {
                 let output = ToolOutput::err(gate::NOT_EXECUTED);
@@ -484,11 +563,11 @@ pub fn run_loop(
                 let output = ToolOutput::err(gate::user_cancelled(&call.name));
                 emit_tool(on_event, &id, call, "failed", &output.text, None);
                 push_output(history, call, output);
-                return finish(input, StopReason::Cancelled, usage, did_compact, true);
+                return finish(input, StopReason::Cancelled, usage, compacted_once, true);
             }
             if reviewed.halted {
                 let _ = stop_for_halt(input);
-                return finish(input, StopReason::Halted, usage, did_compact, true);
+                return finish(input, StopReason::Halted, usage, compacted_once, true);
             }
             let constrained = crate::hooks::constrain_tool(crate::hooks::ToolHook {
                 session: input.conversation_id,
@@ -588,11 +667,11 @@ pub fn run_loop(
                             let output = ToolOutput::err(gate::user_cancelled(&call.name));
                             emit_tool(on_event, &id, call, "failed", &output.text, None);
                             push_output(history, call, output);
-                            return finish(input, StopReason::Cancelled, usage, did_compact, true);
+                            return finish(input, StopReason::Cancelled, usage, compacted_once, true);
                         }
                         Waited::Halted => {
                             let _ = stop_for_halt(input);
-                            return finish(input, StopReason::Halted, usage, did_compact, true);
+                            return finish(input, StopReason::Halted, usage, compacted_once, true);
                         }
                     }
                 }
@@ -616,13 +695,19 @@ pub fn run_loop(
             if !output.failed && !crate::drive::is_session_tool(&call.name) {
                 evidence += 1;
                 fresh.note(&call.name, &serde_json::from_str(&call.arguments).unwrap_or_default());
+                if let Some(path) = crate::compact::path_from_write_call(&call.name, &call.arguments)
+                {
+                    if !modified_paths.iter().any(|p| p == &path) {
+                        modified_paths.push(path);
+                    }
+                }
             }
             push_output(history, call, output);
             if cancelled {
-                return finish(input, StopReason::Cancelled, usage, did_compact, true);
+                return finish(input, StopReason::Cancelled, usage, compacted_once, true);
             }
             if halted {
-                return finish(input, StopReason::Halted, usage, did_compact, true);
+                return finish(input, StopReason::Halted, usage, compacted_once, true);
             }
         }
         if drive.is_some() && evidence >= checkpoint_at + crate::checkpoint::CHECKPOINT_EVERY {
