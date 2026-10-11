@@ -29,8 +29,10 @@ pub const IDEA_BOARD_MAX: usize = 15;
 /// or apply them, never pushed out, and do not count toward `IDEA_BOARD_MAX`.
 pub const IDEA_MODIFIED_MAX: usize = 10;
 /// Digest cards painted beside the event slot. They do not consume `FEED_PAINT_MAX`.
-pub const DIGEST_PAINT_MAX: usize = 2;
-const FEED_STORE_MAX: usize = 40;
+pub const DIGEST_PAINT_MAX: usize = 3;
+/// Live cards kept on disk. Pulse sources post up to five a check, every 90 minutes by
+/// default, so this holds about a day of them.
+const FEED_STORE_MAX: usize = 120;
 /// A dismissed event stays down this long. A failure still posts inside the window.
 /// A muted automation's failure uses the same window as its once-a-day floor.
 const DISMISS_HIDE_MS: u64 = 24 * 60 * 60 * 1000;
@@ -48,7 +50,7 @@ pub const TAKEAWAY_MAX: usize = 220;
 pub const PAUSE_OFFER_MS: u64 = 30 * 60 * 1000;
 /// Workboard detail written by `abandon_inflight_card` when a run is parked.
 const PAUSED_DETAIL: &str = "Paused. This is where to resume.";
-const HONEST_EMPTY: &str = "I looked and did not find a source worth your time.";
+pub const HONEST_EMPTY: &str = "I looked and did not find a source worth your time.";
 const STEER_LINE: &str = "The brief steers the next edition.";
 const IDEA_TITLE_MEMORY: usize = 64;
 const TURNED_DOWN_MEMORY: usize = 64;
