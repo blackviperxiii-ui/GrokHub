@@ -61,7 +61,9 @@ pub fn run(workspace: &Path, args: &Value) -> ToolOutput {
         let n = start + i + 1;
         out.push_str(&format!("{n}|{line}\n"));
     }
-    ToolOutput::ok(out)
+    // Workspace reads stay plain for coding. Outside-workspace text (if a
+    // future path allows it) is fenced as untrusted data.
+    ToolOutput::ok(super::fence::fence_if_outside(workspace, &path, "read_file", &out))
 }
 
 fn image_mime(bytes: &[u8]) -> Option<&'static str> {
@@ -131,8 +133,21 @@ fn jpeg_under_budget(img: &image::DynamicImage) -> Result<Vec<u8>, String> {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use crate::tools::execute;
     use image::ImageEncoder;
+    use std::fs;
+
+    #[test]
+    fn workspace_read_is_not_fenced() {
+        let dir = crate::harness::test_dir("read-no-fence");
+        fs::write(dir.join("notes.txt"), "alpha\nbeta\n").unwrap();
+        let out = run(&dir, &json!({"target_file": "notes.txt"}));
+        assert!(!out.failed, "{}", out.text);
+        assert!(out.text.contains("1|alpha"), "{}", out.text);
+        assert!(!crate::tools::fence::looks_fenced(&out.text), "{}", out.text);
+        let _ = fs::remove_dir_all(dir);
+    }
 
     #[test]
     fn read_file_offsets_lines_and_encodes_a_tiny_png() {
