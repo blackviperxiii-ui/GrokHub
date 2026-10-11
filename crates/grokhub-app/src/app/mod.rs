@@ -174,6 +174,7 @@ mod board_ui;
 mod confirm;
 mod connectors_ui;
 mod marketplace_ui;
+mod personality_ui;
 mod harness_ui;
 mod inbox_ui;
 mod episode_ui;
@@ -271,6 +272,7 @@ enum SettingsSec {
     Labs,
     Permissions,
     Connectors,
+    Personality,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -657,6 +659,8 @@ pub struct Cabin {
     settings_sec: SettingsSec,
     /// Settings → Connectors tab and Marketplace view state.
     market: marketplace_ui::MarketState,
+    /// Settings → Personality: the "Try it" preview.
+    try_voice: personality_ui::TryVoice,
     settings_back: Nav,
     imagine_aspect: u8,
     imagine_quality: bool,
@@ -1229,6 +1233,7 @@ impl Cabin {
             composer_want_focus: false,
             settings_sec: SettingsSec::Account,
             market: Default::default(),
+            try_voice: Default::default(),
             settings_back: Nav::Chat,
             imagine_aspect: 0,
             imagine_quality: true,
@@ -1664,6 +1669,7 @@ impl Cabin {
             composer_want_focus: false,
             settings_sec: SettingsSec::Account,
             market: Default::default(),
+            try_voice: Default::default(),
             settings_back: Nav::Chat,
             imagine_aspect: 0,
             imagine_quality: false,
