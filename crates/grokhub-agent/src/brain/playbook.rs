@@ -10,7 +10,8 @@ use std::path::{Path, PathBuf};
 
 use grokhub_core::playbook::{self as core_pb, Playbook, Tier};
 
-use crate::harness::{classify as hard_classify, HardHit};
+use crate::harness::HardHit;
+use crate::repair::{repair_hit, Os, ProbeId};
 
 /// Where a loaded playbook came from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -40,14 +41,19 @@ fn file_for(config_dir: &Path, id: &str) -> PathBuf {
 }
 
 /// The hard-class lock: no step may run a hard-floor command, and a step that
-/// runs a hard-class one must be risky.
+/// runs a hard-class one must be risky. Commands go through the repair rules
+/// too, so clearing caches or removing packages counts the way a repair fix
+/// does. A probe step must name a repair probe for every OS the playbook
+/// applies to.
 pub fn lock_check(p: &Playbook) -> Result<(), String> {
     for (phase, step) in p.steps() {
+        if !step.probe.is_empty() {
+            probe_check(p, &step.name, &step.probe)?;
+        }
         if step.run.trim().is_empty() {
             continue;
         }
-        let args = serde_json::json!({ "command": step.run }).to_string();
-        match hard_classify("run_terminal_command", &args) {
+        match repair_hit(&step.run) {
             HardHit::Floor(f) => {
                 return Err(format!(
                     "step \"{}\" runs a command GrokHub never runs ({})",
@@ -67,6 +73,34 @@ pub fn lock_check(p: &Playbook) -> Result<(), String> {
             return Err(format!(
                 "step \"{}\" is marked look-only but `{}` can change things",
                 step.name, step.run
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn probe_check(p: &Playbook, step: &str, probe: &str) -> Result<(), String> {
+    let oses: Vec<Os> = p
+        .applies_when
+        .os
+        .iter()
+        .filter_map(|o| match o.as_str() {
+            "linux" => Some(Os::Linux),
+            "windows" => Some(Os::Windows),
+            _ => None,
+        })
+        .collect();
+    if oses.is_empty() || oses.len() != p.applies_when.os.len() {
+        return Err(format!(
+            "step \"{step}\" names a probe, so applies_when.os must list only linux or windows"
+        ));
+    }
+    for os in oses {
+        if ProbeId::parse(probe, os).is_none() {
+            let known: Vec<&str> = ProbeId::all(os).iter().map(|p| p.key()).collect();
+            return Err(format!(
+                "step \"{step}\": no {os:?} probe `{probe}` (one of {})",
+                known.join(", ")
             ));
         }
     }
@@ -263,7 +297,7 @@ mod tests {
         let (all, problems) = load(&dir);
         assert_eq!(
             (all.len(), all[0].source, problems.len()),
-            (1, Source::Shipped, 0)
+            (3, Source::Shipped, 0)
         );
         // Edit the shipped one: it is now yours, and Reset puts it back.
         let edited = all[0]
@@ -291,6 +325,8 @@ mod tests {
             ids,
             vec![
                 (SHIPPED, Source::Edited),
+                ("repair-linux", Source::Shipped),
+                ("repair-windows", Source::Shipped),
                 ("task-general-copy", Source::Yours),
                 ("task-general-copy-2", Source::Yours)
             ]
@@ -306,6 +342,8 @@ mod tests {
             ids,
             vec![
                 (SHIPPED, Source::Shipped),
+                ("repair-linux", Source::Shipped),
+                ("repair-windows", Source::Shipped),
                 ("task-general-copy", Source::Yours)
             ]
         );
@@ -325,7 +363,7 @@ mod tests {
         )
         .unwrap();
         let (all, problems) = load(&dir);
-        assert_eq!(all.len(), 2);
+        assert_eq!(all.len(), 4);
         assert_eq!(
             problems,
             vec![
@@ -342,10 +380,10 @@ mod tests {
     #[test]
     fn the_best_fitting_playbook_is_picked() {
         let dir = crate::harness::test_dir("playbook-pick");
-        let specific = core_pb::renamed(core_pb::BUILTIN[0], "repair-linux-test", "Repair Linux")
+        let specific = core_pb::renamed(core_pb::BUILTIN[0], "repair-code-test", "Repair code")
             .replacen(
                 "intent = [\"task\", \"repair\"]",
-                "intent = [\"repair\"]\ndomain = [\"system\"]\nos = [\"linux\"]",
+                "intent = [\"repair\"]\ndomain = [\"code\"]\nos = [\"linux\"]",
                 1,
             );
         save(&dir, &specific).unwrap();
@@ -353,11 +391,130 @@ mod tests {
         let id = |i, d, o| pick(&all, i, d, o).map(|p| p.id.clone());
         assert_eq!(
             id("repair", "system", "linux").as_deref(),
-            Some("repair-linux-test")
+            Some("repair-linux")
         );
-        assert_eq!(id("repair", "system", "windows").as_deref(), Some(SHIPPED));
+        assert_eq!(
+            id("repair", "system", "windows").as_deref(),
+            Some("repair-windows")
+        );
+        assert_eq!(
+            id("repair", "code", "linux").as_deref(),
+            Some("repair-code-test")
+        );
+        assert_eq!(id("repair", "system", "macos").as_deref(), Some(SHIPPED));
         assert_eq!(id("task", "code", "linux").as_deref(), Some(SHIPPED));
         assert_eq!(id("chat", "general", "linux"), None);
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    fn shipped_one(id: &str) -> Playbook {
+        shipped()
+            .into_iter()
+            .map(|(p, _)| p)
+            .find(|p| p.id == id)
+            .unwrap()
+    }
+
+    /// The repair playbooks sit on the repair module: every look step is one of
+    /// its probes for that OS (fixed argv, read-only), and the risky steps are
+    /// exactly the ones its rules call hard.
+    #[test]
+    fn repair_playbooks_look_first_with_repair_probes_and_ask_before_hard_steps() {
+        for (id, os) in [("repair-linux", Os::Linux), ("repair-windows", Os::Windows)] {
+            let p = shipped_one(id);
+            assert!(
+                !p.backup.is_empty() && !p.verify.is_empty() && !p.rollback.is_empty(),
+                "{id}"
+            );
+            let tiers: Vec<Tier> = p.steps().map(|(ph, s)| s.tier_in(ph)).collect();
+            assert!(tiers.windows(2).all(|w| w[0] <= w[1]), "{id}: {tiers:?}");
+            let mut probes: Vec<&str> = p
+                .steps()
+                .filter(|(_, s)| !s.probe.is_empty())
+                .map(|(_, s)| s.probe.as_str())
+                .collect();
+            let mut all: Vec<&str> = ProbeId::all(os).iter().map(|p| p.key()).collect();
+            probes.sort_unstable();
+            all.sort_unstable();
+            assert_eq!(probes, all, "{id} looks with every repair probe");
+            for key in probes {
+                let spec = crate::repair::probe_spec_with(
+                    ProbeId::parse(key, os).unwrap(),
+                    os,
+                    &|b: &str| b == "pacman",
+                );
+                assert_eq!(
+                    spec.as_ref().and_then(crate::repair::read_only_violation),
+                    None,
+                    "{id} {key}"
+                );
+            }
+        }
+        let risky = |id: &str| -> Vec<(String, String)> {
+            shipped_one(id)
+                .steps()
+                .filter(|(ph, s)| s.tier_in(ph) == Tier::Risky)
+                .map(|(_, s)| (s.name.clone(), hit_label(&s.run)))
+                .collect()
+        };
+        let pairs = |v: &[(&str, &str)]| -> Vec<(String, String)> {
+            v.iter()
+                .map(|(a, b)| (a.to_string(), b.to_string()))
+                .collect()
+        };
+        assert_eq!(
+            risky("repair-linux"),
+            pairs(&[
+                ("Reinstall packages with missing files", "none"),
+                ("Install pending updates", "none"),
+                ("Delete old installer copies to free space", "Delete"),
+            ])
+        );
+        assert_eq!(
+            risky("repair-windows"),
+            pairs(&[
+                ("Repair system files", "none"),
+                ("Repair the Windows image", "none"),
+                ("Install app updates", "none"),
+                ("Delete temporary files to free space", "Delete"),
+            ])
+        );
+    }
+
+    fn hit_label(run: &str) -> String {
+        match repair_hit(run) {
+            HardHit::None => "none".into(),
+            HardHit::Class(c) => c.label().into(),
+            HardHit::Floor(f) => f.reason,
+        }
+    }
+
+    #[test]
+    fn a_repair_step_marked_safe_or_a_probe_for_the_wrong_os_is_refused() {
+        let linux = core_pb::BUILTIN[1];
+        let safe_clean = linux.replacen("name = \"Re-check with the same probe\"", "name = \"Re-check with the same probe\"\n\n[[phase.step]]\nname = \"Free space\"\nrun = \"sudo paccache -rk1\"", 1);
+        assert_eq!(
+            parse(&safe_clean).unwrap_err(),
+            "step \"Free space\" is a hard-class action (Delete) and must be marked risky; it still asks you first"
+        );
+        let mkfs = linux.replacen(
+            "run = \"sudo pacman -Syu --noconfirm\"",
+            "run = \"mkfs.ext4 /dev/sdb1\"",
+            1,
+        );
+        assert_eq!(
+            parse(&mkfs).unwrap_err(),
+            "step \"Install pending updates\" runs a command GrokHub never runs (hard floor: mkfs)"
+        );
+        let wrong = linux.replacen("probe = \"memory\"", "probe = \"volumes\"", 1);
+        assert_eq!(
+            parse(&wrong).unwrap_err(),
+            "step \"Check memory\": no Linux probe `volumes` (one of disk_usage, memory, failed_services, boot_errors, network_links, dns, package_health, pending_updates)"
+        );
+        let any_os = linux.replacen("os = [\"linux\"]\n", "", 1);
+        assert_eq!(
+            parse(&any_os).unwrap_err(),
+            "step \"List failed services\" names a probe, so applies_when.os must list only linux or windows"
+        );
     }
 }
