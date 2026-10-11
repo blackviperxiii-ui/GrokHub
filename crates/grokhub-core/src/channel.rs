@@ -523,9 +523,9 @@ pub fn auto_off_step(current: Channel, tips: &ChannelTips, beta_since: Option<&s
     }
 }
 
-/// Windows Labs copy until the installer supports channels.
+/// Windows Labs copy: Beta comes from signed pre-releases there, never a source build.
 pub const CHANNEL_WINDOWS_NOTE: &str =
-    "Channel switching is not available on Windows yet — the installer does not support channels. When channels land, Beta will also turn off automatically once beta matches main.";
+    "On Windows, Beta installs the newest beta pre-release from GitHub, checked against its SHA256SUMS; building the beta channel from a source clone is Linux-only. Beta doesn't turn off by itself on Windows yet, so turn it off here to go back to stable.";
 
 /// Labs / docs copy: auto-off when beta catches up to main (Linux now; Windows with channels).
 pub const CHANNEL_AUTO_OFF_NOTE: &str =
@@ -740,9 +740,9 @@ mod channel_switch_tests {
     #[test]
     fn windows_note_is_the_labs_copy() {
         assert!(CHANNEL_WINDOWS_NOTE.starts_with(
-            "Channel switching is not available on Windows yet — the installer does not support channels."
+            "On Windows, Beta installs the newest beta pre-release from GitHub, checked against its SHA256SUMS;"
         ));
-        assert!(CHANNEL_WINDOWS_NOTE.contains("turn off automatically once beta matches main"));
+        assert!(CHANNEL_WINDOWS_NOTE.contains("building the beta channel from a source clone is Linux-only"));
     }
 
     fn tips(beta_sha: &str, main_sha: &str, beta_tree: &str, main_tree: &str) -> ChannelTips {
@@ -860,7 +860,7 @@ mod channel_switch_tests {
     #[test]
     fn auto_off_note_documents_linux_and_future_windows() {
         assert!(CHANNEL_AUTO_OFF_NOTE.contains("beta catches up to main"));
-        assert!(CHANNEL_WINDOWS_NOTE.contains("turn off automatically once beta matches main"));
+        assert!(CHANNEL_WINDOWS_NOTE.contains("Beta doesn't turn off by itself on Windows yet"));
     }
 
 }

@@ -3846,8 +3846,9 @@ impl Cabin {
         }
     }
 
-    /// Labs → Beta channel: fetch/build/install from beta or stable. Rollback on fail.
-    /// Linux only — Windows Labs shows a disabled toggle + note instead.
+    /// Labs → Beta channel from a source clone: fetch/build/install from beta
+    /// or stable, rollback on fail. Linux only; without a clone it switches
+    /// through the signed releases instead ([`Self::queue_release_channel_switch`]).
     #[cfg(not(windows))]
     fn queue_channel_switch(&mut self, target: grokhub_core::Channel) {
         self.nav = Nav::Settings;
@@ -3855,7 +3856,7 @@ impl Cabin {
         let src = match resolve_source(&self.cfg.source_dir) {
             Some(p) => p,
             None => {
-                self.status = crate::update::map_channel_switch_error("no clone");
+                self.queue_release_channel_switch(target);
                 return;
             }
         };
@@ -3875,6 +3876,18 @@ impl Cabin {
         ));
         self.start_overlay_update(cmds);
         // Keep Labs visible while the switch runs (start_overlay_update jumps to Update).
+        self.settings_sec = SettingsSec::Labs;
+    }
+
+    /// Labs → Beta channel without a clone (every Windows install, a Linux
+    /// tarball install): install the target channel's verified release (the
+    /// newest beta pre-release, or the latest stable release), then write
+    /// the receipt. A refused download leaves the channel as it was.
+    fn queue_release_channel_switch(&mut self, target: grokhub_core::Channel) {
+        self.nav = Nav::Settings;
+        self.settings_sec = SettingsSec::Labs;
+        self.update_cabin_note = Some(format!("Switching to {}…", target.as_str()));
+        self.start_overlay_update(crate::update::release_channel_switch_cmds(target));
         self.settings_sec = SettingsSec::Labs;
     }
 
@@ -3902,8 +3915,7 @@ impl Cabin {
             self.status = "refusing an update that would wipe config".into();
             return;
         }
-        // Windows: a stray beta receipt updates as stable and says why.
-        self.update_cabin_note = crate::update::stray_beta_receipt_note().map(String::from);
+        self.update_cabin_note = None;
         self.start_overlay_update(cmds);
     }
 
