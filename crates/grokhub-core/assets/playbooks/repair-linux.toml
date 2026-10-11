@@ -1,0 +1,113 @@
+# GrokHub playbook: repair a Linux computer (written for CachyOS and Arch with
+# KDE Plasma; the probes also cover apt, dnf and zypper systems).
+#
+# Copy this file to `playbooks/` in the settings folder (Settings → Playbooks →
+# Duplicate does it for you) to change it. A file there with the same id
+# replaces the shipped one; Reset puts the shipped one back.
+#
+# Look steps name repair probes: fixed, read-only checks with no shell. Safe
+# steps can be undone. Risky steps ask you first, every time.
+
+id = "repair-linux"
+name = "Repair Linux"
+summary = "Check services, packages, boot errors, disk, memory and network first; restart before reinstalling; snapshot before anything bigger."
+
+checklist = ["services", "packages", "boot errors", "ports", "disk space", "network"]
+backup = "Take a restore point first (snapper, Timeshift or a btrfs snapshot when there is one) and copy each config file to a .bak before editing it."
+verify = "Run the same probe again after each fix and compare: the failed service is running, the package check is clean, the error is gone."
+rollback = "Put the .bak copies back and restart what was restarted; for a package change, roll back to the snapshot taken first."
+give_up = [
+  "a hard approval was refused",
+  "hardware, access or a sign-in is missing",
+  "every approach in the playbook failed and was checked",
+]
+
+[applies_when]
+intent = ["repair"]
+domain = ["system"]
+os = ["linux"]
+
+[[phase]]
+name = "Look"
+tier = "read_only"
+
+[[phase.step]]
+name = "List failed services"
+probe = "failed_services"
+
+[[phase.step]]
+name = "Read this boot's errors"
+probe = "boot_errors"
+
+[[phase.step]]
+name = "Check installed packages for missing files"
+probe = "package_health"
+
+[[phase.step]]
+name = "List pending updates from the lists already on disk"
+probe = "pending_updates"
+
+[[phase.step]]
+name = "Check disk space"
+probe = "disk_usage"
+
+[[phase.step]]
+name = "Check memory"
+probe = "memory"
+
+[[phase.step]]
+name = "Check network links"
+probe = "network_links"
+
+[[phase.step]]
+name = "Check name lookups (DNS)"
+probe = "dns"
+
+[[phase.step]]
+name = "List listening ports (ss -tuln) and name what owns each"
+
+[[phase]]
+name = "Back up"
+tier = "safe"
+
+[[phase.step]]
+name = "Take a restore point before the first change"
+
+[[phase.step]]
+name = "Copy a config file before editing it"
+run = "cp -a /etc/example.conf /etc/example.conf.bak"
+
+[[phase]]
+name = "Fix"
+tier = "safe"
+
+[[phase.step]]
+name = "Restart a failed service"
+run = "systemctl restart example.service"
+
+[[phase.step]]
+name = "Restart the Plasma desktop shell"
+run = "systemctl --user restart plasma-plasmashell"
+
+[[phase.step]]
+name = "Clear cached website addresses"
+run = "resolvectl flush-caches"
+
+[[phase.step]]
+name = "Re-check with the same probe"
+
+[[phase]]
+name = "Bigger fixes"
+tier = "risky"
+
+[[phase.step]]
+name = "Reinstall packages with missing files"
+run = "sudo pacman -S --noconfirm example-package"
+
+[[phase.step]]
+name = "Install pending updates"
+run = "sudo pacman -Syu --noconfirm"
+
+[[phase.step]]
+name = "Delete old installer copies to free space"
+run = "sudo paccache -rk1"
