@@ -352,8 +352,8 @@ impl Cabin {
         if !self.harness.work_rows_loaded {
             self.harness.work_rows_loaded = true;
             let auto = self.auto_lines();
-            let trials: Vec<u64> = hx::read_versions(&dir).iter().map(|v| v.seq).collect();
-            let skip = |kind, seq| auto.contains(&(kind, seq)) || (kind == ChangeKind::Skill && trials.contains(&seq));
+            let trials: Vec<(String, u64)> = hx::read_versions(&dir).into_iter().map(|v| (v.kind, v.seq)).collect();
+            let skip = |kind: ChangeKind, seq| auto.contains(&(kind, seq)) || trials.iter().any(|(k, s)| k == kind.as_str() && *s == seq);
             self.harness.work_rows = work_rows_from_disk(&dir, now_ms(), &skip);
             self.harness.ledger_watch.baseline(&dir);
         }
@@ -427,6 +427,9 @@ impl Cabin {
                     self.automations = crate::night::load();
                 }
                 res.map(|d| d.now)
+            }
+            (ChangeAct::Undo, ChangeKind::Snippet) => {
+                hx::undo_change(&dir, &hx::SnippetTarget { config_dir: &dir, name: &row.id }, ask).map(|d| d.now)
             }
             (ChangeAct::Undo, ChangeKind::Model) => {
                 // The routing table: the previous version comes back byte-identical.

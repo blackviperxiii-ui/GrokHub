@@ -74,8 +74,9 @@ impl Cabin {
 
     /// Name the trial side on this run's metrics line.
     pub(super) fn tag_trial(&self, m: &mut RunMetrics) {
-        if let Some(pick) = self.harness.self_review.trial.as_ref().filter(|p| p.class == m.class) {
-            m.version = pick.version.clone();
+        let skill = self.harness.self_review.trial.clone().filter(|p| p.class == m.class);
+        if let Some(pick) = skill.or_else(|| self.note_trial_pick()) {
+            m.version = pick.version;
             m.arm = Some(pick.arm);
         }
     }
@@ -121,11 +122,10 @@ impl Cabin {
         }
     }
 
-    /// True when ledger line `seq` on a skill is on trial: its note already
-    /// went out, so it gets no Work-tree row with Undo and Keep.
+    /// True when this ledger line is on trial: its note already went out, so
+    /// it gets no Work-tree row with Undo and Keep.
     pub(super) fn on_trial(&self, kind: hx::ChangeKind, c: &hx::Change) -> bool {
-        kind == hx::ChangeKind::Skill
-            && hx::read_versions(&config::config_dir()).iter().any(|v| v.kind == c.kind && v.id == c.id && v.seq == c.seq)
+        hx::read_versions(&config::config_dir()).iter().any(|v| v.kind == kind.as_str() && v.id == c.id && v.seq == c.seq)
     }
 }
 
@@ -138,4 +138,130 @@ fn parent_skill(dir: &std::path::Path, v: &hx::Version) -> Option<SkillMd> {
     }
     let bytes = hx::kept_bytes(dir, hx::ChangeKind::Skill, &v.id, &line.before_hash).ok()?;
     Some(grokhub_core::parse_skill_md(&String::from_utf8_lossy(&bytes)))
+}
+
+/// Chat notes kept at once, in name order.
+const NOTES_MAX: usize = 5;
+/// The line above the chat notes in the cabin rules.
+pub(super) const NOTES_HEAD: &str =
+    "Notes from GrokHub's weekly review of its own runs. They shape how you work; the rules after them always win:";
+
+impl Cabin {
+    /// A chat-note proposal from the weekly pass: one Suggestion card whose
+    /// Apply writes `tunable/<name>.md` and puts it on trial.
+    pub(super) fn post_snippet_card(&mut self, p: &grokhub_core::self_review::RankedProposal, now: u64) {
+        let details = format!(
+            "{}.\n\nApply adds this note to the instructions of every chat, before the safety and approval rules, which still win:\n\n“{}”\n\nOne chat in five tries it first; GrokHub keeps it only if those runs take fewer steps.",
+            p.numbers, p.steps
+        );
+        let card = super::self_review_ui::ProposalCard {
+            source: grokhub_core::self_review::snippet_source(&p.skill),
+            skill: &p.skill,
+            title: &p.title,
+            body: &p.numbers,
+            details,
+            md: &p.steps,
+        };
+        self.post_self_review_card(card, now);
+    }
+
+    /// Apply on a chat-note card: the guard checks the name and text again,
+    /// the ledger keeps the version, and the note goes on trial in every chat.
+    pub(super) fn apply_snippet(&mut self, name: &str, title: &str, text: &str) -> bool {
+        use grokhub_core::protected_surface::{ProtectedSurface, TuneTarget};
+        let dir = config::config_dir();
+        let now = grokhub_core::now_ms();
+        let checked = ProtectedSurface::check(&format!("snippet:{name}")).and_then(|t| match t {
+            TuneTarget::Snippet(n) => ProtectedSurface::check_text(text).map(|text| (n, text)),
+            _ => Err("not a chat note".into()),
+        });
+        let (name, text) = match checked {
+            Ok(ok) => ok,
+            Err(why) => {
+                let _ = hx::append_span(&dir, &hx::guard_span(&format!("snippet:{name}"), &why, now));
+                self.status = why;
+                return true;
+            }
+        };
+        let target = hx::SnippetTarget { config_dir: &dir, name: &name };
+        let before = target_text(&target);
+        let reason = format!("weekly self-review: {}", title.trim());
+        let written = hx::record_change(&dir, &target, hx::Origin::SelfManage, &reason, || {
+            hx::ChangeTarget::put(&target, Some(format!("{text}\n").as_bytes()))
+        });
+        match written {
+            Ok(Some(change)) => {
+                let label = format!("{} (chat note)", title.trim());
+                if let Ok(v) = hx::start_trial(&dir, &change, hx::ALL_RUNS, &label, hx::Metric::Steps, &before, &format!("{text}\n")) {
+                    self.post_trial_note(&v);
+                }
+                self.status = format!("Chat note {name} added: one chat in five tries it first.");
+                true
+            }
+            Ok(None) => {
+                self.status = format!("Chat note {name} already says that.");
+                true
+            }
+            Err(e) => {
+                self.status = e;
+                false
+            }
+        }
+    }
+
+    /// The chat notes this chat follows, as one block for the cabin rules.
+    /// On the control side of an open note trial, the note's version before.
+    pub(super) fn tuned_notes(&self) -> String {
+        let dir = config::config_dir();
+        let notes_dir = dir.join(grokhub_core::protected_surface::TUNABLE_DIR);
+        let Ok(entries) = std::fs::read_dir(&notes_dir) else {
+            return String::new();
+        };
+        let mut names: Vec<String> = entries
+            .flatten()
+            .filter_map(|e| e.file_name().to_str()?.strip_suffix(".md").map(str::to_string))
+            .collect();
+        names.sort();
+        let trial = hx::open_trial(&dir, hx::ALL_RUNS);
+        let mut lines = Vec::new();
+        for name in names.into_iter().take(NOTES_MAX) {
+            let target = hx::SnippetTarget { config_dir: &dir, name: &name };
+            let mut text = target_text(&target);
+            if let Some(v) = trial.as_ref().filter(|v| v.id == name) {
+                if hx::pick_arm(&self.trace_id(), &v.version, v.share_pct) == Arm::Control {
+                    text = trial_parent_text(&dir, v).unwrap_or_default();
+                }
+            }
+            // A note edited by hand that the guard would refuse is left out.
+            if let Ok(text) = grokhub_core::protected_surface::ProtectedSurface::check_text(&text) {
+                lines.push(format!("- {text}"));
+            }
+        }
+        if lines.is_empty() {
+            return String::new();
+        }
+        format!("{NOTES_HEAD}\n{}", lines.join("\n"))
+    }
+
+    /// The open note trial's side for this chat, for its runs' metrics.
+    pub(super) fn note_trial_pick(&self) -> Option<TrialPick> {
+        let v = hx::open_trial(&config::config_dir(), hx::ALL_RUNS)?;
+        let arm = hx::pick_arm(&self.trace_id(), &v.version, v.share_pct);
+        Some(TrialPick { class: hx::ALL_RUNS.into(), version: v.version, arm })
+    }
+}
+
+fn target_text(t: &dyn hx::ChangeTarget) -> String {
+    t.read().ok().flatten().map(|b| String::from_utf8_lossy(&b).trim().to_string()).unwrap_or_default()
+}
+
+/// The text a note trial replaced. Empty when the note was new.
+fn trial_parent_text(dir: &std::path::Path, v: &hx::Version) -> Option<String> {
+    let ledger = hx::ChangeLedger::load_kind(dir, hx::ChangeKind::Snippet);
+    let line = ledger.all().iter().find(|c| c.seq == v.seq && c.id == v.id)?;
+    if line.before_hash.is_empty() {
+        return Some(String::new());
+    }
+    let bytes = hx::kept_bytes(dir, hx::ChangeKind::Snippet, &v.id, &line.before_hash).ok()?;
+    Some(String::from_utf8_lossy(&bytes).trim().to_string())
 }

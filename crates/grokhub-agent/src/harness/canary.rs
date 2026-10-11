@@ -25,7 +25,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::harness::changes::{
-    rollback_change, Change, ChangeKind, ChangeLedger, ChangeTarget, SkillTarget, CHANGES_DIR,
+    rollback_change, Change, ChangeKind, ChangeLedger, ChangeTarget, SkillTarget, SnippetTarget, CHANGES_DIR,
 };
 
 pub const VERSIONS_FILE: &str = "changes.jsonl";
@@ -35,6 +35,8 @@ pub const CANARY_SHARE_PCT: u8 = 20;
 pub const CANARY_RUNS: u32 = 10;
 /// The longest a trial runs before it is judged on what it has.
 pub const CANARY_MAX_MS: u64 = 7 * 24 * 60 * 60 * 1000;
+/// The class of a trial that applies to every chat run (a chat note).
+pub const ALL_RUNS: &str = "*";
 /// Runs before the trial that stand in for the control side when it has none.
 const BASELINE_RUNS: usize = 20;
 const HASH_SHOWN: usize = 12;
@@ -310,7 +312,7 @@ pub fn judge(v: &Version, runs: &[RunMetrics], now: u64) -> Option<Judged> {
     if base.is_empty() {
         let before: Vec<&RunMetrics> = runs
             .iter()
-            .filter(|m| m.class == v.class && m.finished_at < v.started_at && m.version.is_empty())
+            .filter(|m| (v.class == ALL_RUNS || m.class == v.class) && m.finished_at < v.started_at && m.version.is_empty())
             .collect();
         base = before.into_iter().rev().take(BASELINE_RUNS).collect();
     }
@@ -369,12 +371,13 @@ pub fn judge(v: &Version, runs: &[RunMetrics], now: u64) -> Option<Judged> {
 }
 
 /// The ledger target a trial changes, when this build can put it back.
-fn target_of<'a>(v: &'a Version, skills_dir: &'a Path) -> Option<Box<dyn ChangeTarget + 'a>> {
+fn target_of<'a>(v: &'a Version, config_dir: &'a Path, skills_dir: &'a Path) -> Option<Box<dyn ChangeTarget + 'a>> {
     match ChangeKind::parse(&v.kind)? {
         ChangeKind::Skill => Some(Box::new(SkillTarget {
             skills_dir,
             name: &v.id,
         })),
+        ChangeKind::Snippet => Some(Box::new(SnippetTarget { config_dir, name: &v.id })),
         _ => None,
     }
 }
@@ -410,7 +413,7 @@ pub fn settle_trials(
         let line = if j.keep {
             v.closed(VersionStatus::Kept, j.note, now)
         } else {
-            let Some(target) = target_of(&v, skills_dir) else {
+            let Some(target) = target_of(&v, config_dir, skills_dir) else {
                 continue;
             };
             match rollback_change(config_dir, target.as_ref(), v.seq, &j.note, &Verdict(())) {
@@ -729,6 +732,31 @@ mod tests {
             judge(&v, &none, 1_000 + 7 * DAY).unwrap().note,
             "Rolled back: Shorter x, too few runs to compare (0 on the new version)"
         );
+    }
+
+    #[test]
+    fn a_worse_chat_note_is_removed_and_its_baseline_is_every_class() {
+        let (root, skills) = dirs("canary-note");
+        let target = SnippetTarget { config_dir: &root, name: "lead" };
+        let c = crate::harness::changes::record_change(&root, &target, Origin::SelfManage, "weekly self-review: Lead", || {
+            target.put(Some(b"Lead with the answer.\n"))
+        })
+        .unwrap()
+        .unwrap();
+        let v = start_trial(&root, &c, ALL_RUNS, "Lead (chat note)", Metric::Steps, "", "Lead with the answer.\n").unwrap();
+        assert_eq!((v.parent.as_str(), v.diff.as_str()), ("", "+1 -0 lines"));
+        let mut runs: Vec<RunMetrics> = ["topic:inbox", "skill:report"]
+            .iter()
+            .enumerate()
+            .map(|(i, class)| RunMetrics { run: format!("old:{i}"), class: class.to_string(), steps: 4, finished_at: 0, ..Default::default() })
+            .collect();
+        runs.extend((0..10).map(|i| run(&v, i, Some(Arm::Canary), 5, OutcomeResult::Success, v.started_at + 1)));
+        let closed = settle_trials(&root, &skills, &runs, v.started_at + 10);
+        assert_eq!(
+            (closed[0].status, closed[0].note.as_str()),
+            (VersionStatus::RolledBack, "Rolled back: Lead (chat note), 25% more steps over 10 runs")
+        );
+        assert!(!root.join("tunable").join("lead.md").exists(), "a new note rolled back is gone");
     }
 
     #[test]
