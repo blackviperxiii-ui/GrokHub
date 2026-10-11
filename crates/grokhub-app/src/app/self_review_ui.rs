@@ -59,6 +59,10 @@ pub(super) struct SelfReviewState {
     pub rx: Option<mpsc::Receiver<Result<hx::WeeklyPass, String>>>,
     /// Cards this pass may still post (the 5-card budget).
     pub budget: usize,
+    /// The trial side of this chat's current skill run (card 32 PR B).
+    pub trial: Option<super::canary_ui::TrialPick>,
+    /// The local day open trials were last judged on the clock.
+    pub settled_day: Option<String>,
 }
 
 fn state_path() -> std::path::PathBuf {
@@ -187,9 +191,11 @@ impl Cabin {
             grokhub_core::now_ms(),
         );
         let _ = oc::append_outcome(&dir, &outcome);
-        let metrics = hx::run_metrics_from_spans(&outcome, &spans);
+        let mut metrics = hx::run_metrics_from_spans(&outcome, &spans);
+        self.tag_trial(&mut metrics);
         let _ = run_metrics::append_run(&dir, &metrics, self.cfg.amr_retention_days);
         self.harness.self_review.last_outcome = Some(outcome);
+        self.settle_trials_now(metrics.at);
     }
 
     /// The user's next typed line reads as "that was wrong": the last task
@@ -248,7 +254,14 @@ impl Cabin {
     /// The review slot's night passes on the local clock. AMR dream takes no
     /// tokens, so no `heartbeat_may` slot.
     pub(super) fn tick_night_passes(&mut self) {
-        let _ = self.night_passes(&Self::local_day(), &Self::local_clock(), grokhub_core::now_ms());
+        let today = Self::local_day();
+        let now = grokhub_core::now_ms();
+        let _ = self.night_passes(&today, &Self::local_clock(), now);
+        // A trial past its window is judged on the clock, not only at a run's end.
+        if self.harness.self_review.settled_day.as_deref() != Some(today.as_str()) {
+            self.harness.self_review.settled_day = Some(today);
+            self.settle_trials_now(now);
+        }
     }
 
     /// Tonight's passes in order, each once a night at or after the dream
@@ -549,12 +562,17 @@ impl Cabin {
                     Ok(()) => {
                         let skill = grokhub_core::parse_skill_md(&pending.md);
                         let reason = format!("weekly self-review: {}", card.title);
-                        match skills::save_skill_logged(&skill, hx::Origin::SelfManage, &reason) {
-                            Ok(()) => {
+                        match skills::save_skill_versioned(&skill, hx::Origin::SelfManage, &reason) {
+                            Ok(change) => {
+                                let skill_name = skill.name.clone();
                                 self.remember_skill(skill);
                                 self.harness.skill_rows = None;
-                                self.status =
-                                    format!("{name} changed. /skills changes can undo it.");
+                                if let Some(c) = change {
+                                    self.start_skill_trial(&c, &skill_name, &card.title, &old, &pending.md);
+                                }
+                                self.status = format!(
+                                    "{name} changed: one run in five tries it first. /skills changes can undo it."
+                                );
                                 true
                             }
                             Err(e) => {

@@ -352,7 +352,9 @@ impl Cabin {
         if !self.harness.work_rows_loaded {
             self.harness.work_rows_loaded = true;
             let auto = self.auto_lines();
-            self.harness.work_rows = work_rows_from_disk(&dir, now_ms(), &|kind, seq| auto.contains(&(kind, seq)));
+            let trials: Vec<u64> = hx::read_versions(&dir).iter().map(|v| v.seq).collect();
+            let skip = |kind, seq| auto.contains(&(kind, seq)) || (kind == ChangeKind::Skill && trials.contains(&seq));
+            self.harness.work_rows = work_rows_from_disk(&dir, now_ms(), &skip);
             self.harness.ledger_watch.baseline(&dir);
         }
         let watch = &mut self.harness.ledger_watch;
@@ -384,6 +386,10 @@ impl Cabin {
             }
             if kind == ChangeKind::Skill {
                 self.harness.skill_rows = None;
+            }
+            // A change on trial already posted its "Trying" note; the trial keeps or rolls it back.
+            if self.on_trial(kind, &c) {
+                continue;
             }
             let row = work_row(kind, &c);
             self.harness.work_rows.retain(|r| !(r.kind == kind && r.id == row.id));

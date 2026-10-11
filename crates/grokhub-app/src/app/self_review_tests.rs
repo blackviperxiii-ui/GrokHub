@@ -773,3 +773,120 @@ fn quiet_mode_logs_the_weekly_suggestions_and_posts_no_cards() {
     assert_eq!(super::self_review_ui::load_state().quiet_log.len(), 2, "off, nothing more is logged");
     let _ = std::fs::remove_dir_all(&root);
 }
+
+/// Apply a weekly patch to weekly-report: the change goes on trial.
+fn applied_trial(label: &str) -> (crate::config::TestConfigDir, std::path::PathBuf, Cabin, SkillMd) {
+    let (pin, root) = pin(label);
+    let now = grokhub_core::now_ms();
+    let v1 = skill("weekly-report", "1. Open report.md\n2. click Save");
+    skills::save_skill(&v1).unwrap();
+    recorded(&root, "weekly-report", "w:1", false, now - 2 * DAY, &["click"]);
+    recorded(&root, "weekly-report", "w:2", true, now - DAY, &["click"]);
+    fake("PATCH_SKILL: skill:weekly-report | Wait for the save | 1. Open report.md 2. click Save 3. wait for the toast");
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.skill_list = skills::list_skills();
+    cabin.run_self_review_now(now);
+    wait_pass(&mut cabin);
+    let card = self_review_cards(&cabin).pop().expect("one card");
+    cabin.pulse_accept(&card.id, "2026-10-11");
+    (pin, root, cabin, v1)
+}
+
+/// Skill runs through the trial until it closes: each run follows what
+/// `trial_follow` hands it and takes `canary` or `control` clicks.
+/// Returns (canary runs, control runs).
+fn run_trial(cabin: &mut Cabin, root: &std::path::Path, v1: &SkillMd, canary: usize, control: usize) -> (usize, usize) {
+    let mut sides = (0, 0);
+    let current = cabin.skill_list.iter().find(|s| s.name == "weekly-report").cloned().unwrap();
+    for _ in 0..300 {
+        if hx::open_trial(root, "skill:weekly-report").is_none() {
+            return sides;
+        }
+        let follow = cabin.trial_follow(&current);
+        let arm = cabin.harness.self_review.trial.as_ref().map(|p| p.arm).expect("a side");
+        let clicks = if arm == run_metrics::Arm::Canary {
+            assert!(follow.instructions.contains("wait for the toast"), "{}", follow.instructions);
+            sides.0 += 1;
+            canary
+        } else {
+            assert_eq!(follow.instructions.trim(), v1.instructions.trim());
+            sides.1 += 1;
+            control
+        };
+        cabin.skill_name = "weekly-report".into();
+        cabin.live_mut().push(("user".into(), "Do the weekly report".into()));
+        let trace = cabin.trace_id();
+        let turn = cabin.turn_no();
+        for i in 0..clicks {
+            let mut s = hx::fixture_span(grokhub_core::now_ms(), "click", &format!("{{\"x\":{turn}{i}}}"), "allow", "clicked", Some(true), "")
+                .in_turn(&trace, turn);
+            s.session_id = trace.clone();
+            hx::append_span(root, &s).unwrap();
+        }
+        cabin.harness_turn_end("Here is the report.", turn);
+        cabin.live_mut().push(("assistant".into(), "Here is the report.".into()));
+    }
+    panic!("the trial never closed");
+}
+
+fn trial_note(cabin: &Cabin, prefix: &str) -> UpdateCard {
+    cabin
+        .updates
+        .iter()
+        .find(|c| c.source_id.starts_with("canary:") && c.title.starts_with(prefix))
+        .cloned()
+        .unwrap_or_else(|| panic!("no {prefix:?} note in {:?}", cabin.updates.iter().map(|c| &c.title).collect::<Vec<_>>()))
+}
+
+#[test]
+fn an_applied_patch_runs_as_a_canary_and_fewer_steps_keep_it_with_a_named_note() {
+    let _g = crate::config::hold_test_config();
+    let (_pin, root, mut cabin, v1) = applied_trial("canary-kept");
+    let trial = hx::open_trial(&root, "skill:weekly-report").expect("a trial");
+    assert_eq!(
+        (trial.label.as_str(), trial.target, trial.share_pct, trial.min_runs),
+        ("Wait for the save in weekly-report", hx::Metric::Steps, 20, 10)
+    );
+    let trying = trial_note(&cabin, "Trying:");
+    assert_eq!(trying.title, "Trying: Wait for the save in weekly-report");
+    assert_eq!(
+        trying.body.as_deref(),
+        Some(format!("{}. One run in 5 uses it; it stays if it takes fewer steps over 10 runs.", trial.diff).as_str())
+    );
+    cabin.poll_self_changes();
+    assert!(
+        cabin.harness.work_rows.iter().all(|r| r.id != "weekly-report"),
+        "no Undo/Keep row for a change on trial"
+    );
+    let (canary, control) = run_trial(&mut cabin, &root, &v1, 3, 5);
+    assert_eq!(canary, 10, "judged at the tenth canary run");
+    assert!(control > canary, "most runs stay on the old steps ({control})");
+    let kept = trial_note(&cabin, "Kept:");
+    assert_eq!(kept.title, "Kept: Wait for the save in weekly-report");
+    assert_eq!(kept.body.as_deref(), Some("Kept: Wait for the save in weekly-report, 40% fewer steps over 10 runs"));
+    let md = std::fs::read_to_string(skills::skills_dir().join("weekly-report").join("SKILL.md")).unwrap();
+    assert!(md.contains("wait for the toast"), "kept: {md}");
+    let tagged = run_metrics::read_runs(&root).into_iter().filter(|m| m.version == trial.version).count();
+    assert_eq!(tagged, canary + control, "every trial run names its version");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn a_canary_with_more_steps_is_rolled_back_to_the_old_skill() {
+    let _g = crate::config::hold_test_config();
+    let (_pin, root, mut cabin, v1) = applied_trial("canary-rolled");
+    let (canary, _) = run_trial(&mut cabin, &root, &v1, 6, 5);
+    assert_eq!(canary, 10);
+    let note = trial_note(&cabin, "Rolled back:");
+    assert_eq!(note.title, "Rolled back: Wait for the save in weekly-report");
+    assert_eq!(note.body.as_deref(), Some("Rolled back: Wait for the save in weekly-report, 20% more steps over 10 runs"));
+    let md = std::fs::read_to_string(skills::skills_dir().join("weekly-report").join("SKILL.md")).unwrap();
+    assert!(!md.contains("wait for the toast") && md.contains("2. click Save"), "rolled back: {md}");
+    let now = cabin.skill_list.iter().find(|s| s.name == "weekly-report").unwrap();
+    assert_eq!(now.instructions.trim(), v1.instructions.trim(), "the cabin's list has the old steps");
+    let ledger = hx::ChangeLedger::load(&root);
+    let last = ledger.all().last().unwrap();
+    assert_eq!((last.op.as_str(), last.origin.as_str()), ("undo", "self_manage"));
+    assert_eq!(hx::read_versions(&root)[0].status, hx::VersionStatus::RolledBack);
+    let _ = std::fs::remove_dir_all(&root);
+}

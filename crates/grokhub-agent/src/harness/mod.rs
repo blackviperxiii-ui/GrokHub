@@ -59,6 +59,7 @@ mod approval;
 mod at_rest;
 mod audit;
 mod backend;
+mod canary;
 mod changes;
 mod consent;
 mod cua;
@@ -99,8 +100,12 @@ pub use cua::{
     CUA_DRIVER_TAG, CUA_DRIVER_VERSION, CUA_ENV_REMOVE, CUA_LINUX_ASSET, CUA_LINUX_SHA256, CUA_LINUX_ONLY_MSG,
     CUA_MISSING_MSG, CUA_OFF_MSG, CUA_PERMISSION_MODE, CUA_TOOLS,
 };
+pub use canary::{
+    diff_stat, judge, open_trial, pick_arm, read_versions, settle_trials, start_trial, versions_path, Judged, Metric,
+    Version, VersionStatus, CANARY_MAX_MS, CANARY_RUNS, CANARY_SHARE_PCT, VERSIONS_FILE,
+};
 pub use changes::{
-    accept_change, change_id, note_proposal_finding, content_hash, entry_id, findings_path, history_dir, ledger_path, read_scope_findings,
+    accept_change, kept_bytes, change_id, note_proposal_finding, content_hash, entry_id, findings_path, history_dir, ledger_path, read_scope_findings,
     record_change, record_skill_change, restore_change, restore_skill, scope_guard, skill_history_dir,
     skill_ledger_path, take_self_changes, undo_change, undo_skill_change, Change, ChangeKind, ChangeLedger,
     ChangeOp, ChangeTarget, Reverted, ScopeFinding, SkillTarget, UndoAsk, AUTOMATION_LEDGER_FILE, CHANGES_DIR,
