@@ -459,6 +459,9 @@ pub struct AppConfig {
     /// the cabin rewrites it after likes and dislikes. Empty means our default.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub feed_instructions: String,
+    /// Settings → Pulse → Sources: which free sources run and what they follow.
+    #[serde(default)]
+    pub pulse_sources: grokhub_core::pulse_sources::SourceSettings,
     /// Settings → Behavior. The old card deck over the empty chat. Pulse holds
     /// the cards now, so it is off unless turned back on.
     #[serde(default)]
@@ -634,6 +637,7 @@ impl Default for AppConfig {
             digest_brief: String::new(),
             feed_pulse: FeedPulse::default(),
             feed_instructions: String::new(),
+            pulse_sources: Default::default(),
             home_deck: false,
             memory_backend: grokhub_core::amr::MemoryBackend::Legacy,
         }

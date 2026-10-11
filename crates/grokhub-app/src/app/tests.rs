@@ -15439,6 +15439,7 @@ fn quiet_cabin() -> Cabin {
         market: Default::default(),
         picker: Default::default(),
         interests: Default::default(),
+        sources: Default::default(),
         settings_back: super::Nav::Chat,
         imagine_aspect: 0,
         imagine_quality: false,
@@ -16897,6 +16898,23 @@ fn every_home_card_the_cabin_posts_names_its_item() {
     let _: Vec<serde_json::Value> = config::load_json(&root.join("projects.json"), config::JSON_STORE_CAP);
     cabin.poll_recovered_stores();
     rows.push(("poll_recovered_stores", posted_card(&cabin, "poll_recovered_stores", |c| c.source_id.starts_with("recovered:")), "Projects list"));
+    cabin.post_source_run(super::pulse_sources_ui::SourceRun {
+        items: vec![grokhub_core::pulse_sources::SourceItem {
+            title: "Rust 1.99 released".into(),
+            url: "https://blog.rust-lang.org/2026/10/09/Rust-1.99.html".into(),
+            kind: grokhub_core::pulse_sources::SourceKind::HackerNews,
+            source_name: "Hacker News".into(),
+            published_ms: now,
+            summary: "812 points, 301 comments on Hacker News.".into(),
+            image: None,
+            topic: Some("Rust".into()),
+        }],
+        errors: Vec::new(),
+        fetched: 1,
+        asked: 1,
+        at_ms: now,
+    });
+    rows.push(("post_source_run", posted_card(&cabin, "post_source_run", |c| c.source_id.starts_with("source:")), "Rust 1.99"));
     rows.push(("model_wait_card", super::model_wait_ui::model_wait_card(&["grok-4.6".into()], "grok-4.6", "9:05 PM", "dream time", now), "grok-4.6"));
     // Sites a test cabin can't reach without a live run: the card from the same call.
     let guard_text = "Auto was succeeding less on everyday chat, so it now starts that work one step higher.";

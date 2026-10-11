@@ -176,6 +176,7 @@ mod connectors_ui;
 mod marketplace_ui;
 mod personality_ui;
 mod interests_ui;
+mod pulse_sources_ui;
 mod harness_ui;
 mod inbox_ui;
 mod episode_ui;
@@ -667,6 +668,8 @@ pub struct Cabin {
     picker: personality_ui::PickerState,
     /// Settings → Pulse: the interest profile and its Add box.
     interests: interests_ui::InterestsState,
+    /// Free Pulse sources: the running fetch and Settings drafts.
+    sources: pulse_sources_ui::SourcesState,
     settings_back: Nav,
     imagine_aspect: u8,
     imagine_quality: bool,
@@ -1242,6 +1245,7 @@ impl Cabin {
             market: Default::default(),
             picker: Default::default(),
             interests: Default::default(),
+            sources: Default::default(),
             settings_back: Nav::Chat,
             imagine_aspect: 0,
             imagine_quality: true,
@@ -1680,6 +1684,7 @@ impl Cabin {
             market: Default::default(),
             picker: Default::default(),
             interests: Default::default(),
+            sources: Default::default(),
             settings_back: Nav::Chat,
             imagine_aspect: 0,
             imagine_quality: false,
@@ -3377,6 +3382,7 @@ impl Cabin {
                     self.tick_feed_pulse();
                     if !halted {
                         self.follow_feed_lookup();
+                        self.follow_source_fetch();
                     }
                     self.release_situation_ping();
                     if !halted {
@@ -4875,6 +4881,7 @@ impl eframe::App for Cabin {
         self.poll_review();
         self.poll_self_review();
         self.poll_digest_lookup();
+        self.poll_source_fetch();
         self.window_focused = ctx.input(|i| i.viewport().focused.unwrap_or(false));
         self.poll_greeting();
         self.poll_ideas();
