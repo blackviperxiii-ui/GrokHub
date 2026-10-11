@@ -344,69 +344,37 @@ pub fn update_cmds_for_host(source: Option<&Path>, windows: bool) -> Result<Vec<
     update_cmds_for_host_in(source, windows, Channel::Stable)
 }
 
-/// A stable Windows host without a usable clone takes the latest release zip.
-/// Beta never does: the zip is a stable release.
+/// An install without a usable clone takes its channel's latest signed
+/// release: stable the latest release, beta the newest beta pre-release (on
+/// Windows, also when a leftover clone is on the wrong branch). A clone keeps
+/// building from source, the developer path.
 pub fn update_cmds_for_host_in(
     source: Option<&Path>,
     windows: bool,
     channel: Channel,
 ) -> Result<Vec<String>, String> {
-    // The release zip is stable; a beta install must never fall back to it.
-    let zip_ok = windows && channel == Channel::Stable;
     match source {
         Some(src) => match update_cmds_on(src, windows, channel) {
             Ok(cmds) => Ok(cmds),
-            Err(_) if zip_ok => Ok(windows_release_update_cmds()),
+            Err(_) if windows => Ok(release_update_cmds()),
             Err(e) => Err(e),
         },
-        None if zip_ok => Ok(windows_release_update_cmds()),
-        None => Err("GrokHub can't find its source folder (~/GrokHub or ~/.config/GrokHub/source).".into()),
+        None => Ok(release_update_cmds()),
     }
 }
 
-pub fn windows_release_update_cmds() -> Vec<String> {
-    vec![windows_release_overlay_cmd().into()]
-}
-
-/// Embedded so a Setup.exe install can update without a source tree.
-pub fn windows_release_overlay_cmd() -> &'static str {
-    concat!(
-        "$ErrorActionPreference='Stop'; ",
-        "[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12; ",
-        "$dest = Join-Path $env:LOCALAPPDATA 'Programs\\GrokHub'; ",
-        "New-Item -ItemType Directory -Path $dest -Force | Out-Null; ",
-        "$rel = Invoke-RestMethod -Uri 'https://api.github.com/repos/blackviperxiii-ui/GrokHub/releases/latest' -Headers @{ 'User-Agent'='GrokHub' } -UseBasicParsing; ",
-        "$asset = @($rel.assets | Where-Object { $_.name -match '^grokhub-windows-v[0-9]+\\.[0-9]+\\.[0-9]+\\.zip$' })[0]; ",
-        "if (-not $asset) { throw 'no grokhub-windows zip on latest GitHub Release' }; ",
-        "$url = [string]$asset.browser_download_url; ",
-        "if ($url -notmatch '^https://(github\\.com/blackviperxiii-ui/GrokHub/releases/download/|objects\\.githubusercontent\\.com/|release-assets\\.githubusercontent\\.com/)') { throw 'unexpected download URL' }; ",
-        "if ($url -notlike ('*/' + $asset.name)) { throw 'download URL name mismatch' }; ",
-        "$zip = Join-Path $env:TEMP $asset.name; ",
-        "Invoke-WebRequest -Uri $url -OutFile $zip -UseBasicParsing; ",
-        "$stage = Join-Path $env:TEMP 'grokhub-windows-overlay'; ",
-        "if (Test-Path $stage) { Remove-Item $stage -Recurse -Force }; ",
-        "Expand-Archive -Path $zip -DestinationPath $stage -Force; ",
-        "$stageFull = (Resolve-Path $stage).Path; ",
-        "$under = { param($p) ([IO.Path]::GetFullPath($p)).StartsWith(($stageFull.TrimEnd('\\') + '\\'), [StringComparison]::OrdinalIgnoreCase) }; ",
-        "$exe = Get-ChildItem -Path $stage -Recurse -File -Filter grokhub.exe | Where-Object { & $under $_.FullName } | Select-Object -First 1; ",
-        "$hub = Get-ChildItem -Path $stage -Recurse -File -Filter grokhub-hub.exe | Where-Object { & $under $_.FullName } | Select-Object -First 1; ",
-        "if (-not $exe -or -not $hub) { throw 'zip missing grokhub.exe' }; ",
-        "function Overlay-Locked($from, $to) { ",
-        "$old = \"$to.old\"; ",
-        "if (Test-Path $old) { Remove-Item $old -Force -ErrorAction SilentlyContinue }; ",
-        "if (Test-Path $to) { try { Copy-Item $from $to -Force; return } catch { Rename-Item $to $old -Force } }; ",
-        "Copy-Item $from $to -Force }; ",
-        "Overlay-Locked $exe.FullName (Join-Path $dest 'grokhub.exe'); ",
-        "Overlay-Locked $hub.FullName (Join-Path $dest 'grokhub-hub.exe'); ",
-        "Write-Output \"overlay $dest\""
-    )
+/// One step the cabin runs itself: download this host's asset from the
+/// latest release, check it against the signed `SHA256SUMS`
+/// ([`crate::release_verify`]), then swap the binaries in.
+pub fn release_update_cmds() -> Vec<String> {
+    vec![crate::release_verify::RELEASE_INSTALL_STEP.into()]
 }
 
 pub fn settings_update_note() -> &'static str {
     if cfg!(windows) {
-        "Downloads the latest Windows zip from GitHub into %LOCALAPPDATA%\\Programs\\GrokHub. A source clone on main overlays with install-windows.ps1 instead. Does not wipe %APPDATA%\\GrokHub."
+        "Downloads the latest Windows release from GitHub (the newest beta pre-release on Beta), checks it against the signed SHA256SUMS, and swaps it into %LOCALAPPDATA%\\Programs\\GrokHub. A source clone on main overlays with install-windows.ps1 instead. Does not wipe %APPDATA%\\GrokHub."
     } else {
-        "Pulls origin/main and overlays the GUI. The clone must be on main. Does not wipe ~/.config/GrokHub."
+        "A source clone pulls its branch and builds. Without a clone, downloads the latest release from GitHub (the newest beta pre-release on Beta) and checks it against the signed SHA256SUMS. Does not wipe ~/.config/GrokHub."
     }
 }
 
@@ -533,8 +501,8 @@ pub fn cabin_overlay_step(cmd: &str) -> bool {
         || cmd.contains("remote add")
         || cmd.contains("install.sh")
         || cmd.contains("install-windows.ps1")
-        || cmd.contains("releases/latest")
-        || cmd.contains("grokhub-windows-v")
+        || cmd == crate::release_verify::RELEASE_INSTALL_STEP
+        || crate::release_verify::parse_release_switch_step(cmd).is_some()
 }
 
 fn overlay_install_cmd(source: &Path, src_quoted: &str, windows: bool) -> String {
@@ -565,8 +533,13 @@ pub fn update_plan_steps(cmds: Vec<String>) -> Vec<HostPlanStep> {
                 "fast-forward origin/main — config stays".into()
             } else if cmd.contains("remote set-url") || cmd.contains("remote add") {
                 "point origin at GitHub — Cursor Origin is not live yet".into()
-            } else if cmd.contains("releases/latest") || cmd.contains("grokhub-windows-v") {
-                "download latest Windows cabin from GitHub — does not wipe config".into()
+            } else if cmd == crate::release_verify::RELEASE_INSTALL_STEP {
+                "download the latest release from GitHub, check its signed SHA256SUMS, swap it in — does not wipe config".into()
+            } else if let Some(target) = crate::release_verify::parse_release_switch_step(&cmd) {
+                match target {
+                    Channel::Beta => "download the newest beta pre-release, check its signed SHA256SUMS, swap it in, then switch to beta — does not wipe config".into(),
+                    Channel::Stable => "download the latest stable release, check its signed SHA256SUMS, swap it in, then switch to stable — does not wipe config".into(),
+                }
             } else if cmd.contains("install.sh") || cmd.contains("install-windows.ps1") {
                 if cfg!(windows) {
                     "overlay %LOCALAPPDATA%\\Programs\\GrokHub — does not wipe config".into()
@@ -608,8 +581,13 @@ pub fn update_step_label(cmd: &str) -> &'static str {
         "Pulling origin/main…"
     } else if cmd.contains("remote set-url") || cmd.contains("remote add") {
         "Retargeting origin…"
-    } else if cmd.contains("releases/latest") || cmd.contains("grokhub-windows-v") {
-        "Downloading latest Windows cabin…"
+    } else if cmd == crate::release_verify::RELEASE_INSTALL_STEP {
+        "Downloading the verified release…"
+    } else if let Some(target) = crate::release_verify::parse_release_switch_step(cmd) {
+        match target {
+            Channel::Beta => "Downloading the beta release…",
+            Channel::Stable => "Downloading the stable release…",
+        }
     } else if cmd.contains("install.sh") || cmd.contains("install-windows.ps1") {
         "Installing overlay…"
     } else {
@@ -908,13 +886,12 @@ mod tests {
                 host_quote_for(&root.display().to_string(), false)
             )
         );
-        assert_eq!(
-            update_cmds_for_host_in(None, true, Channel::Beta).unwrap_err(),
-            "GrokHub can't find its source folder (~/GrokHub or ~/.config/GrokHub/source)."
-        );
+        // No clone: beta takes its newest pre-release, on either OS.
+        assert_eq!(update_cmds_for_host_in(None, true, Channel::Beta).unwrap(), release_update_cmds());
+        assert_eq!(update_cmds_for_host_in(None, false, Channel::Beta).unwrap(), release_update_cmds());
         assert_eq!(
             update_cmds_for_host_in(None, true, Channel::Stable).unwrap(),
-            windows_release_update_cmds()
+            release_update_cmds()
         );
         // A stable receipt on the same beta clone refuses instead of pulling main into it.
         assert_eq!(
@@ -1180,8 +1157,8 @@ mod tests {
             "Installing overlay…"
         );
         assert_eq!(
-            update_step_label(windows_release_overlay_cmd()),
-            "Downloading latest Windows cabin…"
+            update_step_label(crate::release_verify::RELEASE_INSTALL_STEP),
+            "Downloading the verified release…"
         );
         assert_eq!(update_step_label("echo hi"), "Updating…");
         assert_eq!(
@@ -1272,12 +1249,8 @@ mod tests {
             "a leftover cursor/* branch is not a product checkout"
         );
         let win = update_cmds_for_host(Some(&root), true).expect("Setup cabin must still Update");
-        assert_eq!(win, windows_release_update_cmds());
-        assert!(
-            win[0].contains("releases/latest") && win[0].contains("grokhub-windows-v"),
-            "{win:?}"
-        );
-        assert_eq!(win.len(), 1, "{win:?}");
+        assert_eq!(win, release_update_cmds());
+        assert_eq!(win, vec!["grokhub: install the verified release".to_string()]);
         assert!(!update_wipes_config(&win));
         assert!(
             !win.iter()
@@ -1304,63 +1277,41 @@ mod tests {
     }
 
     #[test]
-    fn windows_can_update_without_a_clone() {
+    fn an_install_without_a_clone_updates_from_the_verified_release() {
+        let release = vec!["grokhub: install the verified release".to_string()];
+        assert_eq!(update_cmds_for_host(None, true).expect("windows host, no clone"), release);
+        assert_eq!(update_cmds_for_host(None, false).expect("linux tarball install, no clone"), release);
+        assert_eq!(update_cmds_for(None).expect("this host, no clone"), release);
+        assert!(!update_wipes_config(&release));
+        let plan = update_plan_steps(release.clone());
         assert_eq!(
-            update_cmds_for_host(None, true).expect("windows host, no clone"),
-            windows_release_update_cmds()
+            plan[0].explain,
+            "download the latest release from GitHub, check its signed SHA256SUMS, swap it in — does not wipe config"
         );
-        let none = update_cmds_for(None);
-        #[cfg(windows)]
-        {
-            let cmds = none.expect("windows release plan");
-            assert!(
-                cmds[0].contains("releases/latest") && cmds[0].contains("grokhub-windows-v"),
-                "{cmds:?}"
-            );
-            assert_eq!(cmds.len(), 1, "the zip overlay is the whole plan: {cmds:?}");
-            assert!(!update_wipes_config(&cmds));
-            let plan = update_plan_steps(cmds);
-            assert!(
-                plan[0].explain.contains("GitHub") && plan[0].explain.contains("Windows"),
-                "{plan:?}"
-            );
-        }
-        #[cfg(unix)]
-        {
-            let err = none.unwrap_err();
-            assert!(
-                err.contains("source") || err.contains("GROKHUB_SRC"),
-                "{err}"
-            );
-        }
-        let rel = windows_release_overlay_cmd();
+        let rel = crate::release_verify::RELEASE_INSTALL_STEP;
         assert!(
             crate::forbidden_reason(rel).is_none(),
-            "Windows zip overlay must be allowed as a host command: {:?}",
+            "the release step must pass the host command guard: {:?}",
             crate::forbidden_reason(rel)
-        );
-        assert!(
-            rel.contains("api.github.com/repos/blackviperxiii-ui/GrokHub/releases/latest")
-                && rel.contains("grokhub-windows-v")
-                && rel.contains("Tls12")
-                && rel.contains("UseBasicParsing")
-                && rel.contains("GrokHub/releases/download")
-                && rel.contains("Overlay-Locked")
-                && rel.contains("Rename-Item")
-                && rel.contains("LOCALAPPDATA")
-                && rel.contains("Programs\\GrokHub")
-                && rel.contains("Expand-Archive")
-                && rel.contains("grokhub.exe")
-                && !rel.contains("cargo build")
-                && !rel.contains("GROK_CHANNEL=alpha"),
-            "{rel}"
         );
         let install_win = include_str!("../../../scripts/install-windows.ps1");
         assert!(
             install_win.contains("Overlay-Locked") && install_win.contains("Rename-Item"),
             "clone overlay must replace a running grokhub.exe: {install_win}"
         );
-        assert_eq!(windows_release_update_cmds(), vec![rel.to_string()]);
+        assert_eq!(release_update_cmds(), vec![rel.to_string()]);
+        for target in [Channel::Beta, Channel::Stable] {
+            let switch = crate::release_verify::release_switch_step(target);
+            assert!(crate::forbidden_reason(&switch).is_none(), "{switch}");
+            assert!(cabin_overlay_step(&switch), "{switch}");
+            assert!(!update_wipes_config(std::slice::from_ref(&switch)), "{switch}");
+        }
+        assert_eq!(update_step_label("grokhub: switch to the beta release"), "Downloading the beta release…");
+        assert_eq!(
+            update_plan_steps(vec!["grokhub: switch to the stable release".into()])[0].explain,
+            "download the latest stable release, check its signed SHA256SUMS, swap it in, then switch to stable — does not wipe config"
+        );
+        assert!(settings_update_note().contains("SHA256SUMS"), "{}", settings_update_note());
         assert!(!settings_update_note().contains("grok"), "{}", settings_update_note());
         let win_install = include_str!("update.rs")
             .split("fn overlay_install_cmd(")

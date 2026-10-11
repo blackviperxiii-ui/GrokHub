@@ -42,6 +42,7 @@ mod startup;
 mod threads;
 mod tray;
 mod window;
+mod release_update;
 mod update;
 mod xai;
 #[cfg(windows)]
@@ -230,9 +231,6 @@ fn run_update_cli() {
             std::process::exit(1);
         }
     };
-    if let Some(note) = update::stray_beta_receipt_note() {
-        eprintln!("{note}");
-    }
     if grokhub_core::update_wipes_config(&cmds) {
         eprintln!("refusing an update that would wipe config");
         std::process::exit(1);

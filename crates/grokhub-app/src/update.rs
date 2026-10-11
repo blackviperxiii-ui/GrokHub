@@ -6,7 +6,7 @@ use grokhub_core::{
     update_fail_hint,
     restart_acts,
     restart_bin, systemd_user_restart_args, systemd_user_stop_args, update_progress_pct,
-    update_step_label, update_wipes_config, AutoOffStep, Channel, RestartAct, CHANNEL_AUTO_OFF_NOTE,
+    update_step_label, update_wipes_config, AutoOffStep, Channel, RestartAct,
     CHANNEL_BETA_SINCE, CHANNEL_RECEIPT, GITHUB_LATEST_API,
     TEXT_FILE_CAP,
 };
@@ -63,38 +63,17 @@ pub fn remember_source(dir: &std::path::Path) {
 }
 
 /// The install channel from the `channel` receipt that `scripts/install.sh`
-/// writes next to `source`. Missing or unknown reads as stable. On Windows a
-/// stray `beta` receipt reads as stable too: beta is Linux-only (built from source).
+/// or a Labs switch writes next to `source`. Missing or unknown reads as
+/// stable. Beta is real on every OS: without a clone it is the newest beta
+/// pre-release.
 pub fn installed_channel() -> Channel {
-    channel_for_host(receipt_channel(), cfg!(windows))
+    receipt_channel()
 }
 
-/// The raw receipt, before the Windows guard.
 fn receipt_channel() -> Channel {
     std::fs::read_to_string(config::config_dir().join(CHANNEL_RECEIPT))
         .map(|t| Channel::from_receipt(&t))
         .unwrap_or_default()
-}
-
-/// Windows has no beta channel yet, so any receipt there means stable.
-pub fn channel_for_host(receipt: Channel, windows: bool) -> Channel {
-    if windows {
-        Channel::Stable
-    } else {
-        receipt
-    }
-}
-
-pub const BETA_LINUX_ONLY_NOTE: &str = "Beta is Linux-only for now, so GrokHub updated to stable.";
-
-/// Update note for a stray beta receipt on Windows (Update runs as stable).
-pub fn beta_linux_only_note(receipt: Channel, windows: bool) -> Option<&'static str> {
-    (windows && receipt == Channel::Beta).then_some(BETA_LINUX_ONLY_NOTE)
-}
-
-/// [`beta_linux_only_note`] for this host and its receipt.
-pub fn stray_beta_receipt_note() -> Option<&'static str> {
-    beta_linux_only_note(receipt_channel(), cfg!(windows))
 }
 
 /// The channel this binary was built for (`GROKHUB_BUILD_CHANNEL` from build.rs).
@@ -152,8 +131,10 @@ pub fn channel_windows_note() -> &'static str {
     CHANNEL_WINDOWS_NOTE
 }
 
+/// Linux only, like auto-off itself (it reads the clone's branches).
+#[cfg(not(windows))]
 pub fn channel_auto_off_note() -> &'static str {
-    CHANNEL_AUTO_OFF_NOTE
+    grokhub_core::CHANNEL_AUTO_OFF_NOTE
 }
 
 /// Write the install channel receipt (`channel` next to `source`). A channel
@@ -219,9 +200,32 @@ pub fn try_auto_off_beta_channel(source: Option<&std::path::Path>) -> Option<Str
     )
 }
 
-/// A Labs channel switch runs `install.sh --user --channel …`.
+/// A Labs channel switch: `install.sh --user --channel …` from a clone, or
+/// the release switch step without one.
 pub fn is_channel_switch_cmd(cmd: &str) -> bool {
     cmd.contains("install.sh") && cmd.contains("--channel ")
+        || grokhub_core::release_verify::parse_release_switch_step(cmd).is_some()
+}
+
+/// A channel switch without a source clone: install `target`'s verified
+/// release; the runner writes the receipt only after it lands.
+pub fn release_channel_switch_cmds(target: Channel) -> Vec<String> {
+    vec![grokhub_core::release_verify::release_switch_step(target)]
+}
+
+/// Runs the release step for the plan runner: `install` is the installed
+/// channel's release, a switch installs its target and then writes the
+/// receipt. `None` for any other step.
+fn run_release_step(cmd: &str) -> Option<String> {
+    use crate::release_update::{install_release, release_step_receipt_for};
+    if cmd == grokhub_core::release_verify::RELEASE_INSTALL_STEP {
+        return Some(release_step_receipt_for(cmd, install_release(installed_channel(), cfg!(windows))));
+    }
+    let target = grokhub_core::release_verify::parse_release_switch_step(cmd)?;
+    let result = install_release(target, cfg!(windows)).and_then(|line| {
+        write_installed_channel(target).map(|()| format!("{line} Now on the {} channel.", target.as_str()))
+    });
+    Some(release_step_receipt_for(cmd, result))
 }
 
 /// Host timeout per update step. A channel switch can be a cold release build,
@@ -311,7 +315,9 @@ pub fn log_update_attempt(channel: Channel, cmds: &[String], ok: bool, output: &
 /// host output (dirty clone, Rust too old, no clone, clone on the other
 /// branch, build failed), then where the full log is.
 pub fn update_failure_status(output: &str, channel_switch: bool, log: &std::path::Path) -> String {
-    let hint = if channel_switch {
+    let hint = if let Some(line) = grokhub_core::release_verify::refusal_line(output) {
+        line
+    } else if channel_switch {
         channel_switch_fail_hint(output)
     } else {
         update_fail_hint(output)
@@ -352,7 +358,10 @@ pub fn run_update_cmds_with_progress(
             return Err(why.to_string());
         }
         on_progress(update_progress_pct(i, total), update_step_label(c));
-        let chunk = run_host(c, host_timeout_for(c));
+        let chunk = match run_release_step(c) {
+            Some(receipt) => receipt,
+            None => run_host(c, host_timeout_for(c)),
+        };
         out.push_str(&chunk);
         out.push('\n');
         if host_receipt_failed(&chunk) {
@@ -576,7 +585,7 @@ mod tests {
         fs::write(cfg.join(CHANNEL_RECEIPT), Channel::Beta.receipt()).unwrap();
         assert_eq!(fs::read_to_string(cfg.join("channel")).unwrap(), "beta\n");
         assert_eq!(receipt_channel(), Channel::Beta);
-        assert_eq!(installed_channel(), channel_for_host(Channel::Beta, cfg!(windows)));
+        assert_eq!(installed_channel(), Channel::Beta);
         let root = cfg.join("src");
         fs::create_dir_all(root.join("scripts")).unwrap();
         fs::create_dir_all(root.join("crates/grokhub-app")).unwrap();
@@ -995,7 +1004,8 @@ mod tests {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         assert!(try_auto_off_beta_channel(Some(&root)).is_none());
         assert!(try_auto_off_beta_channel(None).is_none());
-        assert_eq!(channel_auto_off_note(), CHANNEL_AUTO_OFF_NOTE);
+        #[cfg(not(windows))]
+        assert_eq!(channel_auto_off_note(), grokhub_core::CHANNEL_AUTO_OFF_NOTE);
     }
 
     #[test]
@@ -1198,35 +1208,31 @@ mod tests {
     }
 
     #[test]
-    fn windows_reads_a_stray_beta_receipt_as_stable_and_says_beta_is_linux_only() {
-        assert_eq!(channel_for_host(Channel::Beta, true), Channel::Stable);
-        assert_eq!(channel_for_host(Channel::Stable, true), Channel::Stable);
-        assert_eq!(channel_for_host(Channel::Beta, false), Channel::Beta);
-        assert_eq!(
-            beta_linux_only_note(Channel::Beta, true),
-            Some("Beta is Linux-only for now, so GrokHub updated to stable.")
-        );
-        assert_eq!(beta_linux_only_note(Channel::Stable, true), None);
-        assert_eq!(beta_linux_only_note(Channel::Beta, false), None);
+    fn a_beta_receipt_is_beta_on_every_os_and_switches_without_a_clone_go_through_the_release() {
         let _g = crate::config::hold_test_config();
-        let cfg = crate::config::test_config_root("channel-windows-guard");
+        let cfg = crate::config::test_config_root("channel-every-os");
         let _ = fs::remove_dir_all(&cfg);
         let _pin = crate::config::TestConfigDir::set(cfg.clone());
         fs::create_dir_all(&cfg).unwrap();
         fs::write(cfg.join(CHANNEL_RECEIPT), Channel::Beta.receipt()).unwrap();
-        if cfg!(windows) {
-            assert_eq!(installed_channel(), Channel::Stable);
-            assert_eq!(stray_beta_receipt_note(), Some(BETA_LINUX_ONLY_NOTE));
-        } else {
-            assert_eq!(installed_channel(), Channel::Beta);
-            assert_eq!(stray_beta_receipt_note(), None);
-        }
+        assert_eq!(installed_channel(), Channel::Beta);
         let _ = fs::remove_dir_all(&cfg);
-        // Update shows the note instead of failing on a stray Windows receipt.
-        let app = include_str!("app/mod.rs");
-        assert!(app.contains("crate::update::stray_beta_receipt_note()"));
-        let main = include_str!("main.rs");
-        assert!(main.contains("update::stray_beta_receipt_note()"));
+        assert_eq!(release_channel_switch_cmds(Channel::Beta), vec!["grokhub: switch to the beta release".to_string()]);
+        assert_eq!(release_channel_switch_cmds(Channel::Stable), vec!["grokhub: switch to the stable release".to_string()]);
+        assert!(is_channel_switch_cmd("grokhub: switch to the beta release"));
+        assert!(!is_channel_switch_cmd(grokhub_core::release_verify::RELEASE_INSTALL_STEP));
+        assert_eq!(run_release_step("git -C /src pull --ff-only origin beta"), None);
+        // A refused switch names why, not the generic switch failure.
+        let refused = "$ grokhub: switch to the beta release\nexit 1\nUpdate 2.13.1-beta (29e8ac5) not installed: the release has no SHA256SUMS";
+        assert_eq!(
+            update_failure_status(refused, true, std::path::Path::new("/u/update.log")),
+            "Update 2.13.1-beta (29e8ac5) not installed: the release has no SHA256SUMS. Details: /u/update.log"
+        );
+        // The receipt is written only after the install lands.
+        let body = fn_body(include_str!("update.rs"), "fn run_release_step(");
+        let install = body.find("install_release(target").expect("installs the target");
+        let receipt = body.find("write_installed_channel(target)").expect("writes the receipt");
+        assert!(install < receipt && body.contains(".and_then("), "{body}");
     }
 
     #[test]
@@ -1261,6 +1267,11 @@ mod tests {
         assert_eq!(
             update_failure_status("exit 1 · 5ms\nfatal: unable to access", false, log),
             "Update failed. Details: /home/u/.config/GrokHub/update.log"
+        );
+        let refused = "$ grokhub: install the verified release\nexit 1\nUpdate 2.13.2 not installed: the download's checksum didn't match";
+        assert_eq!(
+            update_failure_status(refused, false, log),
+            "Update 2.13.2 not installed: the download's checksum didn't match. Details: /home/u/.config/GrokHub/update.log"
         );
         assert_eq!(
             update_failure_status("exit 1 · 5ms\nfatal: unable to access", true, log),
@@ -1338,10 +1349,15 @@ mod tests {
             "maybe_auto_off_beta_channel must return first on Windows"
         );
         let settings = include_str!("app/settings.rs");
+        let settings = settings.replace("\r\n", "\n");
         assert!(
-            settings.contains("ui.add_enabled_ui(false, |ui| {")
+            settings.contains("#[cfg(windows)]\n                                                                        self.queue_release_channel_switch(target);")
                 && settings.contains("crate::update::channel_windows_note()"),
-            "Windows Labs keeps the Beta toggle disabled with its note"
+            "Windows Labs switches through the signed releases and shows its note"
+        );
+        assert!(
+            settings.contains("#[cfg(not(windows))]\n                                                                crate::cards::settings_note(\n                                                                    ui,\n                                                                    crate::update::channel_auto_off_note(),"),
+            "the auto-off note is Linux only, like auto-off"
         );
     }
 }

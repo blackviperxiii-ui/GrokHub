@@ -73,6 +73,7 @@ pub mod interests;
 pub mod personality;
 pub mod pulse;
 pub mod pulse_sources;
+pub mod release_verify;
 pub mod recovered;
 pub mod run_metrics;
 pub mod recipe;
@@ -487,7 +488,7 @@ pub use update::{
     systemd_user_stop_args, update_check_due, update_chip_label, update_cmds, update_cmds_for,
     update_cmds_for_host, update_cmds_for_host_in, update_cmds_in, update_hint,
     update_plan_steps, update_progress_pct, update_step_label, update_wipes_config,
-    walk_up_source, windows_release_overlay_cmd, windows_release_update_cmds, OverlayUpdateView,
+    walk_up_source, release_update_cmds, OverlayUpdateView,
     RestartAct, UpdatePending, GITHUB_LATEST_API, GITHUB_REMOTE_URL, ORIGIN_REMOTE_URL,
     UPDATE_CHECK_EVERY,
 };
