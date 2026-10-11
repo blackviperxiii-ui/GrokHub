@@ -17008,10 +17008,14 @@ fn corrupt_stores_load_defaults_keep_a_copy_and_post_a_named_card() {
     assert_eq!(crate::secrets::load().api_key, "", "keys fell back to empty");
     assert!(crate::feed::load().is_empty(), "the feed fell back to empty");
     assert!(grokhub_core::load_hub_state(&config::hub_state_path()).is_none());
+    // Checked before the cards post: posting saves a fresh updates.json on a
+    // background thread, which could land before a later check.
+    for (name, _, _) in files {
+        assert!(!root.join(name).exists(), "{name} was moved aside");
+    }
     cabin.poll_recovered_stores();
 
     for (name, bytes, label) in files {
-        assert!(!root.join(name).exists(), "{name} was moved aside");
         let copies: Vec<std::path::PathBuf> = std::fs::read_dir(&root)
             .unwrap()
             .flatten()
