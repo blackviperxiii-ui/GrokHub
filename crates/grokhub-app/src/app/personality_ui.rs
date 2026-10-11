@@ -1,6 +1,7 @@
-//! Settings → Personality (a card per preset, with Try it) and the quick switch in the
-//! chat header. A chat can pick its own personality; "Make default" saves that pick as
-//! the default for every chat. Switching is silent apart from the status line.
+//! Settings → Personality (a card per preset, with Try it, Duplicate and an editor for
+//! the user's own) and the quick switch in the chat header. A chat can pick its own
+//! personality; "Make default" saves that pick as the default for every chat. Switching
+//! is silent apart from the status line. Custom presets live in `{config}/personalities/`.
 
 use super::*;
 use grokhub_core::personality::{self, Personality};
@@ -13,12 +14,37 @@ pub(super) enum TryState {
     Failed(String),
 }
 
-/// The one "Try it" preview in flight or on screen.
+/// Settings → Personality state: the presets on disk, the one "Try it" preview, and the
+/// custom preset being edited.
 #[derive(Default)]
-pub(super) struct TryVoice {
+pub(super) struct PickerState {
     /// The preset id and what its card shows.
     pub shown: Option<(String, TryState)>,
     pub rx: Option<mpsc::Receiver<(String, Result<String, String>)>>,
+    /// Built-ins, then the user's own. Read when Settings or the switch first needs them
+    /// and again after every save or delete.
+    pub presets: Vec<Personality>,
+    /// Custom files that could not be used, each naming the file and why.
+    pub problems: Vec<String>,
+    pub loaded: bool,
+    pub draft: Option<Draft>,
+}
+
+/// A custom preset open in the editor.
+#[derive(Debug, Clone, PartialEq)]
+pub(super) struct Draft {
+    /// As it is on disk; Reset goes back to this.
+    pub saved: Personality,
+    pub edit: Personality,
+    /// Why the last Save was refused.
+    pub error: String,
+    /// Delete was clicked once; the second click deletes.
+    pub confirm_delete: bool,
+}
+
+/// The user's own presets.
+pub(super) fn presets_dir() -> std::path::PathBuf {
+    crate::config::config_dir().join("personalities")
 }
 
 /// How a preset id is stored: the default voice is an empty field.
@@ -66,6 +92,31 @@ impl Cabin {
         shown_id(id).to_string()
     }
 
+    /// The preset the chat being answered uses, custom ones included.
+    pub(super) fn chat_personality(&self) -> Personality {
+        personality::lookup(&presets_dir(), &self.personality_id())
+    }
+
+    /// The TTS voice for spoken replies: the chat's personality's voice hint when it names
+    /// a voice xAI has, else the default voice.
+    pub(super) fn speech_voice(&self) -> &'static str {
+        grokhub_core::tts_voice(self.chat_personality().voice_hint.as_deref())
+    }
+
+    fn reload_presets(&mut self) {
+        let (presets, problems) = personality::load_all(&presets_dir());
+        self.picker.presets = presets;
+        self.picker.problems = problems;
+        self.picker.loaded = true;
+    }
+
+    fn presets_now(&mut self) -> Vec<Personality> {
+        if !self.picker.loaded {
+            self.reload_presets();
+        }
+        self.picker.presets.clone()
+    }
+
     /// The personality the open chat shows in its header.
     fn open_chat_personality(&self) -> String {
         let own = self
@@ -83,7 +134,7 @@ impl Cabin {
 
     /// Settings: the default for every chat that has not picked its own.
     pub(super) fn set_default_personality(&mut self, id: &str) {
-        let p = personality::builtin(id);
+        let p = personality::lookup(&presets_dir(), id);
         self.cfg.personality = stored_id(&p.id);
         self.persist_cfg();
         self.status = default_note(&p);
@@ -91,7 +142,7 @@ impl Cabin {
 
     /// Chat header: this chat only. Picking the default's own voice clears the override.
     pub(super) fn set_chat_personality(&mut self, id: &str) {
-        let p = personality::builtin(id);
+        let p = personality::lookup(&presets_dir(), id);
         let own = if stored_id(&p.id) == self.cfg.personality.trim() {
             String::new()
         } else {
@@ -115,42 +166,137 @@ impl Cabin {
         self.set_default_personality(&id);
     }
 
+    /// Duplicate: a new custom preset copied from `id`, saved at once and opened in the editor.
+    pub(super) fn duplicate_personality(&mut self, id: &str) {
+        let presets = self.presets_now();
+        let copy = personality::duplicate(&personality::find(&presets, id), &presets);
+        match personality::save_custom(&presets_dir(), &copy) {
+            Ok(_) => {
+                self.reload_presets();
+                self.status = format!("Made {}", copy.name);
+                self.picker.draft = Some(Draft {
+                    saved: copy.clone(),
+                    edit: copy,
+                    error: String::new(),
+                    confirm_delete: false,
+                });
+            }
+            Err(err) => self.status = err,
+        }
+    }
+
+    pub(super) fn edit_personality(&mut self, id: &str) {
+        let p = personality::find(&self.presets_now(), id);
+        if !p.custom {
+            return;
+        }
+        self.picker.draft = Some(Draft {
+            saved: p.clone(),
+            edit: p,
+            error: String::new(),
+            confirm_delete: false,
+        });
+    }
+
+    /// Save checks the preset first; a refused one stays in the editor with the reason.
+    pub(super) fn save_personality_draft(&mut self) {
+        let Some(draft) = self.picker.draft.as_mut() else {
+            return;
+        };
+        let e = &mut draft.edit;
+        e.name = e.name.trim().to_string();
+        e.description = e.description.trim().to_string();
+        e.tone_rules = e.tone_rules.trim().to_string();
+        e.address = e.address.as_deref().map(str::trim).filter(|a| !a.is_empty()).map(String::from);
+        e.voice_hint = e.voice_hint.as_deref().map(str::trim).filter(|h| !h.is_empty()).map(String::from);
+        match personality::save_custom(&presets_dir(), &draft.edit) {
+            Ok(_) => {
+                draft.saved = draft.edit.clone();
+                draft.error.clear();
+                self.status = format!("Saved {}", draft.edit.name);
+                self.reload_presets();
+            }
+            Err(err) => draft.error = err,
+        }
+    }
+
+    /// Reset: drop unsaved edits and go back to the saved preset.
+    pub(super) fn reset_personality_draft(&mut self) {
+        if let Some(draft) = self.picker.draft.as_mut() {
+            draft.edit = draft.saved.clone();
+            draft.error.clear();
+            draft.confirm_delete = false;
+        }
+    }
+
+    /// Delete (second click): removes the file. The default and any chat that used it go
+    /// back to the default voice.
+    pub(super) fn delete_personality_draft(&mut self) {
+        let Some(draft) = self.picker.draft.as_mut() else {
+            return;
+        };
+        if !draft.confirm_delete {
+            draft.confirm_delete = true;
+            return;
+        }
+        let (id, name) = (draft.saved.id.clone(), draft.saved.name.clone());
+        if let Err(err) = personality::delete_custom(&presets_dir(), &id) {
+            draft.error = err;
+            return;
+        }
+        self.picker.draft = None;
+        if self.cfg.personality == id {
+            self.cfg.personality.clear();
+            self.persist_cfg();
+        }
+        let mut chats = false;
+        for thread in self.threads.iter_mut().filter(|t| t.personality == id) {
+            thread.personality.clear();
+            chats = true;
+        }
+        if chats {
+            self.persist();
+        }
+        self.reload_presets();
+        self.status = format!("Deleted {name}");
+    }
+
     fn try_personality(&mut self, id: &str) {
         if !self.llm_ready() {
-            self.try_voice.shown = Some((id.to_string(), TryState::Failed(grokhub_core::XAI_NEED_SIGNIN.into())));
+            self.picker.shown = Some((id.to_string(), TryState::Failed(grokhub_core::XAI_NEED_SIGNIN.into())));
             return;
         }
         let key = self.bearer();
         let model = model_for_mode("fast").to_string();
-        let messages = personality::try_it_messages(&personality::builtin(id));
+        let messages = personality::try_it_messages(&personality::lookup(&presets_dir(), id));
         let (tx, rx) = mpsc::channel();
         let id = id.to_string();
-        self.try_voice.shown = Some((id.clone(), TryState::Running));
-        self.try_voice.rx = Some(rx);
+        self.picker.shown = Some((id.clone(), TryState::Running));
+        self.picker.rx = Some(rx);
         std::thread::spawn(move || {
             let _ = tx.send((id, grok_chat(&key, &model, &messages, None, None)));
         });
     }
 
-    fn poll_try_voice(&mut self) {
-        let Some(rx) = self.try_voice.rx.as_ref() else {
+    fn poll_try_it(&mut self) {
+        let Some(rx) = self.picker.rx.as_ref() else {
             return;
         };
         let Ok((id, out)) = rx.try_recv() else {
             return;
         };
-        self.try_voice.rx = None;
+        self.picker.rx = None;
         let state = match out {
             Ok(text) if !text.trim().is_empty() => TryState::Reply(text.trim().to_string()),
             Ok(_) => TryState::Failed("Grok sent an empty reply.".into()),
             Err(err) => TryState::Failed(err),
         };
-        self.try_voice.shown = Some((id, state));
+        self.picker.shown = Some((id, state));
     }
 
     pub(super) fn ui_settings_personality(&mut self, ui: &mut egui::Ui) {
-        self.poll_try_voice();
-        if self.try_voice.rx.is_some() {
+        self.poll_try_it();
+        if self.picker.rx.is_some() {
             ui.ctx().request_repaint_after(std::time::Duration::from_millis(200));
         }
         crate::cards::help_text(
@@ -158,38 +304,163 @@ impl Cabin {
             "How replies sound in chat. Tone only: approvals, warnings and facts stay plain in every personality. A chat can pick its own from the chat header.",
         );
         ui.add_space(10.0);
+        if self.picker.draft.is_some() {
+            self.ui_personality_editor(ui);
+            ui.add_space(16.0);
+        }
+        let presets = self.presets_now();
+        for problem in self.picker.problems.clone() {
+            crate::cards::settings_note(ui, &format!("Skipped {problem}"));
+        }
         let current = shown_id(&self.cfg.personality).to_string();
-        let mut use_id: Option<String> = None;
-        let mut try_id: Option<String> = None;
+        let mut act_on: Option<(CardAct, String)> = None;
         // Two cards a row. A Frame's size is only known after it paints, so rows are
         // laid out by hand instead of with horizontal_wrapped.
         let card_w = ((ui.available_width() - 12.0) / 2.0).max(220.0);
-        let presets = personality::builtins();
         for pair in presets.chunks(2) {
             ui.horizontal_top(|ui| {
                 ui.spacing_mut().item_spacing.x = 12.0;
                 for p in pair {
                     let on = p.id == current;
                     let tried = self
-                        .try_voice
+                        .picker
                         .shown
                         .as_ref()
                         .filter(|(id, _)| *id == p.id)
                         .map(|(_, state)| state.clone());
-                    match paint_preset_card(ui, p, on, tried.as_ref(), card_w) {
-                        Some(CardAct::Use) => use_id = Some(p.id.clone()),
-                        Some(CardAct::Try) => try_id = Some(p.id.clone()),
-                        None => {}
+                    if let Some(act) = paint_preset_card(ui, p, on, tried.as_ref(), card_w) {
+                        act_on = Some((act, p.id.clone()));
                     }
                 }
             });
             ui.add_space(12.0);
         }
-        if let Some(id) = use_id {
-            self.set_default_personality(&id);
+        match act_on {
+            Some((CardAct::Use, id)) => self.set_default_personality(&id),
+            Some((CardAct::Try, id)) => self.try_personality(&id),
+            Some((CardAct::Duplicate, id)) => self.duplicate_personality(&id),
+            Some((CardAct::Edit, id)) => self.edit_personality(&id),
+            None => {}
         }
-        if let Some(id) = try_id {
-            self.try_personality(&id);
+    }
+
+    fn ui_personality_editor(&mut self, ui: &mut egui::Ui) {
+        let Some(mut draft) = self.picker.draft.clone() else {
+            return;
+        };
+        let mut save = false;
+        let mut reset = false;
+        let mut delete = false;
+        let mut close = false;
+        egui::Frame::NONE
+            .fill(crate::theme::surface())
+            .corner_radius(12.0)
+            .stroke(egui::Stroke::new(1.0_f32, crate::theme::fg()))
+            .inner_margin(egui::Margin::same(14))
+            .show(ui, |ui| {
+                crate::cards::section_label(ui, &format!("Edit {}", draft.saved.name));
+                crate::cards::help_text(
+                    ui,
+                    &format!(
+                        "Saved as personalities/{}.toml in the cabin's settings folder. Tone only: approvals and safety rules still come after it.",
+                        draft.edit.id
+                    ),
+                );
+                let e = &mut draft.edit;
+                crate::cards::settings_field(ui, "Name", &format!("Up to {} characters.", personality::NAME_MAX), &mut e.name, false);
+                crate::cards::settings_field(
+                    ui,
+                    "Description",
+                    &format!("One line, up to {} characters.", personality::DESCRIPTION_MAX),
+                    &mut e.description,
+                    false,
+                );
+                ui.label(RichText::new("Tone rules").size(15.0).color(crate::theme::fg()));
+                ui.label(
+                    RichText::new(format!(
+                        "How it talks, {} of {} characters.",
+                        e.tone_rules.chars().count(),
+                        personality::TONE_RULES_MAX
+                    ))
+                    .size(12.0)
+                    .color(crate::theme::muted()),
+                );
+                ui.add_space(6.0);
+                ui.add(egui::TextEdit::multiline(&mut e.tone_rules).desired_rows(4).desired_width(f32::INFINITY));
+                ui.add_space(10.0);
+                let emoji = [
+                    (personality::Emoji::None, "None"),
+                    (personality::Emoji::Light, "Light"),
+                    (personality::Emoji::Heavy, "Heavy"),
+                ];
+                let labels: Vec<String> = emoji.iter().map(|(_, l)| l.to_string()).collect();
+                let now = emoji.iter().find(|(v, _)| *v == e.emoji).map(|(_, l)| *l).unwrap_or("None");
+                if let Some(i) = crate::cards::settings_dropdown(ui, "Emoji", "", now, &labels) {
+                    e.emoji = emoji[i].0;
+                }
+                let verbosity = [
+                    (personality::Verbosity::Terse, "Terse"),
+                    (personality::Verbosity::Normal, "Normal"),
+                    (personality::Verbosity::Chatty, "Chatty"),
+                ];
+                let labels: Vec<String> = verbosity.iter().map(|(_, l)| l.to_string()).collect();
+                let now = verbosity.iter().find(|(v, _)| *v == e.verbosity).map(|(_, l)| *l).unwrap_or("Normal");
+                if let Some(i) = crate::cards::settings_dropdown(ui, "Length", "", now, &labels) {
+                    e.verbosity = verbosity[i].0;
+                }
+                let mut address = e.address.clone().unwrap_or_default();
+                crate::cards::settings_field(ui, "Calls you", "Optional, like sir or captain.", &mut address, false);
+                // Trimmed on save, so a space typed mid-word survives the next frame.
+                e.address = Some(address).filter(|a| !a.trim().is_empty());
+                let mut hint = e.voice_hint.clone().unwrap_or_default();
+                crate::cards::settings_field(
+                    ui,
+                    "Voice",
+                    &format!(
+                        "Spoken replies can use one of these voices: {}. Anything else speaks as {}.",
+                        grokhub_core::TTS_VOICES.join(", "),
+                        grokhub_core::DEFAULT_VOICE
+                    ),
+                    &mut hint,
+                    false,
+                );
+                e.voice_hint = Some(hint).filter(|h| !h.trim().is_empty());
+                if !draft.error.is_empty() {
+                    ui.label(RichText::new(&draft.error).size(crate::theme::FONT_META).color(crate::theme::offline()));
+                    ui.add_space(6.0);
+                }
+                ui.horizontal(|ui| {
+                    if crate::cards::white_pill(ui, "Save") {
+                        save = true;
+                    }
+                    if crate::cards::ghost_pill(ui, "Reset") {
+                        reset = true;
+                    }
+                    let label = if draft.confirm_delete {
+                        format!("Delete {}?", draft.saved.name)
+                    } else {
+                        "Delete".to_string()
+                    };
+                    if crate::cards::ghost_pill(ui, &label) {
+                        delete = true;
+                    }
+                    if crate::cards::ghost_pill(ui, "Close") {
+                        close = true;
+                    }
+                });
+            });
+        self.picker.draft = Some(draft);
+        if save {
+            self.save_personality_draft();
+        }
+        if reset {
+            self.reset_personality_draft();
+        }
+        if delete {
+            self.delete_personality_draft();
+        }
+        if close {
+            self.picker.draft = None;
         }
     }
 
@@ -199,7 +470,8 @@ impl Cabin {
             return;
         }
         let open = self.open_chat_personality();
-        let now = personality::builtin(&open);
+        let presets = self.presets_now();
+        let now = personality::find(&presets, &open);
         let resp = ui.add(
             egui::Button::new(
                 RichText::new(now.name.as_str())
@@ -224,7 +496,7 @@ impl Cabin {
             .show(|ui| {
                 ui.set_min_width(200.0);
                 egui::ScrollArea::vertical().max_height(360.0).show(ui, |ui| {
-                    for p in personality::builtins() {
+                    for p in &presets {
                         let mut label = p.name.clone();
                         if p.id == default && p.id != personality::DEFAULT_ID {
                             label.push_str(" (default)");
@@ -255,6 +527,8 @@ impl Cabin {
 enum CardAct {
     Use,
     Try,
+    Duplicate,
+    Edit,
 }
 
 fn paint_preset_card(
@@ -273,7 +547,7 @@ fn paint_preset_card(
         .inner_margin(egui::Margin::same(12))
         .show(ui, |ui| {
             ui.set_width(width - 24.0);
-            // horizontal_wrapped places the cards; each card stacks its own rows.
+            // Each card stacks its own rows.
             ui.vertical(|ui| paint_preset_rows(ui, p, on, tried, &mut act));
         });
     act
@@ -295,6 +569,9 @@ fn paint_preset_rows(
         );
         if p.explicit {
             crate::cards::status_chip(ui, "Explicit", crate::cards::ChipTone::Setup);
+        }
+        if p.custom {
+            crate::cards::status_chip(ui, "Yours", crate::cards::ChipTone::Mute);
         }
         if on {
             crate::cards::status_chip(ui, "In use", crate::cards::ChipTone::Live);
@@ -349,6 +626,13 @@ fn paint_preset_rows(
         let busy = matches!(tried, Some(TryState::Running));
         if !busy && crate::cards::ghost_pill(ui, "Try it") {
             *act = Some(CardAct::Try);
+        }
+        if p.custom {
+            if crate::cards::ghost_pill(ui, "Edit") {
+                *act = Some(CardAct::Edit);
+            }
+        } else if crate::cards::ghost_pill(ui, "Duplicate") {
+            *act = Some(CardAct::Duplicate);
         }
     });
 }
@@ -450,12 +734,78 @@ mod tests {
         cabin.secrets = Default::default();
         cabin.try_personality("pirate");
         assert_eq!(
-            cabin.try_voice.shown,
+            cabin.picker.shown,
             Some((
                 "pirate".to_string(),
                 TryState::Failed(grokhub_core::XAI_NEED_SIGNIN.into())
             ))
         );
-        assert!(cabin.try_voice.rx.is_none());
+        assert!(cabin.picker.rx.is_none());
+    }
+
+    #[test]
+    fn duplicate_edit_reset_save_and_delete_from_settings() {
+        let (_lock, _root, mut cabin) = cabin_with_chat();
+        cabin.duplicate_personality("butler");
+        assert_eq!(cabin.status, "Made Butler copy");
+        assert!(presets_dir().join("butler-copy.toml").exists());
+        let draft = cabin.picker.draft.clone().expect("the copy opens in the editor");
+        assert_eq!((draft.saved.id.as_str(), draft.edit.name.as_str()), ("butler-copy", "Butler copy"));
+
+        // Reset drops unsaved edits.
+        cabin.picker.draft.as_mut().unwrap().edit.name = "Scratch".into();
+        cabin.reset_personality_draft();
+        assert_eq!(cabin.picker.draft.as_ref().unwrap().edit.name, "Butler copy");
+
+        // A refused save keeps the editor open with the reason and writes nothing.
+        cabin.picker.draft.as_mut().unwrap().edit.description = "two\nlines".into();
+        cabin.save_personality_draft();
+        assert_eq!(
+            cabin.picker.draft.as_ref().unwrap().error,
+            format!("Personality butler-copy: the description must be one line of at most {} characters.", personality::DESCRIPTION_MAX)
+        );
+        cabin.reset_personality_draft();
+
+        cabin.picker.draft.as_mut().unwrap().edit.name = " Jeeves ".into();
+        cabin.picker.draft.as_mut().unwrap().edit.address = Some("  ".into());
+        cabin.picker.draft.as_mut().unwrap().edit.voice_hint = Some("sal ".into());
+        cabin.save_personality_draft();
+        let saved = &cabin.picker.draft.as_ref().unwrap().saved;
+        assert_eq!((saved.name.as_str(), saved.address.as_deref(), saved.voice_hint.as_deref()), ("Jeeves", None, Some("sal")));
+        assert_eq!(cabin.status, "Saved Jeeves");
+        assert!(cabin.picker.presets.iter().any(|p| p.id == "butler-copy" && p.name == "Jeeves" && p.custom));
+
+        // In use as the default and in one chat, it speaks in its own voice.
+        cabin.set_default_personality("butler-copy");
+        assert_eq!(cabin.status, "Personality: Jeeves");
+        cabin.set_chat_personality("butler-copy");
+        assert!(cabin.chat_rules().starts_with("Personality: Jeeves. "), "{}", cabin.chat_rules());
+        assert_eq!(cabin.speech_voice(), "sal");
+        cabin.threads[1].personality = "butler-copy".into();
+
+        // Delete takes two clicks, then everything that used it goes back to the default.
+        cabin.delete_personality_draft();
+        assert!(presets_dir().join("butler-copy.toml").exists(), "the first click only asks");
+        cabin.delete_personality_draft();
+        assert!(!presets_dir().join("butler-copy.toml").exists());
+        assert_eq!(cabin.status, "Deleted Jeeves");
+        assert!(cabin.picker.draft.is_none());
+        assert_eq!(cabin.cfg.personality, "");
+        assert_eq!(cabin.threads[1].personality, "");
+        assert_eq!(cabin.personality_id(), "default");
+        assert_eq!(cabin.speech_voice(), grokhub_core::DEFAULT_VOICE);
+    }
+
+    #[test]
+    fn built_ins_open_no_editor_and_a_style_note_speaks_in_the_default_voice() {
+        let (_lock, _root, mut cabin) = cabin_with_chat();
+        cabin.edit_personality("pirate");
+        assert!(cabin.picker.draft.is_none(), "built-ins are duplicated, not edited");
+        cabin.set_chat_personality("butler");
+        assert_eq!(cabin.speech_voice(), "rex", "Butler's hint names a real voice");
+        cabin.set_chat_personality("genie");
+        assert_eq!(cabin.speech_voice(), "eve");
+        cabin.set_chat_personality("pirate");
+        assert_eq!(cabin.speech_voice(), grokhub_core::DEFAULT_VOICE, "no hint");
     }
 }

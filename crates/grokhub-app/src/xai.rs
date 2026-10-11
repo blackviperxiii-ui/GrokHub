@@ -475,7 +475,8 @@ pub fn http_err(e: ureq::Error) -> String {
     }
 }
 
-pub fn grok_tts(api_key: &str, text: &str) -> Result<Vec<u8>, String> {
+/// Speak `text` in `voice` (an id from `grokhub_core::TTS_VOICES`).
+pub fn grok_tts(api_key: &str, text: &str, voice: &str) -> Result<Vec<u8>, String> {
     let key = api_key.trim();
     if key.is_empty() {
         return Err("Connect Grok in Settings".into());
@@ -489,7 +490,7 @@ pub fn grok_tts(api_key: &str, text: &str) -> Result<Vec<u8>, String> {
         .post(&tts_url())
         .set("authorization", &format!("Bearer {key}"))
         .set("content-type", "application/json")
-        .send_json(tts_request_body(text))
+        .send_json(tts_request_body(text, voice))
         .map_err(|e| e.to_string())?;
     let mut buf = Vec::new();
     resp.into_reader()
