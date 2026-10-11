@@ -20,25 +20,30 @@ use crate::session_tools::TodoItem;
 /// Task tool calls between mid-run checkpoints.
 pub const CHECKPOINT_EVERY: usize = 8;
 
+// Word lists are lowercase; commands are compared lowercased (PowerShell names too).
+
 /// Words in a shell command that make it a check: tests, builds, linters, status.
 const VERIFY_WORDS: &[&str] = &[
     "test", "tests", "nextest", "pytest", "check", "build", "clippy", "lint", "eslint", "tsc", "mypy", "ruff", "verify",
-    "status", "is-active", "is-enabled", "--version", "diff", "Test-Path", "Get-Service",
+    "status", "is-active", "is-enabled", "--version", "diff", "test-path", "get-service",
 ];
 /// Words in a shell command that save the state before a change.
-const BACKUP_WORDS: &[&str] = &["backup", "timeshift", "snapper", "snapshot", "Checkpoint-Computer", "etckeeper"];
+const BACKUP_WORDS: &[&str] = &["backup", "timeshift", "snapper", "snapshot", "checkpoint-computer", "etckeeper"];
 /// A copy to a `.bak` or `.orig` name is a backup too.
-const COPY_WORDS: &[&str] = &["cp", "rsync", "tar", "Copy-Item", "copy"];
+const COPY_WORDS: &[&str] = &["cp", "rsync", "tar", "copy-item", "copy"];
 /// Words in a shell command, or path parts, that touch the system.
 const SYSTEM_WORDS: &[&str] = &[
     "sudo", "systemctl", "apt", "apt-get", "pacman", "dnf", "yum", "flatpak", "snap", "modprobe", "grub-mkconfig",
-    "update-grub", "ufw", "iptables", "chmod", "chown", "mount", "fstab", "reg", "sc.exe", "Set-Service",
+    "update-grub", "ufw", "iptables", "chmod", "chown", "mount", "fstab", "reg", "sc.exe", "set-service",
 ];
 const SYSTEM_PATHS: &[&str] = &["/etc/", "/boot/", "/usr/", "/lib/", "/var/lib/", "c:\\windows", "c:/windows"];
-/// Commands that change files, packages or settings.
+/// Words that make a command change files, packages, services or settings.
+/// A system word alone (`systemctl status`) is not a change.
 const MUTATING_HEADS: &[&str] = &[
     "rm", "mv", "cp", "mkdir", "rmdir", "touch", "tee", "ln", "install", "uninstall", "remove", "add", "commit", "push",
-    "kill", "pkill", "Remove-Item", "Set-Content", "New-Item", "Move-Item",
+    "kill", "pkill", "remove-item", "set-content", "new-item", "move-item", "restart", "start", "stop", "enable",
+    "disable", "mask", "unmask", "reload", "purge", "upgrade", "update", "chmod", "chown", "mount", "umount", "modprobe",
+    "update-grub", "grub-mkconfig", "allow", "deny", "set-service",
 ];
 const DESKTOP_ACTIONS: &[&str] = &["click", "move", "drag", "scroll", "type", "key"];
 const STOP_WORDS: &[&str] = &["the", "is", "it", "a", "an", "in", "of", "and", "to"];
@@ -46,8 +51,9 @@ const STOP_WORDS: &[&str] = &["the", "is", "it", "a", "an", "in", "of", "and", "
 /// What one finished tool call was, for the checkpoint.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Step {
-    /// Changed this (a file path, a command, "the screen").
-    Change { what: String, system: bool },
+    /// Changed this (a file path, a command, "the screen"). `checked`: the
+    /// same command ran a check after the change (`edit && cargo test`).
+    Change { what: String, system: bool, checked: bool },
     /// A check: re-read this path, or a check run (`None`) that covers any change.
     Verify(Option<String>),
     /// A read-only look that checks a shell change but not a file change.
@@ -71,42 +77,59 @@ fn system_path(p: &str) -> bool {
     SYSTEM_PATHS.iter().any(|s| p.starts_with(s))
 }
 
-fn classify(name: &str, args: &Value) -> Step {
+fn classify(name: &str, args: &Value) -> Vec<Step> {
+    let one = |step| vec![step];
     match name {
         "write" | "search_replace" => {
             let path = path_arg(args, &["path", "file_path", "target_file"]);
-            if path.ends_with(".bak") || path.contains("backup") {
-                return Step::Backup;
+            let lower = path.to_ascii_lowercase();
+            // A copy written next to a system file (`/etc/fstab.bak`) is a backup;
+            // other workspace files are ordinary changes, whatever their name.
+            if (lower.ends_with(".bak") || lower.ends_with(".orig")) && system_path(&lower) {
+                return one(Step::Backup);
             }
-            Step::Change { system: system_path(&path), what: path }
+            one(Step::Change { system: system_path(&path), what: path, checked: false })
         }
-        "read_file" => Step::Verify(Some(path_arg(args, &["target_file", "path", "file_path"]))),
-        "screenshot" => Step::Verify(Some(DESKTOP_WHAT.into())),
-        n if DESKTOP_ACTIONS.contains(&n) => Step::Change { what: DESKTOP_WHAT.into(), system: false },
-        "run_terminal_command" => {
-            let cmd = args.get("command").and_then(Value::as_str).unwrap_or("").trim();
-            let ws = words(cmd);
-            if ws.iter().any(|w| BACKUP_WORDS.iter().any(|b| w.eq_ignore_ascii_case(b)))
-                || (ws.iter().any(|w| COPY_WORDS.contains(w)) && (cmd.contains(".bak") || cmd.contains(".orig")))
-            {
-                return Step::Backup;
-            }
-            if ws.iter().any(|w| VERIFY_WORDS.contains(w)) {
-                return Step::Verify(None);
-            }
-            if crate::perm::shell_is_readonly(cmd) {
-                return Step::Look(cmd.to_string());
-            }
-            let system = ws.iter().any(|w| SYSTEM_WORDS.contains(w) || system_path(w));
-            // Only a command that clearly changes something owes a check (not a fetch or a query).
-            let changes = system || cmd.contains('>') || ws.contains(&"-i") || ws.iter().any(|w| MUTATING_HEADS.contains(w));
-            if !changes {
-                return Step::Other;
-            }
-            Step::Change { what: short(cmd), system }
-        }
-        _ => Step::Other,
+        "read_file" => one(Step::Verify(Some(path_arg(args, &["target_file", "path", "file_path"])))),
+        "screenshot" => one(Step::Verify(Some(DESKTOP_WHAT.into()))),
+        n if DESKTOP_ACTIONS.contains(&n) => one(Step::Change { what: DESKTOP_WHAT.into(), system: false, checked: false }),
+        "run_terminal_command" => shell_steps(args.get("command").and_then(Value::as_str).unwrap_or("").trim()),
+        _ => one(Step::Other),
     }
+}
+
+/// A shell command, in order: a backup it takes, the change it makes (and
+/// whether a check word comes after the change), or a check or a read-only look.
+fn shell_steps(cmd: &str) -> Vec<Step> {
+    let lower = cmd.to_ascii_lowercase();
+    let ws = words(&lower);
+    let mut steps = Vec::new();
+    if ws.iter().any(|w| BACKUP_WORDS.contains(w))
+        || (ws.iter().any(|w| COPY_WORDS.contains(w)) && (lower.contains(".bak") || lower.contains(".orig")))
+    {
+        steps.push(Step::Backup);
+    }
+    let system = ws.iter().any(|w| SYSTEM_WORDS.contains(w) || system_path(w));
+    // Only a command that clearly changes something owes a check (not a fetch or a query).
+    let changes = |w: &&str| w.contains('>') || *w == "-i" || MUTATING_HEADS.contains(w);
+    let first_change = ws.iter().position(&changes);
+    let last_check = ws.iter().rposition(|w| VERIFY_WORDS.contains(w));
+    match (first_change, last_check) {
+        (Some(c), check) => {
+            // `sudo cp /etc/fstab /etc/fstab.bak` is the backup, not a change to check.
+            let backup_only = !steps.is_empty() && ws.iter().all(|w| !changes(w) || COPY_WORDS.contains(w));
+            if !backup_only {
+                steps.push(Step::Change { what: short(cmd), system, checked: check.is_some_and(|v| v > c) });
+            }
+        }
+        (None, Some(_)) => steps.push(Step::Verify(None)),
+        (None, None) if crate::perm::shell_is_readonly(cmd) => steps.push(Step::Look(cmd.to_string())),
+        (None, None) => {}
+    }
+    if steps.is_empty() {
+        steps.push(Step::Other);
+    }
+    steps
 }
 
 const DESKTOP_WHAT: &str = "the screen";
@@ -139,30 +162,32 @@ pub struct Fresh {
 impl Fresh {
     /// Note one tool call that ran without failing.
     pub fn note(&mut self, name: &str, args: &Value) {
-        match classify(name, args) {
-            Step::Change { what, system } => {
-                if system && !self.backed_up && self.unbacked.is_none() {
-                    self.unbacked = Some(what.clone());
+        let file = matches!(name, "write" | "search_replace");
+        for step in classify(name, args) {
+            match step {
+                Step::Change { what, system, checked } => {
+                    if system && !self.backed_up && self.unbacked.is_none() {
+                        self.unbacked = Some(what.clone());
+                    }
+                    self.unchecked = (!checked).then_some((what, file));
                 }
-                let file = matches!(name, "write" | "search_replace");
-                self.unchecked = Some((what, file));
-            }
-            Step::Verify(None) => self.unchecked = None,
-            Step::Verify(Some(read)) => {
-                if self.unchecked.as_ref().is_some_and(|(what, _)| rereads(what, &read) || (what == DESKTOP_WHAT && read == DESKTOP_WHAT)) {
-                    self.unchecked = None;
+                Step::Verify(None) => self.unchecked = None,
+                Step::Verify(Some(read)) => {
+                    if self.unchecked.as_ref().is_some_and(|(what, _)| rereads(what, &read) || (what == DESKTOP_WHAT && read == DESKTOP_WHAT)) {
+                        self.unchecked = None;
+                    }
                 }
-            }
-            Step::Look(_) => {
-                if self.unchecked.as_ref().is_some_and(|(what, file)| !file && what != DESKTOP_WHAT) {
-                    self.unchecked = None;
+                Step::Look(_) => {
+                    if self.unchecked.as_ref().is_some_and(|(what, file)| !file && what != DESKTOP_WHAT) {
+                        self.unchecked = None;
+                    }
                 }
+                Step::Backup => {
+                    self.backed_up = true;
+                    self.unbacked = None;
+                }
+                Step::Other => {}
             }
-            Step::Backup => {
-                self.backed_up = true;
-                self.unbacked = None;
-            }
-            Step::Other => {}
         }
     }
 
@@ -323,6 +348,19 @@ mod tests {
         assert_eq!(f.unchecked(), Some("pip install requests"));
         f.note("run_terminal_command", &shell("echo hi > out.txt"));
         assert_eq!(f.unchecked(), Some("echo hi > out.txt"));
+        // A check word only counts after the change in the same command.
+        f.note("run_terminal_command", &shell("sed -i 's/a/b/' x.py && pytest"));
+        assert_eq!(f.unchecked(), None);
+        f.note("run_terminal_command", &shell("pytest && rm -rf build/"));
+        assert_eq!(f.unchecked(), Some("pytest && rm -rf build/"));
+        // PowerShell names in any case.
+        f.note("run_terminal_command", &shell("Get-Service spooler"));
+        assert_eq!(f.unchecked(), None);
+        f.note("run_terminal_command", &shell("remove-item C:\\temp\\x.txt"));
+        assert_eq!(f.unchecked(), Some("remove-item C:\\temp\\x.txt"));
+        // A workspace file named like a backup is still a change.
+        f.note("write", &json!({ "path": "notes/backup-plan.md" }));
+        assert_eq!(f.unchecked(), Some("notes/backup-plan.md"));
     }
 
     #[test]
@@ -343,6 +381,16 @@ mod tests {
         assert_eq!(Gaps::of(Some(&careful), &[], 2, &f).unbacked, None);
         f.note("run_terminal_command", &shell("sudo cp /etc/fstab /etc/fstab.bak"));
         assert_eq!(Gaps::of(Some(&critical), &[], 3, &f), Gaps::default());
+        // A system change hidden behind a check word still needs its backup; a status look is no change.
+        let mut h = Fresh::default();
+        h.note("run_terminal_command", &shell("systemctl status nginx"));
+        assert_eq!(Gaps::of(Some(&critical), &[], 1, &h), Gaps::default());
+        h.note("run_terminal_command", &shell("sudo systemctl restart nginx && systemctl is-active nginx"));
+        assert_eq!(Gaps::of(Some(&critical), &[], 2, &h).unbacked.as_deref(), Some("sudo systemctl restart nginx && systemctl is-active nginx"));
+        assert_eq!(h.unchecked(), None);
+        // Writing a .bak in the workspace is not a system backup.
+        h.note("write", &json!({ "path": "fstab.bak" }));
+        assert!(Gaps::of(Some(&critical), &[], 3, &h).unbacked.is_some());
         // Backed up first: the change never counts as unbacked.
         let mut g = Fresh::default();
         g.note("run_terminal_command", &shell("timeshift --create"));
