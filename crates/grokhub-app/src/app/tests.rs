@@ -16898,6 +16898,7 @@ fn every_home_card_the_cabin_posts_names_its_item() {
     let _: Vec<serde_json::Value> = config::load_json(&root.join("projects.json"), config::JSON_STORE_CAP);
     cabin.poll_recovered_stores();
     rows.push(("poll_recovered_stores", posted_card(&cabin, "poll_recovered_stores", |c| c.source_id.starts_with("recovered:")), "Projects list"));
+    cabin.add_interest("Rust");
     cabin.post_source_run(super::pulse_sources_ui::SourceRun {
         items: vec![grokhub_core::pulse_sources::SourceItem {
             title: "Rust 1.99 released".into(),
@@ -16908,6 +16909,7 @@ fn every_home_card_the_cabin_posts_names_its_item() {
             summary: "812 points, 301 comments on Hacker News.".into(),
             image: None,
             topic: Some("Rust".into()),
+            engagement: 0,
         }],
         errors: Vec::new(),
         fetched: 1,
