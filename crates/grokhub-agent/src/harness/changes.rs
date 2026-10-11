@@ -45,6 +45,8 @@ pub const CONNECTION_LEDGER_FILE: &str = "connections.jsonl";
 pub const AUTOMATION_LEDGER_FILE: &str = "automations.jsonl";
 /// The router's model-file ledger inside [`CHANGES_DIR`] (routing table versions).
 pub const MODEL_LEDGER_FILE: &str = "models.jsonl";
+/// The chat-note ledger inside [`CHANGES_DIR`] (`tunable/<name>.md`, card 32 PR C).
+pub const SNIPPET_LEDGER_FILE: &str = "snippets.jsonl";
 /// Scope-guard findings inside [`CHANGES_DIR`].
 pub const FINDINGS_FILE: &str = "findings.jsonl";
 /// Detector name on a scope-guard finding.
@@ -78,10 +80,12 @@ pub enum ChangeKind {
     Automation,
     /// A file the router keeps under `{config}/models/` (the routing table).
     Model,
+    /// A chat note under `{config}/tunable/` the weekly pass wrote.
+    Snippet,
 }
 
 impl ChangeKind {
-    pub const ALL: [ChangeKind; 4] = [Self::Skill, Self::Connection, Self::Automation, Self::Model];
+    pub const ALL: [ChangeKind; 5] = [Self::Skill, Self::Connection, Self::Automation, Self::Model, Self::Snippet];
 
     pub fn as_str(self) -> &'static str {
         match self {
@@ -89,6 +93,7 @@ impl ChangeKind {
             Self::Connection => "connection",
             Self::Automation => "automation",
             Self::Model => "model",
+            Self::Snippet => "snippet",
         }
     }
 
@@ -102,6 +107,7 @@ impl ChangeKind {
             Self::Connection => CONNECTION_LEDGER_FILE,
             Self::Automation => AUTOMATION_LEDGER_FILE,
             Self::Model => MODEL_LEDGER_FILE,
+            Self::Snippet => SNIPPET_LEDGER_FILE,
         }
     }
 
@@ -111,12 +117,13 @@ impl ChangeKind {
             Self::Connection => "connections",
             Self::Automation => "automations",
             Self::Model => "models",
+            Self::Snippet => "snippets",
         }
     }
 
     fn ext(self) -> &'static str {
         match self {
-            Self::Skill => "md",
+            Self::Skill | Self::Snippet => "md",
             _ => "json",
         }
     }
@@ -275,6 +282,50 @@ pub trait ChangeTarget {
     fn label_of(&self, _bytes: &[u8]) -> String {
         String::new()
     }
+}
+
+/// A chat note `{config}/tunable/<name>.md` (card 32 PR C). Only the
+/// weekly pass writes one, through the ledger and the protected-surface guard.
+pub struct SnippetTarget<'a> {
+    pub config_dir: &'a Path,
+    pub name: &'a str,
+}
+
+impl ChangeTarget for SnippetTarget<'_> {
+    fn kind(&self) -> ChangeKind {
+        ChangeKind::Snippet
+    }
+
+    fn id(&self) -> Result<String, String> {
+        entry_id(self.name)
+    }
+
+    fn file(&self) -> Result<PathBuf, String> {
+        Ok(snippet_path(self.config_dir, &self.id()?))
+    }
+
+    fn read(&self) -> Result<Option<Vec<u8>>, String> {
+        read_capped(&self.file()?)
+    }
+
+    fn put(&self, bytes: Option<&[u8]>) -> Result<(), String> {
+        let path = self.file()?;
+        match bytes {
+            Some(b) => {
+                if let Some(dir) = path.parent() {
+                    fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+                }
+                private_write(&path, b)
+            }
+            None if path.exists() => fs::remove_file(&path).map_err(|e| e.to_string()),
+            None => Ok(()),
+        }
+    }
+}
+
+/// Where a chat note lives.
+pub fn snippet_path(config_dir: &Path, id: &str) -> PathBuf {
+    config_dir.join(grokhub_core::protected_surface::TUNABLE_DIR).join(format!("{id}.md"))
 }
 
 /// A cabin skill's `SKILL.md` under `skills_dir`.

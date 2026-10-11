@@ -254,6 +254,8 @@ impl Cabin {
             &grokhub_core::brief_for(&self.learning, "chat"),
             self.cfg.desktop_control,
         );
+        let notes = self.tuned_notes();
+        let rules = if notes.is_empty() { rules } else { format!("{notes}\n\n{rules}") };
         grokhub_core::personality::layer(&self.chat_personality(), &rules)
     }
 

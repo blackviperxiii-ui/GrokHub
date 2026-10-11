@@ -396,6 +396,10 @@ impl Cabin {
         };
         let now = grokhub_core::now_ms();
         for p in pass.kept {
+            if p.snippet {
+                self.post_snippet_card(&p, now);
+                continue;
+            }
             let Some(existing) = self
                 .skill_list
                 .iter()
@@ -518,6 +522,7 @@ impl Cabin {
         };
         let (dir, skills_dir) = (config::config_dir(), skills::skills_dir());
         let done = match target {
+            CardTarget::Snippet(name) => self.apply_snippet(&name, &card.title, &pending.md),
             CardTarget::Router(candidate) => match grokhub_agent::route::learn::accept_card(&dir, &candidate, grokhub_core::now_ms()) {
                 Ok(msg) => {
                     self.status = msg;
