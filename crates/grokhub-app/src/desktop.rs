@@ -1017,6 +1017,13 @@ pub fn run_computer_op_cancel(op: &ComputerOp, cancel: Option<&AtomicBool>) -> S
         return hands_receipt(&line, started, false, "blocked: lock screen");
     }
     let op = map_pointer_op(op);
+    #[cfg(windows)]
+    if let Some(done) = crate::desktop_mcp::windows_hands(&op) {
+        return match done {
+            Ok(detail) => hands_receipt(&line, started, true, &detail),
+            Err(e) => hands_receipt(&line, started, false, &e),
+        };
+    }
     match pointer_drive(&op) {
         ComputerDrive::Xdotool(steps) | ComputerDrive::Ydotool(steps) => {
             if let Some(detail) = empty_hands_steps_error(&op, &steps) {
@@ -1288,10 +1295,36 @@ pub fn frame_bytes_are_blank(bytes: &[u8]) -> bool {
     frame_is_blank(mean, var)
 }
 
+/// A captured RGBA screen as a JPEG for Eyes: alpha dropped, capped at
+/// [`IMAGE_FILE_CAP`], and an all-black frame (a locked or secure desktop)
+/// refused like the Linux grabbers' black frames.
+#[cfg(any(windows, test))]
+fn rgba_frame_to_jpeg(frame: image::RgbaImage) -> Result<Vec<u8>, String> {
+    let rgb = image::DynamicImage::ImageRgba8(frame).into_rgb8();
+    let mut buf = Vec::new();
+    rgb.write_to(&mut std::io::Cursor::new(&mut buf), image::ImageFormat::Jpeg)
+        .map_err(|e| e.to_string())?;
+    if buf.len() as u64 > IMAGE_FILE_CAP {
+        return Err("screen frame too large".into());
+    }
+    if frame_bytes_are_blank(&buf) {
+        return Err("the screen was a black frame".into());
+    }
+    Ok(buf)
+}
+
 pub fn capture_jpeg(path: &Path) -> Result<Vec<u8>, String> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
+    #[cfg(windows)]
+    let win_err = match crate::desktop_mcp::windows_primary_frame().and_then(rgba_frame_to_jpeg) {
+        Ok(jpeg) => {
+            let _ = std::fs::write(path, &jpeg);
+            return Ok(jpeg);
+        }
+        Err(e) => e,
+    };
     pin_wayland_for_capture();
     let bins: Vec<&str> = CAPTURE_BINS.iter().copied().filter(|n| which(n)).collect();
     let wayland = session_is_wayland(
@@ -1301,7 +1334,11 @@ pub fn capture_jpeg(path: &Path) -> Result<Vec<u8>, String> {
     let x11 = std::env::var_os("DISPLAY").is_some();
     let plan = capture_kinds(&bins, wayland, x11);
     if plan.is_empty() {
-        return Err("no grim/gnome-screenshot/ffmpeg/scrot for a desktop frame".into());
+        #[cfg(windows)]
+        let why = format!("Windows screen capture failed: {win_err}");
+        #[cfg(not(windows))]
+        let why = "no grim/gnome-screenshot/ffmpeg/scrot for a desktop frame".to_string();
+        return Err(why);
     }
     let outputs = read_display_outputs();
     let points: Vec<(i32, i32)> = collect_rows()
@@ -1822,8 +1859,58 @@ pub fn pick_file() -> Option<PathBuf> {
     None
 }
 
+/// A clipboard DIB (`CF_DIB`: a bitmap header, then pixels, no file
+/// header) as PNG bytes. The 14-byte BMP file header is put back in front so
+/// the BMP decoder can read it.
+#[cfg(any(windows, test))]
+fn dib_to_png(dib: &[u8]) -> Option<Vec<u8>> {
+    let u32_at = |at: usize| dib.get(at..at + 4).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]));
+    let header = u32_at(0)?;
+    if header < 40 || dib.len() as u64 > IMAGE_FILE_CAP * 8 {
+        return None;
+    }
+    let bits = u16::from_le_bytes([*dib.get(14)?, *dib.get(15)?]);
+    // BI_BITFIELDS after a plain 40-byte header carries three masks.
+    let masks = if header == 40 && u32_at(16)? == 3 { 12 } else { 0 };
+    let colors = match u32_at(32)? {
+        0 if bits <= 8 => 1u32 << bits,
+        n => n,
+    };
+    let pixels_at = 14u32.checked_add(header)?.checked_add(masks)?.checked_add(colors.checked_mul(4)?)?;
+    let mut bmp = Vec::with_capacity(dib.len() + 14);
+    bmp.extend_from_slice(b"BM");
+    bmp.extend_from_slice(&u32::try_from(dib.len() + 14).ok()?.to_le_bytes());
+    bmp.extend_from_slice(&[0; 4]);
+    bmp.extend_from_slice(&pixels_at.to_le_bytes());
+    bmp.extend_from_slice(dib);
+    if !image_pixels_ok_for_bytes(&bmp) {
+        return None;
+    }
+    let img = image::load_from_memory_with_format(&bmp, image::ImageFormat::Bmp).ok()?;
+    let mut png = Vec::new();
+    img.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).ok()?;
+    Some(png)
+}
+
+/// The Wayland socket for a tool the cabin starts. Startup drops
+/// `WAYLAND_DISPLAY` for the window, so `wl-paste` would find no compositor.
+fn wayland_display_for_tools() -> Option<String> {
+    let runtime = std::env::var("XDG_RUNTIME_DIR").ok();
+    infer_wayland_display(std::env::var("WAYLAND_DISPLAY").ok().as_deref(), runtime.as_deref())
+}
+
 pub fn clipboard_image() -> Option<PathBuf> {
     let dest = std::env::temp_dir().join("grokhub-clip.png");
+    #[cfg(windows)]
+    {
+        let png = crate::win_native::clipboard_image()
+            .and_then(|(bytes, is_png)| if is_png { Some(bytes) } else { dib_to_png(&bytes) });
+        if let Some(png) = png.filter(|b| b.len() as u64 <= IMAGE_FILE_CAP) {
+            if std::fs::write(&dest, &png).is_ok() {
+                return Some(dest);
+            }
+        }
+    }
     for bin in ["xclip", "wl-paste"] {
         let Some(args) = clip_image_args(bin) else {
             continue;
@@ -1833,6 +1920,11 @@ pub fn clipboard_image() -> Option<PathBuf> {
         }
         let mut cmd = Command::new(bin);
         cmd.args(args);
+        if bin == "wl-paste" {
+            if let Some(name) = wayland_display_for_tools() {
+                cmd.env("WAYLAND_DISPLAY", name);
+            }
+        }
         if let Some(o) = run_limited(cmd, DESK_LIST_TIMEOUT) {
             if !o.status.success() || o.stdout.len() < 24 {
                 continue;
@@ -2660,5 +2752,69 @@ mod tests {
                     }),
             "OAuth still checks the xAI host before opening"
         );
+    }
+
+    /// A CF_DIB as Windows puts it on the clipboard: a 40-byte header, then
+    /// bottom-up rows padded to four bytes.
+    fn dib(bits: u16, compression: u32, extra: &[u8], rows: &[&[u8]]) -> Vec<u8> {
+        let mut d = Vec::new();
+        d.extend_from_slice(&40u32.to_le_bytes());
+        d.extend_from_slice(&2i32.to_le_bytes());
+        d.extend_from_slice(&(rows.len() as i32).to_le_bytes());
+        d.extend_from_slice(&1u16.to_le_bytes());
+        d.extend_from_slice(&bits.to_le_bytes());
+        d.extend_from_slice(&compression.to_le_bytes());
+        d.extend_from_slice(&[0; 20]);
+        d.extend_from_slice(extra);
+        for r in rows.iter().rev() {
+            d.extend_from_slice(r);
+            d.resize(d.len().next_multiple_of(4), 0);
+        }
+        d
+    }
+
+    #[test]
+    fn clipboard_dib_becomes_a_png_with_the_same_pixels() {
+        // 24-bit BGR, top row red then green, bottom row blue then white.
+        let d = dib(24, 0, &[], &[&[0, 0, 255, 0, 255, 0], &[255, 0, 0, 255, 255, 255]]);
+        let png = dib_to_png(&d).expect("24-bit DIB");
+        assert_eq!(&png[..4], b"\x89PNG");
+        let img = image::load_from_memory(&png).unwrap().to_rgb8();
+        assert_eq!((img.width(), img.height()), (2, 2));
+        assert_eq!(img.get_pixel(0, 0).0, [255, 0, 0]);
+        assert_eq!(img.get_pixel(1, 0).0, [0, 255, 0]);
+        assert_eq!(img.get_pixel(0, 1).0, [0, 0, 255]);
+        assert_eq!(img.get_pixel(1, 1).0, [255, 255, 255]);
+
+        // 32-bit BI_BITFIELDS: three masks sit between the header and the pixels.
+        let masks: Vec<u8> = [0x00ff_0000u32, 0x0000_ff00, 0x0000_00ff].iter().flat_map(|m| m.to_le_bytes()).collect();
+        let d = dib(32, 3, &masks, &[&[10, 20, 30, 0, 40, 50, 60, 0]]);
+        let img = image::load_from_memory(&dib_to_png(&d).expect("bitfields DIB")).unwrap().to_rgb8();
+        assert_eq!(img.get_pixel(0, 0).0, [30, 20, 10]);
+        assert_eq!(img.get_pixel(1, 0).0, [60, 50, 40]);
+
+        assert_eq!(dib_to_png(&[1, 2, 3]), None, "too short for a header");
+        assert_eq!(dib_to_png(&d[..44]), None, "header with no pixels");
+    }
+
+    #[test]
+    fn a_captured_screen_becomes_a_jpeg_and_a_black_one_is_refused() {
+        let lit = image::RgbaImage::from_fn(64, 48, |x, y| image::Rgba([(x * 4) as u8, (y * 5) as u8, 128, 0]));
+        let jpeg = rgba_frame_to_jpeg(lit).expect("a lit screen");
+        assert_eq!(&jpeg[..3], &[0xFF, 0xD8, 0xFF]);
+        let back = image::load_from_memory(&jpeg).unwrap();
+        assert_eq!((back.width(), back.height()), (64, 48));
+
+        let black = image::RgbaImage::from_pixel(64, 48, image::Rgba([0, 0, 0, 255]));
+        assert_eq!(rgba_frame_to_jpeg(black), Err("the screen was a black frame".to_string()));
+    }
+
+    #[test]
+    fn wl_paste_gets_the_wayland_socket_startup_dropped() {
+        let src = include_str!("desktop.rs").replace("\r\n", "\n");
+        let clip = src.split("pub fn clipboard_image()").nth(1).and_then(|s| s.split("\npub fn ").next()).expect("clipboard_image");
+        let env = clip.find("cmd.env(\"WAYLAND_DISPLAY\", name)").expect("wl-paste gets WAYLAND_DISPLAY");
+        assert!(clip[..env].contains("if bin == \"wl-paste\""), "only wl-paste gets it");
+        assert!(clip[..env].contains("wayland_display_for_tools()"));
     }
 }
