@@ -8,9 +8,8 @@ use eframe::egui::{
 };
 use grokhub_core::{
     clamp_rect_to_slot, feel_lift, feel_scale, felt_rect, hover_alpha, hover_mix, lift_rgb,
-    mix_channel,
-    os_prefers_dark, HOVER_EXPANSION, HOVER_SECS, HOVER_WASH, PRESS_EXPANSION, PRESS_SECS,
-    SELECT_SECS,
+    mix_channel, os_prefers_dark, HOVER_EXPANSION, HOVER_SECS, HOVER_WASH, PRESS_EXPANSION,
+    PRESS_SECS, SELECT_SECS,
 };
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -346,7 +345,9 @@ fn kde_dark() -> Option<bool> {
     let config = std::env::var_os("XDG_CONFIG_HOME")
         .filter(|d| !d.is_empty())
         .map(std::path::PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".config")))?;
+        .or_else(|| {
+            std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".config"))
+        })?;
     let text = std::fs::read_to_string(config.join("kdeglobals")).ok()?;
     grokhub_core::kde_prefers_dark(&text)
 }
@@ -635,21 +636,13 @@ pub fn animate_selection_secs(ui: &egui::Ui, id: egui::Id, on: bool, secs: f32) 
     if !motion_ok(ui) {
         return if on { 1.0 } else { 0.0 };
     }
-    ui.ctx().animate_bool_with_time_and_easing(
-        id,
-        on,
-        secs,
-        egui::emath::easing::quadratic_out,
-    )
+    ui.ctx()
+        .animate_bool_with_time_and_easing(id, on, secs, egui::emath::easing::quadratic_out)
 }
 
 fn button_channel(ui: &egui::Ui, id: egui::Id, on: bool, secs: f32) -> f32 {
-    ui.ctx().animate_bool_with_time_and_easing(
-        id,
-        on,
-        secs,
-        egui::emath::easing::quadratic_out,
-    )
+    ui.ctx()
+        .animate_bool_with_time_and_easing(id, on, secs, egui::emath::easing::quadratic_out)
 }
 
 #[derive(Clone, Debug, Default)]
@@ -670,7 +663,9 @@ pub fn glide_paint(ui: &egui::Ui, group: &str) {
     let Some(rect) = ui.data(|d| d.get_temp::<egui::Rect>(id.with("rect"))) else {
         return;
     };
-    let alpha = ui.data(|d| d.get_temp::<f32>(id.with("alpha"))).unwrap_or(0.0);
+    let alpha = ui
+        .data(|d| d.get_temp::<f32>(id.with("alpha")))
+        .unwrap_or(0.0);
     if alpha < 0.02 || rect.width() < 1.0 {
         return;
     }
@@ -685,7 +680,13 @@ pub fn glide_paint(ui: &egui::Ui, group: &str) {
 }
 
 /// Remember a row item. Hover wins over the resting selection.
-pub fn glide_candidate(ui: &egui::Ui, group: &str, rect: egui::Rect, hovered: bool, selected: bool) {
+pub fn glide_candidate(
+    ui: &egui::Ui,
+    group: &str,
+    rect: egui::Rect,
+    hovered: bool,
+    selected: bool,
+) {
     let id = glide_id(group).with("pick");
     let visible = rect.width() >= 1.0 && rect.height() >= 1.0 && ui.clip_rect().intersects(rect);
     // In place: every rail row calls this, and a copy out and back per row adds up.
@@ -704,8 +705,12 @@ pub fn glide_candidate(ui: &egui::Ui, group: &str, rect: egui::Rect, hovered: bo
 }
 
 fn rect_gap(rect: egui::Rect, pointer: egui::Pos2) -> f32 {
-    let dx = (rect.min.x - pointer.x).max(pointer.x - rect.max.x).max(0.0);
-    let dy = (rect.min.y - pointer.y).max(pointer.y - rect.max.y).max(0.0);
+    let dx = (rect.min.x - pointer.x)
+        .max(pointer.x - rect.max.x)
+        .max(0.0);
+    let dy = (rect.min.y - pointer.y)
+        .max(pointer.y - rect.max.y)
+        .max(0.0);
     dx.hypot(dy)
 }
 
@@ -781,10 +786,18 @@ pub fn glide_aim(ui: &egui::Ui, group: &str) {
         return;
     }
     let secs = 0.16;
-    let x = ui.ctx().animate_value_with_time(id.with("x"), goal.min.x, secs);
-    let y = ui.ctx().animate_value_with_time(id.with("y"), goal.min.y, secs);
-    let w = ui.ctx().animate_value_with_time(id.with("w"), goal.width(), secs);
-    let h = ui.ctx().animate_value_with_time(id.with("h"), goal.height(), secs);
+    let x = ui
+        .ctx()
+        .animate_value_with_time(id.with("x"), goal.min.x, secs);
+    let y = ui
+        .ctx()
+        .animate_value_with_time(id.with("y"), goal.min.y, secs);
+    let w = ui
+        .ctx()
+        .animate_value_with_time(id.with("w"), goal.width(), secs);
+    let h = ui
+        .ctx()
+        .animate_value_with_time(id.with("h"), goal.height(), secs);
     let rect = egui::Rect::from_min_size(egui::pos2(x, y), egui::vec2(w, h));
     ui.data_mut(|d| {
         d.insert_temp(id.with("rect"), rect);
@@ -815,7 +828,8 @@ pub fn copy_button_label(clicked: Option<Instant>, now: Instant) -> &'static str
 /// Width of the wider Copy label, so the row does not jump when it flips.
 pub fn copy_hit_width(ui: &egui::Ui) -> f32 {
     let font = FontId::proportional(FONT_CHROME);
-    let galley = ui.fonts_mut(|f| f.layout_no_wrap("Copied".to_owned(), font, Color32::PLACEHOLDER));
+    let galley =
+        ui.fonts_mut(|f| f.layout_no_wrap("Copied".to_owned(), font, Color32::PLACEHOLDER));
     let pad = ui.style().spacing.button_padding.x;
     galley.size().x + pad * 2.0
 }
@@ -848,7 +862,9 @@ pub fn felt_label_button(
     stroke: Option<Stroke>,
     strong: bool,
 ) -> egui::Response {
-    felt_label_button_with(ui, None, label, base_fill, text_color, rounding, min_size, stroke, strong)
+    felt_label_button_with(
+        ui, None, label, base_fill, text_color, rounding, min_size, stroke, strong,
+    )
 }
 
 /// [`felt_label_button`] with a fixed id when `id` is set, so a key handler
@@ -886,7 +902,8 @@ pub fn felt_label_button_with(
     let (resp, rect, fill) = feel_button(ui, resp, base_fill);
     ui.painter().rect_filled(rect, rounding, fill);
     if let Some(s) = stroke {
-        ui.painter().rect_stroke(rect, rounding, s, egui::StrokeKind::Middle);
+        ui.painter()
+            .rect_stroke(rect, rounding, s, egui::StrokeKind::Middle);
     }
     // Centre vertically: a layout can hand the pill more height than label + pad.
     let text_pos = egui::pos2(rect.min.x + pad.x, rect.center().y - galley.size().y * 0.5);
@@ -980,9 +997,9 @@ fn kb_nav_active(ctx: &egui::Context) -> bool {
     let id = egui::Id::new("cabin-kb-nav");
     let prev = ctx.data(|d| d.get_temp::<bool>(id).unwrap_or(false));
     let (nav_key, pointer) = ctx.input(|i| {
-        let nav_key = i.events.iter().any(|ev| {
-            matches!(ev, egui::Event::Key { key, pressed: true, .. } if kb_nav_key(*key))
-        });
+        let nav_key = i.events.iter().any(
+            |ev| matches!(ev, egui::Event::Key { key, pressed: true, .. } if kb_nav_key(*key)),
+        );
         (nav_key, i.pointer.any_pressed())
     });
     let next = kb_nav_next(prev, nav_key, pointer);
@@ -1010,7 +1027,11 @@ fn feel_motion(
     let scale = feel_scale(hover_t, press_t) + 0.01 * focus_t;
     let mix = hover_mix(hover_t, press_t) + grokhub_core::FOCUS_WASH * focus_t;
     let (x, y, w, h) = felt_rect(base.min.x, base.min.y, base.width(), base.height(), scale);
-    let lift = if rise { feel_lift(hover_t, press_t) } else { 0.0 };
+    let lift = if rise {
+        feel_lift(hover_t, press_t)
+    } else {
+        0.0
+    };
     let rect = egui::Rect::from_min_size(egui::pos2(x, y - lift), egui::vec2(w, h));
     if focused && kb_nav_active(ui.ctx()) {
         ui.painter().rect_stroke(
@@ -1111,7 +1132,11 @@ mod tests {
 
     #[test]
     fn the_bundled_mark_decodes() {
-        assert_eq!(mark_image().size, [32, 32], "a 1x1 blank means the PNG stopped decoding");
+        assert_eq!(
+            mark_image().size,
+            [32, 32],
+            "a 1x1 blank means the PNG stopped decoding"
+        );
     }
 
     #[test]
@@ -1185,9 +1210,19 @@ mod tests {
         let chat = include_str!("app/chat_ui.rs");
         assert!(chat.contains("corner_radius(crate::theme::MENU_RADIUS)"));
         let night = include_str!("app/night.rs");
-        assert_eq!(night.matches("corner_radius(crate::theme::CARD_RADIUS)").count(), 3);
+        assert_eq!(
+            night
+                .matches("corner_radius(crate::theme::CARD_RADIUS)")
+                .count(),
+            3
+        );
         let pages = include_str!("app/pages.rs");
-        assert_eq!(pages.matches("corner_radius(crate::theme::SHEET_RADIUS)").count(), 1);
+        assert_eq!(
+            pages
+                .matches("corner_radius(crate::theme::SHEET_RADIUS)")
+                .count(),
+            1
+        );
         assert!(pages.contains("corner_radius(crate::theme::CARD_RADIUS)"));
     }
 
@@ -1198,12 +1233,21 @@ mod tests {
         let below = egui::Rect::from_min_size(egui::pos2(8.0, 120.0), egui::vec2(200.0, 28.0));
         let rows = [selected, above, below];
         let near_below = nearest_glide_row(&rows, egui::pos2(40.0, 108.0), None).unwrap();
-        assert_eq!(near_below, below, "a gap just above the next row stays there");
+        assert_eq!(
+            near_below, below,
+            "a gap just above the next row stays there"
+        );
         let near_above = nearest_glide_row(&rows, egui::pos2(40.0, 76.0), None).unwrap();
-        assert_eq!(near_above, above, "a gap just under a row stays on that row");
+        assert_eq!(
+            near_above, above,
+            "a gap just under a row stays on that row"
+        );
         assert_ne!(near_below, selected);
         let held = nearest_glide_row(&rows, egui::pos2(40.0, 94.0), Some(above)).unwrap();
-        assert_eq!(held, above, "the midpoint keeps the row the pointer already reached");
+        assert_eq!(
+            held, above,
+            "the midpoint keeps the row the pointer already reached"
+        );
     }
 
     #[test]
@@ -1370,7 +1414,10 @@ mod tests {
         assert!(!kb_nav_key(egui::Key::Enter));
         assert!(!kb_nav_next(false, false, false));
         assert!(kb_nav_next(false, true, false));
-        assert!(kb_nav_next(true, false, false), "the ring stays until the pointer");
+        assert!(
+            kb_nav_next(true, false, false),
+            "the ring stays until the pointer"
+        );
         assert!(!kb_nav_next(true, false, true));
         assert!(
             !kb_nav_next(true, true, true),

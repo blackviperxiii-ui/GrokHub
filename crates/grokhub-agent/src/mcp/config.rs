@@ -366,7 +366,8 @@ fn string_map(value: Option<&Value>) -> BTreeMap<String, String> {
 /// behind the desktop switch, Ask, Halt and the lock screen, so this server is never
 /// imported or started as an MCP server (that would route around those gates).
 pub fn is_desktop_server(name: &str) -> bool {
-    grokhub_core::CABIN_CU_SERVERS.contains(&name.trim().to_ascii_lowercase().replace('_', "-").as_str())
+    grokhub_core::CABIN_CU_SERVERS
+        .contains(&name.trim().to_ascii_lowercase().replace('_', "-").as_str())
 }
 
 pub fn read_mcp_text(path: &Path) -> Result<String, String> {

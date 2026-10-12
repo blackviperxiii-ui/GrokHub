@@ -6,7 +6,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use super::index::{AmrIndex, INDEX_FILE};
-use super::schema::{check_confidence, Edge, EdgeRel, Node, NodeDraft, NodeHit, NodeId, Sensitivity};
+use super::schema::{
+    check_confidence, Edge, EdgeRel, Node, NodeDraft, NodeHit, NodeId, Sensitivity,
+};
 use super::{AmrError, Sealer};
 use crate::redact::redact_secrets;
 
@@ -196,7 +198,12 @@ impl AmrStore {
 
     /// `forgotten: <stamp>` plus `extra` lines, and the id leaves
     /// `index.sqlite`. An existing tombstone stays as it is.
-    pub(super) fn write_tombstone(&self, id: &NodeId, now_ms: u64, extra: &str) -> Result<(), AmrError> {
+    pub(super) fn write_tombstone(
+        &self,
+        id: &NodeId,
+        now_ms: u64,
+        extra: &str,
+    ) -> Result<(), AmrError> {
         let marker = self.node_path(id)?.with_extension(TOMBSTONE_EXT);
         if !marker.is_file() {
             let stamp = crate::oauth::unix_ms_to_rfc3339(now_ms);
@@ -256,7 +263,11 @@ impl AmrStore {
     /// many sealed nodes stayed shut. Opens sealed nodes in memory only.
     pub fn live_from_source(&self, prefix: &str) -> (Vec<Node>, usize) {
         let loaded = self.load_live();
-        let nodes = loaded.nodes.into_iter().filter(|n| n.source.starts_with(prefix)).collect();
+        let nodes = loaded
+            .nodes
+            .into_iter()
+            .filter(|n| n.source.starts_with(prefix))
+            .collect();
         (nodes, loaded.locked)
     }
 
@@ -287,15 +298,21 @@ impl AmrStore {
     }
 
     fn load_nodes(&self, tombstoned: bool) -> Loaded {
-        let mut loaded = Loaded { nodes: Vec::new(), locked: 0, why: None };
+        let mut loaded = Loaded {
+            nodes: Vec::new(),
+            locked: 0,
+            why: None,
+        };
         let Ok(read) = fs::read_dir(self.root.join("nodes")) else {
             return loaded;
         };
         let mut files: Vec<PathBuf> = Vec::new();
         for entry in read.flatten() {
             let path = entry.path();
-            if matches!(path.extension().and_then(|ext| ext.to_str()), Some("md" | SEALED_EXT))
-                && path.with_extension(TOMBSTONE_EXT).is_file() == tombstoned
+            if matches!(
+                path.extension().and_then(|ext| ext.to_str()),
+                Some("md" | SEALED_EXT)
+            ) && path.with_extension(TOMBSTONE_EXT).is_file() == tombstoned
             {
                 files.push(path);
             }
@@ -368,7 +385,11 @@ impl AmrStore {
     pub fn recallable(&self) -> (Vec<Node>, usize) {
         let loaded = self.load_live();
         let superseded = self.superseded_ids();
-        let nodes = loaded.nodes.into_iter().filter(|n| !superseded.contains(&n.id)).collect();
+        let nodes = loaded
+            .nodes
+            .into_iter()
+            .filter(|n| !superseded.contains(&n.id))
+            .collect();
         (nodes, loaded.locked)
     }
 
@@ -385,7 +406,10 @@ impl AmrStore {
         }
         fs::create_dir_all(&self.root).map_err(io_err)?;
         let (nodes, _) = self.recallable();
-        let plain: Vec<Node> = nodes.into_iter().filter(|n| !n.sensitivity.sealed()).collect();
+        let plain: Vec<Node> = nodes
+            .into_iter()
+            .filter(|n| !n.sensitivity.sealed())
+            .collect();
         let index = AmrIndex::open(&self.index_path())?;
         index.replace_all(&plain)?;
         Ok(index)
@@ -394,7 +418,10 @@ impl AmrStore {
     /// An in-memory index of the sealed nodes that open right now (unlock).
     pub fn sealed_index(&self) -> Result<AmrIndex, AmrError> {
         let (nodes, _) = self.recallable();
-        let sealed: Vec<Node> = nodes.into_iter().filter(|n| n.sensitivity.sealed()).collect();
+        let sealed: Vec<Node> = nodes
+            .into_iter()
+            .filter(|n| n.sensitivity.sealed())
+            .collect();
         AmrIndex::in_memory(&sealed)
     }
 
@@ -541,14 +568,21 @@ impl AmrStore {
     /// Live nodes whose `source` is exactly `source`, sorted by id. Sealed
     /// nodes that can't be opened are left out.
     pub fn nodes_from(&self, source: &str) -> Vec<Node> {
-        let mut nodes: Vec<Node> = self.load_live().nodes.into_iter().filter(|n| n.source == source).collect();
+        let mut nodes: Vec<Node> = self
+            .load_live()
+            .nodes
+            .into_iter()
+            .filter(|n| n.source == source)
+            .collect();
         nodes.sort_by(|a, b| a.id.cmp(&b.id));
         nodes
     }
 
     /// True when `nodes/<id>.md` or `nodes/<id>.sealed` is there.
     pub fn has_node(&self, id: &str) -> bool {
-        NodeId::parse(id).and_then(|id| self.node_exists(&id)).unwrap_or(false)
+        NodeId::parse(id)
+            .and_then(|id| self.node_exists(&id))
+            .unwrap_or(false)
     }
 
     /// [`Self::link`] unless the same edge is already in the log. True when
@@ -557,7 +591,11 @@ impl AmrStore {
         if self.scratch {
             return Err(AmrError::Scratch);
         }
-        if self.edges()?.iter().any(|e| e.from == from && e.to == to && e.rel == rel) {
+        if self
+            .edges()?
+            .iter()
+            .any(|e| e.from == from && e.to == to && e.rel == rel)
+        {
             return Ok(false);
         }
         self.link(from, to, rel).map(|()| true)

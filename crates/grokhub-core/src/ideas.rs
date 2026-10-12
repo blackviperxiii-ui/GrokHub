@@ -199,9 +199,21 @@ pub fn idea_prompt(ctx: &IdeaContext) -> String {
             format!("({tag}) {}", p.example)
         })
         .collect();
-    push_list(&mut lines, "What they asked lately, grouped by topic", &patterns, 15, 160);
+    push_list(
+        &mut lines,
+        "What they asked lately, grouped by topic",
+        &patterns,
+        15,
+        160,
+    );
     push_list(&mut lines, "Open workboard cards", ctx.open_cards, 8, 80);
-    push_list(&mut lines, "Automations they already run", ctx.automations, 12, 80);
+    push_list(
+        &mut lines,
+        "Automations they already run",
+        ctx.automations,
+        12,
+        80,
+    );
     push_list(&mut lines, "Skills they already have", ctx.skills, 12, 60);
     push_list(&mut lines, "Existing ideas", ctx.existing, 12, 60);
     push_list(&mut lines, "Turned down", ctx.rejected, 12, 60);
@@ -222,9 +234,27 @@ const STOP_WORDS: &[&str] = &[
 
 /// Verbs of a job you do once. An ask led by one of these is not a routine.
 const ONE_OFF_STEMS: &[&str] = &[
-    "install", "reinstall", "uninstall", "setup", "configur", "fix", "repair", "troubleshoot",
-    "debug", "download", "flash", "mount", "upgrad", "migrat", "recover", "restor", "reset",
-    "unbrick", "partition", "format", "replac",
+    "install",
+    "reinstall",
+    "uninstall",
+    "setup",
+    "configur",
+    "fix",
+    "repair",
+    "troubleshoot",
+    "debug",
+    "download",
+    "flash",
+    "mount",
+    "upgrad",
+    "migrat",
+    "recover",
+    "restor",
+    "reset",
+    "unbrick",
+    "partition",
+    "format",
+    "replac",
 ];
 
 fn stem(word: &str) -> String {
@@ -242,7 +272,10 @@ fn stem(word: &str) -> String {
 /// The words that name what a line is about: lowercased, stemmed, no filler.
 pub fn topic_words(text: &str) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
-    for raw in text.to_ascii_lowercase().split(|c: char| !(c.is_ascii_alphanumeric() || c == '\'' || c == '-')) {
+    for raw in text
+        .to_ascii_lowercase()
+        .split(|c: char| !(c.is_ascii_alphanumeric() || c == '\'' || c == '-'))
+    {
         let raw = raw.trim_matches(['\'', '-']);
         if raw.len() < 4 || STOP_WORDS.contains(&raw) || raw.chars().all(|c| c.is_ascii_digit()) {
             continue;
@@ -354,7 +387,11 @@ pub fn idea_from_one_off(text: &str, ground: &IdeaGround) -> bool {
     if lasting {
         return false;
     }
-    let mut matches = ground.asks.iter().filter(|a| same_topic(text, a)).peekable();
+    let mut matches = ground
+        .asks
+        .iter()
+        .filter(|a| same_topic(text, a))
+        .peekable();
     matches.peek().is_some() && matches.all(|a| is_one_off_ask(a))
 }
 
@@ -365,7 +402,11 @@ pub fn idea_topic_text(seed: &IdeaSeed) -> String {
 
 /// Keep ideas that have a reason and say something new: one per topic in this
 /// batch, and none on a topic already on the board or turned down (`taken`).
-pub fn keep_reasoned_ideas(seeds: Vec<IdeaSeed>, ground: &IdeaGround, taken: &[String]) -> Vec<IdeaSeed> {
+pub fn keep_reasoned_ideas(
+    seeds: Vec<IdeaSeed>,
+    ground: &IdeaGround,
+    taken: &[String],
+) -> Vec<IdeaSeed> {
     let mut out: Vec<IdeaSeed> = Vec::new();
     for seed in seeds {
         let topic = idea_topic_text(&seed);
@@ -547,16 +588,24 @@ mod tests {
         ];
         let autos = vec!["Nightly wrap".to_string()];
         let p = idea_prompt(&ctx(&asks, &autos));
-        assert!(p.contains("IDEA: kind | title | short description | reason | details | what to send"));
+        assert!(
+            p.contains("IDEA: kind | title | short description | reason | details | what to send")
+        );
         assert!(p.contains("- (2x) run the grokhub tests again"), "{p}");
-        assert!(p.contains("- (1x, one-time task) install the nvidia driver"), "{p}");
+        assert!(
+            p.contains("- (1x, one-time task) install the nvidia driver"),
+            "{p}"
+        );
         assert!(p.contains("A one-time task gets nothing"));
         assert!(p.contains("One idea per need"));
         assert!(p.contains("Automations they already run:\n- Nightly wrap"));
         assert!(p.contains("Builds GrokHub"));
         assert!(p.contains("hour 9 on Tuesday"));
         let secret = vec!["token sk-abcdefghijklmnopqrstuv".to_string()];
-        assert!(!idea_prompt(&ctx(&secret, &[])).contains("sk-abcdef"), "secrets stay out");
+        assert!(
+            !idea_prompt(&ctx(&secret, &[])).contains("sk-abcdef"),
+            "secrets stay out"
+        );
     }
 
     #[test]
@@ -575,12 +624,20 @@ IDEA: try | Morning test run | Duplicate title should be dropped by the parser. 
         let sources = vec!["run the grokhub tests again".to_string()];
         let ideas = parse_ideas(raw, &sources, &[]);
         let titles: Vec<&str> = ideas.iter().map(|i| i.title.as_str()).collect();
-        assert_eq!(titles, vec!["Morning test run", "AUR release checklist"], "{ideas:?}");
+        assert_eq!(
+            titles,
+            vec!["Morning test run", "AUR release checklist"],
+            "{ideas:?}"
+        );
         assert_eq!(ideas[0].kind, IdeaKind::Automation);
         assert!(ideas[0].prompt.starts_with("every weekday at 8"));
         assert_eq!(ideas[1].kind, IdeaKind::Skill);
         let taken = vec!["morning test run".to_string()];
-        assert_eq!(parse_ideas(raw, &sources, &taken).len(), 1, "a title already on the board is skipped");
+        assert_eq!(
+            parse_ideas(raw, &sources, &taken).len(),
+            1,
+            "a title already on the board is skipped"
+        );
         assert!(parse_ideas("I'll think about it.", &[], &[]).is_empty());
     }
 
@@ -596,7 +653,10 @@ IDEA: try | Morning test run | Duplicate title should be dropped by the parser. 
             "the nvidia driver install failed, try installing it again".to_string(),
             "install the nvidia 550 driver for my 4070".to_string(),
         ];
-        let ground = IdeaGround { asks: &asks, lasting: &[] };
+        let ground = IdeaGround {
+            asks: &asks,
+            lasting: &[],
+        };
         let raw = "\
 IDEA: automation | Driver update check | Your NVIDIA driver stays current without you asking. | You installed the nvidia driver. | Every Monday the cabin checks for a newer NVIDIA driver and tells you. | every monday at 9, check for a newer nvidia driver
 IDEA: skill | NVIDIA driver install | A saved procedure for the nvidia driver install. | You installed the nvidia driver. | Steps to install the NVIDIA driver on Arch with the right kernel modules. | save a skill that installs the nvidia driver
@@ -606,7 +666,10 @@ IDEA: try | Verify the driver | Check that the nvidia driver loaded. | You insta
         let parsed = ideas_of(raw);
         assert_eq!(parsed.len(), 4, "{parsed:?}");
         assert_eq!(parsed[0].reason, "You installed the nvidia driver.");
-        assert!(keep_reasoned_ideas(parsed, &ground, &[]).is_empty(), "nothing to make from one install");
+        assert!(
+            keep_reasoned_ideas(parsed, &ground, &[]).is_empty(),
+            "nothing to make from one install"
+        );
         for a in &asks {
             assert!(is_one_off_ask(a), "{a}");
         }
@@ -622,7 +685,10 @@ IDEA: try | Verify the driver | Check that the nvidia driver loaded. | You insta
             "run the grokhub tests again before the release".to_string(),
             "run grokhub tests on the chips branch".to_string(),
         ];
-        let ground = IdeaGround { asks: &asks, lasting: &[] };
+        let ground = IdeaGround {
+            asks: &asks,
+            lasting: &[],
+        };
         let raw = "\
 IDEA: automation | Morning test run | Your GrokHub tests run before you sit down. | You asked to run the GrokHub tests three times. | Every weekday at 8 the cabin runs the GrokHub tests and posts failures. | every weekday at 8, run the grokhub tests and summarize failures
 IDEA: skill | GrokHub test triage | Run the GrokHub tests and sort failures. | You run the GrokHub tests often. | A skill that runs the GrokHub tests and groups failures by file. | save a skill that runs the grokhub tests and groups failures
@@ -630,16 +696,26 @@ IDEA: automation | Issue digest | Your open GitHub issues each morning. | You as
 ";
         let kept = keep_reasoned_ideas(ideas_of(raw), &ground, &[]);
         let titles: Vec<&str> = kept.iter().map(|i| i.title.as_str()).collect();
-        assert_eq!(titles, vec!["Morning test run"], "one per topic; one ask is not a pattern");
+        assert_eq!(
+            titles,
+            vec!["Morning test run"],
+            "one per topic; one ask is not a pattern"
+        );
         let taken = vec!["Nightly GrokHub tests".to_string()];
         assert!(
             keep_reasoned_ideas(ideas_of(raw), &ground, &taken).is_empty(),
             "a topic already on the board gets no second card"
         );
         let lasting = vec!["Triages open GitHub issues every Monday for the release".to_string()];
-        let with_memory = IdeaGround { asks: &asks, lasting: &lasting };
+        let with_memory = IdeaGround {
+            asks: &asks,
+            lasting: &lasting,
+        };
         let kept = keep_reasoned_ideas(ideas_of(raw), &with_memory, &[]);
-        assert!(kept.iter().any(|i| i.title == "Issue digest"), "lasting context is a reason: {kept:?}");
+        assert!(
+            kept.iter().any(|i| i.title == "Issue digest"),
+            "lasting context is a reason: {kept:?}"
+        );
         let patterns = ask_patterns(&asks);
         assert_eq!(patterns[0].count, 3);
         assert!(!patterns[0].one_off);
@@ -647,11 +723,26 @@ IDEA: automation | Issue digest | Your open GitHub issues each morning. | You as
 
     #[test]
     fn untouched_one_off_ideas_are_recognized_for_cleanup() {
-        let asks = vec!["install the nvidia driver".to_string(), "summarize my open github issues".to_string()];
-        let ground = IdeaGround { asks: &asks, lasting: &[] };
-        assert!(idea_from_one_off("Driver update check: every monday check the nvidia driver", &ground));
-        assert!(!idea_from_one_off("Issue digest: summarize open github issues", &ground));
-        assert!(!idea_from_one_off("Stream prep before Friday streams", &ground), "no matching ask: left alone");
+        let asks = vec![
+            "install the nvidia driver".to_string(),
+            "summarize my open github issues".to_string(),
+        ];
+        let ground = IdeaGround {
+            asks: &asks,
+            lasting: &[],
+        };
+        assert!(idea_from_one_off(
+            "Driver update check: every monday check the nvidia driver",
+            &ground
+        ));
+        assert!(!idea_from_one_off(
+            "Issue digest: summarize open github issues",
+            &ground
+        ));
+        assert!(
+            !idea_from_one_off("Stream prep before Friday streams", &ground),
+            "no matching ask: left alone"
+        );
     }
 
     #[test]
@@ -685,7 +776,9 @@ IDEA: automation | Issue digest | Your open GitHub issues each morning. | You as
         assert_eq!(ideas.len(), 1, "{ideas:?}");
         assert_eq!(ideas[0].kind.type_label(), "Suggestion");
         assert!(ideas[0].body.chars().count() <= SHORT_CHARS);
-        assert!(ideas[0].details.starts_with("The cabin reads your open GrokHub issues"));
+        assert!(ideas[0]
+            .details
+            .starts_with("The cabin reads your open GrokHub issues"));
         assert_eq!(IdeaKind::Reminder.type_label(), "Automation");
         assert_eq!(IdeaKind::Skill.type_label(), "Skill");
         let json = serde_json::to_string(&IdeaKind::Try).unwrap();

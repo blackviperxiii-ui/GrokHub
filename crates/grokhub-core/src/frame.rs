@@ -57,7 +57,10 @@ fn decode_b64(s: &str) -> Option<Vec<u8>> {
             _ => None,
         }
     }
-    let clean: Vec<u8> = s.bytes().filter(|b| !b.is_ascii_whitespace() && *b != b'=').collect();
+    let clean: Vec<u8> = s
+        .bytes()
+        .filter(|b| !b.is_ascii_whitespace() && *b != b'=')
+        .collect();
     let mut out = Vec::with_capacity(clean.len() * 3 / 4);
     for chunk in clean.chunks(4) {
         if chunk.len() < 2 {

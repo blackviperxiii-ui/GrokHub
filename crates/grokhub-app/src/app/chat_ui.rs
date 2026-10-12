@@ -375,7 +375,13 @@ pub(super) fn result_row_label_pads(ui: &egui::Ui, labels: &[&str]) -> Vec<f32> 
     let font = egui::FontId::proportional(RESULT_ROW_LABEL_SIZE);
     let widths: Vec<f32> = labels
         .iter()
-        .map(|l| ui.fonts_mut(|f| f.layout_no_wrap((*l).to_string(), font.clone(), egui::Color32::WHITE).size().x))
+        .map(|l| {
+            ui.fonts_mut(|f| {
+                f.layout_no_wrap((*l).to_string(), font.clone(), egui::Color32::WHITE)
+                    .size()
+                    .x
+            })
+        })
         .collect();
     let widest = widths.iter().copied().fold(0.0_f32, f32::max);
     widths.into_iter().map(|w| widest - w).collect()
@@ -389,7 +395,11 @@ pub(super) fn paint_speech_bubble(
 ) -> egui::Response {
     let body = crate::markdown::display_text(body);
     let avail = clamp_row_width(ui.available_width().min(ui.max_rect().width()));
-    let mark_w = if user { 0.0 } else { REPLY_MARK_W + REPLY_MARK_GAP };
+    let mark_w = if user {
+        0.0
+    } else {
+        REPLY_MARK_W + REPLY_MARK_GAP
+    };
     let bubble_avail = (avail - mark_w).max(1.0);
     let wrap = bubble_wrap_width(bubble_avail, BUBBLE_PAD_X);
     let content_w = if markdown && !user {
@@ -417,12 +427,19 @@ pub(super) fn paint_speech_bubble(
             crate::theme::bubble_user()
         } else if error {
             // A failed turn must not read as an answer: faint red wash plus a red hairline.
-            crate::theme::blend_color(crate::theme::bubble_assistant(), crate::theme::offline(), 0.08)
+            crate::theme::blend_color(
+                crate::theme::bubble_assistant(),
+                crate::theme::offline(),
+                0.08,
+            )
         } else {
             crate::theme::bubble_assistant()
         })
         .stroke(if error {
-            egui::Stroke::new(1.0_f32, crate::theme::blend_color(crate::theme::border(), crate::theme::offline(), 0.6))
+            egui::Stroke::new(
+                1.0_f32,
+                crate::theme::blend_color(crate::theme::border(), crate::theme::offline(), 0.6),
+            )
         } else {
             egui::Stroke::NONE
         })
@@ -439,12 +456,7 @@ pub(super) fn paint_speech_bubble(
                 ui.set_max_width(inner_w);
                 ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Wrap);
                 if user || !markdown {
-                    let job = crate::markdown::wrapped_job(
-                        ui,
-                        body,
-                        inner_w,
-                        crate::theme::fg(),
-                    );
+                    let job = crate::markdown::wrapped_job(ui, body, inner_w, crate::theme::fg());
                     ui.add(egui::Label::new(job).wrap().selectable(true));
                 } else {
                     crate::markdown::show(ui, body);
@@ -481,8 +493,8 @@ pub(super) fn paint_speech_bubble(
             ui.set_max_width(avail);
             ui.spacing_mut().item_spacing.x = REPLY_MARK_GAP;
             let mark = crate::theme::mark(ui.ctx());
-            let (mark_rect, _) =
-                ui.allocate_exact_size(egui::vec2(REPLY_MARK_W, REPLY_MARK_W), egui::Sense::hover());
+            let (mark_rect, _) = ui
+                .allocate_exact_size(egui::vec2(REPLY_MARK_W, REPLY_MARK_W), egui::Sense::hover());
             ui.painter().image(
                 mark.id(),
                 mark_rect,
@@ -511,7 +523,8 @@ pub(super) struct MsgActsPaint {
 /// with a zero minimum size and the chrome font.
 fn label_hit_width(ui: &egui::Ui, label: &str) -> f32 {
     let font = egui::FontId::proportional(crate::theme::FONT_CHROME);
-    let galley = ui.fonts_mut(|f| f.layout_no_wrap(label.to_owned(), font, egui::Color32::PLACEHOLDER));
+    let galley =
+        ui.fonts_mut(|f| f.layout_no_wrap(label.to_owned(), font, egui::Color32::PLACEHOLDER));
     let pad = ui.style().spacing.button_padding.x;
     galley.size().x + pad * 2.0
 }
@@ -920,8 +933,7 @@ fn paint_thought_collapse_hit(ui: &mut egui::Ui, label: &str, expanded: bool) ->
     );
     let (rect, resp) = ui.allocate_exact_size(size, egui::Sense::click());
     if resp.hovered() {
-        ui.painter()
-            .rect_filled(rect, 3.0, crate::theme::hover());
+        ui.painter().rect_filled(rect, 3.0, crate::theme::hover());
     }
     let cy = rect.center().y;
     paint_thought_chevron(
@@ -932,10 +944,7 @@ fn paint_thought_collapse_hit(ui: &mut egui::Ui, label: &str, expanded: bool) ->
         color,
     );
     ui.painter().galley(
-        egui::pos2(
-            rect.min.x + pad.x + chev + gap,
-            cy - galley.size().y * 0.5,
-        ),
+        egui::pos2(rect.min.x + pad.x + chev + gap, cy - galley.size().y * 0.5),
         galley,
         color,
     );
@@ -1197,31 +1206,42 @@ impl Cabin {
                         let mut collapse_session = false;
                         let mut privacy_revoke: Option<String> = None;
                         let mut skill_hit: Option<super::skill_undo::SkillRow> = None;
-                        let mut findings_hit: Option<(super::findings_ui::FindingsAct, String)> = None;
-                        let mut change_hit: Option<(super::change_undo::ChangeRow, super::change_undo::ChangeAct)> = None;
+                        let mut findings_hit: Option<(super::findings_ui::FindingsAct, String)> =
+                            None;
+                        let mut change_hit: Option<(
+                            super::change_undo::ChangeRow,
+                            super::change_undo::ChangeAct,
+                        )> = None;
                         {
                             let thread_id = fold_thread.clone();
                             let row_h_id = chat_row_height_id(&thread_id, pane);
                             self.cached_chat_views();
                             // SY-04: the newest /privacy bubble gets a ghost Revoke per
                             // live grant. Read the ledger only when that bubble exists.
-                            let privacy_at = super::privacy_ui::newest_privacy_row(&self.chat_views);
+                            let privacy_at =
+                                super::privacy_ui::newest_privacy_row(&self.chat_views);
                             let privacy_grants = if privacy_at.is_some() {
                                 self.privacy_revoke_rows()
                             } else {
                                 Vec::new()
                             };
                             let privacy_locked = if privacy_at.is_some() {
-                                self.private_lock_for_paint().map(|why| super::privacy_ui::lock_hover(&why))
+                                self.private_lock_for_paint()
+                                    .map(|why| super::privacy_ui::lock_hover(&why))
                             } else {
                                 None
                             };
                             // The newest /skills changes bubble gets Undo / Restore rows.
-                            let skill_at = super::skill_undo::newest_skill_changes_row(&self.chat_views);
-                            let skill_rows =
-                                if skill_at.is_some() { self.skill_rows_now() } else { Vec::new() };
+                            let skill_at =
+                                super::skill_undo::newest_skill_changes_row(&self.chat_views);
+                            let skill_rows = if skill_at.is_some() {
+                                self.skill_rows_now()
+                            } else {
+                                Vec::new()
+                            };
                             // Same for /connections changes and /automations changes.
-                            let change_at = super::change_undo::newest_change_report(&self.chat_views);
+                            let change_at =
+                                super::change_undo::newest_change_report(&self.chat_views);
                             let change_rows = match change_at {
                                 Some((_, kind)) => self.change_rows_now(kind),
                                 None => Vec::new(),
@@ -1307,53 +1327,64 @@ impl Cabin {
                                         .iter()
                                         .take_while(|v| v.kind != ChatKind::User)
                                         .any(|v| v.kind == ChatKind::Assistant);
-                                let privacy_here = (privacy_at == Some(i) && !privacy_grants.is_empty())
+                                let privacy_here = (privacy_at == Some(i)
+                                    && !privacy_grants.is_empty())
                                     || (skill_at == Some(i) && !skill_rows.is_empty())
                                     || (change_at == Some(i) && !change_rows.is_empty())
                                     || findings_at == Some(i);
-                                let painted = ui
-                                    .push_id(chat_row_id_salt(&thread_id, i), |ui| {
-                                        let mut p = paint_chat_block_with(
-                                            ui,
-                                            block,
-                                            thought_shows_label(prev_expanded),
-                                            thought_shows_acts(next_expanded),
-                                            fold,
-                                            reply_acts && !privacy_here,
-                                        );
-                                        if privacy_here {
-                                            if skill_at == Some(i) {
-                                                skill_hit =
-                                                    super::skill_undo::paint_skill_undo_rows(ui, &skill_rows);
-                                            } else if let Some((_, card)) = findings.as_ref().filter(|_| findings_at == Some(i)) {
-                                                findings_hit = super::findings_ui::paint_findings_fixes(ui, card)
+                                let painted = ui.push_id(chat_row_id_salt(&thread_id, i), |ui| {
+                                    let mut p = paint_chat_block_with(
+                                        ui,
+                                        block,
+                                        thought_shows_label(prev_expanded),
+                                        thought_shows_acts(next_expanded),
+                                        fold,
+                                        reply_acts && !privacy_here,
+                                    );
+                                    if privacy_here {
+                                        if skill_at == Some(i) {
+                                            skill_hit = super::skill_undo::paint_skill_undo_rows(
+                                                ui,
+                                                &skill_rows,
+                                            );
+                                        } else if let Some((_, card)) =
+                                            findings.as_ref().filter(|_| findings_at == Some(i))
+                                        {
+                                            findings_hit =
+                                                super::findings_ui::paint_findings_fixes(ui, card)
                                                     .map(|act| (act, block.body.clone()));
-                                            } else if change_at == Some(i) {
-                                                change_hit = super::change_undo::paint_change_rows(
-                                                    ui,
-                                                    "change-report",
-                                                    &change_rows,
-                                                    true,
-                                                );
-                                            } else {
-                                                privacy_revoke = super::privacy_ui::paint_privacy_revokes(
+                                        } else if change_at == Some(i) {
+                                            change_hit = super::change_undo::paint_change_rows(
+                                                ui,
+                                                "change-report",
+                                                &change_rows,
+                                                true,
+                                            );
+                                        } else {
+                                            privacy_revoke =
+                                                super::privacy_ui::paint_privacy_revokes(
                                                     ui,
                                                     &privacy_grants,
                                                     privacy_locked,
                                                 );
-                                            }
-                                            if reply_acts {
-                                                let avail = clamp_row_width(
-                                                    ui.available_width().min(ui.max_rect().width()),
-                                                );
-                                                let w = crate::markdown::bubble_width(avail);
-                                                p.act = paint_msg_acts(ui, false, &block.body, avail, w).act;
-                                            }
                                         }
-                                        p
-                                    });
+                                        if reply_acts {
+                                            let avail = clamp_row_width(
+                                                ui.available_width().min(ui.max_rect().width()),
+                                            );
+                                            let w = crate::markdown::bubble_width(avail);
+                                            p.act =
+                                                paint_msg_acts(ui, false, &block.body, avail, w)
+                                                    .act;
+                                        }
+                                    }
+                                    p
+                                });
                                 if (jump_you && last_you_i == Some(i)) || turn_i == Some(i) {
-                                    ui.scroll_to_rect(painted.response.rect, Some(egui::Align::Center));
+                                    ui.scroll_to_rect(
+                                        painted.response.rect,
+                                        Some(egui::Align::Center),
+                                    );
                                     jumped_you = true;
                                 }
                                 if find_hits.contains(&i) {
@@ -1524,7 +1555,9 @@ impl Cabin {
                                     RichText::new("Find in this chat").color(crate::theme::muted()),
                                 )
                                 .desired_width((w - 16.0 - 170.0).max(80.0))
-                                .frame(egui::Frame::NONE.inner_margin(egui::Margin::symmetric(4, 2)));
+                                .frame(
+                                    egui::Frame::NONE.inner_margin(egui::Margin::symmetric(4, 2)),
+                                );
                             let resp = ui.add(edit);
                             if self.find.want_focus {
                                 resp.request_focus();
@@ -1656,7 +1689,10 @@ impl Cabin {
                     return ChatJump::LastYou;
                 }
                 if resp.clicked() {
-                    let used = ui.ctx().data(|d| d.get_temp::<bool>(used_id)).unwrap_or(false);
+                    let used = ui
+                        .ctx()
+                        .data(|d| d.get_temp::<bool>(used_id))
+                        .unwrap_or(false);
                     if used {
                         ui.ctx().data_mut(|d| d.insert_temp(used_id, false));
                         return ChatJump::None;
@@ -1915,7 +1951,9 @@ impl Cabin {
     /// centered and justified, and cards must not inherit that (SY-01).
     /// The inbox rows without the cards, left-aligned like the stack.
     fn paint_inbox_only(&mut self, ui: &mut egui::Ui) {
-        ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| self.paint_inbox(ui));
+        ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
+            self.paint_inbox(ui)
+        });
     }
 
     pub(super) fn paint_approval_stack(&mut self, ui: &mut egui::Ui) {
@@ -1937,7 +1975,11 @@ impl Cabin {
     /// a plain coding ask writes none, as before, so a coding chat is not
     /// audited as a harness turn.
     pub(super) fn answer_perm_at(&mut self, i: usize, allow: bool, why: &str) {
-        let p = if i == 0 { self.perm_ask.take() } else { self.perm_queue.remove(i - 1) };
+        let p = if i == 0 {
+            self.perm_ask.take()
+        } else {
+            self.perm_queue.remove(i - 1)
+        };
         let Some(p) = p else {
             return;
         };
@@ -2008,127 +2050,128 @@ impl Cabin {
                 .stroke(egui::Stroke::new(1.0_f32, crate::theme::border()))
                 .inner_margin(egui::Margin::same(12))
                 .show(ui, |ui| {
-                ui.set_min_width(inner);
-                ui.set_max_width(inner);
-                ui.label(
-                    RichText::new(eyebrow)
-                        .size(12.0)
-                        .color(crate::theme::muted()),
-                );
-                ui.add_space(4.0);
-                ui.label(
-                    RichText::new("Grok wants permission")
-                        .size(14.0)
-                        .color(crate::theme::fg()),
-                );
-                // A parsed command paints even when it is `[ -f … ]` or `{ …; }`.
-                // Only a leftover title dump is hidden.
-                let action = if p.action.trim().is_empty() {
-                    let title = p.title.trim();
-                    if title.starts_with('{') || title.starts_with('[') {
-                        ""
-                    } else {
-                        title
-                    }
-                } else {
-                    p.action.trim()
-                };
-                if !action.is_empty() {
-                    ui.add_space(4.0);
-                    ui.add(
-                        egui::Label::new(
-                            RichText::new(action)
-                                .size(13.0)
-                                .monospace()
-                                .color(crate::theme::fg()),
-                        )
-                        .wrap(),
-                    );
-                }
-                if !p.reason.trim().is_empty() && p.reason.trim() != action {
-                    ui.add_space(4.0);
-                    ui.add(
-                        egui::Label::new(
-                            RichText::new(&p.reason)
-                                .size(13.0)
-                                .color(crate::theme::muted()),
-                        )
-                        .wrap(),
-                    );
-                }
-                if !self.perm_queue.is_empty() {
-                    ui.add_space(4.0);
+                    ui.set_min_width(inner);
+                    ui.set_max_width(inner);
                     ui.label(
-                        RichText::new(format!("{} more waiting", self.perm_queue.len()))
+                        RichText::new(eyebrow)
                             .size(12.0)
                             .color(crate::theme::muted()),
                     );
-                }
-                ui.add_space(8.0);
-                let overlay = self.palette_open || self.nav == Nav::Settings || self.find.focused;
-                let key = perm_key(
-                    bare_press(ui, egui::Key::Enter),
-                    bare_press(ui, egui::Key::Escape),
-                    !self.composer.trim().is_empty(),
-                    overlay || overlay_over_chat(ui.ctx()),
-                );
-                // One press answers one card, not the next one queued behind it.
-                match key {
-                    Some(PermKey::Allow) => {
-                        ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter))
+                    ui.add_space(4.0);
+                    ui.label(
+                        RichText::new("Grok wants permission")
+                            .size(14.0)
+                            .color(crate::theme::fg()),
+                    );
+                    // A parsed command paints even when it is `[ -f … ]` or `{ …; }`.
+                    // Only a leftover title dump is hidden.
+                    let action = if p.action.trim().is_empty() {
+                        let title = p.title.trim();
+                        if title.starts_with('{') || title.starts_with('[') {
+                            ""
+                        } else {
+                            title
+                        }
+                    } else {
+                        p.action.trim()
+                    };
+                    if !action.is_empty() {
+                        ui.add_space(4.0);
+                        ui.add(
+                            egui::Label::new(
+                                RichText::new(action)
+                                    .size(13.0)
+                                    .monospace()
+                                    .color(crate::theme::fg()),
+                            )
+                            .wrap(),
+                        );
                     }
-                    Some(PermKey::Deny) => {
-                        ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
+                    if !p.reason.trim().is_empty() && p.reason.trim() != action {
+                        ui.add_space(4.0);
+                        ui.add(
+                            egui::Label::new(
+                                RichText::new(&p.reason)
+                                    .size(13.0)
+                                    .color(crate::theme::muted()),
+                            )
+                            .wrap(),
+                        );
                     }
-                    None => false,
-                };
-                let mut answered = None;
-                ui.horizontal(|ui| {
-                    if crate::cards::white_pill(ui, "Allow") || key == Some(PermKey::Allow) {
-                        answered = Some(true);
-                    } else if crate::cards::ghost_pill(ui, "Deny") || key == Some(PermKey::Deny) {
-                        // Grok's own reject option: "denied", not "User cancelled".
-                        answered = Some(false);
+                    if !self.perm_queue.is_empty() {
+                        ui.add_space(4.0);
+                        ui.label(
+                            RichText::new(format!("{} more waiting", self.perm_queue.len()))
+                                .size(12.0)
+                                .color(crate::theme::muted()),
+                        );
                     }
-                    if answered.is_none()
-                        && self.perm_always_confirm.is_none()
-                        && crate::cards::ghost_pill(ui, "Always")
-                    {
-                        self.perm_always_confirm = Some(p.rpc_id.clone());
-                    }
-                });
-                // The same answer the inbox row gives.
-                if let Some(allow) = answered {
-                    self.answer_perm_at(0, allow, super::harness_ui::SOFT_DENY);
-                    return;
-                }
-                if always_confirm_matches_rpc(self.perm_always_confirm.as_ref(), &p.rpc_id) {
                     ui.add_space(8.0);
-                    if let Some(act) =
-                        paint_confirm_sheet(ui, always_session_spec(), ALWAYS_CONFIRM_LINE2)
-                    {
-                        match act {
-                            ConfirmAct::Confirm => {
-                                self.set_permission_mode(PermissionMode::AlwaysApprove);
-                                // Always covers the asks already waiting, too.
-                                let queued: Vec<_> = self.perm_queue.drain(..).collect();
-                                if let Some(h) = &self.acp {
-                                    let _ = h.answer_permission_always(p.rpc_id.clone());
-                                    for q in queued {
-                                        let _ = h.answer_permission_always(q.rpc_id);
+                    let overlay =
+                        self.palette_open || self.nav == Nav::Settings || self.find.focused;
+                    let key = perm_key(
+                        bare_press(ui, egui::Key::Enter),
+                        bare_press(ui, egui::Key::Escape),
+                        !self.composer.trim().is_empty(),
+                        overlay || overlay_over_chat(ui.ctx()),
+                    );
+                    // One press answers one card, not the next one queued behind it.
+                    match key {
+                        Some(PermKey::Allow) => {
+                            ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter))
+                        }
+                        Some(PermKey::Deny) => ui
+                            .input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)),
+                        None => false,
+                    };
+                    let mut answered = None;
+                    ui.horizontal(|ui| {
+                        if crate::cards::white_pill(ui, "Allow") || key == Some(PermKey::Allow) {
+                            answered = Some(true);
+                        } else if crate::cards::ghost_pill(ui, "Deny") || key == Some(PermKey::Deny)
+                        {
+                            // Grok's own reject option: "denied", not "User cancelled".
+                            answered = Some(false);
+                        }
+                        if answered.is_none()
+                            && self.perm_always_confirm.is_none()
+                            && crate::cards::ghost_pill(ui, "Always")
+                        {
+                            self.perm_always_confirm = Some(p.rpc_id.clone());
+                        }
+                    });
+                    // The same answer the inbox row gives.
+                    if let Some(allow) = answered {
+                        self.answer_perm_at(0, allow, super::harness_ui::SOFT_DENY);
+                        return;
+                    }
+                    if always_confirm_matches_rpc(self.perm_always_confirm.as_ref(), &p.rpc_id) {
+                        ui.add_space(8.0);
+                        if let Some(act) =
+                            paint_confirm_sheet(ui, always_session_spec(), ALWAYS_CONFIRM_LINE2)
+                        {
+                            match act {
+                                ConfirmAct::Confirm => {
+                                    self.set_permission_mode(PermissionMode::AlwaysApprove);
+                                    // Always covers the asks already waiting, too.
+                                    let queued: Vec<_> = self.perm_queue.drain(..).collect();
+                                    if let Some(h) = &self.acp {
+                                        let _ = h.answer_permission_always(p.rpc_id.clone());
+                                        for q in queued {
+                                            let _ = h.answer_permission_always(q.rpc_id);
+                                        }
                                     }
+                                    self.perm_ask = None;
+                                    self.perm_always_confirm = None;
+                                    self.status = "Permission always-approve".into();
                                 }
-                                self.perm_ask = None;
-                                self.perm_always_confirm = None;
-                                self.status = "Permission always-approve".into();
-                            }
-                            ConfirmAct::Cancel => {
-                                self.perm_always_confirm = None;
+                                ConfirmAct::Cancel => {
+                                    self.perm_always_confirm = None;
+                                }
                             }
                         }
                     }
-                }
-            });
+                });
             let time = ui.ctx().input(|i| i.time) as f32;
             crate::motion::paint_thinking_rim(
                 ui.painter(),
@@ -2275,7 +2318,8 @@ impl Cabin {
             0
         };
         let feed_h = collapsed_stack_h(feed_n);
-        let device_on = pulse_on && device_glance(self.hub_on, self.last_frame_url.as_deref()).is_some();
+        let device_on =
+            pulse_on && device_glance(self.hub_on, self.last_frame_url.as_deref()).is_some();
         let device_h = if device_on { 26.0 } else { 0.0 };
         let block_h = greet_h;
         let greet_top = empty_home_greet_top(composer_top, block_h, 12.0);
@@ -2326,7 +2370,8 @@ impl Cabin {
                     }
                     self.paint_try_again(ui);
                     if pulse_on && (feed_n > 0 || device_on) {
-                        let below = feed_h + device_h + if feed_n > 0 && device_on { 4.0 } else { 0.0 };
+                        let below =
+                            feed_h + device_h + if feed_n > 0 && device_on { 4.0 } else { 0.0 };
                         let gap = ui.available_height();
                         ui.add_space(((gap - below) * 0.5).max(0.0));
                         if feed_n > 0 {
@@ -2357,7 +2402,11 @@ impl Cabin {
         }
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing.x = 6.0;
-            let label = if self.plan_open { "Hide plan" } else { "View plan" };
+            let label = if self.plan_open {
+                "Hide plan"
+            } else {
+                "View plan"
+            };
             if crate::cards::ghost_pill(ui, label) {
                 self.plan_open = !self.plan_open;
             }
@@ -2454,10 +2503,12 @@ impl Cabin {
                                     egui::vec2(bar_w, 14.0),
                                     egui::Sense::hover(),
                                 );
-                                ui.painter().rect_filled(rect, 4.0, crate::theme::elevated());
+                                ui.painter()
+                                    .rect_filled(rect, 4.0, crate::theme::elevated());
                                 let mut fill = rect;
                                 fill.set_width((rect.width() * frac).max(2.0));
-                                ui.painter().rect_filled(fill, 4.0, crate::theme::nav_active());
+                                ui.painter()
+                                    .rect_filled(fill, 4.0, crate::theme::nav_active());
                                 ui.painter().text(
                                     rect.center(),
                                     egui::Align2::CENTER_CENTER,
@@ -2481,7 +2532,8 @@ impl Cabin {
                         if !hits.is_empty() {
                             let first = hits.first().map(|s| s.cmd.as_str()).unwrap_or("");
                             let n = hits.len();
-                            let changed = self.slash_filter_n != n || self.slash_filter_first != first;
+                            let changed =
+                                self.slash_filter_n != n || self.slash_filter_first != first;
                             self.slash_pick = slash_pick_retain(self.slash_pick, changed, n);
                             self.slash_filter_n = n;
                             self.slash_filter_first = first.to_string();
@@ -2536,13 +2588,16 @@ impl Cabin {
                                             }
                                         });
                                 });
-                            if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown)) {
+                            if ui.input_mut(|i| {
+                                i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown)
+                            }) {
                                 self.slash_pick = slash_pick_step(self.slash_pick, hits.len(), 1);
                             } else if ui.input_mut(|i| {
                                 i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp)
                             }) {
                                 self.slash_pick = slash_pick_step(self.slash_pick, hits.len(), -1);
-                            } else if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Tab))
+                            } else if ui
+                                .input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Tab))
                             {
                                 let s = &hits[self.slash_pick.min(hits.len() - 1)];
                                 if let Some(t) =
@@ -2566,268 +2621,264 @@ impl Cabin {
                         }
                     }
                     ComposerStackSlot::Attach => {
-            self.ui_attach_chip(ui, PlusTarget::Chat);
+                        self.ui_attach_chip(ui, PlusTarget::Chat);
                     }
                     ComposerStackSlot::Voice => {
-            self.paint_voice_mode_row(ui);
+                        self.paint_voice_mode_row(ui);
                     }
                     ComposerStackSlot::Pill => {
-            let pill_w = crate::cards::composer_pill_w(ui.ctx().content_rect().width());
-            let cap = pill_w.min(ui.available_width()).max(360.0);
-            ui.set_width(cap);
-            ui.set_max_width(cap);
-            let session_now = self.session_mode.as_str().to_string();
-            let perm_now = self.permission_mode.as_str().to_string();
-            let (rung, why) = self.auto_chip();
-            let row = crate::cards::session_row(ui, &session_now, &perm_now, (&rung, &why));
-            if let Some(mode) = row.mode {
-                if let Some(m) = SessionMode::parse(&mode) {
-                    if m == SessionMode::Plan {
-                        self.select_plan_without_rename();
-                    } else if m == SessionMode::Ask && self.running {
-                        self.set_session_mode(m);
-                        self.status = "btw — side ask, main run continues".into();
-                    } else {
-                        self.confirm = None;
-                        if self.running {
-                            self.halt_in_flight();
-                        }
-                        self.set_session_mode(m);
-                        self.acp = None;
-                        if let Some(t) = self.threads.get_mut(self.thread_idx) {
-                            t.grok_session = None;
-                        }
-                        self.persist_idle_key = self.persist_idle_now();
-                        self.status = if m == SessionMode::Ask {
-                            "btw — look-safe side ask".into()
-                        } else {
-                            format!("Session {}", m.as_str())
-                        };
-                    }
-                }
-            }
-            if let Some(perm) = row.perm {
-                if let Some(p) = PermissionMode::parse(&perm) {
-                    if p == PermissionMode::AlwaysApprove
-                        && self.permission_mode != PermissionMode::AlwaysApprove
-                    {
-                        self.arm_session_always();
-                    } else {
-                    self.confirm = None;
-                    if self.running {
-                        self.halt_in_flight();
-                    }
-                    self.set_permission_mode(p);
-                    self.acp = None;
-                    if let Some(t) = self.threads.get_mut(self.thread_idx) {
-                        t.grok_session = None;
-                    }
-                    self.persist_idle_key = self.persist_idle_now();
-                    self.status = format!("Permission {}", p.as_str());
-                    }
-                }
-            }
-            if row.why {
-                self.run_why(false);
-            }
-            let composer_id = egui::Id::new("chat-composer");
-            let focused = ui.memory(|m| m.has_focus(composer_id));
-            let rows = (self.composer.matches('\n').count() + 1).clamp(1, 6);
-            let pad_l = 20.0;
-            let pad_r = 24.0;
-            let pill_h = if rows == 1 {
-                crate::theme::QUERY_MIN_H
-            } else {
-                (rows as f32 * 22.0 + 28.0).max(crate::theme::QUERY_MIN_H)
-            };
-            ui.allocate_ui_with_layout(
-                egui::vec2(cap, pill_h),
-                egui::Layout::left_to_right(egui::Align::Center),
-                |ui| {
-                    ui.set_min_size(egui::vec2(cap, pill_h));
-                    let pill_rect =
-                        egui::Rect::from_min_size(ui.max_rect().min, egui::vec2(cap, pill_h));
-                    #[cfg(feature = "fx")]
-                    self.paint_composer_glow(ui, pill_rect);
-                    ui.painter().rect(
-                        pill_rect,
-                        crate::theme::QUERY_RADIUS,
-                        crate::theme::elevated(),
-                        crate::theme::composer_chrome_stroke(focused),
-                        egui::StrokeKind::Middle,
-                    );
-                    let inner = (cap - pad_l - pad_r).max(200.0);
-                    ui.spacing_mut().item_spacing.x = 0.0;
-                    ui.add_space(pad_l);
-                    let plus = crate::icons::paint_bar_icon(
-                        ui,
-                        crate::icons::BarIcon::Plus,
-                        22.0,
-                        crate::theme::muted(),
-                    )
-                    .on_hover_text("Upload a file or paste clipboard");
-                    if plus.clicked() {
-                        self.open_plus(PlusTarget::Chat, plus.rect.left_bottom());
-                    }
-                    if self.composer_want_focus {
-                        ui.memory_mut(|m| m.request_focus(composer_id));
-                        self.composer_want_focus = false;
-                    }
-                    let focused = ui.memory(|m| m.has_focus(composer_id));
-                    if let Some(t) = take_focused_composer(ui, &mut self.composer, focused) {
-                        self.send_typed(ui, t);
-                    }
-                    ui.add_space(8.0);
-                    let cluster = crate::cards::composer_go_cluster_w();
-                    let go_sz = crate::cards::composer_go_hit_w();
-                    let mid = crate::cards::composer_mid_w(inner);
-                    let (mut mic_rect, mut go_rect) = (egui::Rect::NOTHING, egui::Rect::NOTHING);
-                    ui.allocate_ui_with_layout(
-                        egui::vec2(mid, pill_h),
-                        egui::Layout::left_to_right(egui::Align::Center),
-                        |ui| {
-                            ui.spacing_mut().item_spacing.x = 8.0;
-                            let text_w = (mid - 8.0 - 22.0).max(80.0);
-                            let edit = egui::ScrollArea::vertical()
-                                .id_salt("chat-composer-scroll")
-                                .max_width(text_w)
-                                .max_height(pill_h)
-                                .auto_shrink([false, true])
-                                .show(ui, |ui| {
-                                    ui.set_min_height(pill_h);
-                                    ui.set_max_height(pill_h);
-                                    let hint_align = if rows == 1 {
-                                        egui::Align::Center
+                        let pill_w = crate::cards::composer_pill_w(ui.ctx().content_rect().width());
+                        let cap = pill_w.min(ui.available_width()).max(360.0);
+                        ui.set_width(cap);
+                        ui.set_max_width(cap);
+                        let session_now = self.session_mode.as_str().to_string();
+                        let perm_now = self.permission_mode.as_str().to_string();
+                        let (rung, why) = self.auto_chip();
+                        let row =
+                            crate::cards::session_row(ui, &session_now, &perm_now, (&rung, &why));
+                        if let Some(mode) = row.mode {
+                            if let Some(m) = SessionMode::parse(&mode) {
+                                if m == SessionMode::Plan {
+                                    self.select_plan_without_rename();
+                                } else if m == SessionMode::Ask && self.running {
+                                    self.set_session_mode(m);
+                                    self.status = "btw — side ask, main run continues".into();
+                                } else {
+                                    self.confirm = None;
+                                    if self.running {
+                                        self.halt_in_flight();
+                                    }
+                                    self.set_session_mode(m);
+                                    self.acp = None;
+                                    if let Some(t) = self.threads.get_mut(self.thread_idx) {
+                                        t.grok_session = None;
+                                    }
+                                    self.persist_idle_key = self.persist_idle_now();
+                                    self.status = if m == SessionMode::Ask {
+                                        "btw — look-safe side ask".into()
                                     } else {
-                                        egui::Align::Min
+                                        format!("Session {}", m.as_str())
                                     };
-                                    ui.add(
-                                        egui::TextEdit::multiline(&mut self.composer)
-                                            .id(composer_id)
-                                            .desired_width(text_w)
-                                            .desired_rows(rows)
-                                            .min_size(egui::vec2(
-                                                text_w,
-                                                if rows == 1 { pill_h } else { 0.0 },
-                                            ))
-                                            .frame(composer_field_frame())
-                                            .vertical_align(hint_align)
-                                            .font(egui::FontId::new(
+                                }
+                            }
+                        }
+                        if let Some(perm) = row.perm {
+                            if let Some(p) = PermissionMode::parse(&perm) {
+                                if p == PermissionMode::AlwaysApprove
+                                    && self.permission_mode != PermissionMode::AlwaysApprove
+                                {
+                                    self.arm_session_always();
+                                } else {
+                                    self.confirm = None;
+                                    if self.running {
+                                        self.halt_in_flight();
+                                    }
+                                    self.set_permission_mode(p);
+                                    self.acp = None;
+                                    if let Some(t) = self.threads.get_mut(self.thread_idx) {
+                                        t.grok_session = None;
+                                    }
+                                    self.persist_idle_key = self.persist_idle_now();
+                                    self.status = format!("Permission {}", p.as_str());
+                                }
+                            }
+                        }
+                        if row.why {
+                            self.run_why(false);
+                        }
+                        let composer_id = egui::Id::new("chat-composer");
+                        let focused = ui.memory(|m| m.has_focus(composer_id));
+                        let rows = (self.composer.matches('\n').count() + 1).clamp(1, 6);
+                        let pad_l = 20.0;
+                        let pad_r = 24.0;
+                        let pill_h = if rows == 1 {
+                            crate::theme::QUERY_MIN_H
+                        } else {
+                            (rows as f32 * 22.0 + 28.0).max(crate::theme::QUERY_MIN_H)
+                        };
+                        ui.allocate_ui_with_layout(
+                            egui::vec2(cap, pill_h),
+                            egui::Layout::left_to_right(egui::Align::Center),
+                            |ui| {
+                                ui.set_min_size(egui::vec2(cap, pill_h));
+                                let pill_rect = egui::Rect::from_min_size(
+                                    ui.max_rect().min,
+                                    egui::vec2(cap, pill_h),
+                                );
+                                #[cfg(feature = "fx")]
+                                self.paint_composer_glow(ui, pill_rect);
+                                ui.painter().rect(
+                                    pill_rect,
+                                    crate::theme::QUERY_RADIUS,
+                                    crate::theme::elevated(),
+                                    crate::theme::composer_chrome_stroke(focused),
+                                    egui::StrokeKind::Middle,
+                                );
+                                let inner = (cap - pad_l - pad_r).max(200.0);
+                                ui.spacing_mut().item_spacing.x = 0.0;
+                                ui.add_space(pad_l);
+                                let plus = crate::icons::paint_bar_icon(
+                                    ui,
+                                    crate::icons::BarIcon::Plus,
+                                    22.0,
+                                    crate::theme::muted(),
+                                )
+                                .on_hover_text("Upload a file or paste clipboard");
+                                if plus.clicked() {
+                                    self.open_plus(PlusTarget::Chat, plus.rect.left_bottom());
+                                }
+                                if self.composer_want_focus {
+                                    ui.memory_mut(|m| m.request_focus(composer_id));
+                                    self.composer_want_focus = false;
+                                }
+                                let focused = ui.memory(|m| m.has_focus(composer_id));
+                                if let Some(t) =
+                                    take_focused_composer(ui, &mut self.composer, focused)
+                                {
+                                    self.send_typed(ui, t);
+                                }
+                                ui.add_space(8.0);
+                                let cluster = crate::cards::composer_go_cluster_w();
+                                let go_sz = crate::cards::composer_go_hit_w();
+                                let mid = crate::cards::composer_mid_w(inner);
+                                let (mut mic_rect, mut go_rect) =
+                                    (egui::Rect::NOTHING, egui::Rect::NOTHING);
+                                ui.allocate_ui_with_layout(
+                                    egui::vec2(mid, pill_h),
+                                    egui::Layout::left_to_right(egui::Align::Center),
+                                    |ui| {
+                                        ui.spacing_mut().item_spacing.x = 8.0;
+                                        let text_w = (mid - 8.0 - 22.0).max(80.0);
+                                        let edit = egui::ScrollArea::vertical()
+                                            .id_salt("chat-composer-scroll")
+                                            .max_width(text_w)
+                                            .max_height(pill_h)
+                                            .auto_shrink([false, true])
+                                            .show(ui, |ui| {
+                                                ui.set_min_height(pill_h);
+                                                ui.set_max_height(pill_h);
+                                                let hint_align = if rows == 1 {
+                                                    egui::Align::Center
+                                                } else {
+                                                    egui::Align::Min
+                                                };
+                                                ui.add(
+                                                    egui::TextEdit::multiline(&mut self.composer)
+                                                        .id(composer_id)
+                                                        .desired_width(text_w)
+                                                        .desired_rows(rows)
+                                                        .min_size(egui::vec2(
+                                                            text_w,
+                                                            if rows == 1 { pill_h } else { 0.0 },
+                                                        ))
+                                                        .frame(composer_field_frame())
+                                                        .vertical_align(hint_align)
+                                                        .font(egui::FontId::new(
+                                                            15.0,
+                                                            egui::FontFamily::Proportional,
+                                                        ))
+                                                        .text_color(crate::theme::fg())
+                                                        .hint_text("")
+                                                        .return_key(Some(
+                                                            egui::KeyboardShortcut::new(
+                                                                egui::Modifiers::COMMAND,
+                                                                egui::Key::Enter,
+                                                            ),
+                                                        )),
+                                                )
+                                            })
+                                            .inner;
+                                        if self.composer.is_empty() && !edit.has_focus() {
+                                            let ghost = composer_hint_ink();
+                                            let hint_font = egui::FontId::new(
                                                 15.0,
                                                 egui::FontFamily::Proportional,
-                                            ))
-                                            .text_color(crate::theme::fg())
-                                            .hint_text("")
-                                            .return_key(Some(egui::KeyboardShortcut::new(
-                                                egui::Modifiers::COMMAND,
-                                                egui::Key::Enter,
-                                            ))),
-                                    )
-                                })
-                                .inner;
-                            if self.composer.is_empty() && !edit.has_focus() {
-                                let ghost = composer_hint_ink();
-                                let hint_font =
-                                    egui::FontId::new(15.0, egui::FontFamily::Proportional);
-                                let hint = ui.fonts_mut(|f| {
-                                    f.layout_no_wrap("Ask anything".to_string(), hint_font, ghost)
-                                });
-                                let hint_pos = egui::pos2(
-                                    edit.rect.left() + 2.0,
-                                    edit.rect.center().y - hint.size().y * 0.5,
+                                            );
+                                            let hint = ui.fonts_mut(|f| {
+                                                f.layout_no_wrap(
+                                                    "Ask anything".to_string(),
+                                                    hint_font,
+                                                    ghost,
+                                                )
+                                            });
+                                            let hint_pos = egui::pos2(
+                                                edit.rect.left() + 2.0,
+                                                edit.rect.center().y - hint.size().y * 0.5,
+                                            );
+                                            ui.painter().galley(hint_pos, hint, ghost);
+                                        }
+                                        if let Some(t) = take_focused_composer(
+                                            ui,
+                                            &mut self.composer,
+                                            edit.has_focus(),
+                                        ) {
+                                            self.send_typed(ui, t);
+                                        }
+                                        mic_rect = self.paint_voice_mic(ui, 22.0);
+                                    },
                                 );
-                                ui.painter().galley(hint_pos, hint, ghost);
-                            }
-                            if let Some(t) =
-                                take_focused_composer(ui, &mut self.composer, edit.has_focus())
-                            {
-                                self.send_typed(ui, t);
-                            }
-                            mic_rect = self.paint_voice_mic(ui, 22.0);
-                        },
-                    );
-                    ui.add_space(8.0);
-                    let ready = !self.composer.trim().is_empty();
-                    let go = composer_go(self.thinking_here(), ready);
-                    ui.allocate_ui_with_layout(
-                        egui::vec2(go_sz, pill_h),
-                        egui::Layout::left_to_right(egui::Align::Center),
-                        |ui| {
-                            let send = crate::icons::paint_bar_icon(
-                                ui,
-                                match go {
-                                    ComposerGo::Stop => crate::icons::BarIcon::Stop,
-                                    ComposerGo::Send => crate::icons::BarIcon::Send,
-                                    ComposerGo::Idle => crate::icons::BarIcon::ArrowUp,
-                                },
-                                match go {
-                                    ComposerGo::Idle => 22.0,
-                                    ComposerGo::Send | ComposerGo::Stop => 28.0,
-                                },
-                                match go {
-                                    ComposerGo::Idle => crate::theme::muted(),
-                                    ComposerGo::Send | ComposerGo::Stop => crate::theme::fg(),
-                                },
-                            )
-                            .on_hover_text(self.go_tip_here());
-                            go_rect = send.rect;
-                            let go_hit = send.clicked()
-                                || (send.is_pointer_button_down_on()
-                                    && ui.input(|i| i.pointer.primary_pressed()));
-                            match go {
-                                ComposerGo::Stop => {
-                                    if go_hit {
-                                        self.run_slash(Slash::Stop);
-                                    }
-                                }
-                                ComposerGo::Send | ComposerGo::Idle => {
-                                    if go_hit {
-                                        let t = std::mem::take(&mut self.composer);
-                                        self.send_from_composer(t);
-                                    }
-                                }
-                            }
-                        },
-                    );
-                    debug_assert!(
-                        8.0 + 22.0 + 8.0 + go_sz <= cluster,
-                        "mic + Send/Stop must fit the reserved cluster"
-                    );
-                    self.composer_geom = Some((pill_rect, mic_rect, go_rect));
-                },
-            );
+                                ui.add_space(8.0);
+                                let ready = !self.composer.trim().is_empty();
+                                let go = composer_go(self.thinking_here(), ready);
+                                ui.allocate_ui_with_layout(
+                                    egui::vec2(go_sz, pill_h),
+                                    egui::Layout::left_to_right(egui::Align::Center),
+                                    |ui| {
+                                        let send = crate::icons::paint_bar_icon(
+                                            ui,
+                                            match go {
+                                                ComposerGo::Stop => crate::icons::BarIcon::Stop,
+                                                ComposerGo::Send => crate::icons::BarIcon::Send,
+                                                ComposerGo::Idle => crate::icons::BarIcon::ArrowUp,
+                                            },
+                                            match go {
+                                                ComposerGo::Idle => 22.0,
+                                                ComposerGo::Send | ComposerGo::Stop => 28.0,
+                                            },
+                                            match go {
+                                                ComposerGo::Idle => crate::theme::muted(),
+                                                ComposerGo::Send | ComposerGo::Stop => {
+                                                    crate::theme::fg()
+                                                }
+                                            },
+                                        )
+                                        .on_hover_text(self.go_tip_here());
+                                        go_rect = send.rect;
+                                        let go_hit = send.clicked()
+                                            || (send.is_pointer_button_down_on()
+                                                && ui.input(|i| i.pointer.primary_pressed()));
+                                        match go {
+                                            ComposerGo::Stop => {
+                                                if go_hit {
+                                                    self.run_slash(Slash::Stop);
+                                                }
+                                            }
+                                            ComposerGo::Send | ComposerGo::Idle => {
+                                                if go_hit {
+                                                    let t = std::mem::take(&mut self.composer);
+                                                    self.send_from_composer(t);
+                                                }
+                                            }
+                                        }
+                                    },
+                                );
+                                debug_assert!(
+                                    8.0 + 22.0 + 8.0 + go_sz <= cluster,
+                                    "mic + Send/Stop must fit the reserved cluster"
+                                );
+                                self.composer_geom = Some((pill_rect, mic_rect, go_rect));
+                            },
+                        );
                     }
                 }
             }
-            });
+        });
     }
 
     // After ui_composer_stack: empty_home_pulse scans ui_empty_home..ui_composer_stack
-    // and forbids Nav:: in that window (toast links to History → Archived).
-    /// Quiet archive / auto-archive note with Undo or a link to Archived.
+    // and forbids Nav:: in that window. Keep this toast Nav-free.
+    /// Quiet archive / unarchive note with Undo. Idle auto-archive stays off chrome.
     pub(super) fn paint_archive_toast(&mut self, ui: &mut egui::Ui) {
-        if let Some(n) = self.auto_archive_note {
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = 8.0;
-                let label = if n == 1 {
-                    "Archived 1 idle chat".to_string()
-                } else {
-                    format!("Archived {n} idle chats")
-                };
-                ui.label(
-                    RichText::new(label)
-                        .size(crate::theme::FONT_META)
-                        .color(crate::theme::muted()),
-                );
-                if crate::cards::ghost_pill(ui, "Archived") {
-                    self.auto_archive_note = None;
-                    self.history_archived = true;
-                    self.nav = Nav::History;
-                }
-            });
-            ui.add_space(4.0);
-            return;
-        }
         let Some(id) = self.archive_undo.clone() else {
             return;
         };
@@ -2899,7 +2950,8 @@ impl Cabin {
         // not every thought in the transcript on every frame.
         self.chat_view_keys.truncate(kept);
         let from = self.chat_view_keys.len();
-        self.chat_view_keys.extend(self.chat_views[from..].iter().map(view_fold_key));
+        self.chat_view_keys
+            .extend(self.chat_views[from..].iter().map(view_fold_key));
         self.chat_view_tid = tid;
         self.chat_view_n = n;
         self.chat_view_last = last;

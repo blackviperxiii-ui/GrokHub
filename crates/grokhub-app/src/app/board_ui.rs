@@ -10,10 +10,10 @@
 //! on (`file_automation_follow_up`). Each automation keeps one open card and one
 //! chat; a new run adds its report to that chat.
 
-use super::*;
 use super::pages::{BoardAct, BoardDrag};
+use super::*;
 use grokhub_core::{
-    encode_turn, visible_chat, visible_chat_refs, views_up_to_last_user, ChatView, ThoughtFold,
+    encode_turn, views_up_to_last_user, visible_chat, visible_chat_refs, ChatView, ThoughtFold,
     UpdateAction,
 };
 
@@ -96,10 +96,9 @@ pub(super) fn board_card_progress(status: BoardStatus) -> (u32, u32) {
         BoardStatus::InProgress => (2, 4),
         BoardStatus::Blocked => (1, 4),
         BoardStatus::Dismissed => (0, 4),
-        BoardStatus::Proposed
-        | BoardStatus::Approved
-        | BoardStatus::Staged
-        | BoardStatus::Todo => (0, 4),
+        BoardStatus::Proposed | BoardStatus::Approved | BoardStatus::Staged | BoardStatus::Todo => {
+            (0, 4)
+        }
     }
 }
 
@@ -108,29 +107,58 @@ fn board_status_chip_colors(status: BoardStatus) -> (egui::Color32, egui::Color3
     use egui::Color32;
     match status {
         BoardStatus::InProgress => (
-            crate::theme::tok_pair(Color32::from_rgb(0x3a, 0x2a, 0x14), Color32::from_rgb(0xff, 0xf3, 0xe0)),
-            crate::theme::tok_pair(Color32::from_rgb(0xf0, 0xb4, 0x5c), Color32::from_rgb(0xd9, 0x77, 0x06)),
+            crate::theme::tok_pair(
+                Color32::from_rgb(0x3a, 0x2a, 0x14),
+                Color32::from_rgb(0xff, 0xf3, 0xe0),
+            ),
+            crate::theme::tok_pair(
+                Color32::from_rgb(0xf0, 0xb4, 0x5c),
+                Color32::from_rgb(0xd9, 0x77, 0x06),
+            ),
         ),
         BoardStatus::Done => (
-            crate::theme::tok_pair(Color32::from_rgb(0x0e, 0x2a, 0x1c), Color32::from_rgb(0xe6, 0xf4, 0xea)),
-            crate::theme::tok_pair(Color32::from_rgb(0x4a, 0xde, 0x80), Color32::from_rgb(0x15, 0x80, 0x3d)),
+            crate::theme::tok_pair(
+                Color32::from_rgb(0x0e, 0x2a, 0x1c),
+                Color32::from_rgb(0xe6, 0xf4, 0xea),
+            ),
+            crate::theme::tok_pair(
+                Color32::from_rgb(0x4a, 0xde, 0x80),
+                Color32::from_rgb(0x15, 0x80, 0x3d),
+            ),
         ),
         BoardStatus::Blocked => (
-            crate::theme::tok_pair(Color32::from_rgb(0x3a, 0x14, 0x14), Color32::from_rgb(0xfe, 0xe2, 0xe2)),
-            crate::theme::tok_pair(Color32::from_rgb(0xf8, 0x71, 0x71), Color32::from_rgb(0xdc, 0x26, 0x26)),
+            crate::theme::tok_pair(
+                Color32::from_rgb(0x3a, 0x14, 0x14),
+                Color32::from_rgb(0xfe, 0xe2, 0xe2),
+            ),
+            crate::theme::tok_pair(
+                Color32::from_rgb(0xf8, 0x71, 0x71),
+                Color32::from_rgb(0xdc, 0x26, 0x26),
+            ),
         ),
         BoardStatus::FollowUp => (
-            crate::theme::tok_pair(Color32::from_rgb(0x12, 0x24, 0x3a), Color32::from_rgb(0xdb, 0xea, 0xfe)),
-            crate::theme::tok_pair(Color32::from_rgb(0x60, 0xa5, 0xfa), Color32::from_rgb(0x1d, 0x4e, 0xd8)),
+            crate::theme::tok_pair(
+                Color32::from_rgb(0x12, 0x24, 0x3a),
+                Color32::from_rgb(0xdb, 0xea, 0xfe),
+            ),
+            crate::theme::tok_pair(
+                Color32::from_rgb(0x60, 0xa5, 0xfa),
+                Color32::from_rgb(0x1d, 0x4e, 0xd8),
+            ),
         ),
         BoardStatus::Dismissed => (crate::theme::panel(), crate::theme::muted()),
-        BoardStatus::Proposed
-        | BoardStatus::Approved
-        | BoardStatus::Staged
-        | BoardStatus::Todo => (
-            crate::theme::tok_pair(Color32::from_rgb(0x24, 0x1a, 0x36), Color32::from_rgb(0xf3, 0xe8, 0xff)),
-            crate::theme::tok_pair(Color32::from_rgb(0xc4, 0xb5, 0xfd), Color32::from_rgb(0x7c, 0x3a, 0xed)),
-        ),
+        BoardStatus::Proposed | BoardStatus::Approved | BoardStatus::Staged | BoardStatus::Todo => {
+            (
+                crate::theme::tok_pair(
+                    Color32::from_rgb(0x24, 0x1a, 0x36),
+                    Color32::from_rgb(0xf3, 0xe8, 0xff),
+                ),
+                crate::theme::tok_pair(
+                    Color32::from_rgb(0xc4, 0xb5, 0xfd),
+                    Color32::from_rgb(0x7c, 0x3a, 0xed),
+                ),
+            )
+        }
     }
 }
 
@@ -141,30 +169,50 @@ pub(super) fn board_presence_chips(card: &BoardCard) -> Vec<(char, egui::Color32
     if card.thread_id.is_some() {
         chips.push((
             'C',
-            crate::theme::tok_pair(Color32::from_rgb(0x1a, 0x2e, 0x24), Color32::from_rgb(0xd1, 0xf4, 0xe0)),
-            crate::theme::tok_pair(Color32::from_rgb(0x6e, 0xe7, 0xb7), Color32::from_rgb(0x04, 0x78, 0x57)),
+            crate::theme::tok_pair(
+                Color32::from_rgb(0x1a, 0x2e, 0x24),
+                Color32::from_rgb(0xd1, 0xf4, 0xe0),
+            ),
+            crate::theme::tok_pair(
+                Color32::from_rgb(0x6e, 0xe7, 0xb7),
+                Color32::from_rgb(0x04, 0x78, 0x57),
+            ),
         ));
     }
     if !card.notes.trim().is_empty() {
         chips.push((
             'N',
-            crate::theme::tok_pair(Color32::from_rgb(0x2a, 0x22, 0x38), Color32::from_rgb(0xe0, 0xe7, 0xff)),
-            crate::theme::tok_pair(Color32::from_rgb(0xc4, 0xb5, 0xfd), Color32::from_rgb(0x5b, 0x21, 0xb6)),
+            crate::theme::tok_pair(
+                Color32::from_rgb(0x2a, 0x22, 0x38),
+                Color32::from_rgb(0xe0, 0xe7, 0xff),
+            ),
+            crate::theme::tok_pair(
+                Color32::from_rgb(0xc4, 0xb5, 0xfd),
+                Color32::from_rgb(0x5b, 0x21, 0xb6),
+            ),
         ));
     }
     if card.automation.is_some() {
         chips.push((
             'A',
-            crate::theme::tok_pair(Color32::from_rgb(0x1a, 0x28, 0x38), Color32::from_rgb(0xdb, 0xea, 0xfe)),
-            crate::theme::tok_pair(Color32::from_rgb(0x93, 0xc5, 0xfd), Color32::from_rgb(0x1e, 0x40, 0xaf)),
+            crate::theme::tok_pair(
+                Color32::from_rgb(0x1a, 0x28, 0x38),
+                Color32::from_rgb(0xdb, 0xea, 0xfe),
+            ),
+            crate::theme::tok_pair(
+                Color32::from_rgb(0x93, 0xc5, 0xfd),
+                Color32::from_rgb(0x1e, 0x40, 0xaf),
+            ),
         ));
     }
     chips
 }
 
 fn paint_board_progress_ring(ui: &mut egui::Ui, filled: u32, total: u32) {
-    let (rect, _) =
-        ui.allocate_exact_size(egui::vec2(BOARD_RING_SIZE, BOARD_RING_SIZE), egui::Sense::hover());
+    let (rect, _) = ui.allocate_exact_size(
+        egui::vec2(BOARD_RING_SIZE, BOARD_RING_SIZE),
+        egui::Sense::hover(),
+    );
     let center = rect.center();
     let radius = BOARD_RING_SIZE * 0.38;
     let total = total.max(1);
@@ -241,11 +289,8 @@ fn paint_presence_stack(ui: &mut egui::Ui, chips: &[(char, egui::Color32, egui::
     for (i, &(ch, bg, fg)) in chips.iter().enumerate() {
         let c = egui::pos2(rect.min.x + d * 0.5 + step * i as f32, rect.center().y);
         ui.painter().circle_filled(c, d * 0.5, bg);
-        ui.painter().circle_stroke(
-            c,
-            d * 0.5,
-            egui::Stroke::new(1.5, crate::theme::elevated()),
-        );
+        ui.painter()
+            .circle_stroke(c, d * 0.5, egui::Stroke::new(1.5, crate::theme::elevated()));
         ui.painter().text(
             c,
             egui::Align2::CENTER_CENTER,
@@ -324,8 +369,7 @@ impl Cabin {
         // Every other card keeps its last measured slot when it is fully outside
         // the column's clip. `Frame::show` burns two parent auto-ids (the child
         // scope, then `allocate_rect`); a skipped card burns the same two.
-        let dragged =
-            egui::DragAndDrop::payload::<BoardDrag>(ui.ctx()).is_some_and(|d| d.0 == id);
+        let dragged = egui::DragAndDrop::payload::<BoardDrag>(ui.ctx()).is_some_and(|d| d.0 == id);
         let width = ui.available_width().max(1.0);
         let cache_id = egui::Id::new((
             "cabin-board-row-h",
@@ -333,7 +377,10 @@ impl Cabin {
             super::chat_ui::pane_width_bucket(width),
             open,
         ));
-        let cached = ui.ctx().data(|d| d.get_temp::<f32>(cache_id)).unwrap_or(0.0);
+        let cached = ui
+            .ctx()
+            .data(|d| d.get_temp::<f32>(cache_id))
+            .unwrap_or(0.0);
         if !open && !dragged && super::chat_ui::reserve_offscreen_chat_row(ui, cached) {
             ui.skip_ahead_auto_ids(2);
             return egui::Rect::NOTHING;
@@ -445,7 +492,11 @@ impl Cabin {
             });
         let rect = frame.response.rect;
         let resp = ui
-            .interact(rect, egui::Id::new(("board-card", id.as_str())), egui::Sense::click_and_drag())
+            .interact(
+                rect,
+                egui::Id::new(("board-card", id.as_str())),
+                egui::Sense::click_and_drag(),
+            )
             .on_hover_cursor(egui::CursorIcon::Grab);
         if resp.hovered() {
             ui.painter().rect_stroke(
@@ -578,7 +629,10 @@ impl Cabin {
                                 .as_ref()
                                 .map(|(_, b)| b.clone())
                                 .unwrap_or_default();
-                            *act = Some(BoardAct::SaveNotes { id: id.clone(), notes: buf });
+                            *act = Some(BoardAct::SaveNotes {
+                                id: id.clone(),
+                                notes: buf,
+                            });
                         }
                         if crate::cards::ghost_pill(ui, "Cancel") {
                             *act = Some(BoardAct::CancelNotes);
@@ -648,7 +702,11 @@ impl Cabin {
         } else if card.status != BoardStatus::Done && ui.button("Work on it").clicked() {
             chosen = Some(BoardAct::Work(id.clone()));
         }
-        let notes_label = if card.notes.trim().is_empty() { "Add notes" } else { "Edit notes" };
+        let notes_label = if card.notes.trim().is_empty() {
+            "Add notes"
+        } else {
+            "Edit notes"
+        };
         if ui.button(notes_label).clicked() {
             chosen = Some(BoardAct::EditNotes(id.clone()));
         }
@@ -700,7 +758,13 @@ impl Cabin {
     /// The card's chat, drawn like the Chat page: replies as markdown bubbles,
     /// thoughts as short rows you can open, tool runs folded. A turn that is
     /// still running streams in from `turn_log`.
-    pub(super) fn paint_card_chat(&mut self, ui: &mut egui::Ui, card_id: &str, thread_id: &str, max_h: f32) {
+    pub(super) fn paint_card_chat(
+        &mut self,
+        ui: &mut egui::Ui,
+        card_id: &str,
+        thread_id: &str,
+        max_h: f32,
+    ) {
         // The open chat's live copy is `self.messages`; its thread row can lag.
         let messages = if thread_id == self.visible_thread_id() {
             self.messages.clone()
@@ -740,7 +804,14 @@ impl Cabin {
                     };
                     let painted = ui
                         .push_id(("board-chat-row", thread_id, i), |ui| {
-                            paint_chat_block_with(ui, view, false, false, fold, last_reply == Some(i))
+                            paint_chat_block_with(
+                                ui,
+                                view,
+                                false,
+                                false,
+                                fold,
+                                last_reply == Some(i),
+                            )
                         })
                         .inner;
                     if view.kind == ChatKind::Thought && painted.thought_fold != fold {
@@ -765,7 +836,11 @@ impl Cabin {
                 ui.ctx().copy_text(body);
             }
             ChatBlockAct::Reply(body) | ChatBlockAct::Edit(body) => {
-                let draft = self.board_view.composers.entry(card_id.to_string()).or_default();
+                let draft = self
+                    .board_view
+                    .composers
+                    .entry(card_id.to_string())
+                    .or_default();
                 *draft = append_composer(draft, &quote_for_reply(&body));
                 if !draft.ends_with('\n') {
                     draft.push('\n');
@@ -788,10 +863,15 @@ impl Cabin {
     ) {
         let id = card.id.clone();
         let edit_id = board_chat_edit_id(&id);
-        let mut text = self.board_view.composers.get(&id).cloned().unwrap_or_default();
+        let mut text = self
+            .board_view
+            .composers
+            .get(&id)
+            .cloned()
+            .unwrap_or_default();
         let focused = ui.memory(|m| m.has_focus(edit_id));
-        let enter = focused
-            && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter));
+        let enter =
+            focused && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter));
         let hint = if linked {
             "Reply to the agent…"
         } else if card.status == BoardStatus::Done {
@@ -846,10 +926,7 @@ impl Cabin {
             return false;
         }
         if !self.agent_ready() {
-            self.board_view.note = Some((
-                id.to_string(),
-                self.no_agent_note().into(),
-            ));
+            self.board_view.note = Some((id.to_string(), self.no_agent_note().into()));
             return false;
         }
         let thread_id = match card
@@ -927,9 +1004,11 @@ impl Cabin {
         let Some(tid) = thread_id else {
             return false;
         };
-        let Some(t) = self.threads.iter_mut().find(|t| {
-            t.id == tid && t.background && crate::threads::is_follow_up_title(&t.title)
-        }) else {
+        let Some(t) = self
+            .threads
+            .iter_mut()
+            .find(|t| t.id == tid && t.background && crate::threads::is_follow_up_title(&t.title))
+        else {
             return false;
         };
         t.background = false;
@@ -972,7 +1051,11 @@ impl Cabin {
         {
             return false;
         }
-        let title = if name.trim().is_empty() { instructions } else { name };
+        let title = if name.trim().is_empty() {
+            instructions
+        } else {
+            name
+        };
         let (card_id, _) =
             grokhub_core::file_follow_up(&mut self.board, automation_id, title, reply, now_ms());
         let Some(card) = self.board.iter().find(|c| c.id == card_id).cloned() else {

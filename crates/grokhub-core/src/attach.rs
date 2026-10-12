@@ -98,8 +98,8 @@ pub fn attach_kind(path: &str) -> AttachKind {
         "mp4" | "webm" | "mov" | "mkv" | "m4v" => AttachKind::Video,
         "pdf" | "doc" | "docx" | "odt" | "rtf" => AttachKind::Doc,
         "txt" | "md" | "rs" | "toml" | "json" | "log" | "csv" | "xml" | "yaml" | "yml" | "sh"
-        | "py" | "js" | "ts" | "tsx" | "jsx" | "html" | "css" | "go" | "c" | "h" | "cpp" | "hpp"
-        | "java" | "rb" | "php" | "sql" | "ini" | "conf" | "lock" | "rst" | "tex" => {
+        | "py" | "js" | "ts" | "tsx" | "jsx" | "html" | "css" | "go" | "c" | "h" | "cpp"
+        | "hpp" | "java" | "rb" | "php" | "sql" | "ini" | "conf" | "lock" | "rst" | "tex" => {
             AttachKind::Text
         }
         _ => AttachKind::Other,
@@ -356,8 +356,13 @@ mod tests {
         assert_eq!(attach_kind("clip.MP4"), AttachKind::Video);
         assert_eq!(attach_kind("/tmp/notes.pdf"), AttachKind::Doc);
         assert_eq!(attach_kind("main.go"), AttachKind::Text);
-        assert!(attach_send_line(AttachKind::Video, "clip.mp4", "/tmp/clip.mp4").contains("/tmp/clip.mp4"));
-        assert!(attach_send_line(AttachKind::Doc, "notes.pdf", "/tmp/notes.pdf").contains("Read it"));
+        assert!(
+            attach_send_line(AttachKind::Video, "clip.mp4", "/tmp/clip.mp4")
+                .contains("/tmp/clip.mp4")
+        );
+        assert!(
+            attach_send_line(AttachKind::Doc, "notes.pdf", "/tmp/notes.pdf").contains("Read it")
+        );
         assert_eq!(
             attach_send_line(AttachKind::Image, "ref.png", ""),
             "from reference ref.png"
@@ -370,7 +375,10 @@ mod tests {
             parse_picker_stdout("/home/user/shot.png\n"),
             Some("/home/user/shot.png".into())
         );
-        assert_eq!(parse_picker_stdout("  \n  /tmp/a.txt  \n"), Some("/tmp/a.txt".into()));
+        assert_eq!(
+            parse_picker_stdout("  \n  /tmp/a.txt  \n"),
+            Some("/tmp/a.txt".into())
+        );
         assert_eq!(parse_picker_stdout(""), None);
         assert_eq!(parse_picker_stdout("   \n"), None);
     }
@@ -405,14 +413,26 @@ mod tests {
         assert_eq!(append_composer("hi", "there"), "hi\nthere");
         assert_eq!(append_composer("hi\n", "there"), "hi\nthere");
         assert_eq!(take_text_body("abc"), "abc");
-        assert_eq!(take_text_body(&"x".repeat(TEXT_FILE_CAP + 8)).len(), TEXT_FILE_CAP);
+        assert_eq!(
+            take_text_body(&"x".repeat(TEXT_FILE_CAP + 8)).len(),
+            TEXT_FILE_CAP
+        );
     }
 
     #[test]
     fn user_image_wins_over_cabin_frame() {
-        assert_eq!(next_chat_image(Some("data:user"), Some("data:cabin")), Some("data:user"));
-        assert_eq!(next_chat_image(None, Some("data:cabin")), Some("data:cabin"));
-        assert_eq!(next_chat_image(Some(""), Some("data:cabin")), Some("data:cabin"));
+        assert_eq!(
+            next_chat_image(Some("data:user"), Some("data:cabin")),
+            Some("data:user")
+        );
+        assert_eq!(
+            next_chat_image(None, Some("data:cabin")),
+            Some("data:cabin")
+        );
+        assert_eq!(
+            next_chat_image(Some(""), Some("data:cabin")),
+            Some("data:cabin")
+        );
         assert_eq!(next_chat_image(None, None), None);
         assert!(kick_consumes_attach(true));
         assert!(
@@ -455,7 +475,10 @@ mod tests {
         assert!(plus_empty_status().contains("file") || plus_empty_status().contains("copy"));
         assert!(imagine_ref_status("ref.png").contains("prompt-only"));
         assert!(chat_attach_status(AttachKind::Image, "ref.png").contains("ref.png"));
-        assert_eq!(list_pick_names(&[".hidden", "b.txt", "a.png", ""]), vec!["a.png", "b.txt"]);
+        assert_eq!(
+            list_pick_names(&[".hidden", "b.txt", "a.png", ""]),
+            vec!["a.png", "b.txt"]
+        );
         let _ = PlusTarget::Chat;
         let _ = PlusTarget::Imagine;
     }

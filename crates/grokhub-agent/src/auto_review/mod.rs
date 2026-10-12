@@ -450,7 +450,13 @@ fn call_judge(
         timer_cancel.cancel();
         let _ = stop_flag.compare_exchange(LIVE, TIMED_OUT, Ordering::SeqCst, Ordering::SeqCst);
     });
-    let result = crate::route::live::stream_routed(client, req, &judge_cancel, &mut |_| {}, crate::route::CLASS_JUDGE);
+    let result = crate::route::live::stream_routed(
+        client,
+        req,
+        &judge_cancel,
+        &mut |_| {},
+        crate::route::CLASS_JUDGE,
+    );
     let _ = stop.compare_exchange(LIVE, DONE, Ordering::SeqCst, Ordering::SeqCst);
     let _ = handle.join();
     (result, stop.load(Ordering::SeqCst))
@@ -747,8 +753,8 @@ mod tests {
                 reasoning: String::new(),
                 calls: Vec::new(),
                 usage: self.usage.clone(),
-            ..Default::default()
-        })
+                ..Default::default()
+            })
         }
     }
 
@@ -1211,8 +1217,8 @@ mod tests {
                     reasoning: String::new(),
                     calls: Vec::new(),
                     usage: self.judge_usage.clone(),
-            ..Default::default()
-        });
+                    ..Default::default()
+                });
             }
             let turn = {
                 let mut turns = self.turns.lock().unwrap();
@@ -1234,8 +1240,8 @@ mod tests {
                 reasoning: String::new(),
                 calls: turn.calls,
                 usage: turn.usage,
-            ..Default::default()
-        })
+                ..Default::default()
+            })
         }
     }
 

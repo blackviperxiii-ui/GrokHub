@@ -9,8 +9,8 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use grokhub_core::release_verify::{
-    download_url_ok, host_asset, parse_releases, pick_release, refusal_note, verify_asset, Refusal, releases_api,
-    RELEASE_PUBKEY, SIG_NAME, SUMS_NAME,
+    download_url_ok, host_asset, parse_releases, pick_release, refusal_note, releases_api,
+    verify_asset, Refusal, RELEASE_PUBKEY, SIG_NAME, SUMS_NAME,
 };
 use grokhub_core::Channel;
 
@@ -29,14 +29,20 @@ fn fetch(url: &str, cap: u64, timeout: Duration) -> Result<Vec<u8>, String> {
         .build()
         .get(url)
         .set("user-agent", "GrokHub")
-        .set("accept", "application/vnd.github+json, application/octet-stream")
+        .set(
+            "accept",
+            "application/vnd.github+json, application/octet-stream",
+        )
         .call()
         .map_err(|e| match e {
             ureq::Error::Status(code, _) => format!("HTTP {code}"),
             other => other.to_string(),
         })?;
     let mut buf = Vec::new();
-    resp.into_reader().take(cap + 1).read_to_end(&mut buf).map_err(|e| e.to_string())?;
+    resp.into_reader()
+        .take(cap + 1)
+        .read_to_end(&mut buf)
+        .map_err(|e| e.to_string())?;
     if buf.len() as u64 > cap {
         return Err("response too large".into());
     }
@@ -47,11 +53,14 @@ fn fetch(url: &str, cap: u64, timeout: Duration) -> Result<Vec<u8>, String> {
 /// running binary's folder (`~/.local/bin`) elsewhere.
 fn install_dir(windows: bool) -> Result<PathBuf, String> {
     if windows {
-        let local = std::env::var("LOCALAPPDATA").map_err(|_| "LOCALAPPDATA is not set".to_string())?;
+        let local =
+            std::env::var("LOCALAPPDATA").map_err(|_| "LOCALAPPDATA is not set".to_string())?;
         return Ok(PathBuf::from(local).join("Programs").join("GrokHub"));
     }
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-    exe.parent().map(Path::to_path_buf).ok_or_else(|| "can't find the install folder".into())
+    exe.parent()
+        .map(Path::to_path_buf)
+        .ok_or_else(|| "can't find the install folder".into())
 }
 
 fn binary_names(windows: bool) -> [&'static str; 2] {
@@ -69,7 +78,9 @@ fn find_under(root: &Path, name: &str) -> Option<PathBuf> {
     while let Some(dir) = stack.pop() {
         for entry in std::fs::read_dir(&dir).ok()?.flatten() {
             let path = entry.path();
-            let Ok(kind) = entry.file_type() else { continue };
+            let Ok(kind) = entry.file_type() else {
+                continue;
+            };
             if kind.is_symlink() {
                 continue;
             }
@@ -95,7 +106,10 @@ fn unpack(archive: &Path, into: &Path) -> Result<(), String> {
         .output()
         .map_err(|e| format!("tar: {e}"))?;
     if !out.status.success() {
-        return Err(format!("tar: {}", String::from_utf8_lossy(&out.stderr).trim()));
+        return Err(format!(
+            "tar: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        ));
     }
     Ok(())
 }
@@ -162,7 +176,13 @@ fn fetch_text(get: Fetch, url: &str) -> Result<String, Refusal> {
 
 /// [`install_release`] with the network, install folder and scratch folder
 /// passed in. Nothing is written to `dest` until the asset verifies.
-fn install_release_with(channel: Channel, windows: bool, get: Fetch, dest: &Path, work: &Path) -> Result<String, String> {
+fn install_release_with(
+    channel: Channel,
+    windows: bool,
+    get: Fetch,
+    dest: &Path,
+    work: &Path,
+) -> Result<String, String> {
     let mut version = String::new();
     let run = (|| -> Result<String, Refusal> {
         let releases = parse_releases(&fetch_text(&mut *get, releases_api(channel))?);
@@ -182,7 +202,13 @@ fn install_release_with(channel: Channel, windows: bool, get: Fetch, dest: &Path
             None => None,
         };
         let bytes = get(&asset.url, ASSET_CAP, 600).map_err(Refusal::Download)?;
-        verify_asset(RELEASE_PUBKEY, &sums_text, sig_text.as_deref(), &asset.name, &bytes)?;
+        verify_asset(
+            RELEASE_PUBKEY,
+            &sums_text,
+            sig_text.as_deref(),
+            &asset.name,
+            &bytes,
+        )?;
         let _ = std::fs::remove_dir_all(work);
         std::fs::create_dir_all(work).map_err(|e| Refusal::Download(e.to_string()))?;
         let archive = work.join(&asset.name);
@@ -191,12 +217,17 @@ fn install_release_with(channel: Channel, windows: bool, get: Fetch, dest: &Path
         unpack(&archive, &stage).map_err(Refusal::Download)?;
         let mut files = Vec::new();
         for name in binary_names(windows) {
-            let found = find_under(&stage, name).ok_or_else(|| Refusal::Download(format!("{name} missing from {}", asset.name)))?;
+            let found = find_under(&stage, name)
+                .ok_or_else(|| Refusal::Download(format!("{name} missing from {}", asset.name)))?;
             files.push((found, name));
         }
         swap_in(dest, &files).map_err(Refusal::Download)?;
         let _ = std::fs::remove_dir_all(work);
-        Ok(format!("Installed GrokHub {} into {} (checked against SHA256SUMS).", rel.version(), dest.display()))
+        Ok(format!(
+            "Installed GrokHub {} into {} (checked against SHA256SUMS).",
+            rel.version(),
+            dest.display()
+        ))
     })();
     run.map_err(|why| refusal_note(&version, &why))
 }
@@ -230,10 +261,23 @@ mod tests {
         std::fs::write(src.join("a"), "new a").unwrap();
         std::fs::write(src.join("b"), "new b").unwrap();
         std::fs::write(dest.join("grokhub"), "old a").unwrap();
-        swap_in(&dest, &[(src.join("a"), "grokhub"), (src.join("b"), "grokhub-hub")]).unwrap();
-        assert_eq!(std::fs::read_to_string(dest.join("grokhub")).unwrap(), "new a");
-        assert_eq!(std::fs::read_to_string(dest.join("grokhub.old")).unwrap(), "old a");
-        assert_eq!(std::fs::read_to_string(dest.join("grokhub-hub")).unwrap(), "new b");
+        swap_in(
+            &dest,
+            &[(src.join("a"), "grokhub"), (src.join("b"), "grokhub-hub")],
+        )
+        .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(dest.join("grokhub")).unwrap(),
+            "new a"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dest.join("grokhub.old")).unwrap(),
+            "old a"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dest.join("grokhub-hub")).unwrap(),
+            "new b"
+        );
         assert!(!dest.join("grokhub-hub.old").exists());
         assert!(!dest.join("grokhub.new").exists());
         let _ = std::fs::remove_dir_all(d);
@@ -248,10 +292,23 @@ mod tests {
         std::fs::write(src.join("a"), "new a").unwrap();
         std::fs::write(dest.join("grokhub"), "old a").unwrap();
         std::fs::write(dest.join("grokhub-hub"), "old b").unwrap();
-        let err = swap_in(&dest, &[(src.join("a"), "grokhub"), (src.join("missing"), "grokhub-hub")]).unwrap_err();
+        let err = swap_in(
+            &dest,
+            &[
+                (src.join("a"), "grokhub"),
+                (src.join("missing"), "grokhub-hub"),
+            ],
+        )
+        .unwrap_err();
         assert!(err.starts_with("grokhub-hub: "), "{err}");
-        assert_eq!(std::fs::read_to_string(dest.join("grokhub")).unwrap(), "old a");
-        assert_eq!(std::fs::read_to_string(dest.join("grokhub-hub")).unwrap(), "old b");
+        assert_eq!(
+            std::fs::read_to_string(dest.join("grokhub")).unwrap(),
+            "old a"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dest.join("grokhub-hub")).unwrap(),
+            "old b"
+        );
         assert!(!dest.join("grokhub.old").exists());
         assert!(!dest.join("grokhub-hub.new").exists());
         let _ = std::fs::remove_dir_all(d);
@@ -264,17 +321,26 @@ mod tests {
         std::fs::write(d.join("stage/grokhub-linux/grokhub"), "x").unwrap();
         std::fs::write(d.join("grokhub-hub"), "outside").unwrap();
         let stage = d.join("stage");
-        assert_eq!(find_under(&stage, "grokhub"), Some(stage.canonicalize().unwrap().join("grokhub-linux/grokhub")));
+        assert_eq!(
+            find_under(&stage, "grokhub"),
+            Some(stage.canonicalize().unwrap().join("grokhub-linux/grokhub"))
+        );
         assert_eq!(find_under(&stage, "grokhub-hub"), None);
         let _ = std::fs::remove_dir_all(d);
     }
 
     #[test]
     fn the_release_step_reads_as_a_host_receipt() {
-        let ok = release_step_receipt_for(grokhub_core::release_verify::RELEASE_INSTALL_STEP, Ok("Installed GrokHub 2.13.1 into /x (checked against SHA256SUMS).".into()));
+        let ok = release_step_receipt_for(
+            grokhub_core::release_verify::RELEASE_INSTALL_STEP,
+            Ok("Installed GrokHub 2.13.1 into /x (checked against SHA256SUMS).".into()),
+        );
         assert_eq!(ok, "$ grokhub: install the verified release\nexit 0\nInstalled GrokHub 2.13.1 into /x (checked against SHA256SUMS).");
         assert!(!crate::update::host_receipt_failed(&ok));
-        let bad = release_step_receipt_for("grokhub: switch to the beta release", Err("Update 2.13.1 not installed: signature didn't verify".into()));
+        let bad = release_step_receipt_for(
+            "grokhub: switch to the beta release",
+            Err("Update 2.13.1 not installed: signature didn't verify".into()),
+        );
         assert_eq!(bad, "$ grokhub: switch to the beta release\nexit 1\nUpdate 2.13.1 not installed: signature didn't verify");
         assert!(crate::update::host_receipt_failed(&bad), "{bad}");
     }
@@ -283,8 +349,16 @@ mod tests {
     fn tarball(root: &Path, marker: &str) -> Vec<u8> {
         let src = root.join("pack");
         std::fs::create_dir_all(src.join("grokhub-linux")).unwrap();
-        std::fs::write(src.join("grokhub-linux/grokhub"), format!("grokhub {marker}")).unwrap();
-        std::fs::write(src.join("grokhub-linux/grokhub-hub"), format!("hub {marker}")).unwrap();
+        std::fs::write(
+            src.join("grokhub-linux/grokhub"),
+            format!("grokhub {marker}"),
+        )
+        .unwrap();
+        std::fs::write(
+            src.join("grokhub-linux/grokhub-hub"),
+            format!("hub {marker}"),
+        )
+        .unwrap();
         let out = root.join("bundle.tar.gz");
         let st = std::process::Command::new("tar")
             .arg("-czf")
@@ -301,17 +375,29 @@ mod tests {
     const DL: &str = "https://github.com/blackviperxiii-ui/GrokHub/releases/download";
 
     fn release_json(tag: &str, pre: bool, created: &str, sums: bool) -> String {
-        let mut assets = format!(r#"{{"name":"grokhub-linux-v2.13.1.tar.gz","browser_download_url":"{DL}/{tag}/grokhub-linux-v2.13.1.tar.gz"}}"#);
+        let mut assets = format!(
+            r#"{{"name":"grokhub-linux-v2.13.1.tar.gz","browser_download_url":"{DL}/{tag}/grokhub-linux-v2.13.1.tar.gz"}}"#
+        );
         if sums {
-            assets.push_str(&format!(r#",{{"name":"SHA256SUMS","browser_download_url":"{DL}/{tag}/SHA256SUMS"}}"#));
+            assets.push_str(&format!(
+                r#",{{"name":"SHA256SUMS","browser_download_url":"{DL}/{tag}/SHA256SUMS"}}"#
+            ));
         }
-        format!(r#"{{"tag_name":"{tag}","prerelease":{pre},"draft":false,"created_at":"{created}","assets":[{assets}]}}"#)
+        format!(
+            r#"{{"tag_name":"{tag}","prerelease":{pre},"draft":false,"created_at":"{created}","assets":[{assets}]}}"#
+        )
     }
 
     /// Serves a fixed set of URLs, like GitHub would.
-    fn server(pages: Vec<(String, Vec<u8>)>) -> impl FnMut(&str, u64, u64) -> Result<Vec<u8>, String> {
+    fn server(
+        pages: Vec<(String, Vec<u8>)>,
+    ) -> impl FnMut(&str, u64, u64) -> Result<Vec<u8>, String> {
         move |url: &str, _cap: u64, _secs: u64| {
-            pages.iter().find(|(u, _)| u == url).map(|(_, b)| b.clone()).ok_or_else(|| format!("HTTP 404 {url}"))
+            pages
+                .iter()
+                .find(|(u, _)| u == url)
+                .map(|(_, b)| b.clone())
+                .ok_or_else(|| format!("HTTP 404 {url}"))
         }
     }
 
@@ -320,7 +406,10 @@ mod tests {
         let d = tmp("install-beta");
         let good = tarball(&d.join("new"), "29e8ac5");
         let old = tarball(&d.join("old"), "d2efb8d");
-        let sums = format!("{}  grokhub-linux-v2.13.1.tar.gz\n", grokhub_core::model_download::sha256_hex(&good));
+        let sums = format!(
+            "{}  grokhub-linux-v2.13.1.tar.gz\n",
+            grokhub_core::model_download::sha256_hex(&good)
+        );
         let list = format!(
             "[{},{},{}]",
             release_json("beta-v2.13.1-d2efb8d", true, "2026-10-11T18:20:03Z", true),
@@ -336,21 +425,51 @@ mod tests {
         std::fs::write(dest.join("grokhub-hub"), "running hub").unwrap();
 
         // Tampered: the asset isn't the one SHA256SUMS lists. Nothing is touched.
-        let mut bad = server(vec![(api.clone(), list.clone().into_bytes()), (sums_url.clone(), sums.clone().into_bytes()), (new_url.clone(), old)]);
+        let mut bad = server(vec![
+            (api.clone(), list.clone().into_bytes()),
+            (sums_url.clone(), sums.clone().into_bytes()),
+            (new_url.clone(), old),
+        ]);
         assert_eq!(
             install_release_with(Channel::Beta, false, &mut bad, &dest, &d.join("work")),
-            Err("Update 2.13.1-beta (29e8ac5) not installed: the download's checksum didn't match".into())
+            Err(
+                "Update 2.13.1-beta (29e8ac5) not installed: the download's checksum didn't match"
+                    .into()
+            )
         );
-        assert_eq!(std::fs::read_to_string(dest.join("grokhub")).unwrap(), "running build");
+        assert_eq!(
+            std::fs::read_to_string(dest.join("grokhub")).unwrap(),
+            "running build"
+        );
         assert!(!dest.join("grokhub.old").exists());
 
         // Good: the newest build (not the one GitHub listed first) swaps in, old kept.
-        let mut ok = server(vec![(api, list.into_bytes()), (sums_url, sums.into_bytes()), (new_url, good)]);
-        let line = install_release_with(Channel::Beta, false, &mut ok, &dest, &d.join("work")).unwrap();
-        assert_eq!(line, format!("Installed GrokHub 2.13.1-beta (29e8ac5) into {} (checked against SHA256SUMS).", dest.display()));
-        assert_eq!(std::fs::read_to_string(dest.join("grokhub")).unwrap(), "grokhub 29e8ac5");
-        assert_eq!(std::fs::read_to_string(dest.join("grokhub-hub")).unwrap(), "hub 29e8ac5");
-        assert_eq!(std::fs::read_to_string(dest.join("grokhub.old")).unwrap(), "running build");
+        let mut ok = server(vec![
+            (api, list.into_bytes()),
+            (sums_url, sums.into_bytes()),
+            (new_url, good),
+        ]);
+        let line =
+            install_release_with(Channel::Beta, false, &mut ok, &dest, &d.join("work")).unwrap();
+        assert_eq!(
+            line,
+            format!(
+                "Installed GrokHub 2.13.1-beta (29e8ac5) into {} (checked against SHA256SUMS).",
+                dest.display()
+            )
+        );
+        assert_eq!(
+            std::fs::read_to_string(dest.join("grokhub")).unwrap(),
+            "grokhub 29e8ac5"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dest.join("grokhub-hub")).unwrap(),
+            "hub 29e8ac5"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dest.join("grokhub.old")).unwrap(),
+            "running build"
+        );
         assert!(!d.join("work").exists(), "scratch is cleaned up");
         let _ = std::fs::remove_dir_all(d);
     }
@@ -363,15 +482,30 @@ mod tests {
         let mut asked = Vec::new();
         let mut get = |url: &str, _cap: u64, _secs: u64| {
             asked.push(url.to_string());
-            if url == api { Ok(latest.clone().into_bytes()) } else { Err("HTTP 404".to_string()) }
+            if url == api {
+                Ok(latest.clone().into_bytes())
+            } else {
+                Err("HTTP 404".to_string())
+            }
         };
         assert_eq!(
-            install_release_with(Channel::Stable, false, &mut get, &d.join("bin"), &d.join("work")),
+            install_release_with(
+                Channel::Stable,
+                false,
+                &mut get,
+                &d.join("bin"),
+                &d.join("work")
+            ),
             Err("Update 2.13.1 not installed: the release has no SHA256SUMS".into())
         );
-        assert_eq!(asked, vec!["https://api.github.com/repos/blackviperxiii-ui/GrokHub/releases/latest".to_string()]);
+        assert_eq!(
+            asked,
+            vec![
+                "https://api.github.com/repos/blackviperxiii-ui/GrokHub/releases/latest"
+                    .to_string()
+            ]
+        );
         assert!(!d.join("bin").exists());
         let _ = std::fs::remove_dir_all(d);
     }
-
 }

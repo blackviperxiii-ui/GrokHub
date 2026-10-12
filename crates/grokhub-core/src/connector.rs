@@ -71,7 +71,10 @@ pub fn parse_connector_args(args: &str) -> Vec<(String, String)> {
         return vec![];
     }
     if !args.contains(':') {
-        return vec![("q".into(), args.to_string()), ("query".into(), args.to_string())];
+        return vec![
+            ("q".into(), args.to_string()),
+            ("query".into(), args.to_string()),
+        ];
     }
     let mut out = Vec::new();
     let mut rest = args;
@@ -218,7 +221,10 @@ mod tests {
 
     #[test]
     fn allowlist_and_cmds() {
-        assert!(connector_url_allowed("https://grok.com/rest/connectors", &[]));
+        assert!(connector_url_allowed(
+            "https://grok.com/rest/connectors",
+            &[]
+        ));
         assert!(connector_url_allowed("https://api.x.ai/v1/chat", &[]));
         assert!(!connector_url_allowed("https://evil.example/x", &[]));
         assert!(
@@ -251,6 +257,9 @@ mod tests {
         assert!(github_api_path("list_issues", "query:owner/name").is_ok());
         assert!(github_api_path("search_issues", "").is_err());
         assert!(github_api_path("create_pr_comment", "repo:a/b issue:1 body:hi").is_err());
-        assert_eq!(arg_of(&parse_connector_args("query:foo language:ts"), &["query"]), "foo");
+        assert_eq!(
+            arg_of(&parse_connector_args("query:foo language:ts"), &["query"]),
+            "foo"
+        );
     }
 }

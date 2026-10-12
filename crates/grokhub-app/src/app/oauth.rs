@@ -2,26 +2,22 @@
 
 use super::*;
 
-
 pub(super) struct OauthPhotoOut {
     tokens: Option<grokhub_core::XaiOAuthTokens>,
     url: String,
     image: Option<ColorImage>,
 }
 
-
 pub(super) struct ProfilePhotoOut {
     path: String,
     image: Option<ColorImage>,
 }
-
 
 pub(super) enum ProfilePick {
     Chosen(std::path::PathBuf),
     Cancelled,
     Failed(String),
 }
-
 
 /// Name and local picture the avatar menu and rail paint. The email is not a field.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -30,11 +26,9 @@ pub(super) struct AvatarMenu {
     pub(super) picture_path: String,
 }
 
-
 pub(super) fn clip_profile_name(s: &str) -> String {
     s.trim().chars().take(PROFILE_NAME_MAX).collect()
 }
-
 
 pub(super) fn fallback_cabin_name(user_md: &str) -> String {
     let n = greeting_name(user_md, "");
@@ -44,7 +38,6 @@ pub(super) fn fallback_cabin_name(user_md: &str) -> String {
         n
     }
 }
-
 
 /// Saved name wins. An empty saved name keeps the OAuth name, then USER.md, then Grok.
 /// The OAuth email is not a name.
@@ -72,19 +65,16 @@ pub(super) fn avatar_menu(
     }
 }
 
-
 pub(super) fn oauth_photo_image(bytes: &[u8]) -> Option<ColorImage> {
     let rgba = crate::oauth::avatar_rgba(bytes)?;
     let size = [rgba.width() as usize, rgba.height() as usize];
     Some(ColorImage::from_rgba_unmultiplied(size, rgba.as_raw()))
 }
 
-
 /// A late picker result applies only when Remove has not bumped the token.
 pub(super) fn profile_pick_current(active: u64, result: u64) -> bool {
     active != 0 && active == result
 }
-
 
 pub(super) fn next_pick_token(current: u64) -> u64 {
     let n = current.wrapping_add(1);
@@ -131,8 +121,7 @@ pub(super) fn account_connect_chrome(
     let Some(tokens) = oauth.filter(|t| !t.access_token.trim().is_empty()) else {
         return AccountConnectChrome {
             title: "Connect Grok",
-            hint: "Device-code OAuth. GrokHub keeps this sign-in to itself."
-                .into(),
+            hint: "Device-code OAuth. GrokHub keeps this sign-in to itself.".into(),
             action: "Sign in with Grok",
             connected: false,
         };
@@ -146,7 +135,6 @@ pub(super) fn account_connect_chrome(
 }
 
 impl Cabin {
-
     /// Adopt secrets.json OAuth written by `grokhub --oauth` (or another process)
     /// while this cabin was already open. Does not overwrite an in-memory session.
     pub(super) fn pull_account_oauth_from_disk(&mut self) {
@@ -154,10 +142,7 @@ impl Cabin {
             return;
         }
         let disk = secrets::load();
-        let Some(tok) = disk
-            .oauth
-            .filter(|t| !t.access_token.trim().is_empty())
-        else {
+        let Some(tok) = disk.oauth.filter(|t| !t.access_token.trim().is_empty()) else {
             return;
         };
         self.secrets.oauth = Some(tok);
@@ -480,9 +465,9 @@ impl Cabin {
                 Ok(out) => {
                     self.profile_photo_busy = false;
                     self.profile_photo_key = out.path;
-                    self.profile_photo = out.image.map(|img| {
-                        ctx.load_texture("profile-avatar", img, TextureOptions::LINEAR)
-                    });
+                    self.profile_photo = out
+                        .image
+                        .map(|img| ctx.load_texture("profile-avatar", img, TextureOptions::LINEAR));
                 }
                 Err(mpsc::TryRecvError::Empty) => {
                     self.profile_photo_rx = Some(rx);
@@ -555,7 +540,11 @@ mod tests {
 
     #[test]
     fn account_connect_chrome_signed_in_shows_identity_and_sign_out() {
-        let t = tok("access", Some("GrokHub QA"), Some("grokhub-qa@agentmail.to"));
+        let t = tok(
+            "access",
+            Some("GrokHub QA"),
+            Some("grokhub-qa@agentmail.to"),
+        );
         let c = account_connect_chrome(Some(&t));
         assert!(c.connected);
         assert_eq!(c.title, "Connected");

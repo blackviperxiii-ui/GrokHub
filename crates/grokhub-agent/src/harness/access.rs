@@ -103,7 +103,10 @@ mod tests {
     #[test]
     fn parse_labels() {
         assert_eq!(AccessMode::parse("Readonly"), Some(AccessMode::Readonly));
-        assert_eq!(AccessMode::parse("supervised"), Some(AccessMode::Supervised));
+        assert_eq!(
+            AccessMode::parse("supervised"),
+            Some(AccessMode::Supervised)
+        );
         assert_eq!(AccessMode::parse("FULL"), Some(AccessMode::Full));
         assert_eq!(AccessMode::parse("yolo"), None);
     }

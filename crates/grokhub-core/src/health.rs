@@ -23,7 +23,10 @@ pub const NO_DREAM_LINE: &str =
 fn updates_line(h: &HealthInput) -> String {
     match h.cabin_update.as_deref() {
         None => "Updates: none pending.".into(),
-        Some(v) => format!("Updates: GrokHub {} is ready. Run /update.", v.trim_start_matches('v')),
+        Some(v) => format!(
+            "Updates: GrokHub {} is ready. Run /update.",
+            v.trim_start_matches('v')
+        ),
     }
 }
 
@@ -31,7 +34,11 @@ fn services_lines(h: &HealthInput) -> String {
     if h.failed.is_empty() {
         return format!("Services: all {} ok.", h.checked);
     }
-    let mut out = format!("Services: {} of {} failed", h.failed.len(), h.checked.max(h.failed.len()));
+    let mut out = format!(
+        "Services: {} of {} failed",
+        h.failed.len(),
+        h.checked.max(h.failed.len())
+    );
     for name in &h.failed {
         out.push_str(&format!("\n- {name}"));
     }
@@ -66,7 +73,11 @@ pub fn health_block(h: &HealthInput) -> String {
 
 /// One status-line summary of the same block.
 pub fn health_status(h: &HealthInput) -> String {
-    let updates = if h.cabin_update.is_some() { "1 update" } else { "no updates" };
+    let updates = if h.cabin_update.is_some() {
+        "1 update"
+    } else {
+        "no updates"
+    };
     let failed = match h.failed.len() {
         0 => "services ok".to_string(),
         n => format!("{n} failed"),
@@ -112,7 +123,10 @@ mod tests {
         let quiet = HealthInput {
             cabin_update: Some("2.12.0".into()),
             checked: 4,
-            last_dream: Some(("2026-10-07".into(), "# Memory dream 2026-10-07\n\n## Merged\n\nNo duplicates found.\n".into())),
+            last_dream: Some((
+                "2026-10-07".into(),
+                "# Memory dream 2026-10-07\n\n## Merged\n\nNo duplicates found.\n".into(),
+            )),
             ..Default::default()
         };
         assert_eq!(

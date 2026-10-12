@@ -136,7 +136,10 @@ pub enum Slash {
     Goal(String),
     Workflow(String),
     /// `/workflow pause|resume|stop <name-or-run-id>`.
-    WorkflowCtl { verb: WorkflowVerb, target: String },
+    WorkflowCtl {
+        verb: WorkflowVerb,
+        target: String,
+    },
     /// `/workflow pause|resume|stop` with no target.
     WorkflowUsage,
     RewindFiles,
@@ -373,7 +376,10 @@ fn parse_skills_arg(rest: &str) -> Slash {
 
 /// `changes`, `history`, `undo`, or nothing after `/connections` or `/automations`.
 fn is_changes_arg(rest: &str) -> bool {
-    matches!(rest.to_ascii_lowercase().as_str(), "" | "changes" | "history" | "undo")
+    matches!(
+        rest.to_ascii_lowercase().as_str(),
+        "" | "changes" | "history" | "undo"
+    )
 }
 
 /// `/workflow pause|resume|stop <target>`, or a launch name when the first word is not a verb.
@@ -430,9 +436,8 @@ pub fn is_cabin_slash_turn(role: &str, content: &str) -> bool {
         return true;
     }
     if role == "user" {
-        return parse_slash(t).is_some_and(|s| {
-            matches!(s, Slash::Help | Slash::Models | Slash::Recall(_))
-        });
+        return parse_slash(t)
+            .is_some_and(|s| matches!(s, Slash::Help | Slash::Models | Slash::Recall(_)));
     }
     if role != "assistant" {
         return false;
@@ -542,84 +547,474 @@ pub struct SlashDef {
 }
 
 pub const SLASH_COMMANDS: &[SlashDef] = &[
-    SlashDef { cmd: "/help", hint: "Show slash commands", insert: "/help", run_on_pick: true },
-    SlashDef { cmd: "/new", hint: "New chat", insert: "/new", run_on_pick: true },
-    SlashDef { cmd: "/scratch", hint: "New scratch chat (no memory)", insert: "/scratch", run_on_pick: true },
-    SlashDef { cmd: "/clear", hint: "Clear current chat", insert: "/clear", run_on_pick: true },
-    SlashDef { cmd: "/compact", hint: "Compact Grok context", insert: "/compact", run_on_pick: true },
-    SlashDef { cmd: "/context", hint: "Show context use", insert: "/context", run_on_pick: true },
-    SlashDef { cmd: "/health", hint: "Updates, failed services and the last dream", insert: "/health", run_on_pick: true },
-    SlashDef { cmd: "/fix", hint: "Self-heal stuck UI + health pass", insert: "/fix", run_on_pick: true },
-    SlashDef { cmd: "/memory", hint: "Show memory files", insert: "/memory ", run_on_pick: false },
-    SlashDef { cmd: "/learn", hint: "Run self-improve reflect", insert: "/learn", run_on_pick: true },
-    SlashDef { cmd: "/learn reflect", hint: "Run self-improve reflect", insert: "/learn reflect", run_on_pick: true },
-    SlashDef { cmd: "/mode", hint: "Set mode…", insert: "/mode ", run_on_pick: false },
-    SlashDef { cmd: "/imagine", hint: "Open Imagine", insert: "/imagine ", run_on_pick: false },
-    SlashDef { cmd: "/export", hint: "Export chat (md, html, or json)", insert: "/export", run_on_pick: true },
-    SlashDef { cmd: "/rename", hint: "Rename chat…", insert: "/rename ", run_on_pick: false },
-    SlashDef { cmd: "/pin", hint: "Pin or unpin this chat", insert: "/pin", run_on_pick: true },
-    SlashDef { cmd: "/delete", hint: "Delete this chat tab", insert: "/delete", run_on_pick: true },
-    SlashDef { cmd: "/remember", hint: "Save durable memory note", insert: "/remember ", run_on_pick: false },
-    SlashDef { cmd: "/project", hint: "Show bound project", insert: "/project", run_on_pick: true },
-    SlashDef { cmd: "/project bind", hint: "Bind a folder as the world", insert: "/project bind ", run_on_pick: false },
-    SlashDef { cmd: "/project new", hint: "Create a project", insert: "/project new ", run_on_pick: false },
-    SlashDef { cmd: "/project folder", hint: "Create a sidebar folder", insert: "/project folder ", run_on_pick: false },
-    SlashDef { cmd: "/project rename", hint: "Rename the selected project", insert: "/project rename ", run_on_pick: false },
-    SlashDef { cmd: "/project move", hint: "Add the selected project to a folder", insert: "/project move ", run_on_pick: false },
-    SlashDef { cmd: "/project delete", hint: "Remove the project; chats return to History", insert: "/project delete", run_on_pick: true },
-    SlashDef { cmd: "/board", hint: "Open Workboards", insert: "/board", run_on_pick: true },
-    SlashDef { cmd: "/skill", hint: "Run a skill…", insert: "/skill ", run_on_pick: false },
-    SlashDef { cmd: "/host", hint: "Desktop host status", insert: "/host", run_on_pick: true },
-    SlashDef { cmd: "/recall", hint: "Search chats and memory", insert: "/recall ", run_on_pick: false },
-    SlashDef { cmd: "/forget", hint: "Remove a memory topic", insert: "/forget ", run_on_pick: false },
-    SlashDef { cmd: "/undo", hint: "Rewind Grok conversation", insert: "/undo", run_on_pick: true },
-    SlashDef { cmd: "/retry", hint: "Re-send last user prompt", insert: "/retry", run_on_pick: true },
-    SlashDef { cmd: "/stop", hint: "Stop generation", insert: "/stop", run_on_pick: true },
-    SlashDef { cmd: "/sh", hint: "Run shell on host", insert: "/sh ", run_on_pick: false },
-    SlashDef { cmd: "$", hint: "Host shell shortcut", insert: "$ ", run_on_pick: false },
-    SlashDef { cmd: "/hub", hint: "Device hub status", insert: "/hub", run_on_pick: true },
-    SlashDef { cmd: "/sync", hint: "Sync chats & memory with paired computers", insert: "/sync", run_on_pick: true },
-    SlashDef { cmd: "/privacy", hint: "What left this computer, and your grants", insert: "/privacy", run_on_pick: true },
-    SlashDef { cmd: "/diagnose", hint: "Check this computer (read only)", insert: "/diagnose", run_on_pick: true },
-    SlashDef { cmd: "/record", hint: "Record my screen and diagnose it (say what's wrong)", insert: "/record ", run_on_pick: false },
-    SlashDef { cmd: "/audiocheck", hint: "Check my audio: devices, levels, clipping, crackle", insert: "/audiocheck", run_on_pick: true },
-    SlashDef { cmd: "/why", hint: "Why Auto would pick each model and effort", insert: "/why", run_on_pick: true },
-    SlashDef { cmd: "/send", hint: "Send a task to another computer", insert: "/send ", run_on_pick: false },
-    SlashDef { cmd: "/rewind", hint: "Rewind Grok conversation", insert: "/rewind", run_on_pick: true },
-    SlashDef { cmd: "/rewind step", hint: "List or restore agent file checkpoints", insert: "/rewind step", run_on_pick: true },
-    SlashDef { cmd: "/rewind --files", hint: "Restore last project snapshot", insert: "/rewind --files", run_on_pick: true },
-    SlashDef { cmd: "/btw", hint: "Side ask — does not stop a live run", insert: "/btw", run_on_pick: true },
-    SlashDef { cmd: "/bg", hint: "Run a task in the background…", insert: "/bg ", run_on_pick: false },
-    SlashDef { cmd: "/queue", hint: "Send after the live reply…", insert: "/queue ", run_on_pick: false },
-    SlashDef { cmd: "/view-plan", hint: "Show the plan from Plan mode", insert: "/view-plan", run_on_pick: true },
-    SlashDef { cmd: "/worktree", hint: "Next chat in a git worktree", insert: "/worktree", run_on_pick: true },
-    SlashDef { cmd: "/room", hint: "Speak the room — stage a project", insert: "/room ", run_on_pick: false },
-    SlashDef { cmd: "/dream", hint: "Imagine last night’s job", insert: "/dream", run_on_pick: true },
-    SlashDef { cmd: "/inhabit", hint: "Hand this Grok to another box", insert: "/inhabit ", run_on_pick: false },
-    SlashDef { cmd: "/update", hint: "Update CLI and cabin when newer", insert: "/update", run_on_pick: true },
-    SlashDef { cmd: "/import", hint: "Import OpenClaw workspace", insert: "/import", run_on_pick: true },
-    SlashDef { cmd: "/consult", hint: "One-shot consult", insert: "/consult ", run_on_pick: false },
-    SlashDef { cmd: "/usage", hint: "Today's usage + Grok spend", insert: "/usage", run_on_pick: true },
-    SlashDef { cmd: "/models", hint: "Grok catalog", insert: "/models", run_on_pick: true },
-    SlashDef { cmd: "/palette", hint: "Command palette", insert: "/palette", run_on_pick: true },
-    SlashDef { cmd: "/plan", hint: "Plan mode", insert: "/plan", run_on_pick: true },
-    SlashDef { cmd: "/always-approve", hint: "Skip Grok tool prompts", insert: "/always-approve", run_on_pick: true },
-    SlashDef { cmd: "/sessions", hint: "Open History", insert: "/sessions", run_on_pick: true },
-    SlashDef { cmd: "/resume", hint: "Resume a session", insert: "/resume", run_on_pick: true },
-    SlashDef { cmd: "/inspect", hint: "Inspect this chat's session", insert: "/inspect", run_on_pick: true },
-    SlashDef { cmd: "/loop", hint: "Schedule a Grok /loop…", insert: "/loop ", run_on_pick: false },
-    SlashDef { cmd: "/skills", hint: "Skills", insert: "/skills", run_on_pick: true },
-    SlashDef { cmd: "/skills changes", hint: "What GrokHub changed in your skills", insert: "/skills changes", run_on_pick: true },
-    SlashDef { cmd: "/skills undo", hint: "Undo the newest change to a skill…", insert: "/skills undo ", run_on_pick: false },
-    SlashDef { cmd: "/skills restore", hint: "Bring back a removed skill…", insert: "/skills restore ", run_on_pick: false },
-    SlashDef { cmd: "/connections changes", hint: "What GrokHub changed in your connections", insert: "/connections changes", run_on_pick: true },
-    SlashDef { cmd: "/automations changes", hint: "What GrokHub changed in your automations", insert: "/automations changes", run_on_pick: true },
-    SlashDef { cmd: "/plugins", hint: "Plugins and marketplace", insert: "/plugins", run_on_pick: true },
-    SlashDef { cmd: "/mcps", hint: "MCP servers", insert: "/mcps", run_on_pick: true },
-    SlashDef { cmd: "/hooks", hint: "Hooks", insert: "/hooks", run_on_pick: true },
-    SlashDef { cmd: "/model", hint: "Set the chat model…", insert: "/model ", run_on_pick: false },
-    SlashDef { cmd: "/imagine-video", hint: "Open Imagine video", insert: "/imagine-video ", run_on_pick: false },
-    SlashDef { cmd: "/goal", hint: "Pin a Grok goal…", insert: "/goal ", run_on_pick: false },
+    SlashDef {
+        cmd: "/help",
+        hint: "Show slash commands",
+        insert: "/help",
+        run_on_pick: true,
+    },
+    SlashDef {
+        cmd: "/new",
+        hint: "New chat",
+        insert: "/new",
+        run_on_pick: true,
+    },
+    SlashDef {
+        cmd: "/scratch",
+        hint: "New scratch chat (no memory)",
+        insert: "/scratch",
+        run_on_pick: true,
+    },
+    SlashDef {
+        cmd: "/clear",
+        hint: "Clear current chat",
+        insert: "/clear",
+        run_on_pick: true,
+    },
+    SlashDef {
+        cmd: "/compact",
+        hint: "Compact Grok context",
+        insert: "/compact",
+        run_on_pick: true,
+    },
+    SlashDef {
+        cmd: "/context",
+        hint: "Show context use",
+        insert: "/context",
+        run_on_pick: true,
+    },
+    SlashDef {
+        cmd: "/health",
+        hint: "Updates, failed services and the last dream",
+        insert: "/health",
+        run_on_pick: true,
+    },
+    SlashDef {
+        cmd: "/fix",
+        hint: "Self-heal stuck UI + health pass",
+        insert: "/fix",
+        run_on_pick: true,
+    },
+    SlashDef {
+        cmd: "/memory",
+        hint: "Show memory files",
+        insert: "/memory ",
+        run_on_pick: false,
+    },
+    SlashDef {
+        cmd: "/learn",
+        hint: "Run self-improve reflect",
+        insert: "/learn",
+        run_on_pick: true,
+    },
+    SlashDef {
+        cmd: "/learn reflect",
+        hint: "Run self-improve reflect",
+        insert: "/learn reflect",
+        run_on_pick: true,
+    },
+    SlashDef {
+        cmd: "/mode",
+        hint: "Set mode…",
+        insert: "/mode ",
+        run_on_pick: false,
+    },
+    SlashDef {
+        cmd: "/imagine",
+        hint: "Open Imagine",
+        insert: "/imagine ",
+        run_on_pick: false,
+    },
+    SlashDef {
+        cmd: "/export",
+        hint: "Export chat (md, html, or json)",
+        insert: "/export",
+        run_on_pick: true,
+    },
+    SlashDef {
+        cmd: "/rename",
+        hint: "Rename chat…",
+        insert: "/rename ",
+        run_on_pick: false,
+    },
+    SlashDef {
+        cmd: "/pin",
+        hint: "Pin or unpin this chat",
+        insert: "/pin",
+        run_on_pick: true,
+    },
+    SlashDef {
+        cmd: "/delete",
+        hint: "Delete this chat tab",
+        insert: "/delete",
+        run_on_pick: true,
+    },
+    SlashDef {
+        cmd: "/remember",
+        hint: "Save durable memory note",
+        insert: "/remember ",
+        run_on_pick: false,
+    },
+    SlashDef {
+        cmd: "/project",
+        hint: "Show bound project",
+        insert: "/project",
+        run_on_pick: true,
+    },
+    SlashDef {
+        cmd: "/project bind",
+        hint: "Bind a folder as the world",
+        insert: "/project bind ",
+        run_on_pick: false,
+    },
+    SlashDef {
+        cmd: "/project new",
+        hint: "Create a project",
+        insert: "/project new ",
+        run_on_pick: false,
+    },
+    SlashDef {
+        cmd: "/project folder",
+        hint: "Create a sidebar folder",
+        insert: "/project folder ",
+        run_on_pick: false,
+    },
+    SlashDef {
+        cmd: "/project rename",
+        hint: "Rename the selected project",
+        insert: "/project rename ",
+        run_on_pick: false,
+    },
+    SlashDef {
+        cmd: "/project move",
+        hint: "Add the selected project to a folder",
+        insert: "/project move ",
+        run_on_pick: false,
+    },
+    SlashDef {
+        cmd: "/project delete",
+        hint: "Remove the project; chats return to History",
+        insert: "/project delete",
+        run_on_pick: true,
+    },
+    SlashDef {
+        cmd: "/board",
+        hint: "Open Workboards",
+        insert: "/board",
+        run_on_pick: true,
+    },
+    SlashDef {
+        cmd: "/skill",
+        hint: "Run a skill…",
+        insert: "/skill ",
+        run_on_pick: false,
+    },
+    SlashDef {
+        cmd: "/host",
+        hint: "Desktop host status",
+        insert: "/host",
+        run_on_pick: true,
+    },
+    SlashDef {
+        cmd: "/recall",
+        hint: "Search chats and memory",
+        insert: "/recall ",
+        run_on_pick: false,
+    },
+    SlashDef {
+        cmd: "/forget",
+        hint: "Remove a memory topic",
+        insert: "/forget ",
+        run_on_pick: false,
+    },
+    SlashDef {
+        cmd: "/undo",
+        hint: "Rewind Grok conversation",
+        insert: "/undo",
+        run_on_pick: true,
+    },
+    SlashDef {
+        cmd: "/retry",
+        hint: "Re-send last user prompt",
+        insert: "/retry",
+        run_on_pick: true,
+    },
+    SlashDef {
+        cmd: "/stop",
+        hint: "Stop generation",
+        insert: "/stop",
+        run_on_pick: true,
+    },
+    SlashDef {
+        cmd: "/sh",
+        hint: "Run shell on host",
+        insert: "/sh ",
+        run_on_pick: false,
+    },
+    SlashDef {
+        cmd: "$",
+        hint: "Host shell shortcut",
+        insert: "$ ",
+        run_on_pick: false,
+    },
+    SlashDef {
+        cmd: "/hub",
+        hint: "Device hub status",
+        insert: "/hub",
+        run_on_pick: true,
+    },
+    SlashDef {
+        cmd: "/sync",
+        hint: "Sync chats & memory with paired computers",
+        insert: "/sync",
+        run_on_pick: true,
+    },
+    SlashDef {
+        cmd: "/privacy",
+        hint: "What left this computer, and your grants",
+        insert: "/privacy",
+        run_on_pick: true,
+    },
+    SlashDef {
+        cmd: "/diagnose",
+        hint: "Check this computer (read only)",
+        insert: "/diagnose",
+        run_on_pick: true,
+    },
+    SlashDef {
+        cmd: "/record",
+        hint: "Record my screen and diagnose it (say what's wrong)",
+        insert: "/record ",
+        run_on_pick: false,
+    },
+    SlashDef {
+        cmd: "/audiocheck",
+        hint: "Check my audio: devices, levels, clipping, crackle",
+        insert: "/audiocheck",
+        run_on_pick: true,
+    },
+    SlashDef {
+        cmd: "/why",
+        hint: "Why Auto would pick each model and effort",
+        insert: "/why",
+        run_on_pick: true,
+    },
+    SlashDef {
+        cmd: "/send",
+        hint: "Send a task to another computer",
+        insert: "/send ",
+        run_on_pick: false,
+    },
+    SlashDef {
+        cmd: "/rewind",
+        hint: "Rewind Grok conversation",
+        insert: "/rewind",
+        run_on_pick: true,
+    },
+    SlashDef {
+        cmd: "/rewind step",
+        hint: "List or restore agent file checkpoints",
+        insert: "/rewind step",
+        run_on_pick: true,
+    },
+    SlashDef {
+        cmd: "/rewind --files",
+        hint: "Restore last project snapshot",
+        insert: "/rewind --files",
+        run_on_pick: true,
+    },
+    SlashDef {
+        cmd: "/btw",
+        hint: "Side ask — does not stop a live run",
+        insert: "/btw",
+        run_on_pick: true,
+    },
+    SlashDef {
+        cmd: "/bg",
+        hint: "Run a task in the background…",
+        insert: "/bg ",
+        run_on_pick: false,
+    },
+    SlashDef {
+        cmd: "/queue",
+        hint: "Send after the live reply…",
+        insert: "/queue ",
+        run_on_pick: false,
+    },
+    SlashDef {
+        cmd: "/view-plan",
+        hint: "Show the plan from Plan mode",
+        insert: "/view-plan",
+        run_on_pick: true,
+    },
+    SlashDef {
+        cmd: "/worktree",
+        hint: "Next chat in a git worktree",
+        insert: "/worktree",
+        run_on_pick: true,
+    },
+    SlashDef {
+        cmd: "/room",
+        hint: "Speak the room — stage a project",
+        insert: "/room ",
+        run_on_pick: false,
+    },
+    SlashDef {
+        cmd: "/dream",
+        hint: "Imagine last night’s job",
+        insert: "/dream",
+        run_on_pick: true,
+    },
+    SlashDef {
+        cmd: "/inhabit",
+        hint: "Hand this Grok to another box",
+        insert: "/inhabit ",
+        run_on_pick: false,
+    },
+    SlashDef {
+        cmd: "/update",
+        hint: "Update CLI and cabin when newer",
+        insert: "/update",
+        run_on_pick: true,
+    },
+    SlashDef {
+        cmd: "/import",
+        hint: "Import OpenClaw workspace",
+        insert: "/import",
+        run_on_pick: true,
+    },
+    SlashDef {
+        cmd: "/consult",
+        hint: "One-shot consult",
+        insert: "/consult ",
+        run_on_pick: false,
+    },
+    SlashDef {
+        cmd: "/usage",
+        hint: "Today's usage + Grok spend",
+        insert: "/usage",
+        run_on_pick: true,
+    },
+    SlashDef {
+        cmd: "/models",
+        hint: "Grok catalog",
+        insert: "/models",
+        run_on_pick: true,
+    },
+    SlashDef {
+        cmd: "/palette",
+        hint: "Command palette",
+        insert: "/palette",
+        run_on_pick: true,
+    },
+    SlashDef {
+        cmd: "/plan",
+        hint: "Plan mode",
+        insert: "/plan",
+        run_on_pick: true,
+    },
+    SlashDef {
+        cmd: "/always-approve",
+        hint: "Skip Grok tool prompts",
+        insert: "/always-approve",
+        run_on_pick: true,
+    },
+    SlashDef {
+        cmd: "/sessions",
+        hint: "Open History",
+        insert: "/sessions",
+        run_on_pick: true,
+    },
+    SlashDef {
+        cmd: "/resume",
+        hint: "Resume a session",
+        insert: "/resume",
+        run_on_pick: true,
+    },
+    SlashDef {
+        cmd: "/inspect",
+        hint: "Inspect this chat's session",
+        insert: "/inspect",
+        run_on_pick: true,
+    },
+    SlashDef {
+        cmd: "/loop",
+        hint: "Schedule a Grok /loop…",
+        insert: "/loop ",
+        run_on_pick: false,
+    },
+    SlashDef {
+        cmd: "/skills",
+        hint: "Skills",
+        insert: "/skills",
+        run_on_pick: true,
+    },
+    SlashDef {
+        cmd: "/skills changes",
+        hint: "What GrokHub changed in your skills",
+        insert: "/skills changes",
+        run_on_pick: true,
+    },
+    SlashDef {
+        cmd: "/skills undo",
+        hint: "Undo the newest change to a skill…",
+        insert: "/skills undo ",
+        run_on_pick: false,
+    },
+    SlashDef {
+        cmd: "/skills restore",
+        hint: "Bring back a removed skill…",
+        insert: "/skills restore ",
+        run_on_pick: false,
+    },
+    SlashDef {
+        cmd: "/connections changes",
+        hint: "What GrokHub changed in your connections",
+        insert: "/connections changes",
+        run_on_pick: true,
+    },
+    SlashDef {
+        cmd: "/automations changes",
+        hint: "What GrokHub changed in your automations",
+        insert: "/automations changes",
+        run_on_pick: true,
+    },
+    SlashDef {
+        cmd: "/plugins",
+        hint: "Plugins and marketplace",
+        insert: "/plugins",
+        run_on_pick: true,
+    },
+    SlashDef {
+        cmd: "/mcps",
+        hint: "MCP servers",
+        insert: "/mcps",
+        run_on_pick: true,
+    },
+    SlashDef {
+        cmd: "/hooks",
+        hint: "Hooks",
+        insert: "/hooks",
+        run_on_pick: true,
+    },
+    SlashDef {
+        cmd: "/model",
+        hint: "Set the chat model…",
+        insert: "/model ",
+        run_on_pick: false,
+    },
+    SlashDef {
+        cmd: "/imagine-video",
+        hint: "Open Imagine video",
+        insert: "/imagine-video ",
+        run_on_pick: false,
+    },
+    SlashDef {
+        cmd: "/goal",
+        hint: "Pin a Grok goal…",
+        insert: "/goal ",
+        run_on_pick: false,
+    },
 ];
 
 pub fn filter_slash_commands(draft: &str) -> Vec<&'static SlashDef> {
@@ -643,7 +1038,11 @@ pub fn filter_slash_commands(draft: &str) -> Vec<&'static SlashDef> {
                 return true;
             }
             if parts.len() == 2 {
-                let want = format!("{} {}", parts[0].to_ascii_lowercase(), parts[1].to_ascii_lowercase());
+                let want = format!(
+                    "{} {}",
+                    parts[0].to_ascii_lowercase(),
+                    parts[1].to_ascii_lowercase()
+                );
                 return c.starts_with(&want);
             }
             false
@@ -868,12 +1267,22 @@ mod tests {
         );
         assert_eq!(parse_slash("/memory dream"), Some(Slash::MemoryDream));
         assert_eq!(parse_slash("/memory prune"), Some(Slash::MemoryPrune));
-        assert_eq!(parse_slash("/dream"), Some(Slash::Dream), "/dream stays the Imagine prompt");
+        assert_eq!(
+            parse_slash("/dream"),
+            Some(Slash::Dream),
+            "/dream stays the Imagine prompt"
+        );
         assert_eq!(parse_slash("/recall pi"), Some(Slash::Recall("pi".into())));
-        assert_eq!(parse_slash("/forget wifi"), Some(Slash::Forget(Some("wifi".into()))));
+        assert_eq!(
+            parse_slash("/forget wifi"),
+            Some(Slash::Forget(Some("wifi".into())))
+        );
         assert_eq!(parse_slash("/forget"), Some(Slash::Forget(None)));
         assert_eq!(parse_slash("/board"), Some(Slash::Board));
-        assert_eq!(parse_slash("/imagine a cabin"), Some(Slash::Imagine("a cabin".into())));
+        assert_eq!(
+            parse_slash("/imagine a cabin"),
+            Some(Slash::Imagine("a cabin".into()))
+        );
         assert_eq!(parse_slash("/compact"), Some(Slash::Compact));
         assert_eq!(parse_slash("/fork"), None, "fork is removed");
         assert_eq!(parse_slash("/btw"), Some(Slash::Btw));
@@ -882,16 +1291,28 @@ mod tests {
             parse_slash("/bg run the tests"),
             Some(Slash::Background("run the tests".into()))
         );
-        assert_eq!(parse_slash("/background stop"), Some(Slash::Background("stop".into())));
-        assert_eq!(parse_slash("/queue then deploy"), Some(Slash::Queue("then deploy".into())));
+        assert_eq!(
+            parse_slash("/background stop"),
+            Some(Slash::Background("stop".into()))
+        );
+        assert_eq!(
+            parse_slash("/queue then deploy"),
+            Some(Slash::Queue("then deploy".into()))
+        );
         assert_eq!(parse_slash("/queue"), None);
         assert_eq!(parse_slash("/view-plan"), Some(Slash::ViewPlan));
         assert_eq!(parse_slash("/show-plan"), Some(Slash::ViewPlan));
         assert_eq!(parse_slash("/plan-view"), Some(Slash::ViewPlan));
         assert_eq!(parse_slash("/rewind --files"), Some(Slash::RewindFiles));
         assert_eq!(parse_slash("/rewind step"), Some(Slash::RewindStep(None)));
-        assert_eq!(parse_slash("/rewind step 3"), Some(Slash::RewindStep(Some(3))));
-        assert_eq!(parse_slash("/workflow review"), Some(Slash::Workflow("review".into())));
+        assert_eq!(
+            parse_slash("/rewind step 3"),
+            Some(Slash::RewindStep(Some(3)))
+        );
+        assert_eq!(
+            parse_slash("/workflow review"),
+            Some(Slash::Workflow("review".into()))
+        );
         assert_eq!(parse_slash("/worktree"), Some(Slash::Worktree));
         let extra = grok_command_hits(&["create-skill".into(), "help".into()]);
         assert!(extra.iter().any(|h| h.cmd == "/create-skill"));
@@ -907,7 +1328,9 @@ mod tests {
         assert!(learn.iter().any(|h| h.cmd == "/create-skill"), "{learn:?}");
         let learn_hits = filter_slash_hits("/learn", &[]);
         assert!(
-            learn_hits.iter().any(|h| h.cmd == "/learn" && h.run_on_pick),
+            learn_hits
+                .iter()
+                .any(|h| h.cmd == "/learn" && h.run_on_pick),
             "{learn_hits:?}"
         );
         assert_eq!(parse_slash("/update"), Some(Slash::Update));
@@ -920,9 +1343,15 @@ mod tests {
         assert_eq!(parse_slash("/scratch"), Some(Slash::Scratch));
         assert_eq!(parse_slash("/undo"), Some(Slash::Undo));
         assert_eq!(parse_slash("/retry"), Some(Slash::Retry));
-        assert_eq!(parse_slash("/sh ls /tmp"), Some(Slash::Sh("ls /tmp".into())));
+        assert_eq!(
+            parse_slash("/sh ls /tmp"),
+            Some(Slash::Sh("ls /tmp".into()))
+        );
         assert_eq!(parse_slash("$ echo hi"), Some(Slash::Sh("echo hi".into())));
-        assert_eq!(parse_slash("/project bind ~/GrokHub-Work"), Some(Slash::ProjectBind(Some("~/GrokHub-Work".into()))));
+        assert_eq!(
+            parse_slash("/project bind ~/GrokHub-Work"),
+            Some(Slash::ProjectBind(Some("~/GrokHub-Work".into())))
+        );
         assert_eq!(parse_slash("/project binding ~/GrokHub-Work"), None);
         assert!(unknown_cabin_slash("/project binding ~/GrokHub-Work"));
         assert!(unknown_cabin_slash("/approve"));
@@ -933,16 +1362,30 @@ mod tests {
             "skill slashes must reach the engine"
         );
         assert!(!unknown_cabin_slash("/workflow runs"));
-        assert_eq!(parse_slash("/loop 30m check deploy").as_ref().map(slash_kind), Some("loop"));
+        assert_eq!(
+            parse_slash("/loop 30m check deploy")
+                .as_ref()
+                .map(slash_kind),
+            Some("loop")
+        );
         assert_eq!(parse_slash("/skills"), Some(Slash::GrokSkills));
         assert_eq!(parse_slash("/skills list"), Some(Slash::GrokSkills));
         assert_eq!(parse_slash("/skills changes"), Some(Slash::SkillChanges));
         assert_eq!(parse_slash("/skills undo"), Some(Slash::SkillChanges));
         assert_eq!(parse_slash("/skills restore"), Some(Slash::SkillChanges));
-        assert_eq!(parse_slash("/connections changes"), Some(Slash::ConnectionChanges));
+        assert_eq!(
+            parse_slash("/connections changes"),
+            Some(Slash::ConnectionChanges)
+        );
         assert_eq!(parse_slash("/connections"), Some(Slash::ConnectionChanges));
-        assert_eq!(parse_slash("/automations changes"), Some(Slash::AutomationChanges));
-        assert_eq!(parse_slash("/automations History"), Some(Slash::AutomationChanges));
+        assert_eq!(
+            parse_slash("/automations changes"),
+            Some(Slash::AutomationChanges)
+        );
+        assert_eq!(
+            parse_slash("/automations History"),
+            Some(Slash::AutomationChanges)
+        );
         assert_eq!(parse_slash("/automations weekly"), None);
         assert_eq!(slash_kind(&Slash::ConnectionChanges), "connection_changes");
         assert_eq!(
@@ -954,18 +1397,40 @@ mod tests {
             Some(Slash::SkillRestore("board status".into()))
         );
         assert_eq!(slash_kind(&Slash::SkillUndo("x".into())), "skill_undo");
-        assert_eq!(slash_kind(&Slash::SkillRestore("x".into())), "skill_restore");
+        assert_eq!(
+            slash_kind(&Slash::SkillRestore("x".into())),
+            "skill_restore"
+        );
         assert_eq!(slash_kind(&Slash::SkillChanges), "skill_changes");
-        assert!(slash_help().contains("/skills undo <name> — put back the version before the newest change"));
+        assert!(slash_help()
+            .contains("/skills undo <name> — put back the version before the newest change"));
         assert_eq!(parse_slash("/mcps"), Some(Slash::GrokConnectors));
-        assert_eq!(parse_slash("/model grok-4.7").as_ref().map(slash_kind), Some("model"));
-        assert_eq!(parse_slash("/m grok-4.5").as_ref().map(slash_kind), Some("model"));
-        assert_eq!(parse_slash("/imagine-video a cat").as_ref().map(slash_kind), Some("imagine_video"));
-        assert_eq!(parse_slash("/goal migrate auth").as_ref().map(slash_kind), Some("goal"));
+        assert_eq!(
+            parse_slash("/model grok-4.7").as_ref().map(slash_kind),
+            Some("model")
+        );
+        assert_eq!(
+            parse_slash("/m grok-4.5").as_ref().map(slash_kind),
+            Some("model")
+        );
+        assert_eq!(
+            parse_slash("/imagine-video a cat").as_ref().map(slash_kind),
+            Some("imagine_video")
+        );
+        assert_eq!(
+            parse_slash("/goal migrate auth").as_ref().map(slash_kind),
+            Some("goal")
+        );
         assert_eq!(parse_slash("/resume"), Some(Slash::Sessions));
         assert_eq!(parse_slash("/dashboard"), Some(Slash::Sessions));
-        assert_eq!(parse_slash("/project ~/GrokHub-Work"), Some(Slash::ProjectBind(Some("~/GrokHub-Work".into()))));
-        assert_eq!(parse_slash("/project /tmp/cabin"), Some(Slash::ProjectBind(Some("/tmp/cabin".into()))));
+        assert_eq!(
+            parse_slash("/project ~/GrokHub-Work"),
+            Some(Slash::ProjectBind(Some("~/GrokHub-Work".into())))
+        );
+        assert_eq!(
+            parse_slash("/project /tmp/cabin"),
+            Some(Slash::ProjectBind(Some("/tmp/cabin".into())))
+        );
         assert_eq!(parse_slash("/project typo"), None);
         // Byte 4 falls inside a multi-byte char: no word match, and no panic.
         assert_eq!(parse_slash("/project aé€"), None);
@@ -975,23 +1440,53 @@ mod tests {
             parse_slash("/project bind ."),
             Some(Slash::ProjectBind(Some(".".into())))
         );
-        assert_eq!(parse_slash("/project new Night watch"), Some(Slash::ProjectNew("Night watch".into())));
-        assert_eq!(parse_slash("/project folder Cabin"), Some(Slash::ProjectFolder("Cabin".into())));
-        assert_eq!(parse_slash("/project rename Dawn"), Some(Slash::ProjectRename("Dawn".into())));
-        assert_eq!(parse_slash("/project move Cabin"), Some(Slash::ProjectMove("Cabin".into())));
+        assert_eq!(
+            parse_slash("/project new Night watch"),
+            Some(Slash::ProjectNew("Night watch".into()))
+        );
+        assert_eq!(
+            parse_slash("/project folder Cabin"),
+            Some(Slash::ProjectFolder("Cabin".into()))
+        );
+        assert_eq!(
+            parse_slash("/project rename Dawn"),
+            Some(Slash::ProjectRename("Dawn".into()))
+        );
+        assert_eq!(
+            parse_slash("/project move Cabin"),
+            Some(Slash::ProjectMove("Cabin".into()))
+        );
         assert_eq!(parse_slash("/project delete"), Some(Slash::ProjectDelete));
-        assert_eq!(parse_slash("/inhabit cabin-2"), Some(Slash::Inhabit("cabin-2".into())));
-        assert_eq!(parse_slash("/send flash the pi"), Some(Slash::Send("flash the pi".into())));
+        assert_eq!(
+            parse_slash("/inhabit cabin-2"),
+            Some(Slash::Inhabit("cabin-2".into()))
+        );
+        assert_eq!(
+            parse_slash("/send flash the pi"),
+            Some(Slash::Send("flash the pi".into()))
+        );
         assert_eq!(slash_kind(&Slash::Update), "update");
-        assert_eq!(parse_slash("/rename night").as_ref().map(slash_kind), Some("rename"));
+        assert_eq!(
+            parse_slash("/rename night").as_ref().map(slash_kind),
+            Some("rename")
+        );
         assert_eq!(parse_slash("/pin"), Some(Slash::Pin));
         assert_eq!(parse_slash("/delete"), Some(Slash::Delete));
         assert_eq!(parse_slash("/close"), Some(Slash::Delete));
         assert_eq!(parse_slash("/host"), Some(Slash::HostStatus));
         assert_eq!(parse_slash("/mode max"), Some(Slash::Mode("max".into())));
-        assert_eq!(parse_slash("/mode think"), Some(Slash::Mode("think".into())));
-        assert_eq!(parse_slash("/mode balance"), Some(Slash::Mode("balanced".into())));
-        assert_eq!(parse_slash("/mode balanced"), Some(Slash::Mode("balanced".into())));
+        assert_eq!(
+            parse_slash("/mode think"),
+            Some(Slash::Mode("think".into()))
+        );
+        assert_eq!(
+            parse_slash("/mode balance"),
+            Some(Slash::Mode("balanced".into()))
+        );
+        assert_eq!(
+            parse_slash("/mode balanced"),
+            Some(Slash::Mode("balanced".into()))
+        );
         assert_eq!(parse_slash("/dream"), Some(Slash::Dream));
         assert_eq!(parse_slash("/host off"), Some(Slash::HostStatus));
         assert_eq!(parse_slash("/tools off"), Some(Slash::HostStatus));
@@ -1120,8 +1615,12 @@ mod tests {
         assert!(slash_help().contains("quiet hours dropdown"));
         assert!(slash_help().contains("History search drops stale hits"));
         assert!(slash_help().contains("keeps unsaved typing"));
-        assert!(filter_slash_commands("/re").iter().any(|s| s.cmd == "/rename"));
-        assert!(filter_slash_commands("/project n").iter().any(|s| s.cmd == "/project new"));
+        assert!(filter_slash_commands("/re")
+            .iter()
+            .any(|s| s.cmd == "/rename"));
+        assert!(filter_slash_commands("/project n")
+            .iter()
+            .any(|s| s.cmd == "/project new"));
         assert!(filter_slash_commands("hello").is_empty());
         let help = mark_slash_result(&slash_help());
         assert!(is_cabin_slash_turn("assistant", &help));
@@ -1171,7 +1670,10 @@ mod tests {
         assert_eq!(parse_slash("/workflow pause"), Some(Slash::WorkflowUsage));
         assert_eq!(parse_slash("/workflow RESUME"), Some(Slash::WorkflowUsage));
         assert_eq!(parse_slash("/workflow stop"), Some(Slash::WorkflowUsage));
-        assert_eq!(parse_slash("/workflow review"), Some(Slash::Workflow("review".into())));
+        assert_eq!(
+            parse_slash("/workflow review"),
+            Some(Slash::Workflow("review".into()))
+        );
         assert_eq!(parse_slash("/workflow"), Some(Slash::GrokWorkflows));
         assert_eq!(parse_slash("/workflows"), Some(Slash::GrokWorkflows));
         assert_eq!(parse_slash("/mcps"), Some(Slash::GrokConnectors));
@@ -1191,10 +1693,14 @@ mod tests {
         assert_eq!(WorkflowVerb::Resume.as_str(), "resume");
         assert_eq!(WorkflowVerb::Stop.as_str(), "stop");
         assert!(
-            !SLASH_COMMANDS.iter().any(|s| s.cmd.starts_with("/workflow")),
+            !SLASH_COMMANDS
+                .iter()
+                .any(|s| s.cmd.starts_with("/workflow")),
             "the palette does not offer workflows"
         );
-        assert!(filter_slash_commands("/workflow").iter().all(|s| !s.cmd.starts_with("/workflow")));
+        assert!(filter_slash_commands("/workflow")
+            .iter()
+            .all(|s| !s.cmd.starts_with("/workflow")));
         assert!(slash_help().contains(
             "/workflow — workflows were a Grok Build CLI feature and are not in GrokHub"
         ));
@@ -1227,17 +1733,27 @@ mod tests {
         assert_eq!(parse_slash("/why table"), Some(Slash::WhyTable));
         assert_eq!(parse_slash("/why not"), None);
         assert_eq!(parse_slash("/why").as_ref().map(slash_kind), Some("why"));
-        assert!(slash_help().contains("\n/why — the last 10 reasons the router gave for a model and effort"));
-        assert!(SLASH_COMMANDS.iter().any(|d| d.cmd == "/why" && d.run_on_pick));
+        assert!(slash_help()
+            .contains("\n/why — the last 10 reasons the router gave for a model and effort"));
+        assert!(SLASH_COMMANDS
+            .iter()
+            .any(|d| d.cmd == "/why" && d.run_on_pick));
     }
 
     #[test]
     fn diagnose_slash_is_a_cabin_view() {
         assert_eq!(parse_slash("/diagnose"), Some(Slash::Diagnose));
         assert_eq!(parse_slash("/Diagnose"), Some(Slash::Diagnose));
-        assert_eq!(parse_slash("/diagnose").as_ref().map(slash_kind), Some("diagnose"));
-        assert!(slash_help().contains("\n/diagnose — check disk, memory, services, logs, network and updates, read only"));
-        assert!(SLASH_COMMANDS.iter().any(|d| d.cmd == "/diagnose" && d.run_on_pick));
+        assert_eq!(
+            parse_slash("/diagnose").as_ref().map(slash_kind),
+            Some("diagnose")
+        );
+        assert!(slash_help().contains(
+            "\n/diagnose — check disk, memory, services, logs, network and updates, read only"
+        ));
+        assert!(SLASH_COMMANDS
+            .iter()
+            .any(|d| d.cmd == "/diagnose" && d.run_on_pick));
         assert!(!unknown_cabin_slash("/diagnose"));
     }
 
@@ -1250,19 +1766,38 @@ mod tests {
         );
         assert_eq!(parse_slash("/record stop"), Some(Slash::RecordStop));
         assert_eq!(parse_slash("/record Stop"), Some(Slash::RecordStop));
-        assert_eq!(parse_slash("/record stop").as_ref().map(slash_kind), Some("record_stop"));
-        assert!(slash_help().contains("\n/record — record the screen (up to 2:00) and diagnose it; /record stop ends it"));
-        assert!(SLASH_COMMANDS.iter().any(|d| d.cmd == "/record" && d.insert == "/record "));
+        assert_eq!(
+            parse_slash("/record stop").as_ref().map(slash_kind),
+            Some("record_stop")
+        );
+        assert!(slash_help().contains(
+            "\n/record — record the screen (up to 2:00) and diagnose it; /record stop ends it"
+        ));
+        assert!(SLASH_COMMANDS
+            .iter()
+            .any(|d| d.cmd == "/record" && d.insert == "/record "));
         assert!(!unknown_cabin_slash("/record"));
     }
 
     #[test]
     fn audiocheck_slash_takes_an_optional_input() {
-        assert_eq!(parse_slash("/audiocheck"), Some(Slash::AudioCheck(String::new())));
-        assert_eq!(parse_slash("/audiocheck Blue Yeti"), Some(Slash::AudioCheck("Blue Yeti".into())));
-        assert_eq!(parse_slash("/audiocheck").as_ref().map(slash_kind), Some("audiocheck"));
-        assert!(slash_help().contains("\n/audiocheck — list outputs and inputs, listen to the default input"));
-        assert!(SLASH_COMMANDS.iter().any(|d| d.cmd == "/audiocheck" && d.run_on_pick));
+        assert_eq!(
+            parse_slash("/audiocheck"),
+            Some(Slash::AudioCheck(String::new()))
+        );
+        assert_eq!(
+            parse_slash("/audiocheck Blue Yeti"),
+            Some(Slash::AudioCheck("Blue Yeti".into()))
+        );
+        assert_eq!(
+            parse_slash("/audiocheck").as_ref().map(slash_kind),
+            Some("audiocheck")
+        );
+        assert!(slash_help()
+            .contains("\n/audiocheck — list outputs and inputs, listen to the default input"));
+        assert!(SLASH_COMMANDS
+            .iter()
+            .any(|d| d.cmd == "/audiocheck" && d.run_on_pick));
         assert!(!unknown_cabin_slash("/audiocheck"));
     }
 

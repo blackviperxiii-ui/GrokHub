@@ -18,12 +18,17 @@ use grokhub_core::desktop_mcp::DesktopWindows;
 use grokhub_core::desktop_mcp::{WindowGeom, APPS_MSG, GEOMETRY_MSG, TRASH_MSG};
 
 /// First window (in list order) whose title holds `want`, any case.
-pub(crate) fn pick_title<'a>(titles: impl IntoIterator<Item = &'a str>, want: &str) -> Option<&'a str> {
+pub(crate) fn pick_title<'a>(
+    titles: impl IntoIterator<Item = &'a str>,
+    want: &str,
+) -> Option<&'a str> {
     let want = want.trim().to_lowercase();
     if want.is_empty() {
         return None;
     }
-    titles.into_iter().find(|t| t.to_lowercase().contains(&want))
+    titles
+        .into_iter()
+        .find(|t| t.to_lowercase().contains(&want))
 }
 
 /// Did `open_app` or `focus_window` change the desktop? A new window, a gone
@@ -37,9 +42,14 @@ pub(crate) fn windows_changed(before: &DesktopWindows, after: &DesktopWindows) -
 }
 
 #[cfg(target_os = "linux")]
-pub(crate) use linux::{focus_window, list_windows, open_app, set_window_geometry, trash, window_geometry};
+pub(crate) use linux::{
+    focus_window, list_windows, open_app, set_window_geometry, trash, window_geometry,
+};
 #[cfg(windows)]
-pub(crate) use win::{focus_window, list_windows, no_recycle_bin, open_app, set_window_geometry, trash, window_geometry};
+pub(crate) use win::{
+    focus_window, list_windows, no_recycle_bin, open_app, set_window_geometry, trash,
+    window_geometry,
+};
 
 /// Outside Windows a trash move with no trash fails instead of deleting.
 #[cfg(not(windows))]
@@ -75,7 +85,10 @@ pub(crate) fn set_window_geometry(_title: &str, _geom: &WindowGeom) -> Result<St
 /// The KWin script body that moves and resizes the first window whose
 /// caption holds `title` (any case).
 #[cfg(target_os = "linux")]
-pub(crate) fn kwin_geometry_script(title: &str, g: &grokhub_core::desktop_mcp::WindowGeom) -> Result<String, String> {
+pub(crate) fn kwin_geometry_script(
+    title: &str,
+    g: &grokhub_core::desktop_mcp::WindowGeom,
+) -> Result<String, String> {
     let want = serde_json::to_string(&title.to_lowercase()).map_err(|e| e.to_string())?;
     Ok(format!(
         "const want = {want};\n\
@@ -121,8 +134,16 @@ fn kwin_windows_script(service: &str) -> String {
 #[cfg(target_os = "linux")]
 fn parse_kwin_windows(json: &str) -> Option<DesktopWindows> {
     let v: serde_json::Value = serde_json::from_str(json).ok()?;
-    let titles = v["titles"].as_array()?.iter().filter_map(|t| t.as_str()).map(str::to_string).collect();
-    Some(DesktopWindows { titles, active: v["active"].as_str()?.to_string() })
+    let titles = v["titles"]
+        .as_array()?
+        .iter()
+        .filter_map(|t| t.as_str())
+        .map(str::to_string)
+        .collect();
+    Some(DesktopWindows {
+        titles,
+        active: v["active"].as_str()?.to_string(),
+    })
 }
 
 /// What a KWin script's answer means. No answer (a KWin that never called
@@ -141,9 +162,13 @@ mod linux {
     use std::process::{Command, Stdio};
     use std::time::{Duration, Instant};
 
-    use grokhub_core::desktop_mcp::{DesktopWindows, WindowGeom, APPS_MSG, GEOMETRY_MSG, TRASH_MSG};
+    use grokhub_core::desktop_mcp::{
+        DesktopWindows, WindowGeom, APPS_MSG, GEOMETRY_MSG, TRASH_MSG,
+    };
     use x11rb::connection::Connection;
-    use x11rb::protocol::xproto::{AtomEnum, ClientMessageEvent, ConnectionExt as _, EventMask, Window};
+    use x11rb::protocol::xproto::{
+        AtomEnum, ClientMessageEvent, ConnectionExt as _, EventMask, Window,
+    };
     use x11rb::rust_connection::RustConnection;
 
     const LAUNCH_WAIT: Duration = Duration::from_secs(5);
@@ -151,7 +176,8 @@ mod linux {
     fn x11_session() -> bool {
         let wayland = std::env::var("WAYLAND_DISPLAY").ok();
         let session = std::env::var("XDG_SESSION_TYPE").ok();
-        !grokhub_core::session_is_wayland(wayland.as_deref(), session.as_deref()) && std::env::var_os("DISPLAY").is_some()
+        !grokhub_core::session_is_wayland(wayland.as_deref(), session.as_deref())
+            && std::env::var_os("DISPLAY").is_some()
     }
 
     fn kde_wayland() -> bool {
@@ -184,7 +210,9 @@ mod linux {
                     let line = err.lines().next().unwrap_or("failed").trim().to_string();
                     return Err(format!("{program}: {line}"));
                 }
-                Ok(None) if start.elapsed() < LAUNCH_WAIT => std::thread::sleep(Duration::from_millis(50)),
+                Ok(None) if start.elapsed() < LAUNCH_WAIT => {
+                    std::thread::sleep(Duration::from_millis(50))
+                }
                 // Still running: the launcher handed off and is waiting on the app.
                 Ok(None) => return Ok(Some(())),
                 Err(e) => return Err(format!("{program}: {e}")),
@@ -198,7 +226,8 @@ mod linux {
         let data_home = std::env::var_os("XDG_DATA_HOME")
             .map(PathBuf::from)
             .or_else(|| home.map(|h| h.join(".local").join("share")));
-        let dirs = std::env::var("XDG_DATA_DIRS").unwrap_or_else(|_| "/usr/local/share:/usr/share".into());
+        let dirs =
+            std::env::var("XDG_DATA_DIRS").unwrap_or_else(|_| "/usr/local/share:/usr/share".into());
         data_home
             .into_iter()
             .chain(dirs.split(':').filter(|d| !d.is_empty()).map(PathBuf::from))
@@ -260,16 +289,36 @@ mod linux {
         let utf8 = atom(&conn, "UTF8_STRING")?;
         let mut rows = Vec::new();
         for w in prop_windows(&conn, root, client_list) {
-            let mut title = String::from_utf8_lossy(&prop_bytes(&conn, w, net_name, utf8)).into_owned();
+            let mut title =
+                String::from_utf8_lossy(&prop_bytes(&conn, w, net_name, utf8)).into_owned();
             if title.is_empty() {
-                title = String::from_utf8_lossy(&prop_bytes(&conn, w, AtomEnum::WM_NAME.into(), AtomEnum::STRING.into())).into_owned();
+                title = String::from_utf8_lossy(&prop_bytes(
+                    &conn,
+                    w,
+                    AtomEnum::WM_NAME.into(),
+                    AtomEnum::STRING.into(),
+                ))
+                .into_owned();
             }
             let class = prop_bytes(&conn, w, AtomEnum::WM_CLASS.into(), AtomEnum::STRING.into());
-            let class = String::from_utf8_lossy(&class).split('\0').filter(|s| !s.is_empty()).collect::<Vec<_>>().join(" ");
+            let class = String::from_utf8_lossy(&class)
+                .split('\0')
+                .filter(|s| !s.is_empty())
+                .collect::<Vec<_>>()
+                .join(" ");
             rows.push((w, title, class));
         }
-        let active = prop_windows(&conn, root, net_active).first().copied().unwrap_or(0);
-        Ok(X11Windows { conn, root, net_active, rows, active })
+        let active = prop_windows(&conn, root, net_active)
+            .first()
+            .copied()
+            .unwrap_or(0);
+        Ok(X11Windows {
+            conn,
+            root,
+            net_active,
+            rows,
+            active,
+        })
     }
 
     fn as_list(x: &X11Windows) -> DesktopWindows {
@@ -279,7 +328,10 @@ mod linux {
             .find(|(w, _, _)| *w == x.active)
             .map(|(_, t, c)| format!("{c} {t}").trim().to_string())
             .unwrap_or_default();
-        DesktopWindows { titles: x.rows.iter().map(|(_, t, _)| t.clone()).collect(), active }
+        DesktopWindows {
+            titles: x.rows.iter().map(|(_, t, _)| t.clone()).collect(),
+            active,
+        }
     }
 
     pub(crate) fn list_windows() -> Result<DesktopWindows, String> {
@@ -303,11 +355,21 @@ mod linux {
         let got = super::pick_title(x.rows.iter().map(|(_, t, _)| t.as_str()), title)
             .ok_or_else(|| format!("No window title has \"{title}\" in it."))?
             .to_string();
-        let win = x.rows.iter().find(|(_, t, _)| *t == got).map(|(w, _, _)| *w).unwrap_or(0);
+        let win = x
+            .rows
+            .iter()
+            .find(|(_, t, _)| *t == got)
+            .map(|(w, _, _)| *w)
+            .unwrap_or(0);
         // EWMH: source 2 (pager) asks the window manager to raise and focus it.
         let ev = ClientMessageEvent::new(32, win, x.net_active, [2u32, 0, 0, 0, 0]);
         x.conn
-            .send_event(false, x.root, EventMask::SUBSTRUCTURE_REDIRECT | EventMask::SUBSTRUCTURE_NOTIFY, ev)
+            .send_event(
+                false,
+                x.root,
+                EventMask::SUBSTRUCTURE_REDIRECT | EventMask::SUBSTRUCTURE_NOTIFY,
+                ev,
+            )
             .map_err(|e| format!("X11: {e}"))?;
         x.conn.flush().map_err(|e| format!("X11: {e}"))?;
         Ok(got)
@@ -318,7 +380,12 @@ mod linux {
         let got = super::pick_title(x.rows.iter().map(|(_, t, _)| t.as_str()), title)
             .ok_or_else(|| format!("No window title has \"{title}\" in it."))?
             .to_string();
-        let win = x.rows.iter().find(|(_, t, _)| *t == got).map(|(w, _, _)| *w).unwrap_or(0);
+        let win = x
+            .rows
+            .iter()
+            .find(|(_, t, _)| *t == got)
+            .map(|(w, _, _)| *w)
+            .unwrap_or(0);
         Ok((win, got))
     }
 
@@ -329,7 +396,12 @@ mod linux {
         }
         let x = x11_windows()?;
         let (win, _) = find_window(&x, title)?;
-        let geo = x.conn.get_geometry(win).map_err(|e| format!("X11: {e}"))?.reply().map_err(|e| format!("X11: {e}"))?;
+        let geo = x
+            .conn
+            .get_geometry(win)
+            .map_err(|e| format!("X11: {e}"))?
+            .reply()
+            .map_err(|e| format!("X11: {e}"))?;
         let at = x
             .conn
             .translate_coordinates(win, x.root, 0, 0)
@@ -348,7 +420,10 @@ mod linux {
             .and_then(|r| r.value32().map(|v| v.collect()))
             .unwrap_or_default();
         let (left, top) = match frame.as_slice() {
-            [l, _, t, _] => (i32::try_from(*l).unwrap_or(0), i32::try_from(*t).unwrap_or(0)),
+            [l, _, t, _] => (
+                i32::try_from(*l).unwrap_or(0),
+                i32::try_from(*t).unwrap_or(0),
+            ),
             _ => (0, 0),
         };
         Ok(WindowGeom {
@@ -373,9 +448,19 @@ mod linux {
         // EWMH: gravity 0 (the window's own), x/y/width/height all set (bits
         // 8-11), source 2 (pager), so the window manager places the frame.
         let flags = (1u32 << 8) | (1 << 9) | (1 << 10) | (1 << 11) | (2 << 12);
-        let ev = ClientMessageEvent::new(32, win, net_move, [flags, g.x as u32, g.y as u32, g.width, g.height]);
+        let ev = ClientMessageEvent::new(
+            32,
+            win,
+            net_move,
+            [flags, g.x as u32, g.y as u32, g.width, g.height],
+        );
         x.conn
-            .send_event(false, x.root, EventMask::SUBSTRUCTURE_REDIRECT | EventMask::SUBSTRUCTURE_NOTIFY, ev)
+            .send_event(
+                false,
+                x.root,
+                EventMask::SUBSTRUCTURE_REDIRECT | EventMask::SUBSTRUCTURE_NOTIFY,
+                ev,
+            )
             .map_err(|e| format!("X11: {e}"))?;
         x.conn.flush().map_err(|e| format!("X11: {e}"))?;
         Ok(got)
@@ -420,16 +505,25 @@ mod linux {
 
     /// Run the script `build` makes for this connection's D-Bus name and
     /// wait briefly for its one call back. `None` when KWin never called.
-    fn kwin_ask(what: &str, build: impl FnOnce(&str) -> String) -> Result<Option<zbus::Message>, String> {
+    fn kwin_ask(
+        what: &str,
+        build: impl FnOnce(&str) -> String,
+    ) -> Result<Option<zbus::Message>, String> {
         let conn = zbus::blocking::Connection::session().map_err(|e| format!("KWin: {e}"))?;
-        let me = conn.unique_name().map(|n| n.to_string()).ok_or("KWin: no D-Bus name")?;
+        let me = conn
+            .unique_name()
+            .map(|n| n.to_string())
+            .ok_or("KWin: no D-Bus name")?;
         let name = format!("grokhub-{what}-{}", std::process::id());
         let file = std::env::temp_dir().join(format!("{name}.js"));
         std::fs::write(&file, build(&me)).map_err(|e| format!("KWin script: {e}"))?;
         let reply = kwin_listen(&conn);
         let out = kwin_run(&conn, &file, &name);
         let _ = std::fs::remove_file(&file);
-        let got = out.is_ok().then(|| reply.recv_timeout(KWIN_REPLY_WAIT).ok()).flatten();
+        let got = out
+            .is_ok()
+            .then(|| reply.recv_timeout(KWIN_REPLY_WAIT).ok())
+            .flatten();
         // Closing the connection ends the listener when no answer came.
         let _ = conn.close();
         out.map(|()| got)
@@ -443,7 +537,11 @@ mod linux {
         let it = zbus::blocking::MessageIterator::from(conn.clone());
         std::thread::spawn(move || {
             for msg in it.flatten() {
-                if msg.header().interface().is_some_and(|i| i.as_str() == super::KWIN_REPLY_IFACE) {
+                if msg
+                    .header()
+                    .interface()
+                    .is_some_and(|i| i.as_str() == super::KWIN_REPLY_IFACE)
+                {
                     let _ = tx.send(msg);
                     return;
                 }
@@ -455,24 +553,53 @@ mod linux {
     fn kwin_run(conn: &zbus::blocking::Connection, file: &Path, name: &str) -> Result<(), String> {
         let path = file.to_string_lossy().into_owned();
         let reply = conn
-            .call_method(Some("org.kde.KWin"), "/Scripting", Some("org.kde.kwin.Scripting"), "loadScript", &(path.as_str(), name))
+            .call_method(
+                Some("org.kde.KWin"),
+                "/Scripting",
+                Some("org.kde.kwin.Scripting"),
+                "loadScript",
+                &(path.as_str(), name),
+            )
             .map_err(|e| format!("KWin: {e}"))?;
-        let id: i32 = reply.body().deserialize().map_err(|e| format!("KWin: {e}"))?;
+        let id: i32 = reply
+            .body()
+            .deserialize()
+            .map_err(|e| format!("KWin: {e}"))?;
         // KWin 6 names the object /Scripting/Script{id}; KWin 5 used /{id}.
-        let ran = [format!("/Scripting/Script{id}"), format!("/{id}")].iter().any(|obj| {
-            conn.call_method(Some("org.kde.KWin"), obj.as_str(), Some("org.kde.kwin.Script"), "run", &())
+        let ran = [format!("/Scripting/Script{id}"), format!("/{id}")]
+            .iter()
+            .any(|obj| {
+                conn.call_method(
+                    Some("org.kde.KWin"),
+                    obj.as_str(),
+                    Some("org.kde.kwin.Script"),
+                    "run",
+                    &(),
+                )
                 .is_ok()
-        });
-        let _ = conn.call_method(Some("org.kde.KWin"), "/Scripting", Some("org.kde.kwin.Scripting"), "unloadScript", &(name,));
+            });
+        let _ = conn.call_method(
+            Some("org.kde.KWin"),
+            "/Scripting",
+            Some("org.kde.kwin.Scripting"),
+            "unloadScript",
+            &(name,),
+        );
         if ran {
             Ok(())
         } else {
-            Err(format!("KWin did not run the {} script.", name.split('-').nth(1).unwrap_or("window")))
+            Err(format!(
+                "KWin did not run the {} script.",
+                name.split('-').nth(1).unwrap_or("window")
+            ))
         }
     }
 
     pub(crate) fn trash(paths: &[PathBuf]) -> Result<(), String> {
-        let list: Vec<String> = paths.iter().map(|p| p.to_string_lossy().into_owned()).collect();
+        let list: Vec<String> = paths
+            .iter()
+            .map(|p| p.to_string_lossy().into_owned())
+            .collect();
         let mut args: Vec<&str> = vec!["trash", "--"];
         args.extend(list.iter().map(String::as_str));
         if run("gio", &args)?.is_some() {
@@ -495,12 +622,13 @@ mod win {
     use grokhub_core::desktop_mcp::{DesktopWindows, WindowGeom};
     use windows_sys::Win32::Foundation::{BOOL, HWND, LPARAM, RECT};
     use windows_sys::Win32::UI::Shell::{
-        SHFileOperationW, ShellExecuteW, FOF_ALLOWUNDO, FOF_NOCONFIRMATION, FOF_NOERRORUI, FOF_SILENT, FO_DELETE,
-        SHFILEOPSTRUCTW,
+        SHFileOperationW, ShellExecuteW, FOF_ALLOWUNDO, FOF_NOCONFIRMATION, FOF_NOERRORUI,
+        FOF_SILENT, FO_DELETE, SHFILEOPSTRUCTW,
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        EnumWindows, GetClassNameW, GetForegroundWindow, GetWindowRect, GetWindowTextW, IsIconic, IsWindowVisible,
-        SetForegroundWindow, SetWindowPos, ShowWindow, SWP_NOACTIVATE, SWP_NOZORDER, SW_RESTORE, SW_SHOWNORMAL,
+        EnumWindows, GetClassNameW, GetForegroundWindow, GetWindowRect, GetWindowTextW, IsIconic,
+        IsWindowVisible, SetForegroundWindow, SetWindowPos, ShowWindow, SWP_NOACTIVATE,
+        SWP_NOZORDER, SW_RESTORE, SW_SHOWNORMAL,
     };
 
     fn wide(s: &str) -> Vec<u16> {
@@ -559,8 +687,15 @@ mod win {
     pub(crate) fn list_windows() -> Result<DesktopWindows, String> {
         let fg = unsafe { GetForegroundWindow() };
         let all = windows();
-        let active = if fg.is_null() { String::new() } else { format!("{} {}", class_of(fg), text_of(fg)) };
-        Ok(DesktopWindows { titles: all.into_iter().map(text_of).collect(), active })
+        let active = if fg.is_null() {
+            String::new()
+        } else {
+            format!("{} {}", class_of(fg), text_of(fg))
+        };
+        Ok(DesktopWindows {
+            titles: all.into_iter().map(text_of).collect(),
+            active,
+        })
     }
 
     /// The window whose title holds `title`, with its full title.
@@ -569,13 +704,22 @@ mod win {
         let got = super::pick_title(all.iter().map(|(_, t)| t.as_str()), title)
             .ok_or_else(|| format!("No window title has \"{title}\" in it."))?
             .to_string();
-        let hwnd = all.iter().find(|(_, t)| *t == got).map(|(h, _)| *h).unwrap_or(std::ptr::null_mut());
+        let hwnd = all
+            .iter()
+            .find(|(_, t)| *t == got)
+            .map(|(h, _)| *h)
+            .unwrap_or(std::ptr::null_mut());
         Ok((hwnd, got))
     }
 
     pub(crate) fn window_geometry(title: &str) -> Result<WindowGeom, String> {
         let (hwnd, got) = find(title)?;
-        let mut rc = RECT { left: 0, top: 0, right: 0, bottom: 0 };
+        let mut rc = RECT {
+            left: 0,
+            top: 0,
+            right: 0,
+            bottom: 0,
+        };
         if unsafe { GetWindowRect(hwnd, &mut rc) } == 0 {
             return Err(format!("Windows did not say where \"{got}\" is."));
         }
@@ -593,7 +737,15 @@ mod win {
             if IsIconic(hwnd) != 0 {
                 ShowWindow(hwnd, SW_RESTORE);
             }
-            let ok = SetWindowPos(hwnd, std::ptr::null_mut(), g.x, g.y, g.width as i32, g.height as i32, SWP_NOZORDER | SWP_NOACTIVATE);
+            let ok = SetWindowPos(
+                hwnd,
+                std::ptr::null_mut(),
+                g.x,
+                g.y,
+                g.width as i32,
+                g.height as i32,
+                SWP_NOZORDER | SWP_NOACTIVATE,
+            );
             if ok == 0 {
                 return Err(format!("Windows did not move \"{got}\"."));
             }
@@ -653,7 +805,9 @@ mod win {
         if code == 0 && op.fAnyOperationsAborted == 0 {
             Ok(())
         } else {
-            Err(format!("Windows could not move them to the Recycle Bin (code {code})."))
+            Err(format!(
+                "Windows could not move them to the Recycle Bin (code {code})."
+            ))
         }
     }
 }
@@ -673,22 +827,50 @@ mod tests {
 
     #[test]
     fn windows_changed_sees_new_gone_and_focus() {
-        let before = DesktopWindows { titles: vec!["A".into(), "B".into()], active: "x A".into() };
-        let same = DesktopWindows { titles: vec!["B".into(), "A".into()], active: "x A".into() };
-        assert!(!windows_changed(&before, &same), "order alone is not a change");
-        let opened = DesktopWindows { titles: vec!["A".into(), "B".into(), "C".into()], active: "x A".into() };
+        let before = DesktopWindows {
+            titles: vec!["A".into(), "B".into()],
+            active: "x A".into(),
+        };
+        let same = DesktopWindows {
+            titles: vec!["B".into(), "A".into()],
+            active: "x A".into(),
+        };
+        assert!(
+            !windows_changed(&before, &same),
+            "order alone is not a change"
+        );
+        let opened = DesktopWindows {
+            titles: vec!["A".into(), "B".into(), "C".into()],
+            active: "x A".into(),
+        };
         assert!(windows_changed(&before, &opened));
-        let focused = DesktopWindows { titles: vec!["A".into(), "B".into()], active: "y B".into() };
+        let focused = DesktopWindows {
+            titles: vec!["A".into(), "B".into()],
+            active: "y B".into(),
+        };
         assert!(windows_changed(&before, &focused));
     }
 
     #[cfg(target_os = "linux")]
     #[test]
     fn the_kwin_geometry_script_matches_the_caption_and_sets_the_frame() {
-        let g = grokhub_core::desktop_mcp::WindowGeom { x: -20, y: 40, width: 800, height: 600 };
+        let g = grokhub_core::desktop_mcp::WindowGeom {
+            x: -20,
+            y: 40,
+            width: 800,
+            height: 600,
+        };
         let body = kwin_geometry_script("Notes \"draft\"", &g).unwrap();
-        assert!(body.starts_with("const want = \"notes \\\"draft\\\"\";\n"), "{body}");
-        assert!(body.contains("w.frameGeometry = { x: -20, y: 40, width: 800, height: 600 };\nfound = true;"), "{body}");
+        assert!(
+            body.starts_with("const want = \"notes \\\"draft\\\"\";\n"),
+            "{body}"
+        );
+        assert!(
+            body.contains(
+                "w.frameGeometry = { x: -20, y: 40, width: 800, height: 600 };\nfound = true;"
+            ),
+            "{body}"
+        );
         assert!(body.contains("let found = false;"), "{body}");
     }
 
@@ -699,19 +881,38 @@ mod tests {
             kwin_reply_line(":1.42"),
             "callDBus(\":1.42\", \"/grokhub/kwin\", \"org.grokhub.KWinReply\", \"done\", found);\n"
         );
-        assert_eq!(kwin_outcome(Some(false), "Notes"), Err("No window title has \"Notes\" in it.".to_string()));
+        assert_eq!(
+            kwin_outcome(Some(false), "Notes"),
+            Err("No window title has \"Notes\" in it.".to_string())
+        );
         assert_eq!(kwin_outcome(Some(true), "Notes"), Ok(()));
-        assert_eq!(kwin_outcome(None, "Notes"), Ok(()), "a KWin that never answers keeps the old behavior");
+        assert_eq!(
+            kwin_outcome(None, "Notes"),
+            Ok(()),
+            "a KWin that never answers keeps the old behavior"
+        );
         let list = kwin_windows_script(":1.7");
         assert!(list.contains("callDBus(\":1.7\", \"/grokhub/kwin\", \"org.grokhub.KWinReply\", \"windows\", JSON.stringify({ titles, active }));"), "{list}");
         assert_eq!(
-            parse_kwin_windows(r#"{"titles":["Notes — Kate","Slack | general"],"active":"Slack Slack | general"}"#),
-            Some(DesktopWindows { titles: vec!["Notes — Kate".into(), "Slack | general".into()], active: "Slack Slack | general".into() })
+            parse_kwin_windows(
+                r#"{"titles":["Notes — Kate","Slack | general"],"active":"Slack Slack | general"}"#
+            ),
+            Some(DesktopWindows {
+                titles: vec!["Notes — Kate".into(), "Slack | general".into()],
+                active: "Slack Slack | general".into()
+            })
         );
         assert_eq!(parse_kwin_windows("not json"), None);
         let src = include_str!("apps.rs").replace("\r\n", "\n");
-        let focus = src.split("fn kwin_focus(").nth(1).and_then(|s| s.split("\n    }\n").next()).expect("kwin_focus");
-        assert!(focus.contains("let found = false;") && focus.contains("found = true;"), "{focus}");
+        let focus = src
+            .split("fn kwin_focus(")
+            .nth(1)
+            .and_then(|s| s.split("\n    }\n").next())
+            .expect("kwin_focus");
+        assert!(
+            focus.contains("let found = false;") && focus.contains("found = true;"),
+            "{focus}"
+        );
     }
 
     #[cfg(target_os = "linux")]
@@ -720,7 +921,11 @@ mod tests {
         let root = crate::config::test_config_root("apps-xdg");
         let apps = root.join("share").join("applications");
         std::fs::create_dir_all(&apps).unwrap();
-        std::fs::write(apps.join("org.example.Viewer.desktop"), "[Desktop Entry]\nName=Viewer\n").unwrap();
+        std::fs::write(
+            apps.join("org.example.Viewer.desktop"),
+            "[Desktop Entry]\nName=Viewer\n",
+        )
+        .unwrap();
         let old_home = std::env::var_os("XDG_DATA_HOME");
         std::env::set_var("XDG_DATA_HOME", root.join("share"));
         let found = linux::desktop_file("org.example.Viewer");

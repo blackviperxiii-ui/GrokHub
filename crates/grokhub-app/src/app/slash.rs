@@ -29,12 +29,18 @@ pub(super) fn locked_recall_line(locked: usize, why: Option<&str>) -> Option<Str
     if locked == 0 {
         return None;
     }
-    let notes = if locked == 1 { "1 private note".to_string() } else { format!("{locked} private notes") };
-    Some(format!("{notes} not searched. {}", why.unwrap_or("Private memory is locked.")))
+    let notes = if locked == 1 {
+        "1 private note".to_string()
+    } else {
+        format!("{locked} private notes")
+    };
+    Some(format!(
+        "{notes} not searched. {}",
+        why.unwrap_or("Private memory is locked.")
+    ))
 }
 
 impl Cabin {
-
     pub(super) fn run_slash(&mut self, slash: Slash) {
         if let Some(cmd) = home_slash_cmd(slash_kind(&slash)) {
             remember_home_slash(&mut self.chip_memory, cmd, now_ms());
@@ -60,7 +66,11 @@ impl Cabin {
                     }
                     Some(q) => {
                         // AMR: tombstone matching nodes; MEMORY.md still drops the topic below.
-                        let amr_line = if self.amr_on() { Some(self.forget_amr(&q)) } else { None };
+                        let amr_line = if self.amr_on() {
+                            Some(self.forget_amr(&q))
+                        } else {
+                            None
+                        };
                         let name = self.mem_name.clone();
                         let body = self.mem_body.clone();
                         std::thread::spawn(move || {
@@ -98,7 +108,8 @@ impl Cabin {
             Slash::MemoryPrune => self.run_memory_prune(),
             Slash::MemoryDream => {
                 let text = amr_memory::memory_dream_text(&config::config_dir());
-                self.live_mut().push(("assistant".into(), mark_slash_result(&text)));
+                self.live_mut()
+                    .push(("assistant".into(), mark_slash_result(&text)));
                 self.stamp_current_access();
                 self.persist();
                 self.status = "Memory dream".into();
@@ -176,8 +187,12 @@ impl Cabin {
             Slash::SkillChanges => self.run_skill_changes(),
             Slash::SkillUndo(name) => self.run_skill_undo(&name),
             Slash::SkillRestore(name) => self.run_skill_restore(&name),
-            Slash::ConnectionChanges => self.run_change_report(grokhub_agent::harness::ChangeKind::Connection),
-            Slash::AutomationChanges => self.run_change_report(grokhub_agent::harness::ChangeKind::Automation),
+            Slash::ConnectionChanges => {
+                self.run_change_report(grokhub_agent::harness::ChangeKind::Connection)
+            }
+            Slash::AutomationChanges => {
+                self.run_change_report(grokhub_agent::harness::ChangeKind::Automation)
+            }
             Slash::GrokConnectors => self.open_connectors(),
             Slash::GrokHooks => {
                 self.open_connectors();
@@ -196,7 +211,11 @@ impl Cabin {
                 self.status = if effort.is_empty() {
                     format!("grok --model {}", self.cfg.model)
                 } else {
-                    format!("grok --model {} · {}", self.cfg.model, grokhub_core::EFFORT_AUTO_MSG)
+                    format!(
+                        "grok --model {} · {}",
+                        self.cfg.model,
+                        grokhub_core::EFFORT_AUTO_MSG
+                    )
                 };
             }
             Slash::Goal(obj) => {
@@ -225,7 +244,10 @@ impl Cabin {
                     self.kick_imagine();
                 }
             }
-            Slash::Workflow(_) | Slash::WorkflowCtl { .. } | Slash::WorkflowUsage | Slash::GrokWorkflows => {
+            Slash::Workflow(_)
+            | Slash::WorkflowCtl { .. }
+            | Slash::WorkflowUsage
+            | Slash::GrokWorkflows => {
                 self.status = WORKFLOWS_GONE.into();
             }
             Slash::Worktree => {
@@ -372,7 +394,8 @@ impl Cabin {
             Slash::Health => {
                 let health = self.health_input();
                 let text = grokhub_core::health::health_block(&health);
-                self.live_mut().push(("assistant".into(), mark_slash_result(&text)));
+                self.live_mut()
+                    .push(("assistant".into(), mark_slash_result(&text)));
                 self.stamp_current_access();
                 self.persist();
                 self.status = grokhub_core::health::health_status(&health);
@@ -671,7 +694,9 @@ impl Cabin {
                 std::thread::spawn(move || {
                     // Legacy reads SOUL/USER/MEMORY/learned. AMR reads amr/nodes and the
                     // same files (dual-read), identical lines once. Threads on both paths.
-                    let amr_hits = amr_store.as_ref().map(|store| recall_amr_lines(store, &q_owned));
+                    let amr_hits = amr_store
+                        .as_ref()
+                        .map(|store| recall_amr_lines(store, &q_owned));
                     let (mut hits, mut rows) = {
                         let soul = if mem_name == "SOUL.md" {
                             mem_body.clone()
@@ -789,7 +814,10 @@ impl Cabin {
                     self.status = if note.trim().is_empty() {
                         "Nothing to remember".into()
                     } else if !is_plain_text(&note) {
-                        format!("{} (secrets redacted)", self.amr_remember_now(&note, "native"))
+                        format!(
+                            "{} (secrets redacted)",
+                            self.amr_remember_now(&note, "native")
+                        )
                     } else {
                         self.amr_remember_now(&note, "native")
                     };
@@ -833,7 +861,10 @@ impl Cabin {
                 self.persist();
                 true
             }
-            Slash::Workflow(_) | Slash::WorkflowCtl { .. } | Slash::WorkflowUsage | Slash::GrokWorkflows => {
+            Slash::Workflow(_)
+            | Slash::WorkflowCtl { .. }
+            | Slash::WorkflowUsage
+            | Slash::GrokWorkflows => {
                 self.status = WORKFLOWS_GONE.into();
                 true
             }

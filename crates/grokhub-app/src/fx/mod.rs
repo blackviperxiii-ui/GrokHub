@@ -397,7 +397,6 @@ pub(crate) fn paint_composer_glow_at(ui: &egui::Ui, pill: egui::Rect, streaming:
     ui.ctx().layer_painter(ui.layer_id()).add(callback);
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -410,7 +409,6 @@ mod tests {
         assert!(COMPOSER_GLOW_WGSL.contains("fn fs_main"));
     }
 
-    
     #[test]
     fn composer_glow_breath_alphas_and_icons_math() {
         assert_eq!(crate::theme::FG, egui::Color32::from_rgb(0xe7, 0xe9, 0xea));

@@ -143,7 +143,11 @@ pub fn is_model_host(dest: &str) -> bool {
 }
 
 /// The pure egress verdict plus the grant that allowed it.
-pub(crate) fn check(dest: &str, data: &[DataClass], ledger: &ConsentLedger) -> (GateOutcome, EgressBasis, String) {
+pub(crate) fn check(
+    dest: &str,
+    data: &[DataClass],
+    ledger: &ConsentLedger,
+) -> (GateOutcome, EgressBasis, String) {
     if is_local_dest(dest) {
         return (GateOutcome::Allow, EgressBasis::Local, String::new());
     }
@@ -240,7 +244,9 @@ pub struct OriginScope {
 
 impl OriginScope {
     pub fn enter(origin: Origin) -> Self {
-        Self { prev: ORIGIN.with(|o| o.replace(origin)) }
+        Self {
+            prev: ORIGIN.with(|o| o.replace(origin)),
+        }
     }
 }
 
@@ -271,7 +277,9 @@ impl RecallScope {
             .map(|l| l.trim().to_lowercase())
             .filter(|l| l.chars().count() >= RECALL_LINE_MIN)
             .collect();
-        Self { prev: RECALL.with(|r| r.replace(lines)) }
+        Self {
+            prev: RECALL.with(|r| r.replace(lines)),
+        }
     }
 }
 
@@ -289,7 +297,11 @@ fn percent_decoded(text: &str) -> String {
     let mut out = Vec::with_capacity(bytes.len());
     let mut i = 0;
     while i < bytes.len() {
-        let pair = bytes.get(i + 1).copied().and_then(hex).zip(bytes.get(i + 2).copied().and_then(hex));
+        let pair = bytes
+            .get(i + 1)
+            .copied()
+            .and_then(hex)
+            .zip(bytes.get(i + 2).copied().and_then(hex));
         match (bytes[i], pair) {
             (b'%', Some((hi, lo))) => {
                 out.push(hi * 16 + lo);
@@ -316,7 +328,9 @@ pub fn model_text_classes(text: &str) -> &'static [DataClass] {
         }
         let raw = text.to_lowercase();
         let decoded = percent_decoded(&raw);
-        lines.iter().any(|l| raw.contains(l.as_str()) || decoded.contains(l.as_str()))
+        lines
+            .iter()
+            .any(|l| raw.contains(l.as_str()) || decoded.contains(l.as_str()))
     });
     if carries {
         CHAT_PERSONAL
@@ -334,15 +348,22 @@ pub fn guard_egress(config_dir: &Path, req: &EgressReq<'_>) -> GateOutcome {
     let _lap = crate::timing::lap("harness:egress_guard");
     let ledger = ConsentLedger::load(config_dir);
     let dest = egress_dest(req.target);
-    let outcome = decide(Step::Egress { dest: &dest, data: req.data, ledger: &ledger });
+    let outcome = decide(Step::Egress {
+        dest: &dest,
+        data: req.data,
+        ledger: &ledger,
+    });
     if outcome.is_allow() {
         let (_, basis, grant_id) = check(&dest, req.data, &ledger);
         if basis != EgressBasis::Local {
-            let logged = append_egress(config_dir, &line_for(req, &dest, basis.as_str(), &grant_id));
+            let logged =
+                append_egress(config_dir, &line_for(req, &dest, basis.as_str(), &grant_id));
             // A grant send that can't be logged doesn't go (fail closed).
             // Model-host and public calls go as before the guard.
             if let (Err(why), EgressBasis::Grant) = (logged, basis) {
-                return GateOutcome::Refuse { reason: format!("not sent: {why}") };
+                return GateOutcome::Refuse {
+                    reason: format!("not sent: {why}"),
+                };
             }
         }
     }
@@ -352,7 +373,10 @@ pub fn guard_egress(config_dir: &Path, req: &EgressReq<'_>) -> GateOutcome {
 /// Log a send the user approved once on a hard card (no standing grant).
 pub fn record_approved_once(config_dir: &Path, req: &EgressReq<'_>) -> Result<(), String> {
     let dest = egress_dest(req.target);
-    append_egress(config_dir, &line_for(req, &dest, "approved_once", "approved-once"))
+    append_egress(
+        config_dir,
+        &line_for(req, &dest, "approved_once", "approved-once"),
+    )
 }
 
 /// The guard for a call with no one to ask (a background read): it goes only
@@ -387,7 +411,14 @@ pub(crate) fn guard_or_park_within(
     ttl: Duration,
     halted: &mut dyn FnMut() -> bool,
 ) -> Result<(), String> {
-    park_unless_allowed(config_dir, req, tool, ttl, halted, guard_egress(config_dir, req))
+    park_unless_allowed(
+        config_dir,
+        req,
+        tool,
+        ttl,
+        halted,
+        guard_egress(config_dir, req),
+    )
 }
 
 /// The guard for a call to a provider you added (Router R3b). It goes only
@@ -399,11 +430,23 @@ pub fn guard_provider(config_dir: &Path, req: &EgressReq<'_>) -> GateOutcome {
     let _lap = crate::timing::lap("harness:provider_guard");
     let ledger = ConsentLedger::load(config_dir);
     let dest = egress_dest(req.target);
-    let outcome = decide(Step::Provider { dest: &dest, data: req.data, ledger: &ledger });
+    let outcome = decide(Step::Provider {
+        dest: &dest,
+        data: req.data,
+        ledger: &ledger,
+    });
     if outcome.is_allow() {
-        let grant_id = ledger.destination_grant(&dest, req.data).map(|g| g.id.clone()).unwrap_or_default();
-        if let Err(why) = append_egress(config_dir, &line_for(req, &dest, EgressBasis::Grant.as_str(), &grant_id)) {
-            return GateOutcome::Refuse { reason: format!("not sent: {why}") };
+        let grant_id = ledger
+            .destination_grant(&dest, req.data)
+            .map(|g| g.id.clone())
+            .unwrap_or_default();
+        if let Err(why) = append_egress(
+            config_dir,
+            &line_for(req, &dest, EgressBasis::Grant.as_str(), &grant_id),
+        ) {
+            return GateOutcome::Refuse {
+                reason: format!("not sent: {why}"),
+            };
         }
     }
     outcome
@@ -419,7 +462,14 @@ pub fn provider_or_park(
     ttl: Duration,
     halted: &mut dyn FnMut() -> bool,
 ) -> Result<(), String> {
-    park_unless_allowed(config_dir, req, tool, ttl, halted, guard_provider(config_dir, req))
+    park_unless_allowed(
+        config_dir,
+        req,
+        tool,
+        ttl,
+        halted,
+        guard_provider(config_dir, req),
+    )
 }
 
 fn park_unless_allowed(
@@ -436,7 +486,11 @@ fn park_unless_allowed(
         GateOutcome::Park { reason, hard, .. } => (reason, hard.unwrap_or(HardClass::Send)),
     };
     static N: AtomicU64 = AtomicU64::new(0);
-    let id = format!("egress-{}-{}", std::process::id(), N.fetch_add(1, Ordering::Relaxed));
+    let id = format!(
+        "egress-{}-{}",
+        std::process::id(),
+        N.fetch_add(1, Ordering::Relaxed)
+    );
     let dest = egress_dest(req.target);
     let classes: Vec<&str> = req.data.iter().map(|c| c.label()).collect();
     let action = format!("{tool} → {dest} ({})", classes.join(", "));
@@ -450,7 +504,11 @@ fn park_unless_allowed(
     };
     post_park(config_dir, &park).map_err(|why| format!("not sent: {why}"))?;
     let ctx = read_turn_context(config_dir);
-    let trace = if ctx.chat_id.is_empty() { "egress" } else { ctx.chat_id.as_str() };
+    let trace = if ctx.chat_id.is_empty() {
+        "egress"
+    } else {
+        ctx.chat_id.as_str()
+    };
     let span = Span::hard_park(trace, tool, &action, class)
         .on_path("E")
         .in_turn(&ctx.chat_id, ctx.turn)
@@ -473,7 +531,11 @@ fn line_for(req: &EgressReq<'_>, dest: &str, basis: &str, grant_id: &str) -> Egr
             .unwrap_or(0),
         dest: dest.to_string(),
         data_classes: data,
-        node_ids: req.node_ids.iter().map(|n| grokhub_core::redact_secrets(n)).collect(),
+        node_ids: req
+            .node_ids
+            .iter()
+            .map(|n| grokhub_core::redact_secrets(n))
+            .collect(),
         redactions: req.redactions,
         grant_id: grant_id.to_string(),
         span_id: grokhub_core::redact_secrets(req.span_id),
@@ -493,12 +555,16 @@ pub fn append_egress(config_dir: &Path, line: &EgressLine) -> Result<(), String>
     fs::create_dir_all(config_dir).map_err(|e| e.to_string())?;
     let path = egress_path(config_dir);
     let rolled = config_dir.join(EGRESS_ROLLED);
-    if fs::metadata(&path).map(|m| m.len() > EGRESS_ROLL).unwrap_or(false) {
+    if fs::metadata(&path)
+        .map(|m| m.len() > EGRESS_ROLL)
+        .unwrap_or(false)
+    {
         let _ = fs::rename(&path, &rolled);
     }
     let text = serde_json::to_string(line).map_err(|e| e.to_string())?;
     let text = grokhub_core::redact_secrets(&text);
-    at_rest::append_sealed_line(config_dir, &path, AAD_EGRESS, &text).map_err(|why| why.message())?;
+    at_rest::append_sealed_line(config_dir, &path, AAD_EGRESS, &text)
+        .map_err(|why| why.message())?;
     // A pre-4b roll can still be plain text: seal it too (cheap once sealed).
     if let Ok(key) = at_rest::write_key(config_dir) {
         let _ = at_rest::migrate_file(&key, &rolled, AAD_EGRESS);
@@ -570,7 +636,9 @@ mod tests {
 
     fn send_park(dest: &str, classes: &str) -> GateOutcome {
         GateOutcome::Park {
-            reason: format!("hard-class send: Send to {dest} ({classes}) with no grant — Always cannot skip"),
+            reason: format!(
+                "hard-class send: Send to {dest} ({classes}) with no grant — Always cannot skip"
+            ),
             hard: Some(HardClass::Send),
             needs_viper: true,
         }
@@ -578,9 +646,18 @@ mod tests {
 
     #[test]
     fn dest_is_the_host_only() {
-        assert_eq!(egress_dest("https://api.x.ai/v1/responses?key=1"), "api.x.ai");
-        assert_eq!(egress_dest("https://me:pw@Example.ORG:8443/a"), "example.org");
-        assert_eq!(egress_dest("http://127.0.0.1:4711/v1/responses"), "127.0.0.1");
+        assert_eq!(
+            egress_dest("https://api.x.ai/v1/responses?key=1"),
+            "api.x.ai"
+        );
+        assert_eq!(
+            egress_dest("https://me:pw@Example.ORG:8443/a"),
+            "example.org"
+        );
+        assert_eq!(
+            egress_dest("http://127.0.0.1:4711/v1/responses"),
+            "127.0.0.1"
+        );
         assert_eq!(egress_dest("http://[::1]:9/x"), "[::1]");
         assert_eq!(egress_dest("hub"), "hub");
         assert_eq!(egress_dest("http://evil.com\\@127.0.0.1/feed"), "evil.com");
@@ -593,10 +670,22 @@ mod tests {
         let none = ConsentLedger::empty();
         let chat = [DataClass::Chat, DataClass::Personal];
         for host in ["api.x.ai", "grok.com", "x.ai", "imgen.x.ai"] {
-            assert_eq!(decide(Step::Egress { dest: host, data: &chat, ledger: &none }), GateOutcome::Allow, "{host}");
+            assert_eq!(
+                decide(Step::Egress {
+                    dest: host,
+                    data: &chat,
+                    ledger: &none
+                }),
+                GateOutcome::Allow,
+                "{host}"
+            );
         }
         assert_eq!(
-            decide(Step::Egress { dest: "api.x.ai", data: &[DataClass::Sensitive], ledger: &none }),
+            decide(Step::Egress {
+                dest: "api.x.ai",
+                data: &[DataClass::Sensitive],
+                ledger: &none
+            }),
             send_park("api.x.ai", "sensitive"),
             "sensitive data needs a grant even to xAI"
         );
@@ -606,20 +695,36 @@ mod tests {
     fn new_destination_with_personal_data_is_hard_send() {
         let none = ConsentLedger::empty();
         assert_eq!(
-            decide(Step::Egress { dest: "example.org", data: &[DataClass::Personal], ledger: &none }),
+            decide(Step::Egress {
+                dest: "example.org",
+                data: &[DataClass::Personal],
+                ledger: &none
+            }),
             send_park("example.org", "personal")
         );
         assert_eq!(
-            decide(Step::Egress { dest: HUB_DEST, data: HUB_SYNC_DATA, ledger: &none }),
+            decide(Step::Egress {
+                dest: HUB_DEST,
+                data: HUB_SYNC_DATA,
+                ledger: &none
+            }),
             send_park("hub", "chat, personal")
         );
         assert_eq!(
-            decide(Step::Egress { dest: "example.org", data: &[], ledger: &none }),
+            decide(Step::Egress {
+                dest: "example.org",
+                data: &[],
+                ledger: &none
+            }),
             GateOutcome::Allow,
             "a public read carries no user data"
         );
         assert_eq!(
-            decide(Step::Egress { dest: "localhost", data: &[DataClass::Personal], ledger: &none }),
+            decide(Step::Egress {
+                dest: "localhost",
+                data: &[DataClass::Personal],
+                ledger: &none
+            }),
             GateOutcome::Allow
         );
     }
@@ -630,7 +735,13 @@ mod tests {
         let req = EgressReq::new("https://example.org/upload", &[DataClass::Personal]);
         assert_eq!(guard_egress(&d, &req), send_park("example.org", "personal"));
         assert!(read_egress(&d).is_empty(), "a blocked call logs nothing");
-        let g = grant_destination(&d, "example.org", &[DataClass::Personal], UserClick::from_click()).unwrap();
+        let g = grant_destination(
+            &d,
+            "example.org",
+            &[DataClass::Personal],
+            UserClick::from_click(),
+        )
+        .unwrap();
         assert_eq!(guard_egress(&d, &req), GateOutcome::Allow);
         let log = read_egress(&d);
         assert_eq!(log.len(), 1);
@@ -646,7 +757,10 @@ mod tests {
     #[test]
     fn egress_log_has_no_content_and_no_secrets() {
         let (d, _g) = dir("redact");
-        let ids = vec!["pref-glow".to_string(), "tok-sk-abcdefghijklmnopqrstuv".to_string()];
+        let ids = vec![
+            "pref-glow".to_string(),
+            "tok-sk-abcdefghijklmnopqrstuv".to_string(),
+        ];
         let req = EgressReq {
             target: "https://api.x.ai/v1/responses?api_key=sk-abcdefghijklmnopqrstuv",
             data: &[DataClass::Personal, DataClass::Chat, DataClass::Chat],
@@ -656,9 +770,15 @@ mod tests {
             origin: Origin::User,
         };
         assert_eq!(guard_egress(&d, &req), GateOutcome::Allow);
-        guard_egress(&d, &EgressReq::new("http://127.0.0.1:4711/v1/responses", &[DataClass::Chat]));
+        guard_egress(
+            &d,
+            &EgressReq::new("http://127.0.0.1:4711/v1/responses", &[DataClass::Chat]),
+        );
         let text = fs::read_to_string(egress_path(&d)).unwrap();
-        assert!(text.lines().all(at_rest::is_sealed_line), "egress log is sealed at rest");
+        assert!(
+            text.lines().all(at_rest::is_sealed_line),
+            "egress log is sealed at rest"
+        );
         let opened = at_rest::read_sealed_jsonl(&d, &text, AAD_EGRESS, true);
         let line = opened.lines.first().unwrap();
         let mut v: serde_json::Value = serde_json::from_str(line).unwrap();
@@ -679,14 +799,24 @@ mod tests {
         );
         assert_eq!(text.lines().count(), 1, "loopback is not egress: {text}");
         assert!(!text.contains("sk-abc"), "{text}");
-        assert!(!opened.lines.concat().contains("sk-abc"), "{:?}", opened.lines);
-        assert!(!text.contains("api.x.ai"), "nothing readable at rest: {text}");
+        assert!(
+            !opened.lines.concat().contains("sk-abc"),
+            "{:?}",
+            opened.lines
+        );
+        assert!(
+            !text.contains("api.x.ai"),
+            "nothing readable at rest: {text}"
+        );
     }
 
     #[test]
     fn approved_once_logs_without_a_grant() {
         let (d, _g) = dir("once");
-        let req = EgressReq { span_id: "chat-2:7", ..EgressReq::new(HUB_DEST, HUB_SYNC_DATA) };
+        let req = EgressReq {
+            span_id: "chat-2:7",
+            ..EgressReq::new(HUB_DEST, HUB_SYNC_DATA)
+        };
         record_approved_once(&d, &req).unwrap();
         let log = read_egress(&d);
         assert_eq!(log.len(), 1);
@@ -694,7 +824,11 @@ mod tests {
         assert_eq!(log[0].grant_id, "approved-once");
         assert_eq!(log[0].basis, "approved_once");
         assert_eq!(log[0].span_id, "chat-2:7");
-        assert_eq!(ConsentLedger::load(&d), ConsentLedger::empty(), "approve once writes no grant");
+        assert_eq!(
+            ConsentLedger::load(&d),
+            ConsentLedger::empty(),
+            "approve once writes no grant"
+        );
     }
 
     #[test]
@@ -703,7 +837,13 @@ mod tests {
         let store = std::sync::Arc::new(at_rest::MemoryKeyStore::new());
         at_rest::use_key_store_for(&d, store.clone());
         let req = EgressReq::new("https://example.org/upload", &[DataClass::Personal]);
-        grant_destination(&d, "example.org", &[DataClass::Personal], UserClick::from_click()).unwrap();
+        grant_destination(
+            &d,
+            "example.org",
+            &[DataClass::Personal],
+            UserClick::from_click(),
+        )
+        .unwrap();
         assert_eq!(guard_egress(&d, &req), GateOutcome::Allow);
         let before = fs::read_to_string(egress_path(&d)).unwrap();
 
@@ -712,10 +852,21 @@ mod tests {
         // The ledger is locked too, so the grant no longer applies: back to the hard card.
         assert_eq!(guard_egress(&d, &req), send_park("example.org", "personal"));
         let model = EgressReq::new("https://api.x.ai/v1/responses", &[DataClass::Chat]);
-        assert_eq!(guard_egress(&d, &model), GateOutcome::Allow, "model calls are not blocked");
+        assert_eq!(
+            guard_egress(&d, &model),
+            GateOutcome::Allow,
+            "model calls are not blocked"
+        );
         let once = EgressReq::new(HUB_DEST, HUB_SYNC_DATA);
-        assert!(record_approved_once(&d, &once).is_err(), "approve-once can't be logged, so it isn't sent");
-        assert_eq!(fs::read_to_string(egress_path(&d)).unwrap(), before, "no line, no plaintext");
+        assert!(
+            record_approved_once(&d, &once).is_err(),
+            "approve-once can't be logged, so it isn't sent"
+        );
+        assert_eq!(
+            fs::read_to_string(egress_path(&d)).unwrap(),
+            before,
+            "no line, no plaintext"
+        );
         let report = read_egress_report(&d);
         assert_eq!(report.locked, Some(Locked::Missing));
         assert!(report.lines.is_empty());
@@ -724,7 +875,13 @@ mod tests {
     #[test]
     fn a_grant_send_that_cannot_be_logged_is_refused() {
         let (d, _g) = dir("refuse");
-        grant_destination(&d, "example.org", &[DataClass::Personal], UserClick::from_click()).unwrap();
+        grant_destination(
+            &d,
+            "example.org",
+            &[DataClass::Personal],
+            UserClick::from_click(),
+        )
+        .unwrap();
         // The ledger opens, but the log can't be written (a directory sits where the file goes).
         fs::create_dir_all(egress_path(&d)).unwrap();
         let req = EgressReq::new("https://example.org/upload", &[DataClass::Personal]);
@@ -738,16 +895,44 @@ mod tests {
     fn model_text_is_chat_unless_it_carries_a_recall_line() {
         const CHAT: &[DataClass] = &[DataClass::Chat];
         const BOTH: &[DataClass] = &[DataClass::Chat, DataClass::Personal];
-        assert_eq!(model_text_classes("https://example.org/?q=pier+four"), CHAT, "no recall pack: chat");
-        let _recall = RecallScope::enter(vec!["The harbor ferry leaves at nine".into(), "short line".into()]);
+        assert_eq!(
+            model_text_classes("https://example.org/?q=pier+four"),
+            CHAT,
+            "no recall pack: chat"
+        );
+        let _recall = RecallScope::enter(vec![
+            "The harbor ferry leaves at nine".into(),
+            "short line".into(),
+        ]);
         assert_eq!(model_text_classes("https://example.org/?q=ferry"), CHAT);
-        assert_eq!(model_text_classes(r#"{"note":"the harbor ferry leaves at nine"}"#), BOTH);
-        assert_eq!(model_text_classes("https://example.org/?q=the+harbor+ferry+leaves+at+nine"), BOTH);
-        assert_eq!(model_text_classes("https://example.org/?q=The%20Harbor%20ferry%20leaves%20at%20nine"), BOTH);
-        assert_eq!(model_text_classes("a short line"), CHAT, "lines under 16 chars say nothing");
+        assert_eq!(
+            model_text_classes(r#"{"note":"the harbor ferry leaves at nine"}"#),
+            BOTH
+        );
+        assert_eq!(
+            model_text_classes("https://example.org/?q=the+harbor+ferry+leaves+at+nine"),
+            BOTH
+        );
+        assert_eq!(
+            model_text_classes("https://example.org/?q=The%20Harbor%20ferry%20leaves%20at%20nine"),
+            BOTH
+        );
+        assert_eq!(
+            model_text_classes("a short line"),
+            CHAT,
+            "lines under 16 chars say nothing"
+        );
         drop(_recall);
-        assert_eq!(model_text_classes("the harbor ferry leaves at nine"), CHAT, "the scope ends with the turn");
-        assert_eq!(percent_decoded("%zz%4"), "%zz%4", "bad escapes stay as typed");
+        assert_eq!(
+            model_text_classes("the harbor ferry leaves at nine"),
+            CHAT,
+            "the scope ends with the turn"
+        );
+        assert_eq!(
+            percent_decoded("%zz%4"),
+            "%zz%4",
+            "bad escapes stay as typed"
+        );
     }
 
     #[test]
@@ -762,7 +947,13 @@ mod tests {
             }
             assert_eq!(current_origin(), Origin::Automation);
             let (d, _g) = dir("origin");
-            assert_eq!(guard_egress(&d, &EgressReq::new("https://api.x.ai/v1/x", &[DataClass::Chat])), GateOutcome::Allow);
+            assert_eq!(
+                guard_egress(
+                    &d,
+                    &EgressReq::new("https://api.x.ai/v1/x", &[DataClass::Chat])
+                ),
+                GateOutcome::Allow
+            );
             assert_eq!(read_egress(&d)[0].origin, Origin::Automation);
         }
         assert_eq!(current_origin(), Origin::User);
@@ -773,19 +964,64 @@ mod tests {
         let (d, _g) = dir("park-ttl");
         let req = EgressReq::new("https://example.org/upload", &[DataClass::Personal]);
         let started = std::time::Instant::now();
-        let got = guard_or_park_within(&d, &req, "web_fetch", Duration::from_millis(60), &mut || false);
+        let got = guard_or_park_within(
+            &d,
+            &req,
+            "web_fetch",
+            Duration::from_millis(60),
+            &mut || false,
+        );
         assert_eq!(
             got,
             Err("hard-class send: Send to example.org (personal) with no grant — Always cannot skip. Denied: nothing was sent.".into())
         );
         assert!(started.elapsed() < Duration::from_secs(5));
-        assert!(crate::harness::pending_parks(&d).is_empty(), "the card is gone after TTL");
-        assert!(read_egress(&d).is_empty(), "no line for a send that never left");
+        assert!(
+            crate::harness::pending_parks(&d).is_empty(),
+            "the card is gone after TTL"
+        );
+        assert!(
+            read_egress(&d).is_empty(),
+            "no line for a send that never left"
+        );
         // Model hosts, plain reads, and loopback never wait on a card.
-        assert_eq!(guard_or_park(&d, &EgressReq::new("https://api.x.ai/v1/x", &[DataClass::Personal]), "t", &mut || false), Ok(()));
-        assert_eq!(guard_or_park(&d, &EgressReq::new("https://example.org/feed", &[]), "t", &mut || false), Ok(()));
-        assert_eq!(guard_or_park(&d, &EgressReq::new("http://localhost:9/x", &[DataClass::Personal]), "t", &mut || false), Ok(()));
-        let rows: Vec<(String, String)> = read_egress(&d).into_iter().map(|l| (l.dest, l.basis)).collect();
-        assert_eq!(rows, vec![("api.x.ai".into(), "model_host".into()), ("example.org".into(), "public".into())]);
+        assert_eq!(
+            guard_or_park(
+                &d,
+                &EgressReq::new("https://api.x.ai/v1/x", &[DataClass::Personal]),
+                "t",
+                &mut || false
+            ),
+            Ok(())
+        );
+        assert_eq!(
+            guard_or_park(
+                &d,
+                &EgressReq::new("https://example.org/feed", &[]),
+                "t",
+                &mut || false
+            ),
+            Ok(())
+        );
+        assert_eq!(
+            guard_or_park(
+                &d,
+                &EgressReq::new("http://localhost:9/x", &[DataClass::Personal]),
+                "t",
+                &mut || false
+            ),
+            Ok(())
+        );
+        let rows: Vec<(String, String)> = read_egress(&d)
+            .into_iter()
+            .map(|l| (l.dest, l.basis))
+            .collect();
+        assert_eq!(
+            rows,
+            vec![
+                ("api.x.ai".into(), "model_host".into()),
+                ("example.org".into(), "public".into())
+            ]
+        );
     }
 }

@@ -44,13 +44,19 @@ fn locate() -> Option<PathBuf> {
         return usable(PathBuf::from(p));
     }
     if let Some(paths) = std::env::var_os("PATH") {
-        if let Some(p) = std::env::split_paths(&paths).find_map(|dir| usable(dir.join(bin_name()))) {
+        if let Some(p) = std::env::split_paths(&paths).find_map(|dir| usable(dir.join(bin_name())))
+        {
             return Some(p);
         }
     }
     let home = grokhub_core::user_home()?;
-    let dirs: &[&str] = if cfg!(windows) { &[".grok/bin"] } else { &[".local/bin", ".grok/bin"] };
-    dirs.iter().find_map(|rel| usable(Path::new(&home).join(rel).join(bin_name())))
+    let dirs: &[&str] = if cfg!(windows) {
+        &[".grok/bin"]
+    } else {
+        &[".local/bin", ".grok/bin"]
+    };
+    dirs.iter()
+        .find_map(|rel| usable(Path::new(&home).join(rel).join(bin_name())))
 }
 
 #[cfg(test)]
@@ -65,7 +71,11 @@ mod tests {
         let bin = dir.join(bin_name());
         let prev = std::env::var_os("GROKHUB_GROK");
         std::env::set_var("GROKHUB_GROK", dir.join("missing"));
-        assert_eq!(locate(), None, "a missing explicit path does not fall back to PATH");
+        assert_eq!(
+            locate(),
+            None,
+            "a missing explicit path does not fall back to PATH"
+        );
         std::fs::write(&bin, "not a program; reading it would fail").unwrap();
         std::env::set_var("GROKHUB_GROK", &bin);
         assert_eq!(locate(), Some(bin.clone()));
@@ -76,6 +86,9 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         let src = include_str!("google_mcp_via_cli.rs").replace("\r\n", "\n");
         let code = src.split("#[cfg(test)]").next().unwrap();
-        assert!(!code.contains("Command::new") && !code.contains("read_to_string"), "{code}");
+        assert!(
+            !code.contains("Command::new") && !code.contains("read_to_string"),
+            "{code}"
+        );
     }
 }

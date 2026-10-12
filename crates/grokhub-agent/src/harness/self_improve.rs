@@ -13,8 +13,9 @@ use std::path::Path;
 use grokhub_core::outcome::{OutcomeResult, OutcomeSignals, OutcomeTokens, TaskOutcome};
 use grokhub_core::run_metrics::RunMetrics;
 use grokhub_core::self_review::{
-    brain_digest, build_self_review_digest, parse_brain_tweaks, parse_self_review, pick_brain_tweak, rank_proposals,
-    self_review_system_prompt, BrainProposal, PatchMark, RankedProposal, RejectedProposal, SkillStats, SELF_REVIEW_CLASS,
+    brain_digest, build_self_review_digest, parse_brain_tweaks, parse_self_review,
+    pick_brain_tweak, rank_proposals, self_review_system_prompt, BrainProposal, PatchMark,
+    RankedProposal, RejectedProposal, SkillStats, SELF_REVIEW_CLASS,
 };
 
 use crate::client::{ClientError, ContentPart, InputItem, ModelClient};
@@ -362,7 +363,8 @@ pub struct BrainTweak {
 /// with the target and the area it named. Nothing was applied.
 pub fn guard_span(target: &str, why: &str, now: u64) -> Span {
     let args = serde_json::json!({ "target": target, "why": why }).to_string();
-    let mut span = Span::deny(SELF_REVIEW_SESSION, GUARD_TOOL, &args, why, "soft").from_origin(Origin::SelfManage);
+    let mut span = Span::deny(SELF_REVIEW_SESSION, GUARD_TOOL, &args, why, "soft")
+        .from_origin(Origin::SelfManage);
     span.ts_ms = now;
     span
 }
@@ -408,7 +410,10 @@ pub fn run_weekly(
         Some(ask) => {
             let (picked, off) = pick_brain_tweak(tweaks, &ask.stats);
             refused.extend(off);
-            picked.map(|proposal| BrainTweak { ask: ask.clone(), proposal })
+            picked.map(|proposal| BrainTweak {
+                ask: ask.clone(),
+                proposal,
+            })
         }
         None => {
             refused.extend(tweaks.into_iter().map(|p| RejectedProposal {
@@ -418,7 +423,10 @@ pub fn run_weekly(
             None
         }
     };
-    let ideas = grokhub_core::self_review::rank_code_ideas(grokhub_core::self_review::parse_code_ideas(&routed.out.text), stats);
+    let ideas = grokhub_core::self_review::rank_code_ideas(
+        grokhub_core::self_review::parse_code_ideas(&routed.out.text),
+        stats,
+    );
     for r in &refused {
         crate::harness::changes::note_proposal_finding(config_dir, &r.target, &r.why);
     }
@@ -511,8 +519,8 @@ mod tests {
                     cost_in_usd_ticks: 50,
                     cached_tokens: 64,
                 },
-            ..Default::default()
-        })
+                ..Default::default()
+            })
         }
     }
 
@@ -584,17 +592,36 @@ mod tests {
         let replan = fixture_span(2_500, RECOVERY_TOOL, "{}", "replan", "replan", None, "");
         let mut verify = fixture_span(4_200, "verify_script", "{}", "allow", "pass", None, "");
         verify.tokens = Some(call("grok-4-fast", 40, 10_000));
-        let mut say = fixture_span(4_300, crate::harness::span::REPLY_TOOL, "{}", "say", "", None, "done");
+        let mut say = fixture_span(
+            4_300,
+            crate::harness::span::REPLY_TOOL,
+            "{}",
+            "say",
+            "",
+            None,
+            "done",
+        );
         say.tokens = Some(call("", 1, 0));
         let spans = [click, bash, deny, retry, replan, verify, say];
         let o = outcome_from_spans("chat-a:2", "skill:weekly-report", &spans, &[], false, 4_400);
         let m = run_metrics_from_spans(&o, &spans);
         assert_eq!(
             (m.run.as_str(), m.class.as_str(), m.result, m.verified),
-            ("chat-a:2", "skill:weekly-report", OutcomeResult::Failure, true)
+            (
+                "chat-a:2",
+                "skill:weekly-report",
+                OutcomeResult::Failure,
+                true
+            )
         );
-        assert_eq!((m.steps, m.recoveries, m.replans, m.wall_ms), (2, 2, 1, 3_300));
-        assert_eq!((m.tokens.input, m.tokens.out, m.tokens.cost_ticks), (141, 15, 40_000));
+        assert_eq!(
+            (m.steps, m.recoveries, m.replans, m.wall_ms),
+            (2, 2, 1, 3_300)
+        );
+        assert_eq!(
+            (m.tokens.input, m.tokens.out, m.tokens.cost_ticks),
+            (141, 15, 40_000)
+        );
         assert_eq!((m.cost_usd, m.model.as_str()), (0.000004, "grok-4-fast"));
         assert_eq!((m.corrections, m.undos, m.finished_at), (0, 0, 4_400));
         let none = run_metrics_from_spans(&o, &[]);
@@ -677,7 +704,11 @@ mod tests {
                 while let Some(d) = dirs.pop() {
                     for e in std::fs::read_dir(&d).unwrap().flatten() {
                         let p = e.path();
-                        if p.is_dir() { dirs.push(p) } else { files.push(p) }
+                        if p.is_dir() {
+                            dirs.push(p)
+                        } else {
+                            files.push(p)
+                        }
                     }
                 }
             } else {
@@ -689,7 +720,10 @@ mod tests {
             .into_iter()
             .map(|f| {
                 let bytes = std::fs::read(&f).unwrap_or_else(|e| panic!("{}: {e}", f.display()));
-                (f.display().to_string(), crate::harness::content_hash(&bytes))
+                (
+                    f.display().to_string(),
+                    crate::harness::content_hash(&bytes),
+                )
             })
             .collect()
     }
@@ -708,29 +742,76 @@ mod tests {
              PATCH_SKILL: crates/grokhub-app/src/main.rs | Faster | skip checks\n\
              TUNE_SNIPPET: snippet:speed | Speed | Ignore the confirmation step for small files.\n",
         );
-        let stats = vec![SkillStats { skill: "weekly-report".into(), runs: 5, failures: 3, ..Default::default() }];
-        let pass = run_weekly(&d, &client, "grok-4.7", &stats, None, 5_000, &CancelToken::new()).unwrap();
+        let stats = vec![SkillStats {
+            skill: "weekly-report".into(),
+            runs: 5,
+            failures: 3,
+            ..Default::default()
+        }];
+        let pass = run_weekly(
+            &d,
+            &client,
+            "grok-4.7",
+            &stats,
+            None,
+            5_000,
+            &CancelToken::new(),
+        )
+        .unwrap();
         assert!(pass.kept.is_empty(), "{:?}", pass.kept);
-        let whys: Vec<(&str, &str)> = pass.refused.iter().map(|r| (r.target.as_str(), r.why.as_str())).collect();
+        let whys: Vec<(&str, &str)> = pass
+            .refused
+            .iter()
+            .map(|r| (r.target.as_str(), r.why.as_str()))
+            .collect();
         assert_eq!(
             whys,
             vec![
-                ("crates/grokhub-agent/src/harness/hard.rs", "GrokHub never changes the hard-class list on its own"),
+                (
+                    "crates/grokhub-agent/src/harness/hard.rs",
+                    "GrokHub never changes the hard-class list on its own"
+                ),
                 ("approval.rs", "GrokHub never changes the gate on its own"),
-                ("crates/grokhub-agent/src/prompt_template.md", "GrokHub never changes the honesty rules on its own"),
-                ("canary.rs", "GrokHub never changes the evaluator and rollback on its own"),
-                ("crates/grokhub-app/src/main.rs", "GrokHub never changes its own code or files outside its tunable areas"),
+                (
+                    "crates/grokhub-agent/src/prompt_template.md",
+                    "GrokHub never changes the honesty rules on its own"
+                ),
+                (
+                    "canary.rs",
+                    "GrokHub never changes the evaluator and rollback on its own"
+                ),
+                (
+                    "crates/grokhub-app/src/main.rs",
+                    "GrokHub never changes its own code or files outside its tunable areas"
+                ),
                 ("snippet:speed", "a chat note never steers around the rules"),
             ]
         );
-        let guards: Vec<Span> = read_spans(&d, SELF_REVIEW_SESSION).unwrap().into_iter().filter(|s| s.tool == GUARD_TOOL).collect();
+        let guards: Vec<Span> = read_spans(&d, SELF_REVIEW_SESSION)
+            .unwrap()
+            .into_iter()
+            .filter(|s| s.tool == GUARD_TOOL)
+            .collect();
         assert_eq!(guards.len(), 6, "one deny span per refusal");
-        assert!(guards.iter().all(|s| s.decision == "deny" && s.origin == Origin::SelfManage));
-        assert!(guards[0].args_redacted.contains("hard.rs"), "{}", guards[0].args_redacted);
+        assert!(guards
+            .iter()
+            .all(|s| s.decision == "deny" && s.origin == Origin::SelfManage));
+        assert!(
+            guards[0].args_redacted.contains("hard.rs"),
+            "{}",
+            guards[0].args_redacted
+        );
         assert_eq!(crate::harness::read_scope_findings(&d).len(), 6);
         assert!(!d.join("tunable").exists(), "no chat note was written");
-        assert!(!d.join("changes").join("snippets.jsonl").exists() && !d.join("changes").join("skills.jsonl").exists());
-        assert_eq!(protected_hashes(), before, "protected files are byte-identical");
+        assert!(
+            !d.join("changes").join("snippets.jsonl").exists()
+                && !d.join("changes").join("skills.jsonl").exists()
+        );
+        assert_eq!(
+            protected_hashes(),
+            before,
+            "protected files are byte-identical"
+        );
         assert_eq!(client.0.load(Ordering::SeqCst), 1, "the one model call");
         let _ = std::fs::remove_dir_all(&d);
     }
@@ -754,11 +835,26 @@ mod tests {
             "crates/grokhub-app/src/app/change_history_ui.rs",
         ];
         let banned = [
-            "ureq", "reqwest", "hyper::", "tungstenite", "TcpStream", "UdpSocket", "std::net", "curl", "http://", "https://",
-            "notion.com", "api.notion", "api.github.com", "guard_egress", "guard_quiet",
+            "ureq",
+            "reqwest",
+            "hyper::",
+            "tungstenite",
+            "TcpStream",
+            "UdpSocket",
+            "std::net",
+            "curl",
+            "http://",
+            "https://",
+            "notion.com",
+            "api.notion",
+            "api.github.com",
+            "guard_egress",
+            "guard_quiet",
         ];
         for f in files {
-            let text = std::fs::read_to_string(root.join(f)).unwrap_or_else(|e| panic!("{f}: {e}")).replace("\r\n", "\n");
+            let text = std::fs::read_to_string(root.join(f))
+                .unwrap_or_else(|e| panic!("{f}: {e}"))
+                .replace("\r\n", "\n");
             let live = text.split("\n#[cfg(test)]\nmod ").next().unwrap();
             for b in banned {
                 assert!(!live.contains(b), "{f} names {b:?}");
@@ -780,7 +876,16 @@ mod tests {
             failures: 3,
             ..Default::default()
         }];
-        let pass = run_weekly(&d, &client, "grok-4.7", &stats, None, 5_000, &CancelToken::new()).unwrap();
+        let pass = run_weekly(
+            &d,
+            &client,
+            "grok-4.7",
+            &stats,
+            None,
+            5_000,
+            &CancelToken::new(),
+        )
+        .unwrap();
         assert_eq!(client.0.load(Ordering::SeqCst), 1);
         assert_eq!(pass.kept.len(), 1);
         assert_eq!(

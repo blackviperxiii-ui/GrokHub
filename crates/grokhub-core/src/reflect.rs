@@ -98,7 +98,10 @@ mod tests {
             ("user".into(), "/forget".into()),
             ("user".into(), "hi how are you".into()),
             ("user".into(), "say hi in one sentence".into()),
-            ("user".into(), "New direction: firefox\n\n(Previous ask: )".into()),
+            (
+                "user".into(),
+                "New direction: firefox\n\n(Previous ask: )".into(),
+            ),
             ("assistant".into(), "ok".into()),
         ]);
         assert_eq!(facts, vec!["prefer nvim"]);

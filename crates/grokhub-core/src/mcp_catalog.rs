@@ -64,7 +64,9 @@ pub struct Catalog {
 /// The catalog shipped with this build. A test pins that it parses; if it ever
 /// didn't, Marketplace shows an empty list rather than taking the app down.
 pub fn bundled() -> Catalog {
-    parse(BUNDLED).unwrap_or(Catalog { entries: Vec::new() })
+    parse(BUNDLED).unwrap_or(Catalog {
+        entries: Vec::new(),
+    })
 }
 
 pub fn parse(text: &str) -> Result<Catalog, String> {
@@ -78,8 +80,20 @@ pub fn parse(text: &str) -> Result<Catalog, String> {
 impl CatalogEntry {
     fn check(&self) -> Result<(), String> {
         let id = &self.id;
-        let filled = [&self.name, &self.publisher, &self.category, &self.description, &self.logo, &self.source, &self.permissions];
-        if id.is_empty() || !id.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-') {
+        let filled = [
+            &self.name,
+            &self.publisher,
+            &self.category,
+            &self.description,
+            &self.logo,
+            &self.source,
+            &self.permissions,
+        ];
+        if id.is_empty()
+            || !id
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+        {
             return Err(format!("MCP catalog: `{id}` must be kebab-case"));
         }
         if filled.iter().any(|f| f.trim().is_empty()) || self.capabilities.is_empty() {
@@ -91,13 +105,21 @@ impl CatalogEntry {
         match self.transport.as_str() {
             "stdio" if !self.command.is_empty() && self.url.is_empty() => {}
             "http" if self.url.starts_with("https://") && self.command.is_empty() => {}
-            _ => return Err(format!("MCP catalog: `{id}` needs a command (stdio) or an https url (http)")),
+            _ => {
+                return Err(format!(
+                    "MCP catalog: `{id}` needs a command (stdio) or an https url (http)"
+                ))
+            }
         }
         if self.auth == CatalogAuth::Key && self.transport == "stdio" && self.key_env.is_empty() {
-            return Err(format!("MCP catalog: `{id}` takes a key but names no key_env"));
+            return Err(format!(
+                "MCP catalog: `{id}` takes a key but names no key_env"
+            ));
         }
         if self.auth == CatalogAuth::Oauth && self.transport != "http" {
-            return Err(format!("MCP catalog: `{id}` signs in in the browser, so it must be http"));
+            return Err(format!(
+                "MCP catalog: `{id}` signs in in the browser, so it must be http"
+            ));
         }
         Ok(())
     }
@@ -133,10 +155,19 @@ impl CatalogEntry {
     fn matches(&self, query: &str) -> bool {
         let q = query.trim().to_lowercase();
         q.is_empty()
-            || [&self.name, &self.publisher, &self.category, &self.description, &self.id]
+            || [
+                &self.name,
+                &self.publisher,
+                &self.category,
+                &self.description,
+                &self.id,
+            ]
+            .iter()
+            .any(|f| f.to_lowercase().contains(&q))
+            || self
+                .capabilities
                 .iter()
-                .any(|f| f.to_lowercase().contains(&q))
-            || self.capabilities.iter().any(|c| c.to_lowercase().contains(&q))
+                .any(|c| c.to_lowercase().contains(&q))
     }
 }
 
@@ -178,7 +209,16 @@ mod tests {
         ids.sort();
         ids.dedup();
         assert_eq!(ids.len(), c.entries.len(), "ids are unique");
-        for id in ["playwright", "github", "context7", "notion", "linear", "gmail", "google-drive", "google-calendar"] {
+        for id in [
+            "playwright",
+            "github",
+            "context7",
+            "notion",
+            "linear",
+            "gmail",
+            "google-drive",
+            "google-calendar",
+        ] {
             assert!(c.get(id).is_some(), "{id} is in the catalog");
         }
     }
@@ -210,9 +250,17 @@ mod tests {
         let c = bundled();
         let names = |v: Vec<&CatalogEntry>| v.iter().map(|e| e.id.clone()).collect::<Vec<_>>();
         assert_eq!(names(c.search("LINEAR", None)), ["linear"]);
-        assert!(names(c.search("", Some("Google"))).iter().all(|id| c.get(id).unwrap().category == "Google"));
-        assert_eq!(names(c.search("", Some("Google"))), ["google-drive", "gmail", "google-calendar"]);
-        assert_eq!(names(c.search("gmail", Some("Developer"))), Vec::<String>::new());
+        assert!(names(c.search("", Some("Google")))
+            .iter()
+            .all(|id| c.get(id).unwrap().category == "Google"));
+        assert_eq!(
+            names(c.search("", Some("Google"))),
+            ["google-drive", "gmail", "google-calendar"]
+        );
+        assert_eq!(
+            names(c.search("gmail", Some("Developer"))),
+            Vec::<String>::new()
+        );
         assert_eq!(c.search("", None).len(), c.entries.len());
         let cats = c.categories();
         assert_eq!(cats.first(), Some(&"Developer"));
@@ -223,11 +271,28 @@ mod tests {
     fn a_broken_entry_is_refused() {
         let base = r#"{"id":"x","name":"X","publisher":"P","category":"C","description":"d","logo":"X","transport":"stdio","command":["x"],"auth":"none","source":"https://x.dev","capabilities":["a"],"permissions":"p"}"#;
         assert!(parse(&format!(r#"{{"entries":[{base}]}}"#)).is_ok());
-        let bad = |from: &str, to: &str| parse(&format!(r#"{{"entries":[{}]}}"#, base.replace(from, to))).unwrap_err();
-        assert_eq!(bad(r#""id":"x""#, r#""id":"X Y""#), "MCP catalog: `X Y` must be kebab-case");
-        assert_eq!(bad(r#""command":["x"]"#, r#""command":[]"#), "MCP catalog: `x` needs a command (stdio) or an https url (http)");
-        assert_eq!(bad(r#""auth":"none""#, r#""auth":"key""#), "MCP catalog: `x` takes a key but names no key_env");
-        assert_eq!(bad(r#""auth":"none""#, r#""auth":"oauth""#), "MCP catalog: `x` signs in in the browser, so it must be http");
-        assert_eq!(bad(r#""source":"https://x.dev""#, r#""source":"http://x.dev""#), "MCP catalog: `x` source must be https");
+        let bad = |from: &str, to: &str| {
+            parse(&format!(r#"{{"entries":[{}]}}"#, base.replace(from, to))).unwrap_err()
+        };
+        assert_eq!(
+            bad(r#""id":"x""#, r#""id":"X Y""#),
+            "MCP catalog: `X Y` must be kebab-case"
+        );
+        assert_eq!(
+            bad(r#""command":["x"]"#, r#""command":[]"#),
+            "MCP catalog: `x` needs a command (stdio) or an https url (http)"
+        );
+        assert_eq!(
+            bad(r#""auth":"none""#, r#""auth":"key""#),
+            "MCP catalog: `x` takes a key but names no key_env"
+        );
+        assert_eq!(
+            bad(r#""auth":"none""#, r#""auth":"oauth""#),
+            "MCP catalog: `x` signs in in the browser, so it must be http"
+        );
+        assert_eq!(
+            bad(r#""source":"https://x.dev""#, r#""source":"http://x.dev""#),
+            "MCP catalog: `x` source must be https"
+        );
     }
 }

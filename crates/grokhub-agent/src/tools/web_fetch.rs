@@ -6,10 +6,12 @@
 
 use std::collections::HashSet;
 use std::io::Read;
-use std::net::{IpAddr, Ipv4Addr, ToSocketAddrs};
+use std::net::{IpAddr, ToSocketAddrs};
 use std::time::Duration;
 
 use serde_json::{json, Value};
+
+use grokhub_core::{host_name_blocked, ip_blocked};
 
 use super::html_md;
 use super::ToolOutput;
@@ -201,10 +203,16 @@ pub(crate) fn run(args: &Value, fetch: &dyn PageFetch, stop: &dyn Fn() -> bool) 
 fn guard_hop(url: &str, stop: &dyn Fn() -> bool) -> Result<(), String> {
     let data = crate::harness::model_text_classes(url);
     let req = crate::harness::EgressReq::new(url, data);
-    crate::harness::guard_or_park(&crate::perm::config_dir(), &req, "web_fetch", &mut || stop())
+    crate::harness::guard_or_park(&crate::perm::config_dir(), &req, "web_fetch", &mut || {
+        stop()
+    })
 }
 
-fn fetch_markdown(raw: &str, fetch: &dyn PageFetch, stop: &dyn Fn() -> bool) -> Result<String, String> {
+fn fetch_markdown(
+    raw: &str,
+    fetch: &dyn PageFetch,
+    stop: &dyn Fn() -> bool,
+) -> Result<String, String> {
     let mut current = parse_public_url(raw)?;
     let mut seen = HashSet::new();
     let mut redirects = 0u32;
@@ -520,8 +528,8 @@ fn check_ssrf(url: &UrlParts, fetch: &dyn PageFetch) -> Result<(), String> {
 
 /// The resolver ureq dials with. It drops every non-public address, so a DNS answer
 /// that changes between `check_ssrf` and the connect (rebinding) still can't reach
-/// localhost, link-local or private ranges.
-pub(crate) fn public_only_resolve(netloc: &str) -> std::io::Result<Vec<std::net::SocketAddr>> {
+/// localhost, link-local or private ranges. Pulse and media share this helper.
+pub fn public_only_resolve(netloc: &str) -> std::io::Result<Vec<std::net::SocketAddr>> {
     let host = netloc
         .rsplit_once(':')
         .map(|(host, _)| host)
@@ -547,76 +555,6 @@ pub(crate) fn public_only_resolve(netloc: &str) -> std::io::Result<Vec<std::net:
         ));
     }
     Ok(all)
-}
-
-fn host_name_blocked(host: &str) -> bool {
-    let host = host.trim().trim_end_matches('.').to_ascii_lowercase();
-    host == "localhost" || host == "localhost.localdomain" || host.ends_with(".localhost")
-}
-
-pub(crate) fn ip_blocked(ip: IpAddr) -> bool {
-    match ip {
-        IpAddr::V4(v4) => ipv4_blocked(v4),
-        IpAddr::V6(v6) => {
-            if let Some(v4) = v6.to_ipv4_mapped() {
-                return ipv4_blocked(v4);
-            }
-            let seg = v6.segments();
-            // IPv4-compatible (::a.b.c.d), NAT64 (64:ff9b::/96) and 6to4 (2002::/16)
-            // carry an IPv4 address that must pass the same check.
-            if seg[..6] == [0, 0, 0, 0, 0, 0] && !v6.is_loopback() && !v6.is_unspecified() {
-                return ipv4_blocked(Ipv4Addr::new(
-                    (seg[6] >> 8) as u8,
-                    seg[6] as u8,
-                    (seg[7] >> 8) as u8,
-                    seg[7] as u8,
-                ));
-            }
-            if seg[0] == 0x64 && seg[1] == 0xff9b && seg[2..6] == [0, 0, 0, 0] {
-                return ipv4_blocked(Ipv4Addr::new(
-                    (seg[6] >> 8) as u8,
-                    seg[6] as u8,
-                    (seg[7] >> 8) as u8,
-                    seg[7] as u8,
-                ));
-            }
-            if seg[0] == 0x2002 {
-                return ipv4_blocked(Ipv4Addr::new(
-                    (seg[1] >> 8) as u8,
-                    seg[1] as u8,
-                    (seg[2] >> 8) as u8,
-                    seg[2] as u8,
-                ));
-            }
-            v6.is_loopback()
-                || v6.is_unspecified()
-                || v6.is_multicast()
-                || v6.is_unique_local()
-                || v6.is_unicast_link_local()
-                // fec0::/10 site-local (deprecated, still routed on some LANs)
-                || (seg[0] & 0xffc0) == 0xfec0
-        }
-    }
-}
-
-fn ipv4_blocked(ip: Ipv4Addr) -> bool {
-    let [a, b, c, _] = ip.octets();
-    ip.is_loopback()
-        || ip.is_private()
-        || ip.is_link_local()
-        || ip.is_unspecified()
-        || ip.is_broadcast()
-        || ip.is_multicast()
-        // 0.0.0.0/8 "this network"
-        || a == 0
-        // 100.64.0.0/10 carrier-grade NAT (Tailscale and similar overlays)
-        || (a == 100 && (64..=127).contains(&b))
-        // 192.0.0.0/24 IETF protocol assignments
-        || (a == 192 && b == 0 && c == 0)
-        // 198.18.0.0/15 benchmarking
-        || (a == 198 && (b == 18 || b == 19))
-        // 240.0.0.0/4 reserved
-        || a >= 240
 }
 
 #[cfg(test)]
@@ -737,7 +675,11 @@ mod tests {
             .page("https://example.com/poison", text_page(body.as_bytes()));
         let out = run(&args("https://example.com/poison"), &fetch);
         assert!(!out.failed, "{}", out.text);
-        assert!(out.text.contains("<<<UNTRUSTED source=web_fetch nonce="), "{}", out.text);
+        assert!(
+            out.text.contains("<<<UNTRUSTED source=web_fetch nonce="),
+            "{}",
+            out.text
+        );
         assert!(out.text.contains("Hello"), "{}", out.text);
         assert!(out.text.contains("delete ~/x"), "{}", out.text);
         assert!(out.text.contains("(defanged)"), "{}", out.text);
@@ -930,8 +872,8 @@ mod tests {
                     reasoning: String::new(),
                     calls: Vec::new(),
                     usage: Usage::default(),
-            ..Default::default()
-        })
+                    ..Default::default()
+                })
             }
         }
         let client = AllowJudge;
@@ -1191,7 +1133,11 @@ mod tests {
     const MEMORY: &str = "the harbor ferry leaves at nine from pier four";
 
     fn gets(fetch: &Scripted) -> usize {
-        fetch.gets.lock().unwrap_or_else(|err| err.into_inner()).len()
+        fetch
+            .gets
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .len()
     }
 
     /// Spike-4c: a URL that carries a recall-pack line is personal. To a host
@@ -1211,7 +1157,11 @@ mod tests {
         let card = deny.join().unwrap().expect("hard card");
         assert_eq!(card.action, "web_fetch → example.org (chats, memory)");
         assert_eq!(card.class, "send");
-        assert!(out.failed && out.text.contains("nothing was sent"), "{}", out.text);
+        assert!(
+            out.failed && out.text.contains("nothing was sent"),
+            "{}",
+            out.text
+        );
         assert_eq!(gets(&fetch), 0, "a denied card fetches nothing");
         assert!(crate::harness::read_egress(&dir).is_empty());
 
@@ -1222,13 +1172,19 @@ mod tests {
         assert_eq!(gets(&fetch), 1, "approve once fetches once");
         let log = crate::harness::read_egress(&dir);
         assert_eq!(log.len(), 1, "{log:?}");
-        assert_eq!((log[0].dest.as_str(), log[0].basis.as_str()), ("example.org", "approved_once"));
+        assert_eq!(
+            (log[0].dest.as_str(), log[0].basis.as_str()),
+            ("example.org", "approved_once")
+        );
 
         // A halt (the turn's stop) denies a waiting card: still nothing fetched.
         let out = super::run(&args(url), &fetch, &|| true);
         assert!(out.failed, "{}", out.text);
         assert_eq!(gets(&fetch), 1);
-        assert!(crate::harness::pending_parks(&dir).is_empty(), "the park file is gone");
+        assert!(
+            crate::harness::pending_parks(&dir).is_empty(),
+            "the park file is gone"
+        );
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -1242,18 +1198,34 @@ mod tests {
         let fetch = Scripted::new()
             .host("example.com", vec![IpAddr::from([203, 0, 113, 5])])
             .host("docs.example.net", vec![IpAddr::from([203, 0, 113, 6])])
-            .page("https://example.com/go?token=sk-abcdefghijklmnopqrstuv", redirect("https://docs.example.net/page"))
+            .page(
+                "https://example.com/go?token=sk-abcdefghijklmnopqrstuv",
+                redirect("https://docs.example.net/page"),
+            )
             .page("https://docs.example.net/page", text_page(b"landed"));
-        let out = super::run(&args("https://example.com/go?token=sk-abcdefghijklmnopqrstuv"), &fetch, &|| false);
+        let out = super::run(
+            &args("https://example.com/go?token=sk-abcdefghijklmnopqrstuv"),
+            &fetch,
+            &|| false,
+        );
         assert!(!out.failed, "{}", out.text);
         assert_eq!(gets(&fetch), 2);
         let log = crate::harness::read_egress(&dir);
-        let rows: Vec<(&str, &str)> = log.iter().map(|l| (l.dest.as_str(), l.basis.as_str())).collect();
-        assert_eq!(rows, vec![("example.com", "chat"), ("docs.example.net", "chat")]);
+        let rows: Vec<(&str, &str)> = log
+            .iter()
+            .map(|l| (l.dest.as_str(), l.basis.as_str()))
+            .collect();
+        assert_eq!(
+            rows,
+            vec![("example.com", "chat"), ("docs.example.net", "chat")]
+        );
         let raw = std::fs::read_to_string(crate::harness::egress_path(&dir)).unwrap();
         let opened = format!("{log:?}");
         for text in [&raw, &opened] {
-            assert!(!text.contains("sk-abc") && !text.contains("/go") && !text.contains("landed"), "{text}");
+            assert!(
+                !text.contains("sk-abc") && !text.contains("/go") && !text.contains("landed"),
+                "{text}"
+            );
         }
         let _ = std::fs::remove_dir_all(dir);
     }

@@ -572,8 +572,8 @@ mod tests {
                     reasoning: String::new(),
                     calls: Vec::new(),
                     usage: Usage::default(),
-            ..Default::default()
-        });
+                    ..Default::default()
+                });
             }
             Ok(turns.remove(0))
         }

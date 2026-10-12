@@ -315,7 +315,10 @@ impl Drop for HttpConn {
 }
 
 pub(super) fn guard_handshake(url: &str) -> Result<(), String> {
-    crate::harness::guard_quiet(&crate::perm::config_dir(), &crate::harness::EgressReq::new(url, &[]))
+    crate::harness::guard_quiet(
+        &crate::perm::config_dir(),
+        &crate::harness::EgressReq::new(url, &[]),
+    )
 }
 
 fn list_tools(conn: &mut HttpConn, timeout: Duration) -> Result<Vec<RawTool>, String> {
@@ -622,7 +625,12 @@ pub(crate) mod tests {
                     }
                 }
             });
-            Self { port, requests, calls, stop }
+            Self {
+                port,
+                requests,
+                calls,
+                stop,
+            }
         }
 
         fn url(&self) -> String {
@@ -659,8 +667,12 @@ pub(crate) mod tests {
         let msg: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
         let id = msg.get("id").cloned().unwrap_or(Value::Null);
         let result = match msg["method"].as_str().unwrap_or("") {
-            "initialize" => json!({"protocolVersion": rpc::PROTOCOL, "capabilities": {}, "serverInfo": {"name": "count", "version": "0"}}),
-            "tools/list" => json!({"tools": [{"name": "echo", "description": "Echo", "inputSchema": {"type": "object"}}]}),
+            "initialize" => {
+                json!({"protocolVersion": rpc::PROTOCOL, "capabilities": {}, "serverInfo": {"name": "count", "version": "0"}})
+            }
+            "tools/list" => {
+                json!({"tools": [{"name": "echo", "description": "Echo", "inputSchema": {"type": "object"}}]})
+            }
             "tools/call" => {
                 calls.fetch_add(1, Ordering::SeqCst);
                 json!({"content": [{"type": "text", "text": "counted"}]})
@@ -672,7 +684,11 @@ pub(crate) mod tests {
         } else {
             json!({"jsonrpc": "2.0", "id": id, "result": result}).to_string()
         };
-        let status = if out.is_empty() { "202 Accepted" } else { "200 OK" };
+        let status = if out.is_empty() {
+            "202 Accepted"
+        } else {
+            "200 OK"
+        };
         let _ = write!(
             sock,
             "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nMcp-Session-Id: s-1\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{out}",
@@ -683,7 +699,15 @@ pub(crate) mod tests {
     const MEMORY: &str = "the harbor ferry leaves at nine from pier four";
 
     fn conn(server: &Counting) -> HttpConn {
-        let (conn, tools) = connect("box", &server.url(), false, &BTreeMap::new(), Duration::from_secs(5), Duration::from_secs(5)).unwrap();
+        let (conn, tools) = connect(
+            "box",
+            &server.url(),
+            false,
+            &BTreeMap::new(),
+            Duration::from_secs(5),
+            Duration::from_secs(5),
+        )
+        .unwrap();
         assert_eq!(tools.len(), 1);
         conn
     }
@@ -699,32 +723,56 @@ pub(crate) mod tests {
         assert_eq!(handshake, 3, "initialize, initialized, tools/list");
         let log = hx::read_egress(&dir);
         assert_eq!(log.len(), 1, "one line for the handshake: {log:?}");
-        assert_eq!((log[0].dest.as_str(), log[0].basis.as_str()), ("mcp.example.test", "public"));
+        assert_eq!(
+            (log[0].dest.as_str(), log[0].basis.as_str()),
+            ("mcp.example.test", "public")
+        );
         assert!(log[0].data_classes.is_empty());
 
         let args = json!({"note": format!("remember: {MEMORY}")});
         let deny = hx::answer_next_park(dir.clone(), false);
-        let err = c.call("echo", &args, Duration::from_secs(5), &|| false).unwrap_err();
+        let err = c
+            .call("echo", &args, Duration::from_secs(5), &|| false)
+            .unwrap_err();
         let card = deny.join().unwrap().expect("a hard card was posted");
         assert_eq!((card.path.as_str(), card.class.as_str()), ("E", "send"));
         assert_eq!(card.action, "mcp:box → mcp.example.test (chats, memory)");
         assert!(err.contains("Denied: nothing was sent"), "{err}");
-        assert_eq!(server.calls.load(Ordering::SeqCst), 0, "a denied card sends nothing");
+        assert_eq!(
+            server.calls.load(Ordering::SeqCst),
+            0,
+            "a denied card sends nothing"
+        );
         assert_eq!(server.requests.load(Ordering::SeqCst), handshake);
         assert_eq!(hx::read_egress(&dir).len(), 1, "no line for a denied send");
 
         let approve = hx::answer_next_park(dir.clone(), true);
-        let (text, failed) = c.call("echo", &args, Duration::from_secs(5), &|| false).unwrap();
+        let (text, failed) = c
+            .call("echo", &args, Duration::from_secs(5), &|| false)
+            .unwrap();
         assert!(approve.join().unwrap().is_some());
         assert_eq!((text.as_str(), failed), ("counted", false));
-        assert_eq!(server.calls.load(Ordering::SeqCst), 1, "approve once sends exactly once");
+        assert_eq!(
+            server.calls.load(Ordering::SeqCst),
+            1,
+            "approve once sends exactly once"
+        );
         let log = hx::read_egress(&dir);
         assert_eq!(log.len(), 2, "{log:?}");
         assert_eq!(log[1].dest, "mcp.example.test");
         assert_eq!(log[1].basis, "approved_once");
-        assert_eq!(log[1].data_classes, vec![DataClass::Chat, DataClass::Personal]);
+        assert_eq!(
+            log[1].data_classes,
+            vec![DataClass::Chat, DataClass::Personal]
+        );
         let spans = hx::read_spans(&dir, "egress").unwrap();
-        assert_eq!(spans.iter().filter(|s| s.decision == "park" && s.path == "E").count(), 2);
+        assert_eq!(
+            spans
+                .iter()
+                .filter(|s| s.decision == "park" && s.path == "E")
+                .count(),
+            2
+        );
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -738,8 +786,13 @@ pub(crate) mod tests {
         let args = json!({"note": format!("remember: {MEMORY}")});
         // Nobody answers the card; Stop is already pressed.
         let started = std::time::Instant::now();
-        let err = c.call("echo", &args, Duration::from_secs(5), &|| true).unwrap_err();
-        assert!(started.elapsed() < Duration::from_secs(10), "it did not wait out the card");
+        let err = c
+            .call("echo", &args, Duration::from_secs(5), &|| true)
+            .unwrap_err();
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "it did not wait out the card"
+        );
         assert!(!err.is_empty());
         assert_eq!(server.calls.load(Ordering::SeqCst), 0, "nothing was sent");
         let _ = std::fs::remove_dir_all(dir);
@@ -752,17 +805,25 @@ pub(crate) mod tests {
         let server = Counting::start();
         let mut c = conn(&server);
         let args = json!({"q": "weather sk-abcdefghijklmnopqrstuv"});
-        let (text, _) = c.call("echo", &args, Duration::from_secs(5), &|| false).unwrap();
+        let (text, _) = c
+            .call("echo", &args, Duration::from_secs(5), &|| false)
+            .unwrap();
         assert_eq!(text, "counted");
         assert_eq!(server.calls.load(Ordering::SeqCst), 1);
         let log = hx::read_egress(&dir);
         assert_eq!(log.len(), 2, "{log:?}");
-        assert_eq!((log[1].dest.as_str(), log[1].basis.as_str()), ("mcp.example.test", "chat"));
+        assert_eq!(
+            (log[1].dest.as_str(), log[1].basis.as_str()),
+            ("mcp.example.test", "chat")
+        );
         assert_eq!(log[1].data_classes, vec![DataClass::Chat]);
         let raw = std::fs::read_to_string(hx::egress_path(&dir)).unwrap();
         let opened = format!("{log:?}");
         for text in [&raw, &opened] {
-            assert!(!text.contains("weather") && !text.contains("sk-abc") && !text.contains("/mcp"), "{text}");
+            assert!(
+                !text.contains("weather") && !text.contains("sk-abc") && !text.contains("/mcp"),
+                "{text}"
+            );
         }
         let _ = std::fs::remove_dir_all(dir);
     }

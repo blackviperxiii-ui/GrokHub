@@ -202,7 +202,11 @@ pub fn take_card_notes_block(cards: &mut [BoardCard], thread_id: &str) -> Option
         if h == 0 || h == c.notes_sent {
             continue;
         }
-        parts.push(format!("Notes on workboard card \"{}\":\n{}", c.title.trim(), c.notes.trim()));
+        parts.push(format!(
+            "Notes on workboard card \"{}\":\n{}",
+            c.title.trim(),
+            c.notes.trim()
+        ));
         c.notes_sent = h;
     }
     if parts.is_empty() {
@@ -220,23 +224,69 @@ pub const FOLLOW_UP_REPORT_MAX: usize = 6000;
 
 /// Words in an automation that ask for something to read or act on.
 const REPORT_WORDS: &[&str] = &[
-    "report", "summar", "digest", "brief", "review", "audit", "analy", "research", "triage",
-    "recap", "status", "compare", "draft", "monitor", "watch", "track", "news", "scan",
-    "look for", "find ", "list ", "check ", "tell me", "let me know", "notify", "update me",
-    "what changed", "anything new",
+    "report",
+    "summar",
+    "digest",
+    "brief",
+    "review",
+    "audit",
+    "analy",
+    "research",
+    "triage",
+    "recap",
+    "status",
+    "compare",
+    "draft",
+    "monitor",
+    "watch",
+    "track",
+    "news",
+    "scan",
+    "look for",
+    "find ",
+    "list ",
+    "check ",
+    "tell me",
+    "let me know",
+    "notify",
+    "update me",
+    "what changed",
+    "anything new",
 ];
 
 /// A reply that asks you something, or found a problem.
 const NEEDS_YOU: &[&str] = &[
-    "should i", "do you want", "would you like", "let me know", "your call", "needs your",
-    "action needed", "action required", "please confirm", "can you", "which one", "recommend",
-    "failed", "error", "warning", "could not", "couldn't", "blocked",
+    "should i",
+    "do you want",
+    "would you like",
+    "let me know",
+    "your call",
+    "needs your",
+    "action needed",
+    "action required",
+    "please confirm",
+    "can you",
+    "which one",
+    "recommend",
+    "failed",
+    "error",
+    "warning",
+    "could not",
+    "couldn't",
+    "blocked",
 ];
 
 /// Runs that found nothing say so in a line.
 const NOTHING_NEW: &[&str] = &[
-    "nothing new", "no changes", "no new", "all clear", "all good", "nothing to report",
-    "no issues", "no updates", "nothing changed",
+    "nothing new",
+    "no changes",
+    "no new",
+    "all clear",
+    "all good",
+    "nothing to report",
+    "no issues",
+    "no updates",
+    "nothing changed",
 ];
 
 /// Does this scheduled run leave you something to follow up on? A report,
@@ -254,7 +304,14 @@ pub fn automation_needs_follow_up(instructions: &str, reply: &str) -> bool {
     }
     let i = format!("{} ", instructions.to_ascii_lowercase());
     let report = REPORT_WORDS.iter().any(|w| i.contains(w));
-    let tail: String = r.chars().rev().take(600).collect::<Vec<_>>().into_iter().rev().collect();
+    let tail: String = r
+        .chars()
+        .rev()
+        .take(600)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
     let asks_you = NEEDS_YOU.iter().any(|w| r.contains(w)) || tail.trim_end().ends_with('?');
     report || asks_you
 }
@@ -289,7 +346,11 @@ pub fn file_follow_up(
         .collect();
     let detail: String = report
         .lines()
-        .map(|l| l.trim().trim_start_matches(['#', '*', '-', '>', ' ']).trim())
+        .map(|l| {
+            l.trim()
+                .trim_start_matches(['#', '*', '-', '>', ' '])
+                .trim()
+        })
         .find(|l| !l.is_empty())
         .unwrap_or("")
         .chars()
@@ -1051,11 +1112,20 @@ mod tests {
         assert!(block.contains("Ship the AUR release"), "{block}");
         assert!(block.contains("bump pkgver, then run makepkg"), "{block}");
         assert!(!block.contains("not for t1"));
-        assert!(take_card_notes_block(&mut cards, "t1").is_none(), "unchanged notes go once");
+        assert!(
+            take_card_notes_block(&mut cards, "t1").is_none(),
+            "unchanged notes go once"
+        );
         cards[0].notes = "bump pkgver, run makepkg, push the tag".into();
-        assert!(take_card_notes_block(&mut cards, "t1").is_some(), "a change goes again");
+        assert!(
+            take_card_notes_block(&mut cards, "t1").is_some(),
+            "a change goes again"
+        );
         cards[0].notes.clear();
-        assert!(take_card_notes_block(&mut cards, "t1").is_none(), "empty notes send nothing");
+        assert!(
+            take_card_notes_block(&mut cards, "t1").is_none(),
+            "empty notes send nothing"
+        );
     }
 
     #[test]
@@ -1065,11 +1135,14 @@ mod tests {
         assert!(bare.starts_with("Work on this workboard card: Fix the tray icon"));
         assert!(!bare.contains("Paused"), "run status is not an instruction");
         c.notes = "Only on Windows; check the DPI scaling.".into();
-        assert!(card_work_prompt(&c).contains("My notes for this card (follow them):\nOnly on Windows"));
+        assert!(
+            card_work_prompt(&c).contains("My notes for this card (follow them):\nOnly on Windows")
+        );
         assert_eq!(card_notes_hash(""), 0);
         assert_eq!(card_notes_hash(" a "), card_notes_hash("a"));
         assert_eq!(clean_card_notes(&"x".repeat(5000)).len(), CARD_NOTES_MAX);
-        let old: BoardCard = serde_json::from_str(r#"{"id":"w1","title":"t","detail":"","status":"todo"}"#).unwrap();
+        let old: BoardCard =
+            serde_json::from_str(r#"{"id":"w1","title":"t","detail":"","status":"todo"}"#).unwrap();
         assert!(old.notes.is_empty() && old.notes_sent == 0);
     }
 
@@ -1083,19 +1156,34 @@ mod tests {
             "every day at 18, clean the downloads folder",
             "I found two installers I was not sure about. Should I delete them?"
         ));
-        assert!(automation_needs_follow_up("every hour, back up ~/notes", "The backup failed: disk full."));
-        assert!(!automation_needs_follow_up("every day at 18, clean the downloads folder", "Cleaned 12 files."));
+        assert!(automation_needs_follow_up(
+            "every hour, back up ~/notes",
+            "The backup failed: disk full."
+        ));
+        assert!(!automation_needs_follow_up(
+            "every day at 18, clean the downloads folder",
+            "Cleaned 12 files."
+        ));
         assert!(!automation_needs_follow_up(
             "every weekday at 9, check for new GitHub issues",
             "Nothing new since yesterday."
         ));
-        assert!(!automation_needs_follow_up("every weekday at 9, write the report", "  "));
+        assert!(!automation_needs_follow_up(
+            "every weekday at 9, write the report",
+            "  "
+        ));
     }
 
     #[test]
     fn one_follow_up_card_per_automation_and_its_report_reaches_the_chat_once() {
         let mut cards = Vec::new();
-        let (id, new) = file_follow_up(&mut cards, "a1", "Morning issues", "## Issues\nThree opened overnight.", 10);
+        let (id, new) = file_follow_up(
+            &mut cards,
+            "a1",
+            "Morning issues",
+            "## Issues\nThree opened overnight.",
+            10,
+        );
         assert!(new);
         let c = cards.iter().find(|c| c.id == id).unwrap();
         assert_eq!(c.status, BoardStatus::FollowUp);
@@ -1105,20 +1193,37 @@ mod tests {
         cards[0].thread_id = Some("t1".into());
         cards[0].status = BoardStatus::InProgress;
         cards[0].fresh = false;
-        let block = take_card_notes_block(&mut cards, "t1").expect("report goes with the first message");
-        assert!(block.contains("scheduled automation \"Morning issues\""), "{block}");
+        let block =
+            take_card_notes_block(&mut cards, "t1").expect("report goes with the first message");
+        assert!(
+            block.contains("scheduled automation \"Morning issues\""),
+            "{block}"
+        );
         assert!(block.contains("Three opened overnight."));
-        assert!(take_card_notes_block(&mut cards, "t1").is_none(), "once per report");
+        assert!(
+            take_card_notes_block(&mut cards, "t1").is_none(),
+            "once per report"
+        );
 
-        let (again, new) = file_follow_up(&mut cards, "a1", "Morning issues", "Two more today.", 20);
-        assert_eq!((again.as_str(), new), (id.as_str(), false), "same card, new report");
+        let (again, new) =
+            file_follow_up(&mut cards, "a1", "Morning issues", "Two more today.", 20);
+        assert_eq!(
+            (again.as_str(), new),
+            (id.as_str(), false),
+            "same card, new report"
+        );
         assert_eq!(cards[0].status, BoardStatus::FollowUp, "back in Follow up");
         assert!(cards[0].fresh);
-        assert!(take_card_notes_block(&mut cards, "t1").unwrap().contains("Two more today."));
+        assert!(take_card_notes_block(&mut cards, "t1")
+            .unwrap()
+            .contains("Two more today."));
 
         cards[0].status = BoardStatus::Done;
         let (third, new) = file_follow_up(&mut cards, "a1", "Morning issues", "One more.", 30);
-        assert!(new && third != id, "a finished card stays finished; the run files a new one");
+        assert!(
+            new && third != id,
+            "a finished card stays finished; the run files a new one"
+        );
         assert_eq!(BoardStatus::parse("follow-up"), Some(BoardStatus::FollowUp));
         let json = serde_json::to_string(&cards[1]).unwrap();
         assert!(json.contains("\"status\":\"follow_up\""), "{json}");

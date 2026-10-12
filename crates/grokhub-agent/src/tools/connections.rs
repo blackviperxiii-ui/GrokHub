@@ -38,16 +38,27 @@ pub fn delete_schema() -> Value {
 }
 
 fn text(args: &Value, key: &str) -> String {
-    args.get(key).and_then(|v| v.as_str()).unwrap_or("").trim().to_string()
+    args.get(key)
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string()
 }
 
 /// A literal token, header, or env value in the arguments.
 fn carries_secret(args: &Value) -> bool {
     let raw = args.to_string();
     grokhub_core::redact_secrets(&raw) != raw
-        || ["bearerToken", "bearer_token", "headers", "env", "token", "api_key"]
-            .iter()
-            .any(|k| args.get(*k).is_some())
+        || [
+            "bearerToken",
+            "bearer_token",
+            "headers",
+            "env",
+            "token",
+            "api_key",
+        ]
+        .iter()
+        .any(|k| args.get(*k).is_some())
 }
 
 fn name_of(args: &Value) -> Result<String, String> {
@@ -66,7 +77,9 @@ fn record(name: &str, reason: &str, entry: Option<Value>) -> Result<Option<hx::C
         Some(v) => Some(serde_json::to_vec_pretty(v).map_err(|e| e.to_string())?),
         None => None,
     };
-    let done = hx::record_change(&config, &target, Origin::SelfManage, reason, || target.put(bytes.as_deref()))?;
+    let done = hx::record_change(&config, &target, Origin::SelfManage, reason, || {
+        target.put(bytes.as_deref())
+    })?;
     crate::mcp::invalidate();
     Ok(done)
 }
@@ -74,7 +87,9 @@ fn record(name: &str, reason: &str, entry: Option<Value>) -> Result<Option<hx::C
 fn current(name: &str) -> Result<Option<Map<String, Value>>, String> {
     let path = crate::mcp::config_file();
     let bytes = McpFile { path: &path, name }.read()?;
-    Ok(bytes.and_then(|b| serde_json::from_slice::<Value>(&b).ok()).and_then(|v| v.as_object().cloned()))
+    Ok(bytes
+        .and_then(|b| serde_json::from_slice::<Value>(&b).ok())
+        .and_then(|v| v.as_object().cloned()))
 }
 
 /// Add a connection, with the token asked through `ask` (the card's message in, the
@@ -93,7 +108,10 @@ pub(crate) fn modify_with(args: &Value, ask: &mut dyn FnMut(&str) -> Option<Stri
         let name = name_of(args)?;
         let cur = current(&name)?.ok_or_else(|| format!("no connection named {name}"))?;
         let mut merged = args.as_object().cloned().unwrap_or_default();
-        let has = |m: &Map<String, Value>, k: &str| m.get(k).is_some_and(|v| !v.is_null() && v.as_str() != Some(""));
+        let has = |m: &Map<String, Value>, k: &str| {
+            m.get(k)
+                .is_some_and(|v| !v.is_null() && v.as_str() != Some(""))
+        };
         if !has(&merged, "url") && !has(&merged, "command") {
             for k in ["url", "command"] {
                 if let Some(v) = cur.get(k) {
@@ -122,7 +140,12 @@ pub(crate) fn list() -> ToolOutput {
     let text = std::fs::read_to_string(&path).unwrap_or_default();
     let servers = serde_json::from_str::<Value>(&text)
         .ok()
-        .and_then(|v| v.get("mcpServers").or_else(|| v.get("mcp_servers")).and_then(|m| m.as_object()).cloned())
+        .and_then(|v| {
+            v.get("mcpServers")
+                .or_else(|| v.get("mcp_servers"))
+                .and_then(|m| m.as_object())
+                .cloned()
+        })
         .unwrap_or_default();
     if servers.is_empty() {
         return ToolOutput::ok("no connections");
@@ -130,16 +153,32 @@ pub(crate) fn list() -> ToolOutput {
     let rows: Vec<String> = servers
         .iter()
         .map(|(name, e)| {
-            let target = e.get("url").or_else(|| e.get("command")).and_then(|v| v.as_str()).unwrap_or("?");
-            let off = if e.get("enabled").and_then(|v| v.as_bool()) == Some(false) { " (off)" } else { "" };
-            let token = if e.get("tokenRef").is_some() { " token=%secret%" } else { "" };
+            let target = e
+                .get("url")
+                .or_else(|| e.get("command"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("?");
+            let off = if e.get("enabled").and_then(|v| v.as_bool()) == Some(false) {
+                " (off)"
+            } else {
+                ""
+            };
+            let token = if e.get("tokenRef").is_some() {
+                " token=%secret%"
+            } else {
+                ""
+            };
             format!("{name}: {target}{off}{token}")
         })
         .collect();
     ToolOutput::ok(grokhub_core::redact_secrets(&rows.join("\n")))
 }
 
-fn add_inner(args: &Value, keep_token: bool, ask: &mut dyn FnMut(&str) -> Option<String>) -> Result<String, String> {
+fn add_inner(
+    args: &Value,
+    keep_token: bool,
+    ask: &mut dyn FnMut(&str) -> Option<String>,
+) -> Result<String, String> {
     if carries_secret(args) {
         return Err("Never pass a token or header. Set needs_token and the user types it in. Nothing was added.".into());
     }
@@ -160,7 +199,13 @@ fn add_inner(args: &Value, keep_token: bool, ask: &mut dyn FnMut(&str) -> Option
             // allowed without a grant; this still needs one unless the host is local
             // or a model host.
             let data = [hx::DataClass::Personal];
-            if !hx::decide(hx::Step::Egress { dest: &dest, data: &data, ledger: &ledger }).is_allow() {
+            if !hx::decide(hx::Step::Egress {
+                dest: &dest,
+                data: &data,
+                ledger: &ledger,
+            })
+            .is_allow()
+            {
                 return Err(format!(
                     "{dest} is a new host for GrokHub. Grant it in Settings, Privacy before a connection can reach it. Nothing was added."
                 ));
@@ -173,7 +218,11 @@ fn add_inner(args: &Value, keep_token: bool, ask: &mut dyn FnMut(&str) -> Option
             let list: Vec<String> = args
                 .get("args")
                 .and_then(|v| v.as_array())
-                .map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_string)).collect())
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|x| x.as_str().map(str::to_string))
+                        .collect()
+                })
                 .unwrap_or_default();
             if !list.is_empty() {
                 entry.insert("args".into(), json!(list));
@@ -197,7 +246,11 @@ fn add_inner(args: &Value, keep_token: bool, ask: &mut dyn FnMut(&str) -> Option
     match record(&name, &reason, Some(Value::Object(entry))) {
         Ok(Some(c)) => Ok(format!(
             "{} connection {name} (version {} kept). The user can undo it from the Work tree.",
-            if c.op == hx::ChangeOp::Create { "added" } else { "updated" },
+            if c.op == hx::ChangeOp::Create {
+                "added"
+            } else {
+                "updated"
+            },
             c.seq
         )),
         Ok(None) => Ok(format!("connection {name} is already set up that way")),
@@ -216,7 +269,10 @@ pub fn disable(args: &Value) -> ToolOutput {
         let mut entry = current(&name)?.ok_or_else(|| format!("no connection named {name}"))?;
         entry.insert("enabled".into(), json!(false));
         match record(&name, &text(args, "reason"), Some(Value::Object(entry)))? {
-            Some(c) => Ok(format!("turned off connection {name} (version {} kept). The user can undo it.", c.seq)),
+            Some(c) => Ok(format!(
+                "turned off connection {name} (version {} kept). The user can undo it.",
+                c.seq
+            )),
             None => Ok(format!("connection {name} is already off")),
         }
     };
@@ -232,8 +288,12 @@ pub fn delete(args: &Value) -> ToolOutput {
         current(&name)?.ok_or_else(|| format!("no connection named {name}"))?;
         let reason = text(args, "reason");
         // The sealed token stays, so Undo brings the connection back whole.
-        let c = record(&name, &reason, None)?.ok_or_else(|| format!("no connection named {name}"))?;
-        Ok(format!("removed connection {name} (version {} kept). The user can undo it.", c.seq))
+        let c =
+            record(&name, &reason, None)?.ok_or_else(|| format!("no connection named {name}"))?;
+        Ok(format!(
+            "removed connection {name} (version {} kept). The user can undo it.",
+            c.seq
+        ))
     };
     match run() {
         Ok(text) => ToolOutput::ok(text),
@@ -246,8 +306,8 @@ mod tests {
     use super::*;
     use crate::gate::{Gate, PermMode};
     use crate::harness::{
-        decide_harness, hard_card_key, resolve_park, AccessMode, ChangeKind, ChangeLedger, GateOutcome, HardClass,
-        HardPark, UndoAsk, APPROVAL_TTL,
+        decide_harness, hard_card_key, resolve_park, AccessMode, ChangeKind, ChangeLedger,
+        GateOutcome, HardClass, HardPark, UndoAsk, APPROVAL_TTL,
     };
     use crate::tools::{dispatch, ToolCtx};
     use std::path::{Path, PathBuf};
@@ -255,7 +315,13 @@ mod tests {
     const FAKE_TOKEN: &str = "sk-abcdefghijklmnopqrstuv";
 
     fn ctx_run(dir: &Path, name: &str, args: &str) -> ToolOutput {
-        let ctx = ToolCtx { workspace: dir, desktop: None, stop: &|| false, tasks: None, owner: None };
+        let ctx = ToolCtx {
+            workspace: dir,
+            desktop: None,
+            stop: &|| false,
+            tasks: None,
+            owner: None,
+        };
         dispatch(&ctx, name, args)
     }
 
@@ -287,9 +353,16 @@ mod tests {
         let cabin = root.join("GrokHub");
         let grok = root.join("home").join(".grok");
         std::fs::create_dir_all(&grok).unwrap();
-        std::fs::write(grok.join("mcp.json"), r#"{"mcpServers":{"cli":{"command":"cli-mcp"}}}"#).unwrap();
+        std::fs::write(
+            grok.join("mcp.json"),
+            r#"{"mcpServers":{"cli":{"command":"cli-mcp"}}}"#,
+        )
+        .unwrap();
         std::fs::create_dir_all(&cabin).unwrap();
-        crate::harness::use_key_store_for(&cabin, std::sync::Arc::new(crate::harness::MemoryKeyStore::new()));
+        crate::harness::use_key_store_for(
+            &cabin,
+            std::sync::Arc::new(crate::harness::MemoryKeyStore::new()),
+        );
         let _guard = crate::perm::ConfigGuard::set(&cabin);
         let grok_before = tree(&grok);
         let out = ctx_run(
@@ -298,19 +371,29 @@ mod tests {
             r#"{"name":"notes","url":"http://127.0.0.1:9/mcp","reason":"read the notes server"}"#,
         );
         assert!(!out.failed, "{}", out.text);
-        assert_eq!(out.text, "added connection notes (version 1 kept). The user can undo it from the Work tree.");
+        assert_eq!(
+            out.text,
+            "added connection notes (version 1 kept). The user can undo it from the Work tree."
+        );
         let mcp = cabin.join("mcp.json");
         let text = std::fs::read_to_string(&mcp).unwrap();
-        assert!(text.contains("\"notes\"") && text.contains("127.0.0.1:9"), "{text}");
+        assert!(
+            text.contains("\"notes\"") && text.contains("127.0.0.1:9"),
+            "{text}"
+        );
         assert_eq!(tree(&grok), grok_before, "~/.grok is untouched");
         let ledger = ChangeLedger::load_kind(&cabin, ChangeKind::Connection);
         let c = &ledger.all()[0];
-        assert_eq!((c.seq, c.id.as_str(), c.op.as_str(), c.origin.as_str()), (1, "notes", "create", "self_manage"));
+        assert_eq!(
+            (c.seq, c.id.as_str(), c.op.as_str(), c.origin.as_str()),
+            (1, "notes", "create", "self_manage")
+        );
         assert_eq!(c.reason, "read the notes server");
         let fresh = crate::harness::take_self_changes(&cabin);
         assert_eq!(fresh.len(), 1);
         assert_eq!((fresh[0].0, fresh[0].1.seq), (ChangeKind::Connection, 1));
-        let back = crate::harness::undo_connection(&cabin, &mcp, "notes", UndoAsk::from_click()).unwrap();
+        let back =
+            crate::harness::undo_connection(&cabin, &mcp, "notes", UndoAsk::from_click()).unwrap();
         assert_eq!(back.now, None);
         let text = std::fs::read_to_string(&mcp).unwrap();
         assert!(!text.contains("notes"), "{text}");
@@ -322,7 +405,11 @@ mod tests {
     fn a_new_host_needs_a_grant_and_a_literal_token_is_refused() {
         let root = crate::harness::test_dir("conn-host");
         let _guard = crate::perm::ConfigGuard::set(&root);
-        let out = ctx_run(&root, "connection_add", r#"{"name":"weather","url":"https://weather.example.com/mcp","reason":"forecasts"}"#);
+        let out = ctx_run(
+            &root,
+            "connection_add",
+            r#"{"name":"weather","url":"https://weather.example.com/mcp","reason":"forecasts"}"#,
+        );
         assert!(out.failed);
         assert_eq!(
             out.text,
@@ -331,12 +418,16 @@ mod tests {
         let out = ctx_run(
             &root,
             "connection_add",
-            &format!(r#"{{"name":"weather","url":"http://127.0.0.1:9/mcp","reason":"use {FAKE_TOKEN}"}}"#),
+            &format!(
+                r#"{{"name":"weather","url":"http://127.0.0.1:9/mcp","reason":"use {FAKE_TOKEN}"}}"#
+            ),
         );
         assert!(out.failed);
         assert!(out.text.starts_with("Never pass a token"), "{}", out.text);
         assert!(!root.join("mcp.json").exists(), "nothing written");
-        assert!(ChangeLedger::load_kind(&root, ChangeKind::Connection).all().is_empty());
+        assert!(ChangeLedger::load_kind(&root, ChangeKind::Connection)
+            .all()
+            .is_empty());
     }
 
     /// Acceptance 4: a connector that needs a token is a credentials hard
@@ -346,9 +437,21 @@ mod tests {
     #[test]
     fn a_token_connection_is_a_credentials_card_and_the_token_stays_out_of_everything() {
         let args = r#"{"name":"crm","url":"http://127.0.0.1:9/mcp","needs_token":true,"reason":"read the CRM"}"#;
-        let always = Gate { mode: PermMode::Always, readonly_session: false, attended: true, desktop: true };
+        let always = Gate {
+            mode: PermMode::Always,
+            readonly_session: false,
+            attended: true,
+            desktop: true,
+        };
         assert_eq!(
-            decide_harness(&always, "connection_add", args, true, None, AccessMode::Full),
+            decide_harness(
+                &always,
+                "connection_add",
+                args,
+                true,
+                None,
+                AccessMode::Full
+            ),
             GateOutcome::Park {
                 reason: "hard-class credentials: Credentials / secrets — Always cannot skip".into(),
                 hard: Some(HardClass::Credentials),
@@ -358,23 +461,37 @@ mod tests {
         let root = crate::harness::test_dir("conn-token");
         let _guard = crate::perm::ConfigGuard::set(&root);
         let mut emit = |_view: crate::mcp::ElicitView| {};
-        let mut wait = |_id: &str| crate::mcp::ElicitAnswer::Accept(serde_json::json!({ "token": FAKE_TOKEN }));
-        let out = crate::mcp::with_elicit(true, &mut emit, &mut wait, || ctx_run(&root, "connection_add", args));
+        let mut wait = |_id: &str| {
+            crate::mcp::ElicitAnswer::Accept(serde_json::json!({ "token": FAKE_TOKEN }))
+        };
+        let out = crate::mcp::with_elicit(true, &mut emit, &mut wait, || {
+            ctx_run(&root, "connection_add", args)
+        });
         assert!(!out.failed, "{}", out.text);
         assert!(!out.text.contains(FAKE_TOKEN));
         for (path, bytes) in tree(&root) {
             let text = String::from_utf8_lossy(&bytes);
-            assert!(!text.contains(FAKE_TOKEN) && !text.contains("abcdefghijklmnopqrstuv"), "token in {}", path.display());
+            assert!(
+                !text.contains(FAKE_TOKEN) && !text.contains("abcdefghijklmnopqrstuv"),
+                "token in {}",
+                path.display()
+            );
         }
         let entry = std::fs::read_to_string(root.join("mcp.json")).unwrap();
         assert!(entry.contains("\"tokenRef\": \"crm\""), "{entry}");
-        assert_eq!(crate::harness::open_connection_token(&root, "crm").as_deref(), Some(FAKE_TOKEN));
+        assert_eq!(
+            crate::harness::open_connection_token(&root, "crm").as_deref(),
+            Some(FAKE_TOKEN)
+        );
         // Unattended (or declined): no card, no token, nothing added.
         let other = crate::harness::test_dir("conn-token-none");
         let _guard = crate::perm::ConfigGuard::set(&other);
         let out = ctx_run(&other, "connection_add", args);
         assert!(out.failed);
-        assert_eq!(out.text, "No token was given, so the connection was not added.");
+        assert_eq!(
+            out.text,
+            "No token was given, so the connection was not added."
+        );
         assert!(!other.join("mcp.json").exists());
     }
 
@@ -383,11 +500,19 @@ mod tests {
     /// the TTL deny.
     #[test]
     fn agent_deletes_are_hard_cards_even_under_always_and_full() {
-        let always = Gate { mode: PermMode::Always, readonly_session: false, attended: true, desktop: true };
+        let always = Gate {
+            mode: PermMode::Always,
+            readonly_session: false,
+            attended: true,
+            desktop: true,
+        };
         for (tool, args) in [
             ("connection_delete", r#"{"name":"notes"}"#),
             ("scheduler_delete", r#"{"task_id":"auto-1"}"#),
-            ("run_terminal_command", r#"{"command":"rm -rf skills/weekly-report"}"#),
+            (
+                "run_terminal_command",
+                r#"{"command":"rm -rf skills/weekly-report"}"#,
+            ),
             ("grokhub__skill_delete", r#"{"name":"weekly-report"}"#),
         ] {
             assert_eq!(
@@ -400,7 +525,11 @@ mod tests {
                 "{tool}"
             );
         }
-        assert_eq!(hard_card_key(true, false, false), None, "Enter does not approve");
+        assert_eq!(
+            hard_card_key(true, false, false),
+            None,
+            "Enter does not approve"
+        );
         let park = HardPark {
             id: "p".into(),
             tool: "connection_delete".into(),
@@ -409,12 +538,23 @@ mod tests {
             parked_at: std::time::Instant::now() - APPROVAL_TTL,
         };
         assert!(matches!(
-            resolve_park(&park, std::time::Instant::now(), Some(crate::harness::HardAnswer::ApproveOnce)),
+            resolve_park(
+                &park,
+                std::time::Instant::now(),
+                Some(crate::harness::HardAnswer::ApproveOnce)
+            ),
             GateOutcome::Refuse { .. }
         ));
         // Soft: add and turn off follow the GB pill.
         assert_eq!(
-            decide_harness(&always, "connection_disable", r#"{"name":"notes","reason":"x"}"#, true, None, AccessMode::Full),
+            decide_harness(
+                &always,
+                "connection_disable",
+                r#"{"name":"notes","reason":"x"}"#,
+                true,
+                None,
+                AccessMode::Full
+            ),
             GateOutcome::Allow
         );
     }
@@ -423,23 +563,59 @@ mod tests {
     fn disable_and_delete_keep_versions_and_undo_walks_back() {
         let root = crate::harness::test_dir("conn-disable");
         let _guard = crate::perm::ConfigGuard::set(&root);
-        let add = ctx_run(&root, "connection_add", r#"{"name":"local","command":"local-mcp","args":["--stdio"],"reason":"files"}"#);
+        let add = ctx_run(
+            &root,
+            "connection_add",
+            r#"{"name":"local","command":"local-mcp","args":["--stdio"],"reason":"files"}"#,
+        );
         assert!(!add.failed, "{}", add.text);
-        let off = ctx_run(&root, "connection_disable", r#"{"name":"local","reason":"it kept failing"}"#);
-        assert_eq!(off.text, "turned off connection local (version 2 kept). The user can undo it.");
-        assert!(std::fs::read_to_string(root.join("mcp.json")).unwrap().contains("\"enabled\": false"));
-        let gone = ctx_run(&root, "connection_delete", r#"{"name":"local","reason":"unused"}"#);
-        assert_eq!(gone.text, "removed connection local (version 3 kept). The user can undo it.");
+        let off = ctx_run(
+            &root,
+            "connection_disable",
+            r#"{"name":"local","reason":"it kept failing"}"#,
+        );
+        assert_eq!(
+            off.text,
+            "turned off connection local (version 2 kept). The user can undo it."
+        );
+        assert!(std::fs::read_to_string(root.join("mcp.json"))
+            .unwrap()
+            .contains("\"enabled\": false"));
+        let gone = ctx_run(
+            &root,
+            "connection_delete",
+            r#"{"name":"local","reason":"unused"}"#,
+        );
+        assert_eq!(
+            gone.text,
+            "removed connection local (version 3 kept). The user can undo it."
+        );
         let mcp = root.join("mcp.json");
         crate::harness::undo_connection(&root, &mcp, "local", UndoAsk::from_click()).unwrap();
         let text = std::fs::read_to_string(&mcp).unwrap();
-        assert!(text.contains("local-mcp") && text.contains("\"enabled\": false"), "{text}");
+        assert!(
+            text.contains("local-mcp") && text.contains("\"enabled\": false"),
+            "{text}"
+        );
         crate::harness::undo_connection(&root, &mcp, "local", UndoAsk::from_typing()).unwrap();
-        assert!(!std::fs::read_to_string(&mcp).unwrap().contains("\"enabled\""));
-        let ops: Vec<&str> = ChangeLedger::load_kind(&root, ChangeKind::Connection).all().iter().map(|c| c.op.as_str()).collect();
+        assert!(!std::fs::read_to_string(&mcp)
+            .unwrap()
+            .contains("\"enabled\""));
+        let ops: Vec<&str> = ChangeLedger::load_kind(&root, ChangeKind::Connection)
+            .all()
+            .iter()
+            .map(|c| c.op.as_str())
+            .collect();
         assert_eq!(ops, ["create", "modify", "delete", "undo", "undo"]);
-        let refused = ctx_run(&root, "connection_add", r#"{"name":"grokhub-desktop","command":"x","reason":"y"}"#);
-        assert_eq!(refused.text, "grokhub-desktop is the cabin's own desktop server");
+        let refused = ctx_run(
+            &root,
+            "connection_add",
+            r#"{"name":"grokhub-desktop","command":"x","reason":"y"}"#,
+        );
+        assert_eq!(
+            refused.text,
+            "grokhub-desktop is the cabin's own desktop server"
+        );
     }
 
     /// Settings → Connectors Disconnect: the entry, its sealed token, and its
@@ -448,7 +624,10 @@ mod tests {
     #[test]
     fn a_user_disconnect_removes_the_entry_token_and_sign_in() {
         let root = crate::harness::test_dir("conn-disconnect");
-        crate::harness::use_key_store_for(&root, std::sync::Arc::new(crate::harness::MemoryKeyStore::new()));
+        crate::harness::use_key_store_for(
+            &root,
+            std::sync::Arc::new(crate::harness::MemoryKeyStore::new()),
+        );
         let _guard = crate::perm::ConfigGuard::set(&root);
         let mcp = root.join("mcp.json");
         std::fs::write(
@@ -460,7 +639,10 @@ mod tests {
         crate::harness::seal_mcp_signin(&root, "linear", r#"{"access_token":"x"}"#).unwrap();
         assert!(crate::harness::open_mcp_signin(&root, "linear").is_some());
 
-        assert_eq!(crate::mcp::disconnect("linear").unwrap(), "Disconnected linear");
+        assert_eq!(
+            crate::mcp::disconnect("linear").unwrap(),
+            "Disconnected linear"
+        );
 
         let names: Vec<String> = crate::mcp::load_servers().into_keys().collect();
         assert_eq!(names, ["notes"]);
@@ -469,10 +651,18 @@ mod tests {
         let ledger = ChangeLedger::load_kind(&root, ChangeKind::Connection);
         let c = &ledger.all()[0];
         assert_eq!(
-            (c.id.as_str(), c.op.as_str(), c.origin.as_str(), c.reason.as_str()),
+            (
+                c.id.as_str(),
+                c.op.as_str(),
+                c.origin.as_str(),
+                c.reason.as_str()
+            ),
             ("linear", "delete", "user", "disconnected in Settings")
         );
-        assert!(crate::harness::take_self_changes(&root).is_empty(), "a user's own disconnect posts no Work-tree row");
+        assert!(
+            crate::harness::take_self_changes(&root).is_empty(),
+            "a user's own disconnect posts no Work-tree row"
+        );
         assert_eq!(
             crate::mcp::disconnect("linear").unwrap_err(),
             "linear isn't one of this cabin's connections"
@@ -490,16 +680,34 @@ mod tests {
         std::fs::write(&mcp, r#"{"mcpServers":{"notes":{"command":"notes-mcp"}}}"#).unwrap();
         let entry = json!({"command": "npx", "args": ["-y", "@playwright/mcp@latest"]});
 
-        assert_eq!(crate::mcp::install("playwright", &entry).unwrap(), crate::mcp::Installed::Added);
+        assert_eq!(
+            crate::mcp::install("playwright", &entry).unwrap(),
+            crate::mcp::Installed::Added
+        );
         let saved: Value = serde_json::from_str(&std::fs::read_to_string(&mcp).unwrap()).unwrap();
         assert_eq!(saved["mcpServers"]["playwright"], entry);
-        assert_eq!(saved["mcpServers"]["notes"], json!({"command": "notes-mcp"}));
-        assert_eq!(crate::mcp::install("playwright", &entry).unwrap(), crate::mcp::Installed::AlreadyThere);
+        assert_eq!(
+            saved["mcpServers"]["notes"],
+            json!({"command": "notes-mcp"})
+        );
+        assert_eq!(
+            crate::mcp::install("playwright", &entry).unwrap(),
+            crate::mcp::Installed::AlreadyThere
+        );
         let ledger = ChangeLedger::load_kind(&root, ChangeKind::Connection);
-        assert_eq!(ledger.all().len(), 1, "a second install writes no ledger line");
+        assert_eq!(
+            ledger.all().len(),
+            1,
+            "a second install writes no ledger line"
+        );
         let c = &ledger.all()[0];
         assert_eq!(
-            (c.id.as_str(), c.op.as_str(), c.origin.as_str(), c.reason.as_str()),
+            (
+                c.id.as_str(),
+                c.op.as_str(),
+                c.origin.as_str(),
+                c.reason.as_str()
+            ),
             ("playwright", "create", "user", "installed from Marketplace")
         );
         assert!(crate::harness::take_self_changes(&root).is_empty());
@@ -509,7 +717,11 @@ mod tests {
             "A connector named notes is already set up differently; disconnect it first"
         );
         assert_eq!(
-            crate::mcp::install("exa", &json!({"url": "https://mcp.exa.ai/mcp", "headers": {"x-api-key": "k"}})).unwrap_err(),
+            crate::mcp::install(
+                "exa",
+                &json!({"url": "https://mcp.exa.ai/mcp", "headers": {"x-api-key": "k"}})
+            )
+            .unwrap_err(),
             "exa's entry carries credentials; a key is saved separately"
         );
         let names: Vec<String> = crate::mcp::load_servers().into_keys().collect();
@@ -519,7 +731,10 @@ mod tests {
     #[test]
     fn a_saved_key_is_sealed_and_named_by_the_entry() {
         let root = crate::harness::test_dir("conn-save-key");
-        crate::harness::use_key_store_for(&root, std::sync::Arc::new(crate::harness::MemoryKeyStore::new()));
+        crate::harness::use_key_store_for(
+            &root,
+            std::sync::Arc::new(crate::harness::MemoryKeyStore::new()),
+        );
         let _guard = crate::perm::ConfigGuard::set(&root);
         let mcp = root.join("mcp.json");
         let entry = json!({"command": "npx", "args": ["-y", "brave-search-mcp"], "tokenEnv": "BRAVE_API_KEY"});
@@ -528,18 +743,33 @@ mod tests {
             crate::mcp::save_key("missing", FAKE_TOKEN).unwrap_err(),
             "missing isn't installed, so it has nowhere to keep a key"
         );
-        assert_eq!(crate::mcp::save_key("brave", "  ").unwrap_err(), "No key was typed, so nothing was saved");
+        assert_eq!(
+            crate::mcp::save_key("brave", "  ").unwrap_err(),
+            "No key was typed, so nothing was saved"
+        );
 
-        assert_eq!(crate::mcp::save_key("brave", FAKE_TOKEN).unwrap(), "Saved the key for brave");
+        assert_eq!(
+            crate::mcp::save_key("brave", FAKE_TOKEN).unwrap(),
+            "Saved the key for brave"
+        );
 
         let text = std::fs::read_to_string(&mcp).unwrap();
         assert!(!text.contains(FAKE_TOKEN), "{text}");
         let saved: Value = serde_json::from_str(&text).unwrap();
         assert_eq!(saved["mcpServers"]["brave"]["tokenRef"], json!("brave"));
-        assert_eq!(saved["mcpServers"]["brave"]["tokenEnv"], json!("BRAVE_API_KEY"));
-        assert_eq!(crate::harness::open_connection_token(&root, "brave").as_deref(), Some(FAKE_TOKEN));
+        assert_eq!(
+            saved["mcpServers"]["brave"]["tokenEnv"],
+            json!("BRAVE_API_KEY")
+        );
+        assert_eq!(
+            crate::harness::open_connection_token(&root, "brave").as_deref(),
+            Some(FAKE_TOKEN)
+        );
         let def = &crate::mcp::load_servers()["brave"];
-        assert_eq!((def.token_ref.as_deref(), def.token_env.as_deref()), (Some("brave"), Some("BRAVE_API_KEY")));
+        assert_eq!(
+            (def.token_ref.as_deref(), def.token_env.as_deref()),
+            (Some("brave"), Some("BRAVE_API_KEY"))
+        );
         assert_eq!(
             crate::mcp::install("brave", &entry).unwrap(),
             crate::mcp::Installed::AlreadyThere,

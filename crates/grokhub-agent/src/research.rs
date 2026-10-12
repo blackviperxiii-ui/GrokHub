@@ -54,7 +54,10 @@ mod tests {
         assert!(text.to_ascii_lowercase().contains("plan"), "{text}");
         assert!(text.to_ascii_lowercase().contains("cited"), "{text}");
         assert!(text.contains("cats"), "{text}");
-        assert!(text.contains("<<<UNTRUSTED source=research nonce="), "{text}");
+        assert!(
+            text.contains("<<<UNTRUSTED source=research nonce="),
+            "{text}"
+        );
         assert!(crate::tools::fence::looks_fenced(&text), "{text}");
         let upper = native_deep_research_prompt("/Deep-Research  harbor").unwrap();
         assert!(upper.contains("harbor"), "{upper}");

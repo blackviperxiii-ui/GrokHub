@@ -77,9 +77,19 @@ impl EvalReport {
     }
 
     pub fn summary_lines(&self) -> String {
-        let mut out = format!("Local eval: {}/{} ({:.0}%)\n", self.passed(), self.total(), self.pass_rate() * 100.0);
+        let mut out = format!(
+            "Local eval: {}/{} ({:.0}%)\n",
+            self.passed(),
+            self.total(),
+            self.pass_rate() * 100.0
+        );
         for i in &self.items {
-            out.push_str(&format!("  {}: {} — {}\n", i.name, if i.pass { "pass" } else { "fail" }, i.detail));
+            out.push_str(&format!(
+                "  {}: {} — {}\n",
+                i.name,
+                if i.pass { "pass" } else { "fail" },
+                i.detail
+            ));
         }
         out
     }
@@ -87,20 +97,32 @@ impl EvalReport {
 
 /// Rough token estimate (whitespace words), enough for relative CI checks.
 pub fn estimate_tokens(text: &str) -> u64 {
-    text.split_whitespace().filter(|w| !w.is_empty()).count().max(1) as u64
+    text.split_whitespace()
+        .filter(|w| !w.is_empty())
+        .count()
+        .max(1) as u64
 }
 
 /// Time a streaming chat turn: first-token latency and tokens/s.
-pub fn measure_chat(rt: &dyn LocalRuntime, prompt: &str) -> Result<(u64, f64, u64, String), String> {
+pub fn measure_chat(
+    rt: &dyn LocalRuntime,
+    prompt: &str,
+) -> Result<(u64, f64, u64, String), String> {
     let mut first_ms = 0u64;
     let mut saw_first = false;
     let start = Instant::now();
-    let text = rt.chat_stream(&[ChatMessage { role: "user".into(), content: prompt.into() }], &mut |d| {
-        if !saw_first && !d.is_empty() {
-            first_ms = start.elapsed().as_millis() as u64;
-            saw_first = true;
-        }
-    })?;
+    let text = rt.chat_stream(
+        &[ChatMessage {
+            role: "user".into(),
+            content: prompt.into(),
+        }],
+        &mut |d| {
+            if !saw_first && !d.is_empty() {
+                first_ms = start.elapsed().as_millis() as u64;
+                saw_first = true;
+            }
+        },
+    )?;
     let elapsed = start.elapsed().as_secs_f64().max(1e-6);
     let tokens = estimate_tokens(&text);
     let tps = tokens as f64 / elapsed;
@@ -113,7 +135,12 @@ pub fn measure_chat(rt: &dyn LocalRuntime, prompt: &str) -> Result<(u64, f64, u6
 /// Run the speed bench against an already-ready runtime.
 ///
 /// `load_ms` is measured by the caller (sidecar start or 0 for an in-process fake).
-pub fn run_bench(rt: &dyn LocalRuntime, hw: &Hardware, load_ms: u64, backend: &str) -> Result<BenchReport, String> {
+pub fn run_bench(
+    rt: &dyn LocalRuntime,
+    hw: &Hardware,
+    load_ms: u64,
+    backend: &str,
+) -> Result<BenchReport, String> {
     let (first_token_ms, tokens_per_sec, completion_tokens, _) =
         measure_chat(rt, "Reply with exactly: bench ok")?;
     Ok(BenchReport {
@@ -138,46 +165,83 @@ pub fn run_eval(rt: &dyn LocalRuntime) -> EvalReport {
             items.push(EvalItemResult {
                 name: "chat",
                 pass,
-                detail: if pass { format!("got {} chars", text.len()) } else { "empty reply".into() },
+                detail: if pass {
+                    format!("got {} chars", text.len())
+                } else {
+                    "empty reply".into()
+                },
             });
         }
-        Err(e) => items.push(EvalItemResult { name: "chat", pass: false, detail: e }),
+        Err(e) => items.push(EvalItemResult {
+            name: "chat",
+            pass: false,
+            detail: e,
+        }),
     }
 
     // 2. Summarize
-    match rt.summarize("GrokHub is a native cabin app. It runs on Linux and Windows.", 20) {
+    match rt.summarize(
+        "GrokHub is a native cabin app. It runs on Linux and Windows.",
+        20,
+    ) {
         Ok(v) => {
             let summary = v.get("summary").and_then(Value::as_str).unwrap_or("");
             let pass = !summary.is_empty();
             items.push(EvalItemResult {
                 name: "summarize",
                 pass,
-                detail: if pass { format!("summary len {}", summary.len()) } else { format!("bad json: {v}") },
+                detail: if pass {
+                    format!("summary len {}", summary.len())
+                } else {
+                    format!("bad json: {v}")
+                },
             });
         }
-        Err(e) => items.push(EvalItemResult { name: "summarize", pass: false, detail: e }),
+        Err(e) => items.push(EvalItemResult {
+            name: "summarize",
+            pass: false,
+            detail: e,
+        }),
     }
 
     // 3. Classify
-    match rt.classify("Please delete my account and wipe the disk.", &["routine", "needs_attention", "sensitive"]) {
+    match rt.classify(
+        "Please delete my account and wipe the disk.",
+        &["routine", "needs_attention", "sensitive"],
+    ) {
         Ok(v) => {
             let label = v.get("label").and_then(Value::as_str).unwrap_or("");
             let pass = matches!(label, "routine" | "needs_attention" | "sensitive");
             items.push(EvalItemResult {
                 name: "classify",
                 pass,
-                detail: if pass { format!("label={label}") } else { format!("bad label in {v}") },
+                detail: if pass {
+                    format!("label={label}")
+                } else {
+                    format!("bad label in {v}")
+                },
             });
         }
-        Err(e) => items.push(EvalItemResult { name: "classify", pass: false, detail: e }),
+        Err(e) => items.push(EvalItemResult {
+            name: "classify",
+            pass: false,
+            detail: e,
+        }),
     }
 
     // 4. Two-step tool-shaped turn: classify then act on the label (summarize).
     let step = (|| {
-        let v = rt.classify("Summarize this inbox briefly.", &["routine", "needs_attention", "sensitive"])?;
+        let v = rt.classify(
+            "Summarize this inbox briefly.",
+            &["routine", "needs_attention", "sensitive"],
+        )?;
         let label = v.get("label").and_then(Value::as_str).unwrap_or("routine");
         let s = rt.summarize(&format!("class={label}; body=meeting at 3pm"), 12)?;
-        let summary = s.get("summary").and_then(Value::as_str).unwrap_or("").to_string();
+        let summary = s
+            .get("summary")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
         if summary.is_empty() {
             Err("empty second-step summary".into())
         } else {
@@ -185,8 +249,16 @@ pub fn run_eval(rt: &dyn LocalRuntime) -> EvalReport {
         }
     })();
     match step {
-        Ok(detail) => items.push(EvalItemResult { name: "tool_two_step", pass: true, detail }),
-        Err(e) => items.push(EvalItemResult { name: "tool_two_step", pass: false, detail: e }),
+        Ok(detail) => items.push(EvalItemResult {
+            name: "tool_two_step",
+            pass: true,
+            detail,
+        }),
+        Err(e) => items.push(EvalItemResult {
+            name: "tool_two_step",
+            pass: false,
+            detail: e,
+        }),
     }
 
     EvalReport { items }
@@ -309,7 +381,11 @@ mod tests {
         fn difficulty(&self, _text: &str) -> Result<Value, String> {
             Ok(json!({ "d": 0.3 }))
         }
-        fn chat_stream(&self, _messages: &[ChatMessage], on_delta: &mut dyn FnMut(&str)) -> Result<String, String> {
+        fn chat_stream(
+            &self,
+            _messages: &[ChatMessage],
+            on_delta: &mut dyn FnMut(&str),
+        ) -> Result<String, String> {
             on_delta("bench ");
             on_delta("ok");
             Ok("bench ok".into())
@@ -318,7 +394,12 @@ mod tests {
 
     #[test]
     fn bench_report_schema_and_ci_floors_pass_on_fake() {
-        let hw = Hardware { gpu: "CPU".into(), vram_mb: 0, ram_mb: 8_192, free_disk_mb: 50_000 };
+        let hw = Hardware {
+            gpu: "CPU".into(),
+            vram_mb: 0,
+            ram_mb: 8_192,
+            free_disk_mb: 50_000,
+        };
         let bench = run_bench(&FakeRt, &hw, 12, "fake").expect("bench");
         assert!(bench.tokens_per_sec > 0.0, "{bench:?}");
         assert!(bench.completion_tokens >= 1);
@@ -341,8 +422,14 @@ mod tests {
     #[test]
     fn http_fake_server_meets_ci_floors() {
         let fake = super::super::local_sidecar::fake_server::FakeServer::start(None);
-        let rt = super::super::local_http::HttpLocalRuntime::new(fake.base_url(), fake.token.clone());
-        let hw = Hardware { gpu: String::new(), vram_mb: 0, ram_mb: 4_096, free_disk_mb: 10_000 };
+        let rt =
+            super::super::local_http::HttpLocalRuntime::new(fake.base_url(), fake.token.clone());
+        let hw = Hardware {
+            gpu: String::new(),
+            vram_mb: 0,
+            ram_mb: 4_096,
+            free_disk_mb: 10_000,
+        };
         let bench = run_bench(&rt, &hw, 5, "fake-server").expect("bench");
         let eval = run_eval(&rt);
         assert_eq!(eval.passed(), 4, "{}", eval.summary_lines());
@@ -362,8 +449,14 @@ mod tests {
             backend: "x".into(),
         };
         let eval = EvalReport {
-            items: vec![EvalItemResult { name: "chat", pass: true, detail: "ok".into() }],
+            items: vec![EvalItemResult {
+                name: "chat",
+                pass: true,
+                detail: "ok".into(),
+            }],
         };
-        assert!(check_ci_regression(&bench, &eval).unwrap_err().contains("first_token_ms"));
+        assert!(check_ci_regression(&bench, &eval)
+            .unwrap_err()
+            .contains("first_token_ms"));
     }
 }

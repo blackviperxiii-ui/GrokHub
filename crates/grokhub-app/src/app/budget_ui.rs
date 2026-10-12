@@ -64,7 +64,11 @@ pub(super) fn premium_model(key: &str) -> &str {
 /// How a premium grant reads in Settings and `/privacy`.
 pub(super) fn premium_label(key: &str) -> String {
     let mut label = format!("Use {}", premium_model(key));
-    for (tag, words) in [("+priority", " at priority speed"), ("+us", " on the US endpoint"), ("+agents16", " with 16 agents")] {
+    for (tag, words) in [
+        ("+priority", " at priority speed"),
+        ("+us", " on the US endpoint"),
+        ("+agents16", " with 16 agents"),
+    ] {
         if key.contains(tag) {
             label.push_str(words);
         }
@@ -130,11 +134,25 @@ impl Cabin {
 
     pub(super) fn ask_premium(&mut self, key: &str) {
         let ledger = self.consent().clone();
-        if let GateOutcome::Park { hard: Some(class), .. } = hx::decide(Step::Premium { route_key: key, ledger: &ledger }) {
+        if let GateOutcome::Park {
+            hard: Some(class), ..
+        } = hx::decide(Step::Premium {
+            route_key: key,
+            ledger: &ledger,
+        }) {
             let action = self.premium_action(key);
             let args = serde_json::json!({ "route": key }).to_string();
-            self.write_span(hx::Span::hard_park(&self.trace_id(), PREMIUM_TOOL, &args, class), "route");
-            self.park_hard(super::harness_ui::ParkSource::Premium(key.to_string()), class, "route", PREMIUM_TOOL.into(), action);
+            self.write_span(
+                hx::Span::hard_park(&self.trace_id(), PREMIUM_TOOL, &args, class),
+                "route",
+            );
+            self.park_hard(
+                super::harness_ui::ParkSource::Premium(key.to_string()),
+                class,
+                "route",
+                PREMIUM_TOOL.into(),
+                action,
+            );
         }
     }
 
@@ -142,19 +160,34 @@ impl Cabin {
     fn premium_action(&self, key: &str) -> String {
         let model = premium_model(key);
         let (reg, _) = grokhub_agent::route::live::snapshot(&crate::config::config_dir());
-        let price = reg.get(model).and_then(|r| r.meta.prices.completion).map(usd_per_m);
+        let price = reg
+            .get(model)
+            .and_then(|r| r.meta.prices.completion)
+            .map(usd_per_m);
         let limit = self.cfg.price_ceiling_usd_per_m;
         let what = premium_label(key);
         match price {
-            Some(p) => format!("Let Auto {} (${p:.0} per million, over your ${limit} limit)", what.replacen("Use ", "use ", 1)),
+            Some(p) => format!(
+                "Let Auto {} (${p:.0} per million, over your ${limit} limit)",
+                what.replacen("Use ", "use ", 1)
+            ),
             None => format!("Let Auto {}", what.replacen("Use ", "use ", 1)),
         }
     }
 
     /// The hard money card's Approve click: one revocable grant for exactly this route.
     pub(super) fn grant_premium_click(&mut self, key: &str) {
-        match hx::grant_premium(&crate::config::config_dir(), key, hx::UserClick::from_click()) {
-            Ok(_) => self.status = format!("{} allowed. Revoke it in Settings → Permissions.", premium_label(key)),
+        match hx::grant_premium(
+            &crate::config::config_dir(),
+            key,
+            hx::UserClick::from_click(),
+        ) {
+            Ok(_) => {
+                self.status = format!(
+                    "{} allowed. Revoke it in Settings → Permissions.",
+                    premium_label(key)
+                )
+            }
             Err(e) => self.status = format!("Could not save the grant: {e}"),
         }
         self.harness.consent = None;
@@ -169,7 +202,12 @@ impl Cabin {
                 Err(mpsc::TryRecvError::Disconnected) => {}
             }
         }
-        let due = self.harness.router.budget.last.is_none_or(|t| t.elapsed().as_millis() as u64 >= budget::BUDGET_EVERY_MS);
+        let due = self
+            .harness
+            .router
+            .budget
+            .last
+            .is_none_or(|t| t.elapsed().as_millis() as u64 >= budget::BUDGET_EVERY_MS);
         if !due || self.harness.router.budget.rx.is_some() {
             return;
         }
@@ -180,7 +218,11 @@ impl Cabin {
         self.harness.router.budget.rx = Some(rx);
         std::thread::spawn(move || {
             let reg = load_registry(&dir);
-            let b = Budget::of(&budget::load_week(&dir, &reg, now), reg.entitlement.credential, cap);
+            let b = Budget::of(
+                &budget::load_week(&dir, &reg, now),
+                reg.entitlement.credential,
+                cap,
+            );
             let facts = budget::nudge_facts(&budget::read_records(&dir), now);
             let _ = tx.send((b, facts));
         });
@@ -201,7 +243,11 @@ impl Cabin {
             self.harness.router.budget.card = Some(BudgetCard::Eighty);
             return;
         }
-        let gate = NudgeGate { in_task: self.running, quiet_hours: self.quiet_now(), throttled: self.proactive.room(now) == 0 };
+        let gate = NudgeGate {
+            in_task: self.running,
+            quiet_hours: self.quiet_now(),
+            throttled: self.proactive.room(now) == 0,
+        };
         if budget::nudge_due(&facts, &notes, gate, now) {
             notes.nudge_shown_ms = now;
             notes.save(&dir);
@@ -212,11 +258,37 @@ impl Cabin {
     }
 
     /// The card's words: (eyebrow, title, note, primary, secondary).
-    pub(super) fn budget_card_text(card: &BudgetCard) -> (&'static str, String, &'static str, &'static str, &'static str) {
+    pub(super) fn budget_card_text(
+        card: &BudgetCard,
+    ) -> (
+        &'static str,
+        String,
+        &'static str,
+        &'static str,
+        &'static str,
+    ) {
         match card {
-            BudgetCard::Eighty => (BUDGET_EYEBROW, budget::EIGHTY_CARD.into(), "Settings → Cabin defaults has the cap.", "OK", "Change cap"),
-            BudgetCard::Ask => (BUDGET_EYEBROW, budget::BUDGET_ASK.into(), "Background work stays paused until next week.", "Keep going", "Wait"),
-            BudgetCard::Nudge(text) => (NUDGE_EYEBROW, text.clone(), "Nothing opens until you click.", "Details", "Not now"),
+            BudgetCard::Eighty => (
+                BUDGET_EYEBROW,
+                budget::EIGHTY_CARD.into(),
+                "Settings → Cabin defaults has the cap.",
+                "OK",
+                "Change cap",
+            ),
+            BudgetCard::Ask => (
+                BUDGET_EYEBROW,
+                budget::BUDGET_ASK.into(),
+                "Background work stays paused until next week.",
+                "Keep going",
+                "Wait",
+            ),
+            BudgetCard::Nudge(text) => (
+                NUDGE_EYEBROW,
+                text.clone(),
+                "Nothing opens until you click.",
+                "Details",
+                "Not now",
+            ),
         }
     }
 
@@ -239,10 +311,13 @@ impl Cabin {
                 notes.save(&dir);
                 self.status = "Chats go on this week. Background work waits.".into();
             }
-            (BudgetCard::Ask, false) => self.status = "Chats wait until next week or a higher cap.".into(),
+            (BudgetCard::Ask, false) => {
+                self.status = "Chats wait until next week or a higher cap.".into()
+            }
             (BudgetCard::Nudge(_), true) => {
                 let body = budget::nudge_details(&self.harness.router.budget.facts);
-                self.live_mut().push(("assistant".into(), mark_slash_result(&body)));
+                self.live_mut()
+                    .push(("assistant".into(), mark_slash_result(&body)));
                 self.stamp_current_access();
                 self.persist();
             }
@@ -261,28 +336,51 @@ impl Cabin {
             return;
         };
         let (eyebrow, title, note, primary, secondary) = Self::budget_card_text(&card);
-        let text = super::harness_ui::CardText { eyebrow, title: &title, action: "", note, primary, secondary, hard: false };
+        let text = super::harness_ui::CardText {
+            eyebrow,
+            title: &title,
+            action: "",
+            note,
+            primary,
+            secondary,
+            hard: false,
+        };
         let key = match &card {
             BudgetCard::Eighty => "eighty",
             BudgetCard::Ask => "ask",
             BudgetCard::Nudge(_) => "nudge",
         };
-        if let Some(primary) = super::harness_ui::harness_card(ui, ("budget", key.to_string()), text, running) {
+        if let Some(primary) =
+            super::harness_ui::harness_card(ui, ("budget", key.to_string()), text, running)
+        {
             self.answer_budget_card(primary);
         }
     }
 
     /// Settings → Cabin defaults: the Fast toggle, the weekly cap, the price limit.
     pub(super) fn ui_spend_rows(&mut self, ui: &mut egui::Ui) {
-        let mut changed = crate::cards::settings_toggle(ui, FAST_ROW, FAST_HINT, &mut self.cfg.fast_when_waiting);
+        let mut changed =
+            crate::cards::settings_toggle(ui, FAST_ROW, FAST_HINT, &mut self.cfg.fast_when_waiting);
         let caps: Vec<String> = CAPS.iter().map(|c| cap_label(*c)).collect();
-        if let Some(i) = crate::cards::settings_dropdown(ui, CAP_ROW, CAP_HINT, &cap_label(self.cfg.weekly_spend_cap_usd), &caps) {
-            changed |= CAPS.get(i).is_some_and(|c| std::mem::replace(&mut self.cfg.weekly_spend_cap_usd, *c) != *c);
+        if let Some(i) = crate::cards::settings_dropdown(
+            ui,
+            CAP_ROW,
+            CAP_HINT,
+            &cap_label(self.cfg.weekly_spend_cap_usd),
+            &caps,
+        ) {
+            changed |= CAPS
+                .get(i)
+                .is_some_and(|c| std::mem::replace(&mut self.cfg.weekly_spend_cap_usd, *c) != *c);
         }
         let ceilings: Vec<String> = CEILINGS.iter().map(|c| ceiling_label(*c)).collect();
         let now = ceiling_label(self.cfg.price_ceiling_usd_per_m);
-        if let Some(i) = crate::cards::settings_dropdown(ui, CEILING_ROW, CEILING_HINT, &now, &ceilings) {
-            changed |= CEILINGS.get(i).is_some_and(|c| std::mem::replace(&mut self.cfg.price_ceiling_usd_per_m, *c) != *c);
+        if let Some(i) =
+            crate::cards::settings_dropdown(ui, CEILING_ROW, CEILING_HINT, &now, &ceilings)
+        {
+            changed |= CEILINGS.get(i).is_some_and(|c| {
+                std::mem::replace(&mut self.cfg.price_ceiling_usd_per_m, *c) != *c
+            });
         }
         if changed {
             self.persist_cfg();
@@ -305,10 +403,21 @@ impl Cabin {
             crate::cards::settings_note(ui, PREMIUM_NONE);
         }
         for (id, key, at) in grants {
-            let hint = format!("Allowed {}. Revoke and Auto asks again.", grokhub_core::pulse::ago_label(at, now_ms()));
+            let hint = format!(
+                "Allowed {}. Revoke and Auto asks again.",
+                grokhub_core::pulse::ago_label(at, now_ms())
+            );
             ui.push_id(("premium-grant", id.as_str()), |ui| {
-                if crate::cards::settings_grant_row(ui, &premium_label(&key), &hint, None, crate::cards::GrantPill::Revoke, locked, false, |_| {})
-                    && locked.is_none()
+                if crate::cards::settings_grant_row(
+                    ui,
+                    &premium_label(&key),
+                    &hint,
+                    None,
+                    crate::cards::GrantPill::Revoke,
+                    locked,
+                    false,
+                    |_| {},
+                ) && locked.is_none()
                 {
                     self.revoke_premium(&id, &key);
                 }
@@ -321,7 +430,10 @@ impl Cabin {
         match hx::revoke_grant(&crate::config::config_dir(), id) {
             Ok(_) => {
                 self.harness.router.budget.asked.retain(|k| k != key);
-                self.status = format!("{} revoked. Auto asks again before using it.", premium_label(key));
+                self.status = format!(
+                    "{} revoked. Auto asks again before using it.",
+                    premium_label(key)
+                );
             }
             Err(e) => self.status = format!("Could not revoke: {e}"),
         }
@@ -335,7 +447,8 @@ mod tests {
     use grokhub_agent::harness::HardClass;
 
     fn is_premium_card(class: HardClass, source: &super::super::harness_ui::ParkSource) -> bool {
-        class == HardClass::Money && matches!(source, super::super::harness_ui::ParkSource::Premium(_))
+        class == HardClass::Money
+            && matches!(source, super::super::harness_ui::ParkSource::Premium(_))
     }
 
     fn pinned(label: &str) -> (crate::config::TestConfigDir, std::path::PathBuf) {
@@ -346,10 +459,23 @@ mod tests {
 
     #[test]
     fn premium_labels_name_the_model_and_its_options() {
-        assert_eq!(premium_model("premium:grok-heavy+priority+us"), "grok-heavy");
+        assert_eq!(
+            premium_model("premium:grok-heavy+priority+us"),
+            "grok-heavy"
+        );
         assert_eq!(premium_label("premium:grok-heavy"), "Use grok-heavy");
-        assert_eq!(premium_label("premium:grok-4.7+priority+us+agents16"), "Use grok-4.7 at priority speed on the US endpoint with 16 agents");
-        assert_eq!((cap_label(0), cap_label(25), ceiling_label(15)), ("Off".to_string(), "$25 a week".to_string(), "$15 per million".to_string()));
+        assert_eq!(
+            premium_label("premium:grok-4.7+priority+us+agents16"),
+            "Use grok-4.7 at priority speed on the US endpoint with 16 agents"
+        );
+        assert_eq!(
+            (cap_label(0), cap_label(25), ceiling_label(15)),
+            (
+                "Off".to_string(),
+                "$25 a week".to_string(),
+                "$15 per million".to_string()
+            )
+        );
     }
 
     #[test]
@@ -362,15 +488,25 @@ mod tests {
         assert_eq!(park.class.label(), "Purchase / money");
         // Enter never approves it; Esc denies it.
         assert_eq!(hx::hard_card_key(true, false, false), None);
-        assert_eq!(hx::hard_card_key(false, true, false), Some(hx::HardAnswer::Deny));
+        assert_eq!(
+            hx::hard_card_key(false, true, false),
+            Some(hx::HardAnswer::Deny)
+        );
         // Deny writes nothing.
         app.resolve_hard_park(false, "Viper denied (Esc)");
         assert!(app.consent().premium_grant("premium:grok-heavy").is_none());
         // Approve (a click) writes exactly one grant for exactly this route.
         app.ask_premium("premium:grok-heavy");
         app.resolve_hard_park(true, "");
-        let g = app.consent().premium_grant("premium:grok-heavy").cloned().expect("granted");
-        assert!(app.consent().premium_grant("premium:grok-heavy+priority").is_none());
+        let g = app
+            .consent()
+            .premium_grant("premium:grok-heavy")
+            .cloned()
+            .expect("granted");
+        assert!(app
+            .consent()
+            .premium_grant("premium:grok-heavy+priority")
+            .is_none());
         // Granted: decide lets it through, so no second card.
         app.ask_premium("premium:grok-heavy");
         assert!(app.harness.park.is_none());
@@ -389,7 +525,12 @@ mod tests {
         app.cfg.quiet_start = "00:00".into();
         app.cfg.quiet_end = "00:00".into();
         let now = 1_000 * budget::DAY_MS;
-        let tight = Budget { week: budget::week_of(now), pct: Some(82), cap_usd: 10.0, ..Budget::default() };
+        let tight = Budget {
+            week: budget::week_of(now),
+            pct: Some(82),
+            cap_usd: 10.0,
+            ..Budget::default()
+        };
         app.budget_landed(&tight, NudgeFacts::default(), now);
         assert_eq!(app.harness.router.budget.card, Some(BudgetCard::Eighty));
         let (_, title, _, primary, _) = Cabin::budget_card_text(&BudgetCard::Eighty);
@@ -398,8 +539,17 @@ mod tests {
         app.budget_landed(&tight, NudgeFacts::default(), now + 60_000);
         assert_eq!(app.harness.router.budget.card, None, "once a week");
         // The nudge: thresholds met, nothing running.
-        let facts = NudgeFacts { would_upgrade: 5, fails: 3, last_failed: 3, last_of: 5 };
-        let calm = Budget { week: tight.week, pct: Some(40), ..Budget::default() };
+        let facts = NudgeFacts {
+            would_upgrade: 5,
+            fails: 3,
+            last_failed: 3,
+            last_of: 5,
+        };
+        let calm = Budget {
+            week: tight.week,
+            pct: Some(40),
+            ..Budget::default()
+        };
         app.running = true;
         app.budget_landed(&calm, facts.clone(), now);
         assert_eq!(app.harness.router.budget.card, None, "never during a task");
@@ -418,7 +568,9 @@ mod tests {
         app.cfg.quiet_start = "00:00".into();
         app.cfg.quiet_end = "00:00".into();
         app.budget_landed(&calm, facts.clone(), now);
-        assert!(matches!(&app.harness.router.budget.card, Some(BudgetCard::Nudge(t)) if t.ends_with("Want details?")));
+        assert!(
+            matches!(&app.harness.router.budget.card, Some(BudgetCard::Nudge(t)) if t.ends_with("Want details?"))
+        );
         app.answer_budget_card(false);
         let notes = BudgetNotes::load(&crate::config::config_dir());
         assert_eq!(notes.nudge_shown_ms, now);
@@ -428,7 +580,10 @@ mod tests {
         // At 100% the ask: Keep going lets chat go on this week.
         app.harness.router.budget.card = Some(BudgetCard::Ask);
         app.answer_budget_card(true);
-        assert_eq!(BudgetNotes::load(&crate::config::config_dir()).go_on_week, budget::week_of(now_ms()));
+        assert_eq!(
+            BudgetNotes::load(&crate::config::config_dir()).go_on_week,
+            budget::week_of(now_ms())
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -436,11 +591,24 @@ mod tests {
     fn spend_settings_reach_the_router_and_fast_is_on_by_default() {
         let mut app = Cabin::quiet_for_test();
         assert!(app.cfg.fast_when_waiting);
-        assert_eq!((app.cfg.weekly_spend_cap_usd, app.cfg.price_ceiling_usd_per_m), (0, 15));
+        assert_eq!(
+            (
+                app.cfg.weekly_spend_cap_usd,
+                app.cfg.price_ceiling_usd_per_m
+            ),
+            (0, 15)
+        );
         app.cfg.fast_when_waiting = false;
         app.cfg.weekly_spend_cap_usd = 25;
         app.sync_spend();
-        assert_eq!(spend::spend_settings(), SpendSettings { fast_when_waiting: false, weekly_cap_usd: 25.0, ceiling_usd_per_m: 15.0 });
+        assert_eq!(
+            spend::spend_settings(),
+            SpendSettings {
+                fast_when_waiting: false,
+                weekly_cap_usd: 25.0,
+                ceiling_usd_per_m: 15.0
+            }
+        );
         app.cfg = crate::config::AppConfig::default();
         app.sync_spend();
         assert_eq!(spend::spend_settings(), SpendSettings::default());
@@ -451,8 +619,23 @@ mod tests {
     /// (no `include_str!`), so CRLF checkouts read the same.
     #[test]
     fn no_code_path_opens_a_top_up_or_credits_url() {
-        let crates = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().expect("crates dir").to_path_buf();
-        let words = ["top-up", "topup", "top_up", "credits", "billing", "/subscribe", "/upgrade", "/plans", "/pricing", "auto-top", "autotopup"];
+        let crates = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("crates dir")
+            .to_path_buf();
+        let words = [
+            "top-up",
+            "topup",
+            "top_up",
+            "credits",
+            "billing",
+            "/subscribe",
+            "/upgrade",
+            "/plans",
+            "/pricing",
+            "auto-top",
+            "autotopup",
+        ];
         let mut hits = Vec::new();
         let mut stack = vec![crates.clone()];
         while let Some(dir) = stack.pop() {
@@ -471,7 +654,9 @@ mod tests {
                 let text = std::fs::read_to_string(&path).unwrap_or_default();
                 for line in text.lines() {
                     let l = line.to_ascii_lowercase();
-                    if (l.contains("http://") || l.contains("https://")) && words.iter().any(|w| l.contains(w)) {
+                    if (l.contains("http://") || l.contains("https://"))
+                        && words.iter().any(|w| l.contains(w))
+                    {
                         hits.push(format!("{}: {}", path.display(), line.trim()));
                     }
                 }

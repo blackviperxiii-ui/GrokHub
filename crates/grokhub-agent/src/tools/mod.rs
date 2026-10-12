@@ -17,6 +17,8 @@ pub(crate) mod shell;
 mod web_fetch;
 mod write;
 
+pub use web_fetch::public_only_resolve;
+
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
@@ -104,7 +106,11 @@ pub fn schemas_for(gate: &Gate) -> Vec<Value> {
     tools.push(control::scheduler_create_schema());
     tools.push(control::scheduler_delete_schema());
     tools.push(connections::delete_schema());
-    let desk = if gate.desktop { desktop::schemas() } else { Vec::new() };
+    let desk = if gate.desktop {
+        desktop::schemas()
+    } else {
+        Vec::new()
+    };
     let native = desk.len();
     tools.extend(desk);
     tools.extend(crate::self_manage::native_schemas());
@@ -198,7 +204,10 @@ pub fn desk_flags(name: &str, gate: &Gate, desktop: Option<&dyn DesktopOps>) -> 
     }
     let desktop = desktop?;
     if desktop.halted() {
-        return Some(DeskFlags { halted: true, locked: false });
+        return Some(DeskFlags {
+            halted: true,
+            locked: false,
+        });
     }
     Some(DeskFlags {
         halted: false,
@@ -263,7 +272,10 @@ pub fn confine(root: &Path, raw: &str) -> Result<PathBuf, String> {
         root_c.join(path)
     };
     let rel = if joined.starts_with(&root_c) {
-        joined.strip_prefix(&root_c).unwrap_or(Path::new("")).to_path_buf()
+        joined
+            .strip_prefix(&root_c)
+            .unwrap_or(Path::new(""))
+            .to_path_buf()
     } else if path.is_absolute() {
         return Err("path escapes the workspace".into());
     } else {
@@ -331,7 +343,11 @@ pub(crate) fn install_network(bearer: &str, session: &str) -> ports::Guard {
 }
 
 pub fn str_field(v: &Value, key: &str) -> String {
-    v.get(key).and_then(|x| x.as_str()).unwrap_or("").trim().to_string()
+    v.get(key)
+        .and_then(|x| x.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string()
 }
 
 /// Path-touching tools that may surface nested folder rules.
@@ -366,7 +382,9 @@ pub(crate) fn tool_path_arg(name: &str, args: &Value) -> Option<String> {
 }
 
 pub fn u32_field(v: &Value, key: &str) -> Option<u32> {
-    v.get(key).and_then(|x| x.as_u64()).map(|n| n.min(u64::from(u32::MAX)) as u32)
+    v.get(key)
+        .and_then(|x| x.as_u64())
+        .map(|n| n.min(u64::from(u32::MAX)) as u32)
 }
 
 #[cfg(test)]
@@ -438,16 +456,29 @@ mod tests {
     fn schemas_for_has_no_duplicate_names() {
         for readonly_session in [false, true] {
             for desktop in [false, true] {
-                let gate = Gate { mode: gate::PermMode::Always, readonly_session, attended: true, desktop };
+                let gate = Gate {
+                    mode: gate::PermMode::Always,
+                    readonly_session,
+                    attended: true,
+                    desktop,
+                };
                 let tools = schemas_for(&gate);
                 let mut seen = std::collections::BTreeSet::new();
                 for tool in &tools {
                     let name = tool["name"].as_str().unwrap_or_default();
-                    assert!(seen.insert(name), "duplicate tool {name} (readonly={readonly_session}, desktop={desktop})");
+                    assert!(
+                        seen.insert(name),
+                        "duplicate tool {name} (readonly={readonly_session}, desktop={desktop})"
+                    );
                 }
             }
         }
-        let full = schemas_for(&Gate { mode: gate::PermMode::Always, readonly_session: false, attended: true, desktop: false });
+        let full = schemas_for(&Gate {
+            mode: gate::PermMode::Always,
+            readonly_session: false,
+            attended: true,
+            desktop: false,
+        });
         let count = |n: &str| full.iter().filter(|t| t["name"] == n).count();
         assert_eq!(count("connection_add"), 1);
         assert_eq!(count("connection_disable"), 1);
@@ -463,12 +494,23 @@ mod tests {
         assert!(out.failed);
         assert!(out.text.contains(READ_ONLY_PHASE));
         assert!(!dir.join("x.txt").exists());
-        for name in ["edit", "search_replace", "shell", "bash", "run_terminal_command"] {
+        for name in [
+            "edit",
+            "search_replace",
+            "shell",
+            "bash",
+            "run_terminal_command",
+        ] {
             let out = execute(&dir, name, "{}");
             assert!(out.text.contains(READ_ONLY_PHASE), "{name}");
         }
         assert!(confine(&dir, "../outside").is_err());
-        assert!(confine(&dir, "/tmp").is_err() || confine(&dir, "/tmp").unwrap().starts_with(dir.canonicalize().unwrap()));
+        assert!(
+            confine(&dir, "/tmp").is_err()
+                || confine(&dir, "/tmp")
+                    .unwrap()
+                    .starts_with(dir.canonicalize().unwrap())
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

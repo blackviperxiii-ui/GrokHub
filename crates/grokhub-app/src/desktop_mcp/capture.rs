@@ -11,8 +11,9 @@ use std::time::Duration;
 
 use grokhub_core::desktop_mcp::{
     capture_failed_note, capture_route_label, capture_route_order, crop_rgba, monitor_crop_rect,
-    monitor_index, spectacle_argv, spectacle_help_supports_screen, union_monitor, wlroots_capture_order,
-    CaptureRouteId, CapturedShot, MonitorGeom, ShotGeom, CAPTURE_FAILED_HEAD, CAPTURE_PASSES,
+    monitor_index, spectacle_argv, spectacle_help_supports_screen, union_monitor,
+    wlroots_capture_order, CaptureRouteId, CapturedShot, MonitorGeom, ShotGeom,
+    CAPTURE_FAILED_HEAD, CAPTURE_PASSES,
 };
 
 pub(crate) trait ShotRoute: Send {
@@ -74,20 +75,40 @@ impl ShotChain {
         let exe = std::env::current_exe()
             .and_then(|path| path.canonicalize())
             .unwrap_or_else(|_| PathBuf::from("/usr/bin/grokhub"));
-        Self { routes, active: None, kwin_refused: false, exe }
+        Self {
+            routes,
+            active: None,
+            kwin_refused: false,
+            exe,
+        }
     }
 
     /// wlroots: grim, then the Screenshot portal.
     pub(crate) fn wlroots(grim: Box<dyn ShotRoute>) -> Self {
-        let routes: Vec<(CaptureRouteId, Box<dyn ShotRoute>)> =
-            vec![(CaptureRouteId::Grim, grim), (CaptureRouteId::PortalScreenshot, Box::new(PortalShotRoute))];
-        debug_assert_eq!(routes.iter().map(|(id, _)| *id).collect::<Vec<_>>(), wlroots_capture_order());
-        Self { routes, active: None, kwin_refused: false, exe: PathBuf::from("grokhub") }
+        let routes: Vec<(CaptureRouteId, Box<dyn ShotRoute>)> = vec![
+            (CaptureRouteId::Grim, grim),
+            (CaptureRouteId::PortalScreenshot, Box::new(PortalShotRoute)),
+        ];
+        debug_assert_eq!(
+            routes.iter().map(|(id, _)| *id).collect::<Vec<_>>(),
+            wlroots_capture_order()
+        );
+        Self {
+            routes,
+            active: None,
+            kwin_refused: false,
+            exe: PathBuf::from("grokhub"),
+        }
     }
 
     #[cfg(test)]
     pub(crate) fn from_routes(routes: Vec<(CaptureRouteId, Box<dyn ShotRoute>)>) -> Self {
-        Self { routes, active: None, kwin_refused: false, exe: PathBuf::from("/usr/bin/grokhub") }
+        Self {
+            routes,
+            active: None,
+            kwin_refused: false,
+            exe: PathBuf::from("/usr/bin/grokhub"),
+        }
     }
 
     #[cfg(test)]
@@ -95,7 +116,11 @@ impl ShotChain {
         self.active.map(capture_route_label)
     }
 
-    pub(crate) fn capture(&mut self, monitor: &str, monitors: &[MonitorGeom]) -> Result<CapturedShot, String> {
+    pub(crate) fn capture(
+        &mut self,
+        monitor: &str,
+        monitors: &[MonitorGeom],
+    ) -> Result<CapturedShot, String> {
         let mut tries = vec![0usize; self.routes.len()];
         let mut failures: Vec<(CaptureRouteId, String)> = Vec::new();
         for pass in 0..=CAPTURE_PASSES {
@@ -103,7 +128,11 @@ impl ShotChain {
                 let id = *id;
                 // Pass 0 is the backend that worked last; then every backend
                 // in order until each has had its tries.
-                let turn = if pass == 0 { self.active == Some(id) } else { *tried < pass };
+                let turn = if pass == 0 {
+                    self.active == Some(id)
+                } else {
+                    *tried < pass
+                };
                 if !turn || (id == CaptureRouteId::ScreenShot2 && self.kwin_refused) {
                     continue;
                 }
@@ -150,7 +179,15 @@ impl ShotRoute for KwinRoute {
                 .cloned()
                 .ok_or_else(|| format!("No monitor \"{monitor}\"."))?;
             let (rgba, meta) = super::kwin_shot::capture(Some(&mon.name))?;
-            return shot_from(&mon.id, mon.x, mon.y, meta.scale, meta.width, meta.height, &rgba);
+            return shot_from(
+                &mon.id,
+                mon.x,
+                mon.y,
+                meta.scale,
+                meta.width,
+                meta.height,
+                &rgba,
+            );
         }
         let (rgba, meta) = super::kwin_shot::capture(None)?;
         let origin = union_monitor(monitors);
@@ -195,9 +232,18 @@ impl ShotRoute for SpectacleRoute {
                 .find(|item| item.id == monitor || item.name == monitor)
                 .cloned()
                 .ok_or_else(|| format!("No monitor \"{monitor}\"."))?;
-            return shot_from(&mon.id, mon.x, mon.y, mon.scale_factor, width, height, &rgba);
+            return shot_from(
+                &mon.id,
+                mon.x,
+                mon.y,
+                mon.scale_factor,
+                width,
+                height,
+                &rgba,
+            );
         }
-        let desktop = union_monitor(monitors).ok_or_else(|| "No monitors for spectacle.".to_string())?;
+        let desktop =
+            union_monitor(monitors).ok_or_else(|| "No monitors for spectacle.".to_string())?;
         if monitor == "all" {
             return shot_from(
                 "all",
@@ -335,7 +381,10 @@ fn shot_from(
 
 fn command_text(bin: &str, args: &[String]) -> String {
     match run_bin(bin, args, 3000) {
-        Ok(out) => String::from_utf8_lossy(&out.stdout).into_owned() + &String::from_utf8_lossy(&out.stderr),
+        Ok(out) => {
+            String::from_utf8_lossy(&out.stdout).into_owned()
+                + &String::from_utf8_lossy(&out.stderr)
+        }
         Err(err) => err,
     }
 }
@@ -397,15 +446,29 @@ mod tests {
     }
 
     impl ShotRoute for Refuse {
-        fn capture(&mut self, _monitor: &str, _monitors: &[MonitorGeom]) -> Result<CapturedShot, String> {
-            self.log.lock().unwrap_or_else(|err| err.into_inner()).push("kwin");
+        fn capture(
+            &mut self,
+            _monitor: &str,
+            _monitors: &[MonitorGeom],
+        ) -> Result<CapturedShot, String> {
+            self.log
+                .lock()
+                .unwrap_or_else(|err| err.into_inner())
+                .push("kwin");
             Err("ScreenShot2: org.kde.KWin.ScreenShot2.Error.NoAuthorized: The process is not authorized to take a screenshot".into())
         }
     }
 
     impl ShotRoute for Script {
-        fn capture(&mut self, _monitor: &str, _monitors: &[MonitorGeom]) -> Result<CapturedShot, String> {
-            self.log.lock().unwrap_or_else(|err| err.into_inner()).push(self.name);
+        fn capture(
+            &mut self,
+            _monitor: &str,
+            _monitors: &[MonitorGeom],
+        ) -> Result<CapturedShot, String> {
+            self.log
+                .lock()
+                .unwrap_or_else(|err| err.into_inner())
+                .push(self.name);
             if self.fail {
                 Err(format!("{} failed", self.name))
             } else {
@@ -431,9 +494,30 @@ mod tests {
     fn capture_fallback_order_when_each_route_fails() {
         let log = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let mut chain = ShotChain::from_routes(vec![
-            (CaptureRouteId::ScreenShot2, Box::new(Script { name: "kwin", fail: true, log: log.clone() })),
-            (CaptureRouteId::Spectacle, Box::new(Script { name: "spectacle", fail: true, log: log.clone() })),
-            (CaptureRouteId::PortalScreenshot, Box::new(Script { name: "portal", fail: false, log: log.clone() })),
+            (
+                CaptureRouteId::ScreenShot2,
+                Box::new(Script {
+                    name: "kwin",
+                    fail: true,
+                    log: log.clone(),
+                }),
+            ),
+            (
+                CaptureRouteId::Spectacle,
+                Box::new(Script {
+                    name: "spectacle",
+                    fail: true,
+                    log: log.clone(),
+                }),
+            ),
+            (
+                CaptureRouteId::PortalScreenshot,
+                Box::new(Script {
+                    name: "portal",
+                    fail: false,
+                    log: log.clone(),
+                }),
+            ),
         ]);
         let shot = chain.capture("all", &[]).unwrap();
         assert_eq!(shot.geom.id, "portal");
@@ -449,9 +533,26 @@ mod tests {
     fn kwin_refused_once_is_not_asked_again_and_the_error_names_the_fix() {
         let log = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let mut chain = ShotChain::from_routes(vec![
-            (CaptureRouteId::ScreenShot2, Box::new(Refuse { log: log.clone() })),
-            (CaptureRouteId::Spectacle, Box::new(Script { name: "spectacle", fail: true, log: log.clone() })),
-            (CaptureRouteId::PortalScreenshot, Box::new(Script { name: "portal", fail: true, log: log.clone() })),
+            (
+                CaptureRouteId::ScreenShot2,
+                Box::new(Refuse { log: log.clone() }),
+            ),
+            (
+                CaptureRouteId::Spectacle,
+                Box::new(Script {
+                    name: "spectacle",
+                    fail: true,
+                    log: log.clone(),
+                }),
+            ),
+            (
+                CaptureRouteId::PortalScreenshot,
+                Box::new(Script {
+                    name: "portal",
+                    fail: true,
+                    log: log.clone(),
+                }),
+            ),
         ]);
         let first = chain.capture("all", &[]).unwrap_err();
         let want = "Can't capture the screen: KDE refused the screenshot (KWin ScreenShot2: NoAuthorized), and Spectacle and the \
@@ -462,7 +563,11 @@ mod tests {
                     another screenshot until then.";
         assert_eq!(first, want);
         let seen = log.lock().unwrap_or_else(|err| err.into_inner()).clone();
-        assert_eq!(seen, vec!["kwin", "spectacle", "portal", "spectacle", "portal"], "two rounds, KWin asked once");
+        assert_eq!(
+            seen,
+            vec!["kwin", "spectacle", "portal", "spectacle", "portal"],
+            "two rounds, KWin asked once"
+        );
         let second = chain.capture("all", &[]).unwrap_err();
         assert_eq!(second, want);
         let seen = log.lock().unwrap_or_else(|err| err.into_inner()).clone();
@@ -474,9 +579,26 @@ mod tests {
     fn kwin_refused_then_portal_still_captures_without_asking_kwin() {
         let log = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let mut chain = ShotChain::from_routes(vec![
-            (CaptureRouteId::ScreenShot2, Box::new(Refuse { log: log.clone() })),
-            (CaptureRouteId::Spectacle, Box::new(Script { name: "spectacle", fail: true, log: log.clone() })),
-            (CaptureRouteId::PortalScreenshot, Box::new(Script { name: "portal", fail: false, log: log.clone() })),
+            (
+                CaptureRouteId::ScreenShot2,
+                Box::new(Refuse { log: log.clone() }),
+            ),
+            (
+                CaptureRouteId::Spectacle,
+                Box::new(Script {
+                    name: "spectacle",
+                    fail: true,
+                    log: log.clone(),
+                }),
+            ),
+            (
+                CaptureRouteId::PortalScreenshot,
+                Box::new(Script {
+                    name: "portal",
+                    fail: false,
+                    log: log.clone(),
+                }),
+            ),
         ]);
         assert_eq!(chain.capture("all", &[]).unwrap().geom.id, "portal");
         assert_eq!(chain.label(), Some("portal Screenshot"));
@@ -492,13 +614,25 @@ mod tests {
     }
 
     impl ShotRoute for Flaky {
-        fn capture(&mut self, monitor: &str, monitors: &[MonitorGeom]) -> Result<CapturedShot, String> {
+        fn capture(
+            &mut self,
+            monitor: &str,
+            monitors: &[MonitorGeom],
+        ) -> Result<CapturedShot, String> {
             if self.ok == 0 {
-                self.log.lock().unwrap_or_else(|err| err.into_inner()).push(self.name);
+                self.log
+                    .lock()
+                    .unwrap_or_else(|err| err.into_inner())
+                    .push(self.name);
                 return Err(format!("{} timed out", self.name));
             }
             self.ok -= 1;
-            Script { name: self.name, fail: false, log: self.log.clone() }.capture(monitor, monitors)
+            Script {
+                name: self.name,
+                fail: false,
+                log: self.log.clone(),
+            }
+            .capture(monitor, monitors)
         }
     }
 
@@ -506,9 +640,30 @@ mod tests {
     fn a_backend_that_stops_working_falls_back_and_the_new_one_is_remembered() {
         let log = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let mut chain = ShotChain::from_routes(vec![
-            (CaptureRouteId::ScreenShot2, Box::new(Flaky { name: "kwin", ok: 1, log: log.clone() })),
-            (CaptureRouteId::Spectacle, Box::new(Script { name: "spectacle", fail: true, log: log.clone() })),
-            (CaptureRouteId::PortalScreenshot, Box::new(Script { name: "portal", fail: false, log: log.clone() })),
+            (
+                CaptureRouteId::ScreenShot2,
+                Box::new(Flaky {
+                    name: "kwin",
+                    ok: 1,
+                    log: log.clone(),
+                }),
+            ),
+            (
+                CaptureRouteId::Spectacle,
+                Box::new(Script {
+                    name: "spectacle",
+                    fail: true,
+                    log: log.clone(),
+                }),
+            ),
+            (
+                CaptureRouteId::PortalScreenshot,
+                Box::new(Script {
+                    name: "portal",
+                    fail: false,
+                    log: log.clone(),
+                }),
+            ),
         ]);
         assert_eq!(chain.capture("all", &[]).unwrap().geom.id, "kwin");
         assert_eq!(chain.label(), Some("KWin ScreenShot2"));
@@ -517,15 +672,33 @@ mod tests {
         assert_eq!(chain.label(), Some("portal Screenshot"));
         chain.capture("all", &[]).unwrap();
         let seen = log.lock().unwrap_or_else(|err| err.into_inner()).clone();
-        assert_eq!(seen, vec!["kwin", "kwin", "spectacle", "portal", "portal"], "the failed one is not asked twice in a row");
+        assert_eq!(
+            seen,
+            vec!["kwin", "kwin", "spectacle", "portal", "portal"],
+            "the failed one is not asked twice in a row"
+        );
     }
 
     #[test]
     fn every_backend_failing_twice_gives_one_error_naming_each() {
         let log = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let mut chain = ShotChain::from_routes(vec![
-            (CaptureRouteId::Grim, Box::new(Script { name: "grim", fail: true, log: log.clone() })),
-            (CaptureRouteId::PortalScreenshot, Box::new(Flaky { name: "portal", ok: 0, log: log.clone() })),
+            (
+                CaptureRouteId::Grim,
+                Box::new(Script {
+                    name: "grim",
+                    fail: true,
+                    log: log.clone(),
+                }),
+            ),
+            (
+                CaptureRouteId::PortalScreenshot,
+                Box::new(Flaky {
+                    name: "portal",
+                    ok: 0,
+                    log: log.clone(),
+                }),
+            ),
         ]);
         assert_eq!(
             chain.capture("all", &[]).unwrap_err(),
@@ -548,7 +721,10 @@ mod tests {
             PathBuf::from("/home/user/.local/share/applications/grokhub.desktop")
         );
         assert_eq!(
-            desktop_entry_for(Path::new("/home/user/GrokHub/target/release/grokhub"), Some(home)),
+            desktop_entry_for(
+                Path::new("/home/user/GrokHub/target/release/grokhub"),
+                Some(home)
+            ),
             PathBuf::from("/home/user/.local/share/applications/grokhub.desktop")
         );
         assert_eq!(

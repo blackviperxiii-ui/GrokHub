@@ -66,7 +66,11 @@ fn outline(text: &str, markdown: bool) -> (Option<String>, Vec<String>) {
             }
         }
     }
-    let title = if headings.is_empty() { first_line } else { Some(headings.remove(0)) };
+    let title = if headings.is_empty() {
+        first_line
+    } else {
+        Some(headings.remove(0))
+    };
     headings.truncate(HEADINGS_MAX);
     (title, headings)
 }
@@ -95,9 +99,16 @@ pub fn index_folder(fs: &dyn IndexFs, root: &Path) -> FolderScan {
                 EntryKind::Dir => queue.push_back(e.path),
                 EntryKind::File => {
                     let rel = e.path.strip_prefix(root).unwrap_or(&e.path);
-                    let rel: Vec<String> = rel.components().map(|c| c.as_os_str().to_string_lossy().into_owned()).collect();
+                    let rel: Vec<String> = rel
+                        .components()
+                        .map(|c| c.as_os_str().to_string_lossy().into_owned())
+                        .collect();
                     let rel = rel.join("/");
-                    let mut line = format!("File {rel} · {} · modified {}", size_label(e.len), date_of(e.modified_ms));
+                    let mut line = format!(
+                        "File {rel} · {} · modified {}",
+                        size_label(e.len),
+                        date_of(e.modified_ms)
+                    );
                     let ext = Path::new(&e.name)
                         .extension()
                         .and_then(|x| x.to_str())
@@ -106,7 +117,8 @@ pub fn index_folder(fs: &dyn IndexFs, root: &Path) -> FolderScan {
                     if TEXT_EXTS.contains(&ext.as_str()) && e.len <= TEXT_CAP {
                         if let Ok(bytes) = fs.read_head(&e.path, TEXT_CAP) {
                             let text = String::from_utf8_lossy(&bytes);
-                            let (title, headings) = outline(&text, matches!(ext.as_str(), "md" | "markdown"));
+                            let (title, headings) =
+                                outline(&text, matches!(ext.as_str(), "md" | "markdown"));
                             if let Some(title) = title {
                                 line.push_str(&format!(" · title: {title}"));
                             }
@@ -115,7 +127,11 @@ pub fn index_folder(fs: &dyn IndexFs, root: &Path) -> FolderScan {
                             }
                         }
                     }
-                    scan.facts.push(Fact { item: rel, line, sensitivity: Sensitivity::Personal });
+                    scan.facts.push(Fact {
+                        item: rel,
+                        line,
+                        sensitivity: Sensitivity::Personal,
+                    });
                 }
                 // Symlinks are never followed; sockets and devices are skipped.
                 EntryKind::Symlink | EntryKind::Other => {}
@@ -132,9 +148,21 @@ mod tests {
     #[test]
     fn outline_reads_markdown_headings_and_plain_first_lines() {
         let md = "\n# Q3 plan\n\nIntro\n## Budget\n### Hiring\n";
-        assert_eq!(outline(md, true), (Some("Q3 plan".into()), vec!["Budget".into(), "Hiring".into()]));
-        assert_eq!(outline("  \nGroceries\nmilk\n", false), (Some("Groceries".into()), vec![]));
-        assert_eq!(outline("# not a heading in txt\n", false), (Some("# not a heading in txt".into()), vec![]));
+        assert_eq!(
+            outline(md, true),
+            (
+                Some("Q3 plan".into()),
+                vec!["Budget".into(), "Hiring".into()]
+            )
+        );
+        assert_eq!(
+            outline("  \nGroceries\nmilk\n", false),
+            (Some("Groceries".into()), vec![])
+        );
+        assert_eq!(
+            outline("# not a heading in txt\n", false),
+            (Some("# not a heading in txt".into()), vec![])
+        );
         assert_eq!(outline("", true), (None, vec![]));
         assert_eq!(size_label(512), "512 B");
         assert_eq!(size_label(4097), "5 KB");

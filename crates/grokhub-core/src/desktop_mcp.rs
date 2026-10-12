@@ -28,7 +28,8 @@ pub const CABIN_CU_SERVERS: &[&str] = &[DESKTOP_MCP_SERVER, CUA_MCP_SERVER];
 const PREFERRED_PROTOCOL: &str = "2025-06-18";
 const PROTOCOLS: &[&str] = &["2025-06-18", "2025-03-26", "2024-11-05"];
 
-pub const OFF_MSG: &str = "Desktop control is off. Turn on Settings → Let Grok control the desktop.";
+pub const OFF_MSG: &str =
+    "Desktop control is off. Turn on Settings → Let Grok control the desktop.";
 pub const HALT_MSG: &str =
     "Desktop control was halted (Ctrl+Alt+H). Open GrokHub again to use the screen.";
 pub const LOCK_MSG: &str = "The lock screen is up. Unlock this computer, then try again.";
@@ -38,7 +39,8 @@ const DRAG_STEPS: i32 = 8;
 /// What a backend says when it cannot open, focus, or list windows here.
 pub const APPS_MSG: &str = "Opening and focusing apps is not available on this desktop.";
 /// What a backend says when it cannot read or change a window's size and place.
-pub const GEOMETRY_MSG: &str = "Reading or changing window size and position is not available on this desktop.";
+pub const GEOMETRY_MSG: &str =
+    "Reading or changing window size and position is not available on this desktop.";
 /// Largest window side `set_window_geometry` takes, in pixels.
 pub const WINDOW_SIDE_MAX: i64 = 16_384;
 /// What a backend says when it has no trash or Recycle Bin route.
@@ -349,7 +351,9 @@ fn parse_key_token(token: &str) -> Result<(KeyName, bool), String> {
         }
     }
     let mut chars = token.chars();
-    let ch = chars.next().ok_or_else(|| format!("Unknown key \"{token}\"."))?;
+    let ch = chars
+        .next()
+        .ok_or_else(|| format!("Unknown key \"{token}\"."))?;
     if chars.next().is_some() {
         return Err(format!("Unknown key \"{token}\"."));
     }
@@ -481,7 +485,9 @@ pub fn app_id(raw: &str) -> Result<String, String> {
     let ok = !id.is_empty()
         && id.len() <= 128
         && !id.starts_with(['-', '.'])
-        && id.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'));
+        && id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'));
     if ok {
         Ok(id.to_string())
     } else {
@@ -556,7 +562,11 @@ impl<B: DesktopBackend> DesktopServer<B> {
                 };
             }
             return RpcOutcome {
-                reply: Some(rpc_error(id.unwrap_or(Value::Null), -32602, "Invalid params")),
+                reply: Some(rpc_error(
+                    id.unwrap_or(Value::Null),
+                    -32602,
+                    "Invalid params",
+                )),
                 exit: false,
             };
         };
@@ -695,7 +705,11 @@ impl<B: DesktopBackend> DesktopServer<B> {
     fn tool_screenshot(&mut self, args: &Value) -> Result<Value, String> {
         let which = monitor_arg(args);
         let shot = self.backend.screenshot(&which)?;
-        let key = if which.is_empty() { "all" } else { which.as_str() };
+        let key = if which.is_empty() {
+            "all"
+        } else {
+            which.as_str()
+        };
         self.shots.insert(key.to_string(), shot.geom.clone());
         if shot.geom.id != key {
             self.shots.insert(shot.geom.id.clone(), shot.geom.clone());
@@ -729,7 +743,10 @@ impl<B: DesktopBackend> DesktopServer<B> {
     fn tool_click(&mut self, args: &Value) -> Result<Value, String> {
         let (x, y) = require_xy(args, "x", "y")?;
         let button = button_arg(args)?;
-        let double = args.get("double").and_then(|v| v.as_bool()).unwrap_or(false);
+        let double = args
+            .get("double")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
         let which = monitor_arg(args);
         let geom = self.shot_for(&which)?;
         let (sx, sy) = map_screenshot_point(&geom, x, y);
@@ -851,7 +868,10 @@ impl<B: DesktopBackend> DesktopServer<B> {
         let title = title_arg(args, "set_window_geometry")?;
         let geom = window_geom_arg(args)?;
         let got = self.backend.set_window_geometry(title, &geom)?;
-        Ok(text_ok(&format!("moved {got} to {}x{} at {},{}", geom.width, geom.height, geom.x, geom.y)))
+        Ok(text_ok(&format!(
+            "moved {got} to {}x{} at {},{}",
+            geom.width, geom.height, geom.x, geom.y
+        )))
     }
 
     fn tool_watch_path(&mut self, args: &Value) -> Result<Value, String> {
@@ -860,7 +880,11 @@ impl<B: DesktopBackend> DesktopServer<B> {
             return Err("watch_path needs path.".into());
         }
         let w = self.watches.watch(path)?;
-        let more = if w.truncated { format!(" (only the first {})", crate::file_watch::WATCH_ENTRIES_MAX) } else { String::new() };
+        let more = if w.truncated {
+            format!(" (only the first {})", crate::file_watch::WATCH_ENTRIES_MAX)
+        } else {
+            String::new()
+        };
         Ok(json!({
             "content": [{ "type": "text", "text": format!("watching {} as {} ({} entries{more}); call watch_events with this id", w.path.display(), w.id, w.entries) }],
             "structuredContent": { "id": w.id, "path": w.path.display().to_string(), "entries": w.entries, "truncated": w.truncated },
@@ -878,7 +902,11 @@ impl<B: DesktopBackend> DesktopServer<B> {
         let text = if events.is_empty() {
             "no changes since the last look".to_string()
         } else {
-            events.iter().map(|e| format!("{} {}", e.kind.as_str(), e.path.display())).collect::<Vec<_>>().join("\n")
+            events
+                .iter()
+                .map(|e| format!("{} {}", e.kind.as_str(), e.path.display()))
+                .collect::<Vec<_>>()
+                .join("\n")
         };
         Ok(json!({
             "content": [{ "type": "text", "text": text }],
@@ -906,7 +934,11 @@ impl<B: DesktopBackend> DesktopServer<B> {
         }
         for p in &paths {
             let meta = std::fs::symlink_metadata(p).map_err(|e| format!("{}: {e}", p.display()))?;
-            let gone = if meta.is_dir() { std::fs::remove_dir(p) } else { std::fs::remove_file(p) };
+            let gone = if meta.is_dir() {
+                std::fs::remove_dir(p)
+            } else {
+                std::fs::remove_file(p)
+            };
             gone.map_err(|e| format!("{}: {e}", p.display()))?;
         }
         Ok(text_ok(&format!("deleted {n} {noun}")))
@@ -936,7 +968,18 @@ impl<B: DesktopBackend> DesktopServer<B> {
 }
 
 fn is_input_tool(name: &str) -> bool {
-    matches!(name, "click" | "move" | "drag" | "scroll" | "type" | "key" | "open_app" | "focus_window" | "set_window_geometry")
+    matches!(
+        name,
+        "click"
+            | "move"
+            | "drag"
+            | "scroll"
+            | "type"
+            | "key"
+            | "open_app"
+            | "focus_window"
+            | "set_window_geometry"
+    )
 }
 
 fn title_arg<'a>(args: &'a Value, tool: &str) -> Result<&'a str, String> {
@@ -951,7 +994,10 @@ fn title_arg<'a>(args: &'a Value, tool: &str) -> Result<&'a str, String> {
 fn window_geom_arg(args: &Value) -> Result<WindowGeom, String> {
     let num = |k: &str| {
         args.get(k)
-            .and_then(|v| v.as_i64().or_else(|| v.as_f64().filter(|f| f.fract() == 0.0).map(|f| f as i64)))
+            .and_then(|v| {
+                v.as_i64()
+                    .or_else(|| v.as_f64().filter(|f| f.fract() == 0.0).map(|f| f as i64))
+            })
             .ok_or_else(|| format!("set_window_geometry needs a whole-number {k}."))
     };
     let (x, y, w, h) = (num("x")?, num("y")?, num("width")?, num("height")?);
@@ -963,7 +1009,12 @@ fn window_geom_arg(args: &Value) -> Result<WindowGeom, String> {
         }
     };
     let place = |n: i64, k: &str| i32::try_from(n).map_err(|_| format!("{k} is off the desktop."));
-    Ok(WindowGeom { x: place(x, "x")?, y: place(y, "y")?, width: side(w, "width")?, height: side(h, "height")? })
+    Ok(WindowGeom {
+        x: place(x, "x")?,
+        y: place(y, "y")?,
+        width: side(w, "width")?,
+        height: side(h, "height")?,
+    })
 }
 
 /// `delete_files` paths: 1 to [`DELETE_FILES_CAP`], absolute, no repeats, each
@@ -978,7 +1029,9 @@ fn delete_paths(args: &Value) -> Result<Vec<std::path::PathBuf>, String> {
     }
     let mut out: Vec<std::path::PathBuf> = Vec::with_capacity(list.len());
     for v in list {
-        let raw = v.as_str().ok_or_else(|| "paths must be strings.".to_string())?;
+        let raw = v
+            .as_str()
+            .ok_or_else(|| "paths must be strings.".to_string())?;
         let p = std::path::PathBuf::from(raw);
         if !p.is_absolute() {
             return Err(format!("{raw}: use the full path."));
@@ -987,8 +1040,15 @@ fn delete_paths(args: &Value) -> Result<Vec<std::path::PathBuf>, String> {
             return Err(format!("{raw} is listed twice."));
         }
         let meta = std::fs::symlink_metadata(&p).map_err(|e| format!("{raw}: {e}"))?;
-        if meta.is_dir() && std::fs::read_dir(&p).map_err(|e| format!("{raw}: {e}"))?.next().is_some() {
-            return Err(format!("{raw} is a folder with files in it. List the files to delete."));
+        if meta.is_dir()
+            && std::fs::read_dir(&p)
+                .map_err(|e| format!("{raw}: {e}"))?
+                .next()
+                .is_some()
+        {
+            return Err(format!(
+                "{raw} is a folder with files in it. List the files to delete."
+            ));
         }
         out.push(p);
     }
@@ -1026,11 +1086,17 @@ fn require_xy(args: &Value, xk: &str, yk: &str) -> Result<(f64, f64), String> {
 }
 
 fn button_arg(args: &Value) -> Result<MouseButton, String> {
-    match args.get("button").and_then(|v| v.as_str()).unwrap_or("left") {
+    match args
+        .get("button")
+        .and_then(|v| v.as_str())
+        .unwrap_or("left")
+    {
         "left" => Ok(MouseButton::Left),
         "right" => Ok(MouseButton::Right),
         "middle" => Ok(MouseButton::Middle),
-        other => Err(format!("button must be left, right, or middle (got \"{other}\").")),
+        other => Err(format!(
+            "button must be left, right, or middle (got \"{other}\")."
+        )),
     }
 }
 
@@ -1529,10 +1595,8 @@ pub fn current_desktop_is_kde(desktop: Option<&str>) -> bool {
 }
 
 pub fn select_desktop_stack(env: &DesktopSessionEnv, probes: &DesktopProbes) -> DesktopStack {
-    let wayland = crate::session_is_wayland(
-        env.wayland_display.as_deref(),
-        env.session_type.as_deref(),
-    );
+    let wayland =
+        crate::session_is_wayland(env.wayland_display.as_deref(), env.session_type.as_deref());
     if wayland && (current_desktop_is_kde(env.current_desktop.as_deref()) || probes.kwin) {
         return DesktopStack {
             input: DesktopInputKind::Portal,
@@ -1578,8 +1642,10 @@ pub fn parse_screenshot2_metadata(value: &Value) -> Result<ScreenShot2Meta, Stri
     let obj = value
         .as_object()
         .ok_or_else(|| "ScreenShot2 metadata is not an object.".to_string())?;
-    let width = json_u32(obj.get("width")).ok_or_else(|| "ScreenShot2 metadata has no width.".to_string())?;
-    let height = json_u32(obj.get("height")).ok_or_else(|| "ScreenShot2 metadata has no height.".to_string())?;
+    let width = json_u32(obj.get("width"))
+        .ok_or_else(|| "ScreenShot2 metadata has no width.".to_string())?;
+    let height = json_u32(obj.get("height"))
+        .ok_or_else(|| "ScreenShot2 metadata has no height.".to_string())?;
     if width == 0 || height == 0 {
         return Err("ScreenShot2 returned an empty image.".into());
     }
@@ -1630,7 +1696,11 @@ pub fn argb32_premul_to_rgba(
             let (r, g, b) = if a == 0 {
                 (0, 0, 0)
             } else {
-                (unpremultiply(r, a), unpremultiply(g, a), unpremultiply(b, a))
+                (
+                    unpremultiply(r, a),
+                    unpremultiply(g, a),
+                    unpremultiply(b, a),
+                )
             };
             out[dst_off + i] = r;
             out[dst_off + i + 1] = g;
@@ -1803,7 +1873,15 @@ fn json_i64(value: &Value) -> Option<i64> {
     value
         .as_i64()
         .or_else(|| value.as_u64().and_then(|n| i64::try_from(n).ok()))
-        .or_else(|| value.as_f64().and_then(|n| if n.is_finite() { Some(n.round() as i64) } else { None }))
+        .or_else(|| {
+            value.as_f64().and_then(|n| {
+                if n.is_finite() {
+                    Some(n.round() as i64)
+                } else {
+                    None
+                }
+            })
+        })
 }
 
 fn json_size(value: Option<&Value>) -> Option<(u32, u32)> {
@@ -2060,7 +2138,11 @@ mod tests {
                 _ => Err(format!("No window title has \"{title}\" in it.")),
             }
         }
-        fn set_window_geometry(&mut self, title: &str, geom: &WindowGeom) -> Result<String, String> {
+        fn set_window_geometry(
+            &mut self,
+            title: &str,
+            geom: &WindowGeom,
+        ) -> Result<String, String> {
             self.log.push(format!("set-geom:{title}"));
             self.window = Some(*geom);
             Ok("notes — Editor".into())
@@ -2115,7 +2197,10 @@ mod tests {
             r#"{"jsonrpc":"2.0","id":3,"method":"initialize","params":{"protocolVersion":"1999-01-01"}}"#,
             on(),
         );
-        assert_eq!(reply_of(&unknown)["result"]["protocolVersion"], "2025-06-18");
+        assert_eq!(
+            reply_of(&unknown)["result"]["protocolVersion"],
+            "2025-06-18"
+        );
         let bad = s.handle_line(
             r#"{"jsonrpc":"2.0","id":4,"method":"initialize","params":{}}"#,
             on(),
@@ -2135,7 +2220,10 @@ mod tests {
     fn tools_list_schemas_and_call_shapes() {
         let mut s = server();
         let listed = s.handle_line(r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#, on());
-        let tools = reply_of(&listed)["result"]["tools"].as_array().unwrap().clone();
+        let tools = reply_of(&listed)["result"]["tools"]
+            .as_array()
+            .unwrap()
+            .clone();
         let names = [
             "list_monitors",
             "screenshot",
@@ -2185,10 +2273,7 @@ mod tests {
         assert!(geom.get("image_w").is_some());
         assert!(geom.get("scale").is_some());
         assert_eq!(body["result"]["structuredContent"]["id"], "all");
-        let oops = s.handle_line(
-            r#"{"jsonrpc":"2.0","id":1,"method":"nope"}"#,
-            on(),
-        );
+        let oops = s.handle_line(r#"{"jsonrpc":"2.0","id":1,"method":"nope"}"#, on());
         assert_eq!(reply_of(&oops)["error"]["code"], -32601);
         let bad = s.handle_line(
             r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{}}"#,
@@ -2235,7 +2320,10 @@ mod tests {
             on(),
         );
         let log = &s.backend_mut().log;
-        assert!(log.iter().filter(|e| e.starts_with("move:")).count() >= 8, "{log:?}");
+        assert!(
+            log.iter().filter(|e| e.starts_with("move:")).count() >= 8,
+            "{log:?}"
+        );
         assert!(log.iter().any(|e| e.contains("btn:Left:true")));
         assert!(log.last().unwrap().contains("btn:Left:false"));
     }
@@ -2287,10 +2375,13 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("halted"));
-        let still = s.handle_line(r#"{"jsonrpc":"2.0","id":1,"method":"ping"}"#, CallGate {
-            enabled: true,
-            halted: true,
-        });
+        let still = s.handle_line(
+            r#"{"jsonrpc":"2.0","id":1,"method":"ping"}"#,
+            CallGate {
+                enabled: true,
+                halted: true,
+            },
+        );
         assert!(!still.exit);
         assert!(reply_of(&still).get("result").is_some());
         s.backend_mut().locked = true;
@@ -2329,17 +2420,29 @@ mod tests {
             for attended in [false, true] {
                 for enabled in [false, true] {
                     let args = desktop_mcp_args(mode, attended, enabled);
-                    let deny = args.windows(2).any(|w| w[0] == "--deny" && w[1] == DESKTOP_MCP_RULE);
+                    let deny = args
+                        .windows(2)
+                        .any(|w| w[0] == "--deny" && w[1] == DESKTOP_MCP_RULE);
                     let allow = args
                         .windows(2)
                         .any(|w| w[0] == "--allow" && w[1] == DESKTOP_MCP_RULE);
                     let want_deny = !enabled || (matches!(mode, DesktopPermMode::Ask) && !attended);
-                    let want_allow = enabled
-                        && matches!(mode, DesktopPermMode::Auto | DesktopPermMode::Always);
+                    let want_allow =
+                        enabled && matches!(mode, DesktopPermMode::Auto | DesktopPermMode::Always);
                     let want_none = enabled && matches!(mode, DesktopPermMode::Ask) && attended;
-                    assert_eq!(deny, want_deny, "{mode:?} att={attended} en={enabled} {args:?}");
-                    assert_eq!(allow, want_allow, "{mode:?} att={attended} en={enabled} {args:?}");
-                    assert_eq!(args.is_empty(), want_none, "{mode:?} att={attended} en={enabled}");
+                    assert_eq!(
+                        deny, want_deny,
+                        "{mode:?} att={attended} en={enabled} {args:?}"
+                    );
+                    assert_eq!(
+                        allow, want_allow,
+                        "{mode:?} att={attended} en={enabled} {args:?}"
+                    );
+                    assert_eq!(
+                        args.is_empty(),
+                        want_none,
+                        "{mode:?} att={attended} en={enabled}"
+                    );
                     assert!(!(deny && allow), "deny wins {args:?}");
                 }
             }
@@ -2351,10 +2454,16 @@ mod tests {
             DESKTOP_MCP_RULE.into(),
         ];
         let kept = apply_desktop_mcp_args(both, DesktopPermMode::Auto, false, true);
-        assert!(kept.windows(2).any(|w| w[0] == "--deny" && w[1] == DESKTOP_MCP_RULE));
-        assert!(!kept.windows(2).any(|w| w[0] == "--allow" && w[1] == DESKTOP_MCP_RULE));
+        assert!(kept
+            .windows(2)
+            .any(|w| w[0] == "--deny" && w[1] == DESKTOP_MCP_RULE));
+        assert!(!kept
+            .windows(2)
+            .any(|w| w[0] == "--allow" && w[1] == DESKTOP_MCP_RULE));
         assert_eq!(
-            kept.iter().filter(|a| a.as_str() == DESKTOP_MCP_RULE).count(),
+            kept.iter()
+                .filter(|a| a.as_str() == DESKTOP_MCP_RULE)
+                .count(),
             1
         );
         let already = apply_desktop_mcp_args(
@@ -2473,7 +2582,10 @@ mod tests {
         assert_eq!(beyond.region, 2);
         near(beyond.x, 7279.0);
         near(beyond.y, 0.0);
-        let neg = [eis("left", -1920, -100, 1920, 1080), eis("main", 0, 0, 2560, 1440)];
+        let neg = [
+            eis("left", -1920, -100, 1920, 1080),
+            eis("main", 0, 0, 2560, 1440),
+        ];
         assert_eq!(pick_eis_region(&neg, -1920.0, -100.0).region, 0);
         near(pick_eis_region(&neg, -1920.0, -100.0).x, -1920.0);
         assert_eq!(pick_eis_region(&neg, 0.0, 0.0).region, 1);
@@ -2641,7 +2753,10 @@ mod tests {
         assert!(!mons[1].primary);
         let joined = join_kscreen_with_eis(
             &mons,
-            &[eis("DP-1", 2000, 10, 2240, 1152), eis("HDMI-A-2", 0, 0, 2560, 1440)],
+            &[
+                eis("DP-1", 2000, 10, 2240, 1152),
+                eis("HDMI-A-2", 0, 0, 2560, 1440),
+            ],
         );
         assert_eq!(joined[0].name, "DP-1");
         assert_eq!(joined[0].x, 2000);
@@ -2662,7 +2777,9 @@ mod tests {
             .unwrap(),
             EisTextPlan::Keycodes(vec![30, 48])
         );
-        assert!(plan_eis_text(false, "é", |_| None).unwrap_err().contains("missing"));
+        assert!(plan_eis_text(false, "é", |_| None)
+            .unwrap_err()
+            .contains("missing"));
     }
 
     #[test]
@@ -2681,7 +2798,14 @@ mod tests {
         assert_eq!(
             super::spectacle_argv("/tmp/out.png", Some(2)),
             vec![
-                "spectacle", "-b", "-n", "-f", "-o", "/tmp/out.png", "-s", "2"
+                "spectacle",
+                "-b",
+                "-n",
+                "-f",
+                "-o",
+                "/tmp/out.png",
+                "-s",
+                "2"
             ]
             .into_iter()
             .map(str::to_string)
@@ -2690,15 +2814,23 @@ mod tests {
         assert!(spectacle_help_supports_screen(
             "Usage: spectacle -b -n -f -o file -s, --screen <index>"
         ));
-        assert!(!spectacle_help_supports_screen("Usage: spectacle -b -n -f -o file"));
+        assert!(!spectacle_help_supports_screen(
+            "Usage: spectacle -b -n -f -o file"
+        ));
         assert_eq!(
             monitor_index(
-                &[mon("HDMI-A-2", 0, 0, 100, 100, 1.0, true), mon("DP-1", 100, 0, 100, 100, 1.0, false)],
+                &[
+                    mon("HDMI-A-2", 0, 0, 100, 100, 1.0, true),
+                    mon("DP-1", 100, 0, 100, 100, 1.0, false)
+                ],
                 "DP-1"
             ),
             Some(1)
         );
-        assert_eq!(monitor_index(&[mon("a", 0, 0, 1, 1, 1.0, true)], "all"), None);
+        assert_eq!(
+            monitor_index(&[mon("a", 0, 0, 1, 1, 1.0, true)], "all"),
+            None
+        );
     }
 
     #[test]
@@ -2769,7 +2901,11 @@ mod tests {
                 button: MouseButton::Right,
                 down: true,
             },
-            DeskRequest::Scroll { id: 6, dx: -1, dy: 2 },
+            DeskRequest::Scroll {
+                id: 6,
+                dx: -1,
+                dy: 2,
+            },
             DeskRequest::TypeText {
                 id: 7,
                 text: "hi".into(),
@@ -2831,11 +2967,20 @@ mod tests {
                 CaptureRouteId::PortalScreenshot
             ]
         );
-        assert_eq!(wlroots_capture_order(), &[CaptureRouteId::Grim, CaptureRouteId::PortalScreenshot]);
+        assert_eq!(
+            wlroots_capture_order(),
+            &[CaptureRouteId::Grim, CaptureRouteId::PortalScreenshot]
+        );
         assert_eq!(
             capture_failed_note(&[
-                (CaptureRouteId::Grim, "grim: compositor doesn't support wlr-screencopy.".into()),
-                (CaptureRouteId::PortalScreenshot, " portal screenshot: timed out ".into()),
+                (
+                    CaptureRouteId::Grim,
+                    "grim: compositor doesn't support wlr-screencopy.".into()
+                ),
+                (
+                    CaptureRouteId::PortalScreenshot,
+                    " portal screenshot: timed out ".into()
+                ),
             ]),
             "Can't capture the screen: grim: grim: compositor doesn't support wlr-screencopy; \
              portal Screenshot: portal screenshot: timed out."
@@ -2977,17 +3122,32 @@ mod tests {
     #[test]
     fn open_and_focus_run_only_with_desktop_control_on() {
         let mut s = server();
-        let opened = call(&mut s, on(), "open_app", json!({ "app": "org.kde.dolphin.desktop" }));
+        let opened = call(
+            &mut s,
+            on(),
+            "open_app",
+            json!({ "app": "org.kde.dolphin.desktop" }),
+        );
         assert_eq!(opened["isError"], false);
         assert_eq!(opened["content"][0]["text"], "opened org.kde.dolphin");
         let focused = call(&mut s, on(), "focus_window", json!({ "title": "notes" }));
         assert_eq!(focused["content"][0]["text"], "focused notes — Editor");
-        assert_eq!(s.backend_mut().log, vec!["open:org.kde.dolphin", "focus:notes"]);
-        let off = CallGate { enabled: false, halted: false };
+        assert_eq!(
+            s.backend_mut().log,
+            vec!["open:org.kde.dolphin", "focus:notes"]
+        );
+        let off = CallGate {
+            enabled: false,
+            halted: false,
+        };
         let refused = call(&mut s, off, "open_app", json!({ "app": "firefox" }));
         assert_eq!(refused["isError"], true);
         assert_eq!(refused["content"][0]["text"], OFF_MSG);
-        assert_eq!(s.backend_mut().log.len(), 2, "nothing ran with the switch off");
+        assert_eq!(
+            s.backend_mut().log.len(),
+            2,
+            "nothing ran with the switch off"
+        );
         s.backend_mut().locked = true;
         let locked = call(&mut s, on(), "focus_window", json!({ "title": "notes" }));
         assert_eq!(locked["content"][0]["text"], LOCK_MSG);
@@ -2999,34 +3159,116 @@ mod tests {
     #[test]
     fn window_geometry_round_trips_and_set_is_gated() {
         let mut s = server();
-        s.backend_mut().window = Some(WindowGeom { x: 10, y: 20, width: 800, height: 600 });
-        let got = call(&mut s, on(), "get_window_geometry", json!({ "title": "Notes" }));
+        s.backend_mut().window = Some(WindowGeom {
+            x: 10,
+            y: 20,
+            width: 800,
+            height: 600,
+        });
+        let got = call(
+            &mut s,
+            on(),
+            "get_window_geometry",
+            json!({ "title": "Notes" }),
+        );
         assert_eq!(got["content"][0]["text"], "Notes: 800x600 at 10,20");
-        assert_eq!(got["structuredContent"], json!({ "x": 10, "y": 20, "width": 800, "height": 600 }));
+        assert_eq!(
+            got["structuredContent"],
+            json!({ "x": 10, "y": 20, "width": 800, "height": 600 })
+        );
 
-        let set = call(&mut s, on(), "set_window_geometry", json!({ "title": "notes", "x": -1900, "y": 0, "width": 1280, "height": 720 }));
-        assert_eq!(set["content"][0]["text"], "moved notes — Editor to 1280x720 at -1900,0");
-        let back = call(&mut s, on(), "get_window_geometry", json!({ "title": "notes" }));
-        assert_eq!(back["structuredContent"], json!({ "x": -1900, "y": 0, "width": 1280, "height": 720 }));
+        let set = call(
+            &mut s,
+            on(),
+            "set_window_geometry",
+            json!({ "title": "notes", "x": -1900, "y": 0, "width": 1280, "height": 720 }),
+        );
+        assert_eq!(
+            set["content"][0]["text"],
+            "moved notes — Editor to 1280x720 at -1900,0"
+        );
+        let back = call(
+            &mut s,
+            on(),
+            "get_window_geometry",
+            json!({ "title": "notes" }),
+        );
+        assert_eq!(
+            back["structuredContent"],
+            json!({ "x": -1900, "y": 0, "width": 1280, "height": 720 })
+        );
 
         let before = s.backend_mut().log.len();
-        let zero = call(&mut s, on(), "set_window_geometry", json!({ "title": "notes", "x": 0, "y": 0, "width": 0, "height": 10 }));
-        assert_eq!(zero["content"][0]["text"], "width must be 1 to 16384 pixels.");
-        let half = call(&mut s, on(), "set_window_geometry", json!({ "title": "notes", "x": 0.5, "y": 0, "width": 10, "height": 10 }));
-        assert_eq!(half["content"][0]["text"], "set_window_geometry needs a whole-number x.");
+        let zero = call(
+            &mut s,
+            on(),
+            "set_window_geometry",
+            json!({ "title": "notes", "x": 0, "y": 0, "width": 0, "height": 10 }),
+        );
+        assert_eq!(
+            zero["content"][0]["text"],
+            "width must be 1 to 16384 pixels."
+        );
+        let half = call(
+            &mut s,
+            on(),
+            "set_window_geometry",
+            json!({ "title": "notes", "x": 0.5, "y": 0, "width": 10, "height": 10 }),
+        );
+        assert_eq!(
+            half["content"][0]["text"],
+            "set_window_geometry needs a whole-number x."
+        );
         let untitled = call(&mut s, on(), "get_window_geometry", json!({ "title": " " }));
-        assert_eq!(untitled["content"][0]["text"], "get_window_geometry needs title.");
-        assert_eq!(s.backend_mut().log.len(), before, "bad args never reach the backend");
-        let missing = call(&mut s, on(), "get_window_geometry", json!({ "title": "Dolphin" }));
-        assert_eq!(missing["content"][0]["text"], "No window title has \"Dolphin\" in it.");
+        assert_eq!(
+            untitled["content"][0]["text"],
+            "get_window_geometry needs title."
+        );
+        assert_eq!(
+            s.backend_mut().log.len(),
+            before,
+            "bad args never reach the backend"
+        );
+        let missing = call(
+            &mut s,
+            on(),
+            "get_window_geometry",
+            json!({ "title": "Dolphin" }),
+        );
+        assert_eq!(
+            missing["content"][0]["text"],
+            "No window title has \"Dolphin\" in it."
+        );
 
         s.backend_mut().locked = true;
-        let locked = call(&mut s, on(), "set_window_geometry", json!({ "title": "notes", "x": 0, "y": 0, "width": 10, "height": 10 }));
+        let locked = call(
+            &mut s,
+            on(),
+            "set_window_geometry",
+            json!({ "title": "notes", "x": 0, "y": 0, "width": 10, "height": 10 }),
+        );
         assert_eq!(locked["content"][0]["text"], LOCK_MSG);
         s.backend_mut().locked = false;
-        let off = call(&mut s, CallGate { enabled: false, halted: false }, "set_window_geometry", json!({ "title": "notes", "x": 0, "y": 0, "width": 10, "height": 10 }));
+        let off = call(
+            &mut s,
+            CallGate {
+                enabled: false,
+                halted: false,
+            },
+            "set_window_geometry",
+            json!({ "title": "notes", "x": 0, "y": 0, "width": 10, "height": 10 }),
+        );
         assert_eq!(off["content"][0]["text"], OFF_MSG);
-        assert_eq!(s.backend_mut().window, Some(WindowGeom { x: -1900, y: 0, width: 1280, height: 720 }), "refused calls change nothing");
+        assert_eq!(
+            s.backend_mut().window,
+            Some(WindowGeom {
+                x: -1900,
+                y: 0,
+                width: 1280,
+                height: 720
+            }),
+            "refused calls change nothing"
+        );
     }
 
     /// Card 12 parity: a watch over the MCP tools reports a create, a modify
@@ -3037,11 +3279,19 @@ mod tests {
         std::fs::write(dir.join("a.txt"), "1").unwrap();
         std::fs::write(dir.join("b.txt"), "2").unwrap();
         let mut s = server();
-        let started = call(&mut s, on(), "watch_path", json!({ "path": dir.to_str().unwrap() }));
+        let started = call(
+            &mut s,
+            on(),
+            "watch_path",
+            json!({ "path": dir.to_str().unwrap() }),
+        );
         assert_eq!(started["structuredContent"]["id"], "w1");
         assert_eq!(started["structuredContent"]["entries"], 3);
         let quiet = call(&mut s, on(), "watch_events", json!({ "id": "w1" }));
-        assert_eq!(quiet["content"][0]["text"], "no changes since the last look");
+        assert_eq!(
+            quiet["content"][0]["text"],
+            "no changes since the last look"
+        );
 
         std::fs::write(dir.join("c.txt"), "3").unwrap();
         std::fs::write(dir.join("a.txt"), "one more").unwrap();
@@ -3056,12 +3306,31 @@ mod tests {
                 { "kind": "deleted", "path": p("b.txt") },
             ])
         );
-        assert_eq!(got["content"][0]["text"], format!("modified {}\ncreated {}\ndeleted {}", p("a.txt"), p("c.txt"), p("b.txt")));
+        assert_eq!(
+            got["content"][0]["text"],
+            format!(
+                "modified {}\ncreated {}\ndeleted {}",
+                p("a.txt"),
+                p("c.txt"),
+                p("b.txt")
+            )
+        );
 
-        let off = call(&mut s, CallGate { enabled: false, halted: false }, "watch_events", json!({ "id": "w1" }));
+        let off = call(
+            &mut s,
+            CallGate {
+                enabled: false,
+                halted: false,
+            },
+            "watch_events",
+            json!({ "id": "w1" }),
+        );
         assert_eq!(off["content"][0]["text"], OFF_MSG);
         let stopped = call(&mut s, on(), "unwatch_path", json!({ "id": "w1" }));
-        assert_eq!(stopped["content"][0]["text"], format!("stopped watching {}", dir.display()));
+        assert_eq!(
+            stopped["content"][0]["text"],
+            format!("stopped watching {}", dir.display())
+        );
         let gone = call(&mut s, on(), "watch_events", json!({ "id": "w1" }));
         assert_eq!(gone["content"][0]["text"], "No watch \"w1\".");
         let rel = call(&mut s, on(), "watch_path", json!({ "path": "notes" }));
@@ -3072,9 +3341,22 @@ mod tests {
     #[test]
     fn app_ids_are_ids_not_commands() {
         assert_eq!(app_id("firefox"), Ok("firefox".into()));
-        assert_eq!(app_id(" org.kde.dolphin.desktop "), Ok("org.kde.dolphin".into()));
+        assert_eq!(
+            app_id(" org.kde.dolphin.desktop "),
+            Ok("org.kde.dolphin".into())
+        );
         assert_eq!(app_id("notepad"), Ok("notepad".into()));
-        for bad in ["", "-x", ".hidden", "rm -rf ~", "/usr/bin/xterm", "C:\\x.exe", "a;b", "$(id)", "calc&"] {
+        for bad in [
+            "",
+            "-x",
+            ".hidden",
+            "rm -rf ~",
+            "/usr/bin/xterm",
+            "C:\\x.exe",
+            "a;b",
+            "$(id)",
+            "calc&",
+        ] {
             assert!(app_id(bad).is_err(), "{bad}");
         }
         assert_eq!(
@@ -3112,21 +3394,48 @@ mod tests {
         let s_path = |p: &std::path::Path| p.to_string_lossy().into_owned();
         let mut s = server();
         // One bad path: nothing is touched.
-        let bad = call(&mut s, on(), "delete_files", json!({ "paths": [s_path(&a), s_path(&full)] }));
+        let bad = call(
+            &mut s,
+            on(),
+            "delete_files",
+            json!({ "paths": [s_path(&a), s_path(&full)] }),
+        );
         assert_eq!(bad["isError"], true);
         assert!(a.exists() && full.join("inner.txt").exists());
         let rel = call(&mut s, on(), "delete_files", json!({ "paths": ["a.txt"] }));
         assert_eq!(rel["content"][0]["text"], "a.txt: use the full path.");
-        let twice = call(&mut s, on(), "delete_files", json!({ "paths": [s_path(&a), s_path(&a)] }));
+        let twice = call(
+            &mut s,
+            on(),
+            "delete_files",
+            json!({ "paths": [s_path(&a), s_path(&a)] }),
+        );
         assert_eq!(twice["isError"], true);
         assert!(a.exists());
-        let ok = call(&mut s, on(), "delete_files", json!({ "paths": [s_path(&a), s_path(&b), s_path(&empty)] }));
+        let ok = call(
+            &mut s,
+            on(),
+            "delete_files",
+            json!({ "paths": [s_path(&a), s_path(&b), s_path(&empty)] }),
+        );
         assert_eq!(ok["content"][0]["text"], "deleted 3 paths");
         assert!(!a.exists() && !b.exists() && !empty.exists());
-        assert_eq!(std::fs::read(&keep).unwrap(), b"fixture bytes", "an unlisted file is untouched");
-        let trash = call(&mut s, on(), "delete_files", json!({ "paths": [s_path(&keep)], "to_trash": true }));
+        assert_eq!(
+            std::fs::read(&keep).unwrap(),
+            b"fixture bytes",
+            "an unlisted file is untouched"
+        );
+        let trash = call(
+            &mut s,
+            on(),
+            "delete_files",
+            json!({ "paths": [s_path(&keep)], "to_trash": true }),
+        );
         assert_eq!(trash["content"][0]["text"], "moved 1 path to the trash");
-        assert_eq!(s.backend_mut().log.last().map(String::as_str), Some("trash:1"));
+        assert_eq!(
+            s.backend_mut().log.last().map(String::as_str),
+            Some("trash:1")
+        );
         let _ = std::fs::remove_dir_all(dir);
     }
 }

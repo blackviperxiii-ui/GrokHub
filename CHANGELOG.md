@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+## 3.0.1 — 2026-10-12
+
+- Fixed: park answers write atomically and ignore empty or partial answer files, so an Approve click is not read as Deny (Windows CUA flake on `deny_sends_nothing_approve_forwards_once_and_the_password_slot_is_never_typed`).
+- Fixed: Settings → Behavior auto-archive copy matches #712 (idle chats leave History and search; still on disk; no Archived drawer promised).
+- Security: Pulse feed and image fetches refuse CGNAT and other non-public literal IPs the same way `web_fetch` does, and dial through the shared public-only DNS resolver so a hostname that resolves to a private or link-local address cannot connect.
+- Settings → Cabin defaults and Permissions no longer re-read `providers.json` (or rebuild the provider model pick list) on every paint: the cabin keeps a cache that add / remove / allow / revoke clear. Settings → Background only schedules its 1 s countdown tick while a job is due in under a minute; waiting and minute+ rows rely on the normal heartbeat.
+- Pulse diversifies what it follows from what you like. A check posts at most two stories from one source (so Hacker News cannot fill the whole run), searches your strongest interest every time and rotates the other topic slots so weaker interests still get a look, and gives a small score bump to under-seen sources. Save or More like this twice on posts from the same subreddit, GitHub repo or YouTube channel adds that place to Settings → Pulse → Sources when that source kind is on.
+- Code is now rustfmt-clean and CI checks formatting.
+- Fixed: source-window tests match rustfmt-wrapped needles (`session_row`, `Margin::symmetric`, `feed_prompt`) and the composer Pill scan window is 15,000 bytes.
+- Fixed: the "Archived N idle chats" composer row and the History sidebar Archived section no longer appear; archived chats stay out of History lists and search. Archive / Unarchive, auto-archive, and Undo remain.
+
+- Linux: `grokhub-linux-v3.0.1.tar.gz` and AUR `pkgver=3.0.1`.
+- Windows: `GrokHub-Setup-3.0.1.exe` and `grokhub-windows-v3.0.1.zip`.
+
 ## 3.0.0 — 2026-10-12
 
 - Beta builds are labeled X.Y.Z-beta.N and compare correctly against releases. GitHub tags `vX.Y.Z-beta.N` publish as pre-releases (never Latest); stable `vX.Y.Z` tags are unchanged.

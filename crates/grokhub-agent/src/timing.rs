@@ -46,7 +46,10 @@ impl Drop for Lap {
 
 /// Start a span named `name`.
 pub fn lap(name: &'static str) -> Lap {
-    Lap { name, start: Instant::now() }
+    Lap {
+        name,
+        start: Instant::now(),
+    }
 }
 
 /// Run `f` inside a span named `name`.
@@ -105,7 +108,11 @@ const ENTER_STALE: Duration = Duration::from_secs(120);
 
 /// When Enter was pressed for the send starting now, once.
 pub fn take_enter() -> Option<Instant> {
-    ENTER.lock().unwrap_or_else(|e| e.into_inner()).take().filter(|t| t.elapsed() < ENTER_STALE)
+    ENTER
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .take()
+        .filter(|t| t.elapsed() < ENTER_STALE)
 }
 
 /// Forget every span (a bench run starts clean).
@@ -124,7 +131,11 @@ pub struct Breakdown {
 impl Breakdown {
     pub fn start() -> Self {
         let now = Instant::now();
-        Self { start: Some(now), last: Some(now), steps: Vec::new() }
+        Self {
+            start: Some(now),
+            last: Some(now),
+            steps: Vec::new(),
+        }
     }
 
     /// Close the step that ran since the last mark, as `name` (also a speed span).
@@ -132,7 +143,8 @@ impl Breakdown {
         let now = Instant::now();
         let took = now.duration_since(self.last.unwrap_or(now));
         record(name, took);
-        self.steps.push((name, u32::try_from(took.as_micros()).unwrap_or(u32::MAX)));
+        self.steps
+            .push((name, u32::try_from(took.as_micros()).unwrap_or(u32::MAX)));
         self.last = Some(now);
     }
 
@@ -140,8 +152,12 @@ impl Breakdown {
     pub fn finish(mut self, total: &'static str) -> BTreeMap<String, u32> {
         let took = self.start.map(|s| s.elapsed()).unwrap_or_default();
         record(total, took);
-        self.steps.push((total, u32::try_from(took.as_micros()).unwrap_or(u32::MAX)));
-        self.steps.into_iter().map(|(k, v)| (k.to_string(), v)).collect()
+        self.steps
+            .push((total, u32::try_from(took.as_micros()).unwrap_or(u32::MAX)));
+        self.steps
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v))
+            .collect()
     }
 }
 
@@ -152,10 +168,16 @@ mod tests {
     #[test]
     fn percentiles_use_the_nearest_rank() {
         let s: Vec<u32> = (1..=100).collect();
-        assert_eq!((percentile(&s, 50), percentile(&s, 95), percentile(&s, 100)), (50, 95, 100));
+        assert_eq!(
+            (percentile(&s, 50), percentile(&s, 95), percentile(&s, 100)),
+            (50, 95, 100)
+        );
         assert_eq!((percentile(&[7], 50), percentile(&[7], 95)), (7, 7));
         assert_eq!(percentile(&[], 95), 0);
-        assert_eq!((percentile(&[1, 2, 3], 50), percentile(&[1, 2, 3], 95)), (2, 3));
+        assert_eq!(
+            (percentile(&[1, 2, 3], 50), percentile(&[1, 2, 3], 95)),
+            (2, 3)
+        );
     }
 
     #[test]
@@ -166,7 +188,11 @@ mod tests {
         }
         let s = stats().into_iter().find(|s| s.name == name).unwrap();
         assert_eq!((s.n, s.max_us), (SAMPLES, SAMPLES as u32 + 9));
-        assert_eq!(s.p50_us, 10 + (SAMPLES as u32 / 2) - 1, "the 10 oldest samples were dropped");
+        assert_eq!(
+            s.p50_us,
+            10 + (SAMPLES as u32 / 2) - 1,
+            "the 10 oldest samples were dropped"
+        );
     }
 
     #[test]
@@ -175,7 +201,10 @@ mod tests {
         b.mark("test:step_a");
         b.mark("test:step_b");
         let steps = b.finish("test:total");
-        assert_eq!(steps.keys().map(String::as_str).collect::<Vec<_>>(), ["test:step_a", "test:step_b", "test:total"]);
+        assert_eq!(
+            steps.keys().map(String::as_str).collect::<Vec<_>>(),
+            ["test:step_a", "test:step_b", "test:total"]
+        );
         assert!(steps["test:total"] >= steps["test:step_a"] + steps["test:step_b"]);
     }
 }

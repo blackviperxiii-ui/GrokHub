@@ -39,7 +39,9 @@ pub struct Entitlement {
 /// either side is unknown (an unknown tier is not a change).
 pub fn tier_notice(old: Option<&str>, new: Option<&str>) -> Option<String> {
     match (old, new) {
-        (Some(a), Some(b)) if !a.eq_ignore_ascii_case(b) => Some(format!("Your Grok plan changed from {a} to {b}.")),
+        (Some(a), Some(b)) if !a.eq_ignore_ascii_case(b) => {
+            Some(format!("Your Grok plan changed from {a} to {b}."))
+        }
         _ => None,
     }
 }
@@ -50,7 +52,10 @@ mod tests {
 
     #[test]
     fn only_a_known_to_known_change_is_a_notice() {
-        assert_eq!(tier_notice(Some("SuperGrok Heavy"), Some("SuperGrok")).as_deref(), Some("Your Grok plan changed from SuperGrok Heavy to SuperGrok."));
+        assert_eq!(
+            tier_notice(Some("SuperGrok Heavy"), Some("SuperGrok")).as_deref(),
+            Some("Your Grok plan changed from SuperGrok Heavy to SuperGrok.")
+        );
         assert_eq!(tier_notice(Some("SuperGrok"), Some("supergrok")), None);
         assert_eq!(tier_notice(None, Some("SuperGrok")), None);
         assert_eq!(tier_notice(Some("SuperGrok"), None), None);

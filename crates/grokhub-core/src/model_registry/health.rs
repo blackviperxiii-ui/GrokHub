@@ -31,7 +31,13 @@ pub const STRIKE_WINDOW_MS: u64 = 24 * 60 * 60 * 1000;
 /// Hard failures in a row (5xx or a timeout) that open the breaker.
 pub const BREAKER_FAILS: u32 = 3;
 /// The open backoff per open, before jitter: 1 m, 5 m, 30 m, 2 h, then 12 h.
-pub const BREAKER_BACKOFF_MS: [u64; 5] = [60_000, 5 * 60_000, 30 * 60_000, 2 * 60 * 60_000, 12 * 60 * 60_000];
+pub const BREAKER_BACKOFF_MS: [u64; 5] = [
+    60_000,
+    5 * 60_000,
+    30 * 60_000,
+    2 * 60 * 60_000,
+    12 * 60 * 60_000,
+];
 
 /// What a call's answer means for health.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -58,10 +64,14 @@ pub fn classify_status(http: u16, message: &str) -> CallStatus {
         200..=299 => CallStatus::Ok,
         404 => CallStatus::NotFound,
         403 if m.contains("subscription") => CallStatus::NoSubscription,
-        403 if m.contains("content") && (m.contains("safety") || m.contains("policy") || m.contains("moderation")) => {
+        403 if m.contains("content")
+            && (m.contains("safety") || m.contains("policy") || m.contains("moderation")) =>
+        {
             CallStatus::ContentSafety
         }
-        429 if m.contains("free-usage-exhausted") || m.contains("free usage") => CallStatus::FreeUsageExhausted,
+        429 if m.contains("free-usage-exhausted") || m.contains("free usage") => {
+            CallStatus::FreeUsageExhausted
+        }
         429 | 503 => CallStatus::Pressure,
         _ => CallStatus::Error,
     }
@@ -94,7 +104,10 @@ fn percentile(sorted: &[u64], pct: usize) -> u64 {
     if sorted.is_empty() {
         return 0;
     }
-    let idx = (sorted.len() * pct).div_ceil(100).saturating_sub(1).min(sorted.len() - 1);
+    let idx = (sorted.len() * pct)
+        .div_ceil(100)
+        .saturating_sub(1)
+        .min(sorted.len() - 1);
     sorted[idx]
 }
 
@@ -108,7 +121,11 @@ pub fn degraded_reason(rec: &ModelRecord, now_ms: u64) -> Option<&'static str> {
     if recent.iter().filter(|c| c.pressure).count() >= PRESSURE_BURST {
         return Some("It answered busy (429 or 503) several times in a row.");
     }
-    let mut last: Vec<u64> = recent.iter().filter(|c| c.ok).map(|c| c.latency_ms).collect();
+    let mut last: Vec<u64> = recent
+        .iter()
+        .filter(|c| c.ok)
+        .map(|c| c.latency_ms)
+        .collect();
     let window_start = recent.front().map(|c| c.ts_ms).unwrap_or(now_ms);
     let mut base: Vec<u64> = rec
         .health
@@ -137,7 +154,8 @@ pub fn observe(rec: &mut ModelRecord, listed: bool, obs: &Observation) -> bool {
         CallStatus::ContentSafety | CallStatus::FreeUsageExhausted => return false,
         CallStatus::NoSubscription => {
             rec.state = ModelState::NotInPlan;
-            rec.reason = "Your plan doesn't include it (the API said it needs a Grok subscription).".into();
+            rec.reason =
+                "Your plan doesn't include it (the API said it needs a Grok subscription).".into();
             return rec.state != before;
         }
         CallStatus::NotFound => {
@@ -147,7 +165,8 @@ pub fn observe(rec: &mut ModelRecord, listed: bool, obs: &Observation) -> bool {
                 return rec.state != before;
             }
             if obs.endpoint_ok {
-                rec.not_found.retain(|t| now.saturating_sub(*t) <= STRIKE_WINDOW_MS);
+                rec.not_found
+                    .retain(|t| now.saturating_sub(*t) <= STRIKE_WINDOW_MS);
                 rec.not_found.push(now);
                 if rec.not_found.len() >= GHOST_STRIKES {
                     rec.state = ModelState::Ghost;
@@ -174,7 +193,12 @@ pub fn observe(rec: &mut ModelRecord, listed: bool, obs: &Observation) -> bool {
         CallStatus::Pressure | CallStatus::Error => {}
     }
     let pressure = obs.status == CallStatus::Pressure;
-    rec.health.recent.push_back(CallMark { ts_ms: now, ok: obs.status == CallStatus::Ok, pressure, latency_ms: obs.latency_ms });
+    rec.health.recent.push_back(CallMark {
+        ts_ms: now,
+        ok: obs.status == CallStatus::Ok,
+        pressure,
+        latency_ms: obs.latency_ms,
+    });
     while rec.health.recent.len() > WINDOW_CALLS {
         rec.health.recent.pop_front();
     }
@@ -211,7 +235,9 @@ pub fn backoff_ms(opens: u32, seed: u64) -> u64 {
 }
 
 fn seed_of(id: &str, opens: u32, now_ms: u64) -> u64 {
-    id.bytes().fold(now_ms ^ ((opens as u64) << 48), |h, b| h.rotate_left(5) ^ b as u64)
+    id.bytes().fold(now_ms ^ ((opens as u64) << 48), |h, b| {
+        h.rotate_left(5) ^ b as u64
+    })
 }
 
 /// A 5xx answer, a 503, or no answer at all (a timeout or no connection).
@@ -228,7 +254,8 @@ fn open_breaker(rec: &mut ModelRecord, now_ms: u64, why: &str) {
     b.opens = b.opens.saturating_add(1);
     b.fails = 0;
     b.half_open = false;
-    b.open_until_ms = now_ms.saturating_add(backoff_ms(b.opens, seed_of(&rec.meta.id, b.opens, now_ms)));
+    b.open_until_ms =
+        now_ms.saturating_add(backoff_ms(b.opens, seed_of(&rec.meta.id, b.opens, now_ms)));
     rec.state = ModelState::Quarantined;
     rec.reason = why.to_string();
 }
@@ -250,7 +277,11 @@ pub fn half_open_result(rec: &mut ModelRecord, ok: bool, now_ms: u64) -> bool {
         close_breaker(rec);
         return true;
     }
-    open_breaker(rec, now_ms, "Its check after the pause failed, so it waits longer.");
+    open_breaker(
+        rec,
+        now_ms,
+        "Its check after the pause failed, so it waits longer.",
+    );
     false
 }
 
@@ -268,14 +299,25 @@ pub fn breaker_observe(rec: &mut ModelRecord, listed: bool, obs: &Observation) -
         }
         CallStatus::NotFound if listed && obs.endpoint_ok => {
             // The first strike quarantines; the second (inside a day) made it a ghost in `observe`.
-            if matches!(rec.state, ModelState::Live | ModelState::Degraded | ModelState::Probing) {
-                open_breaker(rec, now, "The API said not found for it once, so it rests until a check passes.");
+            if matches!(
+                rec.state,
+                ModelState::Live | ModelState::Degraded | ModelState::Probing
+            ) {
+                open_breaker(
+                    rec,
+                    now,
+                    "The API said not found for it once, so it rests until a check passes.",
+                );
             }
         }
         _ if hard_failure(obs) => {
             rec.breaker.fails = rec.breaker.fails.saturating_add(1);
             if rec.state == ModelState::Quarantined && rec.breaker.half_open {
-                open_breaker(rec, now, "Its check after the pause failed, so it waits longer.");
+                open_breaker(
+                    rec,
+                    now,
+                    "Its check after the pause failed, so it waits longer.",
+                );
             } else if rec.breaker.fails >= BREAKER_FAILS && rec.state.routable() {
                 open_breaker(rec, now, "It failed 3 times in a row (server errors or timeouts), so it rests for a while.");
             }
@@ -287,7 +329,9 @@ pub fn breaker_observe(rec: &mut ModelRecord, listed: bool, obs: &Observation) -
 
 /// Quarantined and its open backoff has run out, with no check out yet.
 pub fn half_open_due(rec: &ModelRecord, now_ms: u64) -> bool {
-    rec.state == ModelState::Quarantined && !rec.breaker.half_open && now_ms >= rec.breaker.open_until_ms
+    rec.state == ModelState::Quarantined
+        && !rec.breaker.half_open
+        && now_ms >= rec.breaker.open_until_ms
 }
 
 #[cfg(test)]
@@ -296,7 +340,10 @@ mod tests {
     use crate::model_registry::record::ModelMeta;
 
     fn rec() -> ModelRecord {
-        ModelRecord { meta: ModelMeta::bare("grok-4.7"), ..ModelRecord::default() }
+        ModelRecord {
+            meta: ModelMeta::bare("grok-4.7"),
+            ..ModelRecord::default()
+        }
     }
 
     fn obs(status: CallStatus, ts_ms: u64) -> Observation {
@@ -316,10 +363,22 @@ mod tests {
     #[test]
     fn statuses_map_from_http_and_text() {
         assert_eq!(classify_status(200, ""), CallStatus::Ok);
-        assert_eq!(classify_status(404, "Model not found"), CallStatus::NotFound);
-        assert_eq!(classify_status(403, "This model requires a Grok subscription"), CallStatus::NoSubscription);
-        assert_eq!(classify_status(403, "Blocked by content safety"), CallStatus::ContentSafety);
-        assert_eq!(classify_status(429, "free-usage-exhausted"), CallStatus::FreeUsageExhausted);
+        assert_eq!(
+            classify_status(404, "Model not found"),
+            CallStatus::NotFound
+        );
+        assert_eq!(
+            classify_status(403, "This model requires a Grok subscription"),
+            CallStatus::NoSubscription
+        );
+        assert_eq!(
+            classify_status(403, "Blocked by content safety"),
+            CallStatus::ContentSafety
+        );
+        assert_eq!(
+            classify_status(429, "free-usage-exhausted"),
+            CallStatus::FreeUsageExhausted
+        );
         assert_eq!(classify_status(429, "slow down"), CallStatus::Pressure);
         assert_eq!(classify_status(503, ""), CallStatus::Pressure);
         assert_eq!(classify_status(500, ""), CallStatus::Error);
@@ -332,7 +391,11 @@ mod tests {
         assert_eq!(r.state, ModelState::Live);
         // A strike older than 24 h does not count.
         let mut late = r.clone();
-        assert!(!observe(&mut late, true, &obs(CallStatus::NotFound, 1_000 + STRIKE_WINDOW_MS + 1)));
+        assert!(!observe(
+            &mut late,
+            true,
+            &obs(CallStatus::NotFound, 1_000 + STRIKE_WINDOW_MS + 1)
+        ));
         assert_eq!((late.state, late.not_found.len()), (ModelState::Live, 1));
         assert!(observe(&mut r, true, &obs(CallStatus::NotFound, 5_000)));
         assert_eq!(r.state, ModelState::Ghost);
@@ -361,7 +424,11 @@ mod tests {
         let before = r.clone();
         for _ in 0..10 {
             assert!(!observe(&mut r, true, &obs(CallStatus::ContentSafety, 1)));
-            assert!(!observe(&mut r, true, &obs(CallStatus::FreeUsageExhausted, 1)));
+            assert!(!observe(
+                &mut r,
+                true,
+                &obs(CallStatus::FreeUsageExhausted, 1)
+            ));
         }
         assert_eq!(r, before);
     }
@@ -381,7 +448,10 @@ mod tests {
         let mut o = obs(CallStatus::Ok, 3);
         o.served_model = Some("grok-4.5".into());
         assert!(observe(&mut r, true, &o));
-        assert_eq!((r.state, r.served_as.as_deref()), (ModelState::Redirected, Some("grok-4.5")));
+        assert_eq!(
+            (r.state, r.served_as.as_deref()),
+            (ModelState::Redirected, Some("grok-4.5"))
+        );
         assert_eq!(r.reason, "It answered as grok-4.5.");
     }
 
@@ -400,7 +470,10 @@ mod tests {
         for t in 11..21 {
             observe(&mut r, true, &obs(CallStatus::Ok, t));
         }
-        assert_eq!((r.state, r.reason.as_str()), (ModelState::Live, "Healthy again."));
+        assert_eq!(
+            (r.state, r.reason.as_str()),
+            (ModelState::Live, "Healthy again.")
+        );
         let mut b = rec();
         for t in 0..3 {
             observe(&mut b, true, &obs(CallStatus::Pressure, t));
@@ -421,11 +494,17 @@ mod tests {
             observe(&mut r, true, &o);
         }
         assert_eq!(r.state, ModelState::Degraded);
-        assert_eq!(r.reason, "It is answering more than twice as slowly as its usual week.");
+        assert_eq!(
+            r.reason,
+            "It is answering more than twice as slowly as its usual week."
+        );
     }
 
     fn hard(ts_ms: u64) -> Observation {
-        Observation { http: 502, ..obs(CallStatus::Error, ts_ms) }
+        Observation {
+            http: 502,
+            ..obs(CallStatus::Error, ts_ms)
+        }
     }
 
     fn both(r: &mut ModelRecord, o: &Observation) {
@@ -444,10 +523,25 @@ mod tests {
         assert_ne!(r.state, ModelState::Quarantined);
         assert_eq!(r.breaker.fails, 2);
         // A 400 or a 429 is not a hard failure; a timeout (no status) and a 503 are.
-        both(&mut r, &Observation { http: 400, ..obs(CallStatus::Error, 6) });
-        both(&mut r, &Observation { http: 429, ..obs(CallStatus::Pressure, 7) });
+        both(
+            &mut r,
+            &Observation {
+                http: 400,
+                ..obs(CallStatus::Error, 6)
+            },
+        );
+        both(
+            &mut r,
+            &Observation {
+                http: 429,
+                ..obs(CallStatus::Pressure, 7)
+            },
+        );
         assert_eq!(r.breaker.fails, 2);
-        assert!(hard_failure(&Observation { http: 503, ..obs(CallStatus::Pressure, 0) }));
+        assert!(hard_failure(&Observation {
+            http: 503,
+            ..obs(CallStatus::Pressure, 0)
+        }));
         assert!(hard_failure(&obs(CallStatus::Error, 0)));
         both(&mut r, &obs(CallStatus::Error, 8));
         assert_eq!((r.state, r.breaker.opens), (ModelState::Quarantined, 1));
@@ -466,13 +560,19 @@ mod tests {
 
     #[test]
     fn backoff_follows_the_schedule_with_bounded_full_jitter() {
-        assert_eq!((1..=7).map(backoff_cap_ms).collect::<Vec<_>>(), vec![60_000, 300_000, 1_800_000, 7_200_000, 43_200_000, 43_200_000, 43_200_000]);
+        assert_eq!(
+            (1..=7).map(backoff_cap_ms).collect::<Vec<_>>(),
+            vec![60_000, 300_000, 1_800_000, 7_200_000, 43_200_000, 43_200_000, 43_200_000]
+        );
         for opens in 1..=6 {
             let cap = backoff_cap_ms(opens);
             let draws: Vec<u64> = (0..500).map(|s| backoff_ms(opens, s)).collect();
             assert!(draws.iter().all(|d| *d <= cap), "{opens}");
             // Full jitter spreads over the whole range, not one point.
-            assert!(draws.iter().any(|d| *d < cap / 4) && draws.iter().any(|d| *d > cap * 3 / 4), "{opens}");
+            assert!(
+                draws.iter().any(|d| *d < cap / 4) && draws.iter().any(|d| *d > cap * 3 / 4),
+                "{opens}"
+            );
         }
         assert_eq!(backoff_ms(2, 77), backoff_ms(2, 77));
     }
@@ -490,7 +590,10 @@ mod tests {
         assert!(!half_open_due(&r, until + 1), "one check at a time");
         // The check fails: open again on the next step (up to 5 m).
         assert!(!half_open_result(&mut r, false, until));
-        assert_eq!((r.state, r.breaker.opens, r.breaker.half_open), (ModelState::Quarantined, 2, false));
+        assert_eq!(
+            (r.state, r.breaker.opens, r.breaker.half_open),
+            (ModelState::Quarantined, 2, false)
+        );
         assert!(r.breaker.open_until_ms <= until + 300_000);
         // A failing background call while half-open also opens it again.
         r.breaker.half_open = true;
@@ -498,6 +601,12 @@ mod tests {
         assert_eq!(r.breaker.opens, 3);
         // A pass closes it.
         assert!(half_open_result(&mut r, true, until + 20));
-        assert_eq!((r.state, r.breaker.clone()), (ModelState::Live, crate::model_registry::record::Breaker::default()));
+        assert_eq!(
+            (r.state, r.breaker.clone()),
+            (
+                ModelState::Live,
+                crate::model_registry::record::Breaker::default()
+            )
+        );
     }
 }

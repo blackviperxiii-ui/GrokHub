@@ -57,7 +57,10 @@ impl std::fmt::Debug for Sidecar {
 }
 
 fn unix_secs() -> u64 {
-    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
 }
 
 impl Sidecar {
@@ -73,7 +76,12 @@ impl Sidecar {
 
     /// `true` when `/health` answers 200 with the bearer token.
     pub fn healthy(&self) -> bool {
-        health_ok(&self.host, self.port, &self.token, Duration::from_millis(400))
+        health_ok(
+            &self.host,
+            self.port,
+            &self.token,
+            Duration::from_millis(400),
+        )
     }
 
     /// Block until healthy or [`HEALTH_TIMEOUT`].
@@ -105,7 +113,13 @@ impl Sidecar {
         if self.alive() {
             return Ok(());
         }
-        let child = spawn_llama(&self.binary, &self.model, &self.host, self.port, &self.token)?;
+        let child = spawn_llama(
+            &self.binary,
+            &self.model,
+            &self.host,
+            self.port,
+            &self.token,
+        )?;
         *self.child.lock().expect("sidecar lock") = child;
         self.restarts.fetch_add(1, Ordering::SeqCst);
         self.wait_healthy()
@@ -127,8 +141,12 @@ impl Drop for Sidecar {
 
 /// Pick a free port on 127.0.0.1 (released before the child binds it).
 pub fn free_loopback_port() -> Result<u16, String> {
-    let listener = TcpListener::bind(("127.0.0.1", 0)).map_err(|e| format!("loopback bind: {e}"))?;
-    let port = listener.local_addr().map_err(|e| format!("loopback addr: {e}"))?.port();
+    let listener =
+        TcpListener::bind(("127.0.0.1", 0)).map_err(|e| format!("loopback bind: {e}"))?;
+    let port = listener
+        .local_addr()
+        .map_err(|e| format!("loopback addr: {e}"))?
+        .port();
     Ok(port)
 }
 
@@ -140,7 +158,13 @@ pub fn is_loopback_host(host: &str) -> bool {
 /// Command line for llama-server: host locked to loopback, API key required,
 /// plus hardware-aware perf flags from [`super::local_perf`].
 pub fn llama_args(model: &Path, host: &str, port: u16, token: &str) -> Vec<String> {
-    llama_args_with_perf(model, host, port, token, &super::local_perf::current_defaults())
+    llama_args_with_perf(
+        model,
+        host,
+        port,
+        token,
+        &super::local_perf::current_defaults(),
+    )
 }
 
 /// Same as [`llama_args`] with an explicit [`super::local_perf::RuntimeDefaults`].
@@ -165,36 +189,61 @@ pub fn llama_args_with_perf(
     args
 }
 
-fn spawn_llama(binary: &Path, model: &Path, host: &str, port: u16, token: &str) -> Result<Child, String> {
+fn spawn_llama(
+    binary: &Path,
+    model: &Path,
+    host: &str,
+    port: u16,
+    token: &str,
+) -> Result<Child, String> {
     if !is_loopback_host(host) {
         return Err(format!("local model server must bind loopback, not {host}"));
     }
     // Only the known server name — env overrides must still be llama-server.
     let name = binary.file_name().and_then(|n| n.to_str()).unwrap_or("");
     if name != llama_server_name() {
-        return Err(format!("local model binary must be named {}, not {name}", llama_server_name()));
+        return Err(format!(
+            "local model binary must be named {}, not {name}",
+            llama_server_name()
+        ));
     }
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let mode = std::fs::metadata(binary).map_err(|e| format!("local model binary: {e}"))?.permissions().mode();
+        let mode = std::fs::metadata(binary)
+            .map_err(|e| format!("local model binary: {e}"))?
+            .permissions()
+            .mode();
         if mode & 0o111 == 0 {
-            return Err(format!("local model binary is not executable: {}", binary.display()));
+            return Err(format!(
+                "local model binary is not executable: {}",
+                binary.display()
+            ));
         }
     }
     let mut cmd = Command::new(binary);
-    cmd.args(llama_args(model, host, port, token)).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+    cmd.args(llama_args(model, host, port, token))
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
     grokhub_core::proc_util::hide_windows_console(&mut cmd);
-    cmd.spawn().map_err(|e| format!("could not start local model server: {e}"))
+    cmd.spawn()
+        .map_err(|e| format!("could not start local model server: {e}"))
 }
 
 /// Start llama-server on a fresh loopback port.
 pub fn start(paths: &SidecarPaths) -> Result<Sidecar, String> {
     if !paths.binary.is_file() {
-        return Err(format!("local model binary missing: {}", paths.binary.display()));
+        return Err(format!(
+            "local model binary missing: {}",
+            paths.binary.display()
+        ));
     }
     if !paths.model.is_file() {
-        return Err(format!("local model file missing: {}", paths.model.display()));
+        return Err(format!(
+            "local model file missing: {}",
+            paths.model.display()
+        ));
     }
     let host = "127.0.0.1".to_string();
     let port = free_loopback_port()?;
@@ -222,8 +271,15 @@ pub fn health_ok(host: &str, port: u16, token: &str, timeout: Duration) -> bool 
         return false;
     }
     let url = format!("http://{host}:{port}/health");
-    let agent = ureq::AgentBuilder::new().timeout_connect(timeout).timeout_read(timeout).build();
-    match agent.get(&url).set("Authorization", &format!("Bearer {token}")).call() {
+    let agent = ureq::AgentBuilder::new()
+        .timeout_connect(timeout)
+        .timeout_read(timeout)
+        .build();
+    match agent
+        .get(&url)
+        .set("Authorization", &format!("Bearer {token}"))
+        .call()
+    {
         Ok(resp) => resp.status() == 200,
         Err(_) => false,
     }
@@ -252,7 +308,11 @@ pub fn resolve_paths(config_dir: &Path) -> Option<SidecarPaths> {
 }
 
 fn user_models_dir() -> Option<PathBuf> {
-    Some(grokhub_core::paths::user_home()?.join("GrokHub").join("models"))
+    Some(
+        grokhub_core::paths::user_home()?
+            .join("GrokHub")
+            .join("models"),
+    )
 }
 
 fn resolve_model_file(config_dir: &Path) -> Option<PathBuf> {
@@ -300,7 +360,8 @@ fn global_slot() -> &'static Mutex<Option<Sidecar>> {
 /// Ensure a healthy global sidecar when assets exist under `config_dir`.
 pub fn ensure_global(config_dir: &Path) -> Result<(), String> {
     tick_idle_unload();
-    let paths = resolve_paths(config_dir).ok_or_else(|| "local model binary or GGUF is not installed".to_string())?;
+    let paths = resolve_paths(config_dir)
+        .ok_or_else(|| "local model binary or GGUF is not installed".to_string())?;
     let mut slot = global_slot().lock().expect("sidecar global");
     if let Some(side) = slot.as_ref() {
         side.ensure_alive()?;
@@ -397,8 +458,17 @@ pub mod fake_server {
             let stop_t = stop.clone();
             let hits_t = hits.clone();
             let token_t = token.clone();
-            let join = std::thread::spawn(move || serve_loop(listener, token_t, stop_t, hits_t, exit_after_completions));
-            Self { host: "127.0.0.1".into(), port, token, stop, hits, join: Some(join) }
+            let join = std::thread::spawn(move || {
+                serve_loop(listener, token_t, stop_t, hits_t, exit_after_completions)
+            });
+            Self {
+                host: "127.0.0.1".into(),
+                port,
+                token,
+                stop,
+                hits,
+                join: Some(join),
+            }
         }
 
         pub fn base_url(&self) -> String {
@@ -456,7 +526,10 @@ pub mod fake_server {
         for _ in 0..50 {
             match stream.read(chunk) {
                 Ok(n) => return Ok(n),
-                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock || e.kind() == std::io::ErrorKind::Interrupted => {
+                Err(e)
+                    if e.kind() == std::io::ErrorKind::WouldBlock
+                        || e.kind() == std::io::ErrorKind::Interrupted =>
+                {
                     // Should be rare after set_nonblocking(false); retry briefly.
                     std::thread::sleep(Duration::from_millis(2));
                 }
@@ -469,7 +542,9 @@ pub mod fake_server {
     /// Read one HTTP/1.1 request (headers + Content-Length body). Windows often
     /// delivers headers and body in separate TCP packets; a single `read` is not enough.
     fn read_http_request(stream: &mut TcpStream) -> Result<String, ()> {
-        stream.set_read_timeout(Some(Duration::from_millis(2_000))).ok();
+        stream
+            .set_read_timeout(Some(Duration::from_millis(2_000)))
+            .ok();
         let mut raw = Vec::with_capacity(4096);
         let mut chunk = [0u8; 4096];
         let header_end = loop {
@@ -513,13 +588,23 @@ pub mod fake_server {
         Ok(String::from_utf8_lossy(&raw).into_owned())
     }
 
-    fn handle_one(stream: &mut TcpStream, token: &str, hits: &std::sync::Arc<AtomicUsize>) -> Result<(), ()> {
+    fn handle_one(
+        stream: &mut TcpStream,
+        token: &str,
+        hits: &std::sync::Arc<AtomicUsize>,
+    ) -> Result<(), ()> {
         let req = read_http_request(stream)?;
         let first = req.lines().next().unwrap_or("");
-        let auth_ok = req.lines().any(|l| l.eq_ignore_ascii_case(&format!("Authorization: Bearer {token}")));
+        let auth_ok = req
+            .lines()
+            .any(|l| l.eq_ignore_ascii_case(&format!("Authorization: Bearer {token}")));
         if first.starts_with("GET /health") {
             let body = if auth_ok { "ok" } else { "unauthorized" };
-            let code = if auth_ok { "200 OK" } else { "401 Unauthorized" };
+            let code = if auth_ok {
+                "200 OK"
+            } else {
+                "401 Unauthorized"
+            };
             write_resp(stream, code, body);
             return Ok(());
         }
@@ -642,17 +727,36 @@ mod tests {
     #[test]
     fn fake_server_health_and_chat_contract() {
         let fake = FakeServer::start(None);
-        assert!(health_ok(&fake.host, fake.port, &fake.token, Duration::from_secs(2)));
-        assert!(!health_ok(&fake.host, fake.port, "wrong", Duration::from_secs(1)));
-        let rt = super::super::local_http::HttpLocalRuntime::new(fake.base_url(), fake.token.clone());
-        let v = rt.classify("hello", &["routine", "sensitive"]).expect("classify");
+        assert!(health_ok(
+            &fake.host,
+            fake.port,
+            &fake.token,
+            Duration::from_secs(2)
+        ));
+        assert!(!health_ok(
+            &fake.host,
+            fake.port,
+            "wrong",
+            Duration::from_secs(1)
+        ));
+        let rt =
+            super::super::local_http::HttpLocalRuntime::new(fake.base_url(), fake.token.clone());
+        let v = rt
+            .classify("hello", &["routine", "sensitive"])
+            .expect("classify");
         assert_eq!(v["label"], "routine");
         assert_eq!(v["score"], 0.91);
         let s = rt.summarize("long text", 40).expect("summarize");
         assert_eq!(s["summary"], "fake summary");
         let mut deltas = String::new();
         let chat = rt
-            .chat_stream(&[super::super::local::ChatMessage { role: "user".into(), content: "hi".into() }], &mut |d| deltas.push_str(d))
+            .chat_stream(
+                &[super::super::local::ChatMessage {
+                    role: "user".into(),
+                    content: "hi".into(),
+                }],
+                &mut |d| deltas.push_str(d),
+            )
             .expect("chat");
         assert!(!chat.is_empty());
         assert!(!deltas.is_empty());
