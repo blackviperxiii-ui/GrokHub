@@ -80,8 +80,7 @@ fn expand_shell_assignments(cmd: &str) -> String {
                     continue;
                 }
                 while j < bytes.len()
-                    && (bytes[j].is_ascii_alphanumeric()
-                        || matches!(bytes[j], b'.' | b'_' | b'-'))
+                    && (bytes[j].is_ascii_alphanumeric() || matches!(bytes[j], b'.' | b'_' | b'-'))
                 {
                     j += 1;
                 }
