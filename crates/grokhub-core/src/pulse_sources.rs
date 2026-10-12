@@ -2332,9 +2332,14 @@ mod tests {
     fn pick_new_caps_posts_per_source_name() {
         let cache = SourceCache::default();
         let mut list = Vec::new();
-        for (i, title) in ["Alpha ships", "Bravo lands", "Charlie opens", "Delta closes"]
-            .iter()
-            .enumerate()
+        for (i, title) in [
+            "Alpha ships",
+            "Bravo lands",
+            "Charlie opens",
+            "Delta closes",
+        ]
+        .iter()
+        .enumerate()
         {
             let mut it = item(title, &format!("https://a.test/{i}"), NOW - i as u64);
             it.source_name = "Hacker News".into();
@@ -2416,8 +2421,14 @@ mod tests {
         let bias = BTreeMap::<String, i32>::new();
         let empty_posts = BTreeMap::<String, u32>::new();
         let history: BTreeMap<String, u32> = [("other".into(), 5)].into_iter().collect();
-        let plain =
-            rank_with(std::slice::from_ref(&followed), &p, &bias, &empty_posts, NOW)[0].score;
+        let plain = rank_with(
+            std::slice::from_ref(&followed),
+            &p,
+            &bias,
+            &empty_posts,
+            NOW,
+        )[0]
+        .score;
         let novel = rank_with(std::slice::from_ref(&followed), &p, &bias, &history, NOW)[0].score;
         assert_eq!(plain, 35);
         assert_eq!(novel, 42);

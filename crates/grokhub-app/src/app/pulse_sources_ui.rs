@@ -1229,10 +1229,18 @@ mod tests {
         cabin.add_interest("Rust");
         cabin.cfg.pulse_sources.subreddits.clear();
         let now = now_ms();
-        let mut a = item("Async in the kernel", "https://www.reddit.com/r/rust/comments/a/x", now);
+        let mut a = item(
+            "Async in the kernel",
+            "https://www.reddit.com/r/rust/comments/a/x",
+            now,
+        );
         a.kind = SourceKind::Reddit;
         a.source_name = "r/rust".into();
-        let mut b = item("Egui 0.40", "https://www.reddit.com/r/rust/comments/b/y", now - 1);
+        let mut b = item(
+            "Egui 0.40",
+            "https://www.reddit.com/r/rust/comments/b/y",
+            now - 1,
+        );
         b.kind = SourceKind::Reddit;
         b.source_name = "r/rust".into();
         assert_eq!(cabin.post_source_run(one_item_run(vec![a, b], now)), 2);
