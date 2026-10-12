@@ -2,15 +2,9 @@
 
 ## Unreleased
 
-<<<<<<< HEAD
 - Added: weekly state-of-systems briefing. Sunday at dream time (same `NightPasses` slot as self-review) aggregates local outcomes, `/health` checks, automation health, Pulse digests, and dream What-changed into one Digest card; `/brief` regenerates on demand. Deterministic, local-first, no model call; every claim cites a source id. Missions/decision-journal convert actions wait until those surfaces exist in-app.
-=======
-<<<<<<< HEAD
 - Windows release tags can Authenticode-sign Setup and the portable zip through SignPath Foundation when `SIGNPATH_*` secrets/variables are set (no-op until then). See `docs/CODE_SIGNING.md`.
-=======
->>>>>>> origin/beta
 - Recovery-first runtime v1: a visible `RecoveryState` projection (Running / Retrying / Replanning / Needs approval / Needs input / Paused / Blocked / Recovered / Completed with gaps) over the existing harness ladder, parks and drive gaps. Ladder steps surface a calm status line with reason and next action; hard approvals stay hard and no parallel retry stack was added.
->>>>>>> origin/beta
 - Fixed: Pulse Feed **More like this** starts a source check immediately (HN / Reddit / Web search for the post’s words) instead of only queuing for the next scheduled check with no visible reaction. The button reads Looking…, the Feed shows the check banner, and related posts can land when the fetch finishes.
 - Composer chips and the empty-home greeting paint from built-in local pools only (habit / stage / `local_greeting`); they no longer spend a fast-model ask on every refresh. Chat tab titles come from content words in recent user turns (`topics_from_turns`) instead of a background `GOAL:` summarize. Skill activation matches whole-phrase / `OR`-split triggers before bag-of-words Jaccard, so short junk asks do not false-activate.
 - Pulse interest learning is a local connection graph, not “saw a word → whole identity.” Chat titles need mentions in two distinct chats before they become Interests; related topics get weighted edges; each source check may probe up to two neighbor queries from strong open edges; Save / More like this strengthens a link and Not interested closes it and branches to other neighbors. Domain-general (apps, music, tools, hobbies, …) — no game-only schema. Graph lives in `interests.json`.
