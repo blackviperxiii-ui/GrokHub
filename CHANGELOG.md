@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Beta builds are labeled X.Y.Z-beta.N and compare correctly against releases. GitHub tags `vX.Y.Z-beta.N` publish as pre-releases (never Latest); stable `vX.Y.Z` tags are unchanged.
+- Dependency diet: `Cargo.lock` package count **604 → 601** (dropped unused `tray-icon` libxdo/X11 deps; trimmed `winresource`/`x11rb`/`globset`/`toml`/`regex` features; workspace-shared `sha2`/`ureq`/`image`/`keyring`/`rusqlite`). No feature loss; image codec smoke covers png/jpeg/webp/ico/bmp.
 - Folder-level AGENTS.md and CLAUDE.md files are picked up when the agent first works in that folder, not only the project root.
 - Short UI repaint timers (palette search, Pulse tab crossfade, Permissions keyring wait, folder picker) only run while something is actually busy or animating, so an idle cabin is not woken every few dozen milliseconds.
 - Background and unattended jobs use a slimmer system prompt: they keep the cabin safety rules and AGENTS layers, and drop the skills list and plugin extras unless the job text declares `NEED_SKILLS` or `NEED_PLUGINS`. Chat is unchanged; the nightly review still uses its lean review prompt.
