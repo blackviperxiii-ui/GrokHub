@@ -9,8 +9,8 @@ use grokhub_core::desktop_mcp::{
 use x11rb::connection::{Connection, RequestConnection};
 use x11rb::protocol::randr::ConnectionExt as RandrExt;
 use x11rb::protocol::xproto::{
-    ConnectionExt as XprotoExt, ImageFormat, ImageOrder, KEY_PRESS_EVENT, KEY_RELEASE_EVENT,
-    BUTTON_PRESS_EVENT, BUTTON_RELEASE_EVENT, MOTION_NOTIFY_EVENT,
+    ConnectionExt as XprotoExt, ImageFormat, ImageOrder, BUTTON_PRESS_EVENT, BUTTON_RELEASE_EVENT,
+    KEY_PRESS_EVENT, KEY_RELEASE_EVENT, MOTION_NOTIFY_EVENT,
 };
 use x11rb::protocol::xtest::ConnectionExt as XtestExt;
 use x11rb::rust_connection::RustConnection;
@@ -103,7 +103,13 @@ impl X11Backend {
         (red, green, blue, bpp, msb)
     }
 
-    fn capture_root_rect(&self, x: i32, y: i32, w: u32, h: u32) -> Result<(Vec<u8>, u32, u32), String> {
+    fn capture_root_rect(
+        &self,
+        x: i32,
+        y: i32,
+        w: u32,
+        h: u32,
+    ) -> Result<(Vec<u8>, u32, u32), String> {
         if w == 0 || h == 0 {
             return Err("empty capture".into());
         }
@@ -197,7 +203,11 @@ impl X11Backend {
         Ok((first, reply.keysyms_per_keycode, reply.keysyms))
     }
 
-    fn with_keycode(&self, keysym: u32, press: impl FnOnce(u8) -> Result<(), String>) -> Result<(), String> {
+    fn with_keycode(
+        &self,
+        keysym: u32,
+        press: impl FnOnce(u8) -> Result<(), String>,
+    ) -> Result<(), String> {
         let (first, per, syms) = self.keycode_map()?;
         let per = per.max(1) as usize;
         match find_keycode(first, per, &syms, keysym) {
@@ -274,15 +284,7 @@ impl DesktopBackend for X11Backend {
             // RandR monitor positions are already root-window coordinates.
             let (rgba, cw, ch) =
                 self.capture_root_rect(union.x, union.y, union.physical_w, union.physical_h)?;
-            return finish_shot(
-                "all",
-                union.x,
-                union.y,
-                cw,
-                ch,
-                union.scale_factor,
-                &rgba,
-            );
+            return finish_shot("all", union.x, union.y, cw, ch, union.scale_factor, &rgba);
         }
         let mon = mons
             .iter()
@@ -372,7 +374,11 @@ impl DesktopBackend for X11Backend {
 impl X11Backend {
     fn tap_keysym_down(&self, keysym: u32, down: bool) -> Result<(), String> {
         self.with_keycode(keysym, |kc| {
-            let kind = if down { KEY_PRESS_EVENT } else { KEY_RELEASE_EVENT };
+            let kind = if down {
+                KEY_PRESS_EVENT
+            } else {
+                KEY_RELEASE_EVENT
+            };
             self.fake(kind, kc, 0, 0)
         })
     }

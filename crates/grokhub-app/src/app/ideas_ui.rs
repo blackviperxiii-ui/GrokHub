@@ -26,7 +26,11 @@ enum IdeaAct {
     Apply(String),
     Delete(String),
     Board(String),
-    Draft { id: String, text: String, save: bool },
+    Draft {
+        id: String,
+        text: String,
+        save: bool,
+    },
     Send(String),
 }
 
@@ -119,7 +123,9 @@ impl Cabin {
                 ui.scope_builder(egui::UiBuilder::new().max_rect(rect_slot), |ui| {
                     ui.set_min_width(avail.width());
                     ui.multiply_opacity(enter.clamp(0.0, 1.0));
-                    if self.idea_board.open.as_deref() == Some(card.id.as_str()) && card.kind == UpdateKind::Idea {
+                    if self.idea_board.open.as_deref() == Some(card.id.as_str())
+                        && card.kind == UpdateKind::Idea
+                    {
                         self.paint_idea_open(ui, &card, &mut act);
                     } else {
                         let st = self.pulse_row_state(&card.id);
@@ -168,7 +174,12 @@ impl Cabin {
     }
 
     /// The card opened in place: details, the action, and the chat.
-    fn paint_idea_open(&mut self, ui: &mut egui::Ui, card: &UpdateCard, act: &mut Option<IdeaAct>) -> egui::Rect {
+    fn paint_idea_open(
+        &mut self,
+        ui: &mut egui::Ui,
+        card: &UpdateCard,
+        act: &mut Option<IdeaAct>,
+    ) -> egui::Rect {
         let id = card.id.clone();
         let thread = card
             .discuss_thread
@@ -189,7 +200,12 @@ impl Cabin {
             .as_ref()
             .filter(|(n, _)| n == &id)
             .map(|(_, t)| t.clone());
-        let mut composer = self.idea_board.composers.get(&id).cloned().unwrap_or_default();
+        let mut composer = self
+            .idea_board
+            .composers
+            .get(&id)
+            .cloned()
+            .unwrap_or_default();
         let resp = egui::Frame::NONE
             .fill(crate::theme::elevated())
             .stroke(egui::Stroke::new(1.0_f32, crate::theme::border_strong()))
@@ -227,11 +243,9 @@ impl Cabin {
                             .color(crate::theme::muted()),
                     );
                 }
-                if let Some(details) = card
-                    .details
-                    .as_deref()
-                    .filter(|d| !d.trim().is_empty() && Some(d.trim()) != card.body.as_deref().map(str::trim))
-                {
+                if let Some(details) = card.details.as_deref().filter(|d| {
+                    !d.trim().is_empty() && Some(d.trim()) != card.body.as_deref().map(str::trim)
+                }) {
                     ui.add_space(8.0);
                     crate::cards::section_label(ui, "Details");
                     ui.label(
@@ -295,15 +309,13 @@ impl Cabin {
                                     .size(crate::theme::FONT_TIP)
                                     .color(crate::theme::subtle()),
                             );
-                            ui.label(
-                                RichText::new(&text)
-                                    .size(crate::theme::FONT_BODY)
-                                    .color(if mine {
-                                        crate::theme::fg()
-                                    } else {
-                                        crate::theme::muted()
-                                    }),
-                            );
+                            ui.label(RichText::new(&text).size(crate::theme::FONT_BODY).color(
+                                if mine {
+                                    crate::theme::fg()
+                                } else {
+                                    crate::theme::muted()
+                                },
+                            ));
                             ui.add_space(6.0);
                         }
                         if thinking {
@@ -329,7 +341,9 @@ impl Cabin {
                             .desired_width((ui.available_width() - send_w).max(120.0)),
                     );
                     let enter = edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-                    if (enter || crate::cards::ghost_pill(ui, "Send")) && !composer.trim().is_empty() {
+                    if (enter || crate::cards::ghost_pill(ui, "Send"))
+                        && !composer.trim().is_empty()
+                    {
                         *act = Some(IdeaAct::Send(id.clone()));
                         // Stay in the box for the next line; the card stays open while you type.
                         ui.memory_mut(|m| m.request_focus(chat_edit_id(&id)));
@@ -374,7 +388,12 @@ impl Cabin {
                 }
             }
             Some(IdeaAct::Send(id)) => {
-                let text = self.idea_board.composers.get(&id).cloned().unwrap_or_default();
+                let text = self
+                    .idea_board
+                    .composers
+                    .get(&id)
+                    .cloned()
+                    .unwrap_or_default();
                 self.send_idea_card_chat(&id, text);
             }
             None => {}
@@ -417,7 +436,8 @@ impl Cabin {
 
     /// A hidden chat for this card. It is not a History chat.
     pub(super) fn make_idea_thread(&mut self, card: &UpdateCard) -> String {
-        let mut thread = crate::threads::ChatThread::new(&format!("Discuss · {}", card.title), false);
+        let mut thread =
+            crate::threads::ChatThread::new(&format!("Discuss · {}", card.title), false);
         thread.background = true;
         thread.title_locked = true;
         thread
@@ -456,10 +476,7 @@ impl Cabin {
             return;
         }
         if !self.agent_ready() {
-            self.idea_board.note = Some((
-                id.to_string(),
-                self.no_agent_note().into(),
-            ));
+            self.idea_board.note = Some((id.to_string(), self.no_agent_note().into()));
             return;
         }
         if let Err(e) = mark_idea_modified(&mut self.updates, id) {

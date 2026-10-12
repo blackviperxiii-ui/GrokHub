@@ -7,7 +7,9 @@ use std::io::Read;
 use std::sync::mpsc;
 use std::time::Duration;
 
-use grokhub_core::desktop_mcp::{argb32_premul_to_rgba, parse_screenshot2_metadata, ScreenShot2Meta};
+use grokhub_core::desktop_mcp::{
+    argb32_premul_to_rgba, parse_screenshot2_metadata, ScreenShot2Meta,
+};
 use zbus::zvariant::{Fd, OwnedValue, Value};
 
 const PATH: &str = "/org/kde/KWin/ScreenShot2";
@@ -95,7 +97,8 @@ fn session_bus() -> Result<zbus::blocking::Connection, String> {
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
         let _ = tx.send(
-            zbus::blocking::Connection::session().map_err(|err| format!("D-Bus session bus: {err}")),
+            zbus::blocking::Connection::session()
+                .map_err(|err| format!("D-Bus session bus: {err}")),
         );
     });
     match rx.recv_timeout(Duration::from_secs(2)) {

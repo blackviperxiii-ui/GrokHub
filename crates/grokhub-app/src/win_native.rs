@@ -9,22 +9,20 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use windows_sys::Win32::Foundation::{BOOL, HWND, LPARAM, RECT, SYSTEMTIME, TRUE};
 use windows_sys::Win32::Graphics::Dwm::DwmSetWindowAttribute;
+use windows_sys::Win32::Graphics::Gdi::{
+    GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST,
+};
 use windows_sys::Win32::System::Power::{
     SetThreadExecutionState, ES_CONTINUOUS, ES_SYSTEM_REQUIRED,
 };
 use windows_sys::Win32::System::SystemInformation::GetLocalTime;
-use windows_sys::Win32::UI::Shell::{
-    SetCurrentProcessExplicitAppUserModelID, ShellExecuteW,
-};
-use windows_sys::Win32::Graphics::Gdi::{
-    GetMonitorInfoW, MonitorFromWindow, MONITOR_DEFAULTTONEAREST, MONITORINFO,
-};
+use windows_sys::Win32::UI::Shell::{SetCurrentProcessExplicitAppUserModelID, ShellExecuteW};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GetWindowLongPtrW, GetWindowRect, GetWindowTextW, GetWindowThreadProcessId,
     IsIconic, IsWindowVisible, SetForegroundWindow, SetWindowLongPtrW, SetWindowPos, ShowWindow,
-    SystemParametersInfoW, GWL_EXSTYLE, HWND_TOP, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE,
-    SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW, SW_HIDE, SW_RESTORE, SW_SHOW, SW_SHOWNORMAL,
-    SPI_GETWORKAREA,
+    SystemParametersInfoW, GWL_EXSTYLE, HWND_TOP, SPI_GETWORKAREA, SWP_FRAMECHANGED,
+    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW, SW_HIDE, SW_RESTORE,
+    SW_SHOW, SW_SHOWNORMAL,
 };
 
 const APP_USER_MODEL_ID: &str = "GrokHub.Cabin";
@@ -168,7 +166,10 @@ fn hide_stub_windows(cabin: Option<HWND>) {
 }
 
 fn wide(s: &str) -> Vec<u16> {
-    OsStr::new(s).encode_wide().chain(std::iter::once(0)).collect()
+    OsStr::new(s)
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect()
 }
 
 /// Taskbar / toast identity so Explorer groups GrokHub as one app.
@@ -321,12 +322,7 @@ fn primary_work_area() -> Option<(i32, i32, i32, i32)> {
         bottom: 0,
     };
     unsafe {
-        let ok = SystemParametersInfoW(
-            SPI_GETWORKAREA,
-            0,
-            &mut rc as *mut RECT as *mut _,
-            0,
-        );
+        let ok = SystemParametersInfoW(SPI_GETWORKAREA, 0, &mut rc as *mut RECT as *mut _, 0);
         if ok == 0 {
             return None;
         }
@@ -468,8 +464,8 @@ pub fn local_wall_clock() -> grokhub_core::WallClock {
 
 fn file_dialog(save: bool, suggested: &str) -> Option<std::path::PathBuf> {
     use windows_sys::Win32::UI::Controls::Dialogs::{
-        GetOpenFileNameW, GetSaveFileNameW, OPENFILENAMEW, OFN_EXPLORER, OFN_FILEMUSTEXIST,
-        OFN_HIDEREADONLY, OFN_OVERWRITEPROMPT, OFN_PATHMUSTEXIST,
+        GetOpenFileNameW, GetSaveFileNameW, OFN_EXPLORER, OFN_FILEMUSTEXIST, OFN_HIDEREADONLY,
+        OFN_OVERWRITEPROMPT, OFN_PATHMUSTEXIST, OPENFILENAMEW,
     };
     let mut buf = [0u16; 1024];
     if !suggested.is_empty() {
@@ -557,14 +553,7 @@ pub fn apps_use_light_theme() -> Option<bool> {
     let name = wide("AppsUseLightTheme");
     unsafe {
         let mut key = std::ptr::null_mut();
-        if RegOpenKeyExW(
-            HKEY_CURRENT_USER,
-            sub.as_ptr(),
-            0,
-            KEY_READ,
-            &mut key,
-        ) != 0
-        {
+        if RegOpenKeyExW(HKEY_CURRENT_USER, sub.as_ptr(), 0, KEY_READ, &mut key) != 0 {
             return None;
         }
         let mut ty = 0u32;
@@ -605,7 +594,9 @@ pub fn adapter_ipv4s() -> Vec<std::net::Ipv4Addr> {
     for _ in 0..3 {
         let mut buf = vec![0u64; (size as usize).div_ceil(8)];
         let head = buf.as_mut_ptr().cast::<IP_ADAPTER_ADDRESSES_LH>();
-        let rc = unsafe { GetAdaptersAddresses(u32::from(AF_INET), flags, ptr::null(), head, &mut size) };
+        let rc = unsafe {
+            GetAdaptersAddresses(u32::from(AF_INET), flags, ptr::null(), head, &mut size)
+        };
         if rc == ERROR_BUFFER_OVERFLOW {
             continue;
         }
@@ -625,7 +616,9 @@ pub fn adapter_ipv4s() -> Vec<std::net::Ipv4Addr> {
                         if !sa.is_null() && (*sa).sa_family == AF_INET {
                             let sin = &*sa.cast::<SOCKADDR_IN>();
                             // S_addr is in network byte order, so its bytes in memory are the octets.
-                            out.push(std::net::Ipv4Addr::from(sin.sin_addr.S_un.S_addr.to_ne_bytes()));
+                            out.push(std::net::Ipv4Addr::from(
+                                sin.sin_addr.S_un.S_addr.to_ne_bytes(),
+                            ));
                         }
                         uni = u.Next.cast_const();
                     }
@@ -643,7 +636,8 @@ pub fn adapter_ipv4s() -> Vec<std::net::Ipv4Addr> {
 /// image has. `true` when the bytes are already PNG.
 pub fn clipboard_image() -> Option<(Vec<u8>, bool)> {
     use windows_sys::Win32::System::DataExchange::{
-        CloseClipboard, GetClipboardData, IsClipboardFormatAvailable, OpenClipboard, RegisterClipboardFormatW,
+        CloseClipboard, GetClipboardData, IsClipboardFormatAvailable, OpenClipboard,
+        RegisterClipboardFormatW,
     };
     use windows_sys::Win32::System::Memory::{GlobalLock, GlobalSize, GlobalUnlock};
     // CF_DIB; a const here keeps the Win32_System_Ole feature out.
@@ -671,7 +665,8 @@ pub fn clipboard_image() -> Option<(Vec<u8>, bool)> {
             if at.is_null() {
                 return None;
             }
-            let bytes = (len > 0 && len <= CAP).then(|| std::slice::from_raw_parts(at.cast::<u8>(), len).to_vec());
+            let bytes = (len > 0 && len <= CAP)
+                .then(|| std::slice::from_raw_parts(at.cast::<u8>(), len).to_vec());
             GlobalUnlock(handle);
             bytes.map(|b| (b, is_png))
         });
@@ -691,7 +686,10 @@ mod tests {
         assert!(!ips.is_empty(), "no IPv4 adapters found");
         let text: Vec<String> = ips.iter().map(|ip| ip.to_string()).collect();
         let refs: Vec<&str> = text.iter().map(String::as_str).collect();
-        assert!(grokhub_core::pair::pick_lan_ipv4(&refs).is_some(), "{text:?}");
+        assert!(
+            grokhub_core::pair::pick_lan_ipv4(&refs).is_some(),
+            "{text:?}"
+        );
     }
 
     #[test]

@@ -198,7 +198,10 @@ pub fn clean_project_title(raw: &str) -> String {
     let words: Vec<&str> = t.split_whitespace().take(4).collect();
     let bit = words.join(" ");
     let bit: String = bit.chars().take(28).collect();
-    let bit = bit.trim().trim_end_matches(['.', ',', ';', ':']).to_string();
+    let bit = bit
+        .trim()
+        .trim_end_matches(['.', ',', ';', ':'])
+        .to_string();
     if bit.chars().count() < 2 || is_product_name(&bit) {
         String::new()
     } else {
@@ -364,7 +367,11 @@ pub fn parse_llm_greeting(raw: &str) -> Option<String> {
         return None;
     }
     let out = clip_greeting(line);
-    if out.chars().count() < 8 || is_product_name(&out) || is_product_greeting(&out) || greeting_uses_machine_name(&out) {
+    if out.chars().count() < 8
+        || is_product_name(&out)
+        || is_product_greeting(&out)
+        || greeting_uses_machine_name(&out)
+    {
         None
     } else {
         Some(out)
@@ -375,26 +382,84 @@ pub fn parse_llm_greeting(raw: &str) -> Option<String> {
 /// ("I'll use the user's name if known. The greeting should…"). A plain one-shot
 /// turn prints that reasoning into the reply, so it must never reach the screen.
 pub fn is_model_planning(line: &str) -> bool {
-    let t = line.trim().trim_start_matches(['-', '*', '>', ' ']).to_ascii_lowercase();
+    let t = line
+        .trim()
+        .trim_start_matches(['-', '*', '>', ' '])
+        .to_ascii_lowercase();
     if t.is_empty() {
         return false;
     }
     const STARTS: &[&str] = &[
-        "i'll ", "i will ", "i should ", "i need ", "i'm going", "i am going", "i must ",
-        "i want to ", "i can ", "i think ", "let me ", "let's ", "okay", "ok,", "ok so",
-        "alright", "so the ", "now ", "first,", "next,", "then,", "the user", "the greeting",
-        "the line", "the reply", "the answer", "the output", "they want", "we need", "we should",
-        "need to ", "should ", "must ", "note:", "thinking", "hmm", "plan:", "draft:",
-        "here's ", "here is ", "sure", "got it", "understood", "maybe ", "perhaps ",
-        "keep it ", "make it ", "avoid ", "don't ", "do not ",
+        "i'll ",
+        "i will ",
+        "i should ",
+        "i need ",
+        "i'm going",
+        "i am going",
+        "i must ",
+        "i want to ",
+        "i can ",
+        "i think ",
+        "let me ",
+        "let's ",
+        "okay",
+        "ok,",
+        "ok so",
+        "alright",
+        "so the ",
+        "now ",
+        "first,",
+        "next,",
+        "then,",
+        "the user",
+        "the greeting",
+        "the line",
+        "the reply",
+        "the answer",
+        "the output",
+        "they want",
+        "we need",
+        "we should",
+        "need to ",
+        "should ",
+        "must ",
+        "note:",
+        "thinking",
+        "hmm",
+        "plan:",
+        "draft:",
+        "here's ",
+        "here is ",
+        "sure",
+        "got it",
+        "understood",
+        "maybe ",
+        "perhaps ",
+        "keep it ",
+        "make it ",
+        "avoid ",
+        "don't ",
+        "do not ",
     ];
     if STARTS.iter().any(|p| t.starts_with(p)) {
         return true;
     }
     const INSIDE: &[&str] = &[
-        "the user", "user's name", "the greeting", "the prompt", "the line should",
-        "one sentence", " characters", "no markdown", "no emoji", "if known",
-        "should sound", "status screen", "reply with only", "user.md", "memory.md",
+        "the user",
+        "user's name",
+        "the greeting",
+        "the prompt",
+        "the line should",
+        "one sentence",
+        " characters",
+        "no markdown",
+        "no emoji",
+        "if known",
+        "should sound",
+        "status screen",
+        "reply with only",
+        "user.md",
+        "memory.md",
     ];
     INSIDE.iter().any(|p| t.contains(p))
 }
@@ -439,7 +504,10 @@ pub fn pick_greeting(local: &str, llm: Option<&str>) -> String {
 pub fn pick_greeting_against(local: &str, llm: Option<&str>, sources: &[String]) -> String {
     if let Some(raw) = llm {
         if let Some(g) = parse_llm_greeting(raw) {
-            if !sources.iter().any(|source| crate::situation::echoes_source(&g, source)) {
+            if !sources
+                .iter()
+                .any(|source| crate::situation::echoes_source(&g, source))
+            {
                 return g;
             }
         }
@@ -475,7 +543,10 @@ pub fn should_refresh_greeting(
     has_auth: bool,
     busy: bool,
 ) -> bool {
-    has_auth && !busy && next_fp != prev_fp && now_ms.saturating_sub(last_at) >= GREETING_LLM_DEBOUNCE_MS
+    has_auth
+        && !busy
+        && next_fp != prev_fp
+        && now_ms.saturating_sub(last_at) >= GREETING_LLM_DEBOUNCE_MS
 }
 
 fn clip_greeting(s: &str) -> String {
@@ -574,8 +645,7 @@ mod tests {
         assert!(g.to_ascii_lowercase().contains("viper"), "{g}");
         assert!(g.to_ascii_lowercase().contains("night cabin"), "{g}");
         assert!(
-            !g.to_ascii_lowercase().contains("painted")
-                && !g.to_ascii_lowercase().contains("nvim"),
+            !g.to_ascii_lowercase().contains("painted") && !g.to_ascii_lowercase().contains("nvim"),
             "local line must not dump MEMORY.md: {g}"
         );
         assert!(g.chars().count() <= GREETING_MAX_CHARS, "{g}");
@@ -684,8 +754,10 @@ mod tests {
 
     #[test]
     fn parse_llm_greeting_strips_thinking() {
-        let g = parse_llm_greeting("THINKING:\nplan a quiet line\n\nAfternoon, Viper. The cabin is ready.")
-            .expect("body after thought");
+        let g = parse_llm_greeting(
+            "THINKING:\nplan a quiet line\n\nAfternoon, Viper. The cabin is ready.",
+        )
+        .expect("body after thought");
         assert!(g.to_ascii_lowercase().contains("afternoon"), "{g}");
         assert!(!g.to_ascii_lowercase().contains("thinking"), "{g}");
         assert!(
@@ -784,7 +856,10 @@ mod tests {
         assert_eq!(classify_greeting(&back), GreetingKind::ReturningQuiet);
         assert_eq!(local_greeting(&back), "Good evening, Viper. I'm here.");
 
-        assert_eq!(project_title_from_hint("Continue Night cabin"), "Night cabin");
+        assert_eq!(
+            project_title_from_hint("Continue Night cabin"),
+            "Night cabin"
+        );
         assert!(clean_project_title("CachyOS").is_empty());
         assert!(clean_project_title("GrokHub").is_empty());
         assert!(clean_project_title("Chat").is_empty());
@@ -794,13 +869,28 @@ mod tests {
     fn parse_llm_greeting_never_paints_the_model_planning() {
         let leaked = "I'll use the user's name if known. The greeting should sound like a familiar person, not a status screen.";
         assert!(is_model_planning(leaked));
-        assert!(parse_llm_greeting(leaked).is_none(), "planning alone must fall back to the local line");
-        let g = parse_llm_greeting(&format!("{leaked}\nLet me keep it short.\n\nEvening, Viper. Back to the wall?"))
-            .expect("the answer after the planning");
+        assert!(
+            parse_llm_greeting(leaked).is_none(),
+            "planning alone must fall back to the local line"
+        );
+        let g = parse_llm_greeting(&format!(
+            "{leaked}\nLet me keep it short.\n\nEvening, Viper. Back to the wall?"
+        ))
+        .expect("the answer after the planning");
         assert!(g.starts_with("Evening, Viper"), "{g}");
-        assert_eq!(parse_llm_greeting("Greeting: Morning, Sam.").as_deref(), Some("Morning, Sam."));
-        assert_eq!(pick_greeting("Evening, Viper.", Some(leaked)), "Evening, Viper.");
-        for ok in ["Evening, Viper.", "Morning, Sam. The deploy notes are where you left them.", "Back again, Ana."] {
+        assert_eq!(
+            parse_llm_greeting("Greeting: Morning, Sam.").as_deref(),
+            Some("Morning, Sam.")
+        );
+        assert_eq!(
+            pick_greeting("Evening, Viper.", Some(leaked)),
+            "Evening, Viper."
+        );
+        for ok in [
+            "Evening, Viper.",
+            "Morning, Sam. The deploy notes are where you left them.",
+            "Back again, Ana.",
+        ] {
             assert!(!is_model_planning(ok), "{ok}");
         }
     }

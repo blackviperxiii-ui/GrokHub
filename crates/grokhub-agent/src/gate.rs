@@ -288,7 +288,9 @@ pub fn decide_with(
         crate::harness::GateOutcome::Refuse { reason } => {
             return Decision::Refuse(reason);
         }
-        crate::harness::GateOutcome::Park { hard: Some(class), .. } => {
+        crate::harness::GateOutcome::Park {
+            hard: Some(class), ..
+        } => {
             // Always cannot skip. Attended parks the card; unattended and plan refuse.
             if gate.readonly_session {
                 return Decision::Refuse(readonly_refusal(name));
@@ -391,7 +393,10 @@ mod tests {
         let always = gate(PermMode::Always, false, true, true);
         assert_eq!(decide(&ask, "write", false, None), Decision::Ask);
         assert_eq!(decide(&auto, "search_replace", false, None), Decision::Ask);
-        assert_eq!(decide(&auto, "run_terminal_command", false, None), Decision::Ask);
+        assert_eq!(
+            decide(&auto, "run_terminal_command", false, None),
+            Decision::Ask
+        );
         assert_eq!(decide(&always, "write", false, None), Decision::Run);
         assert_eq!(decide(&ask, "write", true, None), Decision::Run);
 
@@ -414,7 +419,10 @@ mod tests {
             decide(&auto_away, "run_terminal_command", false, None),
             Decision::Refuse(unattended_deny("run_terminal_command"))
         );
-        assert_eq!(decide(&always_away, "search_replace", false, None), Decision::Run);
+        assert_eq!(
+            decide(&always_away, "search_replace", false, None),
+            Decision::Run
+        );
 
         for mode in [PermMode::Ask, PermMode::Auto, PermMode::Always] {
             for attended in [true, false] {
@@ -432,27 +440,68 @@ mod tests {
         }
 
         let off = gate(PermMode::Always, false, true, false);
-        assert_eq!(decide(&off, "screenshot", false, None), Decision::Refuse(OFF_MSG.into()));
-        assert_eq!(decide(&off, "type", false, None), Decision::Refuse(OFF_MSG.into()));
+        assert_eq!(
+            decide(&off, "screenshot", false, None),
+            Decision::Refuse(OFF_MSG.into())
+        );
+        assert_eq!(
+            decide(&off, "type", false, None),
+            Decision::Refuse(OFF_MSG.into())
+        );
 
         let on = gate(PermMode::Always, false, true, true);
         assert_eq!(
-            decide(&on, "screenshot", false, Some(DeskFlags { halted: true, locked: false })),
+            decide(
+                &on,
+                "screenshot",
+                false,
+                Some(DeskFlags {
+                    halted: true,
+                    locked: false
+                })
+            ),
             Decision::Refuse(HALT_MSG.into())
         );
         assert_eq!(
-            decide(&on, "screenshot", false, Some(DeskFlags { halted: false, locked: true })),
+            decide(
+                &on,
+                "screenshot",
+                false,
+                Some(DeskFlags {
+                    halted: false,
+                    locked: true
+                })
+            ),
             Decision::Refuse(LOCK_MSG.into())
         );
         assert_eq!(
-            decide(&on, "key", false, Some(DeskFlags { halted: false, locked: false })),
+            decide(
+                &on,
+                "key",
+                false,
+                Some(DeskFlags {
+                    halted: false,
+                    locked: false
+                })
+            ),
             Decision::Run
         );
-        assert_eq!(decide(&on, "screenshot", false, None), Decision::Refuse(OFF_MSG.into()));
+        assert_eq!(
+            decide(&on, "screenshot", false, None),
+            Decision::Refuse(OFF_MSG.into())
+        );
 
         let ask_desk = gate(PermMode::Ask, false, true, true);
         assert_eq!(
-            decide(&ask_desk, "click", false, Some(DeskFlags { halted: false, locked: false })),
+            decide(
+                &ask_desk,
+                "click",
+                false,
+                Some(DeskFlags {
+                    halted: false,
+                    locked: false
+                })
+            ),
             Decision::Ask
         );
         assert_eq!(
@@ -460,7 +509,10 @@ mod tests {
                 &gate(PermMode::Ask, false, false, true),
                 "screenshot",
                 false,
-                Some(DeskFlags { halted: false, locked: false })
+                Some(DeskFlags {
+                    halted: false,
+                    locked: false
+                })
             ),
             Decision::Refuse(unattended_deny("screenshot"))
         );
@@ -470,11 +522,27 @@ mod tests {
     fn hard_class_parks_under_always() {
         let always = gate(PermMode::Always, false, true, true);
         assert_eq!(
-            decide_with(&always, "hard_send_stub", "{}", true, None, Path::new("."), None),
+            decide_with(
+                &always,
+                "hard_send_stub",
+                "{}",
+                true,
+                None,
+                Path::new("."),
+                None
+            ),
             Decision::Ask
         );
         assert_eq!(
-            decide_with(&always, "drive__delete_file", "{}", true, None, Path::new("."), None),
+            decide_with(
+                &always,
+                "drive__delete_file",
+                "{}",
+                true,
+                None,
+                Path::new("."),
+                None
+            ),
             Decision::Ask
         );
         let away = gate(PermMode::Always, false, false, true);
@@ -487,7 +555,15 @@ mod tests {
         );
         // Soft write under Always still runs: the gate only tightens hard class.
         assert_eq!(
-            decide_with(&always, "write", r#"{"path":"a.txt","contents":"x"}"#, true, None, Path::new("."), None),
+            decide_with(
+                &always,
+                "write",
+                r#"{"path":"a.txt","contents":"x"}"#,
+                true,
+                None,
+                Path::new("."),
+                None
+            ),
             Decision::Run
         );
     }

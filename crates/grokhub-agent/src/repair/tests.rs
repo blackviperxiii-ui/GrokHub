@@ -12,7 +12,11 @@ fn granted(dir: &Path) -> ConsentLedger {
 }
 
 fn done(stdout: &str) -> ProbeRun {
-    ProbeRun::Done { code: Some(0), stdout: stdout.into(), stderr: String::new() }
+    ProbeRun::Done {
+        code: Some(0),
+        stdout: stdout.into(),
+        stderr: String::new(),
+    }
 }
 
 /// Canned Linux answers keyed by program.
@@ -36,7 +40,13 @@ struct Run {
     calls: Vec<String>,
 }
 
-fn run(label: &str, grant: bool, os: Os, has_bin: &dyn Fn(&str) -> bool, probes: &[ProbeId]) -> Run {
+fn run(
+    label: &str,
+    grant: bool,
+    os: Os,
+    has_bin: &dyn Fn(&str) -> bool,
+    probes: &[ProbeId],
+) -> Run {
     run_with(label, grant, os, has_bin, probes, &linux_answer)
 }
 
@@ -49,7 +59,11 @@ fn run_with(
     answer: &dyn Fn(&ProbeSpec) -> ProbeRun,
 ) -> Run {
     let dir = test_dir(label);
-    let ledger = if grant { granted(&dir) } else { ConsentLedger::load(&dir) };
+    let ledger = if grant {
+        granted(&dir)
+    } else {
+        ConsentLedger::load(&dir)
+    };
     let calls = RefCell::new(Vec::new());
     let runner = |spec: &ProbeSpec| {
         assert_eq!(read_only_violation(spec), None, "{}", spec.command_line());
@@ -66,7 +80,11 @@ fn run_with(
         runner: &runner,
     };
     let report = diagnose(&ctx, probes);
-    Run { dir, report, calls: calls.into_inner() }
+    Run {
+        dir,
+        report,
+        calls: calls.into_inner(),
+    }
 }
 
 fn apt(bin: &str) -> bool {
@@ -84,7 +102,10 @@ fn no_system_state_grant_runs_zero_probes_and_posts_the_ask() {
     assert_eq!(spans.len(), 1);
     assert_eq!(spans[0].decision, "deny");
     assert_eq!(spans[0].origin, Origin::Repair);
-    assert_eq!(spans[0].result, "scope system_state is off — only your click in Settings turns it on");
+    assert_eq!(
+        spans[0].result,
+        "scope system_state is off — only your click in Settings turns it on"
+    );
 }
 
 #[test]
@@ -111,14 +132,21 @@ fn every_probe_span_has_origin_repair_and_the_grant() {
     let r = run("diag-spans", true, Os::Linux, &apt, &[]);
     let spans = read_spans(&r.dir, SESSION).unwrap();
     assert_eq!(spans.len(), 8);
-    let grant = ConsentLedger::load(&r.dir).scope_grant(&Scope::SystemState).unwrap().id.clone();
+    let grant = ConsentLedger::load(&r.dir)
+        .scope_grant(&Scope::SystemState)
+        .unwrap()
+        .id
+        .clone();
     for span in &spans {
         assert_eq!(span.origin, Origin::Repair, "{span:?}");
         assert_eq!(span.tool, DIAGNOSE_TOOL);
         assert_eq!(span.decision, "allow");
         assert_eq!(span.consent_ref, grant);
     }
-    assert_eq!(spans[0].args_redacted, r#"{"command":"df -P -k","probe":"disk_usage"}"#);
+    assert_eq!(
+        spans[0].args_redacted,
+        r#"{"command":"df -P -k","probe":"disk_usage"}"#
+    );
 }
 
 #[test]
@@ -130,16 +158,31 @@ fn journal_secrets_and_emails_never_reach_the_span_or_the_model() {
         assert!(!text.contains("sk-abcdefghijklmnopqrstuv"), "{text}");
         assert!(!text.contains("jeremy@example.com"), "{text}");
     }
-    assert!(model.contains("[boot_errors] Oct 07 10:01:00 box sync[9]: auth failed for [email] key [redacted]"), "{model}");
+    assert!(
+        model.contains(
+            "[boot_errors] Oct 07 10:01:00 box sync[9]: auth failed for [email] key [redacted]"
+        ),
+        "{model}"
+    );
 }
 
 #[test]
 fn a_probe_that_needs_admin_is_skipped_with_the_plain_note() {
     let zypper = |b: &str| b == "zypper";
-    let r = run_with("diag-admin", true, Os::Linux, &zypper, &[ProbeId::PackageHealth], &|_| panic!("must not run"));
+    let r = run_with(
+        "diag-admin",
+        true,
+        Os::Linux,
+        &zypper,
+        &[ProbeId::PackageHealth],
+        &|_| panic!("must not run"),
+    );
     assert!(r.calls.is_empty());
     assert_eq!(r.report.findings.len(), 1);
-    assert_eq!(r.report.findings[0].plain, "Checking installed packages needs admin, skipped.");
+    assert_eq!(
+        r.report.findings[0].plain,
+        "Checking installed packages needs admin, skipped."
+    );
     let spans = read_spans(&r.dir, SESSION).unwrap();
     assert_eq!(spans[0].decision, "skip");
     assert_eq!(spans[0].result, NEEDS_ADMIN);
@@ -148,21 +191,43 @@ fn a_probe_that_needs_admin_is_skipped_with_the_plain_note() {
 
 #[test]
 fn a_probe_that_times_out_becomes_a_plain_note() {
-    let r = run_with("diag-timeout", true, Os::Linux, &apt, &[ProbeId::Memory], &|_| ProbeRun::TimedOut);
-    assert_eq!(r.report.findings[0].plain, "Checking memory took too long, so I stopped it.");
+    let r = run_with(
+        "diag-timeout",
+        true,
+        Os::Linux,
+        &apt,
+        &[ProbeId::Memory],
+        &|_| ProbeRun::TimedOut,
+    );
+    assert_eq!(
+        r.report.findings[0].plain,
+        "Checking memory took too long, so I stopped it."
+    );
     assert_eq!(read_spans(&r.dir, SESSION).unwrap()[0].result, "timeout");
 }
 
 #[test]
 fn my_wifi_doesnt_work_picks_network_probes_and_answers_in_plain_words() {
-    assert_eq!(probes_for_intent("my wifi doesn't work", Os::Linux), Some(vec![ProbeId::NetworkLinks, ProbeId::Dns]));
-    assert_eq!(probes_for_intent("My WiFi doesn’t work!", Os::Windows), Some(vec![ProbeId::NetTest]));
+    assert_eq!(
+        probes_for_intent("my wifi doesn't work", Os::Linux),
+        Some(vec![ProbeId::NetworkLinks, ProbeId::Dns])
+    );
+    assert_eq!(
+        probes_for_intent("My WiFi doesn’t work!", Os::Windows),
+        Some(vec![ProbeId::NetTest])
+    );
     let probes = probes_for_intent("my wifi doesn't work", Os::Linux).unwrap();
     let r = run("diag-wifi", true, Os::Linux, &apt, &probes);
-    assert_eq!(r.calls, vec!["ip -brief address", "getent hosts example.com"]);
+    assert_eq!(
+        r.calls,
+        vec!["ip -brief address", "getent hosts example.com"]
+    );
     let text = report_text(&r.report);
     let first = text.lines().next().unwrap();
-    assert_eq!(first, "I checked your computer and found 2 things worth fixing.");
+    assert_eq!(
+        first,
+        "I checked your computer and found 2 things worth fixing."
+    );
     for raw in ["ip ", "getent", "-brief", "example.com"] {
         assert!(!first.contains(raw), "{first}");
     }
@@ -177,27 +242,69 @@ fn my_wifi_doesnt_work_picks_network_probes_and_answers_in_plain_words() {
 
 #[test]
 fn intent_phrases_pick_probes_and_other_text_goes_to_the_model() {
-    assert_eq!(probes_for_intent("something's wrong with my computer", Os::Linux), Some(LINUX_PROBES.to_vec()));
-    assert_eq!(probes_for_intent("Something is wrong with my PC", Os::Windows), Some(WINDOWS_PROBES.to_vec()));
-    assert_eq!(probes_for_intent("my disk is full", Os::Linux), Some(vec![ProbeId::DiskUsage]));
+    assert_eq!(
+        probes_for_intent("something's wrong with my computer", Os::Linux),
+        Some(LINUX_PROBES.to_vec())
+    );
+    assert_eq!(
+        probes_for_intent("Something is wrong with my PC", Os::Windows),
+        Some(WINDOWS_PROBES.to_vec())
+    );
+    assert_eq!(
+        probes_for_intent("my disk is full", Os::Linux),
+        Some(vec![ProbeId::DiskUsage])
+    );
     assert_eq!(
         probes_for_intent("my laptop is so slow", Os::Linux),
         Some(vec![ProbeId::Memory, ProbeId::DiskUsage])
     );
-    assert_eq!(probes_for_intent("my printer isn't working", Os::Linux), Some(vec![ProbeId::FailedServices, ProbeId::BootErrors]));
-    assert_eq!(probes_for_intent("write a poem about my computer", Os::Linux), None);
-    assert_eq!(probes_for_intent("the build is broken on my machine", Os::Linux), None);
-    assert_eq!(probes_for_intent("this test is slow, can you speed it up?", Os::Linux), None);
-    assert_eq!(probes_for_intent("what's wrong with this function?", Os::Linux), None);
+    assert_eq!(
+        probes_for_intent("my printer isn't working", Os::Linux),
+        Some(vec![ProbeId::FailedServices, ProbeId::BootErrors])
+    );
+    assert_eq!(
+        probes_for_intent("write a poem about my computer", Os::Linux),
+        None
+    );
+    assert_eq!(
+        probes_for_intent("the build is broken on my machine", Os::Linux),
+        None
+    );
+    assert_eq!(
+        probes_for_intent("this test is slow, can you speed it up?", Os::Linux),
+        None
+    );
+    assert_eq!(
+        probes_for_intent("what's wrong with this function?", Os::Linux),
+        None
+    );
     assert_eq!(probes_for_intent("/diagnose", Os::Linux), None);
     // Coding messages that mention a trouble word and a device word.
-    assert_eq!(probes_for_intent("fix the DNS issue in resolver.rs", Os::Linux), None);
-    assert_eq!(probes_for_intent("the printer module has a problem", Os::Linux), None);
-    assert_eq!(probes_for_intent("wifi scan in src/net/scan is broken", Os::Linux), None);
-    assert_eq!(probes_for_intent("`audio::play` won't start", Os::Linux), None);
+    assert_eq!(
+        probes_for_intent("fix the DNS issue in resolver.rs", Os::Linux),
+        None
+    );
+    assert_eq!(
+        probes_for_intent("the printer module has a problem", Os::Linux),
+        None
+    );
+    assert_eq!(
+        probes_for_intent("wifi scan in src/net/scan is broken", Os::Linux),
+        None
+    );
+    assert_eq!(
+        probes_for_intent("`audio::play` won't start", Os::Linux),
+        None
+    );
     // Plain words still get the probes.
-    assert_eq!(probes_for_intent("my internet is not working.", Os::Windows), Some(vec![ProbeId::NetTest]));
-    assert_eq!(probes_for_intent("the sound on my laptop is broken", Os::Linux), Some(vec![ProbeId::FailedServices, ProbeId::BootErrors]));
+    assert_eq!(
+        probes_for_intent("my internet is not working.", Os::Windows),
+        Some(vec![ProbeId::NetTest])
+    );
+    assert_eq!(
+        probes_for_intent("the sound on my laptop is broken", Os::Linux),
+        Some(vec![ProbeId::FailedServices, ProbeId::BootErrors])
+    );
 }
 
 #[test]
@@ -209,8 +316,19 @@ fn findings_come_worst_first_and_the_first_sentence_has_no_command() {
     assert_eq!(sev, sorted);
     assert_eq!(r.report.findings[0].plain, "Your main disk is almost full (98% used), so updates can't install and apps may fail to save files.");
     let first = report_text(&r.report).lines().next().unwrap().to_string();
-    assert_eq!(first, "I checked your computer and found 3 things worth fixing.");
-    for p in ["df", "free -b", "systemctl", "journalctl", "getent", "dpkg", "apt list"] {
+    assert_eq!(
+        first,
+        "I checked your computer and found 3 things worth fixing."
+    );
+    for p in [
+        "df",
+        "free -b",
+        "systemctl",
+        "journalctl",
+        "getent",
+        "dpkg",
+        "apt list",
+    ] {
         assert!(!first.contains(p), "{first}");
     }
 }
@@ -222,5 +340,11 @@ fn the_tool_schema_offers_ids_not_commands() {
     let props = s["parameters"]["properties"].as_object().unwrap();
     assert_eq!(props.keys().collect::<Vec<_>>(), vec!["probes"]);
     assert_eq!(s["parameters"]["additionalProperties"], false);
-    assert_eq!(s["parameters"]["properties"]["probes"]["items"]["enum"].as_array().unwrap().len(), 14);
+    assert_eq!(
+        s["parameters"]["properties"]["probes"]["items"]["enum"]
+            .as_array()
+            .unwrap()
+            .len(),
+        14
+    );
 }

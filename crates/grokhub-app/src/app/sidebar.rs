@@ -49,11 +49,9 @@ impl Cabin {
                         }
                     }
                     let clock = Self::local_clock();
-                    if let Some(quiet) = quiet_until_chip(
-                        &clock.hm(),
-                        &self.cfg.quiet_start,
-                        &self.cfg.quiet_end,
-                    ) {
+                    if let Some(quiet) =
+                        quiet_until_chip(&clock.hm(), &self.cfg.quiet_start, &self.cfg.quiet_end)
+                    {
                         ui.add_space(8.0);
                         if crate::cards::titlebar_update_chip(ui, &quiet) {
                             self.nav = Nav::Settings;
@@ -388,151 +386,160 @@ impl Cabin {
                 let row_gap = ui.spacing().item_spacing.y;
                 let pitch = crate::theme::NAV_ROW_H + row_gap;
                 let raw_h = (ui.available_height() * 0.46).clamp(40.0, 320.0);
-                let proj_h = (((raw_h + row_gap) / pitch).floor().max(1.0) * pitch - row_gap).max(40.0);
+                let proj_h =
+                    (((raw_h + row_gap) / pitch).floor().max(1.0) * pitch - row_gap).max(40.0);
                 egui::ScrollArea::vertical()
                     .id_salt("rail-projects")
                     .auto_shrink([false, true])
                     .max_height(proj_h)
                     .show(ui, |ui| {
-                for (depth, idx) in tree {
-                    let kind = self.projects[idx].kind;
-                    let open = self.projects[idx].open;
-                    if self.proj_rename.as_deref() == Some(self.projects[idx].id.as_str()) {
-                        // Center the row so Name and Cancel share a top, bottom, and baseline.
-                        ui.allocate_ui_with_layout(
-                            egui::vec2(ui.available_width(), 30.0),
-                            egui::Layout::left_to_right(egui::Align::Center),
-                            |ui| {
-                                crate::icons::paint_tree_gutter(ui, depth);
-                                // Leave room for Cancel on the narrow rail. Name stays editable.
-                                let cancel_w = 78.0;
-                                let gap = ui.spacing().item_spacing.x;
-                                let edit_w = (ui.available_width() - cancel_w - gap).max(48.0);
-                                // egui replaces hint color with weak_text_color. Pin that to muted.
-                                {
-                                    let visuals = ui.visuals_mut();
-                                    visuals.weak_text_color = Some(crate::theme::muted());
-                                    visuals.text_cursor.stroke =
-                                        egui::Stroke::new(2.0_f32, crate::theme::fg());
-                                }
-                                let edit = ui.add(
-                                    egui::TextEdit::singleline(&mut self.proj_rename_buf)
-                                        .desired_width(edit_w)
-                                        .min_size(egui::vec2(edit_w, 30.0))
-                                        .frame(
-                                            egui::Frame::NONE
-                                                .fill(crate::theme::elevated())
-                                                .corner_radius(15.0)
-                                                .stroke(egui::Stroke::new(
-                                                    2.0_f32,
-                                                    crate::theme::fg(),
-                                                ))
-                                                .inner_margin(egui::Margin::symmetric(10, 6)),
-                                        )
-                                        .hint_text(crate::theme::hint("Name"))
-                                        .font(egui::FontId::proportional(13.0))
-                                        .vertical_align(egui::Align::Center),
+                        for (depth, idx) in tree {
+                            let kind = self.projects[idx].kind;
+                            let open = self.projects[idx].open;
+                            if self.proj_rename.as_deref() == Some(self.projects[idx].id.as_str()) {
+                                // Center the row so Name and Cancel share a top, bottom, and baseline.
+                                ui.allocate_ui_with_layout(
+                                    egui::vec2(ui.available_width(), 30.0),
+                                    egui::Layout::left_to_right(egui::Align::Center),
+                                    |ui| {
+                                        crate::icons::paint_tree_gutter(ui, depth);
+                                        // Leave room for Cancel on the narrow rail. Name stays editable.
+                                        let cancel_w = 78.0;
+                                        let gap = ui.spacing().item_spacing.x;
+                                        let edit_w =
+                                            (ui.available_width() - cancel_w - gap).max(48.0);
+                                        // egui replaces hint color with weak_text_color. Pin that to muted.
+                                        {
+                                            let visuals = ui.visuals_mut();
+                                            visuals.weak_text_color = Some(crate::theme::muted());
+                                            visuals.text_cursor.stroke =
+                                                egui::Stroke::new(2.0_f32, crate::theme::fg());
+                                        }
+                                        let edit = ui.add(
+                                            egui::TextEdit::singleline(&mut self.proj_rename_buf)
+                                                .desired_width(edit_w)
+                                                .min_size(egui::vec2(edit_w, 30.0))
+                                                .frame(
+                                                    egui::Frame::NONE
+                                                        .fill(crate::theme::elevated())
+                                                        .corner_radius(15.0)
+                                                        .stroke(egui::Stroke::new(
+                                                            2.0_f32,
+                                                            crate::theme::fg(),
+                                                        ))
+                                                        .inner_margin(egui::Margin::symmetric(
+                                                            10, 6,
+                                                        )),
+                                                )
+                                                .hint_text(crate::theme::hint("Name"))
+                                                .font(egui::FontId::proportional(13.0))
+                                                .vertical_align(egui::Align::Center),
+                                        );
+                                        if self.proj_rename_focus {
+                                            edit.request_focus();
+                                            if edit.has_focus() {
+                                                self.proj_rename_focus = false;
+                                            }
+                                        }
+                                        if let Some(lock) = self.proj_rename_lock.clone() {
+                                            if self.proj_rename_buf == lock {
+                                                select_all_edit(ui, edit.id, &self.proj_rename_buf);
+                                            } else {
+                                                self.proj_rename_lock = None;
+                                            }
+                                        }
+                                        // The pill is narrower than cancel_w. Pin it to the slot's right
+                                        // edge so it meets the same inset as the Projects "+".
+                                        let cancel_clicked = ui
+                                            .allocate_ui_with_layout(
+                                                egui::vec2(cancel_w, 30.0),
+                                                egui::Layout::right_to_left(egui::Align::Center),
+                                                |ui| crate::cards::ghost_pill(ui, "Cancel"),
+                                            )
+                                            .inner;
+                                        // Click wins over lost-focus commit: Cancel must not save the folder.
+                                        if cancel_clicked {
+                                            self.cancel_proj_rename();
+                                        } else if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                                            drop_key(ui, egui::Key::Escape);
+                                            self.cancel_proj_rename();
+                                        } else if ui.input(|i| i.key_pressed(egui::Key::Enter))
+                                            || (edit.lost_focus() && !self.proj_rename_focus)
+                                        {
+                                            drop_key(ui, egui::Key::Enter);
+                                            self.finish_proj_rename();
+                                        }
+                                    },
                                 );
-                                if self.proj_rename_focus {
-                                    edit.request_focus();
-                                    if edit.has_focus() {
-                                        self.proj_rename_focus = false;
+                                continue;
+                            }
+                            let show_chats = match kind {
+                                ProjectKind::Folder => open,
+                                ProjectKind::Project => true,
+                            };
+                            let nid = self.projects[idx].id.clone();
+                            // A folder scrolled away still lists the chats nested under it.
+                            if !Self::reserve_offscreen_rail_row(ui) {
+                                let icon = match kind {
+                                    ProjectKind::Folder => crate::icons::RailIcon::Folder,
+                                    ProjectKind::Project => crate::icons::RailIcon::Chat,
+                                };
+                                let active = project_row_active(
+                                    self.project_sel.as_deref()
+                                        == Some(self.projects[idx].id.as_str()),
+                                    kind == ProjectKind::Project,
+                                    self.nav,
+                                );
+                                let painted = ui.horizontal(|ui| {
+                                    crate::icons::paint_tree_gutter(ui, depth);
+                                    if kind == ProjectKind::Folder {
+                                        crate::icons::paint_folder_caret(
+                                            ui,
+                                            open,
+                                            crate::theme::subtle(),
+                                        );
                                     }
-                                }
-                                if let Some(lock) = self.proj_rename_lock.clone() {
-                                    if self.proj_rename_buf == lock {
-                                        select_all_edit(ui, edit.id, &self.proj_rename_buf);
-                                    } else {
-                                        self.proj_rename_lock = None;
-                                    }
-                                }
-                                // The pill is narrower than cancel_w. Pin it to the slot's right
-                                // edge so it meets the same inset as the Projects "+".
-                                let cancel_clicked = ui
-                                    .allocate_ui_with_layout(
-                                        egui::vec2(cancel_w, 30.0),
-                                        egui::Layout::right_to_left(egui::Align::Center),
-                                        |ui| crate::cards::ghost_pill(ui, "Cancel"),
-                                    )
-                                    .inner;
-                                // Click wins over lost-focus commit: Cancel must not save the folder.
-                                if cancel_clicked {
-                                    self.cancel_proj_rename();
-                                } else if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
-                                    drop_key(ui, egui::Key::Escape);
-                                    self.cancel_proj_rename();
-                                } else if ui.input(|i| i.key_pressed(egui::Key::Enter))
-                                    || (edit.lost_focus() && !self.proj_rename_focus)
+                                    Self::nav_row(ui, active, icon, &self.projects[idx].name, false)
+                                });
+                                let row = painted.inner;
+                                if row.double_clicked() {
+                                    self.begin_proj_rename(
+                                        self.projects[idx].id.clone(),
+                                        self.projects[idx].name.clone(),
+                                    );
+                                } else if row.clicked()
+                                    || (kind == ProjectKind::Folder
+                                        && painted.response.clicked()
+                                        && !painted.response.double_clicked())
                                 {
-                                    drop_key(ui, egui::Key::Enter);
-                                    self.finish_proj_rename();
+                                    let id = self.projects[idx].id.clone();
+                                    self.activate_project_row(&id);
                                 }
-                            },
-                        );
-                        continue;
-                    }
-                    let show_chats = match kind {
-                        ProjectKind::Folder => open,
-                        ProjectKind::Project => true,
-                    };
-                    let nid = self.projects[idx].id.clone();
-                    // A folder scrolled away still lists the chats nested under it.
-                    if !Self::reserve_offscreen_rail_row(ui) {
-                        let icon = match kind {
-                            ProjectKind::Folder => crate::icons::RailIcon::Folder,
-                            ProjectKind::Project => crate::icons::RailIcon::Chat,
-                        };
-                        let active = project_row_active(
-                            self.project_sel.as_deref() == Some(self.projects[idx].id.as_str()),
-                            kind == ProjectKind::Project,
-                            self.nav,
-                        );
-                        let painted = ui.horizontal(|ui| {
-                            crate::icons::paint_tree_gutter(ui, depth);
-                            if kind == ProjectKind::Folder {
-                                crate::icons::paint_folder_caret(ui, open, crate::theme::subtle());
+                                let row_pos = row.rect.left_bottom();
+                                row.context_menu(|ui| {
+                                    for a in project_menu_acts(kind) {
+                                        if ui.button(project_menu_label(*a)).clicked() {
+                                            proj_act = Some((nid.clone(), *a, row_pos));
+                                            ui.close();
+                                        }
+                                    }
+                                });
                             }
-                            Self::nav_row(ui, active, icon, &self.projects[idx].name, false)
-                        });
-                        let row = painted.inner;
-                        if row.double_clicked() {
-                            self.begin_proj_rename(
-                                self.projects[idx].id.clone(),
-                                self.projects[idx].name.clone(),
-                            );
-                        } else if row.clicked()
-                            || (kind == ProjectKind::Folder
-                                && painted.response.clicked()
-                                && !painted.response.double_clicked())
-                        {
-                            let id = self.projects[idx].id.clone();
-                            self.activate_project_row(&id);
-                        }
-                        let row_pos = row.rect.left_bottom();
-                        row.context_menu(|ui| {
-                            for a in project_menu_acts(kind) {
-                                if ui.button(project_menu_label(*a)).clicked() {
-                                    proj_act = Some((nid.clone(), *a, row_pos));
-                                    ui.close();
+                            if show_chats {
+                                if let Some(act) = self.paint_section_chats(
+                                    ui,
+                                    &threads::project_section_chat_indices(
+                                        &self.threads,
+                                        &nid,
+                                        Some(self.thread_idx),
+                                        live_empty,
+                                    ),
+                                    depth.saturating_add(1),
+                                ) {
+                                    section_act = Some(act);
                                 }
                             }
-                        });
-                    }
-                    if show_chats {
-                        if let Some(act) = self.paint_section_chats(
-                            ui,
-                            &threads::project_section_chat_indices(
-                                &self.threads,
-                                &nid,
-                                Some(self.thread_idx),
-                                live_empty,
-                            ),
-                            depth.saturating_add(1),
-                        ) {
-                            section_act = Some(act);
                         }
-                    }
-                }
                     });
                 if let Some(act) = section_act {
                     self.apply_tab_act(act);
@@ -589,10 +596,7 @@ impl Cabin {
                             .into_iter()
                             .filter(|&i| {
                                 q.is_empty()
-                                    || self
-                                        .thread_rail_title(i)
-                                        .to_ascii_lowercase()
-                                        .contains(&q)
+                                    || self.thread_rail_title(i).to_ascii_lowercase().contains(&q)
                             })
                             .collect();
                         if let Some(act) = self.paint_section_chats(ui, &listed, 0) {

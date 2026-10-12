@@ -83,7 +83,11 @@ impl Cabin {
             .as_deref()
             .and_then(|id| self.threads.iter().position(|t| t.id == id))
             .unwrap_or(self.thread_idx);
-        let own = self.threads.get(idx).map(|t| t.personality.trim()).unwrap_or("");
+        let own = self
+            .threads
+            .get(idx)
+            .map(|t| t.personality.trim())
+            .unwrap_or("");
         let id = if own.is_empty() {
             self.cfg.personality.trim()
         } else {
@@ -207,8 +211,18 @@ impl Cabin {
         e.name = e.name.trim().to_string();
         e.description = e.description.trim().to_string();
         e.tone_rules = e.tone_rules.trim().to_string();
-        e.address = e.address.as_deref().map(str::trim).filter(|a| !a.is_empty()).map(String::from);
-        e.voice_hint = e.voice_hint.as_deref().map(str::trim).filter(|h| !h.is_empty()).map(String::from);
+        e.address = e
+            .address
+            .as_deref()
+            .map(str::trim)
+            .filter(|a| !a.is_empty())
+            .map(String::from);
+        e.voice_hint = e
+            .voice_hint
+            .as_deref()
+            .map(str::trim)
+            .filter(|h| !h.is_empty())
+            .map(String::from);
         match personality::save_custom(&presets_dir(), &draft.edit) {
             Ok(_) => {
                 draft.saved = draft.edit.clone();
@@ -263,7 +277,10 @@ impl Cabin {
 
     fn try_personality(&mut self, id: &str) {
         if !self.llm_ready() {
-            self.picker.shown = Some((id.to_string(), TryState::Failed(grokhub_core::XAI_NEED_SIGNIN.into())));
+            self.picker.shown = Some((
+                id.to_string(),
+                TryState::Failed(grokhub_core::XAI_NEED_SIGNIN.into()),
+            ));
             return;
         }
         let key = self.bearer();
@@ -297,7 +314,8 @@ impl Cabin {
     pub(super) fn ui_settings_personality(&mut self, ui: &mut egui::Ui) {
         self.poll_try_it();
         if self.picker.rx.is_some() {
-            ui.ctx().request_repaint_after(std::time::Duration::from_millis(200));
+            ui.ctx()
+                .request_repaint_after(std::time::Duration::from_millis(200));
         }
         crate::cards::help_text(
             ui,
@@ -495,17 +513,19 @@ impl Cabin {
             .layout(egui::Layout::top_down_justified(egui::Align::LEFT))
             .show(|ui| {
                 ui.set_min_width(200.0);
-                egui::ScrollArea::vertical().max_height(360.0).show(ui, |ui| {
-                    for p in &presets {
-                        let mut label = p.name.clone();
-                        if p.id == default && p.id != personality::DEFAULT_ID {
-                            label.push_str(" (default)");
+                egui::ScrollArea::vertical()
+                    .max_height(360.0)
+                    .show(ui, |ui| {
+                        for p in &presets {
+                            let mut label = p.name.clone();
+                            if p.id == default && p.id != personality::DEFAULT_ID {
+                                label.push_str(" (default)");
+                            }
+                            if ui.selectable_label(p.id == open, label).clicked() {
+                                pick = Some(p.id.clone());
+                            }
                         }
-                        if ui.selectable_label(p.id == open, label).clicked() {
-                            pick = Some(p.id.clone());
-                        }
-                    }
-                });
+                    });
                 ui.separator();
                 let differs = open != default;
                 if ui
@@ -539,7 +559,11 @@ fn paint_preset_card(
     width: f32,
 ) -> Option<CardAct> {
     let mut act = None;
-    let stroke = if on { crate::theme::fg() } else { crate::theme::border() };
+    let stroke = if on {
+        crate::theme::fg()
+    } else {
+        crate::theme::border()
+    };
     egui::Frame::NONE
         .fill(crate::theme::surface())
         .corner_radius(12.0)
@@ -641,7 +665,11 @@ fn paint_preset_rows(
 mod tests {
     use super::*;
 
-    fn cabin_with_chat() -> (std::sync::MutexGuard<'static, ()>, crate::config::TestConfigDir, Cabin) {
+    fn cabin_with_chat() -> (
+        std::sync::MutexGuard<'static, ()>,
+        crate::config::TestConfigDir,
+        Cabin,
+    ) {
         let lock = crate::config::hold_test_config();
         let root = crate::config::test_config_root("personality-ui");
         std::fs::create_dir_all(&root).unwrap();
@@ -742,7 +770,10 @@ mod tests {
             cabin.set_chat_personality("default");
             cabin.chat_prompt_parts()
         };
-        assert_eq!(plain_stable, stable, "default voice keeps the same stable prefix");
+        assert_eq!(
+            plain_stable, stable,
+            "default voice keeps the same stable prefix"
+        );
         assert!(
             !plain_volatile.contains("earlier in this prompt always win"),
             "no closer when there is no voice or notes: {plain_volatile}"
@@ -786,13 +817,23 @@ mod tests {
         cabin.duplicate_personality("butler");
         assert_eq!(cabin.status, "Made Butler copy");
         assert!(presets_dir().join("butler-copy.toml").exists());
-        let draft = cabin.picker.draft.clone().expect("the copy opens in the editor");
-        assert_eq!((draft.saved.id.as_str(), draft.edit.name.as_str()), ("butler-copy", "Butler copy"));
+        let draft = cabin
+            .picker
+            .draft
+            .clone()
+            .expect("the copy opens in the editor");
+        assert_eq!(
+            (draft.saved.id.as_str(), draft.edit.name.as_str()),
+            ("butler-copy", "Butler copy")
+        );
 
         // Reset drops unsaved edits.
         cabin.picker.draft.as_mut().unwrap().edit.name = "Scratch".into();
         cabin.reset_personality_draft();
-        assert_eq!(cabin.picker.draft.as_ref().unwrap().edit.name, "Butler copy");
+        assert_eq!(
+            cabin.picker.draft.as_ref().unwrap().edit.name,
+            "Butler copy"
+        );
 
         // A refused save keeps the editor open with the reason and writes nothing.
         cabin.picker.draft.as_mut().unwrap().edit.description = "two\nlines".into();
@@ -808,21 +849,39 @@ mod tests {
         cabin.picker.draft.as_mut().unwrap().edit.voice_hint = Some("sal ".into());
         cabin.save_personality_draft();
         let saved = &cabin.picker.draft.as_ref().unwrap().saved;
-        assert_eq!((saved.name.as_str(), saved.address.as_deref(), saved.voice_hint.as_deref()), ("Jeeves", None, Some("sal")));
+        assert_eq!(
+            (
+                saved.name.as_str(),
+                saved.address.as_deref(),
+                saved.voice_hint.as_deref()
+            ),
+            ("Jeeves", None, Some("sal"))
+        );
         assert_eq!(cabin.status, "Saved Jeeves");
-        assert!(cabin.picker.presets.iter().any(|p| p.id == "butler-copy" && p.name == "Jeeves" && p.custom));
+        assert!(cabin
+            .picker
+            .presets
+            .iter()
+            .any(|p| p.id == "butler-copy" && p.name == "Jeeves" && p.custom));
 
         // In use as the default and in one chat, it speaks in its own voice.
         cabin.set_default_personality("butler-copy");
         assert_eq!(cabin.status, "Personality: Jeeves");
         cabin.set_chat_personality("butler-copy");
-        assert!(cabin.chat_rules().starts_with("Personality: Jeeves. "), "{}", cabin.chat_rules());
+        assert!(
+            cabin.chat_rules().starts_with("Personality: Jeeves. "),
+            "{}",
+            cabin.chat_rules()
+        );
         assert_eq!(cabin.speech_voice(), "sal");
         cabin.threads[1].personality = "butler-copy".into();
 
         // Delete takes two clicks, then everything that used it goes back to the default.
         cabin.delete_personality_draft();
-        assert!(presets_dir().join("butler-copy.toml").exists(), "the first click only asks");
+        assert!(
+            presets_dir().join("butler-copy.toml").exists(),
+            "the first click only asks"
+        );
         cabin.delete_personality_draft();
         assert!(!presets_dir().join("butler-copy.toml").exists());
         assert_eq!(cabin.status, "Deleted Jeeves");
@@ -837,9 +896,16 @@ mod tests {
     fn built_ins_open_no_editor_and_a_style_note_speaks_in_the_default_voice() {
         let (_lock, _root, mut cabin) = cabin_with_chat();
         cabin.edit_personality("pirate");
-        assert!(cabin.picker.draft.is_none(), "built-ins are duplicated, not edited");
+        assert!(
+            cabin.picker.draft.is_none(),
+            "built-ins are duplicated, not edited"
+        );
         cabin.set_chat_personality("butler");
-        assert_eq!(cabin.speech_voice(), "rex", "Butler's hint names a real voice");
+        assert_eq!(
+            cabin.speech_voice(),
+            "rex",
+            "Butler's hint names a real voice"
+        );
         cabin.set_chat_personality("genie");
         assert_eq!(cabin.speech_voice(), "eve");
         cabin.set_chat_personality("pirate");

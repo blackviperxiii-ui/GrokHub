@@ -303,7 +303,10 @@ mod tests {
     fn html_escapes_everything_the_chat_says() {
         let msgs = [
             ("user", "<script>alert(1)</script> & \"quotes\""),
-            ("assistant", "Try `<b>` and [x](javascript:alert(1)) or [ok](https://x.ai?a=1&b=2)"),
+            (
+                "assistant",
+                "Try `<b>` and [x](javascript:alert(1)) or [ok](https://x.ai?a=1&b=2)",
+            ),
         ];
         let page = chat_export_html("A <title>", msgs, "GrokHub");
         assert!(!page.contains("<script>alert"), "{page}");
@@ -321,11 +324,23 @@ mod tests {
             "# Plan\n1. one\n2. two\n- a\n- [x] done\n\n| k | v |\n|:-|-:|\n| a | 1 |\n```rust\nfn main() { 1 < 2 }\n```\n> note",
         );
         assert!(html.contains("<h2>Plan</h2>"), "{html}");
-        assert!(html.contains("<ol>\n<li style=\"margin-left:0em\">one</li>"), "{html}");
+        assert!(
+            html.contains("<ol>\n<li style=\"margin-left:0em\">one</li>"),
+            "{html}"
+        );
         assert!(html.contains("</ol>\n<ul>\n"), "{html}");
-        assert!(html.contains("<input type=\"checkbox\" disabled checked> done"), "{html}");
-        assert!(html.contains("<td style=\"text-align:right\">1</td>"), "{html}");
-        assert!(html.contains("<pre><code class=\"language-rust\">fn main() { 1 &lt; 2 }</code></pre>"), "{html}");
+        assert!(
+            html.contains("<input type=\"checkbox\" disabled checked> done"),
+            "{html}"
+        );
+        assert!(
+            html.contains("<td style=\"text-align:right\">1</td>"),
+            "{html}"
+        );
+        assert!(
+            html.contains("<pre><code class=\"language-rust\">fn main() { 1 &lt; 2 }</code></pre>"),
+            "{html}"
+        );
         assert!(html.contains("<blockquote>note</blockquote>"), "{html}");
         let started = md_to_html("3. three\n4. four");
         assert!(started.starts_with("<ol start=\"3\">"), "{started}");
@@ -333,7 +348,11 @@ mod tests {
 
     #[test]
     fn json_keeps_every_turn_and_role() {
-        let msgs = [("user", "hi \"there\""), ("assistant", "yo\nline"), ("system", "GOAL PIN: x")];
+        let msgs = [
+            ("user", "hi \"there\""),
+            ("assistant", "yo\nline"),
+            ("system", "GOAL PIN: x"),
+        ];
         let json = chat_export_json("T", "t1", msgs, 42);
         let v: serde_json::Value = serde_json::from_str(&json).expect("valid json");
         assert_eq!(v["title"], "T");

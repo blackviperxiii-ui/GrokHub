@@ -115,7 +115,11 @@ pub fn adopt_native(thread: &mut ChatThread) -> bool {
     if thread.native {
         return false;
     }
-    if let Some(id) = thread.grok_session.take().filter(|id| !id.trim().is_empty()) {
+    if let Some(id) = thread
+        .grok_session
+        .take()
+        .filter(|id| !id.trim().is_empty())
+    {
         if !thread.retired_sessions.iter().any(|s| s == &id) {
             thread.retired_sessions.push(id);
         }
@@ -780,7 +784,6 @@ pub fn user_history_row(background: bool, title: &str, empty: bool, has_session:
     !empty_chat_draft(empty, has_session)
 }
 
-
 /// User chats that exist, ignoring the project filter. Creating a project must not drop these.
 #[cfg(test)]
 pub fn history_corpus(threads: &[ChatThread]) -> Vec<(String, usize)> {
@@ -1060,8 +1063,7 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
         std::env::set_var("GROKHUB_CONFIG", &root);
         let mut big = ChatThread::new("Night watch", false);
-        big.messages_mut()
-            .push(("user".into(), "x".repeat(12_000)));
+        big.messages_mut().push(("user".into(), "x".repeat(12_000)));
         save(&[big]).expect("save big");
         let path = threads_path();
         let before = fs::metadata(&path).expect("meta").len();
@@ -1149,7 +1151,11 @@ mod tests {
             let mut thread = ChatThread::new(&format!("Session {t}"), false);
             for m in 0..100 {
                 thread.messages_mut().push((
-                    if m % 2 == 0 { "user".into() } else { "assistant".into() },
+                    if m % 2 == 0 {
+                        "user".into()
+                    } else {
+                        "assistant".into()
+                    },
                     format!("turn {m} of session {t}: {}", "x".repeat(400)),
                 ));
             }
@@ -1179,7 +1185,11 @@ mod tests {
 
         // The store is intact, so a persist right after boot must not destroy it.
         save(&got).expect("resave");
-        assert_eq!(load().len(), want.len(), "a persist after reload wiped history");
+        assert_eq!(
+            load().len(),
+            want.len(),
+            "a persist after reload wiped history"
+        );
 
         let _ = fs::remove_dir_all(&root);
         std::env::remove_var("GROKHUB_CONFIG");
@@ -1574,8 +1584,7 @@ mod tests {
     #[test]
     fn clone_shares_message_bodies() {
         let mut t = ChatThread::new("a", false);
-        t.messages_mut()
-            .push(("user".into(), "x".repeat(64)));
+        t.messages_mut().push(("user".into(), "x".repeat(64)));
         let mut u = t.clone();
         assert!(
             Arc::ptr_eq(&t.messages, &u.messages),
@@ -1590,23 +1599,33 @@ mod tests {
     #[test]
     fn project_and_chat_sections_stay_separate() {
         let mut global = ChatThread::new("Global", false);
-        global.messages_mut().push(("user".into(), "keep-global".into()));
+        global
+            .messages_mut()
+            .push(("user".into(), "keep-global".into()));
         let mut filed = ChatThread::new("Lab notes", false);
         filed.project_id = Some("proj-lab".into());
-        filed.messages_mut().push(("user".into(), "keep-lab".into()));
+        filed
+            .messages_mut()
+            .push(("user".into(), "keep-lab".into()));
         let mut other = ChatThread::new("Other", false);
         other.project_id = Some("proj-other".into());
-        other.messages_mut().push(("assistant".into(), "stay".into()));
+        other
+            .messages_mut()
+            .push(("assistant".into(), "stay".into()));
         let threads = vec![global, filed, other];
 
         let chat = chat_section_indices(&threads, None, false);
         assert_eq!(
-            chat.iter().map(|&i| threads[i].title.as_str()).collect::<Vec<_>>(),
+            chat.iter()
+                .map(|&i| threads[i].title.as_str())
+                .collect::<Vec<_>>(),
             ["Global"]
         );
         let lab = project_section_chat_indices(&threads, "proj-lab", None, false);
         assert_eq!(
-            lab.iter().map(|&i| threads[i].title.as_str()).collect::<Vec<_>>(),
+            lab.iter()
+                .map(|&i| threads[i].title.as_str())
+                .collect::<Vec<_>>(),
             ["Lab notes"]
         );
         assert!(
@@ -1665,7 +1684,10 @@ mod tests {
         let threads = vec![history, lab];
         let before = chat_section_indices(&threads, None, false);
         assert_eq!(
-            before.iter().map(|&i| threads[i].title.as_str()).collect::<Vec<_>>(),
+            before
+                .iter()
+                .map(|&i| threads[i].title.as_str())
+                .collect::<Vec<_>>(),
             ["Global"]
         );
         assert!(
@@ -1694,7 +1716,9 @@ mod tests {
         global.messages_mut().push(("user".into(), "stay".into()));
         let mut on_folder = ChatThread::new("Folder notes", false);
         on_folder.project_id = Some("fold".into());
-        on_folder.messages_mut().push(("user".into(), "folder".into()));
+        on_folder
+            .messages_mut()
+            .push(("user".into(), "folder".into()));
         let mut older = ChatThread::new("Older lab", false);
         older.project_id = Some("proj-lab".into());
         older.accessed_ms = 10;
@@ -1707,7 +1731,8 @@ mod tests {
         newer.messages_mut().push(("user".into(), "new".into()));
         let mut dawn = ChatThread::new("Dawn", false);
         dawn.project_id = Some("proj-dawn".into());
-        dawn.messages_mut().push(("user".into(), "other-folder".into()));
+        dawn.messages_mut()
+            .push(("user".into(), "other-folder".into()));
         let threads = vec![global, on_folder, older, newer, dawn];
         let listed = folder_chat_indices(&threads, "fold", &["proj-lab"], None, false);
         let titles: Vec<_> = listed.iter().map(|&i| threads[i].title.as_str()).collect();
@@ -1726,7 +1751,10 @@ mod tests {
         let history = chat_section_indices(&threads, None, false);
         let opened = chat_section_indices(&threads, Some(2), false);
         assert_eq!(
-            history.iter().map(|&i| threads[i].title.as_str()).collect::<Vec<_>>(),
+            history
+                .iter()
+                .map(|&i| threads[i].title.as_str())
+                .collect::<Vec<_>>(),
             ["Global"]
         );
         assert!(project_chat_click_keeps_chat_section(&history, &opened));
@@ -1843,11 +1871,16 @@ mod tests {
         lab.grok_session = Some("01a01b0f-7e06-74b1-8f22-5236c9d57d45".into());
         let mut board = ChatThread::new("summarize the workboard", false);
         board.background = true;
-        board.messages_mut()
+        board
+            .messages_mut()
             .push(("user".into(), "summarize the workboard".into()));
         let before_threads = vec![night, lab, board];
         let before = history_corpus(&before_threads);
-        assert_eq!(before.len(), 2, "background workboard summarize is not History");
+        assert_eq!(
+            before.len(),
+            2,
+            "background workboard summarize is not History"
+        );
         assert!(before.iter().all(|(_, n)| *n > 0));
         // Creating a project adds a folder. It does not rewrite threads.json.
         let after = history_corpus(&before_threads);
@@ -1883,15 +1916,22 @@ mod tests {
         let mut threads = vec![linked_chat, orphan, mine];
         let linked = vec!["t-linked".to_string(), "t-mine".to_string()];
         assert!(park_follow_up_chats(&mut threads, &linked));
-        let hidden: Vec<(&str, bool)> =
-            threads.iter().map(|t| (t.id.as_str(), t.background)).collect();
-        assert_eq!(hidden, vec![("t-linked", true), ("t-orphan", false), ("t-mine", false)]);
+        let hidden: Vec<(&str, bool)> = threads
+            .iter()
+            .map(|t| (t.id.as_str(), t.background))
+            .collect();
+        assert_eq!(
+            hidden,
+            vec![("t-linked", true), ("t-orphan", false), ("t-mine", false)]
+        );
         assert!(!park_follow_up_chats(&mut threads, &linked));
     }
 
     #[test]
     fn follow_up_chats_are_scheduled_work() {
-        assert!(is_follow_up_title("Follow up · Run a read-only host snapshot"));
+        assert!(is_follow_up_title(
+            "Follow up · Run a read-only host snapshot"
+        ));
         assert!(is_follow_up_title("  Follow up · Morning issues"));
         assert!(!is_follow_up_title("Follow up on the release notes"));
         assert!(!is_follow_up_title("Chat"));
@@ -1905,12 +1945,26 @@ mod tests {
         chat.messages_mut().push(("user".into(), "hello".into()));
         chat.grok_session = Some(open.clone());
         let mut threads = vec![chat];
-        assert!(file_background_sessions(&mut threads, &[fork.clone(), open.clone()]));
-        assert_eq!(threads.len(), 2, "one hidden Background chat holds the fork");
+        assert!(file_background_sessions(
+            &mut threads,
+            &[fork.clone(), open.clone()]
+        ));
+        assert_eq!(
+            threads.len(),
+            2,
+            "one hidden Background chat holds the fork"
+        );
         let hidden = &threads[1];
         assert!(hidden.background && hidden.title == BACKGROUND_THREAD_TITLE);
-        assert_eq!(hidden.retired_sessions, vec![fork.clone()], "a chat's own session stays");
-        assert!(!file_background_sessions(&mut threads, &[fork.clone(), " ".into()]));
+        assert_eq!(
+            hidden.retired_sessions,
+            vec![fork.clone()],
+            "a chat's own session stays"
+        );
+        assert!(!file_background_sessions(
+            &mut threads,
+            &[fork.clone(), " ".into()]
+        ));
         assert_eq!(threads.len(), 2);
         assert_eq!(chat_section_indices(&threads, None, false), vec![0]);
         assert_eq!(history_corpus(&threads).len(), 1);
@@ -1924,7 +1978,10 @@ mod tests {
         )
         .unwrap();
         let adopted = adopt_sessions_from(&threads, &[(dir.clone(), false)]);
-        assert!(adopted.is_empty(), "a filed fork is not adopted back into History");
+        assert!(
+            adopted.is_empty(),
+            "a filed fork is not adopted back into History"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -1939,8 +1996,12 @@ mod tests {
         assert!(is_learn_map_title("Learn map sessions 0000-0009"));
         assert!(is_learn_map_title("Map sessions 0010-0019 for learn"));
         assert!(is_learn_map_title("Learn mapper 0000-0009 session records"));
-        assert!(is_background_history_title("Map sessions 0040-0049 learn signals"));
-        assert!(!is_learn_map_title("Update all computer software and packages"));
+        assert!(is_background_history_title(
+            "Map sessions 0040-0049 learn signals"
+        ));
+        assert!(!is_learn_map_title(
+            "Update all computer software and packages"
+        ));
         assert!(!user_history_row(
             false,
             "summarize the workboard",
@@ -1948,7 +2009,8 @@ mod tests {
             true
         ));
         let mut leaked = ChatThread::new("summarize the workboard", false);
-        leaked.messages_mut()
+        leaked
+            .messages_mut()
             .push(("user".into(), "summarize the workboard".into()));
         leaked.grok_session = Some("01a01b0f-7e06-74b1-8f22-5236c9d57d46".into());
         let mut flagged = ChatThread::new("Morning brief", false);
@@ -1984,7 +2046,8 @@ mod tests {
         board.project_id = Some("lab".into());
         board.background = true;
         board.accessed_ms = 99;
-        board.messages_mut()
+        board
+            .messages_mut()
             .push(("user".into(), "summarize the workboard".into()));
         let threads = vec![global, older, lab, board];
         let back = project_return_index(&threads, "lab").expect("project chat");
@@ -2035,18 +2098,8 @@ mod tests {
         }
         assert!(session_is_retired(&[thread.clone()], "sess-b"));
         assert!(!session_is_retired(&[thread], "sess-a"));
-        assert!(adopt_reported_session(
-            Some("parent"),
-            "forked",
-            true,
-            true
-        ));
-        assert!(adopt_reported_session(
-            Some("dead"),
-            "fresh",
-            false,
-            false
-        ));
+        assert!(adopt_reported_session(Some("parent"), "forked", true, true));
+        assert!(adopt_reported_session(Some("dead"), "fresh", false, false));
         assert!(!adopt_reported_session(
             Some("sess-a"),
             "sess-b",
@@ -2062,12 +2115,7 @@ mod tests {
 
     #[test]
     fn fork_and_fresh_session_stay_in_history() {
-        assert!(adopt_reported_session(
-            Some("parent"),
-            "forked",
-            true,
-            true
-        ));
+        assert!(adopt_reported_session(Some("parent"), "forked", true, true));
         let fork = prompt_history(&["parent".into()], Some("forked"), "forked");
         assert_eq!(fork.keep, "forked");
         assert!(fork.retire.is_none());
@@ -2139,7 +2187,10 @@ mod tests {
         let recap = native_carry_recap(&msgs);
         assert!(recap.starts_with("Earlier in this chat (before GrokHub ran it natively):\n"));
         assert!(recap.ends_with("…\n\n"), "{recap}");
-        assert!(!recap.contains("ask 2\n"), "only the last 12 turns: {recap}");
+        assert!(
+            !recap.contains("ask 2\n"),
+            "only the last 12 turns: {recap}"
+        );
         assert!(recap.contains("User: ask 3\n"), "{recap}");
         assert!(recap.contains(&format!("You: {}…", "x".repeat(600))));
         assert!(!recap.contains("now"));
@@ -2160,7 +2211,9 @@ mod tests {
         let threads = vec![keep, done];
         let main = chat_section_indices(&threads, None, false);
         assert_eq!(
-            main.iter().map(|&i| threads[i].title.as_str()).collect::<Vec<_>>(),
+            main.iter()
+                .map(|&i| threads[i].title.as_str())
+                .collect::<Vec<_>>(),
             ["Keep me"]
         );
         let archived = archived_section_indices(&threads, None, false);
@@ -2204,7 +2257,10 @@ mod tests {
         let mut t = ChatThread::new("Night watch", false);
         t.messages_mut().push(("user".into(), "keep".into()));
         assert!(archive_thread(&mut t, 9));
-        assert_eq!(search_thread_title(&t.title, is_archived(&t)), "Archived · Night watch");
+        assert_eq!(
+            search_thread_title(&t.title, is_archived(&t)),
+            "Archived · Night watch"
+        );
         assert!(unarchive_thread(&mut t));
         assert!(!is_archived(&t));
         assert!(!unarchive_thread(&mut t));

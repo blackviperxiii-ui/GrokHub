@@ -172,7 +172,10 @@ mod tests {
     fn form_encodes_unreserved_only_and_keeps_order() {
         assert_eq!(urlencode("a b/c:d~e"), "a%20b%2Fc%3Ad~e");
         assert_eq!(
-            form(&[("redirect_uri", "http://127.0.0.1:9/callback"), ("scope", "read write")]),
+            form(&[
+                ("redirect_uri", "http://127.0.0.1:9/callback"),
+                ("scope", "read write")
+            ]),
             "redirect_uri=http%3A%2F%2F127.0.0.1%3A9%2Fcallback&scope=read%20write"
         );
     }
@@ -180,17 +183,32 @@ mod tests {
     #[test]
     fn the_loopback_callback_names_who_and_checks_state() {
         let raw = "GET /callback?code=c%2D1&state=s1 HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n";
-        assert_eq!(loopback_code(raw, "s1", "Linear sign-in").as_deref(), Ok("c-1"));
         assert_eq!(
-            loopback_code("GET /callback?code=c&state=s2 HTTP/1.1", "s1", "Linear sign-in"),
+            loopback_code(raw, "s1", "Linear sign-in").as_deref(),
+            Ok("c-1")
+        );
+        assert_eq!(
+            loopback_code(
+                "GET /callback?code=c&state=s2 HTTP/1.1",
+                "s1",
+                "Linear sign-in"
+            ),
             Err("Linear sign-in state did not match".to_string())
         );
         assert_eq!(
-            loopback_code("GET /callback?error=access_denied&state=s1 HTTP/1.1", "s1", "Linear sign-in"),
+            loopback_code(
+                "GET /callback?error=access_denied&state=s1 HTTP/1.1",
+                "s1",
+                "Linear sign-in"
+            ),
             Err("Linear sign-in failed: access_denied".to_string())
         );
         assert_eq!(
-            loopback_code("POST /callback?code=c&state=s1 HTTP/1.1", "s1", "Linear sign-in"),
+            loopback_code(
+                "POST /callback?code=c&state=s1 HTTP/1.1",
+                "s1",
+                "Linear sign-in"
+            ),
             Err("Linear sign-in callback was not a GET".to_string())
         );
     }

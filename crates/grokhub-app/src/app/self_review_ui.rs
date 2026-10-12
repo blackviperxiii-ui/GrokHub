@@ -236,7 +236,8 @@ impl Cabin {
         let dir = config::config_dir();
         let _ = oc::append_outcome(&dir, &late);
         if let Some(run) = run_metrics::find_run(&dir, &late.task) {
-            let _ = run_metrics::append_run(&dir, &run.corrected(late.at), self.cfg.amr_retention_days);
+            let _ =
+                run_metrics::append_run(&dir, &run.corrected(late.at), self.cfg.amr_retention_days);
         }
         self.harness.self_review.last_outcome = Some(late);
     }
@@ -249,7 +250,8 @@ impl Cabin {
         for late in oc::undo_supersedes(&oc::read_outcomes(&dir), &sig, now) {
             let _ = oc::append_outcome(&dir, &late);
             if let Some(run) = run_metrics::find_run(&dir, &late.task) {
-                let _ = run_metrics::append_run(&dir, &run.undone(now), self.cfg.amr_retention_days);
+                let _ =
+                    run_metrics::append_run(&dir, &run.undone(now), self.cfg.amr_retention_days);
             }
         }
     }
@@ -274,21 +276,21 @@ impl Cabin {
     /// Change versions for Settings history. Cached until a writer clears it.
     pub(super) fn history_versions_now(&mut self) -> Vec<hx::Version> {
         if self.harness.self_review.history.is_none() {
-            self.harness.self_review.history =
-                Some(hx::read_versions(&config::config_dir()));
+            self.harness.self_review.history = Some(hx::read_versions(&config::config_dir()));
         }
-        self.harness
-            .self_review
-            .history
-            .clone()
-            .unwrap_or_default()
+        self.harness.self_review.history.clone().unwrap_or_default()
     }
 
     /// The hour from Settings → Dream time, clamped to 0–23.
     /// Settings → Behavior: the quiet mode switch, and while it's on the
     /// newest suggestions it logged.
     pub(super) fn ui_quiet_self_review_rows(&mut self, ui: &mut egui::Ui) {
-        if crate::cards::settings_toggle(ui, QUIET_ROW, QUIET_HINT, &mut self.cfg.self_improve_quiet) {
+        if crate::cards::settings_toggle(
+            ui,
+            QUIET_ROW,
+            QUIET_HINT,
+            &mut self.cfg.self_improve_quiet,
+        ) {
             self.persist_cfg();
             self.status = "Saved".into();
         }
@@ -335,7 +337,12 @@ impl Cabin {
 
     /// Sunday night: post revert and draft cards, then ask the model for
     /// skill changes off the UI thread.
-    fn self_review_tonight(&mut self, today: &str, clock: &grokhub_core::LocalClock, now: u64) -> bool {
+    fn self_review_tonight(
+        &mut self,
+        today: &str,
+        clock: &grokhub_core::LocalClock,
+        now: u64,
+    ) -> bool {
         self.ensure_self_review_file();
         let last_day = self
             .harness
@@ -486,7 +493,10 @@ impl Cabin {
             );
             let stats = format!("{}.", p.numbers);
             let details = wc::with_block(
-                &wc::from_line_diff(&sr::line_diff(&existing.instructions, &patched.instructions)),
+                &wc::from_line_diff(&sr::line_diff(
+                    &existing.instructions,
+                    &patched.instructions,
+                )),
                 &format!(
                     "{stats} Apply changes the skill's steps; you can undo it.\n\n{}",
                     sr::diff_excerpt(&old, &new, 2)
@@ -538,17 +548,30 @@ impl Cabin {
                 _ => continue,
             };
             let details = format!("{body}\n\nAccept applies it. Nothing changes without your click, and /why table shows the router's picks.");
-            let card = ProposalCard { source, skill: &candidate, title: &title, body: &body, details, md: "" };
+            let card = ProposalCard {
+                source,
+                skill: &candidate,
+                title: &title,
+                body: &body,
+                details,
+                md: "",
+            };
             self.post_self_review_card(card, now);
             posted += usize::from(self.harness.self_review.budget < before);
         }
         grokhub_agent::route::learn::cards_posted(&dir, posted, now);
         let line = grokhub_agent::route::learn::review_line(&dir, now);
         if self.cfg.self_improve_quiet {
-            log_quiet(&mut self.harness.self_review, "router-review", "Weekly router review", &line);
+            log_quiet(
+                &mut self.harness.self_review,
+                "router-review",
+                "Weekly router review",
+                &line,
+            );
             return;
         }
-        let card = grokhub_core::router_update_card("router-review", "Weekly router review", &line, now);
+        let card =
+            grokhub_core::router_update_card("router-review", "Weekly router review", &line, now);
         self.post_feed_card(card);
     }
 
@@ -600,26 +623,24 @@ impl Cabin {
             return false;
         };
         self.ensure_self_review_file();
-        let Some(pending) = self
-            .harness
-            .self_review
-            .file
-            .as_ref()
-            .and_then(|state| {
-                state
-                    .pending
-                    .iter()
-                    .find(|p| p.source == card.source_id)
-                    .cloned()
-            })
-        else {
+        let Some(pending) = self.harness.self_review.file.as_ref().and_then(|state| {
+            state
+                .pending
+                .iter()
+                .find(|p| p.source == card.source_id)
+                .cloned()
+        }) else {
             return false;
         };
         let (dir, skills_dir) = (config::config_dir(), skills::skills_dir());
         let done = match target {
             CardTarget::Snippet(name) => self.apply_snippet(&name, &card.title, &pending.md),
             CardTarget::Code(_) => self.save_code_idea(&card.title, &pending.md),
-            CardTarget::Router(candidate) => match grokhub_agent::route::learn::accept_card(&dir, &candidate, grokhub_core::now_ms()) {
+            CardTarget::Router(candidate) => match grokhub_agent::route::learn::accept_card(
+                &dir,
+                &candidate,
+                grokhub_core::now_ms(),
+            ) {
                 Ok(msg) => {
                     self.status = msg;
                     true
@@ -663,13 +684,20 @@ impl Cabin {
                     Ok(()) => {
                         let skill = grokhub_core::parse_skill_md(&pending.md);
                         let reason = format!("weekly self-review: {}", card.title);
-                        match skills::save_skill_versioned(&skill, hx::Origin::SelfManage, &reason) {
+                        match skills::save_skill_versioned(&skill, hx::Origin::SelfManage, &reason)
+                        {
                             Ok(change) => {
                                 let skill_name = skill.name.clone();
                                 self.remember_skill(skill);
                                 self.harness.skill_rows = None;
                                 if let Some(c) = change {
-                                    self.start_skill_trial(&c, &skill_name, &card.title, &old, &pending.md);
+                                    self.start_skill_trial(
+                                        &c,
+                                        &skill_name,
+                                        &card.title,
+                                        &old,
+                                        &pending.md,
+                                    );
                                 }
                                 self.status = format!(
                                     "{name} changed: one run in five tries it first. /skills changes can undo it."
@@ -730,7 +758,6 @@ impl Cabin {
             .ok_or_else(|| "no fake".to_string())
     }
 }
-
 
 #[cfg(test)]
 thread_local! {

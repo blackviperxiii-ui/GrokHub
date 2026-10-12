@@ -107,10 +107,19 @@ pub fn save_skill_logged(s: &SkillMd, origin: Origin, reason: &str) -> Result<()
 
 /// [`save_skill_logged`], returning the ledger line (`None` when the bytes
 /// did not change), so the weekly pass can put the change on trial.
-pub fn save_skill_versioned(s: &SkillMd, origin: Origin, reason: &str) -> Result<Option<hx::Change>, String> {
-    hx::record_skill_change(&config::config_dir(), &skills_dir(), &s.name, origin, reason, || {
-        save_skill(s).map(|_| ())
-    })
+pub fn save_skill_versioned(
+    s: &SkillMd,
+    origin: Origin,
+    reason: &str,
+) -> Result<Option<hx::Change>, String> {
+    hx::record_skill_change(
+        &config::config_dir(),
+        &skills_dir(),
+        &s.name,
+        origin,
+        reason,
+        || save_skill(s).map(|_| ()),
+    )
 }
 
 /// After an undo or restore put `SKILL.md` back byte for byte, its verify
@@ -166,7 +175,11 @@ fn verify_as_cmd(verify: &str) -> Option<String> {
         .or_else(|| first.strip_prefix("test -e "))?
         .trim()
         .trim_matches('"');
-    if file.is_empty() || file.bytes().any(|b| matches!(b, b'&' | b'|' | b'>' | b'<' | b'%')) {
+    if file.is_empty()
+        || file
+            .bytes()
+            .any(|b| matches!(b, b'&' | b'|' | b'>' | b'<' | b'%'))
+    {
         return None;
     }
     Some(format!(
@@ -315,7 +328,10 @@ mod tests {
     fn verify_as_cmd_translates_test_f() {
         assert_eq!(
             verify_as_cmd("test -f grokhub-verify-marker"),
-            Some("@echo off\r\nif exist \"grokhub-verify-marker\" (exit /b 0) else (exit /b 1)\r\n".into())
+            Some(
+                "@echo off\r\nif exist \"grokhub-verify-marker\" (exit /b 0) else (exit /b 1)\r\n"
+                    .into()
+            )
         );
         assert_eq!(
             verify_as_cmd("test -e notes.md"),
@@ -377,16 +393,35 @@ mod tests {
             verify: String::new(),
             runs: 0,
         };
-        save_skill(&mk("good-job-now-use-the-mouse-to-close-one-tab-of-firefox", "good job now use the mouse to close one tab of firefox")).unwrap();
-        save_skill(&mk("take-the-next-step", "Takes the next concrete step for this kind of task.")).unwrap();
-        save_skill(&mk("board-status", "List open workboard cards and the next concrete step.")).unwrap();
+        save_skill(&mk(
+            "good-job-now-use-the-mouse-to-close-one-tab-of-firefox",
+            "good job now use the mouse to close one tab of firefox",
+        ))
+        .unwrap();
+        save_skill(&mk(
+            "take-the-next-step",
+            "Takes the next concrete step for this kind of task.",
+        ))
+        .unwrap();
+        save_skill(&mk(
+            "board-status",
+            "List open workboard cards and the next concrete step.",
+        ))
+        .unwrap();
         let mut moved = retire_junk_skills();
         moved.sort();
         assert_eq!(moved.len(), 2, "{moved:?}");
         let names: Vec<String> = list_skills().into_iter().map(|s| s.name).collect();
         assert_eq!(names, vec!["board-status".to_string()]);
-        assert!(skills_dir().join(".retired").join("take-the-next-step").join("SKILL.md").exists());
-        assert!(retire_junk_skills().is_empty(), "a second pass moves nothing");
+        assert!(skills_dir()
+            .join(".retired")
+            .join("take-the-next-step")
+            .join("SKILL.md")
+            .exists());
+        assert!(
+            retire_junk_skills().is_empty(),
+            "a second pass moves nothing"
+        );
         let ledger = hx::ChangeLedger::load(&root);
         let mut ops: Vec<(&str, &str, &str)> = ledger
             .all()
@@ -397,16 +432,32 @@ mod tests {
         assert_eq!(
             ops,
             vec![
-                ("good-job-now-use-the-mouse-to-close-one-tab-of-firefox", "delete", "self_manage"),
+                (
+                    "good-job-now-use-the-mouse-to-close-one-tab-of-firefox",
+                    "delete",
+                    "self_manage"
+                ),
                 ("take-the-next-step", "delete", "self_manage"),
             ],
             "each move aside is a ledger delete"
         );
         // Undo brings it back, and the next cleanup leaves it alone.
-        hx::undo_skill_change(&root, &skills_dir(), "take-the-next-step", hx::UndoAsk::from_click()).unwrap();
+        hx::undo_skill_change(
+            &root,
+            &skills_dir(),
+            "take-the-next-step",
+            hx::UndoAsk::from_click(),
+        )
+        .unwrap();
         let names: Vec<String> = list_skills().into_iter().map(|s| s.name).collect();
-        assert_eq!(names, vec!["board-status".to_string(), "take-the-next-step".to_string()]);
-        assert!(retire_junk_skills().is_empty(), "a skill the user brought back stays");
+        assert_eq!(
+            names,
+            vec!["board-status".to_string(), "take-the-next-step".to_string()]
+        );
+        assert!(
+            retire_junk_skills().is_empty(),
+            "a skill the user brought back stays"
+        );
         save_skill(&SkillMd {
             name: "stop-the-staging-server-and-clear-the-cache-now".into(),
             description: "Stop the staging server and clear the cache now".into(),
@@ -424,7 +475,9 @@ mod tests {
         );
         let names: Vec<String> = list_skills().into_iter().map(|s| s.name).collect();
         assert!(
-            names.iter().any(|n| n == "stop-the-staging-server-and-clear-the-cache-now"),
+            names
+                .iter()
+                .any(|n| n == "stop-the-staging-server-and-clear-the-cache-now"),
             "a hand-written skill with empty pitfalls stays listed: {names:?}"
         );
         let _ = fs::remove_dir_all(&root);

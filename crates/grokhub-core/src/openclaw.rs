@@ -97,7 +97,9 @@ mod tests {
         assert!(!clipped.contains('\u{FFFD}'));
         let merged = merge_imported_memory("keep me", "be useful", "AGENTS.md");
         assert!(
-            merged.contains("keep me") && merged.contains("## AGENTS.md") && merged.contains("be useful"),
+            merged.contains("keep me")
+                && merged.contains("## AGENTS.md")
+                && merged.contains("be useful"),
             "import must not clobber MEMORY.md with the last readdir file"
         );
         assert_eq!(merge_imported_memory("", "notes", "MEMORY.md"), "notes");

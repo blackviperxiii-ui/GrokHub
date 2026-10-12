@@ -32,7 +32,13 @@ impl CountingFs {
         self.calls.load(Ordering::SeqCst)
     }
     fn touched_text(&self) -> String {
-        self.touched.lock().unwrap().iter().map(|p| p.display().to_string()).collect::<Vec<_>>().join("\n")
+        self.touched
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|p| p.display().to_string())
+            .collect::<Vec<_>>()
+            .join("\n")
     }
 }
 
@@ -108,7 +114,14 @@ impl Fixture {
             data_home: Some(home.join(".local").join("share")),
             system_data: Vec::new(),
         };
-        Self { cfg, src, keys, fs: CountingFs::default(), probe: CountingProbe::default(), dirs }
+        Self {
+            cfg,
+            src,
+            keys,
+            fs: CountingFs::default(),
+            probe: CountingProbe::default(),
+            dirs,
+        }
     }
 
     fn home(&self) -> PathBuf {
@@ -116,11 +129,26 @@ impl Fixture {
     }
 
     fn env<'a>(&'a self, now_ms: u64, quiet: bool, power: &'a Power) -> TickEnv<'a> {
-        TickEnv { config_dir: &self.cfg, now_ms, quiet, power, fs: &self.fs, probe: &self.probe, dirs: &self.dirs }
+        TickEnv {
+            config_dir: &self.cfg,
+            now_ms,
+            quiet,
+            power,
+            fs: &self.fs,
+            probe: &self.probe,
+            dirs: &self.dirs,
+        }
     }
 
     fn grant(&self, scope: &Scope) -> String {
-        grant_scope(&self.cfg, scope, Some(&self.home()), UserClick::from_click()).unwrap().id
+        grant_scope(
+            &self.cfg,
+            scope,
+            Some(&self.home()),
+            UserClick::from_click(),
+        )
+        .unwrap()
+        .id
     }
 
     fn nodes(&self) -> usize {
@@ -139,7 +167,9 @@ impl Fixture {
                 } else {
                     out.push_str(&p.display().to_string());
                     out.push('\n');
-                    out.push_str(&String::from_utf8_lossy(&std::fs::read(&p).unwrap_or_default()));
+                    out.push_str(&String::from_utf8_lossy(
+                        &std::fs::read(&p).unwrap_or_default(),
+                    ));
                     out.push('\n');
                 }
             }
@@ -148,7 +178,10 @@ impl Fixture {
     }
 
     fn assert_no_egress(&self) {
-        assert!(!hx::egress_path(&self.cfg).exists(), "indexers never write an egress line");
+        assert!(
+            !hx::egress_path(&self.cfg).exists(),
+            "indexers never write an egress line"
+        );
     }
 }
 
@@ -172,9 +205,17 @@ fn all_scopes_off_on_boot_reads_nothing() {
     let mut sched = Scheduler::default();
     let power = Power(false);
     for i in 0..5 {
-        assert_eq!(sched.tick(&fx.env(NOW + i * RESCAN_MS, false, &power)), TickOutcome::Idle);
+        assert_eq!(
+            sched.tick(&fx.env(NOW + i * RESCAN_MS, false, &power)),
+            TickOutcome::Idle
+        );
     }
-    assert_eq!(fx.fs.calls(), 0, "zero indexer reads: {}", fx.fs.touched_text());
+    assert_eq!(
+        fx.fs.calls(),
+        0,
+        "zero indexer reads: {}",
+        fx.fs.touched_text()
+    );
     assert_eq!(fx.probe.0.load(Ordering::SeqCst), 0);
     assert!(!fx.cfg.join("amr").exists(), "nothing written");
     fx.assert_no_egress();
@@ -186,12 +227,27 @@ fn all_scopes_off_on_boot_reads_nothing() {
 fn a_folder_grant_indexes_only_that_tree_and_never_hard_excludes() {
     let fx = Fixture::new("files");
     let docs = fx.home().join("Documents");
-    write(&docs.join("notes.md"), "# Zebra Plan Fixture\n\nbody text\n## Budget Fixture\n");
-    write(&docs.join("sub").join("todo.txt"), "Groceries fixture\nmilk\n");
-    write(&docs.join(".ssh").join("id_ed25519"), "FIXTURE-PRIVATE-KEY-MATERIAL\n");
-    write(&docs.join("secrets.json"), "{\"token\":\"FIXTURE-SECRET-VALUE\"}\n");
+    write(
+        &docs.join("notes.md"),
+        "# Zebra Plan Fixture\n\nbody text\n## Budget Fixture\n",
+    );
+    write(
+        &docs.join("sub").join("todo.txt"),
+        "Groceries fixture\nmilk\n",
+    );
+    write(
+        &docs.join(".ssh").join("id_ed25519"),
+        "FIXTURE-PRIVATE-KEY-MATERIAL\n",
+    );
+    write(
+        &docs.join("secrets.json"),
+        "{\"token\":\"FIXTURE-SECRET-VALUE\"}\n",
+    );
     write(&docs.join("vault.kdbx"), "FIXTURE-VAULT\n");
-    write(&fx.home().join("Pictures").join("outside.md"), "# Outside Fixture\n");
+    write(
+        &fx.home().join("Pictures").join("outside.md"),
+        "# Outside Fixture\n",
+    );
     #[cfg(unix)]
     std::os::unix::fs::symlink(fx.home().join("Pictures"), docs.join("pics-link")).unwrap();
     fx.grant(&Scope::Files(docs.display().to_string()));
@@ -202,17 +258,37 @@ fn a_folder_grant_indexes_only_that_tree_and_never_hard_excludes() {
 
     let index = ScopeIndex::load(&fx.cfg);
     let key = Scope::Files(docs.display().to_string()).key();
-    let lines: Vec<&str> = index.for_scope(&key).iter().map(|f| f.line.as_str()).collect();
+    let lines: Vec<&str> = index
+        .for_scope(&key)
+        .iter()
+        .map(|f| f.line.as_str())
+        .collect();
     assert_eq!(lines.len(), 2, "{lines:?}");
     assert!(lines[0].starts_with("File notes.md · "), "{lines:?}");
-    assert!(lines[0].ends_with(" · title: Zebra Plan Fixture · headings: Budget Fixture"), "{lines:?}");
+    assert!(
+        lines[0].ends_with(" · title: Zebra Plan Fixture · headings: Budget Fixture"),
+        "{lines:?}"
+    );
     assert!(lines[1].starts_with("File sub/todo.txt · "), "{lines:?}");
-    assert!(lines[1].ends_with(" · title: Groceries fixture"), "{lines:?}");
+    assert!(
+        lines[1].ends_with(" · title: Groceries fixture"),
+        "{lines:?}"
+    );
 
     let touched = fx.fs.touched_text();
-    for never in [".ssh", "id_ed25519", "secrets.json", "vault.kdbx", "Pictures", "outside.md"] {
+    for never in [
+        ".ssh",
+        "id_ed25519",
+        "secrets.json",
+        "vault.kdbx",
+        "Pictures",
+        "outside.md",
+    ] {
         assert!(!touched.contains(never), "{never} was read:\n{touched}");
-        assert!(!lines.iter().any(|l| l.contains(never)), "{never} in a fact");
+        assert!(
+            !lines.iter().any(|l| l.contains(never)),
+            "{never} in a fact"
+        );
     }
     // On disk: nodes are sealed, the span holds counts only.
     let disk = fx.config_bytes();
@@ -283,12 +359,20 @@ fn chromium_fixture(db: &Path) {
 #[test]
 fn browser_history_reads_history_tables_from_a_temp_copy_only() {
     let fx = Fixture::new("browser");
-    let profile = fx.home().join(".mozilla").join("firefox").join("abcd.default-release");
+    let profile = fx
+        .home()
+        .join(".mozilla")
+        .join("firefox")
+        .join("abcd.default-release");
     let places = profile.join("places.sqlite");
     firefox_fixture(&places);
     write(&profile.join("logins.json"), "{\"FIXTURE-LOGINS\":1}");
     write(&profile.join("cookies.sqlite"), "FIXTURE-COOKIE-FILE");
-    let chrome_default = fx.home().join(".config").join("google-chrome").join("Default");
+    let chrome_default = fx
+        .home()
+        .join(".config")
+        .join("google-chrome")
+        .join("Default");
     let history = chrome_default.join("History");
     chromium_fixture(&history);
     write(&chrome_default.join("Cookies"), "FIXTURE-COOKIES-FILE");
@@ -299,12 +383,17 @@ fn browser_history_reads_history_tables_from_a_temp_copy_only() {
 
     // Instrumented connection: the one read the indexer makes.
     let tmp = fx.cfg.join(INDEXERS_DIR).join("tmp");
-    let read = browser_history::read_history(&fx.fs, &places, paths::BrowserKind::Firefox, &tmp).unwrap();
+    let read =
+        browser_history::read_history(&fx.fs, &places, paths::BrowserKind::Firefox, &tmp).unwrap();
     assert_eq!(read.tables_read, vec!["moz_places".to_string()]);
     assert_eq!(read.denied, 0);
     assert_eq!(read.hosts.get("fixture-docs.test").map(|h| h.0), Some(10));
     assert_eq!(read.hosts.get("hidden-fixture.test"), None);
-    assert_eq!(std::fs::read_dir(&tmp).unwrap().count(), 0, "the temp copy is gone");
+    assert_eq!(
+        std::fs::read_dir(&tmp).unwrap().count(),
+        0,
+        "the temp copy is gone"
+    );
 
     fx.grant(&Scope::BrowserHistory("firefox".into()));
     fx.grant(&Scope::BrowserHistory("chrome".into()));
@@ -315,8 +404,18 @@ fn browser_history_reads_history_tables_from_a_temp_copy_only() {
     // Sorted by scope key: chrome, then firefox.
     match (&first, &second) {
         (
-            TickOutcome::Ran { kind: "browser_history", written: 1, tables: t1, .. },
-            TickOutcome::Ran { kind: "browser_history", written: 2, tables: t2, .. },
+            TickOutcome::Ran {
+                kind: "browser_history",
+                written: 1,
+                tables: t1,
+                ..
+            },
+            TickOutcome::Ran {
+                kind: "browser_history",
+                written: 2,
+                tables: t2,
+                ..
+            },
         ) => {
             assert_eq!(t1, &vec!["urls".to_string()]);
             assert_eq!(t2, &vec!["moz_places".to_string()]);
@@ -324,7 +423,11 @@ fn browser_history_reads_history_tables_from_a_temp_copy_only() {
         other => panic!("{other:?}"),
     }
     let index = ScopeIndex::load(&fx.cfg);
-    let ff: Vec<&str> = index.for_scope("browser_history:firefox").iter().map(|f| f.line.as_str()).collect();
+    let ff: Vec<&str> = index
+        .for_scope("browser_history:firefox")
+        .iter()
+        .map(|f| f.line.as_str())
+        .collect();
     assert_eq!(
         ff,
         vec![
@@ -332,16 +435,34 @@ fn browser_history_reads_history_tables_from_a_temp_copy_only() {
             "Visited fixture-news.test 2 times in Firefox, last on 2026-10-04",
         ]
     );
-    let ch: Vec<&str> = index.for_scope("browser_history:chrome").iter().map(|f| f.line.as_str()).collect();
+    let ch: Vec<&str> = index
+        .for_scope("browser_history:chrome")
+        .iter()
+        .map(|f| f.line.as_str())
+        .collect();
     assert_eq!(ch.len(), 1);
-    assert!(ch[0].starts_with("Visited fixture-chat.test 11 times in Chrome, last on "), "{ch:?}");
+    assert!(
+        ch[0].starts_with("Visited fixture-chat.test 11 times in Chrome, last on "),
+        "{ch:?}"
+    );
 
-    assert_eq!(mtime(&places), places_before, "the original is never opened");
+    assert_eq!(
+        mtime(&places),
+        places_before,
+        "the original is never opened"
+    );
     assert_eq!(mtime(&history), history_before);
-    assert_eq!(std::fs::read(&places).unwrap(), places_bytes, "not even the WAL header changes");
+    assert_eq!(
+        std::fs::read(&places).unwrap(),
+        places_bytes,
+        "not even the WAL header changes"
+    );
     let touched = fx.fs.touched_text();
     for never in ["logins.json", "cookies.sqlite", "Cookies", "Login Data"] {
-        assert!(!touched.lines().any(|l| l.ends_with(never)), "{never} was touched:\n{touched}");
+        assert!(
+            !touched.lines().any(|l| l.ends_with(never)),
+            "{never} was touched:\n{touched}"
+        );
     }
     let disk = fx.config_bytes();
     for plain in [
@@ -356,7 +477,10 @@ fn browser_history_reads_history_tables_from_a_temp_copy_only() {
     ] {
         assert!(!disk.contains(plain), "{plain} is on disk in plain text");
     }
-    assert!(!ff.iter().chain(ch.iter()).any(|l| l.contains("private") || l.contains("token") || l.contains("Title")));
+    assert!(!ff
+        .iter()
+        .chain(ch.iter())
+        .any(|l| l.contains("private") || l.contains("token") || l.contains("Title")));
     fx.assert_no_egress();
 }
 
@@ -372,14 +496,20 @@ fn revoke_means_no_new_nodes_after_one_tick() {
     assert_eq!(ran(&sched.tick(&fx.env(NOW, false, &power))), (1, 0));
     // Control: a new file is picked up on the next due tick while granted.
     write(&docs.join("b.md"), "# B\n");
-    assert_eq!(ran(&sched.tick(&fx.env(NOW + RESCAN_MS, false, &power))), (1, 1));
+    assert_eq!(
+        ran(&sched.tick(&fx.env(NOW + RESCAN_MS, false, &power))),
+        (1, 1)
+    );
     let before = fx.nodes();
     assert_eq!(before, 2);
 
     write(&docs.join("c.md"), "# C\n");
     assert_eq!(revoke_grant(&fx.cfg, &id), Ok(true));
     let reads = fx.fs.calls();
-    assert_eq!(sched.tick(&fx.env(NOW + 2 * RESCAN_MS, false, &power)), TickOutcome::Idle);
+    assert_eq!(
+        sched.tick(&fx.env(NOW + 2 * RESCAN_MS, false, &power)),
+        TickOutcome::Idle
+    );
     assert_eq!(fx.nodes(), before, "0 new nodes after one tick");
     assert_eq!(fx.fs.calls(), reads, "and nothing read");
     fx.assert_no_egress();
@@ -407,7 +537,14 @@ fn no_keyring_pauses_and_writes_nothing() {
     fx.keys.set_available(true);
     use_key_store_for(&fx.cfg, fx.keys.clone());
     assert_eq!(ran(&sched.tick(&fx.env(NOW, false, &Power(false)))), (1, 0));
-    assert_eq!(ScopeIndex::load(&fx.cfg).facts.values().map(Vec::len).sum::<usize>(), 1);
+    assert_eq!(
+        ScopeIndex::load(&fx.cfg)
+            .facts
+            .values()
+            .map(Vec::len)
+            .sum::<usize>(),
+        1
+    );
 }
 
 /// On battery or in quiet hours a tick does no work (fake power, fake clock).
@@ -416,19 +553,33 @@ fn battery_and_quiet_hours_mean_no_tick_work() {
     let fx = Fixture::new("pace");
     fx.grant(&Scope::SystemState);
     let mut sched = Scheduler::default();
-    assert_eq!(sched.tick(&fx.env(NOW, false, &Power(true))), TickOutcome::OnBattery);
+    assert_eq!(
+        sched.tick(&fx.env(NOW, false, &Power(true))),
+        TickOutcome::OnBattery
+    );
     let quiet = grokhub_core::organs::quiet_hours_active("23:30", "22:00", "07:00");
     assert!(quiet);
-    assert_eq!(sched.tick(&fx.env(NOW, quiet, &Power(false))), TickOutcome::QuietHours);
+    assert_eq!(
+        sched.tick(&fx.env(NOW, quiet, &Power(false))),
+        TickOutcome::QuietHours
+    );
     assert_eq!(fx.probe.0.load(Ordering::SeqCst), 0);
     assert_eq!(fx.nodes(), 0);
     let day = grokhub_core::organs::quiet_hours_active("12:00", "22:00", "07:00");
     let out = sched.tick(&fx.env(NOW, day, &Power(false)));
-    assert_eq!(ran(&out), (1, 0), "/ and home are one disk on the fake probe: {out:?}");
+    assert_eq!(
+        ran(&out),
+        (1, 0),
+        "/ and home are one disk on the fake probe: {out:?}"
+    );
     assert!(fx.probe.0.load(Ordering::SeqCst) > 0);
     let index = ScopeIndex::load(&fx.cfg);
     assert_eq!(
-        index.for_scope("system_state").iter().map(|f| f.line.as_str()).collect::<Vec<_>>(),
+        index
+            .for_scope("system_state")
+            .iter()
+            .map(|f| f.line.as_str())
+            .collect::<Vec<_>>(),
         vec!["System on 2026-10-07: disk / is 60% used, 40 GB free of 100 GB"],
         "home on the same disk is one line"
     );
@@ -447,12 +598,27 @@ fn forget_these_purges_and_stays_forgotten() {
     let mut sched = Scheduler::default();
     let power = Power(false);
     assert_eq!(ran(&sched.tick(&fx.env(NOW, false, &power))), (2, 0));
-    let ids: Vec<String> = ScopeIndex::load(&fx.cfg).for_scope(&key).iter().map(|f| f.id.clone()).collect();
+    let ids: Vec<String> = ScopeIndex::load(&fx.cfg)
+        .for_scope(&key)
+        .iter()
+        .map(|f| f.id.clone())
+        .collect();
     assert_eq!(ids.len(), 2);
     assert_eq!(forget_facts(&fx.cfg, &ids), Ok(2));
-    assert_eq!(ScopeIndex::load(&fx.cfg).for_scope(&key), &[] as &[IndexedFact]);
-    assert_eq!(forget_facts(&fx.cfg, &["mem-000000000000".to_string()]), Ok(0), "only scope facts");
-    assert_eq!(ran(&sched.tick(&fx.env(NOW + RESCAN_MS, false, &power))), (0, 2), "forgotten stays forgotten");
+    assert_eq!(
+        ScopeIndex::load(&fx.cfg).for_scope(&key),
+        &[] as &[IndexedFact]
+    );
+    assert_eq!(
+        forget_facts(&fx.cfg, &["mem-000000000000".to_string()]),
+        Ok(0),
+        "only scope facts"
+    );
+    assert_eq!(
+        ran(&sched.tick(&fx.env(NOW + RESCAN_MS, false, &power))),
+        (0, 2),
+        "forgotten stays forgotten"
+    );
     assert_eq!(ScopeIndex::load(&fx.cfg).for_scope(&key).len(), 0);
 }
 
@@ -461,8 +627,14 @@ fn forget_these_purges_and_stays_forgotten() {
 fn apps_index_desktop_entries_with_launch_counts() {
     let fx = Fixture::new("apps");
     let apps = fx.home().join(".local").join("share").join("applications");
-    write(&apps.join("firefox.desktop"), "[Desktop Entry]\nType=Application\nName=Firefox\n");
-    write(&apps.join("helper.desktop"), "[Desktop Entry]\nType=Application\nName=Helper\nNoDisplay=true\n");
+    write(
+        &apps.join("firefox.desktop"),
+        "[Desktop Entry]\nType=Application\nName=Firefox\n",
+    );
+    write(
+        &apps.join("helper.desktop"),
+        "[Desktop Entry]\nType=Application\nName=Helper\nNoDisplay=true\n",
+    );
     write(
         &fx.cfg.join(INDEXERS_DIR).join(apps::APP_LAUNCH_LOG),
         "{\"app\":\"firefox.desktop\"}\n{\"app\":\"firefox.desktop\"}\n",
@@ -472,7 +644,11 @@ fn apps_index_desktop_entries_with_launch_counts() {
     assert_eq!(ran(&sched.tick(&fx.env(NOW, false, &Power(false)))), (1, 0));
     let index = ScopeIndex::load(&fx.cfg);
     assert_eq!(
-        index.for_scope("apps").iter().map(|f| f.line.as_str()).collect::<Vec<_>>(),
+        index
+            .for_scope("apps")
+            .iter()
+            .map(|f| f.line.as_str())
+            .collect::<Vec<_>>(),
         vec!["Installed app: Firefox · opened 2 times from GrokHub"]
     );
 }
@@ -482,14 +658,28 @@ fn apps_index_desktop_entries_with_launch_counts() {
 fn windows_start_menu_apps() {
     let fx = Fixture::new("winapps");
     let roaming = fx.src.join("AppData").join("Roaming");
-    let programs = roaming.join("Microsoft").join("Windows").join("Start Menu").join("Programs");
+    let programs = roaming
+        .join("Microsoft")
+        .join("Windows")
+        .join("Start Menu")
+        .join("Programs");
     write(&programs.join("Notepad++.lnk"), "x");
     write(&programs.join("7-Zip").join("7-Zip File Manager.lnk"), "x");
     write(&programs.join("7-Zip").join("Uninstall 7-Zip.lnk"), "x");
-    let dirs = PlatformDirs { os: HostOs::Windows, appdata: Some(roaming), ..fx.dirs.clone() };
+    let dirs = PlatformDirs {
+        os: HostOs::Windows,
+        appdata: Some(roaming),
+        ..fx.dirs.clone()
+    };
     let facts = apps::index_apps(&fx.fs, &dirs, &BTreeMap::new());
     let names: Vec<&str> = facts.iter().map(|f| f.line.as_str()).collect();
-    assert_eq!(names, vec!["Installed app: Notepad++", "Installed app: 7-Zip File Manager"]);
+    assert_eq!(
+        names,
+        vec![
+            "Installed app: Notepad++",
+            "Installed app: 7-Zip File Manager"
+        ]
+    );
 }
 
 #[test]
@@ -516,7 +706,11 @@ fn hard_excludes_cover_password_managers_and_key_files() {
     ] {
         assert!(index_excluded(p), "{p}");
     }
-    for p in ["/home/me/Documents/notes.md", "/home/me/Documents/keynote.txt", "/home/me/env/readme.md"] {
+    for p in [
+        "/home/me/Documents/notes.md",
+        "/home/me/Documents/keynote.txt",
+        "/home/me/env/readme.md",
+    ] {
         assert!(!index_excluded(p), "{p}");
     }
     assert_eq!(node_id("files:/a", "x.md"), node_id("files:/a", "x.md"));
@@ -531,22 +725,52 @@ fn a_scope_ask_queues_a_card_and_grants_nothing() {
     let fx = Fixture::new("ask");
     let ledger = ConsentLedger::load(&fx.cfg);
     let mut asks = ScopeAsks::default();
-    assert!(asks.ask(Scope::Apps, "  To suggest the right app I'd read your installed apps. ", &ledger, NOW));
-    assert!(!asks.ask(Scope::Apps, "again", &ledger, NOW + 1), "one card per scope");
-    assert!(!asks.ask(Scope::Calendar, "work hours", &ledger, NOW), "no calendar reader, no card");
-    assert_eq!(asks.first().map(|a| a.why.as_str()), Some("To suggest the right app I'd read your installed apps."));
-    assert_eq!(ConsentLedger::load(&fx.cfg).active().count(), 0, "asking grants nothing");
+    assert!(asks.ask(
+        Scope::Apps,
+        "  To suggest the right app I'd read your installed apps. ",
+        &ledger,
+        NOW
+    ));
+    assert!(
+        !asks.ask(Scope::Apps, "again", &ledger, NOW + 1),
+        "one card per scope"
+    );
+    assert!(
+        !asks.ask(Scope::Calendar, "work hours", &ledger, NOW),
+        "no calendar reader, no card"
+    );
+    assert_eq!(
+        asks.first().map(|a| a.why.as_str()),
+        Some("To suggest the right app I'd read your installed apps.")
+    );
+    assert_eq!(
+        ConsentLedger::load(&fx.cfg).active().count(),
+        0,
+        "asking grants nothing"
+    );
     assert!(!hx::consent_path(&fx.cfg).exists());
     fx.grant(&Scope::SystemState);
     let ledger = ConsentLedger::load(&fx.cfg);
-    assert!(!asks.ask(Scope::SystemState, "disk", &ledger, NOW), "already allowed");
+    assert!(
+        !asks.ask(Scope::SystemState, "disk", &ledger, NOW),
+        "already allowed"
+    );
     asks.expire(NOW + hx::APPROVAL_TTL.as_millis() as u64);
     assert!(asks.is_empty(), "timeout is Not now");
     assert!(asks.ask(Scope::Apps, "apps", &ledger, NOW));
-    assert!(asks.ask(Scope::BrowserHistory("firefox".into()), "sites", &ledger, NOW));
+    assert!(asks.ask(
+        Scope::BrowserHistory("firefox".into()),
+        "sites",
+        &ledger,
+        NOW
+    ));
     asks.promote(1);
     let order: Vec<String> = asks.all().iter().map(|a| a.scope.key()).collect();
-    assert_eq!(order, ["browser_history:firefox", "apps"], "the inbox jump puts its ask on the card");
+    assert_eq!(
+        order,
+        ["browser_history:firefox", "apps"],
+        "the inbox jump puts its ask on the card"
+    );
     asks.promote(5);
     assert_eq!(asks.len(), 2);
     asks.remove(&Scope::Apps);

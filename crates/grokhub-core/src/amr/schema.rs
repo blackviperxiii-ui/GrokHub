@@ -37,7 +37,10 @@ impl NodeType {
 
     /// The user model kinds `/memory` lists (Spike-5a).
     pub fn is_user_model(self) -> bool {
-        matches!(self, Self::Fact | Self::Preference | Self::Routine | Self::Need | Self::MindPrior)
+        matches!(
+            self,
+            Self::Fact | Self::Preference | Self::Routine | Self::Need | Self::MindPrior
+        )
     }
 
     pub fn parse(raw: &str) -> Result<Self, AmrError> {

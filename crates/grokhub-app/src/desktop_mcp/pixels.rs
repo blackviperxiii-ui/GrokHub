@@ -72,7 +72,9 @@ pub(crate) fn crop_rgba(
     w: u32,
     h: u32,
 ) -> Result<Vec<u8>, String> {
-    let need = (src_w as usize).saturating_mul(src_h as usize).saturating_mul(4);
+    let need = (src_w as usize)
+        .saturating_mul(src_h as usize)
+        .saturating_mul(4);
     if src.len() < need {
         return Err("crop source is shorter than its geometry".into());
     }
@@ -102,16 +104,16 @@ mod tests {
     #[test]
     fn desktop_mcp_bgrx_little_endian_is_rgba() {
         let src = [1u8, 2, 3, 4];
-        let rgba = bgrx_to_rgba(&src, 1, 1, 32, false, 0x00ff_0000, 0x0000_ff00, 0x0000_00ff)
-            .unwrap();
+        let rgba =
+            bgrx_to_rgba(&src, 1, 1, 32, false, 0x00ff_0000, 0x0000_ff00, 0x0000_00ff).unwrap();
         assert_eq!(rgba, vec![3, 2, 1, 255]);
     }
 
     #[test]
     fn desktop_mcp_bgrx_big_endian_and_short_buffer() {
         let src = [0u8, 3, 2, 1];
-        let rgba = bgrx_to_rgba(&src, 1, 1, 32, true, 0x00ff_0000, 0x0000_ff00, 0x0000_00ff)
-            .unwrap();
+        let rgba =
+            bgrx_to_rgba(&src, 1, 1, 32, true, 0x00ff_0000, 0x0000_ff00, 0x0000_00ff).unwrap();
         assert_eq!(rgba, vec![3, 2, 1, 255]);
         assert!(bgrx_to_rgba(&[0, 0], 1, 1, 32, false, 1, 1, 1).is_err());
         assert!(bgrx_to_rgba(&[0, 0], 1, 1, 16, false, 1, 1, 1).is_err());

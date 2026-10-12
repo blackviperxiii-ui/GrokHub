@@ -78,7 +78,11 @@ impl RouteOpts {
 /// `+us` and `+agents16` for its options. One click approves exactly this key.
 pub fn route_key(model: &str, opts: RouteOpts) -> String {
     let mut key = format!("premium:{}", model.trim());
-    for (on, tag) in [(opts.priority, "+priority"), (opts.us_endpoint, "+us"), (opts.multi_agent_16, "+agents16")] {
+    for (on, tag) in [
+        (opts.priority, "+priority"),
+        (opts.us_endpoint, "+us"),
+        (opts.multi_agent_16, "+agents16"),
+    ] {
         if on {
             key.push_str(tag);
         }
@@ -101,7 +105,10 @@ pub fn fast_base<'a>(reg: &'a Registry, id: &str) -> Option<&'a str> {
     let price = |r: &ModelRecord| r.meta.prices.completion.or(r.meta.prices.prompt);
     let fast = match (price(rec), price(base_rec)) {
         (Some(f), Some(b)) if b > 0 => f as f64 >= b as f64 * FAST_PRICE_RATIO,
-        (None, _) => rec.sources.contains(&SourceKind::GrokBuild) && !rec.sources.contains(&SourceKind::XaiApi),
+        (None, _) => {
+            rec.sources.contains(&SourceKind::GrokBuild)
+                && !rec.sources.contains(&SourceKind::XaiApi)
+        }
         _ => false,
     };
     fast.then_some(base_id.as_str())
@@ -117,13 +124,21 @@ pub fn fast_of<'a>(reg: &'a Registry, base: &str) -> Option<&'a str> {
 /// The registry says this Fast row may be used: Grok Build lists it in this
 /// plan (so not GB's free tier) and it is in a routable state.
 pub fn fast_entitled(reg: &Registry, id: &str) -> bool {
-    reg.get(id).is_some_and(|r| r.state.routable() && r.sources.contains(&SourceKind::GrokBuild))
+    reg.get(id)
+        .is_some_and(|r| r.state.routable() && r.sources.contains(&SourceKind::GrokBuild))
 }
 
 /// The cost class of one route. `grok_build` is the Grok Build path (GB's own
 /// plan list decides what is in the pool). `ceiling` is the user's $/M output
 /// ceiling for key routes. An unlisted model is `unknown`.
-pub fn classify(reg: &Registry, id: &str, cred: Credential, grok_build: bool, opts: RouteOpts, ceiling_usd_per_m: f64) -> CostClass {
+pub fn classify(
+    reg: &Registry,
+    id: &str,
+    cred: Credential,
+    grok_build: bool,
+    opts: RouteOpts,
+    ceiling_usd_per_m: f64,
+) -> CostClass {
     let Some(rec) = reg.get(id) else {
         return CostClass::Unknown;
     };
@@ -132,11 +147,19 @@ pub fn classify(reg: &Registry, id: &str, cred: Credential, grok_build: bool, op
     }
     if !rec.sources.is_empty() && rec.sources.iter().all(|s| s.is_new_provider()) {
         // A provider you added (R3b): only under your key and destination grant, never the plan pool.
-        return if grok_build { CostClass::Unknown } else { CostClass::NewProvider };
+        return if grok_build {
+            CostClass::Unknown
+        } else {
+            CostClass::NewProvider
+        };
     }
     if rec.sources == [SourceKind::Local] {
         // An on-device model costs nothing and needs no sign-in.
-        return if grok_build { CostClass::Unknown } else { CostClass::Included };
+        return if grok_build {
+            CostClass::Unknown
+        } else {
+            CostClass::Included
+        };
     }
     if !grok_build && cred == Credential::None {
         // Not signed in: nothing native is billed or included.
@@ -146,10 +169,16 @@ pub fn classify(reg: &Registry, id: &str, cred: Credential, grok_build: bool, op
         return CostClass::AutonomousPremium;
     }
     if grok_build {
-        return if rec.sources.contains(&SourceKind::GrokBuild) { CostClass::Included } else { CostClass::Unknown };
+        return if rec.sources.contains(&SourceKind::GrokBuild) {
+            CostClass::Included
+        } else {
+            CostClass::Unknown
+        };
     }
     match cred {
-        Credential::Plan if rec.state.routable() && rec.sources.contains(&SourceKind::XaiApi) => CostClass::Included,
+        Credential::Plan if rec.state.routable() && rec.sources.contains(&SourceKind::XaiApi) => {
+            CostClass::Included
+        }
         Credential::ApiKey => match rec.meta.prices.completion {
             Some(p) if usd_per_m(p) > ceiling_usd_per_m => CostClass::Premium,
             Some(_) => CostClass::Included,
@@ -166,7 +195,14 @@ pub fn probe_class(reg: &Registry, cred: Credential, id: &str) -> CostClass {
     if cred != Credential::Plan {
         return CostClass::Unknown;
     }
-    classify(reg, id, cred, false, RouteOpts::default(), DEFAULT_CEILING_USD_PER_M)
+    classify(
+        reg,
+        id,
+        cred,
+        false,
+        RouteOpts::default(),
+        DEFAULT_CEILING_USD_PER_M,
+    )
 }
 
 #[cfg(test)]
@@ -175,8 +211,20 @@ mod tests {
     use crate::model_registry::record::{ModelMeta, ModelState, Prices};
 
     fn row(id: &str, completion: Option<u64>, sources: &[SourceKind]) -> ModelRecord {
-        let prices = Prices { completion, prompt: completion.map(|c| c / 5), ..Prices::default() };
-        ModelRecord { meta: ModelMeta { id: id.into(), prices, ..ModelMeta::default() }, sources: sources.to_vec(), ..ModelRecord::default() }
+        let prices = Prices {
+            completion,
+            prompt: completion.map(|c| c / 5),
+            ..Prices::default()
+        };
+        ModelRecord {
+            meta: ModelMeta {
+                id: id.into(),
+                prices,
+                ..ModelMeta::default()
+            },
+            sources: sources.to_vec(),
+            ..ModelRecord::default()
+        }
     }
 
     fn reg(rows: Vec<ModelRecord>) -> Registry {
@@ -194,35 +242,89 @@ mod tests {
     #[test]
     fn plan_and_list_price_keys_are_included_and_the_ceiling_makes_premium() {
         // grok-4.7 at $15/M out, grok-heavy at $60/M out.
-        let r = reg(vec![row("grok-4.7", Some(150_000), BOTH), row("grok-heavy", Some(600_000), API)]);
+        let r = reg(vec![
+            row("grok-4.7", Some(150_000), BOTH),
+            row("grok-heavy", Some(600_000), API),
+        ]);
         let plain = RouteOpts::default();
-        assert_eq!(classify(&r, "grok-4.7", Credential::Plan, false, plain, 15.0), CostClass::Included);
-        assert_eq!(classify(&r, "grok-4.7", Credential::ApiKey, false, plain, 15.0), CostClass::Included);
-        assert_eq!(classify(&r, "grok-heavy", Credential::ApiKey, false, plain, 15.0), CostClass::Premium);
-        assert_eq!(classify(&r, "grok-heavy", Credential::ApiKey, false, plain, 60.0), CostClass::Included);
+        assert_eq!(
+            classify(&r, "grok-4.7", Credential::Plan, false, plain, 15.0),
+            CostClass::Included
+        );
+        assert_eq!(
+            classify(&r, "grok-4.7", Credential::ApiKey, false, plain, 15.0),
+            CostClass::Included
+        );
+        assert_eq!(
+            classify(&r, "grok-heavy", Credential::ApiKey, false, plain, 15.0),
+            CostClass::Premium
+        );
+        assert_eq!(
+            classify(&r, "grok-heavy", Credential::ApiKey, false, plain, 60.0),
+            CostClass::Included
+        );
         // The plan pool doesn't bill per token, so the ceiling doesn't apply there.
-        assert_eq!(classify(&r, "grok-heavy", Credential::Plan, false, plain, 15.0), CostClass::Included);
-        assert_eq!(classify(&r, "grok-4.7", Credential::None, false, plain, 15.0), CostClass::Unknown);
-        assert_eq!(classify(&r, "nope", Credential::Plan, false, plain, 15.0), CostClass::Unknown);
+        assert_eq!(
+            classify(&r, "grok-heavy", Credential::Plan, false, plain, 15.0),
+            CostClass::Included
+        );
+        assert_eq!(
+            classify(&r, "grok-4.7", Credential::None, false, plain, 15.0),
+            CostClass::Unknown
+        );
+        assert_eq!(
+            classify(&r, "nope", Credential::Plan, false, plain, 15.0),
+            CostClass::Unknown
+        );
         let mut gone = r.clone();
         gone.models.get_mut("grok-4.7").unwrap().state = ModelState::NotInPlan;
-        assert_eq!(classify(&gone, "grok-4.7", Credential::Plan, false, plain, 15.0), CostClass::Unknown);
+        assert_eq!(
+            classify(&gone, "grok-4.7", Credential::Plan, false, plain, 15.0),
+            CostClass::Unknown
+        );
     }
 
     #[test]
     fn priority_us_and_sixteen_agents_are_premium_on_any_model() {
         let r = reg(vec![row("grok-4.7", Some(150_000), BOTH)]);
         for opts in [
-            RouteOpts { priority: true, ..RouteOpts::default() },
-            RouteOpts { us_endpoint: true, ..RouteOpts::default() },
-            RouteOpts { multi_agent_16: true, ..RouteOpts::default() },
+            RouteOpts {
+                priority: true,
+                ..RouteOpts::default()
+            },
+            RouteOpts {
+                us_endpoint: true,
+                ..RouteOpts::default()
+            },
+            RouteOpts {
+                multi_agent_16: true,
+                ..RouteOpts::default()
+            },
         ] {
-            assert_eq!(classify(&r, "grok-4.7", Credential::Plan, false, opts, 15.0), CostClass::Premium, "{opts:?}");
-            assert_eq!(classify(&r, "grok-4.7", Credential::ApiKey, false, opts, 100.0), CostClass::Premium, "{opts:?}");
+            assert_eq!(
+                classify(&r, "grok-4.7", Credential::Plan, false, opts, 15.0),
+                CostClass::Premium,
+                "{opts:?}"
+            );
+            assert_eq!(
+                classify(&r, "grok-4.7", Credential::ApiKey, false, opts, 100.0),
+                CostClass::Premium,
+                "{opts:?}"
+            );
         }
-        let all = RouteOpts { priority: true, us_endpoint: true, multi_agent_16: true };
-        assert_eq!(route_key("grok-4.7", all), "premium:grok-4.7+priority+us+agents16");
-        assert_eq!(route_key(" grok-heavy ", RouteOpts::default()), "premium:grok-heavy");
+        let all = RouteOpts {
+            priority: true,
+            us_endpoint: true,
+            multi_agent_16: true,
+        };
+        assert_eq!(
+            route_key("grok-4.7", all),
+            "premium:grok-4.7+priority+us+agents16"
+        );
+        assert_eq!(
+            route_key(" grok-heavy ", RouteOpts::default()),
+            "premium:grok-heavy"
+        );
     }
 
     #[test]
@@ -246,11 +348,28 @@ mod tests {
         assert_eq!(fast_of(&r, "grok-4"), None);
         assert_eq!(fast_base(&r, "grok-code-fast"), None);
         for (id, gb) in [("grok-4.7-fast", true), ("grok-4.6-fast", false)] {
-            assert_eq!(classify(&r, id, Credential::Plan, gb, RouteOpts::default(), 15.0), CostClass::AutonomousPremium, "{id}");
+            assert_eq!(
+                classify(&r, id, Credential::Plan, gb, RouteOpts::default(), 15.0),
+                CostClass::AutonomousPremium,
+                "{id}"
+            );
         }
-        assert_eq!(classify(&r, "grok-4-fast", Credential::Plan, false, RouteOpts::default(), 15.0), CostClass::Included);
+        assert_eq!(
+            classify(
+                &r,
+                "grok-4-fast",
+                Credential::Plan,
+                false,
+                RouteOpts::default(),
+                15.0
+            ),
+            CostClass::Included
+        );
         assert!(fast_entitled(&r, "grok-4.7-fast"));
-        assert!(!fast_entitled(&r, "grok-4.6-fast"), "the xAI API alone doesn't say the plan includes it");
+        assert!(
+            !fast_entitled(&r, "grok-4.6-fast"),
+            "the xAI API alone doesn't say the plan includes it"
+        );
         let mut free = r.clone();
         free.models.get_mut("grok-4.7-fast").unwrap().state = ModelState::NotInPlan;
         assert!(!fast_entitled(&free, "grok-4.7-fast"));
@@ -258,28 +377,58 @@ mod tests {
 
     #[test]
     fn probes_and_evals_only_see_the_plan_pool() {
-        let r = reg(vec![row("grok-4.7", Some(150_000), BOTH), row("grok-4.7-fast", Some(300_000), BOTH)]);
-        assert_eq!(probe_class(&r, Credential::Plan, "grok-4.7"), CostClass::Included);
-        assert_eq!(probe_class(&r, Credential::ApiKey, "grok-4.7"), CostClass::Unknown);
-        assert_eq!(probe_class(&r, Credential::Plan, "grok-4.7-fast"), CostClass::AutonomousPremium);
-        assert_eq!(probe_class(&r, Credential::None, "grok-4.7"), CostClass::Unknown);
+        let r = reg(vec![
+            row("grok-4.7", Some(150_000), BOTH),
+            row("grok-4.7-fast", Some(300_000), BOTH),
+        ]);
+        assert_eq!(
+            probe_class(&r, Credential::Plan, "grok-4.7"),
+            CostClass::Included
+        );
+        assert_eq!(
+            probe_class(&r, Credential::ApiKey, "grok-4.7"),
+            CostClass::Unknown
+        );
+        assert_eq!(
+            probe_class(&r, Credential::Plan, "grok-4.7-fast"),
+            CostClass::AutonomousPremium
+        );
+        assert_eq!(
+            probe_class(&r, Credential::None, "grok-4.7"),
+            CostClass::Unknown
+        );
     }
 
     #[test]
     fn a_provider_you_added_is_new_provider_on_any_credential_and_never_probed() {
         let r = reg(vec![
-            row("openrouter/vendor/model-a", Some(30_000), &[SourceKind::OpenAiCompatible]),
+            row(
+                "openrouter/vendor/model-a",
+                Some(30_000),
+                &[SourceKind::OpenAiCompatible],
+            ),
             row("anthropic/model-b", None, &[SourceKind::Anthropic]),
             row("grok-4.7", Some(150_000), BOTH),
         ]);
         for cred in [Credential::Plan, Credential::ApiKey, Credential::None] {
             for id in ["openrouter/vendor/model-a", "anthropic/model-b"] {
-                assert_eq!(classify(&r, id, cred, false, RouteOpts::default(), 15.0), CostClass::NewProvider, "{id} {cred:?}");
-                assert_eq!(classify(&r, id, cred, true, RouteOpts::default(), 15.0), CostClass::Unknown, "Grok Build never sends there");
+                assert_eq!(
+                    classify(&r, id, cred, false, RouteOpts::default(), 15.0),
+                    CostClass::NewProvider,
+                    "{id} {cred:?}"
+                );
+                assert_eq!(
+                    classify(&r, id, cred, true, RouteOpts::default(), 15.0),
+                    CostClass::Unknown,
+                    "Grok Build never sends there"
+                );
             }
         }
         // A cheap price never makes it included: it stays out of the plan pool and the evals.
-        assert_eq!(probe_class(&r, Credential::Plan, "openrouter/vendor/model-a"), CostClass::NewProvider);
+        assert_eq!(
+            probe_class(&r, Credential::Plan, "openrouter/vendor/model-a"),
+            CostClass::NewProvider
+        );
         assert_eq!(CostClass::NewProvider.as_str(), "new_provider");
     }
 }

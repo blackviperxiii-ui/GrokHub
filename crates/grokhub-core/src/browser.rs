@@ -15,8 +15,7 @@ pub const CDP_DOWN: &str =
 
 /// Parse Chrome/Firefox `/json/list` (or `/json`) payload.
 pub fn parse_cdp_targets(raw: &str) -> Result<Vec<BrowserTab>, String> {
-    let v: serde_json::Value =
-        serde_json::from_str(raw).map_err(|e| format!("cdp list: {e}"))?;
+    let v: serde_json::Value = serde_json::from_str(raw).map_err(|e| format!("cdp list: {e}"))?;
     let arr = v
         .as_array()
         .ok_or_else(|| "cdp list: expected array".to_string())?;
@@ -76,10 +75,7 @@ pub fn match_browser_tabs<'a>(tabs: &'a [BrowserTab], query: &str) -> Vec<&'a Br
 }
 
 fn is_browser_app_query(q: &str) -> bool {
-    matches!(
-        q,
-        "firefox" | "chrome" | "chromium" | "browser" | "brave"
-    )
+    matches!(q, "firefox" | "chrome" | "chromium" | "browser" | "brave")
 }
 
 fn is_new_tab_query(q: &str) -> bool {
@@ -111,10 +107,7 @@ fn soft_pick_browser_tab<'a>(tabs: &'a [BrowserTab], query: &str) -> Option<&'a 
 }
 
 /// One exact hit, or an error that lists the candidates.
-pub fn pick_browser_tab<'a>(
-    tabs: &'a [BrowserTab],
-    query: &str,
-) -> Result<&'a BrowserTab, String> {
+pub fn pick_browser_tab<'a>(tabs: &'a [BrowserTab], query: &str) -> Result<&'a BrowserTab, String> {
     let hits = match_browser_tabs(tabs, query);
     match hits.len() {
         0 => {
@@ -218,8 +211,13 @@ mod tests {
         assert_eq!(hit.id, "t1");
         let miss = pick_browser_tab(&tabs, "https").unwrap_err();
         assert!(miss.contains("ambiguous"), "{miss}");
-        assert!(miss.contains("GitHub") && miss.contains("Hacker News"), "{miss}");
-        assert!(pick_browser_tab(&tabs, "nope").unwrap_err().contains("no tab"));
+        assert!(
+            miss.contains("GitHub") && miss.contains("Hacker News"),
+            "{miss}"
+        );
+        assert!(pick_browser_tab(&tabs, "nope")
+            .unwrap_err()
+            .contains("no tab"));
         let one = parse_cdp_targets(
             r#"[{"id":"t1","type":"page","title":"GitHub","url":"https://github.com/foo","webSocketDebuggerUrl":"ws://127.0.0.1:9222/devtools/page/t1"}]"#,
         )

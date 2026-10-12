@@ -140,7 +140,8 @@ fn link_targets(text: &str) -> Vec<String> {
         rest = &rest[i + 2..];
         let Some(end) = rest.find(')') else { break };
         let target = rest[..end].trim();
-        let external = target.contains("://") || target.starts_with('#') || target.starts_with("mailto:");
+        let external =
+            target.contains("://") || target.starts_with('#') || target.starts_with("mailto:");
         if !target.is_empty() && !external {
             out.push(target.split('#').next().unwrap_or(target).to_string());
         }
@@ -158,13 +159,17 @@ fn tokenize_into(text: &str, words: &mut HashSet<String>) {
 }
 
 fn walk(dir: &Path, skip: &[PathBuf], words: &mut HashSet<String>) {
-    let Ok(entries) = fs::read_dir(dir) else { return };
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
     for entry in entries.flatten() {
         let path = entry.path();
         if skip.iter().any(|s| s == &path) {
             continue;
         }
-        let Ok(kind) = entry.file_type() else { continue };
+        let Ok(kind) = entry.file_type() else {
+            continue;
+        };
         if kind.is_dir() {
             walk(&path, skip, words);
             continue;
@@ -214,7 +219,9 @@ fn reference_problems(
         match classify(&span) {
             Some(Ref::Path(p)) => {
                 if p.contains(['<', '>', '*', '{', '}', '$']) {
-                    out.push(format!("{name}: `{p}` is a pattern; name a concrete repo path"));
+                    out.push(format!(
+                        "{name}: `{p}` is a pattern; name a concrete repo path"
+                    ));
                 } else if !root.join(&p).exists() {
                     out.push(format!("{name}: repo path `{p}` does not exist"));
                 }
@@ -222,7 +229,9 @@ fn reference_problems(
             Some(Ref::Ident(id)) => {
                 for seg in id.split("::") {
                     if !words.contains(seg) {
-                        out.push(format!("{name}: identifier `{id}` (`{seg}`) is not in the tree"));
+                        out.push(format!(
+                            "{name}: identifier `{id}` (`{seg}`) is not in the tree"
+                        ));
                     }
                 }
             }
@@ -242,7 +251,9 @@ fn shape_problems(name: &str, text: &str) -> Vec<String> {
     let mut out = Vec::new();
     let count = text.lines().count();
     if !(MIN_LINES..=MAX_LINES).contains(&count) {
-        out.push(format!("{name}: {count} lines; keep compass files {MIN_LINES}..={MAX_LINES}"));
+        out.push(format!(
+            "{name}: {count} lines; keep compass files {MIN_LINES}..={MAX_LINES}"
+        ));
     }
     if !text.starts_with("# Compass: ") {
         out.push(format!("{name}: first line must be `# Compass: <name>`"));
@@ -299,13 +310,18 @@ fn compass_files_point_at_real_paths() {
             .filter(|s| matches!(classify(s), Some(Ref::Path(_))))
             .count();
         if paths < 3 {
-            problems.push(format!("{name}: names {paths} repo paths; a compass needs its 3-5 key files"));
+            problems.push(format!(
+                "{name}: names {paths} repo paths; a compass needs its 3-5 key files"
+            ));
         }
         if !link_targets(&index).iter().any(|t| t == name) {
             problems.push(format!("README.md: does not link {name}"));
         }
     }
-    assert!(maps >= 10, "expected at least 10 compass files, found {maps}");
+    assert!(
+        maps >= 10,
+        "expected at least 10 compass files, found {maps}"
+    );
     assert!(
         problems.is_empty(),
         "stale compass files ({}):\n{}",
@@ -346,10 +362,22 @@ fn prose_commands_and_home_paths_are_not_repo_paths() {
     assert_eq!(classify("legacy"), None);
     assert_eq!(classify("app.json"), None);
     assert_eq!(classify("CLAUDE.md"), Some(Ref::Path("CLAUDE.md".into())));
-    assert_eq!(classify("scripts/install.sh"), Some(Ref::Path("scripts/install.sh".into())));
-    assert_eq!(classify("parse_slash()"), Some(Ref::Ident("parse_slash".into())));
-    assert_eq!(classify("include_str!"), Some(Ref::Ident("include_str".into())));
-    assert_eq!(classify("harness::decide"), Some(Ref::Ident("harness::decide".into())));
+    assert_eq!(
+        classify("scripts/install.sh"),
+        Some(Ref::Path("scripts/install.sh".into()))
+    );
+    assert_eq!(
+        classify("parse_slash()"),
+        Some(Ref::Ident("parse_slash".into()))
+    );
+    assert_eq!(
+        classify("include_str!"),
+        Some(Ref::Ident("include_str".into()))
+    );
+    assert_eq!(
+        classify("harness::decide"),
+        Some(Ref::Ident("harness::decide".into()))
+    );
     let root = repo_root();
     let problems = reference_problems(
         "fixture.md",
@@ -360,7 +388,10 @@ fn prose_commands_and_home_paths_are_not_repo_paths() {
     );
     assert_eq!(
         problems,
-        vec!["fixture.md: `crates/<crate>/src/lib.rs` is a pattern; name a concrete repo path".to_string()]
+        vec![
+            "fixture.md: `crates/<crate>/src/lib.rs` is a pattern; name a concrete repo path"
+                .to_string()
+        ]
     );
 }
 

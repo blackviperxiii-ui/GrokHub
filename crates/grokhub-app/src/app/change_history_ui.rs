@@ -17,7 +17,8 @@ use crate::{config, skills};
 const HISTORY_ROWS: usize = 8;
 /// Saved code ideas kept, newest last.
 pub(super) const SAVED_IDEAS_CAP: usize = 50;
-const HISTORY_EMPTY: &str = "No self-changes yet. The Sunday self-review proposes them as Pulse cards.";
+const HISTORY_EMPTY: &str =
+    "No self-changes yet. The Sunday self-review proposes them as Pulse cards.";
 
 /// A code-change idea the user saved from its Pulse card.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -50,7 +51,9 @@ fn status_word(s: hx::VersionStatus) -> &'static str {
 pub(super) fn history_rows(versions: &[hx::Version], now: u64) -> Vec<HistoryRow> {
     let mut rows = Vec::new();
     for (i, v) in versions.iter().enumerate().rev().take(HISTORY_ROWS) {
-        let newest = !versions[i + 1..].iter().any(|o| o.kind == v.kind && o.id == v.id);
+        let newest = !versions[i + 1..]
+            .iter()
+            .any(|o| o.kind == v.kind && o.id == v.id);
         let mut hint = format!("{} · {}", v.diff, grokhub_core::pulse::ago_label(v.at, now));
         if !v.note.is_empty() {
             hint = format!("{} · {hint}", v.note);
@@ -77,14 +80,20 @@ impl Cabin {
             let over = state.saved_ideas.len().saturating_sub(SAVED_IDEAS_CAP);
             state.saved_ideas.drain(..over);
         });
-        self.status = "Idea saved in Settings → Behavior. GrokHub never changes its own code.".into();
+        self.status =
+            "Idea saved in Settings → Behavior. GrokHub never changes its own code.".into();
         true
     }
 
     /// The issue text for a code idea, redacted, for the clipboard.
     pub(super) fn issue_for(title: &str, text: &str) -> String {
         let home = std::env::var(if cfg!(windows) { "USERPROFILE" } else { "HOME" }).ok();
-        sr::issue_text(title, text, &crate::update::build_version_line(), home.as_deref())
+        sr::issue_text(
+            title,
+            text,
+            &crate::update::build_version_line(),
+            home.as_deref(),
+        )
     }
 
     /// A code-idea card's Copy as GitHub issue: the text goes to the
@@ -96,13 +105,13 @@ impl Cabin {
         let source_id = card.source_id.clone();
         let title = card.title.clone();
         self.ensure_self_review_file();
-        let Some(pending) = self
-            .harness
-            .self_review
-            .file
-            .as_ref()
-            .and_then(|state| state.pending.iter().find(|p| p.source == source_id).cloned())
-        else {
+        let Some(pending) = self.harness.self_review.file.as_ref().and_then(|state| {
+            state
+                .pending
+                .iter()
+                .find(|p| p.source == source_id)
+                .cloned()
+        }) else {
             return;
         };
         self.harness.self_review.copy_out = Some(Self::issue_for(&title, &pending.md));
@@ -134,7 +143,12 @@ impl Cabin {
             .map(|f| f.saved_ideas.clone())
             .unwrap_or_default();
         for idea in ideas.iter().rev() {
-            if crate::cards::settings_action(ui, &format!("Idea: {}", idea.title), &idea.text, "Copy as GitHub issue") {
+            if crate::cards::settings_action(
+                ui,
+                &format!("Idea: {}", idea.title),
+                &idea.text,
+                "Copy as GitHub issue",
+            ) {
                 ui.ctx().copy_text(Self::issue_for(&idea.title, &idea.text));
                 self.status = ISSUE_COPIED.into();
             }
@@ -144,7 +158,13 @@ impl Cabin {
     /// Revert on a kept history row: the user's click undoes it through the ledger.
     pub(super) fn revert_kept_version(&mut self, version: &str) {
         let dir = config::config_dir();
-        match hx::revert_version(&dir, &skills::skills_dir(), version, hx::UndoAsk::from_click(), grokhub_core::now_ms()) {
+        match hx::revert_version(
+            &dir,
+            &skills::skills_dir(),
+            version,
+            hx::UndoAsk::from_click(),
+            grokhub_core::now_ms(),
+        ) {
             Ok(v) => {
                 if v.kind == hx::ChangeKind::Skill.as_str() {
                     self.skill_list = skills::list_skills();

@@ -125,7 +125,8 @@ pub struct Notice {
 
 impl Notice {
     pub fn is_critical_retired(&self) -> bool {
-        self.severity.eq_ignore_ascii_case("critical") && self.text.to_ascii_lowercase().contains("retired")
+        self.severity.eq_ignore_ascii_case("critical")
+            && self.text.to_ascii_lowercase().contains("retired")
     }
 }
 
@@ -169,7 +170,10 @@ pub struct ModelMeta {
 
 impl ModelMeta {
     pub fn bare(id: &str) -> Self {
-        Self { id: id.to_string(), ..Self::default() }
+        Self {
+            id: id.to_string(),
+            ..Self::default()
+        }
     }
 
     /// No prices, no context and no efforts: a row with nothing behind it.
@@ -203,8 +207,14 @@ impl ModelMeta {
         take(&mut self.prices.cached, &other.prices.cached);
         take(&mut self.prices.completion, &other.prices.completion);
         take(&mut self.prices.prompt_long, &other.prices.prompt_long);
-        take(&mut self.prices.completion_long, &other.prices.completion_long);
-        take(&mut self.prices.long_context_threshold, &other.prices.long_context_threshold);
+        take(
+            &mut self.prices.completion_long,
+            &other.prices.completion_long,
+        );
+        take(
+            &mut self.prices.long_context_threshold,
+            &other.prices.long_context_threshold,
+        );
         take(&mut self.efforts, &other.efforts);
         take(&mut self.default_effort, &other.default_effort);
         take(&mut self.fingerprint, &other.fingerprint);
@@ -320,6 +330,7 @@ impl ModelRecord {
         if stem.is_empty() {
             return false;
         }
-        model_id_stem(&self.meta.id) == stem || self.meta.aliases.iter().any(|a| model_id_stem(a) == stem)
+        model_id_stem(&self.meta.id) == stem
+            || self.meta.aliases.iter().any(|a| model_id_stem(a) == stem)
     }
 }

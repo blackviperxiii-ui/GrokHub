@@ -205,8 +205,8 @@ pub fn parse_sse_usage(line: &str) -> Option<StreamUsage> {
     }
     let prompt_tokens = u32_field(&usage, &["prompt_tokens", "input_tokens"])?;
     let completion_tokens = u32_field(&usage, &["completion_tokens", "output_tokens"])?;
-    let total_tokens =
-        u32_field(&usage, &["total_tokens"]).unwrap_or(prompt_tokens.saturating_add(completion_tokens));
+    let total_tokens = u32_field(&usage, &["total_tokens"])
+        .unwrap_or(prompt_tokens.saturating_add(completion_tokens));
     Some(StreamUsage {
         prompt_tokens,
         completion_tokens,
@@ -355,7 +355,10 @@ mod tests {
         let line = r#"data: {"choices":[{"delta":{"content":"flash"}}]}"#;
         assert_eq!(parse_sse_delta(line).as_deref(), Some("flash"));
         let think = r#"data: {"choices":[{"delta":{"reasoning_content":"Need a snapshot."}}]}"#;
-        assert_eq!(parse_sse_thought(think).as_deref(), Some("Need a snapshot."));
+        assert_eq!(
+            parse_sse_thought(think).as_deref(),
+            Some("Need a snapshot.")
+        );
         assert!(parse_sse_delta(think).is_none());
         assert!(sse_done("data: [DONE]"));
         assert!(parse_sse_delta("data: [DONE]").is_none());
@@ -379,8 +382,13 @@ mod tests {
         );
         assert!(!keep_sse_acc("", false));
         let incomplete = r#"data: {"type":"response.incomplete","response":{"status":"incomplete","incomplete_details":{"reason":"max_output_tokens"}}}"#;
-        assert_eq!(parse_sse_finish(incomplete).as_deref(), Some("max_output_tokens"));
-        assert!(stream_was_truncated(parse_sse_finish(incomplete).as_deref()));
+        assert_eq!(
+            parse_sse_finish(incomplete).as_deref(),
+            Some("max_output_tokens")
+        );
+        assert!(stream_was_truncated(
+            parse_sse_finish(incomplete).as_deref()
+        ));
         let mut body = json!({"stream": false});
         chat_stream_flag(&mut body, true);
         assert_eq!(body["stream"], true);
@@ -394,8 +402,12 @@ mod tests {
         assert_eq!(parse_sse_delta(text).as_deref(), Some("Hello"));
         let alias = r#"data: {"type":"response.text.delta","delta":" there"}"#;
         assert_eq!(parse_sse_delta(alias).as_deref(), Some(" there"));
-        let think = r#"data: {"type":"response.reasoning_summary_text.delta","delta":"Need a snapshot."}"#;
-        assert_eq!(parse_sse_thought(think).as_deref(), Some("Need a snapshot."));
+        let think =
+            r#"data: {"type":"response.reasoning_summary_text.delta","delta":"Need a snapshot."}"#;
+        assert_eq!(
+            parse_sse_thought(think).as_deref(),
+            Some("Need a snapshot.")
+        );
         assert!(parse_sse_delta(think).is_none());
         let parts = r#"data: {"choices":[{"delta":{"content":[{"type":"text","text":"flash"}]}}]}"#;
         assert_eq!(parse_sse_delta(parts).as_deref(), Some("flash"));
@@ -415,7 +427,10 @@ mod tests {
         fold_stream_token(&mut msgs, "assistant", "Hello!", StreamTokenKind::Replace);
         assert_eq!(msgs[0].1, "Hello!");
         fold_stream_token(&mut msgs, "user", "hey", StreamTokenKind::Delta);
-        assert_eq!(msgs.last().map(|(r, t)| (r.as_str(), t.as_str())), Some(("user", "hey")));
+        assert_eq!(
+            msgs.last().map(|(r, t)| (r.as_str(), t.as_str())),
+            Some(("user", "hey"))
+        );
         let done = r#"data: {"type":"response.output_text.done","text":"Hello"}"#;
         assert_eq!(
             parse_sse_text(done),
@@ -441,10 +456,7 @@ mod tests {
             "Hello"
         ));
         assert_eq!(
-            prefer_complete_reply(
-                "I'll click.\nCOMPUTER_CMD: click 10 20\n",
-                "I'll click."
-            ),
+            prefer_complete_reply("I'll click.\nCOMPUTER_CMD: click 10 20\n", "I'll click."),
             "I'll click.\nCOMPUTER_CMD: click 10 20\n"
         );
         assert_eq!(prefer_complete_reply("", "final"), "final");

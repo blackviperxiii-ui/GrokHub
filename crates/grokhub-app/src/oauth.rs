@@ -1,9 +1,9 @@
 use grokhub_core::{
     apply_profile, merge_refreshed, parse_device_start, parse_poll_result, parse_token_json,
-    IMAGE_FILE_CAP, TEXT_FILE_CAP,
     parse_userinfo_profile, token_needs_refresh, trusted_profile_photo_url, trusted_xai_url,
-    DeviceCodeStart, PollResult, PollStatus, XaiOAuthTokens, XAI_DEVICE_CODE_GRANT,
-    XAI_OAUTH_CLIENT_ID, XAI_OAUTH_DISCOVERY, XAI_OAUTH_SCOPE, XAI_OAUTH_USERINFO,
+    DeviceCodeStart, PollResult, PollStatus, XaiOAuthTokens, IMAGE_FILE_CAP, TEXT_FILE_CAP,
+    XAI_DEVICE_CODE_GRANT, XAI_OAUTH_CLIENT_ID, XAI_OAUTH_DISCOVERY, XAI_OAUTH_SCOPE,
+    XAI_OAUTH_USERINFO,
 };
 use serde_json::Value;
 use std::io::Read;
@@ -534,7 +534,8 @@ mod tests {
     fn cabin_oauth_refresh_does_not_hammer_the_ui_thread() {
         let src = include_str!("oauth.rs").replace("\r\n", "\n");
         assert!(
-            !src.contains(concat!("grok", "_auth_path")) && !src.contains(concat!("oidc", "_client_id")),
+            !src.contains(concat!("grok", "_auth_path"))
+                && !src.contains(concat!("oidc", "_client_id")),
             "GrokHub never reads or refreshes the Grok CLI login"
         );
         let cabin = src

@@ -49,7 +49,10 @@ pub struct RouteGoal {
 impl RouteGoal {
     /// From a policy row's goal word and reason; `None` for an unknown goal.
     pub fn of(goal: &str, reason: &str) -> Option<Self> {
-        Goal::parse(goal).map(|goal| Self { goal, reason: reason.trim().to_string() })
+        Goal::parse(goal).map(|goal| Self {
+            goal,
+            reason: reason.trim().to_string(),
+        })
     }
 
     /// "goal quality (mistakes can break the system)"
@@ -101,7 +104,9 @@ pub fn pin_goal(session: &str, goal: Option<RouteGoal>) {
 /// The pinned goal of the first of `keys` that has one (Brain 4 background runs).
 pub fn pinned_for(keys: &[&str]) -> Option<RouteGoal> {
     let pinned = PINNED.lock().unwrap_or_else(|e| e.into_inner());
-    keys.iter().filter(|k| !k.is_empty()).find_map(|k| pinned.get(*k).cloned())
+    keys.iter()
+        .filter(|k| !k.is_empty())
+        .find_map(|k| pinned.get(*k).cloned())
 }
 
 /// The goal of the first of `keys` that has one; a pinned goal wins for its key.
@@ -117,7 +122,12 @@ pub fn goal_for(keys: &[&str]) -> Option<RouteGoal> {
 /// [`super::ladder::start_rung`]'s pick; the user's steer leaves it alone.
 /// Quality starts one rung above the class start (capped at High and the
 /// ceiling), speed one below (never under the floor), cost at the floor.
-pub fn goal_start(band: Band, start: (usize, Vec<String>), steer: Steer, goal: Option<&RouteGoal>) -> (usize, Vec<String>) {
+pub fn goal_start(
+    band: Band,
+    start: (usize, Vec<String>),
+    steer: Steer,
+    goal: Option<&RouteGoal>,
+) -> (usize, Vec<String>) {
     let (rung, mut rules) = start;
     let Some(g) = goal.filter(|_| steer == Steer::None) else {
         return (rung, rules);
@@ -139,7 +149,11 @@ mod tests {
     use super::*;
 
     fn band() -> Band {
-        Band { floor: 1, start: 3, ceiling: 5 }
+        Band {
+            floor: 1,
+            start: 3,
+            ceiling: 5,
+        }
     }
 
     fn goal(g: &str) -> RouteGoal {
@@ -149,20 +163,66 @@ mod tests {
     #[test]
     fn each_goal_moves_the_start_inside_the_band_and_the_users_words_win() {
         let b = band();
-        assert_eq!(goal_start(b, (3, vec![]), Steer::None, Some(&goal("quality"))), (4, vec!["goal:quality".to_string()]));
-        assert_eq!(goal_start(b, (3, vec![]), Steer::None, Some(&goal("speed"))), (2, vec!["goal:speed".to_string()]));
-        assert_eq!(goal_start(b, (3, vec![]), Steer::None, Some(&goal("cost"))), (1, vec!["goal:cost".to_string()]));
-        assert_eq!(goal_start(b, (3, vec![]), Steer::None, Some(&goal("balanced"))), (3, vec![]));
+        assert_eq!(
+            goal_start(b, (3, vec![]), Steer::None, Some(&goal("quality"))),
+            (4, vec!["goal:quality".to_string()])
+        );
+        assert_eq!(
+            goal_start(b, (3, vec![]), Steer::None, Some(&goal("speed"))),
+            (2, vec!["goal:speed".to_string()])
+        );
+        assert_eq!(
+            goal_start(b, (3, vec![]), Steer::None, Some(&goal("cost"))),
+            (1, vec!["goal:cost".to_string()])
+        );
+        assert_eq!(
+            goal_start(b, (3, vec![]), Steer::None, Some(&goal("balanced"))),
+            (3, vec![])
+        );
         assert_eq!(goal_start(b, (3, vec![]), Steer::None, None), (3, vec![]));
         // d>0.7 already raised it: quality doesn't stack a second rung.
-        assert_eq!(goal_start(b, (4, vec!["d>0.7".into()]), Steer::None, Some(&goal("quality"))), (4, vec!["d>0.7".to_string()]));
+        assert_eq!(
+            goal_start(
+                b,
+                (4, vec!["d>0.7".into()]),
+                Steer::None,
+                Some(&goal("quality"))
+            ),
+            (4, vec!["d>0.7".to_string()])
+        );
         // "think hard" / "keep it quick" decide on their own.
-        assert_eq!(goal_start(b, (5, vec!["steer:harder".into()]), Steer::Harder, Some(&goal("cost"))), (5, vec!["steer:harder".to_string()]));
-        assert_eq!(goal_start(b, (1, vec!["steer:quicker".into()]), Steer::Quicker, Some(&goal("quality"))), (1, vec!["steer:quicker".to_string()]));
+        assert_eq!(
+            goal_start(
+                b,
+                (5, vec!["steer:harder".into()]),
+                Steer::Harder,
+                Some(&goal("cost"))
+            ),
+            (5, vec!["steer:harder".to_string()])
+        );
+        assert_eq!(
+            goal_start(
+                b,
+                (1, vec!["steer:quicker".into()]),
+                Steer::Quicker,
+                Some(&goal("quality"))
+            ),
+            (1, vec!["steer:quicker".to_string()])
+        );
         // A narrow band: never past the ceiling or under the floor.
-        let narrow = Band { floor: 2, start: 2, ceiling: 2 };
-        assert_eq!(goal_start(narrow, (2, vec![]), Steer::None, Some(&goal("quality"))), (2, vec![]));
-        assert_eq!(goal_start(narrow, (2, vec![]), Steer::None, Some(&goal("speed"))), (2, vec![]));
+        let narrow = Band {
+            floor: 2,
+            start: 2,
+            ceiling: 2,
+        };
+        assert_eq!(
+            goal_start(narrow, (2, vec![]), Steer::None, Some(&goal("quality"))),
+            (2, vec![])
+        );
+        assert_eq!(
+            goal_start(narrow, (2, vec![]), Steer::None, Some(&goal("speed"))),
+            (2, vec![])
+        );
     }
 
     #[test]
@@ -185,9 +245,15 @@ mod tests {
         let row = RouteGoal::of("cost", "user isn't waiting").unwrap();
         pin_goal("goal-test-pin", Some(active.clone()));
         set_goal("goal-test-pin", Some(row.clone()));
-        assert_eq!(goal_for(&["goal-test-pin"]).map(|g| g.label()), Some("goal cost (user active)".to_string()));
+        assert_eq!(
+            goal_for(&["goal-test-pin"]).map(|g| g.label()),
+            Some("goal cost (user active)".to_string())
+        );
         pin_goal("", Some(active));
-        assert_eq!(pinned_for(&["", "goal-test-pin"]).map(|g| g.reason), Some("user active".to_string()));
+        assert_eq!(
+            pinned_for(&["", "goal-test-pin"]).map(|g| g.reason),
+            Some("user active".to_string())
+        );
         pin_goal("goal-test-pin", None);
         assert_eq!(pinned_for(&["goal-test-pin"]), None);
         assert_eq!(goal_for(&["goal-test-pin"]), Some(row));

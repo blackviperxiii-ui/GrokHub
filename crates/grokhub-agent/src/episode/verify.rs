@@ -8,7 +8,9 @@
 use sha2::{Digest, Sha256};
 
 use crate::client::{ClientError, ContentPart, InputItem, ModelClient};
-use crate::route::{call_model, CallTokens, ModelCall, BACKGROUND_EFFORT, CLASS_EPISODE, CLASS_JUDGE};
+use crate::route::{
+    call_model, CallTokens, ModelCall, BACKGROUND_EFFORT, CLASS_EPISODE, CLASS_JUDGE,
+};
 use crate::tools::ToolOutput;
 use crate::CancelToken;
 
@@ -44,9 +46,19 @@ pub struct Observation {
 impl Observation {
     pub fn from_output(out: &ToolOutput) -> Self {
         let mut h = Sha256::new();
-        h.update(out.image_data_url.as_deref().unwrap_or(&out.text).as_bytes());
+        h.update(
+            out.image_data_url
+                .as_deref()
+                .unwrap_or(&out.text)
+                .as_bytes(),
+        );
         let hash = h.finalize().iter().map(|b| format!("{b:02x}")).collect();
-        Self { text: out.text.clone(), image: out.image_data_url.clone(), hash, file_check: None }
+        Self {
+            text: out.text.clone(),
+            image: out.image_data_url.clone(),
+            hash,
+            file_check: None,
+        }
     }
 
     /// The text form the worker and the checker read.
@@ -73,13 +85,24 @@ pub fn parse_verdict(text: &str) -> Verdict {
     let t = text.trim();
     let reason = t.strip_prefix("REJECT:").unwrap_or(t).trim();
     let reason: String = reason.chars().take(200).collect();
-    Verdict::Reject(if reason.is_empty() { "the checker gave no reason".into() } else { reason })
+    Verdict::Reject(if reason.is_empty() {
+        "the checker gave no reason".into()
+    } else {
+        reason
+    })
 }
 
 /// The checker's call: its own system line, then the goal and the final
 /// observation. Nothing else goes in.
 pub fn verify_call(model: &str, goal: &str, obs: &Observation, conversation_id: &str) -> ModelCall {
-    verify_call_at(model, CLASS_JUDGE, Some(BACKGROUND_EFFORT), goal, obs, conversation_id)
+    verify_call_at(
+        model,
+        CLASS_JUDGE,
+        Some(BACKGROUND_EFFORT),
+        goal,
+        obs,
+        conversation_id,
+    )
 }
 
 /// [`verify_call`] routed as `class` at `effort` (the last try uses
@@ -93,16 +116,26 @@ pub fn verify_call_at(
     conversation_id: &str,
 ) -> ModelCall {
     let input = vec![
-        InputItem::Message { role: "system".into(), content: vec![ContentPart::InputText(JUDGE_SYSTEM.into())] },
+        InputItem::Message {
+            role: "system".into(),
+            content: vec![ContentPart::InputText(JUDGE_SYSTEM.into())],
+        },
         InputItem::Message {
             role: "user".into(),
-            content: vec![ContentPart::InputText(format!("Goal:\n{goal}\n\nFinal observation:\n{}", obs.line()))],
+            content: vec![ContentPart::InputText(format!(
+                "Goal:\n{goal}\n\nFinal observation:\n{}",
+                obs.line()
+            ))],
         },
     ];
     ModelCall::xai(model, effort, class, conversation_id, input)
 }
 
-pub fn verify_gate(client: &dyn ModelClient, call: &ModelCall, cancel: &CancelToken) -> Result<(Verdict, CallTokens), ClientError> {
+pub fn verify_gate(
+    client: &dyn ModelClient,
+    call: &ModelCall,
+    cancel: &CancelToken,
+) -> Result<(Verdict, CallTokens), ClientError> {
     let routed = call_model(client, call, cancel)?;
     Ok((parse_verdict(&routed.out.text), routed.tokens))
 }
@@ -114,9 +147,18 @@ mod tests {
     #[test]
     fn verdicts_need_verify_ok_and_keep_the_reason() {
         assert_eq!(parse_verdict("VERIFY_OK"), Verdict::Ok);
-        assert_eq!(parse_verdict("REJECT: the file is still there"), Verdict::Reject("the file is still there".into()));
-        assert_eq!(parse_verdict("looks fine"), Verdict::Reject("looks fine".into()));
-        assert_eq!(parse_verdict("  "), Verdict::Reject("the checker gave no reason".into()));
+        assert_eq!(
+            parse_verdict("REJECT: the file is still there"),
+            Verdict::Reject("the file is still there".into())
+        );
+        assert_eq!(
+            parse_verdict("looks fine"),
+            Verdict::Reject("looks fine".into())
+        );
+        assert_eq!(
+            parse_verdict("  "),
+            Verdict::Reject("the checker gave no reason".into())
+        );
     }
 
     #[test]
@@ -127,7 +169,15 @@ mod tests {
         out.image_data_url = Some("data:image/png;base64,AAAA".into());
         let b = Observation::from_output(&out);
         assert_ne!(a.hash, b.hash);
-        assert!(b.line().starts_with("windows: Settings\nscreenshot sha256: "), "{}", b.line());
-        assert!(!b.line().contains("base64"), "the checker never gets the image");
+        assert!(
+            b.line()
+                .starts_with("windows: Settings\nscreenshot sha256: "),
+            "{}",
+            b.line()
+        );
+        assert!(
+            !b.line().contains("base64"),
+            "the checker never gets the image"
+        );
     }
 }

@@ -123,7 +123,11 @@ impl Snap {
             n: n as u32,
             pass_pct: pct(judged.iter().filter(|p| **p).count(), judged.len()),
             rework_pct: pct(steps.iter().filter(|s| s.rework).count(), n),
-            cost_per_step: if n == 0 { 0.0 } else { steps.iter().map(|s| s.cost_usd).sum::<f64>() / n as f64 },
+            cost_per_step: if n == 0 {
+                0.0
+            } else {
+                steps.iter().map(|s| s.cost_usd).sum::<f64>() / n as f64
+            },
             p50_ms: quantile(&lat, 0.5),
             p95_ms: quantile(&lat, 0.95),
         }
@@ -131,7 +135,8 @@ impl Snap {
 
     /// `self` is worse than `base` past either quality threshold.
     pub fn quality_fell(&self, base: &Snap) -> bool {
-        base.pass_pct - self.pass_pct > QUALITY_MAX_DROP_PTS || self.rework_pct - base.rework_pct > REWORK_MAX_RISE_PTS
+        base.pass_pct - self.pass_pct > QUALITY_MAX_DROP_PTS
+            || self.rework_pct - base.rework_pct > REWORK_MAX_RISE_PTS
     }
 
     /// Percent cheaper per step than `base` (negative when pricier).
@@ -179,17 +184,36 @@ pub fn scorecards(steps: &[Step], now_ms: u64) -> Scorecards {
     let since = now_ms.saturating_sub(SCORECARD_DAYS * DAY_MS);
     let mut groups: BTreeMap<(String, String, Option<String>), Vec<&Step>> = BTreeMap::new();
     for s in steps.iter().filter(|s| s.at >= since && s.at <= now_ms) {
-        groups.entry((s.class.clone(), s.model.clone(), s.effort.clone())).or_default().push(s);
+        groups
+            .entry((s.class.clone(), s.model.clone(), s.effort.clone()))
+            .or_default()
+            .push(s);
     }
-    let cards = groups.into_iter().map(|((class, model, effort), v)| Scorecard { class, model, effort, snap: Snap::of(v) }).collect();
-    Scorecards { built_at: now_ms, window_days: SCORECARD_DAYS, cards }
+    let cards = groups
+        .into_iter()
+        .map(|((class, model, effort), v)| Scorecard {
+            class,
+            model,
+            effort,
+            snap: Snap::of(v),
+        })
+        .collect();
+    Scorecards {
+        built_at: now_ms,
+        window_days: SCORECARD_DAYS,
+        cards,
+    }
 }
 
 impl Scorecards {
     /// One model in one class, all efforts together.
     pub fn model(&self, class: &str, model: &str, steps: &[Step]) -> Snap {
         let since = self.built_at.saturating_sub(SCORECARD_DAYS * DAY_MS);
-        Snap::of(steps.iter().filter(|s| s.class == class && s.model == model && s.at >= since))
+        Snap::of(
+            steps
+                .iter()
+                .filter(|s| s.class == class && s.model == model && s.at >= since),
+        )
     }
 }
 
@@ -335,7 +359,14 @@ pub fn with_order(table: &RoutingTable, class: &str, model: &str) -> RoutingTabl
     };
     let row = match ct.ranked.iter().position(|r| r.model == model) {
         Some(i) => ct.ranked.remove(i),
-        None => TableRow { model: model.into(), effort: None, quality: None, est_cost_usd: None, p50_latency_ms: None, why: "the self-tuned pick".into() },
+        None => TableRow {
+            model: model.into(),
+            effort: None,
+            quality: None,
+            est_cost_usd: None,
+            p50_latency_ms: None,
+            why: "the self-tuned pick".into(),
+        },
     };
     ct.ranked.insert(0, row);
     t
@@ -343,7 +374,12 @@ pub fn with_order(table: &RoutingTable, class: &str, model: &str) -> RoutingTabl
 
 /// The live table: the routing table with every tuned order merged in.
 pub fn tuned_table(table: &RoutingTable, tuning: &Tuning) -> RoutingTable {
-    tuning.orders.iter().fold(table.clone(), |t, (class, model)| with_order(&t, class, model))
+    tuning
+        .orders
+        .iter()
+        .fold(table.clone(), |t, (class, model)| {
+            with_order(&t, class, model)
+        })
 }
 
 /// `{config}/models/tune_state.json`: candidates and what happened to them. Not a ledger target.
@@ -367,17 +403,26 @@ pub struct TuneState {
 impl TuneState {
     /// The class's shadow or canary candidate, if any (one per class at a time).
     pub fn testing(&self, class: &str) -> Option<&Candidate> {
-        self.candidates.iter().find(|c| c.class == class && matches!(c.stage, Stage::Shadow | Stage::Canary))
+        self.candidates
+            .iter()
+            .find(|c| c.class == class && matches!(c.stage, Stage::Shadow | Stage::Canary))
     }
 
     pub fn promotions_since(&self, since: u64) -> usize {
-        self.candidates.iter().filter(|c| c.promoted_at.is_some_and(|t| t >= since)).count()
+        self.candidates
+            .iter()
+            .filter(|c| c.promoted_at.is_some_and(|t| t >= since))
+            .count()
     }
 
     fn blocked(&self, class: &str, change: &Change, now_ms: u64) -> bool {
         self.candidates.iter().any(|c| {
             c.class == class
-                && (c.active() || c.stage == Stage::Card && c.change.as_ref() == Some(change) || c.stage == Stage::Rejected && c.change.as_ref() == Some(change) && c.until.is_some_and(|u| u > now_ms))
+                && (c.active()
+                    || c.stage == Stage::Card && c.change.as_ref() == Some(change)
+                    || c.stage == Stage::Rejected
+                        && c.change.as_ref() == Some(change)
+                        && c.until.is_some_and(|u| u > now_ms))
         })
     }
 }
@@ -397,7 +442,13 @@ pub struct StepRisk<'a> {
 
 pub fn canary_eligible(r: &StepRisk<'_>) -> bool {
     let class = class_row(r.class).map(|row| row.class).unwrap_or(r.class);
-    class_row(class).is_some() && class != PREPARE_HARD && !class.starts_with("repair:") && !r.holdout && !r.under_reject && !r.pinned && !r.hard_tool
+    class_row(class).is_some()
+        && class != PREPARE_HARD
+        && !class.starts_with("repair:")
+        && !r.holdout
+        && !r.under_reject
+        && !r.pinned
+        && !r.hard_tool
 }
 
 /// Deterministic by episode: the same episode always lands the same way, so
@@ -407,7 +458,8 @@ pub fn in_canary(episode: &str, candidate: &str) -> bool {
         return false;
     }
     let buckets = 10_000u64;
-    turn_hash(&format!("{episode}\u{1f}{candidate}")) % buckets < (CANARY_SHARE * buckets as f64) as u64
+    turn_hash(&format!("{episode}\u{1f}{candidate}")) % buckets
+        < (CANARY_SHARE * buckets as f64) as u64
 }
 
 /// What the tuner may route to: the filters a candidate must pass (fit,
@@ -463,13 +515,20 @@ pub fn propose(
             continue;
         }
         // The class's first model.
-        let mut models: Vec<&str> = cards.cards.iter().filter(|c| c.class == class && c.model != *top).map(|c| c.model.as_str()).collect();
+        let mut models: Vec<&str> = cards
+            .cards
+            .iter()
+            .filter(|c| c.class == class && c.model != *top)
+            .map(|c| c.model.as_str())
+            .collect();
         models.sort();
         models.dedup();
         let mut best: Option<(f64, &str)> = None;
         let mut pricier: Option<(f64, f64, &str)> = None;
         for m in models {
-            let change = Change::Order { model: m.to_string() };
+            let change = Change::Order {
+                model: m.to_string(),
+            };
             if !filters.allowed(class, m) || state.blocked(class, &change, now_ms) {
                 continue;
             }
@@ -477,19 +536,28 @@ pub fn propose(
             if snap.n < CARD_MIN_N {
                 continue;
             }
-            let rise = match (filters.expected_cost(class, m), filters.expected_cost(class, top)) {
+            let rise = match (
+                filters.expected_cost(class, m),
+                filters.expected_cost(class, top),
+            ) {
                 (Some(a), Some(b)) if b > 0.0 => (a - b) * 100.0 / b,
                 _ => -snap.cost_gain_pct(&live),
             };
             if rise > 0.0 {
                 let gain = snap.pass_pct - live.pass_pct;
-                if gain >= CARD_MIN_QUALITY_GAIN_PTS && !snap.quality_fell(&live) && pricier.is_none_or(|(g, _, _)| gain > g) {
+                if gain >= CARD_MIN_QUALITY_GAIN_PTS
+                    && !snap.quality_fell(&live)
+                    && pricier.is_none_or(|(g, _, _)| gain > g)
+                {
                     pricier = Some((gain, rise, m));
                 }
                 continue;
             }
             let gain = snap.cost_gain_pct(&live).max(snap.latency_gain_pct(&live));
-            if !snap.quality_fell(&live) && gain >= MIN_GAIN_PCT && best.is_none_or(|(g, _)| gain > g) {
+            if !snap.quality_fell(&live)
+                && gain >= MIN_GAIN_PCT
+                && best.is_none_or(|(g, _)| gain > g)
+            {
                 best = Some((gain, m));
             }
         }
@@ -503,18 +571,40 @@ pub fn propose(
             ..Candidate::default()
         };
         if let Some((_, m)) = best {
-            out.auto.push(new(Change::Order { model: m.to_string() }, Stage::Shadow, id(class), None));
+            out.auto.push(new(
+                Change::Order {
+                    model: m.to_string(),
+                },
+                Stage::Shadow,
+                id(class),
+                None,
+            ));
             continue;
         }
         // The class's start rung, on the live model. Lower is cheaper; higher costs more.
-        let at = |r: usize| Snap::of(steps.iter().filter(|s| s.class == class && s.model == *top && effort_rung(&s.effort) == Some(r) && s.at + SCORECARD_DAYS * DAY_MS >= now_ms));
+        let at = |r: usize| {
+            Snap::of(steps.iter().filter(|s| {
+                s.class == class
+                    && s.model == *top
+                    && effort_rung(&s.effort) == Some(r)
+                    && s.at + SCORECARD_DAYS * DAY_MS >= now_ms
+            }))
+        };
         let start = at(band.start);
         if band.start > band.floor {
             let r = band.start - 1;
-            let change = Change::Start { effort: EFFORT_LADDER[r].to_string() };
+            let change = Change::Start {
+                effort: EFFORT_LADDER[r].to_string(),
+            };
             let lower = at(r);
-            if lower.n >= CARD_MIN_N && start.n >= CARD_MIN_N && !lower.quality_fell(&start) && !state.blocked(class, &change, now_ms) {
-                let gain = lower.cost_gain_pct(&start).max(lower.latency_gain_pct(&start));
+            if lower.n >= CARD_MIN_N
+                && start.n >= CARD_MIN_N
+                && !lower.quality_fell(&start)
+                && !state.blocked(class, &change, now_ms)
+            {
+                let gain = lower
+                    .cost_gain_pct(&start)
+                    .max(lower.latency_gain_pct(&start));
                 if gain >= MIN_GAIN_PCT {
                     out.auto.push(new(change, Stage::Shadow, id(class), None));
                     continue;
@@ -522,16 +612,30 @@ pub fn propose(
             }
         }
         if let Some((_, rise, m)) = pricier {
-            out.cards.push(new(Change::Order { model: m.to_string() }, Stage::Card, id(class), Some(rise)));
+            out.cards.push(new(
+                Change::Order {
+                    model: m.to_string(),
+                },
+                Stage::Card,
+                id(class),
+                Some(rise),
+            ));
             continue;
         }
         if band.start < band.ceiling {
             let r = band.start + 1;
-            let change = Change::Start { effort: EFFORT_LADDER[r].to_string() };
+            let change = Change::Start {
+                effort: EFFORT_LADDER[r].to_string(),
+            };
             let higher = at(r);
-            if higher.n >= CARD_MIN_N && start.n >= CARD_MIN_N && higher.pass_pct - start.pass_pct >= CARD_MIN_QUALITY_GAIN_PTS && !state.blocked(class, &change, now_ms) {
+            if higher.n >= CARD_MIN_N
+                && start.n >= CARD_MIN_N
+                && higher.pass_pct - start.pass_pct >= CARD_MIN_QUALITY_GAIN_PTS
+                && !state.blocked(class, &change, now_ms)
+            {
                 let rise = (-higher.cost_gain_pct(&start)).max(0.0);
-                out.cards.push(new(change, Stage::Card, id(class), Some(rise)));
+                out.cards
+                    .push(new(change, Stage::Card, id(class), Some(rise)));
             }
         }
     }
@@ -544,9 +648,15 @@ pub enum Verdict {
     Wait,
     /// Shadow is done: start the canary.
     StartCanary,
-    Promote { cost_gain_pct: f64, latency_gain_pct: f64 },
+    Promote {
+        cost_gain_pct: f64,
+        latency_gain_pct: f64,
+    },
     /// The canary failed, or a promotion regressed (`rollback` when a file must change back).
-    Reject { why: String, rollback: bool },
+    Reject {
+        why: String,
+        rollback: bool,
+    },
     /// Watched a week with no regression.
     Keep,
 }
@@ -565,33 +675,60 @@ pub struct Evidence {
 /// Judge one candidate. `promotions_week` counts promotions in the last 7 days.
 pub fn judge(c: &Candidate, ev: &Evidence, promotions_week: usize, now_ms: u64) -> Verdict {
     match c.stage {
-        Stage::Shadow if ev.violations > 0 => Verdict::Reject { why: "it broke a routing filter in shadow".into(), rollback: false },
+        Stage::Shadow if ev.violations > 0 => Verdict::Reject {
+            why: "it broke a routing filter in shadow".into(),
+            rollback: false,
+        },
         Stage::Shadow if ev.shadow_steps >= SHADOW_MIN_STEPS => Verdict::StartCanary,
         Stage::Canary => {
             if ev.canary.n >= ROLLBACK_MIN_N && ev.canary.quality_fell(&ev.live) {
-                return Verdict::Reject { why: format!("quality fell in its canary ({:.0}% vs {:.0}% passed)", ev.canary.pass_pct, ev.live.pass_pct), rollback: false };
+                return Verdict::Reject {
+                    why: format!(
+                        "quality fell in its canary ({:.0}% vs {:.0}% passed)",
+                        ev.canary.pass_pct, ev.live.pass_pct
+                    ),
+                    rollback: false,
+                };
             }
             if ev.canary.n < CANARY_MIN_N {
                 return Verdict::Wait;
             }
-            let (cost, lat) = (ev.canary.cost_gain_pct(&ev.live), ev.canary.latency_gain_pct(&ev.live));
+            let (cost, lat) = (
+                ev.canary.cost_gain_pct(&ev.live),
+                ev.canary.latency_gain_pct(&ev.live),
+            );
             if cost < MIN_GAIN_PCT && lat < MIN_GAIN_PCT {
-                return Verdict::Reject { why: format!("it saved only {:.0}% cost and {:.0}% time", cost.max(0.0), lat.max(0.0)), rollback: false };
+                return Verdict::Reject {
+                    why: format!(
+                        "it saved only {:.0}% cost and {:.0}% time",
+                        cost.max(0.0),
+                        lat.max(0.0)
+                    ),
+                    rollback: false,
+                };
             }
             if promotions_week >= MAX_PROMOTIONS_PER_WEEK {
                 return Verdict::Wait;
             }
-            Verdict::Promote { cost_gain_pct: cost, latency_gain_pct: lat }
+            Verdict::Promote {
+                cost_gain_pct: cost,
+                latency_gain_pct: lat,
+            }
         }
         Stage::Watch => {
             let base = c.baseline.unwrap_or_default();
             if ev.since_promotion.n >= ROLLBACK_MIN_N && ev.since_promotion.quality_fell(&base) {
                 return Verdict::Reject {
-                    why: format!("quality fell after it went live ({:.0}% vs {:.0}% passed)", ev.since_promotion.pass_pct, base.pass_pct),
+                    why: format!(
+                        "quality fell after it went live ({:.0}% vs {:.0}% passed)",
+                        ev.since_promotion.pass_pct, base.pass_pct
+                    ),
                     rollback: true,
                 };
             }
-            if c.promoted_at.is_some_and(|t| now_ms.saturating_sub(t) >= WATCH_DAYS * DAY_MS) {
+            if c.promoted_at
+                .is_some_and(|t| now_ms.saturating_sub(t) >= WATCH_DAYS * DAY_MS)
+            {
                 return Verdict::Keep;
             }
             Verdict::Wait
@@ -603,18 +740,46 @@ pub fn judge(c: &Candidate, ev: &Evidence, promotions_week: usize, now_ms: u64) 
 /// The weekly self-review's one router line, with real numbers.
 pub fn review_line(state: &TuneState, now_ms: u64) -> String {
     let since = now_ms.saturating_sub(WEEK_MS);
-    let kept: Vec<&Candidate> = state.candidates.iter().filter(|c| matches!(c.stage, Stage::Watch | Stage::Kept) && c.promoted_at.is_some_and(|t| t >= since)).collect();
-    let rolled = state.candidates.iter().filter(|c| c.stage == Stage::Rejected && c.promoted_at.is_some() && c.ended_at.is_some_and(|t| t >= since)).count();
+    let kept: Vec<&Candidate> = state
+        .candidates
+        .iter()
+        .filter(|c| {
+            matches!(c.stage, Stage::Watch | Stage::Kept)
+                && c.promoted_at.is_some_and(|t| t >= since)
+        })
+        .collect();
+    let rolled = state
+        .candidates
+        .iter()
+        .filter(|c| {
+            c.stage == Stage::Rejected
+                && c.promoted_at.is_some()
+                && c.ended_at.is_some_and(|t| t >= since)
+        })
+        .count();
     let detail: Vec<String> = kept
         .iter()
         .map(|c| {
-            let plain = class_row(&c.class).map(|r| r.plain).unwrap_or(c.class.as_str());
-            let (p, b) = (c.promoted_snap.unwrap_or_default(), c.baseline.unwrap_or_default());
+            let plain = class_row(&c.class)
+                .map(|r| r.plain)
+                .unwrap_or(c.class.as_str());
+            let (p, b) = (
+                c.promoted_snap.unwrap_or_default(),
+                c.baseline.unwrap_or_default(),
+            );
             let cost = p.cost_gain_pct(&b);
             let lat = p.latency_gain_pct(&b);
-            let gain = if cost >= lat { format!("\u{2212}{cost:.0}% cost") } else { format!("\u{2212}{lat:.0}% time") };
+            let gain = if cost >= lat {
+                format!("\u{2212}{cost:.0}% cost")
+            } else {
+                format!("\u{2212}{lat:.0}% time")
+            };
             let dq = p.pass_pct - b.pass_pct;
-            let quality = if dq.abs() < 0.5 { "quality same".to_string() } else { format!("quality {dq:+.1} pts") };
+            let quality = if dq.abs() < 0.5 {
+                "quality same".to_string()
+            } else {
+                format!("quality {dq:+.1} pts")
+            };
             format!("{plain}: {gain}, {quality}")
         })
         .collect();
@@ -622,25 +787,52 @@ pub fn review_line(state: &TuneState, now_ms: u64) -> String {
     if detail.is_empty() {
         format!("Router: 0 changes kept, {rolled} rolled back.")
     } else {
-        format!("Router: {} {changes} kept ({}), {rolled} rolled back.", kept.len(), detail.join("; "))
+        format!(
+            "Router: {} {changes} kept ({}), {rolled} rolled back.",
+            kept.len(),
+            detail.join("; ")
+        )
     }
 }
 
 /// `/why table` lines for the tuner: the live tuning, any candidate and canary status.
-pub fn why_lines(tuning: &Tuning, version: u32, state: &TuneState, ev: &BTreeMap<String, Evidence>) -> Vec<String> {
-    let mut out = vec![if tuning.is_empty() { format!("Self-tuning v{version}: nothing tuned yet") } else { format!("Self-tuning v{version}:") }];
+pub fn why_lines(
+    tuning: &Tuning,
+    version: u32,
+    state: &TuneState,
+    ev: &BTreeMap<String, Evidence>,
+) -> Vec<String> {
+    let mut out = vec![if tuning.is_empty() {
+        format!("Self-tuning v{version}: nothing tuned yet")
+    } else {
+        format!("Self-tuning v{version}:")
+    }];
     for (class, e) in &tuning.starts {
-        out.push(format!("  {class} starts at {}", grokhub_core::effort_label(e)));
+        out.push(format!(
+            "  {class} starts at {}",
+            grokhub_core::effort_label(e)
+        ));
     }
     for (class, m) in &tuning.orders {
         out.push(format!("  {class} → {m} first"));
     }
-    for c in state.candidates.iter().filter(|c| matches!(c.stage, Stage::Shadow | Stage::Canary | Stage::Watch | Stage::Card)) {
+    for c in state.candidates.iter().filter(|c| {
+        matches!(
+            c.stage,
+            Stage::Shadow | Stage::Canary | Stage::Watch | Stage::Card
+        )
+    }) {
         let what = c.change.as_ref().map(Change::label).unwrap_or_default();
         let e = ev.get(&c.id).copied().unwrap_or_default();
         let status = match c.stage {
             Stage::Shadow => format!("shadow, {}/{SHADOW_MIN_STEPS} steps", e.shadow_steps),
-            Stage::Canary => format!("canary on {:.0}% of steps, {}/{CANARY_MIN_N}, passed {:.0}% vs {:.0}% live", CANARY_SHARE * 100.0, e.canary.n, e.canary.pass_pct, e.live.pass_pct),
+            Stage::Canary => format!(
+                "canary on {:.0}% of steps, {}/{CANARY_MIN_N}, passed {:.0}% vs {:.0}% live",
+                CANARY_SHARE * 100.0,
+                e.canary.n,
+                e.canary.pass_pct,
+                e.live.pass_pct
+            ),
             Stage::Watch => format!("live, watched {WATCH_DAYS} days"),
             _ => "waiting on your OK (costs more)".into(),
         };
@@ -651,7 +843,9 @@ pub fn why_lines(tuning: &Tuning, version: u32, state: &TuneState, ev: &BTreeMap
 
 /// The cost-raising card's words.
 pub fn card_text(c: &Candidate) -> (String, String) {
-    let plain = class_row(&c.class).map(|r| r.plain).unwrap_or(c.class.as_str());
+    let plain = class_row(&c.class)
+        .map(|r| r.plain)
+        .unwrap_or(c.class.as_str());
     let rise = c.cost_rise_pct.unwrap_or(0.0).round();
     match &c.change {
         Some(Change::Start { effort }) => {
@@ -665,10 +859,18 @@ pub fn card_text(c: &Candidate) -> (String, String) {
 
 /// "Oct 6" (UTC) for a card.
 fn month_day(ms: u64) -> String {
-    const MONTHS: [&str; 12] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    const MONTHS: [&str; 12] = [
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    ];
     let stamp = grokhub_core::oauth::unix_ms_to_rfc3339(ms);
-    let month = stamp.get(5..7).and_then(|m| m.parse::<usize>().ok()).unwrap_or(1);
-    let day = stamp.get(8..10).and_then(|d| d.parse::<u32>().ok()).unwrap_or(1);
+    let month = stamp
+        .get(5..7)
+        .and_then(|m| m.parse::<usize>().ok())
+        .unwrap_or(1);
+    let day = stamp
+        .get(8..10)
+        .and_then(|d| d.parse::<u32>().ok())
+        .unwrap_or(1);
     format!("{} {day}", MONTHS[month.clamp(1, 12) - 1])
 }
 
@@ -676,13 +878,25 @@ fn month_day(ms: u64) -> String {
 /// its canary and the live arm it beat: `(title, body)`. `None` until it was
 /// promoted. It asks nothing; the router keeps changing routes on its own.
 pub fn why_card_text(c: &Candidate) -> Option<(String, String)> {
-    let (change, at, won, beat) = (c.change.as_ref()?, c.promoted_at?, c.promoted_snap?, c.baseline?);
-    let plain = class_row(&c.class).map(|r| r.plain).unwrap_or(c.class.as_str());
+    let (change, at, won, beat) = (
+        c.change.as_ref()?,
+        c.promoted_at?,
+        c.promoted_snap?,
+        c.baseline?,
+    );
+    let plain = class_row(&c.class)
+        .map(|r| r.plain)
+        .unwrap_or(c.class.as_str());
     let what = match change {
         Change::Order { model } => model.clone(),
         Change::Start { effort } => grokhub_core::effort_label(effort).to_string(),
     };
-    let title = format!("Why {what} for {plain}: {:.0}% pass vs {:.0}%, promoted {}", won.pass_pct, beat.pass_pct, month_day(at));
+    let title = format!(
+        "Why {what} for {plain}: {:.0}% pass vs {:.0}%, promoted {}",
+        won.pass_pct,
+        beat.pass_pct,
+        month_day(at)
+    );
     let body = format!(
         "Auto now runs {plain} with {}: {:.0}% cheaper and {:.0}% faster over {} canary steps. Info only; Auto keeps tuning on its own.",
         change.label(),

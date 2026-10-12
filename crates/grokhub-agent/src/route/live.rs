@@ -17,33 +17,40 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
 use grokhub_core::model_registry::profile::{read_profiles, ModelProfile};
-use grokhub_core::model_registry::store::{append_observation, load_registry, profiles_dir, registry_path};
+use grokhub_core::model_registry::store::{
+    append_observation, load_registry, profiles_dir, registry_path,
+};
 use grokhub_core::model_registry::{classify_status, CallStatus, Observation, Registry};
 
 use super::cabin::{MODEL_TOOL, MODEL_TRACE};
 use grokhub_core::model_registry::EFFORT_LADDER;
 use grokhub_core::outcome::is_correction;
 
+use super::budget::{self, Budget, BudgetNotes};
 use super::difficulty::{estimate, DifficultyInput};
+use super::guard::{holdout_eligible, in_holdout, load_overrides, HOLDOUT_EFFORT};
+use super::ladder::{
+    self, rung, start_rung, take_tool_errors, turn_hash, user_facing, Band, Obs, Pick, Steer,
+};
 use super::learn;
 use super::local::LocalGate;
-use super::policy::ClassRow;
-use super::tune::{self, StepRisk};
-use grokhub_core::model_registry::cost_class::CostClass;
-use grokhub_core::outcome::topic_signature;
-use super::guard::{holdout_eligible, in_holdout, load_overrides, HOLDOUT_EFFORT};
-use super::ladder::{self, rung, start_rung, take_tool_errors, turn_hash, user_facing, Band, Obs, Pick, Steer};
 use super::log::{Chosen, RouteOutcome, RouteRecord, RouteSignals, RouteTokens};
-use super::budget::{self, Budget, BudgetNotes};
+use super::policy::ClassRow;
 use super::policy::{class_row, expected_cost_usd, MODEL_LIVE, POLICY_LIVE};
+use super::signals::{SpanVerifySource, VerifySignal, VerifySource};
 use super::spend::{self, Latency, Spend};
 use super::table::{load_table, table_path, RoutingTable};
-use super::signals::{SpanVerifySource, VerifySignal, VerifySource};
+use super::tune::{self, StepRisk};
 use super::{Route, RouteInput, Router};
-use crate::client::{ClientError, ContentPart, InputItem, ModelClient, ResponsesRequest, StreamEvent, TurnOutput, Usage};
+use crate::client::{
+    ClientError, ContentPart, InputItem, ModelClient, ResponsesRequest, StreamEvent, TurnOutput,
+    Usage,
+};
+use crate::harness::{append_span, current_origin, AccessMode, ModelUsage, Origin, Span};
 use crate::timing::{self, Breakdown};
 use crate::CancelToken;
-use crate::harness::{append_span, current_origin, AccessMode, ModelUsage, Origin, Span};
+use grokhub_core::model_registry::cost_class::CostClass;
+use grokhub_core::outcome::topic_signature;
 
 /// xAI cost ticks per USD (1 tick = 1e-10 USD).
 pub const TICKS_PER_USD: f64 = 1e10;
@@ -103,7 +110,9 @@ pub struct RouteDone {
 
 fn http_of(err: &ClientError) -> u16 {
     match err {
-        ClientError::KeyOffer { status, .. } | ClientError::Auth { status, .. } | ClientError::Server { status, .. } => *status,
+        ClientError::KeyOffer { status, .. }
+        | ClientError::Auth { status, .. }
+        | ClientError::Server { status, .. } => *status,
         ClientError::RateLimited { .. } => 429,
         ClientError::Protocol(msg) => msg
             .strip_prefix("HTTP ")
@@ -117,14 +126,24 @@ fn http_of(err: &ClientError) -> u16 {
 impl RouteDone {
     /// A call whose result the cabin never sees (a Grok Build turn).
     pub fn unseen() -> Self {
-        Self { cancelled: true, ..Self::default() }
+        Self {
+            cancelled: true,
+            ..Self::default()
+        }
     }
 
     pub fn of(out: &Result<TurnOutput, ClientError>, elapsed: Duration) -> Self {
         let latency_ms = elapsed.as_millis() as u64;
         let served_model = crate::sse::take_served_model();
         match out {
-            Ok(turn) => Self { ok: true, http: 200, usage: turn.usage.clone(), latency_ms, served_model, ..Self::default() },
+            Ok(turn) => Self {
+                ok: true,
+                http: 200,
+                usage: turn.usage.clone(),
+                latency_ms,
+                served_model,
+                ..Self::default()
+            },
             Err(e) => Self {
                 http: http_of(e),
                 error: e.to_string(),
@@ -136,14 +155,25 @@ impl RouteDone {
     }
 
     /// A cabin call that reported its usage (or failed with `error`).
-    pub fn cabin(ok: bool, usage: Option<&ModelUsage>, error: &str, elapsed: Duration, served_model: Option<String>) -> Self {
+    pub fn cabin(
+        ok: bool,
+        usage: Option<&ModelUsage>,
+        error: &str,
+        elapsed: Duration,
+        served_model: Option<String>,
+    ) -> Self {
         let u = usage.copied().unwrap_or_default();
         let http = if ok {
             200
         } else {
             error
                 .split_whitespace()
-                .find_map(|w| w.trim_matches(|c: char| !c.is_ascii_digit()).parse::<u16>().ok().filter(|n| (400..600).contains(n)))
+                .find_map(|w| {
+                    w.trim_matches(|c: char| !c.is_ascii_digit())
+                        .parse::<u16>()
+                        .ok()
+                        .filter(|n| (400..600).contains(n))
+                })
                 .unwrap_or(0)
         };
         Self {
@@ -177,7 +207,14 @@ struct Cache {
     steps: BTreeMap<String, (u64, u32)>,
 }
 
-static CACHE: Mutex<Cache> = Mutex::new(Cache { reg: None, profiles: None, table: None, prev: BTreeMap::new(), episodes: BTreeMap::new(), steps: BTreeMap::new() });
+static CACHE: Mutex<Cache> = Mutex::new(Cache {
+    reg: None,
+    profiles: None,
+    table: None,
+    prev: BTreeMap::new(),
+    episodes: BTreeMap::new(),
+    steps: BTreeMap::new(),
+});
 
 /// Episodes remembered at once; a long-running cabin stays small.
 const EPISODES_CAP: usize = 256;
@@ -204,7 +241,10 @@ pub fn set_provider_pick(model: &str) {
 }
 
 fn provider_pick() -> String {
-    PROVIDER_PICK.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    PROVIDER_PICK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone()
 }
 
 /// The text a call that paused returns: no healthy, included model could take
@@ -253,7 +293,11 @@ fn week_budget(config_dir: &Path, reg: &Registry, cap_usd: f64, now_ms: u64) -> 
     if cfg!(test) && !crate::perm::config_pinned() {
         return Budget::default();
     }
-    Budget::of(&budget::load_week(config_dir, reg, now_ms), reg.entitlement.credential, cap_usd)
+    Budget::of(
+        &budget::load_week(config_dir, reg, now_ms),
+        reg.entitlement.credential,
+        cap_usd,
+    )
 }
 
 fn mtime(p: &Path) -> Option<SystemTime> {
@@ -301,7 +345,10 @@ pub fn table_snapshot(config_dir: &Path) -> Arc<RoutingTable> {
 /// The model this episode already runs on, unless `turn` is a new user message.
 fn episode_model(key: &str, turn: u64) -> Option<String> {
     let c = CACHE.lock().unwrap_or_else(|e| e.into_inner());
-    c.episodes.get(key).filter(|(t, _)| *t == turn).map(|(_, m)| m.clone())
+    c.episodes
+        .get(key)
+        .filter(|(t, _)| *t == turn)
+        .map(|(_, m)| m.clone())
 }
 
 fn keep_episode_model(key: String, turn: u64, model: &str) {
@@ -321,7 +368,10 @@ pub fn crosses_long_context(config_dir: &Path, model: &str, ctx_tokens: u64) -> 
     let threshold = profiles
         .get(model.trim())
         .and_then(|p| p.metadata.prices.long_context_threshold)
-        .or_else(|| reg.get(model).and_then(|r| r.meta.prices.long_context_threshold));
+        .or_else(|| {
+            reg.get(model)
+                .and_then(|r| r.meta.prices.long_context_threshold)
+        });
     threshold.is_some_and(|t| t > 0 && ctx_tokens >= t)
 }
 
@@ -408,8 +458,15 @@ fn verify_counts(config_dir: &Path, call: &RouteCall<'_>) -> (Option<u32>, bool)
     if call.episode.is_empty() || call.session.is_empty() {
         return (None, false);
     }
-    let checks = SpanVerifySource { config_dir: config_dir.to_path_buf(), session: call.session.to_string() }.checks(call.episode);
-    let rejects = checks.iter().filter(|c| **c == VerifySignal::Reject).count() as u32;
+    let checks = SpanVerifySource {
+        config_dir: config_dir.to_path_buf(),
+        session: call.session.to_string(),
+    }
+    .checks(call.episode);
+    let rejects = checks
+        .iter()
+        .filter(|c| **c == VerifySignal::Reject)
+        .count() as u32;
     (Some(rejects), checks.last() == Some(&VerifySignal::Ok))
 }
 
@@ -422,21 +479,42 @@ pub fn decide(config_dir: &Path, call: &RouteCall<'_>, now_ms: u64) -> Decision 
     let b = week_budget(config_dir, &reg, settings.weekly_cap_usd, now_ms);
     laps.mark("route:week_budget");
     let rt = super::local::runtime();
-    let d = estimate(&DifficultyInput { text: call.text, planned_tools: call.planned_tools, plan_mode: call.plan_mode, ctx_tokens: call.ctx_tokens }, rt.as_deref());
+    let d = estimate(
+        &DifficultyInput {
+            text: call.text,
+            planned_tools: call.planned_tools,
+            plan_mode: call.plan_mode,
+            ctx_tokens: call.ctx_tokens,
+        },
+        rt.as_deref(),
+    );
     let steer = Steer::from_text(call.text);
     laps.mark("route:difficulty");
     let row = class_row(call.class);
-    let bump = row.and_then(|r| load_overrides(config_dir).get(r.class).map(|o| o.steps)).unwrap_or(0);
+    let bump = row
+        .and_then(|r| load_overrides(config_dir).get(r.class).map(|o| o.steps))
+        .unwrap_or(0);
     laps.mark("route:overrides");
     let key = episode_key(call);
     let holdout = holdout_eligible(call.class) && in_holdout(key);
     let facing = row.is_some_and(|r| user_facing(r.class));
-    let (rejects, verify_ok) = if facing && !key.is_empty() { verify_counts(config_dir, call) } else { (None, false) };
+    let (rejects, verify_ok) = if facing && !key.is_empty() {
+        verify_counts(config_dir, call)
+    } else {
+        (None, false)
+    };
     laps.mark("route:verify_counts");
     let pin = pinned_model();
-    let pinned = call.pinned || (!pin.is_empty() && pin == call.model.trim() && user_facing(call.class));
+    let pinned =
+        call.pinned || (!pin.is_empty() && pin == call.model.trim() && user_facing(call.class));
     let tuned = learn::live_tune(config_dir);
-    let risk = StepRisk { class: call.class, holdout, under_reject: rejects.unwrap_or(0) > 0 && !verify_ok, pinned, hard_tool: call.hard_tool };
+    let risk = StepRisk {
+        class: call.class,
+        holdout,
+        under_reject: rejects.unwrap_or(0) > 0 && !verify_ok,
+        pinned,
+        hard_tool: call.hard_tool,
+    };
     let st = learn::step_tune(&tuned, call.class, key, &risk);
     laps.mark("route:tune");
     let turn = turn_hash(call.text);
@@ -452,12 +530,25 @@ pub fn decide(config_dir: &Path, call: &RouteCall<'_>, now_ms: u64) -> Decision 
     };
     let mut routine = None;
     let pick = match row {
-        Some(_) if holdout => Some(Pick { rung: rung(HOLDOUT_EFFORT).unwrap_or(0), rules: vec!["holdout".into()], ..Pick::default() }),
+        Some(_) if holdout => Some(Pick {
+            rung: rung(HOLDOUT_EFFORT).unwrap_or(0),
+            rules: vec!["holdout".into()],
+            ..Pick::default()
+        }),
         Some(r) if user_facing(r.class) && !key.is_empty() => {
             let band = Band::tuned(r, bump, st.start.as_deref());
             if ladder::is_new_turn(key, r.class, turn) {
-                let sig = if call.signature.is_empty() { topic_signature(call.text) } else { call.signature.to_string() };
-                routine = ladder::routine_rung(r.class, &learn::routine_for(config_dir, &sig, r.class, now_ms), band, now_ms);
+                let sig = if call.signature.is_empty() {
+                    topic_signature(call.text)
+                } else {
+                    call.signature.to_string()
+                };
+                routine = ladder::routine_rung(
+                    r.class,
+                    &learn::routine_for(config_dir, &sig, r.class, now_ms),
+                    band,
+                    now_ms,
+                );
             }
             let obs = Obs {
                 tool_errors: take_tool_errors(),
@@ -470,7 +561,12 @@ pub fn decide(config_dir: &Path, call: &RouteCall<'_>, now_ms: u64) -> Decision 
                 routine,
                 ..Obs::default()
             };
-            let start = super::goal::goal_start(band, start_rung(band, d, steer, true), steer, goal.as_ref());
+            let start = super::goal::goal_start(
+                band,
+                start_rung(band, d, steer, true),
+                steer,
+                goal.as_ref(),
+            );
             let mut pick = ladder::step(key, r.class, turn, band, start, obs);
             if call.step_up {
                 // Only this call: the saved state keeps its rung, so the episode drops back after.
@@ -485,7 +581,11 @@ pub fn decide(config_dir: &Path, call: &RouteCall<'_>, now_ms: u64) -> Decision 
     laps.mark("route:ladder");
     let recover = pick.as_ref().is_some_and(|p| p.recover);
     let class_key = format!("{key}\u{1f}{}", row.map(|r| r.class).unwrap_or(call.class));
-    let sticky = if key.is_empty() { None } else { episode_model(&class_key, turn) };
+    let sticky = if key.is_empty() {
+        None
+    } else {
+        episode_model(&class_key, turn)
+    };
     // PR E: a failed verify on an on-device turn asks the next online pick to escalate.
     if rejects.unwrap_or(0) > 0 && !verify_ok {
         let was_local = sticky.as_deref().is_some_and(super::local::is_local)
@@ -508,11 +608,19 @@ pub fn decide(config_dir: &Path, call: &RouteCall<'_>, now_ms: u64) -> Decision 
     };
     laps.mark("route:table");
     let origin = call.origin.unwrap_or_else(current_origin);
-    let steps = if key.is_empty() { 1 } else { note_step(&class_key, turn) };
+    let steps = if key.is_empty() {
+        1
+    } else {
+        note_step(&class_key, turn)
+    };
     let grants = spend::premium_grants(config_dir);
     laps.mark("route:premium_grants");
     // R3b: a provider you added only with its key and a grant covering this call's data.
-    let providers = if call.providers { super::providers::usable(config_dir, super::providers::call_data(call.sensitive)) } else { Vec::new() };
+    let providers = if call.providers {
+        super::providers::usable(config_dir, super::providers::call_data(call.sensitive))
+    } else {
+        Vec::new()
+    };
     laps.mark("route:providers");
     let spend = Spend {
         settings,
@@ -542,7 +650,8 @@ pub fn decide(config_dir: &Path, call: &RouteCall<'_>, now_ms: u64) -> Decision 
         start: st.start.as_deref(),
         local: LocalGate::now(call.sensitive, call.cloud_grant, call.hard_tool),
         // Your own chats only, never the holdout; the router still checks key and grant.
-        prefer: (call.providers && facing && !holdout && !picked.is_empty()).then_some(picked.as_str()),
+        prefer: (call.providers && facing && !holdout && !picked.is_empty())
+            .then_some(picked.as_str()),
         goal: goal.clone(),
     };
     let route = Router::choose(&input, &reg, &profiles, &table, now_ms);
@@ -556,8 +665,15 @@ pub fn decide(config_dir: &Path, call: &RouteCall<'_>, now_ms: u64) -> Decision 
     let budget_pause = if !live || route.no_route || call.provider == PROVIDER_GROK_BUILD {
         None
     } else if spend.background {
-        let est = reg.get(&route.model).and_then(|r| expected_cost_usd(&r.meta.prices, call.class, call.ctx_tokens)).unwrap_or(0.0);
-        (!b.admits_background(est)).then_some(if b.used_up() { budget::BUDGET_PAUSE_MSG } else { budget::BACKGROUND_PAUSE_MSG })
+        let est = reg
+            .get(&route.model)
+            .and_then(|r| expected_cost_usd(&r.meta.prices, call.class, call.ctx_tokens))
+            .unwrap_or(0.0);
+        (!b.admits_background(est)).then_some(if b.used_up() {
+            budget::BUDGET_PAUSE_MSG
+        } else {
+            budget::BACKGROUND_PAUSE_MSG
+        })
     } else if b.used_up() && BudgetNotes::load(config_dir).must_ask(&b) {
         *BUDGET_ASK.lock().unwrap_or_else(|e| e.into_inner()) = true;
         Some(budget::BUDGET_PAUSE_MSG)
@@ -567,24 +683,54 @@ pub fn decide(config_dir: &Path, call: &RouteCall<'_>, now_ms: u64) -> Decision 
     if live && !route.no_route && !key.is_empty() && !call.step_up {
         // A stepped-up call keeps the episode's own model, so the next call drops back.
         // The plain model: a Fast swap is decided again on every call.
-        keep_episode_model(class_key, turn, route.base.as_deref().unwrap_or(&route.model));
+        keep_episode_model(
+            class_key,
+            turn,
+            route.base.as_deref().unwrap_or(&route.model),
+        );
     }
     if let Some(ask) = &route.premium_ask {
         *PREMIUM_ASK.lock().unwrap_or_else(|e| e.into_inner()) = Some(ask.clone());
     }
     if live && route.no_route {
-        let failed = reg.get(call.model).map(|r| r.reason.clone()).unwrap_or_else(|| "It isn't in your model list.".into());
-        *NO_ROUTE.lock().unwrap_or_else(|e| e.into_inner()) = Some((call.class.to_string(), call.model.trim().to_string(), failed));
+        let failed = reg
+            .get(call.model)
+            .map(|r| r.reason.clone())
+            .unwrap_or_else(|| "It isn't in your model list.".into());
+        *NO_ROUTE.lock().unwrap_or_else(|e| e.into_inner()) = Some((
+            call.class.to_string(),
+            call.model.trim().to_string(),
+            failed,
+        ));
     }
     laps.mark("route:budget_check");
     let timing = laps.finish("route:decide");
-    Decision { route, d: (d * 100.0).round() as u32, holdout, recover, live, budget_pct: b.pct, budget_pause, tune: tune_mark, timing, goal }
+    Decision {
+        route,
+        d: (d * 100.0).round() as u32,
+        holdout,
+        recover,
+        live,
+        budget_pct: b.pct,
+        budget_pause,
+        tune: tune_mark,
+        timing,
+        goal,
+    }
 }
 
 /// A shadow candidate computed next to the live pick, logged only:
 /// `shadow:<id>`, or `shadow:<id>!` when it could not be served inside the
 /// filters (fit, entitlement, cost class, privacy, floors).
-fn shadow_mark(c: &tune::Candidate, row: &ClassRow, input: &RouteInput<'_>, reg: &Registry, profiles: &BTreeMap<String, ModelProfile>, table: &RoutingTable, now_ms: u64) -> String {
+fn shadow_mark(
+    c: &tune::Candidate,
+    row: &ClassRow,
+    input: &RouteInput<'_>,
+    reg: &Registry,
+    profiles: &BTreeMap<String, ModelProfile>,
+    table: &RoutingTable,
+    now_ms: u64,
+) -> String {
     let mut shadow = input.clone();
     shadow.pick = None;
     shadow.episode_model = None;
@@ -598,7 +744,8 @@ fn shadow_mark(c: &tune::Candidate, row: &ClassRow, input: &RouteInput<'_>, reg:
         Some(tune::Change::Start { effort }) => {
             let floor = Band::of(row, input.bump).floor;
             shadow.start = Some(effort);
-            rung(effort).is_some_and(|x| x >= floor) && !Router::choose(&shadow, reg, profiles, table, now_ms).no_route
+            rung(effort).is_some_and(|x| x >= floor)
+                && !Router::choose(&shadow, reg, profiles, table, now_ms).no_route
         }
         None => false,
     };
@@ -606,14 +753,34 @@ fn shadow_mark(c: &tune::Candidate, row: &ClassRow, input: &RouteInput<'_>, reg:
 }
 
 /// The route record for one call. `call.effort` is what was actually sent.
-pub fn route_record(config_dir: &Path, call: &RouteCall<'_>, decision: &Decision, done: &RouteDone) -> RouteRecord {
+pub fn route_record(
+    config_dir: &Path,
+    call: &RouteCall<'_>,
+    decision: &Decision,
+    done: &RouteDone,
+) -> RouteRecord {
     let route = &decision.route;
-    let verify = SpanVerifySource { config_dir: config_dir.to_path_buf(), session: call.session.to_string() }
-        .verdict(call.episode, 0)
-        .map(|v| v.as_str().to_string());
-    let chosen = Chosen { provider: route.provider.clone(), model: route.model.clone(), effort: route.effort.clone() };
-    let provider = if call.provider.is_empty() { super::PROVIDER_XAI } else { call.provider };
-    let used = Chosen { provider: provider.to_string(), model: call.model.to_string(), effort: call.effort.map(str::to_string) };
+    let verify = SpanVerifySource {
+        config_dir: config_dir.to_path_buf(),
+        session: call.session.to_string(),
+    }
+    .verdict(call.episode, 0)
+    .map(|v| v.as_str().to_string());
+    let chosen = Chosen {
+        provider: route.provider.clone(),
+        model: route.model.clone(),
+        effort: route.effort.clone(),
+    };
+    let provider = if call.provider.is_empty() {
+        super::PROVIDER_XAI
+    } else {
+        call.provider
+    };
+    let used = Chosen {
+        provider: provider.to_string(),
+        model: call.model.to_string(),
+        effort: call.effort.map(str::to_string),
+    };
     let key = episode_key(call);
     let prev = if key.is_empty() {
         None
@@ -622,7 +789,8 @@ pub fn route_record(config_dir: &Path, call: &RouteCall<'_>, decision: &Decision
         if c.prev.len() > 256 {
             c.prev.clear();
         }
-        c.prev.insert(format!("{key}\u{1f}{}", call.class), chosen.clone())
+        c.prev
+            .insert(format!("{key}\u{1f}{}", call.class), chosen.clone())
     };
     let u = &done.usage;
     RouteRecord {
@@ -638,7 +806,11 @@ pub fn route_record(config_dir: &Path, call: &RouteCall<'_>, decision: &Decision
             origin: Some(current_origin().as_str().to_string()),
             latency: Some(done.latency_ms),
             budget_pct: decision.budget_pct,
-            privacy: route.rule_ids.iter().any(|r| r == "privacy:local_only").then(|| "local_only".to_string()),
+            privacy: route
+                .rule_ids
+                .iter()
+                .any(|r| r == "privacy:local_only")
+                .then(|| "local_only".to_string()),
         },
         candidates_n: route.candidates_n,
         chosen,
@@ -649,9 +821,15 @@ pub fn route_record(config_dir: &Path, call: &RouteCall<'_>, decision: &Decision
         outcome: (!done.cancelled).then(|| RouteOutcome {
             ok: done.ok,
             verify,
-            tokens: RouteTokens { input: u.input_tokens, cached: u.cached_tokens, out: u.output_tokens, reasoning: u.reasoning_tokens },
+            tokens: RouteTokens {
+                input: u.input_tokens,
+                cached: u.cached_tokens,
+                out: u.output_tokens,
+                reasoning: u.reasoning_tokens,
+            },
             cost_usd: u.cost_in_usd_ticks as f64 / TICKS_PER_USD,
-            limit: done.http == 429 && classify_status(done.http, &done.error) == CallStatus::FreeUsageExhausted,
+            limit: done.http == 429
+                && classify_status(done.http, &done.error) == CallStatus::FreeUsageExhausted,
         }),
         used,
         shadow: !decision.live,
@@ -660,8 +838,16 @@ pub fn route_record(config_dir: &Path, call: &RouteCall<'_>, decision: &Decision
         cost_class: route.cost_class.as_str().to_string(),
         tune: decision.tune.clone(),
         timing_us: decision.timing.clone(),
-        goal: decision.goal.as_ref().map(|g| g.goal.as_str().to_string()).unwrap_or_default(),
-        goal_reason: decision.goal.as_ref().map(|g| g.reason.clone()).unwrap_or_default(),
+        goal: decision
+            .goal
+            .as_ref()
+            .map(|g| g.goal.as_str().to_string())
+            .unwrap_or_default(),
+        goal_reason: decision
+            .goal
+            .as_ref()
+            .map(|g| g.reason.clone())
+            .unwrap_or_default(),
     }
 }
 
@@ -675,7 +861,10 @@ pub fn last_user_pick() -> Option<(Option<String>, String)> {
 
 fn note_user_pick(call: &RouteCall<'_>, decision: &Decision) {
     if decision.live && user_facing(call.class) {
-        *LAST_USER.lock().unwrap_or_else(|e| e.into_inner()) = Some((call.effort.map(str::to_string), decision.route.reason.clone()));
+        *LAST_USER.lock().unwrap_or_else(|e| e.into_inner()) = Some((
+            call.effort.map(str::to_string),
+            decision.route.reason.clone(),
+        ));
     }
 }
 
@@ -684,7 +873,11 @@ fn note_user_pick(call: &RouteCall<'_>, decision: &Decision) {
 pub fn start_effort(class: &str) -> Option<String> {
     let row = class_row(class)?;
     let e = EFFORT_LADDER[Band::of(row, 0).start];
-    Some(grokhub_core::parse_reasoning_effort(e).unwrap_or(e).to_string())
+    Some(
+        grokhub_core::parse_reasoning_effort(e)
+            .unwrap_or(e)
+            .to_string(),
+    )
 }
 
 /// The passive-health line for one call, or `None` when it says nothing about the model.
@@ -692,7 +885,13 @@ pub fn observation(call: &RouteCall<'_>, done: &RouteDone, now_ms: u64) -> Optio
     if done.cancelled || call.model.trim().is_empty() || call.provider == "grok_build" {
         return None;
     }
-    let status = if done.ok { CallStatus::Ok } else if done.http == 0 { CallStatus::Error } else { classify_status(done.http, &done.error) };
+    let status = if done.ok {
+        CallStatus::Ok
+    } else if done.http == 0 {
+        CallStatus::Error
+    } else {
+        classify_status(done.http, &done.error)
+    };
     Some(Observation {
         model: call.model.trim().to_string(),
         ts_ms: now_ms,
@@ -708,13 +907,24 @@ pub fn observation(call: &RouteCall<'_>, done: &RouteDone, now_ms: u64) -> Optio
 
 /// Write the route span and the health line for one call. Never fails the call.
 /// `call.effort` is what was sent.
-pub fn route_log(config_dir: &Path, call: &RouteCall<'_>, decision: &Decision, done: &RouteDone) -> RouteRecord {
+pub fn route_log(
+    config_dir: &Path,
+    call: &RouteCall<'_>,
+    decision: &Decision,
+    done: &RouteDone,
+) -> RouteRecord {
     let _total = timing::lap("route:log");
     let now = grokhub_core::now_ms();
-    let mut rec = timing::time("route:log_record", || route_record(config_dir, call, decision, done));
+    let mut rec = timing::time("route:log_record", || {
+        route_record(config_dir, call, decision, done)
+    });
     let key = episode_key(call);
     if !key.is_empty() {
-        ladder::finish(key, class_row(call.class).map(|r| r.class).unwrap_or(call.class), done.ok);
+        ladder::finish(
+            key,
+            class_row(call.class).map(|r| r.class).unwrap_or(call.class),
+            done.ok,
+        );
     }
     note_user_pick(call, decision);
     // This crate's own tests drive fake clients with made-up model ids: only a
@@ -734,9 +944,17 @@ pub fn route_log(config_dir: &Path, call: &RouteCall<'_>, decision: &Decision, d
         (false, true) => "cancelled",
         (false, false) => "error",
     };
-    let mut span = Span::soft_allow(MODEL_TRACE, MODEL_TOOL, &args, result, "", AccessMode::Supervised, &rec.used.provider)
-        .from_origin(current_origin())
-        .on_path("model");
+    let mut span = Span::soft_allow(
+        MODEL_TRACE,
+        MODEL_TOOL,
+        &args,
+        result,
+        "",
+        AccessMode::Supervised,
+        &rec.used.provider,
+    )
+    .from_origin(current_origin())
+    .on_path("model");
     span.access = String::new();
     span.episode = call.episode.to_string();
     if done.ok {
@@ -773,7 +991,9 @@ pub struct ClassScope {
 
 impl ClassScope {
     pub fn enter(class: &'static str) -> Self {
-        Self { prev: CLASS.with(|c| c.replace(class)) }
+        Self {
+            prev: CLASS.with(|c| c.replace(class)),
+        }
     }
 }
 
@@ -867,7 +1087,15 @@ pub fn stream_routed(
     } else if decision.on_provider() {
         // Not streamed: the whole answer arrives as one delta.
         let span_id = format!("{}:{now}", req.conversation_id);
-        let out = super::providers::call_model(&dir, &model, effort.as_deref(), &sent, super::providers::call_data(call.sensitive), &span_id, cancel);
+        let out = super::providers::call_model(
+            &dir,
+            &model,
+            effort.as_deref(),
+            &sent,
+            super::providers::call_data(call.sensitive),
+            &span_id,
+            cancel,
+        );
         if let Ok(turn) = &out {
             if !turn.text.is_empty() {
                 sink(StreamEvent::TextDelta(turn.text.clone()));
@@ -885,7 +1113,12 @@ pub fn stream_routed(
     }
     call.effort = effort.as_deref();
     call.model = &model;
-    route_log(&dir, &call, &decision, &RouteDone::of(&out, started.elapsed()));
+    route_log(
+        &dir,
+        &call,
+        &decision,
+        &RouteDone::of(&out, started.elapsed()),
+    );
     out
 }
 
@@ -901,7 +1134,15 @@ pub const PROVIDER_GROK_BUILD: &str = "grok_build";
 /// spawns with (R2a: Auto's pick from Grok Build's own plan list; a pin is kept
 /// while it is listed). A running session keeps the model it spawned with.
 /// `origin` is who started the turn: only your own typed turn waits live (R2b).
-pub fn route_gb_turn(config_dir: &Path, model: &str, pinned: bool, sent: Option<Option<&str>>, session: &str, text: &str, origin: Origin) -> (String, Option<String>) {
+pub fn route_gb_turn(
+    config_dir: &Path,
+    model: &str,
+    pinned: bool,
+    sent: Option<Option<&str>>,
+    session: &str,
+    text: &str,
+    origin: Origin,
+) -> (String, Option<String>) {
     let _lap = timing::lap("route:gb_turn");
     if let Some(t) = timing::take_enter() {
         timing::record("send:enter_to_gb_route", t.elapsed());

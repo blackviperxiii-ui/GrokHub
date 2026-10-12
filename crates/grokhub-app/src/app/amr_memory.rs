@@ -23,7 +23,10 @@ use super::*;
 use grokhub_core::amr::{AmrError, AmrStore, LineWrite, PruneReport, Remembered};
 
 /// A retention pass in flight: the chat that asked, and its answer.
-type PruneLive = (Option<String>, mpsc::Receiver<Result<PruneReport, AmrError>>);
+type PruneLive = (
+    Option<String>,
+    mpsc::Receiver<Result<PruneReport, AmrError>>,
+);
 
 /// Memory retention: the local day it last ran this session and the pass in
 /// flight, with the chat that asked (`/memory prune`) or `None` (the daily run).
@@ -131,7 +134,8 @@ pub(super) fn memory_dream_text(config_dir: &std::path::Path) -> String {
     use grokhub_core::what_changed as wc;
     match grokhub_core::amr::latest_dream(&config_dir.join("amr")) {
         Some((_, text)) => wc::with_block(&wc::from_dream(&text), &text),
-        None => "No dream yet. GrokHub dreams once a night after the review, in memory repo mode.".into(),
+        None => "No dream yet. GrokHub dreams once a night after the review, in memory repo mode."
+            .into(),
     }
 }
 
@@ -225,10 +229,9 @@ impl Cabin {
         let turn = if thread == self.visible_thread_id() {
             self.turn_no()
         } else {
-            self.threads
-                .iter()
-                .find(|t| t.id == thread)
-                .map_or(0, |t| t.messages.iter().filter(|(r, _)| r == "user").count() as u32)
+            self.threads.iter().find(|t| t.id == thread).map_or(0, |t| {
+                t.messages.iter().filter(|(r, _)| r == "user").count() as u32
+            })
         };
         let (tx, rx) = mpsc::channel();
         std::thread::spawn(move || {
@@ -393,7 +396,10 @@ impl Cabin {
     /// Once a local day, any hour and apart from the dream: retire unsure,
     /// unlinked notes past Memory retention. Off the UI thread.
     pub(super) fn tick_amr_retention(&mut self, today: &str) {
-        if !self.amr_on() || self.amr_prune.day.as_deref() == Some(today) || self.amr_prune.live.is_some() {
+        if !self.amr_on()
+            || self.amr_prune.day.as_deref() == Some(today)
+            || self.amr_prune.live.is_some()
+        {
             return;
         }
         self.amr_prune.day = Some(today.to_string());
@@ -402,13 +408,21 @@ impl Cabin {
 
     /// Settings → Behavior → Memory retention.
     pub(super) fn ui_memory_retention_row(&mut self, ui: &mut egui::Ui) {
-        let labels: Vec<String> = RETENTION_CHOICES.iter().map(|d| retention_label(*d)).collect();
+        let labels: Vec<String> = RETENTION_CHOICES
+            .iter()
+            .map(|d| retention_label(*d))
+            .collect();
         let hint = "Unsure memory notes nothing links to are retired after this long, once a day. Retired notes stay on disk, marked forgotten. /memory prune runs it now.";
         let current = retention_label(self.cfg.amr_retention_days);
-        if let Some(i) = crate::cards::settings_dropdown(ui, "Memory retention", hint, &current, &labels) {
+        if let Some(i) =
+            crate::cards::settings_dropdown(ui, "Memory retention", hint, &current, &labels)
+        {
             self.cfg.amr_retention_days = RETENTION_CHOICES[i];
             self.persist_cfg();
-            self.status = format!("Memory retention: {}", retention_label(self.cfg.amr_retention_days));
+            self.status = format!(
+                "Memory retention: {}",
+                retention_label(self.cfg.amr_retention_days)
+            );
         }
     }
 
@@ -432,7 +446,8 @@ impl Cabin {
         let days = u64::from(self.cfg.amr_retention_days);
         let (tx, rx) = mpsc::channel();
         std::thread::spawn(move || {
-            let _ = tx.send(store.prune_stale(now_ms(), days, grokhub_core::amr::DREAM_STALE_BELOW));
+            let _ =
+                tx.send(store.prune_stale(now_ms(), days, grokhub_core::amr::DREAM_STALE_BELOW));
         });
         self.amr_prune.live = Some((chat, rx));
     }
@@ -448,12 +463,18 @@ impl Cabin {
                 self.amr_prune.live = Some((chat, rx));
                 return;
             }
-            Err(mpsc::TryRecvError::Disconnected) => Err(AmrError::Io("the retention pass stopped".into())),
+            Err(mpsc::TryRecvError::Disconnected) => {
+                Err(AmrError::Io("the retention pass stopped".into()))
+            }
         };
         self.finish_amr_prune(chat.as_deref(), done);
     }
 
-    pub(super) fn finish_amr_prune(&mut self, chat: Option<&str>, done: Result<PruneReport, AmrError>) {
+    pub(super) fn finish_amr_prune(
+        &mut self,
+        chat: Option<&str>,
+        done: Result<PruneReport, AmrError>,
+    ) {
         let line = match &done {
             Ok(report) => report.status_line(),
             Err(err) => format!("Memory retention didn't run: {err}"),

@@ -92,10 +92,7 @@ fn clip_map_label(s: &str) -> String {
 }
 
 /// Compact History map. Empty when there is no last user turn.
-pub(super) fn session_markers(
-    threads: &[ChatThread],
-    current_idx: usize,
-) -> Vec<SessionMark> {
+pub(super) fn session_markers(threads: &[ChatThread], current_idx: usize) -> Vec<SessionMark> {
     let mut out = Vec::new();
     if let Some(cur) = threads.get(current_idx) {
         if let Some(text) = last_user_text(&cur.messages) {
@@ -122,11 +119,7 @@ pub(super) fn device_glance(hub_on: bool, last_frame_url: Option<&str>) -> Optio
     if !hub_on && thumb.is_none() {
         return None;
     }
-    let share_line = if hub_on {
-        "Sharing"
-    } else {
-        "Last frame"
-    };
+    let share_line = if hub_on { "Sharing" } else { "Last frame" };
     Some(DeviceGlance {
         share_line: share_line.into(),
         has_thumb: thumb.is_some(),

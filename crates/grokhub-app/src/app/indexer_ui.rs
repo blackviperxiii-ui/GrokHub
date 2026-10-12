@@ -11,13 +11,14 @@
 
 use super::*;
 use grokhub_agent::harness as hx;
-use grokhub_agent::indexers::{self as idx, IndexedFact, ScopeIndex, Scheduler, TickOutcome};
+use grokhub_agent::indexers::{self as idx, IndexedFact, Scheduler, ScopeIndex, TickOutcome};
 
 /// Lines of learned facts shown under a scope row before "and N more".
 const FACTS_SHOWN: usize = 3;
 pub(super) const FORGET_THESE: &str = "Forget these";
 const ASK_EYEBROW: &str = "Learn from your computer";
-const ASK_NOTE: &str = "Read on this computer only and sealed at rest. Revoke it any time in Settings → Permissions.";
+const ASK_NOTE: &str =
+    "Read on this computer only and sealed at rest. Revoke it any time in Settings → Permissions.";
 
 /// What the worker hands back after one tick.
 #[derive(Debug)]
@@ -45,11 +46,24 @@ pub(super) struct IndexerUi {
 }
 
 /// The scope rows' learned-facts block. Returns true on a Forget these click.
-fn paint_facts(ui: &mut egui::Ui, source: &str, facts: &[IndexedFact], locked: bool, busy: bool) -> bool {
+fn paint_facts(
+    ui: &mut egui::Ui,
+    source: &str,
+    facts: &[IndexedFact],
+    locked: bool,
+    busy: bool,
+) -> bool {
     let reader = hx::Scope::parse(source).is_some_and(|s| idx::has_reader(&s));
     if !reader {
-        let what = if source == "calendar" { "calendar" } else { "mail" };
-        crate::cards::settings_note(ui, &format!("Nothing reads it yet: GrokHub has no {what} reader of its own."));
+        let what = if source == "calendar" {
+            "calendar"
+        } else {
+            "mail"
+        };
+        crate::cards::settings_note(
+            ui,
+            &format!("Nothing reads it yet: GrokHub has no {what} reader of its own."),
+        );
         return false;
     }
     if facts.is_empty() {
@@ -57,16 +71,35 @@ fn paint_facts(ui: &mut egui::Ui, source: &str, facts: &[IndexedFact], locked: b
         return false;
     }
     let n = facts.len();
-    let head = if n == 1 { "Learned 1 thing, sealed on this computer:".to_string() } else { format!("Learned {n} things, sealed on this computer:") };
+    let head = if n == 1 {
+        "Learned 1 thing, sealed on this computer:".to_string()
+    } else {
+        format!("Learned {n} things, sealed on this computer:")
+    };
     ui.label(RichText::new(head).size(13.0).color(crate::theme::fg()));
     for f in facts.iter().take(FACTS_SHOWN) {
-        ui.add(egui::Label::new(RichText::new(&f.line).size(12.0).color(crate::theme::muted())).truncate());
+        ui.add(
+            egui::Label::new(
+                RichText::new(&f.line)
+                    .size(12.0)
+                    .color(crate::theme::muted()),
+            )
+            .truncate(),
+        );
     }
     if n > FACTS_SHOWN {
-        ui.label(RichText::new(format!("and {} more", n - FACTS_SHOWN)).size(12.0).color(crate::theme::muted()));
+        ui.label(
+            RichText::new(format!("and {} more", n - FACTS_SHOWN))
+                .size(12.0)
+                .color(crate::theme::muted()),
+        );
     }
     ui.add_space(4.0);
-    let hit = ui.add_enabled_ui(!locked && !busy, |ui| crate::cards::ghost_pill(ui, FORGET_THESE)).inner;
+    let hit = ui
+        .add_enabled_ui(!locked && !busy, |ui| {
+            crate::cards::ghost_pill(ui, FORGET_THESE)
+        })
+        .inner;
     ui.add_space(8.0);
     hit
 }
@@ -123,7 +156,11 @@ impl Cabin {
             let wrote = matches!(outcome, TickOutcome::Ran { written, .. } if written > 0);
             let paused = matches!(outcome, TickOutcome::Paused(_));
             let index = ((reload || wrote) && !paused).then(|| ScopeIndex::load(&dir));
-            let _ = tx.send(TickDone { sched, outcome, index });
+            let _ = tx.send(TickDone {
+                sched,
+                outcome,
+                index,
+            });
         });
     }
 
@@ -155,19 +192,28 @@ impl Cabin {
             if allow {
                 self.grant_scope_click(&ask.scope);
             } else {
-                self.status = format!("{} stays off.", super::scope_ui::scope_label(&ask.scope.key()));
+                self.status = format!(
+                    "{} stays off.",
+                    super::scope_ui::scope_label(&ask.scope.key())
+                );
             }
         }
     }
 
     /// Under a granted scope row in Settings: what it taught GrokHub, and
     /// "Forget these". Returns the fact ids to forget on a click.
-    pub(super) fn ui_scope_facts(&mut self, ui: &mut egui::Ui, source: &str, locked: bool) -> Option<Vec<String>> {
+    pub(super) fn ui_scope_facts(
+        &mut self,
+        ui: &mut egui::Ui,
+        source: &str,
+        locked: bool,
+    ) -> Option<Vec<String>> {
         self.poll_forget();
         let index = self.harness.indexer.index.clone();
         let facts = index.for_scope(source);
         let busy = self.harness.indexer.forget_rx.is_some();
-        paint_facts(ui, source, facts, locked, busy).then(|| facts.iter().map(|f| f.id.clone()).collect())
+        paint_facts(ui, source, facts, locked, busy)
+            .then(|| facts.iter().map(|f| f.id.clone()).collect())
     }
 
     /// "Forget these": tombstone the listed facts off the UI thread, then

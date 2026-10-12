@@ -78,14 +78,19 @@ impl Findings {
     /// From the tool's arguments: `{"findings":[{"severity","text"}],
     /// "fixes":[{"label","goal"}]}`. Findings come out most severe first.
     pub fn from_json(value: &Value) -> Result<Self, String> {
-        let rows = value.get("findings").and_then(Value::as_array).ok_or("findings must be an array")?;
+        let rows = value
+            .get("findings")
+            .and_then(Value::as_array)
+            .ok_or("findings must be an array")?;
         if rows.is_empty() || rows.len() > MAX_FINDINGS {
             return Err(format!("give 1 to {MAX_FINDINGS} findings"));
         }
         let mut items = Vec::new();
         for row in rows {
             let sev = row.get("severity").and_then(Value::as_str).unwrap_or("");
-            let severity = Severity::parse(sev).ok_or_else(|| format!("unknown severity `{sev}`: use high, medium, low or info"))?;
+            let severity = Severity::parse(sev).ok_or_else(|| {
+                format!("unknown severity `{sev}`: use high, medium, low or info")
+            })?;
             let text = one_line(row.get("text").and_then(Value::as_str).unwrap_or(""));
             if text.is_empty() {
                 return Err("each finding needs text".into());
@@ -93,7 +98,11 @@ impl Findings {
             items.push(Finding { severity, text });
         }
         items.sort_by_key(|f| f.severity);
-        let fixes_in = value.get("fixes").and_then(Value::as_array).cloned().unwrap_or_default();
+        let fixes_in = value
+            .get("fixes")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
         if fixes_in.len() > MAX_FIXES {
             return Err(format!("give at most {MAX_FIXES} fixes"));
         }
@@ -105,7 +114,9 @@ impl Findings {
                 return Err("each fix needs a label and a goal".into());
             }
             if label.contains(':') || label.chars().count() > LABEL_MAX {
-                return Err(format!("fix label `{label}` must be at most {LABEL_MAX} characters with no colon"));
+                return Err(format!(
+                    "fix label `{label}` must be at most {LABEL_MAX} characters with no colon"
+                ));
             }
             fixes.push(Fix { label, goal });
         }
@@ -142,13 +153,20 @@ impl Findings {
                 in_fixes = true;
                 continue;
             }
-            let Some((head, rest)) = line.strip_prefix("- ").and_then(|l| l.split_once(": ")) else {
+            let Some((head, rest)) = line.strip_prefix("- ").and_then(|l| l.split_once(": "))
+            else {
                 continue;
             };
             if in_fixes {
-                fixes.push(Fix { label: head.to_string(), goal: rest.to_string() });
+                fixes.push(Fix {
+                    label: head.to_string(),
+                    goal: rest.to_string(),
+                });
             } else if let Some(severity) = Severity::parse(head) {
-                items.push(Finding { severity, text: rest.to_string() });
+                items.push(Finding {
+                    severity,
+                    text: rest.to_string(),
+                });
             }
         }
         (!items.is_empty()).then_some(Self { items, fixes })
@@ -200,22 +218,45 @@ mod tests {
         assert_eq!(Findings::parse(&card.to_body()), Some(card));
         assert_eq!(Findings::parse("Some other reply\n- High: x"), None);
         assert_eq!(Findings::parse(FINDINGS_HEAD), None);
-        let no_fixes = Findings::from_json(&json!({"findings":[{"severity":"info","text":"all clear"}]})).unwrap();
-        assert_eq!(Findings::parse(&no_fixes.to_body()).unwrap().fixes, Vec::<Fix>::new());
+        let no_fixes =
+            Findings::from_json(&json!({"findings":[{"severity":"info","text":"all clear"}]}))
+                .unwrap();
+        assert_eq!(
+            Findings::parse(&no_fixes.to_body()).unwrap().fixes,
+            Vec::<Fix>::new()
+        );
     }
 
     #[test]
     fn bad_cards_are_refused_with_a_reason() {
         let err = |v: Value| Findings::from_json(&v).unwrap_err();
         assert_eq!(err(json!({"findings": []})), "give 1 to 30 findings");
-        assert_eq!(err(json!({"findings": [{"severity": "urgent", "text": "x"}]})), "unknown severity `urgent`: use high, medium, low or info");
-        assert_eq!(err(json!({"findings": [{"severity": "low", "text": " "}]})), "each finding needs text");
         assert_eq!(
-            err(json!({"findings": [{"severity": "low", "text": "x"}], "fixes": [{"label": "Fix: now", "goal": "g"}]})),
+            err(json!({"findings": [{"severity": "urgent", "text": "x"}]})),
+            "unknown severity `urgent`: use high, medium, low or info"
+        );
+        assert_eq!(
+            err(json!({"findings": [{"severity": "low", "text": " "}]})),
+            "each finding needs text"
+        );
+        assert_eq!(
+            err(
+                json!({"findings": [{"severity": "low", "text": "x"}], "fixes": [{"label": "Fix: now", "goal": "g"}]})
+            ),
             "fix label `Fix: now` must be at most 40 characters with no colon"
         );
-        assert_eq!(err(json!({"findings": [{"severity": "low", "text": "x"}], "fixes": [{"label": "Go"}]})), "each fix needs a label and a goal");
-        let seven: Vec<Value> = (0..7).map(|n| json!({"label": format!("f{n}"), "goal": "g"})).collect();
-        assert_eq!(err(json!({"findings": [{"severity": "low", "text": "x"}], "fixes": seven})), "give at most 6 fixes");
+        assert_eq!(
+            err(
+                json!({"findings": [{"severity": "low", "text": "x"}], "fixes": [{"label": "Go"}]})
+            ),
+            "each fix needs a label and a goal"
+        );
+        let seven: Vec<Value> = (0..7)
+            .map(|n| json!({"label": format!("f{n}"), "goal": "g"}))
+            .collect();
+        assert_eq!(
+            err(json!({"findings": [{"severity": "low", "text": "x"}], "fixes": seven})),
+            "give at most 6 fixes"
+        );
     }
 }

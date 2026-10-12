@@ -32,7 +32,11 @@ impl std::fmt::Debug for HttpLocalRuntime {
 impl HttpLocalRuntime {
     pub fn new(base_url: impl Into<String>, token: impl Into<String>) -> Self {
         let base_url = base_url.into().trim_end_matches('/').to_string();
-        Self { base_url, token: token.into(), model: "local".into() }
+        Self {
+            base_url,
+            token: token.into(),
+            model: "local".into(),
+        }
     }
 
     /// Reject non-loopback bases so a mis-set URL never leaves the device.
@@ -77,14 +81,22 @@ impl HttpLocalRuntime {
             let body = resp.into_string().unwrap_or_default();
             return Err(format!("local model HTTP {status}: {body}"));
         }
-        let v: Value = resp.into_json().map_err(|e| format!("local model JSON: {e}"))?;
+        let v: Value = resp
+            .into_json()
+            .map_err(|e| format!("local model JSON: {e}"))?;
         content_from_completion(&v).ok_or_else(|| "local model returned no content".into())
     }
 
     fn ask_json(&self, system: &str, user: &str) -> Result<Value, String> {
         let messages = [
-            ChatMessage { role: "system".into(), content: system.into() },
-            ChatMessage { role: "user".into(), content: user.into() },
+            ChatMessage {
+                role: "system".into(),
+                content: system.into(),
+            },
+            ChatMessage {
+                role: "user".into(),
+                content: user.into(),
+            },
         ];
         let text = self.chat_once(&messages)?;
         parse_json_object(&text).ok_or_else(|| format!("local model did not return JSON: {text}"))
@@ -108,11 +120,16 @@ impl LocalRuntime for HttpLocalRuntime {
     }
 
     fn difficulty(&self, text: &str) -> Result<Value, String> {
-        let system = "Reply with one JSON object only: {\"d\": <0.0-1.0>} for task difficulty. No markdown.";
+        let system =
+            "Reply with one JSON object only: {\"d\": <0.0-1.0>} for task difficulty. No markdown.";
         self.ask_json(system, text)
     }
 
-    fn chat_stream(&self, messages: &[ChatMessage], on_delta: &mut dyn FnMut(&str)) -> Result<String, String> {
+    fn chat_stream(
+        &self,
+        messages: &[ChatMessage],
+        on_delta: &mut dyn FnMut(&str),
+    ) -> Result<String, String> {
         let resp = self.post_chat(messages, true)?;
         if resp.status() >= 400 {
             let status = resp.status();
@@ -124,8 +141,11 @@ impl LocalRuntime for HttpLocalRuntime {
             return read_sse(resp, on_delta);
         }
         // Non-streaming servers (and the fake): one JSON body.
-        let v: Value = resp.into_json().map_err(|e| format!("local model JSON: {e}"))?;
-        let text = content_from_completion(&v).ok_or_else(|| "local model returned no content".to_string())?;
+        let v: Value = resp
+            .into_json()
+            .map_err(|e| format!("local model JSON: {e}"))?;
+        let text = content_from_completion(&v)
+            .ok_or_else(|| "local model returned no content".to_string())?;
         if !text.is_empty() {
             on_delta(&text);
         }
@@ -134,7 +154,10 @@ impl LocalRuntime for HttpLocalRuntime {
 }
 
 fn loopback_base(base: &str) -> bool {
-    let rest = base.strip_prefix("http://").or_else(|| base.strip_prefix("https://")).unwrap_or(base);
+    let rest = base
+        .strip_prefix("http://")
+        .or_else(|| base.strip_prefix("https://"))
+        .unwrap_or(base);
     let host = rest.split(['/', ':']).next().unwrap_or("");
     super::local_sidecar::is_loopback_host(host)
 }
@@ -223,7 +246,10 @@ mod tests {
 
     #[test]
     fn http_runtime_debug_redacts_token() {
-        let dbg = format!("{:?}", HttpLocalRuntime::new("http://127.0.0.1:9", "super-secret-token"));
+        let dbg = format!(
+            "{:?}",
+            HttpLocalRuntime::new("http://127.0.0.1:9", "super-secret-token")
+        );
         assert!(dbg.contains("[redacted]"), "{dbg}");
         assert!(!dbg.contains("super-secret-token"), "{dbg}");
     }

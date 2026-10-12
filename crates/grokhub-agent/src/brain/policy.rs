@@ -68,10 +68,23 @@ mod tests {
     #[test]
     fn the_user_file_wins_and_a_bad_one_is_ignored_with_a_note() {
         let dir = crate::harness::test_dir("brain-policy");
-        let brief = super::super::rules(&super::super::BriefInput { text: "hi", ..Default::default() }).unwrap();
+        let brief = super::super::rules(&super::super::BriefInput {
+            text: "hi",
+            ..Default::default()
+        })
+        .unwrap();
         let shipped = pick_policy(&load_policy(&dir).0, &brief).unwrap();
-        assert_eq!(shipped.label(), "chat × casual, goal speed (small talk, fast reply matters most)");
-        assert_eq!((shipped.talk.as_str(), shipped.style()), ("brief, personality on", grokhub_core::talk::TalkStyle::Short));
+        assert_eq!(
+            shipped.label(),
+            "chat × casual, goal speed (small talk, fast reply matters most)"
+        );
+        assert_eq!(
+            (shipped.talk.as_str(), shipped.style()),
+            (
+                "brief, personality on",
+                grokhub_core::talk::TalkStyle::Short
+            )
+        );
         assert_eq!(load_policy(&dir).1, None);
         std::fs::create_dir_all(policy_path(&dir).parent().unwrap()).unwrap();
         std::fs::write(
@@ -81,7 +94,10 @@ mod tests {
         .unwrap();
         let (rows, note) = load_policy(&dir);
         assert_eq!(note, None);
-        assert_eq!(pick_policy(&rows, &brief).unwrap().label(), "chat × casual, goal cost (keep it cheap)");
+        assert_eq!(
+            pick_policy(&rows, &brief).unwrap().label(),
+            "chat × casual, goal cost (keep it cheap)"
+        );
         std::fs::write(policy_path(&dir), "require_approval = false\n").unwrap();
         let (rows, note) = load_policy(&dir);
         assert_eq!(pick_policy(&rows, &brief), Some(shipped));

@@ -25,7 +25,10 @@ pub fn palette_row_action(
         Some(cmds[i].1.to_string())
     } else {
         let rel = files.get(i - cmds.len())?;
-        if rel.split(['/', '\\']).any(|p| p.is_empty() || p == "." || p == "..") {
+        if rel
+            .split(['/', '\\'])
+            .any(|p| p.is_empty() || p == "." || p == "..")
+        {
             None
         } else {
             let full = Path::new(root).join(rel);
@@ -240,7 +243,10 @@ mod tests {
     fn finds_thread_and_memory() {
         let rows = [
             ("night".into(), "flash the pi then verify".into()),
-            ("MEMORY.md".into(), "prefer nvim\nbound project is the world".into()),
+            (
+                "MEMORY.md".into(),
+                "prefer nvim\nbound project is the world".into(),
+            ),
         ];
         let hits = search_corpus("pi", &rows);
         assert_eq!(hits.len(), 1);
@@ -252,14 +258,25 @@ mod tests {
         let uni = [("café".into(), "éclair matching pi here".into())];
         let hit = search_corpus("pi", &uni);
         assert_eq!(hit.len(), 1);
-        assert!(hit[0].contains("éclair") || hit[0].contains("matching"), "{hit:?}");
+        assert!(
+            hit[0].contains("éclair") || hit[0].contains("matching"),
+            "{hit:?}"
+        );
     }
 
     #[test]
     fn a_hit_carries_the_source_it_came_from() {
         let rows = [
-            ("mem:MEMORY.md".to_string(), "MEMORY.md".to_string(), "prefer nvim".to_string()),
-            ("thread:t7".to_string(), "night".to_string(), "flash the pi then verify".to_string()),
+            (
+                "mem:MEMORY.md".to_string(),
+                "MEMORY.md".to_string(),
+                "prefer nvim".to_string(),
+            ),
+            (
+                "thread:t7".to_string(),
+                "night".to_string(),
+                "flash the pi then verify".to_string(),
+            ),
         ];
         let hits = search_corpus_tagged("nvim", &rows);
         assert_eq!(hits.len(), 1);
@@ -317,7 +334,9 @@ mod tests {
             "palette search must walk into nested folders: {hits:?}"
         );
         assert!(
-            search_place(&root, "readme").iter().any(|h| h == "readme.txt"),
+            search_place(&root, "readme")
+                .iter()
+                .any(|h| h == "readme.txt"),
             "a file at the top of the place is still found"
         );
         let _ = std::fs::remove_dir_all(&root);
@@ -341,7 +360,9 @@ mod tests {
         assert!(search_place(&root, "   ").is_empty());
         assert!(search_place(Path::new(""), "blank").is_empty());
         assert!(
-            search_place(&root, "blank").iter().any(|h| h == "blank.txt"),
+            search_place(&root, "blank")
+                .iter()
+                .any(|h| h == "blank.txt"),
             "an empty file is still a file"
         );
         let _ = std::fs::remove_dir_all(&root);
@@ -370,7 +391,8 @@ mod tests {
             "a file above the depth cap is still found: {hits:?}"
         );
         assert!(
-            hits.iter().all(|h| !h.contains("..") && !h.starts_with('/') && !h.starts_with('\\')),
+            hits.iter()
+                .all(|h| !h.contains("..") && !h.starts_with('/') && !h.starts_with('\\')),
             "hits stay relative to the search root: {hits:?}"
         );
         assert!(
@@ -385,7 +407,11 @@ mod tests {
         {
             use std::os::unix::fs::symlink;
             symlink(&outside, root.join("escape")).unwrap();
-            symlink(outside.join("secret-needle.txt"), root.join("secret-needle.txt")).unwrap();
+            symlink(
+                outside.join("secret-needle.txt"),
+                root.join("secret-needle.txt"),
+            )
+            .unwrap();
         }
         let leaked = search_place(&root, "secret-needle");
         assert!(
@@ -401,7 +427,13 @@ mod tests {
         let mut files = vec!["nested/deep/buried.txt".to_string()];
         let mut files_q = "buried".to_string();
         let mut files_root = "/place".to_string();
-        palette_forget_stale_walk(&mut files, &mut files_q, &mut files_root, "buriexx", "/place");
+        palette_forget_stale_walk(
+            &mut files,
+            &mut files_q,
+            &mut files_root,
+            "buriexx",
+            "/place",
+        );
         assert!(files.is_empty(), "a query change clears the last hits");
         assert!(
             files_q.is_empty() && files_root.is_empty(),
@@ -411,12 +443,20 @@ mod tests {
             !palette_search_is_saved(&files_q, &files_root, "buried", "/place"),
             "reverting to the earlier query must walk again so the file hits come back"
         );
-        palette_forget_stale_walk(&mut files, &mut files_q, &mut files_root, "buried", "/place");
+        palette_forget_stale_walk(
+            &mut files,
+            &mut files_q,
+            &mut files_root,
+            "buried",
+            "/place",
+        );
         assert!(
             files_q.is_empty() && files.is_empty(),
             "revert still has no finished key, so tick kicks a real walk: {files_q:?} {files:?}"
         );
-        assert!(palette_search_is_saved("buried", "/place", "buried", "/place"));
+        assert!(palette_search_is_saved(
+            "buried", "/place", "buried", "/place"
+        ));
     }
 
     #[test]

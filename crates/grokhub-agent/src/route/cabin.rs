@@ -42,8 +42,19 @@ pub struct ModelCall<'a> {
 
 impl<'a> ModelCall<'a> {
     /// The origin is this thread's [`OriginScope`](crate::harness::OriginScope).
-    pub fn new(provider: Provider, model: &'a str, effort: Option<&'a str>, class: &'a str) -> Self {
-        Self { provider, model, effort, class, origin: current_origin() }
+    pub fn new(
+        provider: Provider,
+        model: &'a str,
+        effort: Option<&'a str>,
+        class: &'a str,
+    ) -> Self {
+        Self {
+            provider,
+            model,
+            effort,
+            class,
+            origin: current_origin(),
+        }
     }
 }
 
@@ -55,14 +66,24 @@ pub fn call_model<T>(
     call: &ModelCall<'_>,
     send: impl FnOnce(&ModelCall<'_>) -> Result<(T, ModelUsage), String>,
 ) -> Result<T, String> {
-    let mut rc = super::RouteCall { provider: call.provider.as_str(), class: call.class, model: call.model, effort: call.effort, ..Default::default() };
+    let mut rc = super::RouteCall {
+        provider: call.provider.as_str(),
+        class: call.class,
+        model: call.model,
+        effort: call.effort,
+        ..Default::default()
+    };
     let decision = super::live::decide(config_dir, &rc, grokhub_core::now_ms());
     if decision.paused() {
         return Err(decision.pause_msg().into());
     }
     let effort = decision.send_effort(call.effort);
     let model = decision.send_model(call.model);
-    let routed = ModelCall { effort: effort.as_deref(), model: &model, ..*call };
+    let routed = ModelCall {
+        effort: effort.as_deref(),
+        model: &model,
+        ..*call
+    };
     let started = std::time::Instant::now();
     let out = send(&routed);
     let elapsed = started.elapsed();
@@ -76,9 +97,17 @@ pub fn call_model<T>(
         Ok((_, usage)) => ("ok", Some(*usage)),
         Err(_) => ("error", None),
     };
-    let mut span = Span::soft_allow(MODEL_TRACE, MODEL_TOOL, &args, result, "", AccessMode::Supervised, routed.provider.as_str())
-        .from_origin(routed.origin)
-        .on_path("model");
+    let mut span = Span::soft_allow(
+        MODEL_TRACE,
+        MODEL_TOOL,
+        &args,
+        result,
+        "",
+        AccessMode::Supervised,
+        routed.provider.as_str(),
+    )
+    .from_origin(routed.origin)
+    .on_path("model");
     span.access = String::new();
     span.usage = usage;
     rc.effort = routed.effort;
@@ -101,7 +130,8 @@ pub fn xai_usage(reply: &Value) -> ModelUsage {
     let n = |v: &Value| v.as_u64().unwrap_or(0);
     ModelUsage {
         input_tokens: n(&u["input_tokens"]).max(n(&u["prompt_tokens"])),
-        cached_tokens: n(&u["input_tokens_details"]["cached_tokens"]).max(n(&u["prompt_tokens_details"]["cached_tokens"])),
+        cached_tokens: n(&u["input_tokens_details"]["cached_tokens"])
+            .max(n(&u["prompt_tokens_details"]["cached_tokens"])),
         output_tokens: n(&u["output_tokens"]).max(n(&u["completion_tokens"])),
         reasoning_tokens: n(&u["output_tokens_details"]["reasoning_tokens"])
             .max(n(&u["completion_tokens_details"]["reasoning_tokens"])),
@@ -129,7 +159,12 @@ mod tests {
         });
         let got = {
             let _o = OriginScope::enter(Origin::Proactive);
-            let call = ModelCall::new(Provider::Xai, "grok-4.7", Some("high"), "background:summarize");
+            let call = ModelCall::new(
+                Provider::Xai,
+                "grok-4.7",
+                Some("high"),
+                "background:summarize",
+            );
             call_model(&dir, &call, |c| {
                 // background:summarize runs at its class start (low), whatever the caller passed.
                 assert_eq!((c.model, c.effort), ("grok-4.7", Some("low")));
@@ -137,12 +172,19 @@ mod tests {
             })
         };
         assert_eq!(got, Ok("the reply"));
-        let failed = call_model(&dir, &ModelCall::new(Provider::Xai, "grok-4", None, "chat:quick"), |_| Err::<((), ModelUsage), _>("HTTP 500".into()));
+        let failed = call_model(
+            &dir,
+            &ModelCall::new(Provider::Xai, "grok-4", None, "chat:quick"),
+            |_| Err::<((), ModelUsage), _>("HTTP 500".into()),
+        );
         assert_eq!(failed, Err("HTTP 500".to_string()));
         let spans = read_spans(&dir, MODEL_TRACE).unwrap();
         assert_eq!(spans.len(), 2);
         assert_eq!(spans[0].origin, Origin::Proactive);
-        assert_eq!(spans[0].args_redacted, r#"{"effort":"low","model":"grok-4.7","provider":"xai"}"#);
+        assert_eq!(
+            spans[0].args_redacted,
+            r#"{"effort":"low","model":"grok-4.7","provider":"xai"}"#
+        );
         assert_eq!(
             spans[0].usage,
             Some(ModelUsage {
@@ -153,13 +195,25 @@ mod tests {
                 cost_in_usd_ticks: 31_000_000
             })
         );
-        assert_eq!((spans[1].origin, spans[1].result.as_str(), spans[1].usage), (Origin::User, "error", None));
+        assert_eq!(
+            (spans[1].origin, spans[1].result.as_str(), spans[1].usage),
+            (Origin::User, "error", None)
+        );
         let raw = std::fs::read_to_string(crate::harness::span_path(&dir, MODEL_TRACE)).unwrap();
-        assert!(!raw.contains("secret reply") && !raw.contains("sk-abc"), "{raw}");
+        assert!(
+            !raw.contains("secret reply") && !raw.contains("sk-abc"),
+            "{raw}"
+        );
         let chat = serde_json::json!({"usage": {"prompt_tokens": 10, "prompt_tokens_details": {"cached_tokens": 4}, "completion_tokens": 3, "completion_tokens_details": {"reasoning_tokens": 1}}});
         assert_eq!(
             xai_usage(&chat),
-            ModelUsage { input_tokens: 10, cached_tokens: 4, output_tokens: 3, reasoning_tokens: 1, cost_in_usd_ticks: 0 }
+            ModelUsage {
+                input_tokens: 10,
+                cached_tokens: 4,
+                output_tokens: 3,
+                reasoning_tokens: 1,
+                cost_in_usd_ticks: 0
+            }
         );
         let _ = std::fs::remove_dir_all(dir);
     }

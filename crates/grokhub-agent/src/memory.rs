@@ -210,7 +210,13 @@ pub fn dream(
         hosted_search: false,
         call_timeout: Some(std::time::Duration::from_secs(60)),
     };
-    let turn = match crate::route::live::stream_routed(client, &req, cancel, &mut |_| {}, "background:dream") {
+    let turn = match crate::route::live::stream_routed(
+        client,
+        &req,
+        cancel,
+        &mut |_| {},
+        "background:dream",
+    ) {
         Ok(turn) => turn,
         Err(ClientError::Cancelled) => return Err("Dream cancelled".into()),
         Err(err) => return Err(err.to_string()),
@@ -290,7 +296,11 @@ pub fn amr_enabled() -> bool {
     };
     serde_json::from_str::<serde_json::Value>(&text)
         .ok()
-        .and_then(|v| v.get("memory_backend").and_then(|b| b.as_str()).map(|b| b == "amr"))
+        .and_then(|v| {
+            v.get("memory_backend")
+                .and_then(|b| b.as_str())
+                .map(|b| b == "amr")
+        })
         .unwrap_or(false)
 }
 
@@ -340,7 +350,11 @@ pub fn recall_lines(history: &[crate::InputItem]) -> Vec<String> {
             let crate::ContentPart::InputText(text) = part else {
                 continue;
             };
-            let Some(block) = text.split(OPEN_TAG).nth(1).and_then(|b| b.split(CLOSE_TAG).next()) else {
+            let Some(block) = text
+                .split(OPEN_TAG)
+                .nth(1)
+                .and_then(|b| b.split(CLOSE_TAG).next())
+            else {
                 continue;
             };
             let mut inside = false;
@@ -1080,7 +1094,11 @@ mod tests {
     fn amr_first_turn_reads_both_stores_and_skips_tombstones() {
         use grokhub_core::amr::{remember_line, LineWrite};
         let (cfg, ws, _guard) = temp_pair("amr-inject");
-        fs::write(workspace_memory_path(&ws), "the harbor ferry leaves at nine\n").unwrap();
+        fs::write(
+            workspace_memory_path(&ws),
+            "the harbor ferry leaves at nine\n",
+        )
+        .unwrap();
         let store = amr_store();
         let line = |text| LineWrite {
             text,
@@ -1095,20 +1113,33 @@ mod tests {
 
         // Legacy: app.json has no backend key, so AMR is not read.
         let legacy = first_turn_injection(&ws, ask).unwrap();
-        assert!(legacy.contains("the harbor ferry leaves at nine"), "{legacy}");
+        assert!(
+            legacy.contains("the harbor ferry leaves at nine"),
+            "{legacy}"
+        );
         assert!(!legacy.contains("harbor lamp"), "{legacy}");
 
         fs::write(cfg.join("app.json"), r#"{"memory_backend":"amr"}"#).unwrap();
         assert!(amr_enabled());
         let both = first_turn_injection(&ws, ask).unwrap();
         assert!(both.contains("the harbor lamp is green"), "{both}");
-        assert_eq!(both.matches("the harbor ferry leaves at nine").count(), 1, "identical lines dedupe: {both}");
+        assert_eq!(
+            both.matches("the harbor ferry leaves at nine").count(),
+            1,
+            "identical lines dedupe: {both}"
+        );
 
         store.forget(lamp.id()).unwrap();
         let after = first_turn_injection(&ws, ask).unwrap();
-        assert!(!after.contains("harbor lamp"), "a tombstoned node stays out: {after}");
+        assert!(
+            !after.contains("harbor lamp"),
+            "a tombstoned node stays out: {after}"
+        );
         assert!(after.contains("the harbor ferry leaves at nine"), "{after}");
-        assert_eq!(remember_note_text("global: likes the night cabin"), "likes the night cabin");
+        assert_eq!(
+            remember_note_text("global: likes the night cabin"),
+            "likes the night cabin"
+        );
         assert_eq!(remember_note_text("--global keep it"), "keep it");
         assert_eq!(remember_note_text("plain"), "plain");
     }
@@ -1122,9 +1153,18 @@ mod tests {
         )
         .unwrap();
         let block = first_turn_injection(&ws, "who is the harbor contact again").unwrap();
-        assert!(!block.contains("jane.doe@example.org") && !block.contains("312-555-0199"), "{block}");
-        assert!(block.contains("[email]") && block.contains("[phone]"), "{block}");
-        assert!(block.contains("cargo test -p grokhub-agent@0.1 in src/main.rs"), "{block}");
+        assert!(
+            !block.contains("jane.doe@example.org") && !block.contains("312-555-0199"),
+            "{block}"
+        );
+        assert!(
+            block.contains("[email]") && block.contains("[phone]"),
+            "{block}"
+        );
+        assert!(
+            block.contains("cargo test -p grokhub-agent@0.1 in src/main.rs"),
+            "{block}"
+        );
     }
 
     #[test]

@@ -2,7 +2,6 @@
 
 use super::*;
 
-
 #[derive(Default)]
 pub(super) struct ImagineBarOut {
     generate: bool,
@@ -122,7 +121,6 @@ impl Default for ImagineNative {
     }
 }
 
-
 pub(super) fn imagine_popup(
     ctx: &egui::Context,
     id: &'static str,
@@ -148,7 +146,6 @@ pub(super) fn imagine_popup(
         });
     (picked, menu_rect)
 }
-
 
 pub(super) fn paint_wall_cover(
     key: &str,
@@ -190,7 +187,6 @@ pub(super) fn paint_wall_cover(
 }
 
 impl Cabin {
-
     pub(super) fn kick_imagine(&mut self) {
         let prompt = self.imagine_prompt.trim().to_string();
         if prompt.is_empty() {
@@ -1583,7 +1579,9 @@ impl Cabin {
             return;
         }
         let max = match kind {
-            ImaginePickKind::Sources => 3usize.saturating_sub(self.imagine_native.edit_sources.len()),
+            ImaginePickKind::Sources => {
+                3usize.saturating_sub(self.imagine_native.edit_sources.len())
+            }
             ImaginePickKind::Mask | ImaginePickKind::VideoStill => 1,
         };
         if max == 0 {
@@ -1723,7 +1721,8 @@ impl Cabin {
         if let Some(i) = imagine_more_seg(ui, "Mode", &["Generate", "Edit"], n.image_op) {
             n.image_op = i;
         }
-        if let Some(i) = imagine_more_seg(ui, "Model", &["2.0", "Quality", "Original"], n.image_model)
+        if let Some(i) =
+            imagine_more_seg(ui, "Model", &["2.0", "Quality", "Original"], n.image_model)
         {
             n.image_model = i;
         }
@@ -1782,8 +1781,14 @@ impl Cabin {
             let picked = n.video_image.is_some();
             ui.horizontal(|ui| {
                 imagine_more_title(ui, "Source");
-                if crate::cards::ghost_pill(ui, if picked { "Replace image" } else { "Choose image" })
-                {
+                if crate::cards::ghost_pill(
+                    ui,
+                    if picked {
+                        "Replace image"
+                    } else {
+                        "Choose image"
+                    },
+                ) {
                     self.start_imagine_pick(ImaginePickKind::VideoStill);
                 }
             });
@@ -1816,10 +1821,8 @@ impl Cabin {
             .show(ui, |ui| {
                 for (i, path) in paths.iter().enumerate() {
                     ui.vertical(|ui| {
-                        let (rect, resp) = ui.allocate_exact_size(
-                            egui::vec2(168.0, 112.0),
-                            egui::Sense::click(),
-                        );
+                        let (rect, resp) =
+                            ui.allocate_exact_size(egui::vec2(168.0, 112.0), egui::Sense::click());
                         ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
                             crate::cards::imagine_result_hero(ui, path);
                         });
@@ -1877,11 +1880,15 @@ fn imagine_more_seg(ui: &mut egui::Ui, title: &str, labels: &[&str], selected: u
             for (i, label) in labels.iter().enumerate() {
                 let on = selected == i as u8;
                 if crate::cards::imagine_seg_chip(ui, on, |ui| {
-                    ui.label(RichText::new(*label).size(crate::theme::FONT_CHROME).color(if on {
-                        crate::theme::fg()
-                    } else {
-                        crate::theme::muted()
-                    }));
+                    ui.label(
+                        RichText::new(*label)
+                            .size(crate::theme::FONT_CHROME)
+                            .color(if on {
+                                crate::theme::fg()
+                            } else {
+                                crate::theme::muted()
+                            }),
+                    );
                 }) {
                     picked = Some(i as u8);
                 }
@@ -1905,7 +1912,13 @@ fn run_imagine_call(
             quality,
         } => {
             let urls = crate::xai::grok_imagine_generations(
-                key, prompt, &model, n, &resolution, &aspect, &quality,
+                key,
+                prompt,
+                &model,
+                n,
+                &resolution,
+                &aspect,
+                &quality,
             )?;
             Ok((urls, None))
         }

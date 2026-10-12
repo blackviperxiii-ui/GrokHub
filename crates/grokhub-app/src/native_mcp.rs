@@ -64,7 +64,10 @@ pub enum Job {
         sign_in: bool,
     },
     /// Seal a key the user typed, after the confirm sheet approved it.
-    SaveKey { name: String, key: String },
+    SaveKey {
+        name: String,
+        key: String,
+    },
 }
 
 /// What Settings → Connectors paints: the last rows, the last job's note,
@@ -121,7 +124,9 @@ pub fn spawn(job: Job) {
                 (grokhub_agent::mcp::doctor(), note)
             }
             Job::SignIn(name) => {
-                let note = match grokhub_agent::mcp::sign_in(&name, &|url| crate::oauth::open_browser(url)) {
+                let note = match grokhub_agent::mcp::sign_in(&name, &|url| {
+                    crate::oauth::open_browser(url)
+                }) {
                     Ok(line) => line,
                     Err(err) => err,
                 };
@@ -138,11 +143,21 @@ pub fn spawn(job: Job) {
                 };
                 (grokhub_agent::mcp::configured(), note)
             }
-            Job::Install { name, label, entry, sign_in } => {
+            Job::Install {
+                name,
+                label,
+                entry,
+                sign_in,
+            } => {
                 let note = match grokhub_agent::mcp::install(&name, &entry) {
                     Ok(done) if sign_in => {
-                        set_note(&format!("{}. Finish signing in to {label} in your browser", install_line(&label, &done)));
-                        match grokhub_agent::mcp::sign_in(&name, &|url| crate::oauth::open_browser(url)) {
+                        set_note(&format!(
+                            "{}. Finish signing in to {label} in your browser",
+                            install_line(&label, &done)
+                        ));
+                        match grokhub_agent::mcp::sign_in(&name, &|url| {
+                            crate::oauth::open_browser(url)
+                        }) {
                             Ok(line) => format!("{}. {line}", install_line(&label, &done)),
                             Err(err) => format!("{}. {err}", install_line(&label, &done)),
                         }
@@ -169,7 +184,10 @@ pub fn spawn(job: Job) {
 }
 
 fn set_note(note: &str) {
-    paint_state().lock().unwrap_or_else(|err| err.into_inner()).note = note.to_string();
+    paint_state()
+        .lock()
+        .unwrap_or_else(|err| err.into_inner())
+        .note = note.to_string();
 }
 
 /// "Installed Playwright" or "Playwright was already installed".
@@ -441,7 +459,13 @@ mod tests {
         ];
         assert_eq!(
             servers_health(&rows),
-            (3, vec!["MCP github: error, timed out after 5s".to_string(), "MCP files: error".to_string()])
+            (
+                3,
+                vec![
+                    "MCP github: error, timed out after 5s".to_string(),
+                    "MCP files: error".to_string()
+                ]
+            )
         );
         assert_eq!(servers_health(&[]), (0, Vec::new()));
     }

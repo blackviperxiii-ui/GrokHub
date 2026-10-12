@@ -94,7 +94,12 @@ pub fn clip_bytes(s: &str, max: usize) -> &str {
 
 impl EpisodeView {
     pub fn new(budget: usize) -> Self {
-        Self { budget, nodes: HashMap::new(), top: Vec::new(), lessons: String::new() }
+        Self {
+            budget,
+            nodes: HashMap::new(),
+            top: Vec::new(),
+            lessons: String::new(),
+        }
     }
 
     /// Put the "Past lessons" block (already capped and redacted) at the top.
@@ -108,7 +113,10 @@ impl EpisodeView {
 
     /// The lines the worker sees now, oldest first.
     pub fn lines(&self) -> Vec<&ViewNode> {
-        self.top.iter().filter_map(|id| self.nodes.get(id)).collect()
+        self.top
+            .iter()
+            .filter_map(|id| self.nodes.get(id))
+            .collect()
     }
 
     /// The view as the worker gets it.
@@ -127,11 +135,24 @@ impl EpisodeView {
 
     /// Add one step line (already in the fixed step shape, from redacted span
     /// fields) and its raw redacted span row, then fold while over budget.
-    pub fn push(&mut self, id: &str, line: &str, raw: &str, held: &[String], folder: &dyn Folder) -> Vec<FoldDone> {
+    pub fn push(
+        &mut self,
+        id: &str,
+        line: &str,
+        raw: &str,
+        held: &[String],
+        folder: &dyn Folder,
+    ) -> Vec<FoldDone> {
         let text = clean(line, held).replace('\n', " ");
         self.nodes.insert(
             id.into(),
-            ViewNode { id: id.into(), level: 0, text, children: Vec::new(), raw: clean(raw, held) },
+            ViewNode {
+                id: id.into(),
+                level: 0,
+                text,
+                children: Vec::new(),
+                raw: clean(raw, held),
+            },
         );
         self.top.push(id.into());
         let mut done = Vec::new();
@@ -148,14 +169,21 @@ impl EpisodeView {
         let at = (0..self.top.len() - 1)
             .find(|&i| level(&self.top[i]) == level(&self.top[i + 1]))
             .unwrap_or(0);
-        let (left, right) = (self.nodes[&self.top[at]].clone(), self.nodes[&self.top[at + 1]].clone());
+        let (left, right) = (
+            self.nodes[&self.top[at]].clone(),
+            self.nodes[&self.top[at + 1]].clone(),
+        );
         // A parent never outgrows its children, so every fold shrinks the view.
-        let cap = FOLD_CAP_BYTES.min(left.line().len() + right.line().len()).saturating_sub(left.id.len() + 4);
+        let cap = FOLD_CAP_BYTES
+            .min(left.line().len() + right.line().len())
+            .saturating_sub(left.id.len() + 4);
         let (text, tokens) = match folder.fold(&left.text, &right.text) {
             Ok((text, tokens)) if !text.trim().is_empty() => (text, tokens),
             _ => (format!("{} | {}", left.text, right.text), None),
         };
-        let text = clip_bytes(&clean(&text, held).replace('\n', " "), cap).trim().to_string();
+        let text = clip_bytes(&clean(&text, held).replace('\n', " "), cap)
+            .trim()
+            .to_string();
         let id = format!("f{}", fold_span(&left.id, &right.id));
         self.nodes.insert(
             id.clone(),
@@ -168,13 +196,20 @@ impl EpisodeView {
             },
         );
         self.top.splice(at..at + 2, [id.clone()]);
-        FoldDone { id, children: [left.id, right.id], tokens }
+        FoldDone {
+            id,
+            children: [left.id, right.id],
+            tokens,
+        }
     }
 
     /// `zoom(ref, n)`: a fold opens `n` levels (at least one) into its
     /// children's lines; a step returns its raw redacted span row. Read only.
     pub fn zoom(&self, id: &str, n: u32) -> Result<String, String> {
-        let node = self.nodes.get(id.trim()).ok_or_else(|| format!("no line `{id}` in this episode"))?;
+        let node = self
+            .nodes
+            .get(id.trim())
+            .ok_or_else(|| format!("no line `{id}` in this episode"))?;
         if node.level == 0 {
             return Ok(node.raw.clone());
         }
@@ -189,7 +224,10 @@ impl EpisodeView {
                     if n.children.is_empty() {
                         vec![n]
                     } else {
-                        n.children.iter().filter_map(|c| self.nodes.get(c)).collect()
+                        n.children
+                            .iter()
+                            .filter_map(|c| self.nodes.get(c))
+                            .collect()
                     }
                 })
                 .collect();
@@ -200,8 +238,16 @@ impl EpisodeView {
 
 /// `s3`..`s4` → `3-4`; folds keep their outer bounds (`f1-2` + `f3-4` → `1-4`).
 fn fold_span(left: &str, right: &str) -> String {
-    let lo = left.trim_start_matches(['s', 'f']).split('-').next().unwrap_or("");
-    let hi = right.trim_start_matches(['s', 'f']).rsplit('-').next().unwrap_or("");
+    let lo = left
+        .trim_start_matches(['s', 'f'])
+        .split('-')
+        .next()
+        .unwrap_or("");
+    let hi = right
+        .trim_start_matches(['s', 'f'])
+        .rsplit('-')
+        .next()
+        .unwrap_or("");
     format!("{lo}-{hi}")
 }
 
@@ -237,12 +283,17 @@ mod tests {
     impl Folder for Echo {
         fn fold(&self, left: &str, right: &str) -> Result<(String, Option<CallTokens>), String> {
             self.0.borrow_mut().push((left.into(), right.into()));
-            Ok((format!("{} + {}", clip_bytes(left, 30), clip_bytes(right, 30)), None))
+            Ok((
+                format!("{} + {}", clip_bytes(left, 30), clip_bytes(right, 30)),
+                None,
+            ))
         }
     }
 
     fn step(n: u32) -> String {
-        format!(r#"#{n} goal="open the settings" tool=click decision=allow ui_changed=true result="ok""#)
+        format!(
+            r#"#{n} goal="open the settings" tool=click decision=allow ui_changed=true result="ok""#
+        )
     }
 
     #[test]
@@ -250,11 +301,18 @@ mod tests {
         let mut v = EpisodeView::new(VIEW_BUDGET_BYTES);
         let echo = Echo(RefCell::new(Vec::new()));
         for n in 1..=3 {
-            assert!(v.push(&format!("s{n}"), &step(n), "{}", &[], &echo).is_empty());
+            assert!(v
+                .push(&format!("s{n}"), &step(n), "{}", &[], &echo)
+                .is_empty());
         }
         assert_eq!(
             v.render(),
-            format!("{VIEW_HEAD}[s1] {}\n[s2] {}\n[s3] {}\n", step(1), step(2), step(3))
+            format!(
+                "{VIEW_HEAD}[s1] {}\n[s2] {}\n[s3] {}\n",
+                step(1),
+                step(2),
+                step(3)
+            )
         );
         assert!(echo.0.borrow().is_empty());
         assert_eq!(clip_bytes("héllo", 2), "h");
@@ -266,7 +324,13 @@ mod tests {
         let mut v = EpisodeView::new(VIEW_HEAD.len() + 3 * (step(1).len() + 6));
         let echo = Echo(RefCell::new(Vec::new()));
         for n in 1..=3 {
-            v.push(&format!("s{n}"), &step(n), &format!(r#"{{"step":{n}}}"#), &[], &echo);
+            v.push(
+                &format!("s{n}"),
+                &step(n),
+                &format!(r#"{{"step":{n}}}"#),
+                &[],
+                &echo,
+            );
         }
         let folds = v.push("s4", &step(4), r#"{"step":4}"#, &[], &echo);
         assert_eq!(folds.len(), 1);
@@ -274,9 +338,15 @@ mod tests {
         assert_eq!(folds[0].children, ["s1".to_string(), "s2".to_string()]);
         let ids: Vec<&str> = v.lines().iter().map(|n| n.id.as_str()).collect();
         assert_eq!(ids, ["f1-2", "s3", "s4"]);
-        assert_eq!(v.zoom("f1-2", 1).unwrap(), format!("[s1] {}\n[s2] {}\n", step(1), step(2)));
+        assert_eq!(
+            v.zoom("f1-2", 1).unwrap(),
+            format!("[s1] {}\n[s2] {}\n", step(1), step(2))
+        );
         assert_eq!(v.zoom("s1", 1).unwrap(), r#"{"step":1}"#);
-        assert_eq!(v.zoom("nope", 1).unwrap_err(), "no line `nope` in this episode");
+        assert_eq!(
+            v.zoom("nope", 1).unwrap_err(),
+            "no line `nope` in this episode"
+        );
         assert!(v.render().len() <= v.budget());
     }
 }

@@ -2,41 +2,38 @@
 //! Stdout is JSON-RPC only. Logs go to stderr.
 
 mod apps;
+#[cfg(target_os = "linux")]
+mod broker;
+#[cfg(target_os = "linux")]
+mod capture;
+#[cfg(target_os = "linux")]
+mod fallback;
 mod harness_gate;
 mod keys;
+#[cfg(target_os = "linux")]
+mod kwin_shot;
 #[cfg(any(unix, test))]
 mod outputs;
 #[cfg(any(unix, test))]
 mod pixels;
-#[cfg(windows)]
-mod windows;
-#[cfg(unix)]
-mod x11;
-#[cfg(unix)]
-mod wayland;
-#[cfg(target_os = "linux")]
-mod kwin_shot;
 #[cfg(target_os = "linux")]
 mod portal;
 #[cfg(target_os = "linux")]
 mod uinput_dev;
-#[cfg(target_os = "linux")]
-mod fallback;
-#[cfg(target_os = "linux")]
-mod capture;
-#[cfg(target_os = "linux")]
-mod broker;
+#[cfg(unix)]
+mod wayland;
+#[cfg(windows)]
+mod windows;
+#[cfg(unix)]
+mod x11;
 
 use std::io::{BufRead, Write};
 use std::sync::{mpsc, Mutex};
 
-use grokhub_core::desktop_mcp::{
-    stamp_halts, CallGate, DesktopBackend, DesktopServer,
-};
+use grokhub_core::desktop_mcp::{stamp_halts, CallGate, DesktopBackend, DesktopServer};
 
 const LINE_CAP: usize = 1 << 20;
 const PNG_JPEG_AT: usize = 1_400_000;
-
 
 pub fn run_stdio() -> i32 {
     #[cfg(windows)]
@@ -85,7 +82,8 @@ pub fn run_cua_stdio() -> i32 {
     let started = process_started_ms();
     let dir = crate::config::config_dir();
     let child_dir = dir.clone();
-    let mut proxy: hx::CuaProxy<hx::StdioChild> = hx::CuaProxy::new(Box::new(move || start_cua_child(&child_dir)));
+    let mut proxy: hx::CuaProxy<hx::StdioChild> =
+        hx::CuaProxy::new(Box::new(move || start_cua_child(&child_dir)));
     let stdin = std::io::stdin();
     let mut reader = stdin.lock();
     loop {
@@ -103,7 +101,11 @@ pub fn run_cua_stdio() -> i32 {
         }
         let cfg = crate::config::load();
         let mut halted = || read_halt_stamp().is_some_and(|ms| stamp_halts(ms, started));
-        let gate = hx::CuaGate { enabled: cfg.desktop_control, flag: cfg.cua_driver, halted: halted() };
+        let gate = hx::CuaGate {
+            enabled: cfg.desktop_control,
+            flag: cfg.cua_driver,
+            halted: halted(),
+        };
         if let Some(reply) = proxy.handle_line(&line, gate, &dir, &mut halted) {
             emit(&reply);
         }
@@ -117,7 +119,8 @@ fn start_cua_child(dir: &std::path::Path) -> Result<grokhub_agent::harness::Stdi
     if !cfg!(target_os = "linux") {
         return Err(hx::CUA_LINUX_ONLY_MSG.into());
     }
-    let bin = hx::find_cua_driver(&crate::config::load().cua_driver_path).ok_or_else(|| hx::CUA_MISSING_MSG.to_string())?;
+    let bin = hx::find_cua_driver(&crate::config::load().cua_driver_path)
+        .ok_or_else(|| hx::CUA_MISSING_MSG.to_string())?;
     hx::verify_cua_driver(&bin)?;
     hx::spawn_cua_child(&bin, dir)
 }
@@ -135,13 +138,14 @@ fn emit(line: &str) {
     let _ = out.flush();
 }
 
-pub(crate) fn read_line_capped(reader: &mut impl BufRead, cap: usize) -> Result<Option<String>, String> {
+pub(crate) fn read_line_capped(
+    reader: &mut impl BufRead,
+    cap: usize,
+) -> Result<Option<String>, String> {
     let mut buf = Vec::new();
     let mut byte = [0u8; 1];
     loop {
-        let n = reader
-            .read(&mut byte)
-            .map_err(|e| format!("stdin: {e}"))?;
+        let n = reader.read(&mut byte).map_err(|e| format!("stdin: {e}"))?;
         if n == 0 {
             if buf.is_empty() {
                 return Ok(None);
@@ -168,7 +172,11 @@ pub(crate) fn read_line_capped(reader: &mut impl BufRead, cap: usize) -> Result<
     Ok(Some(String::from_utf8_lossy(&buf).into_owned()))
 }
 
-pub(crate) fn encode_rgba(rgba: &[u8], w: u32, h: u32) -> Result<(Vec<u8>, String, u32, u32), String> {
+pub(crate) fn encode_rgba(
+    rgba: &[u8],
+    w: u32,
+    h: u32,
+) -> Result<(Vec<u8>, String, u32, u32), String> {
     if w == 0 || h == 0 {
         return Err("empty screenshot".into());
     }
@@ -190,8 +198,7 @@ pub(crate) fn encode_rgba(rgba: &[u8], w: u32, h: u32) -> Result<(Vec<u8>, Strin
             .map_err(|e| format!("png: {e}"))?;
     }
     if png.len() > PNG_JPEG_AT {
-        let img = image::RgbaImage::from_raw(nw, nh, owned)
-            .ok_or_else(|| "rgba".to_string())?;
+        let img = image::RgbaImage::from_raw(nw, nh, owned).ok_or_else(|| "rgba".to_string())?;
         let rgb = image::DynamicImage::ImageRgba8(img).to_rgb8();
         let mut jpeg = Vec::new();
         let enc = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpeg, 85);
@@ -228,7 +235,9 @@ pub(crate) fn desktop_switch_note(on: bool) -> &'static str {
 /// The native engine's Cua server follows the desktop switch and the
 /// `cuaDriver` flag (Linux only).
 pub(crate) fn sync_native_cua(cfg: &crate::config::AppConfig) {
-    let exe = native_cua_wanted(cfg).then(|| std::env::current_exe().ok()).flatten();
+    let exe = native_cua_wanted(cfg)
+        .then(|| std::env::current_exe().ok())
+        .flatten();
     grokhub_agent::mcp::set_cabin_cua(exe);
 }
 
@@ -254,16 +263,25 @@ pub(crate) fn publish_input_backend(label: &str) {
 
 #[cfg(target_os = "linux")]
 pub(crate) fn publish_capture_backend(label: &str) {
-    *CAPTURE_BACKEND.lock().unwrap_or_else(|err| err.into_inner()) = Some(label.to_string());
+    *CAPTURE_BACKEND
+        .lock()
+        .unwrap_or_else(|err| err.into_inner()) = Some(label.to_string());
 }
 
 pub(crate) fn desktop_panel_lines() -> String {
-    grokhub_core::desktop_mcp::desktop_control_status(&active_input_label(), &active_capture_label())
+    grokhub_core::desktop_mcp::desktop_control_status(
+        &active_input_label(),
+        &active_capture_label(),
+    )
 }
 
 fn active_input_label() -> String {
     #[cfg(target_os = "linux")]
-    if let Some(label) = INPUT_BACKEND.lock().unwrap_or_else(|err| err.into_inner()).clone() {
+    if let Some(label) = INPUT_BACKEND
+        .lock()
+        .unwrap_or_else(|err| err.into_inner())
+        .clone()
+    {
         return label;
     }
     predict_input_label()
@@ -271,7 +289,11 @@ fn active_input_label() -> String {
 
 fn active_capture_label() -> String {
     #[cfg(target_os = "linux")]
-    if let Some(label) = CAPTURE_BACKEND.lock().unwrap_or_else(|err| err.into_inner()).clone() {
+    if let Some(label) = CAPTURE_BACKEND
+        .lock()
+        .unwrap_or_else(|err| err.into_inner())
+        .clone()
+    {
         return label;
     }
     predict_capture_label()
@@ -506,10 +528,17 @@ impl DesktopBackend for LiveBackend {
     fn list_windows(&mut self) -> Result<grokhub_core::desktop_mcp::DesktopWindows, String> {
         apps::list_windows()
     }
-    fn window_geometry(&mut self, title: &str) -> Result<grokhub_core::desktop_mcp::WindowGeom, String> {
+    fn window_geometry(
+        &mut self,
+        title: &str,
+    ) -> Result<grokhub_core::desktop_mcp::WindowGeom, String> {
         apps::window_geometry(title)
     }
-    fn set_window_geometry(&mut self, title: &str, geom: &grokhub_core::desktop_mcp::WindowGeom) -> Result<String, String> {
+    fn set_window_geometry(
+        &mut self,
+        title: &str,
+        geom: &grokhub_core::desktop_mcp::WindowGeom,
+    ) -> Result<String, String> {
         apps::set_window_geometry(title, geom)
     }
     fn trash(&mut self, paths: &[std::path::PathBuf]) -> Result<(), String> {
@@ -529,7 +558,10 @@ pub(crate) struct NativeDesktop {
 impl NativeDesktop {
     pub(crate) fn new() -> Self {
         Self {
-            inner: Mutex::new(DesktopServer::new(env!("CARGO_PKG_VERSION"), LiveBackend::new())),
+            inner: Mutex::new(DesktopServer::new(
+                env!("CARGO_PKG_VERSION"),
+                LiveBackend::new(),
+            )),
         }
     }
 }
@@ -564,7 +596,10 @@ impl grokhub_agent::DesktopOps for NativeDesktop {
 }
 
 fn mcp_tool_output(body: serde_json::Value) -> grokhub_agent::ToolOutput {
-    let failed = body.get("isError").and_then(|value| value.as_bool()).unwrap_or(false);
+    let failed = body
+        .get("isError")
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false);
     let mut text = String::new();
     let mut image = None;
     if let Some(parts) = body.get("content").and_then(|value| value.as_array()) {
@@ -579,8 +614,14 @@ fn mcp_tool_output(body: serde_json::Value) -> grokhub_agent::ToolOutput {
                     }
                 }
                 Some("image") => {
-                    let data = part.get("data").and_then(|value| value.as_str()).unwrap_or("");
-                    let mime = part.get("mimeType").and_then(|value| value.as_str()).unwrap_or("image/png");
+                    let data = part
+                        .get("data")
+                        .and_then(|value| value.as_str())
+                        .unwrap_or("");
+                    let mime = part
+                        .get("mimeType")
+                        .and_then(|value| value.as_str())
+                        .unwrap_or("image/png");
                     if !data.is_empty() {
                         image = Some(format!("data:{mime};base64,{data}"));
                     }
@@ -665,9 +706,13 @@ pub(crate) fn drive_hands<B: DesktopBackend>(
     }
     Some(match op {
         ComputerOp::Click { x, y } => click(b, *x, *y, 1).map(|()| format!("clicked {x},{y}")),
-        ComputerOp::DoubleClick { x, y } => click(b, *x, *y, 2).map(|()| format!("double-clicked {x},{y}")),
+        ComputerOp::DoubleClick { x, y } => {
+            click(b, *x, *y, 2).map(|()| format!("double-clicked {x},{y}"))
+        }
         ComputerOp::Move { x, y } => b.move_abs(*x, *y).map(|()| format!("moved {x},{y}")),
-        ComputerOp::Type { text } => b.type_text(text).map(|()| format!("typed {} chars", text.chars().count())),
+        ComputerOp::Type { text } => b
+            .type_text(text)
+            .map(|()| format!("typed {} chars", text.chars().count())),
         ComputerOp::Key { name } => parse_key_combo(name)
             .and_then(|c| b.key_combo(&c))
             .map(|()| format!("key {name}")),
@@ -686,7 +731,10 @@ pub(crate) fn drive_hands<B: DesktopBackend>(
 #[cfg(windows)]
 pub(crate) fn windows_primary_frame() -> Result<image::RgbaImage, String> {
     let monitors = xcap::Monitor::all().map_err(|e| e.to_string())?;
-    let primary = monitors.iter().position(|m| m.is_primary().unwrap_or(false)).unwrap_or(0);
+    let primary = monitors
+        .iter()
+        .position(|m| m.is_primary().unwrap_or(false))
+        .unwrap_or(0);
     let mon = monitors.get(primary).ok_or("no monitor")?;
     mon.capture_image().map_err(|e| e.to_string())
 }
@@ -694,7 +742,9 @@ pub(crate) fn windows_primary_frame() -> Result<image::RgbaImage, String> {
 /// Windows COMPUTER_CMD hands: SendInput through the desktop tools' own
 /// backend, since xdotool and ydotool are Linux tools.
 #[cfg(windows)]
-pub(crate) fn windows_hands(op: &grokhub_core::recipe::ComputerOp) -> Option<Result<String, String>> {
+pub(crate) fn windows_hands(
+    op: &grokhub_core::recipe::ComputerOp,
+) -> Option<Result<String, String>> {
     drive_hands(&mut windows::WindowsBackend::new(), op)
 }
 
@@ -704,7 +754,10 @@ mod tests {
 
     #[test]
     fn cua_proxy_is_wanted_only_with_the_flag_and_the_switch_on_linux() {
-        assert!(!cua_wanted(true, false), "flag off (the default): Grok Build only");
+        assert!(
+            !cua_wanted(true, false),
+            "flag off (the default): Grok Build only"
+        );
         assert!(!cua_wanted(false, true), "switch off: not registered");
         assert!(!cua_wanted(false, false));
         assert_eq!(cua_wanted(true, true), cfg!(target_os = "linux"));
@@ -714,7 +767,9 @@ mod tests {
 
     #[test]
     fn desktop_mcp_png_encode_and_jpeg_api() {
-        let rgba = vec![255u8, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 255, 255];
+        let rgba = vec![
+            255u8, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 255, 255,
+        ];
         let (bytes, mime, w, h) = encode_rgba(&rgba, 2, 2).unwrap();
         assert_eq!(mime, "image/png");
         assert_eq!((w, h), (2, 2));
@@ -763,8 +818,17 @@ mod tests {
         assert!(text.contains("MODE=\"0660\""));
         assert!(text.contains("TAG+=\"uaccess\""));
         assert!(text.contains("OPTIONS+=\"static_node=uinput\""));
-        assert!(!text.contains("0666") && !text.contains("0777"), "uinput must never be world-writable");
-        assert_eq!(text.lines().filter(|l| !l.trim().is_empty() && !l.starts_with('#')).count(), 1, "one uinput rule only");
+        assert!(
+            !text.contains("0666") && !text.contains("0777"),
+            "uinput must never be world-writable"
+        );
+        assert_eq!(
+            text.lines()
+                .filter(|l| !l.trim().is_empty() && !l.starts_with('#'))
+                .count(),
+            1,
+            "one uinput rule only"
+        );
     }
 
     #[test]
@@ -801,17 +865,29 @@ mod tests {
         };
         // Cua is a Linux-only spike; elsewhere the native engine never starts it.
         assert_eq!(native_cua_wanted(&on), cfg!(target_os = "linux"));
-        let no_flag = crate::config::AppConfig { cua_driver: false, ..on.clone() };
+        let no_flag = crate::config::AppConfig {
+            cua_driver: false,
+            ..on.clone()
+        };
         assert!(!native_cua_wanted(&no_flag));
-        let switch_off = crate::config::AppConfig { desktop_control: false, ..on.clone() };
+        let switch_off = crate::config::AppConfig {
+            desktop_control: false,
+            ..on.clone()
+        };
         assert!(!native_cua_wanted(&switch_off));
         assert_eq!(desktop_switch_note(true), "Desktop control is on.");
         assert_eq!(desktop_switch_note(false), "Desktop control is off.");
 
         let start = include_str!("../app/mod.rs").replace("\r\n", "\n");
-        assert!(!start.contains("maybe_register_on_start("), "nothing registers in Grok Build at startup");
+        assert!(
+            !start.contains("maybe_register_on_start("),
+            "nothing registers in Grok Build at startup"
+        );
         let settings = include_str!("../app/settings.rs").replace("\r\n", "\n");
-        let switch = settings.split("desktop_switch_note(on)").nth(1).expect("desktop switch");
+        let switch = settings
+            .split("desktop_switch_note(on)")
+            .nth(1)
+            .expect("desktop switch");
         assert!(switch.contains("sync_native_cua(&self.cfg)"));
     }
 
@@ -825,15 +901,23 @@ mod tests {
         fn list_monitors(&mut self) -> Result<Vec<grokhub_core::desktop_mcp::MonitorGeom>, String> {
             Ok(vec![])
         }
-        fn screenshot(&mut self, _monitor: &str) -> Result<grokhub_core::desktop_mcp::CapturedShot, String> {
+        fn screenshot(
+            &mut self,
+            _monitor: &str,
+        ) -> Result<grokhub_core::desktop_mcp::CapturedShot, String> {
             Err("no screen".into())
         }
         fn move_abs(&mut self, x: i32, y: i32) -> Result<(), String> {
             self.sent.push(format!("move {x} {y}"));
             Ok(())
         }
-        fn button(&mut self, b: grokhub_core::desktop_mcp::MouseButton, down: bool) -> Result<(), String> {
-            self.sent.push(format!("{b:?} {}", if down { "down" } else { "up" }));
+        fn button(
+            &mut self,
+            b: grokhub_core::desktop_mcp::MouseButton,
+            down: bool,
+        ) -> Result<(), String> {
+            self.sent
+                .push(format!("{b:?} {}", if down { "down" } else { "up" }));
             Ok(())
         }
         fn scroll(&mut self, dx: i32, dy: i32) -> Result<(), String> {
@@ -859,17 +943,53 @@ mod tests {
         let mut b = Hands::default();
         let got = drive_hands(&mut b, &ComputerOp::DoubleClick { x: 40, y: 7 });
         assert_eq!(got, Some(Ok("double-clicked 40,7".to_string())));
-        assert_eq!(b.sent, ["move 40 7", "Left down", "Left up", "Left down", "Left up"]);
+        assert_eq!(
+            b.sent,
+            ["move 40 7", "Left down", "Left up", "Left down", "Left up"]
+        );
 
         let mut b = Hands::default();
-        assert_eq!(drive_hands(&mut b, &ComputerOp::Key { name: "ctrl+l".into() }), Some(Ok("key ctrl+l".to_string())));
-        assert_eq!(drive_hands(&mut b, &ComputerOp::Type { text: "héllo".into() }), Some(Ok("typed 5 chars".to_string())));
-        assert_eq!(drive_hands(&mut b, &ComputerOp::Scroll { dy: 3 }), Some(Ok("scrolled 3".to_string())));
-        assert_eq!(b.sent, ["key ctrl=true Char('l')", "type héllo", "scroll 0 3"]);
+        assert_eq!(
+            drive_hands(
+                &mut b,
+                &ComputerOp::Key {
+                    name: "ctrl+l".into()
+                }
+            ),
+            Some(Ok("key ctrl+l".to_string()))
+        );
+        assert_eq!(
+            drive_hands(
+                &mut b,
+                &ComputerOp::Type {
+                    text: "héllo".into()
+                }
+            ),
+            Some(Ok("typed 5 chars".to_string()))
+        );
+        assert_eq!(
+            drive_hands(&mut b, &ComputerOp::Scroll { dy: 3 }),
+            Some(Ok("scrolled 3".to_string()))
+        );
+        assert_eq!(
+            b.sent,
+            ["key ctrl=true Char('l')", "type héllo", "scroll 0 3"]
+        );
 
         let mut b = Hands::default();
-        assert!(drive_hands(&mut b, &ComputerOp::Key { name: "nosuchkey".into() }).unwrap().is_err());
-        assert_eq!(drive_hands(&mut b, &ComputerOp::Cursor), None, "reads stay on the shared path");
+        assert!(drive_hands(
+            &mut b,
+            &ComputerOp::Key {
+                name: "nosuchkey".into()
+            }
+        )
+        .unwrap()
+        .is_err());
+        assert_eq!(
+            drive_hands(&mut b, &ComputerOp::Cursor),
+            None,
+            "reads stay on the shared path"
+        );
         assert!(b.sent.is_empty());
     }
 }

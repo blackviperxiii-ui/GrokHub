@@ -57,7 +57,10 @@ fn span_files(config_dir: &Path) -> Vec<String> {
                 return None;
             }
             let stem = path.file_stem()?.to_str()?.to_string();
-            let at = e.metadata().and_then(|m| m.modified()).unwrap_or(std::time::UNIX_EPOCH);
+            let at = e
+                .metadata()
+                .and_then(|m| m.modified())
+                .unwrap_or(std::time::UNIX_EPOCH);
             Some((at, stem))
         })
         .collect();
@@ -68,7 +71,12 @@ fn span_files(config_dir: &Path) -> Vec<String> {
 /// Steps whose chat title, tool, decision or claim hold every word of `q`.
 /// Only chats in `titles` (id → title) are searched, so scratch and deleted
 /// chats stay out. Reads files, so call it off the UI thread.
-pub fn search_spans(config_dir: &Path, q: &str, titles: &HashMap<String, String>, held: &[String]) -> SpanSearch {
+pub fn search_spans(
+    config_dir: &Path,
+    q: &str,
+    titles: &HashMap<String, String>,
+    held: &[String],
+) -> SpanSearch {
     let words: Vec<String> = q.split_whitespace().map(|w| w.to_lowercase()).collect();
     let mut out = SpanSearch::default();
     if words.is_empty() {
@@ -89,16 +97,23 @@ pub fn search_spans(config_dir: &Path, q: &str, titles: &HashMap<String, String>
             let Some(title) = titles.get(&span.chat_id) else {
                 continue;
             };
-            let claim = grokhub_core::redact_held_secrets(&grokhub_core::redact_secrets(&span.claim), held);
+            let claim =
+                grokhub_core::redact_held_secrets(&grokhub_core::redact_secrets(&span.claim), held);
             let claim: String = claim.chars().take(ROW_CLAIM_CAP).collect();
             let hay = format!("{title} {} {} {claim}", span.tool, span.decision).to_lowercase();
             if !words.iter().all(|w| hay.contains(w.as_str())) {
                 continue;
             }
-            let line = format!("{title} · turn {} · {} · {}", span.turn, span.tool, span.decision);
+            let line = format!(
+                "{title} · turn {} · {} · {}",
+                span.turn, span.tool, span.decision
+            );
             // Two chats can share a title ("New chat"): one row per chat.
             if out.hits.iter().any(|h| {
-                h.chat_id == span.chat_id && h.turn == span.turn && h.tool == span.tool && h.decision == span.decision
+                h.chat_id == span.chat_id
+                    && h.turn == span.turn
+                    && h.tool == span.tool
+                    && h.decision == span.decision
             }) {
                 continue;
             }
@@ -124,35 +139,79 @@ mod tests {
     use crate::harness::span::{append_span, span_path, Span};
 
     fn step(chat: &str, ts: u64, turn: u32, tool: &str, decision: &str, claim: &str) -> Span {
-        let mut s = Span::soft_allow(chat, tool, "{}", "ok", claim, AccessMode::Supervised, "grok_build").in_turn(chat, turn);
+        let mut s = Span::soft_allow(
+            chat,
+            tool,
+            "{}",
+            "ok",
+            claim,
+            AccessMode::Supervised,
+            "grok_build",
+        )
+        .in_turn(chat, turn);
         s.ts_ms = ts;
         s.decision = decision.into();
         s
     }
 
     fn titles(pairs: &[(&str, &str)]) -> HashMap<String, String> {
-        pairs.iter().map(|(a, b)| (a.to_string(), b.to_string())).collect()
+        pairs
+            .iter()
+            .map(|(a, b)| (a.to_string(), b.to_string()))
+            .collect()
     }
 
     #[test]
     fn click_ok_finds_the_step_row_newest_first_and_skips_unknown_chats() {
         let dir = crate::harness::test_dir("span-search");
         append_span(&dir, &step("chat-a", 1, 2, "click", "allow", "click OK")).unwrap();
-        append_span(&dir, &step("chat-a", 2, 2, "type", "allow", "grokhub-desktop type")).unwrap();
-        append_span(&dir, &step("chat-a", 3, 3, "click", "deny", "click OK on the pay sheet sk-abcdefghijklmnopqrstuv")).unwrap();
-        append_span(&dir, &Span::reply("chat-a", "I clicked OK.", &[]).in_turn("chat-a", 3)).unwrap();
+        append_span(
+            &dir,
+            &step("chat-a", 2, 2, "type", "allow", "grokhub-desktop type"),
+        )
+        .unwrap();
+        append_span(
+            &dir,
+            &step(
+                "chat-a",
+                3,
+                3,
+                "click",
+                "deny",
+                "click OK on the pay sheet sk-abcdefghijklmnopqrstuv",
+            ),
+        )
+        .unwrap();
+        append_span(
+            &dir,
+            &Span::reply("chat-a", "I clicked OK.", &[]).in_turn("chat-a", 3),
+        )
+        .unwrap();
         append_span(&dir, &step("scratch-1", 4, 1, "click", "allow", "click OK")).unwrap();
         let names = titles(&[("chat-a", "Harbor")]);
 
         let got = search_spans(&dir, "click OK", &names, &[]);
         let lines: Vec<&str> = got.hits.iter().map(|h| h.line.as_str()).collect();
-        assert_eq!(lines, vec!["Harbor · turn 3 · click · deny", "Harbor · turn 2 · click · allow"]);
+        assert_eq!(
+            lines,
+            vec![
+                "Harbor · turn 3 · click · deny",
+                "Harbor · turn 2 · click · allow"
+            ]
+        );
         assert_eq!(got.hits[1].target(), "step:2:chat-a");
         assert_eq!((got.files_read, got.lines_read), (2, 5));
         assert_eq!(search_spans(&dir, "harbor deny", &names, &[]).hits.len(), 1);
-        assert!(search_spans(&dir, "sk-abcdefghijklmnopqrstuv", &names, &[]).hits.is_empty(), "a secret in a claim is not searchable");
+        assert!(
+            search_spans(&dir, "sk-abcdefghijklmnopqrstuv", &names, &[])
+                .hits
+                .is_empty(),
+            "a secret in a claim is not searchable"
+        );
         assert!(search_spans(&dir, "  ", &names, &[]).hits.is_empty());
-        assert!(search_spans(&dir, "nothing like this", &names, &[]).hits.is_empty());
+        assert!(search_spans(&dir, "nothing like this", &names, &[])
+            .hits
+            .is_empty());
 
         // A bad line does not hide the rest of the file.
         let path = span_path(&dir, "chat-a");
@@ -172,7 +231,10 @@ mod tests {
         let got = search_spans(&dir, "click OK", &names, &[]);
         let mut targets: Vec<String> = got.hits.iter().map(|h| h.target()).collect();
         targets.sort();
-        assert_eq!(targets, vec!["step:1:chat-a".to_string(), "step:1:chat-b".to_string()]);
+        assert_eq!(
+            targets,
+            vec!["step:1:chat-a".to_string(), "step:1:chat-b".to_string()]
+        );
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -185,11 +247,14 @@ mod tests {
         let base = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000);
         for i in 0..300u32 {
             let chat = format!("chat-{i:03}");
-            let line = serde_json::to_string(&step(&chat, 1, 1, "scroll", "allow", "scroll the list")).unwrap();
+            let line =
+                serde_json::to_string(&step(&chat, 1, 1, "scroll", "allow", "scroll the list"))
+                    .unwrap();
             let path = spans.join(format!("{chat}.jsonl"));
             std::fs::write(&path, format!("{line}\n").repeat(150)).unwrap();
             let f = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
-            f.set_modified(base + std::time::Duration::from_secs(u64::from(i))).unwrap();
+            f.set_modified(base + std::time::Duration::from_secs(u64::from(i)))
+                .unwrap();
             names.insert(chat.clone(), chat);
         }
         let got = search_spans(&dir, "scroll", &names, &[]);
@@ -206,11 +271,16 @@ mod tests {
         // One line per file: the file cap stops it at 200 of 300.
         for i in 0..300u32 {
             let chat = format!("chat-{i:03}");
-            let line = serde_json::to_string(&step(&chat, 1, 1, "scroll", "allow", "scroll the list")).unwrap();
+            let line =
+                serde_json::to_string(&step(&chat, 1, 1, "scroll", "allow", "scroll the list"))
+                    .unwrap();
             std::fs::write(spans.join(format!("{chat}.jsonl")), format!("{line}\n")).unwrap();
         }
         let few = search_spans(&dir, "zzz", &names, &[]);
-        assert_eq!((few.files_read, few.lines_read), (SPAN_SEARCH_FILES, SPAN_SEARCH_FILES));
+        assert_eq!(
+            (few.files_read, few.lines_read),
+            (SPAN_SEARCH_FILES, SPAN_SEARCH_FILES)
+        );
         let _ = std::fs::remove_dir_all(dir);
     }
 }

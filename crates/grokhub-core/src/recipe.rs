@@ -8,15 +8,37 @@ pub struct ScreenSize {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ComputerOp {
-    Click { x: i32, y: i32 },
-    DoubleClick { x: i32, y: i32 },
-    Move { x: i32, y: i32 },
-    Type { text: String },
-    Key { name: String },
-    Scroll { dy: i32 },
-    Act { name: String },
-    WaitFor { title: Option<String> },
-    Tab { action: TabAction, query: String },
+    Click {
+        x: i32,
+        y: i32,
+    },
+    DoubleClick {
+        x: i32,
+        y: i32,
+    },
+    Move {
+        x: i32,
+        y: i32,
+    },
+    Type {
+        text: String,
+    },
+    Key {
+        name: String,
+    },
+    Scroll {
+        dy: i32,
+    },
+    Act {
+        name: String,
+    },
+    WaitFor {
+        title: Option<String>,
+    },
+    Tab {
+        action: TabAction,
+        query: String,
+    },
     Cursor,
     MoveMonitor {
         name: String,
@@ -47,7 +69,11 @@ pub enum HandsBackend {
 }
 
 /// Wayland prefers ydotool. X11 and missing-ydotool fall back to xdotool.
-pub fn pick_hands_backend(wayland: bool, has_ydotool: bool, has_xdotool: bool) -> Option<HandsBackend> {
+pub fn pick_hands_backend(
+    wayland: bool,
+    has_ydotool: bool,
+    has_xdotool: bool,
+) -> Option<HandsBackend> {
     if wayland && has_ydotool {
         Some(HandsBackend::Ydotool)
     } else if has_xdotool {
@@ -86,11 +112,7 @@ pub fn bin_on_path(name: &str, path_env: &str, extra_dirs: &[&str]) -> bool {
 }
 
 pub fn default_bin_extra_dirs(home: &str) -> Vec<String> {
-    let mut dirs = vec![
-        "/usr/bin".into(),
-        "/usr/local/bin".into(),
-        "/bin".into(),
-    ];
+    let mut dirs = vec!["/usr/bin".into(), "/usr/local/bin".into(), "/bin".into()];
     let home = home.trim();
     if !home.is_empty() {
         dirs.push(format!("{home}/.local/bin"));
@@ -374,11 +396,9 @@ fn xdotool_steps(op: &ComputerOp) -> Vec<Vec<String>> {
             "--".into(),
             text.clone(),
         ]],
-        ComputerOp::Key { name } => vec![vec![
-            "key".into(),
-            "--clearmodifiers".into(),
-            name.clone(),
-        ]],
+        ComputerOp::Key { name } => {
+            vec![vec!["key".into(), "--clearmodifiers".into(), name.clone()]]
+        }
         ComputerOp::Scroll { dy } => {
             if *dy == 0 {
                 vec![]
@@ -404,15 +424,30 @@ fn xdotool_steps(op: &ComputerOp) -> Vec<Vec<String>> {
 fn ydotool_steps(op: &ComputerOp) -> Vec<Vec<String>> {
     match op {
         ComputerOp::Click { x, y } => vec![
-            vec!["mousemove".into(), "--absolute".into(), x.to_string(), y.to_string()],
+            vec![
+                "mousemove".into(),
+                "--absolute".into(),
+                x.to_string(),
+                y.to_string(),
+            ],
             vec!["click".into(), "0xC0".into()],
         ],
         ComputerOp::DoubleClick { x, y } => vec![
-            vec!["mousemove".into(), "--absolute".into(), x.to_string(), y.to_string()],
+            vec![
+                "mousemove".into(),
+                "--absolute".into(),
+                x.to_string(),
+                y.to_string(),
+            ],
             vec!["click".into(), "--repeat".into(), "2".into(), "0xC0".into()],
         ],
         ComputerOp::Move { x, y } => {
-            vec![vec!["mousemove".into(), "--absolute".into(), x.to_string(), y.to_string()]]
+            vec![vec![
+                "mousemove".into(),
+                "--absolute".into(),
+                x.to_string(),
+                y.to_string(),
+            ]]
         }
         ComputerOp::Type { text } => vec![vec!["type".into(), "--".into(), text.clone()]],
         ComputerOp::Key { name } => match ydotool_key_tokens(name) {
@@ -422,7 +457,7 @@ fn ydotool_steps(op: &ComputerOp) -> Vec<Vec<String>> {
                 vec![step]
             }
             _ => vec![],
-        }
+        },
         ComputerOp::Scroll { dy } => {
             if *dy == 0 {
                 vec![]
@@ -448,11 +483,7 @@ pub fn relative_move_steps(backend: HandsBackend, dx: i32, dy: i32) -> Vec<Vec<S
         return vec![];
     }
     match backend {
-        HandsBackend::Ydotool => vec![vec![
-            "mousemove".into(),
-            dx.to_string(),
-            dy.to_string(),
-        ]],
+        HandsBackend::Ydotool => vec![vec!["mousemove".into(), dx.to_string(), dy.to_string()]],
         HandsBackend::Xdotool => vec![vec![
             "mousemove_relative".into(),
             "--".into(),
@@ -915,7 +946,9 @@ fn label_for_op(op: &ComputerOp) -> String {
 /// Human Hands chip from a COMPUTER_RESULT / COMPUTER_CMD receipt. Not a dump.
 pub fn hands_step_label(receipt: &str) -> Option<String> {
     let t = receipt.trim_start();
-    if t.starts_with("HOST_RESULT") || t.starts_with("CONNECTOR_RESULT") || t.starts_with("HOST_DIFF")
+    if t.starts_with("HOST_RESULT")
+        || t.starts_with("CONNECTOR_RESULT")
+        || t.starts_with("HOST_DIFF")
     {
         return None;
     }
@@ -924,8 +957,8 @@ pub fn hands_step_label(receipt: &str) -> Option<String> {
     }
     for line in receipt.lines() {
         let line = line.trim().trim_start_matches('$').trim();
-        if let Some(op) = parse_computer_op(line)
-            .or_else(|| parse_computer_op(&format!("COMPUTER_CMD: {line}")))
+        if let Some(op) =
+            parse_computer_op(line).or_else(|| parse_computer_op(&format!("COMPUTER_CMD: {line}")))
         {
             return Some(label_for_op(&op));
         }
@@ -985,11 +1018,19 @@ mod tests {
         )
         .unwrap();
         assert_eq!(recipe.screen, Some(ScreenSize { w: 1920, h: 1080 }));
-        assert!(needs_reshoot(recipe.screen, Some(ScreenSize { w: 1280, h: 720 })));
-        assert!(!needs_reshoot(recipe.screen, Some(ScreenSize { w: 1920, h: 1080 })));
+        assert!(needs_reshoot(
+            recipe.screen,
+            Some(ScreenSize { w: 1280, h: 720 })
+        ));
+        assert!(!needs_reshoot(
+            recipe.screen,
+            Some(ScreenSize { w: 1920, h: 1080 })
+        ));
         let replay = replay_ops(&recipe, Some(ScreenSize { w: 800, h: 600 }));
         assert_eq!(replay[0], ReplayOp::Reshoot);
-        assert!(!replay.iter().any(|r| matches!(r, ReplayOp::Op(ComputerOp::Click { .. }))));
+        assert!(!replay
+            .iter()
+            .any(|r| matches!(r, ReplayOp::Op(ComputerOp::Click { .. }))));
         assert!(replay
             .iter()
             .any(|r| matches!(r, ReplayOp::Op(ComputerOp::Act { name }) if name == "Refresh")));
@@ -1034,14 +1075,13 @@ mod tests {
             text: "hi there".into(),
         }) {
             ComputerDrive::Xdotool(steps) => {
-                assert_eq!(
-                    steps[0],
-                    vec!["type", "--clearmodifiers", "--", "hi there"]
-                );
+                assert_eq!(steps[0], vec!["type", "--clearmodifiers", "--", "hi there"]);
             }
             other => panic!("{other:?}"),
         }
-        match computer_drive(&ComputerOp::Key { name: "ctrl+s".into() }) {
+        match computer_drive(&ComputerOp::Key {
+            name: "ctrl+s".into(),
+        }) {
             ComputerDrive::Xdotool(steps) => {
                 assert_eq!(steps[0], vec!["key", "--clearmodifiers", "ctrl+s"]);
             }
@@ -1134,7 +1174,9 @@ mod tests {
         assert!(!user_asks_gui_help("show me how rust ownership works"));
         assert!(user_asks_guide_only("just tell me don't click"));
         assert!(user_asks_guide_only("walk me through enabling bluetooth"));
-        assert!(!user_asks_guide_only("walk me through this and do it for me"));
+        assert!(!user_asks_guide_only(
+            "walk me through this and do it for me"
+        ));
         assert!(!user_asks_guide_only("click the Save button"));
         assert_eq!(see_drive_attach("close that firefox tab"), (true, true));
         assert_eq!(
@@ -1184,7 +1226,9 @@ mod tests {
         }
         match computer_drive_for(
             HandsBackend::Ydotool,
-            &ComputerOp::Key { name: "ctrl+s".into() },
+            &ComputerOp::Key {
+                name: "ctrl+s".into(),
+            },
         ) {
             ComputerDrive::Ydotool(steps) => {
                 assert_eq!(steps[0], vec!["key", "29:1", "31:1", "31:0", "29:0"]);
@@ -1210,12 +1254,16 @@ mod tests {
         }
         match computer_drive_for(
             HandsBackend::Ydotool,
-            &ComputerOp::Key { name: "Alt+F4".into() },
+            &ComputerOp::Key {
+                name: "Alt+F4".into(),
+            },
         ) {
             ComputerDrive::Ydotool(steps) => {
                 assert_eq!(steps[0], vec!["key", "56:1", "62:1", "62:0", "56:0"]);
                 assert!(empty_hands_steps_error(
-                    &ComputerOp::Key { name: "Alt+F4".into() },
+                    &ComputerOp::Key {
+                        name: "Alt+F4".into()
+                    },
                     &steps
                 )
                 .is_none());
@@ -1321,16 +1369,16 @@ mod tests {
             &ComputerOp::Click { x: 10, y: 20 },
             &["GrokHub", "Terminal"]
         ));
-        let only_lock = crate::windshield::lock_check_titles(&[
-            "0x02 0 0 0 1920 1080 Lock screen",
-        ]);
+        let only_lock = crate::windshield::lock_check_titles(&["0x02 0 0 0 1920 1080 Lock screen"]);
         let only_lock_refs: Vec<&str> = only_lock.iter().map(|s| s.as_str()).collect();
         assert!(
             hands_blocked_by_lock(&ComputerOp::Click { x: 10, y: 20 }, &only_lock_refs),
             "a locker that was filtered from click targets must still block hands"
         );
         assert!(pointer_op_blocked_on_lock(&ComputerOp::Scroll { dy: 1 }));
-        assert!(!pointer_op_blocked_on_lock(&ComputerOp::WaitFor { title: None }));
+        assert!(!pointer_op_blocked_on_lock(&ComputerOp::WaitFor {
+            title: None
+        }));
     }
 
     #[test]
@@ -1451,10 +1499,7 @@ mod tests {
             x: None,
             y: None
         }));
-        assert_eq!(
-            empty_hands_steps_error(&ComputerOp::Cursor, &[]),
-            None
-        );
+        assert_eq!(empty_hands_steps_error(&ComputerOp::Cursor, &[]), None);
         let proto = hands_protocol();
         assert!(proto.contains("COMPUTER_CMD: cursor"), "{proto}");
         assert!(proto.contains("move monitor"), "{proto}");

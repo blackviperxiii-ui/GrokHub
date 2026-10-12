@@ -50,7 +50,14 @@ impl NoRouteWait {
     /// A new wait. `attempts` carries over when the same step paused again
     /// right after a resume, so a route that keeps failing backs off too.
     pub fn new(class: &str, model: &str, step: &str, now_ms: u64, attempts: u32) -> Self {
-        Self { class: class.into(), model: model.into(), step: step.into(), since_ms: now_ms, attempts, next_ms: now_ms + retry_delay_ms(attempts) }
+        Self {
+            class: class.into(),
+            model: model.into(),
+            step: step.into(),
+            since_ms: now_ms,
+            attempts,
+            next_ms: now_ms + retry_delay_ms(attempts),
+        }
     }
 
     pub fn due(&self, now_ms: u64) -> bool {
@@ -71,9 +78,15 @@ impl NoRouteWait {
 
 /// The paused step in plain words: your ask's first line, else the class's own words.
 pub fn step_name(class: &str, ask: &str) -> String {
-    let line = ask.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or("");
+    let line = ask
+        .lines()
+        .map(str::trim)
+        .find(|l| !l.is_empty())
+        .unwrap_or("");
     if line.is_empty() {
-        return policy::class_row(class).map_or(class, |r| r.plain).to_string();
+        return policy::class_row(class)
+            .map_or(class, |r| r.plain)
+            .to_string();
     }
     if line.chars().count() <= STEP_CHARS {
         return line.to_string();
@@ -88,11 +101,20 @@ pub fn waiting_models(reg: &Registry, model: &str) -> Vec<String> {
     let model = model.trim();
     // A resting model is still in your plan: judge it as if it were answering.
     let mut view = reg.clone();
-    for r in view.models.values_mut().filter(|r| r.state == ModelState::Quarantined) {
+    for r in view
+        .models
+        .values_mut()
+        .filter(|r| r.state == ModelState::Quarantined)
+    {
         r.state = ModelState::Live;
     }
     let cred = view.entitlement.credential;
-    let in_plan: Vec<&str> = view.models.keys().filter(|id| probe_class(&view, cred, id) == CostClass::Included).map(String::as_str).collect();
+    let in_plan: Vec<&str> = view
+        .models
+        .keys()
+        .filter(|id| probe_class(&view, cred, id) == CostClass::Included)
+        .map(String::as_str)
+        .collect();
     let mut out = Vec::new();
     if !model.is_empty() {
         out.push(model.to_string());
@@ -104,7 +126,12 @@ pub fn waiting_models(reg: &Registry, model: &str) -> Vec<String> {
 
 /// A model in your plan that can take an everyday step now: the one asked
 /// for, else who stands in for it, else any. `None` while nothing answers.
-pub fn model_back(reg: &Registry, profiles: &BTreeMap<String, ModelProfile>, model: &str, now_ms: u64) -> Option<String> {
+pub fn model_back(
+    reg: &Registry,
+    profiles: &BTreeMap<String, ModelProfile>,
+    model: &str,
+    now_ms: u64,
+) -> Option<String> {
     let ids = heal::candidates(reg, profiles, now_ms);
     if let Some(id) = ids.iter().find(|id| **id == model.trim()) {
         return Some(id.to_string());
@@ -115,7 +142,12 @@ pub fn model_back(reg: &Registry, profiles: &BTreeMap<String, ModelProfile>, mod
 /// One check: if a model is back already, name it; otherwise ping the resting
 /// models the wait is on (`ping` sends one small call) until one answers.
 /// A model that answers leaves its rest and routes again.
-pub fn recheck(config_dir: &Path, model: &str, now_ms: u64, ping: &mut dyn FnMut(&ModelMeta) -> bool) -> Option<String> {
+pub fn recheck(
+    config_dir: &Path,
+    model: &str,
+    now_ms: u64,
+    ping: &mut dyn FnMut(&ModelMeta) -> bool,
+) -> Option<String> {
     let mut reg = load_registry(config_dir);
     let profiles = read_profiles(config_dir);
     if let Some(back) = model_back(&reg, &profiles, model, now_ms) {
@@ -123,7 +155,9 @@ pub fn recheck(config_dir: &Path, model: &str, now_ms: u64, ping: &mut dyn FnMut
     }
     let mut changed = false;
     for id in waiting_models(&reg, model) {
-        let Some(rec) = reg.get(&id).filter(|r| r.state == ModelState::Quarantined) else { continue };
+        let Some(rec) = reg.get(&id).filter(|r| r.state == ModelState::Quarantined) else {
+            continue;
+        };
         let meta = rec.meta.clone();
         reg.mark_half_open(&id);
         let ok = ping(&meta);
@@ -177,7 +211,19 @@ mod tests {
 
     fn down(reg: &mut Registry, ids: &[&str]) {
         for id in ids {
-            let obs: Vec<_> = (0..3).map(|i| grokhub_core::model_registry::Observation { model: id.to_string(), ts_ms: NOW + i, status: CallStatus::Error, latency_ms: 700, served_model: None, endpoint_ok: true, reasoning_tokens: 0, cost_ticks: 0, http: 0 }).collect();
+            let obs: Vec<_> = (0..3)
+                .map(|i| grokhub_core::model_registry::Observation {
+                    model: id.to_string(),
+                    ts_ms: NOW + i,
+                    status: CallStatus::Error,
+                    latency_ms: 700,
+                    served_model: None,
+                    endpoint_ok: true,
+                    reasoning_tokens: 0,
+                    cost_ticks: 0,
+                    http: 0,
+                })
+                .collect();
             reg.fold(&obs);
         }
     }
@@ -185,7 +231,10 @@ mod tests {
     #[test]
     fn the_backoff_climbs_to_five_minutes_and_never_stops() {
         let delays: Vec<u64> = (0..8).map(retry_delay_ms).collect();
-        assert_eq!(delays, vec![15_000, 30_000, 60_000, 120_000, 300_000, 300_000, 300_000, 300_000]);
+        assert_eq!(
+            delays,
+            vec![15_000, 30_000, 60_000, 120_000, 300_000, 300_000, 300_000, 300_000]
+        );
         assert_eq!(retry_delay_ms(u32::MAX), 300_000);
         let mut w = NoRouteWait::new("chat:default", "grok-4.7", "Summarize inbox", NOW, 0);
         assert_eq!(w.next_ms, NOW + 15_000);
@@ -195,10 +244,18 @@ mod tests {
             at = w.next_ms;
             w.missed(at);
         }
-        assert_eq!((w.attempts, w.next_ms - at), (50, 300_000), "fifty misses later it still checks every 5 minutes");
+        assert_eq!(
+            (w.attempts, w.next_ms - at),
+            (50, 300_000),
+            "fifty misses later it still checks every 5 minutes"
+        );
         w.retry_now(at + 1);
         assert!(w.due(at + 1), "Retry now checks at once");
-        assert_eq!(NoRouteWait::new("chat:default", "grok-4.7", "x", NOW, 3).next_ms, NOW + 120_000, "a wait that paused again keeps its place");
+        assert_eq!(
+            NoRouteWait::new("chat:default", "grok-4.7", "x", NOW, 3).next_ms,
+            NOW + 120_000,
+            "a wait that paused again keeps its place"
+        );
     }
 
     #[test]
@@ -207,14 +264,32 @@ mod tests {
         let models = waiting_models(&reg, "grok-4.7");
         assert_eq!(models, vec!["grok-4.7", "grok-4.6", "grok-4.5"]);
         let (title, text) = waiting_card(&models, "12:14 AM", "Summarize inbox");
-        assert_eq!(title, "Waiting for a model: grok-4.7, grok-4.6 and grok-4.5");
+        assert_eq!(
+            title,
+            "Waiting for a model: grok-4.7, grok-4.6 and grok-4.5"
+        );
         assert_eq!(text, "grok-4.7, grok-4.6 and grok-4.5 aren't answering since 12:14 AM; retrying. “Summarize inbox” picks up on its own once one answers.");
         assert_eq!(waiting_card(&["grok-4.7".into()], "9:05 PM", "dream time").1, "grok-4.7 isn't answering since 9:05 PM; retrying. “dream time” picks up on its own once one answers.");
-        assert_eq!(back_note("grok-4.6", "Summarize inbox", true), "Back on grok-4.6; resumed: Summarize inbox");
-        assert_eq!(back_note("grok-4.6", "dream time", false), "Back on grok-4.6 for dream time");
-        assert_eq!(step_name("chat:default", "\n  Summarize inbox  \nthen file it"), "Summarize inbox");
-        assert_eq!(step_name("chat:default", &"word ".repeat(20)), "word word word word word word word word word wo…");
-        assert_eq!(step_name("background:dream", ""), policy::class_row("background:dream").unwrap().plain);
+        assert_eq!(
+            back_note("grok-4.6", "Summarize inbox", true),
+            "Back on grok-4.6; resumed: Summarize inbox"
+        );
+        assert_eq!(
+            back_note("grok-4.6", "dream time", false),
+            "Back on grok-4.6 for dream time"
+        );
+        assert_eq!(
+            step_name("chat:default", "\n  Summarize inbox  \nthen file it"),
+            "Summarize inbox"
+        );
+        assert_eq!(
+            step_name("chat:default", &"word ".repeat(20)),
+            "word word word word word word word word word wo…"
+        );
+        assert_eq!(
+            step_name("background:dream", ""),
+            policy::class_row("background:dream").unwrap().plain
+        );
     }
 
     #[test]
@@ -226,13 +301,20 @@ mod tests {
         }
         down(&mut reg, &IDS);
         save_registry(&dir, &reg).unwrap();
-        assert_eq!(model_back(&reg, &profiles, "grok-4.7", NOW + 10), None, "all down: nothing to resume on");
+        assert_eq!(
+            model_back(&reg, &profiles, "grok-4.7", NOW + 10),
+            None,
+            "all down: nothing to resume on"
+        );
         // Nothing answers: each resting model in the family gets one ping, and the wait goes on.
         let mut pinged = Vec::new();
-        assert_eq!(recheck(&dir, "grok-4.7", NOW + 10, &mut |m| {
-            pinged.push(m.id.clone());
-            false
-        }), None);
+        assert_eq!(
+            recheck(&dir, "grok-4.7", NOW + 10, &mut |m| {
+                pinged.push(m.id.clone());
+                false
+            }),
+            None
+        );
         assert_eq!(pinged, vec!["grok-4.7", "grok-4.6", "grok-4.5"]);
         // grok-4.6 answers again: the check stops there and the wait ends on it.
         let mut pinged = Vec::new();
@@ -243,13 +325,23 @@ mod tests {
         assert_eq!(back.as_deref(), Some("grok-4.6"));
         assert_eq!(pinged, vec!["grok-4.7", "grok-4.6"]);
         let saved = load_registry(&dir);
-        assert_eq!((saved.get("grok-4.6").unwrap().state, saved.get("grok-4.7").unwrap().state), (ModelState::Live, ModelState::Quarantined));
+        assert_eq!(
+            (
+                saved.get("grok-4.6").unwrap().state,
+                saved.get("grok-4.7").unwrap().state
+            ),
+            (ModelState::Live, ModelState::Quarantined)
+        );
         // Next check: a model is back already, so nothing is pinged.
         let mut pings = 0;
-        assert_eq!(recheck(&dir, "grok-4.7", NOW + 30, &mut |_| {
-            pings += 1;
-            true
-        }).as_deref(), Some("grok-4.6"));
+        assert_eq!(
+            recheck(&dir, "grok-4.7", NOW + 30, &mut |_| {
+                pings += 1;
+                true
+            })
+            .as_deref(),
+            Some("grok-4.6")
+        );
         assert_eq!(pings, 0);
         let _ = std::fs::remove_dir_all(dir);
     }

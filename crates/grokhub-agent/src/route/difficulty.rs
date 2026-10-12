@@ -11,7 +11,17 @@ pub struct DifficultyInput<'a> {
     pub ctx_tokens: u64,
 }
 
-const HARD_WORDS: &[&str] = &["debug", "refactor", "design", "why", "prove", "architecture", "migrate", "race", "deadlock"];
+const HARD_WORDS: &[&str] = &[
+    "debug",
+    "refactor",
+    "design",
+    "why",
+    "prove",
+    "architecture",
+    "migrate",
+    "race",
+    "deadlock",
+];
 const STEP_WORDS: &[&str] = &["then", "after that", "step", "first", "finally"];
 
 /// Rule-based difficulty, rounded to hundredths so the same input always gives the same `d`.
@@ -28,13 +38,20 @@ pub fn difficulty(input: &DifficultyInput<'_>) -> f64 {
     }
     let paths = t
         .split_whitespace()
-        .filter(|w| (w.contains('/') || w.contains('\\')) && w.contains('.') || w.ends_with(".rs") || w.ends_with(".py"))
+        .filter(|w| {
+            (w.contains('/') || w.contains('\\')) && w.contains('.')
+                || w.ends_with(".rs")
+                || w.ends_with(".py")
+        })
         .count();
     d += 0.05 * paths.min(4) as f64;
     if t.contains("```") {
         d += 0.1;
     }
-    let hard = HARD_WORDS.iter().filter(|w| t.split(|c: char| !c.is_alphanumeric()).any(|x| x == **w)).count();
+    let hard = HARD_WORDS
+        .iter()
+        .filter(|w| t.split(|c: char| !c.is_alphanumeric()).any(|x| x == **w))
+        .count();
     d += 0.15 * hard.min(2) as f64;
     if STEP_WORDS.iter().filter(|w| t.contains(**w)).count() >= 2 {
         d += 0.1;
@@ -51,8 +68,14 @@ pub fn difficulty(input: &DifficultyInput<'_>) -> f64 {
 
 /// R3a: the optional local difficulty estimator. With the local model off (or
 /// no runtime, or a bad answer) this is [`difficulty`], unchanged.
-pub fn estimate(input: &DifficultyInput<'_>, local: Option<&dyn super::local::LocalRuntime>) -> f64 {
-    let model = local.filter(|_| super::local::enabled()).and_then(|rt| rt.difficulty(input.text).ok()).and_then(|v| v.get("d").and_then(serde_json::Value::as_f64));
+pub fn estimate(
+    input: &DifficultyInput<'_>,
+    local: Option<&dyn super::local::LocalRuntime>,
+) -> f64 {
+    let model = local
+        .filter(|_| super::local::enabled())
+        .and_then(|rt| rt.difficulty(input.text).ok())
+        .and_then(|v| v.get("d").and_then(serde_json::Value::as_f64));
     match model {
         Some(d) if d.is_finite() => (d.clamp(0.0, 1.0) * 100.0).round() / 100.0,
         _ => difficulty(input),
@@ -65,7 +88,13 @@ mod tests {
 
     #[test]
     fn routine_is_low_and_hard_work_is_high_and_repeatable() {
-        assert_eq!(difficulty(&DifficultyInput { text: "hi there", ..Default::default() }), 0.0);
+        assert_eq!(
+            difficulty(&DifficultyInput {
+                text: "hi there",
+                ..Default::default()
+            }),
+            0.0
+        );
         let hard = DifficultyInput {
             text: "Debug why crates/a/src/lib.rs deadlocks, then refactor it. First read it, finally prove the fix. ```rust\nfn x(){}\n```",
             planned_tools: 3,
@@ -75,6 +104,12 @@ mod tests {
         let d = difficulty(&hard);
         assert_eq!(d, 1.0);
         assert_eq!(difficulty(&hard), d);
-        assert_eq!(difficulty(&DifficultyInput { text: "why is the sky blue", ..Default::default() }), 0.15);
+        assert_eq!(
+            difficulty(&DifficultyInput {
+                text: "why is the sky blue",
+                ..Default::default()
+            }),
+            0.15
+        );
     }
 }

@@ -569,8 +569,14 @@ mod tests {
             PromptProfile::Chat,
             PromptNeed::FULL,
         );
-        assert!(with_a.starts_with(&base), "volatile A must only extend the stable prefix");
-        assert!(with_b.starts_with(&base), "volatile B must only extend the stable prefix");
+        assert!(
+            with_a.starts_with(&base),
+            "volatile A must only extend the stable prefix"
+        );
+        assert!(
+            with_b.starts_with(&base),
+            "volatile B must only extend the stable prefix"
+        );
         assert!(with_a.ends_with("VOLATILE_A"));
         assert!(with_b.ends_with("VOLATILE_B"));
         assert_ne!(with_a, with_b);
@@ -650,7 +656,10 @@ mod tests {
         let chat = system_prompt_with(PromptProfile::Chat, rules, "", &dir, PromptNeed::FULL);
         let background =
             system_prompt_with(PromptProfile::Background, rules, "", &dir, PromptNeed::NONE);
-        assert!(chat.contains("<skills>"), "fixture must load skills into Chat");
+        assert!(
+            chat.contains("<skills>"),
+            "fixture must load skills into Chat"
+        );
         assert!(
             !background.contains("<skills>"),
             "Background must drop skills by default: {}",
@@ -675,13 +684,8 @@ mod tests {
     fn job_declaring_skills_still_gets_them() {
         let dir = fixture_workspace("need-skills");
         let rules = "Cabin rule line.";
-        let plain = system_prompt_with(
-            PromptProfile::Background,
-            rules,
-            "",
-            &dir,
-            PromptNeed::NONE,
-        );
+        let plain =
+            system_prompt_with(PromptProfile::Background, rules, "", &dir, PromptNeed::NONE);
         assert!(!plain.contains("<skills>"), "{plain}");
         let need = prompt_need_from_job("Run the weekly report.\nNEED_SKILLS\n");
         assert_eq!(need, PromptNeed::SKILLS);
@@ -703,10 +707,7 @@ mod tests {
     #[test]
     fn prompt_need_from_job_parses_tokens() {
         assert_eq!(prompt_need_from_job("plain task"), PromptNeed::NONE);
-        assert_eq!(
-            prompt_need_from_job("NEED_SKILLS"),
-            PromptNeed::SKILLS
-        );
+        assert_eq!(prompt_need_from_job("NEED_SKILLS"), PromptNeed::SKILLS);
         assert_eq!(
             prompt_need_from_job("NEED_PLUGINS only"),
             PromptNeed {

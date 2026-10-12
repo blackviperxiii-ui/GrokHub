@@ -63,7 +63,10 @@ mod tests {
         let armed = cabin_rules_for("", true);
         assert!(armed.starts_with(CABIN_DESKTOP_RULES));
         assert!(armed.contains(DESKTOP_CABIN_LINE));
-        assert_eq!(cabin_static_rules(true), format!("{CABIN_DESKTOP_RULES}\n{DESKTOP_CABIN_LINE}"));
+        assert_eq!(
+            cabin_static_rules(true),
+            format!("{CABIN_DESKTOP_RULES}\n{DESKTOP_CABIN_LINE}")
+        );
         assert!(armed.ends_with(
             "\nPrefer the grokhub-desktop tools over shell xdotool or PowerShell for the screen. Take a \
              screenshot only when the task needs to see the screen, never for a greeting or plain chat. If a \
@@ -71,7 +74,10 @@ mod tests {
         ));
         assert_ne!(armed, CABIN_DESKTOP_RULES);
         let with = cabin_rules("Around 21:00 they skip night.");
-        assert_eq!(cabin_rules_for("Around 21:00 they skip night.", false), with);
+        assert_eq!(
+            cabin_rules_for("Around 21:00 they skip night.", false),
+            with
+        );
         assert!(with.starts_with(CABIN_DESKTOP_RULES));
         assert!(with.contains("skip night"));
         assert!(with.contains("Do not recite"));

@@ -220,7 +220,8 @@ pub fn restore_step(conversation_id: &str, step: u64) -> Result<String, String> 
         return Err("No conversation id".into());
     }
     let src_dir = step_dir(&conv, step);
-    let manifest = load_manifest(&src_dir).ok_or_else(|| format!("No checkpoint for step {step}"))?;
+    let manifest =
+        load_manifest(&src_dir).ok_or_else(|| format!("No checkpoint for step {step}"))?;
     if manifest.files.is_empty() {
         return Err(format!("Step {step} has no files"));
     }

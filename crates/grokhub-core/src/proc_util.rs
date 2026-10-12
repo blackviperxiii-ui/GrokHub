@@ -63,6 +63,9 @@ mod tests {
             .and_then(|s| s.split("\n}").next())
             .expect("silence_windows_hard_errors");
         assert!(body.contains(concat!("SetError", "Mode(MODE)")), "{body}");
-        assert!(body.contains(concat!("SEM_FAILCRITICAL", "ERRORS | ")), "{body}");
+        assert!(
+            body.contains(concat!("SEM_FAILCRITICAL", "ERRORS | ")),
+            "{body}"
+        );
     }
 }

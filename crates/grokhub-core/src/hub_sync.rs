@@ -81,7 +81,10 @@ pub fn merge_hub_snapshots(local: &HubSnapshot, remote: &HubSnapshot) -> HubSnap
             continue;
         }
         let prev = files.get(&f.name);
-        if prev.map(|p: &HubMemoryFile| f.updated_at >= p.updated_at).unwrap_or(true) {
+        if prev
+            .map(|p: &HubMemoryFile| f.updated_at >= p.updated_at)
+            .unwrap_or(true)
+        {
             files.insert(f.name.clone(), f.clone());
         }
     }
@@ -99,8 +102,16 @@ pub fn merge_hub_snapshots(local: &HubSnapshot, remote: &HubSnapshot) -> HubSnap
 }
 
 fn merge_workboard(local: &Value, remote: &Value) -> Value {
-    let local_items = local.get("items").and_then(|v| v.as_array()).cloned().unwrap_or_default();
-    let remote_items = remote.get("items").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+    let local_items = local
+        .get("items")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    let remote_items = remote
+        .get("items")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
     json!({ "items": merge_by_id(&local_items, &remote_items) })
 }
 

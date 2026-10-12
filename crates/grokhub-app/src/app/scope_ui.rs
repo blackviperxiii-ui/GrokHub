@@ -96,7 +96,11 @@ pub(super) fn scope_label(source: &str) -> String {
         return format!("Files in {}", folder_name(dir));
     }
     if let Some(id) = source.strip_prefix("browser_history:") {
-        let name = BROWSERS.iter().find(|(b, _)| *b == id).map(|(_, n)| *n).unwrap_or(id);
+        let name = BROWSERS
+            .iter()
+            .find(|(b, _)| *b == id)
+            .map(|(_, n)| *n)
+            .unwrap_or(id);
         return format!("Browser history ({name})");
     }
     hx::SCOPE_KINDS
@@ -114,7 +118,11 @@ pub(super) fn scope_detail(source: &str) -> Option<&str> {
 /// A typed folder as the scope stores it: trimmed, no trailing slash.
 pub(super) fn folder_scope(text: &str) -> hx::Scope {
     let t = text.trim();
-    let t = if t.len() > 1 { t.trim_end_matches(['/', '\\']) } else { t };
+    let t = if t.len() > 1 {
+        t.trim_end_matches(['/', '\\'])
+    } else {
+        t
+    };
     hx::Scope::Files(t.to_string())
 }
 
@@ -130,7 +138,8 @@ pub(super) enum FolderPick {
 }
 
 /// Shown under the heading when no folder dialog could open.
-pub(super) const NO_FOLDER_DIALOG: &str = "No folder dialog opened on this computer. Type the folder's path instead.";
+pub(super) const NO_FOLDER_DIALOG: &str =
+    "No folder dialog opened on this computer. Type the folder's path instead.";
 
 /// A `None` from the dialog this fast means it never opened.
 const NO_DIALOG_WITHIN: std::time::Duration = std::time::Duration::from_millis(400);
@@ -178,11 +187,21 @@ impl Cabin {
         let lock = self.private_lock_for_paint();
         let locked = lock.as_ref().map(super::privacy_ui::lock_hover);
         self.poll_folder_pick(ui.ctx());
-        if let Some(note) = self.harness.scope_note.as_deref().filter(|_| locked.is_none()) {
+        if let Some(note) = self
+            .harness
+            .scope_note
+            .as_deref()
+            .filter(|_| locked.is_none())
+        {
             crate::cards::settings_note(ui, note);
         }
         let now = now_ms();
-        let on_hint = |at: u64, rest: &str| format!("On since {}. {rest}", grokhub_core::pulse::ago_label(at, now));
+        let on_hint = |at: u64, rest: &str| {
+            format!(
+                "On since {}. {rest}",
+                grokhub_core::pulse::ago_label(at, now)
+            )
+        };
         let mut grant: Option<hx::Scope> = None;
         let mut revoke: Option<String> = None;
         let mut forget: Option<(String, Vec<String>)> = None;
@@ -303,7 +322,9 @@ impl Cabin {
                 self.harness.scope_folder = dir;
                 self.harness.scope_note = None;
             }
-            Ok(FolderPick::NoDialog) => self.harness.scope_note = Some(NO_FOLDER_DIALOG.to_string()),
+            Ok(FolderPick::NoDialog) => {
+                self.harness.scope_note = Some(NO_FOLDER_DIALOG.to_string())
+            }
             Ok(FolderPick::Cancelled) | Err(mpsc::TryRecvError::Disconnected) => {}
             Err(mpsc::TryRecvError::Empty) => {
                 // Folder dialog still open: poll until it answers. No rx → idle.
@@ -316,7 +337,8 @@ impl Cabin {
     /// The Allow click on a scope row or on an in-context ask card
     /// (`paint_scope_asks`). The only caller of `grant_scope` (rule 4).
     pub(super) fn grant_scope_click(&mut self, scope: &hx::Scope) {
-        let home = std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" }).map(std::path::PathBuf::from);
+        let home = std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
+            .map(std::path::PathBuf::from);
         let dir = crate::config::config_dir();
         let label = scope_label(&scope.key());
         if self.consent().scope_grant(scope).is_some() {
@@ -373,12 +395,18 @@ mod tests {
         assert_eq!(folder_name("C:\\Users\\you\\Notes"), "Notes");
         assert_eq!(folder_name("/"), "/");
         assert_eq!(folder_name("C:\\"), "C:\\");
-        assert_eq!(scope_label("files:/tmp/gh-4b-shots/home/Documents/notes"), "Files in notes");
+        assert_eq!(
+            scope_label("files:/tmp/gh-4b-shots/home/Documents/notes"),
+            "Files in notes"
+        );
         assert_eq!(scope_label("files:D:\\Work\\Q3 plans"), "Files in Q3 plans");
         assert_eq!(scope_detail("files:/srv/notes"), Some("/srv/notes"));
         assert_eq!(scope_detail("calendar"), None);
         assert_eq!(scope_label("calendar"), "Calendar");
-        assert_eq!(scope_label("browser_history:brave"), "Browser history (Brave)");
+        assert_eq!(
+            scope_label("browser_history:brave"),
+            "Browser history (Brave)"
+        );
     }
 
     /// SB-03: a long path keeps its start and, mostly, its end.
@@ -388,9 +416,20 @@ mod tests {
         let cut = middle_ellipsis(long, 32);
         assert_eq!(cut.chars().count(), 32, "{cut}");
         assert_eq!(cut, "/tmp/gh-scop…/clients/hale/notes");
-        assert!(cut.starts_with("/tmp/") && cut.ends_with("/hale/notes"), "{cut}");
-        assert_eq!(middle_ellipsis("/srv/notes", 32), "/srv/notes", "short paths stay whole");
-        assert_eq!(middle_ellipsis("abcdef", 2), "abcdef", "too small a cap leaves it whole");
+        assert!(
+            cut.starts_with("/tmp/") && cut.ends_with("/hale/notes"),
+            "{cut}"
+        );
+        assert_eq!(
+            middle_ellipsis("/srv/notes", 32),
+            "/srv/notes",
+            "short paths stay whole"
+        );
+        assert_eq!(
+            middle_ellipsis("abcdef", 2),
+            "abcdef",
+            "too small a cap leaves it whole"
+        );
         // Characters, not bytes: never splits a multi-byte letter.
         let wide = "/home/jörg/Документы/заметки/очень-длинное-имя";
         let cut = middle_ellipsis(wide, 20);
@@ -409,10 +448,15 @@ mod tests {
         let on = crate::cards::state_hint_job("On since 1m ago. /srv/notes");
         assert_eq!(on.sections.len(), 2);
         assert_eq!(on.sections[0].format.color, crate::theme::fg());
-        let plain = crate::cards::state_hint_job("Pick another browser. Never cookies or saved logins.");
+        let plain =
+            crate::cards::state_hint_job("Pick another browser. Never cookies or saved logins.");
         assert_eq!(plain.sections.len(), 1);
         assert_eq!(plain.sections[0].format.color, crate::theme::muted());
-        assert_eq!(crate::cards::state_hint_job("Online now").sections.len(), 1, "a word that only starts with On");
+        assert_eq!(
+            crate::cards::state_hint_job("Online now").sections.len(),
+            1,
+            "a word that only starts with On"
+        );
     }
 
     /// SB-04: a dialog that answers "nothing" faster than anyone can cancel
@@ -420,19 +464,36 @@ mod tests {
     #[test]
     fn a_folder_dialog_that_never_opened_is_told_apart_from_a_cancel() {
         use std::time::Duration;
-        assert_eq!(FolderPick::from_answer(Some("/srv/notes".into()), Duration::from_millis(5)), FolderPick::Picked("/srv/notes".into()));
-        assert_eq!(FolderPick::from_answer(None, Duration::from_millis(20)), FolderPick::NoDialog);
-        assert_eq!(FolderPick::from_answer(None, Duration::from_secs(3)), FolderPick::Cancelled);
+        assert_eq!(
+            FolderPick::from_answer(Some("/srv/notes".into()), Duration::from_millis(5)),
+            FolderPick::Picked("/srv/notes".into())
+        );
+        assert_eq!(
+            FolderPick::from_answer(None, Duration::from_millis(20)),
+            FolderPick::NoDialog
+        );
+        assert_eq!(
+            FolderPick::from_answer(None, Duration::from_secs(3)),
+            FolderPick::Cancelled
+        );
         assert!(NO_FOLDER_DIALOG.contains("Type the folder's path"));
     }
 
     /// SB-09: the screen's setting is quoted and says where it lives.
     #[test]
     fn the_screen_setting_is_quoted_with_its_place() {
-        assert!(SCOPES_NOTE.ends_with("Screen access is \"Let Grok control the desktop\" in Settings → Cabin defaults."));
+        assert!(SCOPES_NOTE.ends_with(
+            "Screen access is \"Let Grok control the desktop\" in Settings → Cabin defaults."
+        ));
         let settings = include_str!("settings.rs");
         assert!(settings.contains("SettingsSec::Defaults => \"Cabin defaults\""));
-        let defaults = settings.split("SettingsSec::Defaults => {").nth(1).expect("Cabin defaults section");
-        assert!(defaults.contains("\"Let Grok control the desktop\""), "the switch lives in Cabin defaults");
+        let defaults = settings
+            .split("SettingsSec::Defaults => {")
+            .nth(1)
+            .expect("Cabin defaults section");
+        assert!(
+            defaults.contains("\"Let Grok control the desktop\""),
+            "the switch lives in Cabin defaults"
+        );
     }
 }

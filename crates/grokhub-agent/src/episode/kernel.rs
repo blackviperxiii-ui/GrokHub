@@ -6,19 +6,27 @@ use std::path::Path;
 
 use serde_json::{json, Value};
 
-use super::verify::{verify_call, verify_call_at, verify_gate, Observation, Verdict, CHECKER_UNAVAILABLE, ESCALATED_CLASS};
-use super::view::{zoom_schema, EpisodeView, Folder, ZOOM_TOOL};
 use super::lessons;
 use super::loops::{self, LoopEntry, Outcome, REPEAT_CALL};
-use super::{Episode, EpisodeEnd, OpenPark, StepShape, FANOUT_CAP, GOAL_CAP, PARK_PREFIX, REPLAN_NOTE, STALL_REPLAN, STEP_UP_STEPS};
+use super::verify::{
+    verify_call, verify_call_at, verify_gate, Observation, Verdict, CHECKER_UNAVAILABLE,
+    ESCALATED_CLASS,
+};
+use super::view::{zoom_schema, EpisodeView, Folder, ZOOM_TOOL};
+use super::{
+    Episode, EpisodeEnd, OpenPark, StepShape, FANOUT_CAP, GOAL_CAP, PARK_PREFIX, REPLAN_NOTE,
+    STALL_REPLAN, STEP_UP_STEPS,
+};
 use crate::client::{ContentPart, FunctionCall, InputItem, ModelClient, Usage};
 use crate::gate::{self, Decision, Gate, PermAnswer, PermitWait, Waited};
 use crate::harness::{
-    self, action_loop, append_span, desk_args, done_without_criteria, hard_class, ladder_span, post_park, AccessMode,
-    Finding, GateOutcome, HardClass, LadderStep, Origin, ParkRequest, Rung, Span, Step, APPROVAL_TTL, RECOVERY_TOOL,
-    VERIFY_TOOL,
+    self, action_loop, append_span, desk_args, done_without_criteria, hard_class, ladder_span,
+    post_park, AccessMode, Finding, GateOutcome, HardClass, LadderStep, Origin, ParkRequest, Rung,
+    Span, Step, APPROVAL_TTL, RECOVERY_TOOL, VERIFY_TOOL,
 };
-use crate::route::{call_model, CallTokens, ModelCall, BACKGROUND_EFFORT, CLASS_COMPACT, CLASS_EPISODE};
+use crate::route::{
+    call_model, CallTokens, ModelCall, BACKGROUND_EFFORT, CLASS_COMPACT, CLASS_EPISODE,
+};
 use crate::run::{HaltCheck, LoopEvent, SteerQueue};
 use crate::tools::{self, DesktopOps, ToolCtx, ToolOutput};
 use crate::CancelToken;
@@ -138,8 +146,20 @@ pub fn fan_out<'a>(jobs: Vec<Box<dyn FnOnce() -> ToolOutput + Send + 'a>>) -> Ve
 }
 
 /// The span for one step, in the fixed shape, tagged with the episode.
-pub fn step_span(ep: &Episode, shape: &StepShape, args_redacted: &str, class: &str, tokens: Option<CallTokens>) -> Span {
-    let mut s = Span::deny(&ep.chat_id, &shape.tool, args_redacted, &shape.result, class);
+pub fn step_span(
+    ep: &Episode,
+    shape: &StepShape,
+    args_redacted: &str,
+    class: &str,
+    tokens: Option<CallTokens>,
+) -> Span {
+    let mut s = Span::deny(
+        &ep.chat_id,
+        &shape.tool,
+        args_redacted,
+        &shape.result,
+        class,
+    );
     s.decision = shape.decision.clone();
     s.claim = format!("episode step {}", ep.steps);
     s.driver = "native".into();
@@ -164,10 +184,18 @@ impl Folder for RouteFolder<'_> {
             },
             InputItem::Message {
                 role: "user".into(),
-                content: vec![ContentPart::InputText(format!("Older:\n{left}\n\nNewer:\n{right}"))],
+                content: vec![ContentPart::InputText(format!(
+                    "Older:\n{left}\n\nNewer:\n{right}"
+                ))],
             },
         ];
-        let mut call = ModelCall::xai(self.k.model, Some(BACKGROUND_EFFORT), CLASS_COMPACT, self.conversation, input);
+        let mut call = ModelCall::xai(
+            self.k.model,
+            Some(BACKGROUND_EFFORT),
+            CLASS_COMPACT,
+            self.conversation,
+            input,
+        );
         call.provider = self.k.provider.into();
         let routed = call_model(self.k.client, &call, self.k.cancel).map_err(|e| e.to_string())?;
         Ok((routed.out.text, Some(routed.tokens)))
@@ -201,9 +229,21 @@ pub fn run_episode(
     view: &mut EpisodeView,
     on_event: &mut dyn FnMut(LoopEvent),
 ) -> EpisodeOut {
-    let mut run = Run { k, ep, view, usage: Usage::default(), tokens: None, obs: None, end_note: None, looped: false };
+    let mut run = Run {
+        k,
+        ep,
+        view,
+        usage: Usage::default(),
+        tokens: None,
+        obs: None,
+        end_note: None,
+        looped: false,
+    };
     if run.ep.trail.is_empty() {
-        let goal = format!("goal: {}", run.ep.goal.chars().take(GOAL_CAP).collect::<String>());
+        let goal = format!(
+            "goal: {}",
+            run.ep.goal.chars().take(GOAL_CAP).collect::<String>()
+        );
         run.write(run.ep.marker("begin", "open", &goal));
         run.recall_lessons();
     }
@@ -241,8 +281,14 @@ pub fn run_episode(
                 .unwrap_or("max_output_tokens");
             let args = serde_json::json!({ "reason": reason }).to_string();
             run.write(
-                crate::harness::Span::deny(&run.ep.chat_id, "turn_truncated", &args, reason, "soft")
-                    .in_turn(&run.ep.chat_id, run.ep.turn),
+                crate::harness::Span::deny(
+                    &run.ep.chat_id,
+                    "turn_truncated",
+                    &args,
+                    reason,
+                    "soft",
+                )
+                .in_turn(&run.ep.chat_id, run.ep.turn),
             );
             for call in &turn.calls {
                 emit(on_event, call, "failed", crate::run::TRUNCATED_TOOL, None);
@@ -275,7 +321,11 @@ pub fn run_episode(
 
 impl Run<'_, '_> {
     fn out(&self, stop: EpisodeStop, reply: String) -> EpisodeOut {
-        EpisodeOut { stop, usage: self.usage.clone(), reply }
+        EpisodeOut {
+            stop,
+            usage: self.usage.clone(),
+            reply,
+        }
     }
 
     fn now(&self) -> u64 {
@@ -283,7 +333,10 @@ impl Run<'_, '_> {
     }
 
     fn write(&mut self, span: Span) {
-        let mut span = span.on_path("E").in_turn(&self.ep.chat_id, self.ep.turn).in_episode(&self.ep.id);
+        let mut span = span
+            .on_path("E")
+            .in_turn(&self.ep.chat_id, self.ep.turn)
+            .in_episode(&self.ep.id);
         span.goal_step = span.goal_step.chars().take(GOAL_CAP).collect();
         if span.access.is_empty() {
             span.access = self.k.access.as_str().into();
@@ -301,20 +354,29 @@ impl Run<'_, '_> {
         let line = shape.line(self.ep.steps);
         let conversation = self.ep.id.clone();
         let folds = {
-            let folder = RouteFolder { k: self.k, conversation: &conversation };
+            let folder = RouteFolder {
+                k: self.k,
+                conversation: &conversation,
+            };
             self.view.push(view_id, &line, &raw, self.k.held, &folder)
         };
         for fold in folds {
             if let Some(t) = &fold.tokens {
                 self.usage.add(&usage_of(t));
             }
-            let mut s = self.ep.marker("fold", &fold.id, &format!("folded {} and {}", fold.children[0], fold.children[1]));
+            let mut s = self.ep.marker(
+                "fold",
+                &fold.id,
+                &format!("folded {} and {}", fold.children[0], fold.children[1]),
+            );
             s.tokens = fold.tokens;
             self.write(s);
         }
         self.ep.last_ms = self.now();
         let failed = shape.decision == "deny" || shape.result.starts_with("failed");
-        let stalled = self.ep.note_progress(&shape.decision, shape.ui_changed, failed);
+        let stalled = self
+            .ep
+            .note_progress(&shape.decision, shape.ui_changed, failed);
         let looped = (shape.decision != "park")
             .then(|| {
                 let outcome = match (failed, shape.ui_changed) {
@@ -322,7 +384,10 @@ impl Run<'_, '_> {
                     (false, Some(false)) => Outcome::Still,
                     _ => Outcome::Moved,
                 };
-                loops::note_call(&mut self.ep.ring, LoopEntry::new(&shape.tool, args_redacted, outcome, &shape.result))
+                loops::note_call(
+                    &mut self.ep.ring,
+                    LoopEntry::new(&shape.tool, args_redacted, outcome, &shape.result),
+                )
             })
             .flatten();
         if let Some(reason) = looped {
@@ -330,7 +395,10 @@ impl Run<'_, '_> {
             self.looped = true;
             self.replan(REPEAT_CALL, reason);
         } else if stalled {
-            self.replan("no_progress", format!("no_progress: {STALL_REPLAN} steps in a row changed nothing"));
+            self.replan(
+                "no_progress",
+                format!("no_progress: {STALL_REPLAN} steps in a row changed nothing"),
+            );
         }
     }
 
@@ -360,8 +428,18 @@ impl Run<'_, '_> {
             return None;
         }
         let desk = tools::desk_flags("screenshot", &self.k.gate, Some(self.k.desktop));
-        match gate::decide_with(&self.k.gate, "screenshot", "{}", false, desk, self.k.workspace, self.k.perms) {
-            Decision::Run => Some(Observation::from_output(&self.k.desktop.call("screenshot", &json!({})))),
+        match gate::decide_with(
+            &self.k.gate,
+            "screenshot",
+            "{}",
+            false,
+            desk,
+            self.k.workspace,
+            self.k.perms,
+        ) {
+            Decision::Run => Some(Observation::from_output(
+                &self.k.desktop.call("screenshot", &json!({})),
+            )),
             _ => None,
         }
     }
@@ -372,7 +450,11 @@ impl Run<'_, '_> {
         } else {
             format!("{}\n\n{EPISODE_RULES}", self.k.system)
         };
-        let mut now = format!("Step {} of this episode.\nGoal step: {}\n", self.ep.steps + 1, self.ep.goal_step);
+        let mut now = format!(
+            "Step {} of this episode.\nGoal step: {}\n",
+            self.ep.steps + 1,
+            self.ep.goal_step
+        );
         if let Some(note) = &self.ep.note {
             now.push_str(&format!("GrokHub's check: {note}\n"));
         }
@@ -394,9 +476,18 @@ impl Run<'_, '_> {
             }
         }
         vec![
-            InputItem::Message { role: "system".into(), content: vec![ContentPart::InputText(system)] },
-            InputItem::Message { role: "user".into(), content: vec![ContentPart::InputText(self.view.render())] },
-            InputItem::Message { role: "user".into(), content },
+            InputItem::Message {
+                role: "system".into(),
+                content: vec![ContentPart::InputText(system)],
+            },
+            InputItem::Message {
+                role: "user".into(),
+                content: vec![ContentPart::InputText(self.view.render())],
+            },
+            InputItem::Message {
+                role: "user".into(),
+                content,
+            },
         ]
     }
 
@@ -415,9 +506,15 @@ impl Run<'_, '_> {
     }
 
     fn ask_worker(&mut self) -> Result<crate::client::TurnOutput, String> {
-        let mut call = ModelCall::xai(self.k.model, self.k.effort, CLASS_EPISODE, &self.ep.id, self.input())
-            .with_tools(self.worker_tools())
-            .in_session(&self.ep.chat_id);
+        let mut call = ModelCall::xai(
+            self.k.model,
+            self.k.effort,
+            CLASS_EPISODE,
+            &self.ep.id,
+            self.input(),
+        )
+        .with_tools(self.worker_tools())
+        .in_session(&self.ep.chat_id);
         call.provider = self.k.provider.into();
         // After a re-plan the router goes one model and one rung up for a few
         // calls, then the episode is back on its own model. No prompt.
@@ -426,7 +523,10 @@ impl Run<'_, '_> {
         if call.step_up {
             if self.ep.step_up == STEP_UP_STEPS {
                 let t = &routed.tokens;
-                let note = format!("stepped up to {} {} for {STEP_UP_STEPS} steps", t.model, t.effort);
+                let note = format!(
+                    "stepped up to {} {} for {STEP_UP_STEPS} steps",
+                    t.model, t.effort
+                );
                 self.write(self.ep.marker("step_up", &t.model, note.trim()));
             }
             self.ep.step_up -= 1;
@@ -498,7 +598,14 @@ impl Run<'_, '_> {
     fn check(&mut self, fin: &Observation) -> (Verdict, Option<CallTokens>) {
         for i in 0..3 {
             let call = match i {
-                2 => verify_call_at(self.k.model, ESCALATED_CLASS, self.k.effort, &self.ep.goal, fin, &self.ep.id),
+                2 => verify_call_at(
+                    self.k.model,
+                    ESCALATED_CLASS,
+                    self.k.effort,
+                    &self.ep.goal,
+                    fin,
+                    &self.ep.id,
+                ),
                 _ => verify_call(self.k.model, &self.ep.goal, fin, &self.ep.id),
             };
             match verify_gate(self.k.client, &call, self.k.cancel) {
@@ -513,10 +620,14 @@ impl Run<'_, '_> {
                         1 => "escalate",
                         _ => continue,
                     };
-                    let args = json!({"detector": CHECKER_ERROR, "target": VERIFY_TOOL}).to_string();
+                    let args =
+                        json!({"detector": CHECKER_ERROR, "target": VERIFY_TOOL}).to_string();
                     let mut span = Span::deny(&self.ep.chat_id, RECOVERY_TOOL, &args, next, "soft");
                     span.decision = next.into();
-                    span.claim = format!("{CHECKER_ERROR}: {}", e.to_string().chars().take(200).collect::<String>());
+                    span.claim = format!(
+                        "{CHECKER_ERROR}: {}",
+                        e.to_string().chars().take(200).collect::<String>()
+                    );
                     self.write(span.from_origin(Origin::Repair));
                 }
             }
@@ -587,7 +698,9 @@ impl Run<'_, '_> {
             }
             return None;
         }
-        let finding = action_loop(&self.ep.trail).into_iter().find(|f| !self.ep.seen_findings.contains(&finding_key(f)))?;
+        let finding = action_loop(&self.ep.trail)
+            .into_iter()
+            .find(|f| !self.ep.seen_findings.contains(&finding_key(f)))?;
         self.ep.seen_findings.push(finding_key(&finding));
         self.ladder(finding, None)
     }
@@ -603,7 +716,11 @@ impl Run<'_, '_> {
     /// The best past lessons for this goal go at the top of the view, and a
     /// quiet `lesson_used` marker names each one.
     fn recall_lessons(&mut self) {
-        let (block, used) = lessons::past_lessons(&lessons::load(self.k.config_dir), &self.ep.goal, self.k.held);
+        let (block, used) = lessons::past_lessons(
+            &lessons::load(self.k.config_dir),
+            &self.ep.goal,
+            self.k.held,
+        );
         self.view.set_lessons(&block);
         for l in used {
             let claim = format!("Used lesson: {}", lessons::lesson_line(&l));
@@ -622,7 +739,9 @@ impl Run<'_, '_> {
         };
         let stored = lessons::append(self.k.config_dir, &lesson).is_ok();
         let line = lessons::lesson_line(&lesson);
-        let span = self.ep.marker("lesson", if stored { "saved" } else { "not saved" }, &line);
+        let span = self
+            .ep
+            .marker("lesson", if stored { "saved" } else { "not saved" }, &line);
         self.write(span);
     }
 
@@ -631,7 +750,13 @@ impl Run<'_, '_> {
         for park in std::mem::take(&mut self.ep.parks) {
             let _ = self.k.parks.answer(&park.id);
             self.k.parks.withdraw(&park.id);
-            let span = Span::deny(&self.ep.chat_id, &park.tool, &park.args_redacted, reason, park.class.as_str());
+            let span = Span::deny(
+                &self.ep.chat_id,
+                &park.tool,
+                &park.args_redacted,
+                reason,
+                park.class.as_str(),
+            );
             let mut span = span.in_episode(&self.ep.id);
             span.goal_step = park.goal_step.clone();
             self.write(span);
@@ -661,7 +786,12 @@ impl Run<'_, '_> {
                             ui_changed: None,
                             result: timed_out(&park),
                         };
-                        self.record(&shape, &park.args_redacted, park.class.as_str(), &format!("s{}w", park.step));
+                        self.record(
+                            &shape,
+                            &park.args_redacted,
+                            park.class.as_str(),
+                            &format!("s{}w", park.step),
+                        );
                     }
                     self.ep.parks.push(park);
                     continue;
@@ -680,13 +810,23 @@ impl Run<'_, '_> {
                     self.record(&shape, &park.args_redacted, park.class.as_str(), &id);
                 }
                 None => {
-                    let call = FunctionCall { call_id: park.id.clone(), name: park.tool.clone(), arguments: park.args.clone() };
+                    let call = FunctionCall {
+                        call_id: park.id.clone(),
+                        name: park.tool.clone(),
+                        arguments: park.args.clone(),
+                    };
                     emit(on_event, &call, "in_progress", "", None);
                     let (out, ui) = self.execute(&call);
                     if out.failed {
                         crate::route::ladder::note_tool_error();
                     }
-                    emit(on_event, &call, if out.failed { "failed" } else { "completed" }, &out.text, out.image_data_url.clone());
+                    emit(
+                        on_event,
+                        &call,
+                        if out.failed { "failed" } else { "completed" },
+                        &out.text,
+                        out.image_data_url.clone(),
+                    );
                     let shape = StepShape {
                         goal_step: park.goal_step.clone(),
                         tool: park.tool.clone(),
@@ -704,7 +844,13 @@ impl Run<'_, '_> {
     /// observe after a desktop act.
     fn execute(&mut self, call: &FunctionCall) -> (ToolOutput, Option<bool>) {
         let stop = || self.k.halt.halted();
-        let ctx = ToolCtx { workspace: self.k.workspace, desktop: Some(self.k.desktop), stop: &stop, tasks: None, owner: None };
+        let ctx = ToolCtx {
+            workspace: self.k.workspace,
+            desktop: Some(self.k.desktop),
+            stop: &stop,
+            tasks: None,
+            owner: None,
+        };
         let out = tools::dispatch(&ctx, &call.name, &call.arguments);
         if call.name == "screenshot" {
             self.obs = Some(Observation::from_output(&out));
@@ -731,7 +877,9 @@ impl Run<'_, '_> {
         // Only reads every gate allows fan out; a denied or asked read takes
         // the one-at-a-time path, which answers it.
         let reads = calls.len() > 1
-            && calls.iter().all(|c| is_read(&c.name) && matches!(self.verdict(c), GateOutcome::Allow));
+            && calls
+                .iter()
+                .all(|c| is_read(&c.name) && matches!(self.verdict(c), GateOutcome::Allow));
         if reads {
             self.fan(calls, on_event);
             return;
@@ -776,7 +924,13 @@ impl Run<'_, '_> {
             if out.failed {
                 crate::route::ladder::note_tool_error();
             }
-            emit(on_event, c, if out.failed { "failed" } else { "completed" }, &out.text, None);
+            emit(
+                on_event,
+                c,
+                if out.failed { "failed" } else { "completed" },
+                &out.text,
+                None,
+            );
             let shape = StepShape {
                 goal_step: self.ep.goal_step.clone(),
                 tool: c.name.clone(),
@@ -814,16 +968,36 @@ impl Run<'_, '_> {
                 self.record(&shape("deny", None, reason), &args_redacted, class, &id);
                 class == "soft"
             }
-            GateOutcome::Park { hard: Some(class), .. } => {
+            GateOutcome::Park {
+                hard: Some(class), ..
+            } => {
                 self.park(call, class, n, &args_redacted);
                 emit(on_event, call, "completed", PARKED, None);
-                self.record(&shape("park", None, PARKED.into()), &args_redacted, class.as_str(), &id);
+                self.record(
+                    &shape("park", None, PARKED.into()),
+                    &args_redacted,
+                    class.as_str(),
+                    &id,
+                );
                 false
             }
-            GateOutcome::Park { hard: None, reason, .. } => {
+            GateOutcome::Park {
+                hard: None, reason, ..
+            } => {
                 if !self.ask(call, &reason, on_event) {
-                    emit(on_event, call, "failed", &gate::user_rejected(&call.name), None);
-                    self.record(&shape("deny", None, gate::user_rejected(&call.name)), &args_redacted, "soft", &id);
+                    emit(
+                        on_event,
+                        call,
+                        "failed",
+                        &gate::user_rejected(&call.name),
+                        None,
+                    );
+                    self.record(
+                        &shape("deny", None, gate::user_rejected(&call.name)),
+                        &args_redacted,
+                        "soft",
+                        &id,
+                    );
                     return true;
                 }
                 self.run_allowed(call, &shape, &args_redacted, &id, on_event);
@@ -852,22 +1026,39 @@ impl Run<'_, '_> {
         if out.failed {
             crate::route::ladder::note_tool_error();
         }
-        emit(on_event, call, if out.failed { "failed" } else { "completed" }, &out.text, out.image_data_url.clone());
-        self.record(&shape("allow", ui, result_text(&out)), args_redacted, "soft", id);
+        emit(
+            on_event,
+            call,
+            if out.failed { "failed" } else { "completed" },
+            &out.text,
+            out.image_data_url.clone(),
+        );
+        self.record(
+            &shape("allow", ui, result_text(&out)),
+            args_redacted,
+            "soft",
+            id,
+        );
     }
 
     /// `harness::decide` first (the only hard gate; a desktop call is also
     /// read by its args, as on path A), then the soft gate for Ask / Auto /
     /// Always. `zoom` is a read: decide only, it never runs anything.
     fn verdict(&self, call: &FunctionCall) -> GateOutcome {
-        let hard = harness::decide(Step::Tool { name: &call.name, arguments: &call.arguments });
+        let hard = harness::decide(Step::Tool {
+            name: &call.name,
+            arguments: &call.arguments,
+        });
         if !hard.is_allow() {
             return hard;
         }
         if gate::is_desktop(&call.name) {
             let args: Value = serde_json::from_str(&call.arguments).unwrap_or_else(|_| json!({}));
             let args = self.k.desktop.hint(&call.name, &args);
-            let desk = harness::decide(Step::Desk { tool: &call.name, args: &args });
+            let desk = harness::decide(Step::Desk {
+                tool: &call.name,
+                args: &args,
+            });
             if !desk.is_allow() {
                 return desk;
             }
@@ -876,15 +1067,32 @@ impl Run<'_, '_> {
             return GateOutcome::Allow;
         }
         let desk = tools::desk_flags(&call.name, &self.k.gate, Some(self.k.desktop));
-        match gate::decide_with(&self.k.gate, &call.name, &call.arguments, false, desk, self.k.workspace, self.k.perms) {
+        match gate::decide_with(
+            &self.k.gate,
+            &call.name,
+            &call.arguments,
+            false,
+            desk,
+            self.k.workspace,
+            self.k.perms,
+        ) {
             Decision::Run => GateOutcome::Allow,
-            Decision::Ask => GateOutcome::Park { reason: format!("permission ask for `{}`", call.name), hard: None, needs_jeremy: false },
+            Decision::Ask => GateOutcome::Park {
+                reason: format!("permission ask for `{}`", call.name),
+                hard: None,
+                needs_jeremy: false,
+            },
             Decision::Refuse(reason) => GateOutcome::Refuse { reason },
         }
     }
 
     /// A soft ask: the cabin's own permission card, like any native step.
-    fn ask(&mut self, call: &FunctionCall, reason: &str, on_event: &mut dyn FnMut(LoopEvent)) -> bool {
+    fn ask(
+        &mut self,
+        call: &FunctionCall,
+        reason: &str,
+        on_event: &mut dyn FnMut(LoopEvent),
+    ) -> bool {
         on_event(LoopEvent::Permission {
             id: call.call_id.clone(),
             name: call.name.clone(),
@@ -893,7 +1101,9 @@ impl Run<'_, '_> {
         });
         let halt = self.k.halt;
         matches!(
-            self.k.permits.wait(&call.call_id, self.k.cancel, &|| halt.halted()),
+            self.k
+                .permits
+                .wait(&call.call_id, self.k.cancel, &|| halt.halted()),
             Waited::Answer(PermAnswer::Allow | PermAnswer::Always)
         )
     }
@@ -902,9 +1112,9 @@ impl Run<'_, '_> {
         let now = self.now();
         let id = format!("{PARK_PREFIX}{}-{step}", self.ep.id);
         let action = match class {
-            HardClass::Credentials => {
-                harness::credential_action(&serde_json::from_str(&call.arguments).unwrap_or_else(|_| json!({})))
-            }
+            HardClass::Credentials => harness::credential_action(
+                &serde_json::from_str(&call.arguments).unwrap_or_else(|_| json!({})),
+            ),
             _ => format!("{} {args_redacted}", call.name),
         };
         let req = ParkRequest {
@@ -958,9 +1168,19 @@ fn parked_reply(said: &str, parks: &[OpenPark]) -> String {
         .lines()
         .filter(|l| !l.trim().starts_with("GOAL_COMPLETE") && !l.trim().starts_with("VERIFY_OK"))
         .collect();
-    let names: Vec<String> = parks.iter().map(|p| format!("\u{201c}{}\u{201d}", p.action)).collect();
-    let card = if parks.len() == 1 { "its card" } else { "their cards" };
-    let waiting = format!("{WAITING_ON_YOU}{}. Approve {card} and I'll run it once and go on.", names.join("; "));
+    let names: Vec<String> = parks
+        .iter()
+        .map(|p| format!("\u{201c}{}\u{201d}", p.action))
+        .collect();
+    let card = if parks.len() == 1 {
+        "its card"
+    } else {
+        "their cards"
+    };
+    let waiting = format!(
+        "{WAITING_ON_YOU}{}. Approve {card} and I'll run it once and go on.",
+        names.join("; ")
+    );
     let said = said.join("\n");
     if said.trim().is_empty() {
         waiting
@@ -985,7 +1205,11 @@ fn zoom(view: &EpisodeView, arguments: &str) -> ToolOutput {
 
 /// One `action_loop` finding, by detector and its first step.
 fn finding_key(f: &Finding) -> String {
-    format!("{}:{}", f.detector, f.evidence.first().map_or("", |e| e.span.as_str()))
+    format!(
+        "{}:{}",
+        f.detector,
+        f.evidence.first().map_or("", |e| e.span.as_str())
+    )
 }
 
 /// Args as a span keeps them: typed text as its length, credentials and
@@ -1003,7 +1227,11 @@ fn arg_line(name: &str, arguments: &str) -> String {
 /// image. A "no capture backend works" note is kept whole so the pause names
 /// every backend's error.
 fn result_text(out: &ToolOutput) -> String {
-    let cap = if out.text.contains(CAPTURE_FAILED_HEAD) { super::CAPTURE_NOTE_CAP } else { super::STEP_RESULT_CAP };
+    let cap = if out.text.contains(CAPTURE_FAILED_HEAD) {
+        super::CAPTURE_NOTE_CAP
+    } else {
+        super::STEP_RESULT_CAP
+    };
     let t: String = out.text.chars().take(cap).collect();
     if out.failed && !t.starts_with("failed") {
         format!("failed: {t}")
@@ -1022,9 +1250,19 @@ fn usage_of(t: &CallTokens) -> Usage {
     }
 }
 
-fn emit(on_event: &mut dyn FnMut(LoopEvent), call: &FunctionCall, status: &str, detail: &str, image: Option<String>) {
+fn emit(
+    on_event: &mut dyn FnMut(LoopEvent),
+    call: &FunctionCall,
+    status: &str,
+    detail: &str,
+    image: Option<String>,
+) {
     on_event(LoopEvent::Tool {
-        id: if call.call_id.is_empty() { format!("tool-{}", call.name) } else { call.call_id.clone() },
+        id: if call.call_id.is_empty() {
+            format!("tool-{}", call.name)
+        } else {
+            call.call_id.clone()
+        },
         name: call.name.clone(),
         status: status.into(),
         detail: detail.chars().take(180).collect(),
