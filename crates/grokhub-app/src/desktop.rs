@@ -2812,16 +2812,18 @@ mod tests {
     /// Smoke the image codecs we enable in Cargo.toml (png/jpeg/webp/ico/bmp).
     #[test]
     fn cabin_image_codecs_round_trip() {
-        let src = image::RgbaImage::from_pixel(4, 4, image::Rgba([10, 20, 30, 255]));
-        for format in [
-            image::ImageFormat::Png,
-            image::ImageFormat::Jpeg,
-            image::ImageFormat::WebP,
-            image::ImageFormat::Ico,
-            image::ImageFormat::Bmp,
+        let rgba = image::RgbaImage::from_pixel(4, 4, image::Rgba([10, 20, 30, 255]));
+        let rgb = image::RgbImage::from_pixel(4, 4, image::Rgb([10, 20, 30]));
+        for (format, dyn_img) in [
+            (image::ImageFormat::Png, image::DynamicImage::ImageRgba8(rgba.clone())),
+            (image::ImageFormat::Jpeg, image::DynamicImage::ImageRgb8(rgb.clone())),
+            (image::ImageFormat::WebP, image::DynamicImage::ImageRgba8(rgba.clone())),
+            (image::ImageFormat::Ico, image::DynamicImage::ImageRgba8(rgba.clone())),
+            (image::ImageFormat::Bmp, image::DynamicImage::ImageRgb8(rgb)),
         ] {
             let mut buf = Vec::new();
-            src.write_to(&mut std::io::Cursor::new(&mut buf), format)
+            dyn_img
+                .write_to(&mut std::io::Cursor::new(&mut buf), format)
                 .unwrap_or_else(|e| panic!("{format:?} encode: {e}"));
             let back = image::load_from_memory_with_format(&buf, format)
                 .unwrap_or_else(|e| panic!("{format:?} decode: {e}"));
