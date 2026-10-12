@@ -33,10 +33,12 @@ pub(super) struct SourcesState {
     pub saved: Option<Vec<SavedFind>>,
     /// The Add box for each list, by `SourceKind::key`.
     pub drafts: std::collections::BTreeMap<&'static str, String>,
-    /// What the last run did, for Settings.
+    /// What the last run did, for Settings and the Feed banner.
     pub note: String,
     /// From the cache file the first time it is needed.
     pub last_run_ms: Option<u64>,
+    /// More like this started a check; Feed shows Looking… until it finishes.
+    pub looking_more: bool,
 }
 
 /// A run, its picks, and the fast model's reply.
@@ -317,10 +319,12 @@ impl Cabin {
         };
         match rx.try_recv() {
             Ok(run) => {
+                self.sources.looking_more = false;
                 self.post_source_run(run);
             }
             Err(mpsc::TryRecvError::Empty) => self.sources.rx = Some(rx),
             Err(mpsc::TryRecvError::Disconnected) => {
+                self.sources.looking_more = false;
                 self.sources.note = "The source check stopped before it finished.".into();
             }
         }
@@ -332,10 +336,12 @@ impl Cabin {
         };
         match rx.try_recv() {
             Ok((run, picks, reply)) => {
+                self.sources.looking_more = false;
                 self.finish_source_run(run, picks, Some(reply));
             }
             Err(mpsc::TryRecvError::Empty) => self.sources.summary_rx = Some(rx),
             Err(mpsc::TryRecvError::Disconnected) => {
+                self.sources.looking_more = false;
                 self.sources.note = "The summary step stopped before it finished.".into();
             }
         }
@@ -548,8 +554,9 @@ impl Cabin {
 
     /// Save keeps the post in Saved Finds and raises its interest. Not interested
     /// quietly removes it and lowers its interest and source. More like this raises
-    /// both and searches the post's own words on the next check. Save and More like
-    /// this also count toward following a new place after two hits.
+    /// both and starts a source check now for the post's own words (HN / Reddit /
+    /// Web search when those kinds are on). Save and More like this also count
+    /// toward following a new place after two hits.
     pub(super) fn source_post_act(&mut self, id: &str, did: SourceAct) {
         let Some(card) = self.pulse_card(id) else {
             return;
@@ -595,8 +602,21 @@ impl Cabin {
                     InterestSignal::MoreLikeThis,
                 );
                 self.nudge_post_source(&card, 1, true);
-                if !self.learn_place_from_card(&card) {
-                    self.status = "More like this on the next check.".into();
+                let followed = self.learn_place_from_card(&card);
+                let was_busy = self.sources_busy();
+                self.kick_source_fetch();
+                if self.sources.rx.is_some() && !was_busy {
+                    self.sources.looking_more = true;
+                    if !followed {
+                        self.status = "Looking for more like this…".into();
+                    }
+                } else if was_busy {
+                    self.sources.looking_more = true;
+                    if !followed {
+                        self.status = "More like this queued — check already running.".into();
+                    }
+                } else if !followed {
+                    self.status = "More like this queued for the next check.".into();
                 }
             }
         }
@@ -1225,17 +1245,30 @@ mod tests {
 
         let more = id(&cabin, "Rust async book");
         cabin.source_post_act(&more, SourceAct::MoreLike);
-        assert_eq!(cabin.status, "More like this on the next check.");
+        assert_eq!(cabin.status, "Looking for more like this…");
+        assert!(
+            cabin.sources.looking_more,
+            "Feed button flips to Looking…"
+        );
+        assert!(
+            cabin.sources.rx.is_some(),
+            "More like this starts a source check now"
+        );
+        assert!(
+            cabin.sources.note.starts_with("Checking "),
+            "Feed banner shows the check: {}",
+            cabin.sources.note
+        );
         assert_eq!(weight(&mut cabin), 77);
         let cache = ps::load_cache(&sources_cache_path());
         assert_eq!(cache.source_bias.get("blog.test"), Some(&1));
-        assert_eq!(
-            cache.related,
-            vec![ps::Related {
-                query: "Rust async book".into(),
-                topic: Some("Rust".into())
-            }]
+        assert!(
+            cache.related.is_empty(),
+            "queued related search is drained into this check"
         );
+        // Drop the in-flight fetch so the cabin teardown stays quiet.
+        cabin.sources.rx = None;
+        cabin.sources.looking_more = false;
     }
 
     #[test]
@@ -1318,6 +1351,41 @@ mod tests {
         assert!(
             !arm.contains("try_proxy_from_env"),
             "env proxy would skip public_only_resolve on the target: {arm}"
+        );
+    }
+
+    #[test]
+    fn more_like_this_kicks_a_check_and_shows_looking() {
+        let act = include_str!("pulse_sources_ui.rs")
+            .split("SourceAct::MoreLike => {")
+            .nth(1)
+            .and_then(|rest| rest.split("\n            }\n        }\n    }").next())
+            .expect("MoreLike arm");
+        assert!(
+            act.contains("self.kick_source_fetch()"),
+            "More like this must start a check now: {act}"
+        );
+        assert!(
+            act.contains("Looking for more like this…"),
+            "status must name the look: {act}"
+        );
+        assert!(
+            act.contains("looking_more = true"),
+            "Feed button needs looking_more: {act}"
+        );
+        let ui = include_str!("pulse_ui.rs");
+        assert!(
+            ui.contains("\"Looking…\""),
+            "button label while looking"
+        );
+        let feed = ui
+            .split("fn ui_pulse_feed(")
+            .nth(1)
+            .and_then(|rest| rest.split("/// One post:").next())
+            .expect("ui_pulse_feed");
+        assert!(
+            feed.contains("self.sources.note"),
+            "Feed banner shows the check note: {feed}"
         );
     }
 

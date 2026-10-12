@@ -1870,7 +1870,9 @@ impl Cabin {
                                 .size(crate::theme::FONT_TIP)
                                 .color(crate::theme::subtle()),
                         );
-                        if let Some(did) = super::pulse_ui::paint_post_body(ui, card, &thumbs) {
+                        if let Some(did) =
+                            super::pulse_ui::paint_post_body(ui, card, &thumbs, self.sources.looking_more)
+                        {
                             act = Some(match did {
                                 super::pulse_ui::FeedPostAct::Like => {
                                     FeedAct::Like(card.id.clone())
