@@ -274,20 +274,18 @@ fn capability_fit_diversifies_picks_across_task_classes() {
         );
     }
 
-    // Memory needs light reasoning, not the non-reasoning speed slug.
-    assert_eq!(
-        top_of(&table, "background:memory"),
-        "grok-4.20-0309-reasoning"
-    );
+    // Workhorse backgrounds / chat: mid reasoning, not flagship or non-reasoning.
+    for class in [
+        "background:memory",
+        "background:judge",
+        "background:dream",
+        "chat:default",
+        "code:edit-small",
+    ] {
+        assert_eq!(top_of(&table, class), "grok-4.20-0309-reasoning", "{class}");
+    }
 
-    // Everyday chat / small edits: mid reasoning workhorse, not flagship.
-    assert_eq!(top_of(&table, "chat:default"), "grok-4.20-0309-reasoning");
-    assert_eq!(
-        top_of(&table, "code:edit-small"),
-        "grok-4.20-0309-reasoning"
-    );
-
-    // Multi-file prefers the coding-strong family; debug/prepare/repair prefer flagship reasoning.
+    // Multi-file prefers the coding-strong family; Flagship classes take 4.7.
     assert_eq!(top_of(&table, "code:multi-file"), "grok-4.3");
     assert_eq!(top_of(&table, "debug"), "grok-4.7");
     assert_eq!(top_of(&table, "prepare:hard"), "grok-4.7");
@@ -582,6 +580,69 @@ fn high_risk_ask_escalates_off_chat_baseline_and_trivial_background_stays_cheap(
     );
     assert_eq!(cold.model, "grok-4.20-0309-non-reasoning");
     assert!(!cold.rule_ids.iter().any(|r| r.starts_with("attn:escalate")));
+}
+
+/// SuperGrok-shaped plan: flagship + coding mid + non-reasoning speed slug
+/// (no dated mid workhorse). Baselines must still reserve 4.7 for Flagship.
+#[test]
+fn supergrok_shaped_plan_baselines_reserve_flagship_for_quality() {
+    let ids = ["grok-4.7", "grok-4.3", "grok-4.20-0309-non-reasoning"];
+    let (reg, profiles) = plan_with(&ids);
+    let table = build_table(
+        &TableInputs {
+            reg: &reg,
+            profiles: &profiles,
+        },
+        &EvalCache::default(),
+        NOW,
+    );
+
+    for class in [
+        "background:triage",
+        "background:redact",
+        "background:summarize",
+        "background:compact",
+        "chat:quick",
+    ] {
+        assert_eq!(
+            top_of(&table, class),
+            "grok-4.20-0309-non-reasoning",
+            "{class}"
+        );
+    }
+    // Workhorse: coding mid, not flagship.
+    for class in [
+        "background:memory",
+        "background:judge",
+        "background:dream",
+        "chat:default",
+        "code:edit-small",
+        "desktop:soft",
+    ] {
+        assert_eq!(top_of(&table, class), "grok-4.3", "{class}");
+    }
+    assert_eq!(top_of(&table, "code:multi-file"), "grok-4.3");
+    // Flagship: strongest reasoner — including repair:diagnose.
+    for class in ["plan", "design", "debug", "prepare:hard", "repair:diagnose"] {
+        assert_eq!(top_of(&table, class), "grok-4.7", "{class}");
+    }
+
+    let hot = Router::choose(
+        &ask_text(
+            "chat:default",
+            "grok-4.3",
+            "Please sudo rm -rf /etc/old after backup",
+            0.4,
+        ),
+        &reg,
+        &profiles,
+        &table,
+        NOW,
+    );
+    assert_eq!(
+        hot.model, "grok-4.7",
+        "attention escalate still reaches flagship"
+    );
 }
 
 #[test]

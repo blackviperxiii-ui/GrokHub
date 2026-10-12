@@ -401,15 +401,19 @@ pub fn rank(
     };
     let degraded = |id: &str| reg.get(id).is_some_and(|r| r.state == ModelState::Degraded);
     let need = super::capabilities::class_need(class);
-    let fit = |id: &str| {
+    let lane = super::capabilities::BaselineLane::of(class);
+    let caps_of = |id: &str| {
         let mut caps = super::capabilities::derive_caps(
             &reg.get(id)
                 .map(|r| r.meta.clone())
                 .unwrap_or_else(|| grokhub_core::model_registry::ModelMeta::bare(id)),
         );
         super::capabilities::apply_seed(id, &mut caps);
-        super::capabilities::fit_score(&caps, &need)
+        caps
     };
+    let plan_caps: Vec<_> = candidates.iter().map(|id| caps_of(id)).collect();
+    let plan_max_r = super::capabilities::plan_max_reasoning(plan_caps.iter());
+    let fit = |id: &str| super::capabilities::baseline_score(&caps_of(id), &need, lane, plan_max_r);
     let mut out: Vec<&str> = candidates.to_vec();
     out.sort_by(|a, b| {
         degraded(a)
