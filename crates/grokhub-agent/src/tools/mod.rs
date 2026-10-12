@@ -334,6 +334,37 @@ pub fn str_field(v: &Value, key: &str) -> String {
     v.get(key).and_then(|x| x.as_str()).unwrap_or("").trim().to_string()
 }
 
+/// Path-touching tools that may surface nested folder rules.
+pub(crate) fn is_path_tool(name: &str) -> bool {
+    matches!(
+        name,
+        "read_file" | "list_dir" | "grep" | "search_replace" | "write"
+    )
+}
+
+/// Raw path argument for a path tool, if any.
+///
+/// `list_dir` / `grep` with an empty path mean the workspace root (`"."`).
+pub(crate) fn tool_path_arg(name: &str, args: &Value) -> Option<String> {
+    let keys: &[&str] = match name {
+        "read_file" => &["target_file", "path", "file_path"],
+        "list_dir" | "grep" => &["path"],
+        "search_replace" => &["file_path", "path", "target_file"],
+        "write" => &["path", "file_path", "target_file"],
+        _ => return None,
+    };
+    for key in keys {
+        let raw = str_field(args, key);
+        if !raw.is_empty() {
+            return Some(raw);
+        }
+    }
+    if matches!(name, "list_dir" | "grep") {
+        return Some(".".into());
+    }
+    None
+}
+
 pub fn u32_field(v: &Value, key: &str) -> Option<u32> {
     v.get(key).and_then(|x| x.as_u64()).map(|n| n.min(u64::from(u32::MAX)) as u32)
 }
@@ -341,6 +372,38 @@ pub fn u32_field(v: &Value, key: &str) -> Option<u32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tool_path_arg_reads_each_path_tool() {
+        assert_eq!(
+            tool_path_arg("read_file", &json!({"target_file": "sub/a.rs"})).as_deref(),
+            Some("sub/a.rs")
+        );
+        assert_eq!(
+            tool_path_arg("list_dir", &json!({"path": "sub"})).as_deref(),
+            Some("sub")
+        );
+        assert_eq!(tool_path_arg("list_dir", &json!({})).as_deref(), Some("."));
+        assert_eq!(
+            tool_path_arg("grep", &json!({"pattern": "x", "path": "crates"})).as_deref(),
+            Some("crates")
+        );
+        assert_eq!(
+            tool_path_arg(
+                "search_replace",
+                &json!({"file_path": "a.rs", "old_string": "a", "new_string": "b"})
+            )
+            .as_deref(),
+            Some("a.rs")
+        );
+        assert_eq!(
+            tool_path_arg("write", &json!({"path": "b.rs", "content": ""})).as_deref(),
+            Some("b.rs")
+        );
+        assert!(tool_path_arg("shell", &json!({"command": "ls"})).is_none());
+        assert!(is_path_tool("read_file"));
+        assert!(!is_path_tool("shell"));
+    }
 
     #[test]
     fn tool_schemas_have_object_roots() {
