@@ -44,7 +44,7 @@ impl PolicyRow {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct PolicyFile {
     #[serde(default)]
@@ -69,7 +69,9 @@ fn safety_key(table: &toml::Table) -> Option<String> {
     None
 }
 
-fn check_row(r: &PolicyRow) -> Result<(), String> {
+/// One row's checks: known intent, care and goal, field lengths, and an ask
+/// that never drops approvals.
+pub fn check_row(r: &PolicyRow) -> Result<(), String> {
     let key = r.key();
     if r.intent != ANY && !INTENTS.contains(&r.intent.as_str()) {
         return Err(format!("{key}: unknown intent `{}`", r.intent));
@@ -110,6 +112,13 @@ pub fn parse_policy(text: &str) -> Result<Vec<PolicyRow>, String> {
         seen.push(key);
     }
     Ok(file.row)
+}
+
+/// Rows as a policy file's text, checked the way a user file is.
+pub fn policy_text(rows: &[PolicyRow]) -> Result<String, String> {
+    let text = toml::to_string(&PolicyFile { row: rows.to_vec() }).map_err(|e| e.to_string())?;
+    parse_policy(&text)?;
+    Ok(text)
 }
 
 /// The shipped rows.
