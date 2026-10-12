@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Folder-level AGENTS.md and CLAUDE.md files are picked up when the agent first works in that folder, not only the project root.
 - Short UI repaint timers (palette search, Pulse tab crossfade, Permissions keyring wait, folder picker) only run while something is actually busy or animating, so an idle cabin is not woken every few dozen milliseconds.
 - Background and unattended jobs use a slimmer system prompt: they keep the cabin safety rules and AGENTS layers, and drop the skills list and plugin extras unless the job text declares `NEED_SKILLS` or `NEED_PLUGINS`. Chat is unchanged; the nightly review still uses its lean review prompt.
 - Archive finished chats so they leave the main History list but stay searchable and restorable: Archive / Unarchive from the row menu, chat header menu and Ctrl+Shift+A; an Archived sidebar drawer (newest first); search marks archived hits; opening works; a reply restores the chat with a quiet note; toasts name the chat and offer Undo. Idle chats auto-archive after 14 days (Settings → Behavior, off switch), skipping pinned chats and chats with a running or parked task or background job, on app start and once a day.
