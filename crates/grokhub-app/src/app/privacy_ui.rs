@@ -452,7 +452,9 @@ impl Cabin {
         let ledger = self.consent().clone();
         let lock = self.private_lock_for_paint();
         let checking = ledger.pending() || self.harness.lock_pending;
-        if checking {
+        // Short tick only while the keyring answer is still in flight.
+        // A settled lock (or unlock) does not keep Settings at 150 ms.
+        if self.harness.lock_pending {
             ui.ctx().request_repaint_after(std::time::Duration::from_millis(150));
         }
         if let Some(why) = &lock {
