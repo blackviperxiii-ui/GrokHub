@@ -194,6 +194,7 @@ mod screen_record_ui;
 #[cfg(test)]
 mod self_review_tests;
 mod self_review_ui;
+mod systems_brief_ui;
 mod settings;
 mod setup_wizard;
 mod sidebar;

@@ -91,6 +91,7 @@ pub mod run_metrics;
 pub mod screen_record;
 pub mod self_review;
 pub mod shortcuts;
+pub mod systems_brief;
 pub mod situation;
 pub mod skill;
 pub mod slash;
