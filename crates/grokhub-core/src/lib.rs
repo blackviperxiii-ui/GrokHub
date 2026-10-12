@@ -485,8 +485,8 @@ pub use turn_timeline::{
     LiveBlock, LiveKind, ToolRow, TurnPart,
 };
 pub use update::{
-    cabin_overlay_step, cabin_update_notice, cabin_version_newer, clone_needs_recover,
-    clone_recover_step, discover_source, fetch_channel_tips, is_grokhub_source,
+    beta_auto_off_for_versions, cabin_overlay_step, cabin_update_notice, cabin_version_newer,
+    clone_needs_recover, clone_recover_step, discover_source, fetch_channel_tips, is_grokhub_source,
     origin_needs_retarget, overlay_clone_usable, overlay_clone_usable_in, overlay_stop_targets,
     overlay_update_begin, overlay_update_can_restart, overlay_update_finish,
     overlay_update_progress, parse_cabin_semver, parse_clone_recover_step, parse_github_latest_tag,
@@ -496,8 +496,8 @@ pub use update::{
     switch_clone_to_main, systemd_user_restart_args, systemd_user_stop_args, update_check_due,
     update_chip_label, update_cmds, update_cmds_for, update_cmds_for_host, update_cmds_for_host_in,
     update_cmds_in, update_hint, update_plan_steps, update_progress_pct, update_step_label,
-    update_wipes_config, walk_up_source, release_update_cmds, OverlayUpdateView, RestartAct,
-    UpdatePending, CLONE_RECOVER_STEP_PREFIX, GITHUB_LATEST_API, GITHUB_REMOTE_URL,
+    update_wipes_config, walk_up_source, release_update_cmds, CabinSemver, OverlayUpdateView,
+    RestartAct, UpdatePending, CLONE_RECOVER_STEP_PREFIX, GITHUB_LATEST_API, GITHUB_REMOTE_URL,
     ORIGIN_REMOTE_URL, UPDATE_CHECK_EVERY,
 };
 pub use usage::{

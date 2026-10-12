@@ -79,14 +79,14 @@ There are two channels. **Stable** is `main`, where releases are cut. **Beta** i
 ```bash
 ./scripts/install.sh --user --channel beta     # fetch origin, check out beta, build, install
 ./scripts/install.sh --user --channel stable   # back to main
-grokhub --version                              # GrokHub 2.13.1-beta (beta @ abc1234) or GrokHub 2.13.1 (main @ f7dcf9a)
+grokhub --version                              # GrokHub 2.13.1-beta.3 (beta @ abc1234) or GrokHub 2.13.1 (main @ f7dcf9a)
 ```
 
 `--channel` fetches `origin`, checks out the branch (creating a local tracking branch the first time, and fast-forwarding it after that), then builds and installs. Stable follows `main`, not the latest release tag, because the in-app Update already pulls `main`. The switch refuses to run over uncommitted changes, and it stops instead of resetting when your local branch has commits that aren't on `origin`.
 
 The channel is saved to `~/.config/GrokHub/channel` (or `$GROKHUB_CONFIG/channel`), next to the `source` receipt. A plain `./scripts/install.sh --user` keeps the saved channel and builds whatever is checked out; it doesn't move git. Settings → **Update**, `/update`, and `grokhub --update` read the receipt: a beta install pulls `origin beta` and never `origin main`. If the clone isn't on the channel's branch, Update stops and says which command to run. `./scripts/install.sh --dry-run` prints the channel, branch, and receipt it would use, and exits.
 
-`--version` comes from `crates/grokhub-app/build.rs`, which reads the branch and short SHA from git at build time. A beta build adds `-beta` to the version; the Cargo version itself never changes. A build made without git shows just `GrokHub 2.13.1`.
+`--version` comes from `crates/grokhub-app/build.rs`, which reads the branch, short SHA, and beta N from git at build time. A beta build is labeled `X.Y.Z-beta.N`, where N is the commit count since the newest stable `vX.Y.Z` tag (`git rev-list --count <tag>..HEAD`). Shallow clones without tags fall back to `beta.0` until you `git fetch --tags`. The Cargo version itself never changes for a beta label. A build made without git shows just `GrokHub 2.13.1`.
 
 Limits: building beta from a clone is Linux-only (`scripts/install-windows.ps1` has no `-Channel`); Windows gets Beta from the signed pre-releases. Beta turns itself off when beta catches up to main only on a Linux clone, because that check reads the clone's branches; elsewhere, turn it off in Labs. The Update chip still only notices new stable releases, so on beta, use Settings → **Update** to take the newest beta build.
 
