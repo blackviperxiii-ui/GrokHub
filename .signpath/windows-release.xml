@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Paste this into the SignPath project as artifact configuration slug
+  `windows-release` (or match SIGNPATH_ARTIFACT_CONFIGURATION_SLUG).
+
+  GitHub Actions upload-artifact wraps the listed files in a ZIP, so the
+  root element is <zip-file>. Nested portable zip is signed inside.
+
+  Product metadata must match PE resources (ProductName GrokHub) and the
+  version parameter from the workflow.
+-->
+<artifact-configuration xmlns="http://signpath.io/artifact-configuration/v1">
+  <parameters>
+    <parameter name="version" required="true" />
+  </parameters>
+  <zip-file>
+    <pe-file path="GrokHub-Setup-*.exe" product-name="GrokHub" product-version="${version}">
+      <authenticode-sign />
+    </pe-file>
+    <zip-file path="grokhub-windows-v*.zip">
+      <pe-file path="grokhub.exe" product-name="GrokHub" product-version="${version}">
+        <authenticode-sign />
+      </pe-file>
+      <pe-file path="grokhub-hub.exe" product-name="GrokHub" product-version="${version}">
+        <authenticode-sign />
+      </pe-file>
+    </zip-file>
+  </zip-file>
+</artifact-configuration>
