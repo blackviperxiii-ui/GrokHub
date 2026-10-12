@@ -2015,10 +2015,12 @@ pub(super) fn pulse_image_path(url: &str) -> std::path::PathBuf {
 
 fn fetch_agent() -> ureq::Agent {
     // No redirects: a public URL can't bounce the fetch onto a private host.
+    // Dial resolver blocks DNS→private/CGNAT even when the hostname looked public.
     ureq::AgentBuilder::new()
         .try_proxy_from_env(true)
         .redirects(0)
         .timeout(std::time::Duration::from_secs(8))
+        .resolver(grokhub_agent::public_only_resolve)
         .build()
 }
 
@@ -2071,4 +2073,25 @@ fn cache_image(url: &str) -> bool {
         let _ = std::fs::create_dir_all(dir);
     }
     crate::config::atomic_write(&path, &buf).is_ok()
+}
+
+#[cfg(test)]
+mod fetch_agent_tests {
+    #[test]
+    fn fetch_agent_dials_through_the_public_only_resolver() {
+        let src = include_str!("pulse_ui.rs");
+        let arm = src
+            .split("fn fetch_agent()")
+            .nth(1)
+            .and_then(|rest| rest.split("fn source_preview(").next())
+            .expect("fetch_agent");
+        assert!(
+            arm.contains(".resolver(grokhub_agent::public_only_resolve)"),
+            "Pulse page/image fetches must refuse DNS→private: {arm}"
+        );
+        assert!(
+            arm.contains(".redirects(0)"),
+            "Pulse image agent must not auto-follow redirects: {arm}"
+        );
+    }
 }

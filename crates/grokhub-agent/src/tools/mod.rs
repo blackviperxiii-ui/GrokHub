@@ -17,6 +17,8 @@ pub(crate) mod shell;
 mod web_fetch;
 mod write;
 
+pub use web_fetch::public_only_resolve;
+
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
