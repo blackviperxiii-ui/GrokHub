@@ -18,8 +18,11 @@
 //! - **Per-day token budgets.** A [`BudgetClass::Tokens`] job is charged what it
 //!   spent ([`Governor::charge`]). Once today's spend reaches its budget the job
 //!   stops until the local day changes, and one named note says so.
-//! - **Heavy jobs.** [`TickCtx::hold_heavy`] holds every heavy job; the cabin
-//!   passes `false` until user-activity preemption lands.
+//! - **Preemption.** While you're active ([`user_active`]: typing, a draft in
+//!   the composer, a key or click in the last [`ACTIVE_WINDOW_MS`], or a chat
+//!   run going) the cabin sets [`TickCtx::hold_heavy`]: every heavy job waits
+//!   and runs on the first idle beat, and light model jobs keep running on the
+//!   router's cost goal ([`ACTIVE_GOAL`], reason [`ACTIVE_REASON`]).
 //!
 //! Pure and clock-injected: every call takes the time and the local day, so
 //! tests drive a fake clock. The state is in memory; a relaunch starts a fresh
@@ -34,6 +37,20 @@ use crate::organs::quiet_hours_active;
 
 /// Once-a-day jobs check their day gate this often.
 const DAILY_CHECK_MS: u64 = 60_000;
+
+/// How long after your last key or click the cabin still counts you as active.
+pub const ACTIVE_WINDOW_MS: u64 = 20_000;
+
+/// The router goal light model jobs run on while you're active.
+pub const ACTIVE_GOAL: &str = "cost";
+/// The reason the router logs with [`ACTIVE_GOAL`].
+pub const ACTIVE_REASON: &str = "user active";
+
+/// You're active: a chat run is going, the composer holds a draft, or your last
+/// key or click was under [`ACTIVE_WINDOW_MS`] ago.
+pub fn user_active(run_active: bool, composer_has_text: bool, since_input_ms: u64) -> bool {
+    run_active || composer_has_text || since_input_ms < ACTIVE_WINDOW_MS
+}
 
 /// Every kind of background job. Each one has exactly one registration.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -217,10 +234,11 @@ pub fn cabin_jobs() -> Vec<JobSpec> {
             Holds,
             false,
         ),
+        // A turn in your own chat: it waits while you're active, like heavy work.
         job(
             JobKind::Anticipate,
             65,
-            false,
+            true,
             Tokens,
             HEARTBEAT_MS,
             Holds,
@@ -344,6 +362,21 @@ impl JobHold {
             Self::Heavy => "heavy_held",
         }
     }
+
+    /// Why it waits, for Settings → Background.
+    pub fn plain(self) -> &'static str {
+        match self {
+            Self::Halted => "Paused: Halt is on",
+            Self::Quiet => "Waiting for quiet hours to end",
+            Self::BudgetSpent => "Stopped for today: budget used",
+            Self::Heavy => "Waiting while you're active",
+        }
+    }
+}
+
+/// A light model job runs on the router's cost goal while you're active.
+pub fn runs_cheap(spec: &JobSpec, active: bool) -> bool {
+    active && !spec.heavy && spec.budget == BudgetClass::Tokens
 }
 
 /// A note left when a kind's budget for the day is spent.
@@ -373,7 +406,8 @@ pub struct TickCtx<'a> {
     pub quiet_start: &'a str,
     pub quiet_end: &'a str,
     pub halted: bool,
-    /// Hold every heavy job this beat.
+    /// You're active ([`user_active`]): hold every heavy job this beat, and run
+    /// light model jobs on the cost goal.
     pub hold_heavy: bool,
     pub budgets: &'a BackgroundBudgets,
 }
@@ -389,6 +423,8 @@ pub struct TickPlan {
     pub quiet: bool,
     /// Notes first left on this tick.
     pub new_notes: Vec<GovernorNote>,
+    /// Queued light model jobs that run on the cost goal because you're active.
+    pub cheap: Vec<JobKind>,
 }
 
 impl TickPlan {
@@ -397,11 +433,25 @@ impl TickPlan {
     }
 }
 
+/// One job's line in Settings → Background.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JobStatus {
+    pub kind: JobKind,
+    /// When it is next due (ms since the epoch); 0 before its first beat.
+    pub next_due_ms: u64,
+    pub spent_today: u64,
+    /// Today's token budget; `None` for local work.
+    pub daily_budget: Option<u64>,
+    /// Why it waited on the last beat; `None` when it ran or was not due.
+    pub waiting: Option<JobHold>,
+}
+
 #[derive(Debug, Clone)]
 struct Slot {
     spec: JobSpec,
     next_due_ms: u64,
     spent_today: u64,
+    held: Option<JobHold>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -431,6 +481,7 @@ impl Governor {
             spec,
             next_due_ms: 0,
             spent_today: 0,
+            held: None,
         });
         Ok(())
     }
@@ -452,6 +503,21 @@ impl Governor {
     /// Today's notes, oldest first.
     pub fn notes(&self) -> &[GovernorNote] {
         &self.notes
+    }
+
+    /// Every job's line for Settings → Background, in registration order.
+    pub fn status(&self, budgets: &BackgroundBudgets) -> Vec<JobStatus> {
+        self.slots
+            .iter()
+            .map(|s| JobStatus {
+                kind: s.spec.kind,
+                next_due_ms: s.next_due_ms,
+                spent_today: s.spent_today,
+                daily_budget: (s.spec.budget == BudgetClass::Tokens)
+                    .then(|| budgets.daily_tokens(s.spec.kind)),
+                waiting: s.held,
+            })
+            .collect()
     }
 
     /// One beat: the queue of due jobs to run now. A job handed out is not due
@@ -481,11 +547,16 @@ impl Governor {
                     self.notes.push(note.clone());
                     plan.new_notes.push(note);
                 }
+                self.slots[i].held = Some(hold);
                 plan.held.push((spec.kind, hold));
                 continue;
             }
+            self.slots[i].held = None;
             self.slots[i].next_due_ms = ctx.now_ms.saturating_add(spec.every_ms);
             plan.run.push(spec.kind);
+            if runs_cheap(&spec, ctx.hold_heavy) {
+                plan.cheap.push(spec.kind);
+            }
         }
         plan
     }
@@ -806,8 +877,163 @@ mod tests {
             plan.held,
             vec![
                 (JobKind::Automations, JobHold::Heavy),
+                (JobKind::Anticipate, JobHold::Heavy),
                 (JobKind::NightPasses, JobHold::Heavy),
                 (JobKind::Indexers, JobHold::Heavy),
+            ]
+        );
+    }
+
+    #[test]
+    fn activity_is_a_run_a_draft_or_a_key_or_click_under_twenty_seconds_ago() {
+        assert!(user_active(true, false, u64::MAX));
+        assert!(user_active(false, true, u64::MAX));
+        assert!(user_active(false, false, 0));
+        assert!(user_active(false, false, 19_999));
+        assert!(!user_active(false, false, 20_000));
+        assert!(!user_active(false, false, 3_600_000));
+    }
+
+    #[test]
+    fn activity_holds_heavy_jobs_moves_light_model_jobs_to_the_cost_goal_and_idle_resumes() {
+        let budgets = BackgroundBudgets::default();
+        let mut g = Governor::cabin();
+        let mut busy = ctx(T0, DAY, "12:00", &budgets);
+        busy.hold_heavy = true;
+        let plan = g.tick(&busy);
+        assert_eq!(
+            plan.held,
+            vec![
+                (JobKind::Automations, JobHold::Heavy),
+                (JobKind::Anticipate, JobHold::Heavy),
+                (JobKind::NightPasses, JobHold::Heavy),
+                (JobKind::Indexers, JobHold::Heavy),
+            ]
+        );
+        assert_eq!(
+            plan.run,
+            vec![
+                JobKind::PulseRefresh,
+                JobKind::ModelRegistry,
+                JobKind::Proactive,
+                JobKind::Ideas,
+                JobKind::Digest,
+                JobKind::Review,
+                JobKind::MemoryRetention,
+                JobKind::Reflect,
+            ]
+        );
+        // Light jobs that call a model run on the cost goal; local upkeep is untouched.
+        assert_eq!(
+            plan.cheap,
+            vec![JobKind::Ideas, JobKind::Digest, JobKind::Review]
+        );
+        assert_eq!((ACTIVE_GOAL, ACTIVE_REASON), ("cost", "user active"));
+        let rows = g.status(&budgets);
+        assert_eq!(rows[0].kind, JobKind::Automations);
+        assert_eq!(rows[0].waiting, Some(JobHold::Heavy));
+        assert_eq!(rows[0].next_due_ms, 0, "a held job stays due");
+        assert_eq!(rows[4].kind, JobKind::Ideas);
+        assert_eq!(rows[4].waiting, None);
+        assert_eq!(rows[4].next_due_ms, T0 + HEARTBEAT_MS);
+        assert_eq!(JobHold::Heavy.plain(), "Waiting while you're active");
+        // Still active a second later: the held jobs keep waiting, nothing light runs twice.
+        let mut still = ctx(T0 + 1_000, DAY, "12:00", &budgets);
+        still.hold_heavy = true;
+        let again = g.tick(&still);
+        assert_eq!(again.run, Vec::<JobKind>::new());
+        assert_eq!(again.held.len(), 4);
+        // Idle: the held jobs run on the very next beat, once, at full goal.
+        let idle = g.tick(&ctx(T0 + 2_000, DAY, "12:00", &budgets));
+        assert_eq!(
+            idle.run,
+            vec![
+                JobKind::Automations,
+                JobKind::Anticipate,
+                JobKind::NightPasses,
+                JobKind::Indexers
+            ]
+        );
+        assert!(idle.held.is_empty());
+        assert_eq!(idle.cheap, Vec::<JobKind>::new());
+        assert_eq!(g.status(&budgets)[0].waiting, None);
+        assert_eq!(
+            g.tick(&ctx(T0 + 2_000, DAY, "12:00", &budgets)).run,
+            Vec::<JobKind>::new()
+        );
+        // One pulse after the first beat only the light pulse-rate jobs are due; the
+        // resumed ones keep their own cadence from when they ran.
+        assert_eq!(
+            g.tick(&ctx(T0 + HEARTBEAT_MS, DAY, "12:00", &budgets)).run,
+            vec![
+                JobKind::PulseRefresh,
+                JobKind::ModelRegistry,
+                JobKind::Proactive,
+                JobKind::Ideas,
+                JobKind::Digest,
+                JobKind::Reflect,
+            ]
+        );
+        assert_eq!(
+            g.tick(&ctx(T0 + 2_000 + HEARTBEAT_MS, DAY, "12:00", &budgets))
+                .run,
+            vec![JobKind::Automations, JobKind::Anticipate, JobKind::Indexers]
+        );
+    }
+
+    #[test]
+    fn quiet_hours_and_spent_budgets_win_over_activity_and_settings_rows_say_why() {
+        let budgets = BackgroundBudgets {
+            daily_tokens: BTreeMap::from([("review".to_string(), 1_000)]),
+        };
+        let mut g = Governor::cabin();
+        g.charge(JobKind::Review, 1_000, DAY);
+        let mut night = ctx(T0, DAY, "23:30", &budgets);
+        night.hold_heavy = true;
+        let plan = g.tick(&night);
+        assert_eq!(
+            plan.held,
+            vec![
+                (JobKind::Automations, JobHold::Heavy),
+                (JobKind::Ideas, JobHold::Quiet),
+                (JobKind::Anticipate, JobHold::Quiet),
+                (JobKind::Digest, JobHold::Quiet),
+                (JobKind::Review, JobHold::BudgetSpent),
+                (JobKind::NightPasses, JobHold::Heavy),
+                (JobKind::Indexers, JobHold::Quiet),
+            ]
+        );
+        assert_eq!(plan.cheap, Vec::<JobKind>::new());
+        assert_eq!(
+            plan.new_notes[0].text,
+            "Nightly review used today's background budget (1000 of 1000 tokens), so it stops until tomorrow."
+        );
+        let rows = g.status(&budgets);
+        let row = |k: JobKind| rows.iter().find(|r| r.kind == k).cloned().expect("row");
+        assert_eq!(
+            row(JobKind::Review),
+            JobStatus {
+                kind: JobKind::Review,
+                next_due_ms: 0,
+                spent_today: 1_000,
+                daily_budget: Some(1_000),
+                waiting: Some(JobHold::BudgetSpent),
+            }
+        );
+        assert_eq!(row(JobKind::Digest).daily_budget, Some(150_000));
+        assert_eq!(row(JobKind::Indexers).daily_budget, None);
+        assert_eq!(row(JobKind::Indexers).waiting, Some(JobHold::Quiet));
+        assert_eq!(row(JobKind::Proactive).waiting, None);
+        assert_eq!(
+            [
+                JobHold::Quiet.plain(),
+                JobHold::BudgetSpent.plain(),
+                JobHold::Halted.plain()
+            ],
+            [
+                "Waiting for quiet hours to end",
+                "Stopped for today: budget used",
+                "Paused: Halt is on"
             ]
         );
     }
