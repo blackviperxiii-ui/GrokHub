@@ -260,10 +260,10 @@ impl Cabin {
             self.seed_interests(&user_md, &memory_md);
         }
         let topics = self.source_topics();
-        let mut reqs = ps::requests(&self.cfg.pulse_sources, &topics, now);
-        // More like this asks run once, on this check.
         let path = sources_cache_path();
         let mut cache = ps::load_cache(&path);
+        let mut reqs = ps::requests_for(&self.cfg.pulse_sources, &topics, cache.runs, now);
+        // More like this asks run once, on this check.
         if !cache.related.is_empty() {
             reqs.extend(ps::related_requests(
                 &self.cfg.pulse_sources,
@@ -343,6 +343,7 @@ impl Cabin {
             &run.items,
             self.interests_now(),
             &cache.source_bias,
+            &cache.source_posts,
             run.at_ms,
         );
         let posted_urls: Vec<String> = self
@@ -425,6 +426,8 @@ impl Cabin {
             }
         }
         ps::mark_seen(&mut cache, &picks);
+        cache.mark_source_posts(&picks);
+        cache.runs = cache.runs.saturating_add(1);
         cache.last_run_ms = run.at_ms;
         if let Err(err) = ps::save_cache(&path, &cache) {
             self.status = err;
@@ -493,9 +496,48 @@ impl Cabin {
         }
     }
 
+    /// After enough Save / More like this hits, follow the place (subreddit, repo, channel).
+    fn learn_place_from_card(&mut self, card: &grokhub_core::UpdateCard) -> bool {
+        let Some((kind, entry)) = ps::place_from_card(card) else {
+            return false;
+        };
+        let path = sources_cache_path();
+        let mut cache = ps::load_cache(&path);
+        let ready = cache.note_place(kind, &entry);
+        if let Err(err) = ps::save_cache(&path, &cache) {
+            self.status = err;
+            return false;
+        }
+        if !ready || !self.cfg.pulse_sources.on(kind) {
+            return false;
+        }
+        match self.cfg.pulse_sources.add(kind, &entry) {
+            Ok(added) => {
+                self.persist_cfg();
+                self.status = format!(
+                    "Following {} — learned from what you liked.",
+                    match kind {
+                        ps::SourceKind::Reddit => format!("r/{added}"),
+                        ps::SourceKind::GithubReleases => format!("{added} on GitHub"),
+                        ps::SourceKind::YouTube => format!("YouTube {added}"),
+                        ps::SourceKind::Rss => added,
+                        ps::SourceKind::HackerNews => added,
+                    }
+                );
+                true
+            }
+            Err(err) if err.contains("already on the list") => false,
+            Err(err) => {
+                self.status = err;
+                false
+            }
+        }
+    }
+
     /// Save keeps the post in Saved Finds and raises its interest. Not interested
     /// quietly removes it and lowers its interest and source. More like this raises
-    /// both and searches the post's own words on the next check.
+    /// both and searches the post's own words on the next check. Save and More like
+    /// this also count toward following a new place after two hits.
     pub(super) fn source_post_act(&mut self, id: &str, did: SourceAct) {
         let Some(card) = self.pulse_card(id) else {
             return;
@@ -511,6 +553,7 @@ impl Cabin {
                 }
                 self.status = "Saved to Saved Finds in Settings → Pulse.".into();
                 if card.reaction == Some(grokhub_core::CardReaction::Up) {
+                    let _ = self.learn_place_from_card(&card);
                     return;
                 }
                 if let Some(c) = self.updates.iter_mut().find(|c| c.id == id) {
@@ -519,6 +562,7 @@ impl Cabin {
                 self.persist_updates();
                 self.pulse_note(&card.title, LedgerReason::Liked, &day);
                 self.post_topic_feedback(&card, InterestSignal::Saved);
+                let _ = self.learn_place_from_card(&card);
             }
             SourceAct::NotInterested => {
                 self.pulse_note(&card.title, LedgerReason::NotThis, &day);
@@ -535,7 +579,9 @@ impl Cabin {
                 );
                 self.interests_feedback(&text, InterestSignal::MoreLikeThis);
                 self.nudge_post_source(&card, 1, true);
-                self.status = "More like this on the next check.".into();
+                if !self.learn_place_from_card(&card) {
+                    self.status = "More like this on the next check.".into();
+                }
             }
         }
     }
@@ -1081,11 +1127,17 @@ mod tests {
         cabin.updates.clear();
         cabin.add_interest("Rust");
         let now = now_ms();
+        let mut kernel = item("Rust in the kernel", "https://lwn.test/rust", now);
+        kernel.source_name = "r/rust".into();
+        kernel.kind = SourceKind::Reddit;
+        let mut book = item("Rust async book", "https://book.test/async", now);
+        book.source_name = "blog.test".into();
+        book.kind = SourceKind::Rss;
         let added = cabin.post_source_run(one_item_run(
             vec![
                 item("Rust 1.99 released", "https://blog.rust-lang.org/1.99", now),
-                item("Rust in the kernel", "https://lwn.test/rust", now),
-                item("Rust async book", "https://book.test/async", now),
+                kernel,
+                book,
             ],
             now,
         ));
@@ -1153,20 +1205,65 @@ mod tests {
         assert_eq!(cabin.status, "", "Not interested is quiet");
         assert_eq!(weight(&mut cabin), 65);
         let cache = ps::load_cache(&sources_cache_path());
-        assert_eq!(cache.source_bias.get("Hacker News"), Some(&-1));
+        assert_eq!(cache.source_bias.get("r/rust"), Some(&-1));
 
         let more = id(&cabin, "Rust async book");
         cabin.source_post_act(&more, SourceAct::MoreLike);
         assert_eq!(cabin.status, "More like this on the next check.");
         assert_eq!(weight(&mut cabin), 77);
         let cache = ps::load_cache(&sources_cache_path());
-        assert_eq!(cache.source_bias.get("Hacker News"), None);
+        assert_eq!(cache.source_bias.get("blog.test"), Some(&1));
         assert_eq!(
             cache.related,
             vec![ps::Related {
                 query: "Rust async book".into(),
                 topic: Some("Rust".into())
             }]
+        );
+    }
+
+    #[test]
+    fn two_saves_from_a_subreddit_follow_it() {
+        let (_lock, _root, mut cabin) = cabin();
+        cabin.updates.clear();
+        cabin.add_interest("Rust");
+        cabin.cfg.pulse_sources.subreddits.clear();
+        let now = now_ms();
+        let mut a = item(
+            "Async in the kernel",
+            "https://www.reddit.com/r/rust/comments/a/x",
+            now,
+        );
+        a.kind = SourceKind::Reddit;
+        a.source_name = "r/rust".into();
+        let mut b = item(
+            "Egui 0.40",
+            "https://www.reddit.com/r/rust/comments/b/y",
+            now - 1,
+        );
+        b.kind = SourceKind::Reddit;
+        b.source_name = "r/rust".into();
+        assert_eq!(cabin.post_source_run(one_item_run(vec![a, b], now)), 2);
+        let first = cabin
+            .updates
+            .iter()
+            .find(|c| c.title == "Async in the kernel")
+            .map(|c| c.id.clone())
+            .expect("first");
+        let second = cabin
+            .updates
+            .iter()
+            .find(|c| c.title == "Egui 0.40")
+            .map(|c| c.id.clone())
+            .expect("second");
+        cabin.source_post_act(&first, SourceAct::Save);
+        assert_eq!(cabin.cfg.pulse_sources.subreddits, Vec::<String>::new());
+        assert_eq!(cabin.status, "Saved to Saved Finds in Settings → Pulse.");
+        cabin.source_post_act(&second, SourceAct::Save);
+        assert_eq!(cabin.cfg.pulse_sources.subreddits, vec!["rust".to_string()]);
+        assert_eq!(
+            cabin.status,
+            "Following r/rust — learned from what you liked."
         );
     }
 
