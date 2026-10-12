@@ -350,7 +350,11 @@ pub fn set_status(entries: &mut [JournalEntry], id: &str, status: JournalStatus)
     if e.status == status {
         return true;
     }
-    e.note(format!("status {} → {}", e.status.as_str(), status.as_str()));
+    e.note(format!(
+        "status {} → {}",
+        e.status.as_str(),
+        status.as_str()
+    ));
     e.status = status;
     if matches!(status, JournalStatus::Decided) {
         e.decided_ms = Some(now_ms());
@@ -475,12 +479,7 @@ pub fn remove_evidence(entries: &mut [JournalEntry], id: &str, evidence_id: &str
     true
 }
 
-pub fn set_leaning(
-    entries: &mut [JournalEntry],
-    id: &str,
-    option_id: &str,
-    note: &str,
-) -> bool {
+pub fn set_leaning(entries: &mut [JournalEntry], id: &str, option_id: &str, note: &str) -> bool {
     let Some(e) = entries.iter_mut().find(|e| e.id == id) else {
         return false;
     };
@@ -497,7 +496,11 @@ pub fn set_leaning(
 /// Interim stand-in for promote-to-mission until Mission-based OS lands.
 /// Uses the question as the card title (decision questions are not work-verbs,
 /// so `file_idea_todo` / `idea_todo_title` would fall back to a generic label).
-pub fn promote_to_board(entries: &mut [JournalEntry], board: &mut Vec<BoardCard>, id: &str) -> Option<String> {
+pub fn promote_to_board(
+    entries: &mut [JournalEntry],
+    board: &mut Vec<BoardCard>,
+    id: &str,
+) -> Option<String> {
     let e = entries.iter_mut().find(|e| e.id == id)?;
     if let Some(existing) = e.board_id.as_ref() {
         if board.iter().any(|c| c.id == *existing) {
@@ -612,11 +615,7 @@ mod tests {
         assert!(defer_entry(&mut entries, &id));
         assert_eq!(entries[0].status, JournalStatus::Deferred);
 
-        assert!(set_status(
-            &mut entries,
-            &id,
-            JournalStatus::ReadyToDecide
-        ));
+        assert!(set_status(&mut entries, &id, JournalStatus::ReadyToDecide));
         let opt = entries[0].options[1].id.clone();
         assert!(decide_entry(
             &mut entries,
@@ -625,10 +624,7 @@ mod tests {
             "A/B looked quiet enough."
         ));
         assert_eq!(entries[0].status, JournalStatus::Decided);
-        assert_eq!(
-            entries[0].outcome.as_ref().unwrap().chosen_option_id,
-            opt
-        );
+        assert_eq!(entries[0].outcome.as_ref().unwrap().chosen_option_id, opt);
         assert!(entries[0].decided_ms.is_some());
 
         let id2 = create_entry(&mut entries, "Another question?").expect("id2");
@@ -703,15 +699,7 @@ mod tests {
     fn due_nudge_is_quiet_and_dismissible() {
         let mut entries = Vec::new();
         let id = create_entry(&mut entries, "Revisit auth?").unwrap();
-        edit_entry(
-            &mut entries,
-            &id,
-            None,
-            None,
-            None,
-            None,
-            Some(Some(100)),
-        );
+        edit_entry(&mut entries, &id, None, None, None, None, Some(Some(100)));
         assert_eq!(due_nudges(&entries, 99).len(), 0);
         assert_eq!(due_nudges(&entries, 100).len(), 1);
         assert!(dismiss_nudge(&mut entries, &id));

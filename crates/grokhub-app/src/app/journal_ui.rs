@@ -219,12 +219,20 @@ impl Cabin {
                     return;
                 }
                 ui.add_space(8.0);
-                ui.label(RichText::new("Question").size(11.0).color(crate::theme::subtle()));
+                ui.label(
+                    RichText::new("Question")
+                        .size(11.0)
+                        .color(crate::theme::subtle()),
+                );
                 ui.add(
                     egui::TextEdit::singleline(&mut self.journal_view.edit_question)
                         .desired_width(ui.available_width()),
                 );
-                ui.label(RichText::new("Context").size(11.0).color(crate::theme::subtle()));
+                ui.label(
+                    RichText::new("Context")
+                        .size(11.0)
+                        .color(crate::theme::subtle()),
+                );
                 ui.add(
                     egui::TextEdit::multiline(&mut self.journal_view.edit_context)
                         .desired_width(ui.available_width())
@@ -379,7 +387,8 @@ impl Cabin {
                     }
                 });
 
-                if entry.status != JournalStatus::Decided && entry.status != JournalStatus::Abandoned
+                if entry.status != JournalStatus::Decided
+                    && entry.status != JournalStatus::Abandoned
                 {
                     ui.add_space(6.0);
                     ui.horizontal(|ui| {

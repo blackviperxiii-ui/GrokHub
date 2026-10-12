@@ -55,6 +55,7 @@ pub mod imagine;
 pub mod imagine_auth;
 pub mod inhabit;
 pub mod interests;
+pub mod journal;
 pub mod learning;
 pub mod local_setup;
 pub mod mcp_catalog;
@@ -111,7 +112,6 @@ pub mod voice;
 pub mod what_changed;
 pub mod windshield;
 pub mod wire;
-pub mod journal;
 pub mod workboard;
 pub mod xai_signin;
 
@@ -354,6 +354,12 @@ pub use imagine_auth::{
     XAI_OAUTH_ACCOUNT, XAI_OAUTH_LEGACY_ACCOUNT,
 };
 pub use inhabit::{can_inhabit, inhabit_bundle_usable, inhabit_ready, InhabitBundle};
+pub use journal::{
+    abandon_entry, add_evidence, add_option, create_entry, decide_entry, defer_entry,
+    dismiss_nudge, due_nudges, edit_entry, link_board_evidence, promote_to_board, remove_evidence,
+    remove_option, search_entries, set_leaning, set_status, EvidenceKind, EvidenceLink,
+    JournalEntry, JournalLeaning, JournalOption, JournalOutcome, JournalStatus,
+};
 pub use learning::{
     apply_local_lessons, extract_insights, insight_key_for_fact, insight_pin, is_actionable_need,
     is_durable_fact, is_greeting_chitchat, looks_like_user_pref, prune_ephemeral_insights,
@@ -557,12 +563,6 @@ pub use windshield::{
     rank_atspi_rows, refused_lock, tab_list_from_rows, window_name_from_atspi,
     window_name_from_wmctrl, windshield_browser_line, windshield_prompt, AtspiRow, PendingStep,
     WindshieldFrame,
-};
-pub use journal::{
-    abandon_entry, add_evidence, add_option, create_entry, decide_entry, defer_entry,
-    dismiss_nudge, due_nudges, edit_entry, link_board_evidence, promote_to_board, remove_evidence,
-    remove_option, search_entries, set_leaning, set_status, EvidenceKind, EvidenceLink,
-    JournalEntry, JournalLeaning, JournalOption, JournalOutcome, JournalStatus,
 };
 pub use workboard::{
     abandon_inflight_card, apply_assistant_work_marks, apply_work_update,

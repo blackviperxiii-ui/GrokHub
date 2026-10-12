@@ -28862,7 +28862,10 @@ fn journal_create_promote_persists_and_slash_opens() {
     ));
     let board_id =
         grokhub_core::promote_to_board(&mut cabin.journal, &mut cabin.board, &id).expect("promote");
-    assert_eq!(cabin.journal[0].board_id.as_deref(), Some(board_id.as_str()));
+    assert_eq!(
+        cabin.journal[0].board_id.as_deref(),
+        Some(board_id.as_str())
+    );
     assert_eq!(cabin.board.len(), 1);
     assert!(
         cabin.board[0].detail.contains("Ideas were becoming")
@@ -28897,7 +28900,10 @@ fn journal_create_promote_persists_and_slash_opens() {
         None,
         "Local journal is enough for v1."
     ));
-    assert_eq!(cabin.journal[0].status, grokhub_core::JournalStatus::Decided);
+    assert_eq!(
+        cabin.journal[0].status,
+        grokhub_core::JournalStatus::Decided
+    );
 
     std::env::remove_var("GROKHUB_CONFIG");
 }
