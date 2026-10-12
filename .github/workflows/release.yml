@@ -1,11 +1,11 @@
 name: Release
 
-# A `v*` tag publishes a release. A push to `beta` publishes a pre-release
-# (`beta-vX.Y.Z-<sha>`) with the same layout. Each one carries the Linux and
-# Windows builds, `SHA256SUMS` over all of them, and `SHA256SUMS.minisig`, a
-# minisign signature made with the `MINISIGN_SECRET_KEY` Actions secret. The
-# matching public key is `packaging/minisign.pub`; the updater refuses any
-# asset whose hash or signature doesn't verify.
+# A stable `vX.Y.Z` tag publishes Latest. A `vX.Y.Z-beta.N` tag publishes a
+# GitHub pre-release (never Latest) with the same assets. A push to `beta`
+# still publishes `beta-vX.Y.Z-<sha>` for the channel while that path remains.
+# Each release carries Linux and Windows builds, `SHA256SUMS`, and
+# `SHA256SUMS.minisig` (minisign via `MINISIGN_SECRET_KEY`). The public key is
+# `packaging/minisign.pub`; the updater refuses unverified assets.
 
 on:
   push:
@@ -77,8 +77,17 @@ jobs:
         shell: bash
         run: |
           if [ "$GITHUB_REF_TYPE" = tag ]; then
-            echo "tag=$GITHUB_REF_NAME" >> "$GITHUB_OUTPUT"
-            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+            tag="$GITHUB_REF_NAME"
+            echo "tag=$tag" >> "$GITHUB_OUTPUT"
+            if [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-beta\.[0-9]+$ ]]; then
+              # Semver beta pre-release: never Latest.
+              echo "prerelease=true" >> "$GITHUB_OUTPUT"
+            elif [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "prerelease=false" >> "$GITHUB_OUTPUT"
+            else
+              echo "::error::unsupported release tag '$tag' (want vX.Y.Z or vX.Y.Z-beta.N)"
+              exit 1
+            fi
           else
             ver="$(tr -d '[:space:]' < VERSION)"
             echo "tag=beta-v${ver}-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
