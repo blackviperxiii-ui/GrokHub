@@ -83,11 +83,7 @@ impl SpeedQuality {
             | "background:summarize"
             | "background:compact"
             | "chat:quick" => Self::Speed,
-            "plan"
-            | "design"
-            | "code:multi-file"
-            | "debug"
-            | "prepare:hard"
+            "plan" | "design" | "code:multi-file" | "debug" | "prepare:hard"
             | "repair:diagnose" => Self::Quality,
             _ => Self::Balanced,
         }
@@ -599,7 +595,12 @@ pub fn eval_pairs(inp: &TableInputs<'_>) -> Vec<(String, Option<String>, Vec<&'s
 /// Build the table. Pure: the clock is `now_ms`, scores come from `cache`, and
 /// model strengths come from `catalog` (capability fit per class).
 pub fn build_table(inp: &TableInputs<'_>, cache: &EvalCache, now_ms: u64) -> RoutingTable {
-    build_table_with_catalog(inp, cache, &super::capabilities::build_catalog(inp.reg, now_ms), now_ms)
+    build_table_with_catalog(
+        inp,
+        cache,
+        &super::capabilities::build_catalog(inp.reg, now_ms),
+        now_ms,
+    )
 }
 
 /// Same as [`build_table`] with an explicit capability catalog (tests / rebuild).
@@ -955,7 +956,8 @@ pub fn rebuild(config_dir: &Path, eval: Option<EvalEnv<'_>>, force: bool, now_ms
             ..Rebuilt::default()
         };
     }
-    let catalog = super::capabilities::refresh_catalog(config_dir, &reg, force || caps_stale, now_ms);
+    let catalog =
+        super::capabilities::refresh_catalog(config_dir, &reg, force || caps_stale, now_ms);
     let mut cache: EvalCache = read_json(&eval_cache_path(config_dir)).unwrap_or_default();
     let mut run = EvalRun::default();
     if let Some(env) = eval {

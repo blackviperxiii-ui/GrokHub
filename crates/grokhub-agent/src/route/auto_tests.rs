@@ -266,11 +266,17 @@ fn capability_fit_diversifies_picks_across_task_classes() {
     }
 
     // Memory needs light reasoning, not the non-reasoning speed slug.
-    assert_eq!(top_of(&table, "background:memory"), "grok-4.20-0309-reasoning");
+    assert_eq!(
+        top_of(&table, "background:memory"),
+        "grok-4.20-0309-reasoning"
+    );
 
     // Everyday chat / small edits: mid reasoning workhorse, not flagship.
     assert_eq!(top_of(&table, "chat:default"), "grok-4.20-0309-reasoning");
-    assert_eq!(top_of(&table, "code:edit-small"), "grok-4.20-0309-reasoning");
+    assert_eq!(
+        top_of(&table, "code:edit-small"),
+        "grok-4.20-0309-reasoning"
+    );
 
     // Multi-file prefers the coding-strong family; debug/prepare/repair prefer flagship reasoning.
     assert_eq!(top_of(&table, "code:multi-file"), "grok-4.3");
@@ -285,8 +291,7 @@ fn capability_fit_diversifies_picks_across_task_classes() {
 
     let mut tops: BTreeMap<String, Vec<&str>> = BTreeMap::new();
     for row in CLASS_TABLE {
-        tops
-            .entry(top_of(&table, row.class))
+        tops.entry(top_of(&table, row.class))
             .or_default()
             .push(row.class);
     }
@@ -329,7 +334,10 @@ fn adding_a_stronger_flagship_moves_reasoning_heavy_classes_not_speed() {
         NOW,
     );
     assert_eq!(top_of(&table, "debug"), "grok-4.7");
-    assert_eq!(top_of(&table, "background:triage"), "grok-4.20-0309-non-reasoning");
+    assert_eq!(
+        top_of(&table, "background:triage"),
+        "grok-4.20-0309-non-reasoning"
+    );
 
     let with8 = [
         "grok-4.3",
@@ -351,7 +359,10 @@ fn adding_a_stronger_flagship_moves_reasoning_heavy_classes_not_speed() {
     assert_eq!(top_of(&table8, "debug"), "grok-4.8");
     assert_eq!(top_of(&table8, "prepare:hard"), "grok-4.8");
     assert_eq!(top_of(&table8, "repair:diagnose"), "grok-4.8");
-    assert_eq!(top_of(&table8, "background:triage"), "grok-4.20-0309-non-reasoning");
+    assert_eq!(
+        top_of(&table8, "background:triage"),
+        "grok-4.20-0309-non-reasoning"
+    );
     assert_eq!(top_of(&table8, "code:multi-file"), "grok-4.3");
     let r = Router::choose(&ask("debug", "grok-4.7"), &reg8, &profiles8, &table8, NOW);
     assert_eq!(r.model, "grok-4.8");

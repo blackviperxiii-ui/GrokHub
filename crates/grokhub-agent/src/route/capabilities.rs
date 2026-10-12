@@ -96,8 +96,12 @@ pub fn load_catalog(config_dir: &Path) -> CapabilityCatalog {
 pub fn class_need(class: &str) -> ClassNeed {
     let class = policy::class_row(class).map(|r| r.class).unwrap_or(class);
     match class {
-        "background:classify" | "background:triage" | "background:redact"
-        | "background:summarize" | "background:compact" | "chat:quick" => ClassNeed {
+        "background:classify"
+        | "background:triage"
+        | "background:redact"
+        | "background:summarize"
+        | "background:compact"
+        | "chat:quick" => ClassNeed {
             reasoning: 1,
             code: 0,
             speed: 10,
@@ -259,11 +263,7 @@ pub fn build_catalog(reg: &Registry, now_ms: u64) -> CapabilityCatalog {
     for (id, rec) in &reg.models {
         let mut caps = derive_caps(&rec.meta);
         let seeded = apply_seed(id, &mut caps);
-        let source = if seeded {
-            "seed+listing"
-        } else {
-            "listing"
-        };
+        let source = if seeded { "seed+listing" } else { "listing" };
         entries.insert(
             id.clone(),
             CapabilityEntry {

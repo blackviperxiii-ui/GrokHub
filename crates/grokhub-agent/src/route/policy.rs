@@ -403,8 +403,7 @@ pub fn rank(
     let need = super::capabilities::class_need(class);
     let fit = |id: &str| {
         let mut caps = super::capabilities::derive_caps(
-            &reg
-                .get(id)
+            &reg.get(id)
                 .map(|r| r.meta.clone())
                 .unwrap_or_else(|| grokhub_core::model_registry::ModelMeta::bare(id)),
         );

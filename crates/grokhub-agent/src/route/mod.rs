@@ -427,13 +427,11 @@ impl Router {
             rules.push("cost:premium_ungranted".into());
         }
         let tier = table::SpeedQuality::of(input.class);
-        let need_reasoning = tier.needs_reasoning()
-            || capabilities::class_need(input.class).require_reasoning;
+        let need_reasoning =
+            tier.needs_reasoning() || capabilities::class_need(input.class).require_reasoning;
         // Balanced/Quality Auto pool: reasoning models only (pins / Settings pick still use `ids`).
         let auto_ok = |m: &str| {
-            local::is_local(m)
-                || !need_reasoning
-                || table::is_reasoning_model(reg, profiles, m)
+            local::is_local(m) || !need_reasoning || table::is_reasoning_model(reg, profiles, m)
         };
         // R3b: a provider you added is never a stand-in or a fallback, and never
         // the cheapest pick: only a pin or the class preference (a table row) takes it.
