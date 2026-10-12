@@ -26,6 +26,58 @@ pub fn should_name_thread(scratch: bool, user_turns: usize) -> bool {
     !scratch && user_turns > 0
 }
 
+/// Words that say nothing about what a chat is about (title / goal topics).
+const TITLE_STOP: &[&str] = &[
+    "a", "an", "the", "and", "or", "but", "to", "of", "in", "on", "at", "for", "from", "with",
+    "is", "are", "was", "were", "be", "been", "am", "i", "me", "my", "we", "you", "your", "it",
+    "its", "this", "that", "these", "those", "can", "could", "would", "should", "will", "just",
+    "please", "help", "need", "want", "like", "make", "do", "does", "did", "how", "what", "when",
+    "where", "why", "which", "who", "about", "into", "some", "any", "all", "also", "then", "than",
+    "here", "there", "have", "has", "had", "get", "got", "let", "lets", "hey", "hi", "hello",
+    "thanks", "thank", "ok", "okay", "yes", "no", "not", "now", "still", "really", "very",
+    "something", "thing", "things", "stuff", "using", "use", "used", "try", "trying",
+];
+
+/// Local topic words from recent user turns — no model, no `GOAL:` parse.
+/// Prefers content words (len ≥ 3, not stopwords); keeps at most four short topics.
+pub fn topics_from_turns(messages: &[(String, String)]) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let users: Vec<&str> = messages
+        .iter()
+        .filter(|(role, content)| role == "user" && !is_workload_user(content))
+        .map(|(_, c)| c.as_str())
+        .collect();
+    // Newest user turns first so the current subject wins the label.
+    for text in users.into_iter().rev().take(4) {
+        for raw in text
+            .to_ascii_lowercase()
+            .split(|c: char| !c.is_ascii_alphanumeric() && c != '-')
+        {
+            let t = raw.trim().trim_matches('-');
+            if t.len() < 3 || t.len() > 24 {
+                continue;
+            }
+            if !t
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-')
+            {
+                continue;
+            }
+            if TITLE_STOP.contains(&t) {
+                continue;
+            }
+            if out.iter().any(|x| x == t) {
+                continue;
+            }
+            out.push(t.to_string());
+            if out.len() == 4 {
+                return out;
+            }
+        }
+    }
+    out
+}
+
 pub fn parse_fast_topics(reply: &str) -> Vec<String> {
     let line = reply
         .lines()
@@ -743,6 +795,29 @@ If this fails, tell me your distro.";
         assert!(should_name_thread(false, 1));
         assert!(!should_name_thread(true, 4));
         assert!(!should_name_thread(false, 0));
+        assert_eq!(
+            topics_from_turns(&[("user".into(), "draw porn".into())]),
+            vec!["draw".to_string(), "porn".to_string()],
+            "first user turn supplies tab topics without a model"
+        );
+        assert_eq!(
+            topics_from_turns(&[
+                ("user".into(), "please help me with rust ownership".into()),
+                ("assistant".into(), "sure".into()),
+                ("user".into(), "and comics ink".into()),
+            ]),
+            vec![
+                "comics".to_string(),
+                "ink".to_string(),
+                "rust".to_string(),
+                "ownership".to_string()
+            ],
+            "newest user turns win the topic order; stopwords drop out"
+        );
+        assert!(
+            topics_from_turns(&[("user".into(), "please help me".into())]).is_empty(),
+            "stopword-only asks do not invent a title"
+        );
         let empty = ThreadGoal::default();
         let porn = blend_thread_goal(&empty, &["porn".into()], GOAL_DROP_AFTER);
         assert_eq!(porn.label, "porn");

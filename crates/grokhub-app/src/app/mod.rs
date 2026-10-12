@@ -39,7 +39,7 @@ use grokhub_core::{
     bubble_wrap_width, build_hub_snapshot, build_quick_chips, build_review_digest, bump_skill_run,
     bump_usage, cabin_overlay_step, cabin_update_notice, cap_from_text, catalog_line,
     chat_attach_status, chat_bearer, chat_run_action, chat_run_hint, chat_run_phase,
-    chat_send_kind, chat_shows_thinking, chat_stream_is_visible, chip_scan, chip_suggest_prompt,
+    chat_send_kind, chat_shows_thinking, chat_stream_is_visible, chip_scan,
     chunk_seam, clamp_bubble_outer, clamp_row_width, clear_pending_after_complete, cluster_gap,
     compose_imagine_prompt, composer_enter, composer_go, composer_go_tip, computer_cmd_line,
     context_fingerprint, context_percent, create_folder, create_project, daily_units_blocked,
@@ -50,7 +50,7 @@ use grokhub_core::{
     estimate_messages_from, extract_imagine_prompt, extract_insights, fact_candidates,
     fact_candidates_from, filter_palette, filter_slash_hits, flush_visible_goal, folder_choices,
     forbidden_reason, forget_topic, format_consult_reply, frame_bytes, greet_from_last_job,
-    greeting_fingerprint, greeting_name, greeting_prompt, grok_command_hits, halt_when_leaving_tab,
+    greeting_fingerprint, greeting_name, grok_command_hits, halt_when_leaving_tab,
     has_auth, heartbeat_acts, heartbeat_due, heartbeat_repaint_ms, hey_grok_on_press,
     hey_grok_route, home_slash_cmd, home_surface_from_nav, host_cmd_leaves_project,
     host_hour_blocked, host_risk, host_status_line, hub_dispatch_ok, hub_kind_from_health,
@@ -71,7 +71,7 @@ use grokhub_core::{
     night_check_may_fire, night_counts_run, normalize_hm, now_ms, oauth_access_live,
     overlay_update_begin, overlay_update_finish, pair_code_is_live, palette_file_shown,
     palette_forget_stale_walk, palette_row_action, palette_search_is_saved, palette_shortcut,
-    parse_computer_op, parse_fast_topics, parse_hostname_i, parse_llm_chips, parse_local_clock,
+    parse_computer_op, parse_fast_topics, parse_hostname_i, parse_local_clock,
     parse_slash, parse_suggest_lines, parse_suggest_skill_patches, parse_theme,
     parse_trajectory_jsonl, partition_suggestions, patch_skill, perm_key, persist_user_turn,
     pick_fresh_seed, pick_greeting_against, pick_lan_ipv4, plan_room, plus_empty_status,
@@ -90,14 +90,14 @@ use grokhub_core::{
     seed_from_bound, settings_pin_blocks_auto, settings_update_hint, settings_update_label,
     settle_inflight_card, settle_project_path, should_anticipate, should_capture_before_chat,
     should_idle_reflect, should_keep_frame, should_name_thread, should_notify_cabin_update,
-    should_paint_greeting, should_refresh_greeting, should_refresh_llm, should_seed_sidebar,
+    should_paint_greeting, should_seed_sidebar,
     should_send_screenshot, should_trim_result_bodies, skill_follow_block, skill_from_suggestion,
     skill_offer_chip, skill_use_in_chat_prompt, skip_night_check_receipt, slash_help, slash_kind,
     start_hub_rotates_pair, state_for_disk, stretch_saved_skill, strip_thinking,
     suggestions_from_sessions, summarize_trajectory, summarize_write, surgical_memory_edit,
     take_ui_text, teachable_steps, theme_label, thought_body_key, thought_control_act,
     thought_fold_controls, thought_fold_draws, thought_shows_acts, thought_shows_label,
-    thread_goal_prompt, thread_host_receipts, thread_host_receipts_from, toggle_pin, token_delta,
+    thread_host_receipts, thread_host_receipts_from, toggle_pin, token_delta, topics_from_turns,
     tool_display_title, tool_group_label, tool_status_failed, tool_status_running,
     top_habit_labels, trajectory_jsonl_line, transcribe_route, trim_result_bodies_in_place,
     turn_needs_timeline, uid, unified_diff_cite, unknown_cabin_slash, update_check_due,
@@ -122,6 +122,8 @@ use grokhub_core::{
     RESULT_TRIM_KEEP_HOPS, SKILL_SAVED_MARK, SKILL_SAVED_NOTE, TEXT_FILE_CAP, THOUGHT_ROW_LABEL,
     TRANSCRIBERS, UPDATE_CHECK_EVERY, WALL_GIF_EVERY_MS, WALL_GIF_MAX,
 };
+#[cfg(test)]
+use grokhub_core::{chip_suggest_prompt, parse_llm_chips};
 use grokhub_hub::serve_lan;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};

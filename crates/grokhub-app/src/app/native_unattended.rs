@@ -506,6 +506,8 @@ impl Cabin {
         });
     }
 
+    /// Test-only Fast-model chip ask. Composer paint no longer calls this.
+    #[cfg(test)]
     pub(super) fn spawn_native_chips(&mut self) {
         let chat = self.chip_chat_pairs();
         let title = self
@@ -541,6 +543,8 @@ impl Cabin {
         });
     }
 
+    /// Test-only Fast-model greeting ask. Empty-home paint no longer calls this.
+    #[cfg(test)]
     pub(super) fn spawn_native_greeting(&mut self, prompt: String) {
         let ready = match unattended_model(self) {
             Ok(ready) => ready,

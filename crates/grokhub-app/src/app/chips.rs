@@ -148,7 +148,7 @@ impl Cabin {
             .unwrap_or_default();
         let hour = Self::chip_hour();
         let last_night = self.last_night_hint();
-        let (local, fp, llm_prompt) = {
+            let (local, fp, warm) = {
             let user_md = if self.mem_name == "USER.md" {
                 self.mem_body.as_str()
             } else {
@@ -184,31 +184,30 @@ impl Cabin {
             };
             let fp = greeting_fingerprint(&input);
             let local = local_greeting(&input);
-            let llm_prompt = if should_refresh_greeting(
+            // Greeting stays local. Debounce fields stay warm so a future
+            // Settings opt-in can re-enable paraphrase without a schema bump.
+            let warm = grokhub_core::should_refresh_greeting(
                 &self.greeting_llm_fp,
                 &fp,
                 self.greeting_llm_at,
                 now_ms(),
                 self.llm_ready(),
                 self.greeting_busy,
-            ) {
-                Some(greeting_prompt(&input))
-            } else {
-                None
-            };
-            (local, fp, llm_prompt)
+            );
+            (local, fp, warm)
         };
         if self.greeting_fp != fp {
             self.greeting = local;
             self.greeting_fp = fp.clone();
         }
-        if let Some(prompt) = llm_prompt {
+        if warm {
             self.greeting_llm_fp = fp;
             self.greeting_llm_at = now_ms();
-            self.spawn_greeting_llm(prompt);
         }
     }
 
+    /// Test-only Fast-model greeting path. Empty-home paint uses `local_greeting` only.
+    #[cfg(test)]
     pub(super) fn spawn_greeting_llm(&mut self, prompt: String) {
         if self.greeting_busy {
             return;
@@ -332,36 +331,18 @@ impl Cabin {
             self.goal_stale = false;
             return;
         }
-        if !self.llm_ready() {
-            self.goal_stale = false;
-            return;
-        }
         if tid.is_empty() {
             self.goal_stale = false;
             return;
         }
-        let prompt = thread_goal_prompt(&pairs);
-        let key = self.bearer();
-        if key.trim().is_empty() {
-            self.goal_stale = false;
+        // Built-in topics from the chat — no key, network, or GOAL: parse.
+        let topics = topics_from_turns(&pairs);
+        self.goal_stale = false;
+        if topics.is_empty() {
             return;
         }
-        let model = model_for_mode("fast").to_string();
-        let (tx, rx) = mpsc::channel();
-        self.goal_rx = Some(rx);
-        self.goal_busy = true;
-        self.goal_stale = false;
-        std::thread::spawn(move || {
-            let reply = grok_chat(
-                &key,
-                &model,
-                &[("user".into(), prompt)],
-                None,
-                Some(grokhub_core::BACKGROUND_EFFORT),
-            )
-            .unwrap_or_default();
-            let _ = tx.send((tid, reply));
-        });
+        let reply = format!("GOAL: {}", topics.join(", "));
+        self.apply_thread_goal(&tid, &reply);
     }
 
     pub(super) fn refresh_chips(&mut self) {
@@ -454,6 +435,8 @@ impl Cabin {
             pace,
             grokhub_core::CabinPace::With | grokhub_core::CabinPace::Quiet
         );
+        // Habit / stage / draft / skill-offer chips are enough; a fast-model
+        // garnish is not required for composer chrome (offline / weak model).
         self.visible_chips = build_quick_chips(input);
         let mut fp = context_fingerprint(&chat, &self.composer, last_failed, hour, mode);
         if !others.is_empty() {
@@ -465,10 +448,11 @@ impl Cabin {
                 .join(",");
             fp = format!("{fp}+o:{extra}");
         }
+        // Keep debounce state warm; do not spawn a model ask from paint.
         let spend_ready = grokhub_core::chip_spend_allowed(pace, user_turns)
             && now_ms().saturating_sub(self.chip_llm_at) >= grokhub_core::CHIP_LLM_SPEND_MS;
         if spend_ready
-            && should_refresh_llm(
+            && grokhub_core::should_refresh_llm(
                 &self.chip_fp,
                 &fp,
                 self.chip_llm_at,
@@ -479,10 +463,11 @@ impl Cabin {
         {
             self.chip_fp = fp;
             self.chip_llm_at = now_ms();
-            self.spawn_chip_llm();
         }
     }
 
+    /// Test-only Fast-model chip path. Composer paint uses `build_quick_chips` only.
+    #[cfg(test)]
     pub(super) fn spawn_chip_llm(&mut self) {
         if self.chip_busy {
             return;
