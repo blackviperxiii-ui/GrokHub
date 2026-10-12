@@ -621,6 +621,7 @@ impl Cabin {
         match self.page_nav() {
             Nav::Chat => "chat",
             Nav::History => "history",
+            Nav::Journal => "journal",
             Nav::Imagine => "imagine",
             Nav::Workboard => "workboard",
             Nav::Pulse => "pulse",
@@ -637,6 +638,7 @@ impl Cabin {
     pub(super) fn set_nav_id(&mut self, id: &str) {
         self.nav = match id {
             "history" => Nav::History,
+            "journal" => Nav::Journal,
             "imagine" => {
                 self.imagine_want_focus = true;
                 Nav::Imagine

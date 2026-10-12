@@ -955,6 +955,20 @@ pub fn save_board(cards: &[BoardCard]) -> Result<(), String> {
     atomic_write(&workboard_path(), s.as_bytes())
 }
 
+/// Decision backlog / experiment journal (local-first open questions).
+pub fn decisions_path() -> PathBuf {
+    config_dir().join("decisions.json")
+}
+
+pub fn load_journal() -> Vec<grokhub_core::JournalEntry> {
+    load_json(&decisions_path(), JSON_STORE_CAP)
+}
+
+pub fn save_journal(entries: &[grokhub_core::JournalEntry]) -> Result<(), String> {
+    let s = serde_json::to_string_pretty(entries).map_err(|e| e.to_string())?;
+    atomic_write(&decisions_path(), s.as_bytes())
+}
+
 pub fn wall_dir() -> PathBuf {
     config_dir().join("imagine-wall")
 }
@@ -1638,6 +1652,7 @@ mod tests {
             ("pub fn load(", "pub fn save("),
             ("pub fn load_chat(", "pub fn workboard_path("),
             ("pub fn load_board(", "pub fn save_board("),
+            ("pub fn load_journal(", "pub fn save_journal("),
         ] {
             let slice = src
                 .split(name)

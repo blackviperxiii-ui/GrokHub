@@ -641,6 +641,7 @@ mod tests {
                 | Nav::Skills
                 | Nav::Night
                 | Nav::History
+                | Nav::Journal
                 | Nav::Command
                 | Nav::Agents
                 | Nav::Settings => true,
