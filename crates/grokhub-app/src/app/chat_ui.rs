@@ -2876,31 +2876,9 @@ impl Cabin {
     }
 
     // After ui_composer_stack: empty_home_pulse scans ui_empty_home..ui_composer_stack
-    // and forbids Nav:: in that window (toast links to History → Archived).
-    /// Quiet archive / auto-archive note with Undo or a link to Archived.
+    // and forbids Nav:: in that window. Keep this toast Nav-free.
+    /// Quiet archive / unarchive note with Undo. Idle auto-archive stays off chrome.
     pub(super) fn paint_archive_toast(&mut self, ui: &mut egui::Ui) {
-        if let Some(n) = self.auto_archive_note {
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = 8.0;
-                let label = if n == 1 {
-                    "Archived 1 idle chat".to_string()
-                } else {
-                    format!("Archived {n} idle chats")
-                };
-                ui.label(
-                    RichText::new(label)
-                        .size(crate::theme::FONT_META)
-                        .color(crate::theme::muted()),
-                );
-                if crate::cards::ghost_pill(ui, "Archived") {
-                    self.auto_archive_note = None;
-                    self.history_archived = true;
-                    self.nav = Nav::History;
-                }
-            });
-            ui.add_space(4.0);
-            return;
-        }
         let Some(id) = self.archive_undo.clone() else {
             return;
         };
