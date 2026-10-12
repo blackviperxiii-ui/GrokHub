@@ -4,6 +4,8 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use grokhub_agent::route::goal::{pin_goal, Goal, RouteGoal};
+
 use super::*;
 
 struct ReadyModel {
@@ -23,6 +25,16 @@ struct Prepared {
     gate: grokhub_agent::Gate,
     prompt: String,
     image: Option<String>,
+    /// Brain 4: the router goal pinned on the run's session (cost while you're active).
+    goal: Option<RouteGoal>,
+}
+
+/// The model a background ask runs on: the cheap tier while it runs on the cost goal.
+fn tier_model(model: &str, goal: Option<&RouteGoal>) -> String {
+    match goal {
+        Some(g) if g.goal == Goal::Cost => grokhub_core::model_for_mode("fast").to_string(),
+        _ => model.to_string(),
+    }
 }
 
 #[cfg(test)]
@@ -54,9 +66,40 @@ fn test_client() -> Option<Arc<dyn grokhub_agent::ModelClient + Send + Sync>> {
 static EPHEMERAL_SPENT: std::sync::Mutex<Option<grokhub_agent::Usage>> =
     std::sync::Mutex::new(None);
 
-/// Count a one-shot run's tokens toward today's usage, then delete its session
-/// file so these runs don't fill History.
-fn settle_ephemeral(done: &grokhub_agent::UnattendedDone) {
+/// Tokens background jobs spent off the UI thread, by governor kind. The cabin
+/// frame charges them to the governor's per-day budgets.
+static GOVERNED_SPENT: std::sync::Mutex<Vec<(JobKind, u64)>> =
+    std::sync::Mutex::new(Vec::new());
+
+/// Input, output and reasoning tokens of one usage.
+fn usage_tokens(u: &grokhub_agent::Usage) -> u64 {
+    u.input_tokens
+        .saturating_add(u.output_tokens)
+        .saturating_add(u.reasoning_tokens)
+}
+
+/// A background job of `kind` spent `tokens` off the UI thread.
+fn note_governed_spend(kind: JobKind, tokens: u64) {
+    if tokens == 0 {
+        return;
+    }
+    GOVERNED_SPENT
+        .lock()
+        .unwrap_or_else(|err| err.into_inner())
+        .push((kind, tokens));
+}
+
+fn take_governed_spent() -> Vec<(JobKind, u64)> {
+    std::mem::take(&mut *GOVERNED_SPENT.lock().unwrap_or_else(|err| err.into_inner()))
+}
+
+/// Count a one-shot run's tokens toward today's usage, and toward its governor
+/// kind when a background job ran it, then delete its session file so these
+/// runs don't fill History.
+fn settle_ephemeral(done: &grokhub_agent::UnattendedDone, kind: Option<JobKind>) {
+    if let Some(kind) = kind {
+        note_governed_spend(kind, usage_tokens(&done.usage));
+    }
     if done.usage != grokhub_agent::Usage::default() {
         let mut spent = EPHEMERAL_SPENT
             .lock()
@@ -132,6 +175,10 @@ fn fast_gate() -> grokhub_agent::Gate {
 fn execute(job: Prepared) -> grokhub_agent::UnattendedDone {
     let cancel = grokhub_agent::CancelToken::new();
     let session = job.session_id.clone();
+    let goal = job.goal.is_some();
+    if goal {
+        pin_goal(&session, job.goal.clone());
+    }
     let _ = grokhub_agent::hub_for(&session);
     grokhub_agent::watch_cancel(&session, cancel.clone());
     let desktop_ops = if job.gate.desktop {
@@ -140,7 +187,7 @@ fn execute(job: Prepared) -> grokhub_agent::UnattendedDone {
     } else {
         None
     };
-    grokhub_agent::run_unattended(grokhub_agent::UnattendedRun {
+    let done = grokhub_agent::run_unattended(grokhub_agent::UnattendedRun {
         client: job.ready.client,
         workspace: job.workspace,
         model: job.model,
@@ -161,7 +208,11 @@ fn execute(job: Prepared) -> grokhub_agent::UnattendedDone {
         desktop_ops,
         imagine_bearer: job.ready.bearer,
         resume: job.resume,
-    })
+    });
+    if goal {
+        pin_goal(&done.session_id, None);
+    }
+    done
 }
 
 pub(super) fn single_turn_json(done: &grokhub_agent::UnattendedDone) -> String {
@@ -189,6 +240,8 @@ fn fast_once(
     workspace: &Path,
     prompt: &str,
     model: &str,
+    kind: Option<JobKind>,
+    goal: Option<&RouteGoal>,
 ) -> Result<String, String> {
     let done = execute(Prepared {
         ready: ReadyModel {
@@ -205,8 +258,9 @@ fn fast_once(
         gate: fast_gate(),
         prompt: prompt.to_string(),
         image: None,
+        goal: goal.cloned(),
     });
-    settle_ephemeral(&done);
+    settle_ephemeral(&done, kind);
     if done.stop_reason == "halted" || done.stop_reason == "cancelled" {
         return Err(done.stop_reason);
     }
@@ -220,25 +274,43 @@ fn fast_once(
     Ok(done.text)
 }
 
-fn fast_text(ready: &ReadyModel, workspace: &Path, prompt: &str) -> Result<String, String> {
-    let primary = fast_once(ready, workspace, prompt, CABIN_FAST_MODEL)?;
+fn fast_text(
+    ready: &ReadyModel,
+    workspace: &Path,
+    prompt: &str,
+    kind: Option<JobKind>,
+    goal: Option<&RouteGoal>,
+) -> Result<String, String> {
+    let model = tier_model(CABIN_FAST_MODEL, goal);
+    let primary = fast_once(ready, workspace, prompt, &model, kind, goal)?;
     if !primary.trim().is_empty() {
         return Ok(primary);
     }
-    fast_once(ready, workspace, prompt, CABIN_FAST_FALLBACK)
+    fast_once(ready, workspace, prompt, CABIN_FAST_FALLBACK, kind, goal)
 }
 
-fn native_rules(cabin: &Cabin, workspace: &std::path::Path) -> String {
-    let rules = grokhub_core::cabin_rules::cabin_rules_for(
-        &grokhub_core::brief_for(&cabin.learning, "chat"),
-        cabin.cfg.desktop_control,
-    );
-    grokhub_agent::system_prompt(&rules, workspace)
+fn native_rules(cabin: &Cabin, workspace: &std::path::Path, job: &str) -> String {
+    let stable = grokhub_core::cabin_rules::cabin_static_rules(cabin.cfg.desktop_control);
+    let volatile = grokhub_core::cabin_rules::cabin_learned_tail(&grokhub_core::brief_for(
+        &cabin.learning,
+        "chat",
+    ));
+    let need = grokhub_agent::prompt_need_from_job(job);
+    grokhub_agent::system_prompt_with(
+        grokhub_agent::PromptProfile::Unattended,
+        &stable,
+        &volatile,
+        workspace,
+        need,
+    )
 }
 
 impl Cabin {
     /// Add one-shot native runs' tokens to today's usage. Flag off: nothing to drain.
     pub(super) fn drain_native_unattended_usage(&mut self) {
+        for (kind, tokens) in take_governed_spent() {
+            self.governor_charge(kind, tokens);
+        }
         let Some(spent) = take_ephemeral_spent() else {
             return;
         };
@@ -293,7 +365,7 @@ impl Cabin {
         let cwd = self.grok_cwd();
         let gate = scheduled_gate(self, self.session_mode);
         let model = grokhub_core::cabin_spawn_model(&self.cfg.model).to_string();
-        let system = native_rules(self, &cwd);
+        let system = native_rules(self, &cwd, &row.prompt);
         let prompt = row.prompt.clone();
         let id = row.id.clone();
         let (tx, rx) = mpsc::channel();
@@ -309,10 +381,21 @@ impl Cabin {
             gate,
             prompt,
             image: None,
+            goal: None,
         };
         std::thread::spawn(move || {
             let _origin = grokhub_agent::harness::OriginScope::enter(grokhub_agent::harness::Origin::Automation);
+            // A resumed loop reports its session's totals: charge only this run.
+            let before = if job.resume {
+                grokhub_agent::load_session(&job.session_id)
+                    .map(|info| usage_tokens(&info.usage))
+                    .unwrap_or(0)
+            } else {
+                0
+            };
             let done = execute(job);
+            let spent = usage_tokens(&done.usage).saturating_sub(before);
+            note_governed_spend(JobKind::Automations, spent);
             if done.stop_reason == "halted" || done.stop_reason == "cancelled" {
                 return;
             }
@@ -356,8 +439,15 @@ impl Cabin {
             .collect();
         let chip_habits = top_habit_labels(&self.chip_memory, 6);
         let now = now_ms();
-        let model = model_for_mode("balanced").to_string();
-        let prompt = review_system_prompt().to_string();
+        let goal = self.bg_goal(JobKind::Review);
+        let model = tier_model(model_for_mode("balanced"), goal.as_ref());
+        let prompt = grokhub_agent::system_prompt_with(
+            grokhub_agent::PromptProfile::Review,
+            "",
+            "",
+            &self.grok_cwd(),
+            grokhub_agent::PromptNeed::NONE,
+        );
         let workspace = self.grok_cwd();
         let (tx, rx) = mpsc::channel();
         self.review_rx = Some(rx);
@@ -395,8 +485,9 @@ impl Cabin {
                 gate: fast_gate(),
                 prompt: digest,
                 image: None,
+                goal,
             });
-            settle_ephemeral(&done);
+            settle_ephemeral(&done, Some(JobKind::Review));
             let out = if done.stop_reason == "halted" || done.stop_reason == "cancelled" {
                 Err(done.stop_reason)
             } else if done.stop_reason == "error" && done.text.trim().is_empty() {
@@ -442,7 +533,7 @@ impl Cabin {
         self.chip_rx = Some(rx);
         self.chip_busy = true;
         std::thread::spawn(move || {
-            let text = fast_text(&ready, &workspace, &prompt).unwrap_or_default();
+            let text = fast_text(&ready, &workspace, &prompt, None, None).unwrap_or_default();
             let _ = tx.send(parse_llm_chips(&text));
         });
     }
@@ -460,12 +551,18 @@ impl Cabin {
         self.greeting_rx = Some(rx);
         self.greeting_busy = true;
         std::thread::spawn(move || {
-            let text = fast_text(&ready, &workspace, &prompt).unwrap_or_default();
+            let text = fast_text(&ready, &workspace, &prompt, None, None).unwrap_or_default();
             let _ = tx.send(text);
         });
     }
 
-    pub(super) fn spawn_native_ideas(&mut self, prompt: String, tx: mpsc::Sender<String>) {
+    /// `kind` is the governor job this ask is charged to; None for an ask you made.
+    pub(super) fn spawn_native_ideas(
+        &mut self,
+        prompt: String,
+        tx: mpsc::Sender<String>,
+        kind: Option<JobKind>,
+    ) {
         let ready = match unattended_model(self) {
             Ok(ready) => ready,
             Err(err) => {
@@ -475,15 +572,17 @@ impl Cabin {
             }
         };
         let workspace = self.grok_cwd();
+        let goal = kind.and_then(|k| self.bg_goal(k));
         std::thread::spawn(move || {
             let _origin = grokhub_agent::harness::OriginScope::enter(grokhub_agent::harness::Origin::Proactive);
-            let text = fast_text(&ready, &workspace, &prompt).unwrap_or_default();
+            let text =
+                fast_text(&ready, &workspace, &prompt, kind, goal.as_ref()).unwrap_or_default();
             let _ = tx.send(text);
         });
     }
 
     pub(super) fn spawn_native_digest(&mut self) {
-        let prompt = grokhub_core::pulse::feed_prompt(&self.digest_steer, &self.cfg.feed_instructions);
+        let prompt = grokhub_core::pulse::feed_prompt(&self.digest_steer, &self.digest_interests, &self.cfg.feed_instructions);
         let ready = match unattended_model(self) {
             Ok(ready) => ready,
             Err(err) => {
@@ -494,11 +593,14 @@ impl Cabin {
             }
         };
         let workspace = self.grok_cwd();
+        let goal = self.bg_goal(JobKind::Digest);
         let (tx, rx) = mpsc::channel();
         self.digest_rx = Some(rx);
         self.digest_busy = true;
         std::thread::spawn(move || {
-            let out = fast_once(&ready, &workspace, &prompt, CABIN_FAST_MODEL);
+            let digest = Some(JobKind::Digest);
+            let model = tier_model(CABIN_FAST_MODEL, goal.as_ref());
+            let out = fast_once(&ready, &workspace, &prompt, &model, digest, goal.as_ref());
             let _ = tx.send(out);
         });
     }
@@ -542,6 +644,7 @@ mod tests {
                     cost_in_usd_ticks: 5,
                     cached_tokens: 0,
                 },
+                ..Default::default()
             })
         }
     }
@@ -697,6 +800,84 @@ mod tests {
             grokhub_core::feed_group_key(&b).as_deref(),
             Some("run:loop-b")
         );
+    }
+
+    /// Records each request's model and the router goal its session carried.
+    struct Seen(std::sync::Mutex<Vec<(String, Option<String>)>>);
+
+    impl ModelClient for Seen {
+        fn stream(
+            &self,
+            req: &grokhub_agent::ResponsesRequest,
+            _cancel: &grokhub_agent::CancelToken,
+            sink: &mut dyn FnMut(StreamEvent),
+        ) -> Result<TurnOutput, ClientError> {
+            let goal = grokhub_agent::route::goal::goal_for(&[req.conversation_id.as_str()]);
+            self.0
+                .lock()
+                .unwrap_or_else(|err| err.into_inner())
+                .push((req.model.clone(), goal.map(|g| g.label())));
+            sink(StreamEvent::TextDelta("A note.".into()));
+            Ok(TurnOutput {
+                text: "A note.".into(),
+                ..Default::default()
+            })
+        }
+    }
+
+    #[test]
+    fn the_cheap_tier_is_the_fast_model_only_on_the_cost_goal() {
+        let cost = RouteGoal::of("cost", "user active");
+        let quality = RouteGoal::of("quality", "mistakes can break the system");
+        assert_eq!(tier_model("grok-4.3", cost.as_ref()), "grok-3-mini-fast");
+        assert_eq!(tier_model("grok-4.3", quality.as_ref()), "grok-4.3");
+        assert_eq!(tier_model("grok-4.7", None), "grok-4.7");
+    }
+
+    #[test]
+    fn while_you_type_the_review_and_digest_run_cheap_on_the_cost_goal_and_idle_runs_full() {
+        let (_lock, root, _env) = isolated("brain4-cheap");
+        let seen = Arc::new(Seen(std::sync::Mutex::new(Vec::new())));
+        set_unattended_client_for_test(Some(seen.clone()));
+        let mut cabin = Cabin::quiet_for_test();
+        let take = || std::mem::take(&mut *seen.0.lock().unwrap_or_else(|err| err.into_inner()));
+        cabin.composer = "half a thought".into();
+        cabin.spawn_review();
+        wait_until(|| {
+            cabin.poll_review();
+            !cabin.review_busy
+        });
+        let cheap = Some("goal cost (user active)".to_string());
+        assert_eq!(
+            take(),
+            vec![("grok-3-mini-fast".to_string(), cheap.clone())]
+        );
+        cabin.digest_wants_lookup = true;
+        cabin.follow_feed_lookup();
+        wait_until(|| {
+            cabin.poll_digest_lookup();
+            cabin.digest_pending.is_some()
+        });
+        assert_eq!(take(), vec![("grok-3-mini-fast".to_string(), cheap)]);
+        // Idle: the review is back on its own model, under the Brief's own background row.
+        cabin.composer.clear();
+        cabin.last_activity = Instant::now()
+            .checked_sub(Duration::from_secs(60))
+            .expect("a minute of uptime");
+        cabin.spawn_review();
+        wait_until(|| {
+            cabin.poll_review();
+            !cabin.review_busy
+        });
+        assert_eq!(
+            take(),
+            vec![(
+                "grok-4.3".to_string(),
+                Some("goal cost (user isn't waiting)".to_string())
+            )]
+        );
+        set_unattended_client_for_test(None);
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
@@ -898,7 +1079,7 @@ mod tests {
             assert!(memory.contains(line), "{line} in {memory}");
         }
         // The next lookup carries the rewritten text.
-        let prompt = grokhub_core::pulse::feed_prompt("Rust", &cabin.cfg.feed_instructions);
+        let prompt = grokhub_core::pulse::feed_prompt("Rust", "", &cabin.cfg.feed_instructions);
         assert!(prompt.ends_with("- Crypto price swings."), "{prompt}");
         // A reply that is not instructions keeps the current text.
         say.text
@@ -973,5 +1154,65 @@ mod tests {
         }
         set_unattended_client_for_test(None);
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A chat reply takes the chosen personality's tone ahead of the cabin rules; a
+    /// night job stays in the plain voice.
+    #[test]
+    fn personality_reaches_chat_replies_but_not_night_jobs() {
+        let (_lock, root, _env) = isolated("personality-rules");
+        let mut cabin = Cabin::quiet_for_test();
+        let plain = cabin.chat_rules();
+        assert!(!plain.contains("Personality:"), "{plain}");
+        cabin.cfg.personality = "pirate".into();
+        let chat = cabin.chat_rules();
+        assert!(chat.starts_with("Personality: Pirate. Talk like a cheerful pirate"), "{chat}");
+        assert!(chat.ends_with(&plain), "the cabin rules still come last: {chat}");
+        let night = native_rules(&cabin, &root, "");
+        assert!(!night.contains("Personality:"), "night jobs stay neutral: {night}");
+        assert!(night.contains(grokhub_core::cabin_rules::CABIN_DESKTOP_RULES));
+        assert!(
+            night.contains("<dangerous_actions>"),
+            "unattended keeps template safety: {night}"
+        );
+        assert!(
+            !night.contains("<skills>"),
+            "unattended drops skills unless NEED_SKILLS: {night}"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Approval cards, park titles and other hard text never see the personality: only
+    /// the chat rules and the picker read it (a `personality::` call or a `.personality`
+    /// field). A new reader has to be added here on purpose.
+    #[test]
+    fn only_the_chat_rules_read_the_personality() {
+        let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut readers = std::collections::BTreeSet::new();
+        let mut dirs = vec![src.clone()];
+        while let Some(dir) = dirs.pop() {
+            for entry in std::fs::read_dir(&dir).unwrap().flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    dirs.push(path);
+                    continue;
+                }
+                let name = path.file_name().unwrap().to_string_lossy().to_string();
+                if !name.ends_with(".rs") || name == "tests.rs" {
+                    continue;
+                }
+                let text = std::fs::read_to_string(&path).unwrap().replace("\r\n", "\n");
+                let live = text.split("\n#[cfg(test)]\nmod tests").next().unwrap();
+                let reads_field = live.match_indices(".personality").any(|(at, m)| {
+                    !live[at + m.len()..].starts_with(|c: char| c.is_ascii_alphanumeric() || c == '_')
+                });
+                if live.contains("personality::") || reads_field {
+                    readers.insert(path.strip_prefix(&src).unwrap().to_string_lossy().replace('\\', "/"));
+                }
+            }
+        }
+        let want: std::collections::BTreeSet<String> =
+            ["app/native_engine.rs", "app/personality_ui.rs"].iter().map(|s| s.to_string()).collect();
+        assert_eq!(readers, want);
     }
 }

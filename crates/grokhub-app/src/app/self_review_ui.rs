@@ -10,6 +10,7 @@ use std::sync::mpsc;
 use eframe::egui;
 use grokhub_agent::harness as hx;
 use grokhub_core::outcome::{self as oc, TaskOutcome};
+use grokhub_core::run_metrics;
 use grokhub_core::self_review::{self as sr, CardTarget};
 use grokhub_core::what_changed as wc;
 use serde::{Deserialize, Serialize};
@@ -38,6 +39,9 @@ pub(super) struct SelfReviewFile {
     /// Suggestions quiet mode logged instead of posting, newest last.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub quiet_log: Vec<sr::QuietEntry>,
+    /// Code-change ideas the user saved from their cards, newest last.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub saved_ideas: Vec<super::change_history_ui::SavedIdea>,
 }
 
 /// What one card says and what its Apply writes.
@@ -58,6 +62,21 @@ pub(super) struct SelfReviewState {
     pub rx: Option<mpsc::Receiver<Result<hx::WeeklyPass, String>>>,
     /// Cards this pass may still post (the 5-card budget).
     pub budget: usize,
+    /// The trial side of this chat's current skill run (card 32 PR B).
+    pub trial: Option<super::canary_ui::TrialPick>,
+    /// The local day open trials were last judged on the clock.
+    pub settled_day: Option<String>,
+    /// A code idea's issue text for the clipboard on the next frame.
+    pub copy_out: Option<String>,
+    /// Cached `self_review.json`. Settings paint reads this; writers update it
+    /// then persist. `None` means load from disk on the next touch.
+    pub file: Option<SelfReviewFile>,
+    /// Cached change versions for Settings → Behavior history. Cleared when a
+    /// version is written. `None` means read the ledger on the next paint.
+    pub history: Option<Vec<hx::Version>>,
+    /// Cached per-domain run rows for the same page (Brain 6 PR 2). Cleared
+    /// when a run is recorded. `None` means read the runs on the next paint.
+    pub domains: Option<Vec<run_metrics::DomainRow>>,
 }
 
 fn state_path() -> std::path::PathBuf {
@@ -71,7 +90,7 @@ pub(super) fn load_state() -> SelfReviewFile {
         .unwrap_or_default()
 }
 
-fn save_state(s: &SelfReviewFile) {
+pub(super) fn save_state(s: &SelfReviewFile) {
     if let Ok(text) = serde_json::to_string_pretty(s) {
         let _ = std::fs::write(state_path(), text);
     }
@@ -94,16 +113,21 @@ pub(super) fn quiet_log_note(log: &[sr::QuietEntry]) -> String {
 }
 
 /// Quiet mode: the suggestion goes to the log in `self_review.json`, not Pulse.
-fn log_quiet(source: &str, title: &str, body: &str) {
-    let mut state = load_state();
+fn log_quiet(review: &mut SelfReviewState, source: &str, title: &str, body: &str) {
+    if review.file.is_none() {
+        review.file = Some(load_state());
+    }
+    let Some(file) = review.file.as_mut() else {
+        return;
+    };
     let entry = sr::QuietEntry {
         day: Cabin::local_day(),
         source: source.to_string(),
         title: title.to_string(),
         body: body.to_string(),
     };
-    sr::add_quiet_entry(&mut state.quiet_log, entry);
-    save_state(&state);
+    sr::add_quiet_entry(&mut file.quiet_log, entry);
+    save_state(file);
 }
 
 fn draft_md(cand: &sr::DraftCandidate, spans: &[hx::Span]) -> String {
@@ -186,7 +210,16 @@ impl Cabin {
             grokhub_core::now_ms(),
         );
         let _ = oc::append_outcome(&dir, &outcome);
+        let mut metrics = hx::run_metrics_from_spans(&outcome, &spans);
+        // Brain 6: the turn's Brief, policy row and playbook go on its metrics line.
+        if let Some(line) = grokhub_agent::brain::brief_for_turn(&dir, trace, turn) {
+            metrics.brain = line.run_brain();
+        }
+        self.tag_trial(&mut metrics);
+        let _ = run_metrics::append_run(&dir, &metrics, self.cfg.amr_retention_days);
+        self.harness.self_review.domains = None;
         self.harness.self_review.last_outcome = Some(outcome);
+        self.settle_trials_now(metrics.at);
     }
 
     /// The user's next typed line reads as "that was wrong": the last task
@@ -204,7 +237,11 @@ impl Cabin {
             return;
         }
         let late = last.superseded(oc::REASON_CORRECTION, grokhub_core::now_ms());
-        let _ = oc::append_outcome(&config::config_dir(), &late);
+        let dir = config::config_dir();
+        let _ = oc::append_outcome(&dir, &late);
+        if let Some(run) = run_metrics::find_run(&dir, &late.task) {
+            let _ = run_metrics::append_run(&dir, &run.corrected(late.at), self.cfg.amr_retention_days);
+        }
         self.harness.self_review.last_outcome = Some(late);
     }
 
@@ -215,7 +252,49 @@ impl Cabin {
         let sig = oc::skill_signature(&grokhub_core::skill_dir_name(skill));
         for late in oc::undo_supersedes(&oc::read_outcomes(&dir), &sig, now) {
             let _ = oc::append_outcome(&dir, &late);
+            if let Some(run) = run_metrics::find_run(&dir, &late.task) {
+                let _ = run_metrics::append_run(&dir, &run.undone(now), self.cfg.amr_retention_days);
+            }
         }
+    }
+
+    /// Ensure `self_review.json` is in memory. Call before a paint or write.
+    pub(super) fn ensure_self_review_file(&mut self) {
+        if self.harness.self_review.file.is_none() {
+            self.harness.self_review.file = Some(load_state());
+        }
+    }
+
+    /// Mutate the cached file and write it. Keeps Settings paint off disk.
+    pub(super) fn mutate_self_review_file(&mut self, f: impl FnOnce(&mut SelfReviewFile)) {
+        self.ensure_self_review_file();
+        let Some(file) = self.harness.self_review.file.as_mut() else {
+            return;
+        };
+        f(file);
+        save_state(file);
+    }
+
+    /// Change versions for Settings history. Cached until a writer clears it.
+    pub(super) fn history_versions_now(&mut self) -> Vec<hx::Version> {
+        if self.harness.self_review.history.is_none() {
+            self.harness.self_review.history =
+                Some(hx::read_versions(&config::config_dir()));
+        }
+        self.harness
+            .self_review
+            .history
+            .clone()
+            .unwrap_or_default()
+    }
+
+    /// Per-domain rows for Settings → Behavior history, from the cache.
+    pub(super) fn domain_rows_now(&mut self) -> Vec<run_metrics::DomainRow> {
+        if self.harness.self_review.domains.is_none() {
+            let runs = run_metrics::read_runs(&config::config_dir());
+            self.harness.self_review.domains = Some(run_metrics::domain_rows(&runs));
+        }
+        self.harness.self_review.domains.clone().unwrap_or_default()
     }
 
     /// The hour from Settings → Dream time, clamped to 0–23.
@@ -227,7 +306,12 @@ impl Cabin {
             self.status = "Saved".into();
         }
         if self.cfg.self_improve_quiet {
-            crate::cards::settings_note(ui, &quiet_log_note(&load_state().quiet_log));
+            self.ensure_self_review_file();
+            let note = match self.harness.self_review.file.as_ref() {
+                Some(f) => quiet_log_note(&f.quiet_log),
+                None => quiet_log_note(&[]),
+            };
+            crate::cards::settings_note(ui, &note);
         }
     }
 
@@ -238,7 +322,14 @@ impl Cabin {
     /// The review slot's night passes on the local clock. AMR dream takes no
     /// tokens, so no `heartbeat_may` slot.
     pub(super) fn tick_night_passes(&mut self) {
-        let _ = self.night_passes(&Self::local_day(), &Self::local_clock(), grokhub_core::now_ms());
+        let today = Self::local_day();
+        let now = grokhub_core::now_ms();
+        let _ = self.night_passes(&today, &Self::local_clock(), now);
+        // A trial past its window is judged on the clock, not only at a run's end.
+        if self.harness.self_review.settled_day.as_deref() != Some(today.as_str()) {
+            self.harness.self_review.settled_day = Some(today);
+            self.settle_trials_now(now);
+        }
     }
 
     /// Tonight's passes in order, each once a night at or after the dream
@@ -258,14 +349,21 @@ impl Cabin {
     /// Sunday night: post revert and draft cards, then ask the model for
     /// skill changes off the UI thread.
     fn self_review_tonight(&mut self, today: &str, clock: &grokhub_core::LocalClock, now: u64) -> bool {
-        let mut state = load_state();
+        self.ensure_self_review_file();
+        let last_day = self
+            .harness
+            .self_review
+            .file
+            .as_ref()
+            .and_then(|s| s.last_day.clone());
         if self.harness.self_review.rx.is_some()
-            || !sr::self_review_due(state.last_day.as_deref(), today, clock, self.dream_hour())
+            || !sr::self_review_due(last_day.as_deref(), today, clock, self.dream_hour())
         {
             return false;
         }
-        state.last_day = Some(today.to_string());
-        save_state(&state);
+        self.mutate_self_review_file(|state| {
+            state.last_day = Some(today.to_string());
+        });
         self.run_self_review_now(now);
         true
     }
@@ -321,7 +419,10 @@ impl Cabin {
         }
         self.post_router_review(now);
         let stats = sr::skill_stats(&outcomes, now, sr::WEEK_MS);
-        let client = if self.harness.self_review.budget > 0 && stats.iter().any(|s| s.failures > 0)
+        // Brain 6 PR 2: the weakest policy row or playbook rides the same call.
+        let brain = hx::brain_ask(&dir, &run_metrics::read_runs(&dir), now);
+        let client = if self.harness.self_review.budget > 0
+            && (stats.iter().any(|s| s.failures > 0) || brain.is_some())
         {
             self.self_review_client().ok()
         } else {
@@ -343,6 +444,7 @@ impl Cabin {
                 client.as_ref(),
                 &model,
                 &stats,
+                brain.as_ref(),
                 now,
                 &grokhub_agent::CancelToken::new(),
             )
@@ -356,7 +458,12 @@ impl Cabin {
             return;
         };
         let pass = match rx.try_recv() {
-            Ok(Ok(pass)) => pass,
+            Ok(Ok(pass)) => {
+                let t = &pass.tokens;
+                let tokens = t.input.saturating_add(t.out).saturating_add(t.reasoning);
+                self.governor_charge(grokhub_core::JobKind::NightPasses, tokens);
+                pass
+            }
             Ok(Err(e)) => {
                 self.status = format!("Weekly self-review held: {e}");
                 self.persist_updates();
@@ -372,7 +479,14 @@ impl Cabin {
             }
         };
         let now = grokhub_core::now_ms();
+        if let Some(tweak) = pass.brain {
+            self.try_brain_tweak(&tweak, now);
+        }
         for p in pass.kept {
+            if p.snippet {
+                self.post_snippet_card(&p, now);
+                continue;
+            }
             let Some(existing) = self
                 .skill_list
                 .iter()
@@ -408,7 +522,52 @@ impl Cabin {
             };
             self.post_self_review_card(card, now);
         }
+        for idea in pass.ideas {
+            self.post_code_idea_card(&idea, now);
+        }
         self.persist_updates();
+    }
+
+    /// Brain 6 PR 2: the weekly pass's policy or playbook tweak, inside the
+    /// pass's budget. Quiet mode logs it and applies nothing; otherwise it
+    /// goes through `brain_tune` (locks, user version, ledger) and starts a
+    /// trial with its "Trying:" note. A refusal is logged there, not posted.
+    fn try_brain_tweak(&mut self, t: &hx::BrainTweak, now: u64) {
+        if self.harness.self_review.budget == 0 {
+            return;
+        }
+        self.harness.self_review.budget -= 1;
+        let target = t.ask.stats.target();
+        if self.cfg.self_improve_quiet {
+            let body = format!("{}.", t.ask.stats.numbers());
+            log_quiet(&mut self.harness.self_review, &target, &t.proposal.title, &body);
+            return;
+        }
+        match hx::apply_brain_tweak(&config::config_dir(), &t.ask, &t.proposal, now) {
+            Ok(v) => {
+                self.harness.self_review.history = None;
+                self.post_trial_note(&v);
+            }
+            Err(e) => self.status = format!("Self-review tweak not applied: {e}"),
+        }
+    }
+
+    /// A code-change idea from the weekly pass: Save keeps it, Copy as
+    /// GitHub issue copies it redacted. GrokHub never makes the change.
+    pub(super) fn post_code_idea_card(&mut self, idea: &sr::CodeIdea, now: u64) {
+        let text = idea.text();
+        let details = format!(
+            "{text}\n\nGrokHub never changes its own code. Save idea keeps this in Settings → Behavior; Copy as GitHub issue puts it on the clipboard with home paths, emails and keys taken out, for you to paste."
+        );
+        let card = ProposalCard {
+            source: sr::code_source(&idea.slug),
+            skill: &idea.slug,
+            title: &idea.title,
+            body: &idea.evidence,
+            details,
+            md: &text,
+        };
+        self.post_self_review_card(card, now);
     }
 
     /// Router R3a in the weekly pass: at most two cost-raising tuning cards
@@ -430,7 +589,7 @@ impl Cabin {
         grokhub_agent::route::learn::cards_posted(&dir, posted, now);
         let line = grokhub_agent::route::learn::review_line(&dir, now);
         if self.cfg.self_improve_quiet {
-            log_quiet("router-review", "Weekly router review", &line);
+            log_quiet(&mut self.harness.self_review, "router-review", "Weekly router review", &line);
             return;
         }
         let card = grokhub_core::router_update_card("router-review", "Weekly router review", &line, now);
@@ -459,20 +618,20 @@ impl Cabin {
         }
         self.harness.self_review.budget -= 1;
         if self.cfg.self_improve_quiet {
-            log_quiet(&source, title, body);
+            log_quiet(&mut self.harness.self_review, &source, title, body);
             return;
         }
         let mut card = grokhub_core::suggestion_card(&source, title, body, now);
         card.details = Some(details);
         grokhub_core::post_update(&mut self.updates, card);
-        let mut state = load_state();
-        state.pending.retain(|p| p.source != source);
-        state.pending.push(PendingProposal {
-            source,
-            skill: skill.to_string(),
-            md: md.to_string(),
+        self.mutate_self_review_file(|state| {
+            state.pending.retain(|p| p.source != source);
+            state.pending.push(PendingProposal {
+                source,
+                skill: skill.to_string(),
+                md: md.to_string(),
+            });
         });
-        save_state(&state);
     }
 
     /// The card's Apply (or Revert) item, clicked on the Pulse row menu.
@@ -484,17 +643,26 @@ impl Cabin {
         let Some(target) = sr::card_target(&card.source_id) else {
             return false;
         };
-        let mut state = load_state();
-        let Some(pending) = state
-            .pending
-            .iter()
-            .find(|p| p.source == card.source_id)
-            .cloned()
+        self.ensure_self_review_file();
+        let Some(pending) = self
+            .harness
+            .self_review
+            .file
+            .as_ref()
+            .and_then(|state| {
+                state
+                    .pending
+                    .iter()
+                    .find(|p| p.source == card.source_id)
+                    .cloned()
+            })
         else {
             return false;
         };
         let (dir, skills_dir) = (config::config_dir(), skills::skills_dir());
         let done = match target {
+            CardTarget::Snippet(name) => self.apply_snippet(&name, &card.title, &pending.md),
+            CardTarget::Code(_) => self.save_code_idea(&card.title, &pending.md),
             CardTarget::Router(candidate) => match grokhub_agent::route::learn::accept_card(&dir, &candidate, grokhub_core::now_ms()) {
                 Ok(msg) => {
                     self.status = msg;
@@ -539,12 +707,17 @@ impl Cabin {
                     Ok(()) => {
                         let skill = grokhub_core::parse_skill_md(&pending.md);
                         let reason = format!("weekly self-review: {}", card.title);
-                        match skills::save_skill_logged(&skill, hx::Origin::SelfManage, &reason) {
-                            Ok(()) => {
+                        match skills::save_skill_versioned(&skill, hx::Origin::SelfManage, &reason) {
+                            Ok(change) => {
+                                let skill_name = skill.name.clone();
                                 self.remember_skill(skill);
                                 self.harness.skill_rows = None;
-                                self.status =
-                                    format!("{name} changed. /skills changes can undo it.");
+                                if let Some(c) = change {
+                                    self.start_skill_trial(&c, &skill_name, &card.title, &old, &pending.md);
+                                }
+                                self.status = format!(
+                                    "{name} changed: one run in five tries it first. /skills changes can undo it."
+                                );
                                 true
                             }
                             Err(e) => {
@@ -557,8 +730,10 @@ impl Cabin {
             }
         };
         if done {
-            state.pending.retain(|p| p.source != card.source_id);
-            save_state(&state);
+            // Reloaded: a saved code idea wrote the file since.
+            self.mutate_self_review_file(|state| {
+                state.pending.retain(|p| p.source != card.source_id);
+            });
             grokhub_core::dismiss_update_at(&mut self.updates, id, grokhub_core::now_ms());
             self.persist_updates();
         }

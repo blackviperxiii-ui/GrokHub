@@ -4,6 +4,7 @@
 //! kills the cabin. CLI flags attach the parent console when there is one.
 
 #![cfg_attr(not(test), windows_subsystem = "windows")]
+#![cfg_attr(not(test), warn(clippy::unwrap_used, clippy::expect_used))]
 
 mod app;
 mod engine_handle;
@@ -37,9 +38,11 @@ mod imagine_auth;
 mod secrets;
 mod self_mcp;
 mod skills;
+mod startup;
 mod threads;
 mod tray;
 mod window;
+mod release_update;
 mod update;
 mod xai;
 #[cfg(windows)]
@@ -59,6 +62,7 @@ use grokhub_core::{
 use std::env;
 
 fn main() {
+    startup::begin();
     // `sudo`'s helper (card 34): answer it and leave before anything else starts.
     let args: Vec<String> = env::args().collect();
     if let Some(socket) = cli::askpass_socket(&args) {
@@ -74,7 +78,7 @@ fn main() {
     match launch {
         Launch::Cabin | Launch::Agent | Launch::McpDesktop | Launch::McpCua | Launch::McpSelf => {}
         Launch::Hub => attach_cli_console(true),
-        Launch::Version | Launch::Help | Launch::Doctor | Launch::Update | Launch::Oauth => {
+        Launch::Version | Launch::Help | Launch::Doctor | Launch::Update | Launch::Oauth | Launch::BenchLocal => {
             attach_cli_console(false)
         }
     }
@@ -85,16 +89,20 @@ fn main() {
         Launch::Help => {
             #[cfg(windows)]
             eprint!(
-                "grokhub {} — native cabin\n\n  grokhub           cabin (close stays in the tray)\n  grokhub --agent   cabin in the tray, window hidden\n  grokhub --hub     LAN hub only\n  grokhub --mcp-desktop  desktop tools on stdin (no window)\n  grokhub --mcp-cua      Cua Driver gate on stdin (Linux, spike flag)\n  grokhub --mcp-self  Grok's skill, connection, and automation tools on stdin (no window)\n  grokhub --oauth   xAI device-code (Grok)\n  grokhub --update  when the cabin is newer: GitHub zip or source overlay\n  grokhub --doctor  auth / memory / hub kind\n  grokhub --version\n",
+                "grokhub {} — native cabin\n\n  grokhub           cabin (close stays in the tray)\n  grokhub --agent   cabin in the tray, window hidden\n  grokhub --hub     LAN hub only\n  grokhub --mcp-desktop  desktop tools on stdin (no window)\n  grokhub --mcp-cua      Cua Driver gate on stdin (Linux, spike flag)\n  grokhub --mcp-self  Grok's skill, connection, and automation tools on stdin (no window)\n  grokhub --oauth   xAI device-code (Grok)\n  grokhub --update  when the cabin is newer: GitHub zip or source overlay\n  grokhub --doctor  auth / memory / hub kind\n  grokhub bench local  on-device speed + eval\n  grokhub --version\n",
                 env!("CARGO_PKG_VERSION")
             );
             #[cfg(not(windows))]
             eprint!(
-                "grokhub {} — native cabin\n\n  grokhub           cabin (close stays in the tray)\n  grokhub --agent   cabin in the tray, window hidden\n  grokhub --hub     LAN hub only\n  grokhub --mcp-desktop  desktop tools on stdin (no window)\n  grokhub --mcp-cua      Cua Driver gate on stdin (Linux, spike flag)\n  grokhub --mcp-self  Grok's skill, connection, and automation tools on stdin (no window)\n  grokhub --oauth   xAI device-code (Grok)\n  grokhub --update  when the cabin is newer: git pull + install.sh --user\n  grokhub --doctor  auth / memory / hub kind\n  grokhub --version\n",
+                "grokhub {} — native cabin\n\n  grokhub           cabin (close stays in the tray)\n  grokhub --agent   cabin in the tray, window hidden\n  grokhub --hub     LAN hub only\n  grokhub --mcp-desktop  desktop tools on stdin (no window)\n  grokhub --mcp-cua      Cua Driver gate on stdin (Linux, spike flag)\n  grokhub --mcp-self  Grok's skill, connection, and automation tools on stdin (no window)\n  grokhub --oauth   xAI device-code (Grok)\n  grokhub --update  when the cabin is newer: git pull + install.sh --user\n  grokhub --doctor  auth / memory / hub kind\n  grokhub bench local  on-device speed + eval\n  grokhub --version\n",
                 env!("CARGO_PKG_VERSION")
             );
         }
         Launch::Doctor => run_doctor(),
+        Launch::BenchLocal => {
+            let code = grokhub_agent::route::local_bench::run_cli();
+            std::process::exit(code);
+        }
         Launch::Oauth => run_oauth_cli(),
         Launch::Update => run_update_cli(),
         Launch::Hub => run_hub(),
@@ -227,9 +235,6 @@ fn run_update_cli() {
             std::process::exit(1);
         }
     };
-    if let Some(note) = update::stray_beta_receipt_note() {
-        eprintln!("{note}");
-    }
     if grokhub_core::update_wipes_config(&cmds) {
         eprintln!("refusing an update that would wipe config");
         std::process::exit(1);
@@ -353,6 +358,8 @@ fn run_cabin(hidden: bool) -> eframe::Result<()> {
         env::var_os("WAYLAND_DISPLAY").is_some() || env::var_os("WAYLAND_SOCKET").is_some(),
     );
     let geom = window::clamp_geom(config::load().window);
+    startup::mark("startup:config");
+    Cabin::warm_startup_caches();
     let mut viewport = egui::ViewportBuilder::default()
         .with_inner_size(window::launch_size(&geom))
         .with_min_inner_size([window::WIN_MIN_W, window::WIN_MIN_H])
@@ -383,8 +390,12 @@ fn run_cabin(hidden: bool) -> eframe::Result<()> {
             "GrokHub",
             opts,
             Box::new(move |cc| {
+                startup::mark("startup:window");
                 crate::theme::install_fonts(&cc.egui_ctx);
-                Ok(Box::new(Cabin::new(hidden)))
+                startup::mark("startup:fonts");
+                let cabin = Cabin::new(hidden);
+                startup::mark("startup:cabin");
+                Ok(Box::new(cabin))
             }),
         )
     }
@@ -414,8 +425,12 @@ fn run_cabin_with_fx(hidden: bool, viewport: egui::ViewportBuilder) -> eframe::R
                     };
                     crate::fx::install(state);
                 }
+                startup::mark("startup:window");
                 crate::theme::install_fonts(&cc.egui_ctx);
-                Ok(Box::new(Cabin::new(hidden)))
+                startup::mark("startup:fonts");
+                let cabin = Cabin::new(hidden);
+                startup::mark("startup:cabin");
+                Ok(Box::new(cabin))
             }),
         );
         match result {

@@ -605,65 +605,69 @@ pub fn predict_intents(chat: &[(String, String)], draft: &str) -> BTreeMap<Predi
         || (regexish(&asst.to_ascii_lowercase(), &["check", "probe", "investigate"])
             && !asst.to_ascii_lowercase().contains("host_cmd"))
     {
-        *scores.get_mut(&PredictedIntent::Finish).unwrap() += 0.55;
-        *scores.get_mut(&PredictedIntent::Host).unwrap() += 0.25;
+        bump(&mut scores, PredictedIntent::Finish, 0.55);
+        bump(&mut scores, PredictedIntent::Host, 0.25);
     }
     if regexish(&blob, &["error", "fail", "crash", "broken", "exception"]) {
-        *scores.get_mut(&PredictedIntent::Fix).unwrap() += 0.5;
+        bump(&mut scores, PredictedIntent::Fix, 0.5);
     }
     if asst.contains("```") || user.contains("```") || regexish(&blob, &["function", "const ", "import ", "typescript", "refactor"])
     {
-        *scores.get_mut(&PredictedIntent::Review).unwrap() += 0.4;
-        *scores.get_mut(&PredictedIntent::Ship).unwrap() += 0.2;
+        bump(&mut scores, PredictedIntent::Review, 0.4);
+        bump(&mut scores, PredictedIntent::Ship, 0.2);
     }
     if regexish(&format!("{user} {draft_l}"), &["add ", "implement", "build ", "create ", "make ", "wire ", "patch", "fix "])
     {
-        *scores.get_mut(&PredictedIntent::Ship).unwrap() += 0.45;
+        bump(&mut scores, PredictedIntent::Ship, 0.45);
     }
     if regexish(&format!("{user} {draft_l}"), &["explain", "how does", "what is", "why ", "walk me"]) {
-        *scores.get_mut(&PredictedIntent::Explain).unwrap() += 0.45;
+        bump(&mut scores, PredictedIntent::Explain, 0.45);
     }
     if regexish(&blob, &["host_", "desktop host", "$ ", "journalctl", "process", "system"]) {
-        *scores.get_mut(&PredictedIntent::Host).unwrap() += 0.4;
+        bump(&mut scores, PredictedIntent::Host, 0.4);
     }
     if regexish(&blob, &["should i", "which", "options", "recommend", "tradeoff"]) {
-        *scores.get_mut(&PredictedIntent::Decide).unwrap() += 0.4;
+        bump(&mut scores, PredictedIntent::Decide, 0.4);
     }
     if regexish(&blob, &["imagine", "image", "draw", "logo", "generate an image"]) {
-        *scores.get_mut(&PredictedIntent::Create).unwrap() += 0.5;
+        bump(&mut scores, PredictedIntent::Create, 0.5);
     }
     if regexish(&format!("{user} {draft_l}"), &["continue", "keep going", "go on", "resume", "next"]) {
-        *scores.get_mut(&PredictedIntent::Continue).unwrap() += 0.5;
-        *scores.get_mut(&PredictedIntent::Finish).unwrap() += 0.2;
+        bump(&mut scores, PredictedIntent::Continue, 0.5);
+        bump(&mut scores, PredictedIntent::Finish, 0.2);
     }
     if draft_l.len() >= 2 {
         if draft_l.starts_with("fix") || draft_l.starts_with("bug") || draft_l.starts_with("error") || draft_l.starts_with("crash")
         {
-            *scores.get_mut(&PredictedIntent::Fix).unwrap() += 0.35;
+            bump(&mut scores, PredictedIntent::Fix, 0.35);
         }
         if ["add", "implement", "build", "make", "create"]
             .iter()
             .any(|p| draft_l.starts_with(p))
         {
-            *scores.get_mut(&PredictedIntent::Ship).unwrap() += 0.35;
+            bump(&mut scores, PredictedIntent::Ship, 0.35);
         }
         if ["explain", "how", "why", "what"].iter().any(|p| draft_l.starts_with(p)) {
-            *scores.get_mut(&PredictedIntent::Explain).unwrap() += 0.35;
+            bump(&mut scores, PredictedIntent::Explain, 0.35);
         }
         if ["check", "scan", "look", "ps ", "find ", "ls "].iter().any(|p| draft_l.starts_with(p)) {
-            *scores.get_mut(&PredictedIntent::Host).unwrap() += 0.35;
+            bump(&mut scores, PredictedIntent::Host, 0.35);
         }
         if ["continue", "keep", "finish"].iter().any(|p| draft_l.starts_with(p)) {
-            *scores.get_mut(&PredictedIntent::Finish).unwrap() += 0.4;
+            bump(&mut scores, PredictedIntent::Finish, 0.4);
         }
         if ["imagine", "draw", "image"].iter().any(|p| draft_l.starts_with(p)) {
-            *scores.get_mut(&PredictedIntent::Create).unwrap() += 0.4;
+            bump(&mut scores, PredictedIntent::Create, 0.4);
         }
         if draft_l.starts_with('$') || draft_l.starts_with("/sh") {
-            *scores.get_mut(&PredictedIntent::Host).unwrap() += 0.5;
+            bump(&mut scores, PredictedIntent::Host, 0.5);
         }
     }
     scores
+}
+
+fn bump(scores: &mut BTreeMap<PredictedIntent, f32>, intent: PredictedIntent, by: f32) {
+    *scores.entry(intent).or_insert(0.0) += by;
 }
 
 pub fn top_intent_label(intents: &BTreeMap<PredictedIntent, f32>) -> Option<&'static str> {

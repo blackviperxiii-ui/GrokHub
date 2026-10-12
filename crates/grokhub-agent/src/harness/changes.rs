@@ -45,6 +45,12 @@ pub const CONNECTION_LEDGER_FILE: &str = "connections.jsonl";
 pub const AUTOMATION_LEDGER_FILE: &str = "automations.jsonl";
 /// The router's model-file ledger inside [`CHANGES_DIR`] (routing table versions).
 pub const MODEL_LEDGER_FILE: &str = "models.jsonl";
+/// The chat-note ledger inside [`CHANGES_DIR`] (`tunable/<name>.md`, card 32 PR C).
+pub const SNIPPET_LEDGER_FILE: &str = "snippets.jsonl";
+/// The Brain policy file's ledger inside [`CHANGES_DIR`] (Brain 6).
+pub const POLICY_LEDGER_FILE: &str = "policy.jsonl";
+/// The playbooks ledger inside [`CHANGES_DIR`] (Brain 6).
+pub const PLAYBOOK_LEDGER_FILE: &str = "playbooks.jsonl";
 /// Scope-guard findings inside [`CHANGES_DIR`].
 pub const FINDINGS_FILE: &str = "findings.jsonl";
 /// Detector name on a scope-guard finding.
@@ -78,10 +84,17 @@ pub enum ChangeKind {
     Automation,
     /// A file the router keeps under `{config}/models/` (the routing table).
     Model,
+    /// A chat note under `{config}/tunable/` the weekly pass wrote.
+    Snippet,
+    /// The user's Brain policy file, `{config}/brain/brain_policy.toml` (Brain 6).
+    Policy,
+    /// A user playbook, `{config}/playbooks/<id>.toml` (Brain 6).
+    Playbook,
 }
 
 impl ChangeKind {
-    pub const ALL: [ChangeKind; 4] = [Self::Skill, Self::Connection, Self::Automation, Self::Model];
+    pub const ALL: [ChangeKind; 7] =
+        [Self::Skill, Self::Connection, Self::Automation, Self::Model, Self::Snippet, Self::Policy, Self::Playbook];
 
     pub fn as_str(self) -> &'static str {
         match self {
@@ -89,6 +102,9 @@ impl ChangeKind {
             Self::Connection => "connection",
             Self::Automation => "automation",
             Self::Model => "model",
+            Self::Snippet => "snippet",
+            Self::Policy => "policy",
+            Self::Playbook => "playbook",
         }
     }
 
@@ -102,6 +118,9 @@ impl ChangeKind {
             Self::Connection => CONNECTION_LEDGER_FILE,
             Self::Automation => AUTOMATION_LEDGER_FILE,
             Self::Model => MODEL_LEDGER_FILE,
+            Self::Snippet => SNIPPET_LEDGER_FILE,
+            Self::Policy => POLICY_LEDGER_FILE,
+            Self::Playbook => PLAYBOOK_LEDGER_FILE,
         }
     }
 
@@ -111,12 +130,16 @@ impl ChangeKind {
             Self::Connection => "connections",
             Self::Automation => "automations",
             Self::Model => "models",
+            Self::Snippet => "snippets",
+            Self::Policy => "policy",
+            Self::Playbook => "playbooks",
         }
     }
 
     fn ext(self) -> &'static str {
         match self {
-            Self::Skill => "md",
+            Self::Skill | Self::Snippet => "md",
+            Self::Policy | Self::Playbook => "toml",
             _ => "json",
         }
     }
@@ -275,6 +298,50 @@ pub trait ChangeTarget {
     fn label_of(&self, _bytes: &[u8]) -> String {
         String::new()
     }
+}
+
+/// A chat note `{config}/tunable/<name>.md` (card 32 PR C). Only the
+/// weekly pass writes one, through the ledger and the protected-surface guard.
+pub struct SnippetTarget<'a> {
+    pub config_dir: &'a Path,
+    pub name: &'a str,
+}
+
+impl ChangeTarget for SnippetTarget<'_> {
+    fn kind(&self) -> ChangeKind {
+        ChangeKind::Snippet
+    }
+
+    fn id(&self) -> Result<String, String> {
+        entry_id(self.name)
+    }
+
+    fn file(&self) -> Result<PathBuf, String> {
+        Ok(snippet_path(self.config_dir, &self.id()?))
+    }
+
+    fn read(&self) -> Result<Option<Vec<u8>>, String> {
+        read_capped(&self.file()?)
+    }
+
+    fn put(&self, bytes: Option<&[u8]>) -> Result<(), String> {
+        let path = self.file()?;
+        match bytes {
+            Some(b) => {
+                if let Some(dir) = path.parent() {
+                    fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+                }
+                private_write(&path, b)
+            }
+            None if path.exists() => fs::remove_file(&path).map_err(|e| e.to_string()),
+            None => Ok(()),
+        }
+    }
+}
+
+/// Where a chat note lives.
+pub fn snippet_path(config_dir: &Path, id: &str) -> PathBuf {
+    config_dir.join(grokhub_core::protected_surface::TUNABLE_DIR).join(format!("{id}.md"))
 }
 
 /// A cabin skill's `SKILL.md` under `skills_dir`.
@@ -501,11 +568,16 @@ fn find_kept(dir: &Path, ext: &str, hash: &str) -> Option<PathBuf> {
 /// Keep one version. The same bytes kept before move to the front instead
 /// of being copied twice; past [`HISTORY_CAP`] the oldest go. A connection or
 /// automation that holds anything that reads as a secret is not kept: the
-/// write is refused instead.
+/// write is refused instead. A policy file or playbook is prose with ids like
+/// `task-general-copy`, so only a key at the start of a word counts there.
 fn keep_version(config_dir: &Path, kind: ChangeKind, id: &str, bytes: &[u8], at: u64) -> Result<String, String> {
     if kind != ChangeKind::Skill {
         let text = String::from_utf8_lossy(bytes);
-        if grokhub_core::redact_secrets(&text) != text {
+        let redacted = match kind {
+            ChangeKind::Policy | ChangeKind::Playbook => grokhub_core::redact_secret_words(&text),
+            _ => grokhub_core::redact_secrets(&text),
+        };
+        if redacted != text {
             return Err(format!("this {} holds a secret, so GrokHub won't keep or change it", kind.as_str()));
         }
     }
@@ -797,6 +869,36 @@ pub fn record_change(
     Ok(Some(change))
 }
 
+/// Bring an edit made outside the cabin into the ledger: when the target's
+/// bytes are not the newest line's `after`, keep them and append one
+/// `origin: user` line, so the user's version is a version like any other.
+/// `Ok(None)` when the ledger already matches the file.
+pub fn record_outside_edit(config_dir: &Path, target: &dyn ChangeTarget, reason: &str) -> Result<Option<Change>, String> {
+    guard(config_dir, target)?;
+    let _held = LEDGER_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let (kind, id) = (target.kind(), target.id()?);
+    let now = target.read()?;
+    let now_hash = now.as_deref().map(content_hash).unwrap_or_default();
+    let ledger = ChangeLedger::load_kind(config_dir, kind);
+    let last_hash = ledger.for_name(&id).rev().find(|c| c.op != ChangeOp::Accept).map(|c| c.after_hash.clone()).unwrap_or_default();
+    if now_hash == last_hash {
+        return Ok(None);
+    }
+    let at = now_ms();
+    let op = match (&now, last_hash.is_empty()) {
+        (None, _) => ChangeOp::Delete,
+        (Some(_), true) => ChangeOp::Create,
+        (Some(_), false) => ChangeOp::Modify,
+    };
+    let mut change = new_change_for(kind, &id, op, Origin::User, reason, at);
+    if let Some(b) = &now {
+        change.after_hash = keep_version(config_dir, kind, &id, b, at)?;
+        change.label = target.label_of(b);
+    }
+    change.before_hash = last_hash;
+    append_change(config_dir, change).map(Some)
+}
+
 /// [`record_change`] on one skill's `SKILL.md`.
 pub fn record_skill_change(
     config_dir: &Path,
@@ -903,6 +1005,43 @@ pub fn restore_change(config_dir: &Path, target: &dyn ChangeTarget, _ask: UndoAs
     let mut done = put_back(config_dir, target, Some(bytes), change)?;
     done.reverted = Some(source);
     Ok(done)
+}
+
+/// Put a canary the evaluator judged no better back to the bytes it
+/// replaced: one `undo` line by GrokHub (`origin: self_manage`). Only the
+/// evaluator holds a [`Verdict`](crate::harness::canary::Verdict). Refused
+/// when line `seq` is no longer the change in effect on this target.
+pub(crate) fn rollback_change(
+    config_dir: &Path,
+    target: &dyn ChangeTarget,
+    seq: u64,
+    why: &str,
+    _verdict: &crate::harness::canary::Verdict,
+) -> Result<Reverted, String> {
+    guard(config_dir, target)?;
+    let _held = LEDGER_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let (kind, id) = (target.kind(), target.id()?);
+    let ledger = ChangeLedger::load_kind(config_dir, kind);
+    let line = ledger
+        .undo_target(&id)
+        .filter(|c| c.seq == seq)
+        .cloned()
+        .ok_or_else(|| format!("{} changed since #{seq}", shown_id(target, &id)))?;
+    let bytes = if line.before_hash.is_empty() {
+        None
+    } else {
+        Some(kept_version(config_dir, kind, &id, &line.before_hash)?)
+    };
+    let mut change = new_change_for(kind, &id, ChangeOp::Undo, Origin::SelfManage, &format!("canary rollback #{seq}: {why}"), now_ms());
+    change.undoes = Some(seq);
+    let mut done = put_back(config_dir, target, bytes, change)?;
+    done.reverted = Some(line);
+    Ok(done)
+}
+
+/// The kept bytes of one version (a canary's parent for its control runs).
+pub fn kept_bytes(config_dir: &Path, kind: ChangeKind, id: &str, hash: &str) -> Result<Vec<u8>, String> {
+    kept_version(config_dir, kind, id, hash)
 }
 
 /// Keep a change GrokHub made: one `accept` line by the user. Nothing on

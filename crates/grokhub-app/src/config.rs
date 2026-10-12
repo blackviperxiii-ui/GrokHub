@@ -1,4 +1,4 @@
-use grokhub_core::{is_plain_text, BoardCard, FeedPulse, HeartbeatPace};
+use grokhub_core::{is_plain_text, BackgroundBudgets, BoardCard, FeedPulse, HeartbeatPace};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::{Read, Write};
@@ -181,16 +181,9 @@ fn read_store(path: &Path, cap: usize) -> StoreRead {
 ///
 /// Without this the caller falls back to a default value that the next persist tick
 /// writes straight back over the original file, turning one unreadable store into
-/// permanent data loss.
+/// permanent data loss. The move is noted so the cabin posts a Home card naming the file.
 pub fn quarantine(path: &Path) -> Option<PathBuf> {
-    let name = path.file_name().and_then(|s| s.to_str())?;
-    let stamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis())
-        .unwrap_or(0);
-    let aside = path.with_file_name(format!("{name}.corrupt-{stamp}"));
-    fs::rename(path, &aside).ok()?;
-    Some(aside)
+    grokhub_core::recovered::quarantine(path, grokhub_core::recovered::RESTORED_DEFAULTS)
 }
 
 /// Load a JSON store, quarantining it rather than silently returning `fallback` over data
@@ -394,6 +387,10 @@ pub struct AppConfig {
     /// hold. Omitted from `app.json` while it stays default.
     #[serde(default, skip_serializing_if = "HeartbeatPace::is_default")]
     pub heartbeat: HeartbeatPace,
+    /// `app.json` only for now. Per-day token budgets for background jobs, by
+    /// kind (`grokhub_core::governor`). Omitted while it stays default.
+    #[serde(default, skip_serializing_if = "BackgroundBudgets::is_default")]
+    pub background: BackgroundBudgets,
     /// Router R2b: Settings → "Use Grok 4.7 Fast when you're waiting". On by default.
     #[serde(default = "default_fast_when_waiting")]
     pub fast_when_waiting: bool,
@@ -425,10 +422,18 @@ pub struct AppConfig {
     /// (Settings shows the newest) instead of posting Pulse cards. Off by default.
     #[serde(default)]
     pub self_improve_quiet: bool,
+    /// Settings → Personality: the preset id (`grokhub_core::personality`). Empty is the
+    /// default voice. Tone only; approvals and safety rules never change.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub personality: String,
     /// Settings → Memory retention: unsure, unlinked AMR notes not updated in
     /// this many days are retired once a day, apart from dream. 0 keeps all.
     #[serde(default = "default_amr_retention_days", deserialize_with = "de_amr_retention_days")]
     pub amr_retention_days: u32,
+    /// Settings → Behavior → Auto-archive: chats with no activity for this many
+    /// days move to Archived (still searchable). 0 is off. Default 14.
+    #[serde(default = "default_chat_archive_days", deserialize_with = "de_chat_archive_days")]
+    pub chat_archive_days: u32,
     /// Spike-2a flag: Cua Driver as a second pair of hands on Linux
     /// (`grokhub --mcp-cua`). Omitted from `app.json` while false. No Settings control.
     #[serde(default, skip_serializing_if = "is_false")]
@@ -462,6 +467,9 @@ pub struct AppConfig {
     /// the cabin rewrites it after likes and dislikes. Empty means our default.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub feed_instructions: String,
+    /// Settings → Pulse → Sources: which free sources run and what they follow.
+    #[serde(default)]
+    pub pulse_sources: grokhub_core::pulse_sources::SourceSettings,
     /// Settings → Behavior. The old card deck over the empty chat. Pulse holds
     /// the cards now, so it is off unless turned back on.
     #[serde(default)]
@@ -529,6 +537,16 @@ fn default_amr_retention_days() -> u32 {
 fn de_amr_retention_days<'de, D: serde::Deserializer<'de>>(d: D) -> Result<u32, D::Error> {
     let raw = serde_json::Value::deserialize(d)?;
     Ok(raw.as_i64().map_or_else(default_amr_retention_days, |n| n.clamp(0, 3650) as u32))
+}
+
+fn default_chat_archive_days() -> u32 {
+    14
+}
+
+/// A whole number clamps to 0–3650; anything else is the default (14).
+fn de_chat_archive_days<'de, D: serde::Deserializer<'de>>(d: D) -> Result<u32, D::Error> {
+    let raw = serde_json::Value::deserialize(d)?;
+    Ok(raw.as_i64().map_or_else(default_chat_archive_days, |n| n.clamp(0, 3650) as u32))
 }
 
 fn default_imagine_wall() -> bool {
@@ -614,6 +632,7 @@ impl Default for AppConfig {
             daily_token_budget: 0,
             budget_pauses_scheduled: default_budget_pause(),
             heartbeat: HeartbeatPace::default(),
+            background: BackgroundBudgets::default(),
             fast_when_waiting: default_fast_when_waiting(),
             weekly_spend_cap_usd: 0,
             price_ceiling_usd_per_m: default_price_ceiling(),
@@ -624,7 +643,9 @@ impl Default for AppConfig {
             desktop_control: false,
             screen_record: false,
             self_improve_quiet: false,
+            personality: String::new(),
             amr_retention_days: default_amr_retention_days(),
+            chat_archive_days: default_chat_archive_days(),
             cua_driver: false,
             cua_driver_path: String::new(),
             theme: default_theme(),
@@ -636,6 +657,7 @@ impl Default for AppConfig {
             digest_brief: String::new(),
             feed_pulse: FeedPulse::default(),
             feed_instructions: String::new(),
+            pulse_sources: Default::default(),
             home_deck: false,
             memory_backend: grokhub_core::amr::MemoryBackend::Legacy,
         }
@@ -1028,6 +1050,18 @@ mod tests {
     }
 
     #[test]
+    fn background_budgets_default_omitted_and_overrides_parse() {
+        let json = serde_json::to_string(&AppConfig::default()).unwrap();
+        assert!(!json.contains("\"background\""), "a default save must not grow a background key: {json}");
+        let tuned: AppConfig =
+            serde_json::from_str(r#"{"deviceName":"cabin","background":{"dailyTokens":{"review":500}}}"#).unwrap();
+        assert_eq!(tuned.background.daily_tokens(grokhub_core::JobKind::Review), 500);
+        assert_eq!(tuned.background.daily_tokens(grokhub_core::JobKind::Ideas), 100_000);
+        let saved = serde_json::to_string(&tuned).unwrap();
+        assert!(saved.contains(r#""background":{"dailyTokens":{"review":500}}"#), "{saved}");
+    }
+
+    #[test]
     fn desktop_mcp_setting_defaults_off() {
         assert!(!AppConfig::default().desktop_control);
         let absent: AppConfig = serde_json::from_str(r#"{"deviceName":"cabin"}"#).unwrap();
@@ -1395,6 +1429,21 @@ mod tests {
         }
         let text = serde_json::to_string(&AppConfig { amr_retention_days: 180, ..AppConfig::default() }).unwrap();
         assert!(text.contains("\"amrRetentionDays\":180"), "{text}");
+    }
+
+    #[test]
+    fn chat_archive_days_defaults_to_14_clamps_and_round_trips() {
+        let old: AppConfig = serde_json::from_str("{}").unwrap();
+        assert_eq!(old.chat_archive_days, 14);
+        for (raw, want) in [("7", 7), ("0", 0), ("99999", 3650), ("-4", 0), ("\"long\"", 14)] {
+            let cfg: AppConfig =
+                serde_json::from_str(&format!("{{\"chatArchiveDays\": {raw}}}")).unwrap();
+            assert_eq!(cfg.chat_archive_days, want, "{raw}");
+        }
+        let text =
+            serde_json::to_string(&AppConfig { chat_archive_days: 30, ..AppConfig::default() })
+                .unwrap();
+        assert!(text.contains("\"chatArchiveDays\":30"), "{text}");
     }
 
     #[test]

@@ -54,7 +54,7 @@ impl Channel {
 /// What `grokhub --version` reports.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BuildVersion {
-    /// `2.10.91-beta` on beta, `2.10.91` on stable.
+    /// `2.10.91-beta.3` on beta, `2.10.91` on stable (legacy bare `-beta` still parses).
     pub version: String,
     pub channel: Channel,
     /// Branch (or release tag) the binary was built from; empty when unknown.
@@ -63,11 +63,12 @@ pub struct BuildVersion {
     pub sha: String,
 }
 
-/// `GrokHub 2.10.91-beta (beta @ abc1234)` / `GrokHub 2.10.91 (main @ abc1234)`.
-/// Without git info it is `GrokHub 2.10.91`.
-pub fn version_line(base: &str, channel: Channel, branch: &str, sha: &str) -> String {
+/// `GrokHub 2.10.91-beta.3 (beta @ abc1234)` / `GrokHub 2.10.91 (main @ abc1234)`.
+/// Without git info it is `GrokHub 2.10.91`. `beta_n` is the prerelease number
+/// on Beta (`-beta.N`); ignored on Stable.
+pub fn version_line(base: &str, channel: Channel, branch: &str, sha: &str, beta_n: u64) -> String {
     let version = match channel {
-        Channel::Beta => format!("{base}-beta"),
+        Channel::Beta => format!("{base}-beta.{beta_n}"),
         Channel::Stable => base.to_string(),
     };
     match (branch.trim(), sha.trim()) {
@@ -78,7 +79,23 @@ pub fn version_line(base: &str, channel: Channel, branch: &str, sha: &str) -> St
     }
 }
 
-/// Reads a `--version` line back. Also takes the old bare `2.10.90` output.
+/// Core `X.Y.Z` and channel from a version token (`2.13.0-beta.2`, bare
+/// `2.13.0-beta`, or `2.13.0`).
+fn version_core_channel(version: &str) -> Option<(&str, Channel)> {
+    if let Some((core, n)) = version.rsplit_once("-beta.") {
+        if !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()) {
+            return Some((core, Channel::Beta));
+        }
+        return None;
+    }
+    if let Some(core) = version.strip_suffix("-beta") {
+        return Some((core, Channel::Beta));
+    }
+    Some((version, Channel::Stable))
+}
+
+/// Reads a `--version` line back. Also takes the old bare `2.10.90` output
+/// and legacy `2.10.91-beta` (no `.N`).
 pub fn parse_version_line(line: &str) -> Option<BuildVersion> {
     let line = line.trim();
     let rest = line.strip_prefix("GrokHub ").unwrap_or(line).trim();
@@ -86,7 +103,7 @@ pub fn parse_version_line(line: &str) -> Option<BuildVersion> {
         Some((v, p)) => (v.trim(), p.trim()),
         None => (rest, ""),
     };
-    let core = version.strip_suffix("-beta").unwrap_or(version);
+    let (core, channel) = version_core_channel(version)?;
     let parts: Vec<&str> = core.split('.').collect();
     if parts.len() != 3
         || parts
@@ -95,11 +112,6 @@ pub fn parse_version_line(line: &str) -> Option<BuildVersion> {
     {
         return None;
     }
-    let channel = if version.ends_with("-beta") {
-        Channel::Beta
-    } else {
-        Channel::Stable
-    };
     let (branch, sha) = if paren.is_empty() {
         (String::new(), String::new())
     } else {
@@ -150,29 +162,38 @@ mod tests {
     #[test]
     fn version_lines_name_the_channel_branch_and_sha() {
         assert_eq!(
-            version_line("2.10.91", Channel::Beta, "beta", "abc1234"),
-            "GrokHub 2.10.91-beta (beta @ abc1234)"
+            version_line("2.10.91", Channel::Beta, "beta", "abc1234", 3),
+            "GrokHub 2.10.91-beta.3 (beta @ abc1234)"
         );
         assert_eq!(
-            version_line("2.10.91", Channel::Stable, "main", "abc1234"),
+            version_line("2.10.91", Channel::Stable, "main", "abc1234", 0),
             "GrokHub 2.10.91 (main @ abc1234)"
         );
         assert_eq!(
-            version_line("2.10.91", Channel::Stable, "v2.10.91", "bb7890b"),
+            version_line("2.10.91", Channel::Stable, "v2.10.91", "bb7890b", 0),
             "GrokHub 2.10.91 (v2.10.91 @ bb7890b)"
         );
         assert_eq!(
-            version_line("2.10.91", Channel::Stable, "", ""),
+            version_line("2.10.91", Channel::Stable, "", "", 0),
             "GrokHub 2.10.91"
         );
         assert_eq!(
-            version_line("2.10.91", Channel::Beta, "", "abc1234"),
-            "GrokHub 2.10.91-beta (abc1234)"
+            version_line("2.10.91", Channel::Beta, "", "abc1234", 0),
+            "GrokHub 2.10.91-beta.0 (abc1234)"
         );
     }
 
     #[test]
     fn version_lines_parse_back() {
+        assert_eq!(
+            parse_version_line("GrokHub 2.10.91-beta.3 (beta @ abc1234)\n"),
+            Some(BuildVersion {
+                version: "2.10.91-beta.3".into(),
+                channel: Channel::Beta,
+                branch: "beta".into(),
+                sha: "abc1234".into(),
+            })
+        );
         assert_eq!(
             parse_version_line("GrokHub 2.10.91-beta (beta @ abc1234)\n"),
             Some(BuildVersion {
@@ -199,6 +220,10 @@ mod tests {
                 branch: String::new(),
                 sha: String::new(),
             })
+        );
+        assert_eq!(
+            parse_version_line("GrokHub 2.13.0-beta.10 (abc1234)").map(|v| (v.channel, v.version)),
+            Some((Channel::Beta, "2.13.0-beta.10".to_string()))
         );
         assert_eq!(
             parse_version_line("GrokHub 2.10.91-beta (abc1234)").map(|v| (v.channel, v.sha)),
@@ -432,6 +457,39 @@ mod tests {
         );
         let _ = std::fs::remove_dir_all(&base);
     }
+
+    /// Local `beta` with commits that are not on `origin/beta` must refuse
+    /// instead of `checkout -B` dropping them.
+    #[cfg(unix)]
+    #[test]
+    fn install_sh_refuses_when_local_channel_branch_is_ahead() {
+        let (base, repo) = switch_fixture("local-ahead");
+        let git = |args: &[&str]| {
+            let out = std::process::Command::new("git")
+                .args(args)
+                .current_dir(&repo)
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+        };
+        git(&["fetch", "-q", "origin"]);
+        git(&["checkout", "-q", "-B", "beta", "origin/beta"]);
+        std::fs::write(repo.join("src/lib.rs"), "pub fn local_only() {}\n").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-q", "-m", "local beta only"]);
+        let local_beta = git_stdout(&repo, &["rev-parse", "beta"]);
+        git(&["checkout", "-q", "main"]);
+        let out = run_switch_to_beta(&base, &repo);
+        assert_eq!(out.status.code(), Some(1), "stdout={}", String::from_utf8_lossy(&out.stdout));
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            err.contains("local beta has commits that are not on origin/beta"),
+            "{err}"
+        );
+        assert_eq!(git_stdout(&repo, &["rev-parse", "beta"]), local_beta);
+        assert_eq!(git_stdout(&repo, &["symbolic-ref", "--short", "HEAD"]), "beta");
+        let _ = std::fs::remove_dir_all(&base);
+    }
 }
 
 /// Shown next to the Labs Beta channel toggle: `beta · beta @ abc1234`.
@@ -523,9 +581,9 @@ pub fn auto_off_step(current: Channel, tips: &ChannelTips, beta_since: Option<&s
     }
 }
 
-/// Windows Labs copy until the installer supports channels.
+/// Windows Labs copy: Beta comes from signed pre-releases there, never a source build.
 pub const CHANNEL_WINDOWS_NOTE: &str =
-    "Channel switching is not available on Windows yet — the installer does not support channels. When channels land, Beta will also turn off automatically once beta matches main.";
+    "On Windows, Beta installs the newest beta pre-release from GitHub, checked against its SHA256SUMS; building the beta channel from a source clone is Linux-only. Beta doesn't turn off by itself on Windows yet, so turn it off here to go back to stable.";
 
 /// Labs / docs copy: auto-off when beta catches up to main (Linux now; Windows with channels).
 pub const CHANNEL_AUTO_OFF_NOTE: &str =
@@ -740,9 +798,9 @@ mod channel_switch_tests {
     #[test]
     fn windows_note_is_the_labs_copy() {
         assert!(CHANNEL_WINDOWS_NOTE.starts_with(
-            "Channel switching is not available on Windows yet — the installer does not support channels."
+            "On Windows, Beta installs the newest beta pre-release from GitHub, checked against its SHA256SUMS;"
         ));
-        assert!(CHANNEL_WINDOWS_NOTE.contains("turn off automatically once beta matches main"));
+        assert!(CHANNEL_WINDOWS_NOTE.contains("building the beta channel from a source clone is Linux-only"));
     }
 
     fn tips(beta_sha: &str, main_sha: &str, beta_tree: &str, main_tree: &str) -> ChannelTips {
@@ -860,7 +918,7 @@ mod channel_switch_tests {
     #[test]
     fn auto_off_note_documents_linux_and_future_windows() {
         assert!(CHANNEL_AUTO_OFF_NOTE.contains("beta catches up to main"));
-        assert!(CHANNEL_WINDOWS_NOTE.contains("turn off automatically once beta matches main"));
+        assert!(CHANNEL_WINDOWS_NOTE.contains("Beta doesn't turn off by itself on Windows yet"));
     }
 
 }

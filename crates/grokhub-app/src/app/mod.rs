@@ -2,7 +2,7 @@ use crate::config::{self, AppConfig};
 use crate::desktop::{
     capture_data_url, capture_webcam, clipboard_image, collect_rows, first_bin,
     load_image_data_url, lock_titles, pick_file, play_audio, read_text_capped,
-    record_once, run_computer_op_cancel, run_limited, transcribe_local,
+    record_once, run_computer_op_cancel, transcribe_local,
 };
 use crate::helpers::{
     cabin_menu_should_dismiss, click_project_opens_board, collect_other_chip_threads, expand_home,
@@ -23,6 +23,7 @@ use global_hotkey::{
     hotkey::{Code, HotKey, Modifiers},
     GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState,
 };
+use grokhub_core::JobKind;
 use grokhub_core::wire::{
     classify_stream_error, grok_context_line, grok_usage_line, merge_tool_card, retry_status_line,
     rewrite_truncation_error, turn_footer, AcpEvent, GrokPEvent, GrokUsage, PermissionMode,
@@ -96,7 +97,7 @@ use grokhub_core::{
     remember_home_surface, remember_typed_prompt, rename_node, replay_automation_target,
     replay_ops, resolve_bind_path, resolve_chat_model,
     resolve_dark, restore_bound_path, retain_held_plan, reuse_empty_thread_idx, review_due,
-    review_system_prompt, rewind_allowed, rewind_blocked_reason,
+    rewind_allowed, rewind_blocked_reason,
     rewind_copy_cmd, rewind_dest, rewind_restore_matches, rewind_snapshot_ready, roll_usage_day,
     route_schedule, save_hub_state, screen_from_extents, scrolled_off_tail, search_corpus,
     search_corpus_tagged, search_place, search_thread_body, seed_from_bound, settings_pin_blocks_auto,
@@ -174,6 +175,11 @@ mod board_ui;
 mod confirm;
 mod connectors_ui;
 mod marketplace_ui;
+mod personality_ui;
+mod playbook_ui;
+mod background_ui;
+mod interests_ui;
+mod pulse_sources_ui;
 mod harness_ui;
 mod inbox_ui;
 mod episode_ui;
@@ -192,6 +198,8 @@ mod scope_ui;
 mod indexer_ui;
 mod skill_undo;
 mod self_review_ui;
+mod canary_ui;
+mod change_history_ui;
 mod change_undo;
 mod findings_ui;
 mod proactive_auto;
@@ -211,6 +219,8 @@ mod tests;
 mod native_signin_tests;
 #[cfg(test)]
 mod self_review_tests;
+#[cfg(test)]
+mod repaint_timer_tests;
 
 use chat_ui::*;
 use background::BgWork;
@@ -271,6 +281,10 @@ enum SettingsSec {
     Labs,
     Permissions,
     Connectors,
+    Personality,
+    Playbooks,
+    Pulse,
+    Background,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -328,6 +342,7 @@ fn cfg_if_current(slot: &CfgSlot, gen: u64) -> Option<AppConfig> {
 enum TabAct {
     Switch(usize),
     Pin(usize),
+    Archive(usize),
     StartRename(usize),
     CommitRename(usize),
     CancelRename,
@@ -508,6 +523,14 @@ pub struct Cabin {
     history_q_seen: String,
     history_q_at: Option<Instant>,
     history_hits: Vec<(String, String)>,
+    /// History page shows the Archived drawer instead of the main chat list.
+    history_archived: bool,
+    /// Thread id for the quiet archive/unarchive Undo toast.
+    archive_undo: Option<String>,
+    /// Local day the auto-archive pass last ran.
+    chat_archive_day: Option<String>,
+    /// Quiet note after auto-archive: count, with a link to the Archived view.
+    auto_archive_note: Option<usize>,
     last_receipt_ok: Option<bool>,
     /// Last Labs Beta auto-off tip check (cooldown so we do not ls-remote every frame).
     beta_auto_off_checked_at: Option<Instant>,
@@ -523,8 +546,8 @@ pub struct Cabin {
     slash_filter_first: String,
     last_window_title: String,
     voice_orb: String,
-    last_night_tick: Instant,
-    last_auto_tick: Instant,
+    /// Brain 4: the one scheduler for background work. The pulse is its clock.
+    governor: grokhub_core::Governor,
     last_heartbeat: Instant,
     /// Heartbeat throttle state: budget, backoff streak, Halt hold.
     pace: grokhub_core::HeartbeatThrottle,
@@ -540,6 +563,8 @@ pub struct Cabin {
     digest_pending: Option<String>,
     digest_wants_lookup: bool,
     digest_steer: String,
+    /// The interests section the next lookup carries. Set with `digest_steer`.
+    digest_interests: String,
     situation_ping: Option<(String, String)>,
     /// True until a frame reports the cabin window is away. Tests stay silent.
     window_focused: bool,
@@ -657,6 +682,14 @@ pub struct Cabin {
     settings_sec: SettingsSec,
     /// Settings → Connectors tab and Marketplace view state.
     market: marketplace_ui::MarketState,
+    /// Settings → Personality: presets on disk, the Try it preview and the editor.
+    picker: personality_ui::PickerState,
+    /// Settings → Playbooks: the playbooks on disk and the editor.
+    playbooks: playbook_ui::PlaybookState,
+    /// Settings → Pulse: the interest profile and its Add box.
+    interests: interests_ui::InterestsState,
+    /// Free Pulse sources: the running fetch and Settings drafts.
+    sources: pulse_sources_ui::SourcesState,
     settings_back: Nav,
     imagine_aspect: u8,
     imagine_quality: bool,
@@ -829,6 +862,7 @@ thread_local! {
 impl Cabin {
     pub fn new(hidden: bool) -> Self {
         crate::desktop_mcp::process_started_ms();
+        let mut steps = crate::startup::Steps::new();
         let mut cfg = config::load();
         if cfg.device_name.trim().is_empty() {
             cfg.device_name = config::default_device_name();
@@ -923,6 +957,7 @@ impl Cabin {
                 .unwrap_or(0);
             (threads, dropped_leftover, thread_idx)
         };
+        steps.mark("startup:new:config");
         #[cfg(test)]
         let (threads, dropped_leftover, thread_idx, quiet) =
             if let Some((threads, idx)) = QUIET_THREADS.with(|slot| slot.borrow_mut().take()) {
@@ -959,6 +994,7 @@ impl Cabin {
                 cfg.source_dir = src.display().to_string();
             }
         }
+        steps.mark("startup:new:threads");
         let mut projects = crate::store::load_projects();
         let sidebar_file = crate::store::projects_path().exists();
         let home = std::env::var("HOME").ok();
@@ -974,9 +1010,11 @@ impl Cabin {
             .find(|n| n.kind == ProjectKind::Project && expand_home(&n.path) == cfg.project_dir)
             .or_else(|| projects.iter().find(|n| n.kind == ProjectKind::Project))
             .map(|n| n.id.clone());
+        steps.mark("startup:new:projects");
         let mut secrets = secrets::load();
         secrets::migrate_console_key(&mut cfg, &mut secrets);
         secrets::ensure_private();
+        steps.mark("startup:new:secrets");
         let win_max = cfg.window.maximized;
         let cfg_auto_cap = cfg.daily_auto_cap;
         let cfg_host_cap = cfg.host_hour_cap;
@@ -1092,6 +1130,10 @@ impl Cabin {
             history_q_seen: String::new(),
             history_q_at: None,
             history_hits: vec![],
+            history_archived: false,
+            archive_undo: None,
+            chat_archive_day: None,
+            auto_archive_note: None,
             last_receipt_ok: None,
             beta_auto_off_checked_at: None,
             last_receipts: vec![],
@@ -1106,8 +1148,7 @@ impl Cabin {
             slash_filter_first: String::new(),
             last_window_title: String::new(),
             voice_orb: "idle".into(),
-            last_night_tick: Instant::now(),
-            last_auto_tick: Instant::now(),
+            governor: grokhub_core::Governor::cabin(),
             last_heartbeat: Instant::now(),
             pace: Default::default(),
             pace_traced: Vec::new(),
@@ -1121,6 +1162,7 @@ impl Cabin {
             digest_pending: None,
             digest_wants_lookup: false,
             digest_steer: String::new(),
+            digest_interests: String::new(),
             situation_ping: None,
             window_focused: true,
             offer_repeated: false,
@@ -1224,6 +1266,10 @@ impl Cabin {
             composer_want_focus: false,
             settings_sec: SettingsSec::Account,
             market: Default::default(),
+            picker: Default::default(),
+            playbooks: Default::default(),
+            interests: Default::default(),
+            sources: Default::default(),
             settings_back: Nav::Chat,
             imagine_aspect: 0,
             imagine_quality: true,
@@ -1353,33 +1399,67 @@ impl Cabin {
             scroll_to_hooks: false,
             composer_geom: None,
         };
+        steps.mark("startup:new:fields");
         if !quiet {
             c.imagine_native.auth_rx = Some(crate::imagine_auth::begin_load());
-            if let Ok(mgr) = GlobalHotKeyManager::new() {
-                let hey = HotKey::new(Some(Modifiers::SUPER), Code::KeyG);
-                let halt = HotKey::new(Some(Modifiers::SUPER | Modifiers::SHIFT), Code::Escape);
-                let hey_id = hey.id();
-                let halt_id = halt.id();
-                if mgr.register(hey).is_ok() && mgr.register(halt).is_ok() {
-                    c.hotkey_hey = hey_id;
-                    c.hotkey_halt = halt_id;
-                    c.hotkeys = Some(mgr);
-                }
+            steps.mark("startup:new:imagine");
+            // Registering takes ~50 ms on X11, so a shown window registers
+            // after its first frame; a hidden one has no frame to wait for.
+            if hidden {
+                c.register_hotkeys_once();
             }
+            steps.mark("startup:new:hotkeys");
             if dropped_leftover {
                 c.persist_bg();
             }
             // Once: Home deck and Ideas board data move into Pulse.
             c.migrate_pulse_store();
+            steps.mark("startup:new:pulse_store");
             c.ensure_useful_ideas();
+            steps.mark("startup:new:pulse");
             grokhub_core::proc_util::silence_windows_hard_errors();
             c.last_update_probe = Some(Instant::now());
             c.update_probe_rx = Some(crate::update::begin_update_probe());
             c.open_fresh_home();
             #[cfg(not(test))]
             crate::desktop_mcp::set_desktop_enabled(c.cfg.desktop_control);
+            steps.mark("startup:new:home");
+            // Auto-archive idle chats on launch (day gate also runs daily below).
+            c.tick_chat_auto_archive(&Self::local_day());
         }
         c
+    }
+
+    /// Fill the local clock and the desktop theme while the window is being
+    /// created, so the first frame reads them from cache instead of running
+    /// `date` and `gsettings` on the UI thread.
+    pub fn warm_startup_caches() {
+        std::thread::spawn(|| {
+            let _ = Self::local_clock();
+        });
+        std::thread::spawn(|| {
+            let _ = crate::theme::desktop_prefers_dark();
+        });
+    }
+
+    /// Super+G and Super+Shift+Esc, once per process.
+    fn register_hotkeys_once(&mut self) {
+        static TRIED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        if TRIED.swap(true, std::sync::atomic::Ordering::SeqCst) {
+            return;
+        }
+        let Ok(mgr) = GlobalHotKeyManager::new() else {
+            return;
+        };
+        let hey = HotKey::new(Some(Modifiers::SUPER), Code::KeyG);
+        let halt = HotKey::new(Some(Modifiers::SUPER | Modifiers::SHIFT), Code::Escape);
+        let hey_id = hey.id();
+        let halt_id = halt.id();
+        if mgr.register(hey).is_ok() && mgr.register(halt).is_ok() {
+            self.hotkey_hey = hey_id;
+            self.hotkey_halt = halt_id;
+            self.hotkeys = Some(mgr);
+        }
     }
 
     /// A cabin with the given chats already loaded. No install, update probe, or
@@ -1495,6 +1575,10 @@ impl Cabin {
             history_q_seen: String::new(),
             history_q_at: None,
             history_hits: Vec::new(),
+            history_archived: false,
+            archive_undo: None,
+            chat_archive_day: None,
+            auto_archive_note: None,
             last_receipt_ok: None,
             beta_auto_off_checked_at: None,
             last_receipts: Vec::new(),
@@ -1509,8 +1593,7 @@ impl Cabin {
             slash_filter_first: String::new(),
             last_window_title: String::new(),
             voice_orb: String::new(),
-            last_night_tick: Instant::now(),
-            last_auto_tick: Instant::now(),
+            governor: grokhub_core::Governor::cabin(),
             last_heartbeat: Instant::now(),
             pace: Default::default(),
             pace_traced: Vec::new(),
@@ -1524,6 +1607,7 @@ impl Cabin {
             digest_pending: None,
             digest_wants_lookup: false,
             digest_steer: String::new(),
+            digest_interests: String::new(),
             situation_ping: None,
             window_focused: true,
             offer_repeated: false,
@@ -1627,6 +1711,10 @@ impl Cabin {
             composer_want_focus: false,
             settings_sec: SettingsSec::Account,
             market: Default::default(),
+            picker: Default::default(),
+            playbooks: Default::default(),
+            interests: Default::default(),
+            sources: Default::default(),
             settings_back: Nav::Chat,
             imagine_aspect: 0,
             imagine_quality: false,
@@ -2728,6 +2816,39 @@ impl Cabin {
         }
     }
 
+    /// `/rewind step` — list or restore per-step agent file checkpoints.
+    fn rewind_agent_steps(&mut self, step: Option<u64>) {
+        let session = self
+            .threads
+            .get(self.thread_idx)
+            .and_then(|t| t.grok_session.clone())
+            .unwrap_or_default();
+        if session.is_empty() {
+            self.status = "No agent session yet — chat first, then /rewind step".into();
+            return;
+        }
+        match step {
+            None => {
+                let text = grokhub_agent::format_steps(&session);
+                self.live_mut()
+                    .push(("assistant".into(), mark_slash_result(&text)));
+                self.stamp_current_access();
+                self.persist();
+                self.status = "Agent file checkpoints".into();
+            }
+            Some(n) => match grokhub_agent::restore_step(&session, n) {
+                Ok(msg) => {
+                    self.live_mut()
+                        .push(("assistant".into(), mark_slash_result(&msg)));
+                    self.stamp_current_access();
+                    self.persist();
+                    self.status = format!("Restored step {n}");
+                }
+                Err(err) => self.status = err,
+            },
+        }
+    }
+
     fn rewind_project(&mut self) {
         let home = std::env::var("HOME").unwrap_or_default();
         let src = expand_home(self.cfg.project_dir.trim());
@@ -3128,6 +3249,11 @@ impl Cabin {
         }
         self.tokens_seen = now;
         add_tokens(&mut self.usage, spent.0, spent.1, spent.2);
+        // A live anticipate turn the pulse started is the governor's Anticipate job.
+        if self.running && self.pace.pending() == Some(grokhub_core::ProactiveAct::Anticipate) {
+            let tokens = spent.0.saturating_add(spent.1).saturating_add(spent.2);
+            self.governor_charge(JobKind::Anticipate, tokens);
+        }
         self.note_token_budget();
         self.persist_usage();
     }
@@ -3193,7 +3319,7 @@ impl Cabin {
         {
             let mut cmd = std::process::Command::new("date");
             cmd.arg(fmt);
-            run_limited(cmd, Duration::from_millis(400))
+            crate::desktop::run_limited(cmd, Duration::from_millis(400))
                 .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
                 .unwrap_or_default()
         }
@@ -3312,8 +3438,8 @@ impl Cabin {
         }
         self.last_heartbeat = Instant::now();
         // Halt holds every organ that starts work; local upkeep still runs.
-        let halted = self.heartbeat_halted(now_ms());
-        let mut night_fired = false;
+        let now = now_ms();
+        let halted = self.heartbeat_halted(now);
         for act in heartbeat_acts() {
             if halted && !act.runs_while_halted() {
                 continue;
@@ -3321,73 +3447,134 @@ impl Cabin {
             match act {
                 HeartbeatAct::Housekeep => {
                     self.roll_today();
-                    self.tick_feed_pulse();
-                    if !halted {
-                        self.follow_feed_lookup();
-                    }
                     self.release_situation_ping();
-                    if !halted {
-                        self.tick_indexers();
-                    }
-                    self.tick_model_registry(halted);
                     if self.last_persist.elapsed() > Duration::from_secs(2) {
                         self.persist_bg();
                     }
                 }
                 HeartbeatAct::Inbox => self.drain_inbox(),
-                HeartbeatAct::Night => {
-                    // Grok `/loop` intervals and clock-time cabin automations both live on
-                    // this slot. Loops go first; automations still get the pulse when no
-                    // loop is due, so a 09:00 job is not starved by an idle loop list.
-                    night_fired = self.tick_loops();
-                    if !night_fired {
-                        night_fired = self.tick_night();
-                    }
-                }
-                HeartbeatAct::Review => {
-                    self.tick_amr_retention(&Self::local_day());
-                    if !night_fired && !self.running {
-                        self.tick_review();
-                        self.tick_night_passes();
-                    }
-                }
+                // Everything that is not your turn runs from the governor's one queue.
+                HeartbeatAct::Background => self.run_background(now, halted),
                 HeartbeatAct::Wall => self.tick_wall(),
                 HeartbeatAct::MidThought => self.tick_mid_thought(),
-                HeartbeatAct::Reflect => {
-                    if should_idle_reflect(
-                        self.last_activity.elapsed().as_millis() as u64,
-                        self.running,
-                        IDLE_REFLECT_MS,
-                    ) && !self.reflected_idle
-                        && !self.scratch()
-                        && !self.heartbeat_busy()
-                    {
-                        self.reflected_idle = true;
-                        self.run_reflect();
-                    }
-                }
-                HeartbeatAct::Anticipate => self.tick_anticipate(),
             }
         }
     }
 
-    fn tick_anticipate(&mut self) {
+    /// One governor beat: the queue of due jobs, highest priority first. Halt,
+    /// quiet hours, spent budgets and (while you're active) heavy jobs are
+    /// already held out of it.
+    fn run_background(&mut self, now: u64, halted: bool) {
+        let day = Self::local_day();
+        let plan = self.background_plan(now, halted, &day);
+        let mut night_fired = false;
+        for job in plan.run.iter().copied() {
+            night_fired |= self.run_job(job, plan.quiet, halted, &day, night_fired);
+        }
+    }
+
+    /// The governor's plan for this beat. You being active holds every heavy job
+    /// until an idle beat; light model jobs keep running on the cost goal.
+    fn background_plan(&mut self, now: u64, halted: bool, day: &str) -> grokhub_core::TickPlan {
+        let hm = Self::local_clock().hm();
+        let active = self.user_active_now();
+        let plan = self.governor.tick(&grokhub_core::TickCtx {
+            now_ms: now,
+            day,
+            hm: &hm,
+            quiet_start: &self.cfg.quiet_start,
+            quiet_end: &self.cfg.quiet_end,
+            halted,
+            hold_heavy: active,
+            budgets: &self.cfg.background,
+        });
+        for note in &plan.new_notes {
+            self.governor_note(note);
+        }
+        plan
+    }
+
+    /// Run one job the governor handed out. True when a scheduled run fired,
+    /// so the review waits for the next beat.
+    fn run_job(
+        &mut self,
+        job: JobKind,
+        quiet: bool,
+        halted: bool,
+        day: &str,
+        night_fired: bool,
+    ) -> bool {
+        match job {
+            JobKind::Automations => {
+                // Grok `/loop` intervals and clock-time cabin automations share this job.
+                // Loops go first; automations still run when no loop is due, so a
+                // 09:00 job is not starved by an idle loop list.
+                return self.tick_loops() || self.tick_night();
+            }
+            JobKind::PulseRefresh => self.tick_feed_pulse(),
+            JobKind::ModelRegistry => self.tick_model_registry(halted),
+            JobKind::Proactive => self.tick_proactive_cards(quiet),
+            JobKind::Ideas => self.maybe_suggest_ideas(false),
+            JobKind::Anticipate => self.tick_anticipate(),
+            JobKind::Digest => {
+                self.follow_feed_lookup();
+                self.follow_source_fetch();
+            }
+            JobKind::Review => {
+                if !night_fired && !self.running {
+                    self.tick_review();
+                }
+            }
+            JobKind::NightPasses => {
+                if !night_fired && !self.running {
+                    self.tick_night_passes();
+                }
+            }
+            JobKind::MemoryRetention => {
+                self.tick_amr_retention(day);
+                // Same once-a-day beat as memory retention: archive idle chats.
+                self.tick_chat_auto_archive(day);
+            }
+            JobKind::Reflect => {
+                if should_idle_reflect(
+                    self.last_activity.elapsed().as_millis() as u64,
+                    self.running,
+                    IDLE_REFLECT_MS,
+                ) && !self.reflected_idle
+                    && !self.scratch()
+                    && !self.heartbeat_busy()
+                {
+                    self.reflected_idle = true;
+                    self.run_reflect();
+                }
+            }
+            JobKind::Indexers => self.tick_indexers(quiet),
+        }
+        false
+    }
+
+    /// Spike-6a cards and admitted Spike-6b auto-acts. Quiet hours only queue.
+    fn tick_proactive_cards(&mut self, quiet: bool) {
         if self.scratch() {
             return;
         }
         self.tick_auto_act();
-        let clock = Self::local_clock();
-        let quiet = quiet_hours_active(&clock.hm(), &self.cfg.quiet_start, &self.cfg.quiet_end);
-        // Spike-6a cards: busy is should_anticipate's seat check plus a card
-        // waiting on you; quiet hours only queue.
+        // Busy is should_anticipate's seat check plus a card waiting on you.
         let busy = !should_anticipate(self.running, self.review_busy, self.composer.trim().is_empty(), false)
             || self.heartbeat_busy();
         self.tick_proactive(now_ms(), quiet, busy);
+    }
+
+    /// A follow-skill turn in the chat. The governor holds it in quiet hours.
+    fn tick_anticipate(&mut self) {
+        if self.scratch() {
+            return;
+        }
         if !should_anticipate(
             self.running,
             self.review_busy,
             self.composer.trim().is_empty(),
-            quiet,
+            false,
         ) {
             return;
         }
@@ -3744,7 +3931,10 @@ impl Cabin {
 
     fn cabin_update_available(&self) -> bool {
         !self.cabin_overlay_done
-            && should_notify_cabin_update(env!("CARGO_PKG_VERSION"), self.cabin_latest.as_deref())
+            && should_notify_cabin_update(
+                &crate::update::build_version_label(),
+                self.cabin_latest.as_deref(),
+            )
     }
 
     fn update_pending_now(&self) -> UpdatePending {
@@ -3785,8 +3975,9 @@ impl Cabin {
         }
     }
 
-    /// Labs → Beta channel: fetch/build/install from beta or stable. Rollback on fail.
-    /// Linux only — Windows Labs shows a disabled toggle + note instead.
+    /// Labs → Beta channel from a source clone: fetch/build/install from beta
+    /// or stable, rollback on fail. Linux only; without a clone it switches
+    /// through the signed releases instead ([`Self::queue_release_channel_switch`]).
     #[cfg(not(windows))]
     fn queue_channel_switch(&mut self, target: grokhub_core::Channel) {
         self.nav = Nav::Settings;
@@ -3794,7 +3985,7 @@ impl Cabin {
         let src = match resolve_source(&self.cfg.source_dir) {
             Some(p) => p,
             None => {
-                self.status = crate::update::map_channel_switch_error("no clone");
+                self.queue_release_channel_switch(target);
                 return;
             }
         };
@@ -3814,6 +4005,18 @@ impl Cabin {
         ));
         self.start_overlay_update(cmds);
         // Keep Labs visible while the switch runs (start_overlay_update jumps to Update).
+        self.settings_sec = SettingsSec::Labs;
+    }
+
+    /// Labs → Beta channel without a clone (every Windows install, a Linux
+    /// tarball install): install the target channel's verified release (the
+    /// newest beta pre-release, or the latest stable release), then write
+    /// the receipt. A refused download leaves the channel as it was.
+    fn queue_release_channel_switch(&mut self, target: grokhub_core::Channel) {
+        self.nav = Nav::Settings;
+        self.settings_sec = SettingsSec::Labs;
+        self.update_cabin_note = Some(format!("Switching to {}…", target.as_str()));
+        self.start_overlay_update(crate::update::release_channel_switch_cmds(target));
         self.settings_sec = SettingsSec::Labs;
     }
 
@@ -3841,8 +4044,7 @@ impl Cabin {
             self.status = "refusing an update that would wipe config".into();
             return;
         }
-        // Windows: a stray beta receipt updates as stable and says why.
-        self.update_cabin_note = crate::update::stray_beta_receipt_note().map(String::from);
+        self.update_cabin_note = None;
         self.start_overlay_update(cmds);
     }
 
@@ -4402,6 +4604,7 @@ impl Cabin {
         }
         let text = text[..end].to_string();
         let hold = self.voice_is_on();
+        let voice = self.speech_voice();
         let tx = if hold {
             let (tx, rx) = mpsc::channel();
             self.voice_hold_rx = Some(rx);
@@ -4410,7 +4613,7 @@ impl Cabin {
             None
         };
         std::thread::spawn(move || {
-            if let Ok(bytes) = grok_tts(&key, &text) {
+            if let Ok(bytes) = grok_tts(&key, &text, voice) {
                 let path = std::env::temp_dir().join("grokhub-speak.mp3");
                 if std::fs::write(&path, bytes).is_ok() {
                     let _ = play_audio(&path);
@@ -4684,6 +4887,15 @@ impl Cabin {
             self.palette_open = false;
             self.nav = Nav::Settings;
         }
+        if ctx.input(|i| {
+            i.modifiers.command
+                && i.modifiers.shift
+                && !i.modifiers.alt
+                && i.key_pressed(egui::Key::A)
+        }) && self.nav == Nav::Chat
+        {
+            self.toggle_archive_current();
+        }
     }
 
     fn note_window_resume(&mut self, ctx: &egui::Context) {
@@ -4798,6 +5010,10 @@ impl eframe::App for Cabin {
     }
 
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        #[cfg(not(test))]
+        if crate::startup::painted() {
+            self.register_hotkeys_once();
+        }
         #[cfg(feature = "fx")]
         {
             let glow_line = crate::fx::on_frame();
@@ -4809,13 +5025,18 @@ impl eframe::App for Cabin {
         }
         self.poll_job();
         self.poll_persist_err();
+        self.poll_recovered_stores();
         self.poll_imagine_save();
         self.poll_host_diff();
         self.poll_acp();
         self.poll_chips();
         self.poll_review();
         self.poll_self_review();
+        if let Some(issue) = self.harness.self_review.copy_out.take() {
+            ctx.copy_text(issue);
+        }
         self.poll_digest_lookup();
+        self.poll_source_fetch();
         self.window_focused = ctx.input(|i| i.viewport().focused.unwrap_or(false));
         self.poll_greeting();
         self.poll_ideas();
@@ -5077,6 +5298,13 @@ impl eframe::App for Cabin {
                 });
         }
         self.sync_idea_card_actions();
+        // The pass after this one grabs the hotkeys in `logic`, which runs
+        // even while the window is covered or minimized.
+        #[cfg(not(test))]
+        if !crate::startup::painted() {
+            crate::startup::first_frame();
+            ctx.request_repaint();
+        }
     }
 }
 
@@ -5467,19 +5695,33 @@ fn hostname_i() -> String {
 }
 
 fn hostname_i_now() -> String {
-    let mut cmd = std::process::Command::new("hostname");
-    cmd.arg("-I");
-    let out = run_limited(cmd, Duration::from_millis(400))
-        .filter(|o| o.status.success())
-        .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
-        .unwrap_or_default();
+    let out = lan_candidates_now();
     let addrs = parse_hostname_i(&out);
     let refs: Vec<&str> = addrs.iter().map(|s| s.as_str()).collect();
     if pick_lan_ipv4(&refs).is_some() {
         return out;
     }
-    // Windows and macOS have no `hostname -I`, so Devices showed another computer 127.0.0.1.
+    // No candidate (macOS has no `hostname -I`): the address outbound traffic leaves from.
     routed_ipv4().unwrap_or(out)
+}
+
+/// Space-separated local IPv4 addresses, in `hostname -I`'s format.
+#[cfg(not(windows))]
+fn lan_candidates_now() -> String {
+    let mut cmd = std::process::Command::new("hostname");
+    cmd.arg("-I");
+    crate::desktop::run_limited(cmd, Duration::from_millis(400))
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+        .unwrap_or_default()
+}
+
+/// Windows has no `hostname -I` (its `hostname` treats `-I` as an error), so read the
+/// adapters directly instead of spawning a process that always fails.
+#[cfg(windows)]
+fn lan_candidates_now() -> String {
+    let ips: Vec<String> = crate::win_native::adapter_ipv4s().iter().map(|ip| ip.to_string()).collect();
+    ips.join(" ")
 }
 
 /// The local address the OS would route outbound traffic from. A UDP connect sends nothing;

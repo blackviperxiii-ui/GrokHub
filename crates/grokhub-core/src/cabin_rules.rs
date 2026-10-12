@@ -1,16 +1,32 @@
 //! The cabin's standing rules for the model: who it is on this computer and
 //! the work-tracking lines it may emit.
 
+/// Stable cabin safety/approval text for the prompt cache prefix.
+/// Empty desktop flag stays byte-identical to `CABIN_DESKTOP_RULES`.
+pub fn cabin_static_rules(desktop: bool) -> String {
+    if !desktop {
+        return CABIN_DESKTOP_RULES.to_string();
+    }
+    format!("{CABIN_DESKTOP_RULES}\n{DESKTOP_CABIN_LINE}")
+}
+
+/// Volatile learned brief for the prompt tail. Empty when there is nothing learned.
+pub fn cabin_learned_tail(learned: &str) -> String {
+    let learned: String = learned.trim().chars().take(360).collect();
+    if learned.is_empty() {
+        return String::new();
+    }
+    format!("What you have learned about them. Use it. Do not recite it.\n{learned}")
+}
+
 /// Base rules, plus a short learned brief when the cabin already knows them.
 /// Empty brief stays byte-identical to `CABIN_DESKTOP_RULES`.
 pub fn cabin_rules(learned: &str) -> String {
-    let learned: String = learned.trim().chars().take(360).collect();
-    if learned.is_empty() {
+    let tail = cabin_learned_tail(learned);
+    if tail.is_empty() {
         return CABIN_DESKTOP_RULES.to_string();
     }
-    format!(
-        "{CABIN_DESKTOP_RULES}\nWhat you have learned about them. Use it. Do not recite it.\n{learned}"
-    )
+    format!("{CABIN_DESKTOP_RULES}\n{tail}")
 }
 
 /// One line on the cabin rules while Settings → desktop control is on.
@@ -25,6 +41,8 @@ pub fn cabin_rules_for(learned: &str, desktop: bool) -> String {
     if !desktop {
         return base;
     }
+    // Desktop line stays on the static rules, after the learned brief for the
+    // combined helper. Prompt compose splits static vs learned separately.
     format!("{base}\n{DESKTOP_CABIN_LINE}")
 }
 
@@ -40,9 +58,12 @@ mod tests {
     fn cabin_rules_keep_the_desktop_assistant_and_learned_brief() {
         assert_eq!(cabin_rules(""), CABIN_DESKTOP_RULES);
         assert_eq!(cabin_rules_for("", false), CABIN_DESKTOP_RULES);
+        assert_eq!(cabin_static_rules(false), CABIN_DESKTOP_RULES);
+        assert!(cabin_learned_tail("").is_empty());
         let armed = cabin_rules_for("", true);
         assert!(armed.starts_with(CABIN_DESKTOP_RULES));
         assert!(armed.contains(DESKTOP_CABIN_LINE));
+        assert_eq!(cabin_static_rules(true), format!("{CABIN_DESKTOP_RULES}\n{DESKTOP_CABIN_LINE}"));
         assert!(armed.ends_with(
             "\nPrefer the grokhub-desktop tools over shell xdotool or PowerShell for the screen. Take a \
              screenshot only when the task needs to see the screen, never for a greeting or plain chat. If a \
@@ -54,6 +75,8 @@ mod tests {
         assert!(with.starts_with(CABIN_DESKTOP_RULES));
         assert!(with.contains("skip night"));
         assert!(with.contains("Do not recite"));
+        let tail = cabin_learned_tail("Around 21:00 they skip night.");
+        assert!(tail.contains("skip night") && !tail.contains("WORK_PIN"));
         assert!(
             CABIN_DESKTOP_RULES.contains("this computer")
                 && CABIN_DESKTOP_RULES.contains("WORK_PIN")

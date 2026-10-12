@@ -47,6 +47,9 @@ pub struct NativeEngine {
     episode_seed: Option<EpisodeSeed>,
     /// The episode this engine is driving, and its view.
     episode: Option<(crate::episode::Episode, crate::episode::EpisodeView)>,
+    /// Brain 1: an ask the rules can't sort gets one fast-model call. Off
+    /// means the default Brief, with no extra request.
+    brief_model: bool,
 }
 
 /// What the cabin says about the episode a prompt belongs to (Spike-3b).
@@ -108,7 +111,13 @@ impl NativeEngine {
             origin: crate::harness::current_origin(),
             episode_seed: None,
             episode: None,
+            brief_model: false,
         }
+    }
+
+    /// Let an unclear ask's Brief come from one fast-model call.
+    pub fn set_brief_model(&mut self, on: bool) {
+        self.brief_model = on;
     }
 
     /// The cabin's open episode, or `None` for a plain turn.
@@ -163,6 +172,77 @@ impl NativeEngine {
         self.halt = halt;
     }
 
+    /// Brain 1: sort the ask and store its Brief for the trail and `/why`.
+    /// The Brief changes nothing about the run or its reply.
+    fn write_brief(&self, text: &str, has_image: bool) {
+        use crate::harness::Origin;
+        let recent: Vec<String> = self
+            .history
+            .iter()
+            .filter(|item| matches!(item, InputItem::Message { role, .. } if role == "user"))
+            .map(crate::compact::message_text)
+            .rev()
+            .take(2)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect();
+        let background = !self.reopen_tasks || matches!(self.origin, Origin::Automation | Origin::Proactive | Origin::SelfManage);
+        let input = crate::brain::BriefInput { text, files: usize::from(has_image), tools: &[], recent: &recent, background };
+        let mut ask = |t: &str| -> Result<String, String> {
+            let call = crate::route::ModelCall::xai(
+                &self.model,
+                Some(grokhub_core::BACKGROUND_EFFORT),
+                crate::brain::BRIEF_CLASS,
+                &self.conversation_id,
+                vec![
+                    InputItem::Message { role: "system".into(), content: vec![crate::ContentPart::InputText(crate::brain::BRIEF_PROMPT.into())] },
+                    InputItem::Message { role: "user".into(), content: vec![crate::ContentPart::InputText(t.into())] },
+                ],
+            );
+            crate::route::call_model(self.client.as_ref(), &call, &self.cancel).map(|r| r.out.text).map_err(|e| e.to_string())
+        };
+        let brief = crate::brain::classify(&input, if self.brief_model { Some(&mut ask) } else { None });
+        let dir = crate::perm::config_dir();
+        let (chat_id, turn) = match &self.episode_seed {
+            Some(seed) => (seed.chat_id.clone(), seed.turn),
+            None if background => (String::new(), 0),
+            None => {
+                let ctx = crate::harness::read_turn_context(&dir);
+                (ctx.chat_id, ctx.turn)
+            }
+        };
+        let policy = crate::brain::pick_policy(&crate::brain::load_policy(&dir).0, &brief);
+        // Brain 2: the row's goal steers this turn's routing (inside each class's band).
+        // Desktop episode steps route with the chat id as their session, so it gets the goal too.
+        let goal = policy.as_ref().and_then(|p| crate::route::goal::RouteGoal::of(&p.goal, &p.reason));
+        crate::route::goal::set_goal(&chat_id, goal.clone());
+        crate::route::goal::set_goal(&self.conversation_id, goal);
+        // Brain 2: the run's checkpoints read the done list and care.
+        crate::checkpoint::set_turn_brief(&self.conversation_id, brief.clone());
+        // Brain 5: the row's talk column sets the turn's talk style.
+        crate::checkpoint::set_turn_style(&self.conversation_id, policy.as_ref().map(crate::brain::PolicyPick::style));
+        // Brain 3: the Brief's intent, domain and this computer's OS pick the playbook.
+        let (books, _) = crate::brain::playbook::load(&dir);
+        let picked = crate::brain::playbook::pick(&books, brief.intent.as_str(), &brief.domain, crate::brain::playbook::host_os());
+        // The run's system prompt carries the picked playbook's steps (or drops an earlier turn's).
+        crate::checkpoint::set_turn_playbook(&self.conversation_id, picked.map(|p| p.prompt_block()));
+        let playbook = picked.map(|p| p.name.clone()).unwrap_or_default();
+        // Brain 6: the id goes on the line too, so the turn's run metrics can name it.
+        let playbook_id = picked.map(|p| p.id.clone()).unwrap_or_default();
+        let line = crate::brain::BriefLine {
+            at: grokhub_core::now_ms(),
+            session: self.conversation_id.clone(),
+            chat_id,
+            turn,
+            brief,
+            policy,
+            playbook,
+            playbook_id,
+        };
+        let _ = crate::brain::record_brief(&dir, &line);
+    }
+
     /// Replace the in-memory transcript with a session file. The next prompt continues it.
     pub fn resume(&mut self, items: Vec<InputItem>, usage: Usage) {
         self.history = items;
@@ -206,6 +286,7 @@ impl Engine for NativeEngine {
         if image.is_none() && crate::memory::is_dream_command(text) {
             return self.dream_now(emit);
         }
+        self.write_brief(text, image.is_some());
         if let Some(seed) = self.episode_seed.clone().filter(|_| self.gate.desktop && self.desktop.is_some()) {
             return self.prompt_episode(text, &seed, emit);
         }
@@ -440,6 +521,7 @@ impl NativeEngine {
             self.effort.as_deref(),
             &self.conversation_id,
             &mut self.history,
+            &[],
         );
         crate::hooks::on_compact(&self.conversation_id, &self.workspace, false);
         match compact_result {
@@ -656,7 +738,8 @@ mod tests {
                     cost_in_usd_ticks: 9,
                     cached_tokens: 0,
                 },
-            })
+            ..Default::default()
+        })
         }
     }
 
@@ -759,7 +842,8 @@ mod tests {
                         cost_in_usd_ticks: 3,
                         cached_tokens: 0,
                     },
-                });
+            ..Default::default()
+        });
             }
             Ok(crate::TurnOutput {
                 text: "hello".into(),
@@ -772,8 +856,121 @@ mod tests {
                     cost_in_usd_ticks: 1,
                     cached_tokens: 0,
                 },
-            })
+            ..Default::default()
+        })
         }
+    }
+
+    /// Answers a Brief request with JSON and anything else with "hello".
+    struct Brained {
+        chat: AtomicUsize,
+        briefs: AtomicUsize,
+    }
+
+    impl ModelClient for Brained {
+        fn stream(
+            &self,
+            req: &crate::ResponsesRequest,
+            _cancel: &CancelToken,
+            sink: &mut dyn FnMut(crate::StreamEvent),
+        ) -> Result<crate::TurnOutput, crate::ClientError> {
+            let brief = req.input.iter().any(|item| crate::compact::message_text(item) == crate::brain::BRIEF_PROMPT);
+            let text = if brief {
+                self.briefs.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                r#"{"intent":"task","care":"careful","mood":"calm","domain":"files"}"#
+            } else {
+                self.chat.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                sink(crate::StreamEvent::TextDelta("hello".into()));
+                "hello"
+            };
+            Ok(crate::TurnOutput { text: text.into(), reasoning: String::new(), calls: Vec::new(), usage: Usage::default(),
+            ..Default::default()
+        })
+        }
+    }
+
+    #[test]
+    fn a_brief_is_stored_per_prompt_and_the_reply_is_unchanged() {
+        let dir = crate::harness::test_dir("eng-brief");
+        let _guard = crate::perm::ConfigGuard::set(&dir);
+        crate::harness::write_turn_context(&dir, &crate::harness::TurnContext { chat_id: "chat-1".into(), turn: 2, ..Default::default() }).unwrap();
+        let client = Arc::new(Brained { chat: AtomicUsize::new(0), briefs: AtomicUsize::new(0) });
+        let mut eng = engine(&dir, "brief-1", client.clone());
+        eng.set_brief_model(true);
+        let mut texts = Vec::new();
+        // Clear to the rules: no extra request.
+        eng.prompt("the printer service won't start", None, &mut |ev| {
+            if let AcpEvent::Text(t) = ev {
+                texts.push(t);
+            }
+        })
+        .unwrap();
+        assert_eq!(texts, vec!["hello".to_string()]);
+        assert_eq!(client.briefs.load(std::sync::atomic::Ordering::SeqCst), 0);
+        // Brain 2: the row's goal steers this chat's routing, desktop episode steps (chat id) included.
+        let quality = crate::route::goal::RouteGoal::of("quality", "mistakes can break the system");
+        assert_eq!(crate::route::goal::goal_for(&["brief-1"]), quality);
+        assert_eq!(crate::route::goal::goal_for(&["chat-1"]), quality);
+        // Unclear: exactly one Brief call, and the chat still sees only its reply.
+        eng.prompt("the thing from yesterday", None, &mut |ev| {
+            if let AcpEvent::Text(t) = ev {
+                texts.push(t);
+            }
+        })
+        .unwrap();
+        assert_eq!(texts, vec!["hello".to_string(), "hello".to_string()]);
+        assert_eq!(client.briefs.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(client.chat.load(std::sync::atomic::Ordering::SeqCst), 2);
+        let stored = crate::brain::read_briefs(&dir);
+        let got: Vec<(String, u32, Vec<String>, String)> = stored.iter().map(|l| (l.chat_id.clone(), l.turn, l.lines(), l.brief.by.clone())).collect();
+        assert_eq!(
+            got,
+            vec![
+                (
+                    "chat-1".into(),
+                    2,
+                    vec![
+                        "Brief: repair × critical, done = services, packages, boot errors, ports".into(),
+                        "Policy: repair × critical, goal quality (mistakes can break the system)".into(),
+                        "Talk: findings card, reply under 80 words".into(),
+                        // The repair playbook for the OS the test runs on (CI runs Linux and Windows).
+                        if cfg!(windows) { "Playbook: Repair Windows".into() } else { "Playbook: Repair Linux".into() },
+                    ],
+                    "rules".into()
+                ),
+                (
+                    "chat-1".into(),
+                    2,
+                    vec![
+                        "Brief: task × careful, done = files in place, nothing lost".into(),
+                        "Policy: task × careful, goal balanced (escalate on failure)".into(),
+                        "Talk: progress notes, wrap-up under 120 words".into(),
+                        "Playbook: Files".into(),
+                    ],
+                    "model".into()
+                ),
+            ]
+        );
+        // Brain 6: the line carries what the turn's run-metrics line records.
+        assert_eq!(
+            stored[0].run_brain(),
+            grokhub_core::run_metrics::RunBrain {
+                intent: "repair".into(),
+                care: "critical".into(),
+                domain: "system".into(),
+                policy: "repair × critical".into(),
+                playbook: if cfg!(windows) { "repair-windows".into() } else { "repair-linux".into() },
+            }
+        );
+        assert_eq!(stored[1].run_brain().playbook, "files");
+        // Off (the default): an unclear ask makes no extra request.
+        let quiet = Arc::new(Brained { chat: AtomicUsize::new(0), briefs: AtomicUsize::new(0) });
+        let mut off = engine(&dir, "brief-2", quiet.clone());
+        off.prompt("the thing from yesterday", None, &mut |_| {}).unwrap();
+        assert_eq!((quiet.chat.load(std::sync::atomic::Ordering::SeqCst), quiet.briefs.load(std::sync::atomic::Ordering::SeqCst)), (1, 0));
+        assert_eq!(crate::brain::read_briefs(&dir).last().map(|l| l.brief.by.clone()).as_deref(), Some("default"));
+        drop(_guard);
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     fn engine(

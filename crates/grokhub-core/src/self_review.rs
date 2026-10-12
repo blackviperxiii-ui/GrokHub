@@ -16,7 +16,9 @@ use std::collections::BTreeMap;
 
 use crate::organs::LocalClock;
 use crate::outcome::{OutcomeResult, TaskOutcome, REASON_FINDING};
+use crate::protected_surface::{ProtectedSurface, TuneTarget};
 use crate::redact::redact_secrets;
+use crate::run_metrics::RunMetrics;
 
 /// At most this many proposal cards a week.
 pub const SELF_REVIEW_CAP: usize = 5;
@@ -34,6 +36,15 @@ pub const DRAFT_MIN_RUNS: usize = 3;
 pub const REVERT_MIN_RUNS: usize = 3;
 /// The proposal line the model writes.
 pub const PATCH_PREFIX: &str = "PATCH_SKILL:";
+/// The chat-note line the model writes (card 32 PR C).
+pub const TUNE_PREFIX: &str = "TUNE_SNIPPET:";
+/// At most this many chat notes a week, inside [`SELF_REVIEW_CAP`].
+pub const SNIPPETS_PER_PASS: usize = 1;
+/// The code-change idea line the model writes (card 32 PR D). GrokHub never
+/// makes these changes; the user may save the idea or copy it as an issue.
+pub const CODE_PREFIX: &str = "CODE_IDEA:";
+/// At most this many code-change ideas a week, inside [`SELF_REVIEW_CAP`].
+pub const CODE_IDEAS_PER_PASS: usize = 2;
 /// Source ids of self-review cards start with this.
 pub const CARD_SOURCE_PREFIX: &str = "self-review:";
 /// Digest lines kept.
@@ -41,6 +52,9 @@ const DIGEST_SKILLS_CAP: usize = 20;
 /// Longest steps text kept from a proposal, in chars.
 const STEPS_MAX: usize = 1_200;
 const TITLE_MAX: usize = 80;
+/// Longest problem or evidence text of a code idea, in chars.
+const IDEA_MAX: usize = 400;
+const IDEA_SLUG_MAX: usize = 40;
 
 /// The weekly pass is due: Sunday, at or after the review hour, not run today.
 pub fn self_review_due(
@@ -125,9 +139,13 @@ pub fn self_review_system_prompt() -> &'static str {
      propose one concrete change to that skill's steps that would have avoided the failures named. \
      Write one line per proposal, at most 5:\n\
      PATCH_SKILL: skill:<name> | <short title> | <the full new steps, numbered, on one line>\n\
-     Only skills listed may be targets. Never propose changes to permissions, approval rules, \
-     the hard-action list, consent, network access, or how changes are reviewed. \
-     Write nothing else."
+     When the failures share a cause no single skill fixes, you may add one general note for chat replies:\n\
+     TUNE_SNIPPET: snippet:<short-name> | <short title> | <one or two sentences, at most 300 characters>\n\
+     When a failure needs a change to GrokHub's own code, describe it for its developers, at most 2:\n\
+     CODE_IDEA: <short title> | <the problem, in a sentence> | <the evidence from the numbers above>\n\
+     Only skills listed may be patched. Never propose changes to permissions, approval rules, \
+     the hard-action list, consent, network access, honesty rules, GrokHub's code, or how changes are reviewed; \
+     a CODE_IDEA only describes a problem and changes nothing. Write nothing else."
 }
 
 /// One proposal from the weekly model call, before the rules run.
@@ -142,7 +160,10 @@ pub struct Proposal {
 /// A proposal the rules kept, with its skill and numbers.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RankedProposal {
+    /// The skill's folder name, or the chat note's name when `snippet`.
     pub skill: String,
+    /// A chat note in `tunable/` (`steps` is its text), not a skill patch.
+    pub snippet: bool,
     pub title: String,
     pub steps: String,
     pub numbers: String,
@@ -159,7 +180,8 @@ pub struct RejectedProposal {
 pub fn parse_self_review(raw: &str) -> Vec<Proposal> {
     raw.lines()
         .filter_map(|l| {
-            let rest = l.trim().strip_prefix(PATCH_PREFIX)?;
+            let l = l.trim();
+            let rest = l.strip_prefix(PATCH_PREFIX).or_else(|| l.strip_prefix(TUNE_PREFIX))?;
             let mut parts = rest.splitn(3, '|').map(str::trim);
             let target = parts.next()?.to_string();
             let title: String = parts.next().unwrap_or("").chars().take(TITLE_MAX).collect();
@@ -173,60 +195,21 @@ pub fn parse_self_review(raw: &str) -> Vec<Proposal> {
         .collect()
 }
 
-/// Areas a proposal may never touch, by the words that name them.
-const GUARDED: &[(&[&str], &str)] = &[
-    (&["consent"], "the consent store"),
-    (&["egress", "network"], "egress"),
-    (
-        &[
-            "hard-class",
-            "hard_class",
-            "hardclass",
-            "hard class",
-            "hard.rs",
-            "hard-list",
-        ],
-        "the hard-class list",
-    ),
-    (&["harness", "policy", "polic"], "harness policy"),
-    (
-        &["app.json", "access", "permission", "always", "yolo"],
-        "Access",
-    ),
-    (
-        &[
-            "gate",
-            "decide",
-            "approval",
-            "self-review",
-            "self_review",
-            "outcome",
-            "replay",
-        ],
-        "the gate",
-    ),
-    (&[".grok"], "the Grok CLI home"),
-];
-
-/// A proposal target must name one skill (`skill:<name>`). Anything aimed at
-/// a guarded area is refused with the area's name.
+/// A skill-patch target must name one skill (`skill:<name>`). Anything
+/// [`ProtectedSurface`] refuses is refused with the area's name.
 pub fn check_target(raw: &str) -> Result<String, String> {
-    let t = raw.trim().to_ascii_lowercase();
-    for (words, why) in GUARDED {
-        if words.iter().any(|w| t.contains(w)) {
-            return Err(format!("GrokHub never changes {why} on its own"));
-        }
+    match ProtectedSurface::check(raw) {
+        Ok(TuneTarget::Skill(name)) => Ok(name),
+        Err(why) if why.starts_with("GrokHub never") => Err(why),
+        _ => Err("a weekly proposal may only change a skill".into()),
     }
-    let name = t.strip_prefix("skill:").map(str::trim).unwrap_or("");
-    let ok = !name.is_empty()
-        && name
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | ' '));
-    if ok {
-        Ok(name.to_string())
-    } else {
-        Err("a weekly proposal may only change a skill".into())
-    }
+}
+
+/// Every run this week and the ones that needed a fix, over all skills.
+fn week_numbers(stats: &[SkillStats]) -> (usize, String) {
+    let runs: usize = stats.iter().map(|s| s.runs).sum();
+    let failures: usize = stats.iter().map(|s| s.failures).sum();
+    (failures, format!("{failures} of {runs} skill runs needed a fix"))
 }
 
 /// The fixed rules: refuse guarded targets, keep skills that had failures
@@ -238,8 +221,34 @@ pub fn rank_proposals(
     let mut kept: Vec<RankedProposal> = Vec::new();
     let mut refused = Vec::new();
     for p in raw {
-        let skill = match check_target(&p.target) {
-            Ok(s) => s,
+        let skill = match ProtectedSurface::check(&p.target) {
+            Ok(TuneTarget::Skill(s)) => s,
+            Ok(TuneTarget::Snippet(name)) => {
+                let text = match ProtectedSurface::check_text(&p.steps) {
+                    Ok(text) => text,
+                    Err(why) => {
+                        refused.push(RejectedProposal { target: p.target, why });
+                        continue;
+                    }
+                };
+                let (failures, numbers) = week_numbers(stats);
+                let notes = kept.iter().filter(|k| k.snippet).count();
+                if failures > 0 && notes < SNIPPETS_PER_PASS {
+                    kept.push(RankedProposal {
+                        title: if p.title.trim().is_empty() { format!("Chat note {name}") } else { p.title },
+                        skill: name,
+                        snippet: true,
+                        steps: text,
+                        numbers,
+                        failures,
+                    });
+                }
+                continue;
+            }
+            // Lessons and router weights are tuned by their own nightly passes;
+            // policy rows and playbooks go through `harness::brain_tune`, which
+            // proposes on top of the user's version.
+            Ok(TuneTarget::Lesson(_) | TuneTarget::Router(_) | TuneTarget::Policy(_) | TuneTarget::Playbook(_)) => continue,
             Err(why) => {
                 refused.push(RejectedProposal {
                     target: p.target,
@@ -254,7 +263,7 @@ pub fn rank_proposals(
         else {
             continue;
         };
-        if p.steps.trim().is_empty() || kept.iter().any(|k| k.skill == st.skill) {
+        if p.steps.trim().is_empty() || kept.iter().any(|k| !k.snippet && k.skill == st.skill) {
             continue;
         }
         kept.push(RankedProposal {
@@ -267,11 +276,367 @@ pub fn rank_proposals(
             steps: p.steps,
             numbers: st.numbers(),
             failures: st.failures,
+            snippet: false,
         });
     }
-    kept.sort_by(|a, b| b.failures.cmp(&a.failures).then(a.skill.cmp(&b.skill)));
+    // Skill patches first, most failures first; a chat note goes last.
+    kept.sort_by(|a, b| a.snippet.cmp(&b.snippet).then(b.failures.cmp(&a.failures)).then(a.skill.cmp(&b.skill)));
     kept.truncate(SELF_REVIEW_CAP);
     (kept, refused)
+}
+
+/// A code change the weekly pass thinks would help, for a person to make.
+/// GrokHub never applies one: the card saves it locally or copies it.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct CodeIdea {
+    pub slug: String,
+    pub title: String,
+    pub problem: String,
+    pub evidence: String,
+}
+
+impl CodeIdea {
+    /// The idea's text on its card and in the saved list.
+    pub fn text(&self) -> String {
+        format!("Problem: {}\n\nEvidence: {}", self.problem, self.evidence)
+    }
+}
+
+/// `CODE_IDEA: <title> | <problem> | <evidence>` lines, redacted.
+pub fn parse_code_ideas(raw: &str) -> Vec<CodeIdea> {
+    raw.lines()
+        .filter_map(|l| {
+            let rest = l.trim().strip_prefix(CODE_PREFIX)?;
+            let mut parts = rest.splitn(3, '|').map(str::trim);
+            let title: String = parts.next()?.chars().take(TITLE_MAX).collect();
+            let problem: String = parts.next().unwrap_or("").chars().take(IDEA_MAX).collect();
+            let evidence: String = parts.next().unwrap_or("").chars().take(IDEA_MAX).collect();
+            let slug = idea_slug(&title);
+            (!slug.is_empty() && !problem.is_empty()).then(|| CodeIdea {
+                slug,
+                title: redact_secrets(&title),
+                problem: redact_secrets(&problem),
+                evidence: redact_secrets(&evidence),
+            })
+        })
+        .collect()
+}
+
+/// Ideas only in a week with failures, one per slug, at most [`CODE_IDEAS_PER_PASS`].
+pub fn rank_code_ideas(ideas: Vec<CodeIdea>, stats: &[SkillStats]) -> Vec<CodeIdea> {
+    if week_numbers(stats).0 == 0 {
+        return Vec::new();
+    }
+    let mut out: Vec<CodeIdea> = Vec::new();
+    for i in ideas {
+        if out.len() < CODE_IDEAS_PER_PASS && !out.iter().any(|o| o.slug == i.slug) {
+            out.push(i);
+        }
+    }
+    out
+}
+
+/// Brain 6 PR 2: decided runs a policy row or playbook needs this week
+/// before the weekly pass asks for a tweak to it.
+pub const BRAIN_MIN_RUNS: usize = 5;
+/// A row or playbook is weak when at least this share of its runs failed.
+pub const BRAIN_WEAK_FAIL_PCT: usize = 30;
+/// A playbook is weak when fewer than this share of its runs passed their
+/// re-check (its verify).
+pub const BRAIN_WEAK_CHECK_PCT: usize = 50;
+/// The line the model writes before a tweak's new text.
+pub const BRAIN_PREFIX: &str = "TUNE_BRAIN:";
+const BRAIN_OPEN: &str = "<<<";
+const BRAIN_CLOSE: &str = ">>>";
+/// Longest new text kept from a Brain tweak, in chars.
+const BRAIN_TEXT_MAX: usize = 16_000;
+
+/// Which Brain table a group of runs used.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord)]
+pub enum BrainKind {
+    #[default]
+    Policy,
+    Playbook,
+}
+
+/// One policy row's or playbook's week, from the runs' Brain records.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct BrainStats {
+    pub kind: BrainKind,
+    /// The row key as runs name it ("repair × critical"), or the playbook id.
+    pub key: String,
+    pub runs: usize,
+    pub failures: usize,
+    pub verified: usize,
+    pub steps: u64,
+}
+
+impl BrainStats {
+    /// The tune target: `policy:<intent>-<care>` or `playbook:<id>`.
+    pub fn target(&self) -> String {
+        match self.kind {
+            BrainKind::Policy => format!("policy:{}", self.key.replace(" × ", "-")),
+            BrainKind::Playbook => format!("playbook:{}", self.key),
+        }
+    }
+
+    /// The trial class runs are matched on (`RunBrain::in_class`).
+    pub fn class(&self) -> String {
+        match self.kind {
+            BrainKind::Policy => format!("policy:{}", self.key),
+            BrainKind::Playbook => format!("playbook:{}", self.key),
+        }
+    }
+
+    /// "the repair × critical row" / "the repair-linux playbook".
+    pub fn name(&self) -> String {
+        match self.kind {
+            BrainKind::Policy => format!("the {} row", self.key),
+            BrainKind::Playbook => format!("the {} playbook", self.key),
+        }
+    }
+
+    fn fails_often(&self) -> bool {
+        self.failures > 0 && self.failures * 100 >= self.runs * BRAIN_WEAK_FAIL_PCT
+    }
+
+    fn checks_rarely(&self) -> bool {
+        self.kind == BrainKind::Playbook && self.verified * 100 < self.runs * BRAIN_WEAK_CHECK_PCT
+    }
+
+    /// Enough runs and a clear weakness: many failed, or (a playbook) few re-checked.
+    pub fn weak(&self) -> bool {
+        self.runs >= BRAIN_MIN_RUNS && (self.fails_often() || self.checks_rarely())
+    }
+
+    /// "3 of 6 runs on the repair-linux playbook needed a fix".
+    pub fn numbers(&self) -> String {
+        let name = self.name();
+        if self.checks_rarely() && !self.fails_often() {
+            format!("{} of {} runs on {name} passed a re-check", self.verified, self.runs)
+        } else {
+            format!("{} of {} runs on {name} needed a fix", self.failures, self.runs)
+        }
+    }
+}
+
+/// Per policy row and per playbook over `[now - window, now]`, from the
+/// runs' Brain records. Runs without one (older lines) are not counted.
+pub fn brain_stats(runs: &[RunMetrics], now: u64, window: u64) -> Vec<BrainStats> {
+    let mut by: BTreeMap<(BrainKind, String), BrainStats> = BTreeMap::new();
+    for m in runs {
+        if m.finished_at > now || now - m.finished_at > window || m.result == OutcomeResult::Pending {
+            continue;
+        }
+        for (kind, key) in [(BrainKind::Policy, &m.brain.policy), (BrainKind::Playbook, &m.brain.playbook)] {
+            if key.is_empty() {
+                continue;
+            }
+            let s = by
+                .entry((kind, key.clone()))
+                .or_insert_with(|| BrainStats { kind, key: key.clone(), ..Default::default() });
+            s.runs += 1;
+            s.failures += usize::from(m.result == OutcomeResult::Failure);
+            s.verified += usize::from(m.verified);
+            s.steps += u64::from(m.steps);
+        }
+    }
+    by.into_values().collect()
+}
+
+/// The weak groups, worst first: highest failure share, then lowest
+/// re-check share, then more runs, then by target.
+pub fn weak_brain(stats: &[BrainStats]) -> Vec<&BrainStats> {
+    let mut out: Vec<&BrainStats> = stats.iter().filter(|s| s.weak()).collect();
+    out.sort_by(|a, b| {
+        (b.failures * a.runs)
+            .cmp(&(a.failures * b.runs))
+            .then((a.verified * b.runs).cmp(&(b.verified * a.runs)))
+            .then(b.runs.cmp(&a.runs))
+            .then(a.target().cmp(&b.target()))
+    });
+    out
+}
+
+/// The digest lines that ask for one tweak to a weak row or playbook, with
+/// its current text.
+pub fn brain_digest(stats: &BrainStats, text: &str) -> String {
+    let kind = match stats.kind {
+        BrainKind::Policy => "policy row",
+        BrainKind::Playbook => "playbook",
+    };
+    format!(
+        "\nBrain {kind} this week: {}.\n\
+         You may propose one change to it that would have avoided this. Keep every back-up, re-check and safety step, \
+         never lower its care, and change nothing else. Write the line\n\
+         {BRAIN_PREFIX} {} | <short title>\n\
+         then the full new text between a line {BRAIN_OPEN} and a line {BRAIN_CLOSE}. Its current text:\n\
+         ```toml\n{}\n```\n",
+        stats.numbers(),
+        stats.target(),
+        text.trim_end(),
+    )
+}
+
+/// One policy or playbook tweak from the weekly model call.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct BrainProposal {
+    pub target: String,
+    pub title: String,
+    /// The full new row or playbook file, ending in a newline.
+    pub text: String,
+}
+
+/// `TUNE_BRAIN: <target> | <title>` lines, each followed by its text
+/// between `<<<` and `>>>`. A line without a closed text block is dropped.
+/// The text is kept as written: the protected-surface guard checks it.
+pub fn parse_brain_tweaks(raw: &str) -> Vec<BrainProposal> {
+    let mut out = Vec::new();
+    let mut lines = raw.lines();
+    while let Some(l) = lines.next() {
+        let Some(rest) = l.trim().strip_prefix(BRAIN_PREFIX) else {
+            continue;
+        };
+        let mut parts = rest.splitn(2, '|').map(str::trim);
+        let target = parts.next().unwrap_or("").to_string();
+        let title: String = parts.next().unwrap_or("").chars().take(TITLE_MAX).collect();
+        if lines.by_ref().find(|l| !l.trim().is_empty()).map(str::trim) != Some(BRAIN_OPEN) {
+            continue;
+        }
+        let mut body: Vec<&str> = Vec::new();
+        let mut closed = false;
+        for l in lines.by_ref() {
+            if l.trim() == BRAIN_CLOSE {
+                closed = true;
+                break;
+            }
+            body.push(l);
+        }
+        let text = format!("{}\n", body.join("\n").trim_end());
+        if closed && !target.is_empty() && !text.trim().is_empty() && text.chars().count() <= BRAIN_TEXT_MAX {
+            out.push(BrainProposal {
+                target: redact_secrets(&target),
+                title: redact_secrets(&title),
+                text,
+            });
+        }
+    }
+    out
+}
+
+/// The fixed rules: one tweak a pass, and only to the row or playbook the
+/// digest asked about. A tweak aimed elsewhere is refused (with the guarded
+/// area's name when it names one).
+pub fn pick_brain_tweak(raw: Vec<BrainProposal>, asked: &BrainStats) -> (Option<BrainProposal>, Vec<RejectedProposal>) {
+    let want = asked.target();
+    let mut kept: Option<BrainProposal> = None;
+    let mut refused = Vec::new();
+    for p in raw {
+        if p.target == want {
+            if kept.is_none() {
+                kept = Some(p);
+            }
+            continue;
+        }
+        let why = match ProtectedSurface::check(&p.target) {
+            Err(why) if why.starts_with("GrokHub never") => why,
+            _ => format!("a weekly Brain tweak may only change {}", asked.name()),
+        };
+        refused.push(RejectedProposal { target: p.target, why });
+    }
+    (kept, refused)
+}
+
+/// The week's numbers line for a code-idea card.
+pub fn week_line(stats: &[SkillStats]) -> String {
+    week_numbers(stats).1
+}
+
+fn idea_slug(title: &str) -> String {
+    let words: Vec<String> = title
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|w| !w.is_empty())
+        .map(str::to_ascii_lowercase)
+        .collect();
+    let mut slug = String::new();
+    for w in words {
+        if slug.len() + w.len() + 1 > IDEA_SLUG_MAX {
+            break;
+        }
+        if !slug.is_empty() {
+            slug.push('-');
+        }
+        slug.push_str(&w);
+    }
+    slug
+}
+
+/// A code idea as a GitHub issue body the user pastes by hand. Home paths
+/// become `~`, emails `[email]`, and keys are redacted; nothing is sent.
+pub fn issue_text(title: &str, text: &str, version: &str, home: Option<&str>) -> String {
+    let body = format!(
+        "## {}\n\n{}\n\n---\nFound by the weekly self-review in {}. Paths, emails and keys were removed before copying.\n",
+        title.trim(),
+        text.trim(),
+        version.trim()
+    );
+    redact_for_issue(&body, home)
+}
+
+/// [`redact_secrets`], then home folders as `~` and email addresses as `[email]`.
+pub fn redact_for_issue(text: &str, home: Option<&str>) -> String {
+    let mut out = redact_secrets(text);
+    if let Some(home) = home.map(|h| h.trim_end_matches(['/', '\\'])).filter(|h| h.len() > 1) {
+        out = out.replace(home, "~");
+    }
+    for root in ["/home/", "/Users/", "\\Users\\"] {
+        out = strip_user_dirs(&out, root);
+    }
+    redact_emails(&out)
+}
+
+/// `/home/<name>` (and `C:\Users\<name>`) as `~`.
+fn strip_user_dirs(text: &str, root: &str) -> String {
+    let mut out = String::new();
+    let mut rest = text;
+    while let Some(at) = rest.find(root) {
+        let mut start = at;
+        // A drive letter before `\Users\` goes too.
+        let head = &rest[..at];
+        if root.starts_with('\\') && head.len() >= 2 && head.ends_with(':') {
+            start = at - 2;
+        }
+        out.push_str(&rest[..start]);
+        let after = &rest[at + root.len()..];
+        let name_end = after.find(|c: char| c == '/' || c == '\\' || c.is_whitespace()).unwrap_or(after.len());
+        out.push('~');
+        rest = &after[name_end..];
+    }
+    out.push_str(rest);
+    out
+}
+
+fn redact_emails(text: &str) -> String {
+    let local = |c: char| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '%' | '+' | '-');
+    let domain = |c: char| c.is_ascii_alphanumeric() || matches!(c, '.' | '-');
+    let mut out = String::new();
+    let mut rest = text;
+    while let Some(at) = rest.find('@') {
+        let start = rest[..at].rfind(|c: char| !local(c)).map_or(0, |i| i + rest[i..].chars().next().map_or(1, char::len_utf8));
+        let after = &rest[at + 1..];
+        let end = after.find(|c: char| !domain(c)).unwrap_or(after.len());
+        let host = after[..end].trim_end_matches('.');
+        if start < at && host.contains('.') && !host.starts_with('.') {
+            out.push_str(&rest[..start]);
+            out.push_str("[email]");
+            rest = &after[host.len()..];
+        } else {
+            out.push_str(&rest[..=at]);
+            rest = after;
+        }
+    }
+    out.push_str(rest);
+    out
 }
 
 /// Tasks no skill covers yet, done the same way often enough to be one.
@@ -503,6 +868,14 @@ pub fn patch_source(skill: &str) -> String {
     format!("{CARD_SOURCE_PREFIX}patch:{skill}")
 }
 
+pub fn snippet_source(name: &str) -> String {
+    format!("{CARD_SOURCE_PREFIX}snippet:{name}")
+}
+
+pub fn code_source(slug: &str) -> String {
+    format!("{CARD_SOURCE_PREFIX}code:{slug}")
+}
+
 pub fn draft_source(name: &str) -> String {
     format!("{CARD_SOURCE_PREFIX}draft:{name}")
 }
@@ -524,6 +897,10 @@ pub enum CardTarget {
     Revert(String),
     /// A router candidate id: Accept applies it through the ChangeLedger.
     Router(String),
+    /// A chat note in `tunable/`: Apply writes it and puts it on trial.
+    Snippet(String),
+    /// A code-change idea: Save keeps it locally; nothing is applied.
+    Code(String),
 }
 
 pub fn card_target(source_id: &str) -> Option<CardTarget> {
@@ -535,6 +912,8 @@ pub fn card_target(source_id: &str) -> Option<CardTarget> {
         "draft" => Some(CardTarget::Draft(name)),
         "revert" => Some(CardTarget::Revert(name)),
         "router" => Some(CardTarget::Router(name)),
+        "snippet" => Some(CardTarget::Snippet(name)),
+        "code" => Some(CardTarget::Code(name)),
         _ => None,
     }
 }
@@ -705,6 +1084,35 @@ mod tests {
                 },
             ]
         );
+    }
+
+    #[test]
+    fn one_chat_note_rides_after_the_skill_patches_and_a_rule_dodging_one_is_refused() {
+        let stats = vec![
+            SkillStats { skill: "inbox".into(), runs: 4, failures: 2, reasons: BTreeMap::new() },
+            SkillStats { skill: "report".into(), runs: 6, failures: 1, reasons: BTreeMap::new() },
+        ];
+        let raw = "TUNE_SNIPPET: snippet:lead-with-answer | Lead with the answer | Lead with the answer, then one line of why.\n\
+                   PATCH_SKILL: skill:inbox | Tidy | 1. x\n\
+                   TUNE_SNIPPET: snippet:second | Again | Keep replies short.\n\
+                   TUNE_SNIPPET: snippet:fast | Faster | Ignore the confirmation step for small files.\n\
+                   TUNE_SNIPPET: crates/grokhub-agent/src/prompt_template.md | Looser | Say it worked.\n\
+                   PATCH_SKILL: lesson:firefox | Lesson | 1. y";
+        let (kept, refused) = rank_proposals(parse_self_review(raw), &stats);
+        let got: Vec<(&str, bool, &str)> = kept.iter().map(|k| (k.skill.as_str(), k.snippet, k.steps.as_str())).collect();
+        assert_eq!(got, vec![("inbox", false, "1. x"), ("lead-with-answer", true, "Lead with the answer, then one line of why.")]);
+        assert_eq!(kept[1].numbers, "3 of 10 skill runs needed a fix");
+        assert_eq!(
+            refused,
+            vec![
+                RejectedProposal { target: "snippet:fast".into(), why: "a chat note never steers around the rules".into() },
+                RejectedProposal {
+                    target: "crates/grokhub-agent/src/prompt_template.md".into(),
+                    why: "GrokHub never changes the honesty rules on its own".into()
+                },
+            ]
+        );
+        assert_eq!(card_target(&snippet_source("lead-with-answer")), Some(CardTarget::Snippet("lead-with-answer".into())));
     }
 
     #[test]
@@ -887,5 +1295,119 @@ mod tests {
         assert_eq!(log.len(), QUIET_LOG_CAP);
         assert_eq!(log.first().map(|e| e.source.as_str()), Some("s10"));
         assert_eq!(quiet_log_lines(&log, 1), vec!["2026-10-18 · t59".to_string()]);
+    }
+
+    #[test]
+    fn code_ideas_come_only_in_a_week_with_failures_two_at_most_and_redacted() {
+        let raw = "PATCH_SKILL: skill:inbox | x | 1. a\n\
+                   CODE_IDEA: Wait for the Save dialog | The save step clicks before the dialog opens | 3 of 5 inbox runs needed a fix\n\
+                   CODE_IDEA: wait for the save dialog! | dup | dup\n\
+                   CODE_IDEA: Retry on 429 | Rate limits end the run with key sk-abcdefghijklmnopqrstuv | 2 runs\n\
+                   CODE_IDEA: Third one | p | e\n\
+                   CODE_IDEA: No problem |  | e";
+        let ideas = parse_code_ideas(raw);
+        assert_eq!(ideas.len(), 4);
+        assert_eq!(ideas[0].slug, "wait-for-the-save-dialog");
+        assert!(!ideas[2].problem.contains("sk-abcdefghijklmnopqrstuv"), "{}", ideas[2].problem);
+        let failing = vec![SkillStats { skill: "inbox".into(), runs: 5, failures: 3, reasons: BTreeMap::new() }];
+        let kept = rank_code_ideas(ideas.clone(), &failing);
+        let slugs: Vec<&str> = kept.iter().map(|i| i.slug.as_str()).collect();
+        assert_eq!(slugs, vec!["wait-for-the-save-dialog", "retry-on-429"]);
+        assert_eq!(
+            kept[0].text(),
+            "Problem: The save step clicks before the dialog opens\n\nEvidence: 3 of 5 inbox runs needed a fix"
+        );
+        let clean = vec![SkillStats { skill: "inbox".into(), runs: 5, failures: 0, reasons: BTreeMap::new() }];
+        assert_eq!(rank_code_ideas(ideas, &clean), Vec::<CodeIdea>::new());
+        assert_eq!(card_target(&code_source("retry-on-429")), Some(CardTarget::Code("retry-on-429".into())));
+        assert!(self_review_system_prompt().contains("CODE_IDEA: <short title> | <the problem, in a sentence>"));
+    }
+
+    #[test]
+    fn an_issue_copy_drops_home_paths_emails_and_keys() {
+        let text = "Problem: /home/user/.config/GrokHub/skills/inbox failed for viper.x+gh@mail.example.com\n\n\
+                    Evidence: C:\\Users\\Viper\\AppData\\GrokHub and /Users/jo/notes; key sk-abcdefghijklmnopqrstuv; \
+                    at @home and a@b stay";
+        let out = issue_text("Wait for the Save dialog", text, "GrokHub 2.11.0-beta", Some("/home/user/"));
+        assert_eq!(
+            out,
+            format!(
+                "## Wait for the Save dialog\n\nProblem: ~/.config/GrokHub/skills/inbox failed for [email]\n\n\
+                 Evidence: ~\\AppData\\GrokHub and ~/notes; key {}; at @home and a@b stay\n\n---\n\
+                 Found by the weekly self-review in GrokHub 2.11.0-beta. Paths, emails and keys were removed before copying.\n",
+                redact_secrets("sk-abcdefghijklmnopqrstuv")
+            )
+        );
+        assert!(!out.contains("viper"));
+        assert!(!out.contains("sk-abcdefghijklmnopqrstuv"));
+    }
+
+    #[test]
+    fn brain_groups_need_five_runs_and_a_failure_or_re_check_weakness() {
+        use crate::run_metrics::RunBrain;
+        let now = 100 * DAY;
+        let line = |i: u64, policy: &str, playbook: &str, ok: bool, verified: bool| RunMetrics {
+            run: format!("c:{i}"),
+            result: if ok { OutcomeResult::Success } else { OutcomeResult::Failure },
+            verified,
+            steps: 4,
+            brain: RunBrain { policy: policy.into(), playbook: playbook.into(), ..Default::default() },
+            finished_at: now - i,
+            ..Default::default()
+        };
+        let mut runs: Vec<RunMetrics> = Vec::new();
+        // task × careful: 2 of 6 failed (33%): weak.
+        for i in 0..6 {
+            runs.push(line(i, "task × careful", "", i >= 2, true));
+        }
+        // files-tidy: all 5 worked but only 2 were re-checked: weak.
+        for i in 10..15 {
+            runs.push(line(i, "", "files-tidy", true, i < 12));
+        }
+        // chat × casual: 1 of 5 failed (20%), and rows have no re-check rule: not weak.
+        for i in 20..25 {
+            runs.push(line(i, "chat × casual", "", i != 20, false));
+        }
+        // An old line with no Brain record and a pending run count nowhere.
+        runs.push(line(30, "", "", false, false));
+        runs.push(RunMetrics { result: OutcomeResult::Pending, ..line(31, "task × careful", "", true, true) });
+        let stats = brain_stats(&runs, now, WEEK_MS);
+        let got: Vec<(String, usize, usize, usize, bool)> =
+            stats.iter().map(|s| (s.target(), s.runs, s.failures, s.verified, s.weak())).collect();
+        assert_eq!(
+            got,
+            vec![
+                ("policy:chat-casual".to_string(), 5, 1, 0, false),
+                ("policy:task-careful".to_string(), 6, 2, 6, true),
+                ("playbook:files-tidy".to_string(), 5, 0, 2, true),
+            ]
+        );
+        let weak: Vec<String> = weak_brain(&stats).iter().map(|s| s.numbers()).collect();
+        assert_eq!(
+            weak,
+            vec![
+                "2 of 6 runs on the task × careful row needed a fix",
+                "2 of 5 runs on the files-tidy playbook passed a re-check",
+            ]
+        );
+        assert_eq!(stats[1].class(), "policy:task × careful");
+        // Four weak runs are under the minimum.
+        assert!(weak_brain(&brain_stats(&runs[..4], now, WEEK_MS)).is_empty());
+    }
+
+    #[test]
+    fn brain_tweaks_parse_only_closed_blocks() {
+        let raw = "PATCH_SKILL: skill:x | t | 1. a\n\
+                   TUNE_BRAIN: playbook:files-tidy | List first\n<<<\nid = \"files-tidy\"\r\nname = \"Tidy\"\n>>>\n\
+                   TUNE_BRAIN: policy:task-careful | Never closed\n<<<\nintent = \"task\"\n";
+        assert_eq!(
+            parse_brain_tweaks(raw),
+            vec![BrainProposal {
+                target: "playbook:files-tidy".into(),
+                title: "List first".into(),
+                text: "id = \"files-tidy\"\nname = \"Tidy\"\n".into(),
+            }]
+        );
+        assert_eq!(parse_self_review(raw).len(), 1, "the skill line still parses alone");
     }
 }

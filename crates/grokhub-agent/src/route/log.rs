@@ -118,6 +118,12 @@ pub struct RouteRecord {
     /// How long the router's decision took, per step (µs). Speed only.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub timing_us: BTreeMap<String, u32>,
+    /// Brain 2: the turn's goal (`speed`, `quality`, `cost`, `balanced`) and
+    /// the policy row's reason, empty when no Brief named one.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub goal: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub goal_reason: String,
 }
 
 // `d` and `cost_usd` are finite (rounded rules and token math), so equality is total.
@@ -186,18 +192,21 @@ pub fn episode_cache_pct(routes: &[(u64, RouteRecord)]) -> Option<(String, u64)>
 /// multi-turn task got less than [`CACHE_FLOOR_PCT`] of its prompt from the
 /// cache, the oldest line makes room for that flag.
 pub fn why_text(config_dir: &Path) -> String {
+    let brief = crate::brain::why_lines(config_dir);
     let scanned = scanned_routes(config_dir);
     let mut routes = last_routes(config_dir);
     if routes.is_empty() {
-        return "No routed model calls yet. Effort is automatic: each step's reason shows here once it runs.".into();
+        let none = "No routed model calls yet. Effort is automatic: each step's reason shows here once it runs.";
+        return brief.into_iter().chain([none.to_string()]).collect::<Vec<_>>().join("\n");
     }
     let flag = episode_cache_pct(&scanned).filter(|(_, pct)| *pct < CACHE_FLOOR_PCT).map(|(_, pct)| {
         format!("Cache: the last multi-turn task got {pct}% of its prompt from the cache (under {CACHE_FLOOR_PCT}%), so it paid for more of it.")
     });
-    if flag.is_some() && routes.len() >= WHY_LINES {
+    while !routes.is_empty() && routes.len() + usize::from(flag.is_some()) + brief.len() > WHY_LINES {
         routes.remove(0);
     }
-    let mut lines: Vec<String> = routes
+    let mut lines: Vec<String> = brief;
+    lines.extend(routes
         .iter()
         .map(|(_, r)| {
             let same = r.used.effort == r.chosen.effort;
@@ -206,9 +215,13 @@ pub fn why_text(config_dir: &Path) -> String {
             } else {
                 format!(" (this session sent {})", super::effort_word(r.used.effort.as_deref()))
             };
-            format!("{} · {} · {}{}", r.class, r.used.model, r.reason, used)
-        })
-        .collect();
+            let goal = match (r.goal.as_str(), r.goal_reason.as_str()) {
+                ("", _) => String::new(),
+                (g, "") => format!(" Goal: {g}."),
+                (g, why) => format!(" Goal: {g} ({why})."),
+            };
+            format!("{} · {} · {}{}{}", r.class, r.used.model, r.reason, used, goal)
+        }));
     lines.extend(flag);
     lines.join("\n")
 }

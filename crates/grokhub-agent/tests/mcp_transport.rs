@@ -90,7 +90,8 @@ impl ModelClient for Once {
                     arguments: "{}".into(),
                 }],
                 usage: Usage::default(),
-            });
+            ..Default::default()
+        });
         }
         sink(StreamEvent::TextDelta("done".into()));
         Ok(TurnOutput {
@@ -98,6 +99,7 @@ impl ModelClient for Once {
             reasoning: String::new(),
             calls: Vec::new(),
             usage: Usage::default(),
+            ..Default::default()
         })
     }
 }

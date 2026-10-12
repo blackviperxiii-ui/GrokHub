@@ -1,11 +1,10 @@
 //! Router R3a: plumbing for an on-device model (§13). It is **off** by
 //! default. `localModel` in `app.json` is `false` until you turn on Settings →
 //! Cabin defaults → "On-device model for background tasks". The route goes
-//! live only while that toggle is on **and** a runtime is [`installed`]; this
-//! build has no runtime (the download lands later), so the toggle alone routes
-//! nothing. While the route is off the registry has no `local:*` rows
-//! ([`LocalSource`] lists nothing) and [`super::Router::choose`] drops any
-//! `local:*` id, so no route can pick one.
+//! live only while that toggle is on **and** a runtime is [`installed`]
+//! (llama-server binary + GGUF, or a test fake). While the route is off the
+//! registry has no `local:*` rows ([`LocalSource`] lists nothing) and
+//! [`super::Router::choose`] drops any `local:*` id, so no route can pick one.
 //!
 //! When it is on (tests switch it on with a fake [`LocalRuntime`]):
 //! - a `local:<tier>` route has cost class `included`, no effort menu and a
@@ -20,9 +19,16 @@
 //!
 //! A local call never leaves the device: [`serve`] calls the runtime directly
 //! and writes no egress line.
+//!
+//! Production runtime (offline card PR A): a llama.cpp `llama-server` sidecar
+//! on 127.0.0.1 ([`super::local_sidecar`]) behind [`super::local_http::HttpLocalRuntime`].
+//! Assets come from `GROKHUB_LLAMA_SERVER` / `GROKHUB_LOCAL_MODEL`, or
+//! `{GROKHUB_CONFIG}/bin` plus a GGUF from `~/GrokHub/models` (`installed.json`)
+//! or `{GROKHUB_CONFIG}/models`.
 
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use regex::Regex;
 use serde_json::Value;
@@ -35,10 +41,32 @@ use crate::client::{ClientError, TurnOutput, Usage};
 
 pub const PROVIDER_LOCAL: &str = "local";
 pub const LOCAL_PREFIX: &str = "local:";
-/// The on-device model's context cap (2–4k), in tokens.
+/// Floor for the on-device context cap (raised per device by [`set_ctx_cap`] / PR C).
 pub const LOCAL_CTX_CAP: u64 = 4_096;
-/// The classes a local route may take.
+
+static CTX_CAP: AtomicU64 = AtomicU64::new(LOCAL_CTX_CAP);
+
+/// Live context cap for eligibility and registry metadata (at least [`LOCAL_CTX_CAP`]).
+pub fn ctx_cap() -> u64 {
+    CTX_CAP.load(Ordering::SeqCst).max(LOCAL_CTX_CAP)
+}
+
+/// Raise (or reset) the on-device context cap after a hardware probe.
+pub fn set_ctx_cap(cap: u64) {
+    CTX_CAP.store(cap.max(LOCAL_CTX_CAP), Ordering::SeqCst);
+}
+/// The classes a local route may take while online (background helpers).
 pub const LOCAL_CLASSES: &[&str] = &["background:classify", "background:triage", "background:redact", "background:summarize"];
+/// Extra classes allowed on-device while offline (chat + summaries; not cloud-only).
+pub const OFFLINE_CLASSES: &[&str] = &[
+    "background:classify",
+    "background:triage",
+    "background:redact",
+    "background:summarize",
+    "chat:quick",
+    "chat:default",
+    "desktop:soft",
+];
 /// Tiers, strongest first. The downshift ladder moves down this list.
 pub const TIERS: &[&str] = &["local:small", "local:tiny"];
 /// What a local route returns while no runtime is installed.
@@ -58,10 +86,20 @@ pub fn enabled() -> bool {
     (ENABLED.load(Ordering::SeqCst) && installed()) || test_on()
 }
 
-/// An on-device runtime and model are present. None in this build, so the
-/// toggle on its own never sends background work to a model that isn't there.
+/// An on-device runtime and model are present: a test fake, or a binary + GGUF
+/// under the config dir / env overrides.
 pub fn installed() -> bool {
-    test_runtime().is_some()
+    test_runtime().is_some() || production_assets_present()
+}
+
+fn production_assets_present() -> bool {
+    config_dir()
+        .map(|d| super::local_sidecar::assets_present(&d))
+        .unwrap_or(false)
+}
+
+fn config_dir() -> Option<PathBuf> {
+    std::env::var_os("GROKHUB_CONFIG").map(PathBuf::from).filter(|p| !p.as_os_str().is_empty())
 }
 
 pub fn is_local(id: &str) -> bool {
@@ -90,6 +128,57 @@ pub fn live_tier() -> &'static str {
     TIERS[TIER.load(Ordering::SeqCst).min(TIERS.len() - 1)]
 }
 
+/// Capability snapshot from the last local bench / eval (PR E).
+#[derive(Debug, Clone, PartialEq)]
+pub struct TierCaps {
+    pub context: u64,
+    /// Fraction of the local eval set that passed (0.0–1.0). Not function-calling.
+    pub eval_pass_rate: f64,
+    pub tokens_per_sec: Option<f64>,
+    pub first_token_ms: Option<u64>,
+}
+
+impl Default for TierCaps {
+    fn default() -> Self {
+        Self {
+            context: LOCAL_CTX_CAP,
+            eval_pass_rate: 0.0,
+            tokens_per_sec: None,
+            first_token_ms: None,
+        }
+    }
+}
+
+fn caps_slot() -> &'static Mutex<TierCaps> {
+    static S: OnceLock<Mutex<TierCaps>> = OnceLock::new();
+    S.get_or_init(|| Mutex::new(TierCaps::default()))
+}
+
+/// Store bench/eval numbers so [`tier_meta`] and the router can use them.
+pub fn set_caps(caps: TierCaps) {
+    if caps.context > 0 {
+        set_ctx_cap(caps.context);
+    }
+    *caps_slot().lock().expect("local caps") = caps;
+}
+
+/// Latest capability snapshot (defaults until a bench runs).
+pub fn caps() -> TierCaps {
+    caps_slot().lock().expect("local caps").clone()
+}
+
+/// Remember that the last on-device answer failed VerifyGate (escalate next online turn).
+static LOCAL_VERIFY_FAILED: AtomicBool = AtomicBool::new(false);
+
+/// Cabin / live path: set after a local turn's verify outcome.
+pub fn note_local_verify_failed(failed: bool) {
+    LOCAL_VERIFY_FAILED.store(failed, Ordering::SeqCst);
+}
+
+pub fn local_verify_failed() -> bool {
+    LOCAL_VERIFY_FAILED.load(Ordering::SeqCst)
+}
+
 /// What a route may do with the local model for one call.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct LocalGate {
@@ -102,20 +191,43 @@ pub struct LocalGate {
     pub cloud_grant: bool,
     /// The step offers a send, delete or credential tool.
     pub hard_tool: bool,
+    /// Connectivity is offline (PR B): chat may go local too.
+    pub offline: bool,
+    /// Last on-device answer failed a verify check (PR E): escalate to cloud when online.
+    pub local_verify_failed: bool,
 }
 
 impl LocalGate {
     /// The flag and the live tier as set now.
     pub fn now(sensitive: bool, cloud_grant: bool, hard_tool: bool) -> Self {
-        Self { enabled: enabled(), tier: live_tier().into(), sensitive, cloud_grant, hard_tool }
+        Self {
+            enabled: enabled(),
+            tier: live_tier().into(),
+            sensitive,
+            cloud_grant,
+            hard_tool,
+            offline: super::connectivity::state().prefer_local(),
+            local_verify_failed: local_verify_failed(),
+        }
     }
 }
 
-/// The local route may take this step: the flag is on, the class is one of
-/// [`LOCAL_CLASSES`], the step fits the context cap, and it is not hard.
+fn allowed_classes(gate: &LocalGate) -> &'static [&'static str] {
+    if gate.offline {
+        OFFLINE_CLASSES
+    } else {
+        LOCAL_CLASSES
+    }
+}
+
+/// The local route may take this step: the flag is on, the class is allowed
+/// for this connectivity, the step fits the context cap, and it is not hard.
 pub fn eligible(gate: &LocalGate, class: &str, ctx_tokens: u64) -> bool {
     let class = class_row(class).map(|r| r.class).unwrap_or(class.trim());
-    gate.enabled && !gate.hard_tool && class != PREPARE_HARD && LOCAL_CLASSES.contains(&class) && ctx_tokens <= LOCAL_CTX_CAP
+    if super::connectivity::is_cloud_only(class) {
+        return false;
+    }
+    gate.enabled && !gate.hard_tool && class != PREPARE_HARD && allowed_classes(gate).contains(&class) && ctx_tokens <= ctx_cap()
 }
 
 /// `id` may serve this step: the live tier, and [`eligible`].
@@ -128,17 +240,55 @@ pub fn privacy_only(gate: &LocalGate) -> bool {
     gate.enabled && gate.sensitive && !gate.cloud_grant
 }
 
+/// Offline with a live on-device runtime: prefer local for eligible classes.
+pub fn offline_only(gate: &LocalGate) -> bool {
+    gate.enabled && gate.offline
+}
+
+/// Online after a failed on-device verify: leave local and pick a cloud model.
+pub fn escalate_after_verify(gate: &LocalGate) -> bool {
+    gate.enabled && !gate.offline && gate.local_verify_failed
+}
+
+/// Hard or long work should stay on the cloud when online (PR E).
+pub fn too_hard_for_local(class: &str, ctx_tokens: u64, d: f64) -> bool {
+    let class = class_row(class).map(|r| r.class).unwrap_or(class.trim());
+    class == PREPARE_HARD
+        || class.starts_with("repair:")
+        || d > 0.7
+        || ctx_tokens > ctx_cap().saturating_mul(3) / 4
+}
+
+/// Quiet note when escalating from local to cloud (names both models).
+pub fn escalate_note(local_model: &str, cloud_model: &str) -> String {
+    format!("Switched from {local_model} (local) to {cloud_model}: the on-device answer failed a check.")
+}
+
 /// The registry source for local tiers. Lists nothing (a no-op) while the flag is off.
 pub struct LocalSource;
 
 pub fn tier_meta(id: &str) -> ModelMeta {
+    let c = caps();
+    let mut notice = None;
+    if let Some(tps) = c.tokens_per_sec {
+        let ft = c.first_token_ms.unwrap_or(0);
+        notice = Some(grokhub_core::model_registry::Notice {
+            severity: "info".into(),
+            text: format!(
+                "local bench ≈ {tps:.1} tok/s, first token {ft} ms, eval {:.0}%",
+                c.eval_pass_rate * 100.0
+            ),
+        });
+    }
     ModelMeta {
         id: id.into(),
-        context_length: Some(LOCAL_CTX_CAP),
+        context_length: Some(ctx_cap().max(c.context)),
         // No effort menu: a local route sends no effort.
         efforts: Some(Vec::new()),
+        // `serve` returns empty `calls` today — never claim tools from eval pass rate.
         tool_calling: Some(false),
         prices: Prices { prompt: Some(0), cached: Some(0), completion: Some(0), ..Prices::default() },
+        notice,
         ..ModelMeta::default()
     }
 }
@@ -156,8 +306,14 @@ impl CatalogSource for LocalSource {
     }
 }
 
-/// An on-device model. Every answer is JSON-shaped. There is no real
-/// runtime in this build; tests install a fake.
+/// One chat message for [`LocalRuntime::chat_stream`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChatMessage {
+    pub role: String,
+    pub content: String,
+}
+
+/// An on-device model. Background helpers return JSON; chat may stream text.
 pub trait LocalRuntime: Send + Sync {
     /// `{"label": "<one of labels>", "score": 0.0..1.0}`.
     fn classify(&self, text: &str, labels: &[&str]) -> Result<Value, String>;
@@ -165,14 +321,30 @@ pub trait LocalRuntime: Send + Sync {
     fn summarize(&self, text: &str, max_words: u32) -> Result<Value, String>;
     /// `{"d": 0.0..1.0}`.
     fn difficulty(&self, text: &str) -> Result<Value, String>;
+    /// OpenAI-style chat with optional streaming deltas. Default: unsupported.
+    fn chat_stream(&self, messages: &[ChatMessage], on_delta: &mut dyn FnMut(&str)) -> Result<String, String> {
+        let _ = (messages, on_delta);
+        Err("local chat is not available on this runtime".into())
+    }
 }
 
-/// The installed runtime. This build has none: only a test's fake answers.
+/// The installed runtime: test fake, else HTTP client to a loopback sidecar.
 pub fn runtime() -> Option<Arc<dyn LocalRuntime>> {
     if !enabled() {
         return None;
     }
-    test_runtime()
+    if let Some(rt) = test_runtime() {
+        return Some(rt);
+    }
+    ensure_production_runtime();
+    super::local_http::from_global_sidecar()
+}
+
+fn ensure_production_runtime() {
+    let Some(dir) = config_dir() else {
+        return;
+    };
+    let _ = super::local_sidecar::ensure_global(&dir);
 }
 
 #[cfg(not(test))]
@@ -251,9 +423,21 @@ pub fn serve(class: &str, text: &str) -> Result<TurnOutput, ClientError> {
         return Err(ClientError::Protocol(NO_RUNTIME_MSG.into()));
     };
     let class = class_row(class).map(|r| r.class).unwrap_or(class);
+    if matches!(class, "chat:quick" | "chat:default" | "desktop:soft") {
+        let mut deltas = String::new();
+        let out = rt
+            .chat_stream(&[ChatMessage { role: "user".into(), content: text.into() }], &mut |d| deltas.push_str(d))
+            .map_err(ClientError::Protocol)?;
+        let text = if out.is_empty() { deltas } else { out };
+        return Ok(TurnOutput { text, reasoning: String::new(), calls: Vec::new(), usage: Usage::default(),
+            ..Default::default()
+        });
+    }
     let answer = if class == "background:summarize" { rt.summarize(text, 60) } else { rt.classify(text, CLASS_LABELS) };
     let v = answer.map_err(ClientError::Protocol)?;
-    Ok(TurnOutput { text: v.to_string(), reasoning: String::new(), calls: Vec::new(), usage: Usage::default() })
+    Ok(TurnOutput { text: v.to_string(), reasoning: String::new(), calls: Vec::new(), usage: Usage::default(),
+            ..Default::default()
+        })
 }
 
 /// What [`scan_pii`] found.

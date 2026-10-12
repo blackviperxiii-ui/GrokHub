@@ -653,7 +653,7 @@ fn call_qualified(rec: &ToolRec, args: &Value, stop: &dyn Fn() -> bool) -> ToolO
     };
     match conn.call(&rec.raw, args, timeout, stop) {
         Ok((text, true)) => ToolOutput::err(text),
-        Ok((text, false)) => ToolOutput::ok(text),
+        Ok((text, false)) => ToolOutput::ok(crate::tools::fence::fence("mcp", &text)),
         Err(err) => {
             inner.conn.take();
             inner.last_error = Some(clip_err(&err));
@@ -1495,7 +1495,8 @@ mod tests {
                 reasoning: String::new(),
                 calls: Vec::new(),
                 usage: crate::Usage::default(),
-            })
+            ..Default::default()
+        })
         }
     }
 

@@ -256,6 +256,8 @@ pub(super) enum FeedAct {
     DeleteRecording(String),
     /// Retry now on a no-route wait card.
     RetryNow,
+    /// Save / Not interested / More like this on a source post.
+    Source(String, super::pulse_ui::SourceAct),
 }
 
 /// Done-for-you cards carry a white rule down the left edge, the cabin's
@@ -338,6 +340,18 @@ impl Cabin {
         let mut card = automation_done_card(source_id, title, summary, now_ms());
         hold_if_quiet(&mut card, self.quiet_now());
         self.post_feed_card(card);
+    }
+
+    /// One Home card per store that would not load and was moved aside: a settings or
+    /// feed file (`config::quarantine`), the hub state, or a damaged memory note.
+    /// Notes for files outside this cabin's config folder are dropped.
+    pub(super) fn poll_recovered_stores(&mut self) {
+        let dir = crate::config::config_dir();
+        for r in grokhub_core::recovered::drain() {
+            if r.path.starts_with(&dir) {
+                self.post_feed_card(grokhub_core::recovered_card(&r, now_ms()));
+            }
+        }
     }
 
     /// `commit_schedule` calls this after a clock job or interval loop is saved.
@@ -458,9 +472,9 @@ impl Cabin {
         quiet_hours_active(&clock.hm(), &self.cfg.quiet_start, &self.cfg.quiet_end)
     }
 
-    /// Housekeep: idea expiry, quiet release, digest clock. Not the nightly review.
+    /// The governor's Pulse refresh job: idea expiry, quiet release, digest
+    /// clock. Not the nightly review, and not the ideas ask (its own job).
     pub(super) fn tick_feed_pulse(&mut self) {
-        self.maybe_suggest_ideas(false);
         let now = now_ms();
         let quiet = self.quiet_now();
         let pulse = self.cfg.feed_pulse.clone();
@@ -478,6 +492,9 @@ impl Cabin {
         } else {
             (String::new(), String::new(), String::new(), Vec::new())
         };
+        if want_digest && !quiet {
+            self.seed_interests(&user_md, &memory_md);
+        }
         let project = self.cfg.project_dir.clone();
         let steer = if want_digest && !quiet {
             grokhub_core::digest_steer(&self.cfg.digest_brief, &user_md, &memory_md, &project)
@@ -517,6 +534,7 @@ impl Cabin {
         self.digest_wants_lookup = tick.digest_needs_lookup;
         if tick.digest_needs_lookup {
             self.digest_steer = steer;
+            self.digest_interests = self.interests_prompt();
         }
         self.note_finished_card_uses();
         let help_changed = self.note_help_offers(now, quiet);
@@ -854,6 +872,7 @@ impl Cabin {
             Some(FeedAct::Open(id)) => self.open_feed_card(&id),
             Some(FeedAct::Discuss(id)) => self.discuss_card(&id),
             Some(FeedAct::Like(id)) => self.pulse_like(&id, &Self::local_day()),
+            Some(FeedAct::Source(id, did)) => self.source_post_act(&id, did),
             Some(FeedAct::Undo(id)) => self.done_for_you_undo(&id),
             Some(FeedAct::NeverAgain(id)) => self.done_for_you_never(&id),
             Some(FeedAct::Retry(id)) => self.crash_retry(&id),
@@ -948,13 +967,13 @@ impl Cabin {
     }
 
     /// Once per launch: purge template idea cards. The automatic model ask comes
-    /// from the heartbeat (`tick_feed_pulse` → `maybe_suggest_ideas`).
+    /// from the governor's Ideas job (`maybe_suggest_ideas`).
     pub(super) fn ensure_useful_ideas(&mut self) {
         if self.ideas_filled {
             return;
         }
         self.ideas_filled = true;
-        let (_, inputs) = self.idea_request();
+        let inputs = self.idea_inputs();
         let ground = grokhub_core::IdeaGround {
             asks: &inputs.asks,
             lasting: &inputs.lasting,
@@ -979,8 +998,8 @@ impl Cabin {
         let now = now_ms();
         if !force {
             let live = grokhub_core::live_generated_ideas(&self.updates);
+            // The governor's Ideas job: it never runs in quiet hours.
             if !grokhub_core::ideas_refresh_due(self.cfg.feed_pulse.last_ideas_ms, now, live)
-                || self.quiet_now()
                 || self.budget_holds_scheduled()
             {
                 return;
@@ -994,12 +1013,22 @@ impl Cabin {
         self.persist_cfg();
         let (tx, rx) = mpsc::channel();
         self.ideas_rx = Some((rx, inputs));
-        self.spawn_native_ideas(prompt, tx);
+        self.spawn_native_ideas(prompt, tx, (!force).then_some(JobKind::Ideas));
     }
 
     /// The prompt plus what the reply must not copy (their own lines) or repeat,
     /// and what an idea has to stand on.
     pub(super) fn idea_request(&self) -> (String, IdeaInputs) {
+        self.idea_parts(true)
+    }
+
+    /// What an idea is checked against, without the prompt (which reads the
+    /// local clock through `date` on Linux).
+    pub(super) fn idea_inputs(&self) -> IdeaInputs {
+        self.idea_parts(false).1
+    }
+
+    fn idea_parts(&self, with_prompt: bool) -> (String, IdeaInputs) {
         let user_md = crate::config::read_memory("USER.md");
         let memory_md = crate::config::read_memory("MEMORY.md");
         // Enough history to tell a routine from a one-time job.
@@ -1028,28 +1057,32 @@ impl Cabin {
             .collect();
         // Newest first, what they said no to ahead of the rest: the prompt shows only 12.
         let rejected = grokhub_core::turned_down_titles(&self.cfg.feed_pulse, &existing);
-        let clock = Self::local_clock();
-        let weekday = match clock.weekday {
-            0 => "Sunday",
-            1 => "Monday",
-            2 => "Tuesday",
-            3 => "Wednesday",
-            4 => "Thursday",
-            5 => "Friday",
-            _ => "Saturday",
+        let prompt = if !with_prompt {
+            String::new()
+        } else {
+            let clock = Self::local_clock();
+            let weekday = match clock.weekday {
+                0 => "Sunday",
+                1 => "Monday",
+                2 => "Tuesday",
+                3 => "Wednesday",
+                4 => "Thursday",
+                5 => "Friday",
+                _ => "Saturday",
+            };
+            grokhub_core::idea_prompt(&grokhub_core::IdeaContext {
+                user_md: &user_md,
+                memory_md: &memory_md,
+                recent_asks: &asks,
+                open_cards: &open_cards,
+                automations: &automations,
+                skills: &skills,
+                existing: &existing,
+                rejected: &rejected,
+                hour: clock.hour as u8,
+                weekday,
+            })
         };
-        let prompt = grokhub_core::idea_prompt(&grokhub_core::IdeaContext {
-            user_md: &user_md,
-            memory_md: &memory_md,
-            recent_asks: &asks,
-            open_cards: &open_cards,
-            automations: &automations,
-            skills: &skills,
-            existing: &existing,
-            rejected: &rejected,
-            hour: clock.hour as u8,
-            weekday,
-        });
         let memory_lines: Vec<String> = user_md
             .lines()
             .chain(memory_md.lines())
@@ -1269,6 +1302,9 @@ impl Cabin {
         }
         if !mark_update_opened(&mut self.updates, id) {
             return;
+        }
+        if let Some(title) = self.updates.iter().find(|c| c.id == id).map(|c| c.title.clone()) {
+            self.interests_feedback(&title, grokhub_core::interests::InterestSignal::Opened);
         }
         let (action, board_card) = self
             .updates
@@ -1794,6 +1830,7 @@ fn paint_full_feed_card(
                                 FeedAct::DeleteRecording(card.id.clone())
                             }
                             super::pulse_ui::FeedPostAct::RetryNow => FeedAct::RetryNow,
+                            super::pulse_ui::FeedPostAct::Source(did) => FeedAct::Source(card.id.clone(), did),
                         });
                     }
                 });

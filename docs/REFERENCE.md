@@ -2,12 +2,12 @@
 
 Native Rust cabin. No Electron. No Tauri. One repo, one `main`, one version — two ship artifacts.
 
-**v2.13.1** — GrokHub no longer needs, installs or updates the Grok Build CLI (the legacy CLI engine and the `grokhub-acp` crate are gone, and Update updates only the cabin); an old checklist no longer takes over a new, unrelated ask; and a failed first send keeps the CLI-era recap.
+**v3.0.0** — Cabin 3.0: Brain (Brief, mode policy, playbooks, talk styles), on-device local model with offline routing, archive for finished chats, signed release updates and Labs Beta without a source clone, plus harness hardening and a dependency diet.
 
 | Platform | Artifact | Latest |
 |----------|----------|--------|
-| **Linux** (Arch / CachyOS) | `grokhub-linux-v2.13.1.tar.gz`, AUR | **v2.13.1** |
-| **Windows** (x86_64) | `GrokHub-Setup-2.13.1.exe`, `grokhub-windows-v2.13.1.zip` | **v2.13.1** |
+| **Linux** (Arch / CachyOS) | `grokhub-linux-v3.0.0.tar.gz`, AUR | **v3.0.0** |
+| **Windows** (x86_64) | `GrokHub-Setup-3.0.0.exe`, `grokhub-windows-v3.0.0.zip` | **v3.0.0** |
 
 Windows vs Linux in the cabin is `cfg(windows)` / `cfg(unix)`. The older [GrokHub-Windows](https://github.com/blackviperxiii-ui/GrokHub-Windows) fork is an archive source — new cabin work lands here.
 
@@ -70,21 +70,25 @@ Config and memory: `~/.config/GrokHub` (`app.json`, `projects.json`, `updates.js
 
 ## Channels: stable and beta
 
-There are two channels. **Stable** builds `main`, where releases are cut. **Beta** builds the `beta` branch, where new features and fixes land first. Switch on Linux with one command from your clone:
+There are two channels. **Stable** is `main`, where releases are cut. **Beta** is the `beta` branch, where new features and fixes land first. Every push to `beta` publishes a pre-release named `beta-v<version>-<sha>` with the same Linux and Windows files and `SHA256SUMS` as a release.
+
+**Without a source clone** (every Windows Setup install, and a Linux install from the release tarball), turn Settings → Labs → **Beta channel** on or off. GrokHub downloads the newest beta pre-release (or the latest stable release), checks it against its `SHA256SUMS`, swaps `grokhub` and `grokhub-hub` in (keeping the old ones as `.old`), and only then saves the new channel. A download that doesn't check out leaves you on the channel you had. Update on a channel works the same way: Beta takes the newest pre-release by build time.
+
+**From a source clone** (the developer path), switch on Linux with one command; it builds from source:
 
 ```bash
 ./scripts/install.sh --user --channel beta     # fetch origin, check out beta, build, install
 ./scripts/install.sh --user --channel stable   # back to main
-grokhub --version                              # GrokHub 2.13.1-beta (beta @ abc1234) or GrokHub 2.13.1 (main @ f7dcf9a)
+grokhub --version                              # GrokHub 3.0.0-beta.3 (beta @ abc1234) or GrokHub 3.0.0 (main @ f7dcf9a)
 ```
 
 `--channel` fetches `origin`, checks out the branch (creating a local tracking branch the first time, and fast-forwarding it after that), then builds and installs. Stable follows `main`, not the latest release tag, because the in-app Update already pulls `main`. The switch refuses to run over uncommitted changes, and it stops instead of resetting when your local branch has commits that aren't on `origin`.
 
 The channel is saved to `~/.config/GrokHub/channel` (or `$GROKHUB_CONFIG/channel`), next to the `source` receipt. A plain `./scripts/install.sh --user` keeps the saved channel and builds whatever is checked out; it doesn't move git. Settings → **Update**, `/update`, and `grokhub --update` read the receipt: a beta install pulls `origin beta` and never `origin main`. If the clone isn't on the channel's branch, Update stops and says which command to run. `./scripts/install.sh --dry-run` prints the channel, branch, and receipt it would use, and exits.
 
-`--version` comes from `crates/grokhub-app/build.rs`, which reads the branch and short SHA from git at build time. A beta build adds `-beta` to the version; the Cargo version itself never changes. A build made without git shows just `GrokHub 2.13.1`.
+`--version` comes from `crates/grokhub-app/build.rs`, which reads the branch, short SHA, and beta N from git at build time. A beta build is labeled `X.Y.Z-beta.N`, where N is the commit count since the newest stable `vX.Y.Z` tag (`git rev-list --count <tag>..HEAD`). Shallow clones without tags fall back to `beta.0` until you `git fetch --tags`. The Cargo version itself never changes for a beta label. A build made without git shows just `GrokHub 3.0.0`.
 
-Limits: channels are Linux-only for now. `scripts/install-windows.ps1` has no `-Channel`, and Windows Setup always installs stable releases (a beta receipt on Windows never falls back to the stable release zip). The Update chip still only notices new releases, so on beta, use Settings → **Update** to pull new beta commits.
+Limits: building beta from a clone is Linux-only (`scripts/install-windows.ps1` has no `-Channel`); Windows gets Beta from the signed pre-releases. Beta turns itself off when beta catches up to main only on a Linux clone, because that check reads the clone's branches; elsewhere, turn it off in Labs. The Update chip still only notices new stable releases, so on beta, use Settings → **Update** to take the newest beta build.
 
 ## First run
 
@@ -143,7 +147,16 @@ Pair code `ABC-234`. Devices paints a real LAN IPv4 (`http://192.168.x.x:18766`)
 | `%APPDATA%\GrokHub` | Windows user data |
 
 Linux tarball: `grokhub-linux-v*.tar.gz` from `./scripts/make-release-bundle.sh`.  
-Windows installer: `GrokHub-Setup-<version>.exe` from `./scripts/make-windows-release.ps1` (Inno Setup). A tag publishes both.
+Windows installer: `GrokHub-Setup-<version>.exe` from `./scripts/make-windows-release.ps1` (Inno Setup). A `v*` tag publishes both as a release; each push to `beta` publishes them as a pre-release named `beta-v<version>-<sha>`.
+
+Every release and pre-release also carries `SHA256SUMS` (the SHA-256 of each file) and `SHA256SUMS.minisig`, a [minisign](https://jedisct1.github.io/minisign/) signature of it. The public key is [`packaging/minisign.pub`](../packaging/minisign.pub); the private key exists only as the `MINISIGN_SECRET_KEY` Actions secret. To check a download by hand:
+
+```bash
+minisign -V -p packaging/minisign.pub -m SHA256SUMS
+sha256sum -c SHA256SUMS --ignore-missing
+```
+
+Setting up the key (owner, once): `minisign -G -W -p minisign.pub -s minisign.key` makes an unencrypted pair (the secret store is its protection; CI can't type a password). Paste all of `minisign.key` into the repo's `MINISIGN_SECRET_KEY` secret, commit `minisign.pub` as `packaging/minisign.pub`, then delete `minisign.key` or keep it offline. Without the secret, releases ship `SHA256SUMS` unsigned with a warning, and the updater refuses them.
 
 Arch notes: [`packaging/README-ARCH.md`](../packaging/README-ARCH.md).
 

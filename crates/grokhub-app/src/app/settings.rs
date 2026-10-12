@@ -30,6 +30,10 @@ pub(super) fn settings_sec_title(sec: SettingsSec) -> &'static str {
         SettingsSec::Labs => "Labs",
         SettingsSec::Permissions => "Permissions",
         SettingsSec::Connectors => "Connectors",
+        SettingsSec::Personality => "Personality",
+        SettingsSec::Playbooks => "Playbooks",
+        SettingsSec::Pulse => "Pulse",
+        SettingsSec::Background => "Background",
     }
 }
 
@@ -300,7 +304,7 @@ impl Cabin {
             .cabin_latest
             .as_deref()
             .filter(|_| cabin_notify)
-            .map(|tag| cabin_update_notice(env!("CARGO_PKG_VERSION"), tag));
+            .map(|tag| cabin_update_notice(&crate::update::build_version_label(), tag));
         self.pull_account_oauth_from_disk();
         let account_auth = account_connect_chrome(self.secrets.oauth.as_ref());
         let picture_set = !self.cfg.profile_picture.trim().is_empty();
@@ -358,6 +362,10 @@ impl Cabin {
                                                 for (s, label) in [
                                                     (SettingsSec::Account, "Account"),
                                                     (SettingsSec::Appearance, "Appearance"),
+                                                    (SettingsSec::Personality, "Personality"),
+                                                    (SettingsSec::Playbooks, "Playbooks"),
+                                                    (SettingsSec::Pulse, "Pulse"),
+                                                    (SettingsSec::Background, "Background"),
                                                     (SettingsSec::Behavior, "Behavior"),
                                                     (SettingsSec::Permissions, "Permissions"),
                                                     (SettingsSec::Connectors, "Connectors"),
@@ -560,7 +568,9 @@ impl Cabin {
                                                             }
                                                             self.ui_dream_time_row(ui);
                                                             self.ui_quiet_self_review_rows(ui);
+                                                            self.ui_self_change_history(ui);
                                                             self.ui_memory_retention_row(ui);
+                                                            self.ui_chat_archive_row(ui);
                                                             if crate::cards::settings_action(ui, "Setup", "Walk through first-run setup again.", "Open") {
                                                                 self.open_setup(super::setup_wizard::SetupStep::Welcome);
                                                             }
@@ -804,33 +814,11 @@ impl Cabin {
                                                             }
                                                         }
                                                         SettingsSec::Labs => {
-                                                            // Beta channel: Linux switches via install.sh --channel;
-                                                            // Windows stays disabled until the installer supports it.
+                                                            // Beta channel: a Linux clone switches via install.sh --channel;
+                                                            // without one (every Windows install) via the signed releases.
                                                             // Also: when beta caught up to main (same tree), auto-turn off (cooldown).
                                                             self.maybe_auto_off_beta_channel(false);
                                                             let status_line = crate::update::channel_labs_status();
-                                                            #[cfg(windows)]
-                                                            {
-                                                                ui.add_enabled_ui(false, |ui| {
-                                                                    let mut off = false;
-                                                                    let _ = crate::cards::settings_toggle(
-                                                                        ui,
-                                                                        "Beta channel",
-                                                                        "Fetch, build, and install from the beta branch.",
-                                                                        &mut off,
-                                                                    );
-                                                                });
-                                                                crate::cards::settings_note(
-                                                                    ui,
-                                                                    crate::update::channel_windows_note(),
-                                                                );
-                                                                crate::cards::settings_note(
-                                                                    ui,
-                                                                    crate::update::channel_auto_off_note(),
-                                                                );
-                                                                crate::cards::settings_note(ui, &status_line);
-                                                            }
-                                                            #[cfg(not(windows))]
                                                             {
                                                                 let channel_on = crate::update::installed_channel()
                                                                     == grokhub_core::Channel::Beta;
@@ -839,6 +827,8 @@ impl Cabin {
                                                                     && self.update_pct.is_some();
                                                                 let hint = if channel_busy {
                                                                     "Switching channel…"
+                                                                } else if cfg!(windows) {
+                                                                    "On = the newest beta pre-release. Off = the latest stable release."
                                                                 } else {
                                                                     "On = beta branch. Off = stable (main). Same as install.sh --channel."
                                                                 };
@@ -855,10 +845,20 @@ impl Cabin {
                                                                         } else {
                                                                             grokhub_core::Channel::Stable
                                                                         };
+                                                                        #[cfg(windows)]
+                                                                        self.queue_release_channel_switch(target);
+                                                                        #[cfg(not(windows))]
                                                                         self.queue_channel_switch(target);
                                                                     }
                                                                 });
+                                                                #[cfg(windows)]
+                                                                crate::cards::settings_note(
+                                                                    ui,
+                                                                    crate::update::channel_windows_note(),
+                                                                );
                                                                 crate::cards::settings_note(ui, &status_line);
+                                                                // Auto-off reads the clone's branches: Linux only.
+                                                                #[cfg(not(windows))]
                                                                 crate::cards::settings_note(
                                                                     ui,
                                                                     crate::update::channel_auto_off_note(),
@@ -928,6 +928,10 @@ impl Cabin {
                                                         }
                                                         SettingsSec::Permissions => self.ui_permission_editor(ui),
                                                         SettingsSec::Connectors => self.ui_settings_connectors(ui),
+                                                        SettingsSec::Personality => self.ui_settings_personality(ui),
+                                                        SettingsSec::Playbooks => self.ui_settings_playbooks(ui),
+                                                        SettingsSec::Pulse => self.ui_settings_pulse(ui),
+                                                        SettingsSec::Background => self.ui_settings_background(ui),
                                                     }
                                                 });
                                             });

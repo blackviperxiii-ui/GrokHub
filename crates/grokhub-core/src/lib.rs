@@ -1,5 +1,7 @@
 //! Shared GrokHub brain. Linux and Windows call this — not a second protocol.
 
+#![cfg_attr(not(test), warn(clippy::unwrap_used, clippy::expect_used))]
+
 pub mod amr;
 pub mod appearance;
 pub mod attach;
@@ -8,6 +10,8 @@ pub mod cabin_rules;
 pub mod automation;
 pub mod autonomy;
 pub mod bg_task;
+pub mod brain_policy;
+pub mod playbook;
 pub mod browser;
 pub mod capture;
 pub mod chat;
@@ -32,6 +36,7 @@ pub mod feel;
 pub mod findings;
 pub mod frame;
 pub mod goal;
+pub mod governor;
 pub mod greeting;
 pub mod grok_loop;
 pub mod hands;
@@ -64,8 +69,15 @@ pub mod outcome;
 pub mod pair;
 pub mod paths;
 pub mod proactive;
+pub mod protected_surface;
 pub mod project;
+pub mod interests;
+pub mod personality;
 pub mod pulse;
+pub mod pulse_sources;
+pub mod release_verify;
+pub mod recovered;
+pub mod run_metrics;
 pub mod recipe;
 pub mod pii;
 pub mod pkce;
@@ -83,6 +95,7 @@ pub mod situation;
 pub mod slash;
 pub mod state;
 pub mod stream;
+pub mod talk;
 pub mod task;
 pub mod thread_tab;
 pub mod tui_gaps;
@@ -101,7 +114,7 @@ pub mod wire;
 pub mod workboard;
 
 pub use appearance::{
-    appearance_choices, appearance_hint, os_prefers_dark, parse_theme, pick_theme, resolve_dark,
+    appearance_choices, appearance_hint, kde_prefers_dark, os_prefers_dark, parse_theme, pick_theme, resolve_dark,
     theme_id, theme_label, ThemeChoice,
 };
 pub use attach::{
@@ -271,6 +284,11 @@ pub use heartbeat::{
     heartbeat_acts, heartbeat_due, heartbeat_repaint_ms, next_heartbeat_wait_ms, HeartbeatAct,
     HEARTBEAT_MS,
 };
+pub use governor::{
+    cabin_jobs, runs_cheap, user_active, BackgroundBudgets, BudgetClass, Governor, GovernorNote,
+    JobHold, JobKind, JobSpec, JobStatus, QuietRule, TickCtx, TickPlan, ACTIVE_GOAL,
+    ACTIVE_REASON, ACTIVE_WINDOW_MS,
+};
 pub use heartbeat_throttle::{
     ActOutcome, HeartbeatPace, HeartbeatThrottle, PaceGate, PaceHold, ProactiveAct, PACE_NORMAL,
 };
@@ -415,7 +433,7 @@ pub use review::{
 pub use rewind::{
     is_rewind_copy_cmd, is_rewind_copy_cmd_in, keep_last_rewinds, rewind_allowed,
     rewind_blocked_reason, rewind_can_queue, rewind_copy_cmd, rewind_dest, rewind_restore_matches,
-    rewind_snapshot_ready, RewindRecord,
+    rewind_sensitive, rewind_snapshot_ready, RewindRecord,
 };
 pub use shortcuts::{
     apply_composer_enter, composer_enter, composer_go, composer_go_tip, filter_palette,
@@ -467,20 +485,20 @@ pub use turn_timeline::{
     LiveBlock, LiveKind, ToolRow, TurnPart,
 };
 pub use update::{
-    cabin_overlay_step, cabin_update_notice, cabin_version_newer, discover_source,
-    fetch_channel_tips, is_grokhub_source, origin_needs_retarget, overlay_clone_usable,
-    overlay_clone_usable_in, overlay_stop_targets, overlay_update_begin,
-    overlay_update_can_restart, overlay_update_finish, overlay_update_progress,
-    parse_cabin_semver, parse_github_latest_tag, parse_ls_remote_tips, pending_for_manual_update,
-    pending_from_versions, pending_on_channel, remote_tracking_tips, restart_acts, restart_argv,
-    restart_bin, settings_update_hint, settings_update_label, settings_update_note,
-    should_notify_cabin_update, switch_clone_to_main, systemd_user_restart_args,
-    systemd_user_stop_args, update_check_due, update_chip_label, update_cmds, update_cmds_for,
-    update_cmds_for_host, update_cmds_for_host_in, update_cmds_in, update_hint,
-    update_plan_steps, update_progress_pct, update_step_label, update_wipes_config,
-    walk_up_source, windows_release_overlay_cmd, windows_release_update_cmds, OverlayUpdateView,
-    RestartAct, UpdatePending, GITHUB_LATEST_API, GITHUB_REMOTE_URL, ORIGIN_REMOTE_URL,
-    UPDATE_CHECK_EVERY,
+    beta_auto_off_for_versions, cabin_overlay_step, cabin_update_notice, cabin_version_newer,
+    clone_needs_recover, clone_recover_step, discover_source, fetch_channel_tips, is_grokhub_source,
+    origin_needs_retarget, overlay_clone_usable, overlay_clone_usable_in, overlay_stop_targets,
+    overlay_update_begin, overlay_update_can_restart, overlay_update_finish,
+    overlay_update_progress, parse_cabin_semver, parse_clone_recover_step, parse_github_latest_tag,
+    parse_ls_remote_tips, pending_for_manual_update, pending_from_versions, pending_on_channel,
+    recover_clone_if_needed, remote_tracking_tips, restart_acts, restart_argv, restart_bin,
+    settings_update_hint, settings_update_label, settings_update_note, should_notify_cabin_update,
+    switch_clone_to_main, systemd_user_restart_args, systemd_user_stop_args, update_check_due,
+    update_chip_label, update_cmds, update_cmds_for, update_cmds_for_host, update_cmds_for_host_in,
+    update_cmds_in, update_hint, update_plan_steps, update_progress_pct, update_step_label,
+    update_wipes_config, walk_up_source, release_update_cmds, CabinSemver, OverlayUpdateView,
+    RestartAct, UpdatePending, CLONE_RECOVER_STEP_PREFIX, GITHUB_LATEST_API, GITHUB_REMOTE_URL,
+    ORIGIN_REMOTE_URL, UPDATE_CHECK_EVERY,
 };
 pub use usage::{
     add_tokens, budget_holds_scheduled, budget_level, budget_line, bump_usage, roll_usage_day,
@@ -498,11 +516,11 @@ pub use voice::{
     pcm_from_capture, ptt_after_speak, ptt_after_stt, realtime_can_connect,
     redact_cabin_from_memory, reduce_voice_state, should_attach_cabin_frame,
     should_capture_before_chat, should_mute_speaker, speech_can_connect, stt_multipart, stt_url,
-    transcribe_route, tts_request_body, tts_url, voice_can_connect,
+    transcribe_route, tts_request_body, tts_url, tts_voice, voice_can_connect,
     voice_log_role, voice_mode_active, voice_mode_label, voice_session_url, voice_state_after_ptt_stt,
     voice_stream_token, voice_strip_visible, voice_transcript_sends_chat, voice_tts_script,
     CabinEyesState, HeyGrokAction, HeyGrokRoute, PttLine, TranscribeRoute, VoiceEvent, VoiceRole,
-    VoiceState, DEFAULT_VOICE, DEFAULT_VOICE_MODEL, RECORDERS, TRANSCRIBERS, VOICE_READY_HIDE_MS,
+    VoiceState, DEFAULT_VOICE, TTS_VOICES, DEFAULT_VOICE_MODEL, RECORDERS, TRANSCRIBERS, VOICE_READY_HIDE_MS,
 };
 pub use windshield::{
     build_windshield, filter_atspi_rows, is_interactive_role, keep_atspi_row, lock_check_titles,
@@ -523,7 +541,7 @@ pub use update_feed::{
     CARD_ACTION_DONE, CARD_ACTION_TAG, modified_ideas, post_skill_idea, set_idea_draft,
     IDEA_MODIFIED_MAX,
     board_covers_topic, live_generated_ideas, post_generated_ideas, purge_one_off_ideas, purge_template_ideas,
-    audio_check_card, automation_failed_card, crash_card, is_crash_card, is_model_wait_card, MODEL_WAIT_SOURCE_PREFIX, screen_recording_card, screen_recording_dir,
+    audio_check_card, recovered_card, RECOVERED_SOURCE_PREFIX, automation_failed_card, crash_card, is_crash_card, is_model_wait_card, MODEL_WAIT_SOURCE_PREFIX, screen_recording_card, screen_recording_dir,
     CRASH_SOURCE_PREFIX, SCREEN_RECORDING_SOURCE_PREFIX,
     archive_digest, archived_digests, automate_offer_card, automation_done_card,
     digest_card, digest_topic_refused, discuss_context, short_takeaway, TAKEAWAY_MAX,

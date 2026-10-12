@@ -104,7 +104,10 @@ pub(super) enum PulseAct {
     NeverAgain(String),
     Retry(String),
     DeleteRecording(String),
+    /// A code-idea card's Copy as GitHub issue (card 32 PR D).
+    CopyIssue(String),
     RetryNow,
+    Source(String, SourceAct),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -394,11 +397,15 @@ fn pulse_menu(
         act,
     );
     if let Some(target) = self_review {
-        let label = match target {
+        let label = match &target {
             grokhub_core::self_review::CardTarget::Revert(_) => "Revert",
+            grokhub_core::self_review::CardTarget::Code(_) => "Save idea",
             _ => "Apply change",
         };
         pick(ui, label, "", PulseAct::Accept(id.clone()), act);
+        if matches!(target, grokhub_core::self_review::CardTarget::Code(_)) {
+            pick(ui, "Copy as GitHub issue", "", PulseAct::CopyIssue(id.clone()), act);
+        }
     } else if kind == PulseType::Learn {
         pick(
             ui,
@@ -591,6 +598,15 @@ pub(super) enum FeedPostAct {
     DeleteRecording,
     /// No-route wait card: check the models now.
     RetryNow,
+    /// Save / Not interested / More like this on a source post.
+    Source(SourceAct),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum SourceAct {
+    Save,
+    NotInterested,
+    MoreLike,
 }
 
 /// Open and Retry on a crash card (a run killed from outside, exit 143).
@@ -684,6 +700,13 @@ pub(super) fn paint_post_body(
             3,
         );
     }
+    if let Some(topic) = card.pulse.because.as_deref() {
+        ui.label(
+            RichText::new(why_line(topic))
+                .size(crate::theme::FONT_TIP)
+                .color(crate::theme::subtle()),
+        );
+    }
     if let Some(url) = card.citations.first() {
         let host = pc::source_host(url).unwrap_or_else(|| url.clone());
         let link = ui.add(
@@ -709,7 +732,11 @@ pub(super) fn paint_post_body(
     ui.add_space(2.0);
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 14.0;
-        if paint_heart_button(ui, card.reaction == Some(CardReaction::Up)) {
+        if grokhub_core::pulse_sources::is_source_post(card) {
+            if let Some(did) = paint_source_actions(ui, card) {
+                act = Some(FeedPostAct::Source(did));
+            }
+        } else if paint_heart_button(ui, card.reaction == Some(CardReaction::Up)) {
             act = Some(FeedPostAct::Like);
         }
         if matches!(card.kind, UpdateKind::Digest | UpdateKind::Suggestion) {
@@ -736,6 +763,41 @@ pub(super) fn paint_post_body(
         act = Some(wait);
     }
     act
+}
+
+/// Save, Not interested and More like this under a source post. Save reads Saved
+/// once the post is in Saved Finds.
+fn paint_source_actions(ui: &mut egui::Ui, card: &UpdateCard) -> Option<SourceAct> {
+    let saved = card.reaction == Some(CardReaction::Up);
+    let mut act = None;
+    for (label, did) in [
+        (if saved { "Saved" } else { "Save" }, SourceAct::Save),
+        ("Not interested", SourceAct::NotInterested),
+        ("More like this", SourceAct::MoreLike),
+    ] {
+        let color = if did == SourceAct::Save && saved {
+            crate::theme::fg()
+        } else {
+            crate::theme::muted()
+        };
+        let button = ui.add(
+            egui::Button::new(RichText::new(label).size(crate::theme::FONT_TIP).color(color))
+                .frame(false)
+                .min_size(egui::vec2(0.0, 24.0)),
+        );
+        if button.hovered() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        }
+        if button.clicked() {
+            act = Some(did);
+        }
+    }
+    act
+}
+
+/// "Why: air compressors", under a source post's summary.
+pub(super) fn why_line(topic: &str) -> String {
+    format!("Why: {}", topic.trim())
 }
 
 /// Where a post came from, for the line under its headline.
@@ -879,7 +941,8 @@ impl Cabin {
                                         PulseTab::Feed => self.ui_pulse_feed(ui),
                                     }
                                 });
-                                if 0.001 < tab_t && tab_t < 0.999 {
+                                // Crossfade only: settled tabs and reduced motion stay idle.
+                                if crate::theme::motion_ok(ui) && 0.001 < tab_t && tab_t < 0.999 {
                                     ui.ctx().request_repaint_after(std::time::Duration::from_millis(16));
                                 }
                                 ui.add_space(24.0);
@@ -997,6 +1060,7 @@ impl Cabin {
                 paint_skeleton_row(ui);
                 ui.add_space(14.0);
             }
+            // Poll the ideas channel only while a suggest is in flight.
             ui.ctx()
                 .request_repaint_after(std::time::Duration::from_millis(250));
             return;
@@ -1209,6 +1273,7 @@ impl Cabin {
                         FeedPostAct::Retry => PulseAct::Retry(card.id.clone()),
                         FeedPostAct::DeleteRecording => PulseAct::DeleteRecording(card.id.clone()),
                         FeedPostAct::RetryNow => PulseAct::RetryNow,
+                        FeedPostAct::Source(did) => PulseAct::Source(card.id.clone(), did),
                     });
                 }
             });
@@ -1480,7 +1545,9 @@ impl Cabin {
             PulseAct::NeverAgain(id) => self.done_for_you_never(&id),
             PulseAct::Retry(id) => self.crash_retry(&id),
             PulseAct::DeleteRecording(id) => self.arm_delete_recording(&id),
+            PulseAct::CopyIssue(id) => self.copy_code_idea(&id),
             PulseAct::RetryNow => self.retry_model_wait_now(),
+            PulseAct::Source(id, did) => self.source_post_act(&id, did),
             PulseAct::Link(url) => {
                 self.follow_update_action(Some(UpdateAction::DeepLink { href: url }))
             }
@@ -1489,18 +1556,21 @@ impl Cabin {
 
     /// One structured line in MEMORY.md. Likes and dislikes count toward the
     /// next rewrite of the feed instructions.
-    fn pulse_note(&mut self, title: &str, reason: LedgerReason, day: &str) {
+    pub(super) fn pulse_note(&mut self, title: &str, reason: LedgerReason, day: &str) {
         let line = pc::ledger_line(day, title, reason);
         if let Err(err) = crate::config::append_memory("MEMORY.md", &line) {
             self.status = err;
         }
         self.pulse_view.ledger_at = None;
+        if let Some(signal) = interests_ui::ledger_signal(reason) {
+            self.interests_feedback(title, signal);
+        }
         if reason.is_taste() {
             self.pulse_taste_tick();
         }
     }
 
-    fn pulse_card(&self, id: &str) -> Option<UpdateCard> {
+    pub(super) fn pulse_card(&self, id: &str) -> Option<UpdateCard> {
         self.updates.iter().find(|c| c.id == id).cloned()
     }
 
@@ -1539,7 +1609,7 @@ impl Cabin {
         until
     }
 
-    fn pulse_remove(&mut self, card: &UpdateCard) {
+    pub(super) fn pulse_remove(&mut self, card: &UpdateCard) {
         if card.kind == UpdateKind::Idea {
             self.delete_idea(&card.id);
         } else {
@@ -1783,7 +1853,7 @@ impl Cabin {
         let prompt = pc::rewrite_prompt(&self.cfg.feed_instructions, &taste);
         let (tx, rx) = mpsc::channel();
         self.pulse_view.rewrite_rx = Some(rx);
-        self.spawn_native_ideas(prompt, tx);
+        self.spawn_native_ideas(prompt, tx, None);
     }
 
     pub(super) fn poll_pulse_rewrite(&mut self) {

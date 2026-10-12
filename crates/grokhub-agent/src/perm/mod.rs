@@ -459,6 +459,11 @@ fn grant_covers(policy: &Policy, raw: &str, facts: &Facts) -> bool {
     })
 }
 
+/// A shell script made only of read-only commands (the same test that auto-allows them).
+pub fn shell_is_readonly(script: &str) -> bool {
+    readonly_shell(&split::analyze(script))
+}
+
 fn readonly_shell(facts: &Facts) -> bool {
     facts.segments.as_ref().is_some_and(|segs| {
         !segs.is_empty()

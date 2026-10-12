@@ -25,6 +25,14 @@ pub struct ChatThread {
     pub title_locked: bool,
     #[serde(default)]
     pub accessed_ms: u64,
+    /// Last open, message, or edit. Auto-archive idle uses this (or `accessed_ms`
+    /// when still zero). Opening a chat bumps this without moving History order.
+    #[serde(default)]
+    pub last_active_ms: u64,
+    /// When set, the chat is archived: hidden from the main list, kept in full,
+    /// findable in search and the Archived view.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub archived_at: Option<u64>,
     #[serde(default)]
     pub grok_session: Option<String>,
     /// Worktree this Grok session was created in. Resume must load here, not the currently bound tree.
@@ -59,6 +67,10 @@ pub struct ChatThread {
     /// Adopted from the CLI and not yet given a recap of its earlier turns.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub native_carry: bool,
+    /// This chat's own personality id, picked in the chat header. Empty follows the
+    /// default in Settings.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub personality: String,
 }
 
 impl ChatThread {
@@ -73,6 +85,8 @@ impl ChatThread {
             pinned_ms: 0,
             title_locked: false,
             accessed_ms: 0,
+            last_active_ms: 0,
+            archived_at: None,
             grok_session: None,
             grok_cwd: None,
             grok_user_home: false,
@@ -84,6 +98,7 @@ impl ChatThread {
             retired_sessions: Vec::new(),
             native: false,
             native_carry: false,
+            personality: String::new(),
         }
     }
 
@@ -498,6 +513,9 @@ fn listed_user_chat(
     live_idx: Option<usize>,
     live_empty: bool,
 ) -> bool {
+    if thread.archived_at.is_some() {
+        return false;
+    }
     let empty = if Some(index) == live_idx {
         live_empty
     } else {
@@ -508,6 +526,96 @@ fn listed_user_chat(
         .as_deref()
         .is_some_and(|s| !s.trim().is_empty());
     user_history_row(thread.background, &thread.title, empty, has_session)
+}
+
+/// Milliseconds of last activity for auto-archive idle. Opens bump
+/// `last_active_ms`; messages and edits bump `accessed_ms` too.
+pub fn activity_ms(thread: &ChatThread) -> u64 {
+    thread.last_active_ms.max(thread.accessed_ms)
+}
+
+pub fn is_archived(thread: &ChatThread) -> bool {
+    thread.archived_at.is_some()
+}
+
+/// Archive a chat. Returns false when it was already archived.
+pub fn archive_thread(thread: &mut ChatThread, now_ms: u64) -> bool {
+    if thread.archived_at.is_some() {
+        return false;
+    }
+    thread.archived_at = Some(now_ms);
+    true
+}
+
+/// Restore a chat to the main list. Returns false when it was not archived.
+pub fn unarchive_thread(thread: &mut ChatThread) -> bool {
+    if thread.archived_at.take().is_none() {
+        return false;
+    }
+    true
+}
+
+/// One day in milliseconds for the auto-archive idle window.
+pub const DAY_MS: u64 = 24 * 60 * 60 * 1000;
+
+/// Whether this chat is idle long enough to auto-archive.
+/// Pinned chats and busy chats (caller passes `busy`) are never auto-archived.
+pub fn should_auto_archive(thread: &ChatThread, now_ms: u64, days: u32, busy: bool) -> bool {
+    if days == 0 || busy || thread.pinned || thread.background || thread.archived_at.is_some() {
+        return false;
+    }
+    let has_session = thread
+        .grok_session
+        .as_deref()
+        .is_some_and(|s| !s.trim().is_empty());
+    if !user_history_row(
+        thread.background,
+        &thread.title,
+        thread.messages.is_empty(),
+        has_session,
+    ) {
+        return false;
+    }
+    let idle = now_ms.saturating_sub(activity_ms(thread));
+    idle >= u64::from(days) * DAY_MS
+}
+
+/// Archived chats for the sidebar/page, newest archive first.
+pub fn archived_section_indices(
+    threads: &[ChatThread],
+    live_idx: Option<usize>,
+    live_empty: bool,
+) -> Vec<usize> {
+    let mut rows: Vec<(u64, usize)> = threads
+        .iter()
+        .enumerate()
+        .filter(|(i, t)| {
+            t.archived_at.is_some() && {
+                let empty = if Some(*i) == live_idx {
+                    live_empty
+                } else {
+                    t.messages.is_empty()
+                };
+                let has_session = t
+                    .grok_session
+                    .as_deref()
+                    .is_some_and(|s| !s.trim().is_empty());
+                user_history_row(t.background, &t.title, empty, has_session)
+            }
+        })
+        .map(|(i, t)| (t.archived_at.unwrap_or(0), i))
+        .collect();
+    rows.sort_by(|a, b| b.0.cmp(&a.0).then(b.1.cmp(&a.1)));
+    rows.into_iter().map(|(_, i)| i).collect()
+}
+
+/// Search title for a chat: archived rows get an "Archived" tag.
+pub fn search_thread_title(title: &str, archived: bool) -> String {
+    if archived {
+        format!("Archived · {title}")
+    } else {
+        title.to_string()
+    }
 }
 
 /// Chat section. Project selection is not an input, so a project click cannot
@@ -2037,5 +2145,70 @@ mod tests {
         assert!(!recap.contains("now"));
         assert!(!recap.contains("card"));
         assert_eq!(native_carry_recap(&[("user".into(), "only".into())]), "");
+    }
+
+    #[test]
+    fn archive_hides_from_main_list_and_shows_in_archived() {
+        let mut keep = ChatThread::new("Keep me", false);
+        keep.messages_mut().push(("user".into(), "stay".into()));
+        keep.accessed_ms = 100;
+        let mut done = ChatThread::new("Done chat", false);
+        done.messages_mut().push(("user".into(), "old".into()));
+        done.accessed_ms = 50;
+        assert!(archive_thread(&mut done, 1_000));
+        assert!(!archive_thread(&mut done, 2_000), "already archived");
+        let threads = vec![keep, done];
+        let main = chat_section_indices(&threads, None, false);
+        assert_eq!(
+            main.iter().map(|&i| threads[i].title.as_str()).collect::<Vec<_>>(),
+            ["Keep me"]
+        );
+        let archived = archived_section_indices(&threads, None, false);
+        assert_eq!(archived, vec![1]);
+        assert_eq!(threads[1].archived_at, Some(1_000));
+        let legacy: ChatThread = serde_json::from_str(r#"{"id":"t1","title":"legacy"}"#).unwrap();
+        assert!(legacy.archived_at.is_none());
+        assert_eq!(legacy.last_active_ms, 0);
+        assert!(!is_archived(&legacy));
+    }
+
+    #[test]
+    fn auto_archive_skips_fresh_pinned_and_busy() {
+        let now = 20 * DAY_MS;
+        let mut idle15 = ChatThread::new("Fifteen", false);
+        idle15.messages_mut().push(("user".into(), "hi".into()));
+        idle15.accessed_ms = now - 15 * DAY_MS;
+        let mut idle13 = ChatThread::new("Thirteen", false);
+        idle13.messages_mut().push(("user".into(), "hi".into()));
+        idle13.accessed_ms = now - 13 * DAY_MS;
+        let mut pinned = ChatThread::new("Pinned", false);
+        pinned.messages_mut().push(("user".into(), "hi".into()));
+        pinned.accessed_ms = now - 20 * DAY_MS;
+        pinned.pinned = true;
+        assert!(should_auto_archive(&idle15, now, 14, false));
+        assert!(!should_auto_archive(&idle13, now, 14, false));
+        assert!(!should_auto_archive(&pinned, now, 14, false));
+        assert!(!should_auto_archive(&idle15, now, 14, true), "busy skips");
+        assert!(!should_auto_archive(&idle15, now, 0, false), "off");
+        idle13.last_active_ms = now - 2 * DAY_MS;
+        idle13.accessed_ms = now - 20 * DAY_MS;
+        assert!(
+            !should_auto_archive(&idle13, now, 14, false),
+            "a recent open keeps it: activity_ms={}",
+            activity_ms(&idle13)
+        );
+    }
+
+    #[test]
+    fn unarchive_and_search_title_tag() {
+        let mut t = ChatThread::new("Night watch", false);
+        t.messages_mut().push(("user".into(), "keep".into()));
+        assert!(archive_thread(&mut t, 9));
+        assert_eq!(search_thread_title(&t.title, is_archived(&t)), "Archived · Night watch");
+        assert!(unarchive_thread(&mut t));
+        assert!(!is_archived(&t));
+        assert!(!unarchive_thread(&mut t));
+        assert_eq!(search_thread_title(&t.title, false), "Night watch");
+        assert_eq!(t.messages[0].1, "keep", "archive never deletes messages");
     }
 }

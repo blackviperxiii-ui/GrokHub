@@ -106,12 +106,17 @@ pub enum StreamEvent {
     ReasoningDelta(String),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct TurnOutput {
     pub text: String,
     pub reasoning: String,
     pub calls: Vec<FunctionCall>,
     pub usage: Usage,
+    /// True when the stream ended as `response.incomplete` (or status
+    /// incomplete). Tool calls in this turn must not run.
+    pub truncated: bool,
+    /// Provider reason for truncation, when present (e.g. `max_output_tokens`).
+    pub truncate_reason: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -155,7 +160,19 @@ impl ClientError {
                 | ClientError::Server { .. }
                 | ClientError::Transport(_)
                 | ClientError::Disconnect
-        )
+        ) && !self.is_context_length()
+    }
+
+    /// True when the provider refused the request because the prompt is too long.
+    /// Not retryable as a transient error; the run loop compacts and retries once.
+    pub fn is_context_length(&self) -> bool {
+        let msg = match self {
+            ClientError::Protocol(message)
+            | ClientError::Server { message, .. }
+            | ClientError::Transport(message) => message.as_str(),
+            _ => return false,
+        };
+        context_length_message(msg)
     }
 
     pub fn retry_after_secs(&self) -> Option<u64> {
@@ -165,6 +182,20 @@ impl ClientError {
             _ => None,
         }
     }
+}
+
+fn context_length_message(message: &str) -> bool {
+    let lower = message.to_ascii_lowercase();
+    lower.contains("context_length")
+        || lower.contains("context length")
+        || lower.contains("maximum context")
+        || lower.contains("context window")
+        || lower.contains("too many tokens")
+        || lower.contains("prompt is too long")
+        || lower.contains("prompt too long")
+        || lower.contains("token limit")
+        || lower.contains("max_tokens") && lower.contains("exceed")
+        || lower.contains("exceeds the context")
 }
 
 pub fn map_http_status(
@@ -545,6 +576,8 @@ fn read_sse<R: Read>(
     let mut reasoning = String::new();
     let mut calls = Vec::new();
     let mut usage = Usage::default();
+    let mut truncated = false;
+    let mut truncate_reason = None;
     loop {
         if cancel.is_cancelled() {
             drop(reader);
@@ -563,7 +596,16 @@ fn read_sse<R: Read>(
             }
         };
         let chunk = String::from_utf8_lossy(&buf[..n]);
-        fold_events(parser.push(&chunk), sink, &mut text, &mut reasoning, &mut calls, &mut usage)?;
+        fold_events(
+            parser.push(&chunk),
+            sink,
+            &mut text,
+            &mut reasoning,
+            &mut calls,
+            &mut usage,
+            &mut truncated,
+            &mut truncate_reason,
+        )?;
     }
     fold_events(
         parser.finish()?,
@@ -572,8 +614,17 @@ fn read_sse<R: Read>(
         &mut reasoning,
         &mut calls,
         &mut usage,
+        &mut truncated,
+        &mut truncate_reason,
     )?;
-    Ok(TurnOutput { text, reasoning, calls, usage })
+    Ok(TurnOutput {
+        text,
+        reasoning,
+        calls,
+        usage,
+        truncated,
+        truncate_reason,
+    })
 }
 
 fn fold_events(
@@ -583,6 +634,8 @@ fn fold_events(
     reasoning: &mut String,
     calls: &mut Vec<FunctionCall>,
     usage: &mut Usage,
+    truncated: &mut bool,
+    truncate_reason: &mut Option<String>,
 ) -> Result<(), ClientError> {
     for ev in events {
         match ev {
@@ -595,7 +648,19 @@ fn fold_events(
                 sink(StreamEvent::ReasoningDelta(delta));
             }
             SseEvent::FunctionCall(call) => calls.push(call),
-            SseEvent::Completed(next) => *usage = next,
+            SseEvent::Completed {
+                usage: next,
+                incomplete,
+                incomplete_reason,
+            } => {
+                *usage = next;
+                if incomplete {
+                    *truncated = true;
+                    if let Some(reason) = incomplete_reason {
+                        *truncate_reason = Some(reason);
+                    }
+                }
+            }
             SseEvent::Error(message) => return Err(ClientError::Protocol(message)),
         }
     }
@@ -673,6 +738,12 @@ mod tests {
         assert!(map_http_status(500, "x", None, AuthKind::ApiKey).is_retryable());
         assert!(!ClientError::IdleTimeout.is_retryable());
         assert!(ClientError::Disconnect.is_retryable());
+        let overflow = ClientError::Protocol(
+            "HTTP 400: This model's maximum context length was exceeded".into(),
+        );
+        assert!(overflow.is_context_length());
+        assert!(!overflow.is_retryable());
+        assert!(!ClientError::Protocol("disk full".into()).is_context_length());
     }
 
     /// 2.10.87: native path. A saved `minimal` goes out as `low`; `off` sends none.
