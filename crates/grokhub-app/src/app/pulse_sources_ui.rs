@@ -1246,10 +1246,7 @@ mod tests {
         let more = id(&cabin, "Rust async book");
         cabin.source_post_act(&more, SourceAct::MoreLike);
         assert_eq!(cabin.status, "Looking for more like this…");
-        assert!(
-            cabin.sources.looking_more,
-            "Feed button flips to Looking…"
-        );
+        assert!(cabin.sources.looking_more, "Feed button flips to Looking…");
         assert!(
             cabin.sources.rx.is_some(),
             "More like this starts a source check now"
@@ -1374,10 +1371,7 @@ mod tests {
             "Feed button needs looking_more: {act}"
         );
         let ui = include_str!("pulse_ui.rs");
-        assert!(
-            ui.contains("\"Looking…\""),
-            "button label while looking"
-        );
+        assert!(ui.contains("\"Looking…\""), "button label while looking");
         let feed = ui
             .split("fn ui_pulse_feed(")
             .nth(1)

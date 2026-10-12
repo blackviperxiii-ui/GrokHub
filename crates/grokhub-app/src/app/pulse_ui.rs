@@ -806,13 +806,12 @@ fn paint_source_actions(
             SourceAct::MoreLike,
         ),
     ] {
-        let color = if (did == SourceAct::Save && saved)
-            || (did == SourceAct::MoreLike && looking_more)
-        {
-            crate::theme::fg()
-        } else {
-            crate::theme::muted()
-        };
+        let color =
+            if (did == SourceAct::Save && saved) || (did == SourceAct::MoreLike && looking_more) {
+                crate::theme::fg()
+            } else {
+                crate::theme::muted()
+            };
         let button = ui.add(
             egui::Button::new(
                 RichText::new(label)
