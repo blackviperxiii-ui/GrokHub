@@ -65,10 +65,10 @@ mod changes;
 mod consent;
 mod cua;
 mod detect;
-mod evidence;
 mod egress;
 #[cfg(test)]
 mod egress_coverage;
+mod evidence;
 mod hard;
 mod ladder;
 mod mindcheck;
@@ -140,15 +140,15 @@ pub use detect::{
     Evidence, Finding, SpanKind, ACTION_LOOP, APPROVAL_GATE_VIOLATION, CLAIMED_CLICK_NO_CHANGE,
     DONE_WITHOUT_CRITERIA, UNSUPPORTED_ASSURANCE,
 };
-pub use evidence::{
-    evidence_summary, latest_evidence_turn, run_evidence, RunEvidence, EVIDENCE_LINES_CAP,
-};
 pub use egress::{
     append_egress, current_origin, egress_dest, egress_path, guard_egress, guard_or_park,
     guard_provider, guard_quiet, is_local_dest, is_model_host, model_text_classes,
     provider_or_park, read_egress, read_egress_report, record_approved_once, DataClass,
     EgressBasis, EgressLine, EgressRead, EgressReq, OriginScope, RecallScope, EGRESS_FILE,
     HUB_DEST, HUB_SYNC_DATA,
+};
+pub use evidence::{
+    evidence_summary, latest_evidence_turn, run_evidence, RunEvidence, EVIDENCE_LINES_CAP,
 };
 pub use hard::{
     classify, classify_ask, click_action, click_rule, click_target, click_target_class,

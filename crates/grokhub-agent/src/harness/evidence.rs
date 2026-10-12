@@ -228,8 +228,8 @@ pub fn run_evidence(
     }
 
     // A successful tool is not proof the user outcome succeeded.
-    let goal_verified = verify == Some(true)
-        || matches!(outcome.map(|o| o.result), Some(OutcomeResult::Success));
+    let goal_verified =
+        verify == Some(true) || matches!(outcome.map(|o| o.result), Some(OutcomeResult::Success));
     let tool_ran_not_verified = !goal_verified;
     let confidence = if goal_verified {
         "verified"
@@ -253,7 +253,10 @@ pub fn run_evidence(
             outcome.and_then(|o| match o.result {
                 OutcomeResult::Failure => Some(format!(
                     "Retry or correct: {}",
-                    o.reasons.first().map(String::as_str).unwrap_or("see checks")
+                    o.reasons
+                        .first()
+                        .map(String::as_str)
+                        .unwrap_or("see checks")
                 )),
                 OutcomeResult::Pending => {
                     Some("Wait for undo window, or undo a change if needed".into())
@@ -379,7 +382,12 @@ mod tests {
     #[test]
     fn failed_outcome_exposes_recovery_and_does_not_claim_success() {
         let park = at(
-            Span::hard_park("c1", "run_command", r#"{"command":"rm"}"#, HardClass::Delete),
+            Span::hard_park(
+                "c1",
+                "run_command",
+                r#"{"command":"rm"}"#,
+                HardClass::Delete,
+            ),
             4,
             2,
             "c1",

@@ -1260,9 +1260,9 @@ impl Cabin {
                                 .as_ref()
                                 .filter(|e| e.chat_id == thread_id)
                                 .cloned();
-                            let evidence_at = evidence
-                                .as_ref()
-                                .and_then(|_| super::evidence_ui::evidence_host_row(&self.chat_views));
+                            let evidence_at = evidence.as_ref().and_then(|_| {
+                                super::evidence_ui::evidence_host_row(&self.chat_views)
+                            });
                             let (views, keys) = (&self.chat_views, &self.chat_view_keys);
                             let shown = if live {
                                 views_up_to_last_user(views)
