@@ -430,6 +430,10 @@ pub struct AppConfig {
     /// this many days are retired once a day, apart from dream. 0 keeps all.
     #[serde(default = "default_amr_retention_days", deserialize_with = "de_amr_retention_days")]
     pub amr_retention_days: u32,
+    /// Settings → Behavior → Auto-archive: chats with no activity for this many
+    /// days move to Archived (still searchable). 0 is off. Default 14.
+    #[serde(default = "default_chat_archive_days", deserialize_with = "de_chat_archive_days")]
+    pub chat_archive_days: u32,
     /// Spike-2a flag: Cua Driver as a second pair of hands on Linux
     /// (`grokhub --mcp-cua`). Omitted from `app.json` while false. No Settings control.
     #[serde(default, skip_serializing_if = "is_false")]
@@ -535,6 +539,16 @@ fn de_amr_retention_days<'de, D: serde::Deserializer<'de>>(d: D) -> Result<u32, 
     Ok(raw.as_i64().map_or_else(default_amr_retention_days, |n| n.clamp(0, 3650) as u32))
 }
 
+fn default_chat_archive_days() -> u32 {
+    14
+}
+
+/// A whole number clamps to 0–3650; anything else is the default (14).
+fn de_chat_archive_days<'de, D: serde::Deserializer<'de>>(d: D) -> Result<u32, D::Error> {
+    let raw = serde_json::Value::deserialize(d)?;
+    Ok(raw.as_i64().map_or_else(default_chat_archive_days, |n| n.clamp(0, 3650) as u32))
+}
+
 fn default_imagine_wall() -> bool {
     true
 }
@@ -631,6 +645,7 @@ impl Default for AppConfig {
             self_improve_quiet: false,
             personality: String::new(),
             amr_retention_days: default_amr_retention_days(),
+            chat_archive_days: default_chat_archive_days(),
             cua_driver: false,
             cua_driver_path: String::new(),
             theme: default_theme(),
@@ -1414,6 +1429,21 @@ mod tests {
         }
         let text = serde_json::to_string(&AppConfig { amr_retention_days: 180, ..AppConfig::default() }).unwrap();
         assert!(text.contains("\"amrRetentionDays\":180"), "{text}");
+    }
+
+    #[test]
+    fn chat_archive_days_defaults_to_14_clamps_and_round_trips() {
+        let old: AppConfig = serde_json::from_str("{}").unwrap();
+        assert_eq!(old.chat_archive_days, 14);
+        for (raw, want) in [("7", 7), ("0", 0), ("99999", 3650), ("-4", 0), ("\"long\"", 14)] {
+            let cfg: AppConfig =
+                serde_json::from_str(&format!("{{\"chatArchiveDays\": {raw}}}")).unwrap();
+            assert_eq!(cfg.chat_archive_days, want, "{raw}");
+        }
+        let text =
+            serde_json::to_string(&AppConfig { chat_archive_days: 30, ..AppConfig::default() })
+                .unwrap();
+        assert!(text.contains("\"chatArchiveDays\":30"), "{text}");
     }
 
     #[test]
