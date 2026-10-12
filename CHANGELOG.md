@@ -2,7 +2,11 @@
 
 ## Unreleased
 
+<<<<<<< HEAD
 - Fixed: a stalled repair/research run's fallback findings card no longer offers a "Finish the rest" one-tap when the open todos ask to grant workspace/OS access or activate a skill (the same doom-loop #720 already refused on `report_findings`). Stored cards drop those pills when painted.
+=======
+- Security: Pulse feed and image fetches no longer use `HTTP(S)_PROXY` from the environment. An env proxy would dial the proxy host and skip the public-only DNS check on the target URL; they now match `web_fetch` and resolve the target directly.
+>>>>>>> origin/beta
 - Fixed: sealed Installed-app learnings (and other scope facts) reach the model on gaming / Steam / library asks — first turn and follow-ups — even when Memory is still on the legacy backend, so the cabin no longer claims "no recorded info" while Settings shows Learned N things. Steam is matched as a whole word so coding asks about `upstream` / `downstream` do not pull the Installed-app pack.
 - Fixed: cabin skills under the settings `skills/` folder (the same ones `skill_list` shows) load with the `skill` tool; names normalize so `GamingProfile` and `steamlibreview` resolve instead of `unknown skill`.
 - Fixed: the system prompt no longer claims every chat is a permanent read-only phase; it says what tools are available, to prefer sealed Installed-app Memory over `~/.steam` workspace walks, and not to invent OS-permission "fixes".
