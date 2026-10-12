@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Pulse diversifies what it follows from what you like. A check posts at most two stories from one source (so Hacker News cannot fill the whole run), searches your strongest interest every time and rotates the other topic slots so weaker interests still get a look, and gives a small score bump to under-seen sources. Save or More like this twice on posts from the same subreddit, GitHub repo or YouTube channel adds that place to Settings → Pulse → Sources when that source kind is on.
 - Code is now rustfmt-clean and CI checks formatting.
 - Fixed: source-window tests match rustfmt-wrapped needles (`session_row`, `Margin::symmetric`, `feed_prompt`) and the composer Pill scan window is 15,000 bytes.
 - Beta builds are labeled X.Y.Z-beta.N and compare correctly against releases. GitHub tags `vX.Y.Z-beta.N` publish as pre-releases (never Latest); stable `vX.Y.Z` tags are unchanged.
