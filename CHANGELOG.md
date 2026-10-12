@@ -4,6 +4,7 @@
 
 - Code is now rustfmt-clean and CI checks formatting.
 - Fixed: source-window tests match rustfmt-wrapped needles (`session_row`, `Margin::symmetric`, `feed_prompt`) and the composer Pill scan window is 15,000 bytes.
+- Fixed: the "Archived N idle chats" composer row and the History sidebar Archived section no longer appear; archived chats stay out of History lists and search. Archive / Unarchive, auto-archive, and Undo remain.
 
 ## 3.0.0 — 2026-10-12
 

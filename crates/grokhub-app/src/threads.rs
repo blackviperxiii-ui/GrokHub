@@ -584,35 +584,6 @@ pub fn should_auto_archive(thread: &ChatThread, now_ms: u64, days: u32, busy: bo
     idle >= u64::from(days) * DAY_MS
 }
 
-/// Archived chats for the sidebar/page, newest archive first.
-pub fn archived_section_indices(
-    threads: &[ChatThread],
-    live_idx: Option<usize>,
-    live_empty: bool,
-) -> Vec<usize> {
-    let mut rows: Vec<(u64, usize)> = threads
-        .iter()
-        .enumerate()
-        .filter(|(i, t)| {
-            t.archived_at.is_some() && {
-                let empty = if Some(*i) == live_idx {
-                    live_empty
-                } else {
-                    t.messages.is_empty()
-                };
-                let has_session = t
-                    .grok_session
-                    .as_deref()
-                    .is_some_and(|s| !s.trim().is_empty());
-                user_history_row(t.background, &t.title, empty, has_session)
-            }
-        })
-        .map(|(i, t)| (t.archived_at.unwrap_or(0), i))
-        .collect();
-    rows.sort_by(|a, b| b.0.cmp(&a.0).then(b.1.cmp(&a.1)));
-    rows.into_iter().map(|(_, i)| i).collect()
-}
-
 /// Search title for a chat: archived rows get an "Archived" tag.
 pub fn search_thread_title(title: &str, archived: bool) -> String {
     if archived {
@@ -2216,8 +2187,8 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["Keep me"]
         );
-        let archived = archived_section_indices(&threads, None, false);
-        assert_eq!(archived, vec![1]);
+        assert!(is_archived(&threads[1]));
+        assert!(!main.contains(&1), "archived chat stays off the main list");
         assert_eq!(threads[1].archived_at, Some(1_000));
         let legacy: ChatThread = serde_json::from_str(r#"{"id":"t1","title":"legacy"}"#).unwrap();
         assert!(legacy.archived_at.is_none());

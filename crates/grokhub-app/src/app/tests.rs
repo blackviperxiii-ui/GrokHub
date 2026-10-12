@@ -2884,6 +2884,13 @@ fn history_rail_uses_session_names_and_can_delete() {
         rail.contains("is_background_history_title"),
         "sidebar History must drop workboard summarize and similar: {rail}"
     );
+    let side = include_str!("sidebar.rs");
+    assert!(
+        !side.contains("rail-archived")
+            && !side.contains("RichText::new(\"Archived\")")
+            && !side.contains("No archived chats"),
+        "sidebar must not paint an Archived section: {side}"
+    );
     let page = src
         .split("crate::cards::section_label(ui, \"Chats\")")
         .nth(1)
@@ -2900,6 +2907,12 @@ fn history_rail_uses_session_names_and_can_delete() {
     assert!(
         page.contains("is_background_history_title"),
         "History page must not list workboard summarize: {page}"
+    );
+    assert!(
+        !page.contains("Archived chats")
+            && !page.contains("No archived chats")
+            && !page.contains("\"Unarchive\""),
+        "History page must not paint an Archived drawer: {page}"
     );
     let dta = fn_src(&src, "delete_thread_at");
     assert!(
@@ -8819,6 +8832,56 @@ fn pin_thread_flips_the_pin() {
 }
 
 #[test]
+fn composer_and_history_omit_archived_idle_chrome() {
+    let src = cabin_src();
+    let toast = fn_src(&src, "paint_archive_toast");
+    assert!(
+        !toast.contains("idle chat")
+            && !toast.contains("idle chats")
+            && !toast.contains("auto_archive_note")
+            && !toast.contains("ghost_pill(ui, \"Archived\")")
+            && !toast.contains("Nav::History"),
+        "composer archive toast must not show idle-archive chrome: {toast}"
+    );
+    assert!(
+        toast.contains("ghost_pill(ui, \"Undo\")"),
+        "manual archive Undo toast stays: {toast}"
+    );
+    let live = src
+        .split("ComposerStackSlot::LiveWork =>")
+        .nth(1)
+        .and_then(|s| s.split("ComposerStackSlot::SlashPalette =>").next())
+        .expect("LiveWork slot");
+    assert!(
+        live.contains("paint_archive_toast") && !live.contains("idle chat"),
+        "LiveWork must not embed idle-archive labels: {live}"
+    );
+    let hist = src
+        .split("fn ui_history(")
+        .nth(1)
+        .and_then(|s| s.split("fn ui_board(").next())
+        .expect("ui_history");
+    assert!(
+        !hist.contains("history_archived")
+            && !hist.contains("\"Archived\"")
+            && !hist.contains("Archived chats"),
+        "History must not offer an Archived view: {hist}"
+    );
+    let side = include_str!("sidebar.rs");
+    assert!(
+        !side.contains("rail-archived")
+            && !side.contains("RichText::new(\"Archived\")")
+            && !side.contains("No archived chats"),
+        "sidebar must not list Archived chats: {side}"
+    );
+    let kick = fn_src(&src, "kick_history_search");
+    assert!(
+        kick.contains("is_archived") && kick.contains("continue"),
+        "History search must skip archived chats: {kick}"
+    );
+}
+
+#[test]
 fn archive_hides_from_main_list_and_reply_restores() {
     let mut quiet = QuietCabin::boot("chat-archive");
     let cabin = &mut quiet.cabin;
@@ -8837,10 +8900,6 @@ fn archive_hides_from_main_list_and_reply_restores() {
     assert_eq!(
         crate::threads::chat_section_indices(&cabin.threads, Some(1), false),
         vec![0]
-    );
-    assert_eq!(
-        crate::threads::archived_section_indices(&cabin.threads, Some(1), false),
-        vec![1]
     );
     assert_eq!(cabin.status, "Archived Done chat");
     assert_eq!(
@@ -8889,7 +8948,7 @@ fn auto_archive_15_day_idle_skips_13_day_pinned_and_busy() {
     assert!(!crate::threads::is_archived(&cabin.threads[1]));
     assert!(!crate::threads::is_archived(&cabin.threads[2]));
     assert!(!crate::threads::is_archived(&cabin.threads[3]));
-    assert_eq!(cabin.auto_archive_note, Some(1));
+    assert_eq!(cabin.status, "Archived 1 idle chat");
     quiet.settle();
 }
 
@@ -16231,10 +16290,8 @@ fn quiet_cabin() -> Cabin {
         history_q_seen: String::new(),
         history_q_at: None,
         history_hits: Vec::new(),
-        history_archived: false,
         archive_undo: None,
         chat_archive_day: None,
-        auto_archive_note: None,
         last_receipt_ok: None,
         beta_auto_off_checked_at: None,
         last_receipts: Vec::new(),
