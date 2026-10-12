@@ -26,7 +26,10 @@ const ROW_CHARS: usize = 120;
 
 /// The needs-attention line with `n` decisions waiting.
 pub(super) fn inbox_line(n: usize) -> String {
-    format!("{}. {INBOX_TAIL}", crate::motion::needs_attention_summary(n))
+    format!(
+        "{}. {INBOX_TAIL}",
+        crate::motion::needs_attention_summary(n)
+    )
 }
 
 /// Which decision a row answers. Indexes count the card on screen first,
@@ -98,11 +101,18 @@ fn scrub(text: &str, held: &[String]) -> String {
 /// A hard park in plain words. A delete names its paths and count.
 pub(super) fn hard_words(class: HardClass, tool: &str, action: &str, held: &[String]) -> String {
     let action = scrub(action, held);
-    let action = if action.trim().is_empty() { tool } else { action.trim() };
+    let action = if action.trim().is_empty() {
+        tool
+    } else {
+        action.trim()
+    };
     let text = match class {
         HardClass::Delete => {
             let paths = hx::delete_targets(action);
-            if action.starts_with("delete ") || action.starts_with("move to the trash ") || action.starts_with("press ") {
+            if action.starts_with("delete ")
+                || action.starts_with("move to the trash ")
+                || action.starts_with("press ")
+            {
                 capitalized(action)
             } else if paths.is_empty() {
                 format!("Delete: {action}")
@@ -124,7 +134,10 @@ pub(super) fn ask_words(p: &grokhub_core::wire::PermissionAsk, held: &[String]) 
     let (title, action) = (scrub(&p.title, held), scrub(&p.action, held));
     let (title, action) = (title.trim(), action.trim());
     let text = if super::harness_ui::is_desktop_ask(p) {
-        format!("Use the desktop: {}", if action.is_empty() { title } else { action })
+        format!(
+            "Use the desktop: {}",
+            if action.is_empty() { title } else { action }
+        )
     } else if action.is_empty() {
         title.to_string()
     } else {
@@ -145,7 +158,9 @@ impl Cabin {
 
     /// The chat a live ask or offer belongs to: the one running the turn.
     fn turn_chat(&self) -> String {
-        self.chat_job_thread.clone().unwrap_or_else(|| self.visible_thread_id())
+        self.chat_job_thread
+            .clone()
+            .unwrap_or_else(|| self.visible_thread_id())
     }
 
     /// One row per decision, in the order the cards stack. Its length is
@@ -159,25 +174,61 @@ impl Cabin {
             chat: self.chat_title(&chat_id),
             chat_id,
         };
-        for (i, p) in self.harness.park.iter().chain(self.harness.queue.iter()).enumerate() {
-            rows.push(row(InboxKey::Hard(i), true, hard_words(p.class, &p.tool, &p.action, &self.secret_hold), p.chat_id.clone()));
+        for (i, p) in self
+            .harness
+            .park
+            .iter()
+            .chain(self.harness.queue.iter())
+            .enumerate()
+        {
+            rows.push(row(
+                InboxKey::Hard(i),
+                true,
+                hard_words(p.class, &p.tool, &p.action, &self.secret_hold),
+                p.chat_id.clone(),
+            ));
         }
-        for (i, p) in self.perm_ask.iter().chain(self.perm_queue.iter()).enumerate() {
-            rows.push(row(InboxKey::Ask(i), false, ask_words(p, &self.secret_hold), self.turn_chat()));
+        for (i, p) in self
+            .perm_ask
+            .iter()
+            .chain(self.perm_queue.iter())
+            .enumerate()
+        {
+            rows.push(row(
+                InboxKey::Ask(i),
+                false,
+                ask_words(p, &self.secret_hold),
+                self.turn_chat(),
+            ));
         }
         for (i, p) in self.harness.soft_parks.iter().enumerate() {
             let what = cut(&format!("Paused and needs you: {}", p.reason));
             rows.push(row(InboxKey::Soft(i), false, what, p.chat_id.clone()));
         }
         if self.harness.full_card.is_some() {
-            rows.push(row(InboxKey::Full, false, "Click and type without asking for this session".into(), self.turn_chat()));
+            rows.push(row(
+                InboxKey::Full,
+                false,
+                "Click and type without asking for this session".into(),
+                self.turn_chat(),
+            ));
         }
         if let Some(e) = &self.elicit_ask {
-            rows.push(row(InboxKey::Elicit, false, cut(&format!("{} wants input", e.server_name)), self.turn_chat()));
+            rows.push(row(
+                InboxKey::Elicit,
+                false,
+                cut(&format!("{} wants input", e.server_name)),
+                self.turn_chat(),
+            ));
         }
         for (i, a) in self.harness.indexer.asks.all().iter().enumerate() {
             let label = super::scope_ui::scope_label(&a.scope.key());
-            rows.push(row(InboxKey::Scope(i), false, cut(&format!("Learn from {label}: {}", a.why)), self.visible_thread_id()));
+            rows.push(row(
+                InboxKey::Scope(i),
+                false,
+                cut(&format!("Learn from {label}: {}", a.why)),
+                self.visible_thread_id(),
+            ));
         }
         rows
     }
@@ -185,7 +236,9 @@ impl Cabin {
     /// Approve or Deny from a row: the same call its card makes.
     pub(super) fn inbox_answer(&mut self, key: InboxKey, approve: bool) {
         match key {
-            InboxKey::Hard(i) => self.resolve_hard_park_at(i, approve, if approve { "" } else { SOFT_DENY }),
+            InboxKey::Hard(i) => {
+                self.resolve_hard_park_at(i, approve, if approve { "" } else { SOFT_DENY })
+            }
             InboxKey::Ask(i) => self.answer_perm_at(i, approve, SOFT_DENY),
             InboxKey::Soft(i) => self.answer_soft_park(i, approve, SOFT_DENY),
             InboxKey::Full => self.resolve_grant_full(approve, "Viper kept Supervised"),
@@ -202,7 +255,10 @@ impl Cabin {
             InboxKey::Scope(i) => {
                 if let Some(a) = self.harness.indexer.asks.all().get(i).cloned() {
                     self.harness.indexer.asks.remove(&a.scope);
-                    self.status = format!("{} stays off.", super::scope_ui::scope_label(&a.scope.key()));
+                    self.status = format!(
+                        "{} stays off.",
+                        super::scope_ui::scope_label(&a.scope.key())
+                    );
                 }
             }
         }
@@ -252,7 +308,9 @@ impl Cabin {
         }
         let open = self.harness.inbox_open;
         let line = egui::Label::new(
-            RichText::new(inbox_line(n)).size(12.0).color(crate::theme::muted()),
+            RichText::new(inbox_line(n))
+                .size(12.0)
+                .color(crate::theme::muted()),
         )
         .wrap()
         .sense(egui::Sense::click());
@@ -299,7 +357,10 @@ fn inbox_open_t(ui: &egui::Ui, open: bool) -> f32 {
 
 /// Ids of a row's two buttons, so a key handler can tell when they have focus.
 pub(super) fn row_button_ids(key: InboxKey) -> (egui::Id, egui::Id) {
-    (egui::Id::new(("inbox-approve", key.salt())), egui::Id::new(("inbox-deny", key.salt())))
+    (
+        egui::Id::new(("inbox-approve", key.salt())),
+        egui::Id::new(("inbox-deny", key.salt())),
+    )
 }
 
 /// Keys on a focused row. Esc denies a hard row. Enter never approves one;
@@ -330,15 +391,21 @@ fn paint_row(ui: &mut egui::Ui, row: &InboxRow) -> Option<Option<bool>> {
             ui.set_max_width(inner);
             let words = ui
                 .add(
-                    egui::Label::new(RichText::new(&row.what).size(13.0).color(crate::theme::fg()))
-                        .wrap()
-                        .sense(egui::Sense::click()),
+                    egui::Label::new(
+                        RichText::new(&row.what)
+                            .size(13.0)
+                            .color(crate::theme::fg()),
+                    )
+                    .wrap()
+                    .sense(egui::Sense::click()),
                 )
                 .on_hover_cursor(egui::CursorIcon::PointingHand);
             let from = ui
                 .add(
                     egui::Label::new(
-                        RichText::new(format!("From {}", row.chat)).size(12.0).color(crate::theme::muted()),
+                        RichText::new(format!("From {}", row.chat))
+                            .size(12.0)
+                            .color(crate::theme::muted()),
                     )
                     .wrap()
                     .sense(egui::Sense::click()),
@@ -349,14 +416,35 @@ fn paint_row(ui: &mut egui::Ui, row: &InboxRow) -> Option<Option<bool>> {
             }
             ui.add_space(6.0);
             ui.horizontal(|ui| {
-                let primary = if row.key == InboxKey::Elicit { "Open" } else { "Approve" };
-                let approve = if row.hard {
-                    crate::cards::felt_pill_at(ui, Some(approve_id), primary, crate::cards::PillStyle::Danger)
-                        .clicked_by(egui::PointerButton::Primary)
+                let primary = if row.key == InboxKey::Elicit {
+                    "Open"
                 } else {
-                    crate::cards::felt_pill_at(ui, Some(approve_id), primary, crate::cards::PillStyle::Solid).clicked()
+                    "Approve"
                 };
-                let deny = crate::cards::felt_pill_at(ui, Some(deny_id), "Deny", crate::cards::PillStyle::Ghost).clicked();
+                let approve = if row.hard {
+                    crate::cards::felt_pill_at(
+                        ui,
+                        Some(approve_id),
+                        primary,
+                        crate::cards::PillStyle::Danger,
+                    )
+                    .clicked_by(egui::PointerButton::Primary)
+                } else {
+                    crate::cards::felt_pill_at(
+                        ui,
+                        Some(approve_id),
+                        primary,
+                        crate::cards::PillStyle::Solid,
+                    )
+                    .clicked()
+                };
+                let deny = crate::cards::felt_pill_at(
+                    ui,
+                    Some(deny_id),
+                    "Deny",
+                    crate::cards::PillStyle::Ghost,
+                )
+                .clicked();
                 if approve {
                     out = Some(Some(true));
                 } else if deny {
@@ -366,8 +454,14 @@ fn paint_row(ui: &mut egui::Ui, row: &InboxRow) -> Option<Option<bool>> {
             // egui drops focus when Esc arrives, so last frame's focus counts.
             let focus_key = approve_id.with("focused");
             let focused = ui.memory(|m| m.has_focus(approve_id) || m.has_focus(deny_id));
-            let was = ui.data_mut(|d| std::mem::replace(d.get_temp_mut_or_default::<bool>(focus_key), focused));
-            if let Some(answer) = row_key(row.hard, focused || was, super::chat_ui::bare_press(ui, egui::Key::Escape)) {
+            let was = ui.data_mut(|d| {
+                std::mem::replace(d.get_temp_mut_or_default::<bool>(focus_key), focused)
+            });
+            if let Some(answer) = row_key(
+                row.hard,
+                focused || was,
+                super::chat_ui::bare_press(ui, egui::Key::Escape),
+            ) {
                 ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
                 out = Some(Some(answer));
             }
@@ -418,7 +512,10 @@ mod tests {
 
     /// A hard rm, a desktop ask, and a ladder pause.
     fn three_mixed(cabin: &mut Cabin) {
-        assert_eq!(cabin.harness_precheck(ask("Run command", "rm -f /tmp/a.txt /tmp/b.txt")), None);
+        assert_eq!(
+            cabin.harness_precheck(ask("Run command", "rm -f /tmp/a.txt /tmp/b.txt")),
+            None
+        );
         cabin.perm_ask = Some(ask("grokhub-desktop__click", "click 10,20"));
         let chat = cabin.trace_id();
         cabin.harness.soft_parks.push(pause(&chat));
@@ -432,12 +529,27 @@ mod tests {
             .collect()
     }
 
-    fn row(path: &str, tool: &str, decision: &str, result: &str, class: &str) -> (String, String, String, String, String) {
-        (path.into(), tool.into(), decision.into(), result.into(), class.into())
+    fn row(
+        path: &str,
+        tool: &str,
+        decision: &str,
+        result: &str,
+        class: &str,
+    ) -> (String, String, String, String, String) {
+        (
+            path.into(),
+            tool.into(),
+            decision.into(),
+            result.into(),
+            class.into(),
+        )
     }
 
     fn frame(ctx: &egui::Context, events: Vec<egui::Event>, cabin: &mut Cabin) {
-        let raw = egui::RawInput { events, ..Default::default() };
+        let raw = egui::RawInput {
+            events,
+            ..Default::default()
+        };
         let _ = crate::theme::test_pass(ctx, raw, |ui| {
             egui::CentralPanel::default().show(ui, |ui| cabin.paint_inbox(ui));
         });
@@ -465,15 +577,24 @@ mod tests {
 
     #[test]
     fn line_reads_as_the_spec_and_zero_shows_nothing_new() {
-        assert_eq!(inbox_line(1), "1 thing needs a decision. Everything else is on track.");
-        assert_eq!(inbox_line(3), "3 things need a decision. Everything else is on track.");
+        assert_eq!(
+            inbox_line(1),
+            "1 thing needs a decision. Everything else is on track."
+        );
+        assert_eq!(
+            inbox_line(3),
+            "3 things need a decision. Everything else is on track."
+        );
         let (_pin, root) = pinned("inbox-zero");
         let mut cabin = Cabin::quiet_for_test();
         cabin.harness.inbox_open = true;
         assert_eq!(cabin.decisions_waiting(), 0);
         assert!(cabin.inbox_rows().is_empty());
         frame(&egui::Context::default(), Vec::new(), &mut cabin);
-        assert!(!cabin.harness.inbox_open, "with nothing waiting the line is not there to open");
+        assert!(
+            !cabin.harness.inbox_open,
+            "with nothing waiting the line is not there to open"
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -481,18 +602,38 @@ mod tests {
     fn three_mixed_parks_give_three_rows_with_words_and_chat() {
         let (_pin, root) = pinned("inbox-three");
         let mut cabin = loose_cabin();
-        cabin.threads.push(crate::threads::ChatThread::new("Tidy downloads", false));
+        cabin
+            .threads
+            .push(crate::threads::ChatThread::new("Tidy downloads", false));
         three_mixed(&mut cabin);
         let rows = cabin.inbox_rows();
         assert_eq!(rows.len(), 3);
         assert_eq!(rows.len(), cabin.decisions_waiting());
-        let shown: Vec<_> = rows.iter().map(|r| (r.key, r.hard, r.what.as_str(), r.chat.as_str())).collect();
+        let shown: Vec<_> = rows
+            .iter()
+            .map(|r| (r.key, r.hard, r.what.as_str(), r.chat.as_str()))
+            .collect();
         assert_eq!(
             shown,
             vec![
-                (InboxKey::Hard(0), true, "Delete 2 paths: /tmp/a.txt, /tmp/b.txt", "Tidy downloads"),
-                (InboxKey::Ask(0), false, "Use the desktop: click 10,20", "Tidy downloads"),
-                (InboxKey::Soft(0), false, "Paused and needs you: `click` ran 3 times", "Tidy downloads"),
+                (
+                    InboxKey::Hard(0),
+                    true,
+                    "Delete 2 paths: /tmp/a.txt, /tmp/b.txt",
+                    "Tidy downloads"
+                ),
+                (
+                    InboxKey::Ask(0),
+                    false,
+                    "Use the desktop: click 10,20",
+                    "Tidy downloads"
+                ),
+                (
+                    InboxKey::Soft(0),
+                    false,
+                    "Paused and needs you: `click` ran 3 times",
+                    "Tidy downloads"
+                ),
             ]
         );
         let _ = std::fs::remove_dir_all(root);
@@ -509,14 +650,23 @@ mod tests {
         cabin.inbox_answer(InboxKey::Ask(0), true);
         assert!(cabin.perm_ask.is_none(), "the ask card cleared too");
         cabin.inbox_answer(InboxKey::Soft(0), false);
-        assert!(cabin.harness.soft_parks.is_empty(), "the pause card cleared too");
+        assert!(
+            cabin.harness.soft_parks.is_empty(),
+            "the pause card cleared too"
+        );
         assert!(cabin.inbox_rows().is_empty());
         let logged = spans(&root, "session");
         assert_eq!(
             logged[before..].to_vec(),
             vec![
                 row("B", "Run command", "deny", "Viper denied", "delete"),
-                row("B", "grokhub-desktop__click", "approve", "allowed once", "soft"),
+                row(
+                    "B",
+                    "grokhub-desktop__click",
+                    "approve",
+                    "allowed once",
+                    "soft"
+                ),
                 row("audit", hx::RECOVERY_TOOL, "deny", "Viper denied", "soft"),
             ]
         );
@@ -539,16 +689,28 @@ mod tests {
         let ctx = snapped();
         frame(&ctx, Vec::new(), &mut cabin);
         let (approve, _) = row_button_ids(InboxKey::Hard(0));
-        assert!(ctx.read_response(approve).is_some(), "the hard row's Approve is on screen");
+        assert!(
+            ctx.read_response(approve).is_some(),
+            "the hard row's Approve is on screen"
+        );
         ctx.memory_mut(|m| m.request_focus(approve));
         frame(&ctx, key(egui::Key::Enter), &mut cabin);
         frame(&ctx, key(egui::Key::Space), &mut cabin);
-        assert!(cabin.harness.park.is_some(), "Enter or Space on a focused hard Approve must not approve");
+        assert!(
+            cabin.harness.park.is_some(),
+            "Enter or Space on a focused hard Approve must not approve"
+        );
         assert!(!spans(&root, "session").iter().any(|s| s.2 == "approve"));
         ctx.memory_mut(|m| m.request_focus(approve));
         frame(&ctx, key(egui::Key::Escape), &mut cabin);
-        assert!(cabin.harness.park.is_none(), "Esc on the focused hard row denies");
-        assert_eq!(spans(&root, "session").last().map(|s| s.2.as_str()), Some("deny"));
+        assert!(
+            cabin.harness.park.is_none(),
+            "Esc on the focused hard row denies"
+        );
+        assert_eq!(
+            spans(&root, "session").last().map(|s| s.2.as_str()),
+            Some("deny")
+        );
         // A soft row's focused Approve does answer from the keyboard.
         frame(&ctx, Vec::new(), &mut cabin);
         let (soft_approve, _) = row_button_ids(InboxKey::Ask(0));
@@ -563,7 +725,9 @@ mod tests {
         let (_pin, root) = pinned("inbox-halt");
         let mut cabin = loose_cabin();
         three_mixed(&mut cabin);
-        cabin.perm_queue.push_back(ask("grokhub-desktop__type", "type hello"));
+        cabin
+            .perm_queue
+            .push_back(ask("grokhub-desktop__type", "type hello"));
         let _ = cabin.harness_precheck(ask("send_email", "to someone"));
         assert_eq!(cabin.inbox_rows().len(), 5);
         let before = spans(&root, "session").len();
@@ -588,8 +752,12 @@ mod tests {
     fn a_row_jumps_to_its_chat_and_card() {
         let (_pin, root) = pinned("inbox-jump");
         let mut cabin = loose_cabin();
-        cabin.threads.push(crate::threads::ChatThread::new("Notes", false));
-        cabin.threads.push(crate::threads::ChatThread::new("Cleanup", false));
+        cabin
+            .threads
+            .push(crate::threads::ChatThread::new("Notes", false));
+        cabin
+            .threads
+            .push(crate::threads::ChatThread::new("Cleanup", false));
         let cleanup = cabin.threads[1].id.clone();
         let _ = cabin.harness_precheck(ask("send_email", "to someone"));
         cabin.thread_idx = 1;
@@ -597,11 +765,17 @@ mod tests {
         cabin.thread_idx = 0;
         cabin.nav = Nav::Workboard;
         let rows = cabin.inbox_rows();
-        assert_eq!((rows[1].chat.as_str(), rows[1].chat_id.as_str()), ("Cleanup", cleanup.as_str()));
+        assert_eq!(
+            (rows[1].chat.as_str(), rows[1].chat_id.as_str()),
+            ("Cleanup", cleanup.as_str())
+        );
         cabin.inbox_jump(InboxKey::Hard(1));
         assert_eq!(cabin.nav, Nav::Chat);
         assert_eq!(cabin.visible_thread_id(), cleanup);
-        assert_eq!(cabin.harness.park.as_ref().map(|p| p.action.as_str()), Some("rm -f /tmp/old.log"));
+        assert_eq!(
+            cabin.harness.park.as_ref().map(|p| p.action.as_str()),
+            Some("rm -f /tmp/old.log")
+        );
         assert_eq!(cabin.harness.jump, Some("hard"));
         let ctx = snapped();
         let _ = crate::theme::test_pass(&ctx, Default::default(), |ui| {
@@ -624,7 +798,10 @@ mod tests {
         });
         for key in [InboxKey::Hard(0), InboxKey::Ask(0), InboxKey::Soft(0)] {
             let (approve, deny) = row_button_ids(key);
-            assert!(ctx.read_response(approve).is_some() && ctx.read_response(deny).is_some(), "{key:?}");
+            assert!(
+                ctx.read_response(approve).is_some() && ctx.read_response(deny).is_some(),
+                "{key:?}"
+            );
         }
         let _ = std::fs::remove_dir_all(root);
     }
@@ -637,11 +814,24 @@ mod tests {
         let mut cabin = Cabin::quiet_for_test();
         let ledger = hx::ConsentLedger::load(&root);
         let asks = &mut cabin.harness.indexer.asks;
-        assert!(asks.ask(hx::Scope::Apps, "To suggest the right app I'd read your installed apps.", &ledger, now_ms()));
-        assert!(asks.ask(hx::Scope::SystemState, "To spot a full disk early I'd read your disk.", &ledger, now_ms()));
+        assert!(asks.ask(
+            hx::Scope::Apps,
+            "To suggest the right app I'd read your installed apps.",
+            &ledger,
+            now_ms()
+        ));
+        assert!(asks.ask(
+            hx::Scope::SystemState,
+            "To spot a full disk early I'd read your disk.",
+            &ledger,
+            now_ms()
+        ));
         let rows = cabin.inbox_rows();
         assert_eq!(rows.len(), cabin.decisions_waiting());
-        let shown: Vec<_> = rows.iter().map(|r| (r.key, r.hard, r.what.as_str())).collect();
+        let shown: Vec<_> = rows
+            .iter()
+            .map(|r| (r.key, r.hard, r.what.as_str()))
+            .collect();
         assert_eq!(
             shown,
             vec![
@@ -655,9 +845,23 @@ mod tests {
         let (approve, _) = row_button_ids(InboxKey::Scope(1));
         ctx.memory_mut(|m| m.request_focus(approve));
         frame(&ctx, key(egui::Key::Enter), &mut cabin);
-        assert_eq!(hx::ConsentLedger::load(&root).active().count(), 0, "a row never grants");
+        assert_eq!(
+            hx::ConsentLedger::load(&root).active().count(),
+            0,
+            "a row never grants"
+        );
         assert_eq!(cabin.harness.jump, Some("scope"));
-        assert_eq!(cabin.harness.indexer.asks.first().map(|a| a.scope.key()).as_deref(), Some("system_state"), "the jumped ask is on the card");
+        assert_eq!(
+            cabin
+                .harness
+                .indexer
+                .asks
+                .first()
+                .map(|a| a.scope.key())
+                .as_deref(),
+            Some("system_state"),
+            "the jumped ask is on the card"
+        );
         cabin.inbox_answer(InboxKey::Scope(1), false);
         assert_eq!(cabin.status, "Installed apps stays off.");
         assert_eq!(cabin.inbox_rows().len(), 1);
@@ -701,10 +905,16 @@ mod tests {
         ];
         assert_eq!(all.len(), 12);
         assert!(all.iter().all(|n| !page(*n).contains("inbox")));
-        let cards: Vec<_> = [InboxKey::Hard(0), InboxKey::Ask(0), InboxKey::Soft(0), InboxKey::Full, InboxKey::Elicit]
-            .into_iter()
-            .map(InboxKey::card)
-            .collect();
+        let cards: Vec<_> = [
+            InboxKey::Hard(0),
+            InboxKey::Ask(0),
+            InboxKey::Soft(0),
+            InboxKey::Full,
+            InboxKey::Elicit,
+        ]
+        .into_iter()
+        .map(InboxKey::card)
+        .collect();
         assert_eq!(cards, vec!["hard", "ask", "soft", "full", "elicit"]);
     }
 
@@ -720,9 +930,17 @@ mod tests {
             r"powershell -c [Microsoft.VisualBasic.FileIO.FileSystem]::DeleteFile('C:\old.txt','OnlyErrorDialogs','SendToRecycleBin')",
             r"cmd /c del C:\old.txt",
         ] {
-            assert_eq!(cabin.harness_precheck(ask("Run command", action)), None, "{action}");
+            assert_eq!(
+                cabin.harness_precheck(ask("Run command", action)),
+                None,
+                "{action}"
+            );
         }
-        let words: Vec<_> = cabin.inbox_rows().into_iter().map(|r| (r.hard, r.what)).collect();
+        let words: Vec<_> = cabin
+            .inbox_rows()
+            .into_iter()
+            .map(|r| (r.hard, r.what))
+            .collect();
         assert_eq!(
             words,
             vec![
@@ -758,11 +976,36 @@ mod tests {
 
     #[test]
     fn hard_words_say_the_action_plainly() {
-        assert_eq!(hard_words(HardClass::Delete, "delete_files", "delete 2 paths: /a, /b", &[]), "Delete 2 paths: /a, /b");
-        assert_eq!(hard_words(HardClass::Send, "send_email", "to someone", &[]), "Send: to someone");
-        assert_eq!(hard_words(HardClass::Money, "buy", "", &[]), "Spend money: buy");
-        assert_eq!(hard_words(HardClass::Delete, "key", "press Delete on the files selected in Files (the cabin can't see which)", &[]), "Press Delete on the files selected in Files (the cabin can't see which)");
+        assert_eq!(
+            hard_words(
+                HardClass::Delete,
+                "delete_files",
+                "delete 2 paths: /a, /b",
+                &[]
+            ),
+            "Delete 2 paths: /a, /b"
+        );
+        assert_eq!(
+            hard_words(HardClass::Send, "send_email", "to someone", &[]),
+            "Send: to someone"
+        );
+        assert_eq!(
+            hard_words(HardClass::Money, "buy", "", &[]),
+            "Spend money: buy"
+        );
+        assert_eq!(
+            hard_words(
+                HardClass::Delete,
+                "key",
+                "press Delete on the files selected in Files (the cabin can't see which)",
+                &[]
+            ),
+            "Press Delete on the files selected in Files (the cabin can't see which)"
+        );
         let long = "x".repeat(300);
-        assert_eq!(hard_words(HardClass::Send, "t", &long, &[]).chars().count(), ROW_CHARS);
+        assert_eq!(
+            hard_words(HardClass::Send, "t", &long, &[]).chars().count(),
+            ROW_CHARS
+        );
     }
 }

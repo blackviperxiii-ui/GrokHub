@@ -11,7 +11,9 @@ use std::time::Duration;
 
 use grokhub_agent::harness::{self as hx, GateOutcome};
 use grokhub_agent::AccessMode;
-use grokhub_core::desktop_mcp::{CallGate, DesktopBackend, DesktopServer, DesktopWindows, RpcOutcome};
+use grokhub_core::desktop_mcp::{
+    CallGate, DesktopBackend, DesktopServer, DesktopWindows, RpcOutcome,
+};
 use serde_json::{json, Value};
 
 /// How long `open_app` / `focus_window` may take to show a change.
@@ -53,10 +55,16 @@ pub(crate) fn handle_desk_line<B: DesktopBackend>(
         };
         if let Some(reason) = refused {
             write_span(dir, c, false, &reason, access, None, parked);
-            return RpcOutcome { reply: Some(refusal_reply(&c.id, &reason)), exit: false };
+            return RpcOutcome {
+                reply: Some(refusal_reply(&c.id, &reason)),
+                exit: false,
+            };
         }
     }
-    let probe = call.as_ref().filter(|_| live).map_or(Probe::None, |c| probe_for(&c.tool));
+    let probe = call
+        .as_ref()
+        .filter(|_| live)
+        .map_or(Probe::None, |c| probe_for(&c.tool));
     let before = observe(server.backend_mut(), probe);
     // The server answers the call it was sent; the `window` hint is ours.
     let outcome = match &call {
@@ -99,7 +107,11 @@ fn click_hint<B: DesktopBackend>(server: &mut DesktopServer<B>, args: &Value) ->
 /// desktop tools alike: the focused window for a Delete or Enter key, a paste
 /// or a typed newline (`needs_window`), and the control under a click. A
 /// drag lets go at `to`, so a short drag onto Send reads as a click there.
-pub(crate) fn add_hints<B: DesktopBackend>(server: &mut DesktopServer<B>, tool: &str, args: &mut Value) {
+pub(crate) fn add_hints<B: DesktopBackend>(
+    server: &mut DesktopServer<B>,
+    tool: &str,
+    args: &mut Value,
+) {
     if !args.is_object() {
         return;
     }
@@ -119,9 +131,11 @@ pub(crate) fn add_hints<B: DesktopBackend>(server: &mut DesktopServer<B>, tool: 
 /// A trash move with a path on a drive that has no Recycle Bin.
 fn no_bin(args: &Value) -> bool {
     args.get("to_trash").and_then(Value::as_bool) == Some(true)
-        && args["paths"]
-            .as_array()
-            .is_some_and(|a| a.iter().filter_map(Value::as_str).any(|p| super::apps::no_recycle_bin(Path::new(p))))
+        && args["paths"].as_array().is_some_and(|a| {
+            a.iter()
+                .filter_map(Value::as_str)
+                .any(|p| super::apps::no_recycle_bin(Path::new(p)))
+        })
 }
 
 fn strip_window(args: &Value) -> Value {
@@ -161,7 +175,10 @@ pub(crate) fn probe_for(tool: &str) -> Probe {
 pub(crate) fn observe<B: DesktopBackend + ?Sized>(b: &mut B, probe: Probe) -> Option<Seen> {
     match probe {
         Probe::None => None,
-        Probe::Shot => b.screenshot("all").ok().map(|s| Seen::Shot(shot_hash(&s.bytes))),
+        Probe::Shot => b
+            .screenshot("all")
+            .ok()
+            .map(|s| Seen::Shot(shot_hash(&s.bytes))),
         Probe::Windows => match b.list_windows() {
             Ok(w) => Some(Seen::Windows(w)),
             Err(_) => observe(b, Probe::Shot),
@@ -223,7 +240,10 @@ pub(crate) enum Precheck {
     /// Not a tool call, or the server's own gates answer it, or soft.
     Pass,
     Refuse(String),
-    Park { class: String, reason: String },
+    Park {
+        class: String,
+        reason: String,
+    },
 }
 
 /// Switch off or halted: the server refuses on its own (existing behavior).
@@ -231,7 +251,10 @@ pub(crate) fn precheck(call: &DeskCallLine, gate: CallGate) -> Precheck {
     if !gate.enabled || gate.halted {
         return Precheck::Pass;
     }
-    match hx::decide(hx::Step::Desk { tool: &call.tool, args: &call.args }) {
+    match hx::decide(hx::Step::Desk {
+        tool: &call.tool,
+        args: &call.args,
+    }) {
         GateOutcome::Allow => Precheck::Pass,
         GateOutcome::Refuse { reason } => Precheck::Refuse(reason),
         GateOutcome::Park { reason, hard, .. } => Precheck::Park {
@@ -275,7 +298,14 @@ pub(crate) fn park_and_wait(
     class: &str,
     halted: &mut dyn FnMut() -> bool,
 ) -> bool {
-    hx::park_desk_call(config_dir, &call.tool, &call.args, class, hx::ComputerUseBackend::GrokBuild, halted)
+    hx::park_desk_call(
+        config_dir,
+        &call.tool,
+        &call.args,
+        class,
+        hx::ComputerUseBackend::GrokBuild,
+        halted,
+    )
 }
 
 /// Span for a call the pre-check or the server answered.
@@ -344,15 +374,25 @@ mod tests {
             }
         );
         let floor = line("type", json!({ "text": "rm -rf /" }));
-        assert_eq!(precheck(&floor, ON), Precheck::Refuse("hard floor: rm -rf /".into()));
+        assert_eq!(
+            precheck(&floor, ON),
+            Precheck::Refuse("hard floor: rm -rf /".into())
+        );
         let click = line("click", json!({ "x": 12, "y": 34 }));
         assert_eq!(precheck(&click, ON), Precheck::Pass);
         let off = CallGate {
             enabled: false,
             halted: false,
         };
-        assert_eq!(precheck(&floor, off), Precheck::Pass, "the server's switch refusal answers");
-        assert_eq!(parse_call(r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#), None);
+        assert_eq!(
+            precheck(&floor, off),
+            Precheck::Pass,
+            "the server's switch refusal answers"
+        );
+        assert_eq!(
+            parse_call(r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#),
+            None
+        );
     }
 
     #[test]
@@ -406,10 +446,16 @@ mod tests {
         assert_eq!(req.class, "credentials");
         let spans = hx::read_spans(&dir, hx::CU_TRACE).unwrap();
         let last = spans.last().unwrap();
-        assert_eq!((last.decision.as_str(), last.approval_class.as_str()), ("park", "credentials"));
+        assert_eq!(
+            (last.decision.as_str(), last.approval_class.as_str()),
+            ("park", "credentials")
+        );
         assert_eq!(last.args_redacted, r#"{"chars":4}"#);
         let trace = std::fs::read_to_string(hx::span_path(&dir, hx::CU_TRACE)).unwrap();
-        assert!(!trace.contains("4821"), "the typed PIN never reaches a span");
+        assert!(
+            !trace.contains("4821"),
+            "the typed PIN never reaches a span"
+        );
         assert_eq!(access_now(&dir, false), AccessMode::Readonly);
         assert_eq!(access_now(&dir, true), AccessMode::Supervised);
         let _ = std::fs::remove_dir_all(dir);
@@ -444,7 +490,10 @@ mod tests {
                 primary: true,
             }])
         }
-        fn screenshot(&mut self, _monitor: &str) -> Result<grokhub_core::desktop_mcp::CapturedShot, String> {
+        fn screenshot(
+            &mut self,
+            _monitor: &str,
+        ) -> Result<grokhub_core::desktop_mcp::CapturedShot, String> {
             let mon = &self.list_monitors()?[0];
             Ok(grokhub_core::desktop_mcp::CapturedShot {
                 bytes: vec![self.frame],
@@ -455,7 +504,11 @@ mod tests {
         fn move_abs(&mut self, _x: i32, _y: i32) -> Result<(), String> {
             Ok(())
         }
-        fn button(&mut self, _b: grokhub_core::desktop_mcp::MouseButton, down: bool) -> Result<(), String> {
+        fn button(
+            &mut self,
+            _b: grokhub_core::desktop_mcp::MouseButton,
+            down: bool,
+        ) -> Result<(), String> {
             if down {
                 self.clicks += 1;
                 self.frame = self.frame.wrapping_add(1);
@@ -469,10 +522,12 @@ mod tests {
             self.controls
                 .iter()
                 .find(|(cx, cy, w, h, _, _)| x >= *cx && x < cx + w && y >= *cy && y < cy + h)
-                .map(|(_, _, _, _, label, role)| grokhub_core::desktop_mcp::ClickTarget {
-                    label: (*label).into(),
-                    role: (*role).into(),
-                })
+                .map(
+                    |(_, _, _, _, label, role)| grokhub_core::desktop_mcp::ClickTarget {
+                        label: (*label).into(),
+                        role: (*role).into(),
+                    },
+                )
         }
         fn scroll(&mut self, _dx: i32, _dy: i32) -> Result<(), String> {
             Ok(())
@@ -482,7 +537,10 @@ mod tests {
             self.frame = self.frame.wrapping_add(1);
             Ok(())
         }
-        fn key_combo(&mut self, _combo: &grokhub_core::desktop_mcp::KeyCombo) -> Result<(), String> {
+        fn key_combo(
+            &mut self,
+            _combo: &grokhub_core::desktop_mcp::KeyCombo,
+        ) -> Result<(), String> {
             self.keys += 1;
             Ok(())
         }
@@ -496,9 +554,12 @@ mod tests {
             Ok(())
         }
         fn focus_window(&mut self, title: &str) -> Result<String, String> {
-            let got = super::super::apps::pick_title(self.windows.titles.iter().map(String::as_str), title)
-                .ok_or("no window")?
-                .to_string();
+            let got = super::super::apps::pick_title(
+                self.windows.titles.iter().map(String::as_str),
+                title,
+            )
+            .ok_or("no window")?
+            .to_string();
             self.windows.active = format!("x {got}");
             Ok(got)
         }
@@ -532,7 +593,16 @@ mod tests {
 
     fn turn(dir: &Path, access: &str) {
         let _ = std::fs::create_dir_all(dir);
-        hx::write_turn_context(dir, &hx::TurnContext { chat_id: "chat-1".into(), turn: 3, access: access.into(), ..Default::default() }).unwrap();
+        hx::write_turn_context(
+            dir,
+            &hx::TurnContext {
+                chat_id: "chat-1".into(),
+                turn: 3,
+                access: access.into(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
     }
 
     fn spans(dir: &Path) -> Vec<hx::Span> {
@@ -540,7 +610,10 @@ mod tests {
     }
 
     /// The cabin's half: answer the first park the MCP posts.
-    fn cabin_answers(dir: &Path, approve: bool) -> std::thread::JoinHandle<Option<hx::ParkRequest>> {
+    fn cabin_answers(
+        dir: &Path,
+        approve: bool,
+    ) -> std::thread::JoinHandle<Option<hx::ParkRequest>> {
         let dir = dir.to_path_buf();
         std::thread::spawn(move || {
             for _ in 0..500 {
@@ -559,20 +632,64 @@ mod tests {
         let dir = crate::config::test_config_root("desk-open");
         turn(&dir, "supervised");
         let mut s = desk();
-        let out = handle_desk_line(&mut s, &rpc("open_app", json!({ "app": "org.kde.kate" })), ON, &dir, &mut || false);
+        let out = handle_desk_line(
+            &mut s,
+            &rpc("open_app", json!({ "app": "org.kde.kate" })),
+            ON,
+            &dir,
+            &mut || false,
+        );
         assert_eq!(reply_text(&out), "opened org.kde.kate");
-        let out = handle_desk_line(&mut s, &rpc("focus_window", json!({ "title": "dolphin" })), ON, &dir, &mut || false);
+        let out = handle_desk_line(
+            &mut s,
+            &rpc("focus_window", json!({ "title": "dolphin" })),
+            ON,
+            &dir,
+            &mut || false,
+        );
         assert_eq!(reply_text(&out), "focused Downloads — Dolphin");
         // Focusing the window that already has focus changes nothing.
-        let out = handle_desk_line(&mut s, &rpc("focus_window", json!({ "title": "dolphin" })), ON, &dir, &mut || false);
+        let out = handle_desk_line(
+            &mut s,
+            &rpc("focus_window", json!({ "title": "dolphin" })),
+            ON,
+            &dir,
+            &mut || false,
+        );
         assert_eq!(reply_text(&out), "focused Downloads — Dolphin");
         let got: Vec<_> = spans(&dir)
             .iter()
-            .map(|s| (s.tool.clone(), s.decision.clone(), s.approval_class.clone(), s.path.clone(), s.ui_changed))
+            .map(|s| {
+                (
+                    s.tool.clone(),
+                    s.decision.clone(),
+                    s.approval_class.clone(),
+                    s.path.clone(),
+                    s.ui_changed,
+                )
+            })
             .collect();
-        let row = |t: &str, ui: bool| (t.to_string(), "allow".to_string(), "soft".to_string(), "A".to_string(), Some(ui));
-        assert_eq!(got, vec![row("open_app", true), row("focus_window", true), row("focus_window", false)]);
-        assert!(hx::pending_parks(&dir).is_empty(), "open and focus never park");
+        let row = |t: &str, ui: bool| {
+            (
+                t.to_string(),
+                "allow".to_string(),
+                "soft".to_string(),
+                "A".to_string(),
+                Some(ui),
+            )
+        };
+        assert_eq!(
+            got,
+            vec![
+                row("open_app", true),
+                row("focus_window", true),
+                row("focus_window", false)
+            ]
+        );
+        assert!(
+            hx::pending_parks(&dir).is_empty(),
+            "open and focus never park"
+        );
         assert_eq!(s.backend_mut().opened, vec!["org.kde.kate"]);
         let _ = std::fs::remove_dir_all(dir);
     }
@@ -582,19 +699,49 @@ mod tests {
         let dir = crate::config::test_config_root("desk-open-off");
         turn(&dir, "readonly");
         let mut s = desk();
-        let off = CallGate { enabled: false, halted: false };
-        let out = handle_desk_line(&mut s, &rpc("open_app", json!({ "app": "firefox" })), off, &dir, &mut || false);
+        let off = CallGate {
+            enabled: false,
+            halted: false,
+        };
+        let out = handle_desk_line(
+            &mut s,
+            &rpc("open_app", json!({ "app": "firefox" })),
+            off,
+            &dir,
+            &mut || false,
+        );
         assert_eq!(reply_text(&out), grokhub_core::desktop_mcp::OFF_MSG);
-        let out = handle_desk_line(&mut s, &rpc("focus_window", json!({ "title": "GrokHub" })), off, &dir, &mut || false);
+        let out = handle_desk_line(
+            &mut s,
+            &rpc("focus_window", json!({ "title": "GrokHub" })),
+            off,
+            &dir,
+            &mut || false,
+        );
         assert_eq!(reply_text(&out), grokhub_core::desktop_mcp::OFF_MSG);
         assert!(s.backend_mut().opened.is_empty());
-        assert_eq!(s.backend_mut().windows.active, "grokhub GrokHub", "nothing was focused");
-        let got: Vec<_> = spans(&dir).iter().map(|s| (s.tool.clone(), s.decision.clone(), s.access.clone())).collect();
+        assert_eq!(
+            s.backend_mut().windows.active,
+            "grokhub GrokHub",
+            "nothing was focused"
+        );
+        let got: Vec<_> = spans(&dir)
+            .iter()
+            .map(|s| (s.tool.clone(), s.decision.clone(), s.access.clone()))
+            .collect();
         assert_eq!(
             got,
             vec![
-                ("open_app".to_string(), "deny".to_string(), "readonly".to_string()),
-                ("focus_window".to_string(), "deny".to_string(), "readonly".to_string()),
+                (
+                    "open_app".to_string(),
+                    "deny".to_string(),
+                    "readonly".to_string()
+                ),
+                (
+                    "focus_window".to_string(),
+                    "deny".to_string(),
+                    "readonly".to_string()
+                ),
             ]
         );
         let _ = std::fs::remove_dir_all(dir);
@@ -605,11 +752,22 @@ mod tests {
         let dir = crate::config::test_config_root("desk-type");
         turn(&dir, "full");
         let mut s = desk();
-        let out = handle_desk_line(&mut s, &rpc("type", json!({ "text": "quarterly notes" })), ON, &dir, &mut || false);
+        let out = handle_desk_line(
+            &mut s,
+            &rpc("type", json!({ "text": "quarterly notes" })),
+            ON,
+            &dir,
+            &mut || false,
+        );
         assert_eq!(reply_text(&out), "typed");
         let first = spans(&dir).pop().unwrap();
         assert_eq!(
-            (first.decision.as_str(), first.approval_class.as_str(), first.args_redacted.as_str(), first.ui_changed),
+            (
+                first.decision.as_str(),
+                first.approval_class.as_str(),
+                first.args_redacted.as_str(),
+                first.ui_changed
+            ),
             ("allow", "soft", r#"{"chars":15}"#, Some(true))
         );
         assert_eq!(first.access, "full");
@@ -620,12 +778,27 @@ mod tests {
         let req = waiter.join().unwrap().expect("PIN park posted");
         assert_eq!(req.action, "type into PIN (4 chars hidden)");
         assert_eq!(req.class, "credentials");
-        assert!(reply_text(&out).starts_with("Denied: hard-class credentials"), "{}", reply_text(&out));
-        assert_eq!(s.backend_mut().typed, vec!["quarterly notes"], "the PIN was never typed");
-        let tail: Vec<_> = spans(&dir).iter().skip(1).map(|s| (s.decision.clone(), s.approval_class.clone())).collect();
+        assert!(
+            reply_text(&out).starts_with("Denied: hard-class credentials"),
+            "{}",
+            reply_text(&out)
+        );
+        assert_eq!(
+            s.backend_mut().typed,
+            vec!["quarterly notes"],
+            "the PIN was never typed"
+        );
+        let tail: Vec<_> = spans(&dir)
+            .iter()
+            .skip(1)
+            .map(|s| (s.decision.clone(), s.approval_class.clone()))
+            .collect();
         assert_eq!(
             tail,
-            vec![("park".to_string(), "credentials".to_string()), ("deny".to_string(), "credentials".to_string())]
+            vec![
+                ("park".to_string(), "credentials".to_string()),
+                ("deny".to_string(), "credentials".to_string())
+            ]
         );
         // Drop ts_ms first: a millisecond clock like 1791467482199 contains "4821".
         let trace: String = std::fs::read_to_string(hx::span_path(&dir, "chat-1"))
@@ -637,7 +810,10 @@ mod tests {
                 v.to_string()
             })
             .collect();
-        assert!(!trace.contains("quarterly notes") && !trace.contains("4821"), "typed values stay out: {trace}");
+        assert!(
+            !trace.contains("quarterly notes") && !trace.contains("4821"),
+            "typed values stay out: {trace}"
+        );
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -663,24 +839,53 @@ mod tests {
         turn(&dir, "full");
         let (a, b, _) = fixture(&dir);
         let mut s = desk();
-        let del = rpc("delete_files", json!({ "paths": [path_str(&a), path_str(&b)] }));
+        let del = rpc(
+            "delete_files",
+            json!({ "paths": [path_str(&a), path_str(&b)] }),
+        );
         let waiter = cabin_answers(&dir, false);
         let out = handle_desk_line(&mut s, &del, ON, &dir, &mut || false);
         let req = waiter.join().unwrap().expect("delete park posted");
         assert_eq!(req.class, "delete");
-        assert_eq!(req.action, hx::redact_args(&format!("delete 2 paths: {}, {}", path_str(&a), path_str(&b))));
+        assert_eq!(
+            req.action,
+            hx::redact_args(&format!(
+                "delete 2 paths: {}, {}",
+                path_str(&a),
+                path_str(&b)
+            ))
+        );
         assert!(reply_text(&out).starts_with("Denied: hard-class delete"));
-        assert_eq!(std::fs::read(&a).unwrap(), b"fixture report\n", "byte-identical after Deny");
+        assert_eq!(
+            std::fs::read(&a).unwrap(),
+            b"fixture report\n",
+            "byte-identical after Deny"
+        );
         assert_eq!(std::fs::read(&b).unwrap(), b"fixture draft\n");
         // Halt fails closed the same way (the TTL runs out through the same branch).
-        let trash = rpc("delete_files", json!({ "paths": [path_str(&a)], "to_trash": true }));
+        let trash = rpc(
+            "delete_files",
+            json!({ "paths": [path_str(&a)], "to_trash": true }),
+        );
         let out = handle_desk_line(&mut s, &trash, ON, &dir, &mut || true);
         assert!(reply_text(&out).starts_with("Denied: hard-class delete"));
         assert_eq!(std::fs::read(&a).unwrap(), b"fixture report\n");
         assert!(hx::pending_parks(&dir).is_empty());
-        let got: Vec<_> = spans(&dir).iter().map(|s| (s.tool.clone(), s.decision.clone(), s.approval_class.clone())).collect();
-        let row = |d: &str| ("delete_files".to_string(), d.to_string(), "delete".to_string());
-        assert_eq!(got, vec![row("park"), row("deny"), row("park"), row("deny")]);
+        let got: Vec<_> = spans(&dir)
+            .iter()
+            .map(|s| (s.tool.clone(), s.decision.clone(), s.approval_class.clone()))
+            .collect();
+        let row = |d: &str| {
+            (
+                "delete_files".to_string(),
+                d.to_string(),
+                "delete".to_string(),
+            )
+        };
+        assert_eq!(
+            got,
+            vec![row("park"), row("deny"), row("park"), row("deny")]
+        );
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -690,15 +895,29 @@ mod tests {
         turn(&dir, "full");
         let (a, b, keep) = fixture(&dir);
         let mut s = desk();
-        let del = rpc("delete_files", json!({ "paths": [path_str(&a), path_str(&b)] }));
+        let del = rpc(
+            "delete_files",
+            json!({ "paths": [path_str(&a), path_str(&b)] }),
+        );
         let waiter = cabin_answers(&dir, true);
         let out = handle_desk_line(&mut s, &del, ON, &dir, &mut || false);
         assert!(waiter.join().unwrap().is_some());
         assert_eq!(reply_text(&out), "deleted 2 paths");
         assert!(!a.exists() && !b.exists());
-        assert_eq!(std::fs::read(&keep).unwrap(), b"keep me\n", "an unlisted file stays");
+        assert_eq!(
+            std::fs::read(&keep).unwrap(),
+            b"keep me\n",
+            "an unlisted file stays"
+        );
         let last = spans(&dir).pop().unwrap();
-        assert_eq!((last.decision.as_str(), last.approval_class.as_str(), last.hard_approved), ("allow", "delete", true));
+        assert_eq!(
+            (
+                last.decision.as_str(),
+                last.approval_class.as_str(),
+                last.hard_approved
+            ),
+            ("allow", "delete", true)
+        );
         // Once: the same call again parks again, and with no answer it is denied.
         let out = handle_desk_line(&mut s, &del, ON, &dir, &mut || true);
         assert!(reply_text(&out).starts_with("Denied:"));
@@ -724,15 +943,36 @@ mod tests {
             "press Delete on the files selected in org.kde.dolphin Downloads — Dolphin (the cabin can't see which)"
         );
         assert!(reply_text(&out).starts_with("Denied: hard-class delete"));
-        assert_eq!(s.backend_mut().keys, 1, "the denied Delete was never pressed");
+        assert_eq!(
+            s.backend_mut().keys,
+            1,
+            "the denied Delete was never pressed"
+        );
         // Spellings the combo parser reads as the same key park too.
         for keys in ["Shift_L+Delete", "shift+shift+del", "SHIFT + DEL"] {
             let waiter = cabin_answers(&dir, false);
-            let out = handle_desk_line(&mut s, &rpc("key", json!({ "keys": keys })), ON, &dir, &mut || false);
-            assert_eq!(waiter.join().unwrap().expect("park posted").class, "delete", "{keys}");
-            assert!(reply_text(&out).starts_with("Denied: hard-class delete"), "{keys}");
+            let out = handle_desk_line(
+                &mut s,
+                &rpc("key", json!({ "keys": keys })),
+                ON,
+                &dir,
+                &mut || false,
+            );
+            assert_eq!(
+                waiter.join().unwrap().expect("park posted").class,
+                "delete",
+                "{keys}"
+            );
+            assert!(
+                reply_text(&out).starts_with("Denied: hard-class delete"),
+                "{keys}"
+            );
         }
-        assert_eq!(s.backend_mut().keys, 1, "no denied Delete spelling was pressed");
+        assert_eq!(
+            s.backend_mut().keys,
+            1,
+            "no denied Delete spelling was pressed"
+        );
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -762,12 +1002,27 @@ mod tests {
         let dir = crate::config::test_config_root("desk-drag-send");
         turn(&dir, "full");
         let mut s = shop();
-        let drag = |x: i32, y: i32| rpc("drag", json!({ "from_x": x, "from_y": y, "to_x": x + 1, "to_y": y }));
+        let drag = |x: i32, y: i32| {
+            rpc(
+                "drag",
+                json!({ "from_x": x, "from_y": y, "to_x": x + 1, "to_y": y }),
+            )
+        };
         let waiter = cabin_answers(&dir, false);
         let out = handle_desk_line(&mut s, &drag(25, 5), ON, &dir, &mut || false);
         let req = waiter.join().unwrap().expect("send park");
-        assert_eq!((req.class.as_str(), req.action.as_str()), ("send", "Grok wants to click Send in org.shop Checkout — Shop"));
-        assert!(reply_text(&out).starts_with("Denied: hard-class send"), "{}", reply_text(&out));
+        assert_eq!(
+            (req.class.as_str(), req.action.as_str()),
+            (
+                "send",
+                "Grok wants to click Send in org.shop Checkout — Shop"
+            )
+        );
+        assert!(
+            reply_text(&out).starts_with("Denied: hard-class send"),
+            "{}",
+            reply_text(&out)
+        );
         // Letting go on Save is an ordinary drag.
         let out = handle_desk_line(&mut s, &drag(5, 25), ON, &dir, &mut || false);
         assert_eq!(reply_text(&out), "dragged");
@@ -780,37 +1035,80 @@ mod tests {
         turn(&dir, "full");
         let mut s = shop();
         // #3: the typed fields are soft; Pay parks as money and Deny never clicks.
-        let out = handle_desk_line(&mut s, &rpc("type", json!({ "text": "Viper Example" })), ON, &dir, &mut || false);
+        let out = handle_desk_line(
+            &mut s,
+            &rpc("type", json!({ "text": "Viper Example" })),
+            ON,
+            &dir,
+            &mut || false,
+        );
         assert_eq!(reply_text(&out), "typed");
         let waiter = cabin_answers(&dir, false);
         let out = handle_desk_line(&mut s, &at(5, 5), ON, &dir, &mut || false);
         let req = waiter.join().unwrap().expect("pay park");
-        assert_eq!((req.class.as_str(), req.action.as_str()), ("money", "Grok wants to click Pay in org.shop Checkout — Shop"));
-        assert!(reply_text(&out).starts_with("Denied: hard-class money"), "{}", reply_text(&out));
+        assert_eq!(
+            (req.class.as_str(), req.action.as_str()),
+            (
+                "money",
+                "Grok wants to click Pay in org.shop Checkout — Shop"
+            )
+        );
+        assert!(
+            reply_text(&out).starts_with("Denied: hard-class money"),
+            "{}",
+            reply_text(&out)
+        );
         // #4: Send parks as send.
         let waiter = cabin_answers(&dir, false);
         let _ = handle_desk_line(&mut s, &at(25, 5), ON, &dir, &mut || false);
         let req = waiter.join().unwrap().expect("send park");
-        assert_eq!((req.class.as_str(), req.action.as_str()), ("send", "Grok wants to click Send in org.shop Checkout — Shop"));
-        assert_eq!(s.backend_mut().clicks, 0, "neither Pay nor Send was clicked");
+        assert_eq!(
+            (req.class.as_str(), req.action.as_str()),
+            (
+                "send",
+                "Grok wants to click Send in org.shop Checkout — Shop"
+            )
+        );
+        assert_eq!(
+            s.backend_mut().clicks,
+            0,
+            "neither Pay nor Send was clicked"
+        );
         // #8: the toggle is soft and verified by the screenshot hash; Reset parks and Halt denies.
         let out = handle_desk_line(&mut s, &at(45, 5), ON, &dir, &mut || false);
         assert_eq!(reply_text(&out), "clicked");
         let out = handle_desk_line(&mut s, &at(65, 5), ON, &dir, &mut || true);
-        assert!(reply_text(&out).starts_with("Denied: hard-class irreversible_os"), "{}", reply_text(&out));
+        assert!(
+            reply_text(&out).starts_with("Denied: hard-class irreversible_os"),
+            "{}",
+            reply_text(&out)
+        );
         // #9: Save is soft; Upload parks as send.
         let out = handle_desk_line(&mut s, &at(5, 25), ON, &dir, &mut || false);
         assert_eq!(reply_text(&out), "clicked");
         let waiter = cabin_answers(&dir, false);
         let _ = handle_desk_line(&mut s, &at(25, 25), ON, &dir, &mut || false);
         assert_eq!(waiter.join().unwrap().expect("upload park").class, "send");
-        assert_eq!(s.backend_mut().clicks, 2, "only the toggle and Save were clicked");
+        assert_eq!(
+            s.backend_mut().clicks,
+            2,
+            "only the toggle and Save were clicked"
+        );
         let got: Vec<_> = spans(&dir)
             .iter()
             .filter(|s| s.tool == "click")
-            .map(|s| (s.decision.clone(), s.target.clone(), s.target_rule.clone(), s.ui_changed))
+            .map(|s| {
+                (
+                    s.decision.clone(),
+                    s.target.clone(),
+                    s.target_rule.clone(),
+                    s.ui_changed,
+                )
+            })
             .collect();
-        let row = |d: &str, rule: &str, ui: Option<bool>| (d.to_string(), "ax".to_string(), rule.to_string(), ui);
+        let row = |d: &str, rule: &str, ui: Option<bool>| {
+            (d.to_string(), "ax".to_string(), rule.to_string(), ui)
+        };
         assert_eq!(
             got,
             vec![
@@ -827,10 +1125,20 @@ mod tests {
             ]
         );
         let trace = std::fs::read_to_string(hx::span_path(&dir, "chat-1")).unwrap();
-        for never in ["Pay now", "Upload screenshot", "Reset all settings", "Checkout", "Viper Example"] {
+        for never in [
+            "Pay now",
+            "Upload screenshot",
+            "Reset all settings",
+            "Checkout",
+            "Viper Example",
+        ] {
             assert!(!trace.contains(never), "{never} reached a span: {trace}");
         }
-        assert_eq!(hx::hard_card_key(true, false, false), None, "Enter never approves");
+        assert_eq!(
+            hx::hard_card_key(true, false, false),
+            None,
+            "Enter never approves"
+        );
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -845,9 +1153,16 @@ mod tests {
         let req = waiter.join().unwrap().expect("money park");
         assert_eq!(
             (req.class.as_str(), req.action.as_str()),
-            ("money", "Grok wants to click an unlabeled control in org.shop Checkout — Shop")
+            (
+                "money",
+                "Grok wants to click an unlabeled control in org.shop Checkout — Shop"
+            )
         );
-        assert!(reply_text(&out).starts_with("Denied: hard-class money"), "{}", reply_text(&out));
+        assert!(
+            reply_text(&out).starts_with("Denied: hard-class money"),
+            "{}",
+            reply_text(&out)
+        );
         assert_eq!(s.backend_mut().clicks, 0, "the denied click never landed");
         let _ = std::fs::remove_dir_all(dir);
     }
@@ -859,24 +1174,60 @@ mod tests {
         let mut s = desk();
         let enter = rpc("key", json!({ "keys": "Return" }));
         // GrokHub has focus: Enter is a plain key.
-        assert_eq!(reply_text(&handle_desk_line(&mut s, &enter, ON, &dir, &mut || false)), "keyed");
+        assert_eq!(
+            reply_text(&handle_desk_line(&mut s, &enter, ON, &dir, &mut || false)),
+            "keyed"
+        );
         s.backend_mut().windows.active = "Slack | general | Acme".into();
         // Shift+Enter is a new line in the composer.
         let newline = rpc("key", json!({ "keys": "shift+Return" }));
-        assert_eq!(reply_text(&handle_desk_line(&mut s, &newline, ON, &dir, &mut || false)), "keyed");
+        assert_eq!(
+            reply_text(&handle_desk_line(&mut s, &newline, ON, &dir, &mut || false)),
+            "keyed"
+        );
         let waiter = cabin_answers(&dir, false);
         let out = handle_desk_line(&mut s, &enter, ON, &dir, &mut || false);
         let req = waiter.join().unwrap().expect("send park");
-        assert_eq!((req.class.as_str(), req.action.as_str()), ("send", "press Return in Slack | general | Acme"));
-        assert!(reply_text(&out).starts_with("Denied: hard-class send"), "{}", reply_text(&out));
+        assert_eq!(
+            (req.class.as_str(), req.action.as_str()),
+            ("send", "press Return in Slack | general | Acme")
+        );
+        assert!(
+            reply_text(&out).starts_with("Denied: hard-class send"),
+            "{}",
+            reply_text(&out)
+        );
         // A typed newline presses Enter too, and the card never shows the text.
         let waiter = cabin_answers(&dir, false);
-        let out = handle_desk_line(&mut s, &rpc("type", json!({ "text": "see you at 5\n" })), ON, &dir, &mut || false);
+        let out = handle_desk_line(
+            &mut s,
+            &rpc("type", json!({ "text": "see you at 5\n" })),
+            ON,
+            &dir,
+            &mut || false,
+        );
         let req = waiter.join().unwrap().expect("typed send park");
-        assert_eq!((req.class.as_str(), req.action.as_str()), ("send", "type 13 chars into Slack | general | Acme and press Enter"));
-        assert!(reply_text(&out).starts_with("Denied: hard-class send"), "{}", reply_text(&out));
-        assert_eq!(s.backend_mut().keys, 2, "only GrokHub's Enter and the Shift+Enter were pressed");
-        assert!(s.backend_mut().typed.is_empty(), "the denied text was never typed");
+        assert_eq!(
+            (req.class.as_str(), req.action.as_str()),
+            (
+                "send",
+                "type 13 chars into Slack | general | Acme and press Enter"
+            )
+        );
+        assert!(
+            reply_text(&out).starts_with("Denied: hard-class send"),
+            "{}",
+            reply_text(&out)
+        );
+        assert_eq!(
+            s.backend_mut().keys,
+            2,
+            "only GrokHub's Enter and the Shift+Enter were pressed"
+        );
+        assert!(
+            s.backend_mut().typed.is_empty(),
+            "the denied text was never typed"
+        );
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -892,10 +1243,18 @@ mod tests {
         assert_eq!(reply_text(&out), "clicked");
         let last = spans(&dir).pop().unwrap();
         assert_eq!(
-            (last.decision.as_str(), last.approval_class.as_str(), last.target.as_str(), last.target_rule.as_str()),
+            (
+                last.decision.as_str(),
+                last.approval_class.as_str(),
+                last.target.as_str(),
+                last.target_rule.as_str()
+            ),
             ("allow", "soft", "unknown", "")
         );
-        assert_eq!(last.args_redacted, r#"{"x":5,"y":5}"#, "the cabin's hints never reach the span");
+        assert_eq!(
+            last.args_redacted, r#"{"x":5,"y":5}"#,
+            "the cabin's hints never reach the span"
+        );
         assert!(hx::pending_parks(&dir).is_empty());
         // Windows path A keeps the default reader: unknown, so soft (D3, no UIA).
         if !cfg!(target_os = "linux") {

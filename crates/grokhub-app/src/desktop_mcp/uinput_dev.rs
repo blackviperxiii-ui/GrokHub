@@ -2,8 +2,13 @@
 //! Tests never construct [`UinputPointer`]; they use the descriptor in core.
 
 use evdev::uinput::VirtualDevice;
-use evdev::{AbsInfo, AbsoluteAxisCode, AttributeSet, BusType, InputEvent, InputId, KeyCode, PropType, RelativeAxisCode, UinputAbsSetup};
-use grokhub_core::desktop_mcp::{uinput_abs_descriptor, uinput_access_denied_message, MonitorGeom, UinputAbsDescriptor};
+use evdev::{
+    AbsInfo, AbsoluteAxisCode, AttributeSet, BusType, InputEvent, InputId, KeyCode, PropType,
+    RelativeAxisCode, UinputAbsSetup,
+};
+use grokhub_core::desktop_mcp::{
+    uinput_abs_descriptor, uinput_access_denied_message, MonitorGeom, UinputAbsDescriptor,
+};
 
 const EV_SYN: u16 = 0;
 const EV_KEY: u16 = 1;

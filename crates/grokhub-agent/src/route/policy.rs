@@ -33,33 +33,111 @@ pub struct ClassRow {
     pub plain: &'static str,
 }
 
-const fn row(class: &'static str, start: &'static str, floor: &'static str, ceiling: &'static str, plain: &'static str) -> ClassRow {
-    ClassRow { class, start, floor, ceiling, plain }
+const fn row(
+    class: &'static str,
+    start: &'static str,
+    floor: &'static str,
+    ceiling: &'static str,
+    plain: &'static str,
+) -> ClassRow {
+    ClassRow {
+        class,
+        start,
+        floor,
+        ceiling,
+        plain,
+    }
 }
 
 /// start / floor / ceiling per class (§14.3).
 pub const CLASS_TABLE: &[ClassRow] = &[
-    row("background:classify", "low", "none", "medium", "background sorting"),
-    row("background:triage", "low", "none", "medium", "background triage"),
-    row("background:redact", "low", "none", "medium", "background redaction"),
-    row("background:summarize", "low", "none", "medium", "a background summary"),
+    row(
+        "background:classify",
+        "low",
+        "none",
+        "medium",
+        "background sorting",
+    ),
+    row(
+        "background:triage",
+        "low",
+        "none",
+        "medium",
+        "background triage",
+    ),
+    row(
+        "background:redact",
+        "low",
+        "none",
+        "medium",
+        "background redaction",
+    ),
+    row(
+        "background:summarize",
+        "low",
+        "none",
+        "medium",
+        "a background summary",
+    ),
     // Judge and dream use a reasoning model at low/medium (start low).
-    row("background:judge", "low", "low", "high", "an independent check"),
-    row("background:compact", "low", "low", "medium", "folding old context"),
+    row(
+        "background:judge",
+        "low",
+        "low",
+        "high",
+        "an independent check",
+    ),
+    row(
+        "background:compact",
+        "low",
+        "low",
+        "medium",
+        "folding old context",
+    ),
     row("background:memory", "low", "low", "medium", "memory upkeep"),
-    row("background:dream", "low", "low", "medium", "the nightly memory tidy"),
+    row(
+        "background:dream",
+        "low",
+        "low",
+        "medium",
+        "the nightly memory tidy",
+    ),
     // Speed tier: never pays for high effort (ceiling medium).
     row("chat:quick", "low", "none", "medium", "a quick answer"),
     row("chat:default", "medium", "low", "xhigh", "everyday chat"),
     // Small edits reason at low; plan/design/repair diagnose at high.
-    row("code:edit-small", "low", "low", "xhigh", "a small code edit"),
+    row(
+        "code:edit-small",
+        "low",
+        "low",
+        "xhigh",
+        "a small code edit",
+    ),
     row("plan", "high", "medium", "xhigh", "planning"),
     row("design", "high", "medium", "xhigh", "design work"),
-    row("code:multi-file", "high", "medium", "xhigh", "a multi-file change"),
+    row(
+        "code:multi-file",
+        "high",
+        "medium",
+        "xhigh",
+        "a multi-file change",
+    ),
     row("debug", "high", "medium", "xhigh", "debugging"),
     row("desktop:soft", "medium", "low", "high", "a desktop step"),
-    row("prepare:hard", "high", "high", "xhigh", "preparing a hard action"),
-    row("repair:diagnose", "high", "medium", "xhigh", "a computer check"),
+    row(
+        "prepare:hard",
+        "high",
+        "high",
+        "xhigh",
+        "preparing a hard action",
+    ),
+    row(
+        "repair:diagnose",
+        "high",
+        "medium",
+        "xhigh",
+        "a computer check",
+    ),
 ];
 
 /// R3a: a class's band with its self-tuned start merged over the table row,
@@ -79,7 +157,11 @@ pub const CLASS_ALIASES: &[(&str, &str)] = &[
 /// table doesn't list (the route then keeps today's effort).
 pub fn class_row(class: &str) -> Option<&'static ClassRow> {
     let c = class.trim();
-    let c = CLASS_ALIASES.iter().find(|(from, _)| *from == c).map(|(_, to)| *to).unwrap_or(c);
+    let c = CLASS_ALIASES
+        .iter()
+        .find(|(from, _)| *from == c)
+        .map(|(_, to)| *to)
+        .unwrap_or(c);
     CLASS_TABLE.iter().find(|r| r.class == c)
 }
 
@@ -106,9 +188,19 @@ pub fn predicted_tokens(class: &str) -> (u64, u64, u64) {
 pub fn expected_cost_usd(prices: &Prices, class: &str, ctx_tokens: u64) -> Option<f64> {
     let (mut input, out, hit_pct) = predicted_tokens(class);
     input = input.max(ctx_tokens);
-    let long = prices.long_context_threshold.is_some_and(|t| t > 0 && input >= t);
-    let prompt = if long { prices.prompt_long.or(prices.prompt) } else { prices.prompt }?;
-    let completion = if long { prices.completion_long.or(prices.completion) } else { prices.completion }?;
+    let long = prices
+        .long_context_threshold
+        .is_some_and(|t| t > 0 && input >= t);
+    let prompt = if long {
+        prices.prompt_long.or(prices.prompt)
+    } else {
+        prices.prompt
+    }?;
+    let completion = if long {
+        prices.completion_long.or(prices.completion)
+    } else {
+        prices.completion
+    }?;
     let cached = prices.cached.unwrap_or(prompt);
     let hit = input * hit_pct / 100;
     // Prices are USD cents per 100M tokens.
@@ -130,17 +222,34 @@ pub struct Fit {
 /// ghost strike, a usable profile (none yet keeps today's behavior), a cost
 /// class `spend` allows ([`approved`]), and it fits the step (context, image
 /// input, tools, the Responses API).
-pub fn fits(reg: &Registry, profiles: &BTreeMap<String, ModelProfile>, id: &str, fit: Fit, spend: &Spend, now_ms: u64) -> bool {
+pub fn fits(
+    reg: &Registry,
+    profiles: &BTreeMap<String, ModelProfile>,
+    id: &str,
+    fit: Fit,
+    spend: &Spend,
+    now_ms: u64,
+) -> bool {
     fits_any_cost(reg, profiles, id, fit, now_ms) && approved(reg, id, fit.grok_build, spend)
 }
 
 /// [`fits`] without the cost check: a Fast variant the latency policy may
 /// pick, or a model outside the plan the upgrade nudge counts.
-pub fn fits_any_cost(reg: &Registry, profiles: &BTreeMap<String, ModelProfile>, id: &str, fit: Fit, now_ms: u64) -> bool {
+pub fn fits_any_cost(
+    reg: &Registry,
+    profiles: &BTreeMap<String, ModelProfile>,
+    id: &str,
+    fit: Fit,
+    now_ms: u64,
+) -> bool {
     let Some(rec) = reg.get(id) else {
         return false;
     };
-    let strikes = rec.not_found.iter().filter(|t| now_ms.saturating_sub(**t) <= health::STRIKE_WINDOW_MS).count();
+    let strikes = rec
+        .not_found
+        .iter()
+        .filter(|t| now_ms.saturating_sub(**t) <= health::STRIKE_WINDOW_MS)
+        .count();
     if !rec.state.routable() || strikes >= health::GHOST_STRIKES {
         return false;
     }
@@ -148,14 +257,25 @@ pub fn fits_any_cost(reg: &Registry, profiles: &BTreeMap<String, ModelProfile>, 
     if profile.is_some_and(|p| !p.usable) {
         return false;
     }
-    let modalities = profile.and_then(|p| p.metadata.input_modalities.as_ref()).or(rec.meta.input_modalities.as_ref());
+    let modalities = profile
+        .and_then(|p| p.metadata.input_modalities.as_ref())
+        .or(rec.meta.input_modalities.as_ref());
     if fit.needs_image && modalities.is_some_and(|m| !m.iter().any(|x| x == "image")) {
         return false;
     }
-    if fit.needs_tools && (rec.meta.tool_calling == Some(false) || profile.is_some_and(|p| p.runtime.tool_adapter == "none")) {
+    if fit.needs_tools
+        && (rec.meta.tool_calling == Some(false)
+            || profile.is_some_and(|p| p.runtime.tool_adapter == "none"))
+    {
         return false;
     }
-    if !fit.grok_build && rec.meta.api_shape.as_deref().is_some_and(|s| s != "responses") {
+    if !fit.grok_build
+        && rec
+            .meta
+            .api_shape
+            .as_deref()
+            .is_some_and(|s| s != "responses")
+    {
         return false;
     }
     !rec.meta.context_length.is_some_and(|c| fit.ctx_tokens > c)
@@ -164,7 +284,14 @@ pub fn fits_any_cost(reg: &Registry, profiles: &BTreeMap<String, ModelProfile>, 
 /// The cost class of `id`'s plain route for this sign-in (R2b). On the GB
 /// path, Grok Build's own plan list is the pool.
 pub fn route_class(reg: &Registry, id: &str, grok_build: bool, spend: &Spend) -> CostClass {
-    classify(reg, id, reg.entitlement.credential, grok_build, RouteOpts::default(), spend.settings.ceiling_usd_per_m)
+    classify(
+        reg,
+        id,
+        reg.entitlement.credential,
+        grok_build,
+        RouteOpts::default(),
+        spend.settings.ceiling_usd_per_m,
+    )
 }
 
 /// May Auto route here on its own: `included`, or `premium` under your grant
@@ -173,20 +300,28 @@ pub fn route_class(reg: &Registry, id: &str, grok_build: bool, spend: &Spend) ->
 pub fn approved(reg: &Registry, id: &str, grok_build: bool, spend: &Spend) -> bool {
     match route_class(reg, id, grok_build, spend) {
         // R3b: a provider you added, only with its key and a grant covering this call's data.
-        CostClass::NewProvider => split_provider_model(id).is_some_and(|(p, _)| spend.providers.iter().any(|x| x == p)),
+        CostClass::NewProvider => {
+            split_provider_model(id).is_some_and(|(p, _)| spend.providers.iter().any(|x| x == p))
+        }
         class => allowed(class, &route_key(id, RouteOpts::default()), spend),
     }
 }
 
 /// A model on a provider you added (R3b), not xAI: only its own sources list it.
 pub fn is_new_provider(reg: &Registry, id: &str) -> bool {
-    reg.get(id).is_some_and(|r| !r.sources.is_empty() && r.sources.iter().all(|s| s.is_new_provider()))
+    reg.get(id)
+        .is_some_and(|r| !r.sources.is_empty() && r.sources.iter().all(|s| s.is_new_provider()))
 }
 
 /// A newer model of `model`'s family is outside your plan (`not_in_plan`) and
 /// could take the step: a quality step would have picked it. Counted for the
 /// upgrade nudge only; it is never routed to.
-pub fn outranked_by_plan_upgrade(reg: &Registry, profiles: &BTreeMap<String, ModelProfile>, model: &str, fit: Fit) -> bool {
+pub fn outranked_by_plan_upgrade(
+    reg: &Registry,
+    profiles: &BTreeMap<String, ModelProfile>,
+    model: &str,
+    fit: Fit,
+) -> bool {
     let Some((fam, v)) = family(model) else {
         return false;
     };
@@ -194,8 +329,14 @@ pub fn outranked_by_plan_upgrade(reg: &Registry, profiles: &BTreeMap<String, Mod
         r.state == ModelState::NotInPlan
             && family(&r.meta.id).is_some_and(|(f, w)| f == fam && w > v)
             && !r.meta.context_length.is_some_and(|c| fit.ctx_tokens > c)
-            && !(fit.needs_image && r.meta.input_modalities.as_ref().is_some_and(|m| !m.iter().any(|x| x == "image")))
-            && profiles.get(&r.meta.id).is_none_or(|p| p.usable || p.probe.status.starts_with("not_run"))
+            && !(fit.needs_image
+                && r.meta
+                    .input_modalities
+                    .as_ref()
+                    .is_some_and(|m| !m.iter().any(|x| x == "image")))
+            && profiles
+                .get(&r.meta.id)
+                .is_none_or(|p| p.usable || p.probe.status.starts_with("not_run"))
     })
 }
 
@@ -203,8 +344,15 @@ pub fn outranked_by_plan_upgrade(reg: &Registry, profiles: &BTreeMap<String, Mod
 /// `grok-4-fast` is (`grok-*-fast`, [4]). `None` without a version.
 pub fn family(id: &str) -> Option<(String, Vec<u32>)> {
     let parts: Vec<&str> = id.trim().split('-').collect();
-    let at = parts.iter().position(|p| !p.is_empty() && p.split('.').all(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit())))?;
-    let version = parts[at].split('.').filter_map(|n| n.parse().ok()).collect();
+    let at = parts.iter().position(|p| {
+        !p.is_empty()
+            && p.split('.')
+                .all(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+    })?;
+    let version = parts[at]
+        .split('.')
+        .filter_map(|n| n.parse().ok())
+        .collect();
     let mut key: Vec<&str> = parts.clone();
     key[at] = "*";
     Some((key.join("-"), version))
@@ -247,10 +395,25 @@ fn prefers_newest(class: &str) -> bool {
 /// (for real-work classes with no table row) newest family version, then the
 /// lowest expected cost, then the session's own model, then the id.
 /// Degraded models stay eligible but go last.
-pub fn rank(class: &str, candidates: &[&str], table: &RoutingTable, reg: &Registry, current: &str, ctx_tokens: u64) -> Vec<String> {
+pub fn rank(
+    class: &str,
+    candidates: &[&str],
+    table: &RoutingTable,
+    reg: &Registry,
+    current: &str,
+    ctx_tokens: u64,
+) -> Vec<String> {
     let rows = table.rows(class);
-    let pos = |id: &str| rows.iter().position(|r| r.model == id).unwrap_or(usize::MAX);
-    let cost = |id: &str| reg.get(id).and_then(|r| expected_cost_usd(&r.meta.prices, class, ctx_tokens)).unwrap_or(f64::MAX);
+    let pos = |id: &str| {
+        rows.iter()
+            .position(|r| r.model == id)
+            .unwrap_or(usize::MAX)
+    };
+    let cost = |id: &str| {
+        reg.get(id)
+            .and_then(|r| expected_cost_usd(&r.meta.prices, class, ctx_tokens))
+            .unwrap_or(f64::MAX)
+    };
     let degraded = |id: &str| reg.get(id).is_some_and(|r| r.state == ModelState::Degraded);
     let ver = |id: &str| family(id).map(|(_, v)| v).unwrap_or_default();
     let newest = prefers_newest(class);
@@ -259,7 +422,11 @@ pub fn rank(class: &str, candidates: &[&str], table: &RoutingTable, reg: &Regist
         degraded(a)
             .cmp(&degraded(b))
             .then(pos(a).cmp(&pos(b)))
-            .then(if newest && pos(a) == usize::MAX && pos(b) == usize::MAX { ver(b).cmp(&ver(a)) } else { std::cmp::Ordering::Equal })
+            .then(if newest && pos(a) == usize::MAX && pos(b) == usize::MAX {
+                ver(b).cmp(&ver(a))
+            } else {
+                std::cmp::Ordering::Equal
+            })
             .then(cost(a).total_cmp(&cost(b)))
             .then((a.trim() != current).cmp(&(b.trim() != current)))
             .then(a.cmp(b))
@@ -280,10 +447,17 @@ mod tests {
     fn every_row_is_on_the_ladder_and_floor_le_start_le_ceiling() {
         assert_eq!(CLASS_TABLE.len(), 18);
         for r in CLASS_TABLE {
-            assert!(rung(r.floor) <= rung(r.start) && rung(r.start) <= rung(r.ceiling), "{}", r.class);
+            assert!(
+                rung(r.floor) <= rung(r.start) && rung(r.start) <= rung(r.ceiling),
+                "{}",
+                r.class
+            );
         }
         let hard = class_row("prepare:hard").unwrap();
-        assert_eq!((hard.start, hard.floor, hard.ceiling), ("high", "high", "xhigh"));
+        assert_eq!(
+            (hard.start, hard.floor, hard.ceiling),
+            ("high", "high", "xhigh")
+        );
         assert_eq!(class_row("episode:step").unwrap().class, "desktop:soft");
         assert_eq!(class_row("eval:item"), None);
         const { assert!(POLICY_LIVE && MODEL_LIVE) };
@@ -292,26 +466,68 @@ mod tests {
     #[test]
     fn families_and_fallback_chains_are_built_from_the_candidates_newest_first() {
         assert_eq!(family("grok-4.7"), Some(("grok-*".to_string(), vec![4, 7])));
-        assert_eq!(family("grok-4-fast"), Some(("grok-*-fast".to_string(), vec![4])));
-        assert_eq!(family("grok-code-fast-1"), Some(("grok-code-fast-*".to_string(), vec![1])));
+        assert_eq!(
+            family("grok-4-fast"),
+            Some(("grok-*-fast".to_string(), vec![4]))
+        );
+        assert_eq!(
+            family("grok-code-fast-1"),
+            Some(("grok-code-fast-*".to_string(), vec![1]))
+        );
         assert_eq!(family("mystery"), None);
-        let c = ["grok-4.3", "grok-4.7", "grok-4.5", "grok-4-fast", "grok-4.6"];
-        assert_eq!(fallback_chain("grok-4.7", &c), vec!["grok-4.6", "grok-4.5", "grok-4.3"]);
-        assert_eq!(fallback_chain("grok-4.6", &c), vec!["grok-4.7", "grok-4.5", "grok-4.3"]);
+        let c = [
+            "grok-4.3",
+            "grok-4.7",
+            "grok-4.5",
+            "grok-4-fast",
+            "grok-4.6",
+        ];
+        assert_eq!(
+            fallback_chain("grok-4.7", &c),
+            vec!["grok-4.6", "grok-4.5", "grok-4.3"]
+        );
+        assert_eq!(
+            fallback_chain("grok-4.6", &c),
+            vec!["grok-4.7", "grok-4.5", "grok-4.3"]
+        );
         assert_eq!(fallback_chain("grok-4-fast", &c), Vec::<String>::new());
         assert_eq!(fallback_chain("mystery", &c), Vec::<String>::new());
     }
 
     #[test]
     fn expected_cost_counts_the_cache_and_long_context_prices() {
-        let p = Prices { prompt: Some(20_000), cached: Some(5_000), completion: Some(100_000), prompt_long: Some(40_000), completion_long: Some(200_000), long_context_threshold: Some(200_000) };
+        let p = Prices {
+            prompt: Some(20_000),
+            cached: Some(5_000),
+            completion: Some(100_000),
+            prompt_long: Some(40_000),
+            completion_long: Some(200_000),
+            long_context_threshold: Some(200_000),
+        };
         // chat:default: 8000 in (80% cached), 600 out.
         let want = (1_600.0 * 20_000.0 + 6_400.0 * 5_000.0 + 600.0 * 100_000.0) / 1e8 / 100.0;
         assert_eq!(expected_cost_usd(&p, "chat:default", 0), Some(want));
         let long = expected_cost_usd(&p, "chat:default", 250_000).unwrap();
-        let short = expected_cost_usd(&Prices { long_context_threshold: None, ..p.clone() }, "chat:default", 250_000).unwrap();
+        let short = expected_cost_usd(
+            &Prices {
+                long_context_threshold: None,
+                ..p.clone()
+            },
+            "chat:default",
+            250_000,
+        )
+        .unwrap();
         // 250k in, 80% cached: the uncached prompt and the output pay the long prices.
-        assert_eq!((long, short), ((50_000.0 * 40_000.0 + 200_000.0 * 5_000.0 + 600.0 * 200_000.0) / 1e8 / 100.0, (50_000.0 * 20_000.0 + 200_000.0 * 5_000.0 + 600.0 * 100_000.0) / 1e8 / 100.0));
-        assert_eq!(expected_cost_usd(&Prices::default(), "chat:default", 0), None);
+        assert_eq!(
+            (long, short),
+            (
+                (50_000.0 * 40_000.0 + 200_000.0 * 5_000.0 + 600.0 * 200_000.0) / 1e8 / 100.0,
+                (50_000.0 * 20_000.0 + 200_000.0 * 5_000.0 + 600.0 * 100_000.0) / 1e8 / 100.0
+            )
+        );
+        assert_eq!(
+            expected_cost_usd(&Prices::default(), "chat:default", 0),
+            None
+        );
     }
 }

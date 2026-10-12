@@ -9,10 +9,10 @@ use std::io::Read;
 use std::time::Duration;
 
 use grokhub_core::mcp_oauth::{
-    auth_server_metadata_urls, authorize_url, challenge_resource_metadata, challenge_scope, code_form,
-    endpoint_allowed, parse_auth_server, parse_registration, parse_resource_metadata, pick_scope,
-    refresh_form, registration_request, resource_for, resource_metadata_urls, signed_in_line, split_origin,
-    AuthServer, Authorize, McpSignIn,
+    auth_server_metadata_urls, authorize_url, challenge_resource_metadata, challenge_scope,
+    code_form, endpoint_allowed, parse_auth_server, parse_registration, parse_resource_metadata,
+    pick_scope, refresh_form, registration_request, resource_for, resource_metadata_urls,
+    signed_in_line, split_origin, AuthServer, Authorize, McpSignIn,
 };
 use serde_json::Value;
 
@@ -89,7 +89,11 @@ fn probe(url: &str) -> Option<String> {
 /// protected resource metadata (the 2025-03-26 spec) is its own sign-in server.
 fn discover(server: &str, url: &str) -> Result<(AuthServer, Option<String>), String> {
     let challenge = probe(url);
-    let mut prm: Vec<String> = challenge.as_deref().and_then(challenge_resource_metadata).into_iter().collect();
+    let mut prm: Vec<String> = challenge
+        .as_deref()
+        .and_then(challenge_resource_metadata)
+        .into_iter()
+        .collect();
     prm.extend(resource_metadata_urls(url));
     let mut issuer = None;
     let mut resource_scopes = Vec::new();
@@ -103,12 +107,21 @@ fn discover(server: &str, url: &str) -> Result<(AuthServer, Option<String>), Str
     }
     let issuer = match issuer {
         Some(found) => found,
-        None => split_origin(url).map(|(origin, _)| origin).ok_or("its url is not http or https")?,
+        None => split_origin(url)
+            .map(|(origin, _)| origin)
+            .ok_or("its url is not http or https")?,
     };
-    for at in auth_server_metadata_urls(&issuer).iter().filter(|u| endpoint_allowed(u, url)) {
+    for at in auth_server_metadata_urls(&issuer)
+        .iter()
+        .filter(|u| endpoint_allowed(u, url))
+    {
         if let Some(doc) = get_json(at)? {
             let found = parse_auth_server(&doc, url)?;
-            let scope = pick_scope(challenge.as_deref().and_then(challenge_scope).as_deref(), &resource_scopes, &found.scopes_supported);
+            let scope = pick_scope(
+                challenge.as_deref().and_then(challenge_scope).as_deref(),
+                &resource_scopes,
+                &found.scopes_supported,
+            );
             return Ok((found, scope));
         }
     }
@@ -140,13 +153,19 @@ pub(super) fn sign_in(
 ) -> Result<String, String> {
     let (listener, redirect) = crate::loopback::bind()?;
     let (auth, scope) = discover(server, url)?;
-    let register = auth
-        .registration_endpoint
-        .as_deref()
-        .ok_or_else(|| format!("{server} needs a client id that GrokHub can't register on its own"))?;
-    let (ok, v) = post(register, "application/json", &registration_request(&redirect).to_string())?;
+    let register = auth.registration_endpoint.as_deref().ok_or_else(|| {
+        format!("{server} needs a client id that GrokHub can't register on its own")
+    })?;
+    let (ok, v) = post(
+        register,
+        "application/json",
+        &registration_request(&redirect).to_string(),
+    )?;
     if !ok {
-        return Err(format!("{server} refused to register GrokHub: {}", form_error(&v, "no reason given")));
+        return Err(format!(
+            "{server} refused to register GrokHub: {}",
+            form_error(&v, "no reason given")
+        ));
     }
     let client = parse_registration(&v)?;
     let resource = resource_for(url);
@@ -170,7 +189,10 @@ pub(super) fn sign_in(
         &code_form(&code, &verifier, &redirect, &client, &resource),
     )?;
     if !ok {
-        return Err(format!("{server} sign-in failed: {}", form_error(&v, "the code was refused")));
+        return Err(format!(
+            "{server} sign-in failed: {}",
+            form_error(&v, "the code was refused")
+        ));
     }
     let tokens = grokhub_core::oauth::parse_token_json(&v, grokhub_core::now_ms())?;
     let signin = McpSignIn::new(&client, &auth.token_endpoint, &resource, tokens);
@@ -179,16 +201,25 @@ pub(super) fn sign_in(
 }
 
 fn refresh(server: &str, signin: &mut McpSignIn) -> Result<(), String> {
-    let token = signin.refresh_token.clone().ok_or_else(|| format!("{server}: sign in again"))?;
+    let token = signin
+        .refresh_token
+        .clone()
+        .ok_or_else(|| format!("{server}: sign in again"))?;
     let (ok, v) = post(
         &signin.token_endpoint,
         "application/x-www-form-urlencoded",
         &refresh_form(&token, &signin.client(), &signin.resource),
     )?;
     if !ok {
-        return Err(format!("{server}: sign in again ({})", form_error(&v, "the refresh was refused")));
+        return Err(format!(
+            "{server}: sign in again ({})",
+            form_error(&v, "the refresh was refused")
+        ));
     }
-    signin.take_tokens(grokhub_core::oauth::parse_token_json(&v, grokhub_core::now_ms())?);
+    signin.take_tokens(grokhub_core::oauth::parse_token_json(
+        &v,
+        grokhub_core::now_ms(),
+    )?);
     save(server, signin)
 }
 
@@ -208,7 +239,9 @@ pub(super) fn bearer(server: &str, url: &str) -> Option<String> {
 
 /// After a 401: refresh now and hand back the new token.
 pub(super) fn refresh_now(server: &str, url: &str) -> Result<String, String> {
-    let mut signin = load(server).filter(|s| s.resource == resource_for(url)).ok_or_else(|| format!("{server}: sign in again"))?;
+    let mut signin = load(server)
+        .filter(|s| s.resource == resource_for(url))
+        .ok_or_else(|| format!("{server}: sign in again"))?;
     refresh(server, &mut signin)?;
     Ok(signin.access_token)
 }
@@ -249,8 +282,13 @@ pub(super) mod tests {
                 seen: Arc::new(Mutex::new(Vec::new())),
                 stop: Arc::new(AtomicBool::new(false)),
             };
-            let (live, refreshes, calls, seen, stop) =
-                (me.live.clone(), me.refreshes.clone(), me.tool_calls.clone(), me.seen.clone(), me.stop.clone());
+            let (live, refreshes, calls, seen, stop) = (
+                me.live.clone(),
+                me.refreshes.clone(),
+                me.tool_calls.clone(),
+                me.seen.clone(),
+                me.stop.clone(),
+            );
             std::thread::spawn(move || {
                 while !stop.load(Ordering::SeqCst) {
                     match listener.accept() {
@@ -410,7 +448,10 @@ pub(super) mod tests {
             let (host, path) = (host.to_string(), path.to_string());
             std::thread::spawn(move || {
                 let mut sock = TcpStream::connect(&host).unwrap();
-                let _ = write!(sock, "GET /{path}?code={code}&state={state} HTTP/1.1\r\nHost: {host}\r\n\r\n");
+                let _ = write!(
+                    sock,
+                    "GET /{path}?code={code}&state={state} HTTP/1.1\r\nHost: {host}\r\n\r\n"
+                );
                 let mut sink = String::new();
                 let _ = sock.read_to_string(&mut sink);
             });
@@ -441,8 +482,17 @@ pub(super) mod tests {
         let base = format!("http://auth-mcp.example.test:{}", server.port);
         assert!(link.starts_with(&format!("{base}/authorize?response_type=code&client_id=dcr-client-1&redirect_uri=http%3A%2F%2F127.0.0.1%3A")), "{link}");
         assert!(link.contains("&code_challenge_method=S256&"), "{link}");
-        assert!(link.contains("&scope=mcp%3Atools&"), "the 401's scope: {link}");
-        assert!(link.ends_with(&format!("&resource={}", grokhub_core::pkce::urlencode(&format!("{base}/mcp")))), "{link}");
+        assert!(
+            link.contains("&scope=mcp%3Atools&"),
+            "the 401's scope: {link}"
+        );
+        assert!(
+            link.ends_with(&format!(
+                "&resource={}",
+                grokhub_core::pkce::urlencode(&format!("{base}/mcp"))
+            )),
+            "{link}"
+        );
         assert_eq!(
             server.seen.lock().unwrap().clone(),
             vec![
@@ -454,16 +504,37 @@ pub(super) mod tests {
             ]
         );
         let signin = load("linear").expect("sealed sign-in opens");
-        assert_eq!((signin.client_id.as_str(), signin.access_token.as_str(), signin.refresh_token.as_deref()), ("dcr-client-1", "at-1", Some("rt-1")));
+        assert_eq!(
+            (
+                signin.client_id.as_str(),
+                signin.access_token.as_str(),
+                signin.refresh_token.as_deref()
+            ),
+            ("dcr-client-1", "at-1", Some("rt-1"))
+        );
         assert_eq!(bearer("linear", &server.url()).as_deref(), Some("at-1"));
-        assert_eq!(bearer("linear", "http://elsewhere.example.test/mcp"), None, "a sign-in is for its own URL");
+        assert_eq!(
+            bearer("linear", "http://elsewhere.example.test/mcp"),
+            None,
+            "a sign-in is for its own URL"
+        );
         // Nothing of the token is on disk in the clear.
-        let sealed = std::fs::read_to_string(dir.join("connection-tokens").join("linear.signin.sealed")).unwrap();
-        assert!(!sealed.contains("at-1") && !sealed.contains("rt-1") && !sealed.contains("dcr-client-1"));
+        let sealed =
+            std::fs::read_to_string(dir.join("connection-tokens").join("linear.signin.sealed"))
+                .unwrap();
+        assert!(
+            !sealed.contains("at-1")
+                && !sealed.contains("rt-1")
+                && !sealed.contains("dcr-client-1")
+        );
         // Five handshake-class lines, no user data.
         let log = hx::read_egress(&dir);
         assert_eq!(log.len(), 5, "{log:?}");
-        assert!(log.iter().all(|l| l.dest == "auth-mcp.example.test" && l.data_classes.is_empty()), "{log:?}");
+        assert!(
+            log.iter()
+                .all(|l| l.dest == "auth-mcp.example.test" && l.data_classes.is_empty()),
+            "{log:?}"
+        );
         forget("linear");
         assert!(load("linear").is_none());
         let _ = std::fs::remove_dir_all(dir);
@@ -474,7 +545,13 @@ pub(super) mod tests {
         let dir = hx::test_dir("mcp-oauth-refused");
         let _cfg = crate::perm::ConfigGuard::set(&dir);
         let server = AuthMcp::start();
-        let err = sign_in("linear", &server.url(), &approving_browser("bad-code"), Duration::from_secs(10)).unwrap_err();
+        let err = sign_in(
+            "linear",
+            &server.url(),
+            &approving_browser("bad-code"),
+            Duration::from_secs(10),
+        )
+        .unwrap_err();
         assert_eq!(err, "linear sign-in failed: invalid_grant");
         assert!(load("linear").is_none());
         let forged = |link: &str| {
@@ -484,7 +561,13 @@ pub(super) mod tests {
         let err = sign_in("linear", &server.url(), &forged, Duration::from_secs(10)).unwrap_err();
         assert_eq!(err, "linear sign-in state did not match");
         assert!(load("linear").is_none());
-        let err = sign_in("linear", &server.url(), &|_: &str| Ok(()), Duration::from_millis(200)).unwrap_err();
+        let err = sign_in(
+            "linear",
+            &server.url(),
+            &|_: &str| Ok(()),
+            Duration::from_millis(200),
+        )
+        .unwrap_err();
         assert_eq!(err, "linear sign-in timed out");
         let _ = std::fs::remove_dir_all(dir);
     }
@@ -494,7 +577,13 @@ pub(super) mod tests {
         let dir = hx::test_dir("mcp-oauth-refresh");
         let _cfg = crate::perm::ConfigGuard::set(&dir);
         let server = AuthMcp::start();
-        sign_in("linear", &server.url(), &approving_browser("good-code"), Duration::from_secs(10)).unwrap();
+        sign_in(
+            "linear",
+            &server.url(),
+            &approving_browser("good-code"),
+            Duration::from_secs(10),
+        )
+        .unwrap();
         // Due to expire: the next bearer refreshes first.
         let mut signin = load("linear").unwrap();
         signin.expires_at = Some(grokhub_core::now_ms());
@@ -502,8 +591,15 @@ pub(super) mod tests {
         assert_eq!(bearer("linear", &server.url()).as_deref(), Some("at-2"));
         assert_eq!(server.refreshes.load(Ordering::SeqCst), 1);
         let after = load("linear").unwrap();
-        assert_eq!((after.access_token.as_str(), after.refresh_token.as_deref()), ("at-2", Some("rt-1")));
-        assert_eq!(bearer("linear", &server.url()).as_deref(), Some("at-2"), "fresh: no second refresh");
+        assert_eq!(
+            (after.access_token.as_str(), after.refresh_token.as_deref()),
+            ("at-2", Some("rt-1"))
+        );
+        assert_eq!(
+            bearer("linear", &server.url()).as_deref(),
+            Some("at-2"),
+            "fresh: no second refresh"
+        );
         assert_eq!(server.refreshes.load(Ordering::SeqCst), 1);
         let _ = std::fs::remove_dir_all(dir);
     }

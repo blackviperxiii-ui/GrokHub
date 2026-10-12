@@ -94,7 +94,10 @@ pub struct ProbeResult {
 
 impl ProbeResult {
     pub fn status(status: &str) -> Self {
-        Self { status: status.into(), ..Self::default() }
+        Self {
+            status: status.into(),
+            ..Self::default()
+        }
     }
 }
 
@@ -114,14 +117,19 @@ pub struct RuntimeSettings {
 }
 
 fn rung(effort: &str) -> Option<usize> {
-    EFFORT_LADDER.iter().position(|e| e.eq_ignore_ascii_case(effort.trim()))
+    EFFORT_LADDER
+        .iter()
+        .position(|e| e.eq_ignore_ascii_case(effort.trim()))
 }
 
 /// Clamp a canonical rung to a model's menu: the highest offered level at or
 /// below it, else the lowest offered. An empty menu sends no effort.
 pub fn clamp_effort(effort: &str, menu: &[String]) -> Option<String> {
     let want = rung(effort)?;
-    let mut offered: Vec<(usize, &String)> = menu.iter().filter_map(|m| rung(m).map(|r| (r, m))).collect();
+    let mut offered: Vec<(usize, &String)> = menu
+        .iter()
+        .filter_map(|m| rung(m).map(|r| (r, m)))
+        .collect();
     offered.sort_by_key(|(r, _)| *r);
     offered
         .iter()
@@ -134,16 +142,28 @@ pub fn clamp_effort(effort: &str, menu: &[String]) -> Option<String> {
 impl RuntimeSettings {
     pub fn from_profile(p: &ModelProfile, class: &str) -> Self {
         let menu = p.metadata.efforts.clone().unwrap_or_default();
-        let effort_map = EFFORT_LADDER.iter().map(|e| (e.to_string(), clamp_effort(e, &menu))).collect();
+        let effort_map = EFFORT_LADDER
+            .iter()
+            .map(|e| (e.to_string(), clamp_effort(e, &menu)))
+            .collect();
         let tools_off = p.metadata.tool_calling == Some(false) || p.probe.tool_call == Some(false);
-        let json_off = p.metadata.structured_output == Some(false) || p.probe.json_mode == Some(false);
+        let json_off =
+            p.metadata.structured_output == Some(false) || p.probe.json_mode == Some(false);
         Self {
             max_output_tokens: p.metadata.max_output,
             effort_map,
-            api_shape: p.metadata.api_shape.clone().unwrap_or_else(|| "responses".into()),
+            api_shape: p
+                .metadata
+                .api_shape
+                .clone()
+                .unwrap_or_else(|| "responses".into()),
             tool_adapter: if tools_off { "none" } else { "native" }.into(),
             json_adapter: if json_off { "prompt" } else { "native" }.into(),
-            timeout_secs: if class.starts_with("background:") { BACKGROUND_TIMEOUT_SECS } else { FOREGROUND_TIMEOUT_SECS },
+            timeout_secs: if class.starts_with("background:") {
+                BACKGROUND_TIMEOUT_SECS
+            } else {
+                FOREGROUND_TIMEOUT_SECS
+            },
             sends_reasoning_effort: menu.iter().any(|m| rung(m).is_some()),
         }
     }
@@ -246,7 +266,8 @@ pub fn write_profile(config_dir: &Path, profile: &mut ModelProfile) -> Result<bo
             return Ok(false);
         }
         profile.version = old.version.saturating_add(1);
-        fs::rename(&path, dir.join(format!("{stem}.v{}.json", old.version))).map_err(|e| e.to_string())?;
+        fs::rename(&path, dir.join(format!("{stem}.v{}.json", old.version)))
+            .map_err(|e| e.to_string())?;
     } else {
         profile.version = 1;
     }
@@ -256,7 +277,9 @@ pub fn write_profile(config_dir: &Path, profile: &mut ModelProfile) -> Result<bo
         .flatten()
         .filter_map(|e| {
             let name = e.file_name().to_string_lossy().into_owned();
-            let rest = name.strip_prefix(&format!("{stem}.v"))?.strip_suffix(".json")?;
+            let rest = name
+                .strip_prefix(&format!("{stem}.v"))?
+                .strip_suffix(".json")?;
             Some((rest.parse().ok()?, e.path()))
         })
         .collect();
@@ -289,14 +312,24 @@ mod tests {
             efforts: Some(efforts.iter().map(|s| s.to_string()).collect()),
             default_effort: Some("medium".into()),
             api_shape: Some("responses".into()),
-            prices: Prices { prompt: Some(30_000), cached: Some(7_500), completion: Some(150_000), prompt_long: None, completion_long: None, long_context_threshold: Some(200_000) },
+            prices: Prices {
+                prompt: Some(30_000),
+                cached: Some(7_500),
+                completion: Some(150_000),
+                prompt_long: None,
+                completion_long: None,
+                long_context_threshold: Some(200_000),
+            },
             ..ModelMeta::default()
         }
     }
 
     #[test]
     fn clamp_rounds_down_to_the_menu_and_up_from_below_it() {
-        let menu: Vec<String> = ["low", "medium", "high"].iter().map(|s| s.to_string()).collect();
+        let menu: Vec<String> = ["low", "medium", "high"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
         assert_eq!(clamp_effort("xhigh", &menu).as_deref(), Some("high"));
         assert_eq!(clamp_effort("max", &menu).as_deref(), Some("high"));
         assert_eq!(clamp_effort("medium", &menu).as_deref(), Some("medium"));
@@ -311,50 +344,109 @@ mod tests {
         let p = ModelProfile::build(&meta(&["low", "high"]), ProbeResult::status("ok"), 1);
         let rs = RuntimeSettings::from_profile(&p, "background:judge");
         let want: BTreeMap<String, Option<String>> = [
-            ("high", "high"), ("low", "low"), ("max", "high"), ("medium", "low"), ("minimal", "low"), ("none", "low"), ("xhigh", "high"),
+            ("high", "high"),
+            ("low", "low"),
+            ("max", "high"),
+            ("medium", "low"),
+            ("minimal", "low"),
+            ("none", "low"),
+            ("xhigh", "high"),
         ]
         .iter()
         .map(|(k, v)| (k.to_string(), Some(v.to_string())))
         .collect();
         assert_eq!(rs.effort_map, want);
         assert_eq!(rs.max_output_tokens, Some(64_000));
-        assert_eq!((rs.api_shape.as_str(), rs.tool_adapter.as_str(), rs.json_adapter.as_str()), ("responses", "native", "native"));
-        assert_eq!((rs.timeout_secs, rs.sends_reasoning_effort), (BACKGROUND_TIMEOUT_SECS, true));
+        assert_eq!(
+            (
+                rs.api_shape.as_str(),
+                rs.tool_adapter.as_str(),
+                rs.json_adapter.as_str()
+            ),
+            ("responses", "native", "native")
+        );
+        assert_eq!(
+            (rs.timeout_secs, rs.sends_reasoning_effort),
+            (BACKGROUND_TIMEOUT_SECS, true)
+        );
         let mut bad = ProbeResult::status("failed");
         bad.tool_call = Some(false);
         bad.failure = Some("Tool calls didn't come back in the right shape.".into());
         let q = ModelProfile::build(&meta(&[]), bad, 1);
-        assert_eq!((q.usable, q.unusable_reason.as_deref()), (false, Some("Tool calls didn't come back in the right shape.")));
-        assert_eq!((q.runtime.tool_adapter.as_str(), q.runtime.sends_reasoning_effort), ("none", false));
+        assert_eq!(
+            (q.usable, q.unusable_reason.as_deref()),
+            (
+                false,
+                Some("Tool calls didn't come back in the right shape.")
+            )
+        );
+        assert_eq!(
+            (
+                q.runtime.tool_adapter.as_str(),
+                q.runtime.sends_reasoning_effort
+            ),
+            ("none", false)
+        );
     }
 
     #[test]
     fn an_added_model_writes_a_full_profile_a_change_bumps_and_keeps_old_and_same_writes_nothing() {
         let d = dir("versions");
-        let mut p1 = ModelProfile::build(&meta(&["low", "high"]), ProbeResult::status("not_run: gb_only"), 10);
+        let mut p1 = ModelProfile::build(
+            &meta(&["low", "high"]),
+            ProbeResult::status("not_run: gb_only"),
+            10,
+        );
         assert_eq!(write_profile(&d, &mut p1), Ok(true));
         let path = profile_path(&d, "grok/4.7:beta");
-        assert_eq!(path.file_name().unwrap().to_string_lossy(), "grok_4.7_beta.json");
+        assert_eq!(
+            path.file_name().unwrap().to_string_lossy(),
+            "grok_4.7_beta.json"
+        );
         let back = read_profile(&d, "grok/4.7:beta").unwrap();
         assert_eq!(back.version, 1);
         assert_eq!(back.metadata.context_length, Some(500_000));
         assert_eq!(back.metadata.prices.prompt_long, None);
         let raw = fs::read_to_string(&path).unwrap();
-        for key in ["\"context_length\"", "\"max_output\"", "\"input_modalities\"", "\"tool_calling\"", "\"structured_output\"", "\"efforts\"", "\"api_shape\"", "\"long_context_threshold\""] {
+        for key in [
+            "\"context_length\"",
+            "\"max_output\"",
+            "\"input_modalities\"",
+            "\"tool_calling\"",
+            "\"structured_output\"",
+            "\"efforts\"",
+            "\"api_shape\"",
+            "\"long_context_threshold\"",
+        ] {
             assert!(raw.contains(key), "{key} missing: {raw}");
         }
-        let mut same = ModelProfile::build(&meta(&["low", "high"]), ProbeResult::status("not_run: gb_only"), 99);
+        let mut same = ModelProfile::build(
+            &meta(&["low", "high"]),
+            ProbeResult::status("not_run: gb_only"),
+            99,
+        );
         assert_eq!(write_profile(&d, &mut same), Ok(false));
-        let mut changed = ModelProfile::build(&meta(&["low", "medium", "high"]), ProbeResult::status("not_run: gb_only"), 20);
+        let mut changed = ModelProfile::build(
+            &meta(&["low", "medium", "high"]),
+            ProbeResult::status("not_run: gb_only"),
+            20,
+        );
         assert_eq!(write_profile(&d, &mut changed), Ok(true));
         assert_eq!(read_profile(&d, "grok/4.7:beta").unwrap().version, 2);
         assert!(profiles_dir(&d).join("grok_4.7_beta.v1.json").is_file());
         for n in 0..5 {
-            let mut next = ModelProfile::build(&meta(&["low"]), ProbeResult::status(&format!("ok{n}")), 30);
+            let mut next =
+                ModelProfile::build(&meta(&["low"]), ProbeResult::status(&format!("ok{n}")), 30);
             write_profile(&d, &mut next).unwrap();
         }
         assert_eq!(read_profile(&d, "grok/4.7:beta").unwrap().version, 7);
-        let olds: Vec<u32> = (1..=7).filter(|v| profiles_dir(&d).join(format!("grok_4.7_beta.v{v}.json")).is_file()).collect();
+        let olds: Vec<u32> = (1..=7)
+            .filter(|v| {
+                profiles_dir(&d)
+                    .join(format!("grok_4.7_beta.v{v}.json"))
+                    .is_file()
+            })
+            .collect();
         assert_eq!(olds, vec![4, 5, 6]);
         assert_eq!(read_profiles(&d).len(), 1);
         let _ = fs::remove_dir_all(d);

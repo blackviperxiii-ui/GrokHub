@@ -11,7 +11,11 @@ use super::probes::{ProbeSpec, LOG_LINE_CAP, OUTPUT_CAP};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProbeRun {
     /// It finished. `code` is `None` when a signal ended it.
-    Done { code: Option<i32>, stdout: String, stderr: String },
+    Done {
+        code: Option<i32>,
+        stdout: String,
+        stderr: String,
+    },
     /// It ran past its timeout and was killed.
     TimedOut,
     /// The program isn't there or couldn't start.
@@ -124,7 +128,10 @@ mod tests {
     #[test]
     fn a_hanging_probe_is_killed_at_its_timeout() {
         let start = Instant::now();
-        assert_eq!(run_spec(&hanging(Duration::from_millis(300))), ProbeRun::TimedOut);
+        assert_eq!(
+            run_spec(&hanging(Duration::from_millis(300))),
+            ProbeRun::TimedOut
+        );
         let took = start.elapsed();
         assert!(took >= Duration::from_millis(300), "{took:?}");
         assert!(took < Duration::from_secs(10), "{took:?}");
@@ -148,7 +155,13 @@ mod tests {
         assert_eq!(out.lines().count(), 20);
         assert!(!out.contains("sk-abcdefghijklmnopqrstuv"), "{out}");
         assert!(!out.contains("viper@example.com"), "{out}");
-        assert!(out.ends_with("auth failed for [email] with key [redacted]"), "{out}");
-        assert!(out.starts_with("Oct 07 10:00:06 box app[1]: line 6"), "{out}");
+        assert!(
+            out.ends_with("auth failed for [email] with key [redacted]"),
+            "{out}"
+        );
+        assert!(
+            out.starts_with("Oct 07 10:00:06 box app[1]: line 6"),
+            "{out}"
+        );
     }
 }

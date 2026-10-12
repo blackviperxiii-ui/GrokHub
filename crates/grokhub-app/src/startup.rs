@@ -29,7 +29,10 @@ fn since_begin() -> u32 {
 pub fn mark(stage: &'static str) {
     let us = since_begin();
     grokhub_agent::timing::record(stage, Duration::from_micros(u64::from(us)));
-    MARKS.lock().unwrap_or_else(|e| e.into_inner()).push((stage, us));
+    MARKS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .push((stage, us));
 }
 
 /// The stages reached so far, in order, with microseconds since start.
@@ -55,12 +58,22 @@ impl Steps {
 
 /// One launch as a JSON line: the marks in order, then `steps`, the slowest
 /// pieces of building the cabin (each a duration of its own).
-pub fn launch_line(ts_ms: u64, version: &str, marks: &[(&'static str, u32)], steps: &[(&'static str, u32)]) -> String {
-    let marks: serde_json::Map<String, serde_json::Value> =
-        marks.iter().map(|(name, us)| ((*name).to_string(), (*us).into())).collect();
-    let steps: serde_json::Map<String, serde_json::Value> =
-        steps.iter().map(|(name, us)| ((*name).to_string(), (*us).into())).collect();
-    serde_json::json!({ "ts_ms": ts_ms, "version": version, "marks_us": marks, "steps_us": steps }).to_string()
+pub fn launch_line(
+    ts_ms: u64,
+    version: &str,
+    marks: &[(&'static str, u32)],
+    steps: &[(&'static str, u32)],
+) -> String {
+    let marks: serde_json::Map<String, serde_json::Value> = marks
+        .iter()
+        .map(|(name, us)| ((*name).to_string(), (*us).into()))
+        .collect();
+    let steps: serde_json::Map<String, serde_json::Value> = steps
+        .iter()
+        .map(|(name, us)| ((*name).to_string(), (*us).into()))
+        .collect();
+    serde_json::json!({ "ts_ms": ts_ms, "version": version, "marks_us": marks, "steps_us": steps })
+        .to_string()
 }
 
 /// `text` (the old file) plus `line`, keeping the newest [`KEEP`] lines.
@@ -93,7 +106,12 @@ pub fn first_frame() {
         .filter(|s| s.name.starts_with("startup:new:"))
         .map(|s| (s.name, s.max_us))
         .collect();
-    let line = launch_line(grokhub_core::now_ms(), env!("CARGO_PKG_VERSION"), &marks, &steps);
+    let line = launch_line(
+        grokhub_core::now_ms(),
+        env!("CARGO_PKG_VERSION"),
+        &marks,
+        &steps,
+    );
     let path = crate::config::config_dir().join("startup.jsonl");
     std::thread::spawn(move || {
         let old = std::fs::read_to_string(&path).unwrap_or_default();
@@ -110,7 +128,11 @@ mod tests {
         let line = launch_line(
             1_700_000_000_000,
             "2.13.0",
-            &[("startup:config", 1_200), ("startup:window", 90_000), ("startup:first_frame", 140_000)],
+            &[
+                ("startup:config", 1_200),
+                ("startup:window", 90_000),
+                ("startup:first_frame", 140_000),
+            ],
             &[("startup:new:threads", 4_000)],
         );
         assert_eq!(
@@ -142,9 +164,16 @@ mod tests {
             .expect("Cabin::new");
         // Grabbing the hotkeys takes ~50 ms on X11: a shown window does it after its first frame.
         assert!(!new.contains("GlobalHotKeyManager::new"), "{new}");
-        assert!(new.contains("if hidden {\n                c.register_hotkeys_once();"), "{new}");
+        assert!(
+            new.contains("if hidden {\n                c.register_hotkeys_once();"),
+            "{new}"
+        );
         // ...in `logic`, which eframe runs even while the window is covered.
-        let logic = src.split("fn logic(&mut self").nth(1).and_then(|s| s.split("self.poll_job();").next()).expect("logic");
+        let logic = src
+            .split("fn logic(&mut self")
+            .nth(1)
+            .and_then(|s| s.split("self.poll_job();").next())
+            .expect("logic");
         assert!(logic.contains("self.register_hotkeys_once();"), "{logic}");
         // The local clock runs `date` and the theme probe runs `gsettings`.
         for blocking in ["local_clock(", "desktop_prefers_dark(", "Command::new("] {
@@ -156,11 +185,15 @@ mod tests {
             .nth(1)
             .and_then(|s| s.split("\n    }\n").next())
             .expect("ensure_useful_ideas");
-        assert!(ensure.contains("self.idea_inputs()") && !ensure.contains("idea_request"), "{ensure}");
+        assert!(
+            ensure.contains("self.idea_inputs()") && !ensure.contains("idea_request"),
+            "{ensure}"
+        );
         let main = include_str!("main.rs").replace("\r\n", "\n");
         let run = main.split("fn run_cabin(").nth(1).expect("run_cabin");
         assert!(
-            run.find("Cabin::warm_startup_caches()").expect("warm") < run.find("eframe::run_native").expect("run"),
+            run.find("Cabin::warm_startup_caches()").expect("warm")
+                < run.find("eframe::run_native").expect("run"),
             "the clock and theme warm while the window is created"
         );
     }

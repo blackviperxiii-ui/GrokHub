@@ -95,19 +95,27 @@ pub fn self_tool(name: &str) -> Option<&'static str> {
 /// cabin's masked elicit card, as Spike-5b's `connection_add` does.
 pub(crate) fn run_native(name: &str, args: &Value) -> crate::tools::ToolOutput {
     let dir = crate::perm::config_dir();
-    let mut ask = |msg: &str| crate::mcp::ask_secret("GrokHub", msg, crate::tools::connections::TOKEN_TITLE);
+    let mut ask =
+        |msg: &str| crate::mcp::ask_secret("GrokHub", msg, crate::tools::connections::TOKEN_TITLE);
     run(&SelfCtx::new(&dir), name, args, &mut ask)
 }
 
 /// A list tool: runs like the read-only tools.
 pub fn is_read(name: &str) -> bool {
-    self_tool(name).is_some_and(|t| SELF_TOOLS.iter().any(|(n, c)| *n == t && *c == SelfClass::Read))
+    self_tool(name).is_some_and(|t| {
+        SELF_TOOLS
+            .iter()
+            .any(|(n, c)| *n == t && *c == SelfClass::Read)
+    })
 }
 
 /// Class for one call. A connection write that needs a token is credentials.
 pub fn self_class(name: &str, args: &Value) -> Option<SelfClass> {
     let tool = self_tool(name)?;
-    let base = SELF_TOOLS.iter().find(|(n, _)| *n == tool).map(|(_, c)| *c)?;
+    let base = SELF_TOOLS
+        .iter()
+        .find(|(n, _)| *n == tool)
+        .map(|(_, c)| *c)?;
     if matches!(tool, "connection_add" | "connection_modify") && needs_token(args) {
         return Some(SelfClass::Credentials);
     }
@@ -143,7 +151,13 @@ const GUARDED: &[(&str, &str)] = &[
 /// Name parts a self-made skill, connection, or automation can't carry, and
 /// whole names it can't take: they would read as the cabin's own policy.
 const GUARDED_NAME_PARTS: &[&str] = &["consent", "egress", "harness"];
-const GUARDED_NAMES: &[&str] = &["access", "access-mode", "permissions", "policy", "hard-class"];
+const GUARDED_NAMES: &[&str] = &[
+    "access",
+    "access-mode",
+    "permissions",
+    "policy",
+    "hard-class",
+];
 
 /// A refused target, as a finding the cabin and the model can read.
 pub fn scope_guard(name: &str, args: &Value) -> Option<crate::harness::Finding> {
@@ -160,7 +174,9 @@ pub fn scope_guard(name: &str, args: &Value) -> Option<crate::harness::Finding> 
         }
         if key == "name" {
             let slug = grokhub_core::skill_dir_name(s);
-            let part = GUARDED_NAME_PARTS.iter().find(|w| slug.split('-').any(|p| p == **w));
+            let part = GUARDED_NAME_PARTS
+                .iter()
+                .find(|w| slug.split('-').any(|p| p == **w));
             if let Some(w) = part.or_else(|| GUARDED_NAMES.iter().find(|w| slug == **w)) {
                 hit = Some((key.to_string(), (*w).to_string(), "a cabin policy name"));
             }

@@ -428,11 +428,17 @@ pub struct AppConfig {
     pub personality: String,
     /// Settings → Memory retention: unsure, unlinked AMR notes not updated in
     /// this many days are retired once a day, apart from dream. 0 keeps all.
-    #[serde(default = "default_amr_retention_days", deserialize_with = "de_amr_retention_days")]
+    #[serde(
+        default = "default_amr_retention_days",
+        deserialize_with = "de_amr_retention_days"
+    )]
     pub amr_retention_days: u32,
     /// Settings → Behavior → Auto-archive: chats with no activity for this many
-    /// days move to Archived (still searchable). 0 is off. Default 14.
-    #[serde(default = "default_chat_archive_days", deserialize_with = "de_chat_archive_days")]
+    /// days leave History and search (still on disk). 0 is off. Default 14.
+    #[serde(
+        default = "default_chat_archive_days",
+        deserialize_with = "de_chat_archive_days"
+    )]
     pub chat_archive_days: u32,
     /// Spike-2a flag: Cua Driver as a second pair of hands on Linux
     /// (`grokhub --mcp-cua`). Omitted from `app.json` while false. No Settings control.
@@ -525,7 +531,9 @@ fn default_dream_hour() -> u32 {
 /// A number clamps to 0–23; anything else is the default.
 fn de_dream_hour<'de, D: serde::Deserializer<'de>>(d: D) -> Result<u32, D::Error> {
     let raw = serde_json::Value::deserialize(d)?;
-    Ok(raw.as_i64().map_or_else(default_dream_hour, |h| h.clamp(0, 23) as u32))
+    Ok(raw
+        .as_i64()
+        .map_or_else(default_dream_hour, |h| h.clamp(0, 23) as u32))
 }
 
 /// 90 days: what the dream's TTL retired before retention was its own setting.
@@ -536,7 +544,9 @@ fn default_amr_retention_days() -> u32 {
 /// A whole number clamps to 0–3650; anything else is the default.
 fn de_amr_retention_days<'de, D: serde::Deserializer<'de>>(d: D) -> Result<u32, D::Error> {
     let raw = serde_json::Value::deserialize(d)?;
-    Ok(raw.as_i64().map_or_else(default_amr_retention_days, |n| n.clamp(0, 3650) as u32))
+    Ok(raw
+        .as_i64()
+        .map_or_else(default_amr_retention_days, |n| n.clamp(0, 3650) as u32))
 }
 
 fn default_chat_archive_days() -> u32 {
@@ -546,7 +556,9 @@ fn default_chat_archive_days() -> u32 {
 /// A whole number clamps to 0–3650; anything else is the default (14).
 fn de_chat_archive_days<'de, D: serde::Deserializer<'de>>(d: D) -> Result<u32, D::Error> {
     let raw = serde_json::Value::deserialize(d)?;
-    Ok(raw.as_i64().map_or_else(default_chat_archive_days, |n| n.clamp(0, 3650) as u32))
+    Ok(raw
+        .as_i64()
+        .map_or_else(default_chat_archive_days, |n| n.clamp(0, 3650) as u32))
 }
 
 fn default_imagine_wall() -> bool {
@@ -592,9 +604,9 @@ fn default_cabin_lane() -> String {
 /// Always is session-only. Disk and relaunch keep Ask or Auto, never Always.
 pub fn persistable_permission_mode(raw: &str) -> String {
     match grokhub_core::wire::PermissionMode::parse(raw) {
-        Some(grokhub_core::wire::PermissionMode::Auto) => {
-            grokhub_core::wire::PermissionMode::Auto.as_str().to_string()
-        }
+        Some(grokhub_core::wire::PermissionMode::Auto) => grokhub_core::wire::PermissionMode::Auto
+            .as_str()
+            .to_string(),
         _ => grokhub_core::wire::PermissionMode::Ask.as_str().to_string(),
     }
 }
@@ -773,8 +785,16 @@ fn hostname_cmd() -> Option<String> {
 /// is dropped here, and is logged once (`models/router_notes.jsonl`).
 pub fn drop_saved_effort(cfg: &mut AppConfig, dir: &std::path::Path) {
     if let Some(old) = cfg.legacy_reasoning_effort.take() {
-        let text = format!("Dropped the saved reasoning effort ({}): effort is automatic now.", old.trim());
-        grokhub_agent::route::guard::note_once(dir, "migrate:reasoning_effort", &text, grokhub_core::now_ms());
+        let text = format!(
+            "Dropped the saved reasoning effort ({}): effort is automatic now.",
+            old.trim()
+        );
+        grokhub_agent::route::guard::note_once(
+            dir,
+            "migrate:reasoning_effort",
+            &text,
+            grokhub_core::now_ms(),
+        );
     }
 }
 
@@ -1029,7 +1049,8 @@ mod tests {
             !json.contains("heartbeat"),
             "a default save must not grow a heartbeat key: {json}"
         );
-        let old: AppConfig = serde_json::from_str(r#"{"deviceName":"cabin","quietStart":"23:00"}"#).unwrap();
+        let old: AppConfig =
+            serde_json::from_str(r#"{"deviceName":"cabin","quietStart":"23:00"}"#).unwrap();
         assert_eq!(old.heartbeat, grokhub_core::PACE_NORMAL);
         assert_eq!(old.heartbeat.min_interval_min, 15);
         assert_eq!(old.heartbeat.max_per_day, 8);
@@ -1040,7 +1061,10 @@ mod tests {
         assert_eq!(tuned.heartbeat.min_interval_min, 30);
         assert_eq!(tuned.heartbeat.max_per_hour, 1);
         assert_eq!(tuned.heartbeat.backoff_after, 2);
-        assert_eq!(tuned.heartbeat.max_per_day, 8, "a missing key keeps its default");
+        assert_eq!(
+            tuned.heartbeat.max_per_day, 8,
+            "a missing key keeps its default"
+        );
         assert_eq!(tuned.heartbeat.halt_hold_min, 15);
         let saved = serde_json::to_string(&tuned).unwrap();
         assert!(
@@ -1052,13 +1076,27 @@ mod tests {
     #[test]
     fn background_budgets_default_omitted_and_overrides_parse() {
         let json = serde_json::to_string(&AppConfig::default()).unwrap();
-        assert!(!json.contains("\"background\""), "a default save must not grow a background key: {json}");
-        let tuned: AppConfig =
-            serde_json::from_str(r#"{"deviceName":"cabin","background":{"dailyTokens":{"review":500}}}"#).unwrap();
-        assert_eq!(tuned.background.daily_tokens(grokhub_core::JobKind::Review), 500);
-        assert_eq!(tuned.background.daily_tokens(grokhub_core::JobKind::Ideas), 100_000);
+        assert!(
+            !json.contains("\"background\""),
+            "a default save must not grow a background key: {json}"
+        );
+        let tuned: AppConfig = serde_json::from_str(
+            r#"{"deviceName":"cabin","background":{"dailyTokens":{"review":500}}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            tuned.background.daily_tokens(grokhub_core::JobKind::Review),
+            500
+        );
+        assert_eq!(
+            tuned.background.daily_tokens(grokhub_core::JobKind::Ideas),
+            100_000
+        );
         let saved = serde_json::to_string(&tuned).unwrap();
-        assert!(saved.contains(r#""background":{"dailyTokens":{"review":500}}"#), "{saved}");
+        assert!(
+            saved.contains(r#""background":{"dailyTokens":{"review":500}}"#),
+            "{saved}"
+        );
     }
 
     #[test]
@@ -1074,16 +1112,24 @@ mod tests {
     #[test]
     fn cua_driver_flag_defaults_off_and_is_omitted_while_off() {
         let json = serde_json::to_string(&AppConfig::default()).unwrap();
-        assert!(!json.contains("cuaDriver"), "a default save must not grow cuaDriver: {json}");
+        assert!(
+            !json.contains("cuaDriver"),
+            "a default save must not grow cuaDriver: {json}"
+        );
         let absent: AppConfig = serde_json::from_str(r#"{"deviceName":"cabin"}"#).unwrap();
         assert!(!absent.cua_driver);
         assert_eq!(absent.cua_driver_path, "");
-        let on: AppConfig =
-            serde_json::from_str(r#"{"deviceName":"cabin","cuaDriver":true,"cuaDriverPath":"/opt/cua/cua-driver"}"#).unwrap();
+        let on: AppConfig = serde_json::from_str(
+            r#"{"deviceName":"cabin","cuaDriver":true,"cuaDriverPath":"/opt/cua/cua-driver"}"#,
+        )
+        .unwrap();
         assert!(on.cua_driver);
         assert_eq!(on.cua_driver_path, "/opt/cua/cua-driver");
         let saved = serde_json::to_string(&on).unwrap();
-        assert!(saved.contains(r#""cuaDriver":true,"cuaDriverPath":"/opt/cua/cua-driver""#), "{saved}");
+        assert!(
+            saved.contains(r#""cuaDriver":true,"cuaDriverPath":"/opt/cua/cua-driver""#),
+            "{saved}"
+        );
     }
 
     #[test]
@@ -1139,13 +1185,21 @@ mod tests {
         assert_eq!(loaded.legacy_reasoning_effort, None);
         let body = fs::read_to_string(config_dir().join("app.json")).expect("app.json");
         // Router R3a: the local model is off in a fresh config and in an old file without the key.
-        assert!(!loaded.local_model && body.contains("\"localModel\": false"), "{body}");
+        assert!(
+            !loaded.local_model && body.contains("\"localModel\": false"),
+            "{body}"
+        );
         let old: AppConfig = serde_json::from_str("{}").expect("empty config");
         assert!(!old.local_model);
-        assert!(!old.setup_done && body.contains("\"setupDone\": false"), "{body}");
+        assert!(
+            !old.setup_done && body.contains("\"setupDone\": false"),
+            "{body}"
+        );
         let on: AppConfig = serde_json::from_str(r#"{"localModel":true}"#).expect("localModel on");
         assert!(on.local_model);
-        assert!(serde_json::to_string(&on).expect("json").contains("\"localModel\":true"));
+        assert!(serde_json::to_string(&on)
+            .expect("json")
+            .contains("\"localModel\":true"));
         assert!(
             !body.contains("xai-test") && !body.to_ascii_lowercase().contains("apikey"),
             "app.json must omit the leftover console-key field: {body}"
@@ -1351,17 +1405,28 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
         std::env::set_var("GROKHUB_CONFIG", &root);
         fs::create_dir_all(&root).expect("dir");
-        fs::write(root.join("app.json"), r#"{"mode":"max","reasoningEffort":"xhigh","deviceName":"cabin"}"#).expect("write");
+        fs::write(
+            root.join("app.json"),
+            r#"{"mode":"max","reasoningEffort":"xhigh","deviceName":"cabin"}"#,
+        )
+        .expect("write");
         let loaded = load();
         assert_eq!(loaded.device_name, "cabin", "an old config still loads");
         assert_eq!(loaded.legacy_reasoning_effort, None);
         let _ = load();
-        let notes = fs::read_to_string(grokhub_agent::route::guard::notes_path(&root)).expect("notes");
+        let notes =
+            fs::read_to_string(grokhub_agent::route::guard::notes_path(&root)).expect("notes");
         assert_eq!(notes.lines().count(), 1, "{notes}");
-        assert!(notes.contains("Dropped the saved reasoning effort (xhigh): effort is automatic now."), "{notes}");
+        assert!(
+            notes.contains("Dropped the saved reasoning effort (xhigh): effort is automatic now."),
+            "{notes}"
+        );
         save(&loaded).expect("save");
         let body = fs::read_to_string(root.join("app.json")).expect("app.json");
-        assert!(!body.contains("reasoningEffort"), "the effort setting is never written back: {body}");
+        assert!(
+            !body.contains("reasoningEffort"),
+            "the effort setting is never written back: {body}"
+        );
         let _ = fs::remove_dir_all(&root);
         std::env::remove_var("GROKHUB_CONFIG");
     }
@@ -1423,11 +1488,22 @@ mod tests {
     fn amr_retention_defaults_to_90_days_clamps_and_round_trips() {
         let old: AppConfig = serde_json::from_str("{}").unwrap();
         assert_eq!(old.amr_retention_days, 90);
-        for (raw, want) in [("30", 30), ("0", 0), ("99999", 3650), ("-4", 0), ("\"long\"", 90)] {
-            let cfg: AppConfig = serde_json::from_str(&format!("{{\"amrRetentionDays\": {raw}}}")).unwrap();
+        for (raw, want) in [
+            ("30", 30),
+            ("0", 0),
+            ("99999", 3650),
+            ("-4", 0),
+            ("\"long\"", 90),
+        ] {
+            let cfg: AppConfig =
+                serde_json::from_str(&format!("{{\"amrRetentionDays\": {raw}}}")).unwrap();
             assert_eq!(cfg.amr_retention_days, want, "{raw}");
         }
-        let text = serde_json::to_string(&AppConfig { amr_retention_days: 180, ..AppConfig::default() }).unwrap();
+        let text = serde_json::to_string(&AppConfig {
+            amr_retention_days: 180,
+            ..AppConfig::default()
+        })
+        .unwrap();
         assert!(text.contains("\"amrRetentionDays\":180"), "{text}");
     }
 
@@ -1435,14 +1511,22 @@ mod tests {
     fn chat_archive_days_defaults_to_14_clamps_and_round_trips() {
         let old: AppConfig = serde_json::from_str("{}").unwrap();
         assert_eq!(old.chat_archive_days, 14);
-        for (raw, want) in [("7", 7), ("0", 0), ("99999", 3650), ("-4", 0), ("\"long\"", 14)] {
+        for (raw, want) in [
+            ("7", 7),
+            ("0", 0),
+            ("99999", 3650),
+            ("-4", 0),
+            ("\"long\"", 14),
+        ] {
             let cfg: AppConfig =
                 serde_json::from_str(&format!("{{\"chatArchiveDays\": {raw}}}")).unwrap();
             assert_eq!(cfg.chat_archive_days, want, "{raw}");
         }
-        let text =
-            serde_json::to_string(&AppConfig { chat_archive_days: 30, ..AppConfig::default() })
-                .unwrap();
+        let text = serde_json::to_string(&AppConfig {
+            chat_archive_days: 30,
+            ..AppConfig::default()
+        })
+        .unwrap();
         assert!(text.contains("\"chatArchiveDays\":30"), "{text}");
     }
 
@@ -1451,11 +1535,22 @@ mod tests {
         let old: AppConfig = serde_json::from_str("{}").unwrap();
         assert_eq!(old.dream_hour, 21);
         assert_eq!(AppConfig::default().dream_hour, 21);
-        for (raw, want) in [("23", 23), ("0", 0), ("25", 23), ("-3", 0), ("\"late\"", 21), ("7.5", 21)] {
-            let cfg: AppConfig = serde_json::from_str(&format!("{{\"dreamHour\": {raw}}}")).unwrap();
+        for (raw, want) in [
+            ("23", 23),
+            ("0", 0),
+            ("25", 23),
+            ("-3", 0),
+            ("\"late\"", 21),
+            ("7.5", 21),
+        ] {
+            let cfg: AppConfig =
+                serde_json::from_str(&format!("{{\"dreamHour\": {raw}}}")).unwrap();
             assert_eq!(cfg.dream_hour, want, "{raw}");
         }
-        let cfg = AppConfig { dream_hour: 6, ..AppConfig::default() };
+        let cfg = AppConfig {
+            dream_hour: 6,
+            ..AppConfig::default()
+        };
         let text = serde_json::to_string(&cfg).unwrap();
         assert!(text.contains("\"dreamHour\":6"), "{text}");
         let back: AppConfig = serde_json::from_str(&text).unwrap();
@@ -1767,7 +1862,9 @@ mod tests {
             .map(|w| {
                 let path = path.clone();
                 std::thread::spawn(move || {
-                    (0..300).filter(|i| atomic_write(&path, format!("[{w},{i}]").as_bytes()).is_err()).count()
+                    (0..300)
+                        .filter(|i| atomic_write(&path, format!("[{w},{i}]").as_bytes()).is_err())
+                        .count()
                 })
             })
             .collect();

@@ -302,7 +302,12 @@ impl Drop for AshpdPortal {
     fn drop(&mut self) {
         self.close();
         drop(self.tx.lock().unwrap_or_else(|err| err.into_inner()).take());
-        if let Some(handle) = self.thread.lock().unwrap_or_else(|err| err.into_inner()).take() {
+        if let Some(handle) = self
+            .thread
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .take()
+        {
             let _ = handle.join();
         }
     }
@@ -364,11 +369,20 @@ impl EisInput for AshpdPortal {
 
 impl NotifyInput for AshpdPortal {
     fn notify_pointer(&mut self, stream: u32, x: f64, y: f64) -> Result<(), String> {
-        self.roundtrip(|reply| Cmd::NotifyPointer { stream, x, y, reply })
+        self.roundtrip(|reply| Cmd::NotifyPointer {
+            stream,
+            x,
+            y,
+            reply,
+        })
     }
 
     fn notify_button(&mut self, button: i32, down: bool) -> Result<(), String> {
-        self.roundtrip(|reply| Cmd::NotifyButton { button, down, reply })
+        self.roundtrip(|reply| Cmd::NotifyButton {
+            button,
+            down,
+            reply,
+        })
     }
 
     fn notify_axis(&mut self, horizontal: bool, steps: i32) -> Result<(), String> {
@@ -380,7 +394,11 @@ impl NotifyInput for AshpdPortal {
     }
 
     fn notify_keysym(&mut self, keysym: i32, down: bool) -> Result<(), String> {
-        self.roundtrip(|reply| Cmd::NotifyKeysym { keysym, down, reply })
+        self.roundtrip(|reply| Cmd::NotifyKeysym {
+            keysym,
+            down,
+            reply,
+        })
     }
 }
 
@@ -473,7 +491,9 @@ async fn dispatch(live: &mut Option<Live>, cmd: Cmd, cancel: &AtomicBool) {
         Cmd::Pointer { x, y, reply } => {
             let result = match live.as_mut() {
                 Some(Live::Eis(session)) => session.pointer(x, y).await,
-                Some(Live::Notify(_)) => Err("The portal session is using Notify, not libei.".into()),
+                Some(Live::Notify(_)) => {
+                    Err("The portal session is using Notify, not libei.".into())
+                }
                 None => Err("The portal session is closed.".into()),
             };
             let _ = reply.send(result);
@@ -481,7 +501,9 @@ async fn dispatch(live: &mut Option<Live>, cmd: Cmd, cancel: &AtomicBool) {
         Cmd::Button { code, down, reply } => {
             let result = match live.as_mut() {
                 Some(Live::Eis(session)) => session.button(code, down).await,
-                Some(Live::Notify(_)) => Err("The portal session is using Notify, not libei.".into()),
+                Some(Live::Notify(_)) => {
+                    Err("The portal session is using Notify, not libei.".into())
+                }
                 None => Err("The portal session is closed.".into()),
             };
             let _ = reply.send(result);
@@ -489,7 +511,9 @@ async fn dispatch(live: &mut Option<Live>, cmd: Cmd, cancel: &AtomicBool) {
         Cmd::Scroll { dx, dy, reply } => {
             let result = match live.as_mut() {
                 Some(Live::Eis(session)) => session.scroll(dx, dy).await,
-                Some(Live::Notify(_)) => Err("The portal session is using Notify, not libei.".into()),
+                Some(Live::Notify(_)) => {
+                    Err("The portal session is using Notify, not libei.".into())
+                }
                 None => Err("The portal session is closed.".into()),
             };
             let _ = reply.send(result);
@@ -497,7 +521,9 @@ async fn dispatch(live: &mut Option<Live>, cmd: Cmd, cancel: &AtomicBool) {
         Cmd::Key { code, down, reply } => {
             let result = match live.as_mut() {
                 Some(Live::Eis(session)) => session.key(code, down).await,
-                Some(Live::Notify(_)) => Err("The portal session is using Notify, not libei.".into()),
+                Some(Live::Notify(_)) => {
+                    Err("The portal session is using Notify, not libei.".into())
+                }
                 None => Err("The portal session is closed.".into()),
             };
             let _ = reply.send(result);
@@ -505,33 +531,52 @@ async fn dispatch(live: &mut Option<Live>, cmd: Cmd, cancel: &AtomicBool) {
         Cmd::Text { text, reply } => {
             let result = match live.as_mut() {
                 Some(Live::Eis(session)) => session.text(&text).await,
-                Some(Live::Notify(_)) => Err("The portal session is using Notify, not libei.".into()),
+                Some(Live::Notify(_)) => {
+                    Err("The portal session is using Notify, not libei.".into())
+                }
                 None => Err("The portal session is closed.".into()),
             };
             let _ = reply.send(result);
         }
-        Cmd::NotifyPointer { stream, x, y, reply } => {
+        Cmd::NotifyPointer {
+            stream,
+            x,
+            y,
+            reply,
+        } => {
             let result = match live.as_mut() {
                 Some(Live::Notify(session)) => session.pointer(stream, x, y).await,
                 _ => Err("The portal session is not using Notify.".into()),
             };
             let _ = reply.send(result);
         }
-        Cmd::NotifyButton { button, down, reply } => {
+        Cmd::NotifyButton {
+            button,
+            down,
+            reply,
+        } => {
             let result = match live.as_mut() {
                 Some(Live::Notify(session)) => session.button(button, down).await,
                 _ => Err("The portal session is not using Notify.".into()),
             };
             let _ = reply.send(result);
         }
-        Cmd::NotifyAxis { horizontal, steps, reply } => {
+        Cmd::NotifyAxis {
+            horizontal,
+            steps,
+            reply,
+        } => {
             let result = match live.as_mut() {
                 Some(Live::Notify(session)) => session.axis(horizontal, steps).await,
                 _ => Err("The portal session is not using Notify.".into()),
             };
             let _ = reply.send(result);
         }
-        Cmd::NotifyKeysym { keysym, down, reply } => {
+        Cmd::NotifyKeysym {
+            keysym,
+            down,
+            reply,
+        } => {
             let result = match live.as_mut() {
                 Some(Live::Notify(session)) => session.keysym(keysym, down).await,
                 _ => Err("The portal session is not using Notify.".into()),
@@ -547,9 +592,9 @@ fn classify(err: ashpd::Error, had_token: bool) -> PortalFail {
             "ConnectToEIS is not available on this portal ({err})."
         )),
         ashpd::Error::Response(ashpd::desktop::ResponseError::Cancelled)
-        | ashpd::Error::Portal(ashpd::PortalError::Cancelled(_)) => PortalFail::Denied(format!(
-            "The remote-control dialog was cancelled ({err})."
-        )),
+        | ashpd::Error::Portal(ashpd::PortalError::Cancelled(_)) => {
+            PortalFail::Denied(format!("The remote-control dialog was cancelled ({err})."))
+        }
         ashpd::Error::Response(ashpd::desktop::ResponseError::Other)
         | ashpd::Error::Portal(ashpd::PortalError::Failed(_))
         | ashpd::Error::Portal(ashpd::PortalError::InvalidArgument(_))
@@ -768,7 +813,13 @@ async fn select_monitor_sources(session: &RdSession, cancel: &AtomicBool) -> boo
         .set_multiple(true)
         .set_cursor_mode(CursorMode::Hidden)
         .set_persist_mode(PersistMode::DoNot);
-    match drive(cancel, cast.select_sources(session, options), Duration::from_secs(30)).await {
+    match drive(
+        cancel,
+        cast.select_sources(session, options),
+        Duration::from_secs(30),
+    )
+    .await
+    {
         Ok(Ok(request)) => match request.response() {
             Ok(()) => true,
             Err(err) => {
@@ -877,16 +928,29 @@ impl LiveNotify {
 
     async fn button(&self, button: i32, down: bool) -> Result<(), String> {
         use ashpd::desktop::remote_desktop::{KeyState, NotifyPointerButtonOptions};
-        let state = if down { KeyState::Pressed } else { KeyState::Released };
+        let state = if down {
+            KeyState::Pressed
+        } else {
+            KeyState::Released
+        };
         self.portal
-            .notify_pointer_button(&self.session, button, state, NotifyPointerButtonOptions::default())
+            .notify_pointer_button(
+                &self.session,
+                button,
+                state,
+                NotifyPointerButtonOptions::default(),
+            )
             .await
             .map_err(|err| format!("NotifyPointerButton: {err}"))
     }
 
     async fn axis(&self, horizontal: bool, steps: i32) -> Result<(), String> {
         use ashpd::desktop::remote_desktop::{Axis, NotifyPointerAxisDiscreteOptions};
-        let axis = if horizontal { Axis::Horizontal } else { Axis::Vertical };
+        let axis = if horizontal {
+            Axis::Horizontal
+        } else {
+            Axis::Vertical
+        };
         self.portal
             .notify_pointer_axis_discrete(
                 &self.session,
@@ -900,7 +964,11 @@ impl LiveNotify {
 
     async fn keysym(&self, keysym: i32, down: bool) -> Result<(), String> {
         use ashpd::desktop::remote_desktop::{KeyState, NotifyKeyboardKeysymOptions};
-        let state = if down { KeyState::Pressed } else { KeyState::Released };
+        let state = if down {
+            KeyState::Pressed
+        } else {
+            KeyState::Released
+        };
         self.portal
             .notify_keyboard_keysym(
                 &self.session,
@@ -1456,10 +1524,8 @@ mod tests {
 
         let store = MemoryRestoreStore::new();
         store.save("stale").unwrap();
-        let mut portal = FakePortal::script(vec![
-            FakeReply::Reject,
-            FakeReply::Token("fresh".into()),
-        ]);
+        let mut portal =
+            FakePortal::script(vec![FakeReply::Reject, FakeReply::Token("fresh".into())]);
         let opened = open_with_restore(&mut portal, &store).unwrap();
         assert_eq!(portal.seen(), vec![Some("stale".into()), None]);
         assert_eq!(store.load().unwrap().as_deref(), Some("fresh"));

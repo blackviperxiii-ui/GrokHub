@@ -146,9 +146,9 @@ impl SourceSettings {
     /// Add one entry in its canonical form. Err says what was wrong.
     pub fn add(&mut self, kind: SourceKind, raw: &str) -> Result<String, String> {
         let entry = canonical_entry(kind, raw)?;
-        let list = self
-            .list_mut(kind)
-            .ok_or_else(|| "Hacker News follows your interests; there is nothing to add.".to_string())?;
+        let list = self.list_mut(kind).ok_or_else(|| {
+            "Hacker News follows your interests; there is nothing to add.".to_string()
+        })?;
         if let Some(have) = list.iter().find(|have| have.eq_ignore_ascii_case(&entry)) {
             return Err(format!("{have} is already on the list."));
         }
@@ -194,6 +194,16 @@ pub const REFETCH_MS: u64 = 15 * 60 * 1000;
 pub const ITEM_MAX_AGE_MS: u64 = 7 * 24 * 60 * 60 * 1000;
 /// Feed posts one run adds.
 pub const POSTS_PER_RUN: usize = 5;
+/// Most posts one `source_name` may contribute in a single run (stops one place flooding).
+pub const PER_SOURCE_MAX: usize = 2;
+/// Positive Save / More like this hits before Pulse follows a place on its own.
+pub const LEARN_PLACE_HITS: u32 = 2;
+/// Learned place rows kept in the source cache.
+pub const LEARNED_PLACES_MAX: usize = 40;
+/// Prior posts from a source below this get a novelty score bump.
+pub const SOURCE_NOVELTY_BELOW: u32 = 3;
+/// Percent added to an under-seen source's score when the cache has post history.
+pub const SOURCE_NOVELTY_PCT: u32 = 20;
 /// Canonical URLs remembered as already posted.
 pub const SEEN_MAX: usize = 600;
 pub const SUMMARY_CHARS: usize = 280;
@@ -240,7 +250,8 @@ pub fn canonical_entry(kind: SourceKind, raw: &str) -> Result<String, String> {
             let part_ok = |p: &str| {
                 !p.is_empty()
                     && p.len() <= 100
-                    && p.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+                    && p.chars()
+                        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
                     && p != "."
                     && p != ".."
             };
@@ -251,18 +262,19 @@ pub fn canonical_entry(kind: SourceKind, raw: &str) -> Result<String, String> {
             }
         }
         SourceKind::YouTube => {
-            let id = raw
-                .rsplit(['/', '='])
-                .next()
-                .unwrap_or("")
-                .trim();
+            let id = raw.rsplit(['/', '=']).next().unwrap_or("").trim();
             let ok = id.len() == 24
                 && id.starts_with("UC")
-                && id.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_'));
+                && id
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_'));
             if ok {
                 Ok(id.to_string())
             } else {
-                Err("A channel id starts with UC and is 24 characters (from the channel's URL).".into())
+                Err(
+                    "A channel id starts with UC and is 24 characters (from the channel's URL)."
+                        .into(),
+                )
             }
         }
         SourceKind::Rss => {
@@ -303,10 +315,45 @@ pub fn query_value(text: &str) -> String {
     out
 }
 
+/// Which interest topics this check searches. Keeps the strongest first, then
+/// rotates the remaining slots so weaker interests still get turns.
+pub fn topic_queries(topics: &[String], run_index: u64) -> Vec<String> {
+    if topics.is_empty() {
+        return Vec::new();
+    }
+    if topics.len() <= TOPIC_QUERIES {
+        return topics.to_vec();
+    }
+    let mut out = vec![topics[0].clone()];
+    let rest = &topics[1..];
+    let start = (run_index as usize) % rest.len();
+    for i in 0..rest.len() {
+        if out.len() >= TOPIC_QUERIES {
+            break;
+        }
+        let topic = &rest[(start + i) % rest.len()];
+        if !out.iter().any(|have| have.eq_ignore_ascii_case(topic)) {
+            out.push(topic.clone());
+        }
+    }
+    out
+}
+
 /// Every fetch for one run. `topics` strongest first, muted ones already left out.
+/// `run_index` rotates which weaker topics are searched (`topic_queries`).
 pub fn requests(s: &SourceSettings, topics: &[String], now_ms: u64) -> Vec<SourceReq> {
+    requests_for(s, topics, 0, now_ms)
+}
+
+/// Like [`requests`], with an explicit run index for topic rotation.
+pub fn requests_for(
+    s: &SourceSettings,
+    topics: &[String],
+    run_index: u64,
+    now_ms: u64,
+) -> Vec<SourceReq> {
     let mut out = Vec::new();
-    let searched: Vec<&String> = topics.iter().take(TOPIC_QUERIES).collect();
+    let searched = topic_queries(topics, run_index);
     if s.hacker_news {
         let since = now_ms.saturating_sub(SEARCH_WINDOW_MS) / 1000;
         for topic in &searched {
@@ -317,7 +364,7 @@ pub fn requests(s: &SourceSettings, topics: &[String], now_ms: u64) -> Vec<Sourc
                     query_value(topic)
                 ),
                 name: "Hacker News".into(),
-                topic: Some((*topic).clone()),
+                topic: Some(topic.clone()),
             });
         }
     }
@@ -338,7 +385,7 @@ pub fn requests(s: &SourceSettings, topics: &[String], now_ms: u64) -> Vec<Sourc
                     query_value(topic)
                 ),
                 name: "Reddit".into(),
-                topic: Some((*topic).clone()),
+                topic: Some(topic.clone()),
             });
         }
     }
@@ -486,7 +533,11 @@ fn parse_reddit(req: &SourceReq, body: &str) -> Vec<SourceItem> {
             title: one_line(d["title"].as_str().unwrap_or(""), 200),
             url,
             kind: SourceKind::Reddit,
-            source_name: if sub.is_empty() { req.name.clone() } else { format!("r/{sub}") },
+            source_name: if sub.is_empty() {
+                req.name.clone()
+            } else {
+                format!("r/{sub}")
+            },
             published_ms: (d["created_utc"].as_f64().unwrap_or(0.0).max(0.0) as u64) * 1000,
             summary: one_line(d["selftext"].as_str().unwrap_or(""), SUMMARY_CHARS),
             image,
@@ -564,7 +615,9 @@ fn parse_feed(req: &SourceReq, body: &str) -> Vec<SourceItem> {
                         }
                         "title" if cur.title.is_empty() => cur.title = value,
                         "link" if cur.link.is_empty() && !value.is_empty() => cur.link = value,
-                        "guid" if cur.alt_link.is_empty() && http_url(&value) => cur.alt_link = value,
+                        "guid" if cur.alt_link.is_empty() && http_url(&value) => {
+                            cur.alt_link = value
+                        }
                         "pubDate" | "published" | "date" if !value.is_empty() => cur.date = value,
                         "updated" if cur.date.is_empty() => cur.date = value,
                         "description" | "summary" | "content" | "encoded"
@@ -629,7 +682,11 @@ fn take_attrs(cur: &mut Entry, name: &str, e: &quick_xml::events::BytesStart<'_>
 }
 
 fn finish(req: &SourceReq, feed_title: &str, e: Entry) -> SourceItem {
-    let link = if http_url(&e.link) { e.link } else { e.alt_link };
+    let link = if http_url(&e.link) {
+        e.link
+    } else {
+        e.alt_link
+    };
     let source_name = match req.kind {
         SourceKind::GithubReleases => req.name.clone(),
         _ => {
@@ -771,7 +828,14 @@ pub fn parse_date_ms(raw: &str) -> Option<u64> {
     let raw = raw.trim();
     if raw.len() >= 19 && raw.as_bytes().get(4) == Some(&b'-') {
         let n = |a: usize, b: usize| raw.get(a..b)?.parse::<i64>().ok();
-        let (y, mo, d, h, mi, s) = (n(0, 4)?, n(5, 7)?, n(8, 10)?, n(11, 13)?, n(14, 16)?, n(17, 19)?);
+        let (y, mo, d, h, mi, s) = (
+            n(0, 4)?,
+            n(5, 7)?,
+            n(8, 10)?,
+            n(11, 13)?,
+            n(14, 16)?,
+            n(17, 19)?,
+        );
         let mut tz = &raw[19..];
         if let Some(frac) = tz.strip_prefix('.') {
             tz = frac.trim_start_matches(|c: char| c.is_ascii_digit());
@@ -783,7 +847,9 @@ pub fn parse_date_ms(raw: &str) -> Option<u64> {
     if parts.len() < 4 {
         return None;
     }
-    const MONTHS: [&str; 12] = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
+    const MONTHS: [&str; 12] = [
+        "jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec",
+    ];
     let d: i64 = parts[0].parse().ok()?;
     let mon = parts[1].get(..3)?.to_ascii_lowercase();
     let mo = MONTHS.iter().position(|m| *m == mon)? as i64 + 1;
@@ -791,9 +857,20 @@ pub fn parse_date_ms(raw: &str) -> Option<u64> {
     if y < 100 {
         y += 2000;
     }
-    let hms: Vec<i64> = parts[3].split(':').map(|p| p.parse().unwrap_or(0)).collect();
+    let hms: Vec<i64> = parts[3]
+        .split(':')
+        .map(|p| p.parse().unwrap_or(0))
+        .collect();
     let tz = parts.get(4).copied().unwrap_or("Z");
-    to_ms(y, mo, d, *hms.first()?, *hms.get(1)?, hms.get(2).copied().unwrap_or(0), offset_minutes(tz)?)
+    to_ms(
+        y,
+        mo,
+        d,
+        *hms.first()?,
+        *hms.get(1)?,
+        hms.get(2).copied().unwrap_or(0),
+        offset_minutes(tz)?,
+    )
 }
 
 /// Lowercase host without `www.`, no fragment, no `utm_*` or `ref` params, no trailing slash.
@@ -813,7 +890,12 @@ pub fn canonical_url(url: &str) -> String {
     let host = host.strip_prefix("www.").unwrap_or(&host);
     let kept: Vec<&str> = query
         .split('&')
-        .filter(|p| !p.is_empty() && !p.starts_with("utm_") && !p.starts_with("ref=") && !p.starts_with("ref_src="))
+        .filter(|p| {
+            !p.is_empty()
+                && !p.starts_with("utm_")
+                && !p.starts_with("ref=")
+                && !p.starts_with("ref_src=")
+        })
         .collect();
     let mut out = format!("{host}/{}", rest.trim_end_matches('/'));
     out = out.trim_end_matches('/').to_string();
@@ -884,7 +966,11 @@ pub fn related_requests(s: &SourceSettings, related: &[Related], now_ms: u64) ->
 
 /// What the app's fetch returned.
 pub enum Fetched {
-    Body { body: String, etag: Option<String>, last_modified: Option<String> },
+    Body {
+        body: String,
+        etag: Option<String>,
+        last_modified: Option<String>,
+    },
     NotModified,
     Failed(String),
 }
@@ -921,6 +1007,24 @@ pub struct SourceCache {
     /// More like this searches for the next check.
     #[serde(default)]
     pub related: Vec<Related>,
+    /// How many Feed posts each `source_name` has contributed (for novelty).
+    #[serde(default)]
+    pub source_posts: BTreeMap<String, u32>,
+    /// Places Save / More like this pointed at, with hit counts toward auto-follow.
+    #[serde(default)]
+    pub places: Vec<PlaceHit>,
+    /// Completed source checks; rotates weaker interest topic queries.
+    #[serde(default)]
+    pub runs: u64,
+}
+
+/// A followable place learned from posts the person liked.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlaceHit {
+    pub kind: SourceKind,
+    pub entry: String,
+    pub hits: u32,
 }
 
 impl SourceCache {
@@ -949,7 +1053,12 @@ impl SourceCache {
     /// Queue a related search for the next check. The oldest drops past `RELATED_MAX`.
     pub fn queue_related(&mut self, query: &str, topic: Option<&str>) {
         let query = query.trim();
-        if query.is_empty() || self.related.iter().any(|r| r.query.eq_ignore_ascii_case(query)) {
+        if query.is_empty()
+            || self
+                .related
+                .iter()
+                .any(|r| r.query.eq_ignore_ascii_case(query))
+        {
             return;
         }
         self.related.push(Related {
@@ -959,6 +1068,47 @@ impl SourceCache {
         if self.related.len() > RELATED_MAX {
             let drop = self.related.len() - RELATED_MAX;
             self.related.drain(..drop);
+        }
+    }
+
+    /// Count a Save / More like this toward following a place. True the first time
+    /// hits reach [`LEARN_PLACE_HITS`] so the app can call [`SourceSettings::add`].
+    pub fn note_place(&mut self, kind: SourceKind, entry: &str) -> bool {
+        let entry = entry.trim();
+        if entry.is_empty() || kind == SourceKind::HackerNews {
+            return false;
+        }
+        if let Some(row) = self
+            .places
+            .iter_mut()
+            .find(|p| p.kind == kind && p.entry.eq_ignore_ascii_case(entry))
+        {
+            if row.hits >= LEARN_PLACE_HITS {
+                return false;
+            }
+            row.hits = row.hits.saturating_add(1);
+            return row.hits == LEARN_PLACE_HITS;
+        }
+        self.places.push(PlaceHit {
+            kind,
+            entry: entry.to_string(),
+            hits: 1,
+        });
+        if self.places.len() > LEARNED_PLACES_MAX {
+            let drop = self.places.len() - LEARNED_PLACES_MAX;
+            self.places.drain(..drop);
+        }
+        LEARN_PLACE_HITS == 1
+    }
+
+    /// Remember which sources contributed the posts that just went up.
+    pub fn mark_source_posts(&mut self, posted: &[Ranked]) {
+        for r in posted {
+            let name = r.item.source_name.trim();
+            if name.is_empty() {
+                continue;
+            }
+            *self.source_posts.entry(name.to_string()).or_insert(0) += 1;
         }
     }
 
@@ -1011,18 +1161,30 @@ pub fn gather(
     let mut out = Gathered::default();
     for req in reqs {
         let have = cache.entries.get(&req.url).cloned();
-        if let Some(entry) = have.as_ref().filter(|e| now_ms.saturating_sub(e.fetched_ms) < REFETCH_MS) {
+        if let Some(entry) = have
+            .as_ref()
+            .filter(|e| now_ms.saturating_sub(e.fetched_ms) < REFETCH_MS)
+        {
             out.items.extend(entry.items.iter().cloned());
             continue;
         }
         out.fetched += 1;
         match fetch(req, have.as_ref()) {
-            Fetched::Body { body, etag, last_modified } => {
+            Fetched::Body {
+                body,
+                etag,
+                last_modified,
+            } => {
                 let items = parse(req, &body);
                 out.items.extend(items.iter().cloned());
                 cache.entries.insert(
                     req.url.clone(),
-                    CacheEntry { etag, last_modified, fetched_ms: now_ms, items },
+                    CacheEntry {
+                        etag,
+                        last_modified,
+                        fetched_ms: now_ms,
+                        items,
+                    },
                 );
             }
             Fetched::NotModified => {
@@ -1063,7 +1225,10 @@ pub const SAME_STORY_PCT: u32 = 60;
 
 /// How well an item fits: the strongest interest it names (pinned counts as 100), else
 /// half the weight of the interest its search was for, else the followed-source floor.
-fn relevance(item: &SourceItem, profile: &crate::interests::InterestProfile) -> (u32, Option<String>) {
+fn relevance(
+    item: &SourceItem,
+    profile: &crate::interests::InterestProfile,
+) -> (u32, Option<String>) {
     let text = format!("{} {}", item.title, item.summary);
     let weight = |t: &crate::interests::Interest| if t.pinned { 100 } else { u32::from(t.weight) };
     if let Some(t) = profile
@@ -1118,8 +1283,12 @@ fn quality(item: &SourceItem) -> u32 {
 
 /// Score every item. Muted interests, items past ITEM_MAX_AGE_MS and anything under
 /// RANK_MIN drop out. Highest first.
-pub fn rank(items: &[SourceItem], profile: &crate::interests::InterestProfile, now_ms: u64) -> Vec<Ranked> {
-    rank_with(items, profile, &BTreeMap::new(), now_ms)
+pub fn rank(
+    items: &[SourceItem],
+    profile: &crate::interests::InterestProfile,
+    now_ms: u64,
+) -> Vec<Ranked> {
+    rank_with(items, profile, &BTreeMap::new(), &BTreeMap::new(), now_ms)
 }
 
 /// Most steps Not interested or More like this moves one source.
@@ -1127,28 +1296,58 @@ pub const SOURCE_BIAS_MAX: i32 = 4;
 /// What one step is worth, in percent of an item's score.
 const SOURCE_BIAS_STEP_PCT: i32 = 15;
 
-/// `rank`, with each source's score moved 15% a step by Not interested / More like this.
+fn novelty_pct(source_name: &str, source_posts: &BTreeMap<String, u32>) -> u32 {
+    if source_posts.is_empty() {
+        return 0;
+    }
+    let posts = source_posts.get(source_name).copied().unwrap_or(0);
+    if posts < SOURCE_NOVELTY_BELOW {
+        SOURCE_NOVELTY_PCT
+    } else {
+        0
+    }
+}
+
+/// `rank`, with each source's score moved 15% a step by Not interested / More like this,
+/// and a novelty bump for under-seen sources once any posts have been counted.
 pub fn rank_with(
     items: &[SourceItem],
     profile: &crate::interests::InterestProfile,
     bias: &BTreeMap<String, i32>,
+    source_posts: &BTreeMap<String, u32>,
     now_ms: u64,
 ) -> Vec<Ranked> {
-    let muted: Vec<&str> = profile.topics.iter().filter(|t| t.muted).map(|t| t.topic.as_str()).collect();
+    let muted: Vec<&str> = profile
+        .topics
+        .iter()
+        .filter(|t| t.muted)
+        .map(|t| t.topic.as_str())
+        .collect();
     let mut out: Vec<Ranked> = items
         .iter()
         .filter(|i| i.published_ms == 0 || now_ms.saturating_sub(i.published_ms) <= ITEM_MAX_AGE_MS)
         .filter(|i| {
             let text = format!("{} {}", i.title, i.summary);
-            !muted.iter().any(|m| crate::interests::names_topic(&text, m))
+            !muted
+                .iter()
+                .any(|m| crate::interests::names_topic(&text, m))
         })
         .filter_map(|i| {
             let (rel, because) = relevance(i, profile);
             let score = rel * freshness(i, now_ms) * quality(i) / 10_000;
-            let step = bias.get(&i.source_name).copied().unwrap_or(0).clamp(-SOURCE_BIAS_MAX, SOURCE_BIAS_MAX);
+            let step = bias
+                .get(&i.source_name)
+                .copied()
+                .unwrap_or(0)
+                .clamp(-SOURCE_BIAS_MAX, SOURCE_BIAS_MAX);
             let pct = u32::try_from(100 + step * SOURCE_BIAS_STEP_PCT).unwrap_or(100);
             let score = score * pct / 100;
-            (score >= RANK_MIN).then(|| Ranked { item: i.clone(), score, because })
+            let score = score * (100 + novelty_pct(&i.source_name, source_posts)) / 100;
+            (score >= RANK_MIN).then(|| Ranked {
+                item: i.clone(),
+                score,
+                because,
+            })
         })
         .collect();
     out.sort_by(|a, b| {
@@ -1160,7 +1359,10 @@ pub fn rank_with(
     out
 }
 
-const TITLE_STOP: &[&str] = &["the", "and", "for", "with", "from", "that", "this", "into", "your", "are", "has", "have", "its", "now", "new", "how", "why", "what"];
+const TITLE_STOP: &[&str] = &[
+    "the", "and", "for", "with", "from", "that", "this", "into", "your", "are", "has", "have",
+    "its", "now", "new", "how", "why", "what",
+];
 
 fn title_words(title: &str) -> std::collections::BTreeSet<String> {
     title
@@ -1182,11 +1384,18 @@ pub fn title_similarity(a: &str, b: &str) -> u32 {
 }
 
 /// What posts from a run: best score first, not already posted (by canonical URL),
-/// not the same story as a post already up or picked, at most POSTS_PER_RUN.
-pub fn pick_new(ranked: &[Ranked], cache: &SourceCache, posted_urls: &[String], posted_titles: &[String]) -> Vec<Ranked> {
+/// not the same story as a post already up or picked, at most [`POSTS_PER_RUN`],
+/// and at most [`PER_SOURCE_MAX`] from one `source_name`.
+pub fn pick_new(
+    ranked: &[Ranked],
+    cache: &SourceCache,
+    posted_urls: &[String],
+    posted_titles: &[String],
+) -> Vec<Ranked> {
     let mut seen: std::collections::BTreeSet<String> = cache.seen.iter().cloned().collect();
     seen.extend(posted_urls.iter().map(|u| canonical_url(u)));
     let mut titles: Vec<String> = posted_titles.to_vec();
+    let mut per_source: BTreeMap<String, usize> = BTreeMap::new();
     let mut out = Vec::new();
     for r in ranked {
         if out.len() >= POSTS_PER_RUN {
@@ -1195,14 +1404,82 @@ pub fn pick_new(ranked: &[Ranked], cache: &SourceCache, posted_urls: &[String], 
         if seen.contains(&canonical_url(&r.item.url)) {
             continue;
         }
-        if titles.iter().any(|t| title_similarity(t, &r.item.title) >= SAME_STORY_PCT) {
+        if titles
+            .iter()
+            .any(|t| title_similarity(t, &r.item.title) >= SAME_STORY_PCT)
+        {
+            continue;
+        }
+        let name = r.item.source_name.clone();
+        let n = per_source.get(&name).copied().unwrap_or(0);
+        if n >= PER_SOURCE_MAX {
             continue;
         }
         seen.insert(canonical_url(&r.item.url));
         titles.push(r.item.title.clone());
+        *per_source.entry(name).or_insert(0) += 1;
         out.push(r.clone());
     }
     out
+}
+
+/// A followable place implied by a source item (subreddit, GitHub repo, YouTube channel).
+pub fn place_from_item(item: &SourceItem) -> Option<(SourceKind, String)> {
+    if let Some(sub) = item.source_name.strip_prefix("r/") {
+        if let Ok(entry) = canonical_entry(SourceKind::Reddit, sub) {
+            return Some((SourceKind::Reddit, entry));
+        }
+    }
+    if let Some(repo) = item.source_name.strip_suffix(" on GitHub") {
+        if let Ok(entry) = canonical_entry(SourceKind::GithubReleases, repo) {
+            return Some((SourceKind::GithubReleases, entry));
+        }
+    }
+    place_from_url(&item.url)
+}
+
+/// A followable place from a Feed card's source line or citation URLs.
+pub fn place_from_card(card: &UpdateCard) -> Option<(SourceKind, String)> {
+    if let Some(name) = card.pulse.source_name.as_deref() {
+        if let Some(sub) = name.strip_prefix("r/") {
+            if let Ok(entry) = canonical_entry(SourceKind::Reddit, sub) {
+                return Some((SourceKind::Reddit, entry));
+            }
+        }
+        if let Some(repo) = name.strip_suffix(" on GitHub") {
+            if let Ok(entry) = canonical_entry(SourceKind::GithubReleases, repo) {
+                return Some((SourceKind::GithubReleases, entry));
+            }
+        }
+    }
+    for url in &card.citations {
+        if let Some(place) = place_from_url(url) {
+            return Some(place);
+        }
+    }
+    None
+}
+
+/// GitHub repo, Reddit sub, or YouTube channel id from a public URL.
+pub fn place_from_url(url: &str) -> Option<(SourceKind, String)> {
+    let url = url.trim();
+    let host = crate::pulse::source_host(url)?.to_lowercase();
+    if host == "github.com" || host.ends_with(".github.com") {
+        return canonical_entry(SourceKind::GithubReleases, url)
+            .ok()
+            .map(|entry| (SourceKind::GithubReleases, entry));
+    }
+    if host == "reddit.com" || host.ends_with(".reddit.com") {
+        return canonical_entry(SourceKind::Reddit, url)
+            .ok()
+            .map(|entry| (SourceKind::Reddit, entry));
+    }
+    if host == "youtube.com" || host.ends_with(".youtube.com") || host == "youtu.be" {
+        return canonical_entry(SourceKind::YouTube, url)
+            .ok()
+            .map(|entry| (SourceKind::YouTube, entry));
+    }
+    None
 }
 
 /// Remember what posted so a dismissed post never comes back.
@@ -1230,7 +1507,13 @@ pub fn summary_messages(picks: &[Ranked]) -> Option<Vec<(String, String)>> {
     let mut ask = String::new();
     for (i, r) in picks.iter().enumerate() {
         let text = one_line(&r.item.summary, SUMMARY_CHARS);
-        ask.push_str(&format!("{}. {} ({})\n{}\n\n", i + 1, r.item.title, r.item.source_name, text));
+        ask.push_str(&format!(
+            "{}. {} ({})\n{}\n\n",
+            i + 1,
+            r.item.title,
+            r.item.source_name,
+            text
+        ));
     }
     Some(vec![
         ("system".into(), SUMMARY_RULES.into()),
@@ -1359,7 +1642,12 @@ mod tests {
     const NOW: u64 = 1_791_705_600_000; // 2026-10-11T08:00:00Z
 
     fn req(kind: SourceKind, name: &str, topic: Option<&str>) -> SourceReq {
-        SourceReq { kind, url: format!("https://example.test/{}", kind.key()), name: name.into(), topic: topic.map(str::to_string) }
+        SourceReq {
+            kind,
+            url: format!("https://example.test/{}", kind.key()),
+            name: name.into(),
+            topic: topic.map(str::to_string),
+        }
     }
 
     #[test]
@@ -1418,11 +1706,20 @@ mod tests {
         let items = parse(&r, gh);
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].title, "Rust 1.99.0");
-        assert_eq!(items[0].url, "https://github.com/rust-lang/rust/releases/tag/1.99.0");
+        assert_eq!(
+            items[0].url,
+            "https://github.com/rust-lang/rust/releases/tag/1.99.0"
+        );
         assert_eq!(items[0].source_name, "rust-lang/rust on GitHub");
         assert_eq!(items[0].summary, "Language Async closures are stable.");
-        assert_eq!(items[0].published_ms, parse_date_ms("2026-10-09T15:00:00Z").unwrap());
-        assert_eq!(items[0].image.as_deref(), Some("https://avatars.githubusercontent.com/u/5430905?s=60&v=4"));
+        assert_eq!(
+            items[0].published_ms,
+            parse_date_ms("2026-10-09T15:00:00Z").unwrap()
+        );
+        assert_eq!(
+            items[0].image.as_deref(),
+            Some("https://avatars.githubusercontent.com/u/5430905?s=60&v=4")
+        );
 
         let yt = r#"<feed xmlns:yt="http://www.youtube.com/xml/schemas/2015" xmlns:media="http://search.yahoo.com/mrss/" xmlns="http://www.w3.org/2005/Atom">
  <title>Shop Tools</title>
@@ -1438,7 +1735,10 @@ mod tests {
         assert_eq!(items[0].source_name, "Shop Tools");
         assert_eq!(items[0].url, "https://www.youtube.com/watch?v=abc123");
         assert_eq!(items[0].summary, "Full teardown and rebuild.");
-        assert_eq!(items[0].image.as_deref(), Some("https://i1.ytimg.com/vi/abc123/hqdefault.jpg"));
+        assert_eq!(
+            items[0].image.as_deref(),
+            Some("https://i1.ytimg.com/vi/abc123/hqdefault.jpg")
+        );
     }
 
     #[test]
@@ -1446,7 +1746,10 @@ mod tests {
         let hn = r#"{"hits":[
  {"title":"Rust 1.99 released","url":"https://blog.rust-lang.org/2026/10/09/Rust-1.99.html","objectID":"41","points":812,"num_comments":301,"created_at_i":1791705000},
  {"title":"Ask HN: Rust at work?","url":null,"objectID":"42","points":5,"num_comments":2,"created_at_i":1791704000}]}"#;
-        let items = parse(&req(SourceKind::HackerNews, "Hacker News", Some("Rust")), hn);
+        let items = parse(
+            &req(SourceKind::HackerNews, "Hacker News", Some("Rust")),
+            hn,
+        );
         assert_eq!(items.len(), 2);
         assert_eq!(items[0].summary, "812 points, 301 comments on Hacker News.");
         assert_eq!(items[0].topic.as_deref(), Some("Rust"));
@@ -1462,32 +1765,80 @@ mod tests {
         let items = parse(&req(SourceKind::Reddit, "r/rust", None), rd);
         let got: Vec<(&str, &str, &str, Option<&str>)> = items
             .iter()
-            .map(|i| (i.title.as_str(), i.url.as_str(), i.source_name.as_str(), i.image.as_deref()))
+            .map(|i| {
+                (
+                    i.title.as_str(),
+                    i.url.as_str(),
+                    i.source_name.as_str(),
+                    i.image.as_deref(),
+                )
+            })
             .collect();
         assert_eq!(
             got,
             vec![
-                ("My compressor build", "https://www.reddit.com/r/rust/comments/3/x/", "r/rust", None),
-                ("egui 0.40 is out", "https://github.com/emilk/egui/releases", "r/rust", Some("https://preview.redd.it/egui.png?width=640&s=abc")),
+                (
+                    "My compressor build",
+                    "https://www.reddit.com/r/rust/comments/3/x/",
+                    "r/rust",
+                    None
+                ),
+                (
+                    "egui 0.40 is out",
+                    "https://github.com/emilk/egui/releases",
+                    "r/rust",
+                    Some("https://preview.redd.it/egui.png?width=640&s=abc")
+                ),
             ]
         );
         assert_eq!(items[0].summary, "Took a weekend.");
-        assert!(parse(&req(SourceKind::Reddit, "r/rust", None), "<html>blocked</html>").is_empty());
+        assert!(parse(
+            &req(SourceKind::Reddit, "r/rust", None),
+            "<html>blocked</html>"
+        )
+        .is_empty());
     }
 
     #[test]
     fn requests_follow_settings_and_the_top_topics() {
         let mut s = SourceSettings::default();
-        assert_eq!(s.add(SourceKind::Reddit, "https://www.reddit.com/r/rust/"), Ok("rust".into()));
-        assert_eq!(s.add(SourceKind::GithubReleases, "https://github.com/emilk/egui.git"), Ok("emilk/egui".into()));
-        assert_eq!(s.add(SourceKind::YouTube, "https://www.youtube.com/channel/UCxxxxxxxxxxxxxxxxxxxxxx"), Ok("UCxxxxxxxxxxxxxxxxxxxxxx".into()));
-        assert_eq!(s.add(SourceKind::Rss, "https://this-week-in-rust.org/rss.xml"), Ok("https://this-week-in-rust.org/rss.xml".into()));
-        assert_eq!(s.add(SourceKind::Reddit, "r/Rust"), Err("rust is already on the list.".into()));
+        assert_eq!(
+            s.add(SourceKind::Reddit, "https://www.reddit.com/r/rust/"),
+            Ok("rust".into())
+        );
+        assert_eq!(
+            s.add(
+                SourceKind::GithubReleases,
+                "https://github.com/emilk/egui.git"
+            ),
+            Ok("emilk/egui".into())
+        );
+        assert_eq!(
+            s.add(
+                SourceKind::YouTube,
+                "https://www.youtube.com/channel/UCxxxxxxxxxxxxxxxxxxxxxx"
+            ),
+            Ok("UCxxxxxxxxxxxxxxxxxxxxxx".into())
+        );
+        assert_eq!(
+            s.add(SourceKind::Rss, "https://this-week-in-rust.org/rss.xml"),
+            Ok("https://this-week-in-rust.org/rss.xml".into())
+        );
+        assert_eq!(
+            s.add(SourceKind::Reddit, "r/Rust"),
+            Err("rust is already on the list.".into())
+        );
         assert!(s.add(SourceKind::GithubReleases, "just-a-name").is_err());
         assert!(s.add(SourceKind::Rss, "ftp://x.test/feed").is_err());
         assert!(s.add(SourceKind::HackerNews, "anything").is_err());
-        let topics: Vec<String> = ["air compressors", "Rust", "xAI", "F1"].iter().map(|t| t.to_string()).collect();
-        let urls: Vec<String> = requests(&s, &topics, NOW).into_iter().map(|r| r.url).collect();
+        let topics: Vec<String> = ["air compressors", "Rust", "xAI", "F1"]
+            .iter()
+            .map(|t| t.to_string())
+            .collect();
+        let urls: Vec<String> = requests(&s, &topics, NOW)
+            .into_iter()
+            .map(|r| r.url)
+            .collect();
         let since = (NOW - SEARCH_WINDOW_MS) / 1000;
         assert_eq!(
             urls,
@@ -1507,22 +1858,41 @@ mod tests {
         s.set_on(SourceKind::HackerNews, false);
         s.set_on(SourceKind::Reddit, false);
         s.set_on(SourceKind::Rss, false);
-        let kinds: Vec<SourceKind> = requests(&s, &topics, NOW).into_iter().map(|r| r.kind).collect();
+        let kinds: Vec<SourceKind> = requests(&s, &topics, NOW)
+            .into_iter()
+            .map(|r| r.kind)
+            .collect();
         assert_eq!(kinds, vec![SourceKind::GithubReleases, SourceKind::YouTube]);
     }
 
     #[test]
     fn gather_uses_etags_the_refetch_window_and_stale_items_on_failure() {
         let hn = r#"{"hits":[{"title":"Rust 1.99","url":"https://blog.rust-lang.org/1.99","objectID":"1","points":1,"num_comments":0,"created_at_i":1791705000}]}"#;
-        let a = SourceReq { kind: SourceKind::HackerNews, url: "https://hn.test/a".into(), name: "Hacker News".into(), topic: Some("Rust".into()) };
-        let b = SourceReq { kind: SourceKind::Rss, url: "https://feed.test/b".into(), name: "feed.test".into(), topic: None };
+        let a = SourceReq {
+            kind: SourceKind::HackerNews,
+            url: "https://hn.test/a".into(),
+            name: "Hacker News".into(),
+            topic: Some("Rust".into()),
+        };
+        let b = SourceReq {
+            kind: SourceKind::Rss,
+            url: "https://feed.test/b".into(),
+            name: "feed.test".into(),
+            topic: None,
+        };
         let mut cache = SourceCache::default();
-        cache.entries.insert("https://gone.test/".into(), CacheEntry::default());
+        cache
+            .entries
+            .insert("https://gone.test/".into(), CacheEntry::default());
         let mut calls: Vec<(String, Option<String>)> = Vec::new();
         let got = gather(&[a.clone(), b.clone()], &mut cache, NOW, &mut |r, have| {
             calls.push((r.url.clone(), have.and_then(|h| h.etag.clone())));
             if r.url == a.url {
-                Fetched::Body { body: hn.into(), etag: Some("\"v1\"".into()), last_modified: None }
+                Fetched::Body {
+                    body: hn.into(),
+                    etag: Some("\"v1\"".into()),
+                    last_modified: None,
+                }
             } else {
                 Fetched::Failed("timed out".into())
             }
@@ -1530,25 +1900,43 @@ mod tests {
         assert_eq!(got.items.len(), 1);
         assert_eq!(got.errors, vec!["feed.test: timed out".to_string()]);
         assert_eq!(got.fetched, 2);
-        assert!(!cache.entries.contains_key("https://gone.test/"), "unrequested URLs leave the cache");
+        assert!(
+            !cache.entries.contains_key("https://gone.test/"),
+            "unrequested URLs leave the cache"
+        );
         // Inside the window nothing is fetched.
         calls.clear();
-        let again = gather(std::slice::from_ref(&a), &mut cache, NOW + 60_000, &mut |r, _| {
-            calls.push((r.url.clone(), None));
-            Fetched::Failed("should not fetch".into())
-        });
+        let again = gather(
+            std::slice::from_ref(&a),
+            &mut cache,
+            NOW + 60_000,
+            &mut |r, _| {
+                calls.push((r.url.clone(), None));
+                Fetched::Failed("should not fetch".into())
+            },
+        );
         assert!(calls.is_empty());
         assert_eq!(again.items.len(), 1);
         // After it, the ETag goes along and a 304 keeps the items.
-        let later = gather(std::slice::from_ref(&a), &mut cache, NOW + REFETCH_MS, &mut |r, have| {
-            calls.push((r.url.clone(), have.and_then(|h| h.etag.clone())));
-            Fetched::NotModified
-        });
+        let later = gather(
+            std::slice::from_ref(&a),
+            &mut cache,
+            NOW + REFETCH_MS,
+            &mut |r, have| {
+                calls.push((r.url.clone(), have.and_then(|h| h.etag.clone())));
+                Fetched::NotModified
+            },
+        );
         assert_eq!(calls, vec![(a.url.clone(), Some("\"v1\"".to_string()))]);
         assert_eq!(later.items.len(), 1);
         assert_eq!(cache.entries[&a.url].fetched_ms, NOW + REFETCH_MS);
         // A failure after that still offers the cached items.
-        let failed = gather(std::slice::from_ref(&a), &mut cache, NOW + 2 * REFETCH_MS, &mut |_, _| Fetched::Failed("HTTP 503".into()));
+        let failed = gather(
+            std::slice::from_ref(&a),
+            &mut cache,
+            NOW + 2 * REFETCH_MS,
+            &mut |_, _| Fetched::Failed("HTTP 503".into()),
+        );
         assert_eq!(failed.items.len(), 1);
         assert_eq!(failed.errors, vec!["Hacker News: HTTP 503".to_string()]);
     }
@@ -1568,7 +1956,11 @@ mod tests {
     }
 
     fn ranked(r: SourceItem) -> Ranked {
-        Ranked { item: r, score: 50, because: None }
+        Ranked {
+            item: r,
+            score: 50,
+            because: None,
+        }
     }
 
     fn profile(topics: &[(&str, u8, bool, bool)]) -> crate::interests::InterestProfile {
@@ -1589,8 +1981,17 @@ mod tests {
     #[test]
     fn rank_scores_relevance_freshness_and_source_signal() {
         const H: u64 = 3_600_000;
-        let p = profile(&[("Rust", 60, false, false), ("air compressors", 40, false, false), ("F1", 20, true, false), ("crypto", 90, false, true)]);
-        let mut hn = item("Rust 1.99 released", "https://blog.rust-lang.org/1.99", NOW - H);
+        let p = profile(&[
+            ("Rust", 60, false, false),
+            ("air compressors", 40, false, false),
+            ("F1", 20, true, false),
+            ("crypto", 90, false, true),
+        ]);
+        let mut hn = item(
+            "Rust 1.99 released",
+            "https://blog.rust-lang.org/1.99",
+            NOW - H,
+        );
         hn.kind = SourceKind::HackerNews;
         hn.engagement = 812;
         hn.topic = Some("Rust".into());
@@ -1598,26 +1999,54 @@ mod tests {
         quiet_hn.kind = SourceKind::HackerNews;
         quiet_hn.engagement = 3;
         quiet_hn.topic = Some("Rust".into());
-        let compressor = item("Rebuilding air compressors at home", "https://c.test", NOW - 20 * H);
+        let compressor = item(
+            "Rebuilding air compressors at home",
+            "https://c.test",
+            NOW - 20 * H,
+        );
         let f1 = item("F1 calendar for 2027", "https://f1.test", NOW - 80 * H);
         let followed = item("This week in a newsletter", "https://n.test", 0);
         let crypto = item("Rust crypto wallet hacked", "https://x.test", NOW);
-        let old = item("Rust 1.0 retrospective", "https://o.test", NOW - ITEM_MAX_AGE_MS - 1);
-        let got: Vec<(String, u32, Option<String>)> = rank(&[hn, quiet_hn, compressor, f1, followed, crypto, old], &p, NOW)
-            .into_iter()
-            .map(|r| (r.item.title, r.score, r.because))
-            .collect();
+        let old = item(
+            "Rust 1.0 retrospective",
+            "https://o.test",
+            NOW - ITEM_MAX_AGE_MS - 1,
+        );
+        let got: Vec<(String, u32, Option<String>)> = rank(
+            &[hn, quiet_hn, compressor, f1, followed, crypto, old],
+            &p,
+            NOW,
+        )
+        .into_iter()
+        .map(|r| (r.item.title, r.score, r.because))
+        .collect();
         assert_eq!(
             got,
             vec![
                 // 60 × 100% × 130% (812 points).
-                ("Rust 1.99 released".to_string(), 78, Some("Rust".to_string())),
+                (
+                    "Rust 1.99 released".to_string(),
+                    78,
+                    Some("Rust".to_string())
+                ),
                 // Pinned counts as 100, at 72+ hours: 100 × 40%.
-                ("F1 calendar for 2027".to_string(), 40, Some("F1".to_string())),
+                (
+                    "F1 calendar for 2027".to_string(),
+                    40,
+                    Some("F1".to_string())
+                ),
                 // 40 × 80% (20 hours old).
-                ("Rebuilding air compressors at home".to_string(), 32, Some("air compressors".to_string())),
+                (
+                    "Rebuilding air compressors at home".to_string(),
+                    32,
+                    Some("air compressors".to_string())
+                ),
                 // Its search was for Rust but it never says so: 60/2 × 100% × 80% (3 points).
-                ("Show HN: my editor".to_string(), 24, Some("Rust".to_string())),
+                (
+                    "Show HN: my editor".to_string(),
+                    24,
+                    Some("Rust".to_string())
+                ),
                 // A followed source, no date: 35 × 50%.
                 ("This week in a newsletter".to_string(), 17, None),
             ]
@@ -1626,7 +2055,12 @@ mod tests {
 
     #[test]
     fn same_story_titles_match_and_different_ones_do_not() {
-        assert!(title_similarity("Rust 1.99 released with async closures", "Rust 1.99 is released: async closures land") >= SAME_STORY_PCT);
+        assert!(
+            title_similarity(
+                "Rust 1.99 released with async closures",
+                "Rust 1.99 is released: async closures land"
+            ) >= SAME_STORY_PCT
+        );
         assert!(title_similarity("Rust 1.99 released", "Go 1.30 released") < SAME_STORY_PCT);
         assert_eq!(title_similarity("", "anything"), 0);
     }
@@ -1634,14 +2068,29 @@ mod tests {
     #[test]
     fn pick_new_skips_seen_links_and_stories_already_up() {
         let mut cache = SourceCache::default();
-        mark_seen(&mut cache, &[ranked(item("Seen", "https://a.test/seen", NOW))]);
+        mark_seen(
+            &mut cache,
+            &[ranked(item("Seen", "https://a.test/seen", NOW))],
+        );
         let list: Vec<Ranked> = [
             item("Seen again", "https://www.a.test/seen/?utm_source=x", NOW),
-            item("Rust 1.99 released with async closures", "https://a.test/n", NOW - 1),
-            item("Rust 1.99 is released: async closures land", "https://b.test/n", NOW - 1),
+            item(
+                "Rust 1.99 released with async closures",
+                "https://a.test/n",
+                NOW - 1,
+            ),
+            item(
+                "Rust 1.99 is released: async closures land",
+                "https://b.test/n",
+                NOW - 1,
+            ),
             item("Same link twice", "https://A.test/n#top", NOW - 2),
             item("On a card", "https://a.test/card", NOW - 3),
-            item("Egui 0.40 ships a new layout engine", "https://c.test/e", NOW - 4),
+            item(
+                "Egui 0.40 ships a new layout engine",
+                "https://c.test/e",
+                NOW - 4,
+            ),
             item("Older", "https://a.test/o", NOW - 10),
         ]
         .into_iter()
@@ -1649,30 +2098,62 @@ mod tests {
         .collect();
         let posted = vec!["https://a.test/card".to_string()];
         let up = vec!["egui 0.40 ships new layout engine".to_string()];
-        let got: Vec<String> = pick_new(&list, &cache, &posted, &up).into_iter().map(|r| r.item.title).collect();
+        let got: Vec<String> = pick_new(&list, &cache, &posted, &up)
+            .into_iter()
+            .map(|r| r.item.title)
+            .collect();
         assert_eq!(got, vec!["Rust 1.99 released with async closures", "Older"]);
-        assert_eq!(canonical_url("https://WWW.Example.com/a/?utm_medium=x&id=3#frag"), "example.com/a?id=3");
+        assert_eq!(
+            canonical_url("https://WWW.Example.com/a/?utm_medium=x&id=3#frag"),
+            "example.com/a?id=3"
+        );
     }
 
     #[test]
     fn an_item_card_names_its_item_source_and_link() {
-        let mut it = item("Rust 1.99.0", "https://github.com/rust-lang/rust/releases/tag/1.99.0", NOW - 1000);
+        let mut it = item(
+            "Rust 1.99.0",
+            "https://github.com/rust-lang/rust/releases/tag/1.99.0",
+            NOW - 1000,
+        );
         it.source_name = "rust-lang/rust on GitHub".into();
         it.summary = "Async closures are stable.".into();
         it.image = Some("https://img.test/r.png".into());
-        let card = item_card(&Ranked { item: it, score: 40, because: Some("Rust".into()) }, NOW);
+        let card = item_card(
+            &Ranked {
+                item: it,
+                score: 40,
+                because: Some("Rust".into()),
+            },
+            NOW,
+        );
         assert_eq!(card.kind, crate::update_feed::UpdateKind::Digest);
         assert_eq!(card.title, "Rust 1.99.0");
         assert_eq!(card.body.as_deref(), Some("Async closures are stable."));
-        assert_eq!(card.citations, vec!["https://github.com/rust-lang/rust/releases/tag/1.99.0".to_string()]);
-        assert_eq!(card.pulse.source_name.as_deref(), Some("rust-lang/rust on GitHub"));
-        assert_eq!(card.pulse.image_urls, vec!["https://img.test/r.png".to_string()]);
+        assert_eq!(
+            card.citations,
+            vec!["https://github.com/rust-lang/rust/releases/tag/1.99.0".to_string()]
+        );
+        assert_eq!(
+            card.pulse.source_name.as_deref(),
+            Some("rust-lang/rust on GitHub")
+        );
+        assert_eq!(
+            card.pulse.image_urls,
+            vec!["https://img.test/r.png".to_string()]
+        );
         assert_eq!(card.created_at, NOW - 1000);
-        assert_eq!(card.source_id, "source:rss:github.com/rust-lang/rust/releases/tag/1.99.0");
+        assert_eq!(
+            card.source_id,
+            "source:rss:github.com/rust-lang/rust/releases/tag/1.99.0"
+        );
         assert_eq!(card.pulse.because.as_deref(), Some("Rust"));
         assert!(crate::update_feed::names_its_item(&card));
         // A future date from a bad feed clock posts as now.
-        assert_eq!(item_card(&ranked(item("Later", "https://a.test/l", NOW + 5)), NOW).created_at, NOW);
+        assert_eq!(
+            item_card(&ranked(item("Later", "https://a.test/l", NOW + 5)), NOW).created_at,
+            NOW
+        );
     }
 
     #[test]
@@ -1721,7 +2202,11 @@ mod tests {
         let msgs = summary_messages(&[a.clone(), b.clone()]).expect("asks");
         assert_eq!(msgs.len(), 2);
         assert_eq!(msgs[0].0, "system");
-        assert!(msgs[0].1.contains("Use only the text given"), "{}", msgs[0].1);
+        assert!(
+            msgs[0].1.contains("Use only the text given"),
+            "{}",
+            msgs[0].1
+        );
         assert_eq!(
             msgs[1].1,
             "1. Rust 1.99 released (feed.test)\n812 points on Hacker News.\n\n2. Quiet compressors (Shop Notes)\nSix new units under 60 dB."
@@ -1736,7 +2221,10 @@ mod tests {
 
     #[test]
     fn more_like_this_queues_a_search_for_the_posts_own_words() {
-        assert_eq!(related_query("Rust 1.99 ships async closures for the web"), "Rust 1.99 ships async closures web");
+        assert_eq!(
+            related_query("Rust 1.99 ships async closures for the web"),
+            "Rust 1.99 ships async closures web"
+        );
         assert_eq!(related_query("The new: the NEW thing"), "thing");
         let mut cache = SourceCache::default();
         cache.queue_related("Rust async closures", Some("Rust"));
@@ -1747,11 +2235,20 @@ mod tests {
         }
         assert_eq!(cache.related.len(), RELATED_MAX);
         assert_eq!(cache.related[0].query, "query 1");
-        let one = [Related { query: "Rust async closures".into(), topic: Some("Rust".into()) }];
+        let one = [Related {
+            query: "Rust async closures".into(),
+            topic: Some("Rust".into()),
+        }];
         let reqs = related_requests(&SourceSettings::default(), &one, NOW);
         let got: Vec<(SourceKind, Option<String>, bool)> = reqs
             .iter()
-            .map(|r| (r.kind, r.topic.clone(), r.url.contains("Rust%20async%20closures")))
+            .map(|r| {
+                (
+                    r.kind,
+                    r.topic.clone(),
+                    r.url.contains("Rust%20async%20closures"),
+                )
+            })
             .collect();
         assert_eq!(
             got,
@@ -1789,8 +2286,17 @@ mod tests {
         let followed = item("Shop notes", "https://feed.test/1", NOW - 60_000);
         let p = profile(&[]);
         let score = |bias: i32| {
-            let map: BTreeMap<String, i32> = [("feed.test".to_string(), bias)].into_iter().collect();
-            rank_with(std::slice::from_ref(&followed), &p, &map, NOW).first().map(|r| r.score)
+            let map: BTreeMap<String, i32> =
+                [("feed.test".to_string(), bias)].into_iter().collect();
+            rank_with(
+                std::slice::from_ref(&followed),
+                &p,
+                &map,
+                &BTreeMap::new(),
+                NOW,
+            )
+            .first()
+            .map(|r| r.score)
         };
         assert_eq!(score(0), Some(35));
         assert_eq!(score(1), Some(40));
@@ -1799,8 +2305,152 @@ mod tests {
     }
 
     #[test]
+    fn topic_queries_keep_the_strongest_and_rotate_the_rest() {
+        let topics: Vec<String> = ["Rust", "xAI", "F1", "compressors"]
+            .iter()
+            .map(|t| (*t).into())
+            .collect();
+        assert_eq!(
+            topic_queries(&topics, 0),
+            vec!["Rust".to_string(), "xAI".into(), "F1".into()]
+        );
+        assert_eq!(
+            topic_queries(&topics, 1),
+            vec!["Rust".to_string(), "F1".into(), "compressors".into()]
+        );
+        assert_eq!(
+            topic_queries(&topics, 2),
+            vec!["Rust".to_string(), "compressors".into(), "xAI".into()]
+        );
+        assert_eq!(
+            topic_queries(&topics[..2], 9),
+            vec!["Rust".to_string(), "xAI".into()]
+        );
+    }
+
+    #[test]
+    fn pick_new_caps_posts_per_source_name() {
+        let cache = SourceCache::default();
+        let mut list = Vec::new();
+        for (i, title) in [
+            "Alpha ships",
+            "Bravo lands",
+            "Charlie opens",
+            "Delta closes",
+        ]
+        .iter()
+        .enumerate()
+        {
+            let mut it = item(title, &format!("https://a.test/{i}"), NOW - i as u64);
+            it.source_name = "Hacker News".into();
+            list.push(ranked(it));
+        }
+        for (i, title) in ["Kernel notes", "Editor release", "Database tip"]
+            .iter()
+            .enumerate()
+        {
+            let mut it = item(title, &format!("https://b.test/{i}"), NOW - 10 - i as u64);
+            it.source_name = "r/rust".into();
+            list.push(ranked(it));
+        }
+        let mut feed = item("Quiet compressors", "https://c.test/a", NOW - 20);
+        feed.source_name = "blog.test".into();
+        list.push(ranked(feed));
+        let mut feed_b = item("Shop lighting", "https://c.test/b", NOW - 21);
+        feed_b.source_name = "blog.test".into();
+        list.push(ranked(feed_b));
+        let got: Vec<(String, String)> = pick_new(&list, &cache, &[], &[])
+            .into_iter()
+            .map(|r| (r.item.source_name, r.item.title))
+            .collect();
+        assert_eq!(
+            got,
+            vec![
+                ("Hacker News".into(), "Alpha ships".into()),
+                ("Hacker News".into(), "Bravo lands".into()),
+                ("r/rust".into(), "Kernel notes".into()),
+                ("r/rust".into(), "Editor release".into()),
+                ("blog.test".into(), "Quiet compressors".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn place_learning_follows_reddit_and_github_after_two_hits() {
+        assert_eq!(
+            place_from_item(&SourceItem {
+                title: "Async in the kernel".into(),
+                url: "https://www.reddit.com/r/rust/comments/abc/x".into(),
+                kind: SourceKind::Reddit,
+                source_name: "r/rust".into(),
+                published_ms: NOW,
+                summary: String::new(),
+                image: None,
+                topic: None,
+                engagement: 10,
+            }),
+            Some((SourceKind::Reddit, "rust".into()))
+        );
+        assert_eq!(
+            place_from_url("https://github.com/emilk/egui/releases/tag/0.40"),
+            Some((SourceKind::GithubReleases, "emilk/egui".into()))
+        );
+        assert_eq!(
+            place_from_url("https://blog.rust-lang.org/1.99"),
+            None,
+            "plain blogs are not auto-followed without a real feed id"
+        );
+        let mut cache = SourceCache::default();
+        assert!(!cache.note_place(SourceKind::Reddit, "rust"));
+        assert!(cache.note_place(SourceKind::Reddit, "Rust"));
+        assert!(!cache.note_place(SourceKind::Reddit, "rust"));
+        assert_eq!(
+            cache.places,
+            vec![PlaceHit {
+                kind: SourceKind::Reddit,
+                entry: "rust".into(),
+                hits: LEARN_PLACE_HITS,
+            }]
+        );
+    }
+
+    #[test]
+    fn under_seen_sources_get_a_novelty_bump_once_history_exists() {
+        let followed = item("Shop notes", "https://feed.test/1", NOW - 60_000);
+        let p = profile(&[]);
+        let bias = BTreeMap::<String, i32>::new();
+        let empty_posts = BTreeMap::<String, u32>::new();
+        let history: BTreeMap<String, u32> = [("other".into(), 5)].into_iter().collect();
+        let plain = rank_with(
+            std::slice::from_ref(&followed),
+            &p,
+            &bias,
+            &empty_posts,
+            NOW,
+        )[0]
+        .score;
+        let novel = rank_with(std::slice::from_ref(&followed), &p, &bias, &history, NOW)[0].score;
+        assert_eq!(plain, 35);
+        assert_eq!(novel, 42);
+        let known: BTreeMap<String, u32> = [("feed.test".into(), SOURCE_NOVELTY_BELOW)]
+            .into_iter()
+            .collect();
+        assert_eq!(
+            rank_with(std::slice::from_ref(&followed), &p, &bias, &known, NOW)[0].score,
+            35
+        );
+    }
+
+    #[test]
     fn saved_finds_keep_one_entry_per_link_newest_first() {
-        let mut card = item_card(&ranked(item("Rust 1.99 released", "https://a.test/1?utm_source=x", NOW)), NOW);
+        let mut card = item_card(
+            &ranked(item(
+                "Rust 1.99 released",
+                "https://a.test/1?utm_source=x",
+                NOW,
+            )),
+            NOW,
+        );
         card.pulse.because = Some("Rust".into());
         let first = saved_from_card(&card, NOW).expect("has a link");
         assert_eq!(first.url, "https://a.test/1?utm_source=x");
@@ -1810,12 +2460,19 @@ mod tests {
         let mut again = saved_from_card(&card, NOW + 1).expect("has a link");
         again.url = "https://www.a.test/1".into();
         assert!(!save_find(&mut list, again));
-        let other = saved_from_card(&item_card(&ranked(item("Other", "https://b.test/2", NOW)), NOW), NOW + 2).expect("link");
+        let other = saved_from_card(
+            &item_card(&ranked(item("Other", "https://b.test/2", NOW)), NOW),
+            NOW + 2,
+        )
+        .expect("link");
         assert!(save_find(&mut list, other));
         let titles: Vec<&str> = list.iter().map(|f| f.title.as_str()).collect();
         assert_eq!(titles, vec!["Other", "Rust 1.99 released"]);
         card.citations.clear();
         assert_eq!(saved_from_card(&card, NOW), None);
-        assert!(is_source_post(&item_card(&ranked(item("x", "https://c.test/3", NOW)), NOW)));
+        assert!(is_source_post(&item_card(
+            &ranked(item("x", "https://c.test/3", NOW)),
+            NOW
+        )));
     }
 }

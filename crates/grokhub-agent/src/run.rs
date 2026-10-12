@@ -91,7 +91,10 @@ impl SteerQueue {
         if text.trim().is_empty() {
             return;
         }
-        self.inner.lock().unwrap_or_else(|e| e.into_inner()).push_back(text);
+        self.inner
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push_back(text);
     }
 
     pub fn drain(&self) -> Vec<String> {
@@ -243,9 +246,13 @@ pub fn run_loop(
 ) -> LoopOut {
     let first_turn = history.is_empty();
     // Brain 5: the turn's talk style sits in the system prompt's volatile tail.
-    let style = (input.depth == 0).then(|| crate::checkpoint::turn_style(input.conversation_id)).flatten();
+    let style = (input.depth == 0)
+        .then(|| crate::checkpoint::turn_style(input.conversation_id))
+        .flatten();
     // Brain 3: so does the playbook the turn's Brief picked.
-    let playbook = (input.depth == 0).then(|| crate::checkpoint::turn_playbook(input.conversation_id)).flatten();
+    let playbook = (input.depth == 0)
+        .then(|| crate::checkpoint::turn_playbook(input.conversation_id))
+        .flatten();
     if first_turn {
         let base = style.map(|s| grokhub_core::talk::restyle(input.system, s));
         let base = base.as_deref().unwrap_or(input.system);
@@ -296,14 +303,20 @@ pub fn run_loop(
         .then(|| crate::drive::Drive::new(&crate::session_tools::todos_for(input.conversation_id)));
     let mut evidence = 0usize;
     // Brain 2: the turn's Brief and the changes still waiting on a check.
-    let brief = drive.as_ref().and_then(|_| crate::checkpoint::turn_brief(input.conversation_id));
+    let brief = drive
+        .as_ref()
+        .and_then(|_| crate::checkpoint::turn_brief(input.conversation_id));
     let mut fresh = crate::checkpoint::Fresh::default();
     let (mut checkpoint_at, mut checkpoint_due) = (0usize, Vec::<String>::new());
     // Brain 5: a long run in a progress style gets a note at each phase boundary.
     let mut progress = drive
         .as_ref()
         .filter(|_| style.is_some_and(grokhub_core::talk::TalkStyle::progress_notes))
-        .map(|_| crate::checkpoint::Progress::new(&crate::session_tools::todos_for(input.conversation_id)));
+        .map(|_| {
+            crate::checkpoint::Progress::new(&crate::session_tools::todos_for(
+                input.conversation_id,
+            ))
+        });
     match crate::hooks::on_user_prompt(input.conversation_id, input.workspace, user_text) {
         crate::hooks::PromptHook::Block { reason } => {
             history.pop();
@@ -349,17 +362,15 @@ pub fn run_loop(
         }
         // Compact when the context fills (or before a long-context price step).
         // Re-arm after at least one new turn since the last successful compact.
-        let long = crate::route::live::crosses_long_context(&crate::perm::config_dir(), input.model, crate::compact::estimate_input_tokens(history));
+        let long = crate::route::live::crosses_long_context(
+            &crate::perm::config_dir(),
+            input.model,
+            crate::compact::estimate_input_tokens(history),
+        );
         let over = crate::compact::needs_auto_compact(history, input.context_length) || long;
         let may_compact = over && (!compacted_once || turns_since_compact >= 1);
         if may_compact {
-            match run_compact_pass(
-                input,
-                history,
-                &modified_paths,
-                &mut usage,
-                on_event,
-            ) {
+            match run_compact_pass(input, history, &modified_paths, &mut usage, on_event) {
                 CompactPass::Ok => {
                     compacted_once = true;
                     turns_since_compact = 0;
@@ -386,10 +397,16 @@ pub fn run_loop(
         if let Some(t) = step_ended {
             crate::timing::record("loop:step_gap", t.elapsed());
         }
-        let turn = match crate::route::live::stream_routed(input.client, &req, input.cancel, &mut |ev| match ev {
-            StreamEvent::TextDelta(text) => on_event(LoopEvent::Text(text)),
-            StreamEvent::ReasoningDelta(text) => on_event(LoopEvent::Thought(text)),
-        }, class) {
+        let turn = match crate::route::live::stream_routed(
+            input.client,
+            &req,
+            input.cancel,
+            &mut |ev| match ev {
+                StreamEvent::TextDelta(text) => on_event(LoopEvent::Text(text)),
+                StreamEvent::ReasoningDelta(text) => on_event(LoopEvent::Thought(text)),
+            },
+            class,
+        ) {
             Ok(turn) => {
                 overflow_compacted = false;
                 turn
@@ -407,13 +424,7 @@ pub fn run_loop(
                         true,
                     );
                 }
-                match run_compact_pass(
-                    input,
-                    history,
-                    &modified_paths,
-                    &mut usage,
-                    on_event,
-                ) {
+                match run_compact_pass(input, history, &modified_paths, &mut usage, on_event) {
                     CompactPass::Ok => {
                         compacted_once = true;
                         turns_since_compact = 0;
@@ -467,7 +478,14 @@ pub fn run_loop(
                     name: call.name.clone(),
                     arguments: call.arguments.clone(),
                 });
-                emit_tool(on_event, &tool_id(call), call, "failed", TRUNCATED_TOOL, None);
+                emit_tool(
+                    on_event,
+                    &tool_id(call),
+                    call,
+                    "failed",
+                    TRUNCATED_TOOL,
+                    None,
+                );
                 // Do not note a tool error: truncation is not a failed tool run.
                 history.push(InputItem::FunctionCallOutput {
                     call_id: call.call_id.clone(),
@@ -480,9 +498,13 @@ pub fn run_loop(
         if turn.calls.is_empty() {
             let notes = input.steer.drain();
             if notes.is_empty() {
-                if let Some(drive) = drive.as_mut().filter(|_| !crate::session_tools::plan_on(input.conversation_id)) {
+                if let Some(drive) = drive
+                    .as_mut()
+                    .filter(|_| !crate::session_tools::plan_on(input.conversation_id))
+                {
                     let todos = crate::session_tools::todos_for(input.conversation_id);
-                    let gaps = crate::checkpoint::Gaps::of(brief.as_ref(), &todos, evidence, &fresh);
+                    let gaps =
+                        crate::checkpoint::Gaps::of(brief.as_ref(), &todos, evidence, &fresh);
                     match drive.check_with(&todos, evidence, &gaps) {
                         crate::drive::Verdict::Push(note) => {
                             history.push(user_message(&note, None));
@@ -495,7 +517,11 @@ pub fn run_loop(
                                 content: vec![ContentPart::InputText(text)],
                             });
                             // Brain 5: a repair or research run still ends with its findings card.
-                            if let Some(card) = gaps.findings.then(|| crate::checkpoint::fallback_findings(&todos, &gaps)).flatten() {
+                            if let Some(card) = gaps
+                                .findings
+                                .then(|| crate::checkpoint::fallback_findings(&todos, &gaps))
+                                .flatten()
+                            {
                                 on_event(LoopEvent::Findings(card.to_body()));
                             }
                         }
@@ -698,7 +724,13 @@ pub fn run_loop(
                             let output = ToolOutput::err(gate::user_cancelled(&call.name));
                             emit_tool(on_event, &id, call, "failed", &output.text, None);
                             push_output(history, call, output);
-                            return finish(input, StopReason::Cancelled, usage, compacted_once, true);
+                            return finish(
+                                input,
+                                StopReason::Cancelled,
+                                usage,
+                                compacted_once,
+                                true,
+                            );
                         }
                         Waited::Halted => {
                             let _ = stop_for_halt(input);
@@ -726,8 +758,12 @@ pub fn run_loop(
             let halted = stop_for_halt(input);
             if !output.failed && !crate::drive::is_session_tool(&call.name) {
                 evidence += 1;
-                fresh.note(&call.name, &serde_json::from_str(&call.arguments).unwrap_or_default());
-                if let Some(path) = crate::compact::path_from_write_call(&call.name, &call.arguments)
+                fresh.note(
+                    &call.name,
+                    &serde_json::from_str(&call.arguments).unwrap_or_default(),
+                );
+                if let Some(path) =
+                    crate::compact::path_from_write_call(&call.name, &call.arguments)
                 {
                     if !modified_paths.iter().any(|p| p == &path) {
                         modified_paths.push(path);
@@ -748,14 +784,26 @@ pub fn run_loop(
         if drive.is_some() && evidence >= checkpoint_at + crate::checkpoint::CHECKPOINT_EVERY {
             // A checkpoint between phases: name the Brief's done items still uncovered, once per change.
             checkpoint_at = evidence;
-            let due = crate::checkpoint::uncovered(brief.as_ref(), &crate::session_tools::todos_for(input.conversation_id), evidence);
+            let due = crate::checkpoint::uncovered(
+                brief.as_ref(),
+                &crate::session_tools::todos_for(input.conversation_id),
+                evidence,
+            );
             if !due.is_empty() && due != checkpoint_due {
-                let gaps = crate::checkpoint::Gaps { uncovered: due.clone(), ..Default::default() };
+                let gaps = crate::checkpoint::Gaps {
+                    uncovered: due.clone(),
+                    ..Default::default()
+                };
                 history.push(user_message(&format!("Checkpoint: {}", gaps.note()), None));
             }
             checkpoint_due = due;
         }
-        if let Some(note) = progress.as_mut().and_then(|p| p.check(&crate::session_tools::todos_for(input.conversation_id), evidence)) {
+        if let Some(note) = progress.as_mut().and_then(|p| {
+            p.check(
+                &crate::session_tools::todos_for(input.conversation_id),
+                evidence,
+            )
+        }) {
             // Shown in the reply, not sent back to the model.
             on_event(LoopEvent::Text(format!("\n\n{note}\n\n")));
         }
@@ -769,7 +817,8 @@ pub fn run_loop(
 /// message; the stable prefix before it stays cached.
 fn restyle_history(history: &mut [InputItem], style: grokhub_core::talk::TalkStyle) {
     if let Some(InputItem::Message { role, content }) = history.first_mut() {
-        if let Some(ContentPart::InputText(text)) = content.first_mut().filter(|_| role == "system") {
+        if let Some(ContentPart::InputText(text)) = content.first_mut().filter(|_| role == "system")
+        {
             *text = grokhub_core::talk::restyle(text, style);
         }
     }
@@ -779,7 +828,8 @@ fn restyle_history(history: &mut [InputItem], style: grokhub_core::talk::TalkSty
 /// prompt; a turn with none drops it.
 fn replaybook_history(history: &mut [InputItem], block: Option<&str>) {
     if let Some(InputItem::Message { role, content }) = history.first_mut() {
-        if let Some(ContentPart::InputText(text)) = content.first_mut().filter(|_| role == "system") {
+        if let Some(ContentPart::InputText(text)) = content.first_mut().filter(|_| role == "system")
+        {
             *text = grokhub_core::playbook::with_playbook(text, block);
         }
     }
@@ -794,10 +844,15 @@ fn hard_step(name: &str, arguments: &str) -> bool {
 /// The arguments the gate reads: a desktop call's own, plus the focused
 /// window and the control under a click ([`DesktopOps::hint`]). The call
 /// still runs with its own arguments.
-fn hinted_args<'c>(gate: &Gate, desktop: Option<&dyn DesktopOps>, call: &'c FunctionCall) -> std::borrow::Cow<'c, str> {
+fn hinted_args<'c>(
+    gate: &Gate,
+    desktop: Option<&dyn DesktopOps>,
+    call: &'c FunctionCall,
+) -> std::borrow::Cow<'c, str> {
     match desktop {
         Some(desk) if gate.desktop && gate::is_desktop(&call.name) => {
-            let args: serde_json::Value = serde_json::from_str(&call.arguments).unwrap_or_else(|_| serde_json::json!({}));
+            let args: serde_json::Value =
+                serde_json::from_str(&call.arguments).unwrap_or_else(|_| serde_json::json!({}));
             std::borrow::Cow::Owned(desk.hint(&call.name, &args).to_string())
         }
         _ => std::borrow::Cow::Borrowed(&call.arguments),
@@ -822,7 +877,10 @@ fn user_message(text: &str, image: Option<&str>) -> InputItem {
     if let Some(url) = image.map(str::trim).filter(|s| !s.is_empty()) {
         content.push(ContentPart::InputImage(url.to_string()));
     }
-    InputItem::Message { role: "user".into(), content }
+    InputItem::Message {
+        role: "user".into(),
+        content,
+    }
 }
 
 fn push_output(history: &mut Vec<InputItem>, call: &FunctionCall, output: ToolOutput) {
@@ -1179,9 +1237,7 @@ mod tests {
                 calls: turn.calls,
                 usage: turn.usage,
                 truncated: turn.truncated,
-                truncate_reason: turn
-                    .truncated
-                    .then(|| "max_output_tokens".into()),
+                truncate_reason: turn.truncated.then(|| "max_output_tokens".into()),
             })
         }
     }
@@ -1221,8 +1277,8 @@ mod tests {
                     arguments: format!(r#"{{"path":"p{n}"}}"#),
                 }],
                 usage: Usage::default(),
-            ..Default::default()
-        })
+                ..Default::default()
+            })
         }
     }
 
@@ -1286,7 +1342,9 @@ mod tests {
         };
         let mut history = Vec::new();
         let mut events = Vec::new();
-        let out = run_loop(&input, &mut history, "read the note", None, &mut |ev| events.push(ev));
+        let out = run_loop(&input, &mut history, "read the note", None, &mut |ev| {
+            events.push(ev)
+        });
         (out, history, events)
     }
 
@@ -1389,26 +1447,45 @@ mod tests {
         let mut turns: Vec<ScriptTurn> = (0..80)
             .map(|n| ScriptTurn {
                 text: String::new(),
-                calls: vec![call(&format!("t{n}"), "list_dir", &format!(r#"{{"path":"p{n}"}}"#))],
+                calls: vec![call(
+                    &format!("t{n}"),
+                    "list_dir",
+                    &format!(r#"{{"path":"p{n}"}}"#),
+                )],
                 usage: Usage::default(),
                 truncated: false,
             })
             .collect();
-        turns.push(ScriptTurn { text: "all done".into(), calls: Vec::new(), usage: Usage::default(),
-                truncated: false,
-            });
+        turns.push(ScriptTurn {
+            text: "all done".into(),
+            calls: Vec::new(),
+            usage: Usage::default(),
+            truncated: false,
+        });
         let script = Script {
             turns: Mutex::new(turns),
             seen: Mutex::new(Vec::new()),
             cancel_on_text: false,
             steer: None,
         };
-        let (out, history, events) = run(&script, &dir, 0, &CancelToken::new(), &SteerQueue::new(), &NeverHalt);
+        let (out, history, events) = run(
+            &script,
+            &dir,
+            0,
+            &CancelToken::new(),
+            &SteerQueue::new(),
+            &NeverHalt,
+        );
         assert_eq!(out.stop, StopReason::EndTurn);
         assert_eq!(script.seen.lock().unwrap().len(), 81);
-        let outputs = history.iter().filter(|i| matches!(i, InputItem::FunctionCallOutput { .. })).count();
+        let outputs = history
+            .iter()
+            .filter(|i| matches!(i, InputItem::FunctionCallOutput { .. }))
+            .count();
         assert_eq!(outputs, 80);
-        assert!(events.iter().any(|ev| matches!(ev, LoopEvent::Text(t) if t == "all done")));
+        assert!(events
+            .iter()
+            .any(|ev| matches!(ev, LoopEvent::Text(t) if t == "all done")));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -1424,14 +1501,14 @@ mod tests {
                         call("b", "list_dir", "{}"),
                     ],
                     usage: usage(10, 5, 2, 100),
-                truncated: false,
-            },
+                    truncated: false,
+                },
                 ScriptTurn {
                     text: "done".into(),
                     calls: Vec::new(),
                     usage: usage(7, 3, 1, 50),
-                truncated: false,
-            },
+                    truncated: false,
+                },
             ]),
             seen: Mutex::new(Vec::new()),
             cancel_on_text: false,
@@ -1457,10 +1534,17 @@ mod tests {
                 _ => None,
             })
             .collect();
-        assert!(outputs.iter().any(|t| t.contains("hello native")), "{outputs:?}");
+        assert!(
+            outputs.iter().any(|t| t.contains("hello native")),
+            "{outputs:?}"
+        );
         assert!(outputs.len() >= 2, "{outputs:?}");
-        assert!(events.iter().any(|ev| matches!(ev, LoopEvent::Tool { status, .. } if status == "in_progress")));
-        assert!(events.iter().any(|ev| matches!(ev, LoopEvent::Tool { status, .. } if status == "completed")));
+        assert!(events
+            .iter()
+            .any(|ev| matches!(ev, LoopEvent::Tool { status, .. } if status == "in_progress")));
+        assert!(events
+            .iter()
+            .any(|ev| matches!(ev, LoopEvent::Tool { status, .. } if status == "completed")));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -1473,20 +1557,27 @@ mod tests {
                     text: String::new(),
                     calls: vec![call("w", "write", r#"{"path":"x"}"#)],
                     usage: Usage::default(),
-                truncated: false,
-            },
+                    truncated: false,
+                },
                 ScriptTurn {
                     text: "stopped".into(),
                     calls: Vec::new(),
                     usage: Usage::default(),
-                truncated: false,
-            },
+                    truncated: false,
+                },
             ]),
             seen: Mutex::new(Vec::new()),
             cancel_on_text: false,
             steer: None,
         };
-        let (out, history, _) = run(&write, &dir, 4, &CancelToken::new(), &SteerQueue::new(), &NeverHalt);
+        let (out, history, _) = run(
+            &write,
+            &dir,
+            4,
+            &CancelToken::new(),
+            &SteerQueue::new(),
+            &NeverHalt,
+        );
         assert_eq!(out.stop, StopReason::EndTurn);
         assert!(history.iter().any(|item| matches!(
             item,
@@ -1501,20 +1592,27 @@ mod tests {
                     text: String::new(),
                     calls: vec![call("r", "read_file", r#"{"target_file":"missing.txt"}"#)],
                     usage: Usage::default(),
-                truncated: false,
-            },
+                    truncated: false,
+                },
                 ScriptTurn {
                     text: "after steer".into(),
                     calls: Vec::new(),
                     usage: Usage::default(),
-                truncated: false,
-            },
+                    truncated: false,
+                },
             ]),
             seen: Mutex::new(Vec::new()),
             cancel_on_text: false,
             steer: Some(steer.clone()),
         };
-        let _ = run(&steer_script, &dir, 4, &CancelToken::new(), &steer, &NeverHalt);
+        let _ = run(
+            &steer_script,
+            &dir,
+            4,
+            &CancelToken::new(),
+            &steer,
+            &NeverHalt,
+        );
         let seen = steer_script.seen.lock().unwrap();
         let blob = format!("{:?}", seen.get(1));
         assert!(blob.contains("please look again"), "{blob}");
@@ -1526,32 +1624,41 @@ mod tests {
                     text: String::new(),
                     calls: vec![call("1", "read_file", r#"{"target_file":"note.txt"}"#)],
                     usage: Usage::default(),
-                truncated: false,
-            },
+                    truncated: false,
+                },
                 ScriptTurn {
                     text: String::new(),
                     calls: vec![call("2", "read_file", r#"{"target_file":"note.txt"}"#)],
                     usage: Usage::default(),
-                truncated: false,
-            },
+                    truncated: false,
+                },
                 ScriptTurn {
                     text: String::new(),
                     calls: vec![call("3", "read_file", r#"{"target_file":"note.txt"}"#)],
                     usage: Usage::default(),
-                truncated: false,
-            },
+                    truncated: false,
+                },
             ]),
             seen: Mutex::new(Vec::new()),
             cancel_on_text: false,
             steer: None,
         };
-        let (out, history, _) = run(&repeat, &dir, 10, &CancelToken::new(), &SteerQueue::new(), &NeverHalt);
+        let (out, history, _) = run(
+            &repeat,
+            &dir,
+            10,
+            &CancelToken::new(),
+            &SteerQueue::new(),
+            &NeverHalt,
+        );
         // The third identical call re-plans instead of ending the run.
         assert_eq!(out.stop, StopReason::EndTurn);
         let replans: Vec<&str> = history
             .iter()
             .filter_map(|item| match item {
-                InputItem::FunctionCallOutput { output, .. } if output.contains(REPEAT_REPLAN) => Some(output.as_str()),
+                InputItem::FunctionCallOutput { output, .. } if output.contains(REPEAT_REPLAN) => {
+                    Some(output.as_str())
+                }
                 _ => None,
             })
             .collect();
@@ -1563,7 +1670,11 @@ mod tests {
             })
             .count();
         assert_eq!(runs, 2);
-        assert_eq!(repeat.seen.lock().unwrap().len(), 4, "the model got a turn after the re-plan note");
+        assert_eq!(
+            repeat.seen.lock().unwrap().len(),
+            4,
+            "the model got a turn after the re-plan note"
+        );
 
         let cancel_script = Script {
             turns: Mutex::new(vec![ScriptTurn {
@@ -1606,9 +1717,13 @@ mod tests {
             &HaltAfter(AtomicUsize::new(0)),
         );
         assert_eq!(out.stop, StopReason::Halted);
-        assert!(!history.iter().any(|item| matches!(item, InputItem::FunctionCallOutput { .. })));
+        assert!(!history
+            .iter()
+            .any(|item| matches!(item, InputItem::FunctionCallOutput { .. })));
 
-        let cap_client = AlwaysTool { calls: AtomicUsize::new(0) };
+        let cap_client = AlwaysTool {
+            calls: AtomicUsize::new(0),
+        };
         let input = LoopIn {
             client: &cap_client,
             workspace: &dir,
@@ -1646,7 +1761,12 @@ mod tests {
     }
 
     impl PermitWait for Answer {
-        fn wait(&self, _call_id: &str, _cancel: &crate::CancelToken, _halted: &dyn Fn() -> bool) -> Waited {
+        fn wait(
+            &self,
+            _call_id: &str,
+            _cancel: &crate::CancelToken,
+            _halted: &dyn Fn() -> bool,
+        ) -> Waited {
             self.asks.fetch_add(1, Ordering::SeqCst);
             Waited::Answer(self.answer)
         }
@@ -1730,71 +1850,125 @@ mod tests {
         let dir = workspace("gate");
         let write_turn = |id: &str, path: &str| ScriptTurn {
             text: String::new(),
-            calls: vec![call(id, "write", &format!(r#"{{"path":"{path}","content":"yes"}}"#))],
+            calls: vec![call(
+                id,
+                "write",
+                &format!(r#"{{"path":"{path}","content":"yes"}}"#),
+            )],
             usage: Usage::default(),
-                truncated: false,
-            };
+            truncated: false,
+        };
         let done = ScriptTurn {
             text: "done".into(),
             calls: Vec::new(),
             usage: Usage::default(),
-                truncated: false,
-            };
+            truncated: false,
+        };
 
-        let allow = Answer { answer: PermAnswer::Allow, asks: AtomicUsize::new(0) };
+        let allow = Answer {
+            answer: PermAnswer::Allow,
+            asks: AtomicUsize::new(0),
+        };
         let asking = Script {
             turns: Mutex::new(vec![write_turn("w", "asked.txt"), done.clone()]),
             seen: Mutex::new(Vec::new()),
             cancel_on_text: false,
             steer: None,
         };
-        let (out, _, events) = once(&asking, &dir, chat(gate::PermMode::Ask, true, false), None, &allow);
+        let (out, _, events) = once(
+            &asking,
+            &dir,
+            chat(gate::PermMode::Ask, true, false),
+            None,
+            &allow,
+        );
         assert_eq!(out.stop, StopReason::EndTurn);
         assert_eq!(allow.asks.load(Ordering::SeqCst), 1);
-        assert!(events.iter().any(|ev| matches!(ev, LoopEvent::Permission { name, .. } if name == "write")));
-        assert_eq!(std::fs::read_to_string(dir.join("asked.txt")).unwrap(), "yes");
+        assert!(events
+            .iter()
+            .any(|ev| matches!(ev, LoopEvent::Permission { name, .. } if name == "write")));
+        assert_eq!(
+            std::fs::read_to_string(dir.join("asked.txt")).unwrap(),
+            "yes"
+        );
 
-        let auto = Answer { answer: PermAnswer::Deny, asks: AtomicUsize::new(0) };
+        let auto = Answer {
+            answer: PermAnswer::Deny,
+            asks: AtomicUsize::new(0),
+        };
         let auto_script = Script {
             turns: Mutex::new(vec![write_turn("a", "auto.txt"), done.clone()]),
             seen: Mutex::new(Vec::new()),
             cancel_on_text: false,
             steer: None,
         };
-        let (out, history, events) = once(&auto_script, &dir, chat(gate::PermMode::Auto, true, false), None, &auto);
+        let (out, history, events) = once(
+            &auto_script,
+            &dir,
+            chat(gate::PermMode::Auto, true, false),
+            None,
+            &auto,
+        );
         assert_eq!(out.stop, StopReason::EndTurn);
         assert_eq!(auto.asks.load(Ordering::SeqCst), 1);
-        assert!(events.iter().any(|ev| matches!(ev, LoopEvent::Permission { .. })));
+        assert!(events
+            .iter()
+            .any(|ev| matches!(ev, LoopEvent::Permission { .. })));
         assert!(history.iter().any(|item| matches!(
             item,
             InputItem::FunctionCallOutput { output, .. } if output.contains("User rejected the execution for tool `write`")
         )));
         assert!(!dir.join("auto.txt").exists());
 
-        let quiet = Answer { answer: PermAnswer::Deny, asks: AtomicUsize::new(0) };
+        let quiet = Answer {
+            answer: PermAnswer::Deny,
+            asks: AtomicUsize::new(0),
+        };
         let always = Script {
             turns: Mutex::new(vec![write_turn("y", "always.txt"), done.clone()]),
             seen: Mutex::new(Vec::new()),
             cancel_on_text: false,
             steer: None,
         };
-        let (out, _, events) = once(&always, &dir, chat(gate::PermMode::Always, true, false), None, &quiet);
+        let (out, _, events) = once(
+            &always,
+            &dir,
+            chat(gate::PermMode::Always, true, false),
+            None,
+            &quiet,
+        );
         assert_eq!(out.stop, StopReason::EndTurn);
         assert_eq!(quiet.asks.load(Ordering::SeqCst), 0);
-        assert!(!events.iter().any(|ev| matches!(ev, LoopEvent::Permission { .. })));
-        assert_eq!(std::fs::read_to_string(dir.join("always.txt")).unwrap(), "yes");
+        assert!(!events
+            .iter()
+            .any(|ev| matches!(ev, LoopEvent::Permission { .. })));
+        assert_eq!(
+            std::fs::read_to_string(dir.join("always.txt")).unwrap(),
+            "yes"
+        );
 
-        let away = Answer { answer: PermAnswer::Allow, asks: AtomicUsize::new(0) };
+        let away = Answer {
+            answer: PermAnswer::Allow,
+            asks: AtomicUsize::new(0),
+        };
         let unattended = Script {
             turns: Mutex::new(vec![write_turn("u", "away.txt"), done.clone()]),
             seen: Mutex::new(Vec::new()),
             cancel_on_text: false,
             steer: None,
         };
-        let (out, history, events) = once(&unattended, &dir, chat(gate::PermMode::Ask, false, false), None, &away);
+        let (out, history, events) = once(
+            &unattended,
+            &dir,
+            chat(gate::PermMode::Ask, false, false),
+            None,
+            &away,
+        );
         assert_eq!(out.stop, StopReason::EndTurn);
         assert_eq!(away.asks.load(Ordering::SeqCst), 0);
-        assert!(!events.iter().any(|ev| matches!(ev, LoopEvent::Permission { .. })));
+        assert!(!events
+            .iter()
+            .any(|ev| matches!(ev, LoopEvent::Permission { .. })));
         assert!(history.iter().any(|item| matches!(
             item,
             InputItem::FunctionCallOutput { output, .. }
@@ -1802,38 +1976,60 @@ mod tests {
         )));
         assert!(!dir.join("away.txt").exists());
 
-        let auto_away = Answer { answer: PermAnswer::Deny, asks: AtomicUsize::new(0) };
+        let auto_away = Answer {
+            answer: PermAnswer::Deny,
+            asks: AtomicUsize::new(0),
+        };
         let auto_go = Script {
             turns: Mutex::new(vec![write_turn("g", "autogo.txt"), done]),
             seen: Mutex::new(Vec::new()),
             cancel_on_text: false,
             steer: None,
         };
-        let (out, _, _) = once(&auto_go, &dir, chat(gate::PermMode::Auto, false, false), None, &auto_away);
+        let (out, _, _) = once(
+            &auto_go,
+            &dir,
+            chat(gate::PermMode::Auto, false, false),
+            None,
+            &auto_away,
+        );
         assert_eq!(out.stop, StopReason::EndTurn);
         assert_eq!(auto_away.asks.load(Ordering::SeqCst), 0);
-        assert!(!dir.join("autogo.txt").exists(), "unattended Auto denies until Phase 5");
+        assert!(
+            !dir.join("autogo.txt").exists(),
+            "unattended Auto denies until Phase 5"
+        );
 
         let escape = Script {
             turns: Mutex::new(vec![
                 ScriptTurn {
                     text: String::new(),
-                    calls: vec![call("e", "write", r#"{"path":"../nope.txt","content":"x"}"#)],
+                    calls: vec![call(
+                        "e",
+                        "write",
+                        r#"{"path":"../nope.txt","content":"x"}"#,
+                    )],
                     usage: Usage::default(),
-                truncated: false,
-            },
+                    truncated: false,
+                },
                 ScriptTurn {
                     text: "done".into(),
                     calls: Vec::new(),
                     usage: Usage::default(),
-                truncated: false,
-            },
+                    truncated: false,
+                },
             ]),
             seen: Mutex::new(Vec::new()),
             cancel_on_text: false,
             steer: None,
         };
-        let (out, history, _) = once(&escape, &dir, chat(gate::PermMode::Always, true, false), None, &quiet);
+        let (out, history, _) = once(
+            &escape,
+            &dir,
+            chat(gate::PermMode::Always, true, false),
+            None,
+            &quiet,
+        );
         assert_eq!(out.stop, StopReason::EndTurn);
         assert!(history.iter().any(|item| matches!(
             item,
@@ -1845,27 +2041,39 @@ mod tests {
     #[test]
     fn allow_always_covers_the_rest_of_the_turn() {
         let dir = workspace("latch");
-        let permits = Answer { answer: PermAnswer::Always, asks: AtomicUsize::new(0) };
+        let permits = Answer {
+            answer: PermAnswer::Always,
+            asks: AtomicUsize::new(0),
+        };
         let script = Script {
-            turns: Mutex::new(vec![ScriptTurn {
-                text: String::new(),
-                calls: vec![
-                    call("1", "write", r#"{"path":"a.txt","content":"a"}"#),
-                    call("2", "write", r#"{"path":"b.txt","content":"b"}"#),
-                ],
-                usage: Usage::default(),
-                truncated: false,
-            }, ScriptTurn {
-                text: "done".into(),
-                calls: Vec::new(),
-                usage: Usage::default(),
-                truncated: false,
-            }]),
+            turns: Mutex::new(vec![
+                ScriptTurn {
+                    text: String::new(),
+                    calls: vec![
+                        call("1", "write", r#"{"path":"a.txt","content":"a"}"#),
+                        call("2", "write", r#"{"path":"b.txt","content":"b"}"#),
+                    ],
+                    usage: Usage::default(),
+                    truncated: false,
+                },
+                ScriptTurn {
+                    text: "done".into(),
+                    calls: Vec::new(),
+                    usage: Usage::default(),
+                    truncated: false,
+                },
+            ]),
             seen: Mutex::new(Vec::new()),
             cancel_on_text: false,
             steer: None,
         };
-        let (out, _, _) = once(&script, &dir, chat(gate::PermMode::Ask, true, false), None, &permits);
+        let (out, _, _) = once(
+            &script,
+            &dir,
+            chat(gate::PermMode::Ask, true, false),
+            None,
+            &permits,
+        );
         assert_eq!(out.stop, StopReason::EndTurn);
         assert_eq!(permits.asks.load(Ordering::SeqCst), 1);
         assert_eq!(std::fs::read_to_string(dir.join("a.txt")).unwrap(), "a");
@@ -1883,33 +2091,69 @@ mod tests {
                 ScriptTurn {
                     text: String::new(),
                     calls: vec![
-                        call("1", "click", r#"{"x":10,"y":20,"label":"Shipping address"}"#),
-                        call("2", "click", r#"{"x":30,"y":40,"label":"Pay now","role":"push button"}"#),
+                        call(
+                            "1",
+                            "click",
+                            r#"{"x":10,"y":20,"label":"Shipping address"}"#,
+                        ),
+                        call(
+                            "2",
+                            "click",
+                            r#"{"x":30,"y":40,"label":"Pay now","role":"push button"}"#,
+                        ),
                         call("3", "click", r#"{"x":50,"y":60,"label":"Done"}"#),
                         call("4", "type", r#"{"text":"thanks"}"#),
                     ],
                     usage: Usage::default(),
-                truncated: false,
-            },
-                ScriptTurn { text: "done".into(), calls: Vec::new(), usage: Usage::default(),
-                truncated: false,
-            },
+                    truncated: false,
+                },
+                ScriptTurn {
+                    text: "done".into(),
+                    calls: Vec::new(),
+                    usage: Usage::default(),
+                    truncated: false,
+                },
             ]),
             seen: Mutex::new(Vec::new()),
             cancel_on_text: false,
             steer: None,
         };
-        let spy = Spy { calls: AtomicUsize::new(0), halted: false, locked: false };
-        let deny = Answer { answer: PermAnswer::Deny, asks: AtomicUsize::new(0) };
-        let (out, history, events) = once(&script, &dir, chat(gate::PermMode::Always, true, true), Some(&spy), &deny);
+        let spy = Spy {
+            calls: AtomicUsize::new(0),
+            halted: false,
+            locked: false,
+        };
+        let deny = Answer {
+            answer: PermAnswer::Deny,
+            asks: AtomicUsize::new(0),
+        };
+        let (out, history, events) = once(
+            &script,
+            &dir,
+            chat(gate::PermMode::Always, true, true),
+            Some(&spy),
+            &deny,
+        );
         assert_eq!(out.stop, StopReason::EndTurn);
-        assert_eq!(spy.calls.load(Ordering::SeqCst), 1, "only the step before Pay ran");
-        assert_eq!(deny.asks.load(Ordering::SeqCst), 1, "Pay parked once under Always");
-        assert!(events.iter().any(|ev| matches!(ev, LoopEvent::Permission { name, .. } if name == "click")));
+        assert_eq!(
+            spy.calls.load(Ordering::SeqCst),
+            1,
+            "only the step before Pay ran"
+        );
+        assert_eq!(
+            deny.asks.load(Ordering::SeqCst),
+            1,
+            "Pay parked once under Always"
+        );
+        assert!(events
+            .iter()
+            .any(|ev| matches!(ev, LoopEvent::Permission { name, .. } if name == "click")));
         let outputs: Vec<(String, String)> = history
             .iter()
             .filter_map(|item| match item {
-                InputItem::FunctionCallOutput { call_id, output } => Some((call_id.clone(), output.clone())),
+                InputItem::FunctionCallOutput { call_id, output } => {
+                    Some((call_id.clone(), output.clone()))
+                }
                 _ => None,
             })
             .collect();
@@ -1918,8 +2162,14 @@ mod tests {
             vec![
                 ("1".to_string(), "ok".to_string()),
                 ("2".to_string(), gate::user_rejected("click")),
-                ("3".to_string(), "Not executed: earlier action failed".to_string()),
-                ("4".to_string(), "Not executed: earlier action failed".to_string()),
+                (
+                    "3".to_string(),
+                    "Not executed: earlier action failed".to_string()
+                ),
+                (
+                    "4".to_string(),
+                    "Not executed: earlier action failed".to_string()
+                ),
             ]
         );
         let _ = std::fs::remove_dir_all(&dir);
@@ -1938,7 +2188,10 @@ mod tests {
             false
         }
         fn call(&self, name: &str, args: &serde_json::Value) -> ToolOutput {
-            assert!(args.get("window").is_none(), "the gate's hint never reaches the desktop");
+            assert!(
+                args.get("window").is_none(),
+                "the gate's hint never reaches the desktop"
+            );
             self.0.call(name, args)
         }
         fn hint(&self, _name: &str, args: &serde_json::Value) -> serde_json::Value {
@@ -1953,31 +2206,74 @@ mod tests {
         let dir = workspace("enter-slack");
         let script = || Script {
             turns: Mutex::new(vec![
-                ScriptTurn { text: String::new(), calls: vec![call("1", "key", r#"{"keys":"Return"}"#)], usage: Usage::default(),
-                truncated: false,
-            },
-                ScriptTurn { text: "done".into(), calls: Vec::new(), usage: Usage::default(),
-                truncated: false,
-            },
+                ScriptTurn {
+                    text: String::new(),
+                    calls: vec![call("1", "key", r#"{"keys":"Return"}"#)],
+                    usage: Usage::default(),
+                    truncated: false,
+                },
+                ScriptTurn {
+                    text: "done".into(),
+                    calls: Vec::new(),
+                    usage: Usage::default(),
+                    truncated: false,
+                },
             ]),
             seen: Mutex::new(Vec::new()),
             cancel_on_text: false,
             steer: None,
         };
-        let slack = InSlack(Spy { calls: AtomicUsize::new(0), halted: false, locked: false });
-        let deny = Answer { answer: PermAnswer::Deny, asks: AtomicUsize::new(0) };
-        let (out, history, events) = once(&script(), &dir, chat(gate::PermMode::Always, true, true), Some(&slack), &deny);
+        let slack = InSlack(Spy {
+            calls: AtomicUsize::new(0),
+            halted: false,
+            locked: false,
+        });
+        let deny = Answer {
+            answer: PermAnswer::Deny,
+            asks: AtomicUsize::new(0),
+        };
+        let (out, history, events) = once(
+            &script(),
+            &dir,
+            chat(gate::PermMode::Always, true, true),
+            Some(&slack),
+            &deny,
+        );
         assert_eq!(out.stop, StopReason::EndTurn);
-        assert_eq!(deny.asks.load(Ordering::SeqCst), 1, "Enter in Slack parked under Always");
-        assert_eq!(slack.0.calls.load(Ordering::SeqCst), 0, "the denied Enter was never pressed");
-        assert!(events.iter().any(|ev| matches!(ev, LoopEvent::Permission { name, .. } if name == "key")));
+        assert_eq!(
+            deny.asks.load(Ordering::SeqCst),
+            1,
+            "Enter in Slack parked under Always"
+        );
+        assert_eq!(
+            slack.0.calls.load(Ordering::SeqCst),
+            0,
+            "the denied Enter was never pressed"
+        );
+        assert!(events
+            .iter()
+            .any(|ev| matches!(ev, LoopEvent::Permission { name, .. } if name == "key")));
         assert!(history.iter().any(|item| matches!(
             item,
             InputItem::FunctionCallOutput { call_id, output } if call_id == "1" && *output == gate::user_rejected("key")
         )));
-        let plain = Spy { calls: AtomicUsize::new(0), halted: false, locked: false };
-        let (_, _, _) = once(&script(), &dir, chat(gate::PermMode::Always, true, true), Some(&plain), &deny);
-        assert_eq!(deny.asks.load(Ordering::SeqCst), 1, "no window, no ask: Enter is a plain key");
+        let plain = Spy {
+            calls: AtomicUsize::new(0),
+            halted: false,
+            locked: false,
+        };
+        let (_, _, _) = once(
+            &script(),
+            &dir,
+            chat(gate::PermMode::Always, true, true),
+            Some(&plain),
+            &deny,
+        );
+        assert_eq!(
+            deny.asks.load(Ordering::SeqCst),
+            1,
+            "no window, no ask: Enter is a plain key"
+        );
         assert_eq!(plain.calls.load(Ordering::SeqCst), 1);
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -1989,15 +2285,18 @@ mod tests {
             text: String::new(),
             calls: vec![call(id, "screenshot", "{}")],
             usage: Usage::default(),
-                truncated: false,
-            };
+            truncated: false,
+        };
         let done = ScriptTurn {
             text: "done".into(),
             calls: Vec::new(),
             usage: Usage::default(),
-                truncated: false,
-            };
-        let permits = Answer { answer: PermAnswer::Allow, asks: AtomicUsize::new(0) };
+            truncated: false,
+        };
+        let permits = Answer {
+            answer: PermAnswer::Allow,
+            asks: AtomicUsize::new(0),
+        };
 
         let off_script = Script {
             turns: Mutex::new(vec![shot("s"), done.clone()]),
@@ -2005,7 +2304,11 @@ mod tests {
             cancel_on_text: false,
             steer: None,
         };
-        let spy = Spy { calls: AtomicUsize::new(0), halted: false, locked: false };
+        let spy = Spy {
+            calls: AtomicUsize::new(0),
+            halted: false,
+            locked: false,
+        };
         let (out, history, _) = once(
             &off_script,
             &dir,
@@ -2029,7 +2332,11 @@ mod tests {
             hosted_search: true,
             call_timeout: None,
         });
-        assert!(body["tools"].as_array().unwrap().iter().all(|tool| tool["name"] != "screenshot"));
+        assert!(body["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|tool| tool["name"] != "screenshot"));
 
         let halt_script = Script {
             turns: Mutex::new(vec![shot("h"), done.clone()]),
@@ -2037,7 +2344,11 @@ mod tests {
             cancel_on_text: false,
             steer: None,
         };
-        let halted = Spy { calls: AtomicUsize::new(0), halted: true, locked: false };
+        let halted = Spy {
+            calls: AtomicUsize::new(0),
+            halted: true,
+            locked: false,
+        };
         let (_, history, _) = once(
             &halt_script,
             &dir,
@@ -2058,7 +2369,11 @@ mod tests {
             cancel_on_text: false,
             steer: None,
         };
-        let locked = Spy { calls: AtomicUsize::new(0), halted: false, locked: true };
+        let locked = Spy {
+            calls: AtomicUsize::new(0),
+            halted: false,
+            locked: true,
+        };
         let (_, history, _) = once(
             &lock_script,
             &dir,
@@ -2079,7 +2394,11 @@ mod tests {
             cancel_on_text: false,
             steer: None,
         };
-        let live = Spy { calls: AtomicUsize::new(0), halted: false, locked: false };
+        let live = Spy {
+            calls: AtomicUsize::new(0),
+            halted: false,
+            locked: false,
+        };
         let (_, history, _) = once(
             &run_script,
             &dir,
@@ -2097,7 +2416,9 @@ mod tests {
         assert!(tools.iter().any(|tool| tool["name"] == "screenshot"));
         assert!(tools.iter().all(|tool| tool["name"] != "list_monitors"));
         let plan = tools::schemas_for(&Gate::phase_readonly());
-        assert!(plan.iter().all(|tool| tool["name"] != "write" && tool["name"] != "screenshot"));
+        assert!(plan
+            .iter()
+            .all(|tool| tool["name"] != "write" && tool["name"] != "screenshot"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -2176,8 +2497,8 @@ mod tests {
                 reasoning: String::new(),
                 calls,
                 usage: Usage::default(),
-            ..Default::default()
-        })
+                ..Default::default()
+            })
         }
     }
 
@@ -2244,14 +2565,14 @@ mod tests {
                     text: String::new(),
                     calls: vec![call("r", "read_file", r#"{"target_file":"note.txt"}"#)],
                     usage: Usage::default(),
-                truncated: false,
-            },
+                    truncated: false,
+                },
                 ScriptTurn {
                     text: "after steer".into(),
                     calls: Vec::new(),
                     usage: Usage::default(),
-                truncated: false,
-            },
+                    truncated: false,
+                },
             ]),
             seen: Mutex::new(Vec::new()),
             cancel_on_text: false,
@@ -2405,14 +2726,14 @@ mod tests {
                         call("m", "monitor", r#"{"command":"echo hi"}"#),
                     ],
                     usage: Usage::default(),
-                truncated: false,
-            },
+                    truncated: false,
+                },
                 ScriptTurn {
                     text: "done".into(),
                     calls: Vec::new(),
                     usage: Usage::default(),
-                truncated: false,
-            },
+                    truncated: false,
+                },
             ]),
             seen: Mutex::new(Vec::new()),
             cancel_on_text: false,
@@ -2496,14 +2817,14 @@ mod tests {
                     text: String::new(),
                     calls: vec![call("w", "write", r#"{"path":"out.txt","content":"yes"}"#)],
                     usage: Usage::default(),
-                truncated: false,
-            },
+                    truncated: false,
+                },
                 ScriptTurn {
                     text: "done".into(),
                     calls: Vec::new(),
                     usage: Usage::default(),
-                truncated: false,
-            },
+                    truncated: false,
+                },
             ]),
             seen: Mutex::new(Vec::new()),
             cancel_on_text: false,
@@ -2564,14 +2885,14 @@ mod tests {
                     text: String::new(),
                     calls: vec![call("w", "write", r#"{"path":"out.txt","content":"yes"}"#)],
                     usage: Usage::default(),
-                truncated: false,
-            },
+                    truncated: false,
+                },
                 ScriptTurn {
                     text: "done".into(),
                     calls: Vec::new(),
                     usage: Usage::default(),
-                truncated: false,
-            },
+                    truncated: false,
+                },
             ]),
             seen: Mutex::new(Vec::new()),
             cancel_on_text: false,
@@ -2619,11 +2940,20 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    fn run_drive(script: &Script, dir: &std::path::Path, conv: &str) -> (LoopOut, Vec<InputItem>, Vec<LoopEvent>) {
+    fn run_drive(
+        script: &Script,
+        dir: &std::path::Path,
+        conv: &str,
+    ) -> (LoopOut, Vec<InputItem>, Vec<LoopEvent>) {
         run_drive_in(script, dir, conv, Gate::phase_readonly())
     }
 
-    fn run_drive_in(script: &Script, dir: &std::path::Path, conv: &str, gate: Gate) -> (LoopOut, Vec<InputItem>, Vec<LoopEvent>) {
+    fn run_drive_in(
+        script: &Script,
+        dir: &std::path::Path,
+        conv: &str,
+        gate: Gate,
+    ) -> (LoopOut, Vec<InputItem>, Vec<LoopEvent>) {
         let (cancel, steer) = (CancelToken::new(), SteerQueue::new());
         let input = LoopIn {
             client: script,
@@ -2651,7 +2981,9 @@ mod tests {
         };
         let mut history = Vec::new();
         let mut events = Vec::new();
-        let out = run_loop(&input, &mut history, "scan my computer", None, &mut |ev| events.push(ev));
+        let out = run_loop(&input, &mut history, "scan my computer", None, &mut |ev| {
+            events.push(ev)
+        });
         (out, history, events)
     }
 
@@ -2684,10 +3016,26 @@ mod tests {
         let todos = r#"{"todos":[{"id":"svc","content":"failed services","status":"completed"},{"id":"ports","content":"open ports","status":"pending"}]}"#;
         let script = Script {
             turns: Mutex::new(vec![
-                turn("", vec![call("t1", "todo_write", todos), call("r1", "read_file", r#"{"target_file":"note.txt"}"#)]),
+                turn(
+                    "",
+                    vec![
+                        call("t1", "todo_write", todos),
+                        call("r1", "read_file", r#"{"target_file":"note.txt"}"#),
+                    ],
+                ),
                 // Claims it's resolved with "open ports" still open.
                 turn("It's resolved.", Vec::new()),
-                turn("", vec![call("r2", "list_dir", "{}"), call("t2", "todo_write", r#"{"merge":true,"todos":[{"id":"ports","status":"completed"}]}"#)]),
+                turn(
+                    "",
+                    vec![
+                        call("r2", "list_dir", "{}"),
+                        call(
+                            "t2",
+                            "todo_write",
+                            r#"{"merge":true,"todos":[{"id":"ports","status":"completed"}]}"#,
+                        ),
+                    ],
+                ),
                 turn("All covered.", Vec::new()),
             ]),
             seen: Mutex::new(Vec::new()),
@@ -2717,7 +3065,10 @@ mod tests {
             turns: Mutex::new(vec![
                 turn("", vec![call("t1", "todo_write", todos)]),
                 turn("Firewall is fine.", Vec::new()),
-                turn("", vec![call("r1", "read_file", r#"{"target_file":"note.txt"}"#)]),
+                turn(
+                    "",
+                    vec![call("r1", "read_file", r#"{"target_file":"note.txt"}"#)],
+                ),
                 turn("Checked: fine.", Vec::new()),
             ]),
             seen: Mutex::new(Vec::new()),
@@ -2742,13 +3093,22 @@ mod tests {
         let todos = r#"{"todos":[{"id":"bt","content":"bluetooth errors","status":"pending"}]}"#;
         let mut turns = vec![turn("", vec![call("t1", "todo_write", todos)])];
         turns.extend((0..=crate::drive::STALL_LIMIT).map(|_| turn("I can't.", Vec::new())));
-        let script = Script { turns: Mutex::new(turns), seen: Mutex::new(Vec::new()), cancel_on_text: false, steer: None };
+        let script = Script {
+            turns: Mutex::new(turns),
+            seen: Mutex::new(Vec::new()),
+            cancel_on_text: false,
+            steer: None,
+        };
         let (out, history, events) = run_drive(&script, &dir, &conv);
         assert_eq!(out.stop, StopReason::EndTurn);
         assert_eq!(script.seen.lock().unwrap().len(), 5);
         let said = "Stopped with these still open: \"bluetooth errors\". No approach worked after 3 re-plans.";
-        assert!(events.iter().any(|ev| matches!(ev, LoopEvent::Text(t) if t == &format!("\n\n{said}"))));
-        assert!(matches!(history.last(), Some(InputItem::Message { role, content }) if role == "assistant" && content.first() == Some(&ContentPart::InputText(said.into()))));
+        assert!(events
+            .iter()
+            .any(|ev| matches!(ev, LoopEvent::Text(t) if t == &format!("\n\n{said}"))));
+        assert!(
+            matches!(history.last(), Some(InputItem::Message { role, content }) if role == "assistant" && content.first() == Some(&ContentPart::InputText(said.into())))
+        );
         crate::session_tools::invalidate_todos(&conv);
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -2760,14 +3120,22 @@ mod tests {
         let todos = r#"{"todos":[{"id":"bt","content":"bluetooth errors","status":"pending"}]}"#;
         let mut turns = vec![turn("", vec![call("t1", "todo_write", todos)])];
         turns.extend((0..=crate::drive::STALL_LIMIT).map(|_| turn("I can't.", Vec::new())));
-        let script = Script { turns: Mutex::new(turns), seen: Mutex::new(Vec::new()), cancel_on_text: false, steer: None };
+        let script = Script {
+            turns: Mutex::new(turns),
+            seen: Mutex::new(Vec::new()),
+            cancel_on_text: false,
+            steer: None,
+        };
         let (out, _, _) = run_drive(&script, &dir, &conv);
         assert_eq!(out.stop, StopReason::EndTurn);
         assert_eq!(script.seen.lock().unwrap().len(), 5);
 
         // The checklist is still open; the next, unrelated ask is answered once.
         let script = Script {
-            turns: Mutex::new(vec![turn("It is 4 pm.", Vec::new()), turn("unused", Vec::new())]),
+            turns: Mutex::new(vec![
+                turn("It is 4 pm.", Vec::new()),
+                turn("unused", Vec::new()),
+            ]),
             seen: Mutex::new(Vec::new()),
             cancel_on_text: false,
             steer: None,
@@ -2787,7 +3155,13 @@ mod tests {
         let args = r#"{"findings":[{"severity":"high","text":"nextdns can't bind port 53: systemd-resolved owns it"}],"fixes":[{"label":"Fix port 53 conflict","goal":"Free port 53 for nextdns."}]}"#;
         let script = Script {
             turns: Mutex::new(vec![
-                turn("", vec![call("f1", "report_findings", args), call("f2", "report_findings", r#"{"findings":[]}"#)]),
+                turn(
+                    "",
+                    vec![
+                        call("f1", "report_findings", args),
+                        call("f2", "report_findings", r#"{"findings":[]}"#),
+                    ],
+                ),
                 turn("Found one problem.", Vec::new()),
             ]),
             seen: Mutex::new(Vec::new()),
@@ -2796,39 +3170,86 @@ mod tests {
         };
         let (out, history, events) = run_drive(&script, &dir, &conv);
         assert_eq!(out.stop, StopReason::EndTurn);
-        let cards: Vec<&String> = events.iter().filter_map(|ev| match ev { LoopEvent::Findings(b) => Some(b), _ => None }).collect();
+        let cards: Vec<&String> = events
+            .iter()
+            .filter_map(|ev| match ev {
+                LoopEvent::Findings(b) => Some(b),
+                _ => None,
+            })
+            .collect();
         assert_eq!(
             cards,
             ["Findings from this run\n\n- High: nextdns can't bind port 53: systemd-resolved owns it\n\nOne-tap fixes\n\n- Fix port 53 conflict: Free port 53 for nextdns."]
         );
         let outputs: Vec<&str> = history
             .iter()
-            .filter_map(|i| match i { InputItem::FunctionCallOutput { output, .. } => Some(output.as_str()), _ => None })
+            .filter_map(|i| match i {
+                InputItem::FunctionCallOutput { output, .. } => Some(output.as_str()),
+                _ => None,
+            })
             .collect();
-        assert_eq!(outputs, ["Findings card posted: 1 findings, 1 one-tap fixes. It shows after your reply.", "give 1 to 30 findings"]);
+        assert_eq!(
+            outputs,
+            [
+                "Findings card posted: 1 findings, 1 one-tap fixes. It shows after your reply.",
+                "give 1 to 30 findings"
+            ]
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    fn brief(intent: crate::brain::Intent, care: crate::brain::Care, done: &[&str]) -> crate::brain::Brief {
-        crate::brain::Brief { intent, care, done: done.iter().map(|d| d.to_string()).collect(), ..Default::default() }
+    fn brief(
+        intent: crate::brain::Intent,
+        care: crate::brain::Care,
+        done: &[&str],
+    ) -> crate::brain::Brief {
+        crate::brain::Brief {
+            intent,
+            care,
+            done: done.iter().map(|d| d.to_string()).collect(),
+            ..Default::default()
+        }
     }
 
     fn scripted(turns: Vec<ScriptTurn>) -> Script {
-        Script { turns: Mutex::new(turns), seen: Mutex::new(Vec::new()), cancel_on_text: false, steer: None }
+        Script {
+            turns: Mutex::new(turns),
+            seen: Mutex::new(Vec::new()),
+            cancel_on_text: false,
+            steer: None,
+        }
     }
 
     #[test]
     fn an_edit_then_stop_is_pushed_back_until_it_is_checked() {
         let dir = workspace("verify-stop");
         let conv = format!("verify-stop-{}", std::process::id());
-        crate::checkpoint::set_turn_brief(&conv, brief(crate::brain::Intent::Task, crate::brain::Care::Casual, &[]));
+        crate::checkpoint::set_turn_brief(
+            &conv,
+            brief(crate::brain::Intent::Task, crate::brain::Care::Casual, &[]),
+        );
         let script = scripted(vec![
-            turn("", vec![call("w1", "write", r#"{"path":"notes.txt","content":"hi"}"#)]),
+            turn(
+                "",
+                vec![call(
+                    "w1",
+                    "write",
+                    r#"{"path":"notes.txt","content":"hi"}"#,
+                )],
+            ),
             turn("Done.", Vec::new()),
-            turn("", vec![call("r1", "read_file", r#"{"target_file":"notes.txt"}"#)]),
+            turn(
+                "",
+                vec![call("r1", "read_file", r#"{"target_file":"notes.txt"}"#)],
+            ),
             turn("Checked: it says hi.", Vec::new()),
         ]);
-        let (out, history, _) = run_drive_in(&script, &dir, &conv, chat(gate::PermMode::Always, true, false));
+        let (out, history, _) = run_drive_in(
+            &script,
+            &dir,
+            &conv,
+            chat(gate::PermMode::Always, true, false),
+        );
         assert_eq!(out.stop, StopReason::EndTurn);
         assert_eq!(script.seen.lock().unwrap().len(), 4);
         assert_eq!(
@@ -2845,14 +3266,36 @@ mod tests {
     fn an_edit_then_a_test_run_then_stop_ends() {
         let dir = workspace("verify-tests");
         let conv = format!("verify-tests-{}", std::process::id());
-        crate::checkpoint::set_turn_brief(&conv, brief(crate::brain::Intent::Task, crate::brain::Care::Casual, &[]));
+        crate::checkpoint::set_turn_brief(
+            &conv,
+            brief(crate::brain::Intent::Task, crate::brain::Care::Casual, &[]),
+        );
         let script = scripted(vec![
-            turn("", vec![call("w1", "write", r#"{"path":"notes.txt","content":"hi"}"#)]),
-            turn("", vec![call("s1", "run_terminal_command", r#"{"command":"echo test ok"}"#)]),
+            turn(
+                "",
+                vec![call(
+                    "w1",
+                    "write",
+                    r#"{"path":"notes.txt","content":"hi"}"#,
+                )],
+            ),
+            turn(
+                "",
+                vec![call(
+                    "s1",
+                    "run_terminal_command",
+                    r#"{"command":"echo test ok"}"#,
+                )],
+            ),
             turn("Done, and the test run passed.", Vec::new()),
             turn("unused", Vec::new()),
         ]);
-        let (out, history, _) = run_drive_in(&script, &dir, &conv, chat(gate::PermMode::Always, true, false));
+        let (out, history, _) = run_drive_in(
+            &script,
+            &dir,
+            &conv,
+            chat(gate::PermMode::Always, true, false),
+        );
         assert_eq!(out.stop, StopReason::EndTurn);
         assert_eq!(script.seen.lock().unwrap().len(), 3);
         assert_eq!(user_texts(&history), ["scan my computer"]);
@@ -2863,15 +3306,30 @@ mod tests {
     fn a_careful_repair_must_cover_its_brief_done_list_or_end_naming_it() {
         let dir = workspace("brief-done");
         let conv = format!("brief-done-{}", std::process::id());
-        let b = brief(crate::brain::Intent::Repair, crate::brain::Care::Careful, &["the error is gone", "it works again"]);
+        let b = brief(
+            crate::brain::Intent::Repair,
+            crate::brain::Care::Careful,
+            &["the error is gone", "it works again"],
+        );
         crate::checkpoint::set_turn_brief(&conv, b.clone());
         // Covers the list and posts its findings card: ends after one push.
         let todos = r#"{"todos":[{"id":"e","content":"Confirm the error is gone","status":"completed"},{"id":"w","content":"It works again after restart","status":"completed"}]}"#;
-        let card = r#"{"findings":[{"severity":"info","text":"The error is gone after the restart"}]}"#;
+        let card =
+            r#"{"findings":[{"severity":"info","text":"The error is gone after the restart"}]}"#;
         let script = scripted(vec![
-            turn("", vec![call("r1", "read_file", r#"{"target_file":"note.txt"}"#)]),
+            turn(
+                "",
+                vec![call("r1", "read_file", r#"{"target_file":"note.txt"}"#)],
+            ),
             turn("Fixed.", Vec::new()),
-            turn("", vec![call("t1", "todo_write", todos), call("r2", "list_dir", "{}"), call("f1", "report_findings", card)]),
+            turn(
+                "",
+                vec![
+                    call("t1", "todo_write", todos),
+                    call("r2", "list_dir", "{}"),
+                    call("f1", "report_findings", card),
+                ],
+            ),
             turn("Both checked.", Vec::new()),
         ]);
         let (out, history, events) = run_drive(&script, &dir, &conv);
@@ -2882,20 +3340,33 @@ mod tests {
             "This ask is done only when it shows \"the error is gone\", \"it works again\". Put each in your checklist (todo_write) and mark it completed once a tool result shows it, or cancelled with the reason it is blocked. \
              End with the findings card: call report_findings naming each item you checked and its root cause, with a one-tap fix for what is left."
         );
-        let cards: Vec<&LoopEvent> = events.iter().filter(|e| matches!(e, LoopEvent::Findings(_))).collect();
-        assert_eq!(cards, [&LoopEvent::Findings("Findings from this run\n\n- Info: The error is gone after the restart".into())]);
+        let cards: Vec<&LoopEvent> = events
+            .iter()
+            .filter(|e| matches!(e, LoopEvent::Findings(_)))
+            .collect();
+        assert_eq!(
+            cards,
+            [&LoopEvent::Findings(
+                "Findings from this run\n\n- Info: The error is gone after the restart".into()
+            )]
+        );
         crate::session_tools::invalidate_todos(&conv);
         // Truly blocked: ends naming what is still open.
         let conv = format!("brief-stuck-{}", std::process::id());
         crate::checkpoint::set_turn_brief(&conv, b);
-        let mut turns = vec![turn("", vec![call("r1", "read_file", r#"{"target_file":"note.txt"}"#)])];
+        let mut turns = vec![turn(
+            "",
+            vec![call("r1", "read_file", r#"{"target_file":"note.txt"}"#)],
+        )];
         turns.extend((0..=crate::drive::STALL_LIMIT).map(|_| turn("I can't.", Vec::new())));
         let script = scripted(turns);
         let (out, history, events) = run_drive(&script, &dir, &conv);
         assert_eq!(out.stop, StopReason::EndTurn);
         assert_eq!(script.seen.lock().unwrap().len(), 5);
         let said = "Stopped with these still open: \"the error is gone\", \"it works again\", the findings card. No approach worked after 3 re-plans.";
-        assert!(matches!(history.last(), Some(InputItem::Message { role, content }) if role == "assistant" && content.first() == Some(&ContentPart::InputText(said.into()))));
+        assert!(
+            matches!(history.last(), Some(InputItem::Message { role, content }) if role == "assistant" && content.first() == Some(&ContentPart::InputText(said.into())))
+        );
         // It still ends with a findings card naming each item, and a one-tap fix for the rest.
         let card = "Findings from this run\n\n- Medium: Not shown yet: the error is gone\n- Medium: Not shown yet: it works again\n\n\
                     One-tap fixes\n\n- Finish the rest: Finish what the last run left open: the error is gone; it works again.";
@@ -2947,7 +3418,8 @@ mod tests {
 
     fn system_text(history: &[InputItem]) -> String {
         match history.first() {
-            Some(InputItem::Message { role, content }) if role == "system" => match content.first() {
+            Some(InputItem::Message { role, content }) if role == "system" => match content.first()
+            {
                 Some(ContentPart::InputText(t)) => t.clone(),
                 _ => String::new(),
             },
@@ -2963,9 +3435,21 @@ mod tests {
         let voice = grokhub_core::personality::builtin("pirate").prompt_block();
         let system = format!("CABIN RULES\n\n{voice}\n\n{VOLATILE_SAFETY_CLOSER}");
         crate::checkpoint::set_turn_style(&conv, Some(TalkStyle::Short));
-        let script = scripted(vec![turn("Ahoy! All calm here. What be next?", Vec::new()), turn("Fixed.", Vec::new())]);
+        let script = scripted(vec![
+            turn("Ahoy! All calm here. What be next?", Vec::new()),
+            turn("Fixed.", Vec::new()),
+        ]);
         let mut history = Vec::new();
-        let (out, events) = talk_turn(&script, &dir, &conv, &system, Gate::phase_readonly(), &gate::ClosedPermits, &mut history, "hi there");
+        let (out, events) = talk_turn(
+            &script,
+            &dir,
+            &conv,
+            &system,
+            Gate::phase_readonly(),
+            &gate::ClosedPermits,
+            &mut history,
+            "hi there",
+        );
         assert_eq!(out.stop, StopReason::EndTurn);
         let short = format!(
             "CABIN RULES\n\n{voice}\n\n\
@@ -2976,12 +3460,30 @@ mod tests {
         let seen = script.seen.lock().unwrap()[0].clone();
         assert_eq!(system_text(&seen), short);
         // The reply the model gave fits the short style's cap.
-        let reply: String = events.iter().filter_map(|e| if let LoopEvent::Text(t) = e { Some(t.as_str()) } else { None }).collect();
+        let reply: String = events
+            .iter()
+            .filter_map(|e| {
+                if let LoopEvent::Text(t) = e {
+                    Some(t.as_str())
+                } else {
+                    None
+                }
+            })
+            .collect();
         assert_eq!(reply, "Ahoy! All calm here. What be next?");
         assert!(grokhub_core::talk::fits_cap(TalkStyle::Short, &reply));
         // The next turn is a repair: the stored system message swaps the block, nothing else.
         crate::checkpoint::set_turn_style(&conv, Some(TalkStyle::Findings));
-        let _ = talk_turn(&script, &dir, &conv, &system, Gate::phase_readonly(), &gate::ClosedPermits, &mut history, "wifi broke");
+        let _ = talk_turn(
+            &script,
+            &dir,
+            &conv,
+            &system,
+            Gate::phase_readonly(),
+            &gate::ClosedPermits,
+            &mut history,
+            "wifi broke",
+        );
         let repair = short.replace(&TalkStyle::Short.block(), &TalkStyle::Findings.block());
         assert_eq!(system_text(&script.seen.lock().unwrap()[1]), repair);
         crate::checkpoint::set_turn_style(&conv, None);
@@ -2995,13 +3497,25 @@ mod tests {
             std::fs::create_dir_all(dir.join(d)).unwrap();
         }
         let conv = format!("talk-progress-{}", std::process::id());
-        crate::checkpoint::set_turn_brief(&conv, brief(crate::brain::Intent::Task, crate::brain::Care::Careful, &[]));
+        crate::checkpoint::set_turn_brief(
+            &conv,
+            brief(crate::brain::Intent::Task, crate::brain::Care::Careful, &[]),
+        );
         crate::checkpoint::set_turn_style(&conv, Some(grokhub_core::talk::TalkStyle::Progress));
         let ls = |id: &str, d: &str| call(id, "list_dir", &format!(r#"{{"path":"{d}"}}"#));
-        let mark = |id: &str, item: &str| call(id, "todo_write", &format!(r#"{{"merge":true,"todos":[{{"id":"{item}","status":"completed"}}]}}"#));
+        let mark = |id: &str, item: &str| {
+            call(
+                id,
+                "todo_write",
+                &format!(r#"{{"merge":true,"todos":[{{"id":"{item}","status":"completed"}}]}}"#),
+            )
+        };
         let plan = r#"{"todos":[{"id":"s","content":"Check services","status":"in_progress"},{"id":"p","content":"Check packages","status":"pending"},{"id":"b","content":"Boot errors","status":"pending"}]}"#;
         let script = scripted(vec![
-            turn("", vec![call("t0", "todo_write", plan), ls("l1", "a"), ls("l2", "b")]),
+            turn(
+                "",
+                vec![call("t0", "todo_write", plan), ls("l1", "a"), ls("l2", "b")],
+            ),
             // Services done after 3 tool calls: a boundary, told.
             turn("", vec![mark("t1", "s"), ls("l3", "c")]),
             // Packages done 1 call later: a boundary too soon, held.
@@ -3009,13 +3523,35 @@ mod tests {
             // No boundary here, but the held one is told once the gap has passed.
             turn("", vec![ls("l5", "e"), ls("l6", "f")]),
             // The last item: the reply covers it.
-            turn("", vec![mark("t3", "b"), call("r1", "read_file", r#"{"target_file":"note.txt"}"#)]),
+            turn(
+                "",
+                vec![
+                    mark("t3", "b"),
+                    call("r1", "read_file", r#"{"target_file":"note.txt"}"#),
+                ],
+            ),
             turn("All three checked.", Vec::new()),
         ]);
         let (out, history, events) = run_drive(&script, &dir, &conv);
         assert_eq!(out.stop, StopReason::EndTurn);
-        let notes: Vec<&str> = events.iter().filter_map(|e| if let LoopEvent::Text(t) = e { Some(t.as_str()) } else { None }).collect();
-        assert_eq!(notes, ["\n\nDone: Check services. Next: Check packages.\n\n", "\n\nDone: Check packages. Next: Boot errors.\n\n", "All three checked."]);
+        let notes: Vec<&str> = events
+            .iter()
+            .filter_map(|e| {
+                if let LoopEvent::Text(t) = e {
+                    Some(t.as_str())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert_eq!(
+            notes,
+            [
+                "\n\nDone: Check services. Next: Check packages.\n\n",
+                "\n\nDone: Check packages. Next: Boot errors.\n\n",
+                "All three checked."
+            ]
+        );
         // The notes are for the person, not sent back to the model.
         assert_eq!(user_texts(&history), ["scan my computer"]);
         crate::session_tools::invalidate_todos(&conv);
@@ -3028,15 +3564,34 @@ mod tests {
         use grokhub_core::playbook::{parse, with_playbook, BUILTIN};
         let dir = workspace("playbook-prompt");
         let conv = format!("playbook-prompt-{}", std::process::id());
-        let system = format!("CABIN RULES\n\n{}", grokhub_core::talk::VOLATILE_SAFETY_CLOSER);
+        let system = format!(
+            "CABIN RULES\n\n{}",
+            grokhub_core::talk::VOLATILE_SAFETY_CLOSER
+        );
         let code = parse(BUILTIN[3]).unwrap().prompt_block();
         let files = parse(BUILTIN[4]).unwrap().prompt_block();
-        let allow = Answer { answer: PermAnswer::Allow, asks: AtomicUsize::new(0) };
-        let script = scripted(vec![turn("One.", Vec::new()), turn("Two.", Vec::new()), turn("Three.", Vec::new())]);
+        let allow = Answer {
+            answer: PermAnswer::Allow,
+            asks: AtomicUsize::new(0),
+        };
+        let script = scripted(vec![
+            turn("One.", Vec::new()),
+            turn("Two.", Vec::new()),
+            turn("Three.", Vec::new()),
+        ]);
         let mut history = Vec::new();
         let mut ask = |block: Option<&String>, text: &str| {
             crate::checkpoint::set_turn_playbook(&conv, block.cloned());
-            talk_turn(&script, &dir, &conv, &system, chat(gate::PermMode::Ask, true, false), &allow, &mut history, text);
+            talk_turn(
+                &script,
+                &dir,
+                &conv,
+                &system,
+                chat(gate::PermMode::Ask, true, false),
+                &allow,
+                &mut history,
+                text,
+            );
         };
         ask(Some(&code), "add a retry to fetch() in src/net.rs");
         ask(Some(&files), "move my photos into folders by year");
@@ -3046,8 +3601,14 @@ mod tests {
         assert_eq!(
             prompts,
             vec![
-                format!("CABIN RULES\n\n{code}\n\n{}", grokhub_core::talk::VOLATILE_SAFETY_CLOSER),
-                format!("CABIN RULES\n\n{files}\n\n{}", grokhub_core::talk::VOLATILE_SAFETY_CLOSER),
+                format!(
+                    "CABIN RULES\n\n{code}\n\n{}",
+                    grokhub_core::talk::VOLATILE_SAFETY_CLOSER
+                ),
+                format!(
+                    "CABIN RULES\n\n{files}\n\n{}",
+                    grokhub_core::talk::VOLATILE_SAFETY_CLOSER
+                ),
                 system.clone(),
             ]
         );
@@ -3077,21 +3638,52 @@ mod tests {
             let system = format!("CABIN RULES\n\n{}", p.prompt_block());
             for style in styles {
                 crate::checkpoint::set_turn_style(&conv, Some(style));
-                let deny = Answer { answer: PermAnswer::Deny, asks: AtomicUsize::new(0) };
+                let deny = Answer {
+                    answer: PermAnswer::Deny,
+                    asks: AtomicUsize::new(0),
+                };
                 let script = scripted(vec![
-                    turn("", vec![call("w1", "write", r#"{"path":"plan.txt","content":"yes"}"#)]),
+                    turn(
+                        "",
+                        vec![call(
+                            "w1",
+                            "write",
+                            r#"{"path":"plan.txt","content":"yes"}"#,
+                        )],
+                    ),
                     turn("Not written.", Vec::new()),
                 ]);
                 let mut history = Vec::new();
-                let (_, events) = talk_turn(&script, &dir, &conv, &system, chat(gate::PermMode::Ask, true, false), &deny, &mut history, "write the plan");
+                let (_, events) = talk_turn(
+                    &script,
+                    &dir,
+                    &conv,
+                    &system,
+                    chat(gate::PermMode::Ask, true, false),
+                    &deny,
+                    &mut history,
+                    "write the plan",
+                );
                 // The style reached the prompt, and the card came out of the gate all the same.
-                assert_eq!(system_text(&script.seen.lock().unwrap()[0]), restyle(&system, style));
-                cards.extend(events.into_iter().filter(|e| matches!(e, LoopEvent::Permission { .. })));
+                assert_eq!(
+                    system_text(&script.seen.lock().unwrap()[0]),
+                    restyle(&system, style)
+                );
+                cards.extend(
+                    events
+                        .into_iter()
+                        .filter(|e| matches!(e, LoopEvent::Permission { .. })),
+                );
                 crate::session_tools::invalidate_todos(&conv);
             }
         }
         assert_eq!(cards.len(), personalities.len() * styles.len());
-        let plain = LoopEvent::Permission { id: "w1".into(), name: "write".into(), action: "plan.txt".into(), reason: String::new() };
+        let plain = LoopEvent::Permission {
+            id: "w1".into(),
+            name: "write".into(),
+            action: "plan.txt".into(),
+            reason: String::new(),
+        };
         assert_eq!(cards[0], plain);
         assert!(cards.iter().all(|c| *c == plain));
         crate::checkpoint::set_turn_style(&conv, None);

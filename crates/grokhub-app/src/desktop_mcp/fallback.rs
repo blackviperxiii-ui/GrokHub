@@ -5,9 +5,8 @@ use std::sync::{Arc, Mutex};
 
 use grokhub_core::desktop_mcp::{
     cast_stream_for_point, imprecise_fallback_note, input_route_is_imprecise, input_route_label,
-    input_route_order, mapped_point_to_eis, pick_eis_region, plan_eis_text,
-    CastStream, EisRegion, EisTextPlan, InputRouteId, KeyCombo, KeyName, MonitorGeom, MouseButton,
-    ShotGeom,
+    input_route_order, mapped_point_to_eis, pick_eis_region, plan_eis_text, CastStream, EisRegion,
+    EisTextPlan, InputRouteId, KeyCombo, KeyName, MonitorGeom, MouseButton, ShotGeom,
 };
 
 use super::keys::{evdev_mods, evdev_of, keysym_mods, keysym_of};
@@ -70,7 +69,10 @@ impl PortalShare {
             return if self.open {
                 Ok(self.mode)
             } else {
-                Err(self.error.clone().unwrap_or_else(|| "The portal session is closed.".into()))
+                Err(self
+                    .error
+                    .clone()
+                    .unwrap_or_else(|| "The portal session is closed.".into()))
             };
         }
         self.tried = true;
@@ -158,9 +160,17 @@ impl InputChain {
     pub(crate) fn live(share: Arc<Mutex<PortalShare>>, injector: Box<dyn CommandRun>) -> Self {
         let portal = Arc::clone(&share);
         let routes: Vec<(InputRouteId, Box<dyn DesktopRoute>)> = vec![
-            (InputRouteId::Libei, Box::new(LibeiRoute { portal: Arc::clone(&portal) })),
+            (
+                InputRouteId::Libei,
+                Box::new(LibeiRoute {
+                    portal: Arc::clone(&portal),
+                }),
+            ),
             (InputRouteId::Notify, Box::new(NotifyRoute { portal })),
-            (InputRouteId::Uinput, Box::new(LiveUinput::new(super::wayland::host_monitors))),
+            (
+                InputRouteId::Uinput,
+                Box::new(LiveUinput::new(super::wayland::host_monitors)),
+            ),
             (InputRouteId::Ydotool, Box::new(YdotoolRoute { injector })),
         ];
         debug_assert_eq!(
@@ -182,7 +192,12 @@ impl InputChain {
         let portal = Arc::clone(&share);
         Self {
             routes: vec![
-                (InputRouteId::Libei, Box::new(LibeiRoute { portal: Arc::clone(&portal) })),
+                (
+                    InputRouteId::Libei,
+                    Box::new(LibeiRoute {
+                        portal: Arc::clone(&portal),
+                    }),
+                ),
                 (InputRouteId::Notify, Box::new(NotifyRoute { portal })),
                 (InputRouteId::Uinput, Box::new(DeniedUinput)),
                 (InputRouteId::Ydotool, Box::new(YdotoolRoute { injector })),
@@ -216,7 +231,8 @@ impl InputChain {
 
     #[cfg(test)]
     pub(crate) fn label(&self) -> Option<&'static str> {
-        self.active.map(|index| input_route_label(self.routes[index].0))
+        self.active
+            .map(|index| input_route_label(self.routes[index].0))
     }
 
     pub(crate) fn regions(&self) -> Vec<EisRegion> {
@@ -305,7 +321,9 @@ impl InputChain {
                 Err(err) => failures.push(err),
             }
         }
-        Err(failures.pop().unwrap_or_else(|| "No Wayland input route is available.".into()))
+        Err(failures
+            .pop()
+            .unwrap_or_else(|| "No Wayland input route is available.".into()))
     }
 }
 
@@ -324,7 +342,10 @@ impl DesktopRoute for LibeiRoute {
         if mode == ShareMode::Eis {
             Ok(())
         } else {
-            Err(portal.eis_error.clone().unwrap_or_else(|| EIS_MISSING.into()))
+            Err(portal
+                .eis_error
+                .clone()
+                .unwrap_or_else(|| EIS_MISSING.into()))
         }
     }
 
@@ -425,8 +446,8 @@ impl DesktopRoute for NotifyRoute {
 
     fn move_abs(&mut self, x: i32, y: i32) -> Result<(), String> {
         let mut portal = lock(&self.portal);
-        let (node, lx, ly) = cast_stream_for_point(&portal.streams, x, y)
-            .ok_or_else(|| NO_STREAM.to_string())?;
+        let (node, lx, ly) =
+            cast_stream_for_point(&portal.streams, x, y).ok_or_else(|| NO_STREAM.to_string())?;
         portal.device.notify_pointer(node, lx, ly)
     }
 
@@ -497,11 +518,16 @@ struct LiveUinput {
 
 impl LiveUinput {
     fn new(monitors: fn() -> Result<Vec<MonitorGeom>, String>) -> Self {
-        Self { dev: None, monitors }
+        Self {
+            dev: None,
+            monitors,
+        }
     }
 
     fn dev(&mut self) -> Result<&mut UinputPointer, String> {
-        self.dev.as_mut().ok_or_else(|| "The absolute uinput device is closed.".to_string())
+        self.dev
+            .as_mut()
+            .ok_or_else(|| "The absolute uinput device is closed.".to_string())
     }
 }
 
@@ -634,7 +660,8 @@ impl DesktopRoute for YdotoolRoute {
     }
 
     fn type_text(&mut self, text: &str) -> Result<(), String> {
-        self.injector.run(&["type".into(), "--".into(), text.to_string()])
+        self.injector
+            .run(&["type".into(), "--".into(), text.to_string()])
     }
 
     fn key_combo(&mut self, combo: &KeyCombo) -> Result<(), String> {
@@ -680,7 +707,10 @@ struct IdlePortal;
 
 #[cfg(test)]
 impl portal::RemoteDesktopPortal for IdlePortal {
-    fn start(&mut self, _restore_token: Option<String>) -> Result<portal::PortalStart, portal::PortalFail> {
+    fn start(
+        &mut self,
+        _restore_token: Option<String>,
+    ) -> Result<portal::PortalStart, portal::PortalFail> {
         Err(portal::PortalFail::Denied("idle portal".into()))
     }
     fn close(&mut self) {}
@@ -743,14 +773,20 @@ mod tests {
 
     impl DesktopRoute for Script {
         fn open(&mut self) -> Result<(), String> {
-            self.log.lock().unwrap_or_else(|err| err.into_inner()).push(format!("open:{}", self.name));
+            self.log
+                .lock()
+                .unwrap_or_else(|err| err.into_inner())
+                .push(format!("open:{}", self.name));
             match &self.open_err {
                 Some(err) => Err(err.clone()),
                 None => Ok(()),
             }
         }
         fn move_abs(&mut self, x: i32, y: i32) -> Result<(), String> {
-            self.log.lock().unwrap_or_else(|err| err.into_inner()).push(format!("move:{}:{x},{y}", self.name));
+            self.log
+                .lock()
+                .unwrap_or_else(|err| err.into_inner())
+                .push(format!("move:{}:{x},{y}", self.name));
             Ok(())
         }
         fn button(&mut self, _button: MouseButton, _down: bool) -> Result<(), String> {
@@ -766,11 +802,18 @@ mod tests {
             Ok(())
         }
         fn close(&mut self) {
-            self.log.lock().unwrap_or_else(|err| err.into_inner()).push(format!("close:{}", self.name));
+            self.log
+                .lock()
+                .unwrap_or_else(|err| err.into_inner())
+                .push(format!("close:{}", self.name));
         }
     }
 
-    fn script(name: &'static str, err: Option<&str>, log: &Arc<Mutex<Vec<String>>>) -> Box<dyn DesktopRoute> {
+    fn script(
+        name: &'static str,
+        err: Option<&str>,
+        log: &Arc<Mutex<Vec<String>>>,
+    ) -> Box<dyn DesktopRoute> {
         Box::new(Script::new(name, err, Arc::clone(log)))
     }
 
@@ -802,7 +845,10 @@ mod tests {
         let log = Arc::new(Mutex::new(Vec::new()));
         let mut chain = InputChain::from_routes(vec![
             (InputRouteId::Libei, script("libei", Some("eis down"), &log)),
-            (InputRouteId::Notify, script("notify", Some("notify down"), &log)),
+            (
+                InputRouteId::Notify,
+                script("notify", Some("notify down"), &log),
+            ),
             (InputRouteId::Uinput, script("uinput", None, &log)),
             (InputRouteId::Ydotool, script("ydotool", None, &log)),
         ]);
@@ -816,9 +862,18 @@ mod tests {
 
         let log = Arc::new(Mutex::new(Vec::new()));
         let mut chain = InputChain::from_routes(vec![
-            (InputRouteId::Libei, script("libei", Some("user cancelled the dialog"), &log)),
-            (InputRouteId::Notify, script("notify", Some("no stream"), &log)),
-            (InputRouteId::Uinput, script("uinput", Some(uinput_access_denied_message()), &log)),
+            (
+                InputRouteId::Libei,
+                script("libei", Some("user cancelled the dialog"), &log),
+            ),
+            (
+                InputRouteId::Notify,
+                script("notify", Some("no stream"), &log),
+            ),
+            (
+                InputRouteId::Uinput,
+                script("uinput", Some(uinput_access_denied_message()), &log),
+            ),
             (InputRouteId::Ydotool, script("ydotool", None, &log)),
         ]);
         chain.move_abs(9, 8).unwrap();
@@ -853,7 +908,10 @@ mod tests {
         let log = Arc::new(Mutex::new(Vec::new()));
         let mut uinput = InputChain::from_routes(vec![
             (InputRouteId::Libei, script("libei", Some("eis down"), &log)),
-            (InputRouteId::Notify, script("notify", Some("notify down"), &log)),
+            (
+                InputRouteId::Notify,
+                script("notify", Some("notify down"), &log),
+            ),
             (InputRouteId::Uinput, script("uinput", None, &log)),
             (InputRouteId::Ydotool, script("ydotool", None, &log)),
         ]);
@@ -868,7 +926,10 @@ mod tests {
         let mut fake = BrokerFake::default();
         let halted = grokhub_core::desktop_mcp::apply_desk_request(
             &mut fake,
-            grokhub_core::desktop_mcp::CallGate { enabled: true, halted: true },
+            grokhub_core::desktop_mcp::CallGate {
+                enabled: true,
+                halted: true,
+            },
             &grokhub_core::desktop_mcp::DeskRequest::MoveAbs { id: 1, x: 4, y: 5 },
         );
         assert!(!halted.ok);
@@ -888,7 +949,10 @@ mod tests {
         fn list_monitors(&mut self) -> Result<Vec<MonitorGeom>, String> {
             Ok(Vec::new())
         }
-        fn screenshot(&mut self, _: &str) -> Result<grokhub_core::desktop_mcp::CapturedShot, String> {
+        fn screenshot(
+            &mut self,
+            _: &str,
+        ) -> Result<grokhub_core::desktop_mcp::CapturedShot, String> {
             Err("no".into())
         }
         fn move_abs(&mut self, _: i32, _: i32) -> Result<(), String> {

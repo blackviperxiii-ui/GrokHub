@@ -36,10 +36,16 @@ pub(super) struct MarketState {
 pub(super) fn sign_in_line(e: &CatalogEntry) -> String {
     match e.auth {
         CatalogAuth::None => "No sign-in needed. It works as soon as it's installed.".into(),
-        CatalogAuth::Oauth => format!("Signs in to {} in your browser right after Install.", e.publisher),
+        CatalogAuth::Oauth => format!(
+            "Signs in to {} in your browser right after Install.",
+            e.publisher
+        ),
         CatalogAuth::Key => format!("Needs an API key. {}", e.key_hint),
         CatalogAuth::Google => "Uses your Google account, set up through Google Cloud.".into(),
-        CatalogAuth::Own => format!("Signs in with your {} account by itself the first time a chat uses it.", e.publisher),
+        CatalogAuth::Own => format!(
+            "Signs in with your {} account by itself the first time a chat uses it.",
+            e.publisher
+        ),
     }
 }
 
@@ -93,7 +99,8 @@ pub(super) fn market_chip(installed: bool) -> Option<(&'static str, ChipTone)> {
 
 fn paint_badge(ui: &mut egui::Ui, logo: &str, size: f32) {
     let (rect, _) = ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::hover());
-    ui.painter().rect_filled(rect, size / 4.0, crate::theme::surface());
+    ui.painter()
+        .rect_filled(rect, size / 4.0, crate::theme::surface());
     ui.painter().text(
         rect.center(),
         egui::Align2::CENTER_CENTER,
@@ -109,7 +116,12 @@ enum RowHit {
     Install,
 }
 
-fn paint_market_row(ui: &mut egui::Ui, e: &CatalogEntry, installed: bool, via_cli: bool) -> Option<RowHit> {
+fn paint_market_row(
+    ui: &mut egui::Ui,
+    e: &CatalogEntry,
+    installed: bool,
+    via_cli: bool,
+) -> Option<RowHit> {
     let mut hit = None;
     egui::Frame::NONE
         .fill(crate::theme::elevated())
@@ -136,7 +148,11 @@ fn paint_market_row(ui: &mut egui::Ui, e: &CatalogEntry, installed: bool, via_cl
                             .size(12.0)
                             .color(crate::theme::muted()),
                     );
-                    ui.label(RichText::new(&e.description).size(12.0).color(crate::theme::fg()));
+                    ui.label(
+                        RichText::new(&e.description)
+                            .size(12.0)
+                            .color(crate::theme::fg()),
+                    );
                 });
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if crate::cards::ghost_pill(ui, "Details") {
@@ -155,7 +171,11 @@ fn paint_market_row(ui: &mut egui::Ui, e: &CatalogEntry, installed: bool, via_cl
 impl Cabin {
     /// Names in the cabin's `mcp.json`, from the last snapshot.
     fn installed_names(&self) -> Vec<String> {
-        crate::native_mcp::snapshot().rows.into_iter().map(|r| r.name).collect()
+        crate::native_mcp::snapshot()
+            .rows
+            .into_iter()
+            .map(|r| r.name)
+            .collect()
     }
 
     /// Install one catalog entry. Nothing to approve: it only writes an
@@ -194,7 +214,10 @@ impl Cabin {
     /// The tab pills at the top of Settings → Connectors.
     pub(super) fn ui_connectors_tabs(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
-            for (label, tab) in [("Installed", ConnectorsTab::Installed), ("Marketplace", ConnectorsTab::Marketplace)] {
+            for (label, tab) in [
+                ("Installed", ConnectorsTab::Installed),
+                ("Marketplace", ConnectorsTab::Marketplace),
+            ] {
                 if crate::cards::tab_pill(ui, label, self.market.tab == tab) {
                     self.market.tab = tab;
                 }
@@ -208,7 +231,8 @@ impl Cabin {
         let installed = self.installed_names();
         let snap = crate::native_mcp::snapshot();
         if snap.busy {
-            ui.ctx().request_repaint_after(std::time::Duration::from_millis(200));
+            ui.ctx()
+                .request_repaint_after(std::time::Duration::from_millis(200));
         }
         if !snap.note.is_empty() {
             crate::cards::settings_note(ui, &snap.note);
@@ -253,7 +277,8 @@ impl Cabin {
     }
 
     fn ui_market_detail(&mut self, ui: &mut egui::Ui, e: &CatalogEntry, installed: bool) {
-        let via_cli = e.auth == CatalogAuth::Google && google_via(grok_cli_found()) == GoogleVia::GrokBuild;
+        let via_cli =
+            e.auth == CatalogAuth::Google && google_via(grok_cli_found()) == GoogleVia::GrokBuild;
         if crate::cards::ghost_pill(ui, "Back") {
             self.market.detail = None;
             self.market.key.clear();
@@ -286,11 +311,19 @@ impl Cabin {
             });
         });
         ui.add_space(8.0);
-        ui.label(RichText::new(&e.description).size(13.0).color(crate::theme::fg()));
+        ui.label(
+            RichText::new(&e.description)
+                .size(13.0)
+                .color(crate::theme::fg()),
+        );
         ui.add_space(12.0);
         crate::cards::section_label(ui, "What it can do");
         for cap in &e.capabilities {
-            ui.label(RichText::new(format!("•  {cap}")).size(13.0).color(crate::theme::fg()));
+            ui.label(
+                RichText::new(format!("•  {cap}"))
+                    .size(13.0)
+                    .color(crate::theme::fg()),
+            );
         }
         ui.add_space(12.0);
         crate::cards::section_label(ui, "Permissions");
@@ -350,7 +383,10 @@ impl Cabin {
     /// A Google entry with the Grok Build CLI found: Grok Build's own entry
     /// and status, and how to sign in there. Nothing here runs the CLI.
     fn ui_google_via_grok(&mut self, ui: &mut egui::Ui, e: &CatalogEntry) {
-        crate::cards::help_text(ui, &format!("{USES_GROK_CLI}, which signs in to Google for you."));
+        crate::cards::help_text(
+            ui,
+            &format!("{USES_GROK_CLI}, which signs in to Google for you."),
+        );
         for (i, step) in grok_google_steps(&e.name).iter().enumerate() {
             crate::cards::help_text(ui, &format!("{}. {step}", i + 1));
         }
@@ -367,10 +403,19 @@ mod tests {
 
     #[test]
     fn the_sign_in_line_follows_the_auth_type() {
-        assert_eq!(sign_in_line(&entry("playwright")), "No sign-in needed. It works as soon as it's installed.");
-        assert_eq!(sign_in_line(&entry("linear")), "Signs in to Linear in your browser right after Install.");
+        assert_eq!(
+            sign_in_line(&entry("playwright")),
+            "No sign-in needed. It works as soon as it's installed."
+        );
+        assert_eq!(
+            sign_in_line(&entry("linear")),
+            "Signs in to Linear in your browser right after Install."
+        );
         assert!(sign_in_line(&entry("brave-search")).starts_with("Needs an API key. "));
-        assert_eq!(sign_in_line(&entry("gmail")), "Uses your Google account, set up through Google Cloud.");
+        assert_eq!(
+            sign_in_line(&entry("gmail")),
+            "Uses your Google account, set up through Google Cloud."
+        );
         assert_eq!(
             sign_in_line(&entry("microsoft-365")),
             "Signs in with your Microsoft account by itself the first time a chat uses it."
@@ -396,8 +441,14 @@ mod tests {
         let src = include_str!("confirm.rs");
         let cancel = src.split("Some(ConfirmAct::Cancel) => {").nth(1).unwrap();
         let cancel = &cancel[..cancel.find("None => {}").unwrap()];
-        assert!(cancel.contains("ConfirmKind::SaveKey") && cancel.contains("self.market.key.clear()"), "{cancel}");
-        assert!(!format!("{:?}", cabin.confirm).contains("sk-abc"), "the key never rides on the card");
+        assert!(
+            cancel.contains("ConfirmKind::SaveKey") && cancel.contains("self.market.key.clear()"),
+            "{cancel}"
+        );
+        assert!(
+            !format!("{:?}", cabin.confirm).contains("sk-abc"),
+            "the key never rides on the card"
+        );
     }
 
     #[test]
@@ -405,7 +456,10 @@ mod tests {
         assert_eq!(google_via(true), GoogleVia::GrokBuild);
         assert_eq!(google_via(false), GoogleVia::Manual);
         assert_eq!(USES_GROK_CLI, "Uses your Grok Build CLI");
-        assert_eq!(grok_google_steps("Gmail")[1], "Press i on Gmail and sign in with your Google account.");
+        assert_eq!(
+            grok_google_steps("Gmail")[1],
+            "Press i on Gmail and sign in with your Google account."
+        );
         assert_eq!(grok_google_steps("Gmail")[2], "Grok Build can use it then.");
     }
 
@@ -413,13 +467,27 @@ mod tests {
     fn the_grok_cli_is_only_looked_for_never_run() {
         let src = include_str!("marketplace_ui.rs").replace("\r\n", "\n");
         let code = &src[..src.find("#[cfg(test)]").unwrap()];
-        assert_eq!(code.matches("google_mcp_via_cli::cli_installed()").count(), 1);
-        for spawn in ["run_grok_user_cmd", "Command::new", "grok_user_stdout", "spawn_grok"] {
-            assert!(!code.contains(spawn), "the Marketplace must not run the CLI: {spawn}");
+        assert_eq!(
+            code.matches("google_mcp_via_cli::cli_installed()").count(),
+            1
+        );
+        for spawn in [
+            "run_grok_user_cmd",
+            "Command::new",
+            "grok_user_stdout",
+            "spawn_grok",
+        ] {
+            assert!(
+                !code.contains(spawn),
+                "the Marketplace must not run the CLI: {spawn}"
+            );
         }
         let body = src.split("fn ui_google_via_grok(").nth(1).unwrap();
         let body = &body[..body.find("\n    }\n").unwrap()];
-        assert!(!body.contains("market_install"), "via the CLI there is no cabin install");
+        assert!(
+            !body.contains("market_install"),
+            "via the CLI there is no cabin install"
+        );
     }
 
     #[test]
@@ -427,6 +495,9 @@ mod tests {
         let src = include_str!("marketplace_ui.rs").replace("\r\n", "\n");
         let body = src.split("fn market_install(").nth(1).unwrap();
         let body = &body[..body.find("\n    }\n").unwrap()];
-        assert!(body.contains("Job::Install") && !body.contains("confirm"), "{body}");
+        assert!(
+            body.contains("Job::Install") && !body.contains("confirm"),
+            "{body}"
+        );
     }
 }

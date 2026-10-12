@@ -181,7 +181,11 @@ pub fn worker_gone_status() -> &'static str {
 
 /// Halt / redirect must not leave a truncated assistant in the transcript.
 pub fn drop_trailing_assistant(messages: &mut Vec<(String, String)>) {
-    if messages.last().map(|(r, _)| r == "assistant").unwrap_or(false) {
+    if messages
+        .last()
+        .map(|(r, _)| r == "assistant")
+        .unwrap_or(false)
+    {
         messages.pop();
     }
 }
@@ -349,7 +353,10 @@ mod tests {
             &mut stored,
             "Rust is a language",
         );
-        assert_eq!(visible.last().map(|m| m.1.as_str()), Some("Rust is a language"));
+        assert_eq!(
+            visible.last().map(|m| m.1.as_str()),
+            Some("Rust is a language")
+        );
     }
 
     #[test]
@@ -393,7 +400,10 @@ mod tests {
         let mut msgs = vec![("user".into(), "hi".into())];
         apply_job_error(&mut msgs, "401 unauthorized");
         assert_eq!(msgs.len(), 2);
-        assert_eq!(msgs[1], ("assistant".into(), "Error: 401 unauthorized".into()));
+        assert_eq!(
+            msgs[1],
+            ("assistant".into(), "Error: 401 unauthorized".into())
+        );
     }
 
     #[test]
@@ -483,7 +493,10 @@ mod tests {
             ("user".into(), "run ls".into()),
             ("user".into(), "HOST_RESULT (facts only):\nok".into()),
         ];
-        let stored = vec![("thr-a".into(), origin.clone()), ("thr-b".into(), visible.clone())];
+        let stored = vec![
+            ("thr-a".into(), origin.clone()),
+            ("thr-b".into(), visible.clone()),
+        ];
         let msgs = kick_messages_for_job(Some("thr-a"), "thr-b", &visible, &stored);
         assert_eq!(msgs, origin);
         let user = last_user_for_job(Some("thr-a"), "thr-b", &visible, &stored);
@@ -494,8 +507,14 @@ mod tests {
     fn kick_drops_slash_help_dumps() {
         let visible = vec![
             ("user".into(), "hi".into()),
-            ("assistant".into(), "SLASH_RESULT:\n/help — this list".into()),
-            ("assistant".into(), "/help — this list\n/new — new chat".into()),
+            (
+                "assistant".into(),
+                "SLASH_RESULT:\n/help — this list".into(),
+            ),
+            (
+                "assistant".into(),
+                "/help — this list\n/new — new chat".into(),
+            ),
         ];
         let msgs = kick_messages_for_job(None, "thr-a", &visible, &[]);
         assert_eq!(msgs, vec![("user".into(), "hi".into())]);
@@ -510,8 +529,14 @@ mod tests {
         assert_eq!(chat_run_label(ChatRunPhase::Thinking), "Thinking");
         assert_eq!(chat_run_label(ChatRunPhase::Running), "Running");
         assert_eq!(chat_run_label(ChatRunPhase::Waiting), "Waiting");
-        assert_eq!(chat_run_hint(ChatRunPhase::Running, "run_terminal_cmd"), "run_terminal_cmd");
-        assert_eq!(chat_run_hint(ChatRunPhase::Thinking, ""), "Working on your reply");
+        assert_eq!(
+            chat_run_hint(ChatRunPhase::Running, "run_terminal_cmd"),
+            "run_terminal_cmd"
+        );
+        assert_eq!(
+            chat_run_hint(ChatRunPhase::Thinking, ""),
+            "Working on your reply"
+        );
         assert_eq!(chat_run_action(Some("shell"), Some("edit")), "shell");
         assert_eq!(chat_run_action(None, Some("edit")), "edit");
         assert_eq!(chat_run_action(Some("  "), None), "");

@@ -49,11 +49,16 @@ pub fn run(workspace: &Path, args: &Value) -> ToolOutput {
         Err(_) => return ToolOutput::err("file is binary and not a PNG or JPEG"),
     };
     let offset = u32_field(args, "offset").unwrap_or(1).max(1);
-    let limit = u32_field(args, "limit").unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);
+    let limit = u32_field(args, "limit")
+        .unwrap_or(DEFAULT_LIMIT)
+        .clamp(1, MAX_LIMIT);
     let lines: Vec<&str> = text.lines().collect();
     let start = (offset as usize).saturating_sub(1);
     if start >= lines.len() {
-        return ToolOutput::ok(format!("(no lines at offset {offset}; file has {} lines)", lines.len()));
+        return ToolOutput::ok(format!(
+            "(no lines at offset {offset}; file has {} lines)",
+            lines.len()
+        ));
     }
     let end = (start + limit as usize).min(lines.len());
     let mut out = String::new();
@@ -63,7 +68,12 @@ pub fn run(workspace: &Path, args: &Value) -> ToolOutput {
     }
     // Workspace reads stay plain for coding. Outside-workspace text (if a
     // future path allows it) is fenced as untrusted data.
-    ToolOutput::ok(super::fence::fence_if_outside(workspace, &path, "read_file", &out))
+    ToolOutput::ok(super::fence::fence_if_outside(
+        workspace,
+        &path,
+        "read_file",
+        &out,
+    ))
 }
 
 fn image_mime(bytes: &[u8]) -> Option<&'static str> {
@@ -145,7 +155,11 @@ mod tests {
         let out = run(&dir, &json!({"target_file": "notes.txt"}));
         assert!(!out.failed, "{}", out.text);
         assert!(out.text.contains("1|alpha"), "{}", out.text);
-        assert!(!crate::tools::fence::looks_fenced(&out.text), "{}", out.text);
+        assert!(
+            !crate::tools::fence::looks_fenced(&out.text),
+            "{}",
+            out.text
+        );
         let _ = fs::remove_dir_all(dir);
     }
 
@@ -172,7 +186,11 @@ mod tests {
         std::fs::write(dir.join("dot.png"), &png).unwrap();
         let img = execute(&dir, "read_file", r#"{"target_file":"dot.png"}"#);
         assert!(!img.failed, "{}", img.text);
-        assert!(img.text.starts_with("data:image/png;base64,"), "{}", img.text);
+        assert!(
+            img.text.starts_with("data:image/png;base64,"),
+            "{}",
+            img.text
+        );
         assert_eq!(img.image_data_url.as_deref(), Some(img.text.as_str()));
         let _ = std::fs::remove_dir_all(&dir);
     }

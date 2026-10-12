@@ -41,20 +41,30 @@ pub(super) fn should_open_setup(setup_done: bool, has_history: bool) -> bool {
 
 /// Where on-device models go: `~/GrokHub/models`.
 pub(super) fn models_dir() -> PathBuf {
-    grokhub_core::paths::user_home().unwrap_or_else(|| PathBuf::from(".")).join("GrokHub").join("models")
+    grokhub_core::paths::user_home()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("GrokHub")
+        .join("models")
 }
 
 /// The router's downshift ladder from what the wizard found.
 pub(super) fn device_for(hw: &Hardware) -> Device {
-    Device { battery_low: false, low_end: ls::low_end(hw) }
+    Device {
+        battery_low: false,
+        low_end: ls::low_end(hw),
+    }
 }
 
-pub(super) const SETUP_DONE_STATUS: &str = "Setup saved. Settings → Behavior → Setup opens it again.";
-pub(super) const SETUP_SKIPPED_STATUS: &str = "Setup skipped. Settings → Behavior → Setup opens it again.";
+pub(super) const SETUP_DONE_STATUS: &str =
+    "Setup saved. Settings → Behavior → Setup opens it again.";
+pub(super) const SETUP_SKIPPED_STATUS: &str =
+    "Setup skipped. Settings → Behavior → Setup opens it again.";
 
 fn run(cmd: &str, args: &[&str]) -> Option<String> {
     let mut c = std::process::Command::new(cmd);
-    c.args(args).stdin(std::process::Stdio::null()).stderr(std::process::Stdio::null());
+    c.args(args)
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -62,17 +72,30 @@ fn run(cmd: &str, args: &[&str]) -> Option<String> {
         c.creation_flags(CREATE_NO_WINDOW);
     }
     let out = c.output().ok()?;
-    out.status.success().then(|| String::from_utf8_lossy(&out.stdout).into_owned())
+    out.status
+        .success()
+        .then(|| String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
 /// GPU (nvidia-smi, else Linux DRM / Windows DXGI), RAM and free disk under `dir`.
 /// Anything it can't read is 0.
 pub(super) fn detect_hardware(dir: &Path) -> Hardware {
-    let (gpu, vram_mb) = run("nvidia-smi", &["--query-gpu=name,memory.total", "--format=csv,noheader,nounits"])
-        .and_then(|s| ls::parse_nvidia_smi(&s))
-        .or_else(drm_or_dxgi_gpu)
-        .unwrap_or_default();
-    Hardware { gpu, vram_mb, ram_mb: ram_mb().unwrap_or(0), free_disk_mb: free_disk_mb(dir).unwrap_or(0) }
+    let (gpu, vram_mb) = run(
+        "nvidia-smi",
+        &[
+            "--query-gpu=name,memory.total",
+            "--format=csv,noheader,nounits",
+        ],
+    )
+    .and_then(|s| ls::parse_nvidia_smi(&s))
+    .or_else(drm_or_dxgi_gpu)
+    .unwrap_or_default();
+    Hardware {
+        gpu,
+        vram_mb,
+        ram_mb: ram_mb().unwrap_or(0),
+        free_disk_mb: free_disk_mb(dir).unwrap_or(0),
+    }
 }
 
 /// AMD / Intel discrete VRAM when nvidia-smi is missing.
@@ -183,7 +206,14 @@ fn free_disk_mb(dir: &Path) -> Option<u64> {
     let wide: Vec<u16> = dir.as_os_str().encode_wide().chain(Some(0)).collect();
     let mut free: u64 = 0;
     // SAFETY: a NUL-terminated path and one out pointer; the other two may be null.
-    let ok = unsafe { GetDiskFreeSpaceExW(wide.as_ptr(), &mut free, std::ptr::null_mut(), std::ptr::null_mut()) };
+    let ok = unsafe {
+        GetDiskFreeSpaceExW(
+            wide.as_ptr(),
+            &mut free,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        )
+    };
     (ok != 0).then_some(free / (1_024 * 1_024))
 }
 
@@ -197,10 +227,19 @@ impl Cabin {
     pub(super) fn ui_dream_time_row(&mut self, ui: &mut egui::Ui) {
         let hours: Vec<String> = (0..24).map(grokhub_core::hour_label).collect();
         let dream_line = grokhub_core::dream_time_line(self.dream_hour(), &Self::local_zone());
-        if let Some(h) = crate::cards::settings_dropdown(ui, "Dream time", &dream_line, &grokhub_core::hour_label(self.dream_hour()), &hours) {
+        if let Some(h) = crate::cards::settings_dropdown(
+            ui,
+            "Dream time",
+            &dream_line,
+            &grokhub_core::hour_label(self.dream_hour()),
+            &hours,
+        ) {
             self.cfg.dream_hour = h as u32;
             self.persist_cfg();
-            self.status = format!("Dream time: {}", grokhub_core::hour_label(self.cfg.dream_hour));
+            self.status = format!(
+                "Dream time: {}",
+                grokhub_core::hour_label(self.cfg.dream_hour)
+            );
         }
     }
 
@@ -253,7 +292,12 @@ impl Cabin {
             self.cfg.setup_done = true;
             self.persist_cfg();
         }
-        self.status = if skipped { SETUP_SKIPPED_STATUS } else { SETUP_DONE_STATUS }.into();
+        self.status = if skipped {
+            SETUP_SKIPPED_STATUS
+        } else {
+            SETUP_DONE_STATUS
+        }
+        .into();
     }
 
     pub(super) fn paint_setup_wizard(&mut self, ctx: &egui::Context) {
@@ -333,11 +377,17 @@ impl Cabin {
         let mut pick = None;
         match self.setup.hw.as_ref() {
             Some(hw) => {
-                crate::cards::settings_note(ui, &format!("This machine: {}.", ls::hardware_line(hw)));
+                crate::cards::settings_note(
+                    ui,
+                    &format!("This machine: {}.", ls::hardware_line(hw)),
+                );
                 crate::cards::settings_note(ui, &ls::suggestion_line(hw));
                 pick = ls::suggest(hw);
             }
-            None => crate::cards::settings_note(ui, "Checking this machine's GPU, memory and free disk…"),
+            None => crate::cards::settings_note(
+                ui,
+                "Checking this machine's GPU, memory and free disk…",
+            ),
         }
         crate::cards::settings_note(ui, &format!("Models go to {}.", models_dir().display()));
         let dl_model = self.setup.dl.as_ref().map(|d| d.model);
@@ -348,7 +398,8 @@ impl Cabin {
         let mut on = self.cfg.local_model;
         let downloaded = self.downloaded_model_name();
         let hint = super::local_ai_ui::local_model_hint(on, installed, downloaded);
-        if crate::cards::settings_toggle(ui, "On-device model for background tasks", &hint, &mut on) {
+        if crate::cards::settings_toggle(ui, "On-device model for background tasks", &hint, &mut on)
+        {
             self.set_local_model(on);
         }
     }
@@ -363,7 +414,8 @@ mod tests {
         assert!(should_open_setup(false, false));
         assert!(!should_open_setup(true, false));
         assert!(!should_open_setup(false, true));
-        let root = std::env::temp_dir().join(format!("grokhub-setup-wizard-{}", std::process::id()));
+        let root =
+            std::env::temp_dir().join(format!("grokhub-setup-wizard-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).expect("dir");
         let _pin = crate::config::TestConfigDir::set(root.clone());
@@ -373,7 +425,10 @@ mod tests {
         app.finish_setup(true);
         assert_eq!(app.setup.step, None);
         assert!(app.cfg.setup_done);
-        assert_eq!(app.status, "Setup skipped. Settings → Behavior → Setup opens it again.");
+        assert_eq!(
+            app.status,
+            "Setup skipped. Settings → Behavior → Setup opens it again."
+        );
         let mut saved = String::new();
         for _ in 0..200 {
             saved = std::fs::read_to_string(root.join("app.json")).unwrap_or_default();
@@ -392,7 +447,13 @@ mod tests {
         next.open_setup(SetupStep::LocalAi);
         assert_eq!(next.setup.step, Some(SetupStep::LocalAi));
         next.finish_setup(false);
-        assert_eq!((next.setup.step, next.status.as_str()), (None, "Setup saved. Settings → Behavior → Setup opens it again."));
+        assert_eq!(
+            (next.setup.step, next.status.as_str()),
+            (
+                None,
+                "Setup saved. Settings → Behavior → Setup opens it again."
+            )
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -410,12 +471,31 @@ mod tests {
     #[test]
     fn the_hardware_read_sets_the_router_tier_and_feeds_the_suggestion() {
         let mut app = Cabin::quiet_for_test();
-        app.take_setup_hardware(Hardware { gpu: String::new(), vram_mb: 0, ram_mb: 4_096, free_disk_mb: 50_000 });
+        app.take_setup_hardware(Hardware {
+            gpu: String::new(),
+            vram_mb: 0,
+            ram_mb: 4_096,
+            free_disk_mb: 50_000,
+        });
         assert_eq!(local::live_tier(), "local:tiny");
-        assert_eq!(ls::suggest(app.setup.hw.as_ref().unwrap()).map(|m| m.name), Some("Qwen 2.5 1.5B"));
-        app.take_setup_hardware(Hardware { gpu: "NVIDIA GeForce RTX 4070".into(), vram_mb: 12_282, ram_mb: 32_768, free_disk_mb: 225_280 });
+        assert_eq!(
+            ls::suggest(app.setup.hw.as_ref().unwrap()).map(|m| m.name),
+            Some("Qwen 2.5 1.5B")
+        );
+        app.take_setup_hardware(Hardware {
+            gpu: "NVIDIA GeForce RTX 4070".into(),
+            vram_mb: 12_282,
+            ram_mb: 32_768,
+            free_disk_mb: 225_280,
+        });
         assert_eq!(local::live_tier(), "local:small");
-        assert_eq!(device_for(app.setup.hw.as_ref().unwrap()), Device { battery_low: false, low_end: false });
+        assert_eq!(
+            device_for(app.setup.hw.as_ref().unwrap()),
+            Device {
+                battery_low: false,
+                low_end: false
+            }
+        );
         assert!(models_dir().ends_with(Path::new("GrokHub").join("models")));
     }
 

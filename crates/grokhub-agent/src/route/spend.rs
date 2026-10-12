@@ -40,7 +40,11 @@ pub struct SpendSettings {
 
 impl Default for SpendSettings {
     fn default() -> Self {
-        Self { fast_when_waiting: true, weekly_cap_usd: 0.0, ceiling_usd_per_m: DEFAULT_CEILING_USD_PER_M }
+        Self {
+            fast_when_waiting: true,
+            weekly_cap_usd: 0.0,
+            ceiling_usd_per_m: DEFAULT_CEILING_USD_PER_M,
+        }
     }
 }
 
@@ -52,7 +56,10 @@ pub fn set_spend(s: SpendSettings) {
 }
 
 pub fn spend_settings() -> SpendSettings {
-    SETTINGS.lock().unwrap_or_else(|e| e.into_inner()).unwrap_or_default()
+    SETTINGS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .unwrap_or_default()
 }
 
 /// The three times speed is worth paying for, as explicit signals.
@@ -82,12 +89,19 @@ impl Latency {
 
     /// From a call's own facts: who started it, how many steps this turn has
     /// run, and the task's deadline. Nothing but a typed turn waits live.
-    pub fn of(origin: Origin, user_facing: bool, steps: u32, deadline_ms: Option<u64>, now_ms: u64) -> Self {
+    pub fn of(
+        origin: Origin,
+        user_facing: bool,
+        steps: u32,
+        deadline_ms: Option<u64>,
+        now_ms: u64,
+    ) -> Self {
         let live = origin == Origin::User && user_facing;
         Self {
             waiting_live: live,
             chain_latency_bound: live && steps >= CHAIN_LATENCY_STEPS,
-            time_box_at_risk: live && deadline_ms.is_some_and(|d| d.saturating_sub(now_ms) < TIME_BOX_RISK_MS),
+            time_box_at_risk: live
+                && deadline_ms.is_some_and(|d| d.saturating_sub(now_ms) < TIME_BOX_RISK_MS),
         }
     }
 }
@@ -117,7 +131,10 @@ pub fn allowed(class: CostClass, key: &str, spend: &Spend) -> bool {
     match class {
         CostClass::Included => true,
         CostClass::Premium => spend.grants.iter().any(|g| g == key),
-        CostClass::AutonomousPremium | CostClass::ExtraSpend | CostClass::NewProvider | CostClass::Unknown => false,
+        CostClass::AutonomousPremium
+        | CostClass::ExtraSpend
+        | CostClass::NewProvider
+        | CostClass::Unknown => false,
     }
 }
 
@@ -152,7 +169,11 @@ static GRANTS: Mutex<GrantCache> = Mutex::new(None);
 pub fn premium_grants(config_dir: &Path) -> Vec<String> {
     let path = consent_path(config_dir);
     let meta = std::fs::metadata(&path).ok();
-    let stamp = (config_dir.to_path_buf(), meta.as_ref().and_then(|m| m.modified().ok()), meta.map_or(0, |m| m.len()));
+    let stamp = (
+        config_dir.to_path_buf(),
+        meta.as_ref().and_then(|m| m.modified().ok()),
+        meta.map_or(0, |m| m.len()),
+    );
     let mut c = GRANTS.lock().unwrap_or_else(|e| e.into_inner());
     if let Some((s, keys)) = c.as_ref() {
         if *s == stamp {
@@ -160,7 +181,11 @@ pub fn premium_grants(config_dir: &Path) -> Vec<String> {
         }
     }
     let ledger = ConsentLedger::load_now(config_dir);
-    let keys: Vec<String> = ledger.active().filter(|g| g.source.starts_with(PREMIUM_PREFIX)).map(|g| g.source.clone()).collect();
+    let keys: Vec<String> = ledger
+        .active()
+        .filter(|g| g.source.starts_with(PREMIUM_PREFIX))
+        .map(|g| g.source.clone())
+        .collect();
     if !ledger.pending() {
         *c = Some((stamp, keys.clone()));
     }
@@ -172,33 +197,98 @@ mod tests {
     use super::*;
 
     fn waiting() -> Spend {
-        Spend { latency: Latency { waiting_live: true, ..Latency::default() }, ..Spend::default() }
+        Spend {
+            latency: Latency {
+                waiting_live: true,
+                ..Latency::default()
+            },
+            ..Spend::default()
+        }
     }
 
     #[test]
     fn fast_only_when_you_wait_with_the_toggle_on_and_room_in_the_budget() {
         assert_eq!(fast_verdict(&waiting()), Ok("fast:waiting"));
         assert_eq!(fast_verdict(&Spend::default()), Err("fast:not_waiting"));
-        assert_eq!(fast_verdict(&Spend { background: true, ..waiting() }), Err("fast:background"));
-        let off = Spend { settings: SpendSettings { fast_when_waiting: false, ..SpendSettings::default() }, ..waiting() };
+        assert_eq!(
+            fast_verdict(&Spend {
+                background: true,
+                ..waiting()
+            }),
+            Err("fast:background")
+        );
+        let off = Spend {
+            settings: SpendSettings {
+                fast_when_waiting: false,
+                ..SpendSettings::default()
+            },
+            ..waiting()
+        };
         assert_eq!(fast_verdict(&off), Err("fast:off"));
-        assert_eq!(fast_verdict(&Spend { budget_tight: true, ..waiting() }), Err("fast:budget_tight"));
-        let chain = Spend { latency: Latency { waiting_live: true, chain_latency_bound: true, time_box_at_risk: false }, ..Spend::default() };
+        assert_eq!(
+            fast_verdict(&Spend {
+                budget_tight: true,
+                ..waiting()
+            }),
+            Err("fast:budget_tight")
+        );
+        let chain = Spend {
+            latency: Latency {
+                waiting_live: true,
+                chain_latency_bound: true,
+                time_box_at_risk: false,
+            },
+            ..Spend::default()
+        };
         assert_eq!(fast_verdict(&chain), Ok("fast:chain"));
     }
 
     #[test]
     fn latency_comes_only_from_a_typed_user_facing_turn() {
         let now = 1_000_000;
-        assert_eq!(Latency::of(Origin::User, true, 1, None, now), Latency { waiting_live: true, ..Latency::default() });
-        assert_eq!(Latency::of(Origin::User, false, 20, Some(now + 1), now), Latency::default());
-        assert_eq!(Latency::of(Origin::Automation, true, 20, Some(now + 1), now), Latency::default());
-        assert_eq!(Latency::of(Origin::Proactive, true, 1, None, now), Latency::default());
-        let late = Latency::of(Origin::User, true, CHAIN_LATENCY_STEPS, Some(now + TIME_BOX_RISK_MS - 1), now);
-        assert_eq!(late, Latency { waiting_live: true, chain_latency_bound: true, time_box_at_risk: true });
+        assert_eq!(
+            Latency::of(Origin::User, true, 1, None, now),
+            Latency {
+                waiting_live: true,
+                ..Latency::default()
+            }
+        );
+        assert_eq!(
+            Latency::of(Origin::User, false, 20, Some(now + 1), now),
+            Latency::default()
+        );
+        assert_eq!(
+            Latency::of(Origin::Automation, true, 20, Some(now + 1), now),
+            Latency::default()
+        );
+        assert_eq!(
+            Latency::of(Origin::Proactive, true, 1, None, now),
+            Latency::default()
+        );
+        let late = Latency::of(
+            Origin::User,
+            true,
+            CHAIN_LATENCY_STEPS,
+            Some(now + TIME_BOX_RISK_MS - 1),
+            now,
+        );
+        assert_eq!(
+            late,
+            Latency {
+                waiting_live: true,
+                chain_latency_bound: true,
+                time_box_at_risk: true
+            }
+        );
         assert_eq!(late.rule(), Some("fast:time_box"));
-        assert!(!Latency::of(Origin::User, true, 1, Some(now + TIME_BOX_RISK_MS), now).time_box_at_risk);
-        assert!(background_origin(Origin::Automation) && background_origin(Origin::Proactive) && !background_origin(Origin::User));
+        assert!(
+            !Latency::of(Origin::User, true, 1, Some(now + TIME_BOX_RISK_MS), now).time_box_at_risk
+        );
+        assert!(
+            background_origin(Origin::Automation)
+                && background_origin(Origin::Proactive)
+                && !background_origin(Origin::User)
+        );
     }
 
     #[test]
@@ -208,8 +298,17 @@ mod tests {
         assert!(!allowed(CostClass::Premium, "premium:grok-heavy", &s));
         s.grants = vec!["premium:grok-heavy".into()];
         assert!(allowed(CostClass::Premium, "premium:grok-heavy", &s));
-        assert!(!allowed(CostClass::Premium, "premium:grok-heavy+priority", &s));
-        for c in [CostClass::ExtraSpend, CostClass::NewProvider, CostClass::Unknown, CostClass::AutonomousPremium] {
+        assert!(!allowed(
+            CostClass::Premium,
+            "premium:grok-heavy+priority",
+            &s
+        ));
+        for c in [
+            CostClass::ExtraSpend,
+            CostClass::NewProvider,
+            CostClass::Unknown,
+            CostClass::AutonomousPremium,
+        ] {
             s.grants = vec![c.as_str().into(), "premium:grok-heavy".into()];
             assert!(!allowed(c, c.as_str(), &s), "{c:?}");
         }

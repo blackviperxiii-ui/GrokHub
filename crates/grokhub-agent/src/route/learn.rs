@@ -21,11 +21,16 @@ use super::guard::load_overrides;
 use super::ladder::{rung, Band, Routine, ROUTINE_WINDOW_MS};
 use super::local::is_local;
 use super::log::{route_records, with_route_records, RouteRecord};
-use super::policy::{approved, class_row, expected_cost_usd, fits_any_cost, is_new_provider, Fit, CLASS_TABLE};
+use super::policy::{
+    approved, class_row, expected_cost_usd, fits_any_cost, is_new_provider, Fit, CLASS_TABLE,
+};
 use super::signals::{OutcomeSource, VerifySource};
 use super::spend::{premium_grants, spend_settings, Spend};
 use super::table::{load_table, profiles_hash};
-use super::tune::{self, Arm, Candidate, Change, Evidence, Filters, Snap, Stage, Step, TuneState, Tuning, Verdict, DAY_MS, REJECT_DAYS, WEEK_MS};
+use super::tune::{
+    self, Arm, Candidate, Change, Evidence, Filters, Snap, Stage, Step, TuneState, Tuning, Verdict,
+    DAY_MS, REJECT_DAYS, WEEK_MS,
+};
 use crate::harness::{private_write, record_change, ChangeKind, ChangeTarget, Origin};
 
 pub const TUNING_FILE: &str = "route_tuning.json";
@@ -110,9 +115,15 @@ pub fn write_tuning(config_dir: &Path, tuning: &Tuning, reason: &str) -> Result<
     let path = tuning_path(config_dir);
     let mut t = tuning.clone();
     t.schema = TUNING_SCHEMA;
-    let bytes = if t.is_empty() { None } else { Some(serde_json::to_string_pretty(&t).map_err(|e| e.to_string())?) };
+    let bytes = if t.is_empty() {
+        None
+    } else {
+        Some(serde_json::to_string_pretty(&t).map_err(|e| e.to_string())?)
+    };
     let target = TuningFile { path: &path };
-    record_change(config_dir, &target, Origin::SelfManage, reason, || target.put(bytes.as_deref().map(str::as_bytes)))?;
+    record_change(config_dir, &target, Origin::SelfManage, reason, || {
+        target.put(bytes.as_deref().map(str::as_bytes))
+    })?;
     Ok(())
 }
 
@@ -131,12 +142,19 @@ fn mtime(p: &Path) -> Option<SystemTime> {
 }
 
 pub fn live_tune(config_dir: &Path) -> Arc<LiveTune> {
-    let stamp = (config_dir.to_path_buf(), mtime(&tuning_path(config_dir)), mtime(&state_path(config_dir)));
+    let stamp = (
+        config_dir.to_path_buf(),
+        mtime(&tuning_path(config_dir)),
+        mtime(&state_path(config_dir)),
+    );
     let mut c = LIVE.lock().unwrap_or_else(|e| e.into_inner());
     match &*c {
         Some((s, t)) if *s == stamp => t.clone(),
         _ => {
-            let t = Arc::new(LiveTune { tuning: load_tuning(config_dir), state: load_state(config_dir) });
+            let t = Arc::new(LiveTune {
+                tuning: load_tuning(config_dir),
+                state: load_state(config_dir),
+            });
             *c = Some((stamp, t.clone()));
             t
         }
@@ -153,7 +171,10 @@ fn outcome_of<'a>(outcomes: &'a [TaskOutcome], episode: &str) -> Option<&'a Task
         return None;
     }
     let prefix = format!("{episode}:");
-    outcomes.iter().rev().find(|o| (!o.episode.is_empty() && o.episode == episode) || o.task.starts_with(&prefix))
+    outcomes
+        .iter()
+        .rev()
+        .find(|o| (!o.episode.is_empty() && o.episode == episode) || o.task.starts_with(&prefix))
 }
 
 /// The record's cost: the reported ticks, else list prices × tokens.
@@ -171,7 +192,10 @@ fn cost_of(rec: &RouteRecord, reg: &Registry) -> f64 {
     let (prompt, completion) = (p.prompt.unwrap_or(0), p.completion.unwrap_or(0));
     let cached = p.cached.unwrap_or(prompt);
     // Prices are USD cents per 100M tokens.
-    let cents = (t.input.saturating_sub(t.cached) * prompt + t.cached * cached + (t.out + t.reasoning) * completion) as f64 / 100_000_000.0;
+    let cents = (t.input.saturating_sub(t.cached) * prompt
+        + t.cached * cached
+        + (t.out + t.reasoning) * completion) as f64
+        / 100_000_000.0;
     cents / 100.0
 }
 
@@ -185,7 +209,12 @@ pub struct Log {
 
 /// Route records and outcomes as tuner steps. Holdout and shadow-only records
 /// and calls with no outcome (cancelled, Grok Build) are left out.
-pub fn steps_from(records: &[(u64, RouteRecord)], outcomes: &[TaskOutcome], reg: &Registry, now_ms: u64) -> Log {
+pub fn steps_from(
+    records: &[(u64, RouteRecord)],
+    outcomes: &[TaskOutcome],
+    reg: &Registry,
+    now_ms: u64,
+) -> Log {
     let mut log = Log::default();
     for (ts, r) in records {
         if let Some(mark) = r.tune.as_deref().and_then(|t| t.strip_prefix("shadow:")) {
@@ -193,7 +222,10 @@ pub fn steps_from(records: &[(u64, RouteRecord)], outcomes: &[TaskOutcome], reg:
                 Some(id) => (id, true),
                 None => (mark, false),
             };
-            log.shadow.entry(id.to_string()).or_default().push((*ts, bad));
+            log.shadow
+                .entry(id.to_string())
+                .or_default()
+                .push((*ts, bad));
         }
         let (Some(class), Some(out)) = (table_class(&r.class), r.outcome.as_ref()) else {
             continue;
@@ -221,7 +253,10 @@ pub fn steps_from(records: &[(u64, RouteRecord)], outcomes: &[TaskOutcome], reg:
             effort: r.used.effort.clone(),
             arm,
             pass,
-            rework: r.rule_ids.iter().any(|x| matches!(x.as_str(), "E1" | "E2" | "E3" | "retry")),
+            rework: r
+                .rule_ids
+                .iter()
+                .any(|x| matches!(x.as_str(), "E1" | "E2" | "E3" | "retry")),
             cost_usd: cost_of(r, reg),
             latency_ms: r.signals.latency.unwrap_or(0),
         });
@@ -235,20 +270,31 @@ fn read_records(config_dir: &Path, lines: usize) -> Vec<(u64, RouteRecord)> {
 
 /// DE2: this signature's finished runs in `class` and the rung each ran at
 /// (the highest effort its episode sent).
-pub fn routine_from<'a>(records: impl IntoIterator<Item = &'a (u64, RouteRecord)>, outcomes: &[TaskOutcome], signature: &str, class: &str, now_ms: u64) -> Routine {
+pub fn routine_from<'a>(
+    records: impl IntoIterator<Item = &'a (u64, RouteRecord)>,
+    outcomes: &[TaskOutcome],
+    signature: &str,
+    class: &str,
+    now_ms: u64,
+) -> Routine {
     let mut out = Routine::default();
     if signature.is_empty() {
         return out;
     }
     let class = table_class(class).unwrap_or(class);
     let since = now_ms.saturating_sub(ROUTINE_WINDOW_MS);
-    let mut picked = outcomes.iter().filter(|o| o.signature == signature && o.finished_at >= since).peekable();
+    let mut picked = outcomes
+        .iter()
+        .filter(|o| o.signature == signature && o.finished_at >= since)
+        .peekable();
     if picked.peek().is_none() {
         return out;
     }
     // The highest rung each episode of this class sent, read once.
     let mut ran_by_episode: HashMap<&str, Option<usize>> = HashMap::new();
-    for (_, r) in records.into_iter().filter(|(_, r)| !r.episode.is_empty() && !r.holdout && table_class(&r.class) == Some(class)) {
+    for (_, r) in records.into_iter().filter(|(_, r)| {
+        !r.episode.is_empty() && !r.holdout && table_class(&r.class) == Some(class)
+    }) {
         let slot = ran_by_episode.entry(r.episode.as_str()).or_default();
         *slot = (*slot).max(r.used.effort.as_deref().and_then(rung));
     }
@@ -257,10 +303,16 @@ pub fn routine_from<'a>(records: impl IntoIterator<Item = &'a (u64, RouteRecord)
         // `<episode>:` its task id starts with.
         let own = (!o.episode.is_empty()).then_some(o.episode.as_str());
         let prefixes = o.task.match_indices(':').map(|(at, _)| &o.task[..at]);
-        let ran = own.into_iter().chain(prefixes).filter_map(|e| ran_by_episode.get(e).copied().flatten()).max();
+        let ran = own
+            .into_iter()
+            .chain(prefixes)
+            .filter_map(|e| ran_by_episode.get(e).copied().flatten())
+            .max();
         match (o.effective(now_ms), ran) {
             (OutcomeResult::Success, Some(r)) => out.successes.push((r, o.finished_at)),
-            (OutcomeResult::Failure, _) => out.last_failure = out.last_failure.max(Some(o.finished_at)),
+            (OutcomeResult::Failure, _) => {
+                out.last_failure = out.last_failure.max(Some(o.finished_at))
+            }
             _ => {}
         }
     }
@@ -274,7 +326,11 @@ static OUTCOMES: Mutex<Option<(OutcomeStamp, Arc<Vec<TaskOutcome>>)>> = Mutex::n
 fn cached_outcomes(config_dir: &Path) -> Arc<Vec<TaskOutcome>> {
     let path = outcomes_path(config_dir);
     let meta = fs::metadata(&path).ok();
-    let stamp = (path, meta.as_ref().and_then(|m| m.modified().ok()), meta.map_or(0, |m| m.len()));
+    let stamp = (
+        path,
+        meta.as_ref().and_then(|m| m.modified().ok()),
+        meta.map_or(0, |m| m.len()),
+    );
     if let Some((s, o)) = OUTCOMES.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
         if *s == stamp {
             return o.clone();
@@ -294,7 +350,9 @@ pub fn routine_for(config_dir: &Path, signature: &str, class: &str, now_ms: u64)
     if !outcomes.iter().any(|o| o.signature == signature) {
         return Routine::default();
     }
-    with_route_records(config_dir, ROUTINE_SCAN_LINES, |records| routine_from(records, &outcomes, signature, class, now_ms))
+    with_route_records(config_dir, ROUTINE_SCAN_LINES, |records| {
+        routine_from(records, &outcomes, signature, class, now_ms)
+    })
 }
 
 /// The registry and R2b spend rules as tuner filters.
@@ -307,9 +365,15 @@ pub struct RegistryFilters<'a> {
 
 impl Filters for RegistryFilters<'_> {
     fn allowed(&self, class: &str, model: &str) -> bool {
-        let fit = Fit { needs_tools: !class.starts_with("background:"), ..Fit::default() };
+        let fit = Fit {
+            needs_tools: !class.starts_with("background:"),
+            ..Fit::default()
+        };
         // R3b: a provider you added is never promoted for cost or speed.
-        !is_local(model) && !is_new_provider(self.reg, model) && fits_any_cost(self.reg, self.profiles, model, fit, self.now_ms) && approved(self.reg, model, false, &self.spend)
+        !is_local(model)
+            && !is_new_provider(self.reg, model)
+            && fits_any_cost(self.reg, self.profiles, model, fit, self.now_ms)
+            && approved(self.reg, model, false, &self.spend)
     }
 
     fn expected_cost(&self, class: &str, model: &str) -> Option<f64> {
@@ -318,7 +382,10 @@ impl Filters for RegistryFilters<'_> {
 }
 
 /// Each class's live first model and tuned band.
-pub fn live_view(config_dir: &Path, tuning: &Tuning) -> (BTreeMap<String, String>, BTreeMap<String, Band>) {
+pub fn live_view(
+    config_dir: &Path,
+    tuning: &Tuning,
+) -> (BTreeMap<String, String>, BTreeMap<String, Band>) {
     let table = tune::tuned_table(&load_table(config_dir), tuning);
     let overrides = load_overrides(config_dir);
     let mut top = BTreeMap::new();
@@ -328,7 +395,10 @@ pub fn live_view(config_dir: &Path, tuning: &Tuning) -> (BTreeMap<String, String
             top.insert(row.class.to_string(), first.model.clone());
         }
         let bump = overrides.get(row.class).map(|o| o.steps).unwrap_or(0);
-        bands.insert(row.class.to_string(), Band::tuned(row, bump, tuning.starts.get(row.class).map(String::as_str)));
+        bands.insert(
+            row.class.to_string(),
+            Band::tuned(row, bump, tuning.starts.get(row.class).map(String::as_str)),
+        );
     }
     (top, bands)
 }
@@ -340,10 +410,28 @@ pub fn evidence(c: &Candidate, log: &Log) -> Evidence {
     let in_class = |s: &&Step| s.class == c.class;
     Evidence {
         shadow_steps: shadow.iter().filter(|(t, _)| *t >= c.created_at).count() as u32,
-        violations: shadow.iter().filter(|(t, bad)| *t >= c.created_at && *bad).count() as u32,
-        canary: Snap::of(log.steps.iter().filter(in_class).filter(|s| s.arm == Arm::Canary(c.id.clone()) && s.at >= since_canary)),
-        live: Snap::of(log.steps.iter().filter(in_class).filter(|s| s.arm == Arm::Live && s.at >= since_canary)),
-        since_promotion: Snap::of(log.steps.iter().filter(in_class).filter(|s| s.arm == Arm::Live && c.promoted_at.is_some_and(|t| s.at >= t))),
+        violations: shadow
+            .iter()
+            .filter(|(t, bad)| *t >= c.created_at && *bad)
+            .count() as u32,
+        canary: Snap::of(
+            log.steps
+                .iter()
+                .filter(in_class)
+                .filter(|s| s.arm == Arm::Canary(c.id.clone()) && s.at >= since_canary),
+        ),
+        live: Snap::of(
+            log.steps
+                .iter()
+                .filter(in_class)
+                .filter(|s| s.arm == Arm::Live && s.at >= since_canary),
+        ),
+        since_promotion: Snap::of(
+            log.steps
+                .iter()
+                .filter(in_class)
+                .filter(|s| s.arm == Arm::Live && c.promoted_at.is_some_and(|t| s.at >= t)),
+        ),
     }
 }
 
@@ -366,14 +454,24 @@ fn plain(class: &str) -> &str {
 /// One self-tuning pass: scorecards, every candidate judged (promote, roll
 /// back, keep), then the weekly candidate build when due (or when the model
 /// list or a profile changed). Refuses to run on a stub hook.
-pub fn tick(config_dir: &Path, verify: &dyn VerifySource, outcome_hook: &dyn OutcomeSource, now_ms: u64) -> Result<TuneRun, String> {
+pub fn tick(
+    config_dir: &Path,
+    verify: &dyn VerifySource,
+    outcome_hook: &dyn OutcomeSource,
+    now_ms: u64,
+) -> Result<TuneRun, String> {
     if !verify.ready() || !outcome_hook.ready() {
         return Err(NEEDS_DATA.into());
     }
     let reg = load_registry(config_dir);
     let profiles = read_profiles(config_dir);
     let outcomes = read_outcomes(config_dir);
-    let log = steps_from(&read_records(config_dir, TUNE_SCAN_LINES), &outcomes, &reg, now_ms);
+    let log = steps_from(
+        &read_records(config_dir, TUNE_SCAN_LINES),
+        &outcomes,
+        &reg,
+        now_ms,
+    );
     let cards = tune::scorecards(&log.steps, now_ms);
     write_json(&scorecards_path(config_dir), &cards)?;
     let mut state = load_state(config_dir);
@@ -385,7 +483,9 @@ pub fn tick(config_dir: &Path, verify: &dyn VerifySource, outcome_hook: &dyn Out
             continue;
         };
         // You undid it (Undo on the ledger line): it stays off for a while.
-        if matches!(c.stage, Stage::Watch | Stage::Kept | Stage::Accepted) && !tuning.has(&c.class, &change) {
+        if matches!(c.stage, Stage::Watch | Stage::Kept | Stage::Accepted)
+            && !tuning.has(&c.class, &change)
+        {
             let c = &mut state.candidates[i];
             c.stage = Stage::Rejected;
             c.reason = "undone".into();
@@ -406,7 +506,10 @@ pub fn tick(config_dir: &Path, verify: &dyn VerifySource, outcome_hook: &dyn Out
                 c.canary_at = Some(now_ms);
                 run.canaries.push(c.id.clone());
             }
-            Verdict::Promote { cost_gain_pct, latency_gain_pct } => {
+            Verdict::Promote {
+                cost_gain_pct,
+                latency_gain_pct,
+            } => {
                 let before = tuning.value(&c.class, &change);
                 tuning.apply(&c.class, &change);
                 let reason = format!("{TUNED_PREFIX}{}: {} ({cost_gain_pct:.0}% cheaper, {latency_gain_pct:.0}% faster, quality held)", plain(&c.class), change.label());
@@ -422,7 +525,11 @@ pub fn tick(config_dir: &Path, verify: &dyn VerifySource, outcome_hook: &dyn Out
             Verdict::Reject { why, rollback } => {
                 if rollback {
                     tuning.set(&c.class, &change, c.before.clone());
-                    write_tuning(config_dir, &tuning, &format!("router rolled back {}: {why}", plain(&c.class)))?;
+                    write_tuning(
+                        config_dir,
+                        &tuning,
+                        &format!("router rolled back {}: {why}", plain(&c.class)),
+                    )?;
                     run.rolled_back.push(c.id.clone());
                 } else {
                     run.rejected.push(c.id.clone());
@@ -439,7 +546,16 @@ pub fn tick(config_dir: &Path, verify: &dyn VerifySource, outcome_hook: &dyn Out
     let inputs = format!("{}:{}", reg.hash, profiles_hash(&profiles));
     if now_ms.saturating_sub(state.built_at) >= WEEK_MS || state.inputs_hash != inputs {
         let (top, bands) = live_view(config_dir, &tuning);
-        let filters = RegistryFilters { reg: &reg, profiles: &profiles, spend: Spend { settings: spend_settings(), grants: premium_grants(config_dir), ..Spend::default() }, now_ms };
+        let filters = RegistryFilters {
+            reg: &reg,
+            profiles: &profiles,
+            spend: Spend {
+                settings: spend_settings(),
+                grants: premium_grants(config_dir),
+                ..Spend::default()
+            },
+            now_ms,
+        };
         let p = tune::propose(&cards, &log.steps, &state, &top, &bands, &filters, now_ms);
         state.seq += (p.auto.len() + p.cards.len()) as u64;
         run.cards.extend(p.cards.iter().map(|c| c.id.clone()));
@@ -449,7 +565,9 @@ pub fn tick(config_dir: &Path, verify: &dyn VerifySource, outcome_hook: &dyn Out
         state.inputs_hash = inputs;
     }
     // Ended candidates older than their block, and their history, stay 8 weeks.
-    state.candidates.retain(|c| c.active() || c.ended_at.or(c.promoted_at).unwrap_or(c.created_at) + 8 * WEEK_MS > now_ms);
+    state.candidates.retain(|c| {
+        c.active() || c.ended_at.or(c.promoted_at).unwrap_or(c.created_at) + 8 * WEEK_MS > now_ms
+    });
     write_json(&state_path(config_dir), &state)?;
     Ok(run)
 }
@@ -458,7 +576,11 @@ pub fn tick(config_dir: &Path, verify: &dyn VerifySource, outcome_hook: &dyn Out
 /// [`tune::ROUTER_CARDS_PER_WEEK`] a week. Each is `(source id, title, body)`.
 pub fn cards_due(config_dir: &Path, now_ms: u64) -> Vec<(String, String, String)> {
     let state = load_state(config_dir);
-    let sent = state.cards_at.iter().filter(|t| **t + WEEK_MS > now_ms).count();
+    let sent = state
+        .cards_at
+        .iter()
+        .filter(|t| **t + WEEK_MS > now_ms)
+        .count();
     let room = tune::ROUTER_CARDS_PER_WEEK.saturating_sub(sent);
     state
         .candidates
@@ -487,7 +609,11 @@ pub fn cards_posted(config_dir: &Path, n: usize, now_ms: u64) {
 /// ledger (Undo restores the file byte-identical). Nothing else applies one.
 pub fn accept_card(config_dir: &Path, id: &str, now_ms: u64) -> Result<String, String> {
     let mut state = load_state(config_dir);
-    let Some(c) = state.candidates.iter_mut().find(|c| c.id == id && c.stage == Stage::Card) else {
+    let Some(c) = state
+        .candidates
+        .iter_mut()
+        .find(|c| c.id == id && c.stage == Stage::Card)
+    else {
         return Err("That suggestion is no longer open.".into());
     };
     let change = c.change.clone().ok_or("That suggestion has no change.")?;
@@ -511,10 +637,23 @@ pub fn review_line(config_dir: &Path, now_ms: u64) -> String {
 pub fn why_table_lines(config_dir: &Path, now_ms: u64) -> Vec<String> {
     let state = load_state(config_dir);
     let tuning = load_tuning(config_dir);
-    let version = crate::harness::ChangeLedger::load_kind(config_dir, ChangeKind::Model).all().iter().filter(|c| c.id == TUNING_ID).count() as u32;
+    let version = crate::harness::ChangeLedger::load_kind(config_dir, ChangeKind::Model)
+        .all()
+        .iter()
+        .filter(|c| c.id == TUNING_ID)
+        .count() as u32;
     let mut ev = BTreeMap::new();
-    if state.candidates.iter().any(|c| matches!(c.stage, Stage::Shadow | Stage::Canary)) {
-        let log = steps_from(&read_records(config_dir, TUNE_SCAN_LINES), &read_outcomes(config_dir), &load_registry(config_dir), now_ms);
+    if state
+        .candidates
+        .iter()
+        .any(|c| matches!(c.stage, Stage::Shadow | Stage::Canary))
+    {
+        let log = steps_from(
+            &read_records(config_dir, TUNE_SCAN_LINES),
+            &read_outcomes(config_dir),
+            &load_registry(config_dir),
+            now_ms,
+        );
         for c in &state.candidates {
             ev.insert(c.id.clone(), evidence(c, &log));
         }
@@ -537,11 +676,19 @@ pub struct StepTune {
 }
 
 /// The tuning for one step of `class` in `episode` (pure over `live`).
-pub fn step_tune(live: &LiveTune, class: &str, episode: &str, risk: &tune::StepRisk<'_>) -> StepTune {
+pub fn step_tune(
+    live: &LiveTune,
+    class: &str,
+    episode: &str,
+    risk: &tune::StepRisk<'_>,
+) -> StepTune {
     let Some(class) = table_class(class) else {
         return StepTune::default();
     };
-    let mut out = StepTune { start: live.tuning.starts.get(class).cloned(), ..StepTune::default() };
+    let mut out = StepTune {
+        start: live.tuning.starts.get(class).cloned(),
+        ..StepTune::default()
+    };
     let Some(c) = live.state.testing(class) else {
         return out;
     };

@@ -25,7 +25,9 @@ pub fn askpass_socket(args: &[String]) -> Option<&str> {
 
 pub fn parse_args(args: &[String]) -> Launch {
     // Positional: `grokhub bench local` (offline card PR D).
-    if args.get(1).map(String::as_str) == Some("bench") && args.get(2).map(String::as_str) == Some("local") {
+    if args.get(1).map(String::as_str) == Some("bench")
+        && args.get(2).map(String::as_str) == Some("local")
+    {
         return Launch::BenchLocal;
     }
     let mut out = Launch::Cabin;
@@ -57,10 +59,24 @@ mod tests {
 
     #[test]
     fn askpass_takes_the_socket_and_only_as_the_first_flag() {
-        assert_eq!(askpass_socket(&args(&["grokhub", "--askpass", "/run/user/1000/grokhub-askpass-9/s", "[sudo] password for j: "])), Some("/run/user/1000/grokhub-askpass-9/s"));
+        assert_eq!(
+            askpass_socket(&args(&[
+                "grokhub",
+                "--askpass",
+                "/run/user/1000/grokhub-askpass-9/s",
+                "[sudo] password for j: "
+            ])),
+            Some("/run/user/1000/grokhub-askpass-9/s")
+        );
         assert_eq!(askpass_socket(&args(&["grokhub", "--askpass"])), None);
-        assert_eq!(askpass_socket(&args(&["grokhub", "--hub", "--askpass", "/x"])), None);
-        assert_eq!(parse_args(&args(&["grokhub", "--askpass", "/x"])), Launch::Cabin);
+        assert_eq!(
+            askpass_socket(&args(&["grokhub", "--hub", "--askpass", "/x"])),
+            None
+        );
+        assert_eq!(
+            parse_args(&args(&["grokhub", "--askpass", "/x"])),
+            Launch::Cabin
+        );
     }
 
     #[test]
@@ -92,8 +108,14 @@ mod tests {
             "grokhub --oauth keeps the sign-in to GrokHub and never writes the CLI's login (see run_oauth_cli in main.rs)"
         );
         assert_eq!(parse_args(&args(&["grokhub", "-V"])), Launch::Version);
-        assert_eq!(parse_args(&args(&["grokhub", "--version"])), Launch::Version);
-        assert_eq!(parse_args(&args(&["grokhub", "bench", "local"])), Launch::BenchLocal);
+        assert_eq!(
+            parse_args(&args(&["grokhub", "--version"])),
+            Launch::Version
+        );
+        assert_eq!(
+            parse_args(&args(&["grokhub", "bench", "local"])),
+            Launch::BenchLocal
+        );
         assert_eq!(parse_args(&args(&["grokhub", "bench"])), Launch::Cabin);
     }
 
@@ -114,7 +136,8 @@ mod tests {
             "grokhub --mcp-desktop must run the stdio server and skip the cabin window"
         );
         assert!(
-            !main.contains("attach_cli_console") || main.contains("Launch::Cabin | Launch::Agent | Launch::McpDesktop"),
+            !main.contains("attach_cli_console")
+                || main.contains("Launch::Cabin | Launch::Agent | Launch::McpDesktop"),
             "the desktop server must not attach a console"
         );
     }
@@ -122,13 +145,19 @@ mod tests {
     #[test]
     fn cua_gate_launch_flag() {
         assert_eq!(parse_args(&args(&["grokhub", "--mcp-cua"])), Launch::McpCua);
-        assert_eq!(parse_args(&args(&["grokhub", "--hub", "--mcp-cua"])), Launch::McpCua);
-        assert_eq!(parse_args(&args(&["grokhub", "--version", "--mcp-cua"])), Launch::Version);
+        assert_eq!(
+            parse_args(&args(&["grokhub", "--hub", "--mcp-cua"])),
+            Launch::McpCua
+        );
+        assert_eq!(
+            parse_args(&args(&["grokhub", "--version", "--mcp-cua"])),
+            Launch::Version
+        );
     }
 
     #[test]
     fn cabin_reports_version() {
-        assert_eq!(env!("CARGO_PKG_VERSION"), "3.0.0");
+        assert_eq!(env!("CARGO_PKG_VERSION"), "3.0.1");
     }
 
     #[test]

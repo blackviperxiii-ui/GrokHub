@@ -177,7 +177,8 @@ pub fn control_at(rows: &[AtspiRow], x: i32, y: i32) -> Option<&AtspiRow> {
 pub fn filter_atspi_rows(rows: &[AtspiRow], desk_w: i32, desk_h: i32) -> Vec<AtspiRow> {
     rows.iter()
         .filter(|r| keep_atspi_row(r, desk_w, desk_h))
-        .take(80).cloned()
+        .take(80)
+        .cloned()
         .collect()
 }
 
@@ -344,7 +345,14 @@ pub fn parse_atspi_line(line: &str) -> Option<AtspiRow> {
     if lockish(&name) || lockish(&role) {
         return None;
     }
-    Some(AtspiRow { name, role, x, y, w, h })
+    Some(AtspiRow {
+        name,
+        role,
+        x,
+        y,
+        w,
+        h,
+    })
 }
 
 /// Window title from an AT-SPI line, including lock / greeter surfaces.
@@ -484,9 +492,19 @@ mod tests {
             y: Some(50),
             text: Some("Install".into()),
         };
-        let f = build_windshield(&rows, Some(&pending), Some("lock screen"), Some("flash pi"), None, 1);
+        let f = build_windshield(
+            &rows,
+            Some(&pending),
+            Some("lock screen"),
+            Some("flash pi"),
+            None,
+            1,
+        );
         assert_eq!(f.objects[0].label, "Terminal");
-        assert_eq!(f.objects.iter().find(|o| o.kind == "wont").unwrap().label, "lock screen");
+        assert_eq!(
+            f.objects.iter().find(|o| o.kind == "wont").unwrap().label,
+            "lock screen"
+        );
         assert_eq!(f.next.as_ref().unwrap().label, "Install");
         assert_eq!(f.autonomy, 1);
         let row = parse_atspi_line("role=push-button name=Install x=10 y=20 w=80 h=24").unwrap();
@@ -495,7 +513,10 @@ mod tests {
         assert!(parse_atspi_line("role=window name=Lock x=0 y=0 w=1 h=1").is_none());
         assert_eq!(refused_lock(&["Lock screen"]), Some("lock screen"));
         let cursor = parse_xdotool_mouse("x:123 y:456 screen:0 window:9").unwrap();
-        assert_eq!((cursor.x, cursor.y, cursor.role.as_str()), (123, 456, "cursor"));
+        assert_eq!(
+            (cursor.x, cursor.y, cursor.role.as_str()),
+            (123, 456, "cursor")
+        );
         assert!(parse_xdotool_mouse("").is_none());
         let win = parse_wmctrl_line("0x01 0 10 20 800 600 GrokHub").unwrap();
         assert_eq!(win.name, "GrokHub");
@@ -591,7 +612,9 @@ mod tests {
             "role=window name=GDM_Greeter x=0 y=0 w=1920 h=1080",
         ]);
         assert!(titles.iter().any(|t| t.eq_ignore_ascii_case("Lock screen")));
-        assert!(titles.iter().any(|t| t.to_ascii_lowercase().contains("greeter")));
+        assert!(titles
+            .iter()
+            .any(|t| t.to_ascii_lowercase().contains("greeter")));
         assert!(titles.iter().any(|t| t == "GrokHub"));
         assert_eq!(
             window_name_from_wmctrl("0x02 0 0 0 1920 1080 Lock screen").as_deref(),
@@ -608,12 +631,30 @@ mod tests {
             row("Send options", "menu item", 50, 5, 20, 30),
             row("", "cursor", 20, 10, 1, 1),
         ];
-        assert_eq!(control_at(&rows, 20, 10).map(|r| r.name.as_str()), Some("Send"));
-        assert_eq!(control_at(&rows, 55, 10).map(|r| r.name.as_str()), Some("Send options"));
-        assert_eq!(control_at(&rows, 400, 300), None, "a frame or panel is not a control");
-        assert_eq!(control_at(&rows, 70, 10), None, "the right edge is outside the box");
+        assert_eq!(
+            control_at(&rows, 20, 10).map(|r| r.name.as_str()),
+            Some("Send")
+        );
+        assert_eq!(
+            control_at(&rows, 55, 10).map(|r| r.name.as_str()),
+            Some("Send options")
+        );
+        assert_eq!(
+            control_at(&rows, 400, 300),
+            None,
+            "a frame or panel is not a control"
+        );
+        assert_eq!(
+            control_at(&rows, 70, 10),
+            None,
+            "the right edge is outside the box"
+        );
         let line = "role=push-button name=Place_order x=10 y=5 w=60 h=30";
         let parsed = parse_atspi_line(line).unwrap();
-        assert_eq!(control_at(std::slice::from_ref(&parsed), 12, 6).map(|r| (r.name.as_str(), r.role.as_str())), Some(("Place order", "push button")));
+        assert_eq!(
+            control_at(std::slice::from_ref(&parsed), 12, 6)
+                .map(|r| (r.name.as_str(), r.role.as_str())),
+            Some(("Place order", "push button"))
+        );
     }
 }

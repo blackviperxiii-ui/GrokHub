@@ -7,7 +7,10 @@ pub fn click_project_opens_board(_already_selected: bool) -> bool {
     false
 }
 
-pub fn collect_other_chip_threads(threads: &[threads::ChatThread], current_id: &str) -> Vec<ChipThread> {
+pub fn collect_other_chip_threads(
+    threads: &[threads::ChatThread],
+    current_id: &str,
+) -> Vec<ChipThread> {
     threads
         .iter()
         .rev()

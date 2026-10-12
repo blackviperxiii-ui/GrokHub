@@ -1,33 +1,28 @@
 use crate::config;
 use crate::host::run_host;
-use grokhub_core::{
-    auto_off_step, channel_status_line, channel_switch_fail_hint, discover_source,
-    fetch_channel_tips, forbidden_reason, parse_github_latest_tag, switch_clone_to_main,
-    update_fail_hint,
-    restart_acts,
-    restart_bin, systemd_user_restart_args, systemd_user_stop_args, update_progress_pct,
-    update_step_label, update_wipes_config, AutoOffStep, Channel, RestartAct,
-    CHANNEL_BETA_SINCE, CHANNEL_RECEIPT, GITHUB_LATEST_API,
-    TEXT_FILE_CAP,
-};
 #[cfg(any(test, windows))]
 use grokhub_core::CHANNEL_WINDOWS_NOTE;
+use grokhub_core::{
+    auto_off_step, channel_status_line, channel_switch_fail_hint, discover_source,
+    fetch_channel_tips, forbidden_reason, parse_github_latest_tag, restart_acts, restart_bin,
+    switch_clone_to_main, systemd_user_restart_args, systemd_user_stop_args, update_fail_hint,
+    update_progress_pct, update_step_label, update_wipes_config, AutoOffStep, Channel, RestartAct,
+    CHANNEL_BETA_SINCE, CHANNEL_RECEIPT, GITHUB_LATEST_API, TEXT_FILE_CAP,
+};
 #[cfg(not(windows))]
 use grokhub_core::{channel_switch_preflight, channel_switch_shell};
-use std::io::Read;
 use std::env;
-use std::process::{Command, Stdio};
+use std::io::Read;
 #[cfg(all(test, unix))]
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
+use std::process::{Command, Stdio};
 use std::time::Duration;
 
 fn expand_source_hint(raw: &str) -> PathBuf {
     PathBuf::from(grokhub_core::expand_project_root(
         raw,
-        grokhub_core::user_home()
-            .as_ref()
-            .and_then(|p| p.to_str()),
+        grokhub_core::user_home().as_ref().and_then(|p| p.to_str()),
     ))
 }
 
@@ -59,7 +54,10 @@ pub fn resolve_source(cfg_source: &str) -> Option<PathBuf> {
 
 pub fn remember_source(dir: &std::path::Path) {
     let _ = std::fs::create_dir_all(config::config_dir());
-    let _ = std::fs::write(config::config_dir().join("source"), dir.display().to_string());
+    let _ = std::fs::write(
+        config::config_dir().join("source"),
+        dir.display().to_string(),
+    );
 }
 
 /// The install channel from the `channel` receipt that `scripts/install.sh`
@@ -118,7 +116,10 @@ pub fn channel_labs_status() -> String {
 /// One host command: backup binaries, `install.sh --user --channel`, restore on fail.
 /// Linux only — Windows Labs keeps the toggle disabled (see [`CHANNEL_WINDOWS_NOTE`]).
 #[cfg(not(windows))]
-pub fn channel_switch_cmds(source: &std::path::Path, target: Channel) -> Result<Vec<String>, String> {
+pub fn channel_switch_cmds(
+    source: &std::path::Path,
+    target: Channel,
+) -> Result<Vec<String>, String> {
     channel_switch_preflight(false, Some(source))?;
     let home = grokhub_core::user_home()
         .ok_or_else(|| "No home directory — cannot install".to_string())?;
@@ -210,9 +211,7 @@ pub fn try_auto_off_beta_channel(source: Option<&std::path::Path>) -> Option<Str
         ));
     }
     write_installed_channel(Channel::Stable).ok()?;
-    Some(
-        "Beta caught up to main — switched to stable. Re-enable Labs Beta anytime.".into(),
-    )
+    Some("Beta caught up to main — switched to stable. Re-enable Labs Beta anytime.".into())
 }
 
 /// A Labs channel switch: `install.sh --user --channel …` from a clone, or
@@ -235,20 +234,22 @@ pub fn release_channel_switch_cmds(target: Channel) -> Vec<String> {
 fn run_release_step(cmd: &str) -> Option<String> {
     use crate::release_update::{install_release, release_step_receipt_for};
     if cmd == grokhub_core::release_verify::RELEASE_INSTALL_STEP {
-        return Some(release_step_receipt_for(cmd, install_release(installed_channel(), cfg!(windows))));
+        return Some(release_step_receipt_for(
+            cmd,
+            install_release(installed_channel(), cfg!(windows)),
+        ));
     }
     if let Some((channel, path)) = grokhub_core::parse_clone_recover_step(cmd) {
-        let result = grokhub_core::recover_clone_if_needed(&path, channel).map(|bak| {
-            match bak {
-                Some(name) => format!("Saved prior state on {name}; clone reset to the channel tip."),
-                None => "Clone already matched the channel tip — no backup needed.".into(),
-            }
+        let result = grokhub_core::recover_clone_if_needed(&path, channel).map(|bak| match bak {
+            Some(name) => format!("Saved prior state on {name}; clone reset to the channel tip."),
+            None => "Clone already matched the channel tip — no backup needed.".into(),
         });
         return Some(release_step_receipt_for(cmd, result));
     }
     let target = grokhub_core::release_verify::parse_release_switch_step(cmd)?;
     let result = install_release(target, cfg!(windows)).and_then(|line| {
-        write_installed_channel(target).map(|()| format!("{line} Now on the {} channel.", target.as_str()))
+        write_installed_channel(target)
+            .map(|()| format!("{line} Now on the {} channel.", target.as_str()))
     });
     Some(release_step_receipt_for(cmd, result))
 }
@@ -415,7 +416,10 @@ pub fn fetch_github_latest_tag() -> Result<String, String> {
                 .read_to_end(&mut buf);
             return Err(format!(
                 "GitHub Latest {code}: {}",
-                String::from_utf8_lossy(&buf).chars().take(120).collect::<String>()
+                String::from_utf8_lossy(&buf)
+                    .chars()
+                    .take(120)
+                    .collect::<String>()
             ));
         }
         Err(e) => return Err(e.to_string()),
@@ -459,7 +463,8 @@ pub fn blocking_update_probe() -> UpdateProbe {
 fn unit_is_active(unit: &str) -> bool {
     let mut cmd = Command::new("systemctl");
     cmd.args(["--user", "is-active", "--quiet", unit]);
-    crate::desktop::run_limited(cmd, Duration::from_millis(1500)).is_some_and(|o| o.status.success())
+    crate::desktop::run_limited(cmd, Duration::from_millis(1500))
+        .is_some_and(|o| o.status.success())
 }
 
 pub fn stop_user_unit(unit: &str) -> bool {
@@ -559,7 +564,11 @@ mod tests {
         env::set_var("GROKHUB_CONFIG", &cfg);
         let rest = root
             .strip_prefix(&home)
-            .map(|p| p.to_string_lossy().trim_start_matches(['/', '\\']).to_string())
+            .map(|p| {
+                p.to_string_lossy()
+                    .trim_start_matches(['/', '\\'])
+                    .to_string()
+            })
             .unwrap_or_else(|_| root.to_string_lossy().into_owned());
         let found = resolve_source(&format!("~/{rest}"));
         match prev_src {
@@ -654,7 +663,10 @@ mod tests {
         let parsed = grokhub_core::parse_version_line(&line).expect("parses");
         assert_eq!(parsed.channel, build_channel());
         assert_eq!(parsed.version, build_version_label());
-        assert!(line.starts_with(&format!("GrokHub {}", build_version_label())), "{line}");
+        assert!(
+            line.starts_with(&format!("GrokHub {}", build_version_label())),
+            "{line}"
+        );
         assert_eq!(parsed.branch, env!("GROKHUB_BUILD_BRANCH"));
         assert_eq!(parsed.sha, env!("GROKHUB_BUILD_SHA"));
         if build_channel() == Channel::Beta {
@@ -663,7 +675,10 @@ mod tests {
                 "beta builds use -beta.N: {line}"
             );
             let n: u64 = env!("GROKHUB_BUILD_BETA_N").parse().expect("beta N");
-            assert_eq!(parsed.version, format!("{}-beta.{n}", env!("CARGO_PKG_VERSION")));
+            assert_eq!(
+                parsed.version,
+                format!("{}-beta.{n}", env!("CARGO_PKG_VERSION"))
+            );
         } else {
             assert_eq!(parsed.version, env!("CARGO_PKG_VERSION"));
         }
@@ -774,7 +789,10 @@ mod tests {
         assert_eq!(uniq, vec![0, 50, 100], "{ticks:?}");
         assert_eq!(*pcts.first().unwrap(), 0);
         assert_eq!(*pcts.last().unwrap(), 100);
-        assert!(ticks.iter().all(|(_, m)| !m.contains("HOST_RESULT")), "{ticks:?}");
+        assert!(
+            ticks.iter().all(|(_, m)| !m.contains("HOST_RESULT")),
+            "{ticks:?}"
+        );
     }
 
     #[test]
@@ -883,7 +901,10 @@ mod tests {
             probe.contains("thread::spawn") && probe.contains("fetch_github_latest_tag"),
             "the 2h probe must check cabin Latest off the UI thread: {probe}"
         );
-        assert!(!probe.contains("grok_version") && !probe.contains("cli_alpha"), "{probe}");
+        assert!(
+            !probe.contains("grok_version") && !probe.contains("cli_alpha"),
+            "{probe}"
+        );
     }
 
     #[test]
@@ -968,7 +989,10 @@ mod tests {
         let caller_sig = "fn queue_channel_switch(";
         let at = app.find(caller_sig).expect("queue_channel_switch");
         let attrs = &app[..at];
-        let attrs = attrs.trim_end().rsplit_once("\n\n").map_or(attrs, |(_, a)| a);
+        let attrs = attrs
+            .trim_end()
+            .rsplit_once("\n\n")
+            .map_or(attrs, |(_, a)| a);
         assert!(
             attrs.contains("#[cfg(not(windows))]"),
             "queue_channel_switch must stay Linux-only"
@@ -988,7 +1012,9 @@ mod tests {
             let before: Vec<&str> = update[..def_at]
                 .lines()
                 .rev()
-                .take_while(|l| l.trim_start().starts_with("#[") || l.trim_start().starts_with("///"))
+                .take_while(|l| {
+                    l.trim_start().starts_with("#[") || l.trim_start().starts_with("///")
+                })
                 .collect();
             assert!(
                 before.iter().any(|l| l.trim() == "#[cfg(not(windows))]"),
@@ -1006,7 +1032,10 @@ mod tests {
         assert_linux_only_helpers_gated(&gated.replace('\n', "\r\n"), &app.replace('\n', "\r\n"));
         let ungated = gated.replace("/// doc\n#[cfg(not(windows))]\n", "/// doc\n");
         let r = std::panic::catch_unwind(|| assert_linux_only_helpers_gated(&ungated, app));
-        assert!(r.is_err(), "an ungated Linux-only helper must fail the check");
+        assert!(
+            r.is_err(),
+            "an ungated Linux-only helper must fail the check"
+        );
     }
 
     #[test]
@@ -1053,19 +1082,35 @@ mod tests {
         let tree = "47fd2b27aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
         let older = "1111111aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
         assert_eq!(
-            auto_off_step(Channel::Beta, &tips("e79aa50f", "7266ae6a", tree, tree), Some(older)),
+            auto_off_step(
+                Channel::Beta,
+                &tips("e79aa50f", "7266ae6a", tree, tree),
+                Some(older)
+            ),
             AutoOffStep::SwitchToStable
         );
         assert_eq!(
-            auto_off_step(Channel::Beta, &tips("e79aa50f", "7266ae6a", tree, tree), Some(tree)),
+            auto_off_step(
+                Channel::Beta,
+                &tips("e79aa50f", "7266ae6a", tree, tree),
+                Some(tree)
+            ),
             AutoOffStep::Stay
         );
         assert_eq!(
-            auto_off_step(Channel::Beta, &tips("e79aa50f", "7266ae6a", tree, tree), None),
+            auto_off_step(
+                Channel::Beta,
+                &tips("e79aa50f", "7266ae6a", tree, tree),
+                None
+            ),
             AutoOffStep::RecordBaseline(tree.into())
         );
         assert_eq!(
-            auto_off_step(Channel::Beta, &tips("aaaaaaa", "bbbbbbb", older, tree), Some(older)),
+            auto_off_step(
+                Channel::Beta,
+                &tips("aaaaaaa", "bbbbbbb", older, tree),
+                Some(older)
+            ),
             AutoOffStep::Stay
         );
     }
@@ -1081,17 +1126,31 @@ mod tests {
         fs::write(&since, "47fd2b27aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n").unwrap();
         write_installed_channel(Channel::Beta).unwrap();
         assert!(!since.exists(), "turning Beta on clears the baseline");
-        assert_eq!(fs::read_to_string(cfg.join(CHANNEL_RECEIPT)).unwrap(), "beta\n");
+        assert_eq!(
+            fs::read_to_string(cfg.join(CHANNEL_RECEIPT)).unwrap(),
+            "beta\n"
+        );
         fs::write(&since, "47fd2b27aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n").unwrap();
         write_installed_channel(Channel::Stable).unwrap();
         assert!(!since.exists(), "switching to stable deletes the baseline");
-        assert_eq!(fs::read_to_string(cfg.join(CHANNEL_RECEIPT)).unwrap(), "stable\n");
+        assert_eq!(
+            fs::read_to_string(cfg.join(CHANNEL_RECEIPT)).unwrap(),
+            "stable\n"
+        );
         let _ = fs::remove_dir_all(&cfg);
     }
 
     fn git_in(dir: &std::path::Path, args: &[&str]) -> String {
-        let out = Command::new("git").args(args).current_dir(dir).output().unwrap();
-        assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+        let out = Command::new("git")
+            .args(args)
+            .current_dir(dir)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
         String::from_utf8_lossy(&out.stdout).trim().to_string()
     }
 
@@ -1104,11 +1163,9 @@ mod tests {
     }
 
     /// [`same_tree_clone`] plus main's tree before the promote (the seed tree).
-    fn same_tree_clone_with_seed(
-        tag: &str,
-    ) -> (std::path::PathBuf, std::path::PathBuf, String) {
-        let base = std::env::temp_dir()
-            .join(format!("grokhub-auto-off-{tag}-{}", std::process::id()));
+    fn same_tree_clone_with_seed(tag: &str) -> (std::path::PathBuf, std::path::PathBuf, String) {
+        let base =
+            std::env::temp_dir().join(format!("grokhub-auto-off-{tag}-{}", std::process::id()));
         let _ = fs::remove_dir_all(&base);
         let work = base.join("work");
         fs::create_dir_all(work.join("scripts")).unwrap();
@@ -1124,9 +1181,20 @@ mod tests {
         git_in(&work, &["add", "."]);
         git_in(&work, &["commit", "-q", "-m", "seed"]);
         let seed_tree = git_in(&work, &["rev-parse", "HEAD^{tree}"]);
-        git_in(&work, &["remote", "add", "origin", &base.join("origin.git").display().to_string()]);
+        git_in(
+            &work,
+            &[
+                "remote",
+                "add",
+                "origin",
+                &base.join("origin.git").display().to_string(),
+            ],
+        );
         git_in(&work, &["push", "-q", "origin", "main", "main:beta"]);
-        git_in(&base, &["clone", "-q", "-b", "beta", "origin.git", "client"]);
+        git_in(
+            &base,
+            &["clone", "-q", "-b", "beta", "origin.git", "client"],
+        );
         git_in(&work, &["checkout", "-q", "-b", "beta"]);
         fs::write(work.join("feature.txt"), "feature\n").unwrap();
         git_in(&work, &["add", "."]);
@@ -1135,7 +1203,17 @@ mod tests {
         git_in(&work, &["merge", "-q", "--squash", "beta"]);
         git_in(&work, &["commit", "-q", "-m", "promote (squash)"]);
         git_in(&work, &["checkout", "-q", "beta"]);
-        git_in(&work, &["merge", "-q", "--no-ff", "main", "-m", "sync main into beta"]);
+        git_in(
+            &work,
+            &[
+                "merge",
+                "-q",
+                "--no-ff",
+                "main",
+                "-m",
+                "sync main into beta",
+            ],
+        );
         git_in(&work, &["push", "-q", "origin", "main", "beta"]);
         (base.clone(), base.join("client"), seed_tree)
     }
@@ -1156,7 +1234,10 @@ mod tests {
             // Windows stays disabled: no fetch, no checkout, receipt untouched.
             assert!(msg.is_none());
             assert_eq!(receipt_channel(), Channel::Beta);
-            assert_eq!(git_in(&client, &["symbolic-ref", "--short", "HEAD"]), "beta");
+            assert_eq!(
+                git_in(&client, &["symbolic-ref", "--short", "HEAD"]),
+                "beta"
+            );
         } else {
             assert_eq!(
                 msg.as_deref(),
@@ -1165,13 +1246,19 @@ mod tests {
             assert_eq!(installed_channel(), Channel::Stable);
             // Really back on stable: the clone is on main, so the next Update
             // (stable plan) accepts it instead of "source clone is on beta".
-            assert_eq!(git_in(&client, &["symbolic-ref", "--short", "HEAD"]), "main");
+            assert_eq!(
+                git_in(&client, &["symbolic-ref", "--short", "HEAD"]),
+                "main"
+            );
             assert_eq!(
                 git_in(&client, &["rev-parse", "HEAD"]),
                 git_in(&client, &["rev-parse", "origin/main"])
             );
             assert!(grokhub_core::update_cmds_in(&client, Channel::Stable).is_ok());
-            assert!(!cfg.join(CHANNEL_BETA_SINCE).exists(), "stable deletes the baseline");
+            assert!(
+                !cfg.join(CHANNEL_BETA_SINCE).exists(),
+                "stable deletes the baseline"
+            );
         }
         let _ = fs::remove_dir_all(&base);
         let _ = fs::remove_dir_all(&cfg);
@@ -1192,14 +1279,23 @@ mod tests {
         for _ in 0..3 {
             assert_eq!(try_auto_off_beta_channel(Some(&client)), None);
             assert_eq!(receipt_channel(), Channel::Beta);
-            assert_eq!(git_in(&client, &["symbolic-ref", "--short", "HEAD"]), "beta");
+            assert_eq!(
+                git_in(&client, &["symbolic-ref", "--short", "HEAD"]),
+                "beta"
+            );
         }
         if cfg!(windows) {
-            assert!(!cfg.join(CHANNEL_BETA_SINCE).exists(), "Windows never checks");
+            assert!(
+                !cfg.join(CHANNEL_BETA_SINCE).exists(),
+                "Windows never checks"
+            );
         } else {
             assert_eq!(
                 fs::read_to_string(cfg.join(CHANNEL_BETA_SINCE)).unwrap(),
-                format!("{}\n", git_in(&client, &["rev-parse", "origin/main^{tree}"]))
+                format!(
+                    "{}\n",
+                    git_in(&client, &["rev-parse", "origin/main^{tree}"])
+                )
             );
         }
         let _ = fs::remove_dir_all(&base);
@@ -1228,15 +1324,24 @@ mod tests {
             );
         }
         assert_eq!(receipt_channel(), Channel::Beta);
-        assert_eq!(git_in(&client, &["symbolic-ref", "--short", "HEAD"]), "beta");
-        assert_eq!(fs::read_to_string(client.join("Cargo.toml")).unwrap(), "[workspace] # wip\n");
+        assert_eq!(
+            git_in(&client, &["symbolic-ref", "--short", "HEAD"]),
+            "beta"
+        );
+        assert_eq!(
+            fs::read_to_string(client.join("Cargo.toml")).unwrap(),
+            "[workspace] # wip\n"
+        );
         // Offline / fetch error: stay on beta and say nothing.
         git_in(&client, &["checkout", "-q", "--", "Cargo.toml"]);
         let gone = base.join("gone.git").display().to_string();
         git_in(&client, &["remote", "set-url", "origin", &gone]);
         assert!(try_auto_off_beta_channel(Some(&client)).is_none());
         assert_eq!(receipt_channel(), Channel::Beta);
-        assert_eq!(git_in(&client, &["symbolic-ref", "--short", "HEAD"]), "beta");
+        assert_eq!(
+            git_in(&client, &["symbolic-ref", "--short", "HEAD"]),
+            "beta"
+        );
         let _ = fs::remove_dir_all(&base);
         let _ = fs::remove_dir_all(&cfg);
     }
@@ -1251,11 +1356,22 @@ mod tests {
         fs::write(cfg.join(CHANNEL_RECEIPT), Channel::Beta.receipt()).unwrap();
         assert_eq!(installed_channel(), Channel::Beta);
         let _ = fs::remove_dir_all(&cfg);
-        assert_eq!(release_channel_switch_cmds(Channel::Beta), vec!["grokhub: switch to the beta release".to_string()]);
-        assert_eq!(release_channel_switch_cmds(Channel::Stable), vec!["grokhub: switch to the stable release".to_string()]);
+        assert_eq!(
+            release_channel_switch_cmds(Channel::Beta),
+            vec!["grokhub: switch to the beta release".to_string()]
+        );
+        assert_eq!(
+            release_channel_switch_cmds(Channel::Stable),
+            vec!["grokhub: switch to the stable release".to_string()]
+        );
         assert!(is_channel_switch_cmd("grokhub: switch to the beta release"));
-        assert!(!is_channel_switch_cmd(grokhub_core::release_verify::RELEASE_INSTALL_STEP));
-        assert_eq!(run_release_step("git -C /src pull --ff-only origin beta"), None);
+        assert!(!is_channel_switch_cmd(
+            grokhub_core::release_verify::RELEASE_INSTALL_STEP
+        ));
+        assert_eq!(
+            run_release_step("git -C /src pull --ff-only origin beta"),
+            None
+        );
         // A refused switch names why, not the generic switch failure.
         let refused = "$ grokhub: switch to the beta release\nexit 1\nUpdate 2.13.1-beta (29e8ac5) not installed: the release has no SHA256SUMS";
         assert_eq!(
@@ -1264,8 +1380,12 @@ mod tests {
         );
         // The receipt is written only after the install lands.
         let body = fn_body(include_str!("update.rs"), "fn run_release_step(");
-        let install = body.find("install_release(target").expect("installs the target");
-        let receipt = body.find("write_installed_channel(target)").expect("writes the receipt");
+        let install = body
+            .find("install_release(target")
+            .expect("installs the target");
+        let receipt = body
+            .find("write_installed_channel(target)")
+            .expect("writes the receipt");
         assert!(install < receipt && body.contains(".and_then("), "{body}");
     }
 
@@ -1278,7 +1398,10 @@ mod tests {
             host_timeout_for("git -C '/repo' pull --ff-only origin main"),
             Duration::from_secs(900)
         );
-        assert_eq!(host_timeout_for("bash '/repo/scripts/install.sh' --user"), Duration::from_secs(900));
+        assert_eq!(
+            host_timeout_for("bash '/repo/scripts/install.sh' --user"),
+            Duration::from_secs(900)
+        );
         let src = include_str!("update.rs");
         assert!(src.contains("let chunk = run_host(c, host_timeout_for(c));"));
     }
@@ -1297,7 +1420,8 @@ mod tests {
             "GrokHub needs a newer Rust to build. Run rustup update, then try again. Details: /home/u/.config/GrokHub/update.log"
         );
         let on_main = "error: /src is on main but the beta channel builds beta; run with --channel stable to switch, or git checkout beta";
-        assert!(update_failure_status(on_main, false, log).starts_with("Your GrokHub source folder is on stable, but Labs Beta is on."));
+        assert!(update_failure_status(on_main, false, log)
+            .starts_with("Your GrokHub source folder is on stable, but Labs Beta is on."));
         assert_eq!(
             update_failure_status("exit 1 · 5ms\nfatal: unable to access", false, log),
             "Update failed. Details: /home/u/.config/GrokHub/update.log"
@@ -1333,13 +1457,30 @@ mod tests {
             "bash '/src/scripts/install.sh' --user".to_string(),
         ];
         let entry = update_log_entry(0, Channel::Beta, &cmds, false, &out);
-        assert!(entry.starts_with("== 1970-01-01T00:00:00Z · channel beta · update · failed\n"), "{entry}");
-        assert!(entry.contains("$ Pulling origin/beta…: git -C '/src' pull --ff-only origin beta\n"));
+        assert!(
+            entry.starts_with("== 1970-01-01T00:00:00Z · channel beta · update · failed\n"),
+            "{entry}"
+        );
+        assert!(
+            entry.contains("$ Pulling origin/beta…: git -C '/src' pull --ff-only origin beta\n")
+        );
         assert!(entry.contains("$ Installing overlay…: bash '/src/scripts/install.sh' --user\n"));
-        assert!(!entry.contains("line 40\n") && entry.contains("line 41\n") && entry.contains("line 99\n"));
-        assert!(!entry.contains("ghp_abcdefghijklmnop") && entry.contains("[redacted]"), "{entry}");
-        let switch = vec![grokhub_core::channel_switch_shell("/src", Channel::Stable, "/home/u")];
-        assert!(update_log_entry(0, Channel::Beta, &switch, true, "ok").contains("· channel switch · ok"));
+        assert!(
+            !entry.contains("line 40\n")
+                && entry.contains("line 41\n")
+                && entry.contains("line 99\n")
+        );
+        assert!(
+            !entry.contains("ghp_abcdefghijklmnop") && entry.contains("[redacted]"),
+            "{entry}"
+        );
+        let switch = vec![grokhub_core::channel_switch_shell(
+            "/src",
+            Channel::Stable,
+            "/home/u",
+        )];
+        assert!(update_log_entry(0, Channel::Beta, &switch, true, "ok")
+            .contains("· channel switch · ok"));
 
         let dir = std::env::temp_dir().join(format!("grokhub-update-log-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
@@ -1347,16 +1488,35 @@ mod tests {
         for _ in 0..2 {
             append_update_log_in(&dir, &big).unwrap();
         }
-        assert_eq!(fs::metadata(dir.join(UPDATE_LOG)).unwrap().len(), 200 * 1024);
+        assert_eq!(
+            fs::metadata(dir.join(UPDATE_LOG)).unwrap().len(),
+            200 * 1024
+        );
         assert!(!dir.join("update.1.log").exists());
         append_update_log_in(&dir, &big).unwrap(); // would pass 256 KB → rotate
-        assert_eq!(fs::metadata(dir.join("update.1.log")).unwrap().len(), 200 * 1024);
-        assert_eq!(fs::metadata(dir.join(UPDATE_LOG)).unwrap().len(), 100 * 1024);
+        assert_eq!(
+            fs::metadata(dir.join("update.1.log")).unwrap().len(),
+            200 * 1024
+        );
+        assert_eq!(
+            fs::metadata(dir.join(UPDATE_LOG)).unwrap().len(),
+            100 * 1024
+        );
         append_update_log_in(&dir, &big).unwrap();
         append_update_log_in(&dir, &big).unwrap(); // rotates again, replacing the old one
-        assert_eq!(fs::metadata(dir.join("update.1.log")).unwrap().len(), 200 * 1024);
-        assert_eq!(fs::metadata(dir.join(UPDATE_LOG)).unwrap().len(), 100 * 1024);
-        assert_eq!(fs::read_dir(&dir).unwrap().count(), 2, "rotates once, never more files");
+        assert_eq!(
+            fs::metadata(dir.join("update.1.log")).unwrap().len(),
+            200 * 1024
+        );
+        assert_eq!(
+            fs::metadata(dir.join(UPDATE_LOG)).unwrap().len(),
+            100 * 1024
+        );
+        assert_eq!(
+            fs::read_dir(&dir).unwrap().count(),
+            2,
+            "rotates once, never more files"
+        );
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -1376,7 +1536,9 @@ mod tests {
             .split("fn maybe_auto_off_beta_channel(")
             .nth(1)
             .expect("maybe_auto_off_beta_channel");
-        let win = maybe.find("if cfg!(windows)").expect("windows early return");
+        let win = maybe
+            .find("if cfg!(windows)")
+            .expect("windows early return");
         assert!(
             win < maybe.find("installed_channel()").expect("receipt")
                 && win < maybe.find("try_auto_off_beta_channel(").expect("try"),

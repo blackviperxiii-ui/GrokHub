@@ -1,19 +1,18 @@
 use grokhub_core::{
-    act_window_search_bin, capture_kinds, cdp_new_tab_path,
-    cdp_page_close_payload, cdp_page_focus_payload, clamp_to_desktop, clip_image_args,
-    computer_cmd_line, computer_drive_for, cursor_on_output, diagnose_hands, empty_hands_steps_error,
+    act_window_search_bin, capture_kinds, cdp_new_tab_path, cdp_page_close_payload,
+    cdp_page_focus_payload, clamp_to_desktop, clip_image_args, computer_cmd_line,
+    computer_drive_for, cursor_on_output, diagnose_hands, empty_hands_steps_error,
     ffmpeg_webcam_args, ffmpeg_x11_args, filter_atspi_rows, format_cursor_line_miss,
-    format_tab_list, frame_is_blank, frame_origin_for, gnome_shell_screenshot_args, grim_capture_args,
-    hands_blocked_by_lock, hands_down_receipt,
-    image_pixels_ok, image_to_global, infer_wayland_display, jpeg_data_url,
-    luma_mean_var, monitor_local_to_global,
-    parse_atspi_line, parse_cdp_targets, parse_picker_stdout, parse_wmctrl_line, parse_xdotool_mouse,
+    format_tab_list, frame_is_blank, frame_origin_for, gnome_shell_screenshot_args,
+    grim_capture_args, hands_blocked_by_lock, hands_down_receipt, image_pixels_ok, image_to_global,
+    infer_wayland_display, jpeg_data_url, luma_mean_var, monitor_local_to_global, parse_atspi_line,
+    parse_cdp_targets, parse_picker_stdout, parse_wmctrl_line, parse_xdotool_mouse,
     parse_xrandr_outputs, pick_browser_tab, pick_capture_output, pick_hands_backend,
     pick_named_row, picker_args, png_ihdr_size, pointer_slop_miss, relative_move_steps,
-    resolve_bin_in, session_is_wayland, tab_list_from_rows, take_text_body, IMAGE_FILE_CAP,
-    TEXT_FILE_CAP, virtual_desktop_size, x11_grab_size, ydotool_socket_path,
-    AtspiRow, BrowserTab, CaptureKind, ComputerDrive, ComputerOp, DisplayOutput, HandsBackend,
-    HandsDown, TabAction, CDP_DOWN, CDP_PORTS, RECORDERS, TRANSCRIBERS,
+    resolve_bin_in, session_is_wayland, tab_list_from_rows, take_text_body, virtual_desktop_size,
+    x11_grab_size, ydotool_socket_path, AtspiRow, BrowserTab, CaptureKind, ComputerDrive,
+    ComputerOp, DisplayOutput, HandsBackend, HandsDown, TabAction, CDP_DOWN, CDP_PORTS,
+    IMAGE_FILE_CAP, RECORDERS, TEXT_FILE_CAP, TRANSCRIBERS,
 };
 use image::GenericImageView;
 use std::io::Read;
@@ -261,7 +260,11 @@ fn probe_cdp() -> Option<(u16, Vec<BrowserTab>)> {
     None
 }
 
-fn run_tab_op(action: TabAction, query: &str, cancel: Option<&AtomicBool>) -> Result<String, String> {
+fn run_tab_op(
+    action: TabAction,
+    query: &str,
+    cancel: Option<&AtomicBool>,
+) -> Result<String, String> {
     if cancelled(cancel) {
         return Err("halted".into());
     }
@@ -453,8 +456,8 @@ fn cdp_ws_method(ws_url: &str, payload: &str) -> Result<(), String> {
         .map_err(|e| e.to_string())?
         .next()
         .ok_or_else(|| "cdp websocket host".to_string())?;
-    let stream = TcpStream::connect_timeout(&addr, Duration::from_millis(800))
-        .map_err(|e| e.to_string())?;
+    let stream =
+        TcpStream::connect_timeout(&addr, Duration::from_millis(800)).map_err(|e| e.to_string())?;
     stream
         .set_read_timeout(Some(Duration::from_secs(2)))
         .map_err(|e| e.to_string())?;
@@ -575,9 +578,7 @@ pub fn resolve_bin(name: &str) -> Option<PathBuf> {
     resolve_bin_in(
         name,
         std::env::var("PATH").ok().as_deref(),
-        grokhub_core::user_home()
-            .as_ref()
-            .and_then(|p| p.to_str()),
+        grokhub_core::user_home().as_ref().and_then(|p| p.to_str()),
     )
 }
 
@@ -613,8 +614,7 @@ fn ydotool_sock() -> PathBuf {
 
 fn ydotool_socket_ready() -> bool {
     let sock = ydotool_sock();
-    sock.exists()
-        || Path::new("/tmp/.ydotool_socket").exists()
+    sock.exists() || Path::new("/tmp/.ydotool_socket").exists()
 }
 
 fn start_ydotoold() {
@@ -745,9 +745,14 @@ pub fn atspi_target_at(x: i32, y: i32) -> Option<grokhub_core::desktop_mcp::Clic
     let mut cmd = Command::new("python3");
     cmd.args(["-c", ATSPI_PY]);
     let out = run_limited(cmd, ATSPI_HIT_CAP).filter(|o| o.status.success())?;
-    let rows: Vec<AtspiRow> = String::from_utf8_lossy(&out.stdout).lines().filter_map(parse_atspi_line).collect();
-    grokhub_core::control_at(&rows, x, y)
-        .map(|r| grokhub_core::desktop_mcp::ClickTarget { label: r.name.clone(), role: r.role.clone() })
+    let rows: Vec<AtspiRow> = String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter_map(parse_atspi_line)
+        .collect();
+    grokhub_core::control_at(&rows, x, y).map(|r| grokhub_core::desktop_mcp::ClickTarget {
+        label: r.name.clone(),
+        role: r.role.clone(),
+    })
 }
 
 pub fn collect_rows() -> Vec<AtspiRow> {
@@ -803,7 +808,11 @@ pub fn live_hands_backend() -> Option<HandsBackend> {
     pick_hands_backend(wayland, which("ydotool"), which("xdotool"))
 }
 
-fn run_bin_steps(bin: &str, steps: &[Vec<String>], cancel: Option<&AtomicBool>) -> Result<(), String> {
+fn run_bin_steps(
+    bin: &str,
+    steps: &[Vec<String>],
+    cancel: Option<&AtomicBool>,
+) -> Result<(), String> {
     if cancelled(cancel) {
         return Err("halted".into());
     }
@@ -842,10 +851,7 @@ fn run_pointer_steps(steps: &[Vec<String>], cancel: Option<&AtomicBool>) -> Resu
 }
 
 fn pointer_drive(op: &ComputerOp) -> ComputerDrive {
-    computer_drive_for(
-        live_hands_backend().unwrap_or(HandsBackend::Xdotool),
-        op,
-    )
+    computer_drive_for(live_hands_backend().unwrap_or(HandsBackend::Xdotool), op)
 }
 
 const POINTER_SLOP: i32 = 8;
@@ -952,8 +958,8 @@ fn act_click(name: &str, cancel: Option<&AtomicBool>) -> Result<(i32, i32), Stri
     };
     let mut search = spawn_bin(bin);
     search.args(["search", "--onlyvisible", "--name", name]);
-    let out = run_limited(search, DESK_LIST_TIMEOUT)
-        .ok_or_else(|| format!("act {name}: not found"))?;
+    let out =
+        run_limited(search, DESK_LIST_TIMEOUT).ok_or_else(|| format!("act {name}: not found"))?;
     let id = String::from_utf8_lossy(&out.stdout)
         .lines()
         .next()
@@ -968,9 +974,8 @@ fn act_click(name: &str, cancel: Option<&AtomicBool>) -> Result<(i32, i32), Stri
     let geo = run_limited(geo_cmd, DESK_LIST_TIMEOUT)
         .ok_or_else(|| format!("act {name}: no geometry"))?;
     let text = String::from_utf8_lossy(&geo.stdout);
-    let (x, y, w, h) = parse_getwindowgeometry(&text).ok_or_else(|| {
-        format!("act {name}: no geometry")
-    })?;
+    let (x, y, w, h) =
+        parse_getwindowgeometry(&text).ok_or_else(|| format!("act {name}: no geometry"))?;
     let (cx, cy) = clamp_to_desktop(x + w / 2, y + h / 2, &read_display_outputs());
     drive_pointer_to(cx, cy, cancel)?;
     click_after_move(cx, cy, cancel)?;
@@ -1032,38 +1037,36 @@ pub fn run_computer_op_cancel(op: &ComputerOp, cancel: Option<&AtomicBool>) -> S
             match &op {
                 ComputerOp::Click { x, y }
                 | ComputerOp::DoubleClick { x, y }
-                | ComputerOp::Move { x, y } => {
-                    match drive_pointer_to(*x, *y, cancel) {
-                        Ok((x, y)) => {
-                            let click_steps = after_move_click_steps(&op);
-                            if let Err(e) = run_pointer_steps(&click_steps, cancel) {
-                                return hands_receipt(&line, started, false, &e);
-                            }
-                            let detail = match &op {
-                                ComputerOp::Click { .. } => format!("clicked {x},{y}"),
-                                ComputerOp::DoubleClick { .. } => {
-                                    format!("double-clicked {x},{y}")
-                                }
-                                ComputerOp::Move { .. } => format!("moved {x},{y}"),
-                                ComputerOp::Type { .. }
-                                | ComputerOp::Key { .. }
-                                | ComputerOp::Scroll { .. }
-                                | ComputerOp::Act { .. }
-                                | ComputerOp::WaitFor { .. }
-                                | ComputerOp::Tab { .. }
-                                | ComputerOp::Cursor
-                                | ComputerOp::MoveMonitor { .. } => "ok".into(),
-                            };
-                            hands_receipt(
-                                &line,
-                                started,
-                                true,
-                                &append_cursor_detail(&detail, (x, y), read_cursor_xy()),
-                            )
+                | ComputerOp::Move { x, y } => match drive_pointer_to(*x, *y, cancel) {
+                    Ok((x, y)) => {
+                        let click_steps = after_move_click_steps(&op);
+                        if let Err(e) = run_pointer_steps(&click_steps, cancel) {
+                            return hands_receipt(&line, started, false, &e);
                         }
-                        Err(e) => hands_receipt(&line, started, false, &e),
+                        let detail = match &op {
+                            ComputerOp::Click { .. } => format!("clicked {x},{y}"),
+                            ComputerOp::DoubleClick { .. } => {
+                                format!("double-clicked {x},{y}")
+                            }
+                            ComputerOp::Move { .. } => format!("moved {x},{y}"),
+                            ComputerOp::Type { .. }
+                            | ComputerOp::Key { .. }
+                            | ComputerOp::Scroll { .. }
+                            | ComputerOp::Act { .. }
+                            | ComputerOp::WaitFor { .. }
+                            | ComputerOp::Tab { .. }
+                            | ComputerOp::Cursor
+                            | ComputerOp::MoveMonitor { .. } => "ok".into(),
+                        };
+                        hands_receipt(
+                            &line,
+                            started,
+                            true,
+                            &append_cursor_detail(&detail, (x, y), read_cursor_xy()),
+                        )
                     }
-                }
+                    Err(e) => hands_receipt(&line, started, false, &e),
+                },
                 other => match run_pointer_steps(&steps, cancel) {
                     Ok(()) => {
                         let detail = match other {
@@ -1119,7 +1122,11 @@ pub fn run_computer_op_cancel(op: &ComputerOp, cancel: Option<&AtomicBool>) -> S
                         &line,
                         started,
                         true,
-                        &append_cursor_detail(&format!("moved {gx},{gy}"), (gx, gy), read_cursor_xy()),
+                        &append_cursor_detail(
+                            &format!("moved {gx},{gy}"),
+                            (gx, gy),
+                            read_cursor_xy(),
+                        ),
                     ),
                     Err(e) => hands_receipt(&line, started, false, &e),
                 },
@@ -1155,8 +1162,8 @@ fn x11_size() -> (u32, u32) {
         .and_then(|o| String::from_utf8(o.stdout).ok());
     let mut xrandr_cmd = Command::new("xrandr");
     xrandr_cmd.arg("-q");
-    let xrandr = run_limited(xrandr_cmd, DESK_LIST_TIMEOUT)
-        .and_then(|o| String::from_utf8(o.stdout).ok());
+    let xrandr =
+        run_limited(xrandr_cmd, DESK_LIST_TIMEOUT).and_then(|o| String::from_utf8(o.stdout).ok());
     x11_grab_size(xdpy.as_deref(), xrandr.as_deref())
 }
 
@@ -1302,8 +1309,11 @@ pub fn frame_bytes_are_blank(bytes: &[u8]) -> bool {
 fn rgba_frame_to_jpeg(frame: image::RgbaImage) -> Result<Vec<u8>, String> {
     let rgb = image::DynamicImage::ImageRgba8(frame).into_rgb8();
     let mut buf = Vec::new();
-    rgb.write_to(&mut std::io::Cursor::new(&mut buf), image::ImageFormat::Jpeg)
-        .map_err(|e| e.to_string())?;
+    rgb.write_to(
+        &mut std::io::Cursor::new(&mut buf),
+        image::ImageFormat::Jpeg,
+    )
+    .map_err(|e| e.to_string())?;
     if buf.len() as u64 > IMAGE_FILE_CAP {
         return Err("screen frame too large".into());
     }
@@ -1346,8 +1356,7 @@ pub fn capture_jpeg(path: &Path) -> Result<Vec<u8>, String> {
         .filter(|r| r.role != "cursor")
         .map(|r| (r.x + r.w / 2, r.y + r.h / 2))
         .collect();
-    let grim_out = pick_capture_output(&outputs, &points)
-        .map(|o| o.name.clone());
+    let grim_out = pick_capture_output(&outputs, &points).map(|o| o.name.clone());
     let mut last = "no desktop frame".to_string();
     for kind in plan {
         match run_capture_kind(kind, path, grim_out.as_deref()) {
@@ -1357,7 +1366,9 @@ pub fn capture_jpeg(path: &Path) -> Result<Vec<u8>, String> {
                     .and_then(|s| s.to_str())
                     .is_some_and(|e| e == "jpg" || e == "jpeg")
                 {
-                    let len = std::fs::metadata(&written).map(|m| m.len()).unwrap_or(u64::MAX);
+                    let len = std::fs::metadata(&written)
+                        .map(|m| m.len())
+                        .unwrap_or(u64::MAX);
                     if len > IMAGE_FILE_CAP {
                         last = format!("{kind:?} too large");
                         let _ = std::fs::remove_file(&written);
@@ -1434,7 +1445,10 @@ pub fn play_audio(path: &Path) -> Result<(), String> {
     }
     let dest = path.to_str().ok_or("audio path")?;
     match first_bin(PLAYERS).as_deref() {
-        Some("ffplay") => run_ok("ffplay", &["-nodisp", "-autoexit", "-loglevel", "error", dest]),
+        Some("ffplay") => run_ok(
+            "ffplay",
+            &["-nodisp", "-autoexit", "-loglevel", "error", dest],
+        ),
         Some("mpv") => run_ok("mpv", &["--no-video", "--really-quiet", dest]),
         Some("paplay") => run_ok("paplay", &[dest]),
         _ => {
@@ -1464,15 +1478,25 @@ fn record_wav(path: &Path) -> Result<(), String> {
     }
     let dest = path.to_str().ok_or("wav path")?;
     match first_bin(RECORDERS).as_deref() {
-        Some("arecord") => run_ok(
-            "arecord",
-            &["-q", "-d", "4", "-f", "cd", "-t", "wav", dest],
-        ),
+        Some("arecord") => run_ok("arecord", &["-q", "-d", "4", "-f", "cd", "-t", "wav", dest]),
         Some("ffmpeg") => run_ok(
             "ffmpeg",
             &[
-                "-y", "-hide_banner", "-loglevel", "error",
-                "-f", "pulse", "-i", "default", "-t", "4", "-ac", "1", "-ar", "16000", dest,
+                "-y",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-f",
+                "pulse",
+                "-i",
+                "default",
+                "-t",
+                "4",
+                "-ac",
+                "1",
+                "-ar",
+                "16000",
+                dest,
             ],
         ),
         Some("sox") | Some("rec") => run_ok("rec", &[dest, "trim", "0", "4"]),
@@ -1531,7 +1555,9 @@ pub fn record_clip(device: Option<&str>) -> Result<(u32, Vec<u8>), String> {
         use std::os::unix::process::CommandExt;
         cmd.process_group(0);
     }
-    let mut child = cmd.spawn().map_err(|e| format!("{bin} didn't start: {e}"))?;
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| format!("{bin} didn't start: {e}"))?;
     let mut out = child.stdout.take().ok_or("the recorder gave no output")?;
     let reader = std::thread::spawn(move || {
         let mut buf = Vec::with_capacity(want);
@@ -1651,7 +1677,9 @@ pub fn capture_webcam() -> Result<String, String> {
     if !ok {
         return Err("webcam capture failed".into());
     }
-    let len = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(u64::MAX);
+    let len = std::fs::metadata(&path)
+        .map(|m| m.len())
+        .unwrap_or(u64::MAX);
     if len > IMAGE_FILE_CAP {
         let _ = std::fs::remove_file(&path);
         return Err("image too large".into());
@@ -1819,7 +1847,9 @@ pub fn save_file_dialog(suggested: &str) -> Option<PathBuf> {
         }
         if let Ok(o) = Command::new(bin).args(args).output() {
             if o.status.success() {
-                if let Some(p) = grokhub_core::parse_picker_stdout(&String::from_utf8_lossy(&o.stdout)) {
+                if let Some(p) =
+                    grokhub_core::parse_picker_stdout(&String::from_utf8_lossy(&o.stdout))
+                {
                     let path = PathBuf::from(p);
                     if !path.as_os_str().is_empty() {
                         return Some(path);
@@ -1864,19 +1894,29 @@ pub fn pick_file() -> Option<PathBuf> {
 /// the BMP decoder can read it.
 #[cfg(any(windows, test))]
 fn dib_to_png(dib: &[u8]) -> Option<Vec<u8>> {
-    let u32_at = |at: usize| dib.get(at..at + 4).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]));
+    let u32_at = |at: usize| {
+        dib.get(at..at + 4)
+            .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+    };
     let header = u32_at(0)?;
     if header < 40 || dib.len() as u64 > IMAGE_FILE_CAP * 8 {
         return None;
     }
     let bits = u16::from_le_bytes([*dib.get(14)?, *dib.get(15)?]);
     // BI_BITFIELDS after a plain 40-byte header carries three masks.
-    let masks = if header == 40 && u32_at(16)? == 3 { 12 } else { 0 };
+    let masks = if header == 40 && u32_at(16)? == 3 {
+        12
+    } else {
+        0
+    };
     let colors = match u32_at(32)? {
         0 if bits <= 8 => 1u32 << bits,
         n => n,
     };
-    let pixels_at = 14u32.checked_add(header)?.checked_add(masks)?.checked_add(colors.checked_mul(4)?)?;
+    let pixels_at = 14u32
+        .checked_add(header)?
+        .checked_add(masks)?
+        .checked_add(colors.checked_mul(4)?)?;
     let mut bmp = Vec::with_capacity(dib.len() + 14);
     bmp.extend_from_slice(b"BM");
     bmp.extend_from_slice(&u32::try_from(dib.len() + 14).ok()?.to_le_bytes());
@@ -1888,7 +1928,8 @@ fn dib_to_png(dib: &[u8]) -> Option<Vec<u8>> {
     }
     let img = image::load_from_memory_with_format(&bmp, image::ImageFormat::Bmp).ok()?;
     let mut png = Vec::new();
-    img.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).ok()?;
+    img.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .ok()?;
     Some(png)
 }
 
@@ -1896,15 +1937,23 @@ fn dib_to_png(dib: &[u8]) -> Option<Vec<u8>> {
 /// `WAYLAND_DISPLAY` for the window, so `wl-paste` would find no compositor.
 fn wayland_display_for_tools() -> Option<String> {
     let runtime = std::env::var("XDG_RUNTIME_DIR").ok();
-    infer_wayland_display(std::env::var("WAYLAND_DISPLAY").ok().as_deref(), runtime.as_deref())
+    infer_wayland_display(
+        std::env::var("WAYLAND_DISPLAY").ok().as_deref(),
+        runtime.as_deref(),
+    )
 }
 
 pub fn clipboard_image() -> Option<PathBuf> {
     let dest = std::env::temp_dir().join("grokhub-clip.png");
     #[cfg(windows)]
     {
-        let png = crate::win_native::clipboard_image()
-            .and_then(|(bytes, is_png)| if is_png { Some(bytes) } else { dib_to_png(&bytes) });
+        let png = crate::win_native::clipboard_image().and_then(|(bytes, is_png)| {
+            if is_png {
+                Some(bytes)
+            } else {
+                dib_to_png(&bytes)
+            }
+        });
         if let Some(png) = png.filter(|b| b.len() as u64 <= IMAGE_FILE_CAP) {
             if std::fs::write(&dest, &png).is_ok() {
                 return Some(dest);
@@ -2138,13 +2187,19 @@ mod tests {
         let black = image::RgbImage::from_pixel(24, 24, image::Rgb([0, 0, 0]));
         let mut buf = Vec::new();
         image::DynamicImage::ImageRgb8(black)
-            .write_to(&mut std::io::Cursor::new(&mut buf), image::ImageFormat::Jpeg)
+            .write_to(
+                &mut std::io::Cursor::new(&mut buf),
+                image::ImageFormat::Jpeg,
+            )
             .unwrap();
         assert!(frame_bytes_are_blank(&buf));
         let color = image::RgbImage::from_pixel(24, 24, image::Rgb([80, 140, 200]));
         buf.clear();
         image::DynamicImage::ImageRgb8(color)
-            .write_to(&mut std::io::Cursor::new(&mut buf), image::ImageFormat::Jpeg)
+            .write_to(
+                &mut std::io::Cursor::new(&mut buf),
+                image::ImageFormat::Jpeg,
+            )
             .unwrap();
         assert!(!frame_bytes_are_blank(&buf));
     }
@@ -2181,20 +2236,14 @@ mod tests {
         let _ = std::fs::create_dir_all(&dir);
         let path = dir.join("huge.bin");
         std::fs::write(&path, vec![0u8; (IMAGE_FILE_CAP as usize) + 1]).unwrap();
-        assert_eq!(
-            load_image_data_url(&path).unwrap_err(),
-            "image too large"
-        );
+        assert_eq!(load_image_data_url(&path).unwrap_err(), "image too large");
         assert!(
             load.contains("IMAGE_PIXEL_CAP") || load.contains("image_pixels_ok"),
             "a tiny PNG with huge pixels must not decode on the UI thread: {load}"
         );
         let bomb = dir.join("bomb.png");
         std::fs::write(&bomb, png_ihdr_only(50_000, 50_000)).unwrap();
-        assert_eq!(
-            load_image_data_url(&bomb).unwrap_err(),
-            "image too large"
-        );
+        assert_eq!(load_image_data_url(&bomb).unwrap_err(), "image too large");
     }
 
     #[test]
@@ -2268,12 +2317,10 @@ mod tests {
             "0x02 0 0 0 1920 1080 Lock screen\n0x01 0 10 20 800 600 Terminal\n",
         );
         assert!(titles.iter().any(|t| t.eq_ignore_ascii_case("Lock screen")));
-        assert!(
-            grokhub_core::hands_blocked_by_lock(
-                &ComputerOp::Click { x: 10, y: 20 },
-                &titles.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
-            )
-        );
+        assert!(grokhub_core::hands_blocked_by_lock(
+            &ComputerOp::Click { x: 10, y: 20 },
+            &titles.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
+        ));
     }
 
     #[test]
@@ -2286,7 +2333,11 @@ mod tests {
             },
             Some(&stop),
         );
-        assert!(started.elapsed() < Duration::from_secs(1), "{:?}", started.elapsed());
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "{:?}",
+            started.elapsed()
+        );
         assert!(out.contains("halted"), "{out}");
         assert!(out.contains("exit 1"), "{out}");
     }
@@ -2317,7 +2368,13 @@ mod tests {
                 .output()
                 .unwrap();
             let row = parse_xdotool_mouse(&String::from_utf8_lossy(&loc.stdout)).unwrap();
-            assert_eq!((row.x, row.y), (dest_x, dest_y), "{out} {} {}", row.x, row.y);
+            assert_eq!(
+                (row.x, row.y),
+                (dest_x, dest_y),
+                "{out} {} {}",
+                row.x,
+                row.y
+            );
             let cursor = run_computer_op_cancel(&ComputerOp::Cursor, None);
             assert!(cursor.contains("exit 0"), "{cursor}");
             assert!(cursor.contains("cursor"), "{cursor}");
@@ -2377,7 +2434,11 @@ mod tests {
             "run_limited must stop reading past IMAGE_FILE_CAP: {limited}"
         );
         let mut dump = Command::new("head");
-        dump.args(["-c", &(IMAGE_FILE_CAP + 2 * 1024 * 1024).to_string(), "/dev/zero"]);
+        dump.args([
+            "-c",
+            &(IMAGE_FILE_CAP + 2 * 1024 * 1024).to_string(),
+            "/dev/zero",
+        ]);
         let read_budget = Duration::from_secs(if cfg!(windows) { 12 } else { 3 });
         let out = run_limited(dump, read_budget).expect("head exited");
         assert!(
@@ -2595,7 +2656,8 @@ mod tests {
             .expect("capture_webcam");
         let cam_read = cam.find("std::fs::read(&path)").expect("cam read");
         assert!(
-            cam.contains("IMAGE_FILE_CAP") && cam.find("IMAGE_FILE_CAP").expect("cam cap") < cam_read,
+            cam.contains("IMAGE_FILE_CAP")
+                && cam.find("IMAGE_FILE_CAP").expect("cam cap") < cam_read,
             "webcam JPEG must not slurp a huge file: {cam}"
         );
     }
@@ -2733,7 +2795,8 @@ mod tests {
             "{opener}"
         );
         assert!(
-            markdown.contains(".link(RichText::new(text)") && markdown.contains("desktop::open_url"),
+            markdown.contains(".link(RichText::new(text)")
+                && markdown.contains("desktop::open_url"),
             "chat markdown links open through desktop::open_url"
         );
         assert!(
@@ -2776,7 +2839,12 @@ mod tests {
     #[test]
     fn clipboard_dib_becomes_a_png_with_the_same_pixels() {
         // 24-bit BGR, top row red then green, bottom row blue then white.
-        let d = dib(24, 0, &[], &[&[0, 0, 255, 0, 255, 0], &[255, 0, 0, 255, 255, 255]]);
+        let d = dib(
+            24,
+            0,
+            &[],
+            &[&[0, 0, 255, 0, 255, 0], &[255, 0, 0, 255, 255, 255]],
+        );
         let png = dib_to_png(&d).expect("24-bit DIB");
         assert_eq!(&png[..4], b"\x89PNG");
         let img = image::load_from_memory(&png).unwrap().to_rgb8();
@@ -2787,9 +2855,14 @@ mod tests {
         assert_eq!(img.get_pixel(1, 1).0, [255, 255, 255]);
 
         // 32-bit BI_BITFIELDS: three masks sit between the header and the pixels.
-        let masks: Vec<u8> = [0x00ff_0000u32, 0x0000_ff00, 0x0000_00ff].iter().flat_map(|m| m.to_le_bytes()).collect();
+        let masks: Vec<u8> = [0x00ff_0000u32, 0x0000_ff00, 0x0000_00ff]
+            .iter()
+            .flat_map(|m| m.to_le_bytes())
+            .collect();
         let d = dib(32, 3, &masks, &[&[10, 20, 30, 0, 40, 50, 60, 0]]);
-        let img = image::load_from_memory(&dib_to_png(&d).expect("bitfields DIB")).unwrap().to_rgb8();
+        let img = image::load_from_memory(&dib_to_png(&d).expect("bitfields DIB"))
+            .unwrap()
+            .to_rgb8();
         assert_eq!(img.get_pixel(0, 0).0, [30, 20, 10]);
         assert_eq!(img.get_pixel(1, 0).0, [60, 50, 40]);
 
@@ -2799,14 +2872,19 @@ mod tests {
 
     #[test]
     fn a_captured_screen_becomes_a_jpeg_and_a_black_one_is_refused() {
-        let lit = image::RgbaImage::from_fn(64, 48, |x, y| image::Rgba([(x * 4) as u8, (y * 5) as u8, 128, 0]));
+        let lit = image::RgbaImage::from_fn(64, 48, |x, y| {
+            image::Rgba([(x * 4) as u8, (y * 5) as u8, 128, 0])
+        });
         let jpeg = rgba_frame_to_jpeg(lit).expect("a lit screen");
         assert_eq!(&jpeg[..3], &[0xFF, 0xD8, 0xFF]);
         let back = image::load_from_memory(&jpeg).unwrap();
         assert_eq!((back.width(), back.height()), (64, 48));
 
         let black = image::RgbaImage::from_pixel(64, 48, image::Rgba([0, 0, 0, 255]));
-        assert_eq!(rgba_frame_to_jpeg(black), Err("the screen was a black frame".to_string()));
+        assert_eq!(
+            rgba_frame_to_jpeg(black),
+            Err("the screen was a black frame".to_string())
+        );
     }
 
     /// Smoke the image codecs we enable in Cargo.toml (png/jpeg/webp/ico/bmp).
@@ -2815,10 +2893,22 @@ mod tests {
         let rgba = image::RgbaImage::from_pixel(4, 4, image::Rgba([10, 20, 30, 255]));
         let rgb = image::RgbImage::from_pixel(4, 4, image::Rgb([10, 20, 30]));
         for (format, dyn_img) in [
-            (image::ImageFormat::Png, image::DynamicImage::ImageRgba8(rgba.clone())),
-            (image::ImageFormat::Jpeg, image::DynamicImage::ImageRgb8(rgb.clone())),
-            (image::ImageFormat::WebP, image::DynamicImage::ImageRgba8(rgba.clone())),
-            (image::ImageFormat::Ico, image::DynamicImage::ImageRgba8(rgba.clone())),
+            (
+                image::ImageFormat::Png,
+                image::DynamicImage::ImageRgba8(rgba.clone()),
+            ),
+            (
+                image::ImageFormat::Jpeg,
+                image::DynamicImage::ImageRgb8(rgb.clone()),
+            ),
+            (
+                image::ImageFormat::WebP,
+                image::DynamicImage::ImageRgba8(rgba.clone()),
+            ),
+            (
+                image::ImageFormat::Ico,
+                image::DynamicImage::ImageRgba8(rgba.clone()),
+            ),
             (image::ImageFormat::Bmp, image::DynamicImage::ImageRgb8(rgb)),
         ] {
             let mut buf = Vec::new();
@@ -2834,9 +2924,18 @@ mod tests {
     #[test]
     fn wl_paste_gets_the_wayland_socket_startup_dropped() {
         let src = include_str!("desktop.rs").replace("\r\n", "\n");
-        let clip = src.split("pub fn clipboard_image()").nth(1).and_then(|s| s.split("\npub fn ").next()).expect("clipboard_image");
-        let env = clip.find("cmd.env(\"WAYLAND_DISPLAY\", name)").expect("wl-paste gets WAYLAND_DISPLAY");
-        assert!(clip[..env].contains("if bin == \"wl-paste\""), "only wl-paste gets it");
+        let clip = src
+            .split("pub fn clipboard_image()")
+            .nth(1)
+            .and_then(|s| s.split("\npub fn ").next())
+            .expect("clipboard_image");
+        let env = clip
+            .find("cmd.env(\"WAYLAND_DISPLAY\", name)")
+            .expect("wl-paste gets WAYLAND_DISPLAY");
+        assert!(
+            clip[..env].contains("if bin == \"wl-paste\""),
+            "only wl-paste gets it"
+        );
         assert!(clip[..env].contains("wayland_display_for_tools()"));
     }
 }

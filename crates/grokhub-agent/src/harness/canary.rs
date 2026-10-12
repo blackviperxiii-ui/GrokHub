@@ -26,8 +26,8 @@ use sha2::{Digest, Sha256};
 
 use crate::harness::brain_tune::{PlaybookTarget, PolicyTarget};
 use crate::harness::changes::{
-    content_hash, rollback_change, undo_change, Change, ChangeKind, ChangeLedger, ChangeTarget, SkillTarget, SnippetTarget,
-    UndoAsk, CHANGES_DIR,
+    content_hash, rollback_change, undo_change, Change, ChangeKind, ChangeLedger, ChangeTarget,
+    SkillTarget, SnippetTarget, UndoAsk, CHANGES_DIR,
 };
 
 pub const VERSIONS_FILE: &str = "changes.jsonl";
@@ -231,7 +231,15 @@ pub fn start_trial(
     before: &str,
     after: &str,
 ) -> Result<Version, String> {
-    start_trial_at_share(config_dir, change, class, label, target, (before, after), CANARY_SHARE_PCT)
+    start_trial_at_share(
+        config_dir,
+        change,
+        class,
+        label,
+        target,
+        (before, after),
+        CANARY_SHARE_PCT,
+    )
 }
 
 /// [`start_trial`] with its own share of runs. A policy row or playbook
@@ -395,15 +403,25 @@ pub fn judge(v: &Version, runs: &[RunMetrics], now: u64) -> Option<Judged> {
 }
 
 /// The ledger target a trial changes, when this build can put it back.
-fn target_of<'a>(v: &'a Version, config_dir: &'a Path, skills_dir: &'a Path) -> Option<Box<dyn ChangeTarget + 'a>> {
+fn target_of<'a>(
+    v: &'a Version,
+    config_dir: &'a Path,
+    skills_dir: &'a Path,
+) -> Option<Box<dyn ChangeTarget + 'a>> {
     match ChangeKind::parse(&v.kind)? {
         ChangeKind::Skill => Some(Box::new(SkillTarget {
             skills_dir,
             name: &v.id,
         })),
-        ChangeKind::Snippet => Some(Box::new(SnippetTarget { config_dir, name: &v.id })),
+        ChangeKind::Snippet => Some(Box::new(SnippetTarget {
+            config_dir,
+            name: &v.id,
+        })),
         ChangeKind::Policy => Some(Box::new(PolicyTarget { config_dir })),
-        ChangeKind::Playbook => Some(Box::new(PlaybookTarget { config_dir, id: &v.id })),
+        ChangeKind::Playbook => Some(Box::new(PlaybookTarget {
+            config_dir,
+            id: &v.id,
+        })),
         _ => None,
     }
 }
@@ -422,16 +440,32 @@ pub fn revert_version(
         .find(|v| v.version == version)
         .ok_or_else(|| "That change is not in the history".to_string())?;
     if v.status != VersionStatus::Kept {
-        return Err(format!("Only a kept change can be reverted; this one is {}", v.status.label()));
+        return Err(format!(
+            "Only a kept change can be reverted; this one is {}",
+            v.status.label()
+        ));
     }
-    let kind = ChangeKind::parse(&v.kind).ok_or_else(|| format!("{} can't be reverted here", v.kind))?;
-    if ChangeLedger::load_kind(config_dir, kind).undo_target(&v.id).map(|c| c.seq) != Some(v.seq) {
-        return Err(format!("{} changed again since; undo the newer change first", v.id));
+    let kind =
+        ChangeKind::parse(&v.kind).ok_or_else(|| format!("{} can't be reverted here", v.kind))?;
+    if ChangeLedger::load_kind(config_dir, kind)
+        .undo_target(&v.id)
+        .map(|c| c.seq)
+        != Some(v.seq)
+    {
+        return Err(format!(
+            "{} changed again since; undo the newer change first",
+            v.id
+        ));
     }
-    let target = target_of(&v, config_dir, skills_dir).ok_or_else(|| format!("{} can't be reverted here", v.kind))?;
+    let target = target_of(&v, config_dir, skills_dir)
+        .ok_or_else(|| format!("{} can't be reverted here", v.kind))?;
     undo_change(config_dir, target.as_ref(), ask)?;
     // The revert line must win over the kept line, whatever the clocks say.
-    let line = v.closed(VersionStatus::Reverted, format!("Reverted by you: {}", v.label), now.max(v.at + 1));
+    let line = v.closed(
+        VersionStatus::Reverted,
+        format!("Reverted by you: {}", v.label),
+        now.max(v.at + 1),
+    );
     append_version(config_dir, &line)?;
     Ok(line)
 }
@@ -455,7 +489,12 @@ pub fn settle_trials(
         };
         let ledger = ChangeLedger::load_kind(config_dir, kind);
         // A hand edit since the trial (no ledger line) is the user's version: never put back over it.
-        let made = ledger.all().iter().find(|c| c.seq == v.seq).map(|c| c.after_hash.as_str()).unwrap_or("");
+        let made = ledger
+            .all()
+            .iter()
+            .find(|c| c.seq == v.seq)
+            .map(|c| c.after_hash.as_str())
+            .unwrap_or("");
         let edited = target_of(&v, config_dir, skills_dir)
             .and_then(|t| t.read().ok())
             .is_some_and(|now| now.as_deref().map(content_hash).unwrap_or_default() != made);
@@ -655,12 +694,40 @@ mod tests {
             "Only a kept change can be reverted; this one is canary"
         );
         let t = v.started_at;
-        let mut runs: Vec<RunMetrics> =
-            (0..12).map(|i| run(&v, i, Some(Arm::Canary), 9, OutcomeResult::Success, t + 1 + i as u64)).collect();
-        runs.extend((20..30).map(|i| run(&v, i, Some(Arm::Control), 11, OutcomeResult::Success, t + 1 + i as u64)));
-        assert_eq!(settle_trials(&root, &skills, &runs, t + 100)[0].status, VersionStatus::Kept);
+        let mut runs: Vec<RunMetrics> = (0..12)
+            .map(|i| {
+                run(
+                    &v,
+                    i,
+                    Some(Arm::Canary),
+                    9,
+                    OutcomeResult::Success,
+                    t + 1 + i as u64,
+                )
+            })
+            .collect();
+        runs.extend((20..30).map(|i| {
+            run(
+                &v,
+                i,
+                Some(Arm::Control),
+                11,
+                OutcomeResult::Success,
+                t + 1 + i as u64,
+            )
+        }));
+        assert_eq!(
+            settle_trials(&root, &skills, &runs, t + 100)[0].status,
+            VersionStatus::Kept
+        );
         let line = revert_version(&root, &skills, &v.version, ask(), t + 200).unwrap();
-        assert_eq!((line.status, line.note.as_str()), (VersionStatus::Reverted, "Reverted by you: Use ctrl+s in save-page"));
+        assert_eq!(
+            (line.status, line.note.as_str()),
+            (
+                VersionStatus::Reverted,
+                "Reverted by you: Use ctrl+s in save-page"
+            )
+        );
         assert_eq!(md(&skills), V1, "the version before is back, byte for byte");
         assert_eq!(read_versions(&root)[0].status, VersionStatus::Reverted);
         assert_eq!(
@@ -679,11 +746,32 @@ mod tests {
         let v = trial(&root, &skills);
         let t = v.started_at;
         let runs: Vec<RunMetrics> = (0..12)
-            .map(|i| run(&v, i, Some(Arm::Canary), 9, OutcomeResult::Success, t + 1 + i as u64))
-            .chain((20..30).map(|i| run(&v, i, Some(Arm::Control), 11, OutcomeResult::Success, t + 1 + i as u64)))
+            .map(|i| {
+                run(
+                    &v,
+                    i,
+                    Some(Arm::Canary),
+                    9,
+                    OutcomeResult::Success,
+                    t + 1 + i as u64,
+                )
+            })
+            .chain((20..30).map(|i| {
+                run(
+                    &v,
+                    i,
+                    Some(Arm::Control),
+                    11,
+                    OutcomeResult::Success,
+                    t + 1 + i as u64,
+                )
+            }))
             .collect();
         settle_trials(&root, &skills, &runs, t + 100);
-        record_skill_change(&root, &skills, "save-page", Origin::User, "edited", || put(&skills, "mine\n")).unwrap();
+        record_skill_change(&root, &skills, "save-page", Origin::User, "edited", || {
+            put(&skills, "mine\n")
+        })
+        .unwrap();
         assert_eq!(
             revert_version(&root, &skills, &v.version, UndoAsk::from_click(), t + 200).unwrap_err(),
             "save-page changed again since; undo the newer change first"
@@ -843,26 +931,63 @@ mod tests {
     #[test]
     fn a_worse_chat_note_is_removed_and_its_baseline_is_every_class() {
         let (root, skills) = dirs("canary-note");
-        let target = SnippetTarget { config_dir: &root, name: "lead" };
-        let c = crate::harness::changes::record_change(&root, &target, Origin::SelfManage, "weekly self-review: Lead", || {
-            target.put(Some(b"Lead with the answer.\n"))
-        })
+        let target = SnippetTarget {
+            config_dir: &root,
+            name: "lead",
+        };
+        let c = crate::harness::changes::record_change(
+            &root,
+            &target,
+            Origin::SelfManage,
+            "weekly self-review: Lead",
+            || target.put(Some(b"Lead with the answer.\n")),
+        )
         .unwrap()
         .unwrap();
-        let v = start_trial(&root, &c, ALL_RUNS, "Lead (chat note)", Metric::Steps, "", "Lead with the answer.\n").unwrap();
+        let v = start_trial(
+            &root,
+            &c,
+            ALL_RUNS,
+            "Lead (chat note)",
+            Metric::Steps,
+            "",
+            "Lead with the answer.\n",
+        )
+        .unwrap();
         assert_eq!((v.parent.as_str(), v.diff.as_str()), ("", "+1 -0 lines"));
         let mut runs: Vec<RunMetrics> = ["topic:inbox", "skill:report"]
             .iter()
             .enumerate()
-            .map(|(i, class)| RunMetrics { run: format!("old:{i}"), class: class.to_string(), steps: 4, finished_at: 0, ..Default::default() })
+            .map(|(i, class)| RunMetrics {
+                run: format!("old:{i}"),
+                class: class.to_string(),
+                steps: 4,
+                finished_at: 0,
+                ..Default::default()
+            })
             .collect();
-        runs.extend((0..10).map(|i| run(&v, i, Some(Arm::Canary), 5, OutcomeResult::Success, v.started_at + 1)));
+        runs.extend((0..10).map(|i| {
+            run(
+                &v,
+                i,
+                Some(Arm::Canary),
+                5,
+                OutcomeResult::Success,
+                v.started_at + 1,
+            )
+        }));
         let closed = settle_trials(&root, &skills, &runs, v.started_at + 10);
         assert_eq!(
             (closed[0].status, closed[0].note.as_str()),
-            (VersionStatus::RolledBack, "Rolled back: Lead (chat note), 25% more steps over 10 runs")
+            (
+                VersionStatus::RolledBack,
+                "Rolled back: Lead (chat note), 25% more steps over 10 runs"
+            )
         );
-        assert!(!root.join("tunable").join("lead.md").exists(), "a new note rolled back is gone");
+        assert!(
+            !root.join("tunable").join("lead.md").exists(),
+            "a new note rolled back is gone"
+        );
     }
 
     #[test]

@@ -87,7 +87,8 @@ fn repeats_words(proposal: &str, source: &str) -> bool {
     if src.len() < 4 || prop.len() < 4 {
         return false;
     }
-    src.windows(4).any(|window| prop.windows(4).any(|part| part == window))
+    src.windows(4)
+        .any(|window| prop.windows(4).any(|part| part == window))
 }
 
 fn words(s: &str) -> Vec<String> {
@@ -133,7 +134,15 @@ fn classify(user: &str, assistant: &str) -> Option<MoveKind> {
     let blob = format!("{user_l}\n{asst_l}");
     if has_token(
         &blob,
-        &["error", "failed", "failure", "crash", "broken", "exception", "bug"],
+        &[
+            "error",
+            "failed",
+            "failure",
+            "crash",
+            "broken",
+            "exception",
+            "bug",
+        ],
     ) {
         return Some(MoveKind::Fix);
     }
@@ -432,7 +441,10 @@ mod tests {
         let learned = spoken(said);
         assert_eq!(learned.kind, MoveKind::Automate);
         assert!(!learned.idea_title.to_ascii_lowercase().contains("stream"));
-        assert!(!learned.idea_title.to_ascii_lowercase().contains("checklist"));
+        assert!(!learned
+            .idea_title
+            .to_ascii_lowercase()
+            .contains("checklist"));
         for field in [
             &learned.why,
             &learned.chip_label,
@@ -448,7 +460,11 @@ mod tests {
             assert!(!echoes_source(field, said), "{field}");
             assert!(field.chars().count() <= 220, "{field}");
         }
-        assert!(learned.idea_body.chars().count() <= 160, "{}", learned.idea_body);
+        assert!(
+            learned.idea_body.chars().count() <= 160,
+            "{}",
+            learned.idea_body
+        );
     }
 
     #[test]
@@ -459,7 +475,10 @@ mod tests {
         assert_eq!(wrap.kind, MoveKind::Wrap);
         assert_ne!(friday.idea_title, wrap.idea_title);
         assert!(!friday.idea_title.contains("Ships"));
-        assert!(!wrap.idea_title.to_ascii_lowercase().contains("what got done"));
+        assert!(!wrap
+            .idea_title
+            .to_ascii_lowercase()
+            .contains("what got done"));
     }
 
     #[test]
@@ -483,6 +502,9 @@ mod tests {
     fn tonight_is_not_a_night_routine() {
         let learned = spoken("paint the wall tonight please");
         assert_eq!(learned.kind, MoveKind::Next);
-        assert!(!echoes_source(&learned.idea_title, "paint the wall tonight please"));
+        assert!(!echoes_source(
+            &learned.idea_title,
+            "paint the wall tonight please"
+        ));
     }
 }

@@ -18,8 +18,20 @@ use super::AmrError;
 
 /// Words that mark a line as holding a credential. The whole line is skipped.
 const CREDENTIAL_WORDS: &[&str] = &[
-    "password", "passwd", "passcode", "passphrase", "pin", "2fa", "otp", "one-time code", "verification code",
-    "security code", "auth code", "login code", "mfa", "totp",
+    "password",
+    "passwd",
+    "passcode",
+    "passphrase",
+    "pin",
+    "2fa",
+    "otp",
+    "one-time code",
+    "verification code",
+    "security code",
+    "auth code",
+    "login code",
+    "mfa",
+    "totp",
 ];
 
 /// What a signal writer did.
@@ -63,7 +75,9 @@ pub fn unsafe_to_learn(text: &str) -> Option<&'static str> {
         return Some("holds a credential");
     }
     let code_word = words.iter().any(|w| matches!(*w, "code" | "codes"));
-    let digits = words.iter().any(|w| (6..=8).contains(&w.len()) && w.bytes().all(|b| b.is_ascii_digit()));
+    let digits = words
+        .iter()
+        .any(|w| (6..=8).contains(&w.len()) && w.bytes().all(|b| b.is_ascii_digit()));
     if code_word && digits {
         return Some("holds a one-time code");
     }
@@ -88,13 +102,25 @@ impl ChatLine<'_> {
 /// [`node_type_for`] (`preference` or `fact`).
 pub fn user_model_type(text: &str) -> NodeType {
     let lower = text.to_ascii_lowercase();
-    let need = ["i need ", "i have to ", "remind me", "i must "].iter().any(|p| lower.starts_with(p) || lower.contains(&format!(" {p}")));
+    let need = ["i need ", "i have to ", "remind me", "i must "]
+        .iter()
+        .any(|p| lower.starts_with(p) || lower.contains(&format!(" {p}")));
     if need {
         return NodeType::Need;
     }
     let routine = [
-        "every ", "each morning", "each day", "daily", "weekly", "monthly", "standup", "stand-up", "on mondays",
-        "on weekdays", "each week", "usually at",
+        "every ",
+        "each morning",
+        "each day",
+        "daily",
+        "weekly",
+        "monthly",
+        "standup",
+        "stand-up",
+        "on mondays",
+        "on weekdays",
+        "each week",
+        "usually at",
     ]
     .iter()
     .any(|p| lower.contains(p));
@@ -116,7 +142,13 @@ pub struct Correction {
 pub fn detect_correction(text: &str) -> Option<Correction> {
     let trimmed = text.trim().trim_end_matches(['.', '!']);
     let lower = trimmed.to_ascii_lowercase();
-    for prefix in ["no, i meant ", "no i meant ", "i meant ", "actually, ", "actually "] {
+    for prefix in [
+        "no, i meant ",
+        "no i meant ",
+        "i meant ",
+        "actually, ",
+        "actually ",
+    ] {
         if lower.starts_with(prefix) {
             let rest = trimmed[prefix.len()..].trim();
             return (!rest.is_empty()).then(|| split_not(rest));
@@ -126,7 +158,10 @@ pub fn detect_correction(text: &str) -> Option<Correction> {
         let fixed = trimmed[..idx].trim();
         let old = trimmed[idx + ", not ".len()..].trim();
         if !fixed.is_empty() && !old.is_empty() {
-            return Some(Correction { fixed: fixed.to_string(), old_value: Some(old.to_string()) });
+            return Some(Correction {
+                fixed: fixed.to_string(),
+                old_value: Some(old.to_string()),
+            });
         }
     }
     None
@@ -139,7 +174,10 @@ fn split_not(rest: &str) -> Correction {
             fixed: rest[..idx].trim().to_string(),
             old_value: Some(rest[idx + ", not ".len()..].trim().to_string()),
         },
-        None => Correction { fixed: rest.to_string(), old_value: None },
+        None => Correction {
+            fixed: rest.to_string(),
+            old_value: None,
+        },
     }
 }
 
@@ -161,7 +199,13 @@ pub fn note_chat(store: &AmrStore, line: &ChatLine<'_>, now_ms: u64) -> Result<N
 
 /// The user edited agent output from `before` to `after`. The edit is a new
 /// node, and a node whose body was `before` is superseded by it.
-pub fn note_user_edit(store: &AmrStore, line: &ChatLine<'_>, before: &str, after: &str, now_ms: u64) -> Result<Noted, AmrError> {
+pub fn note_user_edit(
+    store: &AmrStore,
+    line: &ChatLine<'_>,
+    before: &str,
+    after: &str,
+    now_ms: u64,
+) -> Result<Noted, AmrError> {
     if store.is_scratch() {
         return Err(AmrError::Scratch);
     }
@@ -176,24 +220,43 @@ pub fn note_user_edit(store: &AmrStore, line: &ChatLine<'_>, before: &str, after
     if let Some(new_id) = noted.id() {
         let (nodes, _) = store.recallable();
         let before = norm(before);
-        for node in nodes.iter().filter(|n| n.id != new_id && norm(&n.body) == before) {
+        for node in nodes
+            .iter()
+            .filter(|n| n.id != new_id && norm(&n.body) == before)
+        {
             store.link(new_id, &node.id, EdgeRel::Supersedes)?;
         }
     }
     Ok(noted)
 }
 
-fn note_correction(store: &AmrStore, source: &str, correction: &Correction, now_ms: u64) -> Result<Noted, AmrError> {
+fn note_correction(
+    store: &AmrStore,
+    source: &str,
+    correction: &Correction,
+    now_ms: u64,
+) -> Result<Noted, AmrError> {
     if let Some(why) = unsafe_to_learn(&correction.fixed) {
         return Ok(Noted::Skipped(why));
     }
     let (nodes, _) = store.recallable();
     let targets = correction_targets(&nodes, correction);
-    let noted = write_line(store, &correction.fixed, source, &["correction"], 0.9, now_ms)?;
+    let noted = write_line(
+        store,
+        &correction.fixed,
+        source,
+        &["correction"],
+        0.9,
+        now_ms,
+    )?;
     let Some(new_id) = noted.id() else {
         return Ok(noted);
     };
-    let rel = if targets.len() == 1 { EdgeRel::Supersedes } else { EdgeRel::Contradicts };
+    let rel = if targets.len() == 1 {
+        EdgeRel::Supersedes
+    } else {
+        EdgeRel::Contradicts
+    };
     for target in targets.iter().filter(|id| id.as_str() != new_id) {
         store.link(new_id, target, rel)?;
     }
@@ -204,8 +267,15 @@ fn note_correction(store: &AmrStore, source: &str, correction: &Correction, now_
 /// plus a point for holding the old value as a whole word.
 fn correction_targets(nodes: &[Node], correction: &Correction) -> Vec<String> {
     let fixed = words(&correction.fixed);
-    let old: Vec<String> = correction.old_value.as_deref().map(words).unwrap_or_default();
-    let subject: Vec<&String> = fixed.iter().filter(|w| w.len() > 2 && !STOP.contains(&w.as_str())).collect();
+    let old: Vec<String> = correction
+        .old_value
+        .as_deref()
+        .map(words)
+        .unwrap_or_default();
+    let subject: Vec<&String> = fixed
+        .iter()
+        .filter(|w| w.len() > 2 && !STOP.contains(&w.as_str()))
+        .collect();
     let mut best = 0usize;
     let mut out = Vec::new();
     for node in nodes.iter().filter(|n| n.node_type != NodeType::MindPrior) {
@@ -227,7 +297,10 @@ fn correction_targets(nodes: &[Node], correction: &Correction) -> Vec<String> {
     out
 }
 
-const STOP: &[&str] = &["the", "and", "not", "but", "you", "your", "are", "was", "for", "with", "that", "this", "its", "it's"];
+const STOP: &[&str] = &[
+    "the", "and", "not", "but", "you", "your", "are", "was", "for", "with", "that", "this", "its",
+    "it's",
+];
 
 fn words(text: &str) -> Vec<String> {
     text.to_lowercase()
@@ -238,7 +311,10 @@ fn words(text: &str) -> Vec<String> {
 }
 
 fn norm(text: &str) -> String {
-    text.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase()
+    text.split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
 }
 
 /// Where a written node came from and how sure the writer is.
@@ -248,12 +324,37 @@ struct Meta<'a> {
     confidence: f32,
 }
 
-fn write_line(store: &AmrStore, text: &str, source: &str, tags: &[&str], confidence: f32, now_ms: u64) -> Result<Noted, AmrError> {
-    let meta = Meta { source, tags, confidence };
-    write_node(store, line_id(text), user_model_type(text), text, &meta, now_ms)
+fn write_line(
+    store: &AmrStore,
+    text: &str,
+    source: &str,
+    tags: &[&str],
+    confidence: f32,
+    now_ms: u64,
+) -> Result<Noted, AmrError> {
+    let meta = Meta {
+        source,
+        tags,
+        confidence,
+    };
+    write_node(
+        store,
+        line_id(text),
+        user_model_type(text),
+        text,
+        &meta,
+        now_ms,
+    )
 }
 
-fn write_node(store: &AmrStore, id: String, node_type: NodeType, text: &str, meta: &Meta<'_>, now_ms: u64) -> Result<Noted, AmrError> {
+fn write_node(
+    store: &AmrStore,
+    id: String,
+    node_type: NodeType,
+    text: &str,
+    meta: &Meta<'_>,
+    now_ms: u64,
+) -> Result<Noted, AmrError> {
     let text = text.trim();
     if text.is_empty() || text.contains(['\n', '\r']) {
         return Ok(Noted::Skipped("not one line"));
@@ -281,7 +382,11 @@ fn write_node(store: &AmrStore, id: String, node_type: NodeType, text: &str, met
 /// Copy each Pulse ledger line in `memory_md` into a `pulse:<date>` node
 /// (body is the ledger line without its `- ` bullet). Ids come from the
 /// line, so a rerun writes nothing new.
-pub fn import_pulse_ledger(store: &AmrStore, memory_md: &str, now_ms: u64) -> Result<Vec<Noted>, AmrError> {
+pub fn import_pulse_ledger(
+    store: &AmrStore,
+    memory_md: &str,
+    now_ms: u64,
+) -> Result<Vec<Noted>, AmrError> {
     if store.is_scratch() {
         return Err(AmrError::Scratch);
     }
@@ -291,8 +396,19 @@ pub fn import_pulse_ledger(store: &AmrStore, memory_md: &str, now_ms: u64) -> Re
         let line = full.strip_prefix("- ").unwrap_or(&full);
         let id = hashed_id("pulse", &[line]);
         let source = format!("pulse:{}", entry.date);
-        let meta = Meta { source: &source, tags: &["pulse", entry.reason.key()], confidence: 0.6 };
-        out.push(write_node(store, id, NodeType::Preference, line, &meta, now_ms)?);
+        let meta = Meta {
+            source: &source,
+            tags: &["pulse", entry.reason.key()],
+            confidence: 0.6,
+        };
+        out.push(write_node(
+            store,
+            id,
+            NodeType::Preference,
+            line,
+            &meta,
+            now_ms,
+        )?);
     }
     Ok(out)
 }
@@ -302,10 +418,17 @@ pub fn import_pulse_ledger(store: &AmrStore, memory_md: &str, now_ms: u64) -> Re
 pub fn pulse_ledger_dual(store: &AmrStore, memory_md: &str) -> Vec<LedgerEntry> {
     let mut out = parse_ledger(memory_md);
     let (nodes, _) = store.recallable();
-    let mut from_nodes: Vec<&Node> = nodes.iter().filter(|n| n.source.starts_with("pulse:")).collect();
+    let mut from_nodes: Vec<&Node> = nodes
+        .iter()
+        .filter(|n| n.source.starts_with("pulse:"))
+        .collect();
     from_nodes.sort_by(|a, b| a.created.cmp(&b.created).then(a.id.cmp(&b.id)));
     for node in from_nodes {
-        let bulleted: String = node.body.lines().map(|l| format!("- {}\n", l.trim())).collect();
+        let bulleted: String = node
+            .body
+            .lines()
+            .map(|l| format!("- {}\n", l.trim()))
+            .collect();
         for entry in parse_ledger(&bulleted) {
             if !out.contains(&entry) {
                 out.push(entry);
@@ -329,16 +452,28 @@ pub fn note_card_signal(store: &AmrStore, signal: &CardSignal) -> Result<Noted, 
     if group.is_empty() {
         return Ok(Noted::Skipped("no card group"));
     }
-    let text = format!("You {verb} {} cards ({group}).", signal.kind.replace('_', " "));
+    let text = format!(
+        "You {verb} {} cards ({group}).",
+        signal.kind.replace('_', " ")
+    );
     let id = hashed_id("card", &[group, verb]);
     let source = format!("pulse:card:{}", signal.card_id);
-    let meta = Meta { source: &source, tags: &["card"], confidence: 0.6 };
+    let meta = Meta {
+        source: &source,
+        tags: &["card"],
+        confidence: 0.6,
+    };
     write_node(store, id, NodeType::Preference, &text, &meta, signal.ts)
 }
 
 /// A skill run or an automation outcome, from its span. One node per name and
 /// outcome, so repeats are `Known`.
-pub fn note_usage(store: &AmrStore, what: Usage<'_>, span_ref: &str, now_ms: u64) -> Result<Noted, AmrError> {
+pub fn note_usage(
+    store: &AmrStore,
+    what: Usage<'_>,
+    span_ref: &str,
+    now_ms: u64,
+) -> Result<Noted, AmrError> {
     let (prefix, text) = match what {
         Usage::SkillRun { name } => ("skill", format!("You use the {name} skill.")),
         Usage::Automation { name, outcome } => ("auto", format!("Automation {name}: {outcome}.")),
@@ -348,7 +483,11 @@ pub fn note_usage(store: &AmrStore, what: Usage<'_>, span_ref: &str, now_ms: u64
     }
     let id = hashed_id(prefix, &[&text]);
     let source = format!("span:{span_ref}");
-    let meta = Meta { source: &source, tags: &[prefix], confidence: 0.5 };
+    let meta = Meta {
+        source: &source,
+        tags: &[prefix],
+        confidence: 0.5,
+    };
     write_node(store, id, NodeType::Routine, &text, &meta, now_ms)
 }
 

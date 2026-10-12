@@ -48,7 +48,11 @@ pub(super) fn remove_job_question(title: &str) -> String {
 pub(super) fn last_run_sheet_body(error: &str, reply: &str) -> String {
     let error = error.trim();
     let reply = reply.trim();
-    let error = if error.is_empty() { "Run failed" } else { error };
+    let error = if error.is_empty() {
+        "Run failed"
+    } else {
+        error
+    };
     if reply.is_empty() || reply == error {
         error.to_string()
     } else {
@@ -67,7 +71,9 @@ pub(super) fn always_confirm_matches_rpc(
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum ConfirmKind {
     AlwaysSession,
-    DestructiveHost { cmd: String },
+    DestructiveHost {
+        cmd: String,
+    },
     /// Delete a scheduled job or a loop. `title` is the row name (name, or the prompt).
     RemoveJob {
         kind: RemoveJobKind,
@@ -75,7 +81,10 @@ pub(super) enum ConfirmKind {
         title: String,
     },
     /// Read-only: what the last scheduled run reported, when nothing else is stored.
-    LastRun { title: String, body: String },
+    LastRun {
+        title: String,
+        body: String,
+    },
     /// Delete a screen recording's folder. `title` names the recording.
     DeleteRecording {
         card_id: String,
@@ -83,10 +92,15 @@ pub(super) enum ConfirmKind {
         title: String,
     },
     /// Settings → Connectors Disconnect: the server and its sign-in go.
-    Disconnect { name: String },
+    Disconnect {
+        name: String,
+    },
     /// Marketplace: seal the key typed for `name`. The key stays in the
     /// Marketplace field, never in this card.
-    SaveKey { name: String, label: String },
+    SaveKey {
+        name: String,
+        label: String,
+    },
 }
 
 impl ConfirmKind {
@@ -165,7 +179,8 @@ pub(super) fn disconnect_spec() -> ConfirmSpec {
 pub(super) fn save_key_spec() -> ConfirmSpec {
     ConfirmSpec {
         title: "Save key",
-        consequence: "GrokHub seals this key with your keychain key and sends it only to this connector.",
+        consequence:
+            "GrokHub seals this key with your keychain key and sends it only to this connector.",
         primary: "Save key",
         danger: false,
     }
@@ -230,11 +245,7 @@ fn paint_confirm_sheet_titled(
         .stroke(egui::Stroke::new(2.0_f32, stroke))
         .inner_margin(egui::Margin::same(10))
         .show(ui, |ui| {
-            ui.label(
-                RichText::new(title)
-                    .size(14.0)
-                    .color(crate::theme::fg()),
-            );
+            ui.label(RichText::new(title).size(14.0).color(crate::theme::fg()));
             ui.add_space(4.0);
             ui.label(
                 RichText::new(spec.consequence)
@@ -243,11 +254,7 @@ fn paint_confirm_sheet_titled(
             );
             let extra = detail.trim();
             if !extra.is_empty() && extra != spec.consequence {
-                ui.label(
-                    RichText::new(extra)
-                        .size(13.0)
-                        .color(crate::theme::muted()),
-                );
+                ui.label(RichText::new(extra).size(13.0).color(crate::theme::muted()));
             }
             ui.add_space(6.0);
             ui.horizontal(|ui| {
@@ -268,7 +275,6 @@ fn paint_confirm_sheet_titled(
 }
 
 impl Cabin {
-
     pub(super) fn paint_confirm_overlay(&mut self, ctx: &egui::Context) {
         let Some(kind) = self.confirm.clone() else {
             return;
@@ -350,9 +356,11 @@ impl Cabin {
             }
             ConfirmKind::RemoveJob { kind, id, .. } => self.delete_confirmed_job(kind, &id),
             ConfirmKind::LastRun { .. } => {}
-            ConfirmKind::DeleteRecording { card_id, dir, title } => {
-                self.delete_recording(&card_id, &dir, &title)
-            }
+            ConfirmKind::DeleteRecording {
+                card_id,
+                dir,
+                title,
+            } => self.delete_recording(&card_id, &dir, &title),
             ConfirmKind::Disconnect { name } => self.disconnect_confirmed(&name),
             ConfirmKind::SaveKey { name, .. } => self.save_key_confirmed(&name),
         }
@@ -416,7 +424,10 @@ mod tests {
             ALWAYS_CONFIRM_LINE1,
             "Skip every tool prompt this launch. GrokHub only stops for money, sending, deleting your data, credentials and irreversible system changes."
         );
-        assert!(crate::cards::composer_perm_tip("always-approve").is_some_and(|(_, tip)| tip.contains("money, sending, deleting your data, credentials and irreversible system changes")));
+        assert!(crate::cards::composer_perm_tip("always-approve")
+            .is_some_and(|(_, tip)| tip.contains(
+                "money, sending, deleting your data, credentials and irreversible system changes"
+            )));
         assert!(
             ALWAYS_CONFIRM_LINE2.contains("--always") && ALWAYS_CONFIRM_LINE2.contains("approve")
         );

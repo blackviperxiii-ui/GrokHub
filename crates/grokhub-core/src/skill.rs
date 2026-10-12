@@ -113,7 +113,12 @@ pub fn bump_skill_run(runs: u32) -> u32 {
     runs.saturating_add(1)
 }
 
-pub fn is_hard_run(tool_calls: u32, recovered_error: bool, user_corrected: bool, scratch: bool) -> bool {
+pub fn is_hard_run(
+    tool_calls: u32,
+    recovered_error: bool,
+    user_corrected: bool,
+    scratch: bool,
+) -> bool {
     if scratch {
         return false;
     }
@@ -169,7 +174,11 @@ pub fn match_skill<'a>(user_text: &str, skills: &'a [SkillMd]) -> Option<&'a Ski
     let mut best: Option<&SkillMd> = None;
     let mut best_score = 0.0f32;
     for s in skills {
-        let trig = words(if s.trigger.is_empty() { &s.name } else { &s.trigger });
+        let trig = words(if s.trigger.is_empty() {
+            &s.name
+        } else {
+            &s.trigger
+        });
         let score = jaccard(&q, &trig);
         if score >= 0.5 && score > best_score {
             best = Some(s);
@@ -257,14 +266,24 @@ pub fn patch_skill(existing: &SkillMd, proposed: &SkillMd) -> SkillMd {
 
 pub fn prefer_patch(existing: &[SkillMd], proposed: &SkillMd) -> Option<String> {
     let slash = proposed.slash.to_ascii_lowercase();
-    if let Some(hit) = existing.iter().find(|s| s.slash.to_ascii_lowercase() == slash) {
+    if let Some(hit) = existing
+        .iter()
+        .find(|s| s.slash.to_ascii_lowercase() == slash)
+    {
         return Some(hit.name.clone());
     }
     let prop = words(&proposed.trigger);
     let mut best: Option<&SkillMd> = None;
     let mut best_score = 0.0f32;
     for s in existing {
-        let score = jaccard(&prop, &words(if s.trigger.is_empty() { &s.name } else { &s.trigger }));
+        let score = jaccard(
+            &prop,
+            &words(if s.trigger.is_empty() {
+                &s.name
+            } else {
+                &s.trigger
+            }),
+        );
         if score >= 0.5 && score > best_score {
             best = Some(s);
             best_score = score;
@@ -280,19 +299,50 @@ pub fn prefer_patch(existing: &[SkillMd], proposed: &SkillMd) -> Option<String> 
 pub fn is_feedback_ask(user: &str) -> bool {
     let t = user.trim().to_ascii_lowercase();
     const STARTS: &[&str] = &[
-        "actually", "no ", "no,", "nope", "still", "ok so", "okay so", "hey", "good job",
-        "nice", "great", "thanks", "thank you", "that was", "you ", "you'", "almost", "close",
-        "wrong", "not ", "stop", "wait", "again", "lets try", "let's try", "try again", "retry",
-        "continue", "keep going", "go on", "yes", "yep", "new update", "update:",
+        "actually",
+        "no ",
+        "no,",
+        "nope",
+        "still",
+        "ok so",
+        "okay so",
+        "hey",
+        "good job",
+        "nice",
+        "great",
+        "thanks",
+        "thank you",
+        "that was",
+        "you ",
+        "you'",
+        "almost",
+        "close",
+        "wrong",
+        "not ",
+        "stop",
+        "wait",
+        "again",
+        "lets try",
+        "let's try",
+        "try again",
+        "retry",
+        "continue",
+        "keep going",
+        "go on",
+        "yes",
+        "yep",
+        "new update",
+        "update:",
     ];
     STARTS.iter().any(|prefix| {
         let Some(rest) = t.strip_prefix(prefix) else {
             return false;
         };
         match prefix.chars().next_back() {
-            Some(c) if c.is_ascii_alphanumeric() => {
-                !rest.chars().next().is_some_and(|n| n.is_ascii_alphanumeric())
-            }
+            Some(c) if c.is_ascii_alphanumeric() => !rest
+                .chars()
+                .next()
+                .is_some_and(|n| n.is_ascii_alphanumeric()),
             _ => true,
         }
     })
@@ -308,7 +358,11 @@ fn command_tool(cmd: &str) -> Option<String> {
                 && !matches!(*w, "sudo" | "env" | "cd" | "&&" | "time" | "nice" | "exec")
         })
         .map(|w| w.rsplit('/').next().unwrap_or(w).to_ascii_lowercase())
-        .filter(|w| w.len() >= 2 && w.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'))
+        .filter(|w| {
+            w.len() >= 2
+                && w.chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+        })
 }
 
 /// A skill only when a run left a reusable procedure: at least two host commands,
@@ -332,7 +386,10 @@ pub fn propose_skill_from_turn(
         .filter(|c| !c.trim().is_empty())
         .filter(|c| {
             let l = c.to_ascii_lowercase();
-            !(l.contains("xdotool") || l.contains("ydotool") || l.contains("mousemove") || l.contains("click"))
+            !(l.contains("xdotool")
+                || l.contains("ydotool")
+                || l.contains("mousemove")
+                || l.contains("click"))
         })
         .collect();
     if cmds.len() < 2 {
@@ -430,7 +487,9 @@ pub fn is_junk_skill(s: &SkillMd) -> bool {
         .collect::<Vec<_>>()
         .join(" ");
     let desc_is_name = !desc.is_empty() && (desc.starts_with(&spoken) || spoken.starts_with(&desc));
-    words >= 7 || (words >= 3 && desc_is_name) || is_feedback_ask(&spoken)
+    words >= 7
+        || (words >= 3 && desc_is_name)
+        || is_feedback_ask(&spoken)
         || desc == "saved host procedure"
 }
 
@@ -504,7 +563,10 @@ mod tests {
             verify: String::new(),
             runs: 0,
         };
-        assert_eq!(prefer_patch(std::slice::from_ref(&flash), &proposed), Some("flash-pi".into()));
+        assert_eq!(
+            prefer_patch(std::slice::from_ref(&flash), &proposed),
+            Some("flash-pi".into())
+        );
         let patched = patch_skill(&flash, &proposed);
         assert_eq!(patched.name, "flash-pi");
         assert_eq!(patched.slash, "/flash");
@@ -517,12 +579,18 @@ mod tests {
             apply_skill_follow("flash the pi", Some(&follow)),
             format!("{follow}\n\nflash the pi")
         );
-        assert_eq!(apply_skill_follow("flash the pi", Some("  ")), "flash the pi");
+        assert_eq!(
+            apply_skill_follow("flash the pi", Some("  ")),
+            "flash the pi"
+        );
     }
 
     #[test]
     fn feedback_and_mouse_runs_do_not_become_skills() {
-        let mouse = vec!["xdotool mousemove 10 10".to_string(), "xdotool click 1".to_string()];
+        let mouse = vec![
+            "xdotool mousemove 10 10".to_string(),
+            "xdotool click 1".to_string(),
+        ];
         for u in [
             "actually still no you moved the mouse yes but you moved it to the left monitor",
             "good job now use the mouse to close one tab of firefox",
@@ -532,19 +600,37 @@ mod tests {
             assert!(propose_skill_from_turn(u, "Done.", &mouse).is_none(), "{u}");
         }
         let one = vec!["cargo build".to_string()];
-        assert!(propose_skill_from_turn("fix the failing build", "error: E0425", &one).is_none(), "one command is not a procedure");
+        assert!(
+            propose_skill_from_turn("fix the failing build", "error: E0425", &one).is_none(),
+            "one command is not a procedure"
+        );
     }
 
     #[test]
     fn a_real_fix_becomes_a_named_skill() {
-        let cmds = vec!["cargo build 2>&1 | tail -20".to_string(), "cargo test -p grokhub-core".to_string()];
-        let s = propose_skill_from_turn("fix the failing build in grokhub", "error[E0425] fixed", &cmds).expect("skill");
+        let cmds = vec![
+            "cargo build 2>&1 | tail -20".to_string(),
+            "cargo test -p grokhub-core".to_string(),
+        ];
+        let s = propose_skill_from_turn(
+            "fix the failing build in grokhub",
+            "error[E0425] fixed",
+            &cmds,
+        )
+        .expect("skill");
         assert_eq!(s.name, "fix-the-cause-cargo");
         assert_eq!(s.slash, "/fix-the-cause-cargo");
-        assert!(s.instructions.contains("1. `cargo build"), "{}", s.instructions);
+        assert!(
+            s.instructions.contains("1. `cargo build"),
+            "{}",
+            s.instructions
+        );
         assert!(s.pitfalls.contains(AUTO_SKILL_PITFALL));
         assert!(!is_junk_skill(&s));
-        assert!(propose_skill_from_turn("what is a lifetime", "It is…", &cmds).is_none(), "an explanation is not a procedure");
+        assert!(
+            propose_skill_from_turn("what is a lifetime", "It is…", &cmds).is_none(),
+            "an explanation is not a procedure"
+        );
     }
 
     #[test]
@@ -564,12 +650,31 @@ mod tests {
             "actually still no you moved the mouse yes but",
             0
         )));
-        assert!(is_junk_skill(&mk("take-control-of-my-mouse-and-close-firefox", "take control of my mouse and close firefox", 0)));
+        assert!(is_junk_skill(&mk(
+            "take-control-of-my-mouse-and-close-firefox",
+            "take control of my mouse and close firefox",
+            0
+        )));
         assert!(is_junk_skill(&mk("continue", "continue", 0)));
-        assert!(is_junk_skill(&mk("take-the-next-step", "Takes the next concrete step for this kind of task.", 0)));
-        assert!(!is_junk_skill(&mk("board-status", "List open workboard cards and the next concrete step.", 0)));
-        assert!(!is_junk_skill(&mk("deploy-user-install", "Sync and restart the user GrokHub install", 0)));
-        assert!(!is_junk_skill(&mk("take-the-next-step", "x", 3)), "a skill that ran is kept");
+        assert!(is_junk_skill(&mk(
+            "take-the-next-step",
+            "Takes the next concrete step for this kind of task.",
+            0
+        )));
+        assert!(!is_junk_skill(&mk(
+            "board-status",
+            "List open workboard cards and the next concrete step.",
+            0
+        )));
+        assert!(!is_junk_skill(&mk(
+            "deploy-user-install",
+            "Sync and restart the user GrokHub install",
+            0
+        )));
+        assert!(
+            !is_junk_skill(&mk("take-the-next-step", "x", 3)),
+            "a skill that ran is kept"
+        );
         let mut hand = mk(
             "actually-still-no-you-moved-the-mouse-yes-but-you-moved-it-to-the-left-monitor",
             "actually still no you moved the mouse yes but",

@@ -26,9 +26,7 @@ fn push_host_line(buf: &mut String, line: &str, cap: usize) -> bool {
 pub fn host_working_dir(project_dir: &str) -> Option<String> {
     let root = grokhub_core::expand_project_root(
         project_dir,
-        grokhub_core::user_home()
-            .as_ref()
-            .and_then(|p| p.to_str()),
+        grokhub_core::user_home().as_ref().and_then(|p| p.to_str()),
     );
     if root.is_empty() {
         return None;
@@ -48,9 +46,7 @@ pub fn resolve_host_cite_path(project_dir: &str, cited: &str) -> String {
     }
     let expanded = grokhub_core::expand_project_root(
         cited,
-        grokhub_core::user_home()
-            .as_ref()
-            .and_then(|p| p.to_str()),
+        grokhub_core::user_home().as_ref().and_then(|p| p.to_str()),
     );
     if Path::new(&expanded).is_absolute() {
         return expanded;
@@ -104,13 +100,7 @@ pub fn run_host_stream(
     let cmd = windows_host_bash(cmd);
     let mut spawn = if cfg!(windows) {
         let mut c = Command::new("powershell.exe");
-        c.args([
-            "-NoProfile",
-            "-NonInteractive",
-            "-NoLogo",
-            "-Command",
-            &cmd,
-        ]);
+        c.args(["-NoProfile", "-NonInteractive", "-NoLogo", "-Command", &cmd]);
         hide_windows_console(&mut c);
         c
     } else {
@@ -275,10 +265,15 @@ mod tests {
         #[cfg(unix)]
         {
             let mut lines = Vec::new();
-            let streamed =
-                run_host_stream("printf 'a\\nb\\n'", Duration::from_secs(5), None, None, |l| {
+            let streamed = run_host_stream(
+                "printf 'a\\nb\\n'",
+                Duration::from_secs(5),
+                None,
+                None,
+                |l| {
                     lines.push(l.to_string());
-                });
+                },
+            );
             assert!(streamed.contains("exit 0"), "{streamed}");
             assert!(
                 lines.contains(&"a".to_string()) || streamed.contains("a"),
@@ -401,7 +396,13 @@ mod tests {
         } else {
             "pwd"
         };
-        let out = run_host_stream(pwd, Duration::from_secs(15), None, Some(path.as_str()), |_| {});
+        let out = run_host_stream(
+            pwd,
+            Duration::from_secs(15),
+            None,
+            Some(path.as_str()),
+            |_| {},
+        );
         let name = dir
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())

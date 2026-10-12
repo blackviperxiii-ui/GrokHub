@@ -30,7 +30,15 @@ mod tests {
 
     #[test]
     fn no_secret_leak() {
-        let t = diagnostics_bundle("2.0.0", true, "grokhub-hub-v1", 2, Some(true), 1, "token sk-nope");
+        let t = diagnostics_bundle(
+            "2.0.0",
+            true,
+            "grokhub-hub-v1",
+            2,
+            Some(true),
+            1,
+            "token sk-nope",
+        );
         assert!(t.contains("version 2.0.0"));
         assert!(t.contains("skills 2"));
         assert!(!t.contains("sk-nope") || t.contains("notes"));
@@ -49,11 +57,18 @@ mod tests {
         );
         assert!(t.contains("version 2.10.92-beta (beta @ abc1234)\n"), "{t}");
         assert!(
-            t.contains(&format!("\nos {} {}\n", std::env::consts::OS, std::env::consts::ARCH)),
+            t.contains(&format!(
+                "\nos {} {}\n",
+                std::env::consts::OS,
+                std::env::consts::ARCH
+            )),
             "{t}"
         );
         assert!(t.contains("notes Saved key [redacted]\n"), "{t}");
         assert!(!t.contains("sk-abcdefghijklmnopqrstuv"), "{t}");
-        assert!(t.contains("auth missing\nhub grokhub-hub-v1\nskills 0\nlastHost none\n"), "{t}");
+        assert!(
+            t.contains("auth missing\nhub grokhub-hub-v1\nskills 0\nlastHost none\n"),
+            "{t}"
+        );
     }
 }

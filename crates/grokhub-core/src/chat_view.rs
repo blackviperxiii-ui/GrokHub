@@ -27,7 +27,9 @@ pub enum MessageOrigin {
 pub fn message_origin(role: &str, content: &str) -> MessageOrigin {
     match role {
         "user" => MessageOrigin::Person,
-        "assistant" if content.starts_with(crate::slash::SLASH_RESULT_PREFIX) => MessageOrigin::Cabin,
+        "assistant" if content.starts_with(crate::slash::SLASH_RESULT_PREFIX) => {
+            MessageOrigin::Cabin
+        }
         _ => MessageOrigin::Model,
     }
 }
@@ -330,10 +332,16 @@ pub fn strip_thinking(content: &str) -> String {
 }
 
 pub fn visible_chat(messages: &[(String, String)]) -> Vec<ChatView> {
-    visible_chat_refs(messages.iter().map(|(role, content)| (role.as_str(), content.as_str())))
+    visible_chat_refs(
+        messages
+            .iter()
+            .map(|(role, content)| (role.as_str(), content.as_str())),
+    )
 }
 
-pub fn visible_chat_refs<'a>(messages: impl IntoIterator<Item = (&'a str, &'a str)>) -> Vec<ChatView> {
+pub fn visible_chat_refs<'a>(
+    messages: impl IntoIterator<Item = (&'a str, &'a str)>,
+) -> Vec<ChatView> {
     let mut out = Vec::new();
     let mut stretch: Vec<(&str, &str)> = Vec::new();
     let mut ask = "";
@@ -618,7 +626,11 @@ fn newest_reply(text: &str) -> String {
     let mut last_assistant: Option<usize> = None;
     let lines: Vec<&str> = text.lines().collect();
     for (i, line) in lines.iter().enumerate() {
-        let t = line.trim().trim_start_matches('#').trim().to_ascii_lowercase();
+        let t = line
+            .trim()
+            .trim_start_matches('#')
+            .trim()
+            .to_ascii_lowercase();
         let role = t.trim_end_matches(':').trim();
         if is_role_header(line) && (role == "assistant" || role == "grok") {
             last_assistant = Some(i);
@@ -948,7 +960,10 @@ mod tail_tests {
             !scrolled_off_tail(0.0, 230.0, 200.0, CHAT_TAIL_SLACK),
             "a chat barely taller than the pane must not flash the button"
         );
-        assert!(CHAT_TAIL_FRAMES >= 2, "one frame lands before the layout does");
+        assert!(
+            CHAT_TAIL_FRAMES >= 2,
+            "one frame lands before the layout does"
+        );
     }
 }
 
@@ -1090,10 +1105,7 @@ mod tests {
             "stream views must not clone an 8MB bubble: {body}"
         );
         let mut views = v;
-        refresh_last_stretch(
-            &mut views,
-            &[("user", "hi"), ("assistant", huge.as_str())],
-        );
+        refresh_last_stretch(&mut views, &[("user", "hi"), ("assistant", huge.as_str())]);
         let refreshed = views
             .iter()
             .find(|x| x.kind == ChatKind::Assistant)
@@ -1110,10 +1122,7 @@ mod tests {
     fn connector_work_stays_off_the_pane() {
         let msgs = vec![
             ("user".into(), "who am I".into()),
-            (
-                "assistant".into(),
-                "CONNECTOR_CMD: github user\n".into(),
-            ),
+            ("assistant".into(), "CONNECTOR_CMD: github user\n".into()),
             (
                 "user".into(),
                 "CONNECTOR_RESULT (facts only):\ngithub user\nlogin: viper".into(),
@@ -1132,7 +1141,10 @@ mod tests {
         let msgs = vec![
             ("user".into(), "flash the pi".into()),
             ("assistant".into(), "Image written.".into()),
-            ("user".into(), "HOST_RESULT (facts only):\n$ dd if=a\n".into()),
+            (
+                "user".into(),
+                "HOST_RESULT (facts only):\n$ dd if=a\n".into(),
+            ),
             ("user".into(), SKILL_SAVED_MARK.into()),
         ];
         let v = visible_chat(&msgs);
@@ -1203,7 +1215,10 @@ mod tests {
             thought_control_act("Collapse"),
             Some(ThoughtFoldAct::Minimize)
         );
-        assert_eq!(thought_control_act("Minimize"), Some(ThoughtFoldAct::Minimize));
+        assert_eq!(
+            thought_control_act("Minimize"),
+            Some(ThoughtFoldAct::Minimize)
+        );
         assert_eq!(thought_control_act("Hide"), Some(ThoughtFoldAct::Hide));
         assert_eq!(thought_control_act("Reply"), None);
         let mut session_a = [
@@ -1331,7 +1346,10 @@ mod tests {
         crate::append_thought(&mut live, "Need a snapshot");
         let slot = live[0].fold_slot;
         crate::append_thought(&mut live, " of the restore path.");
-        assert_eq!(live[0].fold_slot, slot, "a growing live thought keeps its slot");
+        assert_eq!(
+            live[0].fold_slot, slot,
+            "a growing live thought keeps its slot"
+        );
         assert_ne!(slot, 0);
 
         let msgs = vec![
@@ -1416,7 +1434,9 @@ mod tests {
     fn workload_user_is_not_a_spoken_turn() {
         assert!(is_workload_user("HOST_RESULT (facts only):\n$ ls\n"));
         assert!(is_workload_user("CONNECTOR_RESULT (facts only):\nok"));
-        assert!(is_workload_user("COMPUTER_RESULT (facts only):\nclicked 10,20"));
+        assert!(is_workload_user(
+            "COMPUTER_RESULT (facts only):\nclicked 10,20"
+        ));
         assert!(is_workload_user("HOST_DIFF:\n- a"));
         assert!(is_workload_user(
             "FOLLOWUP: Finish the incomplete work from your last reply. Act now (HOST_CMD if needed). End with status."
@@ -1444,10 +1464,7 @@ mod tests {
                 "user".into(),
                 "[Goal step 2/6]\nTask: flash the pi\nContinue autonomously.".into(),
             ),
-            (
-                "user".into(),
-                "VERIFY_RESULT:\nexit 0\nchecked".into(),
-            ),
+            ("user".into(), "VERIFY_RESULT:\nexit 0\nchecked".into()),
             ("assistant".into(), "Flashed.".into()),
         ]);
         assert_eq!(
@@ -1555,7 +1572,9 @@ mod tests {
         let v = visible_chat(&msgs);
         assert!(!v.iter().any(|x| x.kind == ChatKind::Tool));
         assert!(!v.iter().any(|x| x.body.contains("COMPUTER_RESULT")));
-        assert!(v.iter().any(|x| x.kind == ChatKind::Assistant && x.body.contains("Bluetooth")));
+        assert!(v
+            .iter()
+            .any(|x| x.kind == ChatKind::Assistant && x.body.contains("Bluetooth")));
     }
 
     #[test]
@@ -1565,7 +1584,10 @@ mod tests {
             "They asked about chowder."
         );
         assert_eq!(scrub_thought("There is an image attached."), "");
-        assert_eq!(scrub_thought("There's a screenshot attached to this message."), "");
+        assert_eq!(
+            scrub_thought("There's a screenshot attached to this message."),
+            ""
+        );
         assert_eq!(scrub_thought("A picture was attached."), "");
         assert_eq!(
             scrub_thought("You just dropped a black void. Need a snapshot."),
@@ -1590,7 +1612,9 @@ mod tests {
     #[test]
     fn thought_drops_false_no_computer_claim() {
         assert_eq!(
-            scrub_thought("I don't have direct access to your actual file system. I'll list Videos."),
+            scrub_thought(
+                "I don't have direct access to your actual file system. I'll list Videos."
+            ),
             "I'll list Videos."
         );
         assert!(scrub_thought(
@@ -1599,7 +1623,8 @@ mod tests {
         .is_empty());
         let v = visible_chat(&[(
             "assistant".into(),
-            "THINKING:\nI don't have access to your computer.\n\nYour Videos folder is sorted.".into(),
+            "THINKING:\nI don't have access to your computer.\n\nYour Videos folder is sorted."
+                .into(),
         )]);
         assert_eq!(kinds(&v), vec![ChatKind::Assistant]);
         assert_eq!(v[0].body, "Your Videos folder is sorted.");
@@ -1655,7 +1680,10 @@ mod tests {
         assert!(!v.iter().any(|x| x.kind == ChatKind::Tool));
         assert!(!v.iter().any(|x| x.body.contains("===== GPU")));
         assert!(!v.iter().any(|x| x.body.contains("HOST_CMD")));
-        assert_eq!(v.last().map(|x| x.body.as_str()), Some("You're on Linux cabin."));
+        assert_eq!(
+            v.last().map(|x| x.body.as_str()),
+            Some("You're on Linux cabin.")
+        );
     }
 
     #[test]
@@ -1715,10 +1743,7 @@ mod tests {
             host_cmd_heredoc_delim("HOST_CMD: cat <<'EOF'"),
             Some("EOF".into())
         );
-        assert_eq!(
-            host_cmd_heredoc_delim("HOST_CMD: uname -a"),
-            None
-        );
+        assert_eq!(host_cmd_heredoc_delim("HOST_CMD: uname -a"), None);
         assert_eq!(
             host_cmd_heredoc_delim("HOST_CMD: cat <<'EOF-2'"),
             Some("EOF-2".into())
@@ -1776,14 +1801,29 @@ mod tests {
         let msgs: Vec<(String, String)> = vec![
             ("user".into(), "hello".into()),
             ("assistant".into(), "Hi.".into()),
-            ("assistant".into(), crate::mark_slash_result("Synced chats and memory to 1 computer.")),
-            ("assistant".into(), crate::mark_slash_result("/privacy — what leaves this computer\n\nGrants")),
-            ("assistant".into(), crate::mark_slash_result("Sync to paired computers revoked. /sync asks again.")),
+            (
+                "assistant".into(),
+                crate::mark_slash_result("Synced chats and memory to 1 computer."),
+            ),
+            (
+                "assistant".into(),
+                crate::mark_slash_result("/privacy — what leaves this computer\n\nGrants"),
+            ),
+            (
+                "assistant".into(),
+                crate::mark_slash_result("Sync to paired computers revoked. /sync asks again."),
+            ),
         ];
         let v = visible_chat(&msgs);
         assert_eq!(
             kinds(&v),
-            vec![ChatKind::User, ChatKind::Assistant, ChatKind::Result, ChatKind::Result, ChatKind::Result]
+            vec![
+                ChatKind::User,
+                ChatKind::Assistant,
+                ChatKind::Result,
+                ChatKind::Result,
+                ChatKind::Result
+            ]
         );
         assert_eq!(v[2].body, "Synced chats and memory to 1 computer.");
         assert!(!v.iter().any(|x| x.kind == ChatKind::Thought), "{v:?}");
@@ -1805,19 +1845,40 @@ mod tests {
     /// writes), not by what the text says.
     #[test]
     fn result_kind_comes_from_origin_not_text() {
-        assert_eq!(message_origin("assistant", &crate::mark_slash_result("anything")), MessageOrigin::Cabin);
-        assert_eq!(message_origin("assistant", "/privacy — what leaves this computer"), MessageOrigin::Model);
-        assert_eq!(message_origin("user", &crate::mark_slash_result("x")), MessageOrigin::Person);
+        assert_eq!(
+            message_origin("assistant", &crate::mark_slash_result("anything")),
+            MessageOrigin::Cabin
+        );
+        assert_eq!(
+            message_origin("assistant", "/privacy — what leaves this computer"),
+            MessageOrigin::Model
+        );
+        assert_eq!(
+            message_origin("user", &crate::mark_slash_result("x")),
+            MessageOrigin::Person
+        );
         // Model prose that happens to look like a cabin report still ages like model prose.
         let v = visible_chat(&[
             ("user".into(), "what leaves?".into()),
-            ("assistant".into(), "/privacy — what leaves this computer".into()),
-            ("assistant".into(), "Synced chats and memory to 1 computer.".into()),
+            (
+                "assistant".into(),
+                "/privacy — what leaves this computer".into(),
+            ),
+            (
+                "assistant".into(),
+                "Synced chats and memory to 1 computer.".into(),
+            ),
         ]);
-        assert_eq!(kinds(&v), vec![ChatKind::User, ChatKind::Thought, ChatKind::Assistant]);
+        assert_eq!(
+            kinds(&v),
+            vec![ChatKind::User, ChatKind::Thought, ChatKind::Assistant]
+        );
         // A tagged result with any text is a result.
         let v = visible_chat(&[
-            ("assistant".into(), crate::mark_slash_result("Thinking about it")),
+            (
+                "assistant".into(),
+                crate::mark_slash_result("Thinking about it"),
+            ),
             ("assistant".into(), crate::mark_slash_result("Done.")),
         ]);
         assert_eq!(kinds(&v), vec![ChatKind::Result, ChatKind::Result]);
@@ -1830,23 +1891,44 @@ mod tests {
     fn aged_model_reasoning_still_collapses() {
         let model: Vec<(String, String)> = vec![
             ("user".into(), "fix it".into()),
-            ("assistant".into(), merge_thinking("Plan: read the file first.", "Looking now.")),
+            (
+                "assistant".into(),
+                merge_thinking("Plan: read the file first.", "Looking now."),
+            ),
             ("assistant".into(), "Fixed the typo in main.rs.".into()),
         ];
         let v = visible_chat(&model);
         assert_eq!(
             kinds(&v),
-            vec![ChatKind::User, ChatKind::Thought, ChatKind::Thought, ChatKind::Assistant]
+            vec![
+                ChatKind::User,
+                ChatKind::Thought,
+                ChatKind::Thought,
+                ChatKind::Assistant
+            ]
         );
         assert_eq!(v[1].body, "Plan: read the file first.");
         assert_eq!(v[2].body, "Looking now.");
-        assert!(thought_fold_draws(ChatKind::Thought, ThoughtFold::Minimized));
+        assert!(thought_fold_draws(
+            ChatKind::Thought,
+            ThoughtFold::Minimized
+        ));
         assert!(!thought_fold_draws(ChatKind::Thought, ThoughtFold::Hidden));
-        assert!(thought_fold_draws(ChatKind::Result, ThoughtFold::Hidden), "a result is never folded away");
+        assert!(
+            thought_fold_draws(ChatKind::Result, ThoughtFold::Hidden),
+            "a result is never folded away"
+        );
         let mut with_result = model.clone();
-        with_result.push(("assistant".into(), crate::mark_slash_result("Synced chats and memory to 1 computer.")));
+        with_result.push((
+            "assistant".into(),
+            crate::mark_slash_result("Synced chats and memory to 1 computer."),
+        ));
         let w = visible_chat(&with_result);
-        assert_eq!(&w[..v.len()], &v[..], "the model part paints exactly as before");
+        assert_eq!(
+            &w[..v.len()],
+            &v[..],
+            "the model part paints exactly as before"
+        );
         assert_eq!(w.last().map(|x| x.kind), Some(ChatKind::Result));
     }
 
@@ -1873,13 +1955,19 @@ mod tests {
 
     #[test]
     fn multi_paragraph_thought_stays_out_of_the_reply() {
-        let merged = merge_thinking("Plan one.\n\nPlan two.\n\nPlan three.", "Here is the report.");
+        let merged = merge_thinking(
+            "Plan one.\n\nPlan two.\n\nPlan three.",
+            "Here is the report.",
+        );
         assert_eq!(strip_thinking(&merged), "Here is the report.");
         let views = visible_chat(&[
             ("user".into(), "check for bugs".into()),
             ("assistant".into(), merged),
         ]);
-        let reply = views.iter().find(|v| v.kind == ChatKind::Assistant).expect("reply");
+        let reply = views
+            .iter()
+            .find(|v| v.kind == ChatKind::Assistant)
+            .expect("reply");
         assert_eq!(reply.body, "Here is the report.");
         assert!(views
             .iter()
@@ -1914,7 +2002,10 @@ mod tests {
                 ChatKind::Assistant,
             ]
         );
-        assert_eq!(views[2].body, "I'll find the app, then write up what I hit.");
+        assert_eq!(
+            views[2].body,
+            "I'll find the app, then write up what I hit."
+        );
         assert_eq!(views[3].title, "2 steps · Grep, Read file");
         assert_eq!(views[5].title, "Screenshot");
         assert_eq!(views[6].body, "Walked GrokHub.");
@@ -1939,7 +2030,9 @@ mod tests {
             !v.iter().any(|x| x.body.contains("HOST_CMD")),
             "protocol lines stay off the pane: {v:?}"
         );
-        assert!(v.iter().any(|x| x.kind == ChatKind::Thought && x.body.contains("IMAGINE:")));
+        assert!(v
+            .iter()
+            .any(|x| x.kind == ChatKind::Thought && x.body.contains("IMAGINE:")));
         assert!(!v.iter().any(|x| x.body == "true"));
     }
 
@@ -1964,7 +2057,9 @@ mod tests {
             .map(|x| x.body.as_str())
             .collect();
         assert_eq!(replies, vec!["You're on Linux cabin."]);
-        assert!(v.iter().any(|x| x.kind == ChatKind::Thought && x.body == "I'll look."));
+        assert!(v
+            .iter()
+            .any(|x| x.kind == ChatKind::Thought && x.body == "I'll look."));
         assert!(!v.iter().any(|x| x.body.contains("HOST_CMD")));
         assert!(!v.iter().any(|x| x.body.contains("HOST_RESULT")));
         assert!(!v.iter().any(|x| x.body.contains("uname")));

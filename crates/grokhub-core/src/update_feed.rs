@@ -545,7 +545,8 @@ pub fn setup_blocked_by_lessons(title: &str, lessons: &str) -> bool {
     let skip = |topic: &str| lessons_l.contains(&format!("skip {topic}"));
     if (skip("night") && (title_l.contains("night") || title_l.contains("wrap")))
         || (skip("imagine") && title_l.contains("imagine"))
-        || (skip("the tour") && (title_l.contains("start here") || title_l.contains("what you can")))
+        || (skip("the tour")
+            && (title_l.contains("start here") || title_l.contains("what you can")))
     {
         return true;
     }
@@ -626,7 +627,10 @@ pub fn names_its_item(card: &UpdateCard) -> bool {
     if lower == "it" || lower.starts_with("it ") || lower.starts_with("it's ") {
         return false;
     }
-    let text = format!("{lower} {}", card.body.as_deref().unwrap_or("").to_ascii_lowercase());
+    let text = format!(
+        "{lower} {}",
+        card.body.as_deref().unwrap_or("").to_ascii_lowercase()
+    );
     !VAGUE_SUBJECTS.iter().any(|vague| text.contains(vague))
 }
 
@@ -644,7 +648,9 @@ pub fn post_update(cards: &mut Vec<UpdateCard>, card: UpdateCard) -> bool {
             trim_feed_store(cards, now);
             return true;
         }
-        let fresh_tombstone = cards.iter().any(|c| is_group_tombstone(c, &key) && tombstone_fresh(c, now));
+        let fresh_tombstone = cards
+            .iter()
+            .any(|c| is_group_tombstone(c, &key) && tombstone_fresh(c, now));
         if fresh_tombstone && !card_is_failure(&card) {
             trim_feed_store(cards, now);
             return false;
@@ -683,7 +689,10 @@ fn take_live_group(cards: &mut Vec<UpdateCard>, key: &str) -> Option<UpdateCard>
             .find_map(|&i| cards[i].discuss_thread.clone());
     }
     if base.reaction.is_none() {
-        base.reaction = live.iter().filter(|&&i| i != keep).find_map(|&i| cards[i].reaction);
+        base.reaction = live
+            .iter()
+            .filter(|&&i| i != keep)
+            .find_map(|&i| cards[i].reaction);
     }
     base.runs = live
         .iter()
@@ -807,7 +816,11 @@ pub fn refresh_event_why(card: &mut UpdateCard) {
             card.why = Some(format!("“{name}” failed and needs a look."));
         }
         UpdateKind::AutomationDone => {
-            let mut line = if card.board_id.as_ref().is_some_and(|id| !id.trim().is_empty()) {
+            let mut line = if card
+                .board_id
+                .as_ref()
+                .is_some_and(|id| !id.trim().is_empty())
+            {
                 format!("Your automation “{name}” finished and left a report in Follow up.")
             } else {
                 format!("Your automation “{name}” finished.")
@@ -1090,7 +1103,11 @@ pub fn expire_ideas(cards: &mut Vec<UpdateCard>, now: u64) -> usize {
 /// (`IDEA_BOARD_MAX`), and a modified one stays until you delete it. Only a card
 /// with an explicit `expires_at` (older stores) still expires.
 pub fn idea_expired(card: &UpdateCard, now: u64) -> bool {
-    if card.kind != UpdateKind::Idea || card.modified || card.idea_kind.is_some() || card.skill.is_some() {
+    if card.kind != UpdateKind::Idea
+        || card.modified
+        || card.idea_kind.is_some()
+        || card.skill.is_some()
+    {
         return false;
     }
     card.expires_at.is_some_and(|at| now >= at)
@@ -1111,7 +1128,10 @@ pub fn hold_if_quiet(card: &mut UpdateCard, quiet: bool) {
     if quiet
         && matches!(
             card.kind,
-            UpdateKind::AutomationDone | UpdateKind::Idea | UpdateKind::Digest | UpdateKind::Suggestion
+            UpdateKind::AutomationDone
+                | UpdateKind::Idea
+                | UpdateKind::Digest
+                | UpdateKind::Suggestion
         )
     {
         card.held = true;
@@ -1213,9 +1233,11 @@ fn takeaway_text(title: &str, body: &str, why: &str, digest: bool) -> String {
     }
     let why = why.trim();
     if !why.is_empty() && !is_steer(why) && !same_line(why, title) && why.chars().count() <= 140 {
-        let already = sentences
-            .iter()
-            .any(|sentence| sentence.to_ascii_lowercase().contains(&why.to_ascii_lowercase()));
+        let already = sentences.iter().any(|sentence| {
+            sentence
+                .to_ascii_lowercase()
+                .contains(&why.to_ascii_lowercase())
+        });
         if !already {
             // What is going on, then why it matters.
             let at = sentences.len().min(1);
@@ -1240,7 +1262,10 @@ fn is_lead_in(sentence: &str) -> bool {
         "below are ",
         "below is ",
     ];
-    let lower = sentence.trim_start().to_ascii_lowercase().replace('\u{2019}', "'");
+    let lower = sentence
+        .trim_start()
+        .to_ascii_lowercase()
+        .replace('\u{2019}', "'");
     LEADS.iter().any(|lead| lower.starts_with(lead))
 }
 
@@ -1255,7 +1280,12 @@ fn skip_lead_ins(sentences: Vec<String>) -> Vec<String> {
 
 /// Editable note for the idea talk. The person can change it before it is sent.
 pub fn idea_dialogue(card: &UpdateCard) -> String {
-    if let Some(prompt) = card.prompt.as_deref().map(str::trim).filter(|p| !p.is_empty()) {
+    if let Some(prompt) = card
+        .prompt
+        .as_deref()
+        .map(str::trim)
+        .filter(|p| !p.is_empty())
+    {
         return prompt.to_string();
     }
     let mut out = String::new();
@@ -1264,7 +1294,12 @@ pub fn idea_dialogue(card: &UpdateCard) -> String {
         out.push_str(why);
         out.push_str("\n\n");
     }
-    if let Some(body) = card.body.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+    if let Some(body) = card
+        .body
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
         out.push_str(body);
         out.push_str("\n\n");
     }
@@ -1455,10 +1490,9 @@ pub fn post_generated_ideas(
             lessons,
             why,
         ) {
-            if let Some(card) = cards
-                .iter_mut()
-                .find(|c| c.kind == UpdateKind::Idea && c.title.eq_ignore_ascii_case(seed.title.trim()))
-            {
+            if let Some(card) = cards.iter_mut().find(|c| {
+                c.kind == UpdateKind::Idea && c.title.eq_ignore_ascii_case(seed.title.trim())
+            }) {
                 card.prompt = Some(seed.prompt.trim().to_string());
                 card.idea_kind = Some(seed.kind);
                 card.details = Some(seed.details.trim().to_string()).filter(|d| !d.is_empty());
@@ -1542,10 +1576,20 @@ pub fn post_skill_idea(
     {
         card.idea_kind = Some(crate::ideas::IdeaKind::Skill);
         let mut details = item.body.trim().to_string();
-        if let Some(trigger) = item.trigger.as_deref().map(str::trim).filter(|t| !t.is_empty()) {
+        if let Some(trigger) = item
+            .trigger
+            .as_deref()
+            .map(str::trim)
+            .filter(|t| !t.is_empty())
+        {
             details.push_str(&format!("\n\nWhen it runs: {trigger}"));
         }
-        if let Some(steps) = item.instructions.as_deref().map(str::trim).filter(|t| !t.is_empty()) {
+        if let Some(steps) = item
+            .instructions
+            .as_deref()
+            .map(str::trim)
+            .filter(|t| !t.is_empty())
+        {
             details.push_str(&format!("\n\nSteps:\n{steps}"));
         }
         card.details = Some(details);
@@ -1559,7 +1603,11 @@ pub fn live_generated_ideas(cards: &[UpdateCard]) -> usize {
     cards
         .iter()
         .filter(|c| {
-            c.kind == UpdateKind::Idea && c.prompt.is_some() && c.skill.is_none() && !c.built && !c.modified
+            c.kind == UpdateKind::Idea
+                && c.prompt.is_some()
+                && c.skill.is_none()
+                && !c.built
+                && !c.modified
         })
         .count()
 }
@@ -1580,7 +1628,10 @@ pub fn purge_template_ideas(cards: &mut Vec<UpdateCard>) -> usize {
 
 /// Untouched ideas that only answer a one-time job (one driver install, one fix)
 /// go. Cards you opened, changed, filed, or talked about stay. Returns how many went.
-pub fn purge_one_off_ideas(cards: &mut Vec<UpdateCard>, ground: &crate::ideas::IdeaGround) -> usize {
+pub fn purge_one_off_ideas(
+    cards: &mut Vec<UpdateCard>,
+    ground: &crate::ideas::IdeaGround,
+) -> usize {
     let before = cards.len();
     cards.retain(|c| {
         if c.kind != UpdateKind::Idea || idea_touched(c) {
@@ -1614,7 +1665,10 @@ fn post_useful_idea(
     }
     let title = title.trim();
     let body = body.trim();
-    if title.is_empty() || body.is_empty() || digest_topic_refused(title) || digest_topic_refused(body)
+    if title.is_empty()
+        || body.is_empty()
+        || digest_topic_refused(title)
+        || digest_topic_refused(body)
     {
         return false;
     }
@@ -1747,11 +1801,21 @@ pub fn idea_card_brief(card: &UpdateCard) -> String {
         card.idea_type_label(),
         card.title
     );
-    if let Some(body) = card.body.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+    if let Some(body) = card
+        .body
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
         out.push_str("\nSummary: ");
         out.push_str(body);
     }
-    if let Some(details) = card.details.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+    if let Some(details) = card
+        .details
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
         out.push_str("\nDetails: ");
         out.push_str(details);
     }
@@ -2104,8 +2168,7 @@ fn split_sentences(text: &str) -> Vec<String> {
             while j < chars.len() && chars[j].is_whitespace() {
                 j += 1;
             }
-            let boundary =
-                j >= chars.len() || c == '!' || c == '?' || chars[j].is_uppercase();
+            let boundary = j >= chars.len() || c == '!' || c == '?' || chars[j].is_uppercase();
             if boundary {
                 let sentence: String = chars[start..end].iter().collect();
                 let sentence = sentence.trim().to_string();
@@ -2194,7 +2257,8 @@ fn clip_words(raw: &str, max_chars: usize) -> String {
 }
 
 /// An http(s) URL whose host is a public name or address, not localhost, a
-/// private range, or link-local. Used before fetching a URL a model gave.
+/// private range, CGNAT, or link-local. Used before fetching a URL a model gave.
+/// Hostname-only: dialers must also use `public_only_resolve` so DNS→private fails.
 pub fn public_http_url(url: &str) -> bool {
     let Some(rest) = url
         .strip_prefix("https://")
@@ -2210,24 +2274,11 @@ pub fn public_http_url(url: &str) -> bool {
         hostport.split(':').next().unwrap_or("")
     };
     let host = host.trim_end_matches('.').to_ascii_lowercase();
-    if host.is_empty()
-        || host == "localhost"
-        || host.ends_with(".localhost")
-        || !host.contains(['.', ':'])
-    {
+    if host.is_empty() || crate::ssrf::host_name_blocked(&host) || !host.contains(['.', ':']) {
         return false;
     }
     match host.parse::<std::net::IpAddr>() {
-        Ok(std::net::IpAddr::V4(ip)) => {
-            !(ip.is_loopback() || ip.is_private() || ip.is_link_local() || ip.is_unspecified())
-        }
-        Ok(std::net::IpAddr::V6(ip)) => {
-            let seg = ip.segments()[0];
-            !(ip.is_loopback()
-                || ip.is_unspecified()
-                || (seg & 0xfe00) == 0xfc00
-                || (seg & 0xffc0) == 0xfe80)
-        }
+        Ok(ip) => !crate::ssrf::ip_blocked(ip),
         Err(_) => true,
     }
 }
@@ -2257,7 +2308,13 @@ fn clip_line(raw: &str, max_chars: usize) -> String {
     out
 }
 
-fn feed_card_id(prefix: &str, source_id: &str, title: &str, created_at: u64, stable: bool) -> String {
+fn feed_card_id(
+    prefix: &str,
+    source_id: &str,
+    title: &str,
+    created_at: u64,
+    stable: bool,
+) -> String {
     let source = source_id.trim();
     if stable {
         if source.is_empty() {
@@ -2341,7 +2398,11 @@ pub fn collapse_feed(cards: &mut Vec<UpdateCard>) -> bool {
             .copied()
             .filter(|&i| cards[i].status != UpdateStatus::Dismissed)
             .collect();
-        let pool: &[usize] = if live.is_empty() { idxs.as_slice() } else { &live };
+        let pool: &[usize] = if live.is_empty() {
+            idxs.as_slice()
+        } else {
+            &live
+        };
         let Some(keep) = newest_index(cards, pool) else {
             continue;
         };
@@ -2422,7 +2483,11 @@ fn normalize_title(title: &str) -> String {
 
 fn clock_len(chars: &[char]) -> Option<usize> {
     let digits = |slice: &[char], max: usize| {
-        slice.iter().take(max).take_while(|c| c.is_ascii_digit()).count()
+        slice
+            .iter()
+            .take(max)
+            .take_while(|c| c.is_ascii_digit())
+            .count()
     };
     let mut hours = digits(chars, 2);
     if hours == 0 {
@@ -2534,7 +2599,12 @@ pub fn automation_done_card(
 
 /// A scheduled job failed. Same kind as a finished one so older feeds still load;
 /// the title says it failed and the body says why.
-pub fn automation_failed_card(source_id: &str, name: &str, why: &str, created_at: u64) -> UpdateCard {
+pub fn automation_failed_card(
+    source_id: &str,
+    name: &str,
+    why: &str,
+    created_at: u64,
+) -> UpdateCard {
     let name = clip_line(name, TITLE_CHARS.saturating_sub(8).max(8));
     let title = if name.is_empty() {
         "Automation failed".to_string()
@@ -2568,17 +2638,29 @@ pub const CRASH_SOURCE_PREFIX: &str = "crash:";
 /// Open goes to its chat; Retry sends `retry` there. Same kind as a finished
 /// automation so older feeds still load. One card per `source_id`: a second
 /// crash of the same job bumps it instead of adding another.
-pub fn crash_card(source_id: &str, job: &str, thread_id: &str, retry: &str, created_at: u64) -> UpdateCard {
+pub fn crash_card(
+    source_id: &str,
+    job: &str,
+    thread_id: &str,
+    retry: &str,
+    created_at: u64,
+) -> UpdateCard {
     const TAIL: &str = " (exit 143, killed)";
     let job = clip_line(job, TITLE_CHARS - "Crashed: ".len() - TAIL.len());
-    let job = if job.is_empty() { "Reply".to_string() } else { job };
+    let job = if job.is_empty() {
+        "Reply".to_string()
+    } else {
+        job
+    };
     let title = format!("Crashed: {job}{TAIL}");
     let source = format!("{CRASH_SOURCE_PREFIX}{}", source_id.trim());
     let mut card = blank_card(
         feed_card_id("crash", &source, &title, created_at, true),
         UpdateKind::AutomationDone,
         title,
-        Some("Something outside GrokHub stopped it before it finished. Retry runs it again.".into()),
+        Some(
+            "Something outside GrokHub stopped it before it finished. Retry runs it again.".into(),
+        ),
         created_at,
     );
     if !thread_id.trim().is_empty() {
@@ -2602,7 +2684,13 @@ pub const SCREEN_RECORDING_SOURCE_PREFIX: &str = "screenrec:";
 /// ("Screen recording 0:42: video stutters on 4K YouTube"); the body is the
 /// likely cause, or why it was not diagnosed. Open goes to the full report in
 /// its chat; Delete recording removes the folder after a confirm.
-pub fn screen_recording_card(dir: &str, title: &str, summary: &str, thread_id: &str, created_at: u64) -> UpdateCard {
+pub fn screen_recording_card(
+    dir: &str,
+    title: &str,
+    summary: &str,
+    thread_id: &str,
+    created_at: u64,
+) -> UpdateCard {
     let title = clip_line(title, TITLE_CHARS);
     let summary = clip_line(summary, BODY_CHARS);
     let source = format!("{SCREEN_RECORDING_SOURCE_PREFIX}{}", dir.trim());
@@ -2637,7 +2725,10 @@ pub const RECOVERED_SOURCE_PREFIX: &str = "recovered:";
 /// the copy is ("Restored defaults, kept a copy at ~/.config/GrokHub/app.json.corrupt-1012.").
 /// One card per kept copy.
 pub fn recovered_card(r: &crate::recovered::Recovered, created_at: u64) -> UpdateCard {
-    let title = clip_line(&format!("{} was unreadable", crate::recovered::store_label(&r.path)), TITLE_CHARS);
+    let title = clip_line(
+        &format!("{} was unreadable", crate::recovered::store_label(&r.path)),
+        TITLE_CHARS,
+    );
     let aside = crate::recovered::home_short(&r.aside);
     let body = format!("{}, kept a copy at {aside}.", r.restored);
     let source = format!("{RECOVERED_SOURCE_PREFIX}{}", r.aside.to_string_lossy());
@@ -2661,11 +2752,20 @@ const AUDIO_CHECK_SOURCE_PREFIX: &str = "audiocheck:";
 /// Yeti input clipping at -0.2 dBFS"); the body is the first fix and the
 /// default output. A new check of the same input replaces the card. Open
 /// goes to the full report in its chat.
-pub fn audio_check_card(input: &str, title: &str, summary: &str, thread_id: &str, created_at: u64) -> UpdateCard {
+pub fn audio_check_card(
+    input: &str,
+    title: &str,
+    summary: &str,
+    thread_id: &str,
+    created_at: u64,
+) -> UpdateCard {
     let title = clip_line(title, TITLE_CHARS);
     let summary = clip_line(summary, BODY_CHARS);
     let input = input.trim();
-    let source = format!("{AUDIO_CHECK_SOURCE_PREFIX}{}", if input.is_empty() { "default" } else { input });
+    let source = format!(
+        "{AUDIO_CHECK_SOURCE_PREFIX}{}",
+        if input.is_empty() { "default" } else { input }
+    );
     let mut card = blank_card(
         feed_card_id("audiocheck", &source, &title, created_at, true),
         UpdateKind::AutomationDone,
@@ -2688,12 +2788,22 @@ pub fn audio_check_card(input: &str, title: &str, summary: &str, thread_id: &str
 /// added connection notes". `kind` is `skill`, `connection`, or
 /// `automation`; `verb` is `added`, `changed`, or `removed`. Undo is on the
 /// Work-tree row and in `/<kind>s changes`, never on the card.
-pub fn self_change_card(kind: &str, name: &str, verb: &str, reason: &str, created_at: u64) -> UpdateCard {
+pub fn self_change_card(
+    kind: &str,
+    name: &str,
+    verb: &str,
+    reason: &str,
+    created_at: u64,
+) -> UpdateCard {
     let name = clip_line(name, TITLE_CHARS);
     let title = clip_line(&format!("GrokHub {verb} {kind} {name}"), TITLE_CHARS);
     let why = clip_line(reason, TITLE_CHARS);
     let undo = format!("Undo it from its Work-tree row or /{kind}s changes.");
-    let body = if why.is_empty() { undo } else { format!("{why} · {undo}") };
+    let body = if why.is_empty() {
+        undo
+    } else {
+        format!("{why} · {undo}")
+    };
     let source = format!("{kind}:{name}");
     let mut card = blank_card(
         feed_card_id("chg", &source, &title, created_at, false),
@@ -2753,11 +2863,20 @@ pub struct DoneForYou {
 
 /// The Done-for-you card for one auto-act: what was done, why, and the
 /// ledger line Undo reverts.
-pub fn done_for_you_card(summary: &str, why: &str, done: DoneForYou, created_at: u64) -> UpdateCard {
+pub fn done_for_you_card(
+    summary: &str,
+    why: &str,
+    done: DoneForYou,
+    created_at: u64,
+) -> UpdateCard {
     let title = clip_line(summary, TITLE_CHARS);
     let why = clip_line(why, TITLE_CHARS);
     let source = format!("{}:{}:{}", done.kind, done.target, done.undo_ref);
-    let body = if why.is_empty() { "Done for you. Undo puts it back.".to_string() } else { why };
+    let body = if why.is_empty() {
+        "Done for you. Undo puts it back.".to_string()
+    } else {
+        why
+    };
     let mut card = blank_card(
         feed_card_id("dfy", &source, &title, created_at, false),
         UpdateKind::DoneForYou,
@@ -2833,7 +2952,11 @@ const AUTOMATE_OFFER_LINE: &str = "Want me to automate this and notify you here 
 /// Typed offer. Accept stays `commit_schedule`. It does not file a Todo.
 pub fn automate_offer_card(source_id: &str, title: &str, created_at: u64) -> UpdateCard {
     let title = clip_line(title, TITLE_CHARS);
-    let title = if title.is_empty() { AUTOMATE_OFFER_LINE.to_string() } else { title };
+    let title = if title.is_empty() {
+        AUTOMATE_OFFER_LINE.to_string()
+    } else {
+        title
+    };
     let mut card = blank_card(
         feed_card_id("offer", source_id, &title, created_at, true),
         UpdateKind::AutomateOffer,
@@ -3081,7 +3204,10 @@ pub fn post_help(
             }
             let source = format!("pause:{}", job.id.trim());
             let title = format!("Paused: {name}");
-            let body = format!("Paused {}. Want me to pick it back up?", paused_ago(now.saturating_sub(seen)));
+            let body = format!(
+                "Paused {}. Want me to pick it back up?",
+                paused_ago(now.saturating_sub(seen))
+            );
             if post_situation(cards, pulse, now, quiet, &source, &title, &body) {
                 posted = true;
                 break;
@@ -3090,7 +3216,10 @@ pub fn post_help(
     }
     if !posted && offer_repeats && !has_unread_suggestion(cards) {
         for action in repeats {
-            if action.count < 3 || action.dismissed || action.automated || action.key.trim().is_empty()
+            if action.count < 3
+                || action.dismissed
+                || action.automated
+                || action.key.trim().is_empty()
             {
                 continue;
             }
@@ -3138,7 +3267,10 @@ pub fn paused_job_of(card: &UpdateCard) -> Option<&str> {
     if card.kind != UpdateKind::Suggestion {
         return None;
     }
-    card.source_id.strip_prefix("pause:").map(str::trim).filter(|id| !id.is_empty())
+    card.source_id
+        .strip_prefix("pause:")
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
 }
 
 fn has_unread_suggestion(cards: &[UpdateCard]) -> bool {
@@ -3195,7 +3327,11 @@ mod tests {
         assert!(parsed.found);
         assert_eq!(parsed.links.len(), 1, "a link past the clip still counts");
         assert_eq!(parsed.links[0].url, "https://example.com/a-real-story");
-        assert!(!parsed.body.contains("https://example.com/a-real"), "{}", parsed.body);
+        assert!(
+            !parsed.body.contains("https://example.com/a-real"),
+            "{}",
+            parsed.body
+        );
         assert!(parsed.body.chars().count() <= DIGEST_EDITION_CHARS + 1);
         assert!(
             parsed.body.chars().count() <= TAKEAWAY_MAX + 1,
@@ -3237,16 +3373,34 @@ https://xstack.grok.me/post ZEPHYRTAIL"
         let mut x = digest_card("xstack", "For you", xstack, 1);
         x.why = Some("You run Grok Build agents overnight.".into());
         let xt = short_takeaway(&x);
-        assert!(xt.starts_with("Grok Build alpha 1.0.50 changes how a cancel hits a live turn"), "{xt}");
+        assert!(
+            xt.starts_with("Grok Build alpha 1.0.50 changes how a cancel hits a live turn"),
+            "{xt}"
+        );
         assert!(xt.ends_with("You run Grok Build agents overnight."), "{xt}");
-        assert!(xt.chars().count() <= TAKEAWAY_MAX, "{} {xt}", xt.chars().count());
+        assert!(
+            xt.chars().count() <= TAKEAWAY_MAX,
+            "{} {xt}",
+            xt.chars().count()
+        );
 
         // Only a lead-in: keep it rather than show nothing.
-        let alone = digest_card("d", "Digest 3", "I looked and did not find a source worth your time.", 1);
-        assert_eq!(short_takeaway(&alone), "I looked and did not find a source worth your time.");
+        let alone = digest_card(
+            "d",
+            "Digest 3",
+            "I looked and did not find a source worth your time.",
+            1,
+        );
+        assert_eq!(
+            short_takeaway(&alone),
+            "I looked and did not find a source worth your time."
+        );
         // A suggestion in the cabin's voice keeps its "I'll" line.
         let sugg = suggestion_card("s", "Standup", "I'll draft it at 8:45 so you only edit.", 1);
-        assert_eq!(short_takeaway(&sugg), "I'll draft it at 8:45 so you only edit.");
+        assert_eq!(
+            short_takeaway(&sugg),
+            "I'll draft it at 8:45 so you only edit."
+        );
 
         let mut short = digest_card(
             "rust",
@@ -3311,7 +3465,10 @@ https://xstack.grok.me/post ZEPHYRTAIL"
         assert!(!seed.contains("two real pieces"), "{seed}");
         assert!(seed.contains("cancel hits a live turn"), "{seed}");
         assert!(seed.contains("https://xstack.grok.me/post"), "{seed}");
-        assert!(seed.contains("It changes the cancel button you use."), "{seed}");
+        assert!(
+            seed.contains("It changes the cancel button you use."),
+            "{seed}"
+        );
         assert!(!seed.contains("ZEPHYRTAIL"), "{seed}");
         assert!(!seed.contains("evil.example"), "{seed}");
         assert!(
@@ -3336,7 +3493,8 @@ https://xstack.grok.me/post ZEPHYRTAIL"
         assert!(parsed.body.chars().count() <= TAKEAWAY_MAX);
         let head = parsed.body.trim_end_matches('…').trim();
         assert!(
-            head.split_whitespace().all(|word| word == "Headline" || word == "word"),
+            head.split_whitespace()
+                .all(|word| word == "Headline" || word == "word"),
             "stored body cut a word: {}",
             parsed.body
         );
@@ -3347,19 +3505,30 @@ https://xstack.grok.me/post ZEPHYRTAIL"
         let raw = "One https://made.up/x\nTwo https://real.example/y";
         let kept = drop_dead_links(raw, &["https://made.up/x".to_string()]);
         assert_eq!(kept, "One\nTwo https://real.example/y");
-        assert!(!parse_lookup(&drop_dead_links(raw, &[
-            "https://made.up/x".to_string(),
-            "https://real.example/y".to_string(),
-        ]))
-        .found);
+        assert!(
+            !parse_lookup(&drop_dead_links(
+                raw,
+                &[
+                    "https://made.up/x".to_string(),
+                    "https://real.example/y".to_string(),
+                ]
+            ))
+            .found
+        );
         assert!(public_http_url("https://news.example.com/a"));
+        assert!(public_http_url("http://1.1.1.1/"));
         for bad in [
             "http://localhost:8080/",
             "http://127.0.0.1/",
             "http://192.168.1.4/admin",
             "http://10.0.0.1",
             "http://169.254.169.254/latest",
+            "http://100.64.1.1/",
+            "http://100.101.7.9/meta",
+            "http://0.1.2.3/",
+            "http://198.18.0.1/",
             "http://[::1]:3000/",
+            "http://[fd00::1]/",
             "http://intranet/",
             "ftp://example.com/",
             "http://user@127.0.0.1/",
@@ -3435,7 +3604,10 @@ https://xstack.grok.me/post ZEPHYRTAIL"
     #[test]
     fn repeat_runs_of_one_automation_keep_one_card() {
         let mut cards = Vec::new();
-        post_update(&mut cards, automation_done_card("loop-1", "Board", "summary 0", 100));
+        post_update(
+            &mut cards,
+            automation_done_card("loop-1", "Board", "summary 0", 100),
+        );
         cards[0].reaction = Some(CardReaction::Up);
         cards[0].discuss_thread = Some("thr-board".into());
         for (i, at) in [200u64, 300, 400, 500].into_iter().enumerate() {
@@ -3460,7 +3632,10 @@ https://xstack.grok.me/post ZEPHYRTAIL"
     fn two_automations_keep_two_cards() {
         let mut cards = Vec::new();
         for at in [1u64, 2, 3] {
-            post_update(&mut cards, automation_done_card("alpha", "Alpha", &format!("a{at}"), at));
+            post_update(
+                &mut cards,
+                automation_done_card("alpha", "Alpha", &format!("a{at}"), at),
+            );
             post_update(
                 &mut cards,
                 automation_done_card("beta", "Beta", &format!("b{at}"), at + 10),
@@ -3480,7 +3655,10 @@ https://xstack.grok.me/post ZEPHYRTAIL"
     #[test]
     fn failed_run_replaces_done_card_in_same_group() {
         let mut cards = Vec::new();
-        post_update(&mut cards, automation_done_card("loop-1", "Board", "ok", 10));
+        post_update(
+            &mut cards,
+            automation_done_card("loop-1", "Board", "ok", 10),
+        );
         post_update(
             &mut cards,
             automation_failed_card("loop-1", "Board", "credit limit", 20),
@@ -3528,23 +3706,40 @@ https://xstack.grok.me/post ZEPHYRTAIL"
         let day = 24 * 60 * 60 * 1000;
         let t0 = 5_000_000u64;
         let mut cards = Vec::new();
-        post_update(&mut cards, automation_done_card("loop-1", "Board", "first", t0));
+        post_update(
+            &mut cards,
+            automation_done_card("loop-1", "Board", "first", t0),
+        );
         let mut older = automation_done_card("loop-1", "Board", "older", t0 - 10);
         older.id = format!("done-loop-1-{}", t0 - 10);
         cards.push(older);
-        let id = cards.iter().find(|c| c.created_at == t0).unwrap().id.clone();
+        let id = cards
+            .iter()
+            .find(|c| c.created_at == t0)
+            .unwrap()
+            .id
+            .clone();
         assert!(dismiss_update_at(&mut cards, &id, t0));
         assert!(visible_updates(&cards).is_empty());
         assert_eq!(home_feed_n(&cards), 0);
         assert_eq!(
-            cards.iter().filter(|c| feed_group_key(c).as_deref() == Some("run:loop-1")).count(),
+            cards
+                .iter()
+                .filter(|c| feed_group_key(c).as_deref() == Some("run:loop-1"))
+                .count(),
             1,
             "the group keeps one tombstone"
         );
         assert!(cards.iter().all(|c| c.status == UpdateStatus::Dismissed));
 
-        post_update(&mut cards, automation_done_card("loop-1", "Board", "again", t0 + 60_000));
-        assert!(visible_updates(&cards).is_empty(), "a repeat within a day stays hidden");
+        post_update(
+            &mut cards,
+            automation_done_card("loop-1", "Board", "again", t0 + 60_000),
+        );
+        assert!(
+            visible_updates(&cards).is_empty(),
+            "a repeat within a day stays hidden"
+        );
 
         post_update(
             &mut cards,
@@ -3557,10 +3752,16 @@ https://xstack.grok.me/post ZEPHYRTAIL"
         assert_eq!(cards.iter().filter(|c| c.source_id == "loop-1").count(), 1);
 
         let mut later = Vec::new();
-        post_update(&mut later, automation_done_card("loop-2", "Nightly", "once", t0));
+        post_update(
+            &mut later,
+            automation_done_card("loop-2", "Nightly", "once", t0),
+        );
         let id2 = later[0].id.clone();
         assert!(dismiss_update_at(&mut later, &id2, t0));
-        post_update(&mut later, automation_done_card("loop-2", "Nightly", "next day", t0 + day));
+        post_update(
+            &mut later,
+            automation_done_card("loop-2", "Nightly", "next day", t0 + day),
+        );
         let back = visible_updates(&later);
         assert_eq!(back.len(), 1, "a run after a day comes back");
         assert_eq!(back[0].body.as_deref(), Some("next day"));
@@ -3653,12 +3854,7 @@ https://xstack.grok.me/post ZEPHYRTAIL"
             automation_done_card("loop", "done", "ok", 2),
         ];
         assert!(!dismiss_idea(&mut cards, "missing"));
-        let event_id = cards
-            .iter()
-            .find(|c| c.kind.event())
-            .unwrap()
-            .id
-            .clone();
+        let event_id = cards.iter().find(|c| c.kind.event()).unwrap().id.clone();
         assert!(!dismiss_idea(&mut cards, &event_id));
         let idea_id = cards
             .iter()
@@ -3693,8 +3889,7 @@ https://xstack.grok.me/post ZEPHYRTAIL"
         .iter()
         .enumerate()
         {
-            let mut done =
-                automation_done_card(&format!("loop-{i}"), title, "ok", 10 + i as u64);
+            let mut done = automation_done_card(&format!("loop-{i}"), title, "ok", 10 + i as u64);
             hold_if_quiet(&mut done, true);
             cards.push(done);
         }
@@ -3862,9 +4057,13 @@ https://xstack.grok.me/post ZEPHYRTAIL"
         assert!(!tick.digest_needs_lookup);
         assert!(refused.is_empty());
         assert_eq!(pulse.last_digest_ms, 50);
-        assert!(!digest_topic_refused("A story about a bank and the weather"));
+        assert!(!digest_topic_refused(
+            "A story about a bank and the weather"
+        ));
         assert!(digest_topic_refused("I paid your card"));
-        assert!(!crate::review::cabin_real_text("Connect Gmail for this skill"));
+        assert!(!crate::review::cabin_real_text(
+            "Connect Gmail for this skill"
+        ));
     }
 
     fn seed(kind: crate::ideas::IdeaKind, title: &str) -> crate::ideas::IdeaSeed {
@@ -3892,16 +4091,45 @@ https://xstack.grok.me/post ZEPHYRTAIL"
     fn generated_ideas_post_once_with_their_prompt_and_skip_what_you_run() {
         let mut cards = Vec::new();
         let mut pulse = FeedPulse::default();
-        let n = post_generated_ideas(&mut cards, &mut pulse, 40, &seeds(), &["Stream prep reminder"], "");
+        let n = post_generated_ideas(
+            &mut cards,
+            &mut pulse,
+            40,
+            &seeds(),
+            &["Stream prep reminder"],
+            "",
+        );
         assert_eq!(n, 3, "a title you already run is skipped");
-        let test_run = cards.iter().find(|c| c.title == "Morning test run").expect("posted");
-        assert_eq!(test_run.prompt.as_deref(), Some("every weekday at 9, morning test run"));
-        assert_eq!(test_run.why.as_deref(), Some("An automation you can turn on"));
-        assert_eq!(idea_dialogue(test_run), "every weekday at 9, morning test run", "Accept fills the draft");
+        let test_run = cards
+            .iter()
+            .find(|c| c.title == "Morning test run")
+            .expect("posted");
+        assert_eq!(
+            test_run.prompt.as_deref(),
+            Some("every weekday at 9, morning test run")
+        );
+        assert_eq!(
+            test_run.why.as_deref(),
+            Some("An automation you can turn on")
+        );
+        assert_eq!(
+            idea_dialogue(test_run),
+            "every weekday at 9, morning test run",
+            "Accept fills the draft"
+        );
         assert!(idea_open_line(test_run).contains("The draft below does it"));
         assert_eq!(live_generated_ideas(&cards), 3);
-        assert_eq!(post_generated_ideas(&mut cards, &mut pulse, 50, &seeds(), &[], ""), 1, "only the new one");
-        let gone = cards.iter().find(|c| c.title == "Triage open issues").unwrap().id.clone();
+        assert_eq!(
+            post_generated_ideas(&mut cards, &mut pulse, 50, &seeds(), &[], ""),
+            1,
+            "only the new one"
+        );
+        let gone = cards
+            .iter()
+            .find(|c| c.title == "Triage open issues")
+            .unwrap()
+            .id
+            .clone();
         dismiss_idea(&mut cards, &gone);
         assert_eq!(
             post_generated_ideas(&mut cards, &mut pulse, 60, &seeds(), &[], ""),
@@ -3924,9 +4152,15 @@ https://xstack.grok.me/post ZEPHYRTAIL"
         assert_eq!(feed_ideas(&cards, 1_000).len(), 1);
         let gone = feed_ideas(&cards, 1_000)[0].id.clone();
         assert!(unpin_feed_idea(&mut cards, &gone));
-        assert!(cards.iter().any(|c| c.id == gone && !c.feed_pin), "dismissed from home, still on the board");
+        assert!(
+            cards.iter().any(|c| c.id == gone && !c.feed_pin),
+            "dismissed from home, still on the board"
+        );
         assert_eq!(ideas_board(&cards).len(), 4);
-        let card = cards.iter().find(|c| c.title == "Morning test run").unwrap();
+        let card = cards
+            .iter()
+            .find(|c| c.title == "Morning test run")
+            .unwrap();
         assert_eq!(card.idea_type_label(), "Automation");
         assert!(card.details.as_deref().unwrap().contains("full story"));
         assert_eq!(card.idea_action(), "every weekday at 9, morning test run");
@@ -3939,7 +4173,12 @@ https://xstack.grok.me/post ZEPHYRTAIL"
 
     fn many(n: usize, start: u64) -> Vec<crate::ideas::IdeaSeed> {
         (0..n)
-            .map(|i| seed(crate::ideas::IdeaKind::Try, &format!("Errand{:02}", start as usize + i)))
+            .map(|i| {
+                seed(
+                    crate::ideas::IdeaKind::Try,
+                    &format!("Errand{:02}", start as usize + i),
+                )
+            })
             .collect()
     }
 
@@ -3948,16 +4187,34 @@ https://xstack.grok.me/post ZEPHYRTAIL"
         let mut cards = Vec::new();
         let mut pulse = FeedPulse::default();
         for (i, s) in many(IDEA_BOARD_MAX, 0).iter().enumerate() {
-            post_generated_ideas(&mut cards, &mut pulse, 1_000 + i as u64, std::slice::from_ref(s), &[], "");
+            post_generated_ideas(
+                &mut cards,
+                &mut pulse,
+                1_000 + i as u64,
+                std::slice::from_ref(s),
+                &[],
+                "",
+            );
         }
         assert_eq!(ideas_board(&cards).len(), IDEA_BOARD_MAX);
-        let oldest = cards.iter().min_by_key(|c| c.created_at).unwrap().id.clone();
+        let oldest = cards
+            .iter()
+            .min_by_key(|c| c.created_at)
+            .unwrap()
+            .id
+            .clone();
         unpin_feed_idea(&mut cards, &oldest);
         post_generated_ideas(&mut cards, &mut pulse, 5_000, &many(1, 50), &[], "");
         assert_eq!(ideas_board(&cards).len(), IDEA_BOARD_MAX, "still fifteen");
-        assert!(!cards.iter().any(|c| c.id == oldest), "the oldest was pushed out");
+        assert!(
+            !cards.iter().any(|c| c.id == oldest),
+            "the oldest was pushed out"
+        );
         assert!(ideas_board(&cards)[0].title == "Errand50", "newest first");
-        assert!(expire_ideas(&mut cards, u64::MAX) == 0, "ideas do not time out");
+        assert!(
+            expire_ideas(&mut cards, u64::MAX) == 0,
+            "ideas do not time out"
+        );
     }
 
     #[test]
@@ -3965,23 +4222,52 @@ https://xstack.grok.me/post ZEPHYRTAIL"
         let mut cards = Vec::new();
         let mut pulse = FeedPulse::default();
         for (i, s) in many(IDEA_BOARD_MAX, 0).iter().enumerate() {
-            post_generated_ideas(&mut cards, &mut pulse, 1_000 + i as u64, std::slice::from_ref(s), &[], "");
+            post_generated_ideas(
+                &mut cards,
+                &mut pulse,
+                1_000 + i as u64,
+                std::slice::from_ref(s),
+                &[],
+                "",
+            );
         }
-        let oldest = cards.iter().min_by_key(|c| c.created_at).unwrap().id.clone();
+        let oldest = cards
+            .iter()
+            .min_by_key(|c| c.created_at)
+            .unwrap()
+            .id
+            .clone();
         set_idea_draft(&mut cards, &oldest, "every day at 7, do it my way").unwrap();
         let card = cards.iter().find(|c| c.id == oldest).unwrap();
         assert!(card.modified && !card.feed_pin);
         assert_eq!(card.idea_action(), "every day at 7, do it my way");
         for i in 0..30u64 {
-            post_generated_ideas(&mut cards, &mut pulse, 10_000 + i, &many(1, 100 + i), &[], "");
+            post_generated_ideas(
+                &mut cards,
+                &mut pulse,
+                10_000 + i,
+                &many(1, 100 + i),
+                &[],
+                "",
+            );
         }
-        assert!(cards.iter().any(|c| c.id == oldest), "a modified card is never pushed out");
+        assert!(
+            cards.iter().any(|c| c.id == oldest),
+            "a modified card is never pushed out"
+        );
         assert_eq!(
-            cards.iter().filter(|c| c.kind == UpdateKind::Idea && !c.modified).count(),
+            cards
+                .iter()
+                .filter(|c| c.kind == UpdateKind::Idea && !c.modified)
+                .count(),
             IDEA_BOARD_MAX,
             "fifteen unmodified beside it"
         );
-        assert_eq!(ideas_board(&cards)[0].id, oldest, "the one you work on sits at the top");
+        assert_eq!(
+            ideas_board(&cards)[0].id,
+            oldest,
+            "the one you work on sits at the top"
+        );
         let ids: Vec<String> = cards
             .iter()
             .filter(|c| !c.modified)
@@ -3993,10 +4279,23 @@ https://xstack.grok.me/post ZEPHYRTAIL"
         }
         assert_eq!(modified_ideas(&cards), IDEA_MODIFIED_MAX);
         let extra = cards.iter().find(|c| !c.modified).unwrap().id.clone();
-        assert!(mark_idea_modified(&mut cards, &extra).unwrap_err().contains("Apply or delete"));
-        assert!(mark_idea_modified(&mut cards, &oldest).is_ok(), "an open one stays editable");
+        assert!(mark_idea_modified(&mut cards, &extra)
+            .unwrap_err()
+            .contains("Apply or delete"));
+        assert!(
+            mark_idea_modified(&mut cards, &oldest).is_ok(),
+            "an open one stays editable"
+        );
         set_idea_draft(&mut cards, &oldest, "  ").unwrap();
-        assert!(cards.iter().find(|c| c.id == oldest).unwrap().draft.is_none(), "blank goes back to the original");
+        assert!(
+            cards
+                .iter()
+                .find(|c| c.id == oldest)
+                .unwrap()
+                .draft
+                .is_none(),
+            "blank goes back to the original"
+        );
     }
 
     #[test]
@@ -4016,34 +4315,62 @@ https://xstack.grok.me/post ZEPHYRTAIL"
         let mut cards = Vec::new();
         let mut pulse = FeedPulse::default();
         assert!(post_skill_idea(&mut cards, &mut pulse, 10, &item, &[]));
-        assert!(!post_skill_idea(&mut cards, &mut pulse, 11, &item, &[]), "once");
+        assert!(
+            !post_skill_idea(&mut cards, &mut pulse, 11, &item, &[]),
+            "once"
+        );
         let c = &cards[0];
         assert_eq!(c.idea_type_label(), "Skill");
         assert!(c.details.as_deref().unwrap().contains("Steps:\n1. bump"));
-        assert!(!c.feed_pin, "nightly skills wait on the Ideas board, not the home feed");
+        assert!(
+            !c.feed_pin,
+            "nightly skills wait on the Ideas board, not the home feed"
+        );
         let mut fresh = Vec::new();
-        assert!(!post_skill_idea(&mut fresh, &mut pulse, 12, &item, &["release-checklist"]), "you already have it");
+        assert!(
+            !post_skill_idea(&mut fresh, &mut pulse, 12, &item, &["release-checklist"]),
+            "you already have it"
+        );
     }
 
     #[test]
     fn template_cards_are_purged_unless_you_used_them() {
         let mut cards = vec![
-            idea_card("profile", "A chip for the next slice", "A chip does the next slice.", 1),
-            idea_card("profile", "Set up: exit 1 · 9ms", "Turn this into a reminder.", 1),
+            idea_card(
+                "profile",
+                "A chip for the next slice",
+                "A chip does the next slice.",
+                1,
+            ),
+            idea_card(
+                "profile",
+                "Set up: exit 1 · 9ms",
+                "Turn this into a reminder.",
+                1,
+            ),
             idea_card("remind-later", "Remind me later", "Say it once.", 1),
-            idea_card("gen", "Morning test run", "Runs your tests before you sit down.", 1),
+            idea_card(
+                "gen",
+                "Morning test run",
+                "Runs your tests before you sit down.",
+                1,
+            ),
             digest_card("d", "Digest", "brief", 1),
         ];
         cards[2].built = true;
         assert_eq!(purge_template_ideas(&mut cards), 2);
         let titles: Vec<&str> = cards.iter().map(|c| c.title.as_str()).collect();
-        assert_eq!(titles, vec!["Remind me later", "Morning test run", "Digest"]);
+        assert_eq!(
+            titles,
+            vec!["Remind me later", "Morning test run", "Digest"]
+        );
         assert_eq!(purge_template_ideas(&mut cards), 0);
     }
 
     #[test]
     fn older_updates_json_loads_without_a_prompt() {
-        let raw = r#"[{"id":"i1","kind":"idea","title":"Old idea","createdAt":1,"status":"unread"}]"#;
+        let raw =
+            r#"[{"id":"i1","kind":"idea","title":"Old idea","createdAt":1,"status":"unread"}]"#;
         let cards: Vec<UpdateCard> = serde_json::from_str(raw).expect("old feed loads");
         assert!(cards[0].prompt.is_none());
         let back = serde_json::to_string(&cards[0]).unwrap();
@@ -4202,13 +4529,30 @@ https://xstack.grok.me/post ZEPHYRTAIL"
             "t9",
             7,
         );
-        assert_eq!(c.title, "Screen recording 0:42: video stutters on 4K YouTube");
-        assert_eq!(c.body.as_deref(), Some("Likely cause: hardware video decoding is off."));
-        assert_eq!(c.action, Some(UpdateAction::OpenSession { thread_id: "t9".into() }));
+        assert_eq!(
+            c.title,
+            "Screen recording 0:42: video stutters on 4K YouTube"
+        );
+        assert_eq!(
+            c.body.as_deref(),
+            Some("Likely cause: hardware video decoding is off.")
+        );
+        assert_eq!(
+            c.action,
+            Some(UpdateAction::OpenSession {
+                thread_id: "t9".into()
+            })
+        );
         assert_eq!(c.source_id, "screenrec:/home/ada/GrokHub/recordings/r1");
-        assert_eq!(screen_recording_dir(&c), Some("/home/ada/GrokHub/recordings/r1"));
+        assert_eq!(
+            screen_recording_dir(&c),
+            Some("/home/ada/GrokHub/recordings/r1")
+        );
         assert!(!is_crash_card(&c));
-        assert_eq!(screen_recording_dir(&crash_card("t1", "Index", "t1", "/retry", 5)), None);
+        assert_eq!(
+            screen_recording_dir(&crash_card("t1", "Index", "t1", "/retry", 5)),
+            None
+        );
     }
 
     #[test]
@@ -4221,13 +4565,30 @@ https://xstack.grok.me/post ZEPHYRTAIL"
             7,
         );
         assert_eq!(c.title, "Audio check: Yeti input clipping at -0.2 dBFS");
-        assert_eq!(c.body.as_deref(), Some("Lower Yeti's input volume. Default output: HDMI."));
-        assert_eq!(c.action, Some(UpdateAction::OpenSession { thread_id: "t4".into() }));
+        assert_eq!(
+            c.body.as_deref(),
+            Some("Lower Yeti's input volume. Default output: HDMI.")
+        );
+        assert_eq!(
+            c.action,
+            Some(UpdateAction::OpenSession {
+                thread_id: "t4".into()
+            })
+        );
         assert_eq!(c.source_id, "audiocheck:alsa_input.usb-Yeti");
         assert_eq!(c.id, "audiocheck-audiocheck:alsa_input.usb-Yeti");
-        assert_eq!(audio_check_card("alsa_input.usb-Yeti", "Audio check: later", "", "", 9).id, c.id);
-        assert_eq!(audio_check_card("", "Audio check: x", "", "", 9).source_id, "audiocheck:default");
-        assert_eq!(audio_check_card("", "Audio check: x", "", "", 9).action, None);
+        assert_eq!(
+            audio_check_card("alsa_input.usb-Yeti", "Audio check: later", "", "", 9).id,
+            c.id
+        );
+        assert_eq!(
+            audio_check_card("", "Audio check: x", "", "", 9).source_id,
+            "audiocheck:default"
+        );
+        assert_eq!(
+            audio_check_card("", "Audio check: x", "", "", 9).action,
+            None
+        );
     }
 
     #[test]
@@ -4237,41 +4598,68 @@ https://xstack.grok.me/post ZEPHYRTAIL"
         assert_eq!(c.title, "Crashed: Index ~/Projects (exit 143, killed)");
         assert_eq!(
             c.action,
-            Some(UpdateAction::OpenSession { thread_id: "t1".into() })
+            Some(UpdateAction::OpenSession {
+                thread_id: "t1".into()
+            })
         );
         assert_eq!(c.prompt.as_deref(), Some("/retry"));
         assert_eq!(c.source_id, "crash:t1");
         assert!(is_crash_card(&c));
-        assert!(!is_crash_card(&automation_failed_card("t1", "Index", "x", 5)));
-        assert_eq!(crash_card("t2", "  ", "", "", 5).title, "Crashed: Reply (exit 143, killed)");
+        assert!(!is_crash_card(&automation_failed_card(
+            "t1", "Index", "x", 5
+        )));
+        assert_eq!(
+            crash_card("t2", "  ", "", "", 5).title,
+            "Crashed: Reply (exit 143, killed)"
+        );
         let long = crash_card("t3", &"word ".repeat(30), "t3", "/retry", 5);
-        assert!(long.title.starts_with("Crashed: word word"), "{}", long.title);
-        assert!(long.title.ends_with("… (exit 143, killed)"), "{}", long.title);
+        assert!(
+            long.title.starts_with("Crashed: word word"),
+            "{}",
+            long.title
+        );
+        assert!(
+            long.title.ends_with("… (exit 143, killed)"),
+            "{}",
+            long.title
+        );
 
         // A second crash of the same chat bumps one card.
         let mut cards = Vec::new();
         post_update(&mut cards, c.clone());
-        post_update(&mut cards, crash_card("t1", "Index ~/Projects", "t1", "/retry", 9));
+        post_update(
+            &mut cards,
+            crash_card("t1", "Index ~/Projects", "t1", "/retry", 9),
+        );
         assert_eq!(cards.len(), 1, "{cards:?}");
         // After a dismiss, a new crash still shows: it is a failure.
         let first = cards[0].id.clone();
         dismiss_update(&mut cards, &first);
-        post_update(&mut cards, crash_card("t1", "Index ~/Projects", "t1", "/retry", 20));
+        post_update(
+            &mut cards,
+            crash_card("t1", "Index ~/Projects", "t1", "/retry", 20),
+        );
         assert!(
-            cards.iter().any(|x| x.status != UpdateStatus::Dismissed && is_crash_card(x)),
+            cards
+                .iter()
+                .any(|x| x.status != UpdateStatus::Dismissed && is_crash_card(x)),
             "{cards:?}"
         );
     }
 
     #[test]
     fn card_action_line_rewrites_the_action_once() {
-        let reply = "Sure, weekdays only.\n\n**CARD_ACTION: every weekday at 8 summarize my inbox**";
+        let reply =
+            "Sure, weekdays only.\n\n**CARD_ACTION: every weekday at 8 summarize my inbox**";
         let (clean, action) = take_card_action(reply).expect("action");
         assert_eq!(action, "every weekday at 8 summarize my inbox");
         assert!(clean.contains("weekdays only"));
         assert!(clean.contains(CARD_ACTION_DONE));
         assert!(!clean.contains(CARD_ACTION_TAG));
-        assert!(take_card_action(&clean).is_none(), "second pass finds nothing");
+        assert!(
+            take_card_action(&clean).is_none(),
+            "second pass finds nothing"
+        );
         assert!(take_card_action("CARD_ACTION:   ").is_none());
     }
 
@@ -4280,14 +4668,20 @@ https://xstack.grok.me/post ZEPHYRTAIL"
         let turn = "TURN_THOUGHT:\nMaybe end with CARD_ACTION: every hour ping me\nTURN_TOOL: done\tRead\tnotes.md\nTURN_SAY:\nWeekdays it is.\nCARD_ACTION: every weekday at 8 sort my inbox\n";
         let (clean, action) = take_card_action(turn).expect("action");
         assert_eq!(action, "every weekday at 8 sort my inbox");
-        assert!(clean.contains("Maybe end with CARD_ACTION: every hour ping me"), "the thought stays as it was");
+        assert!(
+            clean.contains("Maybe end with CARD_ACTION: every hour ping me"),
+            "the thought stays as it was"
+        );
         assert!(clean.contains(CARD_ACTION_DONE));
         let says = crate::turn_timeline::turn_says(&clean).expect("still a timeline");
         assert!(says.contains("Weekdays it is.") && says.contains(CARD_ACTION_DONE));
         let thought_only = "TURN_THOUGHT:\nI could say CARD_ACTION: every hour ping me\nTURN_SAY:\nWhat time suits you?\n";
         assert!(take_card_action(thought_only).is_none());
         let two = "First: CARD_ACTION: a\nThen\nCARD_ACTION: every day at 9 plan my day";
-        assert_eq!(take_card_action(two).unwrap().1, "every day at 9 plan my day");
+        assert_eq!(
+            take_card_action(two).unwrap().1,
+            "every day at 9 plan my day"
+        );
     }
 
     #[test]
@@ -4319,11 +4713,29 @@ https://xstack.grok.me/post ZEPHYRTAIL"
         };
         let mut cards = Vec::new();
         let mut pulse = FeedPulse::default();
-        let first = post_help(&mut cards, &mut pulse, 1_000, false, false, &paused, &[repeat], "");
+        let first = post_help(
+            &mut cards,
+            &mut pulse,
+            1_000,
+            false,
+            false,
+            &paused,
+            &[repeat],
+            "",
+        );
         assert!(first.ideas >= 1);
         assert!(!first.posted, "a fresh pause is not old enough to offer");
         let later = 1_000 + PAUSE_OFFER_MS;
-        let second = post_help(&mut cards, &mut pulse, later, false, true, &paused, &[repeat], "");
+        let second = post_help(
+            &mut cards,
+            &mut pulse,
+            later,
+            false,
+            true,
+            &paused,
+            &[repeat],
+            "",
+        );
         assert!(second.posted, "an old pause becomes the one suggestion");
         let suggestions: Vec<_> = cards
             .iter()
@@ -4332,59 +4744,160 @@ https://xstack.grok.me/post ZEPHYRTAIL"
             .collect();
         assert_eq!(suggestions.len(), 1);
         assert_eq!(suggestions[0].0, "Paused: Ship the harbor");
-        assert_eq!(suggestions[0].1.as_deref(), Some("Paused 30 minutes ago. Want me to pick it back up?"));
+        assert_eq!(
+            suggestions[0].1.as_deref(),
+            Some("Paused 30 minutes ago. Want me to pick it back up?")
+        );
         assert_eq!(suggestions[0].2, "pause:job-1");
         let source = suggestions[0].2.clone();
         remember_dismissed_source(&mut pulse, &source);
         cards.retain(|c| c.kind != UpdateKind::Suggestion);
-        let after = post_help(&mut cards, &mut pulse, later + PAUSE_OFFER_MS, false, false, &paused, &[], "");
+        let after = post_help(
+            &mut cards,
+            &mut pulse,
+            later + PAUSE_OFFER_MS,
+            false,
+            false,
+            &paused,
+            &[],
+            "",
+        );
         assert!(!after.posted);
         assert!(cards.iter().all(|c| c.kind != UpdateKind::Suggestion));
     }
 
     #[test]
     fn a_paused_job_with_no_title_gets_no_suggestion() {
-        let paused = [PausedJob { id: "job-2", title: "   ", detail: "Paused. This is where to resume." }];
+        let paused = [PausedJob {
+            id: "job-2",
+            title: "   ",
+            detail: "Paused. This is where to resume.",
+        }];
         let mut cards = Vec::new();
         let mut pulse = FeedPulse::default();
-        post_help(&mut cards, &mut pulse, 1_000, false, false, &paused, &[], "");
-        let tick = post_help(&mut cards, &mut pulse, 1_000 + 3 * PAUSE_OFFER_MS, false, false, &paused, &[], "");
+        post_help(
+            &mut cards,
+            &mut pulse,
+            1_000,
+            false,
+            false,
+            &paused,
+            &[],
+            "",
+        );
+        let tick = post_help(
+            &mut cards,
+            &mut pulse,
+            1_000 + 3 * PAUSE_OFFER_MS,
+            false,
+            false,
+            &paused,
+            &[],
+            "",
+        );
         assert!(!tick.posted);
         assert!(cards.is_empty(), "{cards:?}");
     }
 
     #[test]
     fn the_paused_suggestion_points_at_its_job_and_says_how_long() {
-        let paused = [PausedJob { id: " job-9 ", title: "Fix the tray icon", detail: "Paused. This is where to resume." }];
+        let paused = [PausedJob {
+            id: " job-9 ",
+            title: "Fix the tray icon",
+            detail: "Paused. This is where to resume.",
+        }];
         let mut cards = Vec::new();
         let mut pulse = FeedPulse::default();
         post_help(&mut cards, &mut pulse, 0, false, false, &paused, &[], "");
-        assert!(post_help(&mut cards, &mut pulse, 2 * 3_600_000 + 5 * 60_000, false, false, &paused, &[], "").posted);
-        let card = cards.iter().find(|c| c.kind == UpdateKind::Suggestion).expect("suggestion");
+        assert!(
+            post_help(
+                &mut cards,
+                &mut pulse,
+                2 * 3_600_000 + 5 * 60_000,
+                false,
+                false,
+                &paused,
+                &[],
+                ""
+            )
+            .posted
+        );
+        let card = cards
+            .iter()
+            .find(|c| c.kind == UpdateKind::Suggestion)
+            .expect("suggestion");
         assert_eq!(card.title, "Paused: Fix the tray icon");
-        assert_eq!(card.body.as_deref(), Some("Paused 2 hours ago. Want me to pick it back up?"));
-        assert_eq!(paused_job_of(card), Some("job-9"));
-        let idea = cards.iter().find(|c| c.kind == UpdateKind::Idea).expect("idea");
-        assert_eq!(paused_job_of(idea), None, "only the suggestion opens the job");
         assert_eq!(
-            [paused_ago(0), paused_ago(60_000), paused_ago(45 * 60_000), paused_ago(3_600_000), paused_ago(3 * 86_400_000)],
-            ["just now", "1 minute ago", "45 minutes ago", "1 hour ago", "3 days ago"]
+            card.body.as_deref(),
+            Some("Paused 2 hours ago. Want me to pick it back up?")
+        );
+        assert_eq!(paused_job_of(card), Some("job-9"));
+        let idea = cards
+            .iter()
+            .find(|c| c.kind == UpdateKind::Idea)
+            .expect("idea");
+        assert_eq!(
+            paused_job_of(idea),
+            None,
+            "only the suggestion opens the job"
+        );
+        assert_eq!(
+            [
+                paused_ago(0),
+                paused_ago(60_000),
+                paused_ago(45 * 60_000),
+                paused_ago(3_600_000),
+                paused_ago(3 * 86_400_000)
+            ],
+            [
+                "just now",
+                "1 minute ago",
+                "45 minutes ago",
+                "1 hour ago",
+                "3 days ago"
+            ]
         );
     }
 
     /// No situation card may point at "that job" or "it" without naming the thing.
     #[test]
     fn situation_cards_name_what_they_are_about() {
-        let paused = [PausedJob { id: "job-1", title: "Ship the harbor", detail: "Paused. This is where to resume." }];
-        let repeat = RepeatedAction { key: "open-cabin", label: "Open the cabin", count: 3, dismissed: false, automated: false };
-        for (paused, repeats, name) in [(&paused[..], &[][..], "Ship the harbor"), (&[][..], &[repeat][..], "Open the cabin")] {
+        let paused = [PausedJob {
+            id: "job-1",
+            title: "Ship the harbor",
+            detail: "Paused. This is where to resume.",
+        }];
+        let repeat = RepeatedAction {
+            key: "open-cabin",
+            label: "Open the cabin",
+            count: 3,
+            dismissed: false,
+            automated: false,
+        };
+        for (paused, repeats, name) in [
+            (&paused[..], &[][..], "Ship the harbor"),
+            (&[][..], &[repeat][..], "Open the cabin"),
+        ] {
             let mut cards = Vec::new();
             let mut pulse = FeedPulse::default();
             post_help(&mut cards, &mut pulse, 0, false, true, paused, repeats, "");
-            post_help(&mut cards, &mut pulse, PAUSE_OFFER_MS, false, true, paused, repeats, "");
-            let card = cards.iter().find(|c| c.kind == UpdateKind::Suggestion).expect("suggestion");
+            post_help(
+                &mut cards,
+                &mut pulse,
+                PAUSE_OFFER_MS,
+                false,
+                true,
+                paused,
+                repeats,
+                "",
+            );
+            let card = cards
+                .iter()
+                .find(|c| c.kind == UpdateKind::Suggestion)
+                .expect("suggestion");
             assert!(card.title.contains(name), "{card:?}");
-            let text = format!("{} {}", card.title, card.body.as_deref().unwrap_or("")).to_ascii_lowercase();
+            let text = format!("{} {}", card.title, card.body.as_deref().unwrap_or(""))
+                .to_ascii_lowercase();
             for vague in ["that job", "this task", "this job", "that task"] {
                 assert!(!text.contains(vague), "{vague:?} in {text:?}");
             }
@@ -4403,9 +4916,20 @@ https://xstack.grok.me/post ZEPHYRTAIL"
             mind_key: "proactive:connection_disable".into(),
             answered: false,
         };
-        let standup = Candidate::soft(CandidateSource::SystemState, "get standup prep ready", "standup prep", 0.8, 0.9, "Standup is at 9.");
+        let standup = Candidate::soft(
+            CandidateSource::SystemState,
+            "get standup prep ready",
+            "standup prep",
+            0.8,
+            0.9,
+            "Standup is at 9.",
+        );
         let mut rows = vec![
-            ("automation_done_card", automation_done_card("a1", "Nightly backup", "Copied 3 files.", at), "Nightly backup"),
+            (
+                "automation_done_card",
+                automation_done_card("a1", "Nightly backup", "Copied 3 files.", at),
+                "Nightly backup",
+            ),
             (
                 "recovered_card",
                 recovered_card(
@@ -4418,43 +4942,163 @@ https://xstack.grok.me/post ZEPHYRTAIL"
                 ),
                 "Keys file",
             ),
-            ("automation_failed_card", automation_failed_card("a1", "Nightly backup", "The disk is full.", at), "Nightly backup"),
-            ("crash_card", crash_card("job-1", "Index ~/Projects", "t1", "/retry", at), "Index ~/Projects"),
+            (
+                "automation_failed_card",
+                automation_failed_card("a1", "Nightly backup", "The disk is full.", at),
+                "Nightly backup",
+            ),
+            (
+                "crash_card",
+                crash_card("job-1", "Index ~/Projects", "t1", "/retry", at),
+                "Index ~/Projects",
+            ),
             (
                 "screen_recording_card",
-                screen_recording_card("/rec/1", "Screen recording 0:42: video stutters on 4K", "Likely the GPU driver.", "t1", at),
+                screen_recording_card(
+                    "/rec/1",
+                    "Screen recording 0:42: video stutters on 4K",
+                    "Likely the GPU driver.",
+                    "t1",
+                    at,
+                ),
                 "video stutters on 4K",
             ),
             (
                 "audio_check_card",
-                audio_check_card("Yeti", "Audio check: Yeti input clipping at -0.2 dBFS", "Lower the gain.", "t1", at),
+                audio_check_card(
+                    "Yeti",
+                    "Audio check: Yeti input clipping at -0.2 dBFS",
+                    "Lower the gain.",
+                    "t1",
+                    at,
+                ),
                 "Yeti",
             ),
-            ("self_change_card", self_change_card("connection", "notes", "added", "", at), "notes"),
-            ("router_update_card", router_update_card("retired:grok-4.3", "grok-4.3 was retired by xAI", "Using grok-4.7.", at), "grok-4.3"),
-            ("done_for_you_card", done_for_you_card("Turned off the notes connection", "", done, at), "notes connection"),
-            ("schedule_created_card", schedule_created_card("s1", "Morning brief", "every day at 8:00", at), "Morning brief"),
-            ("suggestion_card", suggestion_card("s1", "Paused: Fix the tray icon", "Paused 2 hours ago.", at), "Fix the tray icon"),
-            ("automate_offer_card", automate_offer_card("o1", "Sweep the inbox every hour", at), "Sweep the inbox"),
-            ("idea_card", idea_card("i1", "Flash the pi", "Write the new image to the SD card.", at), "Flash the pi"),
-            ("digest_card", digest_card("edition", "Rust 1.99 ships async closures", "What changed.", at), "Rust 1.99"),
-            ("proactive_card", proactive_card(&standup, ProactiveRoute::Suggest, at), "standup prep"),
-            ("proactive_card", proactive_card(&standup, ProactiveRoute::ICan, at), "standup prep"),
-            ("proactive_card", proactive_card(&standup, ProactiveRoute::Prepare, at), "standup prep"),
+            (
+                "self_change_card",
+                self_change_card("connection", "notes", "added", "", at),
+                "notes",
+            ),
+            (
+                "router_update_card",
+                router_update_card(
+                    "retired:grok-4.3",
+                    "grok-4.3 was retired by xAI",
+                    "Using grok-4.7.",
+                    at,
+                ),
+                "grok-4.3",
+            ),
+            (
+                "done_for_you_card",
+                done_for_you_card("Turned off the notes connection", "", done, at),
+                "notes connection",
+            ),
+            (
+                "schedule_created_card",
+                schedule_created_card("s1", "Morning brief", "every day at 8:00", at),
+                "Morning brief",
+            ),
+            (
+                "suggestion_card",
+                suggestion_card("s1", "Paused: Fix the tray icon", "Paused 2 hours ago.", at),
+                "Fix the tray icon",
+            ),
+            (
+                "automate_offer_card",
+                automate_offer_card("o1", "Sweep the inbox every hour", at),
+                "Sweep the inbox",
+            ),
+            (
+                "idea_card",
+                idea_card(
+                    "i1",
+                    "Flash the pi",
+                    "Write the new image to the SD card.",
+                    at,
+                ),
+                "Flash the pi",
+            ),
+            (
+                "digest_card",
+                digest_card(
+                    "edition",
+                    "Rust 1.99 ships async closures",
+                    "What changed.",
+                    at,
+                ),
+                "Rust 1.99",
+            ),
+            (
+                "proactive_card",
+                proactive_card(&standup, ProactiveRoute::Suggest, at),
+                "standup prep",
+            ),
+            (
+                "proactive_card",
+                proactive_card(&standup, ProactiveRoute::ICan, at),
+                "standup prep",
+            ),
+            (
+                "proactive_card",
+                proactive_card(&standup, ProactiveRoute::Prepare, at),
+                "standup prep",
+            ),
         ];
-        let links = [CitedLink { url: "https://blog.rust-lang.org/1.99".into(), label: "Rust blog".into() }];
-        let material = DigestMaterial { brief: "", user_md: "", memory_md: "", soul_md: "", links: &links, taste: &[], edition: None };
-        let edition = DigestEdition { found: true, refused: false, title: "Rust 1.99 ships async closures", body: "Async closures are stable." };
-        rows.push(("tick_feed_pulse", compose_digest(&[], at, material, edition).expect("digest"), "Rust 1.99"));
+        let links = [CitedLink {
+            url: "https://blog.rust-lang.org/1.99".into(),
+            label: "Rust blog".into(),
+        }];
+        let material = DigestMaterial {
+            brief: "",
+            user_md: "",
+            memory_md: "",
+            soul_md: "",
+            links: &links,
+            taste: &[],
+            edition: None,
+        };
+        let edition = DigestEdition {
+            found: true,
+            refused: false,
+            title: "Rust 1.99 ships async closures",
+            body: "Async closures are stable.",
+        };
+        rows.push((
+            "tick_feed_pulse",
+            compose_digest(&[], at, material, edition).expect("digest"),
+            "Rust 1.99",
+        ));
         // The sites that post through `post_update` themselves.
         let mut cards = Vec::new();
         let mut pulse = FeedPulse::default();
-        let paused = [PausedJob { id: "job-1", title: "Ship the harbor", detail: "Paused. This is where to resume." }];
+        let paused = [PausedJob {
+            id: "job-1",
+            title: "Ship the harbor",
+            detail: "Paused. This is where to resume.",
+        }];
         post_help(&mut cards, &mut pulse, 0, false, true, &paused, &[], "");
-        post_help(&mut cards, &mut pulse, PAUSE_OFFER_MS, false, true, &paused, &[], "");
-        let situation = cards.iter().find(|c| c.kind == UpdateKind::Suggestion).cloned().expect("situation");
+        post_help(
+            &mut cards,
+            &mut pulse,
+            PAUSE_OFFER_MS,
+            false,
+            true,
+            &paused,
+            &[],
+            "",
+        );
+        let situation = cards
+            .iter()
+            .find(|c| c.kind == UpdateKind::Suggestion)
+            .cloned()
+            .expect("situation");
         rows.push(("post_situation", situation, "Ship the harbor"));
-        let paused_idea = cards.iter().find(|c| c.kind == UpdateKind::Idea).cloned().expect("paused idea");
+        let paused_idea = cards
+            .iter()
+            .find(|c| c.kind == UpdateKind::Idea)
+            .cloned()
+            .expect("paused idea");
         rows.push(("post_useful_idea", paused_idea, "Ship the harbor"));
         let seed = crate::ideas::IdeaSeed {
             kind: crate::ideas::IdeaKind::Automation,
@@ -4465,15 +5109,25 @@ https://xstack.grok.me/post ZEPHYRTAIL"
             reason: String::new(),
         };
         let mut cards = Vec::new();
-        assert_eq!(post_generated_ideas(&mut cards, &mut FeedPulse::default(), at, &[seed], &[], ""), 1);
+        assert_eq!(
+            post_generated_ideas(&mut cards, &mut FeedPulse::default(), at, &[seed], &[], ""),
+            1
+        );
         rows.push(("post_useful_idea", cards.remove(0), "Back up ~/Notes"));
-        let mut cards = vec![crash_card("a", "Index ~/Projects", "t1", "/retry", at), crash_card("b", "Sync ~/Photos", "t2", "/retry", at)];
+        let mut cards = vec![
+            crash_card("a", "Index ~/Projects", "t1", "/retry", at),
+            crash_card("b", "Sync ~/Photos", "t2", "/retry", at),
+        ];
         for card in &mut cards {
             card.held = true;
         }
         let (_, id) = crate::pulse::release_quiet_batch(&mut cards, at + 1);
         let id = id.expect("quiet digest");
-        let quiet = cards.iter().find(|c| c.id == id).cloned().expect("quiet digest card");
+        let quiet = cards
+            .iter()
+            .find(|c| c.id == id)
+            .cloned()
+            .expect("quiet digest card");
         rows.push(("release_quiet_batch", quiet, "Sync ~/Photos"));
         let item = crate::pulse_sources::SourceItem {
             title: "Rust 1.99.0".into(),
@@ -4486,8 +5140,16 @@ https://xstack.grok.me/post ZEPHYRTAIL"
             topic: None,
             engagement: 0,
         };
-        let ranked = crate::pulse_sources::Ranked { item, score: 40, because: Some("Rust".into()) };
-        rows.push(("item_card", crate::pulse_sources::item_card(&ranked, at), "Rust 1.99.0"));
+        let ranked = crate::pulse_sources::Ranked {
+            item,
+            score: 40,
+            because: Some("Rust".into()),
+        };
+        rows.push((
+            "item_card",
+            crate::pulse_sources::item_card(&ranked, at),
+            "Rust 1.99.0",
+        ));
         rows
     }
 
@@ -4507,15 +5169,24 @@ https://xstack.grok.me/post ZEPHYRTAIL"
                 if !name.ends_with(".rs") || name.ends_with("tests.rs") {
                     continue;
                 }
-                let text = std::fs::read_to_string(&path).unwrap().replace("\r\n", "\n");
+                let text = std::fs::read_to_string(&path)
+                    .unwrap()
+                    .replace("\r\n", "\n");
                 let live = text.split("\n#[cfg(test)]\nmod ").next().unwrap();
                 let mut current = String::new();
                 for line in live.lines() {
-                    let decl = line.trim_start().trim_start_matches("pub(crate) ").trim_start_matches("pub ");
+                    let decl = line
+                        .trim_start()
+                        .trim_start_matches("pub(crate) ")
+                        .trim_start_matches("pub ");
                     if let Some(rest) = decl.strip_prefix("fn ") {
-                        current = rest.chars().take_while(|c| c.is_alphanumeric() || *c == '_').collect();
+                        current = rest
+                            .chars()
+                            .take_while(|c| c.is_alphanumeric() || *c == '_')
+                            .collect();
                     }
-                    let posts = line.contains("post_update(") && !decl.starts_with("fn post_update(");
+                    let posts =
+                        line.contains("post_update(") && !decl.starts_with("fn post_update(");
                     if posts || line.contains("-> UpdateCard") {
                         sites.insert(current.clone());
                     }
@@ -4536,25 +5207,49 @@ https://xstack.grok.me/post ZEPHYRTAIL"
             let text = format!("{} {}", card.title, card.body.as_deref().unwrap_or(""));
             assert!(text.contains(name), "{site}: {name:?} not in {text:?}");
             assert!(names_its_item(card), "{site}: {card:?}");
-            let lower = format!("{text} {}", card.why.as_deref().unwrap_or("")).to_ascii_lowercase();
+            let lower =
+                format!("{text} {}", card.why.as_deref().unwrap_or("")).to_ascii_lowercase();
             for vague in VAGUE_SUBJECTS {
                 assert!(!lower.contains(vague), "{site}: {vague:?} in {text:?}");
             }
             let mut feed = Vec::new();
-            assert!(post_update(&mut feed, card.clone()), "{site}: the feed refused a named card");
+            assert!(
+                post_update(&mut feed, card.clone()),
+                "{site}: the feed refused a named card"
+            );
             // The Ideas row's bold line names it too ("I can paused: …" did not).
             // The quiet-hours batch names its items in the body, under its header.
-            if matches!(card.kind, UpdateKind::Idea | UpdateKind::Suggestion) && card.title.contains(name) {
+            if matches!(card.kind, UpdateKind::Idea | UpdateKind::Suggestion)
+                && card.title.contains(name)
+            {
                 let line = crate::pulse::i_can_title(card);
-                assert!(line.to_ascii_lowercase().contains(&name.to_ascii_lowercase()), "{site}: {name:?} not in Ideas line {line:?}");
-                assert!(!line.to_ascii_lowercase().starts_with("i can paused"), "{site}: {line:?}");
+                assert!(
+                    line.to_ascii_lowercase()
+                        .contains(&name.to_ascii_lowercase()),
+                    "{site}: {name:?} not in Ideas line {line:?}"
+                );
+                assert!(
+                    !line.to_ascii_lowercase().starts_with("i can paused"),
+                    "{site}: {line:?}"
+                );
             }
         }
-        let situation = &rows.iter().find(|(site, ..)| *site == "post_situation").expect("situation row").1;
-        assert_eq!(crate::pulse::i_can_title(situation), "Paused: Ship the harbor");
-        let covered: std::collections::BTreeSet<String> = rows.iter().map(|(site, ..)| site.to_string()).collect();
+        let situation = &rows
+            .iter()
+            .find(|(site, ..)| *site == "post_situation")
+            .expect("situation row")
+            .1;
+        assert_eq!(
+            crate::pulse::i_can_title(situation),
+            "Paused: Ship the harbor"
+        );
+        let covered: std::collections::BTreeSet<String> =
+            rows.iter().map(|(site, ..)| site.to_string()).collect();
         let missing: Vec<String> = feed_post_sites().difference(&covered).cloned().collect();
-        assert!(missing.is_empty(), "feed post sites with no row in feed_card_rows: {missing:?}");
+        assert!(
+            missing.is_empty(),
+            "feed post sites with no row in feed_card_rows: {missing:?}"
+        );
     }
 
     /// A crash, recording or audio check is not an automation, so its why
@@ -4563,13 +5258,27 @@ https://xstack.grok.me/post ZEPHYRTAIL"
     fn only_automation_cards_say_your_automation_finished() {
         let at = 1_000;
         assert_eq!(
-            automation_done_card("a1", "Nightly backup", "Copied 3 files.", at).why.as_deref(),
+            automation_done_card("a1", "Nightly backup", "Copied 3 files.", at)
+                .why
+                .as_deref(),
             Some("Your automation “Nightly backup” finished.")
         );
         for card in [
             crash_card("job-1", "Index ~/Projects", "t1", "/retry", at),
-            screen_recording_card("/rec/1", "Screen recording 0:42: video stutters on 4K", "Likely the GPU driver.", "t1", at),
-            audio_check_card("Yeti", "Audio check: Yeti input clipping at -0.2 dBFS", "Lower the gain.", "t1", at),
+            screen_recording_card(
+                "/rec/1",
+                "Screen recording 0:42: video stutters on 4K",
+                "Likely the GPU driver.",
+                "t1",
+                at,
+            ),
+            audio_check_card(
+                "Yeti",
+                "Audio check: Yeti input clipping at -0.2 dBFS",
+                "Lower the gain.",
+                "t1",
+                at,
+            ),
         ] {
             assert_eq!(card.why, None, "{}", card.title);
         }
@@ -4587,12 +5296,20 @@ https://xstack.grok.me/post ZEPHYRTAIL"
             idea_card("i1", "", "Write the new image.", at),
             digest_card("d1", "", "What changed.", at),
             suggestion_card("s1", "Pick that job back up?", "Paused 2 hours ago.", at),
-            suggestion_card("s1", "Fix the tray icon", "Want me to resume this task?", at),
+            suggestion_card(
+                "s1",
+                "Fix the tray icon",
+                "Want me to resume this task?",
+                at,
+            ),
             router_update_card("r1", "It stopped answering", "", at),
         ] {
             let mut feed = vec![idea_card("i0", "Flash the pi", "Write the new image.", 10)];
             assert!(!post_update(&mut feed, card.clone()), "{card:?}");
-            assert_eq!(feed.iter().map(|c| c.title.as_str()).collect::<Vec<_>>(), ["Flash the pi"]);
+            assert_eq!(
+                feed.iter().map(|c| c.title.as_str()).collect::<Vec<_>>(),
+                ["Flash the pi"]
+            );
         }
     }
 
@@ -4605,18 +5322,57 @@ https://xstack.grok.me/post ZEPHYRTAIL"
         }];
         let mut cards = Vec::new();
         let mut pulse = FeedPulse::default();
-        post_help(&mut cards, &mut pulse, 1_000, false, false, &paused, &[], "");
+        post_help(
+            &mut cards,
+            &mut pulse,
+            1_000,
+            false,
+            false,
+            &paused,
+            &[],
+            "",
+        );
         let later = 1_000 + PAUSE_OFFER_MS;
-        assert!(post_help(&mut cards, &mut pulse, later, false, false, &paused, &[], "").posted);
+        assert!(
+            post_help(
+                &mut cards,
+                &mut pulse,
+                later,
+                false,
+                false,
+                &paused,
+                &[],
+                ""
+            )
+            .posted
+        );
         // Clicking the card opens its chat and marks it read.
-        for c in cards.iter_mut().filter(|c| c.kind == UpdateKind::Suggestion) {
+        for c in cards
+            .iter_mut()
+            .filter(|c| c.kind == UpdateKind::Suggestion)
+        {
             c.status = UpdateStatus::Opened;
         }
         for step in 1..=3 {
-            let tick = post_help(&mut cards, &mut pulse, later + step * 60_000, false, false, &paused, &[], "");
+            let tick = post_help(
+                &mut cards,
+                &mut pulse,
+                later + step * 60_000,
+                false,
+                false,
+                &paused,
+                &[],
+                "",
+            );
             assert!(!tick.posted, "the same offer came back on tick {step}");
         }
-        assert_eq!(cards.iter().filter(|c| c.kind == UpdateKind::Suggestion).count(), 1);
+        assert_eq!(
+            cards
+                .iter()
+                .filter(|c| c.kind == UpdateKind::Suggestion)
+                .count(),
+            1
+        );
     }
 
     #[test]
@@ -4635,23 +5391,49 @@ https://xstack.grok.me/post ZEPHYRTAIL"
         };
         let mut cards = Vec::new();
         let mut pulse = FeedPulse::default();
-        assert!(post_skill_idea(&mut cards, &mut pulse, 10, &skill("Session scanner"), &[]));
-        let card = cards.iter().find(|c| c.kind == UpdateKind::Idea).cloned().unwrap();
+        assert!(post_skill_idea(
+            &mut cards,
+            &mut pulse,
+            10,
+            &skill("Session scanner"),
+            &[]
+        ));
+        let card = cards
+            .iter()
+            .find(|c| c.kind == UpdateKind::Idea)
+            .cloned()
+            .unwrap();
         // Delete on the Ideas board.
         assert!(dismiss_idea(&mut cards, &card.id));
         remember_dismissed_source(&mut pulse, &card.source_id);
         remember_turned_down(&mut pulse, &card.title);
-        assert!(!post_skill_idea(&mut cards, &mut pulse, 20, &skill("Session scanner"), &[]));
+        assert!(!post_skill_idea(
+            &mut cards,
+            &mut pulse,
+            20,
+            &skill("Session scanner"),
+            &[]
+        ));
         assert!(
             !post_skill_idea(&mut cards, &mut pulse, 30, &skill("Scan my sessions"), &[]),
             "a reworded title on the same topic"
         );
         let mut other = skill("Release checklist");
         other.name = Some("release-checklist".into());
-        assert!(post_skill_idea(&mut cards, &mut pulse, 40, &other, &[]), "other topics still post");
+        assert!(
+            post_skill_idea(&mut cards, &mut pulse, 40, &other, &[]),
+            "other topics still post"
+        );
         use crate::ideas::IdeaKind::*;
         assert_eq!(
-            post_generated_ideas(&mut cards, &mut pulse, 50, &[seed(Try, "Session scanner")], &[], ""),
+            post_generated_ideas(
+                &mut cards,
+                &mut pulse,
+                50,
+                &[seed(Try, "Session scanner")],
+                &[],
+                ""
+            ),
             0
         );
         assert_eq!(
@@ -4680,7 +5462,14 @@ https://xstack.grok.me/post ZEPHYRTAIL"
         remember_turned_down(&mut pulse, "no 10");
         assert_eq!(pulse.turned_down.len(), TURNED_DOWN_MEMORY);
         assert_eq!(pulse.turned_down.last().map(String::as_str), Some("no 10"));
-        assert_eq!(pulse.turned_down.iter().filter(|t| t.eq_ignore_ascii_case("no 10")).count(), 1);
+        assert_eq!(
+            pulse
+                .turned_down
+                .iter()
+                .filter(|t| t.eq_ignore_ascii_case("no 10"))
+                .count(),
+            1
+        );
     }
 
     #[test]
@@ -4696,7 +5485,10 @@ https://xstack.grok.me/post ZEPHYRTAIL"
         let tick = tick_feed_pulse(
             &mut cards,
             &mut pulse,
-            PulseNow { now_ms: 10, quiet: false },
+            PulseNow {
+                now_ms: 10,
+                quiet: false,
+            },
             with_edition(material("the harbor", &[], &[]), edition),
         );
         assert!(tick.digest_posted);
@@ -4706,7 +5498,10 @@ https://xstack.grok.me/post ZEPHYRTAIL"
             body,
             "I looked and did not find a source worth your time. The brief steers the next edition."
         );
-        assert_eq!(cards[0].why, None, "the steer line is in the body; once is enough");
+        assert_eq!(
+            cards[0].why, None,
+            "the steer line is in the body; once is enough"
+        );
         assert!(cards[0].citations.is_empty());
     }
 
@@ -4716,21 +5511,34 @@ https://xstack.grok.me/post ZEPHYRTAIL"
         // covers that path (five posts, never opened, runs = 5) and is unchanged.
         let mut cards = Vec::new();
         for at in [10u64, 20, 30] {
-            post_update(&mut cards, automation_done_card("loop-1", "Board", "ok", at));
+            post_update(
+                &mut cards,
+                automation_done_card("loop-1", "Board", "ok", at),
+            );
         }
         assert_eq!(visible_updates(&cards)[0].runs, 3);
         assert!(mark_update_opened(&mut cards, "done-loop-1"));
-        post_update(&mut cards, automation_done_card("loop-1", "Board", "again", 40));
+        post_update(
+            &mut cards,
+            automation_done_card("loop-1", "Board", "again", 40),
+        );
         let card = &visible_updates(&cards)[0];
         assert_eq!(card.runs, 1, "an opened card starts again at the new run");
         assert_eq!(card.status, UpdateStatus::Unread);
         assert_eq!(card.body.as_deref(), Some("again"));
         let why = card.why.as_deref().unwrap();
         assert!(!why.contains("runs since you last looked"));
-        post_update(&mut cards, automation_done_card("loop-1", "Board", "third", 50));
+        post_update(
+            &mut cards,
+            automation_done_card("loop-1", "Board", "third", 50),
+        );
         let card = &visible_updates(&cards)[0];
         assert_eq!(card.runs, 2);
-        assert!(card.why.as_deref().unwrap().contains("· 2 runs since you last looked"));
+        assert!(card
+            .why
+            .as_deref()
+            .unwrap()
+            .contains("· 2 runs since you last looked"));
         assert_eq!(
             runs_latest_line(3, 0, 90 * 60_000, 15, 0).as_deref(),
             Some("×3 runs · latest 13:30")
@@ -4742,12 +5550,18 @@ https://xstack.grok.me/post ZEPHYRTAIL"
     fn hidden_automation_stays_off_home_but_still_updates() {
         let mut cards = Vec::new();
         let mut pulse = FeedPulse::default();
-        post_update(&mut cards, automation_done_card("hid", "Nightly", "one", 10));
+        post_update(
+            &mut cards,
+            automation_done_card("hid", "Nightly", "one", 10),
+        );
         hide_home_source(&mut pulse, "hid");
         hide_home_source(&mut pulse, "hid");
         assert_eq!(pulse.muted_sources, vec!["hid".to_string()]);
         assert!(home_event_cards(&cards, &pulse, 10).is_empty());
-        post_update(&mut cards, automation_done_card("hid", "Nightly", "two", 20));
+        post_update(
+            &mut cards,
+            automation_done_card("hid", "Nightly", "two", 20),
+        );
         let live: Vec<&UpdateCard> = cards
             .iter()
             .filter(|c| c.source_id == "hid" && c.status != UpdateStatus::Dismissed)
@@ -4756,7 +5570,10 @@ https://xstack.grok.me/post ZEPHYRTAIL"
         assert_eq!(live[0].runs, 2);
         assert_eq!(live[0].body.as_deref(), Some("two"));
         assert!(home_event_cards(&cards, &pulse, 20).is_empty());
-        post_update(&mut cards, automation_done_card("other", "Other", "stay", 30));
+        post_update(
+            &mut cards,
+            automation_done_card("other", "Other", "stay", 30),
+        );
         let home = home_event_cards(&cards, &pulse, 30);
         assert_eq!(home.len(), 1);
         assert_eq!(home[0].source_id, "other");
@@ -4777,7 +5594,10 @@ https://xstack.grok.me/post ZEPHYRTAIL"
         let shown = home_event_cards(&cards, &pulse, 1_000);
         assert_eq!(shown.len(), 1, "the first failure still surfaces");
         assert!(record_home_floors(&mut pulse, &shown, 1_000));
-        assert!(!record_home_floors(&mut pulse, &shown, 1_000), "the same failure stays put");
+        assert!(
+            !record_home_floors(&mut pulse, &shown, 1_000),
+            "the same failure stays put"
+        );
         assert_eq!(pulse.floor_shown.get("hid"), Some(&1_000));
         assert_eq!(home_event_cards(&cards, &pulse, 1_500).len(), 1);
         post_update(
@@ -4785,7 +5605,10 @@ https://xstack.grok.me/post ZEPHYRTAIL"
             automation_failed_card("hid", "Nightly", "disk again", 2_000),
         );
         assert_eq!(
-            cards.iter().filter(|c| c.status != UpdateStatus::Dismissed).count(),
+            cards
+                .iter()
+                .filter(|c| c.status != UpdateStatus::Dismissed)
+                .count(),
             1
         );
         assert_eq!(cards.iter().find(|c| c.source_id == "hid").unwrap().runs, 2);
@@ -4823,7 +5646,11 @@ https://xstack.grok.me/post ZEPHYRTAIL"
 
         let fail = automation_failed_card("loop-9", "Board", "disk", now + 10);
         assert!(surfaces_on_home(&fail, &pulse, now + 10));
-        assert!(record_home_floors(&mut pulse, std::slice::from_ref(&fail), now + 10));
+        assert!(record_home_floors(
+            &mut pulse,
+            std::slice::from_ref(&fail),
+            now + 10
+        ));
         let again = automation_failed_card("loop-9", "Board", "disk again", now + 20);
         assert!(!surfaces_on_home(&again, &pulse, now + 20));
 
@@ -4840,7 +5667,10 @@ https://xstack.grok.me/post ZEPHYRTAIL"
             Some("Your automation “Board” finished.")
         );
         let fail = automation_failed_card("a", "Board", "disk full", 2);
-        assert_eq!(fail.why.as_deref(), Some("“Board” failed and needs a look."));
+        assert_eq!(
+            fail.why.as_deref(),
+            Some("“Board” failed and needs a look.")
+        );
         assert!(!fail.why.as_deref().unwrap().contains("runs since"));
         let sched = schedule_created_card("a", "Board", "weekdays at 9", 3);
         assert_eq!(sched.why.as_deref(), Some("You saved this schedule."));
@@ -4879,7 +5709,9 @@ https://xstack.grok.me/post ZEPHYRTAIL"
         assert_eq!(home.len(), 3);
         assert!(home.iter().all(|c| c.kind.event()));
         assert_eq!(
-            home.iter().map(|c| c.source_id.as_str()).collect::<Vec<_>>(),
+            home.iter()
+                .map(|c| c.source_id.as_str())
+                .collect::<Vec<_>>(),
             vec!["e4", "e3", "e2"]
         );
         assert_eq!(visible_updates(&cards).len(), 5);
@@ -4905,7 +5737,10 @@ https://xstack.grok.me/post ZEPHYRTAIL"
         }
         let cards = vec![loved, neutral, hated];
         let rank = rank_home_events(&cards, &FeedPulse::default(), &prefs, 1_000);
-        assert_eq!(rank.deck.first().map(|card| card.source_id.as_str()), Some("loved"));
+        assert_eq!(
+            rank.deck.first().map(|card| card.source_id.as_str()),
+            Some("loved")
+        );
         assert!(rank.deck.iter().any(|card| card.source_id == "neutral"));
         assert!(rank.deck.iter().all(|card| card.source_id != "hated"));
         assert!(rank.folded.iter().any(|card| card.source_id == "hated"));
@@ -4939,7 +5774,10 @@ https://xstack.grok.me/post ZEPHYRTAIL"
         assert!(rank.deck.iter().any(|card| card.id == worked.id));
         assert!(rank.deck.iter().all(|card| card.id != plain.id));
         assert!(rank.folded.iter().any(|card| card.id == plain.id));
-        assert!(rank.folded.iter().all(|card| card.id != fail.id && card.id != pinned.id && card.id != worked.id));
+        assert!(rank
+            .folded
+            .iter()
+            .all(|card| card.id != fail.id && card.id != pinned.id && card.id != worked.id));
         assert!(rank.deck.len() <= FEED_PAINT_MAX);
     }
 
@@ -4950,7 +5788,12 @@ https://xstack.grok.me/post ZEPHYRTAIL"
         let mut prefs = CardPrefs::default();
         let mut cards = Vec::new();
         for i in 0..4 {
-            let card = automation_done_card(&format!("s{i}"), "Alpha snapshot report", "ok", 1_000 + i * 100);
+            let card = automation_done_card(
+                &format!("s{i}"),
+                "Alpha snapshot report",
+                "ok",
+                1_000 + i * 100,
+            );
             apply_card_event(&mut prefs, &card, CardEvent::More, None, 1_000);
             cards.push(card);
         }
@@ -4968,13 +5811,21 @@ https://xstack.grok.me/post ZEPHYRTAIL"
         assert_eq!(rank.deck.len(), FEED_PAINT_MAX);
         assert!(rank.deck.iter().any(|card| card.id.starts_with("fail-")));
         assert!(rank.deck.iter().all(|card| card.source_id != "mute"));
-        assert!(rank.deck.iter().all(|card| card.source_id != "hid" || card.id.starts_with("fail-")));
-        assert!(rank.folded.iter().all(|card| card.source_id != "hid" && card.source_id != "mute"));
+        assert!(rank
+            .deck
+            .iter()
+            .all(|card| card.source_id != "hid" || card.id.starts_with("fail-")));
+        assert!(rank
+            .folded
+            .iter()
+            .all(|card| card.source_id != "hid" && card.source_id != "mute"));
         let parked = cards.iter().filter(|card| {
             card.source_id.starts_with('s') && rank.deck.iter().all(|shown| shown.id != card.id)
         });
         assert!(parked.clone().count() >= 1);
-        assert!(parked.into_iter().all(|card| rank.folded.iter().all(|folded| folded.id != card.id)));
+        assert!(parked
+            .into_iter()
+            .all(|card| rank.folded.iter().all(|folded| folded.id != card.id)));
     }
 
     #[test]
@@ -5000,39 +5851,61 @@ https://xstack.grok.me/post ZEPHYRTAIL"
     #[test]
     fn explain_hint_picks_the_top_term() {
         use crate::card_prefs::{
-            explain_hint, hint_open_topic, CardPrefs, FOLD_NOTE, HINT_NEEDS, HINT_NEW, HINT_OPEN_GROUP,
+            explain_hint, hint_open_topic, CardPrefs, FOLD_NOTE, HINT_NEEDS, HINT_NEW,
+            HINT_OPEN_GROUP,
         };
         use crate::card_signals::signal_group;
-        assert_eq!(FOLD_NOTE, "Showing fewer of these; you've been dismissing them");
+        assert_eq!(
+            FOLD_NOTE,
+            "Showing fewer of these; you've been dismissing them"
+        );
         let now = 1_000u64;
         let card = automation_done_card("src", "Snapshot ledger report", "body text", now);
         let group = signal_group(&card);
         let mut prefs = CardPrefs::default();
-        prefs.groups.insert(group.clone(), prefs_weight(8.0, 0.0, 5, now));
-        prefs.topics.insert("snapshot".into(), prefs_weight(1.0, 0.0, 2, now));
+        prefs
+            .groups
+            .insert(group.clone(), prefs_weight(8.0, 0.0, 5, now));
+        prefs
+            .topics
+            .insert("snapshot".into(), prefs_weight(1.0, 0.0, 2, now));
         assert_eq!(
             explain_hint(&card, &prefs, now, true).as_deref(),
             Some(HINT_OPEN_GROUP)
         );
 
-        prefs.groups.insert(group.clone(), prefs_weight(0.0, 0.0, 5, now));
-        prefs.topics.insert("ledger".into(), prefs_weight(8.0, 0.0, 5, now));
+        prefs
+            .groups
+            .insert(group.clone(), prefs_weight(0.0, 0.0, 5, now));
+        prefs
+            .topics
+            .insert("ledger".into(), prefs_weight(8.0, 0.0, 5, now));
         assert_eq!(
             explain_hint(&card, &prefs, now, true).as_deref(),
             Some(hint_open_topic("ledger").as_str())
         );
 
         let fail = automation_failed_card("src", "Nightly", "disk full", now);
-        prefs.groups.insert(signal_group(&fail), prefs_weight(8.0, 0.0, 5, now));
-        assert_eq!(explain_hint(&fail, &prefs, now, true).as_deref(), Some(HINT_NEEDS));
+        prefs
+            .groups
+            .insert(signal_group(&fail), prefs_weight(8.0, 0.0, 5, now));
+        assert_eq!(
+            explain_hint(&fail, &prefs, now, true).as_deref(),
+            Some(HINT_NEEDS)
+        );
 
         let fresh = automation_done_card("new", "Widget digest report", "x", now);
         let empty = CardPrefs::default();
-        assert_eq!(explain_hint(&fresh, &empty, now, true).as_deref(), Some(HINT_NEW));
+        assert_eq!(
+            explain_hint(&fresh, &empty, now, true).as_deref(),
+            Some(HINT_NEW)
+        );
         assert!(explain_hint(&fresh, &empty, now, false).is_none());
 
         let mut disliked = CardPrefs::default();
-        disliked.groups.insert(signal_group(&fresh), prefs_weight(0.0, 8.0, 5, now));
+        disliked
+            .groups
+            .insert(signal_group(&fresh), prefs_weight(0.0, 8.0, 5, now));
         assert!(
             explain_hint(&fresh, &disliked, now, true).is_none(),
             "a stronger negative group blocks New for you"

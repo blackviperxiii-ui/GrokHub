@@ -311,10 +311,23 @@ mod tests {
         assert!(r.should_stop(121_000));
         assert!(!r.frame_due(121_000), "no stills past the max length");
         assert_eq!(r.stop(125_000), Some((120, 2)));
-        assert_eq!(r.state, RecState::Stopped { secs: 120, frames: 2 });
+        assert_eq!(
+            r.state,
+            RecState::Stopped {
+                secs: 120,
+                frames: 2
+            }
+        );
         assert_eq!(r.stop(126_000), None);
         r.note_frame(127_000);
-        assert_eq!(r.state, RecState::Stopped { secs: 120, frames: 2 }, "a stopped recorder takes no stills");
+        assert_eq!(
+            r.state,
+            RecState::Stopped {
+                secs: 120,
+                frames: 2
+            },
+            "a stopped recorder takes no stills"
+        );
     }
 
     #[test]
@@ -336,20 +349,35 @@ mod tests {
         );
         assert_eq!(recording_title(5, ""), "Screen recording 0:05 (no note)");
         let long = recording_title(5, &"x".repeat(90));
-        assert_eq!(long, format!("Screen recording 0:05: {}…", "x".repeat(NOTE_CHARS - 1)));
+        assert_eq!(
+            long,
+            format!("Screen recording 0:05: {}…", "x".repeat(NOTE_CHARS - 1))
+        );
     }
 
     #[test]
     fn recordings_live_in_a_visible_folder_and_only_those_folders_can_be_deleted() {
         let home = Path::new("/home/ada");
         let dir = recording_dir(home, "2026-10-09-104200");
-        assert_eq!(dir, PathBuf::from("/home/ada/GrokHub/recordings/2026-10-09-104200"));
+        assert_eq!(
+            dir,
+            PathBuf::from("/home/ada/GrokHub/recordings/2026-10-09-104200")
+        );
         assert_eq!(frame_name(0, "png"), "frame-001.png");
         assert!(is_recording_dir(home, &dir));
-        assert!(!is_recording_dir(home, Path::new("/home/ada/GrokHub/recordings")));
+        assert!(!is_recording_dir(
+            home,
+            Path::new("/home/ada/GrokHub/recordings")
+        ));
         assert!(!is_recording_dir(home, Path::new("/home/ada/GrokHub")));
-        assert!(!is_recording_dir(home, Path::new("/home/ada/GrokHub/recordings/a/b")));
-        assert!(!is_recording_dir(home, Path::new("/home/ada/GrokHub/recordings/..")));
+        assert!(!is_recording_dir(
+            home,
+            Path::new("/home/ada/GrokHub/recordings/a/b")
+        ));
+        assert!(!is_recording_dir(
+            home,
+            Path::new("/home/ada/GrokHub/recordings/..")
+        ));
     }
 
     #[test]
@@ -359,7 +387,8 @@ mod tests {
         assert_eq!(
             report,
             ScreenReport {
-                seen: "Firefox plays a 4K YouTube video. The picture freezes every few seconds.".into(),
+                seen: "Firefox plays a 4K YouTube video. The picture freezes every few seconds."
+                    .into(),
                 cause: "Hardware video decoding is off.".into(),
                 steps: vec![
                     "Open about:support and check Hardware Video Decoding.".into(),
@@ -382,8 +411,19 @@ mod tests {
     fn the_diagnosis_asks_for_three_parts_and_carries_the_note() {
         let m = diagnosis_messages("video stutters", 42, 6);
         assert_eq!(m[0].0, "system");
-        assert!(m[0].1.contains("Seen:") && m[0].1.contains("Likely cause:") && m[0].1.contains("Fix steps:"));
-        assert_eq!(m[1], ("user".into(), "Recording: 0:42, 6 stills in order.\nWhat the user says is wrong: video stutters".into()));
+        assert!(
+            m[0].1.contains("Seen:")
+                && m[0].1.contains("Likely cause:")
+                && m[0].1.contains("Fix steps:")
+        );
+        assert_eq!(
+            m[1],
+            (
+                "user".into(),
+                "Recording: 0:42, 6 stills in order.\nWhat the user says is wrong: video stutters"
+                    .into()
+            )
+        );
         assert_eq!(
             local_only_text("Screen recording 0:05 (no note)", Path::new("/r"), "Connect Grok in Settings"),
             "Screen recording 0:05 (no note)\n\nSaved on this computer only, not diagnosed: Connect Grok in Settings. The recording is in /r."

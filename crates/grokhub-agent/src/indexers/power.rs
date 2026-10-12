@@ -39,7 +39,9 @@ pub fn on_battery() -> bool {
 }
 
 fn read_trim(path: &Path) -> String {
-    std::fs::read_to_string(path).map(|s| s.trim().to_string()).unwrap_or_default()
+    std::fs::read_to_string(path)
+        .map(|s| s.trim().to_string())
+        .unwrap_or_default()
 }
 
 /// Linux rule over a `power_supply` folder: any mains or USB supply online
@@ -70,7 +72,9 @@ pub fn lower_thread_priority() {
     #[cfg(windows)]
     // SAFETY: GetCurrentThread is a pseudo handle valid for this call.
     unsafe {
-        use windows_sys::Win32::System::Threading::{GetCurrentThread, SetThreadPriority, THREAD_PRIORITY_LOWEST};
+        use windows_sys::Win32::System::Threading::{
+            GetCurrentThread, SetThreadPriority, THREAD_PRIORITY_LOWEST,
+        };
         SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_LOWEST);
     }
 }
@@ -89,7 +93,10 @@ mod tests {
     #[test]
     fn linux_power_supply_rules() {
         let root = crate::harness::test_dir("power");
-        assert!(!on_battery_linux(&root.join("missing")), "unknown means not on battery");
+        assert!(
+            !on_battery_linux(&root.join("missing")),
+            "unknown means not on battery"
+        );
         assert!(!on_battery_linux(&root), "no supplies: a desktop");
         supply(&root, "BAT0", "Battery", "status", "Discharging");
         assert!(on_battery_linux(&root));

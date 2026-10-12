@@ -53,7 +53,11 @@ fn stamp(meta: &std::fs::Metadata) -> Stamp {
     if meta.is_dir() {
         return None;
     }
-    let modified = meta.modified().ok().and_then(|t| t.duration_since(UNIX_EPOCH).ok()).map_or(0, |d| d.as_nanos());
+    let modified = meta
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+        .map_or(0, |d| d.as_nanos());
     Some((meta.len(), modified))
 }
 
@@ -95,14 +99,23 @@ fn diff(before: &Snapshot, after: &Snapshot) -> Vec<FileEvent> {
     let mut out = Vec::new();
     for (path, now) in &after.entries {
         match before.entries.get(path) {
-            None => out.push(FileEvent { kind: FileEventKind::Created, path: path.clone() }),
-            Some(was) if was != now => out.push(FileEvent { kind: FileEventKind::Modified, path: path.clone() }),
+            None => out.push(FileEvent {
+                kind: FileEventKind::Created,
+                path: path.clone(),
+            }),
+            Some(was) if was != now => out.push(FileEvent {
+                kind: FileEventKind::Modified,
+                path: path.clone(),
+            }),
             Some(_) => {}
         }
     }
     for path in before.entries.keys() {
         if !after.entries.contains_key(path) {
-            out.push(FileEvent { kind: FileEventKind::Deleted, path: path.clone() });
+            out.push(FileEvent {
+                kind: FileEventKind::Deleted,
+                path: path.clone(),
+            });
         }
     }
     out
@@ -138,15 +151,27 @@ impl FileWatches {
             return Err(format!("{} is not there.", path.display()));
         }
         if let Some((id, (_, snap))) = self.watches.iter().find(|(_, (p, _))| *p == path) {
-            return Ok(Watching { id: id.clone(), path, entries: snap.entries.len(), truncated: snap.truncated });
+            return Ok(Watching {
+                id: id.clone(),
+                path,
+                entries: snap.entries.len(),
+                truncated: snap.truncated,
+            });
         }
         if self.watches.len() >= WATCH_MAX {
-            return Err(format!("Already watching {WATCH_MAX} paths. Stop one with unwatch_path first."));
+            return Err(format!(
+                "Already watching {WATCH_MAX} paths. Stop one with unwatch_path first."
+            ));
         }
         self.next += 1;
         let id = format!("w{}", self.next);
         let snap = snapshot(&path);
-        let watching = Watching { id: id.clone(), path: path.clone(), entries: snap.entries.len(), truncated: snap.truncated };
+        let watching = Watching {
+            id: id.clone(),
+            path: path.clone(),
+            entries: snap.entries.len(),
+            truncated: snap.truncated,
+        };
         self.watches.insert(id, (path, snap));
         Ok(watching)
     }
@@ -154,7 +179,10 @@ impl FileWatches {
     /// What was created, modified or deleted since the last look, oldest
     /// snapshot first. Each call starts the next interval.
     pub fn events(&mut self, id: &str) -> Result<Vec<FileEvent>, String> {
-        let (path, snap) = self.watches.get_mut(id.trim()).ok_or_else(|| format!("No watch \"{}\".", id.trim()))?;
+        let (path, snap) = self
+            .watches
+            .get_mut(id.trim())
+            .ok_or_else(|| format!("No watch \"{}\".", id.trim()))?;
         let fresh = snapshot(path);
         let events = diff(snap, &fresh);
         *snap = fresh;
@@ -163,7 +191,10 @@ impl FileWatches {
 
     /// Stop a watch; returns the path it watched.
     pub fn unwatch(&mut self, id: &str) -> Result<PathBuf, String> {
-        self.watches.remove(id.trim()).map(|(p, _)| p).ok_or_else(|| format!("No watch \"{}\".", id.trim()))
+        self.watches
+            .remove(id.trim())
+            .map(|(p, _)| p)
+            .ok_or_else(|| format!("No watch \"{}\".", id.trim()))
     }
 
     pub fn len(&self) -> usize {
@@ -189,7 +220,12 @@ mod tests {
     fn kinds(events: &[FileEvent], root: &Path) -> Vec<(String, String)> {
         events
             .iter()
-            .map(|e| (e.kind.as_str().to_string(), e.path.strip_prefix(root).unwrap().display().to_string()))
+            .map(|e| {
+                (
+                    e.kind.as_str().to_string(),
+                    e.path.strip_prefix(root).unwrap().display().to_string(),
+                )
+            })
             .collect()
     }
 
@@ -200,7 +236,10 @@ mod tests {
         std::fs::write(root.join("gone.txt"), "b").unwrap();
         let mut w = FileWatches::default();
         let watching = w.watch(root.to_str().unwrap()).unwrap();
-        assert_eq!((watching.id.as_str(), watching.entries, watching.truncated), ("w1", 3, false));
+        assert_eq!(
+            (watching.id.as_str(), watching.entries, watching.truncated),
+            ("w1", 3, false)
+        );
         assert_eq!(w.events("w1").unwrap(), vec![], "nothing changed yet");
 
         std::fs::create_dir(root.join("sub")).unwrap();
@@ -213,11 +252,18 @@ mod tests {
             vec![
                 ("modified".to_string(), "keep.txt".to_string()),
                 ("created".to_string(), "sub".to_string()),
-                ("created".to_string(), "sub/new.txt".replace('/', std::path::MAIN_SEPARATOR_STR)),
+                (
+                    "created".to_string(),
+                    "sub/new.txt".replace('/', std::path::MAIN_SEPARATOR_STR)
+                ),
                 ("deleted".to_string(), "gone.txt".to_string()),
             ]
         );
-        assert_eq!(w.events("w1").unwrap(), vec![], "each change is reported once");
+        assert_eq!(
+            w.events("w1").unwrap(),
+            vec![],
+            "each change is reported once"
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -228,9 +274,19 @@ mod tests {
         std::fs::write(&file, "x").unwrap();
         let mut w = FileWatches::default();
         assert_eq!(w.watch(file.to_str().unwrap()).unwrap().entries, 1);
-        assert_eq!(w.watch(file.to_str().unwrap()).unwrap().id, "w1", "the same path keeps its id");
+        assert_eq!(
+            w.watch(file.to_str().unwrap()).unwrap().id,
+            "w1",
+            "the same path keeps its id"
+        );
         std::fs::remove_file(&file).unwrap();
-        assert_eq!(w.events("w1").unwrap(), vec![FileEvent { kind: FileEventKind::Deleted, path: file.clone() }]);
+        assert_eq!(
+            w.events("w1").unwrap(),
+            vec![FileEvent {
+                kind: FileEventKind::Deleted,
+                path: file.clone()
+            }]
+        );
         assert_eq!(w.unwatch("w1").unwrap(), file);
         assert_eq!(w.events("w1"), Err("No watch \"w1\".".into()));
         assert!(w.is_empty());
@@ -241,9 +297,15 @@ mod tests {
     fn a_watch_needs_a_full_path_that_is_there_and_stops_at_the_cap() {
         let root = tmp("cap");
         let mut w = FileWatches::default();
-        assert_eq!(w.watch("notes.md").unwrap_err(), "\"notes.md\" is not a full path.");
+        assert_eq!(
+            w.watch("notes.md").unwrap_err(),
+            "\"notes.md\" is not a full path."
+        );
         let missing = root.join("nope");
-        assert_eq!(w.watch(missing.to_str().unwrap()).unwrap_err(), format!("{} is not there.", missing.display()));
+        assert_eq!(
+            w.watch(missing.to_str().unwrap()).unwrap_err(),
+            format!("{} is not there.", missing.display())
+        );
         for i in 0..WATCH_MAX {
             let p = root.join(format!("f{i}"));
             std::fs::write(&p, "").unwrap();
@@ -251,7 +313,10 @@ mod tests {
         }
         let extra = root.join("extra");
         std::fs::write(&extra, "").unwrap();
-        assert_eq!(w.watch(extra.to_str().unwrap()).unwrap_err(), "Already watching 16 paths. Stop one with unwatch_path first.");
+        assert_eq!(
+            w.watch(extra.to_str().unwrap()).unwrap_err(),
+            "Already watching 16 paths. Stop one with unwatch_path first."
+        );
         assert_eq!(w.len(), 16);
         let _ = std::fs::remove_dir_all(&root);
     }

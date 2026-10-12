@@ -22,17 +22,18 @@ fn newest_stable_tag(tags: &str) -> Option<&str> {
             continue;
         };
         let mut parts = rest.split('.');
-        let (Some(maj), Some(min), Some(patch_tok)) =
-            (parts.next(), parts.next(), parts.next())
+        let (Some(maj), Some(min), Some(patch_tok)) = (parts.next(), parts.next(), parts.next())
         else {
             continue;
         };
         if parts.next().is_some() || !patch_tok.bytes().all(|b| b.is_ascii_digit()) {
             continue;
         }
-        let (Ok(major), Ok(minor), Ok(patch)) =
-            (maj.parse::<u64>(), min.parse::<u64>(), patch_tok.parse::<u64>())
-        else {
+        let (Ok(major), Ok(minor), Ok(patch)) = (
+            maj.parse::<u64>(),
+            min.parse::<u64>(),
+            patch_tok.parse::<u64>(),
+        ) else {
             continue;
         };
         let key = (major, minor, patch);

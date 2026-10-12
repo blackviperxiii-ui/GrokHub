@@ -47,17 +47,32 @@ pub struct PlatformDirs {
 }
 
 fn env_dir(key: &str) -> Option<PathBuf> {
-    std::env::var_os(key).filter(|v| !v.is_empty()).map(PathBuf::from)
+    std::env::var_os(key)
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
 }
 
 impl PlatformDirs {
     pub fn from_env() -> Self {
         let os = HostOs::current();
-        let home = env_dir(if os == HostOs::Windows { "USERPROFILE" } else { "HOME" });
-        let config_home = env_dir("XDG_CONFIG_HOME").or_else(|| home.as_ref().map(|h| h.join(".config")));
-        let data_home = env_dir("XDG_DATA_HOME").or_else(|| home.as_ref().map(|h| h.join(".local").join("share")));
+        let home = env_dir(if os == HostOs::Windows {
+            "USERPROFILE"
+        } else {
+            "HOME"
+        });
+        let config_home =
+            env_dir("XDG_CONFIG_HOME").or_else(|| home.as_ref().map(|h| h.join(".config")));
+        let data_home = env_dir("XDG_DATA_HOME")
+            .or_else(|| home.as_ref().map(|h| h.join(".local").join("share")));
         let system_data = if os == HostOs::Linux {
-            ["/usr/local/share", "/usr/share", "/var/lib/flatpak/exports/share"].iter().map(PathBuf::from).collect()
+            [
+                "/usr/local/share",
+                "/usr/share",
+                "/var/lib/flatpak/exports/share",
+            ]
+            .iter()
+            .map(PathBuf::from)
+            .collect()
         } else {
             Vec::new()
         };
@@ -103,7 +118,11 @@ impl BrowserKind {
 /// The profiles folder of one browser (the scope id from Settings), or `None`
 /// for an unknown browser or a missing env dir.
 pub fn browser_root(browser: &str, dirs: &PlatformDirs) -> Option<(BrowserKind, PathBuf)> {
-    let mac_support = || dirs.home.as_ref().map(|h| h.join("Library").join("Application Support"));
+    let mac_support = || {
+        dirs.home
+            .as_ref()
+            .map(|h| h.join("Library").join("Application Support"))
+    };
     let chromium = |linux: &[&str], windows: &[&str], mac: &[&str]| -> Option<PathBuf> {
         let (base, parts) = match dirs.os {
             HostOs::Linux => (dirs.config_home.clone()?, linux),
@@ -116,14 +135,27 @@ pub fn browser_root(browser: &str, dirs: &PlatformDirs) -> Option<(BrowserKind, 
         "firefox" => {
             let root = match dirs.os {
                 HostOs::Linux => dirs.home.as_ref()?.join(".mozilla").join("firefox"),
-                HostOs::Windows => dirs.appdata.as_ref()?.join("Mozilla").join("Firefox").join("Profiles"),
+                HostOs::Windows => dirs
+                    .appdata
+                    .as_ref()?
+                    .join("Mozilla")
+                    .join("Firefox")
+                    .join("Profiles"),
                 HostOs::MacOs => mac_support()?.join("Firefox").join("Profiles"),
             };
             return Some((BrowserKind::Firefox, root));
         }
-        "chrome" => chromium(&["google-chrome"], &["Google", "Chrome", "User Data"], &["Google", "Chrome"]),
+        "chrome" => chromium(
+            &["google-chrome"],
+            &["Google", "Chrome", "User Data"],
+            &["Google", "Chrome"],
+        ),
         "chromium" => chromium(&["chromium"], &["Chromium", "User Data"], &["Chromium"]),
-        "edge" => chromium(&["microsoft-edge"], &["Microsoft", "Edge", "User Data"], &["Microsoft Edge"]),
+        "edge" => chromium(
+            &["microsoft-edge"],
+            &["Microsoft", "Edge", "User Data"],
+            &["Microsoft Edge"],
+        ),
         "brave" => chromium(
             &["BraveSoftware", "Brave-Browser"],
             &["BraveSoftware", "Brave-Browser", "User Data"],
@@ -143,7 +175,9 @@ pub fn history_dbs(fs: &dyn IndexFs, kind: BrowserKind, root: &Path) -> Vec<Path
     entries
         .into_iter()
         .filter(|e| e.kind == EntryKind::Dir)
-        .filter(|e| kind == BrowserKind::Firefox || e.name == "Default" || e.name.starts_with("Profile "))
+        .filter(|e| {
+            kind == BrowserKind::Firefox || e.name == "Default" || e.name.starts_with("Profile ")
+        })
         .map(|e| e.path.join(kind.db_name()))
         .filter(|p| fs.stat(p).is_some_and(|e| e.kind == EntryKind::File))
         .collect()
@@ -157,14 +191,28 @@ pub fn app_dirs(dirs: &PlatformDirs) -> Vec<PathBuf> {
             let mut out: Vec<PathBuf> = Vec::new();
             if let Some(data) = &dirs.data_home {
                 out.push(data.join("applications"));
-                out.push(data.join("flatpak").join("exports").join("share").join("applications"));
+                out.push(
+                    data.join("flatpak")
+                        .join("exports")
+                        .join("share")
+                        .join("applications"),
+                );
             }
             out.extend(dirs.system_data.iter().map(|d| d.join("applications")));
             out
         }
         HostOs::Windows => {
-            let start = |base: &PathBuf| base.join("Microsoft").join("Windows").join("Start Menu").join("Programs");
-            dirs.appdata.iter().chain(dirs.program_data.iter()).map(start).collect()
+            let start = |base: &PathBuf| {
+                base.join("Microsoft")
+                    .join("Windows")
+                    .join("Start Menu")
+                    .join("Programs")
+            };
+            dirs.appdata
+                .iter()
+                .chain(dirs.program_data.iter())
+                .map(start)
+                .collect()
         }
         HostOs::MacOs => {
             let mut out = vec![PathBuf::from("/Applications")];
@@ -216,24 +264,53 @@ mod tests {
         let local = d.local_appdata.clone().unwrap();
         assert_eq!(
             browser_root("firefox", &d),
-            Some((BrowserKind::Firefox, roaming.join("Mozilla").join("Firefox").join("Profiles")))
+            Some((
+                BrowserKind::Firefox,
+                roaming.join("Mozilla").join("Firefox").join("Profiles")
+            ))
         );
         assert_eq!(
             browser_root("chrome", &d),
-            Some((BrowserKind::Chromium, local.join("Google").join("Chrome").join("User Data")))
+            Some((
+                BrowserKind::Chromium,
+                local.join("Google").join("Chrome").join("User Data")
+            ))
         );
         assert_eq!(
             browser_root("edge", &d),
-            Some((BrowserKind::Chromium, local.join("Microsoft").join("Edge").join("User Data")))
+            Some((
+                BrowserKind::Chromium,
+                local.join("Microsoft").join("Edge").join("User Data")
+            ))
         );
         assert_eq!(
             browser_root("brave", &d),
-            Some((BrowserKind::Chromium, local.join("BraveSoftware").join("Brave-Browser").join("User Data")))
+            Some((
+                BrowserKind::Chromium,
+                local
+                    .join("BraveSoftware")
+                    .join("Brave-Browser")
+                    .join("User Data")
+            ))
         );
-        assert_eq!(browser_root("chromium", &d), Some((BrowserKind::Chromium, local.join("Chromium").join("User Data"))));
+        assert_eq!(
+            browser_root("chromium", &d),
+            Some((
+                BrowserKind::Chromium,
+                local.join("Chromium").join("User Data")
+            ))
+        );
         assert_eq!(browser_root("netscape", &d), None);
-        let no_env = PlatformDirs { appdata: None, local_appdata: None, ..windows_dirs() };
-        assert_eq!(browser_root("firefox", &no_env), None, "no %APPDATA%, no guess at HOME");
+        let no_env = PlatformDirs {
+            appdata: None,
+            local_appdata: None,
+            ..windows_dirs()
+        };
+        assert_eq!(
+            browser_root("firefox", &no_env),
+            None,
+            "no %APPDATA%, no guess at HOME"
+        );
         assert_eq!(browser_root("chrome", &no_env), None);
     }
 
@@ -241,14 +318,25 @@ mod tests {
     fn linux_browser_roots_use_home_and_xdg_config() {
         let d = linux_dirs();
         let home = PathBuf::from("/home/you");
-        assert_eq!(browser_root("firefox", &d), Some((BrowserKind::Firefox, home.join(".mozilla").join("firefox"))));
+        assert_eq!(
+            browser_root("firefox", &d),
+            Some((BrowserKind::Firefox, home.join(".mozilla").join("firefox")))
+        );
         assert_eq!(
             browser_root("chrome", &d),
-            Some((BrowserKind::Chromium, home.join(".config").join("google-chrome")))
+            Some((
+                BrowserKind::Chromium,
+                home.join(".config").join("google-chrome")
+            ))
         );
         assert_eq!(
             browser_root("brave", &d),
-            Some((BrowserKind::Chromium, home.join(".config").join("BraveSoftware").join("Brave-Browser")))
+            Some((
+                BrowserKind::Chromium,
+                home.join(".config")
+                    .join("BraveSoftware")
+                    .join("Brave-Browser")
+            ))
         );
         assert_eq!(BrowserKind::Firefox.table(), "moz_places");
         assert_eq!(BrowserKind::Chromium.table(), "urls");
@@ -258,10 +346,18 @@ mod tests {
     #[test]
     fn app_dirs_per_os() {
         let w = windows_dirs();
-        let start = |base: PathBuf| base.join("Microsoft").join("Windows").join("Start Menu").join("Programs");
+        let start = |base: PathBuf| {
+            base.join("Microsoft")
+                .join("Windows")
+                .join("Start Menu")
+                .join("Programs")
+        };
         assert_eq!(
             app_dirs(&w),
-            vec![start(w.appdata.clone().unwrap()), start(w.program_data.clone().unwrap())]
+            vec![
+                start(w.appdata.clone().unwrap()),
+                start(w.program_data.clone().unwrap())
+            ]
         );
         let l = linux_dirs();
         let share = PathBuf::from("/home/you").join(".local").join("share");
@@ -269,7 +365,11 @@ mod tests {
             app_dirs(&l),
             vec![
                 share.join("applications"),
-                share.join("flatpak").join("exports").join("share").join("applications"),
+                share
+                    .join("flatpak")
+                    .join("exports")
+                    .join("share")
+                    .join("applications"),
                 PathBuf::from("/usr/share").join("applications"),
             ]
         );

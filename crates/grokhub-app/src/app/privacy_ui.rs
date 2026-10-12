@@ -70,7 +70,10 @@ fn class_label(c: hx::DataClass) -> &'static str {
 
 /// User words for a set of classes: the hub's pair reads "chats, memory".
 pub(super) fn classes(data: &[hx::DataClass]) -> String {
-    data.iter().map(|c| class_label(*c)).collect::<Vec<_>>().join(", ")
+    data.iter()
+        .map(|c| class_label(*c))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// A destination as `/privacy` names it.
@@ -84,7 +87,9 @@ fn dest_label(dest: &str) -> &str {
 
 /// How `/privacy` names an active grant (no id: SY-08).
 pub(super) fn grant_label(g: &hx::Grant) -> String {
-    if g.source.starts_with(grokhub_agent::route::spend::PREMIUM_PREFIX) {
+    if g.source
+        .starts_with(grokhub_agent::route::spend::PREMIUM_PREFIX)
+    {
         super::budget_ui::premium_label(&g.source)
     } else if g.destination == hx::HUB_DEST {
         HUB_ROW.to_string()
@@ -148,7 +153,10 @@ pub(super) fn lock_next_step_short(why: &hx::Locked, os: hx::KeyringOs) -> Strin
             hx::KeyringOs::MacOs => "unlock your macOS Keychain".to_string(),
         },
         hx::Locked::Missing | hx::Locked::WrongKey => {
-            format!("put this data's GrokHub key back in your {}", hx::keyring_name_for(os))
+            format!(
+                "put this data's GrokHub key back in your {}",
+                hx::keyring_name_for(os)
+            )
         }
         hx::Locked::Busy => "wait a moment".to_string(),
         hx::Locked::Unwritable => "check that GrokHub's config folder can be written".to_string(),
@@ -187,7 +195,10 @@ pub(super) fn privacy_report(
     // shares one line. The grant id stays out of the text (SY-08).
     out.push("Grants".to_string());
     let mut off: Vec<String> = Vec::new();
-    if ledger.destination_grant(hx::HUB_DEST, hx::HUB_SYNC_DATA).is_none() {
+    if ledger
+        .destination_grant(hx::HUB_DEST, hx::HUB_SYNC_DATA)
+        .is_none()
+    {
         off.push(format!("{HUB_ROW} (/sync asks each time)"));
     }
     for g in ledger.active().filter(|g| !g.destination.is_empty()) {
@@ -198,12 +209,22 @@ pub(super) fn privacy_report(
             classes(&g.data_classes)
         ));
     }
-    let read: Vec<&hx::Grant> = ledger.active().filter(|g| g.destination.is_empty()).collect();
+    let read: Vec<&hx::Grant> = ledger
+        .active()
+        .filter(|g| g.destination.is_empty())
+        .collect();
     for g in &read {
-        out.push(format!("- {}: on since {}", grant_label(g), ago(g.granted_at)));
+        out.push(format!(
+            "- {}: on since {}",
+            grant_label(g),
+            ago(g.granted_at)
+        ));
     }
     for (kind, label) in hx::SCOPE_KINDS {
-        if !read.iter().any(|g| g.source == *kind || g.source.starts_with(&format!("{kind}:"))) {
+        if !read
+            .iter()
+            .any(|g| g.source == *kind || g.source.starts_with(&format!("{kind}:")))
+        {
             off.push((*label).to_string());
         }
     }
@@ -215,11 +236,16 @@ pub(super) fn privacy_report(
         if desktop_control { "on" } else { "off" }
     ));
     if ledger.unreadable() > 0 {
-        out.push(format!("- {} ledger lines didn't open (damaged or edited) and count for nothing.", ledger.unreadable()));
+        out.push(format!(
+            "- {} ledger lines didn't open (damaged or edited) and count for nothing.",
+            ledger.unreadable()
+        ));
     }
     out.push("Granted folders, apps, browser history and system state are read on this computer only, never on battery or in quiet hours; calendar and mail aren't read yet.".to_string());
     out.push(String::new());
-    out.push(format!("Sent in the last {PRIVACY_DAYS} days (no content stored)"));
+    out.push(format!(
+        "Sent in the last {PRIVACY_DAYS} days (no content stored)"
+    ));
     let since = now_ms.saturating_sub(PRIVACY_DAYS * 86_400_000);
     let mut rows: Vec<EgressRow> = Vec::new();
     for line in egress.iter().filter(|l| l.ts_ms >= since) {
@@ -230,7 +256,10 @@ pub(super) fn privacy_report(
             "chat" => "allowed",
             other => other,
         };
-        match rows.iter_mut().find(|r| r.dest == line.dest && r.basis == basis) {
+        match rows
+            .iter_mut()
+            .find(|r| r.dest == line.dest && r.basis == basis)
+        {
             Some(r) => {
                 r.times += 1;
                 for c in &line.data_classes {
@@ -256,13 +285,29 @@ pub(super) fn privacy_report(
         out.push("- Nothing logged yet.".into());
     }
     if log.unreadable > 0 {
-        out.push(format!("- {} log lines didn't open (damaged or edited) and were skipped.", log.unreadable));
+        out.push(format!(
+            "- {} log lines didn't open (damaged or edited) and were skipped.",
+            log.unreadable
+        ));
     }
     rows.sort_by_key(|r| std::cmp::Reverse(r.last));
     for r in rows {
-        let times = if r.times == 1 { "1 time".to_string() } else { format!("{} times", r.times) };
-        let data = if r.data.is_empty() { "no user data".to_string() } else { classes(&r.data) };
-        out.push(format!("- {} · {times} · {data} · {} · last {}", dest_label(&r.dest), r.basis, ago(r.last)));
+        let times = if r.times == 1 {
+            "1 time".to_string()
+        } else {
+            format!("{} times", r.times)
+        };
+        let data = if r.data.is_empty() {
+            "no user data".to_string()
+        } else {
+            classes(&r.data)
+        };
+        out.push(format!(
+            "- {} · {times} · {data} · {} · last {}",
+            dest_label(&r.dest),
+            r.basis,
+            ago(r.last)
+        ));
     }
     out.push(String::new());
     out.push("Not watched here: Grok Build's own traffic (its model calls, connectors, and web tools) and the commands an Update runs. Everything else GrokHub sends is logged above: model calls, Imagine, Labs web fetch, MCP servers, Pulse previews, update checks, and sign-in.".into());
@@ -275,13 +320,21 @@ const LOCK_RECHECK: std::time::Duration = std::time::Duration::from_secs(1);
 /// Why private data can't be opened or saved here, if it can't: the ledger's
 /// own lock, else the keyring's answer (a fresh config with no keyring can't
 /// save a grant either). `wait = false` never blocks (UI thread).
-pub(super) fn private_lock(dir: &std::path::Path, ledger: &hx::ConsentLedger, wait: bool) -> Option<hx::Locked> {
+pub(super) fn private_lock(
+    dir: &std::path::Path,
+    ledger: &hx::ConsentLedger,
+    wait: bool,
+) -> Option<hx::Locked> {
     lock_answer(dir, ledger, wait).flatten()
 }
 
 /// [`private_lock`], but `None` while the keyring hasn't answered yet (only
 /// with `wait = false` on a keyring that can block).
-fn lock_answer(dir: &std::path::Path, ledger: &hx::ConsentLedger, wait: bool) -> Option<Option<hx::Locked>> {
+fn lock_answer(
+    dir: &std::path::Path,
+    ledger: &hx::ConsentLedger,
+    wait: bool,
+) -> Option<Option<hx::Locked>> {
     if let Some(why) = ledger.locked() {
         return Some(Some(why.clone()));
     }
@@ -302,14 +355,19 @@ impl Cabin {
             Some(c) if c.pending() => true,
             Some(c) => {
                 c.locked().is_some()
-                    && self.harness.consent_at.is_none_or(|at| now.duration_since(at) >= LOCK_RECHECK)
+                    && self
+                        .harness
+                        .consent_at
+                        .is_none_or(|at| now.duration_since(at) >= LOCK_RECHECK)
             }
         };
         if stale {
             self.harness.consent = Some(hx::ConsentLedger::load_now(&crate::config::config_dir()));
             self.harness.consent_at = Some(now);
         }
-        self.harness.consent.get_or_insert_with(hx::ConsentLedger::empty)
+        self.harness
+            .consent
+            .get_or_insert_with(hx::ConsentLedger::empty)
     }
 
     /// [`private_lock`] for painting Settings: never waits, and asks the
@@ -351,7 +409,9 @@ impl Cabin {
         self.harness.consent = None;
         self.harness.consent_at = None;
         if let Some((at, _)) = self.harness.lock_seen.as_mut() {
-            *at = std::time::Instant::now().checked_sub(LOCK_RECHECK).unwrap_or(*at);
+            *at = std::time::Instant::now()
+                .checked_sub(LOCK_RECHECK)
+                .unwrap_or(*at);
         }
         self.harness.scope_note = None;
         self.harness.lock_retry_at = Some(now_ms());
@@ -366,7 +426,8 @@ impl Cabin {
     /// One `/sync` result line in the chat, kept out of the next model kick.
     pub(super) fn post_sync_result(&mut self, line: &str) {
         self.status = line.to_string();
-        self.live_mut().push(("assistant".into(), mark_slash_result(line)));
+        self.live_mut()
+            .push(("assistant".into(), mark_slash_result(line)));
         self.stamp_current_access();
         self.persist();
     }
@@ -392,7 +453,11 @@ impl Cabin {
             self.post_sync_result(&format!("Not synced. {} {next}", why.message()));
             return;
         }
-        let step = Step::Egress { dest: hx::HUB_DEST, data: hx::HUB_SYNC_DATA, ledger: &ledger };
+        let step = Step::Egress {
+            dest: hx::HUB_DEST,
+            data: hx::HUB_SYNC_DATA,
+            ledger: &ledger,
+        };
         match hx::decide(step) {
             GateOutcome::Allow => {
                 let id = ledger
@@ -401,7 +466,9 @@ impl Cabin {
                     .unwrap_or_default();
                 self.run_hub_sync(HubSend::Grant(id));
             }
-            GateOutcome::Park { hard: Some(class), .. } => self.park_egress(hx::HUB_DEST, class),
+            GateOutcome::Park {
+                hard: Some(class), ..
+            } => self.park_egress(hx::HUB_DEST, class),
             GateOutcome::Park { reason, .. } | GateOutcome::Refuse { reason } => {
                 self.status = format!("Sync not sent: {reason}");
             }
@@ -421,7 +488,13 @@ impl Cabin {
             let ledger = hx::ConsentLedger::load(&dir);
             let egress = hx::read_egress_report(&dir);
             let lock = private_lock(&dir, &ledger, true);
-            let _ = tx.send(privacy_report(&ledger, &egress, lock.as_ref(), desktop, now_ms()));
+            let _ = tx.send(privacy_report(
+                &ledger,
+                &egress,
+                lock.as_ref(),
+                desktop,
+                now_ms(),
+            ));
         });
     }
 
@@ -431,7 +504,8 @@ impl Cabin {
         };
         match rx.try_recv() {
             Ok(body) => {
-                self.live_mut().push(("assistant".into(), mark_slash_result(&body)));
+                self.live_mut()
+                    .push(("assistant".into(), mark_slash_result(&body)));
                 self.stamp_current_access();
                 self.persist();
             }
@@ -455,10 +529,15 @@ impl Cabin {
         // Short tick only while the keyring answer is still in flight.
         // A settled lock (or unlock) does not keep Settings at 150 ms.
         if self.harness.lock_pending {
-            ui.ctx().request_repaint_after(std::time::Duration::from_millis(150));
+            ui.ctx()
+                .request_repaint_after(std::time::Duration::from_millis(150));
         }
         if let Some(why) = &lock {
-            ui.label(RichText::new(why.message()).size(13.0).color(crate::theme::fg()));
+            ui.label(
+                RichText::new(why.message())
+                    .size(13.0)
+                    .color(crate::theme::fg()),
+            );
             ui.add_space(4.0);
             let mut retry = false;
             ui.horizontal(|ui| {
@@ -467,7 +546,9 @@ impl Cabin {
                         .size(13.0)
                         .color(crate::theme::fg()),
                 );
-                ui.add_enabled_ui(!checking, |ui| retry = crate::cards::ghost_pill(ui, TRY_AGAIN));
+                ui.add_enabled_ui(!checking, |ui| {
+                    retry = crate::cards::ghost_pill(ui, TRY_AGAIN)
+                });
             });
             if checking {
                 crate::cards::settings_note(ui, "Checking your keyring…");
@@ -494,9 +575,27 @@ impl Cabin {
         match granted {
             None => {
                 let allow = crate::cards::GrantPill::Allow;
-                if crate::cards::settings_grant_row(ui, HUB_ROW, HUB_OFF, None, allow, locked, false, |_| {}) && locked.is_none() {
-                    match hx::grant_destination(&dir, hx::HUB_DEST, hx::HUB_SYNC_DATA, hx::UserClick::from_click()) {
-                        Ok(_) => self.status = "Sync to paired computers allowed. Revoke it here any time.".into(),
+                if crate::cards::settings_grant_row(
+                    ui,
+                    HUB_ROW,
+                    HUB_OFF,
+                    None,
+                    allow,
+                    locked,
+                    false,
+                    |_| {},
+                ) && locked.is_none()
+                {
+                    match hx::grant_destination(
+                        &dir,
+                        hx::HUB_DEST,
+                        hx::HUB_SYNC_DATA,
+                        hx::UserClick::from_click(),
+                    ) {
+                        Ok(_) => {
+                            self.status =
+                                "Sync to paired computers allowed. Revoke it here any time.".into()
+                        }
                         Err(e) => self.status = format!("Could not save the grant: {e}"),
                     }
                     self.harness.consent = None;
@@ -508,7 +607,17 @@ impl Cabin {
                     grokhub_core::pulse::ago_label(at, now_ms())
                 );
                 let revoke = crate::cards::GrantPill::Revoke;
-                if crate::cards::settings_grant_row(ui, HUB_ROW, &hint, None, revoke, locked, false, |_| {}) && locked.is_none() {
+                if crate::cards::settings_grant_row(
+                    ui,
+                    HUB_ROW,
+                    &hint,
+                    None,
+                    revoke,
+                    locked,
+                    false,
+                    |_| {},
+                ) && locked.is_none()
+                {
                     self.revoke_hub_grant(&id);
                 }
             }
@@ -524,7 +633,9 @@ impl Cabin {
             .map(|g| PrivacyRevoke {
                 id: g.id.clone(),
                 label: grant_label(g),
-                detail: super::scope_ui::scope_detail(&g.source).filter(|_| g.destination.is_empty()).map(str::to_string),
+                detail: super::scope_ui::scope_detail(&g.source)
+                    .filter(|_| g.destination.is_empty())
+                    .map(str::to_string),
             })
             .collect()
     }
@@ -544,7 +655,8 @@ impl Cabin {
             None => return,
         }
         let line = self.status.clone();
-        self.live_mut().push(("assistant".into(), mark_slash_result(&line)));
+        self.live_mut()
+            .push(("assistant".into(), mark_slash_result(&line)));
         self.stamp_current_access();
         self.persist();
     }
@@ -584,7 +696,11 @@ const REVOKE_ROW_H: f32 = 28.0;
 /// Enter or any typed text never answers it. The rows start at the bubble's
 /// text inset (SB-11); `locked` disables every Revoke, with why on hover
 /// (SB-01: a revoke is a ledger write, and a locked ledger takes none).
-pub(super) fn paint_privacy_revokes(ui: &mut egui::Ui, grants: &[PrivacyRevoke], locked: Option<&str>) -> Option<String> {
+pub(super) fn paint_privacy_revokes(
+    ui: &mut egui::Ui,
+    grants: &[PrivacyRevoke],
+    locked: Option<&str>,
+) -> Option<String> {
     let mut hit = None;
     // The pills share one column: every label takes the widest label's room.
     let labels: Vec<&str> = grants.iter().map(|g| g.label.as_str()).collect();
@@ -593,38 +709,44 @@ pub(super) fn paint_privacy_revokes(ui: &mut egui::Ui, grants: &[PrivacyRevoke],
         ui.push_id(("privacy-revoke", g.id.as_str()), |ui| {
             // One pill-high row so the label centers on the Revoke pill.
             let row = egui::vec2(ui.available_width(), REVOKE_ROW_H);
-            ui.allocate_ui_with_layout(row, egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                ui.add_space(super::chat_ui::RESULT_TEXT_INSET);
-                let r = ui.label(
-                    RichText::new(&g.label).size(super::chat_ui::RESULT_ROW_LABEL_SIZE).color(crate::theme::muted()),
-                );
-                if let Some(full) = &g.detail {
-                    r.on_hover_text(full);
-                }
-                ui.add_space(pad);
-                let clicked = ui
-                    .add_enabled_ui(locked.is_none(), |ui| {
-                        let resp = crate::theme::felt_label_button(
-                            ui,
-                            "Revoke",
-                            egui::Color32::TRANSPARENT,
-                            crate::theme::muted(),
-                            8.0,
-                            egui::vec2(0.0, REVOKE_ROW_H),
-                            Some(egui::Stroke::new(1.0_f32, crate::theme::border())),
-                            false,
-                        );
-                        let resp = match locked {
-                            Some(why) => resp.on_disabled_hover_text(why),
-                            None => resp,
-                        };
-                        resp.clicked()
-                    })
-                    .inner;
-                if clicked && locked.is_none() {
-                    hit = Some(g.id.clone());
-                }
-            });
+            ui.allocate_ui_with_layout(
+                row,
+                egui::Layout::left_to_right(egui::Align::Center),
+                |ui| {
+                    ui.add_space(super::chat_ui::RESULT_TEXT_INSET);
+                    let r = ui.label(
+                        RichText::new(&g.label)
+                            .size(super::chat_ui::RESULT_ROW_LABEL_SIZE)
+                            .color(crate::theme::muted()),
+                    );
+                    if let Some(full) = &g.detail {
+                        r.on_hover_text(full);
+                    }
+                    ui.add_space(pad);
+                    let clicked = ui
+                        .add_enabled_ui(locked.is_none(), |ui| {
+                            let resp = crate::theme::felt_label_button(
+                                ui,
+                                "Revoke",
+                                egui::Color32::TRANSPARENT,
+                                crate::theme::muted(),
+                                8.0,
+                                egui::vec2(0.0, REVOKE_ROW_H),
+                                Some(egui::Stroke::new(1.0_f32, crate::theme::border())),
+                                false,
+                            );
+                            let resp = match locked {
+                                Some(why) => resp.on_disabled_hover_text(why),
+                                None => resp,
+                            };
+                            resp.clicked()
+                        })
+                        .inner;
+                    if clicked && locked.is_none() {
+                        hit = Some(g.id.clone());
+                    }
+                },
+            );
         });
     }
     if !grants.is_empty() {
@@ -645,8 +767,16 @@ mod tests {
     use super::*;
 
     /// The report for a plain list of log lines and no lock.
-    fn report(ledger: &hx::ConsentLedger, lines: &[hx::EgressLine], desktop: bool, now: u64) -> String {
-        let log = hx::EgressRead { lines: lines.to_vec(), ..hx::EgressRead::default() };
+    fn report(
+        ledger: &hx::ConsentLedger,
+        lines: &[hx::EgressLine],
+        desktop: bool,
+        now: u64,
+    ) -> String {
+        let log = hx::EgressRead {
+            lines: lines.to_vec(),
+            ..hx::EgressRead::default()
+        };
         privacy_report(ledger, &log, None, desktop, now)
     }
 
@@ -692,7 +822,12 @@ mod tests {
                 }
                 let text = std::fs::read_to_string(&path).unwrap_or_default();
                 let live = text.split("#[cfg(test)]").next().unwrap_or("");
-                for needle in ["UserClick::from_click(", "grant_destination(", "grant_scope(", "grant_premium("] {
+                for needle in [
+                    "UserClick::from_click(",
+                    "grant_destination(",
+                    "grant_scope(",
+                    "grant_premium(",
+                ] {
                     for _ in live.matches(needle) {
                         let rel = path.strip_prefix(&crates).unwrap_or(&path);
                         let rel = rel.display().to_string().replace('\\', "/");
@@ -751,15 +886,28 @@ mod tests {
         let chat = [hx::DataClass::Chat, hx::DataClass::Personal];
         let log = vec![
             line("api.x.ai", "model_host", now - 3_600_000, &chat),
-            line("api.x.ai", "model_host", now - 120_000, &[hx::DataClass::Chat]),
+            line(
+                "api.x.ai",
+                "model_host",
+                now - 120_000,
+                &[hx::DataClass::Chat],
+            ),
             line("hub", "approved_once", now - 7_200_000, &chat),
             line("api.x.ai", "model_host", now - 8 * 86_400_000, &chat),
         ];
         let got = report(&hx::ConsentLedger::empty(), &log, true, now);
         assert!(got.contains("- api.x.ai · 2 times · chats, memory · default · last 2m ago\n- paired computers · 1 time · chats, memory · approved once · last 2h ago\n"), "{got}");
         assert!(!got.contains("hub ·"), "the hub is named plainly: {got}");
-        assert!(got.contains("- Screen: \"Let Grok control the desktop\" in Settings → Cabin defaults (on)"), "{got}");
-        assert!(!got.contains("3 times"), "lines older than 7 days are not summed: {got}");
+        assert!(
+            got.contains(
+                "- Screen: \"Let Grok control the desktop\" in Settings → Cabin defaults (on)"
+            ),
+            "{got}"
+        );
+        assert!(
+            !got.contains("3 times"),
+            "lines older than 7 days are not summed: {got}"
+        );
         // Spike-4c: the newly guarded calls are new rows in the same grouping.
         let log = vec![
             line("example.org", "chat", now - 60_000, &[hx::DataClass::Chat]),
@@ -797,10 +945,16 @@ mod tests {
             .nth(1)
             .and_then(|s| s.split("fn privacy_revoke_rows(").next())
             .expect("ui_privacy_rows");
-        assert!(rows.contains("Sends {HUB_SCOPE_LABEL}."), "the On hint names the scope the same way: {rows}");
+        assert!(
+            rows.contains("Sends {HUB_SCOPE_LABEL}."),
+            "the On hint names the scope the same way: {rows}"
+        );
         // Logs keep the ids.
         assert_eq!(
-            hx::HUB_SYNC_DATA.iter().map(|c| c.as_str()).collect::<Vec<_>>(),
+            hx::HUB_SYNC_DATA
+                .iter()
+                .map(|c| c.as_str())
+                .collect::<Vec<_>>(),
             vec!["chat", "personal"]
         );
     }
@@ -816,23 +970,43 @@ mod tests {
             HUB_CARD_NOTE,
             "Sends chats and memory to your paired computers. Approve sends once. Esc denies. Settings → Permissions can allow it every time."
         );
-        assert!(PRIVACY_NOTE.contains("allowed for chats and memory."), "{PRIVACY_NOTE}");
+        assert!(
+            PRIVACY_NOTE.contains("allowed for chats and memory."),
+            "{PRIVACY_NOTE}"
+        );
         assert!(!PRIVACY_NOTE.contains("chats, memory"), "{PRIVACY_NOTE}");
         assert!(!HUB_CARD_NOTE.contains("chats, memory"), "{HUB_CARD_NOTE}");
         let dir = crate::config::test_config_root("privacy-prose");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        let g = hx::grant_destination(&dir, hx::HUB_DEST, hx::HUB_SYNC_DATA, hx::UserClick::from_click()).unwrap();
+        let g = hx::grant_destination(
+            &dir,
+            hx::HUB_DEST,
+            hx::HUB_SYNC_DATA,
+            hx::UserClick::from_click(),
+        )
+        .unwrap();
         let ledger = hx::ConsentLedger::load(&dir);
-        let log = vec![line("hub", "grant", g.granted_at, &[hx::DataClass::Chat, hx::DataClass::Personal])];
+        let log = vec![line(
+            "hub",
+            "grant",
+            g.granted_at,
+            &[hx::DataClass::Chat, hx::DataClass::Personal],
+        )];
         let got = report(&ledger, &log, false, g.granted_at + 60_000);
         let intro = got.lines().nth(2).unwrap_or_default();
         assert_eq!(
             intro,
             "Allowed by default: grok.com, x.ai, api.x.ai (chats and memory in model prompts), and chat text elsewhere, logged below. Sending your memory anywhere else waits for your OK: a hard card, or a grant in Settings → Permissions."
         );
-        assert!(got.contains("- Sync to paired computers: on since 1m ago · chats, memory\n"), "{got}");
-        assert!(got.contains("- paired computers · 1 time · chats, memory · your grant"), "{got}");
+        assert!(
+            got.contains("- Sync to paired computers: on since 1m ago · chats, memory\n"),
+            "{got}"
+        );
+        assert!(
+            got.contains("- paired computers · 1 time · chats, memory · your grant"),
+            "{got}"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -843,17 +1017,30 @@ mod tests {
         let dir = crate::config::test_config_root("privacy-id");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        let g = hx::grant_destination(&dir, hx::HUB_DEST, hx::HUB_SYNC_DATA, hx::UserClick::from_click()).unwrap();
+        let g = hx::grant_destination(
+            &dir,
+            hx::HUB_DEST,
+            hx::HUB_SYNC_DATA,
+            hx::UserClick::from_click(),
+        )
+        .unwrap();
         let ledger = hx::ConsentLedger::load(&dir);
         let now = g.granted_at + 60_000;
         let got = report(&ledger, &[], false, now);
         assert!(!got.contains(&g.id), "{got}");
-        assert!(got.contains("- Sync to paired computers: on since 1m ago · chats, memory\n"), "{got}");
+        assert!(
+            got.contains("- Sync to paired computers: on since 1m ago · chats, memory\n"),
+            "{got}"
+        );
         assert!(!got.contains("No grants yet"), "{got}");
         assert!(!got.contains("egress.jsonl"), "{got}");
         let rows: Vec<PrivacyRevoke> = ledger
             .active()
-            .map(|g| PrivacyRevoke { id: g.id.clone(), label: grant_label(g), detail: None })
+            .map(|g| PrivacyRevoke {
+                id: g.id.clone(),
+                label: grant_label(g),
+                detail: None,
+            })
             .collect();
         let view = grokhub_core::ChatView {
             kind: grokhub_core::ChatKind::Result,
@@ -864,7 +1051,10 @@ mod tests {
         let ctx = egui::Context::default();
         crate::theme::install_fonts_on(&ctx);
         let input = egui::RawInput {
-            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1000.0, 1400.0))),
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1000.0, 1400.0),
+            )),
             ..Default::default()
         };
         let out = crate::theme::test_pass(&ctx, input, |ui| {
@@ -885,8 +1075,14 @@ mod tests {
             collect_text(&clipped.shape, &mut texts);
         }
         assert!(texts.contains("Revoke"), "{texts}");
-        assert!(texts.contains("Sent in the last 7 days (no content stored)"), "{texts}");
-        assert!(!texts.contains(&g.id), "the grant id is not painted: {texts}");
+        assert!(
+            texts.contains("Sent in the last 7 days (no content stored)"),
+            "{texts}"
+        );
+        assert!(
+            !texts.contains(&g.id),
+            "the grant id is not painted: {texts}"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -915,12 +1111,18 @@ mod tests {
             hx::Locked::Unwritable,
         ];
         let u = hx::Locked::Unavailable;
-        assert_eq!(lock_next_step(&u, Linux), "Unlock or start your keyring (GNOME Keyring or KWallet), then Try again.");
+        assert_eq!(
+            lock_next_step(&u, Linux),
+            "Unlock or start your keyring (GNOME Keyring or KWallet), then Try again."
+        );
         assert_eq!(
             lock_next_step(&u, Windows),
             "Turn on Windows Credential Manager (Services → Credential Manager), then Try again."
         );
-        assert_eq!(lock_next_step(&u, MacOs), "Unlock your macOS Keychain (Keychain Access → login), then Try again.");
+        assert_eq!(
+            lock_next_step(&u, MacOs),
+            "Unlock your macOS Keychain (Keychain Access → login), then Try again."
+        );
         assert_eq!(
             lock_next_step_short(&u, Linux),
             "Next: unlock or start GNOME Keyring or KWallet, then Try again in Settings → Permissions."
@@ -929,30 +1131,64 @@ mod tests {
         assert_eq!(hx::keyring_name_for(MacOs), "macOS Keychain");
         for why in &all {
             for os in [Windows, MacOs] {
-                for text in [why.message_for(os), lock_next_step(why, os), lock_next_step_short(why, os)] {
+                for text in [
+                    why.message_for(os),
+                    lock_next_step(why, os),
+                    lock_next_step_short(why, os),
+                ] {
                     assert!(!text.contains("Secret Service"), "{os:?}: {text}");
-                    assert!(!text.contains("GNOME") && !text.contains("KWallet"), "{os:?}: {text}");
+                    assert!(
+                        !text.contains("GNOME") && !text.contains("KWallet"),
+                        "{os:?}: {text}"
+                    );
                 }
             }
             for os in [Linux, Windows, MacOs] {
-                assert!(lock_next_step(why, os).ends_with("then Try again."), "{os:?}: {why:?}");
-                assert!(lock_next_step_short(why, os).ends_with("then Try again in Settings → Permissions."));
+                assert!(
+                    lock_next_step(why, os).ends_with("then Try again."),
+                    "{os:?}: {why:?}"
+                );
+                assert!(lock_next_step_short(why, os)
+                    .ends_with("then Try again in Settings → Permissions."));
             }
         }
-        assert!(hx::Locked::Unavailable.message_for(Windows).contains("Windows Credential Manager"));
+        assert!(hx::Locked::Unavailable
+            .message_for(Windows)
+            .contains("Windows Credential Manager"));
         assert!(lock_next_step(&u, Windows).contains("Windows Credential Manager"));
         assert!(lock_next_step_short(&u, Windows).contains("Windows Credential Manager"));
         assert!(lock_next_step(&u, MacOs).contains("macOS Keychain"));
         assert!(lock_next_step_short(&u, MacOs).contains("macOS Keychain"));
         // This build picks its own OS's words with cfg.
         let here = hx::KeyringOs::current();
-        assert_eq!(here, if cfg!(windows) { Windows } else if cfg!(target_os = "macos") { MacOs } else { Linux });
+        assert_eq!(
+            here,
+            if cfg!(windows) {
+                Windows
+            } else if cfg!(target_os = "macos") {
+                MacOs
+            } else {
+                Linux
+            }
+        );
         assert_eq!(u.message(), u.message_for(here));
         // The folder placeholder follows the OS too (SB-04).
-        assert_eq!(super::super::scope_ui::folder_hint_for(Windows), "C:\\Users\\you\\Notes");
-        assert_eq!(super::super::scope_ui::folder_hint_for(Linux), "/home/you/Notes");
-        assert_eq!(super::super::scope_ui::folder_hint_for(MacOs), "/Users/you/Notes");
-        assert_eq!(super::super::scope_ui::FOLDER_HINT, super::super::scope_ui::folder_hint_for(here));
+        assert_eq!(
+            super::super::scope_ui::folder_hint_for(Windows),
+            "C:\\Users\\you\\Notes"
+        );
+        assert_eq!(
+            super::super::scope_ui::folder_hint_for(Linux),
+            "/home/you/Notes"
+        );
+        assert_eq!(
+            super::super::scope_ui::folder_hint_for(MacOs),
+            "/Users/you/Notes"
+        );
+        assert_eq!(
+            super::super::scope_ui::FOLDER_HINT,
+            super::super::scope_ui::folder_hint_for(here)
+        );
     }
 
     /// SB-11: the Revoke rows under the `/privacy` bubble start at the
@@ -972,7 +1208,10 @@ mod tests {
         let ctx = egui::Context::default();
         crate::theme::install_fonts_on(&ctx);
         let input = egui::RawInput {
-            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1000.0, 600.0))),
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1000.0, 600.0),
+            )),
             ..Default::default()
         };
         let out = crate::theme::test_pass(&ctx, input, |ui| {
@@ -1002,14 +1241,29 @@ mod tests {
             walk(&clipped.shape, &mut lefts);
         }
         let head = lefts.get(PRIVACY_HEAD).copied().expect("bubble head");
-        let row = lefts.get("Files in notes").copied().expect("revoke row label");
-        assert!((head - row).abs() < 1.0, "bubble text at {head}, Revoke row at {row}");
+        let row = lefts
+            .get("Files in notes")
+            .copied()
+            .expect("revoke row label");
+        assert!(
+            (head - row).abs() < 1.0,
+            "bubble text at {head}, Revoke row at {row}"
+        );
     }
 
     #[test]
     fn sync_result_line_counts_computers() {
-        assert_eq!(sync_result_line(0), "Nothing paired yet. Start share to pair a computer.");
-        assert_eq!(sync_result_line(1), "Synced chats and memory to 1 computer.");
-        assert_eq!(sync_result_line(3), "Synced chats and memory to 3 computers.");
+        assert_eq!(
+            sync_result_line(0),
+            "Nothing paired yet. Start share to pair a computer."
+        );
+        assert_eq!(
+            sync_result_line(1),
+            "Synced chats and memory to 1 computer."
+        );
+        assert_eq!(
+            sync_result_line(3),
+            "Synced chats and memory to 3 computers."
+        );
     }
 }

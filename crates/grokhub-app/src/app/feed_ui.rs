@@ -10,16 +10,12 @@
 
 use super::*;
 use grokhub_core::{
-    automation_done_card,
-    dismiss_update_at, feed_ideas, feed_visible, file_idea_todo, hold_if_quiet,
-    unpin_feed_idea,
-    idea_todo_title,
-    mark_update_opened, parse_lookup, post_help, post_update,
-    quiet_hours_active, remember_dismissed_source, route_schedule,
-    schedule_created_card, tick_feed_pulse, visible_digests,
-    DigestEdition, DigestMaterial, PausedJob, PulseNow, RepeatedAction,
-    TasteNote, UpdateAction, UpdateCard,
-    UpdateKind, UpdateStatus, DIGEST_PAINT_MAX,
+    automation_done_card, dismiss_update_at, feed_ideas, feed_visible, file_idea_todo,
+    hold_if_quiet, idea_todo_title, mark_update_opened, parse_lookup, post_help, post_update,
+    quiet_hours_active, remember_dismissed_source, route_schedule, schedule_created_card,
+    tick_feed_pulse, unpin_feed_idea, visible_digests, DigestEdition, DigestMaterial, PausedJob,
+    PulseNow, RepeatedAction, TasteNote, UpdateAction, UpdateCard, UpdateKind, UpdateStatus,
+    DIGEST_PAINT_MAX,
 };
 
 /// What an ideas reply is checked against.
@@ -98,7 +94,10 @@ pub(super) struct SlidePose {
 
 pub(super) fn rest_slide(index: usize) -> SlidePose {
     match index {
-        0 => SlidePose { dy: 0.0, scale: 1.0 },
+        0 => SlidePose {
+            dy: 0.0,
+            scale: 1.0,
+        },
         1 => SlidePose {
             dy: STACK_REST_DY_1,
             scale: STACK_REST_SCALE_1,
@@ -123,7 +122,11 @@ pub(super) fn deck_poses(n: usize, open: bool, lifted: Option<usize>, room: f32)
     (0..n)
         .map(|index| {
             if index > 0 {
-                dy -= if lifted == Some(index) { LIFT_STEP } else { PEEK_H };
+                dy -= if lifted == Some(index) {
+                    LIFT_STEP
+                } else {
+                    PEEK_H
+                };
             }
             SlidePose {
                 dy: dy.max(-room),
@@ -189,7 +192,10 @@ fn settled_hits(
         })
         .collect();
     // The open Pulse card overlaps the strip under it. The pointer stays on it.
-    if let Some(id) = lift.index.and_then(|index| cards.get(index).map(|card| card.id.clone())) {
+    if let Some(id) = lift
+        .index
+        .and_then(|index| cards.get(index).map(|card| card.id.clone()))
+    {
         if let Some(pos) = hits.iter().position(|hit| hit.id == id) {
             let hit = hits.remove(pos);
             hits.push(hit);
@@ -235,7 +241,11 @@ fn lifted_index(cards: &[UpdateCard], view: &StackView) -> Option<usize> {
     cards.iter().position(|card| card.id == id)
 }
 
-pub(super) fn home_feed_count(cards: &[UpdateCard], pulse: &grokhub_core::FeedPulse, now: u64) -> usize {
+pub(super) fn home_feed_count(
+    cards: &[UpdateCard],
+    pulse: &grokhub_core::FeedPulse,
+    now: u64,
+) -> usize {
     home_stack_cards(cards, pulse, now).len()
 }
 
@@ -268,7 +278,10 @@ fn paint_done_accent(painter: &egui::Painter, card: &UpdateCard, rect: egui::Rec
     }
     let x = rect.left() + 1.5;
     painter.line_segment(
-        [egui::pos2(x, rect.top() + 8.0), egui::pos2(x, rect.bottom() - 8.0)],
+        [
+            egui::pos2(x, rect.top() + 8.0),
+            egui::pos2(x, rect.bottom() - 8.0),
+        ],
         egui::Stroke::new(2.0_f32, crate::theme::fg()),
     );
 }
@@ -294,7 +307,12 @@ struct ChromeLift {
     extra: f32,
 }
 
-fn chrome_lift(cards: &[UpdateCard], expanded: bool, lifted: Option<usize>, room: f32) -> ChromeLift {
+fn chrome_lift(
+    cards: &[UpdateCard],
+    expanded: bool,
+    lifted: Option<usize>,
+    room: f32,
+) -> ChromeLift {
     if !expanded {
         return ChromeLift {
             index: None,
@@ -302,8 +320,12 @@ fn chrome_lift(cards: &[UpdateCard], expanded: bool, lifted: Option<usize>, room
         };
     }
     let index = match lifted {
-        Some(i) => cards.get(i).and_then(|card| feed_style_card(card).then_some(i)),
-        None => cards.first().and_then(|card| feed_style_card(card).then_some(0)),
+        Some(i) => cards
+            .get(i)
+            .and_then(|card| feed_style_card(card).then_some(i)),
+        None => cards
+            .first()
+            .and_then(|card| feed_style_card(card).then_some(0)),
     };
     let extra = index
         .map(|i| {
@@ -369,7 +391,11 @@ impl Cabin {
         let Some(card) = self.updates.iter().find(|c| c.id == id).cloned() else {
             return;
         };
-        let Some(line) = card.prompt.clone().filter(|_| grokhub_core::is_crash_card(&card)) else {
+        let Some(line) = card
+            .prompt
+            .clone()
+            .filter(|_| grokhub_core::is_crash_card(&card))
+        else {
             return;
         };
         if mark_update_opened(&mut self.updates, id) {
@@ -654,10 +680,8 @@ impl Cabin {
                     && !card.held
                     && !card.pulse.quiet_batched
             }) {
-                self.situation_ping = Some((
-                    card.title.clone(),
-                    card.body.clone().unwrap_or_default(),
-                ));
+                self.situation_ping =
+                    Some((card.title.clone(), card.body.clone().unwrap_or_default()));
             }
         }
         help.ideas > 0
@@ -745,7 +769,10 @@ impl Cabin {
             let on_deck = pointer.is_some_and(|p| zone.contains(p));
             let hovered = hovered_slide_card(pointer, &prev.hits);
             let front_id = cards.first().map(|card| card.id.as_str());
-            let view = drop_missing_pop(cards, next_feed_stack(cards.len(), on_deck, hovered, front_id));
+            let view = drop_missing_pop(
+                cards,
+                next_feed_stack(cards.len(), on_deck, hovered, front_id),
+            );
             // Paint later, after the home composer, so cards that slide up stay on top.
             ui.ctx().data_mut(|d| {
                 d.insert_temp(
@@ -826,7 +853,12 @@ impl Cabin {
         }
         fly_in_newcomers(ui.ctx(), cards);
         arm_front_settle(ui.ctx(), cards);
-        let hints = deck_hints(cards, &self.card_prefs, now, deck.rank.novelty_id.as_deref());
+        let hints = deck_hints(
+            cards,
+            &self.card_prefs,
+            now,
+            deck.rank.novelty_id.as_deref(),
+        );
         let front = deferred.stack.left_top();
         let lifted = lifted_index(cards, &deferred.view);
         let room = front.y - ui.ctx().content_rect().top() - 8.0;
@@ -954,15 +986,25 @@ impl Cabin {
         self.persist_updates();
         let route = route_schedule(&seed);
         let (depth, did) = if route.is_some() {
-            (grokhub_core::UseDepth::Ran, grokhub_core::UseAction::Automated)
+            (
+                grokhub_core::UseDepth::Ran,
+                grokhub_core::UseAction::Automated,
+            )
         } else {
-            (grokhub_core::UseDepth::Opened, grokhub_core::UseAction::OpenedAutomations)
+            (
+                grokhub_core::UseDepth::Opened,
+                grokhub_core::UseAction::OpenedAutomations,
+            )
         };
         if let Some(card) = self.updates.iter().find(|c| c.id == id).cloned() {
             self.log_card_use(&card, depth, did);
         }
         if let Some(route) = route {
-            let _ = self.commit_schedule(route, grokhub_agent::harness::Origin::SelfManage, "from an Automate offer");
+            let _ = self.commit_schedule(
+                route,
+                grokhub_agent::harness::Origin::SelfManage,
+                "from an Automate offer",
+            );
         }
     }
 
@@ -1115,9 +1157,7 @@ impl Cabin {
             self.threads.iter().filter(|t| !t.background).collect();
         threads.sort_by_key(|t| std::cmp::Reverse(t.accessed_ms));
         let open = self.messages.iter().rev();
-        let rest = threads
-            .into_iter()
-            .flat_map(|t| t.messages.iter().rev());
+        let rest = threads.into_iter().flat_map(|t| t.messages.iter().rev());
         let mut out: Vec<String> = Vec::new();
         for (role, text) in open.chain(rest) {
             if out.len() >= n {
@@ -1207,9 +1247,9 @@ impl Cabin {
         let Some(id) = self.chat_job_thread.as_deref() else {
             return false;
         };
-        self.threads.iter().any(|t| {
-            t.id == id && t.background && t.title.starts_with("Discuss · ")
-        })
+        self.threads
+            .iter()
+            .any(|t| t.id == id && t.background && t.title.starts_with("Discuss · "))
     }
 
     /// A paused-job suggestion opens that job, like Open chat on its Workboard
@@ -1303,7 +1343,12 @@ impl Cabin {
         if !mark_update_opened(&mut self.updates, id) {
             return;
         }
-        if let Some(title) = self.updates.iter().find(|c| c.id == id).map(|c| c.title.clone()) {
+        if let Some(title) = self
+            .updates
+            .iter()
+            .find(|c| c.id == id)
+            .map(|c| c.title.clone())
+        {
             self.interests_feedback(&title, grokhub_core::interests::InterestSignal::Opened);
         }
         let (action, board_card) = self
@@ -1318,7 +1363,9 @@ impl Cabin {
                 Some(UpdateAction::OpenWorkboard) => grokhub_core::UseAction::OpenedBoard,
                 Some(UpdateAction::OpenAutomations) => grokhub_core::UseAction::OpenedAutomations,
                 Some(UpdateAction::DeepLink { .. }) => grokhub_core::UseAction::OpenedLink,
-                Some(UpdateAction::OpenSession { .. }) | None => grokhub_core::UseAction::OpenedChat,
+                Some(UpdateAction::OpenSession { .. }) | None => {
+                    grokhub_core::UseAction::OpenedChat
+                }
             };
             self.log_card_use(&card, grokhub_core::UseDepth::Opened, did);
         }
@@ -1442,10 +1489,18 @@ struct FeedStackMem {
 
 /// Cards still on the main window's deck. × there hides a card from it only.
 fn on_home(cards: &[UpdateCard]) -> Vec<UpdateCard> {
-    cards.iter().filter(|card| !card.pulse.off_home).cloned().collect()
+    cards
+        .iter()
+        .filter(|card| !card.pulse.off_home)
+        .cloned()
+        .collect()
 }
 
-fn home_stack_cards(cards: &[UpdateCard], pulse: &grokhub_core::FeedPulse, now: u64) -> Vec<UpdateCard> {
+fn home_stack_cards(
+    cards: &[UpdateCard],
+    pulse: &grokhub_core::FeedPulse,
+    now: u64,
+) -> Vec<UpdateCard> {
     let cards = on_home(cards);
     let mut out = grokhub_core::home_event_cards(&cards, pulse, now);
     out.extend(feed_ideas(&cards, now));
@@ -1627,228 +1682,241 @@ fn paint_tucked_edge(ui: &mut egui::Ui, rect: egui::Rect, cover: egui::Rect, opa
 }
 
 impl Cabin {
-/// Paints the deck back to front. Each card eases toward its pose; one that
-/// just joined slides in and fades up. `total` counts the cards waiting too.
-/// Reduced motion snaps the slide. A digest or suggestion that is open paints
-/// the Pulse card and grows up so the strip's bottom stays put.
-#[allow(clippy::too_many_arguments)]
-fn paint_slide_deck(
-    &mut self,
-    ui: &mut egui::Ui,
-    cards: &[UpdateCard],
-    hints: &[Option<String>],
-    front: egui::Pos2,
-    width: f32,
-    poses: &[SlidePose],
-    total: usize,
-    expanded: bool,
-    lifted: Option<usize>,
-    room: f32,
-    now_at: u64,
-) -> Option<FeedAct> {
-    let ctx = ui.ctx().clone();
-    let motion = !crate::motion::reduced_motion_ctx(&ctx);
-    let slide_secs = if motion { SLIDE_SECS } else { 0.0 };
-    let fly_secs = if motion { FLY_SECS } else { 0.0 };
-    let settle_secs = if motion { SETTLE_SECS } else { 0.0 };
-    let lift = chrome_lift(cards, expanded, lifted, room);
-    let placed: Vec<(egui::Rect, SlidePose, f32, f32, bool)> = cards
-        .iter()
-        .zip(poses)
-        .enumerate()
-        .map(|(index, (card, pose))| {
-            let mut dy = ctx.animate_value_with_time(
-                egui::Id::new(("home-feed-dy", card.id.as_str())),
-                card_dy(index, pose.dy, &lift, room),
-                slide_secs,
-            );
-            let scale = ctx.animate_value_with_time(
-                egui::Id::new(("home-feed-scale", card.id.as_str())),
-                pose.scale,
-                slide_secs,
-            );
-            let fly = ctx.animate_value_with_time(fly_id(&card.id), 1.0, fly_secs);
-            let settle = ctx.animate_value_with_time(settle_id(&card.id), 1.0, settle_secs);
-            let settle_t = if motion {
-                egui::emath::easing::quadratic_out(settle.clamp(0.0, 1.0))
-            } else {
-                1.0
-            };
-            if index == 0 && motion {
-                // Promoted front: ease up the last couple of pixels (CD-01).
-                dy += SETTLE_DY * (1.0 - settle_t);
+    /// Paints the deck back to front. Each card eases toward its pose; one that
+    /// just joined slides in and fades up. `total` counts the cards waiting too.
+    /// Reduced motion snaps the slide. A digest or suggestion that is open paints
+    /// the Pulse card and grows up so the strip's bottom stays put.
+    #[allow(clippy::too_many_arguments)]
+    fn paint_slide_deck(
+        &mut self,
+        ui: &mut egui::Ui,
+        cards: &[UpdateCard],
+        hints: &[Option<String>],
+        front: egui::Pos2,
+        width: f32,
+        poses: &[SlidePose],
+        total: usize,
+        expanded: bool,
+        lifted: Option<usize>,
+        room: f32,
+        now_at: u64,
+    ) -> Option<FeedAct> {
+        let ctx = ui.ctx().clone();
+        let motion = !crate::motion::reduced_motion_ctx(&ctx);
+        let slide_secs = if motion { SLIDE_SECS } else { 0.0 };
+        let fly_secs = if motion { FLY_SECS } else { 0.0 };
+        let settle_secs = if motion { SETTLE_SECS } else { 0.0 };
+        let lift = chrome_lift(cards, expanded, lifted, room);
+        let placed: Vec<(egui::Rect, SlidePose, f32, f32, bool)> = cards
+            .iter()
+            .zip(poses)
+            .enumerate()
+            .map(|(index, (card, pose))| {
+                let mut dy = ctx.animate_value_with_time(
+                    egui::Id::new(("home-feed-dy", card.id.as_str())),
+                    card_dy(index, pose.dy, &lift, room),
+                    slide_secs,
+                );
+                let scale = ctx.animate_value_with_time(
+                    egui::Id::new(("home-feed-scale", card.id.as_str())),
+                    pose.scale,
+                    slide_secs,
+                );
+                let fly = ctx.animate_value_with_time(fly_id(&card.id), 1.0, fly_secs);
+                let settle = ctx.animate_value_with_time(settle_id(&card.id), 1.0, settle_secs);
+                let settle_t = if motion {
+                    egui::emath::easing::quadratic_out(settle.clamp(0.0, 1.0))
+                } else {
+                    1.0
+                };
+                if index == 0 && motion {
+                    // Promoted front: ease up the last couple of pixels (CD-01).
+                    dy += SETTLE_DY * (1.0 - settle_t);
+                }
+                let away = 1.0 - egui::emath::easing::quadratic_out(fly);
+                let now = SlidePose { dy, scale };
+                let mut rect =
+                    slide_rect(front, width, now).translate(egui::vec2(FLY_DX, FLY_DY) * away);
+                let full = lift.index == Some(index);
+                if full {
+                    rect = full_card_rect(rect, FEED_CARD_H + lift.extra);
+                }
+                let opacity = if motion {
+                    fly * (0.72 + 0.28 * settle_t)
+                } else {
+                    fly
+                };
+                (rect, now, opacity, settle_t, full)
+            })
+            .collect();
+        let &(cover, _, _, _, _) = placed.first()?;
+        let mut act = None;
+        let mut popped_full = None;
+        for index in (0..placed.len()).rev() {
+            let (rect, pose, opacity, _, full) = placed[index];
+            if full && lifted == Some(index) {
+                popped_full = Some(index);
+                continue;
             }
-            let away = 1.0 - egui::emath::easing::quadratic_out(fly);
-            let now = SlidePose { dy, scale };
-            let mut rect =
-                slide_rect(front, width, now).translate(egui::vec2(FLY_DX, FLY_DY) * away);
-            let full = lift.index == Some(index);
-            if full {
-                rect = full_card_rect(rect, FEED_CARD_H + lift.extra);
+            if pose.dy < -1.0 {
+                paint_stack_shadow(ui.painter(), rect);
             }
-            let opacity = if motion {
-                fly * (0.72 + 0.28 * settle_t)
-            } else {
-                fly
-            };
-            (rect, now, opacity, settle_t, full)
-        })
-        .collect();
-    let &(cover, _, _, _, _) = placed.first()?;
-    let mut act = None;
-    let mut popped_full = None;
-    for index in (0..placed.len()).rev() {
-        let (rect, pose, opacity, _, full) = placed[index];
-        if full && lifted == Some(index) {
-            popped_full = Some(index);
-            continue;
-        }
-        if pose.dy < -1.0 {
-            paint_stack_shadow(ui.painter(), rect);
-        }
-        let card_act = if index > 0 && pose.dy > -PEEK_H * 0.5 {
-            paint_tucked_edge(ui, rect, cover, opacity);
-            None
-        } else if full {
-            self.paint_full_feed_card(ui, &cards[index], rect, now_at, opacity)
-        } else {
-            // CD-02: clip each open peek to the strip above the card in front so
-            // that card's own title row is what shows in PEEK_H.
-            let clip = if index > 0 {
-                let front_of = placed[index - 1].0.top();
-                Some(egui::Rect::from_min_max(
-                    egui::pos2(rect.left(), rect.top()),
-                    egui::pos2(rect.right(), front_of.max(rect.top())),
-                ))
-            } else {
+            let card_act = if index > 0 && pose.dy > -PEEK_H * 0.5 {
+                paint_tucked_edge(ui, rect, cover, opacity);
                 None
+            } else if full {
+                self.paint_full_feed_card(ui, &cards[index], rect, now_at, opacity)
+            } else {
+                // CD-02: clip each open peek to the strip above the card in front so
+                // that card's own title row is what shows in PEEK_H.
+                let clip = if index > 0 {
+                    let front_of = placed[index - 1].0.top();
+                    Some(egui::Rect::from_min_max(
+                        egui::pos2(rect.left(), rect.top()),
+                        egui::pos2(rect.right(), front_of.max(rect.top())),
+                    ))
+                } else {
+                    None
+                };
+                paint_card_at(
+                    ui,
+                    &cards[index],
+                    rect,
+                    hints.get(index).and_then(|hint| hint.as_deref()),
+                    opacity,
+                    clip,
+                )
             };
-            paint_card_at(
-                ui,
-                &cards[index],
-                rect,
-                hints.get(index).and_then(|hint| hint.as_deref()),
-                opacity,
-                clip,
-            )
-        };
-        if card_act.is_some() {
-            act = card_act;
+            if card_act.is_some() {
+                act = card_act;
+            }
         }
-    }
-    if let Some(index) = popped_full {
-        let (rect, pose, opacity, _, _) = placed[index];
-        if pose.dy < -1.0 {
-            paint_stack_shadow(ui.painter(), rect);
+        if let Some(index) = popped_full {
+            let (rect, pose, opacity, _, _) = placed[index];
+            if pose.dy < -1.0 {
+                paint_stack_shadow(ui.painter(), rect);
+            }
+            let card_act = self.paint_full_feed_card(ui, &cards[index], rect, now_at, opacity);
+            if card_act.is_some() {
+                act = card_act;
+            }
         }
-        let card_act = self.paint_full_feed_card(ui, &cards[index], rect, now_at, opacity);
-        if card_act.is_some() {
-            act = card_act;
+        if total > 1 {
+            let badge = egui::Rect::from_min_size(
+                egui::pos2(cover.right() - 36.0, cover.bottom() - 8.0),
+                egui::vec2(28.0, 16.0),
+            );
+            paint_count_badge(ui.painter(), badge, total);
         }
+        act
     }
-    if total > 1 {
-        let badge = egui::Rect::from_min_size(
-            egui::pos2(cover.right() - 36.0, cover.bottom() - 8.0),
-            egui::vec2(28.0, 16.0),
-        );
-        paint_count_badge(ui.painter(), badge, total);
-    }
-    act
-}
 
-/// Pulse card on the deck: source · age, title, short takeaway, image, Liked, Discuss.
-/// × is deck-only. The bottom of `rect` is the compact strip; the card grows up.
-fn paint_full_feed_card(
-    &mut self,
-    ui: &mut egui::Ui,
-    card: &UpdateCard,
-    rect: egui::Rect,
-    now_at: u64,
-    opacity: f32,
-) -> Option<FeedAct> {
-    let ctx = ui.ctx().clone();
-    let thumbs: Vec<super::pulse_ui::Thumb> = card
-        .pulse
-        .image_urls
-        .iter()
-        .take(3)
-        .filter_map(|url| self.pulse_thumb(&ctx, url))
-        .collect();
-    let mut act = None;
-    ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
-        ui.multiply_opacity(opacity);
-        ui.set_min_size(rect.size());
-        ui.set_width(rect.width());
-        // Registered first so Like, Discuss, and × keep the click. Tests read this rect.
-        let _hover = ui.interact(
-            rect,
-            egui::Id::new(("feed-card", &card.id)),
-            egui::Sense::hover(),
-        );
-        ui.painter().rect(
-            rect,
-            crate::theme::CARD_RADIUS,
-            crate::theme::elevated(),
-            egui::Stroke::new(1.0_f32, crate::theme::border()),
-            egui::StrokeKind::Middle,
-        );
-        paint_done_accent(ui.painter(), card, rect);
-        let x_rect = egui::Rect::from_min_size(
-            egui::pos2(rect.right() - 32.0, rect.top() + 8.0),
-            egui::vec2(24.0, 24.0),
-        );
-        let inner = egui::Rect::from_min_max(
-            egui::pos2(rect.left() + 12.0, rect.top() + 8.0),
-            egui::pos2(rect.right() - 12.0, rect.bottom() - 8.0),
-        );
-        ui.scope_builder(egui::UiBuilder::new().max_rect(inner), |ui| {
-            ui.set_width(inner.width());
-            ui.spacing_mut().item_spacing.y = 4.0;
-            ui.horizontal_top(|ui| {
-                super::pulse_ui::paint_feed_icon(ui, card);
-                ui.add_space(10.0);
-                ui.vertical(|ui| {
-                    ui.set_width(ui.available_width());
-                    ui.spacing_mut().item_spacing.y = 4.0;
-                    ui.label(
-                        RichText::new(super::pulse_ui::post_age_line(card, now_at))
-                            .size(crate::theme::FONT_TIP)
-                            .color(crate::theme::subtle()),
-                    );
-                    if let Some(did) = super::pulse_ui::paint_post_body(ui, card, &thumbs) {
-                        act = Some(match did {
-                            super::pulse_ui::FeedPostAct::Like => FeedAct::Like(card.id.clone()),
-                            super::pulse_ui::FeedPostAct::Discuss => {
-                                FeedAct::Discuss(card.id.clone())
-                            }
-                            super::pulse_ui::FeedPostAct::Link(url) => FeedAct::Link(url),
-                            super::pulse_ui::FeedPostAct::Undo => FeedAct::Undo(card.id.clone()),
-                            super::pulse_ui::FeedPostAct::NeverAgain => FeedAct::NeverAgain(card.id.clone()),
-                            super::pulse_ui::FeedPostAct::Open => FeedAct::Open(card.id.clone()),
-                            super::pulse_ui::FeedPostAct::Retry => FeedAct::Retry(card.id.clone()),
-                            super::pulse_ui::FeedPostAct::DeleteRecording => {
-                                FeedAct::DeleteRecording(card.id.clone())
-                            }
-                            super::pulse_ui::FeedPostAct::RetryNow => FeedAct::RetryNow,
-                            super::pulse_ui::FeedPostAct::Source(did) => FeedAct::Source(card.id.clone(), did),
-                        });
-                    }
+    /// Pulse card on the deck: source · age, title, short takeaway, image, Liked, Discuss.
+    /// × is deck-only. The bottom of `rect` is the compact strip; the card grows up.
+    fn paint_full_feed_card(
+        &mut self,
+        ui: &mut egui::Ui,
+        card: &UpdateCard,
+        rect: egui::Rect,
+        now_at: u64,
+        opacity: f32,
+    ) -> Option<FeedAct> {
+        let ctx = ui.ctx().clone();
+        let thumbs: Vec<super::pulse_ui::Thumb> = card
+            .pulse
+            .image_urls
+            .iter()
+            .take(3)
+            .filter_map(|url| self.pulse_thumb(&ctx, url))
+            .collect();
+        let mut act = None;
+        ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
+            ui.multiply_opacity(opacity);
+            ui.set_min_size(rect.size());
+            ui.set_width(rect.width());
+            // Registered first so Like, Discuss, and × keep the click. Tests read this rect.
+            let _hover = ui.interact(
+                rect,
+                egui::Id::new(("feed-card", &card.id)),
+                egui::Sense::hover(),
+            );
+            ui.painter().rect(
+                rect,
+                crate::theme::CARD_RADIUS,
+                crate::theme::elevated(),
+                egui::Stroke::new(1.0_f32, crate::theme::border()),
+                egui::StrokeKind::Middle,
+            );
+            paint_done_accent(ui.painter(), card, rect);
+            let x_rect = egui::Rect::from_min_size(
+                egui::pos2(rect.right() - 32.0, rect.top() + 8.0),
+                egui::vec2(24.0, 24.0),
+            );
+            let inner = egui::Rect::from_min_max(
+                egui::pos2(rect.left() + 12.0, rect.top() + 8.0),
+                egui::pos2(rect.right() - 12.0, rect.bottom() - 8.0),
+            );
+            ui.scope_builder(egui::UiBuilder::new().max_rect(inner), |ui| {
+                ui.set_width(inner.width());
+                ui.spacing_mut().item_spacing.y = 4.0;
+                ui.horizontal_top(|ui| {
+                    super::pulse_ui::paint_feed_icon(ui, card);
+                    ui.add_space(10.0);
+                    ui.vertical(|ui| {
+                        ui.set_width(ui.available_width());
+                        ui.spacing_mut().item_spacing.y = 4.0;
+                        ui.label(
+                            RichText::new(super::pulse_ui::post_age_line(card, now_at))
+                                .size(crate::theme::FONT_TIP)
+                                .color(crate::theme::subtle()),
+                        );
+                        if let Some(did) = super::pulse_ui::paint_post_body(ui, card, &thumbs) {
+                            act = Some(match did {
+                                super::pulse_ui::FeedPostAct::Like => {
+                                    FeedAct::Like(card.id.clone())
+                                }
+                                super::pulse_ui::FeedPostAct::Discuss => {
+                                    FeedAct::Discuss(card.id.clone())
+                                }
+                                super::pulse_ui::FeedPostAct::Link(url) => FeedAct::Link(url),
+                                super::pulse_ui::FeedPostAct::Undo => {
+                                    FeedAct::Undo(card.id.clone())
+                                }
+                                super::pulse_ui::FeedPostAct::NeverAgain => {
+                                    FeedAct::NeverAgain(card.id.clone())
+                                }
+                                super::pulse_ui::FeedPostAct::Open => {
+                                    FeedAct::Open(card.id.clone())
+                                }
+                                super::pulse_ui::FeedPostAct::Retry => {
+                                    FeedAct::Retry(card.id.clone())
+                                }
+                                super::pulse_ui::FeedPostAct::DeleteRecording => {
+                                    FeedAct::DeleteRecording(card.id.clone())
+                                }
+                                super::pulse_ui::FeedPostAct::RetryNow => FeedAct::RetryNow,
+                                super::pulse_ui::FeedPostAct::Source(did) => {
+                                    FeedAct::Source(card.id.clone(), did)
+                                }
+                            });
+                        }
+                    });
                 });
             });
+            let x = ui.put(
+                x_rect,
+                egui::Button::new(RichText::new("×").size(16.0).color(crate::theme::muted()))
+                    .frame(false),
+            );
+            if x.hovered() {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+            }
+            if x.clicked() {
+                act = Some(FeedAct::Dismiss(card.id.clone()));
+            }
         });
-        let x = ui.put(
-            x_rect,
-            egui::Button::new(RichText::new("×").size(16.0).color(crate::theme::muted())).frame(false),
-        );
-        if x.hovered() {
-            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-        }
-        if x.clicked() {
-            act = Some(FeedAct::Dismiss(card.id.clone()));
-        }
-    });
-    act
-}
+        act
+    }
 }
 
 fn paint_feed_card(
@@ -1937,7 +2005,12 @@ fn paint_feed_card(
                         .color(crate::theme::muted()),
                 );
             }
-            if let Some(why) = card.why.as_deref().map(str::trim).filter(|line| !line.is_empty()) {
+            if let Some(why) = card
+                .why
+                .as_deref()
+                .map(str::trim)
+                .filter(|line| !line.is_empty())
+            {
                 let line = match hint.map(str::trim).filter(|text| !text.is_empty()) {
                     Some(hint) => format!("{why} · {hint}"),
                     None => why.to_string(),
@@ -2018,11 +2091,17 @@ mod stack_tests {
 
     #[test]
     fn a_single_card_never_moves() {
-        let still = vec![SlidePose { dy: 0.0, scale: 1.0 }];
+        let still = vec![SlidePose {
+            dy: 0.0,
+            scale: 1.0,
+        }];
         assert_eq!(deck_poses(1, true, None, 500.0), still);
         assert_eq!(deck_poses(1, true, Some(0), 500.0), still);
         assert_eq!(deck_poses(1, false, None, 500.0), still);
-        assert_eq!(next_feed_stack(1, true, Some("only".into()), Some("only")), StackView::default());
+        assert_eq!(
+            next_feed_stack(1, true, Some("only".into()), Some("only")),
+            StackView::default()
+        );
     }
 
     #[test]
@@ -2030,18 +2109,47 @@ mod stack_tests {
         assert_eq!(PEEK_H, 34.0);
         assert_eq!(LIFT_STEP, 102.0);
         let rest = deck_poses(3, false, None, 500.0);
-        assert_eq!(rest[1], SlidePose { dy: STACK_REST_DY_1, scale: STACK_REST_SCALE_1 });
-        assert_eq!(rest[2], SlidePose { dy: STACK_REST_DY_2, scale: STACK_REST_SCALE_2 });
+        assert_eq!(
+            rest[1],
+            SlidePose {
+                dy: STACK_REST_DY_1,
+                scale: STACK_REST_SCALE_1
+            }
+        );
+        assert_eq!(
+            rest[2],
+            SlidePose {
+                dy: STACK_REST_DY_2,
+                scale: STACK_REST_SCALE_2
+            }
+        );
         assert_eq!(rest_slide(7), rest[2]);
 
-        assert_eq!(dys(&deck_poses(3, true, None, 500.0)), vec![0.0, -PEEK_H, -2.0 * PEEK_H]);
-        assert!(deck_poses(3, true, None, 500.0).iter().all(|pose| pose.scale == 1.0));
-        assert_eq!(dys(&deck_poses(3, true, Some(1), 500.0)), vec![0.0, -LIFT_STEP, -LIFT_STEP - PEEK_H]);
-        assert_eq!(dys(&deck_poses(3, true, Some(2), 500.0)), vec![0.0, -PEEK_H, -LIFT_STEP - PEEK_H]);
+        assert_eq!(
+            dys(&deck_poses(3, true, None, 500.0)),
+            vec![0.0, -PEEK_H, -2.0 * PEEK_H]
+        );
+        assert!(deck_poses(3, true, None, 500.0)
+            .iter()
+            .all(|pose| pose.scale == 1.0));
+        assert_eq!(
+            dys(&deck_poses(3, true, Some(1), 500.0)),
+            vec![0.0, -LIFT_STEP, -LIFT_STEP - PEEK_H]
+        );
+        assert_eq!(
+            dys(&deck_poses(3, true, Some(2), 500.0)),
+            vec![0.0, -PEEK_H, -LIFT_STEP - PEEK_H]
+        );
         // The front card never lifts.
-        assert_eq!(dys(&deck_poses(3, true, Some(0), 500.0)), vec![0.0, -PEEK_H, -2.0 * PEEK_H]);
+        assert_eq!(
+            dys(&deck_poses(3, true, Some(0), 500.0)),
+            vec![0.0, -PEEK_H, -2.0 * PEEK_H]
+        );
         // Near the top of the window nothing goes above the room left.
-        assert_eq!(dys(&deck_poses(3, true, Some(2), 50.0)), vec![0.0, -PEEK_H, -50.0]);
+        assert_eq!(
+            dys(&deck_poses(3, true, Some(2), 50.0)),
+            vec![0.0, -PEEK_H, -50.0]
+        );
         assert_eq!(dys(&deck_poses(2, true, None, -10.0)), vec![0.0, 0.0]);
     }
 
@@ -2122,9 +2230,14 @@ mod deck_hover_tests {
             frames.expanded.push(mem.expanded);
             let mut by_index = mem.hits.clone();
             by_index.sort_by_key(|hit| hit.index);
-            let front = by_index.first().map(|hit| hit.id.clone()).unwrap_or_default();
+            let front = by_index
+                .first()
+                .map(|hit| hit.id.clone())
+                .unwrap_or_default();
             frames.front_top.push(painted_top(ctx, &front));
-            frames.rects.push(by_index.iter().map(|hit| hit.rect).collect());
+            frames
+                .rects
+                .push(by_index.iter().map(|hit| hit.rect).collect());
             frames
                 .order
                 .push(by_index.into_iter().map(|hit| hit.id).collect());
@@ -2181,13 +2294,20 @@ mod deck_hover_tests {
         let mut path = vec![egui::pos2(500.0, 620.0); 60];
         path.extend(vec![egui::pos2(500.0, gap_y); 120]);
         let frames = play(&egui::Context::default(), 0, &mut cabin, &path);
-        assert_eq!(flips(&frames.expanded[60..]), 0, "deck flips with a still pointer");
+        assert_eq!(
+            flips(&frames.expanded[60..]),
+            0,
+            "deck flips with a still pointer"
+        );
         assert!(frames.expanded[179], "the deck stays open in the gap");
         let step = max_step(&frames.front_top);
         assert!(step < 20.0, "front card jumped {step} px in one frame");
         let first = frames.order[0].clone();
         assert_eq!(first.len(), 3);
-        assert!(frames.order.iter().all(|order| *order == first), "cards reordered");
+        assert!(
+            frames.order.iter().all(|order| *order == first),
+            "cards reordered"
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -2200,7 +2320,10 @@ mod deck_hover_tests {
         let mut path = vec![AWAY; 10];
         path.extend(vec![egui::pos2(500.0, 620.0); 60]);
         let frames = play(&egui::Context::default(), 0, &mut cabin, &path);
-        assert!(frames.expanded.iter().all(|open| !open), "a deck of one never opens");
+        assert!(
+            frames.expanded.iter().all(|open| !open),
+            "a deck of one never opens"
+        );
         let rest = frames.front_top[0];
         assert!((rest - STACK_TOP).abs() < 1.0, "front card rests at {rest}");
         assert!(
@@ -2220,25 +2343,48 @@ mod deck_hover_tests {
         let pile = play(&ctx, 0, &mut cabin, &vec![egui::pos2(500.0, 620.0); 40]);
         assert!(pile.expanded[39]);
         let front = pile.front_top[0];
-        assert!((front - STACK_TOP).abs() < 1.0, "front card rests at {front}");
+        assert!(
+            (front - STACK_TOP).abs() < 1.0,
+            "front card rests at {front}"
+        );
         assert!(pile.front_top.iter().all(|top| (top - front).abs() < 0.01));
-        let tops: Vec<f32> = pile.rects[39].iter().map(|rect| rect.top() - front).collect();
+        let tops: Vec<f32> = pile.rects[39]
+            .iter()
+            .map(|rect| rect.top() - front)
+            .collect();
         assert_eq!(tops, vec![0.0, -PEEK_H, -2.0 * PEEK_H]);
 
         // On the second card's title strip: that card alone rises clear of the front.
-        let second = play(&ctx, 40, &mut cabin, &vec![egui::pos2(500.0, front - 15.0); 40]);
-        let tops: Vec<f32> = second.rects[39].iter().map(|rect| rect.top() - front).collect();
+        let second = play(
+            &ctx,
+            40,
+            &mut cabin,
+            &vec![egui::pos2(500.0, front - 15.0); 40],
+        );
+        let tops: Vec<f32> = second.rects[39]
+            .iter()
+            .map(|rect| rect.top() - front)
+            .collect();
         assert_eq!(tops, vec![0.0, -LIFT_STEP, -LIFT_STEP - PEEK_H]);
         assert_eq!(flips(&second.expanded), 0);
-        assert!(second.front_top.iter().all(|top| (top - front).abs() < 0.01));
+        assert!(second
+            .front_top
+            .iter()
+            .all(|top| (top - front).abs() < 0.01));
         let back = &second.order[39][1];
         let lifted = painted(&ctx, back).expect("lifted card painted");
-        assert!((lifted.top() - (front - LIFT_STEP)).abs() < 0.5, "{lifted:?}");
+        assert!(
+            (lifted.top() - (front - LIFT_STEP)).abs() < 0.5,
+            "{lifted:?}"
+        );
 
         // Up to the third card's strip: it lifts and the second drops back to a peek.
         let third_y = front - LIFT_STEP - 15.0;
         let third = play(&ctx, 80, &mut cabin, &vec![egui::pos2(500.0, third_y); 40]);
-        let tops: Vec<f32> = third.rects[39].iter().map(|rect| rect.top() - front).collect();
+        let tops: Vec<f32> = third.rects[39]
+            .iter()
+            .map(|rect| rect.top() - front)
+            .collect();
         assert_eq!(tops, vec![0.0, -PEEK_H, -PEEK_H - LIFT_STEP]);
         assert_eq!(flips(&third.expanded), 0);
 
@@ -2246,7 +2392,10 @@ mod deck_hover_tests {
         let away = play(&ctx, 120, &mut cabin, &[AWAY; 60]);
         assert_eq!(flips(&away.expanded), 0);
         assert!(!away.expanded[59]);
-        let tops: Vec<f32> = away.rects[59].iter().map(|rect| rect.top() - front).collect();
+        let tops: Vec<f32> = away.rects[59]
+            .iter()
+            .map(|rect| rect.top() - front)
+            .collect();
         assert_eq!(tops[0], 0.0);
         assert!(tops[1] > 0.0 && tops[2] > tops[1], "{tops:?}");
         let _ = std::fs::remove_dir_all(&root);
@@ -2263,24 +2412,45 @@ mod deck_hover_tests {
         let before = play(&ctx, 0, &mut cabin, &[on_pile; 40]);
         let shown = before.order[39].clone();
         assert_eq!(shown.len(), 3, "the deck holds three");
-        let deck = home_deck(&cabin.updates, &cabin.cfg.feed_pulse, &cabin.card_prefs, now_ms());
+        let deck = home_deck(
+            &cabin.updates,
+            &cabin.cfg.feed_pulse,
+            &cabin.card_prefs,
+            now_ms(),
+        );
         assert_eq!(deck.waiting, 2);
 
         let gone = shown[0].clone();
         cabin.close_home_card(&gone);
-        let card = cabin.updates.iter().find(|c| c.id == gone).expect("card kept");
+        let card = cabin
+            .updates
+            .iter()
+            .find(|c| c.id == gone)
+            .expect("card kept");
         assert!(card.pulse.off_home);
         assert_ne!(card.status, UpdateStatus::Dismissed);
-        assert!(grokhub_core::pulse::pulse_visible(card, now_ms()), "Pulse still shows it");
+        assert!(
+            grokhub_core::pulse::pulse_visible(card, now_ms()),
+            "Pulse still shows it"
+        );
 
         // It starts off to the side and settles into its slot.
         let first = play(&ctx, 40, &mut cabin, &[on_pile]);
         let now_shown = first.order[0].clone();
         assert_eq!(now_shown.len(), 3);
         assert!(!now_shown.contains(&gone));
-        let joined: Vec<String> = now_shown.iter().filter(|id| !shown.contains(id)).cloned().collect();
+        let joined: Vec<String> = now_shown
+            .iter()
+            .filter(|id| !shown.contains(id))
+            .cloned()
+            .collect();
         assert_eq!(joined.len(), 1, "one waiting card joins: {now_shown:?}");
-        let deck = home_deck(&cabin.updates, &cabin.cfg.feed_pulse, &cabin.card_prefs, now_ms());
+        let deck = home_deck(
+            &cabin.updates,
+            &cabin.cfg.feed_pulse,
+            &cabin.card_prefs,
+            now_ms(),
+        );
         assert_eq!(deck.waiting, 1);
         let at = now_shown.iter().position(|id| *id == joined[0]).unwrap();
         let slot = first.rects[0][at];
@@ -2289,8 +2459,14 @@ mod deck_hover_tests {
         assert!(flying.top() > slot.top() + 10.0, "{flying:?} vs {slot:?}");
         let _ = play(&ctx, 41, &mut cabin, &vec![on_pile; 40]);
         let landed = painted(&ctx, &joined[0]).expect("newcomer painted");
-        assert!((landed.left() - slot.left()).abs() < 0.5, "{landed:?} vs {slot:?}");
-        assert!((landed.top() - slot.top()).abs() < 0.5, "{landed:?} vs {slot:?}");
+        assert!(
+            (landed.left() - slot.left()).abs() < 0.5,
+            "{landed:?} vs {slot:?}"
+        );
+        assert!(
+            (landed.top() - slot.top()).abs() < 0.5,
+            "{landed:?} vs {slot:?}"
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -2312,7 +2488,12 @@ mod deck_hover_tests {
     }
 
     /// Same layout as `play`, plus the text painted on the last frame.
-    fn last_texts(ctx: &egui::Context, start: usize, cabin: &mut Cabin, path: &[egui::Pos2]) -> Vec<String> {
+    fn last_texts(
+        ctx: &egui::Context,
+        start: usize,
+        cabin: &mut Cabin,
+        path: &[egui::Pos2],
+    ) -> Vec<String> {
         crate::theme::install_fonts(ctx);
         let mut texts = Vec::new();
         for (step, pos) in path.iter().enumerate() {
@@ -2392,8 +2573,14 @@ Streams are retried instead of partial output. ZEPHYRTAIL";
         ] {
             assert!(blob.contains(want), "missing {want:?} in {blob}");
         }
-        assert!(!blob.contains("ZEPHYRTAIL"), "dump leaked into the deck: {blob}");
-        assert!(!blob.contains("two real pieces"), "lead-in leaked into the deck: {blob}");
+        assert!(
+            !blob.contains("ZEPHYRTAIL"),
+            "dump leaked into the deck: {blob}"
+        );
+        assert!(
+            !blob.contains("two real pieces"),
+            "lead-in leaked into the deck: {blob}"
+        );
         assert!(
             !blob.contains("Streams are retried"),
             "third sentence leaked: {blob}"
@@ -2427,7 +2614,11 @@ Streams are retried instead of partial output. ZEPHYRTAIL";
         );
 
         cabin.close_home_card(&front_id);
-        let kept = cabin.updates.iter().find(|c| c.id == front_id).expect("kept");
+        let kept = cabin
+            .updates
+            .iter()
+            .find(|c| c.id == front_id)
+            .expect("kept");
         assert!(kept.pulse.off_home, "× leaves Pulse");
         assert_ne!(kept.status, UpdateStatus::Dismissed);
 
@@ -2485,8 +2676,14 @@ Streams are retried instead of partial output. ZEPHYRTAIL";
         let snap = play(&ctx, 5, &mut cabin, &[egui::pos2(500.0, 620.0)]);
         assert!(snap.expanded[0], "one frame opens the deck");
         let front = snap.front_top[0];
-        assert!((front - STACK_TOP).abs() < 1.0, "front stays put at {front}");
-        let tops: Vec<f32> = snap.rects[0].iter().map(|rect| rect.top() - front).collect();
+        assert!(
+            (front - STACK_TOP).abs() < 1.0,
+            "front stays put at {front}"
+        );
+        let tops: Vec<f32> = snap.rects[0]
+            .iter()
+            .map(|rect| rect.top() - front)
+            .collect();
         let want = [0.0, -PEEK_H, -2.0 * PEEK_H];
         assert_eq!(tops.len(), want.len());
         for (got, exp) in tops.iter().zip(want) {
@@ -2532,9 +2729,18 @@ Streams are retried instead of partial output. ZEPHYRTAIL";
             "back peek title missing in {titles:?} from {texts:?}"
         );
         // Painted back→front, so titles appear back→front in the shape list.
-        let i0 = titles.iter().position(|t| t.contains("Backup run 0")).unwrap();
-        let i1 = titles.iter().position(|t| t.contains("Backup run 1")).unwrap();
-        let i2 = titles.iter().position(|t| t.contains("Backup run 2")).unwrap();
+        let i0 = titles
+            .iter()
+            .position(|t| t.contains("Backup run 0"))
+            .unwrap();
+        let i1 = titles
+            .iter()
+            .position(|t| t.contains("Backup run 1"))
+            .unwrap();
+        let i2 = titles
+            .iter()
+            .position(|t| t.contains("Backup run 2"))
+            .unwrap();
         assert!(
             i2 < i1 && i1 < i0,
             "expected back→front paint order of titles, got idxs {i0},{i1},{i2} in {titles:?}"
@@ -2548,7 +2754,10 @@ Streams are retried instead of partial output. ZEPHYRTAIL";
         assert!((SETTLE_SECS - 0.15).abs() < 0.001);
         assert!((SETTLE_DY - 2.0).abs() < 0.001);
         // Wiring: settle helpers exist in this module (compile-time names).
-        let _ = (arm_front_settle as fn(&egui::Context, &[UpdateCard]), settle_id as fn(&str) -> egui::Id);
+        let _ = (
+            arm_front_settle as fn(&egui::Context, &[UpdateCard]),
+            settle_id as fn(&str) -> egui::Id,
+        );
         let _g = crate::config::hold_test_config();
         let (root, mut cabin) = run_cards(4);
         let ctx = egui::Context::default();
@@ -2616,26 +2825,47 @@ Streams are retried instead of partial output. ZEPHYRTAIL";
         cabin.new_thread(false);
         let job_thread = cabin.threads[cabin.thread_idx].id.clone();
         cabin.new_thread(false);
-        let mut job = grokhub_core::BoardCard::new("Fix the tray icon", "Paused. This is where to resume.", "");
+        let mut job = grokhub_core::BoardCard::new(
+            "Fix the tray icon",
+            "Paused. This is where to resume.",
+            "",
+        );
         job.thread_id = Some(job_thread.clone());
         let job_id = job.id.clone();
         cabin.board.push(job);
         let threads_before = cabin.threads.len();
-        let card = grokhub_core::suggestion_card(&format!("pause:{job_id}"), "Paused: Fix the tray icon", "Paused 2 hours ago.", 5);
+        let card = grokhub_core::suggestion_card(
+            &format!("pause:{job_id}"),
+            "Paused: Fix the tray icon",
+            "Paused 2 hours ago.",
+            5,
+        );
         let id = card.id.clone();
         cabin.updates.push(card);
         cabin.nav = Nav::Pulse;
         cabin.discuss_card(&id);
         assert_eq!(cabin.nav, Nav::Chat);
-        assert_eq!(cabin.threads[cabin.thread_idx].id, job_thread, "the job's own chat");
+        assert_eq!(
+            cabin.threads[cabin.thread_idx].id, job_thread,
+            "the job's own chat"
+        );
         assert_eq!(cabin.threads.len(), threads_before, "no Discuss chat");
         let saved = cabin.updates.iter().find(|c| c.id == id).unwrap();
-        assert_eq!((saved.status, saved.discuss_thread.as_deref()), (UpdateStatus::Opened, None));
+        assert_eq!(
+            (saved.status, saved.discuss_thread.as_deref()),
+            (UpdateStatus::Opened, None)
+        );
         // A paused job with no chat opens the Workboard instead.
-        let lone = grokhub_core::BoardCard::new("Sort receipts", "Paused. This is where to resume.", "");
+        let lone =
+            grokhub_core::BoardCard::new("Sort receipts", "Paused. This is where to resume.", "");
         let lone_id = lone.id.clone();
         cabin.board.push(lone);
-        let card = grokhub_core::suggestion_card(&format!("pause:{lone_id}"), "Paused: Sort receipts", "", 6);
+        let card = grokhub_core::suggestion_card(
+            &format!("pause:{lone_id}"),
+            "Paused: Sort receipts",
+            "",
+            6,
+        );
         let id = card.id.clone();
         cabin.updates.push(card);
         cabin.discuss_card(&id);
@@ -2681,7 +2911,10 @@ ZEPHYRTAIL is the rest of the dump https://evil.example/nope";
         assert!(!body.contains("two real pieces"), "{body}");
         assert!(body.contains("cancel hits a live turn"), "{body}");
         assert!(body.contains("https://xstack.grok.me/post"), "{body}");
-        assert!(body.contains("It changes the cancel button you use."), "{body}");
+        assert!(
+            body.contains("It changes the cancel button you use."),
+            "{body}"
+        );
         assert!(
             body.contains("You opened this from your feed and want to act on it."),
             "{body}"
@@ -2693,7 +2926,8 @@ ZEPHYRTAIL is the rest of the dump https://evil.example/nope";
         assert_eq!(card.status, UpdateStatus::Opened);
         assert!(card.discuss_thread.is_some());
 
-        let mut suggestion = grokhub_core::suggestion_card("tip", "Morning build", "placeholder", 11);
+        let mut suggestion =
+            grokhub_core::suggestion_card("tip", "Morning build", "placeholder", 11);
         suggestion.body = Some(
             "Your crate graph changed overnight. The lint now catches a stale lock. ZEPHYRTAIL"
                 .into(),
@@ -2721,7 +2955,10 @@ ZEPHYRTAIL is the rest of the dump https://evil.example/nope";
         assert!(body.contains("Morning build"), "{body}");
         assert!(body.contains("crate graph changed overnight"), "{body}");
         assert!(body.contains("https://example.com/morning-build"), "{body}");
-        assert!(body.contains("Your morning build is the one that waits."), "{body}");
+        assert!(
+            body.contains("Your morning build is the one that waits."),
+            "{body}"
+        );
         assert!(!body.contains("ZEPHYRTAIL"), "{body}");
         let _ = std::fs::remove_dir_all(&root);
     }

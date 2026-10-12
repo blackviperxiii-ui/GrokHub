@@ -27,7 +27,9 @@ pub(super) fn local_model_status(on: bool, installed: bool, tier: &str) -> Strin
     match (on, installed) {
         (false, _) => "On-device model for background tasks: off".into(),
         (true, true) => format!("On-device model for background tasks: on ({tier})"),
-        (true, false) => "On-device model for background tasks: on, no local model installed".into(),
+        (true, false) => {
+            "On-device model for background tasks: on, no local model installed".into()
+        }
     }
 }
 
@@ -54,10 +56,22 @@ impl Cabin {
         let installed = local::installed();
         let mut on = self.cfg.local_model;
         let downloaded = self.downloaded_model_name();
-        if crate::cards::settings_toggle(ui, "On-device model for background tasks", &local_model_hint(on, installed, downloaded), &mut on) {
+        if crate::cards::settings_toggle(
+            ui,
+            "On-device model for background tasks",
+            &local_model_hint(on, installed, downloaded),
+            &mut on,
+        ) {
             self.set_local_model(on);
         }
-        if !installed && crate::cards::settings_action(ui, "Local model", &self.local_model_row_hint(), "Set up") {
+        if !installed
+            && crate::cards::settings_action(
+                ui,
+                "Local model",
+                &self.local_model_row_hint(),
+                "Set up",
+            )
+        {
             self.open_local_setup();
         }
         if installed
@@ -84,7 +98,11 @@ impl Cabin {
             return;
         }
         self.status = match grokhub_agent::route::local_bench::run_for_ui() {
-            Ok(report) => report.lines().next().unwrap_or("Local speed: done").to_string(),
+            Ok(report) => report
+                .lines()
+                .next()
+                .unwrap_or("Local speed: done")
+                .to_string(),
             Err(e) => format!("Local speed: {e}"),
         };
     }
@@ -96,8 +114,14 @@ mod tests {
 
     #[test]
     fn the_hint_and_status_name_each_state() {
-        assert_eq!(local_model_hint(false, false, None), "Off. Background work uses your cloud model.");
-        assert_eq!(local_model_hint(false, true, Some("Qwen 2.5 7B")), "Off. Background work uses your cloud model.");
+        assert_eq!(
+            local_model_hint(false, false, None),
+            "Off. Background work uses your cloud model."
+        );
+        assert_eq!(
+            local_model_hint(false, true, Some("Qwen 2.5 7B")),
+            "Off. Background work uses your cloud model."
+        );
         assert_eq!(local_model_hint(true, true, None), "On. Dream, digests and summaries run on this device. Chat still uses your cloud model.");
         assert_eq!(
             local_model_hint(true, false, Some("Qwen 2.5 7B")),
@@ -107,9 +131,18 @@ mod tests {
             local_model_hint(true, false, None),
             "On, but no local model is installed. Background work uses your cloud model until one is set up."
         );
-        assert_eq!(local_model_status(false, true, "local:small"), "On-device model for background tasks: off");
-        assert_eq!(local_model_status(true, true, "local:tiny"), "On-device model for background tasks: on (local:tiny)");
-        assert_eq!(local_model_status(true, false, "local:small"), "On-device model for background tasks: on, no local model installed");
+        assert_eq!(
+            local_model_status(false, true, "local:small"),
+            "On-device model for background tasks: off"
+        );
+        assert_eq!(
+            local_model_status(true, true, "local:tiny"),
+            "On-device model for background tasks: on (local:tiny)"
+        );
+        assert_eq!(
+            local_model_status(true, false, "local:small"),
+            "On-device model for background tasks: on, no local model installed"
+        );
     }
 
     #[test]
@@ -122,7 +155,10 @@ mod tests {
         assert!(!app.cfg.local_model);
         app.set_local_model(true);
         assert!(app.cfg.local_model);
-        assert_eq!(app.status, "On-device model for background tasks: on, no local model installed");
+        assert_eq!(
+            app.status,
+            "On-device model for background tasks: on, no local model installed"
+        );
         // This build has no runtime: the flag is set but the route stays off, and no refresh was asked for.
         assert!(!local::installed() && !local::enabled());
         assert!(!app.harness.router.force_table);
@@ -143,7 +179,10 @@ mod tests {
         assert!(!app.cfg.local_model);
         assert_eq!(app.status, "On-device model for background tasks: off");
         app.open_local_setup();
-        assert_eq!(app.setup.step, Some(super::super::setup_wizard::SetupStep::LocalAi));
+        assert_eq!(
+            app.setup.step,
+            Some(super::super::setup_wizard::SetupStep::LocalAi)
+        );
         local::set_enabled(false);
         let _ = std::fs::remove_dir_all(root);
     }

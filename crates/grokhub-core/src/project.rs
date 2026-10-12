@@ -54,7 +54,10 @@ pub fn project_slug(name: &str) -> String {
 }
 
 pub fn project_work_path(work_root: &str, name: &str) -> String {
-    let root = work_root.replace('\\', "/").trim_end_matches('/').to_string();
+    let root = work_root
+        .replace('\\', "/")
+        .trim_end_matches('/')
+        .to_string();
     format!("{root}/{}", project_slug(name))
 }
 
@@ -73,7 +76,10 @@ pub fn seed_from_bound(bound_path: &str) -> Vec<ProjectNode> {
     }]
 }
 
-fn parent_is_folder(nodes: &[ProjectNode], parent: Option<&str>) -> Result<Option<String>, &'static str> {
+fn parent_is_folder(
+    nodes: &[ProjectNode],
+    parent: Option<&str>,
+) -> Result<Option<String>, &'static str> {
     let Some(pid) = parent else {
         return Ok(None);
     };
@@ -373,7 +379,10 @@ pub fn add_to_folder(
     let parent = match folder_id {
         None => None,
         Some(fid) => {
-            let folder = nodes.iter().find(|n| n.id == fid).ok_or("folder not found")?;
+            let folder = nodes
+                .iter()
+                .find(|n| n.id == fid)
+                .ok_or("folder not found")?;
             if folder.kind != ProjectKind::Folder {
                 return Err("target is not a folder");
             }
@@ -392,7 +401,10 @@ pub fn add_to_folder(
 }
 
 pub fn toggle_folder(nodes: &mut [ProjectNode], id: &str) -> bool {
-    if let Some(n) = nodes.iter_mut().find(|n| n.id == id && n.kind == ProjectKind::Folder) {
+    if let Some(n) = nodes
+        .iter_mut()
+        .find(|n| n.id == id && n.kind == ProjectKind::Folder)
+    {
         n.open = !n.open;
         true
     } else {
@@ -409,7 +421,8 @@ pub fn visible_tree(nodes: &[ProjectNode]) -> Vec<(u8, usize)> {
             shown[i] = true;
             if n.open {
                 for (j, c) in nodes.iter().enumerate() {
-                    if c.kind == ProjectKind::Project && c.parent.as_deref() == Some(n.id.as_str()) {
+                    if c.kind == ProjectKind::Project && c.parent.as_deref() == Some(n.id.as_str())
+                    {
                         out.push((1, j));
                         shown[j] = true;
                     }
@@ -474,8 +487,14 @@ pub fn upsert_bound_in(
 }
 
 pub fn is_under_project(abs_path: &str, project_root: &str) -> bool {
-    let a = abs_path.replace('\\', "/").trim_end_matches('/').to_string();
-    let r = project_root.replace('\\', "/").trim_end_matches('/').to_string();
+    let a = abs_path
+        .replace('\\', "/")
+        .trim_end_matches('/')
+        .to_string();
+    let r = project_root
+        .replace('\\', "/")
+        .trim_end_matches('/')
+        .to_string();
     if a.is_empty() || r.is_empty() {
         return false;
     }
@@ -484,7 +503,8 @@ pub fn is_under_project(abs_path: &str, project_root: &str) -> bool {
 
 pub fn project_name_from_path(p: &str) -> String {
     p.replace('\\', "/")
-        .split('/').rfind(|s| !s.is_empty())
+        .split('/')
+        .rfind(|s| !s.is_empty())
         .unwrap_or(p)
         .to_string()
 }
@@ -669,30 +689,30 @@ mod tests {
     fn bound_tree_and_cap() {
         assert!(is_under_project("/home/j/proj/src", "/home/j/proj"));
         assert!(!is_under_project("/etc/passwd", "/home/j/proj"));
-        assert_eq!(project_name_from_path("/home/j/GrokHub-Work"), "GrokHub-Work");
+        assert_eq!(
+            project_name_from_path("/home/j/GrokHub-Work"),
+            "GrokHub-Work"
+        );
         assert!(host_cmd_leaves_project("cat /etc/passwd", "/home/j/proj"));
         assert!(!host_cmd_leaves_project("cat src/main.rs", "/home/j/proj"));
-        assert!(!host_cmd_leaves_project("cat /home/j/proj/src/a.rs", "/home/j/proj"));
+        assert!(!host_cmd_leaves_project(
+            "cat /home/j/proj/src/a.rs",
+            "/home/j/proj"
+        ));
         assert!(host_cmd_leaves_project_in(
             "cat ~/secrets",
             "/home/j/proj",
             Some("/home/j")
         ));
         assert!(
-            !host_cmd_leaves_project_in(
-                "cat ~/proj/src/main.rs",
-                "/home/j/proj",
-                Some("/home/j")
-            ),
+            !host_cmd_leaves_project_in("cat ~/proj/src/main.rs", "/home/j/proj", Some("/home/j")),
             "tilde inside the bound tree is still in-world"
         );
-        assert!(
-            !host_cmd_leaves_project_in(
-                "cat $HOME/proj/src/a.rs",
-                "/home/j/proj",
-                Some("/home/j")
-            )
-        );
+        assert!(!host_cmd_leaves_project_in(
+            "cat $HOME/proj/src/a.rs",
+            "/home/j/proj",
+            Some("/home/j")
+        ));
         assert!(!host_cmd_leaves_project("ls", "/home/j/proj"));
         assert!(!host_cmd_leaves_project("cat /etc/passwd", ""));
         assert!(
@@ -718,11 +738,7 @@ mod tests {
             "quoted absolute paths leave the bound tree"
         );
         assert!(
-            !host_cmd_leaves_project_in(
-                "cat src/main.rs",
-                "~/proj",
-                Some("/home/j")
-            ),
+            !host_cmd_leaves_project_in("cat src/main.rs", "~/proj", Some("/home/j")),
             "tilde bound roots still treat in-tree paths as inside"
         );
         assert!(host_hour_blocked(40, 40));
@@ -824,7 +840,17 @@ mod tests {
     #[test]
     fn create_rename_folder_and_add() {
         let mut nodes = Vec::new();
-        assert_eq!(create_project(&mut nodes, "p1", "Night watch", None, "/home/j/GrokHub-Work").unwrap(), 0);
+        assert_eq!(
+            create_project(
+                &mut nodes,
+                "p1",
+                "Night watch",
+                None,
+                "/home/j/GrokHub-Work"
+            )
+            .unwrap(),
+            0
+        );
         assert_eq!(nodes[0].name, "Night watch");
         assert_eq!(nodes[0].kind, ProjectKind::Project);
         assert_eq!(nodes[0].path, "/home/j/GrokHub-Work/night-watch");
@@ -890,7 +916,14 @@ mod tests {
     fn orphans_still_show_and_folder_drop_unparents() {
         let mut nodes = Vec::new();
         create_folder(&mut nodes, "f1", "Cabin", None).unwrap();
-        create_project(&mut nodes, "p1", "Night watch", Some("f1"), "/home/j/GrokHub-Work").unwrap();
+        create_project(
+            &mut nodes,
+            "p1",
+            "Night watch",
+            Some("f1"),
+            "/home/j/GrokHub-Work",
+        )
+        .unwrap();
         nodes[1].parent = Some("gone".into());
         assert_eq!(visible_tree(&nodes), vec![(0, 0), (0, 1)]);
         nodes[1].parent = Some("f1".into());
@@ -910,10 +943,7 @@ mod tests {
         create_project(&mut nodes, "p3", "Late", Some("f2"), "/w").unwrap();
         nodes[0].open = true;
         nodes[1].open = false;
-        assert_eq!(
-            visible_tree(&nodes),
-            vec![(0, 0), (1, 2), (0, 1), (0, 3)]
-        );
+        assert_eq!(visible_tree(&nodes), vec![(0, 0), (1, 2), (0, 1), (0, 3)]);
         nodes[1].open = true;
         assert_eq!(
             visible_tree(&nodes),
@@ -931,11 +961,9 @@ mod tests {
         let fold = project_menu_acts(ProjectKind::Folder);
         assert!(fold.contains(&ProjectMenuAct::Rename));
         assert!(fold.contains(&ProjectMenuAct::Delete));
-        assert!(
-            !fold
-                .iter()
-                .any(|act| project_menu_label(*act) == "New project here")
-        );
+        assert!(!fold
+            .iter()
+            .any(|act| project_menu_label(*act) == "New project here"));
         assert!(fold.contains(&ProjectMenuAct::NewChat));
         assert!(proj.contains(&ProjectMenuAct::NewChat));
         assert_eq!(project_menu_label(ProjectMenuAct::NewChat), "New chat");
@@ -1026,7 +1054,10 @@ mod tests {
             open: false,
         }];
         let out = drop_selected_in(&mut nodes, "p1", "/home/j/work/proj", Some("/home/j"));
-        assert!(out.unbound, "$HOME sidebar path must match the expanded bound dir");
+        assert!(
+            out.unbound,
+            "$HOME sidebar path must match the expanded bound dir"
+        );
     }
 
     #[test]
@@ -1041,7 +1072,11 @@ mod tests {
         }];
         let id = upsert_bound_in(&mut nodes, "/home/j/work/proj", Some("/home/j"));
         assert_eq!(id.as_deref(), Some("p1"));
-        assert_eq!(nodes.len(), 1, "must not add a second row for the same tree");
+        assert_eq!(
+            nodes.len(),
+            1,
+            "must not add a second row for the same tree"
+        );
     }
 
     #[test]
@@ -1105,7 +1140,12 @@ mod tests {
             "/home/j/Dawn"
         );
         assert_eq!(
-            resolve_bind_path("src", "/home/j/Dawn", "/home/j/GrokHub-Work", Some("/home/j")),
+            resolve_bind_path(
+                "src",
+                "/home/j/Dawn",
+                "/home/j/GrokHub-Work",
+                Some("/home/j")
+            ),
             "/home/j/Dawn/src"
         );
         assert_ne!(
