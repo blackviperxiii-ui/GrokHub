@@ -3931,7 +3931,10 @@ impl Cabin {
 
     fn cabin_update_available(&self) -> bool {
         !self.cabin_overlay_done
-            && should_notify_cabin_update(env!("CARGO_PKG_VERSION"), self.cabin_latest.as_deref())
+            && should_notify_cabin_update(
+                &crate::update::build_version_label(),
+                self.cabin_latest.as_deref(),
+            )
     }
 
     fn update_pending_now(&self) -> UpdatePending {
