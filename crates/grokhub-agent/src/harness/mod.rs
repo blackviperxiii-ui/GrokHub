@@ -59,6 +59,7 @@ mod approval;
 mod at_rest;
 mod audit;
 mod backend;
+mod brain_tune;
 mod canary;
 mod changes;
 mod consent;
@@ -100,13 +101,14 @@ pub use cua::{
     CUA_DRIVER_TAG, CUA_DRIVER_VERSION, CUA_ENV_REMOVE, CUA_LINUX_ASSET, CUA_LINUX_SHA256, CUA_LINUX_ONLY_MSG,
     CUA_MISSING_MSG, CUA_OFF_MSG, CUA_PERMISSION_MODE, CUA_TOOLS,
 };
+pub use brain_tune::{propose, user_version, PlaybookTarget, PolicyTarget, Tweak, BRAIN_SHARE_PCT, OUTSIDE_EDIT, POLICY_ID};
 pub use canary::{
-    diff_stat, judge, open_trial, pick_arm, read_versions, revert_version, settle_trials, start_trial, versions_path, Judged, Metric,
+    diff_stat, judge, open_trial, pick_arm, read_versions, revert_version, settle_trials, start_trial, start_trial_at_share, versions_path, Judged, Metric,
     Version, VersionStatus, ALL_RUNS, CANARY_MAX_MS, CANARY_RUNS, CANARY_SHARE_PCT, VERSIONS_FILE,
 };
 pub use changes::{
     accept_change, kept_bytes, change_id, note_proposal_finding, content_hash, entry_id, findings_path, history_dir, ledger_path, read_scope_findings,
-    record_change, record_skill_change, restore_change, restore_skill, scope_guard, skill_history_dir,
+    record_change, record_outside_edit, record_skill_change, restore_change, restore_skill, scope_guard, skill_history_dir,
     skill_ledger_path, take_self_changes, undo_change, undo_skill_change, Change, ChangeKind, ChangeLedger,
     ChangeOp, ChangeTarget, Reverted, ScopeFinding, SkillTarget, SnippetTarget, UndoAsk, AUTOMATION_LEDGER_FILE, CHANGES_DIR,
     CONNECTION_LEDGER_FILE, FINDINGS_FILE, HISTORY_CAP, LEDGER_LINE_CAP, LEDGER_SCOPE_VIOLATION, MODEL_LEDGER_FILE, SKILL_LEDGER_FILE,
