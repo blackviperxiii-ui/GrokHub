@@ -410,10 +410,7 @@ pub fn requests_for(
         for topic in &searched {
             out.push(SourceReq {
                 kind: SourceKind::WebSearch,
-                url: format!(
-                    "https://lite.duckduckgo.com/lite/?q={}",
-                    query_value(topic)
-                ),
+                url: format!("https://lite.duckduckgo.com/lite/?q={}", query_value(topic)),
                 name: "Web search".into(),
                 topic: Some(topic.clone()),
             });
@@ -1480,9 +1477,10 @@ fn quality(item: &SourceItem) -> u32 {
             10..=99 => 100,
             _ => 85,
         },
-        SourceKind::GithubReleases | SourceKind::YouTube | SourceKind::Rss | SourceKind::WebSearch => {
-            100
-        }
+        SourceKind::GithubReleases
+        | SourceKind::YouTube
+        | SourceKind::Rss
+        | SourceKind::WebSearch => 100,
     }
 }
 
@@ -2526,9 +2524,9 @@ mod tests {
                 (SourceKind::WebSearch, Some("Rust".into()), true),
             ]
         );
-        assert!(reqs.iter().any(|r| {
-            r.kind == SourceKind::WebSearch && r.url.contains("lite.duckduckgo.com")
-        }));
+        assert!(reqs
+            .iter()
+            .any(|r| { r.kind == SourceKind::WebSearch && r.url.contains("lite.duckduckgo.com") }));
         let no_search = SourceSettings {
             hacker_news: false,
             reddit: false,
