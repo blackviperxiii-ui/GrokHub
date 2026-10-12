@@ -252,6 +252,7 @@ impl Cabin {
                 }
             }
             Slash::RewindFiles => self.rewind_project(),
+            Slash::RewindStep(step) => self.rewind_agent_steps(step),
             Slash::Compact => {
                 if self.native_compact_if_current() {
                     self.stamp_current_access();
@@ -565,6 +566,7 @@ impl Cabin {
             Slash::Rewind => {
                 self.status = REWIND_NA.into();
             }
+            // RewindStep is handled above (and on native via dispatch_native_slash).
             Slash::Room(name) => {
                 let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
                 let plan = plan_room(&name, &home);
@@ -814,6 +816,10 @@ impl Cabin {
             }
             Slash::Rewind => {
                 self.status = REWIND_NA.into();
+                true
+            }
+            Slash::RewindStep(step) => {
+                self.rewind_agent_steps(*step);
                 true
             }
             Slash::Usage => {

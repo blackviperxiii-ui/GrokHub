@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Background and unattended jobs use a slimmer system prompt: they keep the cabin safety rules and AGENTS layers, and drop the skills list and plugin extras unless the job text declares `NEED_SKILLS` or `NEED_PLUGINS`. Chat is unchanged; the nightly review still uses its lean review prompt.
+- Added: GrokHub keeps a copy of each file before the agent edits it; `/rewind step` lists the agent's steps and puts any file back as it was.
 - Fixed: channel switch no longer force-moves a local `main`/`beta` that is ahead of origin (fast-forward or refuse); Update recover resets to `origin/main`/`origin/beta` (not an old release tag); backup commits ignore GPG signing.
 - Fixed: long chats and tasks no longer stop with a context error; GrokHub compacts again whenever the context fills and retries once after a context-overflow reply, keeping the latest steps word for word.
 - Auto router picks the strongest reasoning model on your plan for real work and keeps background jobs on the fast tier, with a reason for every pick.

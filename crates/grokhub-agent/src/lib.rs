@@ -6,6 +6,7 @@ mod checkpoint;
 mod client;
 mod compact;
 mod drive;
+mod file_checkpoint;
 pub mod episode;
 mod eval;
 mod events;
@@ -49,6 +50,9 @@ pub use client::{
 pub use compact::{estimate_input_tokens, message_text};
 pub use eval::{parse_args, reject_live, render_report, run_suite, ItemResult, Opts, SUITE_ITEMS};
 pub use events::{Engine, EngineParts, EpisodeSeed, NativeEngine, StampHalt};
+pub use file_checkpoint::{
+    before_write, begin_step, format_steps, list_steps, restore_step, StepInfo, MAX_BYTES, MAX_RUNS,
+};
 pub use gate::{ClosedPermits, Gate, PermAnswer, PermMode, PermitInbox, PermitNote, PermitWait};
 pub use harness::{AccessMode, ComputerUseBackend, GateOutcome, HardClass, APPROVAL_GATE_VIOLATION};
 pub use hooks::{
