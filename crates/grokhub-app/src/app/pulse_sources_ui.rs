@@ -202,8 +202,7 @@ fn ago_label(ms: u64, now: u64) -> String {
 }
 
 impl Cabin {
-    /// Interest topics to search, strongest first. Cabin jargon and weak
-    /// unigrams are left out (`InterestProfile::search_topics`).
+    /// Ready + searchable interest topics (evidence-gated graph, then #727 junk filter).
     fn source_topics(&mut self) -> Vec<String> {
         self.interests_now().search_topics()
     }
@@ -259,17 +258,26 @@ impl Cabin {
             let memory_md = crate::config::read_memory("MEMORY.md");
             self.seed_interests(&user_md, &memory_md);
         }
+        self.interests_observe_recent();
         let topics = self.source_topics();
+        let probes = self
+            .interests_now()
+            .probe_queries(grokhub_core::interests::PROBE_MAX);
         let path = sources_cache_path();
         let mut cache = ps::load_cache(&path);
         let mut reqs = ps::requests_for(&self.cfg.pulse_sources, &topics, cache.runs, now);
-        // More like this asks run once, on this check.
-        if !cache.related.is_empty() {
-            reqs.extend(ps::related_requests(
-                &self.cfg.pulse_sources,
-                &cache.related,
-                now,
-            ));
+        // Graph probes + More like this asks run on this check.
+        let mut related = cache.related.clone();
+        for p in probes {
+            if !related
+                .iter()
+                .any(|r| r.query.eq_ignore_ascii_case(&p.query))
+            {
+                related.push(p);
+            }
+        }
+        if !related.is_empty() {
+            reqs.extend(ps::related_requests(&self.cfg.pulse_sources, &related, now));
             cache.related.clear();
             if let Err(err) = ps::save_cache(&path, &cache) {
                 self.status = err;
@@ -473,12 +481,16 @@ impl Cabin {
     }
 
     /// The interest a post was for moves too when its title doesn't name it.
+    /// Topic weights often already moved via `pulse_note`; edges always get the anchor.
     fn post_topic_feedback(&mut self, card: &grokhub_core::UpdateCard, signal: InterestSignal) {
-        if let Some(topic) = card.pulse.because.as_deref() {
+        let anchor = card.pulse.because.as_deref();
+        if let Some(topic) = anchor {
             if !grokhub_core::interests::names_topic(&card.title, topic) {
-                self.interests_feedback(topic, signal);
+                self.interests_feedback_anchored(topic, Some(topic), signal);
+                return;
             }
         }
+        self.interests_edge_feedback(&card.title, anchor, signal);
     }
 
     fn nudge_post_source(&mut self, card: &grokhub_core::UpdateCard, step: i32, related: bool) {
@@ -577,7 +589,11 @@ impl Cabin {
                     card.title,
                     card.pulse.because.as_deref().unwrap_or("")
                 );
-                self.interests_feedback(&text, InterestSignal::MoreLikeThis);
+                self.interests_feedback_anchored(
+                    &text,
+                    card.pulse.because.as_deref(),
+                    InterestSignal::MoreLikeThis,
+                );
                 self.nudge_post_source(&card, 1, true);
                 if !self.learn_place_from_card(&card) {
                     self.status = "More like this on the next check.".into();
