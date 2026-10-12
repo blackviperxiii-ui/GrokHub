@@ -106,6 +106,7 @@ pub use tasks::{
 };
 pub use tools::control::{take_automation_changes, AutomationChange};
 pub use tools::{
-    execute, is_readonly, schemas_for, tool_schemas, DesktopOps, ToolOutput, READ_ONLY_PHASE,
+    execute, is_readonly, public_only_resolve, schemas_for, tool_schemas, DesktopOps, ToolOutput,
+    READ_ONLY_PHASE,
 };
 pub use unattended::{run_unattended, UnattendedDone, UnattendedRun};
