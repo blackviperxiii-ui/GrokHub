@@ -244,8 +244,10 @@ pub fn rank_proposals(
                 }
                 continue;
             }
-            // Lessons and router weights are tuned by their own nightly passes.
-            Ok(TuneTarget::Lesson(_) | TuneTarget::Router(_)) => continue,
+            // Lessons and router weights are tuned by their own nightly passes;
+            // policy rows and playbooks go through `harness::brain_tune`, which
+            // proposes on top of the user's version.
+            Ok(TuneTarget::Lesson(_) | TuneTarget::Router(_) | TuneTarget::Policy(_) | TuneTarget::Playbook(_)) => continue,
             Err(why) => {
                 refused.push(RejectedProposal {
                     target: p.target,
