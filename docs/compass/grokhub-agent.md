@@ -26,7 +26,7 @@
 - Gate v0 still treats Auto like Ask; Plan and btw stay read-only (`READ_ONLY_PHASE`).
 - Unattended runs (`run_unattended`): Ask denies every non-read-only tool; Auto uses the Phase 5 judge and fails closed.
 - Subagents: Explore is read-only, General copies the parent gate, depth 2 stops grandchildren, a worktree never falls back to the parent tree.
-- `system_prompt_parts` (`prompt.rs`): stable cabin rules then AGENTS/skills (mtime-memoized); personality and learned brief are the volatile tail. Prefer it over `system_prompt`.
+- `system_prompt_parts` / `system_prompt_with` (`prompt.rs`): `PromptProfile` (Chat, Background, Unattended, Review). Chat keeps skills reminder and plugin extras; Background/Unattended drop them unless the job declares `NEED_SKILLS` / `NEED_PLUGINS` (`prompt_need_from_job`). Review is the lean nightly body. Stable cabin rules then AGENTS/skills (mtime-memoized); personality and learned brief are the volatile tail. Prefer `system_prompt_parts` (chat) or `system_prompt_with` over `system_prompt`.
 - Auto-compact (`compact.rs` / `run.rs`): re-arms after a new turn; context-length errors compact once and retry, then stop with `context still too large after compaction`.
 - Its `memory.rs` keeps `MEMORY.md` plus a rebuildable `index.sqlite` (bundled rusqlite); it never touches USER.md or SOUL.md and is not AMR; its recall pack (`first_turn_injection`) goes through `redact_recall` before the model sees it.
 - No tokio: MCP uses one worker thread per stdio child or HTTP read.
