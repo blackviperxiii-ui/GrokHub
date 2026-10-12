@@ -8879,6 +8879,13 @@ fn composer_and_history_omit_archived_idle_chrome() {
         kick.contains("is_archived") && kick.contains("continue"),
         "History search must skip archived chats: {kick}"
     );
+    let archive_row = fn_src(&src, "ui_chat_archive_row");
+    assert!(
+        !archive_row.contains("move to Archived")
+            && archive_row.contains("leave History and search")
+            && archive_row.contains("still on disk"),
+        "Settings auto-archive must not promise an Archived drawer: {archive_row}"
+    );
 }
 
 #[test]

@@ -289,7 +289,7 @@ impl Cabin {
                 }
             })
             .collect();
-        let hint = "Chats with no messages, opens or edits for this long move to Archived. Pinned chats and chats with a running or parked task stay. Nothing is deleted.";
+        let hint = "Chats with no messages, opens or edits for this long leave History and search (still on disk; open the chat or Unarchive from its menu). Pinned chats and chats with a running or parked task stay. Nothing is deleted.";
         let current = if self.cfg.chat_archive_days == 0 {
             "Off".to_string()
         } else {

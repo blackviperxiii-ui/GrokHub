@@ -434,7 +434,7 @@ pub struct AppConfig {
     )]
     pub amr_retention_days: u32,
     /// Settings → Behavior → Auto-archive: chats with no activity for this many
-    /// days move to Archived (still searchable). 0 is off. Default 14.
+    /// days leave History and search (still on disk). 0 is off. Default 14.
     #[serde(
         default = "default_chat_archive_days",
         deserialize_with = "de_chat_archive_days"
