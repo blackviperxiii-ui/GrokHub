@@ -1101,3 +1101,124 @@ fn the_change_history_lists_versions_newest_first_and_reverts_a_kept_skill() {
     assert_eq!((rows[0].title.as_str(), rows[0].revert.as_deref()), ("Reverted: Use ctrl+s in weekly-report", None));
     let _ = std::fs::remove_dir_all(&root);
 }
+
+/// Settings paint must not call `load_state` / `std::fs::read*` / `Command::new`
+/// (or `read_versions` on the history page). The cabin holds a cache writers update.
+#[test]
+fn settings_self_review_paint_does_not_touch_disk() {
+    fn body<'a>(src: &'a str, name: &str) -> &'a str {
+        let needle = format!("fn {name}(");
+        let start = src.find(&needle).unwrap_or_else(|| panic!("missing {name}"));
+        let after = &src[start..];
+        let end = after[needle.len()..]
+            .find("\n    fn ")
+            .or_else(|| after[needle.len()..].find("\nfn "))
+            .map(|i| needle.len() + i)
+            .unwrap_or(after.len());
+        &after[..end]
+    }
+    let review = include_str!("self_review_ui.rs").replace("\r\n", "\n");
+    let history = include_str!("change_history_ui.rs").replace("\r\n", "\n");
+    let quiet = body(&review, "ui_quiet_self_review_rows");
+    assert!(
+        !quiet.contains("load_state()") && !quiet.contains("std::fs::") && !quiet.contains("Command::new"),
+        "quiet rows must paint from the cached file: {quiet}"
+    );
+    assert!(
+        quiet.contains("ensure_self_review_file") && quiet.contains("quiet_log_note"),
+        "quiet rows read the in-memory quiet log: {quiet}"
+    );
+    let hist = body(&history, "ui_self_change_history");
+    assert!(
+        !hist.contains("load_state()")
+            && !hist.contains("read_versions")
+            && !hist.contains("std::fs::")
+            && !hist.contains("Command::new"),
+        "history rows must paint from caches: {hist}"
+    );
+    assert!(
+        hist.contains("history_versions_now") && hist.contains("ensure_self_review_file"),
+        "history rows use the version and idea caches: {hist}"
+    );
+    // Setup / proactive / local-ai: hardware detect and budget load are not in paint.
+    let setup = include_str!("setup_wizard.rs").replace("\r\n", "\n");
+    let paint = body(&setup, "paint_setup_wizard");
+    assert!(
+        !paint.contains("detect_hardware")
+            && !paint.contains("std::fs::")
+            && !paint.contains("Command::new")
+            && !paint.contains("ureq"),
+        "setup paint must not probe hardware on the UI thread: {paint}"
+    );
+    let proactive = include_str!("proactive_ui.rs").replace("\r\n", "\n");
+    for name in ["tick_proactive", "proactive_candidates", "save_proactive"] {
+        let fn_body = body(&proactive, name);
+        assert!(
+            !fn_body.contains("load_budget()"),
+            "{name} must use the in-memory budget, not reload proactive.json: {fn_body}"
+        );
+    }
+}
+
+/// A cabin write updates the cached `self_review.json` view Settings paints from.
+#[test]
+fn self_review_file_cache_updates_on_write() {
+    let _g = crate::config::hold_test_config();
+    let (_pin, root) = pin("self-review-cache");
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.ensure_self_review_file();
+    assert!(
+        cabin
+            .harness
+            .self_review
+            .file
+            .as_ref()
+            .expect("cached")
+            .quiet_log
+            .is_empty()
+    );
+
+    // A write that bypasses the cabin leaves the cache alone until the next load.
+    let mut disk = super::self_review_ui::load_state();
+    disk.quiet_log.push(grokhub_core::self_review::QuietEntry {
+        day: "2099-01-01".into(),
+        source: "self-review:test".into(),
+        title: "Out of band".into(),
+        body: "from disk".into(),
+    });
+    super::self_review_ui::save_state(&disk);
+    assert!(
+        cabin
+            .harness
+            .self_review
+            .file
+            .as_ref()
+            .expect("still cached")
+            .quiet_log
+            .is_empty(),
+        "Settings keeps the cached quiet log across out-of-band disk writes"
+    );
+
+    cabin.mutate_self_review_file(|f| {
+        f.quiet_log.push(grokhub_core::self_review::QuietEntry {
+            day: Cabin::local_day(),
+            source: "self-review:cabin".into(),
+            title: "From cabin".into(),
+            body: "cached write".into(),
+        });
+    });
+    let cached = cabin
+        .harness
+        .self_review
+        .file
+        .as_ref()
+        .expect("cache after write");
+    assert_eq!(cached.quiet_log.len(), 1);
+    assert_eq!(cached.quiet_log[0].title, "From cabin");
+    let on_disk = super::self_review_ui::load_state();
+    assert_eq!(on_disk.quiet_log.len(), 1);
+    assert_eq!(on_disk.quiet_log[0].title, "From cabin");
+    let note = super::self_review_ui::quiet_log_note(&cached.quiet_log);
+    assert!(note.contains("From cabin"), "{note}");
+    let _ = std::fs::remove_dir_all(&root);
+}
