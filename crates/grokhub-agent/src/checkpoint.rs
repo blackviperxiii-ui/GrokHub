@@ -18,7 +18,9 @@ use std::sync::Mutex;
 
 use serde_json::Value;
 
-use grokhub_core::findings::{Finding, Findings, Fix, Severity, MAX_FINDINGS};
+use grokhub_core::findings::{
+    is_impossible_one_tap, Finding, Findings, Fix, Severity, MAX_FINDINGS,
+};
 use grokhub_core::talk::TalkStyle;
 
 use crate::brain::{Brief, Care, Intent};
@@ -646,13 +648,25 @@ pub fn fallback_findings(todos: &[TodoItem], gaps: &Gaps) -> Option<Findings> {
     }
     items.sort_by_key(|f| f.severity);
     items.truncate(MAX_FINDINGS);
-    let fixes = if open.is_empty() {
+    // Skip open todos that are impossible one-taps (grant workspace / activate
+    // skill / …). #720 refused those only on report_findings → from_json; the
+    // stalled-run fallback built the pill directly and re-offered the doom loop.
+    let doable: Vec<String> = open
+        .into_iter()
+        .filter(|t| !is_impossible_one_tap("", t))
+        .collect();
+    let fixes = if doable.is_empty() {
         Vec::new()
     } else {
-        vec![Fix {
-            label: "Finish the rest".into(),
-            goal: format!("Finish what the last run left open: {}.", open.join("; ")),
-        }]
+        let goal = format!("Finish what the last run left open: {}.", doable.join("; "));
+        if is_impossible_one_tap("Finish the rest", &goal) {
+            Vec::new()
+        } else {
+            vec![Fix {
+                label: "Finish the rest".into(),
+                goal,
+            }]
+        }
     };
     Some(Findings { items, fixes })
 }
@@ -1086,5 +1100,39 @@ mod tests {
             ),
             None
         );
+    }
+
+    #[test]
+    fn fallback_findings_omits_impossible_one_tap_finish_pills() {
+        let todos = [
+            todo("Activate skill steamlibreview so it loads", "pending"),
+            todo("Grant workspace access to ~/.steam", "pending"),
+            todo("Restart nginx and confirm it is listening", "pending"),
+        ];
+        let card = fallback_findings(&todos, &Gaps::default()).unwrap();
+        assert_eq!(card.fixes.len(), 1, "{:?}", card.fixes);
+        assert_eq!(card.fixes[0].label, "Finish the rest");
+        assert_eq!(
+            card.fixes[0].goal,
+            "Finish what the last run left open: Restart nginx and confirm it is listening."
+        );
+        assert!(
+            !card.fixes[0].goal.to_ascii_lowercase().contains("activate skill"),
+            "{}",
+            card.fixes[0].goal
+        );
+        assert!(
+            !card.fixes[0].goal.to_ascii_lowercase().contains("grant workspace"),
+            "{}",
+            card.fixes[0].goal
+        );
+        // All open work is impossible: keep the findings, offer no pill.
+        let doom = fallback_findings(
+            &[todo("Enable skill gamingprofile", "pending")],
+            &Gaps::default(),
+        )
+        .unwrap();
+        assert!(doom.fixes.is_empty(), "{:?}", doom.fixes);
+        assert_eq!(doom.items.len(), 1);
     }
 }
