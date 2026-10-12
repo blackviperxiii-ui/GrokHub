@@ -1,5 +1,6 @@
 // Portions derived from xai-org/grok-build (Apache-2.0, © SpaceXAI), commit 2bdd1d6a; modified.
 
+use std::collections::HashSet;
 use std::fs::File;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -9,7 +10,167 @@ use std::time::{Instant, SystemTime};
 use crate::episode::clip_bytes;
 
 const TEMPLATE: &str = include_str!("prompt_template.md");
-const AGENTS_CAP: usize = 64 * 1024;
+pub(crate) const AGENTS_CAP: usize = 64 * 1024;
+
+/// Per-run tracker for just-in-time nested `AGENTS.md` / `CLAUDE.md` notes.
+///
+/// Folder rules are appended to tool output only. The system prompt is never
+/// mutated mid-run (keeps the prompt-cache prefix stable).
+#[derive(Debug, Default)]
+pub(crate) struct NestedAgents {
+    seen: HashSet<PathBuf>,
+    used: usize,
+}
+
+impl NestedAgents {
+    /// Seed with context files already layered into the system prompt so they
+    /// are not repeated on the first tool touch of the workspace root.
+    pub(crate) fn new(workspace: &Path) -> Self {
+        let mut seen = HashSet::new();
+        for dir in crate::skills::project_chain(workspace) {
+            for path in context_files_in(&dir) {
+                seen.insert(canonical_or_owned(&path));
+            }
+        }
+        Self { seen, used: 0 }
+    }
+
+    /// Walk from `touched`'s folder up to `workspace`. Unseen context files
+    /// become fenced notes, once each, until [`AGENTS_CAP`] is spent.
+    ///
+    /// Returns an empty string when `touched` is outside the workspace, the
+    /// path is sensitive, nothing new is left, or the budget is spent.
+    pub(crate) fn notes_for(&mut self, workspace: &Path, touched: &Path) -> String {
+        if self.used >= AGENTS_CAP {
+            return String::new();
+        }
+        let Ok(ws) = workspace.canonicalize() else {
+            return String::new();
+        };
+        let Some(start) = walk_start(&ws, touched) else {
+            return String::new();
+        };
+        let home = grokhub_core::user_home().unwrap_or_default();
+        let home_s = home.to_string_lossy();
+        let mut notes = Vec::new();
+        let mut cur = start;
+        loop {
+            if !cur.starts_with(&ws) {
+                break;
+            }
+            if sensitive_path(&cur, &home_s) {
+                // Still walk up; a parent may be safe. Skip only this folder's files.
+            } else {
+                for path in context_files_in(&cur) {
+                    if sensitive_path(&path, &home_s) {
+                        continue;
+                    }
+                    let key = canonical_or_owned(&path);
+                    if !self.seen.insert(key) {
+                        continue;
+                    }
+                    let Some(text) = read_capped(&path) else {
+                        continue;
+                    };
+                    let text = text.trim();
+                    if text.is_empty() {
+                        continue;
+                    }
+                    let rel = path
+                        .strip_prefix(&ws)
+                        .unwrap_or(&path)
+                        .display()
+                        .to_string()
+                        .replace('\\', "/");
+                    let header = format!("Folder rules from {rel}:\n");
+                    let room = AGENTS_CAP.saturating_sub(self.used);
+                    if room <= header.len() + 8 {
+                        // 8 = fence wrappers roughly; stop spending.
+                        self.used = AGENTS_CAP;
+                        break;
+                    }
+                    let body_room = room.saturating_sub(header.len()).saturating_sub(8);
+                    let body = clip_bytes(text, body_room);
+                    let note = format!("```\n{header}{body}\n```");
+                    self.used = self.used.saturating_add(note.len());
+                    notes.push(note);
+                    if self.used >= AGENTS_CAP {
+                        break;
+                    }
+                }
+            }
+            if self.used >= AGENTS_CAP || cur == ws {
+                break;
+            }
+            if !cur.pop() {
+                break;
+            }
+        }
+        notes.join("\n")
+    }
+}
+
+fn canonical_or_owned(path: &Path) -> PathBuf {
+    path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
+}
+
+fn walk_start(workspace: &Path, touched: &Path) -> Option<PathBuf> {
+    let start = if touched.is_dir() {
+        touched.to_path_buf()
+    } else {
+        touched
+            .parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .unwrap_or(workspace)
+            .to_path_buf()
+    };
+    let start = start.canonicalize().unwrap_or(start);
+    if !start.starts_with(workspace) {
+        return None;
+    }
+    Some(start)
+}
+
+fn sensitive_path(path: &Path, home: &str) -> bool {
+    let s = path.to_string_lossy();
+    grokhub_core::rewind_sensitive(&s, home)
+}
+
+fn context_files_in(dir: &Path) -> Vec<PathBuf> {
+    #[cfg(windows)]
+    {
+        let Ok(rd) = std::fs::read_dir(dir) else {
+            return Vec::new();
+        };
+        let mut out = Vec::new();
+        for ent in rd.flatten() {
+            let name = ent.file_name();
+            let Some(name) = name.to_str() else {
+                continue;
+            };
+            if !name.eq_ignore_ascii_case("AGENTS.md") && !name.eq_ignore_ascii_case("CLAUDE.md") {
+                continue;
+            }
+            let path = ent.path();
+            if regular_file(&path) {
+                out.push(path);
+            }
+        }
+        out.sort();
+        out
+    }
+    #[cfg(not(windows))]
+    {
+        let mut out = Vec::new();
+        for name in ["AGENTS.md", "CLAUDE.md"] {
+            let path = dir.join(name);
+            if regular_file(&path) {
+                out.push(path);
+            }
+        }
+        out
+    }
+}
 
 /// Which surface is building the system prompt.
 ///
@@ -557,5 +718,82 @@ mod tests {
             prompt_need_from_job("NEED_SKILLS\nNEED_PLUGINS"),
             PromptNeed::FULL
         );
+    }
+
+    fn nested_scratch(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "gh-nested-{tag}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn nested_agents_injects_once_then_skips_repeat() {
+        let ws = nested_scratch("once");
+        let sub = ws.join("sub");
+        std::fs::create_dir_all(&sub).unwrap();
+        std::fs::write(sub.join("AGENTS.md"), "use tabs\n").unwrap();
+        std::fs::write(sub.join("a.rs"), "fn main() {}\n").unwrap();
+        let system_before = system_prompt("Cabin rule.", &ws);
+        let mut nested = NestedAgents::new(&ws);
+        let first = nested.notes_for(&ws, &sub.join("a.rs"));
+        assert!(
+            first.contains("Folder rules from sub/AGENTS.md:"),
+            "{first}"
+        );
+        assert!(first.contains("use tabs"), "{first}");
+        assert!(first.contains("```"), "{first}");
+        let second = nested.notes_for(&ws, &sub.join("a.rs"));
+        assert!(second.is_empty(), "second touch must not repeat: {second}");
+        let again_sibling = nested.notes_for(&ws, &sub.join("b.rs"));
+        assert!(
+            again_sibling.is_empty(),
+            "same folder must stay spent: {again_sibling}"
+        );
+        let system_after = system_prompt("Cabin rule.", &ws);
+        assert_eq!(
+            system_before, system_after,
+            "system prompt bytes must stay unchanged across nested injection"
+        );
+        let _ = std::fs::remove_dir_all(&ws);
+    }
+
+    #[test]
+    fn nested_agents_ignores_paths_outside_workspace() {
+        let ws = nested_scratch("outside");
+        let outside = nested_scratch("outside-peer");
+        std::fs::create_dir_all(outside.join("sub")).unwrap();
+        std::fs::write(outside.join("sub").join("AGENTS.md"), "secret rules\n").unwrap();
+        std::fs::write(outside.join("sub").join("a.rs"), "x\n").unwrap();
+        let mut nested = NestedAgents::new(&ws);
+        let note = nested.notes_for(&ws, &outside.join("sub").join("a.rs"));
+        assert!(note.is_empty(), "outside workspace must not inject: {note}");
+        let _ = std::fs::remove_dir_all(&ws);
+        let _ = std::fs::remove_dir_all(&outside);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn nested_agents_matches_context_filenames_case_insensitively_on_windows() {
+        let ws = nested_scratch("win-case");
+        let sub = ws.join("sub");
+        std::fs::create_dir_all(&sub).unwrap();
+        std::fs::write(sub.join("agents.md"), "windows case fold\n").unwrap();
+        std::fs::write(sub.join("a.rs"), "fn main() {}\n").unwrap();
+        let mut nested = NestedAgents::new(&ws);
+        let note = nested.notes_for(&ws, &sub.join("a.rs"));
+        assert!(
+            note.to_ascii_lowercase().contains("folder rules from sub/"),
+            "{note}"
+        );
+        assert!(note.contains("windows case fold"), "{note}");
+        let _ = std::fs::remove_dir_all(&ws);
     }
 }
