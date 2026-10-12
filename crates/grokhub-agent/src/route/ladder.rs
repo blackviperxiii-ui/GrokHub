@@ -408,20 +408,22 @@ mod tests {
 
     #[test]
     fn e2_rejects_climb_then_name_the_next_model_then_hand_to_recovery() {
-        let (s0, _) = go(None, "code:edit-small", Obs { new_turn: true, ..Obs::default() });
-        let (s1, p1) = go(Some(&s0), "code:edit-small", Obs { rejects: Some(1), ..step_obs() });
+        // chat:default starts at medium so two rejects reach the ceiling without
+        // also tripping the third-reject recovery path (code:edit-small starts at low).
+        let (s0, _) = go(None, "chat:default", Obs { new_turn: true, ..Obs::default() });
+        let (s1, p1) = go(Some(&s0), "chat:default", Obs { rejects: Some(1), ..step_obs() });
         assert_eq!((name(p1.rung), p1.rules.clone(), s1.hold), ("high", vec!["E2".to_string()], true));
-        let (mut s2, p2) = go(Some(&s1), "code:edit-small", Obs { rejects: Some(2), ..step_obs() });
+        let (mut s2, p2) = go(Some(&s1), "chat:default", Obs { rejects: Some(2), ..step_obs() });
         assert_eq!((name(p2.rung), p2.recover), ("xhigh", false));
         // At the ceiling a second reject asks for the next model (R2).
         s2.rejects = 1;
-        let (s3, p3) = go(Some(&s2), "code:edit-small", Obs { rejects: Some(2), ..step_obs() });
+        let (s3, p3) = go(Some(&s2), "chat:default", Obs { rejects: Some(2), ..step_obs() });
         assert_eq!(p3.rules, vec!["E2:ceiling".to_string(), "E2:next_model".into()]);
         assert_eq!(name(p3.rung), "xhigh", "the ceiling holds");
-        let (_, p4) = go(Some(&s3), "code:edit-small", Obs { rejects: Some(3), ..step_obs() });
+        let (_, p4) = go(Some(&s3), "chat:default", Obs { rejects: Some(3), ..step_obs() });
         assert!(p4.recover && p4.rules.contains(&"E2:recovery".to_string()), "{:?}", p4.rules);
         // No VerifyGate source (None) fires nothing.
-        let (_, quiet) = go(Some(&s0), "code:edit-small", Obs { rejects: None, ..step_obs() });
+        let (_, quiet) = go(Some(&s0), "chat:default", Obs { rejects: None, ..step_obs() });
         assert!(!quiet.rules.iter().any(|r| r.starts_with("E2")));
     }
 
