@@ -2385,55 +2385,7 @@ impl Cabin {
         }
     }
 
-    /// Compact, Copy session, and Export. Titlebar, immediately left of minimize.
-    /// Quiet archive / auto-archive note with Undo or a link to Archived.
-    pub(super) fn paint_archive_toast(&mut self, ui: &mut egui::Ui) {
-        if let Some(n) = self.auto_archive_note {
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = 8.0;
-                let label = if n == 1 {
-                    "Archived 1 idle chat".to_string()
-                } else {
-                    format!("Archived {n} idle chats")
-                };
-                ui.label(
-                    RichText::new(label)
-                        .size(crate::theme::FONT_META)
-                        .color(crate::theme::muted()),
-                );
-                if crate::cards::ghost_pill(ui, "Archived") {
-                    self.auto_archive_note = None;
-                    self.history_archived = true;
-                    self.nav = Nav::History;
-                }
-            });
-            ui.add_space(4.0);
-            return;
-        }
-        let Some(id) = self.archive_undo.clone() else {
-            return;
-        };
-        let Some(t) = self.threads.iter().find(|t| t.id == id) else {
-            self.archive_undo = None;
-            return;
-        };
-        let title = t.title.clone();
-        let archived = threads::is_archived(t);
-        let verb = if archived { "Archived" } else { "Unarchived" };
-        ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = 8.0;
-            ui.label(
-                RichText::new(format!("{verb} {title}"))
-                    .size(crate::theme::FONT_META)
-                    .color(crate::theme::muted()),
-            );
-            if crate::cards::ghost_pill(ui, "Undo") {
-                self.undo_archive_toast();
-            }
-        });
-        ui.add_space(4.0);
-    }
-
+    /// Compact, Copy session, Export, Archive. Titlebar, immediately left of minimize.
     pub(super) fn paint_session_actions_menu(&mut self, ui: &mut egui::Ui) -> egui::Rect {
         let resp = titlebar_chrome_btn(ui, ChromeBtn::Menu)
             .on_hover_text(crate::titlebar::titlebar_chrome_tip(ChromeBtn::Menu, false));
@@ -2848,6 +2800,56 @@ impl Cabin {
                 }
             }
             });
+    }
+
+    // After ui_composer_stack: empty_home_pulse scans ui_empty_home..ui_composer_stack
+    // and forbids Nav:: in that window (toast links to History → Archived).
+    /// Quiet archive / auto-archive note with Undo or a link to Archived.
+    pub(super) fn paint_archive_toast(&mut self, ui: &mut egui::Ui) {
+        if let Some(n) = self.auto_archive_note {
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 8.0;
+                let label = if n == 1 {
+                    "Archived 1 idle chat".to_string()
+                } else {
+                    format!("Archived {n} idle chats")
+                };
+                ui.label(
+                    RichText::new(label)
+                        .size(crate::theme::FONT_META)
+                        .color(crate::theme::muted()),
+                );
+                if crate::cards::ghost_pill(ui, "Archived") {
+                    self.auto_archive_note = None;
+                    self.history_archived = true;
+                    self.nav = Nav::History;
+                }
+            });
+            ui.add_space(4.0);
+            return;
+        }
+        let Some(id) = self.archive_undo.clone() else {
+            return;
+        };
+        let Some(t) = self.threads.iter().find(|t| t.id == id) else {
+            self.archive_undo = None;
+            return;
+        };
+        let title = t.title.clone();
+        let archived = threads::is_archived(t);
+        let verb = if archived { "Archived" } else { "Unarchived" };
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 8.0;
+            ui.label(
+                RichText::new(format!("{verb} {title}"))
+                    .size(crate::theme::FONT_META)
+                    .color(crate::theme::muted()),
+            );
+            if crate::cards::ghost_pill(ui, "Undo") {
+                self.undo_archive_toast();
+            }
+        });
+        ui.add_space(4.0);
     }
 
     /// A turn is streaming on this tab: only its last message grows, and the pane

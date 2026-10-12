@@ -141,6 +141,21 @@ impl Cabin {
         false
     }
 
+    pub(super) fn open_recent_chat(&mut self) {
+        self.pin_chat_tail();
+        if let Some(idx) = threads::most_recently_accessed_index(&self.threads) {
+            if idx != self.thread_idx {
+                self.switch_thread(idx);
+                return;
+            }
+        }
+        self.stamp_current_access();
+        self.composer_want_focus = true;
+    }
+
+    // Archive helpers stay after open_recent_chat: chat_side_effects_keep_the_origin_thread
+    // scans switch_thread..open_recent_chat and forbids self.persist() in that window.
+
     pub(super) fn archive_thread_at(&mut self, idx: usize) {
         let Some(t) = self.threads.get_mut(idx) else {
             return;
@@ -299,18 +314,6 @@ impl Cabin {
                 )
             };
         }
-    }
-
-    pub(super) fn open_recent_chat(&mut self) {
-        self.pin_chat_tail();
-        if let Some(idx) = threads::most_recently_accessed_index(&self.threads) {
-            if idx != self.thread_idx {
-                self.switch_thread(idx);
-                return;
-            }
-        }
-        self.stamp_current_access();
-        self.composer_want_focus = true;
     }
 
     pub(super) fn land_on_real_chat(&mut self) {
