@@ -2016,8 +2016,9 @@ pub(super) fn pulse_image_path(url: &str) -> std::path::PathBuf {
 fn fetch_agent() -> ureq::Agent {
     // No redirects: a public URL can't bounce the fetch onto a private host.
     // Dial resolver blocks DNS→private/CGNAT even when the hostname looked public.
+    // No env proxy: HTTP(S)_PROXY would dial the proxy and skip public_only_resolve
+    // on the target (same as web_fetch).
     ureq::AgentBuilder::new()
-        .try_proxy_from_env(true)
         .redirects(0)
         .timeout(std::time::Duration::from_secs(8))
         .resolver(grokhub_agent::public_only_resolve)
@@ -2092,6 +2093,10 @@ mod fetch_agent_tests {
         assert!(
             arm.contains(".redirects(0)"),
             "Pulse image agent must not auto-follow redirects: {arm}"
+        );
+        assert!(
+            !arm.contains("try_proxy_from_env"),
+            "env proxy would skip public_only_resolve on the target: {arm}"
         );
     }
 }
