@@ -2013,6 +2013,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tiny_http",
+ "winresource",
 ]
 
 [[package]]
