@@ -569,6 +569,32 @@ pub fn tick(
         c.active() || c.ended_at.or(c.promoted_at).unwrap_or(c.created_at) + 8 * WEEK_MS > now_ms
     });
     write_json(&state_path(config_dir), &state)?;
+    // Built-in attention feedback: learn escalate bias from outcomes (no LLM).
+    {
+        let records = read_records(config_dir, TUNE_SCAN_LINES);
+        let mut attn_by_episode = BTreeMap::new();
+        let mut class_by_episode = BTreeMap::new();
+        for (_, r) in &records {
+            if r.episode.is_empty() {
+                continue;
+            }
+            if let Some(rule) = r.rule_ids.iter().rev().find(|id| id.starts_with("attn:")) {
+                attn_by_episode.insert(r.episode.clone(), rule.clone());
+            } else {
+                attn_by_episode
+                    .entry(r.episode.clone())
+                    .or_insert_with(|| "attn:stay".into());
+            }
+            class_by_episode.insert(r.episode.clone(), r.class.clone());
+        }
+        super::feedback::tick(
+            config_dir,
+            &outcomes,
+            &attn_by_episode,
+            &class_by_episode,
+            now_ms,
+        );
+    }
     Ok(run)
 }
 

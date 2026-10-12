@@ -631,6 +631,12 @@ pub fn decide(config_dir: &Path, call: &RouteCall<'_>, now_ms: u64) -> Decision 
         providers,
     };
     let picked = provider_pick();
+    let class_key_for_bias = row.map(|r| r.class).unwrap_or(call.class);
+    let escalate_bias = super::feedback::load(config_dir).bias(class_key_for_bias);
+    let prior_escalated = sticky.as_ref().is_some_and(|_| {
+        // Episode already on a model: treat as prior escalate when sticky differs from current.
+        sticky.as_deref().is_some_and(|m| m != call.model)
+    });
     let input = RouteInput {
         provider: call.provider,
         class: call.class,
@@ -653,6 +659,9 @@ pub fn decide(config_dir: &Path, call: &RouteCall<'_>, now_ms: u64) -> Decision 
         prefer: (call.providers && facing && !holdout && !picked.is_empty())
             .then_some(picked.as_str()),
         goal: goal.clone(),
+        text: call.text,
+        escalate_bias,
+        prior_escalated,
     };
     let route = Router::choose(&input, &reg, &profiles, &table, now_ms);
     laps.mark("route:choose");
