@@ -5,6 +5,9 @@
 - Pulse diversifies what it follows from what you like. A check posts at most two stories from one source (so Hacker News cannot fill the whole run), searches your strongest interest every time and rotates the other topic slots so weaker interests still get a look, and gives a small score bump to under-seen sources. Save or More like this twice on posts from the same subreddit, GitHub repo or YouTube channel adds that place to Settings → Pulse → Sources when that source kind is on.
 - Code is now rustfmt-clean and CI checks formatting.
 - Fixed: source-window tests match rustfmt-wrapped needles (`session_row`, `Margin::symmetric`, `feed_prompt`) and the composer Pill scan window is 15,000 bytes.
+
+## 3.0.0 — 2026-10-12
+
 - Beta builds are labeled X.Y.Z-beta.N and compare correctly against releases. GitHub tags `vX.Y.Z-beta.N` publish as pre-releases (never Latest); stable `vX.Y.Z` tags are unchanged.
 - Dependency diet: `Cargo.lock` package count **604 → 601** (dropped unused `tray-icon` libxdo/X11 deps; trimmed `winresource`/`x11rb`/`globset`/`toml`/`regex` features; workspace-shared `sha2`/`ureq`/`image`/`keyring`/`rusqlite`). No feature loss; image codec smoke covers png/jpeg/webp/ico/bmp.
 - Folder-level AGENTS.md and CLAUDE.md files are picked up when the agent first works in that folder, not only the project root.
@@ -64,6 +67,9 @@
 - Each talk style now has its own length: casual chat under 60 words, answers under 150, a long task's wrap-up under 120, the reply after a findings card under 80, research summaries under 200 (links don't count) and background notes under 40. The style's length wins over a personality's own length line, so a chatty voice still keeps small talk short. The trail and `/why` show the turn's style, for example "Talk: findings card, reply under 80 words".
 - Each run's line in `metrics/runs.jsonl` now records its Brief (intent, care and domain), the policy row it matched (for example "repair × critical") and the playbook it picked, and policy rows and playbook steps are now areas the self-improvement loop may tune (the weekly review starts proposing them in a follow-up): a tweak runs as a trial like a skill change, kept only when matching runs do better and put back otherwise, with a Home note such as "Kept: Linux repair checks ports before services, 22% fewer steps over 9 runs". It never lowers a critical row or a system playbook's care, never removes a system playbook's back-up or re-check steps, never touches approvals, the hard-action list, the honesty rules or the trial evaluator, and your own edits to `brain/brain_policy.toml` and your playbooks are kept as versions in the change history and never written over. Nothing leaves your computer.
 - The Sunday self-review now proposes one policy-row or playbook tweak a week when a row or playbook had at least 5 runs and many of them failed (or, for a playbook, few passed their re-check); the tweak runs as a trial behind the same locks and is kept or put back by its numbers, and quiet mode only logs it. Settings → Behavior's self-improvement history also shows one line per area (system, code, files, desktop, web, media, general) with its runs, how many worked, average steps and how many passed a re-check.
+
+- Linux: `grokhub-linux-v3.0.0.tar.gz` and AUR `pkgver=3.0.0`.
+- Windows: `GrokHub-Setup-3.0.0.exe` and `grokhub-windows-v3.0.0.zip`.
 
 ## 2.13.1 — 2026-10-10
 
