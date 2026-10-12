@@ -404,9 +404,18 @@ mod tests {
         app.budget_landed(&calm, facts.clone(), now);
         assert_eq!(app.harness.router.budget.card, None, "never during a task");
         app.running = false;
-        app.cfg.quiet_end = "23:59".into();
+        // Quiet hours read the wall clock. Half-open windows always leave one
+        // gap minute — park that gap twelve hours from now so CI never hits it
+        // (00:00–23:59 left a hole at 23:59 on Windows runners).
+        let clock = Cabin::local_clock();
+        let now_m = clock.hour * 60 + clock.minute;
+        let gap = (now_m + 720) % 1440;
+        let start_m = (gap + 1) % 1440;
+        app.cfg.quiet_start = format!("{:02}:{:02}", start_m / 60, start_m % 60);
+        app.cfg.quiet_end = format!("{:02}:{:02}", gap / 60, gap % 60);
         app.budget_landed(&calm, facts.clone(), now);
         assert_eq!(app.harness.router.budget.card, None, "never in quiet hours");
+        app.cfg.quiet_start = "00:00".into();
         app.cfg.quiet_end = "00:00".into();
         app.budget_landed(&calm, facts.clone(), now);
         assert!(matches!(&app.harness.router.budget.card, Some(BudgetCard::Nudge(t)) if t.ends_with("Want details?")));
