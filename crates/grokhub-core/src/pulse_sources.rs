@@ -194,6 +194,16 @@ pub const REFETCH_MS: u64 = 15 * 60 * 1000;
 pub const ITEM_MAX_AGE_MS: u64 = 7 * 24 * 60 * 60 * 1000;
 /// Feed posts one run adds.
 pub const POSTS_PER_RUN: usize = 5;
+/// Most posts one `source_name` may contribute in a single run (stops one place flooding).
+pub const PER_SOURCE_MAX: usize = 2;
+/// Positive Save / More like this hits before Pulse follows a place on its own.
+pub const LEARN_PLACE_HITS: u32 = 2;
+/// Learned place rows kept in the source cache.
+pub const LEARNED_PLACES_MAX: usize = 40;
+/// Prior posts from a source below this get a novelty score bump.
+pub const SOURCE_NOVELTY_BELOW: u32 = 3;
+/// Percent added to an under-seen source's score when the cache has post history.
+pub const SOURCE_NOVELTY_PCT: u32 = 20;
 /// Canonical URLs remembered as already posted.
 pub const SEEN_MAX: usize = 600;
 pub const SUMMARY_CHARS: usize = 280;
@@ -305,10 +315,45 @@ pub fn query_value(text: &str) -> String {
     out
 }
 
+/// Which interest topics this check searches. Keeps the strongest first, then
+/// rotates the remaining slots so weaker interests still get turns.
+pub fn topic_queries(topics: &[String], run_index: u64) -> Vec<String> {
+    if topics.is_empty() {
+        return Vec::new();
+    }
+    if topics.len() <= TOPIC_QUERIES {
+        return topics.to_vec();
+    }
+    let mut out = vec![topics[0].clone()];
+    let rest = &topics[1..];
+    let start = (run_index as usize) % rest.len();
+    for i in 0..rest.len() {
+        if out.len() >= TOPIC_QUERIES {
+            break;
+        }
+        let topic = &rest[(start + i) % rest.len()];
+        if !out.iter().any(|have| have.eq_ignore_ascii_case(topic)) {
+            out.push(topic.clone());
+        }
+    }
+    out
+}
+
 /// Every fetch for one run. `topics` strongest first, muted ones already left out.
+/// `run_index` rotates which weaker topics are searched (`topic_queries`).
 pub fn requests(s: &SourceSettings, topics: &[String], now_ms: u64) -> Vec<SourceReq> {
+    requests_for(s, topics, 0, now_ms)
+}
+
+/// Like [`requests`], with an explicit run index for topic rotation.
+pub fn requests_for(
+    s: &SourceSettings,
+    topics: &[String],
+    run_index: u64,
+    now_ms: u64,
+) -> Vec<SourceReq> {
     let mut out = Vec::new();
-    let searched: Vec<&String> = topics.iter().take(TOPIC_QUERIES).collect();
+    let searched = topic_queries(topics, run_index);
     if s.hacker_news {
         let since = now_ms.saturating_sub(SEARCH_WINDOW_MS) / 1000;
         for topic in &searched {
@@ -319,7 +364,7 @@ pub fn requests(s: &SourceSettings, topics: &[String], now_ms: u64) -> Vec<Sourc
                     query_value(topic)
                 ),
                 name: "Hacker News".into(),
-                topic: Some((*topic).clone()),
+                topic: Some(topic.clone()),
             });
         }
     }
@@ -340,7 +385,7 @@ pub fn requests(s: &SourceSettings, topics: &[String], now_ms: u64) -> Vec<Sourc
                     query_value(topic)
                 ),
                 name: "Reddit".into(),
-                topic: Some((*topic).clone()),
+                topic: Some(topic.clone()),
             });
         }
     }
@@ -962,6 +1007,24 @@ pub struct SourceCache {
     /// More like this searches for the next check.
     #[serde(default)]
     pub related: Vec<Related>,
+    /// How many Feed posts each `source_name` has contributed (for novelty).
+    #[serde(default)]
+    pub source_posts: BTreeMap<String, u32>,
+    /// Places Save / More like this pointed at, with hit counts toward auto-follow.
+    #[serde(default)]
+    pub places: Vec<PlaceHit>,
+    /// Completed source checks; rotates weaker interest topic queries.
+    #[serde(default)]
+    pub runs: u64,
+}
+
+/// A followable place learned from posts the person liked.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlaceHit {
+    pub kind: SourceKind,
+    pub entry: String,
+    pub hits: u32,
 }
 
 impl SourceCache {
@@ -1005,6 +1068,47 @@ impl SourceCache {
         if self.related.len() > RELATED_MAX {
             let drop = self.related.len() - RELATED_MAX;
             self.related.drain(..drop);
+        }
+    }
+
+    /// Count a Save / More like this toward following a place. True the first time
+    /// hits reach [`LEARN_PLACE_HITS`] so the app can call [`SourceSettings::add`].
+    pub fn note_place(&mut self, kind: SourceKind, entry: &str) -> bool {
+        let entry = entry.trim();
+        if entry.is_empty() || kind == SourceKind::HackerNews {
+            return false;
+        }
+        if let Some(row) = self
+            .places
+            .iter_mut()
+            .find(|p| p.kind == kind && p.entry.eq_ignore_ascii_case(entry))
+        {
+            if row.hits >= LEARN_PLACE_HITS {
+                return false;
+            }
+            row.hits = row.hits.saturating_add(1);
+            return row.hits == LEARN_PLACE_HITS;
+        }
+        self.places.push(PlaceHit {
+            kind,
+            entry: entry.to_string(),
+            hits: 1,
+        });
+        if self.places.len() > LEARNED_PLACES_MAX {
+            let drop = self.places.len() - LEARNED_PLACES_MAX;
+            self.places.drain(..drop);
+        }
+        LEARN_PLACE_HITS == 1
+    }
+
+    /// Remember which sources contributed the posts that just went up.
+    pub fn mark_source_posts(&mut self, posted: &[Ranked]) {
+        for r in posted {
+            let name = r.item.source_name.trim();
+            if name.is_empty() {
+                continue;
+            }
+            *self.source_posts.entry(name.to_string()).or_insert(0) += 1;
         }
     }
 
@@ -1184,7 +1288,7 @@ pub fn rank(
     profile: &crate::interests::InterestProfile,
     now_ms: u64,
 ) -> Vec<Ranked> {
-    rank_with(items, profile, &BTreeMap::new(), now_ms)
+    rank_with(items, profile, &BTreeMap::new(), &BTreeMap::new(), now_ms)
 }
 
 /// Most steps Not interested or More like this moves one source.
@@ -1192,11 +1296,25 @@ pub const SOURCE_BIAS_MAX: i32 = 4;
 /// What one step is worth, in percent of an item's score.
 const SOURCE_BIAS_STEP_PCT: i32 = 15;
 
-/// `rank`, with each source's score moved 15% a step by Not interested / More like this.
+fn novelty_pct(source_name: &str, source_posts: &BTreeMap<String, u32>) -> u32 {
+    if source_posts.is_empty() {
+        return 0;
+    }
+    let posts = source_posts.get(source_name).copied().unwrap_or(0);
+    if posts < SOURCE_NOVELTY_BELOW {
+        SOURCE_NOVELTY_PCT
+    } else {
+        0
+    }
+}
+
+/// `rank`, with each source's score moved 15% a step by Not interested / More like this,
+/// and a novelty bump for under-seen sources once any posts have been counted.
 pub fn rank_with(
     items: &[SourceItem],
     profile: &crate::interests::InterestProfile,
     bias: &BTreeMap<String, i32>,
+    source_posts: &BTreeMap<String, u32>,
     now_ms: u64,
 ) -> Vec<Ranked> {
     let muted: Vec<&str> = profile
@@ -1224,6 +1342,7 @@ pub fn rank_with(
                 .clamp(-SOURCE_BIAS_MAX, SOURCE_BIAS_MAX);
             let pct = u32::try_from(100 + step * SOURCE_BIAS_STEP_PCT).unwrap_or(100);
             let score = score * pct / 100;
+            let score = score * (100 + novelty_pct(&i.source_name, source_posts)) / 100;
             (score >= RANK_MIN).then(|| Ranked {
                 item: i.clone(),
                 score,
@@ -1265,7 +1384,8 @@ pub fn title_similarity(a: &str, b: &str) -> u32 {
 }
 
 /// What posts from a run: best score first, not already posted (by canonical URL),
-/// not the same story as a post already up or picked, at most POSTS_PER_RUN.
+/// not the same story as a post already up or picked, at most [`POSTS_PER_RUN`],
+/// and at most [`PER_SOURCE_MAX`] from one `source_name`.
 pub fn pick_new(
     ranked: &[Ranked],
     cache: &SourceCache,
@@ -1275,6 +1395,7 @@ pub fn pick_new(
     let mut seen: std::collections::BTreeSet<String> = cache.seen.iter().cloned().collect();
     seen.extend(posted_urls.iter().map(|u| canonical_url(u)));
     let mut titles: Vec<String> = posted_titles.to_vec();
+    let mut per_source: BTreeMap<String, usize> = BTreeMap::new();
     let mut out = Vec::new();
     for r in ranked {
         if out.len() >= POSTS_PER_RUN {
@@ -1289,11 +1410,76 @@ pub fn pick_new(
         {
             continue;
         }
+        let name = r.item.source_name.clone();
+        let n = per_source.get(&name).copied().unwrap_or(0);
+        if n >= PER_SOURCE_MAX {
+            continue;
+        }
         seen.insert(canonical_url(&r.item.url));
         titles.push(r.item.title.clone());
+        *per_source.entry(name).or_insert(0) += 1;
         out.push(r.clone());
     }
     out
+}
+
+/// A followable place implied by a source item (subreddit, GitHub repo, YouTube channel).
+pub fn place_from_item(item: &SourceItem) -> Option<(SourceKind, String)> {
+    if let Some(sub) = item.source_name.strip_prefix("r/") {
+        if let Ok(entry) = canonical_entry(SourceKind::Reddit, sub) {
+            return Some((SourceKind::Reddit, entry));
+        }
+    }
+    if let Some(repo) = item.source_name.strip_suffix(" on GitHub") {
+        if let Ok(entry) = canonical_entry(SourceKind::GithubReleases, repo) {
+            return Some((SourceKind::GithubReleases, entry));
+        }
+    }
+    place_from_url(&item.url)
+}
+
+/// A followable place from a Feed card's source line or citation URLs.
+pub fn place_from_card(card: &UpdateCard) -> Option<(SourceKind, String)> {
+    if let Some(name) = card.pulse.source_name.as_deref() {
+        if let Some(sub) = name.strip_prefix("r/") {
+            if let Ok(entry) = canonical_entry(SourceKind::Reddit, sub) {
+                return Some((SourceKind::Reddit, entry));
+            }
+        }
+        if let Some(repo) = name.strip_suffix(" on GitHub") {
+            if let Ok(entry) = canonical_entry(SourceKind::GithubReleases, repo) {
+                return Some((SourceKind::GithubReleases, entry));
+            }
+        }
+    }
+    for url in &card.citations {
+        if let Some(place) = place_from_url(url) {
+            return Some(place);
+        }
+    }
+    None
+}
+
+/// GitHub repo, Reddit sub, or YouTube channel id from a public URL.
+pub fn place_from_url(url: &str) -> Option<(SourceKind, String)> {
+    let url = url.trim();
+    let host = crate::pulse::source_host(url)?.to_lowercase();
+    if host == "github.com" || host.ends_with(".github.com") {
+        return canonical_entry(SourceKind::GithubReleases, url)
+            .ok()
+            .map(|entry| (SourceKind::GithubReleases, entry));
+    }
+    if host == "reddit.com" || host.ends_with(".reddit.com") {
+        return canonical_entry(SourceKind::Reddit, url)
+            .ok()
+            .map(|entry| (SourceKind::Reddit, entry));
+    }
+    if host == "youtube.com" || host.ends_with(".youtube.com") || host == "youtu.be" {
+        return canonical_entry(SourceKind::YouTube, url)
+            .ok()
+            .map(|entry| (SourceKind::YouTube, entry));
+    }
+    None
 }
 
 /// Remember what posted so a dismissed post never comes back.
@@ -2102,14 +2288,157 @@ mod tests {
         let score = |bias: i32| {
             let map: BTreeMap<String, i32> =
                 [("feed.test".to_string(), bias)].into_iter().collect();
-            rank_with(std::slice::from_ref(&followed), &p, &map, NOW)
-                .first()
-                .map(|r| r.score)
+            rank_with(
+                std::slice::from_ref(&followed),
+                &p,
+                &map,
+                &BTreeMap::new(),
+                NOW,
+            )
+            .first()
+            .map(|r| r.score)
         };
         assert_eq!(score(0), Some(35));
         assert_eq!(score(1), Some(40));
         assert_eq!(score(-2), Some(24));
         assert_eq!(score(-4), Some(14));
+    }
+
+    #[test]
+    fn topic_queries_keep_the_strongest_and_rotate_the_rest() {
+        let topics: Vec<String> = ["Rust", "xAI", "F1", "compressors"]
+            .iter()
+            .map(|t| (*t).into())
+            .collect();
+        assert_eq!(
+            topic_queries(&topics, 0),
+            vec!["Rust".to_string(), "xAI".into(), "F1".into()]
+        );
+        assert_eq!(
+            topic_queries(&topics, 1),
+            vec!["Rust".to_string(), "F1".into(), "compressors".into()]
+        );
+        assert_eq!(
+            topic_queries(&topics, 2),
+            vec!["Rust".to_string(), "compressors".into(), "xAI".into()]
+        );
+        assert_eq!(
+            topic_queries(&topics[..2], 9),
+            vec!["Rust".to_string(), "xAI".into()]
+        );
+    }
+
+    #[test]
+    fn pick_new_caps_posts_per_source_name() {
+        let cache = SourceCache::default();
+        let mut list = Vec::new();
+        for (i, title) in [
+            "Alpha ships",
+            "Bravo lands",
+            "Charlie opens",
+            "Delta closes",
+        ]
+        .iter()
+        .enumerate()
+        {
+            let mut it = item(title, &format!("https://a.test/{i}"), NOW - i as u64);
+            it.source_name = "Hacker News".into();
+            list.push(ranked(it));
+        }
+        for (i, title) in ["Kernel notes", "Editor release", "Database tip"]
+            .iter()
+            .enumerate()
+        {
+            let mut it = item(title, &format!("https://b.test/{i}"), NOW - 10 - i as u64);
+            it.source_name = "r/rust".into();
+            list.push(ranked(it));
+        }
+        let mut feed = item("Quiet compressors", "https://c.test/a", NOW - 20);
+        feed.source_name = "blog.test".into();
+        list.push(ranked(feed));
+        let mut feed_b = item("Shop lighting", "https://c.test/b", NOW - 21);
+        feed_b.source_name = "blog.test".into();
+        list.push(ranked(feed_b));
+        let got: Vec<(String, String)> = pick_new(&list, &cache, &[], &[])
+            .into_iter()
+            .map(|r| (r.item.source_name, r.item.title))
+            .collect();
+        assert_eq!(
+            got,
+            vec![
+                ("Hacker News".into(), "Alpha ships".into()),
+                ("Hacker News".into(), "Bravo lands".into()),
+                ("r/rust".into(), "Kernel notes".into()),
+                ("r/rust".into(), "Editor release".into()),
+                ("blog.test".into(), "Quiet compressors".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn place_learning_follows_reddit_and_github_after_two_hits() {
+        assert_eq!(
+            place_from_item(&SourceItem {
+                title: "Async in the kernel".into(),
+                url: "https://www.reddit.com/r/rust/comments/abc/x".into(),
+                kind: SourceKind::Reddit,
+                source_name: "r/rust".into(),
+                published_ms: NOW,
+                summary: String::new(),
+                image: None,
+                topic: None,
+                engagement: 10,
+            }),
+            Some((SourceKind::Reddit, "rust".into()))
+        );
+        assert_eq!(
+            place_from_url("https://github.com/emilk/egui/releases/tag/0.40"),
+            Some((SourceKind::GithubReleases, "emilk/egui".into()))
+        );
+        assert_eq!(
+            place_from_url("https://blog.rust-lang.org/1.99"),
+            None,
+            "plain blogs are not auto-followed without a real feed id"
+        );
+        let mut cache = SourceCache::default();
+        assert!(!cache.note_place(SourceKind::Reddit, "rust"));
+        assert!(cache.note_place(SourceKind::Reddit, "Rust"));
+        assert!(!cache.note_place(SourceKind::Reddit, "rust"));
+        assert_eq!(
+            cache.places,
+            vec![PlaceHit {
+                kind: SourceKind::Reddit,
+                entry: "rust".into(),
+                hits: LEARN_PLACE_HITS,
+            }]
+        );
+    }
+
+    #[test]
+    fn under_seen_sources_get_a_novelty_bump_once_history_exists() {
+        let followed = item("Shop notes", "https://feed.test/1", NOW - 60_000);
+        let p = profile(&[]);
+        let bias = BTreeMap::<String, i32>::new();
+        let empty_posts = BTreeMap::<String, u32>::new();
+        let history: BTreeMap<String, u32> = [("other".into(), 5)].into_iter().collect();
+        let plain = rank_with(
+            std::slice::from_ref(&followed),
+            &p,
+            &bias,
+            &empty_posts,
+            NOW,
+        )[0]
+        .score;
+        let novel = rank_with(std::slice::from_ref(&followed), &p, &bias, &history, NOW)[0].score;
+        assert_eq!(plain, 35);
+        assert_eq!(novel, 42);
+        let known: BTreeMap<String, u32> = [("feed.test".into(), SOURCE_NOVELTY_BELOW)]
+            .into_iter()
+            .collect();
+        assert_eq!(
+            rank_with(std::slice::from_ref(&followed), &p, &bias, &known, NOW)[0].score,
+            35
+        );
     }
 
     #[test]

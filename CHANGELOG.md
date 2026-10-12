@@ -2,8 +2,12 @@
 
 ## Unreleased
 
+<<<<<<< HEAD
 - Fixed: park answers write atomically and ignore empty or partial answer files, so an Approve click is not read as Deny (Windows CUA flake on `deny_sends_nothing_approve_forwards_once_and_the_password_slot_is_never_typed`).
 - Fixed: Settings → Behavior auto-archive copy matches #712 (idle chats leave History and search; still on disk; no Archived drawer promised).
+=======
+- Pulse diversifies what it follows from what you like. A check posts at most two stories from one source (so Hacker News cannot fill the whole run), searches your strongest interest every time and rotates the other topic slots so weaker interests still get a look, and gives a small score bump to under-seen sources. Save or More like this twice on posts from the same subreddit, GitHub repo or YouTube channel adds that place to Settings → Pulse → Sources when that source kind is on.
+>>>>>>> origin/beta
 - Code is now rustfmt-clean and CI checks formatting.
 - Fixed: source-window tests match rustfmt-wrapped needles (`session_row`, `Margin::symmetric`, `feed_prompt`) and the composer Pill scan window is 15,000 bytes.
 - Fixed: the "Archived N idle chats" composer row and the History sidebar Archived section no longer appear; archived chats stay out of History lists and search. Archive / Unarchive, auto-archive, and Undo remain.
