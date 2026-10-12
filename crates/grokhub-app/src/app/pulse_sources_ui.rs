@@ -71,8 +71,9 @@ fn user_agent() -> String {
 fn source_agent() -> ureq::Agent {
     // Redirects are followed by hand so every hop is checked as a public URL.
     // Dial resolver blocks DNS→private/CGNAT even when the hostname looked public.
+    // No env proxy: HTTP(S)_PROXY would dial the proxy and skip public_only_resolve
+    // on the target (same as web_fetch).
     ureq::AgentBuilder::new()
-        .try_proxy_from_env(true)
         .redirects(0)
         .timeout(std::time::Duration::from_secs(FETCH_TIMEOUT_SECS))
         .resolver(grokhub_agent::public_only_resolve)
@@ -1300,6 +1301,10 @@ mod tests {
         assert!(
             arm.contains(".redirects(0)"),
             "manual redirect checks need redirects(0): {arm}"
+        );
+        assert!(
+            !arm.contains("try_proxy_from_env"),
+            "env proxy would skip public_only_resolve on the target: {arm}"
         );
     }
 
