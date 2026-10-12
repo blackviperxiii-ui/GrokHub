@@ -529,6 +529,8 @@ pub fn run_loop(
                 arguments: call.arguments.clone(),
             });
         }
+        // Per-step file checkpoints: one step id for this tool batch.
+        let _ = crate::file_checkpoint::begin_step(input.conversation_id);
         // Spike-2b: a denied hard step stops the rest of this batch.
         let mut batch_failed = false;
         for call in &turn.calls {

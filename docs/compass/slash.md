@@ -29,5 +29,6 @@
 - `/skills changes|undo|restore` parse in `parse_skills_arg`; any other `/skills` word stays `GrokSkills`. Undo and restore run only from the user's typing (`typed_send`) or a row click in `crates/grokhub-app/src/app/skill_undo.rs`; from a night job, automation, Pulse run, or idea they only show the rows.
 - `/privacy` is a cabin view (`run_privacy`) and shadows the Grok CLI pager builtin. Slash text never writes a grant; only a Settings click in `ui_privacy_rows` or `ui_scope_rows` does. Its ghost Revoke rows (`paint_privacy_revokes`) answer a pointer click only.
 - `run_slash` calls `dispatch_native_slash` first on every thread. It returns false off native (Lab) threads; on them Remember, Dream, Inspect, Rewind, Usage, Models and Workflow return true and skip the cabin match.
+- `/rewind step` / `/rewind step <n>` (`Slash::RewindStep`) lists or restores `file_checkpoint` steps for the thread's `grok_session`; bare `/rewind` stays N/A on native.
 ## See also
 - [amr](amr.md), [app-module](app-module.md), [grokhub-agent](grokhub-agent.md)
