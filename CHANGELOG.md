@@ -2,15 +2,9 @@
 
 ## Unreleased
 
-<<<<<<< HEAD
 - Short UI repaint timers (palette search, Pulse tab crossfade, Permissions keyring wait, folder picker) only run while something is actually busy or animating, so an idle cabin is not woken every few dozen milliseconds.
-=======
-<<<<<<< HEAD
 - Archive finished chats so they leave the main History list but stay searchable and restorable: Archive / Unarchive from the row menu, chat header menu and Ctrl+Shift+A; an Archived sidebar drawer (newest first); search marks archived hits; opening works; a reply restores the chat with a quiet note; toasts name the chat and offer Undo. Idle chats auto-archive after 14 days (Settings → Behavior, off switch), skipping pinned chats and chats with a running or parked task or background job, on app start and once a day.
-=======
->>>>>>> origin/beta
 - Settings → Behavior no longer reads `self_review.json` (or the change-version ledger) on every paint: the cabin keeps a cache that writers update, so the Settings page stays off the disk while it is open.
->>>>>>> origin/beta
 - Added: GrokHub keeps a copy of each file before the agent edits it; `/rewind step` lists the agent's steps and puts any file back as it was.
 - Fixed: channel switch no longer force-moves a local `main`/`beta` that is ahead of origin (fast-forward or refuse); Update recover resets to `origin/main`/`origin/beta` (not an old release tag); backup commits ignore GPG signing.
 - Fixed: long chats and tasks no longer stop with a context error; GrokHub compacts again whenever the context fills and retries once after a context-overflow reply, keeping the latest steps word for word.
