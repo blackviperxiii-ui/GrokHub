@@ -19,6 +19,9 @@ const REPEAT_LIMIT: u32 = 3;
 pub const REPEAT_REPLAN: &str = "not run: the same call already ran twice. Stop repeating it. \
 Re-read the goal, say in one line what you tried, then pick a different approach \
 (another tool, another route or a smaller sub-step) and go on.";
+/// Tool calls from a length-truncated model reply are failed unexecuted.
+pub const TRUNCATED_TOOL: &str =
+    "not run: your reply was cut off at the output limit; resend smaller steps";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StopReason {
@@ -171,6 +174,66 @@ fn finish(
     }
 }
 
+enum CompactPass {
+    Ok,
+    Cancelled,
+    Failed,
+}
+
+fn run_compact_pass(
+    input: &LoopIn<'_>,
+    history: &mut Vec<InputItem>,
+    modified_paths: &[String],
+    usage: &mut Usage,
+    on_event: &mut dyn FnMut(LoopEvent),
+) -> CompactPass {
+    on_event(LoopEvent::Compact {
+        started: true,
+        usage: usage.clone(),
+        error: None,
+    });
+    crate::hooks::on_compact(input.conversation_id, input.workspace, true);
+    let compact_result = crate::compact::compact_after_flush(
+        input.workspace,
+        input.client,
+        input.cancel,
+        input.model,
+        input.effort,
+        input.conversation_id,
+        history,
+        modified_paths,
+    );
+    crate::hooks::on_compact(input.conversation_id, input.workspace, false);
+    match compact_result {
+        Ok(extra) => {
+            usage.add(&extra);
+            on_event(LoopEvent::Compact {
+                started: false,
+                usage: usage.clone(),
+                error: None,
+            });
+            emit_usage(on_event, usage, history, input.context_length);
+            CompactPass::Ok
+        }
+        Err(crate::compact::CompactError::Cancelled) => {
+            on_event(LoopEvent::Compact {
+                started: false,
+                usage: usage.clone(),
+                error: Some("cancelled".into()),
+            });
+            CompactPass::Cancelled
+        }
+        Err(crate::compact::CompactError::Failed(message)) => {
+            on_event(LoopEvent::Compact {
+                started: false,
+                usage: usage.clone(),
+                error: Some(message),
+            });
+            CompactPass::Failed
+        }
+    }
+}
+
 pub fn run_loop(
     input: &LoopIn<'_>,
     history: &mut Vec<InputItem>,
@@ -179,17 +242,34 @@ pub fn run_loop(
     on_event: &mut dyn FnMut(LoopEvent),
 ) -> LoopOut {
     let first_turn = history.is_empty();
+    // Brain 5: the turn's talk style sits in the system prompt's volatile tail.
+    let style = (input.depth == 0).then(|| crate::checkpoint::turn_style(input.conversation_id)).flatten();
+    // Brain 3: so does the playbook the turn's Brief picked.
+    let playbook = (input.depth == 0).then(|| crate::checkpoint::turn_playbook(input.conversation_id)).flatten();
     if first_turn {
+        let base = style.map(|s| grokhub_core::talk::restyle(input.system, s));
+        let base = base.as_deref().unwrap_or(input.system);
+        let base = match &playbook {
+            Some(block) => grokhub_core::playbook::with_playbook(base, Some(block)),
+            None => base.to_string(),
+        };
         let system = match crate::memory::first_turn_injection(input.workspace, user_text) {
-            Some(block) if input.system.trim().is_empty() => block,
-            Some(block) => format!("{}\n\n{block}", input.system),
-            None => input.system.to_string(),
+            Some(block) if base.trim().is_empty() => block,
+            Some(block) => format!("{base}\n\n{block}"),
+            None => base.to_string(),
         };
         if !system.trim().is_empty() {
             history.push(InputItem::Message {
                 role: "system".into(),
                 content: vec![ContentPart::InputText(system)],
             });
+        }
+    } else {
+        if let Some(style) = style {
+            restyle_history(history, style);
+        }
+        if input.depth == 0 {
+            replaybook_history(history, playbook.as_deref());
         }
     }
     history.push(user_message(user_text, image));
@@ -203,13 +283,27 @@ pub fn run_loop(
     if plan_at_start {
         gate.readonly_session = true;
     }
-    let mut did_compact = false;
+    let mut compacted_once = false;
+    let mut turns_since_compact = 0u32;
+    let mut overflow_compacted = false;
+    let mut modified_paths: Vec<String> = Vec::new();
+    let mut nested_agents = crate::prompt::NestedAgents::new(input.workspace);
     let mut repeats: HashMap<String, u32> = HashMap::new();
     let mut stop_hook_active = false;
+    let mut truncated_streak = 0u32;
     // A subagent's checklist belongs to its parent; plan mode can't do the work.
     let mut drive = (input.depth == 0 && !plan_at_start && !input.conversation_id.is_empty())
         .then(|| crate::drive::Drive::new(&crate::session_tools::todos_for(input.conversation_id)));
     let mut evidence = 0usize;
+    // Brain 2: the turn's Brief and the changes still waiting on a check.
+    let brief = drive.as_ref().and_then(|_| crate::checkpoint::turn_brief(input.conversation_id));
+    let mut fresh = crate::checkpoint::Fresh::default();
+    let (mut checkpoint_at, mut checkpoint_due) = (0usize, Vec::<String>::new());
+    // Brain 5: a long run in a progress style gets a note at each phase boundary.
+    let mut progress = drive
+        .as_ref()
+        .filter(|_| style.is_some_and(grokhub_core::talk::TalkStyle::progress_notes))
+        .map(|_| crate::checkpoint::Progress::new(&crate::session_tools::todos_for(input.conversation_id)));
     match crate::hooks::on_user_prompt(input.conversation_id, input.workspace, user_text) {
         crate::hooks::PromptHook::Block { reason } => {
             history.pop();
@@ -217,7 +311,7 @@ pub fn run_loop(
                 input,
                 StopReason::Error(format!("Prompt blocked by hook: {reason}")),
                 usage,
-                did_compact,
+                compacted_once,
                 true,
             );
         }
@@ -235,15 +329,15 @@ pub fn run_loop(
     let mut turns = 0u32;
     loop {
         if input.max_turns != 0 && turns >= input.max_turns {
-            return finish(input, StopReason::MaxTurns, usage, did_compact, true);
+            return finish(input, StopReason::MaxTurns, usage, compacted_once, true);
         }
         turns = turns.saturating_add(1);
         let turn_top = crate::timing::lap("loop:pre_request");
         if input.cancel.is_cancelled() {
-            return finish(input, StopReason::Cancelled, usage, did_compact, true);
+            return finish(input, StopReason::Cancelled, usage, compacted_once, true);
         }
         if stop_for_halt(input) {
-            return finish(input, StopReason::Halted, usage, did_compact, true);
+            return finish(input, StopReason::Halted, usage, compacted_once, true);
         }
         inject_notices(input, history);
         if let Some(tasks) = &input.tasks {
@@ -253,52 +347,27 @@ pub fn run_loop(
                 emit_usage(on_event, &usage, history, input.context_length);
             }
         }
-        // Compact before the context fills, or before a request would cross the
-        // model's long-context threshold (billed at about twice the price there).
+        // Compact when the context fills (or before a long-context price step).
+        // Re-arm after at least one new turn since the last successful compact.
         let long = crate::route::live::crosses_long_context(&crate::perm::config_dir(), input.model, crate::compact::estimate_input_tokens(history));
-        if !did_compact && (crate::compact::needs_auto_compact(history, input.context_length) || long) {
-            on_event(LoopEvent::Compact {
-                started: true,
-                usage: usage.clone(),
-                error: None,
-            });
-            crate::hooks::on_compact(input.conversation_id, input.workspace, true);
-            let compact_result = crate::compact::compact_after_flush(
-                input.workspace,
-                input.client,
-                input.cancel,
-                input.model,
-                input.effort,
-                input.conversation_id,
+        let over = crate::compact::needs_auto_compact(history, input.context_length) || long;
+        let may_compact = over && (!compacted_once || turns_since_compact >= 1);
+        if may_compact {
+            match run_compact_pass(
+                input,
                 history,
-            );
-            crate::hooks::on_compact(input.conversation_id, input.workspace, false);
-            match compact_result {
-                Ok(extra) => {
-                    usage.add(&extra);
-                    did_compact = true;
-                    on_event(LoopEvent::Compact {
-                        started: false,
-                        usage: usage.clone(),
-                        error: None,
-                    });
-                    emit_usage(on_event, &usage, history, input.context_length);
+                &modified_paths,
+                &mut usage,
+                on_event,
+            ) {
+                CompactPass::Ok => {
+                    compacted_once = true;
+                    turns_since_compact = 0;
                 }
-                Err(crate::compact::CompactError::Cancelled) => {
-                    on_event(LoopEvent::Compact {
-                        started: false,
-                        usage: usage.clone(),
-                        error: Some("cancelled".into()),
-                    });
-                    return finish(input, StopReason::Cancelled, usage, false, true);
+                CompactPass::Cancelled => {
+                    return finish(input, StopReason::Cancelled, usage, compacted_once, true);
                 }
-                Err(crate::compact::CompactError::Failed(message)) => {
-                    on_event(LoopEvent::Compact {
-                        started: false,
-                        usage: usage.clone(),
-                        error: Some(message),
-                    });
-                }
+                CompactPass::Failed => {}
             }
         }
         let mut wire = history.clone();
@@ -321,21 +390,62 @@ pub fn run_loop(
             StreamEvent::TextDelta(text) => on_event(LoopEvent::Text(text)),
             StreamEvent::ReasoningDelta(text) => on_event(LoopEvent::Thought(text)),
         }, class) {
-            Ok(turn) => turn,
+            Ok(turn) => {
+                overflow_compacted = false;
+                turn
+            }
             Err(ClientError::Cancelled) => {
-                return finish(input, StopReason::Cancelled, usage, did_compact, true);
+                return finish(input, StopReason::Cancelled, usage, compacted_once, true);
+            }
+            Err(err) if err.is_context_length() => {
+                if overflow_compacted {
+                    return finish(
+                        input,
+                        StopReason::Error(crate::compact::CONTEXT_STILL_TOO_LARGE.into()),
+                        usage,
+                        compacted_once,
+                        true,
+                    );
+                }
+                match run_compact_pass(
+                    input,
+                    history,
+                    &modified_paths,
+                    &mut usage,
+                    on_event,
+                ) {
+                    CompactPass::Ok => {
+                        compacted_once = true;
+                        turns_since_compact = 0;
+                        overflow_compacted = true;
+                        continue;
+                    }
+                    CompactPass::Cancelled => {
+                        return finish(input, StopReason::Cancelled, usage, compacted_once, true);
+                    }
+                    CompactPass::Failed => {
+                        return finish(
+                            input,
+                            StopReason::Error(err.to_string()),
+                            usage,
+                            compacted_once,
+                            true,
+                        );
+                    }
+                }
             }
             Err(err) => {
                 return finish(
                     input,
                     StopReason::Error(err.to_string()),
                     usage,
-                    did_compact,
+                    compacted_once,
                     true,
                 );
             }
         };
         step_ended = Some(std::time::Instant::now());
+        turns_since_compact = turns_since_compact.saturating_add(1);
         usage.add(&turn.usage);
         emit_usage(on_event, &usage, history, input.context_length);
         if !turn.text.is_empty() {
@@ -344,11 +454,36 @@ pub fn run_loop(
                 content: vec![ContentPart::InputText(turn.text)],
             });
         }
+        if turn.truncated {
+            truncated_streak = truncated_streak.saturating_add(1);
+            record_turn_truncated(
+                input.conversation_id,
+                turn.truncate_reason.as_deref(),
+                truncated_streak,
+            );
+            for call in &turn.calls {
+                history.push(InputItem::FunctionCall {
+                    call_id: call.call_id.clone(),
+                    name: call.name.clone(),
+                    arguments: call.arguments.clone(),
+                });
+                emit_tool(on_event, &tool_id(call), call, "failed", TRUNCATED_TOOL, None);
+                // Do not note a tool error: truncation is not a failed tool run.
+                history.push(InputItem::FunctionCallOutput {
+                    call_id: call.call_id.clone(),
+                    output: TRUNCATED_TOOL.into(),
+                });
+            }
+            continue;
+        }
+        truncated_streak = 0;
         if turn.calls.is_empty() {
             let notes = input.steer.drain();
             if notes.is_empty() {
                 if let Some(drive) = drive.as_mut().filter(|_| !crate::session_tools::plan_on(input.conversation_id)) {
-                    match drive.check(&crate::session_tools::todos_for(input.conversation_id), evidence) {
+                    let todos = crate::session_tools::todos_for(input.conversation_id);
+                    let gaps = crate::checkpoint::Gaps::of(brief.as_ref(), &todos, evidence, &fresh);
+                    match drive.check_with(&todos, evidence, &gaps) {
                         crate::drive::Verdict::Push(note) => {
                             history.push(user_message(&note, None));
                             continue;
@@ -359,6 +494,10 @@ pub fn run_loop(
                                 role: "assistant".into(),
                                 content: vec![ContentPart::InputText(text)],
                             });
+                            // Brain 5: a repair or research run still ends with its findings card.
+                            if let Some(card) = gaps.findings.then(|| crate::checkpoint::fallback_findings(&todos, &gaps)).flatten() {
+                                on_event(LoopEvent::Findings(card.to_body()));
+                            }
                         }
                         crate::drive::Verdict::End => {}
                     }
@@ -374,9 +513,9 @@ pub fn run_loop(
                         ));
                         continue;
                     }
-                    return finish(input, StopReason::EndTurn, usage, did_compact, false);
+                    return finish(input, StopReason::EndTurn, usage, compacted_once, false);
                 }
-                return finish(input, StopReason::EndTurn, usage, did_compact, true);
+                return finish(input, StopReason::EndTurn, usage, compacted_once, true);
             }
             for note in notes {
                 history.push(user_message(&note, None));
@@ -391,14 +530,16 @@ pub fn run_loop(
                 arguments: call.arguments.clone(),
             });
         }
+        // Per-step file checkpoints: one step id for this tool batch.
+        let _ = crate::file_checkpoint::begin_step(input.conversation_id);
         // Spike-2b: a denied hard step stops the rest of this batch.
         let mut batch_failed = false;
         for call in &turn.calls {
             if input.cancel.is_cancelled() {
-                return finish(input, StopReason::Cancelled, usage, did_compact, true);
+                return finish(input, StopReason::Cancelled, usage, compacted_once, true);
             }
             if stop_for_halt(input) {
-                return finish(input, StopReason::Halted, usage, did_compact, true);
+                return finish(input, StopReason::Halted, usage, compacted_once, true);
             }
             if batch_failed {
                 let output = ToolOutput::err(gate::NOT_EXECUTED);
@@ -451,11 +592,11 @@ pub fn run_loop(
                 let output = ToolOutput::err(gate::user_cancelled(&call.name));
                 emit_tool(on_event, &id, call, "failed", &output.text, None);
                 push_output(history, call, output);
-                return finish(input, StopReason::Cancelled, usage, did_compact, true);
+                return finish(input, StopReason::Cancelled, usage, compacted_once, true);
             }
             if reviewed.halted {
                 let _ = stop_for_halt(input);
-                return finish(input, StopReason::Halted, usage, did_compact, true);
+                return finish(input, StopReason::Halted, usage, compacted_once, true);
             }
             let constrained = crate::hooks::constrain_tool(crate::hooks::ToolHook {
                 session: input.conversation_id,
@@ -517,6 +658,7 @@ pub fn run_loop(
                             &id,
                             on_event,
                             &pre_context,
+                            &mut nested_agents,
                         ),
                         Waited::Answer(PermAnswer::Always) => {
                             if input.perms.is_some() {
@@ -536,6 +678,7 @@ pub fn run_loop(
                                 &id,
                                 on_event,
                                 &pre_context,
+                                &mut nested_agents,
                             )
                         }
                         Waited::Answer(PermAnswer::Deny) => {
@@ -555,11 +698,11 @@ pub fn run_loop(
                             let output = ToolOutput::err(gate::user_cancelled(&call.name));
                             emit_tool(on_event, &id, call, "failed", &output.text, None);
                             push_output(history, call, output);
-                            return finish(input, StopReason::Cancelled, usage, did_compact, true);
+                            return finish(input, StopReason::Cancelled, usage, compacted_once, true);
                         }
                         Waited::Halted => {
                             let _ = stop_for_halt(input);
-                            return finish(input, StopReason::Halted, usage, did_compact, true);
+                            return finish(input, StopReason::Halted, usage, compacted_once, true);
                         }
                     }
                 }
@@ -572,6 +715,7 @@ pub fn run_loop(
                     &id,
                     on_event,
                     &pre_context,
+                    &mut nested_agents,
                 ),
             };
             if usage_pending(&extra_usage) {
@@ -582,17 +726,61 @@ pub fn run_loop(
             let halted = stop_for_halt(input);
             if !output.failed && !crate::drive::is_session_tool(&call.name) {
                 evidence += 1;
+                fresh.note(&call.name, &serde_json::from_str(&call.arguments).unwrap_or_default());
+                if let Some(path) = crate::compact::path_from_write_call(&call.name, &call.arguments)
+                {
+                    if !modified_paths.iter().any(|p| p == &path) {
+                        modified_paths.push(path);
+                    }
+                }
+            }
+            if !output.failed && call.name == "report_findings" {
+                fresh.note_findings();
             }
             push_output(history, call, output);
             if cancelled {
-                return finish(input, StopReason::Cancelled, usage, did_compact, true);
+                return finish(input, StopReason::Cancelled, usage, compacted_once, true);
             }
             if halted {
-                return finish(input, StopReason::Halted, usage, did_compact, true);
+                return finish(input, StopReason::Halted, usage, compacted_once, true);
             }
+        }
+        if drive.is_some() && evidence >= checkpoint_at + crate::checkpoint::CHECKPOINT_EVERY {
+            // A checkpoint between phases: name the Brief's done items still uncovered, once per change.
+            checkpoint_at = evidence;
+            let due = crate::checkpoint::uncovered(brief.as_ref(), &crate::session_tools::todos_for(input.conversation_id), evidence);
+            if !due.is_empty() && due != checkpoint_due {
+                let gaps = crate::checkpoint::Gaps { uncovered: due.clone(), ..Default::default() };
+                history.push(user_message(&format!("Checkpoint: {}", gaps.note()), None));
+            }
+            checkpoint_due = due;
+        }
+        if let Some(note) = progress.as_mut().and_then(|p| p.check(&crate::session_tools::todos_for(input.conversation_id), evidence)) {
+            // Shown in the reply, not sent back to the model.
+            on_event(LoopEvent::Text(format!("\n\n{note}\n\n")));
         }
         for note in input.steer.drain() {
             history.push(user_message(&note, None));
+        }
+    }
+}
+
+/// A later turn's talk style replaces the earlier one in the stored system
+/// message; the stable prefix before it stays cached.
+fn restyle_history(history: &mut [InputItem], style: grokhub_core::talk::TalkStyle) {
+    if let Some(InputItem::Message { role, content }) = history.first_mut() {
+        if let Some(ContentPart::InputText(text)) = content.first_mut().filter(|_| role == "system") {
+            *text = grokhub_core::talk::restyle(text, style);
+        }
+    }
+}
+
+/// A later turn's playbook replaces the earlier one in the stored system
+/// prompt; a turn with none drops it.
+fn replaybook_history(history: &mut [InputItem], block: Option<&str>) {
+    if let Some(InputItem::Message { role, content }) = history.first_mut() {
+        if let Some(ContentPart::InputText(text)) = content.first_mut().filter(|_| role == "system") {
+            *text = grokhub_core::playbook::with_playbook(text, block);
         }
     }
 }
@@ -657,6 +845,19 @@ fn push_output(history: &mut Vec<InputItem>, call: &FunctionCall, output: ToolOu
     }
 }
 
+/// Trail span for a length-truncated model reply (`turn_truncated`).
+fn record_turn_truncated(conversation_id: &str, reason: Option<&str>, streak: u32) {
+    let reason = reason.unwrap_or("max_output_tokens");
+    let args = serde_json::json!({
+        "reason": reason,
+        "streak": streak,
+    })
+    .to_string();
+    let span = crate::harness::Span::deny(conversation_id, "turn_truncated", &args, reason, "soft")
+        .in_turn(conversation_id, 0);
+    let _ = crate::harness::append_span(&crate::perm::config_dir(), &span);
+}
+
 fn emit_tool(
     on_event: &mut dyn FnMut(LoopEvent),
     id: &str,
@@ -710,6 +911,7 @@ fn note_tool(
     id: &str,
     on_event: &mut dyn FnMut(LoopEvent),
     pre_context: &str,
+    nested: &mut crate::prompt::NestedAgents,
 ) -> (ToolOutput, Usage) {
     let _lap = crate::timing::lap("loop:tool_run");
     let (mut output, usage) = run_allowed(
@@ -726,6 +928,22 @@ fn note_tool(
             output.text.push('\n');
         }
         output.text.push_str(pre_context);
+    }
+    // Just-in-time nested AGENTS.md / CLAUDE.md: append to tool output only.
+    if !output.failed && tools::is_path_tool(&call.name) {
+        let args: serde_json::Value =
+            serde_json::from_str(&call.arguments).unwrap_or(serde_json::Value::Null);
+        if let Some(raw) = tools::tool_path_arg(&call.name, &args) {
+            if let Ok(path) = tools::confine(input.workspace, &raw) {
+                let note = nested.notes_for(input.workspace, &path);
+                if !note.is_empty() {
+                    if !output.text.is_empty() && !output.text.ends_with('\n') {
+                        output.text.push('\n');
+                    }
+                    output.text.push_str(&note);
+                }
+            }
+        }
     }
     let extra = crate::hooks::after_tool(
         input.conversation_id,
@@ -893,6 +1111,36 @@ mod tests {
         text: String,
         calls: Vec<FunctionCall>,
         usage: Usage,
+        truncated: bool,
+    }
+
+    impl ScriptTurn {
+        fn text(text: impl Into<String>) -> Self {
+            Self {
+                text: text.into(),
+                calls: Vec::new(),
+                usage: Usage::default(),
+                truncated: false,
+            }
+        }
+
+        fn calls(calls: Vec<FunctionCall>, usage: Usage) -> Self {
+            Self {
+                text: String::new(),
+                calls,
+                usage,
+                truncated: false,
+            }
+        }
+
+        fn truncated_calls(calls: Vec<FunctionCall>) -> Self {
+            Self {
+                text: String::new(),
+                calls,
+                usage: Usage::default(),
+                truncated: true,
+            }
+        }
     }
 
     impl ModelClient for Script {
@@ -917,11 +1165,7 @@ mod tests {
             let turn = {
                 let mut turns = self.turns.lock().unwrap();
                 if turns.is_empty() {
-                    ScriptTurn {
-                        text: String::new(),
-                        calls: Vec::new(),
-                        usage: Usage::default(),
-                    }
+                    ScriptTurn::text("")
                 } else {
                     turns.remove(0)
                 }
@@ -934,6 +1178,10 @@ mod tests {
                 reasoning: String::new(),
                 calls: turn.calls,
                 usage: turn.usage,
+                truncated: turn.truncated,
+                truncate_reason: turn
+                    .truncated
+                    .then(|| "max_output_tokens".into()),
             })
         }
     }
@@ -973,7 +1221,8 @@ mod tests {
                     arguments: format!(r#"{{"path":"p{n}"}}"#),
                 }],
                 usage: Usage::default(),
-            })
+            ..Default::default()
+        })
         }
     }
 
@@ -1042,6 +1291,99 @@ mod tests {
     }
 
     #[test]
+    fn truncated_turn_does_not_run_tool_calls() {
+        let dir = workspace("trunc");
+        let config = dir.join("config");
+        std::fs::create_dir_all(&config).unwrap();
+        let _guard = crate::perm::ConfigGuard::set(&config);
+        let script = Script {
+            turns: Mutex::new(vec![
+                ScriptTurn::truncated_calls(vec![call(
+                    "w1",
+                    "write",
+                    r#"{"path":"big.rs","content":"partial"}"#,
+                )]),
+                ScriptTurn::text("rewrote in smaller pieces"),
+            ]),
+            seen: Mutex::new(Vec::new()),
+            cancel_on_text: false,
+            steer: None,
+        };
+        let (out, history, events) = run(
+            &script,
+            &dir,
+            0,
+            &CancelToken::new(),
+            &SteerQueue::new(),
+            &NeverHalt,
+        );
+        assert_eq!(out.stop, StopReason::EndTurn);
+        let outputs: Vec<_> = history
+            .iter()
+            .filter_map(|i| match i {
+                InputItem::FunctionCallOutput { output, .. } => Some(output.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(outputs, [TRUNCATED_TOOL]);
+        assert!(events.iter().any(|ev| matches!(
+            ev,
+            LoopEvent::Tool { status, detail, .. }
+                if status == "failed" && detail.contains("cut off at the output limit")
+        )));
+        // write never ran: the file is absent.
+        assert!(!dir.join("big.rs").exists());
+        let spans = std::fs::read_to_string(crate::harness::span_path(&config, "conv")).unwrap();
+        assert!(spans.contains("turn_truncated"), "{spans}");
+        assert!(spans.contains("max_output_tokens"), "{spans}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn completed_tool_turn_still_runs_as_before() {
+        let dir = workspace("trunc-ok");
+        let script = Script {
+            turns: Mutex::new(vec![
+                ScriptTurn::calls(
+                    vec![call("w1", "write", r#"{"path":"ok.rs","content":"full"}"#)],
+                    Usage::default(),
+                ),
+                ScriptTurn::text("done"),
+            ]),
+            seen: Mutex::new(Vec::new()),
+            cancel_on_text: false,
+            steer: None,
+        };
+        let permits = Answer {
+            answer: PermAnswer::Allow,
+            asks: AtomicUsize::new(0),
+        };
+        let (out, history, _events) = once(
+            &script,
+            &dir,
+            chat(gate::PermMode::Always, true, false),
+            None,
+            &permits,
+        );
+        assert_eq!(out.stop, StopReason::EndTurn);
+        let outputs: Vec<_> = history
+            .iter()
+            .filter_map(|i| match i {
+                InputItem::FunctionCallOutput { output, .. } => Some(output.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            outputs
+                .iter()
+                .all(|o| !o.contains("cut off at the output limit")),
+            "{outputs:?}"
+        );
+        assert_eq!(std::fs::read_to_string(dir.join("ok.rs")).unwrap(), "full");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn no_turn_cap_runs_past_fifty_tool_turns_to_the_reply() {
         let dir = workspace("nocap");
         let mut turns: Vec<ScriptTurn> = (0..80)
@@ -1049,9 +1391,12 @@ mod tests {
                 text: String::new(),
                 calls: vec![call(&format!("t{n}"), "list_dir", &format!(r#"{{"path":"p{n}"}}"#))],
                 usage: Usage::default(),
+                truncated: false,
             })
             .collect();
-        turns.push(ScriptTurn { text: "all done".into(), calls: Vec::new(), usage: Usage::default() });
+        turns.push(ScriptTurn { text: "all done".into(), calls: Vec::new(), usage: Usage::default(),
+                truncated: false,
+            });
         let script = Script {
             turns: Mutex::new(turns),
             seen: Mutex::new(Vec::new()),
@@ -1079,12 +1424,14 @@ mod tests {
                         call("b", "list_dir", "{}"),
                     ],
                     usage: usage(10, 5, 2, 100),
-                },
+                truncated: false,
+            },
                 ScriptTurn {
                     text: "done".into(),
                     calls: Vec::new(),
                     usage: usage(7, 3, 1, 50),
-                },
+                truncated: false,
+            },
             ]),
             seen: Mutex::new(Vec::new()),
             cancel_on_text: false,
@@ -1126,12 +1473,14 @@ mod tests {
                     text: String::new(),
                     calls: vec![call("w", "write", r#"{"path":"x"}"#)],
                     usage: Usage::default(),
-                },
+                truncated: false,
+            },
                 ScriptTurn {
                     text: "stopped".into(),
                     calls: Vec::new(),
                     usage: Usage::default(),
-                },
+                truncated: false,
+            },
             ]),
             seen: Mutex::new(Vec::new()),
             cancel_on_text: false,
@@ -1152,12 +1501,14 @@ mod tests {
                     text: String::new(),
                     calls: vec![call("r", "read_file", r#"{"target_file":"missing.txt"}"#)],
                     usage: Usage::default(),
-                },
+                truncated: false,
+            },
                 ScriptTurn {
                     text: "after steer".into(),
                     calls: Vec::new(),
                     usage: Usage::default(),
-                },
+                truncated: false,
+            },
             ]),
             seen: Mutex::new(Vec::new()),
             cancel_on_text: false,
@@ -1175,17 +1526,20 @@ mod tests {
                     text: String::new(),
                     calls: vec![call("1", "read_file", r#"{"target_file":"note.txt"}"#)],
                     usage: Usage::default(),
-                },
+                truncated: false,
+            },
                 ScriptTurn {
                     text: String::new(),
                     calls: vec![call("2", "read_file", r#"{"target_file":"note.txt"}"#)],
                     usage: Usage::default(),
-                },
+                truncated: false,
+            },
                 ScriptTurn {
                     text: String::new(),
                     calls: vec![call("3", "read_file", r#"{"target_file":"note.txt"}"#)],
                     usage: Usage::default(),
-                },
+                truncated: false,
+            },
             ]),
             seen: Mutex::new(Vec::new()),
             cancel_on_text: false,
@@ -1216,6 +1570,7 @@ mod tests {
                 text: "nope".into(),
                 calls: Vec::new(),
                 usage: Usage::default(),
+                truncated: false,
             }]),
             seen: Mutex::new(Vec::new()),
             cancel_on_text: true,
@@ -1236,6 +1591,7 @@ mod tests {
                 text: String::new(),
                 calls: vec![call("h", "read_file", r#"{"target_file":"note.txt"}"#)],
                 usage: Usage::default(),
+                truncated: false,
             }]),
             seen: Mutex::new(Vec::new()),
             cancel_on_text: false,
@@ -1376,12 +1732,14 @@ mod tests {
             text: String::new(),
             calls: vec![call(id, "write", &format!(r#"{{"path":"{path}","content":"yes"}}"#))],
             usage: Usage::default(),
-        };
+                truncated: false,
+            };
         let done = ScriptTurn {
             text: "done".into(),
             calls: Vec::new(),
             usage: Usage::default(),
-        };
+                truncated: false,
+            };
 
         let allow = Answer { answer: PermAnswer::Allow, asks: AtomicUsize::new(0) };
         let asking = Script {
@@ -1462,12 +1820,14 @@ mod tests {
                     text: String::new(),
                     calls: vec![call("e", "write", r#"{"path":"../nope.txt","content":"x"}"#)],
                     usage: Usage::default(),
-                },
+                truncated: false,
+            },
                 ScriptTurn {
                     text: "done".into(),
                     calls: Vec::new(),
                     usage: Usage::default(),
-                },
+                truncated: false,
+            },
             ]),
             seen: Mutex::new(Vec::new()),
             cancel_on_text: false,
@@ -1494,10 +1854,12 @@ mod tests {
                     call("2", "write", r#"{"path":"b.txt","content":"b"}"#),
                 ],
                 usage: Usage::default(),
+                truncated: false,
             }, ScriptTurn {
                 text: "done".into(),
                 calls: Vec::new(),
                 usage: Usage::default(),
+                truncated: false,
             }]),
             seen: Mutex::new(Vec::new()),
             cancel_on_text: false,
@@ -1527,8 +1889,11 @@ mod tests {
                         call("4", "type", r#"{"text":"thanks"}"#),
                     ],
                     usage: Usage::default(),
-                },
-                ScriptTurn { text: "done".into(), calls: Vec::new(), usage: Usage::default() },
+                truncated: false,
+            },
+                ScriptTurn { text: "done".into(), calls: Vec::new(), usage: Usage::default(),
+                truncated: false,
+            },
             ]),
             seen: Mutex::new(Vec::new()),
             cancel_on_text: false,
@@ -1588,8 +1953,12 @@ mod tests {
         let dir = workspace("enter-slack");
         let script = || Script {
             turns: Mutex::new(vec![
-                ScriptTurn { text: String::new(), calls: vec![call("1", "key", r#"{"keys":"Return"}"#)], usage: Usage::default() },
-                ScriptTurn { text: "done".into(), calls: Vec::new(), usage: Usage::default() },
+                ScriptTurn { text: String::new(), calls: vec![call("1", "key", r#"{"keys":"Return"}"#)], usage: Usage::default(),
+                truncated: false,
+            },
+                ScriptTurn { text: "done".into(), calls: Vec::new(), usage: Usage::default(),
+                truncated: false,
+            },
             ]),
             seen: Mutex::new(Vec::new()),
             cancel_on_text: false,
@@ -1620,12 +1989,14 @@ mod tests {
             text: String::new(),
             calls: vec![call(id, "screenshot", "{}")],
             usage: Usage::default(),
-        };
+                truncated: false,
+            };
         let done = ScriptTurn {
             text: "done".into(),
             calls: Vec::new(),
             usage: Usage::default(),
-        };
+                truncated: false,
+            };
         let permits = Answer { answer: PermAnswer::Allow, asks: AtomicUsize::new(0) };
 
         let off_script = Script {
@@ -1805,7 +2176,8 @@ mod tests {
                 reasoning: String::new(),
                 calls,
                 usage: Usage::default(),
-            })
+            ..Default::default()
+        })
         }
     }
 
@@ -1872,12 +2244,14 @@ mod tests {
                     text: String::new(),
                     calls: vec![call("r", "read_file", r#"{"target_file":"note.txt"}"#)],
                     usage: Usage::default(),
-                },
+                truncated: false,
+            },
                 ScriptTurn {
                     text: "after steer".into(),
                     calls: Vec::new(),
                     usage: Usage::default(),
-                },
+                truncated: false,
+            },
             ]),
             seen: Mutex::new(Vec::new()),
             cancel_on_text: false,
@@ -1934,6 +2308,7 @@ mod tests {
                 text: String::new(),
                 calls: vec![call("r", "read_file", r#"{"target_file":"note.txt"}"#)],
                 usage: Usage::default(),
+                truncated: false,
             }]),
             seen: Mutex::new(Vec::new()),
             cancel_on_text: false,
@@ -2030,12 +2405,14 @@ mod tests {
                         call("m", "monitor", r#"{"command":"echo hi"}"#),
                     ],
                     usage: Usage::default(),
-                },
+                truncated: false,
+            },
                 ScriptTurn {
                     text: "done".into(),
                     calls: Vec::new(),
                     usage: Usage::default(),
-                },
+                truncated: false,
+            },
             ]),
             seen: Mutex::new(Vec::new()),
             cancel_on_text: false,
@@ -2119,12 +2496,14 @@ mod tests {
                     text: String::new(),
                     calls: vec![call("w", "write", r#"{"path":"out.txt","content":"yes"}"#)],
                     usage: Usage::default(),
-                },
+                truncated: false,
+            },
                 ScriptTurn {
                     text: "done".into(),
                     calls: Vec::new(),
                     usage: Usage::default(),
-                },
+                truncated: false,
+            },
             ]),
             seen: Mutex::new(Vec::new()),
             cancel_on_text: false,
@@ -2185,12 +2564,14 @@ mod tests {
                     text: String::new(),
                     calls: vec![call("w", "write", r#"{"path":"out.txt","content":"yes"}"#)],
                     usage: Usage::default(),
-                },
+                truncated: false,
+            },
                 ScriptTurn {
                     text: "done".into(),
                     calls: Vec::new(),
                     usage: Usage::default(),
-                },
+                truncated: false,
+            },
             ]),
             seen: Mutex::new(Vec::new()),
             cancel_on_text: false,
@@ -2239,6 +2620,10 @@ mod tests {
     }
 
     fn run_drive(script: &Script, dir: &std::path::Path, conv: &str) -> (LoopOut, Vec<InputItem>, Vec<LoopEvent>) {
+        run_drive_in(script, dir, conv, Gate::phase_readonly())
+    }
+
+    fn run_drive_in(script: &Script, dir: &std::path::Path, conv: &str, gate: Gate) -> (LoopOut, Vec<InputItem>, Vec<LoopEvent>) {
         let (cancel, steer) = (CancelToken::new(), SteerQueue::new());
         let input = LoopIn {
             client: script,
@@ -2252,7 +2637,7 @@ mod tests {
             cancel: &cancel,
             steer: &steer,
             halt: &NeverHalt,
-            gate: Gate::phase_readonly(),
+            gate,
             desktop: None,
             permits: &gate::ClosedPermits,
             perms: None,
@@ -2271,7 +2656,12 @@ mod tests {
     }
 
     fn turn(text: &str, calls: Vec<FunctionCall>) -> ScriptTurn {
-        ScriptTurn { text: text.into(), calls, usage: Usage::default() }
+        ScriptTurn {
+            text: text.into(),
+            calls,
+            usage: Usage::default(),
+            truncated: false,
+        }
     }
 
     fn user_texts(history: &[InputItem]) -> Vec<String> {
@@ -2416,6 +2806,296 @@ mod tests {
             .filter_map(|i| match i { InputItem::FunctionCallOutput { output, .. } => Some(output.as_str()), _ => None })
             .collect();
         assert_eq!(outputs, ["Findings card posted: 1 findings, 1 one-tap fixes. It shows after your reply.", "give 1 to 30 findings"]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn brief(intent: crate::brain::Intent, care: crate::brain::Care, done: &[&str]) -> crate::brain::Brief {
+        crate::brain::Brief { intent, care, done: done.iter().map(|d| d.to_string()).collect(), ..Default::default() }
+    }
+
+    fn scripted(turns: Vec<ScriptTurn>) -> Script {
+        Script { turns: Mutex::new(turns), seen: Mutex::new(Vec::new()), cancel_on_text: false, steer: None }
+    }
+
+    #[test]
+    fn an_edit_then_stop_is_pushed_back_until_it_is_checked() {
+        let dir = workspace("verify-stop");
+        let conv = format!("verify-stop-{}", std::process::id());
+        crate::checkpoint::set_turn_brief(&conv, brief(crate::brain::Intent::Task, crate::brain::Care::Casual, &[]));
+        let script = scripted(vec![
+            turn("", vec![call("w1", "write", r#"{"path":"notes.txt","content":"hi"}"#)]),
+            turn("Done.", Vec::new()),
+            turn("", vec![call("r1", "read_file", r#"{"target_file":"notes.txt"}"#)]),
+            turn("Checked: it says hi.", Vec::new()),
+        ]);
+        let (out, history, _) = run_drive_in(&script, &dir, &conv, chat(gate::PermMode::Always, true, false));
+        assert_eq!(out.stop, StopReason::EndTurn);
+        assert_eq!(script.seen.lock().unwrap().len(), 4);
+        assert_eq!(
+            user_texts(&history),
+            [
+                "scan my computer".to_string(),
+                "Not verified since your last change to notes.txt. Check it (run the tests or build, re-read the file, look at the result) before you finish.".to_string(),
+            ]
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_edit_then_a_test_run_then_stop_ends() {
+        let dir = workspace("verify-tests");
+        let conv = format!("verify-tests-{}", std::process::id());
+        crate::checkpoint::set_turn_brief(&conv, brief(crate::brain::Intent::Task, crate::brain::Care::Casual, &[]));
+        let script = scripted(vec![
+            turn("", vec![call("w1", "write", r#"{"path":"notes.txt","content":"hi"}"#)]),
+            turn("", vec![call("s1", "run_terminal_command", r#"{"command":"echo test ok"}"#)]),
+            turn("Done, and the test run passed.", Vec::new()),
+            turn("unused", Vec::new()),
+        ]);
+        let (out, history, _) = run_drive_in(&script, &dir, &conv, chat(gate::PermMode::Always, true, false));
+        assert_eq!(out.stop, StopReason::EndTurn);
+        assert_eq!(script.seen.lock().unwrap().len(), 3);
+        assert_eq!(user_texts(&history), ["scan my computer"]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_careful_repair_must_cover_its_brief_done_list_or_end_naming_it() {
+        let dir = workspace("brief-done");
+        let conv = format!("brief-done-{}", std::process::id());
+        let b = brief(crate::brain::Intent::Repair, crate::brain::Care::Careful, &["the error is gone", "it works again"]);
+        crate::checkpoint::set_turn_brief(&conv, b.clone());
+        // Covers the list and posts its findings card: ends after one push.
+        let todos = r#"{"todos":[{"id":"e","content":"Confirm the error is gone","status":"completed"},{"id":"w","content":"It works again after restart","status":"completed"}]}"#;
+        let card = r#"{"findings":[{"severity":"info","text":"The error is gone after the restart"}]}"#;
+        let script = scripted(vec![
+            turn("", vec![call("r1", "read_file", r#"{"target_file":"note.txt"}"#)]),
+            turn("Fixed.", Vec::new()),
+            turn("", vec![call("t1", "todo_write", todos), call("r2", "list_dir", "{}"), call("f1", "report_findings", card)]),
+            turn("Both checked.", Vec::new()),
+        ]);
+        let (out, history, events) = run_drive(&script, &dir, &conv);
+        assert_eq!(out.stop, StopReason::EndTurn);
+        assert_eq!(script.seen.lock().unwrap().len(), 4);
+        assert_eq!(
+            user_texts(&history)[1],
+            "This ask is done only when it shows \"the error is gone\", \"it works again\". Put each in your checklist (todo_write) and mark it completed once a tool result shows it, or cancelled with the reason it is blocked. \
+             End with the findings card: call report_findings naming each item you checked and its root cause, with a one-tap fix for what is left."
+        );
+        let cards: Vec<&LoopEvent> = events.iter().filter(|e| matches!(e, LoopEvent::Findings(_))).collect();
+        assert_eq!(cards, [&LoopEvent::Findings("Findings from this run\n\n- Info: The error is gone after the restart".into())]);
+        crate::session_tools::invalidate_todos(&conv);
+        // Truly blocked: ends naming what is still open.
+        let conv = format!("brief-stuck-{}", std::process::id());
+        crate::checkpoint::set_turn_brief(&conv, b);
+        let mut turns = vec![turn("", vec![call("r1", "read_file", r#"{"target_file":"note.txt"}"#)])];
+        turns.extend((0..=crate::drive::STALL_LIMIT).map(|_| turn("I can't.", Vec::new())));
+        let script = scripted(turns);
+        let (out, history, events) = run_drive(&script, &dir, &conv);
+        assert_eq!(out.stop, StopReason::EndTurn);
+        assert_eq!(script.seen.lock().unwrap().len(), 5);
+        let said = "Stopped with these still open: \"the error is gone\", \"it works again\", the findings card. No approach worked after 3 re-plans.";
+        assert!(matches!(history.last(), Some(InputItem::Message { role, content }) if role == "assistant" && content.first() == Some(&ContentPart::InputText(said.into()))));
+        // It still ends with a findings card naming each item, and a one-tap fix for the rest.
+        let card = "Findings from this run\n\n- Medium: Not shown yet: the error is gone\n- Medium: Not shown yet: it works again\n\n\
+                    One-tap fixes\n\n- Finish the rest: Finish what the last run left open: the error is gone; it works again.";
+        assert_eq!(events.last(), Some(&LoopEvent::Findings(card.into())));
+        crate::session_tools::invalidate_todos(&conv);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// One turn of a talk-style run, continuing `history`.
+    fn talk_turn(
+        script: &Script,
+        dir: &std::path::Path,
+        conv: &str,
+        system: &str,
+        gate: Gate,
+        permits: &dyn PermitWait,
+        history: &mut Vec<InputItem>,
+        text: &str,
+    ) -> (LoopOut, Vec<LoopEvent>) {
+        let (cancel, steer) = (CancelToken::new(), SteerQueue::new());
+        let input = LoopIn {
+            client: script,
+            workspace: dir,
+            model: "grok-4.7",
+            effort: Some("low"),
+            system,
+            conversation_id: conv,
+            max_turns: 0,
+            usage_base: Usage::default(),
+            cancel: &cancel,
+            steer: &steer,
+            halt: &NeverHalt,
+            gate,
+            desktop: None,
+            permits,
+            perms: None,
+            context_length: 0,
+            tasks: None,
+            depth: 0,
+            agent_id: None,
+            shared_client: None,
+            shared_permits: None,
+            shared_desktop: None,
+        };
+        let mut events = Vec::new();
+        let out = run_loop(&input, history, text, None, &mut |ev| events.push(ev));
+        (out, events)
+    }
+
+    fn system_text(history: &[InputItem]) -> String {
+        match history.first() {
+            Some(InputItem::Message { role, content }) if role == "system" => match content.first() {
+                Some(ContentPart::InputText(t)) => t.clone(),
+                _ => String::new(),
+            },
+            _ => String::new(),
+        }
+    }
+
+    #[test]
+    fn casual_chat_gets_the_short_style_and_a_later_repair_swaps_it_in_place() {
+        use grokhub_core::talk::{TalkStyle, VOLATILE_SAFETY_CLOSER};
+        let dir = workspace("talk-short");
+        let conv = format!("talk-short-{}", std::process::id());
+        let voice = grokhub_core::personality::builtin("pirate").prompt_block();
+        let system = format!("CABIN RULES\n\n{voice}\n\n{VOLATILE_SAFETY_CLOSER}");
+        crate::checkpoint::set_turn_style(&conv, Some(TalkStyle::Short));
+        let script = scripted(vec![turn("Ahoy! All calm here. What be next?", Vec::new()), turn("Fixed.", Vec::new())]);
+        let mut history = Vec::new();
+        let (out, events) = talk_turn(&script, &dir, &conv, &system, Gate::phase_readonly(), &gate::ClosedPermits, &mut history, "hi there");
+        assert_eq!(out.stop, StopReason::EndTurn);
+        let short = format!(
+            "CABIN RULES\n\n{voice}\n\n\
+             Talk style for this turn: casual chat. Reply in one to three short sentences, under 60 words, with no headings, lists or preamble.\n\
+             Talk style sets length and shape, and its length wins over a personality's; a personality sets tone only. Approval questions, security warnings and error facts stay plain, and the cabin safety rules win.\n\n\
+             {VOLATILE_SAFETY_CLOSER}"
+        );
+        let seen = script.seen.lock().unwrap()[0].clone();
+        assert_eq!(system_text(&seen), short);
+        // The reply the model gave fits the short style's cap.
+        let reply: String = events.iter().filter_map(|e| if let LoopEvent::Text(t) = e { Some(t.as_str()) } else { None }).collect();
+        assert_eq!(reply, "Ahoy! All calm here. What be next?");
+        assert!(grokhub_core::talk::fits_cap(TalkStyle::Short, &reply));
+        // The next turn is a repair: the stored system message swaps the block, nothing else.
+        crate::checkpoint::set_turn_style(&conv, Some(TalkStyle::Findings));
+        let _ = talk_turn(&script, &dir, &conv, &system, Gate::phase_readonly(), &gate::ClosedPermits, &mut history, "wifi broke");
+        let repair = short.replace(&TalkStyle::Short.block(), &TalkStyle::Findings.block());
+        assert_eq!(system_text(&script.seen.lock().unwrap()[1]), repair);
+        crate::checkpoint::set_turn_style(&conv, None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_long_task_gets_progress_notes_only_at_phase_boundaries() {
+        let dir = workspace("talk-progress");
+        for d in ["a", "b", "c", "d", "e", "f"] {
+            std::fs::create_dir_all(dir.join(d)).unwrap();
+        }
+        let conv = format!("talk-progress-{}", std::process::id());
+        crate::checkpoint::set_turn_brief(&conv, brief(crate::brain::Intent::Task, crate::brain::Care::Careful, &[]));
+        crate::checkpoint::set_turn_style(&conv, Some(grokhub_core::talk::TalkStyle::Progress));
+        let ls = |id: &str, d: &str| call(id, "list_dir", &format!(r#"{{"path":"{d}"}}"#));
+        let mark = |id: &str, item: &str| call(id, "todo_write", &format!(r#"{{"merge":true,"todos":[{{"id":"{item}","status":"completed"}}]}}"#));
+        let plan = r#"{"todos":[{"id":"s","content":"Check services","status":"in_progress"},{"id":"p","content":"Check packages","status":"pending"},{"id":"b","content":"Boot errors","status":"pending"}]}"#;
+        let script = scripted(vec![
+            turn("", vec![call("t0", "todo_write", plan), ls("l1", "a"), ls("l2", "b")]),
+            // Services done after 3 tool calls: a boundary, told.
+            turn("", vec![mark("t1", "s"), ls("l3", "c")]),
+            // Packages done 1 call later: a boundary too soon, held.
+            turn("", vec![mark("t2", "p"), ls("l4", "d")]),
+            // No boundary here, but the held one is told once the gap has passed.
+            turn("", vec![ls("l5", "e"), ls("l6", "f")]),
+            // The last item: the reply covers it.
+            turn("", vec![mark("t3", "b"), call("r1", "read_file", r#"{"target_file":"note.txt"}"#)]),
+            turn("All three checked.", Vec::new()),
+        ]);
+        let (out, history, events) = run_drive(&script, &dir, &conv);
+        assert_eq!(out.stop, StopReason::EndTurn);
+        let notes: Vec<&str> = events.iter().filter_map(|e| if let LoopEvent::Text(t) = e { Some(t.as_str()) } else { None }).collect();
+        assert_eq!(notes, ["\n\nDone: Check services. Next: Check packages.\n\n", "\n\nDone: Check packages. Next: Boot errors.\n\n", "All three checked."]);
+        // The notes are for the person, not sent back to the model.
+        assert_eq!(user_texts(&history), ["scan my computer"]);
+        crate::session_tools::invalidate_todos(&conv);
+        crate::checkpoint::set_turn_style(&conv, None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_picked_playbook_reaches_the_prompt_and_a_later_turn_swaps_or_drops_it() {
+        use grokhub_core::playbook::{parse, with_playbook, BUILTIN};
+        let dir = workspace("playbook-prompt");
+        let conv = format!("playbook-prompt-{}", std::process::id());
+        let system = format!("CABIN RULES\n\n{}", grokhub_core::talk::VOLATILE_SAFETY_CLOSER);
+        let code = parse(BUILTIN[3]).unwrap().prompt_block();
+        let files = parse(BUILTIN[4]).unwrap().prompt_block();
+        let allow = Answer { answer: PermAnswer::Allow, asks: AtomicUsize::new(0) };
+        let script = scripted(vec![turn("One.", Vec::new()), turn("Two.", Vec::new()), turn("Three.", Vec::new())]);
+        let mut history = Vec::new();
+        let mut ask = |block: Option<&String>, text: &str| {
+            crate::checkpoint::set_turn_playbook(&conv, block.cloned());
+            talk_turn(&script, &dir, &conv, &system, chat(gate::PermMode::Ask, true, false), &allow, &mut history, text);
+        };
+        ask(Some(&code), "add a retry to fetch() in src/net.rs");
+        ask(Some(&files), "move my photos into folders by year");
+        ask(None, "thanks");
+        let seen = script.seen.lock().unwrap();
+        let prompts: Vec<String> = seen.iter().map(|h| system_text(h)).collect();
+        assert_eq!(
+            prompts,
+            vec![
+                format!("CABIN RULES\n\n{code}\n\n{}", grokhub_core::talk::VOLATILE_SAFETY_CLOSER),
+                format!("CABIN RULES\n\n{files}\n\n{}", grokhub_core::talk::VOLATILE_SAFETY_CLOSER),
+                system.clone(),
+            ]
+        );
+        assert_eq!(prompts[1], with_playbook(&prompts[0], Some(&files)));
+        crate::checkpoint::set_turn_playbook(&conv, None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_approval_card_is_identical_in_every_style_and_personality() {
+        use grokhub_core::talk::{restyle, TalkStyle};
+        let styles = [
+            TalkStyle::Short,
+            TalkStyle::Concise,
+            TalkStyle::Progress,
+            TalkStyle::Findings,
+            TalkStyle::Summary,
+            TalkStyle::Quiet,
+            TalkStyle::Draft,
+        ];
+        let personalities = grokhub_core::personality::builtins();
+        assert!(personalities.len() > 10);
+        let dir = workspace("talk-approval");
+        let conv = format!("talk-approval-{}", std::process::id());
+        let mut cards = Vec::new();
+        for p in &personalities {
+            let system = format!("CABIN RULES\n\n{}", p.prompt_block());
+            for style in styles {
+                crate::checkpoint::set_turn_style(&conv, Some(style));
+                let deny = Answer { answer: PermAnswer::Deny, asks: AtomicUsize::new(0) };
+                let script = scripted(vec![
+                    turn("", vec![call("w1", "write", r#"{"path":"plan.txt","content":"yes"}"#)]),
+                    turn("Not written.", Vec::new()),
+                ]);
+                let mut history = Vec::new();
+                let (_, events) = talk_turn(&script, &dir, &conv, &system, chat(gate::PermMode::Ask, true, false), &deny, &mut history, "write the plan");
+                // The style reached the prompt, and the card came out of the gate all the same.
+                assert_eq!(system_text(&script.seen.lock().unwrap()[0]), restyle(&system, style));
+                cards.extend(events.into_iter().filter(|e| matches!(e, LoopEvent::Permission { .. })));
+                crate::session_tools::invalidate_todos(&conv);
+            }
+        }
+        assert_eq!(cards.len(), personalities.len() * styles.len());
+        let plain = LoopEvent::Permission { id: "w1".into(), name: "write".into(), action: "plan.txt".into(), reason: String::new() };
+        assert_eq!(cards[0], plain);
+        assert!(cards.iter().all(|c| *c == plain));
+        crate::checkpoint::set_turn_style(&conv, None);
+        assert!(!dir.join("plan.txt").exists());
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

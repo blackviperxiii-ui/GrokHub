@@ -454,24 +454,27 @@ pub(super) fn paint_speech_bubble(
         });
         ui.add_space(BUBBLE_PAD_Y);
     };
-    let mut resp = None;
     if user {
-        ui.scope(|ui| {
-            ui.set_max_width(avail);
-            ui.horizontal(|ui| {
+        return ui
+            .scope(|ui| {
                 ui.set_max_width(avail);
-                let lead = (avail - outer_w).max(0.0);
-                if lead > 0.0 {
-                    ui.add_space(lead);
-                }
-                ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {
-                    ui.set_max_width(outer_w);
-                    resp = Some(frame.show(ui, paint_inner).response);
-                });
-            });
-        });
-        return resp.expect("speech bubble");
+                ui.horizontal(|ui| {
+                    ui.set_max_width(avail);
+                    let lead = (avail - outer_w).max(0.0);
+                    if lead > 0.0 {
+                        ui.add_space(lead);
+                    }
+                    ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {
+                        ui.set_max_width(outer_w);
+                        frame.show(ui, paint_inner).response
+                    })
+                    .inner
+                })
+                .inner
+            })
+            .inner;
     }
+    // Assistant row: the mark sits at the top left, beside the bubble.
     ui.scope(|ui| {
         ui.set_max_width(avail);
         ui.horizontal_top(|ui| {
@@ -488,11 +491,13 @@ pub(super) fn paint_speech_bubble(
             );
             ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {
                 ui.set_max_width(outer_w);
-                resp = Some(frame.show(ui, paint_inner).response);
-            });
-        });
-    });
-    resp.expect("speech bubble")
+                frame.show(ui, paint_inner).response
+            })
+            .inner
+        })
+        .inner
+    })
+    .inner
 }
 
 pub(super) struct MsgActsPaint {
@@ -638,32 +643,30 @@ pub(super) fn paint_thought_bubble(ui: &mut egui::Ui, body: &str) -> egui::Respo
     let frame = egui::Frame::NONE
         .fill(egui::Color32::TRANSPARENT)
         .inner_margin(egui::Margin::symmetric(0, 2));
-    let mut resp = None;
     ui.scope(|ui| {
         ui.set_max_width(avail);
         ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {
             ui.set_max_width(avail);
-            resp = Some(
-                frame
-                    .show(ui, |ui| {
-                        ui.set_max_width(wrap);
-                        ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Wrap);
-                        ui.add(
-                            egui::Label::new(
-                                RichText::new(body)
-                                    .size(crate::theme::FONT_META)
-                                    .italics()
-                                    .color(crate::theme::subtle()),
-                            )
-                            .wrap()
-                            .selectable(true),
-                        );
-                    })
-                    .response,
-            );
-        });
-    });
-    resp.expect("thought bubble")
+            frame
+                .show(ui, |ui| {
+                    ui.set_max_width(wrap);
+                    ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Wrap);
+                    ui.add(
+                        egui::Label::new(
+                            RichText::new(body)
+                                .size(crate::theme::FONT_META)
+                                .italics()
+                                .color(crate::theme::subtle()),
+                        )
+                        .wrap()
+                        .selectable(true),
+                    );
+                })
+                .response
+        })
+        .inner
+    })
+    .inner
 }
 
 /// Temp-data key for per-row heights. Pane width is part of the key so a
@@ -2382,7 +2385,7 @@ impl Cabin {
         }
     }
 
-    /// Compact, Copy session, and Export. Titlebar, immediately left of minimize.
+    /// Compact, Copy session, Export, Archive. Titlebar, immediately left of minimize.
     pub(super) fn paint_session_actions_menu(&mut self, ui: &mut egui::Ui) -> egui::Rect {
         let resp = titlebar_chrome_btn(ui, ChromeBtn::Menu)
             .on_hover_text(crate::titlebar::titlebar_chrome_tip(ChromeBtn::Menu, false));
@@ -2413,6 +2416,18 @@ impl Cabin {
                 }
                 if session_menu_row(ui, "Export", export_on) {
                     self.run_slash(Slash::Export);
+                }
+                let archive_label = if self
+                    .threads
+                    .get(self.thread_idx)
+                    .is_some_and(crate::threads::is_archived)
+                {
+                    "Unarchive"
+                } else {
+                    "Archive"
+                };
+                if session_menu_row(ui, archive_label, !self.messages.is_empty()) {
+                    self.toggle_archive_current();
                 }
             });
         placed
@@ -2458,6 +2473,7 @@ impl Cabin {
                         self.paint_session_tools(ui);
                     }
                     ComposerStackSlot::LiveWork => {
+                        self.paint_archive_toast(ui);
                         self.paint_live_work(ui);
                     }
                     ComposerStackSlot::SlashPalette => {
@@ -2784,6 +2800,56 @@ impl Cabin {
                 }
             }
             });
+    }
+
+    // After ui_composer_stack: empty_home_pulse scans ui_empty_home..ui_composer_stack
+    // and forbids Nav:: in that window (toast links to History → Archived).
+    /// Quiet archive / auto-archive note with Undo or a link to Archived.
+    pub(super) fn paint_archive_toast(&mut self, ui: &mut egui::Ui) {
+        if let Some(n) = self.auto_archive_note {
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 8.0;
+                let label = if n == 1 {
+                    "Archived 1 idle chat".to_string()
+                } else {
+                    format!("Archived {n} idle chats")
+                };
+                ui.label(
+                    RichText::new(label)
+                        .size(crate::theme::FONT_META)
+                        .color(crate::theme::muted()),
+                );
+                if crate::cards::ghost_pill(ui, "Archived") {
+                    self.auto_archive_note = None;
+                    self.history_archived = true;
+                    self.nav = Nav::History;
+                }
+            });
+            ui.add_space(4.0);
+            return;
+        }
+        let Some(id) = self.archive_undo.clone() else {
+            return;
+        };
+        let Some(t) = self.threads.iter().find(|t| t.id == id) else {
+            self.archive_undo = None;
+            return;
+        };
+        let title = t.title.clone();
+        let archived = threads::is_archived(t);
+        let verb = if archived { "Archived" } else { "Unarchived" };
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 8.0;
+            ui.label(
+                RichText::new(format!("{verb} {title}"))
+                    .size(crate::theme::FONT_META)
+                    .color(crate::theme::muted()),
+            );
+            if crate::cards::ghost_pill(ui, "Undo") {
+                self.undo_archive_toast();
+            }
+        });
+        ui.add_space(4.0);
     }
 
     /// A turn is streaming on this tab: only its last message grows, and the pane

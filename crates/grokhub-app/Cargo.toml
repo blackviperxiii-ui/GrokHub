@@ -5,6 +5,7 @@ rust-version.workspace = true
 edition.workspace = true
 license.workspace = true
 description = "GrokHub native cabin — no Electron, no Tauri"
+publish = false
 
 [[bin]]
 name = "grokhub"
@@ -17,19 +18,20 @@ grokhub-agent = { path = "../grokhub-agent" }
 serde.workspace = true
 serde_json.workspace = true
 eframe = { version = "0.36.2", default-features = false, features = ["default_fonts", "glow"] }
-ureq = { version = "2.12", default-features = false, features = ["tls", "json"] }
+ureq = { workspace = true }
 tungstenite = { version = "0.24", default-features = false, features = ["handshake", "rustls-tls-webpki-roots"] }
 global-hotkey = "0.6"
-image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "ico"] }
-keyring = "4"
+image = { workspace = true, features = ["webp", "ico", "bmp"] }
+keyring = { workspace = true }
 # SB-04: native folder picker. On Linux only the xdg-desktop-portal backend
 # (no GTK, no new system libraries); Windows and macOS use their own dialogs.
 rfd = { version = "0.17", default-features = false, features = ["xdg-portal"] }
 
 [target.'cfg(unix)'.dependencies]
 eframe = { version = "0.36.2", default-features = false, features = ["x11", "wayland"] }
+# blocking API; ksni still needs its tokio feature (default) for the async D-Bus service.
 ksni = { version = "0.3.6", features = ["blocking"] }
-x11rb = { version = "0.13", features = ["randr", "xtest"] }
+x11rb = { version = "0.13", default-features = false, features = ["randr", "xtest"] }
 
 # Wayland portal input (Phase 2a). tokio matches the zbus runtime already in
 # the tree. reis stays blocking on that same worker; do not enable its tokio
@@ -43,11 +45,13 @@ rustix = { version = "1", default-features = false, features = ["event", "time",
 # Absolute uinput (Phase 2b). No tokio feature: the device is blocking evdev.
 evdev = { version = "0.13.2", default-features = false }
 
+# build.rs returns early on non-Windows; default-features pull in toml we do not need.
 [build-dependencies]
-winresource = "0.1"
+winresource = { version = "0.1", default-features = false }
 
 [target.'cfg(windows)'.dependencies]
-tray-icon = "0.19"
+# No libxdo (X11) — that default is for Linux menus and only bloated the lockfile.
+tray-icon = { version = "0.19", default-features = false }
 xcap = "0.9.8"
 windows-sys = { version = "0.59", features = [
     "Win32_System_Threading",
@@ -70,6 +74,11 @@ windows-sys = { version = "0.59", features = [
     "Win32_UI_HiDpi",
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_System_StationsAndDesktops",
+    "Win32_System_DataExchange",
+    "Win32_System_Memory",
+    "Win32_NetworkManagement_IpHelper",
+    "Win32_NetworkManagement_Ndis",
+    "Win32_Networking_WinSock",
 ] }
 
 [features]

@@ -73,6 +73,45 @@ impl Cabin {
         self.write_pace_span("halt", "hold", "halted");
     }
 
+    /// A background kind spent today's budget: the governor's note goes on the
+    /// status line once, and the trace gets the kind and the reason, no content.
+    pub(super) fn governor_note(&mut self, note: &grokhub_core::GovernorNote) {
+        self.status = note.text.clone();
+        let act = format!("governor.{}", note.kind.as_str());
+        self.write_pace_span(&act, "hold", grokhub_core::JobHold::BudgetSpent.reason());
+    }
+
+    /// You're active: a chat run is going, the composer holds a draft, or your
+    /// last key or click was moments ago. The governor holds heavy jobs then.
+    pub(super) fn user_active_now(&self) -> bool {
+        grokhub_core::user_active(
+            self.running,
+            !self.composer.trim().is_empty(),
+            self.last_activity.elapsed().as_millis() as u64,
+        )
+    }
+
+    /// The router goal a governor job's model call runs on: cost, reason "user
+    /// active", for a light model job while you're active; else none.
+    pub(super) fn bg_goal(&self, kind: JobKind) -> Option<grokhub_agent::route::goal::RouteGoal> {
+        let spec = self.governor.spec(kind)?;
+        if !grokhub_core::runs_cheap(spec, self.user_active_now()) {
+            return None;
+        }
+        grokhub_agent::route::goal::RouteGoal::of(
+            grokhub_core::ACTIVE_GOAL,
+            grokhub_core::ACTIVE_REASON,
+        )
+    }
+
+    /// Charge tokens a background job spent to its governor kind for today.
+    pub(super) fn governor_charge(&mut self, kind: JobKind, tokens: u64) {
+        if tokens == 0 {
+            return;
+        }
+        self.governor.charge(kind, tokens, &Self::local_day());
+    }
+
     fn trace_pace(&mut self, act: ProactiveAct, gate: PaceGate) {
         let reason = gate.reason();
         let acted = gate == PaceGate::Act;

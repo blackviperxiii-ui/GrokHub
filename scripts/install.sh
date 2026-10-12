@@ -104,15 +104,33 @@ if [[ "$SWITCH" -eq 1 ]]; then
     printf '%s\n' "$CHANGED" >&2
     exit 1
   fi
+  # Single-branch / shallow / fork clones often lack origin/$BRANCH until we
+  # fetch it by refspec. Add the refspec when missing; never drop others.
+  if ! git config --get-all remote.origin.fetch 2>/dev/null | grep -Fq "refs/heads/$BRANCH:"; then
+    git config --add remote.origin.fetch "+refs/heads/$BRANCH:refs/remotes/origin/$BRANCH"
+  fi
   git fetch origin "+refs/heads/$BRANCH:refs/remotes/origin/$BRANCH"
+  if ! git show-ref --verify --quiet "refs/remotes/origin/$BRANCH"; then
+    echo "error: origin/$BRANCH not found after fetch — is the remote a GrokHub fork with that branch?" >&2
+    exit 1
+  fi
+  # Missing local branch (single-branch / shallow): create it tracking origin.
+  # Existing local branch: never `checkout -B` (that drops local commits). Refuse
+  # when HEAD is not an ancestor of origin/$BRANCH (ahead or diverged); otherwise
+  # fast-forward onto the tip.
   if git show-ref --verify --quiet "refs/heads/$BRANCH"; then
     git checkout "$BRANCH"
+    if ! git merge-base --is-ancestor HEAD "origin/$BRANCH"; then
+      echo "error: local $BRANCH has commits that are not on origin/$BRANCH; sort that out by hand" >&2
+      exit 1
+    fi
     if ! git merge --ff-only "origin/$BRANCH"; then
       echo "error: local $BRANCH has commits that are not on origin/$BRANCH; sort that out by hand" >&2
       exit 1
     fi
+    git branch --set-upstream-to="origin/$BRANCH" "$BRANCH" >/dev/null 2>&1 || true
   else
-    git checkout -b "$BRANCH" --track "origin/$BRANCH"
+    git checkout -B "$BRANCH" --track "origin/$BRANCH"
   fi
   echo "channel $CHANNEL: $(git rev-parse --short=7 HEAD) on $BRANCH"
 fi
@@ -155,7 +173,9 @@ if [[ "$SYSTEM" -eq 0 ]]; then
     "$HOME/.config/systemd/user/grokhub.service"
 fi
 
-# Overlay-safe package install. Never fail the cabin overlay if sudo/pkg is missing.
+# Overlay-safe package install. Never fail the cabin overlay if sudo/pkg is
+# missing. Never call sudo without a TTY; remember a declined prompt.
+PKG_SKIP_FILE="${GROKHUB_CONFIG:-$HOME/.config/GrokHub}/skip-pkg-prompt"
 try_pkgs() {
   local kind="$1"
   shift
@@ -164,18 +184,51 @@ try_pkgs() {
   fi
   if [[ "$(id -u)" -eq 0 ]]; then
     "$@" || echo "pkgs: $kind $*"
-  else
-    sudo "$@" || echo "pkgs: sudo $kind $*"
+    return 0
   fi
+  if [[ ! -t 0 ]]; then
+    echo "pkgs: skipped (no TTY). Run: sudo $*"
+    return 0
+  fi
+  if [[ -f "$PKG_SKIP_FILE" ]]; then
+    echo "pkgs: skipped (you declined earlier). Run: sudo $*"
+    return 0
+  fi
+  echo "GrokHub needs packages: $*"
+  echo -n "Install with sudo now? [y/N] "
+  local ans=
+  read -r ans || ans=
+  case "$ans" in
+    y|Y|yes|YES)
+      sudo "$@" || echo "pkgs: sudo $kind $*"
+      ;;
+    *)
+      mkdir -p "$(dirname "$PKG_SKIP_FILE")"
+      : >"$PKG_SKIP_FILE"
+      echo "pkgs: skipped. Run: sudo $*"
+      ;;
+  esac
 }
 
-# Voice / Imagine still need ffmpeg and alsa.
+# Voice / Imagine still need ffmpeg and alsa. Skip when already installed.
 if command -v pacman >/dev/null; then
-  try_pkgs pacman pacman -S --needed ffmpeg alsa-utils
+  if pacman -Q ffmpeg alsa-utils >/dev/null 2>&1; then
+    :
+  else
+    try_pkgs pacman pacman -S --needed ffmpeg alsa-utils
+  fi
 elif command -v apt-get >/dev/null; then
-  try_pkgs apt-get apt-get install -y ffmpeg alsa-utils
+  if dpkg -s ffmpeg alsa-utils >/dev/null 2>&1; then
+    :
+  else
+    try_pkgs apt-get apt-get install -y ffmpeg alsa-utils
+  fi
 elif command -v dnf >/dev/null; then
-  try_pkgs dnf dnf install -y ffmpeg alsa-utils
+  if rpm -q ffmpeg alsa-utils >/dev/null 2>&1; then
+    :
+  else
+    try_pkgs dnf dnf install -y ffmpeg alsa-utils
+  fi
 fi
 
 if command -v systemctl >/dev/null && [[ "$SYSTEM" -eq 0 ]]; then

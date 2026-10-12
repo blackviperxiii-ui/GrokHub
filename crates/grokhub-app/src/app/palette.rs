@@ -189,15 +189,16 @@ impl Cabin {
             &q,
             &root_now,
         );
-        if self.palette_file_rx.is_some() {
+        if self.palette_file_rx.is_none()
+            && !palette_search_is_saved(&self.palette_files_q, &self.palette_files_root, &q, &root_now)
+        {
+            self.kick_palette_search();
+        }
+        // Short tick only while a walk or step search is still on its way.
+        // Idle (saved file hits, steps done) requests nothing.
+        if self.palette_file_rx.is_some() || self.palette_step_rx.is_some() {
             ctx.request_repaint_after(std::time::Duration::from_millis(60));
-            return;
         }
-        if palette_search_is_saved(&self.palette_files_q, &self.palette_files_root, &q, &root_now) {
-            return;
-        }
-        self.kick_palette_search();
-        ctx.request_repaint_after(std::time::Duration::from_millis(60));
     }
 
     pub(super) fn kick_palette_search(&mut self) {

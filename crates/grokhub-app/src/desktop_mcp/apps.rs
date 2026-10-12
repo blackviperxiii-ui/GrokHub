@@ -79,15 +79,60 @@ pub(crate) fn kwin_geometry_script(title: &str, g: &grokhub_core::desktop_mcp::W
     let want = serde_json::to_string(&title.to_lowercase()).map_err(|e| e.to_string())?;
     Ok(format!(
         "const want = {want};\n\
+         let found = false;\n\
          const list = workspace.windowList ? workspace.windowList() : workspace.clientList();\n\
          for (const w of list) {{\n\
            if ((w.caption || \"\").toLowerCase().includes(want)) {{\n\
              w.frameGeometry = {{ x: {}, y: {}, width: {}, height: {} }};\n\
+             found = true;\n\
              break;\n\
            }}\n\
          }}\n",
         g.x, g.y, g.width, g.height
     ))
+}
+
+/// The D-Bus interface a KWin script answers on.
+#[cfg(target_os = "linux")]
+const KWIN_REPLY_IFACE: &str = "org.grokhub.KWinReply";
+
+/// The last line of a KWin script: send `found` back to `service` (this
+/// connection's unique name).
+#[cfg(target_os = "linux")]
+fn kwin_reply_line(service: &str) -> String {
+    let service = serde_json::to_string(service).unwrap_or_default();
+    format!("callDBus({service}, \"/grokhub/kwin\", \"{KWIN_REPLY_IFACE}\", \"done\", found);\n")
+}
+
+/// The KWin script that lists the windows for [`parse_kwin_windows`].
+#[cfg(target_os = "linux")]
+fn kwin_windows_script(service: &str) -> String {
+    let service = serde_json::to_string(service).unwrap_or_default();
+    format!(
+        "const list = workspace.windowList ? workspace.windowList() : workspace.clientList();\n\
+         const act = (\"activeWindow\" in workspace ? workspace.activeWindow : workspace.activeClient) || null;\n\
+         const titles = list.filter(w => w.normalWindow).map(w => w.caption || \"\");\n\
+         const active = act ? ((act.resourceClass || \"\") + \" \" + (act.caption || \"\")).trim() : \"\";\n\
+         callDBus({service}, \"/grokhub/kwin\", \"{KWIN_REPLY_IFACE}\", \"windows\", JSON.stringify({{ titles, active }}));\n"
+    )
+}
+
+/// The window list a KWin script sent back.
+#[cfg(target_os = "linux")]
+fn parse_kwin_windows(json: &str) -> Option<DesktopWindows> {
+    let v: serde_json::Value = serde_json::from_str(json).ok()?;
+    let titles = v["titles"].as_array()?.iter().filter_map(|t| t.as_str()).map(str::to_string).collect();
+    Some(DesktopWindows { titles, active: v["active"].as_str()?.to_string() })
+}
+
+/// What a KWin script's answer means. No answer (a KWin that never called
+/// back) keeps the old behavior: the script ran, so it is taken as done.
+#[cfg(target_os = "linux")]
+fn kwin_outcome(found: Option<bool>, title: &str) -> Result<(), String> {
+    match found {
+        Some(false) => Err(format!("No window title has \"{title}\" in it.")),
+        Some(true) | None => Ok(()),
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -238,6 +283,9 @@ mod linux {
     }
 
     pub(crate) fn list_windows() -> Result<DesktopWindows, String> {
+        if kde_wayland() {
+            return kwin_windows();
+        }
         if !x11_session() {
             return Err(APPS_MSG.into());
         }
@@ -314,7 +362,7 @@ mod linux {
     pub(crate) fn set_window_geometry(title: &str, g: &WindowGeom) -> Result<String, String> {
         if kde_wayland() {
             let body = super::kwin_geometry_script(title, g)?;
-            return kwin_script(&body, "geometry").map(|()| title.to_string());
+            return kwin_script(&body, "geometry", title).map(|()| title.to_string());
         }
         if !x11_session() {
             return Err(GEOMETRY_MSG.into());
@@ -339,29 +387,72 @@ mod linux {
         let want = serde_json::to_string(&title.to_lowercase()).map_err(|e| e.to_string())?;
         let body = format!(
             "const want = {want};\n\
+             let found = false;\n\
              const list = workspace.windowList ? workspace.windowList() : workspace.clientList();\n\
              for (const w of list) {{\n\
                if ((w.caption || \"\").toLowerCase().includes(want)) {{\n\
                  if (\"activeWindow\" in workspace) {{ workspace.activeWindow = w; }} else {{ workspace.activeClient = w; }}\n\
+                 found = true;\n\
                  break;\n\
                }}\n\
              }}\n"
         );
-        kwin_script(&body, "focus")
+        kwin_script(&body, "focus", title)
     }
 
-    /// Write a KWin script to a temp file, run it once and remove it.
-    fn kwin_script(body: &str, what: &str) -> Result<(), String> {
+    /// Write a KWin script to a temp file, run it once and remove it. The
+    /// script reports back over D-Bus whether a window matched `title`, so
+    /// a title no window has is an error, not a quiet success.
+    fn kwin_script(body: &str, what: &str, title: &str) -> Result<(), String> {
+        let msg = kwin_ask(what, |me| format!("{body}{}", super::kwin_reply_line(me)))?;
+        let found = msg.and_then(|m| m.body().deserialize::<bool>().ok());
+        super::kwin_outcome(found, title)
+    }
+
+    /// KDE Wayland's windows: a KWin script sends the captions and the
+    /// active window (`class caption`, as X11 reports it) back as JSON.
+    fn kwin_windows() -> Result<DesktopWindows, String> {
+        let msg = kwin_ask("windows", super::kwin_windows_script)?;
+        msg.and_then(|m| m.body().deserialize::<String>().ok())
+            .and_then(|json| super::parse_kwin_windows(&json))
+            .ok_or_else(|| APPS_MSG.to_string())
+    }
+
+    /// Run the script `build` makes for this connection's D-Bus name and
+    /// wait briefly for its one call back. `None` when KWin never called.
+    fn kwin_ask(what: &str, build: impl FnOnce(&str) -> String) -> Result<Option<zbus::Message>, String> {
+        let conn = zbus::blocking::Connection::session().map_err(|e| format!("KWin: {e}"))?;
+        let me = conn.unique_name().map(|n| n.to_string()).ok_or("KWin: no D-Bus name")?;
         let name = format!("grokhub-{what}-{}", std::process::id());
         let file = std::env::temp_dir().join(format!("{name}.js"));
-        std::fs::write(&file, body).map_err(|e| format!("KWin script: {e}"))?;
-        let out = kwin_run(&file, &name);
+        std::fs::write(&file, build(&me)).map_err(|e| format!("KWin script: {e}"))?;
+        let reply = kwin_listen(&conn);
+        let out = kwin_run(&conn, &file, &name);
         let _ = std::fs::remove_file(&file);
-        out
+        let got = out.is_ok().then(|| reply.recv_timeout(KWIN_REPLY_WAIT).ok()).flatten();
+        // Closing the connection ends the listener when no answer came.
+        let _ = conn.close();
+        out.map(|()| got)
     }
 
-    fn kwin_run(file: &Path, name: &str) -> Result<(), String> {
-        let conn = zbus::blocking::Connection::session().map_err(|e| format!("KWin: {e}"))?;
+    const KWIN_REPLY_WAIT: Duration = Duration::from_secs(2);
+
+    /// The first call a script makes back to this connection.
+    fn kwin_listen(conn: &zbus::blocking::Connection) -> std::sync::mpsc::Receiver<zbus::Message> {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let it = zbus::blocking::MessageIterator::from(conn.clone());
+        std::thread::spawn(move || {
+            for msg in it.flatten() {
+                if msg.header().interface().is_some_and(|i| i.as_str() == super::KWIN_REPLY_IFACE) {
+                    let _ = tx.send(msg);
+                    return;
+                }
+            }
+        });
+        rx
+    }
+
+    fn kwin_run(conn: &zbus::blocking::Connection, file: &Path, name: &str) -> Result<(), String> {
         let path = file.to_string_lossy().into_owned();
         let reply = conn
             .call_method(Some("org.kde.KWin"), "/Scripting", Some("org.kde.kwin.Scripting"), "loadScript", &(path.as_str(), name))
@@ -597,7 +688,30 @@ mod tests {
         let g = grokhub_core::desktop_mcp::WindowGeom { x: -20, y: 40, width: 800, height: 600 };
         let body = kwin_geometry_script("Notes \"draft\"", &g).unwrap();
         assert!(body.starts_with("const want = \"notes \\\"draft\\\"\";\n"), "{body}");
-        assert!(body.contains("w.frameGeometry = { x: -20, y: 40, width: 800, height: 600 };"), "{body}");
+        assert!(body.contains("w.frameGeometry = { x: -20, y: 40, width: 800, height: 600 };\nfound = true;"), "{body}");
+        assert!(body.contains("let found = false;"), "{body}");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_kwin_script_says_whether_a_window_matched() {
+        assert_eq!(
+            kwin_reply_line(":1.42"),
+            "callDBus(\":1.42\", \"/grokhub/kwin\", \"org.grokhub.KWinReply\", \"done\", found);\n"
+        );
+        assert_eq!(kwin_outcome(Some(false), "Notes"), Err("No window title has \"Notes\" in it.".to_string()));
+        assert_eq!(kwin_outcome(Some(true), "Notes"), Ok(()));
+        assert_eq!(kwin_outcome(None, "Notes"), Ok(()), "a KWin that never answers keeps the old behavior");
+        let list = kwin_windows_script(":1.7");
+        assert!(list.contains("callDBus(\":1.7\", \"/grokhub/kwin\", \"org.grokhub.KWinReply\", \"windows\", JSON.stringify({ titles, active }));"), "{list}");
+        assert_eq!(
+            parse_kwin_windows(r#"{"titles":["Notes — Kate","Slack | general"],"active":"Slack Slack | general"}"#),
+            Some(DesktopWindows { titles: vec!["Notes — Kate".into(), "Slack | general".into()], active: "Slack Slack | general".into() })
+        );
+        assert_eq!(parse_kwin_windows("not json"), None);
+        let src = include_str!("apps.rs").replace("\r\n", "\n");
+        let focus = src.split("fn kwin_focus(").nth(1).and_then(|s| s.split("\n    }\n").next()).expect("kwin_focus");
+        assert!(focus.contains("let found = false;") && focus.contains("found = true;"), "{focus}");
     }
 
     #[cfg(target_os = "linux")]

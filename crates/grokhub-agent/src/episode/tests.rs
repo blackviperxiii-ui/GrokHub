@@ -39,6 +39,8 @@ enum Act {
     Say,
     Shell(&'static str),
     Shot,
+    /// A click in a length-truncated reply: must not execute.
+    TruncatedClick,
 }
 
 type Script = Box<dyn Fn(usize) -> Act + Send + Sync>;
@@ -97,13 +99,17 @@ impl ModelClient for FakeModel {
                 Some((from, later)) if n >= from => later,
                 _ => self.judge_says,
             };
-            return Ok(TurnOutput { text: says.into(), reasoning: String::new(), calls: vec![], usage });
+            return Ok(TurnOutput { text: says.into(), reasoning: String::new(), calls: vec![], usage,
+            ..Default::default()
+        });
         }
         if system == FOLD_SYSTEM {
             self.fold_calls.lock().unwrap().push(req.clone());
             let body = first_text(req, 1);
             let text: String = body.replace('\n', " ").chars().take(80).collect();
-            return Ok(TurnOutput { text: format!("fold: {text}"), reasoning: String::new(), calls: vec![], usage });
+            return Ok(TurnOutput { text: format!("fold: {text}"), reasoning: String::new(), calls: vec![], usage,
+            ..Default::default()
+        });
         }
         let n = {
             let mut calls = self.worker_calls.lock().unwrap();
@@ -130,8 +136,11 @@ impl ModelClient for FakeModel {
         // A cache that holds the prefix: everything but the last message.
         let cached = if n == 0 { 0 } else { 800 };
         let usage = Usage { cached_tokens: cached, ..usage };
-        let (text, calls) = match (self.script)(n) {
+        let act = (self.script)(n);
+        let truncated = matches!(act, Act::TruncatedClick);
+        let (text, calls) = match act {
             Act::Click(x) => (String::new(), vec![call(n, "click", json!({"x": x, "y": 40}))]),
+            Act::TruncatedClick => (String::new(), vec![call(n, "click", json!({"x": 7, "y": 40}))]),
             Act::ClickSave => (String::new(), vec![call(n, "click", json!({"x": 120, "y": 40, "label": "Save"}))]),
             Act::HardClick => (String::new(), vec![call(n, "click", json!({"x": 900, "y": 40, "label": "Send"}))]),
             Act::Type => (String::new(), vec![call(n, "type", json!({"text": TYPED}))]),
@@ -146,7 +155,14 @@ impl ModelClient for FakeModel {
             Act::Shell(cmd) => (String::new(), vec![call(n, "run_terminal_command", json!({"command": cmd}))]),
             Act::Shot => (String::new(), vec![call(n, "screenshot", json!({}))]),
         };
-        Ok(TurnOutput { text, reasoning: WORKER_THOUGHT.into(), calls, usage })
+        Ok(TurnOutput {
+            text,
+            reasoning: WORKER_THOUGHT.into(),
+            calls,
+            usage,
+            truncated,
+            truncate_reason: truncated.then(|| "max_output_tokens".into()),
+        })
     }
 }
 
@@ -1148,6 +1164,36 @@ fn an_episode_that_failed_then_recovered_hands_its_lesson_to_the_next_run() {
 
 fn shots_then_done(shots: usize) -> Script {
     Box::new(move |n| if n < shots { Act::Shot } else { Act::Done })
+}
+
+#[test]
+fn truncated_click_is_not_executed() {
+    let r = rig(
+        "trunc-click",
+        Box::new(|n| match n {
+            0 => Act::TruncatedClick,
+            _ => Act::Done,
+        }),
+    );
+    let mut ep = r.episode("Click the button");
+    let out = r.run(&mut ep, &mut EpisodeView::default());
+    assert_eq!(out.stop, EpisodeStop::Ended(EpisodeEnd::Verified));
+    assert_eq!(r.desk.count("click"), 0, "truncated click must not run");
+    let spans = r.spans();
+    assert!(
+        spans.iter().any(|s| s.tool == "turn_truncated"),
+        "expected turn_truncated span, got {:?}",
+        spans.iter().map(|s| s.tool.as_str()).collect::<Vec<_>>()
+    );
+    // The note is consumed when the next worker call is built; that call's
+    // "now" user message must still carry the truncation message.
+    let worker = r.model.worker_calls.lock().unwrap();
+    assert!(worker.len() >= 2, "worker retries after truncation");
+    let now = first_text(&worker[1], 2);
+    assert!(
+        now.contains("cut off at the output limit"),
+        "worker saw truncation note, got: {now}"
+    );
 }
 
 #[test]

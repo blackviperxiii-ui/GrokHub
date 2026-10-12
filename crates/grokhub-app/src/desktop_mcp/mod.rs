@@ -645,6 +645,59 @@ fn connect_backend() -> Result<Box<dyn DesktopBackend>, String> {
     }
 }
 
+/// COMPUTER_CMD hands on a [`DesktopBackend`]: click, double-click, move,
+/// type, key and scroll. `None` for the ops that read the screen instead
+/// (act, wait_for, tabs, cursor, move to a monitor).
+#[cfg(any(windows, test))]
+pub(crate) fn drive_hands<B: DesktopBackend>(
+    b: &mut B,
+    op: &grokhub_core::recipe::ComputerOp,
+) -> Option<Result<String, String>> {
+    use grokhub_core::desktop_mcp::{parse_key_combo, MouseButton};
+    use grokhub_core::recipe::ComputerOp;
+    fn click<B: DesktopBackend>(b: &mut B, x: i32, y: i32, times: u8) -> Result<(), String> {
+        b.move_abs(x, y)?;
+        for _ in 0..times {
+            b.button(MouseButton::Left, true)?;
+            b.button(MouseButton::Left, false)?;
+        }
+        Ok(())
+    }
+    Some(match op {
+        ComputerOp::Click { x, y } => click(b, *x, *y, 1).map(|()| format!("clicked {x},{y}")),
+        ComputerOp::DoubleClick { x, y } => click(b, *x, *y, 2).map(|()| format!("double-clicked {x},{y}")),
+        ComputerOp::Move { x, y } => b.move_abs(*x, *y).map(|()| format!("moved {x},{y}")),
+        ComputerOp::Type { text } => b.type_text(text).map(|()| format!("typed {} chars", text.chars().count())),
+        ComputerOp::Key { name } => parse_key_combo(name)
+            .and_then(|c| b.key_combo(&c))
+            .map(|()| format!("key {name}")),
+        // COMPUTER_CMD scroll: a positive count is up, as a wheel notch is.
+        ComputerOp::Scroll { dy } => b.scroll(0, *dy).map(|()| format!("scrolled {dy}")),
+        ComputerOp::Act { .. }
+        | ComputerOp::WaitFor { .. }
+        | ComputerOp::Tab { .. }
+        | ComputerOp::Cursor
+        | ComputerOp::MoveMonitor { .. } => return None,
+    })
+}
+
+/// Windows Eyes: the primary monitor through xcap, the grabber the desktop
+/// tools' screenshot uses, since the Linux capture tools are not there.
+#[cfg(windows)]
+pub(crate) fn windows_primary_frame() -> Result<image::RgbaImage, String> {
+    let monitors = xcap::Monitor::all().map_err(|e| e.to_string())?;
+    let primary = monitors.iter().position(|m| m.is_primary().unwrap_or(false)).unwrap_or(0);
+    let mon = monitors.get(primary).ok_or("no monitor")?;
+    mon.capture_image().map_err(|e| e.to_string())
+}
+
+/// Windows COMPUTER_CMD hands: SendInput through the desktop tools' own
+/// backend, since xdotool and ydotool are Linux tools.
+#[cfg(windows)]
+pub(crate) fn windows_hands(op: &grokhub_core::recipe::ComputerOp) -> Option<Result<String, String>> {
+    drive_hands(&mut windows::WindowsBackend::new(), op)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -760,5 +813,63 @@ mod tests {
         let settings = include_str!("../app/settings.rs").replace("\r\n", "\n");
         let switch = settings.split("desktop_switch_note(on)").nth(1).expect("desktop switch");
         assert!(switch.contains("sync_native_cua(&self.cfg)"));
+    }
+
+    /// Records what COMPUTER_CMD hands sent to the backend.
+    #[derive(Default)]
+    struct Hands {
+        sent: Vec<String>,
+    }
+
+    impl DesktopBackend for Hands {
+        fn list_monitors(&mut self) -> Result<Vec<grokhub_core::desktop_mcp::MonitorGeom>, String> {
+            Ok(vec![])
+        }
+        fn screenshot(&mut self, _monitor: &str) -> Result<grokhub_core::desktop_mcp::CapturedShot, String> {
+            Err("no screen".into())
+        }
+        fn move_abs(&mut self, x: i32, y: i32) -> Result<(), String> {
+            self.sent.push(format!("move {x} {y}"));
+            Ok(())
+        }
+        fn button(&mut self, b: grokhub_core::desktop_mcp::MouseButton, down: bool) -> Result<(), String> {
+            self.sent.push(format!("{b:?} {}", if down { "down" } else { "up" }));
+            Ok(())
+        }
+        fn scroll(&mut self, dx: i32, dy: i32) -> Result<(), String> {
+            self.sent.push(format!("scroll {dx} {dy}"));
+            Ok(())
+        }
+        fn type_text(&mut self, text: &str) -> Result<(), String> {
+            self.sent.push(format!("type {text}"));
+            Ok(())
+        }
+        fn key_combo(&mut self, c: &grokhub_core::desktop_mcp::KeyCombo) -> Result<(), String> {
+            self.sent.push(format!("key ctrl={} {:?}", c.ctrl, c.key));
+            Ok(())
+        }
+        fn is_locked(&mut self) -> bool {
+            false
+        }
+    }
+
+    #[test]
+    fn computer_cmd_hands_drive_the_desktop_backend() {
+        use grokhub_core::recipe::ComputerOp;
+        let mut b = Hands::default();
+        let got = drive_hands(&mut b, &ComputerOp::DoubleClick { x: 40, y: 7 });
+        assert_eq!(got, Some(Ok("double-clicked 40,7".to_string())));
+        assert_eq!(b.sent, ["move 40 7", "Left down", "Left up", "Left down", "Left up"]);
+
+        let mut b = Hands::default();
+        assert_eq!(drive_hands(&mut b, &ComputerOp::Key { name: "ctrl+l".into() }), Some(Ok("key ctrl+l".to_string())));
+        assert_eq!(drive_hands(&mut b, &ComputerOp::Type { text: "héllo".into() }), Some(Ok("typed 5 chars".to_string())));
+        assert_eq!(drive_hands(&mut b, &ComputerOp::Scroll { dy: 3 }), Some(Ok("scrolled 3".to_string())));
+        assert_eq!(b.sent, ["key ctrl=true Char('l')", "type héllo", "scroll 0 3"]);
+
+        let mut b = Hands::default();
+        assert!(drive_hands(&mut b, &ComputerOp::Key { name: "nosuchkey".into() }).unwrap().is_err());
+        assert_eq!(drive_hands(&mut b, &ComputerOp::Cursor), None, "reads stay on the shared path");
+        assert!(b.sent.is_empty());
     }
 }

@@ -352,7 +352,9 @@ impl Cabin {
         if !self.harness.work_rows_loaded {
             self.harness.work_rows_loaded = true;
             let auto = self.auto_lines();
-            self.harness.work_rows = work_rows_from_disk(&dir, now_ms(), &|kind, seq| auto.contains(&(kind, seq)));
+            let trials: Vec<(String, u64)> = hx::read_versions(&dir).into_iter().map(|v| (v.kind, v.seq)).collect();
+            let skip = |kind: ChangeKind, seq| auto.contains(&(kind, seq)) || trials.iter().any(|(k, s)| k == kind.as_str() && *s == seq);
+            self.harness.work_rows = work_rows_from_disk(&dir, now_ms(), &skip);
             self.harness.ledger_watch.baseline(&dir);
         }
         let watch = &mut self.harness.ledger_watch;
@@ -384,6 +386,10 @@ impl Cabin {
             }
             if kind == ChangeKind::Skill {
                 self.harness.skill_rows = None;
+            }
+            // A change on trial already posted its "Trying" note; the trial keeps or rolls it back.
+            if self.on_trial(kind, &c) {
+                continue;
             }
             let row = work_row(kind, &c);
             self.harness.work_rows.retain(|r| !(r.kind == kind && r.id == row.id));
@@ -422,10 +428,17 @@ impl Cabin {
                 }
                 res.map(|d| d.now)
             }
+            (ChangeAct::Undo, ChangeKind::Snippet) => {
+                hx::undo_change(&dir, &hx::SnippetTarget { config_dir: &dir, name: &row.id }, ask).map(|d| d.now)
+            }
             (ChangeAct::Undo, ChangeKind::Model) => {
                 // The routing table: the previous version comes back byte-identical.
                 let path = grokhub_agent::route::table::table_path(&dir);
                 hx::undo_change(&dir, &grokhub_agent::route::table::TableFile { path: &path }, ask).map(|d| d.now)
+            }
+            (ChangeAct::Undo, ChangeKind::Policy) => hx::undo_change(&dir, &hx::PolicyTarget { config_dir: &dir }, ask).map(|d| d.now),
+            (ChangeAct::Undo, ChangeKind::Playbook) => {
+                hx::undo_change(&dir, &hx::PlaybookTarget { config_dir: &dir, id: &row.id }, ask).map(|d| d.now)
             }
         };
         if done.is_ok() {

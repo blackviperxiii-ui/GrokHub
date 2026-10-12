@@ -245,6 +245,181 @@ pub fn switch_clone_to_main(source: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// Plan step the cabin runs itself: save a dirty or diverged clone onto a
+/// `grokhub-backup/…` branch, then hard-reset to the channel tip.
+pub const CLONE_RECOVER_STEP_PREFIX: &str = "grokhub: recover dirty or diverged clone · ";
+
+/// Encode a recover step for the update plan runner.
+pub fn clone_recover_step(source: &Path, channel: Channel) -> String {
+    format!(
+        "{CLONE_RECOVER_STEP_PREFIX}{} · {}",
+        channel.as_str(),
+        source.display()
+    )
+}
+
+/// Parse [`clone_recover_step`]. `None` when the line is not a recover step.
+pub fn parse_clone_recover_step(cmd: &str) -> Option<(Channel, PathBuf)> {
+    let rest = cmd.strip_prefix(CLONE_RECOVER_STEP_PREFIX)?;
+    let (ch, path) = rest.split_once(" · ")?;
+    let channel = Channel::parse(ch)?;
+    if path.is_empty() {
+        return None;
+    }
+    Some((channel, PathBuf::from(path)))
+}
+
+fn backup_branch_name_now() -> String {
+    let ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    let rfc = crate::oauth::unix_ms_to_rfc3339(ms);
+    let digits: String = rfc.chars().filter(|c| c.is_ascii_digit()).collect();
+    let stamp = if digits.len() >= 14 {
+        format!("{}-{}", &digits[..8], &digits[8..14])
+    } else {
+        ms.to_string()
+    };
+    format!("grokhub-backup/{stamp}")
+}
+
+fn git_is_dirty(source: &Path) -> Result<bool, String> {
+    let (ok, out) = git_stdout(source, &["status", "--porcelain"])?;
+    if !ok {
+        return Err("git status failed".into());
+    }
+    Ok(!out.trim().is_empty())
+}
+
+/// Whether HEAD is not an ancestor of `tip` (diverged, or tip missing).
+fn git_is_diverged_from(source: &Path, tip: &str) -> Result<bool, String> {
+    if git_rev_parse(source, tip).is_err() {
+        return Ok(false);
+    }
+    let (ok, _) = git_stdout(source, &["merge-base", "--is-ancestor", "HEAD", tip])?;
+    Ok(!ok)
+}
+
+/// True when the clone has a dirty tree or a history that cannot fast-forward
+/// onto the cached `origin/<branch>` tip. A missing remote-tracking tip is
+/// not diverged — the pull step still fetches.
+pub fn clone_needs_recover(source: &Path, channel: Channel) -> Result<bool, String> {
+    let tip = format!("origin/{}", channel.branch());
+    Ok(git_is_dirty(source)? || git_is_diverged_from(source, &tip)?)
+}
+
+fn fetch_channel_tip(source: &Path, channel: Channel) -> Result<(), String> {
+    let want = channel.branch();
+    let refspec = format!("+refs/heads/{want}:refs/remotes/origin/{want}");
+    let (ok, _) = git_stdout_within(
+        source,
+        &["fetch", "--quiet", "origin", &refspec],
+        Duration::from_secs(60),
+    )?;
+    if !ok {
+        return Err(format!("git fetch origin {want} failed"));
+    }
+    Ok(())
+}
+
+/// Tip the recover step resets to — the same ref [`clone_needs_recover`] and
+/// `pull --ff-only` use (`origin/main` / `origin/beta`). Never a release tag:
+/// resetting to an old `vX.Y.Z` would leave a clone that keeps looking
+/// diverged from `origin/main` on every later Update.
+fn resolve_channel_tip(source: &Path, channel: Channel) -> Result<String, String> {
+    let tip = format!("origin/{}", channel.branch());
+    git_rev_parse(source, &tip)?;
+    Ok(tip)
+}
+
+/// When the clone is dirty or diverged from the channel tip, commit the
+/// current state onto a local `grokhub-backup/<YYYYMMDD-HHMMSS>` branch
+/// (never pushed) and `reset --hard` to that tip. Returns the backup branch
+/// name, or `None` when a plain fast-forward is enough.
+pub fn recover_clone_if_needed(source: &Path, channel: Channel) -> Result<Option<String>, String> {
+    if !is_grokhub_source(source) {
+        return Err(
+            "GrokHub can't find its source folder (~/GrokHub or ~/.config/GrokHub/source).".into(),
+        );
+    }
+    let want = channel.branch();
+    let branch = git_head_branch(source)?;
+    if branch != want {
+        return Err(match channel {
+            Channel::Stable => format!("source clone is on {branch} — checkout main, then Update"),
+            Channel::Beta => format!(
+                "source clone is on {branch} — run ./scripts/install.sh --user --channel beta, then Update"
+            ),
+        });
+    }
+    fetch_channel_tip(source, channel)?;
+    let tip = resolve_channel_tip(source, channel)?;
+    let dirty = git_is_dirty(source)?;
+    let diverged = git_is_diverged_from(source, &tip)?;
+    if !dirty && !diverged {
+        return Ok(None);
+    }
+    let old_head = git_rev_parse(source, "HEAD")?;
+    if dirty {
+        let (ok, _) = git_stdout(source, &["add", "-A"])?;
+        if !ok {
+            return Err("git add failed while saving the clone".into());
+        }
+        let bak_msg = format!("GrokHub update backup before reset to {tip}");
+        // Disable signing: a global commit.gpgsign=true must not abort recover.
+        let (ok, _) = git_stdout_within(
+            source,
+            &[
+                "-c",
+                "user.email=cabin@local",
+                "-c",
+                "user.name=GrokHub",
+                "-c",
+                "commit.gpgsign=false",
+                "commit",
+                "--no-verify",
+                "--no-gpg-sign",
+                "-m",
+                &bak_msg,
+            ],
+            Duration::from_secs(30),
+        )?;
+        if !ok {
+            return Err("git commit failed while saving the clone".into());
+        }
+    }
+    let mut bak = backup_branch_name_now();
+    // A same-second retry: append a short suffix so `git branch` never clashes.
+    for n in 0..8u32 {
+        let name = if n == 0 {
+            bak.clone()
+        } else {
+            format!("{bak}-{n}")
+        };
+        let (ok, _) = git_stdout(source, &["branch", &name, "HEAD"])?;
+        if ok {
+            bak = name;
+            break;
+        }
+        if n == 7 {
+            return Err(format!("could not create backup branch {bak}"));
+        }
+    }
+    let (ok, _) = git_stdout_within(
+        source,
+        &["reset", "--hard", &tip],
+        Duration::from_secs(60),
+    )?;
+    if !ok {
+        return Err(format!(
+            "git reset --hard {tip} failed — prior state is on {bak} ({})",
+            &old_head[..old_head.len().min(7)]
+        ));
+    }
+    Ok(Some(bak))
+}
+
 /// Overlay pulls this GitHub remote until Cursor Origin is live.
 pub const GITHUB_REMOTE_URL: &str = "https://github.com/blackviperxiii-ui/GrokHub.git";
 /// Leftover Cursor Origin clone — retarget to GitHub.
@@ -318,7 +493,12 @@ fn update_cmds_on(source: &Path, windows: bool, channel: Channel) -> Result<Vec<
             ));
         }
     }
-    cmds.push(format!("git -C {src} pull --ff-only origin {want}"));
+    if clone_needs_recover(source, channel)? {
+        // Fetch + backup branch + hard reset; the cabin runs this step itself.
+        cmds.push(clone_recover_step(source, channel));
+    } else {
+        cmds.push(format!("git -C {src} pull --ff-only origin {want}"));
+    }
     cmds.push(overlay_install_cmd(source, &src, windows));
     Ok(cmds)
 }
@@ -344,95 +524,150 @@ pub fn update_cmds_for_host(source: Option<&Path>, windows: bool) -> Result<Vec<
     update_cmds_for_host_in(source, windows, Channel::Stable)
 }
 
-/// A stable Windows host without a usable clone takes the latest release zip.
-/// Beta never does: the zip is a stable release.
+/// An install without a usable clone takes its channel's latest signed
+/// release: stable the latest release, beta the newest beta pre-release (on
+/// Windows, also when a leftover clone is on the wrong branch). A clone keeps
+/// building from source, the developer path.
 pub fn update_cmds_for_host_in(
     source: Option<&Path>,
     windows: bool,
     channel: Channel,
 ) -> Result<Vec<String>, String> {
-    // The release zip is stable; a beta install must never fall back to it.
-    let zip_ok = windows && channel == Channel::Stable;
     match source {
         Some(src) => match update_cmds_on(src, windows, channel) {
             Ok(cmds) => Ok(cmds),
-            Err(_) if zip_ok => Ok(windows_release_update_cmds()),
+            Err(_) if windows => Ok(release_update_cmds()),
             Err(e) => Err(e),
         },
-        None if zip_ok => Ok(windows_release_update_cmds()),
-        None => Err("GrokHub can't find its source folder (~/GrokHub or ~/.config/GrokHub/source).".into()),
+        None => Ok(release_update_cmds()),
     }
 }
 
-pub fn windows_release_update_cmds() -> Vec<String> {
-    vec![windows_release_overlay_cmd().into()]
-}
-
-/// Embedded so a Setup.exe install can update without a source tree.
-pub fn windows_release_overlay_cmd() -> &'static str {
-    concat!(
-        "$ErrorActionPreference='Stop'; ",
-        "[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12; ",
-        "$dest = Join-Path $env:LOCALAPPDATA 'Programs\\GrokHub'; ",
-        "New-Item -ItemType Directory -Path $dest -Force | Out-Null; ",
-        "$rel = Invoke-RestMethod -Uri 'https://api.github.com/repos/blackviperxiii-ui/GrokHub/releases/latest' -Headers @{ 'User-Agent'='GrokHub' } -UseBasicParsing; ",
-        "$asset = @($rel.assets | Where-Object { $_.name -match '^grokhub-windows-v[0-9]+\\.[0-9]+\\.[0-9]+\\.zip$' })[0]; ",
-        "if (-not $asset) { throw 'no grokhub-windows zip on latest GitHub Release' }; ",
-        "$url = [string]$asset.browser_download_url; ",
-        "if ($url -notmatch '^https://(github\\.com/blackviperxiii-ui/GrokHub/releases/download/|objects\\.githubusercontent\\.com/|release-assets\\.githubusercontent\\.com/)') { throw 'unexpected download URL' }; ",
-        "if ($url -notlike ('*/' + $asset.name)) { throw 'download URL name mismatch' }; ",
-        "$zip = Join-Path $env:TEMP $asset.name; ",
-        "Invoke-WebRequest -Uri $url -OutFile $zip -UseBasicParsing; ",
-        "$stage = Join-Path $env:TEMP 'grokhub-windows-overlay'; ",
-        "if (Test-Path $stage) { Remove-Item $stage -Recurse -Force }; ",
-        "Expand-Archive -Path $zip -DestinationPath $stage -Force; ",
-        "$stageFull = (Resolve-Path $stage).Path; ",
-        "$under = { param($p) ([IO.Path]::GetFullPath($p)).StartsWith(($stageFull.TrimEnd('\\') + '\\'), [StringComparison]::OrdinalIgnoreCase) }; ",
-        "$exe = Get-ChildItem -Path $stage -Recurse -File -Filter grokhub.exe | Where-Object { & $under $_.FullName } | Select-Object -First 1; ",
-        "$hub = Get-ChildItem -Path $stage -Recurse -File -Filter grokhub-hub.exe | Where-Object { & $under $_.FullName } | Select-Object -First 1; ",
-        "if (-not $exe -or -not $hub) { throw 'zip missing grokhub.exe' }; ",
-        "function Overlay-Locked($from, $to) { ",
-        "$old = \"$to.old\"; ",
-        "if (Test-Path $old) { Remove-Item $old -Force -ErrorAction SilentlyContinue }; ",
-        "if (Test-Path $to) { try { Copy-Item $from $to -Force; return } catch { Rename-Item $to $old -Force } }; ",
-        "Copy-Item $from $to -Force }; ",
-        "Overlay-Locked $exe.FullName (Join-Path $dest 'grokhub.exe'); ",
-        "Overlay-Locked $hub.FullName (Join-Path $dest 'grokhub-hub.exe'); ",
-        "Write-Output \"overlay $dest\""
-    )
+/// One step the cabin runs itself: download this host's asset from the
+/// latest release, check it against the signed `SHA256SUMS`
+/// ([`crate::release_verify`]), then swap the binaries in.
+pub fn release_update_cmds() -> Vec<String> {
+    vec![crate::release_verify::RELEASE_INSTALL_STEP.into()]
 }
 
 pub fn settings_update_note() -> &'static str {
     if cfg!(windows) {
-        "Downloads the latest Windows zip from GitHub into %LOCALAPPDATA%\\Programs\\GrokHub. A source clone on main overlays with install-windows.ps1 instead. Does not wipe %APPDATA%\\GrokHub."
+        "Downloads the latest Windows release from GitHub (the newest beta pre-release on Beta), checks it against the signed SHA256SUMS, and swaps it into %LOCALAPPDATA%\\Programs\\GrokHub. A source clone on main overlays with install-windows.ps1 instead. Does not wipe %APPDATA%\\GrokHub."
     } else {
-        "Pulls origin/main and overlays the GUI. The clone must be on main. Does not wipe ~/.config/GrokHub."
+        "A source clone pulls its branch and builds. Without a clone, downloads the latest release from GitHub (the newest beta pre-release on Beta) and checks it against the signed SHA256SUMS. Does not wipe ~/.config/GrokHub."
     }
 }
 
-/// `2.9.5` or `v2.9.5`. Extra suffix after patch (`2.9.5-alpha`) is ignored.
-pub fn parse_cabin_semver(raw: &str) -> Option<(u64, u64, u64)> {
+/// Cabin semver with optional `-beta.N` prerelease. Releases sort above any
+/// prerelease of the same `major.minor.patch`; among betas, `N` is numeric
+/// (`2.13.0-beta.2` < `2.13.0-beta.10` < `2.13.0`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CabinSemver {
+    pub major: u64,
+    pub minor: u64,
+    pub patch: u64,
+    /// `None` = release. `Some(n)` = `-beta.N` (bare `-beta` is `Some(0)`).
+    pub beta: Option<u64>,
+}
+
+impl PartialOrd for CabinSemver {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for CabinSemver {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        (self.major, self.minor, self.patch)
+            .cmp(&(other.major, other.minor, other.patch))
+            .then_with(|| match (self.beta, other.beta) {
+                (None, None) => std::cmp::Ordering::Equal,
+                (None, Some(_)) => std::cmp::Ordering::Greater,
+                (Some(_), None) => std::cmp::Ordering::Less,
+                (Some(a), Some(b)) => a.cmp(&b),
+            })
+    }
+}
+
+/// `2.9.5`, `v2.9.5`, `2.13.0-beta.2`, or bare `2.13.0-beta` (`beta = 0`).
+/// A trailing ` (…)` from release labels is ignored. Other suffixes after the
+/// patch digits (for example `-alpha`) still parse as a release, as before.
+pub fn parse_cabin_semver(raw: &str) -> Option<CabinSemver> {
     let t = raw.trim().trim_start_matches(['v', 'V']);
-    let mut parts = t.split('.');
+    let t = t.split_whitespace().next()?.trim();
+    let (num, beta) = match t.rsplit_once("-beta") {
+        Some((num, "")) => (num, Some(0)),
+        Some((num, rest)) => {
+            let n = rest.strip_prefix('.')?;
+            if n.is_empty() || !n.bytes().all(|b| b.is_ascii_digit()) {
+                return None;
+            }
+            (num, Some(n.parse().ok()?))
+        }
+        None => (t, None),
+    };
+    let mut parts = num.split('.');
     let major = parts.next()?.parse().ok()?;
     let minor = parts.next()?.parse().ok()?;
     let patch_tok = parts.next()?;
-    let patch: String = patch_tok.chars().take_while(|c| c.is_ascii_digit()).collect();
-    if patch.is_empty() {
+    if parts.next().is_some() {
         return None;
     }
-    Some((major, minor, patch.parse().ok()?))
+    let patch: String = patch_tok.chars().take_while(|c| c.is_ascii_digit()).collect();
+    if patch.is_empty() || patch.len() != patch_tok.len() {
+        // Unknown suffix on the patch token (not `-beta`, already split): keep
+        // the old "ignore trailing junk" behavior only when digits prefix it.
+        if patch.is_empty() {
+            return None;
+        }
+        // `2.9.5-alpha` → release 2.9.5
+        return Some(CabinSemver {
+            major,
+            minor,
+            patch: patch.parse().ok()?,
+            beta: None,
+        });
+    }
+    Some(CabinSemver {
+        major,
+        minor,
+        patch: patch.parse().ok()?,
+        beta,
+    })
 }
 
+/// True when `latest` is a newer install than `running`. A prerelease is never
+/// offered to a stable (non-prerelease) install.
 pub fn cabin_version_newer(latest: &str, running: &str) -> bool {
     match (parse_cabin_semver(latest), parse_cabin_semver(running)) {
-        (Some(l), Some(r)) => l > r,
+        (Some(l), Some(r)) => {
+            if l.beta.is_some() && r.beta.is_none() {
+                return false;
+            }
+            l > r
+        }
         _ => false,
     }
 }
 
 pub fn should_notify_cabin_update(running: &str, latest: Option<&str>) -> bool {
     latest.is_some_and(|tag| cabin_version_newer(tag, running))
+}
+
+/// Labs / updater auto-off by version: a beta install at `beta_running`
+/// (`X.Y.Z-beta.N`) turns off when stable `main_version` has reached that
+/// base (`X.Y.Z` or newer). Pure — tree-based [`crate::auto_off_step`] stays
+/// the clone path.
+pub fn beta_auto_off_for_versions(beta_running: &str, main_version: &str) -> bool {
+    match (
+        parse_cabin_semver(beta_running),
+        parse_cabin_semver(main_version),
+    ) {
+        (Some(b), Some(m)) if b.beta.is_some() && m.beta.is_none() => {
+            (m.major, m.minor, m.patch) >= (b.major, b.minor, b.patch)
+        }
+        _ => false,
+    }
 }
 
 /// `tag_name` from `GET …/releases/latest`.
@@ -533,8 +768,9 @@ pub fn cabin_overlay_step(cmd: &str) -> bool {
         || cmd.contains("remote add")
         || cmd.contains("install.sh")
         || cmd.contains("install-windows.ps1")
-        || cmd.contains("releases/latest")
-        || cmd.contains("grokhub-windows-v")
+        || cmd == crate::release_verify::RELEASE_INSTALL_STEP
+        || crate::release_verify::parse_release_switch_step(cmd).is_some()
+        || parse_clone_recover_step(cmd).is_some()
 }
 
 fn overlay_install_cmd(source: &Path, src_quoted: &str, windows: bool) -> String {
@@ -563,10 +799,24 @@ pub fn update_plan_steps(cmds: Vec<String>) -> Vec<HostPlanStep> {
                 "fast-forward origin/beta — config stays".into()
             } else if cmd.contains("pull --ff-only") {
                 "fast-forward origin/main — config stays".into()
+            } else if let Some((channel, _)) = parse_clone_recover_step(&cmd) {
+                match channel {
+                    Channel::Beta => {
+                        "save dirty or diverged work on a grokhub-backup/… branch, reset to origin/beta — config stays".into()
+                    }
+                    Channel::Stable => {
+                        "save dirty or diverged work on a grokhub-backup/… branch, reset to origin/main — config stays".into()
+                    }
+                }
             } else if cmd.contains("remote set-url") || cmd.contains("remote add") {
                 "point origin at GitHub — Cursor Origin is not live yet".into()
-            } else if cmd.contains("releases/latest") || cmd.contains("grokhub-windows-v") {
-                "download latest Windows cabin from GitHub — does not wipe config".into()
+            } else if cmd == crate::release_verify::RELEASE_INSTALL_STEP {
+                "download the latest release from GitHub, check its signed SHA256SUMS, swap it in — does not wipe config".into()
+            } else if let Some(target) = crate::release_verify::parse_release_switch_step(&cmd) {
+                match target {
+                    Channel::Beta => "download the newest beta pre-release, check its signed SHA256SUMS, swap it in, then switch to beta — does not wipe config".into(),
+                    Channel::Stable => "download the latest stable release, check its signed SHA256SUMS, swap it in, then switch to stable — does not wipe config".into(),
+                }
             } else if cmd.contains("install.sh") || cmd.contains("install-windows.ps1") {
                 if cfg!(windows) {
                     "overlay %LOCALAPPDATA%\\Programs\\GrokHub — does not wipe config".into()
@@ -606,10 +856,17 @@ pub fn update_step_label(cmd: &str) -> &'static str {
         "Pulling origin/beta…"
     } else if cmd.contains("pull --ff-only") {
         "Pulling origin/main…"
+    } else if parse_clone_recover_step(cmd).is_some() {
+        "Saving prior clone, resetting…"
     } else if cmd.contains("remote set-url") || cmd.contains("remote add") {
         "Retargeting origin…"
-    } else if cmd.contains("releases/latest") || cmd.contains("grokhub-windows-v") {
-        "Downloading latest Windows cabin…"
+    } else if cmd == crate::release_verify::RELEASE_INSTALL_STEP {
+        "Downloading the verified release…"
+    } else if let Some(target) = crate::release_verify::parse_release_switch_step(cmd) {
+        match target {
+            Channel::Beta => "Downloading the beta release…",
+            Channel::Stable => "Downloading the stable release…",
+        }
     } else if cmd.contains("install.sh") || cmd.contains("install-windows.ps1") {
         "Installing overlay…"
     } else {
@@ -908,13 +1165,12 @@ mod tests {
                 host_quote_for(&root.display().to_string(), false)
             )
         );
-        assert_eq!(
-            update_cmds_for_host_in(None, true, Channel::Beta).unwrap_err(),
-            "GrokHub can't find its source folder (~/GrokHub or ~/.config/GrokHub/source)."
-        );
+        // No clone: beta takes its newest pre-release, on either OS.
+        assert_eq!(update_cmds_for_host_in(None, true, Channel::Beta).unwrap(), release_update_cmds());
+        assert_eq!(update_cmds_for_host_in(None, false, Channel::Beta).unwrap(), release_update_cmds());
         assert_eq!(
             update_cmds_for_host_in(None, true, Channel::Stable).unwrap(),
-            windows_release_update_cmds()
+            release_update_cmds()
         );
         // A stable receipt on the same beta clone refuses instead of pulling main into it.
         assert_eq!(
@@ -1180,8 +1436,8 @@ mod tests {
             "Installing overlay…"
         );
         assert_eq!(
-            update_step_label(windows_release_overlay_cmd()),
-            "Downloading latest Windows cabin…"
+            update_step_label(crate::release_verify::RELEASE_INSTALL_STEP),
+            "Downloading the verified release…"
         );
         assert_eq!(update_step_label("echo hi"), "Updating…");
         assert_eq!(
@@ -1272,12 +1528,8 @@ mod tests {
             "a leftover cursor/* branch is not a product checkout"
         );
         let win = update_cmds_for_host(Some(&root), true).expect("Setup cabin must still Update");
-        assert_eq!(win, windows_release_update_cmds());
-        assert!(
-            win[0].contains("releases/latest") && win[0].contains("grokhub-windows-v"),
-            "{win:?}"
-        );
-        assert_eq!(win.len(), 1, "{win:?}");
+        assert_eq!(win, release_update_cmds());
+        assert_eq!(win, vec!["grokhub: install the verified release".to_string()]);
         assert!(!update_wipes_config(&win));
         assert!(
             !win.iter()
@@ -1304,63 +1556,41 @@ mod tests {
     }
 
     #[test]
-    fn windows_can_update_without_a_clone() {
+    fn an_install_without_a_clone_updates_from_the_verified_release() {
+        let release = vec!["grokhub: install the verified release".to_string()];
+        assert_eq!(update_cmds_for_host(None, true).expect("windows host, no clone"), release);
+        assert_eq!(update_cmds_for_host(None, false).expect("linux tarball install, no clone"), release);
+        assert_eq!(update_cmds_for(None).expect("this host, no clone"), release);
+        assert!(!update_wipes_config(&release));
+        let plan = update_plan_steps(release.clone());
         assert_eq!(
-            update_cmds_for_host(None, true).expect("windows host, no clone"),
-            windows_release_update_cmds()
+            plan[0].explain,
+            "download the latest release from GitHub, check its signed SHA256SUMS, swap it in — does not wipe config"
         );
-        let none = update_cmds_for(None);
-        #[cfg(windows)]
-        {
-            let cmds = none.expect("windows release plan");
-            assert!(
-                cmds[0].contains("releases/latest") && cmds[0].contains("grokhub-windows-v"),
-                "{cmds:?}"
-            );
-            assert_eq!(cmds.len(), 1, "the zip overlay is the whole plan: {cmds:?}");
-            assert!(!update_wipes_config(&cmds));
-            let plan = update_plan_steps(cmds);
-            assert!(
-                plan[0].explain.contains("GitHub") && plan[0].explain.contains("Windows"),
-                "{plan:?}"
-            );
-        }
-        #[cfg(unix)]
-        {
-            let err = none.unwrap_err();
-            assert!(
-                err.contains("source") || err.contains("GROKHUB_SRC"),
-                "{err}"
-            );
-        }
-        let rel = windows_release_overlay_cmd();
+        let rel = crate::release_verify::RELEASE_INSTALL_STEP;
         assert!(
             crate::forbidden_reason(rel).is_none(),
-            "Windows zip overlay must be allowed as a host command: {:?}",
+            "the release step must pass the host command guard: {:?}",
             crate::forbidden_reason(rel)
-        );
-        assert!(
-            rel.contains("api.github.com/repos/blackviperxiii-ui/GrokHub/releases/latest")
-                && rel.contains("grokhub-windows-v")
-                && rel.contains("Tls12")
-                && rel.contains("UseBasicParsing")
-                && rel.contains("GrokHub/releases/download")
-                && rel.contains("Overlay-Locked")
-                && rel.contains("Rename-Item")
-                && rel.contains("LOCALAPPDATA")
-                && rel.contains("Programs\\GrokHub")
-                && rel.contains("Expand-Archive")
-                && rel.contains("grokhub.exe")
-                && !rel.contains("cargo build")
-                && !rel.contains("GROK_CHANNEL=alpha"),
-            "{rel}"
         );
         let install_win = include_str!("../../../scripts/install-windows.ps1");
         assert!(
             install_win.contains("Overlay-Locked") && install_win.contains("Rename-Item"),
             "clone overlay must replace a running grokhub.exe: {install_win}"
         );
-        assert_eq!(windows_release_update_cmds(), vec![rel.to_string()]);
+        assert_eq!(release_update_cmds(), vec![rel.to_string()]);
+        for target in [Channel::Beta, Channel::Stable] {
+            let switch = crate::release_verify::release_switch_step(target);
+            assert!(crate::forbidden_reason(&switch).is_none(), "{switch}");
+            assert!(cabin_overlay_step(&switch), "{switch}");
+            assert!(!update_wipes_config(std::slice::from_ref(&switch)), "{switch}");
+        }
+        assert_eq!(update_step_label("grokhub: switch to the beta release"), "Downloading the beta release…");
+        assert_eq!(
+            update_plan_steps(vec!["grokhub: switch to the stable release".into()])[0].explain,
+            "download the latest stable release, check its signed SHA256SUMS, swap it in, then switch to stable — does not wipe config"
+        );
+        assert!(settings_update_note().contains("SHA256SUMS"), "{}", settings_update_note());
         assert!(!settings_update_note().contains("grok"), "{}", settings_update_note());
         let win_install = include_str!("update.rs")
             .split("fn overlay_install_cmd(")
@@ -1377,9 +1607,33 @@ mod tests {
 
     #[test]
     fn notify_when_newer() {
-        assert_eq!(parse_cabin_semver("2.9.5"), Some((2, 9, 5)));
-        assert_eq!(parse_cabin_semver("v2.9.6"), Some((2, 9, 6)));
-        assert_eq!(parse_cabin_semver("V2.10.0"), Some((2, 10, 0)));
+        assert_eq!(
+            parse_cabin_semver("2.9.5"),
+            Some(CabinSemver {
+                major: 2,
+                minor: 9,
+                patch: 5,
+                beta: None
+            })
+        );
+        assert_eq!(
+            parse_cabin_semver("v2.9.6"),
+            Some(CabinSemver {
+                major: 2,
+                minor: 9,
+                patch: 6,
+                beta: None
+            })
+        );
+        assert_eq!(
+            parse_cabin_semver("V2.10.0"),
+            Some(CabinSemver {
+                major: 2,
+                minor: 10,
+                patch: 0,
+                beta: None
+            })
+        );
         assert!(cabin_version_newer("v2.9.6", "2.9.5"));
         assert!(cabin_version_newer("2.10.0", "v2.9.5"));
         assert!(!cabin_version_newer("v2.9.5", "2.9.5"));
@@ -1403,6 +1657,53 @@ mod tests {
             "notify is in-app, not a web page: {notice}"
         );
         assert_eq!(GITHUB_LATEST_API, "https://api.github.com/repos/blackviperxiii-ui/GrokHub/releases/latest");
+    }
+
+    #[test]
+    fn semver_prerelease_order_and_channel_rules() {
+        let p = |s: &str| parse_cabin_semver(s).expect(s);
+        assert!(p("2.13.0-beta.2") < p("2.13.0-beta.10"));
+        assert!(p("2.13.0-beta.10") < p("2.13.0"));
+        assert!(p("2.13.0") < p("2.13.1"));
+        // Numeric prerelease, not lexicographic: .10 > .2
+        assert!(cabin_version_newer("2.13.0-beta.10", "2.13.0-beta.2"));
+        assert!(!cabin_version_newer("2.13.0-beta.2", "2.13.0-beta.10"));
+        // Release beats any beta of the same base.
+        assert!(cabin_version_newer("2.13.0", "2.13.0-beta.10"));
+        assert!(cabin_version_newer("v2.13.0", "2.13.0-beta.2"));
+        // Stable users are never offered a prerelease.
+        assert!(!cabin_version_newer("2.13.1-beta.1", "2.13.0"));
+        assert!(!cabin_version_newer("2.14.0-beta.5", "2.13.1"));
+        assert!(!should_notify_cabin_update("2.13.1", Some("2.13.2-beta.1")));
+        // Beta → newer beta and beta → release.
+        assert!(should_notify_cabin_update("2.13.0-beta.2", Some("2.13.0-beta.10")));
+        assert!(should_notify_cabin_update("2.13.0-beta.10", Some("v2.13.0")));
+        // main → beta (Labs): a stable install does not take a prerelease via notify.
+        assert!(!should_notify_cabin_update("2.13.0", Some("2.13.0-beta.1")));
+        // Auto-off when main reaches the beta base, not before.
+        assert!(beta_auto_off_for_versions("2.13.0-beta.2", "2.13.0"));
+        assert!(beta_auto_off_for_versions("2.13.0-beta.10", "2.13.1"));
+        assert!(!beta_auto_off_for_versions("2.13.0-beta.2", "2.12.9"));
+        assert!(!beta_auto_off_for_versions("2.13.0", "2.13.0")); // already stable
+        assert!(!beta_auto_off_for_versions("2.13.0-beta.2", "2.13.0-beta.9"));
+        assert_eq!(
+            p("2.13.0-beta"),
+            CabinSemver {
+                major: 2,
+                minor: 13,
+                patch: 0,
+                beta: Some(0)
+            }
+        );
+        assert_eq!(
+            p("2.13.0-beta.2 (abc1234)"),
+            CabinSemver {
+                major: 2,
+                minor: 13,
+                patch: 0,
+                beta: Some(2)
+            }
+        );
     }
 
     #[test]
@@ -1643,5 +1944,315 @@ mod channel_tip_tests {
             parse_ls_remote_tips("deadbeef refs/heads/beta\n"),
             ("deadbeef".into(), String::new())
         );
+    }
+
+    #[test]
+    fn parse_clone_recover_step_reads_channel_and_path() {
+        let step = clone_recover_step(Path::new("/tmp/GrokHub"), Channel::Beta);
+        assert_eq!(
+            parse_clone_recover_step(&step),
+            Some((Channel::Beta, PathBuf::from("/tmp/GrokHub")))
+        );
+        assert!(parse_clone_recover_step("git pull").is_none());
+        assert!(cabin_overlay_step(&step));
+        assert_eq!(update_step_label(&step), "Saving prior clone, resetting…");
+    }
+
+    #[test]
+    fn recover_diverged_clone_saves_old_head_on_backup_and_resets() {
+        let fx = TipsFixture::new("recover-diverged");
+        git_ok(&fx.client, &["config", "user.email", "cabin@test"]);
+        git_ok(&fx.client, &["config", "user.name", "Cabin"]);
+        git_ok(&fx.client, &["config", "commit.gpgsign", "false"]);
+        // Advance origin/main past the client, then give the client its own commit.
+        fx.commit_on("main", "upstream.txt");
+        let tip = git_out(&fx.work, &["rev-parse", "origin/main"]);
+        git_ok(&fx.client, &["checkout", "-q", "main"]);
+        std::fs::write(fx.client.join("local-only.txt"), "mine").unwrap();
+        git_ok(&fx.client, &["add", "."]);
+        git_ok(&fx.client, &["commit", "-q", "-m", "local diverge"]);
+        let old = git_out(&fx.client, &["rev-parse", "HEAD"]);
+        assert!(clone_needs_recover(&fx.client, Channel::Stable).unwrap());
+        let bak = recover_clone_if_needed(&fx.client, Channel::Stable)
+            .expect("recover")
+            .expect("backup branch");
+        assert!(bak.starts_with("grokhub-backup/"), "{bak}");
+        assert_eq!(git_out(&fx.client, &["rev-parse", bak.as_str()]), old);
+        assert_eq!(git_out(&fx.client, &["rev-parse", "HEAD"]), tip);
+        assert!(!clone_needs_recover(&fx.client, Channel::Stable).unwrap());
+        let plan = update_cmds_in(&fx.client, Channel::Stable).unwrap();
+        assert!(
+            plan.iter().any(|c| c.contains("pull --ff-only origin main")),
+            "clean after recover uses pull: {plan:?}"
+        );
+        assert!(plan.iter().all(|c| parse_clone_recover_step(c).is_none()), "{plan:?}");
+    }
+
+    #[test]
+    fn recover_dirty_clone_keeps_changes_on_backup_branch() {
+        let fx = TipsFixture::new("recover-dirty");
+        git_ok(&fx.client, &["config", "user.email", "cabin@test"]);
+        git_ok(&fx.client, &["config", "user.name", "Cabin"]);
+        git_ok(&fx.client, &["config", "commit.gpgsign", "false"]);
+        fx.commit_on("main", "upstream.txt");
+        let tip = git_out(&fx.work, &["rev-parse", "origin/main"]);
+        git_ok(&fx.client, &["fetch", "-q", "origin"]);
+        git_ok(&fx.client, &["checkout", "-q", "main"]);
+        // Still at seed tip locally until recover fetches; make the tree dirty.
+        std::fs::write(fx.client.join("Cargo.toml"), "[workspace] # dirty\n").unwrap();
+        std::fs::write(fx.client.join("untracked.txt"), "new").unwrap();
+        assert!(clone_needs_recover(&fx.client, Channel::Stable).unwrap());
+        let plan = update_cmds_in(&fx.client, Channel::Stable).unwrap();
+        assert!(
+            plan.iter().any(|c| parse_clone_recover_step(c).is_some()),
+            "dirty plan uses recover step: {plan:?}"
+        );
+        let bak = recover_clone_if_needed(&fx.client, Channel::Stable)
+            .expect("recover")
+            .expect("backup");
+        assert_eq!(git_out(&fx.client, &["rev-parse", "HEAD"]), tip);
+        // Windows checkouts may rewrite LF → CRLF; assert the dirty edit is gone.
+        let cargo = std::fs::read_to_string(fx.client.join("Cargo.toml"))
+            .unwrap()
+            .replace("\r\n", "\n");
+        assert_eq!(cargo, "[workspace]\n");
+        assert!(!fx.client.join("untracked.txt").exists());
+        // Backup tip has the saved dirty commit.
+        let tree = git_out(&fx.client, &["ls-tree", "-r", "--name-only", bak.as_str()]);
+        assert!(tree.contains("untracked.txt"), "{tree}");
+        let show = git_out(&fx.client, &["show", &format!("{bak}:Cargo.toml")]);
+        assert!(show.contains("dirty"), "{show}");
+    }
+
+    #[test]
+    fn clean_clone_update_plan_stays_on_fast_forward() {
+        let fx = TipsFixture::new("recover-clean");
+        git_ok(&fx.client, &["checkout", "-q", "main"]);
+        assert!(!clone_needs_recover(&fx.client, Channel::Stable).unwrap());
+        assert_eq!(
+            recover_clone_if_needed(&fx.client, Channel::Stable).unwrap(),
+            None
+        );
+        let plan = update_cmds_in(&fx.client, Channel::Stable).unwrap();
+        assert!(
+            plan.iter().any(|c| c.contains("pull --ff-only origin main")),
+            "{plan:?}"
+        );
+        assert!(plan.iter().all(|c| parse_clone_recover_step(c).is_none()), "{plan:?}");
+        let branches = git_out(&fx.client, &["branch", "--list", "grokhub-backup/*"]);
+        assert!(branches.trim().is_empty(), "no backup on clean: {branches}");
+    }
+
+    #[test]
+    fn recover_stable_resets_to_origin_main_not_an_old_tag() {
+        let fx = TipsFixture::new("recover-not-tag");
+        git_ok(&fx.client, &["config", "user.email", "cabin@test"]);
+        git_ok(&fx.client, &["config", "user.name", "Cabin"]);
+        git_ok(&fx.client, &["config", "commit.gpgsign", "false"]);
+        // An old release tag on the seed commit must not become the recover tip.
+        git_ok(&fx.work, &["tag", "v2.10.0", "origin/main"]);
+        git_ok(&fx.work, &["push", "-q", "origin", "v2.10.0"]);
+        fx.commit_on("main", "newer-main.txt");
+        let tip = git_out(&fx.work, &["rev-parse", "origin/main"]);
+        let tag = git_out(&fx.work, &["rev-parse", "v2.10.0"]);
+        assert_ne!(tip, tag, "main moved past the tag");
+        git_ok(&fx.client, &["checkout", "-q", "main"]);
+        std::fs::write(fx.client.join("local-only.txt"), "mine").unwrap();
+        git_ok(&fx.client, &["add", "."]);
+        git_ok(&fx.client, &["commit", "-q", "-m", "local diverge"]);
+        // Fetch the tag into the client so resolve would see it if it looked.
+        git_ok(&fx.client, &["fetch", "-q", "origin", "--tags"]);
+        let bak = recover_clone_if_needed(&fx.client, Channel::Stable)
+            .expect("recover")
+            .expect("backup");
+        assert!(bak.starts_with("grokhub-backup/"), "{bak}");
+        assert_eq!(git_out(&fx.client, &["rev-parse", "HEAD"]), tip);
+        assert_ne!(git_out(&fx.client, &["rev-parse", "HEAD"]), tag);
+        assert!(!clone_needs_recover(&fx.client, Channel::Stable).unwrap());
+    }
+
+    #[test]
+    fn recover_backup_commit_succeeds_when_gpgsign_is_on() {
+        let fx = TipsFixture::new("recover-gpg");
+        git_ok(&fx.client, &["config", "user.email", "cabin@test"]);
+        git_ok(&fx.client, &["config", "user.name", "Cabin"]);
+        // Global-style signing on — recover must still commit with --no-gpg-sign.
+        git_ok(&fx.client, &["config", "commit.gpgsign", "true"]);
+        fx.commit_on("main", "upstream.txt");
+        let tip = git_out(&fx.work, &["rev-parse", "origin/main"]);
+        git_ok(&fx.client, &["checkout", "-q", "main"]);
+        std::fs::write(fx.client.join("dirty.txt"), "x").unwrap();
+        let bak = recover_clone_if_needed(&fx.client, Channel::Stable)
+            .expect("recover despite gpgsign")
+            .expect("backup");
+        assert_eq!(git_out(&fx.client, &["rev-parse", "HEAD"]), tip);
+        let tree = git_out(&fx.client, &["ls-tree", "-r", "--name-only", bak.as_str()]);
+        assert!(tree.contains("dirty.txt"), "{tree}");
+    }
+
+    #[test]
+    fn single_branch_clone_can_switch_to_beta_and_back() {
+        let fx = TipsFixture::new("single-branch");
+        let single = fx.base.join("single");
+        git_ok(
+            &fx.base,
+            &[
+                "clone",
+                "-q",
+                "--single-branch",
+                "-b",
+                "main",
+                "origin.git",
+                "single",
+            ],
+        );
+        git_ok(&single, &["config", "user.email", "cabin@test"]);
+        git_ok(&single, &["config", "user.name", "Cabin"]);
+        git_ok(&single, &["config", "commit.gpgsign", "false"]);
+        // No local beta yet — same failure mode as a --single-branch user clone.
+        assert!(!Command::new("git")
+            .args(["show-ref", "--verify", "--quiet", "refs/heads/beta"])
+            .current_dir(&single)
+            .status()
+            .unwrap()
+            .success());
+        // Mirror install.sh: add fetch refspec, fetch, checkout -B --track.
+        git_ok(
+            &single,
+            &[
+                "config",
+                "--add",
+                "remote.origin.fetch",
+                "+refs/heads/beta:refs/remotes/origin/beta",
+            ],
+        );
+        git_ok(
+            &single,
+            &[
+                "fetch",
+                "-q",
+                "origin",
+                "+refs/heads/beta:refs/remotes/origin/beta",
+            ],
+        );
+        git_ok(
+            &single,
+            &["checkout", "-q", "-B", "beta", "--track", "origin/beta"],
+        );
+        assert_eq!(git_out(&single, &["symbolic-ref", "--short", "HEAD"]), "beta");
+        assert_eq!(
+            git_out(&single, &["rev-parse", "--abbrev-ref", "beta@{upstream}"]),
+            "origin/beta"
+        );
+        let tips = fetch_channel_tips(&single).expect("fetch tips");
+        switch_clone_to_main(&single).expect("back to main");
+        assert_eq!(git_out(&single, &["symbolic-ref", "--short", "HEAD"]), "main");
+        assert_eq!(git_out(&single, &["rev-parse", "HEAD"]), tips.main_sha);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn install_sh_skips_sudo_when_packages_present_or_no_tty() {
+        let base = std::env::temp_dir().join(format!(
+            "grokhub-pkg-skip-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = std::fs::remove_dir_all(&base);
+        let bin = base.join("bin");
+        let cfg = base.join("cfg");
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::create_dir_all(&cfg).unwrap();
+        // Shim pacman: -Q succeeds (packages present); -S would write a marker.
+        std::fs::write(
+            bin.join("pacman"),
+            "#!/bin/sh\nif [ \"$1\" = -Q ]; then exit 0; fi\necho PACMAN \"$*\" >>\"$GROKHUB_PKG_LOG\"\nexit 0\n",
+        )
+        .unwrap();
+        std::fs::write(
+            bin.join("sudo"),
+            "#!/bin/sh\necho SUDO \"$*\" >>\"$GROKHUB_PKG_LOG\"\nexec \"$@\"\n",
+        )
+        .unwrap();
+        {
+            use std::os::unix::fs::PermissionsExt;
+            for name in ["pacman", "sudo"] {
+                let mut perms = std::fs::metadata(bin.join(name)).unwrap().permissions();
+                perms.set_mode(0o755);
+                std::fs::set_permissions(bin.join(name), perms).unwrap();
+            }
+        }
+        // Extract and run only the package block via a tiny harness: dry-run
+        // never reaches try_pkgs, so the test runs that section on its own.
+        let harness = base.join("pkg-harness.sh");
+        let install_text = include_str!("../../../scripts/install.sh");
+        let start = install_text
+            .find("PKG_SKIP_FILE=")
+            .expect("PKG_SKIP_FILE in install.sh");
+        let end = install_text[start..]
+            .find("\nif command -v systemctl")
+            .map(|i| start + i)
+            .expect("end of package block");
+        let block = &install_text[start..end];
+        std::fs::write(
+            &harness,
+            format!(
+                "#!/usr/bin/env bash\nset -euo pipefail\nGROKHUB_CONFIG=\"{cfg}\"\nexport GROKHUB_CONFIG\n{block}\n",
+                cfg = cfg.display()
+            ),
+        )
+        .unwrap();
+        let log = base.join("pkg.log");
+        let path = format!("{}:{}", bin.display(), std::env::var("PATH").unwrap_or_default());
+        // Packages present → pacman -Q succeeds → no sudo.
+        let out = Command::new("bash")
+            .arg(&harness)
+            .env("PATH", &path)
+            .env("GROKHUB_PKG_LOG", &log)
+            .env("HOME", &base)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "stderr={}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(
+            !log.exists() || std::fs::read_to_string(&log).unwrap().is_empty(),
+            "no sudo when packages present"
+        );
+        // Missing packages + no TTY → note, no sudo.
+        std::fs::write(
+            bin.join("pacman"),
+            "#!/bin/sh\nif [ \"$1\" = -Q ]; then exit 1; fi\necho PACMAN \"$*\" >>\"$GROKHUB_PKG_LOG\"\nexit 0\n",
+        )
+        .unwrap();
+        let _ = std::fs::remove_file(&log);
+        let out = Command::new("bash")
+            .arg(&harness)
+            .env("PATH", &path)
+            .env("GROKHUB_PKG_LOG", &log)
+            .env("HOME", &base)
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            out.status.success(),
+            "stderr={stderr}"
+        );
+        assert!(
+            stdout.contains("pkgs: skipped (no TTY)") || stderr.contains("pkgs: skipped (no TTY)"),
+            "stdout={stdout} stderr={stderr}"
+        );
+        assert!(
+            !log.exists() || !std::fs::read_to_string(&log).unwrap().contains("SUDO"),
+            "no sudo without TTY"
+        );
+        let _ = std::fs::remove_dir_all(&base);
     }
 }

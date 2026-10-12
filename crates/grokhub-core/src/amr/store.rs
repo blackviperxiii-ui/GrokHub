@@ -302,7 +302,11 @@ impl AmrStore {
         }
         files.sort();
         for path in files {
-            let Ok(text) = fs::read_to_string(&path) else {
+            let Ok(bytes) = fs::read(&path) else {
+                continue;
+            };
+            let Ok(text) = String::from_utf8(bytes) else {
+                quarantine_node(&path);
                 continue;
             };
             let sealed = path.extension().and_then(|ext| ext.to_str()) == Some(SEALED_EXT);
@@ -323,13 +327,15 @@ impl AmrStore {
             } else {
                 text
             };
-            if let Ok(mut node) = Node::from_markdown(&text) {
-                // Sealed before Spike-5a wrote the tier into the frontmatter.
-                if sealed && !node.sensitivity.sealed() {
-                    node.sensitivity = Sensitivity::Personal;
-                }
-                loaded.nodes.push(node);
+            let Ok(mut node) = Node::from_markdown(&text) else {
+                quarantine_node(&path);
+                continue;
+            };
+            // Sealed before Spike-5a wrote the tier into the frontmatter.
+            if sealed && !node.sensitivity.sealed() {
+                node.sensitivity = Sensitivity::Personal;
             }
+            loaded.nodes.push(node);
         }
         loaded
     }
@@ -573,6 +579,23 @@ impl AmrStore {
             Some(parent) if parent == nodes => Ok(path),
             _ => Err(AmrError::BadId(id.as_str().to_string())),
         }
+    }
+}
+
+/// How long a node file must sit untouched before a parse failure counts as damage.
+/// `remember` creates the file and then writes it, so a younger file may be mid-write.
+const NODE_SETTLE: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Move a settled node file that will not parse aside (`<id>.md.corrupt-<ms>`) so it
+/// stops failing every recall, and note it for the Home card. The copy is kept.
+fn quarantine_node(path: &Path) {
+    let settled = fs::metadata(path)
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.elapsed().ok())
+        .is_some_and(|age| age >= NODE_SETTLE);
+    if settled {
+        let _ = crate::recovered::quarantine(path, crate::recovered::LEFT_OUT);
     }
 }
 

@@ -1,12 +1,26 @@
 name: Release
 
+# A stable `vX.Y.Z` tag publishes Latest. A `vX.Y.Z-beta.N` tag publishes a
+# GitHub pre-release (never Latest) with the same assets. A push to `beta`
+# still publishes `beta-vX.Y.Z-<sha>` for the channel while that path remains.
+# Each release carries Linux and Windows builds, `SHA256SUMS`, and
+# `SHA256SUMS.minisig` (minisign via `MINISIGN_SECRET_KEY`). The public key is
+# `packaging/minisign.pub`; the updater refuses unverified assets.
+
 on:
   push:
     tags:
       - "v*"
+    branches:
+      - beta
 
 permissions:
   contents: write
+
+concurrency:
+  # A newer beta push replaces a beta pre-release still building; tags never cancel.
+  group: release-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref == 'refs/heads/beta' }}
 
 jobs:
   linux-bundle:
@@ -23,19 +37,11 @@ jobs:
             libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
             libgl1-mesa-dev libwayland-dev libasound2-dev
       - run: ./scripts/make-release-bundle.sh
-      - name: Publish GitHub Release
-        uses: softprops/action-gh-release@v2
+      - uses: actions/upload-artifact@v4
         with:
-          files: dist-release/grokhub-linux-*.tar.gz
-          generate_release_notes: true
-          fail_on_unmatched_files: true
-          body: |
-            ## Install
-            **Linux:** extract `grokhub-linux-${{ github.ref_name }}.tar.gz` and run `./install.sh`,
-            or `cargo install --path crates/grokhub-app` from a clone.
-
-            **Windows:** run `GrokHub-Setup-${{ github.ref_name }}.exe` (no admin).
-            Installs to `%LOCALAPPDATA%\Programs\GrokHub`.
+          name: linux
+          path: dist-release/grokhub-linux-*.tar.gz
+          if-no-files-found: error
 
   windows-installer:
     runs-on: windows-latest
@@ -48,11 +54,92 @@ jobs:
       - name: Package
         shell: pwsh
         run: ./scripts/make-windows-release.ps1
-      - name: Publish GitHub Release
-        uses: softprops/action-gh-release@v2
+      - uses: actions/upload-artifact@v4
         with:
-          files: |
+          name: windows
+          path: |
             dist-release/GrokHub-Setup-*.exe
             dist-release/grokhub-windows-v*.zip
+          if-no-files-found: error
+
+  publish:
+    needs: [linux-bundle, windows-installer]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist-release
+          merge-multiple: true
+      - name: Name the release
+        id: name
+        shell: bash
+        run: |
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            tag="$GITHUB_REF_NAME"
+            echo "tag=$tag" >> "$GITHUB_OUTPUT"
+            if [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-beta\.[0-9]+$ ]]; then
+              # Semver beta pre-release: never Latest.
+              echo "prerelease=true" >> "$GITHUB_OUTPUT"
+            elif [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "prerelease=false" >> "$GITHUB_OUTPUT"
+            else
+              echo "::error::unsupported release tag '$tag' (want vX.Y.Z or vX.Y.Z-beta.N)"
+              exit 1
+            fi
+          else
+            ver="$(tr -d '[:space:]' < VERSION)"
+            echo "tag=beta-v${ver}-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Write SHA256SUMS
+        working-directory: dist-release
+        run: |
+          sha256sum -- * | sort -k2 > SHA256SUMS
+          cat SHA256SUMS
+      - name: Sign SHA256SUMS
+        working-directory: dist-release
+        env:
+          MINISIGN_SECRET_KEY: ${{ secrets.MINISIGN_SECRET_KEY }}
+          TAG: ${{ steps.name.outputs.tag }}
+        shell: bash
+        run: |
+          if [ -z "$MINISIGN_SECRET_KEY" ]; then
+            echo "::warning::MINISIGN_SECRET_KEY is not set: SHA256SUMS ships unsigned and the updater will refuse these assets."
+            exit 0
+          fi
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends minisign
+          umask 077
+          key="$RUNNER_TEMP/minisign.key"
+          printf '%s\n' "$MINISIGN_SECRET_KEY" > "$key"
+          minisign -S -s "$key" -m SHA256SUMS -t "grokhub $TAG SHA256SUMS"
+          rm -f "$key"
+          if grep -q '^untrusted comment: minisign public key' ../packaging/minisign.pub 2>/dev/null; then
+            minisign -V -p ../packaging/minisign.pub -m SHA256SUMS
+          else
+            echo "::warning::packaging/minisign.pub is missing, so the signature was not checked against the shipped key."
+          fi
+      - name: Publish
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.name.outputs.tag }}
+          target_commitish: ${{ github.sha }}
+          prerelease: ${{ steps.name.outputs.prerelease }}
+          make_latest: ${{ steps.name.outputs.prerelease == 'false' }}
+          files: dist-release/*
           generate_release_notes: true
           fail_on_unmatched_files: true
+          body: |
+            ## Install
+            **Linux:** extract `grokhub-linux-v*.tar.gz` and run `./install.sh`,
+            or `cargo install --path crates/grokhub-app` from a clone.
+
+            **Windows:** run `GrokHub-Setup-*.exe` (no admin).
+            Installs to `%LOCALAPPDATA%\Programs\GrokHub`.
+
+            ## Verify
+            `SHA256SUMS` lists every file's SHA-256 and `SHA256SUMS.minisig` signs it.
+            `minisign -V -p minisign.pub -m SHA256SUMS`, then `sha256sum -c SHA256SUMS --ignore-missing`.
+            The public key is `packaging/minisign.pub` in the repo. GrokHub's updater checks both before it installs.
