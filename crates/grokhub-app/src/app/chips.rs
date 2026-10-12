@@ -148,7 +148,7 @@ impl Cabin {
             .unwrap_or_default();
         let hour = Self::chip_hour();
         let last_night = self.last_night_hint();
-            let (local, fp, warm) = {
+        let (local, fp, warm) = {
             let user_md = if self.mem_name == "USER.md" {
                 self.mem_body.as_str()
             } else {
