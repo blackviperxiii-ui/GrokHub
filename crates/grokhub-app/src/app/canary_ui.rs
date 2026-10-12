@@ -93,6 +93,7 @@ impl Cabin {
         if closed.is_empty() {
             return;
         }
+        self.harness.self_review.history = None;
         let mut rolled = false;
         for v in &closed {
             if v.status == hx::VersionStatus::RolledBack {
@@ -118,6 +119,7 @@ impl Cabin {
         let class = grokhub_core::outcome::skill_signature(skill);
         let label = format!("{} in {}", title.trim(), skill);
         if let Ok(v) = hx::start_trial(&dir, change, &class, &label, hx::Metric::Steps, before, after) {
+            self.harness.self_review.history = None;
             self.post_trial_note(&v);
         }
     }
@@ -193,6 +195,7 @@ impl Cabin {
             Ok(Some(change)) => {
                 let label = format!("{} (chat note)", title.trim());
                 if let Ok(v) = hx::start_trial(&dir, &change, hx::ALL_RUNS, &label, hx::Metric::Steps, &before, &format!("{text}\n")) {
+                    self.harness.self_review.history = None;
                     self.post_trial_note(&v);
                 }
                 self.status = format!("Chat note {name} added: one chat in five tries it first.");

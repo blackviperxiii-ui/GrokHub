@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Settings → Behavior no longer reads `self_review.json` (or the change-version ledger) on every paint: the cabin keeps a cache that writers update, so the Settings page stays off the disk while it is open.
 - Added: GrokHub keeps a copy of each file before the agent edits it; `/rewind step` lists the agent's steps and puts any file back as it was.
 - Fixed: channel switch no longer force-moves a local `main`/`beta` that is ahead of origin (fast-forward or refuse); Update recover resets to `origin/main`/`origin/beta` (not an old release tag); backup commits ignore GPG signing.
 - Fixed: long chats and tasks no longer stop with a context error; GrokHub compacts again whenever the context fills and retries once after a context-overflow reply, keeping the latest steps word for word.
