@@ -94,6 +94,7 @@ pub const SHORTCUTS: &[Shortcut] = &[
     Shortcut { keys: "Ctrl+,", action: "Settings", scope: "Global" },
     Shortcut { keys: "Ctrl+/", action: "Shortcut sheet", scope: "Global" },
     Shortcut { keys: "Ctrl+F", action: "Find in this chat (Enter next, Shift+Enter previous, Esc close)", scope: "Chat" },
+    Shortcut { keys: "Ctrl+Shift+A", action: "Archive or unarchive this chat", scope: "Chat" },
     Shortcut { keys: "Enter / Esc", action: "Allow / deny tool permission (empty composer)", scope: "Chat" },
     Shortcut { keys: "Enter / Esc", action: "Confirm / cancel overlay sheet (empty composer; Ask Always stays Allow / Deny)", scope: "Chat" },
     Shortcut { keys: "Enter", action: "Send message", scope: "Composer" },

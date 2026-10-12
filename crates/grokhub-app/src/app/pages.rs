@@ -659,9 +659,21 @@ impl Cabin {
         egui::CentralPanel::default()
             .frame(egui::Frame::NONE.fill(crate::theme::bg()).inner_margin(egui::Margin::same(24)))
             .show(ui, |ui| {
-            if crate::cards::page_header(ui, "History", "Delete all") {
+            let heading = if self.history_archived {
+                "Archived"
+            } else {
+                "History"
+            };
+            if crate::cards::page_header(ui, heading, "Delete all") {
                 self.delete_all_history();
             }
+            ui.horizontal(|ui| {
+                if crate::cards::ghost_pill(ui, if self.history_archived { "Chats" } else { "Archived" })
+                {
+                    self.history_archived = !self.history_archived;
+                }
+            });
+            ui.add_space(8.0);
             let marks = session_markers(&self.threads, self.thread_idx);
             if !marks.is_empty() {
                 ui.horizontal_wrapped(|ui| {
@@ -718,60 +730,104 @@ impl Cabin {
                 self.open_history_hit(&target);
             }
             ui.add_space(16.0);
-            crate::cards::section_label(ui, "Chats");
-            ui.label(
-                RichText::new("Cabin chats. Project chats stay in the project section. Background jobs stay off this list. Delete removes the chat.")
-                    .size(12.0)
-                    .color(crate::theme::subtle()),
-            );
+            if self.history_archived {
+                crate::cards::section_label(ui, "Archived chats");
+                ui.label(
+                    RichText::new("Hidden from the main list, still searchable. Unarchive or reply to put one back. Delete removes the chat.")
+                        .size(12.0)
+                        .color(crate::theme::subtle()),
+                );
+            } else {
+                crate::cards::section_label(ui, "Chats");
+                ui.label(
+                    RichText::new("Cabin chats. Project chats stay in the project section. Background jobs stay off this list. Delete removes the chat.")
+                        .size(12.0)
+                        .color(crate::theme::subtle()),
+                );
+            }
             let live_empty = self.messages.is_empty();
-            let shown = threads::chat_section_indices(
-                &self.threads,
-                Some(self.thread_idx),
-                live_empty,
-            );
+            let shown = if self.history_archived {
+                threads::archived_section_indices(
+                    &self.threads,
+                    Some(self.thread_idx),
+                    live_empty,
+                )
+            } else {
+                threads::chat_section_indices(
+                    &self.threads,
+                    Some(self.thread_idx),
+                    live_empty,
+                )
+            };
             if shown.is_empty() {
                 ui.label(
-                    RichText::new("No chats yet.")
+                    RichText::new(if self.history_archived {
+                        "No archived chats."
+                    } else {
+                        "No chats yet."
+                    })
                         .size(13.0)
                         .color(crate::theme::muted()),
                 );
             } else {
                 let mut open: Option<usize> = None;
                 let mut del: Option<usize> = None;
-                let keys: Vec<threads::SessionSortKey> = shown
-                    .iter()
-                    .map(|&i| {
-                        let t = &self.threads[i];
-                        threads::SessionSortKey {
-                            pinned: t.pinned,
-                            pinned_ms: t.pinned_ms,
-                            accessed_ms: t.accessed_ms,
-                            list_rank: 0,
+                let mut arch: Option<usize> = None;
+                if self.history_archived {
+                    for &i in &shown {
+                        let title = self.thread_rail_title(i);
+                        if threads::is_background_history_title(&title) {
+                            continue;
                         }
-                    })
-                    .collect();
-                let order = threads::session_list_order(&keys);
-                for pos in order {
-                    let i = shown[pos];
-                    let title = self.thread_rail_title(i);
-                    if threads::is_background_history_title(&title) {
-                        continue;
+                        match crate::cards::grok_tile(
+                            ui,
+                            crate::icons::TileIcon::Chat,
+                            &title,
+                            "Archived",
+                            Some("Unarchive"),
+                            false,
+                        ) {
+                            crate::cards::TileHit::Body => open = Some(i),
+                            crate::cards::TileHit::Add => arch = Some(i),
+                            crate::cards::TileHit::None => {}
+                        }
+                        ui.add_space(6.0);
                     }
-                    let kind = if keys[pos].pinned { "Pinned" } else { "Chat" };
-                    match crate::cards::grok_tile(
-                        ui,
-                        crate::icons::TileIcon::Chat,
-                        &title,
-                        kind,
-                        Some("Delete"),
-                        false,
-                    ) {
-                        crate::cards::TileHit::Body => open = Some(i),
-                        crate::cards::TileHit::Add => del = Some(i),
-                        crate::cards::TileHit::None => {}
+                } else {
+                    let keys: Vec<threads::SessionSortKey> = shown
+                        .iter()
+                        .map(|&i| {
+                            let t = &self.threads[i];
+                            threads::SessionSortKey {
+                                pinned: t.pinned,
+                                pinned_ms: t.pinned_ms,
+                                accessed_ms: t.accessed_ms,
+                                list_rank: 0,
+                            }
+                        })
+                        .collect();
+                    let order = threads::session_list_order(&keys);
+                    for pos in order {
+                        let i = shown[pos];
+                        let title = self.thread_rail_title(i);
+                        if threads::is_background_history_title(&title) {
+                            continue;
+                        }
+                        let kind = if keys[pos].pinned { "Pinned" } else { "Chat" };
+                        match crate::cards::grok_tile(
+                            ui,
+                            crate::icons::TileIcon::Chat,
+                            &title,
+                            kind,
+                            Some("Delete"),
+                            false,
+                        ) {
+                            crate::cards::TileHit::Body => open = Some(i),
+                            crate::cards::TileHit::Add => del = Some(i),
+                            crate::cards::TileHit::None => {}
+                        }
+                        ui.add_space(6.0);
                     }
-                    ui.add_space(6.0);
                 }
                 if let Some(i) = open {
                     self.switch_thread(i);
@@ -782,8 +838,15 @@ impl Cabin {
                     self.delete_thread_at(i);
                     self.nav = Nav::History;
                 }
+                if let Some(i) = arch {
+                    self.unarchive_thread_at(i);
+                    self.nav = Nav::History;
+                    self.history_archived = true;
+                }
             }
-            self.paint_native_history_merge(ui);
+            if !self.history_archived {
+                self.paint_native_history_merge(ui);
+            }
         });
     }
 
@@ -1449,7 +1512,8 @@ impl Cabin {
             } else {
                 search_thread_body(t.messages.iter().map(|(_, c)| c.as_str()))
             };
-            thread_rows.push((format!("thread:{}", t.id), t.title.clone(), body));
+            let title = threads::search_thread_title(&t.title, threads::is_archived(t));
+            thread_rows.push((format!("thread:{}", t.id), title, body));
         }
         // Spike-3a: tool steps too, read from the span files in the thread below.
         let step_titles = self.step_search_titles();
