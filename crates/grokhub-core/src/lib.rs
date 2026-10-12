@@ -433,7 +433,7 @@ pub use review::{
 pub use rewind::{
     is_rewind_copy_cmd, is_rewind_copy_cmd_in, keep_last_rewinds, rewind_allowed,
     rewind_blocked_reason, rewind_can_queue, rewind_copy_cmd, rewind_dest, rewind_restore_matches,
-    rewind_snapshot_ready, RewindRecord,
+    rewind_sensitive, rewind_snapshot_ready, RewindRecord,
 };
 pub use shortcuts::{
     apply_composer_enter, composer_enter, composer_go, composer_go_tip, filter_palette,
