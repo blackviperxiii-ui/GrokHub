@@ -83,6 +83,7 @@ impl SpeedQuality {
             | "background:summarize"
             | "background:compact"
             | "chat:quick" => Self::Speed,
+            // repair:diagnose is Quality + Flagship lane (strongest reasoner).
             "plan" | "design" | "code:multi-file" | "debug" | "prepare:hard"
             | "repair:diagnose" => Self::Quality,
             _ => Self::Balanced,
@@ -665,14 +666,21 @@ pub fn build_table_with_catalog(
             };
             r.quality.unwrap_or(QUALITY_PRIOR) - wc * nc - wl * nl
         };
-        let fit = |r: &TableRow| {
+        let lane = super::capabilities::BaselineLane::of(row.class);
+        let plan_caps: Vec<_> = rows
+            .iter()
+            .map(|r| catalog.caps_or_derive(inp.reg, &r.model))
+            .collect();
+        let plan_max_r = super::capabilities::plan_max_reasoning(plan_caps.iter());
+        let score = |r: &TableRow| {
             let caps = catalog.caps_or_derive(inp.reg, &r.model);
-            super::capabilities::fit_score(&caps, &need)
+            super::capabilities::baseline_score(&caps, &need, lane, plan_max_r)
         };
-        // Capability fit first (task-class diversity), then eval/econ, then id.
+        // Baseline lane score first (reserves flagship for Flagship classes),
+        // then eval/econ, then id.
         rows.sort_by(|a, b| {
-            fit(b)
-                .total_cmp(&fit(a))
+            score(b)
+                .total_cmp(&score(a))
                 .then(econ(b).total_cmp(&econ(a)))
                 .then(
                     a.est_cost_usd
@@ -691,11 +699,7 @@ pub fn build_table_with_catalog(
                     )
                 }
                 (0, SpeedQuality::Balanced, _) => {
-                    format!(
-                        "best balance of strength and cost for {} ({})",
-                        row.plain,
-                        sq.word()
-                    )
+                    format!("best everyday balance for {} ({})", row.plain, sq.word())
                 }
                 (0, SpeedQuality::Speed, _) => {
                     format!("{} for {} in your plan", sq.best(), row.plain)
