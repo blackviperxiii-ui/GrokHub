@@ -16,10 +16,20 @@ pub const VOLATILE_SAFETY_CLOSER: &str =
     "The cabin safety, approval, honesty and no-fabrication rules earlier in this prompt always win over notes and personality tone.";
 
 /// Closes every style block, the same layering rule as a personality's.
-pub const STYLE_LINE: &str = "Talk style sets length and shape only; a personality sets tone only. Approval questions, security warnings and error facts stay plain, and the cabin safety rules win.";
+pub const STYLE_LINE: &str = "Talk style sets length and shape, and its length wins over a personality's; a personality sets tone only. Approval questions, security warnings and error facts stay plain, and the cabin safety rules win.";
 
 /// Longest casual-chat reply, in words.
 pub const SHORT_REPLY_WORDS: usize = 60;
+/// Longest answer to a question, in words.
+pub const CONCISE_REPLY_WORDS: usize = 150;
+/// Longest wrap-up after a long task, in words.
+pub const WRAP_UP_WORDS: usize = 120;
+/// Longest reply after a findings card, in words (the card carries the detail).
+pub const AFTER_CARD_WORDS: usize = 80;
+/// Longest research summary, in words, not counting its links.
+pub const SUMMARY_WORDS: usize = 200;
+/// Longest background note, in words.
+pub const QUIET_WORDS: usize = 40;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TalkStyle {
@@ -66,9 +76,34 @@ impl TalkStyle {
         matches!(self, Self::Progress | Self::Findings)
     }
 
-    /// The reply-length cap in words, for the styles that have one.
+    /// The reply-length cap in words; a draft has none.
     pub fn reply_cap_words(self) -> Option<usize> {
-        matches!(self, Self::Short).then_some(SHORT_REPLY_WORDS)
+        match self {
+            Self::Short => Some(SHORT_REPLY_WORDS),
+            Self::Concise => Some(CONCISE_REPLY_WORDS),
+            Self::Progress => Some(WRAP_UP_WORDS),
+            Self::Findings => Some(AFTER_CARD_WORDS),
+            Self::Summary => Some(SUMMARY_WORDS),
+            Self::Quiet => Some(QUIET_WORDS),
+            Self::Draft => None,
+        }
+    }
+
+    /// "short, under 60 words": the style as the trail and `/why` show it.
+    pub fn label(self) -> String {
+        let (name, cap) = match self {
+            Self::Short => ("short", "under"),
+            Self::Concise => ("concise", "under"),
+            Self::Progress => ("progress notes", "wrap-up under"),
+            Self::Findings => ("findings card", "reply under"),
+            Self::Summary => ("summary with links", "under"),
+            Self::Quiet => ("quiet", "under"),
+            Self::Draft => ("draft", ""),
+        };
+        match self.reply_cap_words() {
+            Some(words) => format!("{name}, {cap} {words} words"),
+            None => format!("{name}, no length cap"),
+        }
     }
 
     /// The instruction for the system prompt, ending in [`STYLE_LINE`].
@@ -77,11 +112,21 @@ impl TalkStyle {
             Self::Short => format!(
                 "casual chat. Reply in one to three short sentences, under {SHORT_REPLY_WORDS} words, with no headings, lists or preamble."
             ),
-            Self::Concise => "answer first, in a few sentences. Add detail only when it changes the answer, and name the sources of facts you looked up.".into(),
-            Self::Progress => "a longer task. Work through the checklist without narrating each step; the cabin shows a short progress note between phases. End with what changed and how it was checked, in a few lines.".into(),
-            Self::Findings => "a repair. Work through the checklist without narrating each step; the cabin shows a short progress note between phases. End by posting the findings card (report_findings): name each item checked, its root cause, and a one-tap fix for what is left. Then reply in a few lines.".into(),
-            Self::Summary => "research. End with a short summary and the links you used. When the work checked named items, post the findings card (report_findings) with one-tap follow-ups.".into(),
-            Self::Quiet => "background work. Say only what the person needs; leave suggestions as one-tap cards.".into(),
+            Self::Concise => format!(
+                "answer first, in a few sentences, under {CONCISE_REPLY_WORDS} words. Add detail only when it changes the answer, and name the sources of facts you looked up."
+            ),
+            Self::Progress => format!(
+                "a longer task. Work through the checklist without narrating each step; the cabin shows a short progress note between phases. End with what changed and how it was checked, under {WRAP_UP_WORDS} words."
+            ),
+            Self::Findings => format!(
+                "a repair. Work through the checklist without narrating each step; the cabin shows a short progress note between phases. End by posting the findings card (report_findings): name each item checked, its root cause, and a one-tap fix for what is left. Then reply under {AFTER_CARD_WORDS} words; the card carries the detail."
+            ),
+            Self::Summary => format!(
+                "research. End with a summary under {SUMMARY_WORDS} words and the links you used. When the work checked named items, post the findings card (report_findings) with one-tap follow-ups."
+            ),
+            Self::Quiet => format!(
+                "background work. Say only what the person needs, under {QUIET_WORDS} words; leave suggestions as one-tap cards."
+            ),
             Self::Draft => "creative. Deliver the draft itself, then at most one line about it.".into(),
         };
         format!("{STYLE_HEAD} {body}\n{STYLE_LINE}")
@@ -89,10 +134,15 @@ impl TalkStyle {
 }
 
 /// Whether a reply fits the style's length cap (always, for a style with none).
+/// Links are not counted, so a research summary can cite what it used.
 pub fn fits_cap(style: TalkStyle, reply: &str) -> bool {
-    style
-        .reply_cap_words()
-        .is_none_or(|cap| reply.split_whitespace().count() <= cap)
+    style.reply_cap_words().is_none_or(|cap| {
+        reply
+            .split_whitespace()
+            .filter(|w| !w.trim_start_matches(['(', '<', '[']).starts_with("http"))
+            .count()
+            <= cap
+    })
 }
 
 /// The system prompt with this turn's style block: an earlier style block is
@@ -149,16 +199,16 @@ mod tests {
         assert_eq!(
             TalkStyle::Short.block(),
             "Talk style for this turn: casual chat. Reply in one to three short sentences, under 60 words, with no headings, lists or preamble.\n\
-             Talk style sets length and shape only; a personality sets tone only. Approval questions, security warnings and error facts stay plain, and the cabin safety rules win."
+             Talk style sets length and shape, and its length wins over a personality's; a personality sets tone only. Approval questions, security warnings and error facts stay plain, and the cabin safety rules win."
         );
         assert_eq!(TalkStyle::Short.reply_cap_words(), Some(60));
-        assert_eq!(TalkStyle::Progress.reply_cap_words(), None);
+        assert_eq!(TalkStyle::Draft.reply_cap_words(), None);
         let golden =
             "Hey! Doing well, thanks. Want me to pick up where we left off on the backup script?";
         assert!(fits_cap(TalkStyle::Short, golden));
         let rambling = "word ".repeat(61);
         assert!(!fits_cap(TalkStyle::Short, &rambling));
-        assert!(fits_cap(TalkStyle::Progress, &rambling));
+        assert!(fits_cap(TalkStyle::Draft, &rambling));
         assert!(TalkStyle::Progress.progress_notes() && TalkStyle::Findings.progress_notes());
         assert!(!TalkStyle::Short.progress_notes() && !TalkStyle::Summary.progress_notes());
     }
@@ -197,5 +247,96 @@ mod tests {
             restyle("", TalkStyle::Quiet),
             format!("{}\n\n{VOLATILE_SAFETY_CLOSER}", TalkStyle::Quiet.block())
         );
+    }
+
+    const ALL: [TalkStyle; 7] = [
+        TalkStyle::Short,
+        TalkStyle::Concise,
+        TalkStyle::Progress,
+        TalkStyle::Findings,
+        TalkStyle::Summary,
+        TalkStyle::Quiet,
+        TalkStyle::Draft,
+    ];
+
+    /// A reply each row should produce, written to the row's shape. Each must
+    /// fit its cap, and the same reply padded past the cap must not.
+    const GOLDEN: [(TalkStyle, &str); 6] = [
+        (TalkStyle::Short, "Morning! All quiet here. Want me to check on last night's backup?"),
+        (
+            TalkStyle::Concise,
+            "Yes. Port 53 is taken by systemd-resolved, so nextdns can't bind it. Set DNSStubListener=no in /etc/systemd/resolved.conf and restart systemd-resolved, then start nextdns again. Source: `ss -lntup` shows resolved on 127.0.0.53:53.",
+        ),
+        (
+            TalkStyle::Progress,
+            "Moved the 214 screenshots from Desktop into Pictures/Screenshots/2026, grouped by month. Nothing was deleted. Checked: the folder holds 214 files and Desktop has none left.",
+        ),
+        (
+            TalkStyle::Findings,
+            "The printer queue was stuck on a job from Friday; I cleared it and restarted CUPS. A test page printed. The card lists the driver update that is still waiting.",
+        ),
+        (
+            TalkStyle::Summary,
+            "The Framework 16 and the XPS 15 trade blows: the Framework is repairable and upgradable, the XPS has the better screen and battery. For Linux, the Framework has first-party support. Sources: https://frame.work/laptop16 https://www.dell.com/xps15 https://wiki.archlinux.org/title/Framework_Laptop_16",
+        ),
+        (TalkStyle::Quiet, "Nightly backup finished: 3.2 GB, no errors."),
+    ];
+
+    #[test]
+    fn each_row_has_a_tuned_cap_and_its_golden_reply_fits_it() {
+        let caps: Vec<_> = ALL.iter().map(|s| (s.label(), s.reply_cap_words())).collect();
+        assert_eq!(
+            caps,
+            vec![
+                ("short, under 60 words".to_string(), Some(60)),
+                ("concise, under 150 words".to_string(), Some(150)),
+                ("progress notes, wrap-up under 120 words".to_string(), Some(120)),
+                ("findings card, reply under 80 words".to_string(), Some(80)),
+                ("summary with links, under 200 words".to_string(), Some(200)),
+                ("quiet, under 40 words".to_string(), Some(40)),
+                ("draft, no length cap".to_string(), None),
+            ]
+        );
+        for (style, reply) in GOLDEN {
+            assert!(fits_cap(style, reply), "{style:?}: {reply}");
+            let cap = style.reply_cap_words().unwrap();
+            let padded = format!("{reply} {}", "more ".repeat(cap));
+            assert!(!fits_cap(style, &padded), "{style:?} let a padded reply through");
+            // The block tells the model the same cap the fixture checks.
+            assert!(style.block().contains(&format!("under {cap} words")), "{style:?}");
+        }
+        // Links don't count toward a summary's words.
+        let links = "https://example.com/a ".repeat(300);
+        assert!(fits_cap(TalkStyle::Summary, &format!("Two sources agree. {links}")));
+        assert!(!TalkStyle::Draft.block().contains("words"));
+    }
+
+    #[test]
+    fn every_shipped_personality_composes_with_every_style() {
+        for p in crate::personality::builtins() {
+            let voice = p.prompt_block();
+            let system = if voice.is_empty() {
+                "RULES".to_string()
+            } else {
+                // The cabin's order: rules, then the voice, then the closer.
+                assert!(!voice.contains("\n\n"), "{}: a blank line would split the voice", p.id);
+                format!("RULES\n\n{voice}\n\n{VOLATILE_SAFETY_CLOSER}")
+            };
+            for style in ALL {
+                let out = restyle(&system, style);
+                let block = style.block();
+                assert_eq!(out.matches(block.as_str()).count(), 1, "{} {style:?}", p.id);
+                assert_eq!(out.matches(STYLE_HEAD).count(), 1, "{} {style:?}", p.id);
+                assert!(out.starts_with("RULES\n\n"), "{} {style:?}", p.id);
+                assert!(out.ends_with(&format!("{block}\n\n{VOLATILE_SAFETY_CLOSER}")), "{} {style:?}", p.id);
+                if !voice.is_empty() {
+                    // The voice is kept byte for byte, and the style's length line comes after it.
+                    let at_voice = out.find(voice.as_str()).unwrap();
+                    assert!(at_voice < out.find(STYLE_HEAD).unwrap(), "{} {style:?}", p.id);
+                }
+                // Swapping to another style and back leaves the same prompt.
+                assert_eq!(restyle(&restyle(&out, TalkStyle::Draft), style), out, "{} {style:?}", p.id);
+            }
+        }
     }
 }

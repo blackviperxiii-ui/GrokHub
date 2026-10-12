@@ -11,6 +11,59 @@ use crate::episode::clip_bytes;
 const TEMPLATE: &str = include_str!("prompt_template.md");
 const AGENTS_CAP: usize = 64 * 1024;
 
+/// Which surface is building the system prompt.
+///
+/// Chat keeps the full skills reminder and plugin extras. Background and
+/// Unattended drop those unless the job declares a [`PromptNeed`]. Review is
+/// the lean nightly body from [`grokhub_core::review_system_prompt`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PromptProfile {
+    Chat,
+    Background,
+    Unattended,
+    Review,
+}
+
+/// Extras a job opts into beyond the profile default.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct PromptNeed {
+    pub skills: bool,
+    pub plugins: bool,
+}
+
+impl PromptNeed {
+    pub const NONE: Self = Self {
+        skills: false,
+        plugins: false,
+    };
+    pub const SKILLS: Self = Self {
+        skills: true,
+        plugins: false,
+    };
+    pub const FULL: Self = Self {
+        skills: true,
+        plugins: true,
+    };
+}
+
+/// Parse `NEED_SKILLS` / `NEED_PLUGINS` tokens from a job brief or task body.
+pub fn prompt_need_from_job(job: &str) -> PromptNeed {
+    PromptNeed {
+        skills: job.contains("NEED_SKILLS"),
+        plugins: job.contains("NEED_PLUGINS"),
+    }
+}
+
+impl PromptProfile {
+    fn want_skills(self, need: PromptNeed) -> bool {
+        matches!(self, PromptProfile::Chat) || need.skills
+    }
+
+    fn want_plugins(self, need: PromptNeed) -> bool {
+        matches!(self, PromptProfile::Chat) || need.plugins
+    }
+}
+
 struct AgentsCache {
     key: Vec<(PathBuf, Option<SystemTime>)>,
     text: Option<String>,
@@ -21,17 +74,47 @@ static AGENTS_CACHE: Mutex<Option<AgentsCache>> = Mutex::new(None);
 /// Legacy entry: the whole `cabin_rules` blob is treated as the stable prefix
 /// (no volatile tail). Prefer [`system_prompt_parts`] for cache-friendly order.
 pub fn system_prompt(cabin_rules: &str, workspace: &Path) -> String {
-    compose(cabin_rules, "", workspace, grokhub_core::user_home().as_deref())
+    system_prompt_with(
+        PromptProfile::Chat,
+        cabin_rules,
+        "",
+        workspace,
+        PromptNeed::FULL,
+    )
 }
 
-/// Cache-friendly system prompt: stable rules + disk blocks first, volatile
+/// Cache-friendly chat system prompt: stable rules + disk blocks first, volatile
 /// personality / tuned notes / learned brief last.
 pub fn system_prompt_parts(stable_rules: &str, volatile_tail: &str, workspace: &Path) -> String {
+    system_prompt_with(
+        PromptProfile::Chat,
+        stable_rules,
+        volatile_tail,
+        workspace,
+        PromptNeed::FULL,
+    )
+}
+
+/// Build a system prompt for `profile`. Background and Unattended omit the
+/// skills reminder and plugin extras unless `need` asks for them. Safety text
+/// from the template (and caller-supplied cabin rules) always stays.
+pub fn system_prompt_with(
+    profile: PromptProfile,
+    stable_rules: &str,
+    volatile_tail: &str,
+    workspace: &Path,
+    need: PromptNeed,
+) -> String {
+    if profile == PromptProfile::Review {
+        return grokhub_core::review_system_prompt().to_string();
+    }
     compose(
         stable_rules,
         volatile_tail,
         workspace,
         grokhub_core::user_home().as_deref(),
+        profile,
+        need,
     )
 }
 
@@ -40,6 +123,8 @@ fn compose(
     volatile_tail: &str,
     workspace: &Path,
     home: Option<&Path>,
+    profile: PromptProfile,
+    need: PromptNeed,
 ) -> String {
     let started = Instant::now();
     let mut out = template_body();
@@ -53,16 +138,21 @@ fn compose(
         out.push_str(&agents);
         out.push_str("\n</agents>");
     }
-    let skills = crate::skills::discover(workspace, home, &crate::plugins::skill_dirs(workspace));
-    let reminder = crate::skills::reminder(&skills);
-    if !reminder.is_empty() {
-        out.push_str("\n\n");
-        out.push_str(&reminder);
+    if profile.want_skills(need) {
+        let skills =
+            crate::skills::discover(workspace, home, &crate::plugins::skill_dirs(workspace));
+        let reminder = crate::skills::reminder(&skills);
+        if !reminder.is_empty() {
+            out.push_str("\n\n");
+            out.push_str(&reminder);
+        }
     }
-    let extras = crate::plugins::prompt_extras(workspace);
-    if !extras.is_empty() {
-        out.push_str("\n\n");
-        out.push_str(&extras);
+    if profile.want_plugins(need) {
+        let extras = crate::plugins::prompt_extras(workspace);
+        if !extras.is_empty() {
+            out.push_str("\n\n");
+            out.push_str(&extras);
+        }
     }
     let tail = volatile_tail.trim();
     if !tail.is_empty() {
@@ -189,6 +279,34 @@ fn regular_file(path: &Path) -> bool {
 mod tests {
     use super::*;
 
+    fn fixture_workspace(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "gh-prompt-{tag}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("AGENTS.md"), "Prefer small patches.\n").unwrap();
+        // Enough skills to fill most of the ~4 KiB reminder so Background is
+        // ≥30% smaller than Chat on this fixture.
+        let desc = "d".repeat(160);
+        for i in 0..28 {
+            let name = format!("bulk-skill-{i:02}");
+            let skill_dir = dir.join(".grok/skills").join(&name);
+            std::fs::create_dir_all(&skill_dir).unwrap();
+            std::fs::write(
+                skill_dir.join("SKILL.md"),
+                format!("---\nname: {name}\ndescription: {desc}\n---\nBody {i}.\n"),
+            )
+            .unwrap();
+        }
+        dir
+    }
+
     #[test]
     fn prompt_strips_notice_and_appends_rules_and_agents() {
         let dir = std::env::temp_dir().join(format!("gh-prompt-{}", std::process::id()));
@@ -231,7 +349,14 @@ mod tests {
         let cwd_at = layered.find("CWD_MARK").unwrap();
         assert!(global_at < root_at && root_at < cwd_at, "{layered}");
         assert!(layered.len() <= AGENTS_CAP, "{}", layered.len());
-        let full = compose("Cabin rule line.", "", &cwd, Some(&home));
+        let full = compose(
+            "Cabin rule line.",
+            "",
+            &cwd,
+            Some(&home),
+            PromptProfile::Chat,
+            PromptNeed::FULL,
+        );
         assert!(full.find("Cabin rule line.").unwrap() < full.find("GLOBAL_MARK").unwrap());
         assert!(full.contains("<agents>"));
         let _ = std::fs::remove_dir_all(&root);
@@ -250,11 +375,39 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("AGENTS.md"), "Stable agents line.\n").unwrap();
-        let base = compose("STABLE_RULES", "", &dir, None);
-        let again = compose("STABLE_RULES", "", &dir, None);
+        let base = compose(
+            "STABLE_RULES",
+            "",
+            &dir,
+            None,
+            PromptProfile::Chat,
+            PromptNeed::FULL,
+        );
+        let again = compose(
+            "STABLE_RULES",
+            "",
+            &dir,
+            None,
+            PromptProfile::Chat,
+            PromptNeed::FULL,
+        );
         assert_eq!(base, again, "same inputs must be byte-identical");
-        let with_a = compose("STABLE_RULES", "VOLATILE_A", &dir, None);
-        let with_b = compose("STABLE_RULES", "VOLATILE_B", &dir, None);
+        let with_a = compose(
+            "STABLE_RULES",
+            "VOLATILE_A",
+            &dir,
+            None,
+            PromptProfile::Chat,
+            PromptNeed::FULL,
+        );
+        let with_b = compose(
+            "STABLE_RULES",
+            "VOLATILE_B",
+            &dir,
+            None,
+            PromptProfile::Chat,
+            PromptNeed::FULL,
+        );
         assert!(with_a.starts_with(&base), "volatile A must only extend the stable prefix");
         assert!(with_b.starts_with(&base), "volatile B must only extend the stable prefix");
         assert!(with_a.ends_with("VOLATILE_A"));
@@ -293,5 +446,116 @@ mod tests {
         assert!(second.contains("SECOND"), "{second}");
         assert!(!second.contains("FIRST"), "{second}");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn every_profile_keeps_safety_rules() {
+        let dir = fixture_workspace("safety");
+        let honesty = "Do not invent a source, a count, or a fact.";
+        let rules = honesty;
+        for profile in [
+            PromptProfile::Chat,
+            PromptProfile::Background,
+            PromptProfile::Unattended,
+        ] {
+            let text = system_prompt_with(profile, rules, "", &dir, PromptNeed::NONE);
+            assert!(
+                text.contains("<dangerous_actions>"),
+                "{profile:?} must keep template safety: {}",
+                text.len()
+            );
+            assert!(
+                text.contains("UNTRUSTED"),
+                "{profile:?} must keep fence honesty"
+            );
+            assert!(
+                text.contains(honesty),
+                "{profile:?} must keep cabin honesty rules"
+            );
+        }
+        let review = system_prompt_with(PromptProfile::Review, rules, "", &dir, PromptNeed::NONE);
+        assert_eq!(review, grokhub_core::review_system_prompt());
+        assert!(
+            review.contains("Do not dump a chat reply"),
+            "Review profile keeps its lean safety contract: {review}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn background_prompt_at_least_30_percent_smaller_than_chat() {
+        let dir = fixture_workspace("size");
+        let rules = grokhub_core::cabin_rules::CABIN_DESKTOP_RULES;
+        let chat = system_prompt_with(PromptProfile::Chat, rules, "", &dir, PromptNeed::FULL);
+        let background =
+            system_prompt_with(PromptProfile::Background, rules, "", &dir, PromptNeed::NONE);
+        assert!(chat.contains("<skills>"), "fixture must load skills into Chat");
+        assert!(
+            !background.contains("<skills>"),
+            "Background must drop skills by default: {}",
+            background.len()
+        );
+        let chat_bytes = chat.len();
+        let bg_bytes = background.len();
+        let saved = chat_bytes.saturating_sub(bg_bytes);
+        let pct = (saved as f64) * 100.0 / (chat_bytes as f64);
+        assert!(
+            pct >= 30.0,
+            "Background must be ≥30% smaller than Chat: chat={chat_bytes} bg={bg_bytes} saved={pct:.1}%"
+        );
+        // Rough token estimate for the PR body (chars/4).
+        let chat_tok = chat_bytes.div_ceil(4);
+        let bg_tok = bg_bytes.div_ceil(4);
+        assert!(chat_tok > bg_tok, "chat_tok={chat_tok} bg_tok={bg_tok}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn job_declaring_skills_still_gets_them() {
+        let dir = fixture_workspace("need-skills");
+        let rules = "Cabin rule line.";
+        let plain = system_prompt_with(
+            PromptProfile::Background,
+            rules,
+            "",
+            &dir,
+            PromptNeed::NONE,
+        );
+        assert!(!plain.contains("<skills>"), "{plain}");
+        let need = prompt_need_from_job("Run the weekly report.\nNEED_SKILLS\n");
+        assert_eq!(need, PromptNeed::SKILLS);
+        let with = system_prompt_with(PromptProfile::Background, rules, "", &dir, need);
+        assert!(with.contains("<skills>"), "{with}");
+        assert!(with.contains("bulk-skill-00"), "{with}");
+        assert!(with.contains("<dangerous_actions>"));
+        let unattended = system_prompt_with(
+            PromptProfile::Unattended,
+            rules,
+            "",
+            &dir,
+            prompt_need_from_job("NEED_SKILLS and finish"),
+        );
+        assert!(unattended.contains("<skills>"), "{unattended}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn prompt_need_from_job_parses_tokens() {
+        assert_eq!(prompt_need_from_job("plain task"), PromptNeed::NONE);
+        assert_eq!(
+            prompt_need_from_job("NEED_SKILLS"),
+            PromptNeed::SKILLS
+        );
+        assert_eq!(
+            prompt_need_from_job("NEED_PLUGINS only"),
+            PromptNeed {
+                skills: false,
+                plugins: true
+            }
+        );
+        assert_eq!(
+            prompt_need_from_job("NEED_SKILLS\nNEED_PLUGINS"),
+            PromptNeed::FULL
+        );
     }
 }

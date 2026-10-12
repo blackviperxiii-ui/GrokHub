@@ -359,10 +359,13 @@ impl BriefLine {
         }
     }
 
-    /// "Brief: …" and, when they matched, "Policy: …" and "Playbook: …".
+    /// "Brief: …" and, when they matched, "Policy: …", "Talk: …" and "Playbook: …".
     pub fn lines(&self) -> Vec<String> {
         let mut out = vec![format!("Brief: {}", self.brief.label())];
-        out.extend(self.policy.as_ref().map(|p| format!("Policy: {}", p.label())));
+        if let Some(p) = &self.policy {
+            out.push(format!("Policy: {}", p.label()));
+            out.push(format!("Talk: {}", p.style().label()));
+        }
         if !self.playbook.is_empty() {
             out.push(format!("Playbook: {}", self.playbook));
         }
