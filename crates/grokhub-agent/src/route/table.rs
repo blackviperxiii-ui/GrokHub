@@ -994,9 +994,9 @@ pub fn rebuild(config_dir: &Path, eval: Option<EvalEnv<'_>>, force: bool, now_ms
     }
 }
 
-/// "How Auto picks": one line per class with its top model@effort and setting.
+/// "How Auto picks": one line per class with its baseline model@effort and setting.
 pub fn how_auto_picks(table: &RoutingTable) -> Vec<String> {
-    CLASS_TABLE
+    let mut lines: Vec<String> = CLASS_TABLE
         .iter()
         .map(|row| {
             let ct = table.classes.get(row.class);
@@ -1008,13 +1008,15 @@ pub fn how_auto_picks(table: &RoutingTable) -> Vec<String> {
                 .map(|c| c.speed_quality)
                 .unwrap_or(SpeedQuality::of(row.class));
             format!(
-                "{} → {} ({})",
+                "{} → {} ({} · baseline)",
                 row.class,
                 top.unwrap_or_else(|| "today's model".into()),
                 sq.word()
             )
         })
-        .collect()
+        .collect();
+    lines.push(super::attention::TABLE_ATTENTION_NOTE.into());
+    lines
 }
 
 /// `/why table`: the same list, plus the version and when it was built.

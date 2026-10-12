@@ -107,6 +107,15 @@ fn ask<'a>(class: &'a str, model: &'a str) -> RouteInput<'a> {
     }
 }
 
+fn ask_text<'a>(class: &'a str, model: &'a str, text: &'a str, d: f64) -> RouteInput<'a> {
+    RouteInput {
+        text,
+        d,
+        needs_tools: true,
+        ..ask(class, model)
+    }
+}
+
 fn top_of(table: &table::RoutingTable, class: &str) -> String {
     table.rows(class)[0].model.clone()
 }
@@ -512,6 +521,67 @@ fn repair_diagnose_always_picks_the_strongest_reasoning_model() {
         NOW,
     );
     assert_eq!(r8.model, "grok-4.8");
+}
+
+#[test]
+fn high_risk_ask_escalates_off_chat_baseline_and_trivial_background_stays_cheap() {
+    let ids = [
+        "grok-4.7",
+        "grok-4.3",
+        "grok-4.20-0309-reasoning",
+        "grok-4.20-0309-non-reasoning",
+    ];
+    let (reg, profiles) = plan_with(&ids);
+    let table = build_table(
+        &TableInputs {
+            reg: &reg,
+            profiles: &profiles,
+        },
+        &EvalCache::default(),
+        NOW,
+    );
+    // Baseline chat is mid workhorse.
+    assert_eq!(top_of(&table, "chat:default"), "grok-4.20-0309-reasoning");
+    // Host-risk ask escalates to strongest reasoning (built-in logic, no LLM).
+    let hot = Router::choose(
+        &ask_text(
+            "chat:default",
+            "grok-4.20-0309-reasoning",
+            "Please sudo rm -rf /etc/old after backup — diagnose the boot issue",
+            0.4,
+        ),
+        &reg,
+        &profiles,
+        &table,
+        NOW,
+    );
+    assert_eq!(hot.model, "grok-4.7");
+    assert!(
+        hot.rule_ids.iter().any(|r| r.starts_with("attn:escalate")),
+        "{:?}",
+        hot.rule_ids
+    );
+    assert!(
+        hot.reason.contains("host") || hot.reason.contains("escalat"),
+        "{}",
+        hot.reason
+    );
+
+    // Trivial background stays on the cheap task model.
+    let cold = Router::choose(
+        &ask_text(
+            "background:triage",
+            "grok-4.7",
+            "Label this line as bug or feature",
+            0.1,
+        ),
+        &reg,
+        &profiles,
+        &table,
+        NOW,
+    );
+    assert_eq!(cold.model, "grok-4.20-0309-non-reasoning");
+    assert!(!cold.rule_ids.iter().any(|r| r.starts_with("attn:escalate")));
 }
 
 #[test]

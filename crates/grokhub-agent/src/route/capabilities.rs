@@ -1,8 +1,9 @@
 //! Capability catalog for Auto: what each available model is good at, and
-//! which strengths each call class needs. Pure scoring — no LLM call on the
-//! hot path. A versioned seed plus live listing metadata fill
+//! which strengths each call class needs. A high-fidelity, low-latency local
+//! scorer (versioned seed research + live listing metadata) fills
 //! `{config}/models/capability_catalog.json`; rebuild refreshes it when the
-//! registry hash changes (Refresh models / periodic refresh).
+//! registry hash changes. Token efficiency is for the *task* model Auto picks
+//! — not for weakening this catalog or the attention layer that reads the ask.
 
 use std::collections::BTreeMap;
 use std::path::Path;
