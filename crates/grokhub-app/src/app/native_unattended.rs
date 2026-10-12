@@ -4,6 +4,8 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use grokhub_agent::route::goal::{pin_goal, Goal, RouteGoal};
+
 use super::*;
 
 struct ReadyModel {
@@ -23,6 +25,16 @@ struct Prepared {
     gate: grokhub_agent::Gate,
     prompt: String,
     image: Option<String>,
+    /// Brain 4: the router goal pinned on the run's session (cost while you're active).
+    goal: Option<RouteGoal>,
+}
+
+/// The model a background ask runs on: the cheap tier while it runs on the cost goal.
+fn tier_model(model: &str, goal: Option<&RouteGoal>) -> String {
+    match goal {
+        Some(g) if g.goal == Goal::Cost => grokhub_core::model_for_mode("fast").to_string(),
+        _ => model.to_string(),
+    }
 }
 
 #[cfg(test)]
@@ -163,6 +175,10 @@ fn fast_gate() -> grokhub_agent::Gate {
 fn execute(job: Prepared) -> grokhub_agent::UnattendedDone {
     let cancel = grokhub_agent::CancelToken::new();
     let session = job.session_id.clone();
+    let goal = job.goal.is_some();
+    if goal {
+        pin_goal(&session, job.goal.clone());
+    }
     let _ = grokhub_agent::hub_for(&session);
     grokhub_agent::watch_cancel(&session, cancel.clone());
     let desktop_ops = if job.gate.desktop {
@@ -171,7 +187,7 @@ fn execute(job: Prepared) -> grokhub_agent::UnattendedDone {
     } else {
         None
     };
-    grokhub_agent::run_unattended(grokhub_agent::UnattendedRun {
+    let done = grokhub_agent::run_unattended(grokhub_agent::UnattendedRun {
         client: job.ready.client,
         workspace: job.workspace,
         model: job.model,
@@ -192,7 +208,11 @@ fn execute(job: Prepared) -> grokhub_agent::UnattendedDone {
         desktop_ops,
         imagine_bearer: job.ready.bearer,
         resume: job.resume,
-    })
+    });
+    if goal {
+        pin_goal(&done.session_id, None);
+    }
+    done
 }
 
 pub(super) fn single_turn_json(done: &grokhub_agent::UnattendedDone) -> String {
@@ -221,6 +241,7 @@ fn fast_once(
     prompt: &str,
     model: &str,
     kind: Option<JobKind>,
+    goal: Option<&RouteGoal>,
 ) -> Result<String, String> {
     let done = execute(Prepared {
         ready: ReadyModel {
@@ -237,6 +258,7 @@ fn fast_once(
         gate: fast_gate(),
         prompt: prompt.to_string(),
         image: None,
+        goal: goal.cloned(),
     });
     settle_ephemeral(&done, kind);
     if done.stop_reason == "halted" || done.stop_reason == "cancelled" {
@@ -257,12 +279,14 @@ fn fast_text(
     workspace: &Path,
     prompt: &str,
     kind: Option<JobKind>,
+    goal: Option<&RouteGoal>,
 ) -> Result<String, String> {
-    let primary = fast_once(ready, workspace, prompt, CABIN_FAST_MODEL, kind)?;
+    let model = tier_model(CABIN_FAST_MODEL, goal);
+    let primary = fast_once(ready, workspace, prompt, &model, kind, goal)?;
     if !primary.trim().is_empty() {
         return Ok(primary);
     }
-    fast_once(ready, workspace, prompt, CABIN_FAST_FALLBACK, kind)
+    fast_once(ready, workspace, prompt, CABIN_FAST_FALLBACK, kind, goal)
 }
 
 fn native_rules(cabin: &Cabin, workspace: &std::path::Path, job: &str) -> String {
@@ -357,6 +381,7 @@ impl Cabin {
             gate,
             prompt,
             image: None,
+            goal: None,
         };
         std::thread::spawn(move || {
             let _origin = grokhub_agent::harness::OriginScope::enter(grokhub_agent::harness::Origin::Automation);
@@ -414,7 +439,8 @@ impl Cabin {
             .collect();
         let chip_habits = top_habit_labels(&self.chip_memory, 6);
         let now = now_ms();
-        let model = model_for_mode("balanced").to_string();
+        let goal = self.bg_goal(JobKind::Review);
+        let model = tier_model(model_for_mode("balanced"), goal.as_ref());
         let prompt = grokhub_agent::system_prompt_with(
             grokhub_agent::PromptProfile::Review,
             "",
@@ -459,6 +485,7 @@ impl Cabin {
                 gate: fast_gate(),
                 prompt: digest,
                 image: None,
+                goal,
             });
             settle_ephemeral(&done, Some(JobKind::Review));
             let out = if done.stop_reason == "halted" || done.stop_reason == "cancelled" {
@@ -506,7 +533,7 @@ impl Cabin {
         self.chip_rx = Some(rx);
         self.chip_busy = true;
         std::thread::spawn(move || {
-            let text = fast_text(&ready, &workspace, &prompt, None).unwrap_or_default();
+            let text = fast_text(&ready, &workspace, &prompt, None, None).unwrap_or_default();
             let _ = tx.send(parse_llm_chips(&text));
         });
     }
@@ -524,7 +551,7 @@ impl Cabin {
         self.greeting_rx = Some(rx);
         self.greeting_busy = true;
         std::thread::spawn(move || {
-            let text = fast_text(&ready, &workspace, &prompt, None).unwrap_or_default();
+            let text = fast_text(&ready, &workspace, &prompt, None, None).unwrap_or_default();
             let _ = tx.send(text);
         });
     }
@@ -545,9 +572,11 @@ impl Cabin {
             }
         };
         let workspace = self.grok_cwd();
+        let goal = kind.and_then(|k| self.bg_goal(k));
         std::thread::spawn(move || {
             let _origin = grokhub_agent::harness::OriginScope::enter(grokhub_agent::harness::Origin::Proactive);
-            let text = fast_text(&ready, &workspace, &prompt, kind).unwrap_or_default();
+            let text =
+                fast_text(&ready, &workspace, &prompt, kind, goal.as_ref()).unwrap_or_default();
             let _ = tx.send(text);
         });
     }
@@ -564,12 +593,14 @@ impl Cabin {
             }
         };
         let workspace = self.grok_cwd();
+        let goal = self.bg_goal(JobKind::Digest);
         let (tx, rx) = mpsc::channel();
         self.digest_rx = Some(rx);
         self.digest_busy = true;
         std::thread::spawn(move || {
             let digest = Some(JobKind::Digest);
-            let out = fast_once(&ready, &workspace, &prompt, CABIN_FAST_MODEL, digest);
+            let model = tier_model(CABIN_FAST_MODEL, goal.as_ref());
+            let out = fast_once(&ready, &workspace, &prompt, &model, digest, goal.as_ref());
             let _ = tx.send(out);
         });
     }
@@ -769,6 +800,84 @@ mod tests {
             grokhub_core::feed_group_key(&b).as_deref(),
             Some("run:loop-b")
         );
+    }
+
+    /// Records each request's model and the router goal its session carried.
+    struct Seen(std::sync::Mutex<Vec<(String, Option<String>)>>);
+
+    impl ModelClient for Seen {
+        fn stream(
+            &self,
+            req: &grokhub_agent::ResponsesRequest,
+            _cancel: &grokhub_agent::CancelToken,
+            sink: &mut dyn FnMut(StreamEvent),
+        ) -> Result<TurnOutput, ClientError> {
+            let goal = grokhub_agent::route::goal::goal_for(&[req.conversation_id.as_str()]);
+            self.0
+                .lock()
+                .unwrap_or_else(|err| err.into_inner())
+                .push((req.model.clone(), goal.map(|g| g.label())));
+            sink(StreamEvent::TextDelta("A note.".into()));
+            Ok(TurnOutput {
+                text: "A note.".into(),
+                ..Default::default()
+            })
+        }
+    }
+
+    #[test]
+    fn the_cheap_tier_is_the_fast_model_only_on_the_cost_goal() {
+        let cost = RouteGoal::of("cost", "user active");
+        let quality = RouteGoal::of("quality", "mistakes can break the system");
+        assert_eq!(tier_model("grok-4.3", cost.as_ref()), "grok-3-mini-fast");
+        assert_eq!(tier_model("grok-4.3", quality.as_ref()), "grok-4.3");
+        assert_eq!(tier_model("grok-4.7", None), "grok-4.7");
+    }
+
+    #[test]
+    fn while_you_type_the_review_and_digest_run_cheap_on_the_cost_goal_and_idle_runs_full() {
+        let (_lock, root, _env) = isolated("brain4-cheap");
+        let seen = Arc::new(Seen(std::sync::Mutex::new(Vec::new())));
+        set_unattended_client_for_test(Some(seen.clone()));
+        let mut cabin = Cabin::quiet_for_test();
+        let take = || std::mem::take(&mut *seen.0.lock().unwrap_or_else(|err| err.into_inner()));
+        cabin.composer = "half a thought".into();
+        cabin.spawn_review();
+        wait_until(|| {
+            cabin.poll_review();
+            !cabin.review_busy
+        });
+        let cheap = Some("goal cost (user active)".to_string());
+        assert_eq!(
+            take(),
+            vec![("grok-3-mini-fast".to_string(), cheap.clone())]
+        );
+        cabin.digest_wants_lookup = true;
+        cabin.follow_feed_lookup();
+        wait_until(|| {
+            cabin.poll_digest_lookup();
+            cabin.digest_pending.is_some()
+        });
+        assert_eq!(take(), vec![("grok-3-mini-fast".to_string(), cheap)]);
+        // Idle: the review is back on its own model, under the Brief's own background row.
+        cabin.composer.clear();
+        cabin.last_activity = Instant::now()
+            .checked_sub(Duration::from_secs(60))
+            .expect("a minute of uptime");
+        cabin.spawn_review();
+        wait_until(|| {
+            cabin.poll_review();
+            !cabin.review_busy
+        });
+        assert_eq!(
+            take(),
+            vec![(
+                "grok-4.3".to_string(),
+                Some("goal cost (user isn't waiting)".to_string())
+            )]
+        );
+        set_unattended_client_for_test(None);
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

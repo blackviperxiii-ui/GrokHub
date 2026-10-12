@@ -177,6 +177,7 @@ mod connectors_ui;
 mod marketplace_ui;
 mod personality_ui;
 mod playbook_ui;
+mod background_ui;
 mod interests_ui;
 mod pulse_sources_ui;
 mod harness_ui;
@@ -281,6 +282,7 @@ enum SettingsSec {
     Personality,
     Playbooks,
     Pulse,
+    Background,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -3406,27 +3408,36 @@ impl Cabin {
     }
 
     /// One governor beat: the queue of due jobs, highest priority first. Halt,
-    /// quiet hours and spent budgets are already held out of it.
+    /// quiet hours, spent budgets and (while you're active) heavy jobs are
+    /// already held out of it.
     fn run_background(&mut self, now: u64, halted: bool) {
         let day = Self::local_day();
+        let plan = self.background_plan(now, halted, &day);
+        let mut night_fired = false;
+        for job in plan.run.iter().copied() {
+            night_fired |= self.run_job(job, plan.quiet, halted, &day, night_fired);
+        }
+    }
+
+    /// The governor's plan for this beat. You being active holds every heavy job
+    /// until an idle beat; light model jobs keep running on the cost goal.
+    fn background_plan(&mut self, now: u64, halted: bool, day: &str) -> grokhub_core::TickPlan {
         let hm = Self::local_clock().hm();
+        let active = self.user_active_now();
         let plan = self.governor.tick(&grokhub_core::TickCtx {
             now_ms: now,
-            day: &day,
+            day,
             hm: &hm,
             quiet_start: &self.cfg.quiet_start,
             quiet_end: &self.cfg.quiet_end,
             halted,
-            hold_heavy: false,
+            hold_heavy: active,
             budgets: &self.cfg.background,
         });
         for note in &plan.new_notes {
             self.governor_note(note);
         }
-        let mut night_fired = false;
-        for job in plan.run.iter().copied() {
-            night_fired |= self.run_job(job, plan.quiet, halted, &day, night_fired);
-        }
+        plan
     }
 
     /// Run one job the governor handed out. True when a scheduled run fired,
