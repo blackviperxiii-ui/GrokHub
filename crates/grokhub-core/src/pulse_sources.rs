@@ -1095,7 +1095,8 @@ pub fn canonical_url(url: &str) -> String {
     out
 }
 
-/// More like this: a search for a post's own words on the next check, scored
+/// More like this: a search for a post's own words on the check that click
+/// starts (or the next scheduled check if one is already running), scored
 /// for the interest the post was for.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Related {
@@ -1104,7 +1105,7 @@ pub struct Related {
     pub topic: Option<String>,
 }
 
-/// Searches queued by More like this, kept until the next check runs them.
+/// Searches queued by More like this, drained when a check starts.
 pub const RELATED_MAX: usize = 5;
 const RELATED_WORDS: usize = 6;
 
