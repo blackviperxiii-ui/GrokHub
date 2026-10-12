@@ -113,10 +113,12 @@ pub fn absorb_outcomes(
                 .any(|r| r == REASON_CORRECTION || r == "redo");
         if stayed && failed {
             store.note_under_care(class);
-        } else if escalated && matches!(o.result, OutcomeResult::Success) && !failed {
-            if o.reasons.iter().any(|r| r == "verify_ok" || r == "done") {
-                store.note_over_care(class);
-            }
+        } else if escalated
+            && matches!(o.result, OutcomeResult::Success)
+            && !failed
+            && o.reasons.iter().any(|r| r == "verify_ok" || r == "done")
+        {
+            store.note_over_care(class);
         }
     }
 }
