@@ -360,7 +360,7 @@ mod tests {
         append_span(&dir, &click).unwrap();
         let brief = crate::brain::rules(&crate::brain::BriefInput { text: "the printer service won't start", ..Default::default() }).unwrap();
         let policy = crate::brain::pick_policy(&crate::brain::load_policy(&dir).0, &brief);
-        let line = crate::brain::BriefLine { at: 1, session: "s".into(), chat_id: "chat-7".into(), turn: 4, brief, policy, playbook: "Repair Linux".into() };
+        let line = crate::brain::BriefLine { at: 1, session: "s".into(), chat_id: "chat-7".into(), turn: 4, brief, policy, playbook: "Repair Linux".into(), ..Default::default() };
         crate::brain::record_brief(&dir, &line).unwrap();
         let other = crate::brain::BriefLine { turn: 5, brief: crate::brain::rules(&crate::brain::BriefInput { text: "hi", ..Default::default() }).unwrap(), ..line.clone() };
         crate::brain::record_brief(&dir, &other).unwrap();

@@ -208,6 +208,10 @@ impl Cabin {
         );
         let _ = oc::append_outcome(&dir, &outcome);
         let mut metrics = hx::run_metrics_from_spans(&outcome, &spans);
+        // Brain 6: the turn's Brief, policy row and playbook go on its metrics line.
+        if let Some(line) = grokhub_agent::brain::brief_for_turn(&dir, trace, turn) {
+            metrics.brain = line.run_brain();
+        }
         self.tag_trial(&mut metrics);
         let _ = run_metrics::append_run(&dir, &metrics, self.cfg.amr_retention_days);
         self.harness.self_review.last_outcome = Some(outcome);

@@ -436,6 +436,10 @@ impl Cabin {
                 let path = grokhub_agent::route::table::table_path(&dir);
                 hx::undo_change(&dir, &grokhub_agent::route::table::TableFile { path: &path }, ask).map(|d| d.now)
             }
+            (ChangeAct::Undo, ChangeKind::Policy) => hx::undo_change(&dir, &hx::PolicyTarget { config_dir: &dir }, ask).map(|d| d.now),
+            (ChangeAct::Undo, ChangeKind::Playbook) => {
+                hx::undo_change(&dir, &hx::PlaybookTarget { config_dir: &dir, id: &row.id }, ask).map(|d| d.now)
+            }
         };
         if done.is_ok() {
             self.harness.work_rows.retain(|r| !(r.kind == row.kind && r.id == row.id));

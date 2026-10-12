@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 
 use grokhub_core::playbook::{self as core_pb, Playbook, Tier};
 
-use crate::harness::HardHit;
+use crate::harness::{record_change, ChangeTarget, HardHit, Origin, PlaybookTarget};
 use crate::repair::{repair_hit, Os, ProbeId};
 
 /// Where a loaded playbook came from.
@@ -182,11 +182,13 @@ pub fn load(config_dir: &Path) -> (Vec<Loaded>, Vec<String>) {
     (out, problems)
 }
 
-/// Check and save the editor's text as `{config}/playbooks/<id>.toml`.
+/// Check and save the editor's text as `{config}/playbooks/<id>.toml`. The
+/// save is the user's version in the ChangeLedger (Brain 6), so a tweak the
+/// self-improvement loop proposed on an older one is never applied over it.
 pub fn save(config_dir: &Path, text: &str) -> Result<Playbook, String> {
     let p = parse(text)?;
-    std::fs::create_dir_all(playbooks_dir(config_dir)).map_err(|e| e.to_string())?;
-    std::fs::write(file_for(config_dir, &p.id), text).map_err(|e| e.to_string())?;
+    let target = PlaybookTarget { config_dir, id: &p.id };
+    record_change(config_dir, &target, Origin::User, "saved in Settings", || target.put(Some(text.as_bytes())))?;
     Ok(p)
 }
 
@@ -222,7 +224,8 @@ pub fn reset(config_dir: &Path, id: &str) -> Result<(), String> {
     if !path.exists() {
         return Err(format!("`{id}` has no copy of yours to reset"));
     }
-    std::fs::remove_file(path).map_err(|e| e.to_string())
+    let target = PlaybookTarget { config_dir, id };
+    record_change(config_dir, &target, Origin::User, "reset in Settings", || target.put(None)).map(|_| ())
 }
 
 /// This computer's OS, as playbooks name it.
@@ -359,6 +362,24 @@ mod tests {
             reset(&dir, SHIPPED).unwrap_err(),
             "`task-general` has no copy of yours to reset"
         );
+        // Brain 6: every save and reset is the user's version in the ledger.
+        let ledger = crate::harness::ChangeLedger::load_kind(&dir, crate::harness::ChangeKind::Playbook);
+        let lines: Vec<(String, crate::harness::ChangeOp, Origin, String)> =
+            ledger.all().iter().map(|c| (c.id.clone(), c.op, c.origin, c.label.clone())).collect();
+        use crate::harness::ChangeOp::{Create, Delete};
+        // An id the redactor reads as a key (`sk-general-copy`) is kept with dots.
+        assert_eq!(
+            lines,
+            vec![
+                (SHIPPED.into(), Create, Origin::User, "Any job".into()),
+                ("task.general.copy".into(), Create, Origin::User, "Any job (copy)".into()),
+                ("task.general.copy.2".into(), Create, Origin::User, "Any job (copy)".into()),
+                (SHIPPED.into(), Delete, Origin::User, "Any job".into()),
+                ("task.general.copy.2".into(), Delete, Origin::User, "Any job (copy)".into()),
+            ]
+        );
+        let dotted = PlaybookTarget { config_dir: &dir, id: "task.general.copy" };
+        assert_eq!(dotted.file().unwrap(), playbooks_dir(&dir).join("task-general-copy.toml"), "the ledger id names the same file");
         // A refused or misnamed file is skipped with its reason; the rest still load.
         std::fs::write(
             playbooks_dir(&dir).join("bad.toml"),
