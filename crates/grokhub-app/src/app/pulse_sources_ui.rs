@@ -202,13 +202,9 @@ fn ago_label(ms: u64, now: u64) -> String {
 }
 
 impl Cabin {
-    /// Ready interest topics to search, strongest first (evidence-gated).
+    /// Ready + searchable interest topics (evidence-gated graph, then #727 junk filter).
     fn source_topics(&mut self) -> Vec<String> {
-        self.interests_now()
-            .ready_ranked()
-            .into_iter()
-            .map(|t| t.topic.clone())
-            .collect()
+        self.interests_now().search_topics()
     }
 
     fn sources_last_run(&mut self) -> u64 {
