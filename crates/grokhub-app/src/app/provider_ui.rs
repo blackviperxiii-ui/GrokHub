@@ -73,6 +73,10 @@ pub(super) struct ProviderUi {
     pub pending: Option<PendingKey>,
     /// "Sign in with OpenRouter", running: the key it brings back.
     pub signin_rx: Option<std::sync::mpsc::Receiver<Result<String, String>>>,
+    /// Cached `providers.json` list. Paint reads this; writers clear it.
+    pub list: Option<Vec<providers::Provider>>,
+    /// Cached "Use for your chats" model ids. Cleared with the list / grants.
+    pub model_choices: Option<Vec<String>>,
 }
 
 /// A key you entered or a sign-in brought back, held until its card is answered.
@@ -167,6 +171,21 @@ pub(super) fn provider_action(p: &providers::Provider) -> String {
 }
 
 impl Cabin {
+    /// Ensure `providers.json` is in memory. Call before a paint or write path
+    /// that needs the list. Keeps Settings paint off disk.
+    pub(super) fn ensure_providers(&mut self) {
+        if self.harness.router.providers.list.is_none() {
+            let dir = crate::config::config_dir();
+            self.harness.router.providers.list = Some(providers::load_providers(&dir));
+        }
+    }
+
+    /// Drop the cached list and model choices after a writer changes disk.
+    pub(super) fn invalidate_providers(&mut self) {
+        self.harness.router.providers.list = None;
+        self.harness.router.providers.model_choices = None;
+    }
+
     /// The router reads your pick; it never writes it.
     pub(super) fn sync_provider_pick(&mut self) {
         let pick = self.cfg.provider_model.trim().to_string();
@@ -238,6 +257,7 @@ impl Cabin {
             Ok(p) => {
                 self.harness.router.providers.url.clear();
                 self.harness.router.providers.kind = 0;
+                self.invalidate_providers();
                 self.status = format!(
                     "{} added. Approve the card to allow it, or later in Settings → Permissions.",
                     p.dest()
@@ -291,6 +311,7 @@ impl Cabin {
                     self.cfg.provider_model.clear();
                     self.persist_cfg();
                 }
+                self.invalidate_providers();
                 self.status =
                     "Provider and its key removed. Revoke its grant in Settings → Permissions."
                         .into();
@@ -302,8 +323,16 @@ impl Cabin {
 
     /// Allow a provider's destination: `harness::decide` parks a hard send card.
     pub(super) fn ask_provider(&mut self, id: &str) {
-        let dir = crate::config::config_dir();
-        let Some(p) = providers::provider(&dir, id) else {
+        self.ensure_providers();
+        let Some(p) = self
+            .harness
+            .router
+            .providers
+            .list
+            .as_ref()
+            .and_then(|all| all.iter().find(|p| p.id == id))
+            .cloned()
+        else {
             return;
         };
         let ledger = self.consent().clone();
@@ -332,12 +361,22 @@ impl Cabin {
 
     /// The hard send card's Approve click: one revocable grant for this destination.
     pub(super) fn grant_provider_click(&mut self, id: &str) {
-        let dir = crate::config::config_dir();
-        let Some(p) = providers::provider(&dir, id) else {
+        self.ensure_providers();
+        let Some(p) = self
+            .harness
+            .router
+            .providers
+            .list
+            .as_ref()
+            .and_then(|all| all.iter().find(|p| p.id == id))
+            .cloned()
+        else {
             return;
         };
+        let dir = crate::config::config_dir();
         match hx::grant_destination(&dir, &p.dest(), CALL_DATA, hx::UserClick::from_click()) {
             Ok(_) => {
+                self.invalidate_providers();
                 self.status = format!("{} allowed. Revoke it in Settings → Permissions.", p.dest());
                 self.refresh_models_now();
             }
@@ -347,11 +386,36 @@ impl Cabin {
     }
 
     /// Models from providers you allowed, for "Use for your chats".
-    pub(super) fn provider_model_choices(&self) -> Vec<String> {
+    /// Uses the cabin consent cache and the cached provider list; not a fresh
+    /// `usable()` disk read on every paint.
+    pub(super) fn provider_model_choices(&mut self) -> Vec<String> {
+        if let Some(cached) = &self.harness.router.providers.model_choices {
+            return cached.clone();
+        }
+        self.ensure_providers();
         let dir = crate::config::config_dir();
-        let ready = providers::usable(&dir, CALL_DATA);
+        let locked = self.consent().locked().is_some();
+        let ready: Vec<String> = if locked {
+            Vec::new()
+        } else {
+            let ledger = self.consent().clone();
+            self.harness
+                .router
+                .providers
+                .list
+                .as_ref()
+                .into_iter()
+                .flatten()
+                .filter(|p| {
+                    ledger.destination_grant(&p.dest(), CALL_DATA).is_some()
+                        && providers::has_key(&dir, &p.id)
+                })
+                .map(|p| p.id.clone())
+                .collect()
+        };
         let (reg, _) = grokhub_agent::route::live::snapshot(&dir);
-        reg.models
+        let choices: Vec<String> = reg
+            .models
             .iter()
             .filter(|(id, r)| {
                 r.state.routable() && grokhub_agent::route::policy::is_new_provider(&reg, id)
@@ -362,17 +426,27 @@ impl Cabin {
                     .is_some_and(|p| ready.iter().any(|r| r == p))
             })
             .map(|(id, _)| id.clone())
-            .collect()
+            .collect();
+        self.harness.router.providers.model_choices = Some(choices.clone());
+        choices
     }
 
     /// Settings → Cabin defaults, under the model rows.
     pub(super) fn ui_provider_rows(&mut self, ui: &mut egui::Ui) {
+        self.ensure_providers();
         let dir = crate::config::config_dir();
         let ledger = self.consent().clone();
-        for p in providers::load_providers(&dir) {
-            let state = providers::provider_state(&dir, &ledger, &p);
+        let providers_list = self
+            .harness
+            .router
+            .providers
+            .list
+            .clone()
+            .unwrap_or_default();
+        for p in &providers_list {
+            let state = providers::provider_state(&dir, &ledger, p);
             ui.push_id(("provider-row", p.id.as_str()), |ui| {
-                if crate::cards::settings_action(ui, &provider_label(&p), state.tag(), "Remove") {
+                if crate::cards::settings_action(ui, &provider_label(p), state.tag(), "Remove") {
                     self.remove_provider_click(&p.id);
                 }
             });
@@ -443,8 +517,14 @@ impl Cabin {
     /// Settings → Permissions, "Other providers": one destination row each.
     /// Allow parks the hard send card; only its Approve writes the grant.
     pub(super) fn ui_provider_grant_rows(&mut self, ui: &mut egui::Ui, locked: Option<&str>) {
-        let dir = crate::config::config_dir();
-        let all = providers::load_providers(&dir);
+        self.ensure_providers();
+        let all = self
+            .harness
+            .router
+            .providers
+            .list
+            .clone()
+            .unwrap_or_default();
         if all.is_empty() {
             return;
         }
@@ -499,6 +579,7 @@ impl Cabin {
     pub(super) fn revoke_provider_grant(&mut self, id: &str, dest: &str) {
         match hx::revoke_grant(&crate::config::config_dir(), id) {
             Ok(_) => {
+                self.invalidate_providers();
                 self.status =
                     format!("Sending to {dest} revoked. Its models stop at the next call.")
             }
@@ -797,5 +878,82 @@ mod tests {
             provider_refresh_note(&added(&["grok-4.7"]), &[], &[or]),
             None
         );
+    }
+
+    /// Settings paint must not call `load_providers` / `usable` / raw `std::fs`.
+    /// The cabin holds a cache writers invalidate.
+    #[test]
+    fn settings_provider_paint_does_not_touch_disk() {
+        fn body<'a>(src: &'a str, name: &str) -> &'a str {
+            let needle = format!("fn {name}(");
+            let start = src
+                .find(&needle)
+                .unwrap_or_else(|| panic!("missing {name}"));
+            let after = &src[start..];
+            let end = after[needle.len()..]
+                .find("\n    fn ")
+                .or_else(|| after[needle.len()..].find("\nfn "))
+                .map(|i| needle.len() + i)
+                .unwrap_or(after.len());
+            &after[..end]
+        }
+        let src = include_str!("provider_ui.rs").replace("\r\n", "\n");
+        for name in ["ui_provider_rows", "ui_provider_grant_rows"] {
+            let paint = body(&src, name);
+            assert!(
+                !paint.contains("load_providers(")
+                    && !paint.contains("usable(")
+                    && !paint.contains("std::fs::"),
+                "{name} must paint from the cache: {paint}"
+            );
+            assert!(
+                paint.contains("ensure_providers"),
+                "{name} must call ensure_providers: {paint}"
+            );
+        }
+        let choices = body(&src, "provider_model_choices");
+        assert!(
+            !choices.contains("usable(") && !choices.contains("load_providers("),
+            "model choices must not re-read providers.json via usable/load: {choices}"
+        );
+        assert!(
+            choices.contains("model_choices") && choices.contains("ensure_providers"),
+            "model choices use the cache: {choices}"
+        );
+    }
+
+    #[test]
+    fn provider_list_cache_survives_deleting_the_file_until_invalidate() {
+        let (_pin, root) = pinned("r3b-provider-cache");
+        let mut app = Cabin::quiet_for_test();
+        providers::add_provider_as(&root, "https://openrouter.ai/api/v1", KEY, None, now_ms())
+            .expect("add");
+        app.ensure_providers();
+        assert_eq!(
+            app.harness.router.providers.list.as_ref().map(|v| v.len()),
+            Some(1)
+        );
+        let path = providers::providers_path(&root);
+        std::fs::remove_file(&path).expect("delete providers.json");
+        // Paint path: ensure again must keep the in-memory row.
+        app.ensure_providers();
+        assert_eq!(
+            app.harness
+                .router
+                .providers
+                .list
+                .as_ref()
+                .map(|v| v.iter().map(|p| p.id.as_str()).collect::<Vec<_>>()),
+            Some(vec!["openrouter"])
+        );
+        app.invalidate_providers();
+        assert!(app.harness.router.providers.list.is_none());
+        app.ensure_providers();
+        assert_eq!(
+            app.harness.router.providers.list.as_ref().map(|v| v.len()),
+            Some(0),
+            "after invalidate, a fresh load sees the deleted file"
+        );
+        let _ = std::fs::remove_dir_all(root);
     }
 }

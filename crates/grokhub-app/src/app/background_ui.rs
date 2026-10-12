@@ -30,6 +30,17 @@ pub(super) fn next_run_text(next_due_ms: u64, now_ms: u64) -> String {
     }
 }
 
+/// True when Settings → Background shows a sub-minute countdown that needs
+/// a 1 s tick. Waiting / "Due now" / minute+ labels do not.
+pub(super) fn backgrounds_need_second_tick(rows: &[JobStatus], now_ms: u64) -> bool {
+    rows.iter().any(|s| {
+        s.waiting.is_none() && {
+            let left = s.next_due_ms.saturating_sub(now_ms);
+            left > 0 && left < 60_000
+        }
+    })
+}
+
 pub(super) fn background_row(s: &JobStatus, now_ms: u64) -> BackgroundRow {
     BackgroundRow {
         name: s.kind.label(),
@@ -86,18 +97,17 @@ impl Cabin {
             ),
         );
         let now = now_ms();
-        let rows: Vec<BackgroundRow> = self
-            .governor
-            .status(&self.cfg.background)
-            .iter()
-            .map(|s| background_row(s, now))
-            .collect();
+        let statuses = self.governor.status(&self.cfg.background);
+        let rows: Vec<BackgroundRow> = statuses.iter().map(|s| background_row(s, now)).collect();
         for row in &rows {
             paint_background_row(ui, row);
             ui.add_space(6.0);
         }
-        // Next-run countdowns move on their own.
-        ui.ctx().request_repaint_after(Duration::from_secs(1));
+        // Sub-minute "Next check in Ns" labels need a 1 s tick; otherwise the
+        // cabin heartbeat (~15 s) is enough.
+        if backgrounds_need_second_tick(&statuses, now) {
+            ui.ctx().request_repaint_after(Duration::from_secs(1));
+        }
     }
 }
 
@@ -141,6 +151,78 @@ mod tests {
         assert_eq!(next_run_text(16_000, 1_000), "Next check in 15s");
         assert_eq!(next_run_text(61_000, 1_000), "Next check in 1m");
         assert_eq!(next_run_text(62_000, 1_000), "Next check in 2m");
+    }
+
+    #[test]
+    fn second_tick_only_for_sub_minute_countdowns() {
+        let waiting = JobStatus {
+            kind: JobKind::Review,
+            next_due_ms: 5_000,
+            spent_today: 0,
+            daily_budget: Some(1_000),
+            waiting: Some(JobHold::Heavy),
+        };
+        let due = JobStatus {
+            kind: JobKind::Digest,
+            next_due_ms: 1_000,
+            spent_today: 0,
+            daily_budget: Some(1_000),
+            waiting: None,
+        };
+        let soon = JobStatus {
+            kind: JobKind::Digest,
+            next_due_ms: 20_000,
+            spent_today: 0,
+            daily_budget: Some(1_000),
+            waiting: None,
+        };
+        let later = JobStatus {
+            kind: JobKind::Indexers,
+            next_due_ms: 120_000,
+            spent_today: 0,
+            daily_budget: None,
+            waiting: None,
+        };
+        assert!(!backgrounds_need_second_tick(
+            &[waiting, due, later.clone()],
+            1_000
+        ));
+        assert!(backgrounds_need_second_tick(&[soon], 1_000));
+        assert!(!backgrounds_need_second_tick(&[later], 1_000));
+    }
+
+    #[test]
+    fn background_settings_gates_the_one_second_repaint() {
+        let src = include_str!("background_ui.rs").replace("\r\n", "\n");
+        let needle = "fn ui_settings_background(";
+        let start = src.find(needle).expect("ui_settings_background");
+        let after = &src[start..];
+        let end = after[needle.len()..]
+            .find("\n    fn ")
+            .or_else(|| after[needle.len()..].find("\nfn "))
+            .map(|i| needle.len() + i)
+            .unwrap_or(after.len());
+        let body = &after[..end];
+        assert!(
+            body.contains("backgrounds_need_second_tick") && body.contains("request_repaint_after"),
+            "1 s tick must sit behind the sub-minute gate: {body}"
+        );
+        let gate = body
+            .split("if backgrounds_need_second_tick")
+            .nth(1)
+            .expect("gate before request_repaint_after");
+        assert!(
+            gate.contains("request_repaint_after"),
+            "request_repaint_after must be inside the if: {body}"
+        );
+        let before = body
+            .split("if backgrounds_need_second_tick")
+            .next()
+            .unwrap();
+        assert!(
+            !before.contains("request_repaint_after"),
+            "no ungated request_repaint_after before the gate: {body}"
+        );
     }
 
     #[test]

@@ -446,6 +446,8 @@ impl Cabin {
 
     /// Settings → Refresh models: list, probes and the table now.
     pub(super) fn refresh_models_now(&mut self) {
+        // Registry rows may change; drop the cached provider model pick list.
+        self.harness.router.providers.model_choices = None;
         self.harness.router.force_table = true;
         if let Some(clock) = self.harness.router.clock.as_mut() {
             clock.demand = true;
