@@ -921,6 +921,7 @@ mod tests {
                     vec![
                         "Brief: repair × critical, done = services, packages, boot errors, ports".into(),
                         "Policy: repair × critical, goal quality (mistakes can break the system)".into(),
+                        "Talk: findings card, reply under 80 words".into(),
                         // The repair playbook for the OS the test runs on (CI runs Linux and Windows).
                         if cfg!(windows) { "Playbook: Repair Windows".into() } else { "Playbook: Repair Linux".into() },
                     ],
@@ -932,6 +933,7 @@ mod tests {
                     vec![
                         "Brief: task × careful, done = files in place, nothing lost".into(),
                         "Policy: task × careful, goal balanced (escalate on failure)".into(),
+                        "Talk: progress notes, wrap-up under 120 words".into(),
                         "Playbook: Files".into(),
                     ],
                     "model".into()
