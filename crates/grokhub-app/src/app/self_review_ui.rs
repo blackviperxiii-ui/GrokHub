@@ -68,6 +68,12 @@ pub(super) struct SelfReviewState {
     pub settled_day: Option<String>,
     /// A code idea's issue text for the clipboard on the next frame.
     pub copy_out: Option<String>,
+    /// Cached `self_review.json`. Settings paint reads this; writers update it
+    /// then persist. `None` means load from disk on the next touch.
+    pub file: Option<SelfReviewFile>,
+    /// Cached change versions for Settings → Behavior history. Cleared when a
+    /// version is written. `None` means read the ledger on the next paint.
+    pub history: Option<Vec<hx::Version>>,
 }
 
 fn state_path() -> std::path::PathBuf {
@@ -104,16 +110,21 @@ pub(super) fn quiet_log_note(log: &[sr::QuietEntry]) -> String {
 }
 
 /// Quiet mode: the suggestion goes to the log in `self_review.json`, not Pulse.
-fn log_quiet(source: &str, title: &str, body: &str) {
-    let mut state = load_state();
+fn log_quiet(review: &mut SelfReviewState, source: &str, title: &str, body: &str) {
+    if review.file.is_none() {
+        review.file = Some(load_state());
+    }
+    let Some(file) = review.file.as_mut() else {
+        return;
+    };
     let entry = sr::QuietEntry {
         day: Cabin::local_day(),
         source: source.to_string(),
         title: title.to_string(),
         body: body.to_string(),
     };
-    sr::add_quiet_entry(&mut state.quiet_log, entry);
-    save_state(&state);
+    sr::add_quiet_entry(&mut file.quiet_log, entry);
+    save_state(file);
 }
 
 fn draft_md(cand: &sr::DraftCandidate, spans: &[hx::Span]) -> String {
@@ -239,6 +250,36 @@ impl Cabin {
         }
     }
 
+    /// Ensure `self_review.json` is in memory. Call before a paint or write.
+    pub(super) fn ensure_self_review_file(&mut self) {
+        if self.harness.self_review.file.is_none() {
+            self.harness.self_review.file = Some(load_state());
+        }
+    }
+
+    /// Mutate the cached file and write it. Keeps Settings paint off disk.
+    pub(super) fn mutate_self_review_file(&mut self, f: impl FnOnce(&mut SelfReviewFile)) {
+        self.ensure_self_review_file();
+        let Some(file) = self.harness.self_review.file.as_mut() else {
+            return;
+        };
+        f(file);
+        save_state(file);
+    }
+
+    /// Change versions for Settings history. Cached until a writer clears it.
+    pub(super) fn history_versions_now(&mut self) -> Vec<hx::Version> {
+        if self.harness.self_review.history.is_none() {
+            self.harness.self_review.history =
+                Some(hx::read_versions(&config::config_dir()));
+        }
+        self.harness
+            .self_review
+            .history
+            .clone()
+            .unwrap_or_default()
+    }
+
     /// The hour from Settings → Dream time, clamped to 0–23.
     /// Settings → Behavior: the quiet mode switch, and while it's on the
     /// newest suggestions it logged.
@@ -248,7 +289,12 @@ impl Cabin {
             self.status = "Saved".into();
         }
         if self.cfg.self_improve_quiet {
-            crate::cards::settings_note(ui, &quiet_log_note(&load_state().quiet_log));
+            self.ensure_self_review_file();
+            let note = match self.harness.self_review.file.as_ref() {
+                Some(f) => quiet_log_note(&f.quiet_log),
+                None => quiet_log_note(&[]),
+            };
+            crate::cards::settings_note(ui, &note);
         }
     }
 
@@ -286,14 +332,21 @@ impl Cabin {
     /// Sunday night: post revert and draft cards, then ask the model for
     /// skill changes off the UI thread.
     fn self_review_tonight(&mut self, today: &str, clock: &grokhub_core::LocalClock, now: u64) -> bool {
-        let mut state = load_state();
+        self.ensure_self_review_file();
+        let last_day = self
+            .harness
+            .self_review
+            .file
+            .as_ref()
+            .and_then(|s| s.last_day.clone());
         if self.harness.self_review.rx.is_some()
-            || !sr::self_review_due(state.last_day.as_deref(), today, clock, self.dream_hour())
+            || !sr::self_review_due(last_day.as_deref(), today, clock, self.dream_hour())
         {
             return false;
         }
-        state.last_day = Some(today.to_string());
-        save_state(&state);
+        self.mutate_self_review_file(|state| {
+            state.last_day = Some(today.to_string());
+        });
         self.run_self_review_now(now);
         true
     }
@@ -488,7 +541,7 @@ impl Cabin {
         grokhub_agent::route::learn::cards_posted(&dir, posted, now);
         let line = grokhub_agent::route::learn::review_line(&dir, now);
         if self.cfg.self_improve_quiet {
-            log_quiet("router-review", "Weekly router review", &line);
+            log_quiet(&mut self.harness.self_review, "router-review", "Weekly router review", &line);
             return;
         }
         let card = grokhub_core::router_update_card("router-review", "Weekly router review", &line, now);
@@ -517,20 +570,20 @@ impl Cabin {
         }
         self.harness.self_review.budget -= 1;
         if self.cfg.self_improve_quiet {
-            log_quiet(&source, title, body);
+            log_quiet(&mut self.harness.self_review, &source, title, body);
             return;
         }
         let mut card = grokhub_core::suggestion_card(&source, title, body, now);
         card.details = Some(details);
         grokhub_core::post_update(&mut self.updates, card);
-        let mut state = load_state();
-        state.pending.retain(|p| p.source != source);
-        state.pending.push(PendingProposal {
-            source,
-            skill: skill.to_string(),
-            md: md.to_string(),
+        self.mutate_self_review_file(|state| {
+            state.pending.retain(|p| p.source != source);
+            state.pending.push(PendingProposal {
+                source,
+                skill: skill.to_string(),
+                md: md.to_string(),
+            });
         });
-        save_state(&state);
     }
 
     /// The card's Apply (or Revert) item, clicked on the Pulse row menu.
@@ -542,12 +595,19 @@ impl Cabin {
         let Some(target) = sr::card_target(&card.source_id) else {
             return false;
         };
-        let state = load_state();
-        let Some(pending) = state
-            .pending
-            .iter()
-            .find(|p| p.source == card.source_id)
-            .cloned()
+        self.ensure_self_review_file();
+        let Some(pending) = self
+            .harness
+            .self_review
+            .file
+            .as_ref()
+            .and_then(|state| {
+                state
+                    .pending
+                    .iter()
+                    .find(|p| p.source == card.source_id)
+                    .cloned()
+            })
         else {
             return false;
         };
@@ -623,9 +683,9 @@ impl Cabin {
         };
         if done {
             // Reloaded: a saved code idea wrote the file since.
-            let mut state = load_state();
-            state.pending.retain(|p| p.source != card.source_id);
-            save_state(&state);
+            self.mutate_self_review_file(|state| {
+                state.pending.retain(|p| p.source != card.source_id);
+            });
             grokhub_core::dismiss_update_at(&mut self.updates, id, grokhub_core::now_ms());
             self.persist_updates();
         }
