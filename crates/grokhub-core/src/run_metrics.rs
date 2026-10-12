@@ -258,6 +258,61 @@ pub fn find_run(config_dir: &Path, run: &str) -> Option<RunMetrics> {
     read_runs(config_dir).into_iter().find(|m| m.run == run)
 }
 
+/// Brain 6 PR 2: one area's runs (the run's Brief domain) for the change
+/// history. A run worked unless it failed, as the trial evaluator counts it.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DomainRow {
+    pub domain: String,
+    pub runs: usize,
+    pub worked: usize,
+    pub steps: u64,
+    /// Runs that passed their verify (the playbook's re-check).
+    pub verified: usize,
+}
+
+fn pct(n: usize, of: usize) -> usize {
+    (n * 100 + of / 2).checked_div(of).unwrap_or(0)
+}
+
+impl DomainRow {
+    /// "system · 4 runs · 75% worked · 6.5 steps · 50% checked".
+    pub fn line(&self) -> String {
+        let avg = if self.runs == 0 { 0.0 } else { self.steps as f64 / self.runs as f64 };
+        format!(
+            "{} · {} run{} · {}% worked · {avg:.1} steps · {}% checked",
+            self.domain,
+            self.runs,
+            if self.runs == 1 { "" } else { "s" },
+            pct(self.worked, self.runs),
+            pct(self.verified, self.runs)
+        )
+    }
+}
+
+/// One row per domain the runs name, in the Brief's domain order (unknown
+/// names after, by name). Runs without a Brain record (older lines) name no
+/// domain and are skipped.
+pub fn domain_rows(runs: &[RunMetrics]) -> Vec<DomainRow> {
+    let mut rows: Vec<DomainRow> = Vec::new();
+    for m in runs.iter().filter(|m| !m.brain.domain.is_empty()) {
+        let i = match rows.iter().position(|r| r.domain == m.brain.domain) {
+            Some(i) => i,
+            None => {
+                rows.push(DomainRow { domain: m.brain.domain.clone(), ..Default::default() });
+                rows.len() - 1
+            }
+        };
+        let r = &mut rows[i];
+        r.runs += 1;
+        r.worked += usize::from(m.result != OutcomeResult::Failure);
+        r.steps += u64::from(m.steps);
+        r.verified += usize::from(m.verified);
+    }
+    let rank = |d: &str| crate::playbook::DOMAINS.iter().position(|x| *x == d).unwrap_or(usize::MAX);
+    rows.sort_by(|a, b| rank(&a.domain).cmp(&rank(&b.domain)).then(a.domain.cmp(&b.domain)));
+    rows
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -407,5 +462,45 @@ mod tests {
             (m.result, m.verified, m.cost_usd, m.model.as_str(), m.at),
             (OutcomeResult::Pending, false, 0.0, "", 7)
         );
+    }
+
+    #[test]
+    fn domain_rows_count_runs_success_steps_and_checks_per_domain_and_skip_old_lines() {
+        let line = |run: &str, domain: &str, ok: bool, steps: u32, verified: bool| RunMetrics {
+            run: run.into(),
+            result: if ok { OutcomeResult::Success } else { OutcomeResult::Failure },
+            steps,
+            verified,
+            brain: RunBrain { domain: domain.into(), ..Default::default() },
+            ..Default::default()
+        };
+        let runs = vec![
+            line("a:1", "web", true, 3, false),
+            line("a:2", "system", true, 6, true),
+            line("a:3", "system", false, 9, false),
+            line("a:4", "system", true, 5, true),
+            line("a:5", "system", true, 6, false),
+            line("a:6", "web", false, 2, false),
+            line("a:7", "web", true, 4, true),
+            // An older line with no Brain record names no domain: skipped.
+            line("a:8", "", false, 40, false),
+        ];
+        let rows = domain_rows(&runs);
+        assert_eq!(
+            rows,
+            vec![
+                DomainRow { domain: "system".into(), runs: 4, worked: 3, steps: 26, verified: 2 },
+                DomainRow { domain: "web".into(), runs: 3, worked: 2, steps: 9, verified: 1 },
+            ]
+        );
+        let lines: Vec<String> = rows.iter().map(DomainRow::line).collect();
+        assert_eq!(
+            lines,
+            vec![
+                "system · 4 runs · 75% worked · 6.5 steps · 50% checked",
+                "web · 3 runs · 67% worked · 3.0 steps · 33% checked",
+            ]
+        );
+        assert!(domain_rows(&runs[7..]).is_empty(), "old lines alone give no rows");
     }
 }

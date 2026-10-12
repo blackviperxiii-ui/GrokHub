@@ -74,6 +74,9 @@ pub(super) struct SelfReviewState {
     /// Cached change versions for Settings → Behavior history. Cleared when a
     /// version is written. `None` means read the ledger on the next paint.
     pub history: Option<Vec<hx::Version>>,
+    /// Cached per-domain run rows for the same page (Brain 6 PR 2). Cleared
+    /// when a run is recorded. `None` means read the runs on the next paint.
+    pub domains: Option<Vec<run_metrics::DomainRow>>,
 }
 
 fn state_path() -> std::path::PathBuf {
@@ -214,6 +217,7 @@ impl Cabin {
         }
         self.tag_trial(&mut metrics);
         let _ = run_metrics::append_run(&dir, &metrics, self.cfg.amr_retention_days);
+        self.harness.self_review.domains = None;
         self.harness.self_review.last_outcome = Some(outcome);
         self.settle_trials_now(metrics.at);
     }
@@ -282,6 +286,15 @@ impl Cabin {
             .history
             .clone()
             .unwrap_or_default()
+    }
+
+    /// Per-domain rows for Settings → Behavior history, from the cache.
+    pub(super) fn domain_rows_now(&mut self) -> Vec<run_metrics::DomainRow> {
+        if self.harness.self_review.domains.is_none() {
+            let runs = run_metrics::read_runs(&config::config_dir());
+            self.harness.self_review.domains = Some(run_metrics::domain_rows(&runs));
+        }
+        self.harness.self_review.domains.clone().unwrap_or_default()
     }
 
     /// The hour from Settings → Dream time, clamped to 0–23.
@@ -406,7 +419,10 @@ impl Cabin {
         }
         self.post_router_review(now);
         let stats = sr::skill_stats(&outcomes, now, sr::WEEK_MS);
-        let client = if self.harness.self_review.budget > 0 && stats.iter().any(|s| s.failures > 0)
+        // Brain 6 PR 2: the weakest policy row or playbook rides the same call.
+        let brain = hx::brain_ask(&dir, &run_metrics::read_runs(&dir), now);
+        let client = if self.harness.self_review.budget > 0
+            && (stats.iter().any(|s| s.failures > 0) || brain.is_some())
         {
             self.self_review_client().ok()
         } else {
@@ -428,6 +444,7 @@ impl Cabin {
                 client.as_ref(),
                 &model,
                 &stats,
+                brain.as_ref(),
                 now,
                 &grokhub_agent::CancelToken::new(),
             )
@@ -462,6 +479,9 @@ impl Cabin {
             }
         };
         let now = grokhub_core::now_ms();
+        if let Some(tweak) = pass.brain {
+            self.try_brain_tweak(&tweak, now);
+        }
         for p in pass.kept {
             if p.snippet {
                 self.post_snippet_card(&p, now);
@@ -506,6 +526,30 @@ impl Cabin {
             self.post_code_idea_card(&idea, now);
         }
         self.persist_updates();
+    }
+
+    /// Brain 6 PR 2: the weekly pass's policy or playbook tweak, inside the
+    /// pass's budget. Quiet mode logs it and applies nothing; otherwise it
+    /// goes through `brain_tune` (locks, user version, ledger) and starts a
+    /// trial with its "Trying:" note. A refusal is logged there, not posted.
+    fn try_brain_tweak(&mut self, t: &hx::BrainTweak, now: u64) {
+        if self.harness.self_review.budget == 0 {
+            return;
+        }
+        self.harness.self_review.budget -= 1;
+        let target = t.ask.stats.target();
+        if self.cfg.self_improve_quiet {
+            let body = format!("{}.", t.ask.stats.numbers());
+            log_quiet(&mut self.harness.self_review, &target, &t.proposal.title, &body);
+            return;
+        }
+        match hx::apply_brain_tweak(&config::config_dir(), &t.ask, &t.proposal, now) {
+            Ok(v) => {
+                self.harness.self_review.history = None;
+                self.post_trial_note(&v);
+            }
+            Err(e) => self.status = format!("Self-review tweak not applied: {e}"),
+        }
     }
 
     /// A code-change idea from the weekly pass: Save keeps it, Copy as

@@ -1222,3 +1222,120 @@ fn self_review_file_cache_updates_on_write() {
     assert!(note.contains("From cabin"), "{note}");
     let _ = std::fs::remove_dir_all(&root);
 }
+
+/// Brain 6 PR 2: six repair runs on Repair Linux this week, three failed;
+/// the reply moves its ports check to the front.
+fn stage_weak_playbook(root: &std::path::Path, now: u64) -> String {
+    for i in 0..6u64 {
+        let m = run_metrics::RunMetrics {
+            run: format!("chat-pb{i}:1"),
+            class: "topic:repair".into(),
+            result: if i < 3 { OutcomeResult::Failure } else { OutcomeResult::Success },
+            verified: i >= 3,
+            steps: 8,
+            brain: run_metrics::RunBrain {
+                intent: "repair".into(),
+                care: "critical".into(),
+                domain: "system".into(),
+                policy: "repair × critical".into(),
+                playbook: "repair-linux".into(),
+            },
+            finished_at: now - DAY + i,
+            at: now - DAY + i,
+            ..Default::default()
+        };
+        run_metrics::append_run(root, &m, 0).unwrap();
+    }
+    let linux = grokhub_core::playbook::BUILTIN[1].replace("\r\n", "\n");
+    let ports = "[[phase.step]]\nname = \"List listening ports (ss -tuln) and name what owns each\"\n\n";
+    let first = "[[phase.step]]\nname = \"List failed services\"";
+    assert!(linux.contains(ports) && linux.contains(first));
+    let new = linux.replace(ports, "").replacen(first, &format!("{ports}{first}"), 1);
+    format!("TUNE_BRAIN: playbook:repair-linux | Linux repair checks ports before services\n<<<\n{new}>>>\n")
+}
+
+#[test]
+fn the_weekly_pass_tries_one_playbook_tweak_from_the_runs_and_quiet_mode_only_logs_it() {
+    let _g = crate::config::hold_test_config();
+    let now = grokhub_core::now_ms();
+    let (pin_on, root) = pin("brain6-weekly-on");
+    let calls = fake(&stage_weak_playbook(&root, now));
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.run_self_review_now(now);
+    wait_pass(&mut cabin);
+    assert_eq!(calls.load(Ordering::SeqCst), 1, "the weak playbook alone brings the one call");
+    let versions = hx::read_versions(&root);
+    let shown: Vec<(&str, &str, hx::VersionStatus)> =
+        versions.iter().map(|v| (v.class.as_str(), v.label.as_str(), v.status)).collect();
+    assert_eq!(
+        shown,
+        vec![("playbook:repair-linux", "Linux repair checks ports before services", hx::VersionStatus::Canary)]
+    );
+    assert!(
+        cabin.updates.iter().any(|c| c.title == "Trying: Linux repair checks ports before services"),
+        "the trial's note is posted"
+    );
+    assert!(root.join("playbooks").join("repair-linux.toml").exists());
+    drop(pin_on);
+    let _ = std::fs::remove_dir_all(&root);
+
+    let (_pin, root) = pin("brain6-weekly-quiet");
+    let _calls = fake(&stage_weak_playbook(&root, now));
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.cfg.self_improve_quiet = true;
+    cabin.run_self_review_now(now);
+    wait_pass(&mut cabin);
+    assert!(hx::read_versions(&root).is_empty(), "quiet mode applies nothing");
+    assert!(!root.join("playbooks").exists());
+    let log: Vec<(String, String, String)> = super::self_review_ui::load_state()
+        .quiet_log
+        .into_iter()
+        .filter(|e| e.source.starts_with("playbook:"))
+        .map(|e| (e.source, e.title, e.body))
+        .collect();
+    assert_eq!(
+        log,
+        vec![(
+            "playbook:repair-linux".to_string(),
+            "Linux repair checks ports before services".to_string(),
+            "3 of 6 runs on the repair-linux playbook needed a fix.".to_string()
+        )]
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// Brain 6 PR 2: the change history's per-domain block, from runs in two
+/// domains; a line with no Brain record is skipped.
+#[test]
+fn the_change_history_shows_one_row_per_domain() {
+    use super::change_history_ui::domain_block;
+    let run = |domain: &str, ok: bool, steps: u32, verified: bool| run_metrics::RunMetrics {
+        result: if ok { OutcomeResult::Success } else { OutcomeResult::Failure },
+        steps,
+        verified,
+        brain: run_metrics::RunBrain { domain: domain.into(), ..Default::default() },
+        ..Default::default()
+    };
+    let runs = vec![
+        run("code", true, 10, true),
+        run("files", false, 3, false),
+        run("code", false, 4, false),
+        run("", true, 99, true),
+    ];
+    assert_eq!(
+        domain_block(&run_metrics::domain_rows(&runs)).as_deref(),
+        Some(
+            "Runs by area (runs on file):\n\
+             code · 2 runs · 50% worked · 7.0 steps · 50% checked\n\
+             files · 1 run · 0% worked · 3.0 steps · 0% checked"
+        )
+    );
+    assert_eq!(domain_block(&run_metrics::domain_rows(&runs[3..])), None, "no Brain record, no block");
+    let history = include_str!("change_history_ui.rs").replace("\r\n", "\n");
+    let paint = history.split("fn ui_self_change_history").nth(1).unwrap();
+    let paint = paint.split("\n    }\n").next().unwrap();
+    assert!(
+        paint.contains("domain_rows_now") && !paint.contains("read_runs"),
+        "the block paints from the cache: {paint}"
+    );
+}
