@@ -5223,8 +5223,8 @@ fn chat_side_effects_keep_the_origin_thread() {
         "empty-chat greeting must not clone USER/MEMORY every paint: {greet}"
     );
     assert!(
-        greet.contains("greeting_prompt"),
-        "greeting Fast prompt must be built from borrowed USER/MEMORY: {greet}"
+        greet.contains("local_greeting") && !greet.contains("spawn_greeting_llm"),
+        "empty-home greeting must stay local (no Fast-model paraphrase on paint): {greet}"
     );
     let dream = src
         .split("fn run_dream")
@@ -13238,12 +13238,14 @@ fn board_add_move_archive_restore_and_link() {
 fn background_model_calls_run_at_low_effort() {
     assert_eq!(grokhub_core::BACKGROUND_EFFORT, "low");
     let src = cabin_src() + include_str!("feed_ui.rs") + include_str!("native_unattended.rs");
-    for name in [
-        "fast_once",
-        "spawn_native_review",
-        "spawn_thread_goal_on",
-        "spawn_native_loop",
-    ] {
+    // Thread titles use built-in topics_from_turns (no model). Remaining
+    // background asks still pin BACKGROUND_EFFORT.
+    let goal = fn_src(&src, "spawn_thread_goal_on");
+    assert!(
+        goal.contains("topics_from_turns") && !goal.contains("BACKGROUND_EFFORT"),
+        "thread titles must be local, not a low-effort model ask: {goal}"
+    );
+    for name in ["fast_once", "spawn_native_review", "spawn_native_loop"] {
         let body = fn_src(&src, name);
         assert!(
             body.contains("BACKGROUND_EFFORT"),
@@ -22648,6 +22650,37 @@ fn apply_thread_goal_empty_topics_stays_idle() {
     assert!(cabin.chat_job_thread.is_none());
     assert!(cabin.goal_rx.is_none());
     assert!(cabin.rx.is_none());
+}
+
+#[test]
+fn spawn_thread_goal_titles_from_user_words_without_a_model() {
+    let (root, mut cabin) = isolated_cabin("local-thread-title");
+    cabin
+        .threads
+        .push(crate::threads::ChatThread::new("Chat", false));
+    cabin.thread_idx = cabin.threads.len() - 1;
+    let tid = cabin.threads[cabin.thread_idx].id.clone();
+    cabin.messages = vec![("user".into(), "draw porn comics please".into())].into();
+    cabin.spawn_thread_goal_on(Some(&tid));
+    assert!(
+        cabin.goal_rx.is_none() && !cabin.goal_busy,
+        "titles must not open a model channel"
+    );
+    assert_eq!(cabin.threads[cabin.thread_idx].goal.label, "draw");
+    assert!(
+        cabin.threads[cabin.thread_idx]
+            .goal
+            .topics
+            .iter()
+            .any(|t| t == "porn"),
+        "content words from the user turn become topics: {:?}",
+        cabin.threads[cabin.thread_idx].goal.topics
+    );
+    assert_ne!(
+        cabin.threads[cabin.thread_idx].title, "Chat",
+        "auto-title must rename the rail from local topics"
+    );
+    release_isolated(&root, cabin);
 }
 
 // Folded from PR #425.
