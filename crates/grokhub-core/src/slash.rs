@@ -41,6 +41,8 @@ pub enum Slash {
     MemoryPrune,
     Recall(String),
     Board,
+    /// `/journal` — open the decision backlog / experiment journal.
+    Journal,
     Imagine(String),
     Compact,
     Skill(String),
@@ -217,6 +219,7 @@ pub fn parse_slash(line: &str) -> Option<Slash> {
         }
         "/recall" if !rest.is_empty() => Some(Slash::Recall(rest.to_string())),
         "/board" => Some(Slash::Board),
+        "/journal" => Some(Slash::Journal),
         "/imagine" => Some(Slash::Imagine(rest.to_string())),
         "/imagine-video" => Some(Slash::ImagineVideo(rest.to_string())),
         "/loop" => Some(Slash::Loop(rest.to_string())),
@@ -456,6 +459,7 @@ pub fn slash_kind(s: &Slash) -> &'static str {
         Slash::MemoryPrune => "memory_prune",
         Slash::Recall(_) => "recall",
         Slash::Board => "board",
+        Slash::Journal => "journal",
         Slash::Imagine(_) => "imagine",
         Slash::Compact => "compact",
         Slash::Skill(_) => "skill",
@@ -701,6 +705,12 @@ pub const SLASH_COMMANDS: &[SlashDef] = &[
         cmd: "/board",
         hint: "Open Workboards",
         insert: "/board",
+        run_on_pick: true,
+    },
+    SlashDef {
+        cmd: "/journal",
+        hint: "Open decision journal",
+        insert: "/journal",
         run_on_pick: true,
     },
     SlashDef {
@@ -1175,6 +1185,7 @@ pub fn slash_help() -> String {
         "/project move <folder>|root — add the selected project to a folder",
         "/project delete — remove the project; its chats return to History",
         "/board — open Workboards",
+        "/journal — open the decision backlog / experiment journal",
         "/skill <name> — run a skill",
         "/memory note <fact> — write MEMORY.md",
         "/memory dream — show the last overnight memory tidy (memory repo only)",
@@ -1279,6 +1290,8 @@ mod tests {
         );
         assert_eq!(parse_slash("/forget"), Some(Slash::Forget(None)));
         assert_eq!(parse_slash("/board"), Some(Slash::Board));
+        assert_eq!(parse_slash("/journal"), Some(Slash::Journal));
+        assert!(slash_help().contains("/journal"));
         assert_eq!(
             parse_slash("/imagine a cabin"),
             Some(Slash::Imagine("a cabin".into()))

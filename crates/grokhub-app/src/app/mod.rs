@@ -145,6 +145,7 @@ mod audio_check_ui;
 mod background;
 mod background_ui;
 mod board_ui;
+mod journal_ui;
 mod budget_ui;
 mod canary_ui;
 mod change_history_ui;
@@ -247,6 +248,7 @@ enum Nav {
     Skills,
     Night,
     History,
+    Journal,
     Command,
     Agents,
     Settings,
@@ -444,6 +446,9 @@ pub struct Cabin {
     board: Vec<BoardCard>,
     board_title: String,
     board_notes: String,
+    /// Decision backlog / experiment journal (`decisions.json`).
+    journal: Vec<grokhub_core::JournalEntry>,
+    journal_view: journal_ui::JournalView,
     imagine_prompt: String,
     imagine_last: String,
     skill_name: String,
@@ -1048,6 +1053,8 @@ impl Cabin {
             board: config::load_board(),
             board_title: String::new(),
             board_notes: String::new(),
+            journal: config::load_journal(),
+            journal_view: journal_ui::JournalView::default(),
             imagine_prompt: String::new(),
             imagine_last,
             skill_name: String::new(),
@@ -1500,6 +1507,8 @@ impl Cabin {
             board: Vec::new(),
             board_title: String::new(),
             board_notes: String::new(),
+            journal: Vec::new(),
+            journal_view: journal_ui::JournalView::default(),
             imagine_prompt: String::new(),
             imagine_last: String::new(),
             skill_name: String::new(),
@@ -5253,6 +5262,7 @@ impl eframe::App for Cabin {
                 Nav::Skills => self.ui_skills(ui),
                 Nav::Night => self.ui_night(ui),
                 Nav::History => self.ui_history(ui),
+                Nav::Journal => self.ui_journal(ui),
                 Nav::Command => self.ui_command(ui),
                 Nav::Agents => self.ui_agents(ui),
                 Nav::Settings => self.ui_chat(ui),

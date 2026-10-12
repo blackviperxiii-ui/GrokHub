@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Journal (`/journal`): a local-first decision backlog / experiment journal for open questions — options, evidence, next experiment, defer/decide/abandon, quiet dismissible due nudges, and promote to a Workboard Todo (Mission promotion waits on Mission-based OS). Stored in `decisions.json`.
 - Fixed: Pulse Feed **More like this** starts a source check immediately (HN / Reddit / Web search for the post’s words) instead of only queuing for the next scheduled check with no visible reaction. The button reads Looking…, the Feed shows the check banner, and related posts can land when the fetch finishes.
 - Composer chips and the empty-home greeting paint from built-in local pools only (habit / stage / `local_greeting`); they no longer spend a fast-model ask on every refresh. Chat tab titles come from content words in recent user turns (`topics_from_turns`) instead of a background `GOAL:` summarize. Skill activation matches whole-phrase / `OR`-split triggers before bag-of-words Jaccard, so short junk asks do not false-activate.
 - Pulse interest learning is a local connection graph, not “saw a word → whole identity.” Chat titles need mentions in two distinct chats before they become Interests; related topics get weighted edges; each source check may probe up to two neighbor queries from strong open edges; Save / More like this strengthens a link and Not interested closes it and branches to other neighbors. Domain-general (apps, music, tools, hobbies, …) — no game-only schema. Graph lives in `interests.json`.

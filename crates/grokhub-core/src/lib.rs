@@ -111,6 +111,7 @@ pub mod voice;
 pub mod what_changed;
 pub mod windshield;
 pub mod wire;
+pub mod journal;
 pub mod workboard;
 pub mod xai_signin;
 
@@ -556,6 +557,12 @@ pub use windshield::{
     rank_atspi_rows, refused_lock, tab_list_from_rows, window_name_from_atspi,
     window_name_from_wmctrl, windshield_browser_line, windshield_prompt, AtspiRow, PendingStep,
     WindshieldFrame,
+};
+pub use journal::{
+    abandon_entry, add_evidence, add_option, create_entry, decide_entry, defer_entry,
+    dismiss_nudge, due_nudges, edit_entry, link_board_evidence, promote_to_board, remove_evidence,
+    remove_option, search_entries, set_leaning, set_status, EvidenceKind, EvidenceLink,
+    JournalEntry, JournalLeaning, JournalOption, JournalOutcome, JournalStatus,
 };
 pub use workboard::{
     abandon_inflight_card, apply_assistant_work_marks, apply_work_update,

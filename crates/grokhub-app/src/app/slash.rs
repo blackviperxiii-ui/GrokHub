@@ -162,6 +162,10 @@ impl Cabin {
                 self.nav = Nav::Workboard;
                 self.status = format!("{} cards", self.board.len());
             }
+            Slash::Journal => {
+                self.nav = Nav::Journal;
+                self.status = format!("{} journal entries", self.journal.len());
+            }
             Slash::ImagineVideo(p) => {
                 self.nav = Nav::Imagine;
                 self.imagine_kind = grokhub_core::ImagineKind::Video;
