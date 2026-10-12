@@ -94,7 +94,7 @@ fn expand_shell_assignments(cmd: &str) -> String {
         }
         i = start + 1;
     }
-    assigns.sort_by(|a, b| b.0.len().cmp(&a.0.len()));
+    assigns.sort_by_key(|a| std::cmp::Reverse(a.0.len()));
     let mut out = cmd.to_string();
     for (name, value) in assigns {
         out = out.replace(&format!("${{{name}}}"), &value);
