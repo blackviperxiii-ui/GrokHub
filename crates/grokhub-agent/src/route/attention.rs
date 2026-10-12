@@ -431,7 +431,7 @@ pub fn rank_models(
 }
 
 /// Note under Settings / `/why table` baseline rows.
-pub const TABLE_ATTENTION_NOTE: &str = "Baseline per class; each turn can escalate or de-escalate from built-in request signals + learned feedback (no model-in-the-loop for Auto picks). Token savings apply to the task model. repair:diagnose always uses the top model.";
+pub const TABLE_ATTENTION_NOTE: &str = "Baselines: Cheap / Workhorse / Code / Flagship (flagship reserved for plan/design/debug/prepare/repair). Each turn can escalate or de-escalate from built-in signals + learned feedback (no model-in-the-loop). Token savings apply to the task model.";
 
 #[cfg(test)]
 mod tests {
