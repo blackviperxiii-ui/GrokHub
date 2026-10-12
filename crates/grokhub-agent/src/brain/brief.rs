@@ -341,9 +341,24 @@ pub struct BriefLine {
     /// The playbook the Brief picked, by name.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub playbook: String,
+    /// The same playbook by id, for the run's metrics line (Brain 6).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub playbook_id: String,
 }
 
 impl BriefLine {
+    /// The run-metrics share of this line (Brain 6): the Brief's intent, care
+    /// and domain, the policy row's key and the playbook's id.
+    pub fn run_brain(&self) -> grokhub_core::run_metrics::RunBrain {
+        grokhub_core::run_metrics::RunBrain {
+            intent: self.brief.intent.as_str().into(),
+            care: self.brief.care.as_str().into(),
+            domain: self.brief.domain.clone(),
+            policy: self.policy.as_ref().map(|p| p.row.clone()).unwrap_or_default(),
+            playbook: self.playbook_id.clone(),
+        }
+    }
+
     /// "Brief: …" and, when they matched, "Policy: …", "Talk: …" and "Playbook: …".
     pub fn lines(&self) -> Vec<String> {
         let mut out = vec![format!("Brief: {}", self.brief.label())];
@@ -524,9 +539,27 @@ mod tests {
         assert!(why_lines(&dir).is_empty());
         let text = "the printer service won't start, my password is hunter2";
         let b = rules(&input(text)).unwrap();
-        record_brief(&dir, &BriefLine { at: 1, session: "s1".into(), chat_id: "chat-1".into(), turn: 2, brief: b.clone(), policy: None, playbook: String::new() }).unwrap();
+        let policy = Some(super::super::PolicyPick { row: "repair × critical".into(), goal: "quality".into(), ..Default::default() });
+        let line = BriefLine {
+            at: 1,
+            session: "s1".into(),
+            chat_id: "chat-1".into(),
+            turn: 2,
+            brief: b.clone(),
+            policy,
+            playbook: "Repair Linux".into(),
+            playbook_id: "repair-linux".into(),
+        };
+        record_brief(&dir, &line).unwrap();
         let other = rules(&input("hi")).unwrap();
-        record_brief(&dir, &BriefLine { at: 2, session: "s1".into(), chat_id: "chat-1".into(), turn: 3, brief: other.clone(), policy: None, playbook: String::new() }).unwrap();
+        record_brief(&dir, &BriefLine { at: 2, session: "s1".into(), chat_id: "chat-1".into(), turn: 3, brief: other.clone(), ..Default::default() }).unwrap();
+        // Brain 6: the run's metrics line reads the Brief, row and playbook id from the turn's line.
+        let brain = brief_for_turn(&dir, "chat-1", 2).unwrap().run_brain();
+        assert_eq!(
+            (brain.intent.as_str(), brain.care.as_str(), brain.domain.as_str(), brain.policy.as_str(), brain.playbook.as_str()),
+            ("repair", "critical", "system", "repair × critical", "repair-linux")
+        );
+        assert_eq!(brief_for_turn(&dir, "chat-1", 3).unwrap().run_brain().playbook, "");
         let raw = fs::read_to_string(briefs_path(&dir)).unwrap();
         assert!(!raw.contains("hunter2") && !raw.contains("printer"), "{raw}");
         assert_eq!(brief_for_turn(&dir, "chat-1", 2).map(|l| l.brief), Some(b));

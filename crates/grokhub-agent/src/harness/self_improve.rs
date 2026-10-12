@@ -711,6 +711,7 @@ mod tests {
         let files = [
             "crates/grokhub-agent/src/harness/self_improve.rs",
             "crates/grokhub-agent/src/harness/canary.rs",
+            "crates/grokhub-agent/src/harness/brain_tune.rs",
             "crates/grokhub-core/src/self_review.rs",
             "crates/grokhub-core/src/run_metrics.rs",
             "crates/grokhub-core/src/protected_surface.rs",

@@ -228,7 +228,18 @@ impl NativeEngine {
         // The run's system prompt carries the picked playbook's steps (or drops an earlier turn's).
         crate::checkpoint::set_turn_playbook(&self.conversation_id, picked.map(|p| p.prompt_block()));
         let playbook = picked.map(|p| p.name.clone()).unwrap_or_default();
-        let line = crate::brain::BriefLine { at: grokhub_core::now_ms(), session: self.conversation_id.clone(), chat_id, turn, brief, policy, playbook };
+        // Brain 6: the id goes on the line too, so the turn's run metrics can name it.
+        let playbook_id = picked.map(|p| p.id.clone()).unwrap_or_default();
+        let line = crate::brain::BriefLine {
+            at: grokhub_core::now_ms(),
+            session: self.conversation_id.clone(),
+            chat_id,
+            turn,
+            brief,
+            policy,
+            playbook,
+            playbook_id,
+        };
         let _ = crate::brain::record_brief(&dir, &line);
     }
 
@@ -940,6 +951,18 @@ mod tests {
                 ),
             ]
         );
+        // Brain 6: the line carries what the turn's run-metrics line records.
+        assert_eq!(
+            stored[0].run_brain(),
+            grokhub_core::run_metrics::RunBrain {
+                intent: "repair".into(),
+                care: "critical".into(),
+                domain: "system".into(),
+                policy: "repair × critical".into(),
+                playbook: if cfg!(windows) { "repair-windows".into() } else { "repair-linux".into() },
+            }
+        );
+        assert_eq!(stored[1].run_brain().playbook, "files");
         // Off (the default): an unclear ask makes no extra request.
         let quiet = Arc::new(Brained { chat: AtomicUsize::new(0), briefs: AtomicUsize::new(0) });
         let mut off = engine(&dir, "brief-2", quiet.clone());
