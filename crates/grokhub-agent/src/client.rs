@@ -160,7 +160,19 @@ impl ClientError {
                 | ClientError::Server { .. }
                 | ClientError::Transport(_)
                 | ClientError::Disconnect
-        )
+        ) && !self.is_context_length()
+    }
+
+    /// True when the provider refused the request because the prompt is too long.
+    /// Not retryable as a transient error; the run loop compacts and retries once.
+    pub fn is_context_length(&self) -> bool {
+        let msg = match self {
+            ClientError::Protocol(message)
+            | ClientError::Server { message, .. }
+            | ClientError::Transport(message) => message.as_str(),
+            _ => return false,
+        };
+        context_length_message(msg)
     }
 
     pub fn retry_after_secs(&self) -> Option<u64> {
@@ -170,6 +182,20 @@ impl ClientError {
             _ => None,
         }
     }
+}
+
+fn context_length_message(message: &str) -> bool {
+    let lower = message.to_ascii_lowercase();
+    lower.contains("context_length")
+        || lower.contains("context length")
+        || lower.contains("maximum context")
+        || lower.contains("context window")
+        || lower.contains("too many tokens")
+        || lower.contains("prompt is too long")
+        || lower.contains("prompt too long")
+        || lower.contains("token limit")
+        || lower.contains("max_tokens") && lower.contains("exceed")
+        || lower.contains("exceeds the context")
 }
 
 pub fn map_http_status(
@@ -712,6 +738,12 @@ mod tests {
         assert!(map_http_status(500, "x", None, AuthKind::ApiKey).is_retryable());
         assert!(!ClientError::IdleTimeout.is_retryable());
         assert!(ClientError::Disconnect.is_retryable());
+        let overflow = ClientError::Protocol(
+            "HTTP 400: This model's maximum context length was exceeded".into(),
+        );
+        assert!(overflow.is_context_length());
+        assert!(!overflow.is_retryable());
+        assert!(!ClientError::Protocol("disk full".into()).is_context_length());
     }
 
     /// 2.10.87: native path. A saved `minimal` goes out as `low`; `off` sends none.

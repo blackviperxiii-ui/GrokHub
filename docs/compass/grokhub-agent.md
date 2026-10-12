@@ -27,6 +27,7 @@
 - Unattended runs (`run_unattended`): Ask denies every non-read-only tool; Auto uses the Phase 5 judge and fails closed.
 - Subagents: Explore is read-only, General copies the parent gate, depth 2 stops grandchildren, a worktree never falls back to the parent tree.
 - `system_prompt_parts` (`prompt.rs`): stable cabin rules then AGENTS/skills (mtime-memoized); personality and learned brief are the volatile tail. Prefer it over `system_prompt`.
+- Auto-compact (`compact.rs` / `run.rs`): re-arms after a new turn; context-length errors compact once and retry, then stop with `context still too large after compaction`.
 - Its `memory.rs` keeps `MEMORY.md` plus a rebuildable `index.sqlite` (bundled rusqlite); it never touches USER.md or SOUL.md and is not AMR; its recall pack (`first_turn_injection`) goes through `redact_recall` before the model sees it.
 - No tokio: MCP uses one worker thread per stdio child or HTTP read.
 - MCP browser sign-in (`crates/grokhub-agent/src/mcp/oauth.rs`, pure parts in `crates/grokhub-core/src/mcp_oauth.rs`, PKCE in `crates/grokhub-core/src/pkce.rs`): a remote server with no `Authorization` on its entry signs in from its Native MCP row. The sign-in is sealed by `seal_mcp_signin` (keyring key, next to the connection tokens), refreshed a minute before expiry, and refreshed once on a 401 before the row asks for a new sign-in. An entry that carries its own header or `tokenRef` never uses it.
