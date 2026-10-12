@@ -38,6 +38,7 @@ pub fn run(workspace: &Path, args: &Value) -> ToolOutput {
     if path.is_dir() {
         return ToolOutput::err("path is a directory");
     }
+    crate::checkpoint::before_write(&path);
     let written = with_file_lock(&path, || write_at(&path, &content));
     match written {
         Ok(bytes) => ToolOutput::ok(format!("wrote {bytes} bytes to {raw}")),

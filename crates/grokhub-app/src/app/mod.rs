@@ -2793,6 +2793,39 @@ impl Cabin {
         }
     }
 
+    /// `/rewind step` — list or restore per-step agent file checkpoints.
+    fn rewind_agent_steps(&mut self, step: Option<u64>) {
+        let session = self
+            .threads
+            .get(self.thread_idx)
+            .and_then(|t| t.grok_session.clone())
+            .unwrap_or_default();
+        if session.is_empty() {
+            self.status = "No agent session yet — chat first, then /rewind step".into();
+            return;
+        }
+        match step {
+            None => {
+                let text = grokhub_agent::format_steps(&session);
+                self.live_mut()
+                    .push(("assistant".into(), mark_slash_result(&text)));
+                self.stamp_current_access();
+                self.persist();
+                self.status = "Agent file checkpoints".into();
+            }
+            Some(n) => match grokhub_agent::restore_step(&session, n) {
+                Ok(msg) => {
+                    self.live_mut()
+                        .push(("assistant".into(), mark_slash_result(&msg)));
+                    self.stamp_current_access();
+                    self.persist();
+                    self.status = format!("Restored step {n}");
+                }
+                Err(err) => self.status = err,
+            },
+        }
+    }
+
     fn rewind_project(&mut self) {
         let home = std::env::var("HOME").unwrap_or_default();
         let src = expand_home(self.cfg.project_dir.trim());

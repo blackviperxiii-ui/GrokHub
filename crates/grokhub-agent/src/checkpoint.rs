@@ -24,6 +24,10 @@ use grokhub_core::talk::TalkStyle;
 use crate::brain::{Brief, Care, Intent};
 use crate::session_tools::TodoItem;
 
+// File shadow checkpoints live in `file_checkpoint` (this module is Brain 2
+// verify gaps). Re-export so call sites can use `checkpoint::before_write`.
+pub use crate::file_checkpoint::before_write;
+
 /// Task tool calls between mid-run checkpoints.
 pub const CHECKPOINT_EVERY: usize = 8;
 /// Task tool calls at least between two progress notes (and before the first).
