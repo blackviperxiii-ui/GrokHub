@@ -52,8 +52,10 @@ pub const EIGHTY_CARD: &str =
 /// The 100% ask on user-facing work.
 pub const BUDGET_ASK: &str = "You've used this week's budget. Keep chatting this week anyway?";
 /// What a paused call returns at 100%, or when background used its share.
-pub const BUDGET_PAUSE_MSG: &str = "This week's budget is used up, so GrokHub paused this step. Home has your options.";
-pub const BACKGROUND_PAUSE_MSG: &str = "Background work used its share of this week's budget, so it waits until next week.";
+pub const BUDGET_PAUSE_MSG: &str =
+    "This week's budget is used up, so GrokHub paused this step. Home has your options.";
+pub const BACKGROUND_PAUSE_MSG: &str =
+    "Background work used its share of this week's budget, so it waits until next week.";
 
 /// The week number (weeks start Monday 00:00 UTC; 1970-01-01 was a Thursday).
 pub fn week_of(ms: u64) -> u64 {
@@ -80,7 +82,12 @@ pub fn is_background(class: &str, origin: Option<&str>) -> bool {
 pub fn call_cost(ts_ms: u64, rec: &RouteRecord, reg: &Registry) -> CallCost {
     let background = is_background(&rec.class, rec.signals.origin.as_deref());
     let Some(out) = &rec.outcome else {
-        return CallCost { ts_ms, usd: 0.0, background, limit: false };
+        return CallCost {
+            ts_ms,
+            usd: 0.0,
+            background,
+            limit: false,
+        };
     };
     let usd = if out.cost_usd > 0.0 {
         out.cost_usd
@@ -95,7 +102,12 @@ pub fn call_cost(ts_ms: u64, rec: &RouteRecord, reg: &Registry) -> CallCost {
             cents as f64 / 100_000_000.0 / 100.0
         })
     };
-    CallCost { ts_ms, usd, background, limit: out.limit }
+    CallCost {
+        ts_ms,
+        usd,
+        background,
+        limit: out.limit,
+    }
 }
 
 /// One week of spend.
@@ -112,7 +124,10 @@ pub struct Week {
 /// Sum this week's calls.
 pub fn tally(calls: &[CallCost], now_ms: u64) -> Week {
     let week = week_of(now_ms);
-    let mut w = Week { week, ..Week::default() };
+    let mut w = Week {
+        week,
+        ..Week::default()
+    };
     for c in calls.iter().filter(|c| week_of(c.ts_ms) == week) {
         w.spent_usd += c.usd;
         if c.background {
@@ -147,7 +162,13 @@ impl Budget {
             None
         };
         let background_pct = keyed.then(|| week.background_usd * 100.0 / cap_usd);
-        Self { week: week.week, pct, background_pct, cap_usd: if keyed { cap_usd } else { 0.0 }, background_usd: week.background_usd }
+        Self {
+            week: week.week,
+            pct,
+            background_pct,
+            cap_usd: if keyed { cap_usd } else { 0.0 },
+            background_usd: week.background_usd,
+        }
     }
 
     pub fn tight(&self) -> bool {
@@ -223,7 +244,10 @@ pub struct NudgeFacts {
 /// Count the nudge facts from route records `(ts_ms, record)`, oldest first.
 pub fn nudge_facts(records: &[(u64, RouteRecord)], now_ms: u64) -> NudgeFacts {
     let week = week_of(now_ms);
-    let recent: Vec<&(u64, RouteRecord)> = records.iter().filter(|(t, _)| now_ms.saturating_sub(*t) <= WEEK_MS).collect();
+    let recent: Vec<&(u64, RouteRecord)> = records
+        .iter()
+        .filter(|(t, _)| now_ms.saturating_sub(*t) <= WEEK_MS)
+        .collect();
     let mut tasks: Vec<(String, bool)> = Vec::new();
     let mut seen = BTreeSet::new();
     for (_, r) in &recent {
@@ -231,7 +255,11 @@ pub fn nudge_facts(records: &[(u64, RouteRecord)], now_ms: u64) -> NudgeFacts {
             tasks.push((r.episode.clone(), false));
         }
     }
-    let rejected = |r: &RouteRecord| r.outcome.as_ref().is_some_and(|o| o.verify.as_deref() == Some("reject"));
+    let rejected = |r: &RouteRecord| {
+        r.outcome
+            .as_ref()
+            .is_some_and(|o| o.verify.as_deref() == Some("reject"))
+    };
     for (ep, failed) in tasks.iter_mut() {
         *failed = recent.iter().any(|(_, r)| r.episode == *ep && rejected(r));
     }
@@ -241,7 +269,12 @@ pub fn nudge_facts(records: &[(u64, RouteRecord)], now_ms: u64) -> NudgeFacts {
         .filter(|(_, r)| rejected(r) || r.outcome.as_ref().is_some_and(|o| o.limit))
         .count();
     let last: Vec<&(String, bool)> = tasks.iter().rev().take(5).collect();
-    NudgeFacts { would_upgrade: tasks.len(), fails, last_failed: last.iter().filter(|(_, f)| *f).count(), last_of: last.len() }
+    NudgeFacts {
+        would_upgrade: tasks.len(),
+        fails,
+        last_failed: last.iter().filter(|(_, f)| *f).count(),
+        last_of: last.len(),
+    }
 }
 
 /// Where the nudge stands right now.
@@ -260,7 +293,10 @@ pub fn nudge_due(f: &NudgeFacts, notes: &BudgetNotes, gate: NudgeGate, now_ms: u
     if gate.in_task || gate.quiet_hours || gate.throttled {
         return false;
     }
-    if now_ms < notes.nudge_muted_until_ms || (notes.nudge_shown_ms > 0 && now_ms.saturating_sub(notes.nudge_shown_ms) < NUDGE_EVERY_MS) {
+    if now_ms < notes.nudge_muted_until_ms
+        || (notes.nudge_shown_ms > 0
+            && now_ms.saturating_sub(notes.nudge_shown_ms) < NUDGE_EVERY_MS)
+    {
         return false;
     }
     f.would_upgrade >= NUDGE_MIN_TASKS && f.fails >= NUDGE_MIN_FAILS
@@ -274,9 +310,15 @@ pub fn nudge_text(f: &NudgeFacts, tier: Option<&str>) -> String {
         _ => "A bigger Grok plan includes",
     };
     let lead = if f.last_of > 0 && f.last_failed > 0 {
-        format!("{} of your last {} big tasks failed the check on your plan's models.", f.last_failed, f.last_of)
+        format!(
+            "{} of your last {} big tasks failed the check on your plan's models.",
+            f.last_failed, f.last_of
+        )
     } else {
-        format!("Your plan's models failed the check or hit the usage limit {} times this week.", f.fails)
+        format!(
+            "Your plan's models failed the check or hit the usage limit {} times this week.",
+            f.fails
+        )
     };
     format!("{lead} {plan} more capacity for this kind of work. Want details?")
 }
@@ -308,7 +350,9 @@ pub fn load_week(config_dir: &Path, reg: &Registry, now_ms: u64) -> Week {
         }
     }
     // Read without the lock: a send never waits on the cabin's own budget tick.
-    let calls: Vec<CallCost> = with_route_records(config_dir, BUDGET_SCAN_LINES, |records| records.map(|(t, r)| call_cost(*t, r, reg)).collect());
+    let calls: Vec<CallCost> = with_route_records(config_dir, BUDGET_SCAN_LINES, |records| {
+        records.map(|(t, r)| call_cost(*t, r, reg)).collect()
+    });
     let w = tally(&calls, now_ms);
     *WEEK.lock().unwrap_or_else(|e| e.into_inner()) = Some((key, w.clone()));
     w
@@ -328,43 +372,102 @@ mod tests {
     const MON: u64 = 20_731 * DAY_MS;
 
     fn cost(day: u64, usd: f64, background: bool) -> CallCost {
-        CallCost { ts_ms: MON + day * DAY_MS + 1_000, usd, background, limit: false }
+        CallCost {
+            ts_ms: MON + day * DAY_MS + 1_000,
+            usd,
+            background,
+            limit: false,
+        }
     }
 
     #[test]
     fn weeks_start_on_monday_and_spend_sums_per_day_and_week() {
         assert_eq!(week_of(MON), week_of(MON + 6 * DAY_MS + DAY_MS - 1));
         assert_eq!(week_of(MON) + 1, week_of(MON + WEEK_MS));
-        assert_eq!(week_of(MON - 1) + 1, week_of(MON), "Sunday night is last week");
-        let calls = [cost(0, 1.0, false), cost(0, 0.5, true), cost(3, 2.0, false), cost(7, 9.0, false)];
+        assert_eq!(
+            week_of(MON - 1) + 1,
+            week_of(MON),
+            "Sunday night is last week"
+        );
+        let calls = [
+            cost(0, 1.0, false),
+            cost(0, 0.5, true),
+            cost(3, 2.0, false),
+            cost(7, 9.0, false),
+        ];
         let w = tally(&calls, MON + 4 * DAY_MS);
-        assert_eq!((w.spent_usd, w.background_usd, w.by_day.len()), (3.5, 0.5, 2));
+        assert_eq!(
+            (w.spent_usd, w.background_usd, w.by_day.len()),
+            (3.5, 0.5, 2)
+        );
         assert_eq!(w.by_day[&(MON / DAY_MS)], 1.5);
         assert!(!w.limit_hit);
     }
 
     #[test]
     fn a_key_reads_against_its_cap_and_the_plan_reads_the_limit_signal() {
-        let w = Week { week: 1, spent_usd: 8.5, background_usd: 1.0, ..Week::default() };
+        let w = Week {
+            week: 1,
+            spent_usd: 8.5,
+            background_usd: 1.0,
+            ..Week::default()
+        };
         let b = Budget::of(&w, Credential::ApiKey, 10.0);
         assert_eq!((b.pct, b.tight(), b.used_up()), (Some(85), true, false));
-        assert_eq!(Budget::of(&w, Credential::ApiKey, 0.0).pct, None, "no cap, no percentage");
-        assert_eq!(Budget::of(&w, Credential::Plan, 10.0).pct, None, "the plan pool isn't dollars");
-        let hit = Week { limit_hit: true, ..w.clone() };
+        assert_eq!(
+            Budget::of(&w, Credential::ApiKey, 0.0).pct,
+            None,
+            "no cap, no percentage"
+        );
+        assert_eq!(
+            Budget::of(&w, Credential::Plan, 10.0).pct,
+            None,
+            "the plan pool isn't dollars"
+        );
+        let hit = Week {
+            limit_hit: true,
+            ..w.clone()
+        };
         assert_eq!(Budget::of(&hit, Credential::Plan, 0.0).pct, Some(100));
-        assert_eq!(Budget::of(&Week { spent_usd: 30.0, ..w }, Credential::ApiKey, 10.0).pct, Some(100));
+        assert_eq!(
+            Budget::of(
+                &Week {
+                    spent_usd: 30.0,
+                    ..w
+                },
+                Credential::ApiKey,
+                10.0
+            )
+            .pct,
+            Some(100)
+        );
     }
 
     #[test]
     fn the_eighty_card_shows_once_a_week_and_at_100_user_work_asks_until_you_answer() {
         let mut notes = BudgetNotes::default();
-        let tight = Budget { week: 7, pct: Some(81), ..Budget::default() };
+        let tight = Budget {
+            week: 7,
+            pct: Some(81),
+            ..Budget::default()
+        };
         assert!(notes.eighty_due(&tight));
         notes.eighty_week = 7;
         assert!(!notes.eighty_due(&tight), "once a week");
-        assert!(notes.eighty_due(&Budget { week: 8, ..tight }), "a new week can show it again");
-        assert!(!notes.eighty_due(&Budget { pct: Some(79), ..tight }));
-        let full = Budget { week: 7, pct: Some(100), cap_usd: 10.0, ..Budget::default() };
+        assert!(
+            notes.eighty_due(&Budget { week: 8, ..tight }),
+            "a new week can show it again"
+        );
+        assert!(!notes.eighty_due(&Budget {
+            pct: Some(79),
+            ..tight
+        }));
+        let full = Budget {
+            week: 7,
+            pct: Some(100),
+            cap_usd: 10.0,
+            ..Budget::default()
+        };
         assert!(notes.must_ask(&full));
         assert!(!full.admits_background(0.0), "at 100% background pauses");
         notes.go_on_week = 7;
@@ -389,11 +492,19 @@ mod tests {
                 paused += 1;
                 continue;
             }
-            calls.push(CallCost { ts_ms: at, usd, background, limit: false });
+            calls.push(CallCost {
+                ts_ms: at,
+                usd,
+                background,
+                limit: false,
+            });
         }
         let w = tally(&calls, MON + WEEK_MS - 1);
         assert_eq!((w.background_usd, paused), (3.0, 16));
-        assert_eq!(Budget::of(&w, Credential::ApiKey, cap).background_pct, Some(15.0));
+        assert_eq!(
+            Budget::of(&w, Credential::ApiKey, cap).background_pct,
+            Some(15.0)
+        );
     }
 
     fn rec(episode: &str, rules: &[&str], verify: Option<&str>, limit: bool) -> RouteRecord {
@@ -402,7 +513,13 @@ mod tests {
             class: "code:multi-file".into(),
             rule_ids: rules.iter().map(|s| s.to_string()).collect(),
             cost_class: "included".into(),
-            outcome: Some(RouteOutcome { ok: true, verify: verify.map(str::to_string), tokens: RouteTokens::default(), cost_usd: 0.0, limit }),
+            outcome: Some(RouteOutcome {
+                ok: true,
+                verify: verify.map(str::to_string),
+                tokens: RouteTokens::default(),
+                cost_usd: 0.0,
+                limit,
+            }),
             ..RouteRecord::default()
         }
     }
@@ -411,7 +528,10 @@ mod tests {
         let mut out = Vec::new();
         for i in 0..5usize {
             let verify = (i < fails).then_some("reject");
-            out.push((MON + i as u64 * DAY_MS, rec(&format!("ep{i}"), &["plan:would_pick"], verify, false)));
+            out.push((
+                MON + i as u64 * DAY_MS,
+                rec(&format!("ep{i}"), &["plan:would_pick"], verify, false),
+            ));
         }
         out
     }
@@ -421,7 +541,15 @@ mod tests {
         let now = MON + 5 * DAY_MS;
         let gate = NudgeGate::default();
         let f = nudge_facts(&week_of_tasks(3), now);
-        assert_eq!(f, NudgeFacts { would_upgrade: 5, fails: 3, last_failed: 3, last_of: 5 });
+        assert_eq!(
+            f,
+            NudgeFacts {
+                would_upgrade: 5,
+                fails: 3,
+                last_failed: 3,
+                last_of: 5
+            }
+        );
         let mut notes = BudgetNotes::default();
         assert!(nudge_due(&f, &notes, gate, now));
         assert_eq!(
@@ -432,13 +560,31 @@ mod tests {
         // Thresholds: 4 tasks, or only 1 failure, is not enough.
         let four = nudge_facts(&week_of_tasks(3)[1..], now);
         assert!(!nudge_due(&four, &notes, gate, now));
-        assert!(!nudge_due(&nudge_facts(&week_of_tasks(1), now), &notes, gate, now));
+        assert!(!nudge_due(
+            &nudge_facts(&week_of_tasks(1), now),
+            &notes,
+            gate,
+            now
+        ));
         // A usage-limit hit counts as a failure too.
         let mut limits = week_of_tasks(1);
         limits.push((MON + DAY_MS, rec("ep9", &[], None, true)));
         assert_eq!(nudge_facts(&limits, now).fails, 2);
         // Never mid-task, in quiet hours or under the throttle.
-        for g in [NudgeGate { in_task: true, ..gate }, NudgeGate { quiet_hours: true, ..gate }, NudgeGate { throttled: true, ..gate }] {
+        for g in [
+            NudgeGate {
+                in_task: true,
+                ..gate
+            },
+            NudgeGate {
+                quiet_hours: true,
+                ..gate
+            },
+            NudgeGate {
+                throttled: true,
+                ..gate
+            },
+        ] {
             assert!(!nudge_due(&f, &notes, g, now), "{g:?}");
         }
         // Shown: not again for 30 days.
@@ -446,23 +592,44 @@ mod tests {
         assert!(!nudge_due(&f, &notes, gate, now + NUDGE_EVERY_MS - 1));
         assert!(nudge_due(&f, &notes, gate, now + NUDGE_EVERY_MS));
         // "Not now" mutes it for 30 days.
-        let muted = BudgetNotes { nudge_muted_until_ms: now + NUDGE_EVERY_MS, ..BudgetNotes::default() };
+        let muted = BudgetNotes {
+            nudge_muted_until_ms: now + NUDGE_EVERY_MS,
+            ..BudgetNotes::default()
+        };
         assert!(!nudge_due(&f, &muted, gate, now + NUDGE_EVERY_MS - 1));
         assert!(nudge_due(&f, &muted, gate, now + NUDGE_EVERY_MS));
         // Old tasks fall out of the 7-day window.
-        assert_eq!(nudge_facts(&week_of_tasks(3), now + 2 * WEEK_MS).would_upgrade, 0);
+        assert_eq!(
+            nudge_facts(&week_of_tasks(3), now + 2 * WEEK_MS).would_upgrade,
+            0
+        );
     }
 
     #[test]
     fn a_record_without_a_reported_cost_is_priced_from_the_registry() {
         use grokhub_core::model_registry::{Listing, ModelMeta, Prices, SourceKind};
         let mut reg = Registry::default();
-        let meta = ModelMeta { id: "grok-4.7".into(), context_length: Some(1), prices: Prices { prompt: Some(20_000), cached: Some(5_000), completion: Some(100_000), ..Prices::default() }, ..ModelMeta::default() };
+        let meta = ModelMeta {
+            id: "grok-4.7".into(),
+            context_length: Some(1),
+            prices: Prices {
+                prompt: Some(20_000),
+                cached: Some(5_000),
+                completion: Some(100_000),
+                ..Prices::default()
+            },
+            ..ModelMeta::default()
+        };
         reg.apply_refresh(&[Listing::new(SourceKind::XaiApi, vec![meta])], &[], 1);
         let mut r = rec("e", &[], None, false);
         r.used.model = "grok-4.7".into();
         r.signals.origin = Some("automation".into());
-        r.outcome.as_mut().unwrap().tokens = RouteTokens { input: 10_000, cached: 4_000, out: 500, reasoning: 500 };
+        r.outcome.as_mut().unwrap().tokens = RouteTokens {
+            input: 10_000,
+            cached: 4_000,
+            out: 500,
+            reasoning: 500,
+        };
         let c = call_cost(5, &r, &reg);
         let want = (6_000.0 * 20_000.0 + 4_000.0 * 5_000.0 + 1_000.0 * 100_000.0) / 1e8 / 100.0;
         assert_eq!((c.usd, c.background), (want, true));

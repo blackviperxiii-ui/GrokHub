@@ -60,7 +60,9 @@ fn production_text(raw: &str) -> String {
     let mut out = String::new();
     for (i, line) in lines.iter().enumerate() {
         let next = lines.get(i + 1).map(|l| l.trim_start()).unwrap_or("");
-        if line.trim() == "#[cfg(test)]" && (next.starts_with("mod ") || next.starts_with("pub(crate) mod ")) {
+        if line.trim() == "#[cfg(test)]"
+            && (next.starts_with("mod ") || next.starts_with("pub(crate) mod "))
+        {
             break;
         }
         out.push_str(line);
@@ -80,7 +82,9 @@ fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
             if !matches!(name.as_str(), "tests" | "target" | "fixtures") {
                 rust_files(&path, out);
             }
-        } else if name.ends_with(".rs") && !matches!(name.as_str(), "tests.rs" | "egress_coverage.rs") {
+        } else if name.ends_with(".rs")
+            && !matches!(name.as_str(), "tests.rs" | "egress_coverage.rs")
+        {
             out.push(path);
         }
     }
@@ -99,7 +103,11 @@ pub(crate) fn scan(crates_dir: &Path) -> BTreeMap<String, usize> {
         let n: usize = BUILDERS.iter().map(|b| text.matches(b).count()).sum();
         if n > 0 {
             let rel = path.strip_prefix(crates_dir).unwrap_or(&path);
-            let key = rel.components().map(|c| c.as_os_str().to_string_lossy()).collect::<Vec<_>>().join("/");
+            let key = rel
+                .components()
+                .map(|c| c.as_os_str().to_string_lossy())
+                .collect::<Vec<_>>()
+                .join("/");
             found.insert(key, n);
         }
     }
@@ -107,20 +115,27 @@ pub(crate) fn scan(crates_dir: &Path) -> BTreeMap<String, usize> {
 }
 
 /// Every file whose builders don't match its [`WRAPPED`] entry (or has none).
-pub(crate) fn unwrapped(found: &BTreeMap<String, usize>, wrapped: &[(&str, usize, &str)]) -> Vec<String> {
+pub(crate) fn unwrapped(
+    found: &BTreeMap<String, usize>,
+    wrapped: &[(&str, usize, &str)],
+) -> Vec<String> {
     let mut bad = Vec::new();
     for (path, n) in found {
         match wrapped.iter().find(|(p, _, _)| p == path) {
-            None => bad.push(format!("{path}: {n} outbound builder(s) with no EgressGuard entry")),
-            Some((_, listed, _)) if listed != n => {
-                bad.push(format!("{path}: {n} outbound builder(s), {listed} listed as wrapped"))
-            }
+            None => bad.push(format!(
+                "{path}: {n} outbound builder(s) with no EgressGuard entry"
+            )),
+            Some((_, listed, _)) if listed != n => bad.push(format!(
+                "{path}: {n} outbound builder(s), {listed} listed as wrapped"
+            )),
             Some(_) => {}
         }
     }
     for (path, _, _) in wrapped {
         if !found.contains_key(*path) {
-            bad.push(format!("{path}: listed as wrapped but builds no request (stale entry)"));
+            bad.push(format!(
+                "{path}: listed as wrapped but builds no request (stale entry)"
+            ));
         }
     }
     bad
@@ -133,7 +148,10 @@ fn crates_dir() -> PathBuf {
 #[test]
 fn every_outbound_builder_in_crates_is_behind_the_egress_guard() {
     let found = scan(&crates_dir());
-    assert!(found.len() >= WRAPPED.len(), "the walk found too little: {found:?}");
+    assert!(
+        found.len() >= WRAPPED.len(),
+        "the walk found too little: {found:?}"
+    );
     assert_eq!(unwrapped(&found, WRAPPED), Vec::<String>::new());
 }
 
@@ -145,17 +163,33 @@ fn an_unwrapped_fetch_fails_the_coverage_check() {
     // CRLF, a test module with a loopback fake, and one real fetch above it.
     let fixture = "pub fn fetch() -> String {\r\n    ureq::get(\"https://example.org/feed\").call().unwrap().into_string().unwrap()\r\n}\r\n\r\n#[cfg(test)]\r\nmod tests {\r\n    fn fake() { let _ = ureq::get(\"http://127.0.0.1:9/\"); }\r\n}\r\n";
     fs::write(src.join("feed.rs"), fixture).unwrap();
-    fs::write(src.join("tests.rs"), "fn t() { let _ = ureq::post(\"http://127.0.0.1:9/\"); }\n").unwrap();
+    fs::write(
+        src.join("tests.rs"),
+        "fn t() { let _ = ureq::post(\"http://127.0.0.1:9/\"); }\n",
+    )
+    .unwrap();
     let found = scan(&root);
-    assert_eq!(found, BTreeMap::from([("grokhub-demo/src/feed.rs".to_string(), 1)]));
+    assert_eq!(
+        found,
+        BTreeMap::from([("grokhub-demo/src/feed.rs".to_string(), 1)])
+    );
     assert_eq!(
         unwrapped(&found, &[]),
-        vec!["grokhub-demo/src/feed.rs: 1 outbound builder(s) with no EgressGuard entry".to_string()]
+        vec![
+            "grokhub-demo/src/feed.rs: 1 outbound builder(s) with no EgressGuard entry".to_string()
+        ]
     );
     let listed = [("grokhub-demo/src/feed.rs", 1, "guarded")];
     assert_eq!(unwrapped(&found, &listed), Vec::<String>::new());
     // A second fetch in a wrapped file fails until it is counted too.
-    fs::write(src.join("feed.rs"), fixture.replace("\r\n}\r\n\r\n#[cfg", "\r\n}\r\npub fn more() { let _ = ureq::agent(); }\r\n#[cfg")).unwrap();
+    fs::write(
+        src.join("feed.rs"),
+        fixture.replace(
+            "\r\n}\r\n\r\n#[cfg",
+            "\r\n}\r\npub fn more() { let _ = ureq::agent(); }\r\n#[cfg",
+        ),
+    )
+    .unwrap();
     assert_eq!(
         unwrapped(&scan(&root), &listed),
         vec!["grokhub-demo/src/feed.rs: 2 outbound builder(s), 1 listed as wrapped".to_string()]

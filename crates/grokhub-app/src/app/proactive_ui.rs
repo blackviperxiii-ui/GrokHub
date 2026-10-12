@@ -30,7 +30,11 @@ pub(super) fn load_budget() -> ProactiveBudget {
 
 /// `proactive:<topic>`: the MindCheck key a proactive span on this topic folds into.
 pub(super) fn proactive_key(topic: &str) -> String {
-    format!("{}:{}", hx::Origin::Proactive.as_str(), pro::topic_key(topic))
+    format!(
+        "{}:{}",
+        hx::Origin::Proactive.as_str(),
+        pro::topic_key(topic)
+    )
 }
 
 impl Cabin {
@@ -45,11 +49,15 @@ impl Cabin {
     /// Scope keys you granted in Settings. Only these sources are read.
     fn proactive_granted(&mut self) -> Vec<&'static str> {
         let ledger = self.consent();
-        [(hx::Scope::Calendar, "calendar"), (hx::Scope::Mail, "mail"), (hx::Scope::SystemState, "system_state")]
-            .into_iter()
-            .filter(|(scope, _)| ledger.scope_grant(scope).is_some())
-            .map(|(_, key)| key)
-            .collect()
+        [
+            (hx::Scope::Calendar, "calendar"),
+            (hx::Scope::Mail, "mail"),
+            (hx::Scope::SystemState, "system_state"),
+        ]
+        .into_iter()
+        .filter(|(scope, _)| ledger.scope_grant(scope).is_some())
+        .map(|(_, key)| key)
+        .collect()
     }
 
     /// Open board cards as the engine sees them.
@@ -71,7 +79,11 @@ impl Cabin {
 
     /// MindCheck over the proactive span log: Not this is a deny, a click an approve.
     fn proactive_mind(&self) -> hx::MindCheck {
-        let (spans, _) = hx::read_spans_tail(&crate::config::config_dir(), PROACTIVE_TRACE, PROACTIVE_MIND_LINES);
+        let (spans, _) = hx::read_spans_tail(
+            &crate::config::config_dir(),
+            PROACTIVE_TRACE,
+            PROACTIVE_MIND_LINES,
+        );
         let mut mind = hx::MindCheck::new(std::sync::Arc::new(hx::SystemClock));
         mind.extend(hx::signals_from_spans(&spans));
         mind
@@ -121,7 +133,10 @@ impl Cabin {
         self.last_proactive_ms = now;
         let posted = self.post_proactive(ranked, now);
         if posted == 0 {
-            self.heartbeat_outcome(grokhub_core::ProactiveAct::Anticipate, grokhub_core::ActOutcome::Empty);
+            self.heartbeat_outcome(
+                grokhub_core::ProactiveAct::Anticipate,
+                grokhub_core::ActOutcome::Empty,
+            );
         }
     }
 
@@ -139,7 +154,10 @@ impl Cabin {
                 continue;
             }
             let unsure = mind.prior(&key).is_some()
-                && mind.mind_route(&hx::Candidate { key: &key, hard: None }) == hx::MindRoute::Ask;
+                && mind.mind_route(&hx::Candidate {
+                    key: &key,
+                    hard: None,
+                }) == hx::MindRoute::Ask;
             let Some(route) = pro::route(c, unsure) else {
                 continue;
             };
@@ -184,11 +202,19 @@ impl Cabin {
         let meta = card.pulse.proactive.clone()?;
         self.proactive.engaged();
         self.save_proactive();
-        let action = meta.final_step.clone().unwrap_or_else(|| card.idea_action());
+        let action = meta
+            .final_step
+            .clone()
+            .unwrap_or_else(|| card.idea_action());
         let args = serde_json::json!({ "action": action }).to_string();
-        let outcome = hx::decide(hx::Step::Tool { name: &meta.tool, arguments: &args });
+        let outcome = hx::decide(hx::Step::Tool {
+            name: &meta.tool,
+            arguments: &args,
+        });
         match &outcome {
-            hx::GateOutcome::Park { hard: Some(class), .. } => {
+            hx::GateOutcome::Park {
+                hard: Some(class), ..
+            } => {
                 let span = hx::Span::hard_park(PROACTIVE_TRACE, &meta.tool, &args, *class)
                     .from_origin(hx::Origin::Proactive)
                     .on_path("proactive");
@@ -256,7 +282,14 @@ mod tests {
     }
 
     fn sam() -> Candidate {
-        let mut c = Candidate::soft(CandidateSource::Mail, "reply to Sam's email", "sam reply", 0.9, 0.8, "Sam asked about Friday.");
+        let mut c = Candidate::soft(
+            CandidateSource::Mail,
+            "reply to Sam's email",
+            "sam reply",
+            0.9,
+            0.8,
+            "Sam asked about Friday.",
+        );
         c.class = CandidateClass::Hard;
         c.reversible = Reversibility::Irreversible;
         c.tool = "send_email".into();
@@ -265,7 +298,12 @@ mod tests {
     }
 
     fn proactive_cards(cabin: &Cabin) -> Vec<UpdateCard> {
-        cabin.updates.iter().filter(|c| c.pulse.proactive.is_some()).cloned().collect()
+        cabin
+            .updates
+            .iter()
+            .filter(|c| c.pulse.proactive.is_some())
+            .cloned()
+            .collect()
     }
 
     #[test]
@@ -281,25 +319,56 @@ mod tests {
         assert_eq!(card.title, "I can draft this: reply to Sam's email");
         assert_eq!(card.body.as_deref(), Some("Hi Sam, Friday works for me."));
         assert_eq!(super::super::pulse_ui::run_label(&card), "Send…");
-        assert!(cabin.harness.park.is_none() && !cabin.running, "preparing ran nothing");
+        assert!(
+            cabin.harness.park.is_none() && !cabin.running,
+            "preparing ran nothing"
+        );
 
         let out = cabin.proactive_click(&card.id).expect("a proactive card");
-        assert!(matches!(out, hx::GateOutcome::Park { hard: Some(HardClass::Send), .. }), "{out:?}");
+        assert!(
+            matches!(
+                out,
+                hx::GateOutcome::Park {
+                    hard: Some(HardClass::Send),
+                    ..
+                }
+            ),
+            "{out:?}"
+        );
         let park = cabin.harness.park.clone().expect("the hard send card");
         assert_eq!(park.class, HardClass::Send);
-        assert_eq!(park.source, harness_ui::ParkSource::Proactive(card.id.clone()));
-        assert_eq!((park.tool.as_str(), park.action.as_str()), ("send_email", "reply to Sam's email"));
-        assert!(matches!(cabin.nav, Nav::Chat), "the hard card is in the chat column");
+        assert_eq!(
+            park.source,
+            harness_ui::ParkSource::Proactive(card.id.clone())
+        );
+        assert_eq!(
+            (park.tool.as_str(), park.action.as_str()),
+            ("send_email", "reply to Sam's email")
+        );
+        assert!(
+            matches!(cabin.nav, Nav::Chat),
+            "the hard card is in the chat column"
+        );
         assert!(!cabin.running, "Always and Full sent nothing");
         // Enter never approves a hard card; Esc denies.
         assert_eq!(hx::hard_card_key(true, false, false), None);
-        assert_eq!(hx::hard_card_key(false, true, false), Some(hx::HardAnswer::Deny));
+        assert_eq!(
+            hx::hard_card_key(false, true, false),
+            Some(hx::HardAnswer::Deny)
+        );
         cabin.resolve_hard_park(false, "Esc");
         assert!(cabin.harness.park.is_none() && !cabin.running);
         let spans = hx::read_spans(&root, PROACTIVE_TRACE).unwrap();
         let got: Vec<(&str, &str, &str, &str)> = spans
             .iter()
-            .map(|s| (s.tool.as_str(), s.decision.as_str(), s.approval_class.as_str(), s.origin.as_str()))
+            .map(|s| {
+                (
+                    s.tool.as_str(),
+                    s.decision.as_str(),
+                    s.approval_class.as_str(),
+                    s.origin.as_str(),
+                )
+            })
             .collect();
         assert_eq!(got, vec![("send_email", "park", "send", "proactive")]);
     }
@@ -308,13 +377,26 @@ mod tests {
     fn a_half_reversible_candidate_is_a_card_only_and_runs_on_click() {
         let (_pin, _root) = pinned("proactive-half");
         let mut cabin = Cabin::quiet_for_test();
-        let c = Candidate::soft(CandidateSource::Workboard, "tidy the board", "board tidy", 0.9, 0.9, "w");
+        let c = Candidate::soft(
+            CandidateSource::Workboard,
+            "tidy the board",
+            "board tidy",
+            0.9,
+            0.9,
+            "w",
+        );
         assert_eq!(c.reversible, Reversibility::ByHand);
         assert_eq!(cabin.post_proactive(vec![c], T0), 1);
         let card = proactive_cards(&cabin).pop().unwrap();
         assert_eq!(card.title, "I can tidy the board");
-        assert_eq!(card.pulse.proactive.as_ref().map(|p| (p.route, p.help)), Some((ProactiveRoute::ICan, 405)));
-        assert!(!cabin.running && cabin.messages.is_empty() && cabin.harness.park.is_none(), "a card, never an action");
+        assert_eq!(
+            card.pulse.proactive.as_ref().map(|p| (p.route, p.help)),
+            Some((ProactiveRoute::ICan, 405))
+        );
+        assert!(
+            !cabin.running && cabin.messages.is_empty() && cabin.harness.park.is_none(),
+            "a card, never an action"
+        );
         // Your click is what runs it: soft, so no hard card, and the turn is
         // tagged origin proactive.
         let out = cabin.proactive_click(&card.id).unwrap();
@@ -324,8 +406,9 @@ mod tests {
     }
 
     const NATO: [&str; 20] = [
-        "Alpha", "Bravo", "Charlie", "Delta", "Foxtrot", "Golf", "Hotel", "India", "Juliet", "Kilo", "Lima", "Mike",
-        "November", "Oscar", "Papa", "Quebec", "Romeo", "Sierra", "Tango", "Uniform",
+        "Alpha", "Bravo", "Charlie", "Delta", "Foxtrot", "Golf", "Hotel", "India", "Juliet",
+        "Kilo", "Lima", "Mike", "November", "Oscar", "Papa", "Quebec", "Romeo", "Sierra", "Tango",
+        "Uniform",
     ];
 
     fn board_of(n: usize) -> Vec<grokhub_core::BoardCard> {
@@ -350,16 +433,29 @@ mod tests {
         let mut cabin = Cabin::quiet_for_test();
         cabin.board = board_of(20);
         cabin.tick_proactive(T0, false, true);
-        assert!(proactive_cards(&cabin).is_empty() && cabin.proactive.queue.is_empty(), "busy: nothing");
+        assert!(
+            proactive_cards(&cabin).is_empty() && cabin.proactive.queue.is_empty(),
+            "busy: nothing"
+        );
         assert_eq!(cabin.last_proactive_ms, 0);
 
         cabin.tick_proactive(T0, true, false);
-        assert!(proactive_cards(&cabin).is_empty(), "quiet hours: nothing surfaces");
-        assert_eq!(cabin.proactive.queue.len(), grokhub_core::proactive::QUIET_QUEUE_MAX);
+        assert!(
+            proactive_cards(&cabin).is_empty(),
+            "quiet hours: nothing surfaces"
+        );
+        assert_eq!(
+            cabin.proactive.queue.len(),
+            grokhub_core::proactive::QUIET_QUEUE_MAX
+        );
 
         let after = T0 + PROACTIVE_EVERY_MS;
         cabin.tick_proactive(after, false, false);
-        assert_eq!(proactive_cards(&cabin).len(), 3, "the queue drains after the window, 3 per 4 hours");
+        assert_eq!(
+            proactive_cards(&cabin).len(),
+            3,
+            "the queue drains after the window, 3 per 4 hours"
+        );
         for i in 1..4 {
             cabin.tick_proactive(after + i * PROACTIVE_EVERY_MS, false, false);
         }
@@ -372,7 +468,16 @@ mod tests {
     fn not_this_mutes_the_topic_for_seven_days_then_it_asks_first() {
         let (_pin, _root) = pinned("proactive-not-this");
         let mut cabin = Cabin::quiet_for_test();
-        let prep = || Candidate::soft(CandidateSource::UserModel, "get standup prep ready", "standup prep", 0.8, 0.8, "You do this daily.");
+        let prep = || {
+            Candidate::soft(
+                CandidateSource::UserModel,
+                "get standup prep ready",
+                "standup prep",
+                0.8,
+                0.8,
+                "You do this daily.",
+            )
+        };
         // The cabin's clock is the wall clock; the budget takes it as `now`.
         let t0 = now_ms();
         let day = grokhub_core::proactive::DAY_MS;
@@ -381,9 +486,16 @@ mod tests {
         assert_eq!(card.title, "I can get standup prep ready");
         cabin.pulse_not_this(&card.id, "2027-01-15");
         assert_eq!(cabin.post_proactive(vec![prep()], t0 + 6 * day), 0, "muted");
-        assert_eq!(cabin.post_proactive(vec![prep()], t0 + 8 * day), 1, "7 days passed");
+        assert_eq!(
+            cabin.post_proactive(vec![prep()], t0 + 8 * day),
+            1,
+            "7 days passed"
+        );
         let back = proactive_cards(&cabin).pop().unwrap();
-        assert_eq!(back.title, "Get standup prep ready", "MindCheck heard a deny: a one-tap suggestion");
+        assert_eq!(
+            back.title, "Get standup prep ready",
+            "MindCheck heard a deny: a one-tap suggestion"
+        );
         assert_eq!(super::super::pulse_ui::run_label(&back), "Do it");
     }
 
@@ -409,32 +521,61 @@ mod tests {
         cabin.proactive_span("downloads tidy", "deny", "not this");
         assert_eq!(cabin.post_proactive(vec![tidy()], t0), 1);
         let card = proactive_cards(&cabin).pop().unwrap();
-        assert_eq!(card.title, "Tidy Downloads: move 14 installers to ~/Downloads/old");
-        assert_eq!(card.pulse.proactive.as_ref().map(|p| p.route), Some(ProactiveRoute::Suggest));
+        assert_eq!(
+            card.title,
+            "Tidy Downloads: move 14 installers to ~/Downloads/old"
+        );
+        assert_eq!(
+            card.pulse.proactive.as_ref().map(|p| p.route),
+            Some(ProactiveRoute::Suggest)
+        );
         assert_eq!(super::super::pulse_ui::run_label(&card), "Do it");
-        assert!(cabin.harness.park.is_none() && !cabin.running, "posting asks nothing and runs nothing");
+        assert!(
+            cabin.harness.park.is_none() && !cabin.running,
+            "posting asks nothing and runs nothing"
+        );
 
         // One tap runs it once through the gate: no approval card.
-        assert_eq!(cabin.proactive_click(&card.id), Some(hx::GateOutcome::Allow));
+        assert_eq!(
+            cabin.proactive_click(&card.id),
+            Some(hx::GateOutcome::Allow)
+        );
         assert!(cabin.harness.park.is_none());
         assert_eq!(cabin.harness.next_origin, Some(hx::Origin::Proactive));
         let approvals = |root: &std::path::Path| {
-            hx::read_spans(root, PROACTIVE_TRACE).unwrap().iter().filter(|s| s.decision == "approve").count()
+            hx::read_spans(root, PROACTIVE_TRACE)
+                .unwrap()
+                .iter()
+                .filter(|s| s.decision == "approve")
+                .count()
         };
         assert_eq!(approvals(&root), 1);
 
         // The next one is dismissed: no prompt, no status line, +0.1, and the
         // topic stays off the feed for the rest of the day.
         assert_eq!(cabin.post_proactive(vec![tidy()], t0 + 1_000), 1);
-        let again = proactive_cards(&cabin).into_iter().find(|c| c.id != card.id).unwrap();
+        let again = proactive_cards(&cabin)
+            .into_iter()
+            .find(|c| c.id != card.id)
+            .unwrap();
         let status = cabin.status.clone();
         cabin.pulse_dismiss(&again.id, "2027-01-15");
         assert_eq!(cabin.status, status, "dismiss is quiet");
         assert!(cabin.harness.park.is_none());
-        let prior = cabin.proactive_mind().prior(&proactive_key("downloads tidy")).unwrap();
-        assert_eq!(prior.hundredths, 65, "deny 0.60, approve -0.05, dismiss +0.10");
+        let prior = cabin
+            .proactive_mind()
+            .prior(&proactive_key("downloads tidy"))
+            .unwrap();
+        assert_eq!(
+            prior.hundredths, 65,
+            "deny 0.60, approve -0.05, dismiss +0.10"
+        );
         assert_eq!(approvals(&root), 1, "dismiss ran nothing");
-        assert_eq!(cabin.post_proactive(vec![tidy()], t0 + 2_000), 0, "not posted again that day");
+        assert_eq!(
+            cabin.post_proactive(vec![tidy()], t0 + 2_000),
+            0,
+            "not posted again that day"
+        );
         assert_eq!(cabin.post_proactive(vec![tidy()], t0 + day + 2_000), 1);
     }
 
@@ -442,8 +583,19 @@ mod tests {
     fn dont_do_this_again_means_the_topic_is_never_suggested() {
         let (_pin, _root) = pinned("proactive-never");
         let mut cabin = Cabin::quiet_for_test();
-        let c = Candidate::soft(CandidateSource::Workboard, "archive 3 finished board cards", "board archive", 0.9, 0.9, "w");
-        cabin.proactive_span("board archive", "never", "user answer on a Done-for-you card");
+        let c = Candidate::soft(
+            CandidateSource::Workboard,
+            "archive 3 finished board cards",
+            "board archive",
+            0.9,
+            0.9,
+            "w",
+        );
+        cabin.proactive_span(
+            "board archive",
+            "never",
+            "user answer on a Done-for-you card",
+        );
         assert_eq!(cabin.post_proactive(vec![c], now_ms()), 0);
         assert!(proactive_cards(&cabin).is_empty());
     }
@@ -452,8 +604,22 @@ mod tests {
     fn two_proactive_dismissals_in_a_row_halve_the_card_budget() {
         let (_pin, _root) = pinned("proactive-dismiss");
         let mut cabin = Cabin::quiet_for_test();
-        let a = Candidate::soft(CandidateSource::Workboard, "sort receipts", "receipts sorting", 0.9, 0.9, "w");
-        let b = Candidate::soft(CandidateSource::Workboard, "file the invoices", "invoices filing", 0.9, 0.9, "w");
+        let a = Candidate::soft(
+            CandidateSource::Workboard,
+            "sort receipts",
+            "receipts sorting",
+            0.9,
+            0.9,
+            "w",
+        );
+        let b = Candidate::soft(
+            CandidateSource::Workboard,
+            "file the invoices",
+            "invoices filing",
+            0.9,
+            0.9,
+            "w",
+        );
         assert_eq!(cabin.post_proactive(vec![a, b], T0), 2);
         for card in proactive_cards(&cabin) {
             cabin.pulse_dismiss(&card.id, "2027-01-15");
@@ -483,11 +649,25 @@ mod tests {
         let (_pin, _root) = pinned("proactive-nav");
         let mut cabin = Cabin::quiet_for_test();
         cabin.nav = Nav::Pulse;
-        let c = Candidate::soft(CandidateSource::Workboard, "tidy the board", "board tidy", 0.9, 0.9, "w");
+        let c = Candidate::soft(
+            CandidateSource::Workboard,
+            "tidy the board",
+            "board tidy",
+            0.9,
+            0.9,
+            "w",
+        );
         cabin.post_proactive(vec![c], T0);
-        assert!(known(cabin.nav) && matches!(cabin.nav, Nav::Pulse), "posting a card never moves you");
+        assert!(
+            known(cabin.nav) && matches!(cabin.nav, Nav::Pulse),
+            "posting a card never moves you"
+        );
         let card = proactive_cards(&cabin).pop().unwrap();
-        assert_eq!(card.kind, grokhub_core::UpdateKind::Suggestion, "an existing Pulse card kind");
+        assert_eq!(
+            card.kind,
+            grokhub_core::UpdateKind::Suggestion,
+            "an existing Pulse card kind"
+        );
         assert!(grokhub_core::pulse::is_idea_card(&card));
     }
 }

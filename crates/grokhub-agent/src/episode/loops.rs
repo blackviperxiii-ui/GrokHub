@@ -45,20 +45,32 @@ fn normalize(text: &str) -> String {
         Ok(v) => v.to_string(),
         Err(_) => text.to_string(),
     };
-    text.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase()
+    text.split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
 }
 
 /// "click 'Save'", "click at 120,40", or the bare tool.
 pub fn call_label(tool: &str, args: &str) -> String {
     let v: Value = serde_json::from_str(args).unwrap_or(Value::Null);
-    let named = ["label", "name", "target", "title", "text", "key", "keys", "command", "path", "url"]
-        .iter()
-        .find_map(|k| v.get(*k).and_then(Value::as_str).filter(|s| !s.trim().is_empty()));
+    let named = [
+        "label", "name", "target", "title", "text", "key", "keys", "command", "path", "url",
+    ]
+    .iter()
+    .find_map(|k| {
+        v.get(*k)
+            .and_then(Value::as_str)
+            .filter(|s| !s.trim().is_empty())
+    });
     if let Some(n) = named {
         let n: String = n.trim().chars().take(40).collect();
         return format!("{tool} '{n}'");
     }
-    match (v.get("x").and_then(Value::as_i64), v.get("y").and_then(Value::as_i64)) {
+    match (
+        v.get("x").and_then(Value::as_i64),
+        v.get("y").and_then(Value::as_i64),
+    ) {
         (Some(x), Some(y)) => format!("{tool} at {x},{y}"),
         _ => tool.to_string(),
     }
@@ -67,7 +79,12 @@ pub fn call_label(tool: &str, args: &str) -> String {
 impl LoopEntry {
     pub fn new(tool: &str, args_redacted: &str, outcome: Outcome, result: &str) -> Self {
         let result: String = normalize(result).chars().take(120).collect();
-        Self { call: format!("{tool}\u{1f}{}", normalize(args_redacted)), label: call_label(tool, args_redacted), outcome, result }
+        Self {
+            call: format!("{tool}\u{1f}{}", normalize(args_redacted)),
+            label: call_label(tool, args_redacted),
+            outcome,
+            result,
+        }
     }
 }
 
@@ -78,15 +95,28 @@ pub fn note_call(ring: &mut VecDeque<LoopEntry>, entry: LoopEntry) -> Option<Str
     }
     ring.push_back(entry);
     let last = ring.back()?;
-    let same_call: Vec<&LoopEntry> = ring.iter().filter(|e| e.call == last.call && e.outcome != Outcome::Moved).collect();
-    let failed_calls = same_call.iter().filter(|e| e.outcome == Outcome::Failed).count();
+    let same_call: Vec<&LoopEntry> = ring
+        .iter()
+        .filter(|e| e.call == last.call && e.outcome != Outcome::Moved)
+        .collect();
+    let failed_calls = same_call
+        .iter()
+        .filter(|e| e.outcome == Outcome::Failed)
+        .count();
     let reason = if last.outcome == Outcome::Failed && failed_calls >= SAME_FAILED_CALL {
         Some(format!("replan: {} failed {failed_calls}×", last.label))
     } else if last.outcome != Outcome::Moved && same_call.len() >= SAME_REPEAT {
-        let how = if last.outcome == Outcome::Failed { "failed" } else { "changed nothing" };
+        let how = if last.outcome == Outcome::Failed {
+            "failed"
+        } else {
+            "changed nothing"
+        };
         Some(format!("replan: {} {how} {}×", last.label, same_call.len()))
     } else if last.outcome == Outcome::Failed {
-        let n = ring.iter().filter(|e| e.outcome == Outcome::Failed && e.result == last.result).count();
+        let n = ring
+            .iter()
+            .filter(|e| e.outcome == Outcome::Failed && e.result == last.result)
+            .count();
         (n >= SAME_REPEAT).then(|| {
             let r: String = last.result.chars().take(60).collect();
             format!("replan: {n} steps failed with '{r}'")
@@ -104,7 +134,13 @@ pub fn note_call(ring: &mut VecDeque<LoopEntry>, entry: LoopEntry) -> Option<Str
 mod tests {
     use super::*;
 
-    fn push(ring: &mut VecDeque<LoopEntry>, tool: &str, args: &str, outcome: Outcome, result: &str) -> Option<String> {
+    fn push(
+        ring: &mut VecDeque<LoopEntry>,
+        tool: &str,
+        args: &str,
+        outcome: Outcome,
+        result: &str,
+    ) -> Option<String> {
         note_call(ring, LoopEntry::new(tool, args, outcome, result))
     }
 
@@ -112,10 +148,29 @@ mod tests {
     fn an_identical_failing_click_replans_on_the_second_try() {
         let mut ring = VecDeque::new();
         let save = r#"{"x":120,"y":40,"label":"Save"}"#;
-        assert_eq!(push(&mut ring, "click", save, Outcome::Failed, "failed: no window"), None);
+        assert_eq!(
+            push(
+                &mut ring,
+                "click",
+                save,
+                Outcome::Failed,
+                "failed: no window"
+            ),
+            None
+        );
         // Same call, keys in another order and spaced differently.
         let again = r#"{ "label": "Save", "y": 40, "x": 120 }"#;
-        assert_eq!(push(&mut ring, "click", again, Outcome::Failed, "failed: no window").as_deref(), Some("replan: click 'Save' failed 2×"));
+        assert_eq!(
+            push(
+                &mut ring,
+                "click",
+                again,
+                Outcome::Failed,
+                "failed: no window"
+            )
+            .as_deref(),
+            Some("replan: click 'Save' failed 2×")
+        );
         assert!(ring.is_empty(), "the ring starts over after a re-plan");
     }
 
@@ -123,10 +178,28 @@ mod tests {
     fn the_same_click_that_changes_nothing_replans_on_the_third() {
         let mut ring = VecDeque::new();
         let save = r#"{"label":"Save"}"#;
-        assert_eq!(push(&mut ring, "click", save, Outcome::Still, "click ok"), None);
-        assert_eq!(push(&mut ring, "scroll", r#"{"dy":3}"#, Outcome::Moved, "scroll ok"), None);
-        assert_eq!(push(&mut ring, "click", save, Outcome::Still, "click ok"), None);
-        assert_eq!(push(&mut ring, "click", save, Outcome::Still, "click ok").as_deref(), Some("replan: click 'Save' changed nothing 3×"));
+        assert_eq!(
+            push(&mut ring, "click", save, Outcome::Still, "click ok"),
+            None
+        );
+        assert_eq!(
+            push(
+                &mut ring,
+                "scroll",
+                r#"{"dy":3}"#,
+                Outcome::Moved,
+                "scroll ok"
+            ),
+            None
+        );
+        assert_eq!(
+            push(&mut ring, "click", save, Outcome::Still, "click ok"),
+            None
+        );
+        assert_eq!(
+            push(&mut ring, "click", save, Outcome::Still, "click ok").as_deref(),
+            Some("replan: click 'Save' changed nothing 3×")
+        );
     }
 
     #[test]
@@ -134,10 +207,27 @@ mod tests {
         let mut ring = VecDeque::new();
         for (i, x) in [10, 20].iter().enumerate() {
             let args = format!(r#"{{"x":{x},"y":40}}"#);
-            assert_eq!(push(&mut ring, "click", &args, Outcome::Failed, "failed: Window  not found"), None, "call {i}");
+            assert_eq!(
+                push(
+                    &mut ring,
+                    "click",
+                    &args,
+                    Outcome::Failed,
+                    "failed: Window  not found"
+                ),
+                None,
+                "call {i}"
+            );
         }
         assert_eq!(
-            push(&mut ring, "click", r#"{"x":30,"y":40}"#, Outcome::Failed, "failed: window not found").as_deref(),
+            push(
+                &mut ring,
+                "click",
+                r#"{"x":30,"y":40}"#,
+                Outcome::Failed,
+                "failed: window not found"
+            )
+            .as_deref(),
             Some("replan: 3 steps failed with 'failed: window not found'")
         );
     }
@@ -147,16 +237,31 @@ mod tests {
         let mut ring = VecDeque::new();
         for i in 0..20 {
             let args = format!(r#"{{"x":{i},"y":40}}"#);
-            assert_eq!(push(&mut ring, "click", &args, Outcome::Moved, "click ok"), None);
+            assert_eq!(
+                push(&mut ring, "click", &args, Outcome::Moved, "click ok"),
+                None
+            );
         }
         // The same scroll that keeps moving the page is progress too.
         for _ in 0..10 {
-            assert_eq!(push(&mut ring, "scroll", r#"{"dy":3}"#, Outcome::Moved, "scroll ok"), None);
+            assert_eq!(
+                push(
+                    &mut ring,
+                    "scroll",
+                    r#"{"dy":3}"#,
+                    Outcome::Moved,
+                    "scroll ok"
+                ),
+                None
+            );
         }
         // Different calls that change nothing are the stall backstop's, not a loop.
         for i in 0..10 {
             let args = format!(r#"{{"x":{i},"y":90}}"#);
-            assert_eq!(push(&mut ring, "click", &args, Outcome::Still, "click ok"), None);
+            assert_eq!(
+                push(&mut ring, "click", &args, Outcome::Still, "click ok"),
+                None
+            );
         }
         assert_eq!(ring.len(), LOOP_RING);
     }

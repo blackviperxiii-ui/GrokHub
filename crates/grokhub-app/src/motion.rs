@@ -211,9 +211,17 @@ pub fn one_shot_breath(now: f64, t0: f64, reduced: bool) -> f32 {
 
 /// Position + scale for the agent cursor stub at `now`.
 pub fn cursor_sample(anim: &AgentCursorAnim, now: f64, reduced: bool) -> (Pos2, f32, bool) {
-    let dur = if reduced { 0.0001 } else { anim.duration.max(0.0001) };
+    let dur = if reduced {
+        0.0001
+    } else {
+        anim.duration.max(0.0001)
+    };
     // Reduced motion snaps on the first frame.
-    let raw = if reduced { 1.0 } else { ((now - anim.t0) as f32 / dur).clamp(0.0, 1.0) };
+    let raw = if reduced {
+        1.0
+    } else {
+        ((now - anim.t0) as f32 / dur).clamp(0.0, 1.0)
+    };
     match anim.phase {
         AgentCursorPhase::Travel => {
             // Overshoot: 4–8px past `to` along travel, then settle in the last settle window.
@@ -223,7 +231,13 @@ pub fn cursor_sample(anim: &AgentCursorAnim, now: f64, reduced: bool) -> (Pos2, 
                     .clamp(CURSOR_OVERSHOOT_MIN, CURSOR_OVERSHOOT_MAX),
                 settle_frac: CURSOR_SETTLE_SECS / dur,
             };
-            let (x, y) = travel_point(anim.motion, (anim.from.x, anim.from.y), (anim.to.x, anim.to.y), raw, shape);
+            let (x, y) = travel_point(
+                anim.motion,
+                (anim.from.x, anim.from.y),
+                (anim.to.x, anim.to.y),
+                raw,
+                shape,
+            );
             (Pos2::new(x, y), 1.0, raw < 1.0)
         }
         AgentCursorPhase::HoverSettle => {
@@ -231,17 +245,12 @@ pub fn cursor_sample(anim: &AgentCursorAnim, now: f64, reduced: bool) -> (Pos2, 
             let scale = if raw < 0.5 {
                 1.0 + (CURSOR_HOVER_SCALE - 1.0) * ease_out_cubic(raw * 2.0)
             } else {
-                CURSOR_HOVER_SCALE
-                    - (CURSOR_HOVER_SCALE - 1.0) * ease_out_cubic((raw - 0.5) * 2.0)
+                CURSOR_HOVER_SCALE - (CURSOR_HOVER_SCALE - 1.0) * ease_out_cubic((raw - 0.5) * 2.0)
             };
             (anim.to, scale, raw < 1.0)
         }
         AgentCursorPhase::ClickPress => {
-            let scale = if raw < 1.0 {
-                CURSOR_CLICK_SCALE
-            } else {
-                1.0
-            };
+            let scale = if raw < 1.0 { CURSOR_CLICK_SCALE } else { 1.0 };
             (anim.to, scale, raw < 1.0)
         }
     }
@@ -308,10 +317,7 @@ fn outset_triangle(tip: Pos2, left: Pos2, right: Pos2, px: f32) -> [Pos2; 3] {
 }
 
 /// Drive + paint an optional agent cursor; clears when finished. Requests repaint while live.
-pub fn tick_agent_cursor(
-    ui: &egui::Ui,
-    anim: &mut Option<AgentCursorAnim>,
-) {
+pub fn tick_agent_cursor(ui: &egui::Ui, anim: &mut Option<AgentCursorAnim>) {
     let Some(mut cur) = anim.take() else {
         return;
     };
@@ -337,7 +343,12 @@ pub fn needs_attention_summary(n: usize) -> String {
 }
 
 /// Paint a 2px white thinking rim around `rect` when `thinking`.
-pub fn paint_thinking_rim(painter: &egui::Painter, rect: egui::Rect, thinking: bool, time_secs: f32) {
+pub fn paint_thinking_rim(
+    painter: &egui::Painter,
+    rect: egui::Rect,
+    thinking: bool,
+    time_secs: f32,
+) {
     if !thinking {
         return;
     }
@@ -426,11 +437,8 @@ mod tests {
 
     #[test]
     fn cursor_travel_then_advances() {
-        let mut anim = AgentCursorAnim::start_travel(
-            Pos2::new(0.0, 0.0),
-            Pos2::new(100.0, 0.0),
-            0.0,
-        );
+        let mut anim =
+            AgentCursorAnim::start_travel(Pos2::new(0.0, 0.0), Pos2::new(100.0, 0.0), 0.0);
         let (p0, s0, live0) = cursor_sample(&anim, 0.0, false);
         assert!(live0);
         assert!((s0 - 1.0).abs() < 0.01);
@@ -449,14 +457,27 @@ mod tests {
         let to = Pos2::new(240.0, 118.0);
         assert_eq!(AGENT_CURSOR_MOTION, CursorMotion::SignatureArc);
         for motion in grokhub_core::cursor_motion::CURSOR_MOTIONS {
-            let anim = AgentCursorAnim { motion, ..AgentCursorAnim::start_travel(from, to, 0.0) };
+            let anim = AgentCursorAnim {
+                motion,
+                ..AgentCursorAnim::start_travel(from, to, 0.0)
+            };
             let (mid, _, live) = cursor_sample(&anim, f64::from(CURSOR_TRAVEL_SECS) * 0.4, false);
             assert!(live, "{} is still travelling", motion.cua_name());
             assert_ne!(mid, to, "{} does not jump", motion.cua_name());
             let (end, scale, live) = cursor_sample(&anim, f64::from(CURSOR_TRAVEL_SECS), false);
-            assert_eq!((end, scale, live), (to, 1.0, false), "{}", motion.cua_name());
+            assert_eq!(
+                (end, scale, live),
+                (to, 1.0, false),
+                "{}",
+                motion.cua_name()
+            );
             // Reduced motion: the first frame is already at the target.
-            assert_eq!(cursor_sample(&anim, 0.0, true), (to, 1.0, false), "{}", motion.cua_name());
+            assert_eq!(
+                cursor_sample(&anim, 0.0, true),
+                (to, 1.0, false),
+                "{}",
+                motion.cua_name()
+            );
         }
     }
 

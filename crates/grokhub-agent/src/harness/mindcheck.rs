@@ -129,13 +129,18 @@ pub struct MindCheck {
 
 impl std::fmt::Debug for MindCheck {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("MindCheck").field("signals", &self.signals.len()).finish()
+        f.debug_struct("MindCheck")
+            .field("signals", &self.signals.len())
+            .finish()
     }
 }
 
 impl MindCheck {
     pub fn new(clock: Arc<dyn Clock>) -> Self {
-        Self { signals: Vec::new(), clock }
+        Self {
+            signals: Vec::new(),
+            clock,
+        }
     }
 
     pub fn record(&mut self, signal: MindSignal) {
@@ -149,7 +154,11 @@ impl MindCheck {
     /// The folded prior for `key` as of the clock, or `None` with no history.
     pub fn prior(&self, key: &str) -> Option<Prior> {
         let now = self.clock.now_ms();
-        let mut mine: Vec<&MindSignal> = self.signals.iter().filter(|s| s.key == key && s.at_ms <= now).collect();
+        let mut mine: Vec<&MindSignal> = self
+            .signals
+            .iter()
+            .filter(|s| s.key == key && s.at_ms <= now)
+            .collect();
         if mine.is_empty() {
             return None;
         }
@@ -160,14 +169,18 @@ impl MindCheck {
             match signal.event {
                 MindEvent::Deny | MindEvent::Undo => {
                     prior.hundredths = prior.hundredths.max(MIND_DENY);
-                    prior.ask_until_ms = prior.ask_until_ms.max(signal.at_ms.saturating_add(MIND_ASK_FIRST_MS));
+                    prior.ask_until_ms = prior
+                        .ask_until_ms
+                        .max(signal.at_ms.saturating_add(MIND_ASK_FIRST_MS));
                 }
                 MindEvent::Approve if !prior.never => {
                     prior.hundredths = prior.hundredths.saturating_sub(MIND_APPROVE_STEP)
                 }
                 MindEvent::Approve => {}
                 MindEvent::Dismiss if prior.never => {}
-                MindEvent::Dismiss => prior.hundredths = (prior.hundredths + MIND_DISMISS_STEP).min(100),
+                MindEvent::Dismiss => {
+                    prior.hundredths = (prior.hundredths + MIND_DISMISS_STEP).min(100)
+                }
                 MindEvent::Never => {
                     prior.never = true;
                     prior.hundredths = 100;
@@ -211,7 +224,11 @@ pub fn mind_key(span: &Span) -> String {
     let tool = span.tool.rsplit("__").next().unwrap_or(&span.tool);
     let app = serde_json::from_str::<serde_json::Value>(&span.args_redacted)
         .ok()
-        .and_then(|v| v.get("app").and_then(|a| a.as_str()).map(|a| a.trim().to_ascii_lowercase()))
+        .and_then(|v| {
+            v.get("app")
+                .and_then(|a| a.as_str())
+                .map(|a| a.trim().to_ascii_lowercase())
+        })
         .filter(|a| !a.is_empty());
     match app {
         Some(app) => format!("{class}:{tool}@{app}"),
@@ -301,7 +318,11 @@ pub fn note_prior(store: &AmrStore, signal: &MindSignal) -> Result<Noted, AmrErr
 }
 
 /// Fold the signals in and write a prior node for each deny or Undo.
-pub fn learn(store: &AmrStore, mind: &mut MindCheck, signals: Vec<MindSignal>) -> Result<Vec<Noted>, AmrError> {
+pub fn learn(
+    store: &AmrStore,
+    mind: &mut MindCheck,
+    signals: Vec<MindSignal>,
+) -> Result<Vec<Noted>, AmrError> {
     let mut out = Vec::new();
     for signal in &signals {
         out.push(note_prior(store, signal)?);
@@ -314,7 +335,10 @@ pub fn learn(store: &AmrStore, mind: &mut MindCheck, signals: Vec<MindSignal>) -
 /// card. The user's own Forget click never comes here.
 pub fn agent_forget(count: usize) -> GateOutcome {
     let action = format!("forget {count} learned notes");
-    decide(Step::Ask { title: AGENT_FORGET_TOOL, action: &action })
+    decide(Step::Ask {
+        title: AGENT_FORGET_TOOL,
+        action: &action,
+    })
 }
 
 /// The soft-path verdict for a proactive candidate: [`decide`] with
@@ -323,7 +347,10 @@ pub(crate) fn proactive_outcome(name: &str, key: &str, mind: &MindCheck) -> Gate
     match mind.mind_route(&Candidate { key, hard: None }) {
         MindRoute::MayAuto => GateOutcome::Allow,
         MindRoute::Ask => GateOutcome::Park {
-            reason: format!("ask first: {name} ({key}, p_mind {:.2})", mind.mind_prior(key)),
+            reason: format!(
+                "ask first: {name} ({key}, p_mind {:.2})",
+                mind.mind_prior(key)
+            ),
             hard: None,
             needs_jeremy: false,
         },
@@ -354,7 +381,8 @@ mod tests {
     }
 
     fn tidy(decision: &str, ts: u64) -> Span {
-        let mut s = Span::deny("s1", "tidy_downloads", "{}", "denied", "soft").from_origin(Origin::Proactive);
+        let mut s = Span::deny("s1", "tidy_downloads", "{}", "denied", "soft")
+            .from_origin(Origin::Proactive);
         s.decision = decision.into();
         s.ts_ms = ts;
         s
@@ -376,10 +404,18 @@ mod tests {
         );
         mind.extend(signals);
         assert_eq!(mind.mind_prior("proactive:tidy_downloads"), 0.6);
-        let candidate = Candidate { key: "proactive:tidy_downloads", hard: None };
+        let candidate = Candidate {
+            key: "proactive:tidy_downloads",
+            hard: None,
+        };
         assert_eq!(mind.mind_route(&candidate), MindRoute::Ask);
         assert_eq!(
-            decide(Step::Proactive { name: "tidy_downloads", arguments: "{}", key: "proactive:tidy_downloads", mind: &mind }),
+            decide(Step::Proactive {
+                name: "tidy_downloads",
+                arguments: "{}",
+                key: "proactive:tidy_downloads",
+                mind: &mind
+            }),
             GateOutcome::Park {
                 reason: "ask first: tidy_downloads (proactive:tidy_downloads, p_mind 0.60)".into(),
                 hard: None,
@@ -392,18 +428,31 @@ mod tests {
     fn no_history_asks_and_approvals_lower_the_prior_to_a_floor_of_zero() {
         let c = clock(T0 + 40 * DAY);
         let mut mind = MindCheck::new(c.clone());
-        assert_eq!(mind.mind_route(&Candidate { key: "proactive:new", hard: None }), MindRoute::Ask);
+        assert_eq!(
+            mind.mind_route(&Candidate {
+                key: "proactive:new",
+                hard: None
+            }),
+            MindRoute::Ask
+        );
         assert_eq!(mind.mind_prior("proactive:new"), 0.0);
         let mut spans = vec![tidy("deny", T0)];
         spans.extend((1..=7).map(|i| tidy("approve", T0 + 31 * DAY + i)));
         mind.extend(signals_from_spans(&spans));
         // 0.60 - 7 * 0.05 = 0.25: still asks.
         assert_eq!(mind.mind_prior("proactive:tidy_downloads"), 0.25);
-        let candidate = Candidate { key: "proactive:tidy_downloads", hard: None };
+        let candidate = Candidate {
+            key: "proactive:tidy_downloads",
+            hard: None,
+        };
         assert_eq!(mind.mind_route(&candidate), MindRoute::Ask);
         mind.extend(signals_from_spans(&[tidy("approve", T0 + 32 * DAY)]));
         assert_eq!(mind.mind_prior("proactive:tidy_downloads"), 0.2);
-        assert_eq!(mind.mind_route(&candidate), MindRoute::Ask, "0.2 still asks");
+        assert_eq!(
+            mind.mind_route(&candidate),
+            MindRoute::Ask,
+            "0.2 still asks"
+        );
         mind.extend(signals_from_spans(&[tidy("approve", T0 + 33 * DAY)]));
         assert_eq!(mind.mind_prior("proactive:tidy_downloads"), 0.15);
         assert_eq!(mind.mind_route(&candidate), MindRoute::MayAuto);
@@ -428,7 +477,10 @@ mod tests {
             event: MindEvent::Approve,
             source: "span:s1:0".into(),
         }));
-        let candidate = Candidate { key: "proactive:tidy_downloads", hard: None };
+        let candidate = Candidate {
+            key: "proactive:tidy_downloads",
+            hard: None,
+        };
         c.0.store(T0 + 12, Ordering::SeqCst);
         assert_eq!(mind.mind_prior("proactive:tidy_downloads"), 0.0);
         assert_eq!(mind.mind_route(&candidate), MindRoute::Ask);
@@ -462,8 +514,15 @@ mod tests {
             event: CardEvent::Dismissed,
             after_open: None,
         };
-        let opened = CardSignal { event: CardEvent::Opened, ..card.clone() };
-        mind.extend(signals_from_cards(&[card.clone(), opened, CardSignal { ts: T0 + 1, ..card }]));
+        let opened = CardSignal {
+            event: CardEvent::Opened,
+            ..card.clone()
+        };
+        mind.extend(signals_from_cards(&[
+            card.clone(),
+            opened,
+            CardSignal { ts: T0 + 1, ..card },
+        ]));
         assert_eq!(mind.mind_prior("proactive:offer:downloads"), 0.2);
         let undo = Change {
             seq: 4,
@@ -478,11 +537,20 @@ mod tests {
             undoes: Some(3),
             label: String::new(),
         };
-        let modify = Change { op: ChangeOp::Modify, undoes: None, ..undo.clone() };
+        let modify = Change {
+            op: ChangeOp::Modify,
+            undoes: None,
+            ..undo.clone()
+        };
         let signals = signals_from_changes(&[modify, undo]);
         assert_eq!(
             signals,
-            vec![MindSignal { key: SKILL_CHANGE_KEY.into(), at_ms: T0 + 2, event: MindEvent::Undo, source: "ledger:4".into() }]
+            vec![MindSignal {
+                key: SKILL_CHANGE_KEY.into(),
+                at_ms: T0 + 2,
+                event: MindEvent::Undo,
+                source: "ledger:4".into()
+            }]
         );
         mind.extend(signals);
         assert_eq!(mind.mind_prior(SKILL_CHANGE_KEY), 0.6);
@@ -494,15 +562,23 @@ mod tests {
         let mut mind = MindCheck::new(c.clone());
         let approvals: Vec<Span> = (0..100)
             .map(|i| {
-                let mut s = Span::hard_approve("s1", "send_email", "{}", HardClass::Send).from_origin(Origin::Proactive);
+                let mut s = Span::hard_approve("s1", "send_email", "{}", HardClass::Send)
+                    .from_origin(Origin::Proactive);
                 s.ts_ms = T0 + i;
                 s
             })
             .collect();
-        assert_eq!(signals_from_spans(&approvals), Vec::new(), "priors never read hard spans");
+        assert_eq!(
+            signals_from_spans(&approvals),
+            Vec::new(),
+            "priors never read hard spans"
+        );
         mind.extend(signals_from_spans(&approvals));
         assert_eq!(mind.prior("proactive:send_email"), None);
-        let candidate = Candidate { key: "proactive:send_email", hard: Some(HardClass::Send) };
+        let candidate = Candidate {
+            key: "proactive:send_email",
+            hard: Some(HardClass::Send),
+        };
         assert_eq!(mind.mind_route(&candidate), MindRoute::Ask);
         // Even a prior that says auto cannot reach a hard call.
         mind.extend((0..100).map(|i| MindSignal {
@@ -511,21 +587,42 @@ mod tests {
             event: MindEvent::Approve,
             source: "span:s1:0".into(),
         }));
-        assert_eq!(mind.mind_route(&Candidate { key: "proactive:send_email", hard: None }), MindRoute::MayAuto);
         assert_eq!(
-            decide(Step::Proactive { name: "send_email", arguments: "{}", key: "proactive:send_email", mind: &mind }),
+            mind.mind_route(&Candidate {
+                key: "proactive:send_email",
+                hard: None
+            }),
+            MindRoute::MayAuto
+        );
+        assert_eq!(
+            decide(Step::Proactive {
+                name: "send_email",
+                arguments: "{}",
+                key: "proactive:send_email",
+                mind: &mind
+            }),
             GateOutcome::Park {
                 reason: "hard-class send: Send — Always cannot skip".into(),
                 hard: Some(HardClass::Send),
                 needs_jeremy: true,
             }
         );
-        assert_eq!(hard_card_key(true, false, false), None, "Enter never approves a hard card");
+        assert_eq!(
+            hard_card_key(true, false, false),
+            None,
+            "Enter never approves a hard card"
+        );
     }
 
     #[test]
     fn keys_carry_the_class_and_the_app() {
-        let mut desk = Span::deny("s", "grokhub-desktop__type", r#"{"app":"Browser","text":"hi"}"#, "", "soft");
+        let mut desk = Span::deny(
+            "s",
+            "grokhub-desktop__type",
+            r#"{"app":"Browser","text":"hi"}"#,
+            "",
+            "soft",
+        );
         desk.path = "A".into();
         assert_eq!(mind_key(&desk), "desktop:type@browser");
         let plain = Span::deny("s", "read_file", "{}", "", "soft");
@@ -554,10 +651,21 @@ mod tests {
         store.init().unwrap();
         let c = clock(T0 + 10);
         let mut mind = MindCheck::new(c);
-        let spans = [tidy("deny", T0), tidy("deny", T0 + 5), tidy("approve", T0 + 6)];
+        let spans = [
+            tidy("deny", T0),
+            tidy("deny", T0 + 5),
+            tidy("approve", T0 + 6),
+        ];
         let noted = learn(&store, &mut mind, signals_from_spans(&spans)).unwrap();
         let id = noted[0].id().unwrap().to_string();
-        assert_eq!(noted, vec![Noted::New(id.clone()), Noted::Known(id.clone()), Noted::Skipped("not a deny or undo")]);
+        assert_eq!(
+            noted,
+            vec![
+                Noted::New(id.clone()),
+                Noted::Known(id.clone()),
+                Noted::Skipped("not a deny or undo")
+            ]
+        );
         assert_eq!(mind.mind_prior("proactive:tidy_downloads"), 0.55);
         let (rows, _) = grokhub_core::amr::memory_rows(&store);
         assert_eq!(rows.len(), 1);

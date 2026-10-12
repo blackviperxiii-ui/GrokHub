@@ -105,7 +105,8 @@ mod tests {
         );
         assert!(forbidden_reason("cat /etc/passwd").is_none());
         assert!(
-            forbidden_reason("cp -a '/home/j/.config/GrokHub/rewind/rw1/.' '/home/j/proj'").is_none(),
+            forbidden_reason("cp -a '/home/j/.config/GrokHub/rewind/rw1/.' '/home/j/proj'")
+                .is_none(),
             "cabin rewind copies must still run"
         );
         assert!(
@@ -135,7 +136,10 @@ mod tests {
     fn recall_substring() {
         let hits = recall_hits(
             "nvim",
-            &[("USER.md", "editor: nvim\nshell: zsh"), ("MEMORY.md", "no match")],
+            &[
+                ("USER.md", "editor: nvim\nshell: zsh"),
+                ("MEMORY.md", "no match"),
+            ],
         );
         assert_eq!(hits, vec!["USER.md:1: editor: nvim"]);
     }

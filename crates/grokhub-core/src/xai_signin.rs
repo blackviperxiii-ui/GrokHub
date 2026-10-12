@@ -6,10 +6,10 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub use crate::pkce::{ct_eq, oauth_nonce, pkce_challenge, pkce_verifier};
-use crate::pkce::{form, loopback_code};
 #[cfg(test)]
 use crate::pkce::urlencode;
+pub use crate::pkce::{ct_eq, oauth_nonce, pkce_challenge, pkce_verifier};
+use crate::pkce::{form, loopback_code};
 
 use crate::oauth::{
     merge_refreshed, oauth_access_live, token_needs_refresh, trusted_xai_url, XaiOAuthTokens,
@@ -422,7 +422,10 @@ mod tests {
         assert_eq!(url.matches("referrer=grokhub").count(), 1, "{url}");
         assert!(url.contains("response_type=code"), "{url}");
         assert!(url.contains("code_challenge_method=S256"), "{url}");
-        assert!(url.contains(&format!("client_id={XAI_OAUTH_CLIENT_ID}")), "{url}");
+        assert!(
+            url.contains(&format!("client_id={XAI_OAUTH_CLIENT_ID}")),
+            "{url}"
+        );
         assert!(url.contains("redirect_uri="), "{url}");
         assert!(url.contains("127.0.0.1"), "{url}");
         assert!(url.contains("callback"), "{url}");
@@ -455,16 +458,10 @@ mod tests {
         )
         .unwrap();
         assert_eq!(ok, "abc");
-        let swapped = parse_loopback_callback(
-            "GET /callback?state=xyz&code=abc HTTP/1.1",
-            "xyz",
-        )
-        .unwrap();
+        let swapped =
+            parse_loopback_callback("GET /callback?state=xyz&code=abc HTTP/1.1", "xyz").unwrap();
         assert_eq!(swapped, "abc");
-        let mismatch = parse_loopback_callback(
-            "GET /callback?code=abc&state=nope HTTP/1.1",
-            "xyz",
-        );
+        let mismatch = parse_loopback_callback("GET /callback?code=abc&state=nope HTTP/1.1", "xyz");
         let mismatch = mismatch.expect_err("state mismatch");
         assert!(mismatch.contains("state"), "{mismatch}");
         let err = parse_loopback_callback(
@@ -477,10 +474,7 @@ mod tests {
         assert!(path.unwrap_err().contains("/callback"));
         let missing = parse_loopback_callback("GET /callback?state=xyz HTTP/1.1", "xyz");
         assert!(missing.unwrap_err().to_ascii_lowercase().contains("code"));
-        let long = parse_loopback_callback(
-            "GET /callback?code=abc&state=xxxxxxxx HTTP/1.1",
-            "x",
-        );
+        let long = parse_loopback_callback("GET /callback?code=abc&state=xxxxxxxx HTTP/1.1", "x");
         assert!(long.is_err());
     }
 
@@ -488,7 +482,10 @@ mod tests {
     fn imagine_device_form_has_referrer() {
         let body = imagine_device_form();
         assert_eq!(body.matches("referrer=grokhub").count(), 1, "{body}");
-        assert!(body.contains(&format!("client_id={XAI_OAUTH_CLIENT_ID}")), "{body}");
+        assert!(
+            body.contains(&format!("client_id={XAI_OAUTH_CLIENT_ID}")),
+            "{body}"
+        );
         assert!(body.contains(&urlencode(IMAGINE_OAUTH_SCOPE)), "{body}");
         assert!(!body.contains("grok-cli"), "{body}");
         let code = imagine_code_form("the-code", "the-verifier", "http://127.0.0.1:9/callback");
@@ -502,7 +499,11 @@ mod tests {
         assert!(refresh.contains("client_id="), "{refresh}");
         let poll = imagine_device_poll_form("dev-1");
         assert!(poll.contains("device_code=dev-1"), "{poll}");
-        assert!(poll.contains("urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Adevice_code") || poll.contains("device_code"), "{poll}");
+        assert!(
+            poll.contains("urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Adevice_code")
+                || poll.contains("device_code"),
+            "{poll}"
+        );
     }
 
     #[test]
@@ -522,14 +523,14 @@ mod tests {
         assert!(dbg.contains("redacted"), "{dbg}");
         assert!(dbg.contains("ada@example.com"), "{dbg}");
         let json = serde_json::to_string(&t).unwrap();
-        assert!(json.contains("secret-access"), "keychain JSON keeps the token");
+        assert!(
+            json.contains("secret-access"),
+            "keychain JSON keeps the token"
+        );
         let back: ImagineTokens = serde_json::from_str(&json).unwrap();
         assert_eq!(back, t);
         let now = 40_000u64;
-        assert!(
-            imagine_needs_refresh(&t, now),
-            "inside the 30 minute skew"
-        );
+        assert!(imagine_needs_refresh(&t, now), "inside the 30 minute skew");
         let fresh = ImagineTokens {
             expires_at: Some(now + 60 * 60 * 1000),
             ..t.clone()
@@ -571,7 +572,11 @@ mod tests {
         assert_eq!(oauth_no.text, IMAGINE_OAUTH_DENIED);
         assert!(oauth_no.offer_settings);
         assert!(!oauth_no.offer_use_api_key);
-        let key = map_imagine_error("HTTP 401: Bad credentials.", ImagineCredKind::ConsoleKey, true);
+        let key = map_imagine_error(
+            "HTTP 401: Bad credentials.",
+            ImagineCredKind::ConsoleKey,
+            true,
+        );
         assert_eq!(key.text, IMAGINE_KEY_REJECTED);
         assert!(!key.offer_use_api_key);
         assert!(!key.offer_settings);
@@ -579,11 +584,8 @@ mod tests {
         assert_eq!(key_403.text, IMAGINE_KEY_REJECTED);
         let rate = map_imagine_error("HTTP 429: slow down", ImagineCredKind::OAuth, true);
         assert_eq!(rate.text, IMAGINE_RATE_LIMIT);
-        let blocked = map_imagine_error(
-            "image blocked by moderation",
-            ImagineCredKind::OAuth,
-            false,
-        );
+        let blocked =
+            map_imagine_error("image blocked by moderation", ImagineCredKind::OAuth, false);
         assert!(blocked.text.contains("moderation"));
         assert!(!blocked.offer_use_api_key);
         let video = map_imagine_error(
@@ -637,7 +639,10 @@ mod tests {
 
     #[test]
     fn imagine_auth_source_never_names_cli_login() {
-        let src = concat!(include_str!("xai_signin.rs"), include_str!("imagine_auth.rs"));
+        let src = concat!(
+            include_str!("xai_signin.rs"),
+            include_str!("imagine_auth.rs")
+        );
         for banned in [
             concat!("grok_cli_", "key"),
             concat!("auth", ".json"),
@@ -705,7 +710,10 @@ mod tests {
             fail_save: true,
         };
         assert!(load_xai_oauth(&store).is_err());
-        assert!(store.legacy.lock().unwrap().is_some(), "failed save keeps legacy");
+        assert!(
+            store.legacy.lock().unwrap().is_some(),
+            "failed save keeps legacy"
+        );
         assert!(store.current.lock().unwrap().is_none());
 
         let store = MemAccounts {

@@ -70,7 +70,12 @@ pub fn signal_group(card: &UpdateCard) -> String {
 }
 
 /// A log row. `after_open` is kept only for a dismiss.
-pub fn signal_for(card: &UpdateCard, event: CardEvent, ts: u64, after_open: Option<bool>) -> CardSignal {
+pub fn signal_for(
+    card: &UpdateCard,
+    event: CardEvent,
+    ts: u64,
+    after_open: Option<bool>,
+) -> CardSignal {
     CardSignal {
         ts,
         card_id: card.id.clone(),
@@ -138,14 +143,20 @@ mod tests {
             append_signal(&dir, &signal_for(&card, CardEvent::Opened, n as u64, None));
         }
         let active = fs::read_to_string(dir.join("card_signals.jsonl")).unwrap();
-        assert_eq!(active.lines().filter(|line| !line.is_empty()).count(), SIGNAL_CAP);
+        assert_eq!(
+            active.lines().filter(|line| !line.is_empty()).count(),
+            SIGNAL_CAP
+        );
         assert!(!dir.join("card_signals.jsonl.1").exists());
         append_signal(
             &dir,
             &signal_for(&card, CardEvent::More, SIGNAL_CAP as u64, None),
         );
         let rotated = fs::read_to_string(dir.join("card_signals.jsonl.1")).unwrap();
-        assert_eq!(rotated.lines().filter(|line| !line.is_empty()).count(), SIGNAL_CAP);
+        assert_eq!(
+            rotated.lines().filter(|line| !line.is_empty()).count(),
+            SIGNAL_CAP
+        );
         let fresh = fs::read_to_string(dir.join("card_signals.jsonl")).unwrap();
         assert_eq!(fresh.lines().filter(|line| !line.is_empty()).count(), 1);
         assert!(fresh.contains("\"event\":\"more\""));
@@ -154,10 +165,7 @@ mod tests {
 
     #[test]
     fn signal_lines_hold_no_card_text() {
-        let dir = std::env::temp_dir().join(format!(
-            "grokhub-signals-text-{}",
-            std::process::id()
-        ));
+        let dir = std::env::temp_dir().join(format!("grokhub-signals-text-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         let mut card = automation_done_card("src-plain", "placeholder", "placeholder", 7);
         card.title = "ZephyrTitle9f3a".into();
@@ -188,12 +196,23 @@ mod tests {
         ] {
             assert!(!text.contains(secret), "{secret} leaked into {text}");
         }
-        let allowed = ["ts", "card_id", "kind", "group", "source_id", "event", "after_open"];
+        let allowed = [
+            "ts",
+            "card_id",
+            "kind",
+            "group",
+            "source_id",
+            "event",
+            "after_open",
+        ];
         for line in text.lines().filter(|line| !line.trim().is_empty()) {
             let value: serde_json::Value = serde_json::from_str(line).unwrap();
             let obj = value.as_object().unwrap();
             for key in obj.keys() {
-                assert!(allowed.contains(&key.as_str()), "unexpected key {key} in {line}");
+                assert!(
+                    allowed.contains(&key.as_str()),
+                    "unexpected key {key} in {line}"
+                );
             }
             for key in ["ts", "card_id", "kind", "group", "source_id", "event"] {
                 assert!(obj.contains_key(key), "missing {key} in {line}");
@@ -204,8 +223,14 @@ mod tests {
             } else {
                 assert!(!obj.contains_key("after_open"), "{line}");
             }
-            assert_eq!(obj.get("kind").and_then(|v| v.as_str()), Some("automation_done"));
-            assert_eq!(obj.get("group").and_then(|v| v.as_str()), Some("run:src-plain"));
+            assert_eq!(
+                obj.get("kind").and_then(|v| v.as_str()),
+                Some("automation_done")
+            );
+            assert_eq!(
+                obj.get("group").and_then(|v| v.as_str()),
+                Some("run:src-plain")
+            );
             assert!(!line.contains("title"));
             assert!(!line.contains("body"));
             assert!(!line.contains("prompt"));

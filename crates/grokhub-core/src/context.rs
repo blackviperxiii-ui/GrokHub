@@ -30,7 +30,10 @@ pub fn estimate_messages_from<'a, I>(messages: I) -> u32
 where
     I: IntoIterator<Item = (&'a str, &'a str)>,
 {
-    messages.into_iter().map(|(_, c)| 4 + estimate_tokens(c)).sum()
+    messages
+        .into_iter()
+        .map(|(_, c)| 4 + estimate_tokens(c))
+        .sum()
 }
 
 pub fn context_percent(tokens: u32, budget: u32) -> u32 {
@@ -85,7 +88,10 @@ pub fn trim_result_bodies(
     keep_recent_hops: usize,
 ) -> Vec<(String, String)> {
     let mut out = messages.to_vec();
-    trim_result_bodies_in_place(out.iter_mut().map(|(r, c)| (r.as_str(), c)), keep_recent_hops);
+    trim_result_bodies_in_place(
+        out.iter_mut().map(|(r, c)| (r.as_str(), c)),
+        keep_recent_hops,
+    );
     out
 }
 
@@ -157,10 +163,8 @@ mod tests {
         let out = trim_result_bodies(&msgs, RESULT_TRIM_KEEP_HOPS);
         assert_eq!(out[0].1, "GOAL PIN: close the other-monitor tab");
         assert_eq!(out[1].1, "close the firefox tab");
-        let dumps: Vec<&(String, String)> = out
-            .iter()
-            .filter(|(r, c)| is_result_turn(r, c))
-            .collect();
+        let dumps: Vec<&(String, String)> =
+            out.iter().filter(|(r, c)| is_result_turn(r, c)).collect();
         assert_eq!(dumps.len(), 6);
         assert!(dumps[0].1.contains("…"), "{}", dumps[0].1);
         assert!(dumps[0].1.contains("head 0"), "{}", dumps[0].1);

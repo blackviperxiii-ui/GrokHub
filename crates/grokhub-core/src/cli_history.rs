@@ -207,7 +207,10 @@ pub fn parse_session_markdown(text: &str) -> Vec<(String, String)> {
         let lower = t.to_ascii_lowercase();
         let heading = t.trim_start_matches('#').trim();
         let heading_l = heading.to_ascii_lowercase();
-        let next = if heading_l == "user" || heading_l == "human" || lower.starts_with("user:") || lower.starts_with("**user**")
+        let next = if heading_l == "user"
+            || heading_l == "human"
+            || lower.starts_with("user:")
+            || lower.starts_with("**user**")
         {
             Some("user")
         } else if heading_l == "assistant"
@@ -226,7 +229,10 @@ pub fn parse_session_markdown(text: &str) -> Vec<(String, String)> {
             role = r.into();
             if let Some((_, rest)) = t.split_once(':') {
                 let rest = rest.trim().trim_matches('*').trim();
-                if !rest.is_empty() && !rest.eq_ignore_ascii_case("user") && !rest.eq_ignore_ascii_case("assistant") {
+                if !rest.is_empty()
+                    && !rest.eq_ignore_ascii_case("user")
+                    && !rest.eq_ignore_ascii_case("assistant")
+                {
                     body.push_str(rest);
                     body.push('\n');
                 }
@@ -328,10 +334,7 @@ fn walk_session_dirs(dir: &Path, depth: u8, out: &mut Vec<GrokSession>) {
         if !path.is_dir() {
             continue;
         }
-        let name = path
-            .file_name()
-            .and_then(|s| s.to_str())
-            .unwrap_or("");
+        let name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
         if looks_like_session_id(name) {
             if out.iter().any(|s| s.id == name) {
                 continue;

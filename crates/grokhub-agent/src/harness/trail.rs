@@ -125,7 +125,11 @@ pub fn trail_body(spans: &[Span], chat_id: &str, turn: u32) -> Option<String> {
             findings.push(f.detector.clone());
         }
     }
-    let findings = if findings.is_empty() { "none".to_string() } else { findings.join(", ") };
+    let findings = if findings.is_empty() {
+        "none".to_string()
+    } else {
+        findings.join(", ")
+    };
     let verify = match verify {
         Some(true) => "pass",
         Some(false) => "fail",
@@ -140,9 +144,17 @@ pub fn trail_body(spans: &[Span], chat_id: &str, turn: u32) -> Option<String> {
     let head: String = head.chars().take(TRAIL_BODY_CAP).collect();
     let mut refs = String::from("Spans:");
     for (i, s) in steps.iter().enumerate() {
-        let piece = format!(" {}{}", s.span_ref(), if i + 1 < steps.len() { "," } else { "" });
+        let piece = format!(
+            " {}{}",
+            s.span_ref(),
+            if i + 1 < steps.len() { "," } else { "" }
+        );
         let tail = format!(" +{} more", steps.len() - i);
-        let len = head.chars().count() + refs.chars().count() + piece.chars().count() + tail.chars().count() + 1;
+        let len = head.chars().count()
+            + refs.chars().count()
+            + piece.chars().count()
+            + tail.chars().count()
+            + 1;
         if len > TRAIL_BODY_CAP {
             refs.push_str(&tail);
             break;
@@ -157,11 +169,19 @@ pub fn trail_body(spans: &[Span], chat_id: &str, turn: u32) -> Option<String> {
 
 /// The node to write for one turn: redacted body, sealed when a step was
 /// hard class. `None` when the turn has no harness step.
-pub fn trail_draft(spans: &[Span], chat_id: &str, turn: u32, held: &[String], now_ms: u64) -> Option<NodeDraft> {
+pub fn trail_draft(
+    spans: &[Span],
+    chat_id: &str,
+    turn: u32,
+    held: &[String],
+    now_ms: u64,
+) -> Option<NodeDraft> {
     let body = trail_body(spans, chat_id, turn)?;
     let body = grokhub_core::redact_held_secrets(&grokhub_core::redact_secrets(&body), held);
     let steps = turn_steps(spans, chat_id, turn);
-    let hard = steps.iter().any(|s| HardClass::parse(&s.approval_class).is_some());
+    let hard = steps
+        .iter()
+        .any(|s| HardClass::parse(&s.approval_class).is_some());
     let stamp = grokhub_core::oauth::unix_ms_to_rfc3339(now_ms);
     Some(NodeDraft {
         id: trail_id(chat_id, turn),
@@ -172,7 +192,11 @@ pub fn trail_draft(spans: &[Span], chat_id: &str, turn: u32, held: &[String], no
         confidence: 1.0,
         tags: vec!["trail".into(), format!("turn-{turn}")],
         body,
-        sensitivity: if hard { Sensitivity::Personal } else { Sensitivity::Plain },
+        sensitivity: if hard {
+            Sensitivity::Personal
+        } else {
+            Sensitivity::Plain
+        },
         consent_ref: String::new(),
     })
 }
@@ -216,11 +240,20 @@ pub fn write_trail(
         Err(err) => return Err(err),
     };
     let id = draft.id.clone();
-    let first_ms = turn_steps(&spans, chat_id, turn).first().map_or(0, |s| s.ts_ms);
+    let first_ms = turn_steps(&spans, chat_id, turn)
+        .first()
+        .map_or(0, |s| s.ts_ms);
     let since = grokhub_core::oauth::unix_ms_to_rfc3339(first_ms - first_ms % 1000);
-    let mut out = TrailWrite { id: id.clone(), new, sealed, learned: Vec::new(), references: Vec::new() };
+    let mut out = TrailWrite {
+        id: id.clone(),
+        new,
+        sealed,
+        learned: Vec::new(),
+        references: Vec::new(),
+    };
     for node in store.nodes_from(&format!("chat:{chat_id}")) {
-        let learned = matches!(node.node_type, NodeType::Fact | NodeType::Preference) && node.created >= since;
+        let learned = matches!(node.node_type, NodeType::Fact | NodeType::Preference)
+            && node.created >= since;
         if learned {
             store.link_once(&node.id, &id, EdgeRel::LearnedFromSpan)?;
             out.learned.push(node.id);
@@ -234,7 +267,12 @@ pub fn write_trail(
 
 /// A fact learned from a turn, written after that turn's trail: link it
 /// `fact → trail` (`learned_from_span`). False when the turn has no trail.
-pub fn link_learned(store: &AmrStore, fact_id: &str, chat_id: &str, turn: u32) -> Result<bool, AmrError> {
+pub fn link_learned(
+    store: &AmrStore,
+    fact_id: &str,
+    chat_id: &str,
+    turn: u32,
+) -> Result<bool, AmrError> {
     let trail = trail_id(chat_id, turn);
     if !store.has_node(&trail) {
         return Ok(false);
@@ -259,11 +297,32 @@ mod tests {
     /// 2 clicks, 1 type, 1 park, 1 deny, 1 verify, then the reply's claim.
     fn six(turn: u32, base: u64) -> Vec<Span> {
         let click = |ui: bool| {
-            Span::soft_allow("chat-7", "click", r#"{"x":40,"y":12}"#, "clicked", "click OK", AccessMode::Supervised, "grok_build")
-                .with_ui_changed(Some(ui))
+            Span::soft_allow(
+                "chat-7",
+                "click",
+                r#"{"x":40,"y":12}"#,
+                "clicked",
+                "click OK",
+                AccessMode::Supervised,
+                "grok_build",
+            )
+            .with_ui_changed(Some(ui))
         };
-        let typed = Span::soft_allow("chat-7", "type", r#"{"chars":4}"#, "typed", "grokhub-desktop type", AccessMode::Supervised, "grok_build");
-        let park = Span::hard_park("chat-7", "run_command", r#"{"command":"rm -f draft.md"}"#, HardClass::Delete);
+        let typed = Span::soft_allow(
+            "chat-7",
+            "type",
+            r#"{"chars":4}"#,
+            "typed",
+            "grokhub-desktop type",
+            AccessMode::Supervised,
+            "grok_build",
+        );
+        let park = Span::hard_park(
+            "chat-7",
+            "run_command",
+            r#"{"command":"rm -f draft.md"}"#,
+            HardClass::Delete,
+        );
         let deny = Span::deny("chat-7", "send_email", "{}", "hard floor", "send");
         let mut verify = Span::deny("chat-7", VERIFY_TOOL, "{}", "pass", "soft");
         verify.decision = "allow".into();
@@ -280,12 +339,17 @@ mod tests {
     }
 
     fn vault_store(dir: &Path) -> AmrStore {
-        AmrStore::at(dir.join("amr")).with_sealer(std::sync::Arc::new(crate::harness::LearnedVault::new(dir)))
+        AmrStore::at(dir.join("amr"))
+            .with_sealer(std::sync::Arc::new(crate::harness::LearnedVault::new(dir)))
     }
 
     fn node_files(dir: &Path) -> Vec<String> {
         let mut out: Vec<String> = std::fs::read_dir(dir.join("amr").join("nodes"))
-            .map(|r| r.flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect())
+            .map(|r| {
+                r.flatten()
+                    .map(|e| e.file_name().to_string_lossy().into_owned())
+                    .collect()
+            })
             .unwrap_or_default();
         out.sort();
         out
@@ -310,12 +374,19 @@ mod tests {
         );
         let store = vault_store(&dir);
         store.init().unwrap();
-        let w = write_trail(&store, &dir, "chat-7", 3, &[], 1_791_331_200_000).unwrap().unwrap();
+        let w = write_trail(&store, &dir, "chat-7", 3, &[], 1_791_331_200_000)
+            .unwrap()
+            .unwrap();
         assert_eq!(w.id, trail_id("chat-7", 3));
-        assert!(w.new && w.sealed, "a parked delete is hard class, so the trail is sealed");
+        assert!(
+            w.new && w.sealed,
+            "a parked delete is hard class, so the trail is sealed"
+        );
         assert_eq!(node_files(&dir), vec![format!("{}.sealed", w.id)]);
         // The same turn again writes nothing new.
-        let again = write_trail(&store, &dir, "chat-7", 3, &[], 1_791_331_300_000).unwrap().unwrap();
+        let again = write_trail(&store, &dir, "chat-7", 3, &[], 1_791_331_300_000)
+            .unwrap()
+            .unwrap();
         assert!(!again.new);
         assert_eq!(node_files(&dir).len(), 1);
         // /recall reads the sealed trail with the key.
@@ -329,17 +400,28 @@ mod tests {
         );
 
         // A second turn with a plain click is a second, plain node.
-        let mut click = Span::soft_allow("chat-7", "click", "{}", "clicked", "click Save", AccessMode::Supervised, "grok_build");
+        let mut click = Span::soft_allow(
+            "chat-7",
+            "click",
+            "{}",
+            "clicked",
+            "click Save",
+            AccessMode::Supervised,
+            "grok_build",
+        );
         click = at(click.with_ui_changed(Some(true)), 2001, 4);
         append_span(&dir, &click).unwrap();
-        let second = write_trail(&store, &dir, "chat-7", 4, &[], 1_791_331_400_000).unwrap().unwrap();
+        let second = write_trail(&store, &dir, "chat-7", 4, &[], 1_791_331_400_000)
+            .unwrap()
+            .unwrap();
         assert!(second.new && !second.sealed);
         assert_eq!(node_files(&dir), {
             let mut v = vec![format!("{}.sealed", w.id), format!("{}.md", second.id)];
             v.sort();
             v
         });
-        let md = std::fs::read_to_string(dir.join("amr/nodes").join(format!("{}.md", second.id))).unwrap();
+        let md = std::fs::read_to_string(dir.join("amr/nodes").join(format!("{}.md", second.id)))
+            .unwrap();
         assert_eq!(
             md,
             format!(
@@ -348,32 +430,75 @@ mod tests {
             )
         );
         // A turn with no harness step writes nothing.
-        assert_eq!(write_trail(&store, &dir, "chat-7", 9, &[], 1).unwrap(), None);
+        assert_eq!(
+            write_trail(&store, &dir, "chat-7", 9, &[], 1).unwrap(),
+            None
+        );
         let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
     fn the_turns_brief_goes_on_the_trail_under_the_head_line() {
         let dir = crate::harness::test_dir("trail-brief");
-        let mut click = Span::soft_allow("chat-7", "click", "{}", "clicked", "click Save", AccessMode::Supervised, "grok_build");
+        let mut click = Span::soft_allow(
+            "chat-7",
+            "click",
+            "{}",
+            "clicked",
+            "click Save",
+            AccessMode::Supervised,
+            "grok_build",
+        );
         click = at(click.with_ui_changed(Some(true)), 2001, 4);
         append_span(&dir, &click).unwrap();
-        let brief = crate::brain::rules(&crate::brain::BriefInput { text: "the printer service won't start", ..Default::default() }).unwrap();
+        let brief = crate::brain::rules(&crate::brain::BriefInput {
+            text: "the printer service won't start",
+            ..Default::default()
+        })
+        .unwrap();
         let policy = crate::brain::pick_policy(&crate::brain::load_policy(&dir).0, &brief);
-        let line = crate::brain::BriefLine { at: 1, session: "s".into(), chat_id: "chat-7".into(), turn: 4, brief, policy, playbook: "Repair Linux".into(), ..Default::default() };
+        let line = crate::brain::BriefLine {
+            at: 1,
+            session: "s".into(),
+            chat_id: "chat-7".into(),
+            turn: 4,
+            brief,
+            policy,
+            playbook: "Repair Linux".into(),
+            ..Default::default()
+        };
         crate::brain::record_brief(&dir, &line).unwrap();
-        let other = crate::brain::BriefLine { turn: 5, brief: crate::brain::rules(&crate::brain::BriefInput { text: "hi", ..Default::default() }).unwrap(), ..line.clone() };
+        let other = crate::brain::BriefLine {
+            turn: 5,
+            brief: crate::brain::rules(&crate::brain::BriefInput {
+                text: "hi",
+                ..Default::default()
+            })
+            .unwrap(),
+            ..line.clone()
+        };
         crate::brain::record_brief(&dir, &other).unwrap();
         let store = vault_store(&dir);
         store.init().unwrap();
-        let w = write_trail(&store, &dir, "chat-7", 4, &[], 1_791_331_400_000).unwrap().unwrap();
-        let md = std::fs::read_to_string(dir.join("amr/nodes").join(format!("{}.md", w.id))).unwrap();
+        let w = write_trail(&store, &dir, "chat-7", 4, &[], 1_791_331_400_000)
+            .unwrap()
+            .unwrap();
+        let md =
+            std::fs::read_to_string(dir.join("amr/nodes").join(format!("{}.md", w.id))).unwrap();
         let body = md.split("---\n").nth(2).unwrap();
         assert_eq!(
             body,
             "Turn 4: 1 step.\nBrief: repair × critical, done = services, packages, boot errors, ports\nPolicy: repair × critical, goal quality (mistakes can break the system)\nTalk: findings card, reply under 80 words\nPlaybook: Repair Linux\nTools: click x1\nDecisions: allow 1\nScreen changed: yes 1, no 0\nFindings: none\nVerify: none\nSpans: chat-7:2001\n"
         );
-        assert_eq!(with_brief(&"x".repeat(TRAIL_BODY_CAP), &["Brief: chat × casual".into()]).chars().count(), TRAIL_BODY_CAP);
+        assert_eq!(
+            with_brief(
+                &"x".repeat(TRAIL_BODY_CAP),
+                &["Brief: chat × casual".into()]
+            )
+            .chars()
+            .count(),
+            TRAIL_BODY_CAP
+        );
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -384,16 +509,29 @@ mod tests {
         let typed = Span::hard_park("chat-7", "type", r#"{"chars":4}"#, HardClass::Credentials);
         let held = vec![pin.to_string()];
         append_span(&dir, &at(typed, 11, 1)).unwrap();
-        append_span(&dir, &at(Span::reply("chat-7", "I typed 4821 into the PIN field.", &held), 12, 1)).unwrap();
+        append_span(
+            &dir,
+            &at(
+                Span::reply("chat-7", "I typed 4821 into the PIN field.", &held),
+                12,
+                1,
+            ),
+        )
+        .unwrap();
 
         // No key store at all: Paused, and no file of either kind.
         let bare = AmrStore::at(dir.join("amr"));
         bare.init().unwrap();
-        assert!(matches!(write_trail(&bare, &dir, "chat-7", 1, &held, 1), Err(AmrError::Paused(_))));
+        assert!(matches!(
+            write_trail(&bare, &dir, "chat-7", 1, &held, 1),
+            Err(AmrError::Paused(_))
+        ));
         assert!(node_files(&dir).is_empty());
 
         let store = vault_store(&dir);
-        let w = write_trail(&store, &dir, "chat-7", 1, &held, 1).unwrap().unwrap();
+        let w = write_trail(&store, &dir, "chat-7", 1, &held, 1)
+            .unwrap()
+            .unwrap();
         assert!(w.sealed);
         let hits = store.recall("chars");
         assert_eq!(hits.len(), 1);
@@ -428,7 +566,15 @@ mod tests {
     #[test]
     fn scratch_writes_no_trail_and_facts_link_learned_from_span() {
         let dir = crate::harness::test_dir("trail-links");
-        let click = Span::soft_allow("chat-7", "click", "{}", "clicked", "click OK", AccessMode::Supervised, "grok_build");
+        let click = Span::soft_allow(
+            "chat-7",
+            "click",
+            "{}",
+            "clicked",
+            "click OK",
+            AccessMode::Supervised,
+            "grok_build",
+        );
         append_span(&dir, &at(click, 1_791_331_200_000, 2)).unwrap();
         let mut store = vault_store(&dir);
         store.init().unwrap();
@@ -444,15 +590,24 @@ mod tests {
             sensitivity: Sensitivity::Plain,
             consent_ref: String::new(),
         };
-        store.remember(&old("fact-before", "2026-10-06T00:00:00Z")).unwrap();
-        store.remember(&old("fact-during", "2026-10-07T00:00:00Z")).unwrap();
+        store
+            .remember(&old("fact-before", "2026-10-06T00:00:00Z"))
+            .unwrap();
+        store
+            .remember(&old("fact-during", "2026-10-07T00:00:00Z"))
+            .unwrap();
 
         store.set_scratch(true);
-        assert_eq!(write_trail(&store, &dir, "chat-7", 2, &[], 1), Err(AmrError::Scratch));
+        assert_eq!(
+            write_trail(&store, &dir, "chat-7", 2, &[], 1),
+            Err(AmrError::Scratch)
+        );
         assert!(!store.has_node(&trail_id("chat-7", 2)));
         store.set_scratch(false);
 
-        let w = write_trail(&store, &dir, "chat-7", 2, &[], 1_791_331_201_000).unwrap().unwrap();
+        let w = write_trail(&store, &dir, "chat-7", 2, &[], 1_791_331_201_000)
+            .unwrap()
+            .unwrap();
         assert_eq!(w.learned, vec!["fact-during".to_string()]);
         assert_eq!(w.references, vec!["fact-before".to_string()]);
         let edges = store.edges().unwrap();
@@ -460,15 +615,28 @@ mod tests {
         assert_eq!(
             edges,
             vec![
-                grokhub_core::amr::Edge { from: w.id.clone(), to: "fact-before".into(), rel: EdgeRel::References },
-                grokhub_core::amr::Edge { from: "fact-during".into(), to: w.id.clone(), rel: EdgeRel::LearnedFromSpan },
+                grokhub_core::amr::Edge {
+                    from: w.id.clone(),
+                    to: "fact-before".into(),
+                    rel: EdgeRel::References
+                },
+                grokhub_core::amr::Edge {
+                    from: "fact-during".into(),
+                    to: w.id.clone(),
+                    rel: EdgeRel::LearnedFromSpan
+                },
             ]
         );
         // A fact written after the trail links once, however often it is asked.
-        store.remember(&old("fact-after", "2026-10-07T00:00:05Z")).unwrap();
+        store
+            .remember(&old("fact-after", "2026-10-07T00:00:05Z"))
+            .unwrap();
         assert!(link_learned(&store, "fact-after", "chat-7", 2).unwrap());
         assert!(!link_learned(&store, "fact-after", "chat-7", 2).unwrap());
-        assert!(!link_learned(&store, "fact-after", "chat-7", 3).unwrap(), "turn 3 has no trail");
+        assert!(
+            !link_learned(&store, "fact-after", "chat-7", 3).unwrap(),
+            "turn 3 has no trail"
+        );
         assert_eq!(store.edges().unwrap().len(), 3);
         let _ = std::fs::remove_dir_all(dir);
     }

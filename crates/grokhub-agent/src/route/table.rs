@@ -24,10 +24,12 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
-use grokhub_core::model_registry::probe::{ProbeCall, ProbeKind, ProbeReply, ProbeTransport, DAY_MS};
+use grokhub_core::model_registry::cost_class::{probe_class, CostClass};
+use grokhub_core::model_registry::probe::{
+    ProbeCall, ProbeKind, ProbeReply, ProbeTransport, DAY_MS,
+};
 use grokhub_core::model_registry::profile::ModelProfile;
 use grokhub_core::model_registry::store::{models_dir, read_json};
-use grokhub_core::model_registry::cost_class::{probe_class, CostClass};
 use grokhub_core::model_registry::{ModelState, Registry};
 
 use super::ladder::{self, Band, Move};
@@ -155,7 +157,10 @@ impl RoutingTable {
     /// The ranked rows for a call class (after aliases). Empty when unlisted.
     pub fn rows(&self, class: &str) -> &[TableRow] {
         let c = class_row(class).map(|r| r.class).unwrap_or(class);
-        self.classes.get(c).map(|t| t.ranked.as_slice()).unwrap_or(&[])
+        self.classes
+            .get(c)
+            .map(|t| t.ranked.as_slice())
+            .unwrap_or(&[])
     }
 
     /// The row `model` has in `class`, if any.
@@ -166,7 +171,18 @@ impl RoutingTable {
     /// Same ranking: same models, efforts and order in every class.
     pub fn same_ranking(&self, other: &RoutingTable) -> bool {
         let key = |t: &RoutingTable| -> Vec<(String, Vec<String>)> {
-            t.classes.iter().map(|(c, ct)| (c.clone(), ct.ranked.iter().map(|r| format!("{}@{:?}", r.model, r.effort)).collect())).collect()
+            t.classes
+                .iter()
+                .map(|(c, ct)| {
+                    (
+                        c.clone(),
+                        ct.ranked
+                            .iter()
+                            .map(|r| format!("{}@{:?}", r.model, r.effort))
+                            .collect(),
+                    )
+                })
+                .collect()
         };
         key(self) == key(other)
     }
@@ -206,7 +222,11 @@ pub struct EvalItem {
 }
 
 const fn item(class: &'static str, prompt: &'static str, check: Check) -> EvalItem {
-    EvalItem { class, prompt, check }
+    EvalItem {
+        class,
+        prompt,
+        check,
+    }
 }
 
 use Check::{Exact, Json, Regex as Re, Tool};
@@ -316,8 +336,14 @@ pub fn eval_texts() -> Vec<&'static str> {
 }
 
 fn tool_schema(name: &str, args: &str) -> Value {
-    let keys: Vec<String> = serde_json::from_str::<Value>(args).ok().and_then(|v| v.as_object().map(|o| o.keys().cloned().collect())).unwrap_or_default();
-    let props: serde_json::Map<String, Value> = keys.iter().map(|k| (k.clone(), json!({"type": "string"}))).collect();
+    let keys: Vec<String> = serde_json::from_str::<Value>(args)
+        .ok()
+        .and_then(|v| v.as_object().map(|o| o.keys().cloned().collect()))
+        .unwrap_or_default();
+    let props: serde_json::Map<String, Value> = keys
+        .iter()
+        .map(|k| (k.clone(), json!({"type": "string"})))
+        .collect();
     json!([{
         "type": "function",
         "name": name,
@@ -340,11 +366,20 @@ pub fn eval_call(model: &str, effort: Option<&str>, item: &EvalItem) -> ProbeCal
     if let Check::Tool(name, args) = item.check {
         b["tools"] = tool_schema(name, args);
     }
-    ProbeCall { model: model.into(), effort: effort.map(str::to_string), kind: ProbeKind::Eval, body: b, timeout_secs: EVAL_TIMEOUT_SECS }
+    ProbeCall {
+        model: model.into(),
+        effort: effort.map(str::to_string),
+        kind: ProbeKind::Eval,
+        body: b,
+        timeout_secs: EVAL_TIMEOUT_SECS,
+    }
 }
 
 fn norm(text: &str) -> String {
-    text.trim().trim_end_matches('.').trim().to_ascii_lowercase()
+    text.trim()
+        .trim_end_matches('.')
+        .trim()
+        .to_ascii_lowercase()
 }
 
 /// Did the reply pass the item's check?
@@ -353,13 +388,22 @@ pub fn passes(check: Check, reply: &ProbeReply) -> bool {
         Check::Exact(want) => norm(&reply.text) == norm(want),
         Check::Regex(re) => Regex::new(re).is_ok_and(|r| r.is_match(reply.text.trim())),
         Check::Json(want) => {
-            let got = serde_json::from_str::<Value>(reply.text.trim().trim_start_matches("```json").trim_matches('`').trim());
-            got.ok().is_some_and(|g| serde_json::from_str::<Value>(want).is_ok_and(|w| w == g))
+            let got = serde_json::from_str::<Value>(
+                reply
+                    .text
+                    .trim()
+                    .trim_start_matches("```json")
+                    .trim_matches('`')
+                    .trim(),
+            );
+            got.ok()
+                .is_some_and(|g| serde_json::from_str::<Value>(want).is_ok_and(|w| w == g))
         }
         Check::Tool(name, args) => {
             reply.tool_calls.len() == 1
                 && reply.tool_calls[0].0 == name
-                && serde_json::from_str::<Value>(&reply.tool_calls[0].1).ok() == serde_json::from_str::<Value>(args).ok()
+                && serde_json::from_str::<Value>(&reply.tool_calls[0].1).ok()
+                    == serde_json::from_str::<Value>(args).ok()
         }
     }
 }
@@ -384,7 +428,10 @@ pub struct EvalCache {
 }
 
 pub fn cache_key(source_hash: &str, effort: Option<&str>) -> String {
-    format!("{source_hash}|v{EVAL_SET_VERSION}|{}", effort.unwrap_or("none"))
+    format!(
+        "{source_hash}|v{EVAL_SET_VERSION}|{}",
+        effort.unwrap_or("none")
+    )
 }
 
 impl EvalCache {
@@ -445,16 +492,26 @@ pub fn profiles_hash(profiles: &BTreeMap<String, ModelProfile>) -> String {
 /// steps) need prompt caching, and tool-using classes need tools.
 fn class_fit(class: &str) -> Fit {
     let needs_tools = !class.starts_with("background:") && class != "chat:quick";
-    Fit { needs_tools, ..Fit::default() }
+    Fit {
+        needs_tools,
+        ..Fit::default()
+    }
 }
 
 /// The start rung for `model` in `class`, clamped to its menu inside the
 /// class band. `None` when it can't reach the class floor (a `prepare:hard`
 /// row is never below High). `Some(None)` sends no effort.
-fn row_effort(class: &str, profile: Option<&ModelProfile>, reg: &Registry, model: &str) -> Option<Option<String>> {
+fn row_effort(
+    class: &str,
+    profile: Option<&ModelProfile>,
+    reg: &Registry,
+    model: &str,
+) -> Option<Option<String>> {
     let row = class_row(class)?;
     let band = Band::of(row, 0);
-    let menu = profile.and_then(|p| p.metadata.efforts.clone()).or_else(|| reg.get(model).and_then(|r| r.meta.efforts.clone()));
+    let menu = profile
+        .and_then(|p| p.metadata.efforts.clone())
+        .or_else(|| reg.get(model).and_then(|r| r.meta.efforts.clone()));
     let Some(menu) = menu.filter(|m| !m.is_empty()) else {
         // No effort menu: it can't reach High, so it never prepares a hard action.
         return (class != ladder::PREPARE_HARD).then_some(None);
@@ -465,18 +522,29 @@ fn row_effort(class: &str, profile: Option<&ModelProfile>, reg: &Registry, model
         return None;
     }
     // `minimal` and `max` are not sent: they go out as low and xhigh.
-    Some(Some(grokhub_core::parse_reasoning_effort(&picked).map(str::to_string).unwrap_or(picked)))
+    Some(Some(
+        grokhub_core::parse_reasoning_effort(&picked)
+            .map(str::to_string)
+            .unwrap_or(picked),
+    ))
 }
 
 /// A model that can take a reasoning effort (not a `-non-reasoning` slug, and
 /// either its listing names efforts or [`grokhub_core::accepts_reasoning_effort`]
 /// says it does). Built from the live registry — never a hard-coded list.
-pub fn is_reasoning_model(reg: &Registry, profiles: &BTreeMap<String, ModelProfile>, id: &str) -> bool {
+pub fn is_reasoning_model(
+    reg: &Registry,
+    profiles: &BTreeMap<String, ModelProfile>,
+    id: &str,
+) -> bool {
     let lower = id.to_ascii_lowercase();
     if lower.contains("non-reasoning") {
         return false;
     }
-    let efforts = profiles.get(id).and_then(|p| p.metadata.efforts.as_ref()).or_else(|| reg.get(id).and_then(|r| r.meta.efforts.as_ref()));
+    let efforts = profiles
+        .get(id)
+        .and_then(|p| p.metadata.efforts.as_ref())
+        .or_else(|| reg.get(id).and_then(|r| r.meta.efforts.as_ref()));
     if efforts.is_some_and(|e| !e.is_empty()) {
         return true;
     }
@@ -514,7 +582,10 @@ pub fn eval_pairs(inp: &TableInputs<'_>) -> Vec<(String, Option<String>, Vec<&'s
     for row in CLASS_TABLE {
         for id in table_candidates(inp, row.class) {
             if let Some(effort) = row_effort(row.class, inp.profiles.get(id), inp.reg, id) {
-                pairs.entry((id.clone(), effort)).or_default().push(row.class);
+                pairs
+                    .entry((id.clone(), effort))
+                    .or_default()
+                    .push(row.class);
             }
         }
     }
@@ -533,20 +604,37 @@ pub fn build_table(inp: &TableInputs<'_>, cache: &EvalCache, now_ms: u64) -> Rou
             let Some(effort) = row_effort(row.class, p, inp.reg, id) else {
                 continue;
             };
-            let key = cache_key(&p.map(|p| p.source_hash.clone()).unwrap_or_default(), effort.as_deref());
+            let key = cache_key(
+                &p.map(|p| p.source_hash.clone()).unwrap_or_default(),
+                effort.as_deref(),
+            );
             let meta = &inp.reg.get(id).map(|r| r.meta.clone()).unwrap_or_default();
-            let probe_ms = p.and_then(|p| p.probe.efforts.iter().find(|t| Some(&t.effort) == effort.as_ref()).and_then(|t| t.reply_ms));
+            let probe_ms = p.and_then(|p| {
+                p.probe
+                    .efforts
+                    .iter()
+                    .find(|t| Some(&t.effort) == effort.as_ref())
+                    .and_then(|t| t.reply_ms)
+            });
             rows.push(TableRow {
                 model: id.clone(),
                 effort,
                 quality: cache.quality(&key, row.class),
-                est_cost_usd: policy::expected_cost_usd(&meta.prices, row.class, 0).map(|c| round(c, 6)),
+                est_cost_usd: policy::expected_cost_usd(&meta.prices, row.class, 0)
+                    .map(|c| round(c, 6)),
                 p50_latency_ms: cache.p50(&key).or(probe_ms),
                 why: String::new(),
             });
         }
-        let max_cost = rows.iter().filter_map(|r| r.est_cost_usd).fold(0.0, f64::max);
-        let max_lat = rows.iter().filter_map(|r| r.p50_latency_ms).max().unwrap_or(0) as f64;
+        let max_cost = rows
+            .iter()
+            .filter_map(|r| r.est_cost_usd)
+            .fold(0.0, f64::max);
+        let max_lat = rows
+            .iter()
+            .filter_map(|r| r.p50_latency_ms)
+            .max()
+            .unwrap_or(0) as f64;
         let score = |r: &TableRow| {
             let nc = match r.est_cost_usd {
                 Some(c) if max_cost > 0.0 => c / max_cost,
@@ -567,26 +655,49 @@ pub fn build_table(inp: &TableInputs<'_>, cache: &EvalCache, now_ms: u64) -> Rou
                 version_key(&b.model)
                     .cmp(&version_key(&a.model))
                     .then(score(b).total_cmp(&score(a)))
-                    .then(a.est_cost_usd.unwrap_or(f64::MAX).total_cmp(&b.est_cost_usd.unwrap_or(f64::MAX)))
+                    .then(
+                        a.est_cost_usd
+                            .unwrap_or(f64::MAX)
+                            .total_cmp(&b.est_cost_usd.unwrap_or(f64::MAX)),
+                    )
                     .then(a.model.cmp(&b.model))
             } else {
                 score(b)
                     .total_cmp(&score(a))
-                    .then(a.est_cost_usd.unwrap_or(f64::MAX).total_cmp(&b.est_cost_usd.unwrap_or(f64::MAX)))
+                    .then(
+                        a.est_cost_usd
+                            .unwrap_or(f64::MAX)
+                            .total_cmp(&b.est_cost_usd.unwrap_or(f64::MAX)),
+                    )
                     .then(a.model.cmp(&b.model))
             }
         });
         for (i, r) in rows.iter_mut().enumerate() {
             r.why = match (i, sq, r.quality) {
                 (0, SpeedQuality::Quality | SpeedQuality::Balanced, _) => {
-                    format!("the strongest reasoning model for {} in your plan ({})", row.plain, sq.word())
+                    format!(
+                        "the strongest reasoning model for {} in your plan ({})",
+                        row.plain,
+                        sq.word()
+                    )
                 }
-                (0, SpeedQuality::Speed, _) => format!("{} for {} in your plan", sq.best(), row.plain),
-                (_, _, None) => format!("ranked by price and speed for {} until its check runs", row.plain),
+                (0, SpeedQuality::Speed, _) => {
+                    format!("{} for {} in your plan", sq.best(), row.plain)
+                }
+                (_, _, None) => format!(
+                    "ranked by price and speed for {} until its check runs",
+                    row.plain
+                ),
                 _ => format!("choice {} for {}", i + 1, row.plain),
             };
         }
-        classes.insert(row.class.to_string(), ClassTable { speed_quality: sq, ranked: rows });
+        classes.insert(
+            row.class.to_string(),
+            ClassTable {
+                speed_quality: sq,
+                ranked: rows,
+            },
+        );
     }
     RoutingTable {
         schema: TABLE_SCHEMA,
@@ -626,15 +737,25 @@ pub fn run_evals(inp: &TableInputs<'_>, cache: &mut EvalCache, env: EvalEnv<'_>)
     let mut run = EvalRun::default();
     let mut max_reasoning = EVAL_REASONING_ALLOWANCE;
     for (model, effort, classes) in eval_pairs(inp) {
-        let hash = inp.profiles.get(&model).map(|p| p.source_hash.clone()).unwrap_or_default();
+        let hash = inp
+            .profiles
+            .get(&model)
+            .map(|p| p.source_hash.clone())
+            .unwrap_or_default();
         let key = cache_key(&hash, effort.as_deref());
         for class in classes {
             if cache.quality(&key, class).is_some() {
                 continue;
             }
             let items = eval_items(class);
-            let calls: Vec<ProbeCall> = items.iter().map(|i| eval_call(&model, effort.as_deref(), i)).collect();
-            let need: u64 = calls.iter().map(|c| estimate(c) + EVAL_MAX_OUTPUT_TOKENS + max_reasoning).sum();
+            let calls: Vec<ProbeCall> = items
+                .iter()
+                .map(|i| eval_call(&model, effort.as_deref(), i))
+                .collect();
+            let need: u64 = calls
+                .iter()
+                .map(|c| estimate(c) + EVAL_MAX_OUTPUT_TOKENS + max_reasoning)
+                .sum();
             if run.tokens + need > EVAL_TOKEN_CAP_PER_BUILD {
                 run.capped = true;
                 continue;
@@ -650,13 +771,21 @@ pub fn run_evals(inp: &TableInputs<'_>, cache: &mut EvalCache, env: EvalEnv<'_>)
                 max_reasoning = max_reasoning.max(reply.reasoning_tokens);
                 (env.on_call)(call, &reply);
                 if (200..300).contains(&reply.status) {
-                    cache.latencies.entry(key.clone()).or_default().push(reply.latency_ms);
+                    cache
+                        .latencies
+                        .entry(key.clone())
+                        .or_default()
+                        .push(reply.latency_ms);
                     if passes(item.check, &reply) {
                         passed += 1;
                     }
                 }
             }
-            cache.scores.entry(key.clone()).or_default().insert(class.to_string(), (passed, items.len() as u32));
+            cache
+                .scores
+                .entry(key.clone())
+                .or_default()
+                .insert(class.to_string(), (passed, items.len() as u32));
         }
     }
     run
@@ -722,28 +851,49 @@ impl ChangeTarget for TableFile<'_> {
 /// saved one (`Ok(false)` writes nothing). The old file moves to
 /// `routing_table.v<n>.json` (the newest [`TABLE_KEEP_VERSIONS`] stay), and
 /// the write is one ChangeLedger line with Undo.
-pub fn write_table(config_dir: &Path, table: &mut RoutingTable, reason: &str) -> Result<bool, String> {
+pub fn write_table(
+    config_dir: &Path,
+    table: &mut RoutingTable,
+    reason: &str,
+) -> Result<bool, String> {
     let path = table_path(config_dir);
     let old: Option<RoutingTable> = read_json(&path);
-    if old.as_ref().is_some_and(|o| o.same_ranking(table) && o.schema == table.schema) {
+    if old
+        .as_ref()
+        .is_some_and(|o| o.same_ranking(table) && o.schema == table.schema)
+    {
         return Ok(false);
     }
-    table.version = old.as_ref().map(|o| o.version.saturating_add(1)).unwrap_or(1);
+    table.version = old
+        .as_ref()
+        .map(|o| o.version.saturating_add(1))
+        .unwrap_or(1);
     let text = serde_json::to_string_pretty(&table).map_err(|e| e.to_string())?;
     let dir = models_dir(config_dir);
     let reason = format!("routing table v{}: {reason}", table.version);
-    record_change(config_dir, &TableFile { path: &path }, Origin::SelfManage, &reason, || {
-        if let Some(o) = &old {
-            let _ = fs::copy(&path, dir.join(format!("routing_table.v{}.json", o.version)));
-        }
-        private_write(&path, text.as_bytes())
-    })?;
+    record_change(
+        config_dir,
+        &TableFile { path: &path },
+        Origin::SelfManage,
+        &reason,
+        || {
+            if let Some(o) = &old {
+                let _ = fs::copy(
+                    &path,
+                    dir.join(format!("routing_table.v{}.json", o.version)),
+                );
+            }
+            private_write(&path, text.as_bytes())
+        },
+    )?;
     let mut kept: Vec<(u32, PathBuf)> = fs::read_dir(&dir)
         .map_err(|e| e.to_string())?
         .flatten()
         .filter_map(|e| {
             let name = e.file_name().to_string_lossy().into_owned();
-            let v = name.strip_prefix("routing_table.v")?.strip_suffix(".json")?;
+            let v = name
+                .strip_prefix("routing_table.v")?
+                .strip_suffix(".json")?;
             Some((v.parse().ok()?, e.path()))
         })
         .collect();
@@ -767,12 +917,23 @@ pub struct Rebuilt {
 /// Rebuild the table when the registry or profiles changed (or `force`, the
 /// Refresh models button), running due evals through `eval` once a day.
 pub fn rebuild(config_dir: &Path, eval: Option<EvalEnv<'_>>, force: bool, now_ms: u64) -> Rebuilt {
-    let (reg, profiles) = (grokhub_core::model_registry::store::load_registry(config_dir), grokhub_core::model_registry::profile::read_profiles(config_dir));
+    let (reg, profiles) = (
+        grokhub_core::model_registry::store::load_registry(config_dir),
+        grokhub_core::model_registry::profile::read_profiles(config_dir),
+    );
     let old = load_table(config_dir);
-    let inp = TableInputs { reg: &reg, profiles: &profiles };
-    let unchanged = old.registry_hash == reg.hash && old.profiles_hash == profiles_hash(&profiles) && old.eval_set_version == EVAL_SET_VERSION;
+    let inp = TableInputs {
+        reg: &reg,
+        profiles: &profiles,
+    };
+    let unchanged = old.registry_hash == reg.hash
+        && old.profiles_hash == profiles_hash(&profiles)
+        && old.eval_set_version == EVAL_SET_VERSION;
     if unchanged && !force {
-        return Rebuilt { version: old.version, ..Rebuilt::default() };
+        return Rebuilt {
+            version: old.version,
+            ..Rebuilt::default()
+        };
     }
     let mut cache: EvalCache = read_json(&eval_cache_path(config_dir)).unwrap_or_default();
     let mut run = EvalRun::default();
@@ -783,13 +944,31 @@ pub fn rebuild(config_dir: &Path, eval: Option<EvalEnv<'_>>, force: bool, now_ms
     }
     let _ = grokhub_core::model_registry::store::write_json(&eval_cache_path(config_dir), &cache);
     let mut table = build_table(&inp, &cache, now_ms);
-    let had: Vec<&String> = old.classes.values().flat_map(|c| c.ranked.iter().map(|r| &r.model)).collect();
-    let mut joined: Vec<String> = table.classes.values().flat_map(|c| c.ranked.iter().map(|r| r.model.clone())).filter(|m| !old.classes.is_empty() && !had.contains(&m)).collect();
+    let had: Vec<&String> = old
+        .classes
+        .values()
+        .flat_map(|c| c.ranked.iter().map(|r| &r.model))
+        .collect();
+    let mut joined: Vec<String> = table
+        .classes
+        .values()
+        .flat_map(|c| c.ranked.iter().map(|r| r.model.clone()))
+        .filter(|m| !old.classes.is_empty() && !had.contains(&m))
+        .collect();
     joined.sort();
     joined.dedup();
-    let why = if joined.is_empty() { "the model list or a profile changed".to_string() } else { format!("{} joined", joined.join(", ")) };
+    let why = if joined.is_empty() {
+        "the model list or a profile changed".to_string()
+    } else {
+        format!("{} joined", joined.join(", "))
+    };
     let written = write_table(config_dir, &mut table, &why).unwrap_or(false);
-    Rebuilt { written, version: if written { table.version } else { old.version }, eval: run, joined }
+    Rebuilt {
+        written,
+        version: if written { table.version } else { old.version },
+        eval: run,
+        joined,
+    }
 }
 
 /// "How Auto picks": one line per class with its top model@effort and setting.
@@ -802,8 +981,15 @@ pub fn how_auto_picks(table: &RoutingTable) -> Vec<String> {
                 Some(e) => format!("{}@{e}", r.model),
                 None => r.model.clone(),
             });
-            let sq = ct.map(|c| c.speed_quality).unwrap_or(SpeedQuality::of(row.class));
-            format!("{} → {} ({})", row.class, top.unwrap_or_else(|| "today's model".into()), sq.word())
+            let sq = ct
+                .map(|c| c.speed_quality)
+                .unwrap_or(SpeedQuality::of(row.class));
+            format!(
+                "{} → {} ({})",
+                row.class,
+                top.unwrap_or_else(|| "today's model".into()),
+                sq.word()
+            )
         })
         .collect()
 }
@@ -813,7 +999,11 @@ pub fn why_table_text(table: &RoutingTable, now_ms: u64) -> String {
     if table.classes.is_empty() {
         return "No routing table yet. It builds after the model list refreshes (30 s after start, then every 6 hours).".into();
     }
-    let mut out = vec![format!("Routing table v{} · built {}", table.version, grokhub_core::pulse::ago_label(table.built_at, now_ms))];
+    let mut out = vec![format!(
+        "Routing table v{} · built {}",
+        table.version,
+        grokhub_core::pulse::ago_label(table.built_at, now_ms)
+    )];
     out.extend(how_auto_picks(table));
     out.join("\n")
 }

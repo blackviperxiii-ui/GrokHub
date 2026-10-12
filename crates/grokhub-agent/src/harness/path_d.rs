@@ -16,7 +16,14 @@ use crate::harness::approval::{decide, GateOutcome, Step};
 use crate::harness::hard::HardClass;
 
 /// Name words of a tool that drives the screen, mouse, or keyboard.
-const CU_WORDS: &[&str] = &["computer", "screenshot", "click", "mouse", "keyboard", "desktop"];
+const CU_WORDS: &[&str] = &[
+    "computer",
+    "screenshot",
+    "click",
+    "mouse",
+    "keyboard",
+    "desktop",
+];
 
 /// Lowercase words of a tool name, split on anything not alphanumeric.
 fn name_words(name: &str) -> Vec<String> {
@@ -34,11 +41,16 @@ fn name_words(name: &str) -> Vec<String> {
 /// tools (`browser_tab`, …) drive a page, not the desktop, and stay untouched.
 pub fn builtin_cu(name: &str) -> bool {
     let name = name.trim();
-    if name.is_empty() || name.contains(|c: char| c.is_whitespace() || matches!(c, '`' | '/' | '\\')) {
+    if name.is_empty()
+        || name.contains(|c: char| c.is_whitespace() || matches!(c, '`' | '/' | '\\'))
+    {
         return false;
     }
     let lower = name.to_ascii_lowercase();
-    if grokhub_core::CABIN_CU_SERVERS.iter().any(|s| lower.contains(s)) {
+    if grokhub_core::CABIN_CU_SERVERS
+        .iter()
+        .any(|s| lower.contains(s))
+    {
         return false;
     }
     let words = name_words(&lower);
@@ -52,8 +64,12 @@ pub fn builtin_cu(name: &str) -> bool {
 /// they write no span when allowed, so a few looks never read as a loop.
 pub fn cu_look_only(name: &str) -> bool {
     let words = name_words(name);
-    let acts = ["click", "type", "key", "press", "scroll", "drag", "move", "open", "focus", "launch", "delete"];
-    words.iter().any(|w| w == "screenshot" || w == "snapshot") && !words.iter().any(|w| acts.contains(&w.as_str()))
+    let acts = [
+        "click", "type", "key", "press", "scroll", "drag", "move", "open", "focus", "launch",
+        "delete",
+    ];
+    words.iter().any(|w| w == "screenshot" || w == "snapshot")
+        && !words.iter().any(|w| acts.contains(&w.as_str()))
 }
 
 /// The `grokhub-desktop` tool shape a built-in step matches, so the same
@@ -103,11 +119,17 @@ pub fn decide_unasked(name: &str, args: &serde_json::Value, access: AccessMode) 
             ),
         };
     }
-    let shape = decide(Step::Desk { tool: desk_shape(name), args });
+    let shape = decide(Step::Desk {
+        tool: desk_shape(name),
+        args,
+    });
     if !shape.is_allow() {
         return shape;
     }
-    decide(Step::Tool { name, arguments: &args.to_string() })
+    decide(Step::Tool {
+        name,
+        arguments: &args.to_string(),
+    })
 }
 
 /// What Grok tried, in the words of a hard card title.
@@ -131,7 +153,11 @@ pub fn unasked_action(name: &str, args: &serde_json::Value, class: HardClass) ->
     }
     let detail: Vec<String> = ["keys", "key", "app", "window", "label", "target", "element"]
         .iter()
-        .filter_map(|k| args.get(*k).and_then(|v| v.as_str()).map(|v| format!("{k}={v}")))
+        .filter_map(|k| {
+            args.get(*k)
+                .and_then(|v| v.as_str())
+                .map(|v| format!("{k}={v}"))
+        })
         .collect();
     if detail.is_empty() {
         name.to_string()
@@ -147,7 +173,14 @@ mod tests {
 
     #[test]
     fn builtin_cu_is_a_bare_tool_name_off_path_a_and_off_the_browser() {
-        for name in ["computer_screenshot", "computer_click", "computer-use__type", "left_click", "mouse_move", "desktop_key"] {
+        for name in [
+            "computer_screenshot",
+            "computer_click",
+            "computer-use__type",
+            "left_click",
+            "mouse_move",
+            "desktop_key",
+        ] {
             assert!(builtin_cu(name), "{name}");
         }
         for name in [
@@ -175,58 +208,120 @@ mod tests {
                 reason: "Access is Readonly — Grok Build's own computer use ran with desktop control off".into()
             }
         );
-        assert_eq!(decide_unasked("computer_click", &json!({ "x": 4, "y": 9 }), AccessMode::Supervised), GateOutcome::Allow);
-        assert_eq!(decide_unasked("computer_type", &json!({ "label": "Search" }), AccessMode::Full), GateOutcome::Allow);
+        assert_eq!(
+            decide_unasked(
+                "computer_click",
+                &json!({ "x": 4, "y": 9 }),
+                AccessMode::Supervised
+            ),
+            GateOutcome::Allow
+        );
+        assert_eq!(
+            decide_unasked(
+                "computer_type",
+                &json!({ "label": "Search" }),
+                AccessMode::Full
+            ),
+            GateOutcome::Allow
+        );
     }
 
     #[test]
     fn hard_steps_park_from_the_field_the_key_chord_or_the_name() {
         let park = |class: HardClass| GateOutcome::Park {
-            reason: format!("hard-class {}: {} — Always cannot skip", class.as_str(), class.label()),
+            reason: format!(
+                "hard-class {}: {} — Always cannot skip",
+                class.as_str(),
+                class.label()
+            ),
             hard: Some(class),
             needs_jeremy: true,
         };
         let full = AccessMode::Full;
-        assert_eq!(decide_unasked("computer_type", &json!({ "label": "Password" }), full), park(HardClass::Credentials));
+        assert_eq!(
+            decide_unasked("computer_type", &json!({ "label": "Password" }), full),
+            park(HardClass::Credentials)
+        );
         assert_eq!(
             decide_unasked("computer_key", &json!({ "keys": "ctrl+alt+delete" }), full),
             park(HardClass::IrreversibleOs)
         );
         assert_eq!(
-            decide_unasked("computer_key", &json!({ "keys": "Delete", "window": "Dolphin" }), full),
+            decide_unasked(
+                "computer_key",
+                &json!({ "keys": "Delete", "window": "Dolphin" }),
+                full
+            ),
             park(HardClass::Delete)
         );
-        assert_eq!(decide_unasked("computer_send_message", &json!({}), full), park(HardClass::Send));
-        assert_eq!(decide_unasked("computer_checkout", &json!({}), full), park(HardClass::Money));
-        assert_eq!(decide_unasked("computer_open", &json!({ "app": "shutdown" }), full), park(HardClass::IrreversibleOs));
+        assert_eq!(
+            decide_unasked("computer_send_message", &json!({}), full),
+            park(HardClass::Send)
+        );
+        assert_eq!(
+            decide_unasked("computer_checkout", &json!({}), full),
+            park(HardClass::Money)
+        );
+        assert_eq!(
+            decide_unasked("computer_open", &json!({ "app": "shutdown" }), full),
+            park(HardClass::IrreversibleOs)
+        );
         // A chord sent as `key`, and a credential field named only by `id` or a nested `field`.
-        assert_eq!(decide_unasked("keyboard_press", &json!({ "key": "ctrl+alt+delete" }), full), park(HardClass::IrreversibleOs));
         assert_eq!(
-            decide_unasked("keyboard_press", &json!({ "key": "Delete", "window": "Dolphin" }), full),
+            decide_unasked("keyboard_press", &json!({ "key": "ctrl+alt+delete" }), full),
+            park(HardClass::IrreversibleOs)
+        );
+        assert_eq!(
+            decide_unasked(
+                "keyboard_press",
+                &json!({ "key": "Delete", "window": "Dolphin" }),
+                full
+            ),
             park(HardClass::Delete)
         );
-        assert_eq!(decide_unasked("keyboard_type", &json!({ "id": "login-password" }), full), park(HardClass::Credentials));
         assert_eq!(
-            decide_unasked("computer_type", &json!({ "field": { "role": "AXSecureTextField" } }), full),
+            decide_unasked("keyboard_type", &json!({ "id": "login-password" }), full),
+            park(HardClass::Credentials)
+        );
+        assert_eq!(
+            decide_unasked(
+                "computer_type",
+                &json!({ "field": { "role": "AXSecureTextField" } }),
+                full
+            ),
             park(HardClass::Credentials)
         );
     }
 
     #[test]
     fn card_words_name_the_step_never_a_value() {
-        assert_eq!(unasked_title(HardClass::Send), "Grok tried to send something without asking");
+        assert_eq!(
+            unasked_title(HardClass::Send),
+            "Grok tried to send something without asking"
+        );
         assert_eq!(
             unasked_title(HardClass::Credentials),
             "Grok tried to type into a credential field without asking"
         );
         assert_eq!(
-            unasked_action("computer_type", &json!({ "label": "Password" }), HardClass::Credentials),
+            unasked_action(
+                "computer_type",
+                &json!({ "label": "Password" }),
+                HardClass::Credentials
+            ),
             "computer_type: type into a credential field (value hidden)"
         );
         assert_eq!(
-            unasked_action("computer_key", &json!({ "keys": "ctrl+alt+delete" }), HardClass::IrreversibleOs),
+            unasked_action(
+                "computer_key",
+                &json!({ "keys": "ctrl+alt+delete" }),
+                HardClass::IrreversibleOs
+            ),
             "computer_key keys=ctrl+alt+delete"
         );
-        assert_eq!(unasked_action("computer_send_message", &json!({}), HardClass::Send), "computer_send_message");
+        assert_eq!(
+            unasked_action("computer_send_message", &json!({}), HardClass::Send),
+            "computer_send_message"
+        );
     }
 }

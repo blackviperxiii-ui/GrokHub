@@ -3,7 +3,6 @@
 use super::*;
 
 impl Cabin {
-
     pub(super) fn poll_job(&mut self) {
         let Some(rx) = self.rx.take() else { return };
         match rx.try_recv() {
@@ -131,8 +130,7 @@ impl Cabin {
                 }
                 if !any_hands && is_hard_run(self.last_host.len() as u32, !ok, false, job_scratch) {
                     let user = self.last_user_on_job();
-                    if let Some(proposed) =
-                        propose_skill_from_turn(&user, &block, &self.last_host)
+                    if let Some(proposed) = propose_skill_from_turn(&user, &block, &self.last_host)
                     {
                         self.commit_proposed_skill(proposed);
                     }

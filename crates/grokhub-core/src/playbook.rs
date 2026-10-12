@@ -226,7 +226,11 @@ fn text(field: &str, s: &str, max: usize) -> Result<(), String> {
 
 /// A playbook id: 1 to [`ID_MAX`] of a-z, 0-9 and -.
 pub fn id_ok(id: &str) -> bool {
-    !id.is_empty() && id.len() <= ID_MAX && id.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+    !id.is_empty()
+        && id.len() <= ID_MAX
+        && id
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
 }
 
 /// The shape checks: ids, lengths, known intents/domains/OSes, at least one

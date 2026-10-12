@@ -45,7 +45,9 @@ impl Usage {
         self.input_tokens = self.input_tokens.saturating_add(other.input_tokens);
         self.output_tokens = self.output_tokens.saturating_add(other.output_tokens);
         self.reasoning_tokens = self.reasoning_tokens.saturating_add(other.reasoning_tokens);
-        self.cost_in_usd_ticks = self.cost_in_usd_ticks.saturating_add(other.cost_in_usd_ticks);
+        self.cost_in_usd_ticks = self
+            .cost_in_usd_ticks
+            .saturating_add(other.cost_in_usd_ticks);
         self.cached_tokens = self.cached_tokens.saturating_add(other.cached_tokens);
     }
 
@@ -80,9 +82,19 @@ pub enum ContentPart {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InputItem {
-    Message { role: String, content: Vec<ContentPart> },
-    FunctionCall { call_id: String, name: String, arguments: String },
-    FunctionCallOutput { call_id: String, output: String },
+    Message {
+        role: String,
+        content: Vec<ContentPart>,
+    },
+    FunctionCall {
+        call_id: String,
+        name: String,
+        arguments: String,
+    },
+    FunctionCallOutput {
+        call_id: String,
+        output: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -121,10 +133,23 @@ pub struct TurnOutput {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ClientError {
-    KeyOffer { status: u16, message: String },
-    Auth { status: u16, message: String },
-    RateLimited { retry_after_secs: Option<u64>, message: String },
-    Server { status: u16, message: String, retry_after_secs: Option<u64> },
+    KeyOffer {
+        status: u16,
+        message: String,
+    },
+    Auth {
+        status: u16,
+        message: String,
+    },
+    RateLimited {
+        retry_after_secs: Option<u64>,
+        message: String,
+    },
+    Server {
+        status: u16,
+        message: String,
+        retry_after_secs: Option<u64>,
+    },
     Transport(String),
     IdleTimeout,
     Disconnect,
@@ -138,9 +163,13 @@ impl std::fmt::Display for ClientError {
             ClientError::KeyOffer { status, message } => {
                 write!(f, "sign-in was rejected (HTTP {status}): {message}")
             }
-            ClientError::Auth { status, message } => write!(f, "API key rejected (HTTP {status}): {message}"),
+            ClientError::Auth { status, message } => {
+                write!(f, "API key rejected (HTTP {status}): {message}")
+            }
             ClientError::RateLimited { message, .. } => write!(f, "rate limited: {message}"),
-            ClientError::Server { status, message, .. } => write!(f, "HTTP {status}: {message}"),
+            ClientError::Server {
+                status, message, ..
+            } => write!(f, "HTTP {status}: {message}"),
             ClientError::Transport(msg) => write!(f, "transport: {msg}"),
             ClientError::IdleTimeout => write!(f, "model stopped responding"),
             ClientError::Disconnect => write!(f, "stream disconnected before it completed"),
@@ -177,8 +206,12 @@ impl ClientError {
 
     pub fn retry_after_secs(&self) -> Option<u64> {
         match self {
-            ClientError::RateLimited { retry_after_secs, .. }
-            | ClientError::Server { retry_after_secs, .. } => *retry_after_secs,
+            ClientError::RateLimited {
+                retry_after_secs, ..
+            }
+            | ClientError::Server {
+                retry_after_secs, ..
+            } => *retry_after_secs,
             _ => None,
         }
     }
@@ -212,8 +245,15 @@ pub fn map_http_status(
     match status {
         401 | 403 if kind == AuthKind::OAuth => ClientError::KeyOffer { status, message },
         401 | 403 => ClientError::Auth { status, message },
-        429 => ClientError::RateLimited { retry_after_secs, message },
-        500..=599 => ClientError::Server { status, message, retry_after_secs },
+        429 => ClientError::RateLimited {
+            retry_after_secs,
+            message,
+        },
+        500..=599 => ClientError::Server {
+            status,
+            message,
+            retry_after_secs,
+        },
         other => ClientError::Protocol(format!("HTTP {other}: {message}")),
     }
 }
@@ -332,7 +372,11 @@ fn input_wire(items: &[InputItem]) -> (Vec<Value>, bool) {
                 }
                 input.push(json!({"type": "message", "role": role, "content": parts}));
             }
-            InputItem::FunctionCall { call_id, name, arguments } => {
+            InputItem::FunctionCall {
+                call_id,
+                name,
+                arguments,
+            } => {
                 input.push(json!({
                     "type": "function_call",
                     "call_id": call_id,
@@ -378,7 +422,8 @@ pub fn responses_body(req: &ResponsesRequest) -> Value {
         .map(|e| grokhub_core::parse_reasoning_effort(e).unwrap_or(e));
     // Only a model that takes an effort gets one: the rest answer HTTP 400 (2.10.97).
     // A non-grok id isn't ours to judge.
-    let takes_effort = grokhub_core::accepts_reasoning_effort(model) || !model.to_ascii_lowercase().starts_with("grok-");
+    let takes_effort = grokhub_core::accepts_reasoning_effort(model)
+        || !model.to_ascii_lowercase().starts_with("grok-");
     if let Some(effort) = effort.filter(|s| takes_effort && !s.is_empty() && *s != "none") {
         body["reasoning"] = json!({"effort": effort});
     }
@@ -404,7 +449,10 @@ fn loopback_http(url: &str) -> bool {
     if authority.contains('@') {
         return false;
     }
-    let host = authority.rsplit_once(':').map(|(h, _)| h).unwrap_or(authority);
+    let host = authority
+        .rsplit_once(':')
+        .map(|(h, _)| h)
+        .unwrap_or(authority);
     matches!(host, "127.0.0.1" | "localhost")
 }
 
@@ -445,7 +493,10 @@ impl XaiClient {
         // EgressGuard (Spike-4a): api.x.ai is a default model host, so this
         // logs one `egress.jsonl` line and goes. Loopback test servers are local.
         let data = [DataClass::Chat, DataClass::Personal];
-        let egress = guard_egress(&crate::perm::config_dir(), &EgressReq::new(&self.url, &data));
+        let egress = guard_egress(
+            &crate::perm::config_dir(),
+            &EgressReq::new(&self.url, &data),
+        );
         if let GateOutcome::Park { reason, .. } | GateOutcome::Refuse { reason } = egress {
             return Err(ClientError::Protocol(reason));
         }
@@ -471,7 +522,12 @@ impl XaiClient {
             Err(ureq::Error::Status(status, resp)) => {
                 let retry_after = retry_after_header(&resp);
                 let message = read_error_body(resp);
-                return Err(map_http_status(status, &message, retry_after, self.auth_kind));
+                return Err(map_http_status(
+                    status,
+                    &message,
+                    retry_after,
+                    self.auth_kind,
+                ));
             }
             Err(ureq::Error::Transport(err)) => return Err(classify_transport(&err)),
         };
@@ -502,15 +558,17 @@ impl ModelClient for XaiClient {
             }
             match self.once(req, cancel, sink) {
                 Ok(out) => return Ok(out),
-                Err(err) if err.is_retryable() => match decide_retry(&err, retry_count, DEFAULT_MAX_RETRIES) {
-                    Some(wait) => {
-                        retry_count = retry_count.saturating_add(1);
-                        if !sleep_cancellable(wait, cancel) {
-                            return Err(ClientError::Cancelled);
+                Err(err) if err.is_retryable() => {
+                    match decide_retry(&err, retry_count, DEFAULT_MAX_RETRIES) {
+                        Some(wait) => {
+                            retry_count = retry_count.saturating_add(1);
+                            if !sleep_cancellable(wait, cancel) {
+                                return Err(ClientError::Cancelled);
+                            }
                         }
+                        None => return Err(err),
                     }
-                    None => return Err(err),
-                },
+                }
                 Err(err) => return Err(err),
             }
         }
@@ -532,7 +590,9 @@ fn sleep_cancellable(total: Duration, cancel: &CancelToken) -> bool {
 }
 
 fn retry_after_header(resp: &ureq::Response) -> Option<u64> {
-    resp.header("retry-after").and_then(|s| s.trim().parse::<u64>().ok()).filter(|n| *n > 0)
+    resp.header("retry-after")
+        .and_then(|s| s.trim().parse::<u64>().ok())
+        .filter(|n| *n > 0)
 }
 
 fn read_error_body(resp: ureq::Response) -> String {
@@ -675,9 +735,13 @@ mod tests {
     fn xai_client_loopback_url_accepts_only_local_http() {
         let mk = || XaiClient::new("test-access-token", AuthKind::OAuth, Duration::from_secs(5));
         assert_eq!(mk().url, "https://api.x.ai/v1/responses");
-        let ok = mk().with_loopback_url("http://127.0.0.1:4711/v1/responses").unwrap();
+        let ok = mk()
+            .with_loopback_url("http://127.0.0.1:4711/v1/responses")
+            .unwrap();
         assert_eq!(ok.url, "http://127.0.0.1:4711/v1/responses");
-        let ok = mk().with_loopback_url("http://localhost:9/v1/responses").unwrap();
+        let ok = mk()
+            .with_loopback_url("http://localhost:9/v1/responses")
+            .unwrap();
         assert_eq!(ok.url, "http://localhost:9/v1/responses");
         for bad in [
             "https://api.x.ai/v1/responses",
@@ -728,7 +792,10 @@ mod tests {
         ));
         assert!(matches!(
             map_http_status(429, "slow", Some(9), AuthKind::ApiKey),
-            ClientError::RateLimited { retry_after_secs: Some(9), .. }
+            ClientError::RateLimited {
+                retry_after_secs: Some(9),
+                ..
+            }
         ));
         assert!(matches!(
             map_http_status(503, "down", None, AuthKind::OAuth),
@@ -761,10 +828,16 @@ mod tests {
             hosted_search: true,
             call_timeout: None,
         };
-        assert_eq!(responses_body(&req("minimal"))["reasoning"]["effort"], "low");
+        assert_eq!(
+            responses_body(&req("minimal"))["reasoning"]["effort"],
+            "low"
+        );
         assert_eq!(responses_body(&req("mini"))["reasoning"]["effort"], "low");
         assert_eq!(responses_body(&req("max"))["reasoning"]["effort"], "xhigh");
-        assert_eq!(responses_body(&req("medium"))["reasoning"]["effort"], "medium");
+        assert_eq!(
+            responses_body(&req("medium"))["reasoning"]["effort"],
+            "medium"
+        );
         assert!(responses_body(&req("off")).get("reasoning").is_none());
     }
 
@@ -788,7 +861,9 @@ mod tests {
         assert_eq!(body["reasoning"]["effort"], "high");
         assert!(body.get("store").is_none());
         let tools = body["tools"].as_array().unwrap();
-        assert!(tools.iter().any(|t| t["type"] == "function" && t["name"] == "read_file"));
+        assert!(tools
+            .iter()
+            .any(|t| t["type"] == "function" && t["name"] == "read_file"));
         assert!(tools.iter().any(|t| t["type"] == "web_search"));
         assert!(tools.iter().any(|t| t["type"] == "x_search"));
         assert_eq!(body["input"][0]["content"][0]["type"], "input_text");
@@ -811,15 +886,25 @@ mod tests {
         assert_eq!(body["input"][0]["content"][0]["type"], "input_image");
 
         let headers = request_headers("test-token", "conv-1");
-        assert!(headers.iter().any(|(k, v)| k == "Authorization" && v == "Bearer test-token"));
-        assert!(headers.iter().any(|(k, v)| k == "User-Agent" && v == USER_AGENT));
-        assert!(headers.iter().any(|(k, v)| k == "x-grok-conv-id" && v == "conv-1"));
+        assert!(headers
+            .iter()
+            .any(|(k, v)| k == "Authorization" && v == "Bearer test-token"));
+        assert!(headers
+            .iter()
+            .any(|(k, v)| k == "User-Agent" && v == USER_AGENT));
+        assert!(headers
+            .iter()
+            .any(|(k, v)| k == "x-grok-conv-id" && v == "conv-1"));
         assert_eq!(DEFAULT_MODEL, grokhub_core::CABIN_FAST_MODEL);
     }
 
     #[test]
     fn xai_client_debug_redacts_the_bearer() {
-        let client = XaiClient::new("super-secret-value", AuthKind::ApiKey, Duration::from_secs(1));
+        let client = XaiClient::new(
+            "super-secret-value",
+            AuthKind::ApiKey,
+            Duration::from_secs(1),
+        );
         let rendered = format!("{client:?}");
         assert!(!rendered.contains("super-secret-value"), "{rendered}");
         assert!(rendered.contains("redacted"), "{rendered}");

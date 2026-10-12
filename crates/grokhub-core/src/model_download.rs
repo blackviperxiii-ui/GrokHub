@@ -44,8 +44,15 @@ pub fn tree_url(repo: &str) -> String {
 /// `file`'s `lfs.oid` in a Hugging Face tree listing.
 pub fn sha256_from_tree(json: &str, file: &str) -> Option<String> {
     let v: serde_json::Value = serde_json::from_str(json).ok()?;
-    let oid = v.as_array()?.iter().find(|e| e.get("path").and_then(|p| p.as_str()) == Some(file))?.get("lfs")?.get("oid")?.as_str()?;
-    (oid.len() == 64 && oid.bytes().all(|b| b.is_ascii_hexdigit())).then(|| oid.to_ascii_lowercase())
+    let oid = v
+        .as_array()?
+        .iter()
+        .find(|e| e.get("path").and_then(|p| p.as_str()) == Some(file))?
+        .get("lfs")?
+        .get("oid")?
+        .as_str()?;
+    (oid.len() == 64 && oid.bytes().all(|b| b.is_ascii_hexdigit()))
+        .then(|| oid.to_ascii_lowercase())
 }
 
 pub fn part_path(dir: &Path, m: &LocalModel) -> PathBuf {
@@ -58,7 +65,10 @@ pub fn final_path(dir: &Path, m: &LocalModel) -> PathBuf {
 
 /// Bytes already on disk from an unfinished download.
 pub fn partial_bytes(dir: &Path, m: &LocalModel) -> Option<u64> {
-    fs::metadata(part_path(dir, m)).ok().map(|md| md.len()).filter(|n| *n > 0)
+    fs::metadata(part_path(dir, m))
+        .ok()
+        .map(|md| md.len())
+        .filter(|n| *n > 0)
 }
 
 /// The model that finished and passed its check.
@@ -72,7 +82,8 @@ pub struct Installed {
 
 /// The installed record, only while its file is still there at the recorded size.
 pub fn installed(dir: &Path) -> Option<Installed> {
-    let rec: Installed = serde_json::from_str(&fs::read_to_string(dir.join(INSTALLED_FILE)).ok()?).ok()?;
+    let rec: Installed =
+        serde_json::from_str(&fs::read_to_string(dir.join(INSTALLED_FILE)).ok()?).ok()?;
     let len = fs::metadata(dir.join(&rec.file)).ok()?.len();
     (len == rec.bytes).then_some(rec)
 }
@@ -99,7 +110,10 @@ impl Control {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Progress {
     /// Bytes on disk so far, and the full size when known.
-    Bytes { done: u64, total: Option<u64> },
+    Bytes {
+        done: u64,
+        total: Option<u64>,
+    },
     Verifying,
 }
 
@@ -107,7 +121,9 @@ pub enum Progress {
 pub enum Outcome {
     Done(Installed),
     /// Stopped by Pause; the `.part` stays so it resumes.
-    Paused { done: u64 },
+    Paused {
+        done: u64,
+    },
     /// Stopped by Cancel; the `.part` is gone.
     Cancelled,
     /// The hash didn't match; the `.part` is gone so the next try starts clean.
@@ -119,13 +135,21 @@ pub enum Outcome {
 const CHUNK: usize = 256 * 1024;
 
 /// Download `m` into `dir`, resuming any `.part`, then check its SHA-256.
-pub fn download(dir: &Path, m: &LocalModel, fetch: &dyn Fetch, ctl: &Control, on: &mut dyn FnMut(Progress)) -> Outcome {
+pub fn download(
+    dir: &Path,
+    m: &LocalModel,
+    fetch: &dyn Fetch,
+    ctl: &Control,
+    on: &mut dyn FnMut(Progress),
+) -> Outcome {
     if let Err(e) = fs::create_dir_all(dir) {
         return Outcome::Failed(format!("Couldn't create {}: {e}", dir.display()));
     }
     let want = match fetch.sha256(m.repo, m.file) {
         Ok(h) => h,
-        Err(e) => return Outcome::Failed(format!("Couldn't read the checksum for {}: {e}", m.name)),
+        Err(e) => {
+            return Outcome::Failed(format!("Couldn't read the checksum for {}: {e}", m.name))
+        }
     };
     let part = part_path(dir, m);
     let have = partial_bytes(dir, m).unwrap_or(0);
@@ -134,7 +158,11 @@ pub fn download(dir: &Path, m: &LocalModel, fetch: &dyn Fetch, ctl: &Control, on
         Err(e) => return Outcome::Failed(format!("Couldn't download {}: {e}", m.name)),
     };
     // The server ignored the range: start the file over.
-    let mut out = match if start == 0 { File::create(&part) } else { OpenOptions::new().append(true).open(&part) } {
+    let mut out = match if start == 0 {
+        File::create(&part)
+    } else {
+        OpenOptions::new().append(true).open(&part)
+    } {
         Ok(f) => f,
         Err(e) => return Outcome::Failed(format!("Couldn't write {}: {e}", part.display())),
     };
@@ -167,7 +195,11 @@ pub fn download(dir: &Path, m: &LocalModel, fetch: &dyn Fetch, ctl: &Control, on
     }
     drop(out);
     if total.is_some_and(|t| done < t) {
-        return Outcome::Failed(format!("The download of {} ended early ({done} of {} bytes).", m.name, total.unwrap_or(0)));
+        return Outcome::Failed(format!(
+            "The download of {} ended early ({done} of {} bytes).",
+            m.name,
+            total.unwrap_or(0)
+        ));
     }
     on(Progress::Verifying);
     match sha256_file(&part) {
@@ -182,7 +214,12 @@ pub fn download(dir: &Path, m: &LocalModel, fetch: &dyn Fetch, ctl: &Control, on
     if let Err(e) = fs::rename(&part, &fin) {
         return Outcome::Failed(format!("Couldn't finish {}: {e}", fin.display()));
     }
-    let rec = Installed { id: m.id.into(), file: m.file.into(), sha256: want, bytes: done };
+    let rec = Installed {
+        id: m.id.into(),
+        file: m.file.into(),
+        sha256: want,
+        bytes: done,
+    };
     let json = serde_json::to_string_pretty(&rec).unwrap_or_default();
     if let Err(e) = fs::write(dir.join(INSTALLED_FILE), json) {
         return Outcome::Failed(format!("Couldn't record {}: {e}", m.name));
@@ -211,14 +248,25 @@ fn sha256_file(path: &Path) -> std::io::Result<String> {
 
 /// The full size in a `Content-Range: bytes 20-49/50` header.
 pub fn content_range_total(header: &str) -> Option<u64> {
-    header.trim().strip_prefix("bytes ")?.rsplit_once('/')?.1.trim().parse().ok()
+    header
+        .trim()
+        .strip_prefix("bytes ")?
+        .rsplit_once('/')?
+        .1
+        .trim()
+        .parse()
+        .ok()
 }
 
 /// "2.1 GB of 4.6 GB" for the progress row.
 pub fn progress_line(done: u64, total: Option<u64>) -> String {
     let mb = |b: u64| b / (1_024 * 1_024);
     match total {
-        Some(t) if t > 0 => format!("{} of {}", crate::local_setup::size_label(mb(done)), crate::local_setup::size_label(mb(t))),
+        Some(t) if t > 0 => format!(
+            "{} of {}",
+            crate::local_setup::size_label(mb(done)),
+            crate::local_setup::size_label(mb(t))
+        ),
         _ => crate::local_setup::size_label(mb(done)),
     }
 }
@@ -240,7 +288,16 @@ mod tests {
     const BODY: &[u8] = b"pretend this is a gguf file with a few bytes in it";
 
     fn model() -> LocalModel {
-        LocalModel { id: "test-model", name: "Test Model", download_mb: 1, min_ram_mb: 0, min_vram_mb: 0, tier: "local:tiny", repo: "acme/test-GGUF", file: "test.gguf" }
+        LocalModel {
+            id: "test-model",
+            name: "Test Model",
+            download_mb: 1,
+            min_ram_mb: 0,
+            min_vram_mb: 0,
+            tier: "local:tiny",
+            repo: "acme/test-GGUF",
+            file: "test.gguf",
+        }
     }
 
     fn sha(b: &[u8]) -> String {
@@ -258,7 +315,13 @@ mod tests {
 
     impl FakeServer {
         fn new() -> Self {
-            Self { body: BODY.to_vec(), hash: sha(BODY), ranges: true, cut: Mutex::new(None), opens: Mutex::new(Vec::new()) }
+            Self {
+                body: BODY.to_vec(),
+                hash: sha(BODY),
+                ranges: true,
+                cut: Mutex::new(None),
+                opens: Mutex::new(Vec::new()),
+            }
         }
     }
 
@@ -266,7 +329,10 @@ mod tests {
     impl Read for Broken {
         fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
             match self.0.read(buf)? {
-                0 => Err(std::io::Error::new(std::io::ErrorKind::ConnectionReset, "connection reset")),
+                0 => Err(std::io::Error::new(
+                    std::io::ErrorKind::ConnectionReset,
+                    "connection reset",
+                )),
                 n => Ok(n),
             }
         }
@@ -274,14 +340,25 @@ mod tests {
 
     impl Fetch for FakeServer {
         fn open(&self, url: &str, offset: u64) -> Result<Opened, String> {
-            assert_eq!(url, "https://huggingface.co/acme/test-GGUF/resolve/main/test.gguf");
+            assert_eq!(
+                url,
+                "https://huggingface.co/acme/test-GGUF/resolve/main/test.gguf"
+            );
             self.opens.lock().unwrap().push(offset);
             let start = if self.ranges { offset as usize } else { 0 };
             let total = Some(self.body.len() as u64);
             if let Some(n) = self.cut.lock().unwrap().take() {
-                return Ok((Box::new(Broken(Cursor::new(self.body[start..n].to_vec()))), start as u64, total));
+                return Ok((
+                    Box::new(Broken(Cursor::new(self.body[start..n].to_vec()))),
+                    start as u64,
+                    total,
+                ));
             }
-            Ok((Box::new(Cursor::new(self.body[start..].to_vec())), start as u64, total))
+            Ok((
+                Box::new(Cursor::new(self.body[start..].to_vec())),
+                start as u64,
+                total,
+            ))
         }
         fn sha256(&self, repo: &str, file: &str) -> Result<String, String> {
             assert_eq!((repo, file), ("acme/test-GGUF", "test.gguf"));
@@ -290,7 +367,8 @@ mod tests {
     }
 
     fn tmp(label: &str) -> PathBuf {
-        let d = std::env::temp_dir().join(format!("grokhub-model-dl-{label}-{}", std::process::id()));
+        let d =
+            std::env::temp_dir().join(format!("grokhub-model-dl-{label}-{}", std::process::id()));
         let _ = fs::remove_dir_all(&d);
         d
     }
@@ -300,14 +378,36 @@ mod tests {
         let dir = tmp("clean");
         let srv = FakeServer::new();
         let mut seen = Vec::new();
-        let out = download(&dir, &model(), &srv, &Control::default(), &mut |p| seen.push(p));
-        let rec = Installed { id: "test-model".into(), file: "test.gguf".into(), sha256: sha(BODY), bytes: BODY.len() as u64 };
+        let out = download(&dir, &model(), &srv, &Control::default(), &mut |p| {
+            seen.push(p)
+        });
+        let rec = Installed {
+            id: "test-model".into(),
+            file: "test.gguf".into(),
+            sha256: sha(BODY),
+            bytes: BODY.len() as u64,
+        };
         assert_eq!(out, Outcome::Done(rec.clone()));
         assert_eq!(fs::read(dir.join("test.gguf")).unwrap(), BODY);
         assert!(!dir.join("test.gguf.part").exists());
         assert_eq!(installed(&dir), Some(rec));
-        assert_eq!(seen.first(), Some(&Progress::Bytes { done: 0, total: Some(50) }));
-        assert_eq!(&seen[seen.len() - 2..], &[Progress::Bytes { done: 50, total: Some(50) }, Progress::Verifying]);
+        assert_eq!(
+            seen.first(),
+            Some(&Progress::Bytes {
+                done: 0,
+                total: Some(50)
+            })
+        );
+        assert_eq!(
+            &seen[seen.len() - 2..],
+            &[
+                Progress::Bytes {
+                    done: 50,
+                    total: Some(50)
+                },
+                Progress::Verifying
+            ]
+        );
         // The record only counts while the file is there at its size.
         fs::write(dir.join("test.gguf"), b"short").unwrap();
         assert_eq!(installed(&dir), None);
@@ -320,11 +420,17 @@ mod tests {
         let srv = FakeServer::new();
         *srv.cut.lock().unwrap() = Some(20);
         let out = download(&dir, &model(), &srv, &Control::default(), &mut |_| {});
-        assert_eq!(out, Outcome::Failed("The download of Test Model stopped: connection reset".into()));
+        assert_eq!(
+            out,
+            Outcome::Failed("The download of Test Model stopped: connection reset".into())
+        );
         assert_eq!(partial_bytes(&dir, &model()), Some(20));
         // A restart: a fresh call picks up at byte 20.
         let out = download(&dir, &model(), &srv, &Control::default(), &mut |_| {});
-        assert!(matches!(out, Outcome::Done(ref r) if r.bytes == 50), "{out:?}");
+        assert!(
+            matches!(out, Outcome::Done(ref r) if r.bytes == 50),
+            "{out:?}"
+        );
         assert_eq!(*srv.opens.lock().unwrap(), vec![0, 20]);
         assert_eq!(fs::read(dir.join("test.gguf")).unwrap(), BODY);
         let _ = fs::remove_dir_all(dir);
@@ -367,7 +473,10 @@ mod tests {
         assert!(part_path(&dir, &model()).exists());
         let ctl = Control::default();
         ctl.cancel();
-        assert_eq!(download(&dir, &model(), &srv, &ctl, &mut |_| {}), Outcome::Cancelled);
+        assert_eq!(
+            download(&dir, &model(), &srv, &ctl, &mut |_| {}),
+            Outcome::Cancelled
+        );
         assert!(!part_path(&dir, &model()).exists() && !dir.join("test.gguf").exists());
         let _ = fs::remove_dir_all(dir);
     }
@@ -386,10 +495,23 @@ mod tests {
         assert_eq!(sha256_from_tree("not json", "x"), None);
         let m = crate::local_setup::model_by_id("qwen2.5-3b-instruct-q4_k_m").unwrap();
         assert_eq!(download_url(m), "https://huggingface.co/bartowski/Qwen2.5-3B-Instruct-GGUF/resolve/main/Qwen2.5-3B-Instruct-Q4_K_M.gguf");
-        assert_eq!(tree_url(m.repo), "https://huggingface.co/api/models/bartowski/Qwen2.5-3B-Instruct-GGUF/tree/main");
-        assert_eq!(progress_line(2_202_009_600, Some(4_907_335_680)), "2.1 GB of 4.6 GB");
+        assert_eq!(
+            tree_url(m.repo),
+            "https://huggingface.co/api/models/bartowski/Qwen2.5-3B-Instruct-GGUF/tree/main"
+        );
+        assert_eq!(
+            progress_line(2_202_009_600, Some(4_907_335_680)),
+            "2.1 GB of 4.6 GB"
+        );
         assert_eq!(progress_line(1_048_576 * 300, None), "300 MB");
-        assert_eq!((percent(25, Some(50)), percent(60, Some(50)), percent(5, None)), (50, 100, 0));
+        assert_eq!(
+            (
+                percent(25, Some(50)),
+                percent(60, Some(50)),
+                percent(5, None)
+            ),
+            (50, 100, 0)
+        );
         assert_eq!(content_range_total("bytes 20-49/50"), Some(50));
         assert_eq!(content_range_total("bytes 0-0/*"), None);
         assert_eq!(content_range_total("50"), None);

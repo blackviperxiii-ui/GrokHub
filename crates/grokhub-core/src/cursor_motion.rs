@@ -77,32 +77,52 @@ fn ease_in_out_cubic(t: f32) -> f32 {
 }
 
 /// Point on the travel path at progress `u` (0..1). `u >= 1` is exactly `to`.
-pub fn travel_point(motion: CursorMotion, from: (f32, f32), to: (f32, f32), u: f32, shape: TravelShape) -> (f32, f32) {
+pub fn travel_point(
+    motion: CursorMotion,
+    from: (f32, f32),
+    to: (f32, f32),
+    u: f32,
+    shape: TravelShape,
+) -> (f32, f32) {
     if u >= 1.0 {
         return to;
     }
     let u = u.max(0.0);
     let (dx, dy) = (to.0 - from.0, to.1 - from.1);
     let len = (dx * dx + dy * dy).sqrt();
-    let (ux, uy) = if len > 0.0 { (dx / len, dy / len) } else { (0.0, 0.0) };
+    let (ux, uy) = if len > 0.0 {
+        (dx / len, dy / len)
+    } else {
+        (0.0, 0.0)
+    };
     // Perpendicular to travel, for arcs.
     let (px, py) = (-uy, ux);
     let along = |s: f32| (from.0 + dx * s, from.1 + dy * s);
     match motion {
         CursorMotion::Adaptive => {
-            let pick = if len < ADAPTIVE_SHORT_PX { CursorMotion::Classic } else { CursorMotion::SignatureArc };
+            let pick = if len < ADAPTIVE_SHORT_PX {
+                CursorMotion::Classic
+            } else {
+                CursorMotion::SignatureArc
+            };
             travel_point(pick, from, to, u, shape)
         }
         CursorMotion::Classic => along(ease_out_cubic(u)),
         CursorMotion::SignatureArc => {
             let settle = shape.settle_frac.clamp(0.05, 0.4);
-            let over = (to.0 + ux * shape.overshoot_px, to.1 + uy * shape.overshoot_px);
+            let over = (
+                to.0 + ux * shape.overshoot_px,
+                to.1 + uy * shape.overshoot_px,
+            );
             if u < 1.0 - settle {
                 let v = u / (1.0 - settle);
                 let e = ease_out_cubic(v);
                 let arc = 4.0 * v * (1.0 - v) * shape.arc_px;
                 let reach = len + shape.overshoot_px;
-                (from.0 + ux * reach * e + px * arc, from.1 + uy * reach * e + py * arc)
+                (
+                    from.0 + ux * reach * e + px * arc,
+                    from.1 + uy * reach * e + py * arc,
+                )
             } else {
                 let v = ease_out_cubic((u - (1.0 - settle)) / settle);
                 (over.0 + (to.0 - over.0) * v, over.1 + (to.1 - over.1) * v)
@@ -114,7 +134,11 @@ pub fn travel_point(motion: CursorMotion, from: (f32, f32), to: (f32, f32), u: f
             along(s)
         }
         CursorMotion::Magnetic => {
-            let s = if u < 0.6 { 0.55 * ease_out_cubic(u / 0.6) } else { 0.55 + 0.45 * ease_in_cubic((u - 0.6) / 0.4) };
+            let s = if u < 0.6 {
+                0.55 * ease_out_cubic(u / 0.6)
+            } else {
+                0.55 + 0.45 * ease_in_cubic((u - 0.6) / 0.4)
+            };
             along(s)
         }
         CursorMotion::CometSwoop => {
@@ -130,19 +154,41 @@ pub fn travel_point(motion: CursorMotion, from: (f32, f32), to: (f32, f32), u: f
 mod tests {
     use super::*;
 
-    const SHAPE: TravelShape = TravelShape { arc_px: 10.0, overshoot_px: 6.0, settle_frac: 0.36 };
+    const SHAPE: TravelShape = TravelShape {
+        arc_px: 10.0,
+        overshoot_px: 6.0,
+        settle_frac: 0.36,
+    };
 
     #[test]
     fn every_style_starts_at_from_and_ends_exactly_at_the_target() {
         let from = (10.0, 20.0);
         let to = (250.0, 140.0);
         for m in CURSOR_MOTIONS {
-            assert_eq!(travel_point(m, from, to, 1.0, SHAPE), to, "{}", m.cua_name());
-            assert_eq!(travel_point(m, from, to, 1.7, SHAPE), to, "{}", m.cua_name());
+            assert_eq!(
+                travel_point(m, from, to, 1.0, SHAPE),
+                to,
+                "{}",
+                m.cua_name()
+            );
+            assert_eq!(
+                travel_point(m, from, to, 1.7, SHAPE),
+                to,
+                "{}",
+                m.cua_name()
+            );
             let (x, y) = travel_point(m, from, to, 0.0, SHAPE);
-            assert!((x - from.0).abs() < 0.01 && (y - from.1).abs() < 0.01, "{}: ({x},{y})", m.cua_name());
+            assert!(
+                (x - from.0).abs() < 0.01 && (y - from.1).abs() < 0.01,
+                "{}: ({x},{y})",
+                m.cua_name()
+            );
             let (x, y) = travel_point(m, from, to, 0.999, SHAPE);
-            assert!((x - to.0).abs() < 1.0 && (y - to.1).abs() < 1.0, "{} lands near the end: ({x},{y})", m.cua_name());
+            assert!(
+                (x - to.0).abs() < 1.0 && (y - to.1).abs() < 1.0,
+                "{} lands near the end: ({x},{y})",
+                m.cua_name()
+            );
         }
     }
 
@@ -150,12 +196,19 @@ mod tests {
     fn styles_take_different_paths() {
         let from = (0.0, 0.0);
         let to = (200.0, 0.0);
-        let mid: Vec<(f32, f32)> = CURSOR_MOTIONS.iter().map(|m| travel_point(*m, from, to, 0.5, SHAPE)).collect();
+        let mid: Vec<(f32, f32)> = CURSOR_MOTIONS
+            .iter()
+            .map(|m| travel_point(*m, from, to, 0.5, SHAPE))
+            .collect();
         // Classic and the spring stay on the line; the arcs bulge off it.
         assert_eq!(mid[5].1, 0.0);
         assert_eq!(mid[1].1, 0.0);
         assert!(mid[0].1 > 5.0, "signature arc bulges: {:?}", mid[0]);
-        assert!(mid[3].1 > mid[0].1, "comet swoops wider than the arc: {:?}", mid[3]);
+        assert!(
+            mid[3].1 > mid[0].1,
+            "comet swoops wider than the arc: {:?}",
+            mid[3]
+        );
         // Adaptive is the arc on long travel and classic on a short hop.
         assert_eq!(mid[4], mid[0]);
         let short = (60.0, 0.0);
@@ -164,15 +217,41 @@ mod tests {
             travel_point(CursorMotion::Classic, from, short, 0.5, SHAPE)
         );
         // Magnetic hangs back mid-travel, then snaps in.
-        assert!(mid[2].0 < mid[5].0, "magnetic {:?} vs classic {:?}", mid[2], mid[5]);
+        assert!(
+            mid[2].0 < mid[5].0,
+            "magnetic {:?} vs classic {:?}",
+            mid[2],
+            mid[5]
+        );
         // The spring passes the target before it settles.
-        let peak = (1..100).map(|i| travel_point(CursorMotion::SpringSettle, from, to, i as f32 / 100.0, SHAPE).0).fold(0.0, f32::max);
+        let peak = (1..100)
+            .map(|i| {
+                travel_point(
+                    CursorMotion::SpringSettle,
+                    from,
+                    to,
+                    i as f32 / 100.0,
+                    SHAPE,
+                )
+                .0
+            })
+            .fold(0.0, f32::max);
         assert!(peak > 200.0, "spring overshoots: {peak}");
     }
 
     #[test]
     fn cua_names_are_the_driver_names() {
         let names: Vec<&str> = CURSOR_MOTIONS.iter().map(|m| m.cua_name()).collect();
-        assert_eq!(names, ["signature_arc", "spring_settle", "magnetic", "comet_swoop", "adaptive", "classic"]);
+        assert_eq!(
+            names,
+            [
+                "signature_arc",
+                "spring_settle",
+                "magnetic",
+                "comet_swoop",
+                "adaptive",
+                "classic"
+            ]
+        );
     }
 }

@@ -10,7 +10,15 @@ const BUILTIN: &str = include_str!("../assets/brain_policy.toml");
 
 /// Matches every intent or every care.
 pub const ANY: &str = "any";
-pub const INTENTS: &[&str] = &["chat", "question", "task", "repair", "creative", "research", "background"];
+pub const INTENTS: &[&str] = &[
+    "chat",
+    "question",
+    "task",
+    "repair",
+    "creative",
+    "research",
+    "background",
+];
 pub const CARES: &[&str] = &["casual", "careful", "critical"];
 pub const GOALS: &[&str] = &["speed", "quality", "cost", "balanced"];
 /// Longest text a row field may hold.
@@ -18,11 +26,33 @@ pub const FIELD_MAX: usize = 120;
 
 /// A key holding any of these is a safety key, wherever it sits in the file.
 const SAFETY_KEYS: &[&str] = &[
-    "approv", "hard", "perm", "safe", "consent", "mindcheck", "gate", "sandbox", "network", "honest", "sudo", "allow",
-    "deny", "bypass", "credential", "risk",
+    "approv",
+    "hard",
+    "perm",
+    "safe",
+    "consent",
+    "mindcheck",
+    "gate",
+    "sandbox",
+    "network",
+    "honest",
+    "sudo",
+    "allow",
+    "deny",
+    "bypass",
+    "credential",
+    "risk",
 ];
 /// An `ask` that would drop the hard asks.
-const ASK_REFUSED: &[&str] = &["bypass", "skip approval", "no approval", "without approval", "don't ask", "never ask", "without asking"];
+const ASK_REFUSED: &[&str] = &[
+    "bypass",
+    "skip approval",
+    "no approval",
+    "without approval",
+    "don't ask",
+    "never ask",
+    "without asking",
+];
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -59,7 +89,9 @@ fn safety_key(table: &toml::Table) -> Option<String> {
         }
         let nested = match v {
             toml::Value::Table(t) => safety_key(t),
-            toml::Value::Array(items) => items.iter().find_map(|i| i.as_table().and_then(safety_key)),
+            toml::Value::Array(items) => {
+                items.iter().find_map(|i| i.as_table().and_then(safety_key))
+            }
             _ => None,
         };
         if nested.is_some() {
@@ -82,14 +114,22 @@ pub fn check_row(r: &PolicyRow) -> Result<(), String> {
     if !GOALS.contains(&r.goal.as_str()) {
         return Err(format!("{key}: goal must be one of {}", GOALS.join(", ")));
     }
-    for (name, text) in [("reason", &r.reason), ("depth", &r.depth), ("ask", &r.ask), ("stop", &r.stop), ("talk", &r.talk)] {
+    for (name, text) in [
+        ("reason", &r.reason),
+        ("depth", &r.depth),
+        ("ask", &r.ask),
+        ("stop", &r.stop),
+        ("talk", &r.talk),
+    ] {
         if text.trim().is_empty() || text.chars().count() > FIELD_MAX {
             return Err(format!("{key}: {name} must be 1 to {FIELD_MAX} characters"));
         }
     }
     let ask = r.ask.to_ascii_lowercase();
     if ASK_REFUSED.iter().any(|w| ask.contains(w)) {
-        return Err(format!("{key}: ask can't drop approvals; hard approvals always ask"));
+        return Err(format!(
+            "{key}: ask can't drop approvals; hard approvals always ask"
+        ));
     }
     Ok(())
 }
@@ -97,9 +137,12 @@ pub fn check_row(r: &PolicyRow) -> Result<(), String> {
 /// Parse and check one policy file. Any safety key, unknown key, bad word or
 /// repeated intent × care refuses the whole file.
 pub fn parse_policy(text: &str) -> Result<Vec<PolicyRow>, String> {
-    let table: toml::Table = toml::from_str(text).map_err(|e| format!("not valid TOML: {}", e.message()))?;
+    let table: toml::Table =
+        toml::from_str(text).map_err(|e| format!("not valid TOML: {}", e.message()))?;
     if let Some(k) = safety_key(&table) {
-        return Err(format!("`{k}` is a safety key; safety and approval rules aren't in the policy table"));
+        return Err(format!(
+            "`{k}` is a safety key; safety and approval rules aren't in the policy table"
+        ));
     }
     let file: PolicyFile = toml::from_str(text).map_err(|e| e.message().to_string())?;
     let mut seen: Vec<String> = Vec::new();
@@ -131,7 +174,10 @@ pub fn builtin_policy() -> Vec<PolicyRow> {
 pub fn merge_policy(defaults: Vec<PolicyRow>, user: Vec<PolicyRow>) -> Vec<PolicyRow> {
     let mut rows = defaults;
     for u in user {
-        match rows.iter_mut().find(|r| r.intent == u.intent && r.care == u.care) {
+        match rows
+            .iter_mut()
+            .find(|r| r.intent == u.intent && r.care == u.care)
+        {
             Some(r) => *r = u,
             None => rows.push(u),
         }
@@ -143,7 +189,10 @@ pub fn merge_policy(defaults: Vec<PolicyRow>, user: Vec<PolicyRow>) -> Vec<Polic
 /// then any × any.
 pub fn pick_row<'a>(rows: &'a [PolicyRow], intent: &str, care: &str) -> Option<&'a PolicyRow> {
     let find = |i: &str, c: &str| rows.iter().find(|r| r.intent == i && r.care == c);
-    find(intent, care).or_else(|| find(intent, ANY)).or_else(|| find(ANY, care)).or_else(|| find(ANY, ANY))
+    find(intent, care)
+        .or_else(|| find(intent, ANY))
+        .or_else(|| find(ANY, care))
+        .or_else(|| find(ANY, ANY))
 }
 
 #[cfg(test)]
@@ -171,10 +220,22 @@ mod tests {
             ]
         );
         let repair = pick_row(&rows, "repair", "critical").unwrap();
-        assert_eq!((repair.goal.as_str(), repair.reason.as_str()), ("quality", "mistakes can break the system"));
-        assert_eq!(pick_row(&rows, "background", "critical").unwrap().key(), "background × any");
-        assert_eq!(pick_row(&rows, "chat", "critical").unwrap().key(), "any × critical");
-        assert_eq!(pick_row(&rows, "chat", "careful").unwrap().key(), "any × any");
+        assert_eq!(
+            (repair.goal.as_str(), repair.reason.as_str()),
+            ("quality", "mistakes can break the system")
+        );
+        assert_eq!(
+            pick_row(&rows, "background", "critical").unwrap().key(),
+            "background × any"
+        );
+        assert_eq!(
+            pick_row(&rows, "chat", "critical").unwrap().key(),
+            "any × critical"
+        );
+        assert_eq!(
+            pick_row(&rows, "chat", "careful").unwrap().key(),
+            "any × any"
+        );
         assert_eq!(builtin_policy(), rows);
     }
 
@@ -198,13 +259,32 @@ mod tests {
             parse_policy(&format!("[network]\nopen = true\n{}", row("", "act"))).unwrap_err(),
             "`network` is a safety key; safety and approval rules aren't in the policy table"
         );
-        assert_eq!(parse_policy(&row("", "act without asking")).unwrap_err(), "chat × casual: ask can't drop approvals; hard approvals always ask");
-        assert!(parse_policy(&row("colour = \"red\"\n", "act")).unwrap_err().contains("unknown field `colour`"));
-        assert_eq!(parse_policy(&row("", "act").replace("speed", "fastest")).unwrap_err(), "chat × casual: goal must be one of speed, quality, cost, balanced");
-        assert_eq!(parse_policy(&row("", "act").replace("\"chat\"", "\"gossip\"")).unwrap_err(), "gossip × casual: unknown intent `gossip`");
-        assert_eq!(parse_policy(&row("", "act").replace("\"r\"", "\"\"")).unwrap_err(), "chat × casual: reason must be 1 to 120 characters");
-        assert_eq!(parse_policy(&format!("{}{}", row("", "act"), row("", "act"))).unwrap_err(), "chat × casual is listed twice");
-        assert!(parse_policy("[[row]\n").unwrap_err().starts_with("not valid TOML"));
+        assert_eq!(
+            parse_policy(&row("", "act without asking")).unwrap_err(),
+            "chat × casual: ask can't drop approvals; hard approvals always ask"
+        );
+        assert!(parse_policy(&row("colour = \"red\"\n", "act"))
+            .unwrap_err()
+            .contains("unknown field `colour`"));
+        assert_eq!(
+            parse_policy(&row("", "act").replace("speed", "fastest")).unwrap_err(),
+            "chat × casual: goal must be one of speed, quality, cost, balanced"
+        );
+        assert_eq!(
+            parse_policy(&row("", "act").replace("\"chat\"", "\"gossip\"")).unwrap_err(),
+            "gossip × casual: unknown intent `gossip`"
+        );
+        assert_eq!(
+            parse_policy(&row("", "act").replace("\"r\"", "\"\"")).unwrap_err(),
+            "chat × casual: reason must be 1 to 120 characters"
+        );
+        assert_eq!(
+            parse_policy(&format!("{}{}", row("", "act"), row("", "act"))).unwrap_err(),
+            "chat × casual is listed twice"
+        );
+        assert!(parse_policy("[[row]\n")
+            .unwrap_err()
+            .starts_with("not valid TOML"));
     }
 
     #[test]
@@ -217,8 +297,17 @@ mod tests {
         let rows = merge_policy(builtin_policy(), user);
         assert_eq!(rows.len(), 12);
         let chat = pick_row(&rows, "chat", "casual").unwrap();
-        assert_eq!((chat.goal.as_str(), chat.reason.as_str()), ("cost", "keep it cheap"));
-        assert_eq!(pick_row(&rows, "creative", "careful").unwrap().reason, "for work");
-        assert_eq!(pick_row(&rows, "creative", "casual").unwrap().key(), "creative × any");
+        assert_eq!(
+            (chat.goal.as_str(), chat.reason.as_str()),
+            ("cost", "keep it cheap")
+        );
+        assert_eq!(
+            pick_row(&rows, "creative", "careful").unwrap().reason,
+            "for work"
+        );
+        assert_eq!(
+            pick_row(&rows, "creative", "casual").unwrap().key(),
+            "creative × any"
+        );
     }
 }

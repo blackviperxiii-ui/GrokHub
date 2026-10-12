@@ -32,7 +32,11 @@ mod tests {
             }
             let text = std::fs::read_to_string(&path).unwrap_or_default();
             for banned in banned() {
-                assert!(!text.contains(banned), "{} contains {banned}", path.display());
+                assert!(
+                    !text.contains(banned),
+                    "{} contains {banned}",
+                    path.display()
+                );
             }
         }
     }

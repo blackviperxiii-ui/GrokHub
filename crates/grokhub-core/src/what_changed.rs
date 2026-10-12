@@ -163,9 +163,15 @@ mod tests {
     #[test]
     fn a_dream_report_names_what_it_merged_and_retired() {
         let c = from_dream(DREAM);
-        assert_eq!(c.merged, vec!["uses pnpm".to_string(), "likes dark mode".to_string()]);
+        assert_eq!(
+            c.merged,
+            vec!["uses pnpm".to_string(), "likes dark mode".to_string()]
+        );
         assert_eq!(c.removed, vec!["Token lives in ~/.old".to_string()]);
-        assert!(c.added.is_empty(), "proposed USER.md lines are not added: {c:?}");
+        assert!(
+            c.added.is_empty(),
+            "proposed USER.md lines are not added: {c:?}"
+        );
         assert_eq!(
             c.block(),
             "What changed: 0 added, 2 merged, 1 retired\n- Merged: \"uses pnpm\", \"likes dark mode\"\n- Retired: \"Token lives in ~/.old\"\n\n"
@@ -199,6 +205,9 @@ mod tests {
     #[test]
     fn long_names_are_cut_with_an_ellipsis() {
         let long = "a".repeat(80);
-        assert_eq!(top_items(&[long]), format!("\"{}…\"", "a".repeat(ITEM_CHARS - 1)));
+        assert_eq!(
+            top_items(&[long]),
+            format!("\"{}…\"", "a".repeat(ITEM_CHARS - 1))
+        );
     }
 }

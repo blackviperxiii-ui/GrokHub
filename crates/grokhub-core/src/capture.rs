@@ -192,7 +192,14 @@ pub fn image_to_global(
     (jx + origin.0, jy + origin.1)
 }
 
-fn scale_to_desk(jx: i32, jy: i32, jpeg_w: u32, jpeg_h: u32, desk_w: u32, desk_h: u32) -> (i32, i32) {
+fn scale_to_desk(
+    jx: i32,
+    jy: i32,
+    jpeg_w: u32,
+    jpeg_h: u32,
+    desk_w: u32,
+    desk_h: u32,
+) -> (i32, i32) {
     if jpeg_w == desk_w && jpeg_h == desk_h {
         return (jx, jy);
     }
@@ -241,7 +248,9 @@ pub fn pick_capture_output<'a>(
 }
 
 pub fn output_containing(outputs: &[DisplayOutput], x: i32, y: i32) -> Option<&DisplayOutput> {
-    outputs.iter().find(|o| x >= o.x && y >= o.y && x < o.x + o.w && y < o.y + o.h)
+    outputs
+        .iter()
+        .find(|o| x >= o.x && y >= o.y && x < o.x + o.w && y < o.y + o.h)
 }
 
 pub fn cursor_on_output(outputs: &[DisplayOutput], x: i32, y: i32) -> Option<&DisplayOutput> {
@@ -350,7 +359,9 @@ pub fn windshield_frame_geom(
 pub fn parse_xrandr_size(text: &str) -> Option<(u32, u32)> {
     for line in text.lines() {
         if let Some(rest) = line.split("current").nth(1) {
-            let mut nums = rest.split(|c: char| !c.is_ascii_digit()).filter(|s| !s.is_empty());
+            let mut nums = rest
+                .split(|c: char| !c.is_ascii_digit())
+                .filter(|s| !s.is_empty());
             let w = nums.next()?.parse().ok()?;
             let h = nums.next()?.parse().ok()?;
             if w >= 64 && h >= 64 {
@@ -455,8 +466,12 @@ pub fn infer_wayland_display(explicit: Option<&str>, runtime_dir: Option<&str>) 
 }
 
 pub fn session_is_wayland(wayland_display: Option<&str>, session_type: Option<&str>) -> bool {
-    wayland_display.map(str::trim).is_some_and(|s| !s.is_empty())
-        || session_type.map(str::trim).is_some_and(|s| s.eq_ignore_ascii_case("wayland"))
+    wayland_display
+        .map(str::trim)
+        .is_some_and(|s| !s.is_empty())
+        || session_type
+            .map(str::trim)
+            .is_some_and(|s| s.eq_ignore_ascii_case("wayland"))
 }
 
 /// Near-black + no structure. A dark cabin UI still has variance.
@@ -477,10 +492,14 @@ pub fn luma_mean_var(pixels: &[[u8; 3]]) -> (f32, f32) {
         sum += y;
     }
     let mean = sum / n;
-    let var = lumas.iter().map(|y| {
-        let d = y - mean;
-        d * d
-    }).sum::<f32>() / n;
+    let var = lumas
+        .iter()
+        .map(|y| {
+            let d = y - mean;
+            d * d
+        })
+        .sum::<f32>()
+        / n;
     (mean, var)
 }
 
@@ -501,7 +520,10 @@ mod tests {
         let plan = capture_kinds(&bins, true, true);
         assert_eq!(plan[0], CaptureKind::Grim);
         assert_eq!(plan[1], CaptureKind::GnomeScreenshot);
-        let ff = plan.iter().position(|k| *k == CaptureKind::FfmpegX11).unwrap();
+        let ff = plan
+            .iter()
+            .position(|k| *k == CaptureKind::FfmpegX11)
+            .unwrap();
         let grim = plan.iter().position(|k| *k == CaptureKind::Grim).unwrap();
         assert!(grim < ff);
         assert!(plan.contains(&CaptureKind::GnomeShell));
@@ -529,7 +551,9 @@ mod tests {
             Some((1920, 1080))
         );
         assert_eq!(
-            parse_xrandr_size("Screen 0: minimum 320 x 200, current 2560 x 1440, maximum 8192 x 8192\n"),
+            parse_xrandr_size(
+                "Screen 0: minimum 320 x 200, current 2560 x 1440, maximum 8192 x 8192\n"
+            ),
             Some((2560, 1440))
         );
         assert_eq!(x11_grab_size(None, None), (1920, 1080));
@@ -552,7 +576,10 @@ DP-1 disconnected (normal left inverted right x axis y axis)
         assert_eq!(outs.len(), 2);
         assert_eq!(outs[0].name, "eDP-1");
         assert!(outs[0].primary);
-        assert_eq!((outs[0].x, outs[0].y, outs[0].w, outs[0].h), (0, 0, 1920, 1080));
+        assert_eq!(
+            (outs[0].x, outs[0].y, outs[0].w, outs[0].h),
+            (0, 0, 1920, 1080)
+        );
         assert_eq!(outs[1].name, "HDMI-1");
         assert_eq!((outs[1].x, outs[1].y), (1920, 0));
         assert_eq!(virtual_desktop_size(&outs), Some((3840, 1080)));
@@ -660,7 +687,10 @@ DP-2 connected 1920x1440+5360+0 (normal left inverted right x axis y axis) 527mm
         assert_eq!(outs.len(), 3);
         assert_eq!(virtual_desktop_size(&outs), Some((7280, 1440)));
         assert_eq!(outs[2].name, "DP-2");
-        assert_eq!((outs[2].x, outs[2].y, outs[2].w, outs[2].h), (5360, 0, 1920, 1440));
+        assert_eq!(
+            (outs[2].x, outs[2].y, outs[2].w, outs[2].h),
+            (5360, 0, 1920, 1440)
+        );
         assert_eq!(
             clamp_to_desktop(7285, 25, &outs),
             (7279, 25),
@@ -678,7 +708,10 @@ DP-2 connected 1920x1440+5360+0 (normal left inverted right x axis y axis) 527mm
             monitor_local_to_global(&outs, "DP-2", Some((100, 20))),
             Some((5460, 20))
         );
-        assert_eq!(format_cursor_line(7279, 25, Some("DP-2")), "cursor 7279,25 monitor=DP-2");
+        assert_eq!(
+            format_cursor_line(7279, 25, Some("DP-2")),
+            "cursor 7279,25 monitor=DP-2"
+        );
         assert!(!pointer_slop_miss((7279, 25), (7275, 25), 8));
         assert!(pointer_slop_miss((7279, 25), (5, 25), 8));
         assert_eq!(

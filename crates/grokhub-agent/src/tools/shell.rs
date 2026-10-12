@@ -37,7 +37,12 @@ pub fn schema() -> Value {
 }
 
 pub fn run(workspace: &Path, args: &Value, stop: &dyn Fn() -> bool) -> ToolOutput {
-    let command = args.get("command").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+    let command = args
+        .get("command")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
     if command.is_empty() {
         return ToolOutput::err("command is required");
     }
@@ -295,14 +300,22 @@ fn merge_output(stdout: Vec<u8>, stderr: Vec<u8>) -> Vec<u8> {
 }
 
 #[cfg(unix)]
-fn spawn_and_wait(cwd: &Path, command: &str, timeout_ms: u64, stop: &dyn Fn() -> bool) -> Result<ToolOutput, String> {
+fn spawn_and_wait(
+    cwd: &Path,
+    command: &str,
+    timeout_ms: u64,
+    stop: &dyn Fn() -> bool,
+) -> Result<ToolOutput, String> {
     use std::thread;
 
     let mut child = bash(cwd, command)
         .spawn()
         .map_err(|err| format!("could not start bash: {err}"))?;
     let pgid = child.id() as i32;
-    let mut group = Group { pgid, armed: pgid > 1 };
+    let mut group = Group {
+        pgid,
+        armed: pgid > 1,
+    };
     let stdout = child.stdout.take();
     let stderr = child.stderr.take();
     let out_thread = thread::spawn(move || read_pipe(stdout));
@@ -547,7 +560,12 @@ enum StopKind {
 }
 
 #[cfg(windows)]
-fn spawn_and_wait(cwd: &Path, command: &str, timeout_ms: u64, stop: &dyn Fn() -> bool) -> Result<ToolOutput, String> {
+fn spawn_and_wait(
+    cwd: &Path,
+    command: &str,
+    timeout_ms: u64,
+    stop: &dyn Fn() -> bool,
+) -> Result<ToolOutput, String> {
     win::run(cwd, command, timeout_ms, stop)
 }
 
@@ -563,9 +581,9 @@ fn spawn_and_wait(
 
 #[cfg(test)]
 mod tests {
-    use serde_json::json;
     #[cfg(unix)]
     use super::run;
+    use serde_json::json;
     #[cfg(unix)]
     use std::time::{Duration, Instant};
 
@@ -588,10 +606,19 @@ mod tests {
     #[test]
     fn commands_that_call_the_sudo_helper_never_run() {
         let dir = scratch("askpass");
-        let out = run(&dir, &json!({"command": "sudo -u \"$USER\" \"$SUDO_ASKPASS\""}), &|| false);
+        let out = run(
+            &dir,
+            &json!({"command": "sudo -u \"$USER\" \"$SUDO_ASKPASS\""}),
+            &|| false,
+        );
         assert!(out.failed);
         assert_eq!(out.text, crate::sudo_pass::HELPER_REFUSAL);
-        assert_eq!(super::spawn_background(&dir, "echo \"$SUDO_ASKPASS\"").err().as_deref(), Some(crate::sudo_pass::HELPER_REFUSAL));
+        assert_eq!(
+            super::spawn_background(&dir, "echo \"$SUDO_ASKPASS\"")
+                .err()
+                .as_deref(),
+            Some(crate::sudo_pass::HELPER_REFUSAL)
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -620,10 +647,22 @@ mod tests {
         assert!(bad.text.contains("exit 7"), "{}", bad.text);
 
         let started = Instant::now();
-        let timed = run(&dir, &json!({"command": "sleep 30", "timeout": 200}), &|| false);
+        let timed = run(
+            &dir,
+            &json!({"command": "sleep 30", "timeout": 200}),
+            &|| false,
+        );
         assert!(timed.failed, "{}", timed.text);
-        assert!(timed.text.contains("timed out after 200ms"), "{}", timed.text);
-        assert!(started.elapsed() < Duration::from_secs(5), "timeout took {:?}", started.elapsed());
+        assert!(
+            timed.text.contains("timed out after 200ms"),
+            "{}",
+            timed.text
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "timeout took {:?}",
+            started.elapsed()
+        );
 
         let noisy = run(
             &dir,
@@ -631,8 +670,16 @@ mod tests {
             &|| false,
         );
         assert!(!noisy.failed, "{}", noisy.text);
-        assert!(noisy.text.contains("\n\n... (output truncated) ...\n\n"), "{}", noisy.text.chars().take(80).collect::<String>());
-        assert!(noisy.text.chars().count() < 30_000, "{}", noisy.text.chars().count());
+        assert!(
+            noisy.text.contains("\n\n... (output truncated) ...\n\n"),
+            "{}",
+            noisy.text.chars().take(80).collect::<String>()
+        );
+        assert!(
+            noisy.text.chars().count() < 30_000,
+            "{}",
+            noisy.text.chars().count()
+        );
 
         let tree = scratch("tree");
         let stop = Arc::new(AtomicBool::new(false));
@@ -900,7 +947,9 @@ mod win {
                 hide_inherit(child.stdin_write)?;
                 let exe = powershell_exe();
                 let encoded = encode_ps(command);
-                let mut cmdline = wide(&format!("\"{exe}\" -NoProfile -NonInteractive -EncodedCommand {encoded}"));
+                let mut cmdline = wide(&format!(
+                    "\"{exe}\" -NoProfile -NonInteractive -EncodedCommand {encoded}"
+                ));
                 let app = wide(&exe);
                 let dir = wide(&cwd.display().to_string());
                 let mut si: STARTUPINFOW = std::mem::zeroed();
@@ -1104,12 +1153,18 @@ mod win {
     }
 
     fn encode_ps(script: &str) -> String {
-        let bytes: Vec<u8> = script.encode_utf16().flat_map(|unit| unit.to_le_bytes()).collect();
+        let bytes: Vec<u8> = script
+            .encode_utf16()
+            .flat_map(|unit| unit.to_le_bytes())
+            .collect();
         base64::engine::general_purpose::STANDARD.encode(bytes)
     }
 
     fn wide(text: &str) -> Vec<u16> {
-        OsStr::new(text).encode_wide().chain(std::iter::once(0)).collect()
+        OsStr::new(text)
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect()
     }
 
     struct WinProc {
@@ -1308,7 +1363,9 @@ mod win {
 
     #[cfg(test)]
     fn process_alive(pid: u32) -> bool {
-        use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
+        use windows_sys::Win32::System::Threading::{
+            OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+        };
         unsafe {
             let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
             if handle.is_null() {
@@ -1326,7 +1383,8 @@ mod win {
         use std::sync::atomic::{AtomicBool, Ordering};
         use std::sync::Arc;
 
-        let dir = std::env::temp_dir().join(format!("gh-sh-win-{}-{}", std::process::id(), line!()));
+        let dir =
+            std::env::temp_dir().join(format!("gh-sh-win-{}-{}", std::process::id(), line!()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let script = concat!(
@@ -1339,7 +1397,8 @@ mod win {
         let stop = Arc::new(AtomicBool::new(false));
         let flag = Arc::clone(&stop);
         let dir_job = dir.clone();
-        let worker = thread::spawn(move || super::run(&dir_job, &args, &|| flag.load(Ordering::SeqCst)));
+        let worker =
+            thread::spawn(move || super::run(&dir_job, &args, &|| flag.load(Ordering::SeqCst)));
         let pidfile = dir.join("child.pid");
         let deadline = Instant::now() + Duration::from_secs(8);
         let mut pid = 0u32;

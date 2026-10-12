@@ -404,7 +404,13 @@ fn pulse_menu(
         };
         pick(ui, label, "", PulseAct::Accept(id.clone()), act);
         if matches!(target, grokhub_core::self_review::CardTarget::Code(_)) {
-            pick(ui, "Copy as GitHub issue", "", PulseAct::CopyIssue(id.clone()), act);
+            pick(
+                ui,
+                "Copy as GitHub issue",
+                "",
+                PulseAct::CopyIssue(id.clone()),
+                act,
+            );
         }
     } else if kind == PulseType::Learn {
         pick(
@@ -424,7 +430,13 @@ fn pulse_menu(
         pick(ui, "Retry", "", PulseAct::Retry(id.clone()), act);
     }
     if grokhub_core::screen_recording_dir(card).is_some() {
-        pick(ui, "Delete recording", "", PulseAct::DeleteRecording(id.clone()), act);
+        pick(
+            ui,
+            "Delete recording",
+            "",
+            PulseAct::DeleteRecording(id.clone()),
+            act,
+        );
     }
     pick(ui, "Open", "Enter", PulseAct::Open(id.clone()), act);
     ui.separator();
@@ -629,7 +641,9 @@ fn paint_crash(ui: &mut egui::Ui, card: &UpdateCard) -> Option<FeedPostAct> {
 
 /// Retry now on a no-route wait card; the wait also retries on its own.
 fn paint_model_wait(ui: &mut egui::Ui, card: &UpdateCard) -> Option<FeedPostAct> {
-    if !grokhub_core::is_model_wait_card(card) || card.status == grokhub_core::UpdateStatus::Dismissed {
+    if !grokhub_core::is_model_wait_card(card)
+        || card.status == grokhub_core::UpdateStatus::Dismissed
+    {
         return None;
     }
     super::change_undo::click_pill(ui, "Retry now").then_some(FeedPostAct::RetryNow)
@@ -637,7 +651,9 @@ fn paint_model_wait(ui: &mut egui::Ui, card: &UpdateCard) -> Option<FeedPostAct>
 
 /// Open and Delete recording on a screen recording card.
 fn paint_recording(ui: &mut egui::Ui, card: &UpdateCard) -> Option<FeedPostAct> {
-    if grokhub_core::screen_recording_dir(card).is_none() || card.status == grokhub_core::UpdateStatus::Dismissed {
+    if grokhub_core::screen_recording_dir(card).is_none()
+        || card.status == grokhub_core::UpdateStatus::Dismissed
+    {
         return None;
     }
     let mut act = None;
@@ -655,7 +671,8 @@ fn paint_recording(ui: &mut egui::Ui, card: &UpdateCard) -> Option<FeedPostAct> 
 
 /// The Done-for-you pills, while the card is unanswered.
 fn paint_done_for_you(ui: &mut egui::Ui, card: &UpdateCard) -> Option<FeedPostAct> {
-    let open = card.kind == UpdateKind::DoneForYou && card.done_for_you.as_ref().is_some_and(|d| !d.answered);
+    let open = card.kind == UpdateKind::DoneForYou
+        && card.done_for_you.as_ref().is_some_and(|d| !d.answered);
     if !open {
         return None;
     }
@@ -781,9 +798,13 @@ fn paint_source_actions(ui: &mut egui::Ui, card: &UpdateCard) -> Option<SourceAc
             crate::theme::muted()
         };
         let button = ui.add(
-            egui::Button::new(RichText::new(label).size(crate::theme::FONT_TIP).color(color))
-                .frame(false)
-                .min_size(egui::vec2(0.0, 24.0)),
+            egui::Button::new(
+                RichText::new(label)
+                    .size(crate::theme::FONT_TIP)
+                    .color(color),
+            )
+            .frame(false)
+            .min_size(egui::vec2(0.0, 24.0)),
         );
         if button.hovered() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
@@ -929,7 +950,10 @@ impl Cabin {
                                 let (opacity, x) = if ideas_on {
                                     (tab_t.clamp(0.0, 1.0), crate::motion::ideas_axis_x(tab_t))
                                 } else {
-                                    ((1.0 - tab_t).clamp(0.0, 1.0), crate::motion::feed_axis_x(tab_t))
+                                    (
+                                        (1.0 - tab_t).clamp(0.0, 1.0),
+                                        crate::motion::feed_axis_x(tab_t),
+                                    )
                                 };
                                 let avail = ui.available_rect_before_wrap();
                                 let rect = avail.translate(egui::vec2(x, 0.0));
@@ -943,7 +967,9 @@ impl Cabin {
                                 });
                                 // Crossfade only: settled tabs and reduced motion stay idle.
                                 if crate::theme::motion_ok(ui) && 0.001 < tab_t && tab_t < 0.999 {
-                                    ui.ctx().request_repaint_after(std::time::Duration::from_millis(16));
+                                    ui.ctx().request_repaint_after(
+                                        std::time::Duration::from_millis(16),
+                                    );
                                 }
                                 ui.add_space(24.0);
                             });
@@ -1989,10 +2015,12 @@ pub(super) fn pulse_image_path(url: &str) -> std::path::PathBuf {
 
 fn fetch_agent() -> ureq::Agent {
     // No redirects: a public URL can't bounce the fetch onto a private host.
+    // Dial resolver blocks DNS→private/CGNAT even when the hostname looked public.
     ureq::AgentBuilder::new()
         .try_proxy_from_env(true)
         .redirects(0)
         .timeout(std::time::Duration::from_secs(8))
+        .resolver(grokhub_agent::public_only_resolve)
         .build()
 }
 
@@ -2045,4 +2073,25 @@ fn cache_image(url: &str) -> bool {
         let _ = std::fs::create_dir_all(dir);
     }
     crate::config::atomic_write(&path, &buf).is_ok()
+}
+
+#[cfg(test)]
+mod fetch_agent_tests {
+    #[test]
+    fn fetch_agent_dials_through_the_public_only_resolver() {
+        let src = include_str!("pulse_ui.rs");
+        let arm = src
+            .split("fn fetch_agent()")
+            .nth(1)
+            .and_then(|rest| rest.split("fn source_preview(").next())
+            .expect("fetch_agent");
+        assert!(
+            arm.contains(".resolver(grokhub_agent::public_only_resolve)"),
+            "Pulse page/image fetches must refuse DNS→private: {arm}"
+        );
+        assert!(
+            arm.contains(".redirects(0)"),
+            "Pulse image agent must not auto-follow redirects: {arm}"
+        );
+    }
 }

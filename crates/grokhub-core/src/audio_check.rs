@@ -118,7 +118,10 @@ fn first_percent(volume: &str) -> Option<u32> {
 /// A name matches an input's description or name, ignoring case and
 /// treating `_`, `-` and `.` as spaces ("qa usb" finds "QA_USB_Microphone").
 /// `Ok(None)` means GrokHub couldn't list inputs and records the default.
-pub fn pick_input<'a>(inputs: &'a [AudioDevice], want: &str) -> Result<Option<&'a AudioDevice>, String> {
+pub fn pick_input<'a>(
+    inputs: &'a [AudioDevice],
+    want: &str,
+) -> Result<Option<&'a AudioDevice>, String> {
     let want = want.trim();
     if want.is_empty() {
         return Ok(inputs.iter().find(|d| d.is_default).or(inputs.first()));
@@ -149,13 +152,39 @@ pub fn clip_argv(bin: &str, device: Option<&str>) -> Option<Vec<String>> {
     let rate = CLIP_RATE.to_string();
     let secs = CLIP_SECS.to_string();
     let mut argv: Vec<String> = match bin {
-        "parecord" => vec!["--raw".into(), "--format=s16le".into(), format!("--rate={rate}"), "--channels=1".into()],
-        "pw-record" => vec!["--rate".into(), rate, "--channels".into(), "1".into(), "--format".into(), "s16".into()],
+        "parecord" => vec![
+            "--raw".into(),
+            "--format=s16le".into(),
+            format!("--rate={rate}"),
+            "--channels=1".into(),
+        ],
+        "pw-record" => vec![
+            "--rate".into(),
+            rate,
+            "--channels".into(),
+            "1".into(),
+            "--format".into(),
+            "s16".into(),
+        ],
         "ffmpeg" => {
             return Some(
                 [
-                    "-hide_banner", "-loglevel", "error", "-f", "pulse", "-i", device.unwrap_or("default"),
-                    "-t", &secs, "-ac", "1", "-ar", &rate, "-f", "s16le", "-",
+                    "-hide_banner",
+                    "-loglevel",
+                    "error",
+                    "-f",
+                    "pulse",
+                    "-i",
+                    device.unwrap_or("default"),
+                    "-t",
+                    &secs,
+                    "-ac",
+                    "1",
+                    "-ar",
+                    &rate,
+                    "-f",
+                    "s16le",
+                    "-",
                 ]
                 .iter()
                 .map(|s| s.to_string())
@@ -164,10 +193,12 @@ pub fn clip_argv(bin: &str, device: Option<&str>) -> Option<Vec<String>> {
         }
         "arecord" if device.is_none() => {
             return Some(
-                ["-q", "-t", "raw", "-f", "S16_LE", "-r", &rate, "-c", "1", "-d", &secs]
-                    .iter()
-                    .map(|s| s.to_string())
-                    .collect(),
+                [
+                    "-q", "-t", "raw", "-f", "S16_LE", "-r", &rate, "-c", "1", "-d", &secs,
+                ]
+                .iter()
+                .map(|s| s.to_string())
+                .collect(),
             )
         }
         _ => return None,
@@ -185,7 +216,12 @@ pub fn clip_argv(bin: &str, device: Option<&str>) -> Option<Vec<String>> {
 
 /// Raw s16le bytes to samples (a trailing odd byte is dropped).
 pub fn pcm_samples(bytes: &[u8]) -> Vec<i16> {
-    bytes.as_chunks::<2>().0.iter().map(|&b| i16::from_le_bytes(b)).collect()
+    bytes
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|&b| i16::from_le_bytes(b))
+        .collect()
 }
 
 /// A 16-bit PCM WAV: its rate and the first channel's samples.
@@ -239,11 +275,22 @@ pub struct Levels {
 
 pub fn measure(samples: &[i16], rate: u32) -> Levels {
     let n = samples.len();
-    let peak = samples.iter().map(|&s| (s as i32).unsigned_abs()).max().unwrap_or(0);
+    let peak = samples
+        .iter()
+        .map(|&s| (s as i32).unsigned_abs())
+        .max()
+        .unwrap_or(0);
     let sum_sq: f64 = samples.iter().map(|&s| (s as f64) * (s as f64)).sum();
-    let rms = if n == 0 { 0.0 } else { (sum_sq / n as f64).sqrt() };
+    let rms = if n == 0 {
+        0.0
+    } else {
+        (sum_sq / n as f64).sqrt()
+    };
     let hot = (32768.0 * 10f64.powf(CLIP_DBFS as f64 / 20.0)) as u32;
-    let clipped = samples.iter().filter(|&&s| (s as i32).unsigned_abs() >= hot).count();
+    let clipped = samples
+        .iter()
+        .filter(|&&s| (s as i32).unsigned_abs() >= hot)
+        .count();
     let min_gap = (rate * DROPOUT_MS / 1000).max(1) as usize;
     let mut dropouts = 0;
     let mut run = 0usize;
@@ -267,11 +314,19 @@ pub fn measure(samples: &[i16], rate: u32) -> Levels {
         })
         .count();
     Levels {
-        secs: if rate == 0 { 0.0 } else { n as f32 / rate as f32 },
+        secs: if rate == 0 {
+            0.0
+        } else {
+            n as f32 / rate as f32
+        },
         peak_dbfs: dbfs(peak as f64),
         rms_dbfs: dbfs(rms),
         clipped,
-        clipped_pct: if n == 0 { 0.0 } else { clipped as f32 * 100.0 / n as f32 },
+        clipped_pct: if n == 0 {
+            0.0
+        } else {
+            clipped as f32 * 100.0 / n as f32
+        },
         dropouts,
         clicks,
     }
@@ -290,20 +345,32 @@ pub enum Problem {
     OutputMuted,
 }
 
-pub fn find_problems(input: Option<&AudioDevice>, output: Option<&AudioDevice>, levels: &Levels) -> Vec<Problem> {
+pub fn find_problems(
+    input: Option<&AudioDevice>,
+    output: Option<&AudioDevice>,
+    levels: &Levels,
+) -> Vec<Problem> {
     let mut out = Vec::new();
     if input.is_some_and(|d| d.muted) {
         out.push(Problem::Muted);
     }
-    if let Some(v) = input.and_then(|d| d.volume_pct).filter(|&v| v < LOW_VOLUME_PCT) {
+    if let Some(v) = input
+        .and_then(|d| d.volume_pct)
+        .filter(|&v| v < LOW_VOLUME_PCT)
+    {
         out.push(Problem::VolumeLow(v));
     }
     if levels.peak_dbfs < SILENT_DBFS {
         out.push(Problem::Silent);
     } else if levels.peak_dbfs >= CLIP_DBFS {
-        out.push(Problem::Clipping { peak_dbfs: levels.peak_dbfs, pct: levels.clipped_pct });
+        out.push(Problem::Clipping {
+            peak_dbfs: levels.peak_dbfs,
+            pct: levels.clipped_pct,
+        });
     } else if levels.peak_dbfs < QUIET_DBFS {
-        out.push(Problem::TooQuiet { peak_dbfs: levels.peak_dbfs });
+        out.push(Problem::TooQuiet {
+            peak_dbfs: levels.peak_dbfs,
+        });
     }
     if levels.dropouts > 0 {
         out.push(Problem::Dropouts(levels.dropouts));
@@ -384,10 +451,19 @@ pub struct AudioReport {
     pub text: String,
 }
 
-pub fn audio_report(outputs: &[AudioDevice], inputs: &[AudioDevice], input: Option<&AudioDevice>, levels: &Levels) -> AudioReport {
+pub fn audio_report(
+    outputs: &[AudioDevice],
+    inputs: &[AudioDevice],
+    input: Option<&AudioDevice>,
+    levels: &Levels,
+) -> AudioReport {
     let output = outputs.iter().find(|d| d.is_default).or(outputs.first());
-    let in_label = input.map(AudioDevice::label).unwrap_or("your default input");
-    let out_label = output.map(AudioDevice::label).unwrap_or("the default output");
+    let in_label = input
+        .map(AudioDevice::label)
+        .unwrap_or("your default input");
+    let out_label = output
+        .map(AudioDevice::label)
+        .unwrap_or("the default output");
     let problems = find_problems(input, output, levels);
     let head = match problems.first() {
         Some(p) => short(p),
@@ -397,7 +473,13 @@ pub fn audio_report(outputs: &[AudioDevice], inputs: &[AudioDevice], input: Opti
         Some(d) => format!("Audio check: {} input {head}", d.label()),
         None => format!("Audio check: default input {head}"),
     };
-    let routing = output.map(|o| format!("default output is {}{}", o.label(), if o.muted { " (muted)" } else { "" }));
+    let routing = output.map(|o| {
+        format!(
+            "default output is {}{}",
+            o.label(),
+            if o.muted { " (muted)" } else { "" }
+        )
+    });
     let title = match &routing {
         Some(r) => format!("{card_title}; {r}"),
         None => card_title.clone(),
@@ -405,7 +487,10 @@ pub fn audio_report(outputs: &[AudioDevice], inputs: &[AudioDevice], input: Opti
     let mut text = format!("{title}\n\n");
     match input {
         Some(d) => {
-            let volume = d.volume_pct.map(|v| format!(", volume {v}%")).unwrap_or_default();
+            let volume = d
+                .volume_pct
+                .map(|v| format!(", volume {v}%"))
+                .unwrap_or_default();
             let mute = if d.muted { "muted" } else { "not muted" };
             text.push_str(&format!("Input: {}{volume}, {mute}\n", d.label()));
         }
@@ -435,7 +520,11 @@ pub fn audio_report(outputs: &[AudioDevice], inputs: &[AudioDevice], input: Opti
                 s
             })
             .collect();
-        if names.is_empty() { "none".into() } else { names.join(", ") }
+        if names.is_empty() {
+            "none".into()
+        } else {
+            names.join(", ")
+        }
     };
     if !outputs.is_empty() {
         text.push_str(&format!("Outputs: {}\n", list(outputs, None)));
@@ -447,7 +536,10 @@ pub fn audio_report(outputs: &[AudioDevice], inputs: &[AudioDevice], input: Opti
         text.push_str("\nNo problems found.\n");
         "No problems found.".to_string()
     } else {
-        let lines: Vec<(String, String)> = problems.iter().map(|p| explain(p, in_label, out_label)).collect();
+        let lines: Vec<(String, String)> = problems
+            .iter()
+            .map(|p| explain(p, in_label, out_label))
+            .collect();
         text.push_str("\nProblems:\n");
         for (what, _) in &lines {
             text.push_str(&format!("- {what}\n"));
@@ -458,12 +550,19 @@ pub fn audio_report(outputs: &[AudioDevice], inputs: &[AudioDevice], input: Opti
         }
         lines[0].1.clone()
     };
-    text.push_str("\nNothing was changed on this computer. The clip wasn't saved or sent anywhere.");
+    text.push_str(
+        "\nNothing was changed on this computer. The clip wasn't saved or sent anywhere.",
+    );
     let summary = match output {
         Some(o) => format!("{first} Default output: {}.", o.label()),
         None => first,
     };
-    AudioReport { title, card_title, summary, text }
+    AudioReport {
+        title,
+        card_title,
+        summary,
+        text,
+    }
 }
 
 #[cfg(test)]
@@ -478,7 +577,10 @@ mod tests {
 
     fn devices() -> (Vec<AudioDevice>, Vec<AudioDevice>) {
         let (sink, source) = parse_pactl_defaults(INFO);
-        (parse_pactl_list(SINKS, sink.as_deref()), parse_pactl_list(SOURCES, source.as_deref()))
+        (
+            parse_pactl_list(SINKS, sink.as_deref()),
+            parse_pactl_list(SOURCES, source.as_deref()),
+        )
     }
 
     /// A 16-bit mono WAV fixture, built the way a recorder writes one.
@@ -503,7 +605,10 @@ mod tests {
     /// One second of a 441 Hz-ish sine at `amp`, at 48 kHz.
     fn sine(amp: f64, rate: u32) -> Vec<i16> {
         (0..rate)
-            .map(|i| (amp * (i as f64 * 2.0 * std::f64::consts::PI * 441.0 / rate as f64).sin()).round() as i16)
+            .map(|i| {
+                (amp * (i as f64 * 2.0 * std::f64::consts::PI * 441.0 / rate as f64).sin()).round()
+                    as i16
+            })
             .collect()
     }
 
@@ -530,7 +635,10 @@ mod tests {
             ]
         );
         assert_eq!(inputs.len(), 2, "the HDMI monitor is not a microphone");
-        assert_eq!(inputs[0].description, "Yeti Stereo Microphone Analog Stereo");
+        assert_eq!(
+            inputs[0].description,
+            "Yeti Stereo Microphone Analog Stereo"
+        );
         assert!(inputs[0].is_default);
         assert_eq!(inputs[1].volume_pct, Some(15));
         assert!(inputs[1].muted);
@@ -541,22 +649,43 @@ mod tests {
     #[test]
     fn the_chosen_input_matches_by_name_and_defaults_to_the_default() {
         let (_, inputs) = devices();
-        assert_eq!(pick_input(&inputs, "").unwrap().map(|d| d.label()), Some("Yeti Stereo Microphone Analog Stereo"));
-        assert_eq!(pick_input(&inputs, "matisse").unwrap().map(|d| d.name.as_str()), Some("alsa_input.pci-0000_0c_00.4.analog-stereo"));
-        assert_eq!(pick_input(&inputs, "blue microphones").unwrap().map(|d| d.name.as_str()), Some("alsa_input.usb-Blue_Microphones_Yeti-00.analog-stereo"));
+        assert_eq!(
+            pick_input(&inputs, "").unwrap().map(|d| d.label()),
+            Some("Yeti Stereo Microphone Analog Stereo")
+        );
+        assert_eq!(
+            pick_input(&inputs, "matisse")
+                .unwrap()
+                .map(|d| d.name.as_str()),
+            Some("alsa_input.pci-0000_0c_00.4.analog-stereo")
+        );
+        assert_eq!(
+            pick_input(&inputs, "blue microphones")
+                .unwrap()
+                .map(|d| d.name.as_str()),
+            Some("alsa_input.usb-Blue_Microphones_Yeti-00.analog-stereo")
+        );
         assert_eq!(
             pick_input(&inputs, "rode"),
             Err("No input matches \"rode\". Inputs: Yeti Stereo Microphone Analog Stereo, Starship/Matisse HD Audio Controller Analog Stereo.".into())
         );
         assert_eq!(pick_input(&[], ""), Ok(None));
-        assert!(pick_input(&[], "yeti").unwrap_err().starts_with("GrokHub couldn't list your inputs"));
+        assert!(pick_input(&[], "yeti")
+            .unwrap_err()
+            .starts_with("GrokHub couldn't list your inputs"));
     }
 
     #[test]
     fn each_recorder_writes_raw_48k_mono_from_the_chosen_input() {
         assert_eq!(
             clip_argv("parecord", Some("mic")).unwrap(),
-            vec!["--raw", "--format=s16le", "--rate=48000", "--channels=1", "--device=mic"]
+            vec![
+                "--raw",
+                "--format=s16le",
+                "--rate=48000",
+                "--channels=1",
+                "--device=mic"
+            ]
         );
         assert_eq!(
             clip_argv("pw-record", None).unwrap(),
@@ -564,20 +693,59 @@ mod tests {
         );
         assert_eq!(
             clip_argv("pw-record", Some("mic")).unwrap(),
-            vec!["--rate", "48000", "--channels", "1", "--format", "s16", "--target", "mic", "-"]
+            vec![
+                "--rate",
+                "48000",
+                "--channels",
+                "1",
+                "--format",
+                "s16",
+                "--target",
+                "mic",
+                "-"
+            ]
         );
         let ff = clip_argv("ffmpeg", Some("mic")).unwrap();
-        assert_eq!(ff[3..7], ["-f".to_string(), "pulse".into(), "-i".into(), "mic".into()][..]);
-        assert!(ff.ends_with(&["-t".into(), "5".into(), "-ac".into(), "1".into(), "-ar".into(), "48000".into(), "-f".into(), "s16le".into(), "-".into()]));
-        assert_eq!(clip_argv("arecord", None).unwrap().last().map(String::as_str), Some("5"));
-        assert_eq!(clip_argv("arecord", Some("mic")), None, "arecord only records the default input");
+        assert_eq!(
+            ff[3..7],
+            ["-f".to_string(), "pulse".into(), "-i".into(), "mic".into()][..]
+        );
+        assert!(ff.ends_with(&[
+            "-t".into(),
+            "5".into(),
+            "-ac".into(),
+            "1".into(),
+            "-ar".into(),
+            "48000".into(),
+            "-f".into(),
+            "s16le".into(),
+            "-".into()
+        ]));
+        assert_eq!(
+            clip_argv("arecord", None)
+                .unwrap()
+                .last()
+                .map(String::as_str),
+            Some("5")
+        );
+        assert_eq!(
+            clip_argv("arecord", Some("mic")),
+            None,
+            "arecord only records the default input"
+        );
         assert_eq!(clip_argv("sox", None), None);
     }
 
     #[test]
     fn a_wav_fixture_reads_back_its_rate_and_first_channel() {
-        assert_eq!(wav_samples(&wav(48_000, 1, &[1, -2, 3])), Some((48_000, vec![1, -2, 3])));
-        assert_eq!(wav_samples(&wav(44_100, 2, &[10, 99, 20, 99])), Some((44_100, vec![10, 20])));
+        assert_eq!(
+            wav_samples(&wav(48_000, 1, &[1, -2, 3])),
+            Some((48_000, vec![1, -2, 3]))
+        );
+        assert_eq!(
+            wav_samples(&wav(44_100, 2, &[10, 99, 20, 99])),
+            Some((44_100, vec![10, 20]))
+        );
         assert_eq!(wav_samples(b"RIFF\0\0\0\0WAVE"), None);
         assert_eq!(wav_samples(b"not a wav"), None);
         assert_eq!(pcm_samples(&[1, 0, 0xff, 0xff, 7]), vec![1, -1]);
@@ -586,18 +754,27 @@ mod tests {
     #[test]
     fn a_clipped_wav_reports_the_peak_and_the_share_at_full_scale() {
         let mut s = sine(16_000.0, 48_000);
-        s[..4_800].iter_mut().for_each(|x| *x = if *x >= 0 { 32_767 } else { -32_768 });
+        s[..4_800]
+            .iter_mut()
+            .for_each(|x| *x = if *x >= 0 { 32_767 } else { -32_768 });
         let (rate, samples) = wav_samples(&wav(48_000, 1, &s)).unwrap();
         let l = measure(&samples, rate);
         assert_eq!(l.secs, 1.0);
-        assert_eq!(format!("{:.1}", l.peak_dbfs), "0.0", "-32768 is exactly full scale");
+        assert_eq!(
+            format!("{:.1}", l.peak_dbfs),
+            "0.0",
+            "-32768 is exactly full scale"
+        );
         assert_eq!(l.clipped, 4_800);
         assert_eq!(format!("{:.1}", l.clipped_pct), "10.0");
         assert_eq!(l.dropouts, 0);
         let (_, inputs) = devices();
         assert_eq!(
             find_problems(inputs.first(), None, &l),
-            vec![Problem::Clipping { peak_dbfs: l.peak_dbfs, pct: l.clipped_pct }]
+            vec![Problem::Clipping {
+                peak_dbfs: l.peak_dbfs,
+                pct: l.clipped_pct
+            }]
         );
     }
 
@@ -612,7 +789,12 @@ mod tests {
         let l = measure(&sine(500.0, 48_000), 48_000);
         assert_eq!(format!("{:.1}", l.peak_dbfs), "-36.3");
         assert_eq!(format!("{:.1}", l.rms_dbfs), "-39.3");
-        assert_eq!(find_problems(None, None, &l), vec![Problem::TooQuiet { peak_dbfs: l.peak_dbfs }]);
+        assert_eq!(
+            find_problems(None, None, &l),
+            vec![Problem::TooQuiet {
+                peak_dbfs: l.peak_dbfs
+            }]
+        );
 
         let l = measure(&sine(16_000.0, 48_000), 48_000);
         assert_eq!(format!("{:.1}", l.peak_dbfs), "-6.2");
@@ -644,14 +826,19 @@ mod tests {
     fn the_report_names_the_device_the_problem_and_the_default_output() {
         let (outputs, inputs) = devices();
         let mut s = sine(16_000.0, 48_000);
-        s.iter_mut().take(4_800).for_each(|x| *x = if *x >= 0 { 32_545 } else { -32_545 });
+        s.iter_mut()
+            .take(4_800)
+            .for_each(|x| *x = if *x >= 0 { 32_545 } else { -32_545 });
         let l = measure(&s, 48_000);
         let r = audio_report(&outputs, &inputs, inputs.first(), &l);
         assert_eq!(
             r.title,
             "Audio check: Yeti Stereo Microphone Analog Stereo input clipping at -0.1 dBFS; default output is Navi 21 HDMI / DisplayPort"
         );
-        assert_eq!(r.card_title, "Audio check: Yeti Stereo Microphone Analog Stereo input clipping at -0.1 dBFS");
+        assert_eq!(
+            r.card_title,
+            "Audio check: Yeti Stereo Microphone Analog Stereo input clipping at -0.1 dBFS"
+        );
         assert_eq!(
             r.summary,
             "Lower Yeti Stereo Microphone Analog Stereo's input volume or gain knob until loud speech peaks around -6 dBFS. Default output: Navi 21 HDMI / DisplayPort."
@@ -665,7 +852,12 @@ mod tests {
             )
         );
 
-        let muted = audio_report(&outputs, &inputs, inputs.get(1), &measure(&vec![0; 4_800], 48_000));
+        let muted = audio_report(
+            &outputs,
+            &inputs,
+            inputs.get(1),
+            &measure(&vec![0; 4_800], 48_000),
+        );
         assert_eq!(
             muted.title,
             "Audio check: Starship/Matisse HD Audio Controller Analog Stereo input is muted; default output is Navi 21 HDMI / DisplayPort"
@@ -673,10 +865,18 @@ mod tests {
         assert!(muted.text.contains("\nProblems:\n- Starship/Matisse HD Audio Controller Analog Stereo is muted, so apps hear nothing from it.\n- Starship/Matisse HD Audio Controller Analog Stereo's input volume is at 15%.\n- The clip from Starship/Matisse HD Audio Controller Analog Stereo was silent (peak below -60 dBFS).\n"), "{}", muted.text);
 
         let fine = audio_report(&[], &[], None, &measure(&sine(16_000.0, 48_000), 48_000));
-        assert_eq!(fine.title, "Audio check: default input sounds fine (peak -6.2 dBFS)");
-        assert_eq!(fine.card_title, fine.title, "no outputs listed, nothing to add");
+        assert_eq!(
+            fine.title,
+            "Audio check: default input sounds fine (peak -6.2 dBFS)"
+        );
+        assert_eq!(
+            fine.card_title, fine.title,
+            "no outputs listed, nothing to add"
+        );
         assert_eq!(fine.summary, "No problems found.");
-        assert!(fine.text.contains("Input: the default input (GrokHub couldn't list devices here)\n"));
+        assert!(fine
+            .text
+            .contains("Input: the default input (GrokHub couldn't list devices here)\n"));
         assert!(fine.text.contains("\nNo problems found.\n"));
         assert!(!fine.text.contains("Outputs:"));
     }

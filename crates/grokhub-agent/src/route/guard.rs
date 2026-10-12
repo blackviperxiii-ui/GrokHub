@@ -111,15 +111,17 @@ pub fn tally(
         if ts.get(i).copied().unwrap_or(0) < since {
             continue;
         }
-        let e = episodes.entry(r.episode.as_str()).or_insert((r.class.as_str(), r.holdout, Vec::new()));
+        let e =
+            episodes
+                .entry(r.episode.as_str())
+                .or_insert((r.class.as_str(), r.holdout, Vec::new()));
         e.2.push(r.span_id.as_str());
     }
     let mut stats: BTreeMap<String, ClassStats> = BTreeMap::new();
     for (episode, (class, holdout, spans)) in episodes {
-        let found = outcomes
-            .iter()
-            .rev()
-            .find(|o| o.episode == episode || o.span_ids.iter().any(|s| spans.contains(&s.as_str())));
+        let found = outcomes.iter().rev().find(|o| {
+            o.episode == episode || o.span_ids.iter().any(|s| spans.contains(&s.as_str()))
+        });
         let ok = match found.map(|o| o.effective(now_ms)) {
             Some(OutcomeResult::Success) => true,
             Some(OutcomeResult::Failure) => false,
@@ -155,7 +157,15 @@ pub fn note_once(config_dir: &Path, key: &str, text: &str, now_ms: u64) -> bool 
     if seen {
         return false;
     }
-    append_line(&notes_path(config_dir), &Note { key: key.into(), ts_ms: now_ms, text: text.into() }).is_ok()
+    append_line(
+        &notes_path(config_dir),
+        &Note {
+            key: key.into(),
+            ts_ms: now_ms,
+            text: text.into(),
+        },
+    )
+    .is_ok()
 }
 
 /// What one guard run did: the classes it reverted, each with the Pulse Suggestion text.
@@ -172,10 +182,20 @@ pub fn run_guard(config_dir: &Path, now_ms: u64) -> GuardRun {
     let outcomes = read_outcomes(config_dir);
     if outcomes.is_empty() {
         let day = now_ms / DAY_MS;
-        note_once(config_dir, &format!("guard-waiting:{day}"), "guard waiting on outcomes", now_ms);
-        return GuardRun { reverted: Vec::new(), waiting: true };
+        note_once(
+            config_dir,
+            &format!("guard-waiting:{day}"),
+            "guard waiting on outcomes",
+            now_ms,
+        );
+        return GuardRun {
+            reverted: Vec::new(),
+            waiting: true,
+        };
     }
-    let (ts, records): (Vec<u64>, Vec<RouteRecord>) = route_records(config_dir, GUARD_SCAN_LINES).into_iter().unzip();
+    let (ts, records): (Vec<u64>, Vec<RouteRecord>) = route_records(config_dir, GUARD_SCAN_LINES)
+        .into_iter()
+        .unzip();
     let mut overrides = load_overrides(config_dir);
     let stats = tally(&records, &ts, &outcomes, &overrides, now_ms);
     let mut run = GuardRun::default();
@@ -195,7 +215,12 @@ pub fn run_guard(config_dir: &Path, now_ms: u64) -> GuardRun {
             s.auto.n,
             s.control.n
         );
-        let _ = note_once(config_dir, &format!("guard-revert:{class}:{now_ms}"), &text, now_ms);
+        let _ = note_once(
+            config_dir,
+            &format!("guard-revert:{class}:{now_ms}"),
+            &text,
+            now_ms,
+        );
         run.reverted.push((class, text));
     }
     if !run.reverted.is_empty() {
@@ -215,17 +240,33 @@ mod tests {
         let picked: Vec<bool> = ids.iter().map(|id| in_holdout(id)).collect();
         let n = picked.iter().filter(|b| **b).count();
         assert!((80..=120).contains(&n), "holdout share {n}/1000");
-        assert_eq!(picked, ids.iter().map(|id| in_holdout(id)).collect::<Vec<_>>());
+        assert_eq!(
+            picked,
+            ids.iter().map(|id| in_holdout(id)).collect::<Vec<_>>()
+        );
         assert!(!in_holdout(""));
         assert!(holdout_eligible("chat:default") && holdout_eligible("chat:turn"));
-        assert!(!holdout_eligible(PREPARE_HARD) && !holdout_eligible("background:judge") && !holdout_eligible("eval:item"));
+        assert!(
+            !holdout_eligible(PREPARE_HARD)
+                && !holdout_eligible("background:judge")
+                && !holdout_eligible("eval:item")
+        );
     }
 
     fn stats(auto_ok: u32, auto_n: u32, ctl_ok: u32, ctl_n: u32) -> BTreeMap<String, ClassStats> {
         let mut m = BTreeMap::new();
         m.insert(
             "chat:default".to_string(),
-            ClassStats { auto: Arm { n: auto_n, ok: auto_ok }, control: Arm { n: ctl_n, ok: ctl_ok } },
+            ClassStats {
+                auto: Arm {
+                    n: auto_n,
+                    ok: auto_ok,
+                },
+                control: Arm {
+                    n: ctl_n,
+                    ok: ctl_ok,
+                },
+            },
         );
         m
     }
@@ -233,7 +274,10 @@ mod tests {
     #[test]
     fn guard_reverts_at_a_three_point_gap_and_not_at_one_point_or_below_n_50() {
         // Auto 80% (40/50) vs control 83% (83/100): 3 points.
-        assert_eq!(judge(&stats(40, 50, 83, 100)), vec!["chat:default".to_string()]);
+        assert_eq!(
+            judge(&stats(40, 50, 83, 100)),
+            vec!["chat:default".to_string()]
+        );
         // Auto 80% vs control 81%: 1 point.
         assert!(judge(&stats(40, 50, 81, 100)).is_empty());
         // A 3-point gap with only 49 Auto episodes waits.
@@ -241,11 +285,22 @@ mod tests {
     }
 
     fn rec(episode: &str, holdout: bool, span: &str) -> RouteRecord {
-        RouteRecord { episode: episode.into(), class: "chat:default".into(), holdout, span_id: span.into(), ..RouteRecord::default() }
+        RouteRecord {
+            episode: episode.into(),
+            class: "chat:default".into(),
+            holdout,
+            span_id: span.into(),
+            ..RouteRecord::default()
+        }
     }
 
     fn outcome(episode: &str, result: OutcomeResult) -> TaskOutcome {
-        TaskOutcome { task: episode.into(), episode: episode.into(), result, ..TaskOutcome::default() }
+        TaskOutcome {
+            task: episode.into(),
+            episode: episode.into(),
+            result,
+            ..TaskOutcome::default()
+        }
     }
 
     #[test]
@@ -263,10 +318,25 @@ mod tests {
             let holdout = i >= 50;
             let ok = if holdout { i - 50 < 83 } else { i < 40 };
             let ep = format!("ep-{i}");
-            let mut span = crate::harness::Span::soft_allow(ROUTE_TRACE, "model.call", "{}", "ok", "", crate::harness::AccessMode::Supervised, "xai");
+            let mut span = crate::harness::Span::soft_allow(
+                ROUTE_TRACE,
+                "model.call",
+                "{}",
+                "ok",
+                "",
+                crate::harness::AccessMode::Supervised,
+                "xai",
+            );
             span.route = Some(Box::new(rec(&ep, holdout, &format!("s{i}"))));
             crate::harness::append_span(&dir, &span).unwrap();
-            let o = outcome(&ep, if ok { OutcomeResult::Success } else { OutcomeResult::Failure });
+            let o = outcome(
+                &ep,
+                if ok {
+                    OutcomeResult::Success
+                } else {
+                    OutcomeResult::Failure
+                },
+            );
             lines.push_str(&serde_json::to_string(&o).unwrap());
             lines.push('\n');
         }
@@ -278,7 +348,13 @@ mod tests {
             run.reverted[0].1,
             "Auto was succeeding less on everyday chat (80% vs 83% at a fixed High, 50 and 100 tasks), so it now starts that work one step higher."
         );
-        assert_eq!(load_overrides(&dir).get("chat:default"), Some(&Override { steps: 1, at_ms: now + 2000 }));
+        assert_eq!(
+            load_overrides(&dir).get("chat:default"),
+            Some(&Override {
+                steps: 1,
+                at_ms: now + 2000
+            })
+        );
         // The records that judged the old start no longer count.
         assert!(run_guard(&dir, now + 3000).reverted.is_empty());
         let _ = std::fs::remove_dir_all(dir);

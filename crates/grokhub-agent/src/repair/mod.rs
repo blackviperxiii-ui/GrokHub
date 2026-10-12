@@ -25,24 +25,28 @@ use serde_json::{json, Value};
 
 use crate::harness::{self, AccessMode, ConsentLedger, GateOutcome, Origin, Scope, Span, Step};
 
+pub use apply::{
+    gb_prompt, step_ok, Action, ApplyCtx, ApplyRun, APPLY_TOOL, REPAIR_TOOL, RESTORE_TOOL,
+    STEP_FAILED, STEP_OK, UNATTENDED, UNDO_TOOL,
+};
+pub(crate) use fix::repair_hit;
+pub use fix::{
+    classify_step, elevate, gate_text, plans_for, DraftStep, FixPlan, FixStep, PlanError,
+    StepClass, FLOOR_GUIDANCE,
+};
 pub use interpret::{
-    interpret, Finding, ProbeOutput, Severity, DISK_CRIT_PCT, DISK_WARN_PCT, LOG_WARN_LINES, MEM_WARN_PCT,
+    interpret, Finding, ProbeOutput, Severity, DISK_CRIT_PCT, DISK_WARN_PCT, LOG_WARN_LINES,
+    MEM_WARN_PCT,
 };
 pub use probes::{
     on_path, probe_spec_with, read_only_violation, Os, PackageManager, ProbeId, ProbeSpec,
     LINUX_PROBES, LOG_LINE_CAP, OUTPUT_CAP, PROBE_TIMEOUT, WINDOWS_PROBES,
 };
-pub use run::{redact_output, run_spec, ProbeRun};
-pub use apply::{
-    gb_prompt, step_ok, Action, ApplyCtx, ApplyRun, APPLY_TOOL, REPAIR_TOOL, RESTORE_TOOL, STEP_FAILED, STEP_OK,
-    UNATTENDED, UNDO_TOOL,
-};
-pub(crate) use fix::repair_hit;
-pub use fix::{classify_step, elevate, gate_text, plans_for, DraftStep, FixPlan, FixStep, PlanError, StepClass, FLOOR_GUIDANCE};
 pub use restore::{
-    backup_dir, backup_files, detect_backends, restore_files, BackupEntry, FileBackup, RestorePoint, Snapshot,
-    SnapshotBackend, UndoReport,
+    backup_dir, backup_files, detect_backends, restore_files, BackupEntry, FileBackup,
+    RestorePoint, Snapshot, SnapshotBackend, UndoReport,
 };
+pub use run::{redact_output, run_spec, ProbeRun};
 
 /// The tool name in the native registry and in every probe span.
 pub const DIAGNOSE_TOOL: &str = "diagnose";
@@ -93,40 +97,70 @@ pub fn diagnose(ctx: &DiagnoseCtx<'_>, probes: &[ProbeId]) -> DiagnoseReport {
         .scope_grant(&Scope::SystemState)
         .map(|g| g.id.clone())
         .unwrap_or_default();
-    let mut wanted: Vec<ProbeId> = if probes.is_empty() { ProbeId::all(ctx.os).to_vec() } else { probes.to_vec() };
+    let mut wanted: Vec<ProbeId> = if probes.is_empty() {
+        ProbeId::all(ctx.os).to_vec()
+    } else {
+        probes.to_vec()
+    };
     wanted.retain(|p| ProbeId::all(ctx.os).contains(p));
     wanted.dedup();
     for id in wanted {
         let label = id.label();
         let Some(spec) = probe_spec_with(id, ctx.os, ctx.has_bin) else {
-            report.findings.push(note(id, format!("I couldn't check {label}: no supported tool for it is installed.")));
+            report.findings.push(note(
+                id,
+                format!("I couldn't check {label}: no supported tool for it is installed."),
+            ));
             continue;
         };
         let line = spec.command_line();
         let args = json!({ "probe": id.key(), "command": line }).to_string();
         if let Some(why) = read_only_violation(&spec) {
-            write_span(ctx, Span::deny(ctx.session_id, DIAGNOSE_TOOL, &args, &why, "floor"));
+            write_span(
+                ctx,
+                Span::deny(ctx.session_id, DIAGNOSE_TOOL, &args, &why, "floor"),
+            );
             continue;
         }
         let shell = json!({ "command": line }).to_string();
-        let step = harness::decide(Step::Tool { name: "run_terminal_command", arguments: &shell });
+        let step = harness::decide(Step::Tool {
+            name: "run_terminal_command",
+            arguments: &shell,
+        });
         if !step.is_allow() || !crate::gate::is_readonly(DIAGNOSE_TOOL) {
             let why = match step {
                 GateOutcome::Refuse { reason } | GateOutcome::Park { reason, .. } => reason,
                 GateOutcome::Allow => "diagnose is not a read tool".into(),
             };
-            write_span(ctx, Span::deny(ctx.session_id, DIAGNOSE_TOOL, &args, &why, "gate"));
+            write_span(
+                ctx,
+                Span::deny(ctx.session_id, DIAGNOSE_TOOL, &args, &why, "gate"),
+            );
             continue;
         }
         if spec.needs_admin {
-            let mut span = Span::soft_allow(ctx.session_id, DIAGNOSE_TOOL, &args, NEEDS_ADMIN, label, ctx.access, "repair");
+            let mut span = Span::soft_allow(
+                ctx.session_id,
+                DIAGNOSE_TOOL,
+                &args,
+                NEEDS_ADMIN,
+                label,
+                ctx.access,
+                "repair",
+            );
             span.decision = "skip".into();
             write_span(ctx, span.with_consent(&grant));
-            report.findings.push(note(id, format!("Checking {label} {NEEDS_ADMIN}.")));
+            report
+                .findings
+                .push(note(id, format!("Checking {label} {NEEDS_ADMIN}.")));
             continue;
         }
         let (result, found) = match (ctx.runner)(&spec) {
-            ProbeRun::Done { code, stdout, stderr } => {
+            ProbeRun::Done {
+                code,
+                stdout,
+                stderr,
+            } => {
                 let out = ProbeOutput {
                     program: spec.program.clone(),
                     code,
@@ -135,29 +169,59 @@ pub fn diagnose(ctx: &DiagnoseCtx<'_>, probes: &[ProbeId]) -> DiagnoseReport {
                 };
                 let mut found = interpret(id, &out);
                 if found.is_empty() {
-                    found.push(note(id, format!("I couldn't check {label} on this computer.")));
+                    found.push(note(
+                        id,
+                        format!("I couldn't check {label} on this computer."),
+                    ));
                 }
-                let code = code.map(|c| c.to_string()).unwrap_or_else(|| "signal".into());
-                (cap(&format!("exit {code}\n{}{}", out.stdout, out.stderr)), found)
+                let code = code
+                    .map(|c| c.to_string())
+                    .unwrap_or_else(|| "signal".into());
+                (
+                    cap(&format!("exit {code}\n{}{}", out.stdout, out.stderr)),
+                    found,
+                )
             }
-            ProbeRun::TimedOut => ("timeout".into(), vec![note(id, format!("Checking {label} took too long, so I stopped it."))]),
+            ProbeRun::TimedOut => (
+                "timeout".into(),
+                vec![note(
+                    id,
+                    format!("Checking {label} took too long, so I stopped it."),
+                )],
+            ),
             ProbeRun::Missing(why) => (
                 cap(&format!("missing: {}", redact_output(&why, false))),
-                vec![note(id, format!("I couldn't check {label} on this computer."))],
+                vec![note(
+                    id,
+                    format!("I couldn't check {label} on this computer."),
+                )],
             ),
         };
-        let span = Span::soft_allow(ctx.session_id, DIAGNOSE_TOOL, &args, &result, label, ctx.access, "repair");
+        let span = Span::soft_allow(
+            ctx.session_id,
+            DIAGNOSE_TOOL,
+            &args,
+            &result,
+            label,
+            ctx.access,
+            "repair",
+        );
         write_span(ctx, span.with_consent(&grant));
         report.ran.push(id);
         report.findings.extend(found);
     }
-    report.findings.sort_by_key(|f| std::cmp::Reverse(f.severity));
+    report
+        .findings
+        .sort_by_key(|f| std::cmp::Reverse(f.severity));
     report
 }
 
 /// The scope check every diagnose run starts with.
 fn decide_scope(ledger: &ConsentLedger) -> GateOutcome {
-    harness::decide(Step::Scope { scope: &Scope::SystemState, ledger })
+    harness::decide(Step::Scope {
+        scope: &Scope::SystemState,
+        ledger,
+    })
 }
 
 fn note(probe: ProbeId, plain: String) -> Finding {
@@ -189,11 +253,25 @@ pub fn report_text(report: &DiagnoseReport) -> String {
     if let Some(ask) = &report.ask {
         return ask.clone();
     }
-    let problems: Vec<&Finding> = report.findings.iter().filter(|f| f.severity >= Severity::Warning).collect();
-    let notes: Vec<&Finding> = report.findings.iter().filter(|f| f.severity == Severity::Info).collect();
-    let fine: Vec<&Finding> = report.findings.iter().filter(|f| f.severity == Severity::Ok).collect();
+    let problems: Vec<&Finding> = report
+        .findings
+        .iter()
+        .filter(|f| f.severity >= Severity::Warning)
+        .collect();
+    let notes: Vec<&Finding> = report
+        .findings
+        .iter()
+        .filter(|f| f.severity == Severity::Info)
+        .collect();
+    let fine: Vec<&Finding> = report
+        .findings
+        .iter()
+        .filter(|f| f.severity == Severity::Ok)
+        .collect();
     let mut out = match problems.len() {
-        0 if report.findings.is_empty() => "I couldn't run any checks on this computer.".to_string(),
+        0 if report.findings.is_empty() => {
+            "I couldn't run any checks on this computer.".to_string()
+        }
         0 => "I checked your computer and didn't find anything wrong.".to_string(),
         1 => "I checked your computer and found one thing worth fixing.".to_string(),
         n => format!("I checked your computer and found {n} things worth fixing."),
@@ -224,22 +302,46 @@ pub fn report_text(report: &DiagnoseReport) -> String {
 /// module") goes to the model: a file name, a path, backticks, `::`, or a
 /// code word.
 fn names_code(lower: &str) -> bool {
-    const CODE_WORDS: &[&str] = &["module", "function", "crate", "class", "method", "repo", "compile", "unit test", "code"];
+    const CODE_WORDS: &[&str] = &[
+        "module",
+        "function",
+        "crate",
+        "class",
+        "method",
+        "repo",
+        "compile",
+        "unit test",
+        "code",
+    ];
     const EXTS: &[&str] = &[
-        "rs", "py", "js", "ts", "tsx", "jsx", "go", "c", "h", "cpp", "hpp", "cs", "java", "kt", "rb", "php", "swift", "sh",
-        "ps1", "toml", "json", "yaml", "yml", "md", "sql", "html", "css",
+        "rs", "py", "js", "ts", "tsx", "jsx", "go", "c", "h", "cpp", "hpp", "cs", "java", "kt",
+        "rb", "php", "swift", "sh", "ps1", "toml", "json", "yaml", "yml", "md", "sql", "html",
+        "css",
     ];
     if lower.contains('`') || lower.contains("::") {
         return true;
     }
-    let words: Vec<&str> = lower.split(|c: char| !(c.is_alphanumeric() || c == '_')).filter(|w| !w.is_empty()).collect();
-    if CODE_WORDS.iter().any(|w| if w.contains(' ') { lower.contains(w) } else { words.contains(w) }) {
+    let words: Vec<&str> = lower
+        .split(|c: char| !(c.is_alphanumeric() || c == '_'))
+        .filter(|w| !w.is_empty())
+        .collect();
+    if CODE_WORDS.iter().any(|w| {
+        if w.contains(' ') {
+            lower.contains(w)
+        } else {
+            words.contains(w)
+        }
+    }) {
         return true;
     }
     lower.split_whitespace().any(|tok| {
-        let tok = tok.trim_matches(|c: char| !(c.is_alphanumeric() || c == '/' || c == '\\' || c == '.' || c == '_'));
+        let tok = tok.trim_matches(|c: char| {
+            !(c.is_alphanumeric() || c == '/' || c == '\\' || c == '.' || c == '_')
+        });
         let path = (tok.contains('/') || tok.contains('\\')) && tok.len() > 1;
-        let file = tok.rsplit_once('.').is_some_and(|(stem, ext)| !stem.is_empty() && EXTS.contains(&ext));
+        let file = tok
+            .rsplit_once('.')
+            .is_some_and(|(stem, ext)| !stem.is_empty() && EXTS.contains(&ext));
         path || file
     })
 }
@@ -249,9 +351,24 @@ fn names_code(lower: &str) -> bool {
 /// broken on my machine" is a coding question, not a diagnose.
 pub fn probes_for_intent(text: &str, os: Os) -> Option<Vec<ProbeId>> {
     const TROUBLE: &[&str] = &[
-        "wrong", "broken", "doesn't work", "does not work", "isn't working", "is not working", "not working",
-        "won't", "can't connect", "cannot connect", "keeps dropping", "keeps disconnecting", "problem", "issue",
-        "acting up", "crash", "slow", "freez",
+        "wrong",
+        "broken",
+        "doesn't work",
+        "does not work",
+        "isn't working",
+        "is not working",
+        "not working",
+        "won't",
+        "can't connect",
+        "cannot connect",
+        "keeps dropping",
+        "keeps disconnecting",
+        "problem",
+        "issue",
+        "acting up",
+        "crash",
+        "slow",
+        "freez",
     ];
     let lower = text.trim().to_lowercase().replace('\u{2019}', "'");
     if lower.is_empty() || lower.len() > 160 || lower.starts_with('/') {
@@ -262,11 +379,33 @@ pub fn probes_for_intent(text: &str, os: Os) -> Option<Vec<ProbeId>> {
     }
     let has = |words: &[&str]| words.iter().any(|w| lower.contains(w));
     let trouble = has(TROUBLE);
-    let computer = has(&["my computer", "my pc", "my laptop", "this computer", "this pc", "this laptop", "the computer"]);
+    let computer = has(&[
+        "my computer",
+        "my pc",
+        "my laptop",
+        "this computer",
+        "this pc",
+        "this laptop",
+        "the computer",
+    ]);
     let network = trouble && has(&["wifi", "wi-fi", "internet", "ethernet", "dns"]);
-    let disk = has(&["disk space", "disk is full", "disk full", "out of space", "storage is full", "drive is full"]);
+    let disk = has(&[
+        "disk space",
+        "disk is full",
+        "disk full",
+        "out of space",
+        "storage is full",
+        "drive is full",
+    ]);
     let slow = computer && has(&["slow", "freez"]);
-    let updates = has(&["updates won't", "update won't", "can't update", "can't install updates", "updates fail", "updates keep failing"]);
+    let updates = has(&[
+        "updates won't",
+        "update won't",
+        "can't update",
+        "can't install updates",
+        "updates fail",
+        "updates keep failing",
+    ]);
     let services = trouble && has(&["printer", "bluetooth", "sound", "audio"]);
     let mut picked = Vec::new();
     let mut add = |linux: &[ProbeId], windows: &[ProbeId]| {
@@ -282,10 +421,24 @@ pub fn probes_for_intent(text: &str, os: Os) -> Option<Vec<ProbeId>> {
         add(&[ProbeId::Memory, ProbeId::DiskUsage], &[ProbeId::Volumes]);
     }
     if updates {
-        add(&[ProbeId::PackageHealth, ProbeId::PendingUpdates, ProbeId::DiskUsage], &[ProbeId::WingetUpgrades, ProbeId::WuPending, ProbeId::Volumes]);
+        add(
+            &[
+                ProbeId::PackageHealth,
+                ProbeId::PendingUpdates,
+                ProbeId::DiskUsage,
+            ],
+            &[
+                ProbeId::WingetUpgrades,
+                ProbeId::WuPending,
+                ProbeId::Volumes,
+            ],
+        );
     }
     if services {
-        add(&[ProbeId::FailedServices, ProbeId::BootErrors], &[ProbeId::ServicesStoppedAuto, ProbeId::EventErrors24h]);
+        add(
+            &[ProbeId::FailedServices, ProbeId::BootErrors],
+            &[ProbeId::ServicesStoppedAuto, ProbeId::EventErrors24h],
+        );
     }
     if picked.is_empty() {
         if !(computer && trouble) {
@@ -304,7 +457,11 @@ pub fn probes_for_intent(text: &str, os: Os) -> Option<Vec<ProbeId>> {
 
 /// The native registry's `diagnose` schema (read class).
 pub(crate) fn schema() -> Value {
-    let keys: Vec<&str> = LINUX_PROBES.iter().chain(WINDOWS_PROBES).map(|p| p.key()).collect();
+    let keys: Vec<&str> = LINUX_PROBES
+        .iter()
+        .chain(WINDOWS_PROBES)
+        .map(|p| p.key())
+        .collect();
     json!({
         "type": "function",
         "name": DIAGNOSE_TOOL,
@@ -330,12 +487,21 @@ pub(crate) fn tool_run(args: &Value) -> crate::tools::ToolOutput {
     let probes: Vec<ProbeId> = args
         .get("probes")
         .and_then(Value::as_array)
-        .map(|a| a.iter().filter_map(Value::as_str).filter_map(|k| ProbeId::parse(k, os)).collect())
+        .map(|a| {
+            a.iter()
+                .filter_map(Value::as_str)
+                .filter_map(|k| ProbeId::parse(k, os))
+                .collect()
+        })
         .unwrap_or_default();
     let config_dir = crate::perm::config_dir();
     let ledger = ConsentLedger::load(&config_dir);
     let turn = harness::read_turn_context(&config_dir);
-    let session = if turn.chat_id.is_empty() { "native".to_string() } else { turn.chat_id };
+    let session = if turn.chat_id.is_empty() {
+        "native".to_string()
+    } else {
+        turn.chat_id
+    };
     let ctx = DiagnoseCtx {
         config_dir: &config_dir,
         session_id: &session,
@@ -352,7 +518,11 @@ pub(crate) fn tool_run(args: &Value) -> crate::tools::ToolOutput {
 /// What the model reads: the plain answer, then the redacted detail lines.
 pub fn model_text(report: &DiagnoseReport) -> String {
     let mut out = report_text(report);
-    let details: Vec<&Finding> = report.findings.iter().filter(|f| !f.detail.is_empty()).collect();
+    let details: Vec<&Finding> = report
+        .findings
+        .iter()
+        .filter(|f| !f.detail.is_empty())
+        .collect();
     if !details.is_empty() {
         out.push_str("\n\nDetails (redacted):");
         for f in details {

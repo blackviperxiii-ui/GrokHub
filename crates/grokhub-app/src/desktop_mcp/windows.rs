@@ -117,7 +117,11 @@ impl DesktopBackend for WindowsBackend {
                 y: mon.y().map_err(|e| e.to_string())?,
                 width: mon.width().map_err(|e| e.to_string())?,
                 height: mon.height().map_err(|e| e.to_string())?,
-                scale_factor: if scale.is_finite() && scale > 0.0 { scale } else { 1.0 },
+                scale_factor: if scale.is_finite() && scale > 0.0 {
+                    scale
+                } else {
+                    1.0
+                },
                 primary: mon.is_primary().unwrap_or(false),
             });
         }
@@ -143,7 +147,15 @@ impl DesktopBackend for WindowsBackend {
                     image.height(),
                 );
             }
-            return shot_from("all", geom.x, geom.y, geom.physical_w, geom.physical_h, geom.scale_factor, &canvas);
+            return shot_from(
+                "all",
+                geom.x,
+                geom.y,
+                geom.physical_w,
+                geom.physical_h,
+                geom.scale_factor,
+                &canvas,
+            );
         }
         let want = mons
             .iter()
@@ -221,7 +233,11 @@ impl DesktopBackend for WindowsBackend {
             }
             for unit in utf16_units(ch) {
                 inputs.push(Self::key_input(0, unit, KEYEVENTF_UNICODE));
-                inputs.push(Self::key_input(0, unit, KEYEVENTF_UNICODE | KEYEVENTF_KEYUP));
+                inputs.push(Self::key_input(
+                    0,
+                    unit,
+                    KEYEVENTF_UNICODE | KEYEVENTF_KEYUP,
+                ));
             }
         }
         self.send(&inputs)
@@ -242,7 +258,11 @@ impl DesktopBackend for WindowsBackend {
         } else if let grokhub_core::desktop_mcp::KeyName::Char(ch) = combo.key {
             for unit in utf16_units(ch) {
                 inputs.push(Self::key_input(0, unit, KEYEVENTF_UNICODE));
-                inputs.push(Self::key_input(0, unit, KEYEVENTF_UNICODE | KEYEVENTF_KEYUP));
+                inputs.push(Self::key_input(
+                    0,
+                    unit,
+                    KEYEVENTF_UNICODE | KEYEVENTF_KEYUP,
+                ));
             }
         } else {
             return Err("That key has no Windows virtual-key code.".into());
@@ -324,4 +344,3 @@ fn blit(dst: &mut [u8], dw: u32, dh: u32, x: i32, y: i32, src: &[u8], sw: u32, s
         }
     }
 }
-

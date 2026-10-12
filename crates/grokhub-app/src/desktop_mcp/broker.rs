@@ -17,14 +17,14 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+#[cfg(not(test))]
+use grokhub_core::desktop_mcp::{
+    apply_desk_request, peer_uid_allowed, probe_desktop, stamp_halts, CallGate,
+};
 use grokhub_core::desktop_mcp::{
     decode_desk_response, desk_b64_decode, desk_lock_path, desk_socket_path, encode_desk_request,
     CapturedShot, DeskRequest, DeskResponse, DesktopBackend, KeyCombo, MonitorGeom, MouseButton,
     ShotGeom,
-};
-#[cfg(not(test))]
-use grokhub_core::desktop_mcp::{
-    apply_desk_request, peer_uid_allowed, probe_desktop, stamp_halts, CallGate,
 };
 
 use super::wayland::WaylandBackend;
@@ -75,7 +75,10 @@ static HUB: Mutex<Option<Arc<Hub>>> = Mutex::new(None);
 #[cfg(not(test))]
 pub(crate) fn note_halt() {
     if let Some(hub) = hub() {
-        hub.backend.lock().unwrap_or_else(|err| err.into_inner()).release_input();
+        hub.backend
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .release_input();
     }
 }
 
@@ -86,7 +89,10 @@ pub(crate) fn set_enabled(on: bool) {
             eprintln!("desktop-mcp: {err}");
         }
     } else if let Some(hub) = hub() {
-        hub.backend.lock().unwrap_or_else(|err| err.into_inner()).suspend_input();
+        hub.backend
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .suspend_input();
     }
 }
 
@@ -100,8 +106,9 @@ pub(crate) fn ensure_started() -> Result<(), String> {
     if hub().is_some() {
         return Ok(());
     }
-    let runtime = std::env::var("XDG_RUNTIME_DIR")
-        .map_err(|_| "XDG_RUNTIME_DIR is unset, so the desktop broker has no socket directory.".to_string())?;
+    let runtime = std::env::var("XDG_RUNTIME_DIR").map_err(|_| {
+        "XDG_RUNTIME_DIR is unset, so the desktop broker has no socket directory.".to_string()
+    })?;
     let lock_path = desk_lock_path(&runtime)?;
     let sock_path = desk_socket_path(&runtime)?;
     let lock = SessionLock::try_acquire(Path::new(&lock_path))?;
@@ -112,9 +119,12 @@ pub(crate) fn ensure_started() -> Result<(), String> {
     if sock_path.exists() {
         let _ = std::fs::remove_file(&sock_path);
     }
-    let listener = UnixListener::bind(&sock_path).map_err(|err| format!("desktop socket: {err}"))?;
+    let listener =
+        UnixListener::bind(&sock_path).map_err(|err| format!("desktop socket: {err}"))?;
     let _ = std::fs::set_permissions(&sock_path, std::fs::Permissions::from_mode(0o600));
-    listener.set_nonblocking(true).map_err(|err| format!("desktop socket: {err}"))?;
+    listener
+        .set_nonblocking(true)
+        .map_err(|err| format!("desktop socket: {err}"))?;
     let hub = Arc::new(Hub {
         backend: Mutex::new(WaylandBackend::new()),
         stop: AtomicBool::new(false),
@@ -218,7 +228,9 @@ fn read_line(reader: &mut impl BufRead) -> Result<Option<String>, String> {
     let mut buf = Vec::new();
     let mut byte = [0u8; 1];
     loop {
-        let n = reader.read(&mut byte).map_err(|err| format!("broker read: {err}"))?;
+        let n = reader
+            .read(&mut byte)
+            .map_err(|err| format!("broker read: {err}"))?;
         if n == 0 {
             if buf.is_empty() {
                 return Ok(None);
@@ -242,9 +254,15 @@ fn read_line(reader: &mut impl BufRead) -> Result<Option<String>, String> {
 #[cfg(not(test))]
 fn write_response(stream: &mut UnixStream, resp: &DeskResponse) -> Result<(), String> {
     let line = grokhub_core::desktop_mcp::encode_desk_response(resp)?;
-    stream.write_all(line.as_bytes()).map_err(|err| format!("broker write: {err}"))?;
-    stream.write_all(b"\n").map_err(|err| format!("broker write: {err}"))?;
-    stream.flush().map_err(|err| format!("broker write: {err}"))?;
+    stream
+        .write_all(line.as_bytes())
+        .map_err(|err| format!("broker write: {err}"))?;
+    stream
+        .write_all(b"\n")
+        .map_err(|err| format!("broker write: {err}"))?;
+    stream
+        .flush()
+        .map_err(|err| format!("broker write: {err}"))?;
     Ok(())
 }
 
@@ -267,8 +285,16 @@ impl BrokerClient {
         let stream = UnixStream::connect(path).map_err(|err| format!("desktop broker: {err}"))?;
         let _ = stream.set_read_timeout(Some(Duration::from_secs(120)));
         let _ = stream.set_write_timeout(Some(Duration::from_secs(30)));
-        let reader = BufReader::new(stream.try_clone().map_err(|err| format!("desktop broker: {err}"))?);
-        Ok(Self { stream, reader, next_id: 1 })
+        let reader = BufReader::new(
+            stream
+                .try_clone()
+                .map_err(|err| format!("desktop broker: {err}"))?,
+        );
+        Ok(Self {
+            stream,
+            reader,
+            next_id: 1,
+        })
     }
 
     pub(crate) fn connect_runtime() -> Result<Self, String> {
@@ -281,11 +307,19 @@ impl BrokerClient {
         let id = self.next_id;
         self.next_id = self.next_id.saturating_add(1);
         let line = encode_desk_request(&build(id))?;
-        self.stream.write_all(line.as_bytes()).map_err(|err| format!("desktop broker: {err}"))?;
-        self.stream.write_all(b"\n").map_err(|err| format!("desktop broker: {err}"))?;
-        self.stream.flush().map_err(|err| format!("desktop broker: {err}"))?;
+        self.stream
+            .write_all(line.as_bytes())
+            .map_err(|err| format!("desktop broker: {err}"))?;
+        self.stream
+            .write_all(b"\n")
+            .map_err(|err| format!("desktop broker: {err}"))?;
+        self.stream
+            .flush()
+            .map_err(|err| format!("desktop broker: {err}"))?;
         let mut buf = String::new();
-        self.reader.read_line(&mut buf).map_err(|err| format!("desktop broker: {err}"))?;
+        self.reader
+            .read_line(&mut buf)
+            .map_err(|err| format!("desktop broker: {err}"))?;
         if buf.is_empty() {
             return Err("The desktop broker closed the socket.".into());
         }
@@ -293,14 +327,19 @@ impl BrokerClient {
         if resp.ok {
             Ok(resp)
         } else {
-            Err(resp.error.unwrap_or_else(|| "The desktop broker refused the request.".into()))
+            Err(resp
+                .error
+                .unwrap_or_else(|| "The desktop broker refused the request.".into()))
         }
     }
 }
 
 impl DesktopBackend for BrokerClient {
     fn list_monitors(&mut self) -> Result<Vec<MonitorGeom>, String> {
-        Ok(self.call(|id| DeskRequest::ListMonitors { id })?.monitors.unwrap_or_default())
+        Ok(self
+            .call(|id| DeskRequest::ListMonitors { id })?
+            .monitors
+            .unwrap_or_default())
     }
 
     fn screenshot(&mut self, monitor: &str) -> Result<CapturedShot, String> {
@@ -312,7 +351,9 @@ impl DesktopBackend for BrokerClient {
         Ok(CapturedShot {
             bytes,
             mime: resp.mime.unwrap_or_else(|| "image/png".into()),
-            geom: resp.geom.ok_or_else(|| "The broker screenshot has no geometry.".to_string())?,
+            geom: resp
+                .geom
+                .ok_or_else(|| "The broker screenshot has no geometry.".to_string())?,
         })
     }
 
@@ -373,7 +414,9 @@ impl DesktopBackend for BrokerClient {
     }
 
     fn status_note(&mut self) -> Option<String> {
-        self.call(|id| DeskRequest::Status { id }).ok().and_then(|resp| resp.note)
+        self.call(|id| DeskRequest::Status { id })
+            .ok()
+            .and_then(|resp| resp.note)
     }
 }
 
@@ -516,7 +559,11 @@ mod tests {
         assert!(second.is_err(), "a second holder must be refused");
         let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o600, "lock file mode {mode:o}");
-        let dir_mode = std::fs::metadata(path.parent().unwrap()).unwrap().permissions().mode() & 0o777;
+        let dir_mode = std::fs::metadata(path.parent().unwrap())
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777;
         assert_eq!(dir_mode, 0o700, "runtime dir mode {dir_mode:o}");
         drop(first);
         assert!(path.exists(), "dropping the lock must not delete the file");

@@ -244,7 +244,9 @@ pub fn empty_chip_memory() -> ChipMemory {
 }
 
 pub fn chip_memory_key(chip: &QuickChip) -> String {
-    if chip.id.starts_with("learn-") || chip.id.starts_with("recent-") || chip.id.starts_with("pred-habit")
+    if chip.id.starts_with("learn-")
+        || chip.id.starts_with("recent-")
+        || chip.id.starts_with("pred-habit")
     {
         value_key(&chip.value, chip.kind)
     } else {
@@ -353,7 +355,10 @@ pub fn detect_chip_context(chat: &[(String, String)]) -> ChipContext {
                 "ps aux",
             ],
         ),
-        imagine: regexish(&blob, &["imagine", "generate a pic", "generate an image", "draw "]),
+        imagine: regexish(
+            &blob,
+            &["imagine", "generate a pic", "generate an image", "draw "],
+        ),
         error: regexish(
             &blob,
             &[
@@ -367,14 +372,60 @@ pub fn detect_chip_context(chat: &[(String, String)]) -> ChipContext {
                 "not working",
             ],
         ),
-        ui: regexish(&blob, &["ui", "layout", "button", "sidebar", "theme", "dark mode", "chip"]),
-        decide: regexish(&blob, &["should i", "which", "options", "tradeoff", "recommend", "compare"]),
-        implement: regexish(&users.to_ascii_lowercase(), &["implement", "add ", "build ", "create ", "wire ", "ship ", "patch"]),
-        incomplete: regexish(&asst.to_ascii_lowercase(), &["i'll", "i will", "let me", "next i", "continuing", "still need", "want me to", "shall i"])
-            || (!asst.is_empty()
-                && asst.len() < 600
-                && regexish(&asst.to_ascii_lowercase(), &["check", "probe", "investigate"])
-                && !asst.to_ascii_lowercase().contains("host_cmd")),
+        ui: regexish(
+            &blob,
+            &[
+                "ui",
+                "layout",
+                "button",
+                "sidebar",
+                "theme",
+                "dark mode",
+                "chip",
+            ],
+        ),
+        decide: regexish(
+            &blob,
+            &[
+                "should i",
+                "which",
+                "options",
+                "tradeoff",
+                "recommend",
+                "compare",
+            ],
+        ),
+        implement: regexish(
+            &users.to_ascii_lowercase(),
+            &[
+                "implement",
+                "add ",
+                "build ",
+                "create ",
+                "wire ",
+                "ship ",
+                "patch",
+            ],
+        ),
+        incomplete: regexish(
+            &asst.to_ascii_lowercase(),
+            &[
+                "i'll",
+                "i will",
+                "let me",
+                "next i",
+                "continuing",
+                "still need",
+                "want me to",
+                "shall i",
+            ],
+        ) || (!asst.is_empty()
+            && asst.len() < 600
+            && regexish(
+                &asst.to_ascii_lowercase(),
+                &["check", "probe", "investigate"],
+            )
+            && !asst.to_ascii_lowercase().contains("host_cmd")),
     }
 }
 
@@ -393,7 +444,17 @@ pub fn detect_chip_stage(chat: &[(String, String)], last_failed: bool) -> ChipSt
     let asst = last_of(chat, "assistant");
     let low = asst.to_ascii_lowercase();
     if last_failed
-        || regexish(&low, &["error", "fail", "broken", "crash", "couldn't complete", "not a function"])
+        || regexish(
+            &low,
+            &[
+                "error",
+                "fail",
+                "broken",
+                "crash",
+                "couldn't complete",
+                "not a function",
+            ],
+        )
     {
         return ChipStage::Error;
     }
@@ -466,7 +527,10 @@ pub fn should_refresh_llm(
     has_auth: bool,
     busy: bool,
 ) -> bool {
-    has_auth && !busy && next_fp != prev_fp && now_ms.saturating_sub(last_llm_at) >= CHIP_LLM_DEBOUNCE_MS
+    has_auth
+        && !busy
+        && next_fp != prev_fp
+        && now_ms.saturating_sub(last_llm_at) >= CHIP_LLM_DEBOUNCE_MS
 }
 
 /// How the cabin should sit with this person. Local only. No model call.
@@ -493,7 +557,12 @@ pub fn cabin_pace(input: &ChipInput<'_>) -> CabinPace {
     let touring = input.chat.iter().all(|(role, _)| role != "user");
     let drafting = !input.draft.trim().is_empty();
     let waved_off = guide_dismisses(input.memory) >= 1;
-    if touring && !familiar && !waved_off && !drafting && (input.first_run || input.usage_messages < 8) {
+    if touring
+        && !familiar
+        && !waved_off
+        && !drafting
+        && (input.first_run || input.usage_messages < 8)
+    {
         return CabinPace::Guide;
     }
     let advanced = input.skill_count >= 2
@@ -540,7 +609,13 @@ fn chip_family(id: &str, value: &str, label: &str) -> &'static str {
     ""
 }
 
-fn family_quiet_this_hour(memory: &ChipMemory, id: &str, value: &str, label: &str, hour: u8) -> bool {
+fn family_quiet_this_hour(
+    memory: &ChipMemory,
+    id: &str,
+    value: &str,
+    label: &str,
+    hour: u8,
+) -> bool {
     let family = chip_family(id, value, label);
     if family.is_empty() {
         return false;
@@ -594,16 +669,34 @@ fn guide_chips(connected: bool) -> Vec<QuickChip> {
 pub fn predict_intents(chat: &[(String, String)], draft: &str) -> BTreeMap<PredictedIntent, f32> {
     let mut scores = BTreeMap::new();
     for i in PredictedIntent::all() {
-        scores.insert(i, if i == PredictedIntent::Chat { 0.15 } else { 0.0 });
+        scores.insert(
+            i,
+            if i == PredictedIntent::Chat {
+                0.15
+            } else {
+                0.0
+            },
+        );
     }
     let asst = last_of(chat, "assistant");
     let user = last_of(chat, "user");
     let draft_l = draft.to_ascii_lowercase();
     let blob = format!("{user}\n{asst}\n{draft_l}").to_ascii_lowercase();
 
-    if regexish(&asst.to_ascii_lowercase(), &["let me", "i'll", "i will", "looking into", "running checks", "continuing"])
-        || (regexish(&asst.to_ascii_lowercase(), &["check", "probe", "investigate"])
-            && !asst.to_ascii_lowercase().contains("host_cmd"))
+    if regexish(
+        &asst.to_ascii_lowercase(),
+        &[
+            "let me",
+            "i'll",
+            "i will",
+            "looking into",
+            "running checks",
+            "continuing",
+        ],
+    ) || (regexish(
+        &asst.to_ascii_lowercase(),
+        &["check", "probe", "investigate"],
+    ) && !asst.to_ascii_lowercase().contains("host_cmd"))
     {
         bump(&mut scores, PredictedIntent::Finish, 0.55);
         bump(&mut scores, PredictedIntent::Host, 0.25);
@@ -611,33 +704,74 @@ pub fn predict_intents(chat: &[(String, String)], draft: &str) -> BTreeMap<Predi
     if regexish(&blob, &["error", "fail", "crash", "broken", "exception"]) {
         bump(&mut scores, PredictedIntent::Fix, 0.5);
     }
-    if asst.contains("```") || user.contains("```") || regexish(&blob, &["function", "const ", "import ", "typescript", "refactor"])
+    if asst.contains("```")
+        || user.contains("```")
+        || regexish(
+            &blob,
+            &["function", "const ", "import ", "typescript", "refactor"],
+        )
     {
         bump(&mut scores, PredictedIntent::Review, 0.4);
         bump(&mut scores, PredictedIntent::Ship, 0.2);
     }
-    if regexish(&format!("{user} {draft_l}"), &["add ", "implement", "build ", "create ", "make ", "wire ", "patch", "fix "])
-    {
+    if regexish(
+        &format!("{user} {draft_l}"),
+        &[
+            "add ",
+            "implement",
+            "build ",
+            "create ",
+            "make ",
+            "wire ",
+            "patch",
+            "fix ",
+        ],
+    ) {
         bump(&mut scores, PredictedIntent::Ship, 0.45);
     }
-    if regexish(&format!("{user} {draft_l}"), &["explain", "how does", "what is", "why ", "walk me"]) {
+    if regexish(
+        &format!("{user} {draft_l}"),
+        &["explain", "how does", "what is", "why ", "walk me"],
+    ) {
         bump(&mut scores, PredictedIntent::Explain, 0.45);
     }
-    if regexish(&blob, &["host_", "desktop host", "$ ", "journalctl", "process", "system"]) {
+    if regexish(
+        &blob,
+        &[
+            "host_",
+            "desktop host",
+            "$ ",
+            "journalctl",
+            "process",
+            "system",
+        ],
+    ) {
         bump(&mut scores, PredictedIntent::Host, 0.4);
     }
-    if regexish(&blob, &["should i", "which", "options", "recommend", "tradeoff"]) {
+    if regexish(
+        &blob,
+        &["should i", "which", "options", "recommend", "tradeoff"],
+    ) {
         bump(&mut scores, PredictedIntent::Decide, 0.4);
     }
-    if regexish(&blob, &["imagine", "image", "draw", "logo", "generate an image"]) {
+    if regexish(
+        &blob,
+        &["imagine", "image", "draw", "logo", "generate an image"],
+    ) {
         bump(&mut scores, PredictedIntent::Create, 0.5);
     }
-    if regexish(&format!("{user} {draft_l}"), &["continue", "keep going", "go on", "resume", "next"]) {
+    if regexish(
+        &format!("{user} {draft_l}"),
+        &["continue", "keep going", "go on", "resume", "next"],
+    ) {
         bump(&mut scores, PredictedIntent::Continue, 0.5);
         bump(&mut scores, PredictedIntent::Finish, 0.2);
     }
     if draft_l.len() >= 2 {
-        if draft_l.starts_with("fix") || draft_l.starts_with("bug") || draft_l.starts_with("error") || draft_l.starts_with("crash")
+        if draft_l.starts_with("fix")
+            || draft_l.starts_with("bug")
+            || draft_l.starts_with("error")
+            || draft_l.starts_with("crash")
         {
             bump(&mut scores, PredictedIntent::Fix, 0.35);
         }
@@ -647,16 +781,28 @@ pub fn predict_intents(chat: &[(String, String)], draft: &str) -> BTreeMap<Predi
         {
             bump(&mut scores, PredictedIntent::Ship, 0.35);
         }
-        if ["explain", "how", "why", "what"].iter().any(|p| draft_l.starts_with(p)) {
+        if ["explain", "how", "why", "what"]
+            .iter()
+            .any(|p| draft_l.starts_with(p))
+        {
             bump(&mut scores, PredictedIntent::Explain, 0.35);
         }
-        if ["check", "scan", "look", "ps ", "find ", "ls "].iter().any(|p| draft_l.starts_with(p)) {
+        if ["check", "scan", "look", "ps ", "find ", "ls "]
+            .iter()
+            .any(|p| draft_l.starts_with(p))
+        {
             bump(&mut scores, PredictedIntent::Host, 0.35);
         }
-        if ["continue", "keep", "finish"].iter().any(|p| draft_l.starts_with(p)) {
+        if ["continue", "keep", "finish"]
+            .iter()
+            .any(|p| draft_l.starts_with(p))
+        {
             bump(&mut scores, PredictedIntent::Finish, 0.4);
         }
-        if ["imagine", "draw", "image"].iter().any(|p| draft_l.starts_with(p)) {
+        if ["imagine", "draw", "image"]
+            .iter()
+            .any(|p| draft_l.starts_with(p))
+        {
             bump(&mut scores, PredictedIntent::Create, 0.4);
         }
         if draft_l.starts_with('$') || draft_l.starts_with("/sh") {
@@ -671,7 +817,9 @@ fn bump(scores: &mut BTreeMap<PredictedIntent, f32>, intent: PredictedIntent, by
 }
 
 pub fn top_intent_label(intents: &BTreeMap<PredictedIntent, f32>) -> Option<&'static str> {
-    let (intent, score) = intents.iter().max_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal))?;
+    let (intent, score) = intents
+        .iter()
+        .max_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal))?;
     if *score < 0.35 {
         return None;
     }
@@ -689,14 +837,7 @@ pub fn top_intent_label(intents: &BTreeMap<PredictedIntent, f32>) -> Option<&'st
     })
 }
 
-fn chip(
-    id: &str,
-    label: &str,
-    value: &str,
-    kind: ChipKind,
-    score: f32,
-    hint: &str,
-) -> QuickChip {
+fn chip(id: &str, label: &str, value: &str, kind: ChipKind, score: f32, hint: &str) -> QuickChip {
     QuickChip {
         id: id.into(),
         label: label.into(),
@@ -773,11 +914,22 @@ fn chips_from_last_assistant(chat: &[(String, String)]) -> Vec<QuickChip> {
     let has_code = asst.contains("```");
     let has_error = regexish(
         &asst.to_ascii_lowercase(),
-        &["error", "fail", "exception", "couldn't complete", "not a function"],
+        &[
+            "error",
+            "fail",
+            "exception",
+            "couldn't complete",
+            "not a function",
+        ],
     );
     let has_host = regexish(&asst, &["HOST_CMD", "HOST_RESULT", "desktop host"]);
-    let is_plan = regexish(&asst.to_ascii_lowercase(), &["i'll", "i will", "let me", "would you like me to"])
-        && regexish(&asst.to_ascii_lowercase(), &["check", "probe", "investigate", "run"]);
+    let is_plan = regexish(
+        &asst.to_ascii_lowercase(),
+        &["i'll", "i will", "let me", "would you like me to"],
+    ) && regexish(
+        &asst.to_ascii_lowercase(),
+        &["check", "probe", "investigate", "run"],
+    );
     let mut out = vec![];
     if has_error {
         out.push(chip(
@@ -813,7 +965,11 @@ fn chips_from_last_assistant(chat: &[(String, String)]) -> Vec<QuickChip> {
     if has_host || is_plan {
         out.push(chip(
             "last-run-host",
-            if is_plan { "Finish — run tools now" } else { "Run diagnostics now" },
+            if is_plan {
+                "Finish — run tools now"
+            } else {
+                "Run diagnostics now"
+            },
             finish_tools_prompt(chat),
             ChipKind::Chat,
             97.0,
@@ -947,38 +1103,109 @@ fn draft_prediction_chips(draft_raw: &str) -> Vec<QuickChip> {
         )];
     }
     let templates: &[DraftTemplate] = &[
-        ("fix", "Debug with evidence", |d| {
-            (format!("{d}. Investigate with Grok Build tools for real evidence. Root cause, fix, verify."), ChipKind::Chat)
-        }, 125.0),
-        ("debug", "Debug with evidence", |d| {
-            (format!("{d}. Investigate with Grok Build tools for real evidence. Root cause, fix, verify."), ChipKind::Chat)
-        }, 125.0),
-        ("add", "Implement this now", |d| {
-            (format!("{d}. Ship a minimal solid slice. Inspect files if needed, then apply."), ChipKind::Chat)
-        }, 124.0),
-        ("implement", "Implement this now", |d| {
-            (format!("{d}. Ship a minimal solid slice."), ChipKind::Chat)
-        }, 124.0),
-        ("build", "Implement this now", |d| {
-            (format!("{d}. Ship a minimal solid slice."), ChipKind::Chat)
-        }, 124.0),
-        ("explain", "Explain simply", |d| {
-            (format!("{d}. Plain language, one example, one practical takeaway."), ChipKind::Chat)
-        }, 120.0),
-        ("how", "Explain simply", |d| {
-            (format!("{d}. Plain language, one example, one practical takeaway."), ChipKind::Chat)
-        }, 120.0),
-        ("check", "Check it", |d| {
-            (format!("{d}. Inspect the tree and summarize results clearly."), ChipKind::Chat)
-        }, 123.0),
-        ("continue", "Continue until done", |d| {
-            (format!("{d}. Complete the goal fully. Act now — no planning-only replies."), ChipKind::Chat)
-        }, 126.0),
-        ("finish", "Continue until done", |d| {
-            (format!("{d}. Complete the goal fully."), ChipKind::Chat)
-        }, 126.0),
-        ("imagine", "Open Imagine for this", |_| ("__nav:imagine".into(), ChipKind::Nav), 115.0),
-        ("draw", "Open Imagine for this", |_| ("__nav:imagine".into(), ChipKind::Nav), 115.0),
+        (
+            "fix",
+            "Debug with evidence",
+            |d| {
+                (format!("{d}. Investigate with Grok Build tools for real evidence. Root cause, fix, verify."), ChipKind::Chat)
+            },
+            125.0,
+        ),
+        (
+            "debug",
+            "Debug with evidence",
+            |d| {
+                (format!("{d}. Investigate with Grok Build tools for real evidence. Root cause, fix, verify."), ChipKind::Chat)
+            },
+            125.0,
+        ),
+        (
+            "add",
+            "Implement this now",
+            |d| {
+                (
+                    format!(
+                        "{d}. Ship a minimal solid slice. Inspect files if needed, then apply."
+                    ),
+                    ChipKind::Chat,
+                )
+            },
+            124.0,
+        ),
+        (
+            "implement",
+            "Implement this now",
+            |d| (format!("{d}. Ship a minimal solid slice."), ChipKind::Chat),
+            124.0,
+        ),
+        (
+            "build",
+            "Implement this now",
+            |d| (format!("{d}. Ship a minimal solid slice."), ChipKind::Chat),
+            124.0,
+        ),
+        (
+            "explain",
+            "Explain simply",
+            |d| {
+                (
+                    format!("{d}. Plain language, one example, one practical takeaway."),
+                    ChipKind::Chat,
+                )
+            },
+            120.0,
+        ),
+        (
+            "how",
+            "Explain simply",
+            |d| {
+                (
+                    format!("{d}. Plain language, one example, one practical takeaway."),
+                    ChipKind::Chat,
+                )
+            },
+            120.0,
+        ),
+        (
+            "check",
+            "Check it",
+            |d| {
+                (
+                    format!("{d}. Inspect the tree and summarize results clearly."),
+                    ChipKind::Chat,
+                )
+            },
+            123.0,
+        ),
+        (
+            "continue",
+            "Continue until done",
+            |d| {
+                (
+                    format!("{d}. Complete the goal fully. Act now — no planning-only replies."),
+                    ChipKind::Chat,
+                )
+            },
+            126.0,
+        ),
+        (
+            "finish",
+            "Continue until done",
+            |d| (format!("{d}. Complete the goal fully."), ChipKind::Chat),
+            126.0,
+        ),
+        (
+            "imagine",
+            "Open Imagine for this",
+            |_| ("__nav:imagine".into(), ChipKind::Nav),
+            115.0,
+        ),
+        (
+            "draw",
+            "Open Imagine for this",
+            |_| ("__nav:imagine".into(), ChipKind::Nav),
+            115.0,
+        ),
     ];
     for (prefix, label, build, score) in templates {
         if lower.starts_with(prefix) {
@@ -994,13 +1221,41 @@ fn draft_prediction_chips(draft_raw: &str) -> Vec<QuickChip> {
         }
     }
     let completions: &[(&str, &str, &str)] = &[
-        ("fix the", "Fix the bug we hit", "Diagnose and fix the latest bug. Root cause, exact fix, verify steps."),
-        ("fix o", "Fix OAuth / session", "Fix Grok OAuth or session issues. Check tokens, refresh, and reconnect path."),
-        ("add ", "Add a feature", "Implement the feature I'm describing as a minimal solid slice."),
-        ("check c", "Check CPU / processes", "Read top CPU and memory processes and summarize what's hot."),
-        ("how d", "How does this work?", "Explain how this works simply with one example."),
-        ("contin", "Continue the task", "Continue until the current goal is fully done. Use tools when needed."),
-        ("summar", "Summarize the thread", "Summarize this thread: goals, decisions, open questions, next steps."),
+        (
+            "fix the",
+            "Fix the bug we hit",
+            "Diagnose and fix the latest bug. Root cause, exact fix, verify steps.",
+        ),
+        (
+            "fix o",
+            "Fix OAuth / session",
+            "Fix Grok OAuth or session issues. Check tokens, refresh, and reconnect path.",
+        ),
+        (
+            "add ",
+            "Add a feature",
+            "Implement the feature I'm describing as a minimal solid slice.",
+        ),
+        (
+            "check c",
+            "Check CPU / processes",
+            "Read top CPU and memory processes and summarize what's hot.",
+        ),
+        (
+            "how d",
+            "How does this work?",
+            "Explain how this works simply with one example.",
+        ),
+        (
+            "contin",
+            "Continue the task",
+            "Continue until the current goal is fully done. Use tools when needed.",
+        ),
+        (
+            "summar",
+            "Summarize the thread",
+            "Summarize this thread: goals, decisions, open questions, next steps.",
+        ),
     ];
     let mut out = vec![];
     if draft.len() >= 3 && draft.len() <= 40 {
@@ -1219,14 +1474,30 @@ pub fn remember_typed_prompt(memory: &mut ChipMemory, text: &str, now_ms: u64, h
     let key = value_key(raw, kind);
     let label = chip_label(raw);
     let from = memory.last_chip_key.clone();
-    upsert_hit(memory, key.clone(), &label, raw, kind, 1, 1, 0, None, now_ms, hour);
+    upsert_hit(
+        memory,
+        key.clone(),
+        &label,
+        raw,
+        kind,
+        1,
+        1,
+        0,
+        None,
+        now_ms,
+        hour,
+    );
     record_transition(memory, from, key);
     boost_matching(memory, raw, now_ms);
 }
 
 fn boost_matching(memory: &mut ChipMemory, text: &str, now_ms: u64) {
     let lower = text.to_ascii_lowercase();
-    let tokens: Vec<_> = lower.split_whitespace().filter(|t| t.len() > 3).take(8).collect();
+    let tokens: Vec<_> = lower
+        .split_whitespace()
+        .filter(|t| t.len() > 3)
+        .take(8)
+        .collect();
     if tokens.is_empty() {
         return;
     }
@@ -1388,7 +1659,9 @@ fn apply_home_signal_boost(chips: &mut [QuickChip], input: &ChipInput<'_>) {
         let label = c.label.to_ascii_lowercase();
         let val = c.value.to_ascii_lowercase();
         if surface == "imagine"
-            && (val.contains("__nav:imagine") || label.contains("imagine") || id.contains("imagine"))
+            && (val.contains("__nav:imagine")
+                || label.contains("imagine")
+                || id.contains("imagine"))
         {
             c.score += 22.0;
             if c.hint.is_empty() || c.hint == "Create images" || c.hint == "Images" {
@@ -1493,7 +1766,11 @@ pub fn local_lessons(memory: &ChipMemory) -> Vec<LocalLesson> {
             if used_later {
                 continue;
             }
-            let name = if family == "guide" { "the tour" } else { family };
+            let name = if family == "guide" {
+                "the tour"
+            } else {
+                family
+            };
             out.push(LocalLesson {
                 key: format!("skip:{hour}:{family}"),
                 text: format!("Around {hour}:00 they skip {name}."),
@@ -1538,16 +1815,12 @@ fn memory_boost_for_chip(memory: &ChipMemory, chip: &QuickChip, now_ms: u64, hou
         return 0.0;
     }
     let key = chip_memory_key(chip);
-    let hit = memory
-        .hits
-        .iter()
-        .find(|h| h.key == key)
-        .or_else(|| {
-            memory
-                .hits
-                .iter()
-                .find(|h| h.value.trim().eq_ignore_ascii_case(chip.value.trim()))
-        });
+    let hit = memory.hits.iter().find(|h| h.key == key).or_else(|| {
+        memory
+            .hits
+            .iter()
+            .find(|h| h.value.trim().eq_ignore_ascii_case(chip.value.trim()))
+    });
     let mut boost = 0.0;
     if let Some(hit) = hit {
         boost += ((1.0 + hit.uses as f32).log2() * 12.0).min(48.0);
@@ -1611,7 +1884,11 @@ fn learned_chips_from_memory(memory: &ChipMemory, now_ms: u64) -> Vec<QuickChip>
             )
         })
         .collect();
-    out.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    out.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     out.truncate(8);
     out
 }
@@ -1640,15 +1917,34 @@ fn apply_intent_boost(chips: &mut [QuickChip], intents: &BTreeMap<PredictedInten
                 continue;
             }
             let hit = match intent {
-                PredictedIntent::Finish => regexish(&hay, &["finish", "complete", "continue", "host_cmd", "act now"]),
-                PredictedIntent::Fix => regexish(&hay, &["fix", "diagnos", "error", "root cause", "bug"]),
-                PredictedIntent::Ship => regexish(&hay, &["implement", "ship", "apply", "patch", "add ", "build"]),
-                PredictedIntent::Explain => regexish(&hay, &["explain", "simple", "plain", "takeaway"]),
-                PredictedIntent::Host => regexish(&hay, &["host", "system", "process", "shell", "machine", "scan"]),
-                PredictedIntent::Decide => regexish(&hay, &["recommend", "option", "pick", "best", "decide"]),
+                PredictedIntent::Finish => regexish(
+                    &hay,
+                    &["finish", "complete", "continue", "host_cmd", "act now"],
+                ),
+                PredictedIntent::Fix => {
+                    regexish(&hay, &["fix", "diagnos", "error", "root cause", "bug"])
+                }
+                PredictedIntent::Ship => regexish(
+                    &hay,
+                    &["implement", "ship", "apply", "patch", "add ", "build"],
+                ),
+                PredictedIntent::Explain => {
+                    regexish(&hay, &["explain", "simple", "plain", "takeaway"])
+                }
+                PredictedIntent::Host => regexish(
+                    &hay,
+                    &["host", "system", "process", "shell", "machine", "scan"],
+                ),
+                PredictedIntent::Decide => {
+                    regexish(&hay, &["recommend", "option", "pick", "best", "decide"])
+                }
                 PredictedIntent::Create => regexish(&hay, &["imagine", "image", "draw", "logo"]),
-                PredictedIntent::Continue => regexish(&hay, &["continue", "keep", "resume", "next step"]),
-                PredictedIntent::Review => regexish(&hay, &["review", "bugs", "improve", "refactor", "test"]),
+                PredictedIntent::Continue => {
+                    regexish(&hay, &["continue", "keep", "resume", "next step"])
+                }
+                PredictedIntent::Review => {
+                    regexish(&hay, &["review", "bugs", "improve", "refactor", "test"])
+                }
                 PredictedIntent::Chat => regexish(&hay, &["help", "what can"]),
             };
             if hit {
@@ -1660,14 +1956,26 @@ fn apply_intent_boost(chips: &mut [QuickChip], intents: &BTreeMap<PredictedInten
             c.score += boost;
             if let Some(m) = matched {
                 if intents.get(&m).copied().unwrap_or(0.0) >= 0.35 {
-                    c.hint = format!("Predicted · {}{}", m.as_str(), if c.hint.is_empty() { String::new() } else { format!(" · {}", c.hint) });
+                    c.hint = format!(
+                        "Predicted · {}{}",
+                        m.as_str(),
+                        if c.hint.is_empty() {
+                            String::new()
+                        } else {
+                            format!(" · {}", c.hint)
+                        }
+                    );
                 }
             }
         }
     }
 }
 
-fn apply_draft_boost(chips: &mut [QuickChip], draft_raw: &str, intents: &BTreeMap<PredictedIntent, f32>) {
+fn apply_draft_boost(
+    chips: &mut [QuickChip],
+    draft_raw: &str,
+    intents: &BTreeMap<PredictedIntent, f32>,
+) {
     let draft = draft_raw.trim().to_ascii_lowercase();
     if draft.is_empty() {
         return;
@@ -1693,10 +2001,14 @@ fn apply_draft_boost(chips: &mut [QuickChip], draft_raw: &str, intents: &BTreeMa
         if draft.starts_with('$') && c.kind == ChipKind::Shell {
             boost += 50.0;
         }
-        if regexish(&draft, &["imagine", "draw", "image"]) && regexish(&hay, &["imagine", "image", "__nav:imagine"]) {
+        if regexish(&draft, &["imagine", "draw", "image"])
+            && regexish(&hay, &["imagine", "image", "__nav:imagine"])
+        {
             boost += 45.0;
         }
-        if regexish(&draft, &["bug", "error", "fix", "crash"]) && regexish(&hay, &["fix", "diagnos", "error", "bug"]) {
+        if regexish(&draft, &["bug", "error", "fix", "crash"])
+            && regexish(&hay, &["fix", "diagnos", "error", "bug"])
+        {
             boost += 32.0;
         }
         for (intent, score) in intents {
@@ -2096,17 +2408,21 @@ pub fn build_quick_chips(input: ChipInput<'_>) -> Vec<QuickChip> {
     }
     chips.extend(home_signal_chips(&input));
     chips.extend(draft_prediction_chips(input.draft));
-    chips.extend(learned_chips_from_memory(input.memory, input.now_ms).into_iter().map(|mut c| {
-        if let Some(hit) = input.memory.hits.iter().find(|h| h.value == c.value) {
-            let hour_i = (input.hour as usize).min(23);
-            if hit.hour_hits.get(hour_i).copied().unwrap_or(0) > 0 {
-                c.score += (hit.hour_hits[hour_i] as f32 * 3.0).min(15.0);
-                c.hint = "Predicted for this time of day".into();
-            }
-        }
-        c.id = format!("pred-tod-{}", c.id);
-        c
-    }));
+    chips.extend(
+        learned_chips_from_memory(input.memory, input.now_ms)
+            .into_iter()
+            .map(|mut c| {
+                if let Some(hit) = input.memory.hits.iter().find(|h| h.value == c.value) {
+                    let hour_i = (input.hour as usize).min(23);
+                    if hit.hour_hits.get(hour_i).copied().unwrap_or(0) > 0 {
+                        c.score += (hit.hour_hits[hour_i] as f32 * 3.0).min(15.0);
+                        c.hint = "Predicted for this time of day".into();
+                    }
+                }
+                c.id = format!("pred-tod-{}", c.id);
+                c
+            }),
+    );
     if let Some(last) = &input.memory.last_chip_key {
         if let Some(row) = input.memory.transitions.get(last) {
             let mut ranked: Vec<_> = row.iter().collect();
@@ -2191,7 +2507,10 @@ pub fn build_quick_chips(input: ChipInput<'_>) -> Vec<QuickChip> {
             "Conversation mentioned images",
         ));
     }
-    if !input.thread_title.trim().is_empty() && input.thread_title != "Chat" && input.thread_title != "Scratch" {
+    if !input.thread_title.trim().is_empty()
+        && input.thread_title != "Chat"
+        && input.thread_title != "Scratch"
+    {
         chips.push(chip(
             "topic-title",
             &chip_label(&format!("Continue {}", input.thread_title)),
@@ -2221,7 +2540,12 @@ pub fn build_quick_chips(input: ChipInput<'_>) -> Vec<QuickChip> {
 
     for c in &mut chips {
         c.score += memory_boost_for_chip(input.memory, c, input.now_ms, input.hour);
-        if let Some(hit) = input.memory.hits.iter().find(|h| h.key == chip_memory_key(c)) {
+        if let Some(hit) = input
+            .memory
+            .hits
+            .iter()
+            .find(|h| h.key == chip_memory_key(c))
+        {
             if hit.context_tags.iter().any(|t| {
                 t == &context_fingerprint(input.chat, "", input.last_failed, input.hour, input.mode)
             }) {
@@ -2261,7 +2585,11 @@ pub fn build_quick_chips(input: ChipInput<'_>) -> Vec<QuickChip> {
     }
 
     chips = uniq_by_value(chips);
-    chips.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    chips.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     if draft.len() >= 2 {
         let filtered: Vec<_> = chips
@@ -2271,7 +2599,9 @@ pub fn build_quick_chips(input: ChipInput<'_>) -> Vec<QuickChip> {
                 c.score >= 85.0
                     || c.id.starts_with("pred-")
                     || hay.contains(&draft)
-                    || draft.split_whitespace().any(|t| t.len() > 2 && hay.contains(t))
+                    || draft
+                        .split_whitespace()
+                        .any(|t| t.len() > 2 && hay.contains(t))
                     || matches!(c.kind, ChipKind::Nav | ChipKind::Shell)
             })
             .cloned()
@@ -2397,7 +2727,11 @@ pub fn chip_suggest_prompt(
                 None
             };
             let content = says.as_deref().unwrap_or(capped);
-            let body: String = content.replace("```", "[code]").split_whitespace().collect::<Vec<_>>().join(" ");
+            let body: String = content
+                .replace("```", "[code]")
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ");
             let body: String = body.chars().take(220).collect();
             if body.is_empty() {
                 None
@@ -2442,10 +2776,26 @@ pub fn chip_suggest_prompt(
         lines.push(format!("User is typing: {d}"));
     }
     if !habits.is_empty() {
-        lines.push(format!("User habits: {}", habits.iter().take(6).cloned().collect::<Vec<_>>().join(" · ")));
+        lines.push(format!(
+            "User habits: {}",
+            habits
+                .iter()
+                .take(6)
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(" · ")
+        ));
     }
     if !dismissed.is_empty() {
-        lines.push(format!("Dismissed (avoid): {}", dismissed.iter().take(8).cloned().collect::<Vec<_>>().join(" · ")));
+        lines.push(format!(
+            "Dismissed (avoid): {}",
+            dismissed
+                .iter()
+                .take(8)
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(" · ")
+        ));
     }
     let prev: Vec<String> = other_threads
         .iter()
@@ -2461,7 +2811,11 @@ pub fn chip_suggest_prompt(
                 "- {} · last ask: {} · last reply: {}",
                 t.title.trim(),
                 if ask.is_empty() { "(none)".into() } else { ask },
-                if reply.is_empty() { "(none)".into() } else { reply }
+                if reply.is_empty() {
+                    "(none)".into()
+                } else {
+                    reply
+                }
             ))
         })
         .collect();
@@ -2525,7 +2879,8 @@ pub fn parse_llm_chips(raw: &str) -> Vec<QuickChip> {
                 if !cabin_chip_copy_ok(&label, &value, "") {
                     continue;
                 }
-                let mut kind = ChipKind::from_str(row.get("kind").and_then(|v| v.as_str()).unwrap_or("chat"));
+                let mut kind =
+                    ChipKind::from_str(row.get("kind").and_then(|v| v.as_str()).unwrap_or("chat"));
                 if kind == ChipKind::Shell && !value.starts_with('$') && !value.starts_with("/sh") {
                     kind = ChipKind::Chat;
                 }
@@ -2537,7 +2892,10 @@ pub fn parse_llm_chips(raw: &str) -> Vec<QuickChip> {
                     .take(80)
                     .collect::<String>();
                 out.push(QuickChip {
-                    id: format!("llm-{i}-{}", label.chars().take(10).collect::<String>().replace(' ', "")),
+                    id: format!(
+                        "llm-{i}-{}",
+                        label.chars().take(10).collect::<String>().replace(' ', "")
+                    ),
                     label,
                     value,
                     kind,
@@ -2548,9 +2906,16 @@ pub fn parse_llm_chips(raw: &str) -> Vec<QuickChip> {
             }
         }
         Err(_) => {
-            for (i, line) in raw.lines().map(str::trim).filter(|l| !l.is_empty()).take(CHIP_VISIBLE_MAX).enumerate() {
+            for (i, line) in raw
+                .lines()
+                .map(str::trim)
+                .filter(|l| !l.is_empty())
+                .take(CHIP_VISIBLE_MAX)
+                .enumerate()
+            {
                 let parts: Vec<_> = line.split('|').map(str::trim).collect();
-                let label = parts[0].trim_start_matches(['-', '*', '1', '2', '3', '4', '.', ')', ' ']);
+                let label =
+                    parts[0].trim_start_matches(['-', '*', '1', '2', '3', '4', '.', ')', ' ']);
                 let value = if parts.len() > 1 { parts[1] } else { parts[0] };
                 if label.len() < 2 || value.len() < 4 || !is_plain_text(value) {
                     continue;
@@ -2676,7 +3041,9 @@ mod tests {
             labels
         );
         assert!(
-            labels.iter().all(|l| *l != "Open Imagine" && !l.to_ascii_lowercase().contains("night")),
+            labels
+                .iter()
+                .all(|l| *l != "Open Imagine" && !l.to_ascii_lowercase().contains("night")),
             "empty {:?}",
             labels
         );
@@ -2694,7 +3061,10 @@ mod tests {
         let mem = ChipMemory::default();
         let chat = [
             msg("user", "hi"),
-            msg("assistant", "Hello — what should we work on in the cabin tonight?"),
+            msg(
+                "assistant",
+                "Hello — what should we work on in the cabin tonight?",
+            ),
         ];
         let chips = build_quick_chips(input(&chat, "", &mem, &[], &[]));
         let think = chips
@@ -2711,7 +3081,10 @@ mod tests {
         let mem = ChipMemory::default();
         let chat = [
             msg("user", "hi"),
-            msg("assistant", "Hello — what should we work on in the cabin tonight?"),
+            msg(
+                "assistant",
+                "Hello — what should we work on in the cabin tonight?",
+            ),
         ];
         let mut auto = input(&chat, "", &mem, &[], &[]);
         auto.mode = "auto";
@@ -2762,7 +3135,12 @@ mod tests {
         ];
         let chips = build_quick_chips(input(&[], "", &mem, &[], &llm));
         let voices = chips.iter().filter(|c| c.label == "Voice").count();
-        assert_eq!(voices, 0, "Voice is the mic, not a chip: {:?}", labels(&chips));
+        assert_eq!(
+            voices,
+            0,
+            "Voice is the mic, not a chip: {:?}",
+            labels(&chips)
+        );
     }
 
     #[test]
@@ -2810,7 +3188,10 @@ mod tests {
                 .iter()
                 .all(|c| !c.label.eq_ignore_ascii_case("Connect Grok") && c.id != "ctx-connect"),
             "OAuth session must not keep offering Connect Grok: {:?}",
-            chips.iter().map(|c| format!("{}:{}", c.id, c.label)).collect::<Vec<_>>()
+            chips
+                .iter()
+                .map(|c| format!("{}:{}", c.id, c.label))
+                .collect::<Vec<_>>()
         );
     }
 
@@ -2818,24 +3199,38 @@ mod tests {
     fn error_stage_and_fix_intent() {
         let chat = [
             msg("user", "the build failed"),
-            msg("assistant", "TypeError: foo is not a function. The crash is in render."),
+            msg(
+                "assistant",
+                "TypeError: foo is not a function. The crash is in render.",
+            ),
         ];
         assert_eq!(detect_chip_stage(&chat, false), ChipStage::Error);
         let intents = predict_intents(&chat, "");
         assert!(intents[&PredictedIntent::Fix] >= 0.5);
         let mem = ChipMemory::default();
         let chips = build_quick_chips(input(&chat, "", &mem, &[], &[]));
-        assert!(chips.iter().any(|c| c.id.contains("diagnose") || c.label.contains("fix") || c.label.contains("Root")));
+        assert!(chips.iter().any(|c| c.id.contains("diagnose")
+            || c.label.contains("fix")
+            || c.label.contains("Root")));
     }
 
     #[test]
     fn timeline_failed_tool_does_not_flip_chips_to_error() {
         use crate::turn_timeline::{append_say, append_tool, encode_turn};
         let mut blocks = Vec::new();
-        append_tool(&mut blocks, "t1", "run_terminal_command", "failed", "exit 1");
+        append_tool(
+            &mut blocks,
+            "t1",
+            "run_terminal_command",
+            "failed",
+            "exit 1",
+        );
         append_say(&mut blocks, "The window is back.");
         let enc = encode_turn(&blocks);
-        assert!(enc.contains("failed"), "precondition: the tool row records the failure");
+        assert!(
+            enc.contains("failed"),
+            "precondition: the tool row records the failure"
+        );
         assert!(enc.contains("TURN_TOOL"), "precondition: timeline marker");
         let chat = vec![msg("user", "check the window"), ("assistant".into(), enc)];
         assert_ne!(detect_chip_stage(&chat, false), ChipStage::Error);
@@ -2849,34 +3244,66 @@ mod tests {
 
     #[test]
     fn draft_fix_predicts_debug_chip() {
-        let chat = [msg("user", "auth is broken"), msg("assistant", "I can look at the oauth path next.")];
+        let chat = [
+            msg("user", "auth is broken"),
+            msg("assistant", "I can look at the oauth path next."),
+        ];
         let mem = ChipMemory::default();
         let chips = build_quick_chips(input(&chat, "fix the", &mem, &[], &[]));
         assert!(
-            chips.iter().any(|c| c.id.starts_with("pred-") && (c.label.contains("Debug") || c.label.contains("Fix"))),
+            chips.iter().any(|c| c.id.starts_with("pred-")
+                && (c.label.contains("Debug") || c.label.contains("Fix"))),
             "{:?}",
-            chips.iter().map(|c| format!("{}:{}", c.id, c.label)).collect::<Vec<_>>()
+            chips
+                .iter()
+                .map(|c| format!("{}:{}", c.id, c.label))
+                .collect::<Vec<_>>()
         );
     }
 
     #[test]
     fn dismiss_and_habit_rerank() {
         let mem0 = ChipMemory::default();
-        let chat = [msg("user", "hi"), msg("assistant", "Hello — what should we work on in the cabin tonight?")];
+        let chat = [
+            msg("user", "hi"),
+            msg(
+                "assistant",
+                "Hello — what should we work on in the cabin tonight?",
+            ),
+        ];
         let base = build_quick_chips(input(&chat, "", &mem0, &[], &[]));
-        let think = base.iter().find(|c| c.label == "Think Harder").cloned().expect("think chip");
+        let think = base
+            .iter()
+            .find(|c| c.label == "Think Harder")
+            .cloned()
+            .expect("think chip");
         let mut mem = ChipMemory::default();
         remember_chip_dismiss(&mut mem, &think, 2_000, 21);
-        let after = build_quick_chips(input(&chat, "", &mem, &[think.id.clone(), think.value.clone()], &[]));
+        let after = build_quick_chips(input(
+            &chat,
+            "",
+            &mem,
+            &[think.id.clone(), think.value.clone()],
+            &[],
+        ));
         assert!(!after.iter().any(|c| c.id == think.id));
 
-        let habit = chip("empty-brief", "Cabin brief", "Give me a short cabin brief: bound project, recent chats, and the next useful step.", ChipKind::Chat, 64.0, "New chat");
+        let habit = chip(
+            "empty-brief",
+            "Cabin brief",
+            "Give me a short cabin brief: bound project, recent chats, and the next useful step.",
+            ChipKind::Chat,
+            64.0,
+            "New chat",
+        );
         remember_chip_click(&mut mem, &habit, Some("mid"), 3_000, 21);
         remember_chip_click(&mut mem, &habit, Some("mid"), 4_000, 21);
         remember_chip_click(&mut mem, &habit, Some("mid"), 5_000, 21);
         let ranked = build_quick_chips(input(&chat, "", &mem, &[], &[]));
         assert!(
-            ranked.iter().any(|c| c.label.contains("Cabin brief") || c.value.contains("cabin brief")),
+            ranked
+                .iter()
+                .any(|c| c.label.contains("Cabin brief") || c.value.contains("cabin brief")),
             "{:?}",
             ranked.iter().map(|c| c.label.clone()).collect::<Vec<_>>()
         );
@@ -2887,14 +3314,26 @@ mod tests {
         let mut mem = ChipMemory::default();
         remember_typed_prompt(&mut mem, "token sk-abcdefghijklmnopqrstuv", 1, 3);
         assert!(mem.hits.is_empty());
-        let parsed = parse_llm_chips(r#"[{"label":"Leak","value":"use token sk-abcdefghijklmnopqrstuv now","kind":"chat"}]"#);
+        let parsed = parse_llm_chips(
+            r#"[{"label":"Leak","value":"use token sk-abcdefghijklmnopqrstuv now","kind":"chat"}]"#,
+        );
         assert!(parsed.is_empty());
     }
 
     #[test]
     fn parse_llm_json_and_prompt_grounding() {
-        let chat = [msg("user", "add tests"), msg("assistant", "I will add coverage next.")];
-        let prompt = chip_suggest_prompt(&chat, "Auth", "add tes", &["Check the machine".into()], &["Open Imagine".into()], &[]);
+        let chat = [
+            msg("user", "add tests"),
+            msg("assistant", "I will add coverage next."),
+        ];
+        let prompt = chip_suggest_prompt(
+            &chat,
+            "Auth",
+            "add tes",
+            &["Check the machine".into()],
+            &["Open Imagine".into()],
+            &[],
+        );
         assert!(prompt.contains("Stage:"));
         assert!(prompt.contains("User is typing: add tes"));
         assert!(prompt.contains("User habits:"));
@@ -2936,7 +3375,10 @@ mod tests {
             40.0,
             "Suggested from this chat",
         )];
-        let chat = [msg("user", "implement oauth"), msg("assistant", "Here is a plan to wire the device code flow.")];
+        let chat = [
+            msg("user", "implement oauth"),
+            msg("assistant", "Here is a plan to wire the device code flow."),
+        ];
         let chips = build_quick_chips(input(&chat, "", &mem, &[], &llm));
         assert!(chips.iter().any(|c| c.label == "Ship the patch"));
         assert!(chips.len() <= 5);
@@ -2987,7 +3429,9 @@ mod tests {
         let chips = build_quick_chips(inp);
         assert!(chips.len() <= 2, "{:?}", labels(&chips));
         assert!(
-            chips.iter().all(|c| !c.id.starts_with("guide-") && !c.id.starts_with("empty-")),
+            chips
+                .iter()
+                .all(|c| !c.id.starts_with("guide-") && !c.id.starts_with("empty-")),
             "{:?}",
             labels(&chips)
         );
@@ -3013,7 +3457,9 @@ mod tests {
         remember_chip_outcome(&mut mem, true, 3_000);
         let lessons = local_lessons(&mem);
         assert!(
-            lessons.iter().any(|l| l.text.contains("21:00") && l.text.contains("Think Harder")),
+            lessons
+                .iter()
+                .any(|l| l.text.contains("21:00") && l.text.contains("Think Harder")),
             "{lessons:?}"
         );
         remember_chip_dismiss(&mut mem, &think, 4_000, 21);
@@ -3079,11 +3525,21 @@ mod tests {
     fn a_prompt_typed_once_or_twice_is_not_a_chip() {
         let mut mem = ChipMemory::default();
         remember_typed_prompt(&mut mem, "update grok bot, and fix the tray", 10, 8);
-        assert!(learned_chips_from_memory(&mem, 20).is_empty(), "typed once is not a habit");
+        assert!(
+            learned_chips_from_memory(&mem, 20).is_empty(),
+            "typed once is not a habit"
+        );
         remember_typed_prompt(&mut mem, "update grok bot, and fix the tray", 30, 8);
-        assert!(learned_chips_from_memory(&mem, 40).is_empty(), "typed twice is not a habit");
+        assert!(
+            learned_chips_from_memory(&mem, 40).is_empty(),
+            "typed twice is not a habit"
+        );
         remember_typed_prompt(&mut mem, "update grok bot, and fix the tray", 50, 8);
-        assert_eq!(learned_chips_from_memory(&mem, 60).len(), 1, "the third time it is");
+        assert_eq!(
+            learned_chips_from_memory(&mem, 60).len(),
+            1,
+            "the third time it is"
+        );
     }
 
     #[test]
@@ -3095,7 +3551,10 @@ mod tests {
         remember_typed_prompt(&mut mem, "/compact", 40, 8);
         assert_eq!(mem.hits.len(), 1);
         assert!(mem.hits[0].typed_uses >= 2);
-        assert_eq!(top_habit_labels(&mem, 3)[0], chip_label("morning brief for the cabin"));
+        assert_eq!(
+            top_habit_labels(&mem, 3)[0],
+            chip_label("morning brief for the cabin")
+        );
     }
 
     fn labels(chips: &[QuickChip]) -> Vec<String> {
@@ -3107,13 +3566,20 @@ mod tests {
         let mem = ChipMemory::default();
         let empty = build_quick_chips(input(&[], "", &mem, &[], &[]));
         assert!(!empty.is_empty(), "empty {:?}", labels(&empty));
-        assert!(empty.len() <= CHIP_VISIBLE_MAX, "empty {:?}", labels(&empty));
+        assert!(
+            empty.len() <= CHIP_VISIBLE_MAX,
+            "empty {:?}",
+            labels(&empty)
+        );
         assert!(empty[0].primary);
         assert_eq!(empty.iter().filter(|c| c.primary).count(), 1);
 
         let chat = [
             msg("user", "hi"),
-            msg("assistant", "Hello — what should we work on in the cabin tonight?"),
+            msg(
+                "assistant",
+                "Hello — what should we work on in the cabin tonight?",
+            ),
         ];
         let mid = build_quick_chips(input(&chat, "", &mem, &[], &[]));
         assert!(!mid.is_empty(), "mid {:?}", labels(&mid));
@@ -3151,16 +3617,28 @@ mod tests {
         remember_chip_dismiss(&mut mem, &gone, 5, 8);
         let again = build_quick_chips(input(&[], "", &mem, &[], &[]));
         assert!(
-            again.iter().all(|c| c.id != gone.id && !c.value.eq_ignore_ascii_case(&gone.value)),
+            again
+                .iter()
+                .all(|c| c.id != gone.id && !c.value.eq_ignore_ascii_case(&gone.value)),
             "dismissed chip came back: {:?} still in {:?}",
             gone.label,
             labels(&again)
         );
-        let hit = mem.hits.iter().find(|h| h.key == chip_memory_key(&gone)).unwrap();
+        let hit = mem
+            .hits
+            .iter()
+            .find(|h| h.key == chip_memory_key(&gone))
+            .unwrap();
         assert_eq!(hit.dismiss_hours.get(8).copied().unwrap_or(0), 1);
-        assert_eq!(hit.hour_hits.get(8).copied().unwrap_or(0), 0, "a dismiss is not a use");
+        assert_eq!(
+            hit.hour_hits.get(8).copied().unwrap_or(0),
+            0,
+            "a dismiss is not a use"
+        );
         let talk = idea_talk_chips("Morning reminder", "weekday", &[]);
-        assert!(talk.iter().all(|c| c.hint == "This idea" || c.hint == "This conversation"));
+        assert!(talk
+            .iter()
+            .all(|c| c.hint == "This idea" || c.hint == "This conversation"));
         assert!(talk.iter().all(|c| !c.value.contains("__nav:")));
     }
 
@@ -3207,7 +3685,9 @@ mod tests {
         ];
         let chips = build_quick_chips(input(&[], "", &mem, &[], &llm));
         assert!(
-            chips.iter().all(|c| !retired_host_copy(&c.id, &c.label, &c.value)),
+            chips
+                .iter()
+                .all(|c| !retired_host_copy(&c.id, &c.label, &c.value)),
             "desk/host chips must not sit on the composer: {:?}",
             labels(&chips)
         );
@@ -3218,7 +3698,9 @@ mod tests {
         );
         let empty = build_quick_chips(input(&[], "", &mem, &[], &[]));
         assert!(
-            empty.iter().all(|c| !retired_host_copy(&c.id, &c.label, &c.value)),
+            empty
+                .iter()
+                .all(|c| !retired_host_copy(&c.id, &c.label, &c.value)),
             "empty home must not paint leftover desk chips: {:?}",
             labels(&empty)
         );
@@ -3239,7 +3721,9 @@ mod tests {
             .and_then(|s| s.split("fn recent_user(").next())
             .expect("last_of");
         assert!(
-            last.contains("chip_scan") || last.contains("TEXT_FILE_CAP") || last.contains("CHIP_SCAN"),
+            last.contains("chip_scan")
+                || last.contains("TEXT_FILE_CAP")
+                || last.contains("CHIP_SCAN"),
             "last_of must not clone an 8MB assistant for chips: {last}"
         );
         let suggest = src
@@ -3357,9 +3841,9 @@ mod tests {
         inp.other_threads = &others;
         let chips = build_quick_chips(inp);
         assert!(
-            chips.iter().any(|c| {
-                c.label.contains("Night cabin") || c.value.contains("Night cabin")
-            }),
+            chips
+                .iter()
+                .any(|c| { c.label.contains("Night cabin") || c.value.contains("Night cabin") }),
             "expected a continue chip from the other chat, got {:?}",
             labels(&chips)
         );
@@ -3434,7 +3918,8 @@ mod tests {
             last_user: "paint the wall".into(),
             last_assistant: "First coat is ready.".into(),
         }];
-        let prompt = chip_suggest_prompt(&[], "Chat", "", &["Check the machine".into()], &[], &others);
+        let prompt =
+            chip_suggest_prompt(&[], "Chat", "", &["Check the machine".into()], &[], &others);
         assert!(prompt.contains("Night cabin"), "{prompt}");
         assert!(prompt.contains("paint the wall"), "{prompt}");
         assert!(prompt.contains("Previous"), "{prompt}");
@@ -3484,11 +3969,16 @@ mod tests {
         remember_chip_outcome(&mut mem, true, 5_000);
         let chat = [
             msg("user", "hi"),
-            msg("assistant", "Hello — what should we work on in the cabin tonight?"),
+            msg(
+                "assistant",
+                "Hello — what should we work on in the cabin tonight?",
+            ),
         ];
         let ranked = build_quick_chips(input(&chat, "", &mem, &[], &[]));
         assert!(
-            ranked.iter().any(|c| c.label.contains("Cabin brief") || c.value.contains("cabin brief")),
+            ranked
+                .iter()
+                .any(|c| c.label.contains("Cabin brief") || c.value.contains("cabin brief")),
             "{:?}",
             labels(&ranked)
         );
@@ -3505,7 +3995,10 @@ mod tests {
         assert!(prune_retired_chip_memory(&mut mem));
         let cleaned = build_quick_chips(input(&[], "", &mem, &[], &[]));
         assert!(
-            cleaned.iter().all(|c| !c.label.contains("machine") && !c.label.to_ascii_lowercase().contains("desk")),
+            cleaned
+                .iter()
+                .all(|c| !c.label.contains("machine")
+                    && !c.label.to_ascii_lowercase().contains("desk")),
             "{:?}",
             labels(&cleaned)
         );
@@ -3519,7 +4012,11 @@ mod tests {
         assert_eq!(mem.last_slash.as_deref(), Some("/plan"));
         assert_eq!(mem.last_surface.as_deref(), Some("imagine"));
         remember_home_slash(&mut mem, "/update", 12);
-        assert_eq!(mem.last_slash.as_deref(), Some("/plan"), "junk slashes stay out");
+        assert_eq!(
+            mem.last_slash.as_deref(),
+            Some("/plan"),
+            "junk slashes stay out"
+        );
 
         let mut inp = input(&[], "", &mem, &[], &[]);
         inp.last_slash = "/plan";
@@ -3527,7 +4024,9 @@ mod tests {
         let chips = build_quick_chips(inp);
         let shown = labels(&chips);
         assert!(
-            chips.iter().any(|c| c.value == "/plan" && c.label == "/plan"),
+            chips
+                .iter()
+                .any(|c| c.value == "/plan" && c.label == "/plan"),
             "last slash /plan must surface: {shown:?}"
         );
         assert!(
@@ -3536,7 +4035,10 @@ mod tests {
         );
         assert!(
             chips.iter().find(|c| c.value == "/plan").map(|c| c.score)
-                > chips.iter().find(|c| c.label == "Cabin brief").map(|c| c.score),
+                > chips
+                    .iter()
+                    .find(|c| c.label == "Cabin brief")
+                    .map(|c| c.score),
             "slash outranks generic empty-home: {shown:?}"
         );
         for c in &chips {
@@ -3556,7 +4058,9 @@ mod tests {
         returning.last_project = "Night cabin";
         let chips = build_quick_chips(returning);
         assert!(
-            chips.iter().any(|c| c.id == "home-continue" && c.label.contains("Night cabin")),
+            chips
+                .iter()
+                .any(|c| c.id == "home-continue" && c.label.contains("Night cabin")),
             "{:?}",
             labels(&chips)
         );
@@ -3568,7 +4072,9 @@ mod tests {
         let shown = labels(&chips);
         assert!(shown.iter().any(|l| *l == "Start here"), "{shown:?}");
         assert!(
-            shown.iter().all(|l| *l != "Open Imagine" && !l.to_ascii_lowercase().contains("night")),
+            shown
+                .iter()
+                .all(|l| *l != "Open Imagine" && !l.to_ascii_lowercase().contains("night")),
             "first-run teaches, it does not open the tool menu: {shown:?}"
         );
 
@@ -3586,7 +4092,9 @@ mod tests {
         plan.session_mode = "plan";
         let chips = build_quick_chips(plan);
         assert!(
-            chips.iter().any(|c| c.label == "/plan" && c.value == "/plan"),
+            chips
+                .iter()
+                .any(|c| c.label == "/plan" && c.value == "/plan"),
             "last session Plan offers /plan: {:?}",
             labels(&chips)
         );

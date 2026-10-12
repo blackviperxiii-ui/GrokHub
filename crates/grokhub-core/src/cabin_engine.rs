@@ -142,7 +142,10 @@ pub fn absorb_cabin(state: &mut LearningState) {
                     &mut next,
                     "workboard",
                     &format!("trust:{}", note.key),
-                    &format!("They finish '{}'. Mark that kind of card done when the work is done.", note.text),
+                    &format!(
+                        "They finish '{}'. Mark that kind of card done when the work is done.",
+                        note.text
+                    ),
                 );
             }
             "workboard" if note.key.starts_with("paused:") => {
@@ -285,10 +288,20 @@ mod tests {
     #[test]
     fn each_part_learns_and_the_engine_routes_it() {
         let mut s = state();
-        note_part(&mut s, "ideas", "opened:morning-reminder", "Morning reminder");
+        note_part(
+            &mut s,
+            "ideas",
+            "opened:morning-reminder",
+            "Morning reminder",
+        );
         absorb_cabin(&mut s);
         assert!(s.directives.is_empty(), "one look is not a lesson");
-        note_part(&mut s, "ideas", "opened:morning-reminder", "Morning reminder");
+        note_part(
+            &mut s,
+            "ideas",
+            "opened:morning-reminder",
+            "Morning reminder",
+        );
         absorb_cabin(&mut s);
         assert!(brief_for(&s, "ideas").contains("Rank 'Morning reminder'"));
         assert!(brief_for(&s, "automations").contains("offer to save"));

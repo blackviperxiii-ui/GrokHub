@@ -129,7 +129,14 @@ pub struct Candidate {
 
 impl Candidate {
     /// A soft candidate with the common defaults.
-    pub fn soft(source: CandidateSource, action: &str, topic: &str, value: f64, confidence: f64, why: &str) -> Self {
+    pub fn soft(
+        source: CandidateSource,
+        action: &str,
+        topic: &str,
+        value: f64,
+        confidence: f64,
+        why: &str,
+    ) -> Self {
         Self {
             action: action.to_string(),
             topic: topic.to_string(),
@@ -170,7 +177,11 @@ impl Candidate {
         Candidate {
             class: CandidateClass::Soft,
             reversible: Reversibility::ByHand,
-            prepared: Some(self.prepared.clone().unwrap_or_else(|| format!("Draft: {}", self.action))),
+            prepared: Some(
+                self.prepared
+                    .clone()
+                    .unwrap_or_else(|| format!("Draft: {}", self.action)),
+            ),
             ..self.clone()
         }
     }
@@ -222,7 +233,11 @@ pub fn route(candidate: &Candidate, unsure: bool) -> Option<ProactiveRoute> {
     if candidate.class == CandidateClass::Hard {
         return Some(ProactiveRoute::Prepare);
     }
-    Some(if unsure { ProactiveRoute::Suggest } else { ProactiveRoute::ICan })
+    Some(if unsure {
+        ProactiveRoute::Suggest
+    } else {
+        ProactiveRoute::ICan
+    })
 }
 
 /// The proactive part of a Pulse card. Serde-default on `PulseMeta`, so
@@ -252,12 +267,17 @@ pub fn proactive_card(candidate: &Candidate, route: ProactiveRoute, now_ms: u64)
     );
     let step = candidate.prepare_step();
     let title = match route {
-        ProactiveRoute::Suggest => upper_first(candidate.action.trim().trim_end_matches(['.', '?'])),
+        ProactiveRoute::Suggest => {
+            upper_first(candidate.action.trim().trim_end_matches(['.', '?']))
+        }
         ProactiveRoute::Prepare => format!("I can draft this: {}", candidate.action),
         ProactiveRoute::ICan => format!("I can {}", candidate.action),
     };
     let mut card = crate::update_feed::blank_card(
-        format!("{PROACTIVE_ID_PREFIX}{}-{now_ms}", topic_key(&candidate.topic)),
+        format!(
+            "{PROACTIVE_ID_PREFIX}{}-{now_ms}",
+            topic_key(&candidate.topic)
+        ),
         UpdateKind::Suggestion,
         title,
         step.prepared.clone(),
@@ -293,13 +313,19 @@ pub fn topic_key(text: &str) -> String {
         .chars()
         .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
         .collect();
-    s.split('-').filter(|w| !w.is_empty()).collect::<Vec<_>>().join("-")
+    s.split('-')
+        .filter(|w| !w.is_empty())
+        .collect::<Vec<_>>()
+        .join("-")
 }
 
 /// An OS notification only when you opted into reminders and it is due in
 /// under an hour (not already past).
 pub fn notify_os(candidate: &Candidate, now_ms: u64, reminders_on: bool) -> bool {
-    reminders_on && candidate.due_at.is_some_and(|due| due >= now_ms && due - now_ms < NOTIFY_DUE_MS)
+    reminders_on
+        && candidate
+            .due_at
+            .is_some_and(|due| due >= now_ms && due - now_ms < NOTIFY_DUE_MS)
 }
 
 // watch
@@ -371,7 +397,12 @@ impl ProactiveEngine {
     /// Candidates from every watched source, deduped by topic, minus any
     /// topic already on a visible card, minus anything carrying a secret.
     /// A granted source is read only when `granted` names its scope.
-    pub fn gather(&self, watch: &Watch<'_>, sources: &[&dyn GrantedSource], granted: &[&str]) -> Vec<Candidate> {
+    pub fn gather(
+        &self,
+        watch: &Watch<'_>,
+        sources: &[&dyn GrantedSource],
+        granted: &[&str],
+    ) -> Vec<Candidate> {
         let now = self.now_ms();
         let mut out = Vec::new();
         for item in watch.work {
@@ -430,7 +461,10 @@ impl ProactiveEngine {
         }
         for need in watch.needs {
             let (action, value) = if need.routine {
-                (format!("get {} ready before you start", lower_first(&need.text)), 0.6)
+                (
+                    format!("get {} ready before you start", lower_first(&need.text)),
+                    0.6,
+                )
             } else {
                 (format!("help with {}", lower_first(&need.text)), 0.5)
             };
@@ -440,7 +474,11 @@ impl ProactiveEngine {
                 &need.text,
                 value,
                 0.5,
-                if need.routine { "You do this regularly." } else { "You said you need this." },
+                if need.routine {
+                    "You do this regularly."
+                } else {
+                    "You said you need this."
+                },
             ));
         }
         for src in sources {
@@ -464,7 +502,9 @@ impl ProactiveEngine {
                 .cards
                 .iter()
                 .filter(|card| pulse_visible(card, now))
-                .any(|card| same_topic(&card.title, &c.topic) || card.title.eq_ignore_ascii_case(&c.topic))
+                .any(|card| {
+                    same_topic(&card.title, &c.topic) || card.title.eq_ignore_ascii_case(&c.topic)
+                })
         });
         rank_candidates(dedupe(out))
     }
@@ -488,7 +528,10 @@ fn carries_secret(c: &Candidate) -> bool {
 fn dedupe(cands: Vec<Candidate>) -> Vec<Candidate> {
     let mut kept: Vec<Candidate> = Vec::new();
     for c in rank_candidates(cands) {
-        if !kept.iter().any(|k| same_topic(&k.topic, &c.topic) || k.topic.eq_ignore_ascii_case(&c.topic)) {
+        if !kept
+            .iter()
+            .any(|k| same_topic(&k.topic, &c.topic) || k.topic.eq_ignore_ascii_case(&c.topic))
+        {
             kept.push(c);
         }
     }
@@ -502,7 +545,11 @@ pub fn rank_candidates(mut cands: Vec<Candidate>) -> Vec<Candidate> {
         b.prepare_step()
             .help_milli()
             .cmp(&a.prepare_step().help_milli())
-            .then(a.due_at.unwrap_or(u64::MAX).cmp(&b.due_at.unwrap_or(u64::MAX)))
+            .then(
+                a.due_at
+                    .unwrap_or(u64::MAX)
+                    .cmp(&b.due_at.unwrap_or(u64::MAX)),
+            )
             .then(a.topic.cmp(&b.topic))
             .then(a.action.cmp(&b.action))
     });
@@ -544,21 +591,32 @@ impl ProactiveBudget {
     /// Cards that may still go up now.
     pub fn room(&self, now_ms: u64) -> usize {
         let (window_cap, day_cap) = self.caps(now_ms);
-        let in_window = self.shown.iter().filter(|t| now_ms.saturating_sub(**t) < CARD_WINDOW_MS).count();
-        let in_day = self.shown.iter().filter(|t| now_ms.saturating_sub(**t) < DAY_MS).count();
-        window_cap.saturating_sub(in_window).min(day_cap.saturating_sub(in_day))
+        let in_window = self
+            .shown
+            .iter()
+            .filter(|t| now_ms.saturating_sub(**t) < CARD_WINDOW_MS)
+            .count();
+        let in_day = self
+            .shown
+            .iter()
+            .filter(|t| now_ms.saturating_sub(**t) < DAY_MS)
+            .count();
+        window_cap
+            .saturating_sub(in_window)
+            .min(day_cap.saturating_sub(in_day))
     }
 
     pub fn muted(&self, topic: &str, now_ms: u64) -> bool {
-        self.mutes
-            .iter()
-            .any(|(t, until)| now_ms < *until && (t.eq_ignore_ascii_case(topic) || same_topic(t, topic)))
+        self.mutes.iter().any(|(t, until)| {
+            now_ms < *until && (t.eq_ignore_ascii_case(topic) || same_topic(t, topic))
+        })
     }
 
     /// "Not this": the topic is muted for 7 days, and it counts as a dismissal.
     pub fn not_this(&mut self, topic: &str, now_ms: u64) {
         self.mutes.retain(|(_, until)| now_ms < *until);
-        self.mutes.push((topic.to_string(), now_ms.saturating_add(NOT_THIS_MUTE_MS)));
+        self.mutes
+            .push((topic.to_string(), now_ms.saturating_add(NOT_THIS_MUTE_MS)));
         self.dismissed(now_ms);
     }
 
@@ -566,7 +624,8 @@ impl ProactiveBudget {
     /// and it counts toward the dismissal streak. No prompt follows.
     pub fn dismiss(&mut self, topic: &str, now_ms: u64) {
         self.mutes.retain(|(_, until)| now_ms < *until);
-        self.mutes.push((topic.to_string(), now_ms.saturating_add(DAY_MS)));
+        self.mutes
+            .push((topic.to_string(), now_ms.saturating_add(DAY_MS)));
         self.dismissed(now_ms);
     }
 
@@ -588,7 +647,13 @@ impl ProactiveBudget {
     /// nothing queued. Quiet hours: none, and the best are queued for the end
     /// of the window. Otherwise the queue drains first, then the new ones, up
     /// to the room left; muted topics never surface.
-    pub fn surface(&mut self, ranked: Vec<Candidate>, now_ms: u64, quiet: bool, busy: bool) -> Vec<Candidate> {
+    pub fn surface(
+        &mut self,
+        ranked: Vec<Candidate>,
+        now_ms: u64,
+        quiet: bool,
+        busy: bool,
+    ) -> Vec<Candidate> {
         self.shown.retain(|t| now_ms.saturating_sub(*t) < DAY_MS);
         self.mutes.retain(|(_, until)| now_ms < *until);
         if busy {
@@ -596,7 +661,10 @@ impl ProactiveBudget {
         }
         let mut pool = std::mem::take(&mut self.queue);
         pool.extend(ranked);
-        let pool: Vec<Candidate> = dedupe(pool).into_iter().filter(|c| !self.muted(&c.topic, now_ms)).collect();
+        let pool: Vec<Candidate> = dedupe(pool)
+            .into_iter()
+            .filter(|c| !self.muted(&c.topic, now_ms))
+            .collect();
         if quiet {
             self.queue = pool.into_iter().take(QUIET_QUEUE_MAX).collect();
             return Vec::new();
@@ -628,14 +696,28 @@ mod tests {
     }
 
     fn cand(topic: &str, value: f64) -> Candidate {
-        let mut c = Candidate::soft(CandidateSource::UserModel, &format!("prep {topic}"), topic, value, 1.0, "test");
+        let mut c = Candidate::soft(
+            CandidateSource::UserModel,
+            &format!("prep {topic}"),
+            topic,
+            value,
+            1.0,
+            "test",
+        );
         c.reversible = Reversibility::Ledger;
         c
     }
 
     #[test]
     fn help_is_value_times_confidence_times_reversibility() {
-        let mut c = Candidate::soft(CandidateSource::Pulse, "tidy downloads", "downloads", 0.8, 0.5, "w");
+        let mut c = Candidate::soft(
+            CandidateSource::Pulse,
+            "tidy downloads",
+            "downloads",
+            0.8,
+            0.5,
+            "w",
+        );
         c.reversible = Reversibility::Ledger;
         assert_eq!(c.help_milli(), 400);
         c.reversible = Reversibility::ByHand;
@@ -653,7 +735,14 @@ mod tests {
 
     #[test]
     fn half_reversible_candidate_is_a_card_never_an_action() {
-        let c = Candidate::soft(CandidateSource::Workboard, "tidy the board", "board tidy", 0.9, 0.9, "w");
+        let c = Candidate::soft(
+            CandidateSource::Workboard,
+            "tidy the board",
+            "board tidy",
+            0.9,
+            0.9,
+            "w",
+        );
         assert_eq!(c.reversible, Reversibility::ByHand);
         assert_eq!(c.help_milli(), 405);
         // Confident and unasked-for still routes to an "I can …" card.
@@ -673,15 +762,30 @@ mod tests {
 
     #[test]
     fn reply_to_sam_is_prepared_as_a_draft_with_a_held_send_step() {
-        let mut c = Candidate::soft(CandidateSource::Mail, "reply to Sam's email", "sam reply", 0.9, 0.8, "Sam asked about Friday.");
+        let mut c = Candidate::soft(
+            CandidateSource::Mail,
+            "reply to Sam's email",
+            "sam reply",
+            0.9,
+            0.8,
+            "Sam asked about Friday.",
+        );
         c.class = CandidateClass::Hard;
         c.reversible = Reversibility::Irreversible;
         c.tool = "send_email".into();
         c.prepared = Some("Hi Sam, Friday works for me.".into());
         assert_eq!(c.help_milli(), 0);
-        assert_eq!(c.prepare_step().help_milli(), 360, "the draft is by-hand reversible");
+        assert_eq!(
+            c.prepare_step().help_milli(),
+            360,
+            "the draft is by-hand reversible"
+        );
         assert_eq!(route(&c, false), Some(ProactiveRoute::Prepare));
-        assert_eq!(route(&c, true), Some(ProactiveRoute::Prepare), "unsure changes nothing for hard");
+        assert_eq!(
+            route(&c, true),
+            Some(ProactiveRoute::Prepare),
+            "unsure changes nothing for hard"
+        );
         let card = proactive_card(&c, ProactiveRoute::Prepare, T0);
         assert_eq!(card.title, "I can draft this: reply to Sam's email");
         assert_eq!(card.body.as_deref(), Some("Hi Sam, Friday works for me."));
@@ -697,23 +801,42 @@ mod tests {
         assert_eq!(route(&c, true), Some(ProactiveRoute::Suggest));
         let card = proactive_card(&c, ProactiveRoute::Suggest, T0);
         assert_eq!(card.title, "Prep standup prep");
-        assert_eq!(card.pulse.proactive.as_ref().map(|p| p.route), Some(ProactiveRoute::Suggest));
+        assert_eq!(
+            card.pulse.proactive.as_ref().map(|p| p.route),
+            Some(ProactiveRoute::Suggest)
+        );
         // Saved ask cards from older builds read back as suggestions.
-        let old: ProactiveMeta = serde_json::from_str(r#"{"help":500,"route":"ask","topic":"t","tool":""}"#).unwrap();
+        let old: ProactiveMeta =
+            serde_json::from_str(r#"{"help":500,"route":"ask","topic":"t","tool":""}"#).unwrap();
         assert_eq!(old.route, ProactiveRoute::Suggest);
-        assert_eq!(serde_json::to_value(ProactiveRoute::Suggest).unwrap(), serde_json::json!("suggest"));
+        assert_eq!(
+            serde_json::to_value(ProactiveRoute::Suggest).unwrap(),
+            serde_json::json!("suggest")
+        );
     }
 
     #[test]
     fn suggestion_cards_name_the_item_and_hard_class_is_never_one() {
-        for action in ["tidy Downloads: move 14 installers to ~/Downloads/old", "archive 3 finished board cards", "get standup prep ready"] {
+        for action in [
+            "tidy Downloads: move 14 installers to ~/Downloads/old",
+            "archive 3 finished board cards",
+            "get standup prep ready",
+        ] {
             let mut c = Candidate::soft(CandidateSource::UserModel, action, action, 0.9, 1.0, "w");
             c.reversible = Reversibility::Ledger;
             let card = proactive_card(&c, ProactiveRoute::Suggest, T0);
-            assert_eq!(card.title.to_ascii_lowercase(), action.to_ascii_lowercase(), "{card:?}");
-            let text = format!("{} {}", card.title, card.body.as_deref().unwrap_or("")).to_ascii_lowercase();
+            assert_eq!(
+                card.title.to_ascii_lowercase(),
+                action.to_ascii_lowercase(),
+                "{card:?}"
+            );
+            let text = format!("{} {}", card.title, card.body.as_deref().unwrap_or(""))
+                .to_ascii_lowercase();
             for vague in ["this", "that", "should i"] {
-                assert!(!text.split_whitespace().any(|w| w == vague), "{vague:?} in {text:?}");
+                assert!(
+                    !text.split_whitespace().any(|w| w == vague),
+                    "{vague:?} in {text:?}"
+                );
             }
         }
         // Unsure or not, a hard candidate is a prepared draft whose last step parks.
@@ -730,8 +853,15 @@ mod tests {
         assert!(budget.muted("standup prep", T0 + DAY_MS - 1));
         assert!(!budget.muted("standup prep", T0 + DAY_MS));
         assert_eq!(budget.dismiss_streak, 1);
-        assert!(budget.surface(vec![cand("standup prep", 0.9)], T0 + 60_000, false, false).is_empty());
-        assert_eq!(budget.surface(vec![cand("standup prep", 0.9)], T0 + DAY_MS, false, false).len(), 1);
+        assert!(budget
+            .surface(vec![cand("standup prep", 0.9)], T0 + 60_000, false, false)
+            .is_empty());
+        assert_eq!(
+            budget
+                .surface(vec![cand("standup prep", 0.9)], T0 + DAY_MS, false, false)
+                .len(),
+            1
+        );
     }
 
     #[test]
@@ -747,14 +877,18 @@ mod tests {
         let mut shown = 0;
         for i in 0..20u64 {
             let batch = vec![cand(&format!("topic{i} alpha{i}"), 0.9)];
-            shown += budget.surface(batch, T0 + i * 3 * 60_000, false, false).len();
+            shown += budget
+                .surface(batch, T0 + i * 3 * 60_000, false, false)
+                .len();
         }
         assert_eq!(shown, 3);
         // The next 4-hour window gives three more, and the day stops at 8.
         let mut day = 3;
         for w in 1..6u64 {
             let at = T0 + w * CARD_WINDOW_MS + HOUR_MS;
-            let batch: Vec<Candidate> = (0..5).map(|i| cand(&format!("w{w}x{i} beta{w}{i}"), 0.9)).collect();
+            let batch: Vec<Candidate> = (0..5)
+                .map(|i| cand(&format!("w{w}x{i} beta{w}{i}"), 0.9))
+                .collect();
             day += budget.surface(batch, at, false, false).len();
         }
         assert_eq!(day, CARDS_PER_DAY);
@@ -763,20 +897,27 @@ mod tests {
     #[test]
     fn quiet_hours_surface_nothing_and_the_queue_drains_after() {
         let mut budget = ProactiveBudget::default();
-        let batch: Vec<Candidate> = (0..5).map(|i| cand(&format!("night{i} gamma{i}"), 0.5 + i as f64 / 10.0)).collect();
+        let batch: Vec<Candidate> = (0..5)
+            .map(|i| cand(&format!("night{i} gamma{i}"), 0.5 + i as f64 / 10.0))
+            .collect();
         assert!(budget.surface(batch, T0, true, false).is_empty());
         assert_eq!(budget.queue.len(), 5);
         assert!(budget.shown.is_empty());
         let out = budget.surface(Vec::new(), T0 + 8 * HOUR_MS, false, false);
         let topics: Vec<&str> = out.iter().map(|c| c.topic.as_str()).collect();
-        assert_eq!(topics, vec!["night4 gamma4", "night3 gamma3", "night2 gamma2"]);
+        assert_eq!(
+            topics,
+            vec!["night4 gamma4", "night3 gamma3", "night2 gamma2"]
+        );
         assert!(budget.queue.is_empty());
     }
 
     #[test]
     fn busy_surfaces_nothing_and_queues_nothing() {
         let mut budget = ProactiveBudget::default();
-        assert!(budget.surface(vec![cand("busy topic", 0.9)], T0, false, true).is_empty());
+        assert!(budget
+            .surface(vec![cand("busy topic", 0.9)], T0, false, true)
+            .is_empty());
         assert!(budget.queue.is_empty());
         assert_eq!(budget.room(T0), 3);
     }
@@ -786,8 +927,12 @@ mod tests {
         let mut budget = ProactiveBudget::default();
         budget.not_this("standup prep", T0);
         let again = || vec![cand("standup prep", 0.9)];
-        assert!(budget.surface(again(), T0 + HOUR_MS, false, false).is_empty());
-        assert!(budget.surface(again(), T0 + NOT_THIS_MUTE_MS - 1, false, false).is_empty());
+        assert!(budget
+            .surface(again(), T0 + HOUR_MS, false, false)
+            .is_empty());
+        assert!(budget
+            .surface(again(), T0 + NOT_THIS_MUTE_MS - 1, false, false)
+            .is_empty());
         let back = budget.surface(again(), T0 + NOT_THIS_MUTE_MS, false, false);
         assert_eq!(back.len(), 1);
         assert_eq!(back[0].topic, "standup prep");
@@ -800,10 +945,16 @@ mod tests {
         assert_eq!(budget.caps(T0), (3, 8), "one dismissal changes nothing");
         budget.engaged();
         budget.dismissed(T0);
-        assert_eq!(budget.caps(T0), (3, 8), "a use in between resets the streak");
+        assert_eq!(
+            budget.caps(T0),
+            (3, 8),
+            "a use in between resets the streak"
+        );
         budget.dismissed(T0 + 1);
         assert_eq!(budget.caps(T0 + 1), (1, 4));
-        let batch: Vec<Candidate> = (0..5).map(|i| cand(&format!("half{i} delta{i}"), 0.9)).collect();
+        let batch: Vec<Candidate> = (0..5)
+            .map(|i| cand(&format!("half{i} delta{i}"), 0.9))
+            .collect();
         assert_eq!(budget.surface(batch, T0 + 2, false, false).len(), 1);
         assert_eq!(budget.caps(T0 + 1 + HALVED_MS), (3, 8));
     }
@@ -818,7 +969,11 @@ mod tests {
         let again = rank_candidates(vec![a.clone(), b.clone(), c.clone()]);
         assert_eq!(ranked, again);
         let topics: Vec<&str> = ranked.iter().map(|c| c.topic.as_str()).collect();
-        assert_eq!(topics, vec!["c topic", "b topic", "a topic"], "help, then sooner due, then topic");
+        assert_eq!(
+            topics,
+            vec!["c topic", "b topic", "a topic"],
+            "help, then sooner due, then topic"
+        );
     }
 
     struct CountingCalendar<'a> {
@@ -831,7 +986,14 @@ mod tests {
         }
         fn read(&self) -> Vec<Candidate> {
             self.reads.set(self.reads.get() + 1);
-            vec![Candidate::soft(CandidateSource::Calendar, "prep the 10:00 standup", "standup prep", 0.8, 0.8, "On your calendar.")]
+            vec![Candidate::soft(
+                CandidateSource::Calendar,
+                "prep the 10:00 standup",
+                "standup prep",
+                0.8,
+                0.8,
+                "On your calendar.",
+            )]
         }
     }
 
@@ -855,19 +1017,50 @@ mod tests {
     #[test]
     fn gather_reads_the_board_health_spans_and_needs_and_skips_what_is_on_the_page() {
         let work = [
-            WorkItem { title: "Quarterly taxes".into(), blocked: true, ..Default::default() },
-            WorkItem { title: "Ship notes".into(), due_at: Some(T0 + HOUR_MS), ..Default::default() },
-            WorkItem { title: "Someday idea".into(), ..Default::default() },
+            WorkItem {
+                title: "Quarterly taxes".into(),
+                blocked: true,
+                ..Default::default()
+            },
+            WorkItem {
+                title: "Ship notes".into(),
+                due_at: Some(T0 + HOUR_MS),
+                ..Default::default()
+            },
+            WorkItem {
+                title: "Someday idea".into(),
+                ..Default::default()
+            },
         ];
         let health = ["Backup failed 3 times in a row".to_string()];
-        let failed = [FailedTask { title: "Sync photos".into() }];
-        let needs = [UserNeed { text: "Standup prep".into(), routine: true }];
-        let mut on_page = crate::update_feed::blank_card("x".into(), UpdateKind::Idea, "Sync photos tonight".into(), None, T0);
+        let failed = [FailedTask {
+            title: "Sync photos".into(),
+        }];
+        let needs = [UserNeed {
+            text: "Standup prep".into(),
+            routine: true,
+        }];
+        let mut on_page = crate::update_feed::blank_card(
+            "x".into(),
+            UpdateKind::Idea,
+            "Sync photos tonight".into(),
+            None,
+            T0,
+        );
         on_page.status = crate::update_feed::UpdateStatus::Unread;
         let cards = [on_page];
-        let watch = Watch { cards: &cards, work: &work, automation_health: &health, failed: &failed, needs: &needs };
+        let watch = Watch {
+            cards: &cards,
+            work: &work,
+            automation_health: &health,
+            failed: &failed,
+            needs: &needs,
+        };
         let got = engine_at(T0).gather(&watch, &[], &[]);
-        let actions: Vec<(&str, u32)> = got.iter().map(|c| (c.action.as_str(), c.help_milli())).collect();
+        let actions: Vec<(&str, u32)> = got
+            .iter()
+            .map(|c| (c.action.as_str(), c.help_milli()))
+            .collect();
         assert_eq!(
             actions,
             vec![
@@ -897,7 +1090,9 @@ mod tests {
                 )]
             }
         }
-        assert!(engine_at(T0).gather(&Watch::default(), &[&Leaky], &["mail"]).is_empty());
+        assert!(engine_at(T0)
+            .gather(&Watch::default(), &[&Leaky], &["mail"])
+            .is_empty());
     }
 
     #[test]

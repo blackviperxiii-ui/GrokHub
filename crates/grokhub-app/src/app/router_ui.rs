@@ -7,16 +7,18 @@ use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use grokhub_agent::route::guard::{run_guard, GuardRun};
+use grokhub_agent::route::heal::{heal_messages, joined_messages, HealMsg, HealNotes, Heard, Tier};
 use grokhub_agent::route::learn::{self, TuneRun};
 use grokhub_agent::route::local::LocalSource;
+use grokhub_agent::route::refresh::{
+    fold_health, probe_next, run_refresh, RefreshDone, RefreshJob,
+};
 use grokhub_agent::route::signals::{LedgerOutcomeSource, SpanVerifySource};
-use grokhub_agent::route::heal::{heal_messages, joined_messages, HealMsg, HealNotes, Heard, Tier};
-use grokhub_agent::route::refresh::{fold_health, probe_next, run_refresh, RefreshDone, RefreshJob};
 use grokhub_agent::route::sources::{probe_model, rebuild_table, XaiApiSource};
-use grokhub_core::model_registry::RegistryEvent;
 use grokhub_agent::AuthKind;
 use grokhub_core::model_registry::profile::read_profiles;
 use grokhub_core::model_registry::store::load_registry;
+use grokhub_core::model_registry::RegistryEvent;
 use grokhub_core::model_registry::{CatalogSource, Credential, RefreshClock};
 
 use super::*;
@@ -37,7 +39,12 @@ pub(super) struct HealOut {
 }
 
 /// Messages for a batch of registry events, each incident told once.
-fn heal_after(dir: &std::path::Path, events: &[RegistryEvent], joined: &[String], pin: &str) -> HealOut {
+fn heal_after(
+    dir: &std::path::Path,
+    events: &[RegistryEvent],
+    joined: &[String],
+    pin: &str,
+) -> HealOut {
     let now = grokhub_core::now_ms();
     let mut heard = Heard::default();
     if !events.is_empty() {
@@ -116,8 +123,14 @@ impl Cabin {
                         }
                     }
                     self.deliver_heal(heal);
-                    let added = grokhub_agent::route::providers::load_providers(&crate::config::config_dir());
-                    if let Some(note) = super::provider_ui::provider_refresh_note(&done.events, &done.errors, &added) {
+                    let added = grokhub_agent::route::providers::load_providers(
+                        &crate::config::config_dir(),
+                    );
+                    if let Some(note) = super::provider_ui::provider_refresh_note(
+                        &done.events,
+                        &done.errors,
+                        &added,
+                    ) {
                         self.status = note;
                     }
                 }
@@ -152,7 +165,13 @@ impl Cabin {
         }
         let now = now_ms();
         self.tick_budget(now);
-        if self.harness.router.last_guard.is_none_or(|t| t.elapsed() >= GUARD_EVERY) && self.harness.router.guard_rx.is_none() {
+        if self
+            .harness
+            .router
+            .last_guard
+            .is_none_or(|t| t.elapsed() >= GUARD_EVERY)
+            && self.harness.router.guard_rx.is_none()
+        {
             self.harness.router.last_guard = Some(Instant::now());
             let dir = crate::config::config_dir();
             let (tx, rx) = mpsc::channel();
@@ -165,20 +184,36 @@ impl Cabin {
                 let (tx, rx) = mpsc::channel();
                 self.harness.router.tune_rx = Some(rx);
                 std::thread::spawn(move || {
-                    let verify = SpanVerifySource { config_dir: dir.clone(), session: String::new() };
-                    let _ = tx.send(learn::tick(&dir, &verify, &LedgerOutcomeSource::new(&dir), now));
+                    let verify = SpanVerifySource {
+                        config_dir: dir.clone(),
+                        session: String::new(),
+                    };
+                    let _ = tx.send(learn::tick(
+                        &dir,
+                        &verify,
+                        &LedgerOutcomeSource::new(&dir),
+                        now,
+                    ));
                 });
             }
         }
         let stamp = self.router_auth_stamp();
         let idle = !self.running && !self.heartbeat_busy();
-        let clock = self.harness.router.clock.get_or_insert_with(|| RefreshClock::new(now));
+        let clock = self
+            .harness
+            .router
+            .clock
+            .get_or_insert_with(|| RefreshClock::new(now));
         if clock.due(now, idle, None, &stamp).is_some() && self.harness.router.rx.is_none() {
             clock.ran(now, None, &stamp);
             self.start_model_refresh(now);
             return;
         }
-        let fold_due = self.harness.router.last_fold.is_none_or(|t| t.elapsed() >= HEALTH_FOLD_EVERY);
+        let fold_due = self
+            .harness
+            .router
+            .last_fold
+            .is_none_or(|t| t.elapsed() >= HEALTH_FOLD_EVERY);
         if fold_due && self.harness.router.rx.is_none() && self.harness.router.fold_rx.is_none() {
             self.harness.router.last_fold = Some(Instant::now());
             let dir = crate::config::config_dir();
@@ -207,7 +242,10 @@ impl Cabin {
         let (tx, rx) = mpsc::channel();
         self.harness.router.rx = Some(rx);
         std::thread::spawn(move || {
-            let api = bearer.clone().map(|b| XaiApiSource { config_dir: dir.clone(), bearer: b });
+            let api = bearer.clone().map(|b| XaiApiSource {
+                config_dir: dir.clone(),
+                bearer: b,
+            });
             let mut sources: Vec<&dyn CatalogSource> = Vec::new();
             if let Some(a) = api.as_ref() {
                 sources.push(a);
@@ -219,11 +257,22 @@ impl Cabin {
             for p in &added {
                 sources.push(p);
             }
-            let job = RefreshJob { config_dir: dir.clone(), sources, credential, named, default_model, now_ms: now };
+            let job = RefreshJob {
+                config_dir: dir.clone(),
+                sources,
+                credential,
+                named,
+                default_model,
+                now_ms: now,
+            };
             let done = run_refresh(&job);
             let plan = bearer.as_deref().filter(|_| credential == Credential::Plan);
             if let Some(b) = plan {
-                while probe_next(&dir, credential, grokhub_core::now_ms(), &mut |m, c| probe_model(&dir, b, m, c)).is_some() {}
+                while probe_next(&dir, credential, grokhub_core::now_ms(), &mut |m, c| {
+                    probe_model(&dir, b, m, c)
+                })
+                .is_some()
+                {}
             }
             // Evals run only on a plan sign-in (included routes); a key rebuilds from metadata.
             let table = rebuild_table(&dir, plan, force, grokhub_core::now_ms());
@@ -271,22 +320,36 @@ impl Cabin {
     }
 
     /// One "Why grok-4-fast for summaries" card per promoted candidate. No actions.
-    pub(super) fn post_why_cards(&mut self, state: &grokhub_agent::route::tune::TuneState, promoted: &[String]) {
+    pub(super) fn post_why_cards(
+        &mut self,
+        state: &grokhub_agent::route::tune::TuneState,
+        promoted: &[String],
+    ) {
         for c in state.candidates.iter().filter(|c| promoted.contains(&c.id)) {
             let Some((title, body)) = grokhub_agent::route::tune::why_card_text(c) else {
                 continue;
             };
             let at = c.promoted_at.unwrap_or_else(now_ms);
-            self.post_feed_card(grokhub_core::router_update_card(&format!("router-why:{}", c.id), &title, &body, at));
+            self.post_feed_card(grokhub_core::router_update_card(
+                &format!("router-why:{}", c.id),
+                &title,
+                &body,
+                at,
+            ));
         }
     }
 
     /// The Auto chip: the current rung's label and the router's last plain reason.
     pub(super) fn auto_chip(&self) -> (String, String) {
         match grokhub_agent::route::live::last_user_pick() {
-            Some((effort, reason)) => (grokhub_agent::route::effort_word(effort.as_deref()).to_string(), reason),
+            Some((effort, reason)) => (
+                grokhub_agent::route::effort_word(effort.as_deref()).to_string(),
+                reason,
+            ),
             None => {
-                let start = grokhub_agent::route::live::start_effort(grokhub_agent::route::live::DEFAULT_CLASS);
+                let start = grokhub_agent::route::live::start_effort(
+                    grokhub_agent::route::live::DEFAULT_CLASS,
+                );
                 let word = grokhub_agent::route::effort_word(start.as_deref());
                 (word.to_string(), format!("{word}: everyday chat starts here. GrokHub picks how hard to think on each step. Click for /why."))
             }
@@ -323,7 +386,8 @@ impl Cabin {
         };
         match rx.try_recv() {
             Ok(body) => {
-                self.live_mut().push(("assistant".into(), mark_slash_result(&body)));
+                self.live_mut()
+                    .push(("assistant".into(), mark_slash_result(&body)));
                 self.stamp_current_access();
                 self.persist();
             }
@@ -368,7 +432,12 @@ impl Cabin {
                     }
                     self.harness.router.paused.push(m.key.clone());
                     self.status = m.title.clone();
-                    let card = grokhub_core::suggestion_card(&format!("router-{}", m.key), &m.title, &m.text, now);
+                    let card = grokhub_core::suggestion_card(
+                        &format!("router-{}", m.key),
+                        &m.title,
+                        &m.text,
+                        now,
+                    );
                     self.post_feed_card(card);
                 }
             }
@@ -377,6 +446,8 @@ impl Cabin {
 
     /// Settings → Refresh models: list, probes and the table now.
     pub(super) fn refresh_models_now(&mut self) {
+        // Registry rows may change; drop the cached provider model pick list.
+        self.harness.router.providers.model_choices = None;
         self.harness.router.force_table = true;
         if let Some(clock) = self.harness.router.clock.as_mut() {
             clock.demand = true;
@@ -391,7 +462,9 @@ impl Cabin {
         let pin = self.cfg.model.trim();
         super::settings::cabin_default_models()
             .into_iter()
-            .filter(|(id, _)| id.is_empty() || !grokhub_agent::route::heal::settings_hidden(&reg, id, pin))
+            .filter(|(id, _)| {
+                id.is_empty() || !grokhub_agent::route::heal::settings_hidden(&reg, id, pin)
+            })
             .map(|(id, label)| {
                 let retired = !id.is_empty() && reg.get(id).is_some_and(|r| r.state.tombstone());
                 let label = match grokhub_agent::route::heal::settings_tag(&reg, id) {
@@ -424,7 +497,8 @@ impl Cabin {
             body.push('\n');
             body.push_str(&line);
         }
-        self.live_mut().push(("assistant".into(), mark_slash_result(&body)));
+        self.live_mut()
+            .push(("assistant".into(), mark_slash_result(&body)));
         self.stamp_current_access();
         self.persist();
     }
@@ -434,7 +508,12 @@ impl Cabin {
 /// names the kind of step ("Auto now thinks harder on everyday chat").
 pub(super) fn guard_card(class: &str, text: &str, now: u64) -> grokhub_core::UpdateCard {
     let plain = grokhub_agent::route::policy::class_row(class).map_or(class, |row| row.plain);
-    grokhub_core::suggestion_card(&format!("router-guard:{class}"), &format!("Auto now thinks harder on {plain}"), text, now)
+    grokhub_core::suggestion_card(
+        &format!("router-guard:{class}"),
+        &format!("Auto now thinks harder on {plain}"),
+        text,
+        now,
+    )
 }
 
 #[cfg(test)]
@@ -443,7 +522,12 @@ mod tests {
     use grokhub_agent::route::heal::pause_msg;
 
     fn msg(tier: Tier, key: &str, text: &str) -> HealMsg {
-        HealMsg { tier, key: key.into(), title: format!("title {key}"), text: text.into() }
+        HealMsg {
+            tier,
+            key: key.into(),
+            title: format!("title {key}"),
+            text: text.into(),
+        }
     }
 
     #[test]
@@ -457,20 +541,36 @@ mod tests {
         app.deliver_heal(HealOut {
             msgs: vec![
                 msg(Tier::WorkRow, "unhealthy:grok-4.6", row),
-                msg(Tier::HomeUpdate, "retired:grok-4.3", "grok-4.3 was retired by xAI"),
+                msg(
+                    Tier::HomeUpdate,
+                    "retired:grok-4.3",
+                    "grok-4.3 was retired by xAI",
+                ),
                 pause_msg("grok-4.7", "It failed 3 times in a row.", &[]),
             ],
             cleared: Vec::new(),
         });
-        assert_eq!(app.harness.router.rows, vec![("unhealthy:grok-4.6".to_string(), row.to_string())]);
+        assert_eq!(
+            app.harness.router.rows,
+            vec![("unhealthy:grok-4.6".to_string(), row.to_string())]
+        );
         assert_eq!(app.status, "Paused: grok-4.7 isn't answering");
         let titles: Vec<&str> = app.updates.iter().map(|c| c.title.as_str()).collect();
         assert_eq!(titles.len(), 2, "{titles:?}");
-        assert!(titles.contains(&"title retired:grok-4.3") && titles.contains(&"Paused: grok-4.7 isn't answering"));
+        assert!(
+            titles.contains(&"title retired:grok-4.3")
+                && titles.contains(&"Paused: grok-4.7 isn't answering")
+        );
         // The same pause again says nothing; the model answering again clears the row and the pause.
-        app.deliver_heal(HealOut { msgs: vec![pause_msg("grok-4.7", "It failed.", &[])], cleared: Vec::new() });
+        app.deliver_heal(HealOut {
+            msgs: vec![pause_msg("grok-4.7", "It failed.", &[])],
+            cleared: Vec::new(),
+        });
         assert_eq!(app.updates.len(), 2);
-        app.deliver_heal(HealOut { msgs: Vec::new(), cleared: vec!["unhealthy:grok-4.6".into(), "noroute:grok-4.7".into()] });
+        app.deliver_heal(HealOut {
+            msgs: Vec::new(),
+            cleared: vec!["unhealthy:grok-4.6".into(), "noroute:grok-4.7".into()],
+        });
         assert!(app.harness.router.rows.is_empty());
         assert!(app.harness.router.paused.is_empty());
         let _ = std::fs::remove_dir_all(root);

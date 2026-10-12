@@ -43,7 +43,10 @@ pub(crate) struct SelfServer<'a> {
 
 impl<'a> SelfServer<'a> {
     pub(crate) fn new(config_dir: &'a Path) -> Self {
-        Self { config_dir, elicit_ok: false }
+        Self {
+            config_dir,
+            elicit_ok: false,
+        }
     }
 
     /// One request line in, at most one reply line out.
@@ -58,8 +61,15 @@ impl<'a> SelfServer<'a> {
         Some(match method {
             "initialize" => {
                 self.elicit_ok = params.pointer("/capabilities/elicitation").is_some();
-                let asked = params.get("protocolVersion").and_then(|p| p.as_str()).unwrap_or("");
-                let version = if PROTOCOLS.contains(&asked) { asked } else { PROTOCOLS[0] };
+                let asked = params
+                    .get("protocolVersion")
+                    .and_then(|p| p.as_str())
+                    .unwrap_or("");
+                let version = if PROTOCOLS.contains(&asked) {
+                    asked
+                } else {
+                    PROTOCOLS[0]
+                };
                 rpc_result(
                     &id,
                     json!({
@@ -73,7 +83,11 @@ impl<'a> SelfServer<'a> {
             "tools/list" => rpc_result(&id, json!({ "tools": sm::mcp_tools() })),
             "tools/call" => {
                 let tool = params.get("name").and_then(|n| n.as_str()).unwrap_or("");
-                let args = params.get("arguments").cloned().filter(Value::is_object).unwrap_or_else(|| json!({}));
+                let args = params
+                    .get("arguments")
+                    .cloned()
+                    .filter(Value::is_object)
+                    .unwrap_or_else(|| json!({}));
                 let (ok, text) = self.call(tool, &args, io);
                 tool_reply(&id, ok, &text)
             }
@@ -94,10 +108,19 @@ impl<'a> SelfServer<'a> {
             return (false, why);
         }
         let arguments = args.to_string();
-        let hard = match hx::decide(hx::Step::Tool { name: &mcp, arguments: &arguments }) {
+        let hard = match hx::decide(hx::Step::Tool {
+            name: &mcp,
+            arguments: &arguments,
+        }) {
             GateOutcome::Allow => None,
             GateOutcome::Refuse { reason } => {
-                self.span(hx::Span::deny("", &mcp, &span_args, &reason, class.as_str()));
+                self.span(hx::Span::deny(
+                    "",
+                    &mcp,
+                    &span_args,
+                    &reason,
+                    class.as_str(),
+                ));
                 return (false, reason);
             }
             GateOutcome::Park { reason, hard, .. } => {
@@ -115,7 +138,15 @@ impl<'a> SelfServer<'a> {
         let elicit_ok = self.elicit_ok;
         let mut ask = |message: &str| ask_token(elicit_ok, message, io);
         let out = sm::run(&ctx, &mcp, args, &mut ask);
-        let mut span = hx::Span::soft_allow("", &mcp, &span_args, &out.text, "", hx::AccessMode::Supervised, "grokhub-self");
+        let mut span = hx::Span::soft_allow(
+            "",
+            &mcp,
+            &span_args,
+            &out.text,
+            "",
+            hx::AccessMode::Supervised,
+            "grokhub-self",
+        );
         span.approval_class = class.as_str().into();
         span.hard_approved = hard.is_some();
         if out.failed {
@@ -128,7 +159,11 @@ impl<'a> SelfServer<'a> {
     fn park(&self, mcp: &str, args: &Value, class: HardClass, io: &mut dyn SelfIo) -> bool {
         static N: AtomicU64 = AtomicU64::new(0);
         let req = hx::ParkRequest {
-            id: format!("self-{}-{}", std::process::id(), N.fetch_add(1, Ordering::Relaxed)),
+            id: format!(
+                "self-{}-{}",
+                std::process::id(),
+                N.fetch_add(1, Ordering::Relaxed)
+            ),
             path: "A".into(),
             tool: mcp.into(),
             action: hx::redact_args(&park_action(mcp, args)),
@@ -141,8 +176,15 @@ impl<'a> SelfServer<'a> {
 
     fn span(&self, span: hx::Span) {
         let ctx = hx::read_turn_context(self.config_dir);
-        let session = if ctx.chat_id.is_empty() { SELF_TRACE } else { ctx.chat_id.as_str() };
-        let mut span = span.from_origin(Origin::SelfManage).on_path("A").in_turn(&ctx.chat_id, ctx.turn);
+        let session = if ctx.chat_id.is_empty() {
+            SELF_TRACE
+        } else {
+            ctx.chat_id.as_str()
+        };
+        let mut span = span
+            .from_origin(Origin::SelfManage)
+            .on_path("A")
+            .in_turn(&ctx.chat_id, ctx.turn);
         span.session_id = session.into();
         if !ctx.access.is_empty() {
             span.access = ctx.access;
@@ -201,7 +243,11 @@ fn park_action(mcp: &str, args: &Value) -> String {
         .or_else(|| args.get("id"))
         .and_then(|n| n.as_str())
         .unwrap_or("?");
-    let token = if sm::needs_token(args) { " with a token you type" } else { "" };
+    let token = if sm::needs_token(args) {
+        " with a token you type"
+    } else {
+        ""
+    };
     format!("{} {what}{token}", leaf.replace('_', " "))
 }
 
@@ -214,7 +260,10 @@ fn rpc_error(id: &Value, code: i64, msg: &str) -> String {
 }
 
 fn tool_reply(id: &Value, ok: bool, text: &str) -> String {
-    rpc_result(id, json!({ "content": [{ "type": "text", "text": text }], "isError": !ok }))
+    rpc_result(
+        id,
+        json!({ "content": [{ "type": "text", "text": text }], "isError": !ok }),
+    )
 }
 
 /// The real world: park files, stdio elicitation, the halt stamp.
@@ -232,7 +281,13 @@ impl SelfIo for LiveIo<'_> {
         }
         let started = self.started;
         let mut halted = || stamp_halted(started);
-        hx::wait_park(self.config_dir, &req.id, hx::APPROVAL_TTL, Duration::from_millis(200), &mut halted)
+        hx::wait_park(
+            self.config_dir,
+            &req.id,
+            hx::APPROVAL_TTL,
+            Duration::from_millis(200),
+            &mut halted,
+        )
     }
 
     fn elicit(&mut self, params: Value) -> Option<Value> {
@@ -242,7 +297,9 @@ impl SelfIo for LiveIo<'_> {
         loop {
             let line = crate::desktop_mcp::read_line_capped(&mut self.reader, LINE_CAP).ok()??;
             let v: Value = serde_json::from_str(line.trim()).unwrap_or(Value::Null);
-            if v.get("id").and_then(|i| i.as_str()) == Some(id.as_str()) && v.get("method").is_none() {
+            if v.get("id").and_then(|i| i.as_str()) == Some(id.as_str())
+                && v.get("method").is_none()
+            {
                 return v.get("result").cloned();
             }
             // Anything else waits its turn after this call.
@@ -256,7 +313,8 @@ impl SelfIo for LiveIo<'_> {
 }
 
 fn stamp_halted(started: u64) -> bool {
-    crate::desktop_mcp::read_halt_stamp().is_some_and(|ms| grokhub_core::desktop_mcp::stamp_halts(ms, started))
+    crate::desktop_mcp::read_halt_stamp()
+        .is_some_and(|ms| grokhub_core::desktop_mcp::stamp_halts(ms, started))
 }
 
 fn emit(line: &str) {
@@ -288,7 +346,12 @@ pub fn run_stdio() -> i32 {
         if line.trim().is_empty() {
             continue;
         }
-        let mut io = LiveIo { config_dir: &dir, started, pending: &mut pending, reader: &mut reader };
+        let mut io = LiveIo {
+            config_dir: &dir,
+            started,
+            pending: &mut pending,
+            reader: &mut reader,
+        };
         if let Some(reply) = server.handle_line(&line, &mut io) {
             emit(&reply);
         }

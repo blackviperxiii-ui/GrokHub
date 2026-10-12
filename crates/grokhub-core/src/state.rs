@@ -44,7 +44,11 @@ pub struct HubState {
     pub pair: Option<PairCode>,
     pub peers: Vec<Peer>,
     pub inbox: Vec<HubTask>,
-    #[serde(default, serialize_with = "ser_arc_value", deserialize_with = "de_arc_value")]
+    #[serde(
+        default,
+        serialize_with = "ser_arc_value",
+        deserialize_with = "de_arc_value"
+    )]
     pub snapshot: Option<Arc<Value>>,
     pub last_incoming_at: u64,
     pub inhabit: Option<InhabitBundle>,
@@ -79,7 +83,12 @@ impl HubState {
         p
     }
 
-    pub fn pair_with(&mut self, code: &str, device_id: &str, device_name: &str) -> Result<Peer, PairError> {
+    pub fn pair_with(
+        &mut self,
+        code: &str,
+        device_id: &str,
+        device_name: &str,
+    ) -> Result<Peer, PairError> {
         let want = self
             .pair
             .as_ref()
@@ -147,12 +156,18 @@ impl HubState {
     /// go too; nobody is left to read their results. Same name test the old
     /// inhabit guard used.
     pub fn drop_phone_peers(&mut self) {
-        let phones: Vec<String> = self.peers.iter().filter(|p| is_phone_name(&p.name)).map(|p| p.id.clone()).collect();
+        let phones: Vec<String> = self
+            .peers
+            .iter()
+            .filter(|p| is_phone_name(&p.name))
+            .map(|p| p.id.clone())
+            .collect();
         if phones.is_empty() {
             return;
         }
         self.peers.retain(|p| !phones.contains(&p.id));
-        self.inbox.retain(|t| t.status != "queued" || !phones.contains(&t.from_id));
+        self.inbox
+            .retain(|t| t.status != "queued" || !phones.contains(&t.from_id));
     }
 
     pub fn peer_for_token(&self, token: &str) -> Option<&Peer> {
@@ -243,7 +258,11 @@ impl HubState {
             return None;
         }
         let hit = self.inhabit.as_ref()?;
-        if hit.to_id.as_deref().is_some_and(|id| !id.is_empty() && id == peer.id) {
+        if hit
+            .to_id
+            .as_deref()
+            .is_some_and(|id| !id.is_empty() && id == peer.id)
+        {
             self.inhabit.take()
         } else {
             None
@@ -423,7 +442,8 @@ pub fn load_hub_state(path: &std::path::Path) -> Option<HubState> {
 /// A peer name that says phone, Android or iPhone as a whole word.
 pub fn is_phone_name(name: &str) -> bool {
     let n = name.to_ascii_lowercase();
-    n.split(|c: char| !c.is_ascii_alphanumeric()).any(|part| matches!(part, "phone" | "android" | "iphone"))
+    n.split(|c: char| !c.is_ascii_alphanumeric())
+        .any(|part| matches!(part, "phone" | "android" | "iphone"))
 }
 
 fn quarantine_hub_state(path: &std::path::Path) {
@@ -764,7 +784,10 @@ mod tests {
         assert_eq!(st.peers.len(), 1);
         assert_eq!(st.peers[0].name, "Jeremy's laptop");
         assert!(st.peer_for_token("tok-phone").is_none());
-        assert_eq!(st.peer_for_token("tok-laptop").map(|p| p.id.as_str()), Some("d-laptop"));
+        assert_eq!(
+            st.peer_for_token("tok-laptop").map(|p| p.id.as_str()),
+            Some("d-laptop")
+        );
         assert_eq!(st.inbox.len(), 1);
         assert_eq!(st.inbox[0].id, "task-1");
         assert_eq!(st.inbox[0].status, "done");

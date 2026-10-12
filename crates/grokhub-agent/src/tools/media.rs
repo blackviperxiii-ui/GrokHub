@@ -112,7 +112,11 @@ fn endpoint(path: &str) -> String {
 /// EgressGuard (Spike-4c) in front of each Imagine call. The prompt is chat,
 /// or personal when it carries a recall-pack line; api.x.ai is a model host,
 /// so both go with one line. Polls and result downloads carry no user data.
-fn guard(url: &str, data: &[crate::harness::DataClass], stop: &dyn Fn() -> bool) -> Result<(), String> {
+fn guard(
+    url: &str,
+    data: &[crate::harness::DataClass],
+    stop: &dyn Fn() -> bool,
+) -> Result<(), String> {
     let req = crate::harness::EgressReq::new(url, data);
     crate::harness::guard_or_park(&crate::perm::config_dir(), &req, "imagine", &mut || stop())
 }
@@ -559,13 +563,21 @@ fn run_call(
     stop: &dyn Fn() -> bool,
 ) -> Result<String, String> {
     let url = endpoint(call.path);
-    guard(&url, crate::harness::model_text_classes(&call.body.to_string()), stop)?;
+    guard(
+        &url,
+        crate::harness::model_text_classes(&call.body.to_string()),
+        stop,
+    )?;
     match api.post_json(call.path, &call.body) {
         Ok(body) => finish(call, api, body, false, stop),
         Err(err) => {
             if let Some(fallback) = call.mask_fallback.as_ref() {
                 if grokhub_core::imagine_mask_rejected(&err) && !stop() {
-                    guard(&url, crate::harness::model_text_classes(&fallback.to_string()), stop)?;
+                    guard(
+                        &url,
+                        crate::harness::model_text_classes(&fallback.to_string()),
+                        stop,
+                    )?;
                     let body = api.post_json(call.path, fallback)?;
                     return finish(call, api, body, true, stop);
                 }
@@ -1264,8 +1276,8 @@ pub(crate) mod tests {
                     reasoning: String::new(),
                     calls: Vec::new(),
                     usage: Usage::default(),
-            ..Default::default()
-        })
+                    ..Default::default()
+                })
             }
         }
         let auto = chat(true, PermMode::Auto, false);
@@ -1392,9 +1404,22 @@ pub(crate) mod tests {
         assert_eq!(names.len(), 1);
         // One line for the prompt, one per download: hosts only, no prompt, no path.
         let log = crate::harness::read_egress(&cfg_dir);
-        let rows: Vec<(&str, &str)> = log.iter().map(|l| (l.dest.as_str(), l.basis.as_str())).collect();
-        assert_eq!(rows, vec![("api.x.ai", "model_host"), ("imgen.x.ai", "public"), ("imgen.x.ai", "public")]);
-        assert!(!format!("{log:?}").contains("cabin") && !format!("{log:?}").contains(".png"), "{log:?}");
+        let rows: Vec<(&str, &str)> = log
+            .iter()
+            .map(|l| (l.dest.as_str(), l.basis.as_str()))
+            .collect();
+        assert_eq!(
+            rows,
+            vec![
+                ("api.x.ai", "model_host"),
+                ("imgen.x.ai", "public"),
+                ("imgen.x.ai", "public")
+            ]
+        );
+        assert!(
+            !format!("{log:?}").contains("cabin") && !format!("{log:?}").contains(".png"),
+            "{log:?}"
+        );
         let _ = std::fs::remove_dir_all(&cfg_dir);
         let _ = std::fs::remove_dir_all(&root);
         assert_eq!(

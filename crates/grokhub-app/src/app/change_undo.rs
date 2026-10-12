@@ -16,8 +16,10 @@
 use super::*;
 use grokhub_agent::harness::{self as hx, ChangeKind, ChangeOp, Origin};
 
-pub(super) const CONNECTION_CHANGES_HEAD: &str = "/connections changes — what GrokHub changed in your connections";
-pub(super) const AUTOMATION_CHANGES_HEAD: &str = "/automations changes — what GrokHub changed in your automations";
+pub(super) const CONNECTION_CHANGES_HEAD: &str =
+    "/connections changes — what GrokHub changed in your connections";
+pub(super) const AUTOMATION_CHANGES_HEAD: &str =
+    "/automations changes — what GrokHub changed in your automations";
 /// Ledger lines a report lists.
 const CHANGES_SHOWN: usize = 12;
 /// Undo rows under a report bubble.
@@ -57,7 +59,9 @@ fn kind_slot(kind: ChangeKind) -> usize {
 }
 
 fn ledger_len(dir: &std::path::Path, kind: ChangeKind) -> u64 {
-    std::fs::metadata(hx::ledger_path(dir, kind)).map(|m| m.len()).unwrap_or(0)
+    std::fs::metadata(hx::ledger_path(dir, kind))
+        .map(|m| m.len())
+        .unwrap_or(0)
 }
 
 impl LedgerWatch {
@@ -66,7 +70,12 @@ impl LedgerWatch {
         for kind in ChangeKind::ALL {
             let i = kind_slot(kind);
             self.lens[i] = ledger_len(dir, kind);
-            self.seen[i] = hx::ChangeLedger::load_kind(dir, kind).all().iter().map(|c| c.seq).max().unwrap_or(0);
+            self.seen[i] = hx::ChangeLedger::load_kind(dir, kind)
+                .all()
+                .iter()
+                .map(|c| c.seq)
+                .max()
+                .unwrap_or(0);
         }
     }
 
@@ -104,7 +113,13 @@ impl LedgerWatch {
                     out.push((kind, c.clone()));
                 }
             }
-            self.seen[i] = ledger.all().iter().map(|c| c.seq).max().unwrap_or(0).max(self.seen[i]);
+            self.seen[i] = ledger
+                .all()
+                .iter()
+                .map(|c| c.seq)
+                .max()
+                .unwrap_or(0)
+                .max(self.seen[i]);
         }
         out
     }
@@ -246,13 +261,19 @@ pub(super) fn work_row(kind: ChangeKind, c: &hx::Change) -> ChangeRow {
 pub(super) fn model_change_note(c: &hx::Change) -> grokhub_core::UpdateCard {
     let title = format!("Router {} {}", what(c.op), c.shown_name());
     let why = c.reason.trim();
-    let body = if why.is_empty() { "/why table shows the picks.".to_string() } else { format!("{why} · /why table shows the picks.") };
+    let body = if why.is_empty() {
+        "/why table shows the picks.".to_string()
+    } else {
+        format!("{why} · /why table shows the picks.")
+    };
     grokhub_core::router_update_card(&format!("model:{}#{}", c.id, c.seq), &title, &body, c.at)
 }
 
 /// A self-tuning promotion, which posts its own "why" card instead of a note.
 pub(super) fn is_promotion(c: &hx::Change) -> bool {
-    c.id == grokhub_agent::route::learn::TUNING_ID && c.reason.starts_with(grokhub_agent::route::learn::TUNED_PREFIX)
+    c.id == grokhub_agent::route::learn::TUNING_ID
+        && c.reason
+            .starts_with(grokhub_agent::route::learn::TUNED_PREFIX)
 }
 
 /// Work-tree rows after a restart: self-made changes from the last day that
@@ -273,19 +294,28 @@ pub(super) fn work_rows_from_disk(
             }
             seen.push(&c.id);
             if let Some(open) = ledger.open_self_change(&c.id) {
-                if kind != ChangeKind::Model && now_ms.saturating_sub(open.at) < WORK_ROW_MS && !skip(kind, open.seq) {
+                if kind != ChangeKind::Model
+                    && now_ms.saturating_sub(open.at) < WORK_ROW_MS
+                    && !skip(kind, open.seq)
+                {
                     found.push((open.at, work_row(kind, open)));
                 }
             }
         }
     }
     found.sort_by_key(|(at, _)| std::cmp::Reverse(*at));
-    found.into_iter().take(WORK_ROWS_MAX).map(|(_, r)| r).collect()
+    found
+        .into_iter()
+        .take(WORK_ROWS_MAX)
+        .map(|(_, r)| r)
+        .collect()
 }
 
 /// The newest `/connections changes` or `/automations changes` report among
 /// the painted rows, and which kind it is.
-pub(super) fn newest_change_report(views: &[grokhub_core::ChatView]) -> Option<(usize, ChangeKind)> {
+pub(super) fn newest_change_report(
+    views: &[grokhub_core::ChatView],
+) -> Option<(usize, ChangeKind)> {
     views.iter().enumerate().rev().find_map(|(i, v)| {
         if v.kind != grokhub_core::ChatKind::Result {
             return None;
@@ -330,18 +360,28 @@ impl Cabin {
         let ledger = hx::ChangeLedger::load_kind(&config::config_dir(), kind);
         let body = changes_report(&ledger, now_ms());
         self.harness.change_rows = None;
-        self.live_mut().push(("assistant".into(), mark_slash_result(&body)));
+        self.live_mut()
+            .push(("assistant".into(), mark_slash_result(&body)));
         self.stamp_current_access();
         self.persist();
     }
 
     /// Rows for the newest report bubble, read once per change.
     pub(super) fn change_rows_now(&mut self, kind: ChangeKind) -> Vec<ChangeRow> {
-        if self.harness.change_rows.as_ref().is_none_or(|(k, _)| *k != kind) {
+        if self
+            .harness
+            .change_rows
+            .as_ref()
+            .is_none_or(|(k, _)| *k != kind)
+        {
             let ledger = hx::ChangeLedger::load_kind(&config::config_dir(), kind);
             self.harness.change_rows = Some((kind, report_rows(&ledger, now_ms())));
         }
-        self.harness.change_rows.as_ref().map(|(_, r)| r.clone()).unwrap_or_default()
+        self.harness
+            .change_rows
+            .as_ref()
+            .map(|(_, r)| r.clone())
+            .unwrap_or_default()
     }
 
     /// Each frame: changes GrokHub just made on its own become a Work-tree
@@ -352,16 +392,27 @@ impl Cabin {
         if !self.harness.work_rows_loaded {
             self.harness.work_rows_loaded = true;
             let auto = self.auto_lines();
-            let trials: Vec<(String, u64)> = hx::read_versions(&dir).into_iter().map(|v| (v.kind, v.seq)).collect();
-            let skip = |kind: ChangeKind, seq| auto.contains(&(kind, seq)) || trials.iter().any(|(k, s)| k == kind.as_str() && *s == seq);
+            let trials: Vec<(String, u64)> = hx::read_versions(&dir)
+                .into_iter()
+                .map(|v| (v.kind, v.seq))
+                .collect();
+            let skip = |kind: ChangeKind, seq| {
+                auto.contains(&(kind, seq))
+                    || trials.iter().any(|(k, s)| k == kind.as_str() && *s == seq)
+            };
             self.harness.work_rows = work_rows_from_disk(&dir, now_ms(), &skip);
             self.harness.ledger_watch.baseline(&dir);
         }
         let watch = &mut self.harness.ledger_watch;
-        let mut fresh: Vec<(ChangeKind, hx::Change)> =
-            hx::take_self_changes(&dir).into_iter().filter(|(kind, c)| watch.first_post(*kind, c.seq)).collect();
+        let mut fresh: Vec<(ChangeKind, hx::Change)> = hx::take_self_changes(&dir)
+            .into_iter()
+            .filter(|(kind, c)| watch.first_post(*kind, c.seq))
+            .collect();
         let elsewhere = watch.read_new(&dir, now_ms());
-        if elsewhere.iter().any(|(kind, _)| *kind == ChangeKind::Automation) {
+        if elsewhere
+            .iter()
+            .any(|(kind, _)| *kind == ChangeKind::Automation)
+        {
             // Another process wrote the file; the cabin's list must match it,
             // or its next save drops that automation.
             self.automations = crate::night::load();
@@ -392,10 +443,18 @@ impl Cabin {
                 continue;
             }
             let row = work_row(kind, &c);
-            self.harness.work_rows.retain(|r| !(r.kind == kind && r.id == row.id));
+            self.harness
+                .work_rows
+                .retain(|r| !(r.kind == kind && r.id == row.id));
             self.harness.work_rows.insert(0, row);
             self.harness.work_rows.truncate(WORK_ROWS_MAX);
-            let card = grokhub_core::self_change_card(kind.as_str(), c.shown_name(), what(c.op), &c.reason, c.at);
+            let card = grokhub_core::self_change_card(
+                kind.as_str(),
+                c.shown_name(),
+                what(c.op),
+                &c.reason,
+                c.at,
+            );
             self.post_feed_card(card);
         }
     }
@@ -407,7 +466,9 @@ impl Cabin {
         let dir = config::config_dir();
         let ask = hx::UndoAsk::from_click();
         let done: Result<Option<Vec<u8>>, String> = match (act, row.kind) {
-            (ChangeAct::Keep, kind) => hx::accept_change(&dir, kind, &row.id, ask).map(|_| Some(Vec::new())),
+            (ChangeAct::Keep, kind) => {
+                hx::accept_change(&dir, kind, &row.id, ask).map(|_| Some(Vec::new()))
+            }
             (ChangeAct::Undo, ChangeKind::Skill) => {
                 let res = hx::undo_skill_change(&dir, &skills::skills_dir(), &row.id, ask);
                 let now = res.as_ref().map(|d| d.now.clone()).map_err(|e| e.clone());
@@ -415,34 +476,63 @@ impl Cabin {
                 now
             }
             (ChangeAct::Undo, ChangeKind::Connection) => {
-                let res = hx::undo_connection(&dir, &grokhub_agent::mcp::config_file(), &row.id, ask);
+                let res =
+                    hx::undo_connection(&dir, &grokhub_agent::mcp::config_file(), &row.id, ask);
                 grokhub_agent::mcp::invalidate();
                 res.map(|d| d.now)
             }
             (ChangeAct::Undo, ChangeKind::Automation) => {
                 let path = crate::night::path();
-                let res = hx::undo_change(&dir, &hx::AutomationsFile { path: &path, id: &row.id }, ask);
+                let res = hx::undo_change(
+                    &dir,
+                    &hx::AutomationsFile {
+                        path: &path,
+                        id: &row.id,
+                    },
+                    ask,
+                );
                 if res.is_ok() {
                     // The cabin's list must match the file, or its next save undoes the undo.
                     self.automations = crate::night::load();
                 }
                 res.map(|d| d.now)
             }
-            (ChangeAct::Undo, ChangeKind::Snippet) => {
-                hx::undo_change(&dir, &hx::SnippetTarget { config_dir: &dir, name: &row.id }, ask).map(|d| d.now)
-            }
+            (ChangeAct::Undo, ChangeKind::Snippet) => hx::undo_change(
+                &dir,
+                &hx::SnippetTarget {
+                    config_dir: &dir,
+                    name: &row.id,
+                },
+                ask,
+            )
+            .map(|d| d.now),
             (ChangeAct::Undo, ChangeKind::Model) => {
                 // The routing table: the previous version comes back byte-identical.
                 let path = grokhub_agent::route::table::table_path(&dir);
-                hx::undo_change(&dir, &grokhub_agent::route::table::TableFile { path: &path }, ask).map(|d| d.now)
+                hx::undo_change(
+                    &dir,
+                    &grokhub_agent::route::table::TableFile { path: &path },
+                    ask,
+                )
+                .map(|d| d.now)
             }
-            (ChangeAct::Undo, ChangeKind::Policy) => hx::undo_change(&dir, &hx::PolicyTarget { config_dir: &dir }, ask).map(|d| d.now),
-            (ChangeAct::Undo, ChangeKind::Playbook) => {
-                hx::undo_change(&dir, &hx::PlaybookTarget { config_dir: &dir, id: &row.id }, ask).map(|d| d.now)
+            (ChangeAct::Undo, ChangeKind::Policy) => {
+                hx::undo_change(&dir, &hx::PolicyTarget { config_dir: &dir }, ask).map(|d| d.now)
             }
+            (ChangeAct::Undo, ChangeKind::Playbook) => hx::undo_change(
+                &dir,
+                &hx::PlaybookTarget {
+                    config_dir: &dir,
+                    id: &row.id,
+                },
+                ask,
+            )
+            .map(|d| d.now),
         };
         if done.is_ok() {
-            self.harness.work_rows.retain(|r| !(r.kind == row.kind && r.id == row.id));
+            self.harness
+                .work_rows
+                .retain(|r| !(r.kind == row.kind && r.id == row.id));
         }
         self.harness.change_rows = None;
         self.harness.skill_rows = None;
@@ -458,7 +548,11 @@ impl Cabin {
         ui.add_space(8.0);
         // The router's quiet lines (a pinned model resting): tell-only, no buttons.
         for (_, text) in &self.harness.router.rows {
-            ui.label(egui::RichText::new(text).size(12.0).color(crate::theme::muted()));
+            ui.label(
+                egui::RichText::new(text)
+                    .size(12.0)
+                    .color(crate::theme::muted()),
+            );
         }
         let rows = self.harness.work_rows.clone();
         if let Some((row, act)) = paint_change_rows(ui, "work-row", &rows, false) {
@@ -499,21 +593,27 @@ pub(super) fn paint_change_rows(
     for (row, pad) in rows.iter().zip(pads) {
         ui.push_id((salt, row.kind.as_str(), row.id.as_str()), |ui| {
             let size = egui::vec2(ui.available_width(), ROW_H);
-            ui.allocate_ui_with_layout(size, egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                if inset {
-                    ui.add_space(super::chat_ui::RESULT_TEXT_INSET);
-                }
-                ui.label(
-                    RichText::new(&row.label).size(super::chat_ui::RESULT_ROW_LABEL_SIZE).color(crate::theme::muted()),
-                );
-                ui.add_space(pad);
-                if click_pill(ui, "Undo") {
-                    hit = Some((row.clone(), ChangeAct::Undo));
-                }
-                if row.keep && click_pill(ui, "Keep") {
-                    hit = Some((row.clone(), ChangeAct::Keep));
-                }
-            });
+            ui.allocate_ui_with_layout(
+                size,
+                egui::Layout::left_to_right(egui::Align::Center),
+                |ui| {
+                    if inset {
+                        ui.add_space(super::chat_ui::RESULT_TEXT_INSET);
+                    }
+                    ui.label(
+                        RichText::new(&row.label)
+                            .size(super::chat_ui::RESULT_ROW_LABEL_SIZE)
+                            .color(crate::theme::muted()),
+                    );
+                    ui.add_space(pad);
+                    if click_pill(ui, "Undo") {
+                        hit = Some((row.clone(), ChangeAct::Undo));
+                    }
+                    if row.keep && click_pill(ui, "Keep") {
+                        hit = Some((row.clone(), ChangeAct::Keep));
+                    }
+                },
+            );
         });
     }
     if !rows.is_empty() {
@@ -550,16 +650,38 @@ mod tests {
         std::fs::create_dir_all(&root).unwrap();
         let path = root.join("automations.json");
         let save = |list: &[grokhub_core::Automation]| {
-            std::fs::write(&path, serde_json::to_string_pretty(list).unwrap()).map_err(|e| e.to_string())
+            std::fs::write(&path, serde_json::to_string_pretty(list).unwrap())
+                .map_err(|e| e.to_string())
         };
         save(&[job("auto-a", "board digest", 30)]).unwrap();
-        let t = hx::AutomationsFile { path: &path, id: "auto-a" };
-        hx::record_change(&root, &t, Origin::SelfManage, "every 15 min instead", || save(&[job("auto-a", "board digest", 15)]))
-            .unwrap();
-        let t = hx::AutomationsFile { path: &path, id: "auto-b" };
-        hx::record_change(&root, &t, Origin::SelfManage, "scheduled every 60 min", || {
-            save(&[job("auto-a", "board digest", 15), job("auto-b", "inbox sweep", 60)])
-        })
+        let t = hx::AutomationsFile {
+            path: &path,
+            id: "auto-a",
+        };
+        hx::record_change(
+            &root,
+            &t,
+            Origin::SelfManage,
+            "every 15 min instead",
+            || save(&[job("auto-a", "board digest", 15)]),
+        )
+        .unwrap();
+        let t = hx::AutomationsFile {
+            path: &path,
+            id: "auto-b",
+        };
+        hx::record_change(
+            &root,
+            &t,
+            Origin::SelfManage,
+            "scheduled every 60 min",
+            || {
+                save(&[
+                    job("auto-a", "board digest", 15),
+                    job("auto-b", "inbox sweep", 60),
+                ])
+            },
+        )
         .unwrap();
         let _ = hx::take_self_changes(&root);
         root
@@ -586,11 +708,24 @@ mod tests {
         assert_eq!(
             report_rows(&ledger, now),
             vec![
-                ChangeRow { kind: ChangeKind::Automation, id: "auto-b".into(), label: "inbox sweep · added 2h ago".into(), keep: true },
-                ChangeRow { kind: ChangeKind::Automation, id: "auto-a".into(), label: "board digest · changed 2h ago".into(), keep: true },
+                ChangeRow {
+                    kind: ChangeKind::Automation,
+                    id: "auto-b".into(),
+                    label: "inbox sweep · added 2h ago".into(),
+                    keep: true
+                },
+                ChangeRow {
+                    kind: ChangeKind::Automation,
+                    id: "auto-a".into(),
+                    label: "board digest · changed 2h ago".into(),
+                    keep: true
+                },
             ]
         );
-        let empty = changes_report(&hx::ChangeLedger::load_kind(&root, ChangeKind::Connection), now);
+        let empty = changes_report(
+            &hx::ChangeLedger::load_kind(&root, ChangeKind::Connection),
+            now,
+        );
         assert!(
             empty.starts_with(CONNECTION_CHANGES_HEAD)
                 && empty.contains("- Nothing yet. When GrokHub adds, changes, or removes a connection on its own, it shows here with Undo."),
@@ -609,26 +744,51 @@ mod tests {
         let rows = work_rows_from_disk(&root, now, &|_, _| false);
         assert_eq!(
             rows.iter().map(|r| r.label.as_str()).collect::<Vec<_>>(),
-            ["Grok added automation inbox sweep", "Grok changed automation board digest"]
+            [
+                "Grok added automation inbox sweep",
+                "Grok changed automation board digest"
+            ]
         );
-        hx::accept_change(&root, ChangeKind::Automation, "auto-b", hx::UndoAsk::from_click()).unwrap();
+        hx::accept_change(
+            &root,
+            ChangeKind::Automation,
+            "auto-b",
+            hx::UndoAsk::from_click(),
+        )
+        .unwrap();
         let rows = work_rows_from_disk(&root, now, &|_, _| false);
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].id, "auto-a");
-        assert!(work_rows_from_disk(&root, now + WORK_ROW_MS, &|_, _| false).is_empty(), "a day later the row is gone");
+        assert!(
+            work_rows_from_disk(&root, now + WORK_ROW_MS, &|_, _| false).is_empty(),
+            "a day later the row is gone"
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
     fn rows_paint_with_undo_and_keep_and_painting_never_acts() {
         let rows = vec![
-            ChangeRow { kind: ChangeKind::Connection, id: "notes".into(), label: "Grok added connection notes".into(), keep: true },
-            ChangeRow { kind: ChangeKind::Automation, id: "auto-a".into(), label: "board digest · changed 1m ago".into(), keep: false },
+            ChangeRow {
+                kind: ChangeKind::Connection,
+                id: "notes".into(),
+                label: "Grok added connection notes".into(),
+                keep: true,
+            },
+            ChangeRow {
+                kind: ChangeKind::Automation,
+                id: "auto-a".into(),
+                label: "board digest · changed 1m ago".into(),
+                keep: false,
+            },
         ];
         let ctx = egui::Context::default();
         crate::theme::install_fonts_on(&ctx);
         let input = egui::RawInput {
-            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1000.0, 600.0))),
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1000.0, 600.0),
+            )),
             ..Default::default()
         };
         let mut hit = None;
@@ -648,9 +808,20 @@ mod tests {
         for clipped in &out.shapes {
             walk(&clipped.shape, &mut texts);
         }
-        assert_eq!(texts.iter().filter(|t| *t == "Undo").count(), 2, "{texts:?}");
-        assert_eq!(texts.iter().filter(|t| *t == "Keep").count(), 1, "{texts:?}");
-        assert!(texts.iter().any(|t| t == "Grok added connection notes"), "{texts:?}");
+        assert_eq!(
+            texts.iter().filter(|t| *t == "Undo").count(),
+            2,
+            "{texts:?}"
+        );
+        assert_eq!(
+            texts.iter().filter(|t| *t == "Keep").count(),
+            1,
+            "{texts:?}"
+        );
+        assert!(
+            texts.iter().any(|t| t == "Grok added connection notes"),
+            "{texts:?}"
+        );
         assert_eq!(hit, None);
     }
 
@@ -661,14 +832,40 @@ mod tests {
             title: String::new(),
             body: body.into(),
         };
-        let views = [view(AUTOMATION_CHANGES_HEAD), view(CONNECTION_CHANGES_HEAD), view("other")];
-        assert_eq!(newest_change_report(&views), Some((1, ChangeKind::Connection)));
-        assert_eq!(newest_change_report(&views[..1]), Some((0, ChangeKind::Automation)));
-        let row = ChangeRow { kind: ChangeKind::Connection, id: "notes".into(), label: "Grok added connection notes".into(), keep: true };
+        let views = [
+            view(AUTOMATION_CHANGES_HEAD),
+            view(CONNECTION_CHANGES_HEAD),
+            view("other"),
+        ];
+        assert_eq!(
+            newest_change_report(&views),
+            Some((1, ChangeKind::Connection))
+        );
+        assert_eq!(
+            newest_change_report(&views[..1]),
+            Some((0, ChangeKind::Automation))
+        );
+        let row = ChangeRow {
+            kind: ChangeKind::Connection,
+            id: "notes".into(),
+            label: "Grok added connection notes".into(),
+            keep: true,
+        };
         assert_eq!(row.label_name(), "notes");
-        let row = ChangeRow { kind: ChangeKind::Automation, id: "auto-a".into(), label: "board digest · changed 1m ago".into(), keep: true };
+        let row = ChangeRow {
+            kind: ChangeKind::Automation,
+            id: "auto-a".into(),
+            label: "board digest · changed 1m ago".into(),
+            keep: true,
+        };
         assert_eq!(row.label_name(), "board digest");
-        assert_eq!(done_line(&row, ChangeAct::Undo, &Ok(Some(vec![]))), "Undid GrokHub's change to the automation board digest.");
-        assert_eq!(done_line(&row, ChangeAct::Keep, &Ok(Some(vec![]))), "Kept the automation board digest.");
+        assert_eq!(
+            done_line(&row, ChangeAct::Undo, &Ok(Some(vec![]))),
+            "Undid GrokHub's change to the automation board digest."
+        );
+        assert_eq!(
+            done_line(&row, ChangeAct::Keep, &Ok(Some(vec![]))),
+            "Kept the automation board digest."
+        );
     }
 }

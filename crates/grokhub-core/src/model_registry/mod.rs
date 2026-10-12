@@ -19,12 +19,14 @@ use sha2::{Digest, Sha256};
 
 pub use cost_class::{CostClass, RouteOpts};
 pub use discover::{
-    gb_listing, parse_anthropic_catalog, parse_model_row, parse_openai_compatible_catalog, parse_xai_catalog, provider_model_id,
-    split_provider_model, CatalogSource, Listing,
+    gb_listing, parse_anthropic_catalog, parse_model_row, parse_openai_compatible_catalog,
+    parse_xai_catalog, provider_model_id, split_provider_model, CatalogSource, Listing,
 };
 pub use entitlement::{tier_notice, Credential, Entitlement};
 pub use health::{classify_status, CallStatus, Observation};
-pub use record::{model_id_stem, Breaker, ModelMeta, ModelRecord, ModelState, Notice, Prices, SourceKind};
+pub use record::{
+    model_id_stem, Breaker, ModelMeta, ModelRecord, ModelState, Notice, Prices, SourceKind,
+};
 
 pub const REGISTRY_SCHEMA: u32 = 1;
 /// First refresh after start, once the cabin is idle.
@@ -42,14 +44,30 @@ pub const EFFORT_LADDER: &[&str] = &["none", "minimal", "low", "medium", "high",
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "event", rename_all = "snake_case")]
 pub enum RegistryEvent {
-    Added { id: String },
-    Removed { id: String },
+    Added {
+        id: String,
+    },
+    Removed {
+        id: String,
+    },
     /// `what` is any of `price`, `context`, `efforts`, `endpoint`, `notice`.
-    Changed { id: String, what: Vec<String> },
-    State { id: String, from: ModelState, to: ModelState, reason: String },
-    Notice { text: String },
+    Changed {
+        id: String,
+        what: Vec<String>,
+    },
+    State {
+        id: String,
+        from: ModelState,
+        to: ModelState,
+        reason: String,
+    },
+    Notice {
+        text: String,
+    },
     /// A tombstone's 30 days ran out: the row left `registry.json`.
-    Deleted { id: String },
+    Deleted {
+        id: String,
+    },
 }
 
 impl RegistryEvent {
@@ -105,21 +123,43 @@ fn changed_kinds(old: &ModelMeta, new: &ModelMeta) -> Vec<String> {
 }
 
 /// The state a fresh listing gives, and why.
-fn listed_state(meta: &ModelMeta, api: bool, rec: &ModelRecord, now_ms: u64) -> (ModelState, String) {
-    if meta.notice.as_ref().is_some_and(Notice::is_critical_retired) {
+fn listed_state(
+    meta: &ModelMeta,
+    api: bool,
+    rec: &ModelRecord,
+    now_ms: u64,
+) -> (ModelState, String) {
+    if meta
+        .notice
+        .as_ref()
+        .is_some_and(Notice::is_critical_retired)
+    {
         return (ModelState::Ghost, "Grok Build marked it retired.".into());
     }
     if api && meta.is_placeholder() {
-        return (ModelState::Ghost, "Its listing has no prices, context or efforts.".into());
+        return (
+            ModelState::Ghost,
+            "Its listing has no prices, context or efforts.".into(),
+        );
     }
     if meta.deprecated == Some(true) {
-        return (ModelState::Retired, "Its source marks it deprecated.".into());
+        return (
+            ModelState::Retired,
+            "Its source marks it deprecated.".into(),
+        );
     }
-    let strikes = rec.not_found.iter().filter(|t| now_ms.saturating_sub(**t) <= health::STRIKE_WINDOW_MS).count();
+    let strikes = rec
+        .not_found
+        .iter()
+        .filter(|t| now_ms.saturating_sub(**t) <= health::STRIKE_WINDOW_MS)
+        .count();
     if rec.state == ModelState::Ghost && strikes >= health::GHOST_STRIKES {
         return (rec.state, rec.reason.clone());
     }
-    if matches!(rec.state, ModelState::Degraded | ModelState::Quarantined | ModelState::Probing) {
+    if matches!(
+        rec.state,
+        ModelState::Degraded | ModelState::Quarantined | ModelState::Probing
+    ) {
         return (rec.state, rec.reason.clone());
     }
     (ModelState::Live, "In your model list.".into())
@@ -129,7 +169,10 @@ fn listed_state(meta: &ModelMeta, api: bool, rec: &ModelRecord, now_ms: u64) -> 
 const ANSWERED_RECENTLY_MS: u64 = 24 * 60 * 60 * 1000;
 
 fn answered_since(rec: &ModelRecord, since_ms: u64) -> bool {
-    rec.health.recent.iter().any(|m| m.ok && m.ts_ms >= since_ms)
+    rec.health
+        .recent
+        .iter()
+        .any(|m| m.ok && m.ts_ms >= since_ms)
 }
 
 impl Registry {
@@ -142,23 +185,44 @@ impl Registry {
     /// `id`, or the listed model that names it as an alias.
     pub fn canonical<'a>(&'a self, id: &'a str) -> &'a str {
         let id = id.trim();
-        if self.models.get(id).is_some_and(|r| !r.sources.is_empty() && r.absent_since_ms == 0) {
+        if self
+            .models
+            .get(id)
+            .is_some_and(|r| !r.sources.is_empty() && r.absent_since_ms == 0)
+        {
             return id;
         }
         self.models
             .iter()
-            .find(|(key, r)| key.as_str() != id && !r.sources.is_empty() && r.absent_since_ms == 0 && r.meta.aliases.iter().any(|a| a == id))
+            .find(|(key, r)| {
+                key.as_str() != id
+                    && !r.sources.is_empty()
+                    && r.absent_since_ms == 0
+                    && r.meta.aliases.iter().any(|a| a == id)
+            })
             .map_or(id, |(key, _)| key.as_str())
     }
 
     /// In your own fresh list right now.
     pub fn listed(&self, id: &str) -> bool {
-        self.get(id).is_some_and(|r| !r.sources.is_empty() && r.absent_since_ms == 0)
+        self.get(id)
+            .is_some_and(|r| !r.sources.is_empty() && r.absent_since_ms == 0)
     }
 
-    fn set_state(rec: &mut ModelRecord, to: ModelState, reason: String, now_ms: u64, events: &mut Vec<RegistryEvent>) {
+    fn set_state(
+        rec: &mut ModelRecord,
+        to: ModelState,
+        reason: String,
+        now_ms: u64,
+        events: &mut Vec<RegistryEvent>,
+    ) {
         if rec.state != to {
-            events.push(RegistryEvent::State { id: rec.meta.id.clone(), from: rec.state, to, reason: reason.clone() });
+            events.push(RegistryEvent::State {
+                id: rec.meta.id.clone(),
+                from: rec.state,
+                to,
+                reason: reason.clone(),
+            });
         }
         if !to.tombstone() {
             rec.tombstone_ms = 0;
@@ -171,7 +235,12 @@ impl Registry {
 
     /// Fold fresh listings in. `named` is every id a pin, default, skill or
     /// automation names. No listing (every source failed) changes nothing.
-    pub fn apply_refresh(&mut self, listings: &[Listing], named: &[String], now_ms: u64) -> Vec<RegistryEvent> {
+    pub fn apply_refresh(
+        &mut self,
+        listings: &[Listing],
+        named: &[String],
+        now_ms: u64,
+    ) -> Vec<RegistryEvent> {
         let mut events = Vec::new();
         if listings.is_empty() {
             return events;
@@ -188,7 +257,9 @@ impl Registry {
                 self.gb_version.clone_from(&listing.gb_version);
             }
             for meta in &listing.models {
-                let entry = merged.entry(meta.id.clone()).or_insert_with(|| (meta.clone(), Vec::new()));
+                let entry = merged
+                    .entry(meta.id.clone())
+                    .or_insert_with(|| (meta.clone(), Vec::new()));
                 if entry.1.is_empty() {
                     entry.0 = meta.clone();
                 } else {
@@ -214,13 +285,21 @@ impl Registry {
                 Some(rec) => {
                     let what = changed_kinds(&rec.meta, meta);
                     if !what.is_empty() {
-                        events.push(RegistryEvent::Changed { id: id.clone(), what });
+                        events.push(RegistryEvent::Changed {
+                            id: id.clone(),
+                            what,
+                        });
                     }
                     rec
                 }
                 None => {
                     events.push(RegistryEvent::Added { id: id.clone() });
-                    self.models.entry(id.clone()).or_insert_with(|| ModelRecord { first_seen_ms: now_ms, ..ModelRecord::default() })
+                    self.models
+                        .entry(id.clone())
+                        .or_insert_with(|| ModelRecord {
+                            first_seen_ms: now_ms,
+                            ..ModelRecord::default()
+                        })
                 }
             };
             rec.meta = meta.clone();
@@ -236,7 +315,12 @@ impl Registry {
             .flat_map(|(meta, _)| meta.aliases.iter().map(String::as_str))
             .filter(|a| !merged.contains_key(*a))
             .collect();
-        let stale: Vec<String> = self.models.keys().filter(|id| aliased.contains(&id.as_str())).cloned().collect();
+        let stale: Vec<String> = self
+            .models
+            .keys()
+            .filter(|id| aliased.contains(&id.as_str()))
+            .cloned()
+            .collect();
         for id in stale {
             // A bare record a call or pin made for an alias: the listed model stands for it.
             self.models.remove(&id);
@@ -251,17 +335,50 @@ impl Registry {
                 rec.absent_since_ms = now_ms;
             }
             let named_here = named.iter().any(|n| n.trim() == id);
-            if named_here && was_absent && answered_since(rec, now_ms.saturating_sub(ANSWERED_RECENTLY_MS)) {
-                Self::set_state(rec, ModelState::Live, "It isn't listed, but it answered in the last day.".into(), now_ms, &mut events);
+            if named_here
+                && was_absent
+                && answered_since(rec, now_ms.saturating_sub(ANSWERED_RECENTLY_MS))
+            {
+                Self::set_state(
+                    rec,
+                    ModelState::Live,
+                    "It isn't listed, but it answered in the last day.".into(),
+                    now_ms,
+                    &mut events,
+                );
             } else if named_here && was_absent {
-                Self::set_state(rec, ModelState::Ghost, "A pin, default, skill or automation names it, but no source lists it.".into(), now_ms, &mut events);
+                Self::set_state(
+                    rec,
+                    ModelState::Ghost,
+                    "A pin, default, skill or automation names it, but no source lists it.".into(),
+                    now_ms,
+                    &mut events,
+                );
             } else if now_ms.saturating_sub(rec.absent_since_ms) >= PRUNE_AFTER_MS {
-                Self::set_state(rec, ModelState::Pruned, "No source has listed it for 30 days.".into(), now_ms, &mut events);
-            } else if was_absent && rec.state == ModelState::Live && answered_since(rec, now_ms.saturating_sub(ANSWERED_RECENTLY_MS)) {
+                Self::set_state(
+                    rec,
+                    ModelState::Pruned,
+                    "No source has listed it for 30 days.".into(),
+                    now_ms,
+                    &mut events,
+                );
+            } else if was_absent
+                && rec.state == ModelState::Live
+                && answered_since(rec, now_ms.saturating_sub(ANSWERED_RECENTLY_MS))
+            {
                 // Unlisted but answering as itself (see `health::observe`): it stays routable.
-            } else if !matches!(rec.state, ModelState::NotInPlan | ModelState::Ghost | ModelState::Pruned) {
+            } else if !matches!(
+                rec.state,
+                ModelState::NotInPlan | ModelState::Ghost | ModelState::Pruned
+            ) {
                 events.push(RegistryEvent::Removed { id: id.clone() });
-                Self::set_state(rec, ModelState::NotInPlan, "It isn't in your own fresh model list.".into(), now_ms, &mut events);
+                Self::set_state(
+                    rec,
+                    ModelState::NotInPlan,
+                    "It isn't in your own fresh model list.".into(),
+                    now_ms,
+                    &mut events,
+                );
             }
         }
         let gone: Vec<String> = self
@@ -281,11 +398,26 @@ impl Registry {
         }
         for name in named {
             let id = name.trim();
-            if id.is_empty() || self.models.contains_key(id) || merged.contains_key(id) || aliased.contains(&id) {
+            if id.is_empty()
+                || self.models.contains_key(id)
+                || merged.contains_key(id)
+                || aliased.contains(&id)
+            {
                 continue;
             }
-            let mut rec = ModelRecord { meta: ModelMeta::bare(id), first_seen_ms: now_ms, absent_since_ms: now_ms, ..ModelRecord::default() };
-            Self::set_state(&mut rec, ModelState::Ghost, "A pin, default, skill or automation names it, but no source lists it.".into(), now_ms, &mut events);
+            let mut rec = ModelRecord {
+                meta: ModelMeta::bare(id),
+                first_seen_ms: now_ms,
+                absent_since_ms: now_ms,
+                ..ModelRecord::default()
+            };
+            Self::set_state(
+                &mut rec,
+                ModelState::Ghost,
+                "A pin, default, skill or automation names it, but no source lists it.".into(),
+                now_ms,
+                &mut events,
+            );
             self.models.insert(id.to_string(), rec);
         }
         self.schema = REGISTRY_SCHEMA;
@@ -307,28 +439,41 @@ impl Registry {
                 continue;
             }
             let listed = self.listed(id);
-            let rec = self.models.entry(id.to_string()).or_insert_with(|| ModelRecord {
-                meta: ModelMeta::bare(id),
-                state: ModelState::NotInPlan,
-                reason: "It isn't in your own fresh model list.".into(),
-                first_seen_ms: obs.ts_ms,
-                absent_since_ms: obs.ts_ms,
-                ..ModelRecord::default()
-            });
+            let rec = self
+                .models
+                .entry(id.to_string())
+                .or_insert_with(|| ModelRecord {
+                    meta: ModelMeta::bare(id),
+                    state: ModelState::NotInPlan,
+                    reason: "It isn't in your own fresh model list.".into(),
+                    first_seen_ms: obs.ts_ms,
+                    absent_since_ms: obs.ts_ms,
+                    ..ModelRecord::default()
+                });
             let from = rec.state;
             health::observe(rec, listed, obs);
             health::breaker_observe(rec, listed, obs);
             if rec.state != from {
-                events.push(RegistryEvent::State { id: id.to_string(), from, to: rec.state, reason: rec.reason.clone() });
+                events.push(RegistryEvent::State {
+                    id: id.to_string(),
+                    from,
+                    to: rec.state,
+                    reason: rec.reason.clone(),
+                });
             }
-            signal |= matches!(obs.status, CallStatus::NotFound) || rec.state == ModelState::Redirected;
+            signal |=
+                matches!(obs.status, CallStatus::NotFound) || rec.state == ModelState::Redirected;
         }
         (events, signal)
     }
 
     /// Quarantined models whose open backoff ran out: each gets one check.
     pub fn half_open_due(&self, now_ms: u64) -> Vec<String> {
-        self.models.iter().filter(|(_, r)| health::half_open_due(r, now_ms)).map(|(id, _)| id.clone()).collect()
+        self.models
+            .iter()
+            .filter(|(_, r)| health::half_open_due(r, now_ms))
+            .map(|(id, _)| id.clone())
+            .collect()
     }
 
     /// Hand out a model's one half-open check.
@@ -343,7 +488,12 @@ impl Registry {
         let rec = self.models.get_mut(id.trim())?;
         let from = rec.state;
         health::half_open_result(rec, ok, now_ms);
-        (rec.state != from).then(|| RegistryEvent::State { id: rec.meta.id.clone(), from, to: rec.state, reason: rec.reason.clone() })
+        (rec.state != from).then(|| RegistryEvent::State {
+            id: rec.meta.id.clone(),
+            from,
+            to: rec.state,
+            reason: rec.reason.clone(),
+        })
     }
 
     /// How a pin or setting names `id`: with "(retired)" once it is retired,
@@ -409,16 +559,26 @@ pub struct RefreshClock {
 
 impl RefreshClock {
     pub fn new(started_ms: u64) -> Self {
-        Self { started_ms, ..Self::default() }
+        Self {
+            started_ms,
+            ..Self::default()
+        }
     }
 
     /// The reason a refresh is due now, if any. The first one waits for idle.
-    pub fn due(&self, now_ms: u64, idle: bool, gb_version: Option<&str>, auth_stamp: &str) -> Option<RefreshReason> {
+    pub fn due(
+        &self,
+        now_ms: u64,
+        idle: bool,
+        gb_version: Option<&str>,
+        auth_stamp: &str,
+    ) -> Option<RefreshReason> {
         if self.demand {
             return Some(RefreshReason::Demand);
         }
         let Some(last) = self.last_ms else {
-            return (idle && now_ms.saturating_sub(self.started_ms) >= FIRST_REFRESH_MS).then_some(RefreshReason::Startup);
+            return (idle && now_ms.saturating_sub(self.started_ms) >= FIRST_REFRESH_MS)
+                .then_some(RefreshReason::Startup);
         };
         if gb_version.is_some() && gb_version != self.gb_version.as_deref() {
             return Some(RefreshReason::GbVersion);
@@ -452,7 +612,12 @@ mod tests {
         ModelMeta {
             id: id.into(),
             context_length: Some(256_000),
-            prices: Prices { prompt: Some(20_000), cached: Some(5_000), completion: Some(100_000), ..Prices::default() },
+            prices: Prices {
+                prompt: Some(20_000),
+                cached: Some(5_000),
+                completion: Some(100_000),
+                ..Prices::default()
+            },
             efforts: Some(vec!["low".into(), "high".into()]),
             ..ModelMeta::default()
         }
@@ -465,12 +630,29 @@ mod tests {
     #[test]
     fn first_refresh_adds_every_model_and_a_placeholder_is_a_ghost() {
         let mut reg = Registry::default();
-        let ev = reg.apply_refresh(&[api(vec![meta("grok-4.7"), ModelMeta::bare("grok-3-mini-fast")])], &[], 1_000);
-        assert!(ev.contains(&RegistryEvent::Added { id: "grok-4.7".into() }));
-        assert!(ev.contains(&RegistryEvent::Added { id: "grok-3-mini-fast".into() }));
+        let ev = reg.apply_refresh(
+            &[api(vec![
+                meta("grok-4.7"),
+                ModelMeta::bare("grok-3-mini-fast"),
+            ])],
+            &[],
+            1_000,
+        );
+        assert!(ev.contains(&RegistryEvent::Added {
+            id: "grok-4.7".into()
+        }));
+        assert!(ev.contains(&RegistryEvent::Added {
+            id: "grok-3-mini-fast".into()
+        }));
         assert_eq!(reg.get("grok-4.7").unwrap().state, ModelState::Live);
         let ghost = reg.get("grok-3-mini-fast").unwrap();
-        assert_eq!((ghost.state, ghost.reason.as_str()), (ModelState::Ghost, "Its listing has no prices, context or efforts."));
+        assert_eq!(
+            (ghost.state, ghost.reason.as_str()),
+            (
+                ModelState::Ghost,
+                "Its listing has no prices, context or efforts."
+            )
+        );
         assert_eq!(reg.refreshes, 1);
         assert_eq!(reg.hash.len(), 64);
     }
@@ -480,13 +662,22 @@ mod tests {
         let mut reg = Registry::default();
         reg.apply_refresh(&[api(vec![meta("grok-4.7")])], &[], 1);
         let hash = reg.hash.clone();
-        assert_eq!(reg.apply_refresh(&[api(vec![meta("grok-4.7")])], &[], 2), vec![]);
+        assert_eq!(
+            reg.apply_refresh(&[api(vec![meta("grok-4.7")])], &[], 2),
+            vec![]
+        );
         assert_eq!(reg.hash, hash);
         let mut m = meta("grok-4.7");
         m.efforts = Some(vec!["low".into(), "medium".into(), "high".into()]);
         m.prices.prompt = Some(30_000);
         let ev = reg.apply_refresh(&[api(vec![m])], &[], 3);
-        assert_eq!(ev, vec![RegistryEvent::Changed { id: "grok-4.7".into(), what: vec!["price".into(), "efforts".into()] }]);
+        assert_eq!(
+            ev,
+            vec![RegistryEvent::Changed {
+                id: "grok-4.7".into(),
+                what: vec!["price".into(), "efforts".into()]
+            }]
+        );
         assert_ne!(reg.hash, hash);
     }
 
@@ -515,9 +706,19 @@ mod tests {
         plain.tier = Some("SuperGrok".into());
         let ev = reg.apply_refresh(&[plain], &[], 2);
         let notices: Vec<_> = ev.iter().filter(|e| e.kind() == "notice").collect();
-        assert_eq!(notices, vec![&RegistryEvent::Notice { text: "Your Grok plan changed from SuperGrok Heavy to SuperGrok.".into() }]);
-        assert!(ev.contains(&RegistryEvent::Removed { id: "grok-4.7-heavy".into() }));
-        assert_eq!(reg.get("grok-4.7-heavy").unwrap().state, ModelState::NotInPlan);
+        assert_eq!(
+            notices,
+            vec![&RegistryEvent::Notice {
+                text: "Your Grok plan changed from SuperGrok Heavy to SuperGrok.".into()
+            }]
+        );
+        assert!(ev.contains(&RegistryEvent::Removed {
+            id: "grok-4.7-heavy".into()
+        }));
+        assert_eq!(
+            reg.get("grok-4.7-heavy").unwrap().state,
+            ModelState::NotInPlan
+        );
         assert_eq!(reg.entitlement.tier.as_deref(), Some("SuperGrok"));
     }
 
@@ -525,11 +726,21 @@ mod tests {
     fn a_named_id_no_source_lists_is_a_ghost_and_critical_retired_is_a_ghost() {
         let mut reg = Registry::default();
         let mut retired = meta("grok-4.1");
-        retired.notice = Some(Notice { severity: "critical".into(), text: "Retired on 2026-09-01".into() });
-        reg.apply_refresh(&[api(vec![meta("grok-4.7"), retired])], &["grok-2-pinned".into()], 1);
+        retired.notice = Some(Notice {
+            severity: "critical".into(),
+            text: "Retired on 2026-09-01".into(),
+        });
+        reg.apply_refresh(
+            &[api(vec![meta("grok-4.7"), retired])],
+            &["grok-2-pinned".into()],
+            1,
+        );
         assert_eq!(reg.get("grok-2-pinned").unwrap().state, ModelState::Ghost);
         assert_eq!(reg.get("grok-4.1").unwrap().state, ModelState::Ghost);
-        assert_eq!(reg.get("grok-4.1").unwrap().reason, "Grok Build marked it retired.");
+        assert_eq!(
+            reg.get("grok-4.1").unwrap().reason,
+            "Grok Build marked it retired."
+        );
     }
 
     #[test]
@@ -538,10 +749,16 @@ mod tests {
         let gb = gb_listing(&["grok-4.7".into(), "grok-build-1".into()], Some("1.0.49"));
         reg.apply_refresh(&[gb, api(vec![meta("grok-4.7")])], &[], 1);
         let both = reg.get("grok-4.7").unwrap();
-        assert_eq!(both.sources, vec![SourceKind::XaiApi, SourceKind::GrokBuild]);
+        assert_eq!(
+            both.sources,
+            vec![SourceKind::XaiApi, SourceKind::GrokBuild]
+        );
         assert_eq!(both.meta.context_length, Some(256_000));
         let gb_only = reg.get("grok-build-1").unwrap();
-        assert_eq!((gb_only.state, gb_only.sources.clone()), (ModelState::Live, vec![SourceKind::GrokBuild]));
+        assert_eq!(
+            (gb_only.state, gb_only.sources.clone()),
+            (ModelState::Live, vec![SourceKind::GrokBuild])
+        );
         assert_eq!(reg.gb_version.as_deref(), Some("1.0.49"));
     }
 
@@ -574,7 +791,13 @@ mod tests {
         let (_, signal) = reg.fold(&[unlisted]);
         assert!(!signal, "no not-found and no redirect");
         let rec = reg.get("grok-secret").unwrap();
-        assert_eq!((rec.state, rec.reason.as_str()), (ModelState::Live, "It isn't listed, but it answers as itself."));
+        assert_eq!(
+            (rec.state, rec.reason.as_str()),
+            (
+                ModelState::Live,
+                "It isn't listed, but it answers as itself."
+            )
+        );
         assert!(rec.state.routable());
     }
 
@@ -583,16 +806,34 @@ mod tests {
         let mut c = RefreshClock::new(0);
         assert_eq!(c.due(29_999, true, None, "plan"), None);
         assert_eq!(c.due(30_000, false, None, "plan"), None);
-        assert_eq!(c.due(30_000, true, None, "plan"), Some(RefreshReason::Startup));
+        assert_eq!(
+            c.due(30_000, true, None, "plan"),
+            Some(RefreshReason::Startup)
+        );
         c.ran(30_000, Some("1.0.49"), "plan");
         assert_eq!(c.due(30_001, false, Some("1.0.49"), "plan"), None);
-        assert_eq!(c.due(30_000 + REFRESH_EVERY_MS, false, Some("1.0.49"), "plan"), Some(RefreshReason::Interval));
-        assert_eq!(c.due(40_000, false, Some("1.0.50"), "plan"), Some(RefreshReason::GbVersion));
-        assert_eq!(c.due(40_000, false, None, "api_key"), Some(RefreshReason::Auth));
+        assert_eq!(
+            c.due(30_000 + REFRESH_EVERY_MS, false, Some("1.0.49"), "plan"),
+            Some(RefreshReason::Interval)
+        );
+        assert_eq!(
+            c.due(40_000, false, Some("1.0.50"), "plan"),
+            Some(RefreshReason::GbVersion)
+        );
+        assert_eq!(
+            c.due(40_000, false, None, "api_key"),
+            Some(RefreshReason::Auth)
+        );
         c.signal = true;
-        assert_eq!(c.due(40_000, false, None, "plan"), Some(RefreshReason::Signal));
+        assert_eq!(
+            c.due(40_000, false, None, "plan"),
+            Some(RefreshReason::Signal)
+        );
         c.demand = true;
-        assert_eq!(c.due(40_000, false, None, "plan"), Some(RefreshReason::Demand));
+        assert_eq!(
+            c.due(40_000, false, None, "plan"),
+            Some(RefreshReason::Demand)
+        );
     }
 
     #[test]
@@ -606,10 +847,23 @@ mod tests {
         assert!(!r.state.routable());
         assert_eq!(reg.pin_label("grok-4.5"), "grok-4.5 (retired)");
         assert_eq!(reg.pin_label("grok-4.7"), "grok-4.7");
-        let ev = reg.apply_refresh(&[api(vec![meta("grok-4.7"), old.clone()])], &[], 1_000 + PRUNE_AFTER_MS - 1);
+        let ev = reg.apply_refresh(
+            &[api(vec![meta("grok-4.7"), old.clone()])],
+            &[],
+            1_000 + PRUNE_AFTER_MS - 1,
+        );
         assert!(ev.is_empty() && reg.get("grok-4.5").is_some());
-        let ev = reg.apply_refresh(&[api(vec![meta("grok-4.7"), old])], &[], 1_000 + PRUNE_AFTER_MS);
-        assert_eq!(ev, vec![RegistryEvent::Deleted { id: "grok-4.5".into() }]);
+        let ev = reg.apply_refresh(
+            &[api(vec![meta("grok-4.7"), old])],
+            &[],
+            1_000 + PRUNE_AFTER_MS,
+        );
+        assert_eq!(
+            ev,
+            vec![RegistryEvent::Deleted {
+                id: "grok-4.5".into()
+            }]
+        );
         assert!(reg.get("grok-4.5").is_none());
         // Gone after its tombstone still reads as retired.
         assert_eq!(reg.pin_label("grok-4.5"), "grok-4.5 (retired)");
@@ -623,13 +877,33 @@ mod tests {
         let mut m = meta("grok-4.7");
         m.api_shape = Some("chat_completions".into());
         let ev = reg.apply_refresh(&[api(vec![m.clone()])], &[], 2);
-        assert_eq!(ev, vec![RegistryEvent::Changed { id: "grok-4.7".into(), what: vec!["endpoint".into()] }]);
-        let bad = |ts_ms| Observation { model: "grok-4.7".into(), ts_ms, status: CallStatus::Error, latency_ms: 30_000, served_model: None, endpoint_ok: true, reasoning_tokens: 0, cost_ticks: 0, http: 0 };
+        assert_eq!(
+            ev,
+            vec![RegistryEvent::Changed {
+                id: "grok-4.7".into(),
+                what: vec!["endpoint".into()]
+            }]
+        );
+        let bad = |ts_ms| Observation {
+            model: "grok-4.7".into(),
+            ts_ms,
+            status: CallStatus::Error,
+            latency_ms: 30_000,
+            served_model: None,
+            endpoint_ok: true,
+            reasoning_tokens: 0,
+            cost_ticks: 0,
+            http: 0,
+        };
         let (ev, _) = reg.fold(&[bad(10), bad(11), bad(12)]);
         assert_eq!(ev.len(), 1);
         assert_eq!(reg.get("grok-4.7").unwrap().state, ModelState::Quarantined);
         reg.apply_refresh(&[api(vec![m])], &[], 13);
-        assert_eq!(reg.get("grok-4.7").unwrap().state, ModelState::Quarantined, "a fresh listing doesn't lift the quarantine");
+        assert_eq!(
+            reg.get("grok-4.7").unwrap().state,
+            ModelState::Quarantined,
+            "a fresh listing doesn't lift the quarantine"
+        );
         let until = reg.get("grok-4.7").unwrap().breaker.open_until_ms;
         assert_eq!(reg.half_open_due(until), vec!["grok-4.7".to_string()]);
         reg.mark_half_open("grok-4.7");

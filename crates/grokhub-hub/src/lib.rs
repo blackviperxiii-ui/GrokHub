@@ -24,7 +24,9 @@ pub fn parse_args(args: &[String]) -> Launch {
     Launch::Serve
 }
 
-use grokhub_core::{load_hub_state, now_ms, save_hub_state, start_hub_rotates_pair, HubState, HUB_KIND};
+use grokhub_core::{
+    load_hub_state, now_ms, save_hub_state, start_hub_rotates_pair, HubState, HUB_KIND,
+};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
@@ -97,7 +99,10 @@ mod tests {
         let mut live = HubState::empty();
         let code = live.rotate_pair().code;
         let kept = boot_state(live, 18766);
-        assert_eq!(kept.pair.as_ref().map(|p| p.code.as_str()), Some(code.as_str()));
+        assert_eq!(
+            kept.pair.as_ref().map(|p| p.code.as_str()),
+            Some(code.as_str())
+        );
     }
 
     #[test]
@@ -126,7 +131,10 @@ mod tests {
         let mut live = HubState::empty();
         let code = live.rotate_pair().code;
         assert!(!tick_running_pair(&mut live, now_ms()));
-        assert_eq!(live.pair.as_ref().map(|p| p.code.as_str()), Some(code.as_str()));
+        assert_eq!(
+            live.pair.as_ref().map(|p| p.code.as_str()),
+            Some(code.as_str())
+        );
     }
 
     #[test]
@@ -155,6 +163,9 @@ mod tests {
             parse_args(&["grokhub-hub".into(), "--help".into()]),
             Launch::Help
         );
-        assert_eq!(parse_args(&["grokhub-hub".into(), "-h".into()]), Launch::Help);
+        assert_eq!(
+            parse_args(&["grokhub-hub".into(), "-h".into()]),
+            Launch::Help
+        );
     }
 }

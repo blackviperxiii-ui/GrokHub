@@ -9,7 +9,11 @@ pub(crate) fn parse_sway_outputs(text: &str) -> Option<Vec<MonitorGeom>> {
     let arr = v.as_array()?;
     let mut out = Vec::new();
     for (i, item) in arr.iter().enumerate() {
-        let name = item.get("name").and_then(|n| n.as_str()).unwrap_or("").trim();
+        let name = item
+            .get("name")
+            .and_then(|n| n.as_str())
+            .unwrap_or("")
+            .trim();
         if name.is_empty() {
             continue;
         }
@@ -22,7 +26,10 @@ pub(crate) fn parse_sway_outputs(text: &str) -> Option<Vec<MonitorGeom>> {
             continue;
         }
         let scale = item.get("scale").and_then(|n| n.as_f64()).unwrap_or(1.0);
-        let primary = item.get("primary").and_then(|n| n.as_bool()).unwrap_or(i == 0);
+        let primary = item
+            .get("primary")
+            .and_then(|n| n.as_bool())
+            .unwrap_or(i == 0);
         out.push(MonitorGeom {
             id: name.to_string(),
             name: name.to_string(),
@@ -30,7 +37,11 @@ pub(crate) fn parse_sway_outputs(text: &str) -> Option<Vec<MonitorGeom>> {
             y,
             width: w,
             height: h,
-            scale_factor: if scale.is_finite() && scale > 0.0 { scale } else { 1.0 },
+            scale_factor: if scale.is_finite() && scale > 0.0 {
+                scale
+            } else {
+                1.0
+            },
             primary,
         });
     }

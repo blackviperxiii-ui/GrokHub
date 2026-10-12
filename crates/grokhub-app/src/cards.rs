@@ -2,7 +2,10 @@
 
 use crate::icons::{self, TileIcon};
 use eframe::egui::text::{LayoutJob, TextFormat, TextWrapping};
-use eframe::egui::{self, Align2, Color32, ColorImage, FontId, RichText, Sense, Stroke, TextureHandle, TextureOptions};
+use eframe::egui::{
+    self, Align2, Color32, ColorImage, FontId, RichText, Sense, Stroke, TextureHandle,
+    TextureOptions,
+};
 use grokhub_core::{
     chat_run_dot_alpha, curate_wall, imagine_media_click, imagine_result_fit, parse_loop_line,
     wall_curate_seed, ImagineMediaClick, LearnedSuggestion, SuggestionKind, WallGif, WallSlot,
@@ -225,7 +228,11 @@ pub fn imagine_seg_track(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui)) {
         });
 }
 
-pub fn imagine_seg_chip(ui: &mut egui::Ui, selected: bool, add: impl FnOnce(&mut egui::Ui)) -> bool {
+pub fn imagine_seg_chip(
+    ui: &mut egui::Ui,
+    selected: bool,
+    add: impl FnOnce(&mut egui::Ui),
+) -> bool {
     let fill = if selected {
         crate::theme::panel()
     } else {
@@ -262,7 +269,8 @@ pub fn imagine_frame_pair(scene: &ImagineScene, now_ms: u64) -> (&'static str, &
     if n == 1 {
         return (a, a, 0.0);
     }
-    let t = (now_ms % crate::theme::IMAGINE_FRAME_MS) as f32 / crate::theme::IMAGINE_FRAME_MS as f32;
+    let t =
+        (now_ms % crate::theme::IMAGINE_FRAME_MS) as f32 / crate::theme::IMAGINE_FRAME_MS as f32;
     let fade = ((t - 0.72) / 0.28).clamp(0.0, 1.0);
     (a, b, fade)
 }
@@ -293,7 +301,10 @@ pub fn merge_suggested_autos(
     learned: &[LearnedSuggestion],
     active_names: &[String],
 ) -> Vec<(icons::TileIcon, String, String, String)> {
-    let mut seen: Vec<String> = active_names.iter().map(|s| s.to_ascii_lowercase()).collect();
+    let mut seen: Vec<String> = active_names
+        .iter()
+        .map(|s| s.to_ascii_lowercase())
+        .collect();
     let mut out = Vec::new();
     for s in learned {
         if s.kind != SuggestionKind::Auto {
@@ -325,8 +336,16 @@ pub fn merge_suggested_autos(
 
 /// Built-in read-only GitHub tiles. Who am I / List repos — no writes.
 pub const GITHUB_TILES: &[(&str, &str, &str)] = &[
-    ("Who am I", "Authenticated login and public repo count.", "user"),
-    ("List repos", "Twenty most recently updated repositories.", "list_repos"),
+    (
+        "Who am I",
+        "Authenticated login and public repo count.",
+        "user",
+    ),
+    (
+        "List repos",
+        "Twenty most recently updated repositories.",
+        "list_repos",
+    ),
 ];
 
 pub fn page_header(ui: &mut egui::Ui, title: &str, action: &str) -> bool {
@@ -390,7 +409,12 @@ pub fn felt_pill(ui: &mut egui::Ui, label: &str, style: PillStyle) -> bool {
 
 /// A pill with an optional fixed id. The caller picks `clicked()` (keys
 /// too) or `clicked_by(Primary)` (a pointer click only, for hard actions).
-pub fn felt_pill_at(ui: &mut egui::Ui, id: Option<egui::Id>, label: &str, style: PillStyle) -> egui::Response {
+pub fn felt_pill_at(
+    ui: &mut egui::Ui,
+    id: Option<egui::Id>,
+    label: &str,
+    style: PillStyle,
+) -> egui::Response {
     let (base_fill, text_color, rounding, min_size, stroke, strong) = match style {
         PillStyle::Solid => (
             crate::theme::fg(),
@@ -418,15 +442,7 @@ pub fn felt_pill_at(ui: &mut egui::Ui, id: Option<egui::Id>, label: &str, style:
         ),
     };
     let resp = crate::theme::felt_label_button_with(
-        ui,
-        id,
-        label,
-        base_fill,
-        text_color,
-        rounding,
-        min_size,
-        stroke,
-        strong,
+        ui, id, label, base_fill, text_color, rounding, min_size, stroke, strong,
     );
     let enabled = resp.enabled();
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, label));
@@ -525,12 +541,9 @@ fn felt_segment_styled(
     let text_color = crate::theme::blend_color(crate::theme::muted(), crate::theme::fg(), on_t);
     let (resp, rect, _) = crate::theme::feel_response(ui, resp, Color32::TRANSPARENT);
     // Always: scale 0.98 → 1.0 as it settles (no perpetual pulse).
-    let scale = if strong {
-        0.98 + 0.02 * on_t
-    } else {
-        1.0
-    };
-    let (sx, sy, sw, sh) = grokhub_core::felt_rect(rect.min.x, rect.min.y, rect.width(), rect.height(), scale);
+    let scale = if strong { 0.98 + 0.02 * on_t } else { 1.0 };
+    let (sx, sy, sw, sh) =
+        grokhub_core::felt_rect(rect.min.x, rect.min.y, rect.width(), rect.height(), scale);
     let draw = egui::Rect::from_min_size(egui::pos2(sx, sy), egui::vec2(sw, sh));
     if base_fill.a() > 0 {
         ui.painter().rect_filled(draw, 8.0, base_fill);
@@ -569,8 +582,7 @@ pub fn felt_tab(ui: &mut egui::Ui, label: &str, active: bool) -> bool {
     let font = FontId::proportional(13.0);
     // PLACEHOLDER lets the painter pick the colour below. Baking one in here painted the
     // selected tab's label in fg() on top of an fg() pill — a white label on white.
-    let galley =
-        ui.fonts_mut(|f| f.layout_no_wrap(label.to_owned(), font, Color32::PLACEHOLDER));
+    let galley = ui.fonts_mut(|f| f.layout_no_wrap(label.to_owned(), font, Color32::PLACEHOLDER));
     let pad = ui.style().spacing.button_padding;
     let size = egui::vec2((galley.size().x + pad.x * 2.0).max(32.0), 32.0);
     let (_rect, resp) = ui.allocate_exact_size(size, Sense::click());
@@ -580,8 +592,12 @@ pub fn felt_tab(ui: &mut egui::Ui, label: &str, active: bool) -> bool {
     let stroke_color = crate::theme::blend_color(crate::theme::border(), crate::theme::fg(), on_t);
     let (resp, rect, fill) = crate::theme::feel_button(ui, resp, base_fill);
     ui.painter().rect_filled(rect, 8.0, fill);
-    ui.painter()
-        .rect_stroke(rect, 8.0, Stroke::new(1.0_f32, stroke_color), egui::StrokeKind::Middle);
+    ui.painter().rect_stroke(
+        rect,
+        8.0,
+        Stroke::new(1.0_f32, stroke_color),
+        egui::StrokeKind::Middle,
+    );
     ui.painter().galley(
         egui::pos2(rect.min.x + pad.x, rect.center().y - galley.size().y * 0.5),
         galley,
@@ -647,12 +663,8 @@ pub fn paint_run_pulse(ui: &mut egui::Ui, label: &str, hint: &str) {
     let t = ui.ctx().input(|i| i.time) as f32;
     let pulse = chat_run_dot_alpha(t);
     let fill = crate::theme::live();
-    let color = Color32::from_rgba_unmultiplied(
-        fill.r(),
-        fill.g(),
-        fill.b(),
-        (pulse * 255.0) as u8,
-    );
+    let color =
+        Color32::from_rgba_unmultiplied(fill.r(), fill.g(), fill.b(), (pulse * 255.0) as u8);
     ui.add_space(6.0);
     let row = ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 8.0;
@@ -674,7 +686,11 @@ pub fn paint_run_pulse(ui: &mut egui::Ui, label: &str, hint: &str) {
 pub fn titlebar_update_chip(ui: &mut egui::Ui, label: &str) -> bool {
     // Fixed height: a Frame in the centred titlebar row stretched to the full 40px bar.
     let galley = ui.fonts_mut(|f| {
-        f.layout_no_wrap(label.to_owned(), FontId::proportional(12.0), Color32::PLACEHOLDER)
+        f.layout_no_wrap(
+            label.to_owned(),
+            FontId::proportional(12.0),
+            Color32::PLACEHOLDER,
+        )
     });
     let size = egui::vec2(galley.size().x + 16.0, 24.0);
     let (rect, resp) = ui.allocate_exact_size(size, Sense::click());
@@ -684,8 +700,12 @@ pub fn titlebar_update_chip(ui: &mut egui::Ui, label: &str) -> bool {
         crate::theme::elevated()
     };
     ui.painter().rect_filled(rect, 10.0, fill);
-    ui.painter()
-        .rect_stroke(rect, 10.0, Stroke::new(1.0_f32, crate::theme::border()), egui::StrokeKind::Middle);
+    ui.painter().rect_stroke(
+        rect,
+        10.0,
+        Stroke::new(1.0_f32, crate::theme::border()),
+        egui::StrokeKind::Middle,
+    );
     ui.painter().galley(
         egui::pos2(rect.min.x + 8.0, rect.center().y - galley.size().y * 0.5),
         galley,
@@ -708,10 +728,8 @@ pub fn framed_preview(
         .stroke(Stroke::new(1.0_f32, crate::theme::border()))
         .inner_margin(egui::Margin::same(2))
         .show(ui, |ui| {
-            ui.add(
-                egui::Image::new((tex.id(), egui::vec2(max_w, h))).corner_radius(10.0),
-            )
-            .rect
+            ui.add(egui::Image::new((tex.id(), egui::vec2(max_w, h))).corner_radius(10.0))
+                .rect
         })
         .inner
 }
@@ -795,9 +813,22 @@ pub const AUTO_CHIP_TIP: &str = "Auto effort";
 /// "Auto · Medium": the word Auto, then the current rung in small text.
 pub fn auto_chip_job(rung: &str) -> LayoutJob {
     let mut job = LayoutJob::default();
-    let fmt = |size: f32, color: Color32| TextFormat { font_id: FontId::proportional(size), color, valign: egui::Align::Center, ..Default::default() };
-    job.append("Auto", 0.0, fmt(crate::theme::FONT_CHROME, crate::theme::fg()));
-    job.append(&format!(" · {rung}"), 0.0, fmt(crate::theme::FONT_META, crate::theme::muted()));
+    let fmt = |size: f32, color: Color32| TextFormat {
+        font_id: FontId::proportional(size),
+        color,
+        valign: egui::Align::Center,
+        ..Default::default()
+    };
+    job.append(
+        "Auto",
+        0.0,
+        fmt(crate::theme::FONT_CHROME, crate::theme::fg()),
+    );
+    job.append(
+        &format!(" · {rung}"),
+        0.0,
+        fmt(crate::theme::FONT_META, crate::theme::muted()),
+    );
     job
 }
 
@@ -807,13 +838,26 @@ pub fn auto_chip(ui: &mut egui::Ui, rung: &str, reason: &str) -> bool {
     let galley = ui.fonts_mut(|f| f.layout_job(auto_chip_job(rung)));
     let size = egui::vec2(galley.size().x + 24.0, 28.0);
     let (rect, resp) = ui.allocate_exact_size(size, Sense::click());
-    let stroke = if resp.hovered() { crate::theme::fg() } else { crate::theme::border() };
-    ui.painter().rect_stroke(rect, 14.0, Stroke::new(1.0_f32, stroke), egui::StrokeKind::Inside);
+    let stroke = if resp.hovered() {
+        crate::theme::fg()
+    } else {
+        crate::theme::border()
+    };
+    ui.painter().rect_stroke(
+        rect,
+        14.0,
+        Stroke::new(1.0_f32, stroke),
+        egui::StrokeKind::Inside,
+    );
     let at = egui::pos2(rect.left() + 12.0, rect.center().y - galley.size().y / 2.0);
     ui.painter().galley(at, galley, crate::theme::fg());
     let name = format!("Auto effort, {rung}");
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &name));
-    let resp = with_composer_tip(resp.on_hover_cursor(egui::CursorIcon::PointingHand), AUTO_CHIP_TIP, reason);
+    let resp = with_composer_tip(
+        resp.on_hover_cursor(egui::CursorIcon::PointingHand),
+        AUTO_CHIP_TIP,
+        reason,
+    );
     resp.clicked()
 }
 
@@ -1018,7 +1062,10 @@ pub fn chip_hit_act(index: usize, dismiss: egui::Rect, pointer: egui::Pos2) -> C
 #[cfg(test)]
 fn begin_chip_dismiss_hits(ui: &egui::Ui) {
     ui.ctx().data_mut(|d| {
-        d.insert_temp(egui::Id::new("qchip-dismiss-hits"), Vec::<egui::Rect>::new());
+        d.insert_temp(
+            egui::Id::new("qchip-dismiss-hits"),
+            Vec::<egui::Rect>::new(),
+        );
         d.insert_temp(egui::Id::new("qchip-pills"), Vec::<egui::Rect>::new());
     });
 }
@@ -1171,8 +1218,13 @@ fn paint_chip_pill(ui: &mut egui::Ui, rect: egui::Rect, fill: Color32, primary: 
     let stroke_w = quick_chip_stroke_w(primary);
     let stroke = Stroke::new(stroke_w, quick_chip_stroke(primary));
     let body = rect.shrink(stroke_w * 0.5);
-    ui.painter()
-        .rect(body, CHIP_ROW_H * 0.5, fill, stroke, egui::StrokeKind::Middle);
+    ui.painter().rect(
+        body,
+        CHIP_ROW_H * 0.5,
+        fill,
+        stroke,
+        egui::StrokeKind::Middle,
+    );
 }
 
 pub fn paint_empty_chip_state(ui: &mut egui::Ui) {
@@ -1197,7 +1249,11 @@ pub fn paint_empty_chip_state(ui: &mut egui::Ui) {
             let pill_w = (CHIP_PAD_X + galley.size().x.max(8.0) + CHIP_PAD_X).min(max_w);
             #[cfg(test)]
             begin_chip_dismiss_hits(ui);
-            ui.add_space(chip_cluster_lead(max_w, pill_w, ui.ctx().pixels_per_point()));
+            ui.add_space(chip_cluster_lead(
+                max_w,
+                pill_w,
+                ui.ctx().pixels_per_point(),
+            ));
             let (rect, resp) =
                 ui.allocate_exact_size(egui::vec2(pill_w, CHIP_ROW_H), Sense::hover());
             #[cfg(test)]
@@ -1251,7 +1307,11 @@ pub fn quick_chip_row(ui: &mut egui::Ui, chips: &[grokhub_core::QuickChip]) -> O
             #[cfg(test)]
             begin_chip_dismiss_hits(ui);
             let cluster_w = chip_cluster_w(&widths, fit, CHIP_GAP);
-            ui.add_space(chip_cluster_lead(max_w, cluster_w, ui.ctx().pixels_per_point()));
+            ui.add_space(chip_cluster_lead(
+                max_w,
+                cluster_w,
+                ui.ctx().pixels_per_point(),
+            ));
             let mut used = 0.0f32;
             for (i, c) in chips.iter().enumerate().take(fit) {
                 let galley = measured[i].clone();
@@ -1456,7 +1516,10 @@ pub fn settings_toggle_text_width(row: f32) -> f32 {
 }
 
 pub fn settings_switch(ui: &mut egui::Ui, on: bool) -> bool {
-    finish_switch(paint_switch(ui, on, egui::vec2(SETTINGS_SWITCH_W, 24.0)), on)
+    finish_switch(
+        paint_switch(ui, on, egui::vec2(SETTINGS_SWITCH_W, 24.0)),
+        on,
+    )
 }
 
 /// Compact on/off for an Automations job row. About 28×16, tooltip "Enabled".
@@ -1497,7 +1560,11 @@ fn finish_switch(resp: egui::Response, on: bool) -> bool {
 }
 
 pub fn switch_access_name(on: bool) -> &'static str {
-    if on { "On" } else { "Off" }
+    if on {
+        "On"
+    } else {
+        "Off"
+    }
 }
 
 pub fn settings_dropdown(
@@ -1521,11 +1588,7 @@ pub fn settings_dropdown(
         .inner_margin(egui::Margin::symmetric(10, 8))
         .show(ui, |ui| {
             egui::ComboBox::from_id_salt(title)
-                .selected_text(
-                    RichText::new(selected)
-                        .size(15.0)
-                        .color(crate::theme::fg()),
-                )
+                .selected_text(RichText::new(selected).size(15.0).color(crate::theme::fg()))
                 .width(ui.available_width().max(160.0))
                 .show_ui(ui, |ui| {
                     for (i, label) in choices.iter().enumerate() {
@@ -1637,14 +1700,33 @@ fn grant_pill(ui: &mut egui::Ui, label: &str) -> egui::Response {
 pub fn state_hint_job(hint: &str) -> LayoutJob {
     let lead = ["On", "Off"]
         .into_iter()
-        .find(|w| hint.strip_prefix(w).is_some_and(|rest| rest.starts_with([' ', '.'])))
+        .find(|w| {
+            hint.strip_prefix(w)
+                .is_some_and(|rest| rest.starts_with([' ', '.']))
+        })
         .unwrap_or("");
     let font = FontId::proportional(12.0);
     let mut job = LayoutJob::default();
     if !lead.is_empty() {
-        job.append(lead, 0.0, TextFormat { font_id: font.clone(), color: crate::theme::fg(), ..Default::default() });
+        job.append(
+            lead,
+            0.0,
+            TextFormat {
+                font_id: font.clone(),
+                color: crate::theme::fg(),
+                ..Default::default()
+            },
+        );
     }
-    job.append(&hint[lead.len()..], 0.0, TextFormat { font_id: font, color: crate::theme::muted(), ..Default::default() });
+    job.append(
+        &hint[lead.len()..],
+        0.0,
+        TextFormat {
+            font_id: font,
+            color: crate::theme::muted(),
+            ..Default::default()
+        },
+    );
     job
 }
 
@@ -1807,16 +1889,17 @@ pub fn appearance_card(ui: &mut egui::Ui, label: &str, selected: bool, preview: 
     } else {
         crate::theme::border()
     };
-    let (_rect, resp) =
-        ui.allocate_exact_size(egui::vec2(108.0, 96.0), Sense::click_and_drag());
+    let (_rect, resp) = ui.allocate_exact_size(egui::vec2(108.0, 96.0), Sense::click_and_drag());
     let (resp, rect, fill) = crate::theme::feel_button(ui, resp, fill);
     ui.painter().rect_filled(rect, 12.0, fill);
-    ui.painter()
-        .rect_stroke(rect, 12.0, Stroke::new(1.0_f32, stroke), egui::StrokeKind::Middle);
-    let preview_rect = egui::Rect::from_min_size(
-        rect.min + egui::vec2(10.0, 10.0),
-        egui::vec2(88.0, 56.0),
+    ui.painter().rect_stroke(
+        rect,
+        12.0,
+        Stroke::new(1.0_f32, stroke),
+        egui::StrokeKind::Middle,
     );
+    let preview_rect =
+        egui::Rect::from_min_size(rect.min + egui::vec2(10.0, 10.0), egui::vec2(88.0, 56.0));
     ui.painter().rect_filled(preview_rect, 6.0, preview);
     ui.painter().text(
         egui::pos2(rect.center().x, rect.bottom() - 14.0),
@@ -1825,8 +1908,7 @@ pub fn appearance_card(ui: &mut egui::Ui, label: &str, selected: bool, preview: 
         FontId::proportional(13.0),
         crate::theme::fg(),
     );
-    resp.clicked()
-        || (resp.contains_pointer() && resp.ctx.input(|i| i.pointer.primary_released()))
+    resp.clicked() || (resp.contains_pointer() && resp.ctx.input(|i| i.pointer.primary_released()))
 }
 
 pub fn search_field(ui: &mut egui::Ui, q: &mut String) {
@@ -1871,8 +1953,12 @@ fn paint_slot_card(
     } else {
         (crate::theme::border(), 1.0_f32)
     };
-    ui.painter()
-        .rect_stroke(slot.shrink(0.5), rounding, Stroke::new(stroke_w, stroke), egui::StrokeKind::Middle);
+    ui.painter().rect_stroke(
+        slot.shrink(0.5),
+        rounding,
+        Stroke::new(stroke_w, stroke),
+        egui::StrokeKind::Middle,
+    );
     resp
 }
 
@@ -1927,7 +2013,11 @@ fn tile_body_fits(fonts: &mut egui::epaint::text::FontsView<'_>, text: &str, wid
 /// Body copy for a skill/connector tile. At most three wrapped lines.
 /// Overflow ends on a word boundary with an ellipsis. A single token wider
 /// than the card is the only case that ellipsizes inside the token.
-pub fn tile_body_text(fonts: &mut egui::epaint::text::FontsView<'_>, body: &str, wrap_width: f32) -> String {
+pub fn tile_body_text(
+    fonts: &mut egui::epaint::text::FontsView<'_>,
+    body: &str,
+    wrap_width: f32,
+) -> String {
     let t = body.trim();
     if t.is_empty() {
         return String::new();
@@ -1962,7 +2052,11 @@ pub fn tile_body_text(fonts: &mut egui::epaint::text::FontsView<'_>, body: &str,
     ellipsize_tile_token(fonts, words[0], width)
 }
 
-fn ellipsize_tile_token(fonts: &mut egui::epaint::text::FontsView<'_>, token: &str, width: f32) -> String {
+fn ellipsize_tile_token(
+    fonts: &mut egui::epaint::text::FontsView<'_>,
+    token: &str,
+    width: f32,
+) -> String {
     let chars: Vec<char> = token.chars().collect();
     let mut lo = 0usize;
     let mut hi = chars.len();
@@ -1997,7 +2091,8 @@ fn next_tile_row_id(ui: &egui::Ui) -> egui::Id {
         .data(|d| d.get_temp::<(u64, u32)>(seq_id))
         .unwrap_or((u64::MAX, 0));
     let seq = if seen == frame { seq } else { 0 };
-    ui.ctx().data_mut(|d| d.insert_temp(seq_id, (frame, seq + 1)));
+    ui.ctx()
+        .data_mut(|d| d.insert_temp(seq_id, (frame, seq + 1)));
     ui.id().with(("grokhub-tile-row", seq))
 }
 
@@ -2233,7 +2328,9 @@ fn still_jpeg(key: &str) -> &'static [u8] {
 fn imagine_still_rgba(bytes: &[u8]) -> image::RgbaImage {
     image::load_from_memory(bytes)
         .map(|img| img.to_rgba8())
-        .unwrap_or_else(|_| image::RgbaImage::from_pixel(1, 1, image::Rgba([0x14, 0x14, 0x14, 0xff])))
+        .unwrap_or_else(|_| {
+            image::RgbaImage::from_pixel(1, 1, image::Rgba([0x14, 0x14, 0x14, 0xff]))
+        })
 }
 
 fn imagine_still_tex(ctx: &egui::Context, key: &str) -> (TextureHandle, [usize; 2]) {
@@ -2341,10 +2438,13 @@ pub fn imagine_stage(
     }
     ui.allocate_rect(wall, Sense::hover());
     let r = wall.shrink(1.0);
-    ui.painter()
-        .rect_filled(r, 14.0, crate::theme::elevated());
-    ui.painter()
-        .rect_stroke(r, 14.0, Stroke::new(1.0_f32, crate::theme::border()), egui::StrokeKind::Middle);
+    ui.painter().rect_filled(r, 14.0, crate::theme::elevated());
+    ui.painter().rect_stroke(
+        r,
+        14.0,
+        Stroke::new(1.0_f32, crate::theme::border()),
+        egui::StrokeKind::Middle,
+    );
     if working {
         let label = if video {
             "Imagining video…"
@@ -2603,7 +2703,10 @@ pub fn imagine_masonry(
     let heights: Vec<f32> = slots
         .iter()
         .map(|slot| match slot {
-            WallSlot::Stock(i) => tile_h(IMAGINE_SCENES.get(*i).map(|s| s.tall).unwrap_or(false), scale),
+            WallSlot::Stock(i) => tile_h(
+                IMAGINE_SCENES.get(*i).map(|s| s.tall).unwrap_or(false),
+                scale,
+            ),
             WallSlot::Gif(i) => tile_h(gifs.get(*i).map(|g| g.tall).unwrap_or(false), scale),
         })
         .collect();
@@ -2656,14 +2759,8 @@ fn imagine_photo_tile(
     let resp = ui.interact(rect, egui::Id::new(("imagine-tile", idx)), Sense::click());
     let (key_a, key_b, fade) = imagine_frame_pair(scene, now_ms);
     let (tex, size) = imagine_still_tex(ui.ctx(), key_a);
-    let uv = cover_uv(
-        size[0] as f32,
-        size[1] as f32,
-        rect.width(),
-        rect.height(),
-    );
-    ui.painter()
-        .image(tex.id(), rect, uv, Color32::WHITE);
+    let uv = cover_uv(size[0] as f32, size[1] as f32, rect.width(), rect.height());
+    ui.painter().image(tex.id(), rect, uv, Color32::WHITE);
     if fade > 0.02 && key_b != key_a {
         let (tex_b, size_b) = imagine_still_tex(ui.ctx(), key_b);
         let uv_b = cover_uv(
@@ -2676,10 +2773,7 @@ fn imagine_photo_tile(
         ui.painter()
             .image(tex_b.id(), rect, uv_b, Color32::from_white_alpha(alpha));
     }
-    let fade = egui::Rect::from_min_max(
-        egui::pos2(rect.left(), rect.bottom() - 42.0),
-        rect.max,
-    );
+    let fade = egui::Rect::from_min_max(egui::pos2(rect.left(), rect.bottom() - 42.0), rect.max);
     ui.painter()
         .rect_filled(fade, 0.0, Color32::from_black_alpha(140));
     ui.painter().text(
@@ -2759,7 +2853,9 @@ fn kick_disk_tex(ctx: egui::Context, path: String) {
         }
     }
     std::thread::spawn(move || {
-        let len = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(u64::MAX);
+        let len = std::fs::metadata(&path)
+            .map(|m| m.len())
+            .unwrap_or(u64::MAX);
         let img = if len > IMAGE_FILE_CAP {
             None
         } else {
@@ -2806,10 +2902,7 @@ fn imagine_disk_tile(
             crate::theme::fg(),
         );
         ui.painter().rect_filled(
-            egui::Rect::from_min_max(
-                egui::pos2(rect.left(), rect.bottom() - 42.0),
-                rect.max,
-            ),
+            egui::Rect::from_min_max(egui::pos2(rect.left(), rect.bottom() - 42.0), rect.max),
             0.0,
             Color32::from_black_alpha(140),
         );
@@ -2834,21 +2927,16 @@ fn imagine_disk_tile(
     } else {
         gif.path_a.as_str()
     };
-    let t = (now_ms % crate::theme::IMAGINE_FRAME_MS) as f32 / crate::theme::IMAGINE_FRAME_MS as f32;
+    let t =
+        (now_ms % crate::theme::IMAGINE_FRAME_MS) as f32 / crate::theme::IMAGINE_FRAME_MS as f32;
     let fade = if n == 1 {
         0.0
     } else {
         ((t - 0.72) / 0.28).clamp(0.0, 1.0)
     };
     let (tex, size) = imagine_disk_tex(ui.ctx(), path_a);
-    let uv = cover_uv(
-        size[0] as f32,
-        size[1] as f32,
-        rect.width(),
-        rect.height(),
-    );
-    ui.painter()
-        .image(tex.id(), rect, uv, Color32::WHITE);
+    let uv = cover_uv(size[0] as f32, size[1] as f32, rect.width(), rect.height());
+    ui.painter().image(tex.id(), rect, uv, Color32::WHITE);
     if fade > 0.02 && path_b != path_a && !path_b.is_empty() {
         let (tex_b, size_b) = imagine_disk_tex(ui.ctx(), path_b);
         let uv_b = cover_uv(
@@ -2861,10 +2949,8 @@ fn imagine_disk_tile(
         ui.painter()
             .image(tex_b.id(), rect, uv_b, Color32::from_white_alpha(alpha));
     }
-    let fade_bar = egui::Rect::from_min_max(
-        egui::pos2(rect.left(), rect.bottom() - 42.0),
-        rect.max,
-    );
+    let fade_bar =
+        egui::Rect::from_min_max(egui::pos2(rect.left(), rect.bottom() - 42.0), rect.max);
     ui.painter()
         .rect_filled(fade_bar, 0.0, Color32::from_black_alpha(140));
     ui.painter().text(
@@ -2947,12 +3033,18 @@ mod tests {
     /// label, at the same size.
     #[test]
     fn section_heading_adds_room_above_at_the_same_size() {
-        assert!((8.0..=12.0).contains(&SECTION_HEAD_GAP), "{SECTION_HEAD_GAP}");
+        assert!(
+            (8.0..=12.0).contains(&SECTION_HEAD_GAP),
+            "{SECTION_HEAD_GAP}"
+        );
         let ctx = egui::Context::default();
         crate::theme::install_fonts_on(&ctx);
         let tops = |heading: bool| {
             let input = egui::RawInput {
-                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(480.0, 400.0))),
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(480.0, 400.0),
+                )),
                 ..Default::default()
             };
             let mut top = 0.0_f32;
@@ -2978,8 +3070,14 @@ mod tests {
         };
         let (plain_y, plain_h) = tops(false);
         let (head_y, head_h) = tops(true);
-        assert!((head_y - plain_y - SECTION_HEAD_GAP).abs() < 0.5, "{plain_y} -> {head_y}");
-        assert!((head_h - plain_h).abs() < 0.01, "the heading size stays: {plain_h} vs {head_h}");
+        assert!(
+            (head_y - plain_y - SECTION_HEAD_GAP).abs() < 0.5,
+            "{plain_y} -> {head_y}"
+        );
+        assert!(
+            (head_h - plain_h).abs() < 0.01,
+            "the heading size stays: {plain_h} vs {head_h}"
+        );
     }
 
     /// Spike-4b: a focused Allow answers Enter/Space as a plain pill would, but
@@ -2993,11 +3091,24 @@ mod tests {
             let pass = |events: Vec<egui::Event>| {
                 let mut hit = false;
                 let mut at = egui::Pos2::ZERO;
-                let input = egui::RawInput { screen_rect: Some(screen), events, ..Default::default() };
+                let input = egui::RawInput {
+                    screen_rect: Some(screen),
+                    events,
+                    ..Default::default()
+                };
                 let out = crate::theme::test_pass(&ctx, input, |ui| {
                     egui::CentralPanel::default().show(ui, |ui| {
                         hit = if grant {
-                            settings_grant_row(ui, "Row", "", None, GrantPill::Allow, None, false, |_| {})
+                            settings_grant_row(
+                                ui,
+                                "Row",
+                                "",
+                                None,
+                                GrantPill::Allow,
+                                None,
+                                false,
+                                |_| {},
+                            )
                         } else {
                             white_pill(ui, "Allow")
                         };
@@ -3031,8 +3142,16 @@ mod tests {
             let by_click = pass(vec![press(false)]).0;
             (by_keys, by_click)
         };
-        assert_eq!(run(false), (true, true), "the plain pill takes keys: the test reaches the button");
-        assert_eq!(run(true), (false, true), "the grant pill takes the click only");
+        assert_eq!(
+            run(false),
+            (true, true),
+            "the plain pill takes keys: the test reaches the button"
+        );
+        assert_eq!(
+            run(true),
+            (false, true),
+            "the grant pill takes the click only"
+        );
     }
 
     #[test]
@@ -3043,7 +3162,10 @@ mod tests {
         let ctx = egui::Context::default();
         crate::theme::install_fonts_on(&ctx);
         let input = egui::RawInput {
-            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(480.0, 400.0))),
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(480.0, 400.0),
+            )),
             ..Default::default()
         };
         let mut row_right = 0.0_f32;
@@ -3051,7 +3173,12 @@ mod tests {
             egui::CentralPanel::default().show(ui, |ui| {
                 row_right = ui.max_rect().right();
                 let mut on = true;
-                assert!(!settings_toggle(ui, "Let Grok control the desktop", hint, &mut on));
+                assert!(!settings_toggle(
+                    ui,
+                    "Let Grok control the desktop",
+                    hint,
+                    &mut on
+                ));
             });
         });
         let mut hint_right = None;
@@ -3072,12 +3199,24 @@ mod tests {
     #[test]
     fn help_text_paints_backticks_as_code_not_literals() {
         let job = inline_code_job("run `/loop 30m` now", 12.0, Color32::GRAY, 400.0);
-        assert!(!job.text.contains('`'), "backticks must not paint: {}", job.text);
+        assert!(
+            !job.text.contains('`'),
+            "backticks must not paint: {}",
+            job.text
+        );
         assert_eq!(job.text, "run /loop 30m now");
-        let fonts: Vec<_> = job.sections.iter().map(|s| s.format.font_id.family.clone()).collect();
+        let fonts: Vec<_> = job
+            .sections
+            .iter()
+            .map(|s| s.format.font_id.family.clone())
+            .collect();
         assert_eq!(
             fonts,
-            vec![egui::FontFamily::Proportional, egui::FontFamily::Monospace, egui::FontFamily::Proportional]
+            vec![
+                egui::FontFamily::Proportional,
+                egui::FontFamily::Monospace,
+                egui::FontFamily::Proportional
+            ]
         );
         // An unpaired backtick is prose, not the start of a code span.
         let open = inline_code_job("it's `open", 12.0, Color32::GRAY, 400.0);
@@ -3249,7 +3388,10 @@ mod tests {
             card.contains("feel_response_in_slot") && card.contains("veil_over"),
             "skill and automation cards must tint inside the slot: {card}"
         );
-        assert!(!card.contains("rect_filled"), "hover plate must not cover the title: {card}");
+        assert!(
+            !card.contains("rect_filled"),
+            "hover plate must not cover the title: {card}"
+        );
         let tile = src
             .split("pub fn grok_tile(")
             .nth(1)
@@ -3284,7 +3426,8 @@ mod tests {
             .and_then(|s| s.split("fn tick_history_search(").next())
             .expect("ui_skills");
         assert!(
-            !skills.contains("tab_pill(ui, \"Connectors\"") && skills.contains("self.open_connectors()"),
+            !skills.contains("tab_pill(ui, \"Connectors\"")
+                && skills.contains("self.open_connectors()"),
             "Skills has no Connectors tab; its Connectors pill opens Settings: {skills}"
         );
         assert!(skills.contains("grok_tile("), "skill cards stay grok_tile");
@@ -3293,7 +3436,10 @@ mod tests {
             .nth(1)
             .and_then(|s| s.split("#[cfg(test)]").next())
             .expect("empty_prompt_tile");
-        assert!(empty.contains("paint_slot_card") && !empty.contains("rect_filled"), "{empty}");
+        assert!(
+            empty.contains("paint_slot_card") && !empty.contains("rect_filled"),
+            "{empty}"
+        );
         let wall = src
             .split("fn wall_slot_feel(")
             .nth(1)
@@ -3308,13 +3454,19 @@ mod tests {
             .nth(1)
             .and_then(|s| s.split("fn imagine_disk_tex(").next())
             .expect("imagine_photo_tile");
-        assert!(photo.contains("wall_slot_feel") && !photo.contains("wash"), "{photo}");
+        assert!(
+            photo.contains("wall_slot_feel") && !photo.contains("wash"),
+            "{photo}"
+        );
         let disk = src
             .split("fn imagine_disk_tile(")
             .nth(1)
             .and_then(|s| s.split("fn wall_slot_feel(").next())
             .expect("imagine_disk_tile");
-        assert!(disk.contains("wall_slot_feel") && !disk.contains("wash"), "{disk}");
+        assert!(
+            disk.contains("wall_slot_feel") && !disk.contains("wash"),
+            "{disk}"
+        );
     }
 
     #[test]
@@ -3345,7 +3497,10 @@ mod tests {
             ChipRowAct::Apply(i) => assert_eq!(i, 4),
             ChipRowAct::Dismiss(_) => panic!("apply is not dismiss"),
         }
-        assert_eq!(chip_paint_label("Continue Night cabin"), "Continue Night cabin");
+        assert_eq!(
+            chip_paint_label("Continue Night cabin"),
+            "Continue Night cabin"
+        );
         let long = chip_paint_label(
             "Continue the work from the chat \"Night cabin\". Last ask: paint the wall.",
         );
@@ -3420,7 +3575,10 @@ mod tests {
         );
         let (auto_t, auto) = composer_perm_tip("auto").unwrap();
         assert_eq!(auto_t, "Auto");
-        assert!(auto.contains("Safe tools") && auto.contains("/auto"), "{auto}");
+        assert!(
+            auto.contains("Safe tools") && auto.contains("/auto"),
+            "{auto}"
+        );
         let (always_t, always) = composer_perm_tip("always-approve").unwrap();
         assert_eq!(always_t, "Always");
         assert!(
@@ -3443,10 +3601,7 @@ mod tests {
 
     #[test]
     fn mode_pill_fits_the_composer_cluster() {
-        assert_eq!(
-            composer_go_cluster_w(),
-            22.0 + 28.0 + 8.0 * 3.0 + 12.0
-        );
+        assert_eq!(composer_go_cluster_w(), 22.0 + 28.0 + 8.0 * 3.0 + 12.0);
         assert_eq!(composer_modes().len(), 3);
         assert_eq!(permission_modes().len(), 3);
         let session = include_str!("cards.rs")
@@ -3615,8 +3770,7 @@ mod tests {
             .and_then(|s| s.split("pub fn tab_pill(").next())
             .expect("chip row");
         assert!(
-            slice.contains("left_to_right(egui::Align::Center)")
-                && slice.contains("CHIP_ROW_H"),
+            slice.contains("left_to_right(egui::Align::Center)") && slice.contains("CHIP_ROW_H"),
             "chips share one fixed midline height: {slice}"
         );
         assert!(
@@ -3748,10 +3902,16 @@ mod tests {
                     color,
                     CHIP_LABEL_MAX_W,
                 );
-                let short = layout_chip_label(ui, "Continue", font.clone(), color, CHIP_LABEL_MAX_W);
+                let short =
+                    layout_chip_label(ui, "Continue", font.clone(), color, CHIP_LABEL_MAX_W);
                 let desc = layout_chip_label(ui, "gypq", font, color, CHIP_LABEL_MAX_W);
                 for galley in [&long, &cut, &short, &desc] {
-                    assert_eq!(galley.rows.len(), 1, "single line: {}", galley.rows[0].text());
+                    assert_eq!(
+                        galley.rows.len(),
+                        1,
+                        "single line: {}",
+                        galley.rows[0].text()
+                    );
                     assert!(
                         galley.size().y + CHIP_PAD_Y * 2.0 <= CHIP_ROW_H + 0.5,
                         "descenders must fit the fixed height: h={} row={}",
@@ -3772,7 +3932,11 @@ mod tests {
                     natural > CHIP_LABEL_MAX_W,
                     "owner-length label must overflow the cap, got {natural}"
                 );
-                assert!(long.elided, "long label must ellipsize: {}", long.rows[0].text());
+                assert!(
+                    long.elided,
+                    "long label must ellipsize: {}",
+                    long.rows[0].text()
+                );
                 assert!(
                     long.rows[0].text().ends_with('…'),
                     "ellipsis, not a hard clip: {}",
@@ -3784,7 +3948,11 @@ mod tests {
                     cut.rows[0].text()
                 );
                 assert!(long.size().x <= CHIP_LABEL_MAX_W + 0.5);
-                assert!(!short.elided, "short label stays whole: {}", short.rows[0].text());
+                assert!(
+                    !short.elided,
+                    "short label stays whole: {}",
+                    short.rows[0].text()
+                );
                 assert_eq!(cut.rows.len(), 1);
                 // Owner shot: these wrapped to two lines and the last was cut
                 // mid-glyph. Each stays one line; overflow is an ellipsis.
@@ -3824,8 +3992,13 @@ mod tests {
                     color,
                     CHIP_LABEL_MAX_W,
                 );
-                let test_g =
-                    layout_chip_label(ui, "test", FontId::proportional(13.0), color, CHIP_LABEL_MAX_W);
+                let test_g = layout_chip_label(
+                    ui,
+                    "test",
+                    FontId::proportional(13.0),
+                    color,
+                    CHIP_LABEL_MAX_W,
+                );
                 assert!(!continue_g.elided && continue_g.rows.len() == 1);
                 assert!(!test_g.elided && test_g.rows.len() == 1);
                 let owner = vec![
@@ -3955,7 +4128,10 @@ mod tests {
                 hits, rest,
                 "hover must not move the dismiss slot off the pointer at t={time}: {hits:?} vs {rest:?}"
             );
-            assert!(hits[0].contains(parked), "pointer left the × at t={time}: {hits:?}");
+            assert!(
+                hits[0].contains(parked),
+                "pointer left the × at t={time}: {hits:?}"
+            );
             cursors.push(cursor);
         }
         assert!(
@@ -3998,7 +4174,12 @@ mod tests {
         assert_eq!(chip_cluster_lead(601.0, 252.0, 2.0), 174.5);
         assert_eq!(chip_cluster_lead(300.0, 420.0, 1.0), 0.0);
         assert_eq!(chip_cluster_lead(500.0, 100.0, 0.0), 200.0);
-        for (row_w, cluster_w) in [(360.0, 117.0), (480.5, 301.25), (760.0, 433.0), (1033.0, 77.7)] {
+        for (row_w, cluster_w) in [
+            (360.0, 117.0),
+            (480.5, 301.25),
+            (760.0, 433.0),
+            (1033.0, 77.7),
+        ] {
             for ppp in [1.0f32, 1.25, 1.5, 2.0] {
                 let lead = chip_cluster_lead(row_w, cluster_w, ppp);
                 let off_px = (lead + cluster_w * 0.5 - row_w * 0.5).abs() * ppp;
@@ -4011,7 +4192,11 @@ mod tests {
         }
     }
 
-    fn chip_pills_in_column(screen_w: f32, ppp: f32, chips: &[grokhub_core::QuickChip]) -> (egui::Rect, Vec<egui::Rect>) {
+    fn chip_pills_in_column(
+        screen_w: f32,
+        ppp: f32,
+        chips: &[grokhub_core::QuickChip],
+    ) -> (egui::Rect, Vec<egui::Rect>) {
         let ctx = egui::Context::default();
         install_chip_fonts(&ctx);
         ctx.set_pixels_per_point(ppp);
@@ -4050,7 +4235,11 @@ mod tests {
         for screen_w in [700.0f32, 900.0, 1400.0, 1920.0] {
             for ppp in [1.0f32, 1.25, 1.5, 2.0] {
                 let (col, pills) = chip_pills_in_column(screen_w, ppp, &chips);
-                assert_eq!(pills.len(), 3, "all three chips fit at {screen_w}px {ppp}x: {pills:?}");
+                assert_eq!(
+                    pills.len(),
+                    3,
+                    "all three chips fit at {screen_w}px {ppp}x: {pills:?}"
+                );
                 let left = pills.first().unwrap().left();
                 let right = pills.last().unwrap().right();
                 let mid = (left + right) * 0.5;
@@ -4115,8 +4304,18 @@ mod tests {
     #[test]
     fn catalog_is_cabin_real() {
         let forbidden = [
-            "outlook", "gmail", "stock", "ticker", "docx", "xlsx", "pptx",
-            "powerpoint", "spreadsheet", "word document", "pdf", "video",
+            "outlook",
+            "gmail",
+            "stock",
+            "ticker",
+            "docx",
+            "xlsx",
+            "pptx",
+            "powerpoint",
+            "spreadsheet",
+            "word document",
+            "pdf",
+            "video",
         ];
         for s in SUGGESTED_AUTOS {
             let blob = format!("{} {} {}", s.title, s.body, s.seed).to_ascii_lowercase();
@@ -4294,7 +4493,9 @@ mod tests {
             .nth(1)
             .and_then(|s| s.split("fn cover_uv(").next())
             .expect("imagine_still_tex");
-        let spawn = tex.find("thread::spawn").expect("decode must leave the UI thread");
+        let spawn = tex
+            .find("thread::spawn")
+            .expect("decode must leave the UI thread");
         let decode = tex.find("imagine_still_rgba").expect("bundled JPEG decode");
         assert!(
             spawn < decode && tex.contains("inflight"),
@@ -4312,7 +4513,9 @@ mod tests {
             .expect("imagine_disk_tex");
         let meta = tex.find("metadata").expect("size check before decode");
         let read = tex.find("std::fs::read").expect("read image");
-        let spawn = tex.find("thread::spawn").expect("decode must leave the UI thread");
+        let spawn = tex
+            .find("thread::spawn")
+            .expect("decode must leave the UI thread");
         assert!(
             spawn < read && meta < read && tex.contains("IMAGE_FILE_CAP"),
             "a huge wall still must not decode on the UI thread: {tex}"

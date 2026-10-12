@@ -47,7 +47,9 @@ fn match_at(c: &[char], i: usize) -> Option<(usize, &'static str)> {
     let prev = if i == 0 { None } else { Some(c[i - 1]) };
     // Number-shaped matches start on a clean boundary: not inside a word,
     // identifier, version, path or another number.
-    let clean = prev.is_none_or(|p| !(p.is_alphanumeric() || matches!(p, '_' | '.' | '-' | '/' | '\\' | '#' | '$' | '@' | '+')));
+    let clean = prev.is_none_or(|p| {
+        !(p.is_alphanumeric() || matches!(p, '_' | '.' | '-' | '/' | '\\' | '#' | '$' | '@' | '+'))
+    });
     if ch == '+' && prev.is_none_or(|p| !(p.is_alphanumeric() || matches!(p, '_' | '+'))) {
         if let Some(n) = intl_phone(c, i) {
             return Some((n, "[phone]"));
@@ -97,7 +99,9 @@ fn digits(c: &[char], i: usize, n: usize) -> bool {
 }
 
 fn num(c: &[char], i: usize, n: usize) -> u32 {
-    c[i..i + n].iter().fold(0, |a, x| a * 10 + x.to_digit(10).unwrap_or(0))
+    c[i..i + n]
+        .iter()
+        .fold(0, |a, x| a * 10 + x.to_digit(10).unwrap_or(0))
 }
 
 // ---- email ---------------------------------------------------------------
@@ -109,9 +113,10 @@ fn is_local_char(c: char) -> bool {
 /// File extensions and code-ish endings that are never a mail TLD here
 /// (`logo@2x.png`, `module@scope.js`, `pkg@1.2.3`).
 const NOT_TLDS: &[&str] = &[
-    "png", "jpg", "jpeg", "gif", "svg", "webp", "ico", "bmp", "js", "mjs", "cjs", "ts", "tsx", "jsx", "rs", "py",
-    "rb", "go", "java", "kt", "c", "h", "cpp", "hpp", "cs", "json", "toml", "yaml", "yml", "md", "txt", "lock",
-    "html", "css", "scss", "sh", "zip", "gz", "tar", "wasm", "map", "log", "lib", "dll", "exe", "so", "pdf",
+    "png", "jpg", "jpeg", "gif", "svg", "webp", "ico", "bmp", "js", "mjs", "cjs", "ts", "tsx",
+    "jsx", "rs", "py", "rb", "go", "java", "kt", "c", "h", "cpp", "hpp", "cs", "json", "toml",
+    "yaml", "yml", "md", "txt", "lock", "html", "css", "scss", "sh", "zip", "gz", "tar", "wasm",
+    "map", "log", "lib", "dll", "exe", "so", "pdf",
 ];
 
 fn email(c: &[char], i: usize) -> Option<usize> {
@@ -148,11 +153,15 @@ fn email(c: &[char], i: usize) -> Option<usize> {
         || !(2..=24).contains(&tld.len())
         || !tld.chars().all(|x| x.is_ascii_alphabetic())
         || NOT_TLDS.contains(&tld.to_ascii_lowercase().as_str())
-        || labels.iter().any(|l| l.starts_with('-') || l.ends_with('-'))
+        || labels
+            .iter()
+            .any(|l| l.starts_with('-') || l.ends_with('-'))
     {
         return None;
     }
-    if c.get(k).is_some_and(|x| x.is_alphanumeric() || matches!(x, '_' | '@' | ':' | '/')) {
+    if c.get(k)
+        .is_some_and(|x| x.is_alphanumeric() || matches!(x, '_' | '@' | ':' | '/'))
+    {
         return None;
     }
     Some(k - i)
@@ -182,7 +191,10 @@ fn card(c: &[char], i: usize) -> Option<usize> {
             break;
         }
         match c.get(j) {
-            Some(&s @ (' ' | '-')) if c.get(j + 1).is_some_and(|x| x.is_ascii_digit()) && sep.is_none_or(|p| p == s) => {
+            Some(&s @ (' ' | '-'))
+                if c.get(j + 1).is_some_and(|x| x.is_ascii_digit())
+                    && sep.is_none_or(|p| p == s) =>
+            {
                 sep = Some(s);
                 j += 1;
             }
@@ -190,7 +202,11 @@ fn card(c: &[char], i: usize) -> Option<usize> {
         }
     }
     for (end, digits) in ends.iter().rev() {
-        if (13..=19).contains(&digits.len()) && ends_clean(c, *end) && card_prefix(digits) && luhn(digits) {
+        if (13..=19).contains(&digits.len())
+            && ends_clean(c, *end)
+            && card_prefix(digits)
+            && luhn(digits)
+        {
             // A bare run must be the whole number, not the head of a longer one.
             return Some(end - i);
         }
@@ -266,7 +282,12 @@ fn intl_phone(c: &[char], i: usize) -> Option<usize> {
             j += 1;
         }
         match c.get(j) {
-            Some(' ' | '-' | '.') if c.get(j + 1).is_some_and(|x| x.is_ascii_digit() || *x == '(') => j += 1,
+            Some(' ' | '-' | '.')
+                if c.get(j + 1)
+                    .is_some_and(|x| x.is_ascii_digit() || *x == '(') =>
+            {
+                j += 1
+            }
             _ => break j,
         }
     };
@@ -297,7 +318,11 @@ fn nanp_paren(c: &[char], i: usize) -> Option<usize> {
 /// `312-555-0199`, `312.555.0199`, `1-312-555-0199`. One separator kind,
 /// and never with spaces only (too much like a list of numbers).
 fn nanp_plain(c: &[char], i: usize) -> Option<usize> {
-    let lead = if c[i] == '1' && c.get(i + 1) == Some(&'-') { 2 } else { 0 };
+    let lead = if c[i] == '1' && c.get(i + 1) == Some(&'-') {
+        2
+    } else {
+        0
+    };
     let a = i + lead;
     let sep = *c.get(a + 3)?;
     if !matches!(sep, '-' | '.') || (lead == 2 && sep != '-') {
@@ -315,9 +340,35 @@ fn nanp_plain(c: &[char], i: usize) -> Option<usize> {
 // ---- addresses -------------------------------------------------------------
 
 const STREET_SUFFIXES: &[&str] = &[
-    "Street", "St", "Avenue", "Ave", "Road", "Rd", "Boulevard", "Blvd", "Lane", "Ln", "Drive", "Dr", "Court", "Ct",
-    "Way", "Place", "Pl", "Terrace", "Ter", "Parkway", "Pkwy", "Circle", "Cir", "Highway", "Hwy", "Square", "Sq",
-    "Trail", "Trl",
+    "Street",
+    "St",
+    "Avenue",
+    "Ave",
+    "Road",
+    "Rd",
+    "Boulevard",
+    "Blvd",
+    "Lane",
+    "Ln",
+    "Drive",
+    "Dr",
+    "Court",
+    "Ct",
+    "Way",
+    "Place",
+    "Pl",
+    "Terrace",
+    "Ter",
+    "Parkway",
+    "Pkwy",
+    "Circle",
+    "Cir",
+    "Highway",
+    "Hwy",
+    "Square",
+    "Sq",
+    "Trail",
+    "Trl",
 ];
 const DIRECTIONS: &[&str] = &["N", "S", "E", "W", "NE", "NW", "SE", "SW"];
 
@@ -422,7 +473,10 @@ fn unit(c: &[char], i: usize) -> Option<usize> {
 
 /// `PO Box 123`, `P.O. Box 123`, `Post Office Box 123` (any case).
 fn po_box(c: &[char], i: usize) -> Option<usize> {
-    let rest: String = c[i..c.len().min(i + 20)].iter().collect::<String>().to_ascii_lowercase();
+    let rest: String = c[i..c.len().min(i + 20)]
+        .iter()
+        .collect::<String>()
+        .to_ascii_lowercase();
     let head = ["p.o. box ", "po box ", "p.o.box ", "post office box "]
         .iter()
         .find(|h| rest.starts_with(**h))?;
@@ -445,19 +499,49 @@ mod tests {
     #[test]
     fn masks_each_kind() {
         let cases = [
-            ("mail jane.doe+news@example.co.uk today", "mail [email] today"),
-            ("Reach me at J_Smith@Mail.Example.COM.", "Reach me at [email]."),
-            ("call +1 (312) 555-0199 or +44 20 7946 0958", "call [phone] or [phone]"),
-            ("office (312) 555-0199, cell 312-555-0142", "office [phone], cell [phone]"),
-            ("fax 312.555.0177 or 1-800-555-0100", "fax [phone] or [phone]"),
-            ("card 4111 1111 1111 1111 exp 12/29", "card [card] exp 12/29"),
-            ("amex 3782-822463-10005 and 5555555555554444", "amex [card] and [card]"),
+            (
+                "mail jane.doe+news@example.co.uk today",
+                "mail [email] today",
+            ),
+            (
+                "Reach me at J_Smith@Mail.Example.COM.",
+                "Reach me at [email].",
+            ),
+            (
+                "call +1 (312) 555-0199 or +44 20 7946 0958",
+                "call [phone] or [phone]",
+            ),
+            (
+                "office (312) 555-0199, cell 312-555-0142",
+                "office [phone], cell [phone]",
+            ),
+            (
+                "fax 312.555.0177 or 1-800-555-0100",
+                "fax [phone] or [phone]",
+            ),
+            (
+                "card 4111 1111 1111 1111 exp 12/29",
+                "card [card] exp 12/29",
+            ),
+            (
+                "amex 3782-822463-10005 and 5555555555554444",
+                "amex [card] and [card]",
+            ),
             ("ssn 123-45-6789.", "ssn [ssn]."),
-            ("Phone:312-555-0199 SSN:123-45-6789", "Phone:[phone] SSN:[ssn]"),
-            ("I live at 221B Baker Street, London", "I live at [address], London"),
+            (
+                "Phone:312-555-0199 SSN:123-45-6789",
+                "Phone:[phone] SSN:[ssn]",
+            ),
+            (
+                "I live at 221B Baker Street, London",
+                "I live at [address], London",
+            ),
             ("ship to 1600 Pennsylvania Avenue NW", "ship to [address]"),
             ("42 N 5th St., Apt 3 is the door", "[address] is the door"),
-            ("mail it to PO Box 1234 please", "mail it to [address] please"),
+            (
+                "mail it to PO Box 1234 please",
+                "mail it to [address] please",
+            ),
             ("or P.O. Box 77.", "or [address]."),
         ];
         for (input, want) in cases {

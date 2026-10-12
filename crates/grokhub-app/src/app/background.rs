@@ -13,8 +13,7 @@ use grokhub_agent::harness as hx;
 use grokhub_agent::Engine;
 use grokhub_core::{
     bg_elapsed_label, bg_result_note, bg_result_post, bg_results_follow, bg_task_prompt,
-    bg_task_title, chat_run_dot_alpha, extract_background_tasks,
-    BgEnd, BgOrigin, BG_TASK_MAX,
+    bg_task_title, chat_run_dot_alpha, extract_background_tasks, BgEnd, BgOrigin, BG_TASK_MAX,
 };
 
 /// `/bg` and a model `BACKGROUND_TASK:` line while Ask is on. A background run
@@ -113,7 +112,9 @@ impl BgWork {
 
     /// A scheduled automation is running in its own process.
     pub fn scheduled_live(&self) -> bool {
-        self.runs.iter().any(|r| r.live() && r.origin == BgOrigin::Scheduled)
+        self.runs
+            .iter()
+            .any(|r| r.live() && r.origin == BgOrigin::Scheduled)
     }
 
     pub fn busy(&self) -> bool {
@@ -174,9 +175,17 @@ impl Cabin {
     pub(super) fn automation_span(&self, trace: &str, job: &str) {
         let args = serde_json::json!({ "job": job }).to_string();
         let driver = "native";
-        let span = hx::Span::soft_allow(trace, AUTOMATION_TOOL, &args, "started", "scheduled run", self.access_mode(), driver)
-            .from_origin(hx::Origin::Automation)
-            .on_path("automation");
+        let span = hx::Span::soft_allow(
+            trace,
+            AUTOMATION_TOOL,
+            &args,
+            "started",
+            "scheduled run",
+            self.access_mode(),
+            driver,
+        )
+        .from_origin(hx::Origin::Automation)
+        .on_path("automation");
         let _ = hx::append_span(&crate::config::config_dir(), &span);
     }
 
@@ -352,7 +361,9 @@ impl Cabin {
             self.threads
                 .iter()
                 .find(|t| t.id == thread_id)
-                .and_then(|t| last_user_scan(t.messages.iter().map(|m| (m.0.as_str(), m.1.as_str()))))
+                .and_then(|t| {
+                    last_user_scan(t.messages.iter().map(|m| (m.0.as_str(), m.1.as_str())))
+                })
         }
         .unwrap_or_default()
     }
@@ -477,7 +488,11 @@ impl Cabin {
             if run.origin == BgOrigin::Scheduled {
                 // Its report goes to Follow up and the home feed, never a chat
                 // you can see. The hidden Background chat keeps a copy.
-                self.push_msg_on(&run.thread_id, "assistant", bg_result_post(&run.title, &end, &reply));
+                self.push_msg_on(
+                    &run.thread_id,
+                    "assistant",
+                    bg_result_post(&run.title, &end, &reply),
+                );
                 self.settle_scheduled_run(run.automation.as_deref(), &end, &reply);
                 threads::file_background_sessions(
                     &mut self.threads,
@@ -493,7 +508,11 @@ impl Cabin {
                 continue;
             }
             if end != BgEnd::Stopped || !reply.trim().is_empty() {
-                self.push_msg_on(&run.thread_id, "assistant", bg_result_post(&run.title, &end, &reply));
+                self.push_msg_on(
+                    &run.thread_id,
+                    "assistant",
+                    bg_result_post(&run.title, &end, &reply),
+                );
                 self.bg.unread.push((
                     run.thread_id.clone(),
                     bg_result_note(&run.title, &end, &reply),
@@ -595,7 +614,13 @@ impl Cabin {
     }
 
     pub(super) fn stop_all_bg_runs(&mut self) -> usize {
-        let ids: Vec<u64> = self.bg.runs.iter().filter(|r| r.live()).map(|r| r.id).collect();
+        let ids: Vec<u64> = self
+            .bg
+            .runs
+            .iter()
+            .filter(|r| r.live())
+            .map(|r| r.id)
+            .collect();
         for id in &ids {
             self.stop_bg_run(*id);
         }
@@ -740,7 +765,11 @@ impl Cabin {
             .iter()
             .filter(|r| r.thread_id != vis && r.live() && r.origin != BgOrigin::Scheduled)
             .count();
-        let queued = if self.running { self.followup_queue.len() } else { 0 };
+        let queued = if self.running {
+            self.followup_queue.len()
+        } else {
+            0
+        };
         if !typing && here.is_empty() && elsewhere == 0 && queued == 0 {
             return;
         }
@@ -749,7 +778,8 @@ impl Cabin {
         let t = ui.ctx().input(|i| i.time) as f32;
         let pulse = chat_run_dot_alpha(t);
         let live = crate::theme::live();
-        let dot = Color32::from_rgba_unmultiplied(live.r(), live.g(), live.b(), (pulse * 255.0) as u8);
+        let dot =
+            Color32::from_rgba_unmultiplied(live.r(), live.g(), live.b(), (pulse * 255.0) as u8);
         let meta = |ui: &mut egui::Ui, s: &str, c: Color32| {
             ui.label(RichText::new(s).size(crate::theme::FONT_META).color(c));
         };
@@ -820,7 +850,8 @@ impl Cabin {
         });
         ui.add_space(4.0);
         if !here.is_empty() || elsewhere > 0 {
-            ui.ctx().request_repaint_after(std::time::Duration::from_millis(500));
+            ui.ctx()
+                .request_repaint_after(std::time::Duration::from_millis(500));
         }
         match act {
             Some(LiveWorkAct::Steer) => {
@@ -990,7 +1021,9 @@ fn usage_since(before: &grokhub_agent::Usage, total: &GrokUsage) -> GrokUsage {
     GrokUsage {
         input_tokens: total.input_tokens.saturating_sub(before.input_tokens),
         output_tokens: total.output_tokens.saturating_sub(before.output_tokens),
-        reasoning_tokens: total.reasoning_tokens.saturating_sub(before.reasoning_tokens),
+        reasoning_tokens: total
+            .reasoning_tokens
+            .saturating_sub(before.reasoning_tokens),
         ..empty_grok_usage()
     }
 }
@@ -1011,7 +1044,6 @@ fn empty_grok_usage() -> GrokUsage {
         meter: String::new(),
     }
 }
-
 
 /// The crash card for a background run killed from outside. A moved-off chat
 /// turn retries in its chat; any other run starts again with `/bg`.
