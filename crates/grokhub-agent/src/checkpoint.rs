@@ -1117,12 +1117,18 @@ mod tests {
             "Finish what the last run left open: Restart nginx and confirm it is listening."
         );
         assert!(
-            !card.fixes[0].goal.to_ascii_lowercase().contains("activate skill"),
+            !card.fixes[0]
+                .goal
+                .to_ascii_lowercase()
+                .contains("activate skill"),
             "{}",
             card.fixes[0].goal
         );
         assert!(
-            !card.fixes[0].goal.to_ascii_lowercase().contains("grant workspace"),
+            !card.fixes[0]
+                .goal
+                .to_ascii_lowercase()
+                .contains("grant workspace"),
             "{}",
             card.fixes[0].goal
         );
