@@ -24,7 +24,7 @@ pub use discover::{
 };
 pub use entitlement::{tier_notice, Credential, Entitlement};
 pub use health::{classify_status, CallStatus, Observation};
-pub use record::{Breaker, ModelMeta, ModelRecord, ModelState, Notice, Prices, SourceKind};
+pub use record::{model_id_stem, Breaker, ModelMeta, ModelRecord, ModelState, Notice, Prices, SourceKind};
 
 pub const REGISTRY_SCHEMA: u32 = 1;
 /// First refresh after start, once the cabin is idle.
