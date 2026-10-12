@@ -11,6 +11,10 @@
 //! the runs whose metrics line names that row or playbook; a worse one is
 //! put back through the ledger, and a hand edit since is never written over.
 //!
+//! Brain 6 PR 2: [`brain_ask`] picks the week's weakest row or playbook for
+//! the weekly pass to ask one tweak for, and [`apply_brain_tweak`] hands the
+//! answer to [`propose`].
+//!
 //! Local only: no network, no model call.
 
 use std::fs;
@@ -18,8 +22,10 @@ use std::path::{Path, PathBuf};
 
 use grokhub_core::brain_policy::{parse_policy, policy_text, PolicyRow};
 use grokhub_core::protected_surface::{ProtectedSurface, TuneTarget};
+use grokhub_core::run_metrics::RunMetrics;
+use grokhub_core::self_review::{brain_stats, weak_brain, BrainKind, BrainProposal, BrainStats, WEEK_MS};
 
-use crate::harness::canary::{start_trial_at_share, Metric, Version};
+use crate::harness::canary::{open_trial, start_trial_at_share, Metric, Version};
 use crate::harness::changes::{
     content_hash, entry_id, note_proposal_finding, private_write, read_capped, record_change,
     record_outside_edit, ChangeKind, ChangeTarget,
@@ -303,6 +309,69 @@ fn write_and_try(
         tweak.metric,
         (before, after),
         BRAIN_SHARE_PCT,
+    )
+}
+
+/// Brain 6 PR 2: the weak row or playbook the weekly pass asks one tweak
+/// for, with the text it shows the model and the user version it builds on.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct BrainAsk {
+    pub stats: BrainStats,
+    /// [`user_version`] of the target now.
+    pub base: String,
+    /// The row as one `[[row]]` table, or the playbook file in effect.
+    pub text: String,
+}
+
+/// The row or playbook in effect for `stats`, as text.
+fn current_text(config_dir: &Path, stats: &BrainStats) -> Option<String> {
+    match stats.kind {
+        BrainKind::Policy => {
+            let (rows, _) = crate::brain::load_policy(config_dir);
+            let row = rows.into_iter().find(|r| r.key() == stats.key)?;
+            policy_text(&[row]).ok()
+        }
+        BrainKind::Playbook => {
+            let (books, _) = crate::brain::playbook::load(config_dir);
+            books.into_iter().find(|l| l.playbook.id == stats.key).map(|l| l.text)
+        }
+    }
+}
+
+/// The worst weak row or playbook of the last week (see
+/// [`grokhub_core::self_review::weak_brain`]) that has no trial running and
+/// is still in effect. `None` when nothing qualifies.
+pub fn brain_ask(config_dir: &Path, runs: &[RunMetrics], now: u64) -> Option<BrainAsk> {
+    let stats = brain_stats(runs, now, WEEK_MS);
+    weak_brain(&stats).into_iter().find_map(|s| {
+        if open_trial(config_dir, &s.class()).is_some() {
+            return None;
+        }
+        let text = current_text(config_dir, s)?;
+        let base = user_version(config_dir, &s.target()).ok()?;
+        Some(BrainAsk { stats: s.clone(), base, text })
+    })
+}
+
+/// Hand the weekly pass's tweak to [`propose`]: the guard and its locks,
+/// the user-version check, the ledger and a trial judged on steps.
+pub fn apply_brain_tweak(config_dir: &Path, ask: &BrainAsk, p: &BrainProposal, now: u64) -> Result<Version, String> {
+    let target = ask.stats.target();
+    let label = if p.title.trim().is_empty() {
+        format!("Change {}", ask.stats.name())
+    } else {
+        p.title.clone()
+    };
+    propose(
+        config_dir,
+        &Tweak {
+            target: &target,
+            base: &ask.base,
+            text: &p.text,
+            label: &label,
+            metric: Metric::Steps,
+        },
+        now,
     )
 }
 
@@ -722,5 +791,188 @@ mod tests {
             .all()
             .is_empty());
         assert!(read_versions(&root).is_empty());
+    }
+
+    /// A model that answers every call with `reply` and keeps each user digest.
+    struct Fake {
+        reply: String,
+        asked: std::sync::Mutex<Vec<String>>,
+    }
+
+    impl crate::client::ModelClient for Fake {
+        fn stream(
+            &self,
+            req: &crate::client::ResponsesRequest,
+            _cancel: &crate::CancelToken,
+            _sink: &mut dyn FnMut(crate::client::StreamEvent),
+        ) -> Result<crate::client::TurnOutput, crate::client::ClientError> {
+            for item in &req.input {
+                if let crate::client::InputItem::Message { role, content } = item {
+                    for c in content {
+                        if let crate::client::ContentPart::InputText(t) = c {
+                            if role == "user" {
+                                self.asked.lock().unwrap().push(t.clone());
+                            }
+                        }
+                    }
+                }
+            }
+            Ok(crate::client::TurnOutput {
+                text: self.reply.clone(),
+                ..Default::default()
+            })
+        }
+    }
+
+    fn fake(reply: String) -> Fake {
+        Fake {
+            reply,
+            asked: std::sync::Mutex::new(Vec::new()),
+        }
+    }
+
+    const NOW: u64 = 400 * DAY;
+
+    /// `n` repair runs on Repair Linux in the last week, `failed` of them
+    /// failed; plus eight good runs on the same policy row with no playbook,
+    /// so the row itself is not weak.
+    fn weekly_runs(root: &Path, n: usize, failed: usize) -> Vec<RunMetrics> {
+        let line = |i: usize, playbook: &str, ok: bool| RunMetrics {
+            run: format!("chat-w:{i}"),
+            class: "topic:repair".into(),
+            result: if ok { OutcomeResult::Success } else { OutcomeResult::Failure },
+            verified: ok,
+            steps: 8,
+            brain: brain("repair × critical", playbook),
+            finished_at: NOW - DAY + i as u64,
+            at: NOW - DAY + i as u64,
+            ..Default::default()
+        };
+        for i in 0..n {
+            grokhub_core::run_metrics::append_run(root, &line(i, "repair-linux", i >= failed), 0).unwrap();
+        }
+        for i in 0..8 {
+            grokhub_core::run_metrics::append_run(root, &line(50 + i, "", true), 0).unwrap();
+        }
+        grokhub_core::run_metrics::read_runs(root)
+    }
+
+    fn tweak_block(target: &str, title: &str, text: &str) -> String {
+        format!("TUNE_BRAIN: {target} | {title}\n<<<\n{text}>>>\n")
+    }
+
+    fn weekly(root: &Path, client: &Fake, ask: Option<&BrainAsk>) -> crate::harness::self_improve::WeeklyPass {
+        crate::harness::self_improve::run_weekly(root, client, "grok-4.7", &[], ask, NOW, &crate::CancelToken::new()).unwrap()
+    }
+
+    #[test]
+    fn a_weekly_pass_on_a_weak_playbook_proposes_one_tweak_and_starts_its_trial() {
+        let (root, _) = dirs("brain-weekly-propose");
+        let runs = weekly_runs(&root, 6, 3);
+        let ask = brain_ask(&root, &runs, NOW).expect("a weak playbook");
+        assert_eq!(
+            (ask.stats.kind, ask.stats.key.as_str(), ask.stats.runs, ask.stats.failures, ask.stats.verified),
+            (BrainKind::Playbook, "repair-linux", 6, 3, 3)
+        );
+        assert_eq!(ask.stats.target(), "playbook:repair-linux");
+        assert_eq!(ask.stats.numbers(), "3 of 6 runs on the repair-linux playbook needed a fix");
+        assert_eq!((ask.base.as_str(), ask.text.replace("\r\n", "\n")), ("", linux()));
+        let new = ports_first();
+        let other = repair_row("probe twice before any fix");
+        let reply = format!(
+            "{}{}{}",
+            tweak_block("playbook:repair-linux", "Linux repair checks ports before services", &new),
+            tweak_block("playbook:repair-linux", "A second try", &linux().replace("summary = \"", "summary = \"Again. ")),
+            tweak_block("policy:repair-critical", "Probe twice", &other),
+        );
+        let client = fake(reply);
+        let pass = weekly(&root, &client, Some(&ask));
+        let asked = client.asked.lock().unwrap().clone();
+        assert_eq!(asked.len(), 1, "one model call");
+        assert!(
+            asked[0].contains("Brain playbook this week: 3 of 6 runs on the repair-linux playbook needed a fix.")
+                && asked[0].contains("TUNE_BRAIN: playbook:repair-linux | <short title>"),
+            "{}",
+            asked[0]
+        );
+        let tweak = pass.brain.clone().expect("one tweak");
+        assert_eq!(
+            (tweak.proposal.target.as_str(), tweak.proposal.title.as_str(), tweak.proposal.text.as_str()),
+            ("playbook:repair-linux", "Linux repair checks ports before services", new.as_str())
+        );
+        let refused: Vec<(&str, &str)> = pass.refused.iter().map(|r| (r.target.as_str(), r.why.as_str())).collect();
+        assert_eq!(
+            refused,
+            vec![("policy:repair-critical", "a weekly Brain tweak may only change the repair-linux playbook")],
+            "only one Brain tweak a pass: the second for the playbook is dropped, another target refused"
+        );
+        let v = apply_brain_tweak(&root, &tweak.ask, &tweak.proposal, NOW).unwrap();
+        assert_eq!(
+            (v.class.as_str(), v.label.as_str(), v.share_pct, v.status, v.target),
+            (
+                "playbook:repair-linux",
+                "Linux repair checks ports before services",
+                100,
+                VersionStatus::Canary,
+                Metric::Steps
+            )
+        );
+        assert_eq!(read_versions(&root).len(), 1, "one trial");
+        assert_eq!(
+            file(&root.join("playbooks").join("repair-linux.toml")).as_deref(),
+            Some(new.as_str())
+        );
+        assert_eq!(brain_ask(&root, &runs, NOW), None, "no second ask while its trial runs");
+    }
+
+    #[test]
+    fn too_few_runs_or_no_weakness_asks_for_no_tweak() {
+        let (few, _) = dirs("brain-weekly-few");
+        let runs = weekly_runs(&few, 4, 3);
+        assert_eq!(brain_ask(&few, &runs, NOW), None, "4 runs is under the minimum of 5");
+        let (good, _) = dirs("brain-weekly-good");
+        let runs = weekly_runs(&good, 6, 0);
+        assert_eq!(brain_ask(&good, &runs, NOW), None, "6 good, re-checked runs");
+        // Weak runs older than a week are not this week's.
+        let (old, _) = dirs("brain-weekly-old");
+        let runs = weekly_runs(&old, 6, 3);
+        assert_eq!(brain_ask(&old, &runs, NOW + 8 * DAY), None);
+        // Without an ask, a Brain tweak in the reply is refused and nothing is tried.
+        let client = fake(tweak_block("playbook:repair-linux", "Ports first", &ports_first()));
+        let pass = weekly(&few, &client, None);
+        assert_eq!(pass.brain, None);
+        assert_eq!(
+            pass.refused
+                .iter()
+                .map(|r| (r.target.as_str(), r.why.as_str()))
+                .collect::<Vec<_>>(),
+            vec![("playbook:repair-linux", "this week's review asked for no Brain tweak")]
+        );
+        assert!(read_versions(&few).is_empty() && !few.join("playbooks").exists());
+    }
+
+    #[test]
+    fn a_weekly_tweak_that_drops_a_back_up_step_is_refused_and_opens_no_trial() {
+        let (root, _) = dirs("brain-weekly-lock");
+        let runs = weekly_runs(&root, 5, 5);
+        let ask = brain_ask(&root, &runs, NOW).expect("a weak playbook");
+        let restore = "[[phase.step]]\nname = \"Take a restore point before the first change\"\n\n";
+        let dropped = linux().replace(restore, "");
+        assert_ne!(dropped, linux());
+        let client = fake(tweak_block("playbook:repair-linux", "Skip the restore point", &dropped));
+        let tweak = weekly(&root, &client, Some(&ask)).brain.expect("parsed");
+        assert_eq!(
+            apply_brain_tweak(&root, &tweak.ask, &tweak.proposal, NOW).unwrap_err(),
+            "GrokHub never removes the \"Take a restore point before the first change\" step from Repair Linux on its own"
+        );
+        assert!(read_versions(&root).is_empty(), "no trial");
+        assert!(!root.join("playbooks").exists(), "nothing written");
+        let guards = read_spans(&root, SELF_REVIEW_SESSION)
+            .unwrap()
+            .into_iter()
+            .filter(|s| s.tool == GUARD_TOOL && s.decision == "deny")
+            .count();
+        assert_eq!(guards, 1, "the refusal is logged");
+        assert_eq!(read_scope_findings(&root).len(), 1);
     }
 }
