@@ -4,9 +4,7 @@
 
 use grokhub_core::outcome;
 use grokhub_core::self_review as sr;
-use grokhub_core::systems_brief::{
-    self as sb, BriefInputs, SystemsBrief, CARD_TITLE,
-};
+use grokhub_core::systems_brief::{self as sb, BriefInputs, SystemsBrief, CARD_TITLE};
 use grokhub_core::update_feed::{self as feed, UpdateKind};
 use grokhub_core::what_changed as wc;
 use serde::{Deserialize, Serialize};
@@ -91,9 +89,10 @@ impl Cabin {
             .filter_map(grokhub_core::automation_health_line)
             .collect();
         let digest_titles = week_digest_titles(&self.updates, now);
-        let last_dream = health.last_dream.as_ref().map(|(date, report)| {
-            (date.clone(), wc::from_dream(report))
-        });
+        let last_dream = health
+            .last_dream
+            .as_ref()
+            .map(|(date, report)| (date.clone(), wc::from_dream(report)));
         let progress_wins = recent_progress_wins(&self.updates, now);
         let blocked = blocked_lines(self);
         let input = BriefInputs {
@@ -134,9 +133,7 @@ impl Cabin {
         let today = Self::local_day();
         self.run_systems_brief_now(&today, now, true);
         let state = load_state();
-        let text = state
-            .latest_md
-            .unwrap_or_else(|| "No briefing yet.".into());
+        let text = state.latest_md.unwrap_or_else(|| "No briefing yet.".into());
         self.live_mut()
             .push(("assistant".into(), grokhub_core::mark_slash_result(&text)));
         self.stamp_current_access();
@@ -270,8 +267,7 @@ mod tests {
             .updates
             .iter()
             .filter(|c| {
-                c.kind == UpdateKind::Digest
-                    && c.source_id.starts_with(sb::CARD_SOURCE_PREFIX)
+                c.kind == UpdateKind::Digest && c.source_id.starts_with(sb::CARD_SOURCE_PREFIX)
             })
             .collect();
         assert_eq!(digests.len(), 1, "{:?}", cabin.updates);
@@ -297,8 +293,7 @@ mod tests {
             .updates
             .iter()
             .filter(|c| {
-                c.kind == UpdateKind::Digest
-                    && c.source_id.starts_with(sb::CARD_SOURCE_PREFIX)
+                c.kind == UpdateKind::Digest && c.source_id.starts_with(sb::CARD_SOURCE_PREFIX)
             })
             .count();
         assert_eq!(forced, 1);

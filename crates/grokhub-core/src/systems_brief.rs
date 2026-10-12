@@ -185,7 +185,10 @@ pub fn build_brief(input: &BriefInputs) -> SystemsBrief {
             "No completed task outcomes this week.",
             "outcome:none",
         ));
-        sources.push(claim("outcomes empty or outside the week window", "outcome:none"));
+        sources.push(claim(
+            "outcomes empty or outside the week window",
+            "outcome:none",
+        ));
     } else {
         if decided > 0 {
             let line = format!(
@@ -207,7 +210,12 @@ pub fn build_brief(input: &BriefInputs) -> SystemsBrief {
         for s in ok_skills.iter().take(3) {
             let src = format!("outcome:skill:{}", s.skill);
             progress.push(claim(
-                format!("{}: {} clean run{}", s.skill, s.runs, if s.runs == 1 { "" } else { "s" }),
+                format!(
+                    "{}: {} clean run{}",
+                    s.skill,
+                    s.runs,
+                    if s.runs == 1 { "" } else { "s" }
+                ),
                 src.clone(),
             ));
             sources.push(claim(format!("{} ok", s.skill), src));
@@ -252,10 +260,7 @@ pub fn build_brief(input: &BriefInputs) -> SystemsBrief {
                 ),
                 src.clone(),
             ));
-            sources.push(claim(
-                format!("{} {}/{}", s.skill, s.failures, s.runs),
-                src,
-            ));
+            sources.push(claim(format!("{} {}/{}", s.skill, s.failures, s.runs), src));
         }
         for s in &one_offs {
             let src = format!("outcome:once:{}", s.skill);
@@ -360,10 +365,7 @@ pub fn build_brief(input: &BriefInputs) -> SystemsBrief {
         }
         actions.push(BriefAction {
             text: format!("Review skill {}", s.skill),
-            rationale: format!(
-                "{} of {} runs needed a fix this week",
-                s.failures, s.runs
-            ),
+            rationale: format!("{} of {} runs needed a fix this week", s.failures, s.runs),
             source: format!("outcome:fail:{}", s.skill),
         });
     }
@@ -618,12 +620,24 @@ mod tests {
             services_checked: 5,
             ..Default::default()
         });
-        assert!(brief.reliability.iter().any(|c| c.text.contains("Recurring: deploy")));
-        assert!(brief.reliability.iter().any(|c| c.text.contains("One-off: lint")));
-        assert!(brief.reliability.iter().any(|c| c.text.contains("not enough to call a trend")));
+        assert!(brief
+            .reliability
+            .iter()
+            .any(|c| c.text.contains("Recurring: deploy")));
+        assert!(brief
+            .reliability
+            .iter()
+            .any(|c| c.text.contains("One-off: lint")));
+        assert!(brief
+            .reliability
+            .iter()
+            .any(|c| c.text.contains("not enough to call a trend")));
         assert_eq!(brief.next_actions.len(), MAX_ACTIONS);
         assert_eq!(brief.next_actions[0].text, "Review skill deploy");
-        assert!(brief.next_actions.iter().any(|a| a.text.contains("blocked")));
+        assert!(brief
+            .next_actions
+            .iter()
+            .any(|a| a.text.contains("blocked")));
         assert!(brief.executive_summary.contains("waiting on you"));
         assert!(brief.render().contains("Approve: send invoice email"));
     }
@@ -658,7 +672,10 @@ mod tests {
             ..Default::default()
         });
         assert!(brief.progress.iter().any(|c| c.text.contains("notes")));
-        assert!(brief.reliability.iter().any(|c| c.source == "health:service:0"));
+        assert!(brief
+            .reliability
+            .iter()
+            .any(|c| c.source == "health:service:0"));
         assert_eq!(brief.decisions[0].text, "Ship beta → main?");
         assert!(!brief.executive_summary.to_lowercase().contains("because"));
     }
