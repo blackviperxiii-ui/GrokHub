@@ -74,6 +74,30 @@ fn one_line(s: &str) -> String {
     s.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
+/// One-tap pills that ask the agent to grant OS/workspace paths or "activate"
+/// a skill cannot succeed and doom-loop. Refuse them at card build time.
+fn impossible_host_fix_reason(label: &str, goal: &str) -> Option<String> {
+    let blob = format!("{label} {goal}").to_ascii_lowercase();
+    const NEEDLES: &[&str] = &[
+        "grant workspace",
+        "grant access to ~",
+        "grant access to /",
+        "workspace access to",
+        "path restriction",
+        "activate skill",
+        "enable skill",
+        "os permission",
+        "~/.steam",
+        "escape the workspace",
+    ];
+    NEEDLES.iter().find(|n| blob.contains(*n)).map(|n| {
+        format!(
+            "fix `{label}` is not a one-tap the agent can do (`{n}`). \
+Use Memory, sealed learnings, or a loadable skill instead of OS permission pills."
+        )
+    })
+}
+
 impl Findings {
     /// From the tool's arguments: `{"findings":[{"severity","text"}],
     /// "fixes":[{"label","goal"}]}`. Findings come out most severe first.
@@ -117,6 +141,9 @@ impl Findings {
                 return Err(format!(
                     "fix label `{label}` must be at most {LABEL_MAX} characters with no colon"
                 ));
+            }
+            if let Some(why) = impossible_host_fix_reason(&label, &goal) {
+                return Err(why);
             }
             fixes.push(Fix { label, goal });
         }
@@ -258,5 +285,24 @@ mod tests {
             err(json!({"findings": [{"severity": "low", "text": "x"}], "fixes": seven})),
             "give at most 6 fixes"
         );
+        let steam = err(json!({
+            "findings": [{"severity": "medium", "text": "path escapes the workspace"}],
+            "fixes": [{
+                "label": "Fix path restriction",
+                "goal": "Grant workspace access to ~/.steam path"
+            }]
+        }));
+        assert!(
+            steam.contains("not a one-tap") && steam.contains("grant workspace"),
+            "{steam}"
+        );
+        let skill = err(json!({
+            "findings": [{"severity": "low", "text": "unknown skill"}],
+            "fixes": [{
+                "label": "Activate steamlibreview",
+                "goal": "Activate skill steamlibreview so it loads"
+            }]
+        }));
+        assert!(skill.contains("activate skill"), "{skill}");
     }
 }
