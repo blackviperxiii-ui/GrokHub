@@ -71,7 +71,7 @@ pub enum JobKind {
     Digest,
     /// The nightly review model call and session suggestions.
     Review,
-    /// The night passes: Sunday self-review, lessons tidy, and AMR dream.
+    /// The night passes: Sunday systems briefing, self-review, lessons tidy, and AMR dream.
     NightPasses,
     /// AMR memory retention, once a local day.
     MemoryRetention,
@@ -126,7 +126,7 @@ impl JobKind {
             Self::Anticipate => "Anticipate",
             Self::Digest => "Pulse digest",
             Self::Review => "Nightly review",
-            Self::NightPasses => "Self-review and dream",
+            Self::NightPasses => "Systems briefing, self-review, and dream",
             Self::MemoryRetention => "Memory retention",
             Self::Reflect => "Idle reflect",
             Self::Indexers => "Indexers",

@@ -404,6 +404,7 @@ impl Cabin {
                 self.persist();
                 self.status = grokhub_core::health::health_status(&health);
             }
+            Slash::Brief => self.run_systems_brief_slash(),
             Slash::Fix => {
                 self.halt_work("Stopped");
                 self.nav = Nav::Settings;
