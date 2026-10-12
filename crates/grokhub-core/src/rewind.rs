@@ -22,7 +22,9 @@ const SENSITIVE_HOME_LEAVES: &[&str] = &[
     ".config/GrokHub",
 ];
 
-fn rewind_sensitive(root: &str, home: &str) -> bool {
+/// True when `root` is a sensitive `$HOME` leaf (`.ssh`, `.gnupg`, …) or under one.
+/// Paths may use `/` or `\`; comparison normalizes to `/`.
+pub fn rewind_sensitive(root: &str, home: &str) -> bool {
     let r = normalize(root);
     let h = normalize(home);
     if h.is_empty() {
@@ -171,7 +173,7 @@ pub fn keep_last_rewinds(rows: &[RewindRecord], max: usize) -> Vec<RewindRecord>
 }
 
 fn normalize(p: &str) -> String {
-    let t = p.trim();
+    let t = p.trim().replace('\\', "/");
     if t.is_empty() {
         return String::new();
     }

@@ -50,6 +50,7 @@ pub fn run(workspace: &Path, args: &Value) -> ToolOutput {
         Ok(path) => path,
         Err(err) => return ToolOutput::err(err),
     };
+    crate::checkpoint::before_write(&path);
     let replaced = with_file_lock(&path, || apply(&path, &needle, &replacement, replace_all));
     match replaced {
         Ok(n) => ToolOutput::ok(format!("replaced {n} in {raw}")),
