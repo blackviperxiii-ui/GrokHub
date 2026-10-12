@@ -114,9 +114,24 @@ if [[ "$SWITCH" -eq 1 ]]; then
     echo "error: origin/$BRANCH not found after fetch — is the remote a GrokHub fork with that branch?" >&2
     exit 1
   fi
-  # -B recreates or resets the local branch onto the tip and sets upstream.
-  # Works when the local branch is missing (single-branch clone) or stale.
-  git checkout -B "$BRANCH" --track "origin/$BRANCH"
+  # Missing local branch (single-branch / shallow): create it tracking origin.
+  # Existing local branch: never `checkout -B` (that drops local commits). Refuse
+  # when HEAD is not an ancestor of origin/$BRANCH (ahead or diverged); otherwise
+  # fast-forward onto the tip.
+  if git show-ref --verify --quiet "refs/heads/$BRANCH"; then
+    git checkout "$BRANCH"
+    if ! git merge-base --is-ancestor HEAD "origin/$BRANCH"; then
+      echo "error: local $BRANCH has commits that are not on origin/$BRANCH; sort that out by hand" >&2
+      exit 1
+    fi
+    if ! git merge --ff-only "origin/$BRANCH"; then
+      echo "error: local $BRANCH has commits that are not on origin/$BRANCH; sort that out by hand" >&2
+      exit 1
+    fi
+    git branch --set-upstream-to="origin/$BRANCH" "$BRANCH" >/dev/null 2>&1 || true
+  else
+    git checkout -B "$BRANCH" --track "origin/$BRANCH"
+  fi
   echo "channel $CHANNEL: $(git rev-parse --short=7 HEAD) on $BRANCH"
 fi
 
