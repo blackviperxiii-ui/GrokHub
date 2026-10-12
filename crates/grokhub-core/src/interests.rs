@@ -1,6 +1,9 @@
 //! The person's interest profile: topics Pulse looks for, with a weight each.
 //! Seeded once from USER.md, MEMORY.md, recent chats and liked cards; edited in
 //! Settings → Pulse; nudged by what they open, save and skip.
+//!
+//! The interest graph records cross-chat evidence and domain-general edges
+//! (related / maker / category / adjacent) so one mention is not an identity.
 
 use serde::{Deserialize, Serialize};
 
@@ -15,6 +18,26 @@ pub const SEED_MAX: usize = 12;
 pub const STEER_MAX: usize = 6;
 pub const WEIGHT_MIN: u8 = 5;
 pub const WEIGHT_MAX: u8 = 100;
+
+/// Distinct chats that must name a topic before a Chat-sourced Interest is promoted.
+pub const EVIDENCE_CHATS_MIN: usize = 2;
+/// Distinct co-mention chats before an edge may be probed.
+pub const EDGE_EVIDENCE_MIN: usize = 2;
+/// Neighbor probe searches per source check.
+pub const PROBE_MAX: usize = 2;
+/// Starting weight for a new related edge.
+pub const EDGE_WEIGHT_START: i16 = 30;
+/// Minimum open-edge weight before Pulse probes the neighbor (at start weight once evidence is met).
+pub const EDGE_WEIGHT_PROBE: i16 = EDGE_WEIGHT_START;
+pub const EDGE_WEIGHT_MAX: i16 = 100;
+/// Chat ids kept per evidence / edge row.
+pub const EVIDENCE_CHAT_IDS_MAX: usize = 8;
+/// Cap on evidence rows in the local file.
+pub const EVIDENCE_ROWS_MAX: usize = 80;
+/// Cap on edges in the local file.
+pub const EDGES_MAX: usize = 120;
+/// Recent chats observe() reads outside the one-shot seed.
+pub const OBSERVE_CHATS: usize = 20;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -87,6 +110,65 @@ impl InterestSignal {
             Self::MoreLikeThis => 12,
         }
     }
+
+    fn edge_delta(self) -> i16 {
+        match self {
+            Self::Opened => 4,
+            Self::Saved | Self::MoreLikeThis => 12,
+            Self::Accepted => 8,
+            Self::Dismissed => -6,
+            Self::NotInterested => 0,
+        }
+    }
+}
+
+/// Domain-general link between two topics. Gaming genre/developer is one instance.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EdgeKind {
+    /// Topics travel together across chats.
+    Related,
+    /// Creator / maker / author / org (generic; not a product API).
+    Maker,
+    /// Category / genre / class (generic label).
+    Category,
+    /// Branch after a closed link so probes go elsewhere.
+    Adjacent,
+}
+
+/// Mentions of one topic across distinct chats. Not yet a steerable Interest.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TopicEvidence {
+    pub topic: String,
+    #[serde(default)]
+    pub chat_ids: Vec<String>,
+    #[serde(default)]
+    pub mention_count: u32,
+    #[serde(default)]
+    pub last_seen_ms: u64,
+}
+
+/// A weighted link in the interest connection map.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InterestEdge {
+    pub from: String,
+    pub to: String,
+    pub kind: EdgeKind,
+    pub weight: i16,
+    #[serde(default)]
+    pub chat_ids: Vec<String>,
+    #[serde(default)]
+    pub closed: bool,
+    #[serde(default)]
+    pub last_seen_ms: u64,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InterestGraph {
+    #[serde(default)]
+    pub evidence: Vec<TopicEvidence>,
+    #[serde(default)]
+    pub edges: Vec<InterestEdge>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -99,6 +181,9 @@ pub struct InterestProfile {
     /// Lowercased topics the person removed. Seeding never brings them back.
     #[serde(default)]
     pub removed: Vec<String>,
+    /// Cross-chat evidence and connection edges.
+    #[serde(default)]
+    pub graph: InterestGraph,
 }
 
 /// Trimmed, single-spaced, no bullet or trailing period, at most TOPIC_CHARS.
@@ -228,6 +313,18 @@ impl InterestProfile {
     /// Nudge every topic the card's text names. A pinned topic never drops.
     /// Returns the topics that moved.
     pub fn feedback(&mut self, text: &str, signal: InterestSignal, now_ms: u64) -> Vec<String> {
+        self.feedback_anchored(text, None, signal, now_ms)
+    }
+
+    /// Like [`feedback`], and update graph edges using an optional anchor interest
+    /// (the card's `because` topic) so dislike can close that link.
+    pub fn feedback_anchored(
+        &mut self,
+        text: &str,
+        anchor: Option<&str>,
+        signal: InterestSignal,
+        now_ms: u64,
+    ) -> Vec<String> {
         let delta = signal.delta();
         let mut moved = Vec::new();
         for t in &mut self.topics {
@@ -246,6 +343,7 @@ impl InterestProfile {
                 moved.push(t.topic.clone());
             }
         }
+        self.edge_feedback(text, anchor, signal, now_ms);
         moved
     }
 
@@ -261,11 +359,42 @@ impl InterestProfile {
         out
     }
 
-    /// Topics strong enough to search (HN / Reddit / DuckDuckGo Lite). Skips cabin
-    /// chrome, agent lane names, stopwords and weak chat unigrams so a junk token
-    /// never becomes a query. Empty when nothing qualifies — no fallback query.
-    pub fn search_topics(&self) -> Vec<String> {
+    /// Topics with enough evidence (or Explicit / Memory / Saved / pinned).
+    pub fn ready_ranked(&self) -> Vec<&Interest> {
         self.ranked()
+            .into_iter()
+            .filter(|t| self.topic_is_ready(t))
+            .collect()
+    }
+
+    /// True when this Interest may steer Pulse / digests.
+    pub fn topic_is_ready(&self, t: &Interest) -> bool {
+        if t.muted {
+            return false;
+        }
+        if t.pinned
+            || matches!(
+                t.source,
+                InterestSource::Explicit | InterestSource::Memory | InterestSource::Saved
+            )
+        {
+            return true;
+        }
+        if t.weight > InterestSource::Chats.start_weight() {
+            return true;
+        }
+        self.graph
+            .evidence
+            .iter()
+            .find(|e| e.topic.eq_ignore_ascii_case(&t.topic))
+            .is_some_and(|e| e.chat_ids.len() >= EVIDENCE_CHATS_MIN)
+    }
+
+    /// Topics strong enough to search (HN / Reddit / DuckDuckGo Lite). Ready
+    /// interests only, then skips cabin chrome, agent lane names, stopwords and
+    /// weak chat unigrams. Empty when nothing qualifies — no fallback query.
+    pub fn search_topics(&self) -> Vec<String> {
+        self.ready_ranked()
             .into_iter()
             .filter(|t| searchable_interest(t))
             .map(|t| t.topic.clone())
@@ -274,12 +403,11 @@ impl InterestProfile {
 
     /// The prompt section the lookup follows. Empty when there is nothing to say.
     pub fn prompt_section(&self) -> String {
-        let top: Vec<&str> = self
-            .ranked()
+        let top = self
+            .search_topics()
             .into_iter()
             .take(STEER_MAX)
-            .map(|t| t.topic.as_str())
-            .collect();
+            .collect::<Vec<_>>();
         let muted: Vec<&str> = self
             .topics
             .iter()
@@ -300,6 +428,233 @@ impl InterestProfile {
             out.push_str(&format!("Never about: {}.", muted.join(", ")));
         }
         out
+    }
+
+    /// Record mentions from one chat. Does not add steerable Interests by itself.
+    pub fn observe_chat(&mut self, chat_id: &str, title: &str, now_ms: u64) {
+        let chat_id = chat_id.trim();
+        if chat_id.is_empty() {
+            return;
+        }
+        let candidates = self.candidates_from_title(title);
+        if candidates.is_empty() {
+            return;
+        }
+        for topic in &candidates {
+            self.graph.note_mention(topic, chat_id, now_ms);
+        }
+        for i in 0..candidates.len() {
+            for j in (i + 1)..candidates.len() {
+                self.graph.note_cooccur(
+                    &candidates[i],
+                    &candidates[j],
+                    chat_id,
+                    EdgeKind::Related,
+                    now_ms,
+                );
+            }
+        }
+        self.graph.trim();
+    }
+
+    /// Known topics the title names, else a short title. Preferring known topics
+    /// keeps edges on real entities instead of whole-title phrases.
+    fn candidates_from_title(&self, title: &str) -> Vec<String> {
+        let mut out = Vec::new();
+        let push = |out: &mut Vec<String>, topic: String| {
+            if self.removed.iter().any(|r| r == &key(&topic)) || !topic_searchable(&topic) {
+                return;
+            }
+            if !out.iter().any(|t| t.eq_ignore_ascii_case(&topic)) {
+                out.push(topic);
+            }
+        };
+        for t in &self.topics {
+            if names_topic(title, &t.topic) {
+                push(&mut out, t.topic.clone());
+            }
+        }
+        for e in &self.graph.evidence {
+            if names_topic(title, &e.topic) {
+                push(&mut out, e.topic.clone());
+            }
+        }
+        if out.is_empty() {
+            if let Some(topic) = short_title(title) {
+                push(&mut out, topic);
+            }
+        }
+        out
+    }
+
+    /// Observe many chats (id, title), newest first is fine; order does not matter.
+    pub fn observe_chats(&mut self, chats: &[(String, String)], now_ms: u64) {
+        for (id, title) in chats {
+            self.observe_chat(id, title, now_ms);
+        }
+    }
+
+    /// Promote Chat Interests from evidence that crossed the threshold.
+    /// Returns how many topics were added.
+    pub fn promote_from_evidence(&mut self, now_ms: u64) -> usize {
+        let mut added = 0;
+        let ready: Vec<String> = self
+            .graph
+            .evidence
+            .iter()
+            .filter(|e| e.chat_ids.len() >= EVIDENCE_CHATS_MIN && topic_searchable(&e.topic))
+            .map(|e| e.topic.clone())
+            .collect();
+        for topic in ready {
+            if self.add(&topic, InterestSource::Chats, now_ms) {
+                added += 1;
+            }
+        }
+        added
+    }
+
+    /// Neighbor topics Pulse should probe this check. `topic` on each Related is the
+    /// anchor Interest (for `because`); `query` is the neighbor string.
+    pub fn probe_queries(&self, max: usize) -> Vec<crate::pulse_sources::Related> {
+        if max == 0 {
+            return Vec::new();
+        }
+        let anchors: Vec<String> = self
+            .ready_ranked()
+            .into_iter()
+            .map(|t| t.topic.clone())
+            .collect();
+        let mut out = Vec::new();
+        let mut seen_q = std::collections::BTreeSet::new();
+        for anchor in &anchors {
+            if out.len() >= max {
+                break;
+            }
+            let mut edges: Vec<&InterestEdge> = self
+                .graph
+                .edges
+                .iter()
+                .filter(|e| !e.closed && e.from.eq_ignore_ascii_case(anchor))
+                .filter(|e| e.chat_ids.len() >= EDGE_EVIDENCE_MIN && e.weight >= EDGE_WEIGHT_PROBE)
+                .filter(|e| {
+                    topic_searchable(&e.to)
+                        && !self.removed.iter().any(|r| r == &key(&e.to))
+                        && !self
+                            .topics
+                            .iter()
+                            .any(|t| t.muted && t.topic.eq_ignore_ascii_case(&e.to))
+                })
+                .collect();
+            edges.sort_by(|a, b| {
+                b.weight
+                    .cmp(&a.weight)
+                    .then(b.last_seen_ms.cmp(&a.last_seen_ms))
+                    .then(a.to.cmp(&b.to))
+            });
+            for e in edges {
+                if out.len() >= max {
+                    break;
+                }
+                let q = e.to.clone();
+                if anchors.iter().any(|a| a.eq_ignore_ascii_case(&q)) {
+                    continue;
+                }
+                if !seen_q.insert(q.to_lowercase()) {
+                    continue;
+                }
+                out.push(crate::pulse_sources::Related {
+                    query: q,
+                    topic: Some(anchor.clone()),
+                });
+            }
+        }
+        out
+    }
+
+    /// Update connection edges from a card action without changing topic weights.
+    /// Call this when weights already moved (e.g. via `pulse_note` + title match).
+    pub fn edge_feedback(
+        &mut self,
+        text: &str,
+        anchor: Option<&str>,
+        signal: InterestSignal,
+        now_ms: u64,
+    ) {
+        let named: Vec<String> = self
+            .topics
+            .iter()
+            .filter(|t| names_topic(text, &t.topic))
+            .map(|t| t.topic.clone())
+            .collect();
+        let mut ends = named;
+        if let Some(a) = anchor.map(clean_topic).filter(|a| !a.is_empty()) {
+            if !ends.iter().any(|t| t.eq_ignore_ascii_case(&a)) {
+                ends.push(a);
+            }
+        }
+        if ends.len() < 2 && signal != InterestSignal::NotInterested {
+            // Strengthen edges between any two ready/evidence topics named in text.
+            let evidenced: Vec<String> = self
+                .graph
+                .evidence
+                .iter()
+                .filter(|e| names_topic(text, &e.topic))
+                .map(|e| e.topic.clone())
+                .collect();
+            for t in evidenced {
+                if !ends.iter().any(|x| x.eq_ignore_ascii_case(&t)) {
+                    ends.push(t);
+                }
+            }
+        }
+        match signal {
+            InterestSignal::NotInterested => {
+                let anchor_key = anchor
+                    .map(clean_topic)
+                    .filter(|a| !a.is_empty())
+                    .or_else(|| ends.first().cloned());
+                let Some(from) = anchor_key else {
+                    return;
+                };
+                let mut targets: Vec<String> = ends
+                    .iter()
+                    .filter(|t| !t.eq_ignore_ascii_case(&from))
+                    .cloned()
+                    .collect();
+                // Close links to neighbors named in the card even when they are not Interests yet.
+                for e in &self.graph.edges {
+                    if e.closed || !e.from.eq_ignore_ascii_case(&from) {
+                        continue;
+                    }
+                    if names_topic(text, &e.to)
+                        && !targets.iter().any(|t| t.eq_ignore_ascii_case(&e.to))
+                    {
+                        targets.push(e.to.clone());
+                    }
+                }
+                let mut closed_from = false;
+                for to in &targets {
+                    if self.graph.close_edge(&from, to, now_ms) {
+                        closed_from = true;
+                    }
+                }
+                if closed_from || targets.is_empty() {
+                    self.graph.branch_adjacent(&from, &targets, now_ms);
+                }
+            }
+            _ => {
+                let delta = signal.edge_delta();
+                if delta == 0 || ends.len() < 2 {
+                    return;
+                }
+                for i in 0..ends.len() {
+                    for j in (i + 1)..ends.len() {
+                        self.graph.nudge_pair(&ends[i], &ends[j], delta, now_ms);
+                    }
+                }
+            }
+        }
+        self.graph.trim();
     }
 
     /// One seeding pass from what the app already knows. Runs once.
@@ -328,12 +683,176 @@ impl InterestProfile {
                 offer(self, &topic, InterestSource::Saved);
             }
         }
-        for title in from.chat_titles {
-            if let Some(topic) = short_title(title) {
-                offer(self, &topic, InterestSource::Chats);
+        // Chats: observe + promote (need two distinct chats), never one-shot identity.
+        self.observe_chats(from.chats, now_ms);
+        added += self.promote_from_evidence(now_ms);
+        added
+    }
+}
+
+impl InterestGraph {
+    fn note_mention(&mut self, topic: &str, chat_id: &str, now_ms: u64) {
+        let topic = clean_topic(topic);
+        if topic.is_empty() || !topic_searchable(&topic) {
+            return;
+        }
+        if let Some(row) = self
+            .evidence
+            .iter_mut()
+            .find(|e| e.topic.eq_ignore_ascii_case(&topic))
+        {
+            row.mention_count = row.mention_count.saturating_add(1);
+            row.last_seen_ms = now_ms;
+            push_chat_id(&mut row.chat_ids, chat_id);
+            return;
+        }
+        self.evidence.push(TopicEvidence {
+            topic,
+            chat_ids: vec![chat_id.to_string()],
+            mention_count: 1,
+            last_seen_ms: now_ms,
+        });
+    }
+
+    fn note_cooccur(&mut self, a: &str, b: &str, chat_id: &str, kind: EdgeKind, now_ms: u64) {
+        let a = clean_topic(a);
+        let b = clean_topic(b);
+        if a.is_empty() || b.is_empty() || a.eq_ignore_ascii_case(&b) {
+            return;
+        }
+        if !topic_searchable(&a) || !topic_searchable(&b) {
+            return;
+        }
+        // Directed: each endpoint can probe the other.
+        self.upsert_edge(&a, &b, kind, chat_id, now_ms);
+        self.upsert_edge(&b, &a, kind, chat_id, now_ms);
+    }
+
+    fn upsert_edge(&mut self, from: &str, to: &str, kind: EdgeKind, chat_id: &str, now_ms: u64) {
+        if let Some(e) = self.edges.iter_mut().find(|e| {
+            e.from.eq_ignore_ascii_case(from) && e.to.eq_ignore_ascii_case(to) && e.kind == kind
+        }) {
+            if e.closed {
+                return;
+            }
+            e.last_seen_ms = now_ms;
+            e.weight = (e.weight + 4).clamp(EDGE_WEIGHT_START, EDGE_WEIGHT_MAX);
+            push_chat_id(&mut e.chat_ids, chat_id);
+            return;
+        }
+        self.edges.push(InterestEdge {
+            from: from.to_string(),
+            to: to.to_string(),
+            kind,
+            weight: EDGE_WEIGHT_START,
+            chat_ids: vec![chat_id.to_string()],
+            closed: false,
+            last_seen_ms: now_ms,
+        });
+    }
+
+    fn nudge_pair(&mut self, a: &str, b: &str, delta: i16, now_ms: u64) {
+        for (from, to) in [(a, b), (b, a)] {
+            if let Some(e) = self.edges.iter_mut().find(|e| {
+                e.from.eq_ignore_ascii_case(from) && e.to.eq_ignore_ascii_case(to) && !e.closed
+            }) {
+                e.weight = (e.weight + delta).clamp(1, EDGE_WEIGHT_MAX);
+                e.last_seen_ms = now_ms;
+            } else if delta > 0 {
+                self.edges.push(InterestEdge {
+                    from: clean_topic(from),
+                    to: clean_topic(to),
+                    kind: EdgeKind::Related,
+                    weight: EDGE_WEIGHT_START.saturating_add(delta).min(EDGE_WEIGHT_MAX),
+                    chat_ids: Vec::new(),
+                    closed: false,
+                    last_seen_ms: now_ms,
+                });
             }
         }
-        added
+    }
+
+    fn close_edge(&mut self, from: &str, to: &str, now_ms: u64) -> bool {
+        let mut closed = false;
+        for e in &mut self.edges {
+            if e.closed {
+                continue;
+            }
+            let match_dir = (e.from.eq_ignore_ascii_case(from) && e.to.eq_ignore_ascii_case(to))
+                || (e.from.eq_ignore_ascii_case(to) && e.to.eq_ignore_ascii_case(from));
+            if match_dir {
+                e.closed = true;
+                e.last_seen_ms = now_ms;
+                closed = true;
+            }
+        }
+        closed
+    }
+
+    /// After closing links from `from`, open or bump adjacent edges to other neighbors.
+    fn branch_adjacent(&mut self, from: &str, skip: &[String], now_ms: u64) {
+        let neighbors: Vec<String> = self
+            .edges
+            .iter()
+            .filter(|e| e.from.eq_ignore_ascii_case(from) && !e.closed)
+            .map(|e| e.to.clone())
+            .filter(|to| !skip.iter().any(|s| s.eq_ignore_ascii_case(to)))
+            .collect();
+        for to in neighbors {
+            if let Some(e) = self.edges.iter_mut().find(|e| {
+                e.from.eq_ignore_ascii_case(from)
+                    && e.to.eq_ignore_ascii_case(&to)
+                    && e.kind == EdgeKind::Adjacent
+            }) {
+                e.closed = false;
+                e.weight = (e.weight + 8).clamp(EDGE_WEIGHT_PROBE, EDGE_WEIGHT_MAX);
+                e.last_seen_ms = now_ms;
+                if e.chat_ids.len() < EDGE_EVIDENCE_MIN {
+                    // Synthetic evidence so the branch can probe once.
+                    while e.chat_ids.len() < EDGE_EVIDENCE_MIN {
+                        e.chat_ids.push(format!("branch-{}", e.chat_ids.len()));
+                    }
+                }
+            } else {
+                self.edges.push(InterestEdge {
+                    from: clean_topic(from),
+                    to: clean_topic(&to),
+                    kind: EdgeKind::Adjacent,
+                    weight: EDGE_WEIGHT_PROBE,
+                    chat_ids: vec!["branch-0".into(), "branch-1".into()],
+                    closed: false,
+                    last_seen_ms: now_ms,
+                });
+            }
+        }
+    }
+
+    fn trim(&mut self) {
+        if self.evidence.len() > EVIDENCE_ROWS_MAX {
+            self.evidence
+                .sort_by_key(|a| std::cmp::Reverse(a.last_seen_ms));
+            self.evidence.truncate(EVIDENCE_ROWS_MAX);
+        }
+        if self.edges.len() > EDGES_MAX {
+            self.edges.sort_by(|a, b| {
+                a.closed
+                    .cmp(&b.closed)
+                    .then(b.weight.cmp(&a.weight))
+                    .then(b.last_seen_ms.cmp(&a.last_seen_ms))
+            });
+            self.edges.truncate(EDGES_MAX);
+        }
+    }
+}
+
+fn push_chat_id(ids: &mut Vec<String>, chat_id: &str) {
+    if ids.iter().any(|c| c == chat_id) {
+        return;
+    }
+    ids.push(chat_id.to_string());
+    if ids.len() > EVIDENCE_CHAT_IDS_MAX {
+        let drop = ids.len() - EVIDENCE_CHAT_IDS_MAX;
+        ids.drain(..drop);
     }
 }
 
@@ -383,11 +902,11 @@ pub fn topic_searchable(topic: &str) -> bool {
     true
 }
 
-/// What seeding reads. Chat titles newest first.
+/// What seeding reads. Chats are (id, title), newest first is fine.
 pub struct SeedFrom<'a> {
     pub user_md: &'a str,
     pub memory_md: &'a str,
-    pub chat_titles: &'a [String],
+    pub chats: &'a [(String, String)],
     pub saved_titles: &'a [String],
 }
 
@@ -661,21 +1180,25 @@ mod tests {
     }
 
     #[test]
-    fn seeding_reads_memory_lines_saved_cards_and_short_chat_titles() {
+    fn seeding_reads_memory_lines_saved_cards_and_evidence_gated_chats() {
         let user = "# About me\nInterests: Rust, air compressors and xAI.\nWorks nights.";
         let memory = "- [2026-10-09] pulse: liked \"Tokio 2.0\" reason=liked\nI follow Formula 1";
-        let chats = titles(&[
-            "New chat",
-            "Fix the cabin build on Windows please now",
-            "Home espresso",
-        ]);
+        // One chat is not enough to promote; two chats with the same title are.
+        let chats = vec![
+            ("c1".into(), "New chat".into()),
+            (
+                "c2".into(),
+                "Fix the cabin build on Windows please now".into(),
+            ),
+            ("c3".into(), "Home espresso".into()),
+        ];
         let saved = titles(&["Bambu printers"]);
         let mut p = InterestProfile::default();
         let n = p.seed(
             &SeedFrom {
                 user_md: user,
                 memory_md: memory,
-                chat_titles: &chats,
+                chats: &chats,
                 saved_titles: &saved,
             },
             7,
@@ -693,24 +1216,108 @@ mod tests {
                 ("xAI", InterestSource::Memory, 60),
                 ("Formula 1", InterestSource::Memory, 60),
                 ("Bambu printers", InterestSource::Saved, 55),
-                ("Home espresso", InterestSource::Chats, 40),
             ]
         );
-        assert_eq!(n, 6);
+        assert_eq!(n, 5);
+        assert!(p.find("Home espresso").is_none());
         assert!(p.seeded);
+        // Second distinct chat with the same title promotes it.
+        p.observe_chat("c4", "Home espresso", 8);
+        assert_eq!(p.promote_from_evidence(8), 1);
+        assert_eq!(
+            p.find("Home espresso").map(|t| t.source),
+            Some(InterestSource::Chats)
+        );
         assert_eq!(
             p.seed(
                 &SeedFrom {
                     user_md: "Interests: Go",
                     memory_md: "",
-                    chat_titles: &[],
+                    chats: &[],
                     saved_titles: &[]
                 },
-                8
+                9
             ),
             0
         );
         assert!(p.find("Go").is_none());
+    }
+
+    #[test]
+    fn observe_links_known_topics_and_probe_skips_until_evidence() {
+        let mut p = InterestProfile::default();
+        p.add("Rust", InterestSource::Memory, 1);
+        p.add("async runtimes", InterestSource::Explicit, 1);
+        p.observe_chat("a", "Rust and async runtimes", 10);
+        assert!(p
+            .graph
+            .edges
+            .iter()
+            .any(|e| e.from == "Rust" && e.to == "async runtimes" && e.chat_ids == ["a"]));
+        // One co-mention chat is not enough to probe; neighbor is also already a ready interest.
+        assert!(p.probe_queries(PROBE_MAX).is_empty());
+        // A neighbor that is not itself a ready interest can be probed after two chats.
+        p.graph.edges.push(InterestEdge {
+            from: "Rust".into(),
+            to: "systems programming".into(),
+            kind: EdgeKind::Related,
+            weight: EDGE_WEIGHT_START,
+            chat_ids: vec!["a".into(), "b".into()],
+            closed: false,
+            last_seen_ms: 11,
+        });
+        assert_eq!(
+            p.probe_queries(PROBE_MAX)
+                .iter()
+                .map(|r| (r.query.as_str(), r.topic.as_deref()))
+                .collect::<Vec<_>>(),
+            vec![("systems programming", Some("Rust"))]
+        );
+        p.feedback_anchored(
+            "Why systems programming is hard",
+            Some("Rust"),
+            InterestSignal::NotInterested,
+            12,
+        );
+        assert!(p
+            .graph
+            .edges
+            .iter()
+            .any(|e| e.from == "Rust" && e.to == "systems programming" && e.closed));
+        assert!(p
+            .probe_queries(PROBE_MAX)
+            .iter()
+            .all(|r| r.query != "systems programming"));
+    }
+
+    #[test]
+    fn save_strengthens_a_related_edge() {
+        let mut p = InterestProfile::default();
+        p.add("photography", InterestSource::Memory, 1);
+        p.add("film cameras", InterestSource::Explicit, 1);
+        p.observe_chat("a", "photography with film cameras", 1);
+        p.observe_chat("b", "film cameras and photography", 2);
+        let before = p
+            .graph
+            .edges
+            .iter()
+            .find(|e| e.from == "photography" && e.to == "film cameras")
+            .map(|e| e.weight)
+            .expect("edge");
+        p.feedback_anchored(
+            "New film cameras for photography",
+            Some("photography"),
+            InterestSignal::Saved,
+            3,
+        );
+        let after = p
+            .graph
+            .edges
+            .iter()
+            .find(|e| e.from == "photography" && e.to == "film cameras")
+            .map(|e| e.weight)
+            .expect("edge");
+        assert_eq!(after, before + 12);
     }
 
     #[test]
@@ -773,6 +1380,7 @@ mod tests {
     fn prompt_section_puts_pinned_first_and_names_muted_topics() {
         let mut p = InterestProfile::default();
         p.add("Rust", InterestSource::Memory, 0);
+        // Chat-sourced without evidence is not ready for the prompt; pin makes it ready.
         p.add("xAI", InterestSource::Chats, 0);
         p.add("crypto", InterestSource::Memory, 0);
         p.set_pinned("xAI", true);
@@ -830,8 +1438,11 @@ mod tests {
         // Real sealed interests still search.
         assert!(p.add("Rust", InterestSource::Memory, 1));
         assert!(p.add("air compressors", InterestSource::Explicit, 1));
-        // Multi-word chat title is fine.
+        // Multi-word chat title is fine once evidence-ready (raised weight).
         assert!(p.add("Home espresso", InterestSource::Chats, 1));
+        if let Some(t) = p.find_mut("Home espresso") {
+            t.weight = InterestSource::Chats.start_weight() + 1;
+        }
         assert_eq!(
             p.search_topics(),
             vec![
@@ -855,12 +1466,19 @@ mod tests {
     #[test]
     fn seeding_skips_cabin_chrome_titles() {
         let mut p = InterestProfile::default();
-        let chats = titles(&["Background", "background:refine", "New chat", "Bambu Lab"]);
+        // Two chats with the same good title promote; chrome titles never land.
+        let chats = vec![
+            ("c1".into(), "Background".into()),
+            ("c2".into(), "background:refine".into()),
+            ("c3".into(), "New chat".into()),
+            ("c4".into(), "Bambu Lab".into()),
+            ("c5".into(), "Bambu Lab".into()),
+        ];
         let n = p.seed(
             &SeedFrom {
                 user_md: "Interests: Rust, triage.",
                 memory_md: "",
-                chat_titles: &chats,
+                chats: &chats,
                 saved_titles: &[],
             },
             1,
@@ -870,6 +1488,11 @@ mod tests {
         assert_eq!(n, 2);
         assert!(p.find("Background").is_none());
         assert!(p.find("triage").is_none());
+        assert!(!p
+            .graph
+            .evidence
+            .iter()
+            .any(|e| e.topic.eq_ignore_ascii_case("Background")));
     }
 
     #[test]
