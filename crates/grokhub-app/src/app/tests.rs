@@ -26287,5 +26287,72 @@ fn each_background_job_runs_only_from_its_governor_arm() {
     let beat = fn_src(&src, "tick_heartbeat");
     assert!(beat.contains("HeartbeatAct::Background => self.run_background(now, halted)"), "{beat}");
     let run = fn_src(&src, "run_background");
-    assert!(run.contains("self.governor.tick(") && run.contains("for job in plan.run"), "{run}");
+    assert!(run.contains("self.background_plan(") && run.contains("for job in plan.run"), "{run}");
+    let plan = fn_src(&src, "background_plan");
+    assert!(plan.contains("self.governor.tick(") && plan.contains("hold_heavy: active"), "{plan}");
+}
+
+/// Brain 4 PR 2: a draft in the composer or a chat run holds heavy jobs and
+/// puts light model jobs on the router's cost goal; going idle resumes them.
+#[test]
+fn being_active_holds_heavy_jobs_and_light_model_jobs_go_cheap_until_idle() {
+    use grokhub_core::{JobHold, JobKind};
+    const T0: u64 = 1_800_000_000_000;
+    const DAY: &str = "2026-10-11";
+    let mut cabin = quiet_cabin();
+    // Equal start and end: quiet hours never apply, whatever the real clock says.
+    cabin.cfg.quiet_start = "00:00".into();
+    cabin.cfg.quiet_end = "00:00".into();
+    let long_ago = std::time::Instant::now()
+        .checked_sub(std::time::Duration::from_secs(60))
+        .expect("a minute of uptime");
+    cabin.last_activity = long_ago;
+    cabin.composer = "half a thought".into();
+    assert!(cabin.user_active_now());
+    let plan = cabin.background_plan(T0, false, DAY);
+    assert_eq!(
+        plan.held,
+        vec![
+            (JobKind::Automations, JobHold::Heavy),
+            (JobKind::Anticipate, JobHold::Heavy),
+            (JobKind::NightPasses, JobHold::Heavy),
+            (JobKind::Indexers, JobHold::Heavy),
+        ]
+    );
+    assert_eq!(
+        plan.cheap,
+        vec![JobKind::Ideas, JobKind::Digest, JobKind::Review]
+    );
+    assert_eq!(
+        cabin.bg_goal(JobKind::Review).map(|g| g.label()),
+        Some("goal cost (user active)".to_string())
+    );
+    assert_eq!(cabin.bg_goal(JobKind::Indexers), None, "heavy jobs wait instead");
+    assert_eq!(cabin.bg_goal(JobKind::PulseRefresh), None, "local upkeep calls no model");
+    // An empty composer with a chat run going is active too.
+    cabin.composer.clear();
+    cabin.running = true;
+    assert!(cabin.user_active_now());
+    let plan = cabin.background_plan(T0 + 1_000, false, DAY);
+    assert_eq!(plan.run, Vec::<JobKind>::new());
+    assert_eq!(plan.held.len(), 4);
+    // Idle: the held jobs run on the next beat, once, and nothing is cheap.
+    cabin.running = false;
+    assert!(!cabin.user_active_now());
+    let plan = cabin.background_plan(T0 + 2_000, false, DAY);
+    assert_eq!(
+        plan.run,
+        vec![
+            JobKind::Automations,
+            JobKind::Anticipate,
+            JobKind::NightPasses,
+            JobKind::Indexers
+        ]
+    );
+    assert_eq!(plan.cheap, Vec::<JobKind>::new());
+    assert_eq!(cabin.bg_goal(JobKind::Review), None);
+    assert_eq!(cabin.background_plan(T0 + 2_000, false, DAY).run, Vec::<JobKind>::new());
+    // A key or click a moment ago counts as active again.
+    cabin.last_activity = std::time::Instant::now();
+    assert!(cabin.user_active_now());
 }
