@@ -572,7 +572,8 @@ mod tests {
                     reasoning: String::new(),
                     calls: Vec::new(),
                     usage: Usage::default(),
-                });
+            ..Default::default()
+        });
             }
             Ok(turns.remove(0))
         }
@@ -605,6 +606,7 @@ mod tests {
                 arguments: args.into(),
             }],
             usage: Usage::default(),
+            ..Default::default()
         }
     }
 
@@ -747,7 +749,7 @@ mod tests {
         assert_eq!(open.len(), 1);
         assert_eq!(open[0].id, "a");
         assert_eq!(open[0].status, "pending");
-        let compacted = crate::compact::build_compacted_history(&history, "summary");
+        let compacted = crate::compact::build_compacted_history(&history, "summary", &[]);
         let blob = compacted
             .iter()
             .map(crate::compact::message_text)

@@ -512,16 +512,14 @@ impl Cabin {
             .unwrap_or_default()
     }
 
+    /// The governor's Automations job, after loops. It runs once per due time,
+    /// so it keeps no clock of its own. Your chat turn does not hold a job back:
+    /// it runs in its own process.
     pub(super) fn tick_night(&mut self) -> bool {
-        // Your chat turn does not hold a job back: it runs in its own process.
-        if self.last_auto_tick.elapsed() < Duration::from_secs(5) {
-            return self.night_check_rx.is_some();
-        }
         // One scheduled run at a time. The next due job waits for it.
         if self.bg.scheduled_live() {
             return false;
         }
-        self.last_auto_tick = Instant::now();
         let clock = Self::local_clock();
         self.roll_today();
         self.daily_auto_day = self.usage.day.clone();
@@ -737,10 +735,7 @@ impl Cabin {
         if self.poll_grok_loop() {
             return true;
         }
-        if self.grok_loop_rx.is_some() || self.last_night_tick.elapsed() < Duration::from_secs(5) {
-            return self.grok_loop_rx.is_some();
-        }
-        self.last_night_tick = Instant::now();
+        // A loop still running held the next one above; the governor sets the cadence.
         self.roll_today();
         self.daily_auto_day = self.usage.day.clone();
         self.daily_auto_used = self.usage.automation;
@@ -956,7 +951,7 @@ impl Cabin {
     /// A skill or automation from the review needs the same reason an idea does:
     /// work they repeat, or lasting context. One per topic.
     pub(super) fn keep_reasoned_suggestions(&self, items: &mut Vec<grokhub_core::LearnedSuggestion>) {
-        let (_, inputs) = self.idea_request();
+        let inputs = self.idea_inputs();
         let ground = grokhub_core::IdeaGround {
             asks: &inputs.asks,
             lasting: &inputs.lasting,

@@ -1,9 +1,12 @@
 //! Native engine. Sync HTTP, no CLI, no credential files.
 
 mod auto_review;
+pub mod brain;
+mod checkpoint;
 mod client;
 mod compact;
 mod drive;
+mod file_checkpoint;
 pub mod episode;
 mod eval;
 mod events;
@@ -47,6 +50,9 @@ pub use client::{
 pub use compact::{estimate_input_tokens, message_text};
 pub use eval::{parse_args, reject_live, render_report, run_suite, ItemResult, Opts, SUITE_ITEMS};
 pub use events::{Engine, EngineParts, EpisodeSeed, NativeEngine, StampHalt};
+pub use file_checkpoint::{
+    before_write, begin_step, format_steps, list_steps, restore_step, StepInfo, MAX_BYTES, MAX_RUNS,
+};
 pub use gate::{ClosedPermits, Gate, PermAnswer, PermMode, PermitInbox, PermitNote, PermitWait};
 pub use harness::{AccessMode, ComputerUseBackend, GateOutcome, HardClass, APPROVAL_GATE_VIOLATION};
 pub use hooks::{
@@ -66,7 +72,10 @@ pub use models::{
     context_length_for, parse_listed_models, parse_xai_models, pick_model, ListedModel,
     GROK_47_CONTEXT_LENGTH, XAI_MODELS_URL,
 };
-pub use prompt::system_prompt;
+pub use prompt::{
+    prompt_need_from_job, system_prompt, system_prompt_parts, system_prompt_with, PromptNeed,
+    PromptProfile,
+};
 pub use research::native_deep_research_prompt;
 pub use retry::{
     decide_retry, jitter_backoff, resolve_max_retries_with_env, retry_after_or_backoff,
@@ -75,6 +84,7 @@ pub use retry::{
 };
 pub use run::{
     run_loop, HaltCheck, LoopEvent, LoopIn, LoopOut, SteerQueue, StopReason, REPEAT_REPLAN,
+    TRUNCATED_TOOL,
 };
 pub use session::{
     attach_run, cancel_session, delete_session, export_markdown, fork_session, format_cost_ticks,

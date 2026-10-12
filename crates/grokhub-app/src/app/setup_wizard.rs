@@ -65,12 +65,86 @@ fn run(cmd: &str, args: &[&str]) -> Option<String> {
     out.status.success().then(|| String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
-/// GPU (`nvidia-smi`), RAM and free disk under `dir`. Anything it can't read is 0.
+/// GPU (nvidia-smi, else Linux DRM / Windows DXGI), RAM and free disk under `dir`.
+/// Anything it can't read is 0.
 pub(super) fn detect_hardware(dir: &Path) -> Hardware {
     let (gpu, vram_mb) = run("nvidia-smi", &["--query-gpu=name,memory.total", "--format=csv,noheader,nounits"])
         .and_then(|s| ls::parse_nvidia_smi(&s))
+        .or_else(drm_or_dxgi_gpu)
         .unwrap_or_default();
     Hardware { gpu, vram_mb, ram_mb: ram_mb().unwrap_or(0), free_disk_mb: free_disk_mb(dir).unwrap_or(0) }
+}
+
+/// AMD / Intel discrete VRAM when nvidia-smi is missing.
+fn drm_or_dxgi_gpu() -> Option<(String, u64)> {
+    #[cfg(target_os = "linux")]
+    {
+        if let Some(v) = read_drm_vram() {
+            return Some(v);
+        }
+    }
+    #[cfg(windows)]
+    {
+        // CIM Win32_VideoController: Name + AdapterRAM (bytes). Same CSV shape as DXGI helper.
+        if let Some(s) = run(
+            "powershell",
+            &[
+                "-NoProfile",
+                "-Command",
+                "Get-CimInstance Win32_VideoController | Select-Object Name,AdapterRAM | ConvertTo-Csv -NoTypeInformation",
+            ],
+        ) {
+            if let Some(v) = ls::parse_dxgi_dedicated_mb(&s) {
+                return Some(v);
+            }
+        }
+    }
+    None
+}
+
+/// Read `/sys/class/drm/*/device/mem_info_vram_total` (AMD and other DRM GPUs).
+#[cfg(target_os = "linux")]
+fn read_drm_vram() -> Option<(String, u64)> {
+    let mut best: Option<(String, u64)> = None;
+    let entries = std::fs::read_dir("/sys/class/drm").ok()?;
+    for e in entries.flatten() {
+        let name = e.file_name();
+        let name = name.to_string_lossy();
+        // card0, card1, … — skip card0-HDMI-A-1 style connectors.
+        if !name.starts_with("card") || name.contains('-') {
+            continue;
+        }
+        let vram_path = e.path().join("device/mem_info_vram_total");
+        let Ok(body) = std::fs::read_to_string(&vram_path) else {
+            continue;
+        };
+        let Some(mb) = ls::parse_drm_vram_total_bytes(&body) else {
+            continue;
+        };
+        let gpu = drm_gpu_name(&e.path()).unwrap_or_else(|| "AMD GPU".into());
+        best = Some(match best {
+            Some((ref g, cur)) if cur >= mb => (g.clone(), cur),
+            _ => (gpu, mb),
+        });
+    }
+    best
+}
+
+#[cfg(target_os = "linux")]
+fn drm_gpu_name(card_dir: &Path) -> Option<String> {
+    let uevent = std::fs::read_to_string(card_dir.join("device/uevent")).ok()?;
+    for line in uevent.lines() {
+        if let Some(driver) = line.strip_prefix("DRIVER=") {
+            let d = driver.trim();
+            if d == "amdgpu" {
+                return Some("AMD GPU".into());
+            }
+            if !d.is_empty() {
+                return Some(d.into());
+            }
+        }
+    }
+    None
 }
 
 #[cfg(target_os = "linux")]
@@ -164,9 +238,11 @@ impl Cabin {
         }
     }
 
-    /// The hardware read lands: keep it for the step and set the router's tier.
+    /// The hardware read lands: keep it for the step, set the router's tier,
+    /// and apply local-runtime perf defaults (context, GPU layers, idle unload).
     pub(super) fn take_setup_hardware(&mut self, hw: Hardware) {
         local::set_device(device_for(&hw));
+        grokhub_agent::route::local_perf::apply_hardware(&hw);
         self.setup.hw = Some(hw);
     }
 

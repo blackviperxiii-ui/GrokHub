@@ -7,6 +7,7 @@ use super::self_review_ui::set_self_review_fake;
 use super::*;
 use grokhub_agent::harness as hx;
 use grokhub_core::outcome::{self as oc, OutcomeResult, OutcomeSignals, TaskOutcome};
+use grokhub_core::run_metrics;
 use grokhub_core::{UpdateCard, UpdateKind, UpdateStatus};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -97,6 +98,7 @@ impl grokhub_agent::ModelClient for Fake {
             reasoning: String::new(),
             calls: Vec::new(),
             usage: grokhub_agent::Usage::default(),
+            ..Default::default()
         })
     }
 }
@@ -166,6 +168,26 @@ fn a_turn_end_writes_one_outcome_and_a_later_undo_supersedes_it() {
     assert_eq!(all[0].reasons, vec!["verify_ok".to_string()]);
     assert_eq!(all[0].span_ids.len(), 2, "the verify step and the reply");
     assert_eq!(all[0].span_ids[0], v.span_ref());
+    let runs = run_metrics::read_runs(&root);
+    assert_eq!(runs.len(), 1, "one metrics line per finished run");
+    assert_eq!(
+        (
+            runs[0].run.as_str(),
+            runs[0].class.as_str(),
+            runs[0].result,
+            runs[0].verified,
+            runs[0].steps,
+            runs[0].undos
+        ),
+        (
+            format!("{trace}:1").as_str(),
+            "skill:weekly-report",
+            OutcomeResult::Success,
+            true,
+            0,
+            0
+        )
+    );
 
     // GrokHub changes the skill, then the user undoes it within the day.
     let mut v2 = v1.clone();
@@ -183,6 +205,12 @@ fn a_turn_end_writes_one_outcome_and_a_later_undo_supersedes_it() {
         2,
         "the undo is a superseding line"
     );
+    let runs = run_metrics::read_runs(&root);
+    assert_eq!(
+        (runs.len(), runs[0].result, runs[0].undos, runs[0].corrections),
+        (1, OutcomeResult::Failure, 1, 0)
+    );
+    assert_eq!(run_metrics::read_run_lines(&root).len(), 2);
     let _ = std::fs::remove_dir_all(&root);
 }
 
@@ -207,12 +235,19 @@ fn a_correction_after_the_turn_makes_it_a_failure() {
     );
     cabin.outcome_user_said("thanks, now April");
     assert_eq!(oc::read_outcome_lines(&root).len(), 1, "not a correction");
+    assert_eq!(run_metrics::read_run_lines(&root).len(), 1);
     cabin.outcome_user_said("No, that's the wrong sheet");
     let all = oc::read_outcomes(&root);
     assert_eq!(all.len(), 1);
     assert_eq!(
         (all[0].result, all[0].reasons.clone()),
         (OutcomeResult::Failure, vec!["correction".to_string()])
+    );
+    let runs = run_metrics::read_runs(&root);
+    assert_eq!(
+        (runs.len(), runs[0].steps, runs[0].result, runs[0].corrections, runs[0].undos),
+        (1, 1, OutcomeResult::Failure, 1, 0),
+        "the click counts as a step; the correction is a newer line"
     );
     let _ = std::fs::remove_dir_all(&root);
 }
@@ -738,4 +773,569 @@ fn quiet_mode_logs_the_weekly_suggestions_and_posts_no_cards() {
     assert!(cabin.updates.iter().any(|c| c.source_id == "router-review"));
     assert_eq!(super::self_review_ui::load_state().quiet_log.len(), 2, "off, nothing more is logged");
     let _ = std::fs::remove_dir_all(&root);
+}
+
+/// Apply a weekly patch to weekly-report: the change goes on trial.
+fn applied_trial(label: &str) -> (crate::config::TestConfigDir, std::path::PathBuf, Cabin, SkillMd) {
+    let (pin, root) = pin(label);
+    let now = grokhub_core::now_ms();
+    let v1 = skill("weekly-report", "1. Open report.md\n2. click Save");
+    skills::save_skill(&v1).unwrap();
+    recorded(&root, "weekly-report", "w:1", false, now - 2 * DAY, &["click"]);
+    recorded(&root, "weekly-report", "w:2", true, now - DAY, &["click"]);
+    fake("PATCH_SKILL: skill:weekly-report | Wait for the save | 1. Open report.md 2. click Save 3. wait for the toast");
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.skill_list = skills::list_skills();
+    cabin.run_self_review_now(now);
+    wait_pass(&mut cabin);
+    let card = self_review_cards(&cabin).pop().expect("one card");
+    cabin.pulse_accept(&card.id, "2026-10-11");
+    (pin, root, cabin, v1)
+}
+
+/// Skill runs through the trial until it closes: each run follows what
+/// `trial_follow` hands it and takes `canary` or `control` clicks.
+/// Returns (canary runs, control runs).
+fn run_trial(cabin: &mut Cabin, root: &std::path::Path, v1: &SkillMd, canary: usize, control: usize) -> (usize, usize) {
+    let mut sides = (0, 0);
+    let current = cabin.skill_list.iter().find(|s| s.name == "weekly-report").cloned().unwrap();
+    for _ in 0..300 {
+        if hx::open_trial(root, "skill:weekly-report").is_none() {
+            return sides;
+        }
+        let follow = cabin.trial_follow(&current);
+        let arm = cabin.harness.self_review.trial.as_ref().map(|p| p.arm).expect("a side");
+        let clicks = if arm == run_metrics::Arm::Canary {
+            assert!(follow.instructions.contains("wait for the toast"), "{}", follow.instructions);
+            sides.0 += 1;
+            canary
+        } else {
+            assert_eq!(follow.instructions.trim(), v1.instructions.trim());
+            sides.1 += 1;
+            control
+        };
+        cabin.skill_name = "weekly-report".into();
+        cabin.live_mut().push(("user".into(), "Do the weekly report".into()));
+        let trace = cabin.trace_id();
+        let turn = cabin.turn_no();
+        for i in 0..clicks {
+            let mut s = hx::fixture_span(grokhub_core::now_ms(), "click", &format!("{{\"x\":{turn}{i}}}"), "allow", "clicked", Some(true), "")
+                .in_turn(&trace, turn);
+            s.session_id = trace.clone();
+            hx::append_span(root, &s).unwrap();
+        }
+        cabin.harness_turn_end("Here is the report.", turn);
+        cabin.live_mut().push(("assistant".into(), "Here is the report.".into()));
+    }
+    panic!("the trial never closed");
+}
+
+fn trial_note(cabin: &Cabin, prefix: &str) -> UpdateCard {
+    cabin
+        .updates
+        .iter()
+        .find(|c| c.source_id.starts_with("canary:") && c.title.starts_with(prefix))
+        .cloned()
+        .unwrap_or_else(|| panic!("no {prefix:?} note in {:?}", cabin.updates.iter().map(|c| &c.title).collect::<Vec<_>>()))
+}
+
+#[test]
+fn an_applied_patch_runs_as_a_canary_and_fewer_steps_keep_it_with_a_named_note() {
+    let _g = crate::config::hold_test_config();
+    let (_pin, root, mut cabin, v1) = applied_trial("canary-kept");
+    let trial = hx::open_trial(&root, "skill:weekly-report").expect("a trial");
+    assert_eq!(
+        (trial.label.as_str(), trial.target, trial.share_pct, trial.min_runs),
+        ("Wait for the save in weekly-report", hx::Metric::Steps, 20, 10)
+    );
+    let trying = trial_note(&cabin, "Trying:");
+    assert_eq!(trying.title, "Trying: Wait for the save in weekly-report");
+    assert_eq!(
+        trying.body.as_deref(),
+        Some(format!("{}. One run in 5 uses it; it stays if it takes fewer steps over 10 runs.", trial.diff).as_str())
+    );
+    cabin.poll_self_changes();
+    assert!(
+        cabin.harness.work_rows.iter().all(|r| r.id != "weekly-report"),
+        "no Undo/Keep row for a change on trial"
+    );
+    let (canary, control) = run_trial(&mut cabin, &root, &v1, 3, 5);
+    assert_eq!(canary, 10, "judged at the tenth canary run");
+    assert!(control > canary, "most runs stay on the old steps ({control})");
+    let kept = trial_note(&cabin, "Kept:");
+    assert_eq!(kept.title, "Kept: Wait for the save in weekly-report");
+    assert_eq!(kept.body.as_deref(), Some("Kept: Wait for the save in weekly-report, 40% fewer steps over 10 runs"));
+    let md = std::fs::read_to_string(skills::skills_dir().join("weekly-report").join("SKILL.md")).unwrap();
+    assert!(md.contains("wait for the toast"), "kept: {md}");
+    let tagged = run_metrics::read_runs(&root).into_iter().filter(|m| m.version == trial.version).count();
+    assert_eq!(tagged, canary + control, "every trial run names its version");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn a_canary_with_more_steps_is_rolled_back_to_the_old_skill() {
+    let _g = crate::config::hold_test_config();
+    let (_pin, root, mut cabin, v1) = applied_trial("canary-rolled");
+    let (canary, _) = run_trial(&mut cabin, &root, &v1, 6, 5);
+    assert_eq!(canary, 10);
+    let note = trial_note(&cabin, "Rolled back:");
+    assert_eq!(note.title, "Rolled back: Wait for the save in weekly-report");
+    assert_eq!(note.body.as_deref(), Some("Rolled back: Wait for the save in weekly-report, 20% more steps over 10 runs"));
+    let md = std::fs::read_to_string(skills::skills_dir().join("weekly-report").join("SKILL.md")).unwrap();
+    assert!(!md.contains("wait for the toast") && md.contains("2. click Save"), "rolled back: {md}");
+    let now = cabin.skill_list.iter().find(|s| s.name == "weekly-report").unwrap();
+    assert_eq!(now.instructions.trim(), v1.instructions.trim(), "the cabin's list has the old steps");
+    let ledger = hx::ChangeLedger::load(&root);
+    let last = ledger.all().last().unwrap();
+    assert_eq!((last.op.as_str(), last.origin.as_str()), ("undo", "self_manage"));
+    assert_eq!(hx::read_versions(&root)[0].status, hx::VersionStatus::RolledBack);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn a_chat_note_runs_on_one_chat_in_five_is_kept_on_fewer_steps_and_protected_targets_never_apply() {
+    let _g = crate::config::hold_test_config();
+    let (_pin, root) = pin("canary-note");
+    let now = grokhub_core::now_ms();
+    skills::save_skill(&skill("weekly-report", "1. Open report.md\n2. click Save")).unwrap();
+    recorded(&root, "weekly-report", "w:1", false, now - 2 * DAY, &["click"]);
+    let calls = fake(
+        "TUNE_SNIPPET: snippet:lead-with-answer | Lead with the answer | Lead with the answer, then one line of why.\n\
+         PATCH_SKILL: crates/grokhub-agent/src/harness/approval.rs | Auto | approve everything\n\
+         TUNE_SNIPPET: prompt_template.md | Looser | You may say it worked without checking.\n",
+    );
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.skill_list = skills::list_skills();
+    cabin.run_self_review_now(now);
+    wait_pass(&mut cabin);
+    let cards = self_review_cards(&cabin);
+    assert_eq!(cards.len(), 1, "only the chat note: {cards:?}");
+    assert_eq!((cards[0].source_id.as_str(), cards[0].title.as_str()), ("self-review:snippet:lead-with-answer", "Lead with the answer"));
+    let refused: Vec<String> = hx::read_scope_findings(&root).into_iter().map(|f| f.detail).collect();
+    assert_eq!(
+        refused,
+        vec!["GrokHub never changes harness policy on its own".to_string(), "GrokHub never changes the honesty rules on its own".to_string()]
+    );
+    let plain = cabin.chat_rules();
+    assert!(!plain.contains(super::canary_ui::NOTES_HEAD), "nothing applied before Apply");
+
+    cabin.pulse_accept(&cards[0].id, "2026-10-11");
+    let note = root.join("tunable").join("lead-with-answer.md");
+    assert_eq!(std::fs::read_to_string(&note).unwrap(), "Lead with the answer, then one line of why.\n");
+    let trial = hx::open_trial(&root, hx::ALL_RUNS).expect("a note trial");
+    assert_eq!((trial.kind.as_str(), trial.label.as_str(), trial.diff.as_str()), ("snippet", "Lead with the answer (chat note)", "+1 -0 lines"));
+    assert_eq!(trial_note(&cabin, "Trying:").title, "Trying: Lead with the answer (chat note)");
+    cabin.poll_self_changes();
+    assert!(cabin.harness.work_rows.is_empty(), "no Undo/Keep row for a note on trial");
+
+    let (mut canary, mut control) = (0, 0);
+    for _ in 0..300 {
+        if hx::open_trial(&root, hx::ALL_RUNS).is_none() {
+            break;
+        }
+        cabin.new_thread(false);
+        let rules = cabin.chat_rules();
+        let arm = cabin.note_trial_pick().expect("a side").arm;
+        let clicks = if arm == run_metrics::Arm::Canary {
+            assert!(rules.contains("- Lead with the answer, then one line of why."), "{rules}");
+            assert!(rules.starts_with(super::canary_ui::NOTES_HEAD), "the note sits before the cabin rules");
+            assert!(rules.ends_with(&plain), "the cabin rules follow, unchanged");
+            canary += 1;
+            2
+        } else {
+            assert!(!rules.contains(super::canary_ui::NOTES_HEAD), "control chats follow the rules alone");
+            control += 1;
+            4
+        };
+        cabin.live_mut().push(("user".into(), "Summarize the inbox".into()));
+        let trace = cabin.trace_id();
+        let turn = cabin.turn_no();
+        for i in 0..clicks {
+            let mut s = hx::fixture_span(grokhub_core::now_ms(), "click", &format!("{{\"x\":{i}}}"), "allow", "clicked", Some(true), "")
+                .in_turn(&trace, turn);
+            s.session_id = trace.clone();
+            hx::append_span(&root, &s).unwrap();
+        }
+        cabin.harness_turn_end("Here is the summary.", turn);
+    }
+    assert_eq!(canary, 10);
+    assert!(control > canary, "{control}");
+    let kept = trial_note(&cabin, "Kept:");
+    assert_eq!(kept.body.as_deref(), Some("Kept: Lead with the answer (chat note), 50% fewer steps over 10 runs"));
+    assert!(note.exists(), "kept: the note stays");
+    assert_eq!(calls.load(Ordering::SeqCst), 1, "the weekly pass was the only model call");
+    assert!(hx::read_egress(&root).is_empty(), "no request left the cabin during the pass and the trial");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// Card 32 PR D: a code-change idea is a card the user saves or copies. It
+/// changes nothing, the copy has no home path, email or key, and no request
+/// leaves the cabin.
+#[test]
+fn a_code_idea_is_saved_or_copied_redacted_never_applied_and_nothing_leaves() {
+    let _g = crate::config::hold_test_config();
+    let (_pin, root) = pin("code-idea");
+    let now = grokhub_core::now_ms();
+    skills::save_skill(&skill("weekly-report", "1. Open report.md\n2. click Save")).unwrap();
+    let skill_md = root.join("skills").join("weekly-report").join("SKILL.md");
+    let before = std::fs::read_to_string(&skill_md).ok();
+    recorded(&root, "weekly-report", "w:1", false, now - 2 * DAY, &["click"]);
+    let calls = fake(
+        "CODE_IDEA: Wait for the Save dialog | The save click lands before the dialog opens on /home/viper/Documents/report.md | 1 of 1 weekly-report runs failed; viper@example.com saw it\n\
+         CODE_IDEA: Retry rate limits | A 429 ends the run (key sk-abcdefghijklmnopqrstuv) | 1 run\n\
+         CODE_IDEA: A third idea | p | e\n",
+    );
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.skill_list = skills::list_skills();
+    cabin.run_self_review_now(now);
+    wait_pass(&mut cabin);
+    let cards = self_review_cards(&cabin);
+    let sources: Vec<&str> = cards.iter().map(|c| c.source_id.as_str()).collect();
+    assert_eq!(sources, vec!["self-review:code:wait-for-the-save-dialog", "self-review:code:retry-rate-limits"]);
+    assert_eq!(cards[0].title, "Wait for the Save dialog");
+
+    cabin.apply_pulse_act(super::pulse_ui::PulseAct::CopyIssue(cards[0].id.clone()));
+    let issue = cabin.harness.self_review.copy_out.take().expect("issue text for the clipboard");
+    let version = crate::update::build_version_line();
+    assert_eq!(
+        issue,
+        format!(
+            "## Wait for the Save dialog\n\nProblem: The save click lands before the dialog opens on ~/Documents/report.md\n\n\
+             Evidence: 1 of 1 weekly-report runs failed; [email] saw it\n\n---\n\
+             Found by the weekly self-review in {version}. Paths, emails and keys were removed before copying.\n"
+        )
+    );
+    cabin.copy_code_idea(&cards[1].id);
+    let second = cabin.harness.self_review.copy_out.take().unwrap();
+    assert!(!second.contains("sk-abcdefghijklmnopqrstuv"), "{second}");
+    assert!(cabin.updates.iter().any(|c| c.id == cards[0].id && c.status != UpdateStatus::Dismissed), "copy leaves the card");
+
+    cabin.pulse_accept(&cards[0].id, "2026-10-11");
+    let saved = super::self_review_ui::load_state().saved_ideas;
+    assert_eq!(saved.len(), 1);
+    assert_eq!(
+        (saved[0].title.as_str(), saved[0].text.as_str()),
+        (
+            "Wait for the Save dialog",
+            "Problem: The save click lands before the dialog opens on /home/viper/Documents/report.md\n\nEvidence: 1 of 1 weekly-report runs failed; viper@example.com saw it"
+        )
+    );
+    assert!(cabin.updates.iter().any(|c| c.id == cards[0].id && c.status == UpdateStatus::Dismissed));
+    assert_eq!(std::fs::read_to_string(&skill_md).ok(), before, "a code idea changes no skill");
+    assert!(hx::read_versions(&root).is_empty(), "and starts no trial");
+    assert_eq!(calls.load(Ordering::SeqCst), 1, "the weekly pass was the only model call");
+    assert!(hx::read_egress(&root).is_empty(), "no request left the cabin");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// Settings history: newest first, status words, Revert only on the newest
+/// kept version of a target, and the Revert puts the skill back.
+#[test]
+fn the_change_history_lists_versions_newest_first_and_reverts_a_kept_skill() {
+    use super::change_history_ui::history_rows;
+    let v = |version: &str, id: &str, status: hx::VersionStatus, label: &str, note: &str, at: u64| hx::Version {
+        version: version.into(),
+        kind: "skill".into(),
+        id: id.into(),
+        label: label.into(),
+        diff: "+1 -2 lines".into(),
+        status,
+        note: note.into(),
+        started_at: at,
+        at,
+        ..Default::default()
+    };
+    let now = 10 * DAY;
+    let versions = vec![
+        v("skill:a@1", "a", hx::VersionStatus::Kept, "Old a", "Kept: Old a, 10% fewer steps over 10 runs", DAY),
+        v("skill:b@1", "b", hx::VersionStatus::RolledBack, "Try b", "Rolled back: Try b, 5% more steps over 10 runs", 2 * DAY),
+        v("skill:a@2", "a", hx::VersionStatus::Kept, "New a", "", 8 * DAY),
+        v("skill:c@1", "c", hx::VersionStatus::Canary, "Try c", "", 9 * DAY),
+    ];
+    let rows = history_rows(&versions, now);
+    let shown: Vec<(&str, &str, Option<&str>)> =
+        rows.iter().map(|r| (r.title.as_str(), r.hint.as_str(), r.revert.as_deref())).collect();
+    assert_eq!(
+        shown,
+        vec![
+            ("Trying: Try c", "+1 -2 lines · 1d ago", None),
+            ("Kept: New a", "+1 -2 lines · 2d ago", Some("skill:a@2")),
+            ("Rolled back: Try b", "Rolled back: Try b, 5% more steps over 10 runs · +1 -2 lines · 8d ago", None),
+            ("Kept: Old a", "Kept: Old a, 10% fewer steps over 10 runs · +1 -2 lines · 9d ago", None),
+        ]
+    );
+
+    let _g = crate::config::hold_test_config();
+    let (_pin, root) = pin("history-revert");
+    let old = skill("weekly-report", "1. Open report.md\n2. click Save");
+    skills::save_skill(&old).unwrap();
+    let skill_md = root.join("skills").join("weekly-report").join("SKILL.md");
+    let v1 = std::fs::read_to_string(&skill_md).unwrap();
+    let new = skill("weekly-report", "1. Open report.md\n2. press ctrl+s");
+    let change = skills::save_skill_versioned(&new, hx::Origin::SelfManage, "weekly self-review: Use ctrl+s").unwrap().unwrap();
+    let v2 = std::fs::read_to_string(&skill_md).unwrap();
+    let trial = hx::start_trial(&root, &change, "skill:weekly-report", "Use ctrl+s in weekly-report", hx::Metric::Steps, &v1, &v2).unwrap();
+    let t = trial.started_at;
+    let runs: Vec<run_metrics::RunMetrics> = (0..22u64)
+        .map(|i| {
+            let arm = if i < 12 { run_metrics::Arm::Canary } else { run_metrics::Arm::Control };
+            run_metrics::RunMetrics {
+                run: format!("chat:{i}"),
+                class: trial.class.clone(),
+                result: OutcomeResult::Success,
+                steps: if arm == run_metrics::Arm::Canary { 2 } else { 4 },
+                version: trial.version.clone(),
+                arm: Some(arm),
+                finished_at: t + 1 + i,
+                at: t + 1 + i,
+                ..Default::default()
+            }
+        })
+        .collect();
+    assert_eq!(hx::settle_trials(&root, &skills::skills_dir(), &runs, t + 100)[0].status, hx::VersionStatus::Kept);
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.revert_kept_version(&trial.version);
+    assert_eq!(cabin.status, "Reverted by you: Use ctrl+s in weekly-report");
+    assert_eq!(std::fs::read_to_string(&skill_md).unwrap(), v1, "the skill is back to the version before");
+    let rows = history_rows(&hx::read_versions(&root), t + 200);
+    assert_eq!((rows[0].title.as_str(), rows[0].revert.as_deref()), ("Reverted: Use ctrl+s in weekly-report", None));
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// Settings paint must not call `load_state` / `std::fs::read*` / `Command::new`
+/// (or `read_versions` on the history page). The cabin holds a cache writers update.
+#[test]
+fn settings_self_review_paint_does_not_touch_disk() {
+    fn body<'a>(src: &'a str, name: &str) -> &'a str {
+        let needle = format!("fn {name}(");
+        let start = src.find(&needle).unwrap_or_else(|| panic!("missing {name}"));
+        let after = &src[start..];
+        let end = after[needle.len()..]
+            .find("\n    fn ")
+            .or_else(|| after[needle.len()..].find("\nfn "))
+            .map(|i| needle.len() + i)
+            .unwrap_or(after.len());
+        &after[..end]
+    }
+    let review = include_str!("self_review_ui.rs").replace("\r\n", "\n");
+    let history = include_str!("change_history_ui.rs").replace("\r\n", "\n");
+    let quiet = body(&review, "ui_quiet_self_review_rows");
+    assert!(
+        !quiet.contains("load_state()") && !quiet.contains("std::fs::") && !quiet.contains("Command::new"),
+        "quiet rows must paint from the cached file: {quiet}"
+    );
+    assert!(
+        quiet.contains("ensure_self_review_file") && quiet.contains("quiet_log_note"),
+        "quiet rows read the in-memory quiet log: {quiet}"
+    );
+    let hist = body(&history, "ui_self_change_history");
+    assert!(
+        !hist.contains("load_state()")
+            && !hist.contains("read_versions")
+            && !hist.contains("std::fs::")
+            && !hist.contains("Command::new"),
+        "history rows must paint from caches: {hist}"
+    );
+    assert!(
+        hist.contains("history_versions_now") && hist.contains("ensure_self_review_file"),
+        "history rows use the version and idea caches: {hist}"
+    );
+    // Setup / proactive / local-ai: hardware detect and budget load are not in paint.
+    let setup = include_str!("setup_wizard.rs").replace("\r\n", "\n");
+    let paint = body(&setup, "paint_setup_wizard");
+    assert!(
+        !paint.contains("detect_hardware")
+            && !paint.contains("std::fs::")
+            && !paint.contains("Command::new")
+            && !paint.contains("ureq"),
+        "setup paint must not probe hardware on the UI thread: {paint}"
+    );
+    let proactive = include_str!("proactive_ui.rs").replace("\r\n", "\n");
+    for name in ["tick_proactive", "proactive_candidates", "save_proactive"] {
+        let fn_body = body(&proactive, name);
+        assert!(
+            !fn_body.contains("load_budget()"),
+            "{name} must use the in-memory budget, not reload proactive.json: {fn_body}"
+        );
+    }
+}
+
+/// A cabin write updates the cached `self_review.json` view Settings paints from.
+#[test]
+fn self_review_file_cache_updates_on_write() {
+    let _g = crate::config::hold_test_config();
+    let (_pin, root) = pin("self-review-cache");
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.ensure_self_review_file();
+    assert!(
+        cabin
+            .harness
+            .self_review
+            .file
+            .as_ref()
+            .expect("cached")
+            .quiet_log
+            .is_empty()
+    );
+
+    // A write that bypasses the cabin leaves the cache alone until the next load.
+    let mut disk = super::self_review_ui::load_state();
+    disk.quiet_log.push(grokhub_core::self_review::QuietEntry {
+        day: "2099-01-01".into(),
+        source: "self-review:test".into(),
+        title: "Out of band".into(),
+        body: "from disk".into(),
+    });
+    super::self_review_ui::save_state(&disk);
+    assert!(
+        cabin
+            .harness
+            .self_review
+            .file
+            .as_ref()
+            .expect("still cached")
+            .quiet_log
+            .is_empty(),
+        "Settings keeps the cached quiet log across out-of-band disk writes"
+    );
+
+    cabin.mutate_self_review_file(|f| {
+        f.quiet_log.push(grokhub_core::self_review::QuietEntry {
+            day: Cabin::local_day(),
+            source: "self-review:cabin".into(),
+            title: "From cabin".into(),
+            body: "cached write".into(),
+        });
+    });
+    let cached = cabin
+        .harness
+        .self_review
+        .file
+        .as_ref()
+        .expect("cache after write");
+    assert_eq!(cached.quiet_log.len(), 1);
+    assert_eq!(cached.quiet_log[0].title, "From cabin");
+    let on_disk = super::self_review_ui::load_state();
+    assert_eq!(on_disk.quiet_log.len(), 1);
+    assert_eq!(on_disk.quiet_log[0].title, "From cabin");
+    let note = super::self_review_ui::quiet_log_note(&cached.quiet_log);
+    assert!(note.contains("From cabin"), "{note}");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// Brain 6 PR 2: six repair runs on Repair Linux this week, three failed;
+/// the reply moves its ports check to the front.
+fn stage_weak_playbook(root: &std::path::Path, now: u64) -> String {
+    for i in 0..6u64 {
+        let m = run_metrics::RunMetrics {
+            run: format!("chat-pb{i}:1"),
+            class: "topic:repair".into(),
+            result: if i < 3 { OutcomeResult::Failure } else { OutcomeResult::Success },
+            verified: i >= 3,
+            steps: 8,
+            brain: run_metrics::RunBrain {
+                intent: "repair".into(),
+                care: "critical".into(),
+                domain: "system".into(),
+                policy: "repair × critical".into(),
+                playbook: "repair-linux".into(),
+            },
+            finished_at: now - DAY + i,
+            at: now - DAY + i,
+            ..Default::default()
+        };
+        run_metrics::append_run(root, &m, 0).unwrap();
+    }
+    let linux = grokhub_core::playbook::BUILTIN[1].replace("\r\n", "\n");
+    let ports = "[[phase.step]]\nname = \"List listening ports (ss -tuln) and name what owns each\"\n\n";
+    let first = "[[phase.step]]\nname = \"List failed services\"";
+    assert!(linux.contains(ports) && linux.contains(first));
+    let new = linux.replace(ports, "").replacen(first, &format!("{ports}{first}"), 1);
+    format!("TUNE_BRAIN: playbook:repair-linux | Linux repair checks ports before services\n<<<\n{new}>>>\n")
+}
+
+#[test]
+fn the_weekly_pass_tries_one_playbook_tweak_from_the_runs_and_quiet_mode_only_logs_it() {
+    let _g = crate::config::hold_test_config();
+    let now = grokhub_core::now_ms();
+    let (pin_on, root) = pin("brain6-weekly-on");
+    let calls = fake(&stage_weak_playbook(&root, now));
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.run_self_review_now(now);
+    wait_pass(&mut cabin);
+    assert_eq!(calls.load(Ordering::SeqCst), 1, "the weak playbook alone brings the one call");
+    let versions = hx::read_versions(&root);
+    let shown: Vec<(&str, &str, hx::VersionStatus)> =
+        versions.iter().map(|v| (v.class.as_str(), v.label.as_str(), v.status)).collect();
+    assert_eq!(
+        shown,
+        vec![("playbook:repair-linux", "Linux repair checks ports before services", hx::VersionStatus::Canary)]
+    );
+    assert!(
+        cabin.updates.iter().any(|c| c.title == "Trying: Linux repair checks ports before services"),
+        "the trial's note is posted"
+    );
+    assert!(root.join("playbooks").join("repair-linux.toml").exists());
+    drop(pin_on);
+    let _ = std::fs::remove_dir_all(&root);
+
+    let (_pin, root) = pin("brain6-weekly-quiet");
+    let _calls = fake(&stage_weak_playbook(&root, now));
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.cfg.self_improve_quiet = true;
+    cabin.run_self_review_now(now);
+    wait_pass(&mut cabin);
+    assert!(hx::read_versions(&root).is_empty(), "quiet mode applies nothing");
+    assert!(!root.join("playbooks").exists());
+    let log: Vec<(String, String, String)> = super::self_review_ui::load_state()
+        .quiet_log
+        .into_iter()
+        .filter(|e| e.source.starts_with("playbook:"))
+        .map(|e| (e.source, e.title, e.body))
+        .collect();
+    assert_eq!(
+        log,
+        vec![(
+            "playbook:repair-linux".to_string(),
+            "Linux repair checks ports before services".to_string(),
+            "3 of 6 runs on the repair-linux playbook needed a fix.".to_string()
+        )]
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// Brain 6 PR 2: the change history's per-domain block, from runs in two
+/// domains; a line with no Brain record is skipped.
+#[test]
+fn the_change_history_shows_one_row_per_domain() {
+    use super::change_history_ui::domain_block;
+    let run = |domain: &str, ok: bool, steps: u32, verified: bool| run_metrics::RunMetrics {
+        result: if ok { OutcomeResult::Success } else { OutcomeResult::Failure },
+        steps,
+        verified,
+        brain: run_metrics::RunBrain { domain: domain.into(), ..Default::default() },
+        ..Default::default()
+    };
+    let runs = vec![
+        run("code", true, 10, true),
+        run("files", false, 3, false),
+        run("code", false, 4, false),
+        run("", true, 99, true),
+    ];
+    assert_eq!(
+        domain_block(&run_metrics::domain_rows(&runs)).as_deref(),
+        Some(
+            "Runs by area (runs on file):\n\
+             code · 2 runs · 50% worked · 7.0 steps · 50% checked\n\
+             files · 1 run · 0% worked · 3.0 steps · 0% checked"
+        )
+    );
+    assert_eq!(domain_block(&run_metrics::domain_rows(&runs[3..])), None, "no Brain record, no block");
+    let history = include_str!("change_history_ui.rs").replace("\r\n", "\n");
+    let paint = history.split("fn ui_self_change_history").nth(1).unwrap();
+    let paint = paint.split("\n    }\n").next().unwrap();
+    assert!(
+        paint.contains("domain_rows_now") && !paint.contains("read_runs"),
+        "the block paints from the cache: {paint}"
+    );
 }

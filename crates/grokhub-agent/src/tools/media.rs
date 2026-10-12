@@ -1264,7 +1264,8 @@ pub(crate) mod tests {
                     reasoning: String::new(),
                     calls: Vec::new(),
                     usage: Usage::default(),
-                })
+            ..Default::default()
+        })
             }
         }
         let auto = chat(true, PermMode::Auto, false);

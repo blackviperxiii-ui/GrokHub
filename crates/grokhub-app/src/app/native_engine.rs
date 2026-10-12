@@ -29,6 +29,11 @@ fn live_map() -> &'static Mutex<HashMap<String, LiveCfg>> {
     MAP.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+/// Closes the volatile voice/notes tail so cabin safety (earlier, in the stable
+/// prefix) still outranks a custom personality or tuned note that lands last.
+/// The agent puts each turn's talk style just before it.
+const VOLATILE_SAFETY_CLOSER: &str = grokhub_core::talk::VOLATILE_SAFETY_CLOSER;
+
 impl Cabin {
     /// `/compact` on the open thread. False only when no thread is open.
     /// The job thread is bound after the engine, so the session id stays on this tab.
@@ -222,11 +227,8 @@ impl Cabin {
         let model = grokhub_core::cabin_spawn_model(&self.cfg.model).to_string();
         // The router picks each call's effort; this is only the fallback for an unlisted class.
         let effort = grokhub_agent::route::live::start_effort(grokhub_agent::route::live::DEFAULT_CLASS);
-        let rules = grokhub_core::cabin_rules::cabin_rules_for(
-            &grokhub_core::brief_for(&self.learning, "chat"),
-            self.cfg.desktop_control,
-        );
-        let system = grokhub_agent::system_prompt(&rules, &workspace);
+        let (stable, volatile) = self.chat_prompt_parts();
+        let system = grokhub_agent::system_prompt_parts(&stable, &volatile, &workspace);
         // A side question stays read-only even in plan mode, so it never gets plan approval.
         grokhub_agent::set_plan_session(
             session_id,
@@ -248,6 +250,49 @@ impl Cabin {
             .unwrap_or_else(|err| err.into_inner())
             .insert(session_id.to_string(), cfg);
         Ok(())
+    }
+
+    /// UI/test helper: personality tone first, then cabin safety (legacy order).
+    /// Live publishes use [`Self::chat_prompt_parts`] for a cacheable stable prefix.
+    #[cfg(test)]
+    pub(super) fn chat_rules(&self) -> String {
+        let rules = grokhub_core::cabin_rules::cabin_rules_for(
+            &grokhub_core::brief_for(&self.learning, "chat"),
+            self.cfg.desktop_control,
+        );
+        let notes = self.tuned_notes();
+        let rules = if notes.is_empty() { rules } else { format!("{notes}\n\n{rules}") };
+        grokhub_core::personality::layer(&self.chat_personality(), &rules)
+    }
+
+    /// Stable cabin safety/approval rules, then volatile personality / notes / brief.
+    /// When voice or notes are present, a short closer reasserts that the earlier
+    /// cabin safety rules win (so a rogue tone cannot outrank them by landing last).
+    pub(super) fn chat_prompt_parts(&self) -> (String, String) {
+        let stable = grokhub_core::cabin_rules::cabin_static_rules(self.cfg.desktop_control);
+        let mut parts: Vec<String> = Vec::new();
+        let mut needs_safety_closer = false;
+        let voice = self.chat_personality().prompt_block();
+        if !voice.is_empty() {
+            parts.push(voice);
+            needs_safety_closer = true;
+        }
+        let notes = self.tuned_notes();
+        if !notes.is_empty() {
+            parts.push(notes);
+            needs_safety_closer = true;
+        }
+        let learned = grokhub_core::cabin_rules::cabin_learned_tail(&grokhub_core::brief_for(
+            &self.learning,
+            "chat",
+        ));
+        if !learned.is_empty() {
+            parts.push(learned);
+        }
+        if needs_safety_closer {
+            parts.push(VOLATILE_SAFETY_CLOSER.to_string());
+        }
+        (stable, parts.join("\n\n"))
     }
 
     fn native_gate(&self) -> Gate {
@@ -496,6 +541,9 @@ fn serve_native(session_id: String, ext_rx: std::sync::mpsc::Receiver<ExternalCm
         engine.set_origin(cfg.origin);
         engine.set_episode(cfg.episode.clone());
         engine.set_imagine_bearer(&cfg.bearer);
+        // Brain 1: an unclear ask's Brief costs one fast call. App tests
+        // script each reply, so they keep the rules-only default.
+        engine.set_brief_model(!cfg!(test));
         let client = XaiClient::new(cfg.bearer, cfg.auth_kind, Duration::from_secs(120));
         #[cfg(test)]
         let client = match test_responses_url() {

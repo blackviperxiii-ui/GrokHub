@@ -296,6 +296,19 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             pick < routed,
             "Windows and macOS have no `hostname -I`; Devices must still show a LAN address: {now}"
         );
+        // Windows reads its adapters instead of running a `hostname -I` that always fails.
+        let unix = src
+            .split("#[cfg(not(windows))]\nfn lan_candidates_now()")
+            .nth(1)
+            .and_then(|s| s.split("\n}\n").next())
+            .expect("unix lan_candidates_now");
+        assert!(unix.contains(r#"cmd.arg("-I")"#), "{unix}");
+        let win = src
+            .split("#[cfg(windows)]\nfn lan_candidates_now()")
+            .nth(1)
+            .and_then(|s| s.split("\n}\n").next())
+            .expect("windows lan_candidates_now");
+        assert!(win.contains("win_native::adapter_ipv4s()") && !win.contains("Command::new"), "{win}");
     }
 
     #[test]
@@ -1061,7 +1074,7 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             "a measured-height lock clips markdown: {bubble_fn}"
         );
         let assistant = src
-            .split("return resp.expect(\"speech bubble\");")
+            .split("// Assistant row: the mark sits at the top left")
             .nth(1)
             .and_then(|s| s.split("fn paint_msg_acts").next())
             .expect("assistant bubble");
@@ -3033,32 +3046,39 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
     #[test]
     fn the_night_slot_runs_loops_and_clock_time_automations() {
         let src = cabin_src();
-        let beat = src
-            .split("fn tick_heartbeat")
+        let job = src
+            .split("JobKind::Automations =>")
             .nth(1)
-            .and_then(|s| s.split("fn tick_anticipate").next())
-            .expect("tick_heartbeat");
+            .and_then(|s| s.split("JobKind::PulseRefresh =>").next())
+            .expect("automations job");
         assert!(
-            beat.contains("self.tick_loops()") && beat.contains("self.tick_night()"),
-            "the Night slot owns both schedulers — a 09:00 automation must still fire: {beat}"
+            job.contains("self.tick_loops() || self.tick_night()"),
+            "the Automations job owns both schedulers, loops first, and a 09:00 automation \
+             still fires when no loop is due: {job}"
         );
+        // The governor sets the cadence: neither keeps a private clock, so an idle
+        // loop list cannot starve automations and nothing is scheduled twice.
         let night = src
             .split("fn tick_night(")
             .nth(1)
             .and_then(|s| s.split("fn poll_night_check(").next())
             .expect("tick_night");
-        assert!(
-            night.contains("last_auto_tick") && !night.contains("last_night_tick"),
-            "automations need their own debounce or an idle loop list starves them: {night}"
-        );
         let loops = src
             .split("fn tick_loops(")
             .nth(1)
             .and_then(|s| s.split("fn poll_grok_loop(").next())
             .expect("tick_loops");
+        for body in [night, loops] {
+            assert!(
+                !body.contains("last_auto_tick")
+                    && !body.contains("last_night_tick")
+                    && !body.contains(".elapsed()"),
+                "no self-timing left in the night schedulers: {body}"
+            );
+        }
         assert!(
-            loops.contains("last_night_tick") && !loops.contains("last_auto_tick"),
-            "loops keep their own debounce: {loops}"
+            !src.contains("last_auto_tick") && !src.contains("last_night_tick"),
+            "the old debounce clocks are gone"
         );
     }
 
@@ -6913,9 +6933,9 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             "sitting on a chat is not activity and must not move that History row: {house}"
         );
         let idle = src
-            .split("HeartbeatAct::Reflect =>")
+            .split("JobKind::Reflect =>")
             .nth(1)
-            .and_then(|s| s.split("HeartbeatAct::Anticipate =>").next())
+            .and_then(|s| s.split("JobKind::Indexers =>").next())
             .expect("idle reflect");
         assert!(
             idle.contains("scratch()"),
@@ -7240,9 +7260,15 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
         .nth(1)
         .and_then(|s| s.split("HeartbeatAct::Inbox =>").next())
         .expect("housekeep");
+    assert!(!house.contains("stamp_current_access"), "{house}");
+    let pulse = src
+        .split("JobKind::PulseRefresh =>")
+        .nth(1)
+        .and_then(|s| s.split("JobKind::ModelRegistry =>").next())
+        .expect("pulse refresh job");
     assert!(
-        house.contains("tick_feed_pulse") && !house.contains("stamp_current_access"),
-        "expiry, quiet release, and the digest clock run on Housekeep without moving History: {house}"
+        pulse.contains("tick_feed_pulse") && !pulse.contains("stamp_current_access"),
+        "expiry, quiet release, and the digest clock run on the Pulse refresh job without moving History: {pulse}"
     );
     let tick = src
         .split("fn tick_review(")
@@ -8761,6 +8787,78 @@ fn pin_thread_flips_the_pin() {
     assert!(cabin.threads[idx].pinned, "the pin control must pin this chat");
     assert!(cabin.threads[idx].pinned_ms > 0);
     assert_eq!(cabin.status, format!("Pinned {title}"));
+    quiet.settle();
+}
+
+#[test]
+fn archive_hides_from_main_list_and_reply_restores() {
+    let mut quiet = QuietCabin::boot("chat-archive");
+    let cabin = &mut quiet.cabin;
+    cabin.threads.clear();
+    let mut keep = crate::threads::ChatThread::new("Keep", false);
+    keep.messages_mut().push(("user".into(), "stay".into()));
+    keep.accessed_ms = 100;
+    let mut done = crate::threads::ChatThread::new("Done chat", false);
+    done.messages_mut().push(("user".into(), "old".into()));
+    done.accessed_ms = 50;
+    cabin.threads = vec![keep, done];
+    cabin.thread_idx = 1;
+    cabin.messages = cabin.threads[1].messages.clone();
+    cabin.archive_thread_at(1);
+    assert!(crate::threads::is_archived(&cabin.threads[1]));
+    assert_eq!(
+        crate::threads::chat_section_indices(&cabin.threads, Some(1), false),
+        vec![0]
+    );
+    assert_eq!(
+        crate::threads::archived_section_indices(&cabin.threads, Some(1), false),
+        vec![1]
+    );
+    assert_eq!(cabin.status, "Archived Done chat");
+    assert_eq!(cabin.archive_undo.as_deref(), Some(cabin.threads[1].id.as_str()));
+    cabin.unarchive_on_reply();
+    assert!(!crate::threads::is_archived(&cabin.threads[1]));
+    assert_eq!(cabin.status, "Restored Done chat to chats");
+    assert_eq!(
+        crate::threads::chat_section_indices(&cabin.threads, Some(1), false),
+        vec![0, 1]
+    );
+    quiet.settle();
+}
+
+#[test]
+fn auto_archive_15_day_idle_skips_13_day_pinned_and_busy() {
+    let mut quiet = QuietCabin::boot("auto-archive");
+    let cabin = &mut quiet.cabin;
+    let now = 30 * crate::threads::DAY_MS;
+    cabin.cfg.chat_archive_days = 14;
+    cabin.threads.clear();
+    let mut idle15 = crate::threads::ChatThread::new("Fifteen", false);
+    idle15.messages_mut().push(("user".into(), "hi".into()));
+    idle15.accessed_ms = now - 15 * crate::threads::DAY_MS;
+    let mut idle13 = crate::threads::ChatThread::new("Thirteen", false);
+    idle13.messages_mut().push(("user".into(), "hi".into()));
+    idle13.accessed_ms = now - 13 * crate::threads::DAY_MS;
+    let mut pinned = crate::threads::ChatThread::new("Pinned", false);
+    pinned.messages_mut().push(("user".into(), "hi".into()));
+    pinned.accessed_ms = now - 20 * crate::threads::DAY_MS;
+    pinned.pinned = true;
+    let mut busy = crate::threads::ChatThread::new("Busy", false);
+    busy.messages_mut().push(("user".into(), "hi".into()));
+    busy.accessed_ms = now - 20 * crate::threads::DAY_MS;
+    let busy_id = busy.id.clone();
+    cabin.threads = vec![idle15, idle13, pinned, busy];
+    cabin.thread_idx = 0;
+    cabin.messages = cabin.threads[0].messages.clone();
+    cabin.running = true;
+    cabin.chat_job_thread = Some(busy_id);
+    let n = cabin.run_auto_archive(now);
+    assert_eq!(n, 1, "only the 15-day idle chat archives");
+    assert!(crate::threads::is_archived(&cabin.threads[0]));
+    assert!(!crate::threads::is_archived(&cabin.threads[1]));
+    assert!(!crate::threads::is_archived(&cabin.threads[2]));
+    assert!(!crate::threads::is_archived(&cabin.threads[3]));
+    assert_eq!(cabin.auto_archive_note, Some(1));
     quiet.settle();
 }
 
@@ -15291,6 +15389,10 @@ fn quiet_cabin() -> Cabin {
         history_q_seen: String::new(),
         history_q_at: None,
         history_hits: Vec::new(),
+        history_archived: false,
+        archive_undo: None,
+        chat_archive_day: None,
+        auto_archive_note: None,
         last_receipt_ok: None,
         beta_auto_off_checked_at: None,
         last_receipts: Vec::new(),
@@ -15305,8 +15407,7 @@ fn quiet_cabin() -> Cabin {
         slash_filter_first: String::new(),
         last_window_title: String::new(),
         voice_orb: String::new(),
-        last_night_tick: std::time::Instant::now(),
-        last_auto_tick: std::time::Instant::now(),
+        governor: grokhub_core::Governor::cabin(),
         last_heartbeat: std::time::Instant::now(),
         pace: Default::default(),
         pace_traced: Vec::new(),
@@ -15320,6 +15421,7 @@ fn quiet_cabin() -> Cabin {
         digest_pending: None,
         digest_wants_lookup: false,
         digest_steer: String::new(),
+        digest_interests: String::new(),
         situation_ping: None,
         window_focused: true,
         offer_repeated: false,
@@ -15423,6 +15525,10 @@ fn quiet_cabin() -> Cabin {
         composer_want_focus: false,
         settings_sec: super::SettingsSec::Account,
         market: Default::default(),
+        picker: Default::default(),
+        playbooks: Default::default(),
+        interests: Default::default(),
+        sources: Default::default(),
         settings_back: super::Nav::Chat,
         imagine_aspect: 0,
         imagine_quality: false,
@@ -16877,6 +16983,29 @@ fn every_home_card_the_cabin_posts_names_its_item() {
     cabin.live_mut().push(("user".into(), "Summarize inbox".into()));
     cabin.start_model_wait("chat:default", "grok-4.7", now);
     rows.push(("start_model_wait", posted_card(&cabin, "start_model_wait", grokhub_core::is_model_wait_card), "grok-4.7"));
+    std::fs::write(root.join("projects.json"), "{\"torn").unwrap();
+    let _: Vec<serde_json::Value> = config::load_json(&root.join("projects.json"), config::JSON_STORE_CAP);
+    cabin.poll_recovered_stores();
+    rows.push(("poll_recovered_stores", posted_card(&cabin, "poll_recovered_stores", |c| c.source_id.starts_with("recovered:")), "Projects list"));
+    cabin.add_interest("Rust");
+    cabin.post_source_run(super::pulse_sources_ui::SourceRun {
+        items: vec![grokhub_core::pulse_sources::SourceItem {
+            title: "Rust 1.99 released".into(),
+            url: "https://blog.rust-lang.org/2026/10/09/Rust-1.99.html".into(),
+            kind: grokhub_core::pulse_sources::SourceKind::HackerNews,
+            source_name: "Hacker News".into(),
+            published_ms: now,
+            summary: "812 points, 301 comments on Hacker News.".into(),
+            image: None,
+            topic: Some("Rust".into()),
+            engagement: 0,
+        }],
+        errors: Vec::new(),
+        fetched: 1,
+        asked: 1,
+        at_ms: now,
+    });
+    rows.push(("finish_source_run", posted_card(&cabin, "finish_source_run", |c| c.source_id.starts_with("source:")), "Rust 1.99"));
     rows.push(("model_wait_card", super::model_wait_ui::model_wait_card(&["grok-4.6".into()], "grok-4.6", "9:05 PM", "dream time", now), "grok-4.6"));
     // Sites a test cabin can't reach without a live run: the card from the same call.
     let guard_text = "Auto was succeeding less on everyday chat, so it now starts that work one step higher.";
@@ -16916,6 +17045,21 @@ fn every_home_card_the_cabin_posts_names_its_item() {
         label: String::new(),
     };
     rows.push(("model_change_note", super::change_undo::model_change_note(&change), "chat:default"));
+    let trial = grokhub_agent::harness::Version {
+        version: "skill:save-page@0123456789ab".into(),
+        label: "Use ctrl+s in save-page".into(),
+        diff: "+1 -3 lines".into(),
+        share_pct: 20,
+        min_runs: 10,
+        status: grokhub_agent::harness::VersionStatus::Kept,
+        note: "Kept: Use ctrl+s in save-page, 18% fewer steps over 12 runs".into(),
+        at: now,
+        ..Default::default()
+    };
+    cabin.post_trial_note(&trial);
+    rows.push(("post_trial_note", posted_card(&cabin, "post_trial_note", |c| c.source_id.starts_with("canary:")), "save-page"));
+    let trying = grokhub_agent::harness::Version { status: grokhub_agent::harness::VersionStatus::Canary, note: String::new(), ..trial };
+    rows.push(("trial_card", super::canary_ui::trial_card(&trying), "save-page"));
     rows.push(("poll_self_changes", grokhub_core::self_change_card("skill", "inbox-zero", "added", "", now), "inbox-zero"));
     let done = grokhub_core::DoneForYou {
         kind: "connection".into(),
@@ -16939,6 +17083,61 @@ fn every_home_card_the_cabin_posts_names_its_item() {
     let covered: std::collections::BTreeSet<String> = rows.iter().map(|(site, ..)| site.to_string()).collect();
     let missing: Vec<String> = app_feed_post_sites().difference(&covered).cloned().collect();
     assert!(missing.is_empty(), "Home card sites with no row in this test: {missing:?}");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// Corrupt settings, keys, Home feed and hub files: each loads defaults, keeps its
+/// bytes in a `.corrupt-<ms>` copy, and gets one Home card naming it and the copy.
+#[test]
+fn corrupt_stores_load_defaults_keep_a_copy_and_post_a_named_card() {
+    let _g = config::hold_test_config();
+    let root = config::test_config_root("corrupt-stores");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let _pin = config::TestConfigDir::set(root.clone());
+    let mut cabin = Cabin::quiet_for_test();
+    let _ = grokhub_core::recovered::drain();
+    let files = [
+        ("app.json", "{\"deviceName\": \"cab", "Settings file"),
+        ("secrets.json", "\u{0}\u{1}garbage", "Keys file"),
+        ("updates.json", "[{\"id\": 3,", "Home feed"),
+        ("hub-state.json", "not json", "Hub pairing file"),
+    ];
+    for (name, bytes, _) in files {
+        std::fs::write(root.join(name), bytes).unwrap();
+    }
+
+    let cfg = config::load();
+    assert_eq!(cfg.device_name, config::default_device_name(), "settings fell back to defaults");
+    assert_eq!(crate::secrets::load().api_key, "", "keys fell back to empty");
+    assert!(crate::feed::load().is_empty(), "the feed fell back to empty");
+    assert!(grokhub_core::load_hub_state(&config::hub_state_path()).is_none());
+    // Checked before the cards post: posting saves a fresh updates.json on a
+    // background thread, which could land before a later check.
+    for (name, _, _) in files {
+        assert!(!root.join(name).exists(), "{name} was moved aside");
+    }
+    cabin.poll_recovered_stores();
+
+    for (name, bytes, label) in files {
+        let copies: Vec<std::path::PathBuf> = std::fs::read_dir(&root)
+            .unwrap()
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.starts_with(&format!("{name}.corrupt-"))))
+            .collect();
+        assert_eq!(copies.len(), 1, "{name}: {copies:?}");
+        assert_eq!(std::fs::read_to_string(&copies[0]).unwrap(), bytes, "{name}: the copy keeps the bytes");
+        let title = format!("{label} was unreadable");
+        let cards: Vec<&UpdateCard> = cabin.updates.iter().filter(|c| c.title == title).collect();
+        assert_eq!(cards.len(), 1, "{name}: {:?}", cabin.updates);
+        let body = format!("Restored defaults, kept a copy at {}.", grokhub_core::recovered::home_short(&copies[0]));
+        assert_eq!(cards[0].body.as_deref(), Some(body.as_str()), "{name}");
+    }
+    // Draining again posts nothing new.
+    let before = cabin.updates.len();
+    cabin.poll_recovered_stores();
+    assert_eq!(cabin.updates.len(), before);
     let _ = std::fs::remove_dir_all(&root);
 }
 
@@ -17674,6 +17873,36 @@ fn board_drop_moves_to_another_column_only() {
 }
 
 #[test]
+fn workboard_flo_card_progress_labels_and_presence_chips() {
+    use grokhub_core::{BoardCard, BoardStatus};
+    use super::board_ui::{
+        board_card_progress, board_presence_chips, board_status_label, BOARD_PILL_RADIUS,
+    };
+    assert_eq!(BOARD_PILL_RADIUS, 22.0);
+    assert_eq!(board_status_label(BoardStatus::Todo), "To do");
+    assert_eq!(board_status_label(BoardStatus::InProgress), "In progress");
+    assert_eq!(board_status_label(BoardStatus::Blocked), "Blocked");
+    assert_eq!(board_status_label(BoardStatus::Done), "Done");
+    assert_eq!(board_status_label(BoardStatus::FollowUp), "Follow up");
+    assert_eq!(board_card_progress(BoardStatus::Todo), (0, 4));
+    assert_eq!(board_card_progress(BoardStatus::InProgress), (2, 4));
+    assert_eq!(board_card_progress(BoardStatus::Blocked), (1, 4));
+    assert_eq!(board_card_progress(BoardStatus::FollowUp), (3, 4));
+    assert_eq!(board_card_progress(BoardStatus::Done), (4, 4));
+    let mut card = BoardCard::new("Onboarding flow", "Ship the welcome path", "");
+    card.status = BoardStatus::InProgress;
+    assert!(board_presence_chips(&card).is_empty(), "plain cards show no presence chips");
+    card.thread_id = Some("t1".into());
+    card.notes = "Keep the copy short".into();
+    card.automation = Some("auto-1".into());
+    let chips = board_presence_chips(&card);
+    assert_eq!(
+        chips.iter().map(|(c, _, _)| *c).collect::<Vec<_>>(),
+        vec!['C', 'N', 'A']
+    );
+}
+
+#[test]
 fn token_budget_warns_once_and_holds_scheduled_work() {
     let root = config::test_config_root("token-budget");
     let _ = std::fs::remove_dir_all(&root);
@@ -18393,6 +18622,14 @@ fn board_cards_open_on_click_fold_on_drag_and_chat_like_the_chat_page() {
     assert!(
         !compact.contains("white_pill") && !compact.contains("ghost_pill"),
         "a small card has no buttons: {compact}"
+    );
+    assert!(
+        compact.contains("BOARD_PILL_RADIUS")
+            && compact.contains("paint_board_progress_ring")
+            && compact.contains("paint_status_chip")
+            && compact.contains("paint_presence_stack")
+            && compact.contains("sheet_shadow"),
+        "compact cards keep the Flo project-card chrome: {compact}"
     );
     let say = fn_src(&src, "say_on_card");
     assert!(say.contains("take_card_notes_block") && say.contains("kick_model"), "{say}");
@@ -21164,6 +21401,7 @@ fn only_typing_or_a_click_builds_an_undo_ask() {
     assert_eq!(
         hits,
         vec![
+            "grokhub-app/src/app/change_history_ui.rs: UndoAsk::from_click(",
             "grokhub-app/src/app/change_undo.rs: UndoAsk::from_click(",
             "grokhub-app/src/app/chat_ui.rs: typed_send = true",
             "grokhub-app/src/app/repair_ui.rs: UndoAsk::from_click(",
@@ -22497,10 +22735,12 @@ fn kick_local_day_stays_off_network() {
 // Folded from PR #401.
 #[test]
 fn hostname_i_now_returns_string() {
-    // Free fn: shells `hostname -I` (empty String if it fails). Hostname OK; stay off network/xAI/bind.
+    // `hostname -I` on Linux, the adapter list on Windows, or the routed address: every
+    // word is an IP address (IPv6 included on Linux). Stays off the network.
     let out = hostname_i_now();
-    // Empty is valid when the shell fails; otherwise UTF-8 stdout from `hostname -I`.
-    let _: &str = out.as_str();
+    for word in out.split_whitespace() {
+        assert!(word.parse::<std::net::IpAddr>().is_ok(), "{word:?} in {out:?}");
+    }
 }
 
 // Folded from PR #402.
@@ -24546,7 +24786,7 @@ fn pulse_feed_instructions_sheet_edits_the_prompt_for_future_posts() {
         cabin.cfg.feed_instructions,
         "Only Rust and egui news. No crypto."
     );
-    let prompt = grokhub_core::pulse::feed_prompt("steer", &cabin.cfg.feed_instructions);
+    let prompt = grokhub_core::pulse::feed_prompt("steer", "", &cabin.cfg.feed_instructions);
     assert!(
         prompt.ends_with("Only Rust and egui news. No crypto."),
         "{prompt}"
@@ -24558,7 +24798,7 @@ fn pulse_feed_instructions_sheet_edits_the_prompt_for_future_posts() {
     );
     let native = include_str!("native_unattended.rs");
     assert!(native.contains(
-        "grokhub_core::pulse::feed_prompt(&self.digest_steer, &self.cfg.feed_instructions)"
+        "grokhub_core::pulse::feed_prompt(&self.digest_steer, &self.digest_interests, &self.cfg.feed_instructions)"
     ));
 }
 
@@ -25074,6 +25314,7 @@ fn labs_beta_channel_toggle_is_wired() {
     assert!(
         settings.contains("Beta channel")
             && settings.contains("queue_channel_switch")
+            && settings.contains("queue_release_channel_switch")
             && settings.contains("channel_labs_status")
             && settings.contains("channel_windows_note")
             && settings.contains("maybe_auto_off_beta_channel")
@@ -25083,6 +25324,8 @@ fn labs_beta_channel_toggle_is_wired() {
     let app = include_str!("mod.rs");
     assert!(
         app.contains("fn queue_channel_switch")
+            && app.contains("fn queue_release_channel_switch")
+            && app.contains("release_channel_switch_cmds")
             && app.contains("channel_switch_cmds")
             && app.contains("SettingsSec::Labs")
             && app.contains("fn maybe_auto_off_beta_channel")
@@ -25233,10 +25476,18 @@ fn heartbeat_halt_skips_every_organ_that_starts_work() {
         beat.contains("heartbeat_halted(") && beat.contains("runs_while_halted()"),
         "Halt must hold the pulse before any organ runs: {beat}"
     );
+    let digest = beat
+        .split("JobKind::Digest =>")
+        .nth(1)
+        .and_then(|s| s.split("JobKind::Review =>").next())
+        .expect("digest job");
     assert!(
-        beat.contains("if !halted {\n                        self.follow_feed_lookup();"),
-        "the digest lookup is a model call and waits out a Halt: {beat}"
+        digest.contains("self.follow_feed_lookup();") && beat.contains("self.governor.tick("),
+        "the digest lookup runs only from the governor's queue: {beat}"
     );
+    let spec = grokhub_core::Governor::cabin();
+    let spec = spec.spec(grokhub_core::JobKind::Digest).expect("digest spec");
+    assert!(!spec.while_halted, "the digest lookup is a model call and waits out a Halt");
     let anticipate = fn_src(&src, "tick_anticipate");
     let gate = anticipate.find("heartbeat_may(").expect("anticipate meets the pace gate");
     let fire = anticipate.find("send_scheduled_chat(").expect("anticipate send");
@@ -26053,4 +26304,131 @@ fn a_killed_reply_retries_once_quietly_and_a_second_kill_posts_one_crash_card() 
     assert_eq!(cards[0].prompt.as_deref(), Some("/retry"));
     assert!(!cabin.running);
     release_isolated(&root, cabin);
+}
+
+/// Brain 4: every background job is started from exactly one place, its
+/// governor arm, so nothing is scheduled twice after the migration.
+#[test]
+fn each_background_job_runs_only_from_its_governor_arm() {
+    let src = cabin_src()
+        + &[
+            include_str!("feed_ui.rs"),
+            include_str!("indexer_ui.rs"),
+            include_str!("self_review_ui.rs"),
+            include_str!("amr_memory.rs"),
+            include_str!("router_ui.rs"),
+            include_str!("proactive_auto.rs"),
+            include_str!("proactive_ui.rs"),
+            include_str!("pulse_sources_ui.rs"),
+            include_str!("heartbeat_gate.rs"),
+            include_str!("native_unattended.rs"),
+        ]
+        .concat()
+        .replace("\r\n", "\n");
+    let arm = |kind: &str| -> String {
+        let start = format!("JobKind::{kind} =>");
+        let rest = src.split(start.as_str()).nth(1).unwrap_or_else(|| panic!("no arm for {kind}"));
+        let end = rest
+            .find("\n            JobKind::")
+            .or_else(|| rest.find("\n        }\n"))
+            .unwrap_or(rest.len());
+        rest[..end].to_string()
+    };
+    for (kind, call) in [
+        ("Automations", "self.tick_loops("),
+        ("Automations", "self.tick_night("),
+        ("PulseRefresh", "self.tick_feed_pulse("),
+        ("ModelRegistry", "self.tick_model_registry("),
+        ("Proactive", "self.tick_proactive_cards("),
+        ("Ideas", "self.maybe_suggest_ideas(false)"),
+        ("Anticipate", "self.tick_anticipate("),
+        ("Digest", "self.follow_feed_lookup("),
+        ("Digest", "self.follow_source_fetch("),
+        ("Review", "self.tick_review("),
+        ("NightPasses", "self.tick_night_passes("),
+        ("MemoryRetention", "self.tick_amr_retention("),
+        ("Indexers", "self.tick_indexers("),
+    ] {
+        assert_eq!(src.matches(call).count(), 1, "{call} is started from one place only");
+        assert!(arm(kind).contains(call), "{call} runs from the {kind} arm: {}", arm(kind));
+    }
+    // Every registered kind has exactly one arm, and the pulse reaches them only
+    // through the governor's queue.
+    let kinds = grokhub_core::Governor::cabin().kinds();
+    assert_eq!(kinds.len(), 12);
+    for kind in kinds {
+        let name = format!("{kind:?}");
+        assert_eq!(src.matches(&format!("JobKind::{name} =>")).count(), 1, "{name} has one arm");
+    }
+    let beat = fn_src(&src, "tick_heartbeat");
+    assert!(beat.contains("HeartbeatAct::Background => self.run_background(now, halted)"), "{beat}");
+    let run = fn_src(&src, "run_background");
+    assert!(run.contains("self.background_plan(") && run.contains("for job in plan.run"), "{run}");
+    let plan = fn_src(&src, "background_plan");
+    assert!(plan.contains("self.governor.tick(") && plan.contains("hold_heavy: active"), "{plan}");
+}
+
+/// Brain 4 PR 2: a draft in the composer or a chat run holds heavy jobs and
+/// puts light model jobs on the router's cost goal; going idle resumes them.
+#[test]
+fn being_active_holds_heavy_jobs_and_light_model_jobs_go_cheap_until_idle() {
+    use grokhub_core::{JobHold, JobKind};
+    const T0: u64 = 1_800_000_000_000;
+    const DAY: &str = "2026-10-11";
+    let mut cabin = quiet_cabin();
+    // Equal start and end: quiet hours never apply, whatever the real clock says.
+    cabin.cfg.quiet_start = "00:00".into();
+    cabin.cfg.quiet_end = "00:00".into();
+    let long_ago = std::time::Instant::now()
+        .checked_sub(std::time::Duration::from_secs(60))
+        .expect("a minute of uptime");
+    cabin.last_activity = long_ago;
+    cabin.composer = "half a thought".into();
+    assert!(cabin.user_active_now());
+    let plan = cabin.background_plan(T0, false, DAY);
+    assert_eq!(
+        plan.held,
+        vec![
+            (JobKind::Automations, JobHold::Heavy),
+            (JobKind::Anticipate, JobHold::Heavy),
+            (JobKind::NightPasses, JobHold::Heavy),
+            (JobKind::Indexers, JobHold::Heavy),
+        ]
+    );
+    assert_eq!(
+        plan.cheap,
+        vec![JobKind::Ideas, JobKind::Digest, JobKind::Review]
+    );
+    assert_eq!(
+        cabin.bg_goal(JobKind::Review).map(|g| g.label()),
+        Some("goal cost (user active)".to_string())
+    );
+    assert_eq!(cabin.bg_goal(JobKind::Indexers), None, "heavy jobs wait instead");
+    assert_eq!(cabin.bg_goal(JobKind::PulseRefresh), None, "local upkeep calls no model");
+    // An empty composer with a chat run going is active too.
+    cabin.composer.clear();
+    cabin.running = true;
+    assert!(cabin.user_active_now());
+    let plan = cabin.background_plan(T0 + 1_000, false, DAY);
+    assert_eq!(plan.run, Vec::<JobKind>::new());
+    assert_eq!(plan.held.len(), 4);
+    // Idle: the held jobs run on the next beat, once, and nothing is cheap.
+    cabin.running = false;
+    assert!(!cabin.user_active_now());
+    let plan = cabin.background_plan(T0 + 2_000, false, DAY);
+    assert_eq!(
+        plan.run,
+        vec![
+            JobKind::Automations,
+            JobKind::Anticipate,
+            JobKind::NightPasses,
+            JobKind::Indexers
+        ]
+    );
+    assert_eq!(plan.cheap, Vec::<JobKind>::new());
+    assert_eq!(cabin.bg_goal(JobKind::Review), None);
+    assert_eq!(cabin.background_plan(T0 + 2_000, false, DAY).run, Vec::<JobKind>::new());
+    // A key or click a moment ago counts as active again.
+    cabin.last_activity = std::time::Instant::now();
+    assert!(cabin.user_active_now());
 }

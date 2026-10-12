@@ -292,9 +292,34 @@ pub struct ModelRecord {
     pub tombstone_ms: u64,
 }
 
+/// Strip trailing date / snapshot / `latest` tokens so `grok-4.7`,
+/// `grok-4.7-latest` and `grok-4.7-0414` share one stem.
+pub fn model_id_stem(id: &str) -> String {
+    let lower = id.trim().to_ascii_lowercase();
+    let mut parts: Vec<&str> = lower.split('-').filter(|p| !p.is_empty()).collect();
+    while let Some(last) = parts.last().copied() {
+        if last == "latest" || (!last.is_empty() && last.bytes().all(|b| b.is_ascii_digit())) {
+            parts.pop();
+        } else {
+            break;
+        }
+    }
+    parts.join("-")
+}
+
 impl ModelRecord {
+    /// True when the response's `model` is this row: the id itself, an alias,
+    /// or a dated / `latest` form of either (so `grok-4.7` answering as
+    /// `grok-4.7-0414` is not a redirect).
     pub fn answers_as(&self, served: &str) -> bool {
         let s = served.trim();
-        s.is_empty() || s == self.meta.id || self.meta.aliases.iter().any(|a| a == s)
+        if s.is_empty() || s == self.meta.id || self.meta.aliases.iter().any(|a| a == s) {
+            return true;
+        }
+        let stem = model_id_stem(s);
+        if stem.is_empty() {
+            return false;
+        }
+        model_id_stem(&self.meta.id) == stem || self.meta.aliases.iter().any(|a| model_id_stem(a) == stem)
     }
 }

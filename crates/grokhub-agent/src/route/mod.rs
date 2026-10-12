@@ -10,11 +10,17 @@
 pub mod budget;
 pub mod cabin;
 pub mod difficulty;
+pub mod goal;
 pub mod guard;
 pub mod heal;
 pub mod ladder;
 pub mod learn;
+pub mod connectivity;
 pub mod local;
+pub mod local_bench;
+pub mod local_http;
+pub mod local_perf;
+pub mod local_sidecar;
 pub mod log;
 pub mod policy;
 pub mod providers;
@@ -259,6 +265,9 @@ pub struct RouteInput<'a> {
     /// R3b: the provider model you picked in Settings for this (your own) chat.
     /// Taken only while it is a candidate (its key and a grant covering the data).
     pub prefer: Option<&'a str>,
+    /// Brain 2: the turn's goal and reason from the policy row. Moves a
+    /// user-facing step's starting effort inside its band ([`goal::goal_start`]).
+    pub goal: Option<goal::RouteGoal>,
 }
 
 /// The pick: provider, model, effort, one plain sentence, and the rules that fired.
@@ -297,7 +306,7 @@ pub fn effort_word(e: Option<&str>) -> &'static str {
 
 /// The plain clause for the rule that moved effort last.
 fn why_clause(plain: &str, rules: &[String]) -> String {
-    const MOVES: &[&str] = &["E1", "E2", "E3", "E4", "E5", "DE1", "DE2", "DE3", "steer:harder", "steer:quicker", "d<0.3", "d>0.7"];
+    const MOVES: &[&str] = &["E1", "E2", "E3", "E4", "E5", "DE1", "DE2", "DE3", "steer:harder", "steer:quicker", "d<0.3", "d>0.7", "goal:quality", "goal:speed", "goal:cost"];
     let last = rules.iter().rev().find(|r| MOVES.contains(&r.as_str()));
     match last.map(String::as_str) {
         Some("E1") => "a tool failed, so it thinks harder".into(),
@@ -312,6 +321,9 @@ fn why_clause(plain: &str, rules: &[String]) -> String {
         Some("steer:quicker") => "you asked to keep it quick".into(),
         Some("d<0.3") => format!("{plain}, and this looks routine"),
         Some("d>0.7") => format!("{plain}, and this looks hard"),
+        Some("goal:quality") => format!("{plain}, and this one needs care"),
+        Some("goal:speed") => format!("{plain}, and a fast reply matters here"),
+        Some("goal:cost") => format!("{plain}, kept cheap"),
         _ => plain.to_string(),
     }
 }
@@ -330,7 +342,7 @@ fn successor(reg: &Registry, id: &str, ids: &[&str]) -> Option<String> {
 }
 
 impl Router {
-    fn pick_model(input: &RouteInput<'_>, reg: &Registry, ids: &[&str], table: &RoutingTable, e2: bool, rules: &mut Vec<String>) -> ModelPick {
+    fn pick_model(input: &RouteInput<'_>, reg: &Registry, profiles: &BTreeMap<String, ModelProfile>, ids: &[&str], table: &RoutingTable, e2: bool, rules: &mut Vec<String>) -> ModelPick {
         let current = input.current_model.trim();
         let gb = input.provider == live::PROVIDER_GROK_BUILD;
         let keep = |m: &str| ModelPick { model: m.to_string(), no_route: false, replaced: None };
@@ -347,10 +359,18 @@ impl Router {
             // Over your $/M ceiling and not approved: stand in, and the cabin asks once.
             rules.push("cost:premium_ungranted".into());
         }
+        let tier = table::SpeedQuality::of(input.class);
+        // Quality Auto pool: reasoning models only (pins / Settings pick still use `ids`).
+        let auto_ok = |m: &str| local::is_local(m) || !tier.needs_reasoning() || table::is_reasoning_model(reg, profiles, m);
         // R3b: a provider you added is never a stand-in or a fallback, and never
         // the cheapest pick: only a pin or the class preference (a table row) takes it.
-        let own: Vec<&str> = ids.iter().copied().filter(|m| !policy::is_new_provider(reg, m)).collect();
-        let preferred: Vec<&str> = ids.iter().copied().filter(|m| !policy::is_new_provider(reg, m) || table.row(input.class, m).is_some()).collect();
+        let own: Vec<&str> = ids.iter().copied().filter(|m| !policy::is_new_provider(reg, m)).filter(|m| auto_ok(m)).collect();
+        let preferred: Vec<&str> = ids
+            .iter()
+            .copied()
+            .filter(|m| !policy::is_new_provider(reg, m) || table.row(input.class, m).is_some())
+            .filter(|m| auto_ok(m) || table.row(input.class, m).is_some())
+            .collect();
         // A degraded model is still eligible, but a pin or an episode leaves it
         // when a healthy one can take over.
         let healthy: Vec<&str> = own.iter().copied().filter(|m| reg.get(m).is_some_and(|r| r.state != ModelState::Degraded)).collect();
@@ -437,7 +457,10 @@ impl Router {
         let mut rules: Vec<String> = Vec::new();
         let provider = if input.provider.is_empty() { PROVIDER_XAI } else { input.provider };
         let fit = policy::Fit { needs_image: input.needs_image, needs_tools: input.needs_tools, ctx_tokens: input.ctx_tokens, grok_build: provider == live::PROVIDER_GROK_BUILD };
+        let tier = table::SpeedQuality::of(input.class);
         // A local route only while the flag is on, for an eligible class, on the live tier.
+        // Pins and a Settings pick may still name any fitting model; Auto's quality pool
+        // drops non-reasoning ones in [`Self::pick_model`].
         let ids: Vec<&str> = reg
             .models
             .keys()
@@ -449,7 +472,8 @@ impl Router {
         let band = row.map(|r| ladder::Band::tuned(r, input.bump, input.start));
         let pick = match (row, band) {
             (Some(row), Some(band)) => Some(input.pick.clone().unwrap_or_else(|| {
-                let start = ladder::start_rung(band, input.d, input.steer, ladder::user_facing(row.class));
+                let user = ladder::user_facing(row.class);
+                let start = goal::goal_start(band, ladder::start_rung(band, input.d, input.steer, user), input.steer, input.goal.as_ref().filter(|_| user));
                 ladder::advance(None, row.class, band, start, &ladder::Obs { new_turn: true, routine: input.routine, ..ladder::Obs::default() }).1
             })),
             _ => None,
@@ -467,8 +491,79 @@ impl Router {
                     ModelPick { model: input.current_model.trim().to_string(), no_route: true, replaced: None }
                 }
             }
+        } else if connectivity::is_cloud_only(input.class) && input.local.offline {
+            // Image / web / hard prepare wait for the cloud (named queue note in the cabin).
+            rules.push("offline:cloud_queued".into());
+            ModelPick { model: input.current_model.trim().to_string(), no_route: true, replaced: None }
+        } else if local::offline_only(&input.local) && local::eligible(&input.local, input.class, input.ctx_tokens) {
+            match ids.iter().find(|id| local::is_local(id)) {
+                Some(id) => {
+                    rules.push("offline:local".into());
+                    ModelPick { model: id.to_string(), no_route: false, replaced: None }
+                }
+                None => {
+                    rules.push("offline:no_local".into());
+                    ModelPick { model: input.current_model.trim().to_string(), no_route: true, replaced: None }
+                }
+            }
+        } else if local::escalate_after_verify(&input.local) {
+            // PR E: on-device answer failed verify — pick cloud and name both models.
+            let local_tier = input.local.tier.clone();
+            let cloud_ids: Vec<&str> = ids.iter().copied().filter(|id| !local::is_local(id)).collect();
+            let mut pick = Self::pick_model(input, reg, profiles, &cloud_ids, table, e2, &mut rules);
+            if !pick.no_route && !local::is_local(&pick.model) {
+                rules.push("local:escalate_verify".into());
+                pick.replaced = Some(local_tier);
+                local::note_local_verify_failed(false);
+            } else if pick.no_route && local::eligible(&input.local, input.class, input.ctx_tokens) {
+                // Every plan model down: fall back to local and clear the sticky flag.
+                if let Some(id) = ids.iter().find(|id| local::is_local(id)) {
+                    rules.push("local:cloud_down".into());
+                    pick = ModelPick {
+                        model: id.to_string(),
+                        no_route: false,
+                        replaced: Some(input.current_model.trim().to_string()),
+                    };
+                    local::note_local_verify_failed(false);
+                }
+            }
+            pick
         } else {
-            Self::pick_model(input, reg, &ids, table, e2, &mut rules)
+            let mut pick = Self::pick_model(input, reg, profiles, &ids, table, e2, &mut rules);
+            let too_hard = local::too_hard_for_local(input.class, input.ctx_tokens, input.d);
+            let elig = local::eligible(&input.local, input.class, input.ctx_tokens);
+            let cloud_ids: Vec<&str> = ids.iter().copied().filter(|id| !local::is_local(id)).collect();
+            // Cloud pool empty + local already won (cheapest/table): retag as cloud_down.
+            // Do not fire when a healthy cloud id remains — local may win online on purpose.
+            let cloud_pool_empty_local = !input.local.offline
+                && !pick.no_route
+                && local::is_local(&pick.model)
+                && cloud_ids.is_empty()
+                && elig;
+            // Online: hard/long work must not stay on local if pick_model somehow chose it.
+            if !input.local.offline
+                && !pick.no_route
+                && local::is_local(&pick.model)
+                && too_hard
+            {
+                rules.push("local:escalate_hard".into());
+                let from = pick.model.clone();
+                pick = Self::pick_model(input, reg, profiles, &cloud_ids, table, e2, &mut rules);
+                if !pick.no_route {
+                    pick.replaced = Some(from);
+                }
+            } else if (pick.no_route && elig) || cloud_pool_empty_local {
+                // Plan models down / no healthy cloud route: fall back to local when eligible.
+                if let Some(id) = ids.iter().find(|id| local::is_local(id)) {
+                    rules.push("local:cloud_down".into());
+                    pick = ModelPick {
+                        model: id.to_string(),
+                        no_route: false,
+                        replaced: Some(input.current_model.trim().to_string()),
+                    };
+                }
+            }
+            pick
         };
         let provider = match split_provider_model(&chosen.model) {
             _ if local::is_local(&chosen.model) && !chosen.no_route => local::PROVIDER_LOCAL,
@@ -547,26 +642,40 @@ impl Router {
         }
         let what = row.map(|r| r.plain).unwrap_or("this step");
         let clause = if row.is_some() { why_clause(what, &rules[effort_rules_at..]) } else { format!("{what} keeps its set effort") };
+        // One-line pick reason: tier, effort, why. `/why` and the Auto chip put class and model in front.
+        let tier_word = tier.word();
         let reason = match (&chosen.replaced, rules.iter().any(|r| r == "table")) {
-            _ if base.is_some() => format!("Using {model} at {}: you're waiting, so the faster model is worth it.", effort_word(effort.as_deref())),
+            _ if base.is_some() => format!("{tier_word} · {}: you're waiting, so the faster model is worth it.", effort_word(effort.as_deref())),
             _ if fast_fallback.is_some() => format!(
-                "Using {model} at {}: this week's budget is tight, so not {}.",
+                "{tier_word} · {}: this week's budget is tight, so not {}.",
                 effort_word(effort.as_deref()),
                 fast_fallback.as_deref().unwrap_or_default()
             ),
-            _ if rules.iter().any(|r| r == "provider:picked") => format!("Using {model} at {}: you picked it in Settings.", effort_word(effort.as_deref())),
+            _ if rules.iter().any(|r| r == "provider:picked") => {
+                format!("{tier_word} · {}: you picked it in Settings.", effort_word(effort.as_deref()))
+            }
+            (Some(from), _) if rules.iter().any(|r| r == "local:escalate_verify") => local::escalate_note(from, &model),
+            (Some(from), _) if rules.iter().any(|r| r == "local:escalate_hard") => {
+                format!("{tier_word} · {}: {from} (local) is too small for this step.", effort_word(effort.as_deref()))
+            }
+            (Some(from), _) if rules.iter().any(|r| r == "local:cloud_down") => {
+                format!("{tier_word} · {}: {from} isn't answering (using local).", effort_word(effort.as_deref()))
+            }
             (Some(from), _) if rules.iter().any(|r| r == "provider:ungranted") => {
-                format!("Using {model} at {}: {from} needs its key and your OK in Settings first.", effort_word(effort.as_deref()))
+                format!("{tier_word} · {}: {from} needs its key and your OK in Settings first.", effort_word(effort.as_deref()))
             }
             (Some(from), _) if rules.iter().any(|r| r == "cost:premium_ungranted") => {
-                format!("Using {model} at {}: {from} costs more than your price limit, so it needs your OK first.", effort_word(effort.as_deref()))
+                format!(
+                    "{tier_word} · {}: {from} costs more than your price limit, so it needs your OK first.",
+                    effort_word(effort.as_deref())
+                )
             }
-            (Some(from), _) => format!("Using {model} at {}: {from} isn't answering.", effort_word(effort.as_deref())),
+            (Some(from), _) => format!("{tier_word} · {}: {from} isn't answering.", effort_word(effort.as_deref())),
             (None, true) if model != input.current_model.trim() || input.episode_model.is_none() => {
                 let why = table.row(input.class, &model).map(|r| r.why.clone()).unwrap_or_default();
-                format!("Using {model} at {}: it's {why}.", effort_word(effort.as_deref()))
+                format!("{tier_word} · {}: {why}.", effort_word(effort.as_deref()))
             }
-            _ => format!("{}: {clause}.", effort_word(effort.as_deref())),
+            _ => format!("{tier_word} · {}: {clause}.", effort_word(effort.as_deref())),
         };
         let settings = profiles.get(&model).map(|p| RuntimeSettings::from_profile(p, input.class));
         let cost_class = policy::route_class(reg, &model, gb, &input.spend);
@@ -588,6 +697,9 @@ impl Router {
 }
 
 #[cfg(test)]
+mod auto_tests;
+
+#[cfg(test)]
 mod r2a_tests;
 
 #[cfg(test)]
@@ -597,7 +709,13 @@ mod r2b_tests;
 mod r3b_tests;
 
 #[cfg(test)]
+mod goal_tests;
+
+#[cfg(test)]
 mod speed_bench_tests;
+
+#[cfg(test)]
+mod local_router_tests;
 
 #[cfg(test)]
 mod tests {
@@ -626,7 +744,8 @@ mod tests {
                     cost_in_usd_ticks: 1_200,
                     cached_tokens: 640,
                 },
-            })
+            ..Default::default()
+        })
         }
     }
 
@@ -696,12 +815,12 @@ mod tests {
         let a = Router::choose(&input("chat:default", "grok-4.7", 0.5), &reg, &none, &no_table(), 10);
         assert_eq!(a, Router::choose(&input("chat:default", "grok-4.7", 0.5), &reg, &none, &no_table(), 10));
         assert_eq!((a.model.as_str(), a.effort.as_deref()), ("grok-4.7", Some("medium")));
-        assert_eq!(a.reason, "Medium: everyday chat.");
+        assert_eq!(a.reason, "quality · Medium: everyday chat.");
         // No table yet: equal prices, so the session's own model wins the tie.
         assert_eq!(a.rule_ids, vec!["model:cheapest".to_string(), "class:chat:default".into()]);
         assert_eq!(a.candidates_n, 2);
         let easy = Router::choose(&input("chat:default", "grok-4.7", 0.1), &reg, &none, &no_table(), 10);
-        assert_eq!((easy.effort.as_deref(), easy.reason.as_str()), (Some("low"), "Low: everyday chat, and this looks routine."));
+        assert_eq!((easy.effort.as_deref(), easy.reason.as_str()), (Some("low"), "quality · Low: everyday chat, and this looks routine."));
         // d > 0.7 goes up one rung but never past high on its own; the menu clamps xhigh anyway.
         let hard = Router::choose(&input("plan", "grok-4.7", 0.9), &reg, &none, &no_table(), 10);
         assert_eq!(hard.effort.as_deref(), Some("high"));
@@ -728,7 +847,7 @@ mod tests {
         pin.current_model = "grok-4.5";
         let r = Router::choose(&pin, &reg, &none, &no_table(), 10);
         assert_eq!((r.model.as_str(), r.rule_ids[0].as_str(), r.replaced.as_deref()), ("grok-4.7", "pin:fallback", Some("grok-4.5")));
-        assert_eq!(r.reason, "Using grok-4.7 at Medium: grok-4.5 isn't answering.");
+        assert_eq!(r.reason, "quality · Medium: grok-4.5 isn't answering.");
         let mut profiles = BTreeMap::new();
         let meta = reg.get("grok-4.7").unwrap().meta.clone();
         let mut bad = ProbeResult::status("failed");
@@ -813,7 +932,7 @@ mod tests {
         // E3: a correction starts the next turn one higher than its start (low → medium).
         assert_eq!(sent_effort(&echo, &req("grok-4.7", None, &s, "no, wrong file"), "chat:default").as_deref(), Some("medium"));
         let (effort, reason) = live::last_user_pick().unwrap();
-        assert_eq!((effort.as_deref(), reason.as_str()), (Some("medium"), "Medium: you corrected the last answer."));
+        assert_eq!((effort.as_deref(), reason.as_str()), (Some("medium"), "quality · Medium: you corrected the last answer."));
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -828,7 +947,7 @@ mod tests {
         let rec: crate::harness::Span = serde_json::from_str(raw.lines().last().unwrap()).unwrap();
         let route = rec.route.unwrap();
         assert!(route.holdout && !route.shadow);
-        assert_eq!(route.reason, "High: everyday chat.");
+        assert_eq!(route.reason, "quality · High: everyday chat.");
         assert!(!why_text(&dir).to_ascii_lowercase().contains("holdout"));
         // prepare:hard is never held out.
         let hard = (0..).map(|i| format!("hard-{i}")).find(|s| guard::in_holdout(s)).unwrap();
@@ -860,7 +979,8 @@ mod tests {
         let _cfg = crate::perm::ConfigGuard::set(&dir);
         assert_eq!(why_text(&dir), "No routed model calls yet. Effort is automatic: each step's reason shows here once it runs.");
         let echo = Echo(Mutex::new(Vec::new()));
-        let secret = "PROMPT-FIXTURE my bank PIN is 4512 and sk-abcdefghijklmnopqrstuv";
+        // No bare digits: "4512" matched a `ts_ms` and failed a clean run.
+        let secret = "PROMPT-FIXTURE my bank PIN is QZXW-PIN and sk-abcdefghijklmnopqrstuv";
         let input = vec![InputItem::Message { role: "user".into(), content: vec![ContentPart::InputText(secret.into())] }];
         for _ in 0..14 {
             let call = ModelCall::xai("grok-4.7", Some("low"), CLASS_JUDGE, "ep-9", input.clone());
@@ -868,7 +988,7 @@ mod tests {
         }
         let raw = std::fs::read_to_string(crate::harness::span_path(&dir, log::ROUTE_TRACE)).unwrap();
         assert_eq!(raw.lines().count(), 14);
-        for needle in ["PROMPT-FIXTURE", "4512", "sk-abc", "bank"] {
+        for needle in ["PROMPT-FIXTURE", "QZXW-PIN", "sk-abc", "bank"] {
             assert!(!raw.contains(needle), "{needle} leaked: {raw}");
         }
         let rec: crate::harness::Span = serde_json::from_str(raw.lines().next().unwrap()).unwrap();
@@ -882,7 +1002,14 @@ mod tests {
         assert_eq!(route.span_id, rec.span_ref());
         let why = why_text(&dir);
         assert_eq!(why.lines().count(), 10);
-        assert_eq!(why.lines().next(), Some("background:judge · grok-4.7 · Low: an independent check."));
+        assert_eq!(why.lines().next(), Some("background:judge · grok-4.7 · quality · Low: an independent check."));
+        // Brain 1: the newest Brief leads, and the list stays at ten lines.
+        let brief = crate::brain::rules(&crate::brain::BriefInput { text: "the printer service won't start", ..Default::default() }).unwrap();
+        crate::brain::record_brief(&dir, &crate::brain::BriefLine { at: 1, session: "ep-9".into(), brief, ..Default::default() }).unwrap();
+        let why = why_text(&dir);
+        assert_eq!(why.lines().count(), 10);
+        assert_eq!(why.lines().next(), Some("Brief: repair × critical, done = services, packages, boot errors, ports"));
+        assert_eq!(why.lines().nth(1), Some("background:judge · grok-4.7 · quality · Low: an independent check."));
         let health = std::fs::read_to_string(grokhub_core::model_registry::store::health_path(&dir)).unwrap();
         assert_eq!(health.lines().count(), 14);
         let _ = std::fs::remove_dir_all(dir);
@@ -1003,21 +1130,25 @@ mod tests {
         assert!(reg.listed("grok-4.7"));
     }
 
-    /// The 2.10.96 chain: grok-4.7 missing from the registry, Auto lands on a
-    /// non-reasoning model, and the request it sends carries no effort.
+    /// Quality never lands on a non-reasoning model. When that is the only
+    /// listed model, Auto pauses instead of sending it (wait/retry owns the rest).
+    /// A non-reasoning request still carries no effort on the wire.
     #[test]
-    fn the_2_10_96_chain_sends_no_effort_to_the_non_reasoning_pick() {
+    fn quality_pauses_instead_of_picking_a_lone_non_reasoning_model() {
         let reg = xai_listed(&[NON_REASONING[0]]);
         let none = BTreeMap::new();
         let r = Router::choose(&input("chat:default", "grok-4.7", 0.5), &reg, &none, &no_table(), 10);
-        assert_eq!((r.model.as_str(), r.effort.as_deref()), (NON_REASONING[0], None));
-        let body = crate::client::responses_body(&req(&r.model, r.effort.as_deref(), "s", "hi"));
+        assert_ne!(r.model, NON_REASONING[0]);
+        assert!(r.no_route, "{r:?}");
+        let body = crate::client::responses_body(&req(NON_REASONING[0], None, "s", "hi"));
         assert_eq!(body.get("reasoning"), None);
-        // Even a caller's own effort doesn't reach the wire.
-        let body = crate::client::responses_body(&req(&r.model, Some("high"), "s", "hi"));
+        let body = crate::client::responses_body(&req(NON_REASONING[0], Some("high"), "s", "hi"));
         assert_eq!(body.get("reasoning"), None);
     }
 }
 
 #[cfg(test)]
 mod r3a_tests;
+
+#[cfg(test)]
+mod offline_tests;

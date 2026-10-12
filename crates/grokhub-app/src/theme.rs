@@ -102,6 +102,11 @@ fn tok(dark: Color32, light: Color32) -> Color32 {
     }
 }
 
+/// Pick a dark/light pair for the active paint mode (workboard chips, etc.).
+pub fn tok_pair(dark: Color32, light: Color32) -> Color32 {
+    tok(dark, light)
+}
+
 pub fn bg() -> Color32 {
     tok(BG, LIGHT_BG)
 }
@@ -317,6 +322,9 @@ fn probe_os_dark() -> bool {
     }
     #[cfg(not(windows))]
     {
+        if let Some(dark) = kde_dark() {
+            return dark;
+        }
         let scheme = cmd_stdout(
             "gsettings",
             &["get", "org.gnome.desktop.interface", "color-scheme"],
@@ -325,6 +333,22 @@ fn probe_os_dark() -> bool {
         let xfce = cmd_stdout("xfconf-query", &["-c", "xsettings", "-p", "/Net/ThemeName"]);
         os_prefers_dark(&scheme, &gtk, &xfce)
     }
+}
+
+/// KDE Plasma's scheme from `kdeglobals`. Plasma leaves GNOME's
+/// `color-scheme` at "default" for a light scheme, which reads as dark.
+#[cfg(not(windows))]
+fn kde_dark() -> Option<bool> {
+    let desktop = std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default();
+    if !desktop.to_ascii_uppercase().split(':').any(|d| d == "KDE") {
+        return None;
+    }
+    let config = std::env::var_os("XDG_CONFIG_HOME")
+        .filter(|d| !d.is_empty())
+        .map(std::path::PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".config")))?;
+    let text = std::fs::read_to_string(config.join("kdeglobals")).ok()?;
+    grokhub_core::kde_prefers_dark(&text)
 }
 
 #[cfg(not(windows))]
@@ -1061,7 +1085,10 @@ fn mark_image() -> &'static ColorImage {
     static IMG: OnceLock<ColorImage> = OnceLock::new();
     IMG.get_or_init(|| {
         let bytes = include_bytes!("../assets/grokhub-32.png");
-        let img = image::load_from_memory(bytes).expect("grokhub mark");
+        // A blank mark beats a crash if the bundled PNG ever stops decoding.
+        let Ok(img) = image::load_from_memory(bytes) else {
+            return ColorImage::new([1, 1], vec![Color32::TRANSPARENT]);
+        };
         let rgba = img.to_rgba8();
         let size = [rgba.width() as usize, rgba.height() as usize];
         ColorImage::from_rgba_unmultiplied(size, rgba.as_raw())
@@ -1081,6 +1108,11 @@ pub fn mark(ctx: &egui::Context) -> TextureHandle {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_bundled_mark_decodes() {
+        assert_eq!(mark_image().size, [32, 32], "a 1x1 blank means the PNG stopped decoding");
+    }
 
     #[test]
     fn light_edges_and_selection_stay_visible() {

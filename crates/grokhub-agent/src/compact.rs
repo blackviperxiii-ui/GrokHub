@@ -11,6 +11,13 @@ use crate::CancelToken;
 /// Auto-compact fires at this percent of the context window, inclusive.
 pub const AUTO_COMPACT_PERCENT: u8 = 85;
 
+/// Token budget for the verbatim recent tail kept outside the summary (last user
+/// turn plus trailing tool call/output pairs).
+pub const RECENT_TAIL_TOKEN_BUDGET: u64 = 4_000;
+
+/// Stop reason when a second context-length error follows a reactive compact.
+pub const CONTEXT_STILL_TOO_LARGE: &str = "context still too large after compaction";
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OpenTodo {
     pub id: String,
@@ -84,9 +91,18 @@ pub fn compact_after_flush(
     effort: Option<&str>,
     conversation_id: &str,
     history: &mut Vec<InputItem>,
+    modified_paths: &[String],
 ) -> Result<Usage, CompactError> {
     let _ = crate::memory::flush_pending(workspace, history);
-    compact_transcript(client, cancel, model, effort, conversation_id, history)
+    compact_transcript(
+        client,
+        cancel,
+        model,
+        effort,
+        conversation_id,
+        history,
+        modified_paths,
+    )
 }
 
 /// Summarize `history` and replace it. On failure or cancel, `history` is unchanged.
@@ -98,6 +114,7 @@ pub fn compact_transcript(
     effort: Option<&str>,
     conversation_id: &str,
     history: &mut Vec<InputItem>,
+    modified_paths: &[String],
 ) -> Result<Usage, CompactError> {
     if history.is_empty() {
         return Err(CompactError::Failed("nothing to compact".into()));
@@ -107,7 +124,7 @@ pub fn compact_transcript(
     if cancel.is_cancelled() {
         return Err(CompactError::Cancelled);
     }
-    *history = build_compacted_history(&snapshot, &call.summary);
+    *history = build_compacted_history(&snapshot, &call.summary, modified_paths);
     crate::image_budget::apply_image_budget(history);
     Ok(call.usage)
 }
@@ -125,9 +142,21 @@ pub fn request_summary(
     }
     let mut input = history.to_vec();
     crate::image_budget::apply_image_budget(&mut input);
+    let prior = extract_prior_summary(history);
+    let prompt = match prior.as_deref() {
+        Some(anchor) => build_compaction_prompt(
+            Some(&format!(
+                "<prior_conversation_summary>\n{anchor}\n</prior_conversation_summary>\n\
+                 Merge this prior summary with everything that happened after it; keep its \
+                 still-relevant facts and carry forward any unique markers."
+            )),
+            false,
+        ),
+        None => build_compaction_prompt(None, false),
+    };
     input.push(InputItem::Message {
         role: "user".into(),
-        content: vec![ContentPart::InputText(build_compaction_prompt(None, false))],
+        content: vec![ContentPart::InputText(prompt)],
     });
     let req = ResponsesRequest {
         model: model.to_string(),
@@ -163,9 +192,14 @@ pub struct SummaryCall {
     pub usage: Usage,
 }
 
-/// Summary first, then open todos, then the last user turn copied verbatim.
+/// Summary first, then open todos, modified file paths, then the recent verbatim
+/// tail (last user turn plus trailing tool pairs within [`RECENT_TAIL_TOKEN_BUDGET`]).
 /// Leading system messages stay in front of the summary.
-pub fn build_compacted_history(items: &[InputItem], summary_raw: &str) -> Vec<InputItem> {
+pub fn build_compacted_history(
+    items: &[InputItem],
+    summary_raw: &str,
+    modified_paths: &[String],
+) -> Vec<InputItem> {
     let mut out = Vec::new();
     let mut rest = items;
     while let Some(InputItem::Message { role, .. }) = rest.first() {
@@ -187,10 +221,153 @@ pub fn build_compacted_history(items: &[InputItem], summary_raw: &str) -> Vec<In
     if !todos.is_empty() {
         out.push(todos_message(&todos));
     }
-    if let Some(last) = last_user_turn(rest) {
-        out.push(last.clone());
+    if let Some(files) = modified_files_message(modified_paths) {
+        out.push(files);
     }
+    out.extend(recent_tail(rest));
     out
+}
+
+/// Prior compaction body for merge-anchored re-summaries, if any.
+pub fn extract_prior_summary(items: &[InputItem]) -> Option<String> {
+    for item in items {
+        let text = message_text(item);
+        if let Some(start) = text.find("<conversation_summary>") {
+            let after = text.get(start + "<conversation_summary>".len()..)?;
+            if let Some(end) = after.find("</conversation_summary>") {
+                let body = after.get(..end)?.trim();
+                if !body.is_empty() {
+                    return Some(body.to_string());
+                }
+            }
+        }
+        if text.contains("This session is being continued") {
+            let body = text.trim();
+            if !body.is_empty() {
+                return Some(body.to_string());
+            }
+        }
+    }
+    None
+}
+
+/// Path from a successful `write` / `search_replace` call, if present.
+pub fn path_from_write_call(name: &str, arguments: &str) -> Option<String> {
+    if name != "write" && name != "search_replace" {
+        return None;
+    }
+    let value: serde_json::Value = serde_json::from_str(arguments).ok()?;
+    for key in ["path", "file_path", "target_file"] {
+        if let Some(path) = value
+            .get(key)
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|p| !p.is_empty())
+        {
+            return Some(path.to_string());
+        }
+    }
+    None
+}
+
+fn modified_files_message(paths: &[String]) -> Option<InputItem> {
+    let mut listed = Vec::new();
+    for path in paths {
+        let trimmed = path.trim();
+        if trimmed.is_empty() || listed.iter().any(|p: &String| p == trimmed) {
+            continue;
+        }
+        listed.push(trimmed.to_string());
+    }
+    if listed.is_empty() {
+        return None;
+    }
+    let mut body = String::from("<modified_files>\n");
+    for path in &listed {
+        body.push_str(path);
+        body.push('\n');
+    }
+    body.push_str("</modified_files>");
+    Some(InputItem::Message {
+        role: "user".into(),
+        content: vec![ContentPart::InputText(body)],
+    })
+}
+
+/// Last user turn plus trailing tool call/output pairs within the token budget.
+pub fn recent_tail(items: &[InputItem]) -> Vec<InputItem> {
+    let Some(user) = last_user_turn(items) else {
+        return take_tool_suffix(items, RECENT_TAIL_TOKEN_BUDGET);
+    };
+    let user_at = items
+        .iter()
+        .rposition(|item| matches!(item, InputItem::Message { role, .. } if role == "user"))
+        .expect("last_user_turn index");
+    let user_cost = estimate_input_tokens(std::slice::from_ref(user));
+    if user_cost > RECENT_TAIL_TOKEN_BUDGET {
+        return Vec::new();
+    }
+    let mut out = vec![user.clone()];
+    let remain = RECENT_TAIL_TOKEN_BUDGET.saturating_sub(user_cost);
+    out.extend(take_tool_suffix(&items[user_at + 1..], remain));
+    out
+}
+
+fn take_tool_suffix(items: &[InputItem], budget: u64) -> Vec<InputItem> {
+    if budget == 0 || items.is_empty() {
+        return Vec::new();
+    }
+    let mut acc = Vec::new();
+    let mut used = 0u64;
+    let mut i = items.len();
+    while i > 0 {
+        i -= 1;
+        match &items[i] {
+            InputItem::FunctionCallOutput { call_id, .. } => {
+                let end = i;
+                let start = match i.checked_sub(1) {
+                    Some(prev) => match &items[prev] {
+                        InputItem::FunctionCall {
+                            call_id: cid, ..
+                        } if cid == call_id => prev,
+                        _ => continue,
+                    },
+                    None => continue,
+                };
+                let slice = &items[start..=end];
+                let cost = estimate_input_tokens(slice);
+                if used.saturating_add(cost) > budget {
+                    break;
+                }
+                used = used.saturating_add(cost);
+                // Accumulate reverse so the final acc.reverse() restores chronology.
+                acc.extend(slice.iter().rev().cloned());
+                i = start;
+            }
+            InputItem::FunctionCall { call_id, .. } => {
+                // Paired call+output is handled when we see the output.
+                if i + 1 < items.len()
+                    && matches!(
+                        &items[i + 1],
+                        InputItem::FunctionCallOutput {
+                            call_id: oid, ..
+                        } if oid == call_id
+                    )
+                {
+                    continue;
+                }
+                let cost = estimate_input_tokens(std::slice::from_ref(&items[i]));
+                if used.saturating_add(cost) > budget {
+                    break;
+                }
+                used = used.saturating_add(cost);
+                acc.push(items[i].clone());
+            }
+            InputItem::Message { .. } => break,
+        }
+    }
+    acc.reverse();
+    acc
 }
 
 pub fn last_user_turn(items: &[InputItem]) -> Option<&InputItem> {
@@ -362,7 +539,8 @@ pub fn format_compact_summary_content(raw_summary: &str) -> String {
     let cleaned = format_compact_summary(raw_summary);
     format!(
         "This session is being continued from a previous conversation that ran out of context. \
-         The summary below covers the earlier portion of the conversation.\n\n{cleaned}"
+         The summary below covers the earlier portion of the conversation.\n\n\
+         <conversation_summary>\n{cleaned}\n</conversation_summary>"
     )
 }
 
@@ -516,6 +694,7 @@ mod tests {
         let compacted = build_compacted_history(
             &history,
             "<analysis>scratch</analysis>\n<summary>\n1. Primary Request and Intent: wire auth\n</summary>",
+            &[],
         );
         assert!(matches!(&compacted[0], InputItem::Message { role, .. } if role == "system"));
         assert_eq!(message_text(&compacted[0]), "system prompt");
@@ -581,7 +760,8 @@ mod tests {
                         reasoning: String::new(),
                         calls: Vec::new(),
                         usage: Usage::default(),
-                    })
+            ..Default::default()
+        })
                 } else {
                     turns.remove(0)
                 }
@@ -661,13 +841,15 @@ mod tests {
                     reasoning: String::new(),
                     calls: Vec::new(),
                     usage: usage(11, 4, 5),
-                }),
+            ..Default::default()
+        }),
                 Ok(TurnOutput {
                     text: "done".into(),
                     reasoning: String::new(),
                     calls: Vec::new(),
                     usage: usage(3, 1, 2),
-                }),
+            ..Default::default()
+        }),
             ]),
             seen: Mutex::new(Vec::new()),
         };
@@ -699,7 +881,8 @@ mod tests {
                 reasoning: String::new(),
                 calls: Vec::new(),
                 usage: usage(1, 1, 1),
-            })]),
+            ..Default::default()
+        })]),
             seen: Mutex::new(Vec::new()),
         };
         let mut history = vec![text_message("user", "short")];
@@ -727,7 +910,8 @@ mod tests {
                     reasoning: String::new(),
                     calls: Vec::new(),
                     usage: usage(2, 2, 4),
-                }),
+            ..Default::default()
+        }),
             ]),
             seen: Mutex::new(Vec::new()),
         };
@@ -775,7 +959,8 @@ mod tests {
                     arguments: "{}".into(),
                 }],
                 usage: usage(6, 2, 8),
-            })]),
+            ..Default::default()
+        })]),
             seen: Mutex::new(Vec::new()),
         };
         let last = text_message("user", "last turn");
@@ -788,6 +973,7 @@ mod tests {
             None,
             "conv",
             &mut history,
+            &[],
         )
         .expect("manual compact");
         assert_eq!(usage.cost_in_usd_ticks, 8);
@@ -812,6 +998,7 @@ mod tests {
             None,
             "conv",
             &mut kept,
+            &[],
         );
         assert!(err.is_err());
         assert_eq!(kept, vec![last]);
@@ -846,7 +1033,8 @@ mod tests {
                     reasoning: String::new(),
                     calls: Vec::new(),
                     usage: Usage::default(),
-                })
+            ..Default::default()
+        })
             }
         }
         let mut history = vec![text_message("user", "keep the quay lantern")];
@@ -858,10 +1046,295 @@ mod tests {
             Some("low"),
             "conv",
             &mut history,
+            &[],
         )
         .expect("compact after flush");
         assert!(message_text(&history[0]).contains("kept the quay"));
         drop(_guard);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn take_tool_suffix_keeps_call_and_output_as_one_pair() {
+        let call = InputItem::FunctionCall {
+            call_id: "c1".into(),
+            name: "read_file".into(),
+            arguments: r#"{"path":"a.rs"}"#.into(),
+        };
+        let output = InputItem::FunctionCallOutput {
+            call_id: "c1".into(),
+            output: "ok".into(),
+        };
+        let pair_cost = estimate_input_tokens(&[call.clone(), output.clone()]);
+        let items = vec![call.clone(), output.clone()];
+        let kept = take_tool_suffix(&items, pair_cost);
+        assert_eq!(kept.len(), 2, "pair fits as a unit");
+        assert!(matches!(&kept[0], InputItem::FunctionCall { call_id, .. } if call_id == "c1"));
+        assert!(matches!(&kept[1], InputItem::FunctionCallOutput { call_id, .. } if call_id == "c1"));
+        let half = pair_cost.saturating_sub(1).max(1);
+        if half < pair_cost {
+            assert!(
+                take_tool_suffix(&items, half).is_empty(),
+                "budget below the pair keeps neither half"
+            );
+        }
+    }
+
+    #[test]
+    fn recent_tail_keeps_last_user_and_tool_results_within_budget() {
+        let last = text_message("user", "keep this question verbatim");
+        let call = InputItem::FunctionCall {
+            call_id: "c1".into(),
+            name: "read_file".into(),
+            arguments: r#"{"path":"src/a.rs"}"#.into(),
+        };
+        let output = InputItem::FunctionCallOutput {
+            call_id: "c1".into(),
+            output: "fn main() {}".into(),
+        };
+        let history = vec![
+            text_message("user", "OLD_TOPIC"),
+            text_message("assistant", "working"),
+            last.clone(),
+            call.clone(),
+            output.clone(),
+        ];
+        let compacted = build_compacted_history(&history, "summary body", &[]);
+        assert_eq!(compacted.iter().filter(|i| matches!(i, InputItem::Message { role, .. } if role == "user" && message_text(i).contains("keep this"))).count(), 1);
+        assert!(compacted.iter().any(|i| matches!(i, InputItem::FunctionCall { call_id, .. } if call_id == "c1")));
+        assert!(compacted.iter().any(|i| matches!(i, InputItem::FunctionCallOutput { call_id, .. } if call_id == "c1")));
+        assert!(!compacted.iter().any(|item| message_text(item).contains("OLD_TOPIC")));
+    }
+
+    #[test]
+    fn modified_file_paths_are_reinjected_after_compaction() {
+        let history = vec![
+            text_message("user", "edit files"),
+            text_message("user", "last ask"),
+        ];
+        let compacted = build_compacted_history(
+            &history,
+            "summary",
+            &["src/a.rs".into(), "src/b.rs".into()],
+        );
+        let files = compacted
+            .iter()
+            .find(|item| message_text(item).contains("<modified_files>"))
+            .map(message_text)
+            .expect("modified files");
+        assert!(files.contains("src/a.rs"), "{files}");
+        assert!(files.contains("src/b.rs"), "{files}");
+        assert_eq!(
+            path_from_write_call("write", r#"{"path":"src/a.rs","contents":"x"}"#).as_deref(),
+            Some("src/a.rs")
+        );
+        assert!(path_from_write_call("read_file", r#"{"path":"src/a.rs"}"#).is_none());
+    }
+
+    #[test]
+    fn prior_summary_is_passed_as_merge_anchor_on_second_compact() {
+        let first = format_compact_summary_content("MARKER_ALPHA unique early work");
+        assert!(first.contains("<conversation_summary>"));
+        assert!(extract_prior_summary(&[text_message("user", &first)])
+            .unwrap_or_default()
+            .contains("MARKER_ALPHA"));
+        let history = vec![
+            text_message("user", &first),
+            text_message("user", "more work after the first compact"),
+        ];
+        let script = Script {
+            turns: Mutex::new(vec![Ok(TurnOutput {
+                text: "<summary>MARKER_ALPHA and the later edit</summary>".into(),
+                reasoning: String::new(),
+                calls: Vec::new(),
+                usage: usage(2, 2, 1),
+                ..Default::default()
+            })]),
+            seen: Mutex::new(Vec::new()),
+        };
+        let mut hist = history;
+        compact_transcript(
+            &script,
+            &CancelToken::new(),
+            "grok-4.7",
+            None,
+            "conv",
+            &mut hist,
+            &[],
+        )
+        .expect("second compact");
+        let seen = script.seen.lock().unwrap();
+        let prompt = seen[0]
+            .input
+            .iter()
+            .map(message_text)
+            .find(|t| t.contains("prior_conversation_summary"))
+            .expect("merge anchor in prompt");
+        assert!(prompt.contains("MARKER_ALPHA"), "{prompt}");
+        assert!(message_text(&hist[0]).contains("MARKER_ALPHA"));
+    }
+
+    #[test]
+    fn auto_compact_rearms_after_new_turns_and_compacts_three_times() {
+        // Tool turns keep the loop alive; huge call arguments re-cross the 85%
+        // threshold so compaction re-arms after each new turn.
+        let inflate = text_for_total_tokens(900);
+        let pad_call = |id: &str| FunctionCall {
+            call_id: id.into(),
+            name: "read_file".into(),
+            arguments: format!(r#"{{"path":"pad-{id}.rs","blob":"{inflate}"}}"#),
+        };
+        let script = Script {
+            turns: Mutex::new(vec![
+                Ok(TurnOutput {
+                    text: "<summary>pass one MARKER_ONE</summary>".into(),
+                    reasoning: String::new(),
+                    calls: Vec::new(),
+                    usage: usage(1, 1, 1),
+                    ..Default::default()
+                }),
+                Ok(TurnOutput {
+                    text: String::new(),
+                    reasoning: String::new(),
+                    calls: vec![pad_call("1")],
+                    usage: usage(1, 1, 1),
+                    ..Default::default()
+                }),
+                Ok(TurnOutput {
+                    text: "<summary>pass two MARKER_ONE MARKER_TWO</summary>".into(),
+                    reasoning: String::new(),
+                    calls: Vec::new(),
+                    usage: usage(1, 1, 1),
+                    ..Default::default()
+                }),
+                Ok(TurnOutput {
+                    text: String::new(),
+                    reasoning: String::new(),
+                    calls: vec![pad_call("2")],
+                    usage: usage(1, 1, 1),
+                    ..Default::default()
+                }),
+                Ok(TurnOutput {
+                    text: "<summary>pass three MARKER_ONE MARKER_TWO MARKER_THREE</summary>"
+                        .into(),
+                    reasoning: String::new(),
+                    calls: Vec::new(),
+                    usage: usage(1, 1, 1),
+                    ..Default::default()
+                }),
+                Ok(TurnOutput {
+                    text: "done".into(),
+                    reasoning: String::new(),
+                    calls: Vec::new(),
+                    usage: usage(1, 1, 1),
+                    ..Default::default()
+                }),
+            ]),
+            seen: Mutex::new(Vec::new()),
+        };
+        let mut history = vec![text_message("user", &format!("OLD {inflate}"))];
+        let dir = workspace();
+        let input = LoopIn {
+            client: &script,
+            workspace: &dir,
+            model: "grok-4.7",
+            effort: Some("low"),
+            system: "",
+            conversation_id: "conv-rearm",
+            max_turns: 8,
+            usage_base: Usage::default(),
+            cancel: &CancelToken::new(),
+            steer: &SteerQueue::new(),
+            halt: &Never,
+            gate: Gate::phase_readonly(),
+            desktop: None,
+            permits: &gate::ClosedPermits,
+            perms: None,
+            context_length: 1_000,
+            tasks: None,
+            depth: 0,
+            agent_id: None,
+            shared_client: None,
+            shared_permits: None,
+            shared_desktop: None,
+        };
+        let out = run_loop(&input, &mut history, "go", None, &mut |_| {});
+        assert_eq!(out.stop, crate::run::StopReason::EndTurn);
+        assert!(out.compacted);
+        let prompts = script
+            .seen
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|req| contains_prompt(req))
+            .count();
+        assert_eq!(prompts, 3, "expected three compactions");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn context_length_error_compacts_once_and_retries_the_request() {
+        let script = Script {
+            turns: Mutex::new(vec![
+                Err(ClientError::Protocol(
+                    "HTTP 400: This model's maximum context length was exceeded".into(),
+                )),
+                Ok(TurnOutput {
+                    text: "<summary>trimmed MARKER_OVERFLOW</summary>".into(),
+                    reasoning: String::new(),
+                    calls: Vec::new(),
+                    usage: usage(2, 2, 1),
+                    ..Default::default()
+                }),
+                Ok(TurnOutput {
+                    text: "recovered".into(),
+                    reasoning: String::new(),
+                    calls: Vec::new(),
+                    usage: usage(1, 1, 1),
+                    ..Default::default()
+                }),
+            ]),
+            seen: Mutex::new(Vec::new()),
+        };
+        let mut history = vec![text_message("user", "short enough")];
+        let out = drive(&script, &mut history, 0);
+        assert_eq!(out.stop, crate::run::StopReason::EndTurn);
+        assert!(out.compacted);
+        assert!(history.iter().any(|i| message_text(i) == "recovered"));
+        assert!(history
+            .iter()
+            .any(|i| message_text(i).contains("MARKER_OVERFLOW")));
+        let seen = script.seen.lock().unwrap();
+        assert!(contains_prompt(&seen[1]));
+        assert!(!contains_prompt(&seen[2]));
+    }
+
+    #[test]
+    fn second_context_length_error_after_compaction_ends_with_named_reason() {
+        let script = Script {
+            turns: Mutex::new(vec![
+                Err(ClientError::Protocol(
+                    "HTTP 400: prompt is too long for the context window".into(),
+                )),
+                Ok(TurnOutput {
+                    text: "<summary>still huge</summary>".into(),
+                    reasoning: String::new(),
+                    calls: Vec::new(),
+                    usage: usage(1, 1, 1),
+                    ..Default::default()
+                }),
+                Err(ClientError::Protocol(
+                    "HTTP 400: prompt is too long for the context window".into(),
+                )),
+            ]),
+            seen: Mutex::new(Vec::new()),
+        };
+        let mut history = vec![text_message("user", "go")];
+        let out = drive(&script, &mut history, 0);
+        assert_eq!(
+            out.stop,
+            crate::run::StopReason::Error(CONTEXT_STILL_TOO_LARGE.into())
+        );
+        assert!(out.compacted);
     }
 }

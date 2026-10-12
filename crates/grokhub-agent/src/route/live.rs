@@ -346,6 +346,8 @@ pub struct Decision {
     pub tune: Option<String>,
     /// How long each step of this decision took (µs), for the route record.
     pub timing: BTreeMap<String, u32>,
+    /// Brain 2: the turn's goal, logged with the route.
+    pub goal: Option<super::goal::RouteGoal>,
 }
 
 impl Decision {
@@ -438,6 +440,16 @@ pub fn decide(config_dir: &Path, call: &RouteCall<'_>, now_ms: u64) -> Decision 
     let st = learn::step_tune(&tuned, call.class, key, &risk);
     laps.mark("route:tune");
     let turn = turn_hash(call.text);
+    // Brain 2: the goal the turn's Brief named; user-facing steps only, never the holdout.
+    // Brain 4: a goal the cabin pinned on a background run (cost while you're active) is
+    // logged with it; only user-facing steps move by a goal.
+    let goal = if holdout {
+        None
+    } else if facing {
+        super::goal::goal_for(&[call.session, call.episode])
+    } else {
+        super::goal::pinned_for(&[call.session, call.episode])
+    };
     let mut routine = None;
     let pick = match row {
         Some(_) if holdout => Some(Pick { rung: rung(HOLDOUT_EFFORT).unwrap_or(0), rules: vec!["holdout".into()], ..Pick::default() }),
@@ -458,7 +470,8 @@ pub fn decide(config_dir: &Path, call: &RouteCall<'_>, now_ms: u64) -> Decision 
                 routine,
                 ..Obs::default()
             };
-            let mut pick = ladder::step(key, r.class, turn, band, start_rung(band, d, steer, true), obs);
+            let start = super::goal::goal_start(band, start_rung(band, d, steer, true), steer, goal.as_ref());
+            let mut pick = ladder::step(key, r.class, turn, band, start, obs);
             if call.step_up {
                 // Only this call: the saved state keeps its rung, so the episode drops back after.
                 pick.rung = (pick.rung + 1).min(band.ceiling.max(band.floor));
@@ -473,6 +486,15 @@ pub fn decide(config_dir: &Path, call: &RouteCall<'_>, now_ms: u64) -> Decision 
     let recover = pick.as_ref().is_some_and(|p| p.recover);
     let class_key = format!("{key}\u{1f}{}", row.map(|r| r.class).unwrap_or(call.class));
     let sticky = if key.is_empty() { None } else { episode_model(&class_key, turn) };
+    // PR E: a failed verify on an on-device turn asks the next online pick to escalate.
+    if rejects.unwrap_or(0) > 0 && !verify_ok {
+        let was_local = sticky.as_deref().is_some_and(super::local::is_local)
+            || super::local::is_local(call.model)
+            || call.provider == super::local::PROVIDER_LOCAL;
+        if was_local {
+            super::local::note_local_verify_failed(true);
+        }
+    }
     let base_table = table_snapshot(config_dir);
     let table: Arc<RoutingTable> = match (&st.canary_order, tuned.tuning.orders.is_empty()) {
         (None, true) => base_table,
@@ -521,6 +543,7 @@ pub fn decide(config_dir: &Path, call: &RouteCall<'_>, now_ms: u64) -> Decision 
         local: LocalGate::now(call.sensitive, call.cloud_grant, call.hard_tool),
         // Your own chats only, never the holdout; the router still checks key and grant.
         prefer: (call.providers && facing && !holdout && !picked.is_empty()).then_some(picked.as_str()),
+        goal: goal.clone(),
     };
     let route = Router::choose(&input, &reg, &profiles, &table, now_ms);
     laps.mark("route:choose");
@@ -555,7 +578,7 @@ pub fn decide(config_dir: &Path, call: &RouteCall<'_>, now_ms: u64) -> Decision 
     }
     laps.mark("route:budget_check");
     let timing = laps.finish("route:decide");
-    Decision { route, d: (d * 100.0).round() as u32, holdout, recover, live, budget_pct: b.pct, budget_pause, tune: tune_mark, timing }
+    Decision { route, d: (d * 100.0).round() as u32, holdout, recover, live, budget_pct: b.pct, budget_pause, tune: tune_mark, timing, goal }
 }
 
 /// A shadow candidate computed next to the live pick, logged only:
@@ -637,6 +660,8 @@ pub fn route_record(config_dir: &Path, call: &RouteCall<'_>, decision: &Decision
         cost_class: route.cost_class.as_str().to_string(),
         tune: decision.tune.clone(),
         timing_us: decision.timing.clone(),
+        goal: decision.goal.as_ref().map(|g| g.goal.as_str().to_string()).unwrap_or_default(),
+        goal_reason: decision.goal.as_ref().map(|g| g.reason.clone()).unwrap_or_default(),
     }
 }
 

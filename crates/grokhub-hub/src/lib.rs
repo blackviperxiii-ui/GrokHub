@@ -1,5 +1,7 @@
 //! In-process LAN hub. The native app embeds this. `grokhub-hub` CLI is a thin main.
 
+#![cfg_attr(not(test), warn(clippy::unwrap_used, clippy::expect_used))]
+
 mod server;
 
 pub use server::{serve, serve_background, serve_lan};

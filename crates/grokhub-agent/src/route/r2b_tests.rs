@@ -76,13 +76,13 @@ fn fast_goes_to_a_live_waiting_turn_and_falls_back_to_grok_4_7_when_the_budget_i
     let r = Router::choose(&ask("grok-4.7", waiting()), &reg, &no_profiles(), &table(), NOW);
     assert_eq!((r.model.as_str(), r.cost_class, r.base.as_deref()), (FAST, CostClass::AutonomousPremium, Some("grok-4.7")));
     assert!(r.rule_ids.contains(&"fast:waiting".to_string()), "{:?}", r.rule_ids);
-    assert_eq!(r.reason, "Using grok-4.7-fast at Medium: you're waiting, so the faster model is worth it.");
+    assert_eq!(r.reason, "quality · Medium: you're waiting, so the faster model is worth it.");
     // Budget tight: Grok 4.7, and the record says why.
     let tight = Spend { budget_tight: true, ..waiting() };
     let r = Router::choose(&ask("grok-4.7", tight), &reg, &no_profiles(), &table(), NOW);
     assert_eq!((r.model.as_str(), r.cost_class, r.base.clone()), ("grok-4.7", CostClass::Included, None));
     assert!(r.rule_ids.contains(&"fast:budget_tight".to_string()), "{:?}", r.rule_ids);
-    assert_eq!(r.reason, "Using grok-4.7 at Medium: this week's budget is tight, so not grok-4.7-fast.");
+    assert_eq!(r.reason, "quality · Medium: this week's budget is tight, so not grok-4.7-fast.");
     // The toggle off: never.
     let off = Spend { settings: SpendSettings { fast_when_waiting: false, ..SpendSettings::default() }, ..waiting() };
     let r = Router::choose(&ask("grok-4.7", off), &reg, &no_profiles(), &table(), NOW);
