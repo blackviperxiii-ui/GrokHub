@@ -26168,6 +26168,137 @@ fn imagine_aspect_pill_drives_every_request() {
     );
 }
 
+#[test]
+fn imagine_more_finishes_agent_count_and_results_chrome() {
+    let src = include_str!("imagine.rs");
+    let more = src
+        .split("fn ui_imagine_more(")
+        .nth(1)
+        .and_then(|s| s.split("fn ui_imagine_results(").next())
+        .expect("ui_imagine_more");
+    assert!(
+        more.contains("ui_imagine_more_agent")
+            && more.contains("Character sprite still")
+            && more.contains("ui_imagine_more_count")
+            && more.contains("clamp(1, 10)")
+            && !more.contains("ImagineKind::Agent => {}"),
+        "Agent More must offer model + 1–10 count, not stay empty: {more}"
+    );
+    assert!(
+        !more.contains("&[\"1\", \"2\", \"3\", \"4\"]") && !more.contains("clamp(1, 4)"),
+        "image count UI must reach the API's 1–10 range: {more}"
+    );
+    let results = src
+        .split("fn ui_imagine_results(")
+        .nth(1)
+        .and_then(|s| s.split("fn imagine_more_title(").next())
+        .expect("ui_imagine_results");
+    assert!(
+        results.contains("ghost_pill(ui, \"Save\")")
+            && results.contains("ghost_pill(ui, \"Open folder\")")
+            && !results.contains("small_button"),
+        "Results must use cabin pills, not raw egui buttons: {results}"
+    );
+    let bar = src
+        .split("fn ui_imagine_bar(")
+        .nth(1)
+        .and_then(|s| s.split("fn poll_wall(").next())
+        .expect("ui_imagine_bar");
+    assert!(
+        !bar.contains("if self.imagine_kind != ImagineKind::Video")
+            || !bar
+                .split("imagine-aspect-hit")
+                .nth(1)
+                .expect("aspect")
+                .split("imagine-more-hit")
+                .next()
+                .expect("before more")
+                .contains("ui.end_row()"),
+        "More must sit with Style/Aspect, not alone on a forced second row"
+    );
+    let stage_wire = src
+        .split("fn ui_imagine(")
+        .nth(1)
+        .and_then(|s| s.split("fn ui_imagine_bar(").next())
+        .expect("ui_imagine");
+    assert!(
+        stage_wire.contains("stage_hit.retry") && stage_wire.contains("kick_imagine()"),
+        "stage Retry must re-kick Imagine: {stage_wire}"
+    );
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.imagine_kind = grokhub_core::ImagineKind::Agent;
+    cabin.imagine_native.count = 7;
+    cabin.imagine_native.image_model = 1;
+    match cabin.imagine_call() {
+        super::imagine::ImagineCall::Generate { n, model, .. } => {
+            assert_eq!(n, 7);
+            assert_eq!(model, "grok-imagine-image-quality");
+        }
+        _ => panic!("Agent must generate stills"),
+    }
+    cabin.imagine_native.count = 10;
+    match cabin.imagine_call() {
+        super::imagine::ImagineCall::Generate { n, .. } => assert_eq!(n, 10),
+        _ => panic!("count 10"),
+    }
+
+    // Paint Agent More and a failed stage so the finished chrome is visible in-process.
+    let _cfg = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("imagine-more-paint");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("config root");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.nav = Nav::Imagine;
+    cabin.imagine_kind = grokhub_core::ImagineKind::Agent;
+    cabin.imagine_native.more_open = true;
+    cabin.imagine_native.more_anchor =
+        egui::Rect::from_min_size(egui::pos2(200.0, 400.0), egui::vec2(80.0, 36.0));
+    cabin.imagine_native.count = 3;
+    let _paint = crate::theme::hold_paint_test();
+    let ctx = egui::Context::default();
+    crate::theme::install_fonts_on(&ctx);
+    let raw = egui::RawInput {
+        screen_rect: Some(egui::Rect::from_min_size(
+            egui::Pos2::ZERO,
+            egui::vec2(1280.0, 900.0),
+        )),
+        ..Default::default()
+    };
+    let mut texts = Vec::new();
+    for _ in 0..2 {
+        texts.clear();
+        let out = crate::theme::test_pass(&ctx, raw.clone(), |ui| {
+            cabin.ui_imagine(ui);
+            cabin.ui_imagine_overlays(ui.ctx());
+        });
+        for clipped in &out.shapes {
+            collect_shape_text(&clipped.shape, &mut texts);
+        }
+    }
+    let blob = texts.join(" | ");
+    assert!(
+        blob.contains("Character sprite still")
+            && blob.contains("Model")
+            && blob.contains("Images")
+            && blob.contains("3"),
+        "Agent More must paint model + count: {blob}"
+    );
+    cabin.imagine_native.more_open = false;
+    cabin.imagine_error = "network interrupted".into();
+    cabin.imagine_last.clear();
+    texts.clear();
+    let out = crate::theme::test_pass(&ctx, raw, |ui| cabin.ui_imagine(ui));
+    for clipped in &out.shapes {
+        collect_shape_text(&clipped.shape, &mut texts);
+    }
+    let fail = texts.join(" | ");
+    assert!(
+        fail.contains("Imagine failed") && fail.contains("Retry"),
+        "failed stage must offer Retry: {fail}"
+    );
+}
+
 // Pulse (2.10.91): Ideas and the Home deck became one page.
 
 fn pulse_idea(id: &str, title: &str, prompt: &str, created_at: u64) -> grokhub_core::UpdateCard {
