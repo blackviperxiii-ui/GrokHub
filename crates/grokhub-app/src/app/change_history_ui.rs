@@ -10,7 +10,6 @@ use grokhub_agent::harness as hx;
 use grokhub_core::self_review as sr;
 use serde::{Deserialize, Serialize};
 
-use super::self_review_ui::{load_state, save_state};
 use super::Cabin;
 use crate::{config, skills};
 
@@ -68,12 +67,16 @@ pub(super) fn history_rows(versions: &[hx::Version], now: u64) -> Vec<HistoryRow
 impl Cabin {
     /// A code-idea card's Save: keep it in the local list, change nothing else.
     pub(super) fn save_code_idea(&mut self, title: &str, text: &str) -> bool {
-        let mut state = load_state();
-        state.saved_ideas.retain(|i| i.title != title);
-        state.saved_ideas.push(SavedIdea { title: title.to_string(), text: text.to_string(), at: grokhub_core::now_ms() });
-        let over = state.saved_ideas.len().saturating_sub(SAVED_IDEAS_CAP);
-        state.saved_ideas.drain(..over);
-        save_state(&state);
+        self.mutate_self_review_file(|state| {
+            state.saved_ideas.retain(|i| i.title != title);
+            state.saved_ideas.push(SavedIdea {
+                title: title.to_string(),
+                text: text.to_string(),
+                at: grokhub_core::now_ms(),
+            });
+            let over = state.saved_ideas.len().saturating_sub(SAVED_IDEAS_CAP);
+            state.saved_ideas.drain(..over);
+        });
         self.status = "Idea saved in Settings → Behavior. GrokHub never changes its own code.".into();
         true
     }
@@ -90,17 +93,25 @@ impl Cabin {
         let Some(card) = self.updates.iter().find(|c| c.id == id) else {
             return;
         };
-        let Some(pending) = load_state().pending.into_iter().find(|p| p.source == card.source_id) else {
+        let source_id = card.source_id.clone();
+        let title = card.title.clone();
+        self.ensure_self_review_file();
+        let Some(pending) = self
+            .harness
+            .self_review
+            .file
+            .as_ref()
+            .and_then(|state| state.pending.iter().find(|p| p.source == source_id).cloned())
+        else {
             return;
         };
-        self.harness.self_review.copy_out = Some(Self::issue_for(&card.title, &pending.md));
+        self.harness.self_review.copy_out = Some(Self::issue_for(&title, &pending.md));
         self.status = ISSUE_COPIED.into();
     }
 
     /// Settings: the self-change history and the saved code ideas.
     pub(super) fn ui_self_change_history(&mut self, ui: &mut egui::Ui) {
-        let dir = config::config_dir();
-        let rows = history_rows(&hx::read_versions(&dir), grokhub_core::now_ms());
+        let rows = history_rows(&self.history_versions_now(), grokhub_core::now_ms());
         crate::cards::settings_note(ui, "Self-improvement history");
         if rows.is_empty() {
             crate::cards::settings_note(ui, HISTORY_EMPTY);
@@ -114,7 +125,14 @@ impl Cabin {
                 self.revert_kept_version(&version);
             }
         }
-        let ideas = load_state().saved_ideas;
+        self.ensure_self_review_file();
+        let ideas = self
+            .harness
+            .self_review
+            .file
+            .as_ref()
+            .map(|f| f.saved_ideas.clone())
+            .unwrap_or_default();
         for idea in ideas.iter().rev() {
             if crate::cards::settings_action(ui, &format!("Idea: {}", idea.title), &idea.text, "Copy as GitHub issue") {
                 ui.ctx().copy_text(Self::issue_for(&idea.title, &idea.text));
@@ -133,6 +151,7 @@ impl Cabin {
                     self.harness.skill_rows = None;
                 }
                 self.harness.change_rows = None;
+                self.harness.self_review.history = None;
                 self.status = v.note;
             }
             Err(e) => self.status = e,
