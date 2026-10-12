@@ -114,7 +114,7 @@ fn fetch_source(req: &SourceReq, have: Option<&ps::CacheEntry>) -> Fetched {
             .set("user-agent", &user_agent())
             .set(
                 "accept",
-                "application/json, application/atom+xml, application/rss+xml, application/xml;q=0.9, */*;q=0.5",
+                "application/json, application/atom+xml, application/rss+xml, application/xml;q=0.9, text/html;q=0.8, */*;q=0.5",
             );
         if hop == 0 {
             if let Some(entry) = have {
@@ -524,7 +524,7 @@ impl Cabin {
                         ps::SourceKind::GithubReleases => format!("{added} on GitHub"),
                         ps::SourceKind::YouTube => format!("YouTube {added}"),
                         ps::SourceKind::Rss => added,
-                        ps::SourceKind::HackerNews => added,
+                        ps::SourceKind::HackerNews | ps::SourceKind::WebSearch => added,
                     }
                 );
                 true
@@ -671,7 +671,7 @@ impl Cabin {
         ui.add_space(2.0);
         crate::cards::help_text(
             ui,
-            "Free sources only, no keys. Hacker News and Reddit search your top three interests; the lists below are followed as they are. Each post names its source and links to it.",
+            "Free sources only, no keys. Hacker News, Reddit and Web search (DuckDuckGo Lite) search your top three interests; the lists below are followed as they are. Each post names its source and links to it.",
         );
         ui.add_space(8.0);
         let mut changed = false;
@@ -775,7 +775,7 @@ impl Cabin {
     /// The followed list under a source, with Remove and an Add box. True when it changed.
     fn ui_source_list(&mut self, ui: &mut egui::Ui, kind: SourceKind) -> bool {
         let hint = match kind {
-            SourceKind::HackerNews => return false,
+            SourceKind::HackerNews | SourceKind::WebSearch => return false,
             SourceKind::Reddit => "Subreddit, like rust or r/rust",
             SourceKind::GithubReleases => "Repo, like rust-lang/rust",
             SourceKind::YouTube => "Channel id (UC…) or channel URL",

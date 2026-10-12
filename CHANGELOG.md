@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Pulse can search the open web for free (Settings → Pulse → Sources → Web search). Each check queries DuckDuckGo Lite for your top three interests; results post with the result site as the source name so diversity and novelty caps still apply. No API key. The paid “X and web search (xAI)” row stays off.
 - Security: Pulse feed and image fetches no longer use `HTTP(S)_PROXY` from the environment. An env proxy would dial the proxy host and skip the public-only DNS check on the target URL; they now match `web_fetch` and resolve the target directly.
 - Fixed: a stalled repair/research run's fallback findings card no longer offers a "Finish the rest" one-tap when the open todos ask to grant workspace/OS access or activate a skill (the same doom-loop #720 already refused on `report_findings`). Stored cards drop those pills when painted.
 - Security: host rails (`forbidden_reason`) also catch common shell/Python obfuscations that rebuild forbidden path leaves without spelling them — assignment expansion (`s=ssh; cat ~/.$s/…`), quoted `+` concatenation, and `$(echo …)` / `` `echo …` `` splits — so Always/Auto shell cannot read `~/.ssh` that way.
