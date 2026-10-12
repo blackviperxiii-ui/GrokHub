@@ -30,7 +30,7 @@ pub struct ChatThread {
     #[serde(default)]
     pub last_active_ms: u64,
     /// When set, the chat is archived: hidden from the main list, kept in full,
-    /// findable in search and the Archived view.
+    /// kept on disk; Unarchive from the open chat's menu.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub archived_at: Option<u64>,
     #[serde(default)]
