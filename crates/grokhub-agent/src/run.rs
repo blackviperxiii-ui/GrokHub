@@ -287,6 +287,7 @@ pub fn run_loop(
     let mut turns_since_compact = 0u32;
     let mut overflow_compacted = false;
     let mut modified_paths: Vec<String> = Vec::new();
+    let mut nested_agents = crate::prompt::NestedAgents::new(input.workspace);
     let mut repeats: HashMap<String, u32> = HashMap::new();
     let mut stop_hook_active = false;
     let mut truncated_streak = 0u32;
@@ -657,6 +658,7 @@ pub fn run_loop(
                             &id,
                             on_event,
                             &pre_context,
+                            &mut nested_agents,
                         ),
                         Waited::Answer(PermAnswer::Always) => {
                             if input.perms.is_some() {
@@ -676,6 +678,7 @@ pub fn run_loop(
                                 &id,
                                 on_event,
                                 &pre_context,
+                                &mut nested_agents,
                             )
                         }
                         Waited::Answer(PermAnswer::Deny) => {
@@ -712,6 +715,7 @@ pub fn run_loop(
                     &id,
                     on_event,
                     &pre_context,
+                    &mut nested_agents,
                 ),
             };
             if usage_pending(&extra_usage) {
@@ -907,6 +911,7 @@ fn note_tool(
     id: &str,
     on_event: &mut dyn FnMut(LoopEvent),
     pre_context: &str,
+    nested: &mut crate::prompt::NestedAgents,
 ) -> (ToolOutput, Usage) {
     let _lap = crate::timing::lap("loop:tool_run");
     let (mut output, usage) = run_allowed(
@@ -923,6 +928,22 @@ fn note_tool(
             output.text.push('\n');
         }
         output.text.push_str(pre_context);
+    }
+    // Just-in-time nested AGENTS.md / CLAUDE.md: append to tool output only.
+    if !output.failed && tools::is_path_tool(&call.name) {
+        let args: serde_json::Value =
+            serde_json::from_str(&call.arguments).unwrap_or(serde_json::Value::Null);
+        if let Some(raw) = tools::tool_path_arg(&call.name, &args) {
+            if let Ok(path) = tools::confine(input.workspace, &raw) {
+                let note = nested.notes_for(input.workspace, &path);
+                if !note.is_empty() {
+                    if !output.text.is_empty() && !output.text.ends_with('\n') {
+                        output.text.push('\n');
+                    }
+                    output.text.push_str(&note);
+                }
+            }
+        }
     }
     let extra = crate::hooks::after_tool(
         input.conversation_id,
