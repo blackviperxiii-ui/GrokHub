@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Composer chips and the empty-home greeting paint from built-in local pools only (habit / stage / `local_greeting`); they no longer spend a fast-model ask on every refresh. Chat tab titles come from content words in recent user turns (`topics_from_turns`) instead of a background `GOAL:` summarize. Skill activation matches whole-phrase / `OR`-split triggers before bag-of-words Jaccard, so short junk asks do not false-activate.
 - Pulse interest learning is a local connection graph, not “saw a word → whole identity.” Chat titles need mentions in two distinct chats before they become Interests; related topics get weighted edges; each source check may probe up to two neighbor queries from strong open edges; Save / More like this strengthens a link and Not interested closes it and branches to other neighbors. Domain-general (apps, music, tools, hobbies, …) — no game-only schema. Graph lives in `interests.json`.
 - Fixed: Pulse web search no longer queries cabin jargon or weak tokens (the hidden “Background” chat, agent lanes like `background:triage`, Settings chrome, stopwords). Checks prefer sealed/strong interests; when nothing qualifies they skip Lite rather than invent a junk query.
 - Auto baseline lanes (Cheap / Workhorse / Code / Flagship) reserve the plan's strongest reasoner for plan/design/debug/prepare/`repair:diagnose`; SuperGrok-shaped plans keep memory/judge/dream/chat on the coding mid and escalate to flagship only when attention says so. Seed catalog v2; rebuild refreshes on seed bump.
