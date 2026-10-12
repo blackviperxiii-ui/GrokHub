@@ -90,8 +90,8 @@ impl ModelClient for Once {
                     arguments: "{}".into(),
                 }],
                 usage: Usage::default(),
-            ..Default::default()
-        });
+                ..Default::default()
+            });
         }
         sink(StreamEvent::TextDelta("done".into()));
         Ok(TurnOutput {
@@ -185,19 +185,33 @@ fn stdio_server_lists_calls_paginates_and_reports_a_crash() {
 fn a_saved_key_reaches_a_stdio_server_in_its_token_env() {
     let bin = env!("CARGO_BIN_EXE_fake_mcp");
     let (dir, _clean, _guard) = scratch("token-env");
-    grokhub_agent::harness::use_key_store_for(&dir, Arc::new(grokhub_agent::harness::MemoryKeyStore::new()));
+    grokhub_agent::harness::use_key_store_for(
+        &dir,
+        Arc::new(grokhub_agent::harness::MemoryKeyStore::new()),
+    );
     // FAKE_MCP_PAGE=1 makes the fake server list a second tool, so the tool
     // count shows whether the key landed in that variable.
     let entry = json!({"command": bin, "tokenEnv": "FAKE_MCP_PAGE"});
     assert_eq!(mcp::install("box", &entry).unwrap(), mcp::Installed::Added);
     let rows = mcp::doctor();
-    assert_eq!((rows[0].status.as_str(), rows[0].tool_count), ("connected", 1), "{rows:?}");
+    assert_eq!(
+        (rows[0].status.as_str(), rows[0].tool_count),
+        ("connected", 1),
+        "{rows:?}"
+    );
 
     assert_eq!(mcp::save_key("box", "1").unwrap(), "Saved the key for box");
     let rows = mcp::doctor();
-    assert_eq!((rows[0].status.as_str(), rows[0].tool_count), ("connected", 2), "{rows:?}");
+    assert_eq!(
+        (rows[0].status.as_str(), rows[0].tool_count),
+        ("connected", 2),
+        "{rows:?}"
+    );
     let text = std::fs::read_to_string(dir.join("mcp.json")).unwrap();
-    assert!(text.contains(r#""tokenEnv": "FAKE_MCP_PAGE""#) && !text.contains(r#""env""#), "{text}");
+    assert!(
+        text.contains(r#""tokenEnv": "FAKE_MCP_PAGE""#) && !text.contains(r#""env""#),
+        "{text}"
+    );
 }
 
 #[test]
@@ -709,11 +723,21 @@ fn the_cabin_cua_gate_is_a_native_server_only_while_the_cabin_sets_it() {
 
     mcp::set_cabin_cua(Some(PathBuf::from(bin)));
     let rows = mcp::doctor();
-    let row = rows.iter().find(|row| row.name == "grokhub-cua").expect("cabin Cua server");
-    assert_eq!((row.status.as_str(), row.tool_count), ("connected", 1), "{rows:?}");
+    let row = rows
+        .iter()
+        .find(|row| row.name == "grokhub-cua")
+        .expect("cabin Cua server");
+    assert_eq!(
+        (row.status.as_str(), row.tool_count),
+        ("connected", 1),
+        "{rows:?}"
+    );
     assert_eq!(row.detail, format!("{bin} --mcp-cua"), "{rows:?}");
     let text = std::fs::read_to_string(dir.join("mcp.json")).unwrap();
-    assert!(!text.contains("--mcp-cua"), "never written to mcp.json: {text}");
+    assert!(
+        !text.contains("--mcp-cua"),
+        "never written to mcp.json: {text}"
+    );
 
     mcp::set_cabin_cua(None);
     assert!(mcp::doctor().iter().all(|row| row.name != "grokhub-cua"));

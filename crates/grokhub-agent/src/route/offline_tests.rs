@@ -27,7 +27,11 @@ impl LocalRuntime for FakeRt {
     fn difficulty(&self, _text: &str) -> Result<Value, String> {
         Ok(json!({ "d": 0.4 }))
     }
-    fn chat_stream(&self, _messages: &[local::ChatMessage], on_delta: &mut dyn FnMut(&str)) -> Result<String, String> {
+    fn chat_stream(
+        &self,
+        _messages: &[local::ChatMessage],
+        on_delta: &mut dyn FnMut(&str),
+    ) -> Result<String, String> {
         on_delta("hello offline");
         Ok("hello offline".into())
     }
@@ -39,7 +43,12 @@ fn meta(id: &str) -> ModelMeta {
         context_length: Some(128_000),
         efforts: Some(vec!["low".into(), "medium".into(), "high".into()]),
         tool_calling: Some(true),
-        prices: Prices { prompt: Some(1), cached: Some(1), completion: Some(1), ..Prices::default() },
+        prices: Prices {
+            prompt: Some(1),
+            cached: Some(1),
+            completion: Some(1),
+            ..Prices::default()
+        },
         ..ModelMeta::default()
     }
 }
@@ -47,13 +56,30 @@ fn meta(id: &str) -> ModelMeta {
 fn fleet() -> Registry {
     let mut reg = Registry::default();
     reg.entitlement.credential = Credential::Plan;
-    let local = Listing::new(SourceKind::Local, local::TIERS.iter().map(|t| local::tier_meta(t)).collect());
-    reg.apply_refresh(&[Listing::new(SourceKind::XaiApi, vec![meta("grok-4.7")]), local], &[], 1);
+    let local = Listing::new(
+        SourceKind::Local,
+        local::TIERS.iter().map(|t| local::tier_meta(t)).collect(),
+    );
+    reg.apply_refresh(
+        &[
+            Listing::new(SourceKind::XaiApi, vec![meta("grok-4.7")]),
+            local,
+        ],
+        &[],
+        1,
+    );
     reg
 }
 
 fn ask<'a>(class: &'a str, gate: LocalGate) -> RouteInput<'a> {
-    RouteInput { provider: "xai", class, current_model: "grok-4.7", d: 0.5, local: gate, ..RouteInput::default() }
+    RouteInput {
+        provider: "xai",
+        class,
+        current_model: "grok-4.7",
+        d: 0.5,
+        local: gate,
+        ..RouteInput::default()
+    }
 }
 
 #[test]
@@ -66,22 +92,48 @@ fn offline_routes_chat_and_background_to_local_and_queues_image() {
     let gate = LocalGate::now(false, false, false);
     assert!(gate.offline && gate.enabled);
 
-    let r = Router::choose(&ask("chat:default", gate.clone()), &reg, &profiles, &table, 10);
-    assert_eq!((r.provider.as_str(), r.model.as_str()), ("local", "local:small"));
-    assert!(r.rule_ids.contains(&"offline:local".into()), "{:?}", r.rule_ids);
+    let r = Router::choose(
+        &ask("chat:default", gate.clone()),
+        &reg,
+        &profiles,
+        &table,
+        10,
+    );
+    assert_eq!(
+        (r.provider.as_str(), r.model.as_str()),
+        ("local", "local:small")
+    );
+    assert!(
+        r.rule_ids.contains(&"offline:local".into()),
+        "{:?}",
+        r.rule_ids
+    );
     assert_eq!(r.cost_class, CostClass::Included);
 
-    let r = Router::choose(&ask("background:summarize", gate.clone()), &reg, &profiles, &table, 10);
+    let r = Router::choose(
+        &ask("background:summarize", gate.clone()),
+        &reg,
+        &profiles,
+        &table,
+        10,
+    );
     assert_eq!(r.model, "local:small");
 
     let r = Router::choose(&ask("media:image", gate), &reg, &profiles, &table, 10);
     assert!(r.no_route, "{:?}", r);
-    assert!(r.rule_ids.contains(&"offline:cloud_queued".into()), "{:?}", r.rule_ids);
+    assert!(
+        r.rule_ids.contains(&"offline:cloud_queued".into()),
+        "{:?}",
+        r.rule_ids
+    );
     assert_eq!(
         connectivity::cloud_queue_note("media:image"),
         "Waiting for the network: image generation needs the cloud."
     );
-    assert_eq!(connectivity::offline_chip("Qwen 2.5 3B"), "Offline · on Qwen 2.5 3B (local)");
+    assert_eq!(
+        connectivity::offline_chip("Qwen 2.5 3B"),
+        "Offline · on Qwen 2.5 3B (local)"
+    );
 }
 
 #[test]

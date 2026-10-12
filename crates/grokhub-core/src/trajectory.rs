@@ -16,7 +16,10 @@ pub struct TrajectoryEvent {
 }
 
 pub fn clip_excerpt(raw: &str) -> String {
-    redact_secrets(raw).chars().take(TRAJECTORY_EXCERPT_CHARS).collect()
+    redact_secrets(raw)
+        .chars()
+        .take(TRAJECTORY_EXCERPT_CHARS)
+        .collect()
 }
 
 pub fn trajectory_jsonl_line(ts: u64, cmds: &[String], ok: bool, excerpt: &str) -> String {
@@ -74,12 +77,7 @@ pub fn summarize_trajectory(events: &[TrajectoryEvent], since_ms: u64, cap: usiz
         if n >= cap {
             break;
         }
-        let cmd = ev
-            .cmds
-            .first()
-            .map(|s| s.as_str())
-            .unwrap_or("")
-            .trim();
+        let cmd = ev.cmds.first().map(|s| s.as_str()).unwrap_or("").trim();
         if cmd.is_empty() && ev.excerpt.trim().is_empty() {
             continue;
         }

@@ -277,7 +277,11 @@ fn pct(n: usize, of: usize) -> usize {
 impl DomainRow {
     /// "system · 4 runs · 75% worked · 6.5 steps · 50% checked".
     pub fn line(&self) -> String {
-        let avg = if self.runs == 0 { 0.0 } else { self.steps as f64 / self.runs as f64 };
+        let avg = if self.runs == 0 {
+            0.0
+        } else {
+            self.steps as f64 / self.runs as f64
+        };
         format!(
             "{} · {} run{} · {}% worked · {avg:.1} steps · {}% checked",
             self.domain,
@@ -298,7 +302,10 @@ pub fn domain_rows(runs: &[RunMetrics]) -> Vec<DomainRow> {
         let i = match rows.iter().position(|r| r.domain == m.brain.domain) {
             Some(i) => i,
             None => {
-                rows.push(DomainRow { domain: m.brain.domain.clone(), ..Default::default() });
+                rows.push(DomainRow {
+                    domain: m.brain.domain.clone(),
+                    ..Default::default()
+                });
                 rows.len() - 1
             }
         };
@@ -308,8 +315,17 @@ pub fn domain_rows(runs: &[RunMetrics]) -> Vec<DomainRow> {
         r.steps += u64::from(m.steps);
         r.verified += usize::from(m.verified);
     }
-    let rank = |d: &str| crate::playbook::DOMAINS.iter().position(|x| *x == d).unwrap_or(usize::MAX);
-    rows.sort_by(|a, b| rank(&a.domain).cmp(&rank(&b.domain)).then(a.domain.cmp(&b.domain)));
+    let rank = |d: &str| {
+        crate::playbook::DOMAINS
+            .iter()
+            .position(|x| *x == d)
+            .unwrap_or(usize::MAX)
+    };
+    rows.sort_by(|a, b| {
+        rank(&a.domain)
+            .cmp(&rank(&b.domain))
+            .then(a.domain.cmp(&b.domain))
+    });
     rows
 }
 
@@ -319,7 +335,8 @@ mod tests {
     use crate::outcome::OutcomeSignals;
 
     fn dir(tag: &str) -> PathBuf {
-        let d = std::env::temp_dir().join(format!("grokhub-run-metrics-{tag}-{}", std::process::id()));
+        let d =
+            std::env::temp_dir().join(format!("grokhub-run-metrics-{tag}-{}", std::process::id()));
         let _ = fs::remove_dir_all(&d);
         fs::create_dir_all(&d).unwrap();
         d
@@ -330,13 +347,15 @@ mod tests {
             verify_ok: true,
             ..Default::default()
         };
-        let o = TaskOutcome::finished(task, "skill:weekly-report", &sig, finished_at).with_tokens(OutcomeTokens {
-            input: 1_200,
-            cached: 300,
-            out: 250,
-            reasoning: 40,
-            cost_ticks: 25_000_000,
-        });
+        let o = TaskOutcome::finished(task, "skill:weekly-report", &sig, finished_at).with_tokens(
+            OutcomeTokens {
+                input: 1_200,
+                cached: 300,
+                out: 250,
+                reasoning: 40,
+                cost_ticks: 25_000_000,
+            },
+        );
         let mut m = RunMetrics::from_outcome(&o).with_model("grok-4-fast");
         m.steps = 4;
         m.wall_ms = 9_500;
@@ -387,11 +406,22 @@ mod tests {
         let runs = read_runs(&d);
         assert_eq!(runs.len(), 2);
         assert_eq!(
-            (runs[0].run.as_str(), runs[0].result, runs[0].corrections, runs[0].undos, runs[0].at),
+            (
+                runs[0].run.as_str(),
+                runs[0].result,
+                runs[0].corrections,
+                runs[0].undos,
+                runs[0].at
+            ),
             ("chat-a:3", OutcomeResult::Failure, 1, 1, now + 20)
         );
         assert_eq!(
-            (runs[1].run.as_str(), runs[1].result, runs[1].corrections, runs[1].undos),
+            (
+                runs[1].run.as_str(),
+                runs[1].result,
+                runs[1].corrections,
+                runs[1].undos
+            ),
             ("chat-a:4", OutcomeResult::Success, 0, 0)
         );
         let _ = fs::remove_dir_all(&d);
@@ -448,15 +478,27 @@ mod tests {
         // A line from before Brain 6 has no `brain` and reads with it empty.
         let old = r#"{"run":"chat-a:1","class":"skill:weekly-report","result":"success","verified":true,"steps":3,"wall_ms":10,"tokens":{"in":1,"out":2},"cost_usd":0.0,"finished_at":5,"at":5}"#;
         let parsed: RunMetrics = serde_json::from_str(old).unwrap();
-        assert_eq!((parsed.run.as_str(), parsed.steps, parsed.brain.clone()), ("chat-a:1", 3, RunBrain::default()));
-        let again: serde_json::Value = serde_json::from_str(&serde_json::to_string(&parsed).unwrap()).unwrap();
-        assert!(again.get("brain").is_none(), "an empty brain is not written");
+        assert_eq!(
+            (parsed.run.as_str(), parsed.steps, parsed.brain.clone()),
+            ("chat-a:1", 3, RunBrain::default())
+        );
+        let again: serde_json::Value =
+            serde_json::from_str(&serde_json::to_string(&parsed).unwrap()).unwrap();
+        assert!(
+            again.get("brain").is_none(),
+            "an empty brain is not written"
+        );
         let _ = fs::remove_dir_all(&d);
     }
 
     #[test]
     fn an_unverified_run_with_no_calls_costs_nothing() {
-        let o = TaskOutcome::finished("chat-b:1", "topic:open notes", &OutcomeSignals::default(), 7);
+        let o = TaskOutcome::finished(
+            "chat-b:1",
+            "topic:open notes",
+            &OutcomeSignals::default(),
+            7,
+        );
         let m = RunMetrics::from_outcome(&o);
         assert_eq!(
             (m.result, m.verified, m.cost_usd, m.model.as_str(), m.at),
@@ -468,10 +510,17 @@ mod tests {
     fn domain_rows_count_runs_success_steps_and_checks_per_domain_and_skip_old_lines() {
         let line = |run: &str, domain: &str, ok: bool, steps: u32, verified: bool| RunMetrics {
             run: run.into(),
-            result: if ok { OutcomeResult::Success } else { OutcomeResult::Failure },
+            result: if ok {
+                OutcomeResult::Success
+            } else {
+                OutcomeResult::Failure
+            },
             steps,
             verified,
-            brain: RunBrain { domain: domain.into(), ..Default::default() },
+            brain: RunBrain {
+                domain: domain.into(),
+                ..Default::default()
+            },
             ..Default::default()
         };
         let runs = vec![
@@ -489,8 +538,20 @@ mod tests {
         assert_eq!(
             rows,
             vec![
-                DomainRow { domain: "system".into(), runs: 4, worked: 3, steps: 26, verified: 2 },
-                DomainRow { domain: "web".into(), runs: 3, worked: 2, steps: 9, verified: 1 },
+                DomainRow {
+                    domain: "system".into(),
+                    runs: 4,
+                    worked: 3,
+                    steps: 26,
+                    verified: 2
+                },
+                DomainRow {
+                    domain: "web".into(),
+                    runs: 3,
+                    worked: 2,
+                    steps: 9,
+                    verified: 1
+                },
             ]
         );
         let lines: Vec<String> = rows.iter().map(DomainRow::line).collect();
@@ -501,6 +562,9 @@ mod tests {
                 "web · 3 runs · 67% worked · 3.0 steps · 33% checked",
             ]
         );
-        assert!(domain_rows(&runs[7..]).is_empty(), "old lines alone give no rows");
+        assert!(
+            domain_rows(&runs[7..]).is_empty(),
+            "old lines alone give no rows"
+        );
     }
 }

@@ -44,7 +44,12 @@ pub struct Finding {
 }
 
 impl Finding {
-    fn new(probe: ProbeId, severity: Severity, plain: impl Into<String>, detail: impl Into<String>) -> Self {
+    fn new(
+        probe: ProbeId,
+        severity: Severity,
+        plain: impl Into<String>,
+        detail: impl Into<String>,
+    ) -> Self {
         Self {
             severity,
             plain: plain.into(),
@@ -122,7 +127,9 @@ fn disk_finding(probe: ProbeId, place: &str, pct: u64, line: &str) -> Option<Fin
 
 /// `df -P -k`: Filesystem, 1024-blocks, Used, Available, Capacity, Mounted on.
 fn disk_usage(out: &ProbeOutput) -> Vec<Finding> {
-    const SKIP_FS: &[&str] = &["tmpfs", "devtmpfs", "overlay", "squashfs", "efivarfs", "udev", "none"];
+    const SKIP_FS: &[&str] = &[
+        "tmpfs", "devtmpfs", "overlay", "squashfs", "efivarfs", "udev", "none",
+    ];
     const SKIP_MOUNT: &[&str] = &["/snap", "/run", "/dev", "/sys", "/proc"];
     let mut found = Vec::new();
     let mut seen = 0;
@@ -132,7 +139,11 @@ fn disk_usage(out: &ProbeOutput) -> Vec<Finding> {
             continue;
         }
         let mount = cols[5..].join(" ");
-        if SKIP_FS.contains(&cols[0]) || SKIP_MOUNT.iter().any(|m| mount == *m || mount.starts_with(&format!("{m}/"))) {
+        if SKIP_FS.contains(&cols[0])
+            || SKIP_MOUNT
+                .iter()
+                .any(|m| mount == *m || mount.starts_with(&format!("{m}/")))
+        {
             continue;
         }
         let (Ok(used), Ok(avail)) = (cols[2].parse::<u64>(), cols[3].parse::<u64>()) else {
@@ -142,12 +153,24 @@ fn disk_usage(out: &ProbeOutput) -> Vec<Finding> {
             continue;
         }
         seen += 1;
-        let pct = cols[4].trim_end_matches('%').parse::<u64>().unwrap_or(used * 100 / (used + avail));
-        let place = if mount == "/" { "Your main disk".to_string() } else { format!("The disk at {mount}") };
+        let pct = cols[4]
+            .trim_end_matches('%')
+            .parse::<u64>()
+            .unwrap_or(used * 100 / (used + avail));
+        let place = if mount == "/" {
+            "Your main disk".to_string()
+        } else {
+            format!("The disk at {mount}")
+        };
         found.extend(disk_finding(ProbeId::DiskUsage, &place, pct, line.trim()));
     }
     if found.is_empty() && seen > 0 {
-        found.push(Finding::new(ProbeId::DiskUsage, Severity::Ok, "Your disks have enough free space.", ""));
+        found.push(Finding::new(
+            ProbeId::DiskUsage,
+            Severity::Ok,
+            "Your disks have enough free space.",
+            "",
+        ));
     }
     found
 }
@@ -161,7 +184,8 @@ fn volumes(out: &ProbeOutput) -> Vec<Finding> {
         if cols.len() < 4 || cols[0].trim().is_empty() {
             continue;
         }
-        let (Ok(size), Ok(free)) = (cols[2].trim().parse::<u64>(), cols[3].trim().parse::<u64>()) else {
+        let (Ok(size), Ok(free)) = (cols[2].trim().parse::<u64>(), cols[3].trim().parse::<u64>())
+        else {
             continue;
         };
         if size == 0 {
@@ -173,7 +197,12 @@ fn volumes(out: &ProbeOutput) -> Vec<Finding> {
         found.extend(disk_finding(ProbeId::Volumes, &place, pct, line.trim()));
     }
     if found.is_empty() && seen > 0 {
-        found.push(Finding::new(ProbeId::Volumes, Severity::Ok, "Your drives have enough free space.", ""));
+        found.push(Finding::new(
+            ProbeId::Volumes,
+            Severity::Ok,
+            "Your drives have enough free space.",
+            "",
+        ));
     }
     found
 }
@@ -183,7 +212,11 @@ fn memory(out: &ProbeOutput) -> Vec<Finding> {
     let Some(line) = out.stdout.lines().find(|l| l.starts_with("Mem:")) else {
         return Vec::new();
     };
-    let cols: Vec<u64> = line.split_whitespace().skip(1).filter_map(|c| c.parse().ok()).collect();
+    let cols: Vec<u64> = line
+        .split_whitespace()
+        .skip(1)
+        .filter_map(|c| c.parse().ok())
+        .collect();
     let (Some(&total), Some(&avail)) = (cols.first(), cols.last()) else {
         return Vec::new();
     };
@@ -199,7 +232,12 @@ fn memory(out: &ProbeOutput) -> Vec<Finding> {
             line.trim(),
         )
     } else {
-        Finding::new(ProbeId::Memory, Severity::Ok, format!("Memory is fine ({pct}% free)."), "")
+        Finding::new(
+            ProbeId::Memory,
+            Severity::Ok,
+            format!("Memory is fine ({pct}% free)."),
+            "",
+        )
     };
     vec![finding]
 }
@@ -233,7 +271,11 @@ fn stopped_auto(out: &ProbeOutput) -> Vec<Finding> {
         .filter_map(|l| {
             let mut cols = l.split('\t');
             let name = cols.next()?.trim();
-            let display = cols.next().map(str::trim).filter(|d| !d.is_empty()).unwrap_or(name);
+            let display = cols
+                .next()
+                .map(str::trim)
+                .filter(|d| !d.is_empty())
+                .unwrap_or(name);
             (!name.is_empty()).then(|| display.to_string())
         })
         .collect();
@@ -247,12 +289,25 @@ fn stopped_auto(out: &ProbeOutput) -> Vec<Finding> {
 }
 
 /// `one` and `many` are templates: `{names}` is the list, `{n}` the count.
-fn services_finding(probe: ProbeId, list: &[String], one: &str, many: &str, detail: &str) -> Vec<Finding> {
+fn services_finding(
+    probe: ProbeId,
+    list: &[String],
+    one: &str,
+    many: &str,
+    detail: &str,
+) -> Vec<Finding> {
     if list.is_empty() {
-        return vec![Finding::new(probe, Severity::Ok, "All background services are running.", "")];
+        return vec![Finding::new(
+            probe,
+            Severity::Ok,
+            "All background services are running.",
+            "",
+        )];
     }
     let tpl = if list.len() == 1 { one } else { many };
-    let plain = tpl.replace("{n}", &list.len().to_string()).replace("{names}", &names(list));
+    let plain = tpl
+        .replace("{n}", &list.len().to_string())
+        .replace("{names}", &names(list));
     vec![Finding::new(probe, Severity::Warning, plain, detail)]
 }
 
@@ -264,10 +319,16 @@ fn log_errors(probe: ProbeId, out: &ProbeOutput) -> Vec<Finding> {
         .map(str::trim)
         .filter(|l| !l.is_empty() && !l.starts_with("-- No entries --") && !l.starts_with("Hint:"))
         .collect();
-    let when = if probe == ProbeId::BootErrors { "since you last started the computer" } else { "in the last day" };
+    let when = if probe == ProbeId::BootErrors {
+        "since you last started the computer"
+    } else {
+        "in the last day"
+    };
     let mut found = Vec::new();
     let combined = format!("{}\n{}", out.stdout, out.stderr).to_ascii_lowercase();
-    if combined.contains("insufficient permissions") || combined.contains("not seeing messages from other users") {
+    if combined.contains("insufficient permissions")
+        || combined.contains("not seeing messages from other users")
+    {
         found.push(Finding::new(
             probe,
             Severity::Info,
@@ -277,15 +338,27 @@ fn log_errors(probe: ProbeId, out: &ProbeOutput) -> Vec<Finding> {
     }
     if lines.is_empty() {
         if out.code == Some(0) {
-            found.push(Finding::new(probe, Severity::Ok, format!("No errors were logged {when}."), ""));
+            found.push(Finding::new(
+                probe,
+                Severity::Ok,
+                format!("No errors were logged {when}."),
+                "",
+            ));
         }
         return found;
     }
-    let severity = if lines.len() >= LOG_WARN_LINES { Severity::Warning } else { Severity::Info };
+    let severity = if lines.len() >= LOG_WARN_LINES {
+        Severity::Warning
+    } else {
+        Severity::Info
+    };
     found.push(Finding::new(
         probe,
         severity,
-        format!("{} logged {when}. Most are harmless, but they can point to what broke.", plural(lines.len(), "error was", "errors were")),
+        format!(
+            "{} logged {when}. Most are harmless, but they can point to what broke.",
+            plural(lines.len(), "error was", "errors were")
+        ),
         lines.join("\n"),
     ));
     found
@@ -293,30 +366,56 @@ fn log_errors(probe: ProbeId, out: &ProbeOutput) -> Vec<Finding> {
 
 /// `ip -brief address`: name, state, addresses.
 fn network_links(out: &ProbeOutput) -> Vec<Finding> {
-    const VIRTUAL: &[&str] = &["lo", "docker", "veth", "br-", "virbr", "vmnet", "vboxnet", "tailscale", "zt"];
+    const VIRTUAL: &[&str] = &[
+        "lo",
+        "docker",
+        "veth",
+        "br-",
+        "virbr",
+        "vmnet",
+        "vboxnet",
+        "tailscale",
+        "zt",
+    ];
     let mut up_with_addr = Vec::new();
     let mut up_no_addr = Vec::new();
     for line in out.stdout.lines() {
         let cols: Vec<&str> = line.split_whitespace().collect();
         let Some(name) = cols.first() else { continue };
         let name = name.split('@').next().unwrap_or(name);
-        if VIRTUAL.iter().any(|v| name == *v || (v.len() > 2 && name.starts_with(v))) {
+        if VIRTUAL
+            .iter()
+            .any(|v| name == *v || (v.len() > 2 && name.starts_with(v)))
+        {
             continue;
         }
         let state = cols.get(1).copied().unwrap_or("");
-        let addrs = cols.iter().skip(2).filter(|a| !a.starts_with("fe80:")).count();
+        let addrs = cols
+            .iter()
+            .skip(2)
+            .filter(|a| !a.starts_with("fe80:"))
+            .count();
         if state == "UP" && addrs > 0 {
             up_with_addr.push(name.to_string());
         } else if state == "UP" {
             up_no_addr.push(name.to_string());
         }
     }
-    let kind = |n: &str| if n.starts_with("wl") { "Wi-Fi" } else { "a cable" };
+    let kind = |n: &str| {
+        if n.starts_with("wl") {
+            "Wi-Fi"
+        } else {
+            "a cable"
+        }
+    };
     if let Some(name) = up_with_addr.first() {
         return vec![Finding::new(
             ProbeId::NetworkLinks,
             Severity::Ok,
-            format!("You're connected to a network over {} ({name}).", kind(name)),
+            format!(
+                "You're connected to a network over {} ({name}).",
+                kind(name)
+            ),
             "",
         )];
     }
@@ -341,16 +440,28 @@ const DNS_BROKEN: &str = "Your computer can't look up website names (DNS), so we
 /// `getent hosts example.com`: an address line on success, nothing and exit 2 on failure.
 fn dns(out: &ProbeOutput) -> Vec<Finding> {
     if out.code == Some(0) && !out.stdout.trim().is_empty() {
-        vec![Finding::new(ProbeId::Dns, Severity::Ok, "Looking up website names works.", "")]
+        vec![Finding::new(
+            ProbeId::Dns,
+            Severity::Ok,
+            "Looking up website names works.",
+            "",
+        )]
     } else {
-        vec![Finding::new(ProbeId::Dns, Severity::Warning, DNS_BROKEN, out.stdout.trim())]
+        vec![Finding::new(
+            ProbeId::Dns,
+            Severity::Warning,
+            DNS_BROKEN,
+            out.stdout.trim(),
+        )]
     }
 }
 
 /// Tab line: internet reachable, name lookup worked.
 fn net_test(out: &ProbeOutput) -> Vec<Finding> {
     let line = out.stdout.lines().find(|l| l.contains('\t')).unwrap_or("");
-    let mut cols = line.split('\t').map(|c| c.trim().eq_ignore_ascii_case("true"));
+    let mut cols = line
+        .split('\t')
+        .map(|c| c.trim().eq_ignore_ascii_case("true"));
     let (online, dns_ok) = (cols.next().unwrap_or(false), cols.next().unwrap_or(false));
     let (severity, plain) = match (online, dns_ok) {
         (true, true) => (Severity::Ok, "Your internet connection works."),
@@ -373,17 +484,39 @@ fn package_health(out: &ProbeOutput) -> Vec<Finding> {
     if failed_silently(out) {
         return Vec::new();
     }
-    let lines: Vec<&str> = out.stdout.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
+    let lines: Vec<&str> = out
+        .stdout
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .collect();
     if lines.is_empty() {
-        return vec![Finding::new(ProbeId::PackageHealth, Severity::Ok, "Your installed packages look healthy.", "")];
+        return vec![Finding::new(
+            ProbeId::PackageHealth,
+            Severity::Ok,
+            "Your installed packages look healthy.",
+            "",
+        )];
     }
     let plain = if out.program == "pacman" {
-        let pkgs: std::collections::BTreeSet<&str> = lines.iter().filter_map(|l| l.split_whitespace().next()).collect();
-        format!("{} missing files, which can make apps crash or updates fail.", plural(pkgs.len(), "installed package is", "installed packages are"))
+        let pkgs: std::collections::BTreeSet<&str> = lines
+            .iter()
+            .filter_map(|l| l.split_whitespace().next())
+            .collect();
+        format!(
+            "{} missing files, which can make apps crash or updates fail.",
+            plural(pkgs.len(), "installed package is", "installed packages are")
+        )
     } else {
-        "Some packages are half-installed or broken, which can stop updates from installing.".to_string()
+        "Some packages are half-installed or broken, which can stop updates from installing."
+            .to_string()
     };
-    vec![Finding::new(ProbeId::PackageHealth, Severity::Warning, plain, lines.join("\n"))]
+    vec![Finding::new(
+        ProbeId::PackageHealth,
+        Severity::Warning,
+        plain,
+        lines.join("\n"),
+    )]
 }
 
 /// Pending updates from the package lists already on disk.
@@ -394,23 +527,35 @@ fn pending_updates(out: &ProbeOutput) -> Vec<Finding> {
     let lines = out.stdout.lines().map(str::trim).filter(|l| !l.is_empty());
     let n = match out.program.as_str() {
         "apt" => lines.filter(|l| l.contains("[upgradable from:")).count(),
-        "pacman" => lines.filter(|l| l.contains(" -> ") || l.split_whitespace().count() == 2).count(),
+        "pacman" => lines
+            .filter(|l| l.contains(" -> ") || l.split_whitespace().count() == 2)
+            .count(),
         "zypper" => lines.filter(|l| l.starts_with("v ")).count(),
         // dnf check-update: `name.arch  version  repo` rows.
-        _ => lines.filter(|l| l.split_whitespace().count() == 3 && l.contains('.')).count(),
+        _ => lines
+            .filter(|l| l.split_whitespace().count() == 3 && l.contains('.'))
+            .count(),
     };
     updates_finding(ProbeId::PendingUpdates, n, "updates are", out.stdout.trim())
 }
 
 fn updates_finding(probe: ProbeId, n: usize, many: &str, detail: &str) -> Vec<Finding> {
     if n == 0 {
-        return vec![Finding::new(probe, Severity::Ok, "Your apps are up to date, as of the last update check.", "")];
+        return vec![Finding::new(
+            probe,
+            Severity::Ok,
+            "Your apps are up to date, as of the last update check.",
+            "",
+        )];
     }
     let one = many.replace("updates are", "update is");
     vec![Finding::new(
         probe,
         Severity::Info,
-        format!("{} waiting to install. Installing them often fixes bugs.", plural(n, &one, many)),
+        format!(
+            "{} waiting to install. Installing them often fixes bugs.",
+            plural(n, &one, many)
+        ),
         detail,
     )]
 }
@@ -423,10 +568,16 @@ fn winget_upgrades(out: &ProbeOutput) -> Vec<Finding> {
         .find_map(|l| {
             let l = l.trim();
             let (num, rest) = l.split_once(' ')?;
-            (rest.starts_with("upgrade") && rest.contains("available")).then(|| num.parse::<usize>().ok())?
+            (rest.starts_with("upgrade") && rest.contains("available"))
+                .then(|| num.parse::<usize>().ok())?
         })
         .unwrap_or(0);
-    updates_finding(ProbeId::WingetUpgrades, n, "app updates are", out.stdout.trim())
+    updates_finding(
+        ProbeId::WingetUpgrades,
+        n,
+        "app updates are",
+        out.stdout.trim(),
+    )
 }
 
 /// Tab line: reboot pending, number of updates waiting.
@@ -437,7 +588,10 @@ fn wu_pending(out: &ProbeOutput) -> Vec<Finding> {
     };
     let mut cols = line.split('\t').map(str::trim);
     let reboot = cols.next().is_some_and(|c| c.eq_ignore_ascii_case("true"));
-    let count = cols.next().and_then(|c| c.parse::<usize>().ok()).unwrap_or(0);
+    let count = cols
+        .next()
+        .and_then(|c| c.parse::<usize>().ok())
+        .unwrap_or(0);
     let mut found = Vec::new();
     if reboot {
         found.push(Finding::new(
@@ -448,9 +602,19 @@ fn wu_pending(out: &ProbeOutput) -> Vec<Finding> {
         ));
     }
     if count > 0 {
-        found.extend(updates_finding(ProbeId::WuPending, count, "Windows updates are", line.trim()));
+        found.extend(updates_finding(
+            ProbeId::WuPending,
+            count,
+            "Windows updates are",
+            line.trim(),
+        ));
     } else if !reboot {
-        found.push(Finding::new(ProbeId::WuPending, Severity::Ok, "Windows is up to date.", ""));
+        found.push(Finding::new(
+            ProbeId::WuPending,
+            Severity::Ok,
+            "Windows is up to date.",
+            "",
+        ));
     }
     found
 }
@@ -469,7 +633,10 @@ mod tests {
     }
 
     fn plains(probe: ProbeId, o: &ProbeOutput) -> Vec<(Severity, String)> {
-        interpret(probe, o).into_iter().map(|f| (f.severity, f.plain)).collect()
+        interpret(probe, o)
+            .into_iter()
+            .map(|f| (f.severity, f.plain))
+            .collect()
     }
 
     const DF: &str = "Filesystem     1024-blocks      Used Available Capacity Mounted on
@@ -489,12 +656,17 @@ tmpfs              8000000   7900000    100000      99% /run
             ]
         );
         let roomy = "Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/sda1 1000 500 500 50% /\n";
-        assert_eq!(plains(ProbeId::DiskUsage, &out("df", 0, roomy)), vec![(Severity::Ok, "Your disks have enough free space.".into())]);
+        assert_eq!(
+            plains(ProbeId::DiskUsage, &out("df", 0, roomy)),
+            vec![(Severity::Ok, "Your disks have enough free space.".into())]
+        );
     }
 
     #[test]
     fn disk_thresholds_sit_at_ninety_and_ninety_seven() {
-        let at = |pct: u64| disk_finding(ProbeId::DiskUsage, "Your main disk", pct, "").map(|f| f.severity);
+        let at = |pct: u64| {
+            disk_finding(ProbeId::DiskUsage, "Your main disk", pct, "").map(|f| f.severity)
+        };
         assert_eq!(at(89), None);
         assert_eq!(at(90), Some(Severity::Warning));
         assert_eq!(at(96), Some(Severity::Warning));
@@ -521,7 +693,10 @@ Swap:     2000000000  1900000000   100000000
             vec![(Severity::Warning, "Your computer is low on memory (only 6% free), which can make it slow. Closing a few apps or browser tabs will help.".into())]
         );
         let fine = "Mem: 16000000000 4000000000 8000000000 100000000 4000000000 11000000000\n";
-        assert_eq!(plains(ProbeId::Memory, &out("free", 0, fine)), vec![(Severity::Ok, "Memory is fine (68% free).".into())]);
+        assert_eq!(
+            plains(ProbeId::Memory, &out("free", 0, fine)),
+            vec![(Severity::Ok, "Memory is fine (68% free).".into())]
+        );
     }
 
     #[test]
@@ -529,7 +704,10 @@ Swap:     2000000000  1900000000   100000000
         let failed = "nginx.service loaded failed failed A high performance web server\ncups.service loaded failed failed CUPS Scheduler\n";
         assert_eq!(
             plains(ProbeId::FailedServices, &out("systemctl", 0, failed)),
-            vec![(Severity::Warning, "2 background services have stopped working: nginx, cups.".into())]
+            vec![(
+                Severity::Warning,
+                "2 background services have stopped working: nginx, cups.".into()
+            )]
         );
         assert_eq!(
             plains(ProbeId::FailedServices, &out("systemctl", 0, "")),
@@ -538,16 +716,25 @@ Swap:     2000000000  1900000000   100000000
         let stopped = "Spooler\tPrint Spooler\n";
         assert_eq!(
             plains(ProbeId::ServicesStoppedAuto, &out("powershell", 0, stopped)),
-            vec![(Severity::Warning, "A background service should start on its own but isn't running: Print Spooler.".into())]
+            vec![(
+                Severity::Warning,
+                "A background service should start on its own but isn't running: Print Spooler."
+                    .into()
+            )]
         );
     }
 
     #[test]
     fn a_probe_that_fails_with_no_output_says_nothing() {
         let mut no_systemd = out("systemctl", 1, "");
-        no_systemd.stderr = "System has not been booted with systemd as init system (PID 1). Can't operate.\n".into();
+        no_systemd.stderr =
+            "System has not been booted with systemd as init system (PID 1). Can't operate.\n"
+                .into();
         assert_eq!(plains(ProbeId::FailedServices, &no_systemd), vec![]);
-        assert_eq!(plains(ProbeId::BootErrors, &out("journalctl", 1, "")), vec![]);
+        assert_eq!(
+            plains(ProbeId::BootErrors, &out("journalctl", 1, "")),
+            vec![]
+        );
     }
 
     #[test]
@@ -558,7 +745,8 @@ Swap:     2000000000  1900000000   100000000
             vec![(Severity::Info, "2 errors were logged since you last started the computer. Most are harmless, but they can point to what broke.".into())]
         );
         let mut perms = out("journalctl", 0, "-- No entries --\n");
-        perms.stderr = "Hint: You are currently not seeing messages from other users and the system.\n".into();
+        perms.stderr =
+            "Hint: You are currently not seeing messages from other users and the system.\n".into();
         assert_eq!(
             plains(ProbeId::BootErrors, &perms),
             vec![
@@ -566,7 +754,14 @@ Swap:     2000000000  1900000000   100000000
                 (Severity::Ok, "No errors were logged since you last started the computer.".into()),
             ]
         );
-        let events: String = (0..12).map(|i| format!("2026-10-07T0{}:00:00\tDisk\tThe device has a bad block.\n", i % 10)).collect();
+        let events: String = (0..12)
+            .map(|i| {
+                format!(
+                    "2026-10-07T0{}:00:00\tDisk\tThe device has a bad block.\n",
+                    i % 10
+                )
+            })
+            .collect();
         assert_eq!(
             plains(ProbeId::EventErrors24h, &out("powershell", 0, &events)),
             vec![(Severity::Warning, "12 errors were logged in the last day. Most are harmless, but they can point to what broke.".into())]
@@ -578,7 +773,10 @@ Swap:     2000000000  1900000000   100000000
         let wifi = "lo               UNKNOWN        127.0.0.1/8 ::1/128\nwlp2s0           UP             192.168.1.23/24 fe80::1/64\ndocker0          DOWN           172.17.0.1/16\n";
         assert_eq!(
             plains(ProbeId::NetworkLinks, &out("ip", 0, wifi)),
-            vec![(Severity::Ok, "You're connected to a network over Wi-Fi (wlp2s0).".into())]
+            vec![(
+                Severity::Ok,
+                "You're connected to a network over Wi-Fi (wlp2s0).".into()
+            )]
         );
         let no_addr = "lo UNKNOWN 127.0.0.1/8\nwlp2s0 UP fe80::1/64\n";
         assert_eq!(
@@ -590,16 +788,25 @@ Swap:     2000000000  1900000000   100000000
             plains(ProbeId::NetworkLinks, &out("ip", 0, down)),
             vec![(Severity::Warning, "You're not connected to any network. Wi-Fi may be off, or the cable may be unplugged.".into())]
         );
-        assert_eq!(plains(ProbeId::Dns, &out("getent", 2, "")), vec![(Severity::Warning, DNS_BROKEN.into())]);
         assert_eq!(
-            plains(ProbeId::Dns, &out("getent", 0, "93.184.215.14   example.com\n")),
+            plains(ProbeId::Dns, &out("getent", 2, "")),
+            vec![(Severity::Warning, DNS_BROKEN.into())]
+        );
+        assert_eq!(
+            plains(
+                ProbeId::Dns,
+                &out("getent", 0, "93.184.215.14   example.com\n")
+            ),
             vec![(Severity::Ok, "Looking up website names works.".into())]
         );
         assert_eq!(
             plains(ProbeId::NetTest, &out("powershell", 0, "False\tTrue\n")),
             vec![(Severity::Warning, "Your computer can look up website names but can't reach the internet. The router or the provider may be down.".into())]
         );
-        assert_eq!(plains(ProbeId::NetTest, &out("powershell", 0, "True\tTrue\n")), vec![(Severity::Ok, "Your internet connection works.".into())]);
+        assert_eq!(
+            plains(ProbeId::NetTest, &out("powershell", 0, "True\tTrue\n")),
+            vec![(Severity::Ok, "Your internet connection works.".into())]
+        );
     }
 
     #[test]
@@ -621,20 +828,35 @@ Swap:     2000000000  1900000000   100000000
         let apt = "Listing...\nfirefox/jammy-updates 131.0 amd64 [upgradable from: 130.0]\nlibc6/jammy-updates 2.35-0ubuntu3.9 amd64 [upgradable from: 2.35-0ubuntu3.8]\n";
         assert_eq!(
             plains(ProbeId::PendingUpdates, &out("apt", 0, apt)),
-            vec![(Severity::Info, "2 updates are waiting to install. Installing them often fixes bugs.".into())]
+            vec![(
+                Severity::Info,
+                "2 updates are waiting to install. Installing them often fixes bugs.".into()
+            )]
         );
         assert_eq!(
-            plains(ProbeId::PendingUpdates, &out("pacman", 0, "linux 6.11.1-1 -> 6.11.2-1\n")),
-            vec![(Severity::Info, "1 update is waiting to install. Installing them often fixes bugs.".into())]
+            plains(
+                ProbeId::PendingUpdates,
+                &out("pacman", 0, "linux 6.11.1-1 -> 6.11.2-1\n")
+            ),
+            vec![(
+                Severity::Info,
+                "1 update is waiting to install. Installing them often fixes bugs.".into()
+            )]
         );
         let dnf = "\nfirefox.x86_64   131.0-1.fc40   updates\nkernel.x86_64   6.11.2-300.fc40   updates\n";
         assert_eq!(
             plains(ProbeId::PendingUpdates, &out("dnf", 100, dnf)),
-            vec![(Severity::Info, "2 updates are waiting to install. Installing them often fixes bugs.".into())]
+            vec![(
+                Severity::Info,
+                "2 updates are waiting to install. Installing them often fixes bugs.".into()
+            )]
         );
         assert_eq!(
             plains(ProbeId::PendingUpdates, &out("apt", 0, "Listing...\n")),
-            vec![(Severity::Ok, "Your apps are up to date, as of the last update check.".into())]
+            vec![(
+                Severity::Ok,
+                "Your apps are up to date, as of the last update check.".into()
+            )]
         );
     }
 
@@ -643,20 +865,43 @@ Swap:     2000000000  1900000000   100000000
         let winget = "Name      Id               Version  Available Source\n------------------------------------------------\nFirefox   Mozilla.Firefox  130.0    131.0     winget\nGit       Git.Git          2.45     2.46      winget\n2 upgrades available.\n";
         assert_eq!(
             plains(ProbeId::WingetUpgrades, &out("winget", 0, winget)),
-            vec![(Severity::Info, "2 app updates are waiting to install. Installing them often fixes bugs.".into())]
+            vec![(
+                Severity::Info,
+                "2 app updates are waiting to install. Installing them often fixes bugs.".into()
+            )]
         );
         assert_eq!(
-            plains(ProbeId::WingetUpgrades, &out("winget", 0, "No installed package found matching input criteria.\n")),
-            vec![(Severity::Ok, "Your apps are up to date, as of the last update check.".into())]
+            plains(
+                ProbeId::WingetUpgrades,
+                &out(
+                    "winget",
+                    0,
+                    "No installed package found matching input criteria.\n"
+                )
+            ),
+            vec![(
+                Severity::Ok,
+                "Your apps are up to date, as of the last update check.".into()
+            )]
         );
         assert_eq!(
             plains(ProbeId::WuPending, &out("powershell", 0, "True\t3\n")),
             vec![
-                (Severity::Warning, "Windows needs a restart to finish installing updates.".into()),
-                (Severity::Info, "3 Windows updates are waiting to install. Installing them often fixes bugs.".into()),
+                (
+                    Severity::Warning,
+                    "Windows needs a restart to finish installing updates.".into()
+                ),
+                (
+                    Severity::Info,
+                    "3 Windows updates are waiting to install. Installing them often fixes bugs."
+                        .into()
+                ),
             ]
         );
-        assert_eq!(plains(ProbeId::WuPending, &out("powershell", 0, "False\t0\n")), vec![(Severity::Ok, "Windows is up to date.".into())]);
+        assert_eq!(
+            plains(ProbeId::WuPending, &out("powershell", 0, "False\t0\n")),
+            vec![(Severity::Ok, "Windows is up to date.".into())]
+        );
     }
 
     #[test]
@@ -667,15 +912,28 @@ Swap:     2000000000  1900000000   100000000
             stdout: String::new(),
             stderr: stderr.into(),
         };
-        let no_cache = failed("dnf", 1, "Error: Cache-only enabled but no cache for 'fedora'");
+        let no_cache = failed(
+            "dnf",
+            1,
+            "Error: Cache-only enabled but no cache for 'fedora'",
+        );
         assert_eq!(plains(ProbeId::PendingUpdates, &no_cache), vec![]);
-        assert_eq!(plains(ProbeId::PackageHealth, &failed("dpkg", 2, "dpkg: error: unable to access the dpkg database")), vec![]);
+        assert_eq!(
+            plains(
+                ProbeId::PackageHealth,
+                &failed("dpkg", 2, "dpkg: error: unable to access the dpkg database")
+            ),
+            vec![]
+        );
         let com = failed("powershell", 1, "Exception from HRESULT: 0x8024402C");
         assert_eq!(plains(ProbeId::WuPending, &com), vec![]);
         // pacman -Qu with nothing to update exits 1 and says nothing.
         assert_eq!(
             plains(ProbeId::PendingUpdates, &out("pacman", 1, "")),
-            vec![(Severity::Ok, "Your apps are up to date, as of the last update check.".into())]
+            vec![(
+                Severity::Ok,
+                "Your apps are up to date, as of the last update check.".into()
+            )]
         );
     }
 }

@@ -361,8 +361,16 @@ mod tests {
         std::fs::write(&cargo, "#!/bin/sh\necho cargo-stub \"$@\"\nexit 7\n").unwrap();
         std::fs::set_permissions(&cargo, std::fs::Permissions::from_mode(0o755)).unwrap();
         let git = |dir: &std::path::Path, args: &[&str]| {
-            let out = std::process::Command::new("git").args(args).current_dir(dir).output().unwrap();
-            assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+            let out = std::process::Command::new("git")
+                .args(args)
+                .current_dir(dir)
+                .output()
+                .unwrap();
+            assert!(
+                out.status.success(),
+                "git {args:?}: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
         };
         git(&base, &["init", "-q", "--bare", "-b", "main", "origin.git"]);
         git(&repo, &["init", "-q", "-b", "main"]);
@@ -371,14 +379,26 @@ mod tests {
         git(&repo, &["config", "commit.gpgsign", "false"]);
         git(&repo, &["add", "."]);
         git(&repo, &["commit", "-q", "-m", "seed"]);
-        git(&repo, &["remote", "add", "origin", &base.join("origin.git").display().to_string()]);
+        git(
+            &repo,
+            &[
+                "remote",
+                "add",
+                "origin",
+                &base.join("origin.git").display().to_string(),
+            ],
+        );
         git(&repo, &["push", "-q", "origin", "main", "main:beta"]);
         (base, repo)
     }
 
     #[cfg(unix)]
     fn run_switch_to_beta(base: &std::path::Path, repo: &std::path::Path) -> std::process::Output {
-        let path = format!("{}:{}", base.join("bin").display(), std::env::var("PATH").unwrap_or_default());
+        let path = format!(
+            "{}:{}",
+            base.join("bin").display(),
+            std::env::var("PATH").unwrap_or_default()
+        );
         std::process::Command::new("bash")
             .arg(repo.join("scripts/install.sh"))
             .args(["--user", "--channel", "beta"])
@@ -391,7 +411,11 @@ mod tests {
 
     #[cfg(unix)]
     fn git_stdout(dir: &std::path::Path, args: &[&str]) -> String {
-        let out = std::process::Command::new("git").args(args).current_dir(dir).output().unwrap();
+        let out = std::process::Command::new("git")
+            .args(args)
+            .current_dir(dir)
+            .output()
+            .unwrap();
         String::from_utf8_lossy(&out.stdout).trim().to_string()
     }
 
@@ -401,20 +425,40 @@ mod tests {
     #[test]
     fn install_sh_stashes_a_lone_cargo_lock_change_and_switches() {
         let (base, repo) = switch_fixture("lock-only");
-        std::fs::write(repo.join("Cargo.lock"), "version = 4\n# rewritten by cargo\n").unwrap();
+        std::fs::write(
+            repo.join("Cargo.lock"),
+            "version = 4\n# rewritten by cargo\n",
+        )
+        .unwrap();
         let out = run_switch_to_beta(&base, &repo);
         let stdout = String::from_utf8_lossy(&out.stdout).to_string();
         let lines: Vec<&str> = stdout.lines().collect();
-        assert_eq!(out.status.code(), Some(7), "stopped at the cargo stub: {stdout}");
+        assert_eq!(
+            out.status.code(),
+            Some(7),
+            "stopped at the cargo stub: {stdout}"
+        );
         let sha = git_stdout(&repo, &["rev-parse", "--short=7", "HEAD"]);
         assert!(
             lines.contains(&"set aside a tool-made Cargo.lock change (git stash list: grokhub install.sh: Cargo.lock set aside before --channel beta)"),
             "{stdout}"
         );
-        assert!(lines.contains(&format!("channel beta: {sha} on beta").as_str()), "{stdout}");
-        assert!(lines.contains(&"cargo-stub build --release --locked -p grokhub-app -p grokhub-hub"), "{stdout}");
-        assert_eq!(git_stdout(&repo, &["symbolic-ref", "--short", "HEAD"]), "beta");
-        assert_eq!(git_stdout(&repo, &["status", "--porcelain", "--untracked-files=no"]), "");
+        assert!(
+            lines.contains(&format!("channel beta: {sha} on beta").as_str()),
+            "{stdout}"
+        );
+        assert!(
+            lines.contains(&"cargo-stub build --release --locked -p grokhub-app -p grokhub-hub"),
+            "{stdout}"
+        );
+        assert_eq!(
+            git_stdout(&repo, &["symbolic-ref", "--short", "HEAD"]),
+            "beta"
+        );
+        assert_eq!(
+            git_stdout(&repo, &["status", "--porcelain", "--untracked-files=no"]),
+            ""
+        );
         assert_eq!(
             git_stdout(&repo, &["stash", "list", "--format=%gs"]),
             "On main: grokhub install.sh: Cargo.lock set aside before --channel beta"
@@ -433,7 +477,11 @@ mod tests {
     #[test]
     fn install_sh_refuses_a_real_edit_plus_cargo_lock_and_lists_both() {
         let (base, repo) = switch_fixture("lock-and-rs");
-        std::fs::write(repo.join("Cargo.lock"), "version = 4\n# rewritten by cargo\n").unwrap();
+        std::fs::write(
+            repo.join("Cargo.lock"),
+            "version = 4\n# rewritten by cargo\n",
+        )
+        .unwrap();
         std::fs::write(repo.join("src/lib.rs"), "pub fn a() { /* wip */ }\n").unwrap();
         let out = run_switch_to_beta(&base, &repo);
         assert_eq!(out.status.code(), Some(1));
@@ -445,7 +493,10 @@ mod tests {
                 repo.display()
             )
         );
-        assert_eq!(git_stdout(&repo, &["symbolic-ref", "--short", "HEAD"]), "main");
+        assert_eq!(
+            git_stdout(&repo, &["symbolic-ref", "--short", "HEAD"]),
+            "main"
+        );
         assert_eq!(git_stdout(&repo, &["stash", "list"]), "");
         assert_eq!(
             std::fs::read_to_string(repo.join("Cargo.lock")).unwrap(),
@@ -470,7 +521,11 @@ mod tests {
                 .current_dir(&repo)
                 .output()
                 .unwrap();
-            assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+            assert!(
+                out.status.success(),
+                "git {args:?}: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
         };
         git(&["fetch", "-q", "origin"]);
         git(&["checkout", "-q", "-B", "beta", "origin/beta"]);
@@ -480,14 +535,22 @@ mod tests {
         let local_beta = git_stdout(&repo, &["rev-parse", "beta"]);
         git(&["checkout", "-q", "main"]);
         let out = run_switch_to_beta(&base, &repo);
-        assert_eq!(out.status.code(), Some(1), "stdout={}", String::from_utf8_lossy(&out.stdout));
+        assert_eq!(
+            out.status.code(),
+            Some(1),
+            "stdout={}",
+            String::from_utf8_lossy(&out.stdout)
+        );
         let err = String::from_utf8_lossy(&out.stderr);
         assert!(
             err.contains("local beta has commits that are not on origin/beta"),
             "{err}"
         );
         assert_eq!(git_stdout(&repo, &["rev-parse", "beta"]), local_beta);
-        assert_eq!(git_stdout(&repo, &["symbolic-ref", "--short", "HEAD"]), "beta");
+        assert_eq!(
+            git_stdout(&repo, &["symbolic-ref", "--short", "HEAD"]),
+            "beta"
+        );
         let _ = std::fs::remove_dir_all(&base);
     }
 }
@@ -502,7 +565,6 @@ pub fn channel_status_line(channel: Channel, branch: &str, sha: &str) -> String 
         (branch, sha) => format!("{ch} · {branch} @ {sha}"),
     }
 }
-
 
 /// Tips of `origin/beta` and `origin/main` after a fetch: commit SHAs plus
 /// their tree hashes (`origin/<branch>^{tree}`).
@@ -519,8 +581,7 @@ pub struct ChannelTips {
 /// adds a merge commit, so after a promote the SHAs differ but the trees match.
 /// Empty, short (< 7) or non-hex values never count as caught up.
 pub fn beta_caught_up_to_main(tips: &ChannelTips) -> bool {
-    same_tip_sha(&tips.beta_sha, &tips.main_sha)
-        || same_tree(&tips.beta_tree, &tips.main_tree)
+    same_tip_sha(&tips.beta_sha, &tips.main_sha) || same_tree(&tips.beta_tree, &tips.main_tree)
 }
 
 /// Same commit: exact match, or one is a prefix of the other (short vs full SHA).
@@ -565,7 +626,11 @@ pub enum AutoOffStep {
 /// `beta_since` baseline, record main's tree and stay. With one, switch to
 /// stable only when beta caught up to main (same tree or tip) and main's tree
 /// is no longer the baseline. Pure — no I/O.
-pub fn auto_off_step(current: Channel, tips: &ChannelTips, beta_since: Option<&str>) -> AutoOffStep {
+pub fn auto_off_step(
+    current: Channel,
+    tips: &ChannelTips,
+    beta_since: Option<&str>,
+) -> AutoOffStep {
     if current != Channel::Beta {
         return AutoOffStep::Stay;
     }
@@ -573,7 +638,9 @@ pub fn auto_off_step(current: Channel, tips: &ChannelTips, beta_since: Option<&s
     if !valid_git_hash(&main_tree) {
         return AutoOffStep::Stay;
     }
-    let baseline = beta_since.map(normalize_git_sha).filter(|b| valid_git_hash(b));
+    let baseline = beta_since
+        .map(normalize_git_sha)
+        .filter(|b| valid_git_hash(b));
     match baseline {
         None => AutoOffStep::RecordBaseline(main_tree),
         Some(b) if b != main_tree && beta_caught_up_to_main(tips) => AutoOffStep::SwitchToStable,
@@ -632,9 +699,12 @@ fn specific_fail_hint(s: &str) -> Option<&'static str> {
         || s.contains("grokhub_src")
     {
         "GrokHub can't find its source folder (~/GrokHub or ~/.config/GrokHub/source)."
-    } else if s.contains("is on main but the beta channel") || s.contains("source clone is on main") {
+    } else if s.contains("is on main but the beta channel") || s.contains("source clone is on main")
+    {
         "Your GrokHub source folder is on stable, but Labs Beta is on. Turn Labs Beta off, or switch the folder to beta (git checkout beta)."
-    } else if s.contains("is on beta but the stable channel") || s.contains("source clone is on beta") {
+    } else if s.contains("is on beta but the stable channel")
+        || s.contains("source clone is on beta")
+    {
         "Your GrokHub source folder is on beta, but GrokHub is set to stable. Turn Labs Beta on, or switch the folder to stable (git checkout main)."
     } else if s.contains("build failed")
         || s.contains("cargo")
@@ -742,7 +812,8 @@ mod channel_switch_tests {
 
     #[test]
     fn update_and_switch_hints_name_the_real_cause() {
-        let dirty = "error: /src has uncommitted changes; commit or stash them before --channel stable";
+        let dirty =
+            "error: /src has uncommitted changes; commit or stash them before --channel stable";
         let pull_dirty = "error: Your local changes to the following files would be overwritten by merge:\n\tREADME.md";
         let rustc = "error: package `eframe v0.36.2` cannot be built because it requires rustc 1.88 or newer, while the currently active rustc version is 1.80.0";
         let on_main = "error: /src is on main but the beta channel builds beta; run with --channel stable to switch, or git checkout beta";
@@ -761,7 +832,10 @@ mod channel_switch_tests {
             assert_eq!(update_fail_hint(out), hint, "{out}");
             assert_eq!(channel_switch_fail_hint(out), hint, "{out}");
         }
-        assert_eq!(update_fail_hint("$ git pull\nexit 1 · 20ms\nfatal: unable to access"), "Update failed");
+        assert_eq!(
+            update_fail_hint("$ git pull\nexit 1 · 20ms\nfatal: unable to access"),
+            "Update failed"
+        );
         assert_eq!(
             channel_switch_fail_hint("fatal: unable to access"),
             "Channel switch failed — previous install kept."
@@ -773,8 +847,14 @@ mod channel_switch_tests {
         let sh = channel_switch_shell("/repo/GrokHub", Channel::Beta, "/home/box");
         assert!(sh.contains("--channel beta"), "{sh}");
         assert!(sh.contains("/repo/GrokHub/scripts/install.sh"), "{sh}");
-        assert!(sh.contains("/home/box/.local/share/grokhub/channel-bak"), "{sh}");
-        assert!(sh.contains("cp -f \"$bak/grokhub\" \"$bin/grokhub\""), "{sh}");
+        assert!(
+            sh.contains("/home/box/.local/share/grokhub/channel-bak"),
+            "{sh}"
+        );
+        assert!(
+            sh.contains("cp -f \"$bak/grokhub\" \"$bin/grokhub\""),
+            "{sh}"
+        );
         assert!(sh.contains("previous install kept"), "{sh}");
         let stable = channel_switch_shell("/repo", Channel::Stable, "/home/u");
         assert!(stable.contains("--channel stable"), "{stable}");
@@ -789,7 +869,10 @@ mod channel_switch_tests {
         );
         assert_eq!(
             channel_switch_preflight(false, None),
-            Err("GrokHub can't find its source folder (~/GrokHub or ~/.config/GrokHub/source).".into())
+            Err(
+                "GrokHub can't find its source folder (~/GrokHub or ~/.config/GrokHub/source)."
+                    .into()
+            )
         );
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         assert!(channel_switch_preflight(false, Some(&root)).is_ok());
@@ -800,7 +883,8 @@ mod channel_switch_tests {
         assert!(CHANNEL_WINDOWS_NOTE.starts_with(
             "On Windows, Beta installs the newest beta pre-release from GitHub, checked against its SHA256SUMS;"
         ));
-        assert!(CHANNEL_WINDOWS_NOTE.contains("building the beta channel from a source clone is Linux-only"));
+        assert!(CHANNEL_WINDOWS_NOTE
+            .contains("building the beta channel from a source clone is Linux-only"));
     }
 
     fn tips(beta_sha: &str, main_sha: &str, beta_tree: &str, main_tree: &str) -> ChannelTips {
@@ -830,7 +914,9 @@ mod channel_switch_tests {
     fn beta_caught_up_to_main_same_tree_different_sha() {
         // Squash promote + merge-commit sync (#507 / #508): SHAs differ, tree 47fd2b27 matches.
         let tree = "47fd2b27aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-        assert!(beta_caught_up_to_main(&tips("e79aa50f", "7266ae6a", tree, tree)));
+        assert!(beta_caught_up_to_main(&tips(
+            "e79aa50f", "7266ae6a", tree, tree
+        )));
         assert!(beta_caught_up_to_main(&tips(
             "e79aa50f",
             "7266ae6a",
@@ -845,10 +931,16 @@ mod channel_switch_tests {
             "1111111aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         )));
         // Trees compare in full — a prefix is not the same tree.
-        assert!(!beta_caught_up_to_main(&tips("e79aa50f", "7266ae6a", tree, "47fd2b27")));
+        assert!(!beta_caught_up_to_main(&tips(
+            "e79aa50f", "7266ae6a", tree, "47fd2b27"
+        )));
         // Missing or junk trees never match.
-        assert!(!beta_caught_up_to_main(&tips("e79aa50f", "7266ae6a", "", "")));
-        assert!(!beta_caught_up_to_main(&tips("e79aa50f", "7266ae6a", "zzzzzzzz", "zzzzzzzz")));
+        assert!(!beta_caught_up_to_main(&tips(
+            "e79aa50f", "7266ae6a", "", ""
+        )));
+        assert!(!beta_caught_up_to_main(&tips(
+            "e79aa50f", "7266ae6a", "zzzzzzzz", "zzzzzzzz"
+        )));
         assert!(!beta_caught_up_to_main(&ChannelTips::default()));
     }
 
@@ -880,14 +972,28 @@ mod channel_switch_tests {
         // Main moved but beta is not caught up: stays on.
         let ahead = tips("e79aa50f", "7266ae6a", older, tree);
         assert_eq!(
-            auto_off_step(Channel::Beta, &ahead, Some("2222222aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")),
+            auto_off_step(
+                Channel::Beta,
+                &ahead,
+                Some("2222222aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+            ),
             AutoOffStep::Stay
         );
         // Stable never moves; a missing main tree records nothing.
-        assert_eq!(auto_off_step(Channel::Stable, &caught_up, Some(older)), AutoOffStep::Stay);
-        assert_eq!(auto_off_step(Channel::Beta, &ChannelTips::default(), None), AutoOffStep::Stay);
         assert_eq!(
-            auto_off_step(Channel::Beta, &tips("abc1234", "abc1234", "", ""), Some(older)),
+            auto_off_step(Channel::Stable, &caught_up, Some(older)),
+            AutoOffStep::Stay
+        );
+        assert_eq!(
+            auto_off_step(Channel::Beta, &ChannelTips::default(), None),
+            AutoOffStep::Stay
+        );
+        assert_eq!(
+            auto_off_step(
+                Channel::Beta,
+                &tips("abc1234", "abc1234", "", ""),
+                Some(older)
+            ),
             AutoOffStep::Stay
         );
         assert_eq!(CHANNEL_BETA_SINCE, "channel.beta-since");
@@ -897,20 +1003,31 @@ mod channel_switch_tests {
     fn beta_turned_on_while_beta_equals_main_sticks_across_checks() {
         let tree = "47fd2b27aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
         let synced = tips("e79aa50f", "7266ae6a", tree, tree);
-        let AutoOffStep::RecordBaseline(baseline) = auto_off_step(Channel::Beta, &synced, None) else {
+        let AutoOffStep::RecordBaseline(baseline) = auto_off_step(Channel::Beta, &synced, None)
+        else {
             panic!("first check records the baseline");
         };
         assert_eq!(baseline, tree);
         // Every later check and every main -> beta sync with the same tree stays on.
         for _ in 0..3 {
-            assert_eq!(auto_off_step(Channel::Beta, &synced, Some(&baseline)), AutoOffStep::Stay);
+            assert_eq!(
+                auto_off_step(Channel::Beta, &synced, Some(&baseline)),
+                AutoOffStep::Stay
+            );
         }
         let same_sha = tips("7266ae6a", "7266ae6a", tree, tree);
-        assert_eq!(auto_off_step(Channel::Beta, &same_sha, Some(&baseline)), AutoOffStep::Stay);
+        assert_eq!(
+            auto_off_step(Channel::Beta, &same_sha, Some(&baseline)),
+            AutoOffStep::Stay
+        );
         // The next promote changes main's tree; once beta catches up, Beta turns off.
         let promoted = "3333333aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
         assert_eq!(
-            auto_off_step(Channel::Beta, &tips("aa11bb22", "cc33dd44", promoted, promoted), Some(&baseline)),
+            auto_off_step(
+                Channel::Beta,
+                &tips("aa11bb22", "cc33dd44", promoted, promoted),
+                Some(&baseline)
+            ),
             AutoOffStep::SwitchToStable
         );
     }
@@ -920,5 +1037,4 @@ mod channel_switch_tests {
         assert!(CHANNEL_AUTO_OFF_NOTE.contains("beta catches up to main"));
         assert!(CHANNEL_WINDOWS_NOTE.contains("Beta doesn't turn off by itself on Windows yet"));
     }
-
 }

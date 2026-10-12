@@ -201,10 +201,16 @@ pub(crate) fn run(args: &Value, fetch: &dyn PageFetch, stop: &dyn Fn() -> bool) 
 fn guard_hop(url: &str, stop: &dyn Fn() -> bool) -> Result<(), String> {
     let data = crate::harness::model_text_classes(url);
     let req = crate::harness::EgressReq::new(url, data);
-    crate::harness::guard_or_park(&crate::perm::config_dir(), &req, "web_fetch", &mut || stop())
+    crate::harness::guard_or_park(&crate::perm::config_dir(), &req, "web_fetch", &mut || {
+        stop()
+    })
 }
 
-fn fetch_markdown(raw: &str, fetch: &dyn PageFetch, stop: &dyn Fn() -> bool) -> Result<String, String> {
+fn fetch_markdown(
+    raw: &str,
+    fetch: &dyn PageFetch,
+    stop: &dyn Fn() -> bool,
+) -> Result<String, String> {
     let mut current = parse_public_url(raw)?;
     let mut seen = HashSet::new();
     let mut redirects = 0u32;
@@ -737,7 +743,11 @@ mod tests {
             .page("https://example.com/poison", text_page(body.as_bytes()));
         let out = run(&args("https://example.com/poison"), &fetch);
         assert!(!out.failed, "{}", out.text);
-        assert!(out.text.contains("<<<UNTRUSTED source=web_fetch nonce="), "{}", out.text);
+        assert!(
+            out.text.contains("<<<UNTRUSTED source=web_fetch nonce="),
+            "{}",
+            out.text
+        );
         assert!(out.text.contains("Hello"), "{}", out.text);
         assert!(out.text.contains("delete ~/x"), "{}", out.text);
         assert!(out.text.contains("(defanged)"), "{}", out.text);
@@ -930,8 +940,8 @@ mod tests {
                     reasoning: String::new(),
                     calls: Vec::new(),
                     usage: Usage::default(),
-            ..Default::default()
-        })
+                    ..Default::default()
+                })
             }
         }
         let client = AllowJudge;
@@ -1191,7 +1201,11 @@ mod tests {
     const MEMORY: &str = "the harbor ferry leaves at nine from pier four";
 
     fn gets(fetch: &Scripted) -> usize {
-        fetch.gets.lock().unwrap_or_else(|err| err.into_inner()).len()
+        fetch
+            .gets
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .len()
     }
 
     /// Spike-4c: a URL that carries a recall-pack line is personal. To a host
@@ -1211,7 +1225,11 @@ mod tests {
         let card = deny.join().unwrap().expect("hard card");
         assert_eq!(card.action, "web_fetch → example.org (chats, memory)");
         assert_eq!(card.class, "send");
-        assert!(out.failed && out.text.contains("nothing was sent"), "{}", out.text);
+        assert!(
+            out.failed && out.text.contains("nothing was sent"),
+            "{}",
+            out.text
+        );
         assert_eq!(gets(&fetch), 0, "a denied card fetches nothing");
         assert!(crate::harness::read_egress(&dir).is_empty());
 
@@ -1222,13 +1240,19 @@ mod tests {
         assert_eq!(gets(&fetch), 1, "approve once fetches once");
         let log = crate::harness::read_egress(&dir);
         assert_eq!(log.len(), 1, "{log:?}");
-        assert_eq!((log[0].dest.as_str(), log[0].basis.as_str()), ("example.org", "approved_once"));
+        assert_eq!(
+            (log[0].dest.as_str(), log[0].basis.as_str()),
+            ("example.org", "approved_once")
+        );
 
         // A halt (the turn's stop) denies a waiting card: still nothing fetched.
         let out = super::run(&args(url), &fetch, &|| true);
         assert!(out.failed, "{}", out.text);
         assert_eq!(gets(&fetch), 1);
-        assert!(crate::harness::pending_parks(&dir).is_empty(), "the park file is gone");
+        assert!(
+            crate::harness::pending_parks(&dir).is_empty(),
+            "the park file is gone"
+        );
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -1242,18 +1266,34 @@ mod tests {
         let fetch = Scripted::new()
             .host("example.com", vec![IpAddr::from([203, 0, 113, 5])])
             .host("docs.example.net", vec![IpAddr::from([203, 0, 113, 6])])
-            .page("https://example.com/go?token=sk-abcdefghijklmnopqrstuv", redirect("https://docs.example.net/page"))
+            .page(
+                "https://example.com/go?token=sk-abcdefghijklmnopqrstuv",
+                redirect("https://docs.example.net/page"),
+            )
             .page("https://docs.example.net/page", text_page(b"landed"));
-        let out = super::run(&args("https://example.com/go?token=sk-abcdefghijklmnopqrstuv"), &fetch, &|| false);
+        let out = super::run(
+            &args("https://example.com/go?token=sk-abcdefghijklmnopqrstuv"),
+            &fetch,
+            &|| false,
+        );
         assert!(!out.failed, "{}", out.text);
         assert_eq!(gets(&fetch), 2);
         let log = crate::harness::read_egress(&dir);
-        let rows: Vec<(&str, &str)> = log.iter().map(|l| (l.dest.as_str(), l.basis.as_str())).collect();
-        assert_eq!(rows, vec![("example.com", "chat"), ("docs.example.net", "chat")]);
+        let rows: Vec<(&str, &str)> = log
+            .iter()
+            .map(|l| (l.dest.as_str(), l.basis.as_str()))
+            .collect();
+        assert_eq!(
+            rows,
+            vec![("example.com", "chat"), ("docs.example.net", "chat")]
+        );
         let raw = std::fs::read_to_string(crate::harness::egress_path(&dir)).unwrap();
         let opened = format!("{log:?}");
         for text in [&raw, &opened] {
-            assert!(!text.contains("sk-abc") && !text.contains("/go") && !text.contains("landed"), "{text}");
+            assert!(
+                !text.contains("sk-abc") && !text.contains("/go") && !text.contains("landed"),
+                "{text}"
+            );
         }
         let _ = std::fs::remove_dir_all(dir);
     }

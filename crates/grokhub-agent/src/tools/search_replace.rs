@@ -45,7 +45,10 @@ pub fn run(workspace: &Path, args: &Value) -> ToolOutput {
     if needle == replacement {
         return ToolOutput::err("Old string and new string are the same");
     }
-    let replace_all = args.get("replace_all").and_then(|v| v.as_bool()).unwrap_or(false);
+    let replace_all = args
+        .get("replace_all")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
     let path = match confine(workspace, &raw) {
         Ok(path) => path,
         Err(err) => return ToolOutput::err(err),
@@ -86,7 +89,10 @@ fn apply(path: &Path, needle: &str, replacement: &str, replace_all: bool) -> Res
     } else {
         text
     };
-    let positions: Vec<usize> = match_text.match_indices(needle).map(|(index, _)| index).collect();
+    let positions: Vec<usize> = match_text
+        .match_indices(needle)
+        .map(|(index, _)| index)
+        .collect();
     if positions.is_empty() {
         return Err(
             "The string to replace was not found in the file, use the read_file tool to see the correct string."
@@ -99,14 +105,19 @@ fn apply(path: &Path, needle: &str, replacement: &str, replace_all: bool) -> Res
                 .into(),
         );
     }
-    let used = if replace_all { positions.as_slice() } else { &positions[..1] };
+    let used = if replace_all {
+        positions.as_slice()
+    } else {
+        &positions[..1]
+    };
     let new_text = replace_using_positions(&match_text, used, needle, replacement);
     let write_text = if has_crlf {
         new_text.replace("\r\n", "\n").replace('\n', "\r\n")
     } else {
         new_text
     };
-    std::fs::write(path, write_text.as_bytes()).map_err(|err| format!("could not write file: {err}"))?;
+    std::fs::write(path, write_text.as_bytes())
+        .map_err(|err| format!("could not write file: {err}"))?;
     Ok(used.len())
 }
 
@@ -140,7 +151,13 @@ mod tests {
         dir
     }
 
-    fn edit(dir: &std::path::Path, file: &str, old: &str, new: &str, replace_all: bool) -> ToolOutput {
+    fn edit(
+        dir: &std::path::Path,
+        file: &str,
+        old: &str,
+        new: &str,
+        replace_all: bool,
+    ) -> ToolOutput {
         let args = serde_json::json!({
             "file_path": file,
             "old_string": old,
@@ -180,7 +197,10 @@ mod tests {
         std::fs::write(&crlf, b"line1\r\nline2\r\nline3\r\n").unwrap();
         let once = edit(&dir, "crlf.txt", "line2", "LINE2", false);
         assert!(!once.failed, "{}", once.text);
-        assert_eq!(std::fs::read(&crlf).unwrap(), b"line1\r\nLINE2\r\nline3\r\n");
+        assert_eq!(
+            std::fs::read(&crlf).unwrap(),
+            b"line1\r\nLINE2\r\nline3\r\n"
+        );
 
         let crlf_needle = dir.join("needle.txt");
         std::fs::write(&crlf_needle, b"a\r\nb\r\n").unwrap();
@@ -192,7 +212,10 @@ mod tests {
         std::fs::write(&mixed, b"line1\r\nline2\nline3\r\nline4\n").unwrap();
         let mid = edit(&dir, "mixed.txt", "line2\nline3", "REPLACED", false);
         assert!(!mid.failed, "{}", mid.text);
-        assert_eq!(std::fs::read(&mixed).unwrap(), b"line1\r\nREPLACED\r\nline4\r\n");
+        assert_eq!(
+            std::fs::read(&mixed).unwrap(),
+            b"line1\r\nREPLACED\r\nline4\r\n"
+        );
 
         let all_crlf = dir.join("all.txt");
         std::fs::write(&all_crlf, b"x\r\nx\r\n").unwrap();

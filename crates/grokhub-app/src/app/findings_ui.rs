@@ -22,14 +22,16 @@ pub(super) fn newest_findings_row(
     views: &[grokhub_core::ChatView],
     dismissed: &[String],
 ) -> Option<(usize, Findings)> {
-    let i = views
-        .iter()
-        .rposition(|v| v.kind == grokhub_core::ChatKind::Result && v.body.starts_with(FINDINGS_HEAD))?;
+    let i = views.iter().rposition(|v| {
+        v.kind == grokhub_core::ChatKind::Result && v.body.starts_with(FINDINGS_HEAD)
+    })?;
     let body = &views[i].body;
     if dismissed.iter().any(|d| d == body) {
         return None;
     }
-    Findings::parse(body).filter(|f| !f.fixes.is_empty()).map(|f| (i, f))
+    Findings::parse(body)
+        .filter(|f| !f.fixes.is_empty())
+        .map(|f| (i, f))
 }
 
 /// One pill per fix, then a ghost Dismiss. Pointer clicks only: a stray
@@ -84,7 +86,11 @@ mod tests {
     use grokhub_core::{ChatKind, ChatView};
 
     fn view(kind: ChatKind, body: &str) -> ChatView {
-        ChatView { kind, title: String::new(), body: body.to_string() }
+        ChatView {
+            kind,
+            title: String::new(),
+            body: body.to_string(),
+        }
     }
 
     fn card() -> Findings {
@@ -100,7 +106,10 @@ mod tests {
 
     #[test]
     fn the_newest_findings_bubble_with_fixes_gets_the_pills() {
-        let old = Findings { fixes: Vec::new(), ..card() };
+        let old = Findings {
+            fixes: Vec::new(),
+            ..card()
+        };
         let views = vec![
             view(ChatKind::User, "scan my computer"),
             view(ChatKind::Result, &card().to_body()),
@@ -118,17 +127,25 @@ mod tests {
     #[test]
     fn a_fix_runs_its_goal_in_the_same_chat_and_dismiss_is_quiet() {
         let mut cabin = Cabin::quiet_for_test();
-        cabin.threads.push(crate::threads::ChatThread::new("Chat", false));
+        cabin
+            .threads
+            .push(crate::threads::ChatThread::new("Chat", false));
         cabin.thread_idx = cabin.threads.len() - 1;
         let id = cabin.visible_thread_id();
         let body = card().to_body();
         cabin.post_findings(Some(id), &body);
         assert_eq!(
-            cabin.messages.last().map(|m| (m.0.as_str(), grokhub_core::strip_slash_result(&m.1))),
+            cabin
+                .messages
+                .last()
+                .map(|m| (m.0.as_str(), grokhub_core::strip_slash_result(&m.1))),
             Some(("assistant", body.as_str()))
         );
         cabin.findings_clicked(FindingsAct::Dismiss, &body);
-        assert_eq!(cabin.harness.findings_dismissed, std::slice::from_ref(&body));
+        assert_eq!(
+            cabin.harness.findings_dismissed,
+            std::slice::from_ref(&body)
+        );
         // A fix goes down the typed-send path; with no engine here, that path
         // stops at the sign-in line instead of writing a turn.
         cabin.harness.pending_findings = Some(body.clone());
@@ -136,6 +153,9 @@ mod tests {
         // Starting the next run drops a card left by one that never finished.
         assert_eq!(cabin.harness.pending_findings, None);
         assert_eq!(cabin.status, grokhub_core::XAI_NEED_SIGNIN);
-        assert_eq!(cabin.harness.findings_dismissed, [body.clone(), body.clone()]);
+        assert_eq!(
+            cabin.harness.findings_dismissed,
+            [body.clone(), body.clone()]
+        );
     }
 }

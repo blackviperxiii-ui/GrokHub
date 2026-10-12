@@ -6,23 +6,23 @@ mod checkpoint;
 mod client;
 mod compact;
 mod drive;
-mod file_checkpoint;
 pub mod episode;
 mod eval;
 mod events;
+mod file_checkpoint;
 mod gate;
 pub mod harness;
 mod hooks;
 mod image_budget;
-mod loopback;
 pub mod indexers;
+mod loopback;
 pub mod mcp;
 mod memory;
 mod models;
 pub mod perm;
 pub mod plugins;
-pub mod repair;
 mod prompt;
+pub mod repair;
 mod research;
 mod retry;
 pub mod route;
@@ -54,9 +54,12 @@ pub use file_checkpoint::{
     before_write, begin_step, format_steps, list_steps, restore_step, StepInfo, MAX_BYTES, MAX_RUNS,
 };
 pub use gate::{ClosedPermits, Gate, PermAnswer, PermMode, PermitInbox, PermitNote, PermitWait};
-pub use harness::{AccessMode, ComputerUseBackend, GateOutcome, HardClass, APPROVAL_GATE_VIOLATION};
+pub use harness::{
+    AccessMode, ComputerUseBackend, GateOutcome, HardClass, APPROVAL_GATE_VIOLATION,
+};
 pub use hooks::{
-    discover_hooks, folder_trusted, set_folder_trust, on_subagent_start, on_subagent_stop, HookInfo, HookOrigin,
+    discover_hooks, folder_trusted, on_subagent_start, on_subagent_stop, set_folder_trust,
+    HookInfo, HookOrigin,
 };
 pub use mcp::{
     alias_elicit, attach_elicit, configured, detach_elicit, doctor, import_documents, import_paths,

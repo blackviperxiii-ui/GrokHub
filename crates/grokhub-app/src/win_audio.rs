@@ -12,8 +12,8 @@ use std::time::{Duration, Instant};
 
 use windows_sys::Win32::Media::Audio::{
     waveInAddBuffer, waveInClose, waveInOpen, waveInPrepareHeader, waveInReset, waveInStart,
-    waveInStop, waveInUnprepareHeader, HWAVEIN, PlaySoundW, WAVEFORMATEX, WAVEHDR, CALLBACK_NULL,
-    SND_FILENAME, SND_NODEFAULT, SND_SYNC, WAVE_FORMAT_PCM, WAVE_MAPPER, WHDR_DONE,
+    waveInStop, waveInUnprepareHeader, PlaySoundW, CALLBACK_NULL, HWAVEIN, SND_FILENAME,
+    SND_NODEFAULT, SND_SYNC, WAVEFORMATEX, WAVEHDR, WAVE_FORMAT_PCM, WAVE_MAPPER, WHDR_DONE,
 };
 use windows_sys::Win32::Media::Multimedia::mciSendStringW;
 
@@ -63,16 +63,7 @@ impl WaveIn {
     pub fn start() -> Option<Self> {
         let fmt = pcm_fmt();
         let mut handle: HWAVEIN = ptr::null_mut();
-        let err = unsafe {
-            waveInOpen(
-                &mut handle,
-                WAVE_MAPPER,
-                &fmt,
-                0,
-                0,
-                CALLBACK_NULL,
-            )
-        };
+        let err = unsafe { waveInOpen(&mut handle, WAVE_MAPPER, &fmt, 0, 0, CALLBACK_NULL) };
         if err != MMSYSERR_NOERROR || handle.is_null() {
             return None;
         }
@@ -252,7 +243,13 @@ pub fn play_file(path: &Path) -> Result<(), String> {
     let close = wide(&format!("close {alias}"));
     unsafe {
         let mut err = [0u16; 128];
-        if mciSendStringW(open.as_ptr(), err.as_mut_ptr(), err.len() as u32, ptr::null_mut()) != 0 {
+        if mciSendStringW(
+            open.as_ptr(),
+            err.as_mut_ptr(),
+            err.len() as u32,
+            ptr::null_mut(),
+        ) != 0
+        {
             return Err("Windows media play failed (need a microphone-capable audio stack)".into());
         }
         let _ = mciSendStringW(play.as_ptr(), ptr::null_mut(), 0, ptr::null_mut());

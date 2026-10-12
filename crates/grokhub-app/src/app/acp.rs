@@ -4,7 +4,6 @@
 use super::*;
 
 impl Cabin {
-
     pub(super) fn fail_turn_start(&mut self, detail: &str) {
         self.abandon_turn_card();
         self.running = false;

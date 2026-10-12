@@ -203,7 +203,8 @@ impl MemoryKeyStore {
 
     /// Replace the key (tests: a different key than the data was sealed with).
     pub fn replace(&self, key_b64: &str) {
-        *self.key.lock().unwrap_or_else(|e| e.into_inner()) = Some(Zeroizing::new(key_b64.to_string()));
+        *self.key.lock().unwrap_or_else(|e| e.into_inner()) =
+            Some(Zeroizing::new(key_b64.to_string()));
     }
 }
 
@@ -260,12 +261,19 @@ impl std::fmt::Debug for LearnedKey {
 
 impl LearnedKey {
     fn from_b64(text: &str) -> Option<Self> {
-        let raw = Zeroizing::new(base64::engine::general_purpose::STANDARD.decode(text.trim()).ok()?);
+        let raw = Zeroizing::new(
+            base64::engine::general_purpose::STANDARD
+                .decode(text.trim())
+                .ok()?,
+        );
         if raw.len() != KEY_LEN {
             return None;
         }
         let key = LessSafeKey::new(UnboundKey::new(&CHACHA20_POLY1305, &raw).ok()?);
-        Some(Self { key, id: key_id(&raw) })
+        Some(Self {
+            key,
+            id: key_id(&raw),
+        })
     }
 
     pub fn id(&self) -> &str {
@@ -277,35 +285,54 @@ fn key_id(raw: &[u8]) -> String {
     let mut h = Sha256::new();
     h.update(b"grokhub-learned-key-id:v1:");
     h.update(raw);
-    h.finalize().iter().take(8).map(|b| format!("{b:02x}")).collect()
+    h.finalize()
+        .iter()
+        .take(8)
+        .map(|b| format!("{b:02x}"))
+        .collect()
 }
 
 /// Seal `plain` under `aad`. One line, no newline.
 pub fn seal_with(key: &LearnedKey, aad: &str, plain: &[u8]) -> Result<String, String> {
     let mut nonce = [0u8; NONCE_LEN];
-    SystemRandom::new().fill(&mut nonce).map_err(|_| "no random source".to_string())?;
+    SystemRandom::new()
+        .fill(&mut nonce)
+        .map_err(|_| "no random source".to_string())?;
     let mut buf = Zeroizing::new(plain.to_vec());
     key.key
-        .seal_in_place_append_tag(Nonce::assume_unique_for_key(nonce), Aad::from(aad.as_bytes()), &mut *buf)
+        .seal_in_place_append_tag(
+            Nonce::assume_unique_for_key(nonce),
+            Aad::from(aad.as_bytes()),
+            &mut *buf,
+        )
         .map_err(|_| "seal failed".to_string())?;
     let mut out = Vec::with_capacity(NONCE_LEN + buf.len());
     out.extend_from_slice(&nonce);
     out.extend_from_slice(&buf);
-    Ok(format!("{SEALED_PREFIX}{}", base64::engine::general_purpose::STANDARD.encode(out)))
+    Ok(format!(
+        "{SEALED_PREFIX}{}",
+        base64::engine::general_purpose::STANDARD.encode(out)
+    ))
 }
 
 /// Open one sealed line. `None` for anything that is not an intact line
 /// sealed under this key and `aad` (tampered, truncated, other file, other key).
 pub fn open_with(key: &LearnedKey, aad: &str, line: &str) -> Option<Zeroizing<Vec<u8>>> {
     let body = line.trim().strip_prefix(SEALED_PREFIX)?;
-    let raw = base64::engine::general_purpose::STANDARD.decode(body).ok()?;
+    let raw = base64::engine::general_purpose::STANDARD
+        .decode(body)
+        .ok()?;
     if raw.len() < NONCE_LEN + TAG_LEN {
         return None;
     }
     let (nonce, ct) = raw.split_at(NONCE_LEN);
     let nonce = Nonce::try_assume_unique_for_key(nonce).ok()?;
     let mut buf = Zeroizing::new(ct.to_vec());
-    let plain_len = key.key.open_in_place(nonce, Aad::from(aad.as_bytes()), &mut buf).ok()?.len();
+    let plain_len = key
+        .key
+        .open_in_place(nonce, Aad::from(aad.as_bytes()), &mut buf)
+        .ok()?
+        .len();
     buf.truncate(plain_len);
     Some(buf)
 }
@@ -332,7 +359,11 @@ enum KeyCache {
 
 impl Keys {
     pub fn new(store: Arc<dyn KeyStore>) -> Arc<Self> {
-        Arc::new(Self { store, cache: Mutex::new(KeyCache::Unknown), fetching: AtomicBool::new(false) })
+        Arc::new(Self {
+            store,
+            cache: Mutex::new(KeyCache::Unknown),
+            fetching: AtomicBool::new(false),
+        })
     }
 
     fn cached(&self) -> KeyCache {
@@ -439,7 +470,10 @@ fn keys_for(config_dir: &Path) -> Arc<Keys> {
     {
         return k.clone();
     }
-    default_slot().read().unwrap_or_else(|e| e.into_inner()).clone()
+    default_slot()
+        .read()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone()
 }
 
 fn key_id_path(config_dir: &Path) -> PathBuf {
@@ -538,7 +572,12 @@ pub fn write_key(config_dir: &Path) -> Result<Arc<LearnedKey>, Locked> {
     if stale {
         let _ = fs::remove_file(&lock);
     }
-    if OpenOptions::new().write(true).create_new(true).open(&lock).is_err() {
+    if OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&lock)
+        .is_err()
+    {
         return Err(Locked::Busy);
     }
     let made = make_key(&keys, config_dir);
@@ -548,7 +587,9 @@ pub fn write_key(config_dir: &Path) -> Result<Arc<LearnedKey>, Locked> {
 
 fn make_key(keys: &Keys, config_dir: &Path) -> Result<Arc<LearnedKey>, Locked> {
     let mut raw = Zeroizing::new([0u8; KEY_LEN]);
-    SystemRandom::new().fill(&mut *raw).map_err(|_| Locked::Unavailable)?;
+    SystemRandom::new()
+        .fill(&mut *raw)
+        .map_err(|_| Locked::Unavailable)?;
     let text = Zeroizing::new(base64::engine::general_purpose::STANDARD.encode(*raw));
     keys.store.create(&text).map_err(|_| Locked::Unavailable)?;
     // Read it back: whatever the keyring holds now is the key (another
@@ -606,23 +647,41 @@ pub struct SealedRead {
 /// read as plaintext when the keyring answers; a sealed file needs the key.
 pub fn read_sealed_jsonl(config_dir: &Path, text: &str, aad: &str, wait: bool) -> SealedRead {
     let _lap = crate::timing::lap("harness:sealed_read");
-    let rows: Vec<&str> = text.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
+    let rows: Vec<&str> = text
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .collect();
     if rows.is_empty() {
         return SealedRead::default();
     }
     let Some(key) = read_key(config_dir, wait) else {
-        return SealedRead { pending: true, ..SealedRead::default() };
+        return SealedRead {
+            pending: true,
+            ..SealedRead::default()
+        };
     };
     let key = match key {
         Ok(k) => k,
-        Err(why) => return SealedRead { locked: Some(why), ..SealedRead::default() },
+        Err(why) => {
+            return SealedRead {
+                locked: Some(why),
+                ..SealedRead::default()
+            }
+        }
     };
     let sealed = rows.iter().any(|l| is_sealed_line(l));
     if !sealed {
-        return SealedRead { lines: rows.iter().map(|l| l.to_string()).collect(), ..SealedRead::default() };
+        return SealedRead {
+            lines: rows.iter().map(|l| l.to_string()).collect(),
+            ..SealedRead::default()
+        };
     }
     let Some(key) = key else {
-        return SealedRead { locked: Some(Locked::Missing), ..SealedRead::default() };
+        return SealedRead {
+            locked: Some(Locked::Missing),
+            ..SealedRead::default()
+        };
     };
     let mut out = SealedRead::default();
     for row in rows {
@@ -641,7 +700,12 @@ pub fn read_sealed_jsonl(config_dir: &Path, text: &str, aad: &str, wait: bool) -
 /// Append one plaintext line sealed. A legacy plaintext file is sealed in
 /// place first (every line kept, order kept) so no plaintext is left behind.
 /// Fails closed: no key means nothing is written.
-pub fn append_sealed_line(config_dir: &Path, path: &Path, aad: &str, line: &str) -> Result<(), Locked> {
+pub fn append_sealed_line(
+    config_dir: &Path,
+    path: &Path,
+    aad: &str,
+    line: &str,
+) -> Result<(), Locked> {
     let _lap = crate::timing::lap("harness:sealed_append");
     let key = write_key(config_dir)?;
     migrate_file(&key, path, aad).map_err(|_| Locked::Unwritable)?;
@@ -676,7 +740,9 @@ pub fn migrate_file(key: &LearnedKey, path: &Path, aad: &str) -> Result<bool, St
         return Ok(false);
     }
     let mut text = head.into_owned();
-    f.take(MIGRATE_CAP).read_to_string(&mut text).map_err(|e| e.to_string())?;
+    f.take(MIGRATE_CAP)
+        .read_to_string(&mut text)
+        .map_err(|e| e.to_string())?;
     let mut out = String::with_capacity(text.len() * 2);
     for row in text.lines().map(str::trim).filter(|l| !l.is_empty()) {
         if is_sealed_line(row) {
@@ -698,7 +764,9 @@ pub struct LearnedVault {
 
 impl LearnedVault {
     pub fn new(config_dir: &Path) -> Self {
-        Self { config_dir: config_dir.to_path_buf() }
+        Self {
+            config_dir: config_dir.to_path_buf(),
+        }
     }
 }
 
@@ -712,7 +780,9 @@ impl grokhub_core::amr::Sealer for LearnedVault {
         match read_key(&self.config_dir, true) {
             Some(Ok(Some(key))) => open_with(&key, aad, sealed)
                 .and_then(|p| String::from_utf8(p.to_vec()).ok())
-                .ok_or_else(|| "a private memory could not be opened (damaged or edited)".to_string()),
+                .ok_or_else(|| {
+                    "a private memory could not be opened (damaged or edited)".to_string()
+                }),
             Some(Ok(None)) => Err(Locked::Missing.message()),
             Some(Err(why)) => Err(why.message()),
             None => Err(Locked::Unavailable.message()),
@@ -749,9 +819,14 @@ mod tests {
         assert!(line.starts_with("gh-sealed:v1:"), "{line}");
         assert!(!line.contains("hub") && !line.contains("g-1"), "{line}");
         // nonce 12 + text + tag 16, base64.
-        let raw = base64::engine::general_purpose::STANDARD.decode(&line["gh-sealed:v1:".len()..]).unwrap();
+        let raw = base64::engine::general_purpose::STANDARD
+            .decode(&line["gh-sealed:v1:".len()..])
+            .unwrap();
         assert_eq!(raw.len(), 12 + plain.len() + 16);
-        assert_eq!(&*open_with(&key, AAD_CONSENT, &line).unwrap(), plain.as_bytes());
+        assert_eq!(
+            &*open_with(&key, AAD_CONSENT, &line).unwrap(),
+            plain.as_bytes()
+        );
         let again = seal_with(&key, AAD_CONSENT, plain.as_bytes()).unwrap();
         assert_ne!(line, again, "a fresh nonce every time");
         // The key id is recorded; the key itself is nowhere on disk.
@@ -767,19 +842,42 @@ mod tests {
         let key = write_key(&d).unwrap();
         let line = seal_with(&key, AAD_CONSENT, b"{\"by\":\"user\"}").unwrap();
         let body = &line[SEALED_PREFIX.len()..];
-        let mut raw = base64::engine::general_purpose::STANDARD.decode(body).unwrap();
+        let mut raw = base64::engine::general_purpose::STANDARD
+            .decode(body)
+            .unwrap();
         for at in [0, 12, raw.len() - 1] {
             let mut bad = raw.clone();
             bad[at] ^= 0x01;
-            let bad = format!("{SEALED_PREFIX}{}", base64::engine::general_purpose::STANDARD.encode(&bad));
-            assert_eq!(open_with(&key, AAD_CONSENT, &bad), None, "flipped byte {at}");
+            let bad = format!(
+                "{SEALED_PREFIX}{}",
+                base64::engine::general_purpose::STANDARD.encode(&bad)
+            );
+            assert_eq!(
+                open_with(&key, AAD_CONSENT, &bad),
+                None,
+                "flipped byte {at}"
+            );
         }
         raw.truncate(raw.len() - 1);
-        let cut = format!("{SEALED_PREFIX}{}", base64::engine::general_purpose::STANDARD.encode(&raw));
+        let cut = format!(
+            "{SEALED_PREFIX}{}",
+            base64::engine::general_purpose::STANDARD.encode(&raw)
+        );
         assert_eq!(open_with(&key, AAD_CONSENT, &cut), None, "truncated");
-        assert_eq!(open_with(&key, AAD_EGRESS, &line), None, "a consent line can't be read as egress");
-        assert_eq!(open_with(&key, AAD_CONSENT, "gh-sealed:v1:not base64!"), None);
-        assert_eq!(open_with(&key, AAD_CONSENT, "{\"by\":\"user\"}"), None, "plaintext is not sealed");
+        assert_eq!(
+            open_with(&key, AAD_EGRESS, &line),
+            None,
+            "a consent line can't be read as egress"
+        );
+        assert_eq!(
+            open_with(&key, AAD_CONSENT, "gh-sealed:v1:not base64!"),
+            None
+        );
+        assert_eq!(
+            open_with(&key, AAD_CONSENT, "{\"by\":\"user\"}"),
+            None,
+            "plaintext is not sealed"
+        );
     }
 
     #[test]
@@ -787,13 +885,24 @@ mod tests {
         let (d, store, _g) = dir("down");
         store.set_available(false);
         let path = d.join("consent.jsonl");
-        assert_eq!(append_sealed_line(&d, &path, AAD_CONSENT, "{\"by\":\"user\"}"), Err(Locked::Unavailable));
+        assert_eq!(
+            append_sealed_line(&d, &path, AAD_CONSENT, "{\"by\":\"user\"}"),
+            Err(Locked::Unavailable)
+        );
         assert!(!path.exists(), "no plaintext fallback");
         assert!(!d.join(KEY_ID_FILE).exists());
-        assert_eq!(read_key(&d, true).unwrap().unwrap_err(), Locked::Unavailable);
+        assert_eq!(
+            read_key(&d, true).unwrap().unwrap_err(),
+            Locked::Unavailable
+        );
         let vault = LearnedVault::new(&d);
-        assert_eq!(vault.seal("a", "b").unwrap_err(), Locked::Unavailable.message());
-        assert!(Locked::Unavailable.message().starts_with("Private data is locked: GrokHub can't reach your "));
+        assert_eq!(
+            vault.seal("a", "b").unwrap_err(),
+            Locked::Unavailable.message()
+        );
+        assert!(Locked::Unavailable
+            .message()
+            .starts_with("Private data is locked: GrokHub can't reach your "));
     }
 
     #[test]
@@ -805,15 +914,28 @@ mod tests {
         store.forget();
         use_key_store_for(&d, store.clone()); // a restart: nothing cached
         assert_eq!(read_key(&d, true).unwrap().unwrap_err(), Locked::Missing);
-        assert_eq!(append_sealed_line(&d, &path, AAD_EGRESS, "{\"dest\":\"x.ai\"}"), Err(Locked::Missing));
+        assert_eq!(
+            append_sealed_line(&d, &path, AAD_EGRESS, "{\"dest\":\"x.ai\"}"),
+            Err(Locked::Missing)
+        );
         assert_eq!(store.load().unwrap(), None, "no new key over sealed data");
-        assert_eq!(fs::read_to_string(&path).unwrap(), before, "nothing dropped, nothing added");
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            before,
+            "nothing dropped, nothing added"
+        );
         let other = base64::engine::general_purpose::STANDARD.encode([7u8; 32]);
         store.replace(&other);
         use_key_store_for(&d, store.clone());
         assert_eq!(read_key(&d, true).unwrap().unwrap_err(), Locked::WrongKey);
         let read = read_sealed_jsonl(&d, &before, AAD_EGRESS, true);
-        assert_eq!(read, SealedRead { locked: Some(Locked::WrongKey), ..SealedRead::default() });
+        assert_eq!(
+            read,
+            SealedRead {
+                locked: Some(Locked::WrongKey),
+                ..SealedRead::default()
+            }
+        );
     }
 
     #[test]
@@ -823,7 +945,10 @@ mod tests {
         let old = "{\"id\":\"g-old\",\"by\":\"user\"}\nnot json but kept\n";
         fs::write(&path, old).unwrap();
         let read = read_sealed_jsonl(&d, old, AAD_CONSENT, true);
-        assert_eq!(read.lines, vec!["{\"id\":\"g-old\",\"by\":\"user\"}", "not json but kept"]);
+        assert_eq!(
+            read.lines,
+            vec!["{\"id\":\"g-old\",\"by\":\"user\"}", "not json but kept"]
+        );
         assert_eq!(read.locked, None);
         assert!(!d.join(KEY_ID_FILE).exists(), "reading makes no key");
         append_sealed_line(&d, &path, AAD_CONSENT, "{\"id\":\"g-new\",\"by\":\"user\"}").unwrap();
@@ -834,10 +959,18 @@ mod tests {
         let read = read_sealed_jsonl(&d, &text, AAD_CONSENT, true);
         assert_eq!(
             read.lines,
-            vec!["{\"id\":\"g-old\",\"by\":\"user\"}", "not json but kept", "{\"id\":\"g-new\",\"by\":\"user\"}"]
+            vec![
+                "{\"id\":\"g-old\",\"by\":\"user\"}",
+                "not json but kept",
+                "{\"id\":\"g-new\",\"by\":\"user\"}"
+            ]
         );
         // A plaintext line slipped into a sealed file is never trusted.
-        fs::write(&path, format!("{text}{{\"id\":\"g-forged\",\"by\":\"user\"}}\n")).unwrap();
+        fs::write(
+            &path,
+            format!("{text}{{\"id\":\"g-forged\",\"by\":\"user\"}}\n"),
+        )
+        .unwrap();
         let read = read_sealed_jsonl(&d, &fs::read_to_string(&path).unwrap(), AAD_CONSENT, true);
         assert_eq!(read.lines.len(), 3);
         assert_eq!(read.unreadable, 1);
@@ -893,7 +1026,11 @@ mod tests {
         assert!(has_sealed_data(&d));
 
         // A sealed node renamed onto another id doesn't open (the id is bound in).
-        fs::copy(d.join("amr/nodes/fact-home.sealed"), d.join("amr/nodes/fact-boat.sealed")).unwrap();
+        fs::copy(
+            d.join("amr/nodes/fact-home.sealed"),
+            d.join("amr/nodes/fact-boat.sealed"),
+        )
+        .unwrap();
         assert_eq!(amr.recall_report("pier 9").locked, 1);
         fs::remove_file(d.join("amr/nodes/fact-boat.sealed")).unwrap();
 
@@ -902,8 +1039,17 @@ mod tests {
         let report = amr.recall_report("pier 9");
         assert_eq!((report.hits.len(), report.locked), (0, 1));
         assert_eq!(report.why, Some(Locked::Unavailable.message()));
-        let next = NodeDraft { id: "fact-boat".into(), ..draft };
-        assert_eq!(amr.remember(&next), Err(AmrError::Paused(Locked::Unavailable.message())));
-        assert!(!d.join("amr/nodes/fact-boat.sealed").exists() && !d.join("amr/nodes/fact-boat.md").exists());
+        let next = NodeDraft {
+            id: "fact-boat".into(),
+            ..draft
+        };
+        assert_eq!(
+            amr.remember(&next),
+            Err(AmrError::Paused(Locked::Unavailable.message()))
+        );
+        assert!(
+            !d.join("amr/nodes/fact-boat.sealed").exists()
+                && !d.join("amr/nodes/fact-boat.md").exists()
+        );
     }
 }

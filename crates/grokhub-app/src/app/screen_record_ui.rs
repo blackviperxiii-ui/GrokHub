@@ -107,7 +107,8 @@ impl Cabin {
         }
         if let Err(why) = sr::Recorder::default().start(self.cfg.screen_record, now_ms()) {
             self.status = why.into();
-            self.live_mut().push(("assistant".into(), mark_slash_result(why)));
+            self.live_mut()
+                .push(("assistant".into(), mark_slash_result(why)));
             self.persist();
             return;
         }
@@ -141,7 +142,8 @@ impl Cabin {
             dir.display(),
             sr::clock(sr::MAX_SECS)
         );
-        self.live_mut().push(("assistant".into(), mark_slash_result(&line)));
+        self.live_mut()
+            .push(("assistant".into(), mark_slash_result(&line)));
         self.persist();
         self.status = sr::indicator_line(0);
     }
@@ -177,17 +179,30 @@ impl Cabin {
         let Some(live) = self.screen_rec.take() else {
             return;
         };
-        let key = if done.frames.is_empty() { String::new() } else { self.bearer() };
+        let key = if done.frames.is_empty() {
+            String::new()
+        } else {
+            self.bearer()
+        };
         self.finish_screen_recording(done, &live.note, &live.chat, key);
     }
 
     /// No key, or stills that can't be read back: the recording stays local
     /// and nothing is sent.
-    pub(super) fn finish_screen_recording(&mut self, done: RecordDone, note: &str, chat: &str, key: String) {
+    pub(super) fn finish_screen_recording(
+        &mut self,
+        done: RecordDone,
+        note: &str,
+        chat: &str,
+        key: String,
+    ) {
         let title = sr::recording_title(done.secs, note);
         if done.frames.is_empty() {
             let why = done.err.unwrap_or_else(|| "no stills were taken".into());
-            self.post_into_chat(chat, format!("{title}\n\nThe recording didn't start: {why}."));
+            self.post_into_chat(
+                chat,
+                format!("{title}\n\nThe recording didn't start: {why}."),
+            );
             self.status = format!("Screen recording failed: {why}");
             return;
         }
@@ -229,11 +244,20 @@ impl Cabin {
     }
 
     /// The report in its chat and one feed card naming the recording.
-    pub(super) fn post_screen_done(&mut self, title: &str, dir: &Path, chat: &str, reply: Result<String, String>) {
+    pub(super) fn post_screen_done(
+        &mut self,
+        title: &str,
+        dir: &Path,
+        chat: &str,
+        reply: Result<String, String>,
+    ) {
         let (text, summary) = match reply {
             Ok(raw) => {
                 let report = sr::parse_report(&raw);
-                (sr::report_text(title, &report, dir), report_summary(&report))
+                (
+                    sr::report_text(title, &report, dir),
+                    report_summary(&report),
+                )
             }
             Err(why) => (
                 sr::local_only_text(title, dir, &why),
@@ -241,7 +265,13 @@ impl Cabin {
             ),
         };
         self.post_into_chat(chat, text);
-        let card = grokhub_core::screen_recording_card(&dir.display().to_string(), title, &summary, chat, now_ms());
+        let card = grokhub_core::screen_recording_card(
+            &dir.display().to_string(),
+            title,
+            &summary,
+            chat,
+            now_ms(),
+        );
         self.post_feed_card(card);
         self.status = title.to_string();
     }
@@ -279,7 +309,10 @@ impl Cabin {
         let dir = PathBuf::from(dir);
         let home = grokhub_core::paths::user_home().unwrap_or_default();
         if !sr::is_recording_dir(&home, &dir) {
-            self.status = format!("Not deleted: {} is not a GrokHub recording folder.", dir.display());
+            self.status = format!(
+                "Not deleted: {} is not a GrokHub recording folder.",
+                dir.display()
+            );
             return;
         }
         match std::fs::remove_dir_all(&dir) {
@@ -359,10 +392,15 @@ mod tests {
         assert_eq!(done.err, None);
         assert_eq!(
             done.frames,
-            (1..=5).map(|i| dir.join(format!("frame-00{i}.png"))).collect::<Vec<_>>(),
+            (1..=5)
+                .map(|i| dir.join(format!("frame-00{i}.png")))
+                .collect::<Vec<_>>(),
             "stills at 0, 2, 4, 6 and 8 seconds"
         );
-        assert_eq!(std::fs::read(dir.join("frame-003.png")).unwrap(), vec![3u8; 4]);
+        assert_eq!(
+            std::fs::read(dir.join("frame-003.png")).unwrap(),
+            vec![3u8; 4]
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -412,7 +450,13 @@ mod tests {
             .unwrap();
     }
 
-    fn pinned(label: &str) -> (std::sync::MutexGuard<'static, ()>, PathBuf, Option<std::ffi::OsString>) {
+    fn pinned(
+        label: &str,
+    ) -> (
+        std::sync::MutexGuard<'static, ()>,
+        PathBuf,
+        Option<std::ffi::OsString>,
+    ) {
         let g = crate::config::hold_test_config();
         let root = crate::config::test_config_root(label);
         let _ = std::fs::remove_dir_all(&root);
@@ -435,12 +479,21 @@ mod tests {
     fn record_without_consent_says_where_to_turn_it_on_and_records_nothing() {
         let (_g, root, home) = pinned("screenrec-consent");
         let mut cabin = Cabin::quiet_for_test();
-        assert!(!cabin.cfg.screen_record, "screen recording is off until Settings turns it on");
+        assert!(
+            !cabin.cfg.screen_record,
+            "screen recording is off until Settings turns it on"
+        );
         cabin.run_slash_line("/record video stutters");
         assert!(cabin.screen_rec.is_none());
         assert_eq!(cabin.status, sr::CONSENT_OFF);
-        assert!(cabin.messages.last().is_some_and(|m| m.1.ends_with(sr::CONSENT_OFF)));
-        assert!(!root.join("GrokHub").join("recordings").exists(), "no folder is made without consent");
+        assert!(cabin
+            .messages
+            .last()
+            .is_some_and(|m| m.1.ends_with(sr::CONSENT_OFF)));
+        assert!(
+            !root.join("GrokHub").join("recordings").exists(),
+            "no folder is made without consent"
+        );
         cabin.run_slash_line("/record stop");
         assert_eq!(cabin.status, "Not recording.");
         unpin(home);
@@ -454,9 +507,17 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let frames: Vec<PathBuf> = (0..3).map(|i| dir.join(sr::frame_name(i, "png"))).collect();
         frames.iter().for_each(|f| png(f));
-        let done = RecordDone { secs: 42, frames, dir: dir.clone(), err: None };
+        let done = RecordDone {
+            secs: 42,
+            frames,
+            dir: dir.clone(),
+            err: None,
+        };
         cabin.finish_screen_recording(done, "video stutters on 4K YouTube", "", String::new());
-        assert!(cabin.screen_diag_rx.is_none(), "nothing is sent without a key");
+        assert!(
+            cabin.screen_diag_rx.is_none(),
+            "nothing is sent without a key"
+        );
         let title = "Screen recording 0:42: video stutters on 4K YouTube";
         assert_eq!(
             cabin.messages.last().map(|m| m.1.clone()),
@@ -472,7 +533,10 @@ mod tests {
             .cloned()
             .expect("one screen recording card");
         assert_eq!(card.title, title);
-        assert_eq!(card.body.as_deref(), Some("Saved on this computer, not diagnosed: Connect Grok in Settings"));
+        assert_eq!(
+            card.body.as_deref(),
+            Some("Saved on this computer, not diagnosed: Connect Grok in Settings")
+        );
 
         cabin.arm_delete_recording(&card.id);
         assert_eq!(
@@ -497,8 +561,15 @@ mod tests {
         let outside = root.join("Documents");
         std::fs::create_dir_all(&outside).unwrap();
         cabin.delete_recording("x", &outside.display().to_string(), "Docs");
-        assert!(outside.exists(), "only a GrokHub recording folder can be deleted");
-        assert!(cabin.status.starts_with("Not deleted: "), "{}", cabin.status);
+        assert!(
+            outside.exists(),
+            "only a GrokHub recording folder can be deleted"
+        );
+        assert!(
+            cabin.status.starts_with("Not deleted: "),
+            "{}",
+            cabin.status
+        );
         unpin(home);
     }
 
@@ -509,11 +580,25 @@ mod tests {
         let dir = sr::recording_dir(&root, "r2");
         let raw = "Seen: Firefox plays a 4K video that freezes.\nLikely cause: Hardware decoding is off.\nFix steps:\n1. Turn on hardware decoding.";
         cabin.post_screen_done("Screen recording 0:12: freezes", &dir, "", Ok(raw.into()));
-        let text = cabin.messages.last().map(|m| m.1.clone()).unwrap_or_default();
+        let text = cabin
+            .messages
+            .last()
+            .map(|m| m.1.clone())
+            .unwrap_or_default();
         assert!(text.starts_with("Screen recording 0:12: freezes\n\nWhat I saw: Firefox plays a 4K video that freezes.\nLikely cause: Hardware decoding is off.\nSuggested fix steps:\n1. Turn on hardware decoding.\n"), "{text}");
-        assert!(text.contains("Nothing was changed on this computer."), "{text}");
-        let card = cabin.updates.iter().find(|c| grokhub_core::screen_recording_dir(c).is_some()).unwrap();
-        assert_eq!(card.body.as_deref(), Some("Likely cause: Hardware decoding is off."));
+        assert!(
+            text.contains("Nothing was changed on this computer."),
+            "{text}"
+        );
+        let card = cabin
+            .updates
+            .iter()
+            .find(|c| grokhub_core::screen_recording_dir(c).is_some())
+            .unwrap();
+        assert_eq!(
+            card.body.as_deref(),
+            Some("Likely cause: Hardware decoding is off.")
+        );
         unpin(home);
     }
 

@@ -36,7 +36,8 @@ const HARD_EYEBROW: &str = "Hard action";
 pub(super) const SOFT_DENY: &str = "Viper denied";
 pub(super) const HALT_DENY: &str = "halted — fail-closed Deny";
 const SOFT_EYEBROW: &str = "Paused";
-const SOFT_NOTE: &str = "Grok stopped after a step didn't work. Approve lets it try again; Deny stops it.";
+const SOFT_NOTE: &str =
+    "Grok stopped after a step didn't work. Approve lets it try again; Deny stops it.";
 /// What a path B credential card and its spans say instead of GB's action line.
 const CREDENTIAL_ACTION: &str = "type into a credential field (value hidden)";
 /// The span tool and args for a `/sync` publish (no content).
@@ -137,9 +138,15 @@ pub(super) enum ParkSource {
 #[derive(Debug, Clone, PartialEq)]
 pub(super) enum Watched {
     /// A pending frame on a live ACP session: Grok Build may still ask.
-    Waiting { tool: String, args: serde_json::Value },
+    Waiting {
+        tool: String,
+        args: serde_json::Value,
+    },
     /// Allowed; its span is written once the step finishes (or at turn end).
-    Allowed { tool: String, args: String },
+    Allowed {
+        tool: String,
+        args: String,
+    },
     Done,
 }
 
@@ -309,12 +316,18 @@ pub(super) fn access_for(desktop_control: bool, full: bool) -> AccessMode {
 /// (or the Spike-2a `grokhub-cua` proxy).
 pub(super) fn is_desktop_ask(p: &grokhub_core::wire::PermissionAsk) -> bool {
     let hay = format!("{} {}", p.title, p.action).to_ascii_lowercase();
-    grokhub_core::CABIN_CU_SERVERS.iter().any(|s| hay.contains(s))
+    grokhub_core::CABIN_CU_SERVERS
+        .iter()
+        .any(|s| hay.contains(s))
 }
 
 /// Permission-card eyebrow: the kind of ask, not the decision count.
 pub(super) fn perm_card_eyebrow(p: &grokhub_core::wire::PermissionAsk) -> &'static str {
-    if is_desktop_ask(p) { "Desktop" } else { "Tool" }
+    if is_desktop_ask(p) {
+        "Desktop"
+    } else {
+        "Tool"
+    }
 }
 
 /// Typed text never lands in a span: a desktop `type` (or Cua's `type_text`
@@ -335,7 +348,9 @@ fn raw_of(card: &ToolCard) -> serde_json::Value {
 
 fn is_desktop_card(card: &ToolCard) -> bool {
     let hay = format!("{} {}", card.title, card.raw_input).to_ascii_lowercase();
-    grokhub_core::CABIN_CU_SERVERS.iter().any(|s| hay.contains(s))
+    grokhub_core::CABIN_CU_SERVERS
+        .iter()
+        .any(|s| hay.contains(s))
 }
 
 /// The tool name of a computer-use frame: the stream's `toolName` when it
@@ -379,7 +394,10 @@ fn pending(status: &str) -> bool {
 }
 
 fn failed(status: &str) -> bool {
-    matches!(status.to_ascii_lowercase().as_str(), "failed" | "error" | "cancelled")
+    matches!(
+        status.to_ascii_lowercase().as_str(),
+        "failed" | "error" | "cancelled"
+    )
 }
 
 /// Path C classifier for one headless tool card: the shell command when there
@@ -394,15 +412,24 @@ pub(super) fn headless_hit(card: &ToolCard) -> (String, String, GateOutcome) {
         .to_string();
     if let Some(cmd) = raw.get("command").and_then(|v| v.as_str()) {
         let args = serde_json::json!({ "command": cmd }).to_string();
-        let verdict = hx::decide(Step::Tool { name: "run_terminal_command", arguments: &args });
+        let verdict = hx::decide(Step::Tool {
+            name: "run_terminal_command",
+            arguments: &args,
+        });
         return (tool, cmd.to_string(), verdict);
     }
-    let verdict = hx::decide(Step::Tool { name: &tool, arguments: "{}" });
+    let verdict = hx::decide(Step::Tool {
+        name: &tool,
+        arguments: "{}",
+    });
     (tool.clone(), tool, verdict)
 }
 
 fn ran(status: &str) -> bool {
-    matches!(status.to_ascii_lowercase().as_str(), "completed" | "done" | "success")
+    matches!(
+        status.to_ascii_lowercase().as_str(),
+        "completed" | "done" | "success"
+    )
 }
 
 impl Cabin {
@@ -461,9 +488,18 @@ impl Cabin {
     /// No hub grant: park a hard Send card. Nothing has left.
     pub(super) fn park_egress(&mut self, dest: &str, class: HardClass) {
         let trace = self.trace_id();
-        self.write_span(hx::Span::hard_park(&trace, HUB_SYNC_TOOL, HUB_SYNC_ARGS, class), "egress");
+        self.write_span(
+            hx::Span::hard_park(&trace, HUB_SYNC_TOOL, HUB_SYNC_ARGS, class),
+            "egress",
+        );
         let action = super::privacy_ui::HUB_CARD_ACTION.to_string();
-        self.park_hard(ParkSource::Egress(dest.into()), class, "egress", HUB_SYNC_TOOL.into(), action);
+        self.park_hard(
+            ParkSource::Egress(dest.into()),
+            class,
+            "egress",
+            HUB_SYNC_TOOL.into(),
+            action,
+        );
     }
 
     /// A chat turn starts (Spike-4c): a heartbeat act set `next_origin` right
@@ -511,9 +547,18 @@ impl Cabin {
         if !p.tool_call_id.is_empty() {
             self.harness.asked.insert(p.tool_call_id.clone());
         }
-        match hx::decide(Step::Ask { title: &p.title, action: &p.action }) {
+        match hx::decide(Step::Ask {
+            title: &p.title,
+            action: &p.action,
+        }) {
             GateOutcome::Refuse { reason } => {
-                let span = hx::Span::deny(&trace, &p.title, &span_args(&p.title, &p.action), &reason, "floor");
+                let span = hx::Span::deny(
+                    &trace,
+                    &p.title,
+                    &span_args(&p.title, &p.action),
+                    &reason,
+                    "floor",
+                );
                 self.write_span(span.from_origin(hx::tool_origin(&p.title)), path);
                 if let Some(h) = &self.acp {
                     let _ = h.reject_permission(&p);
@@ -521,8 +566,12 @@ impl Cabin {
                 self.status = format!("Denied: {reason}");
                 None
             }
-            GateOutcome::Park { hard: Some(class), .. } => {
-                if self.take_oneshot(&p.action) || self.take_oneshot_step(&p.title, &p.action, class) {
+            GateOutcome::Park {
+                hard: Some(class), ..
+            } => {
+                if self.take_oneshot(&p.action)
+                    || self.take_oneshot_step(&p.title, &p.action, class)
+                {
                     // Approved once on a path C or D card: Grok's own Allow card decides.
                     return Some(p);
                 }
@@ -532,7 +581,8 @@ impl Cabin {
                 } else {
                     p.action.clone()
                 };
-                let span = hx::Span::hard_park(&trace, &p.title, &span_args(&p.title, &action), class);
+                let span =
+                    hx::Span::hard_park(&trace, &p.title, &span_args(&p.title, &action), class);
                 self.write_span(span.from_origin(hx::tool_origin(&p.title)), path);
                 let tool = p.title.clone();
                 self.park_hard(ParkSource::Ask(p), class, path, tool, action);
@@ -540,7 +590,16 @@ impl Cabin {
             }
             _ if is_desktop_ask(&p) && !self.access_mode().allows_computer() => {
                 let why = "Access is Readonly: turn on Let Grok control the desktop first";
-                self.write_span(hx::Span::deny(&trace, &p.title, &span_args(&p.title, &p.action), why, "soft"), path);
+                self.write_span(
+                    hx::Span::deny(
+                        &trace,
+                        &p.title,
+                        &span_args(&p.title, &p.action),
+                        why,
+                        "soft",
+                    ),
+                    path,
+                );
                 if let Some(h) = &self.acp {
                     let _ = h.reject_permission(&p);
                 }
@@ -580,7 +639,8 @@ impl Cabin {
         let hit = shot.step.as_ref().is_some_and(|(tool, c)| {
             let tool = tool.to_ascii_lowercase();
             *c == class
-                && (title.to_ascii_lowercase().contains(&tool) || action.to_ascii_lowercase().contains(&tool))
+                && (title.to_ascii_lowercase().contains(&tool)
+                    || action.to_ascii_lowercase().contains(&tool))
         });
         if hit {
             shot.action = None;
@@ -618,7 +678,13 @@ impl Cabin {
 
     /// A fix step classified hard parks the same white card (Spike-9).
     pub(super) fn park_repair(&mut self, class: HardClass, command: String) {
-        self.park_hard(ParkSource::Repair, class, "repair", grokhub_agent::repair::REPAIR_TOOL.into(), command);
+        self.park_hard(
+            ParkSource::Repair,
+            class,
+            "repair",
+            grokhub_agent::repair::REPAIR_TOOL.into(),
+            command,
+        );
     }
 
     /// A hard card past `APPROVAL_TTL` is denied with a span. Painting and the
@@ -644,8 +710,20 @@ impl Cabin {
     }
 
     /// A hard step GrokHub prepared on its own waits on the white card.
-    pub(super) fn park_proactive(&mut self, class: HardClass, tool: String, arguments: String, prepared: String) {
-        self.park_hard(ParkSource::AutoPrepared(arguments), class, "E", tool, prepared);
+    pub(super) fn park_proactive(
+        &mut self,
+        class: HardClass,
+        tool: String,
+        arguments: String,
+        prepared: String,
+    ) {
+        self.park_hard(
+            ParkSource::AutoPrepared(arguments),
+            class,
+            "E",
+            tool,
+            prepared,
+        );
     }
 
     /// Approve answers once (never Always). Deny, Esc, TTL, and halt reject.
@@ -661,13 +739,23 @@ impl Cabin {
             _ => self.trace_id(),
         };
         let span = if approve {
-            hx::Span::hard_approve(&trace, &park.tool, &span_args(&park.tool, &park.action), park.class)
+            hx::Span::hard_approve(
+                &trace,
+                &park.tool,
+                &span_args(&park.tool, &park.action),
+                park.class,
+            )
         } else {
-            hx::Span::deny(&trace, &park.tool, &span_args(&park.tool, &park.action), why, park.class.as_str())
+            hx::Span::deny(
+                &trace,
+                &park.tool,
+                &span_args(&park.tool, &park.action),
+                why,
+                park.class.as_str(),
+            )
         };
         // An episode park's outcome span is the kernel's (Spike-3b).
-        let kernel_park =
-            matches!(&park.source, ParkSource::Desk(id) if id.starts_with(grokhub_agent::episode::PARK_PREFIX));
+        let kernel_park = matches!(&park.source, ParkSource::Desk(id) if id.starts_with(grokhub_agent::episode::PARK_PREFIX));
         if let ParkSource::AutoPrepared(_) = park.source {
             let mut span = span.on_path(park.path).from_origin(hx::Origin::Proactive);
             span.access = self.access_mode().as_str().into();
@@ -721,7 +809,8 @@ impl Cabin {
             ParkSource::ProviderKey(_) => key_answer = Some(approve),
             ParkSource::AutoPrepared(args) => {
                 if approve {
-                    let (text, failed) = hx::run_approved_once(&self.native_workspace(), &park.tool, args);
+                    let (text, failed) =
+                        hx::run_approved_once(&self.native_workspace(), &park.tool, args);
                     if failed {
                         self.status = grokhub_core::redact_secrets(&text);
                         self.harness.park = self.harness.queue.pop_front();
@@ -787,7 +876,8 @@ impl Cabin {
         }
         let park = self.harness.soft_parks.remove(i);
         let trace = self.trace_id();
-        let args = serde_json::json!({ "detector": park.detector, "evidence": park.evidence }).to_string();
+        let args =
+            serde_json::json!({ "detector": park.detector, "evidence": park.evidence }).to_string();
         let mut span = if approve {
             let mut s = hx::Span::soft_allow(
                 &trace,
@@ -807,7 +897,11 @@ impl Cabin {
         self.write_span(span, "audit");
         self.harness.repair = None;
         self.harness.ladder.reset();
-        self.status = if approve { "Resumed".into() } else { "Stopped that step".into() };
+        self.status = if approve {
+            "Resumed".into()
+        } else {
+            "Stopped that step".into()
+        };
         if approve && self.harness.soft_parks.is_empty() && !self.running {
             self.resume_parked_run();
             self.status = "Resumed".into();
@@ -890,8 +984,14 @@ impl Cabin {
                 | ParkSource::ProviderKey(_) => continue,
             }
             let args = span_args(&park.tool, &park.action);
-            self.write_span(hx::Span::deny(&trace, &park.tool, &args, why, park.class.as_str()), park.path);
-            self.write_span(hx::Span::hard_park(&trace, &park.tool, &args, park.class), park.path);
+            self.write_span(
+                hx::Span::deny(&trace, &park.tool, &args, why, park.class.as_str()),
+                park.path,
+            );
+            self.write_span(
+                hx::Span::hard_park(&trace, &park.tool, &args, park.class),
+                park.path,
+            );
             park.source = ParkSource::Held;
         }
         kept
@@ -913,15 +1013,27 @@ impl Cabin {
     pub(super) fn harness_turn_end(&mut self, reply: &str, turn: u32) {
         let dir = crate::config::config_dir();
         let trace = self.trace_id();
-        let this_turn = |a: &hx::Audit| a.windows.iter().any(|w| w.chat_id == trace && w.turn == turn);
-        let stepped = hx::audit_file(&dir, &trace, Some((&trace, turn))).is_ok_and(|a| this_turn(&a));
+        let this_turn = |a: &hx::Audit| {
+            a.windows
+                .iter()
+                .any(|w| w.chat_id == trace && w.turn == turn)
+        };
+        let stepped =
+            hx::audit_file(&dir, &trace, Some((&trace, turn))).is_ok_and(|a| this_turn(&a));
         if !stepped && !grokhub_core::verify::has_goal_complete(reply) {
             return;
         }
-        self.write_span_at(hx::Span::reply(&trace, reply, &self.secret_hold), "audit", turn);
+        self.write_span_at(
+            hx::Span::reply(&trace, reply, &self.secret_hold),
+            "audit",
+            turn,
+        );
         let _ = self.write_turn_trail(&trace, turn);
         let audit = hx::audit_file(&dir, &trace, Some((&trace, turn))).ok();
-        let paused = self.harness.soft_parks.is_empty() && audit.as_ref().is_some_and(|a| self.harness_ladder_step(&trace, turn, a));
+        let paused = self.harness.soft_parks.is_empty()
+            && audit
+                .as_ref()
+                .is_some_and(|a| self.harness_ladder_step(&trace, turn, a));
         self.record_turn_outcome(&trace, turn, audit.as_ref(), paused);
     }
 
@@ -958,7 +1070,11 @@ impl Cabin {
     /// Memory repo mode only; legacy and scratch chats write none. Built from
     /// spans only (it reads, never runs anything). A sealed trail with no key
     /// is `Paused` and writes nothing; the turn ends as usual either way.
-    pub(super) fn write_turn_trail(&mut self, chat: &str, turn: u32) -> Option<std::thread::JoinHandle<()>> {
+    pub(super) fn write_turn_trail(
+        &mut self,
+        chat: &str,
+        turn: u32,
+    ) -> Option<std::thread::JoinHandle<()>> {
         if !self.amr_on() || self.scratch() {
             return None;
         }
@@ -1011,7 +1127,8 @@ impl Cabin {
         let trace = self.trace_id();
         self.episode_user_sent();
         for park in std::mem::take(&mut self.harness.soft_parks) {
-            let args = serde_json::json!({ "detector": park.detector, "evidence": park.evidence }).to_string();
+            let args = serde_json::json!({ "detector": park.detector, "evidence": park.evidence })
+                .to_string();
             let mut span = hx::Span::soft_allow(
                 &trace,
                 hx::RECOVERY_TOOL,
@@ -1048,7 +1165,12 @@ impl Cabin {
         if is_builtin_cu_card(card) {
             return;
         }
-        if let Some(h) = self.harness.headless.iter_mut().find(|h| h.card_id == card.id) {
+        if let Some(h) = self
+            .harness
+            .headless
+            .iter_mut()
+            .find(|h| h.card_id == card.id)
+        {
             if !card.status.is_empty() {
                 h.status = card.status.clone();
             }
@@ -1074,9 +1196,17 @@ impl Cabin {
             let done = ran(&h.status);
             match (&h.hit, done) {
                 (GateOutcome::Refuse { reason }, false) => {
-                    self.write_span(hx::Span::deny(&trace, &h.tool, &h.action, reason, "floor"), "C");
+                    self.write_span(
+                        hx::Span::deny(&trace, &h.tool, &h.action, reason, "floor"),
+                        "C",
+                    );
                 }
-                (GateOutcome::Park { hard: Some(class), .. }, false) => {
+                (
+                    GateOutcome::Park {
+                        hard: Some(class), ..
+                    },
+                    false,
+                ) => {
                     self.write_span(hx::Span::hard_park(&trace, &h.tool, &h.action, *class), "C");
                     self.park_hard(ParkSource::Headless, *class, "C", h.tool, h.action);
                 }
@@ -1137,7 +1267,9 @@ impl Cabin {
             return false;
         }
         if from_acp && pending(&card.status) {
-            self.harness.watched.insert(card.id.clone(), Watched::Waiting { tool: name, args });
+            self.harness
+                .watched
+                .insert(card.id.clone(), Watched::Waiting { tool: name, args });
             return false;
         }
         match hx::decide_unasked(&name, &args, self.access_mode()) {
@@ -1146,17 +1278,38 @@ impl Cabin {
                 if ran(&card.status) || failed(&card.status) {
                     self.write_cu_allow(card, &name, &kept);
                 } else {
-                    self.harness.watched.insert(card.id.clone(), Watched::Allowed { tool: name, args: kept });
+                    self.harness.watched.insert(
+                        card.id.clone(),
+                        Watched::Allowed {
+                            tool: name,
+                            args: kept,
+                        },
+                    );
                 }
                 false
             }
-            GateOutcome::Park { hard: Some(class), .. } => self.stop_unasked_hard(card, &name, &args, class),
-            GateOutcome::Refuse { reason } | GateOutcome::Park { reason, hard: None, .. } => {
+            GateOutcome::Park {
+                hard: Some(class), ..
+            } => self.stop_unasked_hard(card, &name, &args, class),
+            GateOutcome::Refuse { reason }
+            | GateOutcome::Park {
+                reason, hard: None, ..
+            } => {
                 // Readonly or the floor: stop the turn, no card, no bypass.
                 self.harness.watched.insert(card.id.clone(), Watched::Done);
                 let trace = self.trace_id();
-                let class = if self.access_mode().allows_computer() { "floor" } else { "soft" };
-                let span = hx::Span::deny(&trace, &name, &hx::redact_args(&args.to_string()), &reason, class);
+                let class = if self.access_mode().allows_computer() {
+                    "floor"
+                } else {
+                    "soft"
+                };
+                let span = hx::Span::deny(
+                    &trace,
+                    &name,
+                    &hx::redact_args(&args.to_string()),
+                    &reason,
+                    class,
+                );
                 self.write_span(span, "D");
                 self.stop_turn_unasked();
                 self.status = format!("Stopped: {reason}");
@@ -1170,10 +1323,14 @@ impl Cabin {
     /// like path A.
     fn write_cu_allow(&mut self, card: &ToolCard, name: &str, kept: &str) {
         self.harness.watched.insert(card.id.clone(), Watched::Done);
-        let changed = card.image_data_url.as_deref().map(frame_hash).and_then(|h| {
-            let was = self.harness.last_cu_frame.replace(h);
-            was.map(|w| w != h)
-        });
+        let changed = card
+            .image_data_url
+            .as_deref()
+            .map(frame_hash)
+            .and_then(|h| {
+                let was = self.harness.last_cu_frame.replace(h);
+                was.map(|w| w != h)
+            });
         if hx::cu_look_only(name) {
             return;
         }
@@ -1181,7 +1338,15 @@ impl Cabin {
         let span = if failed(&card.status) {
             hx::Span::deny(&trace, name, kept, &card.status, "soft")
         } else {
-            hx::Span::soft_allow(&trace, name, kept, "ran", "Grok Build computer use, no ask", self.access_mode(), "grok_build")
+            hx::Span::soft_allow(
+                &trace,
+                name,
+                kept,
+                "ran",
+                "Grok Build computer use, no ask",
+                self.access_mode(),
+                "grok_build",
+            )
         };
         self.write_span(span.with_ui_changed(changed), "D");
     }
@@ -1190,26 +1355,51 @@ impl Cabin {
     /// an allow with no approve when it already ran (`approval_gate_violation`
     /// flags it), then a deny span and a hard card. Approve re-runs that one
     /// step once through a one-shot ACP Ask, like a path C card.
-    fn stop_unasked_hard(&mut self, card: &ToolCard, name: &str, args: &serde_json::Value, class: HardClass) -> bool {
+    fn stop_unasked_hard(
+        &mut self,
+        card: &ToolCard,
+        name: &str,
+        args: &serde_json::Value,
+        class: HardClass,
+    ) -> bool {
         self.harness.watched.insert(card.id.clone(), Watched::Done);
         let trace = self.trace_id();
         let kept = hx::redact_args(&args.to_string());
         let action = hx::unasked_action(name, args, class);
         if self.take_oneshot(&action) {
             // The one step the user approved on this card, re-run once.
-            let mut s = hx::Span::soft_allow(&trace, name, &kept, "ran", "approved once on the card", self.access_mode(), "grok_build");
+            let mut s = hx::Span::soft_allow(
+                &trace,
+                name,
+                &kept,
+                "ran",
+                "approved once on the card",
+                self.access_mode(),
+                "grok_build",
+            );
             s.approval_class = class.as_str().into();
             s.hard_approved = true;
             self.write_span(s, "D");
             return false;
         }
         if ran(&card.status) {
-            let mut s = hx::Span::soft_allow(&trace, name, &kept, "ran", "Grok Build ran a hard step with no ask", self.access_mode(), "grok_build");
+            let mut s = hx::Span::soft_allow(
+                &trace,
+                name,
+                &kept,
+                "ran",
+                "Grok Build ran a hard step with no ask",
+                self.access_mode(),
+                "grok_build",
+            );
             s.approval_class = class.as_str().into();
             self.write_span(s, "D");
         }
         let why = "stopped: Grok Build tried a hard step without asking";
-        self.write_span(hx::Span::deny(&trace, name, &kept, why, class.as_str()), "D");
+        self.write_span(
+            hx::Span::deny(&trace, name, &kept, why, class.as_str()),
+            "D",
+        );
         self.stop_turn_unasked();
         self.write_span(hx::Span::hard_park(&trace, name, &kept, class), "D");
         self.park_hard(ParkSource::Unasked, class, "D", name.to_string(), action);
@@ -1220,7 +1410,9 @@ impl Cabin {
     /// Stop the turn with the existing stop path. Parked cards stay, like a
     /// Steer: a path A / B park is denied with a span and kept as held.
     fn stop_turn_unasked(&mut self) {
-        let parks = self.take_parks_for_stop("turn stopped by the path D check — the card stays for a fresh approval");
+        let parks = self.take_parks_for_stop(
+            "turn stopped by the path D check — the card stays for a fresh approval",
+        );
         self.halt_in_flight();
         self.restore_parks_after_steer(parks);
     }
@@ -1236,7 +1428,15 @@ impl Cabin {
                 if hx::cu_look_only(&tool) {
                     continue;
                 }
-                let span = hx::Span::soft_allow(&trace, &tool, &args, "ran", "Grok Build computer use, no ask", self.access_mode(), "grok_build");
+                let span = hx::Span::soft_allow(
+                    &trace,
+                    &tool,
+                    &args,
+                    "ran",
+                    "Grok Build computer use, no ask",
+                    self.access_mode(),
+                    "grok_build",
+                );
                 self.write_span(span, "D");
             }
         }
@@ -1300,7 +1500,11 @@ impl Cabin {
     /// one-shot pill restore. Throttled to [`POLL`].
     pub(super) fn poll_harness(&mut self) {
         let now = Instant::now();
-        if self.harness.last_poll.is_some_and(|t| now.duration_since(t) < POLL) {
+        if self
+            .harness
+            .last_poll
+            .is_some_and(|t| now.duration_since(t) < POLL)
+        {
             return;
         }
         self.harness.last_poll = Some(now);
@@ -1552,8 +1756,10 @@ pub(super) fn harness_card(
                 ui.horizontal(|ui| {
                     let clicked = match style.primary {
                         // A hard Approve takes a pointer click: Enter or Space on a focused pill does nothing.
-                        PillKind::Danger => crate::cards::felt_pill_at(ui, None, primary, PillKind::Danger)
-                            .clicked_by(egui::PointerButton::Primary),
+                        PillKind::Danger => {
+                            crate::cards::felt_pill_at(ui, None, primary, PillKind::Danger)
+                                .clicked_by(egui::PointerButton::Primary)
+                        }
                         PillKind::Solid => crate::cards::white_pill(ui, primary),
                         PillKind::Ghost => crate::cards::ghost_pill(ui, primary),
                     };
@@ -1571,7 +1777,12 @@ pub(super) fn harness_card(
 }
 
 /// Remember where a Work-tree frame painted, for the click marker.
-pub(super) fn remember_work_frame(ui: &egui::Ui, card_id: &str, rect: egui::Rect, size: [usize; 2]) {
+pub(super) fn remember_work_frame(
+    ui: &egui::Ui,
+    card_id: &str,
+    rect: egui::Rect,
+    size: [usize; 2],
+) {
     let id = egui::Id::new(("work-frame", card_id));
     ui.ctx().data_mut(|d| d.insert_temp(id, (rect, size)));
 }
@@ -1608,7 +1819,8 @@ pub(super) fn marker_sample(
     reduced: bool,
 ) -> (egui::Pos2, f32, bool) {
     use crate::motion::{
-        AgentCursorAnim, AgentCursorPhase, AGENT_CURSOR_MOTION, CURSOR_CLICK_SECS, CURSOR_TRAVEL_SECS,
+        AgentCursorAnim, AgentCursorPhase, AGENT_CURSOR_MOTION, CURSOR_CLICK_SECS,
+        CURSOR_TRAVEL_SECS,
     };
     const HOVER: f32 = 0.200;
     if reduced {
@@ -1621,7 +1833,11 @@ pub(super) fn marker_sample(
     } else if el < travel + HOVER {
         (AgentCursorPhase::HoverSettle, t0 + f64::from(travel), HOVER)
     } else if el < travel + HOVER + CURSOR_CLICK_SECS {
-        (AgentCursorPhase::ClickPress, t0 + f64::from(travel + HOVER), CURSOR_CLICK_SECS)
+        (
+            AgentCursorPhase::ClickPress,
+            t0 + f64::from(travel + HOVER),
+            CURSOR_CLICK_SECS,
+        )
     } else {
         return (to, 1.0, false);
     };
@@ -1643,7 +1859,9 @@ pub(super) fn paint_click_marker(ui: &egui::Ui, cards: &[&ToolCard]) {
         return;
     };
     let frame_id = egui::Id::new(("work-frame", frame_card.id.as_str()));
-    let Some((rect, size)) = ui.ctx().data(|d| d.get_temp::<(egui::Rect, [usize; 2])>(frame_id))
+    let Some((rect, size)) = ui
+        .ctx()
+        .data(|d| d.get_temp::<(egui::Rect, [usize; 2])>(frame_id))
     else {
         return;
     };
@@ -1657,12 +1875,15 @@ pub(super) fn paint_click_marker(ui: &egui::Ui, cards: &[&ToolCard]) {
     let to = marker_pos(rect, size, x, y);
     let now = ui.ctx().input(|i| i.time);
     let t_id = egui::Id::new(("work-click", click_card.id.as_str()));
-    let t0 = ui.ctx().data_mut(|d| *d.get_temp_mut_or_insert_with(t_id, || now));
+    let t0 = ui
+        .ctx()
+        .data_mut(|d| *d.get_temp_mut_or_insert_with(t_id, || now));
     let reduced = crate::motion::reduced_motion(ui);
     let (pos, scale, live) = marker_sample(rect.center(), to, t0, now, reduced);
     crate::motion::paint_agent_cursor(ui.painter(), pos, scale);
     if live {
-        ui.ctx().request_repaint_after(std::time::Duration::from_millis(16));
+        ui.ctx()
+            .request_repaint_after(std::time::Duration::from_millis(16));
     }
 }
 
@@ -1740,7 +1961,10 @@ mod tests {
 
     #[test]
     fn desktop_asks_are_the_grokhub_desktop_mcp() {
-        assert!(is_desktop_ask(&ask("grokhub-desktop__click", "click 10,20")));
+        assert!(is_desktop_ask(&ask(
+            "grokhub-desktop__click",
+            "click 10,20"
+        )));
         assert!(!is_desktop_ask(&ask("Run command", "ls")));
     }
 
@@ -1751,14 +1975,20 @@ mod tests {
         assert_eq!(cabin.access_mode(), AccessMode::Readonly);
         cabin.set_permission_mode(PermissionMode::AlwaysApprove);
         assert_eq!(cabin.access_mode(), AccessMode::Readonly);
-        assert!(!cabin.cfg.desktop_control, "Always must not turn on desktop control");
+        assert!(
+            !cabin.cfg.desktop_control,
+            "Always must not turn on desktop control"
+        );
         cabin.cfg.desktop_control = true;
         assert_eq!(cabin.access_mode(), AccessMode::Supervised);
         assert!(!cabin.harness.access_full, "Always must not grant Full");
         cabin.harness.full_card_on = true;
         let soft = ask("grokhub-desktop__click", "click 1,2");
         assert_eq!(cabin.harness_precheck(soft.clone()), Some(soft));
-        assert!(cabin.harness.full_card.is_some(), "first desktop act offers the inline card");
+        assert!(
+            cabin.harness.full_card.is_some(),
+            "first desktop act offers the inline card"
+        );
         assert_eq!(cabin.access_mode(), AccessMode::Supervised);
         cabin.resolve_grant_full(true, "");
         assert_eq!(cabin.access_mode(), AccessMode::Full);
@@ -1778,7 +2008,10 @@ mod tests {
         cabin.cfg.desktop_control = true;
         cabin.harness.access_full = true;
         let out = cabin.harness_precheck(ask("Run command", "rm -f draft.md"));
-        assert_eq!(out, None, "hard class must not reach the Always auto-answer");
+        assert_eq!(
+            out, None,
+            "hard class must not reach the Always auto-answer"
+        );
         let park = cabin.harness.park.clone().expect("parked");
         assert_eq!(park.class, HardClass::Delete);
         assert_eq!(park.path, "B");
@@ -1829,7 +2062,12 @@ mod tests {
         assert_eq!(cabin.hard_waiting(), 0);
         assert!(cabin.harness.full_card.is_none());
         let spans = hx::read_spans(&root, "session").unwrap();
-        let tail: Vec<_> = spans.iter().rev().take(3).map(|s| (s.decision.as_str(), s.result.as_str())).collect();
+        let tail: Vec<_> = spans
+            .iter()
+            .rev()
+            .take(3)
+            .map(|s| (s.decision.as_str(), s.result.as_str()))
+            .collect();
         assert_eq!(
             tail,
             vec![
@@ -1846,11 +2084,20 @@ mod tests {
         let (_pin, root) = pinned("harness-floor");
         let mut cabin = Cabin::quiet_for_test();
         cabin.permission_mode = PermissionMode::AlwaysApprove;
-        assert_eq!(cabin.harness_precheck(ask("Run command", "cat ~/.ssh/id_rsa")), None);
+        assert_eq!(
+            cabin.harness_precheck(ask("Run command", "cat ~/.ssh/id_rsa")),
+            None
+        );
         assert!(cabin.harness.park.is_none());
         assert_eq!(cabin.status, "Denied: forbidden path: ssh keys");
-        assert_eq!(cabin.harness_precheck(ask("grokhub-desktop__click", "click 1,2")), None);
-        assert_eq!(cabin.status, "Access is Readonly: turn on Let Grok control the desktop first");
+        assert_eq!(
+            cabin.harness_precheck(ask("grokhub-desktop__click", "click 1,2")),
+            None
+        );
+        assert_eq!(
+            cabin.status,
+            "Access is Readonly: turn on Let Grok control the desktop first"
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -1889,12 +2136,28 @@ mod tests {
         cabin.resolve_hard_park(true, "");
         assert_eq!(hx::take_answer(&root, "d1"), Some(true));
         let spans = hx::read_spans(&root, "session").unwrap();
-        let logged: Vec<_> = spans.iter().map(|s| (s.decision.as_str(), s.args_redacted.as_str())).collect();
-        assert_eq!(logged, vec![("approve", r#"{"chars":20}"#)], "typed text stays out of spans");
-        assert_eq!(span_args("grokhub-desktop__type", "hunter2"), r#"{"chars":7}"#);
+        let logged: Vec<_> = spans
+            .iter()
+            .map(|s| (s.decision.as_str(), s.args_redacted.as_str()))
+            .collect();
+        assert_eq!(
+            logged,
+            vec![("approve", r#"{"chars":20}"#)],
+            "typed text stays out of spans"
+        );
+        assert_eq!(
+            span_args("grokhub-desktop__type", "hunter2"),
+            r#"{"chars":7}"#
+        );
         assert_eq!(span_args("run_terminal_command", "rm -f x"), "rm -f x");
-        assert_eq!(span_args("grokhub-cua__type_text", "hunter2"), r#"{"chars":7}"#);
-        assert_eq!(span_args("mcp__grokhub-cua__set_value", "s3cret"), r#"{"chars":6}"#);
+        assert_eq!(
+            span_args("grokhub-cua__type_text", "hunter2"),
+            r#"{"chars":7}"#
+        );
+        assert_eq!(
+            span_args("mcp__grokhub-cua__set_value", "s3cret"),
+            r#"{"chars":6}"#
+        );
         assert_eq!(span_args("grokhub-cua__press_key", "Return"), "Return");
         let turn = hx::read_turn_context(&root);
         assert_eq!(turn.chat_id, "session");
@@ -1907,25 +2170,47 @@ mod tests {
         let (_pin, root) = pinned("harness-headless");
         let mut cabin = Cabin::quiet_for_test();
         cabin.permission_mode = PermissionMode::AlwaysApprove;
-        let denied = card("c1", "pending", r#"{"tool":"run_terminal_command","command":"rm -f disposable.txt"}"#);
+        let denied = card(
+            "c1",
+            "pending",
+            r#"{"tool":"run_terminal_command","command":"rm -f disposable.txt"}"#,
+        );
         cabin.harness_note_headless(&denied);
-        let ran_card = card("c2", "pending", r#"{"tool":"run_terminal_command","command":"shred notes.txt"}"#);
+        let ran_card = card(
+            "c2",
+            "pending",
+            r#"{"tool":"run_terminal_command","command":"shred notes.txt"}"#,
+        );
         cabin.harness_note_headless(&ran_card);
         cabin.harness_note_headless(&card("c2", "completed", ""));
-        cabin.harness_note_headless(&card("c3", "completed", r#"{"tool":"run_terminal_command","command":"ls"}"#));
+        cabin.harness_note_headless(&card(
+            "c3",
+            "completed",
+            r#"{"tool":"run_terminal_command","command":"ls"}"#,
+        ));
         cabin.harness_headless_end();
         let park = cabin.harness.park.clone().expect("path C park");
         assert_eq!(park.source, ParkSource::Headless);
         assert_eq!(park.action, "rm -f disposable.txt");
         assert_eq!(park.path, "C");
         cabin.withdraw_hard_parks();
-        assert!(cabin.harness.park.is_some(), "a turn stop leaves path C cards");
+        assert!(
+            cabin.harness.park.is_some(),
+            "a turn stop leaves path C cards"
+        );
         cabin.halt_hard_parks();
         assert!(cabin.harness.park.is_none());
         let spans = hx::read_spans(&root, "session").unwrap();
-        let kinds: Vec<_> = spans.iter().map(|s| (s.path.as_str(), s.decision.as_str())).collect();
+        let kinds: Vec<_> = spans
+            .iter()
+            .map(|s| (s.path.as_str(), s.decision.as_str()))
+            .collect();
         assert_eq!(kinds, vec![("C", "park"), ("C", "allow"), ("C", "deny")]);
-        assert_eq!(hx::approval_gate_violation(&spans).len(), 1, "the unapproved run is flagged");
+        assert_eq!(
+            hx::approval_gate_violation(&spans).len(),
+            1,
+            "the unapproved run is flagged"
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -1962,7 +2247,10 @@ mod tests {
         let mut cabin = Cabin::quiet_for_test();
         cabin.permission_mode = PermissionMode::AlwaysApprove;
         // Path B hard ask, path A desk park, path C headless park, one ladder pause.
-        assert_eq!(cabin.harness_precheck(ask("Run command", "rm -f draft.md")), None);
+        assert_eq!(
+            cabin.harness_precheck(ask("Run command", "rm -f draft.md")),
+            None
+        );
         hx::post_park(
             &root,
             &hx::ParkRequest {
@@ -1976,7 +2264,11 @@ mod tests {
         )
         .unwrap();
         cabin.poll_harness();
-        cabin.harness_note_headless(&card("c1", "pending", r#"{"tool":"run_terminal_command","command":"shred notes.txt"}"#));
+        cabin.harness_note_headless(&card(
+            "c1",
+            "pending",
+            r#"{"tool":"run_terminal_command","command":"shred notes.txt"}"#,
+        ));
         cabin.harness_headless_end();
         cabin.harness.soft_parks.push(SoftPark {
             detector: "action_loop".into(),
@@ -1995,7 +2287,10 @@ mod tests {
         cabin.chat_job_thread = Some(cabin.visible_thread_id());
         assert!(cabin.can_steer_live_turn());
         cabin.send_from_composer("go left instead".into());
-        assert!(cabin.running && cabin.grok_p_rx.is_some(), "a steer keeps the turn");
+        assert!(
+            cabin.running && cabin.grok_p_rx.is_some(),
+            "a steer keeps the turn"
+        );
         assert_eq!(cabin.status, "Steering…");
         assert_eq!(cabin.decisions_waiting(), 4);
         assert_eq!(decisions(&root), before, "a steer writes no span");
@@ -2012,12 +2307,27 @@ mod tests {
             .chain(cabin.harness.queue.iter())
             .map(|p| p.source.clone())
             .collect();
-        assert_eq!(sources, vec![ParkSource::Held, ParkSource::Held, ParkSource::Headless]);
-        assert_eq!(cabin.harness.soft_parks.len(), 1, "a stop does not answer a pause");
+        assert_eq!(
+            sources,
+            vec![ParkSource::Held, ParkSource::Held, ParkSource::Headless]
+        );
+        assert_eq!(
+            cabin.harness.soft_parks.len(),
+            1,
+            "a stop does not answer a pause"
+        );
         assert_eq!(cabin.decisions_waiting(), 4);
-        assert_eq!(hx::take_answer(&root, "d9"), Some(false), "the stopped desk call was denied");
+        assert_eq!(
+            hx::take_answer(&root, "d9"),
+            Some(false),
+            "the stopped desk call was denied"
+        );
         let after = decisions(&root);
-        assert_eq!(after[..before.len()], before[..], "earlier spans are untouched");
+        assert_eq!(
+            after[..before.len()],
+            before[..],
+            "earlier spans are untouched"
+        );
         assert_eq!(
             after[before.len()..],
             [
@@ -2045,13 +2355,24 @@ mod tests {
         assert_eq!(cabin.hard_waiting(), 3);
         assert_eq!(cabin.harness.soft_parks.len(), 1);
         let last = hx::read_spans(&root, "session").unwrap().pop().unwrap();
-        assert_eq!((last.tool.as_str(), last.decision.as_str()), (hx::RECOVERY_TOOL, "skip"));
+        assert_eq!(
+            (last.tool.as_str(), last.decision.as_str()),
+            (hx::RECOVERY_TOOL, "skip")
+        );
         assert_eq!(last.origin, hx::Origin::Repair);
 
         // Approve on a held card re-runs that one step under Grok's own Allow.
         cabin.resolve_hard_park(true, "");
         assert_eq!(cabin.permission_mode, PermissionMode::Ask);
-        assert_eq!(cabin.harness.oneshot.as_ref().and_then(|o| o.action.clone()).as_deref(), Some("rm -f draft.md"));
+        assert_eq!(
+            cabin
+                .harness
+                .oneshot
+                .as_ref()
+                .and_then(|o| o.action.clone())
+                .as_deref(),
+            Some("rm -f draft.md")
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -2062,10 +2383,18 @@ mod tests {
         let mut cabin = Cabin::quiet_for_test();
         let turn = cabin.turn_no();
         let click = |ts: u64| {
-            let mut s = hx::Span::soft_allow("session", "click", r#"{"x":40,"y":12}"#, "clicked", "grokhub-desktop click", AccessMode::Supervised, "grok_build")
-                .on_path("A")
-                .in_turn("session", turn)
-                .with_ui_changed(Some(false));
+            let mut s = hx::Span::soft_allow(
+                "session",
+                "click",
+                r#"{"x":40,"y":12}"#,
+                "clicked",
+                "grokhub-desktop click",
+                AccessMode::Supervised,
+                "grok_build",
+            )
+            .on_path("A")
+            .in_turn("session", turn)
+            .with_ui_changed(Some(false));
             s.ts_ms = ts;
             hx::append_span(&root, &s).unwrap();
         };
@@ -2076,13 +2405,24 @@ mod tests {
         click(1);
         cabin.harness_turn_end("I clicked Save and it worked.", turn);
         let repair = cabin.harness.repair.clone().expect("retry turn queued");
-        assert!(repair.starts_with("GrokHub's check: `click` changed nothing on screen"), "{repair}");
-        assert!(cabin.kick_repair(), "the retry goes once nothing else waits");
+        assert!(
+            repair.starts_with("GrokHub's check: `click` changed nothing on screen"),
+            "{repair}"
+        );
+        assert!(
+            cabin.kick_repair(),
+            "the retry goes once nothing else waits"
+        );
         assert_eq!(cabin.harness.repair, None);
 
         click(2);
         cabin.harness_turn_end("Clicked Save again, done.", turn);
-        assert!(cabin.harness.repair.as_deref().unwrap().contains("try a different target"));
+        assert!(cabin
+            .harness
+            .repair
+            .as_deref()
+            .unwrap()
+            .contains("try a different target"));
         cabin.harness.repair = None;
 
         // Out of retries, a soft finding re-plans instead of pausing, as often as it takes.
@@ -2090,7 +2430,10 @@ mod tests {
             click(ts);
             cabin.harness_turn_end(reply, turn);
             let repair = cabin.harness.repair.take().expect("re-plan turn queued");
-            assert!(repair.contains("Stop repeating that. Re-read the goal"), "{repair}");
+            assert!(
+                repair.contains("Stop repeating that. Re-read the goal"),
+                "{repair}"
+            );
             assert!(cabin.harness.soft_parks.is_empty(), "no card");
             assert_eq!(cabin.decisions_waiting(), 0);
         }
@@ -2135,10 +2478,16 @@ mod tests {
         assert_eq!(cabin.harness_precheck(ask("send_email", "to sam")), None);
         cabin.resolve_hard_park(false, "Viper denied");
         cabin.harness_turn_end("I sent the email to Sam.", turn);
-        assert_eq!(cabin.harness.repair, None, "a hard step is never retried on its own");
+        assert_eq!(
+            cabin.harness.repair, None,
+            "a hard step is never retried on its own"
+        );
         assert_eq!(cabin.harness.soft_parks.len(), 1);
         let last = hx::read_spans(&root, "session").unwrap().pop().unwrap();
-        assert_eq!((last.decision.as_str(), last.approval_class.as_str()), ("pause", "send"));
+        assert_eq!(
+            (last.decision.as_str(), last.approval_class.as_str()),
+            ("pause", "send")
+        );
         assert_eq!(
             last.claim,
             "unsupported_assurance: hard-class send is never retried on its own; it needs your approval"
@@ -2151,32 +2500,61 @@ mod tests {
         let (_pin, root) = pinned("harness-cred");
         let mut cabin = Cabin::quiet_for_test();
         cabin.permission_mode = PermissionMode::AlwaysApprove;
-        assert_eq!(cabin.harness_precheck(ask("Type text", "into the Password field: hunter2222")), None);
+        assert_eq!(
+            cabin.harness_precheck(ask("Type text", "into the Password field: hunter2222")),
+            None
+        );
         let park = cabin.harness.park.clone().expect("hard card");
         assert_eq!(park.class, HardClass::Credentials);
         assert_eq!(park.action, CREDENTIAL_ACTION);
         cabin.secret_hold = vec!["hunter2222".into()];
         cabin.resolve_hard_park(false, "Viper denied");
-        cabin.harness_turn_end("I typed hunter2222 into the field and logged in.", cabin.turn_no());
+        cabin.harness_turn_end(
+            "I typed hunter2222 into the field and logged in.",
+            cabin.turn_no(),
+        );
         let trace = std::fs::read_to_string(hx::span_path(&root, "session")).unwrap();
         assert!(!trace.contains("hunter2222"), "{trace}");
-        assert!(trace.contains("I typed [redacted] into the field and logged in."), "{trace}");
+        assert!(
+            trace.contains("I typed [redacted] into the field and logged in."),
+            "{trace}"
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
     fn click_marker_maps_screenshot_pixels_onto_the_frame() {
         let rect = egui::Rect::from_min_size(egui::pos2(100.0, 50.0), egui::vec2(360.0, 225.0));
-        assert_eq!(marker_pos(rect, [1920, 1200], 960.0, 600.0), egui::pos2(280.0, 162.5));
-        assert_eq!(marker_pos(rect, [1920, 1200], 5000.0, -10.0), egui::pos2(460.0, 50.0));
+        assert_eq!(
+            marker_pos(rect, [1920, 1200], 960.0, 600.0),
+            egui::pos2(280.0, 162.5)
+        );
+        assert_eq!(
+            marker_pos(rect, [1920, 1200], 5000.0, -10.0),
+            egui::pos2(460.0, 50.0)
+        );
         let to = egui::pos2(280.0, 162.5);
-        assert_eq!(marker_sample(rect.center(), to, 0.0, 0.0, true), (to, 1.0, false));
-        assert_eq!(marker_sample(rect.center(), to, 0.0, 2.0, false), (to, 1.0, false));
+        assert_eq!(
+            marker_sample(rect.center(), to, 0.0, 0.0, true),
+            (to, 1.0, false)
+        );
+        assert_eq!(
+            marker_sample(rect.center(), to, 0.0, 2.0, false),
+            (to, 1.0, false)
+        );
         let (_, _, live) = marker_sample(rect.center(), to, 0.0, 0.1, false);
         assert!(live);
-        let done = card("k1", "completed", r#"{"tool":"grokhub-desktop__click","x":960,"y":600}"#);
+        let done = card(
+            "k1",
+            "completed",
+            r#"{"tool":"grokhub-desktop__click","x":960,"y":600}"#,
+        );
         assert_eq!(click_point(&done), Some((960.0, 600.0)));
-        let pending = card("k2", "pending", r#"{"tool":"grokhub-desktop__click","x":1,"y":2}"#);
+        let pending = card(
+            "k2",
+            "pending",
+            r#"{"tool":"grokhub-desktop__click","x":1,"y":2}"#,
+        );
         assert_eq!(click_point(&pending), None);
     }
 
@@ -2216,7 +2594,10 @@ mod tests {
             FULL_TITLE,
             "Let Grok click and type without asking for this session?"
         );
-        assert_eq!(FULL_NOTE, "Deletes, sends, money and credentials still ask.");
+        assert_eq!(
+            FULL_NOTE,
+            "Deletes, sends, money and credentials still ask."
+        );
         assert_eq!(
             perm_card_eyebrow(&ask("grokhub-desktop__click", "click 1,2")),
             "Desktop"
@@ -2291,14 +2672,21 @@ mod tests {
             "3 things need a decision"
         );
         let (texts, _) = paint_stack(&mut cabin, Vec::new(), 1400.0);
-        let counts = texts.iter().filter(|t| t.contains("need a decision")).count();
+        let counts = texts
+            .iter()
+            .filter(|t| t.contains("need a decision"))
+            .count();
         assert_eq!(counts, 1, "one count line, got {texts:?}");
-        assert!(texts.iter().any(|t| t == "3 things need a decision. Everything else is on track."));
+        assert!(texts
+            .iter()
+            .any(|t| t == "3 things need a decision. Everything else is on track."));
         assert!(texts.iter().any(|t| t == "Hard action"));
         assert!(texts.iter().any(|t| t == "Delete"));
         assert!(texts.iter().any(|t| t == "Desktop"));
         assert!(texts.iter().any(|t| t == "Grok wants permission"));
-        assert!(texts.iter().any(|t| t == "Session access · Desktop control is on"));
+        assert!(texts
+            .iter()
+            .any(|t| t == "Session access · Desktop control is on"));
         assert!(texts
             .iter()
             .any(|t| t == "Let Grok click and type without asking for this session?"));
@@ -2365,7 +2753,11 @@ mod tests {
     }
 
     fn path_d(root: &std::path::Path) -> Vec<hx::Span> {
-        hx::read_spans(root, "session").unwrap().into_iter().filter(|s| s.path == "D").collect()
+        hx::read_spans(root, "session")
+            .unwrap()
+            .into_iter()
+            .filter(|s| s.path == "D")
+            .collect()
     }
 
     #[test]
@@ -2374,16 +2766,36 @@ mod tests {
         let mut cabin = Cabin::quiet_for_test();
         cabin.cfg.desktop_control = true;
         cabin.harness.last_cu_frame = Some(frame_hash("data:image/jpeg;base64,AAAA"));
-        assert!(!unasked_frame(&mut cabin, "computer_click", r#"{"x":5,"y":6}"#, Some("QQ==")));
+        assert!(!unasked_frame(
+            &mut cabin,
+            "computer_click",
+            r#"{"x":5,"y":6}"#,
+            Some("QQ==")
+        ));
         let spans = path_d(&root);
         assert_eq!(spans.len(), 1, "{spans:?}");
         let s = &spans[0];
-        assert_eq!((s.tool.as_str(), s.decision.as_str(), s.approval_class.as_str()), ("computer_click", "allow", "soft"));
+        assert_eq!(
+            (
+                s.tool.as_str(),
+                s.decision.as_str(),
+                s.approval_class.as_str()
+            ),
+            ("computer_click", "allow", "soft")
+        );
         assert_eq!(s.args_redacted, r#"{"x":5,"y":6}"#);
         assert_eq!(s.access, "supervised");
-        assert_eq!(s.ui_changed, Some(true), "the frame differs from the last one");
+        assert_eq!(
+            s.ui_changed,
+            Some(true),
+            "the frame differs from the last one"
+        );
         assert!(cabin.harness.park.is_none());
-        assert!(!cabin.status.starts_with("Stopped"), "a soft step does not stop the turn: {}", cabin.status);
+        assert!(
+            !cabin.status.starts_with("Stopped"),
+            "a soft step does not stop the turn: {}",
+            cabin.status
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -2392,23 +2804,54 @@ mod tests {
         let (_pin, root) = pinned("path-d-hard");
         let mut cabin = Cabin::quiet_for_test();
         cabin.cfg.desktop_control = true;
-        assert!(unasked_frame(&mut cabin, "computer_type", r#"{"label":"Password","text":"hunter2222"}"#, None));
+        assert!(unasked_frame(
+            &mut cabin,
+            "computer_type",
+            r#"{"label":"Password","text":"hunter2222"}"#,
+            None
+        ));
         assert!(!cabin.running, "the turn stops at once");
         let park = cabin.harness.park.clone().unwrap();
         assert_eq!(park.source, ParkSource::Unasked);
         assert_eq!(park.class, HardClass::Credentials);
         assert_eq!(park.path, "D");
-        assert_eq!(park.action, "computer_type: type into a credential field (value hidden)");
-        assert_eq!(cabin.status, "Grok tried to type into a credential field without asking");
+        assert_eq!(
+            park.action,
+            "computer_type: type into a credential field (value hidden)"
+        );
+        assert_eq!(
+            cabin.status,
+            "Grok tried to type into a credential field without asking"
+        );
         let spans = path_d(&root);
-        let rows: Vec<_> = spans.iter().map(|s| (s.decision.as_str(), s.approval_class.as_str())).collect();
-        assert_eq!(rows, vec![("allow", "credentials"), ("deny", "credentials"), ("park", "credentials")]);
-        assert_eq!(spans[1].result, "stopped: Grok Build tried a hard step without asking");
+        let rows: Vec<_> = spans
+            .iter()
+            .map(|s| (s.decision.as_str(), s.approval_class.as_str()))
+            .collect();
+        assert_eq!(
+            rows,
+            vec![
+                ("allow", "credentials"),
+                ("deny", "credentials"),
+                ("park", "credentials")
+            ]
+        );
+        assert_eq!(
+            spans[1].result,
+            "stopped: Grok Build tried a hard step without asking"
+        );
         let flagged = hx::approval_gate_violation(&spans);
-        assert_eq!(flagged.len(), 1, "the raw step that ran with no approve is flagged");
+        assert_eq!(
+            flagged.len(),
+            1,
+            "the raw step that ran with no approve is flagged"
+        );
         assert_eq!(flagged[0].tool, "computer_type");
         let all = std::fs::read_to_string(hx::span_path(&root, "session")).unwrap();
-        assert!(!all.contains("hunter2222"), "the typed value never reaches a span");
+        assert!(
+            !all.contains("hunter2222"),
+            "the typed value never reaches a span"
+        );
 
         // The card: no Always, Enter leaves it.
         let enter = egui::Event::Key {
@@ -2419,10 +2862,21 @@ mod tests {
             modifiers: egui::Modifiers::NONE,
         };
         let (texts, _) = paint_stack(&mut cabin, vec![enter], 900.0);
-        assert!(texts.iter().any(|t| t == "Grok tried to type into a credential field without asking"), "{texts:?}");
+        assert!(
+            texts
+                .iter()
+                .any(|t| t == "Grok tried to type into a credential field without asking"),
+            "{texts:?}"
+        );
         assert!(texts.iter().any(|t| t == UNASKED_NOTE), "{texts:?}");
-        assert!(texts.iter().any(|t| t == "Approve") && texts.iter().any(|t| t == "Deny"), "{texts:?}");
-        assert!(!texts.iter().any(|t| t.contains("Always")), "a hard card has no Always: {texts:?}");
+        assert!(
+            texts.iter().any(|t| t == "Approve") && texts.iter().any(|t| t == "Deny"),
+            "{texts:?}"
+        );
+        assert!(
+            !texts.iter().any(|t| t.contains("Always")),
+            "a hard card has no Always: {texts:?}"
+        );
         assert!(cabin.harness.park.is_some(), "Enter must not approve");
 
         // Approve re-runs that one step once through a one-shot ACP Ask.
@@ -2442,19 +2896,36 @@ mod tests {
             raw_input: r#"{"label":"Password"}"#.into(),
         };
         cabin.running = true;
-        assert!(!cabin.harness_watch_cu(&card, true), "the approved step runs once");
+        assert!(
+            !cabin.harness_watch_cu(&card, true),
+            "the approved step runs once"
+        );
         assert!(cabin.harness.park.is_none());
-        let again = ToolCard { id: "tool-3".into(), ..card };
-        assert!(cabin.harness_watch_cu(&again, true), "a second run parks again");
+        let again = ToolCard {
+            id: "tool-3".into(),
+            ..card
+        };
+        assert!(
+            cabin.harness_watch_cu(&again, true),
+            "a second run parks again"
+        );
         let spans = path_d(&root);
-        let approved: Vec<_> = spans.iter().filter(|s| s.hard_approved).map(|s| s.decision.as_str()).collect();
+        let approved: Vec<_> = spans
+            .iter()
+            .filter(|s| s.hard_approved)
+            .map(|s| s.decision.as_str())
+            .collect();
         assert_eq!(approved, vec!["approve", "allow"]);
         let raw_runs: Vec<_> = spans
             .iter()
             .filter(|s| s.decision == "allow" && !s.hard_approved)
             .map(|s| s.claim.as_str())
             .collect();
-        assert_eq!(raw_runs, vec!["Grok Build ran a hard step with no ask"; 2], "each unapproved run keeps its raw span");
+        assert_eq!(
+            raw_runs,
+            vec!["Grok Build ran a hard step with no ask"; 2],
+            "each unapproved run keeps its raw span"
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -2466,23 +2937,48 @@ mod tests {
         cabin.permission_mode = PermissionMode::AlwaysApprove;
         cabin.running = true;
         // The title says nothing; the stream's toolName says keyboard.
-        let card = card("tool-1", "completed", r#"{"tool":"keyboard_type","id":"login-password"}"#);
-        assert!(cabin.harness_watch_cu(&card, false), "a keyboard step is path D computer use");
+        let card = card(
+            "tool-1",
+            "completed",
+            r#"{"tool":"keyboard_type","id":"login-password"}"#,
+        );
+        assert!(
+            cabin.harness_watch_cu(&card, false),
+            "a keyboard step is path D computer use"
+        );
         let park = cabin.harness.park.clone().expect("hard card");
-        assert_eq!((park.source.clone(), park.class), (ParkSource::Unasked, HardClass::Credentials));
+        assert_eq!(
+            (park.source.clone(), park.class),
+            (ParkSource::Unasked, HardClass::Credentials)
+        );
 
         cabin.resolve_hard_park(true, "");
         assert_eq!(cabin.permission_mode, PermissionMode::Ask);
         // The re-run comes back as Grok's own path B ask, in its own words.
         let rerun = ask("keyboard_type", "type into the password field");
         assert!(matches!(
-            hx::decide(Step::Ask { title: &rerun.title, action: &rerun.action }),
-            GateOutcome::Park { hard: Some(HardClass::Credentials), .. }
+            hx::decide(Step::Ask {
+                title: &rerun.title,
+                action: &rerun.action
+            }),
+            GateOutcome::Park {
+                hard: Some(HardClass::Credentials),
+                ..
+            }
         ));
-        assert!(cabin.harness_precheck(rerun.clone()).is_some(), "the approved step reaches Grok's Allow once");
+        assert!(
+            cabin.harness_precheck(rerun.clone()).is_some(),
+            "the approved step reaches Grok's Allow once"
+        );
         assert!(cabin.harness.park.is_none());
-        assert!(cabin.harness_precheck(rerun).is_none(), "a second ask parks again");
-        assert_eq!(cabin.harness.park.as_ref().map(|p| p.class), Some(HardClass::Credentials));
+        assert!(
+            cabin.harness_precheck(rerun).is_none(),
+            "a second ask parks again"
+        );
+        assert_eq!(
+            cabin.harness.park.as_ref().map(|p| p.class),
+            Some(HardClass::Credentials)
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -2491,14 +2987,26 @@ mod tests {
         let (_pin, root) = pinned("path-d-readonly");
         let mut cabin = Cabin::quiet_for_test();
         assert_eq!(cabin.access_mode(), AccessMode::Readonly);
-        assert!(unasked_frame(&mut cabin, "computer_click", r#"{"x":1,"y":2}"#, None));
+        assert!(unasked_frame(
+            &mut cabin,
+            "computer_click",
+            r#"{"x":1,"y":2}"#,
+            None
+        ));
         assert!(!cabin.running, "the turn stops");
-        assert!(cabin.harness.park.is_none(), "Readonly refuses with no card");
+        assert!(
+            cabin.harness.park.is_none(),
+            "Readonly refuses with no card"
+        );
         assert_eq!(cabin.hard_waiting(), 0);
         let spans = path_d(&root);
         assert_eq!(spans.len(), 1, "{spans:?}");
-        assert_eq!((spans[0].tool.as_str(), spans[0].decision.as_str()), ("computer_click", "deny"));
-        let reason = "Access is Readonly — Grok Build's own computer use ran with desktop control off";
+        assert_eq!(
+            (spans[0].tool.as_str(), spans[0].decision.as_str()),
+            ("computer_click", "deny")
+        );
+        let reason =
+            "Access is Readonly — Grok Build's own computer use ran with desktop control off";
         assert_eq!(spans[0].result, reason);
         assert_eq!(cabin.status, format!("Stopped: {reason}"));
         let _ = std::fs::remove_dir_all(root);
@@ -2514,8 +3022,14 @@ mod tests {
         let soft = ask("computer_click", "click 4,5");
         assert_eq!(cabin.harness_precheck(soft.clone()), Some(soft));
         // A hard one still parks a hard card on path B.
-        assert_eq!(cabin.harness_precheck(ask("computer_type", "into the Password field")), None);
-        assert_eq!(cabin.harness.park.as_ref().map(|p| (p.class, p.path)), Some((HardClass::Credentials, "B")));
+        assert_eq!(
+            cabin.harness_precheck(ask("computer_type", "into the Password field")),
+            None
+        );
+        assert_eq!(
+            cabin.harness.park.as_ref().map(|p| (p.class, p.path)),
+            Some((HardClass::Credentials, "B"))
+        );
         // Its frame (tool call `t`) was decided on path B: the watchdog leaves it.
         let card = ToolCard {
             id: "t".into(),
@@ -2531,12 +3045,27 @@ mod tests {
         assert!(cabin.running);
         assert!(path_d(&root).is_empty());
         // A pending ACP frame waits for the ask that may follow it.
-        let pending = ToolCard { id: "t2".into(), status: "pending".into(), ..card };
+        let pending = ToolCard {
+            id: "t2".into(),
+            status: "pending".into(),
+            ..card
+        };
         assert!(!cabin.harness_watch_cu(&pending, true));
-        assert!(path_d(&root).is_empty() && cabin.harness.park.as_ref().is_some_and(|p| p.path == "B"));
+        assert!(
+            path_d(&root).is_empty() && cabin.harness.park.as_ref().is_some_and(|p| p.path == "B")
+        );
         // Browser and path A frames are not path D's.
-        for title in ["browser_tab", "grokhub-desktop__click", "Read `src/click.rs`"] {
-            let other = ToolCard { id: title.into(), title: title.into(), status: "completed".into(), ..pending.clone() };
+        for title in [
+            "browser_tab",
+            "grokhub-desktop__click",
+            "Read `src/click.rs`",
+        ] {
+            let other = ToolCard {
+                id: title.into(),
+                title: title.into(),
+                status: "completed".into(),
+                ..pending.clone()
+            };
             assert!(!cabin.harness_watch_cu(&other, false), "{title}");
         }
         assert!(path_d(&root).is_empty());
@@ -2558,7 +3087,10 @@ mod tests {
             modifiers: egui::Modifiers::NONE,
         };
         let _ = paint_stack(&mut cabin, vec![enter], 900.0);
-        assert!(cabin.harness.park.is_some(), "Enter must not approve a hard card");
+        assert!(
+            cabin.harness.park.is_some(),
+            "Enter must not approve a hard card"
+        );
         let after_enter = hx::read_spans(&root, "session").unwrap();
         assert_eq!(after_enter.len(), before.len(), "Enter writes no span");
         assert_eq!(after_enter.last().unwrap().decision, "park");
@@ -2584,7 +3116,10 @@ mod tests {
         let (_pin, root) = pinned("agent-forget");
         let mut cabin = Cabin::quiet_for_test();
         cabin.permission_mode = PermissionMode::AlwaysApprove;
-        assert_eq!(cabin.harness_precheck(ask(hx::AGENT_FORGET_TOOL, "forget 3 learned notes")), None);
+        assert_eq!(
+            cabin.harness_precheck(ask(hx::AGENT_FORGET_TOOL, "forget 3 learned notes")),
+            None
+        );
         assert!(cabin.harness.park.is_some());
         let (texts, _) = paint_stack(&mut cabin, Vec::new(), 900.0);
         assert!(texts.iter().any(|t| t == "Delete"), "{texts:?}");
@@ -2602,8 +3137,18 @@ mod tests {
             modifiers: egui::Modifiers::NONE,
         };
         let _ = paint_stack(&mut cabin, vec![enter], 900.0);
-        assert!(cabin.harness.park.is_some(), "Enter must not approve an agent forget");
-        assert_eq!(hx::read_spans(&root, "session").unwrap().last().unwrap().decision, "park");
+        assert!(
+            cabin.harness.park.is_some(),
+            "Enter must not approve an agent forget"
+        );
+        assert_eq!(
+            hx::read_spans(&root, "session")
+                .unwrap()
+                .last()
+                .unwrap()
+                .decision,
+            "park"
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -2636,7 +3181,10 @@ mod tests {
         let ctx = egui::Context::default();
         crate::theme::install_fonts_on(&ctx);
         let input = egui::RawInput {
-            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1400.0, 1200.0))),
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1400.0, 1200.0),
+            )),
             ..Default::default()
         };
         let column = egui::Rect::from_min_size(egui::pos2(300.0, 100.0), egui::vec2(700.0, 900.0));
@@ -2644,10 +3192,13 @@ mod tests {
             egui::CentralPanel::default().show(ui, |ui| {
                 // The same nesting as the empty chat's composer column.
                 ui.scope_builder(egui::UiBuilder::new().max_rect(column), |ui| {
-                    ui.with_layout(egui::Layout::top_down_justified(egui::Align::Center), |ui| {
-                        ui.set_width(column.width());
-                        cabin.paint_approval_stack(ui);
-                    });
+                    ui.with_layout(
+                        egui::Layout::top_down_justified(egui::Align::Center),
+                        |ui| {
+                            ui.set_width(column.width());
+                            cabin.paint_approval_stack(ui);
+                        },
+                    );
                 });
             });
         });
@@ -2679,7 +3230,10 @@ mod tests {
             .map(|(r, _)| *r)
             .expect("hard frame");
         assert_eq!(frame.width(), approval_card_width(column.width()));
-        assert!((frame.left() - column.left()).abs() < 1.0, "card sits on the column's left edge: {frame:?}");
+        assert!(
+            (frame.left() - column.left()).abs() < 1.0,
+            "card sits on the column's left edge: {frame:?}"
+        );
         let x_of = |want: &str| {
             texts
                 .iter()
@@ -2696,15 +3250,24 @@ mod tests {
         let left = frame.left() + 2.0 + APPROVAL_CARD_MARGIN;
         for want in lines {
             let (_, x, justify, halign) = x_of(want);
-            assert!((x - left).abs() < 1.0, "{want} starts at the card's left inset ({left}), got {x}");
+            assert!(
+                (x - left).abs() < 1.0,
+                "{want} starts at the card's left inset ({left}), got {x}"
+            );
             assert!(!justify, "{want} is ragged right, not justified");
             assert_eq!(halign, egui::Align::LEFT, "{want}");
         }
         let (_, approve_x, _, _) = x_of("Approve");
         let (_, deny_x, _, _) = x_of("Deny");
-        assert!(approve_x < left + 40.0 && approve_x < deny_x, "buttons start on the left: {approve_x} {deny_x}");
+        assert!(
+            approve_x < left + 40.0 && approve_x < deny_x,
+            "buttons start on the left: {approve_x} {deny_x}"
+        );
         let (_, count_x, _, _) = x_of("1 thing needs a decision. Everything else is on track.");
-        assert!((count_x - column.left()).abs() < 1.0, "the count line is left-aligned too: {count_x}");
+        assert!(
+            (count_x - column.left()).abs() < 1.0,
+            "the count line is left-aligned too: {count_x}"
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -2752,7 +3315,13 @@ mod tests {
     }
 
     fn key(key: egui::Key) -> egui::Event {
-        egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE }
+        egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        }
     }
 
     /// Spike-4c path E: a cabin-owned send the EgressGuard parked (web_fetch,
@@ -2778,17 +3347,40 @@ mod tests {
         assert_eq!(park.source, ParkSource::Desk("egress-7".into()));
         assert_eq!((park.path, park.class), ("E", HardClass::Send));
         let (texts, _) = paint_stack(&mut cabin, vec![key(egui::Key::Enter)], 900.0);
-        assert!(texts.iter().any(|t| t == "web_fetch → example.org (chats, memory)"), "{texts:?}");
-        assert!(!texts.iter().any(|t| t == "Always"), "no Always on a hard card: {texts:?}");
+        assert!(
+            texts
+                .iter()
+                .any(|t| t == "web_fetch → example.org (chats, memory)"),
+            "{texts:?}"
+        );
+        assert!(
+            !texts.iter().any(|t| t == "Always"),
+            "no Always on a hard card: {texts:?}"
+        );
         assert!(cabin.harness.park.is_some(), "Enter must not approve");
-        assert_eq!(hx::take_answer(&root, "egress-7"), None, "nothing answered yet");
+        assert_eq!(
+            hx::take_answer(&root, "egress-7"),
+            None,
+            "nothing answered yet"
+        );
         let _ = paint_stack(&mut cabin, vec![key(egui::Key::Escape)], 900.0);
         assert!(cabin.harness.park.is_none());
-        assert_eq!(hx::take_answer(&root, "egress-7"), Some(false), "Esc denies the waiting send");
+        assert_eq!(
+            hx::take_answer(&root, "egress-7"),
+            Some(false),
+            "Esc denies the waiting send"
+        );
         let spans = hx::read_spans(&root, "session").unwrap();
         let last = spans.last().unwrap();
-        assert_eq!((last.decision.as_str(), last.path.as_str(), last.origin), ("deny", "E", hx::Origin::Proactive));
-        assert_eq!(hx::read_turn_context(&root).origin, hx::Origin::Proactive, "turn.json carries it");
+        assert_eq!(
+            (last.decision.as_str(), last.path.as_str(), last.origin),
+            ("deny", "E", hx::Origin::Proactive)
+        );
+        assert_eq!(
+            hx::read_turn_context(&root).origin,
+            hx::Origin::Proactive,
+            "turn.json carries it"
+        );
         // The next typed message is the user's again.
         cabin.begin_turn_origin();
         cabin.harness.last_poll = None;
@@ -2812,12 +3404,16 @@ mod tests {
         step(&mut cabin);
         cabin.begin_turn_origin();
         step(&mut cabin);
-        let mut repair = hx::Span::deny("session", hx::RECOVERY_TOOL, "{}", "skip", "soft").from_origin(hx::Origin::Repair);
+        let mut repair = hx::Span::deny("session", hx::RECOVERY_TOOL, "{}", "skip", "soft")
+            .from_origin(hx::Origin::Repair);
         repair.decision = "skip".into();
         cabin.write_span(repair, "audit");
         cabin.automation_span("Background", "auto-9");
         let spans = hx::read_spans(&root, "session").unwrap();
-        let seen: Vec<(&str, hx::Origin)> = spans.iter().map(|s| (s.decision.as_str(), s.origin)).collect();
+        let seen: Vec<(&str, hx::Origin)> = spans
+            .iter()
+            .map(|s| (s.decision.as_str(), s.origin))
+            .collect();
         assert_eq!(
             seen,
             vec![
@@ -2830,10 +3426,19 @@ mod tests {
         );
         let run = hx::read_spans(&root, "Background").unwrap();
         assert_eq!(run.len(), 1);
-        assert_eq!((run[0].tool.as_str(), run[0].origin, run[0].path.as_str()), ("automation.run", hx::Origin::Automation, "automation"));
+        assert_eq!(
+            (run[0].tool.as_str(), run[0].origin, run[0].path.as_str()),
+            ("automation.run", hx::Origin::Automation, "automation")
+        );
         assert_eq!(run[0].args_redacted, r#"{"job":"auto-9"}"#);
-        assert_eq!(super::super::background::bg_span_origin(grokhub_core::BgOrigin::Scheduled), hx::Origin::Automation);
-        assert_eq!(super::super::background::bg_span_origin(grokhub_core::BgOrigin::User), hx::Origin::User);
+        assert_eq!(
+            super::super::background::bg_span_origin(grokhub_core::BgOrigin::Scheduled),
+            hx::Origin::Automation
+        );
+        assert_eq!(
+            super::super::background::bg_span_origin(grokhub_core::BgOrigin::User),
+            hx::Origin::User
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 }

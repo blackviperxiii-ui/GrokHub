@@ -69,8 +69,12 @@ impl ConnectorRow {
     /// The error line under the row, naming the error.
     pub(super) fn error_line(&self) -> Option<String> {
         match &self.state {
-            ConnectorState::Error(why) if !why.trim().is_empty() => Some(format!("Error: {}", why.trim())),
-            ConnectorState::Error(_) => Some("Error: the server stopped without saying why.".into()),
+            ConnectorState::Error(why) if !why.trim().is_empty() => {
+                Some(format!("Error: {}", why.trim()))
+            }
+            ConnectorState::Error(_) => {
+                Some("Error: the server stopped without saying why.".into())
+            }
             _ => None,
         }
     }
@@ -128,7 +132,9 @@ pub(super) fn filter_connector_rows(rows: Vec<ConnectorRow>, q: &str) -> Vec<Con
         .filter(|r| {
             r.name.to_ascii_lowercase().contains(q)
                 || r.detail.to_ascii_lowercase().contains(q)
-                || r.account.as_deref().is_some_and(|a| a.to_ascii_lowercase().contains(q))
+                || r.account
+                    .as_deref()
+                    .is_some_and(|a| a.to_ascii_lowercase().contains(q))
         })
         .collect()
 }
@@ -154,9 +160,15 @@ fn paint_connector_row(ui: &mut egui::Ui, row: &ConnectorRow) -> Option<Connecto
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
             ui.horizontal(|ui| {
-                let (rect, _) = ui.allocate_exact_size(egui::vec2(32.0, 32.0), egui::Sense::hover());
+                let (rect, _) =
+                    ui.allocate_exact_size(egui::vec2(32.0, 32.0), egui::Sense::hover());
                 ui.painter().rect_filled(rect, 8.0, crate::theme::surface());
-                let initial: String = row.name.chars().next().map(|c| c.to_uppercase().collect()).unwrap_or_default();
+                let initial: String = row
+                    .name
+                    .chars()
+                    .next()
+                    .map(|c| c.to_uppercase().collect())
+                    .unwrap_or_default();
                 ui.painter().text(
                     rect.center(),
                     egui::Align2::CENTER_CENTER,
@@ -167,12 +179,20 @@ fn paint_connector_row(ui: &mut egui::Ui, row: &ConnectorRow) -> Option<Connecto
                 ui.add_space(8.0);
                 ui.vertical(|ui| {
                     ui.horizontal(|ui| {
-                        ui.label(RichText::new(&row.name).size(15.0).color(crate::theme::fg()));
+                        ui.label(
+                            RichText::new(&row.name)
+                                .size(15.0)
+                                .color(crate::theme::fg()),
+                        );
                         let (label, tone) = row.state.chip();
                         crate::cards::status_chip(ui, label, tone);
                     });
                     if !row.detail.is_empty() {
-                        ui.label(RichText::new(&row.detail).size(12.0).color(crate::theme::muted()));
+                        ui.label(
+                            RichText::new(&row.detail)
+                                .size(12.0)
+                                .color(crate::theme::muted()),
+                        );
                     }
                     if let Some(line) = row.error_line() {
                         ui.label(RichText::new(line).size(12.0).color(crate::theme::setup()));
@@ -278,7 +298,10 @@ impl Cabin {
         }
         let rows = filter_connector_rows(cabin_connector_rows(&snap.rows), &q);
         if snap.rows.is_empty() {
-            crate::cards::settings_note(ui, "No connectors in this cabin yet. Import copies them from the cabin's Grok home.");
+            crate::cards::settings_note(
+                ui,
+                "No connectors in this cabin yet. Import copies them from the cabin's Grok home.",
+            );
         } else if rows.is_empty() {
             crate::cards::settings_note(ui, "None matched.");
         }
@@ -288,7 +311,8 @@ impl Cabin {
             }
         }
         if snap.busy {
-            ui.ctx().request_repaint_after(std::time::Duration::from_millis(200));
+            ui.ctx()
+                .request_repaint_after(std::time::Duration::from_millis(200));
         }
         if let Some((row, act)) = picked {
             self.take_connector_act(&row, act);
@@ -359,7 +383,12 @@ mod tests {
     #[test]
     fn cabin_rows_name_each_state_and_offer_the_next_step() {
         let rows = cabin_connector_rows(&[
-            doctor("linear", "connected", "", SignIn::SignedIn("Signed in to linear as ada@example.com".into())),
+            doctor(
+                "linear",
+                "connected",
+                "",
+                SignIn::SignedIn("Signed in to linear as ada@example.com".into()),
+            ),
             doctor("notion", "not checked", "", SignIn::SignedOut),
             doctor("github", "error", "timed out after 5s", SignIn::NotOffered),
             doctor("old", "disabled", "", SignIn::NotOffered),
@@ -367,21 +396,37 @@ mod tests {
         ]);
         let got: Vec<(&str, &str, Vec<&str>)> = rows
             .iter()
-            .map(|r| (r.name.as_str(), r.state.chip().0, r.acts.iter().map(|a| a.label()).collect()))
+            .map(|r| {
+                (
+                    r.name.as_str(),
+                    r.state.chip().0,
+                    r.acts.iter().map(|a| a.label()).collect(),
+                )
+            })
             .collect();
         assert_eq!(
             got,
             vec![
-                ("linear", "Connected", vec!["Reconnect", "Sign out", "Disconnect"]),
+                (
+                    "linear",
+                    "Connected",
+                    vec!["Reconnect", "Sign out", "Disconnect"]
+                ),
                 ("notion", "Needs sign-in", vec!["Connect", "Disconnect"]),
                 ("github", "Error", vec!["Reconnect", "Disconnect"]),
                 ("old", "Off", vec!["Disconnect"]),
                 ("files", "Not checked", vec!["Reconnect", "Disconnect"]),
             ]
         );
-        assert_eq!(rows[0].account.as_deref(), Some("Signed in to linear as ada@example.com"));
+        assert_eq!(
+            rows[0].account.as_deref(),
+            Some("Signed in to linear as ada@example.com")
+        );
         assert_eq!(rows[1].account, None);
-        assert_eq!(rows[2].error_line().as_deref(), Some("Error: timed out after 5s"));
+        assert_eq!(
+            rows[2].error_line().as_deref(),
+            Some("Error: timed out after 5s")
+        );
         assert_eq!(rows[0].error_line(), None);
     }
 
@@ -396,11 +441,19 @@ mod tests {
     #[test]
     fn search_matches_name_target_and_account() {
         let rows = cabin_connector_rows(&[
-            doctor("linear", "connected", "", SignIn::SignedIn("Signed in to linear as ada@example.com".into())),
+            doctor(
+                "linear",
+                "connected",
+                "",
+                SignIn::SignedIn("Signed in to linear as ada@example.com".into()),
+            ),
             doctor("notion", "connected", "", SignIn::NotOffered),
         ]);
         let names = |q: &str| -> Vec<String> {
-            filter_connector_rows(rows.clone(), q).into_iter().map(|r| r.name).collect()
+            filter_connector_rows(rows.clone(), q)
+                .into_iter()
+                .map(|r| r.name)
+                .collect()
         };
         assert_eq!(names(""), ["linear", "notion"]);
         assert_eq!(names("ada@"), ["linear"]);
@@ -416,9 +469,15 @@ mod tests {
         std::fs::create_dir_all(&root).unwrap();
         std::env::set_var("GROKHUB_CONFIG", &root);
         let mut cabin = Cabin::quiet_for_test();
-        let row = cabin_connector_rows(&[doctor("ctx7", "connected", "", SignIn::NotOffered)]).remove(0);
+        let row =
+            cabin_connector_rows(&[doctor("ctx7", "connected", "", SignIn::NotOffered)]).remove(0);
         cabin.take_connector_act(&row, ConnectorAct::Disconnect);
-        assert_eq!(cabin.confirm, Some(confirm::ConfirmKind::Disconnect { name: "ctx7".into() }));
+        assert_eq!(
+            cabin.confirm,
+            Some(confirm::ConfirmKind::Disconnect {
+                name: "ctx7".into()
+            })
+        );
         assert_eq!(disconnect_question("ctx7"), "Disconnect ctx7?");
         // Cancel is the sheet dropping `confirm`: nothing ran.
         cabin.confirm = None;
@@ -440,7 +499,11 @@ mod tests {
         assert_eq!(cabin.settings_sec, SettingsSec::Connectors);
         assert_eq!(cabin.settings_back, Nav::Skills);
         cabin.open_connectors();
-        assert_eq!(cabin.settings_back, Nav::Skills, "a second open keeps the page behind Settings");
+        assert_eq!(
+            cabin.settings_back,
+            Nav::Skills,
+            "a second open keeps the page behind Settings"
+        );
         std::env::remove_var("GROKHUB_CONFIG");
     }
 }

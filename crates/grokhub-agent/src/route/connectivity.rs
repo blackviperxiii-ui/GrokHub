@@ -86,7 +86,9 @@ pub fn cloud_queue_note(class: &str) -> String {
 }
 
 pub fn is_cloud_only(class: &str) -> bool {
-    let class = super::policy::class_row(class).map(|r| r.class).unwrap_or(class.trim());
+    let class = super::policy::class_row(class)
+        .map(|r| r.class)
+        .unwrap_or(class.trim());
     CLOUD_ONLY_CLASSES.contains(&class)
 }
 
@@ -130,9 +132,15 @@ mod tests {
 
     #[test]
     fn chip_and_queue_notes_are_literal() {
-        assert_eq!(offline_chip("Qwen 2.5 3B"), "Offline · on Qwen 2.5 3B (local)");
+        assert_eq!(
+            offline_chip("Qwen 2.5 3B"),
+            "Offline · on Qwen 2.5 3B (local)"
+        );
         assert_eq!(offline_chip("  "), "Offline · on local model");
-        assert_eq!(cloud_queue_note("media:image"), "Waiting for the network: image generation needs the cloud.");
+        assert_eq!(
+            cloud_queue_note("media:image"),
+            "Waiting for the network: image generation needs the cloud."
+        );
         assert!(is_cloud_only("media:image"));
         assert!(!is_cloud_only("chat:default"));
         assert!(!is_cloud_only("background:summarize"));

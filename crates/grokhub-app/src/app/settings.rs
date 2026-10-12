@@ -83,7 +83,13 @@ pub(super) const DEFAULTS_ROWS: &[&str] = &[
     super::budget_ui::FAST_ROW,
     super::budget_ui::CAP_ROW,
     super::budget_ui::CEILING_ROW,
-    ROW_PERMISSION, ROW_DESKTOP, ROW_DESKTOP_TEST, ROW_SCREEN_RECORD, ROW_SESSION, ROW_COLLAPSE];
+    ROW_PERMISSION,
+    ROW_DESKTOP,
+    ROW_DESKTOP_TEST,
+    ROW_SCREEN_RECORD,
+    ROW_SESSION,
+    ROW_COLLAPSE,
+];
 
 pub(super) fn cabin_default_permissions() -> &'static [(&'static str, &'static str)] {
     &[("ask", "Ask"), ("auto", "Auto")]
@@ -131,9 +137,11 @@ impl Cabin {
                 .color(crate::theme::fg()),
         );
         ui.label(
-            RichText::new("Groups and topics from cards you open or dismiss. Stays on this computer.")
-                .size(12.0)
-                .color(crate::theme::muted()),
+            RichText::new(
+                "Groups and topics from cards you open or dismiss. Stays on this computer.",
+            )
+            .size(12.0)
+            .color(crate::theme::muted()),
         );
         ui.add_space(6.0);
         let (liked, disliked) = grokhub_core::top_learned(&self.card_prefs, now_ms());
@@ -147,7 +155,8 @@ impl Cabin {
                     grokhub_core::LearnedBucket::Group => "Group",
                     grokhub_core::LearnedBucket::Topic => "Topic",
                 };
-                if crate::cards::settings_action(ui, &format!("{sign} {}", row.key), hint, "Forget") {
+                if crate::cards::settings_action(ui, &format!("{sign} {}", row.key), hint, "Forget")
+                {
                     forget = Some((row.bucket, row.key.clone()));
                 }
             }
@@ -1007,7 +1016,9 @@ impl Cabin {
         }
         self.ui_privacy_rows(ui);
         self.ui_scope_rows(ui);
-        let locked = self.private_lock_for_paint().map(|why| super::privacy_ui::lock_hover(&why));
+        let locked = self
+            .private_lock_for_paint()
+            .map(|why| super::privacy_ui::lock_hover(&why));
         self.ui_premium_rows(ui, locked);
         self.ui_provider_grant_rows(ui, locked);
         let workspace = self.grok_cwd();
@@ -1242,9 +1253,16 @@ mod tests {
                 "Weekly spend cap",
                 "Price limit",
                 "Permission",
-                "Let Grok control the desktop", "Desktop control", "Screen recording", "Session mode", "Always collapse"]
+                "Let Grok control the desktop",
+                "Desktop control",
+                "Screen recording",
+                "Session mode",
+                "Always collapse"
+            ]
         );
-        assert!(DEFAULTS_ROWS.iter().all(|r| !r.to_ascii_lowercase().contains("effort")));
+        assert!(DEFAULTS_ROWS
+            .iter()
+            .all(|r| !r.to_ascii_lowercase().contains("effort")));
         let perms = cabin_default_permissions();
         assert_eq!(perms, &[("ask", "Ask"), ("auto", "Auto")]);
         assert!(perms.iter().all(|(id, _)| *id != "always-approve"));

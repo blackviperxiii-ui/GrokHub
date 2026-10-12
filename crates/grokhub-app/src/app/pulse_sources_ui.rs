@@ -5,12 +5,14 @@
 //! The cache, last run, already-posted links and today's model calls live in
 //! `{config}/pulse-sources.json`.
 
+use super::pulse_ui::SourceAct;
 use super::*;
 use grokhub_agent::harness::DataClass;
-use super::pulse_ui::SourceAct;
 use grokhub_core::interests::InterestSignal;
 use grokhub_core::pulse::LedgerReason;
-use grokhub_core::pulse_sources::{self as ps, Fetched, Ranked, SavedFind, SourceItem, SourceKind, SourceReq};
+use grokhub_core::pulse_sources::{
+    self as ps, Fetched, Ranked, SavedFind, SourceItem, SourceKind, SourceReq,
+};
 use std::io::Read as _;
 
 /// Largest reply read from one source.
@@ -150,7 +152,12 @@ fn fetch_source(req: &SourceReq, have: Option<&ps::CacheEntry>) -> Fetched {
         let etag = resp.header("etag").map(str::to_string);
         let last_modified = resp.header("last-modified").map(str::to_string);
         let mut buf = Vec::new();
-        if resp.into_reader().take(BODY_CAP).read_to_end(&mut buf).is_err() {
+        if resp
+            .into_reader()
+            .take(BODY_CAP)
+            .read_to_end(&mut buf)
+            .is_err()
+        {
             return Fetched::Failed("timed out or dropped".into());
         }
         return Fetched::Body {
@@ -258,7 +265,11 @@ impl Cabin {
         let path = sources_cache_path();
         let mut cache = ps::load_cache(&path);
         if !cache.related.is_empty() {
-            reqs.extend(ps::related_requests(&self.cfg.pulse_sources, &cache.related, now));
+            reqs.extend(ps::related_requests(
+                &self.cfg.pulse_sources,
+                &cache.related,
+                now,
+            ));
             cache.related.clear();
             if let Err(err) = ps::save_cache(&path, &cache) {
                 self.status = err;
@@ -276,7 +287,9 @@ impl Cabin {
         std::thread::spawn(move || {
             let path = sources_cache_path();
             let mut cache = ps::load_cache(&path);
-            let got = ps::gather(&reqs, &mut cache, now, &mut |req, have| fetch_source(req, have));
+            let got = ps::gather(&reqs, &mut cache, now, &mut |req, have| {
+                fetch_source(req, have)
+            });
             cache.last_run_ms = now;
             let _ = ps::save_cache(&path, &cache);
             let _ = tx.send(SourceRun {
@@ -326,7 +339,12 @@ impl Cabin {
     /// many posted now.
     pub(super) fn post_source_run(&mut self, run: SourceRun) -> usize {
         let cache = ps::load_cache(&sources_cache_path());
-        let ranked = ps::rank_with(&run.items, self.interests_now(), &cache.source_bias, run.at_ms);
+        let ranked = ps::rank_with(
+            &run.items,
+            self.interests_now(),
+            &cache.source_bias,
+            run.at_ms,
+        );
         let posted_urls: Vec<String> = self
             .updates
             .iter()
@@ -362,7 +380,13 @@ impl Cabin {
         self.sources.summary_rx = Some(rx);
         self.sources.note = format!("Summarizing {} new {}…", picks.len(), plural(picks.len()));
         std::thread::spawn(move || {
-            let reply = grok_chat(&key, &model, &messages, None, Some(grokhub_core::BACKGROUND_EFFORT));
+            let reply = grok_chat(
+                &key,
+                &model,
+                &messages,
+                None,
+                Some(grokhub_core::BACKGROUND_EFFORT),
+            );
             let _ = tx.send((run, picks, reply));
         });
         0
@@ -387,7 +411,8 @@ impl Cabin {
                 summary_note = format!(" {BUDGET_USED}");
             }
             Some(Err(err)) => {
-                summary_note = format!(" Summaries failed ({err}), so they show the sources' own text.");
+                summary_note =
+                    format!(" Summaries failed ({err}), so they show the sources' own text.");
             }
             None => {}
         }
@@ -407,7 +432,10 @@ impl Cabin {
         if added > 0 {
             self.persist_updates();
         }
-        let mut note = format!("Checked {} sources ({} from the network).", run.asked, run.fetched);
+        let mut note = format!(
+            "Checked {} sources ({} from the network).",
+            run.asked, run.fetched
+        );
         if added == 0 {
             note.push(' ');
             note.push_str(grokhub_core::update_feed::HONEST_EMPTY);
@@ -455,7 +483,10 @@ impl Cabin {
         let mut cache = ps::load_cache(&path);
         cache.nudge_source(card.pulse.source_name.as_deref().unwrap_or(""), step);
         if related {
-            cache.queue_related(&ps::related_query(&card.title), card.pulse.because.as_deref());
+            cache.queue_related(
+                &ps::related_query(&card.title),
+                card.pulse.because.as_deref(),
+            );
         }
         if let Err(err) = ps::save_cache(&path, &cache) {
             self.status = err;
@@ -497,7 +528,11 @@ impl Cabin {
                 self.heartbeat_card_dismissed();
             }
             SourceAct::MoreLike => {
-                let text = format!("{} {}", card.title, card.pulse.because.as_deref().unwrap_or(""));
+                let text = format!(
+                    "{} {}",
+                    card.title,
+                    card.pulse.because.as_deref().unwrap_or("")
+                );
                 self.interests_feedback(&text, InterestSignal::MoreLikeThis);
                 self.nudge_post_source(&card, 1, true);
                 self.status = "More like this on the next check.".into();
@@ -516,7 +551,10 @@ impl Cabin {
         ui.add_space(4.0);
         let list = self.saved_now().clone();
         if list.is_empty() {
-            crate::cards::settings_note(ui, "Nothing saved yet. Save on a Feed post keeps it here.");
+            crate::cards::settings_note(
+                ui,
+                "Nothing saved yet. Save on a Feed post keeps it here.",
+            );
             return;
         }
         let mut open: Option<String> = None;
@@ -551,7 +589,14 @@ impl Cabin {
             });
         }
         if list.len() > SAVED_SHOWN {
-            crate::cards::settings_note(ui, &format!("And {} more in {}.", list.len() - SAVED_SHOWN, ps::SAVED_FILE));
+            crate::cards::settings_note(
+                ui,
+                &format!(
+                    "And {} more in {}.",
+                    list.len() - SAVED_SHOWN,
+                    ps::SAVED_FILE
+                ),
+            );
         }
         if let Some(url) = open {
             self.follow_update_action(Some(grokhub_core::UpdateAction::DeepLink { href: url }));
@@ -565,7 +610,8 @@ impl Cabin {
     pub(super) fn ui_pulse_sources(&mut self, ui: &mut egui::Ui) {
         self.poll_source_fetch();
         if self.sources_busy() {
-            ui.ctx().request_repaint_after(std::time::Duration::from_millis(300));
+            ui.ctx()
+                .request_repaint_after(std::time::Duration::from_millis(300));
         }
         ui.label(
             RichText::new("Sources")
@@ -583,7 +629,10 @@ impl Cabin {
         for kind in SourceKind::ALL {
             let mut on = self.cfg.pulse_sources.on(kind);
             if ui
-                .checkbox(&mut on, RichText::new(kind.label()).size(crate::theme::FONT_BODY))
+                .checkbox(
+                    &mut on,
+                    RichText::new(kind.label()).size(crate::theme::FONT_BODY),
+                )
                 .changed()
             {
                 self.cfg.pulse_sources.set_on(kind, on);
@@ -598,7 +647,10 @@ impl Cabin {
         let mut paid = ps::PAID_SEARCH_ENABLED;
         ui.add_enabled(
             ps::PAID_SEARCH_ENABLED,
-            egui::Checkbox::new(&mut paid, RichText::new(ps::PAID_SEARCH_LABEL).size(crate::theme::FONT_BODY)),
+            egui::Checkbox::new(
+                &mut paid,
+                RichText::new(ps::PAID_SEARCH_LABEL).size(crate::theme::FONT_BODY),
+            ),
         );
         ui.indent("pulse-paid-search", |ui| {
             ui.label(
@@ -610,7 +662,11 @@ impl Cabin {
         ui.add_space(6.0);
         ui.add_space(4.0);
         ui.horizontal(|ui| {
-            ui.label(RichText::new("Check every").size(crate::theme::FONT_BODY).color(crate::theme::fg()));
+            ui.label(
+                RichText::new("Check every")
+                    .size(crate::theme::FONT_BODY)
+                    .color(crate::theme::fg()),
+            );
             for mins in ps::EVERY_CHOICES {
                 let label = every_label(mins);
                 let picked = if self.cfg.pulse_sources.every_mins == mins {
@@ -687,7 +743,11 @@ impl Cabin {
         ui.indent(("pulse-source", kind.key()), |ui| {
             for entry in &entries {
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new(entry).size(crate::theme::FONT_TIP).color(crate::theme::fg()));
+                    ui.label(
+                        RichText::new(entry)
+                            .size(crate::theme::FONT_TIP)
+                            .color(crate::theme::fg()),
+                    );
                     if crate::cards::ghost_pill(ui, "Remove") {
                         remove = Some(entry.clone());
                     }
@@ -735,7 +795,11 @@ impl Cabin {
 mod tests {
     use super::*;
 
-    fn cabin() -> (std::sync::MutexGuard<'static, ()>, crate::config::TestConfigDir, Cabin) {
+    fn cabin() -> (
+        std::sync::MutexGuard<'static, ()>,
+        crate::config::TestConfigDir,
+        Cabin,
+    ) {
         let lock = crate::config::hold_test_config();
         let root = crate::config::test_config_root("pulse-sources-ui");
         let _ = std::fs::remove_dir_all(&root);
@@ -773,8 +837,16 @@ mod tests {
             at_ms: now,
         };
         let added = cabin.post_source_run(run(vec![
-            item("Rust 1.99 released", "https://blog.rust-lang.org/1.99", now - 60_000),
-            item("Rust 1.99 released (dup)", "https://www.blog.rust-lang.org/1.99/?utm_source=hn", now - 120_000),
+            item(
+                "Rust 1.99 released",
+                "https://blog.rust-lang.org/1.99",
+                now - 60_000,
+            ),
+            item(
+                "Rust 1.99 released (dup)",
+                "https://www.blog.rust-lang.org/1.99/?utm_source=hn",
+                now - 120_000,
+            ),
         ]));
         assert_eq!(added, 1);
         assert_eq!(
@@ -787,7 +859,10 @@ mod tests {
             .find(|c| c.title == "Rust 1.99 released")
             .cloned()
             .expect("posted");
-        assert_eq!(card.citations, vec!["https://blog.rust-lang.org/1.99".to_string()]);
+        assert_eq!(
+            card.citations,
+            vec!["https://blog.rust-lang.org/1.99".to_string()]
+        );
         assert_eq!(card.pulse.source_name.as_deref(), Some("Hacker News"));
         assert_eq!(card.pulse.because.as_deref(), Some("Rust"));
         assert_eq!(super::super::pulse_ui::why_line("Rust"), "Why: Rust");
@@ -802,8 +877,17 @@ mod tests {
         let id = card.id.clone();
         cabin.dismiss_feed_card(&id);
         cabin.updates.retain(|c| c.id != id);
-        assert_eq!(cabin.post_source_run(run(vec![item("Rust 1.99 released", "https://blog.rust-lang.org/1.99", now - 60_000)])), 0);
-        assert!(ps::load_cache(&sources_cache_path()).seen.contains(&"blog.rust-lang.org/1.99".to_string()));
+        assert_eq!(
+            cabin.post_source_run(run(vec![item(
+                "Rust 1.99 released",
+                "https://blog.rust-lang.org/1.99",
+                now - 60_000
+            )])),
+            0
+        );
+        assert!(ps::load_cache(&sources_cache_path())
+            .seen
+            .contains(&"blog.rust-lang.org/1.99".to_string()));
     }
 
     #[test]
@@ -814,7 +898,11 @@ mod tests {
         cabin.interests_now().set_muted("crypto", true);
         let now = now_ms();
         let added = cabin.post_source_run(SourceRun {
-            items: vec![item("Crypto exchange collapses", "https://news.test/c", now)],
+            items: vec![item(
+                "Crypto exchange collapses",
+                "https://news.test/c",
+                now,
+            )],
             errors: Vec::new(),
             fetched: 1,
             asked: 1,
@@ -825,7 +913,10 @@ mod tests {
         cabin.interests.profile = Some(Default::default());
         cabin.kick_source_fetch();
         assert!(cabin.sources.rx.is_none());
-        assert_eq!(cabin.sources.note, "Nothing to check yet. Add an interest or a source.");
+        assert_eq!(
+            cabin.sources.note,
+            "Nothing to check yet. Add an interest or a source."
+        );
     }
 
     fn one_item_run(items: Vec<SourceItem>, now: u64) -> SourceRun {
@@ -847,7 +938,14 @@ mod tests {
         cabin.add_interest("crypto");
         cabin.interests_now().set_muted("crypto", true);
         let now = now_ms();
-        let added = cabin.post_source_run(one_item_run(vec![item("Crypto exchange collapses", "https://news.test/c", now)], now));
+        let added = cabin.post_source_run(one_item_run(
+            vec![item(
+                "Crypto exchange collapses",
+                "https://news.test/c",
+                now,
+            )],
+            now,
+        ));
         assert_eq!(added, 0);
         assert!(cabin.sources.summary_rx.is_none());
         assert_eq!(cabin.summary_calls_today(now), 0);
@@ -869,7 +967,14 @@ mod tests {
             assert!(cache.take_summary_call(now));
         }
         ps::save_cache(&sources_cache_path(), &cache).unwrap();
-        let added = cabin.post_source_run(one_item_run(vec![item("Rust 1.99 released", "https://blog.rust-lang.org/1.99", now)], now));
+        let added = cabin.post_source_run(one_item_run(
+            vec![item(
+                "Rust 1.99 released",
+                "https://blog.rust-lang.org/1.99",
+                now,
+            )],
+            now,
+        ));
         assert_eq!(added, 1);
         assert!(cabin.sources.summary_rx.is_none());
         assert_eq!(cabin.summary_calls_today(now), 16);
@@ -877,8 +982,15 @@ mod tests {
             cabin.sources.note,
             "Checked 1 sources (1 from the network). 1 new post. Today's summary budget is used, so they show the sources' own text."
         );
-        let card = cabin.updates.iter().find(|c| c.title == "Rust 1.99 released").expect("posted");
-        assert_eq!(card.body.as_deref(), Some("812 points, 301 comments on Hacker News."));
+        let card = cabin
+            .updates
+            .iter()
+            .find(|c| c.title == "Rust 1.99 released")
+            .expect("posted");
+        assert_eq!(
+            card.body.as_deref(),
+            Some("812 points, 301 comments on Hacker News.")
+        );
     }
 
     #[test]
@@ -896,14 +1008,32 @@ mod tests {
             cabin.interests_now(),
             now,
         );
-        let reply = r#"Here you go: [{"n":1,"summary":"Rust 1.99 is out. It adds async closures."}]"#;
-        assert_eq!(cabin.finish_source_run(run, picks, Some(Ok(reply.into()))), 2);
+        let reply =
+            r#"Here you go: [{"n":1,"summary":"Rust 1.99 is out. It adds async closures."}]"#;
+        assert_eq!(
+            cabin.finish_source_run(run, picks, Some(Ok(reply.into()))),
+            2
+        );
         let body = |title: &str| {
-            cabin.updates.iter().find(|c| c.title == title).and_then(|c| c.body.clone()).expect("posted")
+            cabin
+                .updates
+                .iter()
+                .find(|c| c.title == title)
+                .and_then(|c| c.body.clone())
+                .expect("posted")
         };
-        assert_eq!(body("Rust 1.99 released"), "Rust 1.99 is out. It adds async closures.");
-        assert_eq!(body("Rust in the kernel"), "812 points, 301 comments on Hacker News.");
-        assert_eq!(cabin.sources.note, "Checked 1 sources (1 from the network). 2 new posts.");
+        assert_eq!(
+            body("Rust 1.99 released"),
+            "Rust 1.99 is out. It adds async closures."
+        );
+        assert_eq!(
+            body("Rust in the kernel"),
+            "812 points, 301 comments on Hacker News."
+        );
+        assert_eq!(
+            cabin.sources.note,
+            "Checked 1 sources (1 from the network). 2 new posts."
+        );
     }
 
     #[test]
@@ -919,7 +1049,10 @@ mod tests {
         cabin.sources.last_run_ms = Some(now - 20 * 60_000);
         cabin.follow_source_fetch();
         assert!(cabin.sources.last_run_ms.unwrap() >= now, "ran on open");
-        assert_eq!(cabin.sources.note, "Nothing to check yet. Add an interest or a source.");
+        assert_eq!(
+            cabin.sources.note,
+            "Nothing to check yet. Add an interest or a source."
+        );
         // Not again until 90 minutes pass.
         cabin.sources.note.clear();
         cabin.sources.last_run_ms = Some(now - 20 * 60_000);
@@ -927,7 +1060,10 @@ mod tests {
         assert_eq!(cabin.sources.note, "");
         cabin.sources.last_run_ms = Some(now - 91 * 60_000);
         cabin.follow_source_fetch();
-        assert_eq!(cabin.sources.note, "Nothing to check yet. Add an interest or a source.");
+        assert_eq!(
+            cabin.sources.note,
+            "Nothing to check yet. Add an interest or a source."
+        );
         // Never in quiet hours, however overdue.
         cabin.sources.note.clear();
         cabin.sources.last_run_ms = Some(now - 5 * 60 * 60_000);
@@ -954,8 +1090,21 @@ mod tests {
             now,
         ));
         assert_eq!(added, 3);
-        let id = |cabin: &Cabin, title: &str| cabin.updates.iter().find(|c| c.title == title).map(|c| c.id.clone()).expect("posted");
-        let weight = |cabin: &mut Cabin| cabin.interests_now().find("Rust").map(|t| t.weight).expect("topic");
+        let id = |cabin: &Cabin, title: &str| {
+            cabin
+                .updates
+                .iter()
+                .find(|c| c.title == title)
+                .map(|c| c.id.clone())
+                .expect("posted")
+        };
+        let weight = |cabin: &mut Cabin| {
+            cabin
+                .interests_now()
+                .find("Rust")
+                .map(|t| t.weight)
+                .expect("topic")
+        };
         assert_eq!(weight(&mut cabin), 70);
 
         let saved = id(&cabin, "Rust 1.99 released");
@@ -965,10 +1114,29 @@ mod tests {
         let on_disk = ps::load_saved(&saved_finds_path());
         let rows: Vec<(&str, &str, &str, Option<&str>)> = on_disk
             .iter()
-            .map(|f| (f.title.as_str(), f.url.as_str(), f.source_name.as_str(), f.because.as_deref()))
+            .map(|f| {
+                (
+                    f.title.as_str(),
+                    f.url.as_str(),
+                    f.source_name.as_str(),
+                    f.because.as_deref(),
+                )
+            })
             .collect();
-        assert_eq!(rows, vec![("Rust 1.99 released", "https://blog.rust-lang.org/1.99", "Hacker News", Some("Rust"))]);
-        let card = cabin.updates.iter().find(|c| c.id == saved).expect("still up");
+        assert_eq!(
+            rows,
+            vec![(
+                "Rust 1.99 released",
+                "https://blog.rust-lang.org/1.99",
+                "Hacker News",
+                Some("Rust")
+            )]
+        );
+        let card = cabin
+            .updates
+            .iter()
+            .find(|c| c.id == saved)
+            .expect("still up");
         assert_eq!(card.reaction, Some(grokhub_core::CardReaction::Up));
         assert_eq!(weight(&mut cabin), 80);
 
@@ -976,7 +1144,10 @@ mod tests {
         let gone = id(&cabin, "Rust in the kernel");
         cabin.source_post_act(&gone, SourceAct::NotInterested);
         assert!(
-            !cabin.updates.iter().any(|c| c.id == gone && c.status != grokhub_core::UpdateStatus::Dismissed),
+            !cabin
+                .updates
+                .iter()
+                .any(|c| c.id == gone && c.status != grokhub_core::UpdateStatus::Dismissed),
             "Not interested takes the post down"
         );
         assert_eq!(cabin.status, "", "Not interested is quiet");
@@ -1001,9 +1172,18 @@ mod tests {
 
     #[test]
     fn relative_redirects_stay_on_the_same_host() {
-        assert_eq!(redirect_target("https://a.test/feed", "/feed.xml"), "https://a.test/feed.xml");
-        assert_eq!(redirect_target("http://a.test/x/y", "rss"), "http://a.test/rss");
-        assert_eq!(redirect_target("http://a.test/x", "https://b.test/rss"), "https://b.test/rss");
+        assert_eq!(
+            redirect_target("https://a.test/feed", "/feed.xml"),
+            "https://a.test/feed.xml"
+        );
+        assert_eq!(
+            redirect_target("http://a.test/x/y", "rss"),
+            "http://a.test/rss"
+        );
+        assert_eq!(
+            redirect_target("http://a.test/x", "https://b.test/rss"),
+            "https://b.test/rss"
+        );
     }
 
     #[test]

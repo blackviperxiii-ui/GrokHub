@@ -73,18 +73,29 @@ pub fn chat_request_body_images(
         .iter()
         .map(|(role, content)| json!({ "role": role, "content": content }))
         .collect();
-    let urls: Vec<&str> = images.iter().copied().filter(|s| s.starts_with("data:image")).collect();
+    let urls: Vec<&str> = images
+        .iter()
+        .copied()
+        .filter(|s| s.starts_with("data:image"))
+        .collect();
     if !urls.is_empty() {
         if let Some(last) = msgs.last_mut() {
             if last["role"] == "user" {
                 let text = last["content"].as_str().unwrap_or("").to_string();
                 let mut parts = vec![json!({ "type": "text", "text": text })];
-                parts.extend(urls.iter().map(|url| json!({ "type": "image_url", "image_url": { "url": url } })));
+                parts.extend(
+                    urls.iter()
+                        .map(|url| json!({ "type": "image_url", "image_url": { "url": url } })),
+                );
                 last["content"] = Value::Array(parts);
             }
         }
     }
-    let resolved = if model.is_empty() { DEFAULT_MODEL } else { model };
+    let resolved = if model.is_empty() {
+        DEFAULT_MODEL
+    } else {
+        model
+    };
     let mut body = json!({
         "model": resolved,
         "stream": false,
@@ -143,7 +154,10 @@ pub fn accepts_reasoning_effort(model: &str) -> bool {
     }
     ["grok-4.7", "grok-4.6", "grok-4.5", "grok-4.20-multi-agent"]
         .iter()
-        .any(|f| m.strip_prefix(f).is_some_and(|rest| rest.is_empty() || rest.starts_with('-')))
+        .any(|f| {
+            m.strip_prefix(f)
+                .is_some_and(|rest| rest.is_empty() || rest.starts_with('-'))
+        })
 }
 
 /// Normalize effort ids and legacy aliases (`/effort`, `/mode`).
@@ -163,7 +177,12 @@ pub fn parse_reasoning_effort(s: &str) -> Option<&'static str> {
 
 pub fn effort_label(id: &str) -> &'static str {
     parse_reasoning_effort(id)
-        .and_then(|e| REASONING_EFFORTS.iter().find(|(k, _)| *k == e).map(|(_, l)| *l))
+        .and_then(|e| {
+            REASONING_EFFORTS
+                .iter()
+                .find(|(k, _)| *k == e)
+                .map(|(_, l)| *l)
+        })
         .unwrap_or("High")
 }
 
@@ -252,12 +271,7 @@ const THINK_ROUTE_SIGNALS: &[&str] = &[
 ];
 
 const BALANCE_ROUTE_SIGNALS: &[&str] = &[
-    "explain",
-    "compare",
-    "why ",
-    "how does",
-    "review",
-    "write a",
+    "explain", "compare", "why ", "how does", "review", "write a",
 ];
 
 fn contains_any(hay: &str, needles: &[&str]) -> bool {
@@ -341,18 +355,29 @@ pub fn responses_request_body_images(
     images: &[&str],
     effort: Option<&str>,
 ) -> Value {
-    let resolved = if model.is_empty() { DEFAULT_MODEL } else { model };
+    let resolved = if model.is_empty() {
+        DEFAULT_MODEL
+    } else {
+        model
+    };
     let mut input: Vec<Value> = messages
         .iter()
         .map(|(role, content)| json!({ "role": role, "content": content }))
         .collect();
-    let urls: Vec<&str> = images.iter().copied().filter(|s| s.starts_with("data:image")).collect();
+    let urls: Vec<&str> = images
+        .iter()
+        .copied()
+        .filter(|s| s.starts_with("data:image"))
+        .collect();
     if !urls.is_empty() {
         if let Some(last) = input.last_mut() {
             if last["role"] == "user" {
                 let text = last["content"].as_str().unwrap_or("").to_string();
                 let mut parts = vec![json!({ "type": "input_text", "text": text })];
-                parts.extend(urls.iter().map(|url| json!({ "type": "input_image", "image_url": url })));
+                parts.extend(
+                    urls.iter()
+                        .map(|url| json!({ "type": "input_image", "image_url": url })),
+                );
                 last["content"] = Value::Array(parts);
             }
         }
@@ -448,9 +473,16 @@ mod tests {
             ("system".to_string(), "diagnose".to_string()),
             ("user".to_string(), "video stutters".to_string()),
         ];
-        let stills = ["data:image/png;base64,AAA", "https://x/y.png", "data:image/jpeg;base64,BBB"];
+        let stills = [
+            "data:image/png;base64,AAA",
+            "https://x/y.png",
+            "data:image/jpeg;base64,BBB",
+        ];
         let r = responses_request_body_images("grok-4.7", &msgs, &stills, None);
-        assert_eq!(r["input"][0], json!({ "role": "system", "content": "diagnose" }));
+        assert_eq!(
+            r["input"][0],
+            json!({ "role": "system", "content": "diagnose" })
+        );
         assert_eq!(
             r["input"][1]["content"],
             json!([
@@ -473,15 +505,34 @@ mod tests {
             responses_request_body_images("grok-4.7", &msgs, &["data:image/png;base64,AAA"], None),
             "one image is the same body as before"
         );
-        assert_eq!(chat_request_body_images("grok-4.7", &msgs, &[], None)["messages"][1]["content"], "video stutters");
+        assert_eq!(
+            chat_request_body_images("grok-4.7", &msgs, &[], None)["messages"][1]["content"],
+            "video stutters"
+        );
     }
 
     #[test]
     fn only_reasoning_models_accept_an_effort() {
-        for m in ["grok-4.7", "grok-4.7-latest", "GROK-4.6", "grok-4.5-0901", "grok-4.20-multi-agent", " grok-4.20-multi-agent-0309 "] {
+        for m in [
+            "grok-4.7",
+            "grok-4.7-latest",
+            "GROK-4.6",
+            "grok-4.5-0901",
+            "grok-4.20-multi-agent",
+            " grok-4.20-multi-agent-0309 ",
+        ] {
             assert!(accepts_reasoning_effort(m), "{m}");
         }
-        for m in ["grok-4.20-0309-non-reasoning", "grok-4-1-fast-non-reasoning", "grok-4.20-0309-reasoning", "grok-4-fast", "grok-3-mini", "grok-4.70", "grok-code-fast-1", ""] {
+        for m in [
+            "grok-4.20-0309-non-reasoning",
+            "grok-4-1-fast-non-reasoning",
+            "grok-4.20-0309-reasoning",
+            "grok-4-fast",
+            "grok-3-mini",
+            "grok-4.70",
+            "grok-code-fast-1",
+            "",
+        ] {
             assert!(!accepts_reasoning_effort(m), "{m}");
         }
     }
@@ -527,7 +578,10 @@ mod tests {
         let reasoned = json!({
             "choices": [{ "message": { "content": "hello", "reasoning_content": "Need a snapshot." } }]
         });
-        assert_eq!(parse_chat_reasoning(&reasoned).as_deref(), Some("Need a snapshot."));
+        assert_eq!(
+            parse_chat_reasoning(&reasoned).as_deref(),
+            Some("Need a snapshot.")
+        );
         assert!(should_failover_status(429));
         assert!(!should_failover_status(200));
         assert_eq!(failover_model("grok-4-latest"), Some("grok-4.3"));
@@ -570,11 +624,18 @@ mod tests {
                 { "type": "message", "content": [{ "type": "output_text", "text": "hello" }] }
             ]
         });
-        assert_eq!(parse_responses_reasoning(&reasoned).as_deref(), Some("Need a snapshot."));
+        assert_eq!(
+            parse_responses_reasoning(&reasoned).as_deref(),
+            Some("Need a snapshot.")
+        );
         assert_eq!(parse_model_text(&reply).as_deref(), Some("hello"));
-        assert_eq!(parse_model_text(&json!({
-            "choices": [{ "message": { "content": "legacy" } }]
-        })).as_deref(), Some("legacy"));
+        assert_eq!(
+            parse_model_text(&json!({
+                "choices": [{ "message": { "content": "legacy" } }]
+            }))
+            .as_deref(),
+            Some("legacy")
+        );
         assert_eq!(chat_timeout_secs(Some("xhigh")), 600);
         assert_eq!(chat_timeout_secs(None), 120);
     }
@@ -595,10 +656,7 @@ mod tests {
             DEFAULT_MODEL,
             "invalid Settings pin must not be sent to the API"
         );
-        assert_eq!(
-            reasoning_effort_for_mode("max"),
-            Some("xhigh")
-        );
+        assert_eq!(reasoning_effort_for_mode("max"), Some("xhigh"));
     }
 
     #[test]
@@ -616,7 +674,9 @@ mod tests {
         assert_eq!(effort_label("xhigh"), "Extra High");
         assert_eq!(effort_label("max"), "Extra High");
         assert_eq!(REASONING_EFFORTS.len(), 5);
-        assert!(REASONING_EFFORTS.iter().all(|(id, label)| *id != "max" && *label != "Max"));
+        assert!(REASONING_EFFORTS
+            .iter()
+            .all(|(id, label)| *id != "max" && *label != "Max"));
         assert_eq!(cabin_spawn_model(""), "grok-4.7");
         assert_eq!(cabin_spawn_model("  "), "grok-4.7");
         assert_eq!(cabin_spawn_model("grok-4.6"), "grok-4.6");
@@ -627,7 +687,9 @@ mod tests {
     fn minimal_effort_is_gone_and_loads_as_low() {
         let ids: Vec<&str> = REASONING_EFFORTS.iter().map(|(id, _)| *id).collect();
         assert_eq!(ids, vec!["none", "low", "medium", "high", "xhigh"]);
-        assert!(REASONING_EFFORTS.iter().all(|(_, label)| *label != "Minimal"));
+        assert!(REASONING_EFFORTS
+            .iter()
+            .all(|(_, label)| *label != "Minimal"));
         assert_eq!(parse_reasoning_effort("minimal"), Some("low"));
         assert_eq!(parse_reasoning_effort(" Minimal "), Some("low"));
         assert_eq!(parse_reasoning_effort("MINI"), Some("low"));
@@ -694,7 +756,10 @@ mod tests {
         assert_eq!(crate::next_failover_tier("balanced"), "fast");
         assert_eq!(crate::next_failover_tier("fast"), "fast");
         assert_eq!(model_for_mode(crate::next_failover_tier("max")), "grok-4.3");
-        assert_eq!(model_for_mode(crate::next_failover_tier("balanced")), "grok-3-mini-fast");
+        assert_eq!(
+            model_for_mode(crate::next_failover_tier("balanced")),
+            "grok-3-mini-fast"
+        );
     }
 
     #[test]
@@ -739,7 +804,11 @@ mod tests {
         );
         assert_eq!(effective_chat_mode("auto", "hi", ""), "fast");
         assert_eq!(
-            effective_chat_mode("", "architect a host-tool plan and implement the first slice", ""),
+            effective_chat_mode(
+                "",
+                "architect a host-tool plan and implement the first slice",
+                ""
+            ),
             "think",
             "empty composer mode is Auto"
         );
@@ -771,13 +840,24 @@ mod tests {
             ),
             "think"
         );
-        assert_eq!(effective_chat_mode("auto", "hi", "grok-3-mini-fast"), "fast");
         assert_eq!(
-            effective_chat_mode("auto", "explain how rust ownership works in detail", "grok-4.3"),
+            effective_chat_mode("auto", "hi", "grok-3-mini-fast"),
+            "fast"
+        );
+        assert_eq!(
+            effective_chat_mode(
+                "auto",
+                "explain how rust ownership works in detail",
+                "grok-4.3"
+            ),
             "balanced"
         );
         assert_eq!(
-            effective_chat_mode("auto", "think as hard as possible about this proof", "grok-4.6"),
+            effective_chat_mode(
+                "auto",
+                "think as hard as possible about this proof",
+                "grok-4.6"
+            ),
             "max"
         );
         assert_eq!(
@@ -809,7 +889,10 @@ mod tests {
 
     #[test]
     fn failover_only_drops_grok_4_family() {
-        assert_eq!(failover_model("grok-4-1-fast-non-reasoning"), Some("grok-4.3"));
+        assert_eq!(
+            failover_model("grok-4-1-fast-non-reasoning"),
+            Some("grok-4.3")
+        );
         assert!(failover_model("gpt-4").is_none());
         assert!(failover_model("4").is_none());
         assert!(failover_model("grok-3").is_none());

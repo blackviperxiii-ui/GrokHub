@@ -106,7 +106,10 @@ pub fn append_say(blocks: &mut Vec<LiveBlock>, delta: &str) {
 
 pub fn append_tool(blocks: &mut Vec<LiveBlock>, id: &str, title: &str, status: &str, detail: &str) {
     if !id.is_empty() {
-        if let Some(old) = blocks.iter_mut().rev().find(|b| b.kind == LiveKind::Tool && b.tool_id == id)
+        if let Some(old) = blocks
+            .iter_mut()
+            .rev()
+            .find(|b| b.kind == LiveKind::Tool && b.tool_id == id)
         {
             // Grok's `tool_call_update` carries no title, which parses as the
             // placeholder `Tool`. It must not replace the name from the call.
@@ -199,7 +202,10 @@ fn starts_sentence(s: &str) -> bool {
     if !first.is_uppercase() {
         return false;
     }
-    word == "I" || word.starts_with("I'") || word.starts_with("I\u{2019}") || chars.any(char::is_lowercase)
+    word == "I"
+        || word.starts_with("I'")
+        || word.starts_with("I\u{2019}")
+        || chars.any(char::is_lowercase)
 }
 
 /// Inside an open fence or inline code span on the last line.
@@ -407,7 +413,10 @@ pub(crate) fn clip_chars(s: &str, max: usize) -> String {
     if s.chars().count() <= max {
         return s.to_string();
     }
-    format!("{}…", s.chars().take(max.saturating_sub(1)).collect::<String>())
+    format!(
+        "{}…",
+        s.chars().take(max.saturating_sub(1)).collect::<String>()
+    )
 }
 
 /// True when `detail` is only a status word, so a header or body must not repeat the chip.
@@ -616,8 +625,14 @@ mod tests {
 
     #[test]
     fn chunk_seam_keeps_messages_and_summaries_apart() {
-        assert_eq!(chunk_seam("then write up what I hit.", "GrokHub is running.", false), "\n\n");
-        assert_eq!(chunk_seam("uses WORK_PIN to track tasks.", "I'm examining", false), "\n\n");
+        assert_eq!(
+            chunk_seam("then write up what I hit.", "GrokHub is running.", false),
+            "\n\n"
+        );
+        assert_eq!(
+            chunk_seam("uses WORK_PIN to track tasks.", "I'm examining", false),
+            "\n\n"
+        );
         assert_eq!(chunk_seam("Checking the path", "Next", true), "\n\n");
         assert_eq!(chunk_seam("Checking the ", "path", true), "");
         assert_eq!(chunk_seam("", "Hello", true), "");
@@ -642,7 +657,11 @@ mod tests {
             ""
         );
         assert_eq!(
-            chunk_seam("I'll look.\nHOST_CMD: cat <<'EOF'\necho hi.", "There", false),
+            chunk_seam(
+                "I'll look.\nHOST_CMD: cat <<'EOF'\necho hi.",
+                "There",
+                false
+            ),
             ""
         );
         // A tool call still opens a paragraph, even when the buffer holds a command.
@@ -690,8 +709,20 @@ mod tests {
         let mut b = Vec::new();
         append_thought(&mut b, "First paragraph.\n\nSecond paragraph.");
         append_say(&mut b, "I'll find the app.");
-        append_tool(&mut b, "t1", "Read `Cargo.toml`", "completed", "[workspace]");
-        append_tool(&mut b, "t2", "run_terminal_command", "failed", "exit 1\tboom");
+        append_tool(
+            &mut b,
+            "t1",
+            "Read `Cargo.toml`",
+            "completed",
+            "[workspace]",
+        );
+        append_tool(
+            &mut b,
+            "t2",
+            "run_terminal_command",
+            "failed",
+            "exit 1\tboom",
+        );
         append_say(&mut b, "Walked it.\nTURN_SAY: literal");
         assert!(turn_needs_timeline(&b));
         let enc = encode_turn(&b);
@@ -731,10 +762,19 @@ mod tests {
 
     #[test]
     fn tool_group_labels_read_like_steps() {
-        assert_eq!(tool_display_title("run_terminal_command"), "Run terminal command");
+        assert_eq!(
+            tool_display_title("run_terminal_command"),
+            "Run terminal command"
+        );
         assert_eq!(tool_display_title("Read `src/main.rs`"), "Read src/main.rs");
-        assert_eq!(tool_group_label([("click", "completed", "running")]), "Click");
-        assert_eq!(tool_group_label([("grep", "completed", "3 matches")]), "Grep · 3 matches");
+        assert_eq!(
+            tool_group_label([("click", "completed", "running")]),
+            "Click"
+        );
+        assert_eq!(
+            tool_group_label([("grep", "completed", "3 matches")]),
+            "Grep · 3 matches"
+        );
         assert!(tool_detail_is_status(" Running… "));
         assert!(tool_detail_is_status("waiting for input"));
         assert!(tool_detail_is_status("in progress"));

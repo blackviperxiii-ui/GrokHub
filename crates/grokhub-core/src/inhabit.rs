@@ -60,7 +60,10 @@ mod tests {
 
     #[test]
     fn inhabit_requires_peers_and_idle_dest() {
-        assert!(!inhabit_ready(0, false), "sharing with no peers is not paired");
+        assert!(
+            !inhabit_ready(0, false),
+            "sharing with no peers is not paired"
+        );
         assert!(!inhabit_ready(1, true), "a busy dest must not take inhabit");
         assert!(inhabit_ready(1, false));
         assert!(!inhabit_bundle_usable(&InhabitBundle::default()));

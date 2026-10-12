@@ -42,7 +42,6 @@ pub(super) struct PersistSnap {
     pub(super) secrets: Option<crate::secrets::Secrets>,
 }
 
-
 pub(super) fn write_persist_disk(dir: &std::path::Path, snap: &PersistSnap) {
     let _ = threads::save(&snap.threads);
     let msgs = snap
@@ -126,7 +125,6 @@ pub(super) fn write_persist_disk_in_order(
 }
 
 impl Cabin {
-
     pub(super) fn persist(&mut self) {
         let mut snap = self.persist_snap();
         if snap.projects.is_some() {

@@ -3,7 +3,9 @@
 
 fn body<'a>(src: &'a str, name: &str) -> &'a str {
     let needle = format!("fn {name}(");
-    let start = src.find(&needle).unwrap_or_else(|| panic!("missing {name}"));
+    let start = src
+        .find(&needle)
+        .unwrap_or_else(|| panic!("missing {name}"));
     let after = &src[start..];
     let end = after[needle.len()..]
         .find("\n    fn ")
@@ -30,7 +32,9 @@ fn palette_repaint_only_while_search_inflight() {
         .nth(1)
         .expect("kick then maybe tick");
     assert!(
-        !after_kick.trim_start().starts_with("ctx.request_repaint_after")
+        !after_kick
+            .trim_start()
+            .starts_with("ctx.request_repaint_after")
             && after_kick.contains("palette_file_rx.is_some()"),
         "idle after a saved search must not schedule 60 ms: {tick}"
     );
@@ -41,7 +45,9 @@ fn pulse_tab_repaint_only_while_crossfade_moves() {
     let src = include_str!("pulse_ui.rs").replace("\r\n", "\n");
     let pulse = body(&src, "ui_pulse");
     assert!(
-        pulse.contains("motion_ok") && pulse.contains("0.001 < tab_t") && pulse.contains("tab_t < 0.999"),
+        pulse.contains("motion_ok")
+            && pulse.contains("0.001 < tab_t")
+            && pulse.contains("tab_t < 0.999"),
         "16 ms crossfade tick only while motion is on and t is mid-way: {pulse}"
     );
     let silence = body(&src, "paint_pulse_silence");
@@ -81,7 +87,11 @@ fn scope_folder_pick_repaint_only_while_dialog_open() {
     );
     assert!(
         poll.contains("scope_pick_rx.take()")
-            && poll.split("request_repaint_after").next().unwrap().contains("Empty"),
+            && poll
+                .split("request_repaint_after")
+                .next()
+                .unwrap()
+                .contains("Empty"),
         "no rx means no short timer: {poll}"
     );
 }

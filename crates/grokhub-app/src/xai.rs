@@ -1,20 +1,18 @@
-use grokhub_core::{
-    chat_request_body_images, chat_timeout_secs,
-    dedicated_imagine_model, frame_bytes, imagine_edit_body,
-    imagine_edit_mask_fallback, imagine_empty_reply_hint, imagine_generation_body,
-    imagine_image_fallback_model, imagine_image_shaped, imagine_is_network_stall,
-    imagine_mask_rejected, imagine_moderation_blocked, imagine_network_hint,
-    imagine_should_retry_model, imagine_slug, imagine_video_body,
-    media_ext_from_bytes, merge_thinking, parse_imagine_url,
-    parse_imagine_urls, parse_model_reasoning, parse_model_text, parse_stt_text,
-    parse_video_job_status, parse_video_request_id, parse_video_url,
-    responses_request_body_images, responses_url, stt_multipart, stt_url, tts_request_body, tts_url,
-    video_failure_detail, video_moderation_blocked,
-    ImagineVideoOp, PresenceFrame, VideoBodyReq, VideoJobStatus, MEDIA_FILE_CAP, TEXT_FILE_CAP,
-    XAI_BASE,
-};
 use grokhub_agent::harness as hx;
 use grokhub_agent::route;
+use grokhub_core::{
+    chat_request_body_images, chat_timeout_secs, dedicated_imagine_model, frame_bytes,
+    imagine_edit_body, imagine_edit_mask_fallback, imagine_empty_reply_hint,
+    imagine_generation_body, imagine_image_fallback_model, imagine_image_shaped,
+    imagine_is_network_stall, imagine_mask_rejected, imagine_moderation_blocked,
+    imagine_network_hint, imagine_should_retry_model, imagine_slug, imagine_video_body,
+    media_ext_from_bytes, merge_thinking, parse_imagine_url, parse_imagine_urls,
+    parse_model_reasoning, parse_model_text, parse_stt_text, parse_video_job_status,
+    parse_video_request_id, parse_video_url, responses_request_body_images, responses_url,
+    stt_multipart, stt_url, tts_request_body, tts_url, video_failure_detail,
+    video_moderation_blocked, ImagineVideoOp, PresenceFrame, VideoBodyReq, VideoJobStatus,
+    MEDIA_FILE_CAP, TEXT_FILE_CAP, XAI_BASE,
+};
 use std::io::Read;
 
 /// Production Imagine calls `XAI_BASE`. Tests can point the generations POST at a local origin.
@@ -103,9 +101,8 @@ fn read_json_capped(resp: ureq::Response) -> Result<serde_json::Value, String> {
 }
 
 fn merge_reply(v: &serde_json::Value) -> Option<String> {
-    parse_model_text(v).map(|content| {
-        merge_thinking(&parse_model_reasoning(v).unwrap_or_default(), &content)
-    })
+    parse_model_text(v)
+        .map(|content| merge_thinking(&parse_model_reasoning(v).unwrap_or_default(), &content))
 }
 
 pub fn grok_chat(
@@ -120,7 +117,11 @@ pub fn grok_chat(
         return Err("Connect Grok in Settings".into());
     }
     // Background helpers pass the background effort; the rest is a quick user ask.
-    let class = if effort == Some(grokhub_core::BACKGROUND_EFFORT) { "background:summarize" } else { "chat:quick" };
+    let class = if effort == Some(grokhub_core::BACKGROUND_EFFORT) {
+        "background:summarize"
+    } else {
+        "chat:quick"
+    };
     let call = route::cabin::ModelCall::new(route::cabin::Provider::Xai, model, effort, class);
     let images: Vec<&str> = image_data_url.into_iter().collect();
     route::cabin::call_model(&crate::config::config_dir(), &call, |call| {
@@ -161,12 +162,7 @@ fn grok_chat_once(
         }
     }
     let body = chat_request_body_images(call.model, messages, images, call.effort);
-    let v = grok_json(
-        &format!("{XAI_BASE}/chat/completions"),
-        key,
-        body,
-        timeout,
-    )?;
+    let v = grok_json(&format!("{XAI_BASE}/chat/completions"), key, body, timeout)?;
     let text = merge_reply(&v).ok_or_else(|| "empty Grok reply".to_string())?;
     Ok((text, route::cabin::xai_usage(&v)))
 }
@@ -301,8 +297,9 @@ pub fn grok_imagine_edits(
     match post(body) {
         Ok(urls) => Ok((urls, None)),
         Err(e) if mask.is_some_and(|m| !m.trim().is_empty()) && imagine_mask_rejected(&e) => {
-            let body =
-                imagine_edit_mask_fallback(prompt, model, &refs, mask, n, resolution, aspect, "url");
+            let body = imagine_edit_mask_fallback(
+                prompt, model, &refs, mask, n, resolution, aspect, "url",
+            );
             let urls = post(body)?;
             Ok((
                 urls,
@@ -459,7 +456,10 @@ pub fn http_err(e: ureq::Error) -> String {
                 .take(TEXT_FILE_CAP as u64)
                 .read_to_end(&mut buf);
             let body = String::from_utf8_lossy(&buf);
-            format!("HTTP {code}: {}", body.chars().take(200).collect::<String>())
+            format!(
+                "HTTP {code}: {}",
+                body.chars().take(200).collect::<String>()
+            )
         }
         other => {
             let raw = other.to_string();
@@ -543,7 +543,9 @@ mod tests {
             .and_then(|s| s.split("fn merge_reply(").next())
             .expect("grok_json");
         assert!(
-            json.contains(".take(") && json.contains("MEDIA_FILE_CAP") && !json.contains("into_json()"),
+            json.contains(".take(")
+                && json.contains("MEDIA_FILE_CAP")
+                && !json.contains("into_json()"),
             "chat JSON must not slurp an unbounded completion: {json}"
         );
         let err = src
@@ -569,7 +571,8 @@ mod tests {
             .and_then(|s| s.split("pub fn grok_imagine_video_op(").next())
             .expect("grok_imagine_opts");
         assert!(
-            imagine.contains("try_model(&primary, 120)") && !imagine.contains("try_model(&primary, 45)"),
+            imagine.contains("try_model(&primary, 120)")
+                && !imagine.contains("try_model(&primary, 45)"),
             "2k stills routinely exceed a 45s ureq budget and surface as Windows 10060: {imagine}"
         );
         assert!(

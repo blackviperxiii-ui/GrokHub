@@ -86,7 +86,11 @@ pub fn capture_exhausted(finding: &Finding, spans: &[Span]) -> Option<String> {
         .iter()
         .filter_map(|e| spans.get(e.at))
         .filter(|s| s.tool == finding.tool && failed_result(&s.result))
-        .find_map(|s| s.result.find(CAPTURE_FAILED_HEAD).map(|at| s.result[at..].trim().to_string()))
+        .find_map(|s| {
+            s.result
+                .find(CAPTURE_FAILED_HEAD)
+                .map(|at| s.result[at..].trim().to_string())
+        })
 }
 
 /// Hard class that keeps the ladder from retrying: any step the finding
@@ -297,7 +301,11 @@ mod tests {
             .unwrap()
             .contains("Stop repeating that. Re-read the goal"));
         for _ in 0..20 {
-            assert_eq!(ladder.next(&finding, &spans).rung, Rung::Replan, "never pauses");
+            assert_eq!(
+                ladder.next(&finding, &spans).rung,
+                Rung::Replan,
+                "never pauses"
+            );
         }
         assert_eq!(ladder.tried(&a.target), 23);
         ladder.reset();
@@ -433,7 +441,15 @@ mod tests {
                 None,
                 "",
             ),
-            span(2, "reply", "{}", "say", "soft", None, "Done.\nGOAL_COMPLETE"),
+            span(
+                2,
+                "reply",
+                "{}",
+                "say",
+                "soft",
+                None,
+                "Done.\nGOAL_COMPLETE",
+            ),
         ];
         let finding = Finding {
             detector: "action_loop".into(),
@@ -447,8 +463,7 @@ mod tests {
             }],
         };
         // One backend's refusal no longer pauses at once: no card per retry.
-        spans[0].result =
-            "error: ScreenShot2: org.kde.KWin.ScreenShot2.Error.NoAuthorized".into();
+        spans[0].result = "error: ScreenShot2: org.kde.KWin.ScreenShot2.Error.NoAuthorized".into();
         assert_eq!(capture_exhausted(&finding, &spans), None);
         let mut ladder = Ladder::new();
         let rungs: Vec<Rung> = (0..3).map(|_| ladder.next(&finding, &spans).rung).collect();

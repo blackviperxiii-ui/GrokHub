@@ -73,7 +73,12 @@ impl SystemProbe for OsProbe {
         match rx.recv_timeout(COMMAND_TIMEOUT) {
             Ok(text) => {
                 let _ = child.wait();
-                Some(text.lines().map(str::to_string).filter(|l| !l.trim().is_empty()).collect())
+                Some(
+                    text.lines()
+                        .map(str::to_string)
+                        .filter(|l| !l.trim().is_empty())
+                        .collect(),
+                )
             }
             Err(_) => {
                 let _ = child.kill();
@@ -100,11 +105,20 @@ fn disk_usage(path: &Path) -> Option<(u64, u64)> {
 #[cfg(windows)]
 fn disk_usage(path: &Path) -> Option<(u64, u64)> {
     use std::os::windows::ffi::OsStrExt;
-    let wide: Vec<u16> = path.as_os_str().encode_wide().chain(std::iter::once(0)).collect();
+    let wide: Vec<u16> = path
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
     let (mut avail, mut total, mut free) = (0u64, 0u64, 0u64);
     // SAFETY: `wide` is NUL-terminated and the three out pointers are valid.
     let ok = unsafe {
-        windows_sys::Win32::Storage::FileSystem::GetDiskFreeSpaceExW(wide.as_ptr(), &mut avail, &mut total, &mut free)
+        windows_sys::Win32::Storage::FileSystem::GetDiskFreeSpaceExW(
+            wide.as_ptr(),
+            &mut avail,
+            &mut total,
+            &mut free,
+        )
     };
     let _ = free;
     (ok != 0).then_some((total, avail))
@@ -146,7 +160,11 @@ pub fn snapshot(probe: &dyn SystemProbe, dirs: &PlatformDirs) -> SystemSnapshot 
     for (label, path) in disk_paths(dirs) {
         if let Some((total, free)) = probe.disk(&path) {
             // Home on the root disk is the same disk: one line.
-            if snap.disks.iter().any(|d| d.total == total && d.free == free) {
+            if snap
+                .disks
+                .iter()
+                .any(|d| d.total == total && d.free == free)
+            {
                 continue;
             }
             snap.disks.push(DiskUse { label, total, free });
@@ -154,10 +172,31 @@ pub fn snapshot(probe: &dyn SystemProbe, dirs: &PlatformDirs) -> SystemSnapshot 
     }
     if dirs.os == HostOs::Linux {
         snap.failed_units = probe
-            .lines("systemctl", &["--failed", "--no-legend", "--plain", "--no-pager"])
-            .map(|lines| lines.iter().filter_map(|l| l.split_whitespace().next().map(str::to_string)).collect());
+            .lines(
+                "systemctl",
+                &["--failed", "--no-legend", "--plain", "--no-pager"],
+            )
+            .map(|lines| {
+                lines
+                    .iter()
+                    .filter_map(|l| l.split_whitespace().next().map(str::to_string))
+                    .collect()
+            });
         snap.boot_errors = probe
-            .lines("journalctl", &["-p", "err", "-b", "-q", "--no-pager", "-o", "cat", "-n", "500"])
+            .lines(
+                "journalctl",
+                &[
+                    "-p",
+                    "err",
+                    "-b",
+                    "-q",
+                    "--no-pager",
+                    "-o",
+                    "cat",
+                    "-n",
+                    "500",
+                ],
+            )
             .map(|l| l.len());
         snap.pending_updates = probe.lines("pacman", &["-Qu"]).map(|l| l.len());
     }
@@ -174,13 +213,24 @@ impl SystemSnapshot {
     pub fn facts(&self, day: &str) -> Vec<Fact> {
         let mut out = Vec::new();
         let mut push = |item: String, line: String| {
-            out.push(Fact { item: format!("{day}:{item}"), line, sensitivity: Sensitivity::Personal });
+            out.push(Fact {
+                item: format!("{day}:{item}"),
+                line,
+                sensitivity: Sensitivity::Personal,
+            });
         };
         for d in &self.disks {
-            let used = (d.free * 100).checked_div(d.total).map_or(0, |free| 100 - free);
+            let used = (d.free * 100)
+                .checked_div(d.total)
+                .map_or(0, |free| 100 - free);
             push(
                 format!("disk:{}:{used}", d.label),
-                format!("System on {day}: disk {} is {used}% used, {} free of {}", d.label, gb(d.free), gb(d.total)),
+                format!(
+                    "System on {day}: disk {} is {used}% used, {} free of {}",
+                    d.label,
+                    gb(d.free),
+                    gb(d.total)
+                ),
             );
         }
         if let Some(units) = &self.failed_units {
@@ -188,15 +238,25 @@ impl SystemSnapshot {
                 format!("System on {day}: no failed services")
             } else {
                 let shown: Vec<&str> = units.iter().take(UNITS_MAX).map(String::as_str).collect();
-                format!("System on {day}: {} failed services ({})", units.len(), shown.join(", "))
+                format!(
+                    "System on {day}: {} failed services ({})",
+                    units.len(),
+                    shown.join(", ")
+                )
             };
             push(format!("units:{}", units.join(",")), line);
         }
         if let Some(n) = self.boot_errors {
-            push(format!("errors:{n}"), format!("System on {day}: {n} errors in this boot's log"));
+            push(
+                format!("errors:{n}"),
+                format!("System on {day}: {n} errors in this boot's log"),
+            );
         }
         if let Some(n) = self.pending_updates {
-            push(format!("updates:{n}"), format!("System on {day}: {n} updates waiting"));
+            push(
+                format!("updates:{n}"),
+                format!("System on {day}: {n} updates waiting"),
+            );
         }
         out
     }
@@ -217,7 +277,9 @@ mod tests {
         }
         fn lines(&self, program: &str, _args: &[&str]) -> Option<Vec<String>> {
             match program {
-                "systemctl" => Some(vec!["bluetooth.service loaded failed failed Bluetooth".into()]),
+                "systemctl" => Some(vec![
+                    "bluetooth.service loaded failed failed Bluetooth".into()
+                ]),
                 "journalctl" => Some(vec!["e1".into(), "e2".into(), "e3".into()]),
                 _ => None,
             }
@@ -237,10 +299,20 @@ mod tests {
             system_data: Vec::new(),
         };
         let snap = snapshot(&Fake, &dirs);
-        assert_eq!(snap.failed_units, Some(vec!["bluetooth.service".to_string()]));
+        assert_eq!(
+            snap.failed_units,
+            Some(vec!["bluetooth.service".to_string()])
+        );
         assert_eq!(snap.boot_errors, Some(3));
-        assert_eq!(snap.pending_updates, None, "no pacman: not available, not zero");
-        let lines: Vec<String> = snap.facts("2026-10-07").into_iter().map(|f| f.line).collect();
+        assert_eq!(
+            snap.pending_updates, None,
+            "no pacman: not available, not zero"
+        );
+        let lines: Vec<String> = snap
+            .facts("2026-10-07")
+            .into_iter()
+            .map(|f| f.line)
+            .collect();
         assert_eq!(
             lines,
             vec![
@@ -274,7 +346,14 @@ mod tests {
             system_data: Vec::new(),
         };
         let snap = snapshot(&Win, &dirs);
-        assert_eq!(snap.disks, vec![DiskUse { label: "C:".into(), total: 1_000_000_000_000, free: 250_000_000_000 }]);
+        assert_eq!(
+            snap.disks,
+            vec![DiskUse {
+                label: "C:".into(),
+                total: 1_000_000_000_000,
+                free: 250_000_000_000
+            }]
+        );
         assert_eq!(snap.failed_units, None);
     }
 }

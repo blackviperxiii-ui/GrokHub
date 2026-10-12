@@ -215,7 +215,11 @@ pub fn switch_clone_to_main(source: &Path) -> Result<(), String> {
     match git_head_branch(source)?.as_str() {
         "main" => return Ok(()),
         "beta" => {}
-        other => return Err(format!("source clone is on {other}, not beta — checkout main by hand")),
+        other => {
+            return Err(format!(
+                "source clone is on {other}, not beta — checkout main by hand"
+            ))
+        }
     }
     let clean = git_stdout(source, &["diff", "--quiet"])?.0
         && git_stdout(source, &["diff", "--cached", "--quiet"])?.0;
@@ -225,14 +229,24 @@ pub fn switch_clone_to_main(source: &Path) -> Result<(), String> {
             source.display()
         ));
     }
-    if git_stdout(source, &["show-ref", "--verify", "--quiet", "refs/heads/main"])?.0
-        && !git_stdout(
-            source,
-            &["merge-base", "--is-ancestor", "refs/heads/main", "refs/remotes/origin/main"],
-        )?
-        .0
+    if git_stdout(
+        source,
+        &["show-ref", "--verify", "--quiet", "refs/heads/main"],
+    )?
+    .0 && !git_stdout(
+        source,
+        &[
+            "merge-base",
+            "--is-ancestor",
+            "refs/heads/main",
+            "refs/remotes/origin/main",
+        ],
+    )?
+    .0
     {
-        return Err("local main has commits that are not on origin/main; sort that out by hand".into());
+        return Err(
+            "local main has commits that are not on origin/main; sort that out by hand".into(),
+        );
     }
     let (ok, _) = git_stdout_within(
         source,
@@ -406,11 +420,7 @@ pub fn recover_clone_if_needed(source: &Path, channel: Channel) -> Result<Option
             return Err(format!("could not create backup branch {bak}"));
         }
     }
-    let (ok, _) = git_stdout_within(
-        source,
-        &["reset", "--hard", &tip],
-        Duration::from_secs(60),
-    )?;
+    let (ok, _) = git_stdout_within(source, &["reset", "--hard", &tip], Duration::from_secs(60))?;
     if !ok {
         return Err(format!(
             "git reset --hard {tip} failed — prior state is on {bak} ({})",
@@ -466,7 +476,9 @@ pub fn update_cmds_in(source: &Path, channel: Channel) -> Result<Vec<String>, St
 /// test can still assert the Linux `install.sh` plan.
 fn update_cmds_on(source: &Path, windows: bool, channel: Channel) -> Result<Vec<String>, String> {
     if !is_grokhub_source(source) {
-        return Err("GrokHub can't find its source folder (~/GrokHub or ~/.config/GrokHub/source).".into());
+        return Err(
+            "GrokHub can't find its source folder (~/GrokHub or ~/.config/GrokHub/source).".into(),
+        );
     }
     let want = channel.branch();
     let branch = git_head_branch(source)?;
@@ -613,7 +625,10 @@ pub fn parse_cabin_semver(raw: &str) -> Option<CabinSemver> {
     if parts.next().is_some() {
         return None;
     }
-    let patch: String = patch_tok.chars().take_while(|c| c.is_ascii_digit()).collect();
+    let patch: String = patch_tok
+        .chars()
+        .take_while(|c| c.is_ascii_digit())
+        .collect();
     if patch.is_empty() || patch.len() != patch_tok.len() {
         // Unknown suffix on the patch token (not `-beta`, already split): keep
         // the old "ignore trailing junk" behavior only when digits prefix it.
@@ -839,7 +854,8 @@ pub fn update_plan_steps(cmds: Vec<String>) -> Vec<HostPlanStep> {
 pub fn update_wipes_config(cmds: &[String]) -> bool {
     cmds.iter().any(|c| {
         let l = c.to_ascii_lowercase();
-        l.contains(".config/grokhub") && (l.contains("rm ") || l.contains("rm\t") || l.contains("rm -"))
+        l.contains(".config/grokhub")
+            && (l.contains("rm ") || l.contains("rm\t") || l.contains("rm -"))
     })
 }
 
@@ -952,7 +968,11 @@ pub fn restart_bin(home: Option<&str>, current_exe: Option<&str>) -> String {
     current_exe
         .map(str::trim)
         .filter(|s| !s.is_empty())
-        .unwrap_or(if cfg!(windows) { "grokhub.exe" } else { "grokhub" })
+        .unwrap_or(if cfg!(windows) {
+            "grokhub.exe"
+        } else {
+            "grokhub"
+        })
         .to_string()
 }
 
@@ -1068,13 +1088,17 @@ mod tests {
         fs::write(root.join("scripts/install.sh"), "#!/bin/sh\n").unwrap();
         assert!(is_grokhub_source(&root));
         assert!(!is_grokhub_source(&std::env::temp_dir()));
-        assert_eq!(walk_up_source(&root.join("crates/grokhub-app")), Some(root.clone()));
+        assert_eq!(
+            walk_up_source(&root.join("crates/grokhub-app")),
+            Some(root.clone())
+        );
         assert_eq!(discover_source(&[root.join("crates")]), Some(root.clone()));
         let err = update_cmds(&root).unwrap_err();
-        assert!(err.contains("not on a branch") || err.contains("main"), "{err}");
-        assert!(update_wipes_config(&[
-            "rm -rf ~/.config/GrokHub".into()
-        ]));
+        assert!(
+            err.contains("not on a branch") || err.contains("main"),
+            "{err}"
+        );
+        assert!(update_wipes_config(&["rm -rf ~/.config/GrokHub".into()]));
         assert!(update_cmds(Path::new("/tmp/not-grokhub")).is_err());
         let _ = fs::remove_dir_all(&root);
     }
@@ -1166,8 +1190,14 @@ mod tests {
             )
         );
         // No clone: beta takes its newest pre-release, on either OS.
-        assert_eq!(update_cmds_for_host_in(None, true, Channel::Beta).unwrap(), release_update_cmds());
-        assert_eq!(update_cmds_for_host_in(None, false, Channel::Beta).unwrap(), release_update_cmds());
+        assert_eq!(
+            update_cmds_for_host_in(None, true, Channel::Beta).unwrap(),
+            release_update_cmds()
+        );
+        assert_eq!(
+            update_cmds_for_host_in(None, false, Channel::Beta).unwrap(),
+            release_update_cmds()
+        );
         assert_eq!(
             update_cmds_for_host_in(None, true, Channel::Stable).unwrap(),
             release_update_cmds()
@@ -1206,20 +1236,34 @@ mod tests {
             .unwrap();
         let no_origin = update_cmds(&root).unwrap();
         assert!(
-            no_origin[0].contains("remote add origin https://github.com/blackviperxiii-ui/GrokHub.git"),
+            no_origin[0]
+                .contains("remote add origin https://github.com/blackviperxiii-ui/GrokHub.git"),
             "{no_origin:?}"
         );
-        assert!(no_origin[1].contains("pull --ff-only origin main"), "{no_origin:?}");
+        assert!(
+            no_origin[1].contains("pull --ff-only origin main"),
+            "{no_origin:?}"
+        );
         assert_overlay_install(&no_origin[2]);
-        assert_eq!(no_origin.len(), 3, "the plan ends at the overlay: {no_origin:?}");
+        assert_eq!(
+            no_origin.len(),
+            3,
+            "the plan ends at the overlay: {no_origin:?}"
+        );
         std::process::Command::new("git")
-            .args(["remote", "add", "origin", "https://example.invalid/grokhub.git"])
+            .args([
+                "remote",
+                "add",
+                "origin",
+                "https://example.invalid/grokhub.git",
+            ])
             .current_dir(&root)
             .status()
             .unwrap();
         let cmds = update_cmds(&root).unwrap();
         assert!(
-            cmds[0].contains("remote set-url origin https://github.com/blackviperxiii-ui/GrokHub.git"),
+            cmds[0]
+                .contains("remote set-url origin https://github.com/blackviperxiii-ui/GrokHub.git"),
             "{cmds:?}"
         );
         assert!(cmds[1].contains("pull --ff-only origin main"), "{cmds:?}");
@@ -1255,11 +1299,8 @@ mod tests {
         assert!(!start.can_restart);
         assert!(start.status.contains("Updating"));
 
-        let pull = overlay_update_progress(
-            1,
-            2,
-            update_step_label("git pull --ff-only origin main"),
-        );
+        let pull =
+            overlay_update_progress(1, 2, update_step_label("git pull --ff-only origin main"));
         assert_eq!(pull.pct, 50);
         assert!(pull.running);
         assert!(!pull.posts_chat);
@@ -1332,7 +1373,10 @@ mod tests {
                 None => std::env::remove_var("LOCALAPPDATA"),
             }
         }
-        assert_eq!(restart_argv("/opt/grokhub", false), vec!["/opt/grokhub".to_string()]);
+        assert_eq!(
+            restart_argv("/opt/grokhub", false),
+            vec!["/opt/grokhub".to_string()]
+        );
         assert_eq!(
             restart_argv("/opt/grokhub", true),
             vec!["/opt/grokhub".to_string(), "--agent".into()]
@@ -1385,7 +1429,11 @@ mod tests {
         );
         assert_eq!(
             systemd_user_stop_args("grokhub-hub.service"),
-            vec!["--user".to_string(), "stop".into(), "grokhub-hub.service".into()]
+            vec![
+                "--user".to_string(),
+                "stop".into(),
+                "grokhub-hub.service".into()
+            ]
         );
         let _ = fs::remove_dir_all(&root);
     }
@@ -1478,7 +1526,8 @@ mod tests {
             .unwrap();
         let cmds = update_cmds(&root).unwrap();
         assert!(
-            cmds[0].contains("remote set-url origin https://github.com/blackviperxiii-ui/GrokHub.git"),
+            cmds[0]
+                .contains("remote set-url origin https://github.com/blackviperxiii-ui/GrokHub.git"),
             "{cmds:?}"
         );
         assert!(cmds[1].contains("pull --ff-only origin main"), "{cmds:?}");
@@ -1499,9 +1548,8 @@ mod tests {
             .unwrap();
         let from_windows = update_cmds(&root).unwrap();
         assert!(
-            from_windows[0].contains(
-                "remote set-url origin https://github.com/blackviperxiii-ui/GrokHub.git"
-            ),
+            from_windows[0]
+                .contains("remote set-url origin https://github.com/blackviperxiii-ui/GrokHub.git"),
             "{from_windows:?}"
         );
         assert!(!from_windows
@@ -1512,10 +1560,8 @@ mod tests {
 
     #[test]
     fn leftover_windows_clone_uses_github_zip() {
-        let root = std::env::temp_dir().join(format!(
-            "grokhub-src-leftover-{}",
-            std::process::id()
-        ));
+        let root =
+            std::env::temp_dir().join(format!("grokhub-src-leftover-{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
         seed_git_source(&root, "cursor/windows-icon-tray-7fe9");
         let err = update_cmds(&root).unwrap_err();
@@ -1529,7 +1575,10 @@ mod tests {
         );
         let win = update_cmds_for_host(Some(&root), true).expect("Setup cabin must still Update");
         assert_eq!(win, release_update_cmds());
-        assert_eq!(win, vec!["grokhub: install the verified release".to_string()]);
+        assert_eq!(
+            win,
+            vec!["grokhub: install the verified release".to_string()]
+        );
         assert!(!update_wipes_config(&win));
         assert!(
             !win.iter()
@@ -1549,7 +1598,9 @@ mod tests {
         assert!(overlay_clone_usable(&root));
         let on_main = update_cmds_for_host(Some(&root), true).expect("main clone overlays");
         assert!(
-            on_main.iter().any(|c| c.contains("pull --ff-only origin main")),
+            on_main
+                .iter()
+                .any(|c| c.contains("pull --ff-only origin main")),
             "a real main checkout still overlays: {on_main:?}"
         );
         let _ = fs::remove_dir_all(&root);
@@ -1558,8 +1609,14 @@ mod tests {
     #[test]
     fn an_install_without_a_clone_updates_from_the_verified_release() {
         let release = vec!["grokhub: install the verified release".to_string()];
-        assert_eq!(update_cmds_for_host(None, true).expect("windows host, no clone"), release);
-        assert_eq!(update_cmds_for_host(None, false).expect("linux tarball install, no clone"), release);
+        assert_eq!(
+            update_cmds_for_host(None, true).expect("windows host, no clone"),
+            release
+        );
+        assert_eq!(
+            update_cmds_for_host(None, false).expect("linux tarball install, no clone"),
+            release
+        );
         assert_eq!(update_cmds_for(None).expect("this host, no clone"), release);
         assert!(!update_wipes_config(&release));
         let plan = update_plan_steps(release.clone());
@@ -1583,15 +1640,29 @@ mod tests {
             let switch = crate::release_verify::release_switch_step(target);
             assert!(crate::forbidden_reason(&switch).is_none(), "{switch}");
             assert!(cabin_overlay_step(&switch), "{switch}");
-            assert!(!update_wipes_config(std::slice::from_ref(&switch)), "{switch}");
+            assert!(
+                !update_wipes_config(std::slice::from_ref(&switch)),
+                "{switch}"
+            );
         }
-        assert_eq!(update_step_label("grokhub: switch to the beta release"), "Downloading the beta release…");
+        assert_eq!(
+            update_step_label("grokhub: switch to the beta release"),
+            "Downloading the beta release…"
+        );
         assert_eq!(
             update_plan_steps(vec!["grokhub: switch to the stable release".into()])[0].explain,
             "download the latest stable release, check its signed SHA256SUMS, swap it in, then switch to stable — does not wipe config"
         );
-        assert!(settings_update_note().contains("SHA256SUMS"), "{}", settings_update_note());
-        assert!(!settings_update_note().contains("grok"), "{}", settings_update_note());
+        assert!(
+            settings_update_note().contains("SHA256SUMS"),
+            "{}",
+            settings_update_note()
+        );
+        assert!(
+            !settings_update_note().contains("grok"),
+            "{}",
+            settings_update_note()
+        );
         let win_install = include_str!("update.rs")
             .split("fn overlay_install_cmd(")
             .nth(1)
@@ -1651,12 +1722,18 @@ mod tests {
         assert!(parse_github_latest_tag("{}").is_none());
         assert!(parse_github_latest_tag("not-json").is_none());
         let notice = cabin_update_notice("2.9.5", "v2.9.6");
-        assert!(notice.contains("v2.9.6") && notice.contains("2.9.5"), "{notice}");
+        assert!(
+            notice.contains("v2.9.6") && notice.contains("2.9.5"),
+            "{notice}"
+        );
         assert!(
             !notice.contains("http") && !notice.contains("github.com"),
             "notify is in-app, not a web page: {notice}"
         );
-        assert_eq!(GITHUB_LATEST_API, "https://api.github.com/repos/blackviperxiii-ui/GrokHub/releases/latest");
+        assert_eq!(
+            GITHUB_LATEST_API,
+            "https://api.github.com/repos/blackviperxiii-ui/GrokHub/releases/latest"
+        );
     }
 
     #[test]
@@ -1676,8 +1753,14 @@ mod tests {
         assert!(!cabin_version_newer("2.14.0-beta.5", "2.13.1"));
         assert!(!should_notify_cabin_update("2.13.1", Some("2.13.2-beta.1")));
         // Beta → newer beta and beta → release.
-        assert!(should_notify_cabin_update("2.13.0-beta.2", Some("2.13.0-beta.10")));
-        assert!(should_notify_cabin_update("2.13.0-beta.10", Some("v2.13.0")));
+        assert!(should_notify_cabin_update(
+            "2.13.0-beta.2",
+            Some("2.13.0-beta.10")
+        ));
+        assert!(should_notify_cabin_update(
+            "2.13.0-beta.10",
+            Some("v2.13.0")
+        ));
         // main → beta (Labs): a stable install does not take a prerelease via notify.
         assert!(!should_notify_cabin_update("2.13.0", Some("2.13.0-beta.1")));
         // Auto-off when main reaches the beta base, not before.
@@ -1685,7 +1768,10 @@ mod tests {
         assert!(beta_auto_off_for_versions("2.13.0-beta.10", "2.13.1"));
         assert!(!beta_auto_off_for_versions("2.13.0-beta.2", "2.12.9"));
         assert!(!beta_auto_off_for_versions("2.13.0", "2.13.0")); // already stable
-        assert!(!beta_auto_off_for_versions("2.13.0-beta.2", "2.13.0-beta.9"));
+        assert!(!beta_auto_off_for_versions(
+            "2.13.0-beta.2",
+            "2.13.0-beta.9"
+        ));
         assert_eq!(
             p("2.13.0-beta"),
             CabinSemver {
@@ -1720,7 +1806,6 @@ mod tests {
     }
 }
 
-
 #[cfg(test)]
 mod channel_tip_tests {
     use super::*;
@@ -1735,12 +1820,24 @@ mod channel_tip_tests {
     }
 
     fn git_ok(dir: &Path, args: &[&str]) {
-        let out = Command::new("git").args(args).current_dir(dir).output().unwrap();
-        assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+        let out = Command::new("git")
+            .args(args)
+            .current_dir(dir)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
     }
 
     fn git_out(dir: &Path, args: &[&str]) -> String {
-        let out = Command::new("git").args(args).current_dir(dir).output().unwrap();
+        let out = Command::new("git")
+            .args(args)
+            .current_dir(dir)
+            .output()
+            .unwrap();
         assert!(out.status.success(), "git {args:?}");
         String::from_utf8_lossy(&out.stdout).trim().to_string()
     }
@@ -1763,7 +1860,10 @@ mod channel_tip_tests {
             git_ok(&work, &["config", "commit.gpgsign", "false"]);
             git_ok(&work, &["add", "."]);
             git_ok(&work, &["commit", "-q", "-m", "seed"]);
-            git_ok(&work, &["remote", "add", "origin", &origin.display().to_string()]);
+            git_ok(
+                &work,
+                &["remote", "add", "origin", &origin.display().to_string()],
+            );
             git_ok(&work, &["push", "-q", "origin", "main", "main:beta"]);
             git_ok(&base, &["clone", "-q", "origin.git", "client"]);
             let client = base.join("client");
@@ -1771,7 +1871,10 @@ mod channel_tip_tests {
         }
 
         fn commit_on(&self, branch: &str, file: &str) {
-            git_ok(&self.work, &["checkout", "-q", "-B", branch, &format!("origin/{branch}")]);
+            git_ok(
+                &self.work,
+                &["checkout", "-q", "-B", branch, &format!("origin/{branch}")],
+            );
             std::fs::write(self.work.join(file), file).unwrap();
             git_ok(&self.work, &["add", "."]);
             git_ok(&self.work, &["commit", "-q", "-m", file]);
@@ -1785,7 +1888,17 @@ mod channel_tip_tests {
             git_ok(&self.work, &["merge", "-q", "--squash", "origin/beta"]);
             git_ok(&self.work, &["commit", "-q", "-m", "promote (squash)"]);
             git_ok(&self.work, &["checkout", "-q", "-B", "beta", "origin/beta"]);
-            git_ok(&self.work, &["merge", "-q", "--no-ff", "main", "-m", "sync main into beta"]);
+            git_ok(
+                &self.work,
+                &[
+                    "merge",
+                    "-q",
+                    "--no-ff",
+                    "main",
+                    "-m",
+                    "sync main into beta",
+                ],
+            );
             git_ok(&self.work, &["push", "-q", "origin", "main", "beta"]);
             git_ok(&self.work, &["fetch", "-q", "origin"]);
         }
@@ -1806,13 +1919,28 @@ mod channel_tip_tests {
         fx.squash_promote_and_merge_sync();
         let tips = fetch_channel_tips(&fx.client).expect("fetch");
         // The fetch moved the stale client refs to the real tips.
-        assert_eq!(tips.beta_sha, git_out(&fx.work, &["rev-parse", "origin/beta"]));
-        assert_eq!(tips.main_sha, git_out(&fx.work, &["rev-parse", "origin/main"]));
-        assert_ne!(tips.beta_sha, tips.main_sha, "squash + merge commit: SHAs differ");
+        assert_eq!(
+            tips.beta_sha,
+            git_out(&fx.work, &["rev-parse", "origin/beta"])
+        );
+        assert_eq!(
+            tips.main_sha,
+            git_out(&fx.work, &["rev-parse", "origin/main"])
+        );
+        assert_ne!(
+            tips.beta_sha, tips.main_sha,
+            "squash + merge commit: SHAs differ"
+        );
         assert_eq!(tips.beta_tree, tips.main_tree, "same code: trees match");
-        assert_eq!(tips.beta_tree, git_out(&fx.work, &["rev-parse", "origin/beta^{tree}"]));
+        assert_eq!(
+            tips.beta_tree,
+            git_out(&fx.work, &["rev-parse", "origin/beta^{tree}"])
+        );
         assert!(crate::channel::beta_caught_up_to_main(&tips));
-        assert_ne!(before_promote, tips.main_tree, "the promote moved main's tree");
+        assert_ne!(
+            before_promote, tips.main_tree,
+            "the promote moved main's tree"
+        );
         assert_eq!(
             crate::channel::auto_off_step(Channel::Beta, &tips, Some(&before_promote)),
             crate::channel::AutoOffStep::SwitchToStable
@@ -1850,10 +1978,16 @@ mod channel_tip_tests {
         let fx = TipsFixture::new("same-sha");
         fx.commit_on("main", "hotfix.txt");
         // Fast-forward beta to main: one commit on both branches.
-        git_ok(&fx.work, &["push", "-q", "origin", "origin/main:refs/heads/beta"]);
+        git_ok(
+            &fx.work,
+            &["push", "-q", "origin", "origin/main:refs/heads/beta"],
+        );
         let tips = fetch_channel_tips(&fx.client).expect("fetch");
         assert_eq!(tips.beta_sha, tips.main_sha);
-        assert_eq!(tips.main_sha, git_out(&fx.work, &["rev-parse", "origin/main"]));
+        assert_eq!(
+            tips.main_sha,
+            git_out(&fx.work, &["rev-parse", "origin/main"])
+        );
         assert!(crate::channel::beta_caught_up_to_main(&tips));
     }
 
@@ -1883,10 +2017,16 @@ mod channel_tip_tests {
         let tips = fetch_channel_tips(&fx.client).expect("fetch");
         assert!(crate::channel::beta_caught_up_to_main(&tips));
         switch_clone_to_main(&fx.client).expect("switch");
-        assert_eq!(git_out(&fx.client, &["symbolic-ref", "--short", "HEAD"]), "main");
+        assert_eq!(
+            git_out(&fx.client, &["symbolic-ref", "--short", "HEAD"]),
+            "main"
+        );
         assert_eq!(git_out(&fx.client, &["rev-parse", "HEAD"]), tips.main_sha);
         assert_eq!(
-            git_out(&fx.client, &["rev-parse", "--abbrev-ref", "main@{upstream}"]),
+            git_out(
+                &fx.client,
+                &["rev-parse", "--abbrev-ref", "main@{upstream}"]
+            ),
             "origin/main"
         );
         // The next stable Update can use this clone; a second call is a no-op.
@@ -1906,7 +2046,10 @@ mod channel_tip_tests {
         std::fs::write(fx.client.join("Cargo.toml"), "[workspace] # local edit\n").unwrap();
         let err = switch_clone_to_main(&fx.client).unwrap_err();
         assert!(err.contains("uncommitted changes"), "{err}");
-        assert_eq!(git_out(&fx.client, &["symbolic-ref", "--short", "HEAD"]), "beta");
+        assert_eq!(
+            git_out(&fx.client, &["symbolic-ref", "--short", "HEAD"]),
+            "beta"
+        );
         assert_eq!(
             std::fs::read_to_string(fx.client.join("Cargo.toml")).unwrap(),
             "[workspace] # local edit\n"
@@ -1921,7 +2064,10 @@ mod channel_tip_tests {
         git_ok(&fx.client, &["checkout", "-q", "beta"]);
         let err = switch_clone_to_main(&fx.client).unwrap_err();
         assert!(err.contains("not on origin/main"), "{err}");
-        assert_eq!(git_out(&fx.client, &["symbolic-ref", "--short", "HEAD"]), "beta");
+        assert_eq!(
+            git_out(&fx.client, &["symbolic-ref", "--short", "HEAD"]),
+            "beta"
+        );
         assert_eq!(git_out(&fx.client, &["rev-parse", "main"]), local_main);
         // Some other branch: refused.
         git_ok(&fx.client, &["checkout", "-q", "-b", "cabin/feature"]);
@@ -1982,10 +2128,14 @@ mod channel_tip_tests {
         assert!(!clone_needs_recover(&fx.client, Channel::Stable).unwrap());
         let plan = update_cmds_in(&fx.client, Channel::Stable).unwrap();
         assert!(
-            plan.iter().any(|c| c.contains("pull --ff-only origin main")),
+            plan.iter()
+                .any(|c| c.contains("pull --ff-only origin main")),
             "clean after recover uses pull: {plan:?}"
         );
-        assert!(plan.iter().all(|c| parse_clone_recover_step(c).is_none()), "{plan:?}");
+        assert!(
+            plan.iter().all(|c| parse_clone_recover_step(c).is_none()),
+            "{plan:?}"
+        );
     }
 
     #[test]
@@ -2035,10 +2185,14 @@ mod channel_tip_tests {
         );
         let plan = update_cmds_in(&fx.client, Channel::Stable).unwrap();
         assert!(
-            plan.iter().any(|c| c.contains("pull --ff-only origin main")),
+            plan.iter()
+                .any(|c| c.contains("pull --ff-only origin main")),
             "{plan:?}"
         );
-        assert!(plan.iter().all(|c| parse_clone_recover_step(c).is_none()), "{plan:?}");
+        assert!(
+            plan.iter().all(|c| parse_clone_recover_step(c).is_none()),
+            "{plan:?}"
+        );
         let branches = git_out(&fx.client, &["branch", "--list", "grokhub-backup/*"]);
         assert!(branches.trim().is_empty(), "no backup on clean: {branches}");
     }
@@ -2139,14 +2293,20 @@ mod channel_tip_tests {
             &single,
             &["checkout", "-q", "-B", "beta", "--track", "origin/beta"],
         );
-        assert_eq!(git_out(&single, &["symbolic-ref", "--short", "HEAD"]), "beta");
+        assert_eq!(
+            git_out(&single, &["symbolic-ref", "--short", "HEAD"]),
+            "beta"
+        );
         assert_eq!(
             git_out(&single, &["rev-parse", "--abbrev-ref", "beta@{upstream}"]),
             "origin/beta"
         );
         let tips = fetch_channel_tips(&single).expect("fetch tips");
         switch_clone_to_main(&single).expect("back to main");
-        assert_eq!(git_out(&single, &["symbolic-ref", "--short", "HEAD"]), "main");
+        assert_eq!(
+            git_out(&single, &["symbolic-ref", "--short", "HEAD"]),
+            "main"
+        );
         assert_eq!(git_out(&single, &["rev-parse", "HEAD"]), tips.main_sha);
     }
 
@@ -2206,7 +2366,11 @@ mod channel_tip_tests {
         )
         .unwrap();
         let log = base.join("pkg.log");
-        let path = format!("{}:{}", bin.display(), std::env::var("PATH").unwrap_or_default());
+        let path = format!(
+            "{}:{}",
+            bin.display(),
+            std::env::var("PATH").unwrap_or_default()
+        );
         // Packages present → pacman -Q succeeds → no sudo.
         let out = Command::new("bash")
             .arg(&harness)
@@ -2241,10 +2405,7 @@ mod channel_tip_tests {
             .unwrap();
         let stdout = String::from_utf8_lossy(&out.stdout);
         let stderr = String::from_utf8_lossy(&out.stderr);
-        assert!(
-            out.status.success(),
-            "stderr={stderr}"
-        );
+        assert!(out.status.success(), "stderr={stderr}");
         assert!(
             stdout.contains("pkgs: skipped (no TTY)") || stderr.contains("pkgs: skipped (no TTY)"),
             "stdout={stdout} stderr={stderr}"

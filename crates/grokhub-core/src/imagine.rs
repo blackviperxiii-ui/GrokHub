@@ -128,10 +128,7 @@ pub fn imagine_is_network_stall(err: &str) -> bool {
 /// Retry the cheaper Imagine alias when 2.0 / 1.5 is missing, slow, or times out.
 pub fn imagine_should_retry_model(err: &str) -> bool {
     let e = err.to_ascii_lowercase();
-    if e.contains("bad credentials")
-        || e.contains("unauthenticated")
-        || e.contains("http 401")
-    {
+    if e.contains("bad credentials") || e.contains("unauthenticated") || e.contains("http 401") {
         return false;
     }
     imagine_is_network_stall(err)
@@ -152,10 +149,7 @@ pub fn imagine_should_retry_model(err: &str) -> bool {
 /// Rewrite raw ureq / WinSock text so Imagine shows a next step, not `os error 10060`.
 pub fn imagine_network_hint(err: &str) -> String {
     let e = err.to_ascii_lowercase();
-    if e.contains("http 401")
-        || e.contains("bad credentials")
-        || e.contains("unauthenticated")
-    {
+    if e.contains("http 401") || e.contains("bad credentials") || e.contains("unauthenticated") {
         return "Imagine auth failed (HTTP 401). Sign in with Grok in Settings → Account, or add an xAI console API key.".into();
     }
     if e.contains("http 403") {
@@ -353,7 +347,9 @@ fn imagine_item_url(data: &Value) -> Option<String> {
 }
 
 fn first_array_item<'a>(body: &'a Value, key: &str) -> Option<&'a Value> {
-    body.get(key).and_then(|d| d.as_array()).and_then(|a| a.first())
+    body.get(key)
+        .and_then(|d| d.as_array())
+        .and_then(|a| a.first())
 }
 
 pub fn parse_imagine_url(body: &Value) -> Option<String> {
@@ -419,7 +415,8 @@ pub fn media_ext_from_bytes<'a>(buf: &'a [u8], fallback: &'a str) -> &'a str {
         "webp"
     } else if buf.len() >= 8 && &buf[4..8] == b"ftyp" {
         "mp4"
-    } else if buf.len() >= 4 && buf[0] == 0x1A && buf[1] == 0x45 && buf[2] == 0xDF && buf[3] == 0xA3 {
+    } else if buf.len() >= 4 && buf[0] == 0x1A && buf[1] == 0x45 && buf[2] == 0xDF && buf[3] == 0xA3
+    {
         "webm"
     } else {
         fallback
@@ -436,7 +433,14 @@ pub const IMAGINE_ASPECTS: &[(&str, &str)] = &[
 ];
 
 /// Style Auto menu. Cabin stills only — each label becomes a prompt suffix.
-pub const IMAGINE_STYLES: &[&str] = &["Auto", "Cinematic", "Anime", "Comic", "Photo", "Illustration"];
+pub const IMAGINE_STYLES: &[&str] = &[
+    "Auto",
+    "Cinematic",
+    "Anime",
+    "Comic",
+    "Photo",
+    "Illustration",
+];
 
 /// grok.com/imagine Video-mode chips, measured 2026-08-15.
 pub const IMAGINE_VIDEO_RES: &[&str] = &["480p", "720p"];
@@ -913,7 +917,11 @@ pub fn wall_can_paint(
 }
 
 pub fn wall_evict(mut gifs: Vec<WallGif>, max: usize) -> (Vec<WallGif>, Vec<WallGif>) {
-    gifs.sort_by(|a, b| a.created_ms.cmp(&b.created_ms).then_with(|| a.id.cmp(&b.id)));
+    gifs.sort_by(|a, b| {
+        a.created_ms
+            .cmp(&b.created_ms)
+            .then_with(|| a.id.cmp(&b.id))
+    });
     if gifs.len() <= max {
         return (gifs, Vec::new());
     }
@@ -1319,7 +1327,11 @@ pub fn video_failure_detail(body: &Value) -> String {
         .map(str::trim)
         .filter(|s| !s.is_empty());
     let msg = err
-        .and_then(|e| e.get("message").and_then(|m| m.as_str()).or_else(|| e.as_str()))
+        .and_then(|e| {
+            e.get("message")
+                .and_then(|m| m.as_str())
+                .or_else(|| e.as_str())
+        })
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .unwrap_or("video failed");
@@ -1355,7 +1367,11 @@ pub fn video_bytes_data_uri(buf: &[u8]) -> Result<String, String> {
         return Err("Video file is too large to attach. Paste a video URL instead.".into());
     }
     let ext = media_ext_from_bytes(buf, "mp4");
-    let mime = if ext == "webm" { "video/webm" } else { "video/mp4" };
+    let mime = if ext == "webm" {
+        "video/webm"
+    } else {
+        "video/mp4"
+    };
     Ok(format!("data:{mime};base64,{}", crate::encode_b64(buf)))
 }
 
@@ -1366,15 +1382,25 @@ mod tests {
     #[test]
     fn body_and_url() {
         assert_eq!(DEFAULT_IMAGINE_MODEL, "grok-imagine-image-2.0");
-        assert_eq!(dedicated_imagine_model("grok-3-mini-fast"), DEFAULT_IMAGINE_MODEL);
-        assert_eq!(dedicated_imagine_model("grok-2-image"), DEFAULT_IMAGINE_MODEL);
-        assert_eq!(dedicated_imagine_model("grok-2-image-1212"), DEFAULT_IMAGINE_MODEL);
+        assert_eq!(
+            dedicated_imagine_model("grok-3-mini-fast"),
+            DEFAULT_IMAGINE_MODEL
+        );
+        assert_eq!(
+            dedicated_imagine_model("grok-2-image"),
+            DEFAULT_IMAGINE_MODEL
+        );
+        assert_eq!(
+            dedicated_imagine_model("grok-2-image-1212"),
+            DEFAULT_IMAGINE_MODEL
+        );
         assert!(retired_imagine_model("grok-2-image-1212"));
         assert!(!retired_imagine_model("grok-imagine-image-2.0"));
         let b = imagine_request_body("a cabin at night", "grok-3-mini-fast");
         assert_eq!(b["model"], DEFAULT_IMAGINE_MODEL);
         assert_eq!(b["response_format"], "url");
-        let shaped = imagine_image_body("a cabin at night", "grok-2-image", Some("2:3"), Some("2k"));
+        let shaped =
+            imagine_image_body("a cabin at night", "grok-2-image", Some("2:3"), Some("2k"));
         assert_eq!(shaped["model"], DEFAULT_IMAGINE_MODEL);
         assert_eq!(shaped["aspect_ratio"], "2:3");
         assert_eq!(shaped["resolution"], "2k");
@@ -1389,13 +1415,19 @@ mod tests {
         assert_eq!(draft["quality"], "low");
         assert_eq!(draft["response_format"], "url");
         assert_eq!(dedicated_imagine_model(""), DEFAULT_IMAGINE_MODEL);
-        assert_eq!(dedicated_imagine_model("grok-imagine"), DEFAULT_IMAGINE_MODEL);
+        assert_eq!(
+            dedicated_imagine_model("grok-imagine"),
+            DEFAULT_IMAGINE_MODEL
+        );
         assert_eq!(
             dedicated_imagine_model("grok-imagine-image-2.0"),
             "grok-imagine-image-2.0"
         );
         let reply = json!({ "data": [{ "url": "https://img/x.png" }] });
-        assert_eq!(parse_imagine_url(&reply).as_deref(), Some("https://img/x.png"));
+        assert_eq!(
+            parse_imagine_url(&reply).as_deref(),
+            Some("https://img/x.png")
+        );
         let empty_url = json!({ "data": [{ "url": "", "b64_json": "aaaa" }] });
         assert_eq!(
             parse_imagine_url(&empty_url).as_deref(),
@@ -1403,7 +1435,10 @@ mod tests {
             "an empty url must not hide b64_json"
         );
         let top = json!({ "url": "https://img/top.png" });
-        assert_eq!(parse_imagine_url(&top).as_deref(), Some("https://img/top.png"));
+        assert_eq!(
+            parse_imagine_url(&top).as_deref(),
+            Some("https://img/top.png")
+        );
         let images = json!({ "images": [{ "image_url": "https://img/new.png" }] });
         assert_eq!(
             parse_imagine_url(&images).as_deref(),
@@ -1438,7 +1473,9 @@ mod tests {
         ));
         assert!(imagine_should_retry_model("timed out waiting for 2.0"));
         assert!(
-            imagine_is_network_stall("https://api.x.ai/v1/images/generations: Network Error: os error 10060"),
+            imagine_is_network_stall(
+                "https://api.x.ai/v1/images/generations: Network Error: os error 10060"
+            ),
             "Windows WSAETIMEDOUT must count as a stall so Imagine retries"
         );
         assert!(imagine_should_retry_model(
@@ -1468,7 +1505,10 @@ mod tests {
             imagine_video_fallback_model(DEFAULT_VIDEO_MODEL),
             Some(FALLBACK_VIDEO_MODEL)
         );
-        assert_eq!(media_ext_from_bytes(&[0xFF, 0xD8, 0xFF, 0xE0], "png"), "jpg");
+        assert_eq!(
+            media_ext_from_bytes(&[0xFF, 0xD8, 0xFF, 0xE0], "png"),
+            "jpg"
+        );
         assert_eq!(media_ext_from_bytes(b"nope", "png"), "png");
         let mut ftyp = vec![0u8; 12];
         ftyp[4..8].copy_from_slice(b"ftyp");
@@ -1497,7 +1537,17 @@ mod tests {
                 ("16:9", "Widescreen"),
             ]
         );
-        assert_eq!(IMAGINE_STYLES, &["Auto", "Cinematic", "Anime", "Comic", "Photo", "Illustration"]);
+        assert_eq!(
+            IMAGINE_STYLES,
+            &[
+                "Auto",
+                "Cinematic",
+                "Anime",
+                "Comic",
+                "Photo",
+                "Illustration"
+            ]
+        );
         assert_eq!(IMAGINE_VIDEO_RES, &["480p", "720p"]);
         assert_eq!(IMAGINE_VIDEO_DURS, &["6s", "10s", "15s"]);
         let quality = compose_imagine_prompt(&ImagineSpec {
@@ -1540,7 +1590,10 @@ mod tests {
             video_audio: true,
         });
         assert!(video.contains("snow on the rail"));
-        assert!(video.to_ascii_lowercase().contains("sound") || video.to_ascii_lowercase().contains("audio"));
+        assert!(
+            video.to_ascii_lowercase().contains("sound")
+                || video.to_ascii_lowercase().contains("audio")
+        );
         assert!(!video.to_ascii_lowercase().contains("storyboard"));
         assert!(!video.to_ascii_lowercase().contains("still"));
         assert_eq!(imagine_video_duration_secs("10s"), 10);
@@ -1595,7 +1648,10 @@ mod tests {
         });
         assert!(agent.contains("1:1"));
         assert!(agent.to_ascii_lowercase().contains("comic"));
-        assert!(agent.to_ascii_lowercase().contains("sprite") || agent.to_ascii_lowercase().contains("agent"));
+        assert!(
+            agent.to_ascii_lowercase().contains("sprite")
+                || agent.to_ascii_lowercase().contains("agent")
+        );
         assert!(agent.to_ascii_lowercase().contains("still"));
     }
 
@@ -1616,8 +1672,16 @@ mod tests {
         assert_eq!(WALL_GIF_MAX, 20);
         assert_eq!(WALL_GIF_EVERY_MS, 3 * 60 * 60 * 1000);
         assert!(wall_due(0, 1, WALL_GIF_EVERY_MS));
-        assert!(!wall_due(1_000, 1_000 + WALL_GIF_EVERY_MS - 1, WALL_GIF_EVERY_MS));
-        assert!(wall_due(1_000, 1_000 + WALL_GIF_EVERY_MS, WALL_GIF_EVERY_MS));
+        assert!(!wall_due(
+            1_000,
+            1_000 + WALL_GIF_EVERY_MS - 1,
+            WALL_GIF_EVERY_MS
+        ));
+        assert!(wall_due(
+            1_000,
+            1_000 + WALL_GIF_EVERY_MS,
+            WALL_GIF_EVERY_MS
+        ));
         assert!(!wall_can_paint(false, true, false, false, false, 0, 10_000));
         assert!(!wall_can_paint(true, false, false, false, false, 0, 10_000));
         assert!(!wall_can_paint(true, true, true, false, false, 0, 10_000));
@@ -1678,18 +1742,27 @@ mod tests {
         assert_eq!(slots_a, slots_b);
         assert_eq!(slots_a.len(), 13);
         assert_eq!(
-            slots_a.iter().filter(|s| matches!(s, WallSlot::Stock(_))).count(),
+            slots_a
+                .iter()
+                .filter(|s| matches!(s, WallSlot::Stock(_)))
+                .count(),
             9
         );
         assert_eq!(
-            slots_a.iter().filter(|s| matches!(s, WallSlot::Gif(_))).count(),
+            slots_a
+                .iter()
+                .filter(|s| matches!(s, WallSlot::Gif(_)))
+                .count(),
             4
         );
         let slots_c = curate_wall(9, 4, 99);
         assert_ne!(slots_a, slots_c);
         let gifs = vec![gif("alpha", 1), gif("beta", 2)];
         assert_eq!(wall_curate_seed(&gifs), wall_curate_seed(&gifs));
-        assert_ne!(wall_curate_seed(&gifs), wall_curate_seed(&[gif("alpha", 1)]));
+        assert_ne!(
+            wall_curate_seed(&gifs),
+            wall_curate_seed(&[gif("alpha", 1)])
+        );
     }
 
     #[test]
@@ -1719,13 +1792,12 @@ mod tests {
             ImagineToolboxDock::Bottom
         );
         let idle = imagine_toolbox_top(100.0, 600.0, 180.0, ImagineToolboxDock::Middle);
-        let busy = imagine_toolbox_top(
-            100.0,
-            600.0,
-            180.0,
-            imagine_toolbox_dock(true, false, true),
+        let busy =
+            imagine_toolbox_top(100.0, 600.0, 180.0, imagine_toolbox_dock(true, false, true));
+        assert!(
+            busy > idle,
+            "send must drop the chat box to the floor: idle={idle} busy={busy}"
         );
-        assert!(busy > idle, "send must drop the chat box to the floor: idle={idle} busy={busy}");
         assert!(!imagine_toolbox_shows_title(ImagineToolboxDock::Bottom));
     }
 
@@ -1747,12 +1819,7 @@ mod tests {
         );
         assert!(h > 0.0);
         assert!(top + h <= 700.0 + 0.01);
-        assert!(!imagine_wall_overlaps_toolbox(
-            top,
-            h,
-            toolbox_top,
-            180.0
-        ));
+        assert!(!imagine_wall_overlaps_toolbox(top, h, toolbox_top, 180.0));
     }
 
     #[test]
@@ -1951,7 +2018,10 @@ mod tests {
         assert!(fall.get("mask").is_none());
         assert_eq!(fall["images"].as_array().map(|a| a.len()), Some(2));
         assert_eq!(fall["images"][1]["url"], "data:mask");
-        assert!(fall["prompt"].as_str().unwrap_or("").contains(MASK_PROMPT_NOTE));
+        assert!(fall["prompt"]
+            .as_str()
+            .unwrap_or("")
+            .contains(MASK_PROMPT_NOTE));
         assert!(imagine_mask_rejected("HTTP 400: unknown field mask"));
         assert!(!imagine_mask_rejected("HTTP 401: bad credentials"));
         assert!(!imagine_mask_rejected("please include a mask"));
@@ -1987,7 +2057,10 @@ mod tests {
             "16:9",
         ));
         assert_eq!(i2v["resolution"], "1080p");
-        assert!(i2v.get("aspect_ratio").is_none(), "aspect only on text-to-video");
+        assert!(
+            i2v.get("aspect_ratio").is_none(),
+            "aspect only on text-to-video"
+        );
         assert_eq!(i2v["image"]["url"], "data:image/png;base64,aa");
         let edit = imagine_video_body(&video_req(
             ImagineVideoOp::Edit,

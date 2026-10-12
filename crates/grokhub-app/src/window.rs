@@ -82,12 +82,7 @@ pub fn remember_geom(
         return None;
     }
     let (w, h, x, y) = if maximized {
-        (
-            prev.w,
-            prev.h,
-            prev.x.unwrap_or(x),
-            prev.y.unwrap_or(y),
-        )
+        (prev.w, prev.h, prev.x.unwrap_or(x), prev.y.unwrap_or(y))
     } else {
         (w, h, x, y)
     };

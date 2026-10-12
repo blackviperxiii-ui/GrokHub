@@ -238,7 +238,8 @@ impl InterestProfile {
             if delta < 0 && t.pinned {
                 continue;
             }
-            let next = (i16::from(t.weight) + delta).clamp(i16::from(WEIGHT_MIN), i16::from(WEIGHT_MAX));
+            let next =
+                (i16::from(t.weight) + delta).clamp(i16::from(WEIGHT_MIN), i16::from(WEIGHT_MAX));
             let next = u8::try_from(next).unwrap_or(WEIGHT_MIN);
             if next != t.weight {
                 t.weight = next;
@@ -276,7 +277,10 @@ impl InterestProfile {
             .collect();
         let mut out = String::new();
         if !top.is_empty() {
-            out.push_str(&format!("Their interests, strongest first: {}.", top.join(", ")));
+            out.push_str(&format!(
+                "Their interests, strongest first: {}.",
+                top.join(", ")
+            ));
         }
         if !muted.is_empty() {
             if !out.is_empty() {
@@ -380,9 +384,7 @@ pub fn topics_in_memory(raw: &str) -> Vec<String> {
         for piece in rest.split([',', ';', '/']).flat_map(|p| p.split(" and ")) {
             let topic = clean_topic(piece);
             let words = topic.split_whitespace().count();
-            if (1..=4).contains(&words)
-                && !out.iter().any(|t| t.eq_ignore_ascii_case(&topic))
-            {
+            if (1..=4).contains(&words) && !out.iter().any(|t| t.eq_ignore_ascii_case(&topic)) {
                 out.push(topic);
             }
         }
@@ -431,15 +433,27 @@ mod tests {
     fn seeding_reads_memory_lines_saved_cards_and_short_chat_titles() {
         let user = "# About me\nInterests: Rust, air compressors and xAI.\nWorks nights.";
         let memory = "- [2026-10-09] pulse: liked \"Tokio 2.0\" reason=liked\nI follow Formula 1";
-        let chats = titles(&["New chat", "Fix the cabin build on Windows please now", "Home espresso"]);
+        let chats = titles(&[
+            "New chat",
+            "Fix the cabin build on Windows please now",
+            "Home espresso",
+        ]);
         let saved = titles(&["Bambu printers"]);
         let mut p = InterestProfile::default();
         let n = p.seed(
-            &SeedFrom { user_md: user, memory_md: memory, chat_titles: &chats, saved_titles: &saved },
+            &SeedFrom {
+                user_md: user,
+                memory_md: memory,
+                chat_titles: &chats,
+                saved_titles: &saved,
+            },
             7,
         );
-        let got: Vec<(&str, InterestSource, u8)> =
-            p.topics.iter().map(|t| (t.topic.as_str(), t.source, t.weight)).collect();
+        let got: Vec<(&str, InterestSource, u8)> = p
+            .topics
+            .iter()
+            .map(|t| (t.topic.as_str(), t.source, t.weight))
+            .collect();
         assert_eq!(
             got,
             vec![
@@ -453,7 +467,18 @@ mod tests {
         );
         assert_eq!(n, 6);
         assert!(p.seeded);
-        assert_eq!(p.seed(&SeedFrom { user_md: "Interests: Go", memory_md: "", chat_titles: &[], saved_titles: &[] }, 8), 0);
+        assert_eq!(
+            p.seed(
+                &SeedFrom {
+                    user_md: "Interests: Go",
+                    memory_md: "",
+                    chat_titles: &[],
+                    saved_titles: &[]
+                },
+                8
+            ),
+            0
+        );
         assert!(p.find("Go").is_none());
     }
 
@@ -465,7 +490,10 @@ mod tests {
         assert_eq!(p.removed, vec!["rust".to_string()]);
         assert!(!p.add("Rust", InterestSource::Chats, 2));
         assert!(p.add("Rust", InterestSource::Explicit, 3));
-        assert_eq!(p.find("RUST").map(|t| (t.weight, t.source)), Some((70, InterestSource::Explicit)));
+        assert_eq!(
+            p.find("RUST").map(|t| (t.weight, t.source)),
+            Some((70, InterestSource::Explicit))
+        );
         assert!(p.removed.is_empty());
     }
 
@@ -476,18 +504,38 @@ mod tests {
         p.add("air compressors", InterestSource::Chats, 0);
         p.add("xAI", InterestSource::Explicit, 0);
         p.set_pinned("xAI", true);
-        assert_eq!(p.feedback("Rust 1.99 ships async closures", InterestSignal::Saved, 50), vec!["Rust"]);
-        assert_eq!(p.find("Rust").map(|t| (t.weight, t.last_seen_ms)), Some((70, 50)));
+        assert_eq!(
+            p.feedback("Rust 1.99 ships async closures", InterestSignal::Saved, 50),
+            vec!["Rust"]
+        );
+        assert_eq!(
+            p.find("Rust").map(|t| (t.weight, t.last_seen_ms)),
+            Some((70, 50))
+        );
         // "trust" is not "Rust".
-        assert!(p.feedback("Why trust matters", InterestSignal::Saved, 60).is_empty());
-        p.feedback("New air compressors for home shops", InterestSignal::NotInterested, 70);
+        assert!(p
+            .feedback("Why trust matters", InterestSignal::Saved, 60)
+            .is_empty());
+        p.feedback(
+            "New air compressors for home shops",
+            InterestSignal::NotInterested,
+            70,
+        );
         assert_eq!(p.find("air compressors").map(|t| t.weight), Some(25));
-        assert!(p.feedback("xAI raises again", InterestSignal::NotInterested, 80).is_empty());
-        assert_eq!(p.find("xAI").map(|t| (t.weight, t.last_seen_ms)), Some((70, 80)));
+        assert!(p
+            .feedback("xAI raises again", InterestSignal::NotInterested, 80)
+            .is_empty());
+        assert_eq!(
+            p.find("xAI").map(|t| (t.weight, t.last_seen_ms)),
+            Some((70, 80))
+        );
         for _ in 0..10 {
             p.feedback("air compressors", InterestSignal::NotInterested, 90);
         }
-        assert_eq!(p.find("air compressors").map(|t| t.weight), Some(WEIGHT_MIN));
+        assert_eq!(
+            p.find("air compressors").map(|t| t.weight),
+            Some(WEIGHT_MIN)
+        );
     }
 
     #[test]
@@ -498,11 +546,17 @@ mod tests {
         p.add("crypto", InterestSource::Memory, 0);
         p.set_pinned("xAI", true);
         p.set_muted("crypto", true);
-        assert_eq!(p.prompt_section(), "Their interests, strongest first: xAI, Rust. Never about: crypto.");
+        assert_eq!(
+            p.prompt_section(),
+            "Their interests, strongest first: xAI, Rust. Never about: crypto."
+        );
         assert_eq!(InterestProfile::default().prompt_section(), "");
         // Pin and mute exclude each other.
         p.set_pinned("crypto", true);
-        assert_eq!(p.find("crypto").map(|t| (t.pinned, t.muted)), Some((true, false)));
+        assert_eq!(
+            p.find("crypto").map(|t| (t.pinned, t.muted)),
+            Some((true, false))
+        );
     }
 
     #[test]

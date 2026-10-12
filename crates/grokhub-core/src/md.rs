@@ -9,11 +9,22 @@ pub enum MdBlock {
     /// `#` .. `######`. Level is 1..=6.
     Heading(u8, String),
     /// `- `, `* `, or `+ `. Depth counts two-space indents.
-    Bullet { depth: u8, text: String },
+    Bullet {
+        depth: u8,
+        text: String,
+    },
     /// `1. ` or `1) `. The number is what the reply wrote, not a recount.
-    Numbered { depth: u8, num: String, text: String },
+    Numbered {
+        depth: u8,
+        num: String,
+        text: String,
+    },
     /// `- [ ]` / `- [x]`.
-    Task { depth: u8, done: bool, text: String },
+    Task {
+        depth: u8,
+        done: bool,
+        text: String,
+    },
     /// `> ` lines, joined.
     Quote(String),
     /// `---`, `***`, `___`.
@@ -24,7 +35,10 @@ pub enum MdBlock {
         rows: Vec<Vec<String>>,
     },
     /// A fenced block. `lang` is the info string's first word, lowercased.
-    Code { lang: String, body: String },
+    Code {
+        lang: String,
+        body: String,
+    },
     Para(String),
     Blank,
 }
@@ -45,7 +59,10 @@ pub enum MdSpan {
     Strike(String),
     Code(String),
     /// Only http(s). Anything else stays [`MdSpan::Text`].
-    Link { text: String, url: String },
+    Link {
+        text: String,
+        url: String,
+    },
 }
 
 /// A code block or a table takes the full bubble width.
@@ -103,7 +120,9 @@ fn heading(line: &str) -> Option<(u8, String)> {
 fn is_rule(line: &str) -> bool {
     let t: String = line.chars().filter(|c| !c.is_whitespace()).collect();
     t.len() >= 3
-        && (t.chars().all(|c| c == '-') || t.chars().all(|c| c == '*') || t.chars().all(|c| c == '_'))
+        && (t.chars().all(|c| c == '-')
+            || t.chars().all(|c| c == '*')
+            || t.chars().all(|c| c == '_'))
 }
 
 fn bullet(line: &str) -> Option<(u8, &str)> {
@@ -251,7 +270,11 @@ pub fn md_blocks(text: &str) -> Vec<MdBlock> {
                         rows.push(cells);
                         i += 1;
                     }
-                    out.push(MdBlock::Table { header, align, rows });
+                    out.push(MdBlock::Table {
+                        header,
+                        align,
+                        rows,
+                    });
                     continue;
                 }
             }
@@ -340,7 +363,8 @@ fn bare_url_len(s: &str) -> Option<usize> {
     // Trailing sentence punctuation is not part of the URL.
     while end > 0 {
         let last = s[..end].chars().next_back().unwrap_or(' ');
-        let unbalanced_paren = last == ')' && s[..end].matches('(').count() < s[..end].matches(')').count();
+        let unbalanced_paren =
+            last == ')' && s[..end].matches('(').count() < s[..end].matches(')').count();
         if matches!(last, '.' | ',' | ';' | ':' | '!' | '?' | '\'' | ']') || unbalanced_paren {
             end -= last.len_utf8();
         } else {
@@ -485,15 +509,99 @@ pub enum CodeTok {
 
 const KEYWORDS: &[&str] = &[
     // Shared across C-family, Rust, Go, JS/TS, Python, shell.
-    "as", "async", "await", "break", "case", "catch", "class", "const", "continue", "def",
-    "default", "del", "do", "elif", "else", "enum", "esac", "except", "export", "extends",
-    "false", "fi", "finally", "fn", "for", "from", "func", "function", "go", "if", "impl",
-    "import", "in", "interface", "is", "lambda", "let", "loop", "match", "mod", "mut", "new",
-    "nil", "None", "not", "null", "or", "and", "package", "pass", "pub", "raise", "return",
-    "self", "Self", "static", "struct", "super", "switch", "then", "this", "throw", "trait",
-    "True", "False", "true", "try", "type", "typeof", "use", "var", "void", "where", "while",
-    "with", "yield", "done", "echo", "local", "unsafe", "undefined", "private", "public",
-    "protected", "defer", "chan", "select", "range", "map", "crate", "ref", "dyn", "move",
+    "as",
+    "async",
+    "await",
+    "break",
+    "case",
+    "catch",
+    "class",
+    "const",
+    "continue",
+    "def",
+    "default",
+    "del",
+    "do",
+    "elif",
+    "else",
+    "enum",
+    "esac",
+    "except",
+    "export",
+    "extends",
+    "false",
+    "fi",
+    "finally",
+    "fn",
+    "for",
+    "from",
+    "func",
+    "function",
+    "go",
+    "if",
+    "impl",
+    "import",
+    "in",
+    "interface",
+    "is",
+    "lambda",
+    "let",
+    "loop",
+    "match",
+    "mod",
+    "mut",
+    "new",
+    "nil",
+    "None",
+    "not",
+    "null",
+    "or",
+    "and",
+    "package",
+    "pass",
+    "pub",
+    "raise",
+    "return",
+    "self",
+    "Self",
+    "static",
+    "struct",
+    "super",
+    "switch",
+    "then",
+    "this",
+    "throw",
+    "trait",
+    "True",
+    "False",
+    "true",
+    "try",
+    "type",
+    "typeof",
+    "use",
+    "var",
+    "void",
+    "where",
+    "while",
+    "with",
+    "yield",
+    "done",
+    "echo",
+    "local",
+    "unsafe",
+    "undefined",
+    "private",
+    "public",
+    "protected",
+    "defer",
+    "chan",
+    "select",
+    "range",
+    "map",
+    "crate",
+    "ref",
+    "dyn",
+    "move",
 ];
 
 /// Line comment marker for a fence language. `None` means try both `//` and `#`.
@@ -685,7 +793,11 @@ mod tests {
         let src = "| Name | Size |\n|:-----|-----:|\n| a | 1 |\n| b |\nnot a row";
         let b = md_blocks(src);
         match &b[0] {
-            MdBlock::Table { header, align, rows } => {
+            MdBlock::Table {
+                header,
+                align,
+                rows,
+            } => {
                 assert_eq!(header, &vec!["Name".to_string(), "Size".to_string()]);
                 assert_eq!(align, &vec![MdAlign::Left, MdAlign::Right]);
                 assert_eq!(rows.len(), 2);
@@ -731,7 +843,8 @@ mod tests {
 
     #[test]
     fn inline_spans() {
-        let s = md_spans("**bold** and *it* and `co*de` ~~gone~~ [x](https://x.ai) snake_case_name");
+        let s =
+            md_spans("**bold** and *it* and `co*de` ~~gone~~ [x](https://x.ai) snake_case_name");
         assert_eq!(s[0], MdSpan::Bold("bold".into()));
         assert_eq!(s[1], MdSpan::Text(" and ".into()));
         assert_eq!(s[2], MdSpan::Italic("it".into()));
@@ -750,7 +863,10 @@ mod tests {
     #[test]
     fn unclosed_markers_stay_text() {
         assert_eq!(md_spans("a ** b"), vec![MdSpan::Text("a ** b".into())]);
-        assert_eq!(md_spans("2 * 3 * 4"), vec![MdSpan::Text("2 * 3 * 4".into())]);
+        assert_eq!(
+            md_spans("2 * 3 * 4"),
+            vec![MdSpan::Text("2 * 3 * 4".into())]
+        );
         assert_eq!(md_spans("`open"), vec![MdSpan::Text("`open".into())]);
         assert_eq!(md_spans(""), Vec::<MdSpan>::new());
         assert_eq!(md_plain("é **ü** ✓"), "é ü ✓");

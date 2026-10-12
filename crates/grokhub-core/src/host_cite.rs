@@ -26,7 +26,10 @@ pub fn summarize_write(cmd: &str, stdout: &str) -> Option<String> {
     if let Some(dest) = write_dest(c) {
         return Some(format!("wrote to {}", cite_host_path(&dest)));
     }
-    Some(format!("wrote via `{}`", c.chars().take(80).collect::<String>()))
+    Some(format!(
+        "wrote via `{}`",
+        c.chars().take(80).collect::<String>()
+    ))
 }
 
 fn is_write_cmd(c: &str) -> bool {
@@ -34,7 +37,8 @@ fn is_write_cmd(c: &str) -> bool {
     l.contains("tee")
         || l.contains("sed -i")
         || l.contains("truncate")
-        || l.split_whitespace().any(|w| matches!(w, "mv" | "cp" | "install" | "dd"))
+        || l.split_whitespace()
+            .any(|w| matches!(w, "mv" | "cp" | "install" | "dd"))
         || redirect_file_dest(c).is_some()
 }
 
@@ -99,7 +103,8 @@ fn write_dest(c: &str) -> Option<String> {
 pub fn last_host_line(chunk: &str) -> String {
     chunk
         .lines()
-        .map(|l| l.split_whitespace().collect::<Vec<_>>().join(" ")).rfind(|l| !l.is_empty())
+        .map(|l| l.split_whitespace().collect::<Vec<_>>().join(" "))
+        .rfind(|l| !l.is_empty())
         .unwrap_or_default()
         .chars()
         .take(200)
@@ -190,8 +195,14 @@ mod tests {
             summarize_write("install /home/j/src/foo /tmp/foo", "").as_deref(),
             Some("wrote to /tmp/foo")
         );
-        assert_eq!(last_host_line("a\n  compiling cabin  \n"), "compiling cabin");
-        assert_eq!(host_status_line("make", "compiling cabin", 3), "host: compiling cabin");
+        assert_eq!(
+            last_host_line("a\n  compiling cabin  \n"),
+            "compiling cabin"
+        );
+        assert_eq!(
+            host_status_line("make", "compiling cabin", 3),
+            "host: compiling cabin"
+        );
         assert!(host_status_line("sleep 9", "", 4).contains("4s"));
         let d = unified_diff_cite("/tmp/a", "old\nkeep\n", "new\nkeep\n");
         assert!(d.contains("- old"));

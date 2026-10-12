@@ -4,11 +4,11 @@
 use grokhub_core::OAuthAccountStore;
 use grokhub_core::{
     imagine_authorize_url, imagine_code_form, imagine_device_form, imagine_device_poll_form,
-    imagine_needs_refresh, imagine_refresh_form, imagine_tokens_from_xai, keychain_unavailable_message,
-    merge_imagine_refresh, next_oauth_poll_secs, parse_device_start, parse_imagine_discovery,
-    parse_loopback_callback, parse_poll_result, parse_token_json, pkce_challenge, pkce_verifier,
-    ImagineAuthorize, ImagineEndpoints, ImagineTokens, PollStatus, XAI_OAUTH_DISCOVERY,
-    IMAGINE_SIGN_IN_AGAIN, TEXT_FILE_CAP,
+    imagine_needs_refresh, imagine_refresh_form, imagine_tokens_from_xai,
+    keychain_unavailable_message, merge_imagine_refresh, next_oauth_poll_secs, parse_device_start,
+    parse_imagine_discovery, parse_loopback_callback, parse_poll_result, parse_token_json,
+    pkce_challenge, pkce_verifier, ImagineAuthorize, ImagineEndpoints, ImagineTokens, PollStatus,
+    IMAGINE_SIGN_IN_AGAIN, TEXT_FILE_CAP, XAI_OAUTH_DISCOVERY,
 };
 use serde_json::Value;
 use std::io::{Read, Write};
@@ -94,11 +94,7 @@ impl MemoryTokenStore {
 #[cfg(test)]
 impl TokenStore for MemoryTokenStore {
     fn load(&self) -> Result<Option<ImagineTokens>, String> {
-        Ok(self
-            .inner
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone())
+        Ok(self.inner.lock().unwrap_or_else(|e| e.into_inner()).clone())
     }
 
     fn save(&self, tokens: &ImagineTokens) -> Result<(), String> {
@@ -158,7 +154,9 @@ fn post_form(url: &str, body: &str) -> Result<(bool, Value), String> {
         .send_string(body);
     match resp {
         Ok(r) => Ok((true, read_json_capped(r)?)),
-        Err(ureq::Error::Status(_code, r)) => Ok((false, read_json_capped(r).unwrap_or(Value::Null))),
+        Err(ureq::Error::Status(_code, r)) => {
+            Ok((false, read_json_capped(r).unwrap_or(Value::Null)))
+        }
         Err(e) => Err(e.to_string()),
     }
 }
@@ -462,9 +460,9 @@ fn refreshed_from(old: &ImagineTokens) -> Option<ImagineTokens> {
 /// Never blocks.
 pub fn take_refreshed(current_refresh: Option<&str>) -> Option<ImagineTokens> {
     let mut slot = REFRESHED.try_lock().ok()?;
-    let r = slot
-        .as_mut()
-        .filter(|r| r.unseen && r.from_refresh.is_some() && r.from_refresh.as_deref() == current_refresh)?;
+    let r = slot.as_mut().filter(|r| {
+        r.unseen && r.from_refresh.is_some() && r.from_refresh.as_deref() == current_refresh
+    })?;
     r.unseen = false;
     Some(r.tokens.clone())
 }

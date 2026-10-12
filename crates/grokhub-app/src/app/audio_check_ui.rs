@@ -26,7 +26,10 @@ fn list_devices() -> (Vec<ac::AudioDevice>, Vec<ac::AudioDevice>) {
             .map(|t| ac::parse_pactl_list(&t, default))
             .unwrap_or_default()
     };
-    (list("sinks", sink.as_deref()), list("sources", source.as_deref()))
+    (
+        list("sinks", sink.as_deref()),
+        list("sources", source.as_deref()),
+    )
 }
 
 /// The check, off the UI thread: pick the input, record it, measure it.
@@ -39,7 +42,9 @@ pub(super) fn run_check(
     let (outputs, inputs) = list();
     let input = ac::pick_input(&inputs, want)?;
     let target = input.filter(|d| !d.is_default).map(|d| d.name.as_str());
-    let label = input.map(ac::AudioDevice::label).unwrap_or("the default input");
+    let label = input
+        .map(ac::AudioDevice::label)
+        .unwrap_or("the default input");
     let (rate, pcm) = record(target).map_err(|e| format!("Couldn't record from {label}: {e}"))?;
     let levels = ac::measure(&ac::pcm_samples(&pcm), rate);
     let name = input.map(|d| d.name.clone()).unwrap_or_default();
@@ -66,7 +71,8 @@ impl Cabin {
             "Checking your audio: finding the input, then listening for {} seconds. Talk or play something at your usual loudness. The clip stays in memory and isn't saved or sent.",
             ac::CLIP_SECS
         );
-        self.live_mut().push(("assistant".into(), mark_slash_result(&line)));
+        self.live_mut()
+            .push(("assistant".into(), mark_slash_result(&line)));
         self.persist();
         self.status = "Checking your audio…".into();
     }
@@ -81,7 +87,9 @@ impl Cabin {
                 ctx.request_repaint_after(Duration::from_millis(500));
                 return;
             }
-            Err(mpsc::TryRecvError::Disconnected) => Err("the audio check stopped unexpectedly".into()),
+            Err(mpsc::TryRecvError::Disconnected) => {
+                Err("the audio check stopped unexpectedly".into())
+            }
         };
         let Some(live) = self.audio_check.take() else {
             return;
@@ -94,7 +102,13 @@ impl Cabin {
         match done {
             Ok((input, report)) => {
                 self.post_into_chat(chat, report.text.clone());
-                let card = grokhub_core::audio_check_card(&input, &report.card_title, &report.summary, chat, now_ms());
+                let card = grokhub_core::audio_check_card(
+                    &input,
+                    &report.card_title,
+                    &report.summary,
+                    chat,
+                    now_ms(),
+                );
                 self.post_feed_card(card);
                 self.status = report.title;
             }
@@ -110,8 +124,15 @@ impl Cabin {
         let Some(live) = self.audio_check.as_ref() else {
             return;
         };
-        let secs = live.started.elapsed().as_secs().min(u64::from(ac::CLIP_SECS));
-        let line = format!("● Audio check: listening 0:{secs:02} of 0:{:02}", ac::CLIP_SECS);
+        let secs = live
+            .started
+            .elapsed()
+            .as_secs()
+            .min(u64::from(ac::CLIP_SECS));
+        let line = format!(
+            "● Audio check: listening 0:{secs:02} of 0:{:02}",
+            ac::CLIP_SECS
+        );
         egui::Area::new(egui::Id::new("audio-check-indicator"))
             .order(egui::Order::Foreground)
             .anchor(egui::Align2::RIGHT_TOP, [-16.0, 52.0])
@@ -147,14 +168,24 @@ mod tests {
     fn devices() -> (Vec<ac::AudioDevice>, Vec<ac::AudioDevice>) {
         (
             vec![dev("hdmi", "Navi 21 HDMI / DisplayPort", true)],
-            vec![dev("yeti", "Yeti Stereo Microphone", true), dev("builtin", "Built-in Microphone", false)],
+            vec![
+                dev("yeti", "Yeti Stereo Microphone", true),
+                dev("builtin", "Built-in Microphone", false),
+            ],
         )
     }
 
     /// One second of full-scale square wave: clipping all the way.
     fn clipped_pcm() -> Vec<u8> {
         (0..48_000)
-            .flat_map(|i| if (i / 50) % 2 == 0 { 32_767i16 } else { -32_768 }.to_le_bytes())
+            .flat_map(|i| {
+                if (i / 50) % 2 == 0 {
+                    32_767i16
+                } else {
+                    -32_768
+                }
+                .to_le_bytes()
+            })
             .collect()
     }
 
@@ -166,7 +197,11 @@ mod tests {
             Ok((48_000, clipped_pcm()))
         })
         .unwrap();
-        assert_eq!(asked, vec![None], "the default input is recorded as the default");
+        assert_eq!(
+            asked,
+            vec![None],
+            "the default input is recorded as the default"
+        );
         assert_eq!(name, "yeti");
         assert_eq!(
             report.title,
@@ -185,12 +220,30 @@ mod tests {
 
     #[test]
     fn a_wrong_name_or_a_missing_recorder_says_so_and_records_nothing() {
-        let err = run_check("rode", devices, |_| panic!("nothing is recorded for an unknown input"));
-        assert_eq!(err, Err("No input matches \"rode\". Inputs: Yeti Stereo Microphone, Built-in Microphone.".into()));
+        let err = run_check("rode", devices, |_| {
+            panic!("nothing is recorded for an unknown input")
+        });
+        assert_eq!(
+            err,
+            Err(
+                "No input matches \"rode\". Inputs: Yeti Stereo Microphone, Built-in Microphone."
+                    .into()
+            )
+        );
         let err = run_check("", devices, |_| Err("No recorder found".into()));
-        assert_eq!(err, Err("Couldn't record from Yeti Stereo Microphone: No recorder found".into()));
-        let err = run_check("", || (Vec::new(), Vec::new()), |_| Err("parecord recorded no sound data".into()));
-        assert_eq!(err, Err("Couldn't record from the default input: parecord recorded no sound data".into()));
+        assert_eq!(
+            err,
+            Err("Couldn't record from Yeti Stereo Microphone: No recorder found".into())
+        );
+        let err = run_check(
+            "",
+            || (Vec::new(), Vec::new()),
+            |_| Err("parecord recorded no sound data".into()),
+        );
+        assert_eq!(
+            err,
+            Err("Couldn't record from the default input: parecord recorded no sound data".into())
+        );
     }
 
     #[test]
@@ -204,14 +257,22 @@ mod tests {
         let done = run_check("", devices, |_| Ok((48_000, clipped_pcm())));
         let report = done.clone().unwrap().1;
         cabin.finish_audio_check("", done);
-        assert_eq!(cabin.messages.last().map(|m| m.1.clone()), Some(report.text.clone()));
-        assert!(report.text.contains("\nSuggested fixes:\n1. Lower Yeti Stereo Microphone's input volume or gain knob"));
+        assert_eq!(
+            cabin.messages.last().map(|m| m.1.clone()),
+            Some(report.text.clone())
+        );
+        assert!(report.text.contains(
+            "\nSuggested fixes:\n1. Lower Yeti Stereo Microphone's input volume or gain knob"
+        ));
         let card = cabin
             .updates
             .iter()
             .find(|c| c.source_id == "audiocheck:yeti")
             .expect("one audio check card");
-        assert_eq!(card.title, "Audio check: Yeti Stereo Microphone input clipping at 0.0 dBFS");
+        assert_eq!(
+            card.title,
+            "Audio check: Yeti Stereo Microphone input clipping at 0.0 dBFS"
+        );
         assert_eq!(
             card.body.as_deref(),
             Some("Lower Yeti Stereo Microphone's input volume or gain knob until loud speech peaks around -6 dBFS. Default output: Navi 21 HDMI / DisplayPort.")
@@ -219,8 +280,18 @@ mod tests {
         assert_eq!(cabin.status, report.title);
 
         cabin.finish_audio_check("", Err("No input matches \"rode\".".into()));
-        assert!(cabin.messages.last().is_some_and(|m| m.1.ends_with("No input matches \"rode\".")));
-        assert_eq!(cabin.updates.iter().filter(|c| c.source_id.starts_with("audiocheck:")).count(), 1);
+        assert!(cabin
+            .messages
+            .last()
+            .is_some_and(|m| m.1.ends_with("No input matches \"rode\".")));
+        assert_eq!(
+            cabin
+                .updates
+                .iter()
+                .filter(|c| c.source_id.starts_with("audiocheck:"))
+                .count(),
+            1
+        );
         std::env::remove_var("GROKHUB_CONFIG");
     }
 
@@ -229,7 +300,11 @@ mod tests {
         let _g = crate::config::hold_test_config();
         let mut cabin = Cabin::quiet_for_test();
         let (_tx, rx) = mpsc::channel();
-        cabin.audio_check = Some(LiveAudioCheck { started: Instant::now(), chat: String::new(), rx });
+        cabin.audio_check = Some(LiveAudioCheck {
+            started: Instant::now(),
+            chat: String::new(),
+            rx,
+        });
         let before = cabin.messages.len();
         cabin.run_slash_line("/audiocheck");
         assert_eq!(cabin.status, ac::ALREADY_CHECKING);

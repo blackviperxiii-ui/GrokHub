@@ -152,7 +152,9 @@ pub struct ElicitAsk {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum AcpEvent {
-    Ready { session_id: String },
+    Ready {
+        session_id: String,
+    },
     Thought(String),
     Text(String),
     Tool(ToolCard),
@@ -161,16 +163,25 @@ pub enum AcpEvent {
     Findings(String),
     Permission(PermissionAsk),
     Elicit(ElicitAsk),
-    ElicitComplete { elicitation_id: String, server_name: String },
+    ElicitComplete {
+        elicitation_id: String,
+        server_name: String,
+    },
     Usage(GrokUsage),
     Commands(Vec<String>),
-    Task { id: String, title: String, done: bool },
+    Task {
+        id: String,
+        title: String,
+        done: bool,
+    },
     Compact {
         started: bool,
         usage: GrokUsage,
         error: Option<String>,
     },
-    Done { stop_reason: String },
+    Done {
+        stop_reason: String,
+    },
     Err(String),
 }
 
@@ -240,7 +251,10 @@ pub fn method_not_found(id: Value) -> JsonRpc {
 }
 
 pub fn encode_line(msg: &JsonRpc) -> String {
-    format!("{}\n", serde_json::to_string(msg).unwrap_or_else(|_| "{}".into()))
+    format!(
+        "{}\n",
+        serde_json::to_string(msg).unwrap_or_else(|_| "{}".into())
+    )
 }
 
 pub fn initialize_params() -> Value {
@@ -271,7 +285,13 @@ pub fn session_new_params(cwd: &str, yolo: bool, auto: bool, mode: SessionMode) 
     })
 }
 
-pub fn session_load_params(cwd: &str, session_id: &str, yolo: bool, auto: bool, mode: SessionMode) -> Value {
+pub fn session_load_params(
+    cwd: &str,
+    session_id: &str,
+    yolo: bool,
+    auto: bool,
+    mode: SessionMode,
+) -> Value {
     let mut body = session_new_params(cwd, yolo, auto, mode);
     body["sessionId"] = json!(session_id);
     body["session_id"] = json!(session_id);
@@ -349,7 +369,11 @@ pub fn pick_auth_method(auth_methods: &Value, api_key: &str) -> Option<String> {
 }
 
 pub fn image_data_url_from_value(v: &Value) -> Option<String> {
-    if let Some(url) = v.get("dataUrl").or_else(|| v.get("data_url")).and_then(|x| x.as_str()) {
+    if let Some(url) = v
+        .get("dataUrl")
+        .or_else(|| v.get("data_url"))
+        .and_then(|x| x.as_str())
+    {
         if url.starts_with("data:image") {
             return Some(url.to_string());
         }
@@ -448,7 +472,12 @@ pub fn parse_tool_card(update: &Value) -> ToolCard {
         .and_then(|a| {
             a.iter().find_map(|p| {
                 if p.get("type").and_then(|t| t.as_str()) == Some("diff") {
-                    Some(p.get("diff").and_then(|d| d.as_str()).unwrap_or("").to_string())
+                    Some(
+                        p.get("diff")
+                            .and_then(|d| d.as_str())
+                            .unwrap_or("")
+                            .to_string(),
+                    )
                 } else {
                     None
                 }
@@ -471,9 +500,30 @@ pub fn parse_tool_card(update: &Value) -> ToolCard {
 /// chords, the app and window, and field descriptors and secret flags (the
 /// same keys `harness::credential_field` reads).
 const CU_RAW_KEYS: &[&str] = &[
-    "keys", "key", "app", "window", "role", "ax_role", "label", "ax_label", "aria_label", "field", "field_name",
-    "placeholder", "target", "element", "autocomplete", "input_type", "id", "selector", "secret", "sensitive",
-    "is_secret", "is_password", "password_field", "masked",
+    "keys",
+    "key",
+    "app",
+    "window",
+    "role",
+    "ax_role",
+    "label",
+    "ax_label",
+    "aria_label",
+    "field",
+    "field_name",
+    "placeholder",
+    "target",
+    "element",
+    "autocomplete",
+    "input_type",
+    "id",
+    "selector",
+    "secret",
+    "sensitive",
+    "is_secret",
+    "is_password",
+    "password_field",
+    "masked",
 ];
 
 /// One kept computer-use value: a string capped at 80 chars, a bool or
@@ -528,7 +578,11 @@ pub fn merge_tool_card(old: ToolCard, new: ToolCard) -> ToolCard {
     } else {
         new.title
     };
-    let kind = if new.kind.is_empty() { old.kind } else { new.kind };
+    let kind = if new.kind.is_empty() {
+        old.kind
+    } else {
+        new.kind
+    };
     // A status flip with no new content must not keep a status-word detail
     // ("Waiting for input", "running"). The chip is the one status. Real
     // content on the update still replaces it.
@@ -544,17 +598,18 @@ pub fn merge_tool_card(old: ToolCard, new: ToolCard) -> ToolCard {
         } else {
             old.detail
         }
-    } else if new.detail.is_empty()
-        && status_flipped
-        && crate::tool_detail_is_status(&old.detail)
-    {
+    } else if new.detail.is_empty() && status_flipped && crate::tool_detail_is_status(&old.detail) {
         String::new()
     } else if new.detail.is_empty() {
         old.detail
     } else {
         new.detail
     };
-    let diff = if new.diff.is_empty() { old.diff } else { new.diff };
+    let diff = if new.diff.is_empty() {
+        old.diff
+    } else {
+        new.diff
+    };
     ToolCard {
         id: if new.id.is_empty() { old.id } else { new.id },
         title,
@@ -707,7 +762,11 @@ fn push_tool_text(out: &mut String, t: &str) {
 }
 
 fn clip_tool_detail(s: &str) -> String {
-    let line = s.lines().find(|l| !l.trim().is_empty()).unwrap_or("").trim();
+    let line = s
+        .lines()
+        .find(|l| !l.trim().is_empty())
+        .unwrap_or("")
+        .trim();
     if line.chars().count() <= 96 {
         return line.to_string();
     }
@@ -1156,7 +1215,10 @@ fn first_form_field(schema: &Value) -> (Option<String>, String, bool) {
     let pick = required
         .iter()
         .find(|k| {
-            props.get(k.as_str()).and_then(|p| p.get("type")).and_then(|t| t.as_str())
+            props
+                .get(k.as_str())
+                .and_then(|p| p.get("type"))
+                .and_then(|t| t.as_str())
                 == Some("string")
         })
         .cloned()
@@ -1235,7 +1297,6 @@ pub fn elicit_cancel(id: Value) -> JsonRpc {
     response(id, json!({ "outcome": "cancel" }))
 }
 
-
 /// One finished turn of a background or night run: its session, reply, thinking and usage.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SingleTurn {
@@ -1260,7 +1321,11 @@ pub enum GrokPEvent {
         error: Option<String>,
     },
     Commands(Vec<String>),
-    Task { id: String, title: String, done: bool },
+    Task {
+        id: String,
+        title: String,
+        done: bool,
+    },
     Recovering(String),
     End(SingleTurn),
     Err(String),
@@ -1448,7 +1513,10 @@ pub fn grok_usage_line(u: &GrokUsage) -> String {
         s.push_str(&format!(" / {} think", compact_k(u.reasoning_tokens)));
     }
     if u.cache_read_input_tokens > 0 {
-        s.push_str(&format!(" / {} cache", compact_k(u.cache_read_input_tokens)));
+        s.push_str(&format!(
+            " / {} cache",
+            compact_k(u.cache_read_input_tokens)
+        ));
     }
     s
 }
@@ -1496,12 +1564,14 @@ pub fn classify_stream_error(msg: &str) -> StreamErrorKind {
     } else if l.contains("shorter answer")
         || l.contains("max_output")
         || l.contains("max_tokens")
-        || (l.contains("truncat") && (l.contains("output") || l.contains("response") || l.contains("token")))
+        || (l.contains("truncat")
+            && (l.contains("output") || l.contains("response") || l.contains("token")))
     {
         StreamErrorKind::TruncationContinue
-    } else if ["500", "502", "503", "504"].iter().any(|c| {
-        l.split(|ch: char| !ch.is_ascii_digit()).any(|w| w == *c)
-    }) || l.contains("5xx")
+    } else if ["500", "502", "503", "504"]
+        .iter()
+        .any(|c| l.split(|ch: char| !ch.is_ascii_digit()).any(|w| w == *c))
+        || l.contains("5xx")
         || l.contains("stall")
         || l.contains("dropped")
         || l.contains("timed out")
@@ -1569,7 +1639,11 @@ pub fn parse_usage(v: &Value) -> GrokUsage {
         reasoning_tokens: json_u64(body, &["reasoning_tokens", "reasoningTokens"]),
         cache_read_input_tokens: json_u64(
             body,
-            &["cache_read_input_tokens", "cacheReadInputTokens", "cachedReadTokens"],
+            &[
+                "cache_read_input_tokens",
+                "cacheReadInputTokens",
+                "cachedReadTokens",
+            ],
         ),
         cache_creation_input_tokens: json_u64(
             body,
@@ -1583,7 +1657,12 @@ pub fn parse_usage(v: &Value) -> GrokUsage {
         num_turns: json_u64(v, &["num_turns", "numTurns"]).min(u32::MAX as u64) as u32,
         context_tokens_used: json_u64(
             v,
-            &["context_tokens_used", "contextTokensUsed", "tokens_used", "tokensUsed"],
+            &[
+                "context_tokens_used",
+                "contextTokensUsed",
+                "tokens_used",
+                "tokensUsed",
+            ],
         ),
         context_window_tokens: json_u64(
             v,
@@ -1599,13 +1678,17 @@ pub fn parse_usage(v: &Value) -> GrokUsage {
         meter: json_str(body, &["meter"]),
     };
     if u.num_turns == 0 {
-        u.num_turns = json_u64(body, &["num_turns", "numTurns", "modelCalls"]).min(u32::MAX as u64) as u32;
+        u.num_turns =
+            json_u64(body, &["num_turns", "numTurns", "modelCalls"]).min(u32::MAX as u64) as u32;
     }
     if u.context_tokens_used == 0 {
         u.context_tokens_used = json_u64(body, &["context_tokens_used", "contextTokensUsed"]);
     }
     if u.context_window_tokens == 0 {
-        u.context_window_tokens = json_u64(body, &["context_window", "contextWindow", "contextWindowTokens"]);
+        u.context_window_tokens = json_u64(
+            body,
+            &["context_window", "contextWindow", "contextWindowTokens"],
+        );
     }
     if u.stop_reason.is_empty() {
         u.stop_reason = json_str(body, &["stopReason", "stop_reason"]);
@@ -1665,7 +1748,12 @@ fn json_i64(v: &Value, keys: &[&str]) -> i64 {
 
 fn json_str(v: &Value, keys: &[&str]) -> String {
     for k in keys {
-        if let Some(s) = v.get(*k).and_then(|x| x.as_str()).map(str::trim).filter(|s| !s.is_empty()) {
+        if let Some(s) = v
+            .get(*k)
+            .and_then(|x| x.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
             return s.to_string();
         }
     }
@@ -1770,8 +1858,16 @@ mod tests {
         assert_eq!(elicit.server_name, "github");
         assert_eq!(elicit.field_name.as_deref(), Some("email"));
         assert!(!elicit.secret, "an email field is not a secret");
-        assert_eq!(elicit_accept(json!(2), Some(json!({"email": "a@b.com"}))).result.unwrap()["outcome"], "accept");
-        assert_eq!(elicit_decline(json!(3)).result.unwrap()["outcome"], "decline");
+        assert_eq!(
+            elicit_accept(json!(2), Some(json!({"email": "a@b.com"})))
+                .result
+                .unwrap()["outcome"],
+            "accept"
+        );
+        assert_eq!(
+            elicit_decline(json!(3)).result.unwrap()["outcome"],
+            "decline"
+        );
         let url = parse_elicit(
             json!(4),
             &json!({
@@ -1839,7 +1935,10 @@ mod tests {
                 "content": { "text": "hmm" }
             }
         });
-        assert_eq!(parse_session_update(&t), Some(AcpEvent::Thought("hmm".into())));
+        assert_eq!(
+            parse_session_update(&t),
+            Some(AcpEvent::Thought("hmm".into()))
+        );
     }
 
     #[test]
@@ -1872,7 +1971,10 @@ mod tests {
         });
         let card = parse_tool_card(&u);
         let raw: Value = serde_json::from_str(&card.raw_input).unwrap();
-        assert_eq!(raw, json!({ "label": "Password", "secret": true, "keys": "ctrl+v" }));
+        assert_eq!(
+            raw,
+            json!({ "label": "Password", "secret": true, "keys": "ctrl+v" })
+        );
         assert!(!card.raw_input.contains("hunter22"), "{}", card.raw_input);
     }
 
@@ -1910,7 +2012,11 @@ mod tests {
         let card = parse_tool_card(&pending);
         assert!(card.title.contains("SKILL.md"), "{}", card.title);
         assert!(!card.title.contains("/home/user"), "{}", card.title);
-        assert!(!card.detail.contains('{'), "raw JSON leaked: {}", card.detail);
+        assert!(
+            !card.detail.contains('{'),
+            "raw JSON leaked: {}",
+            card.detail
+        );
         assert!(!card.detail.contains("target_file"), "{}", card.detail);
 
         let done = json!({
@@ -1925,7 +2031,11 @@ mod tests {
         assert!(merged.title.contains("SKILL.md"), "{}", merged.title);
         assert_eq!(merged.status, "completed");
         assert!(!merged.detail.contains('{'), "{}", merged.detail);
-        assert!(merged.detail.to_ascii_lowercase().contains("skill"), "{}", merged.detail);
+        assert!(
+            merged.detail.to_ascii_lowercase().contains("skill"),
+            "{}",
+            merged.detail
+        );
     }
 
     #[test]
@@ -1936,7 +2046,13 @@ mod tests {
         assert_eq!(SessionMode::Chat.as_str(), "chat");
         assert_eq!(SessionMode::Chat.acp_id(), "code");
         assert_eq!(SessionMode::parse("PLAN"), Some(SessionMode::Plan));
-        let load = session_load_params("/home/j/GrokHub-Work", "sess-1", false, true, SessionMode::Chat);
+        let load = session_load_params(
+            "/home/j/GrokHub-Work",
+            "sess-1",
+            false,
+            true,
+            SessionMode::Chat,
+        );
         assert_eq!(load["cwd"], "/home/j/GrokHub-Work");
         assert_eq!(load["sessionId"], "sess-1");
         assert_eq!(load["_meta"]["sessionMode"], "code");
@@ -1984,7 +2100,10 @@ mod tests {
         }));
         assert_eq!(titled, "example.com");
         let dump = permission_action_line(&json!({ "title": "{\"ok\":true}" }));
-        assert!(dump.is_empty(), "a raw tool dump is not the action line: {dump}");
+        assert!(
+            dump.is_empty(),
+            "a raw tool dump is not the action line: {dump}"
+        );
         let test = permission_action_line(&json!({
             "title": "Run",
             "rawInput": { "command": "[ -f /etc/os-release ] && cat /etc/os-release" }
@@ -2061,6 +2180,10 @@ mod tests {
             "Password",
             &json!({ "type": "string", "format": "password" })
         ));
-        assert!(!field_asks_for_secret("email", "Email", &json!({ "type": "string" })));
+        assert!(!field_asks_for_secret(
+            "email",
+            "Email",
+            &json!({ "type": "string" })
+        ));
     }
 }

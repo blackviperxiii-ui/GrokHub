@@ -59,7 +59,8 @@ fn path_arg(args: &Value) -> String {
 fn write_at(path: &Path, content: &str) -> Result<usize, String> {
     if let Some(parent) = path.parent() {
         if !parent.as_os_str().is_empty() {
-            std::fs::create_dir_all(parent).map_err(|err| format!("could not create parent: {err}"))?;
+            std::fs::create_dir_all(parent)
+                .map_err(|err| format!("could not create parent: {err}"))?;
         }
     }
     std::fs::write(path, content).map_err(|err| format!("could not write file: {err}"))?;
@@ -96,7 +97,10 @@ mod tests {
         };
         let out = dispatch(&ctx, "write", r#"{"path":"sub/a.txt","content":"hi"}"#);
         assert!(!out.failed, "{}", out.text);
-        assert_eq!(std::fs::read_to_string(dir.join("sub/a.txt")).unwrap(), "hi");
+        assert_eq!(
+            std::fs::read_to_string(dir.join("sub/a.txt")).unwrap(),
+            "hi"
+        );
 
         let empty = dispatch(&ctx, "write", r#"{"path":"empty.txt","content":""}"#);
         assert!(!empty.failed, "{}", empty.text);
@@ -112,7 +116,10 @@ mod tests {
         let abs = dispatch(
             &ctx,
             "write",
-            &format!(r#"{{"path":"{}","content":"no"}}"#, outside.display().to_string().replace('\\', "\\\\")),
+            &format!(
+                r#"{{"path":"{}","content":"no"}}"#,
+                outside.display().to_string().replace('\\', "\\\\")
+            ),
         );
         assert!(abs.failed, "{}", abs.text);
         assert!(!outside.exists(), "write left {}", outside.display());

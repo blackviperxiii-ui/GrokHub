@@ -64,7 +64,13 @@ pub fn lessons_path(config_dir: &Path) -> PathBuf {
 
 fn cap(text: &str, held: &[String]) -> String {
     let clean = grokhub_core::redact_held_secrets(&grokhub_core::redact_secrets(text), held);
-    clean.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(LESSON_FIELD_CAP).collect()
+    clean
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .take(LESSON_FIELD_CAP)
+        .collect()
 }
 
 /// The place a goal names: the capitalized words after its last " in ",
@@ -103,19 +109,32 @@ fn is_step(s: &Span) -> bool {
 /// The lesson an episode's trail teaches, or `None` for a trivial run (no
 /// re-plan, no recovery, no checker reject).
 pub fn derive(ep: &Episode, end: EpisodeEnd, now_ms: u64, held: &[String]) -> Option<Lesson> {
-    let trouble: Vec<usize> = ep.trail.iter().enumerate().filter(|(_, s)| is_recovery(s) || is_reject(s)).map(|(i, _)| i).collect();
+    let trouble: Vec<usize> = ep
+        .trail
+        .iter()
+        .enumerate()
+        .filter(|(_, s)| is_recovery(s) || is_reject(s))
+        .map(|(i, _)| i)
+        .collect();
     let last = *trouble.last()?;
     let mut failed: Vec<String> = Vec::new();
     for &i in &trouble {
         let s = &ep.trail[i];
-        let line = if is_reject(s) { format!("check said: {}", s.claim) } else { s.claim.clone() };
+        let line = if is_reject(s) {
+            format!("check said: {}", s.claim)
+        } else {
+            s.claim.clone()
+        };
         if !line.trim().is_empty() && !failed.contains(&line) {
             failed.push(line);
         }
     }
     let worked = if end == EpisodeEnd::Verified {
         let mut steps: Vec<String> = Vec::new();
-        for s in ep.trail[last..].iter().filter(|s| is_step(s) && s.decision == "allow" && !s.result.starts_with("failed")) {
+        for s in ep.trail[last..]
+            .iter()
+            .filter(|s| is_step(s) && s.decision == "allow" && !s.result.starts_with("failed"))
+        {
             let label = call_label(&s.tool, &s.args_redacted);
             if !steps.contains(&label) {
                 steps.push(label);
@@ -165,8 +184,15 @@ pub fn append(config_dir: &Path, lesson: &Lesson) -> std::io::Result<()> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
     }
-    let mut f = std::fs::OpenOptions::new().create(true).append(true).open(path)?;
-    writeln!(f, "{}", serde_json::to_string(lesson).map_err(std::io::Error::other)?)
+    let mut f = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)?;
+    writeln!(
+        f,
+        "{}",
+        serde_json::to_string(lesson).map_err(std::io::Error::other)?
+    )
 }
 
 /// Every lesson that parses; a bad line is skipped, never fatal.
@@ -188,14 +214,18 @@ fn overlap(a: &[String], b: &[String]) -> f64 {
 }
 
 fn norm(text: &str) -> String {
-    text.to_lowercase().split_whitespace().collect::<Vec<_>>().join(" ")
+    text.to_lowercase()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// Same app, and either the same failure or the same fix on mostly the same goal.
 pub fn near_duplicate(a: &Lesson, b: &Lesson) -> bool {
     a.app.eq_ignore_ascii_case(&b.app)
         && (norm(&a.what_failed) == norm(&b.what_failed)
-            || (norm(&a.what_worked) == norm(&b.what_worked) && overlap(&a.goal_keywords, &b.goal_keywords) >= MERGE_OVERLAP))
+            || (norm(&a.what_worked) == norm(&b.what_worked)
+                && overlap(&a.goal_keywords, &b.goal_keywords) >= MERGE_OVERLAP))
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -285,10 +315,17 @@ fn fit(l: &Lesson, app: &str, words: &[String]) -> f64 {
 pub fn recall(lessons: &[Lesson], goal: &str) -> Vec<Lesson> {
     let app = goal_app(goal);
     let words = grokhub_core::topic_words(goal);
-    let mut scored: Vec<(f64, &Lesson)> =
-        lessons.iter().map(|l| (fit(l, &app, &words), l)).filter(|(score, _)| *score > 0.0).collect();
+    let mut scored: Vec<(f64, &Lesson)> = lessons
+        .iter()
+        .map(|l| (fit(l, &app, &words), l))
+        .filter(|(score, _)| *score > 0.0)
+        .collect();
     scored.sort_by(|a, b| b.0.total_cmp(&a.0).then(b.1.ts.cmp(&a.1.ts)));
-    scored.into_iter().take(LESSONS_SHOWN).map(|(_, l)| l.clone()).collect()
+    scored
+        .into_iter()
+        .take(LESSONS_SHOWN)
+        .map(|(_, l)| l.clone())
+        .collect()
 }
 
 /// The "Past lessons" block for `goal` and the lessons in it. Whole lines
@@ -297,7 +334,10 @@ pub fn past_lessons(lessons: &[Lesson], goal: &str, held: &[String]) -> (String,
     let mut block = String::from(PAST_LESSONS_HEAD);
     let mut used = Vec::new();
     for l in recall(lessons, goal) {
-        let line = format!("- {}\n", grokhub_core::redact_held_secrets(&lesson_line(&l), held));
+        let line = format!(
+            "- {}\n",
+            grokhub_core::redact_held_secrets(&lesson_line(&l), held)
+        );
         if block.len() + line.len() > PAST_LESSONS_BYTES {
             continue;
         }
@@ -342,7 +382,12 @@ mod tests {
             app: app.into(),
             what_failed: failed.into(),
             what_worked: worked.into(),
-            outcome: if worked.is_empty() { "unconfirmed" } else { "verified" }.into(),
+            outcome: if worked.is_empty() {
+                "unconfirmed"
+            } else {
+                "verified"
+            }
+            .into(),
             episode_id: format!("ep-{ts}"),
             ts,
             seen: 1,
@@ -378,15 +423,27 @@ mod tests {
         assert_eq!(l.app, "Gedit");
         assert_eq!(l.what_failed, "replan: click 'Save' changed nothing 3×");
         assert_eq!(l.what_worked, "then key 'ctrl+s', key 'Return'");
-        assert_eq!((l.outcome.as_str(), l.episode_id.as_str(), l.ts, l.seen), ("verified", "ep-1", 42, 1));
-        assert_eq!(l.goal_keywords, vec!["save".to_string(), "note".into(), "gedit".into()]);
-        assert_eq!(lesson_line(&l), "Gedit: replan: click 'Save' changed nothing 3× → then key 'ctrl+s', key 'Return'");
+        assert_eq!(
+            (l.outcome.as_str(), l.episode_id.as_str(), l.ts, l.seen),
+            ("verified", "ep-1", 42, 1)
+        );
+        assert_eq!(
+            l.goal_keywords,
+            vec!["save".to_string(), "note".into(), "gedit".into()]
+        );
+        assert_eq!(
+            lesson_line(&l),
+            "Gedit: replan: click 'Save' changed nothing 3× → then key 'ctrl+s', key 'Return'"
+        );
     }
 
     #[test]
     fn a_trivial_run_teaches_nothing() {
         let mut ep = Episode::begin("ep-2", "c", "Turn on Wi-Fi in Settings", 0, &[]);
-        ep.trail = vec![step("click", r#"{"x":1,"y":2}"#, "click ok"), step("click", r#"{"x":3,"y":4}"#, "click ok")];
+        ep.trail = vec![
+            step("click", r#"{"x":1,"y":2}"#, "click ok"),
+            step("click", r#"{"x":3,"y":4}"#, "click ok"),
+        ];
         assert_eq!(derive(&ep, EpisodeEnd::Verified, 1, &[]), None);
     }
 
@@ -397,8 +454,14 @@ mod tests {
         check.claim = "still on the hunter2222 login page".into();
         ep.trail = vec![step("type", r#"{"chars":9}"#, "type ok"), check];
         let l = derive(&ep, EpisodeEnd::Unconfirmed, 5, &["hunter2222".to_string()]).unwrap();
-        assert_eq!(l.what_failed, "check said: still on the [redacted] login page");
-        assert_eq!((l.what_worked.as_str(), l.outcome.as_str(), l.app.as_str()), ("", "unconfirmed", "Example Portal"));
+        assert_eq!(
+            l.what_failed,
+            "check said: still on the [redacted] login page"
+        );
+        assert_eq!(
+            (l.what_worked.as_str(), l.outcome.as_str(), l.app.as_str()),
+            ("", "unconfirmed", "Example Portal")
+        );
     }
 
     #[test]
@@ -415,43 +478,135 @@ mod tests {
         let now = 200 * day;
         let lessons = vec![
             // Same failure (case and spacing aside): merged into the newest.
-            lesson("gedit", "Replan: click 'Save'  changed nothing 3×", "", &["save", "notes"], now - 2 * day),
-            lesson("Gedit", "replan: click 'Save' changed nothing 3×", "then key 'ctrl+s'", &["save", "report"], now - day),
+            lesson(
+                "gedit",
+                "Replan: click 'Save'  changed nothing 3×",
+                "",
+                &["save", "notes"],
+                now - 2 * day,
+            ),
+            lesson(
+                "Gedit",
+                "replan: click 'Save' changed nothing 3×",
+                "then key 'ctrl+s'",
+                &["save", "report"],
+                now - day,
+            ),
             // Same fix, mostly the same goal, a different failure line: merged too.
-            lesson("Gedit", "replan: 3 steps failed with 'no window'", "then key 'ctrl+s'", &["save", "report"], now - 3 * day),
+            lesson(
+                "Gedit",
+                "replan: 3 steps failed with 'no window'",
+                "then key 'ctrl+s'",
+                &["save", "report"],
+                now - 3 * day,
+            ),
             // Another app: kept apart.
-            lesson("Firefox", "replan: click 'Save' changed nothing 3×", "then key 'ctrl+s'", &["save", "page"], now - day),
+            lesson(
+                "Firefox",
+                "replan: click 'Save' changed nothing 3×",
+                "then key 'ctrl+s'",
+                &["save", "page"],
+                now - day,
+            ),
             // Past the TTL.
-            lesson("Settings", "check said: Wi-Fi off", "then click 'Wi-Fi'", &["wi-fi"], now - 91 * day),
+            lesson(
+                "Settings",
+                "check said: Wi-Fi off",
+                "then click 'Wi-Fi'",
+                &["wi-fi"],
+                now - 91 * day,
+            ),
         ];
         let (kept, report) = dream(lessons, now);
-        assert_eq!(report, LessonDream { merged: 2, dropped: 1, kept: 2 });
-        let gedit = kept.iter().find(|l| l.app.eq_ignore_ascii_case("gedit")).unwrap();
+        assert_eq!(
+            report,
+            LessonDream {
+                merged: 2,
+                dropped: 1,
+                kept: 2
+            }
+        );
+        let gedit = kept
+            .iter()
+            .find(|l| l.app.eq_ignore_ascii_case("gedit"))
+            .unwrap();
         assert_eq!(gedit.seen, 3);
         assert_eq!(gedit.what_worked, "then key 'ctrl+s'");
-        assert_eq!(gedit.what_failed, "replan: click 'Save' changed nothing 3×", "the newest one stays");
-        assert_eq!(gedit.goal_keywords, vec!["save".to_string(), "report".into(), "notes".into()]);
+        assert_eq!(
+            gedit.what_failed, "replan: click 'Save' changed nothing 3×",
+            "the newest one stays"
+        );
+        assert_eq!(
+            gedit.goal_keywords,
+            vec!["save".to_string(), "report".into(), "notes".into()]
+        );
         assert_eq!(kept.iter().filter(|l| l.app == "Firefox").count(), 1);
     }
 
     #[test]
     fn recall_ranks_the_same_app_and_goal_first_and_down_ranks_lessons_that_preceded_failures() {
-        let mut tried = lesson("Gedit", "replan: b", "then key 'ctrl+s'", &["save", "note"], 9);
+        let mut tried = lesson(
+            "Gedit",
+            "replan: b",
+            "then key 'ctrl+s'",
+            &["save", "note"],
+            9,
+        );
         tried.failed_after = 2;
         let lessons = vec![
-            lesson("Firefox", "replan: c", "then key 'ctrl+s'", &["save", "page"], 4),
-            lesson("Firefox", "replan: d", "then click 'Save'", &["save", "page"], 3),
+            lesson(
+                "Firefox",
+                "replan: c",
+                "then key 'ctrl+s'",
+                &["save", "page"],
+                4,
+            ),
+            lesson(
+                "Firefox",
+                "replan: d",
+                "then click 'Save'",
+                &["save", "page"],
+                3,
+            ),
             tried,
-            lesson("Settings", "check said: Wi-Fi off", "then click 'Wi-Fi'", &["wi-fi"], 10),
-            lesson("Gedit", "replan: a", "then key 'ctrl+s'", &["save", "note"], 2),
+            lesson(
+                "Settings",
+                "check said: Wi-Fi off",
+                "then click 'Wi-Fi'",
+                &["wi-fi"],
+                10,
+            ),
+            lesson(
+                "Gedit",
+                "replan: a",
+                "then key 'ctrl+s'",
+                &["save", "note"],
+                2,
+            ),
         ];
-        let picked: Vec<String> = recall(&lessons, "Save notes.txt in Gedit").into_iter().map(|l| l.what_failed).collect();
+        let picked: Vec<String> = recall(&lessons, "Save notes.txt in Gedit")
+            .into_iter()
+            .map(|l| l.what_failed)
+            .collect();
         // Gedit + two words = 4; the same over 1 + 2 failures ≈ 1.3; Firefox shares
         // one word = 1, the newer of the two wins the tie; Settings shares nothing.
-        assert_eq!(picked, vec!["replan: a".to_string(), "replan: b".into(), "replan: c".into()]);
+        assert_eq!(
+            picked,
+            vec![
+                "replan: a".to_string(),
+                "replan: b".into(),
+                "replan: c".into()
+            ]
+        );
         // A lesson with no fix counts half.
-        let no_fix = vec![lesson("Gedit", "replan: e", "", &["save"], 5), lesson("Gedit", "replan: f", "then g", &["save"], 1)];
-        let picked: Vec<String> = recall(&no_fix, "Save it in Gedit").into_iter().map(|l| l.what_failed).collect();
+        let no_fix = vec![
+            lesson("Gedit", "replan: e", "", &["save"], 5),
+            lesson("Gedit", "replan: f", "then g", &["save"], 1),
+        ];
+        let picked: Vec<String> = recall(&no_fix, "Save it in Gedit")
+            .into_iter()
+            .map(|l| l.what_failed)
+            .collect();
         assert_eq!(picked, vec!["replan: f".to_string(), "replan: e".into()]);
         assert!(recall(&lessons, "Sort the photos").is_empty());
     }
@@ -460,30 +615,69 @@ mod tests {
     fn the_past_lessons_block_keeps_whole_lines_within_its_budget() {
         let long = "é".repeat(LESSON_FIELD_CAP);
         let lessons = vec![
-            lesson("Gedit", &format!("replan: {long}"), &format!("then {long}"), &["save"], 3),
-            lesson("Gedit", &format!("replan 2: {long}"), &format!("then {long}"), &["save"], 2),
-            lesson("Gedit", "replan: short", "then key 'hunter2222'", &["save"], 1),
+            lesson(
+                "Gedit",
+                &format!("replan: {long}"),
+                &format!("then {long}"),
+                &["save"],
+                3,
+            ),
+            lesson(
+                "Gedit",
+                &format!("replan 2: {long}"),
+                &format!("then {long}"),
+                &["save"],
+                2,
+            ),
+            lesson(
+                "Gedit",
+                "replan: short",
+                "then key 'hunter2222'",
+                &["save"],
+                1,
+            ),
         ];
         let (block, used) = past_lessons(&lessons, "Save it in Gedit", &["hunter2222".to_string()]);
         assert!(block.len() <= PAST_LESSONS_BYTES, "{} bytes", block.len());
-        assert_eq!(used.iter().map(|l| l.ts).collect::<Vec<_>>(), vec![3, 1], "the second long line would not fit");
+        assert_eq!(
+            used.iter().map(|l| l.ts).collect::<Vec<_>>(),
+            vec![3, 1],
+            "the second long line would not fit"
+        );
         assert!(block.starts_with(PAST_LESSONS_HEAD));
-        assert!(block.ends_with("- Gedit: replan: short → then key '[redacted]'\n"), "{block}");
+        assert!(
+            block.ends_with("- Gedit: replan: short → then key '[redacted]'\n"),
+            "{block}"
+        );
         assert_eq!(block.lines().count(), 3);
-        assert_eq!(past_lessons(&lessons, "Sort the photos", &[]), (String::new(), Vec::new()));
+        assert_eq!(
+            past_lessons(&lessons, "Sort the photos", &[]),
+            (String::new(), Vec::new())
+        );
     }
 
     #[test]
     fn a_lesson_counts_a_failure_only_when_the_episode_that_used_it_did_not_finish() {
         let dir = crate::harness::test_dir("lessons-used");
         append(&dir, &lesson("Gedit", "replan: a", "then b", &["save"], 1)).unwrap();
-        append(&dir, &lesson("Firefox", "replan: c", "then d", &["save"], 2)).unwrap();
+        append(
+            &dir,
+            &lesson("Firefox", "replan: c", "then d", &["save"], 2),
+        )
+        .unwrap();
         let used = vec!["ep-1".to_string()];
         assert_eq!(note_used(&dir, &used, EpisodeEnd::Verified).unwrap(), 0);
-        assert_eq!(note_used(&dir, &used, EpisodeEnd::Stop).unwrap(), 0, "a stop is the user's call, not the lesson's");
+        assert_eq!(
+            note_used(&dir, &used, EpisodeEnd::Stop).unwrap(),
+            0,
+            "a stop is the user's call, not the lesson's"
+        );
         assert_eq!(note_used(&dir, &used, EpisodeEnd::Unconfirmed).unwrap(), 1);
         assert_eq!(note_used(&dir, &used, EpisodeEnd::Idle).unwrap(), 1);
-        let after: Vec<(String, u32)> = load(&dir).into_iter().map(|l| (l.episode_id, l.failed_after)).collect();
+        let after: Vec<(String, u32)> = load(&dir)
+            .into_iter()
+            .map(|l| (l.episode_id, l.failed_after))
+            .collect();
         assert_eq!(after, vec![("ep-1".to_string(), 2), ("ep-2".into(), 0)]);
         assert_eq!(note_used(&dir, &[], EpisodeEnd::Unconfirmed).unwrap(), 0);
     }
@@ -492,15 +686,52 @@ mod tests {
     fn the_store_appends_loads_and_rewrites_only_when_the_dream_changed_something() {
         let dir = crate::harness::test_dir("lessons-store");
         let now = 10 * 24 * 60 * 60 * 1000;
-        append(&dir, &lesson("Gedit", "replan: a", "then b", &["save"], now - 2)).unwrap();
-        append(&dir, &lesson("Gedit", "replan: a", "then b", &["save"], now - 1)).unwrap();
-        std::fs::OpenOptions::new().append(true).open(lessons_path(&dir)).unwrap().write_all(b"not json\n").unwrap();
+        append(
+            &dir,
+            &lesson("Gedit", "replan: a", "then b", &["save"], now - 2),
+        )
+        .unwrap();
+        append(
+            &dir,
+            &lesson("Gedit", "replan: a", "then b", &["save"], now - 1),
+        )
+        .unwrap();
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(lessons_path(&dir))
+            .unwrap()
+            .write_all(b"not json\n")
+            .unwrap();
         assert_eq!(load(&dir).len(), 2, "a bad line is skipped");
-        assert_eq!(dream_store(&dir, now).unwrap(), LessonDream { merged: 1, dropped: 0, kept: 1 });
+        assert_eq!(
+            dream_store(&dir, now).unwrap(),
+            LessonDream {
+                merged: 1,
+                dropped: 0,
+                kept: 1
+            }
+        );
         let after = load(&dir);
         assert_eq!((after.len(), after[0].seen, after[0].ts), (1, 2, now - 1));
-        let stamp = std::fs::metadata(lessons_path(&dir)).unwrap().modified().unwrap();
-        assert_eq!(dream_store(&dir, now).unwrap(), LessonDream { merged: 0, dropped: 0, kept: 1 });
-        assert_eq!(std::fs::metadata(lessons_path(&dir)).unwrap().modified().unwrap(), stamp, "nothing to change, nothing written");
+        let stamp = std::fs::metadata(lessons_path(&dir))
+            .unwrap()
+            .modified()
+            .unwrap();
+        assert_eq!(
+            dream_store(&dir, now).unwrap(),
+            LessonDream {
+                merged: 0,
+                dropped: 0,
+                kept: 1
+            }
+        );
+        assert_eq!(
+            std::fs::metadata(lessons_path(&dir))
+                .unwrap()
+                .modified()
+                .unwrap(),
+            stamp,
+            "nothing to change, nothing written"
+        );
     }
 }

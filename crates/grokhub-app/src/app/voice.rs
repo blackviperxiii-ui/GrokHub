@@ -2,7 +2,6 @@
 
 use super::*;
 
-
 pub(super) fn listen_turn(api_key: &str) -> String {
     let wav = match record_once() {
         Ok(p) => p,
@@ -37,7 +36,6 @@ pub(super) fn listen_turn(api_key: &str) -> String {
 }
 
 impl Cabin {
-
     pub(super) fn listen_voice(&mut self) {
         if self.voice_is_on() {
             self.leave_voice();

@@ -32,7 +32,10 @@ pub fn dream_time_line(hour: u32, zone: &str) -> String {
         "" => "local time",
         z => z,
     };
-    format!("Dream and self-review run at {} ({zone}).", hour_label(hour))
+    format!(
+        "Dream and self-review run at {} ({zone}).",
+        hour_label(hour)
+    )
 }
 
 /// Hard cap per suggestion kind so the Suggested grids stay short.
@@ -115,7 +118,12 @@ pub struct SuggestionStore {
 /// - Already finished today → not due.
 /// - Last review was a previous day → due any hour (catch-up after downtime).
 /// - Never ran → due only at `night_hour` or later (avoid first-boot API spam).
-pub fn review_due(last_day: Option<&str>, today: &str, clock: &LocalClock, night_hour: u32) -> bool {
+pub fn review_due(
+    last_day: Option<&str>,
+    today: &str,
+    clock: &LocalClock,
+    night_hour: u32,
+) -> bool {
     if last_day == Some(today) {
         return false;
     }
@@ -856,13 +864,28 @@ mod tests {
 
     #[test]
     fn review_due_before_21_never_ran() {
-        assert!(!review_due(None, "2026-08-16", &clock(10), REVIEW_NIGHT_HOUR));
+        assert!(!review_due(
+            None,
+            "2026-08-16",
+            &clock(10),
+            REVIEW_NIGHT_HOUR
+        ));
     }
 
     #[test]
     fn review_due_after_21_no_review() {
-        assert!(review_due(None, "2026-08-16", &clock(21), REVIEW_NIGHT_HOUR));
-        assert!(review_due(None, "2026-08-16", &clock(22), REVIEW_NIGHT_HOUR));
+        assert!(review_due(
+            None,
+            "2026-08-16",
+            &clock(21),
+            REVIEW_NIGHT_HOUR
+        ));
+        assert!(review_due(
+            None,
+            "2026-08-16",
+            &clock(22),
+            REVIEW_NIGHT_HOUR
+        ));
     }
 
     #[test]
@@ -885,11 +908,23 @@ mod tests {
     fn review_due_follows_a_custom_hour() {
         for hour in [23, 0] {
             if hour > 0 {
-                assert!(!review_due(None, "2026-08-16", &clock(hour - 1), hour), "{hour}: not before");
+                assert!(
+                    !review_due(None, "2026-08-16", &clock(hour - 1), hour),
+                    "{hour}: not before"
+                );
             }
-            assert!(review_due(None, "2026-08-16", &clock(hour), hour), "{hour}: due at the hour");
-            assert!(review_due(None, "2026-08-16", &clock(23), hour), "{hour}: due after");
-            assert!(!review_due(Some("2026-08-16"), "2026-08-16", &clock(23), hour), "{hour}: not twice a day");
+            assert!(
+                review_due(None, "2026-08-16", &clock(hour), hour),
+                "{hour}: due at the hour"
+            );
+            assert!(
+                review_due(None, "2026-08-16", &clock(23), hour),
+                "{hour}: due after"
+            );
+            assert!(
+                !review_due(Some("2026-08-16"), "2026-08-16", &clock(23), hour),
+                "{hour}: not twice a day"
+            );
         }
         assert!(!review_due(None, "2026-08-16", &clock(22), 23));
     }
@@ -902,8 +937,14 @@ mod tests {
         assert_eq!(hour_label(21), "9 PM");
         assert_eq!(hour_label(23), "11 PM");
         assert_eq!(hour_label(40), "11 PM");
-        assert_eq!(dream_time_line(21, "CDT"), "Dream and self-review run at 9 PM (CDT).");
-        assert_eq!(dream_time_line(0, " "), "Dream and self-review run at 12 AM (local time).");
+        assert_eq!(
+            dream_time_line(21, "CDT"),
+            "Dream and self-review run at 9 PM (CDT)."
+        );
+        assert_eq!(
+            dream_time_line(0, " "),
+            "Dream and self-review run at 12 AM (local time)."
+        );
     }
 
     #[test]
@@ -995,13 +1036,18 @@ SUGGEST_AUTO: Night wrap | Close the day | every day at 21, say good night
             ..ReviewDigest::default()
         };
         let digest = build_review_digest(&input);
-        assert!(!digest.contains("Turned down"), "nothing turned down, no line");
+        assert!(
+            !digest.contains("Turned down"),
+            "nothing turned down, no line"
+        );
         let with_no = build_review_digest(&ReviewDigest {
             turned_down: vec!["Session scanner".into(), " ".into()],
             ..ReviewDigest::default()
         });
         assert!(
-            with_no.contains("Turned down (do not suggest these or anything like them): Session scanner\n"),
+            with_no.contains(
+                "Turned down (do not suggest these or anything like them): Session scanner\n"
+            ),
             "{with_no}"
         );
         assert!(!digest.contains("ghp_abcdefghijklmnopqrstuvwx"));
@@ -1031,7 +1077,11 @@ SUGGEST_AUTO: Night wrap | Close the day | every day at 21, say good night
             "SUGGEST_SKILL: desk-tidy | Desk | Body | trig | do it\n",
         ));
         let merged = merge_suggestion_store(&prior, incoming);
-        assert_eq!(merged.autos.len(), 1, "prior autos must survive a skill-only night");
+        assert_eq!(
+            merged.autos.len(),
+            1,
+            "prior autos must survive a skill-only night"
+        );
         assert_eq!(merged.autos[0].title, "Night wrap");
         assert_eq!(merged.skills.len(), 1);
         assert_eq!(merged.skills[0].name.as_deref(), Some("desk-tidy"));
@@ -1093,7 +1143,8 @@ SUGGEST_AUTO: Night wrap | Close the day | every day at 21, say good night
         );
         let kept = drop_echoed_suggestions(items, std::slice::from_ref(&said));
         assert!(
-            kept.iter().all(|item| !item.title.to_ascii_lowercase().contains("stream")),
+            kept.iter()
+                .all(|item| !item.title.to_ascii_lowercase().contains("stream")),
             "{kept:?}"
         );
         assert!(kept.iter().any(|item| item.title == "Friday routine"));
@@ -1129,20 +1180,27 @@ SUGGEST_AUTO: Night wrap | Close the day | every day at 21, say good night
         ];
         let items = suggestions_from_sessions(&lines, &[], &[]);
         assert!(
-            items.iter().any(|i| i.kind == SuggestionKind::Auto && i.title == "Midday board"),
+            items
+                .iter()
+                .any(|i| i.kind == SuggestionKind::Auto && i.title == "Midday board"),
             "{items:?}"
         );
         assert!(
-            items.iter().any(|i| i.kind == SuggestionKind::Auto && i.title == "Host heartbeat"),
+            items
+                .iter()
+                .any(|i| i.kind == SuggestionKind::Auto && i.title == "Host heartbeat"),
             "{items:?}"
         );
         assert!(
             !items.iter().any(|i| i.kind == SuggestionKind::Skill),
             "no generic habit skill from a phrase: {items:?}"
         );
-        let hidden = suggestions_from_sessions(&lines, &["session-habit".into()], &["Midday board".into()]);
+        let hidden =
+            suggestions_from_sessions(&lines, &["session-habit".into()], &["Midday board".into()]);
         assert!(!hidden.iter().any(|i| i.title == "Midday board"));
-        assert!(!hidden.iter().any(|i| i.name.as_deref() == Some("session-habit")));
+        assert!(!hidden
+            .iter()
+            .any(|i| i.name.as_deref() == Some("session-habit")));
         assert!(suggestions_from_sessions(&[], &[], &[]).is_empty());
     }
 

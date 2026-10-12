@@ -32,7 +32,10 @@ pub fn run_github_tool(tool: &str, args: &str, token: &str) -> String {
                 .take(TEXT_FILE_CAP as u64)
                 .read_to_end(&mut buf);
             let body = String::from_utf8_lossy(&buf);
-            return format!("GitHub {code}: {}", body.chars().take(240).collect::<String>());
+            return format!(
+                "GitHub {code}: {}",
+                body.chars().take(240).collect::<String>()
+            );
         }
         Err(e) => return e.to_string(),
     };

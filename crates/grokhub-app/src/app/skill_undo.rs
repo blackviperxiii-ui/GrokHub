@@ -141,9 +141,15 @@ pub(super) fn revert_line(done: &hx::Reverted) -> String {
         return format!("Restored {id} from its kept copy.");
     }
     if done.now.is_none() {
-        return format!("Removed {id}: it was new. Its text is kept, and /skills restore {id} brings it back.");
+        return format!(
+            "Removed {id}: it was new. Its text is kept, and /skills restore {id} brings it back."
+        );
     }
-    if done.reverted.as_ref().is_some_and(|c| c.op == ChangeOp::Delete) {
+    if done
+        .reverted
+        .as_ref()
+        .is_some_and(|c| c.op == ChangeOp::Delete)
+    {
         return format!("{id} is back.");
     }
     format!("Undid the newest change to {id}. The version before it is back.")
@@ -196,8 +202,12 @@ impl Cabin {
     pub(super) fn skill_row_clicked(&mut self, row: &SkillRow) {
         let (dir, skills) = (config::config_dir(), skills::skills_dir());
         let res = match row.act {
-            SkillAct::Undo => hx::undo_skill_change(&dir, &skills, &row.id, hx::UndoAsk::from_click()),
-            SkillAct::Restore => hx::restore_skill(&dir, &skills, &row.id, hx::UndoAsk::from_click()),
+            SkillAct::Undo => {
+                hx::undo_skill_change(&dir, &skills, &row.id, hx::UndoAsk::from_click())
+            }
+            SkillAct::Restore => {
+                hx::restore_skill(&dir, &skills, &row.id, hx::UndoAsk::from_click())
+            }
         };
         self.finish_skill_revert(&row.id, res);
     }
@@ -230,7 +240,8 @@ impl Cabin {
                     }
                     None => {
                         let dir = grokhub_core::skill_dir_name(name);
-                        self.skill_list.retain(|s| grokhub_core::skill_dir_name(&s.name) != dir);
+                        self.skill_list
+                            .retain(|s| grokhub_core::skill_dir_name(&s.name) != dir);
                     }
                 }
                 revert_line(&done)
@@ -242,7 +253,8 @@ impl Cabin {
     }
 
     fn post_skill_result(&mut self, body: &str) {
-        self.live_mut().push(("assistant".into(), mark_slash_result(body)));
+        self.live_mut()
+            .push(("assistant".into(), mark_slash_result(body)));
         self.stamp_current_access();
         self.persist();
     }
@@ -277,16 +289,22 @@ pub(super) fn paint_skill_undo_rows(ui: &mut egui::Ui, rows: &[SkillRow]) -> Opt
     for (row, pad) in rows.iter().zip(pads) {
         ui.push_id(("skill-undo", row.id.as_str()), |ui| {
             let size = egui::vec2(ui.available_width(), SKILL_ROW_H);
-            ui.allocate_ui_with_layout(size, egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                ui.add_space(super::chat_ui::RESULT_TEXT_INSET);
-                ui.label(
-                    RichText::new(&row.label).size(super::chat_ui::RESULT_ROW_LABEL_SIZE).color(crate::theme::muted()),
-                );
-                ui.add_space(pad);
-                if undo_pill(ui, row.act.label()) {
-                    hit = Some(row.clone());
-                }
-            });
+            ui.allocate_ui_with_layout(
+                size,
+                egui::Layout::left_to_right(egui::Align::Center),
+                |ui| {
+                    ui.add_space(super::chat_ui::RESULT_TEXT_INSET);
+                    ui.label(
+                        RichText::new(&row.label)
+                            .size(super::chat_ui::RESULT_ROW_LABEL_SIZE)
+                            .color(crate::theme::muted()),
+                    );
+                    ui.add_space(pad);
+                    if undo_pill(ui, row.act.label()) {
+                        hit = Some(row.clone());
+                    }
+                },
+            );
         });
     }
     if !rows.is_empty() {
@@ -297,9 +315,9 @@ pub(super) fn paint_skill_undo_rows(ui: &mut egui::Ui, rows: &[SkillRow]) -> Opt
 
 /// The newest `/skills changes` report among the painted rows, if any.
 pub(super) fn newest_skill_changes_row(views: &[grokhub_core::ChatView]) -> Option<usize> {
-    views
-        .iter()
-        .rposition(|v| v.kind == grokhub_core::ChatKind::Result && v.body.starts_with(SKILL_CHANGES_HEAD))
+    views.iter().rposition(|v| {
+        v.kind == grokhub_core::ChatKind::Result && v.body.starts_with(SKILL_CHANGES_HEAD)
+    })
 }
 
 #[cfg(test)]
@@ -320,10 +338,17 @@ mod tests {
             Ok(())
         })
         .unwrap();
-        hx::record_skill_change(&root, &skills, "board-status", Origin::SelfManage, "learned from a host run", || {
-            put("board-status", "b1\n");
-            Ok(())
-        })
+        hx::record_skill_change(
+            &root,
+            &skills,
+            "board-status",
+            Origin::SelfManage,
+            "learned from a host run",
+            || {
+                put("board-status", "b1\n");
+                Ok(())
+            },
+        )
         .unwrap();
         hx::undo_skill_change(&root, &skills, "board-status", hx::UndoAsk::from_click()).unwrap();
         root
@@ -350,8 +375,16 @@ mod tests {
         assert_eq!(
             skill_undo_rows(&ledger, now),
             vec![
-                SkillRow { id: "board-status".into(), label: "board-status · removed 2h ago".into(), act: SkillAct::Restore },
-                SkillRow { id: "weekly-report".into(), label: "weekly-report · changed 2h ago".into(), act: SkillAct::Undo },
+                SkillRow {
+                    id: "board-status".into(),
+                    label: "board-status · removed 2h ago".into(),
+                    act: SkillAct::Restore
+                },
+                SkillRow {
+                    id: "weekly-report".into(),
+                    label: "weekly-report · changed 2h ago".into(),
+                    act: SkillAct::Undo
+                },
             ]
         );
         let empty = skill_changes_report(&hx::ChangeLedger::default(), now);
@@ -370,13 +403,23 @@ mod tests {
             title: String::new(),
             body: skill_changes_report(&ledger, now),
         };
-        let other = grokhub_core::ChatView { kind: grokhub_core::ChatKind::Assistant, title: String::new(), body: "hi".into() };
-        assert_eq!(newest_skill_changes_row(&[view.clone(), other.clone()]), Some(0));
+        let other = grokhub_core::ChatView {
+            kind: grokhub_core::ChatKind::Assistant,
+            title: String::new(),
+            body: "hi".into(),
+        };
+        assert_eq!(
+            newest_skill_changes_row(&[view.clone(), other.clone()]),
+            Some(0)
+        );
         assert_eq!(newest_skill_changes_row(&[other]), None);
         let ctx = egui::Context::default();
         crate::theme::install_fonts_on(&ctx);
         let input = egui::RawInput {
-            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1000.0, 900.0))),
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1000.0, 900.0),
+            )),
             ..Default::default()
         };
         let mut hit = None;
@@ -389,7 +432,10 @@ mod tests {
         for clipped in &out.shapes {
             collect_text(&clipped.shape, &mut texts);
         }
-        assert!(texts.contains("Undo\n") && texts.contains("Restore\n"), "{texts}");
+        assert!(
+            texts.contains("Undo\n") && texts.contains("Restore\n"),
+            "{texts}"
+        );
         assert!(texts.contains("weekly-report · changed 1m ago"), "{texts}");
         assert_eq!(hit, None, "painting alone never undoes");
         let _ = std::fs::remove_dir_all(&root);
@@ -412,7 +458,10 @@ mod tests {
         let ctx = egui::Context::default();
         crate::theme::install_fonts_on(&ctx);
         let input = egui::RawInput {
-            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1000.0, 900.0))),
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1000.0, 900.0),
+            )),
             ..Default::default()
         };
         let out = crate::theme::test_pass(&ctx, input, |ui| {
@@ -431,7 +480,9 @@ mod tests {
         let mut lefts: Vec<(String, f32)> = Vec::new();
         fn walk(shape: &egui::Shape, lefts: &mut Vec<(String, f32)>) {
             match shape {
-                egui::Shape::Text(t) => lefts.push((t.galley.text().to_string(), t.pos.x + t.galley.rect.min.x)),
+                egui::Shape::Text(t) => {
+                    lefts.push((t.galley.text().to_string(), t.pos.x + t.galley.rect.min.x))
+                }
                 egui::Shape::Vec(v) => v.iter().for_each(|c| walk(c, lefts)),
                 _ => {}
             }
@@ -439,18 +490,40 @@ mod tests {
         for clipped in &out.shapes {
             walk(&clipped.shape, &mut lefts);
         }
-        let left = |want: &str| lefts.iter().find(|(t, _)| t.starts_with(want)).map(|(_, x)| *x);
+        let left = |want: &str| {
+            lefts
+                .iter()
+                .find(|(t, _)| t.starts_with(want))
+                .map(|(_, x)| *x)
+        };
         let head = left(SKILL_CHANGES_HEAD).expect("bubble head");
         for row in &rows {
-            let at = lefts.iter().rev().find(|(t, _)| *t == row.label).map(|(_, x)| *x).expect("row label");
-            assert!((head - at).abs() < 1.0, "bubble text at {head}, {} at {at}", row.label);
+            let at = lefts
+                .iter()
+                .rev()
+                .find(|(t, _)| *t == row.label)
+                .map(|(_, x)| *x)
+                .expect("row label");
+            assert!(
+                (head - at).abs() < 1.0,
+                "bubble text at {head}, {} at {at}",
+                row.label
+            );
         }
-        let pills: Vec<f32> = lefts.iter().filter(|(t, _)| t == "Undo" || t == "Restore").map(|(_, x)| *x).collect();
+        let pills: Vec<f32> = lefts
+            .iter()
+            .filter(|(t, _)| t == "Undo" || t == "Restore")
+            .map(|(_, x)| *x)
+            .collect();
         assert!(pills.len() >= 2, "{lefts:?}");
-        let spread = pills.iter().copied().fold(f32::MIN, f32::max) - pills.iter().copied().fold(f32::MAX, f32::min);
+        let spread = pills.iter().copied().fold(f32::MIN, f32::max)
+            - pills.iter().copied().fold(f32::MAX, f32::min);
         // Pill labels differ in width; their pills' left edges match, so the
         // text sits within a few px of each other.
-        assert!(spread < 12.0, "Undo / Restore pills should share a column: {pills:?}");
+        assert!(
+            spread < 12.0,
+            "Undo / Restore pills should share a column: {pills:?}"
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 

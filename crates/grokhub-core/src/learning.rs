@@ -83,11 +83,7 @@ pub fn upsert_insight(state: &mut LearningState, key: &str, text: &str) {
         i.hits = i.hits.saturating_add(1);
         return;
     }
-    state.insights.push(LearningInsight {
-        key,
-        text,
-        hits: 1,
-    });
+    state.insights.push(LearningInsight { key, text, hits: 1 });
     if state.insights.len() > 40 {
         state.insights.remove(0);
     }
@@ -155,13 +151,7 @@ pub fn insight_key_for_fact(fact: &str) -> String {
     let lower = fact.to_ascii_lowercase();
     let slug: String = lower
         .chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() {
-                c
-            } else {
-                '-'
-            }
-        })
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
         .collect();
     let slug: String = slug
         .split('-')
@@ -300,7 +290,9 @@ mod tests {
     fn greeting_chitchat_is_not_a_fact() {
         assert!(!is_durable_fact("hi how are you"));
         assert!(!is_durable_fact("say hi in one sentence"));
-        assert!(!is_durable_fact("New direction: firefox --remote-debugging-port=9222\n\n(Previous ask: )"));
+        assert!(!is_durable_fact(
+            "New direction: firefox --remote-debugging-port=9222\n\n(Previous ask: )"
+        ));
         assert!(is_durable_fact("prefer nvim"));
         let mut s = LearningState::default();
         extract_insights(
@@ -333,7 +325,11 @@ mod tests {
     #[test]
     fn serve_brief_is_short_and_a_skip_blocks_that_idea() {
         let mut s = LearningState::default();
-        upsert_insight(&mut s, "habit:21:id:think", "Around 21:00 they use Think Harder.");
+        upsert_insight(
+            &mut s,
+            "habit:21:id:think",
+            "Around 21:00 they use Think Harder.",
+        );
         upsert_insight(&mut s, "skip:21:night", "Around 21:00 they skip night.");
         upsert_insight(&mut s, "secret", "token sk-abcdefghijklmnopqrstuvwx");
         let brief = serve_brief(&s);

@@ -144,12 +144,15 @@ pub fn scope_excluded(path: &str) -> bool {
     // Case-blind: Windows and macOS paths are (`.SSH`, `cookies`), and
     // excluding a little more on Linux fails closed.
     let p = path.replace('\\', "/").to_lowercase();
-    SCOPE_HARD_EXCLUDES.iter().map(|x| x.to_lowercase()).any(|x| {
-        p == x
-            || p.ends_with(&format!("/{x}"))
-            || p.contains(&format!("/{x}/"))
-            || p.starts_with(&format!("{x}/"))
-    })
+    SCOPE_HARD_EXCLUDES
+        .iter()
+        .map(|x| x.to_lowercase())
+        .any(|x| {
+            p == x
+                || p.ends_with(&format!("/{x}"))
+                || p.contains(&format!("/{x}/"))
+                || p.starts_with(&format!("{x}/"))
+        })
 }
 
 /// Why a scope cannot be granted, if it can't. `home` is the user's home dir.
@@ -244,7 +247,10 @@ impl ConsentLedger {
                 None => grants.push(g),
             }
         }
-        Self { grants, ..Self::default() }
+        Self {
+            grants,
+            ..Self::default()
+        }
     }
 
     /// Why the ledger is closed, if it is. Then no grant applies.
@@ -363,7 +369,11 @@ pub fn grant_scope(
 /// Approve one premium route (Router R2b), the `premium:<model>` key from
 /// `cost_class::route_key`. Click only: the hard money card's Approve. It
 /// covers exactly this route and stays until revoked in Settings → Permissions.
-pub fn grant_premium(config_dir: &Path, route_key: &str, _click: UserClick) -> Result<Grant, String> {
+pub fn grant_premium(
+    config_dir: &Path,
+    route_key: &str,
+    _click: UserClick,
+) -> Result<Grant, String> {
     let key = route_key.trim();
     if !key.starts_with("premium:") || key.len() <= "premium:".len() {
         return Err("a premium grant needs a premium route".into());
@@ -385,7 +395,8 @@ pub fn grant_premium(config_dir: &Path, route_key: &str, _click: UserClick) -> R
 impl ConsentLedger {
     /// An active grant for exactly this premium route key.
     pub fn premium_grant(&self, route_key: &str) -> Option<&Grant> {
-        self.active().find(|g| g.source == route_key.trim() && g.scope == "spend")
+        self.active()
+            .find(|g| g.source == route_key.trim() && g.scope == "spend")
     }
 }
 
@@ -448,7 +459,10 @@ mod tests {
             assert_eq!(ledger.scope_grant(&scope), None, "{}", scope.key());
         }
         assert_eq!(ledger.destination_grant(HUB_DEST, &[DataClass::Chat]), None);
-        assert!(!consent_path(&d).exists(), "loading must not create the ledger");
+        assert!(
+            !consent_path(&d).exists(),
+            "loading must not create the ledger"
+        );
     }
 
     #[test]
@@ -460,10 +474,24 @@ mod tests {
         assert_eq!(g.destination, "hub");
         assert_eq!(g.by, "user");
         let ledger = ConsentLedger::load(&d);
-        assert_eq!(ledger.destination_grant("hub", &data).map(|x| x.id.clone()), Some(g.id.clone()));
-        assert_eq!(ledger.destination_grant("hub", &[DataClass::Chat]).map(|x| x.id.clone()), Some(g.id.clone()));
-        assert_eq!(ledger.destination_grant("hub", &[DataClass::Sensitive]), None);
-        assert_eq!(ledger.destination_grant("example.org", &[DataClass::Chat]), None);
+        assert_eq!(
+            ledger.destination_grant("hub", &data).map(|x| x.id.clone()),
+            Some(g.id.clone())
+        );
+        assert_eq!(
+            ledger
+                .destination_grant("hub", &[DataClass::Chat])
+                .map(|x| x.id.clone()),
+            Some(g.id.clone())
+        );
+        assert_eq!(
+            ledger.destination_grant("hub", &[DataClass::Sensitive]),
+            None
+        );
+        assert_eq!(
+            ledger.destination_grant("example.org", &[DataClass::Chat]),
+            None
+        );
 
         assert_eq!(revoke_grant(&d, &g.id), Ok(true));
         assert_eq!(revoke_grant(&d, &g.id), Ok(false), "already revoked");
@@ -472,7 +500,11 @@ mod tests {
         assert_eq!(after.all().len(), 1);
         assert!(after.all()[0].revoked_at.is_some());
         let text = fs::read_to_string(consent_path(&d)).unwrap();
-        assert_eq!(text.lines().count(), 2, "append-only: grant line + revoke line\n{text}");
+        assert_eq!(
+            text.lines().count(),
+            2,
+            "append-only: grant line + revoke line\n{text}"
+        );
     }
 
     #[test]
@@ -489,7 +521,10 @@ mod tests {
             Some("files: one folder at a time, never all of your home folder"),
             "a folder that holds the home folder is the home folder too"
         );
-        assert_eq!(scope_refusal(&Scope::Files("/home/meadow".into()), Some(home)), None);
+        assert_eq!(
+            scope_refusal(&Scope::Files("/home/meadow".into()), Some(home)),
+            None
+        );
         assert_eq!(
             scope_refusal(&Scope::Files("/home/me/.ssh".into()), Some(home)).as_deref(),
             Some("files: that folder is always excluded")
@@ -503,12 +538,22 @@ mod tests {
         assert_eq!(g.source, "files:/home/me/Documents");
         let ledger = ConsentLedger::load(&d);
         assert!(ledger.scope_grant(&docs).is_some());
-        assert_eq!(ledger.scope_grant(&Scope::Files("/home/me/Pictures".into())), None);
+        assert_eq!(
+            ledger.scope_grant(&Scope::Files("/home/me/Pictures".into())),
+            None
+        );
         assert_eq!(ledger.scope_grant(&Scope::Calendar), None);
         assert!(scope_excluded("/home/me/.mozilla/firefox/x/Cookies"));
         assert!(!scope_excluded("/home/me/Documents/notes.md"));
-        assert_eq!(Scope::parse("browser_history:firefox"), Some(Scope::BrowserHistory("firefox".into())));
-        assert_eq!(Scope::parse("screen"), None, "the screen stays the desktop switch");
+        assert_eq!(
+            Scope::parse("browser_history:firefox"),
+            Some(Scope::BrowserHistory("firefox".into()))
+        );
+        assert_eq!(
+            Scope::parse("screen"),
+            None,
+            "the screen stays the desktop switch"
+        );
     }
 
     #[test]
@@ -523,8 +568,13 @@ mod tests {
         let ledger = ConsentLedger::from_lines(text);
         assert_eq!(ledger.all().len(), 1);
         assert_eq!(ledger.all()[0].id, "g-2");
-        assert_eq!(ledger.destination_grant("hub", &[DataClass::Chat, DataClass::Personal]), None);
-        assert!(ledger.destination_grant("hub", &[DataClass::Chat]).is_some());
+        assert_eq!(
+            ledger.destination_grant("hub", &[DataClass::Chat, DataClass::Personal]),
+            None
+        );
+        assert!(ledger
+            .destination_grant("hub", &[DataClass::Chat])
+            .is_some());
     }
 
     #[test]
@@ -534,8 +584,13 @@ mod tests {
         let g = grant_destination(&d, HUB_DEST, &data, UserClick::from_click()).unwrap();
         let text = fs::read_to_string(consent_path(&d)).unwrap();
         assert!(text.lines().all(is_sealed_line), "{text}");
-        assert!(!text.contains("hub") && !text.contains(&g.id) && !text.contains("user"), "{text}");
-        assert!(ConsentLedger::load(&d).destination_grant(HUB_DEST, &data).is_some());
+        assert!(
+            !text.contains("hub") && !text.contains(&g.id) && !text.contains("user"),
+            "{text}"
+        );
+        assert!(ConsentLedger::load(&d)
+            .destination_grant(HUB_DEST, &data)
+            .is_some());
 
         // The keyring goes away (next start): no grant applies, nothing is written.
         store.set_available(false);
@@ -547,12 +602,18 @@ mod tests {
         let why = grant_scope(&d, &Scope::Calendar, None, UserClick::from_click()).unwrap_err();
         assert!(why.starts_with("Private data is locked"), "{why}");
         assert_eq!(revoke_grant(&d, &g.id), Err(Locked::Unavailable.message()));
-        assert_eq!(fs::read_to_string(consent_path(&d)).unwrap(), text, "nothing written, nothing dropped");
+        assert_eq!(
+            fs::read_to_string(consent_path(&d)).unwrap(),
+            text,
+            "nothing written, nothing dropped"
+        );
 
         // It comes back: the grant is still there.
         store.set_available(true);
         use_key_store_for(&d, store.clone());
-        assert!(ConsentLedger::load(&d).destination_grant(HUB_DEST, &data).is_some());
+        assert!(ConsentLedger::load(&d)
+            .destination_grant(HUB_DEST, &data)
+            .is_some());
     }
 
     #[test]
@@ -563,7 +624,10 @@ mod tests {
         let ledger = ConsentLedger::load(&d);
         assert_eq!(ledger.locked(), None);
         assert_eq!(ledger.active().count(), 1, "existing grants still count");
-        assert!(!d.join(crate::harness::KEY_ID_FILE).exists(), "reading makes no key");
+        assert!(
+            !d.join(crate::harness::KEY_ID_FILE).exists(),
+            "reading makes no key"
+        );
 
         // Without a keyring even the old plaintext ledger reads as locked.
         store.set_available(false);
@@ -575,7 +639,11 @@ mod tests {
 
         assert_eq!(revoke_grant(&d, "g-0000000000aa"), Ok(true));
         let text = fs::read_to_string(consent_path(&d)).unwrap();
-        assert_eq!(text.lines().count(), 2, "the old line is kept, sealed in place\n{text}");
+        assert_eq!(
+            text.lines().count(),
+            2,
+            "the old line is kept, sealed in place\n{text}"
+        );
         assert!(text.lines().all(is_sealed_line), "{text}");
         let after = ConsentLedger::load(&d);
         assert_eq!(after.all().len(), 1);

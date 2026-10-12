@@ -18,8 +18,12 @@ use crate::gate::{Gate, PermAnswer, PermMode, PermitWait, Waited};
 use crate::{CancelToken, LoopEvent, LoopIn, ModelClient, SteerQueue, StopReason, Usage};
 
 /// The 4 one-tap fixes the card must offer.
-pub(super) const FIXES: [&str; 4] =
-    ["Fix port 53 conflict", "Reinstall 6 packages", "Investigate Bluetooth errors", "Explain all"];
+pub(super) const FIXES: [&str; 4] = [
+    "Fix port 53 conflict",
+    "Reinstall 6 packages",
+    "Investigate Bluetooth errors",
+    "Explain all",
+];
 
 const FIXTURES: &[(&str, &str)] = &[
     ("sudo", "#!/bin/sh\nexec \"$@\"\n"),
@@ -78,7 +82,11 @@ impl ScanModel {
 }
 
 fn call(id: &str, name: &str, arguments: &str) -> crate::client::FunctionCall {
-    crate::client::FunctionCall { call_id: id.into(), name: name.into(), arguments: arguments.into() }
+    crate::client::FunctionCall {
+        call_id: id.into(),
+        name: name.into(),
+        arguments: arguments.into(),
+    }
 }
 
 fn calls(calls: Vec<crate::client::FunctionCall>) -> TurnOutput {
@@ -92,8 +100,15 @@ fn calls(calls: Vec<crate::client::FunctionCall>) -> TurnOutput {
 }
 
 fn done(todos: &[&str]) -> crate::client::FunctionCall {
-    let rows: Vec<_> = todos.iter().map(|id| json!({"id": id, "status": "completed"})).collect();
-    call(&format!("done-{}", todos.join("-")), "todo_write", &json!({"merge": true, "todos": rows}).to_string())
+    let rows: Vec<_> = todos
+        .iter()
+        .map(|id| json!({"id": id, "status": "completed"}))
+        .collect();
+    call(
+        &format!("done-{}", todos.join("-")),
+        "todo_write",
+        &json!({"merge": true, "todos": rows}).to_string(),
+    )
 }
 
 impl ModelClient for ScanModel {
@@ -107,7 +122,10 @@ impl ModelClient for ScanModel {
         let n = self.n.fetch_add(1, Ordering::SeqCst);
         *self.seen.lock().unwrap_or_else(|e| e.into_inner()) = blob.clone();
         Ok(match n {
-            0 => calls(vec![call("plan", "todo_write", CHECKLIST), self.sh("svc", "sudo systemctl --failed")]),
+            0 => calls(vec![
+                call("plan", "todo_write", CHECKLIST),
+                self.sh("svc", "sudo systemctl --failed"),
+            ]),
             // The early stop from the session.
             1 => {
                 sink(StreamEvent::TextDelta("It's resolved.".into()));
@@ -122,8 +140,16 @@ impl ModelClient for ScanModel {
             3 => calls(vec![self.sh("sec", "sudo ufw status"), done(&["sec"])]),
             4 => {
                 // The card says only what the tools showed.
-                let owner = if blob.contains("users:((\"systemd-resolve\"") { "systemd-resolved owns it" } else { "cause unknown" };
-                let pkgs = if blob.contains("6 packages with missing files") { "6 packages have missing files" } else { "packages not checked" };
+                let owner = if blob.contains("users:((\"systemd-resolve\"") {
+                    "systemd-resolved owns it"
+                } else {
+                    "cause unknown"
+                };
+                let pkgs = if blob.contains("6 packages with missing files") {
+                    "6 packages have missing files"
+                } else {
+                    "packages not checked"
+                };
                 let card = json!({
                     "findings": [
                         {"severity": "high", "text": format!("nextdns can't bind port 53: {owner}")},
@@ -168,12 +194,23 @@ pub(super) fn system_scan_native() -> (&'static str, u32) {
     }
     // The PATH prefix must not hide the command from the hard classes, or
     // "no card" below would prove nothing.
-    let probe = |cmd| crate::harness::classify("run_terminal_command", &on_host(&bin.to_string_lossy(), cmd));
-    if probe("sudo reboot") == crate::harness::HardHit::None || probe("sudo systemctl --failed") != crate::harness::HardHit::None {
+    let probe = |cmd| {
+        crate::harness::classify(
+            "run_terminal_command",
+            &on_host(&bin.to_string_lossy(), cmd),
+        )
+    };
+    if probe("sudo reboot") == crate::harness::HardHit::None
+        || probe("sudo systemctl --failed") != crate::harness::HardHit::None
+    {
         let _ = std::fs::remove_dir_all(&dir);
         return ("failed: PATH prefix hides the command", 0);
     }
-    let model = ScanModel { bin: bin.to_string_lossy().into_owned(), n: AtomicUsize::new(0), seen: Mutex::new(String::new()) };
+    let model = ScanModel {
+        bin: bin.to_string_lossy().into_owned(),
+        n: AtomicUsize::new(0),
+        seen: Mutex::new(String::new()),
+    };
     let cards = CountCards(AtomicU32::new(0));
     let session = format!("eval-scan-{}", std::process::id());
     let policy = crate::perm::Policy::load(&dir);
@@ -190,7 +227,12 @@ pub(super) fn system_scan_native() -> (&'static str, u32) {
         cancel: &cancel,
         steer: &steer,
         halt: &super::NoHalt,
-        gate: Gate { mode: PermMode::Always, readonly_session: false, attended: true, desktop: false },
+        gate: Gate {
+            mode: PermMode::Always,
+            readonly_session: false,
+            attended: true,
+            desktop: false,
+        },
         desktop: None,
         permits: &cards,
         perms: Some(&policy),
@@ -219,7 +261,9 @@ pub(super) fn system_scan_native() -> (&'static str, u32) {
     let seen = model.seen.lock().unwrap_or_else(|e| e.into_inner()).clone();
     let todos = crate::session_tools::todos_for(&session);
     let _ = std::fs::remove_dir_all(&dir);
-    let card = card.as_deref().and_then(grokhub_core::findings::Findings::parse);
+    let card = card
+        .as_deref()
+        .and_then(grokhub_core::findings::Findings::parse);
     if out.stop != StopReason::EndTurn {
         ("failed: turn did not end", turns)
     } else if cards.0.load(Ordering::SeqCst) != 0 {
@@ -236,4 +280,3 @@ pub(super) fn system_scan_native() -> (&'static str, u32) {
         ("covered", turns)
     }
 }
-

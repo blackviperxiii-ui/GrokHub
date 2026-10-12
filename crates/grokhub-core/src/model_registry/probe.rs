@@ -27,13 +27,16 @@ pub const PROBE_REASONING_ALLOWANCE: u64 = 256;
 pub const PROBE_RETRY_MS: u64 = 24 * 60 * 60 * 1000;
 
 pub const PROBE_TOOL_NAME: &str = "probe_echo";
-pub const PROBE_TOOL_PROMPT: &str = "Call the probe_echo tool once with word set to ping. Do not write anything else.";
-pub const PROBE_JSON_PROMPT: &str = "Reply with a JSON object where a is \"ok\", b is 3 and c is true.";
+pub const PROBE_TOOL_PROMPT: &str =
+    "Call the probe_echo tool once with word set to ping. Do not write anything else.";
+pub const PROBE_JSON_PROMPT: &str =
+    "Reply with a JSON object where a is \"ok\", b is 3 and c is true.";
 pub const PROBE_SPEED_PROMPT: &str = "Count from 1 to 10, separated by spaces.";
 /// The cache check sends this exact prefix twice (a few thousand characters).
 pub const PROBE_CACHE_LINE: &str = "GrokHub probe cache line: the quick brown fox jumps over the lazy dog while seven calm owls count the stars above the quiet harbor. ";
 pub const PROBE_CACHE_REPEAT: usize = 24;
-pub const PROBE_CACHE_QUESTION: &str = "How many owls are in the line above? Answer with one number.";
+pub const PROBE_CACHE_QUESTION: &str =
+    "How many owls are in the line above? Answer with one number.";
 
 pub const FAIL_TOOL: &str = "Tool calls didn't come back in the right shape.";
 pub const FAIL_JSON: &str = "JSON mode broke.";
@@ -144,7 +147,13 @@ pub fn tool_call(model: &str, effort: Option<&str>) -> ProbeCall {
         "description": "Echo one fixed word.",
         "parameters": {"type": "object", "properties": {"word": {"type": "string"}}, "required": ["word"], "additionalProperties": false}
     }]);
-    ProbeCall { model: model.into(), effort: effort.map(str::to_string), kind: ProbeKind::Tool, body: b, timeout_secs: PROBE_TIMEOUT_SECS }
+    ProbeCall {
+        model: model.into(),
+        effort: effort.map(str::to_string),
+        kind: ProbeKind::Tool,
+        body: b,
+        timeout_secs: PROBE_TIMEOUT_SECS,
+    }
 }
 
 pub fn json_call(model: &str, effort: Option<&str>) -> ProbeCall {
@@ -160,7 +169,13 @@ pub fn json_call(model: &str, effort: Option<&str>) -> ProbeCall {
             "additionalProperties": false
         }
     }});
-    ProbeCall { model: model.into(), effort: effort.map(str::to_string), kind: ProbeKind::Json, body: b, timeout_secs: PROBE_TIMEOUT_SECS }
+    ProbeCall {
+        model: model.into(),
+        effort: effort.map(str::to_string),
+        kind: ProbeKind::Json,
+        body: b,
+        timeout_secs: PROBE_TIMEOUT_SECS,
+    }
 }
 
 pub fn cache_call(model: &str, effort: Option<&str>) -> ProbeCall {
@@ -168,7 +183,13 @@ pub fn cache_call(model: &str, effort: Option<&str>) -> ProbeCall {
         {"role": "system", "content": cache_prefix()},
         {"role": "user", "content": PROBE_CACHE_QUESTION}
     ]);
-    ProbeCall { model: model.into(), effort: effort.map(str::to_string), kind: ProbeKind::Cache, body: body(model, effort, input), timeout_secs: PROBE_TIMEOUT_SECS }
+    ProbeCall {
+        model: model.into(),
+        effort: effort.map(str::to_string),
+        kind: ProbeKind::Cache,
+        body: body(model, effort, input),
+        timeout_secs: PROBE_TIMEOUT_SECS,
+    }
 }
 
 pub fn speed_call(model: &str, effort: Option<&str>) -> ProbeCall {
@@ -189,11 +210,15 @@ pub fn estimate_input(call: &ProbeCall) -> u64 {
 fn tool_ok(reply: &ProbeReply) -> bool {
     reply.tool_calls.len() == 1
         && reply.tool_calls[0].0 == PROBE_TOOL_NAME
-        && serde_json::from_str::<Value>(&reply.tool_calls[0].1).ok().is_some_and(|v| v == json!({"word": "ping"}))
+        && serde_json::from_str::<Value>(&reply.tool_calls[0].1)
+            .ok()
+            .is_some_and(|v| v == json!({"word": "ping"}))
 }
 
 fn json_ok(reply: &ProbeReply) -> bool {
-    serde_json::from_str::<Value>(reply.text.trim()).ok().is_some_and(|v| v == json!({"a": "ok", "b": 3, "c": true}))
+    serde_json::from_str::<Value>(reply.text.trim())
+        .ok()
+        .is_some_and(|v| v == json!({"a": "ok", "b": 3, "c": true}))
 }
 
 /// The model's advertised efforts, lowest first (only names on the ladder).
@@ -252,7 +277,10 @@ pub fn run_probe(meta: &ModelMeta, cost: CostClass, env: ProbeEnv<'_>) -> ProbeR
         }
         let reply = match env.transport.send(call) {
             Ok(r) => r,
-            Err(_) => ProbeReply { status: 0, ..ProbeReply::default() },
+            Err(_) => ProbeReply {
+                status: 0,
+                ..ProbeReply::default()
+            },
         };
         out.calls += 1;
         out.tokens += reply.input_tokens + reply.output_tokens + reply.reasoning_tokens;
@@ -264,7 +292,11 @@ pub fn run_probe(meta: &ModelMeta, cost: CostClass, env: ProbeEnv<'_>) -> ProbeR
             break;
         }
         if !(200..300).contains(&reply.status) {
-            out.failure = Some(if reply.status == 0 { "The check couldn't reach it.".into() } else { format!("It answered HTTP {}.", reply.status) });
+            out.failure = Some(if reply.status == 0 {
+                "The check couldn't reach it.".into()
+            } else {
+                format!("It answered HTTP {}.", reply.status)
+            });
             break;
         }
         match call.kind {
@@ -293,14 +325,20 @@ pub fn run_probe(meta: &ModelMeta, cost: CostClass, env: ProbeEnv<'_>) -> ProbeR
                 effort: call.effort.clone().unwrap_or_else(|| "none".into()),
                 measured: "probe".into(),
                 reply_ms: Some(reply.latency_ms),
-                tokens_per_sec: (reply.latency_ms > 0).then(|| reply.output_tokens * 1000 / reply.latency_ms),
+                tokens_per_sec: (reply.latency_ms > 0)
+                    .then(|| reply.output_tokens * 1000 / reply.latency_ms),
             }),
             ProbeKind::Eval => {}
         }
     }
     for e in &efforts {
         if !out.efforts.iter().any(|t| &t.effort == e) {
-            out.efforts.push(EffortTiming { effort: e.clone(), measured: "passive".into(), reply_ms: None, tokens_per_sec: None });
+            out.efforts.push(EffortTiming {
+                effort: e.clone(),
+                measured: "passive".into(),
+                reply_ms: None,
+                tokens_per_sec: None,
+            });
         }
     }
     if out.failure.is_some() {
@@ -391,9 +429,19 @@ mod tests {
     }
 
     fn good(call: &ProbeCall) -> ProbeReply {
-        let mut r = ProbeReply { status: 200, latency_ms: 400, input_tokens: 60, output_tokens: 10, reasoning_tokens: 20, cost_ticks: 1_000, ..ProbeReply::default() };
+        let mut r = ProbeReply {
+            status: 200,
+            latency_ms: 400,
+            input_tokens: 60,
+            output_tokens: 10,
+            reasoning_tokens: 20,
+            cost_ticks: 1_000,
+            ..ProbeReply::default()
+        };
         match call.kind {
-            ProbeKind::Tool => r.tool_calls = vec![(PROBE_TOOL_NAME.into(), r#"{"word":"ping"}"#.into())],
+            ProbeKind::Tool => {
+                r.tool_calls = vec![(PROBE_TOOL_NAME.into(), r#"{"word":"ping"}"#.into())]
+            }
             ProbeKind::Json => r.text = r#"{"a":"ok","b":3,"c":true}"#.into(),
             ProbeKind::Cache => {
                 r.input_tokens = 900;
@@ -406,10 +454,19 @@ mod tests {
     }
 
     fn meta() -> ModelMeta {
-        ModelMeta { id: "grok-4.7".into(), efforts: Some(vec!["high".into(), "low".into(), "medium".into()]), ..ModelMeta::default() }
+        ModelMeta {
+            id: "grok-4.7".into(),
+            efforts: Some(vec!["high".into(), "low".into(), "medium".into()]),
+            ..ModelMeta::default()
+        }
     }
 
-    fn run(m: &ModelMeta, cost: CostClass, fake: &mut Fake, guard_ok: bool) -> (ProbeResult, u32, Vec<u64>, u32) {
+    fn run(
+        m: &ModelMeta,
+        cost: CostClass,
+        fake: &mut Fake,
+        guard_ok: bool,
+    ) -> (ProbeResult, u32, Vec<u64>, u32) {
         let mut guards = 0;
         let mut waits = Vec::new();
         let mut logged = 0;
@@ -419,33 +476,65 @@ mod tests {
         };
         let mut wait = |ms| waits.push(ms);
         let mut on_call = |_: &ProbeCall, _: &ProbeReply| logged += 1;
-        let r = run_probe(m, cost, ProbeEnv { transport: fake, guard: &mut guard, wait: &mut wait, on_call: &mut on_call });
+        let r = run_probe(
+            m,
+            cost,
+            ProbeEnv {
+                transport: fake,
+                guard: &mut guard,
+                wait: &mut wait,
+                on_call: &mut on_call,
+            },
+        );
         (r, guards, waits, logged)
     }
 
     #[test]
     fn a_good_model_passes_every_check_lowest_effort_first_with_one_guard_per_call() {
-        let mut fake = Fake { sent: Vec::new(), reply: Box::new(good) };
+        let mut fake = Fake {
+            sent: Vec::new(),
+            reply: Box::new(good),
+        };
         let (r, guards, waits, logged) = run(&meta(), CostClass::Included, &mut fake, true);
         assert_eq!(r.status, "ok");
-        assert_eq!((r.tool_call, r.json_mode, r.caching, r.cached_tokens), (Some(true), Some(true), Some(true), Some(768)));
+        assert_eq!(
+            (r.tool_call, r.json_mode, r.caching, r.cached_tokens),
+            (Some(true), Some(true), Some(true), Some(768))
+        );
         assert_eq!(fake.sent.len(), 7);
         assert_eq!(guards, 7);
         assert_eq!(logged, 7);
         assert_eq!(waits, vec![10_000; 6]);
         assert_eq!(fake.sent[0].effort.as_deref(), Some("low"));
-        let speed: Vec<_> = r.efforts.iter().map(|t| (t.effort.as_str(), t.measured.as_str())).collect();
-        assert_eq!(speed, vec![("low", "probe"), ("medium", "probe"), ("high", "probe")]);
+        let speed: Vec<_> = r
+            .efforts
+            .iter()
+            .map(|t| (t.effort.as_str(), t.measured.as_str()))
+            .collect();
+        assert_eq!(
+            speed,
+            vec![("low", "probe"), ("medium", "probe"), ("high", "probe")]
+        );
         assert_eq!(r.efforts[0].tokens_per_sec, Some(25));
         assert_eq!(r.tokens, 5 * 90 + 2 * 930);
         assert_eq!(r.cost_ticks, 7_000);
-        assert!(fake.sent.iter().all(|c| c.body["max_output_tokens"] == 64 && c.body["store"] == false));
+        assert!(fake
+            .sent
+            .iter()
+            .all(|c| c.body["max_output_tokens"] == 64 && c.body["store"] == false));
     }
 
     #[test]
     fn a_non_included_route_never_probes() {
-        for cost in [CostClass::Premium, CostClass::AutonomousPremium, CostClass::Unknown] {
-            let mut fake = Fake { sent: Vec::new(), reply: Box::new(good) };
+        for cost in [
+            CostClass::Premium,
+            CostClass::AutonomousPremium,
+            CostClass::Unknown,
+        ] {
+            let mut fake = Fake {
+                sent: Vec::new(),
+                reply: Box::new(good),
+            };
             let (r, guards, _, _) = run(&meta(), cost, &mut fake, true);
             assert_eq!(r.status, "not_run: cost_class");
             assert_eq!((fake.sent.len(), guards), (0, 0));
@@ -454,9 +543,15 @@ mod tests {
 
     #[test]
     fn a_refused_egress_sends_nothing() {
-        let mut fake = Fake { sent: Vec::new(), reply: Box::new(good) };
+        let mut fake = Fake {
+            sent: Vec::new(),
+            reply: Box::new(good),
+        };
         let (r, guards, _, _) = run(&meta(), CostClass::Included, &mut fake, false);
-        assert_eq!((r.status.as_str(), fake.sent.len(), guards), ("not_run: egress", 0, 1));
+        assert_eq!(
+            (r.status.as_str(), fake.sent.len(), guards),
+            ("not_run: egress", 0, 1)
+        );
     }
 
     #[test]
@@ -472,10 +567,16 @@ mod tests {
             }),
         };
         let (r, _, _, _) = run(&meta(), CostClass::Included, &mut fake, true);
-        assert_eq!((r.status.as_str(), r.tool_call, r.failure.as_deref()), ("failed", Some(false), Some(FAIL_TOOL)));
+        assert_eq!(
+            (r.status.as_str(), r.tool_call, r.failure.as_deref()),
+            ("failed", Some(false), Some(FAIL_TOOL))
+        );
         assert_eq!(fake.sent.len(), 1);
         let p = ModelProfile::build(&meta(), r, 1);
-        assert_eq!((p.usable, p.unusable_reason.as_deref()), (false, Some(FAIL_TOOL)));
+        assert_eq!(
+            (p.usable, p.unusable_reason.as_deref()),
+            (false, Some(FAIL_TOOL))
+        );
     }
 
     #[test]
@@ -490,19 +591,46 @@ mod tests {
                 r
             }),
         };
-        assert_eq!(run(&meta(), CostClass::Included, &mut fake, true).0.failure.as_deref(), Some(FAIL_JSON));
-        let mut slow = Fake { sent: Vec::new(), reply: Box::new(|c| ProbeReply { latency_ms: 30_001, ..good(c) }) };
-        assert_eq!(run(&meta(), CostClass::Included, &mut slow, true).0.failure.as_deref(), Some(FAIL_TIMEOUT));
+        assert_eq!(
+            run(&meta(), CostClass::Included, &mut fake, true)
+                .0
+                .failure
+                .as_deref(),
+            Some(FAIL_JSON)
+        );
+        let mut slow = Fake {
+            sent: Vec::new(),
+            reply: Box::new(|c| ProbeReply {
+                latency_ms: 30_001,
+                ..good(c)
+            }),
+        };
+        assert_eq!(
+            run(&meta(), CostClass::Included, &mut slow, true)
+                .0
+                .failure
+                .as_deref(),
+            Some(FAIL_TIMEOUT)
+        );
     }
 
     #[test]
     fn a_run_stops_before_crossing_the_token_cap_and_marks_the_rest_passive() {
-        let mut fake = Fake { sent: Vec::new(), reply: Box::new(|c| ProbeReply { reasoning_tokens: 1_400, ..good(c) }) };
+        let mut fake = Fake {
+            sent: Vec::new(),
+            reply: Box::new(|c| ProbeReply {
+                reasoning_tokens: 1_400,
+                ..good(c)
+            }),
+        };
         let (r, _, _, _) = run(&meta(), CostClass::Included, &mut fake, true);
         assert!(r.tokens <= PROBE_TOKEN_CAP_PER_RUN, "{}", r.tokens);
         assert!(fake.sent.len() < 7, "{}", fake.sent.len());
         assert_eq!(r.status, "ok");
-        assert!(r.efforts.iter().any(|t| t.measured == "passive" && t.reply_ms.is_none()));
+        assert!(r
+            .efforts
+            .iter()
+            .any(|t| t.measured == "passive" && t.reply_ms.is_none()));
     }
 
     #[test]
@@ -520,8 +648,17 @@ mod tests {
 
     #[test]
     fn probe_prompts_contain_no_user_data() {
-        let seeded = ["Viper's bank PIN is 4512", "sk-abcdefghijklmnopqrstuv", "meet Sam at 5pm", "MEMORY.md", "/home/"];
-        let mut fake = Fake { sent: Vec::new(), reply: Box::new(good) };
+        let seeded = [
+            "Viper's bank PIN is 4512",
+            "sk-abcdefghijklmnopqrstuv",
+            "meet Sam at 5pm",
+            "MEMORY.md",
+            "/home/",
+        ];
+        let mut fake = Fake {
+            sent: Vec::new(),
+            reply: Box::new(good),
+        };
         run(&meta(), CostClass::Included, &mut fake, true);
         let wire: String = fake.sent.iter().map(|c| c.body.to_string()).collect();
         for s in seeded {

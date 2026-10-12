@@ -493,7 +493,11 @@ pub const SPAN_TAIL_BYTES: u64 = 4 * 1024 * 1024;
 /// how many lines were read. Only the last [`SPAN_TAIL_BYTES`] of the file are
 /// read. Unlike [`read_spans`], a line that is not a span is skipped, so one
 /// bad line never hides a whole file from search.
-pub fn read_spans_tail(config_dir: &Path, session_id: &str, max_lines: usize) -> (Vec<Span>, usize) {
+pub fn read_spans_tail(
+    config_dir: &Path,
+    session_id: &str,
+    max_lines: usize,
+) -> (Vec<Span>, usize) {
     use std::io::{Read, Seek, SeekFrom};
     let Ok(mut file) = fs::File::open(span_path(config_dir, session_id)) else {
         return (Vec::new(), 0);
@@ -568,8 +572,18 @@ mod tests {
             "Logged in with hunter2222 and key sk-abcdefghijklmnopqrstuv, then done.",
             &["hunter2222".into()],
         );
-        assert_eq!(s.claim, "Logged in with [redacted] and key [redacted], then done.");
-        assert_eq!((s.tool.as_str(), s.decision.as_str(), s.args_redacted.as_str()), (REPLY_TOOL, "say", "{}"));
+        assert_eq!(
+            s.claim,
+            "Logged in with [redacted] and key [redacted], then done."
+        );
+        assert_eq!(
+            (
+                s.tool.as_str(),
+                s.decision.as_str(),
+                s.args_redacted.as_str()
+            ),
+            (REPLY_TOOL, "say", "{}")
+        );
         let long = Span::reply("chat-r", &"a".repeat(CLAIM_CAP + 50), &[]);
         assert_eq!(long.claim.chars().count(), CLAIM_CAP);
         let r = redact_args(r#"{"passcode":"9911","verification_code":"424242"}"#);
@@ -632,7 +646,11 @@ mod tests {
         write_turn_context(&dir, &ctx).unwrap();
         assert_eq!(read_turn_context(&dir), ctx);
         // A turn file from before Spike-4c has no origin: it reads as the user's.
-        fs::write(turn_context_path(&dir), r#"{"chat_id":"chat-1","turn":2,"access":"supervised"}"#).unwrap();
+        fs::write(
+            turn_context_path(&dir),
+            r#"{"chat_id":"chat-1","turn":2,"access":"supervised"}"#,
+        )
+        .unwrap();
         assert_eq!(read_turn_context(&dir).origin, Origin::User);
     }
 
@@ -680,18 +698,41 @@ mod tests {
         assert_eq!(got[0].path, "A");
         assert_eq!(got[0].ui_changed, Some(true));
 
-        let tagged = Span::soft_allow("chat-old", "hub_sync", "{}", "sent", "c", AccessMode::Readonly, "none")
-            .from_origin(Origin::Automation)
-            .with_consent("g-0123456789ab");
+        let tagged = Span::soft_allow(
+            "chat-old",
+            "hub_sync",
+            "{}",
+            "sent",
+            "c",
+            AccessMode::Readonly,
+            "none",
+        )
+        .from_origin(Origin::Automation)
+        .with_consent("g-0123456789ab");
         let line = serde_json::to_string(&tagged).unwrap();
-        assert!(line.ends_with(r#","origin":"automation","consent_ref":"g-0123456789ab"}"#), "{line}");
+        assert!(
+            line.ends_with(r#","origin":"automation","consent_ref":"g-0123456789ab"}"#),
+            "{line}"
+        );
         let back: Span = serde_json::from_str(&line).unwrap();
         assert_eq!(back, tagged);
         assert_eq!(tagged.span_ref(), format!("chat-old:{}", tagged.ts_ms));
         // Spike-2b: a click span adds its target and rule; nothing else changes.
-        let click = Span::soft_allow("chat-old", "click", "{}", "parked", "c", AccessMode::Full, "cua").with_target("ax", "send:Send");
+        let click = Span::soft_allow(
+            "chat-old",
+            "click",
+            "{}",
+            "parked",
+            "c",
+            AccessMode::Full,
+            "cua",
+        )
+        .with_target("ax", "send:Send");
         let line = serde_json::to_string(&click).unwrap();
-        assert!(line.ends_with(r#","consent_ref":"","target":"ax","target_rule":"send:Send"}"#), "{line}");
+        assert!(
+            line.ends_with(r#","consent_ref":"","target":"ax","target_rule":"send:Send"}"#),
+            "{line}"
+        );
         assert_eq!(serde_json::from_str::<Span>(&line).unwrap(), click);
     }
 }

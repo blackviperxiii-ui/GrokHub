@@ -246,8 +246,8 @@ mod tests {
                     reasoning: String::new(),
                     calls: Vec::new(),
                     usage: Usage::default(),
-            ..Default::default()
-        });
+                    ..Default::default()
+                });
             }
             let n = self.n.fetch_add(1, Ordering::SeqCst);
             if n == 0 {
@@ -292,8 +292,8 @@ mod tests {
                         },
                     ],
                     usage: Usage::default(),
-            ..Default::default()
-        });
+                    ..Default::default()
+                });
             }
             *self
                 .final_blob
@@ -311,8 +311,8 @@ mod tests {
                     cost_in_usd_ticks: 1,
                     cached_tokens: 0,
                 },
-            ..Default::default()
-        })
+                ..Default::default()
+            })
         }
     }
 
@@ -429,8 +429,8 @@ mod tests {
                     reasoning: String::new(),
                     calls: Vec::new(),
                     usage: Usage::default(),
-            ..Default::default()
-        });
+                    ..Default::default()
+                });
             }
             let n = self.n.fetch_add(1, Ordering::SeqCst);
             if n == 0 {
@@ -443,8 +443,8 @@ mod tests {
                         arguments: r#"{"path":"note.txt","content":"yes"}"#.into(),
                     }],
                     usage: Usage::default(),
-            ..Default::default()
-        });
+                    ..Default::default()
+                });
             }
             *self
                 .final_blob
@@ -456,8 +456,8 @@ mod tests {
                 reasoning: String::new(),
                 calls: Vec::new(),
                 usage: Usage::default(),
-            ..Default::default()
-        })
+                ..Default::default()
+            })
         }
     }
 
@@ -558,8 +558,8 @@ mod tests {
                     cost_in_usd_ticks: 42,
                     cached_tokens: 0,
                 },
-            ..Default::default()
-        })
+                ..Default::default()
+            })
         }
     }
 
@@ -579,8 +579,8 @@ mod tests {
                 reasoning: String::new(),
                 calls: Vec::new(),
                 usage: Usage::default(),
-            ..Default::default()
-        })
+                ..Default::default()
+            })
         }
     }
 
@@ -725,7 +725,11 @@ mod tests {
             let n = self.n.fetch_add(1, Ordering::SeqCst);
             *self.last_blob.lock().unwrap() = blob(req);
             if n < self.tools {
-                let path = if self.same { "p".to_string() } else { format!("p{n}") };
+                let path = if self.same {
+                    "p".to_string()
+                } else {
+                    format!("p{n}")
+                };
                 return Ok(TurnOutput {
                     text: String::new(),
                     reasoning: String::new(),
@@ -735,8 +739,8 @@ mod tests {
                         arguments: format!(r#"{{"path":"{path}"}}"#),
                     }],
                     usage: Usage::default(),
-            ..Default::default()
-        });
+                    ..Default::default()
+                });
             }
             sink(StreamEvent::TextDelta("chore done".into()));
             Ok(TurnOutput {
@@ -744,8 +748,8 @@ mod tests {
                 reasoning: String::new(),
                 calls: Vec::new(),
                 usage: Usage::default(),
-            ..Default::default()
-        })
+                ..Default::default()
+            })
         }
     }
 
@@ -757,7 +761,12 @@ mod tests {
             n: AtomicUsize::new(0),
             last_blob: Mutex::new(String::new()),
         });
-        let done = run_in(&dir, PermMode::Ask, client.clone(), Arc::new(AtomicUsize::new(0)));
+        let done = run_in(
+            &dir,
+            PermMode::Ask,
+            client.clone(),
+            Arc::new(AtomicUsize::new(0)),
+        );
         let _ = std::fs::remove_dir_all(&dir);
         (done, client)
     }
@@ -778,7 +787,11 @@ mod tests {
         assert_eq!(done.text, "chore done");
         assert_eq!(client.n.load(Ordering::SeqCst), 7);
         let last = client.last_blob.lock().unwrap().clone();
-        assert_eq!(last.matches(crate::REPEAT_REPLAN).count(), 4, "calls 3 to 6 re-plan: {last}");
+        assert_eq!(
+            last.matches(crate::REPEAT_REPLAN).count(),
+            4,
+            "calls 3 to 6 re-plan: {last}"
+        );
         assert_eq!((done.permission_cards, done.elicit_cards), (0, 0));
     }
 }

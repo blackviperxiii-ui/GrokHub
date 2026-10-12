@@ -32,14 +32,20 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use zeroize::Zeroizing;
 
-use grokhub_core::model_registry::discover::{parse_anthropic_catalog, parse_openai_compatible_catalog, split_provider_model};
+use grokhub_core::model_registry::discover::{
+    parse_anthropic_catalog, parse_openai_compatible_catalog, split_provider_model,
+};
 use grokhub_core::model_registry::store::{models_dir, read_json, write_json};
 use grokhub_core::model_registry::{CatalogSource, Listing, SourceKind};
 
 use crate::client::{
-    map_http_status, AuthKind, ClientError, ContentPart, FunctionCall, InputItem, ResponsesRequest, TurnOutput, Usage, USER_AGENT,
+    map_http_status, AuthKind, ClientError, ContentPart, FunctionCall, InputItem, ResponsesRequest,
+    TurnOutput, Usage, USER_AGENT,
 };
-use crate::harness::{egress_dest, guard_provider, is_model_host, provider_or_park, ConsentLedger, DataClass, EgressReq, GateOutcome};
+use crate::harness::{
+    egress_dest, guard_provider, is_model_host, provider_or_park, ConsentLedger, DataClass,
+    EgressReq, GateOutcome,
+};
 use crate::CancelToken;
 
 /// `{config}/models/providers.json`: id, kind and base URL only. No key.
@@ -51,7 +57,8 @@ pub const KEY_SERVICE: &str = "GrokHub provider keys";
 /// What a provider call carries: chat plus memory, like every native model call.
 pub const CALL_DATA: &[DataClass] = &[DataClass::Chat, DataClass::Personal];
 /// The same with the step's data marked sensitive.
-pub const CALL_DATA_SENSITIVE: &[DataClass] = &[DataClass::Chat, DataClass::Personal, DataClass::Sensitive];
+pub const CALL_DATA_SENSITIVE: &[DataClass] =
+    &[DataClass::Chat, DataClass::Personal, DataClass::Sensitive];
 /// Anthropic's API version header.
 pub const ANTHROPIC_VERSION: &str = "2023-06-01";
 /// Anthropic requires `max_tokens`; this is used when the listing gives none.
@@ -133,9 +140,14 @@ impl Provider {
 
     /// The auth headers. Built at send time from the keyring; never logged.
     fn headers(&self, key: &str) -> Vec<(String, String)> {
-        let mut h = vec![("User-Agent".to_string(), USER_AGENT.to_string()), ("Content-Type".into(), "application/json".into())];
+        let mut h = vec![
+            ("User-Agent".to_string(), USER_AGENT.to_string()),
+            ("Content-Type".into(), "application/json".into()),
+        ];
         match self.kind {
-            ProviderKind::OpenAiCompatible => h.push(("Authorization".into(), format!("Bearer {key}"))),
+            ProviderKind::OpenAiCompatible => {
+                h.push(("Authorization".into(), format!("Bearer {key}")))
+            }
             ProviderKind::Anthropic => {
                 h.push(("x-api-key".into(), key.to_string()));
                 h.push(("anthropic-version".into(), ANTHROPIC_VERSION.into()));
@@ -163,10 +175,22 @@ pub fn parse_base_url(raw: &str) -> Result<(String, ProviderKind, String), Strin
     if is_model_host(&host) {
         return Err("xAI is already built in.".into());
     }
-    let kind = if host == "anthropic.com" || host.ends_with(".anthropic.com") { ProviderKind::Anthropic } else { ProviderKind::OpenAiCompatible };
+    let kind = if host == "anthropic.com" || host.ends_with(".anthropic.com") {
+        ProviderKind::Anthropic
+    } else {
+        ProviderKind::OpenAiCompatible
+    };
     let labels: Vec<&str> = host.split('.').collect();
-    let name = labels.iter().copied().find(|l| !matches!(*l, "api" | "www" | "gateway")).unwrap_or(labels[0]);
-    let id: String = name.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '-').collect::<String>().to_ascii_lowercase();
+    let name = labels
+        .iter()
+        .copied()
+        .find(|l| !matches!(*l, "api" | "www" | "gateway"))
+        .unwrap_or(labels[0]);
+    let id: String = name
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '-')
+        .collect::<String>()
+        .to_ascii_lowercase();
     if id.is_empty() || RESERVED_IDS.contains(&id.as_str()) {
         return Err("That provider name is reserved.".into());
     }
@@ -185,21 +209,35 @@ pub fn providers_path(config_dir: &Path) -> PathBuf {
 
 /// The providers you added, oldest first. None on a fresh config.
 pub fn load_providers(config_dir: &Path) -> Vec<Provider> {
-    read_json::<ProviderList>(&providers_path(config_dir)).map(|l| l.providers).unwrap_or_default()
+    read_json::<ProviderList>(&providers_path(config_dir))
+        .map(|l| l.providers)
+        .unwrap_or_default()
 }
 
 fn save_providers(config_dir: &Path, providers: &[Provider]) -> Result<(), String> {
-    write_json(&providers_path(config_dir), &ProviderList { providers: providers.to_vec() })
+    write_json(
+        &providers_path(config_dir),
+        &ProviderList {
+            providers: providers.to_vec(),
+        },
+    )
 }
 
 pub fn provider(config_dir: &Path, id: &str) -> Option<Provider> {
-    load_providers(config_dir).into_iter().find(|p| p.id == id.trim())
+    load_providers(config_dir)
+        .into_iter()
+        .find(|p| p.id == id.trim())
 }
 
 /// Settings → "Add a provider": the key goes into the keyring first; only if
 /// that worked is the provider (no key) saved. Adding sends nothing: the
 /// destination is allowed separately, on a hard send card.
-pub fn add_provider(config_dir: &Path, base_url: &str, key: &str, now_ms: u64) -> Result<Provider, String> {
+pub fn add_provider(
+    config_dir: &Path,
+    base_url: &str,
+    key: &str,
+    now_ms: u64,
+) -> Result<Provider, String> {
     add_provider_as(config_dir, base_url, key, None, now_ms)
 }
 
@@ -214,14 +252,27 @@ pub fn check_key(key: &str) -> Result<&str, String> {
 
 /// [`add_provider`] with the API shape you picked; `None` detects it from the host.
 /// A proxy that speaks Anthropic's API under another host needs the pick.
-pub fn add_provider_as(config_dir: &Path, base_url: &str, key: &str, kind: Option<ProviderKind>, now_ms: u64) -> Result<Provider, String> {
+pub fn add_provider_as(
+    config_dir: &Path,
+    base_url: &str,
+    key: &str,
+    kind: Option<ProviderKind>,
+    now_ms: u64,
+) -> Result<Provider, String> {
     let (url, detected, id) = parse_base_url(base_url)?;
     let kind = kind.unwrap_or(detected);
     let key = check_key(key)?;
-    vault_for(config_dir).ok_or_else(|| "The keyring isn't available, so the key wasn't saved.".to_string())?.set(&id, key)?;
+    vault_for(config_dir)
+        .ok_or_else(|| "The keyring isn't available, so the key wasn't saved.".to_string())?
+        .set(&id, key)?;
     forget_key_cache(config_dir, &id);
     let mut all = load_providers(config_dir);
-    let p = Provider { id: id.clone(), kind, base_url: url, added_at: now_ms };
+    let p = Provider {
+        id: id.clone(),
+        kind,
+        base_url: url,
+        added_at: now_ms,
+    };
     match all.iter_mut().find(|x| x.id == id) {
         Some(slot) => *slot = p.clone(),
         None => all.push(p.clone()),
@@ -248,7 +299,10 @@ const OPENROUTER_AUTH: &str = "https://openrouter.ai/auth";
 const OPENROUTER_KEYS: &str = "https://openrouter.ai/api/v1/auth/keys";
 
 fn host_is(host: &str, domain: &str) -> bool {
-    host == domain || host.strip_suffix(domain).is_some_and(|rest| rest.ends_with('.'))
+    host == domain
+        || host
+            .strip_suffix(domain)
+            .is_some_and(|rest| rest.ends_with('.'))
 }
 
 /// Where a known provider hands out API keys, from its address. `None` for
@@ -257,7 +311,10 @@ pub fn key_page(base_url: &str) -> Option<&'static str> {
     let host = egress_dest(base_url);
     [
         ("openai.com", "https://platform.openai.com/api-keys"),
-        ("anthropic.com", "https://console.anthropic.com/settings/keys"),
+        (
+            "anthropic.com",
+            "https://console.anthropic.com/settings/keys",
+        ),
         ("openrouter.ai", "https://openrouter.ai/settings/keys"),
         ("groq.com", "https://console.groq.com/keys"),
         ("mistral.ai", "https://console.mistral.ai/api-keys"),
@@ -270,7 +327,11 @@ pub fn key_page(base_url: &str) -> Option<&'static str> {
 
 /// OpenRouter's browser sign-in page (its OAuth PKCE flow) with our loopback.
 pub fn openrouter_auth_url(callback: &str, challenge: &str) -> String {
-    let query = grokhub_core::pkce::form(&[("callback_url", callback), ("code_challenge", challenge), ("code_challenge_method", "S256")]);
+    let query = grokhub_core::pkce::form(&[
+        ("callback_url", callback),
+        ("code_challenge", challenge),
+        ("code_challenge_method", "S256"),
+    ]);
     format!("{OPENROUTER_AUTH}?{query}")
 }
 
@@ -278,20 +339,40 @@ pub fn openrouter_auth_url(callback: &str, challenge: &str) -> String {
 /// new key. Nothing is saved here: the cabin asks you on a credentials card
 /// first. OpenRouter sends no `state`; the code only buys a key together with
 /// this verifier (PKCE), and the exchange carries no user data.
-pub fn openrouter_key(config_dir: &Path, open: &dyn Fn(&str) -> Result<(), String>, wait: Duration) -> Result<Zeroizing<String>, String> {
+pub fn openrouter_key(
+    config_dir: &Path,
+    open: &dyn Fn(&str) -> Result<(), String>,
+    wait: Duration,
+) -> Result<Zeroizing<String>, String> {
     let (listener, redirect) = crate::loopback::bind()?;
     let verifier = grokhub_core::pkce::pkce_verifier();
-    open(&openrouter_auth_url(&redirect, &grokhub_core::pkce::pkce_challenge(&verifier)))?;
+    open(&openrouter_auth_url(
+        &redirect,
+        &grokhub_core::pkce::pkce_challenge(&verifier),
+    ))?;
     let code = crate::loopback::wait_code(&listener, "", "OpenRouter sign-in", wait)?;
     crate::harness::guard_quiet(config_dir, &EgressReq::new(OPENROUTER_KEYS, &[]))?;
-    let body = json!({"code": code, "code_verifier": verifier, "code_challenge_method": "S256"}).to_string();
-    let headers = [("User-Agent".to_string(), USER_AGENT.to_string()), ("Content-Type".into(), "application/json".into())];
+    let body = json!({"code": code, "code_verifier": verifier, "code_challenge_method": "S256"})
+        .to_string();
+    let headers = [
+        ("User-Agent".to_string(), USER_AGENT.to_string()),
+        ("Content-Type".into(), "application/json".into()),
+    ];
     let r = transport_for(config_dir).post(OPENROUTER_KEYS, &headers, &body)?;
     if !(200..300).contains(&r.status) {
-        return Err(format!("OpenRouter didn't hand over a key (HTTP {})", r.status));
+        return Err(format!(
+            "OpenRouter didn't hand over a key (HTTP {})",
+            r.status
+        ));
     }
-    let v: Value = serde_json::from_str(&r.body).map_err(|_| "OpenRouter's answer had no key".to_string())?;
-    let key = v.get("key").and_then(Value::as_str).map(str::trim).filter(|k| !k.is_empty()).ok_or("OpenRouter's answer had no key")?;
+    let v: Value =
+        serde_json::from_str(&r.body).map_err(|_| "OpenRouter's answer had no key".to_string())?;
+    let key = v
+        .get("key")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|k| !k.is_empty())
+        .ok_or("OpenRouter's answer had no key")?;
     Ok(Zeroizing::new(key.to_string()))
 }
 
@@ -337,11 +418,20 @@ pub struct MemoryVault(Mutex<BTreeMap<String, String>>);
 
 impl KeyVault for MemoryVault {
     fn get(&self, id: &str) -> Result<Option<Zeroizing<String>>, String> {
-        Ok(self.0.lock().unwrap_or_else(|e| e.into_inner()).get(id).cloned().map(Zeroizing::new))
+        Ok(self
+            .0
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(id)
+            .cloned()
+            .map(Zeroizing::new))
     }
 
     fn set(&self, id: &str, key: &str) -> Result<(), String> {
-        self.0.lock().unwrap_or_else(|e| e.into_inner()).insert(id.to_string(), key.to_string());
+        self.0
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(id.to_string(), key.to_string());
         Ok(())
     }
 
@@ -368,21 +458,41 @@ pub fn use_vault_for(config_dir: &Path, vault: Arc<dyn KeyVault>) {
     let mut v = VAULTS.lock().unwrap_or_else(|e| e.into_inner());
     v.retain(|(d, _)| d != config_dir);
     v.push((config_dir.to_path_buf(), vault));
-    HAS_KEY.lock().unwrap_or_else(|e| e.into_inner()).retain(|(d, _), _| d != config_dir);
+    HAS_KEY
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .retain(|(d, _), _| d != config_dir);
 }
 
 fn vault_for(config_dir: &Path) -> Option<Arc<dyn KeyVault>> {
-    let over = VAULTS.lock().unwrap_or_else(|e| e.into_inner()).iter().find(|(d, _)| d == config_dir).map(|(_, v)| v.clone());
-    over.or_else(|| DEFAULT_VAULT.lock().unwrap_or_else(|e| e.into_inner()).clone())
+    let over = VAULTS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .iter()
+        .find(|(d, _)| d == config_dir)
+        .map(|(_, v)| v.clone());
+    over.or_else(|| {
+        DEFAULT_VAULT
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    })
 }
 
 fn forget_key_cache(config_dir: &Path, id: &str) {
-    HAS_KEY.lock().unwrap_or_else(|e| e.into_inner()).remove(&(config_dir.to_path_buf(), id.to_string()));
+    HAS_KEY
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .remove(&(config_dir.to_path_buf(), id.to_string()));
 }
 
 fn key(config_dir: &Path, id: &str) -> Option<Zeroizing<String>> {
     let _lap = crate::timing::lap("route:provider_key_read");
-    vault_for(config_dir)?.get(id).ok().flatten().filter(|k| !k.trim().is_empty())
+    vault_for(config_dir)?
+        .get(id)
+        .ok()
+        .flatten()
+        .filter(|k| !k.trim().is_empty())
 }
 
 /// A key for this provider is in the keyring.
@@ -392,7 +502,10 @@ pub fn has_key(config_dir: &Path, id: &str) -> bool {
         return *have;
     }
     let have = key(config_dir, id).is_some();
-    HAS_KEY.lock().unwrap_or_else(|e| e.into_inner()).insert(slot, have);
+    HAS_KEY
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(slot, have);
     have
 }
 
@@ -421,7 +534,9 @@ pub fn usable(config_dir: &Path, data: &[DataClass]) -> Vec<String> {
         return Vec::new();
     }
     all.into_iter()
-        .filter(|p| ledger.destination_grant(&p.dest(), data).is_some() && has_key(config_dir, &p.id))
+        .filter(|p| {
+            ledger.destination_grant(&p.dest(), data).is_some() && has_key(config_dir, &p.id)
+        })
         .map(|p| p.id)
         .collect()
 }
@@ -469,14 +584,22 @@ pub struct HttpReply {
 /// How provider requests leave. Tests use a counting fake: zero network.
 pub trait ProviderTransport: Send + Sync {
     fn get(&self, url: &str, headers: &[(String, String)]) -> Result<HttpReply, String>;
-    fn post(&self, url: &str, headers: &[(String, String)], body: &str) -> Result<HttpReply, String>;
+    fn post(
+        &self,
+        url: &str,
+        headers: &[(String, String)],
+        body: &str,
+    ) -> Result<HttpReply, String>;
 }
 
 /// The real wire. Every call reaches it only after [`guard_provider`].
 pub struct UreqTransport;
 
 fn agent() -> ureq::Agent {
-    ureq::AgentBuilder::new().timeout_connect(Duration::from_secs(20)).timeout(Duration::from_secs(600)).build()
+    ureq::AgentBuilder::new()
+        .timeout_connect(Duration::from_secs(20))
+        .timeout(Duration::from_secs(600))
+        .build()
 }
 
 fn reply(r: Result<ureq::Response, ureq::Error>) -> Result<HttpReply, String> {
@@ -487,7 +610,10 @@ fn reply(r: Result<ureq::Response, ureq::Error>) -> Result<HttpReply, String> {
     };
     let status = resp.status();
     let mut body = String::new();
-    resp.into_reader().take(BODY_CAP).read_to_string(&mut body).map_err(|e| e.to_string())?;
+    resp.into_reader()
+        .take(BODY_CAP)
+        .read_to_string(&mut body)
+        .map_err(|e| e.to_string())?;
     Ok(HttpReply { status, body })
 }
 
@@ -500,7 +626,12 @@ impl ProviderTransport for UreqTransport {
         reply(req.call())
     }
 
-    fn post(&self, url: &str, headers: &[(String, String)], body: &str) -> Result<HttpReply, String> {
+    fn post(
+        &self,
+        url: &str,
+        headers: &[(String, String)],
+        body: &str,
+    ) -> Result<HttpReply, String> {
         let mut req = agent().post(url);
         for (k, v) in headers {
             req = req.set(k, v);
@@ -532,7 +663,12 @@ pub fn use_transport_for(config_dir: &Path, t: Arc<dyn ProviderTransport>) {
 }
 
 fn transport_for(config_dir: &Path) -> Arc<dyn ProviderTransport> {
-    let over = TRANSPORTS.lock().unwrap_or_else(|e| e.into_inner()).iter().find(|(d, _)| d == config_dir).map(|(_, t)| t.clone());
+    let over = TRANSPORTS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .iter()
+        .find(|(d, _)| d == config_dir)
+        .map(|(_, t)| t.clone());
     match over {
         Some(t) => t,
         None if cfg!(test) => Arc::new(NoNetwork),
@@ -553,7 +689,13 @@ pub struct ProviderSource {
 
 /// One source per provider you added.
 pub fn sources(config_dir: &Path) -> Vec<ProviderSource> {
-    load_providers(config_dir).into_iter().map(|provider| ProviderSource { config_dir: config_dir.to_path_buf(), provider }).collect()
+    load_providers(config_dir)
+        .into_iter()
+        .map(|provider| ProviderSource {
+            config_dir: config_dir.to_path_buf(),
+            provider,
+        })
+        .collect()
 }
 
 impl CatalogSource for ProviderSource {
@@ -565,7 +707,9 @@ impl CatalogSource for ProviderSource {
         let p = &self.provider;
         let key = key(&self.config_dir, &p.id).ok_or_else(|| format!("{}: no key", p.id))?;
         let url = p.models_url();
-        if let GateOutcome::Park { reason, .. } | GateOutcome::Refuse { reason } = guard_provider(&self.config_dir, &EgressReq::new(&url, &[])) {
+        if let GateOutcome::Park { reason, .. } | GateOutcome::Refuse { reason } =
+            guard_provider(&self.config_dir, &EgressReq::new(&url, &[]))
+        {
             return Err(format!("{}: {reason}", p.id));
         }
         let r = transport_for(&self.config_dir).get(&url, &p.headers(&key))?;
@@ -594,7 +738,9 @@ fn texts(content: &[ContentPart]) -> String {
 }
 
 fn has_image(content: &[ContentPart]) -> bool {
-    content.iter().any(|c| matches!(c, ContentPart::InputImage(_)))
+    content
+        .iter()
+        .any(|c| matches!(c, ContentPart::InputImage(_)))
 }
 
 /// A Responses function tool (`{"type":"function","name",…}`) as its name,
@@ -603,10 +749,17 @@ fn function_tool(t: &Value) -> Option<(String, String, Value)> {
     if t["type"].as_str() != Some("function") {
         return None;
     }
-    let f = if t.get("function").is_some() { &t["function"] } else { t };
+    let f = if t.get("function").is_some() {
+        &t["function"]
+    } else {
+        t
+    };
     let name = f["name"].as_str()?.to_string();
     let desc = f["description"].as_str().unwrap_or("").to_string();
-    let params = f.get("parameters").cloned().unwrap_or_else(|| json!({"type": "object", "properties": {}}));
+    let params = f
+        .get("parameters")
+        .cloned()
+        .unwrap_or_else(|| json!({"type": "object", "properties": {}}));
     Some((name, desc, params))
 }
 
@@ -616,14 +769,20 @@ pub fn openai_body(model: &str, effort: Option<&str>, req: &ResponsesRequest) ->
     for item in &req.input {
         match item {
             InputItem::Message { role, content } => {
-                let role = if matches!(role.as_str(), "system" | "developer") { "system" } else { role.as_str() };
+                let role = if matches!(role.as_str(), "system" | "developer") {
+                    "system"
+                } else {
+                    role.as_str()
+                };
                 let content = if has_image(content) {
                     Value::Array(
                         content
                             .iter()
                             .map(|c| match c {
                                 ContentPart::InputText(t) => json!({"type": "text", "text": t}),
-                                ContentPart::InputImage(u) => json!({"type": "image_url", "image_url": {"url": u}}),
+                                ContentPart::InputImage(u) => {
+                                    json!({"type": "image_url", "image_url": {"url": u}})
+                                }
                             })
                             .collect(),
                     )
@@ -632,7 +791,11 @@ pub fn openai_body(model: &str, effort: Option<&str>, req: &ResponsesRequest) ->
                 };
                 messages.push(json!({"role": role, "content": content}));
             }
-            InputItem::FunctionCall { call_id, name, arguments } => {
+            InputItem::FunctionCall {
+                call_id,
+                name,
+                arguments,
+            } => {
                 let call = json!({"id": call_id, "type": "function", "function": {"name": name, "arguments": arguments}});
                 match messages.last_mut() {
                     Some(m) if m["role"] == "assistant" && m.get("tool_calls").is_some() => {
@@ -640,7 +803,9 @@ pub fn openai_body(model: &str, effort: Option<&str>, req: &ResponsesRequest) ->
                             calls.push(call);
                         }
                     }
-                    _ => messages.push(json!({"role": "assistant", "content": Value::Null, "tool_calls": [call]})),
+                    _ => messages.push(
+                        json!({"role": "assistant", "content": Value::Null, "tool_calls": [call]}),
+                    ),
                 }
             }
             InputItem::FunctionCallOutput { call_id, output } => {
@@ -658,7 +823,10 @@ pub fn openai_body(model: &str, effort: Option<&str>, req: &ResponsesRequest) ->
     if !tools.is_empty() {
         body["tools"] = Value::Array(tools);
     }
-    if let Some(e) = effort.map(str::trim).filter(|e| !e.is_empty() && *e != "none") {
+    if let Some(e) = effort
+        .map(str::trim)
+        .filter(|e| !e.is_empty() && *e != "none")
+    {
         body["reasoning"] = json!({"effort": e});
     }
     body
@@ -666,7 +834,10 @@ pub fn openai_body(model: &str, effort: Option<&str>, req: &ResponsesRequest) ->
 
 fn anthropic_image(url: &str) -> Value {
     // `data:image/png;base64,…` goes inline; anything else by URL.
-    if let Some((head, data)) = url.strip_prefix("data:").and_then(|r| r.split_once(";base64,")) {
+    if let Some((head, data)) = url
+        .strip_prefix("data:")
+        .and_then(|r| r.split_once(";base64,"))
+    {
         return json!({"type": "image", "source": {"type": "base64", "media_type": head, "data": data}});
     }
     json!({"type": "image", "source": {"type": "url", "url": url}})
@@ -685,14 +856,27 @@ fn push_block(messages: &mut Vec<Value>, role: &str, block: Value) {
 }
 
 /// Anthropic `/v1/messages`. Effort is `output_config.effort`.
-pub fn anthropic_body(model: &str, effort: Option<&str>, req: &ResponsesRequest, max_output: Option<u64>) -> Value {
+pub fn anthropic_body(
+    model: &str,
+    effort: Option<&str>,
+    req: &ResponsesRequest,
+    max_output: Option<u64>,
+) -> Value {
     let mut system: Vec<String> = Vec::new();
     let mut messages: Vec<Value> = Vec::new();
     for item in &req.input {
         match item {
-            InputItem::Message { role, content } if matches!(role.as_str(), "system" | "developer") => system.push(texts(content)),
+            InputItem::Message { role, content }
+                if matches!(role.as_str(), "system" | "developer") =>
+            {
+                system.push(texts(content))
+            }
             InputItem::Message { role, content } => {
-                let role = if role == "assistant" { "assistant" } else { "user" };
+                let role = if role == "assistant" {
+                    "assistant"
+                } else {
+                    "user"
+                };
                 for c in content {
                     let block = match c {
                         ContentPart::InputText(t) => json!({"type": "text", "text": t}),
@@ -701,16 +885,31 @@ pub fn anthropic_body(model: &str, effort: Option<&str>, req: &ResponsesRequest,
                     push_block(&mut messages, role, block);
                 }
             }
-            InputItem::FunctionCall { call_id, name, arguments } => {
+            InputItem::FunctionCall {
+                call_id,
+                name,
+                arguments,
+            } => {
                 let input: Value = serde_json::from_str(arguments).unwrap_or_else(|_| json!({}));
-                push_block(&mut messages, "assistant", json!({"type": "tool_use", "id": call_id, "name": name, "input": input}));
+                push_block(
+                    &mut messages,
+                    "assistant",
+                    json!({"type": "tool_use", "id": call_id, "name": name, "input": input}),
+                );
             }
             InputItem::FunctionCallOutput { call_id, output } => {
-                push_block(&mut messages, "user", json!({"type": "tool_result", "tool_use_id": call_id, "content": output}));
+                push_block(
+                    &mut messages,
+                    "user",
+                    json!({"type": "tool_result", "tool_use_id": call_id, "content": output}),
+                );
             }
         }
     }
-    let max_tokens = max_output.filter(|m| *m > 0).map(|m| m.min(ANTHROPIC_MAX_TOKENS)).unwrap_or(ANTHROPIC_MAX_TOKENS);
+    let max_tokens = max_output
+        .filter(|m| *m > 0)
+        .map(|m| m.min(ANTHROPIC_MAX_TOKENS))
+        .unwrap_or(ANTHROPIC_MAX_TOKENS);
     let mut body = json!({"model": model, "max_tokens": max_tokens, "messages": messages});
     if !system.is_empty() {
         body["system"] = Value::String(system.join("\n\n"));
@@ -724,14 +923,23 @@ pub fn anthropic_body(model: &str, effort: Option<&str>, req: &ResponsesRequest,
     if !tools.is_empty() {
         body["tools"] = Value::Array(tools);
     }
-    if let Some(e) = effort.map(str::trim).filter(|e| !e.is_empty() && *e != "none") {
+    if let Some(e) = effort
+        .map(str::trim)
+        .filter(|e| !e.is_empty() && *e != "none")
+    {
         body["output_config"] = json!({"effort": e});
     }
     body
 }
 
 /// The request body a provider gets for this call (`model` is the provider's own id).
-pub fn request_body(kind: ProviderKind, model: &str, effort: Option<&str>, req: &ResponsesRequest, max_output: Option<u64>) -> Value {
+pub fn request_body(
+    kind: ProviderKind,
+    model: &str,
+    effort: Option<&str>,
+    req: &ResponsesRequest,
+    max_output: Option<u64>,
+) -> Value {
     match kind {
         ProviderKind::OpenAiCompatible => openai_body(model, effort, req),
         ProviderKind::Anthropic => anthropic_body(model, effort, req, max_output),
@@ -746,10 +954,13 @@ fn u64_at(v: &Value, path: &[&str]) -> u64 {
 
 /// A `/chat/completions` answer as a turn. OpenRouter's `usage.cost` (USD) becomes ticks.
 pub fn parse_openai_reply(body: &str) -> Result<TurnOutput, ClientError> {
-    let v: Value = serde_json::from_str(body).map_err(|e| ClientError::Protocol(format!("provider reply: {e}")))?;
+    let v: Value = serde_json::from_str(body)
+        .map_err(|e| ClientError::Protocol(format!("provider reply: {e}")))?;
     let msg = &v["choices"][0]["message"];
     if msg.is_null() {
-        return Err(ClientError::Protocol("provider reply has no message".into()));
+        return Err(ClientError::Protocol(
+            "provider reply has no message".into(),
+        ));
     }
     let calls = msg["tool_calls"]
         .as_array()
@@ -758,7 +969,10 @@ pub fn parse_openai_reply(body: &str) -> Result<TurnOutput, ClientError> {
         .map(|c| FunctionCall {
             call_id: c["id"].as_str().unwrap_or("").to_string(),
             name: c["function"]["name"].as_str().unwrap_or("").to_string(),
-            arguments: c["function"]["arguments"].as_str().unwrap_or("{}").to_string(),
+            arguments: c["function"]["arguments"]
+                .as_str()
+                .unwrap_or("{}")
+                .to_string(),
         })
         .collect();
     let u = &v["usage"];
@@ -771,21 +985,31 @@ pub fn parse_openai_reply(body: &str) -> Result<TurnOutput, ClientError> {
             output_tokens: u64_at(u, &["completion_tokens"]),
             reasoning_tokens: u64_at(u, &["completion_tokens_details", "reasoning_tokens"]),
             cached_tokens: u64_at(u, &["prompt_tokens_details", "cached_tokens"]),
-            cost_in_usd_ticks: u["cost"].as_f64().map(|c| (c * 1e10).round() as i64).unwrap_or(0),
+            cost_in_usd_ticks: u["cost"]
+                .as_f64()
+                .map(|c| (c * 1e10).round() as i64)
+                .unwrap_or(0),
         },
-            ..Default::default()
-        })
+        ..Default::default()
+    })
 }
 
 /// A `/v1/messages` answer as a turn.
 pub fn parse_anthropic_reply(body: &str) -> Result<TurnOutput, ClientError> {
-    let v: Value = serde_json::from_str(body).map_err(|e| ClientError::Protocol(format!("provider reply: {e}")))?;
+    let v: Value = serde_json::from_str(body)
+        .map_err(|e| ClientError::Protocol(format!("provider reply: {e}")))?;
     let Some(blocks) = v["content"].as_array() else {
-        return Err(ClientError::Protocol("provider reply has no content".into()));
+        return Err(ClientError::Protocol(
+            "provider reply has no content".into(),
+        ));
     };
-    let mut out = TurnOutput { text: String::new(), reasoning: String::new(), calls: Vec::new(), usage: Usage::default(),
-            ..Default::default()
-        };
+    let mut out = TurnOutput {
+        text: String::new(),
+        reasoning: String::new(),
+        calls: Vec::new(),
+        usage: Usage::default(),
+        ..Default::default()
+    };
     for b in blocks {
         match b["type"].as_str() {
             Some("text") => out.text.push_str(b["text"].as_str().unwrap_or("")),
@@ -810,8 +1034,17 @@ pub fn parse_anthropic_reply(body: &str) -> Result<TurnOutput, ClientError> {
 
 fn error_of(status: u16, body: &str) -> ClientError {
     let v: Value = serde_json::from_str(body).unwrap_or(Value::Null);
-    let msg = v["error"]["message"].as_str().or_else(|| v["error"].as_str()).or_else(|| v["message"].as_str()).unwrap_or("");
-    map_http_status(status, &grokhub_core::redact_secrets(msg), None, AuthKind::ApiKey)
+    let msg = v["error"]["message"]
+        .as_str()
+        .or_else(|| v["error"].as_str())
+        .or_else(|| v["message"].as_str())
+        .unwrap_or("");
+    map_http_status(
+        status,
+        &grokhub_core::redact_secrets(msg),
+        None,
+        AuthKind::ApiKey,
+    )
 }
 
 // ---- The call ----------------------------------------------------------------
@@ -830,19 +1063,34 @@ pub fn call_model(
     span_id: &str,
     cancel: &CancelToken,
 ) -> Result<TurnOutput, ClientError> {
-    let (pid, wire_model) = split_provider_model(model).ok_or_else(|| ClientError::Protocol(format!("`{model}` is not a provider model")))?;
-    let p = provider(config_dir, pid).ok_or_else(|| ClientError::Protocol(format!("no provider `{pid}`")))?;
-    let key = key(config_dir, &p.id).ok_or_else(|| ClientError::Protocol(format!("no key for {}: add it in Settings", p.id)))?;
+    let (pid, wire_model) = split_provider_model(model)
+        .ok_or_else(|| ClientError::Protocol(format!("`{model}` is not a provider model")))?;
+    let p = provider(config_dir, pid)
+        .ok_or_else(|| ClientError::Protocol(format!("no provider `{pid}`")))?;
+    let key = key(config_dir, &p.id)
+        .ok_or_else(|| ClientError::Protocol(format!("no key for {}: add it in Settings", p.id)))?;
     let url = p.call_url();
-    let egress = EgressReq { span_id, ..EgressReq::new(&url, data) };
-    provider_or_park(config_dir, &egress, PROVIDER_TOOL, crate::harness::APPROVAL_TTL, &mut || cancel.is_cancelled()).map_err(ClientError::Protocol)?;
+    let egress = EgressReq {
+        span_id,
+        ..EgressReq::new(&url, data)
+    };
+    provider_or_park(
+        config_dir,
+        &egress,
+        PROVIDER_TOOL,
+        crate::harness::APPROVAL_TTL,
+        &mut || cancel.is_cancelled(),
+    )
+    .map_err(ClientError::Protocol)?;
     if cancel.is_cancelled() {
         return Err(ClientError::Cancelled);
     }
     let (reg, _) = super::live::snapshot(config_dir);
     let max_output = reg.get(model).and_then(|r| r.meta.max_output);
     let body = request_body(p.kind, wire_model, effort, req, max_output).to_string();
-    let r = transport_for(config_dir).post(&url, &p.headers(&key), &body).map_err(|e| ClientError::Transport(grokhub_core::redact_secrets(&e)))?;
+    let r = transport_for(config_dir)
+        .post(&url, &p.headers(&key), &body)
+        .map_err(|e| ClientError::Transport(grokhub_core::redact_secrets(&e)))?;
     if !(200..300).contains(&r.status) {
         return Err(error_of(r.status, &r.body));
     }

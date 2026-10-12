@@ -284,13 +284,19 @@ mod tests {
 
     #[test]
     fn each_row_has_a_tuned_cap_and_its_golden_reply_fits_it() {
-        let caps: Vec<_> = ALL.iter().map(|s| (s.label(), s.reply_cap_words())).collect();
+        let caps: Vec<_> = ALL
+            .iter()
+            .map(|s| (s.label(), s.reply_cap_words()))
+            .collect();
         assert_eq!(
             caps,
             vec![
                 ("short, under 60 words".to_string(), Some(60)),
                 ("concise, under 150 words".to_string(), Some(150)),
-                ("progress notes, wrap-up under 120 words".to_string(), Some(120)),
+                (
+                    "progress notes, wrap-up under 120 words".to_string(),
+                    Some(120)
+                ),
                 ("findings card, reply under 80 words".to_string(), Some(80)),
                 ("summary with links, under 200 words".to_string(), Some(200)),
                 ("quiet, under 40 words".to_string(), Some(40)),
@@ -301,13 +307,22 @@ mod tests {
             assert!(fits_cap(style, reply), "{style:?}: {reply}");
             let cap = style.reply_cap_words().unwrap();
             let padded = format!("{reply} {}", "more ".repeat(cap));
-            assert!(!fits_cap(style, &padded), "{style:?} let a padded reply through");
+            assert!(
+                !fits_cap(style, &padded),
+                "{style:?} let a padded reply through"
+            );
             // The block tells the model the same cap the fixture checks.
-            assert!(style.block().contains(&format!("under {cap} words")), "{style:?}");
+            assert!(
+                style.block().contains(&format!("under {cap} words")),
+                "{style:?}"
+            );
         }
         // Links don't count toward a summary's words.
         let links = "https://example.com/a ".repeat(300);
-        assert!(fits_cap(TalkStyle::Summary, &format!("Two sources agree. {links}")));
+        assert!(fits_cap(
+            TalkStyle::Summary,
+            &format!("Two sources agree. {links}")
+        ));
         assert!(!TalkStyle::Draft.block().contains("words"));
     }
 
@@ -319,7 +334,11 @@ mod tests {
                 "RULES".to_string()
             } else {
                 // The cabin's order: rules, then the voice, then the closer.
-                assert!(!voice.contains("\n\n"), "{}: a blank line would split the voice", p.id);
+                assert!(
+                    !voice.contains("\n\n"),
+                    "{}: a blank line would split the voice",
+                    p.id
+                );
                 format!("RULES\n\n{voice}\n\n{VOLATILE_SAFETY_CLOSER}")
             };
             for style in ALL {
@@ -328,14 +347,27 @@ mod tests {
                 assert_eq!(out.matches(block.as_str()).count(), 1, "{} {style:?}", p.id);
                 assert_eq!(out.matches(STYLE_HEAD).count(), 1, "{} {style:?}", p.id);
                 assert!(out.starts_with("RULES\n\n"), "{} {style:?}", p.id);
-                assert!(out.ends_with(&format!("{block}\n\n{VOLATILE_SAFETY_CLOSER}")), "{} {style:?}", p.id);
+                assert!(
+                    out.ends_with(&format!("{block}\n\n{VOLATILE_SAFETY_CLOSER}")),
+                    "{} {style:?}",
+                    p.id
+                );
                 if !voice.is_empty() {
                     // The voice is kept byte for byte, and the style's length line comes after it.
                     let at_voice = out.find(voice.as_str()).unwrap();
-                    assert!(at_voice < out.find(STYLE_HEAD).unwrap(), "{} {style:?}", p.id);
+                    assert!(
+                        at_voice < out.find(STYLE_HEAD).unwrap(),
+                        "{} {style:?}",
+                        p.id
+                    );
                 }
                 // Swapping to another style and back leaves the same prompt.
-                assert_eq!(restyle(&restyle(&out, TalkStyle::Draft), style), out, "{} {style:?}", p.id);
+                assert_eq!(
+                    restyle(&restyle(&out, TalkStyle::Draft), style),
+                    out,
+                    "{} {style:?}",
+                    p.id
+                );
             }
         }
     }

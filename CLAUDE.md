@@ -26,7 +26,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 - A full local `cargo test` can touch the real `~/.grok` and `~/.config/GrokHub`. Set `GROKHUB_CONFIG` to a temp dir, run only the crate or test you changed, or rely on CI.
 - **Test shape:** assert literal expected values, no tautologies (would it still pass if the code returned a default or stub?). Never skip, `#[ignore]`, delete, or loosen a test to get green; fix the code and report suspect tests. Don't add `#[allow(dead_code)]`; delete dead code.
 - Don't mass `cargo fmt`. Format only the lines you touch.
-- `chat_composer_pins_stop_on_the_right` (`crates/grokhub-app/src/app/tests.rs`) reads a 12,000-byte window after `ComposerStackSlot::Pill =>` in `chat_ui.rs`. The last string it checks for sits about 310 bytes from the window's edge, and less with Windows CRLF line endings. Don't grow the Pill arm before the Stop handler. Move code into helpers instead of widening the window.
+- `chat_composer_pins_stop_on_the_right` (`crates/grokhub-app/src/app/tests.rs`) reads a 15,000-byte window after `ComposerStackSlot::Pill =>` in `chat_ui.rs`. The last string it checks for must stay inside that window (tighter with Windows CRLF). Don't grow the Pill arm before the Stop handler. Move code into helpers instead of widening the window.
 
 ## How bots work
 - **Proof of work:** every PR body names the real run path exercised and what was seen (CI green is the floor, not the proof), plus a **Skipped / not verified** line.

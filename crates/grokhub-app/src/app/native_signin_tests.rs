@@ -360,13 +360,20 @@ fn native_signin_missing_gives_exact_message() {
     .unwrap();
     let err = cabin.native_cred().unwrap_err();
     assert_eq!(err, "Sign in with Grok or add an API key.");
-    assert_eq!(cabin.bearer(), "", "the chips and Imagine bearer ignores the CLI login too");
+    assert_eq!(
+        cabin.bearer(),
+        "",
+        "the chips and Imagine bearer ignores the CLI login too"
+    );
     assert!(!cabin.llm_ready());
     // The CLI login does not skip GrokHub's own Get Started sheet either.
     cabin.cfg.get_started_done = false;
     assert!(cabin.ui_wants_get_started());
     cabin.cfg.get_started_done = true;
-    assert!(!cabin.ui_wants_get_started(), "a finished Get Started stays finished");
+    assert!(
+        !cabin.ui_wants_get_started(),
+        "a finished Get Started stays finished"
+    );
     cabin.cfg.get_started_done = false;
 
     // An API key stays a working alternative.
@@ -415,7 +422,11 @@ fn native_signin_failed_refresh_is_not_retried_every_turn() {
     }
     assert_eq!(tries(), 1, "a failed refresh is not retried every turn");
     assert_eq!(
-        cabin.secrets.oauth.as_ref().map(|t| t.access_token.as_str()),
+        cabin
+            .secrets
+            .oauth
+            .as_ref()
+            .map(|t| t.access_token.as_str()),
         Some("test-expired-token"),
         "a failed refresh keeps the saved sign-in"
     );
@@ -455,7 +466,10 @@ fn imagine_cred_reuses_account_oauth_without_imagine_keychain() {
     );
     assert_eq!(cabin.console_key(), "");
     assert!(cabin.account_oauth_present());
-    assert!(cabin.imagine_ui_ready(), "Account alone must count as signed in");
+    assert!(
+        cabin.imagine_ui_ready(),
+        "Account alone must count as signed in"
+    );
 
     let cred = cabin.imagine_cred().expect("Account covers Imagine");
     assert_eq!(cred.secret, "test-account-access");
@@ -465,7 +479,10 @@ fn imagine_cred_reuses_account_oauth_without_imagine_keychain() {
     let again = cabin.imagine_cred().expect("no re-prompt");
     assert_eq!(again.secret, "test-account-access");
     assert_eq!(again.kind, grokhub_core::ImagineCredKind::OAuth);
-    assert!(cabin.imagine_native.tokens.is_none(), "must not invent Imagine keychain tokens");
+    assert!(
+        cabin.imagine_native.tokens.is_none(),
+        "must not invent Imagine keychain tokens"
+    );
 }
 
 #[test]
@@ -588,7 +605,10 @@ fn a_cli_era_chat_moves_to_the_native_engine_with_a_recap_once() {
     let sent = server.responses();
     assert_eq!(sent.len(), 1, "{sent:?}");
     let body = &sent[0].body;
-    assert!(body.contains("Earlier in this chat (before GrokHub ran it natively):"), "{body}");
+    assert!(
+        body.contains("Earlier in this chat (before GrokHub ran it natively):"),
+        "{body}"
+    );
     assert!(body.contains("User: plan the harbor walk"), "{body}");
     assert!(body.contains("You: Start at the north pier."), "{body}");
     assert_eq!(body.matches("what about lunch").count(), 1, "{body}");
@@ -600,8 +620,16 @@ fn a_cli_era_chat_moves_to_the_native_engine_with_a_recap_once() {
     assert!(sent[1].body.contains("and dinner"), "{}", sent[1].body);
     // The second request replays the first turn from the session, recap included,
     // but no new recap is added.
-    assert_eq!(sent[1].body.matches("Earlier in this chat").count(), 1, "{}", sent[1].body);
-    assert_eq!(cabin.threads.last().unwrap().grok_session.as_deref(), Some(sid.as_str()));
+    assert_eq!(
+        sent[1].body.matches("Earlier in this chat").count(),
+        1,
+        "{}",
+        sent[1].body
+    );
+    assert_eq!(
+        cabin.threads.last().unwrap().grok_session.as_deref(),
+        Some(sid.as_str())
+    );
 }
 
 #[test]
@@ -637,10 +665,16 @@ fn a_failed_first_native_send_keeps_the_recap_for_the_retry() {
 
     // The engine for this session is gone, so the first send fails. No live
     // engine runs first: its shutdown would race the retry's config.
-    cabin.acp = Some(crate::engine_handle::AcpHandle::dead(cwd, "native-retry-8".into()));
+    cabin.acp = Some(crate::engine_handle::AcpHandle::dead(
+        cwd,
+        "native-retry-8".into(),
+    ));
     assert!(cabin.kick_native_turn("what about lunch", None, "what about lunch", "Lab chat"));
     assert!(!cabin.running);
-    assert!(cabin.threads.last().unwrap().native_carry, "a failed send must keep the recap");
+    assert!(
+        cabin.threads.last().unwrap().native_carry,
+        "a failed send must keep the recap"
+    );
     assert!(server.responses().is_empty());
 
     cabin.acp = None;
@@ -650,7 +684,10 @@ fn a_failed_first_native_send_keeps_the_recap_for_the_retry() {
     let sent = server.responses();
     assert_eq!(sent.len(), 1, "{sent:?}");
     let body = &sent[0].body;
-    assert!(body.contains("Earlier in this chat (before GrokHub ran it natively):"), "{body}");
+    assert!(
+        body.contains("Earlier in this chat (before GrokHub ran it natively):"),
+        "{body}"
+    );
     assert!(body.contains("User: plan the harbor walk"), "{body}");
     assert!(body.contains("You: Start at the north pier."), "{body}");
     assert_eq!(body.matches("what about lunch").count(), 1, "{body}");

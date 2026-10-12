@@ -10,7 +10,8 @@ use sha2::{Digest, Sha256};
 use crate::Channel;
 
 /// Newest first, drafts hidden for anonymous reads.
-pub const GITHUB_RELEASES_API: &str = "https://api.github.com/repos/blackviperxiii-ui/GrokHub/releases?per_page=30";
+pub const GITHUB_RELEASES_API: &str =
+    "https://api.github.com/repos/blackviperxiii-ui/GrokHub/releases?per_page=30";
 
 /// Where the channel's release is listed. Stable asks for `releases/latest`
 /// (never a pre-release), so a run of beta pre-releases can't push the
@@ -39,12 +40,18 @@ const RELEASE_SWITCH_TAIL: &str = " release";
 /// The Labs channel-switch step without a source clone: install `target`'s
 /// verified release, then write its channel receipt.
 pub fn release_switch_step(target: Channel) -> String {
-    format!("{RELEASE_SWITCH_HEAD}{}{RELEASE_SWITCH_TAIL}", target.as_str())
+    format!(
+        "{RELEASE_SWITCH_HEAD}{}{RELEASE_SWITCH_TAIL}",
+        target.as_str()
+    )
 }
 
 /// The target channel of a [`release_switch_step`].
 pub fn parse_release_switch_step(cmd: &str) -> Option<Channel> {
-    Channel::parse(cmd.strip_prefix(RELEASE_SWITCH_HEAD)?.strip_suffix(RELEASE_SWITCH_TAIL)?)
+    Channel::parse(
+        cmd.strip_prefix(RELEASE_SWITCH_HEAD)?
+            .strip_suffix(RELEASE_SWITCH_TAIL)?,
+    )
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -135,9 +142,16 @@ pub fn parse_releases(body: &str) -> Vec<Release> {
                 .unwrap_or_default();
             Some(Release {
                 tag,
-                prerelease: r.get("prerelease").and_then(|b| b.as_bool()).unwrap_or(false),
+                prerelease: r
+                    .get("prerelease")
+                    .and_then(|b| b.as_bool())
+                    .unwrap_or(false),
                 draft: r.get("draft").and_then(|b| b.as_bool()).unwrap_or(false),
-                created: r.get("created_at").and_then(|c| c.as_str()).unwrap_or("").to_string(),
+                created: r
+                    .get("created_at")
+                    .and_then(|c| c.as_str())
+                    .unwrap_or("")
+                    .to_string(),
                 assets,
             })
         })
@@ -156,8 +170,7 @@ pub fn pick_release(releases: &[Release], channel: Channel) -> Option<&Release> 
                 && match channel {
                     Channel::Stable => !r.prerelease && is_stable_release_tag(&r.tag),
                     Channel::Beta => {
-                        r.prerelease
-                            && (r.tag.starts_with("beta-v") || is_beta_semver_tag(&r.tag))
+                        r.prerelease && (r.tag.starts_with("beta-v") || is_beta_semver_tag(&r.tag))
                     }
                 }
         })
@@ -172,19 +185,30 @@ fn semver_name(name: &str, prefix: &str, suffix: &str) -> bool {
         .and_then(|r| r.strip_suffix(suffix))
         .is_some_and(|ver| {
             let parts: Vec<&str> = ver.split('.').collect();
-            parts.len() == 3 && parts.iter().all(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_digit()))
+            parts.len() == 3
+                && parts
+                    .iter()
+                    .all(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_digit()))
         })
 }
 
 /// The download this host installs: the Linux tarball or the Windows zip.
 pub fn host_asset(release: &Release, windows: bool) -> Option<&ReleaseAsset> {
-    let (prefix, suffix) = if windows { ("grokhub-windows-v", ".zip") } else { ("grokhub-linux-v", ".tar.gz") };
-    release.assets.iter().find(|a| semver_name(&a.name, prefix, suffix))
+    let (prefix, suffix) = if windows {
+        ("grokhub-windows-v", ".zip")
+    } else {
+        ("grokhub-linux-v", ".tar.gz")
+    };
+    release
+        .assets
+        .iter()
+        .find(|a| semver_name(&a.name, prefix, suffix))
 }
 
 /// Only this repo's release downloads, and the URL must end in the asset's name.
 pub fn download_url_ok(url: &str, name: &str) -> bool {
-    let from_repo = url.starts_with("https://github.com/blackviperxiii-ui/GrokHub/releases/download/");
+    let from_repo =
+        url.starts_with("https://github.com/blackviperxiii-ui/GrokHub/releases/download/");
     from_repo && url.ends_with(&format!("/{name}")) && !name.contains('/') && !name.contains("..")
 }
 
@@ -230,7 +254,10 @@ pub fn refusal_note(version: &str, why: &Refusal) -> String {
 
 /// The [`refusal_note`] line in an update's output, if the release step refused.
 pub fn refusal_line(output: &str) -> Option<&str> {
-    output.lines().map(str::trim).find(|l| l.starts_with("Update ") && l.contains(" not installed: "))
+    output
+        .lines()
+        .map(str::trim)
+        .find(|l| l.starts_with("Update ") && l.contains(" not installed: "))
 }
 
 /// `sha256sum` lines: `<64 hex>  <name>` (or `*<name>` for binary mode).
@@ -248,18 +275,30 @@ pub fn parse_sums(text: &str) -> Vec<(String, String)> {
 /// Check one download. With a key: the signature over `sums` must verify
 /// with it, then the asset's SHA-256 must match its `sums` line. With no key
 /// shipped yet: the checksum alone.
-pub fn verify_asset(pubkey: Option<&str>, sums: &str, sig: Option<&str>, name: &str, bytes: &[u8]) -> Result<(), Refusal> {
+pub fn verify_asset(
+    pubkey: Option<&str>,
+    sums: &str,
+    sig: Option<&str>,
+    name: &str,
+    bytes: &[u8],
+) -> Result<(), Refusal> {
     if let Some(pk) = pubkey {
         let sig = sig.ok_or(Refusal::NoSignature)?;
-        let pk = minisign_verify::PublicKey::decode(pk.trim()).map_err(|_| Refusal::BadSignature)?;
-        let sig = minisign_verify::Signature::decode(sig.trim()).map_err(|_| Refusal::BadSignature)?;
+        let pk =
+            minisign_verify::PublicKey::decode(pk.trim()).map_err(|_| Refusal::BadSignature)?;
+        let sig =
+            minisign_verify::Signature::decode(sig.trim()).map_err(|_| Refusal::BadSignature)?;
         match pk.verify(sums.as_bytes(), &sig, false) {
             Ok(()) => {}
             Err(minisign_verify::Error::UnexpectedKeyId) => return Err(Refusal::WrongKey),
             Err(_) => return Err(Refusal::BadSignature),
         }
     }
-    let want = parse_sums(sums).into_iter().find(|(_, n)| n == name).map(|(h, _)| h).ok_or(Refusal::NotListed)?;
+    let want = parse_sums(sums)
+        .into_iter()
+        .find(|(_, n)| n == name)
+        .map(|(h, _)| h)
+        .ok_or(Refusal::NotListed)?;
     let got = hex::encode(Sha256::digest(bytes));
     if got != want {
         return Err(Refusal::HashMismatch);
@@ -281,26 +320,77 @@ mod tests {
 
     #[test]
     fn a_signed_listed_asset_verifies_and_every_tamper_is_refused() {
-        assert_eq!(verify_asset(Some(PUB_A), SUMS, Some(SIG_A), LINUX_NAME, LINUX), Ok(()));
-        assert_eq!(verify_asset(Some(PUB_A), SUMS, Some(SIG_A), "grokhub-windows-v9.9.9.zip", b"windows-asset"), Ok(()));
+        assert_eq!(
+            verify_asset(Some(PUB_A), SUMS, Some(SIG_A), LINUX_NAME, LINUX),
+            Ok(())
+        );
+        assert_eq!(
+            verify_asset(
+                Some(PUB_A),
+                SUMS,
+                Some(SIG_A),
+                "grokhub-windows-v9.9.9.zip",
+                b"windows-asset"
+            ),
+            Ok(())
+        );
         // Tampered asset.
-        assert_eq!(verify_asset(Some(PUB_A), SUMS, Some(SIG_A), LINUX_NAME, b"linux-asset!"), Err(Refusal::HashMismatch));
+        assert_eq!(
+            verify_asset(Some(PUB_A), SUMS, Some(SIG_A), LINUX_NAME, b"linux-asset!"),
+            Err(Refusal::HashMismatch)
+        );
         // Tampered list: the signature no longer covers it.
         let edited = SUMS.replacen("a82d", "0000", 1);
-        assert_eq!(verify_asset(Some(PUB_A), &edited, Some(SIG_A), LINUX_NAME, LINUX), Err(Refusal::BadSignature));
+        assert_eq!(
+            verify_asset(Some(PUB_A), &edited, Some(SIG_A), LINUX_NAME, LINUX),
+            Err(Refusal::BadSignature)
+        );
         // Wrong key.
-        assert_eq!(verify_asset(Some(PUB_B), SUMS, Some(SIG_A), LINUX_NAME, LINUX), Err(Refusal::WrongKey));
+        assert_eq!(
+            verify_asset(Some(PUB_B), SUMS, Some(SIG_A), LINUX_NAME, LINUX),
+            Err(Refusal::WrongKey)
+        );
         // Missing .minisig.
-        assert_eq!(verify_asset(Some(PUB_A), SUMS, None, LINUX_NAME, LINUX), Err(Refusal::NoSignature));
+        assert_eq!(
+            verify_asset(Some(PUB_A), SUMS, None, LINUX_NAME, LINUX),
+            Err(Refusal::NoSignature)
+        );
         // Garbage signature.
-        assert_eq!(verify_asset(Some(PUB_A), SUMS, Some("not a signature"), LINUX_NAME, LINUX), Err(Refusal::BadSignature));
+        assert_eq!(
+            verify_asset(
+                Some(PUB_A),
+                SUMS,
+                Some("not a signature"),
+                LINUX_NAME,
+                LINUX
+            ),
+            Err(Refusal::BadSignature)
+        );
         // Not in the list.
-        assert_eq!(verify_asset(Some(PUB_A), SUMS, Some(SIG_A), "grokhub-linux-v9.9.8.tar.gz", LINUX), Err(Refusal::NotListed));
+        assert_eq!(
+            verify_asset(
+                Some(PUB_A),
+                SUMS,
+                Some(SIG_A),
+                "grokhub-linux-v9.9.8.tar.gz",
+                LINUX
+            ),
+            Err(Refusal::NotListed)
+        );
         // No key shipped yet: the checksum alone decides.
         assert_eq!(verify_asset(None, SUMS, None, LINUX_NAME, LINUX), Ok(()));
-        assert_eq!(verify_asset(None, SUMS, None, LINUX_NAME, b"other"), Err(Refusal::HashMismatch));
-        assert_eq!(refusal_note("2.10.98", &Refusal::BadSignature), "Update 2.10.98 not installed: signature didn't verify");
-        assert_eq!(refusal_note("", &Refusal::NoRelease), "Update not installed: no release on this channel yet");
+        assert_eq!(
+            verify_asset(None, SUMS, None, LINUX_NAME, b"other"),
+            Err(Refusal::HashMismatch)
+        );
+        assert_eq!(
+            refusal_note("2.10.98", &Refusal::BadSignature),
+            "Update 2.10.98 not installed: signature didn't verify"
+        );
+        assert_eq!(
+            refusal_note("", &Refusal::NoRelease),
+            "Update not installed: no release on this channel yet"
+        );
     }
 
     fn release(tag: &str, prerelease: bool) -> String {
@@ -329,20 +419,42 @@ mod tests {
         let all = parse_releases(&body);
         assert_eq!(all.len(), 4);
         let stable = pick_release(&all, Channel::Stable).unwrap();
-        assert_eq!((stable.tag.as_str(), stable.version()), ("v2.13.1", "2.13.1".to_string()));
+        assert_eq!(
+            (stable.tag.as_str(), stable.version()),
+            ("v2.13.1", "2.13.1".to_string())
+        );
         let beta = pick_release(&all, Channel::Beta).unwrap();
-        assert_eq!((beta.tag.as_str(), beta.version()), ("beta-v2.13.1-abc1234", "2.13.1-beta (abc1234)".to_string()));
-        assert_eq!(host_asset(stable, false).unwrap().name, "grokhub-linux-v2.13.1.tar.gz");
-        assert_eq!(host_asset(stable, true).unwrap().name, "grokhub-windows-v2.13.1.zip");
+        assert_eq!(
+            (beta.tag.as_str(), beta.version()),
+            ("beta-v2.13.1-abc1234", "2.13.1-beta (abc1234)".to_string())
+        );
+        assert_eq!(
+            host_asset(stable, false).unwrap().name,
+            "grokhub-linux-v2.13.1.tar.gz"
+        );
+        assert_eq!(
+            host_asset(stable, true).unwrap().name,
+            "grokhub-windows-v2.13.1.zip"
+        );
         assert_eq!(stable.asset(SUMS_NAME).unwrap().name, "SHA256SUMS");
         assert_eq!(stable.asset(SIG_NAME), None);
-        assert!(pick_release(&parse_releases(&format!("[{}]", release("v2.13.1", false))), Channel::Beta).is_none());
+        assert!(pick_release(
+            &parse_releases(&format!("[{}]", release("v2.13.1", false))),
+            Channel::Beta
+        )
+        .is_none());
         assert_eq!(parse_releases(&release("v2.13.1", false)).len(), 1);
         assert!(parse_releases("not json").is_empty());
         let a = host_asset(stable, false).unwrap();
         assert!(download_url_ok(&a.url, &a.name));
-        assert!(!download_url_ok("https://evil.example/grokhub-linux-v2.13.1.tar.gz", &a.name));
-        assert!(!download_url_ok("https://github.com/blackviperxiii-ui/GrokHub/releases/download/v2.13.1/other.tar.gz", &a.name));
+        assert!(!download_url_ok(
+            "https://evil.example/grokhub-linux-v2.13.1.tar.gz",
+            &a.name
+        ));
+        assert!(!download_url_ok(
+            "https://github.com/blackviperxiii-ui/GrokHub/releases/download/v2.13.1/other.tar.gz",
+            &a.name
+        ));
     }
 
     #[test]
@@ -362,7 +474,8 @@ mod tests {
         assert_eq!(beta.tag, "v2.13.1-beta.10");
         assert_eq!(beta.version(), "2.13.1-beta.10");
         // A prerelease tag must never be the stable pick even if mis-flagged.
-        let misflagged = parse_releases(&release_at("v2.13.1-beta.3", false, "2026-10-12T00:00:00Z"));
+        let misflagged =
+            parse_releases(&release_at("v2.13.1-beta.3", false, "2026-10-12T00:00:00Z"));
         assert!(pick_release(&misflagged, Channel::Stable).is_none());
         assert!(is_beta_semver_tag("v2.13.1-beta.3"));
         assert!(!is_beta_semver_tag("v2.13.1"));
@@ -372,13 +485,25 @@ mod tests {
 
     #[test]
     fn sums_lines_parse_in_text_and_binary_mode() {
-        let parsed = parse_sums(&format!("{}{}\nnot a line\n", SUMS, "A82D46432D0F6BAA57EBB1B0E8A03307DF6724580CC316C763E61AE1BFE8CCCF *bin.zip"));
+        let parsed = parse_sums(&format!(
+            "{}{}\nnot a line\n",
+            SUMS, "A82D46432D0F6BAA57EBB1B0E8A03307DF6724580CC316C763E61AE1BFE8CCCF *bin.zip"
+        ));
         assert_eq!(
             parsed,
             vec![
-                ("a82d46432d0f6baa57ebb1b0e8a03307df6724580cc316c763e61ae1bfe8cccf".to_string(), LINUX_NAME.to_string()),
-                ("8e527193e30f66d04ad8a6f13d97f4d577a00dec5a936ccb968ea06ac332399f".to_string(), "grokhub-windows-v9.9.9.zip".to_string()),
-                ("a82d46432d0f6baa57ebb1b0e8a03307df6724580cc316c763e61ae1bfe8cccf".to_string(), "bin.zip".to_string()),
+                (
+                    "a82d46432d0f6baa57ebb1b0e8a03307df6724580cc316c763e61ae1bfe8cccf".to_string(),
+                    LINUX_NAME.to_string()
+                ),
+                (
+                    "8e527193e30f66d04ad8a6f13d97f4d577a00dec5a936ccb968ea06ac332399f".to_string(),
+                    "grokhub-windows-v9.9.9.zip".to_string()
+                ),
+                (
+                    "a82d46432d0f6baa57ebb1b0e8a03307df6724580cc316c763e61ae1bfe8cccf".to_string(),
+                    "bin.zip".to_string()
+                ),
             ]
         );
     }
@@ -393,33 +518,77 @@ mod tests {
             release_at("v2.13.1", false, "2026-10-10T20:44:35Z")
         );
         let all = parse_releases(&body);
-        assert_eq!(pick_release(&all, Channel::Beta).unwrap().tag, "beta-v2.13.1-29e8ac5");
+        assert_eq!(
+            pick_release(&all, Channel::Beta).unwrap().tag,
+            "beta-v2.13.1-29e8ac5"
+        );
         assert_eq!(pick_release(&all, Channel::Stable).unwrap().tag, "v2.13.1");
     }
 
     #[test]
     fn the_switch_step_names_its_channel_and_parses_back() {
-        assert_eq!(release_switch_step(Channel::Beta), "grokhub: switch to the beta release");
-        assert_eq!(release_switch_step(Channel::Stable), "grokhub: switch to the stable release");
-        assert_eq!(parse_release_switch_step("grokhub: switch to the beta release"), Some(Channel::Beta));
-        assert_eq!(parse_release_switch_step("grokhub: switch to the stable release"), Some(Channel::Stable));
+        assert_eq!(
+            release_switch_step(Channel::Beta),
+            "grokhub: switch to the beta release"
+        );
+        assert_eq!(
+            release_switch_step(Channel::Stable),
+            "grokhub: switch to the stable release"
+        );
+        assert_eq!(
+            parse_release_switch_step("grokhub: switch to the beta release"),
+            Some(Channel::Beta)
+        );
+        assert_eq!(
+            parse_release_switch_step("grokhub: switch to the stable release"),
+            Some(Channel::Stable)
+        );
         assert_eq!(parse_release_switch_step(RELEASE_INSTALL_STEP), None);
-        assert_eq!(parse_release_switch_step("grokhub: switch to the nightly release"), None);
+        assert_eq!(
+            parse_release_switch_step("grokhub: switch to the nightly release"),
+            None
+        );
     }
 
     #[test]
     fn stable_asks_for_the_latest_release_and_refusals_are_found_in_the_output() {
-        assert_eq!(releases_api(Channel::Stable), "https://api.github.com/repos/blackviperxiii-ui/GrokHub/releases/latest");
-        assert_eq!(releases_api(Channel::Beta), "https://api.github.com/repos/blackviperxiii-ui/GrokHub/releases?per_page=30");
-        let out = format!("$ {RELEASE_INSTALL_STEP}\nexit 1\n{}", refusal_note("2.13.2", &Refusal::NoSums));
-        assert_eq!(refusal_line(&out), Some("Update 2.13.2 not installed: the release has no SHA256SUMS"));
-        assert_eq!(refusal_line("$ git pull\nexit 1\nfatal: unable to access"), None);
-        assert!(crate::update::cabin_overlay_step(RELEASE_INSTALL_STEP), "the release step marks the cabin updated");
+        assert_eq!(
+            releases_api(Channel::Stable),
+            "https://api.github.com/repos/blackviperxiii-ui/GrokHub/releases/latest"
+        );
+        assert_eq!(
+            releases_api(Channel::Beta),
+            "https://api.github.com/repos/blackviperxiii-ui/GrokHub/releases?per_page=30"
+        );
+        let out = format!(
+            "$ {RELEASE_INSTALL_STEP}\nexit 1\n{}",
+            refusal_note("2.13.2", &Refusal::NoSums)
+        );
+        assert_eq!(
+            refusal_line(&out),
+            Some("Update 2.13.2 not installed: the release has no SHA256SUMS")
+        );
+        assert_eq!(
+            refusal_line("$ git pull\nexit 1\nfatal: unable to access"),
+            None
+        );
+        assert!(
+            crate::update::cabin_overlay_step(RELEASE_INSTALL_STEP),
+            "the release step marks the cabin updated"
+        );
     }
 
     #[test]
     fn the_shipped_key_matches_packaging() {
-        let file = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../packaging/minisign.pub")).ok();
-        assert_eq!(RELEASE_PUBKEY.map(str::trim), file.as_deref().map(str::trim), "packaging/minisign.pub and RELEASE_PUBKEY must match");
+        let file = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../packaging/minisign.pub"
+        ))
+        .ok();
+        assert_eq!(
+            RELEASE_PUBKEY.map(str::trim),
+            file.as_deref().map(str::trim),
+            "packaging/minisign.pub and RELEASE_PUBKEY must match"
+        );
     }
 }

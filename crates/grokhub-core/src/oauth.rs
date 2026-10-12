@@ -4,8 +4,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 pub const XAI_OAUTH_CLIENT_ID: &str = "b1a00492-073a-47ea-816f-4c329264a828";
-pub const XAI_OAUTH_SCOPE: &str =
-    "openid profile email offline_access grok-cli:access api:access";
+pub const XAI_OAUTH_SCOPE: &str = "openid profile email offline_access grok-cli:access api:access";
 pub const XAI_OAUTH_ISSUER: &str = "https://auth.x.ai";
 pub const XAI_OAUTH_DISCOVERY: &str = "https://auth.x.ai/.well-known/openid-configuration";
 pub const XAI_OAUTH_USERINFO: &str = "https://auth.x.ai/oauth2/userinfo";
@@ -318,7 +317,10 @@ pub fn parse_device_start(json: &Value) -> Result<DeviceCodeStart, String> {
         user_code,
         verification_uri,
         verification_uri_complete: complete,
-        expires_in: json.get("expires_in").and_then(|v| v.as_u64()).unwrap_or(1800),
+        expires_in: json
+            .get("expires_in")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(1800),
         interval: json.get("interval").and_then(|v| v.as_u64()).unwrap_or(5),
     })
 }
@@ -632,8 +634,12 @@ mod tests {
         );
         assert!(!token_needs_refresh(&dead, 1_000));
         assert_eq!(
-            chat_bearer("xai-live-key", "dead-oauth", oauth_access_live(&dead, 1_000))
-                .as_deref(),
+            chat_bearer(
+                "xai-live-key",
+                "dead-oauth",
+                oauth_access_live(&dead, 1_000)
+            )
+            .as_deref(),
             Some("xai-live-key")
         );
         let opaque = XaiOAuthTokens {
@@ -652,8 +658,12 @@ mod tests {
             "unknown-age OAuth must not beat a console key"
         );
         assert_eq!(
-            chat_bearer("xai-live-key", "dead-opaque", oauth_access_live(&opaque, 9_000_000_000))
-                .as_deref(),
+            chat_bearer(
+                "xai-live-key",
+                "dead-opaque",
+                oauth_access_live(&opaque, 9_000_000_000)
+            )
+            .as_deref(),
             Some("xai-live-key")
         );
     }
@@ -680,7 +690,10 @@ mod tests {
     }
 
     fn jwt_from_payload(payload: &str) -> String {
-        format!("eyJhbGciOiJub25lIn0.{}.sig", b64url_encode(payload.as_bytes()))
+        format!(
+            "eyJhbGciOiJub25lIn0.{}.sig",
+            b64url_encode(payload.as_bytes())
+        )
     }
 
     fn b64url_encode(data: &[u8]) -> String {
@@ -710,11 +723,7 @@ mod tests {
         let jwt = jwt_from_payload(
             r#"{"email":"viper@x.ai","name":"Viper","picture":"https://assets.grok.com/users/viper.png"}"#,
         );
-        let t = parse_token_json(
-            &json!({"access_token":"tok","id_token": jwt}),
-            1,
-        )
-        .unwrap();
+        let t = parse_token_json(&json!({"access_token":"tok","id_token": jwt}), 1).unwrap();
         assert_eq!(t.email.as_deref(), Some("viper@x.ai"));
         assert_eq!(t.name.as_deref(), Some("Viper"));
         assert_eq!(
@@ -758,11 +767,10 @@ mod tests {
     fn trusted_profile_photo_hosts() {
         assert!(trusted_profile_photo_url("https://assets.grok.com/users/viper.png").is_ok());
         assert!(trusted_profile_photo_url("https://auth.x.ai/avatar/viper.png").is_ok());
-        assert!(trusted_profile_photo_url("https://pbs.twimg.com/profile_images/viper.jpg").is_ok());
-        assert!(trusted_profile_photo_url(
-            "https://lh3.googleusercontent.com/a/viper"
-        )
-        .is_ok());
+        assert!(
+            trusted_profile_photo_url("https://pbs.twimg.com/profile_images/viper.jpg").is_ok()
+        );
+        assert!(trusted_profile_photo_url("https://lh3.googleusercontent.com/a/viper").is_ok());
         assert!(trusted_profile_photo_url("https://x.com/users/viper.png").is_ok());
         assert!(trusted_profile_photo_url("https://evil.com/x.png").is_err());
         assert!(trusted_profile_photo_url("http://assets.grok.com/users/viper.png").is_err());
@@ -788,7 +796,10 @@ mod tests {
         let merged = merge_refreshed(&prev, next);
         assert_eq!(merged.access_token, "new");
         assert_eq!(merged.refresh_token.as_deref(), Some("ref2"));
-        assert_eq!(merged.picture.as_deref(), Some("https://assets.grok.com/users/viper.png"));
+        assert_eq!(
+            merged.picture.as_deref(),
+            Some("https://assets.grok.com/users/viper.png")
+        );
         assert_eq!(merged.name.as_deref(), Some("Viper"));
         assert_eq!(merged.email.as_deref(), Some("viper@x.ai"));
     }
@@ -808,7 +819,10 @@ mod tests {
             },
         );
         assert_eq!(t.name.as_deref(), Some("Viper"));
-        assert_eq!(t.picture.as_deref(), Some("https://assets.grok.com/users/viper.png"));
+        assert_eq!(
+            t.picture.as_deref(),
+            Some("https://assets.grok.com/users/viper.png")
+        );
     }
 
     #[test]
@@ -841,6 +855,9 @@ mod tests {
     #[test]
     fn unix_ms_formats_as_utc_rfc3339() {
         assert_eq!(unix_ms_to_rfc3339(0), "1970-01-01T00:00:00Z");
-        assert_eq!(unix_ms_to_rfc3339(1_767_225_600_000), "2026-01-01T00:00:00Z");
+        assert_eq!(
+            unix_ms_to_rfc3339(1_767_225_600_000),
+            "2026-01-01T00:00:00Z"
+        );
     }
 }

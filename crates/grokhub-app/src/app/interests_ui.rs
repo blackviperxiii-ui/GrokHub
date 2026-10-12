@@ -92,7 +92,10 @@ impl Cabin {
         if topic.is_empty() {
             return;
         }
-        if self.interests_now().add(&topic, InterestSource::Explicit, now_ms()) {
+        if self
+            .interests_now()
+            .add(&topic, InterestSource::Explicit, now_ms())
+        {
             self.persist_interests();
             self.status = format!("Pulse will look for {topic}.");
         } else {
@@ -169,7 +172,11 @@ impl Cabin {
                 } else {
                     crate::theme::fg()
                 };
-                ui.label(RichText::new(&row.topic).size(crate::theme::FONT_BODY).color(color));
+                ui.label(
+                    RichText::new(&row.topic)
+                        .size(crate::theme::FONT_BODY)
+                        .color(color),
+                );
                 let note = if row.muted {
                     "Muted".to_string()
                 } else if row.pinned {
@@ -223,7 +230,11 @@ pub(super) fn ledger_signal(reason: grokhub_core::pulse::LedgerReason) -> Option
 mod tests {
     use super::*;
 
-    fn cabin() -> (std::sync::MutexGuard<'static, ()>, crate::config::TestConfigDir, Cabin) {
+    fn cabin() -> (
+        std::sync::MutexGuard<'static, ()>,
+        crate::config::TestConfigDir,
+        Cabin,
+    ) {
         let lock = crate::config::hold_test_config();
         let root = crate::config::test_config_root("interests-ui");
         let _ = std::fs::remove_dir_all(&root);
@@ -247,8 +258,16 @@ mod tests {
         liked.reaction = Some(grokhub_core::CardReaction::Up);
         cabin.updates = vec![liked];
         cabin.seed_interests("Interests: Rust", "");
-        let topics: Vec<String> = cabin.interests_now().topics.iter().map(|t| t.topic.clone()).collect();
-        assert_eq!(topics, vec!["Rust", "Bambu printers", "Home espresso", "Sourdough"]);
+        let topics: Vec<String> = cabin
+            .interests_now()
+            .topics
+            .iter()
+            .map(|t| t.topic.clone())
+            .collect();
+        assert_eq!(
+            topics,
+            vec!["Rust", "Bambu printers", "Home espresso", "Sourdough"]
+        );
         let on_disk = interests::load(&interests_path());
         assert!(on_disk.seeded);
         assert_eq!(on_disk.topics.len(), 4);
@@ -269,23 +288,47 @@ mod tests {
         cabin.act_on_interest("crypto", RowAct::Mute(true));
         cabin.interests_feedback("New air compressors for small shops", InterestSignal::Saved);
         let on_disk = interests::load(&interests_path());
-        let rows: Vec<(&str, u8, bool)> =
-            on_disk.topics.iter().map(|t| (t.topic.as_str(), t.weight, t.muted)).collect();
-        assert_eq!(rows, vec![("air compressors", 80, false), ("crypto", 70, true)]);
+        let rows: Vec<(&str, u8, bool)> = on_disk
+            .topics
+            .iter()
+            .map(|t| (t.topic.as_str(), t.weight, t.muted))
+            .collect();
+        assert_eq!(
+            rows,
+            vec![("air compressors", 80, false), ("crypto", 70, true)]
+        );
         cabin.act_on_interest("crypto", RowAct::Remove);
-        assert_eq!(interests::load(&interests_path()).removed, vec!["crypto".to_string()]);
+        assert_eq!(
+            interests::load(&interests_path()).removed,
+            vec!["crypto".to_string()]
+        );
         // A fresh cabin reads the same file.
         cabin.interests.profile = None;
-        assert_eq!(cabin.interests_prompt(), "Their interests, strongest first: air compressors.");
+        assert_eq!(
+            cabin.interests_prompt(),
+            "Their interests, strongest first: air compressors."
+        );
     }
 
     #[test]
     fn pulse_reasons_map_to_interest_signals() {
         use grokhub_core::pulse::LedgerReason;
-        assert_eq!(ledger_signal(LedgerReason::Liked), Some(InterestSignal::Saved));
-        assert_eq!(ledger_signal(LedgerReason::NotThis), Some(InterestSignal::NotInterested));
-        assert_eq!(ledger_signal(LedgerReason::Dismiss), Some(InterestSignal::Dismissed));
-        assert_eq!(ledger_signal(LedgerReason::Accepted), Some(InterestSignal::Accepted));
+        assert_eq!(
+            ledger_signal(LedgerReason::Liked),
+            Some(InterestSignal::Saved)
+        );
+        assert_eq!(
+            ledger_signal(LedgerReason::NotThis),
+            Some(InterestSignal::NotInterested)
+        );
+        assert_eq!(
+            ledger_signal(LedgerReason::Dismiss),
+            Some(InterestSignal::Dismissed)
+        );
+        assert_eq!(
+            ledger_signal(LedgerReason::Accepted),
+            Some(InterestSignal::Accepted)
+        );
         assert_eq!(ledger_signal(LedgerReason::Wrong), None);
     }
 }

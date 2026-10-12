@@ -271,7 +271,11 @@ fn spawn(call: SpawnCall<'_>) -> (ToolOutput, Usage) {
         system: child_system(call.system, &spec.persona, spec.explore),
         conversation_id,
         parent_session: call.session.to_string(),
-        max_turns: if call.max_turns == 0 { SUBAGENT_MAX_TURNS } else { call.max_turns },
+        max_turns: if call.max_turns == 0 {
+            SUBAGENT_MAX_TURNS
+        } else {
+            call.max_turns
+        },
         cancel: child_cancel.clone(),
         steer,
         gate: child_gate(call.gate, spec.explore),

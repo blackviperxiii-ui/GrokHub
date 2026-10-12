@@ -1366,7 +1366,10 @@ mod tests {
             let needle_native = format!("| {name} | native |");
             assert_eq!(report.matches(&needle_native).count(), 1, "{report}");
         }
-        assert!(!report.contains("| cli |") && !report.contains("fake-acp"), "{report}");
+        assert!(
+            !report.contains("| cli |") && !report.contains("fake-acp"),
+            "{report}"
+        );
         assert!(report.contains("## GAPS\n"));
         let gaps = report.split("## GAPS\n\n").nth(1).expect("gaps body");
         for line in STANDING_GAPS {
@@ -1398,11 +1401,15 @@ mod tests {
         assert!(report.contains("| compaction | native | yes |"), "{report}");
         assert!(report.contains("| mcp-tool | native | yes |"), "{report}");
         if cfg!(unix) {
-            assert!(report.contains("| system-scan | native | yes | 6 |"), "{report}");
+            assert!(
+                report.contains("| system-scan | native | yes | 6 |"),
+                "{report}"
+            );
             assert!(!report.contains("- system-scan:"), "{report}");
         } else {
             assert!(
-                report.contains("- system-scan: native skipped: the fake host needs a Unix shell\n"),
+                report
+                    .contains("- system-scan: native skipped: the fake host needs a Unix shell\n"),
                 "{report}"
             );
         }

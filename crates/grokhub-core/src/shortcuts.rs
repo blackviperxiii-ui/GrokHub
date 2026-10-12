@@ -66,7 +66,12 @@ pub enum PermKey {
 /// Esc always denies. Enter only allows when the composer is empty: a half-typed
 /// follow-up must send, not silently approve a shell command. An open palette or
 /// settings overlay owns both keys.
-pub fn perm_key(enter: bool, esc: bool, composer_has_text: bool, overlay_open: bool) -> Option<PermKey> {
+pub fn perm_key(
+    enter: bool,
+    esc: bool,
+    composer_has_text: bool,
+    overlay_open: bool,
+) -> Option<PermKey> {
     if overlay_open {
         return None;
     }
@@ -87,23 +92,91 @@ pub struct Shortcut {
 }
 
 pub const SHORTCUTS: &[Shortcut] = &[
-    Shortcut { keys: "Ctrl+K", action: "Command palette", scope: "Global" },
-    Shortcut { keys: "Ctrl+N", action: "New chat", scope: "Global" },
-    Shortcut { keys: "Ctrl+G", action: "Hey Grok (listen or halt)", scope: "Global" },
-    Shortcut { keys: "Ctrl+Alt+H", action: "Halt", scope: "Global" },
-    Shortcut { keys: "Ctrl+,", action: "Settings", scope: "Global" },
-    Shortcut { keys: "Ctrl+/", action: "Shortcut sheet", scope: "Global" },
-    Shortcut { keys: "Ctrl+F", action: "Find in this chat (Enter next, Shift+Enter previous, Esc close)", scope: "Chat" },
-    Shortcut { keys: "Ctrl+Shift+A", action: "Archive or unarchive this chat", scope: "Chat" },
-    Shortcut { keys: "Enter / Esc", action: "Allow / deny tool permission (empty composer)", scope: "Chat" },
-    Shortcut { keys: "Enter / Esc", action: "Confirm / cancel overlay sheet (empty composer; Ask Always stays Allow / Deny)", scope: "Chat" },
-    Shortcut { keys: "Enter", action: "Send message", scope: "Composer" },
-    Shortcut { keys: "Shift+Enter / Ctrl+Enter", action: "New line", scope: "Composer" },
-    Shortcut { keys: "Enter while a reply runs", action: "Steer the live reply", scope: "Composer" },
-    Shortcut { keys: "Alt+Enter while a reply runs", action: "Queue for after the reply", scope: "Composer" },
-    Shortcut { keys: "Tab", action: "Accept slash", scope: "Composer" },
-    Shortcut { keys: "Super+G", action: "Hey Grok when unfocused", scope: "System" },
-    Shortcut { keys: "Super+Shift+Esc", action: "Halt when unfocused", scope: "System" },
+    Shortcut {
+        keys: "Ctrl+K",
+        action: "Command palette",
+        scope: "Global",
+    },
+    Shortcut {
+        keys: "Ctrl+N",
+        action: "New chat",
+        scope: "Global",
+    },
+    Shortcut {
+        keys: "Ctrl+G",
+        action: "Hey Grok (listen or halt)",
+        scope: "Global",
+    },
+    Shortcut {
+        keys: "Ctrl+Alt+H",
+        action: "Halt",
+        scope: "Global",
+    },
+    Shortcut {
+        keys: "Ctrl+,",
+        action: "Settings",
+        scope: "Global",
+    },
+    Shortcut {
+        keys: "Ctrl+/",
+        action: "Shortcut sheet",
+        scope: "Global",
+    },
+    Shortcut {
+        keys: "Ctrl+F",
+        action: "Find in this chat (Enter next, Shift+Enter previous, Esc close)",
+        scope: "Chat",
+    },
+    Shortcut {
+        keys: "Ctrl+Shift+A",
+        action: "Archive or unarchive this chat",
+        scope: "Chat",
+    },
+    Shortcut {
+        keys: "Enter / Esc",
+        action: "Allow / deny tool permission (empty composer)",
+        scope: "Chat",
+    },
+    Shortcut {
+        keys: "Enter / Esc",
+        action: "Confirm / cancel overlay sheet (empty composer; Ask Always stays Allow / Deny)",
+        scope: "Chat",
+    },
+    Shortcut {
+        keys: "Enter",
+        action: "Send message",
+        scope: "Composer",
+    },
+    Shortcut {
+        keys: "Shift+Enter / Ctrl+Enter",
+        action: "New line",
+        scope: "Composer",
+    },
+    Shortcut {
+        keys: "Enter while a reply runs",
+        action: "Steer the live reply",
+        scope: "Composer",
+    },
+    Shortcut {
+        keys: "Alt+Enter while a reply runs",
+        action: "Queue for after the reply",
+        scope: "Composer",
+    },
+    Shortcut {
+        keys: "Tab",
+        action: "Accept slash",
+        scope: "Composer",
+    },
+    Shortcut {
+        keys: "Super+G",
+        action: "Hey Grok when unfocused",
+        scope: "System",
+    },
+    Shortcut {
+        keys: "Super+Shift+Esc",
+        action: "Halt when unfocused",
+        scope: "System",
+    },
 ];
 
 pub fn shortcut_help() -> String {
@@ -209,10 +282,22 @@ mod tests {
         // Off the rail, so an empty query hides them (22 - Devices/Agents/Connectors).
         // Night is not its own row; `night` still resolves to Automations above.
         assert_eq!(filter_palette("").len(), 19);
-        assert_eq!(filter_palette("record"), vec![("Record my screen", "/record")]);
-        assert_eq!(filter_palette("screen"), vec![("Record my screen", "/record")]);
-        assert_eq!(filter_palette("check my audio"), vec![("Check my audio", "/audiocheck")]);
-        assert_eq!(filter_palette("microphone"), vec![("Check my audio", "/audiocheck")]);
+        assert_eq!(
+            filter_palette("record"),
+            vec![("Record my screen", "/record")]
+        );
+        assert_eq!(
+            filter_palette("screen"),
+            vec![("Record my screen", "/record")]
+        );
+        assert_eq!(
+            filter_palette("check my audio"),
+            vec![("Check my audio", "/audiocheck")]
+        );
+        assert_eq!(
+            filter_palette("microphone"),
+            vec![("Check my audio", "/audiocheck")]
+        );
         let empty = filter_palette("");
         for gone in ["Devices", "Agents", "Connectors", "Night"] {
             assert!(
@@ -239,8 +324,14 @@ mod tests {
                 ("Skills and Connectors", "nav:skills"),
             ]
         );
-        assert_eq!(filter_palette("keyb"), vec![("Keyboard shortcuts", "shortcuts")]);
-        assert_eq!(filter_palette("hotkeys"), vec![("Keyboard shortcuts", "shortcuts")]);
+        assert_eq!(
+            filter_palette("keyb"),
+            vec![("Keyboard shortcuts", "shortcuts")]
+        );
+        assert_eq!(
+            filter_palette("hotkeys"),
+            vec![("Keyboard shortcuts", "shortcuts")]
+        );
         assert_eq!(filter_palette("pulse"), vec![("Pulse", "nav:pulse")]);
         assert!(filter_palette("").iter().all(|(l, _)| *l != "Command"));
     }

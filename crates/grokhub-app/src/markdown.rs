@@ -69,7 +69,11 @@ pub fn measure_markdown_width(ui: &Ui, text: &str, wrap: f32) -> f32 {
                 format!("{}•  {}", "    ".repeat(*depth as usize), md_plain(text))
             }
             MdBlock::Numbered { depth, num, text } => {
-                format!("{}{num}.  {}", "    ".repeat(*depth as usize), md_plain(text))
+                format!(
+                    "{}{num}.  {}",
+                    "    ".repeat(*depth as usize),
+                    md_plain(text)
+                )
             }
             MdBlock::Para(t) => md_plain(t),
             _ => String::new(),
@@ -119,7 +123,11 @@ pub fn show(ui: &mut Ui, text: &str) {
                 ui.separator();
                 ui.add_space(4.0);
             }
-            MdBlock::Table { header, align, rows } => {
+            MdBlock::Table {
+                header,
+                align,
+                rows,
+            } => {
                 table(ui, bi, &header, &align, &rows, wrap);
             }
             MdBlock::Code { lang, body } => code_block(ui, bi, &lang, &body, wrap),
@@ -184,7 +192,12 @@ fn list_item(ui: &mut Ui, depth: u8, marker: Marker, text: &str, wrap: f32) {
                     egui::pos2(rect.min.x + side * 0.5 + 1.0, rect.center().y),
                     Vec2::splat(side),
                 );
-                ui.painter().rect_stroke(b, 2.5, Stroke::new(1.2_f32, ink), egui::StrokeKind::Middle);
+                ui.painter().rect_stroke(
+                    b,
+                    2.5,
+                    Stroke::new(1.2_f32, ink),
+                    egui::StrokeKind::Middle,
+                );
                 if done {
                     let s = Stroke::new(1.6_f32, crate::theme::live());
                     ui.painter().line_segment(
@@ -373,7 +386,11 @@ pub(crate) fn code_job(ui: &Ui, lang: &str, body: &str, wrap: f32) -> LayoutJob 
     let mut first = true;
     for line in body.lines() {
         if !first {
-            job.append("\n", 0.0, TextFormat::simple(font.clone(), crate::theme::fg()));
+            job.append(
+                "\n",
+                0.0,
+                TextFormat::simple(font.clone(), crate::theme::fg()),
+            );
         }
         first = false;
         for (tok, text) in code_tokens(lang, line) {
@@ -409,35 +426,34 @@ fn code_block(ui: &mut Ui, key: usize, lang: &str, body: &str, wrap: f32) {
                 Vec2::new(inner, head_h),
                 Layout::left_to_right(Align::Center),
                 |ui| {
-                ui.set_min_height(head_h);
-                let tag = if lang.is_empty() { "code" } else { lang };
-                ui.label(
-                    RichText::new(tag)
-                        .size(crate::theme::FONT_TIP)
-                        .color(crate::theme::subtle()),
-                );
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    ui.push_id(("md-code-copy", key), |ui| {
-                        let flash_id = ui.next_auto_id();
-                        let copy = crate::theme::felt_label_button(
-                            ui,
-                            crate::theme::copy_flash_label(ui.ctx(), flash_id),
-                            Color32::TRANSPARENT,
-                            crate::theme::muted(),
-                            6.0,
-                            Vec2::new(crate::theme::copy_hit_width(ui), 0.0),
-                            None,
-                            false,
-                        )
-                        .on_hover_text("Copy this code");
-                        if copy.clicked() {
-                            crate::theme::mark_copy_clicked(ui.ctx(), copy.id);
-                            let code = body.to_string();
-                            ui.ctx()
-                                .data_mut(|d| d.insert_temp(code_copy_id(), code));
-                        }
+                    ui.set_min_height(head_h);
+                    let tag = if lang.is_empty() { "code" } else { lang };
+                    ui.label(
+                        RichText::new(tag)
+                            .size(crate::theme::FONT_TIP)
+                            .color(crate::theme::subtle()),
+                    );
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        ui.push_id(("md-code-copy", key), |ui| {
+                            let flash_id = ui.next_auto_id();
+                            let copy = crate::theme::felt_label_button(
+                                ui,
+                                crate::theme::copy_flash_label(ui.ctx(), flash_id),
+                                Color32::TRANSPARENT,
+                                crate::theme::muted(),
+                                6.0,
+                                Vec2::new(crate::theme::copy_hit_width(ui), 0.0),
+                                None,
+                                false,
+                            )
+                            .on_hover_text("Copy this code");
+                            if copy.clicked() {
+                                crate::theme::mark_copy_clicked(ui.ctx(), copy.id);
+                                let code = body.to_string();
+                                ui.ctx().data_mut(|d| d.insert_temp(code_copy_id(), code));
+                            }
+                        });
                     });
-                });
                 },
             );
             ui.add_space(2.0);
@@ -449,7 +465,10 @@ fn code_block(ui: &mut Ui, key: usize, lang: &str, body: &str, wrap: f32) {
 
 fn wrapping_break(ui: &mut Ui, line: &str, wrap: f32) {
     ui.set_max_width(wrap);
-    let ink = ui.visuals().override_text_color.unwrap_or_else(crate::theme::fg);
+    let ink = ui
+        .visuals()
+        .override_text_color
+        .unwrap_or_else(crate::theme::fg);
     let job = wrapped_job(ui, line, wrap, ink);
     ui.add(Label::new(job).wrap().selectable(true));
 }
@@ -563,7 +582,9 @@ mod tests {
             .and_then(|s| s.split("MdSpan::Link").next())
             .expect("inline code");
         assert!(
-            code.contains("theme::fg()") && code.contains("code_well()") && !code.contains("theme::subtle()"),
+            code.contains("theme::fg()")
+                && code.contains("code_well()")
+                && !code.contains("theme::subtle()"),
             "inline code must clear the well: {code}"
         );
     }
@@ -647,8 +668,15 @@ mod tests {
     fn markdown_width_hugs_short_prose_and_fills_for_code() {
         with_fonts_ui(|ui| {
             let wrap = 600.0;
-            let short = super::measure_markdown_width(ui, "**Hi** [there](https://x.ai/a/very/long/path/that/is/not/shown)", wrap);
-            assert!(short < 120.0, "markers and urls must not widen the bubble: {short}");
+            let short = super::measure_markdown_width(
+                ui,
+                "**Hi** [there](https://x.ai/a/very/long/path/that/is/not/shown)",
+                wrap,
+            );
+            assert!(
+                short < 120.0,
+                "markers and urls must not widen the bubble: {short}"
+            );
             let code = super::measure_markdown_width(ui, "```\nls\n```", wrap);
             assert!((code - wrap).abs() < 0.5, "{code}");
             let table = super::measure_markdown_width(ui, "| a |\n|---|\n| 1 |", wrap);
@@ -725,14 +753,24 @@ mod tests {
     fn table_columns_fit_their_widest_cell_and_shrink_to_the_bubble() {
         with_fonts_ui(|ui| {
             let header = vec!["Step".to_string(), "Time".to_string(), "Owner".to_string()];
-            let rows = vec![vec!["Build".to_string(), "4m".to_string(), "CI".to_string()]];
+            let rows = vec![vec![
+                "Build".to_string(),
+                "4m".to_string(),
+                "CI".to_string(),
+            ]];
             let w = super::table_col_widths(ui, &header, &rows, 600.0, 14.0);
             assert_eq!(w.len(), 3);
-            assert!(w.iter().sum::<f32>() + 28.0 < 600.0, "short table hugs: {w:?}");
+            assert!(
+                w.iter().sum::<f32>() + 28.0 < 600.0,
+                "short table hugs: {w:?}"
+            );
             assert!(w[0] >= w[2] - 20.0 && w.iter().all(|x| *x >= 24.0), "{w:?}");
             let long = vec![vec!["word ".repeat(60), "x".into(), "y".into()]];
             let w = super::table_col_widths(ui, &header, &long, 300.0, 14.0);
-            assert!(w.iter().sum::<f32>() + 28.0 <= 300.0 + 1.0, "wide table shrinks to the bubble: {w:?}");
+            assert!(
+                w.iter().sum::<f32>() + 28.0 <= 300.0 + 1.0,
+                "wide table shrinks to the bubble: {w:?}"
+            );
             assert!(w.iter().all(|x| *x >= 24.0), "{w:?}");
         });
     }
@@ -744,4 +782,3 @@ mod tests {
         });
     }
 }
-

@@ -166,7 +166,11 @@ fn is_stop(word: &str) -> bool {
 
 fn clock_len(chars: &[char]) -> Option<usize> {
     let digits = |slice: &[char], max: usize| {
-        slice.iter().take(max).take_while(|c| c.is_ascii_digit()).count()
+        slice
+            .iter()
+            .take(max)
+            .take_while(|c| c.is_ascii_digit())
+            .count()
     };
     let mut hours = digits(chars, 2);
     if hours == 0 {
@@ -289,9 +293,16 @@ fn enforce_cap(map: &mut BTreeMap<String, Weight>, now: u64, cap: usize) {
     }
 }
 
-fn event_deltas(event: CardEvent, after_open: Option<bool>) -> (Option<Delta>, Option<Delta>, Option<Delta>) {
+fn event_deltas(
+    event: CardEvent,
+    after_open: Option<bool>,
+) -> (Option<Delta>, Option<Delta>, Option<Delta>) {
     match event {
-        CardEvent::Opened => (Some(Delta::Pos(1.0)), Some(Delta::Pos(1.0)), Some(Delta::Pos(1.0))),
+        CardEvent::Opened => (
+            Some(Delta::Pos(1.0)),
+            Some(Delta::Pos(1.0)),
+            Some(Delta::Pos(1.0)),
+        ),
         CardEvent::Dismissed => {
             let delta = if after_open == Some(true) {
                 Delta::Count
@@ -300,14 +311,30 @@ fn event_deltas(event: CardEvent, after_open: Option<bool>) -> (Option<Delta>, O
             };
             (Some(delta), Some(delta), Some(delta))
         }
-        CardEvent::More => (Some(Delta::Pos(3.0)), Some(Delta::Pos(3.0)), Some(Delta::Pos(3.0))),
+        CardEvent::More => (
+            Some(Delta::Pos(3.0)),
+            Some(Delta::Pos(3.0)),
+            Some(Delta::Pos(3.0)),
+        ),
         CardEvent::Less => (None, Some(Delta::Neg(3.0)), Some(Delta::Neg(3.0))),
         CardEvent::Hidden => (None, Some(Delta::Neg(3.0)), None),
         CardEvent::Unhidden => (None, Some(Delta::Unhide), None),
         CardEvent::FollowUp => (Some(Delta::Count), Some(Delta::Count), Some(Delta::Count)),
-        CardEvent::Rejected => (Some(Delta::Neg(1.5)), Some(Delta::Neg(3.0)), Some(Delta::Neg(3.0))),
-        CardEvent::Ran => (Some(Delta::Pos(1.0)), Some(Delta::Pos(2.0)), Some(Delta::Pos(2.0))),
-        CardEvent::Completed => (Some(Delta::Pos(1.0)), Some(Delta::Pos(3.0)), Some(Delta::Pos(3.0))),
+        CardEvent::Rejected => (
+            Some(Delta::Neg(1.5)),
+            Some(Delta::Neg(3.0)),
+            Some(Delta::Neg(3.0)),
+        ),
+        CardEvent::Ran => (
+            Some(Delta::Pos(1.0)),
+            Some(Delta::Pos(2.0)),
+            Some(Delta::Pos(2.0)),
+        ),
+        CardEvent::Completed => (
+            Some(Delta::Pos(1.0)),
+            Some(Delta::Pos(3.0)),
+            Some(Delta::Pos(3.0)),
+        ),
     }
 }
 
@@ -393,8 +420,10 @@ pub fn used_depth(prefs: &CardPrefs, card: &UpdateCard) -> u8 {
 /// A card the user asked to keep seeing: runs and schedules they set up,
 /// a card they pinned, or one that keeps coming back on its own.
 pub fn card_recurs(card: &UpdateCard) -> bool {
-    matches!(card.kind, UpdateKind::AutomationDone | UpdateKind::ScheduleCreated)
-        || card.feed_pin
+    matches!(
+        card.kind,
+        UpdateKind::AutomationDone | UpdateKind::ScheduleCreated
+    ) || card.feed_pin
         || card.runs > 1
 }
 
@@ -532,7 +561,13 @@ struct HintTerm {
     order: u8,
 }
 
-fn consider(terms: &mut Vec<HintTerm>, contrib: f64, show: Option<String>, order: u8, always: bool) {
+fn consider(
+    terms: &mut Vec<HintTerm>,
+    contrib: f64,
+    show: Option<String>,
+    order: u8,
+    always: bool,
+) {
     let mag = contrib.abs();
     if mag == 0.0 && !always {
         return;
@@ -546,14 +581,25 @@ fn consider(terms: &mut Vec<HintTerm>, contrib: f64, show: Option<String>, order
 /// Hint for the largest |contribution| among the explain terms. Not stored.
 /// Novelty is listed even at 0.2 so the one new card can say "New for you"
 /// when nothing stronger qualifies. A larger negative term blocks it.
-pub fn explain_hint(card: &UpdateCard, prefs: &CardPrefs, now: u64, novelty: bool) -> Option<String> {
+pub fn explain_hint(
+    card: &UpdateCard,
+    prefs: &CardPrefs,
+    now: u64,
+    novelty: bool,
+) -> Option<String> {
     let (group_a, _) = feature_affinity(&prefs.groups, &signal_group(card), now);
     let group_c = 1.5 * group_a;
     let topics = topic_score(card, prefs, now);
     let topic_c = topics.mean;
     let mut terms = Vec::new();
     if card_needs_you(card) {
-        consider(&mut terms, base_score(card), Some(HINT_NEEDS.to_string()), 0, false);
+        consider(
+            &mut terms,
+            base_score(card),
+            Some(HINT_NEEDS.to_string()),
+            0,
+            false,
+        );
     }
     let group_label = if group_c > 0.0 {
         Some(HINT_OPEN_GROUP.to_string())
@@ -568,7 +614,13 @@ pub fn explain_hint(card: &UpdateCard, prefs: &CardPrefs, now: u64, novelty: boo
     };
     consider(&mut terms, topic_c, topic_label, 2, false);
     if novelty {
-        consider(&mut terms, NOVELTY_BONUS, Some(HINT_NEW.to_string()), 3, true);
+        consider(
+            &mut terms,
+            NOVELTY_BONUS,
+            Some(HINT_NEW.to_string()),
+            3,
+            true,
+        );
     }
     terms.sort_by(|a, b| b.mag.total_cmp(&a.mag).then(a.order.cmp(&b.order)));
     terms.into_iter().next().and_then(|term| term.show)
@@ -668,7 +720,11 @@ pub fn rank_home_events(
     }
 }
 
-fn ranked_learned(bucket: LearnedBucket, map: &BTreeMap<String, Weight>, now: u64) -> Vec<(f64, LearnedEntry)> {
+fn ranked_learned(
+    bucket: LearnedBucket,
+    map: &BTreeMap<String, Weight>,
+    now: u64,
+) -> Vec<(f64, LearnedEntry)> {
     let mut rows = Vec::new();
     for (key, weight) in map {
         let (pos, neg) = decayed_weight(weight, now);
@@ -692,8 +748,16 @@ fn ranked_learned(bucket: LearnedBucket, map: &BTreeMap<String, Weight>, now: u6
 pub fn top_learned(prefs: &CardPrefs, now: u64) -> (Vec<LearnedEntry>, Vec<LearnedEntry>) {
     let mut rows = ranked_learned(LearnedBucket::Group, &prefs.groups, now);
     rows.extend(ranked_learned(LearnedBucket::Topic, &prefs.topics, now));
-    let mut liked: Vec<(f64, LearnedEntry)> = rows.iter().filter(|(score, _)| *score > 0.0).cloned().collect();
-    let mut disliked: Vec<(f64, LearnedEntry)> = rows.iter().filter(|(score, _)| *score < 0.0).cloned().collect();
+    let mut liked: Vec<(f64, LearnedEntry)> = rows
+        .iter()
+        .filter(|(score, _)| *score > 0.0)
+        .cloned()
+        .collect();
+    let mut disliked: Vec<(f64, LearnedEntry)> = rows
+        .iter()
+        .filter(|(score, _)| *score < 0.0)
+        .cloned()
+        .collect();
     liked.sort_by(|a, b| b.0.total_cmp(&a.0).then(a.1.key.cmp(&b.1.key)));
     disliked.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.key.cmp(&b.1.key)));
     liked.truncate(5);
@@ -755,7 +819,10 @@ mod tests {
         };
         let first = play();
         let second = play();
-        assert_eq!(card_prefs_json(&first).unwrap(), card_prefs_json(&second).unwrap());
+        assert_eq!(
+            card_prefs_json(&first).unwrap(),
+            card_prefs_json(&second).unwrap()
+        );
         let now = 6_000;
         assert_eq!(
             card_score(&card, &first, now, false).to_bits(),
@@ -814,11 +881,22 @@ mod tests {
     #[test]
     fn topic_keywords_are_three_title_words_without_digits_or_times() {
         let words = topic_keywords("Run a 12:30 host snapshot 42 please ZephyrFourth");
-        assert_eq!(words, vec!["run".to_string(), "host".to_string(), "snapshot".to_string()]);
-        assert!(!words.iter().any(|word| word.chars().any(|c| c.is_ascii_digit())));
+        assert_eq!(
+            words,
+            vec![
+                "run".to_string(),
+                "host".to_string(),
+                "snapshot".to_string()
+            ]
+        );
+        assert!(!words
+            .iter()
+            .any(|word| word.chars().any(|c| c.is_ascii_digit())));
         assert!(!words.iter().any(|word| word.contains(':')));
         assert!(words.len() <= 3);
-        assert!(!words.iter().any(|word| word == "please" || word == "zephyrfourth"));
+        assert!(!words
+            .iter()
+            .any(|word| word == "please" || word == "zephyrfourth"));
     }
 
     #[test]
@@ -839,8 +917,14 @@ mod tests {
         let fresh = automation_done_card("src", "Zebrakeyword", "body", now);
         apply_card_event(&mut prefs, &fresh, CardEvent::Opened, None, now);
         assert_eq!(prefs.topics.len(), TOPIC_CAP);
-        assert!(prefs.topics.contains_key("zebrakeyword"), "a stronger new keyword stays");
-        assert!(!prefs.topics.contains_key("topic000"), "the weakest topic is dropped");
+        assert!(
+            prefs.topics.contains_key("zebrakeyword"),
+            "a stronger new keyword stays"
+        );
+        assert!(
+            !prefs.topics.contains_key("topic000"),
+            "the weakest topic is dropped"
+        );
 
         for i in 0..GROUP_CAP {
             prefs.groups.insert(
@@ -869,8 +953,15 @@ mod tests {
         append_signal(&dir, &signal_for(&card, CardEvent::Opened, 1_000, None));
         // Rotate the active log aside the way a full file would, then add more.
         // Same timestamp so the half-life factor stays 1 and the counts stay exact.
-        fs::rename(dir.join("card_signals.jsonl"), dir.join("card_signals.jsonl.1")).unwrap();
-        append_signal(&dir, &signal_for(&card, CardEvent::Dismissed, 1_000, Some(false)));
+        fs::rename(
+            dir.join("card_signals.jsonl"),
+            dir.join("card_signals.jsonl.1"),
+        )
+        .unwrap();
+        append_signal(
+            &dir,
+            &signal_for(&card, CardEvent::Dismissed, 1_000, Some(false)),
+        );
         append_signal(&dir, &signal_for(&card, CardEvent::Hidden, 1_000, None));
         append_signal(&dir, &signal_for(&card, CardEvent::Unhidden, 1_000, None));
         fs::write(dir.join("card_prefs.json"), b"not-json").unwrap();
@@ -878,8 +969,17 @@ mod tests {
         let prefs = load_card_prefs(&dir);
         assert!(prefs.topics.is_empty(), "the signal log has no topics");
         let kind = weight_of(&prefs.kinds, "automation_done");
-        assert!((kind.pos - 1.0).abs() < 1e-9, "kind pos {} neg {} n {}", kind.pos, kind.neg, kind.n);
-        assert!((kind.neg - 1.0).abs() < 1e-9, "dismiss without open is negative");
+        assert!(
+            (kind.pos - 1.0).abs() < 1e-9,
+            "kind pos {} neg {} n {}",
+            kind.pos,
+            kind.neg,
+            kind.n
+        );
+        assert!(
+            (kind.neg - 1.0).abs() < 1e-9,
+            "dismiss without open is negative"
+        );
         let group = weight_of(&prefs.groups, "run:alpha");
         assert!((group.pos - 1.0).abs() < 1e-9);
         assert!(
@@ -925,20 +1025,32 @@ mod tests {
                 _ => false,
             }
         }
-        assert!(leaves_are_numbers(&value), "prefs hold numbers, not text values: {text}");
+        assert!(
+            leaves_are_numbers(&value),
+            "prefs hold numbers, not text values: {text}"
+        );
         let obj = value.as_object().unwrap();
         for key in obj.keys() {
-            assert!(matches!(key.as_str(), "kinds" | "groups" | "topics"), "{key}");
+            assert!(
+                matches!(key.as_str(), "kinds" | "groups" | "topics"),
+                "{key}"
+            );
         }
         for bucket in ["kinds", "groups", "topics"] {
             let Some(map) = obj.get(bucket).and_then(|v| v.as_object()) else {
                 continue;
             };
             for (feature, weight) in map {
-                assert!(!feature.contains(' '), "feature keys are single tokens: {feature}");
+                assert!(
+                    !feature.contains(' '),
+                    "feature keys are single tokens: {feature}"
+                );
                 let fields = weight.as_object().unwrap();
                 for field in fields.keys() {
-                    assert!(matches!(field.as_str(), "pos" | "neg" | "n" | "at"), "{field}");
+                    assert!(
+                        matches!(field.as_str(), "pos" | "neg" | "n" | "at"),
+                        "{field}"
+                    );
                 }
             }
         }
@@ -991,7 +1103,12 @@ mod tests {
         let rank = rank_home_events(&cards, &FeedPulse::default(), &CardPrefs::default(), now);
         assert_eq!(rank.deck.len(), 3);
         assert_eq!(rank.waiting, 2);
-        let rank = rank_home_events(&cards[..2], &FeedPulse::default(), &CardPrefs::default(), now);
+        let rank = rank_home_events(
+            &cards[..2],
+            &FeedPulse::default(),
+            &CardPrefs::default(),
+            now,
+        );
         assert_eq!(rank.deck.len(), 2);
         assert_eq!(rank.waiting, 0);
     }
@@ -1002,14 +1119,37 @@ mod tests {
         let now = 1_000;
         let done = suggestion_card("chip-backup", "Backup photos library", "", now);
         let mut prefs = CardPrefs::default();
-        assert!(record_card_use(&mut prefs, &done, UseDepth::Completed, UseAction::FinishedTodo, now));
+        assert!(record_card_use(
+            &mut prefs,
+            &done,
+            UseDepth::Completed,
+            UseAction::FinishedTodo,
+            now
+        ));
         assert_eq!(
             prefs.uses.get("sugg:chip-backup"),
-            Some(&CardUse { depth: 3, did: 8, n: 1, at: now })
+            Some(&CardUse {
+                depth: 3,
+                did: 8,
+                n: 1,
+                at: now
+            })
         );
         // The same step again is not a second use.
-        assert!(!record_card_use(&mut prefs, &done, UseDepth::Completed, UseAction::FinishedTodo, now));
-        assert!(!record_card_use(&mut prefs, &done, UseDepth::Ran, UseAction::FiledTodo, now));
+        assert!(!record_card_use(
+            &mut prefs,
+            &done,
+            UseDepth::Completed,
+            UseAction::FinishedTodo,
+            now
+        ));
+        assert!(!record_card_use(
+            &mut prefs,
+            &done,
+            UseDepth::Ran,
+            UseAction::FiledTodo,
+            now
+        ));
         assert_eq!(prefs.uses["sugg:chip-backup"].n, 1);
         assert_eq!(weight_of(&prefs.kinds, "suggestion").pos, 1.0);
         assert_eq!(weight_of(&prefs.groups, "sugg:chip-backup").pos, 3.0);
@@ -1026,18 +1166,34 @@ mod tests {
             &prefs,
             now,
         );
-        assert_eq!(ids(&rank.deck), vec![related.id.clone(), unrelated.id.clone()]);
+        assert_eq!(
+            ids(&rank.deck),
+            vec![related.id.clone(), unrelated.id.clone()]
+        );
         assert!(rank.folded.is_empty());
         assert_eq!(rank.waiting, 0);
         assert!((card_score(&related, &prefs, now, false) - 1.066_666_666_666_666_7).abs() < 1e-9);
-        assert!((card_score(&unrelated, &prefs, now, false) - 0.766_666_666_666_666_7).abs() < 1e-9);
+        assert!(
+            (card_score(&unrelated, &prefs, now, false) - 0.766_666_666_666_666_7).abs() < 1e-9
+        );
 
         // Only opened: the card can still come back.
         let peeked = suggestion_card("chip-peek", "Tidy downloads", "", now);
         let mut looked = CardPrefs::default();
-        assert!(record_card_use(&mut looked, &peeked, UseDepth::Opened, UseAction::Discussed, now));
+        assert!(record_card_use(
+            &mut looked,
+            &peeked,
+            UseDepth::Opened,
+            UseAction::Discussed,
+            now
+        ));
         assert_eq!(used_depth(&looked, &peeked), 1);
-        let rank = rank_home_events(std::slice::from_ref(&peeked), &FeedPulse::default(), &looked, now);
+        let rank = rank_home_events(
+            std::slice::from_ref(&peeked),
+            &FeedPulse::default(),
+            &looked,
+            now,
+        );
         assert_eq!(ids(&rank.deck), vec![peeked.id.clone()]);
     }
 
@@ -1046,18 +1202,40 @@ mod tests {
         use crate::update_feed::suggestion_card;
         let mut prefs = CardPrefs::default();
         let first = automation_done_card("nightly-backup", "Nightly backup", "ok", 1_000);
-        assert!(record_card_use(&mut prefs, &first, UseDepth::Completed, UseAction::OpenedAutomations, 1_000));
+        assert!(record_card_use(
+            &mut prefs,
+            &first,
+            UseDepth::Completed,
+            UseAction::OpenedAutomations,
+            1_000
+        ));
         let next = automation_done_card("nightly-backup", "Nightly backup", "ok again", 2_000);
         assert!(card_recurs(&next));
         assert!(!already_done(&next, &prefs));
-        let rank = rank_home_events(std::slice::from_ref(&next), &FeedPulse::default(), &prefs, 2_000);
+        let rank = rank_home_events(
+            std::slice::from_ref(&next),
+            &FeedPulse::default(),
+            &prefs,
+            2_000,
+        );
         assert_eq!(ids(&rank.deck), vec![next.id.clone()]);
 
         // A card the user pinned asked to stay, even after it ran.
         let mut pinned = suggestion_card("chip-pin", "Weekly invoice check", "", 1_000);
         pinned.feed_pin = true;
-        assert!(record_card_use(&mut prefs, &pinned, UseDepth::Ran, UseAction::Automated, 1_000));
-        let rank = rank_home_events(std::slice::from_ref(&pinned), &FeedPulse::default(), &prefs, 1_000);
+        assert!(record_card_use(
+            &mut prefs,
+            &pinned,
+            UseDepth::Ran,
+            UseAction::Automated,
+            1_000
+        ));
+        let rank = rank_home_events(
+            std::slice::from_ref(&pinned),
+            &FeedPulse::default(),
+            &prefs,
+            1_000,
+        );
         assert_eq!(ids(&rank.deck), vec![pinned.id.clone()]);
     }
 
@@ -1067,7 +1245,13 @@ mod tests {
         let mut prefs = CardPrefs::default();
         for i in 0..(USE_CAP as u64 + 20) {
             let card = suggestion_card(&format!("chip-{i:03}"), "Sort inbox", "", i);
-            assert!(record_card_use(&mut prefs, &card, UseDepth::Ran, UseAction::Automated, 10 + i));
+            assert!(record_card_use(
+                &mut prefs,
+                &card,
+                UseDepth::Ran,
+                UseAction::Automated,
+                10 + i
+            ));
         }
         assert_eq!(prefs.uses.len(), 100);
         assert!(!prefs.uses.contains_key("sugg:chip-000"));

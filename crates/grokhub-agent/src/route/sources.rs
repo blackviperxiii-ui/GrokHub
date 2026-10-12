@@ -12,12 +12,17 @@ use serde_json::Value;
 
 use grokhub_core::model_registry::cost_class::CostClass;
 use grokhub_core::model_registry::discover::{parse_xai_catalog, CatalogSource, Listing};
-use grokhub_core::model_registry::probe::{run_probe, speed_call, ProbeCall, ProbeEnv, ProbeReply, ProbeTransport};
+use grokhub_core::model_registry::probe::{
+    run_probe, speed_call, ProbeCall, ProbeEnv, ProbeReply, ProbeTransport,
+};
 use grokhub_core::model_registry::profile::ProbeResult;
 use grokhub_core::model_registry::{ModelMeta, SourceKind};
 
 use crate::client::{RESPONSES_URL, USER_AGENT};
-use crate::harness::{append_span, guard_egress, AccessMode, EgressReq, GateOutcome, ModelUsage, Origin, OriginScope, Span};
+use crate::harness::{
+    append_span, guard_egress, AccessMode, EgressReq, GateOutcome, ModelUsage, Origin, OriginScope,
+    Span,
+};
 
 pub const XAI_MODELS_URL: &str = crate::models::XAI_MODELS_URL;
 pub const XAI_LANGUAGE_MODELS_URL: &str = "https://api.x.ai/v1/language-models";
@@ -28,12 +33,18 @@ pub const PROBE_CLASS: &str = "background:probe";
 const BODY_CAP: u64 = 4 * 1024 * 1024;
 
 fn agent(timeout: Duration) -> ureq::Agent {
-    ureq::AgentBuilder::new().timeout_connect(Duration::from_secs(15)).timeout(timeout).build()
+    ureq::AgentBuilder::new()
+        .timeout_connect(Duration::from_secs(15))
+        .timeout(timeout)
+        .build()
 }
 
 fn read_capped(resp: ureq::Response) -> Result<String, String> {
     let mut buf = String::new();
-    resp.into_reader().take(BODY_CAP).read_to_string(&mut buf).map_err(|e| e.to_string())?;
+    resp.into_reader()
+        .take(BODY_CAP)
+        .read_to_string(&mut buf)
+        .map_err(|e| e.to_string())?;
     Ok(buf)
 }
 
@@ -135,10 +146,20 @@ impl ProbeTransport for XaiProbeTransport {
         let latency_ms = started.elapsed().as_millis() as u64;
         let resp = match resp {
             Ok(r) => r,
-            Err(ureq::Error::Status(code, _)) => return Ok(ProbeReply { status: code, latency_ms, ..ProbeReply::default() }),
+            Err(ureq::Error::Status(code, _)) => {
+                return Ok(ProbeReply {
+                    status: code,
+                    latency_ms,
+                    ..ProbeReply::default()
+                })
+            }
             Err(ureq::Error::Transport(t)) => {
                 let timed_out = t.to_string().to_ascii_lowercase().contains("timed out");
-                return Ok(ProbeReply { timed_out, latency_ms, ..ProbeReply::default() });
+                return Ok(ProbeReply {
+                    timed_out,
+                    latency_ms,
+                    ..ProbeReply::default()
+                });
             }
         };
         let v: Value = serde_json::from_str(&read_capped(resp)?).map_err(|e| e.to_string())?;
@@ -170,9 +191,17 @@ pub fn probe_span(call: &ProbeCall, reply: &ProbeReply) -> Span {
     })
     .to_string();
     let ok = (200..300).contains(&reply.status);
-    let mut span = Span::soft_allow(super::cabin::MODEL_TRACE, PROBE_TOOL, &args, if ok { "ok" } else { "error" }, "", AccessMode::Supervised, "xai")
-        .from_origin(Origin::SelfManage)
-        .on_path("model");
+    let mut span = Span::soft_allow(
+        super::cabin::MODEL_TRACE,
+        PROBE_TOOL,
+        &args,
+        if ok { "ok" } else { "error" },
+        "",
+        AccessMode::Supervised,
+        "xai",
+    )
+    .from_origin(Origin::SelfManage)
+    .on_path("model");
     span.access = String::new();
     span.usage = Some(ModelUsage {
         input_tokens: reply.input_tokens,
@@ -185,16 +214,32 @@ pub fn probe_span(call: &ProbeCall, reply: &ProbeReply) -> Span {
 }
 
 /// Probe one model for real: guarded, spanned, with the gap between calls slept.
-pub fn probe_model(config_dir: &Path, bearer: &str, meta: &ModelMeta, cost: CostClass) -> ProbeResult {
+pub fn probe_model(
+    config_dir: &Path,
+    bearer: &str,
+    meta: &ModelMeta,
+    cost: CostClass,
+) -> ProbeResult {
     let _lap = crate::timing::lap("route:onboarding_probe");
     let _origin = OriginScope::enter(Origin::SelfManage);
-    let mut transport = XaiProbeTransport { bearer: bearer.to_string() };
+    let mut transport = XaiProbeTransport {
+        bearer: bearer.to_string(),
+    };
     let mut guard_fn = || guard(config_dir, RESPONSES_URL).is_ok();
     let mut wait = |ms: u64| std::thread::sleep(Duration::from_millis(ms));
     let mut on_call = |call: &ProbeCall, reply: &ProbeReply| {
         let _ = append_span(config_dir, &probe_span(call, reply));
     };
-    run_probe(meta, cost, ProbeEnv { transport: &mut transport, guard: &mut guard_fn, wait: &mut wait, on_call: &mut on_call })
+    run_probe(
+        meta,
+        cost,
+        ProbeEnv {
+            transport: &mut transport,
+            guard: &mut guard_fn,
+            wait: &mut wait,
+            on_call: &mut on_call,
+        },
+    )
 }
 
 /// One small call to `meta`, for a no-route wait ([`super::wait`]): true when
@@ -205,7 +250,9 @@ pub fn ping_model(config_dir: &Path, bearer: &str, meta: &ModelMeta) -> bool {
         return false;
     }
     let call = speed_call(&meta.id, None);
-    let mut transport = XaiProbeTransport { bearer: bearer.to_string() };
+    let mut transport = XaiProbeTransport {
+        bearer: bearer.to_string(),
+    };
     let Ok(reply) = transport.send(&call) else {
         return false;
     };
@@ -217,18 +264,29 @@ pub fn ping_model(config_dir: &Path, bearer: &str, meta: &ModelMeta) -> bool {
 /// (`force`: the Refresh models button). With a plan sign-in, today's eval
 /// build runs on the real wire: guarded, spanned as `background:eval`
 /// (origin `self_manage`), only on `included` routes.
-pub fn rebuild_table(config_dir: &Path, plan_bearer: Option<&str>, force: bool, now_ms: u64) -> super::table::Rebuilt {
+pub fn rebuild_table(
+    config_dir: &Path,
+    plan_bearer: Option<&str>,
+    force: bool,
+    now_ms: u64,
+) -> super::table::Rebuilt {
     let _lap = crate::timing::lap("route:table_rebuild");
     let _origin = OriginScope::enter(Origin::SelfManage);
     let Some(bearer) = plan_bearer else {
         return super::table::rebuild(config_dir, None, force, now_ms);
     };
-    let mut transport = XaiProbeTransport { bearer: bearer.to_string() };
+    let mut transport = XaiProbeTransport {
+        bearer: bearer.to_string(),
+    };
     let mut guard_fn = || guard(config_dir, RESPONSES_URL).is_ok();
     let mut on_call = |call: &ProbeCall, reply: &ProbeReply| {
         let _ = append_span(config_dir, &eval_span(call, reply));
     };
-    let env = super::table::EvalEnv { transport: &mut transport, guard: &mut guard_fn, on_call: &mut on_call };
+    let env = super::table::EvalEnv {
+        transport: &mut transport,
+        guard: &mut guard_fn,
+        on_call: &mut on_call,
+    };
     super::table::rebuild(config_dir, Some(env), force, now_ms)
 }
 
@@ -257,17 +315,30 @@ mod tests {
         ]});
         let (text, calls) = reply_of(&v);
         assert_eq!(text, "{\"a\":\"ok\"}");
-        assert_eq!(calls, vec![("probe_echo".to_string(), "{\"word\":\"ping\"}".to_string())]);
+        assert_eq!(
+            calls,
+            vec![("probe_echo".to_string(), "{\"word\":\"ping\"}".to_string())]
+        );
     }
 
     #[test]
     fn a_probe_span_is_self_manage_background_probe_with_counts_and_no_text() {
         let call = tool_call("grok-4.7", Some("low"));
         assert_eq!(call.kind, ProbeKind::Tool);
-        let reply = ProbeReply { status: 200, input_tokens: 70, output_tokens: 9, cost_ticks: 1_500, text: "secret".into(), ..ProbeReply::default() };
+        let reply = ProbeReply {
+            status: 200,
+            input_tokens: 70,
+            output_tokens: 9,
+            cost_ticks: 1_500,
+            text: "secret".into(),
+            ..ProbeReply::default()
+        };
         let span = probe_span(&call, &reply);
         assert_eq!(span.origin, Origin::SelfManage);
-        assert_eq!(span.args_redacted, r#"{"check":"tool","class":"background:probe","effort":"low","model":"grok-4.7"}"#);
+        assert_eq!(
+            span.args_redacted,
+            r#"{"check":"tool","class":"background:probe","effort":"low","model":"grok-4.7"}"#
+        );
         assert_eq!(span.usage.unwrap().input_tokens, 70);
         assert!(!serde_json::to_string(&span).unwrap().contains("secret"));
     }
@@ -286,6 +357,12 @@ mod tests {
     fn a_failed_source_is_skipped_and_named() {
         let (ok, errors) = fetch_all(&[&Down(SourceKind::XaiApi), &Down(SourceKind::GrokBuild)]);
         assert!(ok.is_empty());
-        assert_eq!(errors, vec!["xai_api: offline".to_string(), "grok_build: offline".to_string()]);
+        assert_eq!(
+            errors,
+            vec![
+                "xai_api: offline".to_string(),
+                "grok_build: offline".to_string()
+            ]
+        );
     }
 }

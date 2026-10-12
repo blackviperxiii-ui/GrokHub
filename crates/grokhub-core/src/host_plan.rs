@@ -271,7 +271,8 @@ mod tests {
             empty_num.iter().map(|s| s.cmd.as_str()).collect::<Vec<_>>(),
             vec!["ls", "git status"]
         );
-        let prose = parse_host_plan("HOST_PLAN:\n1. ls\nThis explains step 1\n2. git status\n").unwrap();
+        let prose =
+            parse_host_plan("HOST_PLAN:\n1. ls\nThis explains step 1\n2. git status\n").unwrap();
         assert_eq!(
             prose.iter().map(|s| s.cmd.as_str()).collect::<Vec<_>>(),
             vec!["ls", "git status"]

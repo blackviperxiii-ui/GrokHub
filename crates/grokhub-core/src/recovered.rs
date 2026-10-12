@@ -24,7 +24,9 @@ pub const LEFT_OUT: &str = "Left it out of memory";
 
 /// Record that `path` was moved to `aside`.
 pub fn note(path: &Path, aside: &Path, restored: &'static str) {
-    let mut pending = PENDING.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut pending = PENDING
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     pending.push(Recovered {
         path: path.to_path_buf(),
         aside: aside.to_path_buf(),
@@ -34,7 +36,9 @@ pub fn note(path: &Path, aside: &Path, restored: &'static str) {
 
 /// Every store moved aside since the last drain, oldest first.
 pub fn drain() -> Vec<Recovered> {
-    let mut pending = PENDING.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut pending = PENDING
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     std::mem::take(&mut *pending)
 }
 
@@ -82,9 +86,15 @@ pub fn store_label(path: &Path) -> String {
 
 /// `path` with the home folder written as `~`.
 pub fn home_short(path: &Path) -> String {
-    if let Some(rest) = crate::paths::user_home().and_then(|home| path.strip_prefix(home).ok().map(Path::to_path_buf)) {
+    if let Some(rest) = crate::paths::user_home()
+        .and_then(|home| path.strip_prefix(home).ok().map(Path::to_path_buf))
+    {
         let rest = rest.to_string_lossy().replace('\\', "/");
-        return if rest.is_empty() { "~".into() } else { format!("~/{rest}") };
+        return if rest.is_empty() {
+            "~".into()
+        } else {
+            format!("~/{rest}")
+        };
     }
     path.to_string_lossy().into_owned()
 }
@@ -98,7 +108,10 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_nanos())
             .unwrap_or(0);
-        let dir = std::env::temp_dir().join(format!("grokhub-recovered-{label}-{}-{n}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!(
+            "grokhub-recovered-{label}-{}-{n}",
+            std::process::id()
+        ));
         std::fs::create_dir_all(&dir).expect("scratch");
         dir
     }
@@ -149,7 +162,11 @@ mod tests {
         assert!(crate::names_its_item(&card));
         assert_eq!(card.why, None, "not an automation");
         assert_eq!(card.pulse.source_name.as_deref(), Some("Recovered file"));
-        assert_eq!(card.id, crate::recovered_card(&r, 99).id, "one card per kept copy");
+        assert_eq!(
+            card.id,
+            crate::recovered_card(&r, 99).id,
+            "one card per kept copy"
+        );
     }
 
     #[test]
@@ -157,7 +174,10 @@ mod tests {
         assert_eq!(store_label(Path::new("/c/app.json")), "Settings file");
         assert_eq!(store_label(Path::new("/c/secrets.json")), "Keys file");
         assert_eq!(store_label(Path::new("/c/updates.json")), "Home feed");
-        assert_eq!(store_label(Path::new("/c/amr/nodes/prefs.md")), "Memory note prefs.md");
+        assert_eq!(
+            store_label(Path::new("/c/amr/nodes/prefs.md")),
+            "Memory note prefs.md"
+        );
         assert_eq!(store_label(Path::new("/c/odd.json")), "File odd.json");
     }
 }

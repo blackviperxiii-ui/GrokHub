@@ -38,17 +38,32 @@ impl Cabin {
     /// A job failed: remember the chat when it was a no-route pause.
     pub(super) fn note_no_route_turn(&mut self, err: &str) {
         if err.contains(NO_ROUTE_MSG) {
-            self.harness.router.wait.paused_turn = Some(self.chat_job_thread.clone().unwrap_or_else(|| self.visible_thread_id()));
+            self.harness.router.wait.paused_turn = Some(
+                self.chat_job_thread
+                    .clone()
+                    .unwrap_or_else(|| self.visible_thread_id()),
+            );
         }
     }
 
     /// The newest ask in `thread` (the open chat when `None` or open).
     fn last_ask_in(&self, thread: Option<&str>) -> String {
         let vis = self.visible_thread_id();
-        let ask = |msgs: &[(String, String)]| msgs.iter().rev().find(|(role, text)| role == "user" && !is_workload_user(text)).map(|(_, text)| text.clone()).unwrap_or_default();
+        let ask = |msgs: &[(String, String)]| {
+            msgs.iter()
+                .rev()
+                .find(|(role, text)| role == "user" && !is_workload_user(text))
+                .map(|(_, text)| text.clone())
+                .unwrap_or_default()
+        };
         match thread.filter(|id| *id != vis) {
             None => ask(&self.messages),
-            Some(id) => self.threads.iter().find(|t| t.id == id).map(|t| ask(&t.messages)).unwrap_or_default(),
+            Some(id) => self
+                .threads
+                .iter()
+                .find(|t| t.id == id)
+                .map(|t| ask(&t.messages))
+                .unwrap_or_default(),
         }
     }
 
@@ -58,7 +73,11 @@ impl Cabin {
         if self.harness.router.wait.wait.is_some() {
             return;
         }
-        let ask = if class.starts_with("chat:") { self.last_ask_in(self.harness.router.wait.paused_turn.as_deref()) } else { String::new() };
+        let ask = if class.starts_with("chat:") {
+            self.last_ask_in(self.harness.router.wait.paused_turn.as_deref())
+        } else {
+            String::new()
+        };
         let step = wait::step_name(class, &ask);
         let attempts = match &self.harness.router.wait.carry {
             Some((m, a, at)) if m == model && at.elapsed() < CARRY_FOR => *a,
@@ -67,7 +86,13 @@ impl Cabin {
         let (reg, _) = grokhub_agent::route::live::snapshot(&crate::config::config_dir());
         let clock = Self::local_clock();
         let since = grokhub_core::automation::format_ampm(clock.hour * 60 + clock.minute);
-        let card = model_wait_card(&wait::waiting_models(&reg, model), model, &since, &step, now);
+        let card = model_wait_card(
+            &wait::waiting_models(&reg, model),
+            model,
+            &since,
+            &step,
+            now,
+        );
         let id = card.id.clone();
         self.status = card.title.clone();
         self.post_feed_card(card);
@@ -102,7 +127,15 @@ impl Cabin {
         if halted || self.harness.router.wait.rx.is_some() {
             return;
         }
-        let Some(model) = self.harness.router.wait.wait.as_ref().filter(|w| w.due(now)).map(|w| w.model.clone()) else {
+        let Some(model) = self
+            .harness
+            .router
+            .wait
+            .wait
+            .as_ref()
+            .filter(|w| w.due(now))
+            .map(|w| w.model.clone())
+        else {
             return;
         };
         // Pings go on the plan sign-in only: an included call, never money.
@@ -114,7 +147,11 @@ impl Cabin {
         let (tx, rx) = mpsc::channel();
         self.harness.router.wait.rx = Some(rx);
         std::thread::spawn(move || {
-            let mut ping = |m: &ModelMeta| bearer.as_deref().is_some_and(|b| grokhub_agent::route::sources::ping_model(&dir, b, m));
+            let mut ping = |m: &ModelMeta| {
+                bearer
+                    .as_deref()
+                    .is_some_and(|b| grokhub_agent::route::sources::ping_model(&dir, b, m))
+            };
             let _ = tx.send(wait::recheck(&dir, &model, now, &mut ping));
         });
     }
@@ -125,7 +162,11 @@ impl Cabin {
         let Some(done) = w.wait.take() else {
             return;
         };
-        w.carry = Some((done.model.clone(), done.attempts.saturating_add(1), Instant::now()));
+        w.carry = Some((
+            done.model.clone(),
+            done.attempts.saturating_add(1),
+            Instant::now(),
+        ));
         if let Some(id) = w.card.take() {
             self.updates.retain(|c| c.id != id);
             self.persist_updates();
@@ -149,7 +190,10 @@ impl Cabin {
         }
         self.harness.router.wait.resume = None;
         self.harness.router.wait.paused_turn = None;
-        let paused = self.messages.last().is_some_and(|m| m.0 == "assistant" && m.1.contains(NO_ROUTE_MSG));
+        let paused = self
+            .messages
+            .last()
+            .is_some_and(|m| m.0 == "assistant" && m.1.contains(NO_ROUTE_MSG));
         let ask = self.last_ask_in(None);
         if paused && !ask.is_empty() {
             self.kick_model_retry(ask);
@@ -171,9 +215,20 @@ impl Cabin {
 }
 
 /// The waiting card for `model`'s wait.
-pub(super) fn model_wait_card(models: &[String], model: &str, since: &str, step: &str, now: u64) -> grokhub_core::UpdateCard {
+pub(super) fn model_wait_card(
+    models: &[String],
+    model: &str,
+    since: &str,
+    step: &str,
+    now: u64,
+) -> grokhub_core::UpdateCard {
     let (title, text) = wait::waiting_card(models, since, step);
-    grokhub_core::router_update_card(&format!("{}{model}", grokhub_core::MODEL_WAIT_SOURCE_PREFIX), &title, &text, now)
+    grokhub_core::router_update_card(
+        &format!("{}{model}", grokhub_core::MODEL_WAIT_SOURCE_PREFIX),
+        &title,
+        &text,
+        now,
+    )
 }
 
 #[cfg(test)]
@@ -181,7 +236,10 @@ mod tests {
     use super::*;
 
     fn wait_cards(app: &Cabin) -> Vec<&grokhub_core::UpdateCard> {
-        app.updates.iter().filter(|c| grokhub_core::is_model_wait_card(c)).collect()
+        app.updates
+            .iter()
+            .filter(|c| grokhub_core::is_model_wait_card(c))
+            .collect()
     }
 
     #[test]
@@ -191,36 +249,73 @@ mod tests {
         std::fs::create_dir_all(&root).unwrap();
         let _pin = crate::config::TestConfigDir::set(root.clone());
         let mut app = Cabin::quiet_for_test();
-        app.live_mut().push(("user".into(), "Summarize inbox".into()));
+        app.live_mut()
+            .push(("user".into(), "Summarize inbox".into()));
         // A budget pause is not a wait: nothing is remembered to resume.
         app.apply_job_fail(grokhub_agent::route::budget::BUDGET_PAUSE_MSG);
         assert_eq!(app.harness.router.wait.paused_turn, None);
         app.chat_job_thread = Some(app.visible_thread_id());
         app.apply_job_fail(&format!("protocol error: {NO_ROUTE_MSG}"));
-        assert_eq!(app.harness.router.wait.paused_turn, Some(app.visible_thread_id()));
+        assert_eq!(
+            app.harness.router.wait.paused_turn,
+            Some(app.visible_thread_id())
+        );
         app.start_model_wait("chat:default", "grok-4.7", 1_000);
         let cards = wait_cards(&app);
         assert_eq!(cards.len(), 1);
         assert_eq!(cards[0].title, "Waiting for a model: grok-4.7");
         let body = cards[0].body.clone().unwrap();
-        assert!(body.starts_with("grok-4.7 isn't answering since ") && body.ends_with("; retrying. “Summarize inbox” picks up on its own once one answers."), "{body}");
+        assert!(
+            body.starts_with("grok-4.7 isn't answering since ")
+                && body.ends_with(
+                    "; retrying. “Summarize inbox” picks up on its own once one answers."
+                ),
+            "{body}"
+        );
         assert_eq!(app.status, "Waiting for a model: grok-4.7");
         // The same pause again keeps the one card and the one wait.
         app.start_model_wait("chat:default", "grok-4.7", 2_000);
         assert_eq!(wait_cards(&app).len(), 1);
         let w = app.harness.router.wait.wait.clone().unwrap();
-        assert_eq!((w.step.as_str(), w.attempts, w.next_ms), ("Summarize inbox", 0, 16_000));
+        assert_eq!(
+            (w.step.as_str(), w.attempts, w.next_ms),
+            ("Summarize inbox", 0, 16_000)
+        );
         app.retry_model_wait_now();
-        assert!(app.harness.router.wait.wait.as_ref().unwrap().due(now_ms()), "Retry now checks at once");
+        assert!(
+            app.harness.router.wait.wait.as_ref().unwrap().due(now_ms()),
+            "Retry now checks at once"
+        );
         // grok-4.6 answers: the card goes, the turn goes out again, one quiet note.
         app.end_model_wait("grok-4.6");
         assert!(wait_cards(&app).is_empty());
         let w = &app.harness.router.wait;
-        assert_eq!((w.wait.is_none(), w.paused_turn.is_none(), w.resume.is_none()), (true, true, true));
-        assert_eq!(app.harness.router.rows.first(), Some(&("model-back".to_string(), "Back on grok-4.6; resumed: Summarize inbox".to_string())));
+        assert_eq!(
+            (
+                w.wait.is_none(),
+                w.paused_turn.is_none(),
+                w.resume.is_none()
+            ),
+            (true, true, true)
+        );
+        assert_eq!(
+            app.harness.router.rows.first(),
+            Some(&(
+                "model-back".to_string(),
+                "Back on grok-4.6; resumed: Summarize inbox".to_string()
+            ))
+        );
         // Pausing again right away keeps the backoff's place.
         app.start_model_wait("chat:default", "grok-4.7", 50_000);
-        assert_eq!(app.harness.router.wait.wait.as_ref().map(|w| (w.attempts, w.next_ms)), Some((1, 80_000)));
+        assert_eq!(
+            app.harness
+                .router
+                .wait
+                .wait
+                .as_ref()
+                .map(|w| (w.attempts, w.next_ms)),
+            Some((1, 80_000))
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -232,8 +327,18 @@ mod tests {
         let _pin = crate::config::TestConfigDir::set(root.clone());
         let mut app = Cabin::quiet_for_test();
         app.start_model_wait("background:dream", "grok-4.7", 1_000);
-        let step = grokhub_agent::route::policy::class_row("background:dream").unwrap().plain;
-        assert_eq!(app.harness.router.wait.wait.as_ref().map(|w| w.step.as_str()), Some(step));
+        let step = grokhub_agent::route::policy::class_row("background:dream")
+            .unwrap()
+            .plain;
+        assert_eq!(
+            app.harness
+                .router
+                .wait
+                .wait
+                .as_ref()
+                .map(|w| w.step.as_str()),
+            Some(step)
+        );
         app.end_model_wait("grok-4.7");
         assert_eq!(app.status, format!("Back on grok-4.7 for {step}"));
         assert!(wait_cards(&app).is_empty());
