@@ -13,11 +13,13 @@ use std::path::Path;
 use grokhub_core::outcome::{OutcomeResult, OutcomeSignals, OutcomeTokens, TaskOutcome};
 use grokhub_core::run_metrics::RunMetrics;
 use grokhub_core::self_review::{
-    build_self_review_digest, parse_self_review, rank_proposals, self_review_system_prompt,
-    PatchMark, RankedProposal, RejectedProposal, SkillStats, SELF_REVIEW_CLASS,
+    brain_digest, build_self_review_digest, parse_brain_tweaks, parse_self_review,
+    pick_brain_tweak, rank_proposals, self_review_system_prompt, BrainProposal, PatchMark,
+    RankedProposal, RejectedProposal, SkillStats, SELF_REVIEW_CLASS,
 };
 
 use crate::client::{ClientError, ContentPart, InputItem, ModelClient};
+use crate::harness::brain_tune::BrainAsk;
 use crate::harness::changes::{ChangeKind, ChangeLedger, ChangeOp};
 use crate::harness::detect::{span_kind, verify_passed, SpanKind};
 use crate::harness::ladder::Rung;
@@ -344,7 +346,17 @@ pub struct WeeklyPass {
     pub refused: Vec<RejectedProposal>,
     /// Code-change ideas for a person to make (card 32 PR D); never applied.
     pub ideas: Vec<grokhub_core::self_review::CodeIdea>,
+    /// Brain 6 PR 2: the one policy or playbook tweak the pass asked for,
+    /// for the cabin to hand to `brain_tune` (never more than one a pass).
+    pub brain: Option<BrainTweak>,
     pub tokens: CallTokens,
+}
+
+/// The weekly pass's policy or playbook tweak and what it was asked about.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct BrainTweak {
+    pub ask: BrainAsk,
+    pub proposal: BrainProposal,
 }
 
 /// The span for one proposal the protected-surface guard refused: a deny,
@@ -359,15 +371,21 @@ pub fn guard_span(target: &str, why: &str, now: u64) -> Span {
 
 /// The weekly model call: one routed `background:review` call at the
 /// background effort, then the fixed rules. Refused targets are logged as
-/// scope findings; the call's tokens go on a span.
+/// scope findings; the call's tokens go on a span. With `brain`, the same
+/// call is asked for one tweak to that weak policy row or playbook.
 pub fn run_weekly(
     config_dir: &Path,
     client: &dyn ModelClient,
     model: &str,
     stats: &[SkillStats],
+    brain: Option<&BrainAsk>,
     now: u64,
     cancel: &CancelToken,
 ) -> Result<WeeklyPass, ClientError> {
+    let mut digest = build_self_review_digest(stats);
+    if let Some(ask) = brain {
+        digest.push_str(&brain_digest(&ask.stats, &ask.text));
+    }
     let input = vec![
         InputItem::Message {
             role: "system".into(),
@@ -375,7 +393,7 @@ pub fn run_weekly(
         },
         InputItem::Message {
             role: "user".into(),
-            content: vec![ContentPart::InputText(build_self_review_digest(stats))],
+            content: vec![ContentPart::InputText(digest)],
         },
     ];
     let call = ModelCall::xai(
@@ -386,7 +404,25 @@ pub fn run_weekly(
         input,
     );
     let routed = call_model(client, &call, cancel)?;
-    let (kept, refused) = rank_proposals(parse_self_review(&routed.out.text), stats);
+    let (kept, mut refused) = rank_proposals(parse_self_review(&routed.out.text), stats);
+    let tweaks = parse_brain_tweaks(&routed.out.text);
+    let brain = match brain {
+        Some(ask) => {
+            let (picked, off) = pick_brain_tweak(tweaks, &ask.stats);
+            refused.extend(off);
+            picked.map(|proposal| BrainTweak {
+                ask: ask.clone(),
+                proposal,
+            })
+        }
+        None => {
+            refused.extend(tweaks.into_iter().map(|p| RejectedProposal {
+                target: p.target,
+                why: "this week's review asked for no Brain tweak".into(),
+            }));
+            None
+        }
+    };
     let ideas = grokhub_core::self_review::rank_code_ideas(
         grokhub_core::self_review::parse_code_ideas(&routed.out.text),
         stats,
@@ -397,8 +433,7 @@ pub fn run_weekly(
     let mut span = Span::soft_allow(
         SELF_REVIEW_SESSION,
         SELF_REVIEW_TOOL,
-        &serde_json::json!({ "kept": kept.len(), "refused": refused.len(), "ideas": ideas.len() })
-            .to_string(),
+        &serde_json::json!({ "kept": kept.len(), "refused": refused.len(), "ideas": ideas.len(), "brain": usize::from(brain.is_some()) }).to_string(),
         "ok",
         "",
         crate::harness::AccessMode::Supervised,
@@ -416,6 +451,7 @@ pub fn run_weekly(
         kept,
         refused,
         ideas,
+        brain,
         tokens: routed.tokens,
     })
 }
@@ -712,7 +748,16 @@ mod tests {
             failures: 3,
             ..Default::default()
         }];
-        let pass = run_weekly(&d, &client, "grok-4.7", &stats, 5_000, &CancelToken::new()).unwrap();
+        let pass = run_weekly(
+            &d,
+            &client,
+            "grok-4.7",
+            &stats,
+            None,
+            5_000,
+            &CancelToken::new(),
+        )
+        .unwrap();
         assert!(pass.kept.is_empty(), "{:?}", pass.kept);
         let whys: Vec<(&str, &str)> = pass
             .refused
@@ -831,7 +876,16 @@ mod tests {
             failures: 3,
             ..Default::default()
         }];
-        let pass = run_weekly(&d, &client, "grok-4.7", &stats, 5_000, &CancelToken::new()).unwrap();
+        let pass = run_weekly(
+            &d,
+            &client,
+            "grok-4.7",
+            &stats,
+            None,
+            5_000,
+            &CancelToken::new(),
+        )
+        .unwrap();
         assert_eq!(client.0.load(Ordering::SeqCst), 1);
         assert_eq!(pass.kept.len(), 1);
         assert_eq!(

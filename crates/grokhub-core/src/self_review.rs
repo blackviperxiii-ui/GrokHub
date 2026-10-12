@@ -18,6 +18,7 @@ use crate::organs::LocalClock;
 use crate::outcome::{OutcomeResult, TaskOutcome, REASON_FINDING};
 use crate::protected_surface::{ProtectedSurface, TuneTarget};
 use crate::redact::redact_secrets;
+use crate::run_metrics::RunMetrics;
 
 /// At most this many proposal cards a week.
 pub const SELF_REVIEW_CAP: usize = 5;
@@ -355,6 +356,239 @@ pub fn rank_code_ideas(ideas: Vec<CodeIdea>, stats: &[SkillStats]) -> Vec<CodeId
         }
     }
     out
+}
+
+/// Brain 6 PR 2: decided runs a policy row or playbook needs this week
+/// before the weekly pass asks for a tweak to it.
+pub const BRAIN_MIN_RUNS: usize = 5;
+/// A row or playbook is weak when at least this share of its runs failed.
+pub const BRAIN_WEAK_FAIL_PCT: usize = 30;
+/// A playbook is weak when fewer than this share of its runs passed their
+/// re-check (its verify).
+pub const BRAIN_WEAK_CHECK_PCT: usize = 50;
+/// The line the model writes before a tweak's new text.
+pub const BRAIN_PREFIX: &str = "TUNE_BRAIN:";
+const BRAIN_OPEN: &str = "<<<";
+const BRAIN_CLOSE: &str = ">>>";
+/// Longest new text kept from a Brain tweak, in chars.
+const BRAIN_TEXT_MAX: usize = 16_000;
+
+/// Which Brain table a group of runs used.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord)]
+pub enum BrainKind {
+    #[default]
+    Policy,
+    Playbook,
+}
+
+/// One policy row's or playbook's week, from the runs' Brain records.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct BrainStats {
+    pub kind: BrainKind,
+    /// The row key as runs name it ("repair × critical"), or the playbook id.
+    pub key: String,
+    pub runs: usize,
+    pub failures: usize,
+    pub verified: usize,
+    pub steps: u64,
+}
+
+impl BrainStats {
+    /// The tune target: `policy:<intent>-<care>` or `playbook:<id>`.
+    pub fn target(&self) -> String {
+        match self.kind {
+            BrainKind::Policy => format!("policy:{}", self.key.replace(" × ", "-")),
+            BrainKind::Playbook => format!("playbook:{}", self.key),
+        }
+    }
+
+    /// The trial class runs are matched on (`RunBrain::in_class`).
+    pub fn class(&self) -> String {
+        match self.kind {
+            BrainKind::Policy => format!("policy:{}", self.key),
+            BrainKind::Playbook => format!("playbook:{}", self.key),
+        }
+    }
+
+    /// "the repair × critical row" / "the repair-linux playbook".
+    pub fn name(&self) -> String {
+        match self.kind {
+            BrainKind::Policy => format!("the {} row", self.key),
+            BrainKind::Playbook => format!("the {} playbook", self.key),
+        }
+    }
+
+    fn fails_often(&self) -> bool {
+        self.failures > 0 && self.failures * 100 >= self.runs * BRAIN_WEAK_FAIL_PCT
+    }
+
+    fn checks_rarely(&self) -> bool {
+        self.kind == BrainKind::Playbook && self.verified * 100 < self.runs * BRAIN_WEAK_CHECK_PCT
+    }
+
+    /// Enough runs and a clear weakness: many failed, or (a playbook) few re-checked.
+    pub fn weak(&self) -> bool {
+        self.runs >= BRAIN_MIN_RUNS && (self.fails_often() || self.checks_rarely())
+    }
+
+    /// "3 of 6 runs on the repair-linux playbook needed a fix".
+    pub fn numbers(&self) -> String {
+        let name = self.name();
+        if self.checks_rarely() && !self.fails_often() {
+            format!(
+                "{} of {} runs on {name} passed a re-check",
+                self.verified, self.runs
+            )
+        } else {
+            format!(
+                "{} of {} runs on {name} needed a fix",
+                self.failures, self.runs
+            )
+        }
+    }
+}
+
+/// Per policy row and per playbook over `[now - window, now]`, from the
+/// runs' Brain records. Runs without one (older lines) are not counted.
+pub fn brain_stats(runs: &[RunMetrics], now: u64, window: u64) -> Vec<BrainStats> {
+    let mut by: BTreeMap<(BrainKind, String), BrainStats> = BTreeMap::new();
+    for m in runs {
+        if m.finished_at > now || now - m.finished_at > window || m.result == OutcomeResult::Pending
+        {
+            continue;
+        }
+        for (kind, key) in [
+            (BrainKind::Policy, &m.brain.policy),
+            (BrainKind::Playbook, &m.brain.playbook),
+        ] {
+            if key.is_empty() {
+                continue;
+            }
+            let s = by.entry((kind, key.clone())).or_insert_with(|| BrainStats {
+                kind,
+                key: key.clone(),
+                ..Default::default()
+            });
+            s.runs += 1;
+            s.failures += usize::from(m.result == OutcomeResult::Failure);
+            s.verified += usize::from(m.verified);
+            s.steps += u64::from(m.steps);
+        }
+    }
+    by.into_values().collect()
+}
+
+/// The weak groups, worst first: highest failure share, then lowest
+/// re-check share, then more runs, then by target.
+pub fn weak_brain(stats: &[BrainStats]) -> Vec<&BrainStats> {
+    let mut out: Vec<&BrainStats> = stats.iter().filter(|s| s.weak()).collect();
+    out.sort_by(|a, b| {
+        (b.failures * a.runs)
+            .cmp(&(a.failures * b.runs))
+            .then((a.verified * b.runs).cmp(&(b.verified * a.runs)))
+            .then(b.runs.cmp(&a.runs))
+            .then(a.target().cmp(&b.target()))
+    });
+    out
+}
+
+/// The digest lines that ask for one tweak to a weak row or playbook, with
+/// its current text.
+pub fn brain_digest(stats: &BrainStats, text: &str) -> String {
+    let kind = match stats.kind {
+        BrainKind::Policy => "policy row",
+        BrainKind::Playbook => "playbook",
+    };
+    format!(
+        "\nBrain {kind} this week: {}.\n\
+         You may propose one change to it that would have avoided this. Keep every back-up, re-check and safety step, \
+         never lower its care, and change nothing else. Write the line\n\
+         {BRAIN_PREFIX} {} | <short title>\n\
+         then the full new text between a line {BRAIN_OPEN} and a line {BRAIN_CLOSE}. Its current text:\n\
+         ```toml\n{}\n```\n",
+        stats.numbers(),
+        stats.target(),
+        text.trim_end(),
+    )
+}
+
+/// One policy or playbook tweak from the weekly model call.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct BrainProposal {
+    pub target: String,
+    pub title: String,
+    /// The full new row or playbook file, ending in a newline.
+    pub text: String,
+}
+
+/// `TUNE_BRAIN: <target> | <title>` lines, each followed by its text
+/// between `<<<` and `>>>`. A line without a closed text block is dropped.
+/// The text is kept as written: the protected-surface guard checks it.
+pub fn parse_brain_tweaks(raw: &str) -> Vec<BrainProposal> {
+    let mut out = Vec::new();
+    let mut lines = raw.lines();
+    while let Some(l) = lines.next() {
+        let Some(rest) = l.trim().strip_prefix(BRAIN_PREFIX) else {
+            continue;
+        };
+        let mut parts = rest.splitn(2, '|').map(str::trim);
+        let target = parts.next().unwrap_or("").to_string();
+        let title: String = parts.next().unwrap_or("").chars().take(TITLE_MAX).collect();
+        if lines.by_ref().find(|l| !l.trim().is_empty()).map(str::trim) != Some(BRAIN_OPEN) {
+            continue;
+        }
+        let mut body: Vec<&str> = Vec::new();
+        let mut closed = false;
+        for l in lines.by_ref() {
+            if l.trim() == BRAIN_CLOSE {
+                closed = true;
+                break;
+            }
+            body.push(l);
+        }
+        let text = format!("{}\n", body.join("\n").trim_end());
+        if closed
+            && !target.is_empty()
+            && !text.trim().is_empty()
+            && text.chars().count() <= BRAIN_TEXT_MAX
+        {
+            out.push(BrainProposal {
+                target: redact_secrets(&target),
+                title: redact_secrets(&title),
+                text,
+            });
+        }
+    }
+    out
+}
+
+/// The fixed rules: one tweak a pass, and only to the row or playbook the
+/// digest asked about. A tweak aimed elsewhere is refused (with the guarded
+/// area's name when it names one).
+pub fn pick_brain_tweak(
+    raw: Vec<BrainProposal>,
+    asked: &BrainStats,
+) -> (Option<BrainProposal>, Vec<RejectedProposal>) {
+    let want = asked.target();
+    let mut kept: Option<BrainProposal> = None;
+    let mut refused = Vec::new();
+    for p in raw {
+        if p.target == want {
+            if kept.is_none() {
+                kept = Some(p);
+            }
+            continue;
+        }
+        let why = match ProtectedSurface::check(&p.target) {
+            Err(why) if why.starts_with("GrokHub never") => why,
+            _ => format!("a weekly Brain tweak may only change {}", asked.name()),
+        };
+        refused.push(RejectedProposal {
+            target: p.target,
+            why,
+        });
+    }
+    (kept, refused)
 }
 
 /// The week's numbers line for a code-idea card.
@@ -1235,5 +1469,91 @@ mod tests {
         );
         assert!(!out.contains("viper"));
         assert!(!out.contains("sk-abcdefghijklmnopqrstuv"));
+    }
+
+    #[test]
+    fn brain_groups_need_five_runs_and_a_failure_or_re_check_weakness() {
+        use crate::run_metrics::RunBrain;
+        let now = 100 * DAY;
+        let line = |i: u64, policy: &str, playbook: &str, ok: bool, verified: bool| RunMetrics {
+            run: format!("c:{i}"),
+            result: if ok {
+                OutcomeResult::Success
+            } else {
+                OutcomeResult::Failure
+            },
+            verified,
+            steps: 4,
+            brain: RunBrain {
+                policy: policy.into(),
+                playbook: playbook.into(),
+                ..Default::default()
+            },
+            finished_at: now - i,
+            ..Default::default()
+        };
+        let mut runs: Vec<RunMetrics> = Vec::new();
+        // task × careful: 2 of 6 failed (33%): weak.
+        for i in 0..6 {
+            runs.push(line(i, "task × careful", "", i >= 2, true));
+        }
+        // files-tidy: all 5 worked but only 2 were re-checked: weak.
+        for i in 10..15 {
+            runs.push(line(i, "", "files-tidy", true, i < 12));
+        }
+        // chat × casual: 1 of 5 failed (20%), and rows have no re-check rule: not weak.
+        for i in 20..25 {
+            runs.push(line(i, "chat × casual", "", i != 20, false));
+        }
+        // An old line with no Brain record and a pending run count nowhere.
+        runs.push(line(30, "", "", false, false));
+        runs.push(RunMetrics {
+            result: OutcomeResult::Pending,
+            ..line(31, "task × careful", "", true, true)
+        });
+        let stats = brain_stats(&runs, now, WEEK_MS);
+        let got: Vec<(String, usize, usize, usize, bool)> = stats
+            .iter()
+            .map(|s| (s.target(), s.runs, s.failures, s.verified, s.weak()))
+            .collect();
+        assert_eq!(
+            got,
+            vec![
+                ("policy:chat-casual".to_string(), 5, 1, 0, false),
+                ("policy:task-careful".to_string(), 6, 2, 6, true),
+                ("playbook:files-tidy".to_string(), 5, 0, 2, true),
+            ]
+        );
+        let weak: Vec<String> = weak_brain(&stats).iter().map(|s| s.numbers()).collect();
+        assert_eq!(
+            weak,
+            vec![
+                "2 of 6 runs on the task × careful row needed a fix",
+                "2 of 5 runs on the files-tidy playbook passed a re-check",
+            ]
+        );
+        assert_eq!(stats[1].class(), "policy:task × careful");
+        // Four weak runs are under the minimum.
+        assert!(weak_brain(&brain_stats(&runs[..4], now, WEEK_MS)).is_empty());
+    }
+
+    #[test]
+    fn brain_tweaks_parse_only_closed_blocks() {
+        let raw = "PATCH_SKILL: skill:x | t | 1. a\n\
+                   TUNE_BRAIN: playbook:files-tidy | List first\n<<<\nid = \"files-tidy\"\r\nname = \"Tidy\"\n>>>\n\
+                   TUNE_BRAIN: policy:task-careful | Never closed\n<<<\nintent = \"task\"\n";
+        assert_eq!(
+            parse_brain_tweaks(raw),
+            vec![BrainProposal {
+                target: "playbook:files-tidy".into(),
+                title: "List first".into(),
+                text: "id = \"files-tidy\"\nname = \"Tidy\"\n".into(),
+            }]
+        );
+        assert_eq!(
+            parse_self_review(raw).len(),
+            1,
+            "the skill line still parses alone"
+        );
     }
 }

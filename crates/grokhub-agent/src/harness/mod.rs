@@ -100,8 +100,8 @@ pub use backend::{
     park_desk_call, ClickOutcome, ClickRequest, ComputerUseBackend, DeskCall, CU_TRACE,
 };
 pub use brain_tune::{
-    propose, user_version, PlaybookTarget, PolicyTarget, Tweak, BRAIN_SHARE_PCT, OUTSIDE_EDIT,
-    POLICY_ID,
+    apply_brain_tweak, brain_ask, propose, user_version, BrainAsk, PlaybookTarget, PolicyTarget,
+    Tweak, BRAIN_SHARE_PCT, OUTSIDE_EDIT, POLICY_ID,
 };
 pub use canary::{
     diff_stat, judge, open_trial, pick_arm, read_versions, revert_version, settle_trials,
@@ -172,8 +172,8 @@ pub use proactive::{
 };
 pub use self_improve::{
     guard_span, last_recorded_run, outcome_from_spans, patch_marks, reject_live_replay,
-    replay_gate, replay_patch, run_metrics_from_spans, run_weekly, spans_for, ReplayOpts,
-    WeeklyPass, GUARD_TOOL, REPLAY_LIVE_REFUSED, REPLAY_TOOL, SELF_REVIEW_SESSION,
+    replay_gate, replay_patch, run_metrics_from_spans, run_weekly, spans_for, BrainTweak,
+    ReplayOpts, WeeklyPass, GUARD_TOOL, REPLAY_LIVE_REFUSED, REPLAY_TOOL, SELF_REVIEW_SESSION,
     SELF_REVIEW_TOOL,
 };
 pub use self_manage::{

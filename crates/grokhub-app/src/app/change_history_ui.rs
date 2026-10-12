@@ -2,8 +2,9 @@
 //! change the weekly pass made (on trial, kept, rolled back, reverted), with
 //! a click Revert on a kept one, and the code-change ideas the user saved.
 //! A code idea is never applied: it can only be copied as a GitHub issue the
-//! user pastes by hand, with home paths, emails and keys taken out. Nothing
-//! here makes a network request.
+//! user pastes by hand, with home paths, emails and keys taken out. Brain 6
+//! PR 2 adds one line per domain (runs, success, average steps, re-checks)
+//! from the runs on file. Nothing here makes a network request.
 
 use eframe::egui;
 use grokhub_agent::harness as hx;
@@ -17,6 +18,7 @@ use crate::{config, skills};
 const HISTORY_ROWS: usize = 8;
 /// Saved code ideas kept, newest last.
 pub(super) const SAVED_IDEAS_CAP: usize = 50;
+const DOMAINS_HEAD: &str = "Runs by area (runs on file):";
 const HISTORY_EMPTY: &str =
     "No self-changes yet. The Sunday self-review proposes them as Pulse cards.";
 
@@ -65,6 +67,16 @@ pub(super) fn history_rows(versions: &[hx::Version], now: u64) -> Vec<HistoryRow
         });
     }
     rows
+}
+
+/// Brain 6 PR 2: one compact line per domain the runs on file name (runs,
+/// success, average steps, re-checks). `None` before any run has a Brief.
+pub(super) fn domain_block(rows: &[grokhub_core::run_metrics::DomainRow]) -> Option<String> {
+    if rows.is_empty() {
+        return None;
+    }
+    let lines: Vec<String> = rows.iter().map(|r| r.line()).collect();
+    Some(format!("{DOMAINS_HEAD}\n{}", lines.join("\n")))
 }
 
 impl Cabin {
@@ -124,6 +136,9 @@ impl Cabin {
         crate::cards::settings_note(ui, "Self-improvement history");
         if rows.is_empty() {
             crate::cards::settings_note(ui, HISTORY_EMPTY);
+        }
+        if let Some(block) = domain_block(&self.domain_rows_now()) {
+            crate::cards::settings_note(ui, &block);
         }
         for row in rows {
             let Some(version) = row.revert else {
