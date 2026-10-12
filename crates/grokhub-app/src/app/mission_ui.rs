@@ -19,13 +19,12 @@ impl Cabin {
         let trace = self.trace_id();
         let turn = self.turn_no();
         let dir = crate::config::config_dir();
-        let brief = grokhub_agent::brain::brief_for_turn(&dir, &trace, turn)
-            .or_else(|| {
-                grokhub_agent::brain::read_briefs(&dir)
-                    .into_iter()
-                    .rev()
-                    .find(|l| l.chat_id == trace)
-            });
+        let brief = grokhub_agent::brain::brief_for_turn(&dir, &trace, turn).or_else(|| {
+            grokhub_agent::brain::read_briefs(&dir)
+                .into_iter()
+                .rev()
+                .find(|l| l.chat_id == trace)
+        });
         let episode = self.episode_here();
         let todos = grokhub_agent::todos_for(&trace);
         let hard_for_chat = |p: &super::harness_ui::HardParkUi| p.chat_id == trace;
@@ -42,11 +41,7 @@ impl Cabin {
                     format!("{} · {}", p.tool, p.action)
                 }
             });
-        let soft = self
-            .harness
-            .soft_parks
-            .iter()
-            .any(|p| p.chat_id == trace);
+        let soft = self.harness.soft_parks.iter().any(|p| p.chat_id == trace);
         let (intent, care, done_goal, playbook_title) = match &brief {
             Some(b) => (
                 b.brief.intent.as_str().to_string(),
@@ -79,15 +74,13 @@ impl Cabin {
         } else {
             title.clone()
         };
-        let id = episode
-            .map(|e| e.id.clone())
-            .unwrap_or_else(|| {
-                if trace.is_empty() {
-                    String::new()
-                } else {
-                    format!("{trace}:{turn}")
-                }
-            });
+        let id = episode.map(|e| e.id.clone()).unwrap_or_else(|| {
+            if trace.is_empty() {
+                String::new()
+            } else {
+                format!("{trace}:{turn}")
+            }
+        });
         let activity = match episode {
             Some(e) => e.header(now_ms()),
             None if !todos.is_empty() => {
@@ -122,10 +115,7 @@ impl Cabin {
         };
         let goal_outcome = String::new();
         let todos_verified = outcome_reasons.iter().any(|r| r == "verify_ok")
-            || matches!(
-                outcome_result.as_str(),
-                "success"
-            );
+            || matches!(outcome_result.as_str(), "success");
         MissionSeed {
             id,
             title,

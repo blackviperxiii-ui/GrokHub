@@ -469,7 +469,10 @@ mod tests {
     fn unfinished_completed_todos_without_verify_stay_unverified() {
         let item = MissionCheckStatus::from_todo("completed", false);
         assert_eq!(item, MissionCheckStatus::Unverified);
-        assert_eq!(MissionCheckStatus::from_todo("pending", true).as_str(), "planned");
+        assert_eq!(
+            MissionCheckStatus::from_todo("pending", true).as_str(),
+            "planned"
+        );
     }
 
     #[test]
