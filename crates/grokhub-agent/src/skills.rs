@@ -206,12 +206,7 @@ fn discover_uncached(workspace: &Path, home: Option<&Path>, plugin_dirs: &[PathB
         );
     }
     // Same folder skill_list / skill_create use — must load via `skill` too.
-    push_skill_root(
-        &mut found,
-        &cabin_skills_dir(),
-        SkillSource::Cabin,
-        15_000,
-    );
+    push_skill_root(&mut found, &cabin_skills_dir(), SkillSource::Cabin, 15_000);
     for (i, dir) in plugin_dirs.iter().enumerate() {
         let rank = 20_000u32.saturating_add(u32::try_from(i).unwrap_or(u32::MAX));
         push_skill_root(&mut found, dir, SkillSource::Plugin, rank);
@@ -817,10 +812,7 @@ mod tests {
                 .any(|s| s.name == "gamingprofile" && s.source == SkillSource::Cabin),
             "PascalCase frontmatter normalizes: {skills:?}"
         );
-        let loaded = tool_run(
-            &repo,
-            &serde_json::json!({"name": "steamlibreview"}),
-        );
+        let loaded = tool_run(&repo, &serde_json::json!({"name": "steamlibreview"}));
         assert!(!loaded.failed, "{}", loaded.text);
         assert!(
             loaded.text.contains("Use sealed Installed app learnings."),

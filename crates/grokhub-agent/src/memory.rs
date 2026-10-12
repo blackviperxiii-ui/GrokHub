@@ -313,12 +313,11 @@ fn inject_snippets(workspace: &Path, user_text: &str, include_legacy: bool) -> O
 /// a claim of empty memory or a `~/.steam` workspace walk.
 pub fn library_intent(user_text: &str) -> bool {
     let q = user_text.to_ascii_lowercase();
-    const NEEDLES: &[&str] = &[
+    const PHRASES: &[&str] = &[
         "gaming",
         "game library",
         "games library",
         "steam library",
-        "steam",
         "installed app",
         "installed apps",
         "my library",
@@ -330,7 +329,18 @@ pub fn library_intent(user_text: &str) -> bool {
         "which games",
         "my games",
     ];
-    NEEDLES.iter().any(|n| q.contains(n))
+    if PHRASES.iter().any(|n| q.contains(n)) {
+        return true;
+    }
+    // Whole-word "steam" only — never substring-match `upstream` / `downstream`.
+    library_word(&q, "steam")
+}
+
+/// Alphanumeric token match (word boundaries). `~/.steam/path` still hits
+/// because `/` and `.` split tokens.
+fn library_word(hay: &str, word: &str) -> bool {
+    hay.split(|c: char| !c.is_ascii_alphanumeric())
+        .any(|tok| tok == word)
 }
 
 /// Sealed installed-app (and related scope) lines for a library-shaped ask.
@@ -1319,6 +1329,19 @@ mod tests {
             followup_injection("scan my steam library").expect("follow-up library ask injects");
         assert!(follow.contains("Installed app: ARC Raiders"), "{follow}");
         assert!(followup_injection("what is 2+2").is_none());
+    }
+
+    #[test]
+    fn library_intent_matches_steam_as_a_word_not_a_substring() {
+        assert!(!library_intent("fix the upstream merge conflict"));
+        assert!(!library_intent("push the downstream branch"));
+        assert!(!library_intent("the codebase is upstream of ours"));
+        assert!(library_intent("steam library"));
+        assert!(library_intent("scan my steam library"));
+        assert!(library_intent("my steam"));
+        assert!(library_intent("what's on Steam?"));
+        assert!(library_intent("look under ~/.steam/steamapps"));
+        assert!(!library_intent("what is 2+2"));
     }
 
     #[test]

@@ -174,11 +174,7 @@ fn skill_list(ctx: &SelfCtx<'_>) -> String {
         // skill_list never advertises a name the skill tool rejects.
         .map(|s| {
             let id = grokhub_core::skill_dir_name(&s.name);
-            let id = if id.is_empty() {
-                s.name.clone()
-            } else {
-                id
-            };
+            let id = if id.is_empty() { s.name.clone() } else { id };
             format!("{id}: {}", s.description)
         })
         .collect();

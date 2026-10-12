@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- Fixed: sealed Installed-app learnings (and other scope facts) reach the model on gaming / Steam / library asks — first turn and follow-ups — even when Memory is still on the legacy backend, so the cabin no longer claims "no recorded info" while Settings shows Learned N things.
+- Fixed: sealed Installed-app learnings (and other scope facts) reach the model on gaming / Steam / library asks — first turn and follow-ups — even when Memory is still on the legacy backend, so the cabin no longer claims "no recorded info" while Settings shows Learned N things. Steam is matched as a whole word so coding asks about `upstream` / `downstream` do not pull the Installed-app pack.
 - Fixed: cabin skills under the settings `skills/` folder (the same ones `skill_list` shows) load with the `skill` tool; names normalize so `GamingProfile` and `steamlibreview` resolve instead of `unknown skill`.
 - Fixed: the system prompt no longer claims every chat is a permanent read-only phase; it says what tools are available, to prefer sealed Installed-app Memory over `~/.steam` workspace walks, and not to invent OS-permission "fixes".
 - Fixed: `report_findings` one-tap pills that ask to grant workspace/OS path access or "activate" a skill are refused, so path-restriction and skill-activation doom-loops cannot post.
