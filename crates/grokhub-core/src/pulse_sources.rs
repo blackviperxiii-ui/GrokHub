@@ -1,7 +1,8 @@
-//! Free Pulse sources: Hacker News (Algolia), Reddit (public JSON), GitHub release
-//! feeds, YouTube channel feeds and any RSS or Atom feed. No keys, no paid search.
-//! This module builds the requests, parses the replies and keeps the ETag cache;
-//! the app does the HTTP. Every item it yields has a title and a real link.
+//! Free Pulse sources: Hacker News (Algolia), Reddit (public JSON), DuckDuckGo Lite
+//! web search, GitHub release feeds, YouTube channel feeds and any RSS or Atom feed.
+//! No keys, no paid search. This module builds the requests, parses the replies and
+//! keeps the ETag cache; the app does the HTTP. Every item it yields has a title and
+//! a real link.
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -13,15 +14,17 @@ use crate::update_feed::{digest_card, UpdateCard};
 pub enum SourceKind {
     HackerNews,
     Reddit,
+    WebSearch,
     GithubReleases,
     YouTube,
     Rss,
 }
 
 impl SourceKind {
-    pub const ALL: [SourceKind; 5] = [
+    pub const ALL: [SourceKind; 6] = [
         SourceKind::HackerNews,
         SourceKind::Reddit,
+        SourceKind::WebSearch,
         SourceKind::GithubReleases,
         SourceKind::YouTube,
         SourceKind::Rss,
@@ -31,6 +34,7 @@ impl SourceKind {
         match self {
             Self::HackerNews => "Hacker News",
             Self::Reddit => "Reddit",
+            Self::WebSearch => "Web search",
             Self::GithubReleases => "GitHub releases",
             Self::YouTube => "YouTube",
             Self::Rss => "RSS and changelogs",
@@ -41,6 +45,7 @@ impl SourceKind {
         match self {
             Self::HackerNews => "hn",
             Self::Reddit => "reddit",
+            Self::WebSearch => "web",
             Self::GithubReleases => "github",
             Self::YouTube => "youtube",
             Self::Rss => "rss",
@@ -64,6 +69,9 @@ pub struct SourceSettings {
     pub hacker_news: bool,
     #[serde(default = "yes")]
     pub reddit: bool,
+    /// DuckDuckGo Lite topic search (no API key).
+    #[serde(default = "yes")]
+    pub web_search: bool,
     #[serde(default = "yes")]
     pub github: bool,
     #[serde(default = "yes")]
@@ -92,6 +100,7 @@ impl Default for SourceSettings {
         Self {
             hacker_news: true,
             reddit: true,
+            web_search: true,
             github: true,
             youtube: true,
             rss: true,
@@ -116,6 +125,7 @@ impl SourceSettings {
         match kind {
             SourceKind::HackerNews => self.hacker_news,
             SourceKind::Reddit => self.reddit,
+            SourceKind::WebSearch => self.web_search,
             SourceKind::GithubReleases => self.github,
             SourceKind::YouTube => self.youtube,
             SourceKind::Rss => self.rss,
@@ -126,16 +136,17 @@ impl SourceSettings {
         match kind {
             SourceKind::HackerNews => self.hacker_news = on,
             SourceKind::Reddit => self.reddit = on,
+            SourceKind::WebSearch => self.web_search = on,
             SourceKind::GithubReleases => self.github = on,
             SourceKind::YouTube => self.youtube = on,
             SourceKind::Rss => self.rss = on,
         }
     }
 
-    /// The list a kind follows. Hacker News has none: it searches by topic.
+    /// The list a kind follows. Hacker News and Web search have none: they search by topic.
     pub fn list_mut(&mut self, kind: SourceKind) -> Option<&mut Vec<String>> {
         match kind {
-            SourceKind::HackerNews => None,
+            SourceKind::HackerNews | SourceKind::WebSearch => None,
             SourceKind::Reddit => Some(&mut self.subreddits),
             SourceKind::GithubReleases => Some(&mut self.repos),
             SourceKind::YouTube => Some(&mut self.channels),
@@ -147,7 +158,10 @@ impl SourceSettings {
     pub fn add(&mut self, kind: SourceKind, raw: &str) -> Result<String, String> {
         let entry = canonical_entry(kind, raw)?;
         let list = self.list_mut(kind).ok_or_else(|| {
-            "Hacker News follows your interests; there is nothing to add.".to_string()
+            format!(
+                "{} follows your interests; there is nothing to add.",
+                kind.label()
+            )
         })?;
         if let Some(have) = list.iter().find(|have| have.eq_ignore_ascii_case(&entry)) {
             return Err(format!("{have} is already on the list."));
@@ -184,8 +198,10 @@ pub fn check_due(last_run_ms: u64, now_ms: u64, every_ms: u64, just_opened: bool
 
 /// Most entries one source list holds.
 pub const LIST_MAX: usize = 30;
-/// Interest topics searched on Hacker News and Reddit per run.
+/// Interest topics searched on Hacker News, Reddit and Web search per run.
 pub const TOPIC_QUERIES: usize = 3;
+/// Most results kept from one DuckDuckGo Lite page.
+pub const WEB_SEARCH_MAX: usize = 10;
 /// How far back a topic search looks.
 pub const SEARCH_WINDOW_MS: u64 = 3 * 24 * 60 * 60 * 1000;
 /// A source fetched this recently is read from the cache instead.
@@ -223,6 +239,7 @@ pub fn canonical_entry(kind: SourceKind, raw: &str) -> Result<String, String> {
     let raw = raw.trim();
     match kind {
         SourceKind::HackerNews => Err("Hacker News follows your interests.".into()),
+        SourceKind::WebSearch => Err("Web search follows your interests.".into()),
         SourceKind::Reddit => {
             let name = raw
                 .trim_start_matches("https://")
@@ -389,6 +406,19 @@ pub fn requests_for(
             });
         }
     }
+    if s.web_search {
+        for topic in &searched {
+            out.push(SourceReq {
+                kind: SourceKind::WebSearch,
+                url: format!(
+                    "https://lite.duckduckgo.com/lite/?q={}",
+                    query_value(topic)
+                ),
+                name: "Web search".into(),
+                topic: Some(topic.clone()),
+            });
+        }
+    }
     if s.github {
         for repo in &s.repos {
             out.push(SourceReq {
@@ -449,6 +479,7 @@ pub fn parse(req: &SourceReq, body: &str) -> Vec<SourceItem> {
     let mut items = match req.kind {
         SourceKind::HackerNews => parse_hn(req, body),
         SourceKind::Reddit => parse_reddit(req, body),
+        SourceKind::WebSearch => parse_web_search(req, body),
         SourceKind::GithubReleases | SourceKind::YouTube | SourceKind::Rss => parse_feed(req, body),
     };
     items.retain(|i| !i.title.is_empty() && http_url(&i.url));
@@ -499,6 +530,167 @@ fn parse_hn(req: &SourceReq, body: &str) -> Vec<SourceItem> {
             image: None,
             topic: req.topic.clone(),
             engagement: u32::try_from(points).unwrap_or(u32::MAX),
+        });
+    }
+    out
+}
+
+/// Percent-decode a query value once (`%XX` only; `+` stays `+`).
+fn percent_decode(text: &str) -> String {
+    let bytes = text.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            let hi = hex_nibble(bytes[i + 1]);
+            let lo = hex_nibble(bytes[i + 2]);
+            if let (Some(h), Some(l)) = (hi, lo) {
+                out.push((h << 4) | l);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+fn hex_nibble(b: u8) -> Option<u8> {
+    match b {
+        b'0'..=b'9' => Some(b - b'0'),
+        b'a'..=b'f' => Some(b - b'a' + 10),
+        b'A'..=b'F' => Some(b - b'A' + 10),
+        _ => None,
+    }
+}
+
+/// HTML attribute value for `name=` (double, single, or bare).
+fn html_attr(tag: &str, name: &str) -> Option<String> {
+    let needle = format!("{name}=");
+    let rest = tag.split(&needle).nth(1)?;
+    let rest = rest.trim_start();
+    let (raw, _) = match rest.as_bytes().first() {
+        Some(b'"') => {
+            let end = rest[1..].find('"')?;
+            (&rest[1..1 + end], ())
+        }
+        Some(b'\'') => {
+            let end = rest[1..].find('\'')?;
+            (&rest[1..1 + end], ())
+        }
+        _ => {
+            let end = rest
+                .find(|c: char| c.is_whitespace() || c == '>')
+                .unwrap_or(rest.len());
+            (&rest[..end], ())
+        }
+    };
+    Some(decode_entities(raw))
+}
+
+/// Turn a DuckDuckGo result href into the destination URL, or None.
+fn unwrap_ddg_url(href: &str) -> Option<String> {
+    let href = href.trim();
+    let abs = if let Some(rest) = href.strip_prefix("//") {
+        format!("https://{rest}")
+    } else if href.starts_with("https://") || href.starts_with("http://") {
+        href.to_string()
+    } else {
+        return None;
+    };
+    let host = crate::pulse::source_host(&abs)?;
+    if host == "duckduckgo.com" || host == "www.duckduckgo.com" || host == "duck.com" {
+        // Bounce links: /l/?uddg=<encoded destination>
+        let path_q = abs
+            .strip_prefix("https://")
+            .or_else(|| abs.strip_prefix("http://"))?;
+        let after_host = path_q.split_once('/').map(|(_, p)| p).unwrap_or("");
+        if !(after_host.starts_with("l/") || after_host.starts_with("l?")) {
+            return None;
+        }
+        let q = after_host.split('?').nth(1).unwrap_or("");
+        for pair in q.split('&') {
+            let Some((k, v)) = pair.split_once('=') else {
+                continue;
+            };
+            if k == "uddg" {
+                let dest = percent_decode(v);
+                if http_url(&dest) {
+                    let dest_host = crate::pulse::source_host(&dest)?;
+                    if dest_host != "duckduckgo.com"
+                        && dest_host != "www.duckduckgo.com"
+                        && dest_host != "duck.com"
+                    {
+                        return Some(dest);
+                    }
+                }
+                return None;
+            }
+        }
+        return None;
+    }
+    http_url(&abs).then_some(abs)
+}
+
+fn ddg_nav_href(href: &str) -> bool {
+    let h = href.trim();
+    h.is_empty()
+        || h.starts_with('#')
+        // Site-relative nav (`/lite/`), not protocol-relative result links (`//duckduckgo.com/…`).
+        || (h.starts_with('/') && !h.starts_with("//"))
+        || h.contains("duckduckgo.com/y.js")
+        || h.contains("duckduckgo.com/settings")
+}
+
+/// DuckDuckGo Lite HTML: result anchors, uddg unwrap, source_name = result host.
+fn parse_web_search(req: &SourceReq, body: &str) -> Vec<SourceItem> {
+    let mut out = Vec::new();
+    let mut rest = body;
+    while out.len() < WEB_SEARCH_MAX {
+        let Some(at) = rest.find("<a") else {
+            break;
+        };
+        rest = &rest[at..];
+        let Some(tag_end) = rest.find('>') else {
+            break;
+        };
+        let tag = &rest[..=tag_end];
+        rest = &rest[tag_end + 1..];
+        let Some(close) = rest.find("</a>") else {
+            break;
+        };
+        let title_raw = &rest[..close];
+        rest = &rest[close + 4..];
+        let Some(href) = html_attr(tag, "href") else {
+            continue;
+        };
+        if ddg_nav_href(&href) {
+            continue;
+        }
+        let Some(url) = unwrap_ddg_url(&href) else {
+            continue;
+        };
+        let title = one_line(&decode_entities(&strip_tags(title_raw)), 200);
+        if title.is_empty() {
+            continue;
+        }
+        let Some(source_name) = crate::pulse::source_host(&url) else {
+            continue;
+        };
+        if out.iter().any(|i: &SourceItem| i.url == url) {
+            continue;
+        }
+        out.push(SourceItem {
+            title,
+            url,
+            kind: SourceKind::WebSearch,
+            source_name,
+            published_ms: 0,
+            summary: String::new(),
+            image: None,
+            topic: req.topic.clone(),
+            engagement: 0,
         });
     }
     out
@@ -932,8 +1124,8 @@ pub fn related_query(title: &str) -> String {
         .join(" ")
 }
 
-/// Hacker News and Reddit searches for queued More like this asks. Sources that are
-/// off are not searched.
+/// Hacker News, Reddit and Web search for queued More like this asks. Sources that
+/// are off are not searched.
 pub fn related_requests(s: &SourceSettings, related: &[Related], now_ms: u64) -> Vec<SourceReq> {
     let mut out = Vec::new();
     for r in related.iter().filter(|r| !r.query.trim().is_empty()) {
@@ -957,6 +1149,17 @@ pub fn related_requests(s: &SourceSettings, related: &[Related], now_ms: u64) ->
                     query_value(&r.query)
                 ),
                 name: "Reddit".into(),
+                topic: r.topic.clone(),
+            });
+        }
+        if s.web_search {
+            out.push(SourceReq {
+                kind: SourceKind::WebSearch,
+                url: format!(
+                    "https://lite.duckduckgo.com/lite/?q={}",
+                    query_value(&r.query)
+                ),
+                name: "Web search".into(),
                 topic: r.topic.clone(),
             });
         }
@@ -1075,7 +1278,7 @@ impl SourceCache {
     /// hits reach [`LEARN_PLACE_HITS`] so the app can call [`SourceSettings::add`].
     pub fn note_place(&mut self, kind: SourceKind, entry: &str) -> bool {
         let entry = entry.trim();
-        if entry.is_empty() || kind == SourceKind::HackerNews {
+        if entry.is_empty() || matches!(kind, SourceKind::HackerNews | SourceKind::WebSearch) {
             return false;
         }
         if let Some(row) = self
@@ -1277,7 +1480,9 @@ fn quality(item: &SourceItem) -> u32 {
             10..=99 => 100,
             _ => 85,
         },
-        SourceKind::GithubReleases | SourceKind::YouTube | SourceKind::Rss => 100,
+        SourceKind::GithubReleases | SourceKind::YouTube | SourceKind::Rss | SourceKind::WebSearch => {
+            100
+        }
     }
 }
 
@@ -1831,6 +2036,7 @@ mod tests {
         assert!(s.add(SourceKind::GithubReleases, "just-a-name").is_err());
         assert!(s.add(SourceKind::Rss, "ftp://x.test/feed").is_err());
         assert!(s.add(SourceKind::HackerNews, "anything").is_err());
+        assert!(s.add(SourceKind::WebSearch, "anything").is_err());
         let topics: Vec<String> = ["air compressors", "Rust", "xAI", "F1"]
             .iter()
             .map(|t| t.to_string())
@@ -1850,6 +2056,9 @@ mod tests {
                 "https://www.reddit.com/search.json?q=air%20compressors&sort=top&t=week&limit=10&raw_json=1".to_string(),
                 "https://www.reddit.com/search.json?q=Rust&sort=top&t=week&limit=10&raw_json=1".to_string(),
                 "https://www.reddit.com/search.json?q=xAI&sort=top&t=week&limit=10&raw_json=1".to_string(),
+                "https://lite.duckduckgo.com/lite/?q=air%20compressors".to_string(),
+                "https://lite.duckduckgo.com/lite/?q=Rust".to_string(),
+                "https://lite.duckduckgo.com/lite/?q=xAI".to_string(),
                 "https://github.com/emilk/egui/releases.atom".to_string(),
                 "https://www.youtube.com/feeds/videos.xml?channel_id=UCxxxxxxxxxxxxxxxxxxxxxx".to_string(),
                 "https://this-week-in-rust.org/rss.xml".to_string(),
@@ -1857,12 +2066,71 @@ mod tests {
         );
         s.set_on(SourceKind::HackerNews, false);
         s.set_on(SourceKind::Reddit, false);
+        s.set_on(SourceKind::WebSearch, false);
         s.set_on(SourceKind::Rss, false);
         let kinds: Vec<SourceKind> = requests(&s, &topics, NOW)
             .into_iter()
             .map(|r| r.kind)
             .collect();
         assert_eq!(kinds, vec![SourceKind::GithubReleases, SourceKind::YouTube]);
+    }
+
+    #[test]
+    fn web_search_requests_follow_topics_like_hn() {
+        let s = SourceSettings::default();
+        let topics: Vec<String> = ["Rust", "xAI", "F1", "extra"]
+            .iter()
+            .map(|t| (*t).to_string())
+            .collect();
+        let web: Vec<String> = requests(&s, &topics, NOW)
+            .into_iter()
+            .filter(|r| r.kind == SourceKind::WebSearch)
+            .map(|r| r.url)
+            .collect();
+        assert_eq!(
+            web,
+            vec![
+                "https://lite.duckduckgo.com/lite/?q=Rust".to_string(),
+                "https://lite.duckduckgo.com/lite/?q=xAI".to_string(),
+                "https://lite.duckduckgo.com/lite/?q=F1".to_string(),
+            ]
+        );
+        let mut off = s;
+        off.set_on(SourceKind::WebSearch, false);
+        assert!(!requests(&off, &topics, NOW)
+            .iter()
+            .any(|r| r.url.contains("lite.duckduckgo.com")));
+        let empty: SourceSettings = serde_json::from_str("{}").unwrap();
+        assert!(empty.web_search);
+    }
+
+    #[test]
+    fn web_search_html_parse_unwraps_uddg_and_names_the_host() {
+        let body = r#"<html><body>
+<a rel="nofollow" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fblog.rust-lang.org%2F1.99">Rust 1.99 released</a>
+<a rel="nofollow" href="https://example.com/compressors">Quiet compressors</a>
+<a href="/lite/">Lite</a>
+<a rel="nofollow" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fduckduckgo.com%2Fabout">About DDG</a>
+</body></html>"#;
+        let items = parse(
+            &req(SourceKind::WebSearch, "Web search", Some("Rust")),
+            body,
+        );
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].title, "Rust 1.99 released");
+        assert_eq!(items[0].url, "https://blog.rust-lang.org/1.99");
+        assert_eq!(items[0].source_name, "blog.rust-lang.org");
+        assert_eq!(items[0].kind, SourceKind::WebSearch);
+        assert_eq!(items[0].topic.as_deref(), Some("Rust"));
+        assert_eq!(items[0].published_ms, 0);
+        assert_eq!(items[0].engagement, 0);
+        assert_eq!(items[1].url, "https://example.com/compressors");
+        assert_eq!(items[1].source_name, "example.com");
+        assert!(parse(
+            &req(SourceKind::WebSearch, "Web search", Some("Rust")),
+            "<html>captcha</html>"
+        )
+        .is_empty());
     }
 
     #[test]
@@ -2255,14 +2523,19 @@ mod tests {
             vec![
                 (SourceKind::HackerNews, Some("Rust".into()), true),
                 (SourceKind::Reddit, Some("Rust".into()), true),
+                (SourceKind::WebSearch, Some("Rust".into()), true),
             ]
         );
-        let no_hn = SourceSettings {
+        assert!(reqs.iter().any(|r| {
+            r.kind == SourceKind::WebSearch && r.url.contains("lite.duckduckgo.com")
+        }));
+        let no_search = SourceSettings {
             hacker_news: false,
             reddit: false,
+            web_search: false,
             ..Default::default()
         };
-        assert!(related_requests(&no_hn, &one, NOW).is_empty());
+        assert!(related_requests(&no_search, &one, NOW).is_empty());
     }
 
     #[test]
