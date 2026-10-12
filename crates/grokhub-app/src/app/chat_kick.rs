@@ -168,6 +168,7 @@ impl Cabin {
         } else {
             self.live_mut().push(("user".into(), text.clone()));
         }
+        self.unarchive_on_reply();
         self.stamp_current_access();
         self.persist();
         self.kick_model(true);
