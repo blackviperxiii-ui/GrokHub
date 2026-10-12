@@ -2257,7 +2257,8 @@ fn clip_words(raw: &str, max_chars: usize) -> String {
 }
 
 /// An http(s) URL whose host is a public name or address, not localhost, a
-/// private range, or link-local. Used before fetching a URL a model gave.
+/// private range, CGNAT, or link-local. Used before fetching a URL a model gave.
+/// Hostname-only: dialers must also use `public_only_resolve` so DNS→private fails.
 pub fn public_http_url(url: &str) -> bool {
     let Some(rest) = url
         .strip_prefix("https://")
@@ -2273,24 +2274,11 @@ pub fn public_http_url(url: &str) -> bool {
         hostport.split(':').next().unwrap_or("")
     };
     let host = host.trim_end_matches('.').to_ascii_lowercase();
-    if host.is_empty()
-        || host == "localhost"
-        || host.ends_with(".localhost")
-        || !host.contains(['.', ':'])
-    {
+    if host.is_empty() || crate::ssrf::host_name_blocked(&host) || !host.contains(['.', ':']) {
         return false;
     }
     match host.parse::<std::net::IpAddr>() {
-        Ok(std::net::IpAddr::V4(ip)) => {
-            !(ip.is_loopback() || ip.is_private() || ip.is_link_local() || ip.is_unspecified())
-        }
-        Ok(std::net::IpAddr::V6(ip)) => {
-            let seg = ip.segments()[0];
-            !(ip.is_loopback()
-                || ip.is_unspecified()
-                || (seg & 0xfe00) == 0xfc00
-                || (seg & 0xffc0) == 0xfe80)
-        }
+        Ok(ip) => !crate::ssrf::ip_blocked(ip),
         Err(_) => true,
     }
 }
@@ -3528,13 +3516,19 @@ https://xstack.grok.me/post ZEPHYRTAIL"
             .found
         );
         assert!(public_http_url("https://news.example.com/a"));
+        assert!(public_http_url("http://1.1.1.1/"));
         for bad in [
             "http://localhost:8080/",
             "http://127.0.0.1/",
             "http://192.168.1.4/admin",
             "http://10.0.0.1",
             "http://169.254.169.254/latest",
+            "http://100.64.1.1/",
+            "http://100.101.7.9/meta",
+            "http://0.1.2.3/",
+            "http://198.18.0.1/",
             "http://[::1]:3000/",
+            "http://[fd00::1]/",
             "http://intranet/",
             "ftp://example.com/",
             "http://user@127.0.0.1/",
