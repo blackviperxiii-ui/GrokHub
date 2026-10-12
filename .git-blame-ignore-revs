@@ -1,0 +1,3 @@
+# Mass formatting commits to skip in git blame (git config blame.ignoreRevsFile .git-blame-ignore-revs).
+# cargo fmt --all (Formatting Command Center card)
+85d10be58a4ffd90d4f13c12985b8f74605c981e
