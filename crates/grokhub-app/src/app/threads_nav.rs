@@ -256,7 +256,6 @@ impl Cabin {
         }
         if n > 0 {
             self.persist();
-            self.auto_archive_note = Some(n);
             self.status = if n == 1 {
                 "Archived 1 idle chat".into()
             } else {

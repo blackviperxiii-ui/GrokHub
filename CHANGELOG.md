@@ -5,6 +5,7 @@
 - Pulse diversifies what it follows from what you like. A check posts at most two stories from one source (so Hacker News cannot fill the whole run), searches your strongest interest every time and rotates the other topic slots so weaker interests still get a look, and gives a small score bump to under-seen sources. Save or More like this twice on posts from the same subreddit, GitHub repo or YouTube channel adds that place to Settings → Pulse → Sources when that source kind is on.
 - Code is now rustfmt-clean and CI checks formatting.
 - Fixed: source-window tests match rustfmt-wrapped needles (`session_row`, `Margin::symmetric`, `feed_prompt`) and the composer Pill scan window is 15,000 bytes.
+- Fixed: the "Archived N idle chats" composer row and the History sidebar Archived section no longer appear; archived chats stay out of History lists and search. Archive / Unarchive, auto-archive, and Undo remain.
 
 ## 3.0.0 — 2026-10-12
 

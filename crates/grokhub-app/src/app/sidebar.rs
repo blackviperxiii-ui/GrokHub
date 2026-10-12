@@ -568,7 +568,6 @@ impl Cabin {
                         )
                         .clicked()
                         {
-                            self.history_archived = false;
                             self.nav = Nav::History;
                         }
                     });
@@ -579,7 +578,7 @@ impl Cabin {
                     "Filter chats…",
                     (ui.available_width() - 8.0).max(80.0),
                 );
-                let hist_h = (ui.available_height() * 0.72).max(0.0);
+                let hist_h = ui.available_height().max(0.0);
                 egui::ScrollArea::vertical()
                     .id_salt("rail-history")
                     .auto_shrink([false, true])
@@ -600,53 +599,6 @@ impl Cabin {
                             })
                             .collect();
                         if let Some(act) = self.paint_section_chats(ui, &listed, 0) {
-                            self.apply_tab_act(act);
-                        }
-                    });
-                ui.add_space(8.0);
-                ui.horizontal(|ui| {
-                    ui.label(
-                        RichText::new("Archived")
-                            .size(12.0)
-                            .color(crate::theme::subtle()),
-                    );
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if crate::theme::felt_label_button(
-                            ui,
-                            "See all",
-                            egui::Color32::TRANSPARENT,
-                            crate::theme::subtle(),
-                            6.0,
-                            egui::vec2(0.0, 20.0),
-                            None,
-                            false,
-                        )
-                        .clicked()
-                        {
-                            self.history_archived = true;
-                            self.nav = Nav::History;
-                        }
-                    });
-                });
-                let arch_h = ui.available_height().max(0.0);
-                egui::ScrollArea::vertical()
-                    .id_salt("rail-archived")
-                    .auto_shrink([false, true])
-                    .max_height(arch_h)
-                    .show(ui, |ui| {
-                        let live_empty = self.messages.is_empty();
-                        let listed = threads::archived_section_indices(
-                            &self.threads,
-                            Some(self.thread_idx),
-                            live_empty,
-                        );
-                        if listed.is_empty() {
-                            ui.label(
-                                RichText::new("No archived chats")
-                                    .size(12.0)
-                                    .color(crate::theme::muted()),
-                            );
-                        } else if let Some(act) = self.paint_section_chats(ui, &listed, 0) {
                             self.apply_tab_act(act);
                         }
                     });
