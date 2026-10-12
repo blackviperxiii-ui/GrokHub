@@ -1993,8 +1993,9 @@ fn always_permission_keeps_the_acp_session() {
         plan.contains("halt_in_flight"),
         "/plan mid-turn must halt or Thinking sticks after the agent is dropped: {plan}"
     );
+    // rustfmt may break `let row = crate::cards::session_row(...)` across lines.
     let row = src
-        .split("let row = crate::cards::session_row")
+        .split("crate::cards::session_row(")
         .nth(1)
         .and_then(|s| s.split("ui.allocate_ui_with_layout").next())
         .expect("session_row");
@@ -6181,7 +6182,9 @@ fn other_chip_threads_skip_current_scratch_and_background() {
 fn chat_composer_pins_stop_on_the_right() {
     let src = cabin_src();
     let start = src.find("ComposerStackSlot::Pill =>").expect("pill arm");
-    let pill = &src[start..start + 12000];
+    // 15_000: rustfmt wrapping pushed Stop / primary_pressed past the old 12_000 window.
+    // Keep Stop near the end of the arm; do not grow logic before the Stop handler.
+    let pill = &src[start..start + 15000];
     assert!(
         pill.contains("composer_go_cluster_w()"),
         "Fast + mic + Stop need a reserved strip: {pill}"
@@ -7084,8 +7087,9 @@ fn empty_home_pulse_stays_off_scratch_and_off_about() {
         auto.contains("self.confirm = None"),
         "/auto must drop a session Always overlay: {auto}"
     );
+    // rustfmt may break `let row = crate::cards::session_row(...)` across lines.
     let row = src
-        .split("let row = crate::cards::session_row")
+        .split("crate::cards::session_row(")
         .nth(1)
         .and_then(|s| s.split("ui.allocate_ui_with_layout").next())
         .expect("session_row");
@@ -17546,7 +17550,7 @@ fn projects_rename_row_lines_up_with_cancel() {
         "Name field is the pill height: {row}"
     );
     assert!(
-        row.contains("Margin::symmetric(10, 6)"),
+        row.contains("Margin::symmetric(") && row.contains("10, 6"),
         "Name field has ~10px left padding: {row}"
     );
     assert!(
@@ -26627,9 +26631,14 @@ fn pulse_feed_instructions_sheet_edits_the_prompt_for_future_posts() {
         "our default is not stored as yours"
     );
     let native = include_str!("native_unattended.rs");
-    assert!(native.contains(
-        "grokhub_core::pulse::feed_prompt(&self.digest_steer, &self.digest_interests, &self.cfg.feed_instructions)"
-    ));
+    // rustfmt wraps the three feed_prompt args onto their own lines.
+    assert!(
+        native.contains("grokhub_core::pulse::feed_prompt(")
+            && native.contains("&self.digest_steer,")
+            && native.contains("&self.digest_interests,")
+            && native.contains("&self.cfg.feed_instructions,"),
+        "digest must pass steer, interests, and feed_instructions into feed_prompt"
+    );
 }
 
 /// Text shapes with their left edge, for "which comes first" checks.
