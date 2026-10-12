@@ -154,6 +154,7 @@ mod chips;
 mod confirm;
 mod connectors_ui;
 mod episode_ui;
+mod evidence_ui;
 mod feed_ui;
 mod findings_ui;
 mod glance;

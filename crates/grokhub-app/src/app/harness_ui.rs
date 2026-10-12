@@ -286,6 +286,10 @@ pub(super) struct HarnessState {
     /// The last finished reply's prose, for the turn-end audit. `None` when
     /// that turn was not on the visible chat.
     pub last_reply: Option<String>,
+    /// Proof receipt for the newest harness turn on a chat (derived from spans).
+    pub evidence: Option<hx::RunEvidence>,
+    /// Chat id we already tried to load Evidence for (avoids re-reading spans every frame).
+    pub evidence_checked: Option<String>,
     /// Who started the chat turn on screen (Spike-4c). Spans and `turn.json`
     /// carry it; `send_chat` sets it from `next_origin`, else `user`.
     pub turn_origin: hx::Origin,
@@ -1035,6 +1039,7 @@ impl Cabin {
                 .as_ref()
                 .is_some_and(|a| self.harness_ladder_step(&trace, turn, a));
         self.record_turn_outcome(&trace, turn, audit.as_ref(), paused);
+        self.refresh_run_evidence(&trace, turn);
     }
 
     /// The retry ladder's next rung for this turn's first finding. True when

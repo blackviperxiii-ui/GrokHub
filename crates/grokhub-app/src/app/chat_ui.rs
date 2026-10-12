@@ -1253,6 +1253,16 @@ impl Cabin {
                                 &self.harness.findings_dismissed,
                             );
                             let findings_at = findings.as_ref().map(|(i, _)| *i);
+                            self.ensure_run_evidence();
+                            let evidence = self
+                                .harness
+                                .evidence
+                                .as_ref()
+                                .filter(|e| e.chat_id == thread_id)
+                                .cloned();
+                            let evidence_at = evidence
+                                .as_ref()
+                                .and_then(|_| super::evidence_ui::evidence_host_row(&self.chat_views));
                             let (views, keys) = (&self.chat_views, &self.chat_view_keys);
                             let shown = if live {
                                 views_up_to_last_user(views)
@@ -1332,6 +1342,7 @@ impl Cabin {
                                     || (skill_at == Some(i) && !skill_rows.is_empty())
                                     || (change_at == Some(i) && !change_rows.is_empty())
                                     || findings_at == Some(i);
+                                let evidence_here = evidence_at == Some(i);
                                 let painted = ui.push_id(chat_row_id_salt(&thread_id, i), |ui| {
                                     let mut p = paint_chat_block_with(
                                         ui,
@@ -1376,6 +1387,11 @@ impl Cabin {
                                             p.act =
                                                 paint_msg_acts(ui, false, &block.body, avail, w)
                                                     .act;
+                                        }
+                                    }
+                                    if evidence_here {
+                                        if let Some(ev) = evidence.as_ref() {
+                                            super::evidence_ui::paint_evidence_panel(ui, ev);
                                         }
                                     }
                                     p

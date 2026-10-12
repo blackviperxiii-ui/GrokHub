@@ -65,6 +65,7 @@ mod changes;
 mod consent;
 mod cua;
 mod detect;
+mod evidence;
 mod egress;
 #[cfg(test)]
 mod egress_coverage;
@@ -138,6 +139,9 @@ pub use detect::{
     fixture_span, fixture_unsupported_assurance, span_kind, step_hash, unsupported_assurance,
     Evidence, Finding, SpanKind, ACTION_LOOP, APPROVAL_GATE_VIOLATION, CLAIMED_CLICK_NO_CHANGE,
     DONE_WITHOUT_CRITERIA, UNSUPPORTED_ASSURANCE,
+};
+pub use evidence::{
+    evidence_summary, latest_evidence_turn, run_evidence, RunEvidence, EVIDENCE_LINES_CAP,
 };
 pub use egress::{
     append_egress, current_origin, egress_dest, egress_path, guard_egress, guard_or_park,
