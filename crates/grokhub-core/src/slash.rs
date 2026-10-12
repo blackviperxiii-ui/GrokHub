@@ -83,6 +83,8 @@ pub enum Slash {
     Hub,
     Inhabit(String),
     Rewind,
+    /// `/rewind step` lists agent file checkpoints; `/rewind step <n>` restores one.
+    RewindStep(Option<u64>),
     Room(String),
     Export,
     /// `/export html`, `/export json`, or `/export md`.
@@ -336,6 +338,16 @@ pub fn parse_slash(line: &str) -> Option<Slash> {
         "/rewind" if rest == "--files" || rest == "--code" || rest == "files" => {
             Some(Slash::RewindFiles)
         }
+        "/rewind" if rest == "step" || rest.starts_with("step ") => {
+            let arg = rest.strip_prefix("step").unwrap_or("").trim();
+            if arg.is_empty() {
+                Some(Slash::RewindStep(None))
+            } else if let Ok(n) = arg.parse::<u64>() {
+                Some(Slash::RewindStep(Some(n)))
+            } else {
+                Some(Slash::RewindStep(None))
+            }
+        }
         "/rewind" => Some(Slash::Rewind),
         "/room" if !rest.is_empty() => Some(Slash::Room(rest.to_string())),
         "/export" if rest.is_empty() => Some(Slash::Export),
@@ -471,6 +483,7 @@ pub fn slash_kind(s: &Slash) -> &'static str {
         Slash::Hub => "hub",
         Slash::Inhabit(_) => "inhabit",
         Slash::Rewind => "rewind",
+        Slash::RewindStep(_) => "rewind_step",
         Slash::Room(_) => "room",
         Slash::Export => "export",
         Slash::ExportAs(_) => "export",
@@ -573,6 +586,7 @@ pub const SLASH_COMMANDS: &[SlashDef] = &[
     SlashDef { cmd: "/why", hint: "Why Auto would pick each model and effort", insert: "/why", run_on_pick: true },
     SlashDef { cmd: "/send", hint: "Send a task to another computer", insert: "/send ", run_on_pick: false },
     SlashDef { cmd: "/rewind", hint: "Rewind Grok conversation", insert: "/rewind", run_on_pick: true },
+    SlashDef { cmd: "/rewind step", hint: "List or restore agent file checkpoints", insert: "/rewind step", run_on_pick: true },
     SlashDef { cmd: "/rewind --files", hint: "Restore last project snapshot", insert: "/rewind --files", run_on_pick: true },
     SlashDef { cmd: "/btw", hint: "Side ask — does not stop a live run", insert: "/btw", run_on_pick: true },
     SlashDef { cmd: "/bg", hint: "Run a task in the background…", insert: "/bg ", run_on_pick: false },
@@ -784,7 +798,7 @@ pub fn slash_help() -> String {
         "/audiocheck — list outputs and inputs, listen to the default input (or /audiocheck yeti) for 5 seconds, and name what's wrong: muted, silent, clipping, too quiet, dropouts or crackle. Changes nothing",
         "/hub — devices / pair",
         "/inhabit <peer> — hand this Grok to another paired computer",
-        "/rewind — rewind Grok conversation; /rewind --files restores the last project snapshot",
+        "/rewind — rewind Grok conversation; /rewind step lists agent file checkpoints and /rewind step <n> restores one; /rewind --files restores the last project snapshot",
         "/btw — side ask. A live run keeps going; the question waits, then sends look-safe. Saved as ask.",
         "/bg <task> — run a task in the background beside this chat (up to 3 at once); its reply posts here when it ends. Bare /bg moves the live reply to the background and frees the composer. /bg stop stops every background run.",
         "/queue <message> — hold a message until the live reply ends instead of steering it (Alt+Enter does the same).",
@@ -875,6 +889,8 @@ mod tests {
         assert_eq!(parse_slash("/show-plan"), Some(Slash::ViewPlan));
         assert_eq!(parse_slash("/plan-view"), Some(Slash::ViewPlan));
         assert_eq!(parse_slash("/rewind --files"), Some(Slash::RewindFiles));
+        assert_eq!(parse_slash("/rewind step"), Some(Slash::RewindStep(None)));
+        assert_eq!(parse_slash("/rewind step 3"), Some(Slash::RewindStep(Some(3))));
         assert_eq!(parse_slash("/workflow review"), Some(Slash::Workflow("review".into())));
         assert_eq!(parse_slash("/worktree"), Some(Slash::Worktree));
         let extra = grok_command_hits(&["create-skill".into(), "help".into()]);
