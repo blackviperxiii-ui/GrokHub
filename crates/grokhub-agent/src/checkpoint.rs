@@ -475,6 +475,28 @@ pub fn turn_style(session: &str) -> Option<TalkStyle> {
     STYLES.lock().unwrap_or_else(|e| e.into_inner()).get(session).copied()
 }
 
+/// The turn's playbook paragraph, by chat session (Brain 3). `None` clears it.
+static PLAYBOOKS: Mutex<BTreeMap<String, String>> = Mutex::new(BTreeMap::new());
+
+pub fn set_turn_playbook(session: &str, block: Option<String>) {
+    if session.is_empty() {
+        return;
+    }
+    let mut m = PLAYBOOKS.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(block) = block else {
+        m.remove(session);
+        return;
+    };
+    if m.len() >= BRIEFS_CAP && !m.contains_key(session) {
+        m.clear();
+    }
+    m.insert(session.to_string(), block);
+}
+
+pub fn turn_playbook(session: &str) -> Option<String> {
+    PLAYBOOKS.lock().unwrap_or_else(|e| e.into_inner()).get(session).cloned()
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::json;
@@ -600,6 +622,12 @@ mod tests {
         assert_eq!(turn_style(""), None);
         set_turn_style("cp-test-a", None);
         assert_eq!(turn_style("cp-test-a"), None);
+        set_turn_playbook("cp-test-a", Some("Playbook for this turn: Files.".into()));
+        set_turn_playbook("", Some("Playbook for this turn: Research.".into()));
+        assert_eq!(turn_playbook("cp-test-a").as_deref(), Some("Playbook for this turn: Files."));
+        assert_eq!(turn_playbook(""), None);
+        set_turn_playbook("cp-test-a", None);
+        assert_eq!(turn_playbook("cp-test-a"), None);
     }
 
     #[test]

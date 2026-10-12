@@ -19,6 +19,13 @@ pub const BUILTIN: &[&str] = &[
     include_str!("../assets/playbooks/desktop.toml"),
 ];
 
+/// First words of the playbook paragraph in a turn's system prompt, so a
+/// later turn can swap or drop it in place.
+pub const PLAYBOOK_HEAD: &str = "Playbook for this turn:";
+/// Closes the playbook paragraph: it orders the work and never changes an approval.
+pub const PLAYBOOK_LINE: &str =
+    "The playbook orders the work; risky steps and hard-class actions still ask first, and the cabin safety rules win.";
+
 pub const DOMAINS: &[&str] = &[
     "system", "code", "files", "desktop", "web", "media", "general",
 ];
@@ -154,6 +161,40 @@ impl Playbook {
 
     /// How closely it fits: one point per named intent, domain and OS that
     /// matches; `None` when any named one doesn't.
+    /// The playbook as one paragraph for the turn's prompt: phases in order
+    /// with their steps, then how to back up, check, undo and when to stop.
+    pub fn prompt_block(&self) -> String {
+        let mut out = vec![format!("{PLAYBOOK_HEAD} {}. {}", self.name, self.summary)];
+        if !self.checklist.is_empty() {
+            out.push(format!("Cover: {}.", self.checklist.join(", ")));
+        }
+        for phase in &self.phases {
+            let steps: Vec<String> = phase
+                .steps
+                .iter()
+                .map(|s| match s.run.as_str() {
+                    "" => s.name.clone(),
+                    run => format!("{} (`{run}`)", s.name),
+                })
+                .collect();
+            out.push(format!(
+                "{} ({}): {}.",
+                phase.name,
+                phase.tier.label().to_lowercase(),
+                steps.join("; ")
+            ));
+        }
+        out.push(format!("Back up: {}", self.backup));
+        out.push(format!("Check: {}", self.verify));
+        out.push(format!("Undo: {}", self.rollback));
+        if !self.give_up.is_empty() {
+            out.push(format!("Stop only when {}.", self.give_up.join(", or ")));
+        }
+        out.push(PLAYBOOK_LINE.to_string());
+        // One paragraph: a blank line inside would split it from its head.
+        out.join("\n").replace("\n\n", "\n")
+    }
+
     pub fn fit(&self, intent: &str, domain: &str, os: &str) -> Option<usize> {
         let a = &self.applies_when;
         let mut score = 0;
@@ -267,6 +308,30 @@ pub fn check(p: &Playbook) -> Result<(), String> {
 }
 
 /// Parse one playbook file and check its shape.
+/// The system prompt with this turn's playbook paragraph: an earlier one is
+/// dropped, and the new one sits before the volatile tail's closing safety
+/// line (added when the prompt has none). `None` only drops the old one.
+/// Paragraphs are split on blank lines, so the rest is kept byte for byte.
+pub fn with_playbook(system: &str, block: Option<&str>) -> String {
+    let mut paras: Vec<&str> = if system.is_empty() {
+        Vec::new()
+    } else {
+        system.split("\n\n").collect()
+    };
+    paras.retain(|p| !p.starts_with(PLAYBOOK_HEAD));
+    if let Some(block) = block {
+        let closer = crate::talk::VOLATILE_SAFETY_CLOSER;
+        match paras.iter().rposition(|p| *p == closer) {
+            Some(at) => paras.insert(at, block),
+            None => {
+                paras.push(block);
+                paras.push(closer);
+            }
+        }
+    }
+    paras.join("\n\n")
+}
+
 pub fn parse(text: &str) -> Result<Playbook, String> {
     let p: Playbook = toml::from_str(text).map_err(|e| e.message().to_string())?;
     check(&p)?;
@@ -331,6 +396,58 @@ mod tests {
             ),
             (Some(1), None)
         );
+    }
+
+    #[test]
+    fn the_prompt_block_lists_phases_in_order_and_when_to_stop() {
+        let p = parse(BUILTIN[3]).unwrap();
+        assert_eq!(
+            p.prompt_block(),
+            "Playbook for this turn: Code changes. Read the code and run the tests before editing, change one thing at a time, and run the build and tests after each change.\n\
+             Cover: read before edit, it builds, tests pass.\n\
+             Look (look only): See what is already changed (`git status`); Read the files and the tests around the change; Run the tests once first to know what already fails.\n\
+             Change (safe, reversible): Make one small edit at a time; Add or update a test for the change; Build and run the tests after each edit.\n\
+             Bigger changes (risky, asks first): Delete files or folders the change no longer needs; Push, publish or deploy the change.\n\
+             Back up: Check the working tree is committed or note what was already changed (git status) before the first edit, so each change can be undone on its own.\n\
+             Check: After each change, build and run the tests that cover it; a change is done only when they pass.\n\
+             Undo: Undo the change that broke the build or tests (restore the file from git or the kept copy) and say what failed.\n\
+             Stop only when a hard approval was refused, or hardware, access or a sign-in is missing, or every approach in the playbook failed and was checked.\n\
+             The playbook orders the work; risky steps and hard-class actions still ask first, and the cabin safety rules win."
+        );
+        // Every shipped playbook is one paragraph, so it can be swapped whole.
+        for text in BUILTIN {
+            let block = parse(text).unwrap().prompt_block();
+            assert!(
+                !block.contains("\n\n") && block.starts_with(PLAYBOOK_HEAD),
+                "{block}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_turns_playbook_paragraph_is_swapped_in_place_and_dropped_when_none() {
+        let closer = crate::talk::VOLATILE_SAFETY_CLOSER;
+        let style = "Talk style for this turn: short.";
+        let system = format!("Rules.\n\nNotes.\n\n{style}\n\n{closer}");
+        let code = parse(BUILTIN[3]).unwrap().prompt_block();
+        let files = parse(BUILTIN[4]).unwrap().prompt_block();
+        let one = with_playbook(&system, Some(&code));
+        assert_eq!(
+            one,
+            format!("Rules.\n\nNotes.\n\n{style}\n\n{code}\n\n{closer}")
+        );
+        let two = with_playbook(&one, Some(&files));
+        assert_eq!(
+            two,
+            format!("Rules.\n\nNotes.\n\n{style}\n\n{files}\n\n{closer}")
+        );
+        assert_eq!(with_playbook(&two, None), system);
+        // A prompt with no closing line gets one after the playbook.
+        assert_eq!(
+            with_playbook("Rules.", Some(&files)),
+            format!("Rules.\n\n{files}\n\n{closer}")
+        );
+        assert_eq!(with_playbook("Rules.", None), "Rules.");
     }
 
     #[test]
