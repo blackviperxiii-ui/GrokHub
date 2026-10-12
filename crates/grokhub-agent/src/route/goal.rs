@@ -67,13 +67,14 @@ const GOALS_CAP: usize = 256;
 
 static GOALS: Mutex<BTreeMap<String, RouteGoal>> = Mutex::new(BTreeMap::new());
 
-/// The turn's goal for a chat session, set when its Brief is written. `None`
-/// (no policy row matched) clears the last turn's goal.
-pub fn set_goal(session: &str, goal: Option<RouteGoal>) {
+/// Brain 4: goals the cabin pins on a background run's session.
+static PINNED: Mutex<BTreeMap<String, RouteGoal>> = Mutex::new(BTreeMap::new());
+
+fn put(map: &Mutex<BTreeMap<String, RouteGoal>>, session: &str, goal: Option<RouteGoal>) {
     if session.is_empty() {
         return;
     }
-    let mut g = GOALS.lock().unwrap_or_else(|e| e.into_inner());
+    let mut g = map.lock().unwrap_or_else(|e| e.into_inner());
     let Some(goal) = goal else {
         g.remove(session);
         return;
@@ -84,10 +85,32 @@ pub fn set_goal(session: &str, goal: Option<RouteGoal>) {
     g.insert(session.to_string(), goal);
 }
 
-/// The goal of the first of `keys` that has one.
+/// The turn's goal for a chat session, set when its Brief is written. `None`
+/// (no policy row matched) clears the last turn's goal.
+pub fn set_goal(session: &str, goal: Option<RouteGoal>) {
+    put(&GOALS, session, goal);
+}
+
+/// Brain 4: the governor's goal for one background run (cost, "user active",
+/// while you're active). It wins over the Brief's row for that session until
+/// the run clears it with `None`.
+pub fn pin_goal(session: &str, goal: Option<RouteGoal>) {
+    put(&PINNED, session, goal);
+}
+
+/// The pinned goal of the first of `keys` that has one (Brain 4 background runs).
+pub fn pinned_for(keys: &[&str]) -> Option<RouteGoal> {
+    let pinned = PINNED.lock().unwrap_or_else(|e| e.into_inner());
+    keys.iter().filter(|k| !k.is_empty()).find_map(|k| pinned.get(*k).cloned())
+}
+
+/// The goal of the first of `keys` that has one; a pinned goal wins for its key.
 pub fn goal_for(keys: &[&str]) -> Option<RouteGoal> {
+    let pinned = PINNED.lock().unwrap_or_else(|e| e.into_inner()).clone();
     let g = GOALS.lock().unwrap_or_else(|e| e.into_inner());
-    keys.iter().filter(|k| !k.is_empty()).find_map(|k| g.get(*k).cloned())
+    keys.iter()
+        .filter(|k| !k.is_empty())
+        .find_map(|k| pinned.get(*k).or_else(|| g.get(*k)).cloned())
 }
 
 /// Move a user-facing step's starting rung for the goal. `start` is
@@ -154,5 +177,21 @@ mod tests {
         // A turn with no policy row clears the last turn's goal.
         set_goal("goal-test-a", None);
         assert_eq!(goal_for(&["goal-test-a"]), None);
+    }
+
+    #[test]
+    fn a_pinned_goal_wins_over_the_briefs_row_until_it_is_cleared() {
+        let active = RouteGoal::of("cost", "user active").unwrap();
+        let row = RouteGoal::of("cost", "user isn't waiting").unwrap();
+        pin_goal("goal-test-pin", Some(active.clone()));
+        set_goal("goal-test-pin", Some(row.clone()));
+        assert_eq!(goal_for(&["goal-test-pin"]).map(|g| g.label()), Some("goal cost (user active)".to_string()));
+        pin_goal("", Some(active));
+        assert_eq!(pinned_for(&["", "goal-test-pin"]).map(|g| g.reason), Some("user active".to_string()));
+        pin_goal("goal-test-pin", None);
+        assert_eq!(pinned_for(&["goal-test-pin"]), None);
+        assert_eq!(goal_for(&["goal-test-pin"]), Some(row));
+        set_goal("goal-test-pin", None);
+        assert_eq!(goal_for(&["goal-test-pin"]), None);
     }
 }
