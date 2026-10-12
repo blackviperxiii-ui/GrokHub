@@ -3,9 +3,10 @@
 //! `SKILL.md` discovery and the `skill` tool.
 //!
 //! Project skills (`.grok/skills`, then `.claude/skills`, from the workspace up to the
-//! git root) win over the user directory. Plugin directories are an extension point
-//! for later phases and lose to both. Same-name duplicates keep the winner; the
-//! walk order is sorted so the choice does not depend on directory iteration.
+//! git root) win over the user directory, then cabin skills under
+//! `{GROKHUB_CONFIG}/skills` (the same store `skill_list` / `skill_create` use),
+//! then plugins. Same-name duplicates keep the winner; the walk order is sorted
+//! so the choice does not depend on directory iteration.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -35,6 +36,8 @@ const WALK_DEPTH: usize = 8;
 pub enum SkillSource {
     Project,
     User,
+    /// `{GROKHUB_CONFIG}/skills` — same store as self-manage `skill_list`.
+    Cabin,
     Plugin,
 }
 
@@ -43,6 +46,7 @@ impl SkillSource {
         match self {
             Self::Project => "project",
             Self::User => "user",
+            Self::Cabin => "cabin",
             Self::Plugin => "plugin",
         }
     }
@@ -119,6 +123,10 @@ fn walk_skill_mtimes(dir: &Path, depth: usize, newest: &mut Option<SystemTime>) 
     }
 }
 
+fn cabin_skills_dir() -> PathBuf {
+    crate::perm::config_dir().join("skills")
+}
+
 fn discover_cache_key(
     workspace: &Path,
     home: Option<&Path>,
@@ -137,6 +145,8 @@ fn discover_cache_key(
         keys.push((grok.clone(), skill_root_mtime(&grok)));
         keys.push((claude.clone(), skill_root_mtime(&claude)));
     }
+    let cabin = cabin_skills_dir();
+    keys.push((cabin.clone(), skill_root_mtime(&cabin)));
     for dir in plugin_dirs {
         keys.push((dir.clone(), skill_root_mtime(dir)));
     }
@@ -195,6 +205,13 @@ fn discover_uncached(workspace: &Path, home: Option<&Path>, plugin_dirs: &[PathB
             10_001,
         );
     }
+    // Same folder skill_list / skill_create use — must load via `skill` too.
+    push_skill_root(
+        &mut found,
+        &cabin_skills_dir(),
+        SkillSource::Cabin,
+        15_000,
+    );
     for (i, dir) in plugin_dirs.iter().enumerate() {
         let rank = 20_000u32.saturating_add(u32::try_from(i).unwrap_or(u32::MAX));
         push_skill_root(&mut found, dir, SkillSource::Plugin, rank);
@@ -244,13 +261,16 @@ pub fn tool_run(workspace: &Path, args: &Value) -> ToolOutput {
     if name.is_empty() {
         return ToolOutput::err("name is required");
     }
+    let want = normalize_name(&name);
     let home = grokhub_core::user_home();
     let skills = discover(
         workspace,
         home.as_deref(),
         &crate::plugins::skill_dirs(workspace),
     );
-    let Some(skill) = skills.into_iter().find(|skill| skill.name == name) else {
+    let Some(skill) = skills.into_iter().find(|skill| {
+        skill.name == want || skill.name == name || normalize_name(&skill.name) == want
+    }) else {
         return ToolOutput::err(format!("unknown skill `{name}`"));
     };
     let rel = {
@@ -764,6 +784,52 @@ mod tests {
             parse_skill("---\ndescription: no name\n---\nHello.\n", Some("Dir Name")).unwrap();
         assert_eq!(fallback.name, "dir-name");
         assert_eq!(fallback.description, "no name");
+    }
+
+    #[test]
+    fn cabin_skills_are_discovered_and_loadable_by_skill_tool() {
+        let root = scratch("cabin-skills");
+        let repo = root.join("repo");
+        let home = root.join("home");
+        fs::create_dir_all(repo.join(".git")).unwrap();
+        fs::create_dir_all(&home).unwrap();
+        let cfg = root.join("cfg");
+        fs::create_dir_all(&cfg).unwrap();
+        let _guard = crate::perm::ConfigGuard::set(&cfg);
+        skill_md(
+            &cfg.join("skills/steamlibreview"),
+            "---\nname: steamlibreview\ndescription: Review the Steam library from Memory\n---\nUse sealed Installed app learnings.\n",
+        );
+        skill_md(
+            &cfg.join("skills/GamingProfile"),
+            "---\nname: GamingProfile\ndescription: Gaming profile notes\n---\nTailor answers to installed games.\n",
+        );
+        let skills = discover(&repo, Some(&home), &[]);
+        assert!(
+            skills
+                .iter()
+                .any(|s| s.name == "steamlibreview" && s.source == SkillSource::Cabin),
+            "{skills:?}"
+        );
+        assert!(
+            skills
+                .iter()
+                .any(|s| s.name == "gamingprofile" && s.source == SkillSource::Cabin),
+            "PascalCase frontmatter normalizes: {skills:?}"
+        );
+        let loaded = tool_run(
+            &repo,
+            &serde_json::json!({"name": "steamlibreview"}),
+        );
+        assert!(!loaded.failed, "{}", loaded.text);
+        assert!(
+            loaded.text.contains("Use sealed Installed app learnings."),
+            "{}",
+            loaded.text
+        );
+        let pascal = tool_run(&repo, &serde_json::json!({"name": "GamingProfile"}));
+        assert!(!pascal.failed, "{}", pascal.text);
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]

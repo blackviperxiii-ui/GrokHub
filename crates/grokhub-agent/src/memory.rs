@@ -249,14 +249,46 @@ pub fn dream(
 /// With `"memory_backend": "amr"` in `app.json` this also reads the agent
 /// memory repo (dual-read): AMR lines lead, identical lines are dropped, and
 /// tombstoned or locked nodes never appear. Legacy reads only the index.
+///
+/// Sealed indexer facts (`Installed app: …` and other `scope:` nodes) are
+/// always dual-read when the user's text asks about a library, games, Steam,
+/// installed apps, or similar — even when the memory backend is still legacy.
+/// Those facts live in AMR regardless of `memory_backend`.
 pub fn first_turn_injection(workspace: &Path, user_text: &str) -> Option<String> {
+    inject_snippets(workspace, user_text, true)
+}
+
+/// Later-turn recall for library / installed-app asks. Empty history already
+/// got [`first_turn_injection`]; follow-ups that name games, Steam, or the
+/// library still need the sealed pack, or the model honestly claims none.
+pub fn followup_injection(user_text: &str) -> Option<String> {
+    if !library_intent(user_text) {
+        return None;
+    }
+    let scope = scope_library_lines(user_text);
+    if scope.is_empty() {
+        return None;
+    }
+    let snippets: Vec<String> = scope
+        .into_iter()
+        .map(|body| grokhub_core::redact_recall(&body).0)
+        .collect();
+    format_injection(&snippets)
+}
+
+fn inject_snippets(workspace: &Path, user_text: &str, include_legacy: bool) -> Option<String> {
     let amr = if amr_enabled() {
         amr_injection_lines(user_text)
     } else {
         Vec::new()
     };
-    let legacy = legacy_injection_bodies(workspace, user_text);
-    if amr.is_empty() {
+    let scope = scope_library_lines(user_text);
+    let legacy = if include_legacy {
+        legacy_injection_bodies(workspace, user_text)
+    } else {
+        None
+    };
+    if amr.is_empty() && scope.is_empty() {
         let hits = legacy?;
         // Spike-4b: the recall pack is masked (secrets + PII) before the model sees it.
         let snippets: Vec<String> = hits
@@ -266,13 +298,71 @@ pub fn first_turn_injection(workspace: &Path, user_text: &str) -> Option<String>
         return format_injection(&snippets);
     }
     let mut seen = std::collections::HashSet::new();
-    let snippets: Vec<String> = amr
+    let snippets: Vec<String> = scope
         .into_iter()
+        .chain(amr)
         .chain(legacy.unwrap_or_default())
         .filter(|body| seen.insert(body.trim().to_lowercase()))
         .map(|body| grokhub_core::redact_recall(&body).0)
         .collect();
     format_injection(&snippets)
+}
+
+/// True when the user is asking about games, Steam, installed apps, or a
+/// software library — the sealed `scope:apps` pack is the right answer, not
+/// a claim of empty memory or a `~/.steam` workspace walk.
+pub fn library_intent(user_text: &str) -> bool {
+    let q = user_text.to_ascii_lowercase();
+    const NEEDLES: &[&str] = &[
+        "gaming",
+        "game library",
+        "games library",
+        "steam library",
+        "steam",
+        "installed app",
+        "installed apps",
+        "my library",
+        "your library",
+        "gaming library",
+        "game news",
+        "gaming news",
+        "what games",
+        "which games",
+        "my games",
+    ];
+    NEEDLES.iter().any(|n| q.contains(n))
+}
+
+/// Sealed installed-app (and related scope) lines for a library-shaped ask.
+/// Independent of `memory_backend`: indexers always write AMR `scope:` nodes.
+fn scope_library_lines(user_text: &str) -> Vec<String> {
+    if !library_intent(user_text) {
+        return Vec::new();
+    }
+    let index = crate::indexers::ScopeIndex::load(&crate::perm::config_dir());
+    let apps = index.for_scope("apps");
+    if apps.is_empty() {
+        return Vec::new();
+    }
+    // Cap: injection budget is tight; names are enough for a tailored answer.
+    const APP_CAP: usize = 40;
+    let mut out: Vec<String> = Vec::new();
+    out.push(format!(
+        "Sealed on this computer: {} installed-app learning(s). Prefer these over claiming no library info or scanning ~/.steam.",
+        apps.len()
+    ));
+    for fact in apps.iter().take(APP_CAP) {
+        if !out.contains(&fact.line) {
+            out.push(fact.line.clone());
+        }
+    }
+    if apps.len() > APP_CAP {
+        out.push(format!(
+            "…and {} more installed apps (ask to narrow or name one).",
+            apps.len() - APP_CAP
+        ));
+    }
+    out
 }
 
 /// Index hits for the first turn, or `None` when there are no files or the
@@ -1165,6 +1255,70 @@ mod tests {
             block.contains("cargo test -p grokhub-agent@0.1 in src/main.rs"),
             "{block}"
         );
+    }
+
+    /// Sealed Installed-app facts must reach the model on a gaming/library ask
+    /// even when `memory_backend` is still the default (legacy).
+    #[test]
+    fn gaming_library_ask_injects_sealed_installed_apps_on_legacy_backend() {
+        use grokhub_core::amr::{NodeDraft, NodeType, Sensitivity};
+        use std::sync::Arc;
+
+        let (cfg, ws, _guard) = temp_pair("apps-inject");
+        let keys = Arc::new(crate::harness::MemoryKeyStore::new());
+        crate::harness::use_key_store_for(&cfg, keys);
+        // No memory_backend key → legacy. Scope facts still live in AMR.
+        assert!(!amr_enabled());
+
+        let store = amr_store();
+        store.init().unwrap();
+        let stamp = "2026-10-12T12:00:00Z";
+        for (item, name) in [
+            ("ace", "Installed app: ACE COMBAT 8: WINGS OF THEVE"),
+            ("aion", "Installed app: AION 2"),
+            ("arc", "Installed app: ARC Raiders"),
+        ] {
+            let draft = NodeDraft {
+                id: format!("scope-apps-{item}"),
+                node_type: NodeType::Fact,
+                created: stamp.into(),
+                updated: stamp.into(),
+                source: "scope:apps".into(),
+                confidence: 0.7,
+                tags: vec!["scope:apps".into()],
+                body: format!("{name}\n"),
+                sensitivity: Sensitivity::Personal,
+                consent_ref: "grant-test".into(),
+            };
+            store.remember(&draft).unwrap();
+        }
+
+        let short = first_turn_injection(&ws, "good morning");
+        assert!(
+            short.is_none()
+                || (!short.as_ref().unwrap().contains("ACE COMBAT")
+                    && !short.as_ref().unwrap().contains("ARC Raiders")),
+            "short opener must not dump the app library: {short:?}"
+        );
+
+        let block =
+            first_turn_injection(&ws, "could you use what you knew about my gaming library?")
+                .expect("library ask must inject sealed apps");
+        assert!(
+            block.contains("Installed app: ACE COMBAT 8: WINGS OF THEVE"),
+            "{block}"
+        );
+        assert!(block.contains("Installed app: AION 2"), "{block}");
+        assert!(block.contains("Installed app: ARC Raiders"), "{block}");
+        assert!(
+            block.contains("installed-app learning"),
+            "affordance line: {block}"
+        );
+
+        let follow =
+            followup_injection("scan my steam library").expect("follow-up library ask injects");
+        assert!(follow.contains("Installed app: ARC Raiders"), "{follow}");
+        assert!(followup_injection("what is 2+2").is_none());
     }
 
     #[test]
