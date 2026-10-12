@@ -61,6 +61,7 @@ pub mod local_setup;
 pub mod mcp_catalog;
 pub mod mcp_oauth;
 pub mod md;
+pub mod mission;
 pub mod model_download;
 pub mod model_registry;
 pub mod models;
@@ -370,6 +371,10 @@ pub use learning::{
 pub use md::{
     code_tokens, md_blocks, md_link_ok, md_plain, md_spans, md_table_cells, md_wants_full_width,
     CodeTok, MdAlign, MdBlock, MdSpan,
+};
+pub use mission::{
+    mission_worthy_intent, MissionCheckItem, MissionCheckStatus, MissionOutcomeView, MissionSeed,
+    MissionStatus, MissionView,
 };
 pub use models::{catalog_line, sanitize_chat_model, MODEL_CATALOG};
 pub use oauth::{
