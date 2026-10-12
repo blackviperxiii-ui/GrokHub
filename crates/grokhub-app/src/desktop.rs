@@ -2809,6 +2809,26 @@ mod tests {
         assert_eq!(rgba_frame_to_jpeg(black), Err("the screen was a black frame".to_string()));
     }
 
+    /// Smoke the image codecs we enable in Cargo.toml (png/jpeg/webp/ico/bmp).
+    #[test]
+    fn cabin_image_codecs_round_trip() {
+        let src = image::RgbaImage::from_pixel(4, 4, image::Rgba([10, 20, 30, 255]));
+        for format in [
+            image::ImageFormat::Png,
+            image::ImageFormat::Jpeg,
+            image::ImageFormat::WebP,
+            image::ImageFormat::Ico,
+            image::ImageFormat::Bmp,
+        ] {
+            let mut buf = Vec::new();
+            src.write_to(&mut std::io::Cursor::new(&mut buf), format)
+                .unwrap_or_else(|e| panic!("{format:?} encode: {e}"));
+            let back = image::load_from_memory_with_format(&buf, format)
+                .unwrap_or_else(|e| panic!("{format:?} decode: {e}"));
+            assert_eq!((back.width(), back.height()), (4, 4), "{format:?}");
+        }
+    }
+
     #[test]
     fn wl_paste_gets_the_wayland_socket_startup_dropped() {
         let src = include_str!("desktop.rs").replace("\r\n", "\n");
