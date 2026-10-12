@@ -26,4 +26,6 @@ Want new features early? On Linux, turn on **Settings → General → Labs → B
 
 Full technical details, build steps and settings reference: [docs/REFERENCE.md](docs/REFERENCE.md).
 
+**Code signing policy:** Windows release binaries may be signed through SignPath — see [docs/CODE_SIGNING.md](docs/CODE_SIGNING.md).
+
 License: MIT
