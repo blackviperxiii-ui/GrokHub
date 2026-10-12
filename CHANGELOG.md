@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Security: Pulse feed and image fetches refuse CGNAT and other non-public literal IPs the same way `web_fetch` does, and dial through the shared public-only DNS resolver so a hostname that resolves to a private or link-local address cannot connect.
 - Settings → Cabin defaults and Permissions no longer re-read `providers.json` (or rebuild the provider model pick list) on every paint: the cabin keeps a cache that add / remove / allow / revoke clear. Settings → Background only schedules its 1 s countdown tick while a job is due in under a minute; waiting and minute+ rows rely on the normal heartbeat.
 - Pulse diversifies what it follows from what you like. A check posts at most two stories from one source (so Hacker News cannot fill the whole run), searches your strongest interest every time and rotates the other topic slots so weaker interests still get a look, and gives a small score bump to under-seen sources. Save or More like this twice on posts from the same subreddit, GitHub repo or YouTube channel adds that place to Settings → Pulse → Sources when that source kind is on.
 - Code is now rustfmt-clean and CI checks formatting.
