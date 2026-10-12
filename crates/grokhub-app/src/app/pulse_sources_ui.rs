@@ -70,10 +70,12 @@ fn user_agent() -> String {
 
 fn source_agent() -> ureq::Agent {
     // Redirects are followed by hand so every hop is checked as a public URL.
+    // Dial resolver blocks DNS→private/CGNAT even when the hostname looked public.
     ureq::AgentBuilder::new()
         .try_proxy_from_env(true)
         .redirects(0)
         .timeout(std::time::Duration::from_secs(FETCH_TIMEOUT_SECS))
+        .resolver(grokhub_agent::public_only_resolve)
         .build()
 }
 
@@ -1280,6 +1282,24 @@ mod tests {
         assert_eq!(
             redirect_target("http://a.test/x", "https://b.test/rss"),
             "https://b.test/rss"
+        );
+    }
+
+    #[test]
+    fn source_agent_dials_through_the_public_only_resolver() {
+        let src = include_str!("pulse_sources_ui.rs");
+        let arm = src
+            .split("fn source_agent()")
+            .nth(1)
+            .and_then(|rest| rest.split("fn redirect_target(").next())
+            .expect("source_agent");
+        assert!(
+            arm.contains(".resolver(grokhub_agent::public_only_resolve)"),
+            "Pulse source fetches must refuse DNS→private: {arm}"
+        );
+        assert!(
+            arm.contains(".redirects(0)"),
+            "manual redirect checks need redirects(0): {arm}"
         );
     }
 
