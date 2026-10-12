@@ -371,7 +371,7 @@ mod tests {
         let body = md.split("---\n").nth(2).unwrap();
         assert_eq!(
             body,
-            "Turn 4: 1 step.\nBrief: repair × critical, done = services, packages, boot errors, ports\nPolicy: repair × critical, goal quality (mistakes can break the system)\nPlaybook: Repair Linux\nTools: click x1\nDecisions: allow 1\nScreen changed: yes 1, no 0\nFindings: none\nVerify: none\nSpans: chat-7:2001\n"
+            "Turn 4: 1 step.\nBrief: repair × critical, done = services, packages, boot errors, ports\nPolicy: repair × critical, goal quality (mistakes can break the system)\nTalk: findings card, reply under 80 words\nPlaybook: Repair Linux\nTools: click x1\nDecisions: allow 1\nScreen changed: yes 1, no 0\nFindings: none\nVerify: none\nSpans: chat-7:2001\n"
         );
         assert_eq!(with_brief(&"x".repeat(TRAIL_BODY_CAP), &["Brief: chat × casual".into()]).chars().count(), TRAIL_BODY_CAP);
         let _ = std::fs::remove_dir_all(dir);
