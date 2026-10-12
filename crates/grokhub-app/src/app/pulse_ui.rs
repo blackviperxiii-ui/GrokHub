@@ -691,10 +691,12 @@ fn paint_done_for_you(ui: &mut egui::Ui, card: &UpdateCard) -> Option<FeedPostAc
 
 /// Title, short takeaway, Read at, images, then Like / Discuss.
 /// `thumbs` is empty when the post has no image yet.
+/// `looking_more` is true while a More like this check is in flight.
 pub(super) fn paint_post_body(
     ui: &mut egui::Ui,
     card: &UpdateCard,
     thumbs: &[Thumb],
+    looking_more: bool,
 ) -> Option<FeedPostAct> {
     let mut act = None;
     ui.add(
@@ -750,7 +752,7 @@ pub(super) fn paint_post_body(
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 14.0;
         if grokhub_core::pulse_sources::is_source_post(card) {
-            if let Some(did) = paint_source_actions(ui, card) {
+            if let Some(did) = paint_source_actions(ui, card, looking_more) {
                 act = Some(FeedPostAct::Source(did));
             }
         } else if paint_heart_button(ui, card.reaction == Some(CardReaction::Up)) {
@@ -783,20 +785,33 @@ pub(super) fn paint_post_body(
 }
 
 /// Save, Not interested and More like this under a source post. Save reads Saved
-/// once the post is in Saved Finds.
-fn paint_source_actions(ui: &mut egui::Ui, card: &UpdateCard) -> Option<SourceAct> {
+/// once the post is in Saved Finds. More like this reads Looking… while a check
+/// it started is still running.
+fn paint_source_actions(
+    ui: &mut egui::Ui,
+    card: &UpdateCard,
+    looking_more: bool,
+) -> Option<SourceAct> {
     let saved = card.reaction == Some(CardReaction::Up);
     let mut act = None;
     for (label, did) in [
         (if saved { "Saved" } else { "Save" }, SourceAct::Save),
         ("Not interested", SourceAct::NotInterested),
-        ("More like this", SourceAct::MoreLike),
+        (
+            if looking_more {
+                "Looking…"
+            } else {
+                "More like this"
+            },
+            SourceAct::MoreLike,
+        ),
     ] {
-        let color = if did == SourceAct::Save && saved {
-            crate::theme::fg()
-        } else {
-            crate::theme::muted()
-        };
+        let color =
+            if (did == SourceAct::Save && saved) || (did == SourceAct::MoreLike && looking_more) {
+                crate::theme::fg()
+            } else {
+                crate::theme::muted()
+            };
         let button = ui.add(
             egui::Button::new(
                 RichText::new(label)
@@ -1233,6 +1248,14 @@ impl Cabin {
         let now = now_ms();
         let posts = self.pulse_feed_posts(now);
         self.kick_pulse_images(&posts);
+        if !self.sources.note.is_empty() {
+            ui.label(
+                RichText::new(&self.sources.note)
+                    .size(crate::theme::FONT_TIP)
+                    .color(crate::theme::muted()),
+            );
+            ui.add_space(8.0);
+        }
         if posts.is_empty() {
             self.paint_pulse_silence(ui, true);
             return;
@@ -1288,7 +1311,7 @@ impl Cabin {
                         });
                     });
                 });
-                if let Some(did) = paint_post_body(ui, card, &thumbs) {
+                if let Some(did) = paint_post_body(ui, card, &thumbs, self.sources.looking_more) {
                     act = Some(match did {
                         FeedPostAct::Like => PulseAct::Like(card.id.clone()),
                         FeedPostAct::Discuss => PulseAct::Discuss(card.id.clone()),
