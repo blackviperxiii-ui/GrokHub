@@ -335,14 +335,16 @@ impl Cabin {
     }
 
     /// Tonight's passes in order, each once a night at or after the dream
-    /// hour: the Sunday self-review, then dream (with the episode lessons'
-    /// tidy). Returns whether the self-review started and dream's thread.
+    /// hour: the Sunday systems briefing, the Sunday self-review, then dream
+    /// (with the episode lessons' tidy). Returns whether the self-review
+    /// started and dream's thread.
     pub(super) fn night_passes(
         &mut self,
         today: &str,
         clock: &grokhub_core::LocalClock,
         now: u64,
     ) -> (bool, Option<std::thread::JoinHandle<()>>) {
+        let _briefed = self.systems_brief_tonight(today, clock, now);
         let reviewed = self.self_review_tonight(today, clock, now);
         lessons_tonight(today, clock.hour >= self.dream_hour(), now);
         (reviewed, self.dream_tonight(today, clock.hour, now))
