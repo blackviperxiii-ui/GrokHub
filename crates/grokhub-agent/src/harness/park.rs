@@ -74,18 +74,35 @@ pub fn pending_parks(config_dir: &Path) -> Vec<ParkRequest> {
 }
 
 /// The cabin's click: `approve` true runs the call once.
+///
+/// Writes atomically (temp file, then rename) so a concurrent `take_answer`
+/// never sees an empty or half-written answer and treats Approve as Deny.
 pub fn answer_park(config_dir: &Path, id: &str, approve: bool) -> Result<(), String> {
     let dir = park_dir(config_dir);
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let word = if approve { "approve" } else { "deny" };
-    fs::write(answer_path(config_dir, id), word).map_err(|e| e.to_string())
+    let dest = answer_path(config_dir, id);
+    let tmp = dir.join(format!("{}.answer.tmp", safe_id(id)));
+    fs::write(&tmp, word).map_err(|e| e.to_string())?;
+    fs::rename(&tmp, dest).map_err(|e| e.to_string())
 }
 
-/// Read the answer once and clear both files. Anything but `approve` is Deny.
+/// Read a complete answer once and clear both files.
+///
+/// Only the exact words `approve` and `deny` count. An empty, partial, or
+/// unknown body returns `None` and leaves the files so `wait_park` can poll
+/// again — a torn write must not become Deny.
 pub fn take_answer(config_dir: &Path, id: &str) -> Option<bool> {
-    let raw = fs::read_to_string(answer_path(config_dir, id)).ok()?;
+    let path = answer_path(config_dir, id);
+    let raw = fs::read_to_string(&path).ok()?;
+    let word = raw.trim();
+    let ok = match word {
+        "approve" => true,
+        "deny" => false,
+        _ => return None,
+    };
     clear_park(config_dir, id);
-    Some(raw.trim() == "approve")
+    Some(ok)
 }
 
 pub fn clear_park(config_dir: &Path, id: &str) {
@@ -181,6 +198,40 @@ mod tests {
             &mut || true
         ));
         assert_eq!(fs::read_dir(park_dir(&dir)).unwrap().count(), 0);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn incomplete_answer_is_not_deny_and_approve_still_wins() {
+        let dir = temp("torn");
+        post_park(&dir, &req("p5")).unwrap();
+        // Simulate a torn or empty answer file a non-atomic write could expose.
+        fs::write(answer_path(&dir, "p5"), "").unwrap();
+        assert_eq!(take_answer(&dir, "p5"), None);
+        assert!(answer_path(&dir, "p5").exists());
+        assert!(req_path(&dir, "p5").exists());
+        fs::write(answer_path(&dir, "p5"), "appr").unwrap();
+        assert_eq!(take_answer(&dir, "p5"), None);
+        answer_park(&dir, "p5", true).unwrap();
+        assert_eq!(take_answer(&dir, "p5"), Some(true));
+        assert!(!answer_path(&dir, "p5").exists());
+        assert!(!req_path(&dir, "p5").exists());
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn answer_park_lands_as_exact_approve_or_deny() {
+        let dir = temp("atomic");
+        post_park(&dir, &req("p6")).unwrap();
+        answer_park(&dir, "p6", true).unwrap();
+        let raw = fs::read_to_string(answer_path(&dir, "p6")).unwrap();
+        assert_eq!(raw, "approve");
+        assert_eq!(take_answer(&dir, "p6"), Some(true));
+        post_park(&dir, &req("p7")).unwrap();
+        answer_park(&dir, "p7", false).unwrap();
+        let raw = fs::read_to_string(answer_path(&dir, "p7")).unwrap();
+        assert_eq!(raw, "deny");
+        assert_eq!(take_answer(&dir, "p7"), Some(false));
         let _ = fs::remove_dir_all(dir);
     }
 }
