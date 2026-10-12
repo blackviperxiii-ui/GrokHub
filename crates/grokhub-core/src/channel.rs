@@ -432,6 +432,39 @@ mod tests {
         );
         let _ = std::fs::remove_dir_all(&base);
     }
+
+    /// Local `beta` with commits that are not on `origin/beta` must refuse
+    /// instead of `checkout -B` dropping them.
+    #[cfg(unix)]
+    #[test]
+    fn install_sh_refuses_when_local_channel_branch_is_ahead() {
+        let (base, repo) = switch_fixture("local-ahead");
+        let git = |args: &[&str]| {
+            let out = std::process::Command::new("git")
+                .args(args)
+                .current_dir(&repo)
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+        };
+        git(&["fetch", "-q", "origin"]);
+        git(&["checkout", "-q", "-B", "beta", "origin/beta"]);
+        std::fs::write(repo.join("src/lib.rs"), "pub fn local_only() {}\n").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-q", "-m", "local beta only"]);
+        let local_beta = git_stdout(&repo, &["rev-parse", "beta"]);
+        git(&["checkout", "-q", "main"]);
+        let out = run_switch_to_beta(&base, &repo);
+        assert_eq!(out.status.code(), Some(1), "stdout={}", String::from_utf8_lossy(&out.stdout));
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            err.contains("local beta has commits that are not on origin/beta"),
+            "{err}"
+        );
+        assert_eq!(git_stdout(&repo, &["rev-parse", "beta"]), local_beta);
+        assert_eq!(git_stdout(&repo, &["symbolic-ref", "--short", "HEAD"]), "beta");
+        let _ = std::fs::remove_dir_all(&base);
+    }
 }
 
 /// Shown next to the Labs Beta channel toggle: `beta · beta @ abc1234`.
