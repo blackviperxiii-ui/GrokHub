@@ -20,7 +20,7 @@
 
 use super::*;
 use grokhub_agent::harness::{self as hx, GateOutcome, Step};
-use grokhub_agent::{AccessMode, HardClass};
+use grokhub_agent::{project_recovery, AccessMode, HardClass, RecoveryFacts, RecoveryState};
 
 /// How often the cabin looks for desktop parks and refreshes the turn file.
 const POLL: Duration = Duration::from_millis(250);
@@ -1043,16 +1043,28 @@ impl Cabin {
     }
 
     /// The retry ladder's next rung for this turn's first finding. True when
-    /// it ran out and paused for the user.
+    /// it ran out and paused for the user. Status chrome shows the projected
+    /// [`RecoveryState`] (reason + next), not a second retry stack.
     fn harness_ladder_step(&mut self, trace: &str, turn: u32, audit: &hx::Audit) -> bool {
         let Some(window) = audit.flagged.iter().find(|w| !w.findings.is_empty()) else {
             return false;
         };
         let step = self.harness.ladder.next(&window.findings[0], &window.spans);
         self.write_span_at(hx::ladder_span(trace, &step), "audit", turn);
+        let snap = project_recovery(&RecoveryFacts {
+            ladder: Some(step.rung),
+            ladder_reason: Some(step.reason.clone()),
+            ladder_next: step.prompt.clone(),
+            soft_park_open: step.rung == hx::Rung::Pause,
+            running: true,
+            ..RecoveryFacts::default()
+        });
         match step.rung {
             hx::Rung::Retry | hx::Rung::Backtrack | hx::Rung::Replan => {
                 self.harness.repair = step.prompt;
+                if self.chrome_here() {
+                    self.status = snap.status_line();
+                }
                 false
             }
             hx::Rung::Pause => {
@@ -1064,8 +1076,15 @@ impl Cabin {
                     chat_id: trace.to_string(),
                 });
                 if self.chrome_here() {
-                    self.status = crate::motion::needs_attention_summary(self.decisions_waiting());
+                    // Keep the needs-attention count when several cards wait;
+                    // otherwise show the recovery reason and next action.
+                    self.status = if self.decisions_waiting() > 1 {
+                        crate::motion::needs_attention_summary(self.decisions_waiting())
+                    } else {
+                        snap.status_line()
+                    };
                 }
+                debug_assert_eq!(snap.state, RecoveryState::Paused);
                 true
             }
         }
