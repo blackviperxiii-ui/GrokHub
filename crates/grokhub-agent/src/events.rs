@@ -224,9 +224,10 @@ impl NativeEngine {
         crate::checkpoint::set_turn_style(&self.conversation_id, policy.as_ref().map(crate::brain::PolicyPick::style));
         // Brain 3: the Brief's intent, domain and this computer's OS pick the playbook.
         let (books, _) = crate::brain::playbook::load(&dir);
-        let playbook = crate::brain::playbook::pick(&books, brief.intent.as_str(), &brief.domain, crate::brain::playbook::host_os())
-            .map(|p| p.name.clone())
-            .unwrap_or_default();
+        let picked = crate::brain::playbook::pick(&books, brief.intent.as_str(), &brief.domain, crate::brain::playbook::host_os());
+        // The run's system prompt carries the picked playbook's steps (or drops an earlier turn's).
+        crate::checkpoint::set_turn_playbook(&self.conversation_id, picked.map(|p| p.prompt_block()));
+        let playbook = picked.map(|p| p.name.clone()).unwrap_or_default();
         let line = crate::brain::BriefLine { at: grokhub_core::now_ms(), session: self.conversation_id.clone(), chat_id, turn, brief, policy, playbook };
         let _ = crate::brain::record_brief(&dir, &line);
     }
