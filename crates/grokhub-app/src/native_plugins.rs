@@ -304,7 +304,10 @@ mod tests {
             .nth(1)
             .expect("labs arm");
         assert!(arm.contains("native_plugins::paint"), "{arm}");
-        assert!(!arm.contains("native_engine"), "plugins are not behind an engine switch: {arm}");
+        assert!(
+            !arm.contains("native_engine"),
+            "plugins are not behind an engine switch: {arm}"
+        );
         let chat = include_str!("app/chat_ui.rs");
         assert!(!chat.contains("native_plugins"));
     }

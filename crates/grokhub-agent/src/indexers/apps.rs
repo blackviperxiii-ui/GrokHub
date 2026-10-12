@@ -60,7 +60,9 @@ fn desktop_name(text: &str) -> Option<String> {
         match t.split_once('=') {
             Some(("Name", v)) if name.is_none() => name = Some(v.trim().to_string()),
             Some(("Type", v)) => app = v.trim() == "Application",
-            Some(("NoDisplay" | "Hidden", v)) if v.trim().eq_ignore_ascii_case("true") => return None,
+            Some(("NoDisplay" | "Hidden", v)) if v.trim().eq_ignore_ascii_case("true") => {
+                return None
+            }
             _ => {}
         }
     }
@@ -74,11 +76,19 @@ fn fact(id: &str, name: &str, launches: &BTreeMap<String, u32>) -> Fact {
         Some(n) => line.push_str(&format!(" · opened {n} times from GrokHub")),
         None => {}
     }
-    Fact { item: id.to_string(), line, sensitivity: Sensitivity::Personal }
+    Fact {
+        item: id.to_string(),
+        line,
+        sensitivity: Sensitivity::Personal,
+    }
 }
 
 /// Every installed app the OS lists, deduplicated by id (user folders win).
-pub fn index_apps(fs: &dyn IndexFs, dirs: &PlatformDirs, launches: &BTreeMap<String, u32>) -> Vec<Fact> {
+pub fn index_apps(
+    fs: &dyn IndexFs,
+    dirs: &PlatformDirs,
+    launches: &BTreeMap<String, u32>,
+) -> Vec<Fact> {
     let mut seen = BTreeSet::new();
     let mut out = Vec::new();
     for dir in app_dirs(dirs) {
@@ -94,8 +104,15 @@ pub fn index_apps(fs: &dyn IndexFs, dirs: &PlatformDirs, launches: &BTreeMap<Str
                 if index_excluded(&e.path.display().to_string()) {
                     continue;
                 }
-                let stem = Path::new(&e.name).file_stem().and_then(|s| s.to_str()).unwrap_or("").to_string();
-                let ext = Path::new(&e.name).extension().and_then(|x| x.to_str()).unwrap_or("");
+                let stem = Path::new(&e.name)
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("")
+                    .to_string();
+                let ext = Path::new(&e.name)
+                    .extension()
+                    .and_then(|x| x.to_str())
+                    .unwrap_or("");
                 match (dirs.os, e.kind, ext) {
                     (HostOs::Linux, EntryKind::File, "desktop") => {
                         if !seen.insert(e.name.clone()) {
@@ -108,7 +125,9 @@ pub fn index_apps(fs: &dyn IndexFs, dirs: &PlatformDirs, launches: &BTreeMap<Str
                             out.push(fact(&e.name, &name, launches));
                         }
                     }
-                    (HostOs::Windows, EntryKind::Dir, _) if depth < START_MENU_DEPTH => stack.push((e.path, depth + 1)),
+                    (HostOs::Windows, EntryKind::Dir, _) if depth < START_MENU_DEPTH => {
+                        stack.push((e.path, depth + 1))
+                    }
                     (HostOs::Windows, EntryKind::File, "lnk") => {
                         let lower = stem.to_ascii_lowercase();
                         if lower.contains("uninstall") || !seen.insert(lower) {
@@ -135,15 +154,33 @@ mod tests {
     fn desktop_entries_skip_hidden_and_non_apps() {
         let shown = "[Desktop Entry]\nType=Application\nName=Firefox\nName[de]=Feuerfuchs\nExec=firefox %u\n";
         assert_eq!(desktop_name(shown), Some("Firefox".into()));
-        assert_eq!(desktop_name("[Desktop Entry]\nType=Application\nName=Helper\nNoDisplay=true\n"), None);
-        assert_eq!(desktop_name("[Desktop Entry]\nType=Link\nName=Docs\n"), None);
+        assert_eq!(
+            desktop_name("[Desktop Entry]\nType=Application\nName=Helper\nNoDisplay=true\n"),
+            None
+        );
+        assert_eq!(
+            desktop_name("[Desktop Entry]\nType=Link\nName=Docs\n"),
+            None
+        );
         assert_eq!(
             desktop_name("[Desktop Action new]\nName=New Window\n[Desktop Entry]\nType=Application\nName=Files\n"),
             Some("Files".into())
         );
-        let launches = BTreeMap::from([("firefox.desktop".to_string(), 3u32), ("gimp.desktop".to_string(), 1)]);
-        assert_eq!(fact("firefox.desktop", "Firefox", &launches).line, "Installed app: Firefox · opened 3 times from GrokHub");
-        assert_eq!(fact("gimp.desktop", "GIMP", &launches).line, "Installed app: GIMP · opened once from GrokHub");
-        assert_eq!(fact("vlc.desktop", "VLC", &launches).line, "Installed app: VLC");
+        let launches = BTreeMap::from([
+            ("firefox.desktop".to_string(), 3u32),
+            ("gimp.desktop".to_string(), 1),
+        ]);
+        assert_eq!(
+            fact("firefox.desktop", "Firefox", &launches).line,
+            "Installed app: Firefox · opened 3 times from GrokHub"
+        );
+        assert_eq!(
+            fact("gimp.desktop", "GIMP", &launches).line,
+            "Installed app: GIMP · opened once from GrokHub"
+        );
+        assert_eq!(
+            fact("vlc.desktop", "VLC", &launches).line,
+            "Installed app: VLC"
+        );
     }
 }

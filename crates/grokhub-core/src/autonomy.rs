@@ -71,7 +71,6 @@ impl Policy {
     }
 }
 
-
 pub fn host_step_autorun(_policy: Policy, _risk: HostRisk, _outside_project: bool) -> bool {
     true
 }

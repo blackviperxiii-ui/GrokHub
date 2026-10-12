@@ -11,11 +11,16 @@ use std::path::{Path, PathBuf};
 
 use grokhub_core::model_registry::cost_class::{probe_class, CostClass};
 use grokhub_core::model_registry::probe::{Onboarding, ProbeLogLine};
-use grokhub_core::model_registry::profile::{read_profile, write_profile, ModelProfile, ProbeResult};
-use grokhub_core::model_registry::store::{
-    append_line, load_registry, onboarding_path, probe_log_path, read_json, save_registry, take_observations, write_json,
+use grokhub_core::model_registry::profile::{
+    read_profile, write_profile, ModelProfile, ProbeResult,
 };
-use grokhub_core::model_registry::{CatalogSource, Credential, ModelMeta, Registry, RegistryEvent, SourceKind};
+use grokhub_core::model_registry::store::{
+    append_line, load_registry, onboarding_path, probe_log_path, read_json, save_registry,
+    take_observations, write_json,
+};
+use grokhub_core::model_registry::{
+    CatalogSource, Credential, ModelMeta, Registry, RegistryEvent, SourceKind,
+};
 
 use crate::harness::{append_span, AccessMode, Origin, OriginScope, Span};
 
@@ -48,9 +53,17 @@ pub struct RefreshDone {
 /// One span per registry event: `{"event":"changed","id":…,"what":[…]}`. No content.
 pub fn event_span(ev: &RegistryEvent) -> Span {
     let args = serde_json::to_string(ev).unwrap_or_default();
-    let mut s = Span::soft_allow(REGISTRY_TRACE, REGISTRY_TOOL, &args, ev.kind(), "", AccessMode::Supervised, "cabin")
-        .from_origin(Origin::SelfManage)
-        .on_path("model");
+    let mut s = Span::soft_allow(
+        REGISTRY_TRACE,
+        REGISTRY_TOOL,
+        &args,
+        ev.kind(),
+        "",
+        AccessMode::Supervised,
+        "cabin",
+    )
+    .from_origin(Origin::SelfManage)
+    .on_path("model");
     s.access = String::new();
     s
 }
@@ -91,7 +104,14 @@ fn reprobe(what: &[String]) -> bool {
 }
 
 /// Build and write profiles for added or changed models; queue the ones to probe.
-fn onboard(config_dir: &Path, reg: &mut Registry, events: &[RegistryEvent], cred: Credential, default_model: &str, now_ms: u64) -> usize {
+fn onboard(
+    config_dir: &Path,
+    reg: &mut Registry,
+    events: &[RegistryEvent],
+    cred: Credential,
+    default_model: &str,
+    now_ms: u64,
+) -> usize {
     let ids: Vec<(&String, bool)> = events
         .iter()
         .filter_map(|e| match e {
@@ -108,7 +128,10 @@ fn onboard(config_dir: &Path, reg: &mut Registry, events: &[RegistryEvent], cred
         if !rec.state.routable() {
             continue;
         }
-        let kept = (!fresh).then(|| read_profile(config_dir, id)).flatten().map(|p| p.probe);
+        let kept = (!fresh)
+            .then(|| read_profile(config_dir, id))
+            .flatten()
+            .map(|p| p.probe);
         let probe = kept.unwrap_or_else(|| first_probe(&rec.sources, probe_class(reg, cred, id)));
         if probe.status == "queued" {
             to_probe.push(id.clone());
@@ -120,8 +143,13 @@ fn onboard(config_dir: &Path, reg: &mut Registry, events: &[RegistryEvent], cred
     }
     // A failed probe is retried after a day (a `changed` event retries it sooner).
     for (id, p) in grokhub_core::model_registry::profile::read_profiles(config_dir) {
-        let due = now_ms.saturating_sub(p.built_at) >= grokhub_core::model_registry::probe::PROBE_RETRY_MS;
-        if p.probe.status == "failed" && due && reg.get(&id).is_some_and(|r| r.state.routable()) && !to_probe.contains(&id) {
+        let due = now_ms.saturating_sub(p.built_at)
+            >= grokhub_core::model_registry::probe::PROBE_RETRY_MS;
+        if p.probe.status == "failed"
+            && due
+            && reg.get(&id).is_some_and(|r| r.state.routable())
+            && !to_probe.contains(&id)
+        {
             to_probe.push(id);
         }
     }
@@ -197,9 +225,22 @@ pub fn run_refresh(job: &RefreshJob<'_>) -> RefreshDone {
     for ev in &events {
         let _ = append_span(dir, &event_span(ev));
     }
-    let profiles_written = onboard(dir, &mut reg, &events, job.credential, &job.default_model, job.now_ms);
+    let profiles_written = onboard(
+        dir,
+        &mut reg,
+        &events,
+        job.credential,
+        &job.default_model,
+        job.now_ms,
+    );
     let _ = save_registry(dir, &reg);
-    RefreshDone { events, errors, gb_version, signal, profiles_written }
+    RefreshDone {
+        events,
+        errors,
+        gb_version,
+        signal,
+        profiles_written,
+    }
 }
 
 #[cfg(test)]
@@ -207,7 +248,9 @@ mod tests {
     use super::*;
     use crate::harness::{read_spans, test_dir};
     use grokhub_core::model_registry::discover::Listing;
-    use grokhub_core::model_registry::probe::{run_probe, ProbeCall, ProbeEnv, ProbeKind, ProbeReply, ProbeTransport, PROBE_TOOL_NAME};
+    use grokhub_core::model_registry::probe::{
+        run_probe, ProbeCall, ProbeEnv, ProbeKind, ProbeReply, ProbeTransport, PROBE_TOOL_NAME,
+    };
     use grokhub_core::model_registry::profile::read_profiles;
     use grokhub_core::model_registry::Prices;
     use std::cell::Cell;
@@ -227,7 +270,12 @@ mod tests {
         ModelMeta {
             id: id.into(),
             context_length: Some(500_000),
-            prices: Prices { prompt: Some(1), cached: Some(1), completion: Some(1), ..Prices::default() },
+            prices: Prices {
+                prompt: Some(1),
+                cached: Some(1),
+                completion: Some(1),
+                ..Prices::default()
+            },
             efforts: Some(vec!["low".into(), "high".into()]),
             tool_calling: Some(true),
             ..ModelMeta::default()
@@ -239,10 +287,21 @@ mod tests {
     impl ProbeTransport for Counting {
         fn send(&mut self, call: &ProbeCall) -> Result<ProbeReply, String> {
             self.0 += 1;
-            let mut r = ProbeReply { status: 200, latency_ms: 300, input_tokens: 50, output_tokens: 8, cost_ticks: 900, ..ProbeReply::default() };
+            let mut r = ProbeReply {
+                status: 200,
+                latency_ms: 300,
+                input_tokens: 50,
+                output_tokens: 8,
+                cost_ticks: 900,
+                ..ProbeReply::default()
+            };
             match call.kind {
-                ProbeKind::Tool if self.1 => r.tool_calls = vec![(PROBE_TOOL_NAME.into(), "not json".into())],
-                ProbeKind::Tool => r.tool_calls = vec![(PROBE_TOOL_NAME.into(), r#"{"word":"ping"}"#.into())],
+                ProbeKind::Tool if self.1 => {
+                    r.tool_calls = vec![(PROBE_TOOL_NAME.into(), "not json".into())]
+                }
+                ProbeKind::Tool => {
+                    r.tool_calls = vec![(PROBE_TOOL_NAME.into(), r#"{"word":"ping"}"#.into())]
+                }
                 ProbeKind::Json => r.text = r#"{"a":"ok","b":3,"c":true}"#.into(),
                 _ => {}
             }
@@ -253,8 +312,20 @@ mod tests {
     #[test]
     fn a_refresh_writes_events_profiles_and_queues_the_default_first_then_probes_with_a_fake() {
         let dir = test_dir("route-refresh");
-        let api = Fixed(SourceKind::XaiApi, vec![meta("grok-4.5"), meta("grok-4.7"), ModelMeta::bare("grok-3-mini-fast")], Cell::new(0));
-        let gb = Fixed(SourceKind::GrokBuild, vec![ModelMeta::bare("grok-build-x")], Cell::new(0));
+        let api = Fixed(
+            SourceKind::XaiApi,
+            vec![
+                meta("grok-4.5"),
+                meta("grok-4.7"),
+                ModelMeta::bare("grok-3-mini-fast"),
+            ],
+            Cell::new(0),
+        );
+        let gb = Fixed(
+            SourceKind::GrokBuild,
+            vec![ModelMeta::bare("grok-build-x")],
+            Cell::new(0),
+        );
         let job = RefreshJob {
             config_dir: dir.clone(),
             sources: vec![&api, &gb],
@@ -265,20 +336,29 @@ mod tests {
         };
         let done = run_refresh(&job);
         assert_eq!(done.errors, Vec::<String>::new());
-        assert_eq!(done.events.iter().filter(|e| e.kind() == "added").count(), 4);
+        assert_eq!(
+            done.events.iter().filter(|e| e.kind() == "added").count(),
+            4
+        );
         let spans = read_spans(&dir, REGISTRY_TRACE).unwrap();
         assert_eq!(spans.len(), done.events.len());
         assert!(spans.iter().all(|s| s.origin == Origin::SelfManage));
         let profiles = read_profiles(&dir);
         // Ghosts (the placeholder and the pinned id) get no profile.
-        assert_eq!(profiles.keys().cloned().collect::<Vec<_>>(), vec!["grok-4.5", "grok-4.7", "grok-build-x"]);
+        assert_eq!(
+            profiles.keys().cloned().collect::<Vec<_>>(),
+            vec!["grok-4.5", "grok-4.7", "grok-build-x"]
+        );
         assert_eq!(profiles["grok-build-x"].probe.status, "not_run: gb_only");
         assert_eq!(profiles["grok-4.7"].probe.status, "queued");
         assert!(!profiles["grok-4.7"].usable);
         let queue: Onboarding = read_json(&onboarding_path(&dir)).unwrap();
         assert_eq!(queue.queue, vec!["grok-4.7".to_string(), "grok-4.5".into()]);
         // An unchanged refresh writes no profile.
-        let again = run_refresh(&RefreshJob { now_ms: 2_000, ..job });
+        let again = run_refresh(&RefreshJob {
+            now_ms: 2_000,
+            ..job
+        });
         assert_eq!((again.events.len(), again.profiles_written), (0, 0));
         // The probe runs on the fake, one guard per call, and logs one line.
         let mut fake = Counting(0, false);
@@ -288,14 +368,29 @@ mod tests {
                 guards += 1;
                 true
             };
-            run_probe(m, c, ProbeEnv { transport: &mut fake, guard: &mut g, wait: &mut |_| {}, on_call: &mut |_, _| {} })
+            run_probe(
+                m,
+                c,
+                ProbeEnv {
+                    transport: &mut fake,
+                    guard: &mut g,
+                    wait: &mut |_| {},
+                    on_call: &mut |_, _| {},
+                },
+            )
         })
         .unwrap();
-        assert_eq!((p.model.as_str(), p.usable, p.version), ("grok-4.7", true, 2));
+        assert_eq!(
+            (p.model.as_str(), p.usable, p.version),
+            ("grok-4.7", true, 2)
+        );
         assert_eq!(fake.0, guards);
         let log = std::fs::read_to_string(probe_log_path(&dir)).unwrap();
         assert_eq!(log.lines().count(), 1);
-        assert!(log.contains("\"model\":\"grok-4.7\"") && log.contains("\"status\":\"ok\""), "{log}");
+        assert!(
+            log.contains("\"model\":\"grok-4.7\"") && log.contains("\"status\":\"ok\""),
+            "{log}"
+        );
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -303,13 +398,35 @@ mod tests {
     fn a_bad_tool_shape_is_unusable_and_why_models_says_so() {
         let dir = test_dir("route-refresh-bad");
         let api = Fixed(SourceKind::XaiApi, vec![meta("grok-4.7")], Cell::new(0));
-        run_refresh(&RefreshJob { config_dir: dir.clone(), sources: vec![&api], credential: Credential::Plan, named: vec![], default_model: "grok-4.7".into(), now_ms: 1 });
+        run_refresh(&RefreshJob {
+            config_dir: dir.clone(),
+            sources: vec![&api],
+            credential: Credential::Plan,
+            named: vec![],
+            default_model: "grok-4.7".into(),
+            now_ms: 1,
+        });
         let mut fake = Counting(0, true);
         let p = probe_next(&dir, Credential::Plan, 2, &mut |m, c| {
-            run_probe(m, c, ProbeEnv { transport: &mut fake, guard: &mut || true, wait: &mut |_| {}, on_call: &mut |_, _| {} })
+            run_probe(
+                m,
+                c,
+                ProbeEnv {
+                    transport: &mut fake,
+                    guard: &mut || true,
+                    wait: &mut |_| {},
+                    on_call: &mut |_, _| {},
+                },
+            )
         })
         .unwrap();
-        assert_eq!((p.usable, p.unusable_reason.as_deref()), (false, Some("Tool calls didn't come back in the right shape.")));
+        assert_eq!(
+            (p.usable, p.unusable_reason.as_deref()),
+            (
+                false,
+                Some("Tool calls didn't come back in the right shape.")
+            )
+        );
         let text = crate::route::why_models_text(&load_registry(&dir), &read_profiles(&dir));
         assert_eq!(text, "grok-4.7 · live · not usable. In your model list. Tool calls didn't come back in the right shape.");
         let _ = std::fs::remove_dir_all(dir);
@@ -322,10 +439,27 @@ mod tests {
         let dir = test_dir("route-refresh-half-open");
         let ids: Vec<String> = (1..=6).map(|i| format!("grok-4.{i}")).collect();
         let mut reg = Registry::default();
-        reg.apply_refresh(&[Listing::new(SourceKind::XaiApi, ids.iter().map(|i| meta(i)).collect())], &[], 1);
+        reg.apply_refresh(
+            &[Listing::new(
+                SourceKind::XaiApi,
+                ids.iter().map(|i| meta(i)).collect(),
+            )],
+            &[],
+            1,
+        );
         for id in &ids {
             let fails: Vec<Observation> = (0..3)
-                .map(|t| Observation { model: id.clone(), ts_ms: 10 + t, status: CallStatus::Error, latency_ms: 0, served_model: None, endpoint_ok: true, reasoning_tokens: 0, cost_ticks: 0, http: 503 })
+                .map(|t| Observation {
+                    model: id.clone(),
+                    ts_ms: 10 + t,
+                    status: CallStatus::Error,
+                    latency_ms: 0,
+                    served_model: None,
+                    endpoint_ok: true,
+                    reasoning_tokens: 0,
+                    cost_ticks: 0,
+                    http: 503,
+                })
                 .collect();
             reg.fold(&fails);
             assert_eq!(reg.get(id).unwrap().state, ModelState::Quarantined);
@@ -336,12 +470,23 @@ mod tests {
         onboard(&dir, &mut reg, &[], Credential::Plan, "", now);
         save_registry(&dir, &reg).unwrap();
         let mut ran = 0;
-        while probe_next(&dir, Credential::Plan, now, &mut |_, _| ProbeResult { status: "ok".into(), ..ProbeResult::default() }).is_some() {
+        while probe_next(&dir, Credential::Plan, now, &mut |_, _| ProbeResult {
+            status: "ok".into(),
+            ..ProbeResult::default()
+        })
+        .is_some()
+        {
             ran += 1;
         }
-        assert_eq!(ran, PROBE_RUNS_PER_DAY as usize, "the sixth waits for tomorrow");
+        assert_eq!(
+            ran, PROBE_RUNS_PER_DAY as usize,
+            "the sixth waits for tomorrow"
+        );
         let reg = load_registry(&dir);
-        let live = ids.iter().filter(|i| reg.get(i).unwrap().state == ModelState::Live).count();
+        let live = ids
+            .iter()
+            .filter(|i| reg.get(i).unwrap().state == ModelState::Live)
+            .count();
         assert_eq!((live, ids.len() - live), (5, 1));
         let _ = std::fs::remove_dir_all(dir);
     }
@@ -350,9 +495,22 @@ mod tests {
     fn an_api_key_route_is_metered_and_never_queued() {
         let dir = test_dir("route-refresh-key");
         let api = Fixed(SourceKind::XaiApi, vec![meta("grok-4.7")], Cell::new(0));
-        run_refresh(&RefreshJob { config_dir: dir.clone(), sources: vec![&api], credential: Credential::ApiKey, named: vec![], default_model: "grok-4.7".into(), now_ms: 1 });
-        assert_eq!(read_profiles(&dir)["grok-4.7"].probe.status, "not_run: cost_class");
-        assert_eq!(probe_next(&dir, Credential::ApiKey, 2, &mut |_, _| panic!("no probe")), None);
+        run_refresh(&RefreshJob {
+            config_dir: dir.clone(),
+            sources: vec![&api],
+            credential: Credential::ApiKey,
+            named: vec![],
+            default_model: "grok-4.7".into(),
+            now_ms: 1,
+        });
+        assert_eq!(
+            read_profiles(&dir)["grok-4.7"].probe.status,
+            "not_run: cost_class"
+        );
+        assert_eq!(
+            probe_next(&dir, Credential::ApiKey, 2, &mut |_, _| panic!("no probe")),
+            None
+        );
         let _ = std::fs::remove_dir_all(dir);
     }
 }

@@ -46,11 +46,15 @@ impl SnapshotBackend {
 pub fn detect_backends(os: Os, has_bin: &dyn Fn(&str) -> bool) -> Vec<SnapshotBackend> {
     match os {
         Os::Windows => vec![SnapshotBackend::SystemRestore],
-        Os::Linux => [("snapper", SnapshotBackend::Snapper), ("timeshift", SnapshotBackend::Timeshift), ("btrfs", SnapshotBackend::Btrfs)]
-            .into_iter()
-            .filter(|(bin, _)| has_bin(bin))
-            .map(|(_, b)| b)
-            .collect(),
+        Os::Linux => [
+            ("snapper", SnapshotBackend::Snapper),
+            ("timeshift", SnapshotBackend::Timeshift),
+            ("btrfs", SnapshotBackend::Btrfs),
+        ]
+        .into_iter()
+        .filter(|(bin, _)| has_bin(bin))
+        .map(|(_, b)| b)
+        .collect(),
     }
 }
 
@@ -85,12 +89,20 @@ impl RestorePoint for Snapshot {
     fn create_step(&self) -> Option<String> {
         let l = &self.label;
         Some(match self.backend {
-            SnapshotBackend::Snapper => elevate(Os::Linux, &format!("snapper create --description {l}")),
-            SnapshotBackend::Timeshift => elevate(Os::Linux, &format!("timeshift --create --comments {l}")),
-            SnapshotBackend::Btrfs => elevate(Os::Linux, &format!("btrfs subvolume snapshot -r / /.snapshots/{l}")),
-            SnapshotBackend::SystemRestore => {
-                elevate(Os::Windows, &format!("Checkpoint-Computer -Description {l} -RestorePointType MODIFY_SETTINGS"))
+            SnapshotBackend::Snapper => {
+                elevate(Os::Linux, &format!("snapper create --description {l}"))
             }
+            SnapshotBackend::Timeshift => {
+                elevate(Os::Linux, &format!("timeshift --create --comments {l}"))
+            }
+            SnapshotBackend::Btrfs => elevate(
+                Os::Linux,
+                &format!("btrfs subvolume snapshot -r / /.snapshots/{l}"),
+            ),
+            SnapshotBackend::SystemRestore => elevate(
+                Os::Windows,
+                &format!("Checkpoint-Computer -Description {l} -RestorePointType MODIFY_SETTINGS"),
+            ),
         })
     }
 
@@ -159,18 +171,37 @@ pub fn backup_files(config_dir: &Path, id: &str, paths: &[PathBuf]) -> Result<Fi
         match fs::read(path) {
             Ok(bytes) => {
                 let saved = format!("{i}.bak");
-                fs::write(dir.join(&saved), &bytes).map_err(|e| format!("couldn't back up {}: {e}", path.display()))?;
-                entries.push(BackupEntry { original: path.clone(), saved: Some(saved), hash: content_hash(&bytes) });
+                fs::write(dir.join(&saved), &bytes)
+                    .map_err(|e| format!("couldn't back up {}: {e}", path.display()))?;
+                entries.push(BackupEntry {
+                    original: path.clone(),
+                    saved: Some(saved),
+                    hash: content_hash(&bytes),
+                });
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                entries.push(BackupEntry { original: path.clone(), saved: None, hash: String::new() });
+                entries.push(BackupEntry {
+                    original: path.clone(),
+                    saved: None,
+                    hash: String::new(),
+                });
             }
-            Err(e) => return Err(format!("couldn't read {} to back it up: {e}", path.display())),
+            Err(e) => {
+                return Err(format!(
+                    "couldn't read {} to back it up: {e}",
+                    path.display()
+                ))
+            }
         }
     }
-    let backup = FileBackup { id: id.into(), dir: dir.clone(), entries };
+    let backup = FileBackup {
+        id: id.into(),
+        dir: dir.clone(),
+        entries,
+    };
     let body = serde_json::to_string_pretty(&backup).map_err(|e| e.to_string())?;
-    fs::write(dir.join(MANIFEST), body).map_err(|e| format!("couldn't write the backup list: {e}"))?;
+    fs::write(dir.join(MANIFEST), body)
+        .map_err(|e| format!("couldn't write the backup list: {e}"))?;
     Ok(backup)
 }
 

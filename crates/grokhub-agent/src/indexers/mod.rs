@@ -35,7 +35,9 @@ use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::Arc;
 
-use grokhub_core::amr::{AmrError, AmrStore, NodeDraft, NodeType, Sensitivity, SCOPE_SOURCE_PREFIX};
+use grokhub_core::amr::{
+    AmrError, AmrStore, NodeDraft, NodeType, Sensitivity, SCOPE_SOURCE_PREFIX,
+};
 use sha2::{Digest, Sha256};
 
 use crate::harness::{self as hx, ConsentLedger, Scope, Step};
@@ -59,10 +61,25 @@ const FACT_CONFIDENCE: f32 = 0.9;
 
 /// Beyond `SCOPE_HARD_EXCLUDES`: password-manager stores and credential files.
 /// (The auth file name is spelled in two parts: agent sources never name it whole.)
-pub const INDEX_EXCLUDES: &[&str] =
-    &[".password-store", "keyrings", "1Password", "Bitwarden", "KeePassXC", concat!("auth", ".json")];
+pub const INDEX_EXCLUDES: &[&str] = &[
+    ".password-store",
+    "keyrings",
+    "1Password",
+    "Bitwarden",
+    "KeePassXC",
+    concat!("auth", ".json"),
+];
 /// Credential file extensions never read.
-const EXCLUDED_EXTS: &[&str] = &["kdbx", "kdb", "pem", "key", "p12", "pfx", "keychain-db", "opvault"];
+const EXCLUDED_EXTS: &[&str] = &[
+    "kdbx",
+    "kdb",
+    "pem",
+    "key",
+    "p12",
+    "pfx",
+    "keychain-db",
+    "opvault",
+];
 /// Credential file name starts never read (`.env.local`, `id_ed25519.pub`, …).
 const EXCLUDED_STEMS: &[&str] = &[".env", "id_rsa", "id_ed25519", "id_ecdsa", "id_dsa"];
 
@@ -82,17 +99,27 @@ pub fn index_excluded(path: &str) -> bool {
     }
     // Case-blind, like `scope_excluded`: `ID_RSA`, `1PASSWORD`, `Keyrings`.
     let p = path.replace('\\', "/").to_lowercase();
-    if INDEX_EXCLUDES.iter().map(|x| x.to_lowercase()).any(|x| p.ends_with(&format!("/{x}")) || p.contains(&format!("/{x}/")) || p == x) {
+    if INDEX_EXCLUDES
+        .iter()
+        .map(|x| x.to_lowercase())
+        .any(|x| p.ends_with(&format!("/{x}")) || p.contains(&format!("/{x}/")) || p == x)
+    {
         return true;
     }
     let name = p.rsplit('/').next().unwrap_or("");
-    let ext = name.rsplit_once('.').map(|(_, e)| e.to_string()).unwrap_or_default();
+    let ext = name
+        .rsplit_once('.')
+        .map(|(_, e)| e.to_string())
+        .unwrap_or_default();
     EXCLUDED_EXTS.contains(&ext.as_str()) || EXCLUDED_STEMS.iter().any(|s| name.starts_with(s))
 }
 
 /// `YYYY-MM-DD` of a unix-ms stamp.
 pub fn date_of(ms: u64) -> String {
-    grokhub_core::oauth::unix_ms_to_rfc3339(ms).chars().take(10).collect()
+    grokhub_core::oauth::unix_ms_to_rfc3339(ms)
+        .chars()
+        .take(10)
+        .collect()
 }
 
 /// The kind part of a scope key (`files`, `browser_history`, …): the only
@@ -168,7 +195,11 @@ pub struct Scheduler {
 
 impl Default for Scheduler {
     fn default() -> Self {
-        Self { cursor: 0, last_run: BTreeMap::new(), rescan_ms: RESCAN_MS }
+        Self {
+            cursor: 0,
+            last_run: BTreeMap::new(),
+            rescan_ms: RESCAN_MS,
+        }
     }
 }
 
@@ -186,7 +217,12 @@ fn granted(ledger: &ConsentLedger) -> Vec<(Scope, String)> {
 
 fn allowed(config_dir: &Path, scope: &Scope) -> bool {
     let ledger = ConsentLedger::load(config_dir);
-    ledger.locked().is_none() && hx::decide(Step::Scope { scope, ledger: &ledger }).is_allow()
+    ledger.locked().is_none()
+        && hx::decide(Step::Scope {
+            scope,
+            ledger: &ledger,
+        })
+        .is_allow()
 }
 
 fn browser_name(id: &str) -> &str {
@@ -203,8 +239,14 @@ fn browser_name(id: &str) -> &str {
 /// Read one scope. Only called after `decide` allowed it this tick.
 fn gather(scope: &Scope, env: &TickEnv<'_>) -> (Vec<Fact>, Vec<String>) {
     match scope {
-        Scope::Files(dir) => (files::index_folder(env.fs, Path::new(dir)).facts, Vec::new()),
-        Scope::Apps => (apps::index_apps(env.fs, env.dirs, &apps::read_launch_counts(env.config_dir)), Vec::new()),
+        Scope::Files(dir) => (
+            files::index_folder(env.fs, Path::new(dir)).facts,
+            Vec::new(),
+        ),
+        Scope::Apps => (
+            apps::index_apps(env.fs, env.dirs, &apps::read_launch_counts(env.config_dir)),
+            Vec::new(),
+        ),
         Scope::BrowserHistory(id) => {
             let Some((kind, root)) = paths::browser_root(id, env.dirs) else {
                 return (Vec::new(), Vec::new());
@@ -223,9 +265,15 @@ fn gather(scope: &Scope, env: &TickEnv<'_>) -> (Vec<Fact>, Vec<String>) {
                 }
             }
             let _ = std::fs::remove_dir(&tmp);
-            (browser_history::history_facts(browser_name(id), &reads), tables)
+            (
+                browser_history::history_facts(browser_name(id), &reads),
+                tables,
+            )
         }
-        Scope::SystemState => (system_state::snapshot(env.probe, env.dirs).facts(&date_of(env.now_ms)), Vec::new()),
+        Scope::SystemState => (
+            system_state::snapshot(env.probe, env.dirs).facts(&date_of(env.now_ms)),
+            Vec::new(),
+        ),
         Scope::Calendar | Scope::Mail => (Vec::new(), Vec::new()),
     }
 }
@@ -244,7 +292,8 @@ impl Scheduler {
             return TickOutcome::Paused(why.message());
         }
         let granted = granted(&ledger);
-        self.last_run.retain(|k, _| granted.iter().any(|(s, _)| s.key() == *k));
+        self.last_run
+            .retain(|k, _| granted.iter().any(|(s, _)| s.key() == *k));
         let due: Vec<(Scope, String)> = granted
             .into_iter()
             .filter(|(s, _)| {
@@ -264,20 +313,45 @@ impl Scheduler {
         }
         let (scope, grant_id) = due[self.cursor % due.len()].clone();
         self.cursor = self.cursor.wrapping_add(1);
-        if !hx::decide(Step::Scope { scope: &scope, ledger: &ledger }).is_allow() {
+        if !hx::decide(Step::Scope {
+            scope: &scope,
+            ledger: &ledger,
+        })
+        .is_allow()
+        {
             return TickOutcome::Idle;
         }
         self.last_run.insert(scope.key(), env.now_ms);
         let (facts, tables) = gather(&scope, env);
         let out = write_facts(env, &scope, &facts, tables);
-        if let TickOutcome::Ran { kind, written, known, stopped, tables } = &out {
-            write_span(env.config_dir, kind, *written, *known, *stopped, tables, &grant_id);
+        if let TickOutcome::Ran {
+            kind,
+            written,
+            known,
+            stopped,
+            tables,
+        } = &out
+        {
+            write_span(
+                env.config_dir,
+                kind,
+                *written,
+                *known,
+                *stopped,
+                tables,
+                &grant_id,
+            );
         }
         out
     }
 }
 
-fn write_facts(env: &TickEnv<'_>, scope: &Scope, facts: &[Fact], tables: Vec<String>) -> TickOutcome {
+fn write_facts(
+    env: &TickEnv<'_>,
+    scope: &Scope,
+    facts: &[Fact],
+    tables: Vec<String>,
+) -> TickOutcome {
     let kind = scope_kind(scope);
     let key = scope.key();
     let store = scope_store(env.config_dir);
@@ -294,7 +368,10 @@ fn write_facts(env: &TickEnv<'_>, scope: &Scope, facts: &[Fact], tables: Vec<Str
             stopped = true;
             break;
         }
-        let consent_ref = ConsentLedger::load(env.config_dir).scope_grant(scope).map(|g| g.id.clone()).unwrap_or_default();
+        let consent_ref = ConsentLedger::load(env.config_dir)
+            .scope_grant(scope)
+            .map(|g| g.id.clone())
+            .unwrap_or_default();
         for f in batch {
             if written >= NODE_CAP_PER_TICK {
                 break 'batches;
@@ -323,13 +400,30 @@ fn write_facts(env: &TickEnv<'_>, scope: &Scope, facts: &[Fact], tables: Vec<Str
             }
         }
     }
-    TickOutcome::Ran { kind, written, known, stopped, tables }
+    TickOutcome::Ran {
+        kind,
+        written,
+        known,
+        stopped,
+        tables,
+    }
 }
 
 /// One span per tick that ran: the scope kind and counts, never a path or a fact.
-fn write_span(config_dir: &Path, kind: &str, written: usize, known: usize, stopped: bool, tables: &[String], grant_id: &str) {
+fn write_span(
+    config_dir: &Path,
+    kind: &str,
+    written: usize,
+    known: usize,
+    stopped: bool,
+    tables: &[String],
+    grant_id: &str,
+) {
     let args = serde_json::json!({ "scope": kind, "tables": tables }).to_string();
-    let result = format!("wrote {written}, known {known}{}", if stopped { ", stopped: revoked" } else { "" });
+    let result = format!(
+        "wrote {written}, known {known}{}",
+        if stopped { ", stopped: revoked" } else { "" }
+    );
     let mut span = hx::Span::soft_allow(
         INDEXER_TRACE,
         "index",
@@ -369,7 +463,10 @@ impl ScopeIndex {
         for n in nodes {
             let key = n.source[SCOPE_SOURCE_PREFIX.len()..].to_string();
             let line = n.body.lines().next().unwrap_or("").trim().to_string();
-            facts.entry(key).or_default().push(IndexedFact { id: n.id, line });
+            facts
+                .entry(key)
+                .or_default()
+                .push(IndexedFact { id: n.id, line });
         }
         for list in facts.values_mut() {
             list.sort_by(|a, b| a.line.cmp(&b.line));
@@ -423,10 +520,17 @@ impl ScopeAsks {
     /// Queue an ask. False when the scope is already allowed, already asked,
     /// or has no reader (calendar, mail).
     pub fn ask(&mut self, scope: Scope, why: &str, ledger: &ConsentLedger, now_ms: u64) -> bool {
-        if !has_reader(&scope) || ledger.scope_grant(&scope).is_some() || self.asks.iter().any(|a| a.scope == scope) {
+        if !has_reader(&scope)
+            || ledger.scope_grant(&scope).is_some()
+            || self.asks.iter().any(|a| a.scope == scope)
+        {
             return false;
         }
-        self.asks.push(ScopeAsk { scope, why: why.trim().to_string(), asked_ms: now_ms });
+        self.asks.push(ScopeAsk {
+            scope,
+            why: why.trim().to_string(),
+            asked_ms: now_ms,
+        });
         true
     }
 
@@ -455,7 +559,8 @@ impl ScopeAsks {
     /// No answer within `APPROVAL_TTL` means Not now.
     pub fn expire(&mut self, now_ms: u64) {
         let ttl = hx::APPROVAL_TTL.as_millis() as u64;
-        self.asks.retain(|a| now_ms.saturating_sub(a.asked_ms) < ttl);
+        self.asks
+            .retain(|a| now_ms.saturating_sub(a.asked_ms) < ttl);
     }
 
     pub fn len(&self) -> usize {

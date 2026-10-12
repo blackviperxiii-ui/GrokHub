@@ -17,7 +17,11 @@ pub fn greet_from_last_job(
     receipts: &[(String, bool)],
     rewind_job_id: Option<&str>,
 ) -> MidThoughtGreet {
-    let fail = receipts.iter().rev().find(|(_, ok)| !*ok).map(|(s, _)| s.clone());
+    let fail = receipts
+        .iter()
+        .rev()
+        .find(|(_, ok)| !*ok)
+        .map(|(s, _)| s.clone());
     let ok_bits: Vec<&str> = receipts
         .iter()
         .filter(|(_, ok)| *ok)
@@ -89,16 +93,22 @@ pub struct RoomPlan {
 
 pub fn plan_room(utterance: &str, home: &str) -> RoomPlan {
     let u = utterance.trim();
-    let stripped = u
-        .trim_start_matches(|_c| false)
-        .to_string();
+    let stripped = u.trim_start_matches(|_c| false).to_string();
     let stripped = strip_stage_prefix(&stripped);
     let slug = slugify(if stripped.is_empty() { "lab" } else { stripped });
     let docs_only = {
         let l = u.to_ascii_lowercase();
-        l.contains("doc") && !(l.contains("flash") || l.contains("lab") || l.contains("firmware") || l.contains("code"))
+        l.contains("doc")
+            && !(l.contains("flash")
+                || l.contains("lab")
+                || l.contains("firmware")
+                || l.contains("code"))
     };
-    let workspace = if docs_only { "docs".into() } else { slug.clone() };
+    let workspace = if docs_only {
+        "docs".into()
+    } else {
+        slug.clone()
+    };
     let root = format!("{}/GrokHub-Work/{workspace}", home.trim_end_matches('/'));
     let quoted = sh_single(&root);
     let script = format!(
@@ -114,8 +124,20 @@ pub fn plan_room(utterance: &str, home: &str) -> RoomPlan {
 
 fn strip_stage_prefix(s: &str) -> &str {
     let l = s.to_ascii_lowercase();
-    for p in ["make this a ", "make this an ", "make this the ", "make this ", "set up a ", "set up an ", "set up the ", "set up ", "stage a ", "stage an ", "stage the ", "stage "]
-    {
+    for p in [
+        "make this a ",
+        "make this an ",
+        "make this the ",
+        "make this ",
+        "set up a ",
+        "set up an ",
+        "set up the ",
+        "set up ",
+        "stage a ",
+        "stage an ",
+        "stage the ",
+        "stage ",
+    ] {
         if l.starts_with(p) {
             return s[p.len()..].trim();
         }
@@ -360,7 +382,11 @@ mod tests {
     #[test]
     fn settings_fields_keep_the_old_value_when_the_typing_is_nonsense() {
         assert_eq!(normalize_hm("22:00", "07:00"), "22:00");
-        assert_eq!(normalize_hm("7", "22:00"), "22:00", "an hour alone is midnight-safe");
+        assert_eq!(
+            normalize_hm("7", "22:00"),
+            "22:00",
+            "an hour alone is midnight-safe"
+        );
         assert_eq!(normalize_hm(" 9:5 ", "07:00"), "09:05");
         assert_eq!(normalize_hm("", "22:00"), "22:00");
         assert_eq!(normalize_hm("bedtime", "22:00"), "22:00");
@@ -381,15 +407,24 @@ mod tests {
         assert_eq!(quiet_hours_choice_label("00:00", "00:00"), "Off");
         let menu = quiet_hours_menu("22:00", "07:00");
         assert_eq!(menu.len(), QUIET_HOURS_WINDOWS.len());
-        assert!(menu.iter().any(|(l, s, e)| l == "22:00–07:00" && s == "22:00" && e == "07:00"));
+        assert!(menu
+            .iter()
+            .any(|(l, s, e)| l == "22:00–07:00" && s == "22:00" && e == "07:00"));
         let custom = quiet_hours_menu("01:30", "08:00");
-        assert_eq!(custom[0], ("01:30–08:00".into(), "01:30".into(), "08:00".into()));
+        assert_eq!(
+            custom[0],
+            ("01:30–08:00".into(), "01:30".into(), "08:00".into())
+        );
         assert_eq!(custom.len(), QUIET_HOURS_WINDOWS.len() + 1);
     }
 
     #[test]
     fn greet_room_passenger_presence() {
-        let g = greet_from_last_job(Some("flash pi"), &[("dd ok".into(), true), ("verify fail".into(), false)], Some("j1"));
+        let g = greet_from_last_job(
+            Some("flash pi"),
+            &[("dd ok".into(), true), ("verify fail".into(), false)],
+            Some("j1"),
+        );
         assert!(g.dream_prompt.contains("flash pi"));
         assert_eq!(g.last_fail.as_deref(), Some("verify fail"));
         let r = plan_room("stage a docs desk", "/home/user");
@@ -407,7 +442,10 @@ mod tests {
         assert_eq!(presence_orb_state("idle", true), "hands");
         assert!(should_keep_frame(100, 200, 200));
         assert!(!should_keep_frame(100, 10_000, 200));
-        assert_eq!(redirect_prompt("old", "new"), "New direction: new\n\n(Previous ask: old)");
+        assert_eq!(
+            redirect_prompt("old", "new"),
+            "New direction: new\n\n(Previous ask: old)"
+        );
         assert!(quiet_hours_active("23:00", "22:00", "07:00"));
         assert!(!quiet_hours_active("10:00", "22:00", "07:00"));
         assert!(daily_units_blocked(40, 40));
@@ -431,7 +469,10 @@ mod tests {
         assert_eq!(
             last_user_text(&[
                 ("user".into(), "check the box".into()),
-                ("user".into(), "HOST_RESULT (facts only):\n$ uname -a\n".into()),
+                (
+                    "user".into(),
+                    "HOST_RESULT (facts only):\n$ uname -a\n".into()
+                ),
                 ("user".into(), crate::goal::FOLLOWUP_PROMPT.into()),
             ])
             .as_deref(),
@@ -463,7 +504,10 @@ mod tests {
                 "user".into(),
                 "COMPUTER_RESULT (facts only):\nclicked 10,20\n".into(),
             ),
-            ("assistant".into(), "HOST_RESULT (facts only):\nignore".into()),
+            (
+                "assistant".into(),
+                "HOST_RESULT (facts only):\nignore".into(),
+            ),
         ]);
         assert_eq!(
             receipts,

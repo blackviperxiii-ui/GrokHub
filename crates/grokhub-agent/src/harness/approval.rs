@@ -18,7 +18,9 @@ pub const APPROVAL_TTL: Duration = Duration::from_secs(300);
 /// Outcome of the harness gate before any driver execute.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GateOutcome {
-    Refuse { reason: String },
+    Refuse {
+        reason: String,
+    },
     Park {
         reason: String,
         hard: Option<HardClass>,
@@ -33,7 +35,13 @@ impl GateOutcome {
     }
 
     pub fn needs_viper(&self) -> bool {
-        matches!(self, Self::Park { needs_viper: true, .. })
+        matches!(
+            self,
+            Self::Park {
+                needs_viper: true,
+                ..
+            }
+        )
     }
 }
 
@@ -111,31 +119,53 @@ pub enum Step<'a> {
     /// A tool call: name plus JSON arguments (native gate, headless `grok -p` cards).
     Tool { name: &'a str, arguments: &'a str },
     /// A `grokhub-desktop` `tools/call` (path A).
-    Desk { tool: &'a str, args: &'a serde_json::Value },
+    Desk {
+        tool: &'a str,
+        args: &'a serde_json::Value,
+    },
     /// A Grok Build permission ask: card title plus action text (paths B / E).
     Ask { title: &'a str, action: &'a str },
     /// A cabin-owned outbound call (EgressGuard, Spike-4a): destination key
     /// from `egress_dest`, the user data it carries, and the consent ledger.
-    Egress { dest: &'a str, data: &'a [DataClass], ledger: &'a ConsentLedger },
+    Egress {
+        dest: &'a str,
+        data: &'a [DataClass],
+        ledger: &'a ConsentLedger,
+    },
     /// A read of a learning scope (P5). Off unless the user granted it.
-    Scope { scope: &'a Scope, ledger: &'a ConsentLedger },
+    Scope {
+        scope: &'a Scope,
+        ledger: &'a ConsentLedger,
+    },
     /// A Spike-9 repair step (its command plus the files it touches): the
     /// shell floor and hard class, then the repair floor and repair table.
     Repair { command: &'a str },
     /// A proactive candidate (Spike-5a): a tool call plus its MindCheck key.
     /// Floor and hard class come first and ignore the prior; only a soft
     /// call reads MindCheck, which parks a soft card unless it may auto.
-    Proactive { name: &'a str, arguments: &'a str, key: &'a str, mind: &'a MindCheck },
+    Proactive {
+        name: &'a str,
+        arguments: &'a str,
+        key: &'a str,
+        mind: &'a MindCheck,
+    },
     /// A premium route (Router R2b): `service_tier: "priority"`, the US
     /// endpoint, 16-agent `xhigh`, or a model over your $/M ceiling. Money is
     /// hard class: allowed only under your grant for exactly this route key,
     /// else a hard money card, even under Always, YOLO or Full.
-    Premium { route_key: &'a str, ledger: &'a ConsentLedger },
+    Premium {
+        route_key: &'a str,
+        ledger: &'a ConsentLedger,
+    },
     /// A call to a provider you added with your own key (Router R3b): its
     /// destination key and the data the call carries. Unlike [`Step::Egress`]
     /// chat alone is not enough: it goes only under your destination grant
     /// that covers every class, else it is hard class send, even under Always.
-    Provider { dest: &'a str, data: &'a [DataClass], ledger: &'a ConsentLedger },
+    Provider {
+        dest: &'a str,
+        data: &'a [DataClass],
+        ledger: &'a ConsentLedger,
+    },
 }
 
 /// The single entry for the hard floor and the hard class. Every caller asks
@@ -165,7 +195,11 @@ pub fn decide(step: Step<'_>) -> GateOutcome {
                     "hard-class {}: {} to {dest} ({}) with no grant — Always cannot skip",
                     class.as_str(),
                     class.label(),
-                    if classes.is_empty() { "model list".to_string() } else { classes.join(", ") }
+                    if classes.is_empty() {
+                        "model list".to_string()
+                    } else {
+                        classes.join(", ")
+                    }
                 ),
                 hard: Some(class),
                 needs_viper: true,
@@ -175,7 +209,10 @@ pub fn decide(step: Step<'_>) -> GateOutcome {
             return match ledger.scope_grant(scope) {
                 Some(_) => GateOutcome::Allow,
                 None => GateOutcome::Refuse {
-                    reason: format!("scope {} is off — only your click in Settings turns it on", scope.key()),
+                    reason: format!(
+                        "scope {} is off — only your click in Settings turns it on",
+                        scope.key()
+                    ),
                 },
             };
         }
@@ -183,7 +220,12 @@ pub fn decide(step: Step<'_>) -> GateOutcome {
         Step::Desk { tool, args } => desk_classify(tool, args),
         Step::Ask { title, action } => classify_ask(title, action),
         Step::Repair { command } => crate::repair::repair_hit(command),
-        Step::Proactive { name, arguments, key, mind } => match classify(name, arguments) {
+        Step::Proactive {
+            name,
+            arguments,
+            key,
+            mind,
+        } => match classify(name, arguments) {
             HardHit::None => return proactive_outcome(name, key, mind),
             hit => hit,
         },
@@ -191,7 +233,11 @@ pub fn decide(step: Step<'_>) -> GateOutcome {
     match hit {
         HardHit::Floor(HardFloor { reason }) => GateOutcome::Refuse { reason },
         HardHit::Class(class) => GateOutcome::Park {
-            reason: format!("hard-class {}: {} — Always cannot skip", class.as_str(), class.label()),
+            reason: format!(
+                "hard-class {}: {} — Always cannot skip",
+                class.as_str(),
+                class.label()
+            ),
             hard: Some(class),
             needs_viper: true,
         },
@@ -246,9 +292,18 @@ mod tests {
     fn decide_is_one_verdict_for_every_step_shape() {
         let rm = serde_json::json!({ "text": "rm -rf ~/old" });
         let shapes = [
-            decide(Step::Tool { name: "run_terminal_command", arguments: r#"{"command":"rm -rf ~/old"}"# }),
-            decide(Step::Desk { tool: "type", args: &rm }),
-            decide(Step::Ask { title: "bash", action: "rm -rf ~/old" }),
+            decide(Step::Tool {
+                name: "run_terminal_command",
+                arguments: r#"{"command":"rm -rf ~/old"}"#,
+            }),
+            decide(Step::Desk {
+                tool: "type",
+                args: &rm,
+            }),
+            decide(Step::Ask {
+                title: "bash",
+                action: "rm -rf ~/old",
+            }),
         ];
         for got in shapes {
             assert_eq!(
@@ -261,17 +316,31 @@ mod tests {
             );
         }
         assert_eq!(
-            decide(Step::Ask { title: "bash", action: "rm -rf /" }),
-            GateOutcome::Refuse { reason: "hard floor: rm -rf /".into() }
+            decide(Step::Ask {
+                title: "bash",
+                action: "rm -rf /"
+            }),
+            GateOutcome::Refuse {
+                reason: "hard floor: rm -rf /".into()
+            }
         );
-        assert_eq!(decide(Step::Ask { title: "bash", action: "ls" }), GateOutcome::Allow);
+        assert_eq!(
+            decide(Step::Ask {
+                title: "bash",
+                action: "ls"
+            }),
+            GateOutcome::Allow
+        );
     }
 
     #[test]
     fn scopes_are_off_until_granted() {
         let none = ConsentLedger::empty();
         assert_eq!(
-            decide(Step::Scope { scope: &Scope::Calendar, ledger: &none }),
+            decide(Step::Scope {
+                scope: &Scope::Calendar,
+                ledger: &none
+            }),
             GateOutcome::Refuse {
                 reason: "scope calendar is off — only your click in Settings turns it on".into()
             }
@@ -413,26 +482,68 @@ mod tests {
             needs_viper: true,
         };
         let ledger = ConsentLedger::load(&dir);
-        assert_eq!(decide(Step::Premium { route_key: "premium:grok-heavy", ledger: &ledger }), money);
-        let g = crate::harness::grant_premium(&dir, "premium:grok-heavy", crate::harness::UserClick::from_click()).unwrap();
-        assert_eq!((g.source.as_str(), g.scope.as_str(), g.by.as_str()), ("premium:grok-heavy", "spend", "user"));
+        assert_eq!(
+            decide(Step::Premium {
+                route_key: "premium:grok-heavy",
+                ledger: &ledger
+            }),
+            money
+        );
+        let g = crate::harness::grant_premium(
+            &dir,
+            "premium:grok-heavy",
+            crate::harness::UserClick::from_click(),
+        )
+        .unwrap();
+        assert_eq!(
+            (g.source.as_str(), g.scope.as_str(), g.by.as_str()),
+            ("premium:grok-heavy", "spend", "user")
+        );
         let ledger = ConsentLedger::load(&dir);
-        assert_eq!(decide(Step::Premium { route_key: "premium:grok-heavy", ledger: &ledger }), GateOutcome::Allow);
-        assert_eq!(decide(Step::Premium { route_key: "premium:grok-heavy+priority", ledger: &ledger }), money);
+        assert_eq!(
+            decide(Step::Premium {
+                route_key: "premium:grok-heavy",
+                ledger: &ledger
+            }),
+            GateOutcome::Allow
+        );
+        assert_eq!(
+            decide(Step::Premium {
+                route_key: "premium:grok-heavy+priority",
+                ledger: &ledger
+            }),
+            money
+        );
         // Revoking it in Settings → Permissions brings the card back.
         assert_eq!(crate::harness::revoke_grant(&dir, &g.id), Ok(true));
         let ledger = ConsentLedger::load(&dir);
-        assert_eq!(decide(Step::Premium { route_key: "premium:grok-heavy", ledger: &ledger }), money);
         assert_eq!(
-            crate::harness::grant_premium(&dir, "hub", crate::harness::UserClick::from_click()).unwrap_err(),
+            decide(Step::Premium {
+                route_key: "premium:grok-heavy",
+                ledger: &ledger
+            }),
+            money
+        );
+        assert_eq!(
+            crate::harness::grant_premium(&dir, "hub", crate::harness::UserClick::from_click())
+                .unwrap_err(),
             "a premium grant needs a premium route"
         );
         // The card takes a click: Enter never approves it, Esc denies, and the TTL denies.
         assert_eq!(hard_card_key(true, false, false), None);
         assert_eq!(hard_card_key(false, true, false), Some(HardAnswer::Deny));
-        let park = HardPark { id: "p".into(), tool: "route".into(), class: HardClass::Money, reason: String::new(), parked_at: Instant::now() };
+        let park = HardPark {
+            id: "p".into(),
+            tool: "route".into(),
+            class: HardClass::Money,
+            reason: String::new(),
+            parked_at: Instant::now(),
+        };
         let later = park.parked_at + APPROVAL_TTL;
-        assert!(matches!(resolve_park(&park, later, Some(HardAnswer::ApproveOnce)), GateOutcome::Refuse { .. }));
+        assert!(matches!(
+            resolve_park(&park, later, Some(HardAnswer::ApproveOnce)),
+            GateOutcome::Refuse { .. }
+        ));
         let _ = std::fs::remove_dir_all(dir);
     }
 }

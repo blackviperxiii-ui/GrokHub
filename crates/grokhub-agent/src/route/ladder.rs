@@ -20,7 +20,9 @@ use super::policy::ClassRow;
 pub const PREPARE_HARD: &str = "prepare:hard";
 
 pub fn rung(e: &str) -> Option<usize> {
-    EFFORT_LADDER.iter().position(|l| l.eq_ignore_ascii_case(e.trim()))
+    EFFORT_LADDER
+        .iter()
+        .position(|l| l.eq_ignore_ascii_case(e.trim()))
 }
 
 /// `high` on the ladder: d alone never starts above it, and `prepare:hard` never goes below it.
@@ -42,8 +44,21 @@ pub enum Steer {
     Quicker,
 }
 
-const HARDER: &[&str] = &["think hard", "think harder", "think deeply", "think really hard", "think it through", "take your time"];
-const QUICKER: &[&str] = &["keep it quick", "be quick", "quick answer", "keep it short", "just quickly"];
+const HARDER: &[&str] = &[
+    "think hard",
+    "think harder",
+    "think deeply",
+    "think really hard",
+    "think it through",
+    "take your time",
+];
+const QUICKER: &[&str] = &[
+    "keep it quick",
+    "be quick",
+    "quick answer",
+    "keep it short",
+    "just quickly",
+];
 
 impl Steer {
     pub fn from_text(text: &str) -> Self {
@@ -71,7 +86,11 @@ impl Band {
     pub fn of(row: &ClassRow, bump: u8) -> Self {
         let ceiling = rung(row.ceiling).unwrap_or(0);
         let up = |r: usize| (r + bump as usize).min(ceiling);
-        Self { floor: up(rung(row.floor).unwrap_or(0)), start: up(rung(row.start).unwrap_or(0)), ceiling }
+        Self {
+            floor: up(rung(row.floor).unwrap_or(0)),
+            start: up(rung(row.start).unwrap_or(0)),
+            ceiling,
+        }
     }
 
     /// [`Band::of`] with a self-tuned start (R3a) merged over the class table,
@@ -81,7 +100,11 @@ impl Band {
         let mut b = Self::of(row, bump);
         if let Some(r) = start.and_then(rung) {
             let r = r.clamp(b.floor, b.ceiling.max(b.floor));
-            b.start = if row.class == PREPARE_HARD { r.max(b.start) } else { r };
+            b.start = if row.class == PREPARE_HARD {
+                r.max(b.start)
+            } else {
+                r
+            };
         }
         b
     }
@@ -185,13 +208,26 @@ pub fn routine_rung(class: &str, r: &Routine, band: Band, now_ms: u64) -> Option
     if class.trim() == PREPARE_HARD {
         return None;
     }
-    let since = now_ms.saturating_sub(ROUTINE_WINDOW_MS).max(r.last_failure.map(|f| f + 1).unwrap_or(0));
-    (band.floor..band.start)
-        .find(|rung| r.successes.iter().filter(|(x, at)| x == rung && *at >= since && *at <= now_ms).count() >= ROUTINE_MIN_SUCCESSES)
+    let since = now_ms
+        .saturating_sub(ROUTINE_WINDOW_MS)
+        .max(r.last_failure.map(|f| f + 1).unwrap_or(0));
+    (band.floor..band.start).find(|rung| {
+        r.successes
+            .iter()
+            .filter(|(x, at)| x == rung && *at >= since && *at <= now_ms)
+            .count()
+            >= ROUTINE_MIN_SUCCESSES
+    })
 }
 
 /// Advance one episode's state for the next call. Pure: the caller keeps the state.
-pub fn advance(prev: Option<&EffortState>, class: &str, band: Band, start: (usize, Vec<String>), obs: &Obs) -> (EffortState, Pick) {
+pub fn advance(
+    prev: Option<&EffortState>,
+    class: &str,
+    band: Band,
+    start: (usize, Vec<String>),
+    obs: &Obs,
+) -> (EffortState, Pick) {
     let hard = class.trim() == PREPARE_HARD;
     let user = user_facing(class);
     let fresh = prev.is_none() || obs.new_turn;
@@ -199,8 +235,16 @@ pub fn advance(prev: Option<&EffortState>, class: &str, band: Band, start: (usiz
     let mut st = match prev {
         Some(p) if !fresh => p.clone(),
         // A new turn starts over at the class start, but a reject's hold carries over.
-        Some(p) => EffortState { rung: start.0, rejects: p.rejects, hold: p.hold, ..EffortState::default() },
-        None => EffortState { rung: start.0, ..EffortState::default() },
+        Some(p) => EffortState {
+            rung: start.0,
+            rejects: p.rejects,
+            hold: p.hold,
+            ..EffortState::default()
+        },
+        None => EffortState {
+            rung: start.0,
+            ..EffortState::default()
+        },
     };
     st.moved = Move::Start;
     if fresh {
@@ -217,7 +261,10 @@ pub fn advance(prev: Option<&EffortState>, class: &str, band: Band, start: (usiz
         }
     };
     let steered = rules.iter().any(|r| r.starts_with("steer:"));
-    if let Some(r) = obs.routine.filter(|r| fresh && user && !hard && !st.hold && !steered && *r < st.rung) {
+    if let Some(r) = obs
+        .routine
+        .filter(|r| fresh && user && !hard && !st.hold && !steered && *r < st.rung)
+    {
         st.rung = r.max(band.floor);
         st.moved = Move::Down;
         rules.push("DE2".into());
@@ -270,7 +317,12 @@ pub fn advance(prev: Option<&EffortState>, class: &str, band: Band, start: (usiz
     }
     if !hard && obs.budget_pct.is_some_and(|p| p >= 80) {
         // Below a floor would need an ask card, so DE3 stops at the floor.
-        let target = if user { band.start } else { rung("low").unwrap_or(0) }.max(band.floor);
+        let target = if user {
+            band.start
+        } else {
+            rung("low").unwrap_or(0)
+        }
+        .max(band.floor);
         if target < st.rung {
             st.rung = target;
             st.moved = Move::Down;
@@ -278,7 +330,12 @@ pub fn advance(prev: Option<&EffortState>, class: &str, band: Band, start: (usiz
         }
     }
     st.rung = st.rung.clamp(band.floor, band.ceiling.max(band.floor));
-    let pick = Pick { rung: st.rung, moved: st.moved, rules, recover };
+    let pick = Pick {
+        rung: st.rung,
+        moved: st.moved,
+        rules,
+        recover,
+    };
     (st, pick)
 }
 
@@ -286,10 +343,19 @@ pub fn advance(prev: Option<&EffortState>, class: &str, band: Band, start: (usiz
 /// offered level; going down (or starting) rounds down. Never below `floor`
 /// when the list offers something at or above it. `None` when the list is empty.
 pub fn clamp(r: usize, menu: &[String], moved: Move, floor: usize) -> Option<String> {
-    let mut offered: Vec<(usize, &String)> = menu.iter().filter_map(|m| rung(m).map(|x| (x, m))).collect();
+    let mut offered: Vec<(usize, &String)> = menu
+        .iter()
+        .filter_map(|m| rung(m).map(|x| (x, m)))
+        .collect();
     offered.sort_by_key(|(x, _)| *x);
     let up = || offered.iter().find(|(x, _)| *x >= r).or(offered.last());
-    let down = || offered.iter().rev().find(|(x, _)| *x <= r).or(offered.first());
+    let down = || {
+        offered
+            .iter()
+            .rev()
+            .find(|(x, _)| *x <= r)
+            .or(offered.first())
+    };
     let mut pick = if moved == Move::Up { up() } else { down() };
     if pick.is_some_and(|(x, _)| *x < floor) {
         pick = offered.iter().find(|(x, _)| *x >= floor).or(pick);
@@ -320,11 +386,20 @@ fn key(episode: &str, class: &str) -> String {
 
 /// FNV-1a of the user's newest text: tells a new turn from a tool step without keeping the text.
 pub fn turn_hash(text: &str) -> u64 {
-    text.bytes().fold(0xcbf2_9ce4_8422_2325_u64, |h, b| (h ^ b as u64).wrapping_mul(0x0100_0000_01b3))
+    text.bytes().fold(0xcbf2_9ce4_8422_2325_u64, |h, b| {
+        (h ^ b as u64).wrapping_mul(0x0100_0000_01b3)
+    })
 }
 
 /// Advance the saved state for `episode` and `class`.
-pub fn step(episode: &str, class: &str, turn: u64, band: Band, start: (usize, Vec<String>), mut obs: Obs) -> Pick {
+pub fn step(
+    episode: &str,
+    class: &str,
+    turn: u64,
+    band: Band,
+    start: (usize, Vec<String>),
+    mut obs: Obs,
+) -> Pick {
     let k = key(episode, class);
     let mut states = STATES.lock().unwrap_or_else(|e| e.into_inner());
     let prev = states.get(&k).cloned();
@@ -341,19 +416,31 @@ pub fn step(episode: &str, class: &str, turn: u64, band: Band, start: (usize, Ve
 
 /// How the call went (DE1 counts clean steps).
 pub fn finish(episode: &str, class: &str, ok: bool) {
-    if let Some(st) = STATES.lock().unwrap_or_else(|e| e.into_inner()).get_mut(&key(episode, class)) {
+    if let Some(st) = STATES
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get_mut(&key(episode, class))
+    {
         st.last_ok = ok;
     }
 }
 
 /// This call starts a new turn for `episode` in `class` (or its first call).
 pub fn is_new_turn(episode: &str, class: &str, turn: u64) -> bool {
-    STATES.lock().unwrap_or_else(|e| e.into_inner()).get(&key(episode, class)).is_none_or(|s| s.turn != turn)
+    STATES
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(&key(episode, class))
+        .is_none_or(|s| s.turn != turn)
 }
 
 /// The rung this episode is on now, if it has routed a call in `class`.
 pub fn current(episode: &str, class: &str) -> Option<usize> {
-    STATES.lock().unwrap_or_else(|e| e.into_inner()).get(&key(episode, class)).map(|s| s.rung)
+    STATES
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(&key(episode, class))
+        .map(|s| s.rung)
 }
 
 #[cfg(test)]
@@ -371,92 +458,261 @@ mod tests {
 
     fn go(prev: Option<&EffortState>, class: &str, obs: Obs) -> (EffortState, Pick) {
         let b = band(class);
-        advance(prev, class, b, start_rung(b, 0.5, Steer::None, user_facing(class)), &obs)
+        advance(
+            prev,
+            class,
+            b,
+            start_rung(b, 0.5, Steer::None, user_facing(class)),
+            &obs,
+        )
     }
 
     fn step_obs() -> Obs {
-        Obs { new_turn: false, ..Obs::default() }
+        Obs {
+            new_turn: false,
+            ..Obs::default()
+        }
     }
 
     #[test]
     fn steer_reads_plain_words() {
-        assert_eq!(Steer::from_text("Please think hard on this one"), Steer::Harder);
-        assert_eq!(Steer::from_text("keep it quick, just the name"), Steer::Quicker);
+        assert_eq!(
+            Steer::from_text("Please think hard on this one"),
+            Steer::Harder
+        );
+        assert_eq!(
+            Steer::from_text("keep it quick, just the name"),
+            Steer::Quicker
+        );
         assert_eq!(Steer::from_text("rename the file"), Steer::None);
     }
 
     #[test]
     fn start_follows_d_and_steer_and_never_starts_above_high_on_d_alone() {
         let chat = band("chat:default");
-        assert_eq!(start_rung(chat, 0.5, Steer::None, true), (rung("medium").unwrap(), vec![]));
+        assert_eq!(
+            start_rung(chat, 0.5, Steer::None, true),
+            (rung("medium").unwrap(), vec![])
+        );
         assert_eq!(name(start_rung(chat, 0.1, Steer::None, true).0), "low");
         assert_eq!(name(start_rung(chat, 0.9, Steer::None, true).0), "high");
-        assert_eq!(name(start_rung(band("plan"), 0.9, Steer::None, true).0), "high", "d alone never reaches xhigh");
+        assert_eq!(
+            name(start_rung(band("plan"), 0.9, Steer::None, true).0),
+            "high",
+            "d alone never reaches xhigh"
+        );
         assert_eq!(name(start_rung(chat, 0.0, Steer::Harder, true).0), "xhigh");
         assert_eq!(name(start_rung(chat, 0.9, Steer::Quicker, true).0), "low");
         // Background runs at its start whatever d says.
-        assert_eq!(name(start_rung(band("background:summarize"), 0.0, Steer::None, false).0), "low");
+        assert_eq!(
+            name(start_rung(band("background:summarize"), 0.0, Steer::None, false).0),
+            "low"
+        );
     }
 
     #[test]
     fn e1_tool_error_climbs_one_rung() {
-        let (s0, p0) = go(None, "chat:default", Obs { new_turn: true, ..Obs::default() });
+        let (s0, p0) = go(
+            None,
+            "chat:default",
+            Obs {
+                new_turn: true,
+                ..Obs::default()
+            },
+        );
         assert_eq!(name(p0.rung), "medium");
-        let (_, p1) = go(Some(&s0), "chat:default", Obs { tool_errors: 3, ..step_obs() });
-        assert_eq!((name(p1.rung), p1.moved, p1.rules.clone()), ("high", Move::Up, vec!["E1".to_string()]));
+        let (_, p1) = go(
+            Some(&s0),
+            "chat:default",
+            Obs {
+                tool_errors: 3,
+                ..step_obs()
+            },
+        );
+        assert_eq!(
+            (name(p1.rung), p1.moved, p1.rules.clone()),
+            ("high", Move::Up, vec!["E1".to_string()])
+        );
     }
 
     #[test]
     fn e2_rejects_climb_then_name_the_next_model_then_hand_to_recovery() {
         // chat:default starts at medium so two rejects reach the ceiling without
         // also tripping the third-reject recovery path (code:edit-small starts at low).
-        let (s0, _) = go(None, "chat:default", Obs { new_turn: true, ..Obs::default() });
-        let (s1, p1) = go(Some(&s0), "chat:default", Obs { rejects: Some(1), ..step_obs() });
-        assert_eq!((name(p1.rung), p1.rules.clone(), s1.hold), ("high", vec!["E2".to_string()], true));
-        let (mut s2, p2) = go(Some(&s1), "chat:default", Obs { rejects: Some(2), ..step_obs() });
+        let (s0, _) = go(
+            None,
+            "chat:default",
+            Obs {
+                new_turn: true,
+                ..Obs::default()
+            },
+        );
+        let (s1, p1) = go(
+            Some(&s0),
+            "chat:default",
+            Obs {
+                rejects: Some(1),
+                ..step_obs()
+            },
+        );
+        assert_eq!(
+            (name(p1.rung), p1.rules.clone(), s1.hold),
+            ("high", vec!["E2".to_string()], true)
+        );
+        let (mut s2, p2) = go(
+            Some(&s1),
+            "chat:default",
+            Obs {
+                rejects: Some(2),
+                ..step_obs()
+            },
+        );
         assert_eq!((name(p2.rung), p2.recover), ("xhigh", false));
         // At the ceiling a second reject asks for the next model (R2).
         s2.rejects = 1;
-        let (s3, p3) = go(Some(&s2), "chat:default", Obs { rejects: Some(2), ..step_obs() });
-        assert_eq!(p3.rules, vec!["E2:ceiling".to_string(), "E2:next_model".into()]);
+        let (s3, p3) = go(
+            Some(&s2),
+            "chat:default",
+            Obs {
+                rejects: Some(2),
+                ..step_obs()
+            },
+        );
+        assert_eq!(
+            p3.rules,
+            vec!["E2:ceiling".to_string(), "E2:next_model".into()]
+        );
         assert_eq!(name(p3.rung), "xhigh", "the ceiling holds");
-        let (_, p4) = go(Some(&s3), "chat:default", Obs { rejects: Some(3), ..step_obs() });
-        assert!(p4.recover && p4.rules.contains(&"E2:recovery".to_string()), "{:?}", p4.rules);
+        let (_, p4) = go(
+            Some(&s3),
+            "chat:default",
+            Obs {
+                rejects: Some(3),
+                ..step_obs()
+            },
+        );
+        assert!(
+            p4.recover && p4.rules.contains(&"E2:recovery".to_string()),
+            "{:?}",
+            p4.rules
+        );
         // No VerifyGate source (None) fires nothing.
-        let (_, quiet) = go(Some(&s0), "chat:default", Obs { rejects: None, ..step_obs() });
+        let (_, quiet) = go(
+            Some(&s0),
+            "chat:default",
+            Obs {
+                rejects: None,
+                ..step_obs()
+            },
+        );
         assert!(!quiet.rules.iter().any(|r| r.starts_with("E2")));
     }
 
     #[test]
     fn e3_correction_starts_the_next_turn_one_higher() {
-        let (s0, _) = go(None, "chat:default", Obs { new_turn: true, ..Obs::default() });
-        let (_, p) = go(Some(&s0), "chat:default", Obs { new_turn: true, correction: true, ..Obs::default() });
-        assert_eq!((name(p.rung), p.rules.clone()), ("high", vec!["E3".to_string()]));
+        let (s0, _) = go(
+            None,
+            "chat:default",
+            Obs {
+                new_turn: true,
+                ..Obs::default()
+            },
+        );
+        let (_, p) = go(
+            Some(&s0),
+            "chat:default",
+            Obs {
+                new_turn: true,
+                correction: true,
+                ..Obs::default()
+            },
+        );
+        assert_eq!(
+            (name(p.rung), p.rules.clone()),
+            ("high", vec!["E3".to_string()])
+        );
     }
 
     #[test]
     fn e4_low_self_check_climbs_and_none_does_nothing() {
-        let (s0, _) = go(None, "chat:default", Obs { new_turn: true, ..Obs::default() });
-        let (_, p) = go(Some(&s0), "chat:default", Obs { low_check: Some(true), ..step_obs() });
-        assert_eq!((name(p.rung), p.rules.clone()), ("high", vec!["E4".to_string()]));
-        let (_, none) = go(Some(&s0), "chat:default", Obs { low_check: None, ..step_obs() });
+        let (s0, _) = go(
+            None,
+            "chat:default",
+            Obs {
+                new_turn: true,
+                ..Obs::default()
+            },
+        );
+        let (_, p) = go(
+            Some(&s0),
+            "chat:default",
+            Obs {
+                low_check: Some(true),
+                ..step_obs()
+            },
+        );
+        assert_eq!(
+            (name(p.rung), p.rules.clone()),
+            ("high", vec!["E4".to_string()])
+        );
+        let (_, none) = go(
+            Some(&s0),
+            "chat:default",
+            Obs {
+                low_check: None,
+                ..step_obs()
+            },
+        );
         assert_eq!(name(none.rung), "medium");
     }
 
     #[test]
     fn e5_prepare_hard_starts_at_high_even_when_asked_to_be_quick() {
         let b = band(PREPARE_HARD);
-        let (_, p) = advance(None, PREPARE_HARD, b, start_rung(b, 0.0, Steer::Quicker, true), &Obs { new_turn: true, ..Obs::default() });
+        let (_, p) = advance(
+            None,
+            PREPARE_HARD,
+            b,
+            start_rung(b, 0.0, Steer::Quicker, true),
+            &Obs {
+                new_turn: true,
+                ..Obs::default()
+            },
+        );
         assert_eq!(name(p.rung), "high");
         // Even a band whose floor sat lower gets lifted to High by E5.
-        let low = Band { floor: rung("low").unwrap(), start: rung("low").unwrap(), ceiling: rung("xhigh").unwrap() };
-        let (_, p) = advance(None, PREPARE_HARD, low, (low.start, vec![]), &Obs { new_turn: true, ..Obs::default() });
-        assert_eq!((name(p.rung), p.rules.clone()), ("high", vec!["E5".to_string()]));
+        let low = Band {
+            floor: rung("low").unwrap(),
+            start: rung("low").unwrap(),
+            ceiling: rung("xhigh").unwrap(),
+        };
+        let (_, p) = advance(
+            None,
+            PREPARE_HARD,
+            low,
+            (low.start, vec![]),
+            &Obs {
+                new_turn: true,
+                ..Obs::default()
+            },
+        );
+        assert_eq!(
+            (name(p.rung), p.rules.clone()),
+            ("high", vec!["E5".to_string()])
+        );
     }
 
     #[test]
     fn de1_three_clean_steps_step_down_to_the_floor_but_not_after_a_reject_or_in_prepare_hard() {
-        let mut s = go(None, "chat:default", Obs { new_turn: true, ..Obs::default() }).0;
+        let mut s = go(
+            None,
+            "chat:default",
+            Obs {
+                new_turn: true,
+                ..Obs::default()
+            },
+        )
+        .0;
         let mut rungs = Vec::new();
         for _ in 0..7 {
             s.last_ok = true;
@@ -464,22 +720,68 @@ mod tests {
             rungs.push(name(p.rung));
             s = n;
         }
-        assert_eq!(rungs, vec!["medium", "medium", "low", "low", "low", "low", "low"], "DE1 stops at the floor");
+        assert_eq!(
+            rungs,
+            vec!["medium", "medium", "low", "low", "low", "low", "low"],
+            "DE1 stops at the floor"
+        );
         // After a reject: hold until VERIFY_OK.
-        let mut s = go(None, "chat:default", Obs { new_turn: true, ..Obs::default() }).0;
-        s = go(Some(&s), "chat:default", Obs { rejects: Some(1), ..step_obs() }).0;
+        let mut s = go(
+            None,
+            "chat:default",
+            Obs {
+                new_turn: true,
+                ..Obs::default()
+            },
+        )
+        .0;
+        s = go(
+            Some(&s),
+            "chat:default",
+            Obs {
+                rejects: Some(1),
+                ..step_obs()
+            },
+        )
+        .0;
         for _ in 0..4 {
             s.last_ok = true;
             s = go(Some(&s), "chat:default", step_obs()).0;
         }
         assert_eq!(name(s.rung), "high", "held after the reject");
         s.last_ok = true;
-        let (s2, p) = go(Some(&s), "chat:default", Obs { verify_ok: true, ..step_obs() });
-        assert_eq!((name(p.rung), p.rules.clone()), ("medium", vec!["DE1".to_string()]));
+        let (s2, p) = go(
+            Some(&s),
+            "chat:default",
+            Obs {
+                verify_ok: true,
+                ..step_obs()
+            },
+        );
+        assert_eq!(
+            (name(p.rung), p.rules.clone()),
+            ("medium", vec!["DE1".to_string()])
+        );
         assert!(!s2.hold);
         // prepare:hard never steps down.
-        let mut s = go(None, PREPARE_HARD, Obs { new_turn: true, ..Obs::default() }).0;
-        s = go(Some(&s), PREPARE_HARD, Obs { tool_errors: 1, ..step_obs() }).0;
+        let mut s = go(
+            None,
+            PREPARE_HARD,
+            Obs {
+                new_turn: true,
+                ..Obs::default()
+            },
+        )
+        .0;
+        s = go(
+            Some(&s),
+            PREPARE_HARD,
+            Obs {
+                tool_errors: 1,
+                ..step_obs()
+            },
+        )
+        .0;
         assert_eq!(name(s.rung), "xhigh");
         for _ in 0..5 {
             s.last_ok = true;
@@ -490,26 +792,96 @@ mod tests {
 
     #[test]
     fn de3_budget_pressure_lowers_background_to_low_and_user_work_to_start_never_below_the_floor() {
-        let mut s = go(None, "chat:default", Obs { new_turn: true, ..Obs::default() }).0;
-        s = go(Some(&s), "chat:default", Obs { tool_errors: 1, ..step_obs() }).0;
-        s = go(Some(&s), "chat:default", Obs { tool_errors: 1, ..step_obs() }).0;
+        let mut s = go(
+            None,
+            "chat:default",
+            Obs {
+                new_turn: true,
+                ..Obs::default()
+            },
+        )
+        .0;
+        s = go(
+            Some(&s),
+            "chat:default",
+            Obs {
+                tool_errors: 1,
+                ..step_obs()
+            },
+        )
+        .0;
+        s = go(
+            Some(&s),
+            "chat:default",
+            Obs {
+                tool_errors: 1,
+                ..step_obs()
+            },
+        )
+        .0;
         assert_eq!(name(s.rung), "xhigh");
-        let (_, p) = go(Some(&s), "chat:default", Obs { budget_pct: Some(85), ..step_obs() });
-        assert_eq!((name(p.rung), p.rules.clone()), ("medium", vec!["DE3".to_string()]));
-        let (_, p) = go(Some(&s), "chat:default", Obs { budget_pct: Some(79), ..step_obs() });
+        let (_, p) = go(
+            Some(&s),
+            "chat:default",
+            Obs {
+                budget_pct: Some(85),
+                ..step_obs()
+            },
+        );
+        assert_eq!(
+            (name(p.rung), p.rules.clone()),
+            ("medium", vec!["DE3".to_string()])
+        );
+        let (_, p) = go(
+            Some(&s),
+            "chat:default",
+            Obs {
+                budget_pct: Some(79),
+                ..step_obs()
+            },
+        );
         assert_eq!(name(p.rung), "xhigh");
-        let judge = EffortState { rung: rung("high").unwrap(), ..EffortState::default() };
-        let (_, p) = go(Some(&judge), "background:judge", Obs { budget_pct: Some(90), ..step_obs() });
-        assert_eq!((name(p.rung), p.rules.clone()), ("low", vec!["DE3".to_string()]));
-        let hard = EffortState { rung: rung("xhigh").unwrap(), ..EffortState::default() };
-        let (_, p) = go(Some(&hard), PREPARE_HARD, Obs { budget_pct: Some(99), ..step_obs() });
+        let judge = EffortState {
+            rung: rung("high").unwrap(),
+            ..EffortState::default()
+        };
+        let (_, p) = go(
+            Some(&judge),
+            "background:judge",
+            Obs {
+                budget_pct: Some(90),
+                ..step_obs()
+            },
+        );
+        assert_eq!(
+            (name(p.rung), p.rules.clone()),
+            ("low", vec!["DE3".to_string()])
+        );
+        let hard = EffortState {
+            rung: rung("xhigh").unwrap(),
+            ..EffortState::default()
+        };
+        let (_, p) = go(
+            Some(&hard),
+            PREPARE_HARD,
+            Obs {
+                budget_pct: Some(99),
+                ..step_obs()
+            },
+        );
         assert_eq!(name(p.rung), "xhigh", "prepare:hard ignores DE3");
     }
 
     const DAY: u64 = 24 * 60 * 60 * 1000;
 
     fn wins(rung_name: &str, days_ago: &[u64], now: u64) -> Routine {
-        Routine { successes: days_ago.iter().map(|d| (rung(rung_name).unwrap(), now - d * DAY)).collect(), last_failure: None }
+        Routine {
+            successes: days_ago
+                .iter()
+                .map(|d| (rung(rung_name).unwrap(), now - d * DAY))
+                .collect(),
+            last_failure: None,
+        }
     }
 
     #[test]
@@ -518,49 +890,143 @@ mod tests {
         let b = band("chat:default");
         let r = routine_rung("chat:default", &wins("low", &[1, 5, 13], now), b, now);
         assert_eq!(r, Some(rung("low").unwrap()));
-        let (_, p) = go(None, "chat:default", Obs { new_turn: true, routine: r, ..Obs::default() });
-        assert_eq!((name(p.rung), p.moved, p.rules.clone()), ("low", Move::Down, vec!["DE2".to_string()]));
+        let (_, p) = go(
+            None,
+            "chat:default",
+            Obs {
+                new_turn: true,
+                routine: r,
+                ..Obs::default()
+            },
+        );
+        assert_eq!(
+            (name(p.rung), p.moved, p.rules.clone()),
+            ("low", Move::Down, vec!["DE2".to_string()])
+        );
         // Two successes, or three spread over 20 days, are not a routine.
-        assert_eq!(routine_rung("chat:default", &wins("low", &[1, 5], now), b, now), None);
-        assert_eq!(routine_rung("chat:default", &wins("low", &[1, 10, 20], now), b, now), None);
+        assert_eq!(
+            routine_rung("chat:default", &wins("low", &[1, 5], now), b, now),
+            None
+        );
+        assert_eq!(
+            routine_rung("chat:default", &wins("low", &[1, 10, 20], now), b, now),
+            None
+        );
         // A failure after them resets the count.
         let mut failed = wins("low", &[3, 5, 6], now);
         failed.last_failure = Some(now - 2 * DAY);
         assert_eq!(routine_rung("chat:default", &failed, b, now), None);
         // Successes at the start rung or above lower nothing.
-        assert_eq!(routine_rung("chat:default", &wins("medium", &[1, 2, 3], now), b, now), None);
+        assert_eq!(
+            routine_rung("chat:default", &wins("medium", &[1, 2, 3], now), b, now),
+            None
+        );
     }
 
     #[test]
     fn de2_never_lowers_prepare_hard_never_goes_below_the_floor_and_waits_out_a_reject() {
         let now = 100 * DAY;
         let hard = band(PREPARE_HARD);
-        assert_eq!(routine_rung(PREPARE_HARD, &wins("low", &[1, 2, 3], now), hard, now), None);
+        assert_eq!(
+            routine_rung(PREPARE_HARD, &wins("low", &[1, 2, 3], now), hard, now),
+            None
+        );
         // Even handed a low rung, advance keeps prepare:hard at High.
-        let (_, p) = advance(None, PREPARE_HARD, hard, (hard.start, vec![]), &Obs { new_turn: true, routine: Some(rung("low").unwrap()), ..Obs::default() });
+        let (_, p) = advance(
+            None,
+            PREPARE_HARD,
+            hard,
+            (hard.start, vec![]),
+            &Obs {
+                new_turn: true,
+                routine: Some(rung("low").unwrap()),
+                ..Obs::default()
+            },
+        );
         assert_eq!(name(p.rung), "high");
         assert!(!p.rules.contains(&"DE2".to_string()));
         // code:multi-file's floor is medium: successes at low don't count below it.
         let multi = band("code:multi-file");
-        assert_eq!(routine_rung("code:multi-file", &wins("low", &[1, 2, 3], now), multi, now), None);
-        assert_eq!(routine_rung("code:multi-file", &wins("medium", &[1, 2, 3], now), multi, now), Some(rung("medium").unwrap()));
+        assert_eq!(
+            routine_rung("code:multi-file", &wins("low", &[1, 2, 3], now), multi, now),
+            None
+        );
+        assert_eq!(
+            routine_rung(
+                "code:multi-file",
+                &wins("medium", &[1, 2, 3], now),
+                multi,
+                now
+            ),
+            Some(rung("medium").unwrap())
+        );
         // After a reject, the next turn keeps its hold: no DE2 until VERIFY_OK.
-        let mut s = go(None, "chat:default", Obs { new_turn: true, ..Obs::default() }).0;
-        s = go(Some(&s), "chat:default", Obs { rejects: Some(1), ..step_obs() }).0;
+        let mut s = go(
+            None,
+            "chat:default",
+            Obs {
+                new_turn: true,
+                ..Obs::default()
+            },
+        )
+        .0;
+        s = go(
+            Some(&s),
+            "chat:default",
+            Obs {
+                rejects: Some(1),
+                ..step_obs()
+            },
+        )
+        .0;
         let low = Some(rung("low").unwrap());
-        let (_, p) = go(Some(&s), "chat:default", Obs { new_turn: true, routine: low, ..Obs::default() });
+        let (_, p) = go(
+            Some(&s),
+            "chat:default",
+            Obs {
+                new_turn: true,
+                routine: low,
+                ..Obs::default()
+            },
+        );
         assert_eq!(name(p.rung), "medium");
         // "think hard" wins over a routine.
         let b = band("chat:default");
-        let (_, p) = advance(None, "chat:default", b, start_rung(b, 0.5, Steer::Harder, true), &Obs { new_turn: true, routine: low, ..Obs::default() });
+        let (_, p) = advance(
+            None,
+            "chat:default",
+            b,
+            start_rung(b, 0.5, Steer::Harder, true),
+            &Obs {
+                new_turn: true,
+                routine: low,
+                ..Obs::default()
+            },
+        );
         assert_eq!(name(p.rung), "xhigh");
     }
 
     #[test]
     fn background_classes_never_escalate() {
-        let (s, p) = go(None, "background:compact", Obs { new_turn: true, ..Obs::default() });
+        let (s, p) = go(
+            None,
+            "background:compact",
+            Obs {
+                new_turn: true,
+                ..Obs::default()
+            },
+        );
         assert_eq!(name(p.rung), "low");
-        let (_, p) = go(Some(&s), "background:compact", Obs { tool_errors: 4, rejects: Some(2), correction: true, ..step_obs() });
+        let (_, p) = go(
+            Some(&s),
+            "background:compact",
+            Obs {
+                tool_errors: 4,
+                rejects: Some(2),
+                correction: true,
+                ..step_obs()
+            },
+        );
         assert_eq!((name(p.rung), p.rules.len()), ("low", 0));
     }
 
@@ -571,11 +1037,23 @@ mod tests {
         assert_eq!(clamp(medium, &menu, Move::Up, 0).as_deref(), Some("high"));
         assert_eq!(clamp(medium, &menu, Move::Down, 0).as_deref(), Some("low"));
         assert_eq!(clamp(medium, &menu, Move::Start, 0).as_deref(), Some("low"));
-        assert_eq!(clamp(rung("max").unwrap(), &menu, Move::Up, 0).as_deref(), Some("high"));
-        assert_eq!(clamp(rung("none").unwrap(), &menu, Move::Down, 0).as_deref(), Some("low"));
+        assert_eq!(
+            clamp(rung("max").unwrap(), &menu, Move::Up, 0).as_deref(),
+            Some("high")
+        );
+        assert_eq!(
+            clamp(rung("none").unwrap(), &menu, Move::Down, 0).as_deref(),
+            Some("low")
+        );
         // A floor of high is kept even when rounding down would drop below it.
-        let menu2: Vec<String> = ["low", "medium", "xhigh"].iter().map(|s| s.to_string()).collect();
-        assert_eq!(clamp(high(), &menu2, Move::Start, high()).as_deref(), Some("xhigh"));
+        let menu2: Vec<String> = ["low", "medium", "xhigh"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        assert_eq!(
+            clamp(high(), &menu2, Move::Start, high()).as_deref(),
+            Some("xhigh")
+        );
         assert_eq!(clamp(medium, &[], Move::Up, 0), None);
     }
 
@@ -584,13 +1062,27 @@ mod tests {
         let b = band("chat:default");
         let ep = "ladder-state-test";
         let t1 = turn_hash("first ask");
-        let p = step(ep, "chat:default", t1, b, start_rung(b, 0.5, Steer::Harder, true), Obs::default());
+        let p = step(
+            ep,
+            "chat:default",
+            t1,
+            b,
+            start_rung(b, 0.5, Steer::Harder, true),
+            Obs::default(),
+        );
         assert_eq!(name(p.rung), "xhigh");
         finish(ep, "chat:default", true);
         let p = step(ep, "chat:default", t1, b, (b.start, vec![]), Obs::default());
         assert_eq!(name(p.rung), "xhigh", "the same turn keeps its steer");
         assert_eq!(current(ep, "chat:default"), Some(rung("xhigh").unwrap()));
-        let p = step(ep, "chat:default", turn_hash("next ask"), b, (b.start, vec![]), Obs::default());
+        let p = step(
+            ep,
+            "chat:default",
+            turn_hash("next ask"),
+            b,
+            (b.start, vec![]),
+            Obs::default(),
+        );
         assert_eq!(name(p.rung), "medium", "a new turn drops the steer");
         note_tool_error();
         note_tool_error();

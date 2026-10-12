@@ -347,7 +347,10 @@ mod tests {
             PaceGate::Hold(PaceHold::MinInterval)
         );
         assert_eq!(t.gate(&pace, T0 + 15 * MIN, false), PaceGate::Act);
-        assert_eq!(PaceGate::Hold(PaceHold::MinInterval).reason(), "min_interval");
+        assert_eq!(
+            PaceGate::Hold(PaceHold::MinInterval).reason(),
+            "min_interval"
+        );
     }
 
     #[test]
@@ -429,7 +432,10 @@ mod tests {
         assert_eq!(t.quiet_streak(), 3);
         // Last act at T0+40; 20 min later the 15-min interval has passed, backoff has not.
         assert_eq!(t.gate(&pace, now, false), PaceGate::Hold(PaceHold::Backoff));
-        assert_eq!(t.gate(&pace, T0 + 40 * MIN + 30 * MIN, false), PaceGate::Act);
+        assert_eq!(
+            t.gate(&pace, T0 + 40 * MIN + 30 * MIN, false),
+            PaceGate::Act
+        );
         t.record_act(ProactiveAct::Anticipate, T0 + 70 * MIN);
         t.record_outcome(ProactiveAct::Anticipate, ActOutcome::Useful);
         assert_eq!(t.quiet_streak(), 0);
@@ -473,7 +479,9 @@ mod tests {
         assert!(!t.record_outcome(ProactiveAct::Review, ActOutcome::Empty));
         assert_eq!(t.quiet_streak(), 0);
         assert_eq!(t.pending(), Some(ProactiveAct::Ideas));
-        assert!(!HeartbeatThrottle::default().record_outcome(ProactiveAct::Ideas, ActOutcome::Empty));
+        assert!(
+            !HeartbeatThrottle::default().record_outcome(ProactiveAct::Ideas, ActOutcome::Empty)
+        );
     }
 
     #[test]
@@ -496,8 +504,14 @@ mod tests {
         assert_eq!(t.quiet_streak(), 1, "the halted act counts as dismissed");
         assert_eq!(t.pending(), None);
         // Halt beats every other reason, even a free budget.
-        assert_eq!(t.gate(&pace, T0 + MIN, false), PaceGate::Hold(PaceHold::Halted));
-        assert_eq!(t.gate(&pace, T0 + MIN, true), PaceGate::Hold(PaceHold::Halted));
+        assert_eq!(
+            t.gate(&pace, T0 + MIN, false),
+            PaceGate::Hold(PaceHold::Halted)
+        );
+        assert_eq!(
+            t.gate(&pace, T0 + MIN, true),
+            PaceGate::Hold(PaceHold::Halted)
+        );
         assert_eq!(
             t.gate(&pace, T0 + 16 * MIN - 1, false),
             PaceGate::Hold(PaceHold::Halted)
@@ -576,7 +590,15 @@ mod tests {
         let tags: Vec<&str> = all.iter().map(|h| h.reason()).collect();
         assert_eq!(
             tags,
-            ["halted", "busy", "off", "day_cap", "hour_cap", "backoff", "min_interval"]
+            [
+                "halted",
+                "busy",
+                "off",
+                "day_cap",
+                "hour_cap",
+                "backoff",
+                "min_interval"
+            ]
         );
         assert_eq!(PaceGate::Act.reason(), "under_budget");
         assert_eq!(ProactiveAct::Anticipate.as_str(), "anticipate");

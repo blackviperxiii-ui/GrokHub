@@ -43,7 +43,12 @@ fn request_line(stream: &mut impl Read) -> String {
 
 /// Wait for `/callback` and hand back its code ([`grokhub_core::pkce::loopback_code`]).
 /// Strays (a favicon, a prefetch) get a 404 and the wait goes on.
-pub(crate) fn wait_code(listener: &TcpListener, state: &str, who: &str, wait: Duration) -> Result<String, String> {
+pub(crate) fn wait_code(
+    listener: &TcpListener,
+    state: &str,
+    who: &str,
+    wait: Duration,
+) -> Result<String, String> {
     let deadline = Instant::now() + wait;
     loop {
         if Instant::now() >= deadline {
@@ -61,7 +66,9 @@ pub(crate) fn wait_code(listener: &TcpListener, state: &str, who: &str, wait: Du
         let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
         let head = request_line(&mut stream);
         if !head.starts_with("GET /callback") {
-            let _ = stream.write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+            let _ = stream.write_all(
+                b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+            );
             continue;
         }
         let _ = stream.write_all(&close_page());
@@ -76,18 +83,25 @@ mod tests {
     #[test]
     fn a_callback_sent_in_pieces_is_read_whole() {
         let (listener, redirect) = bind().unwrap();
-        let host = redirect.trim_start_matches("http://").trim_end_matches("/callback").to_string();
+        let host = redirect
+            .trim_start_matches("http://")
+            .trim_end_matches("/callback")
+            .to_string();
         let client = std::thread::spawn(move || {
             let mut sock = std::net::TcpStream::connect(&host).unwrap();
             sock.set_nodelay(true).unwrap();
             sock.write_all(b"GET /").unwrap();
             std::thread::sleep(Duration::from_millis(150));
-            sock.write_all(b"callback?code=abc HTTP/1.1\r\nHost: x\r\n\r\n").unwrap();
+            sock.write_all(b"callback?code=abc HTTP/1.1\r\nHost: x\r\n\r\n")
+                .unwrap();
             let mut sink = String::new();
             let _ = sock.read_to_string(&mut sink);
             sink
         });
-        assert_eq!(wait_code(&listener, "", "Test sign-in", Duration::from_secs(5)), Ok("abc".to_string()));
+        assert_eq!(
+            wait_code(&listener, "", "Test sign-in", Duration::from_secs(5)),
+            Ok("abc".to_string())
+        );
         assert!(client.join().unwrap().starts_with("HTTP/1.1 200 OK"));
     }
 }

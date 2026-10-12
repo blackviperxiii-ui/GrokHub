@@ -14,13 +14,7 @@ pub struct RewindRecord {
     pub method: String,
 }
 
-const SENSITIVE_HOME_LEAVES: &[&str] = &[
-    ".ssh",
-    ".gnupg",
-    ".aws",
-    ".kube",
-    ".config/GrokHub",
-];
+const SENSITIVE_HOME_LEAVES: &[&str] = &[".ssh", ".gnupg", ".aws", ".kube", ".config/GrokHub"];
 
 /// True when `root` is a sensitive `$HOME` leaf (`.ssh`, `.gnupg`, …) or under one.
 /// Paths may use `/` or `\`; comparison normalizes to `/`.
@@ -196,11 +190,17 @@ mod tests {
         assert!(rewind_allowed("/home/user/GrokHub-Work", "/home/user"));
         assert!(rewind_allowed("/tmp/lab", "/home/user"));
         assert!(!rewind_allowed("/home/user/.ssh", "/home/user"));
-        assert!(!rewind_allowed("/home/user/.ssh/id_ed25519", "/home/user"));
+        assert!(!rewind_allowed(
+            "/home/user/.ssh/id_ed25519",
+            "/home/user"
+        ));
         assert!(!rewind_allowed("/home/user/.gnupg", "/home/user"));
         assert!(!rewind_allowed("/home/user/.aws", "/home/user"));
         assert!(!rewind_allowed("/home/user/.kube/config", "/home/user"));
-        assert!(!rewind_allowed("/home/user/.config/GrokHub", "/home/user"));
+        assert!(!rewind_allowed(
+            "/home/user/.config/GrokHub",
+            "/home/user"
+        ));
         assert_eq!(
             rewind_dest("/home/user/.config/GrokHub/", "job-1"),
             "/home/user/.config/GrokHub/rewind/job-1"
@@ -238,10 +238,8 @@ mod tests {
             Some("Busy — wait, then rewind")
         );
         assert_eq!(rewind_blocked_reason(true, false), None);
-        let empty = std::env::temp_dir().join(format!(
-            "grokhub-rewind-empty-{}",
-            std::process::id()
-        ));
+        let empty =
+            std::env::temp_dir().join(format!("grokhub-rewind-empty-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&empty);
         std::fs::create_dir_all(&empty).unwrap();
         assert!(

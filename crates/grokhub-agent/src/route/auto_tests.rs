@@ -3,18 +3,24 @@
 
 use std::collections::BTreeMap;
 
-use grokhub_core::model_registry::profile::{EffortTiming, ModelProfile, ProbeResult};
-use grokhub_core::model_registry::{Credential, Listing, ModelMeta, ModelState, Prices, Registry, SourceKind};
 use grokhub_core::model_registry::model_id_stem;
+use grokhub_core::model_registry::profile::{EffortTiming, ModelProfile, ProbeResult};
+use grokhub_core::model_registry::{
+    Credential, Listing, ModelMeta, ModelState, Prices, Registry, SourceKind,
+};
 
 use super::policy::{self, CLASS_TABLE};
 use super::table::{self, build_table, EvalCache, SpeedQuality, TableInputs};
-use super::{Router, RouteInput};
+use super::{RouteInput, Router};
 
 const NOW: u64 = 2_000_000;
 
 fn meta(id: &str, reasoning: bool) -> ModelMeta {
-    let v: u64 = id.rsplit('.').next().and_then(|n| n.parse().ok()).unwrap_or(1);
+    let v: u64 = id
+        .rsplit('.')
+        .next()
+        .and_then(|n| n.parse().ok())
+        .unwrap_or(1);
     ModelMeta {
         id: id.into(),
         context_length: Some(256_000),
@@ -26,7 +32,8 @@ fn meta(id: &str, reasoning: bool) -> ModelMeta {
             long_context_threshold: Some(200_000),
             ..Prices::default()
         },
-        efforts: reasoning.then(|| vec!["low".into(), "medium".into(), "high".into(), "xhigh".into()]),
+        efforts: reasoning
+            .then(|| vec!["low".into(), "medium".into(), "high".into(), "xhigh".into()]),
         tool_calling: Some(true),
         structured_output: Some(true),
         input_modalities: Some(vec!["text".into(), "image".into()]),
@@ -69,7 +76,10 @@ fn plan_with(ids: &[&str]) -> (Registry, BTreeMap<String, ModelProfile>) {
         .iter()
         .map(|id| {
             let reasoning = !id.contains("non-reasoning");
-            (id.to_string(), ModelProfile::build(&meta(id, reasoning), ok_probe(), 1))
+            (
+                id.to_string(),
+                ModelProfile::build(&meta(id, reasoning), ok_probe(), 1),
+            )
         })
         .collect();
     (reg, profiles)
@@ -118,8 +128,14 @@ fn each_class_maps_to_its_tier_and_start_effort() {
     // Speed never pays for high: every speed class ceilings at medium or below.
     for row in CLASS_TABLE {
         if SpeedQuality::of(row.class) == SpeedQuality::Speed {
-            let ceil = grokhub_core::model_registry::EFFORT_LADDER.iter().position(|e| *e == row.ceiling).unwrap();
-            let medium = grokhub_core::model_registry::EFFORT_LADDER.iter().position(|e| *e == "medium").unwrap();
+            let ceil = grokhub_core::model_registry::EFFORT_LADDER
+                .iter()
+                .position(|e| *e == row.ceiling)
+                .unwrap();
+            let medium = grokhub_core::model_registry::EFFORT_LADDER
+                .iter()
+                .position(|e| *e == "medium")
+                .unwrap();
             assert!(ceil <= medium, "{} ceiling {}", row.class, row.ceiling);
         }
     }
@@ -129,26 +145,67 @@ fn each_class_maps_to_its_tier_and_start_effort() {
 fn quality_never_picks_non_reasoning_and_speed_never_gets_high_effort() {
     let ids = ["grok-4.7", "grok-4.6", "grok-4.20-0309-non-reasoning"];
     let (reg, profiles) = plan_with(&ids);
-    let table = build_table(&TableInputs { reg: &reg, profiles: &profiles }, &EvalCache::default(), NOW);
+    let table = build_table(
+        &TableInputs {
+            reg: &reg,
+            profiles: &profiles,
+        },
+        &EvalCache::default(),
+        NOW,
+    );
     for row in CLASS_TABLE {
-        let r = Router::choose(&ask(row.class, "grok-4.20-0309-non-reasoning"), &reg, &profiles, &table, NOW);
+        let r = Router::choose(
+            &ask(row.class, "grok-4.20-0309-non-reasoning"),
+            &reg,
+            &profiles,
+            &table,
+            NOW,
+        );
         if SpeedQuality::of(row.class).needs_reasoning() {
-            assert!(!r.model.contains("non-reasoning"), "{} → {}", row.class, r.model);
-            assert!(table::is_reasoning_model(&reg, &profiles, &r.model), "{} → {}", row.class, r.model);
+            assert!(
+                !r.model.contains("non-reasoning"),
+                "{} → {}",
+                row.class,
+                r.model
+            );
+            assert!(
+                table::is_reasoning_model(&reg, &profiles, &r.model),
+                "{} → {}",
+                row.class,
+                r.model
+            );
         }
         if SpeedQuality::of(row.class) == SpeedQuality::Speed {
             if let Some(e) = r.effort.as_deref() {
-                let rung = grokhub_core::model_registry::EFFORT_LADDER.iter().position(|x| *x == e).unwrap();
-                let medium = grokhub_core::model_registry::EFFORT_LADDER.iter().position(|x| *x == "medium").unwrap();
+                let rung = grokhub_core::model_registry::EFFORT_LADDER
+                    .iter()
+                    .position(|x| *x == e)
+                    .unwrap();
+                let medium = grokhub_core::model_registry::EFFORT_LADDER
+                    .iter()
+                    .position(|x| *x == "medium")
+                    .unwrap();
                 assert!(rung <= medium, "{} effort {}", row.class, e);
             }
         }
-        assert!(r.reason.contains(SpeedQuality::of(row.class).word()), "{} reason {}", row.class, r.reason);
+        assert!(
+            r.reason.contains(SpeedQuality::of(row.class).word()),
+            "{} reason {}",
+            row.class,
+            r.reason
+        );
     }
     // Non-reasoning never ranks in a quality class.
     for row in CLASS_TABLE {
         if SpeedQuality::of(row.class).needs_reasoning() {
-            assert!(table.rows(row.class).iter().all(|r| !r.model.contains("non-reasoning")), "{}", row.class);
+            assert!(
+                table
+                    .rows(row.class)
+                    .iter()
+                    .all(|r| !r.model.contains("non-reasoning")),
+                "{}",
+                row.class
+            );
         }
     }
 }
@@ -156,7 +213,14 @@ fn quality_never_picks_non_reasoning_and_speed_never_gets_high_effort() {
 #[test]
 fn a_newer_plan_model_is_selected_and_adding_one_moves_quality_picks() {
     let (reg, profiles) = plan_with(&["grok-4.3", "grok-4.5", "grok-4.6", "grok-4.7"]);
-    let table = build_table(&TableInputs { reg: &reg, profiles: &profiles }, &EvalCache::default(), NOW);
+    let table = build_table(
+        &TableInputs {
+            reg: &reg,
+            profiles: &profiles,
+        },
+        &EvalCache::default(),
+        NOW,
+    );
     let mut quality_tops = Vec::new();
     for row in CLASS_TABLE {
         if SpeedQuality::of(row.class).needs_reasoning() {
@@ -169,8 +233,16 @@ fn a_newer_plan_model_is_selected_and_adding_one_moves_quality_picks() {
     }
     assert!(!quality_tops.is_empty());
     // Adding grok-4.8 on the plan moves every quality top with no code change.
-    let (reg8, profiles8) = plan_with(&["grok-4.3", "grok-4.5", "grok-4.6", "grok-4.7", "grok-4.8"]);
-    let table8 = build_table(&TableInputs { reg: &reg8, profiles: &profiles8 }, &EvalCache::default(), NOW);
+    let (reg8, profiles8) =
+        plan_with(&["grok-4.3", "grok-4.5", "grok-4.6", "grok-4.7", "grok-4.8"]);
+    let table8 = build_table(
+        &TableInputs {
+            reg: &reg8,
+            profiles: &profiles8,
+        },
+        &EvalCache::default(),
+        NOW,
+    );
     for row in CLASS_TABLE {
         if SpeedQuality::of(row.class).needs_reasoning() {
             assert_eq!(table8.rows(row.class)[0].model, "grok-4.8", "{}", row.class);
@@ -195,16 +267,33 @@ fn a_model_outside_the_plan_is_never_picked_even_when_plan_models_are_down() {
         },
     );
     let mut profiles = profiles;
-    profiles.insert("grok-4.8".into(), ModelProfile::build(&outside, ok_probe(), 1));
+    profiles.insert(
+        "grok-4.8".into(),
+        ModelProfile::build(&outside, ok_probe(), 1),
+    );
     // Quarantine every plan model.
     for id in ["grok-4.7", "grok-4.6"] {
         reg.models.get_mut(id).unwrap().state = ModelState::Quarantined;
     }
-    let table = build_table(&TableInputs { reg: &reg, profiles: &profiles }, &EvalCache::default(), NOW);
-    assert!(table.classes.values().all(|c| c.ranked.iter().all(|r| r.model != "grok-4.8")));
+    let table = build_table(
+        &TableInputs {
+            reg: &reg,
+            profiles: &profiles,
+        },
+        &EvalCache::default(),
+        NOW,
+    );
+    assert!(table
+        .classes
+        .values()
+        .all(|c| c.ranked.iter().all(|r| r.model != "grok-4.8")));
     let r = Router::choose(&ask("plan", "grok-4.7"), &reg, &profiles, &table, NOW);
     assert_ne!(r.model, "grok-4.8");
-    assert!(r.no_route || r.model == "grok-4.7" || r.model == "grok-4.6", "{}", r.model);
+    assert!(
+        r.no_route || r.model == "grok-4.7" || r.model == "grok-4.6",
+        "{}",
+        r.model
+    );
 }
 
 #[test]

@@ -2,7 +2,15 @@
 
 use serde_json::{json, Value};
 
-pub const NAMES: &[&str] = &["screenshot", "click", "move", "drag", "scroll", "type", "key"];
+pub const NAMES: &[&str] = &[
+    "screenshot",
+    "click",
+    "move",
+    "drag",
+    "scroll",
+    "type",
+    "key",
+];
 
 pub fn schemas() -> Vec<Value> {
     let monitor = json!({

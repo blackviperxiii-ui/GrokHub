@@ -66,7 +66,12 @@ impl Cabin {
         let bound: HashSet<String> = self
             .threads
             .iter()
-            .flat_map(|thread| thread.grok_session.iter().chain(thread.retired_sessions.iter()))
+            .flat_map(|thread| {
+                thread
+                    .grok_session
+                    .iter()
+                    .chain(thread.retired_sessions.iter())
+            })
             .map(|id| id.trim().to_string())
             .filter(|id| !id.is_empty())
             .collect();
@@ -240,13 +245,14 @@ impl Cabin {
             .iter()
             .any(|session| session.id == row.id)
         {
-            self.grok_sessions.push(grokhub_core::cli_history::GrokSession {
-                id: row.id.clone(),
-                title: row.title.clone(),
-                path: row.path.clone(),
-                cwd: row.cwd.clone(),
-                cabin: false,
-            });
+            self.grok_sessions
+                .push(grokhub_core::cli_history::GrokSession {
+                    id: row.id.clone(),
+                    title: row.title.clone(),
+                    path: row.path.clone(),
+                    cwd: row.cwd.clone(),
+                    cabin: false,
+                });
         }
         self.open_grok_session(&row.id);
         if let Some(thread) = self

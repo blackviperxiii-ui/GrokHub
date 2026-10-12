@@ -106,9 +106,15 @@ mod tests {
         let lines = doctor_lines(true, true, HUB_KIND);
         assert!(doctor_ok(&lines));
         assert_eq!(hub_kind_from_health(None), "unreachable");
-        assert!(!doctor_ok(&doctor_lines(true, true, &hub_kind_from_health(None))));
+        assert!(!doctor_ok(&doctor_lines(
+            true,
+            true,
+            &hub_kind_from_health(None)
+        )));
         assert_eq!(
-            hub_kind_from_health(Some(r#"{"ok":true,"kind":"grokhub-hub-v1","name":"Beast"}"#)),
+            hub_kind_from_health(Some(
+                r#"{"ok":true,"kind":"grokhub-hub-v1","name":"Beast"}"#
+            )),
             HUB_KIND
         );
         assert_eq!(hub_kind_from_health(Some("not-json")), "unknown");

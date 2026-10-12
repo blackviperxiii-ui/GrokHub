@@ -3,7 +3,6 @@
 use super::*;
 
 impl Cabin {
-
     pub(super) fn switch_thread(&mut self, idx: usize) {
         self.apply_switch_thread(idx);
         if let Some(id) = self.threads.get(self.thread_idx).and_then(|t| {
@@ -127,12 +126,7 @@ impl Cabin {
         if self.harness.soft_parks.iter().any(|p| p.chat_id == id) {
             return true;
         }
-        if self
-            .harness
-            .park
-            .as_ref()
-            .is_some_and(|p| p.chat_id == id)
-        {
+        if self.harness.park.as_ref().is_some_and(|p| p.chat_id == id) {
             return true;
         }
         if self.harness.queue.iter().any(|p| p.chat_id == id) {
@@ -254,7 +248,8 @@ impl Cabin {
         let mut n = 0;
         for t in &mut self.threads {
             let is_busy = busy.contains(&t.id);
-            if threads::should_auto_archive(t, now, days, is_busy) && threads::archive_thread(t, now)
+            if threads::should_auto_archive(t, now, days, is_busy)
+                && threads::archive_thread(t, now)
             {
                 n += 1;
             }
@@ -301,17 +296,15 @@ impl Cabin {
         } else {
             format!("{} days", self.cfg.chat_archive_days)
         };
-        if let Some(i) = crate::cards::settings_dropdown(ui, "Auto-archive idle chats", hint, &current, &labels)
+        if let Some(i) =
+            crate::cards::settings_dropdown(ui, "Auto-archive idle chats", hint, &current, &labels)
         {
             self.cfg.chat_archive_days = CHOICES[i];
             self.persist_cfg();
             self.status = if self.cfg.chat_archive_days == 0 {
                 "Auto-archive off".into()
             } else {
-                format!(
-                    "Auto-archive after {} days",
-                    self.cfg.chat_archive_days
-                )
+                format!("Auto-archive after {} days", self.cfg.chat_archive_days)
             };
         }
     }

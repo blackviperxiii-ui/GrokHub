@@ -10,11 +10,13 @@ use serde_json::{json, Value};
 
 use super::*;
 use crate::client::{
-    responses_body, ClientError, ContentPart, FunctionCall, InputItem, ModelClient, ResponsesRequest, StreamEvent,
-    TurnOutput, Usage,
+    responses_body, ClientError, ContentPart, FunctionCall, InputItem, ModelClient,
+    ResponsesRequest, StreamEvent, TurnOutput, Usage,
 };
 use crate::gate::{ClosedPermits, Gate, PermMode};
-use crate::harness::{done_without_criteria, read_spans, ParkRequest, DONE_WITHOUT_CRITERIA, VERIFY_TOOL};
+use crate::harness::{
+    done_without_criteria, read_spans, ParkRequest, DONE_WITHOUT_CRITERIA, VERIFY_TOOL,
+};
 use crate::run::{HaltCheck, SteerQueue};
 use crate::tools::{DesktopOps, ToolOutput};
 use crate::CancelToken;
@@ -74,7 +76,11 @@ fn first_text(req: &ResponsesRequest, at: usize) -> String {
 }
 
 fn call(n: usize, name: &str, args: Value) -> FunctionCall {
-    FunctionCall { call_id: format!("c{n}-{name}"), name: name.into(), arguments: args.to_string() }
+    FunctionCall {
+        call_id: format!("c{n}-{name}"),
+        name: name.into(),
+        arguments: args.to_string(),
+    }
 }
 
 impl ModelClient for FakeModel {
@@ -85,7 +91,13 @@ impl ModelClient for FakeModel {
         _sink: &mut dyn FnMut(StreamEvent),
     ) -> Result<TurnOutput, ClientError> {
         let system = first_text(req, 0);
-        let usage = Usage { input_tokens: 1_000, output_tokens: 20, reasoning_tokens: 5, cost_in_usd_ticks: 10, cached_tokens: 0 };
+        let usage = Usage {
+            input_tokens: 1_000,
+            output_tokens: 20,
+            reasoning_tokens: 5,
+            cost_in_usd_ticks: 10,
+            cached_tokens: 0,
+        };
         if system == JUDGE_SYSTEM {
             let n = {
                 let mut calls = self.judge_calls.lock().unwrap();
@@ -99,17 +111,25 @@ impl ModelClient for FakeModel {
                 Some((from, later)) if n >= from => later,
                 _ => self.judge_says,
             };
-            return Ok(TurnOutput { text: says.into(), reasoning: String::new(), calls: vec![], usage,
-            ..Default::default()
-        });
+            return Ok(TurnOutput {
+                text: says.into(),
+                reasoning: String::new(),
+                calls: vec![],
+                usage,
+                ..Default::default()
+            });
         }
         if system == FOLD_SYSTEM {
             self.fold_calls.lock().unwrap().push(req.clone());
             let body = first_text(req, 1);
             let text: String = body.replace('\n', " ").chars().take(80).collect();
-            return Ok(TurnOutput { text: format!("fold: {text}"), reasoning: String::new(), calls: vec![], usage,
-            ..Default::default()
-        });
+            return Ok(TurnOutput {
+                text: format!("fold: {text}"),
+                reasoning: String::new(),
+                calls: vec![],
+                usage,
+                ..Default::default()
+            });
         }
         let n = {
             let mut calls = self.worker_calls.lock().unwrap();
@@ -135,24 +155,61 @@ impl ModelClient for FakeModel {
         }
         // A cache that holds the prefix: everything but the last message.
         let cached = if n == 0 { 0 } else { 800 };
-        let usage = Usage { cached_tokens: cached, ..usage };
+        let usage = Usage {
+            cached_tokens: cached,
+            ..usage
+        };
         let act = (self.script)(n);
         let truncated = matches!(act, Act::TruncatedClick);
         let (text, calls) = match act {
-            Act::Click(x) => (String::new(), vec![call(n, "click", json!({"x": x, "y": 40}))]),
-            Act::TruncatedClick => (String::new(), vec![call(n, "click", json!({"x": 7, "y": 40}))]),
-            Act::ClickSave => (String::new(), vec![call(n, "click", json!({"x": 120, "y": 40, "label": "Save"}))]),
-            Act::HardClick => (String::new(), vec![call(n, "click", json!({"x": 900, "y": 40, "label": "Send"}))]),
+            Act::Click(x) => (
+                String::new(),
+                vec![call(n, "click", json!({"x": x, "y": 40}))],
+            ),
+            Act::TruncatedClick => (
+                String::new(),
+                vec![call(n, "click", json!({"x": 7, "y": 40}))],
+            ),
+            Act::ClickSave => (
+                String::new(),
+                vec![call(
+                    n,
+                    "click",
+                    json!({"x": 120, "y": 40, "label": "Save"}),
+                )],
+            ),
+            Act::HardClick => (
+                String::new(),
+                vec![call(
+                    n,
+                    "click",
+                    json!({"x": 900, "y": 40, "label": "Send"}),
+                )],
+            ),
             Act::Type => (String::new(), vec![call(n, "type", json!({"text": TYPED}))]),
-            Act::Zoom(id) => (String::new(), vec![call(n, "zoom", json!({"span_ref": id, "n": 1}))]),
+            Act::Zoom(id) => (
+                String::new(),
+                vec![call(n, "zoom", json!({"span_ref": id, "n": 1}))],
+            ),
             Act::Reads(k) => (
                 String::new(),
-                (0..k).map(|i| call(n * 100 + i, "read_file", json!({"path": format!("missing-{i}.txt")}))).collect(),
+                (0..k)
+                    .map(|i| {
+                        call(
+                            n * 100 + i,
+                            "read_file",
+                            json!({"path": format!("missing-{i}.txt")}),
+                        )
+                    })
+                    .collect(),
             ),
             Act::Done => ("All set.\nGOAL_COMPLETE".into(), vec![]),
             Act::DoneSelfChecked => ("Saved it.\nVERIFY_OK\nGOAL_COMPLETE".into(), vec![]),
             Act::Say => ("Which network should I pick?".into(), vec![]),
-            Act::Shell(cmd) => (String::new(), vec![call(n, "run_terminal_command", json!({"command": cmd}))]),
+            Act::Shell(cmd) => (
+                String::new(),
+                vec![call(n, "run_terminal_command", json!({"command": cmd}))],
+            ),
             Act::Shot => (String::new(), vec![call(n, "screenshot", json!({}))]),
         };
         Ok(TurnOutput {
@@ -183,7 +240,12 @@ struct FakeDesk {
 
 impl FakeDesk {
     fn count(&self, name: &str) -> usize {
-        self.calls.lock().unwrap().iter().filter(|(n, _)| n == name).count()
+        self.calls
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(n, _)| n == name)
+            .count()
     }
 
     fn total(&self) -> usize {
@@ -210,7 +272,10 @@ impl DesktopOps for FakeDesk {
             self.halt.store(true, Ordering::SeqCst);
             *self.calls_at_halt.lock().unwrap() = Some(n);
         }
-        if name == "click" && self.fail_label.is_some() && args.get("label").and_then(Value::as_str) == self.fail_label {
+        if name == "click"
+            && self.fail_label.is_some()
+            && args.get("label").and_then(Value::as_str) == self.fail_label
+        {
             return ToolOutput::err("no such button");
         }
         if let (Some(err), "screenshot") = (self.shot_error, name) {
@@ -219,7 +284,11 @@ impl DesktopOps for FakeDesk {
         if name == "screenshot" {
             return ToolOutput {
                 text: "windows: Settings, Terminal".into(),
-                image_data_url: Some(if self.still { "data:image/png;base64,FRAME".into() } else { format!("data:image/png;base64,FRAME{n}") }),
+                image_data_url: Some(if self.still {
+                    "data:image/png;base64,FRAME".into()
+                } else {
+                    format!("data:image/png;base64,FRAME{n}")
+                }),
                 failed: false,
             };
         }
@@ -244,7 +313,13 @@ struct FakeParks {
 
 impl FakeParks {
     fn answer_all(&self, approve: bool) {
-        let ids: Vec<String> = self.posted.lock().unwrap().iter().map(|p| p.id.clone()).collect();
+        let ids: Vec<String> = self
+            .posted
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|p| p.id.clone())
+            .collect();
         let mut a = self.answers.lock().unwrap();
         for id in ids {
             a.insert(id, approve);
@@ -336,7 +411,12 @@ impl Rig {
             system: "cabin rules",
             workspace: &self.dir,
             config_dir: &self.dir,
-            gate: Gate { mode: PermMode::Always, readonly_session: false, attended: true, desktop: true },
+            gate: Gate {
+                mode: PermMode::Always,
+                readonly_session: false,
+                attended: true,
+                desktop: true,
+            },
             access: crate::harness::AccessMode::Supervised,
             desktop: &self.desk,
             parks: &self.parks,
@@ -361,7 +441,13 @@ impl Rig {
 }
 
 fn clicks_then_done(steps: usize) -> Script {
-    Box::new(move |n| if n < steps { Act::Click(n as u32) } else { Act::Done })
+    Box::new(move |n| {
+        if n < steps {
+            Act::Click(n as u32)
+        } else {
+            Act::Done
+        }
+    })
 }
 
 fn is_step(s: &crate::harness::Span) -> bool {
@@ -377,25 +463,48 @@ fn a_25_step_episode_is_one_trace_with_one_shape_per_step() {
     assert_eq!(out.stop, EpisodeStop::Ended(EpisodeEnd::Verified));
     let spans = r.spans();
     assert!(spans.len() > 25);
-    assert!(spans.iter().all(|s| s.episode == ep.id), "every span carries the episode id");
+    assert!(
+        spans.iter().all(|s| s.episode == ep.id),
+        "every span carries the episode id"
+    );
     let steps: Vec<_> = spans.iter().filter(|s| is_step(s)).collect();
     assert_eq!(steps.len(), 25);
     for s in &steps {
-        assert_eq!((s.tool.as_str(), s.decision.as_str(), s.path.as_str()), ("click", "allow", "E"));
+        assert_eq!(
+            (s.tool.as_str(), s.decision.as_str(), s.path.as_str()),
+            ("click", "allow", "E")
+        );
         assert_eq!(s.goal_step, "Turn on Wi-Fi in Settings");
         assert_eq!(s.ui_changed, Some(true));
         assert_eq!(s.result, "click ok");
         let t = s.tokens.as_ref().expect("the step's model call is logged");
-        assert_eq!((t.class.as_str(), t.input, t.out, t.reasoning, t.cost_ticks), ("episode:step", 1_000, 20, 5, 10));
+        assert_eq!(
+            (t.class.as_str(), t.input, t.out, t.reasoning, t.cost_ticks),
+            ("episode:step", 1_000, 20, 5, 10)
+        );
     }
     assert_eq!(steps[0].tokens.as_ref().unwrap().cached, 0);
-    assert_eq!(steps[1].tokens.as_ref().unwrap().cached, 800, "cached tokens are logged per step");
+    assert_eq!(
+        steps[1].tokens.as_ref().unwrap().cached,
+        800,
+        "cached tokens are logged per step"
+    );
     let check = spans.iter().find(|s| s.tool == VERIFY_TOOL).unwrap();
-    assert_eq!((check.result.as_str(), check.claim.as_str()), ("pass", "VERIFY_OK"));
+    assert_eq!(
+        (check.result.as_str(), check.claim.as_str()),
+        ("pass", "VERIFY_OK")
+    );
     assert_eq!(check.tokens.as_ref().unwrap().class, "background:judge");
     assert_eq!(check.tokens.as_ref().unwrap().effort, "low");
     let end = spans.last().unwrap();
-    assert_eq!((end.tool.as_str(), end.decision.as_str(), end.result.as_str()), (EPISODE_TOOL, "end", "verified"));
+    assert_eq!(
+        (
+            end.tool.as_str(),
+            end.decision.as_str(),
+            end.result.as_str()
+        ),
+        (EPISODE_TOOL, "end", "verified")
+    );
     assert_eq!(end.claim, "Desktop session · 25 steps · 0 min");
     assert_eq!(r.desk.count("click"), 25);
     assert_eq!(ep.ended, Some(EpisodeEnd::Verified));
@@ -404,17 +513,26 @@ fn a_25_step_episode_is_one_trace_with_one_shape_per_step() {
 /// Step 8 is a hard Send; the other 19 clicks don't depend on it. Worker
 /// calls are 30 s apart, so the card passes the 300 s TTL at call 18.
 fn send_parked_past_ttl(label: &str) -> Rig {
-    let mut r = rig(label, Box::new(|n| match n {
-        7 => Act::HardClick,
-        n if n < 20 => Act::Click(n as u32),
-        _ => Act::Done,
-    }));
+    let mut r = rig(
+        label,
+        Box::new(|n| match n {
+            7 => Act::HardClick,
+            n if n < 20 => Act::Click(n as u32),
+            _ => Act::Done,
+        }),
+    );
     r.model.tick_ms = 30_000;
     r
 }
 
 fn sends(r: &Rig) -> usize {
-    r.desk.calls.lock().unwrap().iter().filter(|(_, a)| a.get("label").is_some()).count()
+    r.desk
+        .calls
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(_, a)| a.get("label").is_some())
+        .count()
 }
 
 #[test]
@@ -422,7 +540,11 @@ fn an_unanswered_hard_step_parks_only_itself_and_the_episode_waits_instead_of_en
     let r = send_parked_past_ttl("hard");
     let mut ep = r.episode("Reply to the thread");
     let out = r.run(&mut ep, &mut EpisodeView::default());
-    assert_eq!(out.stop, EpisodeStop::Waiting, "a parked step keeps the episode open");
+    assert_eq!(
+        out.stop,
+        EpisodeStop::Waiting,
+        "a parked step keeps the episode open"
+    );
     let action = r#"click {"label":"Send","x":900,"y":40}"#;
     assert_eq!(r.parks.posted.lock().unwrap()[0].action, action);
     assert_eq!(
@@ -431,16 +553,36 @@ fn an_unanswered_hard_step_parks_only_itself_and_the_episode_waits_instead_of_en
     );
     let spans = r.spans();
     let park = spans.iter().find(|s| s.decision == "park").unwrap();
-    assert_eq!((park.tool.as_str(), park.approval_class.as_str(), park.claim.as_str()), ("click", "send", "episode step 8"));
+    assert_eq!(
+        (
+            park.tool.as_str(),
+            park.approval_class.as_str(),
+            park.claim.as_str()
+        ),
+        ("click", "send", "episode step 8")
+    );
     let deny: Vec<_> = spans.iter().filter(|s| s.decision == "deny").collect();
-    assert_eq!(deny.len(), 1, "one span when the TTL passes, not one per step");
-    assert_eq!(deny[0].result, "hard-class send unanswered after 300s — not run; waiting on your card");
+    assert_eq!(
+        deny.len(),
+        1,
+        "one span when the TTL passes, not one per step"
+    );
+    assert_eq!(
+        deny[0].result,
+        "hard-class send unanswered after 300s — not run; waiting on your card"
+    );
     assert_eq!(deny[0].episode, ep.id);
     // The Send never ran; the 19 clicks that don't need it did.
     assert_eq!(r.desk.count("click"), 19);
     assert_eq!(sends(&r), 0);
-    assert!(!spans.iter().any(|s| s.tool == VERIFY_TOOL), "no check while a step is parked");
-    assert!(!spans.iter().any(|s| s.decision == "end"), "the episode did not end");
+    assert!(
+        !spans.iter().any(|s| s.tool == VERIFY_TOOL),
+        "no check while a step is parked"
+    );
+    assert!(
+        !spans.iter().any(|s| s.decision == "end"),
+        "the episode did not end"
+    );
     // The card stays up for a late answer; nothing withdrew it.
     assert!(r.parks.withdrawn.lock().unwrap().is_empty());
     assert_eq!((ep.parks.len(), ep.parks[0].waiting), (1, true));
@@ -455,19 +597,32 @@ fn an_unanswered_hard_step_parks_only_itself_and_the_episode_waits_instead_of_en
 fn a_late_approve_runs_the_parked_step_once_and_the_episode_finishes() {
     let r = send_parked_past_ttl("late-approve");
     let mut ep = r.episode("Reply to the thread");
-    assert_eq!(r.run(&mut ep, &mut EpisodeView::default()).stop, EpisodeStop::Waiting);
+    assert_eq!(
+        r.run(&mut ep, &mut EpisodeView::default()).stop,
+        EpisodeStop::Waiting
+    );
     r.parks.answer_all(true);
     let out = r.run(&mut ep, &mut EpisodeView::default());
     assert_eq!(out.stop, EpisodeStop::Ended(EpisodeEnd::Verified));
     assert_eq!(sends(&r), 1);
-    let ran: Vec<_> = r.spans().into_iter().filter(|s| s.decision == "approve").collect();
+    let ran: Vec<_> = r
+        .spans()
+        .into_iter()
+        .filter(|s| s.decision == "approve")
+        .collect();
     assert_eq!(ran.len(), 1);
     assert!(ran[0].hard_approved);
-    assert_eq!((ran[0].tool.as_str(), ran[0].goal_step.as_str()), ("click", "Reply to the thread"));
+    assert_eq!(
+        (ran[0].tool.as_str(), ran[0].goal_step.as_str()),
+        ("click", "Reply to the thread")
+    );
     assert!(ep.parks.is_empty());
     // A second answer or another turn never runs it again.
     r.parks.answer_all(true);
-    assert_eq!(r.run(&mut ep, &mut EpisodeView::default()).stop, EpisodeStop::Ended(EpisodeEnd::Verified));
+    assert_eq!(
+        r.run(&mut ep, &mut EpisodeView::default()).stop,
+        EpisodeStop::Ended(EpisodeEnd::Verified)
+    );
     assert_eq!(sends(&r), 1);
 }
 
@@ -475,13 +630,31 @@ fn a_late_approve_runs_the_parked_step_once_and_the_episode_finishes() {
 fn a_late_deny_never_runs_the_parked_step() {
     let r = send_parked_past_ttl("late-deny");
     let mut ep = r.episode("Reply to the thread");
-    assert_eq!(r.run(&mut ep, &mut EpisodeView::default()).stop, EpisodeStop::Waiting);
+    assert_eq!(
+        r.run(&mut ep, &mut EpisodeView::default()).stop,
+        EpisodeStop::Waiting
+    );
     r.parks.answer_all(false);
     let out = r.run(&mut ep, &mut EpisodeView::default());
-    assert_eq!(out.stop, EpisodeStop::Ended(EpisodeEnd::Verified), "the rest of the goal finishes");
+    assert_eq!(
+        out.stop,
+        EpisodeStop::Ended(EpisodeEnd::Verified),
+        "the rest of the goal finishes"
+    );
     assert_eq!(sends(&r), 0);
-    let results: Vec<String> = r.spans().into_iter().filter(|s| s.decision == "deny").map(|s| s.result).collect();
-    assert_eq!(results, vec!["hard-class send unanswered after 300s — not run; waiting on your card".to_string(), "denied".to_string()]);
+    let results: Vec<String> = r
+        .spans()
+        .into_iter()
+        .filter(|s| s.decision == "deny")
+        .map(|s| s.result)
+        .collect();
+    assert_eq!(
+        results,
+        vec![
+            "hard-class send unanswered after 300s — not run; waiting on your card".to_string(),
+            "denied".to_string()
+        ]
+    );
     assert!(ep.parks.is_empty());
 }
 
@@ -489,25 +662,48 @@ fn a_late_deny_never_runs_the_parked_step() {
 fn halt_while_a_step_waits_past_its_ttl_denies_it() {
     let r = send_parked_past_ttl("wait-halt");
     let mut ep = r.episode("Reply to the thread");
-    assert_eq!(r.run(&mut ep, &mut EpisodeView::default()).stop, EpisodeStop::Waiting);
+    assert_eq!(
+        r.run(&mut ep, &mut EpisodeView::default()).stop,
+        EpisodeStop::Waiting
+    );
     r.desk.halt.store(true, Ordering::SeqCst);
-    assert_eq!(r.run(&mut ep, &mut EpisodeView::default()).stop, EpisodeStop::Ended(EpisodeEnd::Halt));
-    let last_deny = r.spans().into_iter().rev().find(|s| s.decision == "deny").unwrap();
-    assert_eq!((last_deny.tool.as_str(), last_deny.result.as_str()), ("click", "halt — fail-closed Deny"));
-    assert_eq!(*r.parks.withdrawn.lock().unwrap(), vec![format!("{PARK_PREFIX}{}-8", ep.id)]);
+    assert_eq!(
+        r.run(&mut ep, &mut EpisodeView::default()).stop,
+        EpisodeStop::Ended(EpisodeEnd::Halt)
+    );
+    let last_deny = r
+        .spans()
+        .into_iter()
+        .rev()
+        .find(|s| s.decision == "deny")
+        .unwrap();
+    assert_eq!(
+        (last_deny.tool.as_str(), last_deny.result.as_str()),
+        ("click", "halt — fail-closed Deny")
+    );
+    assert_eq!(
+        *r.parks.withdrawn.lock().unwrap(),
+        vec![format!("{PARK_PREFIX}{}-8", ep.id)]
+    );
     // An approve that lands after the halt finds nothing to run.
     r.parks.answer_all(true);
     r.desk.halt.store(false, Ordering::SeqCst);
-    assert_eq!(r.run(&mut ep, &mut EpisodeView::default()).stop, EpisodeStop::Ended(EpisodeEnd::Halt));
+    assert_eq!(
+        r.run(&mut ep, &mut EpisodeView::default()).stop,
+        EpisodeStop::Ended(EpisodeEnd::Halt)
+    );
     assert_eq!(sends(&r), 0);
 }
 
 #[test]
 fn halt_at_step_10_denies_every_park_and_the_desktop_gets_nothing_more() {
-    let mut r = rig("halt", Box::new(|n| match n {
-        2 | 6 => Act::HardClick,
-        n => Act::Click(n as u32),
-    }));
+    let mut r = rig(
+        "halt",
+        Box::new(|n| match n {
+            2 | 6 => Act::HardClick,
+            n => Act::Click(n as u32),
+        }),
+    );
     // Steps 1-10 with 3 and 7 parked: the 8th click is step 10.
     r.desk.halt_after_clicks = Some(8);
     let mut ep = r.episode("Clean up the downloads");
@@ -515,31 +711,47 @@ fn halt_at_step_10_denies_every_park_and_the_desktop_gets_nothing_more() {
     assert_eq!(out.stop, EpisodeStop::Ended(EpisodeEnd::Halt));
     assert_eq!(ep.steps, 10);
     let at_halt = r.desk.calls_at_halt.lock().unwrap().expect("halted");
-    assert_eq!(r.desk.total(), at_halt, "the fake backend got 0 calls after Halt");
+    assert_eq!(
+        r.desk.total(),
+        at_halt,
+        "the fake backend got 0 calls after Halt"
+    );
     let spans = r.spans();
     let denies: Vec<_> = spans.iter().filter(|s| s.decision == "deny").collect();
     assert_eq!(denies.len(), 2, "both parks denied with a span");
     for d in &denies {
-        assert_eq!((d.tool.as_str(), d.result.as_str()), ("click", "halt — fail-closed Deny"));
+        assert_eq!(
+            (d.tool.as_str(), d.result.as_str()),
+            ("click", "halt — fail-closed Deny")
+        );
         assert_eq!(d.episode, ep.id);
     }
     assert_eq!(r.parks.withdrawn.lock().unwrap().len(), 2);
     assert!(ep.parks.is_empty());
     let end = spans.last().unwrap();
-    assert_eq!((end.decision.as_str(), end.result.as_str()), ("end", "halt"));
+    assert_eq!(
+        (end.decision.as_str(), end.result.as_str()),
+        ("end", "halt")
+    );
     // A halted episode stays ended.
     r.desk.halt.store(false, Ordering::SeqCst);
-    assert_eq!(r.run(&mut ep, &mut EpisodeView::default()).stop, EpisodeStop::Ended(EpisodeEnd::Halt));
+    assert_eq!(
+        r.run(&mut ep, &mut EpisodeView::default()).stop,
+        EpisodeStop::Ended(EpisodeEnd::Halt)
+    );
     assert_eq!(r.desk.total(), at_halt);
 }
 
 #[test]
 fn steer_at_step_5_keeps_the_episode_id_and_the_parks() {
-    let mut r = rig("steer", Box::new(|n| match n {
-        2 => Act::HardClick,
-        n if n < 9 => Act::Click(n as u32),
-        _ => Act::Done,
-    }));
+    let mut r = rig(
+        "steer",
+        Box::new(|n| match n {
+            2 => Act::HardClick,
+            n if n < 9 => Act::Click(n as u32),
+            _ => Act::Done,
+        }),
+    );
     r.model.steer = Some((4, r.steer.clone()));
     r.model.answer_at = Some((7, Arc::clone(&r.parks), true));
     let mut ep = r.episode("Turn on Wi-Fi in Settings");
@@ -549,21 +761,44 @@ fn steer_at_step_5_keeps_the_episode_id_and_the_parks() {
     assert_eq!(ep.id, id);
     let spans = r.spans();
     assert!(spans.iter().all(|s| s.episode == id));
-    let goals: Vec<&str> = spans.iter().filter(|s| is_step(s)).map(|s| s.goal_step.as_str()).collect();
-    assert_eq!(goals[4], "Turn on Wi-Fi in Settings", "step 5 was proposed before the Steer landed");
+    let goals: Vec<&str> = spans
+        .iter()
+        .filter(|s| is_step(s))
+        .map(|s| s.goal_step.as_str())
+        .collect();
+    assert_eq!(
+        goals[4], "Turn on Wi-Fi in Settings",
+        "step 5 was proposed before the Steer landed"
+    );
     assert_eq!(goals[5], "now open the Wi-Fi page");
     // The park from step 3 outlived the Steer and was approved later, once.
     assert!(!spans.iter().any(|s| s.decision == "deny"));
     let ran = spans.iter().find(|s| s.decision == "approve").unwrap();
     assert!(ran.hard_approved);
-    assert_eq!((ran.tool.as_str(), ran.goal_step.as_str()), ("click", "Turn on Wi-Fi in Settings"));
-    let sends: Vec<_> = r.desk.calls.lock().unwrap().iter().filter(|(_, a)| a.get("label").is_some()).cloned().collect();
+    assert_eq!(
+        (ran.tool.as_str(), ran.goal_step.as_str()),
+        ("click", "Turn on Wi-Fi in Settings")
+    );
+    let sends: Vec<_> = r
+        .desk
+        .calls
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(_, a)| a.get("label").is_some())
+        .cloned()
+        .collect();
     assert_eq!(sends.len(), 1);
 }
 
 /// The text message (input 2) of every worker call: goal step, note, observation.
 fn nows(m: &FakeModel) -> Vec<String> {
-    m.worker_calls.lock().unwrap().iter().map(|r| first_text(r, 2)).collect()
+    m.worker_calls
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|r| first_text(r, 2))
+        .collect()
 }
 
 #[test]
@@ -576,10 +811,21 @@ fn a_100_step_episode_runs_to_verified_with_no_pause() {
     assert_eq!(ep.steps, 100);
     let spans = r.spans();
     assert_eq!(spans.iter().filter(|s| is_step(s)).count(), 100);
-    assert!(!spans.iter().any(|s| s.decision == "pause"), "no pause span");
-    assert!(!spans.iter().any(|s| s.tool == crate::harness::RECOVERY_TOOL), "every click moved: no re-plan");
+    assert!(
+        !spans.iter().any(|s| s.decision == "pause"),
+        "no pause span"
+    );
+    assert!(
+        !spans
+            .iter()
+            .any(|s| s.tool == crate::harness::RECOVERY_TOOL),
+        "every click moved: no re-plan"
+    );
     assert!(r.parks.posted.lock().unwrap().is_empty(), "no card");
-    assert_eq!(spans.last().unwrap().claim, "Desktop session · 100 steps · 1 min");
+    assert_eq!(
+        spans.last().unwrap().claim,
+        "Desktop session · 100 steps · 1 min"
+    );
 }
 
 #[test]
@@ -591,7 +837,10 @@ fn an_episode_past_30_minutes_keeps_going() {
     assert_eq!(out.stop, EpisodeStop::Ended(EpisodeEnd::Verified));
     assert_eq!(r.desk.count("click"), 10);
     // Eleven worker calls five minutes apart: 55 minutes.
-    assert_eq!(r.spans().last().unwrap().claim, "Desktop session · 10 steps · 55 min");
+    assert_eq!(
+        r.spans().last().unwrap().claim,
+        "Desktop session · 10 steps · 55 min"
+    );
 }
 
 #[test]
@@ -603,12 +852,29 @@ fn twenty_clicks_that_change_nothing_replan_every_five_quietly_and_verify() {
     assert_eq!(out.stop, EpisodeStop::Ended(EpisodeEnd::Verified));
     assert_eq!(r.desk.count("click"), 20);
     let spans = r.spans();
-    assert!(spans.iter().filter(|s| is_step(s)).all(|s| s.ui_changed == Some(false)));
-    let replans: Vec<_> = spans.iter().filter(|s| s.tool == crate::harness::RECOVERY_TOOL).collect();
+    assert!(spans
+        .iter()
+        .filter(|s| is_step(s))
+        .all(|s| s.ui_changed == Some(false)));
+    let replans: Vec<_> = spans
+        .iter()
+        .filter(|s| s.tool == crate::harness::RECOVERY_TOOL)
+        .collect();
     assert_eq!(replans.len(), 4);
     for s in &replans {
-        assert_eq!((s.decision.as_str(), s.result.as_str(), s.approval_class.as_str()), ("replan", "replan", "soft"));
-        assert!(s.args_redacted.contains(r#""detector":"no_progress""#), "{}", s.args_redacted);
+        assert_eq!(
+            (
+                s.decision.as_str(),
+                s.result.as_str(),
+                s.approval_class.as_str()
+            ),
+            ("replan", "replan", "soft")
+        );
+        assert!(
+            s.args_redacted.contains(r#""detector":"no_progress""#),
+            "{}",
+            s.args_redacted
+        );
         assert_eq!(s.claim, "no_progress: 5 steps in a row changed nothing");
     }
     assert!(!spans.iter().any(|s| s.decision == "pause"));
@@ -619,17 +885,24 @@ fn twenty_clicks_that_change_nothing_replan_every_five_quietly_and_verify() {
         .filter(|(_, t)| t.contains(&format!("GrokHub's check: {REPLAN_NOTE}")))
         .map(|(i, _)| i)
         .collect();
-    assert_eq!(told, vec![5, 10, 15, 20], "the worker is told to re-plan after every 5th still click");
+    assert_eq!(
+        told,
+        vec![5, 10, 15, 20],
+        "the worker is told to re-plan after every 5th still click"
+    );
     assert_eq!(ep.stall, 0);
 }
 
 #[test]
 fn a_hard_park_approved_after_the_turn_ended_runs_once_on_the_resume_prompt() {
-    let r = rig("resume", Box::new(|n| match n {
-        0 => Act::HardClick,
-        1 => Act::Say,
-        _ => Act::Done,
-    }));
+    let r = rig(
+        "resume",
+        Box::new(|n| match n {
+            0 => Act::HardClick,
+            1 => Act::Say,
+            _ => Act::Done,
+        }),
+    );
     let mut ep = r.episode("Reply to the thread");
     let mut view = EpisodeView::default();
     assert_eq!(r.run(&mut ep, &mut view).stop, EpisodeStop::Waiting);
@@ -640,25 +913,42 @@ fn a_hard_park_approved_after_the_turn_ended_runs_once_on_the_resume_prompt() {
     r.parks.answer_all(true);
     let out = r.run(&mut ep, &mut view);
     assert_eq!(out.stop, EpisodeStop::Ended(EpisodeEnd::Verified));
-    let sends: Vec<_> = r.desk.calls.lock().unwrap().iter().filter(|(_, a)| a.get("label").is_some()).cloned().collect();
+    let sends: Vec<_> = r
+        .desk
+        .calls
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(_, a)| a.get("label").is_some())
+        .cloned()
+        .collect();
     assert_eq!(sends.len(), 1, "the approved Send ran once");
     let spans = r.spans();
     let ran: Vec<_> = spans.iter().filter(|s| s.decision == "approve").collect();
     assert_eq!(ran.len(), 1);
-    assert_eq!((ran[0].tool.as_str(), ran[0].goal_step.as_str()), ("click", "Reply to the thread"));
+    assert_eq!(
+        (ran[0].tool.as_str(), ran[0].goal_step.as_str()),
+        ("click", "Reply to the thread")
+    );
     assert!(ran[0].hard_approved);
     let last = nows(&r.model).pop().unwrap();
-    assert!(last.starts_with("Step 2 of this episode.\nGoal step: Reply to the thread\n"), "{last}");
+    assert!(
+        last.starts_with("Step 2 of this episode.\nGoal step: Reply to the thread\n"),
+        "{last}"
+    );
     assert!(ep.parks.is_empty());
 }
 
 #[test]
 fn verify_gets_only_the_goal_and_the_observation_and_a_reject_stays_flagged() {
-    let mut r = rig("verify", Box::new(|n| match n {
-        0 => Act::Click(5),
-        1 => Act::Done,
-        _ => Act::Say,
-    }));
+    let mut r = rig(
+        "verify",
+        Box::new(|n| match n {
+            0 => Act::Click(5),
+            1 => Act::Done,
+            _ => Act::Say,
+        }),
+    );
     r.model.judge_says = "REJECT: the Wi-Fi toggle is still off";
     let mut ep = r.episode("Turn on Wi-Fi in Settings");
     let out = r.run(&mut ep, &mut EpisodeView::default());
@@ -667,31 +957,60 @@ fn verify_gets_only_the_goal_and_the_observation_and_a_reject_stays_flagged() {
     assert_eq!(judge.len(), 1);
     let body = serde_json::to_string(&responses_body(&judge[0])).unwrap();
     assert!(body.contains("Goal:\\nTurn on Wi-Fi in Settings"), "{body}");
-    assert!(body.contains("Final observation:\\nwindows: Settings, Terminal\\nscreenshot sha256: "), "{body}");
+    assert!(
+        body.contains("Final observation:\\nwindows: Settings, Terminal\\nscreenshot sha256: "),
+        "{body}"
+    );
     assert!(!body.contains(WORKER_THOUGHT), "{body}");
-    assert!(!body.contains("All set"), "the worker's own words stay out: {body}");
-    assert!(!body.contains("Episode so far"), "the view stays out: {body}");
-    assert!(!body.contains("FRAME"), "the screenshot image stays out: {body}");
+    assert!(
+        !body.contains("All set"),
+        "the worker's own words stay out: {body}"
+    );
+    assert!(
+        !body.contains("Episode so far"),
+        "the view stays out: {body}"
+    );
+    assert!(
+        !body.contains("FRAME"),
+        "the screenshot image stays out: {body}"
+    );
     assert!(!body.contains("\"tools\":[{"), "{body}");
     assert_eq!(judge[0].effort.as_deref(), Some("low"));
     let spans = r.spans();
     let check = spans.iter().find(|s| s.tool == VERIFY_TOOL).unwrap();
-    assert_eq!((check.result.as_str(), check.claim.as_str()), ("fail", "the Wi-Fi toggle is still off"));
+    assert_eq!(
+        (check.result.as_str(), check.claim.as_str()),
+        ("fail", "the Wi-Fi toggle is still off")
+    );
     let found = done_without_criteria(&spans);
     assert_eq!(found.len(), 1);
     assert_eq!(found[0].detector, DONE_WITHOUT_CRITERIA);
-    assert!(found[0].evidence[0].quote.contains("GOAL_COMPLETE"), "{:?}", found[0].evidence);
+    assert!(
+        found[0].evidence[0].quote.contains("GOAL_COMPLETE"),
+        "{:?}",
+        found[0].evidence
+    );
     // The reject went to the 1a ladder: one retry with the checker's reason.
-    let rung = spans.iter().find(|s| s.tool == crate::harness::RECOVERY_TOOL).unwrap();
+    let rung = spans
+        .iter()
+        .find(|s| s.tool == crate::harness::RECOVERY_TOOL)
+        .unwrap();
     assert_eq!(rung.decision, "retry");
     let retry = r.model.worker_calls.lock().unwrap()[2].clone();
-    assert!(first_text(&retry, 2).contains("The independent check said: the Wi-Fi toggle is still off"));
+    assert!(
+        first_text(&retry, 2).contains("The independent check said: the Wi-Fi toggle is still off")
+    );
     assert_eq!(ep.ended, None);
 }
 
 /// The view message (input 1) of every worker call.
 fn views(m: &FakeModel) -> Vec<String> {
-    m.worker_calls.lock().unwrap().iter().map(|r| first_text(r, 1)).collect()
+    m.worker_calls
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|r| first_text(r, 1))
+        .collect()
 }
 
 #[test]
@@ -700,25 +1019,44 @@ fn sixty_steps_stay_under_the_budget_and_the_prefix_holds_between_folds() {
     let r = rig("budget", clicks_then_done(60));
     let mut ep = r.episode("Sort the photos");
     let mut view = EpisodeView::new(budget);
-    assert_eq!(r.run(&mut ep, &mut view).stop, EpisodeStop::Ended(EpisodeEnd::Verified));
+    assert_eq!(
+        r.run(&mut ep, &mut view).stop,
+        EpisodeStop::Ended(EpisodeEnd::Verified)
+    );
     let views = views(&r.model);
     assert_eq!(views.len(), 61);
     for v in &views {
-        assert!(v.len() <= budget, "{} bytes over the {budget}-byte budget", v.len());
+        assert!(
+            v.len() <= budget,
+            "{} bytes over the {budget}-byte budget",
+            v.len()
+        );
     }
     let folds = r.spans().iter().filter(|s| s.decision == "fold").count();
     assert!(folds > 10, "a 3,000-byte view must fold: {folds}");
     let stable = views.windows(2).filter(|w| w[1].starts_with(&w[0])).count();
-    assert!(stable >= 60 - folds, "{stable} stable of 60 with {folds} folds");
+    assert!(
+        stable >= 60 - folds,
+        "{stable} stable of 60 with {folds} folds"
+    );
     // Byte-identical wire prefix (system + view) between two steps with no fold.
     let calls = r.model.worker_calls.lock().unwrap();
-    let wire = |req: &ResponsesRequest| serde_json::to_string(&crate::client::input_wire_value(&req.input[..2])).unwrap();
+    let wire = |req: &ResponsesRequest| {
+        serde_json::to_string(&crate::client::input_wire_value(&req.input[..2])).unwrap()
+    };
     let (a, b) = (wire(&calls[1]), wire(&calls[2]));
     // Everything up to the end of the older view's text is byte-identical.
     let cut = a.rfind(r#"","type":"input_text"}],"role":"user""#).unwrap();
     assert_eq!(a[..cut], b[..cut]);
     for req in calls.iter() {
-        assert_eq!(first_text(req, 0), calls[0].input.first().map(|_| first_text(&calls[0], 0)).unwrap());
+        assert_eq!(
+            first_text(req, 0),
+            calls[0]
+                .input
+                .first()
+                .map(|_| first_text(&calls[0], 0))
+                .unwrap()
+        );
     }
     let fold = r.model.fold_calls.lock().unwrap();
     assert!(!fold.is_empty());
@@ -743,25 +1081,38 @@ fn the_default_budget_never_folds_a_short_episode_and_the_prefix_is_identical() 
 
 #[test]
 fn zoom_opens_a_fold_into_its_two_children_and_a_step_into_its_raw_span() {
-    let r = rig("zoom", Box::new(|n| match n {
-        n if n < 12 => Act::Click(n as u32),
-        12 => Act::Zoom("f1-2"),
-        13 => Act::Zoom("s3"),
-        _ => Act::Done,
-    }));
+    let r = rig(
+        "zoom",
+        Box::new(|n| match n {
+            n if n < 12 => Act::Click(n as u32),
+            12 => Act::Zoom("f1-2"),
+            13 => Act::Zoom("s3"),
+            _ => Act::Done,
+        }),
+    );
     let mut ep = r.episode("Sort the photos");
     let mut view = EpisodeView::new(1_000);
     r.run(&mut ep, &mut view);
     let s1 = view.node("s1").unwrap().clone();
     let s2 = view.node("s2").unwrap().clone();
-    assert_eq!(view.zoom("f1-2", 1).unwrap(), format!("[s1] {}\n[s2] {}\n", s1.text, s2.text));
+    assert_eq!(
+        view.zoom("f1-2", 1).unwrap(),
+        format!("[s1] {}\n[s2] {}\n", s1.text, s2.text)
+    );
     let spans = r.spans();
     let zooms: Vec<_> = spans.iter().filter(|s| s.tool == ZOOM_TOOL).collect();
     assert_eq!(zooms.len(), 2);
     assert_eq!(zooms[0].decision, "allow");
-    assert!(zooms[0].result.starts_with("[s1] #1 goal="), "{}", zooms[0].result);
+    assert!(
+        zooms[0].result.starts_with("[s1] #1 goal="),
+        "{}",
+        zooms[0].result
+    );
     let raw: Value = serde_json::from_str(&view.zoom("s3", 1).unwrap()).unwrap();
-    assert_eq!((raw["tool"].as_str(), raw["claim"].as_str()), (Some("click"), Some("episode step 3")));
+    assert_eq!(
+        (raw["tool"].as_str(), raw["claim"].as_str()),
+        (Some("click"), Some("episode step 3"))
+    );
     assert_eq!(raw["episode"].as_str(), Some(ep.id.as_str()));
     // zoom is a read: the desktop never saw it.
     assert_eq!(r.desk.count("zoom"), 0);
@@ -770,18 +1121,24 @@ fn zoom_opens_a_fold_into_its_two_children_and_a_step_into_its_raw_span() {
 
 #[test]
 fn folds_and_spans_never_hold_a_typed_value() {
-    let r = rig("typed", Box::new(|n| match n {
-        n if n < 30 && n % 3 == 0 => Act::Type,
-        n if n < 30 => Act::Click(n as u32),
-        _ => Act::Done,
-    }));
+    let r = rig(
+        "typed",
+        Box::new(|n| match n {
+            n if n < 30 && n % 3 == 0 => Act::Type,
+            n if n < 30 => Act::Click(n as u32),
+            _ => Act::Done,
+        }),
+    );
     let mut ep = r.episode("Fill the form");
     let mut view = EpisodeView::new(1_500);
     r.run(&mut ep, &mut view);
     assert_eq!(r.desk.count("type"), 10, "the value was typed");
     let file = std::fs::read_to_string(crate::harness::span_path(&r.dir, CHAT)).unwrap();
     assert!(!file.contains(TYPED));
-    assert!(file.contains(r#"{\"chars\":22}"#), "typed text is kept as its length");
+    assert!(
+        file.contains(r#"{\"chars\":22}"#),
+        "typed text is kept as its length"
+    );
     assert!(!view.render().contains(TYPED));
     let folds = r.model.fold_calls.lock().unwrap();
     assert!(!folds.is_empty());
@@ -798,13 +1155,22 @@ fn folds_and_spans_never_hold_a_typed_value() {
 
 #[test]
 fn a_fan_out_runs_at_most_20_reads_and_counts_its_returns() {
-    let r = rig("fan", Box::new(|n| if n == 0 { Act::Reads(25) } else { Act::Done }));
+    let r = rig(
+        "fan",
+        Box::new(|n| if n == 0 { Act::Reads(25) } else { Act::Done }),
+    );
     let mut ep = r.episode("Find the config file");
     r.run(&mut ep, &mut EpisodeView::default());
     let spans = r.spans();
     let reads: Vec<_> = spans.iter().filter(|s| s.tool == "read_file").collect();
     assert_eq!(reads.len(), 20);
-    assert!(reads.iter().all(|s| s.result.ends_with("(fan-out 20/20 returned)")), "{}", reads[0].result);
+    assert!(
+        reads
+            .iter()
+            .all(|s| s.result.ends_with("(fan-out 20/20 returned)")),
+        "{}",
+        reads[0].result
+    );
     assert_eq!(ep.steps, 20);
     let outs = fan_out(vec![
         Box::new(|| ToolOutput::ok("a")),
@@ -818,29 +1184,55 @@ fn a_fan_out_runs_at_most_20_reads_and_counts_its_returns() {
 
 #[test]
 fn idle_stall_and_header_are_named_and_progress_resets_the_stall() {
-    assert_eq!((EPISODE_IDLE.as_secs(), FANOUT_CAP, STALL_REPLAN, STEP_UP_STEPS), (600, 20, 5, 3));
+    assert_eq!(
+        (
+            EPISODE_IDLE.as_secs(),
+            FANOUT_CAP,
+            STALL_REPLAN,
+            STEP_UP_STEPS
+        ),
+        (600, 20, 5, 3)
+    );
     let mut ep = Episode::begin("ep-1", CHAT, "Go", T0, &[]);
     assert!(!ep.idle(T0 + 599_999));
     assert!(ep.idle(T0 + 600_000));
     ep.steps = 12;
-    assert_eq!(ep.header(T0 + 4 * 60_000 + 5_000), "Desktop session · 12 steps · 4 min");
-    assert_eq!(episode_header(1, std::time::Duration::ZERO), "Desktop session · 1 step · 0 min");
+    assert_eq!(
+        ep.header(T0 + 4 * 60_000 + 5_000),
+        "Desktop session · 12 steps · 4 min"
+    );
+    assert_eq!(
+        episode_header(1, std::time::Duration::ZERO),
+        "Desktop session · 1 step · 0 min"
+    );
     // A screen change or a quiet success moves; no change or a failure doesn't; a park is neutral.
     for _ in 0..4 {
         assert!(!ep.note_progress("allow", Some(false), false));
     }
     assert!(!ep.note_progress("park", None, false));
     assert_eq!(ep.stall, 4);
-    assert!(ep.note_progress("deny", None, true), "the 5th step with no progress re-plans");
+    assert!(
+        ep.note_progress("deny", None, true),
+        "the 5th step with no progress re-plans"
+    );
     assert_eq!(ep.stall, 0);
     assert!(!ep.note_progress("allow", None, true));
     assert!(!ep.note_progress("allow", Some(true), true));
     assert_eq!(ep.stall, 0, "the screen changed");
     assert!(!ep.note_progress("allow", Some(false), false));
     assert!(!ep.note_progress("allow", None, false));
-    assert_eq!(ep.stall, 0, "a read with no screen reading that worked moved");
+    assert_eq!(
+        ep.stall, 0,
+        "a read with no screen reading that worked moved"
+    );
     let held = vec!["hunter2222".to_string()];
-    let secret = Episode::begin("ep-2", CHAT, "Log in with hunter2222 and sk-abcdefghijklmnopqrstuv", T0, &held);
+    let secret = Episode::begin(
+        "ep-2",
+        CHAT,
+        "Log in with hunter2222 and sk-abcdefghijklmnopqrstuv",
+        T0,
+        &held,
+    );
     assert_eq!(secret.goal, "Log in with [redacted] and [redacted]");
     let shape = StepShape {
         goal_step: "Go".into(),
@@ -849,16 +1241,22 @@ fn idle_stall_and_header_are_named_and_progress_resets_the_stall() {
         ui_changed: Some(false),
         result: "click ok".into(),
     };
-    assert_eq!(shape.line(3), r#"#3 goal="Go" tool=click decision=allow ui_changed=false result="click ok""#);
+    assert_eq!(
+        shape.line(3),
+        r#"#3 goal="Go" tool=click decision=allow ui_changed=false result="click ok""#
+    );
     assert!(new_episode_id(T0).starts_with("ep-1a3185c5000-"));
 }
 
 #[test]
 fn stop_during_a_worker_call_ends_the_episode_and_denies_its_parks() {
-    let mut r = rig("stop-mid-call", Box::new(|n| match n {
-        0 => Act::HardClick,
-        _ => Act::Click(n as u32),
-    }));
+    let mut r = rig(
+        "stop-mid-call",
+        Box::new(|n| match n {
+            0 => Act::HardClick,
+            _ => Act::Click(n as u32),
+        }),
+    );
     r.model.cancel_at = Some((1, r.cancel.clone()));
     let mut ep = r.episode("Reply to the thread");
     let out = r.run(&mut ep, &mut EpisodeView::default());
@@ -867,44 +1265,86 @@ fn stop_during_a_worker_call_ends_the_episode_and_denies_its_parks() {
     let park = format!("{PARK_PREFIX}{}-1", ep.id);
     assert_eq!(*r.parks.withdrawn.lock().unwrap(), vec![park]);
     let spans = r.spans();
-    let deny = spans.iter().find(|s| s.decision == "deny").expect("the parked Send is denied");
-    assert_eq!((deny.tool.as_str(), deny.result.as_str()), ("click", "stopped — fail-closed Deny"));
+    let deny = spans
+        .iter()
+        .find(|s| s.decision == "deny")
+        .expect("the parked Send is denied");
+    assert_eq!(
+        (deny.tool.as_str(), deny.result.as_str()),
+        ("click", "stopped — fail-closed Deny")
+    );
     assert_eq!(r.desk.count("click"), 0, "the parked Send never ran");
     assert!(ep.parks.is_empty());
 }
 
 #[test]
 fn workspace_deny_rules_hold_inside_an_episode() {
-    let mut r = rig("policy", Box::new(|n| match n {
-        0 => Act::Shell("echo episode-policy"),
-        _ => Act::Done,
-    }));
+    let mut r = rig(
+        "policy",
+        Box::new(|n| match n {
+            0 => Act::Shell("echo episode-policy"),
+            _ => Act::Done,
+        }),
+    );
     let mut policy = crate::perm::Policy::empty();
-    policy.rules.push(crate::perm::parse_rule("Bash(echo *)", crate::perm::Action::Deny).unwrap());
+    policy
+        .rules
+        .push(crate::perm::parse_rule("Bash(echo *)", crate::perm::Action::Deny).unwrap());
     r.perms = Some(policy);
     let mut ep = r.episode("Say hi in a terminal");
     r.run(&mut ep, &mut EpisodeView::default());
     let spans = r.spans();
-    let step = spans.iter().find(|s| s.tool == "run_terminal_command").expect("the shell step is logged");
-    assert_eq!(step.decision, "deny", "Always mode still obeys a deny rule: {}", step.result);
+    let step = spans
+        .iter()
+        .find(|s| s.tool == "run_terminal_command")
+        .expect("the shell step is logged");
+    assert_eq!(
+        step.decision, "deny",
+        "Always mode still obeys a deny rule: {}",
+        step.result
+    );
 }
 
 #[test]
 fn a_long_goal_reaches_the_worker_and_the_checker_whole_and_spans_keep_200() {
     let r = rig("long-goal", clicks_then_done(1));
-    let goal = format!("Open Settings, then {} and finally turn on Wi-Fi", "check the network list carefully, ".repeat(10));
+    let goal = format!(
+        "Open Settings, then {} and finally turn on Wi-Fi",
+        "check the network list carefully, ".repeat(10)
+    );
     assert!(goal.chars().count() > 300);
     let mut ep = r.episode(&goal);
     let out = r.run(&mut ep, &mut EpisodeView::default());
     assert_eq!(out.stop, EpisodeStop::Ended(EpisodeEnd::Verified));
-    let worker = serde_json::to_string(&responses_body(&r.model.worker_calls.lock().unwrap()[0])).unwrap();
-    assert!(worker.contains("finally turn on Wi-Fi"), "the worker sees the end of the goal");
-    let judge = serde_json::to_string(&responses_body(&r.model.judge_calls.lock().unwrap()[0])).unwrap();
-    assert!(judge.contains("finally turn on Wi-Fi"), "the checker judges the whole goal");
+    let worker =
+        serde_json::to_string(&responses_body(&r.model.worker_calls.lock().unwrap()[0])).unwrap();
+    assert!(
+        worker.contains("finally turn on Wi-Fi"),
+        "the worker sees the end of the goal"
+    );
+    let judge =
+        serde_json::to_string(&responses_body(&r.model.judge_calls.lock().unwrap()[0])).unwrap();
+    assert!(
+        judge.contains("finally turn on Wi-Fi"),
+        "the checker judges the whole goal"
+    );
     for s in r.spans() {
-        assert!(s.goal_step.chars().count() <= GOAL_CAP, "{}", s.goal_step.chars().count());
+        assert!(
+            s.goal_step.chars().count() <= GOAL_CAP,
+            "{}",
+            s.goal_step.chars().count()
+        );
     }
-    assert_eq!(r.spans().iter().find(|s| is_step(s)).unwrap().goal_step.chars().count(), GOAL_CAP);
+    assert_eq!(
+        r.spans()
+            .iter()
+            .find(|s| is_step(s))
+            .unwrap()
+            .goal_step
+            .chars()
+            .count(),
+        GOAL_CAP
+    );
 }
 
 /// The `harness_recovery` spans in order: (decision, detector, claim).
@@ -914,38 +1354,62 @@ fn recoveries(spans: &[crate::harness::Span]) -> Vec<(String, String, String)> {
         .filter(|s| s.tool == crate::harness::RECOVERY_TOOL)
         .map(|s| {
             let args: Value = serde_json::from_str(&s.args_redacted).unwrap();
-            (s.decision.clone(), args["detector"].as_str().unwrap_or("").to_string(), s.claim.clone())
+            (
+                s.decision.clone(),
+                args["detector"].as_str().unwrap_or("").to_string(),
+                s.claim.clone(),
+            )
         })
         .collect()
 }
 
 #[test]
 fn a_reject_with_no_finding_replans_with_the_reason_and_later_verifies() {
-    let mut r = rig("reject-replan", Box::new(|n| match n {
-        0 => Act::Click(5),
-        1 => Act::DoneSelfChecked,
-        2 => Act::Click(6),
-        _ => Act::Done,
-    }));
+    let mut r = rig(
+        "reject-replan",
+        Box::new(|n| match n {
+            0 => Act::Click(5),
+            1 => Act::DoneSelfChecked,
+            2 => Act::Click(6),
+            _ => Act::Done,
+        }),
+    );
     r.model.judge_says = "REJECT: notes.txt is not saved";
     r.model.judge_later = Some((1, "VERIFY_OK"));
     let mut ep = r.episode("Save notes.txt in the editor");
     let out = r.run(&mut ep, &mut EpisodeView::default());
-    assert_eq!(out.stop, EpisodeStop::Ended(EpisodeEnd::Verified), "a reject never leaves it waiting");
+    assert_eq!(
+        out.stop,
+        EpisodeStop::Ended(EpisodeEnd::Verified),
+        "a reject never leaves it waiting"
+    );
     let spans = r.spans();
     assert_eq!(
         recoveries(&spans),
-        vec![("replan".to_string(), "verify_reject".to_string(), "verify_reject: notes.txt is not saved".to_string())]
+        vec![(
+            "replan".to_string(),
+            "verify_reject".to_string(),
+            "verify_reject: notes.txt is not saved".to_string()
+        )]
     );
-    let replan = spans.iter().find(|s| s.tool == crate::harness::RECOVERY_TOOL).unwrap();
+    let replan = spans
+        .iter()
+        .find(|s| s.tool == crate::harness::RECOVERY_TOOL)
+        .unwrap();
     assert_eq!(replan.origin, crate::harness::Origin::Repair);
     let next = r.model.worker_calls.lock().unwrap()[2].clone();
     assert!(
-        first_text(&next, 2).contains(&format!("GrokHub's check: {REPLAN_NOTE} The independent check said: notes.txt is not saved")),
+        first_text(&next, 2).contains(&format!(
+            "GrokHub's check: {REPLAN_NOTE} The independent check said: notes.txt is not saved"
+        )),
         "{}",
         first_text(&next, 2)
     );
-    let checks: Vec<&str> = spans.iter().filter(|s| s.tool == VERIFY_TOOL).map(|s| s.result.as_str()).collect();
+    let checks: Vec<&str> = spans
+        .iter()
+        .filter(|s| s.tool == VERIFY_TOOL)
+        .map(|s| s.result.as_str())
+        .collect();
     assert_eq!(checks, vec!["fail", "pass"]);
     assert_eq!(r.model.judge_calls.lock().unwrap().len(), 2);
     assert_eq!(ep.ended, Some(EpisodeEnd::Verified));
@@ -962,13 +1426,31 @@ fn a_checker_that_cannot_run_is_retried_then_escalated_and_passes() {
     let spans = r.spans();
     let rec = recoveries(&spans);
     assert_eq!(rec.len(), 2);
-    assert_eq!((rec[0].0.as_str(), rec[0].1.as_str()), ("retry", "checker_error"));
-    assert_eq!((rec[1].0.as_str(), rec[1].1.as_str()), ("escalate", "checker_error"));
-    assert!(rec[0].2.starts_with("checker_error: ") && rec[0].2.contains("checker offline"), "{}", rec[0].2);
+    assert_eq!(
+        (rec[0].0.as_str(), rec[0].1.as_str()),
+        ("retry", "checker_error")
+    );
+    assert_eq!(
+        (rec[1].0.as_str(), rec[1].1.as_str()),
+        ("escalate", "checker_error")
+    );
+    assert!(
+        rec[0].2.starts_with("checker_error: ") && rec[0].2.contains("checker offline"),
+        "{}",
+        rec[0].2
+    );
     let check = spans.iter().find(|s| s.tool == VERIFY_TOOL).unwrap();
     assert_eq!(check.result, "pass");
-    assert_eq!(check.tokens.as_ref().unwrap().class, "episode:step", "the last try routes as the worker's class");
-    assert_eq!(r.model.worker_calls.lock().unwrap().len(), 2, "the worker was not sent back");
+    assert_eq!(
+        check.tokens.as_ref().unwrap().class,
+        "episode:step",
+        "the last try routes as the worker's class"
+    );
+    assert_eq!(
+        r.model.worker_calls.lock().unwrap().len(),
+        2,
+        "the worker was not sent back"
+    );
 }
 
 #[test]
@@ -979,12 +1461,30 @@ fn a_checker_still_down_after_escalating_replans_as_checker_unavailable() {
     let out = r.run(&mut ep, &mut EpisodeView::default());
     assert_eq!(out.stop, EpisodeStop::Ended(EpisodeEnd::Verified));
     let rec = recoveries(&r.spans());
-    let decisions: Vec<(&str, &str)> = rec.iter().map(|(d, det, _)| (d.as_str(), det.as_str())).collect();
-    assert_eq!(decisions, vec![("retry", "checker_error"), ("escalate", "checker_error"), ("replan", "verify_reject")]);
+    let decisions: Vec<(&str, &str)> = rec
+        .iter()
+        .map(|(d, det, _)| (d.as_str(), det.as_str()))
+        .collect();
+    assert_eq!(
+        decisions,
+        vec![
+            ("retry", "checker_error"),
+            ("escalate", "checker_error"),
+            ("replan", "verify_reject")
+        ]
+    );
     assert_eq!(rec[2].2, "verify_reject: checker unavailable");
     let next = r.model.worker_calls.lock().unwrap()[1].clone();
-    assert!(first_text(&next, 2).contains("The independent check said: checker unavailable"), "{}", first_text(&next, 2));
-    assert_eq!(r.model.judge_calls.lock().unwrap().len(), 4, "three tries, then the next claim's check");
+    assert!(
+        first_text(&next, 2).contains("The independent check said: checker unavailable"),
+        "{}",
+        first_text(&next, 2)
+    );
+    assert_eq!(
+        r.model.judge_calls.lock().unwrap().len(),
+        4,
+        "three tries, then the next claim's check"
+    );
 }
 
 #[test]
@@ -995,21 +1495,43 @@ fn the_same_reject_three_times_on_an_unchanged_screen_ends_with_a_named_note() {
     let mut ep = r.episode("Turn on Wi-Fi in Settings");
     let out = r.run(&mut ep, &mut EpisodeView::default());
     assert_eq!(out.stop, EpisodeStop::Ended(EpisodeEnd::Unconfirmed));
-    assert_eq!(out.reply, "Couldn't confirm: Turn on Wi-Fi in Settings — checker says the Wi-Fi toggle is still off");
+    assert_eq!(
+        out.reply,
+        "Couldn't confirm: Turn on Wi-Fi in Settings — checker says the Wi-Fi toggle is still off"
+    );
     assert_eq!(ep.ended, Some(EpisodeEnd::Unconfirmed));
     assert_eq!(r.model.judge_calls.lock().unwrap().len(), 3);
     let spans = r.spans();
     let end = spans.last().unwrap();
-    assert_eq!((end.tool.as_str(), end.decision.as_str(), end.result.as_str()), (EPISODE_TOOL, "end", "unconfirmed"));
+    assert_eq!(
+        (
+            end.tool.as_str(),
+            end.decision.as_str(),
+            end.result.as_str()
+        ),
+        (EPISODE_TOOL, "end", "unconfirmed")
+    );
     assert!(r.parks.posted.lock().unwrap().is_empty(), "no card");
     assert_eq!(EpisodeEnd::Unconfirmed.as_str(), "unconfirmed");
 
     // The same reject while the screen keeps changing keeps going.
-    let mut r = rig("same-reject-moving", Box::new(|n| if n % 2 == 0 { Act::Done } else { Act::Click(n as u32) }));
+    let mut r = rig(
+        "same-reject-moving",
+        Box::new(|n| {
+            if n % 2 == 0 {
+                Act::Done
+            } else {
+                Act::Click(n as u32)
+            }
+        }),
+    );
     r.model.judge_says = "REJECT: the Wi-Fi toggle is still off";
     r.model.judge_later = Some((4, "VERIFY_OK"));
     let mut ep = r.episode("Turn on Wi-Fi in Settings");
-    assert_eq!(r.run(&mut ep, &mut EpisodeView::default()).stop, EpisodeStop::Ended(EpisodeEnd::Verified));
+    assert_eq!(
+        r.run(&mut ep, &mut EpisodeView::default()).stop,
+        EpisodeStop::Ended(EpisodeEnd::Verified)
+    );
     assert_eq!(r.model.judge_calls.lock().unwrap().len(), 5);
 }
 
@@ -1018,11 +1540,20 @@ fn note_reject_counts_only_the_same_reason_on_the_same_screen() {
     let mut ep = Episode::begin("ep-r", CHAT, "Save notes.txt", T0, &[]);
     assert!(!ep.note_reject("not saved", "aaa"));
     assert!(!ep.note_reject("not saved", "aaa"));
-    assert!(!ep.note_reject("not saved", "bbb"), "the screen changed: the count starts over");
-    assert!(!ep.note_reject("wrong folder", "bbb"), "another reason starts over");
+    assert!(
+        !ep.note_reject("not saved", "bbb"),
+        "the screen changed: the count starts over"
+    );
+    assert!(
+        !ep.note_reject("wrong folder", "bbb"),
+        "another reason starts over"
+    );
     assert!(!ep.note_reject("wrong folder", "bbb"));
     assert!(ep.note_reject("wrong folder", "bbb"));
-    assert_eq!(ep.last_reject, Some(("wrong folder".into(), "bbb".into(), 3)));
+    assert_eq!(
+        ep.last_reject,
+        Some(("wrong folder".into(), "bbb".into(), 3))
+    );
 }
 
 fn worker_tokens(spans: &[crate::harness::Span]) -> Vec<(String, String)> {
@@ -1038,11 +1569,14 @@ fn worker_tokens(spans: &[crate::harness::Span]) -> Vec<(String, String)> {
 
 #[test]
 fn a_save_button_that_does_nothing_replans_on_the_third_click_and_steps_up_for_three_steps() {
-    let mut r = rig("dead-save", Box::new(|n| match n {
-        0..=2 => Act::ClickSave,
-        3..=6 => Act::Click(n as u32),
-        _ => Act::Done,
-    }));
+    let mut r = rig(
+        "dead-save",
+        Box::new(|n| match n {
+            0..=2 => Act::ClickSave,
+            3..=6 => Act::Click(n as u32),
+            _ => Act::Done,
+        }),
+    );
     r.desk.still = true;
     let mut ep = r.episode("Save notes.txt in the editor");
     let out = r.run(&mut ep, &mut EpisodeView::default());
@@ -1059,105 +1593,212 @@ fn a_save_button_that_does_nothing_replans_on_the_third_click_and_steps_up_for_t
         .filter(|(_, t)| t.contains(&format!("GrokHub's check: {REPLAN_NOTE}")))
         .map(|(i, _)| i)
         .collect();
-    assert_eq!(told, vec![3], "the worker is told right after the third click");
+    assert_eq!(
+        told,
+        vec![3],
+        "the worker is told right after the third click"
+    );
     let efforts: Vec<String> = worker_tokens(&spans).into_iter().map(|(_, e)| e).collect();
-    assert_eq!(efforts, vec!["low", "low", "low", "medium", "medium", "medium", "low"], "three stepped-up calls, then back");
+    assert_eq!(
+        efforts,
+        vec!["low", "low", "low", "medium", "medium", "medium", "low"],
+        "three stepped-up calls, then back"
+    );
     let marks: Vec<(String, String)> = spans
         .iter()
         .filter(|s| s.tool == EPISODE_TOOL && s.decision == "step_up")
         .map(|s| (s.result.clone(), s.claim.clone()))
         .collect();
-    assert_eq!(marks, vec![("grok-4.7".to_string(), "stepped up to grok-4.7 medium for 3 steps".to_string())], "one quiet note naming the model");
-    assert!(r.parks.posted.lock().unwrap().is_empty(), "no card, no prompt");
+    assert_eq!(
+        marks,
+        vec![(
+            "grok-4.7".to_string(),
+            "stepped up to grok-4.7 medium for 3 steps".to_string()
+        )],
+        "one quiet note naming the model"
+    );
+    assert!(
+        r.parks.posted.lock().unwrap().is_empty(),
+        "no card, no prompt"
+    );
     assert_eq!(ep.step_up, 0);
 }
 
 #[test]
 fn an_identical_failing_click_replans_on_the_second_try() {
-    let mut r = rig("failing-save", Box::new(|n| match n {
-        0 | 1 => Act::ClickSave,
-        2 => Act::Click(7),
-        _ => Act::Done,
-    }));
+    let mut r = rig(
+        "failing-save",
+        Box::new(|n| match n {
+            0 | 1 => Act::ClickSave,
+            2 => Act::Click(7),
+            _ => Act::Done,
+        }),
+    );
     r.desk.fail_label = Some("Save");
     let mut ep = r.episode("Save notes.txt in the editor");
-    assert_eq!(r.run(&mut ep, &mut EpisodeView::default()).stop, EpisodeStop::Ended(EpisodeEnd::Verified));
+    assert_eq!(
+        r.run(&mut ep, &mut EpisodeView::default()).stop,
+        EpisodeStop::Ended(EpisodeEnd::Verified)
+    );
     let spans = r.spans();
-    let steps: Vec<&str> = spans.iter().filter(|s| is_step(s)).map(|s| s.result.as_str()).collect();
-    assert_eq!(steps, vec!["failed: no such button", "failed: no such button", "click ok"]);
-    assert_eq!(recoveries(&spans), vec![("replan".into(), "repeat_call".into(), "replan: click 'Save' failed 2×".into())]);
-    assert!(first_text(&r.model.worker_calls.lock().unwrap()[2], 2).contains(&format!("GrokHub's check: {REPLAN_NOTE}")));
+    let steps: Vec<&str> = spans
+        .iter()
+        .filter(|s| is_step(s))
+        .map(|s| s.result.as_str())
+        .collect();
+    assert_eq!(
+        steps,
+        vec![
+            "failed: no such button",
+            "failed: no such button",
+            "click ok"
+        ]
+    );
+    assert_eq!(
+        recoveries(&spans),
+        vec![(
+            "replan".into(),
+            "repeat_call".into(),
+            "replan: click 'Save' failed 2×".into()
+        )]
+    );
+    assert!(first_text(&r.model.worker_calls.lock().unwrap()[2], 2)
+        .contains(&format!("GrokHub's check: {REPLAN_NOTE}")));
 }
 
 #[test]
 fn varied_clicks_that_move_the_screen_never_replan_or_step_up() {
     let r = rig("varied", clicks_then_done(12));
     let mut ep = r.episode("Sort the photos");
-    assert_eq!(r.run(&mut ep, &mut EpisodeView::default()).stop, EpisodeStop::Ended(EpisodeEnd::Verified));
+    assert_eq!(
+        r.run(&mut ep, &mut EpisodeView::default()).stop,
+        EpisodeStop::Ended(EpisodeEnd::Verified)
+    );
     let spans = r.spans();
     assert!(recoveries(&spans).is_empty());
-    assert!(worker_tokens(&spans).iter().all(|(m, e)| (m.as_str(), e.as_str()) == ("grok-4.7", "low")));
+    assert!(worker_tokens(&spans)
+        .iter()
+        .all(|(m, e)| (m.as_str(), e.as_str()) == ("grok-4.7", "low")));
     assert!(!spans.iter().any(|s| s.decision == "step_up"));
 }
 
 #[test]
 fn an_episode_that_recovered_writes_one_lesson_and_a_clean_one_writes_none() {
-    let mut r = rig("lesson", Box::new(|n| match n {
-        0..=2 => Act::ClickSave,
-        3 => Act::Click(7),
-        _ => Act::Done,
-    }));
+    let mut r = rig(
+        "lesson",
+        Box::new(|n| match n {
+            0..=2 => Act::ClickSave,
+            3 => Act::Click(7),
+            _ => Act::Done,
+        }),
+    );
     r.desk.still = true;
     let mut ep = r.episode("Save notes.txt in Gedit");
-    assert_eq!(r.run(&mut ep, &mut EpisodeView::default()).stop, EpisodeStop::Ended(EpisodeEnd::Verified));
+    assert_eq!(
+        r.run(&mut ep, &mut EpisodeView::default()).stop,
+        EpisodeStop::Ended(EpisodeEnd::Verified)
+    );
     let stored = lessons::load(&r.dir);
     assert_eq!(stored.len(), 1);
     let l = &stored[0];
-    assert_eq!((l.app.as_str(), l.outcome.as_str(), l.episode_id.as_str()), ("Gedit", "verified", ep.id.as_str()));
+    assert_eq!(
+        (l.app.as_str(), l.outcome.as_str(), l.episode_id.as_str()),
+        ("Gedit", "verified", ep.id.as_str())
+    );
     assert_eq!(l.what_failed, "replan: click 'Save' changed nothing 3×");
     assert_eq!(l.what_worked, "then click at 7,40");
     let spans = r.spans();
-    let mark = spans.iter().find(|s| s.tool == EPISODE_TOOL && s.decision == "lesson").expect("a quiet lesson marker");
-    assert_eq!((mark.result.as_str(), mark.claim.as_str()), ("saved", "Gedit: replan: click 'Save' changed nothing 3× → then click at 7,40"));
-    assert_eq!(spans.last().unwrap().decision, "end", "the end marker stays last");
+    let mark = spans
+        .iter()
+        .find(|s| s.tool == EPISODE_TOOL && s.decision == "lesson")
+        .expect("a quiet lesson marker");
+    assert_eq!(
+        (mark.result.as_str(), mark.claim.as_str()),
+        (
+            "saved",
+            "Gedit: replan: click 'Save' changed nothing 3× → then click at 7,40"
+        )
+    );
+    assert_eq!(
+        spans.last().unwrap().decision,
+        "end",
+        "the end marker stays last"
+    );
 
     let clean = rig("lesson-clean", clicks_then_done(3));
     let mut ep = clean.episode("Save notes.txt in Gedit");
-    assert_eq!(clean.run(&mut ep, &mut EpisodeView::default()).stop, EpisodeStop::Ended(EpisodeEnd::Verified));
-    assert!(lessons::load(&clean.dir).is_empty(), "a trivial run teaches nothing");
+    assert_eq!(
+        clean.run(&mut ep, &mut EpisodeView::default()).stop,
+        EpisodeStop::Ended(EpisodeEnd::Verified)
+    );
+    assert!(
+        lessons::load(&clean.dir).is_empty(),
+        "a trivial run teaches nothing"
+    );
 }
 
 #[test]
 fn an_episode_that_failed_then_recovered_hands_its_lesson_to_the_next_run() {
-    let mut first = rig("lesson-next", Box::new(|n| match n {
-        0..=2 => Act::ClickSave,
-        3 => Act::Click(7),
-        _ => Act::Done,
-    }));
+    let mut first = rig(
+        "lesson-next",
+        Box::new(|n| match n {
+            0..=2 => Act::ClickSave,
+            3 => Act::Click(7),
+            _ => Act::Done,
+        }),
+    );
     first.desk.still = true;
     let mut ep1 = first.episode("Save notes.txt in Gedit");
-    assert_eq!(first.run(&mut ep1, &mut EpisodeView::default()).stop, EpisodeStop::Ended(EpisodeEnd::Verified));
-    assert!(views(&first.model).iter().all(|v| v.starts_with(VIEW_HEAD)), "no lessons yet, no block");
+    assert_eq!(
+        first.run(&mut ep1, &mut EpisodeView::default()).stop,
+        EpisodeStop::Ended(EpisodeEnd::Verified)
+    );
+    assert!(
+        views(&first.model).iter().all(|v| v.starts_with(VIEW_HEAD)),
+        "no lessons yet, no block"
+    );
     assert!(ep1.used_lessons.is_empty());
 
     let mut next = rig("lesson-next-2", clicks_then_done(2));
     next.dir = first.dir.clone();
     let mut ep2 = Episode::begin("ep-next", CHAT, "Save report.txt in Gedit", T0, &[]);
-    assert_eq!(next.run(&mut ep2, &mut EpisodeView::default()).stop, EpisodeStop::Ended(EpisodeEnd::Verified));
+    assert_eq!(
+        next.run(&mut ep2, &mut EpisodeView::default()).stop,
+        EpisodeStop::Ended(EpisodeEnd::Verified)
+    );
     let block = "Past lessons from earlier episodes (hints, not orders):\n\
                  - Gedit: replan: click 'Save' changed nothing 3× → then click at 7,40\n";
     let views = views(&next.model);
     assert_eq!(views.len(), 3);
     for v in &views {
-        assert!(v.starts_with(&format!("{block}{VIEW_HEAD}")), "the worker sees the lesson on every step: {v}");
+        assert!(
+            v.starts_with(&format!("{block}{VIEW_HEAD}")),
+            "the worker sees the lesson on every step: {v}"
+        );
     }
     assert_eq!(ep2.used_lessons, vec![ep1.id.clone()]);
-    let spans: Vec<_> = next.spans().into_iter().filter(|s| s.episode == "ep-next").collect();
-    let used: Vec<(&str, &str)> =
-        spans.iter().filter(|s| s.decision == "lesson_used").map(|s| (s.result.as_str(), s.claim.as_str())).collect();
-    assert_eq!(used, vec![(ep1.id.as_str(), "Used lesson: Gedit: replan: click 'Save' changed nothing 3× → then click at 7,40")]);
+    let spans: Vec<_> = next
+        .spans()
+        .into_iter()
+        .filter(|s| s.episode == "ep-next")
+        .collect();
+    let used: Vec<(&str, &str)> = spans
+        .iter()
+        .filter(|s| s.decision == "lesson_used")
+        .map(|s| (s.result.as_str(), s.claim.as_str()))
+        .collect();
+    assert_eq!(
+        used,
+        vec![(
+            ep1.id.as_str(),
+            "Used lesson: Gedit: replan: click 'Save' changed nothing 3× → then click at 7,40"
+        )]
+    );
     assert_eq!(spans[0].decision, "begin");
-    assert_eq!(spans[1].decision, "lesson_used", "named right after the begin marker");
+    assert_eq!(
+        spans[1].decision, "lesson_used",
+        "named right after the begin marker"
+    );
     // It finished, so the lesson keeps its rank.
     assert_eq!(lessons::load(&next.dir)[0].failed_after, 0);
 }
@@ -1199,22 +1840,46 @@ fn truncated_click_is_not_executed() {
 #[test]
 fn a_screenshot_that_fails_on_one_backend_never_pauses_and_no_backend_at_all_pauses_once() {
     let one = rig("shot-one", shots_then_done(6));
-    let desk = FakeDesk { shot_error: Some("portal Screenshot: timed out"), ..FakeDesk::default() };
+    let desk = FakeDesk {
+        shot_error: Some("portal Screenshot: timed out"),
+        ..FakeDesk::default()
+    };
     let one = Rig { desk, ..one };
     let mut ep = one.episode("Open the Settings");
-    assert_eq!(one.run(&mut ep, &mut EpisodeView::default()).stop, EpisodeStop::Ended(EpisodeEnd::Verified));
+    assert_eq!(
+        one.run(&mut ep, &mut EpisodeView::default()).stop,
+        EpisodeStop::Ended(EpisodeEnd::Verified)
+    );
     let spans = one.spans();
-    assert!(!spans.iter().any(|s| s.decision == "pause" || s.decision == "park"), "no pause, no card");
+    assert!(
+        !spans
+            .iter()
+            .any(|s| s.decision == "pause" || s.decision == "park"),
+        "no pause, no card"
+    );
 
     let note = "Can't capture the screen: KWin ScreenShot2: NoAuthorized; spectacle: not installed; \
                 portal Screenshot: timed out after 30 s while waiting for the desktop portal to answer the request.";
     let none = rig("shot-none", shots_then_done(6));
-    let desk = FakeDesk { shot_error: Some(note), ..FakeDesk::default() };
+    let desk = FakeDesk {
+        shot_error: Some(note),
+        ..FakeDesk::default()
+    };
     let none = Rig { desk, ..none };
     let mut ep = none.episode("Open the Settings");
     let stop = none.run(&mut ep, &mut EpisodeView::default()).stop;
-    let EpisodeStop::LadderPause(step) = stop else { panic!("one pause: {stop:?}") };
-    assert_eq!(step.reason, format!("action_loop: {note}"), "the pause names every backend's error");
-    let pauses = none.spans().iter().filter(|s| s.tool == crate::harness::RECOVERY_TOOL && s.decision == "pause").count();
+    let EpisodeStop::LadderPause(step) = stop else {
+        panic!("one pause: {stop:?}")
+    };
+    assert_eq!(
+        step.reason,
+        format!("action_loop: {note}"),
+        "the pause names every backend's error"
+    );
+    let pauses = none
+        .spans()
+        .iter()
+        .filter(|s| s.tool == crate::harness::RECOVERY_TOOL && s.decision == "pause")
+        .count();
     assert_eq!(pauses, 1);
 }

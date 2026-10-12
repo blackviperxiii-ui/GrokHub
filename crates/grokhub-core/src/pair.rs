@@ -131,7 +131,10 @@ mod tests {
         let b = code.as_bytes();
         assert_eq!(b.len(), 7);
         assert_eq!(b[3], b'-');
-        assert!(code.chars().filter(|c| *c != '-').all(|c| CODE_ALPH.contains(c)));
+        assert!(code
+            .chars()
+            .filter(|c| *c != '-')
+            .all(|c| CODE_ALPH.contains(c)));
         assert_eq!(PAIR_TTL_MS, 15 * 60 * 1000);
     }
 
@@ -157,8 +160,13 @@ mod tests {
             "http://192.168.1.40:18766"
         );
         assert_eq!(hub_pair_url(18766, None), "http://127.0.0.1:18766");
-        assert!(!hub_pair_url(18766, pick_lan_ipv4(&["192.168.1.40"]).as_deref()).contains("<lan>"));
-        assert_eq!(parse_hostname_i("192.168.1.40 10.0.0.8\n"), vec!["192.168.1.40", "10.0.0.8"]);
+        assert!(
+            !hub_pair_url(18766, pick_lan_ipv4(&["192.168.1.40"]).as_deref()).contains("<lan>")
+        );
+        assert_eq!(
+            parse_hostname_i("192.168.1.40 10.0.0.8\n"),
+            vec!["192.168.1.40", "10.0.0.8"]
+        );
     }
 
     #[test]

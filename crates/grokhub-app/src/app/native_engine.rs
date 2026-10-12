@@ -4,7 +4,8 @@
 use super::*;
 use crate::engine_handle::{ExternalCmd, NativePerm};
 use grokhub_agent::{
-    AuthKind, Engine, EngineParts, Gate, NativeEngine, PermAnswer, PermMode, PermitNote, StampHalt, XaiClient,
+    AuthKind, Engine, EngineParts, Gate, NativeEngine, PermAnswer, PermMode, PermitNote, StampHalt,
+    XaiClient,
 };
 use std::collections::HashMap;
 use std::time::Duration;
@@ -226,13 +227,15 @@ impl Cabin {
         let workspace = self.native_workspace();
         let model = grokhub_core::cabin_spawn_model(&self.cfg.model).to_string();
         // The router picks each call's effort; this is only the fallback for an unlisted class.
-        let effort = grokhub_agent::route::live::start_effort(grokhub_agent::route::live::DEFAULT_CLASS);
+        let effort =
+            grokhub_agent::route::live::start_effort(grokhub_agent::route::live::DEFAULT_CLASS);
         let (stable, volatile) = self.chat_prompt_parts();
         let system = grokhub_agent::system_prompt_parts(&stable, &volatile, &workspace);
         // A side question stays read-only even in plan mode, so it never gets plan approval.
         grokhub_agent::set_plan_session(
             session_id,
-            matches!(self.session_mode, grokhub_core::wire::SessionMode::Plan) && !self.side_ask_kick,
+            matches!(self.session_mode, grokhub_core::wire::SessionMode::Plan)
+                && !self.side_ask_kick,
         );
         let cfg = LiveCfg {
             workspace,
@@ -261,7 +264,11 @@ impl Cabin {
             self.cfg.desktop_control,
         );
         let notes = self.tuned_notes();
-        let rules = if notes.is_empty() { rules } else { format!("{notes}\n\n{rules}") };
+        let rules = if notes.is_empty() {
+            rules
+        } else {
+            format!("{notes}\n\n{rules}")
+        };
         grokhub_core::personality::layer(&self.chat_personality(), &rules)
     }
 
@@ -297,7 +304,10 @@ impl Cabin {
 
     fn native_gate(&self) -> Gate {
         let readonly = self.side_ask_kick
-            || matches!(self.session_mode, grokhub_core::wire::SessionMode::Plan | grokhub_core::wire::SessionMode::Ask);
+            || matches!(
+                self.session_mode,
+                grokhub_core::wire::SessionMode::Plan | grokhub_core::wire::SessionMode::Ask
+            );
         let mode = match self.permission_mode {
             grokhub_core::wire::PermissionMode::Ask => PermMode::Ask,
             grokhub_core::wire::PermissionMode::Auto => PermMode::Auto,
@@ -448,7 +458,11 @@ enum NativeJob {
     Shutdown,
 }
 
-fn serve_native(session_id: String, ext_rx: std::sync::mpsc::Receiver<ExternalCmd>, evt_tx: std::sync::mpsc::Sender<AcpEvent>) {
+fn serve_native(
+    session_id: String,
+    ext_rx: std::sync::mpsc::Receiver<ExternalCmd>,
+    evt_tx: std::sync::mpsc::Sender<AcpEvent>,
+) {
     let cancel = grokhub_agent::CancelToken::new();
     let steer = grokhub_agent::SteerQueue::new();
     let (job_tx, job_rx) = std::sync::mpsc::channel();
@@ -511,7 +525,10 @@ fn serve_native(session_id: String, ext_rx: std::sync::mpsc::Receiver<ExternalCm
         max_turns: 0,
         cancel: cancel.clone(),
         steer,
-        halt: Box::new(StampHalt { started_ms: 0, read: || None }),
+        halt: Box::new(StampHalt {
+            started_ms: 0,
+            read: || None,
+        }),
         gate: Gate::phase_readonly(),
         desktop: Some(Box::new(crate::desktop_mcp::NativeDesktop::new())),
         permits: std::sync::Arc::new(permit_inbox),
@@ -533,7 +550,9 @@ fn serve_native(session_id: String, ext_rx: std::sync::mpsc::Receiver<ExternalCm
             .cloned()
         else {
             let _ = evt_tx.send(AcpEvent::Err(grokhub_core::XAI_NEED_SIGNIN.into()));
-            let _ = evt_tx.send(AcpEvent::Done { stop_reason: "error".into() });
+            let _ = evt_tx.send(AcpEvent::Done {
+                stop_reason: "error".into(),
+            });
             continue;
         };
         engine.set_workspace(cfg.workspace);

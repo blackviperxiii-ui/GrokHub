@@ -11,7 +11,10 @@ const MAX_BODY: usize = 8 * 1024 * 1024;
 /// Requests handled at once. Past this a LAN flood gets a 503, not one more thread each.
 const MAX_IN_FLIGHT: usize = 64;
 
-pub fn serve(state: Arc<Mutex<HubState>>, port: u16) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+pub fn serve(
+    state: Arc<Mutex<HubState>>,
+    port: u16,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let server = Server::http(("0.0.0.0", port))?;
     accept_loop(state, server);
     Ok(())
@@ -29,7 +32,11 @@ pub fn serve_lan(state: Arc<Mutex<HubState>>, port: u16) -> Result<u16, String> 
 
 fn serve_bind(state: Arc<Mutex<HubState>>, host: &str, port: u16) -> Result<u16, String> {
     let server = Server::http((host, port)).map_err(|e| e.to_string())?;
-    let bound = server.server_addr().to_ip().map(|a| a.port()).unwrap_or(port);
+    let bound = server
+        .server_addr()
+        .to_ip()
+        .map(|a| a.port())
+        .unwrap_or(port);
     std::thread::spawn(move || {
         accept_loop(state, server);
     });
@@ -88,7 +95,11 @@ fn handle(state: &Arc<Mutex<HubState>>, mut req: Request) -> Result<(), ()> {
     }
     if method == Method::Get && (path == "/v1/health" || path == "/health") {
         let name = lock(state).device_name.clone();
-        return send_json(req, 200, json!({ "ok": true, "kind": HUB_KIND, "name": name }));
+        return send_json(
+            req,
+            200,
+            json!({ "ok": true, "kind": HUB_KIND, "name": name }),
+        );
     }
     if method == Method::Post && path == "/v1/pair" {
         let body = match read_json(&mut req) {
@@ -98,7 +109,10 @@ fn handle(state: &Arc<Mutex<HubState>>, mut req: Request) -> Result<(), ()> {
         let mut st = lock(state);
         let code = body.get("code").and_then(|v| v.as_str()).unwrap_or("");
         let device_id = body.get("deviceId").and_then(|v| v.as_str()).unwrap_or("");
-        let device_name = body.get("deviceName").and_then(|v| v.as_str()).unwrap_or("Computer");
+        let device_name = body
+            .get("deviceName")
+            .and_then(|v| v.as_str())
+            .unwrap_or("Computer");
         let result = st.pair_with(code, device_id, device_name);
         let hub_id = st.device_id.clone();
         let hub_name = st.device_name.clone();
@@ -156,7 +170,11 @@ fn handle(state: &Arc<Mutex<HubState>>, mut req: Request) -> Result<(), ()> {
         let peers: Vec<Value> = std::iter::once(json!({
             "id": st.device_id, "name": st.device_name, "role": "hub"
         }))
-        .chain(st.peers.iter().map(|p| json!({ "id": p.id, "name": p.name, "role": "peer" })))
+        .chain(
+            st.peers
+                .iter()
+                .map(|p| json!({ "id": p.id, "name": p.name, "role": "peer" })),
+        )
         .collect();
         let body = json!({
             "ok": true,
@@ -176,10 +194,14 @@ fn handle(state: &Arc<Mutex<HubState>>, mut req: Request) -> Result<(), ()> {
             ok: bool,
             snapshot: Option<&'a Value>,
         }
-        return send_json(req, 200, Body {
-            ok: true,
-            snapshot: snapshot.as_deref(),
-        });
+        return send_json(
+            req,
+            200,
+            Body {
+                ok: true,
+                snapshot: snapshot.as_deref(),
+            },
+        );
     }
     if method == Method::Put && path == "/v1/snapshot" {
         drop(st);
@@ -229,7 +251,11 @@ fn handle(state: &Arc<Mutex<HubState>>, mut req: Request) -> Result<(), ()> {
     if method == Method::Get && path == "/v1/inhabit" {
         if grokhub_core::is_phone_name(&peer.name) {
             drop(st);
-            return send_json(req, 403, json!({ "ok": false, "error": "Phones can't inhabit." }));
+            return send_json(
+                req,
+                403,
+                json!({ "ok": false, "error": "Phones can't inhabit." }),
+            );
         }
         let bundle = st.claim_inhabit(&peer);
         drop(st);
@@ -264,13 +290,21 @@ fn handle(state: &Arc<Mutex<HubState>>, mut req: Request) -> Result<(), ()> {
             ok: bool,
             frame: Option<&'a grokhub_core::PresenceFrame>,
         }
-        return send_json(req, 200, Body {
-            ok: true,
-            frame: frame.as_deref(),
-        });
+        return send_json(
+            req,
+            200,
+            Body {
+                ok: true,
+                frame: frame.as_deref(),
+            },
+        );
     }
     drop(st);
-    send_json(req, 404, json!({ "ok": false, "error": "unknown hub route" }))
+    send_json(
+        req,
+        404,
+        json!({ "ok": false, "error": "unknown hub route" }),
+    )
 }
 
 fn url_path(url: &str) -> String {
@@ -300,13 +334,20 @@ fn bearer(req: &Request) -> String {
 /// The hub state, even after a handler panicked holding it: one bad request must not
 /// turn every later one into a dropped connection.
 fn lock(state: &Mutex<HubState>) -> std::sync::MutexGuard<'_, HubState> {
-    state.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    state
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 /// The body as JSON. An empty body reads as `{}`; anything else that isn't JSON is a 400.
 fn read_json(req: &mut Request) -> Result<Value, &'static str> {
     let mut buf = Vec::new();
-    if req.as_reader().take(MAX_BODY as u64 + 1).read_to_end(&mut buf).is_err() {
+    if req
+        .as_reader()
+        .take(MAX_BODY as u64 + 1)
+        .read_to_end(&mut buf)
+        .is_err()
+    {
         return Err("Couldn't read the request body.");
     }
     if buf.len() > MAX_BODY {
@@ -326,7 +367,10 @@ fn reject_body(req: Request, error: &str) -> Result<(), ()> {
 fn cors_headers() -> Vec<Header> {
     [
         ("access-control-allow-origin", "*"),
-        ("access-control-allow-headers", "authorization, content-type"),
+        (
+            "access-control-allow-headers",
+            "authorization, content-type",
+        ),
         ("access-control-allow-methods", "GET,POST,PUT,OPTIONS"),
         ("cache-control", "no-store"),
     ]
@@ -384,16 +428,12 @@ mod tests {
         let port = serve_background(state.clone(), 0).expect("bind");
         std::thread::sleep(std::time::Duration::from_millis(40));
 
-        let (st_h, _, body) = http(
-            port,
-            "GET /v1/health HTTP/1.0\r\nHost: 127.0.0.1\r\n\r\n",
-        );
+        let (st_h, _, body) = http(port, "GET /v1/health HTTP/1.0\r\nHost: 127.0.0.1\r\n\r\n");
         assert_eq!(st_h, 200);
         assert!(String::from_utf8_lossy(&body).contains(HUB_KIND));
 
-        let pair_body = format!(
-            r#"{{"code":"{code}","deviceId":"d-test","deviceName":"cabin-2"}}"#
-        );
+        let pair_body =
+            format!(r#"{{"code":"{code}","deviceId":"d-test","deviceName":"cabin-2"}}"#);
         let req = format!(
             "POST /v1/pair HTTP/1.0\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{pair_body}",
             pair_body.len()
@@ -429,7 +469,8 @@ mod tests {
         let state = Arc::new(Mutex::new(st));
         let port = serve_background(state, 0).expect("bind");
         std::thread::sleep(std::time::Duration::from_millis(40));
-        let pair_body = format!(r#"{{"code":"{code}","deviceId":"d-cabin","deviceName":"cabin-2"}}"#);
+        let pair_body =
+            format!(r#"{{"code":"{code}","deviceId":"d-cabin","deviceName":"cabin-2"}}"#);
         let req = format!(
             "POST /v1/pair HTTP/1.0\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{pair_body}",
             pair_body.len()
@@ -451,7 +492,12 @@ mod tests {
                 "{method} {path} HTTP/1.0\r\nHost: 127.0.0.1\r\nAuthorization: Bearer {token}\r\nContent-Length: 0\r\n\r\n"
             );
             let (status, _, body) = http(port, &req);
-            assert_eq!(status, 404, "{method} {path}: {}", String::from_utf8_lossy(&body));
+            assert_eq!(
+                status,
+                404,
+                "{method} {path}: {}",
+                String::from_utf8_lossy(&body)
+            );
             assert_eq!(
                 String::from_utf8_lossy(&body),
                 r#"{"error":"unknown hub route","ok":false}"#,
@@ -520,9 +566,8 @@ mod tests {
         let state = Arc::new(Mutex::new(st));
         let port = serve_background(state, 0).expect("bind");
         std::thread::sleep(std::time::Duration::from_millis(40));
-        let pair_body = format!(
-            r#"{{"code":"{code}","deviceId":"d-cabin","deviceName":"cabin-2"}}"#
-        );
+        let pair_body =
+            format!(r#"{{"code":"{code}","deviceId":"d-cabin","deviceName":"cabin-2"}}"#);
         let req = format!(
             "POST /v1/pair HTTP/1.0\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{pair_body}",
             pair_body.len()
@@ -546,7 +591,12 @@ mod tests {
     }
 
     /// Pair `name` under `id` on a fresh code; the status and the token, if any.
-    fn pair_as(state: &Arc<Mutex<HubState>>, port: u16, id: &str, name: &str) -> (u16, Option<String>) {
+    fn pair_as(
+        state: &Arc<Mutex<HubState>>,
+        port: u16,
+        id: &str,
+        name: &str,
+    ) -> (u16, Option<String>) {
         let code = lock(state).rotate_pair().code;
         let body = format!(r#"{{"code":"{code}","deviceId":"{id}","deviceName":"{name}"}}"#);
         let req = format!(
@@ -589,7 +639,10 @@ mod tests {
             let (status, token) = pair_as(&state, port, "d-phone", name);
             assert_eq!((status, token), (403, None), "{name}");
         }
-        assert!(state.lock().unwrap().peers.is_empty(), "no phone may be registered");
+        assert!(
+            state.lock().unwrap().peers.is_empty(),
+            "no phone may be registered"
+        );
         // Not a whole word: still a computer.
         assert_eq!(pair_as(&state, port, "d-mac", "Megaphone Mac").0, 200);
     }
@@ -608,16 +661,26 @@ mod tests {
         let (status, body) = claim(port, "phone-token-abcdefghijklmnop");
         assert_eq!(status, 403, "{body}");
         assert_eq!(body["bundle"], Value::Null);
-        assert!(state.lock().unwrap().inhabit.is_some(), "the bundle stays staged");
+        assert!(
+            state.lock().unwrap().inhabit.is_some(),
+            "the bundle stays staged"
+        );
     }
 
     #[test]
     fn a_peer_copying_the_target_name_gets_nothing() {
         let (state, port) = hub();
-        let target = pair_as(&state, port, "d-target", "studio-pc").1.expect("target pairs");
-        let copycat = pair_as(&state, port, "d-copycat", "STUDIO-PC").1.expect("copycat pairs");
+        let target = pair_as(&state, port, "d-target", "studio-pc")
+            .1
+            .expect("target pairs");
+        let copycat = pair_as(&state, port, "d-copycat", "STUDIO-PC")
+            .1
+            .expect("copycat pairs");
         stage(&state, Some("d-target"), Some("studio-pc"));
-        assert_eq!(claim(port, &copycat), (200, json!({ "ok": true, "bundle": null })));
+        assert_eq!(
+            claim(port, &copycat),
+            (200, json!({ "ok": true, "bundle": null }))
+        );
         assert!(state.lock().unwrap().inhabit.is_some());
         // A bundle naming only a name (an older sender) goes to nobody, the target included.
         stage(&state, None, Some("studio-pc"));
@@ -625,7 +688,10 @@ mod tests {
         assert_eq!(claim(port, &target).1["bundle"], Value::Null);
         stage(&state, Some("d-target"), Some("studio-pc"));
         let (status, body) = claim(port, &target);
-        assert_eq!((status, body["bundle"]["soul"].as_str()), (200, Some("stay kind")));
+        assert_eq!(
+            (status, body["bundle"]["soul"].as_str()),
+            (200, Some("stay kind"))
+        );
         assert!(state.lock().unwrap().inhabit.is_none(), "claimed once");
     }
 
@@ -635,10 +701,20 @@ mod tests {
         let a = pair_as(&state, port, "d-a", "cabin-a").1.expect("a pairs");
         let b = pair_as(&state, port, "d-b", "cabin-b").1.expect("b pairs");
         stage(&state, None, None);
-        assert_eq!(claim(port, &a), (200, json!({ "ok": true, "bundle": null })));
-        assert_eq!(claim(port, &b), (200, json!({ "ok": true, "bundle": null })));
+        assert_eq!(
+            claim(port, &a),
+            (200, json!({ "ok": true, "bundle": null }))
+        );
+        assert_eq!(
+            claim(port, &b),
+            (200, json!({ "ok": true, "bundle": null }))
+        );
         stage(&state, Some(""), None);
-        assert_eq!(claim(port, &a).1["bundle"], Value::Null, "an empty id names nobody");
+        assert_eq!(
+            claim(port, &a).1["bundle"],
+            Value::Null,
+            "an empty id names nobody"
+        );
         assert!(state.lock().unwrap().inhabit.is_some());
     }
 
@@ -667,14 +743,22 @@ mod tests {
             .nth(1)
             .and_then(|s| s.split("Method::Post && path == \"/v1/inhabit\"").next())
             .expect("PUT /v1/snapshot");
-        let drop_at = put_snap.find("drop(st)").expect("PUT snapshot must drop before read_json");
-        let read_at = put_snap.find("read_json").expect("PUT snapshot reads a body");
+        let drop_at = put_snap
+            .find("drop(st)")
+            .expect("PUT snapshot must drop before read_json");
+        let read_at = put_snap
+            .find("read_json")
+            .expect("PUT snapshot reads a body");
         assert!(
             drop_at < read_at,
             "PUT snapshot must not read the body while holding the hub lock: {put_snap}"
         );
-        let clone_at = put_snap.find("snapshot.clone()").expect("PUT clones the Arc");
-        let merge_at = put_snap.find("merge_put_snapshot").expect("PUT merges off lock");
+        let clone_at = put_snap
+            .find("snapshot.clone()")
+            .expect("PUT clones the Arc");
+        let merge_at = put_snap
+            .find("merge_put_snapshot")
+            .expect("PUT merges off lock");
         assert!(
             read_at < clone_at && clone_at < merge_at && !put_snap.contains(".put_snapshot("),
             "PUT snapshot must not from_value 8MB under hub.lock(): {put_snap}"
@@ -697,14 +781,22 @@ mod tests {
             .nth(1)
             .and_then(|s| s.split("Method::Get && path == \"/v1/frame\"").next())
             .expect("POST /v1/frame");
-        let drop_at = post_frame.find("drop(st)").expect("POST frame must drop before read_json");
-        let read_at = post_frame.find("read_json").expect("POST frame reads a body");
+        let drop_at = post_frame
+            .find("drop(st)")
+            .expect("POST frame must drop before read_json");
+        let read_at = post_frame
+            .find("read_json")
+            .expect("POST frame reads a body");
         assert!(
             drop_at < read_at,
             "POST frame must not read a JPEG while holding the hub lock: {post_frame}"
         );
-        let parse = post_frame.find("store_frame").expect("POST parses the JPEG");
-        let relock = post_frame.rfind("lock(state)").expect("POST re-locks to install");
+        let parse = post_frame
+            .find("store_frame")
+            .expect("POST parses the JPEG");
+        let relock = post_frame
+            .rfind("lock(state)")
+            .expect("POST re-locks to install");
         assert!(
             read_at < parse && parse < relock && post_frame.contains("install_frame"),
             "POST frame must not decode a 400KB JPEG under hub.lock(): {post_frame}"
@@ -714,8 +806,12 @@ mod tests {
             .nth(1)
             .and_then(|s| s.split("Method::Get && path == \"/v1/inhabit\"").next())
             .expect("POST /v1/inhabit");
-        let drop_at = inhabit.find("drop(st)").expect("POST inhabit must drop before read_json");
-        let read_at = inhabit.find("read_json").expect("POST inhabit reads a body");
+        let drop_at = inhabit
+            .find("drop(st)")
+            .expect("POST inhabit must drop before read_json");
+        let read_at = inhabit
+            .find("read_json")
+            .expect("POST inhabit reads a body");
         assert!(
             drop_at < read_at,
             "POST inhabit must not read the bundle while holding the hub lock: {inhabit}"
@@ -741,9 +837,15 @@ mod tests {
         let pair = src
             .split("path == \"/v1/pair\"")
             .nth(1)
-            .and_then(|s| s.split("fn bearer").next().or_else(|| s.split("let token = bearer").next()))
+            .and_then(|s| {
+                s.split("fn bearer")
+                    .next()
+                    .or_else(|| s.split("let token = bearer").next())
+            })
             .expect("POST /v1/pair");
-        let drop_at = pair.find("drop(st)").expect("POST pair must drop before send_json");
+        let drop_at = pair
+            .find("drop(st)")
+            .expect("POST pair must drop before send_json");
         let send_at = pair.find("send_json").expect("POST pair sends");
         assert!(
             drop_at < send_at,
@@ -789,7 +891,9 @@ mod tests {
     #[test]
     fn malformed_requests_get_a_4xx_not_a_panic() {
         let (state, port) = hub();
-        let token = pair_as(&state, port, "d-cabin", "cabin-2").1.expect("pairs");
+        let token = pair_as(&state, port, "d-cabin", "cabin-2")
+            .1
+            .expect("pairs");
         state.lock().unwrap().snapshot = Some(Arc::new(json!({ "kept": true })));
         let bodies: [&[u8]; 6] = [
             b"{",
@@ -833,7 +937,11 @@ mod tests {
             Some(&json!({ "kept": true })),
             "a bad PUT must not replace the snapshot"
         );
-        assert_eq!(state.lock().unwrap().peers.len(), 1, "a bad pair registers nobody");
+        assert_eq!(
+            state.lock().unwrap().peers.len(),
+            1,
+            "a bad pair registers nobody"
+        );
         // A bare request line with no headers and an unknown method still gets an answer.
         let (status, _, _) = http(port, "BREW /v1/pair HTTP/1.0\r\n\r\n");
         assert!((400..500).contains(&status), "{status}");
@@ -856,7 +964,10 @@ mod tests {
         assert_eq!(token.0, 200);
         let (status, _, _) = http(
             port,
-            &format!("GET /v1/status HTTP/1.0\r\nHost: 127.0.0.1\r\nAuthorization: Bearer {}\r\n\r\n", token.1.unwrap()),
+            &format!(
+                "GET /v1/status HTTP/1.0\r\nHost: 127.0.0.1\r\nAuthorization: Bearer {}\r\n\r\n",
+                token.1.unwrap()
+            ),
         );
         assert_eq!(status, 200);
     }
@@ -866,7 +977,10 @@ mod tests {
         let count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let a = InFlight::enter(&count, 2).expect("first");
         let b = InFlight::enter(&count, 2).expect("second");
-        assert!(InFlight::enter(&count, 2).is_none(), "a third waits for a free slot");
+        assert!(
+            InFlight::enter(&count, 2).is_none(),
+            "a third waits for a free slot"
+        );
         drop(a);
         let c = InFlight::enter(&count, 2).expect("a freed slot is reused");
         let panicked = std::thread::spawn(move || {
@@ -875,7 +989,11 @@ mod tests {
         })
         .join();
         assert!(panicked.is_err());
-        assert_eq!(count.load(std::sync::atomic::Ordering::SeqCst), 1, "a panic still frees its slot");
+        assert_eq!(
+            count.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "a panic still frees its slot"
+        );
         drop(b);
         assert_eq!(count.load(std::sync::atomic::Ordering::SeqCst), 0);
     }

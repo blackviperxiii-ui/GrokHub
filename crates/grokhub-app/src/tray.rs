@@ -175,11 +175,7 @@ pub fn ignore_close_while_hidden(window_visible: bool, close_requested: bool) ->
 
 /// Tray Quit / restart set `want_quit` then Close. A hidden cabin must not
 /// CancelClose that — otherwise Quit leaves a process with no window.
-pub fn ignore_close_request(
-    window_visible: bool,
-    close_requested: bool,
-    want_quit: bool,
-) -> bool {
+pub fn ignore_close_request(window_visible: bool, close_requested: bool, want_quit: bool) -> bool {
     !want_quit && ignore_close_while_hidden(window_visible, close_requested)
 }
 
@@ -931,8 +927,14 @@ mod tests {
             HiddenTick::StayHidden,
             "titlebar × hides after the raise check; next frame is still focused"
         );
-        assert_eq!(hidden_window_tick(true, false, false, false), HiddenTick::StayHidden);
-        assert_eq!(hidden_window_tick(false, true, false, true), HiddenTick::StayHidden);
+        assert_eq!(
+            hidden_window_tick(true, false, false, false),
+            HiddenTick::StayHidden
+        );
+        assert_eq!(
+            hidden_window_tick(false, true, false, true),
+            HiddenTick::StayHidden
+        );
         assert!(
             !remember_hidden_unfocus(true, false),
             "a hide that never lost focus must not arm a taskbar raise"
@@ -965,11 +967,11 @@ mod tests {
         ));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
+        assert_eq!(claim_cabin_at(&dir, 11, |_| false), CabinClaim::ThisProcess);
         assert_eq!(
-            claim_cabin_at(&dir, 11, |_| false),
-            CabinClaim::ThisProcess
+            fs::read_to_string(cabin_pid_path(&dir)).unwrap().trim(),
+            "11"
         );
-        assert_eq!(fs::read_to_string(cabin_pid_path(&dir)).unwrap().trim(), "11");
         assert!(!cabin_raise_path(&dir).exists());
         assert_eq!(
             claim_cabin_at(&dir, 22, |pid| pid == 11),
@@ -982,10 +984,7 @@ mod tests {
             CabinClaim::ThisProcess,
             "a dead pid file must not block a new cabin"
         );
-        assert_eq!(
-            claim_cabin_at(&dir, 44, |_| false),
-            CabinClaim::ThisProcess
-        );
+        assert_eq!(claim_cabin_at(&dir, 44, |_| false), CabinClaim::ThisProcess);
         release_cabin_claim_at(&dir, 99);
         assert_eq!(
             fs::read_to_string(cabin_pid_path(&dir)).unwrap().trim(),
@@ -1056,11 +1055,9 @@ mod tests {
 
     #[test]
     fn windows_ico_matches_linux_hicolor() {
-        let ico = image::load_from_memory(include_bytes!(
-            "../../../packaging/windows/grokhub.ico"
-        ))
-        .expect("grokhub.ico")
-        .into_rgba8();
+        let ico = image::load_from_memory(include_bytes!("../../../packaging/windows/grokhub.ico"))
+            .expect("grokhub.ico")
+            .into_rgba8();
         let linux = image::load_from_memory(include_bytes!(
             "../../../packaging/icons/hicolor/256x256/apps/grokhub.png"
         ))
@@ -1086,7 +1083,10 @@ mod tests {
             tray_needed_at_launch(false),
             "A visible cabin must already have a tray icon"
         );
-        assert!(tray_needed_at_launch(true), "--agent starts hidden with a tray");
+        assert!(
+            tray_needed_at_launch(true),
+            "--agent starts hidden with a tray"
+        );
         std::env::set_var("GROKHUB_TRAY", "0");
         assert!(!tray_needed_at_launch(true));
         match prev {

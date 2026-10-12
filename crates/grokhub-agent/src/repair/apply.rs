@@ -19,12 +19,16 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde_json::json;
 
-use crate::harness::{self, AccessMode, GateOutcome, HardClass, Origin, Span, UndoAsk, VERIFY_TOOL};
+use crate::harness::{
+    self, AccessMode, GateOutcome, HardClass, Origin, Span, UndoAsk, VERIFY_TOOL,
+};
 
 use super::fix::{gate_text, FixPlan, StepClass};
 use super::interpret::Severity;
 use super::probes::{Os, ProbeId};
-use super::restore::{backup_files, detect_backends, restore_files, FileBackup, RestorePoint, Snapshot};
+use super::restore::{
+    backup_files, detect_backends, restore_files, FileBackup, RestorePoint, Snapshot,
+};
 use super::DiagnoseReport;
 
 /// Span tool for the restore point, written before the first step.
@@ -58,9 +62,17 @@ pub struct ApplyCtx<'a> {
 pub enum Action {
     /// Send `prompt` to Grok Build. `approved` when the user clicked Approve
     /// on this step's hard card, so GB's own Allow card asks once.
-    Gb { prompt: String, command: String, approved: bool },
+    Gb {
+        prompt: String,
+        command: String,
+        approved: bool,
+    },
     /// Park a hard card for this step and wait for the click.
-    Park { class: HardClass, command: String, plain: String },
+    Park {
+        class: HardClass,
+        command: String,
+        plain: String,
+    },
     /// Re-run this probe off the UI thread, then call [`ApplyRun::record_verify`].
     Verify(ProbeId),
     /// Nothing more to do. [`ApplyRun::result_text`] says how it went.
@@ -115,7 +127,8 @@ impl ApplyRun {
     pub fn begin(ctx: &ApplyCtx<'_>, plan: FixPlan) -> Result<Self, String> {
         let args = json!({ "finding": plan.finding.probe.key() }).to_string();
         let refuse = |why: &str| {
-            let span = Span::deny(ctx.session_id, APPLY_TOOL, &args, why, "soft").from_origin(Origin::Repair);
+            let span = Span::deny(ctx.session_id, APPLY_TOOL, &args, why, "soft")
+                .from_origin(Origin::Repair);
             let _ = harness::append_span(ctx.config_dir, &span);
             why.to_string()
         };
@@ -123,18 +136,37 @@ impl ApplyRun {
             return Err(refuse(UNATTENDED));
         }
         if plan.runnable() == 0 {
-            return Err(refuse("This fix has no step I'm allowed to run, so I only explained what to do."));
+            return Err(refuse(
+                "This fix has no step I'm allowed to run, so I only explained what to do.",
+            ));
         }
         let id = run_id();
-        let files = backup_files(ctx.config_dir, &id, &plan.touches()).map_err(|e| refuse(&format!("I couldn't take a backup first, so I changed nothing: {e}")))?;
+        let files = backup_files(ctx.config_dir, &id, &plan.touches()).map_err(|e| {
+            refuse(&format!(
+                "I couldn't take a backup first, so I changed nothing: {e}"
+            ))
+        })?;
         let snapshot = detect_backends(ctx.os, ctx.has_bin)
             .first()
-            .map(|b| Snapshot { backend: *b, label: format!("grokhub-repair-{id}") });
+            .map(|b| Snapshot {
+                backend: *b,
+                label: format!("grokhub-repair-{id}"),
+            });
         let mut queue = Vec::new();
         if let Some(cmd) = snapshot.as_ref().and_then(|s| s.create_step()) {
-            queue.push(Queued { gate: cmd.clone(), command: cmd, plain: "Save a system snapshot first.".into(), elevated: true, restore: true });
+            queue.push(Queued {
+                gate: cmd.clone(),
+                command: cmd,
+                plain: "Save a system snapshot first.".into(),
+                elevated: true,
+                restore: true,
+            });
         }
-        for s in plan.steps.iter().filter(|s| s.class != StepClass::HardFloor) {
+        for s in plan
+            .steps
+            .iter()
+            .filter(|s| s.class != StepClass::HardFloor)
+        {
             queue.push(Queued {
                 command: s.command.clone(),
                 gate: gate_text(&s.command, &s.touches),
@@ -166,7 +198,15 @@ impl ApplyRun {
             "finding": run.plan.finding.probe.key(),
         })
         .to_string();
-        let mut span = Span::soft_allow(&run.session_id, RESTORE_TOOL, &args, "taken", "restore point before fixing", run.access, "repair");
+        let mut span = Span::soft_allow(
+            &run.session_id,
+            RESTORE_TOOL,
+            &args,
+            "taken",
+            "restore point before fixing",
+            run.access,
+            "repair",
+        );
         span.decision = "restore".into();
         run.write(span);
         Ok(run)
@@ -203,25 +243,50 @@ impl ApplyRun {
             let args = json!({ "step": n, "command": q.command }).to_string();
             match harness::decide(harness::Step::Repair { command: &q.gate }) {
                 GateOutcome::Refuse { reason } => {
-                    self.write(Span::deny(&self.session_id, REPAIR_TOOL, &args, &reason, "floor"));
+                    self.write(Span::deny(
+                        &self.session_id,
+                        REPAIR_TOOL,
+                        &args,
+                        &reason,
+                        "floor",
+                    ));
                     self.cursor += 1;
                 }
                 GateOutcome::Park { hard, .. } if self.approved != Some(self.cursor) => {
                     let class = hard.unwrap_or(HardClass::IrreversibleOs);
                     self.write(Span::hard_park(&self.session_id, REPAIR_TOOL, &args, class));
                     self.phase = Phase::AwaitCard;
-                    return Action::Park { class, command: q.command, plain: q.plain };
+                    return Action::Park {
+                        class,
+                        command: q.command,
+                        plain: q.plain,
+                    };
                 }
                 hit => {
                     let approved = self.approved == Some(self.cursor);
-                    let mut span = Span::soft_allow(&self.session_id, REPAIR_TOOL, &args, "sent to Grok Build", &q.plain, self.access, "grok-build");
-                    if let GateOutcome::Park { hard: Some(class), .. } = hit {
+                    let mut span = Span::soft_allow(
+                        &self.session_id,
+                        REPAIR_TOOL,
+                        &args,
+                        "sent to Grok Build",
+                        &q.plain,
+                        self.access,
+                        "grok-build",
+                    );
+                    if let GateOutcome::Park {
+                        hard: Some(class), ..
+                    } = hit
+                    {
                         span.approval_class = class.as_str().into();
                         span.hard_approved = true;
                     }
                     self.write(span.on_path("B"));
                     self.phase = Phase::AwaitGb;
-                    return Action::Gb { prompt: gb_prompt(&q.command, n, total, q.elevated), command: q.command, approved };
+                    return Action::Gb {
+                        prompt: gb_prompt(&q.command, n, total, q.elevated),
+                        command: q.command,
+                        approved,
+                    };
                 }
             }
         }
@@ -241,10 +306,25 @@ impl ApplyRun {
             if !ok && q.restore {
                 // The file backup still holds; there is just no snapshot to go back to.
                 self.snapshot = None;
-                self.write(Span::deny(&self.session_id, RESTORE_TOOL, &args, "failed: no system snapshot, file backup kept", "soft"));
+                self.write(Span::deny(
+                    &self.session_id,
+                    RESTORE_TOOL,
+                    &args,
+                    "failed: no system snapshot, file backup kept",
+                    "soft",
+                ));
             } else if !ok {
-                self.write(Span::deny(&self.session_id, REPAIR_TOOL, &args, "failed", "soft"));
-                self.stopped = Some(format!("A step didn't work ({}), so I stopped there.", q.plain.trim_end_matches('.')));
+                self.write(Span::deny(
+                    &self.session_id,
+                    REPAIR_TOOL,
+                    &args,
+                    "failed",
+                    "soft",
+                ));
+                self.stopped = Some(format!(
+                    "A step didn't work ({}), so I stopped there.",
+                    q.plain.trim_end_matches('.')
+                ));
             }
         }
         self.cursor += 1;
@@ -261,7 +341,8 @@ impl ApplyRun {
         if approve {
             self.approved = Some(self.cursor);
         } else {
-            self.stopped = Some("You said no to a step, so I stopped there. Nothing after it ran.".into());
+            self.stopped =
+                Some("You said no to a step, so I stopped there. Nothing after it ran.".into());
         }
         self.phase = Phase::Ready;
     }
@@ -281,20 +362,38 @@ impl ApplyRun {
     /// it found is gone.
     pub fn record_verify(&mut self, report: &DiagnoseReport) -> bool {
         let probe = self.plan.finding.probe;
-        let still = report.findings.iter().find(|f| f.probe == probe && f.severity >= Severity::Warning);
+        let still = report
+            .findings
+            .iter()
+            .find(|f| f.probe == probe && f.severity >= Severity::Warning);
         let pass = report.ask.is_none() && report.ran.contains(&probe) && still.is_none();
         self.verify_note = match (still, report.findings.iter().find(|f| f.probe == probe)) {
             (Some(f), _) => f.plain.clone(),
             (None, Some(f)) if pass => f.plain.clone(),
-            _ => report.ask.clone().unwrap_or_else(|| "I couldn't check it again.".into()),
+            _ => report
+                .ask
+                .clone()
+                .unwrap_or_else(|| "I couldn't check it again.".into()),
         };
         let args = json!({ "probe": probe.key(), "restore_ref": self.restore_ref() }).to_string();
         let result = if pass { "pass" } else { "fail" };
-        self.write(Span::soft_allow(&self.session_id, VERIFY_TOOL, &args, result, &self.verify_note, self.access, "repair"));
+        self.write(Span::soft_allow(
+            &self.session_id,
+            VERIFY_TOOL,
+            &args,
+            result,
+            &self.verify_note,
+            self.access,
+            "repair",
+        ));
         self.verified = Some(pass);
         self.phase = Phase::Ready;
         let text = self.result_text();
-        let claim = if pass { format!("{text}\nVERIFY_OK\nGOAL_COMPLETE") } else { text };
+        let claim = if pass {
+            format!("{text}\nVERIFY_OK\nGOAL_COMPLETE")
+        } else {
+            text
+        };
         self.write(Span::reply(&self.session_id, &claim, &[]));
         pass
     }
@@ -305,8 +404,14 @@ impl ApplyRun {
             return format!("{why} Undo fix puts back what I changed.");
         }
         match self.verified {
-            Some(true) => format!("Fixed. I checked again: {} If anything seems off, press Undo fix.", self.verify_note),
-            Some(false) => format!("That didn't fix it. I checked again: {} Undo fix puts back what I changed.", self.verify_note),
+            Some(true) => format!(
+                "Fixed. I checked again: {} If anything seems off, press Undo fix.",
+                self.verify_note
+            ),
+            Some(false) => format!(
+                "That didn't fix it. I checked again: {} Undo fix puts back what I changed.",
+                self.verify_note
+            ),
             None => "Working on the fix…".into(),
         }
     }
@@ -316,14 +421,30 @@ impl ApplyRun {
         let report = restore_files(&self.files, ask);
         self.undone = true;
         let args = json!({ "restore_ref": self.restore_ref() }).to_string();
-        let result = format!("restored {}, removed {}, failed {}", report.restored.len(), report.removed.len(), report.failed.len());
-        let mut span = Span::soft_allow(&self.session_id, UNDO_TOOL, &args, &result, "undo fix", self.access, "repair");
+        let result = format!(
+            "restored {}, removed {}, failed {}",
+            report.restored.len(),
+            report.removed.len(),
+            report.failed.len()
+        );
+        let mut span = Span::soft_allow(
+            &self.session_id,
+            UNDO_TOOL,
+            &args,
+            &result,
+            "undo fix",
+            self.access,
+            "repair",
+        );
         span.decision = "undo".into();
         self.write(span);
         let mut out = match report.restored.len() + report.removed.len() {
-            0 => "Undone. This fix didn't change any files, so there was nothing to put back.".to_string(),
+            0 => "Undone. This fix didn't change any files, so there was nothing to put back."
+                .to_string(),
             1 => "Undone. I put back the one file this fix changed, exactly as it was.".to_string(),
-            n => format!("Undone. I put back the {n} files this fix changed, exactly as they were."),
+            n => {
+                format!("Undone. I put back the {n} files this fix changed, exactly as they were.")
+            }
         };
         for (path, copy) in &report.failed {
             out.push_str(&format!(
@@ -366,6 +487,9 @@ pub fn step_ok(reply: &str) -> bool {
 /// never share a backup folder.
 fn run_id() -> String {
     static NEXT: AtomicU32 = AtomicU32::new(0);
-    let ms = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0);
+    let ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
     format!("{ms}-{}", NEXT.fetch_add(1, Ordering::Relaxed))
 }

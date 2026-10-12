@@ -25,7 +25,12 @@ pub fn paint_icon(ui: &mut egui::Ui, icon: TileIcon, size: f32) {
     let fill = crate::theme::elevated();
     let stroke = Stroke::new(crate::theme::ICON_STROKE, crate::theme::fg());
     painter.rect_filled(rect, 6.0, fill);
-    painter.rect_stroke(rect, 6.0, Stroke::new(1.0_f32, crate::theme::border()), egui::StrokeKind::Middle);
+    painter.rect_stroke(
+        rect,
+        6.0,
+        Stroke::new(1.0_f32, crate::theme::border()),
+        egui::StrokeKind::Middle,
+    );
     let r = rect.shrink(size * 0.22);
     let c = r.center();
     let w = r.width();
@@ -51,7 +56,10 @@ pub fn paint_icon(ui: &mut egui::Ui, icon: TileIcon, size: f32) {
             painter.line_segment([p, Pos2::new(p.x + 5.0, p.y + 4.0)], stroke);
             painter.line_segment([p, Pos2::new(p.x + 5.0, p.y - 4.0)], stroke);
             painter.line_segment(
-                [Pos2::new(p.x + 8.0, r.bottom() - 6.0), Pos2::new(r.right() - 6.0, r.bottom() - 6.0)],
+                [
+                    Pos2::new(p.x + 8.0, r.bottom() - 6.0),
+                    Pos2::new(r.right() - 6.0, r.bottom() - 6.0),
+                ],
                 stroke,
             );
         }
@@ -114,18 +122,27 @@ pub fn paint_icon(ui: &mut egui::Ui, icon: TileIcon, size: f32) {
                 stroke,
             );
             painter.line_segment(
-                [Pos2::new(c.x - 1.0, c.y + 4.0), Pos2::new(c.x + 6.0, c.y - 4.0)],
+                [
+                    Pos2::new(c.x - 1.0, c.y + 4.0),
+                    Pos2::new(c.x + 6.0, c.y - 4.0),
+                ],
                 stroke,
             );
         }
         TileIcon::Board => {
             painter.rect_stroke(r, 3.0, stroke, egui::StrokeKind::Middle);
             painter.line_segment(
-                [Pos2::new(r.center().x, r.top()), Pos2::new(r.center().x, r.bottom())],
+                [
+                    Pos2::new(r.center().x, r.top()),
+                    Pos2::new(r.center().x, r.bottom()),
+                ],
                 stroke,
             );
             painter.line_segment(
-                [Pos2::new(r.left(), r.center().y), Pos2::new(r.right(), r.center().y)],
+                [
+                    Pos2::new(r.left(), r.center().y),
+                    Pos2::new(r.right(), r.center().y),
+                ],
                 stroke,
             );
         }
@@ -142,11 +159,7 @@ pub fn paint_icon(ui: &mut egui::Ui, icon: TileIcon, size: f32) {
         }
         TileIcon::Moon => {
             painter.circle_filled(c, w * 0.32, crate::theme::fg());
-            painter.circle_filled(
-                Pos2::new(c.x + w * 0.14, c.y - w * 0.08),
-                w * 0.26,
-                fill,
-            );
+            painter.circle_filled(Pos2::new(c.x + w * 0.14, c.y - w * 0.08), w * 0.26, fill);
         }
         TileIcon::Connect => {
             painter.circle_stroke(Pos2::new(c.x - 5.0, c.y), 4.0, stroke);
@@ -248,7 +261,12 @@ pub fn paint_rail_icon(ui: &mut egui::Ui, icon: RailIcon, size: f32, color: egui
     paint_rail_icon_at(ui.painter(), rect, icon, color);
 }
 
-pub fn paint_rail_icon_at(painter: &egui::Painter, rect: egui::Rect, icon: RailIcon, color: egui::Color32) {
+pub fn paint_rail_icon_at(
+    painter: &egui::Painter,
+    rect: egui::Rect,
+    icon: RailIcon,
+    color: egui::Color32,
+) {
     let c = rect.center();
     let w = rect.width();
     let stroke = Stroke::new(crate::theme::ICON_STROKE, color);
@@ -267,11 +285,17 @@ pub fn paint_rail_icon_at(painter: &egui::Painter, rect: egui::Rect, icon: RailI
             let r = rect.shrink(w * 0.22);
             painter.rect_stroke(r, 3.0, stroke, egui::StrokeKind::Middle);
             painter.line_segment(
-                [Pos2::new(c.x, r.top() + 3.0), Pos2::new(c.x, r.bottom() - 3.0)],
+                [
+                    Pos2::new(c.x, r.top() + 3.0),
+                    Pos2::new(c.x, r.bottom() - 3.0),
+                ],
                 stroke,
             );
             painter.line_segment(
-                [Pos2::new(r.left() + 3.0, c.y), Pos2::new(r.right() - 3.0, c.y)],
+                [
+                    Pos2::new(r.left() + 3.0, c.y),
+                    Pos2::new(r.right() - 3.0, c.y),
+                ],
                 stroke,
             );
         }
@@ -379,7 +403,10 @@ pub fn paint_rail_icon_at(painter: &egui::Painter, rect: egui::Rect, icon: RailI
         RailIcon::Pin => {
             painter.circle_filled(Pos2::new(c.x, c.y - w * 0.10), w * 0.14, color);
             painter.line_segment(
-                [Pos2::new(c.x, c.y - w * 0.02), Pos2::new(c.x, c.y + w * 0.28)],
+                [
+                    Pos2::new(c.x, c.y - w * 0.02),
+                    Pos2::new(c.x, c.y + w * 0.28),
+                ],
                 stroke,
             );
         }
@@ -404,7 +431,10 @@ pub fn paint_tree_gutter(ui: &mut egui::Ui, depth: u8) {
         );
         if level == depth {
             ui.painter().line_segment(
-                [Pos2::new(x, rect.center().y), Pos2::new(rect.right() - 2.0, rect.center().y)],
+                [
+                    Pos2::new(x, rect.center().y),
+                    Pos2::new(rect.right() - 2.0, rect.center().y),
+                ],
                 stroke,
             );
         }
@@ -676,12 +706,7 @@ pub fn paint_composer_mic(
     let motion = composer_motion(hover_t, press_t, live_t, speak_phase);
     let glyph = risen_glyph(alloc, hover_t, press_t);
     paint_mic_glyph(ui.painter(), glyph, mic_ink(mood, motion.fill), motion);
-    follow_composer_frame(
-        ui,
-        &resp,
-        live,
-        &[hover_t, press_t, live_t, speak_t],
-    );
+    follow_composer_frame(ui, &resp, live, &[hover_t, press_t, live_t, speak_t]);
     name_control(&resp, bar_icon_name(BarIcon::Mic));
     (resp, motion)
 }
@@ -707,10 +732,7 @@ fn spin_about(origin: Pos2, point: Pos2, ang: f32) -> Pos2 {
     let (s, co) = ang.sin_cos();
     let dx = point.x - origin.x;
     let dy = point.y - origin.y;
-    Pos2::new(
-        origin.x + dx * co - dy * s,
-        origin.y + dx * s + dy * co,
-    )
+    Pos2::new(origin.x + dx * co - dy * s, origin.y + dx * s + dy * co)
 }
 
 fn paper_pt(center: Pos2, scale: f32, ang: f32, x: f32, y: f32) -> Pos2 {
@@ -754,7 +776,12 @@ fn paint_paperclip_glyph(
     let end = p(outer_l, outer_end);
     painter.line_segment([start, inner_shoulder], stroke);
     painter.add(egui::epaint::CubicBezierShape::from_points_stroke(
-        [inner_shoulder, p(inner_l, top_i), p(inner_r, top_i), inner_right_top],
+        [
+            inner_shoulder,
+            p(inner_l, top_i),
+            p(inner_r, top_i),
+            inner_right_top,
+        ],
         false,
         egui::Color32::TRANSPARENT,
         stroke,
@@ -872,7 +899,10 @@ pub fn paint_bar_icon(
             painter.circle_filled(c, w * 0.46, crate::theme::send_on());
             let arrow = Stroke::new(1.8_f32, crate::theme::send_on_ink());
             painter.line_segment(
-                [Pos2::new(c.x, c.y + w * 0.16), Pos2::new(c.x, c.y - w * 0.16)],
+                [
+                    Pos2::new(c.x, c.y + w * 0.16),
+                    Pos2::new(c.x, c.y - w * 0.16),
+                ],
                 arrow,
             );
             painter.line_segment(
@@ -895,7 +925,10 @@ pub fn paint_bar_icon(
         BarIcon::ArrowUp => {
             // grok.com Submit: M6 11L12 5M12 5L18 11M12 5V19 square-cap
             painter.line_segment(
-                [Pos2::new(c.x, c.y + w * 0.22), Pos2::new(c.x, c.y - w * 0.22)],
+                [
+                    Pos2::new(c.x, c.y + w * 0.22),
+                    Pos2::new(c.x, c.y - w * 0.22),
+                ],
                 stroke,
             );
             painter.line_segment(
@@ -915,7 +948,10 @@ pub fn paint_bar_icon(
         }
         BarIcon::ArrowDown => {
             painter.line_segment(
-                [Pos2::new(c.x, c.y - w * 0.22), Pos2::new(c.x, c.y + w * 0.22)],
+                [
+                    Pos2::new(c.x, c.y - w * 0.22),
+                    Pos2::new(c.x, c.y + w * 0.22),
+                ],
                 stroke,
             );
             painter.line_segment(
@@ -1061,7 +1097,12 @@ pub fn paint_style_auto(ui: &mut egui::Ui, size: f32, color: egui::Color32) {
     let r = rect.shrink(size * 0.12);
     painter.rect_stroke(r, 2.0, stroke, egui::StrokeKind::Middle);
     let inset = r.shrink(size * 0.10);
-    painter.rect_stroke(inset, 1.0, Stroke::new(1.0_f32, color), egui::StrokeKind::Middle);
+    painter.rect_stroke(
+        inset,
+        1.0,
+        Stroke::new(1.0_f32, color),
+        egui::StrokeKind::Middle,
+    );
 }
 
 pub fn paint_aspect_rect(ui: &mut egui::Ui, aspect: u8, size: f32, color: egui::Color32) {
@@ -1075,7 +1116,12 @@ pub fn paint_aspect_rect(ui: &mut egui::Ui, aspect: u8, size: f32, color: egui::
         4 => (size * 0.78, size * 0.44),
         _ => (size * 0.66, size * 0.66),
     };
-    painter.rect_stroke(egui::Rect::from_center_size(rect.center(), Vec2::new(w, h)), 1.5, stroke, egui::StrokeKind::Middle);
+    painter.rect_stroke(
+        egui::Rect::from_center_size(rect.center(), Vec2::new(w, h)),
+        1.5,
+        stroke,
+        egui::StrokeKind::Middle,
+    );
 }
 
 pub fn paint_menu_caret(ui: &mut egui::Ui, color: egui::Color32) {
@@ -1097,11 +1143,17 @@ pub fn paint_plus_at(painter: &egui::Painter, rect: egui::Rect, color: egui::Col
     let w = rect.width();
     let stroke = Stroke::new(1.6_f32, color);
     painter.line_segment(
-        [Pos2::new(c.x, c.y - w * 0.18), Pos2::new(c.x, c.y + w * 0.18)],
+        [
+            Pos2::new(c.x, c.y - w * 0.18),
+            Pos2::new(c.x, c.y + w * 0.18),
+        ],
         stroke,
     );
     painter.line_segment(
-        [Pos2::new(c.x - w * 0.18, c.y), Pos2::new(c.x + w * 0.18, c.y)],
+        [
+            Pos2::new(c.x - w * 0.18, c.y),
+            Pos2::new(c.x + w * 0.18, c.y),
+        ],
         stroke,
     );
 }
@@ -1116,7 +1168,10 @@ mod tests {
         assert_eq!(icon_for_label("Open Imagine"), TileIcon::Image);
         assert_eq!(icon_for_label("Think Harder"), TileIcon::Think);
         assert_eq!(icon_for_label("Go Max"), TileIcon::Think);
-        assert_ne!(icon_for_label("Host snapshot"), icon_for_label("Morning brief"));
+        assert_ne!(
+            icon_for_label("Host snapshot"),
+            icon_for_label("Morning brief")
+        );
         assert_ne!(BarIcon::Mic, BarIcon::Send);
         assert_ne!(BarIcon::Plus, BarIcon::Search);
         assert_ne!(BarIcon::ArrowUp, BarIcon::Send);
@@ -1287,10 +1342,7 @@ mod tests {
             .nth(1)
             .and_then(|s| s.split("pub fn bar_icon_name(").next())
             .expect("paperclip");
-        let follow = clip
-            .split("follow_composer_frame(")
-            .nth(1)
-            .expect("follow");
+        let follow = clip.split("follow_composer_frame(").nth(1).expect("follow");
         let args = follow.split(';').next().unwrap_or(follow);
         assert!(
             args.contains("false") && !args.contains("hovered"),

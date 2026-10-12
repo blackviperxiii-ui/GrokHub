@@ -32,7 +32,15 @@ pub struct SpanTail<T> {
 impl<T: Clone> SpanTail<T> {
     /// Follow `path`, keeping at most `cap` lines.
     pub fn new(path: PathBuf, cap: usize, keep: fn(Span) -> Option<T>) -> Self {
-        Self { path, offset: 0, head: Vec::new(), lines: VecDeque::new(), bytes: 0, cap, keep }
+        Self {
+            path,
+            offset: 0,
+            head: Vec::new(),
+            lines: VecDeque::new(),
+            bytes: 0,
+            cap,
+            keep,
+        }
     }
 
     pub fn path(&self) -> &Path {
@@ -48,7 +56,9 @@ impl<T: Clone> SpanTail<T> {
 
     fn read_head(&self) -> Vec<u8> {
         let mut head = vec![0u8; HEAD_BYTES];
-        let n = fs::File::open(&self.path).and_then(|mut f| f.read(&mut head)).unwrap_or(0);
+        let n = fs::File::open(&self.path)
+            .and_then(|mut f| f.read(&mut head))
+            .unwrap_or(0);
         head.truncate(n);
         head
     }
@@ -59,7 +69,12 @@ impl<T: Clone> SpanTail<T> {
             self.reset();
             return;
         };
-        if len < self.offset || (self.offset > 0 && !self.read_head().starts_with(&self.head[..self.head.len().min(len as usize)])) {
+        if len < self.offset
+            || (self.offset > 0
+                && !self
+                    .read_head()
+                    .starts_with(&self.head[..self.head.len().min(len as usize)]))
+        {
             self.reset();
         }
         if len == self.offset {
@@ -71,7 +86,11 @@ impl<T: Clone> SpanTail<T> {
         };
         // A first read starts at most SPAN_TAIL_BYTES from the end, like read_spans_tail.
         let fresh = self.offset == 0;
-        let start = if fresh { len.saturating_sub(SPAN_TAIL_BYTES) } else { self.offset };
+        let start = if fresh {
+            len.saturating_sub(SPAN_TAIL_BYTES)
+        } else {
+            self.offset
+        };
         if file.seek(SeekFrom::Start(start)).is_err() {
             return;
         }
@@ -116,7 +135,10 @@ impl<T: Clone> SpanTail<T> {
     /// What was kept from the newest `max_lines` lines, oldest first, borrowed.
     pub fn newest_iter(&self, max_lines: usize) -> impl Iterator<Item = &T> {
         let skip = self.lines.len().saturating_sub(max_lines);
-        self.lines.iter().skip(skip).filter_map(|(_, kept)| kept.as_ref())
+        self.lines
+            .iter()
+            .skip(skip)
+            .filter_map(|(_, kept)| kept.as_ref())
     }
 
     /// What was kept from the newest `max_lines` lines, oldest first.
@@ -131,7 +153,15 @@ mod tests {
     use crate::harness::{append_span, read_spans_tail, span_path, test_dir, AccessMode};
 
     fn span(session: &str, tool: &str, result: &str) -> Span {
-        Span::soft_allow(session, tool, "{}", result, "", AccessMode::Supervised, "native")
+        Span::soft_allow(
+            session,
+            tool,
+            "{}",
+            result,
+            "",
+            AccessMode::Supervised,
+            "native",
+        )
     }
 
     fn tool_of(s: Span) -> Option<String> {
@@ -157,13 +187,24 @@ mod tests {
         let mut f = fs::OpenOptions::new().append(true).open(&path).unwrap();
         std::io::Write::write_all(&mut f, b"not a span\n{\"partial\":").unwrap();
         tail.refresh();
-        assert_eq!(tail.newest(5), ["read:4", "read:5", "read:6", "read:7"], "the cap keeps the newest 5 lines");
+        assert_eq!(
+            tail.newest(5),
+            ["read:4", "read:5", "read:6", "read:7"],
+            "the cap keeps the newest 5 lines"
+        );
         assert_eq!(tail.newest(2), ["read:7"]);
         std::io::Write::write_all(&mut f, b"\"x\"}\n").unwrap();
         tail.refresh();
-        assert_eq!(tail.newest(5), ["read:5", "read:6", "read:7"], "the finished line counts now");
+        assert_eq!(
+            tail.newest(5),
+            ["read:5", "read:6", "read:7"],
+            "the finished line counts now"
+        );
         let (direct, _) = read_spans_tail(&dir, "chat-1", 5);
-        assert_eq!(direct.into_iter().filter_map(tool_of).collect::<Vec<_>>(), tail.newest(5));
+        assert_eq!(
+            direct.into_iter().filter_map(tool_of).collect::<Vec<_>>(),
+            tail.newest(5)
+        );
         let _ = fs::remove_dir_all(dir);
     }
 
@@ -180,7 +221,11 @@ mod tests {
         fs::remove_file(&path).unwrap();
         append_span(&dir, &span("chat-2", "write", "a")).unwrap();
         tail.refresh();
-        assert_eq!(tail.newest(100), ["write:a"], "shorter file: read from scratch");
+        assert_eq!(
+            tail.newest(100),
+            ["write:a"],
+            "shorter file: read from scratch"
+        );
         // Same length or longer, different content: the head check catches it.
         let old = fs::read_to_string(&path).unwrap();
         let swapped = old.replace("\"write\"", "\"wrote\"");

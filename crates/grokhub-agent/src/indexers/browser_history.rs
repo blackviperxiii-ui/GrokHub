@@ -52,7 +52,9 @@ impl Drop for TempCopy {
 
 /// `scheme://[user@]host[:port]/…` → lowercase host, http(s) only.
 pub fn host_of(url: &str) -> Option<String> {
-    let rest = url.strip_prefix("https://").or_else(|| url.strip_prefix("http://"))?;
+    let rest = url
+        .strip_prefix("https://")
+        .or_else(|| url.strip_prefix("http://"))?;
     let authority = rest.split(['/', '?', '#']).next()?;
     let host = authority.rsplit('@').next()?;
     let host = if host.starts_with('[') {
@@ -69,9 +71,15 @@ pub fn host_of(url: &str) -> Option<String> {
 /// to rollback mode. Visits still only in the original's `-wal` are missed.
 fn unwal(path: &Path) -> std::io::Result<()> {
     use std::io::{Read, Seek, SeekFrom, Write};
-    let mut f = std::fs::OpenOptions::new().read(true).write(true).open(path)?;
+    let mut f = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(path)?;
     let mut head = [0u8; 20];
-    if f.read(&mut head)? == 20 && &head[..16] == b"SQLite format 3\0" && (head[18] == 2 || head[19] == 2) {
+    if f.read(&mut head)? == 20
+        && &head[..16] == b"SQLite format 3\0"
+        && (head[18] == 2 || head[19] == 2)
+    {
         f.seek(SeekFrom::Start(18))?;
         f.write_all(&[1, 1])?;
     }
@@ -84,8 +92,11 @@ type AuthLog = Arc<Mutex<(Vec<String>, usize)>>;
 /// Open a (copied) history file read-only with an authorizer that allows
 /// reads of `kind`'s one table and denies everything else.
 fn open_guarded(path: &Path, kind: BrowserKind) -> Result<(Connection, AuthLog), String> {
-    let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX)
-        .map_err(|e| e.to_string())?;
+    let conn = Connection::open_with_flags(
+        path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .map_err(|e| e.to_string())?;
     let log: AuthLog = Arc::default();
     let seen = log.clone();
     let allowed = kind.table();
@@ -110,7 +121,12 @@ fn open_guarded(path: &Path, kind: BrowserKind) -> Result<(Connection, AuthLog),
 
 /// Copy `db` into `tmp_dir`, open the copy read-only, read the one history
 /// table. The original file is only ever copied.
-pub fn read_history(fs: &dyn IndexFs, db: &Path, kind: BrowserKind, tmp_dir: &Path) -> Result<HistoryRead, String> {
+pub fn read_history(
+    fs: &dyn IndexFs,
+    db: &Path,
+    kind: BrowserKind,
+    tmp_dir: &Path,
+) -> Result<HistoryRead, String> {
     if index_excluded(&db.display().to_string()) {
         return Err("that file is always excluded".into());
     }
@@ -141,7 +157,11 @@ pub fn read_history(fs: &dyn IndexFs, db: &Path, kind: BrowserKind, tmp_dir: &Pa
         let mut stmt = conn.prepare(sql).map_err(|e| e.to_string())?;
         let rows = stmt
             .query_map([ROWS_MAX], |r| {
-                Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?, r.get::<_, Option<i64>>(2)?.unwrap_or(0)))
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, i64>(1)?,
+                    r.get::<_, Option<i64>>(2)?.unwrap_or(0),
+                ))
             })
             .map_err(|e| e.to_string())?;
         for (url, visits, last) in rows.flatten() {
@@ -180,10 +200,17 @@ pub fn history_facts(browser: &str, reads: &[HistoryRead]) -> Vec<Fact> {
     rows.truncate(HOSTS_MAX);
     rows.into_iter()
         .map(|(host, (visits, last))| {
-            let times = if visits == 1 { "once".to_string() } else { format!("{visits} times") };
+            let times = if visits == 1 {
+                "once".to_string()
+            } else {
+                format!("{visits} times")
+            };
             Fact {
                 item: host.to_string(),
-                line: format!("Visited {host} {times} in {browser}, last on {}", date_of(last)),
+                line: format!(
+                    "Visited {host} {times} in {browser}, last on {}",
+                    date_of(last)
+                ),
                 sensitivity: Sensitivity::Sensitive,
             }
         })
@@ -210,13 +237,25 @@ mod tests {
         .unwrap();
         drop(c);
         let (conn, log) = open_guarded(&db, BrowserKind::Firefox).unwrap();
-        let n: i64 = conn.query_row("SELECT count(url) FROM moz_places", [], |r| r.get(0)).unwrap();
+        let n: i64 = conn
+            .query_row("SELECT count(url) FROM moz_places", [], |r| r.get(0))
+            .unwrap();
         assert_eq!(n, 1);
-        let err = conn.query_row("SELECT value FROM moz_cookies", [], |r| r.get::<_, String>(0)).unwrap_err();
+        let err = conn
+            .query_row("SELECT value FROM moz_cookies", [], |r| {
+                r.get::<_, String>(0)
+            })
+            .unwrap_err();
         assert_eq!(err.to_string(), "access to moz_cookies.value is prohibited");
-        assert!(conn.execute("DELETE FROM moz_places", []).is_err(), "read-only and no writes authorized");
+        assert!(
+            conn.execute("DELETE FROM moz_places", []).is_err(),
+            "read-only and no writes authorized"
+        );
         let g = log.lock().unwrap();
-        assert_eq!(g.0, vec!["moz_places".to_string(), "moz_cookies".to_string()]);
+        assert_eq!(
+            g.0,
+            vec!["moz_places".to_string(), "moz_cookies".to_string()]
+        );
         assert_eq!(g.1, 1);
         drop(g);
         drop(conn);
@@ -225,8 +264,14 @@ mod tests {
 
     #[test]
     fn host_of_keeps_the_host_only() {
-        assert_eq!(host_of("https://www.GitHub.com/me/repo?token=abc#x").as_deref(), Some("github.com"));
-        assert_eq!(host_of("http://user:pw@example.org:8080/a").as_deref(), Some("example.org"));
+        assert_eq!(
+            host_of("https://www.GitHub.com/me/repo?token=abc#x").as_deref(),
+            Some("github.com")
+        );
+        assert_eq!(
+            host_of("http://user:pw@example.org:8080/a").as_deref(),
+            Some("example.org")
+        );
         assert_eq!(host_of("https://[::1]:3000/").as_deref(), Some("[::1]"));
         assert_eq!(host_of("file:///home/me/notes.html"), None);
         assert_eq!(host_of("about:blank"), None);
@@ -239,12 +284,18 @@ mod tests {
             hosts: BTreeMap::from([("a.test".into(), (3, 10)), ("b.test".into(), (1, 5))]),
             ..HistoryRead::default()
         };
-        let b = HistoryRead { hosts: BTreeMap::from([("b.test".into(), (4, 1_791_342_000_000))]), ..HistoryRead::default() };
+        let b = HistoryRead {
+            hosts: BTreeMap::from([("b.test".into(), (4, 1_791_342_000_000))]),
+            ..HistoryRead::default()
+        };
         let facts = history_facts("Firefox", &[a, b]);
         let lines: Vec<&str> = facts.iter().map(|f| f.line.as_str()).collect();
         assert_eq!(
             lines,
-            vec!["Visited b.test 5 times in Firefox, last on 2026-10-07", "Visited a.test 3 times in Firefox, last on 1970-01-01"]
+            vec![
+                "Visited b.test 5 times in Firefox, last on 2026-10-07",
+                "Visited a.test 3 times in Firefox, last on 1970-01-01"
+            ]
         );
         assert_eq!(facts[0].item, "b.test");
         assert_eq!(facts[0].sensitivity, Sensitivity::Sensitive);

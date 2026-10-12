@@ -149,7 +149,12 @@ pub fn ceiling_allows(candidate: &AutoCandidate, ctx: &CeilingCtx) -> Result<(),
     if candidate.hard.is_some() {
         return Err(CeilingMiss::HardClass);
     }
-    if !ctx.in_scope || candidate.scope.as_deref().is_none_or(|s| s.trim().is_empty()) {
+    if !ctx.in_scope
+        || candidate
+            .scope
+            .as_deref()
+            .is_none_or(|s| s.trim().is_empty())
+    {
         return Err(CeilingMiss::NotInScope);
     }
     // Watch never mutates; desktop tools need Supervised or Full, and so
@@ -279,45 +284,172 @@ mod tests {
     #[test]
     fn each_term_off_names_its_miss() {
         let cases: Vec<(AutoCandidate, CeilingCtx, CeilingMiss)> = vec![
-            (soft(), CeilingCtx { in_scope: false, ..open() }, CeilingMiss::NotInScope),
-            (AutoCandidate { scope: None, ..soft() }, open(), CeilingMiss::NotInScope),
-            (soft(), CeilingCtx { access: AccessTier::Readonly, ..open() }, CeilingMiss::Access),
-            (soft(), CeilingCtx { pill: PillMode::Ask, ..open() }, CeilingMiss::Pill),
-            (soft(), CeilingCtx { halted: true, ..open() }, CeilingMiss::Halted),
-            (soft(), CeilingCtx { quiet: true, ..open() }, CeilingMiss::QuietHours),
-            (soft(), CeilingCtx { busy: true, ..open() }, CeilingMiss::Busy),
-            (soft(), CeilingCtx { budget_left: 0, ..open() }, CeilingMiss::Budget),
-            (soft(), CeilingCtx { p_mind: Some(0.2), ..open() }, CeilingMiss::PMind),
-            (soft(), CeilingCtx { p_mind: None, ..open() }, CeilingMiss::NoHistory),
-            (soft(), CeilingCtx { mind_asks: true, ..open() }, CeilingMiss::MindCheck),
-            (AutoCandidate { confidence: 0.79, ..soft() }, open(), CeilingMiss::Confidence),
-            (AutoCandidate { reversibility: 0.5, ..soft() }, open(), CeilingMiss::Reversibility),
-            (AutoCandidate { hard: Some("send".into()), ..soft() }, open(), CeilingMiss::HardClass),
+            (
+                soft(),
+                CeilingCtx {
+                    in_scope: false,
+                    ..open()
+                },
+                CeilingMiss::NotInScope,
+            ),
+            (
+                AutoCandidate {
+                    scope: None,
+                    ..soft()
+                },
+                open(),
+                CeilingMiss::NotInScope,
+            ),
+            (
+                soft(),
+                CeilingCtx {
+                    access: AccessTier::Readonly,
+                    ..open()
+                },
+                CeilingMiss::Access,
+            ),
+            (
+                soft(),
+                CeilingCtx {
+                    pill: PillMode::Ask,
+                    ..open()
+                },
+                CeilingMiss::Pill,
+            ),
+            (
+                soft(),
+                CeilingCtx {
+                    halted: true,
+                    ..open()
+                },
+                CeilingMiss::Halted,
+            ),
+            (
+                soft(),
+                CeilingCtx {
+                    quiet: true,
+                    ..open()
+                },
+                CeilingMiss::QuietHours,
+            ),
+            (
+                soft(),
+                CeilingCtx {
+                    busy: true,
+                    ..open()
+                },
+                CeilingMiss::Busy,
+            ),
+            (
+                soft(),
+                CeilingCtx {
+                    budget_left: 0,
+                    ..open()
+                },
+                CeilingMiss::Budget,
+            ),
+            (
+                soft(),
+                CeilingCtx {
+                    p_mind: Some(0.2),
+                    ..open()
+                },
+                CeilingMiss::PMind,
+            ),
+            (
+                soft(),
+                CeilingCtx {
+                    p_mind: None,
+                    ..open()
+                },
+                CeilingMiss::NoHistory,
+            ),
+            (
+                soft(),
+                CeilingCtx {
+                    mind_asks: true,
+                    ..open()
+                },
+                CeilingMiss::MindCheck,
+            ),
+            (
+                AutoCandidate {
+                    confidence: 0.79,
+                    ..soft()
+                },
+                open(),
+                CeilingMiss::Confidence,
+            ),
+            (
+                AutoCandidate {
+                    reversibility: 0.5,
+                    ..soft()
+                },
+                open(),
+                CeilingMiss::Reversibility,
+            ),
+            (
+                AutoCandidate {
+                    hard: Some("send".into()),
+                    ..soft()
+                },
+                open(),
+                CeilingMiss::HardClass,
+            ),
         ];
         for (candidate, ctx, miss) in cases {
-            assert_eq!(ceiling_allows(&candidate, &ctx), Err(miss), "{}", miss.as_str());
+            assert_eq!(
+                ceiling_allows(&candidate, &ctx),
+                Err(miss),
+                "{}",
+                miss.as_str()
+            );
             assert_eq!(AutoAct::admit(candidate, &ctx), Err(miss));
         }
     }
 
     #[test]
     fn supervised_and_always_are_enough_but_watch_never_is() {
-        let sup = CeilingCtx { access: AccessTier::Supervised, pill: PillMode::Always, ..open() };
+        let sup = CeilingCtx {
+            access: AccessTier::Supervised,
+            pill: PillMode::Always,
+            ..open()
+        };
         assert_eq!(ceiling_allows(&soft(), &sup), Ok(()));
-        let desk = AutoCandidate { desktop: true, ..soft() };
+        let desk = AutoCandidate {
+            desktop: true,
+            ..soft()
+        };
         assert_eq!(ceiling_allows(&desk, &sup), Ok(()));
         assert_eq!(
-            ceiling_allows(&desk, &CeilingCtx { access: AccessTier::Readonly, ..sup }),
+            ceiling_allows(
+                &desk,
+                &CeilingCtx {
+                    access: AccessTier::Readonly,
+                    ..sup
+                }
+            ),
             Err(CeilingMiss::Access)
         );
     }
 
     #[test]
     fn hard_class_misses_first_whatever_else_is_open() {
-        let send = AutoCandidate { hard: Some("send".into()), confidence: 1.0, reversibility: 1.0, ..soft() };
-        let widest = CeilingCtx { pill: PillMode::Always, ..open() };
+        let send = AutoCandidate {
+            hard: Some("send".into()),
+            confidence: 1.0,
+            reversibility: 1.0,
+            ..soft()
+        };
+        let widest = CeilingCtx {
+            pill: PillMode::Always,
+            ..open()
+        };
         assert_eq!(ceiling_allows(&send, &widest), Err(CeilingMiss::HardClass));
-        assert_eq!(CeilingMiss::HardClass.why(), "It sends, pays, deletes, or touches a secret, so it always asks.");
+        assert_eq!(
+            CeilingMiss::HardClass.why(),
+            "It sends, pays, deletes, or touches a secret, so it always asks."
+        );
     }
 
     #[test]

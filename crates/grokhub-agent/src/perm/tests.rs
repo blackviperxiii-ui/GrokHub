@@ -836,13 +836,23 @@ fn always_allow_loop_asks_only_for_the_hard_step() {
     std::fs::create_dir_all(&project).unwrap();
     std::fs::write(project.join("marker.txt"), "x").unwrap();
     let _guard = ConfigGuard::set(root.join("cfg"));
-    let permits = Answer { answer: crate::gate::PermAnswer::Deny, asks: AtomicUsize::new(0) };
-    let call = |id: &str, command: &str| FunctionCall { call_id: id.into(), name: "run_terminal_command".into(), arguments: shell(command) };
+    let permits = Answer {
+        answer: crate::gate::PermAnswer::Deny,
+        asks: AtomicUsize::new(0),
+    };
+    let call = |id: &str, command: &str| FunctionCall {
+        call_id: id.into(),
+        name: "run_terminal_command".into(),
+        arguments: shell(command),
+    };
     let client = Script {
         calls: Mutex::new(vec![
             call("a1", "chmod 600 marker.txt && echo chmod-ran"),
             call("a2", "sudo -n true >/dev/null 2>&1; echo sudo-ran"),
-            call("a3", "sudo grub-install --target=x86_64-efi /dev/sdb; echo grub-ran"),
+            call(
+                "a3",
+                "sudo grub-install --target=x86_64-efi /dev/sdb; echo grub-ran",
+            ),
         ]),
         sent: AtomicBool::new(false),
     };
@@ -880,10 +890,17 @@ fn always_allow_loop_asks_only_for_the_hard_step() {
             _ => None,
         })
         .collect();
-    assert_eq!(permits.asks.load(Ordering::SeqCst), 1, "only the bootloader step asks: {outputs:?}");
+    assert_eq!(
+        permits.asks.load(Ordering::SeqCst),
+        1,
+        "only the bootloader step asks: {outputs:?}"
+    );
     assert!(outputs[0].contains("chmod-ran"), "{outputs:?}");
     assert!(outputs[1].contains("sudo-ran"), "{outputs:?}");
-    assert!(!outputs[2].contains("grub-ran") && outputs[2].contains("User rejected"), "{outputs:?}");
+    assert!(
+        !outputs[2].contains("grub-ran") && outputs[2].contains("User rejected"),
+        "{outputs:?}"
+    );
     let _ = std::fs::remove_dir_all(&root);
 }
 
@@ -902,20 +919,45 @@ fn unattended_refuses_dangerous_and_unsplittable_in_every_mode() {
         for mode in [PermMode::Ask, PermMode::Auto, PermMode::Always] {
             for command in risky {
                 assert_eq!(
-                    at(policy, mode, false, true, "run_terminal_command", &shell(command)),
+                    at(
+                        policy,
+                        mode,
+                        false,
+                        true,
+                        "run_terminal_command",
+                        &shell(command)
+                    ),
                     Decision::Refuse(gate::unattended_deny("run_terminal_command")),
                     "unattended {mode:?} must refuse {command:?}"
                 );
                 // Attended: Always Allow (or a latched Always) runs it; the
                 // hard classes and the floor are checked before this engine.
                 assert_eq!(
-                    at(policy, mode, true, true, "run_terminal_command", &shell(command)),
+                    at(
+                        policy,
+                        mode,
+                        true,
+                        true,
+                        "run_terminal_command",
+                        &shell(command)
+                    ),
                     Decision::Run,
                     "attended latched {mode:?} runs {command:?}"
                 );
-                let want = if mode == PermMode::Always { Decision::Run } else { Decision::Ask };
+                let want = if mode == PermMode::Always {
+                    Decision::Run
+                } else {
+                    Decision::Ask
+                };
                 assert_eq!(
-                    at(policy, mode, true, false, "run_terminal_command", &shell(command)),
+                    at(
+                        policy,
+                        mode,
+                        true,
+                        false,
+                        "run_terminal_command",
+                        &shell(command)
+                    ),
                     want,
                     "attended {mode:?} for {command:?}"
                 );
@@ -973,9 +1015,23 @@ fn grants_file_with_a_bom_survives_a_new_grant() {
 /// and money still park; the floor and deny rules still refuse.
 #[test]
 fn always_allow_stops_only_for_hard_classes() {
-    let policy = policy_of(&[("Bash(systemctl stop nextdns)", Action::Deny), ("Bash(journalctl *)", Action::Ask)], &[]);
+    let policy = policy_of(
+        &[
+            ("Bash(systemctl stop nextdns)", Action::Deny),
+            ("Bash(journalctl *)", Action::Ask),
+        ],
+        &[],
+    );
     let decide = |mode: PermMode, name: &str, arguments: &str| {
-        gate::decide_with(&gate(mode, true), name, arguments, false, None, Path::new("/work"), Some(&policy))
+        gate::decide_with(
+            &gate(mode, true),
+            name,
+            arguments,
+            false,
+            None,
+            Path::new("/work"),
+            Some(&policy),
+        )
     };
     for command in [
         "sudo journalctl -b -p err",
@@ -997,8 +1053,16 @@ fn always_allow_stops_only_for_hard_classes() {
         assert_eq!(decide(PermMode::Always, "run_terminal_command", &shell(command)), Decision::Run, "Always runs {command:?}");
     }
     // Supervised keeps asking for the same admin steps.
-    for command in ["sudo journalctl -b -p err", "sudo pacman -S amd-ucode", "systemctl restart nextdns"] {
-        assert_eq!(decide(PermMode::Ask, "run_terminal_command", &shell(command)), Decision::Ask, "Supervised asks {command:?}");
+    for command in [
+        "sudo journalctl -b -p err",
+        "sudo pacman -S amd-ucode",
+        "systemctl restart nextdns",
+    ] {
+        assert_eq!(
+            decide(PermMode::Ask, "run_terminal_command", &shell(command)),
+            Decision::Ask,
+            "Supervised asks {command:?}"
+        );
     }
     // Hard classes park a card in every mode, Always included.
     for command in [
@@ -1020,24 +1084,57 @@ fn always_allow_stops_only_for_hard_classes() {
         "cat ~/.local/share/keyrings/login.keyring",
     ] {
         for mode in [PermMode::Always, PermMode::Ask] {
-            assert_eq!(decide(mode, "run_terminal_command", &shell(command)), Decision::Ask, "{mode:?} parks {command:?}");
-            assert!(crate::harness::hard_class("run_terminal_command", &shell(command)).is_some(), "hard class: {command:?}");
+            assert_eq!(
+                decide(mode, "run_terminal_command", &shell(command)),
+                Decision::Ask,
+                "{mode:?} parks {command:?}"
+            );
+            assert!(
+                crate::harness::hard_class("run_terminal_command", &shell(command)).is_some(),
+                "hard class: {command:?}"
+            );
         }
     }
     for tool in ["shop__purchase", "gmail__send_email"] {
-        assert_eq!(decide(PermMode::Always, tool, "{}"), Decision::Ask, "Always parks {tool}");
+        assert_eq!(
+            decide(PermMode::Always, tool, "{}"),
+            Decision::Ask,
+            "Always parks {tool}"
+        );
     }
     // The floor refuses outright; a deny rule beats Always.
-    for command in ["sudo mkfs.ext4 /dev/sdb1", "dd if=x.img of=/dev/sdb", "cat /etc/shadow"] {
-        assert!(matches!(decide(PermMode::Always, "run_terminal_command", &shell(command)), Decision::Refuse(_)), "floor: {command:?}");
+    for command in [
+        "sudo mkfs.ext4 /dev/sdb1",
+        "dd if=x.img of=/dev/sdb",
+        "cat /etc/shadow",
+    ] {
+        assert!(
+            matches!(
+                decide(PermMode::Always, "run_terminal_command", &shell(command)),
+                Decision::Refuse(_)
+            ),
+            "floor: {command:?}"
+        );
     }
     assert_eq!(
-        decide(PermMode::Always, "run_terminal_command", &shell("systemctl stop nextdns")),
+        decide(
+            PermMode::Always,
+            "run_terminal_command",
+            &shell("systemctl stop nextdns")
+        ),
         Decision::Refuse(gate::unattended_deny("run_terminal_command"))
     );
     // Nobody there: Always still refuses what it would otherwise have asked about.
     assert_eq!(
-        gate::decide_with(&gate(PermMode::Always, false), "run_terminal_command", &shell("sudo pacman -Qk"), false, None, Path::new("/work"), Some(&policy)),
+        gate::decide_with(
+            &gate(PermMode::Always, false),
+            "run_terminal_command",
+            &shell("sudo pacman -Qk"),
+            false,
+            None,
+            Path::new("/work"),
+            Some(&policy)
+        ),
         Decision::Refuse(gate::unattended_deny("run_terminal_command"))
     );
 }

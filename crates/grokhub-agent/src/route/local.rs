@@ -56,7 +56,12 @@ pub fn set_ctx_cap(cap: u64) {
     CTX_CAP.store(cap.max(LOCAL_CTX_CAP), Ordering::SeqCst);
 }
 /// The classes a local route may take while online (background helpers).
-pub const LOCAL_CLASSES: &[&str] = &["background:classify", "background:triage", "background:redact", "background:summarize"];
+pub const LOCAL_CLASSES: &[&str] = &[
+    "background:classify",
+    "background:triage",
+    "background:redact",
+    "background:summarize",
+];
 /// Extra classes allowed on-device while offline (chat + summaries; not cloud-only).
 pub const OFFLINE_CLASSES: &[&str] = &[
     "background:classify",
@@ -99,7 +104,9 @@ fn production_assets_present() -> bool {
 }
 
 fn config_dir() -> Option<PathBuf> {
-    std::env::var_os("GROKHUB_CONFIG").map(PathBuf::from).filter(|p| !p.as_os_str().is_empty())
+    std::env::var_os("GROKHUB_CONFIG")
+        .map(PathBuf::from)
+        .filter(|p| !p.as_os_str().is_empty())
 }
 
 pub fn is_local(id: &str) -> bool {
@@ -121,7 +128,10 @@ pub fn tier_for(d: Device) -> &'static str {
 /// The downshift ladder: only which tier is live changes.
 pub fn set_device(d: Device) {
     let t = tier_for(d);
-    TIER.store(TIERS.iter().position(|x| *x == t).unwrap_or(0), Ordering::SeqCst);
+    TIER.store(
+        TIERS.iter().position(|x| *x == t).unwrap_or(0),
+        Ordering::SeqCst,
+    );
 }
 
 pub fn live_tier() -> &'static str {
@@ -227,7 +237,11 @@ pub fn eligible(gate: &LocalGate, class: &str, ctx_tokens: u64) -> bool {
     if super::connectivity::is_cloud_only(class) {
         return false;
     }
-    gate.enabled && !gate.hard_tool && class != PREPARE_HARD && allowed_classes(gate).contains(&class) && ctx_tokens <= ctx_cap()
+    gate.enabled
+        && !gate.hard_tool
+        && class != PREPARE_HARD
+        && allowed_classes(gate).contains(&class)
+        && ctx_tokens <= ctx_cap()
 }
 
 /// `id` may serve this step: the live tier, and [`eligible`].
@@ -287,7 +301,12 @@ pub fn tier_meta(id: &str) -> ModelMeta {
         efforts: Some(Vec::new()),
         // `serve` returns empty `calls` today — never claim tools from eval pass rate.
         tool_calling: Some(false),
-        prices: Prices { prompt: Some(0), cached: Some(0), completion: Some(0), ..Prices::default() },
+        prices: Prices {
+            prompt: Some(0),
+            cached: Some(0),
+            completion: Some(0),
+            ..Prices::default()
+        },
         notice,
         ..ModelMeta::default()
     }
@@ -302,7 +321,10 @@ impl CatalogSource for LocalSource {
         if !enabled() {
             return Err("the local model is off".into());
         }
-        Ok(Listing::new(SourceKind::Local, TIERS.iter().map(|t| tier_meta(t)).collect()))
+        Ok(Listing::new(
+            SourceKind::Local,
+            TIERS.iter().map(|t| tier_meta(t)).collect(),
+        ))
     }
 }
 
@@ -322,7 +344,11 @@ pub trait LocalRuntime: Send + Sync {
     /// `{"d": 0.0..1.0}`.
     fn difficulty(&self, text: &str) -> Result<Value, String>;
     /// OpenAI-style chat with optional streaming deltas. Default: unsupported.
-    fn chat_stream(&self, messages: &[ChatMessage], on_delta: &mut dyn FnMut(&str)) -> Result<String, String> {
+    fn chat_stream(
+        &self,
+        messages: &[ChatMessage],
+        on_delta: &mut dyn FnMut(&str),
+    ) -> Result<String, String> {
         let _ = (messages, on_delta);
         Err("local chat is not available on this runtime".into())
     }
@@ -426,18 +452,36 @@ pub fn serve(class: &str, text: &str) -> Result<TurnOutput, ClientError> {
     if matches!(class, "chat:quick" | "chat:default" | "desktop:soft") {
         let mut deltas = String::new();
         let out = rt
-            .chat_stream(&[ChatMessage { role: "user".into(), content: text.into() }], &mut |d| deltas.push_str(d))
+            .chat_stream(
+                &[ChatMessage {
+                    role: "user".into(),
+                    content: text.into(),
+                }],
+                &mut |d| deltas.push_str(d),
+            )
             .map_err(ClientError::Protocol)?;
         let text = if out.is_empty() { deltas } else { out };
-        return Ok(TurnOutput { text, reasoning: String::new(), calls: Vec::new(), usage: Usage::default(),
+        return Ok(TurnOutput {
+            text,
+            reasoning: String::new(),
+            calls: Vec::new(),
+            usage: Usage::default(),
             ..Default::default()
         });
     }
-    let answer = if class == "background:summarize" { rt.summarize(text, 60) } else { rt.classify(text, CLASS_LABELS) };
+    let answer = if class == "background:summarize" {
+        rt.summarize(text, 60)
+    } else {
+        rt.classify(text, CLASS_LABELS)
+    };
     let v = answer.map_err(ClientError::Protocol)?;
-    Ok(TurnOutput { text: v.to_string(), reasoning: String::new(), calls: Vec::new(), usage: Usage::default(),
-            ..Default::default()
-        })
+    Ok(TurnOutput {
+        text: v.to_string(),
+        reasoning: String::new(),
+        calls: Vec::new(),
+        usage: Usage::default(),
+        ..Default::default()
+    })
 }
 
 /// What [`scan_pii`] found.
@@ -454,7 +498,13 @@ pub struct PiiScan {
 fn pii_patterns() -> &'static [Regex] {
     static P: std::sync::OnceLock<Vec<Regex>> = std::sync::OnceLock::new();
     P.get_or_init(|| {
-        [r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", r"\+?\d[\d\s().-]{7,}\d"].iter().filter_map(|p| Regex::new(p).ok()).collect()
+        [
+            r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}",
+            r"\+?\d[\d\s().-]{7,}\d",
+        ]
+        .iter()
+        .filter_map(|p| Regex::new(p).ok())
+        .collect()
     })
 }
 
@@ -470,6 +520,12 @@ pub fn scan_pii(text: &str, rt: Option<&dyn LocalRuntime>) -> PiiScan {
             out = re.replace_all(&out, "[redacted]").into_owned();
         }
     }
-    let model_flag = rt.and_then(|rt| rt.classify(&out, &["pii", "clean"]).ok()).and_then(|v| v.get("label").and_then(Value::as_str).map(|l| l == "pii"));
-    PiiScan { redacted: out, regex_hits: hits, model_flag }
+    let model_flag = rt
+        .and_then(|rt| rt.classify(&out, &["pii", "clean"]).ok())
+        .and_then(|v| v.get("label").and_then(Value::as_str).map(|l| l == "pii"));
+    PiiScan {
+        redacted: out,
+        regex_hits: hits,
+        model_flag,
+    }
 }

@@ -4,7 +4,6 @@ use super::*;
 use grokhub_core::{live_send, LiveSend};
 
 impl Cabin {
-
     pub(super) fn send_chat(&mut self, text: String) {
         // Alt+Enter or `/queue`: wait for the live reply instead of steering it.
         let queue_asked = std::mem::take(&mut self.bg.queue_next);
@@ -34,9 +33,7 @@ impl Cabin {
         if self.apply_unparsed_native_slash(&text) {
             return;
         }
-        if let Some(recipe) =
-            grokhub_agent::native_deep_research_prompt(&text)
-        {
+        if let Some(recipe) = grokhub_agent::native_deep_research_prompt(&text) {
             text = recipe;
         }
         if btw_queues_without_interrupt(self.session_mode == SessionMode::Ask, self.running) {
@@ -138,7 +135,9 @@ impl Cabin {
             let follow = self.trial_follow(&sk);
             (
                 sk.name.clone(),
-                self.policy().injects_skill().then(|| skill_follow_block(&follow)),
+                self.policy()
+                    .injects_skill()
+                    .then(|| skill_follow_block(&follow)),
             )
         });
         if let Some((skill_ran, follow)) = matched {

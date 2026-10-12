@@ -58,13 +58,37 @@ pub struct Heard {
 }
 
 /// The models that could take an everyday step now.
-pub(super) fn candidates<'a>(reg: &'a Registry, profiles: &BTreeMap<String, ModelProfile>, now_ms: u64) -> Vec<&'a str> {
-    reg.models.keys().map(String::as_str).filter(|id| policy::fits(reg, profiles, id, Fit::default(), &super::spend::Spend { settings: super::spend::spend_settings(), ..Default::default() }, now_ms)).collect()
+pub(super) fn candidates<'a>(
+    reg: &'a Registry,
+    profiles: &BTreeMap<String, ModelProfile>,
+    now_ms: u64,
+) -> Vec<&'a str> {
+    reg.models
+        .keys()
+        .map(String::as_str)
+        .filter(|id| {
+            policy::fits(
+                reg,
+                profiles,
+                id,
+                Fit::default(),
+                &super::spend::Spend {
+                    settings: super::spend::spend_settings(),
+                    ..Default::default()
+                },
+                now_ms,
+            )
+        })
+        .collect()
 }
 
 /// Who stands in for `from`: its redirect successor, then its family, newest first.
 pub(super) fn stand_in(reg: &Registry, from: &str, ids: &[&str]) -> Option<String> {
-    if let Some(s) = reg.get(from).and_then(|r| r.served_as.clone()).filter(|s| ids.contains(&s.as_str())) {
+    if let Some(s) = reg
+        .get(from)
+        .and_then(|r| r.served_as.clone())
+        .filter(|s| ids.contains(&s.as_str()))
+    {
         return Some(s);
     }
     policy::fallback_chain(from, ids).into_iter().next()
@@ -72,7 +96,11 @@ pub(super) fn stand_in(reg: &Registry, from: &str, ids: &[&str]) -> Option<Strin
 
 /// The pause card's text: what failed, what was tried, the options.
 pub fn pause_msg(model: &str, failed: &str, tried: &[String]) -> HealMsg {
-    let tried = if tried.is_empty() { "No other model in your plan can take over.".to_string() } else { format!("I tried {}.", tried.join(", ")) };
+    let tried = if tried.is_empty() {
+        "No other model in your plan can take over.".to_string()
+    } else {
+        format!("I tried {}.", tried.join(", "))
+    };
     HealMsg {
         tier: Tier::Pause,
         key: format!("noroute:{model}"),
@@ -83,7 +111,13 @@ pub fn pause_msg(model: &str, failed: &str, tried: &[String]) -> HealMsg {
 
 /// The messages a batch of registry events asks for. `pin` is the user's
 /// pinned model (empty is Auto).
-pub fn heal_messages(events: &[RegistryEvent], reg: &Registry, profiles: &BTreeMap<String, ModelProfile>, pin: &str, now_ms: u64) -> Heard {
+pub fn heal_messages(
+    events: &[RegistryEvent],
+    reg: &Registry,
+    profiles: &BTreeMap<String, ModelProfile>,
+    pin: &str,
+    now_ms: u64,
+) -> Heard {
     let pin = pin.trim();
     let ids = candidates(reg, profiles, now_ms);
     let mut heard = Heard::default();
@@ -102,7 +136,12 @@ pub fn heal_messages(events: &[RegistryEvent], reg: &Registry, profiles: &BTreeM
     }
     for (id, (from, to)) in &last {
         let id = *id;
-        if *to == ModelState::Live && matches!(from, ModelState::Degraded | ModelState::Quarantined | ModelState::Probing) {
+        if *to == ModelState::Live
+            && matches!(
+                from,
+                ModelState::Degraded | ModelState::Quarantined | ModelState::Probing
+            )
+        {
             heard.cleared.push(format!("unhealthy:{id}"));
             heard.cleared.push(format!("noroute:{id}"));
         }
@@ -160,14 +199,24 @@ pub fn heal_messages(events: &[RegistryEvent], reg: &Registry, profiles: &BTreeM
                 _ => None,
             })
             .collect();
-        let lost = removed.iter().find(|id| id.as_str() == pin).or(removed.first());
+        let lost = removed
+            .iter()
+            .find(|id| id.as_str() == pin)
+            .or(removed.first());
         if let Some(lost) = lost {
             let instead = stand_in(reg, lost, &ids).or_else(|| ids.first().map(|s| s.to_string()));
             let text = match instead {
-                Some(f) => format!("Your plan changed, so {lost} isn't included anymore. I'll use {f}."),
+                Some(f) => {
+                    format!("Your plan changed, so {lost} isn't included anymore. I'll use {f}.")
+                }
                 None => format!("Your plan changed, so {lost} isn't included anymore."),
             };
-            heard.msgs.push(HealMsg { tier: Tier::HomeUpdate, key: format!("tier:{notice}"), title: format!("Your plan no longer includes {lost}"), text });
+            heard.msgs.push(HealMsg {
+                tier: Tier::HomeUpdate,
+                key: format!("tier:{notice}"),
+                title: format!("Your plan no longer includes {lost}"),
+                text,
+            });
         }
     }
     heard
@@ -220,7 +269,11 @@ impl HealNotes {
             out.push(m);
         }
         while self.shown.len() > HEAL_NOTES_CAP {
-            let oldest = self.shown.iter().min_by_key(|(_, t)| **t).map(|(k, _)| k.clone());
+            let oldest = self
+                .shown
+                .iter()
+                .min_by_key(|(_, t)| **t)
+                .map(|(k, _)| k.clone());
             match oldest {
                 Some(k) => self.shown.remove(&k),
                 None => break,
@@ -261,15 +314,31 @@ mod tests {
         assert_eq!(settings_tag(&reg, "grok-4.7"), None);
         assert_eq!(settings_tag(&reg, "grok-9"), None);
         assert!(settings_hidden(&reg, "grok-4.3", ""));
-        assert!(!settings_hidden(&reg, "grok-4.3", "grok-4.3"), "your retired pin stays visible");
+        assert!(
+            !settings_hidden(&reg, "grok-4.3", "grok-4.3"),
+            "your retired pin stays visible"
+        );
         assert!(!settings_hidden(&reg, "grok-4.7", ""));
-        let fail = |ts_ms| Observation { model: "grok-4.7".into(), ts_ms, status: CallStatus::Error, latency_ms: 0, served_model: None, endpoint_ok: true, reasoning_tokens: 0, cost_ticks: 0, http: 500 };
+        let fail = |ts_ms| Observation {
+            model: "grok-4.7".into(),
+            ts_ms,
+            status: CallStatus::Error,
+            latency_ms: 0,
+            served_model: None,
+            endpoint_ok: true,
+            reasoning_tokens: 0,
+            cost_ticks: 0,
+            http: 500,
+        };
         reg.fold(&[fail(10), fail(11), fail(12)]);
         assert_eq!(settings_tag(&reg, "grok-4.7"), Some("Not answering"));
         let mut fresh = ModelMeta::bare("grok-4.7");
         fresh.context_length = Some(1);
         reg.apply_refresh(&[Listing::new(SourceKind::XaiApi, vec![fresh])], &[], 20);
-        assert_eq!(reg.get("grok-4.3").map(|r| r.state), Some(ModelState::NotInPlan));
+        assert_eq!(
+            reg.get("grok-4.3").map(|r| r.state),
+            Some(ModelState::NotInPlan)
+        );
         assert_eq!(settings_tag(&reg, "grok-4.3"), Some("Not in your plan"));
     }
 }

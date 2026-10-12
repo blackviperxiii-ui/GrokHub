@@ -23,7 +23,9 @@ use std::path::{Path, PathBuf};
 use grokhub_core::brain_policy::{parse_policy, policy_text, PolicyRow};
 use grokhub_core::protected_surface::{ProtectedSurface, TuneTarget};
 use grokhub_core::run_metrics::RunMetrics;
-use grokhub_core::self_review::{brain_stats, weak_brain, BrainKind, BrainProposal, BrainStats, WEEK_MS};
+use grokhub_core::self_review::{
+    brain_stats, weak_brain, BrainKind, BrainProposal, BrainStats, WEEK_MS,
+};
 
 use crate::harness::canary::{open_trial, start_trial_at_share, Metric, Version};
 use crate::harness::changes::{
@@ -333,7 +335,10 @@ fn current_text(config_dir: &Path, stats: &BrainStats) -> Option<String> {
         }
         BrainKind::Playbook => {
             let (books, _) = crate::brain::playbook::load(config_dir);
-            books.into_iter().find(|l| l.playbook.id == stats.key).map(|l| l.text)
+            books
+                .into_iter()
+                .find(|l| l.playbook.id == stats.key)
+                .map(|l| l.text)
         }
     }
 }
@@ -349,13 +354,22 @@ pub fn brain_ask(config_dir: &Path, runs: &[RunMetrics], now: u64) -> Option<Bra
         }
         let text = current_text(config_dir, s)?;
         let base = user_version(config_dir, &s.target()).ok()?;
-        Some(BrainAsk { stats: s.clone(), base, text })
+        Some(BrainAsk {
+            stats: s.clone(),
+            base,
+            text,
+        })
     })
 }
 
 /// Hand the weekly pass's tweak to [`propose`]: the guard and its locks,
 /// the user-version check, the ledger and a trial judged on steps.
-pub fn apply_brain_tweak(config_dir: &Path, ask: &BrainAsk, p: &BrainProposal, now: u64) -> Result<Version, String> {
+pub fn apply_brain_tweak(
+    config_dir: &Path,
+    ask: &BrainAsk,
+    p: &BrainProposal,
+    now: u64,
+) -> Result<Version, String> {
     let target = ask.stats.target();
     let label = if p.title.trim().is_empty() {
         format!("Change {}", ask.stats.name())
@@ -840,7 +854,11 @@ mod tests {
         let line = |i: usize, playbook: &str, ok: bool| RunMetrics {
             run: format!("chat-w:{i}"),
             class: "topic:repair".into(),
-            result: if ok { OutcomeResult::Success } else { OutcomeResult::Failure },
+            result: if ok {
+                OutcomeResult::Success
+            } else {
+                OutcomeResult::Failure
+            },
             verified: ok,
             steps: 8,
             brain: brain("repair × critical", playbook),
@@ -849,7 +867,8 @@ mod tests {
             ..Default::default()
         };
         for i in 0..n {
-            grokhub_core::run_metrics::append_run(root, &line(i, "repair-linux", i >= failed), 0).unwrap();
+            grokhub_core::run_metrics::append_run(root, &line(i, "repair-linux", i >= failed), 0)
+                .unwrap();
         }
         for i in 0..8 {
             grokhub_core::run_metrics::append_run(root, &line(50 + i, "", true), 0).unwrap();
@@ -861,8 +880,21 @@ mod tests {
         format!("TUNE_BRAIN: {target} | {title}\n<<<\n{text}>>>\n")
     }
 
-    fn weekly(root: &Path, client: &Fake, ask: Option<&BrainAsk>) -> crate::harness::self_improve::WeeklyPass {
-        crate::harness::self_improve::run_weekly(root, client, "grok-4.7", &[], ask, NOW, &crate::CancelToken::new()).unwrap()
+    fn weekly(
+        root: &Path,
+        client: &Fake,
+        ask: Option<&BrainAsk>,
+    ) -> crate::harness::self_improve::WeeklyPass {
+        crate::harness::self_improve::run_weekly(
+            root,
+            client,
+            "grok-4.7",
+            &[],
+            ask,
+            NOW,
+            &crate::CancelToken::new(),
+        )
+        .unwrap()
     }
 
     #[test]
@@ -871,18 +903,38 @@ mod tests {
         let runs = weekly_runs(&root, 6, 3);
         let ask = brain_ask(&root, &runs, NOW).expect("a weak playbook");
         assert_eq!(
-            (ask.stats.kind, ask.stats.key.as_str(), ask.stats.runs, ask.stats.failures, ask.stats.verified),
+            (
+                ask.stats.kind,
+                ask.stats.key.as_str(),
+                ask.stats.runs,
+                ask.stats.failures,
+                ask.stats.verified
+            ),
             (BrainKind::Playbook, "repair-linux", 6, 3, 3)
         );
         assert_eq!(ask.stats.target(), "playbook:repair-linux");
-        assert_eq!(ask.stats.numbers(), "3 of 6 runs on the repair-linux playbook needed a fix");
-        assert_eq!((ask.base.as_str(), ask.text.replace("\r\n", "\n")), ("", linux()));
+        assert_eq!(
+            ask.stats.numbers(),
+            "3 of 6 runs on the repair-linux playbook needed a fix"
+        );
+        assert_eq!(
+            (ask.base.as_str(), ask.text.replace("\r\n", "\n")),
+            ("", linux())
+        );
         let new = ports_first();
         let other = repair_row("probe twice before any fix");
         let reply = format!(
             "{}{}{}",
-            tweak_block("playbook:repair-linux", "Linux repair checks ports before services", &new),
-            tweak_block("playbook:repair-linux", "A second try", &linux().replace("summary = \"", "summary = \"Again. ")),
+            tweak_block(
+                "playbook:repair-linux",
+                "Linux repair checks ports before services",
+                &new
+            ),
+            tweak_block(
+                "playbook:repair-linux",
+                "A second try",
+                &linux().replace("summary = \"", "summary = \"Again. ")
+            ),
             tweak_block("policy:repair-critical", "Probe twice", &other),
         );
         let client = fake(reply);
@@ -890,17 +942,30 @@ mod tests {
         let asked = client.asked.lock().unwrap().clone();
         assert_eq!(asked.len(), 1, "one model call");
         assert!(
-            asked[0].contains("Brain playbook this week: 3 of 6 runs on the repair-linux playbook needed a fix.")
-                && asked[0].contains("TUNE_BRAIN: playbook:repair-linux | <short title>"),
+            asked[0].contains(
+                "Brain playbook this week: 3 of 6 runs on the repair-linux playbook needed a fix."
+            ) && asked[0].contains("TUNE_BRAIN: playbook:repair-linux | <short title>"),
             "{}",
             asked[0]
         );
         let tweak = pass.brain.clone().expect("one tweak");
         assert_eq!(
-            (tweak.proposal.target.as_str(), tweak.proposal.title.as_str(), tweak.proposal.text.as_str()),
-            ("playbook:repair-linux", "Linux repair checks ports before services", new.as_str())
+            (
+                tweak.proposal.target.as_str(),
+                tweak.proposal.title.as_str(),
+                tweak.proposal.text.as_str()
+            ),
+            (
+                "playbook:repair-linux",
+                "Linux repair checks ports before services",
+                new.as_str()
+            )
         );
-        let refused: Vec<(&str, &str)> = pass.refused.iter().map(|r| (r.target.as_str(), r.why.as_str())).collect();
+        let refused: Vec<(&str, &str)> = pass
+            .refused
+            .iter()
+            .map(|r| (r.target.as_str(), r.why.as_str()))
+            .collect();
         assert_eq!(
             refused,
             vec![("policy:repair-critical", "a weekly Brain tweak may only change the repair-linux playbook")],
@@ -908,7 +973,13 @@ mod tests {
         );
         let v = apply_brain_tweak(&root, &tweak.ask, &tweak.proposal, NOW).unwrap();
         assert_eq!(
-            (v.class.as_str(), v.label.as_str(), v.share_pct, v.status, v.target),
+            (
+                v.class.as_str(),
+                v.label.as_str(),
+                v.share_pct,
+                v.status,
+                v.target
+            ),
             (
                 "playbook:repair-linux",
                 "Linux repair checks ports before services",
@@ -922,23 +993,39 @@ mod tests {
             file(&root.join("playbooks").join("repair-linux.toml")).as_deref(),
             Some(new.as_str())
         );
-        assert_eq!(brain_ask(&root, &runs, NOW), None, "no second ask while its trial runs");
+        assert_eq!(
+            brain_ask(&root, &runs, NOW),
+            None,
+            "no second ask while its trial runs"
+        );
     }
 
     #[test]
     fn too_few_runs_or_no_weakness_asks_for_no_tweak() {
         let (few, _) = dirs("brain-weekly-few");
         let runs = weekly_runs(&few, 4, 3);
-        assert_eq!(brain_ask(&few, &runs, NOW), None, "4 runs is under the minimum of 5");
+        assert_eq!(
+            brain_ask(&few, &runs, NOW),
+            None,
+            "4 runs is under the minimum of 5"
+        );
         let (good, _) = dirs("brain-weekly-good");
         let runs = weekly_runs(&good, 6, 0);
-        assert_eq!(brain_ask(&good, &runs, NOW), None, "6 good, re-checked runs");
+        assert_eq!(
+            brain_ask(&good, &runs, NOW),
+            None,
+            "6 good, re-checked runs"
+        );
         // Weak runs older than a week are not this week's.
         let (old, _) = dirs("brain-weekly-old");
         let runs = weekly_runs(&old, 6, 3);
         assert_eq!(brain_ask(&old, &runs, NOW + 8 * DAY), None);
         // Without an ask, a Brain tweak in the reply is refused and nothing is tried.
-        let client = fake(tweak_block("playbook:repair-linux", "Ports first", &ports_first()));
+        let client = fake(tweak_block(
+            "playbook:repair-linux",
+            "Ports first",
+            &ports_first(),
+        ));
         let pass = weekly(&few, &client, None);
         assert_eq!(pass.brain, None);
         assert_eq!(
@@ -946,7 +1033,10 @@ mod tests {
                 .iter()
                 .map(|r| (r.target.as_str(), r.why.as_str()))
                 .collect::<Vec<_>>(),
-            vec![("playbook:repair-linux", "this week's review asked for no Brain tweak")]
+            vec![(
+                "playbook:repair-linux",
+                "this week's review asked for no Brain tweak"
+            )]
         );
         assert!(read_versions(&few).is_empty() && !few.join("playbooks").exists());
     }
@@ -959,7 +1049,11 @@ mod tests {
         let restore = "[[phase.step]]\nname = \"Take a restore point before the first change\"\n\n";
         let dropped = linux().replace(restore, "");
         assert_ne!(dropped, linux());
-        let client = fake(tweak_block("playbook:repair-linux", "Skip the restore point", &dropped));
+        let client = fake(tweak_block(
+            "playbook:repair-linux",
+            "Skip the restore point",
+            &dropped,
+        ));
         let tweak = weekly(&root, &client, Some(&ask)).brain.expect("parsed");
         assert_eq!(
             apply_brain_tweak(&root, &tweak.ask, &tweak.proposal, NOW).unwrap_err(),

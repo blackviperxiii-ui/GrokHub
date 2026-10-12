@@ -44,7 +44,9 @@ impl AmrIndex {
 
     /// Drop every row and index `nodes` instead.
     pub fn replace_all(&self, nodes: &[Node]) -> Result<(), AmrError> {
-        self.conn.execute("DELETE FROM nodes_fts", []).map_err(db_err)?;
+        self.conn
+            .execute("DELETE FROM nodes_fts", [])
+            .map_err(db_err)?;
         for node in nodes {
             self.add(node)?;
         }
@@ -71,8 +73,13 @@ impl AmrIndex {
 
     /// Every indexed id, sorted.
     pub fn ids(&self) -> Result<Vec<String>, AmrError> {
-        let mut stmt = self.conn.prepare("SELECT id FROM nodes_fts ORDER BY id").map_err(db_err)?;
-        let rows = stmt.query_map([], |row| row.get::<_, String>(0)).map_err(db_err)?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT id FROM nodes_fts ORDER BY id")
+            .map_err(db_err)?;
+        let rows = stmt
+            .query_map([], |row| row.get::<_, String>(0))
+            .map_err(db_err)?;
         rows.collect::<Result<Vec<_>, _>>().map_err(db_err)
     }
 
@@ -90,7 +97,9 @@ impl AmrIndex {
         }
         let mut stmt = self
             .conn
-            .prepare("SELECT id FROM nodes_fts WHERE nodes_fts MATCH ?1 ORDER BY bm25(nodes_fts), id")
+            .prepare(
+                "SELECT id FROM nodes_fts WHERE nodes_fts MATCH ?1 ORDER BY bm25(nodes_fts), id",
+            )
             .map_err(db_err)?;
         let rows = stmt
             .query_map(params![terms.join(" ")], |row| row.get::<_, String>(0))

@@ -59,8 +59,17 @@ fn entry_of(path: PathBuf, meta: &fs::Metadata) -> Entry {
         .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0);
-    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-    Entry { path, name, kind, len: meta.len(), modified_ms }
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    Entry {
+        path,
+        name,
+        kind,
+        len: meta.len(),
+        modified_ms,
+    }
 }
 
 impl IndexFs for RealFs {
@@ -77,7 +86,9 @@ impl IndexFs for RealFs {
     }
 
     fn stat(&self, path: &Path) -> Option<Entry> {
-        fs::symlink_metadata(path).ok().map(|m| entry_of(path.to_path_buf(), &m))
+        fs::symlink_metadata(path)
+            .ok()
+            .map(|m| entry_of(path.to_path_buf(), &m))
     }
 
     fn read_head(&self, path: &Path, cap: u64) -> std::io::Result<Vec<u8>> {

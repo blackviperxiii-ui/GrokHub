@@ -49,7 +49,8 @@ pub fn titlebar_should_start_drag(drag_started: bool) -> bool {
 }
 
 pub fn titlebar_chrome_btn(ui: &mut egui::Ui, kind: ChromeBtn) -> egui::Response {
-    let (_rect, resp) = ui.allocate_exact_size(titlebar_chrome_size(), egui::Sense::click_and_drag());
+    let (_rect, resp) =
+        ui.allocate_exact_size(titlebar_chrome_size(), egui::Sense::click_and_drag());
     let (resp, rect, wash) = crate::theme::feel_button(ui, resp, egui::Color32::TRANSPARENT);
     if wash.a() > 0 {
         ui.painter().rect_filled(rect, 6.0, wash);
@@ -101,9 +102,18 @@ fn paint_chrome_glyph(ui: &egui::Ui, rect: egui::Rect, kind: ChromeBtn, color: e
             let y0 = r.top() + 1.0;
             let y1 = r.center().y;
             let y2 = r.bottom() - 1.0;
-            painter.line_segment([egui::pos2(r.left(), y0), egui::pos2(r.right(), y0)], stroke);
-            painter.line_segment([egui::pos2(r.left(), y1), egui::pos2(r.right(), y1)], stroke);
-            painter.line_segment([egui::pos2(r.left(), y2), egui::pos2(r.right(), y2)], stroke);
+            painter.line_segment(
+                [egui::pos2(r.left(), y0), egui::pos2(r.right(), y0)],
+                stroke,
+            );
+            painter.line_segment(
+                [egui::pos2(r.left(), y1), egui::pos2(r.right(), y1)],
+                stroke,
+            );
+            painter.line_segment(
+                [egui::pos2(r.left(), y2), egui::pos2(r.right(), y2)],
+                stroke,
+            );
         }
     }
 }

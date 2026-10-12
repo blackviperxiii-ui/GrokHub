@@ -189,7 +189,11 @@ impl ProbeSpec {
 
 /// PowerShell runs a fixed script string, never a profile or a prompt (D3).
 fn powershell(id: ProbeId, script: &str) -> ProbeSpec {
-    ProbeSpec::new(id, "powershell", &["-NoProfile", "-NonInteractive", "-Command", script])
+    ProbeSpec::new(
+        id,
+        "powershell",
+        &["-NoProfile", "-NonInteractive", "-Command", script],
+    )
 }
 
 /// The spec for `id` on `os`. `has_bin` answers whether a program is on PATH.
@@ -254,10 +258,18 @@ pub fn on_path(name: &str) -> bool {
     let Some(paths) = std::env::var_os("PATH") else {
         return false;
     };
-    let exts: &[&str] = if cfg!(windows) { &["exe", "cmd", "bat"] } else { &[""] };
+    let exts: &[&str] = if cfg!(windows) {
+        &["exe", "cmd", "bat"]
+    } else {
+        &[""]
+    };
     std::env::split_paths(&paths).any(|dir| {
         exts.iter().any(|ext| {
-            let p = if ext.is_empty() { dir.join(name) } else { dir.join(name).with_extension(ext) };
+            let p = if ext.is_empty() {
+                dir.join(name)
+            } else {
+                dir.join(name).with_extension(ext)
+            };
             p.is_file()
         })
     })
@@ -265,20 +277,89 @@ pub fn on_path(name: &str) -> bool {
 
 /// Programs that run other programs or raise privileges. A probe is never one.
 const WRAPPERS: &[&str] = &[
-    "sh", "bash", "zsh", "dash", "fish", "ksh", "csh", "tcsh", "busybox", "cmd", "env", "xargs", "nohup",
-    "sudo", "doas", "pkexec", "su", "runas", "gsudo", "python", "python3", "perl", "ruby", "node",
+    "sh", "bash", "zsh", "dash", "fish", "ksh", "csh", "tcsh", "busybox", "cmd", "env", "xargs",
+    "nohup", "sudo", "doas", "pkexec", "su", "runas", "gsudo", "python", "python3", "perl", "ruby",
+    "node",
 ];
 
 /// Argv words that change the system, the package database, or a service.
 const WRITE_WORDS: &[&str] = &[
-    "rm", "rmdir", "mv", "cp", "dd", "mkfs", "shred", "truncate", "chmod", "chown", "kill", "pkill", "killall",
-    "install", "reinstall", "remove", "purge", "erase", "autoremove", "dist-upgrade", "full-upgrade", "update",
-    "refresh", "clean", "makecache", "distro-sync", "sync", "-S", "-Sy", "-Syu", "-Syy", "-R", "-Rs", "-Rns",
-    "-U", "-D", "--sync", "--remove", "--upgrade", "--refresh", "-y", "--yes", "--assume-yes", "--fix",
-    "--fix-broken", "-f", "--force", "--all", "-r", "--recurse", "--install", "--uninstall",
-    "start", "stop", "restart", "reload", "enable", "disable", "mask", "unmask", "isolate",
-    "reboot", "poweroff", "halt", "shutdown", "suspend", "hibernate", "set", "edit", "vacuum",
-    "--vacuum-size", "--vacuum-time", "--rotate", "--flush", "--setup-keys", "flush",
+    "rm",
+    "rmdir",
+    "mv",
+    "cp",
+    "dd",
+    "mkfs",
+    "shred",
+    "truncate",
+    "chmod",
+    "chown",
+    "kill",
+    "pkill",
+    "killall",
+    "install",
+    "reinstall",
+    "remove",
+    "purge",
+    "erase",
+    "autoremove",
+    "dist-upgrade",
+    "full-upgrade",
+    "update",
+    "refresh",
+    "clean",
+    "makecache",
+    "distro-sync",
+    "sync",
+    "-S",
+    "-Sy",
+    "-Syu",
+    "-Syy",
+    "-R",
+    "-Rs",
+    "-Rns",
+    "-U",
+    "-D",
+    "--sync",
+    "--remove",
+    "--upgrade",
+    "--refresh",
+    "-y",
+    "--yes",
+    "--assume-yes",
+    "--fix",
+    "--fix-broken",
+    "-f",
+    "--force",
+    "--all",
+    "-r",
+    "--recurse",
+    "--install",
+    "--uninstall",
+    "start",
+    "stop",
+    "restart",
+    "reload",
+    "enable",
+    "disable",
+    "mask",
+    "unmask",
+    "isolate",
+    "reboot",
+    "poweroff",
+    "halt",
+    "shutdown",
+    "suspend",
+    "hibernate",
+    "set",
+    "edit",
+    "vacuum",
+    "--vacuum-size",
+    "--vacuum-time",
+    "--rotate",
+    "--flush",
+    "--setup-keys",
+    "flush",
 ];
 
 /// Text that chains, redirects, or substitutes commands, anywhere in an arg.
@@ -287,12 +368,54 @@ const SHELL_MARKS: &[&str] = &[">", "<", "|", ";", "&&", "$(", "\n", "\r"];
 /// PowerShell verbs and calls that write, run code, or download. Matched
 /// case-insensitively anywhere in the script string.
 const PS_WRITES: &[&str] = &[
-    "set-", "remove-", "stop-", "restart-", "start-", "clear-", "install-", "uninstall-", "add-", "enable-",
-    "disable-", "suspend-", "resume-", "rename-", "move-", "copy-", "update-", "repair-", "reset-", "register-",
-    "unregister-", "invoke-", "iex", "new-item", "new-service", "new-itemproperty", "new-psdrive",
-    "write-eventlog", "out-file", "tee-object", "export-", "import-", "mount-", "dismount-", "initialize-",
-    "optimize-", "format-volume", "restore-", "checkpoint-", "createupdateinstaller", "createupdatedownloader",
-    ".install(", ".download(", ".delete(", ".kill(", "-encodedcommand", "-file", "-executionpolicy",
+    "set-",
+    "remove-",
+    "stop-",
+    "restart-",
+    "start-",
+    "clear-",
+    "install-",
+    "uninstall-",
+    "add-",
+    "enable-",
+    "disable-",
+    "suspend-",
+    "resume-",
+    "rename-",
+    "move-",
+    "copy-",
+    "update-",
+    "repair-",
+    "reset-",
+    "register-",
+    "unregister-",
+    "invoke-",
+    "iex",
+    "new-item",
+    "new-service",
+    "new-itemproperty",
+    "new-psdrive",
+    "write-eventlog",
+    "out-file",
+    "tee-object",
+    "export-",
+    "import-",
+    "mount-",
+    "dismount-",
+    "initialize-",
+    "optimize-",
+    "format-volume",
+    "restore-",
+    "checkpoint-",
+    "createupdateinstaller",
+    "createupdatedownloader",
+    ".install(",
+    ".download(",
+    ".delete(",
+    ".kill(",
+    "-encodedcommand",
+    "-file",
+    "-executionpolicy",
 ];
 
 /// `Some(reason)` when a spec could write or wrap a shell; `None` when read-only.
@@ -320,7 +443,12 @@ pub fn read_only_violation(spec: &ProbeSpec) -> Option<String> {
         }
     }
     if program == "winget" {
-        let allowed = ["upgrade", "--disable-interactivity", "list", "--include-unknown"];
+        let allowed = [
+            "upgrade",
+            "--disable-interactivity",
+            "list",
+            "--include-unknown",
+        ];
         if let Some(arg) = spec.argv.iter().find(|a| !allowed.contains(&a.as_str())) {
             return Some(format!("winget {arg} is not a list"));
         }
@@ -379,37 +507,68 @@ mod tests {
 
     #[test]
     fn the_classifier_catches_writes_and_shell_wrappers() {
-        let spec = |program: &str, argv: &[&str]| ProbeSpec::new(ProbeId::PackageHealth, program, argv);
+        let spec =
+            |program: &str, argv: &[&str]| ProbeSpec::new(ProbeId::PackageHealth, program, argv);
         let cases: &[(ProbeSpec, &str)] = &[
             (spec("apt-get", &["remove", "firefox"]), "remove writes"),
             (spec("apt-get", &["install", "vim"]), "install writes"),
             (spec("pacman", &["-Sy"]), "-Sy writes"),
             (spec("rm", &["-rf", "/tmp/x"]), "rm writes"),
             (spec("systemctl", &["restart", "nginx"]), "restart writes"),
-            (spec("df", &["-h", ">", "/tmp/out"]), "\">\" chains or redirects"),
+            (
+                spec("df", &["-h", ">", "/tmp/out"]),
+                "\">\" chains or redirects",
+            ),
             (spec("df", &["-h|tee"]), "\"|\" chains or redirects"),
             (spec("df", &["-h;", "reboot"]), "\";\" chains or redirects"),
             (spec("df", &["&&", "reboot"]), "\"&&\" chains or redirects"),
             (spec("sh", &["-c", "df -h"]), "sh is a shell or wrapper"),
-            (spec("/bin/bash", &["-c", "df"]), "bash is a shell or wrapper"),
+            (
+                spec("/bin/bash", &["-c", "df"]),
+                "bash is a shell or wrapper",
+            ),
             (spec("cmd.exe", &["/c", "dir"]), "cmd is a shell or wrapper"),
             (spec("sudo", &["df"]), "sudo is a shell or wrapper"),
             (spec("winget", &["upgrade", "--all"]), "--all writes"),
-            (spec("winget", &["upgrade", "Mozilla.Firefox"]), "winget Mozilla.Firefox is not a list"),
+            (
+                spec("winget", &["upgrade", "Mozilla.Firefox"]),
+                "winget Mozilla.Firefox is not a list",
+            ),
             (
                 powershell(ProbeId::Volumes, "Stop-Service wuauserv"),
                 "stop- writes or runs code",
             ),
             (
-                powershell(ProbeId::Volumes, "Set-Service -Name x -StartupType Disabled"),
+                powershell(
+                    ProbeId::Volumes,
+                    "Set-Service -Name x -StartupType Disabled",
+                ),
                 "set- writes or runs code",
             ),
-            (powershell(ProbeId::Volumes, "Remove-Item C:\\x"), "remove- writes or runs code"),
-            (powershell(ProbeId::Volumes, "Restart-Computer"), "restart- writes or runs code"),
-            (powershell(ProbeId::Volumes, "Invoke-Expression $x"), "invoke- writes or runs code"),
-            (powershell(ProbeId::Volumes, "Get-Volume | Format-List"), "\"|\" chains or redirects"),
-            (powershell(ProbeId::Volumes, "Get-Volume; Restart-Computer"), "\";\" chains or redirects"),
-            (powershell(ProbeId::Volumes, "Get-Volume > C:\\out.txt"), "\">\" chains or redirects"),
+            (
+                powershell(ProbeId::Volumes, "Remove-Item C:\\x"),
+                "remove- writes or runs code",
+            ),
+            (
+                powershell(ProbeId::Volumes, "Restart-Computer"),
+                "restart- writes or runs code",
+            ),
+            (
+                powershell(ProbeId::Volumes, "Invoke-Expression $x"),
+                "invoke- writes or runs code",
+            ),
+            (
+                powershell(ProbeId::Volumes, "Get-Volume | Format-List"),
+                "\"|\" chains or redirects",
+            ),
+            (
+                powershell(ProbeId::Volumes, "Get-Volume; Restart-Computer"),
+                "\";\" chains or redirects",
+            ),
+            (
+                powershell(ProbeId::Volumes, "Get-Volume > C:\\out.txt"),
+                "\">\" chains or redirects",
+            ),
             (
                 ProbeSpec::new(ProbeId::Volumes, "powershell", &["-Command", "Get-Volume"]),
                 "powershell takes -NoProfile -NonInteractive -Command <script> only",
@@ -417,13 +576,21 @@ mod tests {
         ];
         for (spec, want) in cases {
             let got = read_only_violation(spec).unwrap_or_default();
-            assert!(got.contains(want), "{}: got {got:?}, want {want:?}", spec.command_line());
+            assert!(
+                got.contains(want),
+                "{}: got {got:?}, want {want:?}",
+                spec.command_line()
+            );
         }
     }
 
     #[test]
     fn apt_get_remove_is_caught_by_the_classifier() {
-        let bad = ProbeSpec::new(ProbeId::PackageHealth, "apt-get", &["remove", "-y", "libreoffice"]);
+        let bad = ProbeSpec::new(
+            ProbeId::PackageHealth,
+            "apt-get",
+            &["remove", "-y", "libreoffice"],
+        );
         assert_eq!(read_only_violation(&bad), Some("remove writes".into()));
     }
 
@@ -433,11 +600,25 @@ mod tests {
         let pacman = |b: &str| b == "pacman";
         let zypper = |b: &str| b == "zypper";
         let none = |_: &str| false;
-        let line = |id, has: &dyn Fn(&str) -> bool| probe_spec_with(id, Os::Linux, has).map(|s| s.command_line());
-        assert_eq!(line(ProbeId::PackageHealth, &apt), Some("dpkg --audit".into()));
-        assert_eq!(line(ProbeId::PendingUpdates, &apt), Some("apt list --upgradable".into()));
-        assert_eq!(line(ProbeId::PackageHealth, &pacman), Some("pacman -Qkq".into()));
-        assert_eq!(line(ProbeId::PendingUpdates, &pacman), Some("pacman -Qu".into()));
+        let line = |id, has: &dyn Fn(&str) -> bool| {
+            probe_spec_with(id, Os::Linux, has).map(|s| s.command_line())
+        };
+        assert_eq!(
+            line(ProbeId::PackageHealth, &apt),
+            Some("dpkg --audit".into())
+        );
+        assert_eq!(
+            line(ProbeId::PendingUpdates, &apt),
+            Some("apt list --upgradable".into())
+        );
+        assert_eq!(
+            line(ProbeId::PackageHealth, &pacman),
+            Some("pacman -Qkq".into())
+        );
+        assert_eq!(
+            line(ProbeId::PendingUpdates, &pacman),
+            Some("pacman -Qu".into())
+        );
         assert_eq!(line(ProbeId::PackageHealth, &none), None);
         let zyp = probe_spec_with(ProbeId::PackageHealth, Os::Linux, &zypper).unwrap();
         assert!(zyp.needs_admin);
@@ -445,20 +626,35 @@ mod tests {
 
     #[test]
     fn ids_parse_only_for_their_own_os() {
-        assert_eq!(ProbeId::parse("disk_usage", Os::Linux), Some(ProbeId::DiskUsage));
+        assert_eq!(
+            ProbeId::parse("disk_usage", Os::Linux),
+            Some(ProbeId::DiskUsage)
+        );
         assert_eq!(ProbeId::parse(" DNS ", Os::Linux), Some(ProbeId::Dns));
         assert_eq!(ProbeId::parse("disk_usage", Os::Windows), None);
-        assert_eq!(ProbeId::parse("volumes", Os::Windows), Some(ProbeId::Volumes));
+        assert_eq!(
+            ProbeId::parse("volumes", Os::Windows),
+            Some(ProbeId::Volumes)
+        );
         assert_eq!(ProbeId::parse("df -h; rm -rf /", Os::Linux), None);
-        assert_eq!(probe_spec_with(ProbeId::Volumes, Os::Linux, &|_| true), None);
+        assert_eq!(
+            probe_spec_with(ProbeId::Volumes, Os::Linux, &|_| true),
+            None
+        );
     }
 
     #[test]
     fn windows_probes_run_powershell_without_a_profile_or_prompt() {
         let spec = probe_spec_with(ProbeId::Volumes, Os::Windows, &|_| false).unwrap();
         assert_eq!(spec.program, "powershell");
-        assert_eq!(&spec.argv[..3], &["-NoProfile", "-NonInteractive", "-Command"]);
+        assert_eq!(
+            &spec.argv[..3],
+            &["-NoProfile", "-NonInteractive", "-Command"]
+        );
         let winget = probe_spec_with(ProbeId::WingetUpgrades, Os::Windows, &|_| false).unwrap();
-        assert_eq!(winget.command_line(), "winget upgrade --disable-interactivity");
+        assert_eq!(
+            winget.command_line(),
+            "winget upgrade --disable-interactivity"
+        );
     }
 }

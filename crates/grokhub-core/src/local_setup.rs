@@ -32,9 +32,36 @@ pub struct LocalModel {
 
 /// Biggest first: the wizard suggests the first one that fits.
 pub const LOCAL_MODELS: &[LocalModel] = &[
-    LocalModel { id: "qwen2.5-7b-instruct-q4_k_m", name: "Qwen 2.5 7B", download_mb: 4_680, min_ram_mb: 16_384, min_vram_mb: 6_144, tier: "local:small", repo: "bartowski/Qwen2.5-7B-Instruct-GGUF", file: "Qwen2.5-7B-Instruct-Q4_K_M.gguf" },
-    LocalModel { id: "qwen2.5-3b-instruct-q4_k_m", name: "Qwen 2.5 3B", download_mb: 1_930, min_ram_mb: 8_192, min_vram_mb: 3_072, tier: "local:small", repo: "bartowski/Qwen2.5-3B-Instruct-GGUF", file: "Qwen2.5-3B-Instruct-Q4_K_M.gguf" },
-    LocalModel { id: "qwen2.5-1.5b-instruct-q4_k_m", name: "Qwen 2.5 1.5B", download_mb: 1_120, min_ram_mb: 4_096, min_vram_mb: 2_048, tier: "local:tiny", repo: "bartowski/Qwen2.5-1.5B-Instruct-GGUF", file: "Qwen2.5-1.5B-Instruct-Q4_K_M.gguf" },
+    LocalModel {
+        id: "qwen2.5-7b-instruct-q4_k_m",
+        name: "Qwen 2.5 7B",
+        download_mb: 4_680,
+        min_ram_mb: 16_384,
+        min_vram_mb: 6_144,
+        tier: "local:small",
+        repo: "bartowski/Qwen2.5-7B-Instruct-GGUF",
+        file: "Qwen2.5-7B-Instruct-Q4_K_M.gguf",
+    },
+    LocalModel {
+        id: "qwen2.5-3b-instruct-q4_k_m",
+        name: "Qwen 2.5 3B",
+        download_mb: 1_930,
+        min_ram_mb: 8_192,
+        min_vram_mb: 3_072,
+        tier: "local:small",
+        repo: "bartowski/Qwen2.5-3B-Instruct-GGUF",
+        file: "Qwen2.5-3B-Instruct-Q4_K_M.gguf",
+    },
+    LocalModel {
+        id: "qwen2.5-1.5b-instruct-q4_k_m",
+        name: "Qwen 2.5 1.5B",
+        download_mb: 1_120,
+        min_ram_mb: 4_096,
+        min_vram_mb: 2_048,
+        tier: "local:tiny",
+        repo: "bartowski/Qwen2.5-1.5B-Instruct-GGUF",
+        file: "Qwen2.5-1.5B-Instruct-Q4_K_M.gguf",
+    },
 ];
 
 pub fn model_by_id(id: &str) -> Option<&'static LocalModel> {
@@ -50,7 +77,8 @@ pub fn disk_needed_mb(m: &LocalModel) -> u64 {
 }
 
 pub fn fits(m: &LocalModel, hw: &Hardware) -> bool {
-    hw.free_disk_mb >= disk_needed_mb(m) && (hw.ram_mb >= m.min_ram_mb || hw.vram_mb >= m.min_vram_mb)
+    hw.free_disk_mb >= disk_needed_mb(m)
+        && (hw.ram_mb >= m.min_ram_mb || hw.vram_mb >= m.min_vram_mb)
 }
 
 /// The biggest model that fits, or none.
@@ -85,8 +113,16 @@ pub fn hardware_line(hw: &Hardware) -> String {
     } else {
         hw.gpu.trim().to_string()
     };
-    let ram = if hw.ram_mb > 0 { format!("{} RAM", size_label(hw.ram_mb)) } else { "RAM unknown".into() };
-    let disk = if hw.free_disk_mb > 0 { format!("{} free", size_label(hw.free_disk_mb)) } else { "free disk unknown".into() };
+    let ram = if hw.ram_mb > 0 {
+        format!("{} RAM", size_label(hw.ram_mb))
+    } else {
+        "RAM unknown".into()
+    };
+    let disk = if hw.free_disk_mb > 0 {
+        format!("{} free", size_label(hw.free_disk_mb))
+    } else {
+        "free disk unknown".into()
+    };
     format!("{gpu}, {ram}, {disk}")
 }
 
@@ -149,7 +185,10 @@ pub fn parse_drm_vram_total_bytes(text: &str) -> Option<u64> {
 
 /// Best VRAM MB from several DRM `mem_info_vram_total` file bodies (one per card).
 pub fn max_drm_vram_mb(files: &[&str]) -> Option<u64> {
-    files.iter().filter_map(|t| parse_drm_vram_total_bytes(t)).max()
+    files
+        .iter()
+        .filter_map(|t| parse_drm_vram_total_bytes(t))
+        .max()
 }
 
 /// Windows DXGI / CIM CSV: `Name,DedicatedVideoMemory` (bytes) → (name, MB).
@@ -181,26 +220,48 @@ mod tests {
     use super::*;
 
     fn hw(gpu: &str, vram_mb: u64, ram_mb: u64, free_disk_mb: u64) -> Hardware {
-        Hardware { gpu: gpu.into(), vram_mb, ram_mb, free_disk_mb }
+        Hardware {
+            gpu: gpu.into(),
+            vram_mb,
+            ram_mb,
+            free_disk_mb,
+        }
     }
 
     #[test]
     fn the_biggest_model_that_fits_ram_or_vram_and_disk_is_suggested() {
         let pick = |h: &Hardware| suggest(h).map(|m| m.name);
-        assert_eq!(pick(&hw("NVIDIA GeForce RTX 4070", 12_282, 32_768, 225_000)), Some("Qwen 2.5 7B"));
+        assert_eq!(
+            pick(&hw("NVIDIA GeForce RTX 4070", 12_282, 32_768, 225_000)),
+            Some("Qwen 2.5 7B")
+        );
         assert_eq!(pick(&hw("", 0, 16_384, 6_728)), Some("Qwen 2.5 7B"));
         // 1 MB short of the 7B's download plus headroom.
         assert_eq!(pick(&hw("", 0, 16_384, 6_727)), Some("Qwen 2.5 3B"));
         // A 6 GB GPU carries the 7B on a 4 GB laptop.
-        assert_eq!(pick(&hw("NVIDIA GeForce RTX 3060 Laptop GPU", 6_144, 4_096, 100_000)), Some("Qwen 2.5 7B"));
+        assert_eq!(
+            pick(&hw(
+                "NVIDIA GeForce RTX 3060 Laptop GPU",
+                6_144,
+                4_096,
+                100_000
+            )),
+            Some("Qwen 2.5 7B")
+        );
         assert_eq!(pick(&hw("", 0, 8_192, 100_000)), Some("Qwen 2.5 3B"));
         assert_eq!(pick(&hw("", 0, 8_191, 100_000)), Some("Qwen 2.5 1.5B"));
         assert_eq!(pick(&hw("", 0, 4_096, 3_168)), Some("Qwen 2.5 1.5B"));
         assert_eq!(pick(&hw("", 0, 4_095, 100_000)), None);
         assert_eq!(pick(&hw("", 0, 65_536, 3_167)), None, "no room on disk");
         assert_eq!(pick(&Hardware::default()), None, "nothing read");
-        assert_eq!(suggest(&hw("", 0, 8_192, 100_000)).map(|m| (m.id, m.tier)), Some(("qwen2.5-3b-instruct-q4_k_m", "local:small")));
-        assert_eq!(suggest(&hw("", 0, 4_096, 100_000)).map(|m| m.tier), Some("local:tiny"));
+        assert_eq!(
+            suggest(&hw("", 0, 8_192, 100_000)).map(|m| (m.id, m.tier)),
+            Some(("qwen2.5-3b-instruct-q4_k_m", "local:small"))
+        );
+        assert_eq!(
+            suggest(&hw("", 0, 4_096, 100_000)).map(|m| m.tier),
+            Some("local:tiny")
+        );
     }
 
     #[test]
@@ -222,8 +283,14 @@ mod tests {
             hardware_line(&hw("NVIDIA GeForce RTX 4070", 12_282, 32_768, 225_280)),
             "NVIDIA GeForce RTX 4070 (12 GB), 32 GB RAM, 220 GB free"
         );
-        assert_eq!(hardware_line(&hw("", 0, 8_192, 40_960)), "No GPU found, 8 GB RAM, 40 GB free");
-        assert_eq!(hardware_line(&Hardware::default()), "No GPU found, RAM unknown, free disk unknown");
+        assert_eq!(
+            hardware_line(&hw("", 0, 8_192, 40_960)),
+            "No GPU found, 8 GB RAM, 40 GB free"
+        );
+        assert_eq!(
+            hardware_line(&Hardware::default()),
+            "No GPU found, RAM unknown, free disk unknown"
+        );
         assert_eq!(
             suggestion_line(&hw("", 0, 32_768, 225_280)),
             "Qwen 2.5 7B fits this machine: a 4.6 GB download that needs 6.6 GB free."
@@ -236,9 +303,15 @@ mod tests {
 
     #[test]
     fn the_hardware_parsers_read_meminfo_nvidia_smi_df_and_sysctl() {
-        assert_eq!(parse_meminfo("MemTotal:       16314252 kB\nMemFree:  1 kB\n"), Some(15_931));
+        assert_eq!(
+            parse_meminfo("MemTotal:       16314252 kB\nMemFree:  1 kB\n"),
+            Some(15_931)
+        );
         assert_eq!(parse_meminfo("MemFree: 1 kB\n"), None);
-        assert_eq!(parse_nvidia_smi("NVIDIA GeForce RTX 4070, 12282\nNVIDIA T400, 2048\n"), Some(("NVIDIA GeForce RTX 4070".into(), 12_282)));
+        assert_eq!(
+            parse_nvidia_smi("NVIDIA GeForce RTX 4070, 12282\nNVIDIA T400, 2048\n"),
+            Some(("NVIDIA GeForce RTX 4070".into(), 12_282))
+        );
         assert_eq!(parse_nvidia_smi("NVIDIA-SMI has failed\n"), None);
         assert_eq!(parse_nvidia_smi(""), None);
         let df = "Filesystem     1024-blocks      Used Available Capacity Mounted on\n/dev/nvme0n1p2  490617784 250000000 230686720      53% /\n";
@@ -249,11 +322,19 @@ mod tests {
         // RDNA4-class 16 GB as DRM bytes.
         assert_eq!(parse_drm_vram_total_bytes("17179869184\n"), Some(16_384));
         assert_eq!(parse_drm_vram_total_bytes("0\n"), None);
-        assert_eq!(max_drm_vram_mb(&["8589934592", "17179869184", "bad"]), Some(16_384));
         assert_eq!(
-            parse_dxgi_dedicated_mb("Name,DedicatedVideoMemory\n\"AMD Radeon RX 9070 XT\",17179869184\n"),
+            max_drm_vram_mb(&["8589934592", "17179869184", "bad"]),
+            Some(16_384)
+        );
+        assert_eq!(
+            parse_dxgi_dedicated_mb(
+                "Name,DedicatedVideoMemory\n\"AMD Radeon RX 9070 XT\",17179869184\n"
+            ),
             Some(("AMD Radeon RX 9070 XT".into(), 16_384))
         );
-        assert_eq!(parse_dxgi_dedicated_mb("Name,DedicatedVideoMemory\nIntel UHD,0\n"), None);
+        assert_eq!(
+            parse_dxgi_dedicated_mb("Name,DedicatedVideoMemory\nIntel UHD,0\n"),
+            None
+        );
     }
 }
