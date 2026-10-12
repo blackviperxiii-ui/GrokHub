@@ -98,6 +98,7 @@ pub mod slash;
 pub mod ssrf;
 pub mod state;
 pub mod stream;
+pub mod systems_brief;
 pub mod talk;
 pub mod task;
 pub mod thread_tab;
