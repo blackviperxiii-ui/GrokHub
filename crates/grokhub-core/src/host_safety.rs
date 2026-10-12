@@ -202,11 +202,22 @@ fn collapse_echo_subs(cmd: &str) -> String {
     s
 }
 
+/// Copy one UTF-8 char at `i` onto `out` and advance `i`. Never reinterpret
+/// multi-byte codepoints as Latin-1 — that made the echo-collapse fixpoint
+/// loop forever on curly-quoted ask labels (`click “Reset zoom”`).
+fn push_utf8_char(cmd: &str, i: &mut usize, out: &mut String) {
+    let Some(ch) = cmd[*i..].chars().next() else {
+        *i = cmd.len();
+        return;
+    };
+    out.push(ch);
+    *i += ch.len_utf8();
+}
+
 fn collapse_echo_dollar(cmd: &str) -> String {
     let mut out = String::with_capacity(cmd.len());
     let lower = cmd.to_ascii_lowercase();
     let bytes = lower.as_bytes();
-    let orig = cmd.as_bytes();
     let mut i = 0;
     while i < bytes.len() {
         if bytes[i] == b'$' && i + 1 < bytes.len() && bytes[i + 1] == b'(' {
@@ -239,8 +250,7 @@ fn collapse_echo_dollar(cmd: &str) -> String {
                 }
             }
         }
-        out.push(orig[i] as char);
-        i += 1;
+        push_utf8_char(cmd, &mut i, &mut out);
     }
     out
 }
@@ -249,7 +259,6 @@ fn collapse_echo_backtick(cmd: &str) -> String {
     let mut out = String::with_capacity(cmd.len());
     let lower = cmd.to_ascii_lowercase();
     let bytes = lower.as_bytes();
-    let orig = cmd.as_bytes();
     let mut i = 0;
     while i < bytes.len() {
         if bytes[i] == b'`' {
@@ -282,8 +291,7 @@ fn collapse_echo_backtick(cmd: &str) -> String {
                 }
             }
         }
-        out.push(orig[i] as char);
-        i += 1;
+        push_utf8_char(cmd, &mut i, &mut out);
     }
     out
 }
@@ -404,6 +412,13 @@ mod tests {
         assert!(
             forbidden_reason("name=ssh; echo $name").is_none(),
             "mentioning ssh as a value without a path leaf must not trip"
+        );
+        // Curly quotes are multi-byte UTF-8; the echo-collapse pass must not
+        // reinterpret them as Latin-1 or the deobfuscate fixpoint never ends
+        // (hung ask_cards_that_click_are_classified_by_the_quoted_label in CI).
+        assert!(
+            forbidden_reason("click \u{201c}Reset zoom\u{201d}").is_none(),
+            "curly-quoted ask labels must stay allowed and finish"
         );
     }
 
