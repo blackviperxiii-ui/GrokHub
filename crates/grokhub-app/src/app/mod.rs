@@ -199,6 +199,7 @@ mod setup_wizard;
 mod sidebar;
 mod skill_undo;
 mod slash;
+mod systems_brief_ui;
 #[cfg(test)]
 mod tests;
 mod threads_nav;
