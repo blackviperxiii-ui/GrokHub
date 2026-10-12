@@ -92,6 +92,8 @@ pub enum Slash {
     Rename(String),
     Context,
     Health,
+    /// Weekly state-of-systems briefing (local aggregation; also Sunday night).
+    Brief,
     Fix,
     Remember(String),
     Mode(String),
@@ -263,6 +265,7 @@ pub fn parse_slash(line: &str) -> Option<Slash> {
         "/delete" | "/close" => Some(Slash::Delete),
         "/context" => Some(Slash::Context),
         "/health" => Some(Slash::Health),
+        "/brief" => Some(Slash::Brief),
         "/fix" => Some(Slash::Fix),
         "/remember" if !rest.is_empty() => Some(Slash::Remember(rest.to_string())),
         "/mode" if !rest.is_empty() => resolve_mode_arg(rest).map(Slash::Mode),
@@ -495,6 +498,7 @@ pub fn slash_kind(s: &Slash) -> &'static str {
         Slash::Rename(_) => "rename",
         Slash::Context => "context",
         Slash::Health => "health",
+        Slash::Brief => "brief",
         Slash::Fix => "fix",
         Slash::Remember(_) => "remember",
         Slash::Mode(_) => "mode",
@@ -587,6 +591,12 @@ pub const SLASH_COMMANDS: &[SlashDef] = &[
         cmd: "/health",
         hint: "Updates, failed services and the last dream",
         insert: "/health",
+        run_on_pick: true,
+    },
+    SlashDef {
+        cmd: "/brief",
+        hint: "Weekly systems briefing (local)",
+        insert: "/brief",
         run_on_pick: true,
     },
     SlashDef {
@@ -1212,6 +1222,7 @@ pub fn slash_help() -> String {
         "/delete — delete this chat tab",
         "/context — context use (server tokens + reasoning; visible turns as fallback)",
         "/health — updates, failed services, last dream",
+        "/brief — weekly systems briefing from local records",
         "/fix — halt + doctor",
         "/remember <fact> — write MEMORY.md",
         "/mode auto|fast|balance|think|max — legacy composer ladder (effort is automatic now)",
@@ -1334,6 +1345,9 @@ mod tests {
             "{learn_hits:?}"
         );
         assert_eq!(parse_slash("/update"), Some(Slash::Update));
+        assert_eq!(parse_slash("/brief"), Some(Slash::Brief));
+        assert_eq!(slash_kind(&Slash::Brief), "brief");
+        assert!(slash_help().contains("/brief — weekly systems briefing"));
     }
 
     #[test]
