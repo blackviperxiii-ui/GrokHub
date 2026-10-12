@@ -75,7 +75,7 @@ impl Cabin {
     /// Name the trial side on this run's metrics line.
     pub(super) fn tag_trial(&self, m: &mut RunMetrics) {
         let skill = self.harness.self_review.trial.clone().filter(|p| p.class == m.class);
-        if let Some(pick) = skill.or_else(|| self.note_trial_pick()) {
+        if let Some(pick) = skill.or_else(|| brain_trial_pick(&m.brain)).or_else(|| self.note_trial_pick()) {
             m.version = pick.version;
             m.arm = Some(pick.arm);
         }
@@ -129,6 +129,17 @@ impl Cabin {
     pub(super) fn on_trial(&self, kind: hx::ChangeKind, c: &hx::Change) -> bool {
         hx::read_versions(&config::config_dir()).iter().any(|v| v.kind == kind.as_str() && v.id == c.id && v.seq == c.seq)
     }
+}
+
+/// Brain 6: an open trial on the run's policy row or playbook. The tweak is
+/// in the file every matching run reads, so the run is on its canary side.
+fn brain_trial_pick(b: &run_metrics::RunBrain) -> Option<TrialPick> {
+    let dir = config::config_dir();
+    let classes = [(!b.policy.is_empty()).then(|| format!("policy:{}", b.policy)), (!b.playbook.is_empty()).then(|| format!("playbook:{}", b.playbook))];
+    classes.into_iter().flatten().find_map(|class| {
+        let v = hx::open_trial(&dir, &class)?;
+        Some(TrialPick { class, version: v.version, arm: Arm::Canary })
+    })
 }
 
 /// The trial's parent `SKILL.md`, parsed. `None` when it was not kept.

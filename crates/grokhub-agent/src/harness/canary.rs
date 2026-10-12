@@ -24,9 +24,10 @@ use grokhub_core::run_metrics::{Arm, RunMetrics};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+use crate::harness::brain_tune::{PlaybookTarget, PolicyTarget};
 use crate::harness::changes::{
-    rollback_change, undo_change, Change, ChangeKind, ChangeLedger, ChangeTarget, SkillTarget, SnippetTarget, UndoAsk,
-    CHANGES_DIR,
+    content_hash, rollback_change, undo_change, Change, ChangeKind, ChangeLedger, ChangeTarget, SkillTarget, SnippetTarget,
+    UndoAsk, CHANGES_DIR,
 };
 
 pub const VERSIONS_FILE: &str = "changes.jsonl";
@@ -230,6 +231,21 @@ pub fn start_trial(
     before: &str,
     after: &str,
 ) -> Result<Version, String> {
+    start_trial_at_share(config_dir, change, class, label, target, (before, after), CANARY_SHARE_PCT)
+}
+
+/// [`start_trial`] with its own share of runs. A policy row or playbook
+/// applies to every matching run once written (Brain 6), so its trial is at
+/// 100% and the runs before it are the control side.
+pub fn start_trial_at_share(
+    config_dir: &Path,
+    change: &Change,
+    class: &str,
+    label: &str,
+    target: Metric,
+    (before, after): (&str, &str),
+    share_pct: u8,
+) -> Result<Version, String> {
     let at = change.at;
     if let Some(open) = open_trial(config_dir, class) {
         append_version(
@@ -247,7 +263,7 @@ pub fn start_trial(
         diff: diff_stat(before, after),
         target,
         class: class.to_string(),
-        share_pct: CANARY_SHARE_PCT,
+        share_pct: share_pct.min(100),
         min_runs: CANARY_RUNS,
         max_ms: CANARY_MAX_MS,
         status: VersionStatus::Canary,
@@ -316,7 +332,11 @@ pub fn judge(v: &Version, runs: &[RunMetrics], now: u64) -> Option<Judged> {
     if base.is_empty() {
         let before: Vec<&RunMetrics> = runs
             .iter()
-            .filter(|m| (v.class == ALL_RUNS || m.class == v.class) && m.finished_at < v.started_at && m.version.is_empty())
+            .filter(|m| {
+                (v.class == ALL_RUNS || m.class == v.class || m.brain.in_class(&v.class))
+                    && m.finished_at < v.started_at
+                    && m.version.is_empty()
+            })
             .collect();
         base = before.into_iter().rev().take(BASELINE_RUNS).collect();
     }
@@ -382,6 +402,8 @@ fn target_of<'a>(v: &'a Version, config_dir: &'a Path, skills_dir: &'a Path) -> 
             name: &v.id,
         })),
         ChangeKind::Snippet => Some(Box::new(SnippetTarget { config_dir, name: &v.id })),
+        ChangeKind::Policy => Some(Box::new(PolicyTarget { config_dir })),
+        ChangeKind::Playbook => Some(Box::new(PlaybookTarget { config_dir, id: &v.id })),
         _ => None,
     }
 }
@@ -432,7 +454,12 @@ pub fn settle_trials(
             continue;
         };
         let ledger = ChangeLedger::load_kind(config_dir, kind);
-        if ledger.undo_target(&v.id).map(|c| c.seq) != Some(v.seq) {
+        // A hand edit since the trial (no ledger line) is the user's version: never put back over it.
+        let made = ledger.all().iter().find(|c| c.seq == v.seq).map(|c| c.after_hash.as_str()).unwrap_or("");
+        let edited = target_of(&v, config_dir, skills_dir)
+            .and_then(|t| t.read().ok())
+            .is_some_and(|now| now.as_deref().map(content_hash).unwrap_or_default() != made);
+        if edited || ledger.undo_target(&v.id).map(|c| c.seq) != Some(v.seq) {
             let line = v.closed(VersionStatus::Ended, String::new(), now);
             if append_version(config_dir, &line).is_ok() {
                 closed.push(line);

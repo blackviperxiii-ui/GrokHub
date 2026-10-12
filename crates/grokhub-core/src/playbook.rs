@@ -224,15 +224,15 @@ fn text(field: &str, s: &str, max: usize) -> Result<(), String> {
     Ok(())
 }
 
+/// A playbook id: 1 to [`ID_MAX`] of a-z, 0-9 and -.
+pub fn id_ok(id: &str) -> bool {
+    !id.is_empty() && id.len() <= ID_MAX && id.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+}
+
 /// The shape checks: ids, lengths, known intents/domains/OSes, at least one
 /// step, and phases and steps ordered read-only, then safe, then risky.
 pub fn check(p: &Playbook) -> Result<(), String> {
-    let id_ok = !p.id.is_empty()
-        && p.id.len() <= ID_MAX
-        && p.id
-            .chars()
-            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-');
-    if !id_ok {
+    if !id_ok(&p.id) {
         return Err(format!("id must be 1 to {ID_MAX} of a-z, 0-9 and -"));
     }
     text("name", &p.name, NAME_MAX)?;

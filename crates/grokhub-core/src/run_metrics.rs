@@ -61,9 +61,44 @@ pub struct RunMetrics {
     pub version: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub arm: Option<Arm>,
+    /// Brain 6: the run's Brief and what it picked. Empty on older lines.
+    #[serde(default, skip_serializing_if = "RunBrain::is_empty")]
+    pub brain: RunBrain,
     pub finished_at: u64,
     /// When this line was written. A later line for the same run wins.
     pub at: u64,
+}
+
+/// The run's Brief (intent, care, domain), the policy row it matched
+/// ("repair × critical") and the playbook it picked, by id.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RunBrain {
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub intent: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub care: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub domain: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub policy: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub playbook: String,
+}
+
+impl RunBrain {
+    pub fn is_empty(&self) -> bool {
+        *self == Self::default()
+    }
+
+    /// True when a trial on `class` (`policy:<row>` or `playbook:<id>`)
+    /// covers this run.
+    pub fn in_class(&self, class: &str) -> bool {
+        match class.split_once(':') {
+            Some(("policy", row)) => !row.is_empty() && self.policy == row,
+            Some(("playbook", id)) => !id.is_empty() && self.playbook == id,
+            _ => false,
+        }
+    }
 }
 
 /// The side of a canary trial a run was on: the new version, or its parent.
@@ -321,6 +356,46 @@ mod tests {
         assert_eq!(left, vec!["mid:1", "new:1", "new:2"]);
         assert_eq!(retention_cutoff(now, 0), 0);
         assert_eq!(retention_cutoff(now, 30), now - 30 * DAY_MS);
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn a_line_carries_the_brief_policy_and_playbook_and_an_old_line_still_parses() {
+        let d = dir("brain");
+        let now = 1_000 * DAY_MS;
+        let mut m = run("chat-a:5", now);
+        m.brain = RunBrain {
+            intent: "repair".into(),
+            care: "critical".into(),
+            domain: "system".into(),
+            policy: "repair × critical".into(),
+            playbook: "repair-linux".into(),
+        };
+        append_run(&d, &m, 90).unwrap();
+        let raw = fs::read_to_string(runs_path(&d)).unwrap();
+        let v: serde_json::Value = serde_json::from_str(raw.trim()).unwrap();
+        assert_eq!(
+            v["brain"],
+            serde_json::json!({
+                "intent": "repair",
+                "care": "critical",
+                "domain": "system",
+                "policy": "repair × critical",
+                "playbook": "repair-linux"
+            })
+        );
+        assert_eq!(read_runs(&d)[0].brain.playbook, "repair-linux");
+        assert!(m.brain.in_class("policy:repair × critical"));
+        assert!(m.brain.in_class("playbook:repair-linux"));
+        assert!(!m.brain.in_class("playbook:repair-windows"));
+        assert!(!m.brain.in_class("skill:repair-linux"));
+        assert!(!RunBrain::default().in_class("playbook:"));
+        // A line from before Brain 6 has no `brain` and reads with it empty.
+        let old = r#"{"run":"chat-a:1","class":"skill:weekly-report","result":"success","verified":true,"steps":3,"wall_ms":10,"tokens":{"in":1,"out":2},"cost_usd":0.0,"finished_at":5,"at":5}"#;
+        let parsed: RunMetrics = serde_json::from_str(old).unwrap();
+        assert_eq!((parsed.run.as_str(), parsed.steps, parsed.brain.clone()), ("chat-a:1", 3, RunBrain::default()));
+        let again: serde_json::Value = serde_json::from_str(&serde_json::to_string(&parsed).unwrap()).unwrap();
+        assert!(again.get("brain").is_none(), "an empty brain is not written");
         let _ = fs::remove_dir_all(&d);
     }
 

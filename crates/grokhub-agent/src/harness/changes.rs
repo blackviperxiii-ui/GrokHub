@@ -47,6 +47,10 @@ pub const AUTOMATION_LEDGER_FILE: &str = "automations.jsonl";
 pub const MODEL_LEDGER_FILE: &str = "models.jsonl";
 /// The chat-note ledger inside [`CHANGES_DIR`] (`tunable/<name>.md`, card 32 PR C).
 pub const SNIPPET_LEDGER_FILE: &str = "snippets.jsonl";
+/// The Brain policy file's ledger inside [`CHANGES_DIR`] (Brain 6).
+pub const POLICY_LEDGER_FILE: &str = "policy.jsonl";
+/// The playbooks ledger inside [`CHANGES_DIR`] (Brain 6).
+pub const PLAYBOOK_LEDGER_FILE: &str = "playbooks.jsonl";
 /// Scope-guard findings inside [`CHANGES_DIR`].
 pub const FINDINGS_FILE: &str = "findings.jsonl";
 /// Detector name on a scope-guard finding.
@@ -82,10 +86,15 @@ pub enum ChangeKind {
     Model,
     /// A chat note under `{config}/tunable/` the weekly pass wrote.
     Snippet,
+    /// The user's Brain policy file, `{config}/brain/brain_policy.toml` (Brain 6).
+    Policy,
+    /// A user playbook, `{config}/playbooks/<id>.toml` (Brain 6).
+    Playbook,
 }
 
 impl ChangeKind {
-    pub const ALL: [ChangeKind; 5] = [Self::Skill, Self::Connection, Self::Automation, Self::Model, Self::Snippet];
+    pub const ALL: [ChangeKind; 7] =
+        [Self::Skill, Self::Connection, Self::Automation, Self::Model, Self::Snippet, Self::Policy, Self::Playbook];
 
     pub fn as_str(self) -> &'static str {
         match self {
@@ -94,6 +103,8 @@ impl ChangeKind {
             Self::Automation => "automation",
             Self::Model => "model",
             Self::Snippet => "snippet",
+            Self::Policy => "policy",
+            Self::Playbook => "playbook",
         }
     }
 
@@ -108,6 +119,8 @@ impl ChangeKind {
             Self::Automation => AUTOMATION_LEDGER_FILE,
             Self::Model => MODEL_LEDGER_FILE,
             Self::Snippet => SNIPPET_LEDGER_FILE,
+            Self::Policy => POLICY_LEDGER_FILE,
+            Self::Playbook => PLAYBOOK_LEDGER_FILE,
         }
     }
 
@@ -118,12 +131,15 @@ impl ChangeKind {
             Self::Automation => "automations",
             Self::Model => "models",
             Self::Snippet => "snippets",
+            Self::Policy => "policy",
+            Self::Playbook => "playbooks",
         }
     }
 
     fn ext(self) -> &'static str {
         match self {
             Self::Skill | Self::Snippet => "md",
+            Self::Policy | Self::Playbook => "toml",
             _ => "json",
         }
     }
@@ -552,11 +568,16 @@ fn find_kept(dir: &Path, ext: &str, hash: &str) -> Option<PathBuf> {
 /// Keep one version. The same bytes kept before move to the front instead
 /// of being copied twice; past [`HISTORY_CAP`] the oldest go. A connection or
 /// automation that holds anything that reads as a secret is not kept: the
-/// write is refused instead.
+/// write is refused instead. A policy file or playbook is prose with ids like
+/// `task-general-copy`, so only a key at the start of a word counts there.
 fn keep_version(config_dir: &Path, kind: ChangeKind, id: &str, bytes: &[u8], at: u64) -> Result<String, String> {
     if kind != ChangeKind::Skill {
         let text = String::from_utf8_lossy(bytes);
-        if grokhub_core::redact_secrets(&text) != text {
+        let redacted = match kind {
+            ChangeKind::Policy | ChangeKind::Playbook => grokhub_core::redact_secret_words(&text),
+            _ => grokhub_core::redact_secrets(&text),
+        };
+        if redacted != text {
             return Err(format!("this {} holds a secret, so GrokHub won't keep or change it", kind.as_str()));
         }
     }
@@ -846,6 +867,36 @@ pub fn record_change(
         });
     }
     Ok(Some(change))
+}
+
+/// Bring an edit made outside the cabin into the ledger: when the target's
+/// bytes are not the newest line's `after`, keep them and append one
+/// `origin: user` line, so the user's version is a version like any other.
+/// `Ok(None)` when the ledger already matches the file.
+pub fn record_outside_edit(config_dir: &Path, target: &dyn ChangeTarget, reason: &str) -> Result<Option<Change>, String> {
+    guard(config_dir, target)?;
+    let _held = LEDGER_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let (kind, id) = (target.kind(), target.id()?);
+    let now = target.read()?;
+    let now_hash = now.as_deref().map(content_hash).unwrap_or_default();
+    let ledger = ChangeLedger::load_kind(config_dir, kind);
+    let last_hash = ledger.for_name(&id).rev().find(|c| c.op != ChangeOp::Accept).map(|c| c.after_hash.clone()).unwrap_or_default();
+    if now_hash == last_hash {
+        return Ok(None);
+    }
+    let at = now_ms();
+    let op = match (&now, last_hash.is_empty()) {
+        (None, _) => ChangeOp::Delete,
+        (Some(_), true) => ChangeOp::Create,
+        (Some(_), false) => ChangeOp::Modify,
+    };
+    let mut change = new_change_for(kind, &id, op, Origin::User, reason, at);
+    if let Some(b) = &now {
+        change.after_hash = keep_version(config_dir, kind, &id, b, at)?;
+        change.label = target.label_of(b);
+    }
+    change.before_hash = last_hash;
+    append_change(config_dir, change).map(Some)
 }
 
 /// [`record_change`] on one skill's `SKILL.md`.
