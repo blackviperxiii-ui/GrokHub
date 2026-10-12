@@ -509,6 +509,7 @@ impl NativeEngine {
             self.effort.as_deref(),
             &self.conversation_id,
             &mut self.history,
+            &[],
         );
         crate::hooks::on_compact(&self.conversation_id, &self.workspace, false);
         match compact_result {
