@@ -170,7 +170,13 @@ fn skill_list(ctx: &SelfCtx<'_>) -> String {
         .flatten()
         .filter(|e| !e.file_name().to_string_lossy().starts_with('.'))
         .filter_map(|e| read_skill(&e.path().join("SKILL.md")))
-        .map(|s| format!("{}: {}", s.name, s.description))
+        // List the loadable id (`skill` normalizes the same way) so
+        // skill_list never advertises a name the skill tool rejects.
+        .map(|s| {
+            let id = grokhub_core::skill_dir_name(&s.name);
+            let id = if id.is_empty() { s.name.clone() } else { id };
+            format!("{id}: {}", s.description)
+        })
         .collect();
     rows.sort();
     if rows.is_empty() {

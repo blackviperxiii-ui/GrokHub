@@ -19,7 +19,7 @@
 - Any table but `moz_places` / `urls`, opening the original history file, or a URL path in a fact (`browser_history_reads_history_tables_from_a_temp_copy_only`).
 - Granting from anything but a pointer click: `ScopeAsks::ask` only queues a card; Allow goes through `grant_scope_click` (`a_scope_ask_card_grants_on_a_click_only`, `only_a_settings_click_writes_a_grant`).
 ## What depends on it
-- Settings → Permissions scope rows and `/privacy`; the AMR store and its dream (which skips `SCOPE_SOURCE_PREFIX` nodes); Spike-6a cards (`ScopeAsks`) and Spike-8b diagnose (`snapshot`).
+- Settings → Permissions scope rows and `/privacy`; the AMR store and its dream (which skips `SCOPE_SOURCE_PREFIX` nodes); Spike-6a cards (`ScopeAsks`) and Spike-8b diagnose (`snapshot`); chat recall (`memory::library_intent` / `followup_injection`) so gaming/library asks see sealed Installed-app facts.
 ## Non-obvious
 - Calendar and mail are grant rows only: no cabin-owned reader exists (D1), so `has_reader` is false and no ask card is offered for them.
 - App launch counts come only from the cabin's own `APP_LAUNCH_LOG`; nothing writes it yet. A forgotten fact keeps its tombstone, so the same item is never written again.
