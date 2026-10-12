@@ -53,6 +53,7 @@ impl Cabin {
                 .get(self.thread_idx)
                 .map(|t| t.messages.clone())
                 .unwrap_or_else(|| Arc::new(Vec::new()));
+            self.stamp_open_activity(self.thread_idx);
             self.pin_chat_tail();
         } else if let Some(t) = self.threads.get_mut(self.thread_idx) {
             flush_visible_goal(&mut t.goal, self.goal_step, &self.cfg.goal_pin);
@@ -102,7 +103,201 @@ impl Cabin {
 
     pub(super) fn stamp_current_access(&mut self) {
         if let Some(t) = self.threads.get_mut(self.thread_idx) {
-            t.accessed_ms = now_ms();
+            let now = now_ms();
+            t.accessed_ms = now;
+            t.last_active_ms = now;
+        }
+    }
+
+    /// Opening a chat counts as activity for auto-archive without moving History order.
+    pub(super) fn stamp_open_activity(&mut self, idx: usize) {
+        if let Some(t) = self.threads.get_mut(idx) {
+            t.last_active_ms = now_ms();
+        }
+    }
+
+    /// A chat with a live reply, soft/hard park, or background job is busy.
+    pub(super) fn thread_is_busy(&self, id: &str) -> bool {
+        if self.running && self.chat_job_thread.as_deref() == Some(id) {
+            return true;
+        }
+        if self.bg.runs.iter().any(|r| r.thread_id == id && r.live()) {
+            return true;
+        }
+        if self.harness.soft_parks.iter().any(|p| p.chat_id == id) {
+            return true;
+        }
+        if self
+            .harness
+            .park
+            .as_ref()
+            .is_some_and(|p| p.chat_id == id)
+        {
+            return true;
+        }
+        if self.harness.queue.iter().any(|p| p.chat_id == id) {
+            return true;
+        }
+        false
+    }
+
+    pub(super) fn archive_thread_at(&mut self, idx: usize) {
+        let Some(t) = self.threads.get_mut(idx) else {
+            return;
+        };
+        let title = t.title.clone();
+        let id = t.id.clone();
+        if !threads::archive_thread(t, now_ms()) {
+            self.status = format!("{title} is already archived");
+            return;
+        }
+        self.archive_undo = Some(id.clone());
+        self.status = format!("Archived {title}");
+        self.persist();
+    }
+
+    pub(super) fn unarchive_thread_at(&mut self, idx: usize) {
+        let Some(t) = self.threads.get_mut(idx) else {
+            return;
+        };
+        let title = t.title.clone();
+        let id = t.id.clone();
+        if !threads::unarchive_thread(t) {
+            self.status = format!("{title} is not archived");
+            return;
+        }
+        t.last_active_ms = now_ms();
+        self.archive_undo = Some(id);
+        self.status = format!("Unarchived {title}");
+        self.persist();
+    }
+
+    /// Toggle archive on the open chat (shortcut and header menu).
+    pub(super) fn toggle_archive_current(&mut self) {
+        let idx = self.thread_idx;
+        let Some(t) = self.threads.get(idx) else {
+            return;
+        };
+        if t.background || t.scratch {
+            self.status = "Scratch and background chats stay put".into();
+            return;
+        }
+        if threads::is_archived(t) {
+            self.unarchive_thread_at(idx);
+        } else {
+            self.archive_thread_at(idx);
+        }
+    }
+
+    /// Undo the last archive or unarchive toast (same chat, flip back).
+    pub(super) fn undo_archive_toast(&mut self) {
+        let Some(id) = self.archive_undo.take() else {
+            return;
+        };
+        let Some(idx) = self.threads.iter().position(|t| t.id == id) else {
+            return;
+        };
+        if threads::is_archived(&self.threads[idx]) {
+            self.unarchive_thread_at(idx);
+        } else {
+            self.archive_thread_at(idx);
+        }
+        self.archive_undo = None;
+    }
+
+    /// Reply in an archived chat restores it to the main list with a quiet note.
+    pub(super) fn unarchive_on_reply(&mut self) {
+        let idx = self.thread_idx;
+        let Some(t) = self.threads.get(idx) else {
+            return;
+        };
+        if !threads::is_archived(t) {
+            return;
+        }
+        let title = t.title.clone();
+        if let Some(t) = self.threads.get_mut(idx) {
+            let _ = threads::unarchive_thread(t);
+            t.last_active_ms = now_ms();
+        }
+        self.archive_undo = None;
+        self.status = format!("Restored {title} to chats");
+        self.persist();
+    }
+
+    /// App start and once a day: archive idle chats. Returns how many moved.
+    pub(super) fn run_auto_archive(&mut self, now: u64) -> usize {
+        let days = self.cfg.chat_archive_days;
+        if days == 0 {
+            return 0;
+        }
+        let busy: std::collections::HashSet<String> = self
+            .threads
+            .iter()
+            .filter(|t| self.thread_is_busy(&t.id))
+            .map(|t| t.id.clone())
+            .collect();
+        let mut n = 0;
+        for t in &mut self.threads {
+            let is_busy = busy.contains(&t.id);
+            if threads::should_auto_archive(t, now, days, is_busy) && threads::archive_thread(t, now)
+            {
+                n += 1;
+            }
+        }
+        if n > 0 {
+            self.persist();
+            self.auto_archive_note = Some(n);
+            self.status = if n == 1 {
+                "Archived 1 idle chat".into()
+            } else {
+                format!("Archived {n} idle chats")
+            };
+        }
+        n
+    }
+
+    /// Once a local day (and on first call after launch when the day is new).
+    pub(super) fn tick_chat_auto_archive(&mut self, today: &str) {
+        if self.chat_archive_day.as_deref() == Some(today) {
+            return;
+        }
+        self.chat_archive_day = Some(today.to_string());
+        let _ = self.run_auto_archive(now_ms());
+    }
+
+    /// Settings → Behavior → Auto-archive idle chats.
+    pub(super) fn ui_chat_archive_row(&mut self, ui: &mut egui::Ui) {
+        const CHOICES: &[u32] = &[0, 7, 14, 30, 90];
+        let labels: Vec<String> = CHOICES
+            .iter()
+            .map(|d| {
+                if *d == 0 {
+                    "Off".into()
+                } else if *d == 1 {
+                    "1 day".into()
+                } else {
+                    format!("{d} days")
+                }
+            })
+            .collect();
+        let hint = "Chats with no messages, opens or edits for this long move to Archived. Pinned chats and chats with a running or parked task stay. Nothing is deleted.";
+        let current = if self.cfg.chat_archive_days == 0 {
+            "Off".to_string()
+        } else {
+            format!("{} days", self.cfg.chat_archive_days)
+        };
+        if let Some(i) = crate::cards::settings_dropdown(ui, "Auto-archive idle chats", hint, &current, &labels)
+        {
+            self.cfg.chat_archive_days = CHOICES[i];
+            self.persist_cfg();
+            self.status = if self.cfg.chat_archive_days == 0 {
+                "Auto-archive off".into()
+            } else {
+                format!(
+                    "Auto-archive after {} days",
+                    self.cfg.chat_archive_days
+                )
+            };
         }
     }
 
@@ -322,7 +517,9 @@ impl Cabin {
                 t.title = tab.title;
                 t.title_locked = true;
                 t.pinned = tab.pinned;
-                t.accessed_ms = now_ms();
+                let now = now_ms();
+                t.accessed_ms = now;
+                t.last_active_ms = now;
                 Some((t.title.clone(), t.grok_session.clone()))
             } else {
                 None
@@ -355,6 +552,7 @@ impl Cabin {
         t.pinned = toggle_pin(t.pinned);
         let now = now_ms();
         t.accessed_ms = now;
+        t.last_active_ms = now;
         if t.pinned {
             t.pinned_ms = now;
         }

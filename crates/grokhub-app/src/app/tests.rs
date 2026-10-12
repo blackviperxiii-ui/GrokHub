@@ -8791,6 +8791,78 @@ fn pin_thread_flips_the_pin() {
 }
 
 #[test]
+fn archive_hides_from_main_list_and_reply_restores() {
+    let mut quiet = QuietCabin::boot("chat-archive");
+    let cabin = &mut quiet.cabin;
+    cabin.threads.clear();
+    let mut keep = crate::threads::ChatThread::new("Keep", false);
+    keep.messages_mut().push(("user".into(), "stay".into()));
+    keep.accessed_ms = 100;
+    let mut done = crate::threads::ChatThread::new("Done chat", false);
+    done.messages_mut().push(("user".into(), "old".into()));
+    done.accessed_ms = 50;
+    cabin.threads = vec![keep, done];
+    cabin.thread_idx = 1;
+    cabin.messages = cabin.threads[1].messages.clone();
+    cabin.archive_thread_at(1);
+    assert!(crate::threads::is_archived(&cabin.threads[1]));
+    assert_eq!(
+        crate::threads::chat_section_indices(&cabin.threads, Some(1), false),
+        vec![0]
+    );
+    assert_eq!(
+        crate::threads::archived_section_indices(&cabin.threads, Some(1), false),
+        vec![1]
+    );
+    assert_eq!(cabin.status, "Archived Done chat");
+    assert_eq!(cabin.archive_undo.as_deref(), Some(cabin.threads[1].id.as_str()));
+    cabin.unarchive_on_reply();
+    assert!(!crate::threads::is_archived(&cabin.threads[1]));
+    assert_eq!(cabin.status, "Restored Done chat to chats");
+    assert_eq!(
+        crate::threads::chat_section_indices(&cabin.threads, Some(1), false),
+        vec![0, 1]
+    );
+    quiet.settle();
+}
+
+#[test]
+fn auto_archive_15_day_idle_skips_13_day_pinned_and_busy() {
+    let mut quiet = QuietCabin::boot("auto-archive");
+    let cabin = &mut quiet.cabin;
+    let now = 30 * crate::threads::DAY_MS;
+    cabin.cfg.chat_archive_days = 14;
+    cabin.threads.clear();
+    let mut idle15 = crate::threads::ChatThread::new("Fifteen", false);
+    idle15.messages_mut().push(("user".into(), "hi".into()));
+    idle15.accessed_ms = now - 15 * crate::threads::DAY_MS;
+    let mut idle13 = crate::threads::ChatThread::new("Thirteen", false);
+    idle13.messages_mut().push(("user".into(), "hi".into()));
+    idle13.accessed_ms = now - 13 * crate::threads::DAY_MS;
+    let mut pinned = crate::threads::ChatThread::new("Pinned", false);
+    pinned.messages_mut().push(("user".into(), "hi".into()));
+    pinned.accessed_ms = now - 20 * crate::threads::DAY_MS;
+    pinned.pinned = true;
+    let mut busy = crate::threads::ChatThread::new("Busy", false);
+    busy.messages_mut().push(("user".into(), "hi".into()));
+    busy.accessed_ms = now - 20 * crate::threads::DAY_MS;
+    let busy_id = busy.id.clone();
+    cabin.threads = vec![idle15, idle13, pinned, busy];
+    cabin.thread_idx = 0;
+    cabin.messages = cabin.threads[0].messages.clone();
+    cabin.running = true;
+    cabin.chat_job_thread = Some(busy_id);
+    let n = cabin.run_auto_archive(now);
+    assert_eq!(n, 1, "only the 15-day idle chat archives");
+    assert!(crate::threads::is_archived(&cabin.threads[0]));
+    assert!(!crate::threads::is_archived(&cabin.threads[1]));
+    assert!(!crate::threads::is_archived(&cabin.threads[2]));
+    assert!(!crate::threads::is_archived(&cabin.threads[3]));
+    assert_eq!(cabin.auto_archive_note, Some(1));
+    quiet.settle();
+}
+
+#[test]
 fn persist_keeps_threads_in_the_dir_it_was_scheduled_with() {
     let _g = crate::config::hold_test_config();
     let first = crate::config::test_config_root("persist-pin-a");
@@ -15317,6 +15389,10 @@ fn quiet_cabin() -> Cabin {
         history_q_seen: String::new(),
         history_q_at: None,
         history_hits: Vec::new(),
+        history_archived: false,
+        archive_undo: None,
+        chat_archive_day: None,
+        auto_archive_note: None,
         last_receipt_ok: None,
         beta_auto_off_checked_at: None,
         last_receipts: Vec::new(),

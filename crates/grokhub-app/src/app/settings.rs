@@ -568,6 +568,7 @@ impl Cabin {
                                                             self.ui_quiet_self_review_rows(ui);
                                                             self.ui_self_change_history(ui);
                                                             self.ui_memory_retention_row(ui);
+                                                            self.ui_chat_archive_row(ui);
                                                             if crate::cards::settings_action(ui, "Setup", "Walk through first-run setup again.", "Open") {
                                                                 self.open_setup(super::setup_wizard::SetupStep::Welcome);
                                                             }

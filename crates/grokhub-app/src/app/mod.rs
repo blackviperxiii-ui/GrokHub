@@ -338,6 +338,7 @@ fn cfg_if_current(slot: &CfgSlot, gen: u64) -> Option<AppConfig> {
 enum TabAct {
     Switch(usize),
     Pin(usize),
+    Archive(usize),
     StartRename(usize),
     CommitRename(usize),
     CancelRename,
@@ -518,6 +519,14 @@ pub struct Cabin {
     history_q_seen: String,
     history_q_at: Option<Instant>,
     history_hits: Vec<(String, String)>,
+    /// History page shows the Archived drawer instead of the main chat list.
+    history_archived: bool,
+    /// Thread id for the quiet archive/unarchive Undo toast.
+    archive_undo: Option<String>,
+    /// Local day the auto-archive pass last ran.
+    chat_archive_day: Option<String>,
+    /// Quiet note after auto-archive: count, with a link to the Archived view.
+    auto_archive_note: Option<usize>,
     last_receipt_ok: Option<bool>,
     /// Last Labs Beta auto-off tip check (cooldown so we do not ls-remote every frame).
     beta_auto_off_checked_at: Option<Instant>,
@@ -1117,6 +1126,10 @@ impl Cabin {
             history_q_seen: String::new(),
             history_q_at: None,
             history_hits: vec![],
+            history_archived: false,
+            archive_undo: None,
+            chat_archive_day: None,
+            auto_archive_note: None,
             last_receipt_ok: None,
             beta_auto_off_checked_at: None,
             last_receipts: vec![],
@@ -1407,6 +1420,8 @@ impl Cabin {
             #[cfg(not(test))]
             crate::desktop_mcp::set_desktop_enabled(c.cfg.desktop_control);
             steps.mark("startup:new:home");
+            // Auto-archive idle chats on launch (day gate also runs daily below).
+            c.tick_chat_auto_archive(&Self::local_day());
         }
         c
     }
@@ -1556,6 +1571,10 @@ impl Cabin {
             history_q_seen: String::new(),
             history_q_at: None,
             history_hits: Vec::new(),
+            history_archived: false,
+            archive_undo: None,
+            chat_archive_day: None,
+            auto_archive_note: None,
             last_receipt_ok: None,
             beta_auto_off_checked_at: None,
             last_receipts: Vec::new(),
@@ -3465,7 +3484,11 @@ impl Cabin {
                     self.tick_night_passes();
                 }
             }
-            JobKind::MemoryRetention => self.tick_amr_retention(day),
+            JobKind::MemoryRetention => {
+                self.tick_amr_retention(day);
+                // Same once-a-day beat as memory retention: archive idle chats.
+                self.tick_chat_auto_archive(day);
+            }
             JobKind::Reflect => {
                 if should_idle_reflect(
                     self.last_activity.elapsed().as_millis() as u64,
@@ -4814,6 +4837,15 @@ impl Cabin {
         {
             self.palette_open = false;
             self.nav = Nav::Settings;
+        }
+        if ctx.input(|i| {
+            i.modifiers.command
+                && i.modifiers.shift
+                && !i.modifiers.alt
+                && i.key_pressed(egui::Key::A)
+        }) && self.nav == Nav::Chat
+        {
+            self.toggle_archive_current();
         }
     }
 
