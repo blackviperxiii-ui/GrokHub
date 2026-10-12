@@ -373,7 +373,12 @@ mod tests {
         let mut alias = obs(CallStatus::Ok, 1);
         alias.served_model = Some("grok-4.7-latest".into());
         assert!(!observe(&mut r, true, &alias));
-        let mut o = obs(CallStatus::Ok, 2);
+        // A dated snapshot of the same id is not a redirect either.
+        let mut dated = obs(CallStatus::Ok, 2);
+        dated.served_model = Some("grok-4.7-0414".into());
+        assert!(!observe(&mut r, true, &dated));
+        assert_eq!(r.state, ModelState::Live);
+        let mut o = obs(CallStatus::Ok, 3);
         o.served_model = Some("grok-4.5".into());
         assert!(observe(&mut r, true, &o));
         assert_eq!((r.state, r.served_as.as_deref()), (ModelState::Redirected, Some("grok-4.5")));

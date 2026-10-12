@@ -43,20 +43,23 @@ pub const CLASS_TABLE: &[ClassRow] = &[
     row("background:triage", "low", "none", "medium", "background triage"),
     row("background:redact", "low", "none", "medium", "background redaction"),
     row("background:summarize", "low", "none", "medium", "a background summary"),
+    // Judge and dream use a reasoning model at low/medium (start low).
     row("background:judge", "low", "low", "high", "an independent check"),
     row("background:compact", "low", "low", "medium", "folding old context"),
     row("background:memory", "low", "low", "medium", "memory upkeep"),
     row("background:dream", "low", "low", "medium", "the nightly memory tidy"),
-    row("chat:quick", "low", "none", "high", "a quick answer"),
+    // Speed tier: never pays for high effort (ceiling medium).
+    row("chat:quick", "low", "none", "medium", "a quick answer"),
     row("chat:default", "medium", "low", "xhigh", "everyday chat"),
-    row("code:edit-small", "medium", "low", "xhigh", "a small code edit"),
+    // Small edits reason at low; plan/design/repair diagnose at high.
+    row("code:edit-small", "low", "low", "xhigh", "a small code edit"),
     row("plan", "high", "medium", "xhigh", "planning"),
     row("design", "high", "medium", "xhigh", "design work"),
     row("code:multi-file", "high", "medium", "xhigh", "a multi-file change"),
     row("debug", "high", "medium", "xhigh", "debugging"),
     row("desktop:soft", "medium", "low", "high", "a desktop step"),
     row("prepare:hard", "high", "high", "xhigh", "preparing a hard action"),
-    row("repair:diagnose", "medium", "low", "high", "a computer check"),
+    row("repair:diagnose", "high", "medium", "xhigh", "a computer check"),
 ];
 
 /// R3a: a class's band with its self-tuned start merged over the table row,
@@ -225,19 +228,38 @@ pub fn fallback_chain(from: &str, candidates: &[&str]) -> Vec<String> {
     same.into_iter().map(|(_, c)| c.to_string()).collect()
 }
 
+/// User-facing / real-work classes that prefer the newest reasoning model when
+/// the routing table has not ranked the candidates yet.
+fn prefers_newest(class: &str) -> bool {
+    !matches!(
+        class,
+        "background:classify"
+            | "background:triage"
+            | "background:redact"
+            | "background:summarize"
+            | "background:compact"
+            | "background:memory"
+            | "chat:quick"
+    )
+}
+
 /// Rank the candidates for `class`: the routing table's order first, then
-/// the lowest expected cost, then the session's own model, then the id.
+/// (for real-work classes with no table row) newest family version, then the
+/// lowest expected cost, then the session's own model, then the id.
 /// Degraded models stay eligible but go last.
 pub fn rank(class: &str, candidates: &[&str], table: &RoutingTable, reg: &Registry, current: &str, ctx_tokens: u64) -> Vec<String> {
     let rows = table.rows(class);
     let pos = |id: &str| rows.iter().position(|r| r.model == id).unwrap_or(usize::MAX);
     let cost = |id: &str| reg.get(id).and_then(|r| expected_cost_usd(&r.meta.prices, class, ctx_tokens)).unwrap_or(f64::MAX);
     let degraded = |id: &str| reg.get(id).is_some_and(|r| r.state == ModelState::Degraded);
+    let ver = |id: &str| family(id).map(|(_, v)| v).unwrap_or_default();
+    let newest = prefers_newest(class);
     let mut out: Vec<&str> = candidates.to_vec();
     out.sort_by(|a, b| {
         degraded(a)
             .cmp(&degraded(b))
             .then(pos(a).cmp(&pos(b)))
+            .then(if newest && pos(a) == usize::MAX && pos(b) == usize::MAX { ver(b).cmp(&ver(a)) } else { std::cmp::Ordering::Equal })
             .then(cost(a).total_cmp(&cost(b)))
             .then((a.trim() != current).cmp(&(b.trim() != current)))
             .then(a.cmp(b))

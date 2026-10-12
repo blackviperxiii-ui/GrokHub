@@ -60,7 +60,7 @@ fn the_goal_changes_the_effort_for_the_same_class_and_the_reason_is_logged() {
     let (quality, rules, d) = effort("g2-s-quality", "g2-ep-q1", "debug and refactor the config");
     assert_eq!(quality, "high", "{rules:?}");
     assert!(rules.contains(&"goal:quality".to_string()), "{rules:?}");
-    assert_eq!(d.route.reason, "High: everyday chat, and this one needs care.");
+    assert_eq!(d.route.reason, "quality · High: everyday chat, and this one needs care.");
     let rec = live::route_log(&dir, &call("g2-s-quality", "g2-ep-q1", "debug and refactor the config"), &d, &ok());
     assert_eq!((rec.goal.as_str(), rec.goal_reason.as_str()), ("quality", "mistakes can break the system"));
     let why = why_text(&dir);

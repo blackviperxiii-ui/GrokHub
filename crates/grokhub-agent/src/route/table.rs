@@ -67,14 +67,26 @@ pub const W_BALANCED: (f64, f64) = (0.3, 0.15);
 pub const W_QUALITY: (f64, f64) = (0.1, 0.0);
 
 impl SpeedQuality {
-    /// `Speed` for `background:*` and `chat:quick`; `Balanced` for everyday
-    /// chat, small edits, desktop steps and computer checks; `Quality` for the rest.
+    /// `Speed` for background sort/triage/redact/summarize/compact/memory and
+    /// `chat:quick`. Everything else (chat, code, plan, design, debug, desktop,
+    /// repair, judge, dream, prepare) is `Quality`: the strongest reasoning
+    /// model on the plan. `Balanced` stays for older saved tables only.
     pub fn of(class: &str) -> Self {
         match class {
-            c if c.starts_with("background:") || c == "chat:quick" => Self::Speed,
-            "chat:default" | "code:edit-small" | "desktop:soft" | "repair:diagnose" => Self::Balanced,
+            "background:classify"
+            | "background:triage"
+            | "background:redact"
+            | "background:summarize"
+            | "background:compact"
+            | "background:memory"
+            | "chat:quick" => Self::Speed,
             _ => Self::Quality,
         }
+    }
+
+    /// True when this tier must pick a reasoning model.
+    pub fn needs_reasoning(self) -> bool {
+        matches!(self, Self::Quality | Self::Balanced)
     }
 
     pub fn weights(self) -> (f64, f64) {
@@ -456,8 +468,30 @@ fn row_effort(class: &str, profile: Option<&ModelProfile>, reg: &Registry, model
     Some(Some(grokhub_core::parse_reasoning_effort(&picked).map(str::to_string).unwrap_or(picked)))
 }
 
+/// A model that can take a reasoning effort (not a `-non-reasoning` slug, and
+/// either its listing names efforts or [`grokhub_core::accepts_reasoning_effort`]
+/// says it does). Built from the live registry — never a hard-coded list.
+pub fn is_reasoning_model(reg: &Registry, profiles: &BTreeMap<String, ModelProfile>, id: &str) -> bool {
+    let lower = id.to_ascii_lowercase();
+    if lower.contains("non-reasoning") {
+        return false;
+    }
+    let efforts = profiles.get(id).and_then(|p| p.metadata.efforts.as_ref()).or_else(|| reg.get(id).and_then(|r| r.meta.efforts.as_ref()));
+    if efforts.is_some_and(|e| !e.is_empty()) {
+        return true;
+    }
+    grokhub_core::accepts_reasoning_effort(id)
+}
+
+/// Family version for ranking by recency (`grok-4.7` → `[4, 7]`). Empty when unknown.
+fn version_key(id: &str) -> Vec<u32> {
+    policy::family(id).map(|(_, v)| v).unwrap_or_default()
+}
+
 /// The models a class may rank: usable profile, live or degraded, in the plan pool (`included`), and it fits.
+/// Quality classes drop non-reasoning models so the tier never resolves to one.
 fn table_candidates<'a>(inp: &'a TableInputs<'_>, class: &str) -> Vec<&'a String> {
+    let sq = SpeedQuality::of(class);
     inp.reg
         .models
         .iter()
@@ -468,6 +502,7 @@ fn table_candidates<'a>(inp: &'a TableInputs<'_>, class: &str) -> Vec<&'a String
                 // Evals spend only the plan pool: never a key, a Fast variant or a premium route.
                 && probe_class(inp.reg, inp.reg.entitlement.credential, id) == CostClass::Included
                 && (class != "desktop:soft" || inp.profiles.get(*id).is_some_and(|p| p.probe.caching == Some(true)))
+                && (!sq.needs_reasoning() || is_reasoning_model(inp.reg, inp.profiles, id))
         })
         .map(|(id, _)| id)
         .collect()
@@ -525,16 +560,29 @@ pub fn build_table(inp: &TableInputs<'_>, cache: &EvalCache, now_ms: u64) -> Rou
             };
             r.quality.unwrap_or(QUALITY_PRIOR) - wc * nc - wl * nl
         };
+        // Quality: newest reasoning model first (live plan list, no hard-coded ids).
+        // Speed: score by cost and latency as before.
         rows.sort_by(|a, b| {
-            score(b)
-                .total_cmp(&score(a))
-                .then(a.est_cost_usd.unwrap_or(f64::MAX).total_cmp(&b.est_cost_usd.unwrap_or(f64::MAX)))
-                .then(a.model.cmp(&b.model))
+            if sq.needs_reasoning() {
+                version_key(&b.model)
+                    .cmp(&version_key(&a.model))
+                    .then(score(b).total_cmp(&score(a)))
+                    .then(a.est_cost_usd.unwrap_or(f64::MAX).total_cmp(&b.est_cost_usd.unwrap_or(f64::MAX)))
+                    .then(a.model.cmp(&b.model))
+            } else {
+                score(b)
+                    .total_cmp(&score(a))
+                    .then(a.est_cost_usd.unwrap_or(f64::MAX).total_cmp(&b.est_cost_usd.unwrap_or(f64::MAX)))
+                    .then(a.model.cmp(&b.model))
+            }
         });
         for (i, r) in rows.iter_mut().enumerate() {
-            r.why = match (i, r.quality) {
-                (0, _) => format!("{} for {} in your plan", sq.best(), row.plain),
-                (_, None) => format!("ranked by price and speed for {} until its check runs", row.plain),
+            r.why = match (i, sq, r.quality) {
+                (0, SpeedQuality::Quality | SpeedQuality::Balanced, _) => {
+                    format!("the strongest reasoning model for {} in your plan ({})", row.plain, sq.word())
+                }
+                (0, SpeedQuality::Speed, _) => format!("{} for {} in your plan", sq.best(), row.plain),
+                (_, _, None) => format!("ranked by price and speed for {} until its check runs", row.plain),
                 _ => format!("choice {} for {}", i + 1, row.plain),
             };
         }
