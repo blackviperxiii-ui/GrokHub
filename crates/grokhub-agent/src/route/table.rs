@@ -69,20 +69,23 @@ pub const W_BALANCED: (f64, f64) = (0.3, 0.15);
 pub const W_QUALITY: (f64, f64) = (0.1, 0.0);
 
 impl SpeedQuality {
-    /// `Speed` for background sort/triage/redact/summarize/compact/memory and
-    /// `chat:quick`. Everything else (chat, code, plan, design, debug, desktop,
-    /// repair, judge, dream, prepare) is `Quality`: the strongest reasoning
-    /// model on the plan. `Balanced` stays for older saved tables only.
+    /// `Speed` for cheap background sort/triage/redact/summarize/compact and
+    /// `chat:quick`. `Balanced` for everyday chat, small edits, desktop,
+    /// repair diagnose, memory/judge/dream. `Quality` for plan, design,
+    /// multi-file, debug, prepare. Capability fit (not "newest wins") picks
+    /// the model inside each tier.
     pub fn of(class: &str) -> Self {
+        let class = class_row(class).map(|r| r.class).unwrap_or(class);
         match class {
             "background:classify"
             | "background:triage"
             | "background:redact"
             | "background:summarize"
             | "background:compact"
-            | "background:memory"
             | "chat:quick" => Self::Speed,
-            _ => Self::Quality,
+            "plan" | "design" | "code:multi-file" | "debug" | "prepare:hard"
+            | "repair:diagnose" => Self::Quality,
+            _ => Self::Balanced,
         }
     }
 
@@ -551,15 +554,12 @@ pub fn is_reasoning_model(
     grokhub_core::accepts_reasoning_effort(id)
 }
 
-/// Family version for ranking by recency (`grok-4.7` → `[4, 7]`). Empty when unknown.
-fn version_key(id: &str) -> Vec<u32> {
-    policy::family(id).map(|(_, v)| v).unwrap_or_default()
-}
-
 /// The models a class may rank: usable profile, live or degraded, in the plan pool (`included`), and it fits.
-/// Quality classes drop non-reasoning models so the tier never resolves to one.
+/// Balanced/Quality (and classes that [`capabilities::class_need`] marks) drop non-reasoning models.
 fn table_candidates<'a>(inp: &'a TableInputs<'_>, class: &str) -> Vec<&'a String> {
     let sq = SpeedQuality::of(class);
+    let need = super::capabilities::class_need(class);
+    let want_reasoning = sq.needs_reasoning() || need.require_reasoning;
     inp.reg
         .models
         .iter()
@@ -570,7 +570,7 @@ fn table_candidates<'a>(inp: &'a TableInputs<'_>, class: &str) -> Vec<&'a String
                 // Evals spend only the plan pool: never a key, a Fast variant or a premium route.
                 && probe_class(inp.reg, inp.reg.entitlement.credential, id) == CostClass::Included
                 && (class != "desktop:soft" || inp.profiles.get(*id).is_some_and(|p| p.probe.caching == Some(true)))
-                && (!sq.needs_reasoning() || is_reasoning_model(inp.reg, inp.profiles, id))
+                && (!want_reasoning || is_reasoning_model(inp.reg, inp.profiles, id))
         })
         .map(|(id, _)| id)
         .collect()
@@ -592,11 +592,28 @@ pub fn eval_pairs(inp: &TableInputs<'_>) -> Vec<(String, Option<String>, Vec<&'s
     pairs.into_iter().map(|((m, e), c)| (m, e, c)).collect()
 }
 
-/// Build the table. Pure: the clock is `now_ms`, and the scores come from `cache`.
+/// Build the table. Pure: the clock is `now_ms`, scores come from `cache`, and
+/// model strengths come from `catalog` (capability fit per class).
 pub fn build_table(inp: &TableInputs<'_>, cache: &EvalCache, now_ms: u64) -> RoutingTable {
+    build_table_with_catalog(
+        inp,
+        cache,
+        &super::capabilities::build_catalog(inp.reg, now_ms),
+        now_ms,
+    )
+}
+
+/// Same as [`build_table`] with an explicit capability catalog (tests / rebuild).
+pub fn build_table_with_catalog(
+    inp: &TableInputs<'_>,
+    cache: &EvalCache,
+    catalog: &super::capabilities::CapabilityCatalog,
+    now_ms: u64,
+) -> RoutingTable {
     let mut classes = BTreeMap::new();
     for row in CLASS_TABLE {
         let sq = SpeedQuality::of(row.class);
+        let need = super::capabilities::class_need(row.class);
         let (wc, wl) = sq.weights();
         let mut rows: Vec<TableRow> = Vec::new();
         for id in table_candidates(inp, row.class) {
@@ -635,7 +652,7 @@ pub fn build_table(inp: &TableInputs<'_>, cache: &EvalCache, now_ms: u64) -> Rou
             .filter_map(|r| r.p50_latency_ms)
             .max()
             .unwrap_or(0) as f64;
-        let score = |r: &TableRow| {
+        let econ = |r: &TableRow| {
             let nc = match r.est_cost_usd {
                 Some(c) if max_cost > 0.0 => c / max_cost,
                 Some(_) => 0.0,
@@ -648,35 +665,34 @@ pub fn build_table(inp: &TableInputs<'_>, cache: &EvalCache, now_ms: u64) -> Rou
             };
             r.quality.unwrap_or(QUALITY_PRIOR) - wc * nc - wl * nl
         };
-        // Quality: newest reasoning model first (live plan list, no hard-coded ids).
-        // Speed: score by cost and latency as before.
+        let fit = |r: &TableRow| {
+            let caps = catalog.caps_or_derive(inp.reg, &r.model);
+            super::capabilities::fit_score(&caps, &need)
+        };
+        // Capability fit first (task-class diversity), then eval/econ, then id.
         rows.sort_by(|a, b| {
-            if sq.needs_reasoning() {
-                version_key(&b.model)
-                    .cmp(&version_key(&a.model))
-                    .then(score(b).total_cmp(&score(a)))
-                    .then(
-                        a.est_cost_usd
-                            .unwrap_or(f64::MAX)
-                            .total_cmp(&b.est_cost_usd.unwrap_or(f64::MAX)),
-                    )
-                    .then(a.model.cmp(&b.model))
-            } else {
-                score(b)
-                    .total_cmp(&score(a))
-                    .then(
-                        a.est_cost_usd
-                            .unwrap_or(f64::MAX)
-                            .total_cmp(&b.est_cost_usd.unwrap_or(f64::MAX)),
-                    )
-                    .then(a.model.cmp(&b.model))
-            }
+            fit(b)
+                .total_cmp(&fit(a))
+                .then(econ(b).total_cmp(&econ(a)))
+                .then(
+                    a.est_cost_usd
+                        .unwrap_or(f64::MAX)
+                        .total_cmp(&b.est_cost_usd.unwrap_or(f64::MAX)),
+                )
+                .then(a.model.cmp(&b.model))
         });
         for (i, r) in rows.iter_mut().enumerate() {
             r.why = match (i, sq, r.quality) {
-                (0, SpeedQuality::Quality | SpeedQuality::Balanced, _) => {
+                (0, SpeedQuality::Quality, _) => {
                     format!(
-                        "the strongest reasoning model for {} in your plan ({})",
+                        "best capability fit for {} in your plan ({})",
+                        row.plain,
+                        sq.word()
+                    )
+                }
+                (0, SpeedQuality::Balanced, _) => {
+                    format!(
+                        "best balance of strength and cost for {} ({})",
                         row.plain,
                         sq.word()
                     )
@@ -685,7 +701,7 @@ pub fn build_table(inp: &TableInputs<'_>, cache: &EvalCache, now_ms: u64) -> Rou
                     format!("{} for {} in your plan", sq.best(), row.plain)
                 }
                 (_, _, None) => format!(
-                    "ranked by price and speed for {} until its check runs",
+                    "ranked by capability fit for {} until its check runs",
                     row.plain
                 ),
                 _ => format!("choice {} for {}", i + 1, row.plain),
@@ -926,15 +942,22 @@ pub fn rebuild(config_dir: &Path, eval: Option<EvalEnv<'_>>, force: bool, now_ms
         reg: &reg,
         profiles: &profiles,
     };
+    let old_caps = super::capabilities::load_catalog(config_dir);
+    let caps_stale = old_caps.seed_version != super::capabilities::SEED_VERSION
+        || old_caps.schema != super::capabilities::CATALOG_SCHEMA
+        || old_caps.registry_hash != reg.hash;
     let unchanged = old.registry_hash == reg.hash
         && old.profiles_hash == profiles_hash(&profiles)
-        && old.eval_set_version == EVAL_SET_VERSION;
+        && old.eval_set_version == EVAL_SET_VERSION
+        && !caps_stale;
     if unchanged && !force {
         return Rebuilt {
             version: old.version,
             ..Rebuilt::default()
         };
     }
+    let catalog =
+        super::capabilities::refresh_catalog(config_dir, &reg, force || caps_stale, now_ms);
     let mut cache: EvalCache = read_json(&eval_cache_path(config_dir)).unwrap_or_default();
     let mut run = EvalRun::default();
     if let Some(env) = eval {
@@ -943,7 +966,7 @@ pub fn rebuild(config_dir: &Path, eval: Option<EvalEnv<'_>>, force: bool, now_ms
         }
     }
     let _ = grokhub_core::model_registry::store::write_json(&eval_cache_path(config_dir), &cache);
-    let mut table = build_table(&inp, &cache, now_ms);
+    let mut table = build_table_with_catalog(&inp, &cache, &catalog, now_ms);
     let had: Vec<&String> = old
         .classes
         .values()
@@ -971,9 +994,9 @@ pub fn rebuild(config_dir: &Path, eval: Option<EvalEnv<'_>>, force: bool, now_ms
     }
 }
 
-/// "How Auto picks": one line per class with its top model@effort and setting.
+/// "How Auto picks": one line per class with its baseline model@effort and setting.
 pub fn how_auto_picks(table: &RoutingTable) -> Vec<String> {
-    CLASS_TABLE
+    let mut lines: Vec<String> = CLASS_TABLE
         .iter()
         .map(|row| {
             let ct = table.classes.get(row.class);
@@ -985,13 +1008,15 @@ pub fn how_auto_picks(table: &RoutingTable) -> Vec<String> {
                 .map(|c| c.speed_quality)
                 .unwrap_or(SpeedQuality::of(row.class));
             format!(
-                "{} → {} ({})",
+                "{} → {} ({} · baseline)",
                 row.class,
                 top.unwrap_or_else(|| "today's model".into()),
                 sq.word()
             )
         })
-        .collect()
+        .collect();
+    lines.push(super::attention::TABLE_ATTENTION_NOTE.into());
+    lines
 }
 
 /// `/why table`: the same list, plus the version and when it was built.

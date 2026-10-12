@@ -484,7 +484,7 @@ fn a_provider_is_never_picked_to_save_money_and_a_pin_or_the_class_preference_ta
     let reg = fleet();
     let empty = RoutingTable::default();
     assert_eq!(reg.get(OR_MODEL).map(|r| r.state), Some(ModelState::Live));
-    // Granted and twenty times cheaper, but Auto never takes it for cost (newest xAI instead).
+    // Granted and twenty times cheaper, but Auto never takes a provider to save money.
     let r = Router::choose(
         &ask(
             "chat:default",
@@ -497,10 +497,14 @@ fn a_provider_is_never_picked_to_save_money_and_a_pin_or_the_class_preference_ta
         &empty,
         NOW,
     );
-    assert_eq!(
-        (r.provider.as_str(), r.model.as_str(), r.cost_class),
-        ("xai", "grok-4.7", CostClass::Included)
+    assert_eq!(r.provider.as_str(), "xai");
+    assert_eq!(r.cost_class, CostClass::Included);
+    assert!(
+        r.model == "grok-4.7" || r.model == "grok-4.3",
+        "expected an included xAI model, got {}",
+        r.model
     );
+    assert!(!r.model.contains('/'), "must not pick a provider model");
     // Your pin with its key and grant: it goes there, at an effort from its own list.
     let r = Router::choose(
         &ask("chat:default", OR_MODEL, true, granted(&["openrouter"])),
@@ -536,11 +540,16 @@ fn a_provider_is_never_picked_to_save_money_and_a_pin_or_the_class_preference_ta
     let r = Router::choose(&picked, &reg, &none(), &empty, NOW);
     assert_eq!(
         (r.model.as_str(), r.reason.as_str()),
-        (OR_MODEL, "quality · Low: you picked it in Settings.")
+        (OR_MODEL, "balanced · Low: you picked it in Settings.")
     );
     picked.spend = Spend::default();
     let r = Router::choose(&picked, &reg, &none(), &empty, NOW);
-    assert_eq!((r.provider.as_str(), r.model.as_str()), ("xai", "grok-4.7"));
+    assert_eq!(r.provider.as_str(), "xai");
+    assert!(
+        r.model == "grok-4.7" || r.model == "grok-4.3",
+        "ungranted pick falls back to included xAI, got {}",
+        r.model
+    );
     // The class preference ranks it first: taken while granted, never without.
     let pref = table_with("chat:default", OR_MODEL);
     let r = Router::choose(
@@ -558,7 +567,12 @@ fn a_provider_is_never_picked_to_save_money_and_a_pin_or_the_class_preference_ta
         &pref,
         NOW,
     );
-    assert_eq!((r.provider.as_str(), r.model.as_str()), ("xai", "grok-4.7"));
+    assert_eq!(r.provider.as_str(), "xai");
+    assert!(
+        r.model == "grok-4.7" || r.model == "grok-4.3",
+        "ungranted table preference falls back to included xAI, got {}",
+        r.model
+    );
 }
 
 #[test]

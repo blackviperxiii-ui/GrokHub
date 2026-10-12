@@ -376,24 +376,9 @@ pub fn fallback_chain(from: &str, candidates: &[&str]) -> Vec<String> {
     same.into_iter().map(|(_, c)| c.to_string()).collect()
 }
 
-/// User-facing / real-work classes that prefer the newest reasoning model when
-/// the routing table has not ranked the candidates yet.
-fn prefers_newest(class: &str) -> bool {
-    !matches!(
-        class,
-        "background:classify"
-            | "background:triage"
-            | "background:redact"
-            | "background:summarize"
-            | "background:compact"
-            | "background:memory"
-            | "chat:quick"
-    )
-}
-
 /// Rank the candidates for `class`: the routing table's order first, then
-/// (for real-work classes with no table row) newest family version, then the
-/// lowest expected cost, then the session's own model, then the id.
+/// (when the table has no row) capability fit for the class, then the lowest
+/// expected cost, then the session's own model, then the id.
 /// Degraded models stay eligible but go last.
 pub fn rank(
     class: &str,
@@ -415,15 +400,23 @@ pub fn rank(
             .unwrap_or(f64::MAX)
     };
     let degraded = |id: &str| reg.get(id).is_some_and(|r| r.state == ModelState::Degraded);
-    let ver = |id: &str| family(id).map(|(_, v)| v).unwrap_or_default();
-    let newest = prefers_newest(class);
+    let need = super::capabilities::class_need(class);
+    let fit = |id: &str| {
+        let mut caps = super::capabilities::derive_caps(
+            &reg.get(id)
+                .map(|r| r.meta.clone())
+                .unwrap_or_else(|| grokhub_core::model_registry::ModelMeta::bare(id)),
+        );
+        super::capabilities::apply_seed(id, &mut caps);
+        super::capabilities::fit_score(&caps, &need)
+    };
     let mut out: Vec<&str> = candidates.to_vec();
     out.sort_by(|a, b| {
         degraded(a)
             .cmp(&degraded(b))
             .then(pos(a).cmp(&pos(b)))
-            .then(if newest && pos(a) == usize::MAX && pos(b) == usize::MAX {
-                ver(b).cmp(&ver(a))
+            .then(if pos(a) == usize::MAX && pos(b) == usize::MAX {
+                fit(b).total_cmp(&fit(a))
             } else {
                 std::cmp::Ordering::Equal
             })
