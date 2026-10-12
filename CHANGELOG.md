@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Security: Pulse feed and image fetches no longer use `HTTP(S)_PROXY` from the environment. An env proxy would dial the proxy host and skip the public-only DNS check on the target URL; they now match `web_fetch` and resolve the target directly.
 - Security: host rails (`forbidden_reason`) also catch common shell/Python obfuscations that rebuild forbidden path leaves without spelling them — assignment expansion (`s=ssh; cat ~/.$s/…`), quoted `+` concatenation, and `$(echo …)` / `` `echo …` `` splits — so Always/Auto shell cannot read `~/.ssh` that way.
 - Fixed: sealed Installed-app learnings (and other scope facts) reach the model on gaming / Steam / library asks — first turn and follow-ups — even when Memory is still on the legacy backend, so the cabin no longer claims "no recorded info" while Settings shows Learned N things. Steam is matched as a whole word so coding asks about `upstream` / `downstream` do not pull the Installed-app pack.
 - Fixed: cabin skills under the settings `skills/` folder (the same ones `skill_list` shows) load with the `skill` tool; names normalize so `GamingProfile` and `steamlibreview` resolve instead of `unknown skill`.
