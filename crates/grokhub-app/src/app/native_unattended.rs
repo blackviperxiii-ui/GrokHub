@@ -289,13 +289,20 @@ fn fast_text(
     fast_once(ready, workspace, prompt, CABIN_FAST_FALLBACK, kind, goal)
 }
 
-fn native_rules(cabin: &Cabin, workspace: &std::path::Path) -> String {
+fn native_rules(cabin: &Cabin, workspace: &std::path::Path, job: &str) -> String {
     let stable = grokhub_core::cabin_rules::cabin_static_rules(cabin.cfg.desktop_control);
     let volatile = grokhub_core::cabin_rules::cabin_learned_tail(&grokhub_core::brief_for(
         &cabin.learning,
         "chat",
     ));
-    grokhub_agent::system_prompt_parts(&stable, &volatile, workspace)
+    let need = grokhub_agent::prompt_need_from_job(job);
+    grokhub_agent::system_prompt_with(
+        grokhub_agent::PromptProfile::Unattended,
+        &stable,
+        &volatile,
+        workspace,
+        need,
+    )
 }
 
 impl Cabin {
@@ -358,7 +365,7 @@ impl Cabin {
         let cwd = self.grok_cwd();
         let gate = scheduled_gate(self, self.session_mode);
         let model = grokhub_core::cabin_spawn_model(&self.cfg.model).to_string();
-        let system = native_rules(self, &cwd);
+        let system = native_rules(self, &cwd, &row.prompt);
         let prompt = row.prompt.clone();
         let id = row.id.clone();
         let (tx, rx) = mpsc::channel();
@@ -434,7 +441,13 @@ impl Cabin {
         let now = now_ms();
         let goal = self.bg_goal(JobKind::Review);
         let model = tier_model(model_for_mode("balanced"), goal.as_ref());
-        let prompt = review_system_prompt().to_string();
+        let prompt = grokhub_agent::system_prompt_with(
+            grokhub_agent::PromptProfile::Review,
+            "",
+            "",
+            &self.grok_cwd(),
+            grokhub_agent::PromptNeed::NONE,
+        );
         let workspace = self.grok_cwd();
         let (tx, rx) = mpsc::channel();
         self.review_rx = Some(rx);
@@ -1155,9 +1168,17 @@ mod tests {
         let chat = cabin.chat_rules();
         assert!(chat.starts_with("Personality: Pirate. Talk like a cheerful pirate"), "{chat}");
         assert!(chat.ends_with(&plain), "the cabin rules still come last: {chat}");
-        let night = native_rules(&cabin, &root);
+        let night = native_rules(&cabin, &root, "");
         assert!(!night.contains("Personality:"), "night jobs stay neutral: {night}");
         assert!(night.contains(grokhub_core::cabin_rules::CABIN_DESKTOP_RULES));
+        assert!(
+            night.contains("<dangerous_actions>"),
+            "unattended keeps template safety: {night}"
+        );
+        assert!(
+            !night.contains("<skills>"),
+            "unattended drops skills unless NEED_SKILLS: {night}"
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 
