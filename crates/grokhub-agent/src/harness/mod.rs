@@ -101,7 +101,7 @@ pub use cua::{
     CUA_DRIVER_TAG, CUA_DRIVER_VERSION, CUA_ENV_REMOVE, CUA_LINUX_ASSET, CUA_LINUX_SHA256, CUA_LINUX_ONLY_MSG,
     CUA_MISSING_MSG, CUA_OFF_MSG, CUA_PERMISSION_MODE, CUA_TOOLS,
 };
-pub use brain_tune::{propose, user_version, PlaybookTarget, PolicyTarget, Tweak, BRAIN_SHARE_PCT, OUTSIDE_EDIT, POLICY_ID};
+pub use brain_tune::{apply_brain_tweak, brain_ask, propose, user_version, BrainAsk, PlaybookTarget, PolicyTarget, Tweak, BRAIN_SHARE_PCT, OUTSIDE_EDIT, POLICY_ID};
 pub use canary::{
     diff_stat, judge, open_trial, pick_arm, read_versions, revert_version, settle_trials, start_trial, start_trial_at_share, versions_path, Judged, Metric,
     Version, VersionStatus, ALL_RUNS, CANARY_MAX_MS, CANARY_RUNS, CANARY_SHARE_PCT, VERSIONS_FILE,
@@ -117,7 +117,7 @@ pub use changes::{
 pub(crate) use changes::private_write;
 pub use self_improve::{
     guard_span, last_recorded_run, outcome_from_spans, patch_marks, run_metrics_from_spans, GUARD_TOOL, reject_live_replay, replay_gate, replay_patch, run_weekly,
-    spans_for, ReplayOpts, WeeklyPass, REPLAY_LIVE_REFUSED, REPLAY_TOOL, SELF_REVIEW_SESSION, SELF_REVIEW_TOOL,
+    spans_for, BrainTweak, ReplayOpts, WeeklyPass, REPLAY_LIVE_REFUSED, REPLAY_TOOL, SELF_REVIEW_SESSION, SELF_REVIEW_TOOL,
 };
 pub use self_manage::{
     automation_cap_refusal, open_connection_token, tool_origin, undo_connection, AutomationsFile, McpFile,
