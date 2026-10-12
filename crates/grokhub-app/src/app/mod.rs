@@ -167,6 +167,7 @@ mod interests_ui;
 mod jobs;
 mod local_ai_ui;
 mod marketplace_ui;
+mod mission_ui;
 mod model_download_ui;
 mod model_wait_ui;
 #[cfg(test)]
