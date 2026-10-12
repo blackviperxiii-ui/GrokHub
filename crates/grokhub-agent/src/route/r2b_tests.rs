@@ -141,7 +141,7 @@ fn fast_goes_to_a_live_waiting_turn_and_falls_back_to_grok_4_7_when_the_budget_i
     );
     assert_eq!(
         r.reason,
-        "quality · Medium: you're waiting, so the faster model is worth it."
+        "balanced · Medium: you're waiting, so the faster model is worth it."
     );
     // Budget tight: Grok 4.7, and the record says why.
     let tight = Spend {
@@ -160,7 +160,7 @@ fn fast_goes_to_a_live_waiting_turn_and_falls_back_to_grok_4_7_when_the_budget_i
     );
     assert_eq!(
         r.reason,
-        "quality · Medium: this week's budget is tight, so not grok-4.7-fast."
+        "balanced · Medium: this week's budget is tight, so not grok-4.7-fast."
     );
     // The toggle off: never.
     let off = Spend {

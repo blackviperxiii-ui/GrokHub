@@ -105,7 +105,7 @@ fn the_goal_changes_the_effort_for_the_same_class_and_the_reason_is_logged() {
     assert!(rules.contains(&"goal:quality".to_string()), "{rules:?}");
     assert_eq!(
         d.route.reason,
-        "quality · High: everyday chat, and this one needs care."
+        "balanced · High: everyday chat, and this one needs care."
     );
     let rec = live::route_log(
         &dir,

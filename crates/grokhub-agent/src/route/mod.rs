@@ -9,6 +9,7 @@
 
 pub mod budget;
 pub mod cabin;
+pub mod capabilities;
 pub mod connectivity;
 pub mod difficulty;
 pub mod goal;
@@ -426,10 +427,12 @@ impl Router {
             rules.push("cost:premium_ungranted".into());
         }
         let tier = table::SpeedQuality::of(input.class);
-        // Quality Auto pool: reasoning models only (pins / Settings pick still use `ids`).
+        let need_reasoning = tier.needs_reasoning()
+            || capabilities::class_need(input.class).require_reasoning;
+        // Balanced/Quality Auto pool: reasoning models only (pins / Settings pick still use `ids`).
         let auto_ok = |m: &str| {
             local::is_local(m)
-                || !tier.needs_reasoning()
+                || !need_reasoning
                 || table::is_reasoning_model(reg, profiles, m)
         };
         // R3b: a provider you added is never a stand-in or a fallback, and never
@@ -1123,7 +1126,7 @@ mod tests {
             (a.model.as_str(), a.effort.as_deref()),
             ("grok-4.7", Some("medium"))
         );
-        assert_eq!(a.reason, "quality · Medium: everyday chat.");
+        assert_eq!(a.reason, "balanced · Medium: everyday chat.");
         // No table yet: equal prices, so the session's own model wins the tie.
         assert_eq!(
             a.rule_ids,
@@ -1141,7 +1144,7 @@ mod tests {
             (easy.effort.as_deref(), easy.reason.as_str()),
             (
                 Some("low"),
-                "quality · Low: everyday chat, and this looks routine."
+                "balanced · Low: everyday chat, and this looks routine."
             )
         );
         // d > 0.7 goes up one rung but never past high on its own; the menu clamps xhigh anyway.
@@ -1217,7 +1220,7 @@ mod tests {
             ),
             ("grok-4.7", "pin:fallback", Some("grok-4.5"))
         );
-        assert_eq!(r.reason, "quality · Medium: grok-4.5 isn't answering.");
+        assert_eq!(r.reason, "balanced · Medium: grok-4.5 isn't answering.");
         let mut profiles = BTreeMap::new();
         let meta = reg.get("grok-4.7").unwrap().meta.clone();
         let mut bad = ProbeResult::status("failed");
@@ -1411,7 +1414,7 @@ mod tests {
             (effort.as_deref(), reason.as_str()),
             (
                 Some("medium"),
-                "quality · Medium: you corrected the last answer."
+                "balanced · Medium: you corrected the last answer."
             )
         );
         let _ = std::fs::remove_dir_all(dir);
@@ -1440,7 +1443,7 @@ mod tests {
         let rec: crate::harness::Span = serde_json::from_str(raw.lines().last().unwrap()).unwrap();
         let route = rec.route.unwrap();
         assert!(route.holdout && !route.shadow);
-        assert_eq!(route.reason, "quality · High: everyday chat.");
+        assert_eq!(route.reason, "balanced · High: everyday chat.");
         assert!(!why_text(&dir).to_ascii_lowercase().contains("holdout"));
         // prepare:hard is never held out.
         let hard = (0..)
@@ -1535,7 +1538,7 @@ mod tests {
         assert_eq!(why.lines().count(), 10);
         assert_eq!(
             why.lines().next(),
-            Some("background:judge · grok-4.7 · quality · Low: an independent check.")
+            Some("background:judge · grok-4.7 · balanced · Low: an independent check.")
         );
         // Brain 1: the newest Brief leads, and the list stays at ten lines.
         let brief = crate::brain::rules(&crate::brain::BriefInput {
@@ -1561,7 +1564,7 @@ mod tests {
         );
         assert_eq!(
             why.lines().nth(1),
-            Some("background:judge · grok-4.7 · quality · Low: an independent check.")
+            Some("background:judge · grok-4.7 · balanced · Low: an independent check.")
         );
         let health =
             std::fs::read_to_string(grokhub_core::model_registry::store::health_path(&dir))
