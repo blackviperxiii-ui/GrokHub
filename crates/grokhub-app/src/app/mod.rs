@@ -219,6 +219,8 @@ mod tests;
 mod native_signin_tests;
 #[cfg(test)]
 mod self_review_tests;
+#[cfg(test)]
+mod repaint_timer_tests;
 
 use chat_ui::*;
 use background::BgWork;
