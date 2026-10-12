@@ -306,6 +306,7 @@ impl Cabin {
             Ok(FolderPick::NoDialog) => self.harness.scope_note = Some(NO_FOLDER_DIALOG.to_string()),
             Ok(FolderPick::Cancelled) | Err(mpsc::TryRecvError::Disconnected) => {}
             Err(mpsc::TryRecvError::Empty) => {
+                // Folder dialog still open: poll until it answers. No rx → idle.
                 self.harness.scope_pick_rx = Some(rx);
                 ctx.request_repaint_after(std::time::Duration::from_millis(150));
             }
