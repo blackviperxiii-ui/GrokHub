@@ -304,7 +304,7 @@ impl Cabin {
             .cabin_latest
             .as_deref()
             .filter(|_| cabin_notify)
-            .map(|tag| cabin_update_notice(env!("CARGO_PKG_VERSION"), tag));
+            .map(|tag| cabin_update_notice(&crate::update::build_version_label(), tag));
         self.pull_account_oauth_from_disk();
         let account_auth = account_connect_chrome(self.secrets.oauth.as_ref());
         let picture_set = !self.cfg.profile_picture.trim().is_empty();

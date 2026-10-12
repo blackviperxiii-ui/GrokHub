@@ -68,7 +68,8 @@ impl Release {
         self.assets.iter().find(|a| a.name == name)
     }
 
-    /// "2.13.1" from `v2.13.1`, "2.13.1-beta (abc1234)" from `beta-v2.13.1-abc1234`.
+    /// "2.13.1" from `v2.13.1`, "2.13.1-beta.3" from `v2.13.1-beta.3`,
+    /// "2.13.1-beta (abc1234)" from legacy `beta-v2.13.1-abc1234`.
     pub fn version(&self) -> String {
         if let Some(rest) = self.tag.strip_prefix("beta-v") {
             return match rest.rsplit_once('-') {
@@ -78,6 +79,31 @@ impl Release {
         }
         self.tag.trim_start_matches('v').to_string()
     }
+}
+
+/// Stable release tag: `vX.Y.Z` only (no prerelease suffix).
+fn is_stable_release_tag(tag: &str) -> bool {
+    let Some(rest) = tag.strip_prefix('v') else {
+        return false;
+    };
+    let mut parts = rest.split('.');
+    matches!(
+        (parts.next(), parts.next(), parts.next(), parts.next()),
+        (Some(a), Some(b), Some(c), None)
+            if !a.is_empty()
+                && !b.is_empty()
+                && !c.is_empty()
+                && a.bytes().all(|x| x.is_ascii_digit())
+                && b.bytes().all(|x| x.is_ascii_digit())
+                && c.bytes().all(|x| x.is_ascii_digit())
+    )
+}
+
+/// Semver beta tag: `vX.Y.Z-beta.N`.
+fn is_beta_semver_tag(tag: &str) -> bool {
+    crate::parse_cabin_semver(tag).is_some_and(|v| v.beta.is_some())
+        && tag.starts_with('v')
+        && !tag.starts_with("beta-v")
 }
 
 /// `GET …/releases` (a list) or one release object.
@@ -118,18 +144,21 @@ pub fn parse_releases(body: &str) -> Vec<Release> {
         .collect()
 }
 
-/// Stable takes the newest full release (`v*`); beta the newest beta
-/// pre-release (`beta-v*`). The list isn't reliably in build order (a slow
-/// build publishes after a newer one), so the latest `created_at` wins and
-/// list order only breaks ties.
+/// Stable takes the newest full release (`vX.Y.Z`); beta the newest beta
+/// pre-release (`vX.Y.Z-beta.N` or legacy `beta-v*`). The list isn't reliably
+/// in build order (a slow build publishes after a newer one), so the latest
+/// `created_at` wins and list order only breaks ties.
 pub fn pick_release(releases: &[Release], channel: Channel) -> Option<&Release> {
     releases
         .iter()
         .filter(|r| {
             !r.draft
                 && match channel {
-                    Channel::Stable => !r.prerelease && r.tag.starts_with('v'),
-                    Channel::Beta => r.prerelease && r.tag.starts_with("beta-v"),
+                    Channel::Stable => !r.prerelease && is_stable_release_tag(&r.tag),
+                    Channel::Beta => {
+                        r.prerelease
+                            && (r.tag.starts_with("beta-v") || is_beta_semver_tag(&r.tag))
+                    }
                 }
         })
         .fold(None, |best: Option<&Release>, r| match best {
@@ -314,6 +343,31 @@ mod tests {
         assert!(download_url_ok(&a.url, &a.name));
         assert!(!download_url_ok("https://evil.example/grokhub-linux-v2.13.1.tar.gz", &a.name));
         assert!(!download_url_ok("https://github.com/blackviperxiii-ui/GrokHub/releases/download/v2.13.1/other.tar.gz", &a.name));
+    }
+
+    #[test]
+    fn semver_beta_tags_are_prereleases_and_never_stable_picks() {
+        let body = format!(
+            "[{},{},{},{}]",
+            release_at("v2.13.1-beta.2", true, "2026-10-11T17:00:00Z"),
+            release_at("v2.13.1-beta.10", true, "2026-10-11T19:00:00Z"),
+            release_at("v2.13.1", false, "2026-10-11T18:00:00Z"),
+            release_at("beta-v2.13.1-abc1234", true, "2026-10-11T16:00:00Z")
+        );
+        let all = parse_releases(&body);
+        let stable = pick_release(&all, Channel::Stable).unwrap();
+        assert_eq!(stable.tag, "v2.13.1");
+        // Newest by created_at among beta-channel tags (semver + legacy).
+        let beta = pick_release(&all, Channel::Beta).unwrap();
+        assert_eq!(beta.tag, "v2.13.1-beta.10");
+        assert_eq!(beta.version(), "2.13.1-beta.10");
+        // A prerelease tag must never be the stable pick even if mis-flagged.
+        let misflagged = parse_releases(&release_at("v2.13.1-beta.3", false, "2026-10-12T00:00:00Z"));
+        assert!(pick_release(&misflagged, Channel::Stable).is_none());
+        assert!(is_beta_semver_tag("v2.13.1-beta.3"));
+        assert!(!is_beta_semver_tag("v2.13.1"));
+        assert!(is_stable_release_tag("v2.13.1"));
+        assert!(!is_stable_release_tag("v2.13.1-beta.3"));
     }
 
     #[test]

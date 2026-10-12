@@ -81,13 +81,28 @@ pub fn build_channel() -> Channel {
     Channel::parse(env!("GROKHUB_BUILD_CHANNEL")).unwrap_or_default()
 }
 
-/// `grokhub --version`: `GrokHub 2.10.92-beta (beta @ abc1234)` on beta.
+/// Semver label only: `2.13.1-beta.3` on beta, `2.13.1` on stable. Used by
+/// the updater notify path so a beta install is offered the matching release.
+pub fn build_version_label() -> String {
+    match build_channel() {
+        Channel::Beta => format!(
+            "{}-beta.{}",
+            env!("CARGO_PKG_VERSION"),
+            env!("GROKHUB_BUILD_BETA_N")
+        ),
+        Channel::Stable => env!("CARGO_PKG_VERSION").to_string(),
+    }
+}
+
+/// `grokhub --version`: `GrokHub 2.13.1-beta.3 (beta @ abc1234)` on beta.
 pub fn build_version_line() -> String {
+    let beta_n: u64 = env!("GROKHUB_BUILD_BETA_N").parse().unwrap_or(0);
     grokhub_core::version_line(
         env!("CARGO_PKG_VERSION"),
         build_channel(),
         env!("GROKHUB_BUILD_BRANCH"),
         env!("GROKHUB_BUILD_SHA"),
+        beta_n,
     )
 }
 
@@ -638,11 +653,20 @@ mod tests {
         let line = build_version_line();
         let parsed = grokhub_core::parse_version_line(&line).expect("parses");
         assert_eq!(parsed.channel, build_channel());
-        let base = parsed.version.trim_end_matches("-beta");
-        assert_eq!(base, env!("CARGO_PKG_VERSION"));
-        assert!(line.starts_with(&format!("GrokHub {}", env!("CARGO_PKG_VERSION"))), "{line}");
+        assert_eq!(parsed.version, build_version_label());
+        assert!(line.starts_with(&format!("GrokHub {}", build_version_label())), "{line}");
         assert_eq!(parsed.branch, env!("GROKHUB_BUILD_BRANCH"));
         assert_eq!(parsed.sha, env!("GROKHUB_BUILD_SHA"));
+        if build_channel() == Channel::Beta {
+            assert!(
+                parsed.version.contains("-beta."),
+                "beta builds use -beta.N: {line}"
+            );
+            let n: u64 = env!("GROKHUB_BUILD_BETA_N").parse().expect("beta N");
+            assert_eq!(parsed.version, format!("{}-beta.{n}", env!("CARGO_PKG_VERSION")));
+        } else {
+            assert_eq!(parsed.version, env!("CARGO_PKG_VERSION"));
+        }
     }
 
     #[test]

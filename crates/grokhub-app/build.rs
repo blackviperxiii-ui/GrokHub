@@ -14,10 +14,58 @@ fn git(dir: &Path, args: &[&str]) -> Option<String> {
     (!s.is_empty()).then_some(s)
 }
 
-/// Channel, branch, and short SHA for `grokhub --version`, read from git at
-/// build time. `GROKHUB_CHANNEL=beta|stable` (set by `scripts/install.sh
+/// Newest stable `vMAJOR.MINOR.PATCH` tag (no prerelease suffix), by semver.
+fn newest_stable_tag(tags: &str) -> Option<&str> {
+    let mut best: Option<(u64, u64, u64, &str)> = None;
+    for tag in tags.lines().map(str::trim).filter(|t| !t.is_empty()) {
+        let Some(rest) = tag.strip_prefix('v') else {
+            continue;
+        };
+        let mut parts = rest.split('.');
+        let (Some(maj), Some(min), Some(patch_tok)) =
+            (parts.next(), parts.next(), parts.next())
+        else {
+            continue;
+        };
+        if parts.next().is_some() || !patch_tok.bytes().all(|b| b.is_ascii_digit()) {
+            continue;
+        }
+        let (Ok(major), Ok(minor), Ok(patch)) =
+            (maj.parse::<u64>(), min.parse::<u64>(), patch_tok.parse::<u64>())
+        else {
+            continue;
+        };
+        let key = (major, minor, patch);
+        match best {
+            Some((a, b, c, _)) if key <= (a, b, c) => {}
+            _ => best = Some((major, minor, patch, tag)),
+        }
+    }
+    best.map(|(_, _, _, t)| t)
+}
+
+/// Beta N = commits on HEAD since the newest stable `vX.Y.Z` tag (`git
+/// rev-list --count <tag>..HEAD`). Deterministic on any clone that has that
+/// tag. Shallow clones without tags fall back to `0` (`X.Y.Z-beta.0`); fetch
+/// tags (`git fetch --tags`) for the real count.
+fn beta_n(root: &Path) -> u64 {
+    let tags = match git(root, &["tag", "-l", "v*"]) {
+        Some(t) => t,
+        None => return 0,
+    };
+    let Some(tag) = newest_stable_tag(&tags) else {
+        return 0;
+    };
+    let range = format!("{tag}..HEAD");
+    git(root, &["rev-list", "--count", &range])
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0)
+}
+
+/// Channel, branch, short SHA, and beta N for `grokhub --version`, read from
+/// git at build time. `GROKHUB_CHANNEL=beta|stable` (set by `scripts/install.sh
 /// --channel`) wins; otherwise a `beta` branch builds as beta. The Cargo
-/// version is never touched, so the lockstep version stays 2.10.x.
+/// version is never touched. Beta labels are `X.Y.Z-beta.N` (see `beta_n`).
 fn build_info(manifest: &Path) {
     println!("cargo:rerun-if-env-changed=GROKHUB_CHANNEL");
     let root = manifest.join("../..");
@@ -36,12 +84,14 @@ fn build_info(manifest: &Path) {
         _ if branch == "beta" => "beta",
         _ => "stable",
     };
+    let n = if channel == "beta" { beta_n(&root) } else { 0 };
     println!("cargo:rustc-env=GROKHUB_BUILD_CHANNEL={channel}");
     println!("cargo:rustc-env=GROKHUB_BUILD_BRANCH={branch}");
     println!("cargo:rustc-env=GROKHUB_BUILD_SHA={sha}");
-    // Rebuild the label when HEAD moves (branch switch or new commit). The
-    // reflog is appended on every commit, checkout, and pull, so it catches a
-    // pull that writes a loose ref after `git gc` packed the branch ref.
+    println!("cargo:rustc-env=GROKHUB_BUILD_BETA_N={n}");
+    // Rebuild the label when HEAD or tags move. The reflog is appended on every
+    // commit, checkout, and pull, so it catches a pull that writes a loose ref
+    // after `git gc` packed the branch ref. `packed-refs` covers tag updates.
     let mut watch = vec![
         "HEAD".to_string(),
         "packed-refs".to_string(),

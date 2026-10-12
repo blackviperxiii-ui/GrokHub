@@ -558,29 +558,116 @@ pub fn settings_update_note() -> &'static str {
     }
 }
 
-/// `2.9.5` or `v2.9.5`. Extra suffix after patch (`2.9.5-alpha`) is ignored.
-pub fn parse_cabin_semver(raw: &str) -> Option<(u64, u64, u64)> {
+/// Cabin semver with optional `-beta.N` prerelease. Releases sort above any
+/// prerelease of the same `major.minor.patch`; among betas, `N` is numeric
+/// (`2.13.0-beta.2` < `2.13.0-beta.10` < `2.13.0`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CabinSemver {
+    pub major: u64,
+    pub minor: u64,
+    pub patch: u64,
+    /// `None` = release. `Some(n)` = `-beta.N` (bare `-beta` is `Some(0)`).
+    pub beta: Option<u64>,
+}
+
+impl PartialOrd for CabinSemver {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for CabinSemver {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        (self.major, self.minor, self.patch)
+            .cmp(&(other.major, other.minor, other.patch))
+            .then_with(|| match (self.beta, other.beta) {
+                (None, None) => std::cmp::Ordering::Equal,
+                (None, Some(_)) => std::cmp::Ordering::Greater,
+                (Some(_), None) => std::cmp::Ordering::Less,
+                (Some(a), Some(b)) => a.cmp(&b),
+            })
+    }
+}
+
+/// `2.9.5`, `v2.9.5`, `2.13.0-beta.2`, or bare `2.13.0-beta` (`beta = 0`).
+/// A trailing ` (…)` from release labels is ignored. Other suffixes after the
+/// patch digits (for example `-alpha`) still parse as a release, as before.
+pub fn parse_cabin_semver(raw: &str) -> Option<CabinSemver> {
     let t = raw.trim().trim_start_matches(['v', 'V']);
-    let mut parts = t.split('.');
+    let t = t.split_whitespace().next()?.trim();
+    let (num, beta) = match t.rsplit_once("-beta") {
+        Some((num, "")) => (num, Some(0)),
+        Some((num, rest)) => {
+            let n = rest.strip_prefix('.')?;
+            if n.is_empty() || !n.bytes().all(|b| b.is_ascii_digit()) {
+                return None;
+            }
+            (num, Some(n.parse().ok()?))
+        }
+        None => (t, None),
+    };
+    let mut parts = num.split('.');
     let major = parts.next()?.parse().ok()?;
     let minor = parts.next()?.parse().ok()?;
     let patch_tok = parts.next()?;
-    let patch: String = patch_tok.chars().take_while(|c| c.is_ascii_digit()).collect();
-    if patch.is_empty() {
+    if parts.next().is_some() {
         return None;
     }
-    Some((major, minor, patch.parse().ok()?))
+    let patch: String = patch_tok.chars().take_while(|c| c.is_ascii_digit()).collect();
+    if patch.is_empty() || patch.len() != patch_tok.len() {
+        // Unknown suffix on the patch token (not `-beta`, already split): keep
+        // the old "ignore trailing junk" behavior only when digits prefix it.
+        if patch.is_empty() {
+            return None;
+        }
+        // `2.9.5-alpha` → release 2.9.5
+        return Some(CabinSemver {
+            major,
+            minor,
+            patch: patch.parse().ok()?,
+            beta: None,
+        });
+    }
+    Some(CabinSemver {
+        major,
+        minor,
+        patch: patch.parse().ok()?,
+        beta,
+    })
 }
 
+/// True when `latest` is a newer install than `running`. A prerelease is never
+/// offered to a stable (non-prerelease) install.
 pub fn cabin_version_newer(latest: &str, running: &str) -> bool {
     match (parse_cabin_semver(latest), parse_cabin_semver(running)) {
-        (Some(l), Some(r)) => l > r,
+        (Some(l), Some(r)) => {
+            if l.beta.is_some() && r.beta.is_none() {
+                return false;
+            }
+            l > r
+        }
         _ => false,
     }
 }
 
 pub fn should_notify_cabin_update(running: &str, latest: Option<&str>) -> bool {
     latest.is_some_and(|tag| cabin_version_newer(tag, running))
+}
+
+/// Labs / updater auto-off by version: a beta install at `beta_running`
+/// (`X.Y.Z-beta.N`) turns off when stable `main_version` has reached that
+/// base (`X.Y.Z` or newer). Pure — tree-based [`crate::auto_off_step`] stays
+/// the clone path.
+pub fn beta_auto_off_for_versions(beta_running: &str, main_version: &str) -> bool {
+    match (
+        parse_cabin_semver(beta_running),
+        parse_cabin_semver(main_version),
+    ) {
+        (Some(b), Some(m)) if b.beta.is_some() && m.beta.is_none() => {
+            (m.major, m.minor, m.patch) >= (b.major, b.minor, b.patch)
+        }
+        _ => false,
+    }
 }
 
 /// `tag_name` from `GET …/releases/latest`.
@@ -1520,9 +1607,33 @@ mod tests {
 
     #[test]
     fn notify_when_newer() {
-        assert_eq!(parse_cabin_semver("2.9.5"), Some((2, 9, 5)));
-        assert_eq!(parse_cabin_semver("v2.9.6"), Some((2, 9, 6)));
-        assert_eq!(parse_cabin_semver("V2.10.0"), Some((2, 10, 0)));
+        assert_eq!(
+            parse_cabin_semver("2.9.5"),
+            Some(CabinSemver {
+                major: 2,
+                minor: 9,
+                patch: 5,
+                beta: None
+            })
+        );
+        assert_eq!(
+            parse_cabin_semver("v2.9.6"),
+            Some(CabinSemver {
+                major: 2,
+                minor: 9,
+                patch: 6,
+                beta: None
+            })
+        );
+        assert_eq!(
+            parse_cabin_semver("V2.10.0"),
+            Some(CabinSemver {
+                major: 2,
+                minor: 10,
+                patch: 0,
+                beta: None
+            })
+        );
         assert!(cabin_version_newer("v2.9.6", "2.9.5"));
         assert!(cabin_version_newer("2.10.0", "v2.9.5"));
         assert!(!cabin_version_newer("v2.9.5", "2.9.5"));
@@ -1546,6 +1657,53 @@ mod tests {
             "notify is in-app, not a web page: {notice}"
         );
         assert_eq!(GITHUB_LATEST_API, "https://api.github.com/repos/blackviperxiii-ui/GrokHub/releases/latest");
+    }
+
+    #[test]
+    fn semver_prerelease_order_and_channel_rules() {
+        let p = |s: &str| parse_cabin_semver(s).expect(s);
+        assert!(p("2.13.0-beta.2") < p("2.13.0-beta.10"));
+        assert!(p("2.13.0-beta.10") < p("2.13.0"));
+        assert!(p("2.13.0") < p("2.13.1"));
+        // Numeric prerelease, not lexicographic: .10 > .2
+        assert!(cabin_version_newer("2.13.0-beta.10", "2.13.0-beta.2"));
+        assert!(!cabin_version_newer("2.13.0-beta.2", "2.13.0-beta.10"));
+        // Release beats any beta of the same base.
+        assert!(cabin_version_newer("2.13.0", "2.13.0-beta.10"));
+        assert!(cabin_version_newer("v2.13.0", "2.13.0-beta.2"));
+        // Stable users are never offered a prerelease.
+        assert!(!cabin_version_newer("2.13.1-beta.1", "2.13.0"));
+        assert!(!cabin_version_newer("2.14.0-beta.5", "2.13.1"));
+        assert!(!should_notify_cabin_update("2.13.1", Some("2.13.2-beta.1")));
+        // Beta → newer beta and beta → release.
+        assert!(should_notify_cabin_update("2.13.0-beta.2", Some("2.13.0-beta.10")));
+        assert!(should_notify_cabin_update("2.13.0-beta.10", Some("v2.13.0")));
+        // main → beta (Labs): a stable install does not take a prerelease via notify.
+        assert!(!should_notify_cabin_update("2.13.0", Some("2.13.0-beta.1")));
+        // Auto-off when main reaches the beta base, not before.
+        assert!(beta_auto_off_for_versions("2.13.0-beta.2", "2.13.0"));
+        assert!(beta_auto_off_for_versions("2.13.0-beta.10", "2.13.1"));
+        assert!(!beta_auto_off_for_versions("2.13.0-beta.2", "2.12.9"));
+        assert!(!beta_auto_off_for_versions("2.13.0", "2.13.0")); // already stable
+        assert!(!beta_auto_off_for_versions("2.13.0-beta.2", "2.13.0-beta.9"));
+        assert_eq!(
+            p("2.13.0-beta"),
+            CabinSemver {
+                major: 2,
+                minor: 13,
+                patch: 0,
+                beta: Some(0)
+            }
+        );
+        assert_eq!(
+            p("2.13.0-beta.2 (abc1234)"),
+            CabinSemver {
+                major: 2,
+                minor: 13,
+                patch: 0,
+                beta: Some(2)
+            }
+        );
     }
 
     #[test]
