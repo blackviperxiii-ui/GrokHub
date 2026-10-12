@@ -2600,6 +2600,37 @@ mod tests {
     }
 
     #[test]
+    fn web_search_skips_cabin_background_and_empty_weak_interests() {
+        use crate::interests::{InterestProfile, InterestSource};
+        let mut p = InterestProfile::default();
+        assert!(p.add("Background", InterestSource::Chats, 1));
+        assert!(p.add("background:triage", InterestSource::Chats, 1));
+        assert!(p.add("settings", InterestSource::Memory, 1));
+        let topics = p.search_topics();
+        assert!(topics.is_empty(), "{topics:?}");
+        let web: Vec<String> = requests(&SourceSettings::default(), &topics, NOW)
+            .into_iter()
+            .filter(|r| r.kind == SourceKind::WebSearch)
+            .map(|r| r.url)
+            .collect();
+        assert!(web.is_empty(), "{web:?}");
+        assert!(!web.iter().any(|u| u.contains("background")));
+
+        assert!(p.add("Rust", InterestSource::Explicit, 2));
+        let topics = p.search_topics();
+        assert_eq!(topics, vec!["Rust".to_string()]);
+        let web: Vec<String> = requests(&SourceSettings::default(), &topics, NOW)
+            .into_iter()
+            .filter(|r| r.kind == SourceKind::WebSearch)
+            .map(|r| r.url)
+            .collect();
+        assert_eq!(
+            web,
+            vec!["https://lite.duckduckgo.com/lite/?q=Rust".to_string()]
+        );
+    }
+
+    #[test]
     fn pick_new_caps_posts_per_source_name() {
         let cache = SourceCache::default();
         let mut list = Vec::new();

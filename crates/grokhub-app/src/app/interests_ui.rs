@@ -47,7 +47,7 @@ impl Cabin {
         let mut chats: Vec<&threads::ChatThread> = self
             .threads
             .iter()
-            .filter(|t| !t.scratch && !t.title.trim().is_empty())
+            .filter(|t| !t.scratch && !t.background && !t.title.trim().is_empty())
             .collect();
         chats.sort_by_key(|t| std::cmp::Reverse(t.accessed_ms));
         let chat_titles: Vec<String> = chats

@@ -2,7 +2,11 @@
 
 ## Unreleased
 
+<<<<<<< HEAD
+- Fixed: Pulse web search no longer queries cabin jargon or weak tokens (the hidden “Background” chat, agent lanes like `background:triage`, Settings chrome, stopwords). Checks prefer sealed/strong interests; when nothing qualifies they skip Lite rather than invent a junk query.
+=======
 - Auto baseline lanes (Cheap / Workhorse / Code / Flagship) reserve the plan's strongest reasoner for plan/design/debug/prepare/`repair:diagnose`; SuperGrok-shaped plans keep memory/judge/dream/chat on the coding mid and escalate to flagship only when attention says so. Seed catalog v2; rebuild refreshes on seed bump.
+>>>>>>> origin/beta
 - Auto picks models with a built-in Rust logic system (no model-in-the-loop): capability catalog + baseline lanes + on-the-fly escalate/de-escalate from request signals, plus learned feedback from corrections/failures (`models/capability_catalog.json`, `models/attention_feedback.json`). Light tasks keep a cheap *task* model; host risk and hard asks escalate; `repair:diagnose` always takes the strongest reasoning model. Settings "How Auto picks" shows baselines and notes that turns can escalate.
 - Pulse can search the open web for free (Settings → Pulse → Sources → Web search). Each check queries DuckDuckGo Lite for your top three interests; results post with the result site as the source name so diversity and novelty caps still apply. No API key. The paid “X and web search (xAI)” row stays off.
 - Security: Pulse feed and image fetches no longer use `HTTP(S)_PROXY` from the environment. An env proxy would dial the proxy host and skip the public-only DNS check on the target URL; they now match `web_fetch` and resolve the target directly.
