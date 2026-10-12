@@ -13839,6 +13839,10 @@ fn set_nav_id_opens_each_page() {
     assert!(matches!(cabin.nav, super::Nav::History));
     assert!(!cabin.running);
 
+    cabin.set_nav_id("journal");
+    assert!(matches!(cabin.nav, super::Nav::Journal));
+    assert!(!cabin.running);
+
     cabin.set_nav_id("imagine");
     assert!(matches!(cabin.nav, super::Nav::Imagine));
     assert!(cabin.imagine_want_focus);
@@ -16239,6 +16243,8 @@ fn quiet_cabin() -> Cabin {
         board: Vec::new(),
         board_title: String::new(),
         board_notes: String::new(),
+        journal: Vec::new(),
+        journal_view: super::journal_ui::JournalView::default(),
         imagine_prompt: String::new(),
         imagine_last: String::new(),
         skill_name: String::new(),
@@ -28250,6 +28256,7 @@ fn spike3a_adds_no_nav_page() {
         Nav::Skills,
         Nav::Night,
         Nav::History,
+        Nav::Journal,
         Nav::Command,
         Nav::Agents,
         Nav::Settings,
@@ -28266,12 +28273,13 @@ fn spike3a_adds_no_nav_page() {
             Nav::Skills => "skills",
             Nav::Night => "night",
             Nav::History => "history",
+            Nav::Journal => "journal",
             Nav::Command => "command",
             Nav::Agents => "agents",
             Nav::Settings => "settings",
         })
         .collect();
-    assert_eq!(named.len(), 12);
+    assert_eq!(named.len(), 13);
     let _g = crate::config::hold_test_config();
     let root = crate::config::test_config_root("spike3a-nav");
     std::env::set_var("GROKHUB_CONFIG", &root);
@@ -28955,4 +28963,78 @@ fn being_active_holds_heavy_jobs_and_light_model_jobs_go_cheap_until_idle() {
     // A key or click a moment ago counts as active again.
     cabin.last_activity = std::time::Instant::now();
     assert!(cabin.user_active_now());
+}
+
+#[test]
+fn journal_create_promote_persists_and_slash_opens() {
+    let _hold = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("journal-v1");
+    let _ = std::fs::create_dir_all(&root);
+    std::env::set_var("GROKHUB_CONFIG", &root);
+
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.run_slash_line("/journal");
+    assert!(
+        matches!(cabin.nav, Nav::Journal),
+        "/journal must open the Journal page"
+    );
+
+    let id = grokhub_core::create_entry(&mut cabin.journal, "Should we keep a decision journal?")
+        .expect("create");
+    assert_eq!(cabin.journal.len(), 1);
+    assert!(grokhub_core::edit_entry(
+        &mut cabin.journal,
+        &id,
+        None,
+        Some("Ideas were becoming silent commitments."),
+        Some("Ship local decisions.json."),
+        None,
+        None,
+    ));
+    let board_id =
+        grokhub_core::promote_to_board(&mut cabin.journal, &mut cabin.board, &id).expect("promote");
+    assert_eq!(
+        cabin.journal[0].board_id.as_deref(),
+        Some(board_id.as_str())
+    );
+    assert_eq!(cabin.board.len(), 1);
+    assert!(
+        cabin.board[0].detail.contains("Ideas were becoming")
+            || cabin.board[0].detail.contains("journal"),
+        "context must survive promote: {}",
+        cabin.board[0].detail
+    );
+
+    crate::config::save_journal(&cabin.journal).expect("save decisions.json");
+    let path = crate::config::decisions_path();
+    assert!(
+        path.starts_with(&root),
+        "journal must land under GROKHUB_CONFIG: {} vs {}",
+        path.display(),
+        root.display()
+    );
+    let loaded = crate::config::load_journal();
+    assert_eq!(loaded.len(), 1, "decisions.json at {}", path.display());
+    assert_eq!(loaded[0].question, "Should we keep a decision journal?");
+    assert_eq!(loaded[0].board_id.as_deref(), Some(board_id.as_str()));
+    // Background flush uses the same save path.
+    cabin.flush_journal();
+    let src = include_str!("journal_ui.rs");
+    assert!(
+        src.contains("config::save_journal") && src.contains("flush_journal"),
+        "UI flush must write decisions.json"
+    );
+
+    assert!(grokhub_core::decide_entry(
+        &mut cabin.journal,
+        &id,
+        None,
+        "Local journal is enough for v1."
+    ));
+    assert_eq!(
+        cabin.journal[0].status,
+        grokhub_core::JournalStatus::Decided
+    );
+
+    std::env::remove_var("GROKHUB_CONFIG");
 }
