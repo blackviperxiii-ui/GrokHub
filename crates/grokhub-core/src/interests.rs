@@ -261,6 +261,17 @@ impl InterestProfile {
         out
     }
 
+    /// Topics strong enough to search (HN / Reddit / DuckDuckGo Lite). Skips cabin
+    /// chrome, agent lane names, stopwords and weak chat unigrams so a junk token
+    /// never becomes a query. Empty when nothing qualifies — no fallback query.
+    pub fn search_topics(&self) -> Vec<String> {
+        self.ranked()
+            .into_iter()
+            .filter(|t| searchable_interest(t))
+            .map(|t| t.topic.clone())
+            .collect()
+    }
+
     /// The prompt section the lookup follows. Empty when there is nothing to say.
     pub fn prompt_section(&self) -> String {
         let top: Vec<&str> = self
@@ -300,6 +311,9 @@ impl InterestProfile {
         self.seeded = true;
         let mut added = 0;
         let mut offer = |p: &mut Self, topic: &str, source: InterestSource| {
+            if !topic_searchable(topic) {
+                return;
+            }
             if added < SEED_MAX && p.add(topic, source, now_ms) {
                 added += 1;
             }
@@ -321,6 +335,52 @@ impl InterestProfile {
         }
         added
     }
+}
+
+/// True when this interest may become a Pulse source query.
+fn searchable_interest(t: &Interest) -> bool {
+    if !topic_searchable(&t.topic) {
+        return false;
+    }
+    // Prefer sealed / strong sources. Chat titles only when multi-word.
+    if t.pinned
+        || matches!(
+            t.source,
+            InterestSource::Explicit | InterestSource::Memory | InterestSource::Saved
+        )
+    {
+        return true;
+    }
+    t.topic.split_whitespace().count() >= 2
+}
+
+/// A topic string safe to put in HN / Reddit / Lite `q=`. Blocks cabin chrome,
+/// agent class names (`background:triage`), and weak unigrams.
+pub fn topic_searchable(topic: &str) -> bool {
+    let topic = clean_topic(topic);
+    if topic.is_empty() {
+        return false;
+    }
+    let lower = topic.to_lowercase();
+    // Agent lanes and class ids: "background:triage", "repair:diagnose".
+    if lower.contains(':') {
+        return false;
+    }
+    if CABIN_TOPIC_BLOCK.contains(&lower.as_str()) {
+        return false;
+    }
+    let words: Vec<&str> = lower.split_whitespace().collect();
+    if words.is_empty() {
+        return false;
+    }
+    if words.len() == 1 && WEAK_UNIGRAMS.contains(&words[0]) {
+        return false;
+    }
+    // "the background", "new chat" style leftovers.
+    if words.iter().all(|w| WEAK_UNIGRAMS.contains(w)) {
+        return false;
+    }
+    true
 }
 
 /// What seeding reads. Chat titles newest first.
@@ -392,13 +452,184 @@ pub fn topics_in_memory(raw: &str) -> Vec<String> {
     out
 }
 
-const GENERIC_TITLES: &[&str] = &["new chat", "untitled", "chat", "scratch", "new session"];
+/// Chat / Settings chrome titles that are never interests.
+const CABIN_TOPIC_BLOCK: &[&str] = &[
+    "background",
+    "new chat",
+    "untitled",
+    "chat",
+    "scratch",
+    "new session",
+    "settings",
+    "pulse",
+    "sources",
+    "interests",
+    "feed",
+    "ideas",
+    "cabin",
+    "grokhub",
+    "history",
+    "permissions",
+    "labs",
+    "behavior",
+    "saved finds",
+    "follow up",
+    "summarize the workboard",
+    "background task",
+    "background task done",
+    "background task failed",
+    "background task stopped",
+];
+
+/// Single words that are not user interests (English glue + cabin / agent verbs).
+const WEAK_UNIGRAMS: &[&str] = &[
+    "a",
+    "an",
+    "the",
+    "and",
+    "or",
+    "of",
+    "to",
+    "in",
+    "on",
+    "for",
+    "with",
+    "from",
+    "this",
+    "that",
+    "it",
+    "is",
+    "are",
+    "was",
+    "be",
+    "as",
+    "at",
+    "by",
+    "about",
+    "into",
+    "over",
+    "after",
+    "before",
+    "new",
+    "old",
+    "more",
+    "less",
+    "other",
+    "some",
+    "any",
+    "all",
+    "my",
+    "your",
+    "our",
+    "their",
+    "me",
+    "you",
+    "we",
+    "they",
+    "i",
+    "do",
+    "did",
+    "does",
+    "not",
+    "no",
+    "yes",
+    "ok",
+    "hi",
+    "hey",
+    "hello",
+    "thanks",
+    "please",
+    "help",
+    "fix",
+    "test",
+    "build",
+    "run",
+    "stop",
+    "start",
+    "open",
+    "close",
+    "save",
+    "delete",
+    "update",
+    "check",
+    "review",
+    "search",
+    "web",
+    "news",
+    "home",
+    "work",
+    "task",
+    "tasks",
+    "job",
+    "jobs",
+    "agent",
+    "model",
+    "auto",
+    "always",
+    "ask",
+    "deny",
+    "allow",
+    "mute",
+    "pin",
+    "like",
+    "skip",
+    "card",
+    "cards",
+    "post",
+    "posts",
+    "source",
+    "sources",
+    "interest",
+    "interests",
+    "setting",
+    "settings",
+    "pulse",
+    "cabin",
+    "chat",
+    "chats",
+    "session",
+    "sessions",
+    "scratch",
+    "untitled",
+    "background",
+    "triage",
+    "classify",
+    "redact",
+    "summarize",
+    "compact",
+    "judge",
+    "dream",
+    "memory",
+    "refine",
+    "unattended",
+    "eval",
+    "probe",
+    "repair",
+    "prepare",
+    "skill",
+    "skills",
+    "plugin",
+    "plugins",
+    "feed",
+    "feeds",
+    "idea",
+    "ideas",
+    "night",
+    "nightly",
+    "loop",
+    "loops",
+    "inbox",
+    "governor",
+    "harness",
+    "follow",
+    "up",
+];
 
 /// A chat or card title short enough to be a topic, else None.
 fn short_title(title: &str) -> Option<String> {
     let topic = clean_topic(title);
     let words = topic.split_whitespace().count();
-    if !(1..=4).contains(&words) || GENERIC_TITLES.contains(&topic.to_lowercase().as_str()) {
+    if !(1..=4).contains(&words) || !topic_searchable(&topic) {
         return None;
     }
     Some(topic)
@@ -580,6 +811,65 @@ mod tests {
             clean_topic("an extremely long topic name that keeps going and going"),
             "an extremely long topic name that keeps"
         );
+    }
+
+    #[test]
+    fn search_topics_skip_cabin_jargon_and_weak_unigrams() {
+        let mut p = InterestProfile::default();
+        // Hidden Background chat title and agent lane names must never query.
+        assert!(p.add("Background", InterestSource::Chats, 1));
+        assert!(p.add("background:triage", InterestSource::Chats, 1));
+        assert!(p.add("triage", InterestSource::Chats, 1));
+        assert!(p.add("Settings", InterestSource::Chats, 1));
+        assert!(p.add("the", InterestSource::Memory, 1));
+        // Weak chat unigram stays off the search list even at full weight.
+        assert!(p.add("refine", InterestSource::Chats, 1));
+        if let Some(t) = p.find_mut("refine") {
+            t.weight = WEIGHT_MAX;
+        }
+        // Real sealed interests still search.
+        assert!(p.add("Rust", InterestSource::Memory, 1));
+        assert!(p.add("air compressors", InterestSource::Explicit, 1));
+        // Multi-word chat title is fine.
+        assert!(p.add("Home espresso", InterestSource::Chats, 1));
+        assert_eq!(
+            p.search_topics(),
+            vec![
+                "air compressors".to_string(),
+                "Rust".to_string(),
+                "Home espresso".to_string(),
+            ]
+        );
+        assert!(!topic_searchable("background"));
+        assert!(!topic_searchable("background:triage"));
+        assert!(!topic_searchable("background:refine"));
+        // Real multi-word phrases stay searchable; junk drift comes from weak
+        // tokens like "background", not from inventing a fallback query.
+        assert!(topic_searchable("Girl Scouts"));
+        let mut noise = InterestProfile::default();
+        assert!(noise.add("Background", InterestSource::Chats, 1));
+        assert!(noise.add("Pulse", InterestSource::Chats, 1));
+        assert!(noise.search_topics().is_empty());
+    }
+
+    #[test]
+    fn seeding_skips_cabin_chrome_titles() {
+        let mut p = InterestProfile::default();
+        let chats = titles(&["Background", "background:refine", "New chat", "Bambu Lab"]);
+        let n = p.seed(
+            &SeedFrom {
+                user_md: "Interests: Rust, triage.",
+                memory_md: "",
+                chat_titles: &chats,
+                saved_titles: &[],
+            },
+            1,
+        );
+        let got: Vec<&str> = p.topics.iter().map(|t| t.topic.as_str()).collect();
+        assert_eq!(got, vec!["Rust", "Bambu Lab"]);
+        assert_eq!(n, 2);
+        assert!(p.find("Background").is_none());
+        assert!(p.find("triage").is_none());
     }
 
     #[test]
