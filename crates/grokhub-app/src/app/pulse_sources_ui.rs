@@ -202,13 +202,10 @@ fn ago_label(ms: u64, now: u64) -> String {
 }
 
 impl Cabin {
-    /// Interest topics to search, strongest first, muted ones left out.
+    /// Interest topics to search, strongest first. Cabin jargon and weak
+    /// unigrams are left out (`InterestProfile::search_topics`).
     fn source_topics(&mut self) -> Vec<String> {
-        self.interests_now()
-            .ranked()
-            .into_iter()
-            .map(|t| t.topic.clone())
-            .collect()
+        self.interests_now().search_topics()
     }
 
     fn sources_last_run(&mut self) -> u64 {
