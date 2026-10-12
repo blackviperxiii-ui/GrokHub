@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 3.0.1 — 2026-10-12
+
 - Fixed: park answers write atomically and ignore empty or partial answer files, so an Approve click is not read as Deny (Windows CUA flake on `deny_sends_nothing_approve_forwards_once_and_the_password_slot_is_never_typed`).
 - Fixed: Settings → Behavior auto-archive copy matches #712 (idle chats leave History and search; still on disk; no Archived drawer promised).
 - Security: Pulse feed and image fetches refuse CGNAT and other non-public literal IPs the same way `web_fetch` does, and dial through the shared public-only DNS resolver so a hostname that resolves to a private or link-local address cannot connect.
@@ -10,6 +12,9 @@
 - Code is now rustfmt-clean and CI checks formatting.
 - Fixed: source-window tests match rustfmt-wrapped needles (`session_row`, `Margin::symmetric`, `feed_prompt`) and the composer Pill scan window is 15,000 bytes.
 - Fixed: the "Archived N idle chats" composer row and the History sidebar Archived section no longer appear; archived chats stay out of History lists and search. Archive / Unarchive, auto-archive, and Undo remain.
+
+- Linux: `grokhub-linux-v3.0.1.tar.gz` and AUR `pkgver=3.0.1`.
+- Windows: `GrokHub-Setup-3.0.1.exe` and `grokhub-windows-v3.0.1.zip`.
 
 ## 3.0.0 — 2026-10-12
 
