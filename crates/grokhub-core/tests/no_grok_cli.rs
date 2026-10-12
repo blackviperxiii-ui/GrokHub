@@ -60,7 +60,10 @@ const DELETED: &[&str] = &[
 ];
 
 fn repo_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").canonicalize().expect("repo root")
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .canonicalize()
+        .expect("repo root")
 }
 
 fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
@@ -90,7 +93,11 @@ fn rust_hits(root: &Path) -> Vec<String> {
     rust_files(&root.join("crates"), &mut files);
     let mut hits = Vec::new();
     for path in files {
-        let rel = path.strip_prefix(root).unwrap().to_string_lossy().replace('\\', "/");
+        let rel = path
+            .strip_prefix(root)
+            .unwrap()
+            .to_string_lossy()
+            .replace('\\', "/");
         if rel == ALLOWED || is_test_file(&rel) || rel.contains("/target") {
             continue;
         }
@@ -125,7 +132,11 @@ fn packaging_hits(root: &Path) -> Vec<String> {
 fn only_the_google_module_looks_for_the_grok_cli() {
     let root = repo_root();
     let hits = rust_hits(&root);
-    assert!(hits.is_empty(), "CLI plumbing outside {ALLOWED}:\n{}", hits.join("\n"));
+    assert!(
+        hits.is_empty(),
+        "CLI plumbing outside {ALLOWED}:\n{}",
+        hits.join("\n")
+    );
     let allowed = fs::read_to_string(root.join(ALLOWED)).expect("google module");
     assert!(
         allowed.contains("GROKHUB_GROK") && !shipped_part(&allowed).contains("Command::new"),
@@ -137,15 +148,25 @@ fn only_the_google_module_looks_for_the_grok_cli() {
 fn packaging_never_installs_the_grok_cli() {
     let root = repo_root();
     let hits = packaging_hits(&root);
-    assert!(hits.is_empty(), "packaging still ships the Grok Build CLI:\n{}", hits.join("\n"));
+    assert!(
+        hits.is_empty(),
+        "packaging still ships the Grok Build CLI:\n{}",
+        hits.join("\n")
+    );
     for rel in DELETED {
-        assert!(!root.join(rel).exists(), "{rel} was deleted with the CLI and must stay gone");
+        assert!(
+            !root.join(rel).exists(),
+            "{rel} was deleted with the CLI and must stay gone"
+        );
     }
 }
 
 #[test]
 fn guard_flags_a_cli_spawn_and_skips_test_modules() {
-    assert_eq!(shipped_part("fn a() {}\n#[cfg(test)]\nmod tests { grok update }"), "fn a() {}\n");
+    assert_eq!(
+        shipped_part("fn a() {}\n#[cfg(test)]\nmod tests { grok update }"),
+        "fn a() {}\n"
+    );
     assert!(is_test_file("crates/grokhub-app/src/app/tests.rs"));
     assert!(is_test_file("crates/grokhub-agent/src/route/r2a_tests.rs"));
     assert!(!is_test_file("crates/grokhub-app/src/main.rs"));

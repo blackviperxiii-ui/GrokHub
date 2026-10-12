@@ -52,23 +52,36 @@ mod tests {
     use super::*;
 
     fn view(kind: ChatKind) -> ChatView {
-        ChatView { kind, title: String::new(), body: String::new() }
+        ChatView {
+            kind,
+            title: String::new(),
+            body: String::new(),
+        }
     }
 
     #[test]
     fn step_targets_parse_and_turns_land_on_their_work_card() {
         assert_eq!(parse_step_target("step:3:chat-a"), Some((3, "chat-a")));
-        assert_eq!(parse_step_target("step:3:chat:with:colons"), Some((3, "chat:with:colons")));
+        assert_eq!(
+            parse_step_target("step:3:chat:with:colons"),
+            Some((3, "chat:with:colons"))
+        );
         assert_eq!(parse_step_target("step:x:chat-a"), None);
         assert_eq!(parse_step_target("step:3:"), None);
         assert_eq!(parse_step_target("thread:chat-a"), None);
 
         use ChatKind::*;
-        let views: Vec<ChatView> = [User, Assistant, User, Thought, Tool, Assistant, User, Assistant]
-            .into_iter()
-            .map(view)
-            .collect();
-        assert_eq!(turn_jump_row(&views, 1), Some(0), "no Work card: the ask itself");
+        let views: Vec<ChatView> = [
+            User, Assistant, User, Thought, Tool, Assistant, User, Assistant,
+        ]
+        .into_iter()
+        .map(view)
+        .collect();
+        assert_eq!(
+            turn_jump_row(&views, 1),
+            Some(0),
+            "no Work card: the ask itself"
+        );
         assert_eq!(turn_jump_row(&views, 2), Some(4));
         assert_eq!(turn_jump_row(&views, 3), Some(6));
         assert_eq!(turn_jump_row(&views, 4), None);

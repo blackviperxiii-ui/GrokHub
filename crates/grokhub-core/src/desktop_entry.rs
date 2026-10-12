@@ -56,13 +56,17 @@ mod tests {
             "menu Exec must be the prefix binary: {entry}"
         );
         assert!(
-            !entry.lines().any(|l| l == "Exec=grokhub" || l == "TryExec=grokhub"),
+            !entry
+                .lines()
+                .any(|l| l == "Exec=grokhub" || l == "TryExec=grokhub"),
             "PATH-relative grokhub must not remain after rewrite: {entry}"
         );
         // A session PATH that lacks ~/.local/bin still has an absolute Exec.
         let path_without_prefix = "/usr/bin:/bin";
         assert!(
-            !path_without_prefix.split(':').any(|p| p == "/home/cabin/.local/bin"),
+            !path_without_prefix
+                .split(':')
+                .any(|p| p == "/home/cabin/.local/bin"),
             "fixture PATH must omit the prefix bin dir"
         );
         assert!(
@@ -93,7 +97,8 @@ mod tests {
             "sync-user-integration.sh already refreshed the database: {sync}"
         );
         assert!(
-            sync.contains("$PREFIX/bin/grokhub") && (sync.contains("Exec=") || sync.contains("rewrite")),
+            sync.contains("$PREFIX/bin/grokhub")
+                && (sync.contains("Exec=") || sync.contains("rewrite")),
             "sync-user-integration.sh must also write a prefix Exec: {sync}"
         );
     }

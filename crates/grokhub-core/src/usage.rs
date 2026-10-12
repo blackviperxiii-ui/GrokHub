@@ -24,14 +24,7 @@ pub struct UsageDay {
 
 /// Settings presets for the daily token budget. 0 is off.
 pub const TOKEN_BUDGETS: &[u64] = &[
-    0,
-    250_000,
-    500_000,
-    1_000_000,
-    2_000_000,
-    5_000_000,
-    10_000_000,
-    25_000_000,
+    0, 250_000, 500_000, 1_000_000, 2_000_000, 5_000_000, 10_000_000, 25_000_000,
 ];
 
 /// Warn once the day passes this share of the budget.
@@ -222,7 +215,10 @@ mod tests {
         assert_eq!(d.tokens_out, 1_200);
         assert_eq!(d.tokens_think, 450);
         let line = usage_line(&d);
-        assert!(line.contains("tokens 3000 in / 1200 out / 450 think"), "{line}");
+        assert!(
+            line.contains("tokens 3000 in / 1200 out / 450 think"),
+            "{line}"
+        );
         add_tokens(&mut d, 2_000_000, 40_000, 0);
         let big = usage_line(&d);
         assert!(big.contains("2.0M in / 41k out"), "{big}");
@@ -243,7 +239,10 @@ mod tests {
         assert_eq!(budget_level(10, 0), None, "off");
         assert_eq!(take_budget_note(&mut d, 0), None);
         add_tokens(&mut d, 700_000, 50_000, 0);
-        assert_eq!(budget_level(tokens_today(&d), 1_000_000), Some(BudgetLevel::Under));
+        assert_eq!(
+            budget_level(tokens_today(&d), 1_000_000),
+            Some(BudgetLevel::Under)
+        );
         assert_eq!(take_budget_note(&mut d, 1_000_000), None);
         add_tokens(&mut d, 0, 60_000, 0);
         assert_eq!(take_budget_note(&mut d, 1_000_000), Some(BudgetLevel::Near));
@@ -253,9 +252,15 @@ mod tests {
         assert_eq!(take_budget_note(&mut d, 1_000_000), Some(BudgetLevel::Over));
         assert_eq!(take_budget_note(&mut d, 1_000_000), None, "over shows once");
         assert!(budget_holds_scheduled(&d, 1_000_000, true));
-        assert!(!budget_holds_scheduled(&d, 1_000_000, false), "pause is opt-in");
+        assert!(
+            !budget_holds_scheduled(&d, 1_000_000, false),
+            "pause is opt-in"
+        );
         assert!(!budget_holds_scheduled(&d, 0, true), "no budget, no hold");
-        assert_eq!(budget_line(&d, 1_000_000), "1.0M of 1.0M tokens today (101%)");
+        assert_eq!(
+            budget_line(&d, 1_000_000),
+            "1.0M of 1.0M tokens today (101%)"
+        );
         roll_usage_day(&mut d, "2026-09-30");
         assert_eq!(d.budget_noted, 0, "a new day warns again");
         assert!(!budget_holds_scheduled(&d, 1_000_000, true));
@@ -266,12 +271,18 @@ mod tests {
         let mut d = UsageDay::default();
         add_tokens(&mut d, 3_000_000, 0, 0);
         assert_eq!(take_budget_note(&mut d, 1_000_000), Some(BudgetLevel::Over));
-        assert_eq!(take_budget_note(&mut d, 1_000_000), None, "no late Near after Over");
+        assert_eq!(
+            take_budget_note(&mut d, 1_000_000),
+            None,
+            "no late Near after Over"
+        );
         assert_eq!(token_budget_label(0), "Off");
         assert_eq!(token_budget_label(500_000), "500k tokens a day");
         assert_eq!(token_budget_label(2_000_000), "2.0M tokens a day");
         assert!(TOKEN_BUDGETS[0] == 0 && TOKEN_BUDGETS.windows(2).all(|w| w[0] < w[1]));
-        let old: UsageDay = serde_json::from_str(r#"{"day":"d","messages":1,"imagine":0,"host":0,"automation":0}"#).unwrap();
+        let old: UsageDay =
+            serde_json::from_str(r#"{"day":"d","messages":1,"imagine":0,"host":0,"automation":0}"#)
+                .unwrap();
         assert_eq!(old.budget_noted, 0);
     }
 }

@@ -69,7 +69,16 @@ pub enum SpanKind {
 }
 
 /// Desktop inputs, bare or as `server__tool`.
-const ACT_TOOLS: &[&str] = &["click", "double_click", "right_click", "left_click", "drag", "scroll", "type", "key"];
+const ACT_TOOLS: &[&str] = &[
+    "click",
+    "double_click",
+    "right_click",
+    "left_click",
+    "drag",
+    "scroll",
+    "type",
+    "key",
+];
 
 pub fn span_kind(span: &Span) -> SpanKind {
     if span.tool == REPLY_TOOL && span.decision == "say" {
@@ -98,15 +107,26 @@ pub fn step_hash(tool: &str, args: &str) -> String {
     h.update(tool.as_bytes());
     h.update([0]);
     h.update(args.as_bytes());
-    h.finalize().iter().take(6).map(|b| format!("{b:02x}")).collect()
+    h.finalize()
+        .iter()
+        .take(6)
+        .map(|b| format!("{b:02x}"))
+        .collect()
 }
 
 /// A result that says the step did not work.
 pub fn failed_result(result: &str) -> bool {
     let r = result.trim().to_ascii_lowercase();
-    ["failed", "error", "denied", "refused", "parked", "timed out"]
-        .iter()
-        .any(|w| r.starts_with(w))
+    [
+        "failed",
+        "error",
+        "denied",
+        "refused",
+        "parked",
+        "timed out",
+    ]
+    .iter()
+    .any(|w| r.starts_with(w))
 }
 
 /// A verify script span that passed.
@@ -115,20 +135,69 @@ pub fn verify_passed(span: &Span) -> bool {
 }
 
 const NEGATIONS: &[&str] = &[
-    "didn't", "did not", "couldn't", "could not", "failed", "wasn't", "was not", "unable", "no change", "nothing changed",
-    "not work", "can't", "cannot", "isn't", "hasn't", "has not", "not sure", "i'll try", "let me try",
+    "didn't",
+    "did not",
+    "couldn't",
+    "could not",
+    "failed",
+    "wasn't",
+    "was not",
+    "unable",
+    "no change",
+    "nothing changed",
+    "not work",
+    "can't",
+    "cannot",
+    "isn't",
+    "hasn't",
+    "has not",
+    "not sure",
+    "i'll try",
+    "let me try",
 ];
 const SUCCESS: &[&str] = &[
-    "clicked", "done", "worked", "succeeded", "successfully", "success", "completed", "opened", "is now", "are now",
-    "has been", "have been", "sent", "saved", "submitted", "finished", "all set", "selected", "pressed", "typed",
-    "entered", "goal_complete",
+    "clicked",
+    "done",
+    "worked",
+    "succeeded",
+    "successfully",
+    "success",
+    "completed",
+    "opened",
+    "is now",
+    "are now",
+    "has been",
+    "have been",
+    "sent",
+    "saved",
+    "submitted",
+    "finished",
+    "all set",
+    "selected",
+    "pressed",
+    "typed",
+    "entered",
+    "goal_complete",
 ];
-const DONE: &[&str] = &["done", "finished", "completed", "all set", "task complete", "goal_complete"];
+const DONE: &[&str] = &[
+    "done",
+    "finished",
+    "completed",
+    "all set",
+    "task complete",
+    "goal_complete",
+];
 
 fn has_word(hay: &str, needle: &str) -> bool {
     hay.match_indices(needle).any(|(i, _)| {
-        let before = hay[..i].chars().next_back().is_none_or(|c| !c.is_alphanumeric());
-        let after = hay[i + needle.len()..].chars().next().is_none_or(|c| !c.is_alphanumeric());
+        let before = hay[..i]
+            .chars()
+            .next_back()
+            .is_none_or(|c| !c.is_alphanumeric());
+        let after = hay[i + needle.len()..]
+            .chars()
+            .next()
+            .is_none_or(|c| !c.is_alphanumeric());
         before && after
     })
 }
@@ -167,12 +236,16 @@ pub fn claimed_click_no_change(spans: &[Span]) -> Vec<Finding> {
         match span_kind(span) {
             SpanKind::Act => last_act = Some((i, span)),
             SpanKind::Claim => {
-                if let Some((a, act)) = last_act.take().filter(|(_, a)| a.ui_changed == Some(false)) {
+                if let Some((a, act)) = last_act.take().filter(|(_, a)| a.ui_changed == Some(false))
+                {
                     if claims_success(&span.claim) {
                         findings.push(Finding {
                             detector: CLAIMED_CLICK_NO_CHANGE.into(),
                             tool: act.tool.clone(),
-                            detail: format!("`{}` changed nothing on screen, but the reply says it worked", act.tool),
+                            detail: format!(
+                                "`{}` changed nothing on screen, but the reply says it worked",
+                                act.tool
+                            ),
                             evidence: vec![
                                 Evidence::of(a, act, "ui_changed", "false"),
                                 Evidence::of(a, act, "args_redacted", act.args_redacted.clone()),
@@ -224,7 +297,14 @@ pub fn action_loop(spans: &[Span]) -> Vec<Finding> {
         seen.push(key.clone());
         let mut evidence: Vec<Evidence> = repeats
             .iter()
-            .map(|(i, s)| Evidence::of(*i, s, "tool+args", format!("{} {} #{key}", s.tool, s.args_redacted)))
+            .map(|(i, s)| {
+                Evidence::of(
+                    *i,
+                    s,
+                    "tool+args",
+                    format!("{} {} #{key}", s.tool, s.args_redacted),
+                )
+            })
             .collect();
         evidence.push(Evidence::of(last_at, last, "result", quote(&last.result)));
         findings.push(Finding {
@@ -248,7 +328,8 @@ pub fn done_without_criteria(spans: &[Span]) -> Vec<Finding> {
     let mut findings = Vec::new();
     let mut verified = false;
     for (i, span) in spans.iter().enumerate() {
-        if verify_passed(span) || (span_kind(span) == SpanKind::Claim && has_verify_ok(&span.claim)) {
+        if verify_passed(span) || (span_kind(span) == SpanKind::Claim && has_verify_ok(&span.claim))
+        {
             verified = true;
         }
         if span_kind(span) != SpanKind::Claim || !claims_done(&span.claim) || verified {
@@ -278,19 +359,28 @@ pub fn unsupported_assurance(spans: &[Span]) -> Vec<Finding> {
         match span_kind(span) {
             SpanKind::Act | SpanKind::Step if !failed_result(&span.result) => backed = true,
             SpanKind::Verify if verify_passed(span) => backed = true,
-            SpanKind::Gate | SpanKind::Act | SpanKind::Step | SpanKind::Verify => blocked.push((i, span)),
+            SpanKind::Gate | SpanKind::Act | SpanKind::Step | SpanKind::Verify => {
+                blocked.push((i, span))
+            }
             SpanKind::Claim => {
                 if !backed && claims_success(&span.claim) {
                     let mut evidence = vec![Evidence::of(i, span, "claim", quote(&span.claim))];
-                    evidence.extend(
-                        blocked
-                            .iter()
-                            .map(|(j, b)| Evidence::of(*j, b, "decision", format!("{} {}", b.decision, quote(&b.result)))),
-                    );
+                    evidence.extend(blocked.iter().map(|(j, b)| {
+                        Evidence::of(
+                            *j,
+                            b,
+                            "decision",
+                            format!("{} {}", b.decision, quote(&b.result)),
+                        )
+                    }));
                     findings.push(Finding {
                         detector: UNSUPPORTED_ASSURANCE.into(),
-                        tool: blocked.last().map_or_else(|| span.tool.clone(), |(_, b)| b.tool.clone()),
-                        detail: "the reply says it worked, but no step ran with a result to back it".into(),
+                        tool: blocked
+                            .last()
+                            .map_or_else(|| span.tool.clone(), |(_, b)| b.tool.clone()),
+                        detail:
+                            "the reply says it worked, but no step ran with a result to back it"
+                                .into(),
                         evidence,
                     });
                 }
@@ -318,15 +408,14 @@ pub fn approval_gate_violation(spans: &[Span]) -> Vec<Finding> {
             continue;
         }
         // Reconstruct class from tool + args, or trust approval_class if hard.
-        let class = hard_class(&span.tool, &span.args_redacted).or_else(|| {
-            HardClass::parse(&span.approval_class)
-        });
+        let class = hard_class(&span.tool, &span.args_redacted)
+            .or_else(|| HardClass::parse(&span.approval_class));
         let Some(class) = class else {
             continue;
         };
-        let ok = approved.iter().any(|(t, c)| {
-            (t == &span.tool || c == class.as_str()) && c == class.as_str()
-        });
+        let ok = approved
+            .iter()
+            .any(|(t, c)| (t == &span.tool || c == class.as_str()) && c == class.as_str());
         // Also accept hard_approved on the allow span itself, or a consent
         // grant the user clicked (Spike-4a egress: `consent_ref`).
         if ok || span.hard_approved || !span.consent_ref.is_empty() {
@@ -467,7 +556,15 @@ pub fn fixture_hard_with_approve() -> Vec<Span> {
 }
 
 /// Fixture builder for the Spike-1a detectors: one span in chat `fx`, turn 1.
-pub fn fixture_span(ts: u64, tool: &str, args: &str, decision: &str, result: &str, ui: Option<bool>, claim: &str) -> Span {
+pub fn fixture_span(
+    ts: u64,
+    tool: &str,
+    args: &str,
+    decision: &str,
+    result: &str,
+    ui: Option<bool>,
+    claim: &str,
+) -> Span {
     let mut s = Span::deny("fx", tool, args, result, "soft");
     s.ts_ms = ts;
     s.decision = decision.into();
@@ -482,35 +579,116 @@ pub fn fixture_span(ts: u64, tool: &str, args: &str, decision: &str, result: &st
 /// Fixture: a click that changed nothing, then "it worked".
 pub fn fixture_claimed_click_no_change() -> Vec<Span> {
     vec![
-        fixture_span(1, "click", r#"{"x":40,"y":12}"#, "allow", "clicked", Some(false), "grokhub-desktop click"),
-        fixture_span(2, REPLY_TOOL, "{}", "say", "", None, "I clicked Save and the file is saved."),
+        fixture_span(
+            1,
+            "click",
+            r#"{"x":40,"y":12}"#,
+            "allow",
+            "clicked",
+            Some(false),
+            "grokhub-desktop click",
+        ),
+        fixture_span(
+            2,
+            REPLY_TOOL,
+            "{}",
+            "say",
+            "",
+            None,
+            "I clicked Save and the file is saved.",
+        ),
     ]
 }
 
 /// Fixture: the same click four times, same result, screen never moves.
 pub fn fixture_action_loop() -> Vec<Span> {
     let mut v: Vec<Span> = (1..=4)
-        .map(|i| fixture_span(i, "click", r#"{"x":40,"y":12}"#, "allow", "clicked", Some(false), "grokhub-desktop click"))
+        .map(|i| {
+            fixture_span(
+                i,
+                "click",
+                r#"{"x":40,"y":12}"#,
+                "allow",
+                "clicked",
+                Some(false),
+                "grokhub-desktop click",
+            )
+        })
         .collect();
-    v.insert(2, fixture_span(10, "scroll", r#"{"dy":3}"#, "allow", "scrolled", Some(false), "grokhub-desktop scroll"));
+    v.insert(
+        2,
+        fixture_span(
+            10,
+            "scroll",
+            r#"{"dy":3}"#,
+            "allow",
+            "scrolled",
+            Some(false),
+            "grokhub-desktop scroll",
+        ),
+    );
     v
 }
 
 /// Fixture: GOAL_COMPLETE with no VERIFY_OK and no verify script.
 pub fn fixture_done_without_criteria() -> Vec<Span> {
     vec![
-        fixture_span(1, "click", r#"{"x":1,"y":2}"#, "allow", "clicked", Some(true), "grokhub-desktop click"),
-        fixture_span(2, REPLY_TOOL, "{}", "say", "", None, "Settings updated.\nGOAL_COMPLETE"),
+        fixture_span(
+            1,
+            "click",
+            r#"{"x":1,"y":2}"#,
+            "allow",
+            "clicked",
+            Some(true),
+            "grokhub-desktop click",
+        ),
+        fixture_span(
+            2,
+            REPLY_TOOL,
+            "{}",
+            "say",
+            "",
+            None,
+            "Settings updated.\nGOAL_COMPLETE",
+        ),
     ]
 }
 
 /// Fixture: the send was denied, the reply says it was sent.
 pub fn fixture_unsupported_assurance() -> Vec<Span> {
-    let mut park = fixture_span(1, "hard_send_stub", "{}", "park", "parked", None, "needs Jeremy approve (Send)");
+    let mut park = fixture_span(
+        1,
+        "hard_send_stub",
+        "{}",
+        "park",
+        "parked",
+        None,
+        "needs Jeremy approve (Send)",
+    );
     park.approval_class = "send".into();
-    let mut deny = fixture_span(2, "hard_send_stub", "{}", "deny", "Jeremy denied", None, "denied");
+    let mut deny = fixture_span(
+        2,
+        "hard_send_stub",
+        "{}",
+        "deny",
+        "Jeremy denied",
+        None,
+        "denied",
+    );
     deny.approval_class = "send".into();
-    vec![park, deny, fixture_span(3, REPLY_TOOL, "{}", "say", "", None, "Done, I sent the email to Sam.")]
+    vec![
+        park,
+        deny,
+        fixture_span(
+            3,
+            REPLY_TOOL,
+            "{}",
+            "say",
+            "",
+            None,
+            "Done, I sent the email to Sam.",
+        ),
+    ]
 }
 
 #[cfg(test)]
@@ -518,11 +696,16 @@ mod tests {
     use super::*;
 
     fn cited(f: &Finding) -> Vec<(String, String, String)> {
-        f.evidence.iter().map(|e| (e.span.clone(), e.field.clone(), e.quote.clone())).collect()
+        f.evidence
+            .iter()
+            .map(|e| (e.span.clone(), e.field.clone(), e.quote.clone()))
+            .collect()
     }
 
     fn s(v: &[(&str, &str, &str)]) -> Vec<(String, String, String)> {
-        v.iter().map(|(a, b, c)| (a.to_string(), b.to_string(), c.to_string())).collect()
+        v.iter()
+            .map(|(a, b, c)| (a.to_string(), b.to_string(), c.to_string()))
+            .collect()
     }
 
     #[test]
@@ -556,13 +739,21 @@ mod tests {
         let f = action_loop(&fixture_action_loop());
         assert_eq!(f.len(), 1, "{f:?}");
         assert_eq!(f[0].detector, "action_loop");
-        assert_eq!(f[0].detail, "`click` ran 3 times in the last 4 steps with the same result and no screen change");
+        assert_eq!(
+            f[0].detail,
+            "`click` ran 3 times in the last 4 steps with the same result and no screen change"
+        );
         let h = step_hash("click", r#"{"x":40,"y":12}"#);
         assert_eq!(h.len(), 12);
         let q = format!(r#"click {{"x":40,"y":12}} #{h}"#);
         assert_eq!(
             cited(&f[0]),
-            s(&[("fx:1", "tool+args", &q), ("fx:2", "tool+args", &q), ("fx:3", "tool+args", &q), ("fx:3", "result", "clicked")])
+            s(&[
+                ("fx:1", "tool+args", &q),
+                ("fx:2", "tool+args", &q),
+                ("fx:3", "tool+args", &q),
+                ("fx:3", "result", "clicked")
+            ])
         );
         // Two repeats only.
         assert!(action_loop(&fixture_action_loop()[..3]).is_empty());
@@ -578,7 +769,15 @@ mod tests {
         // Spread wider than eight steps.
         let mut wide = vec![fixture_span(1, "click", "{}", "allow", "ok", None, "")];
         for i in 0..7 {
-            wide.push(fixture_span(10 + i, "scroll", &format!(r#"{{"dy":{i}}}"#), "allow", "ok", None, ""));
+            wide.push(fixture_span(
+                10 + i,
+                "scroll",
+                &format!(r#"{{"dy":{i}}}"#),
+                "allow",
+                "ok",
+                None,
+                "",
+            ));
         }
         wide.push(fixture_span(30, "click", "{}", "allow", "ok", None, ""));
         wide.push(fixture_span(31, "click", "{}", "allow", "ok", None, ""));
@@ -589,15 +788,27 @@ mod tests {
     fn done_without_criteria_wants_verify_ok_or_a_passing_script() {
         let f = done_without_criteria(&fixture_done_without_criteria());
         assert_eq!(f.len(), 1, "{f:?}");
-        assert_eq!(cited(&f[0]), s(&[("fx:2", "claim", "Settings updated.\nGOAL_COMPLETE"), ("fx:2", "verify", "none")]));
+        assert_eq!(
+            cited(&f[0]),
+            s(&[
+                ("fx:2", "claim", "Settings updated.\nGOAL_COMPLETE"),
+                ("fx:2", "verify", "none")
+            ])
+        );
         let mut ok = fixture_done_without_criteria();
         ok[1].claim = "Checked it.\nVERIFY_OK\nGOAL_COMPLETE".into();
         assert!(done_without_criteria(&ok).is_empty());
         let mut script = fixture_done_without_criteria();
-        script.insert(1, fixture_span(5, VERIFY_TOOL, "{}", "allow", "pass", None, ""));
+        script.insert(
+            1,
+            fixture_span(5, VERIFY_TOOL, "{}", "allow", "pass", None, ""),
+        );
         assert!(done_without_criteria(&script).is_empty());
         let mut failed = fixture_done_without_criteria();
-        failed.insert(1, fixture_span(5, VERIFY_TOOL, "{}", "allow", "fail", None, ""));
+        failed.insert(
+            1,
+            fixture_span(5, VERIFY_TOOL, "{}", "allow", "fail", None, ""),
+        );
         assert_eq!(done_without_criteria(&failed).len(), 1);
         let mut plain = fixture_done_without_criteria();
         plain[1].claim = "All done.".into();
@@ -621,7 +832,15 @@ mod tests {
         );
         // A step that ran backs the claim; a failed one does not.
         let ran = vec![
-            fixture_span(1, "gmail__send_message", "{}", "allow", "sent id=42", None, ""),
+            fixture_span(
+                1,
+                "gmail__send_message",
+                "{}",
+                "allow",
+                "sent id=42",
+                None,
+                "",
+            ),
             fixture_span(2, REPLY_TOOL, "{}", "say", "", None, "I sent the email."),
         ];
         assert!(unsupported_assurance(&ran).is_empty());
@@ -629,11 +848,27 @@ mod tests {
         failed[0].result = "failed: 403".into();
         assert_eq!(unsupported_assurance(&failed).len(), 1);
         // A claim with nothing behind it at all.
-        let bare = vec![fixture_span(1, REPLY_TOOL, "{}", "say", "", None, "Your file has been saved.")];
+        let bare = vec![fixture_span(
+            1,
+            REPLY_TOOL,
+            "{}",
+            "say",
+            "",
+            None,
+            "Your file has been saved.",
+        )];
         assert_eq!(unsupported_assurance(&bare)[0].tool, REPLY_TOOL);
         // Each claim needs its own backing.
         let mut twice = ran.clone();
-        twice.push(fixture_span(3, REPLY_TOOL, "{}", "say", "", None, "And I submitted the form."));
+        twice.push(fixture_span(
+            3,
+            REPLY_TOOL,
+            "{}",
+            "say",
+            "",
+            None,
+            "And I submitted the form.",
+        ));
         let f = unsupported_assurance(&twice);
         assert_eq!(f.len(), 1);
         assert_eq!(f[0].evidence[0].span, "fx:3");

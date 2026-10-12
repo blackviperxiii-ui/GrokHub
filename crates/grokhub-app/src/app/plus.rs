@@ -2,7 +2,6 @@
 
 use super::*;
 
-
 pub(super) enum PlusPick {
     NativeMiss,
     ClipEmpty,
@@ -11,7 +10,6 @@ pub(super) enum PlusPick {
     Err(String),
 }
 
-
 pub(super) struct PlusReady {
     pub(super) kind: AttachKind,
     pub(super) name: String,
@@ -19,7 +17,6 @@ pub(super) struct PlusReady {
     pub(super) image_url: Option<String>,
     pub(super) text: Option<String>,
 }
-
 
 pub(super) fn plus_from_path(target: PlusTarget, path: PathBuf) -> PlusPick {
     let raw = path.display().to_string();
@@ -57,7 +54,6 @@ pub(super) fn plus_from_path(target: PlusTarget, path: PathBuf) -> PlusPick {
 }
 
 impl Cabin {
-
     pub(super) fn open_plus(&mut self, target: PlusTarget, anchor: egui::Pos2) {
         self.plus_menu = Some(target);
         self.plus_anchor = anchor;
@@ -238,10 +234,8 @@ impl Cabin {
         painter.rect_filled(screen, 0.0, crate::theme::bg().gamma_multiply(0.72));
         let font = egui::FontId::proportional(crate::theme::FONT_SECTION);
         let galley = painter.layout_no_wrap(line, font, crate::theme::fg());
-        let card = egui::Rect::from_center_size(
-            screen.center(),
-            galley.size() + egui::vec2(48.0, 32.0),
-        );
+        let card =
+            egui::Rect::from_center_size(screen.center(), galley.size() + egui::vec2(48.0, 32.0));
         painter.rect(
             card,
             16.0,
@@ -249,7 +243,11 @@ impl Cabin {
             egui::Stroke::new(1.5_f32, crate::theme::link()),
             egui::StrokeKind::Middle,
         );
-        painter.galley(card.center() - galley.size() * 0.5, galley, crate::theme::fg());
+        painter.galley(
+            card.center() - galley.size() * 0.5,
+            galley,
+            crate::theme::fg(),
+        );
     }
 
     /// A file dropped on the window becomes the next chat attachment.
@@ -624,7 +622,9 @@ pub(super) fn drop_hint_line(imagine: bool, files: usize) -> String {
 pub(super) fn drop_extra_note(extra: usize) -> Option<String> {
     match extra {
         0 => None,
-        1 => Some("Attached the first file. The other one was left out — one file per message.".into()),
+        1 => Some(
+            "Attached the first file. The other one was left out — one file per message.".into(),
+        ),
         n => Some(format!(
             "Attached the first file. {n} others were left out — one file per message."
         )),

@@ -49,14 +49,22 @@ fn redact_patterns(input: &str, word_start: bool) -> String {
             };
             out.push_str(&rest[..idx]);
             let after = &rest[idx + needle.len()..];
-            if word_start && out.chars().next_back().is_some_and(|c| c.is_alphanumeric() || matches!(c, '-' | '_' | '.')) {
+            if word_start
+                && out
+                    .chars()
+                    .next_back()
+                    .is_some_and(|c| c.is_alphanumeric() || matches!(c, '-' | '_' | '.'))
+            {
                 out.push_str(needle);
                 rest = after;
                 continue;
             }
             let n = after
                 .chars()
-                .take_while(|c| c.is_ascii_alphanumeric() || matches!(*c, '-' | '_' | '.' | '~' | '+' | '/' | '='))
+                .take_while(|c| {
+                    c.is_ascii_alphanumeric()
+                        || matches!(*c, '-' | '_' | '.' | '~' | '+' | '/' | '=')
+                })
                 .count();
             if n < 12 {
                 out.push_str(needle);
@@ -154,14 +162,18 @@ mod tests {
 
     #[test]
     fn forget_takes_the_topic_not_every_word_that_contains_it() {
-        let notes = "pi is the raspberry pi in the den\nprinciple: keep it small\npicture day is friday\n";
+        let notes =
+            "pi is the raspberry pi in the den\nprinciple: keep it small\npicture day is friday\n";
         let out = forget_topic(notes, "pi");
         assert!(!out.contains("raspberry"), "the topic line goes: {out}");
         assert!(
             out.contains("principle") && out.contains("picture"),
             "a substring of a longer word is not the topic: {out}"
         );
-        assert!(mentions_topic("Wi-Fi password is taped to the router", "wi-fi"));
+        assert!(mentions_topic(
+            "Wi-Fi password is taped to the router",
+            "wi-fi"
+        ));
         assert!(mentions_topic("the wifi.", "wifi"));
         assert!(mentions_topic("wifi-extender in the den", "extender in"));
         assert!(!mentions_topic("wifi-extender in the den", "tender"));
@@ -184,12 +196,20 @@ mod tests {
         assert!(!pat.contains("github_pat_"), "{pat}");
         let bearer = redact_secrets("Authorization: Bearer abcdefghijklmnop");
         assert!(!bearer.contains("abcdefghijklmnop"), "{bearer}");
-        assert_eq!(redact_secrets("authorization: bearer abcdefghijklmnop"), "authorization: [redacted]");
         assert_eq!(
-            redact_secret_words("rm /tmp/grokhub-desk-delete-deny-0/a.txt; echo sk-abcdefghijklmnopqrstuv"),
+            redact_secrets("authorization: bearer abcdefghijklmnop"),
+            "authorization: [redacted]"
+        );
+        assert_eq!(
+            redact_secret_words(
+                "rm /tmp/grokhub-desk-delete-deny-0/a.txt; echo sk-abcdefghijklmnopqrstuv"
+            ),
             "rm /tmp/grokhub-desk-delete-deny-0/a.txt; echo [redacted]"
         );
-        assert_eq!(redact_secret_words("KEY=sk-abcdefghijklmnopqrstuv \"ghp_abcdefghijklmnopqrstuvwx\""), "KEY=[redacted] \"[redacted]\"");
+        assert_eq!(
+            redact_secret_words("KEY=sk-abcdefghijklmnopqrstuv \"ghp_abcdefghijklmnopqrstuvwx\""),
+            "KEY=[redacted] \"[redacted]\""
+        );
         assert!(
             is_plain_text("sk-short"),
             "short tokens stay visible so ordinary words are not eaten"

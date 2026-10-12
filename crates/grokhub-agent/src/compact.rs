@@ -167,7 +167,13 @@ pub fn request_summary(
         hosted_search: false,
         call_timeout: None,
     };
-    match crate::route::live::stream_routed(client, &req, cancel, &mut |_| {}, crate::route::CLASS_COMPACT) {
+    match crate::route::live::stream_routed(
+        client,
+        &req,
+        cancel,
+        &mut |_| {},
+        crate::route::CLASS_COMPACT,
+    ) {
         Ok(turn) => {
             if cancel.is_cancelled() {
                 return Err(CompactError::Cancelled);
@@ -327,9 +333,7 @@ fn take_tool_suffix(items: &[InputItem], budget: u64) -> Vec<InputItem> {
                 let end = i;
                 let start = match i.checked_sub(1) {
                     Some(prev) => match &items[prev] {
-                        InputItem::FunctionCall {
-                            call_id: cid, ..
-                        } if cid == call_id => prev,
+                        InputItem::FunctionCall { call_id: cid, .. } if cid == call_id => prev,
                         _ => continue,
                     },
                     None => continue,
@@ -760,8 +764,8 @@ mod tests {
                         reasoning: String::new(),
                         calls: Vec::new(),
                         usage: Usage::default(),
-            ..Default::default()
-        })
+                        ..Default::default()
+                    })
                 } else {
                     turns.remove(0)
                 }
@@ -841,15 +845,15 @@ mod tests {
                     reasoning: String::new(),
                     calls: Vec::new(),
                     usage: usage(11, 4, 5),
-            ..Default::default()
-        }),
+                    ..Default::default()
+                }),
                 Ok(TurnOutput {
                     text: "done".into(),
                     reasoning: String::new(),
                     calls: Vec::new(),
                     usage: usage(3, 1, 2),
-            ..Default::default()
-        }),
+                    ..Default::default()
+                }),
             ]),
             seen: Mutex::new(Vec::new()),
         };
@@ -881,8 +885,8 @@ mod tests {
                 reasoning: String::new(),
                 calls: Vec::new(),
                 usage: usage(1, 1, 1),
-            ..Default::default()
-        })]),
+                ..Default::default()
+            })]),
             seen: Mutex::new(Vec::new()),
         };
         let mut history = vec![text_message("user", "short")];
@@ -910,8 +914,8 @@ mod tests {
                     reasoning: String::new(),
                     calls: Vec::new(),
                     usage: usage(2, 2, 4),
-            ..Default::default()
-        }),
+                    ..Default::default()
+                }),
             ]),
             seen: Mutex::new(Vec::new()),
         };
@@ -959,8 +963,8 @@ mod tests {
                     arguments: "{}".into(),
                 }],
                 usage: usage(6, 2, 8),
-            ..Default::default()
-        })]),
+                ..Default::default()
+            })]),
             seen: Mutex::new(Vec::new()),
         };
         let last = text_message("user", "last turn");
@@ -1033,8 +1037,8 @@ mod tests {
                     reasoning: String::new(),
                     calls: Vec::new(),
                     usage: Usage::default(),
-            ..Default::default()
-        })
+                    ..Default::default()
+                })
             }
         }
         let mut history = vec![text_message("user", "keep the quay lantern")];
@@ -1070,7 +1074,9 @@ mod tests {
         let kept = take_tool_suffix(&items, pair_cost);
         assert_eq!(kept.len(), 2, "pair fits as a unit");
         assert!(matches!(&kept[0], InputItem::FunctionCall { call_id, .. } if call_id == "c1"));
-        assert!(matches!(&kept[1], InputItem::FunctionCallOutput { call_id, .. } if call_id == "c1"));
+        assert!(
+            matches!(&kept[1], InputItem::FunctionCallOutput { call_id, .. } if call_id == "c1")
+        );
         let half = pair_cost.saturating_sub(1).max(1);
         if half < pair_cost {
             assert!(
@@ -1101,9 +1107,15 @@ mod tests {
         ];
         let compacted = build_compacted_history(&history, "summary body", &[]);
         assert_eq!(compacted.iter().filter(|i| matches!(i, InputItem::Message { role, .. } if role == "user" && message_text(i).contains("keep this"))).count(), 1);
-        assert!(compacted.iter().any(|i| matches!(i, InputItem::FunctionCall { call_id, .. } if call_id == "c1")));
-        assert!(compacted.iter().any(|i| matches!(i, InputItem::FunctionCallOutput { call_id, .. } if call_id == "c1")));
-        assert!(!compacted.iter().any(|item| message_text(item).contains("OLD_TOPIC")));
+        assert!(compacted
+            .iter()
+            .any(|i| matches!(i, InputItem::FunctionCall { call_id, .. } if call_id == "c1")));
+        assert!(compacted.iter().any(
+            |i| matches!(i, InputItem::FunctionCallOutput { call_id, .. } if call_id == "c1")
+        ));
+        assert!(!compacted
+            .iter()
+            .any(|item| message_text(item).contains("OLD_TOPIC")));
     }
 
     #[test]
@@ -1112,11 +1124,8 @@ mod tests {
             text_message("user", "edit files"),
             text_message("user", "last ask"),
         ];
-        let compacted = build_compacted_history(
-            &history,
-            "summary",
-            &["src/a.rs".into(), "src/b.rs".into()],
-        );
+        let compacted =
+            build_compacted_history(&history, "summary", &["src/a.rs".into(), "src/b.rs".into()]);
         let files = compacted
             .iter()
             .find(|item| message_text(item).contains("<modified_files>"))
@@ -1215,8 +1224,7 @@ mod tests {
                     ..Default::default()
                 }),
                 Ok(TurnOutput {
-                    text: "<summary>pass three MARKER_ONE MARKER_TWO MARKER_THREE</summary>"
-                        .into(),
+                    text: "<summary>pass three MARKER_ONE MARKER_TWO MARKER_THREE</summary>".into(),
                     reasoning: String::new(),
                     calls: Vec::new(),
                     usage: usage(1, 1, 1),

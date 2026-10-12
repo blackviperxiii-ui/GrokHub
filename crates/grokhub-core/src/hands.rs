@@ -167,7 +167,8 @@ mod tests {
 
     #[test]
     fn sidecar_prefix_wins_over_local_bin() {
-        let root = std::env::temp_dir().join(format!("grokhub-hands-prefix-{}", std::process::id()));
+        let root =
+            std::env::temp_dir().join(format!("grokhub-hands-prefix-{}", std::process::id()));
         let sidecar = root.join(".local/lib/grokhub/bin");
         let local = root.join(".local/bin");
         let _ = fs::remove_dir_all(&root);
@@ -190,10 +191,7 @@ mod tests {
 
     #[test]
     fn missing_uinput_daemon_receipts_are_distinct() {
-        assert_eq!(
-            diagnose_hands(false, false, None, None),
-            HandsDown::Missing
-        );
+        assert_eq!(diagnose_hands(false, false, None, None), HandsDown::Missing);
         assert_eq!(
             diagnose_hands(true, false, Some(false), Some(false)),
             HandsDown::Uinput
@@ -206,10 +204,7 @@ mod tests {
             diagnose_hands(true, false, Some(true), Some(true)),
             HandsDown::Ready
         );
-        assert_eq!(
-            diagnose_hands(false, true, None, None),
-            HandsDown::Ready
-        );
+        assert_eq!(diagnose_hands(false, true, None, None), HandsDown::Ready);
         let miss = hands_down_receipt(HandsDown::Missing);
         let uinput = hands_down_receipt(HandsDown::Uinput);
         let daemon = hands_down_receipt(HandsDown::Daemon);
@@ -218,7 +213,10 @@ mod tests {
         assert!(daemon.contains("ydotoold"));
         assert_ne!(miss, uinput);
         assert_ne!(uinput, daemon);
-        assert_eq!(hands_chip_label(HandsDown::Missing, "missing"), "not installed");
+        assert_eq!(
+            hands_chip_label(HandsDown::Missing, "missing"),
+            "not installed"
+        );
         assert_eq!(hands_chip_label(HandsDown::Uinput, "ydotool"), "uinput");
         assert_eq!(hands_chip_label(HandsDown::Daemon, "ydotool"), "daemon");
         assert_eq!(hands_chip_label(HandsDown::Ready, "ydotool"), "ydotool");
@@ -228,7 +226,10 @@ mod tests {
             hands_windshield_line(HandsDown::Ready, "ydotool"),
             "hands: ydotool ready\n"
         );
-        assert_eq!(hands_windshield_line(HandsDown::Daemon, "ydotool"), "hands: daemon\n");
+        assert_eq!(
+            hands_windshield_line(HandsDown::Daemon, "ydotool"),
+            "hands: daemon\n"
+        );
         assert_eq!(HANDS_PACMAN, "scripts/build-hands.sh");
         let build = include_str!("../../../scripts/build-hands.sh");
         assert!(
@@ -344,7 +345,10 @@ mod tests {
             ),
         ] {
             let pkg = pkg.replace("\r\n", "\n");
-            assert!(pkg.contains(&format!("{rewrite}{dest}\n")), "{name} must write Exec=/usr/bin/grokhub");
+            assert!(
+                pkg.contains(&format!("{rewrite}{dest}\n")),
+                "{name} must write Exec=/usr/bin/grokhub"
+            );
             assert!(
                 !pkg.contains("install -Dm644 packaging/grokhub.desktop"),
                 "{name} must not install the relative-Exec .desktop unchanged"
@@ -353,7 +357,10 @@ mod tests {
         let desktop = include_str!("../../../packaging/grokhub.desktop").replace("\r\n", "\n");
         let lines: Vec<&str> = desktop.lines().collect();
         assert!(lines.contains(&"X-KDE-DBUS-Restricted-Interfaces=org.kde.KWin.ScreenShot2"));
-        assert!(lines.contains(&"Exec=grokhub"), "the PKGBUILD sed matches this exact line");
+        assert!(
+            lines.contains(&"Exec=grokhub"),
+            "the PKGBUILD sed matches this exact line"
+        );
         assert!(lines.contains(&"TryExec=grokhub"));
     }
 }

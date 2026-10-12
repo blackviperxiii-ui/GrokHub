@@ -3,7 +3,6 @@
 use super::*;
 
 impl Cabin {
-
     pub(super) fn work_root(&self) -> String {
         let home = std::env::var("HOME").ok();
         let profile = std::env::var("USERPROFILE").ok();

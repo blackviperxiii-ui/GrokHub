@@ -3,7 +3,6 @@
 use super::*;
 
 impl Cabin {
-
     pub(super) fn open_palette(&mut self) {
         self.palette_open = true;
         self.palette_focus = true;
@@ -136,10 +135,7 @@ impl Cabin {
                                         .size(crate::theme::FONT_TIP)
                                         .color(crate::theme::muted()),
                                 );
-                            if ui
-                                .add_sized([ui.available_width(), 28.0], row)
-                                .clicked()
-                            {
+                            if ui.add_sized([ui.available_width(), 28.0], row).clicked() {
                                 picked = palette_pick(&cmds, &files, &root, &steps, i);
                             }
                         }
@@ -190,7 +186,12 @@ impl Cabin {
             &root_now,
         );
         if self.palette_file_rx.is_none()
-            && !palette_search_is_saved(&self.palette_files_q, &self.palette_files_root, &q, &root_now)
+            && !palette_search_is_saved(
+                &self.palette_files_q,
+                &self.palette_files_root,
+                &q,
+                &root_now,
+            )
         {
             self.kick_palette_search();
         }
@@ -286,7 +287,9 @@ pub(super) fn palette_pick(
 
 /// Contiguous scope runs, in sheet order. A scope that comes back later is a new group.
 #[cfg(test)]
-pub fn group_shortcut_scopes<'a>(scopes: impl IntoIterator<Item = &'a str>) -> Vec<(&'a str, usize)> {
+pub fn group_shortcut_scopes<'a>(
+    scopes: impl IntoIterator<Item = &'a str>,
+) -> Vec<(&'a str, usize)> {
     let mut out: Vec<(&str, usize)> = Vec::new();
     for scope in scopes {
         match out.last_mut() {
@@ -331,11 +334,8 @@ fn shortcut_key_chip(ui: &mut egui::Ui, keys: &str) {
     let galley = ui.fonts_mut(|f| f.layout_no_wrap(keys.to_owned(), font, crate::theme::fg()));
     let pad = egui::vec2(8.0, 3.0);
     let (rect, _) = ui.allocate_exact_size(galley.size() + pad * 2.0, egui::Sense::hover());
-    ui.painter().rect_filled(
-        rect,
-        crate::theme::CHROME_RADIUS,
-        crate::theme::surface(),
-    );
+    ui.painter()
+        .rect_filled(rect, crate::theme::CHROME_RADIUS, crate::theme::surface());
     ui.painter().galley(
         egui::pos2(rect.min.x + pad.x, rect.center().y - galley.size().y * 0.5),
         galley,

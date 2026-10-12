@@ -188,7 +188,10 @@ mod tests {
                 (lead + outer - avail).abs() < 0.1,
                 "width {avail}: lead {lead} + outer {outer} must fill the row"
             );
-            assert!(outer <= cap + 0.1, "width {avail}: outer {outer} over cap {cap}");
+            assert!(
+                outer <= cap + 0.1,
+                "width {avail}: outer {outer} over cap {cap}"
+            );
             if cap + 0.5 < avail - gap {
                 assert!(
                     (outer - cap).abs() < 0.1,

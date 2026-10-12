@@ -14,7 +14,13 @@ pub fn last_path() -> std::path::PathBuf {
 pub fn path_for(id: &str) -> std::path::PathBuf {
     let safe: String = id
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect();
     dir().join(format!("{safe}.json"))
 }
@@ -52,7 +58,9 @@ mod tests {
         std::env::set_var("GROKHUB_CONFIG", &root);
         let recipe = Recipe {
             screen: Some(ScreenSize { w: 1920, h: 1080 }),
-            ops: vec![ComputerOp::Act { name: "Save".into() }],
+            ops: vec![ComputerOp::Act {
+                name: "Save".into(),
+            }],
         };
         save_recipe("desk-1", &recipe).expect("save");
         assert_eq!(load_recipe("desk-1").unwrap(), recipe);

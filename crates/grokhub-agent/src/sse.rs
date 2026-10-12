@@ -82,13 +82,22 @@ impl SseParser {
         };
         let kind = v.get("type").and_then(|t| t.as_str()).unwrap_or("");
         if kind == "response.output_text.delta" {
-            return text_delta(&v).into_iter().map(SseEvent::TextDelta).collect();
+            return text_delta(&v)
+                .into_iter()
+                .map(SseEvent::TextDelta)
+                .collect();
         }
         if is_reasoning_delta(kind) {
-            return text_delta(&v).into_iter().map(SseEvent::ReasoningDelta).collect();
+            return text_delta(&v)
+                .into_iter()
+                .map(SseEvent::ReasoningDelta)
+                .collect();
         }
         if kind == "response.output_item.done" {
-            return self.take_call(v.get("item").unwrap_or(&v)).into_iter().collect();
+            return self
+                .take_call(v.get("item").unwrap_or(&v))
+                .into_iter()
+                .collect();
         }
         if kind == "response.completed" || kind == "response.incomplete" {
             self.completed = true;
@@ -169,7 +178,11 @@ fn parse_call(item: &Value) -> Option<FunctionCall> {
     if typ != "function_call" {
         return None;
     }
-    let name = item.get("name").and_then(|t| t.as_str()).unwrap_or("").to_string();
+    let name = item
+        .get("name")
+        .and_then(|t| t.as_str())
+        .unwrap_or("")
+        .to_string();
     if name.is_empty() {
         return None;
     }
@@ -232,8 +245,14 @@ pub(crate) fn parse_usage_value(v: &Value) -> Usage {
         .or_else(|| i64_field(v, "cost_in_usd_ticks"))
         .unwrap_or(0);
     Usage {
-        input_tokens: body.get("input_tokens").and_then(|n| n.as_u64()).unwrap_or(0),
-        output_tokens: body.get("output_tokens").and_then(|n| n.as_u64()).unwrap_or(0),
+        input_tokens: body
+            .get("input_tokens")
+            .and_then(|n| n.as_u64())
+            .unwrap_or(0),
+        output_tokens: body
+            .get("output_tokens")
+            .and_then(|n| n.as_u64())
+            .unwrap_or(0),
         reasoning_tokens: reasoning,
         cost_in_usd_ticks: cost,
         cached_tokens: body
@@ -246,7 +265,9 @@ pub(crate) fn parse_usage_value(v: &Value) -> Usage {
 
 fn i64_field(v: &Value, key: &str) -> Option<i64> {
     let n = v.get(key)?;
-    n.as_i64().or_else(|| n.as_u64().map(|u| u as i64)).or_else(|| n.as_f64().map(|f| f as i64))
+    n.as_i64()
+        .or_else(|| n.as_u64().map(|u| u as i64))
+        .or_else(|| n.as_f64().map(|f| f as i64))
 }
 
 fn error_message(v: &Value) -> String {
@@ -301,7 +322,9 @@ mod tests {
             r#"{"type":"response.reasoning_summary_text.delta","delta":"hmm"}"#,
         ));
         assert_eq!(thought, vec![SseEvent::ReasoningDelta("hmm".into())]);
-        let thought2 = p.push(&frame(r#"{"type":"response.reasoning.delta","delta":" more"}"#));
+        let thought2 = p.push(&frame(
+            r#"{"type":"response.reasoning.delta","delta":" more"}"#,
+        ));
         assert_eq!(thought2, vec![SseEvent::ReasoningDelta(" more".into())]);
 
         let call = p.push(&frame(
@@ -389,7 +412,9 @@ mod tests {
     #[test]
     fn sse_frames_split_across_chunks() {
         let mut p = SseParser::new();
-        assert!(p.push("data: {\"type\":\"response.output_text.delta\",\"del").is_empty());
+        assert!(p
+            .push("data: {\"type\":\"response.output_text.delta\",\"del")
+            .is_empty());
         let ev = p.push("ta\":\"ab\"}\n\n");
         assert_eq!(ev, vec![SseEvent::TextDelta("ab".into())]);
     }

@@ -45,10 +45,19 @@ impl SourceLink {
         if let Some(rest) = source.strip_prefix("chat:") {
             return match rest.rsplit_once('#') {
                 Some((thread, turn)) => match turn.parse() {
-                    Ok(turn) => Self::Chat { thread: thread.to_string(), turn: Some(turn) },
-                    Err(_) => Self::Chat { thread: rest.to_string(), turn: None },
+                    Ok(turn) => Self::Chat {
+                        thread: thread.to_string(),
+                        turn: Some(turn),
+                    },
+                    Err(_) => Self::Chat {
+                        thread: rest.to_string(),
+                        turn: None,
+                    },
                 },
-                None => Self::Chat { thread: rest.to_string(), turn: None },
+                None => Self::Chat {
+                    thread: rest.to_string(),
+                    turn: None,
+                },
             };
         }
         if let Some(rest) = source.strip_prefix("span:") {
@@ -69,7 +78,9 @@ impl SourceLink {
     /// The "why I think this" words.
     pub fn label(&self) -> String {
         match self {
-            Self::Chat { turn: Some(turn), .. } => format!("you said it in chat (turn {turn})"),
+            Self::Chat {
+                turn: Some(turn), ..
+            } => format!("you said it in chat (turn {turn})"),
             Self::Chat { turn: None, .. } => "you said it in chat".into(),
             Self::Span(_) => "from what you approved, denied or undid".into(),
             Self::Pulse(_) => "from a card you reacted to".into(),
@@ -82,7 +93,10 @@ impl SourceLink {
     /// Link target the cabin opens: `chat:`, `span:` or `pulse:` as stored.
     pub fn target(&self) -> String {
         match self {
-            Self::Chat { thread, turn: Some(turn) } => format!("chat:{thread}#{turn}"),
+            Self::Chat {
+                thread,
+                turn: Some(turn),
+            } => format!("chat:{thread}#{turn}"),
             Self::Chat { thread, turn: None } => format!("chat:{thread}"),
             Self::Span(rest) => format!("span:{rest}"),
             Self::Pulse(rest) => format!("pulse:{rest}"),
@@ -109,7 +123,12 @@ pub struct MemoryRow {
 impl MemoryRow {
     /// `- <text> · why: [<label>](<target>)`.
     pub fn line(&self) -> String {
-        format!("- {} · why: [{}]({})", self.text, self.source.label(), self.source.target())
+        format!(
+            "- {} · why: [{}]({})",
+            self.text,
+            self.source.label(),
+            self.source.target()
+        )
     }
 }
 
@@ -122,7 +141,13 @@ pub fn memory_rows(store: &AmrStore) -> (Vec<MemoryRow>, usize) {
         .into_iter()
         .filter(|n| n.node_type.is_user_model())
         .map(|n| MemoryRow {
-            text: n.body.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or("").to_string(),
+            text: n
+                .body
+                .lines()
+                .map(str::trim)
+                .find(|l| !l.is_empty())
+                .unwrap_or("")
+                .to_string(),
             source: SourceLink::parse(&n.source),
             id: n.id,
             node_type: n.node_type,
@@ -189,7 +214,11 @@ pub fn edit_node(store: &AmrStore, id: &str, text: &str, now_ms: u64) -> Result<
         confidence: 1.0,
         tags: vec!["edited".into()],
         body: format!("{text}\n"),
-        sensitivity: if old.sensitivity.sealed() { old.sensitivity } else { super::write::sensitivity_for(text) },
+        sensitivity: if old.sensitivity.sealed() {
+            old.sensitivity
+        } else {
+            super::write::sensitivity_for(text)
+        },
         consent_ref: String::new(),
     };
     let new_id = match store.remember(&draft) {
@@ -208,9 +237,17 @@ pub fn edit_node(store: &AmrStore, id: &str, text: &str, now_ms: u64) -> Result<
 
 /// Forget one node because the user asked: tombstone, out of
 /// `index.sqlite`, and one line (id only) in `dreams/forget-<date>.md`.
-pub fn forget_node(store: &AmrStore, id: &str, _ask: UserForget, now_ms: u64) -> Result<(), AmrError> {
+pub fn forget_node(
+    store: &AmrStore,
+    id: &str,
+    _ask: UserForget,
+    now_ms: u64,
+) -> Result<(), AmrError> {
     store.forget(id)?;
-    let date: String = crate::oauth::unix_ms_to_rfc3339(now_ms).chars().take(10).collect();
+    let date: String = crate::oauth::unix_ms_to_rfc3339(now_ms)
+        .chars()
+        .take(10)
+        .collect();
     let dir = store.root().join("dreams");
     fs::create_dir_all(&dir).map_err(|err| AmrError::Io(err.to_string()))?;
     let mut file = OpenOptions::new()
@@ -231,7 +268,11 @@ pub fn strip_forgotten(store: &AmrStore, files: Vec<HubMemoryFile>) -> Vec<HubMe
     files
         .into_iter()
         .map(|mut file| {
-            let kept: Vec<&str> = file.content.lines().filter(|l| !forgotten.contains(&norm_line(l))).collect();
+            let kept: Vec<&str> = file
+                .content
+                .lines()
+                .filter(|l| !forgotten.contains(&norm_line(l)))
+                .collect();
             let mut content = kept.join("\n");
             if file.content.ends_with('\n') && !content.is_empty() {
                 content.push('\n');
@@ -245,8 +286,12 @@ pub fn strip_forgotten(store: &AmrStore, files: Vec<HubMemoryFile>) -> Vec<HubMe
 /// Lines of forgotten nodes that no live node still holds: a dream merge
 /// tombstones one copy of a line another node keeps, and that is not a forget.
 fn forgotten_lines(store: &AmrStore) -> Vec<String> {
-    let live: std::collections::BTreeSet<String> =
-        store.recallable().0.iter().flat_map(|n| n.body.lines().map(norm_line).collect::<Vec<_>>()).collect();
+    let live: std::collections::BTreeSet<String> = store
+        .recallable()
+        .0
+        .iter()
+        .flat_map(|n| n.body.lines().map(norm_line).collect::<Vec<_>>())
+        .collect();
     store
         .load_forgotten()
         .nodes
@@ -258,8 +303,14 @@ fn forgotten_lines(store: &AmrStore) -> Vec<String> {
 
 fn norm_line(line: &str) -> String {
     let t = line.trim();
-    let t = t.strip_prefix("- ").or_else(|| t.strip_prefix("* ")).unwrap_or(t);
-    t.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase()
+    let t = t
+        .strip_prefix("- ")
+        .or_else(|| t.strip_prefix("* "))
+        .unwrap_or(t);
+    t.split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
 }
 
 /// What reflect would change in USER.md. Shown to the user; never written.
@@ -290,14 +341,24 @@ pub fn reflect_diff(store: &AmrStore, user_md: &str) -> ReflectDiff {
     let (nodes, _) = store.recallable();
     let mut diff = ReflectDiff::default();
     for node in nodes.iter().filter(|n| proposable(n)) {
-        let line = node.body.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or("");
-        if !line.is_empty() && !have.contains(&norm_line(line)) && !diff.add.iter().any(|l| l == line) {
+        let line = node
+            .body
+            .lines()
+            .map(str::trim)
+            .find(|l| !l.is_empty())
+            .unwrap_or("");
+        if !line.is_empty()
+            && !have.contains(&norm_line(line))
+            && !diff.add.iter().any(|l| l == line)
+        {
             diff.add.push(line.to_string());
         }
     }
     let superseded = store.superseded_ids();
-    let live: std::collections::BTreeSet<String> =
-        nodes.iter().flat_map(|n| n.body.lines().map(norm_line).collect::<Vec<_>>()).collect();
+    let live: std::collections::BTreeSet<String> = nodes
+        .iter()
+        .flat_map(|n| n.body.lines().map(norm_line).collect::<Vec<_>>())
+        .collect();
     let mut stale = forgotten_lines(store);
     stale.extend(
         store
@@ -317,8 +378,10 @@ pub fn reflect_diff(store: &AmrStore, user_md: &str) -> ReflectDiff {
 }
 
 fn proposable(node: &Node) -> bool {
-    matches!(node.node_type, NodeType::Fact | NodeType::Preference | NodeType::Routine | NodeType::Need)
-        && !node.sensitivity.sealed()
+    matches!(
+        node.node_type,
+        NodeType::Fact | NodeType::Preference | NodeType::Routine | NodeType::Need
+    ) && !node.sensitivity.sealed()
         && node.confidence >= REFLECT_MIN_CONFIDENCE
         && !node.source.starts_with("pulse:")
 }

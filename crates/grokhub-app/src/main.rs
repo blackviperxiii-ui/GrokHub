@@ -7,57 +7,56 @@
 #![cfg_attr(not(test), warn(clippy::unwrap_used, clippy::expect_used))]
 
 mod app;
-mod engine_handle;
-mod helpers;
-mod titlebar;
+mod card_prefs;
 mod cards;
-mod icons;
-mod theme;
-mod motion;
 mod cli;
 mod config;
-#[cfg(feature = "fx")]
-mod fx;
 mod desktop;
 mod desktop_mcp;
+mod engine_handle;
+mod feed;
+#[cfg(feature = "fx")]
+mod fx;
 mod github;
 mod google_mcp_via_cli;
+mod helpers;
 mod host;
+mod icons;
+mod imagine_auth;
+mod loops;
 mod markdown;
+mod motion;
 mod native_mcp;
 mod native_plugins;
 mod night;
-mod loops;
-mod card_prefs;
-mod feed;
-mod recipes;
 mod notify;
-mod store;
 mod oauth;
-mod imagine_auth;
+mod recipes;
+mod release_update;
 mod secrets;
 mod self_mcp;
 mod skills;
 mod startup;
+mod store;
+mod theme;
 mod threads;
+mod titlebar;
 mod tray;
-mod window;
-mod release_update;
 mod update;
-mod xai;
 #[cfg(windows)]
 mod win_acl;
 #[cfg(windows)]
 mod win_audio;
 #[cfg(windows)]
 mod win_native;
+mod window;
+mod xai;
 
 use app::Cabin;
 use cli::{parse_args, Launch};
 use eframe::egui;
 use grokhub_core::{
-    doctor_cabin_line, doctor_lines, doctor_ok, hub_kind_from_health,
-    DEFAULT_PORT,
+    doctor_cabin_line, doctor_lines, doctor_ok, hub_kind_from_health, DEFAULT_PORT,
 };
 use std::env;
 
@@ -78,9 +77,12 @@ fn main() {
     match launch {
         Launch::Cabin | Launch::Agent | Launch::McpDesktop | Launch::McpCua | Launch::McpSelf => {}
         Launch::Hub => attach_cli_console(true),
-        Launch::Version | Launch::Help | Launch::Doctor | Launch::Update | Launch::Oauth | Launch::BenchLocal => {
-            attach_cli_console(false)
-        }
+        Launch::Version
+        | Launch::Help
+        | Launch::Doctor
+        | Launch::Update
+        | Launch::Oauth
+        | Launch::BenchLocal => attach_cli_console(false),
     }
     match launch {
         Launch::Version => {
@@ -199,7 +201,10 @@ fn run_doctor() {
     );
     let kind = hub_kind_from_health(probe_hub_health_body().as_deref());
     let mut lines = doctor_lines(authed, mem_ok, &kind);
-    lines.extend(grokhub_core::doctor_extras(None, crate::skills::list_skills().len()));
+    lines.extend(grokhub_core::doctor_extras(
+        None,
+        crate::skills::list_skills().len(),
+    ));
     lines.push(doctor_cabin_line(cabin_running()));
     for l in &lines {
         println!("{} {}", if l.ok { "ok " } else { "ERR" }, l.text);

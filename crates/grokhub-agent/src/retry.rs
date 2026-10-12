@@ -9,7 +9,10 @@ pub const DEFAULT_MAX_RETRIES: u32 = 15;
 pub const MAX_RETRY_BACKOFF: Duration = Duration::from_secs(30);
 pub const TRANSPORT_REBUILD_BACKOFF: Duration = Duration::from_millis(200);
 
-pub fn resolve_max_retries_with_env(env_override: Option<&str>, model_max_retries: Option<u32>) -> u32 {
+pub fn resolve_max_retries_with_env(
+    env_override: Option<&str>,
+    model_max_retries: Option<u32>,
+) -> u32 {
     env_override
         .and_then(|value| value.parse::<u32>().ok())
         .or(model_max_retries)
@@ -56,7 +59,9 @@ pub fn decide_retry(err: &ClientError, retry_count: u32, max_retries: u32) -> Op
     }
     let next_attempt = retry_count.saturating_add(1);
     match err {
-        ClientError::RateLimited { retry_after_secs, .. } => {
+        ClientError::RateLimited {
+            retry_after_secs, ..
+        } => {
             if next_attempt >= max_retries.min(RATE_LIMIT_RETRY_THRESHOLD) {
                 return None;
             }
@@ -90,7 +95,10 @@ mod tests {
     fn resolve_max_retries_env_model_and_default() {
         assert_eq!(resolve_max_retries_with_env(Some("9"), Some(3)), 9);
         assert_eq!(resolve_max_retries_with_env(None, Some(7)), 7);
-        assert_eq!(resolve_max_retries_with_env(None, None), DEFAULT_MAX_RETRIES);
+        assert_eq!(
+            resolve_max_retries_with_env(None, None),
+            DEFAULT_MAX_RETRIES
+        );
         assert_eq!(resolve_max_retries_with_env(Some("abc"), Some(4)), 4);
     }
 
@@ -108,7 +116,10 @@ mod tests {
     #[test]
     fn backoff_doubles_then_caps_at_thirty_seconds() {
         let r2 = retry_backoff_with_jitter(2);
-        assert!(r2 >= Duration::from_millis(3200) && r2 <= Duration::from_millis(4800), "{r2:?}");
+        assert!(
+            r2 >= Duration::from_millis(3200) && r2 <= Duration::from_millis(4800),
+            "{r2:?}"
+        );
         let r10 = retry_backoff_with_jitter(10);
         assert!(
             r10 >= Duration::from_millis(24_000) && r10 <= Duration::from_millis(36_000),
@@ -134,7 +145,10 @@ mod tests {
             retry_after_secs: Some(120),
         };
         let waited = decide_retry(&server, 1, DEFAULT_MAX_RETRIES).unwrap();
-        assert!(waited >= Duration::from_secs(24) && waited <= Duration::from_secs(36), "{waited:?}");
+        assert!(
+            waited >= Duration::from_secs(24) && waited <= Duration::from_secs(36),
+            "{waited:?}"
+        );
 
         let transport = ClientError::Transport("reset".into());
         let first = decide_retry(&transport, 0, DEFAULT_MAX_RETRIES).unwrap();

@@ -26,8 +26,8 @@ pub use split::{analyze, peeled_primary, Facts, Seg};
 
 pub(crate) use risk::{git_words_are_read_only_query, git_words_have_unsafe_query_option};
 pub use store::{
-    add_grant_at, config_dir, load_all_grants, load_grants, load_rules, project_key,
-    remember_grant, remove_grant, save_rules, ConfigGuard, config_pinned,
+    add_grant_at, config_dir, config_pinned, load_all_grants, load_grants, load_rules, project_key,
+    remember_grant, remove_grant, save_rules, ConfigGuard,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -72,7 +72,8 @@ pub fn govern(
         return base;
     }
     // `base` is Run for a mutating tool only under Always or a latched Always.
-    let always = gate.attended && (gate.mode == PermMode::Always || (base == Decision::Run && !gate::is_readonly(name)));
+    let always = gate.attended
+        && (gate.mode == PermMode::Always || (base == Decision::Run && !gate::is_readonly(name)));
     if name == "monitor" {
         if let Some(command) = command_arg(arguments) {
             let facts = split::analyze(&command);
@@ -106,7 +107,10 @@ pub fn govern(
         if rule_hit(policy, Action::Deny, kind, &texts) {
             return Decision::Refuse(gate::unattended_deny(name));
         }
-        if facts.segments.is_none() || facts.dangerous || rule_hit(policy, Action::Ask, kind, &texts) {
+        if facts.segments.is_none()
+            || facts.dangerous
+            || rule_hit(policy, Action::Ask, kind, &texts)
+        {
             return ask(gate, name, always);
         }
         if allow_bash(policy, &facts) {
@@ -212,7 +216,13 @@ pub(crate) fn explicit_ask(policy: &Policy, name: &str, arguments: &str, workspa
     rule_hit_paths(policy, Action::Ask, kind, workspace, &paths)
 }
 
-fn govern_fetch(base: Decision, gate: &Gate, arguments: &str, policy: &Policy, always: bool) -> Decision {
+fn govern_fetch(
+    base: Decision,
+    gate: &Gate,
+    arguments: &str,
+    policy: &Policy,
+    always: bool,
+) -> Decision {
     let url = url_arg(arguments);
     if policy
         .rules
@@ -241,7 +251,13 @@ fn govern_fetch(base: Decision, gate: &Gate, arguments: &str, policy: &Policy, a
 /// Media tools have no tool prefix in the rule parser. A rule matches only
 /// when it is `Tool::Any` and the pattern is blank, `*`, or the tool name.
 /// Bash and edit rules do not reach these tools.
-fn govern_media(base: Decision, gate: &Gate, name: &str, policy: &Policy, always: bool) -> Decision {
+fn govern_media(
+    base: Decision,
+    gate: &Gate,
+    name: &str,
+    policy: &Policy,
+    always: bool,
+) -> Decision {
     if policy
         .rules
         .iter()

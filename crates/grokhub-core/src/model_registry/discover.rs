@@ -21,7 +21,12 @@ pub struct Listing {
 
 impl Listing {
     pub fn new(kind: SourceKind, models: Vec<ModelMeta>) -> Self {
-        Self { kind: Some(kind), models, tier: None, gb_version: None }
+        Self {
+            kind: Some(kind),
+            models,
+            tier: None,
+            gb_version: None,
+        }
     }
 }
 
@@ -33,7 +38,8 @@ pub trait CatalogSource {
 }
 
 fn u64_of(row: &Value, keys: &[&str]) -> Option<u64> {
-    keys.iter().find_map(|k| row.get(*k).and_then(Value::as_u64))
+    keys.iter()
+        .find_map(|k| row.get(*k).and_then(Value::as_u64))
 }
 
 fn str_of(row: &Value, keys: &[&str]) -> Option<String> {
@@ -55,17 +61,23 @@ fn strings(v: Option<&Value>) -> Option<Vec<String>> {
 }
 
 fn bool_of(row: &Value, keys: &[&str]) -> Option<bool> {
-    keys.iter().find_map(|k| row.get(*k).and_then(Value::as_bool))
+    keys.iter()
+        .find_map(|k| row.get(*k).and_then(Value::as_bool))
 }
 
 /// One `/v1/models` or `/v1/language-models` row. Unknown fields stay `None`.
 pub fn parse_model_row(row: &Value) -> Option<ModelMeta> {
-    let id = row.get("id").and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty())?;
+    let id = row
+        .get("id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())?;
     let caps = row.get("capabilities").cloned().unwrap_or(Value::Null);
     let efforts = strings(caps.get("reasoning_effort"))
         .or_else(|| strings(row.get("reasoning_effort")))
         .or_else(|| strings(row.get("reasoning_efforts")));
-    let endpoints = strings(row.get("endpoints")).or_else(|| strings(row.get("supported_endpoints")));
+    let endpoints =
+        strings(row.get("endpoints")).or_else(|| strings(row.get("supported_endpoints")));
     let api_shape = endpoints.as_ref().and_then(|eps| {
         if eps.iter().any(|e| e.contains("responses")) {
             Some("responses".to_string())
@@ -76,32 +88,57 @@ pub fn parse_model_row(row: &Value) -> Option<ModelMeta> {
         }
     });
     let notice = row.get("notice").and_then(|n| {
-        Some(Notice { severity: str_of(n, &["severity"])?, text: str_of(n, &["text", "message"]).unwrap_or_default() })
+        Some(Notice {
+            severity: str_of(n, &["severity"])?,
+            text: str_of(n, &["text", "message"]).unwrap_or_default(),
+        })
     });
     Some(ModelMeta {
         id: id.to_string(),
         aliases: strings(row.get("aliases")).unwrap_or_default(),
-        context_length: u64_of(row, &["context_length", "context_window", "max_prompt_length"]),
+        context_length: u64_of(
+            row,
+            &["context_length", "context_window", "max_prompt_length"],
+        ),
         max_output: u64_of(row, &["max_output_tokens", "max_completion_tokens"]),
         prices: Prices {
             prompt: u64_of(row, &["prompt_text_token_price"]),
-            cached: u64_of(row, &["cached_prompt_text_token_price", "cached_prompt_token_price"]),
+            cached: u64_of(
+                row,
+                &[
+                    "cached_prompt_text_token_price",
+                    "cached_prompt_token_price",
+                ],
+            ),
             completion: u64_of(row, &["completion_text_token_price"]),
-            prompt_long: u64_of(row, &["prompt_text_token_price_long_context", "long_context_prompt_text_token_price"]),
+            prompt_long: u64_of(
+                row,
+                &[
+                    "prompt_text_token_price_long_context",
+                    "long_context_prompt_text_token_price",
+                ],
+            ),
             completion_long: u64_of(
                 row,
-                &["completion_text_token_price_long_context", "long_context_completion_text_token_price"],
+                &[
+                    "completion_text_token_price_long_context",
+                    "long_context_completion_text_token_price",
+                ],
             ),
             long_context_threshold: u64_of(row, &["long_context_threshold"]),
         },
         efforts,
-        default_effort: str_of(&caps, &["default_reasoning_effort"]).or_else(|| str_of(row, &["default_reasoning_effort"])),
+        default_effort: str_of(&caps, &["default_reasoning_effort"])
+            .or_else(|| str_of(row, &["default_reasoning_effort"])),
         fingerprint: str_of(row, &["fingerprint", "system_fingerprint"]),
         version: str_of(row, &["version"]),
         input_modalities: strings(row.get("input_modalities")),
         output_modalities: strings(row.get("output_modalities")),
         tool_calling: bool_of(&caps, &["function_calling", "tools", "tool_calling"]),
-        structured_output: bool_of(&caps, &["structured_outputs", "structured_output", "json_schema"]),
+        structured_output: bool_of(
+            &caps,
+            &["structured_outputs", "structured_output", "json_schema"],
+        ),
         api_shape,
         deprecated: bool_of(row, &["deprecated"]),
         notice,
@@ -121,7 +158,10 @@ fn rows(body: &str) -> Result<Vec<Value>, String> {
 
 /// `/v1/models` plus `/v1/language-models` (either may be missing), merged by id.
 /// The language-models row wins on any field both send; order is by id.
-pub fn parse_xai_catalog(models: Option<&str>, language: Option<&str>) -> Result<Vec<ModelMeta>, String> {
+pub fn parse_xai_catalog(
+    models: Option<&str>,
+    language: Option<&str>,
+) -> Result<Vec<ModelMeta>, String> {
     let mut by_id: BTreeMap<String, ModelMeta> = BTreeMap::new();
     let mut any = false;
     for body in [language, models].into_iter().flatten() {
@@ -146,7 +186,10 @@ pub fn parse_xai_catalog(models: Option<&str>, language: Option<&str>) -> Result
 /// Ids from `grok models` (already parsed by `grokhub_acp::parse_models_list`).
 /// The CLI lists ids only, so every other field stays unknown.
 pub fn gb_listing(ids: &[String], gb_version: Option<&str>) -> Listing {
-    let mut listing = Listing::new(SourceKind::GrokBuild, ids.iter().map(|id| ModelMeta::bare(id)).collect());
+    let mut listing = Listing::new(
+        SourceKind::GrokBuild,
+        ids.iter().map(|id| ModelMeta::bare(id)).collect(),
+    );
     listing.gb_version = gb_version.map(str::to_string);
     listing
 }
@@ -176,27 +219,47 @@ fn usd_per_token(v: Option<&Value>) -> Option<u64> {
 
 /// An effort list the listing itself names. Nothing is filled from code.
 fn listed_efforts(row: &Value) -> Option<Vec<String>> {
-    const KEYS: &[&str] = &["efforts", "reasoning_efforts", "reasoning_effort", "supported_efforts"];
+    const KEYS: &[&str] = &[
+        "efforts",
+        "reasoning_efforts",
+        "reasoning_effort",
+        "supported_efforts",
+    ];
     let caps = row.get("capabilities");
     KEYS.iter()
         .find_map(|k| strings(row.get(*k)))
-        .or_else(|| KEYS.iter().find_map(|k| strings(caps.and_then(|c| c.get(*k)))))
-        .or_else(|| strings(caps.and_then(|c| c.get("effort")).and_then(|e| e.get("levels").or(Some(e)))))
+        .or_else(|| {
+            KEYS.iter()
+                .find_map(|k| strings(caps.and_then(|c| c.get(*k))))
+        })
+        .or_else(|| {
+            strings(
+                caps.and_then(|c| c.get("effort"))
+                    .and_then(|e| e.get("levels").or(Some(e))),
+            )
+        })
 }
 
 /// An OpenAI-compatible `/models` listing (OpenRouter and the like), ids as
 /// `<provider>/<model>`. Prices are USD per token there; unknown stays `None`.
-pub fn parse_openai_compatible_catalog(provider: &str, body: &str) -> Result<Vec<ModelMeta>, String> {
+pub fn parse_openai_compatible_catalog(
+    provider: &str,
+    body: &str,
+) -> Result<Vec<ModelMeta>, String> {
     let mut out = Vec::new();
     for row in rows(body)? {
-        let Some(id) = str_of(&row, &["id"]) else { continue };
+        let Some(id) = str_of(&row, &["id"]) else {
+            continue;
+        };
         let top = row.get("top_provider").cloned().unwrap_or(Value::Null);
         let pricing = row.get("pricing").cloned().unwrap_or(Value::Null);
         let params = strings(row.get("supported_parameters"));
         out.push(ModelMeta {
             id: provider_model_id(provider, &id),
-            context_length: u64_of(&row, &["context_length", "context_window"]).or_else(|| u64_of(&top, &["context_length"])),
-            max_output: u64_of(&top, &["max_completion_tokens"]).or_else(|| u64_of(&row, &["max_output_tokens", "max_completion_tokens"])),
+            context_length: u64_of(&row, &["context_length", "context_window"])
+                .or_else(|| u64_of(&top, &["context_length"])),
+            max_output: u64_of(&top, &["max_completion_tokens"])
+                .or_else(|| u64_of(&row, &["max_output_tokens", "max_completion_tokens"])),
             prices: Prices {
                 prompt: usd_per_token(pricing.get("prompt")),
                 cached: usd_per_token(pricing.get("input_cache_read")),
@@ -204,8 +267,14 @@ pub fn parse_openai_compatible_catalog(provider: &str, body: &str) -> Result<Vec
                 ..Prices::default()
             },
             efforts: listed_efforts(&row),
-            input_modalities: strings(row.get("architecture").and_then(|a| a.get("input_modalities"))),
-            output_modalities: strings(row.get("architecture").and_then(|a| a.get("output_modalities"))),
+            input_modalities: strings(
+                row.get("architecture")
+                    .and_then(|a| a.get("input_modalities")),
+            ),
+            output_modalities: strings(
+                row.get("architecture")
+                    .and_then(|a| a.get("output_modalities")),
+            ),
             tool_calling: params.as_ref().map(|p| p.iter().any(|x| x == "tools")),
             ..ModelMeta::default()
         });
@@ -218,10 +287,15 @@ pub fn parse_openai_compatible_catalog(provider: &str, body: &str) -> Result<Vec
 pub fn parse_anthropic_catalog(provider: &str, body: &str) -> Result<Vec<ModelMeta>, String> {
     let mut out = Vec::new();
     for row in rows(body)? {
-        let Some(id) = str_of(&row, &["id"]) else { continue };
+        let Some(id) = str_of(&row, &["id"]) else {
+            continue;
+        };
         out.push(ModelMeta {
             id: provider_model_id(provider, &id),
-            context_length: u64_of(&row, &["max_input_tokens", "context_window", "context_length"]),
+            context_length: u64_of(
+                &row,
+                &["max_input_tokens", "context_window", "context_length"],
+            ),
             max_output: u64_of(&row, &["max_tokens", "max_output_tokens"]),
             efforts: listed_efforts(&row),
             ..ModelMeta::default()
@@ -253,7 +327,10 @@ mod tests {
     #[test]
     fn xai_catalog_merges_both_endpoints_and_keeps_unknowns_null() {
         let got = parse_xai_catalog(Some(MODELS), Some(LANGUAGE)).unwrap();
-        assert_eq!(got.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(), vec!["grok-3-mini-fast", "grok-4.7"]);
+        assert_eq!(
+            got.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(),
+            vec!["grok-3-mini-fast", "grok-4.7"]
+        );
         let ghost = &got[0];
         assert!(ghost.is_placeholder());
         assert_eq!(ghost.context_length, None);
@@ -273,19 +350,44 @@ mod tests {
                 long_context_threshold: Some(200_000)
             }
         );
-        assert_eq!(m.efforts.as_deref(), Some(&["low".to_string(), "medium".into(), "high".into(), "xhigh".into()][..]));
+        assert_eq!(
+            m.efforts.as_deref(),
+            Some(
+                &[
+                    "low".to_string(),
+                    "medium".into(),
+                    "high".into(),
+                    "xhigh".into()
+                ][..]
+            )
+        );
         assert_eq!(m.default_effort.as_deref(), Some("medium"));
-        assert_eq!((m.fingerprint.as_deref(), m.version.as_deref()), (Some("fp_47"), Some("1.0")));
-        assert_eq!(m.input_modalities.as_deref(), Some(&["text".to_string(), "image".into()][..]));
-        assert_eq!((m.tool_calling, m.structured_output), (Some(true), Some(true)));
+        assert_eq!(
+            (m.fingerprint.as_deref(), m.version.as_deref()),
+            (Some("fp_47"), Some("1.0"))
+        );
+        assert_eq!(
+            m.input_modalities.as_deref(),
+            Some(&["text".to_string(), "image".into()][..])
+        );
+        assert_eq!(
+            (m.tool_calling, m.structured_output),
+            (Some(true), Some(true))
+        );
         assert_eq!(m.api_shape.as_deref(), Some("responses"));
         assert!(!m.is_placeholder());
     }
 
     #[test]
     fn a_bad_payload_is_an_error_not_an_empty_list() {
-        assert_eq!(parse_xai_catalog(Some("{}"), None).unwrap_err(), "models payload has no data array");
-        assert_eq!(parse_xai_catalog(None, None).unwrap_err(), "no models payload");
+        assert_eq!(
+            parse_xai_catalog(Some("{}"), None).unwrap_err(),
+            "models payload has no data array"
+        );
+        assert_eq!(
+            parse_xai_catalog(None, None).unwrap_err(),
+            "no models payload"
+        );
     }
 
     #[test]
@@ -301,21 +403,59 @@ mod tests {
             {"object":"no id"}
         ]}"#;
         let got = parse_openai_compatible_catalog("openrouter", body).unwrap();
-        assert_eq!(got.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(), vec!["openrouter/vendor/model-a", "openrouter/vendor/model-b", "openrouter/vendor/model-c"]);
+        assert_eq!(
+            got.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(),
+            vec![
+                "openrouter/vendor/model-a",
+                "openrouter/vendor/model-b",
+                "openrouter/vendor/model-c"
+            ]
+        );
         let a = &got[0];
         // $3 / $15 / $0.30 per million is 30_000 / 150_000 / 3_000 cents per 100M, as xAI reports.
-        assert_eq!(a.prices, Prices { prompt: Some(30_000), cached: Some(3_000), completion: Some(150_000), ..Prices::default() });
-        assert_eq!((a.context_length, a.max_output), (Some(200_000), Some(64_000)));
-        assert_eq!(a.efforts.as_deref(), Some(&["low".to_string(), "high".into()][..]));
+        assert_eq!(
+            a.prices,
+            Prices {
+                prompt: Some(30_000),
+                cached: Some(3_000),
+                completion: Some(150_000),
+                ..Prices::default()
+            }
+        );
+        assert_eq!(
+            (a.context_length, a.max_output),
+            (Some(200_000), Some(64_000))
+        );
+        assert_eq!(
+            a.efforts.as_deref(),
+            Some(&["low".to_string(), "high".into()][..])
+        );
         assert_eq!(a.tool_calling, Some(true));
-        assert_eq!(a.input_modalities.as_deref(), Some(&["text".to_string(), "image".into()][..]));
+        assert_eq!(
+            a.input_modalities.as_deref(),
+            Some(&["text".to_string(), "image".into()][..])
+        );
         assert_eq!(a.api_shape, None);
         let b = &got[1];
-        assert_eq!(b.prices, Prices::default(), "a negative or unparsable price is unknown");
-        assert_eq!((b.tool_calling, b.efforts.as_ref()), (Some(false), None), "no effort list is filled from code");
+        assert_eq!(
+            b.prices,
+            Prices::default(),
+            "a negative or unparsable price is unknown"
+        );
+        assert_eq!(
+            (b.tool_calling, b.efforts.as_ref()),
+            (Some(false), None),
+            "no effort list is filled from code"
+        );
         let c = &got[2];
-        assert_eq!((c.context_length, c.tool_calling, c.prices.is_empty()), (None, None, true));
-        assert_eq!(split_provider_model("openrouter/vendor/model-a"), Some(("openrouter", "vendor/model-a")));
+        assert_eq!(
+            (c.context_length, c.tool_calling, c.prices.is_empty()),
+            (None, None, true)
+        );
+        assert_eq!(
+            split_provider_model("openrouter/vendor/model-a"),
+            Some(("openrouter", "vendor/model-a"))
+        );
         assert_eq!(split_provider_model("grok-4.7"), None);
         assert_eq!(split_provider_model("/x"), None);
     }
@@ -329,10 +469,25 @@ mod tests {
         ],"has_more":false}"#;
         let got = parse_anthropic_catalog("anthropic", body).unwrap();
         assert_eq!(got[0].id, "anthropic/model-x");
-        assert_eq!((got[0].context_length, got[0].max_output), (Some(200_000), Some(32_000)));
-        assert_eq!(got[0].efforts.as_deref(), Some(&["low".to_string(), "medium".into(), "high".into()][..]));
-        assert!(got[0].prices.is_empty(), "Anthropic lists no prices: unknown, never guessed");
-        assert_eq!((got[1].efforts.as_ref(), got[1].context_length), (None, None));
-        assert_eq!(parse_anthropic_catalog("anthropic", "{}").unwrap_err(), "models payload has no data array");
+        assert_eq!(
+            (got[0].context_length, got[0].max_output),
+            (Some(200_000), Some(32_000))
+        );
+        assert_eq!(
+            got[0].efforts.as_deref(),
+            Some(&["low".to_string(), "medium".into(), "high".into()][..])
+        );
+        assert!(
+            got[0].prices.is_empty(),
+            "Anthropic lists no prices: unknown, never guessed"
+        );
+        assert_eq!(
+            (got[1].efforts.as_ref(), got[1].context_length),
+            (None, None)
+        );
+        assert_eq!(
+            parse_anthropic_catalog("anthropic", "{}").unwrap_err(),
+            "models payload has no data array"
+        );
     }
 }

@@ -43,8 +43,14 @@ pub const TTS_VOICES: &[&str] = &["ara", "eve", "leo", "rex", "sal"];
 
 /// The TTS voice for a personality's hint: a listed voice id (any case), else the default.
 pub fn tts_voice(hint: Option<&str>) -> &'static str {
-    let hint = hint.map(|h| h.trim().to_ascii_lowercase()).unwrap_or_default();
-    TTS_VOICES.iter().copied().find(|v| *v == hint).unwrap_or(DEFAULT_VOICE)
+    let hint = hint
+        .map(|h| h.trim().to_ascii_lowercase())
+        .unwrap_or_default();
+    TTS_VOICES
+        .iter()
+        .copied()
+        .find(|v| *v == hint)
+        .unwrap_or(DEFAULT_VOICE)
 }
 
 /// Hide the voice strip this long after Ready. Listening / Speaking stay up.
@@ -132,7 +138,9 @@ pub enum VoiceEvent {
         role: VoiceRole,
         replace: bool,
     },
-    AudioOut { pcm_b64: String },
+    AudioOut {
+        pcm_b64: String,
+    },
     AudioEnd,
     BargeIn,
     Hands,
@@ -440,12 +448,8 @@ pub fn pcm_from_capture(bytes: &[u8]) -> &[u8] {
         let mut i = 12usize;
         while i + 8 <= bytes.len() {
             let id = &bytes[i..i + 4];
-            let sz = u32::from_le_bytes([
-                bytes[i + 4],
-                bytes[i + 5],
-                bytes[i + 6],
-                bytes[i + 7],
-            ]) as usize;
+            let sz = u32::from_le_bytes([bytes[i + 4], bytes[i + 5], bytes[i + 6], bytes[i + 7]])
+                as usize;
             i += 8;
             if id == b"data" {
                 let end = (i + sz).min(bytes.len());
@@ -552,14 +556,29 @@ mod tests {
 
     #[test]
     fn hey_and_url() {
-        assert_eq!(dedicated_voice_model("grok-3-mini-fast"), DEFAULT_VOICE_MODEL);
+        assert_eq!(
+            dedicated_voice_model("grok-3-mini-fast"),
+            DEFAULT_VOICE_MODEL
+        );
         assert!(voice_session_url("").contains("grok-voice-think-fast-2.0"));
         assert!(is_voice_error("VOICE_RECEIPT: arecord missing"));
         assert!(!is_voice_error("hey grok flash the pi"));
-        assert_eq!(hey_grok_on_press(VoiceState::Idle, false), HeyGrokAction::Start);
-        assert_eq!(hey_grok_on_press(VoiceState::Listening, false), HeyGrokAction::BargeIn);
-        assert_eq!(hey_grok_on_press(VoiceState::Idle, true), HeyGrokAction::Halt);
-        assert_eq!(hey_grok_on_press(VoiceState::Hands, false), HeyGrokAction::Halt);
+        assert_eq!(
+            hey_grok_on_press(VoiceState::Idle, false),
+            HeyGrokAction::Start
+        );
+        assert_eq!(
+            hey_grok_on_press(VoiceState::Listening, false),
+            HeyGrokAction::BargeIn
+        );
+        assert_eq!(
+            hey_grok_on_press(VoiceState::Idle, true),
+            HeyGrokAction::Halt
+        );
+        assert_eq!(
+            hey_grok_on_press(VoiceState::Hands, false),
+            HeyGrokAction::Halt
+        );
         let ev = parse_realtime_event(&serde_json::json!({
             "type": "conversation.item.input_audio_transcription.completed",
             "transcript": "hey grok"
@@ -615,12 +634,27 @@ mod tests {
         assert!(!should_attach_cabin_frame(CabinEyesState::Off, true));
         assert!(should_capture_before_chat(true));
         assert!(!should_capture_before_chat(false));
-        assert_eq!(cabin_eyes_for_turn(true, true, true), CabinEyesState::Seeing);
-        assert_eq!(cabin_eyes_for_turn(true, false, true), CabinEyesState::Armed);
-        assert_eq!(cabin_eyes_for_turn(true, true, false), CabinEyesState::Armed);
+        assert_eq!(
+            cabin_eyes_for_turn(true, true, true),
+            CabinEyesState::Seeing
+        );
+        assert_eq!(
+            cabin_eyes_for_turn(true, false, true),
+            CabinEyesState::Armed
+        );
+        assert_eq!(
+            cabin_eyes_for_turn(true, true, false),
+            CabinEyesState::Armed
+        );
         assert_eq!(cabin_eyes_for_turn(false, true, true), CabinEyesState::Off);
-        assert!(should_attach_cabin_frame(cabin_eyes_for_turn(true, true, true), true));
-        assert!(!should_attach_cabin_frame(cabin_eyes_for_turn(true, false, true), true));
+        assert!(should_attach_cabin_frame(
+            cabin_eyes_for_turn(true, true, true),
+            true
+        ));
+        assert!(!should_attach_cabin_frame(
+            cabin_eyes_for_turn(true, false, true),
+            true
+        ));
         assert_eq!(stt_url(), "https://api.x.ai/v1/stt");
         assert_eq!(tts_url(), "https://api.x.ai/v1/tts");
         assert_eq!(
@@ -646,21 +680,18 @@ mod tests {
         assert_eq!(voice_mode_label(VoiceState::Listening), "Listening");
         assert_eq!(voice_mode_label(VoiceState::Speaking), "Speaking");
         assert_eq!(voice_mode_label(VoiceState::Ready), "Ready");
-        assert_eq!(hey_grok_on_press(VoiceState::Ready, false), HeyGrokAction::Start);
+        assert_eq!(
+            hey_grok_on_press(VoiceState::Ready, false),
+            HeyGrokAction::Start
+        );
         assert!(voice_strip_visible(VoiceState::Listening, 5_000));
         assert!(voice_strip_visible(VoiceState::Speaking, 5_000));
         assert!(voice_strip_visible(VoiceState::Ready, 0));
         assert!(voice_strip_visible(VoiceState::Ready, 999));
         assert!(!voice_strip_visible(VoiceState::Ready, VOICE_READY_HIDE_MS));
         assert!(!voice_strip_visible(VoiceState::Idle, 0));
-        assert_eq!(
-            voice_state_after_ptt_stt(true, false),
-            VoiceState::Ready
-        );
-        assert_eq!(
-            voice_state_after_ptt_stt(true, true),
-            VoiceState::Listening
-        );
+        assert_eq!(voice_state_after_ptt_stt(true, false), VoiceState::Ready);
+        assert_eq!(voice_state_after_ptt_stt(true, true), VoiceState::Listening);
         assert_eq!(voice_state_after_ptt_stt(false, false), VoiceState::Idle);
         let form = stt_multipart(b"RIFF", "grokhub-voice.wav", "bound");
         let s = String::from_utf8_lossy(&form);
@@ -673,10 +704,7 @@ mod tests {
         assert_eq!(DEFAULT_VOICE_MODEL, "grok-voice-think-fast-2.0");
         assert!(voice_session_url("").contains("grok-voice-think-fast-2.0"));
         assert!(voice_session_url("grok-voice-latest").contains("grok-voice-latest"));
-        assert_eq!(
-            dedicated_voice_model(""),
-            "grok-voice-think-fast-2.0"
-        );
+        assert_eq!(dedicated_voice_model(""), "grok-voice-think-fast-2.0");
         assert_eq!(hey_grok_route(true, true, false), HeyGrokRoute::PushToTalk);
         assert_eq!(hey_grok_route(true, false, false), HeyGrokRoute::PushToTalk);
         assert_eq!(hey_grok_route(false, true, false), HeyGrokRoute::PushToTalk);
@@ -686,10 +714,7 @@ mod tests {
             voice_tts_script("THINKING:\nplan the night\n\nI'll look."),
             "I'll look."
         );
-        assert_eq!(
-            voice_tts_script("<think>plan</think>\nHello."),
-            "Hello."
-        );
+        assert_eq!(voice_tts_script("<think>plan</think>\nHello."), "Hello.");
         assert!(voice_tts_script("THINKING:\nonly thought").is_empty());
         assert!(!voice_tts_script("I'll look.\nHOST_CMD: echo hi\nDone.").contains("HOST_CMD"));
         assert!(realtime_can_connect("xai-k"));
@@ -788,11 +813,16 @@ mod tests {
             other => panic!("{other:?}"),
         }
         assert_eq!(voice_log_role(&user), Some(("user", "hey grok")));
-        assert_eq!(voice_log_role(&asst), Some(("assistant", "hello from grok")));
+        assert_eq!(
+            voice_log_role(&asst),
+            Some(("assistant", "hello from grok"))
+        );
         let sess = encode_session_update();
         assert!(sess.contains("language_hint") || sess.contains("\"en\""));
         assert!(sess.contains("grok-transcribe"));
-        assert!(!sess.to_ascii_lowercase().contains("host and computer tools"));
+        assert!(!sess
+            .to_ascii_lowercase()
+            .contains("host and computer tools"));
     }
 
     #[test]
@@ -901,6 +931,9 @@ mod tests {
         assert_eq!(tts_voice(Some("deep and gravelly")), DEFAULT_VOICE);
         assert_eq!(tts_voice(Some("")), DEFAULT_VOICE);
         assert_eq!(tts_voice(None), DEFAULT_VOICE);
-        assert_eq!(tts_request_body("hi", tts_voice(Some("sal")))["voice_id"], "sal");
+        assert_eq!(
+            tts_request_body("hi", tts_voice(Some("sal")))["voice_id"],
+            "sal"
+        );
     }
 }

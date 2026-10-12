@@ -118,14 +118,23 @@ impl SpanVerifySource {
         };
         let tail = &mut tails[at];
         tail.refresh();
-        tail.newest(VERIFY_SCAN_LINES).into_iter().filter(|(ep, _)| ep == episode).map(|(_, v)| v).collect()
+        tail.newest(VERIFY_SCAN_LINES)
+            .into_iter()
+            .filter(|(ep, _)| ep == episode)
+            .map(|(_, v)| v)
+            .collect()
     }
 }
 
 impl VerifySource for SpanVerifySource {
     fn verdict(&self, episode: &str, step: u32) -> Option<VerifySignal> {
         let checks = self.checks(episode);
-        if step == 0 { checks.last() } else { checks.get(step as usize - 1) }.copied()
+        if step == 0 {
+            checks.last()
+        } else {
+            checks.get(step as usize - 1)
+        }
+        .copied()
     }
 }
 
@@ -145,13 +154,19 @@ pub struct LedgerOutcomeSource {
 
 impl LedgerOutcomeSource {
     pub fn new(config_dir: &Path) -> Self {
-        Self { config_dir: config_dir.to_path_buf() }
+        Self {
+            config_dir: config_dir.to_path_buf(),
+        }
     }
 }
 
 impl OutcomeSource for LedgerOutcomeSource {
     fn outcome(&self, span_id: &str) -> Option<OutcomeResult> {
-        read_outcomes(&self.config_dir).into_iter().rev().find(|o| o.span_ids.iter().any(|s| s == span_id)).map(|o| o.result)
+        read_outcomes(&self.config_dir)
+            .into_iter()
+            .rev()
+            .find(|o| o.span_ids.iter().any(|s| s == span_id))
+            .map(|o| o.result)
     }
 }
 
@@ -170,18 +185,33 @@ mod tests {
         append_span(&dir, &pass).unwrap();
         pass.result = "pass".into();
         append_span(&dir, &pass).unwrap();
-        let v = SpanVerifySource { config_dir: dir.clone(), session: "chat-1".into() };
+        let v = SpanVerifySource {
+            config_dir: dir.clone(),
+            session: "chat-1".into(),
+        };
         assert_eq!(v.verdict("ep-1", 1), Some(VerifySignal::Reject));
         assert_eq!(v.verdict("ep-1", 0), Some(VerifySignal::Ok));
         assert_eq!(v.verdict("ep-1", 3), None);
         assert_eq!(v.verdict("ep-2", 0), None);
-        assert_eq!(v.checks("ep-1"), vec![VerifySignal::Reject, VerifySignal::Ok]);
+        assert_eq!(
+            v.checks("ep-1"),
+            vec![VerifySignal::Reject, VerifySignal::Ok]
+        );
         let mut s = Span::deny("chat-1", "x", "{}", "", "soft");
         s.origin = Origin::Automation;
         assert_eq!(SpanOriginSource.origin(&s), Some(Origin::Automation));
-        let line = TaskOutcome { task: "t".into(), result: OutcomeResult::Success, span_ids: vec!["chat-1:5".into()], ..TaskOutcome::default() };
+        let line = TaskOutcome {
+            task: "t".into(),
+            result: OutcomeResult::Success,
+            span_ids: vec!["chat-1:5".into()],
+            ..TaskOutcome::default()
+        };
         let path = grokhub_core::outcome::outcomes_path(&dir);
-        std::fs::write(&path, format!("{}\n", serde_json::to_string(&line).unwrap())).unwrap();
+        std::fs::write(
+            &path,
+            format!("{}\n", serde_json::to_string(&line).unwrap()),
+        )
+        .unwrap();
         let o = LedgerOutcomeSource::new(&dir);
         assert_eq!(o.outcome("chat-1:5"), Some(OutcomeResult::Success));
         assert_eq!(o.outcome("chat-1:6"), None);

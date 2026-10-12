@@ -997,9 +997,7 @@ pub fn release_quiet_batch(cards: &mut Vec<UpdateCard>, now_ms: u64) -> (usize, 
         card.pulse.quiet_batched = true;
     }
     // Yesterday's dismissed digest must not swallow today's.
-    cards.retain(|c| {
-        !(c.source_id == QUIET_DIGEST_SOURCE && c.status == UpdateStatus::Dismissed)
-    });
+    cards.retain(|c| !(c.source_id == QUIET_DIGEST_SOURCE && c.status == UpdateStatus::Dismissed));
     let shown: Vec<&str> = titles.iter().take(3).map(String::as_str).collect();
     let mut body = format!("{n} updates: {}", shown.join(" · "));
     if n > 3 {
@@ -1377,7 +1375,8 @@ mod tests {
             "A run left a report.",
         );
         c.reversible = crate::proactive::Reversibility::ByHand;
-        let offer6 = crate::proactive::proactive_card(&c, crate::proactive::ProactiveRoute::ICan, 60);
+        let offer6 =
+            crate::proactive::proactive_card(&c, crate::proactive::ProactiveRoute::ICan, 60);
         assert_eq!(pulse_score(&offer6, &inputs), 150 + 240);
         let mut with_offer = cards.clone();
         with_offer.push(offer6.clone());
@@ -1398,7 +1397,11 @@ mod tests {
         );
         let mut reversed = with_offer.clone();
         reversed.reverse();
-        assert_eq!(rank_pulse(&with_offer, &inputs), rank_pulse(&reversed, &inputs), "input order never matters");
+        assert_eq!(
+            rank_pulse(&with_offer, &inputs),
+            rank_pulse(&reversed, &inputs),
+            "input order never matters"
+        );
     }
 
     #[test]
@@ -1556,7 +1559,10 @@ mod tests {
         fresh.status = UpdateStatus::Dismissed;
         let mut gone = vec![fresh];
         let gone_id = gone[0].id.clone();
-        assert!(!hide_from_home(&mut gone, &gone_id), "a dismissed card stays dismissed");
+        assert!(
+            !hide_from_home(&mut gone, &gone_id),
+            "a dismissed card stays dismissed"
+        );
     }
 
     #[test]
@@ -1668,7 +1674,11 @@ mod tests {
         );
         let prompt = feed_prompt("Rust news", "", "Only Rust.\nNo sports.");
         assert!(!prompt.contains("\n\n\n"), "{prompt}");
-        let with = feed_prompt("Rust news", "Their interests, strongest first: Rust.", "Only Rust.");
+        let with = feed_prompt(
+            "Rust news",
+            "Their interests, strongest first: Rust.",
+            "Only Rust.",
+        );
         assert!(with.contains("NONE. Do not invent a source, a count, or a fact. Do not offer to send, pay, delete, or publish anything.\n\nTheir interests, strongest first: Rust.\n\nFeed instructions"), "{with}");
         assert!(prompt.ends_with("Feed instructions from the person (follow them; they apply to this and future posts):\nOnly Rust.\nNo sports."), "{prompt}");
         let taste = parse_ledger(
@@ -1724,9 +1734,8 @@ mod tests {
 
     #[test]
     fn a_dismissed_feed_post_does_not_bury_the_next_one_with_its_title() {
-        let ledger = parse_ledger(
-            "- [2026-10-04] pulse: dismissed \"Nightly backup\" reason=dismiss\n",
-        );
+        let ledger =
+            parse_ledger("- [2026-10-04] pulse: dismissed \"Nightly backup\" reason=dismiss\n");
         let inputs = PulseInputs {
             ledger: &ledger,
             now_ms: 9_000,
@@ -1782,7 +1791,10 @@ mod tests {
             .find(|c| c.id == "pulse-quiet-3000")
             .expect("tonight's digest posts");
         assert_eq!(digest.status, UpdateStatus::Unread);
-        assert_eq!(digest.body.as_deref(), Some("2 updates: Repo synced · Price check ran"));
+        assert_eq!(
+            digest.body.as_deref(),
+            Some("2 updates: Repo synced · Price check ran")
+        );
     }
 
     #[test]
@@ -1838,14 +1850,20 @@ mod tests {
     #[test]
     fn apply_heading_follows_pulse_type() {
         assert_eq!(PulseType::Do.apply_heading(), "What Apply will do");
-        assert_eq!(PulseType::Automate.apply_heading(), "What Apply will schedule");
+        assert_eq!(
+            PulseType::Automate.apply_heading(),
+            "What Apply will schedule"
+        );
         assert_eq!(PulseType::Learn.apply_heading(), "What I'll learn");
         assert_eq!(PulseType::Watch.apply_heading(), "What Apply will do");
         assert_eq!(
             format!("{}{}.", FEED_EMPTY_LEAD, FEED_EMPTY_LINK),
             FEED_EMPTY
         );
-        assert_eq!(IDEAS_EMPTY, "No ideas yet. I'll add one when I spot something worth doing.");
+        assert_eq!(
+            IDEAS_EMPTY,
+            "No ideas yet. I'll add one when I spot something worth doing."
+        );
         assert_eq!(IDEAS_LOADING, "Looking for ideas in your recent work…");
         assert_eq!(IDEAS_SIGN_IN, "Sign in to Grok to get ideas.");
     }

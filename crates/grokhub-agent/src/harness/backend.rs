@@ -6,8 +6,8 @@ use crate::gate::{DeskFlags, Gate};
 use crate::harness::access::AccessMode;
 use crate::harness::approval::{decide, decide_harness, GateOutcome, Step, APPROVAL_TTL};
 use crate::harness::hard::{
-    classify, click_action, click_rule, click_target, credential_action, credential_field, delete_files_action, HardClass,
-    HardHit, TARGET_HINT,
+    classify, click_action, click_rule, click_target, credential_action, credential_field,
+    delete_files_action, HardClass, HardHit, TARGET_HINT,
 };
 use crate::harness::park::{post_park, wait_park, ParkRequest};
 use crate::harness::span::{append_span, read_turn_context, redact_args, Origin, Span};
@@ -200,11 +200,23 @@ pub struct DeskCall<'a> {
 pub fn desk_span(call: &DeskCall<'_>, chat_id: &str, turn: u32) -> Option<Span> {
     if !matches!(
         call.tool,
-        "click" | "drag" | "scroll" | "type" | "key" | "open_app" | "focus_window" | "delete_files" | "set_window_geometry"
+        "click"
+            | "drag"
+            | "scroll"
+            | "type"
+            | "key"
+            | "open_app"
+            | "focus_window"
+            | "delete_files"
+            | "set_window_geometry"
     ) {
         return None;
     }
-    let trace = if chat_id.is_empty() { CU_TRACE } else { chat_id };
+    let trace = if chat_id.is_empty() {
+        CU_TRACE
+    } else {
+        chat_id
+    };
     let args = desk_args(call.tool, call.args);
     let class = call.parked.map_or("soft", |(c, _)| c.as_str());
     let span = if call.ok {
@@ -226,7 +238,10 @@ pub fn desk_span(call: &DeskCall<'_>, chat_id: &str, turn: u32) -> Option<Span> 
         s.driver = ComputerUseBackend::GrokBuild.as_str().into();
         s
     };
-    let span = span.on_path("A").in_turn(chat_id, turn).with_ui_changed(call.ui_changed);
+    let span = span
+        .on_path("A")
+        .in_turn(chat_id, turn)
+        .with_ui_changed(call.ui_changed);
     Some(with_click_target(span, call.tool, call.args))
 }
 
@@ -263,8 +278,16 @@ fn typed_action(args: &serde_json::Value, class: &str) -> String {
             return text.to_string();
         }
     }
-    let window = args["window"].as_str().map(str::trim).filter(|w| !w.is_empty()).unwrap_or("the focused window");
-    let enter = if text.contains(['\n', '\r']) { " and press Enter" } else { "" };
+    let window = args["window"]
+        .as_str()
+        .map(str::trim)
+        .filter(|w| !w.is_empty())
+        .unwrap_or("the focused window");
+    let enter = if text.contains(['\n', '\r']) {
+        " and press Enter"
+    } else {
+        ""
+    };
     format!("type {} chars into {window}{enter}", text.chars().count())
 }
 
@@ -280,7 +303,11 @@ pub fn park_desk_call(
     halted: &mut dyn FnMut() -> bool,
 ) -> bool {
     static N: AtomicU64 = AtomicU64::new(0);
-    let id = format!("{}-{}", std::process::id(), N.fetch_add(1, Ordering::Relaxed));
+    let id = format!(
+        "{}-{}",
+        std::process::id(),
+        N.fetch_add(1, Ordering::Relaxed)
+    );
     // A credential field's value never reaches the park file, the card, or a span.
     let action = match tool {
         _ if class == HardClass::Credentials.as_str() => credential_action(args),
@@ -292,7 +319,11 @@ pub fn park_desk_call(
             args["window"].as_str().unwrap_or("a file manager")
         ),
         // Enter in a chat, mail or checkout window: the card names the window.
-        "key" => match args["window"].as_str().map(str::trim).filter(|w| !w.is_empty()) {
+        "key" => match args["window"]
+            .as_str()
+            .map(str::trim)
+            .filter(|w| !w.is_empty())
+        {
             Some(window) => format!("press {} in {window}", args["keys"].as_str().unwrap_or("")),
             None => args["keys"].as_str().unwrap_or("").to_string(),
         },
@@ -317,7 +348,11 @@ pub fn park_desk_call(
     }
     let ctx = read_turn_context(config_dir);
     let mut park_span = Span::hard_park(
-        if ctx.chat_id.is_empty() { CU_TRACE } else { &ctx.chat_id },
+        if ctx.chat_id.is_empty() {
+            CU_TRACE
+        } else {
+            &ctx.chat_id
+        },
         tool,
         &desk_args(tool, args),
         HardClass::parse(class).unwrap_or(HardClass::IrreversibleOs),
@@ -331,7 +366,13 @@ pub fn park_desk_call(
         park_span.driver = driver.as_str().into();
     }
     let _ = append_span(config_dir, &park_span);
-    wait_park(config_dir, &id, APPROVAL_TTL, Duration::from_millis(200), halted)
+    wait_park(
+        config_dir,
+        &id,
+        APPROVAL_TTL,
+        Duration::from_millis(200),
+        halted,
+    )
 }
 
 pub fn computer_tool_names(access: AccessMode) -> &'static [&'static str] {
@@ -432,10 +473,17 @@ mod tests {
     fn parked_action(tool: &str, args: &serde_json::Value, class: &str) -> String {
         let dir = crate::harness::test_dir("cu-park-text");
         let mut seen = Vec::new();
-        let approved = park_desk_call(&dir, tool, args, class, ComputerUseBackend::GrokBuild, &mut || {
-            seen = crate::harness::pending_parks(&dir);
-            true
-        });
+        let approved = park_desk_call(
+            &dir,
+            tool,
+            args,
+            class,
+            ComputerUseBackend::GrokBuild,
+            &mut || {
+                seen = crate::harness::pending_parks(&dir);
+                true
+            },
+        );
         assert!(!approved, "a halt denies");
         let _ = std::fs::remove_dir_all(&dir);
         assert_eq!(seen.len(), 1, "one park file");
@@ -461,12 +509,21 @@ mod tests {
     #[test]
     fn other_parked_typing_says_how_much_and_where_never_what() {
         let typed = serde_json::json!({ "text": "hi sk-abcdefghijklmnopqrstuv", "window": "Mail" });
-        assert_eq!(parked_action("type", &typed, HardClass::Send.as_str()), "type 28 chars into Mail");
+        assert_eq!(
+            parked_action("type", &typed, HardClass::Send.as_str()),
+            "type 28 chars into Mail"
+        );
         let no_window = serde_json::json!({ "text": "hello" });
-        assert_eq!(parked_action("type", &no_window, HardClass::Send.as_str()), "type 5 chars into the focused window");
+        assert_eq!(
+            parked_action("type", &no_window, HardClass::Send.as_str()),
+            "type 5 chars into the focused window"
+        );
         // A PIN field still shows only the length.
         let pin = serde_json::json!({ "text": "482913", "label": "PIN", "secret": true });
-        assert_eq!(parked_action("type", &pin, HardClass::Credentials.as_str()), "type into PIN (6 chars hidden)");
+        assert_eq!(
+            parked_action("type", &pin, HardClass::Credentials.as_str()),
+            "type into PIN (6 chars hidden)"
+        );
     }
 
     #[test]
@@ -482,7 +539,9 @@ mod tests {
         );
         assert_eq!(
             desk_decide("type", &serde_json::json!({ "text": "cat ~/.ssh/id_rsa" })),
-            GateOutcome::Refuse { reason: "forbidden path: ssh keys".into() }
+            GateOutcome::Refuse {
+                reason: "forbidden path: ssh keys".into()
+            }
         );
         let click = serde_json::json!({ "x": 120, "y": 48 });
         assert_eq!(desk_decide("click", &click), GateOutcome::Allow);
@@ -528,7 +587,13 @@ mod tests {
         let pin = serde_json::json!({ "label": "PIN", "value": "4821" });
         let a = desk_args("set_value", &pin);
         assert!(a.contains("%redacted%") && !a.contains("4821"), "{a}");
-        assert_eq!(desk_args("set_value", &serde_json::json!({ "label": "Name", "value": "Ada" })), r#"{"label":"Name","value":"Ada"}"#);
+        assert_eq!(
+            desk_args(
+                "set_value",
+                &serde_json::json!({ "label": "Name", "value": "Ada" })
+            ),
+            r#"{"label":"Name","value":"Ada"}"#
+        );
         let mv = DeskCall {
             tool: "move",
             args: &click,
@@ -558,11 +623,25 @@ mod tests {
         };
         let denied = parked(false, false);
         assert_eq!(
-            (denied.decision.as_str(), denied.approval_class.as_str(), denied.args_redacted.as_str()),
+            (
+                denied.decision.as_str(),
+                denied.approval_class.as_str(),
+                denied.args_redacted.as_str()
+            ),
             ("deny", "delete", r#"{"chars":12}"#)
         );
         let ran = parked(true, true);
-        assert_eq!((ran.decision.as_str(), ran.approval_class.as_str(), ran.hard_approved), ("allow", "delete", true));
-        assert!(crate::harness::approval_gate_violation(&[ran]).is_empty(), "an approved park is not a violation");
+        assert_eq!(
+            (
+                ran.decision.as_str(),
+                ran.approval_class.as_str(),
+                ran.hard_approved
+            ),
+            ("allow", "delete", true)
+        );
+        assert!(
+            crate::harness::approval_gate_violation(&[ran]).is_empty(),
+            "an approved park is not a violation"
+        );
     }
 }

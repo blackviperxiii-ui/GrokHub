@@ -21,7 +21,10 @@ pub(super) fn queue_task_label(title: &str, done: bool) -> &'static str {
 pub(super) enum BoardAct {
     Add,
     Save(String),
-    Move { id: String, status: BoardStatus },
+    Move {
+        id: String,
+        status: BoardStatus,
+    },
     Archive(String),
     Restore(String),
     /// Remove the card for good. Its chat stays in History.
@@ -32,14 +35,20 @@ pub(super) enum BoardAct {
     Edit(String),
     /// Open the notes editor on this card.
     EditNotes(String),
-    SaveNotes { id: String, notes: String },
+    SaveNotes {
+        id: String,
+        notes: String,
+    },
     CancelNotes,
     /// Start a chat from this card, with its notes, and move it to Doing.
     Work(String),
     /// A click on a card: opens a small card in place, folds the open one.
     Expand(String),
     /// Send a line to the agent from the card's chat box.
-    Say { id: String, text: String },
+    Say {
+        id: String,
+        text: String,
+    },
     /// Stop the turn running in a card's chat.
     Stop,
 }
@@ -85,7 +94,6 @@ pub(super) fn paint_drag_ghost(ctx: &egui::Context, title: &str) {
 pub(super) const BOARD_DROP_MIN_H: f32 = 180.0;
 
 impl Cabin {
-
     pub(super) fn ui_command(&mut self, ui: &mut egui::Ui) {
         egui::CentralPanel::default()
             .frame(
@@ -117,9 +125,14 @@ impl Cabin {
                         let enter = ui
                             .add(
                                 egui::TextEdit::singleline(&mut self.cmd_line)
-                                    .hint_text(crate::theme::hint("$ ls — bound project is the working tree"))
+                                    .hint_text(crate::theme::hint(
+                                        "$ ls — bound project is the working tree",
+                                    ))
                                     .desired_width(f32::INFINITY)
-                                    .frame(egui::Frame::NONE.inner_margin(egui::Margin::symmetric(4, 2))),
+                                    .frame(
+                                        egui::Frame::NONE
+                                            .inner_margin(egui::Margin::symmetric(4, 2)),
+                                    ),
                             )
                             .lost_focus()
                             && ui.input(|i| i.key_pressed(egui::Key::Enter));
@@ -493,7 +506,9 @@ impl Cabin {
                             egui::TextEdit::multiline(&mut self.task_prompt)
                                 .desired_rows(3)
                                 .desired_width(f32::INFINITY)
-                                .frame(egui::Frame::NONE.inner_margin(egui::Margin::symmetric(4, 2)))
+                                .frame(
+                                    egui::Frame::NONE.inner_margin(egui::Margin::symmetric(4, 2)),
+                                )
                                 .hint_text(crate::theme::hint("What should this computer do?")),
                         );
                     });
@@ -583,7 +598,9 @@ impl Cabin {
                             egui::TextEdit::multiline(&mut self.mem_body)
                                 .desired_rows(24)
                                 .desired_width(f32::INFINITY)
-                                .frame(egui::Frame::NONE.inner_margin(egui::Margin::symmetric(4, 2)))
+                                .frame(
+                                    egui::Frame::NONE.inner_margin(egui::Margin::symmetric(4, 2)),
+                                )
                                 .font(egui::TextStyle::Monospace),
                         );
                     });
@@ -1262,7 +1279,9 @@ impl Cabin {
                 if let Some(c) = self.board.iter_mut().find(|c| c.id == id) {
                     c.notes = grokhub_core::clean_card_notes(&notes);
                 }
-                self.status = "Notes saved. The agent gets them with the next message on this card's chat.".into();
+                self.status =
+                    "Notes saved. The agent gets them with the next message on this card's chat."
+                        .into();
                 true
             }
             BoardAct::Work(id) => {
@@ -1658,4 +1677,3 @@ impl Cabin {
         }
     }
 }
-

@@ -18,9 +18,15 @@ enum PermAnswer {
 }
 
 enum Cmd {
-    Prompt { text: String, image: Option<String> },
+    Prompt {
+        text: String,
+        image: Option<String>,
+    },
     Cancel,
-    Permission { id: Value, answer: PermAnswer },
+    Permission {
+        id: Value,
+        answer: PermAnswer,
+    },
     Elicit {
         id: Value,
         outcome: &'static str,
@@ -43,10 +49,16 @@ pub enum NativePerm {
 /// Commands the native engine receives from the cabin.
 #[derive(Debug)]
 pub enum ExternalCmd {
-    Prompt { text: String, image: Option<String> },
+    Prompt {
+        text: String,
+        image: Option<String>,
+    },
     Cancel,
     Steer(String),
-    Permission { id: String, answer: NativePerm },
+    Permission {
+        id: String,
+        answer: NativePerm,
+    },
     Elicit {
         id: String,
         action: String,
@@ -79,7 +91,9 @@ impl AcpHandle {
         self.cmd
             .send(Cmd::Prompt {
                 text: text.to_string(),
-                image: image.filter(|s| !s.trim().is_empty()).map(|s| s.to_string()),
+                image: image
+                    .filter(|s| !s.trim().is_empty())
+                    .map(|s| s.to_string()),
             })
             .map_err(|e| e.to_string())
     }
@@ -89,7 +103,9 @@ impl AcpHandle {
     }
 
     pub fn steer(&self, text: &str) -> Result<(), String> {
-        self.cmd.send(Cmd::Steer(text.to_string())).map_err(|e| e.to_string())
+        self.cmd
+            .send(Cmd::Steer(text.to_string()))
+            .map_err(|e| e.to_string())
     }
 
     /// A new session. `Ready` is already queued. The caller owns the event
@@ -121,7 +137,10 @@ impl AcpHandle {
                             PermAnswer::Reject => NativePerm::Deny,
                             PermAnswer::Cancel => NativePerm::Cancel,
                         };
-                        ExternalCmd::Permission { id: id_text(id), answer }
+                        ExternalCmd::Permission {
+                            id: id_text(id),
+                            answer,
+                        }
                     }
                     Cmd::Elicit {
                         id,
@@ -202,7 +221,12 @@ impl AcpHandle {
     pub fn dead(cwd: PathBuf, session_id: String) -> AcpHandle {
         let (cmd, _) = mpsc::channel();
         let (_, events) = mpsc::channel();
-        AcpHandle { cmd, events, session_id, cwd }
+        AcpHandle {
+            cmd,
+            events,
+            session_id,
+            cwd,
+        }
     }
 
     pub fn try_recv(&self) -> Result<AcpEvent, TryRecvError> {

@@ -29,7 +29,13 @@ pub fn park_dir(config_dir: &Path) -> PathBuf {
 
 fn safe_id(id: &str) -> String {
     id.chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '-' { c } else { '_' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect()
 }
 
@@ -134,7 +140,13 @@ mod tests {
         assert_eq!(pending_parks(&dir), vec![req("p1")]);
         answer_park(&dir, "p1", true).unwrap();
         assert_eq!(pending_parks(&dir), vec![]);
-        assert!(wait_park(&dir, "p1", Duration::from_secs(1), Duration::from_millis(5), &mut || false));
+        assert!(wait_park(
+            &dir,
+            "p1",
+            Duration::from_secs(1),
+            Duration::from_millis(5),
+            &mut || false
+        ));
         assert_eq!(fs::read_dir(park_dir(&dir)).unwrap().count(), 0);
         let _ = fs::remove_dir_all(dir);
     }
@@ -144,12 +156,30 @@ mod tests {
         let dir = temp("deny");
         post_park(&dir, &req("p2")).unwrap();
         answer_park(&dir, "p2", false).unwrap();
-        assert!(!wait_park(&dir, "p2", Duration::from_secs(1), Duration::from_millis(5), &mut || false));
+        assert!(!wait_park(
+            &dir,
+            "p2",
+            Duration::from_secs(1),
+            Duration::from_millis(5),
+            &mut || false
+        ));
         post_park(&dir, &req("p3")).unwrap();
-        assert!(!wait_park(&dir, "p3", Duration::from_millis(20), Duration::from_millis(5), &mut || false));
+        assert!(!wait_park(
+            &dir,
+            "p3",
+            Duration::from_millis(20),
+            Duration::from_millis(5),
+            &mut || false
+        ));
         assert_eq!(pending_parks(&dir), vec![]);
         post_park(&dir, &req("p4")).unwrap();
-        assert!(!wait_park(&dir, "p4", Duration::from_secs(5), Duration::from_millis(5), &mut || true));
+        assert!(!wait_park(
+            &dir,
+            "p4",
+            Duration::from_secs(5),
+            Duration::from_millis(5),
+            &mut || true
+        ));
         assert_eq!(fs::read_dir(park_dir(&dir)).unwrap().count(), 0);
         let _ = fs::remove_dir_all(dir);
     }

@@ -48,7 +48,13 @@ pub fn probe_log_path(config_dir: &Path) -> PathBuf {
 pub fn safe_file_stem(id: &str) -> String {
     id.trim()
         .chars()
-        .map(|c| if matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|') || c.is_control() { '_' } else { c })
+        .map(|c| {
+            if matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|') || c.is_control() {
+                '_'
+            } else {
+                c
+            }
+        })
         .collect()
 }
 
@@ -75,7 +81,11 @@ pub fn append_line<T: Serialize>(path: &Path, value: &T) -> Result<(), String> {
     }
     let mut line = serde_json::to_string(value).map_err(|e| e.to_string())?;
     line.push('\n');
-    let mut f = OpenOptions::new().create(true).append(true).open(path).map_err(|e| e.to_string())?;
+    let mut f = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .map_err(|e| e.to_string())?;
     f.write_all(line.as_bytes()).map_err(|e| e.to_string())
 }
 
@@ -100,7 +110,9 @@ pub fn take_observations(config_dir: &Path) -> Vec<Observation> {
         return Vec::new();
     };
     let _ = fs::write(&path, b"");
-    text.lines().filter_map(|l| serde_json::from_str(l).ok()).collect()
+    text.lines()
+        .filter_map(|l| serde_json::from_str(l).ok())
+        .collect()
 }
 
 #[cfg(test)]
@@ -110,14 +122,26 @@ mod tests {
     #[test]
     fn ids_become_windows_safe_file_names() {
         assert_eq!(safe_file_stem("grok-4.7"), "grok-4.7");
-        assert_eq!(safe_file_stem(r#"x/a:b*c?d"e<f>g|h\i"#), "x_a_b_c_d_e_f_g_h_i");
+        assert_eq!(
+            safe_file_stem(r#"x/a:b*c?d"e<f>g|h\i"#),
+            "x_a_b_c_d_e_f_g_h_i"
+        );
     }
 
     #[test]
     fn paths_are_under_config_models() {
         let base = Path::new("cfg");
-        assert_eq!(registry_path(base), base.join("models").join("registry.json"));
-        assert_eq!(profiles_dir(base), base.join("models").join("model_profiles"));
-        assert_eq!(probe_log_path(base), base.join("models").join("probe_log.jsonl"));
+        assert_eq!(
+            registry_path(base),
+            base.join("models").join("registry.json")
+        );
+        assert_eq!(
+            profiles_dir(base),
+            base.join("models").join("model_profiles")
+        );
+        assert_eq!(
+            probe_log_path(base),
+            base.join("models").join("probe_log.jsonl")
+        );
     }
 }

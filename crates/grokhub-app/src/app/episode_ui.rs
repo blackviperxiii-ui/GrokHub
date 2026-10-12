@@ -61,7 +61,10 @@ impl EpisodeUi {
     }
 
     pub(super) fn header(&self, now: u64) -> String {
-        ep::episode_header(self.steps, Duration::from_millis(now.saturating_sub(self.started_ms)))
+        ep::episode_header(
+            self.steps,
+            Duration::from_millis(now.saturating_sub(self.started_ms)),
+        )
     }
 }
 
@@ -93,19 +96,27 @@ fn count_new_steps(path: &std::path::Path, from: u64, id: &str) -> (u32, u64) {
 /// decided (not a reply, a check, a ladder rung, or an episode marker).
 pub(super) fn is_episode_step(s: &hx::Span, id: &str) -> bool {
     s.episode == id
-        && !matches!(s.tool.as_str(), hx::REPLY_TOOL | hx::VERIFY_TOOL | hx::RECOVERY_TOOL | ep::EPISODE_TOOL)
+        && !matches!(
+            s.tool.as_str(),
+            hx::REPLY_TOOL | hx::VERIFY_TOOL | hx::RECOVERY_TOOL | ep::EPISODE_TOOL
+        )
         && matches!(s.decision.as_str(), "allow" | "park" | "deny")
 }
 
 impl Cabin {
     /// The open episode on the visible chat.
     pub(super) fn episode_here(&self) -> Option<&EpisodeUi> {
-        self.harness.episode.as_ref().filter(|e| e.chat_id == self.trace_id())
+        self.harness
+            .episode
+            .as_ref()
+            .filter(|e| e.chat_id == self.trace_id())
     }
 
     /// The id spans on the visible chat carry (empty with no open episode).
     pub(super) fn episode_span_id(&self) -> String {
-        self.episode_here().map(|e| e.id.clone()).unwrap_or_default()
+        self.episode_here()
+            .map(|e| e.id.clone())
+            .unwrap_or_default()
     }
 
     /// The user typed a message (no reply running). With desktop control on
@@ -119,7 +130,12 @@ impl Cabin {
             return;
         }
         let trace = self.trace_id();
-        if self.harness.episode.as_ref().is_some_and(|e| e.chat_id != trace) {
+        if self
+            .harness
+            .episode
+            .as_ref()
+            .is_some_and(|e| e.chat_id != trace)
+        {
             self.end_episode(ep::EpisodeEnd::Stop);
         }
         match self.harness.episode.as_mut() {
@@ -167,7 +183,10 @@ impl Cabin {
             let mut span = hx::Span::deny(&e.chat_id, ep::EPISODE_TOOL, "{}", why.as_str(), "soft");
             span.decision = "end".into();
             span.claim = e.header(now_ms());
-            let span = span.in_episode(&e.id).on_path("E").in_turn(&e.chat_id, self.turn_no());
+            let span = span
+                .in_episode(&e.id)
+                .on_path("E")
+                .in_turn(&e.chat_id, self.turn_no());
             let _ = hx::append_span(&crate::config::config_dir(), &span);
             self.deny_episode_parks(&e);
         }
@@ -182,7 +201,9 @@ impl Cabin {
         if self.harness.park.as_ref().is_some_and(mine) {
             gone.extend(self.harness.park.take());
         }
-        let (drop, keep): (Vec<_>, Vec<_>) = std::mem::take(&mut self.harness.queue).into_iter().partition(|p| mine(p));
+        let (drop, keep): (Vec<_>, Vec<_>) = std::mem::take(&mut self.harness.queue)
+            .into_iter()
+            .partition(|p| mine(p));
         self.harness.queue = keep.into();
         gone.extend(drop);
         if self.harness.park.is_none() {
@@ -194,7 +215,13 @@ impl Cabin {
                 hx::clear_park(&dir, id);
             }
             let args = super::harness_ui::span_args(&park.tool, &park.action);
-            let span = hx::Span::deny(&e.chat_id, &park.tool, &args, "episode ended — fail-closed Deny", park.class.as_str());
+            let span = hx::Span::deny(
+                &e.chat_id,
+                &park.tool,
+                &args,
+                "episode ended — fail-closed Deny",
+                park.class.as_str(),
+            );
             let _ = hx::append_span(&dir, &span.in_episode(&e.id).on_path("E"));
         }
     }
@@ -205,7 +232,11 @@ impl Cabin {
     }
 
     fn episode_has_parks(&self) -> bool {
-        self.harness.park.iter().chain(self.harness.queue.iter()).any(|p| self.episode_park(p))
+        self.harness
+            .park
+            .iter()
+            .chain(self.harness.queue.iter())
+            .any(|p| self.episode_park(p))
     }
 
     /// Throttled from `poll_harness`: the idle end and the header's step count.
@@ -218,7 +249,9 @@ impl Cabin {
             if let Some(e) = self.harness.episode.as_mut() {
                 e.last_ms = now;
             }
-        } else if now.saturating_sub(e.last_ms) >= ep::EPISODE_IDLE.as_millis() as u64 && !self.episode_has_parks() {
+        } else if now.saturating_sub(e.last_ms) >= ep::EPISODE_IDLE.as_millis() as u64
+            && !self.episode_has_parks()
+        {
             self.end_episode(ep::EpisodeEnd::Idle);
             return;
         }
@@ -229,7 +262,11 @@ impl Cabin {
             return;
         }
         let (id, chat, from) = (e.id.clone(), e.chat_id.clone(), e.counted_bytes);
-        let (new_steps, upto) = count_new_steps(&hx::span_path(&crate::config::config_dir(), &chat), from, &id);
+        let (new_steps, upto) = count_new_steps(
+            &hx::span_path(&crate::config::config_dir(), &chat),
+            from,
+            &id,
+        );
         let Some(e) = self.harness.episode.as_mut() else {
             return;
         };
@@ -252,14 +289,23 @@ impl Cabin {
             e.last_ms = now_ms();
         }
         match stop_reason {
-            "episode_verified" | "halted" | "cancelled" | "episode_idle" | "episode_unconfirmed" => {
+            "episode_verified"
+            | "halted"
+            | "cancelled"
+            | "episode_idle"
+            | "episode_unconfirmed" => {
                 self.harness.episode = None;
             }
             "episode_ladder_pause" => {
                 let spans = self.episode_spans();
-                if let Some(s) = spans.iter().rev().find(|s| s.tool == hx::RECOVERY_TOOL && s.decision == "pause") {
+                if let Some(s) = spans
+                    .iter()
+                    .rev()
+                    .find(|s| s.tool == hx::RECOVERY_TOOL && s.decision == "pause")
+                {
                     let chat = self.trace_id();
-                    let args: serde_json::Value = serde_json::from_str(&s.args_redacted).unwrap_or_default();
+                    let args: serde_json::Value =
+                        serde_json::from_str(&s.args_redacted).unwrap_or_default();
                     self.harness.soft_parks.push(super::harness_ui::SoftPark {
                         detector: args["detector"].as_str().unwrap_or("episode").into(),
                         reason: s.claim.clone(),
@@ -288,7 +334,11 @@ impl Cabin {
     /// once before the prompt goes ([`Self::episode_resume_sent`] clears it).
     pub(super) fn native_episode_seed(&self) -> Option<grokhub_agent::EpisodeSeed> {
         let trace = self.trace_id();
-        let e = self.harness.episode.as_ref().filter(|e| e.chat_id == trace)?;
+        let e = self
+            .harness
+            .episode
+            .as_ref()
+            .filter(|e| e.chat_id == trace)?;
         let seed = grokhub_agent::EpisodeSeed {
             id: e.id.clone(),
             chat_id: e.chat_id.clone(),
@@ -333,7 +383,15 @@ mod tests {
     }
 
     fn step(cabin: &Cabin, x: u32) {
-        let span = hx::Span::soft_allow(&cabin.trace_id(), "click", &format!(r#"{{"x":{x}}}"#), "ok", "c", hx::AccessMode::Supervised, "grok_build");
+        let span = hx::Span::soft_allow(
+            &cabin.trace_id(),
+            "click",
+            &format!(r#"{{"x":{x}}}"#),
+            "ok",
+            "c",
+            hx::AccessMode::Supervised,
+            "grok_build",
+        );
         cabin.write_span(span, "A");
     }
 
@@ -352,7 +410,11 @@ mod tests {
         step(&cabin, 1);
         cabin.harness.last_poll = None;
         cabin.poll_harness();
-        assert_eq!(hx::read_turn_context(&root).episode, id, "path A spans pick the id up from turn.json");
+        assert_eq!(
+            hx::read_turn_context(&root).episode,
+            id,
+            "path A spans pick the id up from turn.json"
+        );
         // A second typed message on the same chat is the same episode.
         cabin.harness_user_sent();
         assert_eq!(cabin.episode_span_id(), id);
@@ -395,21 +457,31 @@ mod tests {
         assert_eq!(cabin.episode_here().unwrap().steps, 5);
         cabin.harness.episode.as_mut().unwrap().counted_ms = 0;
         cabin.poll_episode();
-        assert_eq!(cabin.episode_here().unwrap().steps, 5, "nothing new, nothing added");
+        assert_eq!(
+            cabin.episode_here().unwrap().steps,
+            5,
+            "nothing new, nothing added"
+        );
     }
 
     fn resume_marks(root: &std::path::Path) -> usize {
-        spans(root).iter().filter(|s| s.tool == ep::EPISODE_TOOL && s.decision == "resume").count()
+        spans(root)
+            .iter()
+            .filter(|s| s.tool == ep::EPISODE_TOOL && s.decision == "resume")
+            .count()
     }
 
     fn soft_park(cabin: &mut Cabin) {
         let chat_id = cabin.trace_id();
-        cabin.harness.soft_parks.push(super::super::harness_ui::SoftPark {
-            detector: "action_loop".into(),
-            reason: "the screenshot failed".into(),
-            evidence: Vec::new(),
-            chat_id,
-        });
+        cabin
+            .harness
+            .soft_parks
+            .push(super::super::harness_ui::SoftPark {
+                detector: "action_loop".into(),
+                reason: "the screenshot failed".into(),
+                evidence: Vec::new(),
+                chat_id,
+            });
     }
 
     #[test]
@@ -444,11 +516,18 @@ mod tests {
         assert!(!cabin.native_episode_seed().unwrap().resume);
         // The turn kick publishes once, and clears the flag only on a sent prompt.
         let src = include_str!("native_engine.rs");
-        let kick = src.split("fn kick_native_turn(").nth(1).and_then(|s| s.split("fn prompt_native_memory").next()).unwrap();
+        let kick = src
+            .split("fn kick_native_turn(")
+            .nth(1)
+            .and_then(|s| s.split("fn prompt_native_memory").next())
+            .unwrap();
         assert!(!kick.contains("publish_native_cfg"), "{kick}");
         // Whitespace-free, so Windows CRLF checkouts read the same.
         let flat: String = kick.split_whitespace().collect();
-        assert!(flat.contains("Some(Ok(()))=>{self.episode_resume_sent();"), "{kick}");
+        assert!(
+            flat.contains("Some(Ok(()))=>{self.episode_resume_sent();"),
+            "{kick}"
+        );
     }
 
     #[test]
@@ -459,7 +538,10 @@ mod tests {
         soft_park(&mut cabin);
         soft_park(&mut cabin);
         cabin.answer_soft_park(0, true, "");
-        assert!(!cabin.episode_here().unwrap().resume, "one pause is still open");
+        assert!(
+            !cabin.episode_here().unwrap().resume,
+            "one pause is still open"
+        );
         cabin.answer_soft_park(0, true, "");
         assert!(cabin.episode_here().unwrap().resume);
         assert_eq!(cabin.status, "Resumed");
@@ -479,7 +561,11 @@ mod tests {
         assert_eq!(cabin.status, "Stopped that step");
         assert!(!cabin.episode_here().unwrap().resume);
         assert!(cabin.harness.episode.is_some());
-        assert_eq!(resume_marks(&root), 0, "the native kernel writes the resume marker");
+        assert_eq!(
+            resume_marks(&root),
+            0,
+            "the native kernel writes the resume marker"
+        );
     }
 
     #[test]
@@ -492,7 +578,14 @@ mod tests {
             let id = format!("{}{eid}-{n}", ep::PARK_PREFIX);
             hx::post_park(
                 &root,
-                &hx::ParkRequest { id: id.clone(), path: "E".into(), tool: "click".into(), action: "click".into(), class: "send".into(), ts_ms: 1 },
+                &hx::ParkRequest {
+                    id: id.clone(),
+                    path: "E".into(),
+                    tool: "click".into(),
+                    action: "click".into(),
+                    class: "send".into(),
+                    ts_ms: 1,
+                },
             )
             .unwrap();
             id
@@ -500,7 +593,11 @@ mod tests {
         let id = post(3);
         cabin.poll_harness();
         cabin.resolve_hard_park(true, "");
-        assert_eq!(hx::take_answer(&root, &id), Some(true), "the kernel reads the Approve");
+        assert_eq!(
+            hx::take_answer(&root, &id),
+            Some(true),
+            "the kernel reads the Approve"
+        );
         assert_eq!(cabin.status, "Approved once · Send · going on");
         assert!(cabin.episode_here().unwrap().resume);
         // With a reply running the live kernel runs it; no second send.
@@ -514,7 +611,11 @@ mod tests {
         cabin.resolve_hard_park(true, "");
         assert_eq!(hx::take_answer(&root, &id), Some(true));
         assert_eq!(cabin.status, "Approved once · Send");
-        assert_eq!(resume_marks(&root), 0, "the native kernel writes the resume marker");
+        assert_eq!(
+            resume_marks(&root),
+            0,
+            "the native kernel writes the resume marker"
+        );
         assert!(!cabin.episode_here().unwrap().resume);
     }
 
@@ -523,10 +624,15 @@ mod tests {
         let (_pin, root) = pinned("episode-idle");
         let mut cabin = desk_cabin();
         cabin.harness_user_sent();
-        cabin.harness.episode.as_mut().unwrap().last_ms = now_ms() - ep::EPISODE_IDLE.as_millis() as u64;
+        cabin.harness.episode.as_mut().unwrap().last_ms =
+            now_ms() - ep::EPISODE_IDLE.as_millis() as u64;
         cabin.poll_episode();
         assert!(cabin.harness.episode.is_none());
-        let end = spans(&root).into_iter().rev().find(|s| s.tool == ep::EPISODE_TOOL).unwrap();
+        let end = spans(&root)
+            .into_iter()
+            .rev()
+            .find(|s| s.tool == ep::EPISODE_TOOL)
+            .unwrap();
         assert_eq!(end.result, "idle");
     }
 
@@ -537,14 +643,31 @@ mod tests {
         let id = format!("{}ep-1-8", ep::PARK_PREFIX);
         hx::post_park(
             &root,
-            &hx::ParkRequest { id: id.clone(), path: "E".into(), tool: "click".into(), action: "click".into(), class: "send".into(), ts_ms: 1 },
+            &hx::ParkRequest {
+                id: id.clone(),
+                path: "E".into(),
+                tool: "click".into(),
+                action: "click".into(),
+                class: "send".into(),
+                ts_ms: 1,
+            },
         )
         .unwrap();
         cabin.poll_harness();
-        assert_eq!(cabin.harness.park.as_ref().map(|p| p.source.clone()), Some(ParkSource::Desk(id.clone())));
+        assert_eq!(
+            cabin.harness.park.as_ref().map(|p| p.source.clone()),
+            Some(ParkSource::Desk(id.clone()))
+        );
         cabin.resolve_hard_park(false, "Denied");
-        assert_eq!(hx::take_answer(&root, &id), Some(false), "the kernel reads the answer");
-        assert!(spans(&root).is_empty(), "the kernel writes the deny span, not the cabin");
+        assert_eq!(
+            hx::take_answer(&root, &id),
+            Some(false),
+            "the kernel reads the answer"
+        );
+        assert!(
+            spans(&root).is_empty(),
+            "the kernel writes the deny span, not the cabin"
+        );
     }
 
     #[test]
@@ -556,30 +679,61 @@ mod tests {
         let id = format!("{}{eid}-3", ep::PARK_PREFIX);
         hx::post_park(
             &root,
-            &hx::ParkRequest { id: id.clone(), path: "E".into(), tool: "click".into(), action: "click".into(), class: "send".into(), ts_ms: 1 },
+            &hx::ParkRequest {
+                id: id.clone(),
+                path: "E".into(),
+                tool: "click".into(),
+                action: "click".into(),
+                class: "send".into(),
+                ts_ms: 1,
+            },
         )
         .unwrap();
         cabin.poll_harness();
-        assert_eq!(cabin.harness.park.as_ref().map(|p| p.source.clone()), Some(ParkSource::Desk(id.clone())));
+        assert_eq!(
+            cabin.harness.park.as_ref().map(|p| p.source.clone()),
+            Some(ParkSource::Desk(id.clone()))
+        );
         cabin.end_episode(ep::EpisodeEnd::Idle);
-        assert!(cabin.harness.park.is_none(), "the card goes with the episode");
-        assert_eq!(hx::take_answer(&root, &id), None, "no answer is left for anyone to act on");
-        let deny = spans(&root).into_iter().find(|s| s.tool == "click").expect("a deny span");
-        assert_eq!((deny.decision.as_str(), deny.result.as_str()), ("deny", "episode ended — fail-closed Deny"));
+        assert!(
+            cabin.harness.park.is_none(),
+            "the card goes with the episode"
+        );
+        assert_eq!(
+            hx::take_answer(&root, &id),
+            None,
+            "no answer is left for anyone to act on"
+        );
+        let deny = spans(&root)
+            .into_iter()
+            .find(|s| s.tool == "click")
+            .expect("a deny span");
+        assert_eq!(
+            (deny.decision.as_str(), deny.result.as_str()),
+            ("deny", "episode ended — fail-closed Deny")
+        );
         assert_eq!(deny.episode, eid);
     }
 
     fn post_desk_park(root: &std::path::Path, id: &str, path: &str) {
         hx::post_park(
             root,
-            &hx::ParkRequest { id: id.into(), path: path.into(), tool: "click".into(), action: "click Send".into(), class: "send".into(), ts_ms: 1 },
+            &hx::ParkRequest {
+                id: id.into(),
+                path: path.into(),
+                tool: "click".into(),
+                action: "click Send".into(),
+                class: "send".into(),
+                ts_ms: 1,
+            },
         )
         .unwrap();
     }
 
     fn past_ttl(cabin: &mut Cabin) {
         if let Some(p) = cabin.harness.park.as_mut() {
-            p.parked_at = std::time::Instant::now() - hx::APPROVAL_TTL - std::time::Duration::from_secs(1);
+            p.parked_at =
+                std::time::Instant::now() - hx::APPROVAL_TTL - std::time::Duration::from_secs(1);
         }
     }
 
@@ -594,21 +748,46 @@ mod tests {
         cabin.poll_harness();
         past_ttl(&mut cabin);
         cabin.expire_hard_park();
-        assert_eq!(cabin.harness.park.as_ref().map(|p| p.source.clone()), Some(ParkSource::Desk(id.clone())), "the card stays");
-        assert_eq!(hx::take_answer(&root, &id), None, "no deny reaches the kernel");
-        assert!(!spans(&root).iter().any(|s| s.decision == "deny"), "the kernel writes the not-run span, not the cabin");
+        assert_eq!(
+            cabin.harness.park.as_ref().map(|p| p.source.clone()),
+            Some(ParkSource::Desk(id.clone())),
+            "the card stays"
+        );
+        assert_eq!(
+            hx::take_answer(&root, &id),
+            None,
+            "no deny reaches the kernel"
+        );
+        assert!(
+            !spans(&root).iter().any(|s| s.decision == "deny"),
+            "the kernel writes the not-run span, not the cabin"
+        );
         // Another card waiting goes first; the parked step goes behind it.
         post_desk_park(&root, "d1", "A");
         cabin.harness.last_poll = None;
         cabin.poll_harness();
         cabin.expire_hard_park();
-        assert_eq!(cabin.harness.park.as_ref().map(|p| p.source.clone()), Some(ParkSource::Desk("d1".into())));
-        assert_eq!(cabin.harness.queue.iter().map(|p| p.source.clone()).collect::<Vec<_>>(), vec![ParkSource::Desk(id.clone())]);
+        assert_eq!(
+            cabin.harness.park.as_ref().map(|p| p.source.clone()),
+            Some(ParkSource::Desk("d1".into()))
+        );
+        assert_eq!(
+            cabin
+                .harness
+                .queue
+                .iter()
+                .map(|p| p.source.clone())
+                .collect::<Vec<_>>(),
+            vec![ParkSource::Desk(id.clone())]
+        );
         // A card that isn't the episode's still fails closed at its TTL.
         past_ttl(&mut cabin);
         cabin.expire_hard_park();
         assert_eq!(hx::take_answer(&root, "d1"), Some(false));
-        assert_eq!(cabin.harness.park.as_ref().map(|p| p.source.clone()), Some(ParkSource::Desk(id)));
+        assert_eq!(
+            cabin.harness.park.as_ref().map(|p| p.source.clone()),
+            Some(ParkSource::Desk(id))
+        );
     }
 
     #[test]
@@ -622,13 +801,26 @@ mod tests {
         let idle = now_ms() - ep::EPISODE_IDLE.as_millis() as u64;
         cabin.harness.episode.as_mut().unwrap().last_ms = idle;
         cabin.poll_episode();
-        assert_eq!(cabin.harness.episode.as_ref().map(|e| e.id.clone()), Some(eid));
-        assert!(!spans(&root).iter().any(|s| s.decision == "end"), "no idle end while a step waits");
+        assert_eq!(
+            cabin.harness.episode.as_ref().map(|e| e.id.clone()),
+            Some(eid)
+        );
+        assert!(
+            !spans(&root).iter().any(|s| s.decision == "end"),
+            "no idle end while a step waits"
+        );
         cabin.resolve_hard_park(false, "Denied");
         cabin.harness.episode.as_mut().unwrap().last_ms = idle;
         cabin.poll_episode();
-        assert!(cabin.harness.episode.is_none(), "answered, the idle end applies again");
-        let end = spans(&root).into_iter().rev().find(|s| s.tool == ep::EPISODE_TOOL).unwrap();
+        assert!(
+            cabin.harness.episode.is_none(),
+            "answered, the idle end applies again"
+        );
+        let end = spans(&root)
+            .into_iter()
+            .rev()
+            .find(|s| s.tool == ep::EPISODE_TOOL)
+            .unwrap();
         assert_eq!(end.result, "idle");
     }
 
@@ -636,7 +828,10 @@ mod tests {
     fn work_tree_header_reads_steps_and_minutes() {
         let mut e = EpisodeUi::new("session", 1_000);
         e.steps = 12;
-        assert_eq!(e.header(1_000 + 4 * 60_000 + 30_000), "Desktop session · 12 steps · 4 min");
+        assert_eq!(
+            e.header(1_000 + 4 * 60_000 + 30_000),
+            "Desktop session · 12 steps · 4 min"
+        );
     }
 
     #[test]

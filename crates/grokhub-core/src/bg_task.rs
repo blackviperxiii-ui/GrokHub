@@ -143,7 +143,10 @@ pub fn bg_result_note(title: &str, end: &BgEnd, reply: &str) -> String {
         BgEnd::Failed(err) if assistant_prose(reply).trim().is_empty() => err.trim().to_string(),
         _ => assistant_prose(reply),
     };
-    let said = clip_chars(&said.split_whitespace().collect::<Vec<_>>().join(" "), BG_FOLLOW_CAP);
+    let said = clip_chars(
+        &said.split_whitespace().collect::<Vec<_>>().join(" "),
+        BG_FOLLOW_CAP,
+    );
     if said.is_empty() {
         format!("- {} ({how})", title.trim())
     } else {
@@ -241,10 +244,22 @@ mod tests {
     #[test]
     fn only_a_plain_headless_turn_moves_to_the_background() {
         assert!(can_detach_turn(true, false, false, false));
-        assert!(!can_detach_turn(false, false, false, false), "no grok -p child to keep");
-        assert!(!can_detach_turn(true, true, false, false), "Ask needs you at the card");
-        assert!(!can_detach_turn(true, false, true, false), "scheduled runs settle themselves");
-        assert!(!can_detach_turn(true, false, false, true), "a capture or host step is queued");
+        assert!(
+            !can_detach_turn(false, false, false, false),
+            "no grok -p child to keep"
+        );
+        assert!(
+            !can_detach_turn(true, true, false, false),
+            "Ask needs you at the card"
+        );
+        assert!(
+            !can_detach_turn(true, false, true, false),
+            "scheduled runs settle themselves"
+        );
+        assert!(
+            !can_detach_turn(true, false, false, true),
+            "a capture or host step is queued"
+        );
     }
 
     #[test]
@@ -262,7 +277,10 @@ mod tests {
         assert!(extract_background_tasks(text, 0).is_empty());
         assert!(extract_background_tasks("no markers here", 3).is_empty());
         let long = format!("BACKGROUND_TASK: {}", "x".repeat(5000));
-        assert_eq!(extract_background_tasks(&long, 1)[0].chars().count(), BG_TASK_PROMPT_CAP);
+        assert_eq!(
+            extract_background_tasks(&long, 1)[0].chars().count(),
+            BG_TASK_PROMPT_CAP
+        );
     }
 
     #[test]
@@ -281,7 +299,10 @@ mod tests {
 
     #[test]
     fn titles_are_the_first_line_clipped() {
-        assert_eq!(bg_task_title("\n  fix the build  \nthen test"), "fix the build");
+        assert_eq!(
+            bg_task_title("\n  fix the build  \nthen test"),
+            "fix the build"
+        );
         let t = bg_task_title(&"y".repeat(200));
         assert_eq!(t.chars().count(), BG_TITLE_CAP);
         assert!(t.ends_with('…'));
@@ -308,9 +329,15 @@ mod tests {
         assert_eq!(note, "- tests (done): All 42 passed.");
         let failed = bg_result_note("tests", &BgEnd::Failed("exit 2".into()), "");
         assert_eq!(failed, "- tests (failed): exit 2");
-        assert_eq!(bg_result_note("tests", &BgEnd::Stopped, ""), "- tests (stopped)");
+        assert_eq!(
+            bg_result_note("tests", &BgEnd::Stopped, ""),
+            "- tests (stopped)"
+        );
         let block = bg_results_follow(&[note]).unwrap();
-        assert!(block.starts_with("Background tasks that finished"), "{block}");
+        assert!(
+            block.starts_with("Background tasks that finished"),
+            "{block}"
+        );
         assert!(block.ends_with("- tests (done): All 42 passed."), "{block}");
         let long = bg_result_note("t", &BgEnd::Done, &"z ".repeat(2000));
         assert!(long.chars().count() < BG_FOLLOW_CAP + 40);
@@ -332,17 +359,37 @@ mod tests {
             " ".to_string(),
             "cargo test".to_string(),
         ];
-        let block = steer_follow_block("fix the failing test", "Looking at it.\nUSER_FACT: x", &tools);
+        let block = steer_follow_block(
+            "fix the failing test",
+            "Looking at it.\nUSER_FACT: x",
+            &tools,
+        );
         assert!(block.starts_with("STEER:"), "{block}");
-        assert!(block.contains("Their previous ask: fix the failing test"), "{block}");
-        assert!(block.contains("Already ran this turn: Read Cargo.toml; cargo test"), "{block}");
-        assert!(block.contains("You had said so far: Looking at it."), "{block}");
+        assert!(
+            block.contains("Their previous ask: fix the failing test"),
+            "{block}"
+        );
+        assert!(
+            block.contains("Already ran this turn: Read Cargo.toml; cargo test"),
+            "{block}"
+        );
+        assert!(
+            block.contains("You had said so far: Looking at it."),
+            "{block}"
+        );
         assert!(!block.contains("USER_FACT"), "{block}");
         let bare = steer_follow_block("", "", &[]);
-        assert!(!bare.contains("previous ask") && !bare.contains("Already ran") && !bare.contains("said so far"));
+        assert!(
+            !bare.contains("previous ask")
+                && !bare.contains("Already ran")
+                && !bare.contains("said so far")
+        );
         let many: Vec<String> = (0..30).map(|i| format!("tool {i}")).collect();
         let capped = steer_follow_block("a", "", &many);
-        assert!(capped.contains("tool 29") && !capped.contains("tool 17;"), "{capped}");
+        assert!(
+            capped.contains("tool 29") && !capped.contains("tool 17;"),
+            "{capped}"
+        );
         let long = steer_follow_block("a", &format!("start {}", "w".repeat(3000)), &[]);
         assert!(!long.contains("start"), "the newest words win: {long}");
     }

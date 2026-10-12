@@ -181,7 +181,9 @@ pub fn parse_self_review(raw: &str) -> Vec<Proposal> {
     raw.lines()
         .filter_map(|l| {
             let l = l.trim();
-            let rest = l.strip_prefix(PATCH_PREFIX).or_else(|| l.strip_prefix(TUNE_PREFIX))?;
+            let rest = l
+                .strip_prefix(PATCH_PREFIX)
+                .or_else(|| l.strip_prefix(TUNE_PREFIX))?;
             let mut parts = rest.splitn(3, '|').map(str::trim);
             let target = parts.next()?.to_string();
             let title: String = parts.next().unwrap_or("").chars().take(TITLE_MAX).collect();
@@ -209,7 +211,10 @@ pub fn check_target(raw: &str) -> Result<String, String> {
 fn week_numbers(stats: &[SkillStats]) -> (usize, String) {
     let runs: usize = stats.iter().map(|s| s.runs).sum();
     let failures: usize = stats.iter().map(|s| s.failures).sum();
-    (failures, format!("{failures} of {runs} skill runs needed a fix"))
+    (
+        failures,
+        format!("{failures} of {runs} skill runs needed a fix"),
+    )
 }
 
 /// The fixed rules: refuse guarded targets, keep skills that had failures
@@ -227,7 +232,10 @@ pub fn rank_proposals(
                 let text = match ProtectedSurface::check_text(&p.steps) {
                     Ok(text) => text,
                     Err(why) => {
-                        refused.push(RejectedProposal { target: p.target, why });
+                        refused.push(RejectedProposal {
+                            target: p.target,
+                            why,
+                        });
                         continue;
                     }
                 };
@@ -235,7 +243,11 @@ pub fn rank_proposals(
                 let notes = kept.iter().filter(|k| k.snippet).count();
                 if failures > 0 && notes < SNIPPETS_PER_PASS {
                     kept.push(RankedProposal {
-                        title: if p.title.trim().is_empty() { format!("Chat note {name}") } else { p.title },
+                        title: if p.title.trim().is_empty() {
+                            format!("Chat note {name}")
+                        } else {
+                            p.title
+                        },
                         skill: name,
                         snippet: true,
                         steps: text,
@@ -248,7 +260,12 @@ pub fn rank_proposals(
             // Lessons and router weights are tuned by their own nightly passes;
             // policy rows and playbooks go through `harness::brain_tune`, which
             // proposes on top of the user's version.
-            Ok(TuneTarget::Lesson(_) | TuneTarget::Router(_) | TuneTarget::Policy(_) | TuneTarget::Playbook(_)) => continue,
+            Ok(
+                TuneTarget::Lesson(_)
+                | TuneTarget::Router(_)
+                | TuneTarget::Policy(_)
+                | TuneTarget::Playbook(_),
+            ) => continue,
             Err(why) => {
                 refused.push(RejectedProposal {
                     target: p.target,
@@ -280,7 +297,12 @@ pub fn rank_proposals(
         });
     }
     // Skill patches first, most failures first; a chat note goes last.
-    kept.sort_by(|a, b| a.snippet.cmp(&b.snippet).then(b.failures.cmp(&a.failures)).then(a.skill.cmp(&b.skill)));
+    kept.sort_by(|a, b| {
+        a.snippet
+            .cmp(&b.snippet)
+            .then(b.failures.cmp(&a.failures))
+            .then(a.skill.cmp(&b.skill))
+    });
     kept.truncate(SELF_REVIEW_CAP);
     (kept, refused)
 }
@@ -413,9 +435,15 @@ impl BrainStats {
     pub fn numbers(&self) -> String {
         let name = self.name();
         if self.checks_rarely() && !self.fails_often() {
-            format!("{} of {} runs on {name} passed a re-check", self.verified, self.runs)
+            format!(
+                "{} of {} runs on {name} passed a re-check",
+                self.verified, self.runs
+            )
         } else {
-            format!("{} of {} runs on {name} needed a fix", self.failures, self.runs)
+            format!(
+                "{} of {} runs on {name} needed a fix",
+                self.failures, self.runs
+            )
         }
     }
 }
@@ -425,16 +453,22 @@ impl BrainStats {
 pub fn brain_stats(runs: &[RunMetrics], now: u64, window: u64) -> Vec<BrainStats> {
     let mut by: BTreeMap<(BrainKind, String), BrainStats> = BTreeMap::new();
     for m in runs {
-        if m.finished_at > now || now - m.finished_at > window || m.result == OutcomeResult::Pending {
+        if m.finished_at > now || now - m.finished_at > window || m.result == OutcomeResult::Pending
+        {
             continue;
         }
-        for (kind, key) in [(BrainKind::Policy, &m.brain.policy), (BrainKind::Playbook, &m.brain.playbook)] {
+        for (kind, key) in [
+            (BrainKind::Policy, &m.brain.policy),
+            (BrainKind::Playbook, &m.brain.playbook),
+        ] {
             if key.is_empty() {
                 continue;
             }
-            let s = by
-                .entry((kind, key.clone()))
-                .or_insert_with(|| BrainStats { kind, key: key.clone(), ..Default::default() });
+            let s = by.entry((kind, key.clone())).or_insert_with(|| BrainStats {
+                kind,
+                key: key.clone(),
+                ..Default::default()
+            });
             s.runs += 1;
             s.failures += usize::from(m.result == OutcomeResult::Failure);
             s.verified += usize::from(m.verified);
@@ -513,7 +547,11 @@ pub fn parse_brain_tweaks(raw: &str) -> Vec<BrainProposal> {
             body.push(l);
         }
         let text = format!("{}\n", body.join("\n").trim_end());
-        if closed && !target.is_empty() && !text.trim().is_empty() && text.chars().count() <= BRAIN_TEXT_MAX {
+        if closed
+            && !target.is_empty()
+            && !text.trim().is_empty()
+            && text.chars().count() <= BRAIN_TEXT_MAX
+        {
             out.push(BrainProposal {
                 target: redact_secrets(&target),
                 title: redact_secrets(&title),
@@ -527,7 +565,10 @@ pub fn parse_brain_tweaks(raw: &str) -> Vec<BrainProposal> {
 /// The fixed rules: one tweak a pass, and only to the row or playbook the
 /// digest asked about. A tweak aimed elsewhere is refused (with the guarded
 /// area's name when it names one).
-pub fn pick_brain_tweak(raw: Vec<BrainProposal>, asked: &BrainStats) -> (Option<BrainProposal>, Vec<RejectedProposal>) {
+pub fn pick_brain_tweak(
+    raw: Vec<BrainProposal>,
+    asked: &BrainStats,
+) -> (Option<BrainProposal>, Vec<RejectedProposal>) {
     let want = asked.target();
     let mut kept: Option<BrainProposal> = None;
     let mut refused = Vec::new();
@@ -542,7 +583,10 @@ pub fn pick_brain_tweak(raw: Vec<BrainProposal>, asked: &BrainStats) -> (Option<
             Err(why) if why.starts_with("GrokHub never") => why,
             _ => format!("a weekly Brain tweak may only change {}", asked.name()),
         };
-        refused.push(RejectedProposal { target: p.target, why });
+        refused.push(RejectedProposal {
+            target: p.target,
+            why,
+        });
     }
     (kept, refused)
 }
@@ -586,7 +630,10 @@ pub fn issue_text(title: &str, text: &str, version: &str, home: Option<&str>) ->
 /// [`redact_secrets`], then home folders as `~` and email addresses as `[email]`.
 pub fn redact_for_issue(text: &str, home: Option<&str>) -> String {
     let mut out = redact_secrets(text);
-    if let Some(home) = home.map(|h| h.trim_end_matches(['/', '\\'])).filter(|h| h.len() > 1) {
+    if let Some(home) = home
+        .map(|h| h.trim_end_matches(['/', '\\']))
+        .filter(|h| h.len() > 1)
+    {
         out = out.replace(home, "~");
     }
     for root in ["/home/", "/Users/", "\\Users\\"] {
@@ -608,7 +655,9 @@ fn strip_user_dirs(text: &str, root: &str) -> String {
         }
         out.push_str(&rest[..start]);
         let after = &rest[at + root.len()..];
-        let name_end = after.find(|c: char| c == '/' || c == '\\' || c.is_whitespace()).unwrap_or(after.len());
+        let name_end = after
+            .find(|c: char| c == '/' || c == '\\' || c.is_whitespace())
+            .unwrap_or(after.len());
         out.push('~');
         rest = &after[name_end..];
     }
@@ -622,7 +671,9 @@ fn redact_emails(text: &str) -> String {
     let mut out = String::new();
     let mut rest = text;
     while let Some(at) = rest.find('@') {
-        let start = rest[..at].rfind(|c: char| !local(c)).map_or(0, |i| i + rest[i..].chars().next().map_or(1, char::len_utf8));
+        let start = rest[..at].rfind(|c: char| !local(c)).map_or(0, |i| {
+            i + rest[i..].chars().next().map_or(1, char::len_utf8)
+        });
         let after = &rest[at + 1..];
         let end = after.find(|c: char| !domain(c)).unwrap_or(after.len());
         let host = after[..end].trim_end_matches('.');
@@ -1089,8 +1140,18 @@ mod tests {
     #[test]
     fn one_chat_note_rides_after_the_skill_patches_and_a_rule_dodging_one_is_refused() {
         let stats = vec![
-            SkillStats { skill: "inbox".into(), runs: 4, failures: 2, reasons: BTreeMap::new() },
-            SkillStats { skill: "report".into(), runs: 6, failures: 1, reasons: BTreeMap::new() },
+            SkillStats {
+                skill: "inbox".into(),
+                runs: 4,
+                failures: 2,
+                reasons: BTreeMap::new(),
+            },
+            SkillStats {
+                skill: "report".into(),
+                runs: 6,
+                failures: 1,
+                reasons: BTreeMap::new(),
+            },
         ];
         let raw = "TUNE_SNIPPET: snippet:lead-with-answer | Lead with the answer | Lead with the answer, then one line of why.\n\
                    PATCH_SKILL: skill:inbox | Tidy | 1. x\n\
@@ -1099,20 +1160,39 @@ mod tests {
                    TUNE_SNIPPET: crates/grokhub-agent/src/prompt_template.md | Looser | Say it worked.\n\
                    PATCH_SKILL: lesson:firefox | Lesson | 1. y";
         let (kept, refused) = rank_proposals(parse_self_review(raw), &stats);
-        let got: Vec<(&str, bool, &str)> = kept.iter().map(|k| (k.skill.as_str(), k.snippet, k.steps.as_str())).collect();
-        assert_eq!(got, vec![("inbox", false, "1. x"), ("lead-with-answer", true, "Lead with the answer, then one line of why.")]);
+        let got: Vec<(&str, bool, &str)> = kept
+            .iter()
+            .map(|k| (k.skill.as_str(), k.snippet, k.steps.as_str()))
+            .collect();
+        assert_eq!(
+            got,
+            vec![
+                ("inbox", false, "1. x"),
+                (
+                    "lead-with-answer",
+                    true,
+                    "Lead with the answer, then one line of why."
+                )
+            ]
+        );
         assert_eq!(kept[1].numbers, "3 of 10 skill runs needed a fix");
         assert_eq!(
             refused,
             vec![
-                RejectedProposal { target: "snippet:fast".into(), why: "a chat note never steers around the rules".into() },
+                RejectedProposal {
+                    target: "snippet:fast".into(),
+                    why: "a chat note never steers around the rules".into()
+                },
                 RejectedProposal {
                     target: "crates/grokhub-agent/src/prompt_template.md".into(),
                     why: "GrokHub never changes the honesty rules on its own".into()
                 },
             ]
         );
-        assert_eq!(card_target(&snippet_source("lead-with-answer")), Some(CardTarget::Snippet("lead-with-answer".into())));
+        assert_eq!(
+            card_target(&snippet_source("lead-with-answer")),
+            Some(CardTarget::Snippet("lead-with-answer".into()))
+        );
     }
 
     #[test]
@@ -1277,24 +1357,50 @@ mod tests {
             body: body.into(),
         };
         let mut log = Vec::new();
-        add_quiet_entry(&mut log, entry("2026-10-04", &draft_source("deploy"), "Make a skill: deploy", "You did this 4 times in the last two weeks"));
-        add_quiet_entry(&mut log, entry("2026-10-04", "router-review", "Weekly router review", ""));
-        add_quiet_entry(&mut log, entry("2026-10-11", &draft_source("deploy"), "Make a skill: deploy", "You did this 6 times in the last two weeks"));
+        add_quiet_entry(
+            &mut log,
+            entry(
+                "2026-10-04",
+                &draft_source("deploy"),
+                "Make a skill: deploy",
+                "You did this 4 times in the last two weeks",
+            ),
+        );
+        add_quiet_entry(
+            &mut log,
+            entry("2026-10-04", "router-review", "Weekly router review", ""),
+        );
+        add_quiet_entry(
+            &mut log,
+            entry(
+                "2026-10-11",
+                &draft_source("deploy"),
+                "Make a skill: deploy",
+                "You did this 6 times in the last two weeks",
+            ),
+        );
         assert_eq!(
             quiet_log_lines(&log, 5),
             vec![
-                "2026-10-11 · Make a skill: deploy: You did this 6 times in the last two weeks".to_string(),
+                "2026-10-11 · Make a skill: deploy: You did this 6 times in the last two weeks"
+                    .to_string(),
                 "2026-10-04 · Weekly router review".to_string(),
             ],
             "the newer pass replaces the same suggestion"
         );
         assert_eq!(quiet_log_lines(&log, 1).len(), 1);
         for i in 0..60 {
-            add_quiet_entry(&mut log, entry("2026-10-18", &format!("s{i}"), &format!("t{i}"), ""));
+            add_quiet_entry(
+                &mut log,
+                entry("2026-10-18", &format!("s{i}"), &format!("t{i}"), ""),
+            );
         }
         assert_eq!(log.len(), QUIET_LOG_CAP);
         assert_eq!(log.first().map(|e| e.source.as_str()), Some("s10"));
-        assert_eq!(quiet_log_lines(&log, 1), vec!["2026-10-18 · t59".to_string()]);
+        assert_eq!(
+            quiet_log_lines(&log, 1),
+            vec!["2026-10-18 · t59".to_string()]
+        );
     }
 
     #[test]
@@ -1308,8 +1414,17 @@ mod tests {
         let ideas = parse_code_ideas(raw);
         assert_eq!(ideas.len(), 4);
         assert_eq!(ideas[0].slug, "wait-for-the-save-dialog");
-        assert!(!ideas[2].problem.contains("sk-abcdefghijklmnopqrstuv"), "{}", ideas[2].problem);
-        let failing = vec![SkillStats { skill: "inbox".into(), runs: 5, failures: 3, reasons: BTreeMap::new() }];
+        assert!(
+            !ideas[2].problem.contains("sk-abcdefghijklmnopqrstuv"),
+            "{}",
+            ideas[2].problem
+        );
+        let failing = vec![SkillStats {
+            skill: "inbox".into(),
+            runs: 5,
+            failures: 3,
+            reasons: BTreeMap::new(),
+        }];
         let kept = rank_code_ideas(ideas.clone(), &failing);
         let slugs: Vec<&str> = kept.iter().map(|i| i.slug.as_str()).collect();
         assert_eq!(slugs, vec!["wait-for-the-save-dialog", "retry-on-429"]);
@@ -1317,10 +1432,19 @@ mod tests {
             kept[0].text(),
             "Problem: The save step clicks before the dialog opens\n\nEvidence: 3 of 5 inbox runs needed a fix"
         );
-        let clean = vec![SkillStats { skill: "inbox".into(), runs: 5, failures: 0, reasons: BTreeMap::new() }];
+        let clean = vec![SkillStats {
+            skill: "inbox".into(),
+            runs: 5,
+            failures: 0,
+            reasons: BTreeMap::new(),
+        }];
         assert_eq!(rank_code_ideas(ideas, &clean), Vec::<CodeIdea>::new());
-        assert_eq!(card_target(&code_source("retry-on-429")), Some(CardTarget::Code("retry-on-429".into())));
-        assert!(self_review_system_prompt().contains("CODE_IDEA: <short title> | <the problem, in a sentence>"));
+        assert_eq!(
+            card_target(&code_source("retry-on-429")),
+            Some(CardTarget::Code("retry-on-429".into()))
+        );
+        assert!(self_review_system_prompt()
+            .contains("CODE_IDEA: <short title> | <the problem, in a sentence>"));
     }
 
     #[test]
@@ -1328,7 +1452,12 @@ mod tests {
         let text = "Problem: /home/viper/.config/GrokHub/skills/inbox failed for viper.x+gh@mail.example.com\n\n\
                     Evidence: C:\\Users\\Viper\\AppData\\GrokHub and /Users/jo/notes; key sk-abcdefghijklmnopqrstuv; \
                     at @home and a@b stay";
-        let out = issue_text("Wait for the Save dialog", text, "GrokHub 2.11.0-beta", Some("/home/viper/"));
+        let out = issue_text(
+            "Wait for the Save dialog",
+            text,
+            "GrokHub 2.11.0-beta",
+            Some("/home/viper/"),
+        );
         assert_eq!(
             out,
             format!(
@@ -1348,10 +1477,18 @@ mod tests {
         let now = 100 * DAY;
         let line = |i: u64, policy: &str, playbook: &str, ok: bool, verified: bool| RunMetrics {
             run: format!("c:{i}"),
-            result: if ok { OutcomeResult::Success } else { OutcomeResult::Failure },
+            result: if ok {
+                OutcomeResult::Success
+            } else {
+                OutcomeResult::Failure
+            },
             verified,
             steps: 4,
-            brain: RunBrain { policy: policy.into(), playbook: playbook.into(), ..Default::default() },
+            brain: RunBrain {
+                policy: policy.into(),
+                playbook: playbook.into(),
+                ..Default::default()
+            },
             finished_at: now - i,
             ..Default::default()
         };
@@ -1370,10 +1507,15 @@ mod tests {
         }
         // An old line with no Brain record and a pending run count nowhere.
         runs.push(line(30, "", "", false, false));
-        runs.push(RunMetrics { result: OutcomeResult::Pending, ..line(31, "task × careful", "", true, true) });
+        runs.push(RunMetrics {
+            result: OutcomeResult::Pending,
+            ..line(31, "task × careful", "", true, true)
+        });
         let stats = brain_stats(&runs, now, WEEK_MS);
-        let got: Vec<(String, usize, usize, usize, bool)> =
-            stats.iter().map(|s| (s.target(), s.runs, s.failures, s.verified, s.weak())).collect();
+        let got: Vec<(String, usize, usize, usize, bool)> = stats
+            .iter()
+            .map(|s| (s.target(), s.runs, s.failures, s.verified, s.weak()))
+            .collect();
         assert_eq!(
             got,
             vec![
@@ -1408,6 +1550,10 @@ mod tests {
                 text: "id = \"files-tidy\"\nname = \"Tidy\"\n".into(),
             }]
         );
-        assert_eq!(parse_self_review(raw).len(), 1, "the skill line still parses alone");
+        assert_eq!(
+            parse_self_review(raw).len(),
+            1,
+            "the skill line still parses alone"
+        );
     }
 }

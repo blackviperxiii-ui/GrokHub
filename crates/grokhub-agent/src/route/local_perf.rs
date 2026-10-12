@@ -61,7 +61,11 @@ pub fn current_defaults() -> RuntimeDefaults {
 /// With enough discrete VRAM for GPU layers, size from VRAM (KV lives on the GPU).
 /// Otherwise size from system RAM (CPU / unified-memory machines).
 pub fn ctx_for(hw: &Hardware) -> u64 {
-    let mem = if hw.vram_mb >= 3_072 { hw.vram_mb } else { hw.ram_mb.max(hw.vram_mb) };
+    let mem = if hw.vram_mb >= 3_072 {
+        hw.vram_mb
+    } else {
+        hw.ram_mb.max(hw.vram_mb)
+    };
     if mem >= 16_384 {
         16_384
     } else if mem >= 8_192 {
@@ -108,7 +112,9 @@ pub fn physical_cores() -> Option<u32> {
             return Some(cores.len() as u32);
         }
     }
-    std::thread::available_parallelism().ok().map(|n| (n.get() as u32).max(1))
+    std::thread::available_parallelism()
+        .ok()
+        .map(|n| (n.get() as u32).max(1))
 }
 
 /// Defaults for this machine. Fixture-friendly when `cores` is `None` (RAM stand-in).
@@ -120,7 +126,10 @@ pub fn defaults_for(hw: &Hardware) -> RuntimeDefaults {
 pub fn defaults_for_with_cores(hw: &Hardware, cores: Option<u32>) -> RuntimeDefaults {
     let has_gpu = hw.vram_mb >= 2_048 || !hw.gpu.trim().is_empty();
     let n_gpu_layers = if hw.vram_mb >= 3_072 { 99 } else { 0 };
-    let threads = cores.filter(|c| *c > 0).unwrap_or_else(|| threads_from_ram(hw.ram_mb)).max(1);
+    let threads = cores
+        .filter(|c| *c > 0)
+        .unwrap_or_else(|| threads_from_ram(hw.ram_mb))
+        .max(1);
     let ctx = ctx_for(hw);
     RuntimeDefaults {
         n_gpu_layers,
@@ -146,7 +155,12 @@ pub fn llama_perf_args(d: &RuntimeDefaults) -> Vec<String> {
         args.push("--flash-attn".into());
     }
     if d.kv_cache_q8 {
-        args.extend(["--cache-type-k".into(), "q8_0".into(), "--cache-type-v".into(), "q8_0".into()]);
+        args.extend([
+            "--cache-type-k".into(),
+            "q8_0".into(),
+            "--cache-type-v".into(),
+            "q8_0".into(),
+        ]);
     }
     // Reuse the prompt/KV cache across turns (stable prefix / card 41 order).
     args.push("--cache-prompt".into());
@@ -171,7 +185,12 @@ mod tests {
     use grokhub_core::local_setup::Hardware;
 
     fn hw(gpu: &str, vram_mb: u64, ram_mb: u64) -> Hardware {
-        Hardware { gpu: gpu.into(), vram_mb, ram_mb, free_disk_mb: 100_000 }
+        Hardware {
+            gpu: gpu.into(),
+            vram_mb,
+            ram_mb,
+            free_disk_mb: 100_000,
+        }
     }
 
     #[test]

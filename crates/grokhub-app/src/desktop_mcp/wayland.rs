@@ -212,7 +212,9 @@ impl DesktopBackend for WaylandBackend {
             }
             #[cfg(not(target_os = "linux"))]
             {
-                return Err(format!("Wayland monitor list on KDE needs kscreen-doctor. {MISS}"));
+                return Err(format!(
+                    "Wayland monitor list on KDE needs kscreen-doctor. {MISS}"
+                ));
             }
         }
         self.wl_monitors()
@@ -268,8 +270,7 @@ impl DesktopBackend for WaylandBackend {
             (MouseButton::Middle, true) => 0x42,
             (MouseButton::Middle, false) => 0x82,
         };
-        self.injector
-            .run(&["click".into(), format!("0x{code:X}")])
+        self.injector.run(&["click".into(), format!("0x{code:X}")])
     }
 
     fn scroll(&mut self, dx: i32, dy: i32) -> Result<(), String> {
@@ -544,11 +545,7 @@ fn input_ready() -> Result<(), String> {
         return Ok(());
     }
     let uinput = std::path::Path::new("/dev/uinput");
-    let writable = uinput.exists()
-        && std::fs::OpenOptions::new()
-            .write(true)
-            .open(uinput)
-            .is_ok();
+    let writable = uinput.exists() && std::fs::OpenOptions::new().write(true).open(uinput).is_ok();
     if writable {
         Err(format!(
             "Wayland input needs ydotoold running (the ydotool socket is missing). {MISS}"
@@ -563,9 +560,7 @@ fn input_ready() -> Result<(), String> {
 fn run_bin(bin: &str, args: &[String], ms: u64) -> Result<Output, String> {
     let program = crate::desktop::resolve_bin(bin).unwrap_or_else(|| std::path::PathBuf::from(bin));
     let mut cmd = Command::new(program);
-    cmd.args(args)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+    cmd.args(args).stdout(Stdio::piped()).stderr(Stdio::piped());
     let child = cmd.spawn().map_err(|err| format!("{bin}: {err}"))?;
     let pid = child.id();
     let (tx, rx) = std::sync::mpsc::channel();
@@ -636,13 +631,11 @@ mod route_tests {
         backend.move_abs(10, 20).unwrap();
         let note = backend.status_note().expect("fallback note");
         assert!(note.contains("imprecise"), "{note}");
-        assert!(
-            note.contains("user cancelled"),
-            "{note}"
-        );
+        assert!(note.contains("user cancelled"), "{note}");
         let log = calls.lock().unwrap_or_else(|err| err.into_inner()).clone();
         assert!(
-            log.iter().any(|args| args.iter().any(|arg| arg == "mousemove")),
+            log.iter()
+                .any(|args| args.iter().any(|arg| arg == "mousemove")),
             "{log:?}"
         );
         assert_eq!(portal.start_count(), 1);
@@ -661,7 +654,10 @@ mod route_tests {
         backend.move_abs(10, 10).unwrap();
         assert_eq!(portal.pointers().len(), 1);
         assert!(
-            calls.lock().unwrap_or_else(|err| err.into_inner()).is_empty(),
+            calls
+                .lock()
+                .unwrap_or_else(|err| err.into_inner())
+                .is_empty(),
             "halted portal input must not reach ydotool"
         );
         backend.release_input();
@@ -670,6 +666,9 @@ mod route_tests {
         assert!(err.contains("halted") || err.contains("closed"), "{err}");
         assert_eq!(portal.start_count(), 1);
         assert_eq!(portal.pointers().len(), 1);
-        assert!(calls.lock().unwrap_or_else(|err| err.into_inner()).is_empty());
+        assert!(calls
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .is_empty());
     }
 }

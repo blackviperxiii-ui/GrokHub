@@ -2,9 +2,7 @@
 
 use super::*;
 
-
 impl Cabin {
-
     /// Chat pairs for chip rebuild: scan a 4KB prefix so an 8MB complete
     /// does not get cloned into `chip_suggest_prompt` / `chip_thread_from_messages`.
     pub(super) fn chip_chat_pairs(&self) -> Vec<(String, String)> {
@@ -354,15 +352,14 @@ impl Cabin {
         self.goal_busy = true;
         self.goal_stale = false;
         std::thread::spawn(move || {
-            let reply =
-                grok_chat(
-                    &key,
-                    &model,
-                    &[("user".into(), prompt)],
-                    None,
-                    Some(grokhub_core::BACKGROUND_EFFORT),
-                )
-                .unwrap_or_default();
+            let reply = grok_chat(
+                &key,
+                &model,
+                &[("user".into(), prompt)],
+                None,
+                Some(grokhub_core::BACKGROUND_EFFORT),
+            )
+            .unwrap_or_default();
             let _ = tx.send((tid, reply));
         });
     }
@@ -472,13 +469,14 @@ impl Cabin {
             && now_ms().saturating_sub(self.chip_llm_at) >= grokhub_core::CHIP_LLM_SPEND_MS;
         if spend_ready
             && should_refresh_llm(
-            &self.chip_fp,
-            &fp,
-            self.chip_llm_at,
-            now_ms(),
-            self.llm_ready(),
-            self.chip_busy,
-        ) {
+                &self.chip_fp,
+                &fp,
+                self.chip_llm_at,
+                now_ms(),
+                self.llm_ready(),
+                self.chip_busy,
+            )
+        {
             self.chip_fp = fp;
             self.chip_llm_at = now_ms();
             self.spawn_chip_llm();
@@ -637,7 +635,10 @@ impl Cabin {
             if let Some(title) = self
                 .board
                 .iter()
-                .find(|c| c.thread_id.as_deref() == Some(id.as_str()) && c.status == grokhub_core::BoardStatus::Done)
+                .find(|c| {
+                    c.thread_id.as_deref() == Some(id.as_str())
+                        && c.status == grokhub_core::BoardStatus::Done
+                })
                 .map(|c| c.title.clone())
             {
                 let key = format!("done:{}", grokhub_core::engine_slug(&title));
@@ -660,7 +661,10 @@ impl Cabin {
             if let Some(title) = self
                 .board
                 .iter()
-                .find(|c| c.thread_id.as_deref() == Some(id.as_str()) && c.status == grokhub_core::BoardStatus::Blocked)
+                .find(|c| {
+                    c.thread_id.as_deref() == Some(id.as_str())
+                        && c.status == grokhub_core::BoardStatus::Blocked
+                })
                 .map(|c| c.title.clone())
             {
                 let key = format!("paused:{}", grokhub_core::engine_slug(&title));

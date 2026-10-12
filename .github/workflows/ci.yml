@@ -75,6 +75,18 @@ jobs:
           fi
           echo "rust-only tree ok"
 
+  # Fast formatting gate. Runs on every event (no paths-filter skip) so drift
+  # cannot land even on docs-only PRs that later touch Rust. Starts with the
+  # other jobs; build jobs do not wait on it.
+  fmt:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --all -- --check
 
   linux:
     needs: changes

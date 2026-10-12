@@ -8,12 +8,17 @@ use grokhub_core::wire::{AcpEvent, ElicitAsk, GrokUsage, PermissionAsk, ToolCard
 use crate::gate::{Gate, PermitWait};
 use crate::tools::DesktopOps;
 use crate::{
-    run_loop, AuthKind, CancelToken, HaltCheck, InputItem, LoopEvent, LoopIn, ModelClient, SteerQueue,
-    StopReason, Usage,
+    run_loop, AuthKind, CancelToken, HaltCheck, InputItem, LoopEvent, LoopIn, ModelClient,
+    SteerQueue, StopReason, Usage,
 };
 
 pub trait Engine {
-    fn prompt(&mut self, text: &str, image: Option<&str>, emit: &mut dyn FnMut(AcpEvent)) -> Result<(), String>;
+    fn prompt(
+        &mut self,
+        text: &str,
+        image: Option<&str>,
+        emit: &mut dyn FnMut(AcpEvent),
+    ) -> Result<(), String>;
     fn cancel(&self);
 }
 
@@ -187,8 +192,18 @@ impl NativeEngine {
             .into_iter()
             .rev()
             .collect();
-        let background = !self.reopen_tasks || matches!(self.origin, Origin::Automation | Origin::Proactive | Origin::SelfManage);
-        let input = crate::brain::BriefInput { text, files: usize::from(has_image), tools: &[], recent: &recent, background };
+        let background = !self.reopen_tasks
+            || matches!(
+                self.origin,
+                Origin::Automation | Origin::Proactive | Origin::SelfManage
+            );
+        let input = crate::brain::BriefInput {
+            text,
+            files: usize::from(has_image),
+            tools: &[],
+            recent: &recent,
+            background,
+        };
         let mut ask = |t: &str| -> Result<String, String> {
             let call = crate::route::ModelCall::xai(
                 &self.model,
@@ -196,13 +211,30 @@ impl NativeEngine {
                 crate::brain::BRIEF_CLASS,
                 &self.conversation_id,
                 vec![
-                    InputItem::Message { role: "system".into(), content: vec![crate::ContentPart::InputText(crate::brain::BRIEF_PROMPT.into())] },
-                    InputItem::Message { role: "user".into(), content: vec![crate::ContentPart::InputText(t.into())] },
+                    InputItem::Message {
+                        role: "system".into(),
+                        content: vec![crate::ContentPart::InputText(
+                            crate::brain::BRIEF_PROMPT.into(),
+                        )],
+                    },
+                    InputItem::Message {
+                        role: "user".into(),
+                        content: vec![crate::ContentPart::InputText(t.into())],
+                    },
                 ],
             );
-            crate::route::call_model(self.client.as_ref(), &call, &self.cancel).map(|r| r.out.text).map_err(|e| e.to_string())
+            crate::route::call_model(self.client.as_ref(), &call, &self.cancel)
+                .map(|r| r.out.text)
+                .map_err(|e| e.to_string())
         };
-        let brief = crate::brain::classify(&input, if self.brief_model { Some(&mut ask) } else { None });
+        let brief = crate::brain::classify(
+            &input,
+            if self.brief_model {
+                Some(&mut ask)
+            } else {
+                None
+            },
+        );
         let dir = crate::perm::config_dir();
         let (chat_id, turn) = match &self.episode_seed {
             Some(seed) => (seed.chat_id.clone(), seed.turn),
@@ -215,18 +247,31 @@ impl NativeEngine {
         let policy = crate::brain::pick_policy(&crate::brain::load_policy(&dir).0, &brief);
         // Brain 2: the row's goal steers this turn's routing (inside each class's band).
         // Desktop episode steps route with the chat id as their session, so it gets the goal too.
-        let goal = policy.as_ref().and_then(|p| crate::route::goal::RouteGoal::of(&p.goal, &p.reason));
+        let goal = policy
+            .as_ref()
+            .and_then(|p| crate::route::goal::RouteGoal::of(&p.goal, &p.reason));
         crate::route::goal::set_goal(&chat_id, goal.clone());
         crate::route::goal::set_goal(&self.conversation_id, goal);
         // Brain 2: the run's checkpoints read the done list and care.
         crate::checkpoint::set_turn_brief(&self.conversation_id, brief.clone());
         // Brain 5: the row's talk column sets the turn's talk style.
-        crate::checkpoint::set_turn_style(&self.conversation_id, policy.as_ref().map(crate::brain::PolicyPick::style));
+        crate::checkpoint::set_turn_style(
+            &self.conversation_id,
+            policy.as_ref().map(crate::brain::PolicyPick::style),
+        );
         // Brain 3: the Brief's intent, domain and this computer's OS pick the playbook.
         let (books, _) = crate::brain::playbook::load(&dir);
-        let picked = crate::brain::playbook::pick(&books, brief.intent.as_str(), &brief.domain, crate::brain::playbook::host_os());
+        let picked = crate::brain::playbook::pick(
+            &books,
+            brief.intent.as_str(),
+            &brief.domain,
+            crate::brain::playbook::host_os(),
+        );
         // The run's system prompt carries the picked playbook's steps (or drops an earlier turn's).
-        crate::checkpoint::set_turn_playbook(&self.conversation_id, picked.map(|p| p.prompt_block()));
+        crate::checkpoint::set_turn_playbook(
+            &self.conversation_id,
+            picked.map(|p| p.prompt_block()),
+        );
         let playbook = picked.map(|p| p.name.clone()).unwrap_or_default();
         // Brain 6: the id goes on the line too, so the turn's run metrics can name it.
         let playbook_id = picked.map(|p| p.id.clone()).unwrap_or_default();
@@ -287,7 +332,11 @@ impl Engine for NativeEngine {
             return self.dream_now(emit);
         }
         self.write_brief(text, image.is_some());
-        if let Some(seed) = self.episode_seed.clone().filter(|_| self.gate.desktop && self.desktop.is_some()) {
+        if let Some(seed) = self
+            .episode_seed
+            .clone()
+            .filter(|_| self.gate.desktop && self.desktop.is_some())
+        {
             return self.prompt_episode(text, &seed, emit);
         }
         let policy = crate::perm::Policy::load(&self.workspace);
@@ -391,8 +440,15 @@ impl NativeEngine {
     /// Spike-3b: a desktop task while desktop control is on runs as an
     /// episode. Each step starts the worker fresh from the episode view; the
     /// episode outlives the prompt (Steers, new messages, pauses).
-    fn prompt_episode(&mut self, text: &str, seed: &EpisodeSeed, emit: &mut dyn FnMut(AcpEvent)) -> Result<(), String> {
-        use crate::episode::{Episode, EpisodeEnd, EpisodeStop, EpisodeView, FileParks, KernelIn, Parks};
+    fn prompt_episode(
+        &mut self,
+        text: &str,
+        seed: &EpisodeSeed,
+        emit: &mut dyn FnMut(AcpEvent),
+    ) -> Result<(), String> {
+        use crate::episode::{
+            Episode, EpisodeEnd, EpisodeStop, EpisodeView, FileParks, KernelIn, Parks,
+        };
         let now = grokhub_core::now_ms();
         let open = matches!(&self.episode, Some((ep, _)) if ep.id == seed.id && ep.ended.is_none());
         if !open {
@@ -450,7 +506,11 @@ impl NativeEngine {
             held: &seed.held,
             perms: Some(&policy),
         };
-        let (kind, session, base) = (self.auth_kind, self.conversation_id.clone(), self.usage.clone());
+        let (kind, session, base) = (
+            self.auth_kind,
+            self.conversation_id.clone(),
+            self.usage.clone(),
+        );
         let limit = self.context_length;
         let out = crate::episode::run_episode(&k, ep, view, &mut |ev| {
             let ev = match ev {
@@ -477,7 +537,15 @@ impl NativeEngine {
             },
         ];
         let cwd = self.workspace.display().to_string();
-        let _ = crate::session::record_turn(&session, &cwd, &self.model, &turn, &out.usage, kind.meter(), text);
+        let _ = crate::session::record_turn(
+            &session,
+            &cwd,
+            &self.model,
+            &turn,
+            &out.usage,
+            kind.meter(),
+            text,
+        );
         let stop = match out.stop {
             EpisodeStop::Ended(EpisodeEnd::Verified) => "episode_verified".to_string(),
             EpisodeStop::Ended(EpisodeEnd::Halt) => "halted".into(),
@@ -491,7 +559,12 @@ impl NativeEngine {
                 "error".into()
             }
         };
-        emit(grok_usage_event(&self.usage, self.auth_kind, 0, self.context_length));
+        emit(grok_usage_event(
+            &self.usage,
+            self.auth_kind,
+            0,
+            self.context_length,
+        ));
         emit(AcpEvent::Done { stop_reason: stop });
         Ok(())
     }
@@ -630,7 +703,13 @@ fn to_acp(ev: LoopEvent, kind: AuthKind, session: &str, used: u64, limit: u64) -
     Some(match ev {
         LoopEvent::Text(text) => AcpEvent::Text(text),
         LoopEvent::Thought(text) => AcpEvent::Thought(text),
-        LoopEvent::Tool { id, name, status, detail, image } => AcpEvent::Tool(ToolCard {
+        LoopEvent::Tool {
+            id,
+            name,
+            status,
+            detail,
+            image,
+        } => AcpEvent::Tool(ToolCard {
             id,
             title: name.clone(),
             kind: name,
@@ -738,8 +817,8 @@ mod tests {
                     cost_in_usd_ticks: 9,
                     cached_tokens: 0,
                 },
-            ..Default::default()
-        })
+                ..Default::default()
+            })
         }
     }
 
@@ -777,8 +856,12 @@ mod tests {
             .prompt("hi", None, &mut |ev| events.lock().unwrap().push(ev))
             .unwrap();
         let events = events.into_inner().unwrap();
-        assert!(events.iter().any(|ev| matches!(ev, AcpEvent::Thought(t) if t == "think")));
-        assert!(events.iter().any(|ev| matches!(ev, AcpEvent::Text(t) if t == "hello")));
+        assert!(events
+            .iter()
+            .any(|ev| matches!(ev, AcpEvent::Thought(t) if t == "think")));
+        assert!(events
+            .iter()
+            .any(|ev| matches!(ev, AcpEvent::Text(t) if t == "hello")));
         assert!(events.iter().any(|ev| matches!(
             ev,
             AcpEvent::Usage(u) if u.meter == "SuperGrok pool" && u.input_tokens == 3 && u.cost_in_usd_ticks == 9
@@ -842,8 +925,8 @@ mod tests {
                         cost_in_usd_ticks: 3,
                         cached_tokens: 0,
                     },
-            ..Default::default()
-        });
+                    ..Default::default()
+                });
             }
             Ok(crate::TurnOutput {
                 text: "hello".into(),
@@ -856,8 +939,8 @@ mod tests {
                     cost_in_usd_ticks: 1,
                     cached_tokens: 0,
                 },
-            ..Default::default()
-        })
+                ..Default::default()
+            })
         }
     }
 
@@ -874,18 +957,26 @@ mod tests {
             _cancel: &CancelToken,
             sink: &mut dyn FnMut(crate::StreamEvent),
         ) -> Result<crate::TurnOutput, crate::ClientError> {
-            let brief = req.input.iter().any(|item| crate::compact::message_text(item) == crate::brain::BRIEF_PROMPT);
+            let brief = req
+                .input
+                .iter()
+                .any(|item| crate::compact::message_text(item) == crate::brain::BRIEF_PROMPT);
             let text = if brief {
-                self.briefs.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                self.briefs
+                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 r#"{"intent":"task","care":"careful","mood":"calm","domain":"files"}"#
             } else {
                 self.chat.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 sink(crate::StreamEvent::TextDelta("hello".into()));
                 "hello"
             };
-            Ok(crate::TurnOutput { text: text.into(), reasoning: String::new(), calls: Vec::new(), usage: Usage::default(),
-            ..Default::default()
-        })
+            Ok(crate::TurnOutput {
+                text: text.into(),
+                reasoning: String::new(),
+                calls: Vec::new(),
+                usage: Usage::default(),
+                ..Default::default()
+            })
         }
     }
 
@@ -893,8 +984,19 @@ mod tests {
     fn a_brief_is_stored_per_prompt_and_the_reply_is_unchanged() {
         let dir = crate::harness::test_dir("eng-brief");
         let _guard = crate::perm::ConfigGuard::set(&dir);
-        crate::harness::write_turn_context(&dir, &crate::harness::TurnContext { chat_id: "chat-1".into(), turn: 2, ..Default::default() }).unwrap();
-        let client = Arc::new(Brained { chat: AtomicUsize::new(0), briefs: AtomicUsize::new(0) });
+        crate::harness::write_turn_context(
+            &dir,
+            &crate::harness::TurnContext {
+                chat_id: "chat-1".into(),
+                turn: 2,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let client = Arc::new(Brained {
+            chat: AtomicUsize::new(0),
+            briefs: AtomicUsize::new(0),
+        });
         let mut eng = engine(&dir, "brief-1", client.clone());
         eng.set_brief_model(true);
         let mut texts = Vec::new();
@@ -922,7 +1024,10 @@ mod tests {
         assert_eq!(client.briefs.load(std::sync::atomic::Ordering::SeqCst), 1);
         assert_eq!(client.chat.load(std::sync::atomic::Ordering::SeqCst), 2);
         let stored = crate::brain::read_briefs(&dir);
-        let got: Vec<(String, u32, Vec<String>, String)> = stored.iter().map(|l| (l.chat_id.clone(), l.turn, l.lines(), l.brief.by.clone())).collect();
+        let got: Vec<(String, u32, Vec<String>, String)> = stored
+            .iter()
+            .map(|l| (l.chat_id.clone(), l.turn, l.lines(), l.brief.by.clone()))
+            .collect();
         assert_eq!(
             got,
             vec![
@@ -930,11 +1035,17 @@ mod tests {
                     "chat-1".into(),
                     2,
                     vec![
-                        "Brief: repair × critical, done = services, packages, boot errors, ports".into(),
-                        "Policy: repair × critical, goal quality (mistakes can break the system)".into(),
+                        "Brief: repair × critical, done = services, packages, boot errors, ports"
+                            .into(),
+                        "Policy: repair × critical, goal quality (mistakes can break the system)"
+                            .into(),
                         "Talk: findings card, reply under 80 words".into(),
                         // The repair playbook for the OS the test runs on (CI runs Linux and Windows).
-                        if cfg!(windows) { "Playbook: Repair Windows".into() } else { "Playbook: Repair Linux".into() },
+                        if cfg!(windows) {
+                            "Playbook: Repair Windows".into()
+                        } else {
+                            "Playbook: Repair Linux".into()
+                        },
                     ],
                     "rules".into()
                 ),
@@ -959,16 +1070,36 @@ mod tests {
                 care: "critical".into(),
                 domain: "system".into(),
                 policy: "repair × critical".into(),
-                playbook: if cfg!(windows) { "repair-windows".into() } else { "repair-linux".into() },
+                playbook: if cfg!(windows) {
+                    "repair-windows".into()
+                } else {
+                    "repair-linux".into()
+                },
             }
         );
         assert_eq!(stored[1].run_brain().playbook, "files");
         // Off (the default): an unclear ask makes no extra request.
-        let quiet = Arc::new(Brained { chat: AtomicUsize::new(0), briefs: AtomicUsize::new(0) });
+        let quiet = Arc::new(Brained {
+            chat: AtomicUsize::new(0),
+            briefs: AtomicUsize::new(0),
+        });
         let mut off = engine(&dir, "brief-2", quiet.clone());
-        off.prompt("the thing from yesterday", None, &mut |_| {}).unwrap();
-        assert_eq!((quiet.chat.load(std::sync::atomic::Ordering::SeqCst), quiet.briefs.load(std::sync::atomic::Ordering::SeqCst)), (1, 0));
-        assert_eq!(crate::brain::read_briefs(&dir).last().map(|l| l.brief.by.clone()).as_deref(), Some("default"));
+        off.prompt("the thing from yesterday", None, &mut |_| {})
+            .unwrap();
+        assert_eq!(
+            (
+                quiet.chat.load(std::sync::atomic::Ordering::SeqCst),
+                quiet.briefs.load(std::sync::atomic::Ordering::SeqCst)
+            ),
+            (1, 0)
+        );
+        assert_eq!(
+            crate::brain::read_briefs(&dir)
+                .last()
+                .map(|l| l.brief.by.clone())
+                .as_deref(),
+            Some("default")
+        );
         drop(_guard);
         let _ = std::fs::remove_dir_all(dir);
     }
@@ -1208,9 +1339,15 @@ mod tests {
 
     #[test]
     fn stamp_halt_uses_the_cabin_rule() {
-        let halt = StampHalt { started_ms: 10, read: || Some(11u64) };
+        let halt = StampHalt {
+            started_ms: 10,
+            read: || Some(11u64),
+        };
         assert!(halt.halted());
-        let same = StampHalt { started_ms: 10, read: || Some(10u64) };
+        let same = StampHalt {
+            started_ms: 10,
+            read: || Some(10u64),
+        };
         assert!(!same.halted());
     }
 }

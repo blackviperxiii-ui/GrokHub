@@ -51,22 +51,30 @@ mod user_model;
 mod write;
 
 pub use dream::{
-    dream_report_path, latest_dream, DreamMerge, DreamOpts, DreamReport, DreamRetire, PruneReport, DREAM_DUP_JACCARD,
-    DREAM_PROPOSE_CONFIDENCE, DREAM_RECENT_DAYS, DREAM_STALE_BELOW, DREAM_TAG_JACCARD, DREAM_TTL_DAYS,
+    dream_report_path, latest_dream, DreamMerge, DreamOpts, DreamReport, DreamRetire, PruneReport,
+    DREAM_DUP_JACCARD, DREAM_PROPOSE_CONFIDENCE, DREAM_RECENT_DAYS, DREAM_STALE_BELOW,
+    DREAM_TAG_JACCARD, DREAM_TTL_DAYS,
 };
-pub use import::{durable_chip_prefs, import_legacy, write_import_report, ImportReport, ImportTally};
-pub use schema::{Edge, EdgeRel, Node, NodeDraft, NodeHit, NodeId, NodeType, Sensitivity, AMR_SCHEMA};
+pub use import::{
+    durable_chip_prefs, import_legacy, write_import_report, ImportReport, ImportTally,
+};
 pub use index::{AmrIndex, INDEX_FILE};
+pub use schema::{
+    Edge, EdgeRel, Node, NodeDraft, NodeHit, NodeId, NodeType, Sensitivity, AMR_SCHEMA,
+};
 pub use signal::{
-    detect_correction, import_pulse_ledger, note_card_signal, note_chat, note_usage, note_user_edit, pulse_ledger_dual,
-    unsafe_to_learn, user_model_type, ChatLine, Correction, Noted, Usage,
+    detect_correction, import_pulse_ledger, note_card_signal, note_chat, note_usage,
+    note_user_edit, pulse_ledger_dual, unsafe_to_learn, user_model_type, ChatLine, Correction,
+    Noted, Usage,
 };
 pub use store::{AmrStore, ForgetReport, RecallReport};
 pub use user_model::{
-    edit_node, forget_node, memory_rows, memory_text, reflect_diff, strip_forgotten, MemoryRow, ReflectDiff, SourceLink,
-    UserForget, REFLECT_MIN_CONFIDENCE,
+    edit_node, forget_node, memory_rows, memory_text, reflect_diff, strip_forgotten, MemoryRow,
+    ReflectDiff, SourceLink, UserForget, REFLECT_MIN_CONFIDENCE,
 };
-pub use write::{line_id, node_type_for, remember_line, sensitivity_for, trail_id, LineWrite, Remembered};
+pub use write::{
+    line_id, node_type_for, remember_line, sensitivity_for, trail_id, LineWrite, Remembered,
+};
 
 /// `source` of a node a local indexer wrote (Spike-8a): `scope:<scope key>`.
 /// The dream leaves these alone; "Forget these" in Settings retires them.
@@ -712,19 +720,33 @@ Glow stays white.
         std::fs::write(&old, "not a node\n").unwrap();
         std::fs::write(&fresh, "").unwrap();
         let hour_ago = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
-        std::fs::File::options().write(true).open(&old).unwrap().set_modified(hour_ago).unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&old)
+            .unwrap()
+            .set_modified(hour_ago)
+            .unwrap();
 
         assert_eq!(store.recall("keepword").len(), 1);
         assert!(!old.exists(), "the damaged node is moved out of nodes/*.md");
         assert!(fresh.exists(), "a file still being written is left alone");
-        let noted: Vec<_> = crate::recovered::drain().into_iter().filter(|r| r.path == old).collect();
+        let noted: Vec<_> = crate::recovered::drain()
+            .into_iter()
+            .filter(|r| r.path == old)
+            .collect();
         assert_eq!(noted.len(), 1);
         assert_eq!(noted[0].restored, crate::recovered::LEFT_OUT);
-        assert_eq!(std::fs::read_to_string(&noted[0].aside).unwrap(), "not a node\n");
+        assert_eq!(
+            std::fs::read_to_string(&noted[0].aside).unwrap(),
+            "not a node\n"
+        );
         let card = crate::recovered_card(&noted[0], 7);
         assert_eq!(card.title, "Memory note broken.md was unreadable");
         assert!(
-            card.body.as_deref().unwrap_or("").starts_with("Left it out of memory, kept a copy at "),
+            card.body
+                .as_deref()
+                .unwrap_or("")
+                .starts_with("Left it out of memory, kept a copy at "),
             "{:?}",
             card.body
         );
@@ -750,52 +772,89 @@ Glow stays white.
             let rest = sealed
                 .strip_prefix(&format!("fake:{}:", hex::encode(aad)))
                 .ok_or("wrong node")?;
-            String::from_utf8(hex::decode(rest).map_err(|e| e.to_string())?).map_err(|e| e.to_string())
+            String::from_utf8(hex::decode(rest).map_err(|e| e.to_string())?)
+                .map_err(|e| e.to_string())
         }
     }
 
     #[test]
     fn personal_nodes_are_sealed_and_a_locked_sealer_writes_nothing() {
         let tmp = Tmp::new("sealed");
-        let sealer = std::sync::Arc::new(FakeSealer { locked: false.into() });
+        let sealer = std::sync::Arc::new(FakeSealer {
+            locked: false.into(),
+        });
         let store = AmrStore::at(&tmp.path).with_sealer(sealer.clone());
         store.init().unwrap();
-        let personal = NodeDraft { sensitivity: Sensitivity::Personal, ..draft("fact-home", "Home harbor is Pier 9.") };
+        let personal = NodeDraft {
+            sensitivity: Sensitivity::Personal,
+            ..draft("fact-home", "Home harbor is Pier 9.")
+        };
         store.remember(&personal).unwrap();
-        store.remember(&draft("fact-dock", "Dock layout is plain.")).unwrap();
+        store
+            .remember(&draft("fact-dock", "Dock layout is plain."))
+            .unwrap();
         let sealed = tmp.path.join("nodes/fact-home.sealed");
         let text = std::fs::read_to_string(&sealed).unwrap();
-        assert!(!text.contains("Pier 9") && !text.contains("harbor"), "{text}");
+        assert!(
+            !text.contains("Pier 9") && !text.contains("harbor"),
+            "{text}"
+        );
         assert!(!tmp.path.join("nodes/fact-home.md").exists());
-        assert!(tmp.path.join("nodes/fact-dock.md").exists(), "plain nodes stay plain");
+        assert!(
+            tmp.path.join("nodes/fact-dock.md").exists(),
+            "plain nodes stay plain"
+        );
         let hits = store.recall("pier");
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].id, "fact-home");
-        assert_eq!(store.remember(&personal), Err(AmrError::DuplicateId("fact-home".into())));
         assert_eq!(
-            store.remember(&NodeDraft { sensitivity: Sensitivity::Plain, ..personal.clone() }),
+            store.remember(&personal),
+            Err(AmrError::DuplicateId("fact-home".into()))
+        );
+        assert_eq!(
+            store.remember(&NodeDraft {
+                sensitivity: Sensitivity::Plain,
+                ..personal.clone()
+            }),
             Err(AmrError::DuplicateId("fact-home".into())),
             "a sealed id can't be shadowed by a plain one"
         );
-        store.link("fact-home", "fact-dock", EdgeRel::References).unwrap();
+        store
+            .link("fact-home", "fact-dock", EdgeRel::References)
+            .unwrap();
 
         // Locked: recall skips sealed nodes and says so; writes pause and leave no file.
-        sealer.locked.store(true, std::sync::atomic::Ordering::SeqCst);
+        sealer
+            .locked
+            .store(true, std::sync::atomic::Ordering::SeqCst);
         let report = store.recall_report("pier");
         assert!(report.hits.is_empty());
         assert_eq!(report.locked, 1);
         assert_eq!(report.why.as_deref(), Some("Private data is locked"));
         assert_eq!(store.recall("layout").len(), 1, "plain nodes still recall");
-        let more = NodeDraft { sensitivity: Sensitivity::Sensitive, ..draft("fact-card", "Card ends 4242.") };
-        assert_eq!(store.remember(&more), Err(AmrError::Paused("Private data is locked".into())));
+        let more = NodeDraft {
+            sensitivity: Sensitivity::Sensitive,
+            ..draft("fact-card", "Card ends 4242.")
+        };
+        assert_eq!(
+            store.remember(&more),
+            Err(AmrError::Paused("Private data is locked".into()))
+        );
         assert!(!tmp.path.join("nodes/fact-card.sealed").exists());
-        assert!(!tmp.path.join("nodes/fact-card.md").exists(), "never a plaintext fallback");
+        assert!(
+            !tmp.path.join("nodes/fact-card.md").exists(),
+            "never a plaintext fallback"
+        );
 
         // No sealer at all (a store opened without one): same, fail closed.
         let bare = AmrStore::at(&tmp.path);
         assert_eq!(bare.recall_report("pier").locked, 1);
         assert!(matches!(bare.remember(&more), Err(AmrError::Paused(_))));
-        assert_eq!(std::fs::read_to_string(&sealed).unwrap(), text, "nothing dropped");
+        assert_eq!(
+            std::fs::read_to_string(&sealed).unwrap(),
+            text,
+            "nothing dropped"
+        );
     }
 
     fn node_files(root: &std::path::Path) -> Vec<String> {
@@ -815,25 +874,53 @@ Glow stays white.
         let tmp = Tmp::new("forget");
         let mut store = AmrStore::at(&tmp.path);
         store.init().unwrap();
-        store.remember(&draft("fact-harbor", "harbor light\n")).unwrap();
-        store.remember(&draft("fact-quay", "quay harbor lamp\n")).unwrap();
-        store.remember(&draft("fact-keel", "keel stays white\n")).unwrap();
+        store
+            .remember(&draft("fact-harbor", "harbor light\n"))
+            .unwrap();
+        store
+            .remember(&draft("fact-quay", "quay harbor lamp\n"))
+            .unwrap();
+        store
+            .remember(&draft("fact-keel", "keel stays white\n"))
+            .unwrap();
         let before = std::fs::read(tmp.path.join("nodes/fact-harbor.md")).unwrap();
 
         MemoryEngine::forget(&store, "fact-harbor").unwrap();
         assert!(store.is_forgotten("fact-harbor"));
-        assert_eq!(std::fs::read(tmp.path.join("nodes/fact-harbor.md")).unwrap(), before, "the node stays on disk");
+        assert_eq!(
+            std::fs::read(tmp.path.join("nodes/fact-harbor.md")).unwrap(),
+            before,
+            "the node stays on disk"
+        );
         let marker = std::fs::read_to_string(tmp.path.join("nodes/fact-harbor.tombstone")).unwrap();
-        assert!(marker.starts_with("forgotten: ") && marker.ends_with("Z\n"), "{marker}");
-        assert_eq!(MemoryEngine::recall(&store, "harbor"), vec!["amr:fact-quay: quay harbor lamp".to_string()]);
+        assert!(
+            marker.starts_with("forgotten: ") && marker.ends_with("Z\n"),
+            "{marker}"
+        );
+        assert_eq!(
+            MemoryEngine::recall(&store, "harbor"),
+            vec!["amr:fact-quay: quay harbor lamp".to_string()]
+        );
         // A second forget is a no-op, a missing id is an error.
         store.forget("fact-harbor").unwrap();
-        assert_eq!(store.forget("fact-nope"), Err(AmrError::MissingNode("fact-nope".into())));
-        assert_eq!(store.forget("../etc"), Err(AmrError::BadId("../etc".into())));
+        assert_eq!(
+            store.forget("fact-nope"),
+            Err(AmrError::MissingNode("fact-nope".into()))
+        );
+        assert_eq!(
+            store.forget("../etc"),
+            Err(AmrError::BadId("../etc".into()))
+        );
 
         // forget_matching tombstones every live match and says which.
         let report = store.forget_matching("HARBOR").unwrap();
-        assert_eq!(report, ForgetReport { forgotten: vec!["fact-quay".into()], locked: 0 });
+        assert_eq!(
+            report,
+            ForgetReport {
+                forgotten: vec!["fact-quay".into()],
+                locked: 0
+            }
+        );
         assert!(store.recall("harbor").is_empty());
         assert_eq!(store.recall("keel").len(), 1);
         assert_eq!(store.node_file_count(), 3);
@@ -865,9 +952,15 @@ Glow stays white.
             ids
         };
         // The dream merged A into B (edge B→A, A tombstoned), then B was forgotten.
-        store.remember(&draft("fact-old", "dark theme in the editor\n")).unwrap();
-        store.remember(&draft("fact-new", "the dark theme in the editor\n")).unwrap();
-        store.link("fact-new", "fact-old", EdgeRel::Supersedes).unwrap();
+        store
+            .remember(&draft("fact-old", "dark theme in the editor\n"))
+            .unwrap();
+        store
+            .remember(&draft("fact-new", "the dark theme in the editor\n"))
+            .unwrap();
+        store
+            .link("fact-new", "fact-old", EdgeRel::Supersedes)
+            .unwrap();
         store.forget("fact-old").unwrap();
         store.forget("fact-new").unwrap();
         assert!(live(&store).is_empty());
@@ -876,12 +969,27 @@ Glow stays white.
         assert_eq!(live(&store), vec!["fact-old".to_string()]);
 
         // Edit tabs → spaces (spaces supersedes tabs), then back to tabs.
-        store.remember(&draft("fact-tabs", "I prefer tabs\n")).unwrap();
-        store.remember(&draft("fact-spaces", "I prefer spaces\n")).unwrap();
-        store.link("fact-spaces", "fact-tabs", EdgeRel::Supersedes).unwrap();
-        assert_eq!(live(&store), vec!["fact-old".to_string(), "fact-spaces".to_string()]);
-        store.link("fact-tabs", "fact-spaces", EdgeRel::Supersedes).unwrap();
-        assert_eq!(live(&store), vec!["fact-old".to_string(), "fact-tabs".to_string()], "the edit back leaves tabs, not nothing");
+        store
+            .remember(&draft("fact-tabs", "I prefer tabs\n"))
+            .unwrap();
+        store
+            .remember(&draft("fact-spaces", "I prefer spaces\n"))
+            .unwrap();
+        store
+            .link("fact-spaces", "fact-tabs", EdgeRel::Supersedes)
+            .unwrap();
+        assert_eq!(
+            live(&store),
+            vec!["fact-old".to_string(), "fact-spaces".to_string()]
+        );
+        store
+            .link("fact-tabs", "fact-spaces", EdgeRel::Supersedes)
+            .unwrap();
+        assert_eq!(
+            live(&store),
+            vec!["fact-old".to_string(), "fact-tabs".to_string()],
+            "the edit back leaves tabs, not nothing"
+        );
     }
 
     #[test]
@@ -895,16 +1003,29 @@ Glow stays white.
             confidence: 0.7,
             revive,
         };
-        let first = remember_line(&store, &line("I prefer the harbor light on", false), 1_791_331_200_000).unwrap();
+        let first = remember_line(
+            &store,
+            &line("I prefer the harbor light on", false),
+            1_791_331_200_000,
+        )
+        .unwrap();
         let id = line_id("I prefer the harbor light on");
         assert_eq!(id.len(), "mem-".len() + 12);
         assert!(id.starts_with("mem-"), "{id}");
         assert_eq!(first, Remembered::New(id.clone()));
         assert_eq!(line_id("  i PREFER the   harbor light on "), id);
-        let again = remember_line(&store, &line("i prefer the harbor light on", false), 1_791_331_300_000).unwrap();
+        let again = remember_line(
+            &store,
+            &line("i prefer the harbor light on", false),
+            1_791_331_300_000,
+        )
+        .unwrap();
         assert_eq!(again, Remembered::Known(id.clone()));
         assert_eq!(node_files(&tmp.path), vec![format!("{id}.md")]);
-        let node = Node::from_markdown(&std::fs::read_to_string(tmp.path.join(format!("nodes/{id}.md"))).unwrap()).unwrap();
+        let node = Node::from_markdown(
+            &std::fs::read_to_string(tmp.path.join(format!("nodes/{id}.md"))).unwrap(),
+        )
+        .unwrap();
         assert_eq!(node.node_type, NodeType::Preference);
         assert_eq!(node.source, "chat:thread-7");
         assert_eq!(node.created, "2026-10-07T00:00:00Z");
@@ -921,31 +1042,56 @@ Glow stays white.
         let secret = "sk-abcdefghijklmnopqrstuv";
         let keyed = remember_line(
             &store,
-            &LineWrite { text: "the dock key is sk-abcdefghijklmnopqrstuv", ..line("", false) },
+            &LineWrite {
+                text: "the dock key is sk-abcdefghijklmnopqrstuv",
+                ..line("", false)
+            },
             1,
         )
         .unwrap();
-        let disk = std::fs::read_to_string(tmp.path.join(format!("nodes/{}.md", keyed.id()))).unwrap();
+        let disk =
+            std::fs::read_to_string(tmp.path.join(format!("nodes/{}.md", keyed.id()))).unwrap();
         assert!(!disk.contains(secret), "{disk}");
         assert!(disk.contains("the dock key is [redacted]\n"), "{disk}");
         assert_eq!(keyed.id(), line_id("the dock key is [redacted]"));
 
         // Personal with no sealer: paused, and no file of either kind.
-        let personal = LineWrite { text: "my email is ada@example.com", ..line("", false) };
+        let personal = LineWrite {
+            text: "my email is ada@example.com",
+            ..line("", false)
+        };
         assert_eq!(sensitivity_for(personal.text), Sensitivity::Personal);
-        assert!(matches!(remember_line(&store, &personal, 1), Err(AmrError::Paused(_))));
+        assert!(matches!(
+            remember_line(&store, &personal, 1),
+            Err(AmrError::Paused(_))
+        ));
         let pid = line_id(personal.text);
         assert!(!tmp.path.join(format!("nodes/{pid}.md")).exists());
         assert!(!tmp.path.join(format!("nodes/{pid}.sealed")).exists());
-        assert_eq!(node_files(&tmp.path).len(), 2, "{:?}", node_files(&tmp.path));
         assert_eq!(
-            remember_line(&store, &LineWrite { text: "  ", ..line("", false) }, 1),
+            node_files(&tmp.path).len(),
+            2,
+            "{:?}",
+            node_files(&tmp.path)
+        );
+        assert_eq!(
+            remember_line(
+                &store,
+                &LineWrite {
+                    text: "  ",
+                    ..line("", false)
+                },
+                1
+            ),
             Err(AmrError::BadFrontmatter("body".into()))
         );
         assert_eq!(node_type_for("the ferry leaves at nine"), NodeType::Fact);
     }
 
-    fn import_fixture() -> (Vec<crate::learning::LearningInsight>, crate::chips::ChipMemory) {
+    fn import_fixture() -> (
+        Vec<crate::learning::LearningInsight>,
+        crate::chips::ChipMemory,
+    ) {
         let insight = |key: &str, text: &str, hits: u32| crate::learning::LearningInsight {
             key: key.into(),
             text: text.into(),
@@ -988,9 +1134,18 @@ Glow stays white.
         assert_eq!(
             durable_chip_prefs(&chips),
             vec![
-                ("last_slash".to_string(), "From home they reach for /imagine.".to_string()),
-                ("last_surface".to_string(), "From home they come back to skills.".to_string()),
-                ("pick:chat:plan".to_string(), "They pick the \"Plan the week\" chip.".to_string()),
+                (
+                    "last_slash".to_string(),
+                    "From home they reach for /imagine.".to_string()
+                ),
+                (
+                    "last_surface".to_string(),
+                    "From home they come back to skills.".to_string()
+                ),
+                (
+                    "pick:chat:plan".to_string(),
+                    "They pick the \"Plan the week\" chip.".to_string()
+                ),
             ]
         );
         let report = import_legacy(&store, &insights, &chips, 1_791_331_200_000);
@@ -1004,14 +1159,28 @@ Glow stays white.
         );
         let files = node_files(&tmp.path);
         assert_eq!(files.len(), 10, "{files:?}");
-        assert!(files.iter().all(|f| f.starts_with("import-") && f.len() == "import-".len() + 12 + ".md".len()), "{files:?}");
+        assert!(
+            files
+                .iter()
+                .all(|f| f.starts_with("import-") && f.len() == "import-".len() + 12 + ".md".len()),
+            "{files:?}"
+        );
         let path = write_import_report(&store, &report).unwrap();
         assert_eq!(path, tmp.path.join("dreams").join("import-2026-10-07.md"));
         let md = std::fs::read_to_string(&path).unwrap();
-        assert!(md.starts_with("# Import 2026-10-07\n\n10 imported, 0 skipped.\n"), "{md}");
-        assert!(md.contains("## learning_state\n\n7 imported, 0 skipped.\n"), "{md}");
+        assert!(
+            md.starts_with("# Import 2026-10-07\n\n10 imported, 0 skipped.\n"),
+            "{md}"
+        );
+        assert!(
+            md.contains("## learning_state\n\n7 imported, 0 skipped.\n"),
+            "{md}"
+        );
         assert!(md.contains("## chips\n\n3 imported, 0 skipped.\n"), "{md}");
-        assert!(!md.contains("nvim") && !md.contains("typed words"), "the report carries counts, not notes: {md}");
+        assert!(
+            !md.contains("nvim") && !md.contains("typed words"),
+            "the report carries counts, not notes: {md}"
+        );
 
         let pref = store.recall("nvim");
         assert_eq!(pref.len(), 1);
@@ -1023,19 +1192,31 @@ Glow stays white.
         assert_eq!(node.source, "learning_state");
         assert_eq!(node.body, "prefer nvim for quick edits\n");
         let tide = &store.recall("high tide")[0];
-        let tide = Node::from_markdown(&std::fs::read_to_string(tmp.path.join(format!("nodes/{}.md", tide.id))).unwrap()).unwrap();
+        let tide = Node::from_markdown(
+            &std::fs::read_to_string(tmp.path.join(format!("nodes/{}.md", tide.id))).unwrap(),
+        )
+        .unwrap();
         assert_eq!(tide.node_type, NodeType::Fact);
         assert_eq!(tide.confidence, 0.9);
         let chip = &store.recall("plan the week")[0];
-        let chip = Node::from_markdown(&std::fs::read_to_string(tmp.path.join(format!("nodes/{}.md", chip.id))).unwrap()).unwrap();
+        let chip = Node::from_markdown(
+            &std::fs::read_to_string(tmp.path.join(format!("nodes/{}.md", chip.id))).unwrap(),
+        )
+        .unwrap();
         assert_eq!(chip.source, "chips");
         assert_eq!(chip.node_type, NodeType::Preference);
-        assert!(store.recall("typed words").is_empty(), "hit values never become nodes");
+        assert!(
+            store.recall("typed words").is_empty(),
+            "hit values never become nodes"
+        );
 
         let second = import_legacy(&store, &insights, &chips, 1_791_331_300_000);
         assert_eq!(second.imported(), 0);
         assert_eq!(second.skipped(), 10);
-        assert_eq!(second.learning_state.skipped.get("already imported"), Some(&7));
+        assert_eq!(
+            second.learning_state.skipped.get("already imported"),
+            Some(&7)
+        );
         assert_eq!(node_files(&tmp.path).len(), 10);
 
         // Habit lines are rebuilt from chips, so they are skipped with a reason.
@@ -1046,6 +1227,12 @@ Glow stays white.
         }];
         let third = import_legacy(&store, &habits, &crate::chips::ChipMemory::default(), 1);
         assert_eq!(third.imported(), 0);
-        assert_eq!(third.learning_state.skipped.get("chip habit, rebuilt from chips each night"), Some(&1));
+        assert_eq!(
+            third
+                .learning_state
+                .skipped
+                .get("chip habit, rebuilt from chips each night"),
+            Some(&1)
+        );
     }
 }

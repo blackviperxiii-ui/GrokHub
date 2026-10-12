@@ -24,8 +24,8 @@
 mod kernel;
 pub mod lessons;
 pub mod loops;
-mod view;
 mod verify;
+mod view;
 
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -34,16 +34,16 @@ use std::time::Duration;
 use crate::harness::{Ladder, Origin, Span};
 
 pub use kernel::{
-    fan_out, run_episode, step_span, EpisodeOut, EpisodeStop, FileParks, KernelIn, Parks, CHECKER_ERROR, DEAD_WORKER,
-    EPISODE_RULES, FANOUT_CAPPED, VERIFY_REJECT, WAITING_ON_YOU,
+    fan_out, run_episode, step_span, EpisodeOut, EpisodeStop, FileParks, KernelIn, Parks,
+    CHECKER_ERROR, DEAD_WORKER, EPISODE_RULES, FANOUT_CAPPED, VERIFY_REJECT, WAITING_ON_YOU,
 };
 pub use verify::{
-    parse_verdict, verify_call, verify_call_at, verify_gate, Observation, Verdict, CHECKER_UNAVAILABLE, ESCALATED_CLASS,
-    JUDGE_SYSTEM, OBSERVATION_CAP,
+    parse_verdict, verify_call, verify_call_at, verify_gate, Observation, Verdict,
+    CHECKER_UNAVAILABLE, ESCALATED_CLASS, JUDGE_SYSTEM, OBSERVATION_CAP,
 };
 pub use view::{
-    clip_bytes, zoom_schema, EpisodeView, FoldDone, Folder, ViewNode, FOLD_CAP_BYTES, FOLD_SYSTEM, VIEW_BUDGET_BYTES,
-    VIEW_HEAD, ZOOM_TOOL,
+    clip_bytes, zoom_schema, EpisodeView, FoldDone, Folder, ViewNode, FOLD_CAP_BYTES, FOLD_SYSTEM,
+    VIEW_BUDGET_BYTES, VIEW_HEAD, ZOOM_TOOL,
 };
 
 /// Steps in a row that move nothing before the worker is told to re-plan.
@@ -82,7 +82,10 @@ pub fn new_episode_id(now_ms: u64) -> String {
 /// "Desktop session · 12 steps · 4 min", the Work-tree group header.
 pub fn episode_header(steps: u32, elapsed: Duration) -> String {
     let unit = if steps == 1 { "step" } else { "steps" };
-    format!("Desktop session · {steps} {unit} · {} min", elapsed.as_secs() / 60)
+    format!(
+        "Desktop session · {steps} {unit} · {} min",
+        elapsed.as_secs() / 60
+    )
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -153,7 +156,12 @@ impl StepShape {
             None => "unknown",
         };
         let goal: String = self.goal_step.chars().take(60).collect();
-        let result: String = self.result.replace('\n', " ").chars().take(STEP_RESULT_CAP).collect();
+        let result: String = self
+            .result
+            .replace('\n', " ")
+            .chars()
+            .take(STEP_RESULT_CAP)
+            .collect();
         format!(
             "#{n} goal={goal:?} tool={} decision={} ui_changed={ui} result={result:?}",
             self.tool, self.decision
@@ -231,7 +239,12 @@ impl Episode {
     /// changed, or when there was no screen reading and it didn't fail. A
     /// park is neutral. True when [`STALL_REPLAN`] steps in a row moved
     /// nothing; the count then starts over.
-    pub fn note_progress(&mut self, decision: &str, ui_changed: Option<bool>, failed: bool) -> bool {
+    pub fn note_progress(
+        &mut self,
+        decision: &str,
+        ui_changed: Option<bool>,
+        failed: bool,
+    ) -> bool {
         if decision == "park" {
             return false;
         }
@@ -264,7 +277,8 @@ impl Episode {
 
     /// No step for [`EPISODE_IDLE`].
     pub fn idle(&self, now_ms: u64) -> bool {
-        self.ended.is_none() && now_ms.saturating_sub(self.last_ms) >= EPISODE_IDLE.as_millis() as u64
+        self.ended.is_none()
+            && now_ms.saturating_sub(self.last_ms) >= EPISODE_IDLE.as_millis() as u64
     }
 
     /// A Steer or a new message: same episode, same parks, new goal step.
@@ -276,7 +290,10 @@ impl Episode {
     }
 
     pub fn header(&self, now_ms: u64) -> String {
-        episode_header(self.steps, Duration::from_millis(now_ms.saturating_sub(self.started_ms)))
+        episode_header(
+            self.steps,
+            Duration::from_millis(now_ms.saturating_sub(self.started_ms)),
+        )
     }
 
     /// An episode marker span (`begin`, `pause`, `resume`, `end`, `fold`).

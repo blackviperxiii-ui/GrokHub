@@ -8,5 +8,8 @@ pub fn load() -> grokhub_core::CardPrefs {
 
 pub fn save(prefs: &grokhub_core::CardPrefs) -> Result<(), String> {
     let body = grokhub_core::card_prefs_json(prefs)?;
-    config::atomic_write(&config::config_dir().join("card_prefs.json"), body.as_bytes())
+    config::atomic_write(
+        &config::config_dir().join("card_prefs.json"),
+        body.as_bytes(),
+    )
 }

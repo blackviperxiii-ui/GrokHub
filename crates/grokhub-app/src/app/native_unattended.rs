@@ -68,8 +68,7 @@ static EPHEMERAL_SPENT: std::sync::Mutex<Option<grokhub_agent::Usage>> =
 
 /// Tokens background jobs spent off the UI thread, by governor kind. The cabin
 /// frame charges them to the governor's per-day budgets.
-static GOVERNED_SPENT: std::sync::Mutex<Vec<(JobKind, u64)>> =
-    std::sync::Mutex::new(Vec::new());
+static GOVERNED_SPENT: std::sync::Mutex<Vec<(JobKind, u64)>> = std::sync::Mutex::new(Vec::new());
 
 /// Input, output and reasoning tokens of one usage.
 fn usage_tokens(u: &grokhub_agent::Usage) -> u64 {
@@ -384,7 +383,9 @@ impl Cabin {
             goal: None,
         };
         std::thread::spawn(move || {
-            let _origin = grokhub_agent::harness::OriginScope::enter(grokhub_agent::harness::Origin::Automation);
+            let _origin = grokhub_agent::harness::OriginScope::enter(
+                grokhub_agent::harness::Origin::Automation,
+            );
             // A resumed loop reports its session's totals: charge only this run.
             let before = if job.resume {
                 grokhub_agent::load_session(&job.session_id)
@@ -453,7 +454,9 @@ impl Cabin {
         self.review_rx = Some(rx);
         self.review_busy = true;
         std::thread::spawn(move || {
-            let _origin = grokhub_agent::harness::OriginScope::enter(grokhub_agent::harness::Origin::Proactive);
+            let _origin = grokhub_agent::harness::OriginScope::enter(
+                grokhub_agent::harness::Origin::Proactive,
+            );
             if config::read_memory(&mem_name) != mem_body {
                 let _ = config::write_memory(&mem_name, &mem_body);
             }
@@ -574,7 +577,9 @@ impl Cabin {
         let workspace = self.grok_cwd();
         let goal = kind.and_then(|k| self.bg_goal(k));
         std::thread::spawn(move || {
-            let _origin = grokhub_agent::harness::OriginScope::enter(grokhub_agent::harness::Origin::Proactive);
+            let _origin = grokhub_agent::harness::OriginScope::enter(
+                grokhub_agent::harness::Origin::Proactive,
+            );
             let text =
                 fast_text(&ready, &workspace, &prompt, kind, goal.as_ref()).unwrap_or_default();
             let _ = tx.send(text);
@@ -582,7 +587,11 @@ impl Cabin {
     }
 
     pub(super) fn spawn_native_digest(&mut self) {
-        let prompt = grokhub_core::pulse::feed_prompt(&self.digest_steer, &self.digest_interests, &self.cfg.feed_instructions);
+        let prompt = grokhub_core::pulse::feed_prompt(
+            &self.digest_steer,
+            &self.digest_interests,
+            &self.cfg.feed_instructions,
+        );
         let ready = match unattended_model(self) {
             Ok(ready) => ready,
             Err(err) => {
@@ -704,19 +713,45 @@ mod tests {
     #[test]
     fn every_runner_goes_native_with_no_cli_path() {
         for (src, name, native) in [
-            (include_str!("chat_kick.rs"), "kick_model", "kick_native_turn"),
+            (
+                include_str!("chat_kick.rs"),
+                "kick_model",
+                "kick_native_turn",
+            ),
             (include_str!("night.rs"), "fire_loop", "native_loop"),
-            (include_str!("night.rs"), "start_scheduled_run", "start_bg_task"),
+            (
+                include_str!("night.rs"),
+                "start_scheduled_run",
+                "start_bg_task",
+            ),
             (include_str!("night.rs"), "spawn_review", "native_review"),
             (include_str!("mod.rs"), "drain_inbox", "send_scheduled_chat"),
-            (include_str!("feed_ui.rs"), "maybe_suggest_ideas", "native_ideas"),
-            (include_str!("feed_ui.rs"), "follow_feed_lookup", "native_digest"),
+            (
+                include_str!("feed_ui.rs"),
+                "maybe_suggest_ideas",
+                "native_ideas",
+            ),
+            (
+                include_str!("feed_ui.rs"),
+                "follow_feed_lookup",
+                "native_digest",
+            ),
             (include_str!("chips.rs"), "spawn_chip_llm", "native_chips"),
-            (include_str!("chips.rs"), "spawn_greeting_llm", "native_greeting"),
+            (
+                include_str!("chips.rs"),
+                "spawn_greeting_llm",
+                "native_greeting",
+            ),
         ] {
             let body = fn_body(src, name);
             assert!(body.contains(native), "{name}: {body}");
-            for gone in ["find_grok", "spawn_grok_p_stream", "grok_user_stdout_wait", "cabin_fast_llm", "native_engine()"] {
+            for gone in [
+                "find_grok",
+                "spawn_grok_p_stream",
+                "grok_user_stdout_wait",
+                "cabin_fast_llm",
+                "native_engine()",
+            ] {
                 assert!(!body.contains(gone), "{name} still has {gone}");
             }
         }
@@ -1166,10 +1201,19 @@ mod tests {
         assert!(!plain.contains("Personality:"), "{plain}");
         cabin.cfg.personality = "pirate".into();
         let chat = cabin.chat_rules();
-        assert!(chat.starts_with("Personality: Pirate. Talk like a cheerful pirate"), "{chat}");
-        assert!(chat.ends_with(&plain), "the cabin rules still come last: {chat}");
+        assert!(
+            chat.starts_with("Personality: Pirate. Talk like a cheerful pirate"),
+            "{chat}"
+        );
+        assert!(
+            chat.ends_with(&plain),
+            "the cabin rules still come last: {chat}"
+        );
         let night = native_rules(&cabin, &root, "");
-        assert!(!night.contains("Personality:"), "night jobs stay neutral: {night}");
+        assert!(
+            !night.contains("Personality:"),
+            "night jobs stay neutral: {night}"
+        );
         assert!(night.contains(grokhub_core::cabin_rules::CABIN_DESKTOP_RULES));
         assert!(
             night.contains("<dangerous_actions>"),
@@ -1201,18 +1245,29 @@ mod tests {
                 if !name.ends_with(".rs") || name == "tests.rs" {
                     continue;
                 }
-                let text = std::fs::read_to_string(&path).unwrap().replace("\r\n", "\n");
+                let text = std::fs::read_to_string(&path)
+                    .unwrap()
+                    .replace("\r\n", "\n");
                 let live = text.split("\n#[cfg(test)]\nmod tests").next().unwrap();
                 let reads_field = live.match_indices(".personality").any(|(at, m)| {
-                    !live[at + m.len()..].starts_with(|c: char| c.is_ascii_alphanumeric() || c == '_')
+                    !live[at + m.len()..]
+                        .starts_with(|c: char| c.is_ascii_alphanumeric() || c == '_')
                 });
                 if live.contains("personality::") || reads_field {
-                    readers.insert(path.strip_prefix(&src).unwrap().to_string_lossy().replace('\\', "/"));
+                    readers.insert(
+                        path.strip_prefix(&src)
+                            .unwrap()
+                            .to_string_lossy()
+                            .replace('\\', "/"),
+                    );
                 }
             }
         }
         let want: std::collections::BTreeSet<String> =
-            ["app/native_engine.rs", "app/personality_ui.rs"].iter().map(|s| s.to_string()).collect();
+            ["app/native_engine.rs", "app/personality_ui.rs"]
+                .iter()
+                .map(|s| s.to_string())
+                .collect();
         assert_eq!(readers, want);
     }
 }

@@ -146,7 +146,11 @@ fn default_enabled() -> bool {
 pub fn normalize_times(time: &str, times: &[String]) -> Vec<String> {
     let mut out = Vec::new();
     let mut seen = std::collections::BTreeSet::new();
-    for t in times.iter().map(|s| s.as_str()).chain(std::iter::once(time)) {
+    for t in times
+        .iter()
+        .map(|s| s.as_str())
+        .chain(std::iter::once(time))
+    {
         let Some(min) = hm_min(t) else {
             continue;
         };
@@ -356,7 +360,12 @@ pub fn parse_nl_automation(text: &str) -> Option<Automation> {
         let mins: u32 = after
             .split_whitespace()
             .next()
-            .and_then(|s| s.trim_end_matches("mins").trim_end_matches("min").parse().ok())
+            .and_then(|s| {
+                s.trim_end_matches("mins")
+                    .trim_end_matches("min")
+                    .parse()
+                    .ok()
+            })
             .unwrap_or(15)
             .max(1);
         let name = t
@@ -394,7 +403,10 @@ pub fn parse_nl_automation(text: &str) -> Option<Automation> {
     let mut toks = clock_src.split_whitespace();
     let first = toks.next().unwrap_or("9:00");
     // "9 pm" splits into two words; "9pm" does not.
-    let (hh, mm) = match toks.next().filter(|s| matches!(s.trim_end_matches(','), "am" | "pm")) {
+    let (hh, mm) = match toks
+        .next()
+        .filter(|s| matches!(s.trim_end_matches(','), "am" | "pm"))
+    {
         Some(half) => parse_clock_token(&format!("{first}{half}")),
         None => parse_clock_token(first),
     }
@@ -920,7 +932,10 @@ mod tests {
         };
         let line = relative_when(26 * 60 * 60_000, monday);
         assert_eq!(line, "Tue 10:00 PM");
-        assert!(!line.contains("in 1 day") && !line.contains("in 1h"), "{line}");
+        assert!(
+            !line.contains("in 1 day") && !line.contains("in 1h"),
+            "{line}"
+        );
     }
 
     #[test]
@@ -935,7 +950,9 @@ mod tests {
             user_asked_to_schedule("remind me every weekday at 9 to summarize the board"),
             "Night compose and an explicit ask still save a job"
         );
-        assert!(user_asked_to_schedule("add an automation: heartbeat every 15 min"));
+        assert!(user_asked_to_schedule(
+            "add an automation: heartbeat every 15 min"
+        ));
         assert!(
             !user_asked_to_schedule("what is rust"),
             "a normal question must not arm a night job"
@@ -955,7 +972,10 @@ mod tests {
         assert!(skip_automation("ok", 1));
         assert!(!skip_automation("work to do", 0));
         assert_eq!(night_check_command("  "), None);
-        assert_eq!(night_check_command("test -f /tmp/ready"), Some("test -f /tmp/ready"));
+        assert_eq!(
+            night_check_command("test -f /tmp/ready"),
+            Some("test -f /tmp/ready")
+        );
         assert_eq!(night_check_exit_code("$ cmd\nexit 0\n"), 0);
         assert_eq!(night_check_exit_code("$ cmd\nexit 1\n"), 1);
         assert_eq!(
@@ -967,9 +987,16 @@ mod tests {
         assert!(skip_automation("ready", night_check_exit_code("exit 1")));
         assert!(!skip_automation("ready", night_check_exit_code("exit 0")));
         assert_eq!(night_check_stdout("$ cmd\nexit 0 · 3ms\n"), "");
-        assert_eq!(night_check_stdout("$ cmd\nexit 0 · 3ms\ndirty\n"), "dirty\n");
-        assert!(skip_night_check_receipt("$ git status --porcelain\nexit 0 · 3ms\n"));
-        assert!(!skip_night_check_receipt("$ git status --porcelain\nexit 0 · 3ms\n M src.rs\n"));
+        assert_eq!(
+            night_check_stdout("$ cmd\nexit 0 · 3ms\ndirty\n"),
+            "dirty\n"
+        );
+        assert!(skip_night_check_receipt(
+            "$ git status --porcelain\nexit 0 · 3ms\n"
+        ));
+        assert!(!skip_night_check_receipt(
+            "$ git status --porcelain\nexit 0 · 3ms\n M src.rs\n"
+        ));
         let clock = LocalClock {
             now_ms: 1_000,
             weekday: 3,
@@ -1006,17 +1033,28 @@ mod tests {
             ..clock
         };
         slow.next_run = Some(compute_next_run(&slow, at));
-        assert_eq!(slow.next_run, Some(1_000 + day), "heartbeat gaps cap at a day");
+        assert_eq!(
+            slow.next_run,
+            Some(1_000 + day),
+            "heartbeat gaps cap at a day"
+        );
         assert_eq!(
             due_automations(std::slice::from_ref(&slow), 1_000 + day).len(),
             1,
             "a heartbeat is due when its capped next run comes up"
         );
-        assert_eq!(automation_schedule_label(&slow), "every 24h", "the label shows the cap");
+        assert_eq!(
+            automation_schedule_label(&slow),
+            "every 24h",
+            "the label shows the cap"
+        );
         assert!(automation_blocked_by_policy(true, true, 3));
         assert!(!automation_blocked_by_policy(false, true, 3));
         assert_eq!(replay_automation_target("replay last"), Some("last"));
-        assert_eq!(replay_automation_target("every day at 21, replay last"), Some("last"));
+        assert_eq!(
+            replay_automation_target("every day at 21, replay last"),
+            Some("last")
+        );
         assert_eq!(replay_automation_target("REPLAY desk-1"), Some("desk-1"));
         assert!(night_counts_run(None), "a chat night job still counts");
         assert!(night_counts_run(Some(true)));
@@ -1066,7 +1104,10 @@ mod tests {
             health: Default::default(),
         };
         let check_skip = mark_automation_skipped(once.clone(), 1_000, clock);
-        assert!(check_skip.enabled, "a gated skip must not disable once jobs");
+        assert!(
+            check_skip.enabled,
+            "a gated skip must not disable once jobs"
+        );
         assert_eq!(check_skip.run_count, 0);
         let ran = mark_automation_ran(once, 1_000);
         assert!(!ran.enabled);
@@ -1134,10 +1175,8 @@ mod tests {
 
     #[test]
     fn teach_drops_the_internal_rewind_snapshot() {
-        let rewind = crate::rewind::rewind_copy_cmd(
-            "/home/j/.config/GrokHub/rewind/snap",
-            "/home/j/proj",
-        );
+        let rewind =
+            crate::rewind::rewind_copy_cmd("/home/j/.config/GrokHub/rewind/snap", "/home/j/proj");
         let real_cp = "cp notes.md /tmp/notes.md".to_string();
         let steps = vec![rewind.clone(), real_cp.clone(), "git status --short".into()];
         let kept = teachable_steps(&steps);
@@ -1156,8 +1195,16 @@ mod tests {
         else {
             panic!("the schedule still saves when the only step was a snapshot");
         };
-        assert!(!only.instructions.contains("cp -a"), "{}", only.instructions);
-        assert!(!only.instructions.contains("Follow along:"), "{}", only.instructions);
+        assert!(
+            !only.instructions.contains("cp -a"),
+            "{}",
+            only.instructions
+        );
+        assert!(
+            !only.instructions.contains("Follow along:"),
+            "{}",
+            only.instructions
+        );
     }
 
     fn job(id: &str) -> Automation {

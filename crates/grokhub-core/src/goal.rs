@@ -34,11 +34,7 @@ pub fn parse_fast_topics(reply: &str) -> Vec<String> {
     let Some(line) = line else {
         return Vec::new();
     };
-    let rest = line
-        .split_once(':')
-        .map(|(_, r)| r)
-        .unwrap_or(line)
-        .trim();
+    let rest = line.split_once(':').map(|(_, r)| r).unwrap_or(line).trim();
     if rest.is_empty() || looks_like_refusal(rest) {
         return Vec::new();
     }
@@ -115,10 +111,7 @@ pub fn blend_thread_goal(prev: &ThreadGoal, observed: &[String], drop_after: u32
         kept_unseen.push(unseen);
     }
     ThreadGoal {
-        label: kept_topics
-            .first()
-            .cloned()
-            .unwrap_or_default(),
+        label: kept_topics.first().cloned().unwrap_or_default(),
         topics: kept_topics,
         unseen: kept_unseen,
         step: prev.step,
@@ -176,12 +169,7 @@ pub fn thread_goal_prompt(messages: &[(String, String)]) -> String {
         .rev()
         .take(8)
         .rev()
-        .map(|(role, content)| {
-            format!(
-                "{role}: {}",
-                content.chars().take(400).collect::<String>()
-            )
-        })
+        .map(|(role, content)| format!("{role}: {}", content.chars().take(400).collect::<String>()))
         .collect::<Vec<_>>()
         .join("\n");
     format!(
@@ -252,9 +240,11 @@ fn regexish_done(t: &str) -> bool {
 }
 
 fn done_word(t: &str) -> bool {
-    ["done", "fixed", "complete", "shipped", "resolved", "applied"]
-        .iter()
-        .any(|w| t.split(|c: char| !c.is_ascii_alphabetic()).any(|x| x == *w))
+    [
+        "done", "fixed", "complete", "shipped", "resolved", "applied",
+    ]
+    .iter()
+    .any(|w| t.split(|c: char| !c.is_ascii_alphabetic()).any(|x| x == *w))
 }
 
 /// A queued `/send` task must not complete as `done` when the cabin is blocked.
@@ -284,16 +274,17 @@ pub fn compact_keep_pin(
     keep: usize,
     pin: Option<&str>,
 ) -> Vec<(String, String)> {
-    let start = compact_keep_start_from(
-        messages.iter().map(|(r, c)| (r.as_str(), c.as_str())),
-        keep,
-    );
+    let start =
+        compact_keep_start_from(messages.iter().map(|(r, c)| (r.as_str(), c.as_str())), keep);
     let mut out = messages[start..].to_vec();
     let Some(pin) = pin.map(str::trim).filter(|s| !s.is_empty()) else {
         return out;
     };
     let marked = format!("GOAL PIN: {pin}");
-    if !out.iter().any(|(_, c)| c == &marked || c.starts_with(&format!("{marked}\n"))) {
+    if !out
+        .iter()
+        .any(|(_, c)| c == &marked || c.starts_with(&format!("{marked}\n")))
+    {
         out.insert(0, ("system".into(), marked));
     }
     out
@@ -409,9 +400,11 @@ pub fn should_auto_continue_goal(outcome: &str, pin: &str, running: bool) -> boo
 
 fn promised_action(assistant: &str) -> bool {
     let t = assistant_prose(assistant).to_ascii_lowercase();
-    ["i'll", "i will", "let me ", "next i", "going to", "about to"]
-        .iter()
-        .any(|p| t.contains(p))
+    [
+        "i'll", "i will", "let me ", "next i", "going to", "about to",
+    ]
+    .iter()
+    .any(|p| t.contains(p))
 }
 
 fn asked_user_a_question(assistant: &str) -> bool {
@@ -587,11 +580,20 @@ mod tests {
         );
         let p = next_goal_prompt("flash the pi", "wrote image", 0).unwrap();
         assert!(p.starts_with("[Goal step 1]\nTask: flash the pi\n"), "{p}");
-        let past_four = next_goal_prompt("flash the pi", "x", 9).expect("goal follow-ups go past 4 steps");
+        let past_four =
+            next_goal_prompt("flash the pi", "x", 9).expect("goal follow-ups go past 4 steps");
         assert!(past_four.starts_with("[Goal step 10]\n"), "{past_four}");
-        assert!(next_goal_prompt("  ", "x", 0).is_none(), "no pin, no goal step");
+        assert!(
+            next_goal_prompt("  ", "x", 0).is_none(),
+            "no pin, no goal step"
+        );
         assert_eq!(
-            goal_pin_for_job(Some("thr-a"), "thr-b", "", &[("thr-a".into(), "flash pi".into())]),
+            goal_pin_for_job(
+                Some("thr-a"),
+                "thr-b",
+                "",
+                &[("thr-a".into(), "flash pi".into())]
+            ),
             "flash pi"
         );
         assert_eq!(goal_step_after_outcome(3, "complete", false), 3);
@@ -782,7 +784,9 @@ If this fails, tell me your distro.";
             .nth(1)
             .and_then(|s| s.split("pub fn next_goal_prompt(").next())
             .expect("reply_needs_followup");
-        let follow_up = follow.find("to_ascii_uppercase").expect("followup uppercase");
+        let follow_up = follow
+            .find("to_ascii_uppercase")
+            .expect("followup uppercase");
         assert!(
             follow[..follow_up].contains("TEXT_FILE_CAP")
                 || follow[..follow_up].contains("bound_scan")

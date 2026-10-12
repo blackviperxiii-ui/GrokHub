@@ -72,7 +72,6 @@ fn job_primary_pill(ui: &mut egui::Ui, label: &str) -> bool {
 }
 
 impl Cabin {
-
     pub(super) fn add_automation_seed(&mut self, seed: &str) {
         match self.save_schedule(seed) {
             Some(status) => {
@@ -114,7 +113,12 @@ impl Cabin {
     }
 
     /// [`Self::save_schedule`] for job text the model wrote (an Ideas Add).
-    pub(super) fn save_schedule_as(&mut self, seed: &str, origin: Origin, reason: &str) -> Option<String> {
+    pub(super) fn save_schedule_as(
+        &mut self,
+        seed: &str,
+        origin: Origin,
+        reason: &str,
+    ) -> Option<String> {
         Some(self.commit_schedule(route_schedule(seed)?, origin, reason))
     }
 
@@ -123,7 +127,12 @@ impl Cabin {
     /// the ChangeLedger, so it keeps a version, gets a Work-tree row with
     /// Undo, and shows in the next Home update. Interval loops are Grok Build
     /// rows and stay outside the ledger.
-    pub(super) fn commit_schedule(&mut self, route: ScheduleRoute, origin: Origin, reason: &str) -> String {
+    pub(super) fn commit_schedule(
+        &mut self,
+        route: ScheduleRoute,
+        origin: Origin,
+        reason: &str,
+    ) -> String {
         match route {
             ScheduleRoute::Clock(a) => {
                 if self.automations.len() >= LOOP_MAX {
@@ -138,10 +147,17 @@ impl Cabin {
                 self.automations.push(a);
                 if origin == Origin::SelfManage {
                     let (path, list) = (crate::night::path(), self.automations.clone());
-                    let target = grokhub_agent::harness::AutomationsFile { path: &path, id: &id };
-                    let saved = grokhub_agent::harness::record_change(&config::config_dir(), &target, origin, reason, || {
-                        crate::night::save(&list)
-                    });
+                    let target = grokhub_agent::harness::AutomationsFile {
+                        path: &path,
+                        id: &id,
+                    };
+                    let saved = grokhub_agent::harness::record_change(
+                        &config::config_dir(),
+                        &target,
+                        origin,
+                        reason,
+                        || crate::night::save(&list),
+                    );
                     if let Err(why) = saved {
                         self.automations.retain(|a| a.id != id);
                         return why;
@@ -327,7 +343,10 @@ impl Cabin {
     pub(super) fn ui_scheduled_automations(&mut self, ui: &mut egui::Ui) {
         crate::cards::section_label(ui, "Scheduled");
         if self.automations.is_empty() {
-            crate::cards::help_text(ui, "No clock jobs yet. Add `every weekday at 9, summarize the board`.");
+            crate::cards::help_text(
+                ui,
+                "No clock jobs yet. Add `every weekday at 9, summarize the board`.",
+            );
             ui.add_space(16.0);
             return;
         }
@@ -393,8 +412,10 @@ impl Cabin {
                                     view = Some(i);
                                 }
                             }
-                            if grokhub_core::source_hidden(&self.cfg.feed_pulse, &self.automations[i].id)
-                                && crate::cards::ghost_pill(ui, grokhub_core::HOME_HIDDEN_NOTE)
+                            if grokhub_core::source_hidden(
+                                &self.cfg.feed_pulse,
+                                &self.automations[i].id,
+                            ) && crate::cards::ghost_pill(ui, grokhub_core::HOME_HIDDEN_NOTE)
                             {
                                 unhide = Some(self.automations[i].id.clone());
                             }
@@ -456,7 +477,10 @@ impl Cabin {
             return;
         }
         let body = last_run_sheet_body(&a.health.error, "");
-        self.confirm = Some(ConfirmKind::LastRun { title: title.clone(), body });
+        self.confirm = Some(ConfirmKind::LastRun {
+            title: title.clone(),
+            body,
+        });
         self.status = format!("Last run · {title}");
     }
 
@@ -473,9 +497,11 @@ impl Cabin {
 
     /// Open Chat on the hidden Background thread when a post there is this run.
     fn open_background_run(&mut self, a: &Automation, title: &str) -> bool {
-        let Some(idx) = self.threads.iter().position(|t| {
-            t.background && t.title == threads::BACKGROUND_THREAD_TITLE
-        }) else {
+        let Some(idx) = self
+            .threads
+            .iter()
+            .position(|t| t.background && t.title == threads::BACKGROUND_THREAD_TITLE)
+        else {
             return false;
         };
         let needles = run_needles(a);
@@ -483,9 +509,10 @@ impl Cabin {
             return false;
         }
         let bodies = self.bodies_of(idx);
-        let found = bodies.iter().rev().any(|body| {
-            needles.iter().any(|n| body.contains(n.as_str()))
-        });
+        let found = bodies
+            .iter()
+            .rev()
+            .any(|body| needles.iter().any(|n| body.contains(n.as_str())));
         if !found {
             return false;
         }
@@ -950,7 +977,10 @@ impl Cabin {
 
     /// A skill or automation from the review needs the same reason an idea does:
     /// work they repeat, or lasting context. One per topic.
-    pub(super) fn keep_reasoned_suggestions(&self, items: &mut Vec<grokhub_core::LearnedSuggestion>) {
+    pub(super) fn keep_reasoned_suggestions(
+        &self,
+        items: &mut Vec<grokhub_core::LearnedSuggestion>,
+    ) {
         let inputs = self.idea_inputs();
         let ground = grokhub_core::IdeaGround {
             asks: &inputs.asks,
@@ -1118,7 +1148,9 @@ pub(super) fn loop_card_name(prompt: &str) -> String {
     let p = prompt.trim().trim_start_matches("/loop").trim();
     // Drop the interval word ("12h", "1d") the loop starts with.
     let p = match p.split_once(' ') {
-        Some((head, rest)) if head.chars().next().is_some_and(|c| c.is_ascii_digit()) => rest.trim(),
+        Some((head, rest)) if head.chars().next().is_some_and(|c| c.is_ascii_digit()) => {
+            rest.trim()
+        }
         _ => p,
     };
     let mut out: String = p.chars().take(60).collect();

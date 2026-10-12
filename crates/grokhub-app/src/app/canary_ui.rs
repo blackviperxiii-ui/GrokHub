@@ -68,14 +68,26 @@ impl Cabin {
         if arm == Arm::Control && parent.is_none() {
             return sk.clone();
         }
-        self.harness.self_review.trial = Some(TrialPick { class, version: v.version.clone(), arm });
+        self.harness.self_review.trial = Some(TrialPick {
+            class,
+            version: v.version.clone(),
+            arm,
+        });
         parent.unwrap_or_else(|| sk.clone())
     }
 
     /// Name the trial side on this run's metrics line.
     pub(super) fn tag_trial(&self, m: &mut RunMetrics) {
-        let skill = self.harness.self_review.trial.clone().filter(|p| p.class == m.class);
-        if let Some(pick) = skill.or_else(|| brain_trial_pick(&m.brain)).or_else(|| self.note_trial_pick()) {
+        let skill = self
+            .harness
+            .self_review
+            .trial
+            .clone()
+            .filter(|p| p.class == m.class);
+        if let Some(pick) = skill
+            .or_else(|| brain_trial_pick(&m.brain))
+            .or_else(|| self.note_trial_pick())
+        {
             m.version = pick.version;
             m.arm = Some(pick.arm);
         }
@@ -114,11 +126,26 @@ impl Cabin {
     }
 
     /// Start a trial for the skill change the weekly pass just wrote.
-    pub(super) fn start_skill_trial(&mut self, change: &hx::Change, skill: &str, title: &str, before: &str, after: &str) {
+    pub(super) fn start_skill_trial(
+        &mut self,
+        change: &hx::Change,
+        skill: &str,
+        title: &str,
+        before: &str,
+        after: &str,
+    ) {
         let dir = config::config_dir();
         let class = grokhub_core::outcome::skill_signature(skill);
         let label = format!("{} in {}", title.trim(), skill);
-        if let Ok(v) = hx::start_trial(&dir, change, &class, &label, hx::Metric::Steps, before, after) {
+        if let Ok(v) = hx::start_trial(
+            &dir,
+            change,
+            &class,
+            &label,
+            hx::Metric::Steps,
+            before,
+            after,
+        ) {
             self.harness.self_review.history = None;
             self.post_trial_note(&v);
         }
@@ -127,7 +154,9 @@ impl Cabin {
     /// True when this ledger line is on trial: its note already went out, so
     /// it gets no Work-tree row with Undo and Keep.
     pub(super) fn on_trial(&self, kind: hx::ChangeKind, c: &hx::Change) -> bool {
-        hx::read_versions(&config::config_dir()).iter().any(|v| v.kind == kind.as_str() && v.id == c.id && v.seq == c.seq)
+        hx::read_versions(&config::config_dir())
+            .iter()
+            .any(|v| v.kind == kind.as_str() && v.id == c.id && v.seq == c.seq)
     }
 }
 
@@ -135,22 +164,34 @@ impl Cabin {
 /// in the file every matching run reads, so the run is on its canary side.
 fn brain_trial_pick(b: &run_metrics::RunBrain) -> Option<TrialPick> {
     let dir = config::config_dir();
-    let classes = [(!b.policy.is_empty()).then(|| format!("policy:{}", b.policy)), (!b.playbook.is_empty()).then(|| format!("playbook:{}", b.playbook))];
+    let classes = [
+        (!b.policy.is_empty()).then(|| format!("policy:{}", b.policy)),
+        (!b.playbook.is_empty()).then(|| format!("playbook:{}", b.playbook)),
+    ];
     classes.into_iter().flatten().find_map(|class| {
         let v = hx::open_trial(&dir, &class)?;
-        Some(TrialPick { class, version: v.version, arm: Arm::Canary })
+        Some(TrialPick {
+            class,
+            version: v.version,
+            arm: Arm::Canary,
+        })
     })
 }
 
 /// The trial's parent `SKILL.md`, parsed. `None` when it was not kept.
 fn parent_skill(dir: &std::path::Path, v: &hx::Version) -> Option<SkillMd> {
     let ledger = hx::ChangeLedger::load_kind(dir, hx::ChangeKind::Skill);
-    let line = ledger.all().iter().find(|c| c.seq == v.seq && c.id == v.id)?;
+    let line = ledger
+        .all()
+        .iter()
+        .find(|c| c.seq == v.seq && c.id == v.id)?;
     if line.before_hash.is_empty() {
         return None;
     }
     let bytes = hx::kept_bytes(dir, hx::ChangeKind::Skill, &v.id, &line.before_hash).ok()?;
-    Some(grokhub_core::parse_skill_md(&String::from_utf8_lossy(&bytes)))
+    Some(grokhub_core::parse_skill_md(&String::from_utf8_lossy(
+        &bytes,
+    )))
 }
 
 /// Chat notes kept at once, in name order.
@@ -162,7 +203,11 @@ pub(super) const NOTES_HEAD: &str =
 impl Cabin {
     /// A chat-note proposal from the weekly pass: one Suggestion card whose
     /// Apply writes `tunable/<name>.md` and puts it on trial.
-    pub(super) fn post_snippet_card(&mut self, p: &grokhub_core::self_review::RankedProposal, now: u64) {
+    pub(super) fn post_snippet_card(
+        &mut self,
+        p: &grokhub_core::self_review::RankedProposal,
+        now: u64,
+    ) {
         let details = format!(
             "{}.\n\nApply adds this note to the instructions of every chat; the cabin safety and approval rules still win:\n\n“{}”\n\nOne chat in five tries it first; GrokHub keeps it only if those runs take fewer steps.",
             p.numbers, p.steps
@@ -191,12 +236,16 @@ impl Cabin {
         let (name, text) = match checked {
             Ok(ok) => ok,
             Err(why) => {
-                let _ = hx::append_span(&dir, &hx::guard_span(&format!("snippet:{name}"), &why, now));
+                let _ =
+                    hx::append_span(&dir, &hx::guard_span(&format!("snippet:{name}"), &why, now));
                 self.status = why;
                 return true;
             }
         };
-        let target = hx::SnippetTarget { config_dir: &dir, name: &name };
+        let target = hx::SnippetTarget {
+            config_dir: &dir,
+            name: &name,
+        };
         let before = target_text(&target);
         let reason = format!("weekly self-review: {}", title.trim());
         let written = hx::record_change(&dir, &target, hx::Origin::SelfManage, &reason, || {
@@ -205,7 +254,15 @@ impl Cabin {
         match written {
             Ok(Some(change)) => {
                 let label = format!("{} (chat note)", title.trim());
-                if let Ok(v) = hx::start_trial(&dir, &change, hx::ALL_RUNS, &label, hx::Metric::Steps, &before, &format!("{text}\n")) {
+                if let Ok(v) = hx::start_trial(
+                    &dir,
+                    &change,
+                    hx::ALL_RUNS,
+                    &label,
+                    hx::Metric::Steps,
+                    &before,
+                    &format!("{text}\n"),
+                ) {
                     self.harness.self_review.history = None;
                     self.post_trial_note(&v);
                 }
@@ -233,13 +290,21 @@ impl Cabin {
         };
         let mut names: Vec<String> = entries
             .flatten()
-            .filter_map(|e| e.file_name().to_str()?.strip_suffix(".md").map(str::to_string))
+            .filter_map(|e| {
+                e.file_name()
+                    .to_str()?
+                    .strip_suffix(".md")
+                    .map(str::to_string)
+            })
             .collect();
         names.sort();
         let trial = hx::open_trial(&dir, hx::ALL_RUNS);
         let mut lines = Vec::new();
         for name in names.into_iter().take(NOTES_MAX) {
-            let target = hx::SnippetTarget { config_dir: &dir, name: &name };
+            let target = hx::SnippetTarget {
+                config_dir: &dir,
+                name: &name,
+            };
             let mut text = target_text(&target);
             if let Some(v) = trial.as_ref().filter(|v| v.id == name) {
                 if hx::pick_arm(&self.trace_id(), &v.version, v.share_pct) == Arm::Control {
@@ -261,18 +326,29 @@ impl Cabin {
     pub(super) fn note_trial_pick(&self) -> Option<TrialPick> {
         let v = hx::open_trial(&config::config_dir(), hx::ALL_RUNS)?;
         let arm = hx::pick_arm(&self.trace_id(), &v.version, v.share_pct);
-        Some(TrialPick { class: hx::ALL_RUNS.into(), version: v.version, arm })
+        Some(TrialPick {
+            class: hx::ALL_RUNS.into(),
+            version: v.version,
+            arm,
+        })
     }
 }
 
 fn target_text(t: &dyn hx::ChangeTarget) -> String {
-    t.read().ok().flatten().map(|b| String::from_utf8_lossy(&b).trim().to_string()).unwrap_or_default()
+    t.read()
+        .ok()
+        .flatten()
+        .map(|b| String::from_utf8_lossy(&b).trim().to_string())
+        .unwrap_or_default()
 }
 
 /// The text a note trial replaced. Empty when the note was new.
 fn trial_parent_text(dir: &std::path::Path, v: &hx::Version) -> Option<String> {
     let ledger = hx::ChangeLedger::load_kind(dir, hx::ChangeKind::Snippet);
-    let line = ledger.all().iter().find(|c| c.seq == v.seq && c.id == v.id)?;
+    let line = ledger
+        .all()
+        .iter()
+        .find(|c| c.seq == v.seq && c.id == v.id)?;
     if line.before_hash.is_empty() {
         return Some(String::new());
     }

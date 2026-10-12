@@ -69,7 +69,11 @@ pub(super) fn fix_card(plan: &repair::FixPlan) -> FixCard {
         .collect();
     let runnable = plan.runnable() > 0;
     FixCard {
-        sections: plan.card_sections().iter().map(|(h, t)| (*h, t.to_string())).collect(),
+        sections: plan
+            .card_sections()
+            .iter()
+            .map(|(h, t)| (*h, t.to_string()))
+            .collect(),
         steps,
         primary: runnable.then_some(FIX_PRIMARY),
         secondary: if runnable { "Not now" } else { "Got it" },
@@ -137,17 +141,31 @@ impl Cabin {
             Ok((body, ask, plans)) => {
                 if ask {
                     let ledger = hx::ConsentLedger::load_now(&crate::config::config_dir());
-                    self.harness.indexer.asks.ask(hx::Scope::SystemState, repair::SCOPE_ASK_WHY, &ledger, now_ms());
+                    self.harness.indexer.asks.ask(
+                        hx::Scope::SystemState,
+                        repair::SCOPE_ASK_WHY,
+                        &ledger,
+                        now_ms(),
+                    );
                 }
-                let body = if self.harness.diagnose_slash { mark_slash_result(&body) } else { body };
+                let body = if self.harness.diagnose_slash {
+                    mark_slash_result(&body)
+                } else {
+                    body
+                };
                 self.status.clear();
                 self.post_diagnose(body);
                 if !self.harness.fixes.busy() {
-                    self.harness.fixes = FixUi { proposals: plans, ..FixUi::default() };
+                    self.harness.fixes = FixUi {
+                        proposals: plans,
+                        ..FixUi::default()
+                    };
                 }
             }
             Err(mpsc::TryRecvError::Empty) => self.harness.diagnose_rx = Some(rx),
-            Err(mpsc::TryRecvError::Disconnected) => self.status = "Couldn't finish checking your computer".into(),
+            Err(mpsc::TryRecvError::Disconnected) => {
+                self.status = "Couldn't finish checking your computer".into()
+            }
         }
     }
 
@@ -199,7 +217,11 @@ impl Cabin {
             return;
         };
         match run.next_action() {
-            repair::Action::Gb { prompt, command, approved } => {
+            repair::Action::Gb {
+                prompt,
+                command,
+                approved,
+            } => {
                 if approved {
                     // Approved on the hard card: Grok's own Allow card asks once.
                     self.harness.oneshot = Some(super::harness_ui::OneShot {
@@ -222,7 +244,8 @@ impl Cabin {
                     self.advance_fix();
                     return;
                 }
-                self.status = "Fixing… if your computer asks for your password, type it yourself".into();
+                self.status =
+                    "Fixing… if your computer asks for your password, type it yourself".into();
             }
             repair::Action::Park { class, command, .. } => {
                 self.park_repair(class, command);
@@ -261,7 +284,12 @@ impl Cabin {
 
     /// Step progress: Grok Build's reply to the step, and the re-check.
     pub(super) fn poll_fix(&mut self) {
-        let waiting = self.harness.fixes.run.as_ref().is_some_and(|r| r.awaiting_gb());
+        let waiting = self
+            .harness
+            .fixes
+            .run
+            .as_ref()
+            .is_some_and(|r| r.awaiting_gb());
         if waiting {
             if self.running {
                 self.harness.fixes.gb_started = true;
@@ -337,13 +365,37 @@ impl Cabin {
         if let Some(run) = self.harness.fixes.run.as_ref() {
             if !run.is_done() {
                 let note = "One step at a time. If your computer asks for your password, type it yourself; I never do.";
-                let card = FixCard { sections: vec![], steps: vec![], primary: None, secondary: "", hard: false };
-                fix_card_ui(ui, ("fix-running", run.id.clone()), "Fixing", &run.plan.what, note, &card, running);
+                let card = FixCard {
+                    sections: vec![],
+                    steps: vec![],
+                    primary: None,
+                    secondary: "",
+                    hard: false,
+                };
+                fix_card_ui(
+                    ui,
+                    ("fix-running", run.id.clone()),
+                    "Fixing",
+                    &run.plan.what,
+                    note,
+                    &card,
+                    running,
+                );
                 return;
             }
             if !self.harness.fixes.closed && !run.undone {
-                let eyebrow = if run.verified == Some(true) { "Fixed" } else { "Fix result" };
-                let card = FixCard { sections: vec![], steps: vec![], primary: Some(UNDO_PRIMARY), secondary: "Done", hard: false };
+                let eyebrow = if run.verified == Some(true) {
+                    "Fixed"
+                } else {
+                    "Fix result"
+                };
+                let card = FixCard {
+                    sections: vec![],
+                    steps: vec![],
+                    primary: Some(UNDO_PRIMARY),
+                    secondary: "Done",
+                    hard: false,
+                };
                 let (id, text) = (run.id.clone(), run.result_text());
                 match fix_card_ui(ui, ("fix-result", id), eyebrow, &text, "", &card, running) {
                     Some(true) => self.undo_fix(),
@@ -398,17 +450,27 @@ fn fix_card_ui(
     running: bool,
 ) -> Option<bool> {
     let stroke_w = if card.hard { 2.0 } else { 1.0 };
-    let stroke = if card.hard { crate::theme::fg() } else { crate::theme::border() };
+    let stroke = if card.hard {
+        crate::theme::fg()
+    } else {
+        crate::theme::border()
+    };
     ui.add_space(8.0);
     let card_id = egui::Id::new(("fix-card", id.0, id.1));
     let enter_t = crate::motion::approval_enter_t(ui, card_id, true);
-    let slot = ui.available_rect_before_wrap().translate(egui::vec2(0.0, crate::motion::approval_y(enter_t, false)));
+    let slot = ui
+        .available_rect_before_wrap()
+        .translate(egui::vec2(0.0, crate::motion::approval_y(enter_t, false)));
     let mut hit = None;
     ui.scope_builder(egui::UiBuilder::new().max_rect(slot), |ui| {
         ui.multiply_opacity(enter_t.clamp(0.0, 1.0));
         let inner = super::harness_ui::approval_card_inner(ui.available_width(), stroke_w);
-        let muted = |t: &str, size: f32| egui::Label::new(RichText::new(t).size(size).color(crate::theme::muted())).wrap();
-        let strong = |t: &str, size: f32| egui::Label::new(RichText::new(t).size(size).color(crate::theme::fg())).wrap();
+        let muted = |t: &str, size: f32| {
+            egui::Label::new(RichText::new(t).size(size).color(crate::theme::muted())).wrap()
+        };
+        let strong = |t: &str, size: f32| {
+            egui::Label::new(RichText::new(t).size(size).color(crate::theme::fg())).wrap()
+        };
         let framed = egui::Frame::NONE
             .fill(egui::Color32::TRANSPARENT)
             .corner_radius(crate::theme::CHROME_RADIUS)
@@ -419,7 +481,15 @@ fn fix_card_ui(
                 ui.set_max_width(inner);
                 ui.add(muted(eyebrow, 12.0));
                 ui.add_space(4.0);
-                ui.add(egui::Label::new(RichText::new(title).size(14.0).strong().color(crate::theme::fg())).wrap());
+                ui.add(
+                    egui::Label::new(
+                        RichText::new(title)
+                            .size(14.0)
+                            .strong()
+                            .color(crate::theme::fg()),
+                    )
+                    .wrap(),
+                );
                 for (heading, text) in &card.sections {
                     ui.add_space(6.0);
                     ui.add(muted(heading, 12.0));
@@ -431,7 +501,15 @@ fn fix_card_ui(
                     for (line, cmd) in &card.steps {
                         ui.add(strong(&format!("• {line}"), 13.0));
                         if let Some(cmd) = cmd {
-                            ui.add(egui::Label::new(RichText::new(cmd).size(12.0).monospace().color(crate::theme::muted())).wrap());
+                            ui.add(
+                                egui::Label::new(
+                                    RichText::new(cmd)
+                                        .size(12.0)
+                                        .monospace()
+                                        .color(crate::theme::muted()),
+                                )
+                                .wrap(),
+                            );
                         }
                     }
                 }
@@ -451,7 +529,9 @@ fn fix_card_ui(
                         });
                         if primary {
                             hit = Some(true);
-                        } else if !card.secondary.is_empty() && crate::cards::ghost_pill(ui, card.secondary) {
+                        } else if !card.secondary.is_empty()
+                            && crate::cards::ghost_pill(ui, card.secondary)
+                        {
                             hit = Some(false);
                         }
                     });
@@ -510,7 +590,11 @@ mod tests {
     }
 
     fn tools(root: &std::path::Path) -> Vec<(String, String)> {
-        hx::read_spans(root, "session").unwrap().into_iter().map(|s| (s.tool, s.decision)).collect()
+        hx::read_spans(root, "session")
+            .unwrap()
+            .into_iter()
+            .map(|s| (s.tool, s.decision))
+            .collect()
     }
 
     /// A snapshot step comes first wherever this computer has one (System
@@ -518,7 +602,10 @@ mod tests {
     /// no Grok Build it can't run, so the fix goes on with the file backup alone.
     fn snapshot_spans() -> Vec<(String, String)> {
         if !repair::detect_backends(repair::Os::current(), &repair::on_path).is_empty() {
-            vec![(repair::REPAIR_TOOL.into(), "allow".into()), (repair::RESTORE_TOOL.into(), "deny".into())]
+            vec![
+                (repair::REPAIR_TOOL.into(), "allow".into()),
+                (repair::RESTORE_TOOL.into(), "deny".into()),
+            ]
         } else {
             vec![]
         }
@@ -526,7 +613,9 @@ mod tests {
 
     fn wait_fix(cabin: &mut Cabin) {
         let start = std::time::Instant::now();
-        while cabin.harness.fixes.verify_rx.is_some() && start.elapsed() < std::time::Duration::from_secs(4) {
+        while cabin.harness.fixes.verify_rx.is_some()
+            && start.elapsed() < std::time::Duration::from_secs(4)
+        {
             cabin.poll_fix();
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
@@ -534,11 +623,20 @@ mod tests {
 
     #[test]
     fn a_hard_floor_step_is_never_an_apply_button() {
-        let floor_only = plan(vec![DraftStep::new("mkfs.ext4 /dev/sdb1", "Erase the second disk.")]);
+        let floor_only = plan(vec![DraftStep::new(
+            "mkfs.ext4 /dev/sdb1",
+            "Erase the second disk.",
+        )]);
         let card = fix_card(&floor_only);
         assert_eq!(card.primary, None);
         assert_eq!(card.secondary, "Got it");
-        assert_eq!(card.steps, vec![(format!("Erase the second disk. {}", repair::FLOOR_GUIDANCE), None)]);
+        assert_eq!(
+            card.steps,
+            vec![(
+                format!("Erase the second disk. {}", repair::FLOOR_GUIDANCE),
+                None
+            )]
+        );
 
         let mixed = plan(vec![
             DraftStep::new("dd if=/dev/zero of=/dev/sda", "Wipe the disk."),
@@ -549,8 +647,17 @@ mod tests {
         assert_eq!(card.primary, Some(FIX_PRIMARY));
         assert!(card.hard, "a card with a hard step is the hard family");
         assert_eq!(card.steps[0].1, None, "the floor step shows no command");
-        assert_eq!(card.steps[1], ("Clear the list.".to_string(), Some("ipconfig /flushdns".to_string())));
-        assert_eq!(card.steps[2].0, "Delete old installer copies. I'll ask you before this step.");
+        assert_eq!(
+            card.steps[1],
+            (
+                "Clear the list.".to_string(),
+                Some("ipconfig /flushdns".to_string())
+            )
+        );
+        assert_eq!(
+            card.steps[2].0,
+            "Delete old installer copies. I'll ask you before this step."
+        );
         assert_eq!(
             card.sections.iter().map(|(h, _)| *h).collect::<Vec<_>>(),
             vec!["What's wrong", "What I'll do", "Why", "How to undo", "Risk"]
@@ -564,12 +671,18 @@ mod tests {
         let (_pin, root) = pinned("fix-cabin-nogb");
         let _grok = NoGrok::set(&root);
         let mut cabin = Cabin::quiet_for_test();
-        cabin.harness.fixes.proposals = vec![plan(vec![DraftStep::new("ipconfig /flushdns", "Clear the list.")])];
+        cabin.harness.fixes.proposals = vec![plan(vec![DraftStep::new(
+            "ipconfig /flushdns",
+            "Clear the list.",
+        )])];
         cabin.apply_fix(0);
         assert!(cabin.harness.fixes.proposals.is_empty());
         let mut want = vec![(repair::RESTORE_TOOL.to_string(), "restore".to_string())];
         want.extend(snapshot_spans());
-        want.extend([(repair::REPAIR_TOOL.into(), "allow".into()), (repair::REPAIR_TOOL.into(), "deny".into())]);
+        want.extend([
+            (repair::REPAIR_TOOL.into(), "allow".into()),
+            (repair::REPAIR_TOOL.into(), "deny".into()),
+        ]);
         assert_eq!(tools(&root), want);
         assert_eq!(
             cabin.messages.last().unwrap().1,
@@ -586,7 +699,11 @@ mod tests {
         let conf = root.join("resolved.conf");
         let before: &[u8] = b"[Resolve]\r\nDNS=9.9.9.9\r\n";
         std::fs::write(&conf, before).unwrap();
-        let p = plan(vec![DraftStep::new("ipconfig /flushdns", "Clear the list.").touching(&[&conf])]);
+        let p = plan(vec![DraftStep::new(
+            "ipconfig /flushdns",
+            "Clear the list.",
+        )
+        .touching(&[&conf])]);
         let ctx = repair::ApplyCtx {
             config_dir: &root,
             session_id: "session",
@@ -604,18 +721,32 @@ mod tests {
         cabin.poll_fix();
         assert!(cabin.harness.fixes.gb_started);
         cabin.running = false;
-        cabin.live_mut().push(("assistant".into(), "Ran it.\nSTEP_OK".into()));
+        cabin
+            .live_mut()
+            .push(("assistant".into(), "Ran it.\nSTEP_OK".into()));
         cabin.poll_fix();
         wait_fix(&mut cabin);
         // No System state grant: the re-check can't run, so it is not a fix.
         let last = cabin.messages.last().unwrap().1.clone();
-        assert!(last.starts_with("That didn't fix it. I checked again: To check your computer"), "{last}");
+        assert!(
+            last.starts_with("That didn't fix it. I checked again: To check your computer"),
+            "{last}"
+        );
         let spans = hx::read_spans(&root, "session").unwrap();
-        assert_eq!(spans.iter().find(|s| s.tool == hx::VERIFY_TOOL).map(|s| s.result.as_str()), Some("fail"));
+        assert_eq!(
+            spans
+                .iter()
+                .find(|s| s.tool == hx::VERIFY_TOOL)
+                .map(|s| s.result.as_str()),
+            Some("fail")
+        );
         assert!(hx::done_without_criteria(&spans).is_empty());
         cabin.undo_fix();
         assert_eq!(std::fs::read(&conf).unwrap(), before);
-        assert_eq!(cabin.messages.last().unwrap().1, "Undone. I put back the one file this fix changed, exactly as it was.");
+        assert_eq!(
+            cabin.messages.last().unwrap().1,
+            "Undone. I put back the one file this fix changed, exactly as it was."
+        );
         assert!(cabin.harness.fixes.closed);
         let _ = std::fs::remove_dir_all(root);
     }
@@ -627,9 +758,16 @@ mod tests {
         let mut cabin = Cabin::quiet_for_test();
         cabin.permission_mode = PermissionMode::AlwaysApprove;
         cabin.harness.access_full = true;
-        cabin.harness.fixes.proposals = vec![plan(vec![DraftStep::new("pkexec apt-get clean", "Delete old installer copies.")])];
+        cabin.harness.fixes.proposals = vec![plan(vec![DraftStep::new(
+            "pkexec apt-get clean",
+            "Delete old installer copies.",
+        )])];
         cabin.apply_fix(0);
-        let park = cabin.harness.park.clone().expect("hard step parks under Always and Full");
+        let park = cabin
+            .harness
+            .park
+            .clone()
+            .expect("hard step parks under Always and Full");
         assert_eq!(park.source, super::super::harness_ui::ParkSource::Repair);
         assert_eq!(park.class, hx::HardClass::Delete);
         assert_eq!(park.action, "pkexec apt-get clean");
@@ -646,12 +784,20 @@ mod tests {
             (repair::REPAIR_TOOL.into(), "deny".into()),
         ]);
         assert_eq!(tools(&root), want);
-        let fix_lines: Vec<&String> = cabin.messages.iter().filter(|(_, b)| b.contains("Undo fix")).map(|(_, b)| b).collect();
+        let fix_lines: Vec<&String> = cabin
+            .messages
+            .iter()
+            .filter(|(_, b)| b.contains("Undo fix"))
+            .map(|(_, b)| b)
+            .collect();
         assert_eq!(
             fix_lines,
             vec!["I stopped the fix because you halted. Nothing more will run. Undo fix puts back what I changed."]
         );
-        assert!(!cabin.messages.iter().any(|(r, _)| r == "user"), "nothing went to Grok Build");
+        assert!(
+            !cabin.messages.iter().any(|(r, _)| r == "user"),
+            "nothing went to Grok Build"
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 }

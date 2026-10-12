@@ -10,8 +10,8 @@ mod rpc;
 mod stdio;
 
 pub use config::{
-    config_file, import_documents, import_paths, is_desktop_server, load_servers, load_servers_for, read_mcp_text,
-    target_label, ImportReport, ServerDef,
+    config_file, import_documents, import_paths, is_desktop_server, load_servers, load_servers_for,
+    read_mcp_text, target_label, ImportReport, ServerDef,
 };
 pub use elicit::{
     alias_elicit, attach_elicit, detach_elicit, unalias_elicit, ElicitInbox, ElicitNote, ElicitView,
@@ -65,7 +65,10 @@ pub fn set_cabin_cua(exe: Option<PathBuf>) {
 }
 
 fn cabin_cua_def() -> Option<ServerDef> {
-    let exe = cabin_cua().lock().unwrap_or_else(|err| err.into_inner()).clone()?;
+    let exe = cabin_cua()
+        .lock()
+        .unwrap_or_else(|err| err.into_inner())
+        .clone()?;
     Some(ServerDef {
         transport: TransportDef::Stdio {
             command: exe.display().to_string(),
@@ -103,7 +106,9 @@ pub enum SignIn {
 }
 
 fn has_auth_header(headers: &BTreeMap<String, String>) -> bool {
-    headers.keys().any(|k| k.eq_ignore_ascii_case("authorization"))
+    headers
+        .keys()
+        .any(|k| k.eq_ignore_ascii_case("authorization"))
 }
 
 fn sign_in_state(name: &str, def: &ServerDef) -> SignIn {
@@ -114,7 +119,10 @@ fn sign_in_state(name: &str, def: &ServerDef) -> SignIn {
         return SignIn::NotOffered;
     }
     match oauth::load(name).filter(|s| s.resource == grokhub_core::mcp_oauth::resource_for(url)) {
-        Some(s) => SignIn::SignedIn(grokhub_core::mcp_oauth::signed_in_line(name, s.account.as_deref())),
+        Some(s) => SignIn::SignedIn(grokhub_core::mcp_oauth::signed_in_line(
+            name,
+            s.account.as_deref(),
+        )),
         None => SignIn::SignedOut,
     }
 }
@@ -335,9 +343,18 @@ pub fn sign_in(name: &str, open: &dyn Fn(&str) -> Result<(), String>) -> Result<
         .ok_or_else(|| format!("MCP server `{name}` is not configured"))?;
     let url = match &lock_slot(&slot).def.transport {
         TransportDef::Http { url, .. } => url.clone(),
-        TransportDef::Stdio { .. } => return Err(format!("MCP server `{name}` runs on this machine and has no sign-in")),
+        TransportDef::Stdio { .. } => {
+            return Err(format!(
+                "MCP server `{name}` runs on this machine and has no sign-in"
+            ))
+        }
     };
-    let line = oauth::sign_in(name, &url, open, std::time::Duration::from_secs(oauth::LOOPBACK_SECS))?;
+    let line = oauth::sign_in(
+        name,
+        &url,
+        open,
+        std::time::Duration::from_secs(oauth::LOOPBACK_SECS),
+    )?;
     match restart(name) {
         Ok(()) => Ok(line),
         Err(err) => Ok(format!("{line}, but it didn't connect: {err}")),
@@ -395,9 +412,16 @@ pub enum Installed {
 /// again writes nothing; a different entry under the name is refused, so a
 /// connector the user set up is never overwritten.
 pub fn install(name: &str, entry: &Value) -> Result<Installed, String> {
-    let obj = entry.as_object().ok_or("a connector entry must be a JSON object")?;
-    if ["headers", "env", "bearerToken", "bearer_token", "tokenRef"].iter().any(|k| obj.contains_key(*k)) {
-        return Err(format!("{name}'s entry carries credentials; a key is saved separately"));
+    let obj = entry
+        .as_object()
+        .ok_or("a connector entry must be a JSON object")?;
+    if ["headers", "env", "bearerToken", "bearer_token", "tokenRef"]
+        .iter()
+        .any(|k| obj.contains_key(*k))
+    {
+        return Err(format!(
+            "{name}'s entry carries credentials; a key is saved separately"
+        ));
     }
     let config = crate::perm::config_dir();
     let path = config::config_file();
@@ -409,12 +433,18 @@ pub fn install(name: &str, entry: &Value) -> Result<Installed, String> {
         if Value::Object(bare) == *entry {
             return Ok(Installed::AlreadyThere);
         }
-        return Err(format!("A connector named {name} is already set up differently; disconnect it first"));
+        return Err(format!(
+            "A connector named {name} is already set up differently; disconnect it first"
+        ));
     }
     let bytes = serde_json::to_vec_pretty(entry).map_err(|e| e.to_string())?;
-    crate::harness::record_change(&config, &target, crate::harness::Origin::User, "installed from Marketplace", || {
-        crate::harness::ChangeTarget::put(&target, Some(&bytes))
-    })?;
+    crate::harness::record_change(
+        &config,
+        &target,
+        crate::harness::Origin::User,
+        "installed from Marketplace",
+        || crate::harness::ChangeTarget::put(&target, Some(&bytes)),
+    )?;
     invalidate();
     Ok(Installed::Added)
 }
@@ -433,13 +463,18 @@ pub fn save_key(name: &str, key: &str) -> Result<String, String> {
     let target = crate::harness::McpFile { path: &path, name };
     let cur = crate::harness::ChangeTarget::read(&target)?
         .ok_or_else(|| format!("{name} isn't installed, so it has nowhere to keep a key"))?;
-    let mut entry: serde_json::Map<String, Value> = serde_json::from_slice(&cur).map_err(|e| e.to_string())?;
+    let mut entry: serde_json::Map<String, Value> =
+        serde_json::from_slice(&cur).map_err(|e| e.to_string())?;
     crate::harness::seal_connection_token(&config, name, key)?;
     entry.insert("tokenRef".into(), json!(name));
     let bytes = serde_json::to_vec_pretty(&entry).map_err(|e| e.to_string())?;
-    crate::harness::record_change(&config, &target, crate::harness::Origin::User, "key saved in Settings", || {
-        crate::harness::ChangeTarget::put(&target, Some(&bytes))
-    })?;
+    crate::harness::record_change(
+        &config,
+        &target,
+        crate::harness::Origin::User,
+        "key saved in Settings",
+        || crate::harness::ChangeTarget::put(&target, Some(&bytes)),
+    )?;
     invalidate();
     Ok(format!("Saved the key for {name}"))
 }
@@ -457,7 +492,11 @@ pub(crate) fn schema_tools(native: usize) -> Vec<Value> {
 
 /// `stop` is the run's Stop / Halt: an egress park waiting on a card gives up
 /// when it turns true.
-pub(crate) fn try_dispatch(name: &str, args: &Value, stop: &dyn Fn() -> bool) -> Option<ToolOutput> {
+pub(crate) fn try_dispatch(
+    name: &str,
+    args: &Value,
+    stop: &dyn Fn() -> bool,
+) -> Option<ToolOutput> {
     if name == "search_tool" {
         return Some(search_output(args));
     }
@@ -836,7 +875,9 @@ fn open_def(name: &str, def: &ServerDef, workspace: &Path) -> Result<(Conn, Vec<
             if let Some(token_name) = &def.token_ref {
                 let token = crate::harness::open_connection_token(&perm::config_dir(), token_name)
                     .ok_or("its token is missing or locked: add the connection again")?;
-                headers.entry("Authorization".into()).or_insert_with(|| format!("Bearer {token}"));
+                headers
+                    .entry("Authorization".into())
+                    .or_insert_with(|| format!("Bearer {token}"));
             }
             let signed = !has_auth_header(&headers);
             if signed {
@@ -845,7 +886,14 @@ fn open_def(name: &str, def: &ServerDef, workspace: &Path) -> Result<(Conn, Vec<
                 }
             }
             let open = |headers: &BTreeMap<String, String>| {
-                http::connect(name, url, *sse, headers, def.startup_timeout, def.tool_timeout)
+                http::connect(
+                    name,
+                    url,
+                    *sse,
+                    headers,
+                    def.startup_timeout,
+                    def.tool_timeout,
+                )
             };
             let (conn, tools) = match open(&headers) {
                 Err(err) if signed && http::is_unauthorized(&err) => {
@@ -1132,7 +1180,15 @@ mod tests {
             Decision::Run
         );
         assert_eq!(
-            decide_with(&gate(PermMode::Ask, false, true), "box__echo", "{}", false, None, ws, Some(&ask)),
+            decide_with(
+                &gate(PermMode::Ask, false, true),
+                "box__echo",
+                "{}",
+                false,
+                None,
+                ws,
+                Some(&ask)
+            ),
             Decision::Ask
         );
         let away = decide_with(
@@ -1357,7 +1413,10 @@ mod tests {
     /// and a deferred hard tool still parks through `harness::decide`.
     #[test]
     fn native_desktop_and_mcp_tools_pass_forty_together_and_hard_use_tool_parks() {
-        let desk_on = Gate { desktop: true, ..gate(PermMode::Always, false, true) };
+        let desk_on = Gate {
+            desktop: true,
+            ..gate(PermMode::Always, false, true)
+        };
         let desk_off = gate(PermMode::Always, false, true);
         let native = {
             let _none = install_test_tools(&[]);
@@ -1365,14 +1424,23 @@ mod tests {
         };
         assert_eq!(native, 7, "desktop tools the native engine registers");
         let names: Vec<String> = (0..41 - native).map(|n| format!("t{n}")).collect();
-        let mut rows: Vec<(&str, &str, &str, bool)> = names.iter().map(|n| ("box", n.as_str(), "other", false)).collect();
+        let mut rows: Vec<(&str, &str, &str, bool)> = names
+            .iter()
+            .map(|n| ("box", n.as_str(), "other", false))
+            .collect();
         rows[0] = ("mail", "send_message", "Send an email", false);
         let _guard = install_test_tools(&rows);
         assert_eq!(rows.len() + native, 41);
         let on = crate::tools::schemas_for(&desk_on);
-        assert!(on.iter().any(|t| t["name"] == "search_tool") && on.iter().any(|t| t["name"] == "use_tool"));
+        assert!(
+            on.iter().any(|t| t["name"] == "search_tool")
+                && on.iter().any(|t| t["name"] == "use_tool")
+        );
         assert!(on.iter().all(|t| t["name"] != "box__t1"));
-        assert!(on.iter().any(|t| t["name"] == "click"), "desktop tools stay listed");
+        assert!(
+            on.iter().any(|t| t["name"] == "click"),
+            "desktop tools stay listed"
+        );
         // 34 MCP tools alone stay listed one by one.
         let off = crate::tools::schemas_for(&desk_off);
         assert!(off.iter().any(|t| t["name"] == "box__t1"));
@@ -1380,14 +1448,28 @@ mod tests {
         let ws = Path::new(".");
         let send = r#"{"name":"mail__send_message","arguments":{"to":"a@example.com"}}"#;
         // Always cannot skip a hard tool behind use_tool: attended parks, unattended refuses.
-        assert_eq!(decide_with(&desk_on, "use_tool", send, true, None, ws, None), Decision::Ask);
-        let away = Gate { attended: false, ..desk_on };
+        assert_eq!(
+            decide_with(&desk_on, "use_tool", send, true, None, ws, None),
+            Decision::Ask
+        );
+        let away = Gate {
+            attended: false,
+            ..desk_on
+        };
         assert!(matches!(
             decide_with(&away, "use_tool", send, true, None, ws, None),
             Decision::Refuse(ref msg) if msg.contains("hard-class send")
         ));
         assert_eq!(
-            decide_with(&desk_on, "use_tool", r#"{"name":"box__t1","arguments":{}}"#, false, None, ws, None),
+            decide_with(
+                &desk_on,
+                "use_tool",
+                r#"{"name":"box__t1","arguments":{}}"#,
+                false,
+                None,
+                ws,
+                None
+            ),
             Decision::Run
         );
     }
@@ -1495,41 +1577,67 @@ mod tests {
                 reasoning: String::new(),
                 calls: Vec::new(),
                 usage: crate::Usage::default(),
-            ..Default::default()
-        })
+                ..Default::default()
+            })
         }
     }
 
     #[test]
     fn a_signed_in_server_connects_refreshes_once_on_401_and_signs_out() {
-        use super::{configured, doctor, invalidate, oauth, restart, shutdown_all, sign_in, sign_out, SignIn};
+        use super::{
+            configured, doctor, invalidate, oauth, restart, shutdown_all, sign_in, sign_out, SignIn,
+        };
         let dir = crate::harness::test_dir("mcp-oauth-slots");
         let _guard = ConfigGuard::set(&dir);
         let server = oauth::tests::AuthMcp::start();
-        let doc = format!(r#"{{"mcpServers": {{"linear": {{"url": "{}", "type": "http"}}, "kept": {{"url": "{}", "bearerToken": "sk-abcdefghijklmnopqrstuv"}}}}}}"#, server.url(), server.url());
+        let doc = format!(
+            r#"{{"mcpServers": {{"linear": {{"url": "{}", "type": "http"}}, "kept": {{"url": "{}", "bearerToken": "sk-abcdefghijklmnopqrstuv"}}}}}}"#,
+            server.url(),
+            server.url()
+        );
         std::fs::write(dir.join("mcp.json"), doc).unwrap();
         invalidate();
-        let state = |name: &str| configured().into_iter().find(|r| r.name == name).map(|r| r.sign_in);
+        let state = |name: &str| {
+            configured()
+                .into_iter()
+                .find(|r| r.name == name)
+                .map(|r| r.sign_in)
+        };
         assert_eq!(state("linear"), Some(SignIn::SignedOut));
-        assert_eq!(state("kept"), Some(SignIn::NotOffered), "its entry carries its own credentials");
+        assert_eq!(
+            state("kept"),
+            Some(SignIn::NotOffered),
+            "its entry carries its own credentials"
+        );
         let err = restart("linear").unwrap_err();
-        assert!(err.contains("HTTP 401") && err.ends_with("Sign in on its row under Native MCP"), "{err}");
+        assert!(
+            err.contains("HTTP 401") && err.ends_with("Sign in on its row under Native MCP"),
+            "{err}"
+        );
 
         let line = sign_in("linear", &oauth::tests::approving_browser("good-code")).unwrap();
         assert_eq!(line, "Signed in to linear");
-        assert_eq!(state("linear"), Some(SignIn::SignedIn("Signed in to linear".into())));
+        assert_eq!(
+            state("linear"),
+            Some(SignIn::SignedIn("Signed in to linear".into()))
+        );
         let row = doctor().into_iter().find(|r| r.name == "linear").unwrap();
         assert_eq!((row.status.as_str(), row.tool_count), ("connected", 1));
 
         // The server stops taking at-1: one refresh, and the reconnect succeeds.
         *server.live.lock().unwrap() = "at-2".into();
         restart("linear").unwrap();
-        assert_eq!(server.refreshes.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(
+            server.refreshes.load(std::sync::atomic::Ordering::SeqCst),
+            1
+        );
         assert_eq!(oauth::load("linear").unwrap().access_token, "at-2");
 
         assert_eq!(sign_out("linear"), "Signed out of linear");
         assert_eq!(state("linear"), Some(SignIn::SignedOut));
-        assert!(restart("linear").unwrap_err().ends_with("Sign in on its row under Native MCP"));
+        assert!(restart("linear")
+            .unwrap_err()
+            .ends_with("Sign in on its row under Native MCP"));
         shutdown_all();
         let _ = std::fs::remove_dir_all(dir);
     }

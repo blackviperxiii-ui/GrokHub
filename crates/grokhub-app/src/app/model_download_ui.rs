@@ -53,9 +53,17 @@ impl Fetch for HfFetch {
         }
         let resp = req.call().map_err(|e| e.to_string())?;
         let (start, total) = if resp.status() == 206 {
-            (offset, resp.header("content-range").and_then(md::content_range_total))
+            (
+                offset,
+                resp.header("content-range")
+                    .and_then(md::content_range_total),
+            )
         } else {
-            (0, resp.header("content-length").and_then(|v| v.trim().parse().ok()))
+            (
+                0,
+                resp.header("content-length")
+                    .and_then(|v| v.trim().parse().ok()),
+            )
         };
         Ok((Box::new(resp.into_reader()), start, total))
     }
@@ -63,22 +71,42 @@ impl Fetch for HfFetch {
     fn sha256(&self, repo: &str, file: &str) -> Result<String, String> {
         let url = md::tree_url(repo);
         crate::xai::egress_ok(&url, &[])?;
-        let resp = agent().get(&url).set("user-agent", "GrokHub").call().map_err(|e| e.to_string())?;
+        let resp = agent()
+            .get(&url)
+            .set("user-agent", "GrokHub")
+            .call()
+            .map_err(|e| e.to_string())?;
         let mut body = String::new();
-        resp.into_reader().take(4 * MIB).read_to_string(&mut body).map_err(|e| e.to_string())?;
-        md::sha256_from_tree(&body, file).ok_or_else(|| format!("Hugging Face lists no checksum for {file}"))
+        resp.into_reader()
+            .take(4 * MIB)
+            .read_to_string(&mut body)
+            .map_err(|e| e.to_string())?;
+        md::sha256_from_tree(&body, file)
+            .ok_or_else(|| format!("Hugging Face lists no checksum for {file}"))
     }
 }
 
 /// The status line for how a download ended.
 pub(super) fn outcome_status(m: &LocalModel, out: &Outcome, dir: &Path) -> String {
     match out {
-        Outcome::Done(rec) => format!("Downloaded {} ({}) to {}", m.name, ls::size_label(rec.bytes / MIB), dir.display()),
+        Outcome::Done(rec) => format!(
+            "Downloaded {} ({}) to {}",
+            m.name,
+            ls::size_label(rec.bytes / MIB),
+            dir.display()
+        ),
         Outcome::Paused { done } => {
-            format!("Paused {} at {}. Resume picks up where it stopped.", m.name, md::progress_line(*done, Some(m.download_mb * MIB)))
+            format!(
+                "Paused {} at {}. Resume picks up where it stopped.",
+                m.name,
+                md::progress_line(*done, Some(m.download_mb * MIB))
+            )
         }
         Outcome::Cancelled => format!("Cancelled the {} download.", m.name),
-        Outcome::BadChecksum => format!("{} didn't match its published checksum, so it was deleted. Try the download again.", m.name),
+        Outcome::BadChecksum => format!(
+            "{} didn't match its published checksum, so it was deleted. Try the download again.",
+            m.name
+        ),
         Outcome::Failed(why) => format!("{why} Resume picks up where it stopped."),
     }
 }
@@ -86,16 +114,28 @@ pub(super) fn outcome_status(m: &LocalModel, out: &Outcome, dir: &Path) -> Strin
 impl Cabin {
     /// The downloaded model's name, when one passed its check.
     pub(super) fn downloaded_model_name(&self) -> Option<&'static str> {
-        self.setup.installed.as_ref().and_then(|r| ls::model_by_id(&r.id)).map(|m| m.name)
+        self.setup
+            .installed
+            .as_ref()
+            .and_then(|r| ls::model_by_id(&r.id))
+            .map(|m| m.name)
     }
 
     /// The Settings "Local model" row: the download in flight, what's on disk, or nothing.
     pub(super) fn local_model_row_hint(&self) -> String {
         if let Some(dl) = &self.setup.dl {
-            return format!("Downloading {}: {}.", dl.model.name, md::progress_line(dl.done, dl.total));
+            return format!(
+                "Downloading {}: {}.",
+                dl.model.name,
+                md::progress_line(dl.done, dl.total)
+            );
         }
         match (self.setup.installed.as_ref(), self.downloaded_model_name()) {
-            (Some(rec), Some(name)) => format!("{name} ({}) is in {}.", ls::size_label(rec.bytes / MIB), models_dir().display()),
+            (Some(rec), Some(name)) => format!(
+                "{name} ({}) is in {}.",
+                ls::size_label(rec.bytes / MIB),
+                models_dir().display()
+            ),
             _ => "No local model installed.".into(),
         }
     }
@@ -104,7 +144,12 @@ impl Cabin {
         self.start_model_download_with(m, models_dir(), Box::new(HfFetch));
     }
 
-    pub(super) fn start_model_download_with(&mut self, m: &'static LocalModel, dir: std::path::PathBuf, fetch: Box<dyn Fetch + Send>) {
+    pub(super) fn start_model_download_with(
+        &mut self,
+        m: &'static LocalModel,
+        dir: std::path::PathBuf,
+        fetch: Box<dyn Fetch + Send>,
+    ) {
         if self.setup.dl.is_some() {
             return;
         }
@@ -120,7 +165,15 @@ impl Cabin {
         });
         let done = md::partial_bytes(&dir, m).unwrap_or(0);
         self.status = format!("Downloading {} to {}", m.name, dir.display());
-        self.setup.dl = Some(ModelDl { model: m, dir, ctl, rx, done, total: Some(m.download_mb * MIB), verifying: false });
+        self.setup.dl = Some(ModelDl {
+            model: m,
+            dir,
+            ctl,
+            rx,
+            done,
+            total: Some(m.download_mb * MIB),
+            verifying: false,
+        });
     }
 
     pub(super) fn pause_model_download(&self) {
@@ -160,7 +213,10 @@ impl Cabin {
                 }
                 Err(mpsc::TryRecvError::Empty) => break,
                 Err(mpsc::TryRecvError::Disconnected) => {
-                    finished = Some(Outcome::Failed(format!("The download of {} stopped.", dl.model.name)));
+                    finished = Some(Outcome::Failed(format!(
+                        "The download of {} stopped.",
+                        dl.model.name
+                    )));
                     break;
                 }
             }
@@ -188,7 +244,11 @@ impl Cabin {
             let line = if dl.verifying {
                 format!("Checking {}…", dl.model.name)
             } else {
-                format!("Downloading {}: {}", dl.model.name, md::progress_line(dl.done, dl.total))
+                format!(
+                    "Downloading {}: {}",
+                    dl.model.name,
+                    md::progress_line(dl.done, dl.total)
+                )
             };
             crate::cards::settings_note(ui, &line);
             crate::cards::settings_progress(ui, md::percent(dl.done, dl.total), crate::theme::fg());
@@ -205,7 +265,11 @@ impl Cabin {
         }
         let part = md::partial_bytes(&models_dir(), m);
         let label = match part {
-            Some(b) => format!("Resume {} ({})", m.name, md::progress_line(b, Some(m.download_mb * MIB))),
+            Some(b) => format!(
+                "Resume {} ({})",
+                m.name,
+                md::progress_line(b, Some(m.download_mb * MIB))
+            ),
             None => format!("Download {} ({})", m.name, ls::size_label(m.download_mb)),
         };
         ui.horizontal(|ui| {
@@ -219,7 +283,9 @@ impl Cabin {
     }
 
     fn ui_installed_note(&self, ui: &mut egui::Ui, rec: &Installed) {
-        let name = ls::model_by_id(&rec.id).map(|m| m.name).unwrap_or(rec.file.as_str());
+        let name = ls::model_by_id(&rec.id)
+            .map(|m| m.name)
+            .unwrap_or(rec.file.as_str());
         crate::cards::settings_note(
             ui,
             &format!(
@@ -241,7 +307,11 @@ mod tests {
     impl Fetch for FakeHf {
         fn open(&self, url: &str, offset: u64) -> Result<md::Opened, String> {
             assert_eq!(url, "https://huggingface.co/bartowski/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/Qwen2.5-1.5B-Instruct-Q4_K_M.gguf");
-            Ok((Box::new(Cursor::new(self.0[offset as usize..].to_vec())), offset, Some(self.0.len() as u64)))
+            Ok((
+                Box::new(Cursor::new(self.0[offset as usize..].to_vec())),
+                offset,
+                Some(self.0.len() as u64),
+            ))
         }
         fn sha256(&self, _repo: &str, _file: &str) -> Result<String, String> {
             Ok(md::sha256_hex(&self.0))
@@ -261,7 +331,10 @@ mod tests {
         assert_eq!(crate::xai::egress_ok(&md::tree_url(m.repo), &[]), Ok(()));
         let mut app = Cabin::quiet_for_test();
         app.start_model_download_with(m, dir.clone(), Box::new(FakeHf(b"tiny fake gguf".to_vec())));
-        assert_eq!(app.status, format!("Downloading Qwen 2.5 1.5B to {}", dir.display()));
+        assert_eq!(
+            app.status,
+            format!("Downloading Qwen 2.5 1.5B to {}", dir.display())
+        );
         for _ in 0..500 {
             app.poll_model_download();
             if app.setup.dl.is_none() {
@@ -270,15 +343,27 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
         assert!(app.setup.dl.is_none(), "the download never finished");
-        assert_eq!(app.status, format!("Downloaded Qwen 2.5 1.5B (0 MB) to {}", dir.display()));
+        assert_eq!(
+            app.status,
+            format!("Downloaded Qwen 2.5 1.5B (0 MB) to {}", dir.display())
+        );
         let rec = app.setup.installed.clone().expect("installed");
-        assert_eq!((rec.id.as_str(), rec.bytes), ("qwen2.5-1.5b-instruct-q4_k_m", 14));
+        assert_eq!(
+            (rec.id.as_str(), rec.bytes),
+            ("qwen2.5-1.5b-instruct-q4_k_m", 14)
+        );
         assert_eq!(md::installed(&dir), Some(rec));
-        assert!(app.cfg.local_model, "a finished download turns the toggle on");
+        assert!(
+            app.cfg.local_model,
+            "a finished download turns the toggle on"
+        );
         // No runtime in this build: the route stays off and the rows say why.
         assert!(!grokhub_agent::route::local::enabled());
         assert_eq!(app.downloaded_model_name(), Some("Qwen 2.5 1.5B"));
-        assert_eq!(app.local_model_row_hint(), format!("Qwen 2.5 1.5B (0 MB) is in {}.", models_dir().display()));
+        assert_eq!(
+            app.local_model_row_hint(),
+            format!("Qwen 2.5 1.5B (0 MB) is in {}.", models_dir().display())
+        );
         grokhub_agent::route::local::set_enabled(false);
         let _ = std::fs::remove_dir_all(root);
     }
@@ -291,16 +376,31 @@ mod tests {
             outcome_status(m, &Outcome::Paused { done: 2_100 * MIB }, dir),
             "Paused Qwen 2.5 7B at 2.1 GB of 4.6 GB. Resume picks up where it stopped."
         );
-        assert_eq!(outcome_status(m, &Outcome::Cancelled, dir), "Cancelled the Qwen 2.5 7B download.");
+        assert_eq!(
+            outcome_status(m, &Outcome::Cancelled, dir),
+            "Cancelled the Qwen 2.5 7B download."
+        );
         assert_eq!(
             outcome_status(m, &Outcome::BadChecksum, dir),
             "Qwen 2.5 7B didn't match its published checksum, so it was deleted. Try the download again."
         );
         assert_eq!(
-            outcome_status(m, &Outcome::Failed("The download of Qwen 2.5 7B stopped: timed out".into()), dir),
+            outcome_status(
+                m,
+                &Outcome::Failed("The download of Qwen 2.5 7B stopped: timed out".into()),
+                dir
+            ),
             "The download of Qwen 2.5 7B stopped: timed out Resume picks up where it stopped."
         );
-        let rec = Installed { id: m.id.into(), file: m.file.into(), sha256: "a".repeat(64), bytes: 4_680 * MIB };
-        assert_eq!(outcome_status(m, &Outcome::Done(rec), dir), format!("Downloaded Qwen 2.5 7B (4.6 GB) to {}", dir.display()));
+        let rec = Installed {
+            id: m.id.into(),
+            file: m.file.into(),
+            sha256: "a".repeat(64),
+            bytes: 4_680 * MIB,
+        };
+        assert_eq!(
+            outcome_status(m, &Outcome::Done(rec), dir),
+            format!("Downloaded Qwen 2.5 7B (4.6 GB) to {}", dir.display())
+        );
     }
 }

@@ -16,7 +16,7 @@
 - New behavior: put logic in a pure fn (often in grokhub-core) and unit-test it; keep the egui code thin. Then add a cabin test with `isolated_cabin` and finish with `release_isolated`.
 - Disk work stays off the UI thread: spawn it and poll a channel, as `/recall` and persist do. The one exception is the final `config::save` in `on_exit`. Settings → Behavior self-review rows paint from `harness.self_review.file` / `.history` (filled by `ensure_self_review_file` / `history_versions_now`); writers go through `mutate_self_review_file` and clear `.history` when a version changes. Short `request_repaint_after` timers (palette, Pulse crossfade, Permissions, folder pick) only schedule while a search/dialog/keyring wait is in flight or a crossfade is mid-motion (`motion_ok` + mid `tab_t`); idle pages request none.
 ## What breaks it
-- Growing the `ComposerStackSlot::Pill` arm in `chat_ui.rs`: `chat_composer_pins_stop_on_the_right` reads a fixed 12,000-byte window after it (`CLAUDE.md`). Move code into helpers.
+- Growing the `ComposerStackSlot::Pill` arm in `chat_ui.rs`: `chat_composer_pins_stop_on_the_right` reads a fixed 15,000-byte window after it (`CLAUDE.md`). Move code into helpers.
 - Moving a fn between files or renaming it: `fn_src` finds `fn name(` in `cabin_src()` (a fixed list of submodules) and ends at the next same-indent fn, and many tests assert on that slice.
 - Reordering `paint_approval_stack` / `paint_perm_ask` / `paint_elicit_ask` in `chat_ui.rs`: `needs_attention_summary_is_only_on_the_stack` slices between those signatures.
 - Blocking the frame on disk, network, or a model call.
