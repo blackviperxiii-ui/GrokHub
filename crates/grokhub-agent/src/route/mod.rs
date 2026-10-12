@@ -1228,12 +1228,12 @@ mod tests {
                 10
             )
         );
+        // Workhorse baseline: prefer the non-flagship reasoner (4.5) over 4.7.
         assert_eq!(
             (a.model.as_str(), a.effort.as_deref()),
-            ("grok-4.7", Some("medium"))
+            ("grok-4.5", Some("medium"))
         );
         assert_eq!(a.reason, "balanced · Medium: everyday chat.");
-        // No table yet: equal prices, so the session's own model wins the tie.
         assert_eq!(
             a.rule_ids,
             vec!["model:cheapest".to_string(), "class:chat:default".into()]

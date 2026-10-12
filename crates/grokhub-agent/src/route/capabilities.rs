@@ -19,8 +19,40 @@ use super::table::SpeedQuality;
 /// On-disk catalog schema.
 pub const CATALOG_SCHEMA: u32 = 1;
 pub const CATALOG_FILE: &str = "capability_catalog.json";
-/// Bump when curated family heuristics change (research refresh).
-pub const SEED_VERSION: u32 = 1;
+/// Bump when curated family heuristics or baseline-lane scoring change.
+pub const SEED_VERSION: u32 = 2;
+
+/// Baseline lane for table build / Stay. Attention escalate can still move
+/// Workhorse → Flagship for one ask; ForceTop classes stay Flagship.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BaselineLane {
+    /// Cheap/fast task model (often non-reasoning).
+    Cheap,
+    /// Everyday mid reasoning — not the plan's strongest model.
+    Workhorse,
+    /// Coding-strong specialist.
+    Code,
+    /// Strongest reasoning on the plan (repair / prepare / plan / design / debug).
+    Flagship,
+}
+
+impl BaselineLane {
+    pub fn of(class: &str) -> Self {
+        let class = policy::class_row(class).map(|r| r.class).unwrap_or(class);
+        match class {
+            "background:classify"
+            | "background:triage"
+            | "background:redact"
+            | "background:summarize"
+            | "background:compact"
+            | "chat:quick" => Self::Cheap,
+            "code:multi-file" => Self::Code,
+            "plan" | "design" | "debug" | "prepare:hard" | "repair:diagnose" => Self::Flagship,
+            // chat:default, code:edit-small, desktop:soft, memory/judge/dream, …
+            _ => Self::Workhorse,
+        }
+    }
+}
 
 /// 0..=100 scores on each axis. Higher is better for that strength.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -112,31 +144,32 @@ pub fn class_need(class: &str) -> ClassNeed {
             tools: 0,
             require_reasoning: false,
         },
+        // Workhorse backgrounds: solid mid reasoning, keep the flagship free.
         "background:memory" => ClassNeed {
-            reasoning: 7,
+            reasoning: 5,
             code: 0,
-            speed: 6,
-            cost: 6,
+            speed: 5,
+            cost: 8,
             vision: 0,
             long_context: 3,
             tools: 0,
             require_reasoning: true,
         },
         "background:judge" => ClassNeed {
-            reasoning: 7,
+            reasoning: 5,
             code: 2,
-            speed: 3,
-            cost: 4,
+            speed: 4,
+            cost: 7,
             vision: 0,
             long_context: 2,
             tools: 4,
             require_reasoning: true,
         },
         "background:dream" => ClassNeed {
-            reasoning: 6,
+            reasoning: 5,
             code: 0,
             speed: 4,
-            cost: 5,
+            cost: 7,
             vision: 0,
             long_context: 5,
             tools: 0,
@@ -144,46 +177,46 @@ pub fn class_need(class: &str) -> ClassNeed {
         },
         "chat:default" => ClassNeed {
             reasoning: 5,
-            code: 3,
-            speed: 4,
-            cost: 5,
+            code: 2,
+            speed: 5,
+            cost: 7,
             vision: 2,
             long_context: 3,
-            tools: 5,
+            tools: 4,
             require_reasoning: true,
         },
         "code:edit-small" => ClassNeed {
             reasoning: 4,
-            code: 6,
+            code: 5,
             speed: 5,
-            cost: 6,
+            cost: 7,
             vision: 0,
             long_context: 2,
-            tools: 5,
+            tools: 4,
             require_reasoning: true,
         },
         "plan" => ClassNeed {
-            reasoning: 9,
-            code: 3,
-            speed: 1,
-            cost: 2,
+            reasoning: 10,
+            code: 2,
+            speed: 0,
+            cost: 0,
             vision: 0,
             long_context: 6,
             tools: 3,
             require_reasoning: true,
         },
         "design" => ClassNeed {
-            reasoning: 8,
+            reasoning: 9,
             code: 2,
-            speed: 1,
-            cost: 2,
+            speed: 0,
+            cost: 0,
             vision: 3,
             long_context: 5,
             tools: 2,
             require_reasoning: true,
         },
         "code:multi-file" => ClassNeed {
-            reasoning: 7,
+            reasoning: 6,
             code: 10,
             speed: 1,
             cost: 1,
@@ -194,43 +227,43 @@ pub fn class_need(class: &str) -> ClassNeed {
         },
         "debug" => ClassNeed {
             reasoning: 10,
-            code: 6,
-            speed: 1,
-            cost: 1,
+            code: 4,
+            speed: 0,
+            cost: 0,
             vision: 0,
             long_context: 4,
-            tools: 7,
+            tools: 5,
             require_reasoning: true,
         },
         "desktop:soft" => ClassNeed {
             reasoning: 5,
-            code: 3,
-            speed: 3,
-            cost: 4,
+            code: 2,
+            speed: 4,
+            cost: 6,
             vision: 4,
             long_context: 2,
-            tools: 7,
+            tools: 6,
             require_reasoning: true,
         },
         "prepare:hard" => ClassNeed {
             reasoning: 10,
-            code: 5,
+            code: 3,
             speed: 0,
-            cost: 1,
+            cost: 0,
             vision: 0,
             long_context: 3,
-            tools: 6,
+            tools: 5,
             require_reasoning: true,
         },
         // Host repair: always the strongest reasoning model. Never cheap/fast.
         "repair:diagnose" => ClassNeed {
             reasoning: 10,
-            code: 5,
+            code: 3,
             speed: 0,
             cost: 0,
             vision: 1,
             long_context: 4,
-            tools: 6,
+            tools: 5,
             require_reasoning: true,
         },
         _ => ClassNeed {
@@ -256,6 +289,33 @@ pub fn fit_score(caps: &Caps, need: &ClassNeed) -> f64 {
         + term(need.vision, caps.vision)
         + term(need.long_context, caps.long_context)
         + term(need.tools, caps.tools)
+}
+
+/// Strongest reasoning score among candidate caps (for Workhorse flagship penalty).
+pub fn plan_max_reasoning<'a>(caps: impl IntoIterator<Item = &'a Caps>) -> u8 {
+    caps.into_iter().map(|c| c.reasoning).max().unwrap_or(0)
+}
+
+/// Baseline rank score for table build / Stay. Workhorse reserves the plan's
+/// strongest reasoner for Flagship classes and attention escalate; Flagship
+/// boosts raw reasoning so a coding mid cannot beat repair/debug/plan.
+pub fn baseline_score(caps: &Caps, need: &ClassNeed, lane: BaselineLane, plan_max_r: u8) -> f64 {
+    let mut s = fit_score(caps, need);
+    match lane {
+        BaselineLane::Cheap | BaselineLane::Code => s,
+        BaselineLane::Workhorse => {
+            // Everyday baseline must not burn the flagship when a weaker
+            // reasoner exists on the plan (coding mid or dated mid).
+            if plan_max_r >= 90 && caps.reasoning + 1 >= plan_max_r {
+                s -= 0.40;
+            }
+            s
+        }
+        BaselineLane::Flagship => {
+            // Hard preference for deepest reasoning (repair / prepare / debug / plan).
+            s + (caps.reasoning as f64) * 0.02
+        }
+    }
 }
 
 /// Build (or refresh) the catalog from the live registry + versioned seed.
@@ -545,6 +605,12 @@ mod tests {
         assert!(class_need("repair:diagnose").require_reasoning);
         assert_eq!(class_need("repair:diagnose").cost, 0);
         assert_eq!(class_need("repair:diagnose").speed, 0);
+        assert_eq!(
+            BaselineLane::of("background:memory"),
+            BaselineLane::Workhorse
+        );
+        assert_eq!(BaselineLane::of("repair:diagnose"), BaselineLane::Flagship);
+        assert_eq!(BaselineLane::of("code:multi-file"), BaselineLane::Code);
         assert!(class_need("code:multi-file").code >= class_need("plan").code);
         assert!(class_need("debug").reasoning >= class_need("chat:default").reasoning);
         assert!(class_need("chat:quick").speed >= 8);
@@ -552,7 +618,7 @@ mod tests {
     }
 
     #[test]
-    fn fit_score_picks_non_reasoning_for_triage_and_flagship_for_debug() {
+    fn baseline_score_reserves_flagship_and_prefers_mid_workhorse() {
         let mut non = derive_caps(&meta_priced("grok-4.20-0309-non-reasoning", 8_000, false));
         let mut mid = derive_caps(&meta_priced("grok-4.20-0309-reasoning", 20_000, true));
         let mut c43 = derive_caps(&meta_priced("grok-4.3", 40_000, true));
@@ -561,18 +627,31 @@ mod tests {
         apply_seed("grok-4.20-0309-reasoning", &mut mid);
         apply_seed("grok-4.3", &mut c43);
         apply_seed("grok-4.7", &mut c47);
+        let max_r = plan_max_reasoning([&non, &mid, &c43, &c47]);
 
         let triage = class_need("background:triage");
         assert!(fit_score(&non, &triage) > fit_score(&c47, &triage));
 
         let memory = class_need("background:memory");
-        assert!(fit_score(&mid, &memory) > fit_score(&non, &memory));
+        assert!(
+            baseline_score(&mid, &memory, BaselineLane::Workhorse, max_r)
+                > baseline_score(&c47, &memory, BaselineLane::Workhorse, max_r)
+        );
+        // SuperGrok-shaped (no mid): workhorse prefers coding mid over flagship.
+        let max_sg = plan_max_reasoning([&c43, &c47]);
+        assert!(
+            baseline_score(&c43, &memory, BaselineLane::Workhorse, max_sg)
+                > baseline_score(&c47, &memory, BaselineLane::Workhorse, max_sg)
+        );
 
         let multi = class_need("code:multi-file");
         assert!(fit_score(&c43, &multi) > fit_score(&mid, &multi));
 
-        let debug = class_need("debug");
-        assert!(fit_score(&c47, &debug) > fit_score(&c43, &debug));
+        let repair = class_need("repair:diagnose");
+        assert!(
+            baseline_score(&c47, &repair, BaselineLane::Flagship, max_r)
+                > baseline_score(&c43, &repair, BaselineLane::Flagship, max_r)
+        );
     }
 
     #[test]
