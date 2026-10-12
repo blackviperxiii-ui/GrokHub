@@ -27,8 +27,7 @@ const FORBIDDEN_LEAVES: &[(&str, &str)] = &[
     ("hub-state.json", "forbidden path: hub pair tokens"),
 ];
 
-pub fn forbidden_reason(cmd: &str) -> Option<&'static str> {
-    let c = cmd.to_ascii_lowercase().replace('\\', "/");
+fn forbidden_on(c: &str) -> Option<&'static str> {
     if c.contains("/etc/shadow") {
         return Some("forbidden path: /etc/shadow");
     }
@@ -39,8 +38,274 @@ pub fn forbidden_reason(cmd: &str) -> Option<&'static str> {
         return Some("forbidden path: grok login");
     }
     for (leaf, why) in FORBIDDEN_LEAVES {
-        if contains_path_leaf(&c, leaf) {
+        if contains_path_leaf(c, leaf) {
             return Some(*why);
+        }
+    }
+    None
+}
+
+/// Expand simple `name=value` assignments into `$name` / `${name}` so
+/// `s=ssh; cat ~/.$s/id_rsa` still trips the `.ssh` leaf.
+fn expand_shell_assignments(cmd: &str) -> String {
+    let mut assigns: Vec<(String, String)> = Vec::new();
+    let bytes = cmd.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        let start = i;
+        if bytes[i].is_ascii_alphabetic() || bytes[i] == b'_' {
+            i += 1;
+            while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_') {
+                i += 1;
+            }
+            if i < bytes.len() && bytes[i] == b'=' {
+                let name = &cmd[start..i];
+                i += 1;
+                let quote = bytes.get(i).copied().filter(|b| *b == b'"' || *b == b'\'');
+                let val_start = if quote.is_some() { i + 1 } else { i };
+                let mut j = val_start;
+                if let Some(q) = quote {
+                    while j < bytes.len() && bytes[j] != q {
+                        j += 1;
+                    }
+                    let value = cmd[val_start..j].to_string();
+                    if !name.is_empty()
+                        && value
+                            .chars()
+                            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-'))
+                    {
+                        assigns.push((name.to_string(), value));
+                    }
+                    i = if j < bytes.len() { j + 1 } else { j };
+                    continue;
+                }
+                while j < bytes.len()
+                    && (bytes[j].is_ascii_alphanumeric()
+                        || matches!(bytes[j], b'.' | b'_' | b'-'))
+                {
+                    j += 1;
+                }
+                if j > val_start {
+                    assigns.push((name.to_string(), cmd[val_start..j].to_string()));
+                }
+                i = j;
+                continue;
+            }
+        }
+        i = start + 1;
+    }
+    assigns.sort_by(|a, b| b.0.len().cmp(&a.0.len()));
+    let mut out = cmd.to_string();
+    for (name, value) in assigns {
+        out = out.replace(&format!("${{{name}}}"), &value);
+        // Replace `$name` only when the next char is not an identifier char.
+        let needle = format!("${name}");
+        let mut rebuilt = String::with_capacity(out.len());
+        let mut rest = out.as_str();
+        while let Some(at) = rest.find(&needle) {
+            rebuilt.push_str(&rest[..at]);
+            let after = &rest[at + needle.len()..];
+            let next_id = after
+                .chars()
+                .next()
+                .is_some_and(|ch| ch.is_ascii_alphanumeric() || ch == '_');
+            if next_id {
+                rebuilt.push_str(&needle);
+            } else {
+                rebuilt.push_str(&value);
+            }
+            rest = after;
+        }
+        rebuilt.push_str(rest);
+        out = rebuilt;
+    }
+    out
+}
+
+/// Join adjacent quoted fragments glued with `+` (Python / JS style).
+fn collapse_string_concats(cmd: &str) -> String {
+    let mut s = cmd.to_string();
+    loop {
+        let before = s.clone();
+        s = collapse_one_quote_concat(&s, '"');
+        s = collapse_one_quote_concat(&s, '\'');
+        if s == before {
+            break;
+        }
+    }
+    s
+}
+
+fn collapse_one_quote_concat(cmd: &str, q: char) -> String {
+    let mut out = String::with_capacity(cmd.len());
+    let chars: Vec<char> = cmd.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i] == q {
+            let mut piece = String::new();
+            i += 1;
+            while i < chars.len() && chars[i] != q {
+                piece.push(chars[i]);
+                i += 1;
+            }
+            if i < chars.len() {
+                i += 1; // closing quote
+            }
+            // Absorb further `+ "…"` / `+ '…'` with the same quote.
+            loop {
+                let mut j = i;
+                while j < chars.len() && chars[j].is_whitespace() {
+                    j += 1;
+                }
+                if j >= chars.len() || chars[j] != '+' {
+                    break;
+                }
+                j += 1;
+                while j < chars.len() && chars[j].is_whitespace() {
+                    j += 1;
+                }
+                if j >= chars.len() || chars[j] != q {
+                    break;
+                }
+                j += 1;
+                while j < chars.len() && chars[j] != q {
+                    piece.push(chars[j]);
+                    j += 1;
+                }
+                if j >= chars.len() {
+                    break;
+                }
+                j += 1; // closing
+                i = j;
+            }
+            out.push(q);
+            out.push_str(&piece);
+            out.push(q);
+            continue;
+        }
+        out.push(chars[i]);
+        i += 1;
+    }
+    out
+}
+
+/// Collapse `$(echo word)` and `` `echo word` `` so split leaves rejoin.
+fn collapse_echo_subs(cmd: &str) -> String {
+    let mut s = cmd.to_string();
+    loop {
+        let before = s.clone();
+        s = collapse_echo_dollar(&s);
+        s = collapse_echo_backtick(&s);
+        if s == before {
+            break;
+        }
+    }
+    s
+}
+
+fn collapse_echo_dollar(cmd: &str) -> String {
+    let mut out = String::with_capacity(cmd.len());
+    let lower = cmd.to_ascii_lowercase();
+    let bytes = lower.as_bytes();
+    let orig = cmd.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'$' && i + 1 < bytes.len() && bytes[i + 1] == b'(' {
+            let mut j = i + 2;
+            while j < bytes.len() && bytes[j].is_ascii_whitespace() {
+                j += 1;
+            }
+            if j + 4 <= bytes.len() && &bytes[j..j + 4] == b"echo" {
+                j += 4;
+                if j < bytes.len() && bytes[j].is_ascii_whitespace() {
+                    while j < bytes.len() && bytes[j].is_ascii_whitespace() {
+                        j += 1;
+                    }
+                    let word_start = j;
+                    while j < bytes.len()
+                        && (bytes[j].is_ascii_alphanumeric()
+                            || matches!(bytes[j], b'.' | b'_' | b'-'))
+                    {
+                        j += 1;
+                    }
+                    let word_end = j;
+                    while j < bytes.len() && bytes[j].is_ascii_whitespace() {
+                        j += 1;
+                    }
+                    if word_end > word_start && j < bytes.len() && bytes[j] == b')' {
+                        out.push_str(&cmd[word_start..word_end]);
+                        i = j + 1;
+                        continue;
+                    }
+                }
+            }
+        }
+        out.push(orig[i] as char);
+        i += 1;
+    }
+    out
+}
+
+fn collapse_echo_backtick(cmd: &str) -> String {
+    let mut out = String::with_capacity(cmd.len());
+    let lower = cmd.to_ascii_lowercase();
+    let bytes = lower.as_bytes();
+    let orig = cmd.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'`' {
+            let mut j = i + 1;
+            while j < bytes.len() && bytes[j].is_ascii_whitespace() {
+                j += 1;
+            }
+            if j + 4 <= bytes.len() && &bytes[j..j + 4] == b"echo" {
+                j += 4;
+                if j < bytes.len() && bytes[j].is_ascii_whitespace() {
+                    while j < bytes.len() && bytes[j].is_ascii_whitespace() {
+                        j += 1;
+                    }
+                    let word_start = j;
+                    while j < bytes.len()
+                        && (bytes[j].is_ascii_alphanumeric()
+                            || matches!(bytes[j], b'.' | b'_' | b'-'))
+                    {
+                        j += 1;
+                    }
+                    let word_end = j;
+                    while j < bytes.len() && bytes[j].is_ascii_whitespace() {
+                        j += 1;
+                    }
+                    if word_end > word_start && j < bytes.len() && bytes[j] == b'`' {
+                        out.push_str(&cmd[word_start..word_end]);
+                        i = j + 1;
+                        continue;
+                    }
+                }
+            }
+        }
+        out.push(orig[i] as char);
+        i += 1;
+    }
+    out
+}
+
+fn deobfuscate(cmd: &str) -> String {
+    let mut s = cmd.to_ascii_lowercase().replace('\\', "/");
+    s = expand_shell_assignments(&s);
+    s = collapse_string_concats(&s);
+    s = collapse_echo_subs(&s);
+    s
+}
+
+pub fn forbidden_reason(cmd: &str) -> Option<&'static str> {
+    let c = cmd.to_ascii_lowercase().replace('\\', "/");
+    if let Some(why) = forbidden_on(&c) {
+        return Some(why);
+    }
+    let d = deobfuscate(cmd);
+    if d != c {
+        if let Some(why) = forbidden_on(&d) {
+            return Some(why);
         }
     }
     None
@@ -112,6 +377,34 @@ mod tests {
         assert!(
             forbidden_reason("cat my.gnupg_backup/file").is_none(),
             "unrelated names that contain .gnupg must not trip the rail"
+        );
+    }
+
+    #[test]
+    fn blocks_common_obfuscations_that_rebuild_forbidden_leaves() {
+        assert_eq!(
+            forbidden_reason("s=ssh; cat ~/.$s/id_rsa"),
+            Some("forbidden path: ssh keys")
+        );
+        assert_eq!(
+            forbidden_reason(r#"python3 -c 'open("/home/j/.s"+"sh/id_rsa").read()'"#),
+            Some("forbidden path: ssh keys")
+        );
+        assert_eq!(
+            forbidden_reason("cat $(echo $HOME)/.s$(echo sh)/id_rsa"),
+            Some("forbidden path: ssh keys")
+        );
+        assert_eq!(
+            forbidden_reason("g=gnupg; ls ~/.$g"),
+            Some("forbidden path: gnupg")
+        );
+        assert!(
+            forbidden_reason("echo hello; ls /tmp").is_none(),
+            "plain commands must stay allowed"
+        );
+        assert!(
+            forbidden_reason("name=ssh; echo $name").is_none(),
+            "mentioning ssh as a value without a path leaf must not trip"
         );
     }
 
