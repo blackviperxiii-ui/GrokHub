@@ -281,11 +281,7 @@ impl Cabin {
             }
         }
         if !related.is_empty() {
-            reqs.extend(ps::related_requests(
-                &self.cfg.pulse_sources,
-                &related,
-                now,
-            ));
+            reqs.extend(ps::related_requests(&self.cfg.pulse_sources, &related, now));
             cache.related.clear();
             if let Err(err) = ps::save_cache(&path, &cache) {
                 self.status = err;
@@ -489,15 +485,16 @@ impl Cabin {
     }
 
     /// The interest a post was for moves too when its title doesn't name it.
-    /// Graph edges use the because topic as the anchor (strengthen / close / branch).
+    /// Topic weights often already moved via `pulse_note`; edges always get the anchor.
     fn post_topic_feedback(&mut self, card: &grokhub_core::UpdateCard, signal: InterestSignal) {
         let anchor = card.pulse.because.as_deref();
-        self.interests_feedback_anchored(&card.title, anchor, signal);
         if let Some(topic) = anchor {
             if !grokhub_core::interests::names_topic(&card.title, topic) {
                 self.interests_feedback_anchored(topic, Some(topic), signal);
+                return;
             }
         }
+        self.interests_edge_feedback(&card.title, anchor, signal);
     }
 
     fn nudge_post_source(&mut self, card: &grokhub_core::UpdateCard, step: i32, related: bool) {

@@ -32,10 +32,26 @@ impl Cabin {
             .get_or_insert_with(|| interests::load(&interests_path()))
     }
 
-    fn persist_interests(&mut self) {
+    pub(super) fn persist_interests(&mut self) {
         let profile = self.interests_now().clone();
         if let Err(err) = interests::save(&interests_path(), &profile) {
             self.status = err;
+        }
+    }
+
+    /// Edge-only feedback (topic weights already moved elsewhere).
+    pub(super) fn interests_edge_feedback(
+        &mut self,
+        title: &str,
+        anchor: Option<&str>,
+        signal: InterestSignal,
+    ) {
+        let now = now_ms();
+        let profile = self.interests_now();
+        let before = profile.clone();
+        profile.edge_feedback(title, anchor, signal, now);
+        if *profile != before {
+            self.persist_interests();
         }
     }
 

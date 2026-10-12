@@ -560,7 +560,9 @@ impl InterestProfile {
         out
     }
 
-    fn edge_feedback(
+    /// Update connection edges from a card action without changing topic weights.
+    /// Call this when weights already moved (e.g. via `pulse_note` + title match).
+    pub fn edge_feedback(
         &mut self,
         text: &str,
         anchor: Option<&str>,
@@ -698,14 +700,7 @@ impl InterestGraph {
         });
     }
 
-    fn note_cooccur(
-        &mut self,
-        a: &str,
-        b: &str,
-        chat_id: &str,
-        kind: EdgeKind,
-        now_ms: u64,
-    ) {
+    fn note_cooccur(&mut self, a: &str, b: &str, chat_id: &str, kind: EdgeKind, now_ms: u64) {
         let a = clean_topic(a);
         let b = clean_topic(b);
         if a.is_empty() || b.is_empty() || a.eq_ignore_ascii_case(&b) {
@@ -716,19 +711,10 @@ impl InterestGraph {
         self.upsert_edge(&b, &a, kind, chat_id, now_ms);
     }
 
-    fn upsert_edge(
-        &mut self,
-        from: &str,
-        to: &str,
-        kind: EdgeKind,
-        chat_id: &str,
-        now_ms: u64,
-    ) {
-        if let Some(e) = self
-            .edges
-            .iter_mut()
-            .find(|e| e.from.eq_ignore_ascii_case(from) && e.to.eq_ignore_ascii_case(to) && e.kind == kind)
-        {
+    fn upsert_edge(&mut self, from: &str, to: &str, kind: EdgeKind, chat_id: &str, now_ms: u64) {
+        if let Some(e) = self.edges.iter_mut().find(|e| {
+            e.from.eq_ignore_ascii_case(from) && e.to.eq_ignore_ascii_case(to) && e.kind == kind
+        }) {
             if e.closed {
                 return;
             }
@@ -750,11 +736,9 @@ impl InterestGraph {
 
     fn nudge_pair(&mut self, a: &str, b: &str, delta: i16, now_ms: u64) {
         for (from, to) in [(a, b), (b, a)] {
-            if let Some(e) = self
-                .edges
-                .iter_mut()
-                .find(|e| e.from.eq_ignore_ascii_case(from) && e.to.eq_ignore_ascii_case(to) && !e.closed)
-            {
+            if let Some(e) = self.edges.iter_mut().find(|e| {
+                e.from.eq_ignore_ascii_case(from) && e.to.eq_ignore_ascii_case(to) && !e.closed
+            }) {
                 e.weight = (e.weight + delta).clamp(1, EDGE_WEIGHT_MAX);
                 e.last_seen_ms = now_ms;
             } else if delta > 0 {
@@ -968,7 +952,10 @@ mod tests {
         // One chat is not enough to promote; two chats with the same title are.
         let chats = vec![
             ("c1".into(), "New chat".into()),
-            ("c2".into(), "Fix the cabin build on Windows please now".into()),
+            (
+                "c2".into(),
+                "Fix the cabin build on Windows please now".into(),
+            ),
             ("c3".into(), "Home espresso".into()),
         ];
         let saved = titles(&["Bambu printers"]);
