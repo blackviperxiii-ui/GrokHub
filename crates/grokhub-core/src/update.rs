@@ -312,62 +312,25 @@ pub fn clone_needs_recover(source: &Path, channel: Channel) -> Result<bool, Stri
 fn fetch_channel_tip(source: &Path, channel: Channel) -> Result<(), String> {
     let want = channel.branch();
     let refspec = format!("+refs/heads/{want}:refs/remotes/origin/{want}");
-    // Stable resets to the newest v* tag when one exists.
-    let (ok, _) = if matches!(channel, Channel::Stable) {
-        git_stdout_within(
-            source,
-            &["fetch", "--quiet", "--tags", "origin", &refspec],
-            Duration::from_secs(60),
-        )?
-    } else {
-        git_stdout_within(
-            source,
-            &["fetch", "--quiet", "origin", &refspec],
-            Duration::from_secs(60),
-        )?
-    };
+    let (ok, _) = git_stdout_within(
+        source,
+        &["fetch", "--quiet", "origin", &refspec],
+        Duration::from_secs(60),
+    )?;
     if !ok {
         return Err(format!("git fetch origin {want} failed"));
     }
     Ok(())
 }
 
-/// Tip the recover step resets to: `origin/beta`, or the newest `vX.Y.Z` tag
-/// on stable (falling back to `origin/main`).
+/// Tip the recover step resets to — the same ref [`clone_needs_recover`] and
+/// `pull --ff-only` use (`origin/main` / `origin/beta`). Never a release tag:
+/// resetting to an old `vX.Y.Z` would leave a clone that keeps looking
+/// diverged from `origin/main` on every later Update.
 fn resolve_channel_tip(source: &Path, channel: Channel) -> Result<String, String> {
-    match channel {
-        Channel::Beta => {
-            let tip = "origin/beta".to_string();
-            git_rev_parse(source, &tip)?;
-            Ok(tip)
-        }
-        Channel::Stable => {
-            let (ok, out) = git_stdout(
-                source,
-                &["tag", "-l", "v[0-9]*", "--sort=-v:refname"],
-            )?;
-            if ok {
-                for line in out.lines() {
-                    let tag = line.trim();
-                    if tag.is_empty() {
-                        continue;
-                    }
-                    // Prefer plain vX.Y.Z release tags, not -beta / -rc.
-                    let rest = tag.strip_prefix('v').unwrap_or(tag);
-                    if rest.split('.').count() == 3
-                        && rest
-                            .bytes()
-                            .all(|b| b.is_ascii_digit() || b == b'.')
-                    {
-                        return Ok(tag.to_string());
-                    }
-                }
-            }
-            let tip = "origin/main".to_string();
-            git_rev_parse(source, &tip)?;
-            Ok(tip)
-        }
-    }
+    let tip = format!("origin/{}", channel.branch());
+    git_rev_parse(source, &tip)?;
+    Ok(tip)
 }
 
 /// When the clone is dirty or diverged from the channel tip, commit the
@@ -404,6 +367,7 @@ pub fn recover_clone_if_needed(source: &Path, channel: Channel) -> Result<Option
             return Err("git add failed while saving the clone".into());
         }
         let bak_msg = format!("GrokHub update backup before reset to {tip}");
+        // Disable signing: a global commit.gpgsign=true must not abort recover.
         let (ok, _) = git_stdout_within(
             source,
             &[
@@ -411,8 +375,11 @@ pub fn recover_clone_if_needed(source: &Path, channel: Channel) -> Result<Option
                 "user.email=cabin@local",
                 "-c",
                 "user.name=GrokHub",
+                "-c",
+                "commit.gpgsign=false",
                 "commit",
                 "--no-verify",
+                "--no-gpg-sign",
                 "-m",
                 &bak_msg,
             ],
@@ -751,7 +718,7 @@ pub fn update_plan_steps(cmds: Vec<String>) -> Vec<HostPlanStep> {
                         "save dirty or diverged work on a grokhub-backup/… branch, reset to origin/beta — config stays".into()
                     }
                     Channel::Stable => {
-                        "save dirty or diverged work on a grokhub-backup/… branch, reset to the latest release tag — config stays".into()
+                        "save dirty or diverged work on a grokhub-backup/… branch, reset to origin/main — config stays".into()
                     }
                 }
             } else if cmd.contains("remote set-url") || cmd.contains("remote add") {
@@ -1916,6 +1883,53 @@ mod channel_tip_tests {
         assert!(plan.iter().all(|c| parse_clone_recover_step(c).is_none()), "{plan:?}");
         let branches = git_out(&fx.client, &["branch", "--list", "grokhub-backup/*"]);
         assert!(branches.trim().is_empty(), "no backup on clean: {branches}");
+    }
+
+    #[test]
+    fn recover_stable_resets_to_origin_main_not_an_old_tag() {
+        let fx = TipsFixture::new("recover-not-tag");
+        git_ok(&fx.client, &["config", "user.email", "cabin@test"]);
+        git_ok(&fx.client, &["config", "user.name", "Cabin"]);
+        git_ok(&fx.client, &["config", "commit.gpgsign", "false"]);
+        // An old release tag on the seed commit must not become the recover tip.
+        git_ok(&fx.work, &["tag", "v2.10.0", "origin/main"]);
+        git_ok(&fx.work, &["push", "-q", "origin", "v2.10.0"]);
+        fx.commit_on("main", "newer-main.txt");
+        let tip = git_out(&fx.work, &["rev-parse", "origin/main"]);
+        let tag = git_out(&fx.work, &["rev-parse", "v2.10.0"]);
+        assert_ne!(tip, tag, "main moved past the tag");
+        git_ok(&fx.client, &["checkout", "-q", "main"]);
+        std::fs::write(fx.client.join("local-only.txt"), "mine").unwrap();
+        git_ok(&fx.client, &["add", "."]);
+        git_ok(&fx.client, &["commit", "-q", "-m", "local diverge"]);
+        // Fetch the tag into the client so resolve would see it if it looked.
+        git_ok(&fx.client, &["fetch", "-q", "origin", "--tags"]);
+        let bak = recover_clone_if_needed(&fx.client, Channel::Stable)
+            .expect("recover")
+            .expect("backup");
+        assert!(bak.starts_with("grokhub-backup/"), "{bak}");
+        assert_eq!(git_out(&fx.client, &["rev-parse", "HEAD"]), tip);
+        assert_ne!(git_out(&fx.client, &["rev-parse", "HEAD"]), tag);
+        assert!(!clone_needs_recover(&fx.client, Channel::Stable).unwrap());
+    }
+
+    #[test]
+    fn recover_backup_commit_succeeds_when_gpgsign_is_on() {
+        let fx = TipsFixture::new("recover-gpg");
+        git_ok(&fx.client, &["config", "user.email", "cabin@test"]);
+        git_ok(&fx.client, &["config", "user.name", "Cabin"]);
+        // Global-style signing on — recover must still commit with --no-gpg-sign.
+        git_ok(&fx.client, &["config", "commit.gpgsign", "true"]);
+        fx.commit_on("main", "upstream.txt");
+        let tip = git_out(&fx.work, &["rev-parse", "origin/main"]);
+        git_ok(&fx.client, &["checkout", "-q", "main"]);
+        std::fs::write(fx.client.join("dirty.txt"), "x").unwrap();
+        let bak = recover_clone_if_needed(&fx.client, Channel::Stable)
+            .expect("recover despite gpgsign")
+            .expect("backup");
+        assert_eq!(git_out(&fx.client, &["rev-parse", "HEAD"]), tip);
+        let tree = git_out(&fx.client, &["ls-tree", "-r", "--name-only", bak.as_str()]);
+        assert!(tree.contains("dirty.txt"), "{tree}");
     }
 
     #[test]

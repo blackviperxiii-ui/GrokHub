@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Fixed: channel switch no longer force-moves a local `main`/`beta` that is ahead of origin (fast-forward or refuse); Update recover resets to `origin/main`/`origin/beta` (not an old release tag); backup commits ignore GPG signing.
 - Fixed: long chats and tasks no longer stop with a context error; GrokHub compacts again whenever the context fills and retries once after a context-overflow reply, keeping the latest steps word for word.
 - Auto router picks the strongest reasoning model on your plan for real work and keeps background jobs on the fast tier, with a reason for every pick.
 - The router knows the on-device model's strengths: bench results fill its capability metadata (context, eval pass rate, tokens/s) without claiming tool-calling (the on-device path still returns no tool calls), a failed verify on a local answer escalates to a cloud model with a quiet note naming both, hard or long work stays off local when online, and when every plan model is down an eligible step can fall back to local instead of pausing forever (including after a verify escalate that finds no healthy cloud route).
