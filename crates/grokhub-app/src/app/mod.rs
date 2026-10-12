@@ -513,14 +513,10 @@ pub struct Cabin {
     history_q_seen: String,
     history_q_at: Option<Instant>,
     history_hits: Vec<(String, String)>,
-    /// History page shows the Archived drawer instead of the main chat list.
-    history_archived: bool,
     /// Thread id for the quiet archive/unarchive Undo toast.
     archive_undo: Option<String>,
     /// Local day the auto-archive pass last ran.
     chat_archive_day: Option<String>,
-    /// Quiet note after auto-archive: count, with a link to the Archived view.
-    auto_archive_note: Option<usize>,
     last_receipt_ok: Option<bool>,
     /// Last Labs Beta auto-off tip check (cooldown so we do not ls-remote every frame).
     beta_auto_off_checked_at: Option<Instant>,
@@ -1119,10 +1115,8 @@ impl Cabin {
             history_q_seen: String::new(),
             history_q_at: None,
             history_hits: vec![],
-            history_archived: false,
             archive_undo: None,
             chat_archive_day: None,
-            auto_archive_note: None,
             last_receipt_ok: None,
             beta_auto_off_checked_at: None,
             last_receipts: vec![],
@@ -1564,10 +1558,8 @@ impl Cabin {
             history_q_seen: String::new(),
             history_q_at: None,
             history_hits: Vec::new(),
-            history_archived: false,
             archive_undo: None,
             chat_archive_day: None,
-            auto_archive_note: None,
             last_receipt_ok: None,
             beta_auto_off_checked_at: None,
             last_receipts: Vec::new(),
