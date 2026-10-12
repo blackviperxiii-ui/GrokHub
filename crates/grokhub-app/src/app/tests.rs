@@ -5585,13 +5585,17 @@ fn empty_home_paints_faint_greeting() {
         "empty home must still show a live permission bar: {slice}"
     );
     assert!(
-            slice.contains("paint_update_feed")
-                && slice.contains("pulse_should_paint")
+            slice.contains("pulse_should_paint")
                 && slice.contains("empty_home_composer_top")
+                && slice.contains("paint_device_glance_row")
+                && !slice.contains("paint_update_feed")
+                && !slice.contains("paint_home_deck_over_chat")
+                && !slice.contains("home_feed_count")
+                && !slice.contains("collapsed_stack_h")
                 && !slice.contains("paint_empty_pulse")
                 && !slice.contains("paint_lane_chip")
                 && !slice.contains("No updates"),
-            "signed-in empty home paints the update feed under the greeting and hides it when empty: {slice}"
+            "signed-in empty home is chat-first: greeting, composer, device glance; no Home card deck: {slice}"
         );
     assert!(
         !slice.contains("weather")
@@ -7016,13 +7020,16 @@ fn empty_home_pulse_stays_off_scratch_and_off_about() {
         "pulse clicks reuse Workboard and Automations"
     );
     assert!(
-            home.contains("paint_update_feed")
-                && home.contains("paint_device_glance_row")
-                && home.contains("collapsed_stack_h")
+            home.contains("paint_device_glance_row")
+                && home.contains("pulse_should_paint")
+                && !home.contains("paint_update_feed")
+                && !home.contains("paint_home_deck_over_chat")
+                && !home.contains("collapsed_stack_h")
+                && !home.contains("home_feed_count")
                 && !home.contains("stacked_feed_h")
                 && !home.contains("paint_lane_chip")
                 && !home.contains("No updates"),
-            "empty home paints the update feed only when a card exists, plus a fail-soft device glance: {home}"
+            "empty home keeps device glance and does not paint the Home card deck: {home}"
         );
     assert!(
         !home.contains("\"Personal\"") && !home.contains("Nav::"),
@@ -7032,13 +7039,15 @@ fn empty_home_pulse_stays_off_scratch_and_off_about() {
     assert!(
         feed.contains("note_automation_done")
             && feed.contains("note_schedule_created")
-            && feed.contains("feed_visible")
-            && feed.contains("paint_home_deck_over_chat")
+            && feed.contains("close_home_card")
+            && feed.contains("apply_feed_act")
+            && !feed.contains("paint_update_feed")
+            && !feed.contains("paint_home_deck_over_chat")
+            && !feed.contains("HOME_STACK_SHOW")
             && !feed.contains("Order::Foreground")
-            && feed.contains("HOME_STACK_SHOW")
             && !feed.contains("No updates")
             && !feed.contains("interest_update"),
-        "feed hook is typed and hidden when empty: {feed}"
+        "feed posting and card actions stay; Home deck paint is gone: {feed}"
     );
     let night = include_str!("night.rs");
     let poll = night
@@ -7384,7 +7393,7 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     let ping = pulse
         .split("fn release_situation_ping(")
         .nth(1)
-        .and_then(|s| s.split("fn paint_update_feed(").next())
+        .and_then(|s| s.split("fn apply_feed_act(").next())
         .expect("release_situation_ping");
     assert!(
         ping.contains("notify::ping")
@@ -7428,19 +7437,15 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
             && !build.contains("idea.body.clone()"),
         "Idea Accept files the task line, not the raw message: {build}"
     );
-    let paint = pulse
-        .split("fn paint_feed_card(")
-        .nth(1)
-        .and_then(|s| s.split("mod stack_tests").next())
-        .expect("paint_feed_card");
     assert!(
-        !paint.contains("ghost_pill")
-            && paint.contains("\"×\"")
-            && !paint.contains("FeedAct::Archive")
-            && paint.contains("FeedAct::Discuss")
-            && paint.contains("FeedAct::Dismiss")
-            && paint.contains("FeedAct::Open"),
-        "a home card is a click plus ×, with no pill row: {paint}"
+        pulse.contains("FeedAct::Discuss")
+            && pulse.contains("FeedAct::Dismiss")
+            && pulse.contains("FeedAct::Open")
+            && !pulse.contains("FeedAct::Archive")
+            && pulse.contains("fn close_home_card(")
+            && !pulse.contains("fn paint_feed_card(")
+            && !pulse.contains("fn paint_update_feed("),
+        "feed card acts and close_home_card remain; Home deck paint is gone: {pulse}"
     );
     let offer_open = pulse
         .split("fn open_offer_on_automations(")
@@ -9622,21 +9627,16 @@ fn home_x_on_a_digest_keeps_it_in_pulse() {
     let card = grokhub_core::digest_card("week", "Week notes", "rolled up", 2);
     let id = card.id.clone();
     cabin.updates.push(card);
-    let on_deck = |cabin: &Cabin| {
-        super::feed_ui::home_deck(
-            &cabin.updates,
-            &cabin.cfg.feed_pulse,
-            &cabin.card_prefs,
-            now_ms(),
-        )
-        .cards
-        .iter()
-        .any(|c| c.id == id)
+    let on_home = |cabin: &Cabin| {
+        cabin
+            .updates
+            .iter()
+            .any(|c| c.id == id && !c.pulse.off_home)
     };
-    assert!(on_deck(&cabin), "the digest starts on the main deck");
+    assert!(on_home(&cabin), "the digest starts visible for home");
     cabin.apply_feed_act(Some(FeedAct::Dismiss(id.clone())));
     wait_tree_contains(&cfg.root, "offHome");
-    assert!(!on_deck(&cabin), "× takes it off the main deck");
+    assert!(!on_home(&cabin), "× sets off_home");
     assert!(
         grokhub_core::visible_digests(&cabin.updates)
             .iter()
@@ -16291,7 +16291,6 @@ fn quiet_cabin() -> Cabin {
         grok_loops: Vec::new(),
         updates: Vec::new(),
         card_prefs: grokhub_core::CardPrefs::default(),
-        home_fold_open: false,
         grok_loop_rx: None,
         night_nl: String::new(),
         watch_once: false,
@@ -23913,95 +23912,6 @@ fn pulse_paints_only_on_an_empty_signed_in_chat() {
     assert!(!should_paint_pulse(true, false, false));
 }
 
-// Folded from PR #280.
-#[test]
-fn feed_deck_hover_lifts_the_card_behind() {
-    let open = super::feed_ui::deck_poses(3, true, Some(1), 1_000.0);
-    assert_eq!(
-        open[0],
-        super::SlidePose {
-            dy: 0.0,
-            scale: 1.0
-        }
-    );
-    assert_eq!(
-        open[1],
-        super::SlidePose {
-            dy: -super::feed_ui::LIFT_STEP,
-            scale: 1.0
-        }
-    );
-    assert_eq!(
-        open[2],
-        super::SlidePose {
-            dy: -(super::feed_ui::LIFT_STEP + super::feed_ui::PEEK_H),
-            scale: 1.0
-        }
-    );
-    let rest = super::feed_ui::deck_poses(3, false, Some(1), 1_000.0);
-    assert_eq!(rest[1], super::rest_slide(1));
-    assert!(rest[1].dy > 0.0 && rest[1].scale < 1.0);
-
-    let pile = super::next_feed_stack(3, true, Some("back".into()), Some("front"));
-    assert_eq!(
-        pile,
-        super::StackView {
-            expanded: true,
-            popped: Some("back".into()),
-        }
-    );
-    assert_eq!(
-        super::next_feed_stack(3, false, Some("back".into()), Some("front")),
-        super::StackView::default()
-    );
-    assert_eq!(
-        super::next_feed_stack(1, true, Some("front".into()), Some("front")),
-        super::StackView::default()
-    );
-}
-
-// Folded from PR #289.
-#[test]
-fn feed_deck_shift_keeps_the_top_card_on_screen() {
-    let tops: Vec<f32> = super::feed_ui::deck_poses(3, true, Some(2), 40.0)
-        .iter()
-        .map(|pose| pose.dy)
-        .collect();
-    // room=40 caps the lifted back card; open peek uses PEEK_H.
-    assert_eq!(tops, vec![0.0, -super::feed_ui::PEEK_H, -40.0]);
-    let none: Vec<f32> = super::feed_ui::deck_poses(3, true, None, 0.0)
-        .iter()
-        .map(|pose| pose.dy)
-        .collect();
-    assert_eq!(none, vec![0.0, 0.0, 0.0]);
-}
-
-// Folded from PR #292.
-#[test]
-fn feed_stack_height_peeks_two_edges() {
-    assert_eq!(super::feed_ui::collapsed_stack_h(0), 0.0);
-    assert_eq!(super::feed_ui::collapsed_stack_h(1), 96.0);
-    assert_eq!(
-        super::feed_ui::collapsed_stack_h(2),
-        96.0 + super::feed_ui::STACK_REST_DY_1
-    );
-    assert_eq!(
-        super::feed_ui::collapsed_stack_h(3),
-        96.0 + super::feed_ui::STACK_REST_DY_2
-    );
-    assert!(super::feed_ui::collapsed_stack_h(1) < super::feed_ui::collapsed_stack_h(2));
-    assert!(super::feed_ui::collapsed_stack_h(2) < super::feed_ui::collapsed_stack_h(3));
-    assert_eq!(
-        super::feed_ui::collapsed_stack_h(9),
-        super::feed_ui::collapsed_stack_h(3)
-    );
-    assert_eq!(super::feed_ui::STACK_REST_DY_1, 8.0);
-    assert_eq!(super::feed_ui::STACK_REST_DY_2, 16.0);
-    assert_eq!(super::feed_ui::stacked_feed_h(0), 0.0);
-    assert_eq!(super::feed_ui::stacked_feed_h(2), 96.0 * 2.0 + 6.0);
-    assert!(super::feed_ui::stacked_feed_h(2) > super::feed_ui::collapsed_stack_h(2));
-}
-
 // Folded from PR #330.
 #[test]
 fn roll_today_stays_put_on_same_day() {
@@ -24120,15 +24030,14 @@ fn device_glance_none_when_hub_off() {
     assert!(!share.has_thumb);
 }
 
-// Folded from PR #409.
+// Folded from PR #409. Empty main chat no longer counts a Home deck; ranking stays for Pulse floors.
 #[test]
-fn home_feed_count_empty_and_one_event() {
-    // Real `home_feed_count` on a quiet slice — no cabin, spawn, or network.
+fn home_event_cards_empty_and_one_event() {
     let pulse = grokhub_core::FeedPulse::default();
-    assert_eq!(home_feed_count(&[], &pulse, 0), 0);
+    assert!(grokhub_core::home_event_cards(&[], &pulse, 0).is_empty());
 
     let cards = vec![feed_card("event-1", UpdateKind::AutomationDone, false)];
-    assert_eq!(home_feed_count(&cards, &pulse, 0), 1);
+    assert_eq!(grokhub_core::home_event_cards(&cards, &pulse, 0).len(), 1);
 }
 
 /// The card menu is gone (2.10.86). A run hidden from Home by an older build
@@ -24157,7 +24066,7 @@ fn legacy_hidden_run_stays_off_home_until_undo() {
         .map(|card| card.id.clone())
         .expect("run card");
     assert_eq!(
-        home_feed_count(&cabin.updates, &cabin.cfg.feed_pulse, now_ms()),
+        grokhub_core::home_event_cards(&cabin.updates, &cabin.cfg.feed_pulse, now_ms()).len(),
         1
     );
 
@@ -24205,15 +24114,11 @@ fn legacy_hidden_run_stays_off_home_until_undo() {
     );
     assert!(grokhub_core::HOME_HIDDEN_NOTE.contains("Undo"));
     let feed = include_str!("feed_ui.rs");
-    let paint = feed
-        .split("fn paint_feed_card(")
-        .nth(1)
-        .and_then(|rest| rest.split("\n}\n").next())
-        .expect("paint_feed_card");
-    assert!(!paint.contains("Popup"), "feed cards have no menu");
-    assert!(!paint.contains("secondary_clicked"), "no right-click menu");
-    assert!(!paint.contains("\"⋯\""), "no ⋯ button");
-    assert!(paint.contains("\"×\""), "the X stays");
+    assert!(feed.contains("fn close_home_card("), "close_home_card stays");
+    assert!(!feed.contains("Popup"), "feed module has no card menu");
+    assert!(!feed.contains("secondary_clicked"), "no right-click menu");
+    assert!(!feed.contains("\"⋯\""), "no ⋯ button");
+    assert!(!feed.contains("fn paint_feed_card("), "Home deck paint is gone");
 
     let app_json = root.join("app.json");
     let mut saw_hide = false;
@@ -24231,7 +24136,7 @@ fn legacy_hidden_run_stays_off_home_until_undo() {
 
     cabin.undo_hide_automation_from_home("zephyr-src-9f3a");
     assert_eq!(
-        home_feed_count(&cabin.updates, &cabin.cfg.feed_pulse, now_ms()),
+        grokhub_core::home_event_cards(&cabin.updates, &cabin.cfg.feed_pulse, now_ms()).len(),
         1
     );
     let mut saw_undo = false;
@@ -26367,12 +26272,15 @@ fn pulse_replaces_ideas_on_the_rail_and_old_links_still_land() {
     cabin.nav = super::Nav::Chat;
     cabin.run_palette(&egui::Context::default(), "nav:pulse");
     assert_eq!(cabin.nav, super::Nav::Pulse);
-    // The deck no longer stacks over a new chat unless Settings turns it back on.
-    assert!(!crate::config::AppConfig::default().home_deck);
+    // Empty main chat is chat-first; cards live in Pulse (no Settings deck toggle).
     let home = fn_src(&cabin_src(), "ui_empty_home").to_string();
     assert!(
-        home.contains("let feed_n = if pulse_on && self.cfg.home_deck {"),
-        "{home}"
+        !home.contains("home_deck")
+            && !home.contains("paint_update_feed")
+            && !home.contains("paint_home_deck_over_chat")
+            && !home.contains("home_feed_count")
+            && home.contains("paint_device_glance_row"),
+        "empty home must not paint the Home card deck: {home}"
     );
     let texts = pulse_texts(cabin, 900.0);
     assert_eq!(
