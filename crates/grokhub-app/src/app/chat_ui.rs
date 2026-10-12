@@ -1953,6 +1953,7 @@ impl Cabin {
         .id_salt("chat-work-tree")
         .default_open(false)
         .show(ui, |ui| {
+            self.paint_mission_header(ui);
             self.paint_episode_header(ui);
             for card in &self.tool_cards {
                 paint_tool_card_body(ui, card);
