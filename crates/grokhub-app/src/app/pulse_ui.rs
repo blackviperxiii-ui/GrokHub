@@ -941,7 +941,8 @@ impl Cabin {
                                         PulseTab::Feed => self.ui_pulse_feed(ui),
                                     }
                                 });
-                                if 0.001 < tab_t && tab_t < 0.999 {
+                                // Crossfade only: settled tabs and reduced motion stay idle.
+                                if crate::theme::motion_ok(ui) && 0.001 < tab_t && tab_t < 0.999 {
                                     ui.ctx().request_repaint_after(std::time::Duration::from_millis(16));
                                 }
                                 ui.add_space(24.0);
@@ -1059,6 +1060,7 @@ impl Cabin {
                 paint_skeleton_row(ui);
                 ui.add_space(14.0);
             }
+            // Poll the ideas channel only while a suggest is in flight.
             ui.ctx()
                 .request_repaint_after(std::time::Duration::from_millis(250));
             return;
