@@ -271,9 +271,9 @@ fn a_provider_is_never_picked_to_save_money_and_a_pin_or_the_class_preference_ta
     let reg = fleet();
     let empty = RoutingTable::default();
     assert_eq!(reg.get(OR_MODEL).map(|r| r.state), Some(ModelState::Live));
-    // Granted and twenty times cheaper, but Auto never takes it for cost.
+    // Granted and twenty times cheaper, but Auto never takes it for cost (newest xAI instead).
     let r = Router::choose(&ask("chat:default", "grok-4.7", false, granted(&["openrouter", "anthropic"])), &reg, &none(), &empty, NOW);
-    assert_eq!((r.provider.as_str(), r.model.as_str(), r.cost_class), ("xai", "grok-4.3", CostClass::Included));
+    assert_eq!((r.provider.as_str(), r.model.as_str(), r.cost_class), ("xai", "grok-4.7", CostClass::Included));
     // Your pin with its key and grant: it goes there, at an effort from its own list.
     let r = Router::choose(&ask("chat:default", OR_MODEL, true, granted(&["openrouter"])), &reg, &none(), &empty, NOW);
     assert_eq!((r.provider.as_str(), r.model.as_str(), r.cost_class), ("openrouter", OR_MODEL, CostClass::NewProvider));
@@ -285,10 +285,10 @@ fn a_provider_is_never_picked_to_save_money_and_a_pin_or_the_class_preference_ta
     let mut picked = ask("chat:default", "grok-4.7", false, granted(&["openrouter"]));
     picked.prefer = Some(OR_MODEL);
     let r = Router::choose(&picked, &reg, &none(), &empty, NOW);
-    assert_eq!((r.model.as_str(), r.reason.as_str()), (OR_MODEL, "Using openrouter/vendor/cheap at Low: you picked it in Settings."));
+    assert_eq!((r.model.as_str(), r.reason.as_str()), (OR_MODEL, "quality · Low: you picked it in Settings."));
     picked.spend = Spend::default();
     let r = Router::choose(&picked, &reg, &none(), &empty, NOW);
-    assert_eq!((r.provider.as_str(), r.model.as_str()), ("xai", "grok-4.3"));
+    assert_eq!((r.provider.as_str(), r.model.as_str()), ("xai", "grok-4.7"));
     // The class preference ranks it first: taken while granted, never without.
     let pref = table_with("chat:default", OR_MODEL);
     let r = Router::choose(&ask("chat:default", "grok-4.7", false, granted(&["openrouter"])), &reg, &none(), &pref, NOW);
