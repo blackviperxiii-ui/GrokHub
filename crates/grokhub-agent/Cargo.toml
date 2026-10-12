@@ -11,23 +11,23 @@ publish = false
 grokhub-core = { path = "../grokhub-core" }
 serde.workspace = true
 serde_json.workspace = true
-sha2 = "0.10"
-ureq = { version = "2.12", default-features = false, features = ["tls", "json"] }
-regex = "1.13"
+sha2 = { workspace = true }
+ureq = { workspace = true }
+regex = { version = "1.13", default-features = false, features = ["std", "perf", "unicode"] }
 base64 = "0.22"
 ignore = "0.4"
-globset = "0.4"
-image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+globset = { version = "0.4", default-features = false }
+image = { workspace = true }
 # FTS5 memory index. Bundled sqlite so Windows GNU does not need a system libsqlite.
 # `hooks` (no extra crates): the browser-history indexer's authorizer denies
 # every table but `moz_places` / `urls`.
-rusqlite = { version = "0.32", features = ["bundled", "hooks"] }
+rusqlite = { workspace = true, features = ["hooks"] }
 # Spike-4b learned tier at rest. All three are already in Cargo.lock and build
 # on Windows CI today: ring (ChaCha20-Poly1305) via rustls/ureq, zeroize via
 # rustls, keyring 4 via grokhub-app (Secret Service / Credential Manager / Keychain).
 ring = "0.17"
 zeroize = "1"
-keyring = "4"
+keyring = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2.189"
