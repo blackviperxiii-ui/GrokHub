@@ -664,12 +664,7 @@ pub fn daily_drop_refresh(ctx: DailyDropRefreshCtx<'_>) -> DailyDropRefreshResul
             mark_day: None,
         };
     }
-    let cards = crate::daily_drop::pick_cards(
-        ctx.settings,
-        ctx.ranked,
-        ctx.ledger,
-        ctx.now_ms,
-    );
+    let cards = crate::daily_drop::pick_cards(ctx.settings, ctx.ranked, ctx.ledger, ctx.now_ms);
     DailyDropRefreshResult {
         cards,
         mark_day: Some(ctx.today.to_string()),
