@@ -2,6 +2,51 @@
 
 use super::*;
 
+/// True when a chat chip should run through `send_chat` (slash parse or empty-composer send).
+fn chip_chat_runs_immediately(chip: &QuickChip, composer_draft: &str) -> bool {
+    let value = chip.value.trim();
+    if value.starts_with('/') {
+        return true;
+    }
+    if composer_draft.trim().is_empty() {
+        return true;
+    }
+    false
+}
+
+fn chip_action_tip(chip: &QuickChip, composer_draft: &str) -> String {
+    match chip.kind {
+        ChipKind::Nav => "Opens this page — nothing is sent".into(),
+        ChipKind::Mode => "Changes the model mode — nothing is sent".into(),
+        ChipKind::Shell => "Runs on the host when you send — review the command first".into(),
+        ChipKind::Chat => {
+            if chip_chat_runs_immediately(chip, composer_draft) {
+                if chip.value.trim().starts_with('/') {
+                    "Runs this slash command".into()
+                } else {
+                    "Sends when you are signed in — edit in the composer first if you need to"
+                        .into()
+                }
+            } else {
+                "Inserts draft text — edit and send when ready (never auto-sends)".into()
+            }
+        }
+    }
+}
+
+fn polish_chip_hints(chips: &mut [QuickChip], composer_draft: &str) {
+    for c in chips {
+        if c.hint.trim().is_empty() {
+            c.hint = chip_action_tip(c, composer_draft);
+        } else if !c.hint.contains("send") && !c.hint.contains("Inserts") && !c.hint.contains("Opens") {
+            let action = chip_action_tip(c, composer_draft);
+            if action != c.hint {
+                c.hint = format!("{}\n{}", c.hint.trim(), action);
+            }
+        }
+    }
+}
+
 impl Cabin {
     /// Chat pairs for chip rebuild: scan a 4KB prefix so an 8MB complete
     /// does not get cloned into `chip_suggest_prompt` / `chip_thread_from_messages`.
@@ -491,6 +536,7 @@ impl Cabin {
             }
         }
         bias_chips_for_lane(&mut chips, cabin_lane(&self.cfg.cabin_lane));
+        polish_chip_hints(&mut chips, &self.composer);
         chips
     }
 
@@ -550,8 +596,13 @@ impl Cabin {
             ChipKind::Chat => {
                 // Slash chips use the typed send path so `/learn` click and Enter
                 // both parse locally instead of inserting a no-op or hitting Grok.
-                self.composer.clear();
-                self.send_chat(chip.value);
+                if chip_chat_runs_immediately(&chip, &self.composer) {
+                    self.composer.clear();
+                    self.send_chat(chip.value);
+                } else {
+                    self.composer = chip.value;
+                    self.composer_want_focus = true;
+                }
             }
         }
     }
@@ -668,5 +719,522 @@ impl Cabin {
                 let _ = config::save_board(&board);
             }
         });
+    }
+}
+
+/// Composer quick-chip row (paint + layout). Restyled with ui_kit tokens.
+pub mod row {
+    use eframe::egui::text::{LayoutJob, TextFormat, TextWrapping};
+    use eframe::egui::{self, Align2, Color32, FontId, Sense, Stroke, StrokeKind};
+    use std::sync::Arc;
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum ChipRowAct {
+        Apply(usize),
+        Dismiss(usize),
+    }
+
+    pub fn chip_paint_label(label: &str) -> String {
+        label
+            .split_whitespace()
+            .flat_map(|w| w.split('…'))
+            .filter(|w| !w.is_empty())
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+
+    pub const CHIP_LABEL_MAX_W: f32 = 180.0;
+    pub const CHIP_PAD_X: f32 = crate::theme::SPACING_12;
+    #[cfg(test)]
+    pub const CHIP_PAD_Y: f32 = 8.0;
+    pub const CHIP_GAP: f32 = 6.0;
+    pub const CHIP_DISMISS_SLOT: f32 = crate::theme::MIN_HIT * 0.55;
+    pub const CHIP_DISMISS_GAP: f32 = crate::theme::SPACING_4;
+    /// One fixed chip height. Does not grow when a label is long.
+    pub const CHIP_ROW_H: f32 = 40.0;
+
+    pub fn chip_row_width_lock(avail: f32) -> f32 {
+        avail.clamp(120.0, crate::theme::CHAT_COL_W)
+    }
+
+    pub fn chip_row_visible_w(ui: &egui::Ui) -> f32 {
+        let left = ui.cursor().left();
+        let clip_w = (ui.clip_rect().right() - left).max(0.0);
+        let avail = ui.available_width().min(clip_w);
+        let col = crate::cards::composer_pill_w(ui.ctx().content_rect().width());
+        chip_row_width_lock(avail.min(col))
+    }
+
+    pub fn chip_pill_width(label_w: f32) -> f32 {
+        CHIP_PAD_X + label_w.max(0.0) + CHIP_DISMISS_GAP + CHIP_DISMISS_SLOT + CHIP_PAD_X
+    }
+
+    pub fn chip_dismiss_rect(pill: egui::Rect) -> egui::Rect {
+        egui::Rect::from_center_size(
+            egui::pos2(
+                pill.right() - CHIP_PAD_X - CHIP_DISMISS_SLOT * 0.5,
+                pill.center().y,
+            ),
+            egui::vec2(CHIP_DISMISS_SLOT, CHIP_DISMISS_SLOT),
+        )
+    }
+
+    pub fn chip_hit_act(index: usize, dismiss: egui::Rect, pointer: egui::Pos2) -> ChipRowAct {
+        if dismiss.contains(pointer) {
+            ChipRowAct::Dismiss(index)
+        } else {
+            ChipRowAct::Apply(index)
+        }
+    }
+
+    pub fn chip_label_budget(row_w: f32) -> f32 {
+        let chrome = chip_pill_width(0.0);
+        (row_w - chrome).clamp(32.0, CHIP_LABEL_MAX_W)
+    }
+
+    pub fn fluid_chip_count(widths: &[f32], row_w: f32, gap: f32) -> usize {
+        if widths.is_empty() || row_w <= 0.0 {
+            return 0;
+        }
+        let mut used = 0.0;
+        let mut n = 0usize;
+        for (i, w) in widths.iter().enumerate() {
+            let add = if i == 0 { *w } else { gap + *w };
+            if used + add > row_w + 0.5 {
+                break;
+            }
+            used += add;
+            n += 1;
+        }
+        n
+    }
+
+    pub fn chip_cluster_w(widths: &[f32], fit: usize, gap: f32) -> f32 {
+        let n = fit.min(widths.len());
+        let pills: f32 = widths[..n].iter().sum();
+        pills + gap * n.saturating_sub(1) as f32
+    }
+
+    pub fn chip_cluster_lead(row_w: f32, cluster_w: f32, ppp: f32) -> f32 {
+        let lead = ((row_w - cluster_w) * 0.5).max(0.0);
+        let ppp = if ppp > 0.0 { ppp } else { 1.0 };
+        (lead * ppp).round() / ppp
+    }
+
+    #[cfg(test)]
+    pub(crate) fn begin_chip_dismiss_hits(ui: &egui::Ui) {
+        ui.ctx().data_mut(|d| {
+            d.insert_temp(
+                egui::Id::new("qchip-dismiss-hits"),
+                Vec::<egui::Rect>::new(),
+            );
+            d.insert_temp(egui::Id::new("qchip-pills"), Vec::<egui::Rect>::new());
+        });
+    }
+
+    #[cfg(test)]
+    pub(crate) fn remember_chip_dismiss_hit(ui: &egui::Ui, rect: egui::Rect) {
+        ui.ctx().data_mut(|d| {
+            let id = egui::Id::new("qchip-dismiss-hits");
+            let mut hits = d.get_temp::<Vec<egui::Rect>>(id).unwrap_or_default();
+            hits.push(rect);
+            d.insert_temp(id, hits);
+        });
+    }
+
+    #[cfg(test)]
+    pub(crate) fn remember_chip_pill(ui: &egui::Ui, rect: egui::Rect) {
+        ui.ctx().data_mut(|d| {
+            let id = egui::Id::new("qchip-pills");
+            let mut pills = d.get_temp::<Vec<egui::Rect>>(id).unwrap_or_default();
+            pills.push(rect);
+            d.insert_temp(id, pills);
+        });
+    }
+
+    pub fn layout_chip_label(
+        ui: &egui::Ui,
+        text: &str,
+        font: FontId,
+        color: Color32,
+        max_w: f32,
+    ) -> Arc<egui::Galley> {
+        let mut job = LayoutJob::single_section(
+            text.to_owned(),
+            TextFormat {
+                font_id: font,
+                color,
+                ..Default::default()
+            },
+        );
+        job.wrap = TextWrapping::truncate_at_width(max_w.max(1.0));
+        job.break_on_newline = false;
+        ui.fonts_mut(|f| f.layout_job(job))
+    }
+
+    pub const CHIP_EMPTY_LABEL: &str = "Nothing queued";
+
+    fn chip_fill(primary: bool, hovered: bool) -> Color32 {
+        if primary {
+            crate::theme::blend_color(
+                crate::theme::selection(),
+                crate::theme::surface_hover(),
+                if hovered { 0.35 } else { 0.15 },
+            )
+        } else if hovered {
+            crate::theme::surface_hover()
+        } else {
+            crate::theme::elevated()
+        }
+    }
+
+    pub fn quick_chip_fill(primary: bool) -> Color32 {
+        chip_fill(primary, false)
+    }
+
+    pub fn quick_chip_fg(primary: bool) -> Color32 {
+        if primary {
+            crate::theme::fg()
+        } else {
+            crate::theme::muted()
+        }
+    }
+
+    pub fn quick_chip_stroke_w(primary: bool) -> f32 {
+        if primary { 1.5 } else { 1.0 }
+    }
+
+    pub fn quick_chip_stroke(primary: bool) -> Color32 {
+        if primary {
+            crate::theme::border_strong()
+        } else {
+            crate::theme::border()
+        }
+    }
+
+    fn quick_chip_stroke_paint(primary: bool) -> Stroke {
+        Stroke::new(quick_chip_stroke_w(primary), quick_chip_stroke(primary))
+    }
+
+    pub fn quick_chip_strong(primary: bool) -> bool {
+        primary
+    }
+
+    pub fn chip_why_tip(hint: &str, label: &str) -> String {
+        let why = hint.trim();
+        if why == "New here" {
+            return "Suggested because you're new here".into();
+        }
+        if !why.is_empty() {
+            return format!("Why this?\n{why}");
+        }
+        let label = label.trim();
+        if label.is_empty() {
+            "Why this?".into()
+        } else {
+            format!("Why this?\n{label}")
+        }
+    }
+
+    fn paint_chip_pill(
+        ui: &mut egui::Ui,
+        rect: egui::Rect,
+        fill: Color32,
+        primary: bool,
+        resp: &egui::Response,
+    ) {
+        let stroke = quick_chip_stroke_paint(primary);
+        let body = rect.shrink(stroke.width * 0.5);
+        let radius = crate::theme::RADIUS_MD;
+        ui.painter().rect(body, radius, fill, stroke, StrokeKind::Inside);
+        crate::theme::paint_focus_ring(ui, body, radius, resp);
+    }
+
+    pub fn paint_empty_chip_state(ui: &mut egui::Ui) {
+        let max_w = chip_row_visible_w(ui);
+        ui.allocate_ui_with_layout(
+            egui::vec2(max_w, CHIP_ROW_H),
+            egui::Layout::left_to_right(egui::Align::Center)
+                .with_main_wrap(false)
+                .with_main_align(egui::Align::Min),
+            |ui| {
+                ui.set_max_width(max_w);
+                #[cfg(test)]
+                begin_chip_dismiss_hits(ui);
+                let color = quick_chip_fg(false);
+                let budget = chip_label_budget(max_w);
+                let galley = layout_chip_label(
+                    ui,
+                    CHIP_EMPTY_LABEL,
+                    FontId::proportional(crate::theme::TYPE_CAPTION),
+                    color,
+                    budget,
+                );
+                let pill_w = (CHIP_PAD_X + galley.size().x.max(8.0) + CHIP_PAD_X).min(max_w);
+                ui.add_space(chip_cluster_lead(
+                    max_w,
+                    pill_w,
+                    ui.ctx().pixels_per_point(),
+                ));
+                let (rect, resp) =
+                    ui.allocate_exact_size(egui::vec2(pill_w, CHIP_ROW_H), Sense::hover());
+                #[cfg(test)]
+                remember_chip_pill(ui, rect);
+                let fill = if resp.hovered() {
+                    chip_fill(false, true)
+                } else {
+                    quick_chip_fill(false)
+                };
+                paint_chip_pill(ui, rect, fill, false, &resp);
+                let text_pos = egui::pos2(
+                    rect.left() + CHIP_PAD_X,
+                    rect.center().y - galley.size().y * 0.5,
+                );
+                ui.painter().galley(text_pos, galley, color);
+            },
+        );
+    }
+
+    pub fn quick_chip_row(
+        ui: &mut egui::Ui,
+        chips: &[grokhub_core::QuickChip],
+    ) -> Option<ChipRowAct> {
+        if chips.is_empty() {
+            paint_empty_chip_state(ui);
+            return None;
+        }
+        let mut act = None;
+        let max_w = chip_row_visible_w(ui);
+        let budget = chip_label_budget(max_w);
+        let measured: Vec<Arc<egui::Galley>> = chips
+            .iter()
+            .map(|c| {
+                let font = if quick_chip_strong(c.primary) {
+                    crate::theme::title_font(crate::theme::TYPE_CAPTION)
+                } else {
+                    FontId::proportional(crate::theme::TYPE_CAPTION)
+                };
+                let color = quick_chip_fg(c.primary);
+                layout_chip_label(ui, &chip_paint_label(&c.label), font, color, budget)
+            })
+            .collect();
+        let widths: Vec<f32> = measured
+            .iter()
+            .map(|g| chip_pill_width(g.size().x.min(budget)).min(max_w))
+            .collect();
+        let fit = fluid_chip_count(&widths, max_w, CHIP_GAP);
+        ui.allocate_ui_with_layout(
+            egui::vec2(max_w, CHIP_ROW_H),
+            egui::Layout::left_to_right(egui::Align::Center)
+                .with_main_wrap(false)
+                .with_main_align(egui::Align::Min),
+            |ui| {
+                ui.set_max_width(max_w);
+                ui.spacing_mut().item_spacing = egui::vec2(CHIP_GAP, 0.0);
+                crate::theme::glide_paint(ui, "quick-chips");
+                let mut chip_hover: Option<egui::Rect> = None;
+                #[cfg(test)]
+                begin_chip_dismiss_hits(ui);
+                let cluster_w = chip_cluster_w(&widths, fit, CHIP_GAP);
+                ui.add_space(chip_cluster_lead(
+                    max_w,
+                    cluster_w,
+                    ui.ctx().pixels_per_point(),
+                ));
+                let mut used = 0.0f32;
+                for (i, c) in chips.iter().enumerate().take(fit) {
+                    let galley = measured[i].clone();
+                    let pill_w = widths[i];
+                    let add = if used == 0.0 {
+                        pill_w
+                    } else {
+                        CHIP_GAP + pill_w
+                    };
+                    if used + add > max_w + 0.5 {
+                        break;
+                    }
+                    used += add;
+                    let chip_id = ui.id().with(("qchip", i));
+                    let color = quick_chip_fg(c.primary);
+                    let paint = chip_paint_label(&c.label);
+                    let why = if c.hint.is_empty() && paint != c.label {
+                        c.label.as_str()
+                    } else {
+                        c.hint.as_str()
+                    };
+                    let tip = chip_why_tip(why, &c.label);
+                    let (rect, hit_resp) =
+                        ui.allocate_exact_size(egui::vec2(pill_w, CHIP_ROW_H), Sense::click());
+                    let hit_resp = crate::theme::pointing(hit_resp);
+                    let hovered = hit_resp.hovered();
+                    if hovered {
+                        chip_hover = Some(rect);
+                    }
+                    let fill = chip_fill(c.primary, hovered);
+                    let (_, felt, painted) =
+                        crate::theme::feel_response(ui, hit_resp.clone(), fill);
+                    paint_chip_pill(ui, felt, painted, c.primary, &hit_resp);
+                    #[cfg(test)]
+                    remember_chip_pill(ui, rect);
+                    let text_pos = egui::pos2(
+                        rect.left() + CHIP_PAD_X,
+                        rect.center().y - galley.size().y * 0.5,
+                    );
+                    ui.painter().galley(text_pos, galley, color);
+                    let x_rect = chip_dismiss_rect(rect);
+                    #[cfg(test)]
+                    remember_chip_dismiss_hit(ui, x_rect);
+                    let dismiss_t = ui.ctx().animate_bool_with_time(
+                        chip_id.with("dismiss"),
+                        hovered,
+                        grokhub_core::SELECT_SECS,
+                    );
+                    let over_x = hit_resp.hover_pos().is_some_and(|p| x_rect.contains(p));
+                    let hit = if over_x {
+                        hit_resp.on_hover_text("Hide this suggestion")
+                    } else {
+                        hit_resp.on_hover_text(tip)
+                    };
+                    let hit_resp = hit;
+                    if dismiss_t > 0.01 {
+                        if over_x {
+                            ui.painter().rect_filled(
+                                x_rect,
+                                crate::theme::RADIUS_SM,
+                                crate::theme::lift_fill(
+                                    Color32::TRANSPARENT,
+                                    grokhub_core::HOVER_WASH * dismiss_t,
+                                ),
+                            );
+                        }
+                        let x_color = crate::theme::blend_color(
+                            Color32::TRANSPARENT,
+                            crate::theme::subtle(),
+                            dismiss_t,
+                        );
+                        ui.painter().text(
+                            x_rect.center(),
+                            Align2::CENTER_CENTER,
+                            "×",
+                            FontId::proportional(crate::theme::TYPE_CAPTION),
+                            x_color,
+                        );
+                    }
+                    if hit_resp.clicked() {
+                        act = Some(match hit_resp.interact_pointer_pos() {
+                            Some(pos) => chip_hit_act(i, x_rect, pos),
+                            None => ChipRowAct::Apply(i),
+                        });
+                    }
+                    if hit_resp.has_focus() {
+                        crate::theme::paint_focus_ring(
+                            ui,
+                            felt,
+                            crate::theme::RADIUS_MD,
+                            &hit_resp,
+                        );
+                    }
+                }
+                if let Some(rect) = chip_hover {
+                    crate::theme::glide_candidate(ui, "quick-chips", rect, true, false);
+                }
+                crate::theme::glide_aim(ui, "quick-chips");
+            },
+        );
+        act
+    }
+    // quick_chip_row_end
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use crate::theme::{hold_paint_test, set_paint_dark};
+
+        #[test]
+        fn chip_row_source_layout_contract() {
+            let src = include_str!("chips.rs");
+            let chip_row = src
+                .split("pub fn quick_chip_row(")
+                .nth(1)
+                .and_then(|s| s.split("#[cfg(test)]").next())
+                .expect("quick_chip_row");
+            assert!(
+                chip_row.contains("with_main_wrap(false)")
+                    && chip_row.contains("fluid_chip_count")
+                    && chip_row.contains("layout_chip_label")
+                    && chip_row.contains("CHIP_ROW_H")
+                    && chip_row.contains("chip_row_visible_w")
+                    && !chip_row.contains("with_main_wrap(true)"),
+                "chips are one fixed line, ellipsized, and drop overflow inside Ask anything"
+            );
+        }
+
+        #[test]
+        fn chip_row_height_meets_caption_pad() {
+            let _hold = hold_paint_test();
+            const {
+                assert!(CHIP_ROW_H >= crate::theme::TYPE_CAPTION + CHIP_PAD_Y * 2.0);
+            }
+        }
+
+        #[test]
+        fn chip_pill_contrast_dark_and_light() {
+            let _hold = hold_paint_test();
+            for dark in [true, false] {
+                set_paint_dark(dark);
+                let fill = quick_chip_fill(true);
+                let fg = quick_chip_fg(true);
+                assert!(
+                    crate::theme::contrast_ratio(fg, fill) >= 4.5,
+                    "primary chip contrast dark={dark}"
+                );
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod chip_apply_tests {
+    use super::*;
+    use grokhub_core::{AttachKind, ChipKind, QuickChip};
+
+    fn chat_chip(id: &str, label: &str, value: &str) -> QuickChip {
+        QuickChip {
+            id: id.into(),
+            label: label.into(),
+            value: value.into(),
+            kind: ChipKind::Chat,
+            score: 1.0,
+            hint: String::new(),
+            primary: false,
+        }
+    }
+
+    #[test]
+    fn chip_insert_keeps_draft_and_attachments() {
+        let _hold = crate::config::hold_test_config();
+        let root = crate::config::test_config_root("chip-insert");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("config root");
+        std::env::set_var("GROKHUB_CONFIG", &root);
+
+        let mut cabin = Cabin::quiet_for_test();
+        cabin.composer = "fix the leak".into();
+        cabin.attach_path = Some("/tmp/leak.png".into());
+        cabin.attach_name = Some("leak.png".into());
+        cabin.attach_kind = Some(AttachKind::Image);
+
+        let expanded = "fix the leak. Be concrete and complete the goal.";
+        cabin.apply_chip(chat_chip("pred-expand-draft", "Expand & send", expanded));
+
+        assert_eq!(cabin.composer, expanded);
+        assert_eq!(cabin.attach_path.as_deref(), Some("/tmp/leak.png"));
+        assert_eq!(cabin.attach_name.as_deref(), Some("leak.png"));
+        assert_eq!(cabin.attach_kind, Some(AttachKind::Image));
+        assert!(!cabin.running);
+        assert!(cabin.messages.is_empty());
+
+        let _ = std::fs::remove_dir_all(&root);
+        std::env::remove_var("GROKHUB_CONFIG");
     }
 }
