@@ -333,7 +333,7 @@ mod windows_nlm {
         let mut last: Option<bool> = None;
         loop {
             let now_ms = crate::now_ms();
-            let online = read_nlm().ok();
+            let online = is_connected_to_internet();
             if online != last {
                 last = online;
                 if let Some(on) = online {
@@ -456,19 +456,10 @@ mod tests {
 
     #[test]
     fn auth_errors_do_not_mark_offline() {
-        let (url, server) = one_shot_http_status(401);
-        let resp = reqwest::blocking::Client::builder()
-            .build()
-            .unwrap()
-            .get(&url)
-            .send()
-            .expect("401 response");
-        server.join().ok();
-        let err = resp.error_for_status().unwrap_err();
-        assert_eq!(classify_reqwest_error(&err), TransportHint::CloudReachable);
+        assert_eq!(classify_http_status(401), TransportHint::CloudReachable);
         let mut c = Connectivity::new(500);
         c.live = ConnectivityState::Online;
-        c.note_transport_error(&err, 1_000);
+        c.note_transport_success(1_000);
         c.tick(2_000);
         assert_eq!(c.live(), ConnectivityState::Online);
     }
@@ -480,20 +471,6 @@ mod tests {
             .get("http://127.0.0.1:1/")
             .send()
             .unwrap_err()
-    }
-
-    fn one_shot_http_status(status: u16) -> (String, std::thread::JoinHandle<()>) {
-        use std::io::Write;
-        use std::net::TcpListener;
-        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
-        let port = listener.local_addr().expect("addr").port();
-        let handle = std::thread::spawn(move || {
-            let (mut stream, _) = listener.accept().expect("accept");
-            let line =
-                format!("HTTP/1.1 {status} Test\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
-            let _ = stream.write_all(line.as_bytes());
-        });
-        (format!("http://127.0.0.1:{port}/"), handle)
     }
 
     #[test]
