@@ -39,6 +39,11 @@ const WRAPPED: &[(&str, usize, &str)] = &[
     ("grokhub-agent/src/route/local_sidecar.rs", 1, "Sidecar health_ok: loopback /health with bearer token; no egress line"),
     ("grokhub-agent/src/route/sources.rs", 1, "XaiApiSource::get / XaiProbeTransport::send: guard_egress (no user data) to api.x.ai"),
     ("grokhub-agent/src/plugins.rs", 1, "fetch_marketplace: guard_quiet (no user data)"),
+    (
+        "grokhub-core/src/mcp_catalog.rs",
+        1,
+        "MCP registry refresh: https allowlist + public_only_resolve (official registry, no user data)",
+    ),
     ("grokhub-agent/src/tools/media.rs", 1, "run_call / poll_video / save_results: guard_or_park"),
     ("grokhub-agent/src/tools/web_fetch.rs", 1, "fetch_markdown: guard_or_park on every hop"),
     ("grokhub-app/src/app/model_download_ui.rs", 1, "HfFetch::open / sha256: egress_ok (no user data) to Hugging Face"),

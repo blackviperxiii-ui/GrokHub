@@ -4,6 +4,10 @@
 //! writes [`CatalogEntry::config_entry`] into the cabin's `mcp.json`, which
 //! never holds a credential.
 
+use std::collections::HashMap;
+use std::io::Read;
+use std::time::Duration;
+
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
 
@@ -60,6 +64,16 @@ pub struct CatalogEntry {
 pub struct Catalog {
     pub entries: Vec<CatalogEntry>,
 }
+
+/// Display metadata taken from the official MCP registry (never install recipes).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RegistryMeta {
+    pub name: String,
+    pub description: String,
+    pub source: String,
+}
+
+const MAX_REGISTRY_BYTES: usize = 2 * 1024 * 1024;
 
 /// The catalog shipped with this build. A test pins that it parses; if it ever
 /// didn't, Marketplace shows an empty list rather than taking the app down.
@@ -197,6 +211,231 @@ impl Catalog {
     }
 }
 
+fn encode_registry_server(name: &str) -> String {
+    name.replace('/', "%2F")
+}
+
+fn registry_versions_url(registry_id: &str) -> Result<String, String> {
+    let id = registry_id.trim();
+    if id.is_empty() {
+        return Err("MCP registry id is empty".into());
+    }
+    let url = format!(
+        "https://{}/v0.1/servers/{}/versions",
+        crate::ssrf::MCP_REGISTRY_HOST,
+        encode_registry_server(id)
+    );
+    crate::ssrf::guard_mcp_registry_url(&url)?;
+    Ok(url)
+}
+
+fn registry_agent() -> ureq::Agent {
+    ureq::AgentBuilder::new()
+        .timeout_connect(Duration::from_secs(10))
+        .timeout(Duration::from_secs(25))
+        .redirects(0)
+        .resolver(crate::ssrf::public_only_resolve)
+        .build()
+}
+
+fn read_registry_body(resp: ureq::Response) -> Result<String, String> {
+    if !(200..300).contains(&resp.status()) {
+        return Err(format!("MCP registry: http {}", resp.status()));
+    }
+    let mut buf = Vec::new();
+    resp.into_reader()
+        .take((MAX_REGISTRY_BYTES + 1) as u64)
+        .read_to_end(&mut buf)
+        .map_err(|err| format!("MCP registry: {err}"))?;
+    if buf.len() > MAX_REGISTRY_BYTES {
+        return Err("MCP registry response is too large".into());
+    }
+    String::from_utf8(buf).map_err(|_| "MCP registry response is not utf-8".to_string())
+}
+
+/// GET one server's version list from the official registry (https + allowlist + SSRF rail).
+pub fn fetch_registry_versions(registry_id: &str) -> Result<String, String> {
+    let url = registry_versions_url(registry_id)?;
+    let resp = registry_agent()
+        .get(&url)
+        .call()
+        .map_err(|err| format!("MCP registry: {err}"))?;
+    read_registry_body(resp)
+}
+
+/// Parse a registry versions response and return metadata for the latest active row.
+pub fn parse_registry_versions(body: &str) -> Result<Option<RegistryMeta>, String> {
+    let root: Value = serde_json::from_str(body).map_err(|e| format!("MCP registry json: {e}"))?;
+    let servers = root
+        .get("servers")
+        .and_then(Value::as_array)
+        .ok_or_else(|| "MCP registry json: missing servers".to_string())?;
+    let mut pick: Option<(bool, RegistryMeta)> = None;
+    for row in servers {
+        let server = row
+            .get("server")
+            .ok_or_else(|| "MCP registry json: missing server".to_string())?;
+        let name = server
+            .get("name")
+            .and_then(Value::as_str)
+            .ok_or_else(|| "MCP registry json: missing server name".to_string())?;
+        let official = row
+            .get("_meta")
+            .and_then(|m| m.get("io.modelcontextprotocol.registry/official"));
+        let status = official
+            .and_then(|m| m.get("status"))
+            .and_then(Value::as_str)
+            .unwrap_or("active");
+        if status == "deleted" {
+            continue;
+        }
+        let is_latest = official
+            .and_then(|m| m.get("isLatest"))
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        let description = server
+            .get("description")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        let display = server
+            .get("title")
+            .and_then(Value::as_str)
+            .filter(|t| !t.trim().is_empty())
+            .or_else(|| {
+                server
+                    .get("_meta")
+                    .and_then(|m| m.get("io.modelcontextprotocol.registry/publisher-provided"))
+                    .and_then(|p| p.get("title"))
+                    .and_then(Value::as_str)
+            })
+            .map(str::trim)
+            .filter(|t| !t.is_empty())
+            .map(str::to_string)
+            .unwrap_or_else(|| name.to_string());
+        let source = registry_source_url(server).unwrap_or_default();
+        let meta = RegistryMeta {
+            name: display,
+            description,
+            source,
+        };
+        let replace = match &pick {
+            None => true,
+            Some((was_latest, _)) => is_latest || !was_latest,
+        };
+        if replace {
+            pick = Some((is_latest, meta));
+        }
+        if is_latest {
+            break;
+        }
+    }
+    Ok(pick.map(|(_, meta)| meta))
+}
+
+fn registry_source_url(server: &Value) -> Option<String> {
+    let from_repo = server
+        .get("repository")
+        .and_then(|r| r.get("url"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|u| u.starts_with("https://"));
+    if from_repo.is_some() {
+        return from_repo.map(str::to_string);
+    }
+    server
+        .get("websiteUrl")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|u| u.starts_with("https://"))
+        .map(str::to_string)
+}
+
+fn apply_registry_meta(entry: &mut CatalogEntry, meta: &RegistryMeta) -> bool {
+    let before = (
+        entry.name.clone(),
+        entry.description.clone(),
+        entry.source.clone(),
+    );
+    if !meta.name.trim().is_empty() {
+        entry.name = meta.name.trim().to_string();
+    }
+    if !meta.description.is_empty() {
+        entry.description = meta.description.clone();
+    }
+    if meta.source.starts_with("https://") {
+        entry.source = meta.source.clone();
+    }
+    if entry.check().is_err() {
+        entry.name = before.0;
+        entry.description = before.1;
+        entry.source = before.2;
+        return false;
+    }
+    before
+        != (
+            entry.name.clone(),
+            entry.description.clone(),
+            entry.source.clone(),
+        )
+}
+
+/// Merge registry metadata into a catalog copy. Only rows with a matching
+/// `registry_id` are updated; install recipes are untouched. Rows in the
+/// registry that are not already listed are ignored.
+pub fn merge_registry_metadata(
+    catalog: &Catalog,
+    by_registry_id: &HashMap<String, RegistryMeta>,
+) -> Catalog {
+    let mut out = catalog.clone();
+    for entry in &mut out.entries {
+        if entry.registry_id.is_empty() {
+            continue;
+        }
+        if let Some(meta) = by_registry_id.get(&entry.registry_id) {
+            apply_registry_meta(entry, meta);
+        }
+    }
+    out
+}
+
+/// Fetch the official registry for every bundled `registry_id` and merge metadata.
+pub fn refresh_metadata_from_registry(catalog: &Catalog) -> Result<(Catalog, u32), String> {
+    let agent = registry_agent();
+    let mut by_id = HashMap::new();
+    let mut seen = HashMap::new();
+    for entry in &catalog.entries {
+        let id = entry.registry_id.trim();
+        if id.is_empty() || seen.contains_key(id) {
+            continue;
+        }
+        seen.insert(id.to_string(), ());
+        let url = registry_versions_url(id)?;
+        let resp = agent
+            .get(&url)
+            .call()
+            .map_err(|err| format!("MCP registry: {err}"))?;
+        let text = read_registry_body(resp)?;
+        if let Some(meta) = parse_registry_versions(&text)? {
+            by_id.insert(id.to_string(), meta);
+        }
+    }
+    let merged = merge_registry_metadata(catalog, &by_id);
+    let mut updates = 0u32;
+    for (a, b) in catalog.entries.iter().zip(&merged.entries) {
+        if a.name != b.name || a.description != b.description || a.source != b.source {
+            updates += 1;
+        }
+    }
+    Ok((merged, updates))
+}
+
+/// Refresh starting from the catalog shipped in this build.
+pub fn refresh_from_official_registry() -> Result<(Catalog, u32), String> {
+    refresh_metadata_from_registry(&bundled())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -265,6 +504,76 @@ mod tests {
         let cats = c.categories();
         assert_eq!(cats.first(), Some(&"Developer"));
         assert!(cats.contains(&"Google"));
+    }
+
+    #[test]
+    fn registry_fixture_parses_and_merges_without_touching_install_recipes() {
+        let fixture = include_str!("../tests/fixtures/mcp_registry_playwright_versions.json");
+        let meta = parse_registry_versions(fixture)
+            .expect("fixture parses")
+            .expect("latest row");
+        assert_eq!(
+            meta.description,
+            "Playwright Tools for MCP (registry latest)"
+        );
+        assert_eq!(meta.source, "https://github.com/microsoft/playwright-mcp");
+
+        let base = bundled();
+        let before = base.get("playwright").unwrap().clone();
+        let map = HashMap::from([(before.registry_id.clone(), meta)]);
+        let merged = merge_registry_metadata(&base, &map);
+        let after = merged.get("playwright").unwrap();
+        assert_eq!(
+            after.description,
+            "Playwright Tools for MCP (registry latest)"
+        );
+        assert_eq!(after.config_entry(), before.config_entry());
+        assert_eq!(merged.entries.len(), base.entries.len());
+        assert!(merged.get("slack").is_none());
+    }
+
+    #[test]
+    fn registry_fetch_url_rejects_non_allowlisted_hosts() {
+        assert!(registry_versions_url("io.github.microsoft/playwright-mcp").is_ok());
+        let bad = "https://evil.example/v0.1/servers/x/versions";
+        assert_eq!(
+            crate::ssrf::guard_mcp_registry_url(bad).unwrap_err(),
+            "MCP registry host is not allowlisted"
+        );
+    }
+
+    #[test]
+    fn registry_network_failure_leaves_the_bundled_catalog() {
+        let base = bundled();
+        let err = refresh_metadata_from_registry(&Catalog {
+            entries: vec![CatalogEntry {
+                id: "probe".into(),
+                name: "Probe".into(),
+                publisher: "P".into(),
+                category: "Developer".into(),
+                description: "d".into(),
+                logo: "P".into(),
+                transport: "http".into(),
+                command: Vec::new(),
+                url: "https://mcp.example.com/mcp".into(),
+                auth: CatalogAuth::None,
+                key_env: String::new(),
+                key_hint: String::new(),
+                registry_id: "io.github.example/probe".into(),
+                source: "https://example.com".into(),
+                capabilities: vec!["a".into()],
+                permissions: "p".into(),
+            }],
+        })
+        .unwrap_err();
+        assert!(
+            err.contains("MCP registry"),
+            "expected registry fetch error, got {err}"
+        );
+        assert_eq!(
+            base.get("playwright").unwrap().description,
+            bundled().get("playwright").unwrap().description
+        );
     }
 
     #[test]
