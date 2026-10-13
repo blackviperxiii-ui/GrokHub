@@ -1,4 +1,4 @@
-//! Browser sign-in for remote MCP servers: discovery from the server's 401,
+//! Browser sign-in for remote MCP servers. Discovery from the server's 401,
 //! dynamic client registration, authorization code + PKCE S256 on a loopback
 //! redirect, and refresh. The sign-in is sealed with the keyring key next to
 //! the connection tokens (`harness::seal_mcp_signin`), never written plain.
@@ -637,7 +637,9 @@ pub(super) mod tests {
         assert_eq!(err, "linear: saving sign-in was denied");
         assert!(load("linear").is_none());
         assert!(
-            !dir.join("connection-tokens").join("linear.signin.sealed").exists(),
+            !dir.join("connection-tokens")
+                .join("linear.signin.sealed")
+                .exists(),
             "denied save must not write a sealed sign-in"
         );
         TEST_CREDENTIALS_REQUIRED.store(false, std::sync::atomic::Ordering::SeqCst);
