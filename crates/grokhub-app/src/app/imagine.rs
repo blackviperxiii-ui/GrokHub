@@ -48,7 +48,8 @@ pub(super) enum ImagineCall {
     },
 }
 
-/// Extra Imagine controls and the Grok sign-in used only by this page.
+/// Extra Imagine controls, optional Imagine keychain tokens, and More-menu state.
+/// Sign-in prefers this keychain, then Settings → Account, then a console key.
 pub(super) struct ImagineNative {
     pub tokens: Option<grokhub_core::ImagineTokens>,
     pub email: String,
@@ -629,6 +630,9 @@ impl Cabin {
         if save_now {
             self.start_imagine_save();
         }
+        if stage_hit.retry {
+            self.kick_imagine();
+        }
         if new_project {
             self.imagine_prompt.clear();
             self.imagine_last.clear();
@@ -931,10 +935,6 @@ impl Cabin {
                                 self.imagine_native.more_open = false;
                                 self.imagine_aspect_anchor = aspect_hit.rect;
                                 self.imagine_menu_ignore = true;
-                            }
-                            // Frames do not wrap on their own; a full first row would grow the box.
-                            if self.imagine_kind != ImagineKind::Video {
-                                ui.end_row();
                             }
                             let more_inner = egui::Frame::NONE
                                 .fill(crate::theme::panel())
@@ -1676,7 +1676,7 @@ impl Cabin {
                         match self.imagine_kind {
                             ImagineKind::Image => self.ui_imagine_more_image(ui),
                             ImagineKind::Video => self.ui_imagine_more_video(ui),
-                            ImagineKind::Agent => {}
+                            ImagineKind::Agent => self.ui_imagine_more_agent(ui),
                         }
                     });
             })
@@ -1721,20 +1721,13 @@ impl Cabin {
         if let Some(i) = imagine_more_seg(ui, "Mode", &["Generate", "Edit"], n.image_op) {
             n.image_op = i;
         }
-        if let Some(i) =
-            imagine_more_seg(ui, "Model", &["2.0", "Quality", "Original"], n.image_model)
-        {
-            n.image_model = i;
-        }
-        let count = n.count.clamp(1, 4) - 1;
-        if let Some(i) = imagine_more_seg(ui, "Images", &["1", "2", "3", "4"], count) {
-            n.count = i + 1;
-        }
-        if n.image_op != 1 {
+        self.ui_imagine_more_image_model(ui);
+        self.ui_imagine_more_count(ui);
+        if self.imagine_native.image_op != 1 {
             return;
         }
-        let sources = n.edit_sources.len();
-        let masked = n.edit_mask.is_some();
+        let sources = self.imagine_native.edit_sources.len();
+        let masked = self.imagine_native.edit_mask.is_some();
         ui.horizontal(|ui| {
             imagine_more_title(ui, "Sources");
             ui.label(
@@ -1757,6 +1750,46 @@ impl Cabin {
             if masked && crate::cards::ghost_pill(ui, "Clear") {
                 self.imagine_native.edit_mask = None;
             }
+        });
+    }
+
+    /// Agent always generates a sprite still; share image model + count, not Edit.
+    fn ui_imagine_more_agent(&mut self, ui: &mut egui::Ui) {
+        ui.label(
+            RichText::new("Character sprite still")
+                .size(crate::theme::FONT_META)
+                .color(crate::theme::muted()),
+        );
+        self.ui_imagine_more_image_model(ui);
+        self.ui_imagine_more_count(ui);
+    }
+
+    fn ui_imagine_more_image_model(&mut self, ui: &mut egui::Ui) {
+        let n = &mut self.imagine_native;
+        if let Some(i) =
+            imagine_more_seg(ui, "Model", &["2.0", "Quality", "Original"], n.image_model)
+        {
+            n.image_model = i;
+        }
+    }
+
+    /// Image count 1–10 (API clamp); stepper keeps the More menu readable.
+    fn ui_imagine_more_count(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            imagine_more_title(ui, "Images");
+            let mut n = self.imagine_native.count.clamp(1, 10);
+            if crate::cards::ghost_pill(ui, "−") && n > 1 {
+                n -= 1;
+            }
+            ui.label(
+                RichText::new(n.to_string())
+                    .size(crate::theme::FONT_CHROME)
+                    .color(crate::theme::fg()),
+            );
+            if crate::cards::ghost_pill(ui, "+") && n < 10 {
+                n += 1;
+            }
+            self.imagine_native.count = n;
         });
     }
 
@@ -1830,10 +1863,10 @@ impl Cabin {
                             play = Some(path.clone());
                         }
                         ui.horizontal(|ui| {
-                            if ui.small_button("Save").clicked() {
+                            if crate::cards::ghost_pill(ui, "Save") {
                                 save_at = Some(i);
                             }
-                            if ui.small_button("Open folder").clicked() {
+                            if crate::cards::ghost_pill(ui, "Open folder") {
                                 open_folder = true;
                             }
                         });

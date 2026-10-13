@@ -55,11 +55,13 @@ pub mod imagine;
 pub mod imagine_auth;
 pub mod inhabit;
 pub mod interests;
+pub mod journal;
 pub mod learning;
 pub mod local_setup;
 pub mod mcp_catalog;
 pub mod mcp_oauth;
 pub mod md;
+pub mod mission;
 pub mod model_download;
 pub mod model_registry;
 pub mod models;
@@ -89,6 +91,7 @@ pub mod review;
 pub mod rewind;
 pub mod run_metrics;
 pub mod screen_record;
+pub mod sddl;
 pub mod self_review;
 pub mod shortcuts;
 pub mod situation;
@@ -97,6 +100,7 @@ pub mod slash;
 pub mod ssrf;
 pub mod state;
 pub mod stream;
+pub mod systems_brief;
 pub mod talk;
 pub mod task;
 pub mod thread_tab;
@@ -109,6 +113,8 @@ pub mod usage;
 pub mod verify;
 pub mod voice;
 pub mod what_changed;
+#[cfg(windows)]
+pub mod win_acl;
 pub mod windshield;
 pub mod wire;
 pub mod workboard;
@@ -263,8 +269,8 @@ pub use goal::{
     goal_continue_pin, goal_pin_for_job, goal_step_after_outcome, hub_dispatch_ok,
     is_auto_continue_prompt, looks_incomplete, next_goal_prompt, parse_fast_topics,
     parse_goal_outcome, reply_needs_followup, should_auto_continue_goal, should_name_thread,
-    thread_goal_prompt, visible_goal_step_on_continue, ThreadGoal, FOLLOWUP_PROMPT,
-    GOAL_DROP_AFTER,
+    thread_goal_prompt, topics_from_turns, visible_goal_step_on_continue, ThreadGoal,
+    FOLLOWUP_PROMPT, GOAL_DROP_AFTER,
 };
 pub use governor::{
     cabin_jobs, runs_cheap, user_active, BackgroundBudgets, BudgetClass, Governor, GovernorNote,
@@ -353,6 +359,12 @@ pub use imagine_auth::{
     XAI_OAUTH_ACCOUNT, XAI_OAUTH_LEGACY_ACCOUNT,
 };
 pub use inhabit::{can_inhabit, inhabit_bundle_usable, inhabit_ready, InhabitBundle};
+pub use journal::{
+    abandon_entry, add_evidence, add_option, create_entry, decide_entry, defer_entry,
+    dismiss_nudge, due_nudges, edit_entry, link_board_evidence, promote_to_board, remove_evidence,
+    remove_option, search_entries, set_leaning, set_status, EvidenceKind, EvidenceLink,
+    JournalEntry, JournalLeaning, JournalOption, JournalOutcome, JournalStatus,
+};
 pub use learning::{
     apply_local_lessons, extract_insights, insight_key_for_fact, insight_pin, is_actionable_need,
     is_durable_fact, is_greeting_chitchat, looks_like_user_pref, prune_ephemeral_insights,
@@ -362,6 +374,10 @@ pub use learning::{
 pub use md::{
     code_tokens, md_blocks, md_link_ok, md_plain, md_spans, md_table_cells, md_wants_full_width,
     CodeTok, MdAlign, MdBlock, MdSpan,
+};
+pub use mission::{
+    mission_worthy_intent, MissionCheckItem, MissionCheckStatus, MissionOutcomeView, MissionSeed,
+    MissionStatus, MissionView,
 };
 pub use models::{catalog_line, sanitize_chat_model, MODEL_CATALOG};
 pub use oauth::{

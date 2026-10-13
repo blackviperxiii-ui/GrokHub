@@ -104,19 +104,8 @@ fn restrict_private(path: &Path) {
 #[cfg(not(any(unix, windows)))]
 fn restrict_private(_path: &Path) {}
 
-/// True when an SDDL DACL grants read/write to Everyone, Users, Authenticated Users,
-/// Guests, or Anonymous. Owner / SYSTEM SIDs are fine (`OW` expands to `S-1-5-21-…`).
-#[cfg(any(windows, test))]
-pub(crate) fn sddl_allows_world(sddl: &str) -> bool {
-    sddl.split('(')
-        .skip(1)
-        .map(|ace| ace.split(')').next().unwrap_or(""))
-        .filter(|ace| ace.starts_with('A') || ace.starts_with("OA"))
-        .any(|ace| {
-            let trustee = ace.rsplit(';').next().unwrap_or("");
-            matches!(trustee, "WD" | "BU" | "AU" | "BG" | "AN")
-        })
-}
+#[cfg(test)]
+pub(crate) use grokhub_core::sddl::sddl_allows_world;
 
 fn is_private_file(path: &Path) -> bool {
     #[cfg(unix)]
@@ -476,10 +465,6 @@ pub struct AppConfig {
     /// Settings → Pulse → Sources: which free sources run and what they follow.
     #[serde(default)]
     pub pulse_sources: grokhub_core::pulse_sources::SourceSettings,
-    /// Settings → Behavior. The old card deck over the empty chat. Pulse holds
-    /// the cards now, so it is off unless turned back on.
-    #[serde(default)]
-    pub home_deck: bool,
     /// Where `/recall` reads memory. Omitted from `app.json` while this stays
     /// legacy, so an old file and a default save do not grow a new key.
     /// Opt in with `"memory_backend": "amr"` (snake_case, not camelCase).
@@ -670,7 +655,6 @@ impl Default for AppConfig {
             feed_pulse: FeedPulse::default(),
             feed_instructions: String::new(),
             pulse_sources: Default::default(),
-            home_deck: false,
             memory_backend: grokhub_core::amr::MemoryBackend::Legacy,
         }
     }
@@ -953,6 +937,20 @@ pub fn load_board() -> Vec<BoardCard> {
 pub fn save_board(cards: &[BoardCard]) -> Result<(), String> {
     let s = serde_json::to_string_pretty(cards).map_err(|e| e.to_string())?;
     atomic_write(&workboard_path(), s.as_bytes())
+}
+
+/// Decision backlog / experiment journal (local-first open questions).
+pub fn decisions_path() -> PathBuf {
+    config_dir().join("decisions.json")
+}
+
+pub fn load_journal() -> Vec<grokhub_core::JournalEntry> {
+    load_json(&decisions_path(), JSON_STORE_CAP)
+}
+
+pub fn save_journal(entries: &[grokhub_core::JournalEntry]) -> Result<(), String> {
+    let s = serde_json::to_string_pretty(entries).map_err(|e| e.to_string())?;
+    atomic_write(&decisions_path(), s.as_bytes())
 }
 
 pub fn wall_dir() -> PathBuf {
@@ -1638,6 +1636,7 @@ mod tests {
             ("pub fn load(", "pub fn save("),
             ("pub fn load_chat(", "pub fn workboard_path("),
             ("pub fn load_board(", "pub fn save_board("),
+            ("pub fn load_journal(", "pub fn save_journal("),
         ] {
             let slice = src
                 .split(name)
@@ -1830,7 +1829,7 @@ mod tests {
             !src.contains(concat!("File::", "create(path)")),
             "Windows create_private must not be a no-op File create"
         );
-        let acl = include_str!("win_acl.rs");
+        let acl = include_str!("../../grokhub-core/src/win_acl.rs");
         assert!(
             acl.contains("USER_ONLY_SDDL")
                 && acl.contains("D:P(A;;FA;;;SY)(A;;FA;;;OW)")

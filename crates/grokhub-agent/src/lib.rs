@@ -22,6 +22,7 @@ mod models;
 pub mod perm;
 pub mod plugins;
 mod prompt;
+mod recovery;
 pub mod repair;
 mod research;
 mod retry;
@@ -78,6 +79,10 @@ pub use models::{
 pub use prompt::{
     prompt_need_from_job, system_prompt, system_prompt_parts, system_prompt_with, PromptNeed,
     PromptProfile,
+};
+pub use recovery::{
+    project as project_recovery, state_for_rung, DriveFact, RecoveryFacts, RecoverySnapshot,
+    RecoveryState,
 };
 pub use research::native_deep_research_prompt;
 pub use retry::{

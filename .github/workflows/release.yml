@@ -45,7 +45,11 @@ jobs:
 
   windows-installer:
     runs-on: windows-latest
-    timeout-minutes: 60
+    # SignPath OSS approvals are manual; leave headroom when signing is on.
+    timeout-minutes: 120
+    permissions:
+      contents: read
+      actions: write
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -54,6 +58,89 @@ jobs:
       - name: Package
         shell: pwsh
         run: ./scripts/make-windows-release.ps1
+      # Authenticode via SignPath Foundation. No-op until secrets/vars exist.
+      # Only tags are signed (every beta push would spam approvals).
+      - name: Detect SignPath configuration
+        id: signpath-config
+        shell: pwsh
+        env:
+          SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}
+          SIGNPATH_ORGANIZATION_ID: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          SIGNPATH_PROJECT_SLUG: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          SIGNPATH_SIGNING_POLICY_SLUG: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
+          SIGNPATH_ARTIFACT_CONFIGURATION_SLUG: ${{ vars.SIGNPATH_ARTIFACT_CONFIGURATION_SLUG }}
+        run: |
+          $ver = (Get-Content VERSION -Raw).Trim()
+          "product-version=$ver" >> $env:GITHUB_OUTPUT
+          if ($env:GITHUB_REF_TYPE -ne "tag") {
+            "enabled=false" >> $env:GITHUB_OUTPUT
+            Write-Host "SignPath skipped: not a tag (beta branch pushes stay unsigned)."
+            exit 0
+          }
+          $missing = @()
+          foreach ($name in @(
+            "SIGNPATH_API_TOKEN",
+            "SIGNPATH_ORGANIZATION_ID",
+            "SIGNPATH_PROJECT_SLUG",
+            "SIGNPATH_SIGNING_POLICY_SLUG",
+            "SIGNPATH_ARTIFACT_CONFIGURATION_SLUG"
+          )) {
+            if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($name))) {
+              $missing += $name
+            }
+          }
+          if ($missing.Count -gt 0) {
+            "enabled=false" >> $env:GITHUB_OUTPUT
+            Write-Host "::warning::SignPath skipped (unsigned Windows artifacts): missing $($missing -join ', '). See docs/CODE_SIGNING.md."
+            exit 0
+          }
+          "enabled=true" >> $env:GITHUB_OUTPUT
+          Write-Host "SignPath enabled for tag with policy '$env:SIGNPATH_SIGNING_POLICY_SLUG'."
+      - name: Upload unsigned Windows artifacts for SignPath
+        if: steps.signpath-config.outputs.enabled == 'true'
+        id: signpath-unsigned
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-signpath-unsigned
+          path: |
+            dist-release/GrokHub-Setup-*.exe
+            dist-release/grokhub-windows-v*.zip
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
+      - name: Submit SignPath signing request
+        if: steps.signpath-config.outputs.enabled == 'true'
+        id: signpath
+        uses: signpath/github-action-submit-signing-request@v3
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
+          artifact-configuration-slug: ${{ vars.SIGNPATH_ARTIFACT_CONFIGURATION_SLUG }}
+          github-artifact-id: ${{ steps.signpath-unsigned.outputs.artifact-id }}
+          wait-for-completion: true
+          wait-for-completion-timeout-in-seconds: 3600
+          output-artifact-directory: signpath-signed
+          parameters: |
+            version: "${{ steps.signpath-config.outputs.product-version }}"
+      - name: Replace unsigned artifacts with SignPath-signed outputs
+        if: steps.signpath-config.outputs.enabled == 'true'
+        shell: pwsh
+        run: |
+          $downloadDir = Join-Path $PWD "signpath-signed"
+          if (-not (Test-Path $downloadDir)) {
+            throw "Signed artifact directory '$downloadDir' was not created."
+          }
+          $setup = Get-ChildItem $downloadDir -Recurse -File -Filter "GrokHub-Setup-*.exe" | Select-Object -First 1
+          $zip = Get-ChildItem $downloadDir -Recurse -File -Filter "grokhub-windows-v*.zip" | Select-Object -First 1
+          if (-not $setup) { throw "Signed GrokHub-Setup-*.exe was not found in '$downloadDir'." }
+          if (-not $zip) { throw "Signed grokhub-windows-v*.zip was not found in '$downloadDir'." }
+          $outDir = Join-Path $PWD "dist-release"
+          Copy-Item $setup.FullName (Join-Path $outDir $setup.Name) -Force
+          Copy-Item $zip.FullName (Join-Path $outDir $zip.Name) -Force
+          Write-Host "Replaced dist-release Windows artifacts with SignPath-signed outputs."
+          Write-Host "Signing request: ${{ steps.signpath.outputs.signing-request-web-url }}"
       - uses: actions/upload-artifact@v4
         with:
           name: windows

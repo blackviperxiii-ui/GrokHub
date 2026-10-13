@@ -68,6 +68,7 @@ mod detect;
 mod egress;
 #[cfg(test)]
 mod egress_coverage;
+mod evidence;
 mod hard;
 mod ladder;
 mod mindcheck;
@@ -145,6 +146,9 @@ pub use egress::{
     provider_or_park, read_egress, read_egress_report, record_approved_once, DataClass,
     EgressBasis, EgressLine, EgressRead, EgressReq, OriginScope, RecallScope, EGRESS_FILE,
     HUB_DEST, HUB_SYNC_DATA,
+};
+pub use evidence::{
+    evidence_summary, latest_evidence_turn, run_evidence, RunEvidence, EVIDENCE_LINES_CAP,
 };
 pub use hard::{
     classify, classify_ask, click_action, click_rule, click_target, click_target_class,

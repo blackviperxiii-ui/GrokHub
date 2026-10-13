@@ -12,9 +12,8 @@
 - `crates/grokhub-app/src/app/chat_kick.rs`: the send path that tries `parse_slash`, then `unknown_cabin_slash`, then native parity, then the model.
 - `crates/grokhub-agent/src/slash_parity.rs`: every Grok CLI builtin and what a native thread does with it.
 ## Change recipe
-- Add a `Slash` variant, a `parse_slash` arm, a `slash_kind` string, a `SLASH_COMMANDS` row (`cmd`, `hint`, `insert`, `run_on_pick`), and a `slash_help` line in `crates/grokhub-core/src/slash.rs`.
-- Handle it in `run_slash` in `crates/grokhub-app/src/app/slash.rs`, with a core test in `cabin_slash` or a new one.
-- If it should count as a home habit, map its kind in `home_slash_cmd` (`crates/grokhub-core/src/chips.rs`).
+- Add a `Slash` variant, `parse_slash` arm, `slash_kind`, `SLASH_COMMANDS` row, and `slash_help` line in `crates/grokhub-core/src/slash.rs` (e.g. `/brief` → `Slash::Brief`).
+- Handle it in `run_slash` (`crates/grokhub-app/src/app/slash.rs`); map habits in `home_slash_cmd` (`chips.rs`) only when needed.
 ## What breaks it
 - Renaming a `slash_kind` string: it is the input to `home_slash_cmd`, so home habits stop counting.
 - Claiming a skill verb: unknown slashes and skill slashes such as `/create-skill` must still go to the native engine as a turn (`unknown_cabin_slash`). Only retired verbs (`/approve`, `/project binding`) are rejected locally.

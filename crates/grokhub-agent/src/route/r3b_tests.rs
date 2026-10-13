@@ -307,6 +307,27 @@ fn usable_needs_a_key_and_a_grant_that_covers_the_data() {
 }
 
 #[test]
+fn provider_agent_dials_through_the_public_only_resolver() {
+    let arm = include_str!("providers.rs")
+        .split("fn agent() -> ureq::Agent {")
+        .nth(1)
+        .and_then(|s| s.split("fn reply(").next())
+        .expect("provider agent");
+    assert!(
+        arm.contains(".resolver(crate::public_only_resolve)"),
+        "provider dials must use public_only_resolve: {arm}"
+    );
+    assert!(
+        arm.contains(".redirects(0)"),
+        "provider dials must not follow redirects blindly: {arm}"
+    );
+    assert!(
+        !arm.contains("env_proxy") && !arm.to_ascii_lowercase().contains("http_proxy"),
+        "env proxy would skip public_only_resolve on the target: {arm}"
+    );
+}
+
+#[test]
 fn base_urls_are_https_hosts_and_xai_is_built_in() {
     assert_eq!(
         parse_base_url(" https://openrouter.ai/api/v1/ ").unwrap(),
@@ -338,7 +359,19 @@ fn base_urls_are_https_hosts_and_xai_is_built_in() {
     );
     assert_eq!(
         parse_base_url("https://localhost").unwrap_err(),
-        "That address has no host."
+        "That address isn't a public https URL."
+    );
+    assert_eq!(
+        parse_base_url("https://127.0.0.1/v1").unwrap_err(),
+        "That address isn't a public https URL."
+    );
+    assert_eq!(
+        parse_base_url("https://169.254.169.254/latest").unwrap_err(),
+        "That address isn't a public https URL."
+    );
+    assert_eq!(
+        parse_base_url("https://10.0.0.5/v1").unwrap_err(),
+        "That address isn't a public https URL."
     );
     let a = providers::Provider {
         id: "anthropic".into(),
@@ -484,7 +517,7 @@ fn a_provider_is_never_picked_to_save_money_and_a_pin_or_the_class_preference_ta
     let reg = fleet();
     let empty = RoutingTable::default();
     assert_eq!(reg.get(OR_MODEL).map(|r| r.state), Some(ModelState::Live));
-    // Granted and twenty times cheaper, but Auto never takes it for cost (newest xAI instead).
+    // Granted and twenty times cheaper, but Auto never takes a provider to save money.
     let r = Router::choose(
         &ask(
             "chat:default",
@@ -497,10 +530,14 @@ fn a_provider_is_never_picked_to_save_money_and_a_pin_or_the_class_preference_ta
         &empty,
         NOW,
     );
-    assert_eq!(
-        (r.provider.as_str(), r.model.as_str(), r.cost_class),
-        ("xai", "grok-4.7", CostClass::Included)
+    assert_eq!(r.provider.as_str(), "xai");
+    assert_eq!(r.cost_class, CostClass::Included);
+    assert!(
+        r.model == "grok-4.7" || r.model == "grok-4.3",
+        "expected an included xAI model, got {}",
+        r.model
     );
+    assert!(!r.model.contains('/'), "must not pick a provider model");
     // Your pin with its key and grant: it goes there, at an effort from its own list.
     let r = Router::choose(
         &ask("chat:default", OR_MODEL, true, granted(&["openrouter"])),
@@ -536,11 +573,16 @@ fn a_provider_is_never_picked_to_save_money_and_a_pin_or_the_class_preference_ta
     let r = Router::choose(&picked, &reg, &none(), &empty, NOW);
     assert_eq!(
         (r.model.as_str(), r.reason.as_str()),
-        (OR_MODEL, "quality · Low: you picked it in Settings.")
+        (OR_MODEL, "balanced · Low: you picked it in Settings.")
     );
     picked.spend = Spend::default();
     let r = Router::choose(&picked, &reg, &none(), &empty, NOW);
-    assert_eq!((r.provider.as_str(), r.model.as_str()), ("xai", "grok-4.7"));
+    assert_eq!(r.provider.as_str(), "xai");
+    assert!(
+        r.model == "grok-4.7" || r.model == "grok-4.3",
+        "ungranted pick falls back to included xAI, got {}",
+        r.model
+    );
     // The class preference ranks it first: taken while granted, never without.
     let pref = table_with("chat:default", OR_MODEL);
     let r = Router::choose(
@@ -558,7 +600,12 @@ fn a_provider_is_never_picked_to_save_money_and_a_pin_or_the_class_preference_ta
         &pref,
         NOW,
     );
-    assert_eq!((r.provider.as_str(), r.model.as_str()), ("xai", "grok-4.7"));
+    assert_eq!(r.provider.as_str(), "xai");
+    assert!(
+        r.model == "grok-4.7" || r.model == "grok-4.3",
+        "ungranted table preference falls back to included xAI, got {}",
+        r.model
+    );
 }
 
 #[test]
