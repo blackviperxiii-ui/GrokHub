@@ -28,13 +28,14 @@ mod scan;
 pub mod ab;
 pub mod metrics;
 
-pub const SUITE_ITEMS: [&str; 8] = [
+pub const SUITE_ITEMS: [&str; 9] = [
     "xvfb-desktop",
     "repo-bugfix",
     "ask-refusal",
     "background-halt",
     "mcp-tool",
     "compaction",
+    "tool-output-compact",
     "imagine",
     "system-scan",
 ];
@@ -172,6 +173,11 @@ pub fn run_suite(opts: &Opts) -> Vec<ItemResult> {
     items.push(measure("background-halt", "native", background_halt_native));
     items.push(measure("mcp-tool", "native", || mcp_native(cfg.as_deref())));
     items.push(measure("compaction", "native", compact_native));
+    items.push(measure(
+        "tool-output-compact",
+        "native",
+        tool_output_compact_native,
+    ));
     items.push(measure("imagine", "native", imagine_native));
     items.push(measure("system-scan", "native", system_scan_native));
     if !opts.live {
@@ -215,7 +221,8 @@ is set to a non-empty value and `--budget-usd` is set with `0 < amount <= 0.20`.
     out.push_str(
         "Suite items: an Xvfb desktop probe, a temp repo bugfix with a test, an Ask-mode \
 refusal, background plus Halt, an MCP tool call through a fake stdio server, compaction \
-of a long transcript, and an Imagine call that only builds the request.\n\n",
+of a long transcript, large tool-output compaction with a spooled re-read path, and an \
+Imagine call that only builds the request.\n\n",
     );
     out.push_str("This report does not switch the default engine.\n\n");
     out.push_str("## Results\n\n");
@@ -350,6 +357,7 @@ fn success_of(status: &str) -> bool {
             | "halted"
             | "echoed"
             | "compacted"
+            | "spooled"
             | "request built"
             | "scripted reply"
             | "scripted tool"
@@ -612,6 +620,10 @@ fn mcp_native(cfg: Option<&Path>) -> (&'static str, u32) {
     } else {
         ("failed: mcp", turns)
     }
+}
+
+fn tool_output_compact_native() -> (&'static str, u32) {
+    crate::compact::eval_tool_output_compact_native()
 }
 
 fn compact_native() -> (&'static str, u32) {
