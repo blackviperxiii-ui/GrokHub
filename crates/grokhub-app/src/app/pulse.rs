@@ -4,8 +4,8 @@ use super::*;
 
 #[allow(unused_imports)]
 pub(super) use feed_ui::{
-    kit_daily_drop_badge, kit_pulse_feed_post, kit_pulse_ideas_row, kit_skeleton_row,
-    paint_feed_empty_prompt, paint_ideas_empty_prompt,
+    kit_daily_drop_badge, kit_pulse_feed_post, kit_pulse_ideas_row, paint_feed_empty_prompt,
+    paint_ideas_empty_prompt,
 };
 
 pub(super) fn should_paint_pulse(empty_chat: bool, scratch: bool, signed_in: bool) -> bool {

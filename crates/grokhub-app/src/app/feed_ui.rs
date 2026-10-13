@@ -1075,39 +1075,6 @@ pub(super) fn paint_ideas_empty_prompt(ui: &mut eframe::egui::Ui) -> bool {
     empty_state(ui, "Ideas", IDEAS_EMPTY, Some("Suggest ideas"))
 }
 
-/// Placeholder row while ideas load.
-pub(super) fn kit_skeleton_row(ui: &mut eframe::egui::Ui) {
-    const ICON: f32 = 32.0;
-    kit_pulse_ideas_row(ui, false, |ui| {
-        let w = ui.available_width();
-        let (rect, _) = ui.allocate_exact_size(egui::vec2(w, 40.0), egui::Sense::hover());
-        let block = crate::theme::elevated();
-        let p = ui.painter();
-        p.rect_filled(
-            egui::Rect::from_min_size(rect.min + egui::vec2(10.0, 4.0), egui::vec2(ICON, ICON)),
-            crate::theme::RADIUS_MD,
-            block,
-        );
-        let left = rect.left() + 10.0 + ICON + 10.0;
-        p.rect_filled(
-            egui::Rect::from_min_size(
-                egui::pos2(left, rect.top() + 6.0),
-                egui::vec2((w * 0.55).min(360.0), 12.0),
-            ),
-            crate::theme::RADIUS_SM,
-            block,
-        );
-        p.rect_filled(
-            egui::Rect::from_min_size(
-                egui::pos2(left, rect.top() + 26.0),
-                egui::vec2((w * 0.75).min(480.0), 10.0),
-            ),
-            crate::theme::RADIUS_SM,
-            block,
-        );
-    });
-}
-
 #[cfg(test)]
 mod feed_pulse_kit_tests {
     #[test]

@@ -1931,7 +1931,32 @@ pub(super) enum Thumb {
 
 /// Placeholder row while ideas are being found: the size of a real row.
 fn paint_skeleton_row(ui: &mut egui::Ui) {
-    super::feed_ui::kit_skeleton_row(ui);
+    let w = ui.available_width();
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(w, 52.0), egui::Sense::hover());
+    let block = crate::theme::elevated();
+    let p = ui.painter();
+    p.rect_filled(
+        egui::Rect::from_min_size(rect.min + egui::vec2(10.0, 4.0), egui::vec2(ICON, ICON)),
+        9.0,
+        block,
+    );
+    let left = rect.left() + 10.0 + ICON + 10.0;
+    p.rect_filled(
+        egui::Rect::from_min_size(
+            egui::pos2(left, rect.top() + 6.0),
+            egui::vec2((w * 0.55).min(360.0), 12.0),
+        ),
+        4.0,
+        block,
+    );
+    p.rect_filled(
+        egui::Rect::from_min_size(
+            egui::pos2(left, rect.top() + 26.0),
+            egui::vec2((w * 0.75).min(480.0), 10.0),
+        ),
+        4.0,
+        block,
+    );
 }
 
 fn paint_thumbs(ui: &mut egui::Ui, thumbs: &[Thumb]) {
