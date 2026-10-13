@@ -3477,6 +3477,43 @@ impl Cabin {
         }
     }
 
+    /// Governor [`JobKind::DailyDrop`]: overnight local pick from ranked Pulse rows.
+    /// Settings and ledger wiring land with Dreambeans UI; off by default.
+    fn tick_daily_drop(&mut self, today: &str) {
+        use grokhub_core::{
+            daily_drop::{DailyDropLedger, DailyDropSettings},
+            governor::{daily_drop_refresh, DailyDropRefreshCtx},
+            post_update,
+        };
+        let settings = DailyDropSettings::default();
+        let mut ledger = DailyDropLedger::default();
+        let ranked: Vec<grokhub_core::pulse_sources::Ranked> = Vec::new();
+        let clock = Self::local_clock();
+        let now = now_ms();
+        let out = daily_drop_refresh(DailyDropRefreshCtx {
+            settings: &settings,
+            ranked: &ranked,
+            ledger: &mut ledger,
+            last_run_day: None,
+            today,
+            clock: &clock,
+            night_hour: self.dream_hour(),
+            now_ms: now,
+        });
+        if out.cards.is_empty() {
+            return;
+        }
+        let mut changed = false;
+        for card in out.cards {
+            if post_update(&mut self.updates, card) {
+                changed = true;
+            }
+        }
+        if changed {
+            self.persist_updates();
+        }
+    }
+
     /// The governor's plan for this beat. You being active holds every heavy job
     /// until an idle beat; light model jobs keep running on the cost goal.
     fn background_plan(&mut self, now: u64, halted: bool, day: &str) -> grokhub_core::TickPlan {
@@ -3539,6 +3576,7 @@ impl Cabin {
                 // Same once-a-day beat as memory retention: archive idle chats.
                 self.tick_chat_auto_archive(day);
             }
+            JobKind::DailyDrop => self.tick_daily_drop(day),
             JobKind::Reflect => {
                 if should_idle_reflect(
                     self.last_activity.elapsed().as_millis() as u64,
