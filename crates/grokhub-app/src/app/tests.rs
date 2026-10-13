@@ -7169,11 +7169,11 @@ fn cabin_2109_must_ships() {
     );
     let review = fn_src(&src, "tick_review");
     assert!(review.contains("tick_session_suggestions"), "{review}");
-    let chips = include_str!("../cards.rs");
+    let chips = include_str!("chips.rs");
     let chip_row = chips
         .split("pub fn quick_chip_row(")
         .nth(1)
-        .and_then(|s| s.split("pub fn tab_pill(").next())
+        .and_then(|s| s.split("// quick_chip_row_end").next())
         .expect("quick_chip_row");
     assert!(
         chip_row.contains("with_main_wrap(false)")
