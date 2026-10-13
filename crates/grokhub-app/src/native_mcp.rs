@@ -63,7 +63,8 @@ pub enum Job {
         entry: serde_json::Value,
         sign_in: bool,
     },
-    /// Seal a key the user typed, after the confirm sheet approved it.
+    /// Seal a key after the credentials card approved it (`secrets::save_connector_key`).
+    #[expect(dead_code)]
     SaveKey {
         name: String,
         key: String,
