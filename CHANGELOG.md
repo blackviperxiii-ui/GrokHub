@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Pulse Feed thumbs decode cached images off the UI thread (same gate as Eyes / Imagine stills), so the first paint of a post with on-disk images no longer hitch on `fs::read` + JPEG/PNG decode.
 - The main chat empty surface no longer shows the Home/event card deck; cards live in Pulse.
 - Chat turns that ran harness tools show an expandable **Evidence** receipt under the reply: goal, plan status, actions, checks, changes, confidence, and recovery. Built from existing redacted spans and outcomes (no new log). A successful tool is not treated as proof the goal succeeded; missing sections say unavailable.
 - Imagine UI finish: Agent More offers model and 1–10 image count (sprite stills, not an empty menu); image count is a ± stepper to the API’s 1–10 range; Results use ghost pills like the stage; a failed stage shows Retry; More sits with Style/Aspect instead of a lone second row; docs match Account-reuse auth.
