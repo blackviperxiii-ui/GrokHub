@@ -253,12 +253,7 @@ mod tests {
     fn second_user_turn_appends_without_mutating_first() {
         let mut history: Vec<InputItem> = Vec::new();
         push_stable_system(&mut history, "STABLE");
-        push_user_turn(
-            &mut history,
-            &TurnVolatile::default(),
-            "turn one",
-            None,
-        );
+        push_user_turn(&mut history, &TurnVolatile::default(), "turn one", None);
         let frozen = serde_json::to_string(&input_wire_value(&history)).unwrap();
         push_user_turn(
             &mut history,
@@ -281,7 +276,8 @@ mod tests {
         let step_b = "Step 2 of this episode.\nGoal step: Wi-Fi\nLatest observation:\non";
         let a = episode_worker_input("CABIN", stable_view, step_a, None);
         let b = episode_worker_input("CABIN", stable_view, step_b, None);
-        let wire = |items: &[InputItem]| serde_json::to_string(&input_wire_value(&items[..2])).unwrap();
+        let wire =
+            |items: &[InputItem]| serde_json::to_string(&input_wire_value(&items[..2])).unwrap();
         assert_eq!(wire(&a), wire(&b), "system + view prefix must match");
         assert_ne!(message_text(&a, 2), message_text(&b, 2));
         assert!(message_text(&a, 2).contains("Step 1"));

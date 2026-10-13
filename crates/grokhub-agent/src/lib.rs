@@ -77,7 +77,10 @@ pub use models::{
     context_length_for, parse_listed_models, parse_xai_models, pick_model, ListedModel,
     GROK_47_CONTEXT_LENGTH, XAI_MODELS_URL,
 };
-pub use prefix_cache::{enabled as prefix_cache_enabled, settings as prefix_cache_settings, Settings as PrefixCacheSettings};
+pub use prefix_cache::{
+    enabled as prefix_cache_enabled, settings as prefix_cache_settings,
+    Settings as PrefixCacheSettings,
+};
 pub use prompt::{
     prompt_need_from_job, system_prompt, system_prompt_parts, system_prompt_with, PromptNeed,
     PromptProfile,
