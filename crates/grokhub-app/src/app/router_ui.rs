@@ -153,6 +153,7 @@ impl Cabin {
         self.poll_guard();
         self.poll_tune();
         self.poll_openrouter_sign_in();
+        super::connectivity_ui::tick_connectivity(now_ms());
         self.sync_router_pin();
         self.sync_spend();
         self.poll_route_asks();

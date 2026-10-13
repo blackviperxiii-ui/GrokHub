@@ -152,6 +152,7 @@ mod change_undo;
 mod chat_ui;
 mod chips;
 mod confirm;
+mod connectivity_ui;
 mod connectors_ui;
 mod daily_drop_ui;
 mod episode_ui;
