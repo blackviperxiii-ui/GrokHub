@@ -645,6 +645,42 @@ Glow stays white.
     }
 
     #[test]
+    fn remember_publishes_a_complete_node_and_leaves_no_temp() {
+        let tmp = Tmp::new("complete");
+        let store = AmrStore::at(&tmp.path);
+        store.init().unwrap();
+        store
+            .remember(&draft("fact-complete", "full body line\n"))
+            .unwrap();
+        let path = tmp.path.join("nodes").join("fact-complete.md");
+        let md = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            md.contains("full body line\n"),
+            "readers must never see an empty shell: {md}"
+        );
+        assert!(
+            md.starts_with("---\n"),
+            "frontmatter must be present on first read: {md}"
+        );
+        let temps: Vec<_> = std::fs::read_dir(tmp.path.join("nodes"))
+            .unwrap()
+            .flatten()
+            .filter(|e| e.file_name().to_string_lossy().contains(".tmp"))
+            .map(|e| e.file_name())
+            .collect();
+        assert!(
+            temps.is_empty(),
+            "temp must not survive remember: {temps:?}"
+        );
+        assert_eq!(
+            store
+                .remember(&draft("fact-complete", "again\n"))
+                .unwrap_err(),
+            AmrError::DuplicateId("fact-complete".into())
+        );
+    }
+
+    #[test]
     fn remember_redacts_a_secret_in_the_body_source_and_tags() {
         let tmp = Tmp::new("redact");
         let store = AmrStore::at(&tmp.path);

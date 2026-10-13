@@ -674,10 +674,12 @@ mod tests {
     }
 
     fn wait_until(mut ready: impl FnMut() -> bool) {
+        // Windows CI can starve the unattended rewrite thread for several seconds
+        // under a full nextest load; 4s timed out while the mock Say was still pending.
         let start = Instant::now();
         while !ready() {
-            if start.elapsed() > Duration::from_secs(4) {
-                panic!("timed out");
+            if start.elapsed() > Duration::from_secs(30) {
+                panic!("timed out after {:?}", start.elapsed());
             }
             std::thread::sleep(Duration::from_millis(10));
         }
