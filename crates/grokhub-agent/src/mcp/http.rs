@@ -552,9 +552,33 @@ fn read_sse(reader: &mut impl BufRead) -> Result<Option<(String, String)>, Strin
     Ok(Some((event, data)))
 }
 
+/// Scheme + host[:port] for an http(s) URL. Userinfo is dropped; host is lowercased.
+fn http_origin(url: &str) -> Option<String> {
+    let url = url.trim();
+    let (scheme, rest) = url
+        .strip_prefix("https://")
+        .map(|rest| ("https", rest))
+        .or_else(|| url.strip_prefix("http://").map(|rest| ("http", rest)))?;
+    let authority = rest.split(['/', '?', '#']).next()?.trim();
+    if authority.is_empty() {
+        return None;
+    }
+    let hostport = authority.rsplit('@').next()?.trim();
+    if hostport.is_empty() {
+        return None;
+    }
+    Some(format!("{scheme}://{}", hostport.to_ascii_lowercase()))
+}
+
 pub(crate) fn resolve_endpoint(base: &str, endpoint: &str) -> Result<String, String> {
     let endpoint = endpoint.trim();
     if endpoint.starts_with("http://") || endpoint.starts_with("https://") {
+        // Absolute SSE `endpoint` events must stay on the connect host. A remote
+        // MCP that pivots to link-local / LAN / loopback would otherwise POST
+        // JSON-RPC (and later chat tool args) there after an empty-data handshake.
+        if http_origin(base) != http_origin(endpoint) {
+            return Err("MCP endpoint must stay on the same host".into());
+        }
         return Ok(endpoint.to_string());
     }
     if !(base.starts_with("http://") || base.starts_with("https://")) {
@@ -796,6 +820,43 @@ pub(crate) mod tests {
         assert!(!err.is_empty());
         assert_eq!(server.calls.load(Ordering::SeqCst), 0, "nothing was sent");
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn absolute_sse_endpoint_must_stay_on_the_connect_host() {
+        assert_eq!(
+            resolve_endpoint("http://127.0.0.1:9/sse", "http://127.0.0.1:9/message").unwrap(),
+            "http://127.0.0.1:9/message"
+        );
+        assert_eq!(
+            resolve_endpoint("https://mcp.example.test/sse", "/rpc").unwrap(),
+            "https://mcp.example.test/rpc"
+        );
+        assert_eq!(
+            resolve_endpoint(
+                "https://mcp.example.test/v1/sse",
+                "https://mcp.example.test/v1/message"
+            )
+            .unwrap(),
+            "https://mcp.example.test/v1/message"
+        );
+        assert_eq!(
+            resolve_endpoint(
+                "https://mcp.example.test/sse",
+                "http://169.254.169.254/latest/meta-data/"
+            )
+            .unwrap_err(),
+            "MCP endpoint must stay on the same host"
+        );
+        assert_eq!(
+            resolve_endpoint("https://mcp.example.test/sse", "https://10.0.0.1/internal")
+                .unwrap_err(),
+            "MCP endpoint must stay on the same host"
+        );
+        assert_eq!(
+            resolve_endpoint("https://mcp.example.test/sse", "http://127.0.0.1:9/x").unwrap_err(),
+            "MCP endpoint must stay on the same host"
+        );
     }
 
     #[test]

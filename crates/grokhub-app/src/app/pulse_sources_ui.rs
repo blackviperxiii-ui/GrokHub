@@ -33,10 +33,12 @@ pub(super) struct SourcesState {
     pub saved: Option<Vec<SavedFind>>,
     /// The Add box for each list, by `SourceKind::key`.
     pub drafts: std::collections::BTreeMap<&'static str, String>,
-    /// What the last run did, for Settings.
+    /// What the last run did, for Settings and the Feed banner.
     pub note: String,
     /// From the cache file the first time it is needed.
     pub last_run_ms: Option<u64>,
+    /// More like this started a check; Feed shows Looking… until it finishes.
+    pub looking_more: bool,
 }
 
 /// A run, its picks, and the fast model's reply.
@@ -71,8 +73,9 @@ fn user_agent() -> String {
 fn source_agent() -> ureq::Agent {
     // Redirects are followed by hand so every hop is checked as a public URL.
     // Dial resolver blocks DNS→private/CGNAT even when the hostname looked public.
+    // No env proxy: HTTP(S)_PROXY would dial the proxy and skip public_only_resolve
+    // on the target (same as web_fetch).
     ureq::AgentBuilder::new()
-        .try_proxy_from_env(true)
         .redirects(0)
         .timeout(std::time::Duration::from_secs(FETCH_TIMEOUT_SECS))
         .resolver(grokhub_agent::public_only_resolve)
@@ -113,7 +116,7 @@ fn fetch_source(req: &SourceReq, have: Option<&ps::CacheEntry>) -> Fetched {
             .set("user-agent", &user_agent())
             .set(
                 "accept",
-                "application/json, application/atom+xml, application/rss+xml, application/xml;q=0.9, */*;q=0.5",
+                "application/json, application/atom+xml, application/rss+xml, application/xml;q=0.9, text/html;q=0.8, */*;q=0.5",
             );
         if hop == 0 {
             if let Some(entry) = have {
@@ -201,13 +204,9 @@ fn ago_label(ms: u64, now: u64) -> String {
 }
 
 impl Cabin {
-    /// Interest topics to search, strongest first, muted ones left out.
+    /// Ready + searchable interest topics (evidence-gated graph, then #727 junk filter).
     fn source_topics(&mut self) -> Vec<String> {
-        self.interests_now()
-            .ranked()
-            .into_iter()
-            .map(|t| t.topic.clone())
-            .collect()
+        self.interests_now().search_topics()
     }
 
     fn sources_last_run(&mut self) -> u64 {
@@ -261,20 +260,34 @@ impl Cabin {
             let memory_md = crate::config::read_memory("MEMORY.md");
             self.seed_interests(&user_md, &memory_md);
         }
+        self.interests_observe_recent();
         let topics = self.source_topics();
+        let probes = self
+            .interests_now()
+            .probe_queries(grokhub_core::interests::PROBE_MAX);
         let path = sources_cache_path();
         let mut cache = ps::load_cache(&path);
         let mut reqs = ps::requests_for(&self.cfg.pulse_sources, &topics, cache.runs, now);
-        // More like this asks run once, on this check.
-        if !cache.related.is_empty() {
-            reqs.extend(ps::related_requests(
-                &self.cfg.pulse_sources,
-                &cache.related,
-                now,
-            ));
-            cache.related.clear();
-            if let Err(err) = ps::save_cache(&path, &cache) {
-                self.status = err;
+        // Graph probes + More like this asks run on this check.
+        let mut related = cache.related.clone();
+        for p in probes {
+            if !related
+                .iter()
+                .any(|r| r.query.eq_ignore_ascii_case(&p.query))
+            {
+                related.push(p);
+            }
+        }
+        if !related.is_empty() {
+            let related_reqs = ps::related_requests(&self.cfg.pulse_sources, &related, now);
+            // Only drain related when at least one search kind is on. Clearing
+            // first dropped More like this asks when HN/Reddit/Web were all off.
+            if !related_reqs.is_empty() {
+                reqs.extend(related_reqs);
+                cache.related.clear();
+                if let Err(err) = ps::save_cache(&path, &cache) {
+                    self.status = err;
+                }
             }
         }
         // Counted as a run either way, so an empty setup does not retry every tick.
@@ -311,10 +324,12 @@ impl Cabin {
         };
         match rx.try_recv() {
             Ok(run) => {
+                self.sources.looking_more = false;
                 self.post_source_run(run);
             }
             Err(mpsc::TryRecvError::Empty) => self.sources.rx = Some(rx),
             Err(mpsc::TryRecvError::Disconnected) => {
+                self.sources.looking_more = false;
                 self.sources.note = "The source check stopped before it finished.".into();
             }
         }
@@ -326,10 +341,12 @@ impl Cabin {
         };
         match rx.try_recv() {
             Ok((run, picks, reply)) => {
+                self.sources.looking_more = false;
                 self.finish_source_run(run, picks, Some(reply));
             }
             Err(mpsc::TryRecvError::Empty) => self.sources.summary_rx = Some(rx),
             Err(mpsc::TryRecvError::Disconnected) => {
+                self.sources.looking_more = false;
                 self.sources.note = "The summary step stopped before it finished.".into();
             }
         }
@@ -475,12 +492,16 @@ impl Cabin {
     }
 
     /// The interest a post was for moves too when its title doesn't name it.
+    /// Topic weights often already moved via `pulse_note`; edges always get the anchor.
     fn post_topic_feedback(&mut self, card: &grokhub_core::UpdateCard, signal: InterestSignal) {
-        if let Some(topic) = card.pulse.because.as_deref() {
+        let anchor = card.pulse.because.as_deref();
+        if let Some(topic) = anchor {
             if !grokhub_core::interests::names_topic(&card.title, topic) {
-                self.interests_feedback(topic, signal);
+                self.interests_feedback_anchored(topic, Some(topic), signal);
+                return;
             }
         }
+        self.interests_edge_feedback(&card.title, anchor, signal);
     }
 
     fn nudge_post_source(&mut self, card: &grokhub_core::UpdateCard, step: i32, related: bool) {
@@ -523,7 +544,7 @@ impl Cabin {
                         ps::SourceKind::GithubReleases => format!("{added} on GitHub"),
                         ps::SourceKind::YouTube => format!("YouTube {added}"),
                         ps::SourceKind::Rss => added,
-                        ps::SourceKind::HackerNews => added,
+                        ps::SourceKind::HackerNews | ps::SourceKind::WebSearch => added,
                     }
                 );
                 true
@@ -538,8 +559,9 @@ impl Cabin {
 
     /// Save keeps the post in Saved Finds and raises its interest. Not interested
     /// quietly removes it and lowers its interest and source. More like this raises
-    /// both and searches the post's own words on the next check. Save and More like
-    /// this also count toward following a new place after two hits.
+    /// both and starts a source check now for the post's own words (HN / Reddit /
+    /// Web search when those kinds are on). Save and More like this also count
+    /// toward following a new place after two hits.
     pub(super) fn source_post_act(&mut self, id: &str, did: SourceAct) {
         let Some(card) = self.pulse_card(id) else {
             return;
@@ -579,10 +601,33 @@ impl Cabin {
                     card.title,
                     card.pulse.because.as_deref().unwrap_or("")
                 );
-                self.interests_feedback(&text, InterestSignal::MoreLikeThis);
+                self.interests_feedback_anchored(
+                    &text,
+                    card.pulse.because.as_deref(),
+                    InterestSignal::MoreLikeThis,
+                );
                 self.nudge_post_source(&card, 1, true);
-                if !self.learn_place_from_card(&card) {
-                    self.status = "More like this on the next check.".into();
+                let followed = self.learn_place_from_card(&card);
+                let was_busy = self.sources_busy();
+                let search_on = self.cfg.pulse_sources.hacker_news
+                    || self.cfg.pulse_sources.reddit
+                    || self.cfg.pulse_sources.web_search;
+                self.kick_source_fetch();
+                if self.sources.rx.is_some() && !was_busy {
+                    self.sources.looking_more = true;
+                    if !followed {
+                        self.status = "Looking for more like this…".into();
+                    }
+                } else if was_busy {
+                    self.sources.looking_more = true;
+                    if !followed {
+                        self.status = "More like this queued — check already running.".into();
+                    }
+                } else if !followed && !search_on {
+                    self.status =
+                        "Turn on Hacker News, Reddit, or Web search to look for more.".into();
+                } else if !followed {
+                    self.status = "More like this queued for the next check.".into();
                 }
             }
         }
@@ -670,7 +715,7 @@ impl Cabin {
         ui.add_space(2.0);
         crate::cards::help_text(
             ui,
-            "Free sources only, no keys. Hacker News and Reddit search your top three interests; the lists below are followed as they are. Each post names its source and links to it.",
+            "Free sources only, no keys. Hacker News, Reddit and Web search (DuckDuckGo Lite) search your top three interests; the lists below are followed as they are. Each post names its source and links to it.",
         );
         ui.add_space(8.0);
         let mut changed = false;
@@ -774,7 +819,7 @@ impl Cabin {
     /// The followed list under a source, with Remove and an Add box. True when it changed.
     fn ui_source_list(&mut self, ui: &mut egui::Ui, kind: SourceKind) -> bool {
         let hint = match kind {
-            SourceKind::HackerNews => return false,
+            SourceKind::HackerNews | SourceKind::WebSearch => return false,
             SourceKind::Reddit => "Subreddit, like rust or r/rust",
             SourceKind::GithubReleases => "Repo, like rust-lang/rust",
             SourceKind::YouTube => "Channel id (UC…) or channel URL",
@@ -1211,17 +1256,27 @@ mod tests {
 
         let more = id(&cabin, "Rust async book");
         cabin.source_post_act(&more, SourceAct::MoreLike);
-        assert_eq!(cabin.status, "More like this on the next check.");
+        assert_eq!(cabin.status, "Looking for more like this…");
+        assert!(cabin.sources.looking_more, "Feed button flips to Looking…");
+        assert!(
+            cabin.sources.rx.is_some(),
+            "More like this starts a source check now"
+        );
+        assert!(
+            cabin.sources.note.starts_with("Checking "),
+            "Feed banner shows the check: {}",
+            cabin.sources.note
+        );
         assert_eq!(weight(&mut cabin), 77);
         let cache = ps::load_cache(&sources_cache_path());
         assert_eq!(cache.source_bias.get("blog.test"), Some(&1));
-        assert_eq!(
-            cache.related,
-            vec![ps::Related {
-                query: "Rust async book".into(),
-                topic: Some("Rust".into())
-            }]
+        assert!(
+            cache.related.is_empty(),
+            "queued related search is drained into this check"
         );
+        // Drop the in-flight fetch so the cabin teardown stays quiet.
+        cabin.sources.rx = None;
+        cabin.sources.looking_more = false;
     }
 
     #[test]
@@ -1300,6 +1355,99 @@ mod tests {
         assert!(
             arm.contains(".redirects(0)"),
             "manual redirect checks need redirects(0): {arm}"
+        );
+        assert!(
+            !arm.contains("try_proxy_from_env"),
+            "env proxy would skip public_only_resolve on the target: {arm}"
+        );
+    }
+
+    #[test]
+    fn more_like_this_keeps_related_when_search_kinds_are_off() {
+        let (_lock, _root, mut cabin) = cabin();
+        cabin.updates.clear();
+        cabin.add_interest("Rust");
+        cabin.cfg.pulse_sources.hacker_news = false;
+        cabin.cfg.pulse_sources.reddit = false;
+        cabin.cfg.pulse_sources.web_search = false;
+        let now = now_ms();
+        let added = cabin.post_source_run(one_item_run(
+            vec![item("Rust async book", "https://book.test/async", now)],
+            now,
+        ));
+        assert_eq!(added, 1);
+        let more = cabin
+            .updates
+            .iter()
+            .find(|c| c.title == "Rust async book")
+            .map(|c| c.id.clone())
+            .expect("posted");
+        cabin.source_post_act(&more, SourceAct::MoreLike);
+        assert_eq!(
+            cabin.status,
+            "Turn on Hacker News, Reddit, or Web search to look for more."
+        );
+        assert!(
+            !cabin.sources.looking_more,
+            "no Looking… when nothing can run"
+        );
+        assert!(cabin.sources.rx.is_none(), "no in-flight check");
+        let cache = ps::load_cache(&sources_cache_path());
+        assert_eq!(
+            cache.related.len(),
+            1,
+            "related ask must stay queued until a search kind is on: {:?}",
+            cache.related
+        );
+        assert!(
+            !cache.related[0].query.trim().is_empty(),
+            "queued query must be non-empty: {:?}",
+            cache.related[0]
+        );
+    }
+
+    #[test]
+    fn more_like_this_kicks_a_check_and_shows_looking() {
+        let act = include_str!("pulse_sources_ui.rs")
+            .split("SourceAct::MoreLike => {")
+            .nth(1)
+            .and_then(|rest| rest.split("\n            }\n        }\n    }").next())
+            .expect("MoreLike arm");
+        assert!(
+            act.contains("self.kick_source_fetch()"),
+            "More like this must start a check now: {act}"
+        );
+        assert!(
+            act.contains("Looking for more like this…"),
+            "status must name the look: {act}"
+        );
+        assert!(
+            act.contains("looking_more = true"),
+            "Feed button needs looking_more: {act}"
+        );
+        assert!(
+            act.contains("Turn on Hacker News, Reddit, or Web search"),
+            "off-search path must say what to turn on: {act}"
+        );
+        let kick = include_str!("pulse_sources_ui.rs")
+            .split("fn kick_source_fetch(")
+            .nth(1)
+            .and_then(|rest| rest.split("\n    pub(super) fn ").next())
+            .expect("kick_source_fetch");
+        assert!(
+            kick.contains("if !related_reqs.is_empty()") && kick.contains("cache.related.clear()"),
+            "related queue clears only after search reqs exist: {kick}"
+        );
+        let ui = include_str!("pulse_ui.rs");
+        assert!(ui.contains("\"Looking…\""), "button label while looking");
+        let feed = ui
+            .split("fn ui_pulse_feed(")
+            .nth(1)
+            .and_then(|rest| rest.split("/// One post:").next())
+            .expect("ui_pulse_feed");
+        assert!(
+            feed.contains("self.sources.note"),
+            "Feed banner shows the check note: {feed}"
         );
     }
 

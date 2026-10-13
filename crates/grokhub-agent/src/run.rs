@@ -278,6 +278,14 @@ pub fn run_loop(
         if input.depth == 0 {
             replaybook_history(history, playbook.as_deref());
         }
+        // Later turns: surface sealed installed-app learnings when the user
+        // asks about games / Steam / library (first turn was often "hi").
+        if let Some(block) = crate::memory::followup_injection(user_text) {
+            history.push(InputItem::Message {
+                role: "system".into(),
+                content: vec![ContentPart::InputText(block)],
+            });
+        }
     }
     history.push(user_message(user_text, image));
     // Spike-4c: a tool call that carries a recalled line is personal egress.

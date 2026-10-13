@@ -2421,6 +2421,7 @@ pub struct ImagineStageHit {
     pub save: bool,
     pub open: bool,
     pub play: bool,
+    pub retry: bool,
 }
 
 /// Generating or finished still/video above the docked Imagine chat box.
@@ -2462,13 +2463,26 @@ pub fn imagine_stage(
     }
     let fail = error.trim();
     if !fail.is_empty() {
+        let bar_h = 40.0;
+        let message = egui::Rect::from_min_max(
+            r.min,
+            egui::pos2(r.right(), (r.bottom() - bar_h).max(r.top() + 8.0)),
+        );
         ui.painter().text(
-            r.center(),
+            message.center(),
             Align2::CENTER_CENTER,
             format!("Imagine failed — {fail}"),
             FontId::proportional(crate::theme::FONT_CHROME),
             crate::theme::fg(),
         );
+        let bar = egui::Rect::from_min_max(egui::pos2(r.left() + 10.0, message.bottom()), r.max);
+        ui.scope_builder(egui::UiBuilder::new().max_rect(bar), |ui| {
+            ui.horizontal(|ui| {
+                if ghost_pill(ui, "Retry") {
+                    hit.retry = true;
+                }
+            });
+        });
         return hit;
     }
     if path.is_empty() {
@@ -4395,6 +4409,8 @@ mod tests {
             stage.contains("Imagining…")
                 && stage.contains("Imagining video…")
                 && stage.contains("Imagine failed")
+                && stage.contains("ghost_pill(ui, \"Retry\")")
+                && stage.contains("hit.retry = true")
                 && stage.contains("Expand")
                 && stage.contains("Play")
                 && stage.contains("Save")

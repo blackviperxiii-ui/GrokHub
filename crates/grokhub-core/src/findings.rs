@@ -74,6 +74,38 @@ fn one_line(s: &str) -> String {
     s.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
+/// One-tap pills that ask the agent to grant OS/workspace paths or "activate"
+/// a skill cannot succeed and doom-loop. Refuse them at card build time
+/// (`from_json`) and drop them when painting a stored card (`parse`) or when
+/// a stalled run builds a fallback card (`is_impossible_one_tap`).
+fn impossible_host_fix_reason(label: &str, goal: &str) -> Option<String> {
+    let blob = format!("{label} {goal}").to_ascii_lowercase();
+    const NEEDLES: &[&str] = &[
+        "grant workspace",
+        "grant access to ~",
+        "grant access to /",
+        "workspace access to",
+        "path restriction",
+        "activate skill",
+        "enable skill",
+        "os permission",
+        "~/.steam",
+        "escape the workspace",
+    ];
+    NEEDLES.iter().find(|n| blob.contains(*n)).map(|n| {
+        format!(
+            "fix `{label}` is not a one-tap the agent can do (`{n}`). \
+Use Memory, sealed learnings, or a loadable skill instead of OS permission pills."
+        )
+    })
+}
+
+/// True when a one-tap label/goal (or open-todo text used as a goal) is an
+/// impossible host/OS ask the agent cannot fulfill.
+pub fn is_impossible_one_tap(label: &str, goal: &str) -> bool {
+    impossible_host_fix_reason(label, goal).is_some()
+}
+
 impl Findings {
     /// From the tool's arguments: `{"findings":[{"severity","text"}],
     /// "fixes":[{"label","goal"}]}`. Findings come out most severe first.
@@ -118,6 +150,9 @@ impl Findings {
                     "fix label `{label}` must be at most {LABEL_MAX} characters with no colon"
                 ));
             }
+            if let Some(why) = impossible_host_fix_reason(&label, &goal) {
+                return Err(why);
+            }
             fixes.push(Fix { label, goal });
         }
         Ok(Self { items, fixes })
@@ -158,10 +193,14 @@ impl Findings {
                 continue;
             };
             if in_fixes {
-                fixes.push(Fix {
-                    label: head.to_string(),
-                    goal: rest.to_string(),
-                });
+                // Drop doom-loop pills that may already be on disk from older
+                // runs or from a fallback card that skipped from_json.
+                if impossible_host_fix_reason(head, rest).is_none() {
+                    fixes.push(Fix {
+                        label: head.to_string(),
+                        goal: rest.to_string(),
+                    });
+                }
             } else if let Some(severity) = Severity::parse(head) {
                 items.push(Finding {
                     severity,
@@ -257,6 +296,44 @@ mod tests {
         assert_eq!(
             err(json!({"findings": [{"severity": "low", "text": "x"}], "fixes": seven})),
             "give at most 6 fixes"
+        );
+        let steam = err(json!({
+            "findings": [{"severity": "medium", "text": "path escapes the workspace"}],
+            "fixes": [{
+                "label": "Fix path restriction",
+                "goal": "Grant workspace access to ~/.steam path"
+            }]
+        }));
+        assert!(
+            steam.contains("not a one-tap") && steam.contains("grant workspace"),
+            "{steam}"
+        );
+        let skill = err(json!({
+            "findings": [{"severity": "low", "text": "unknown skill"}],
+            "fixes": [{
+                "label": "Activate steamlibreview",
+                "goal": "Activate skill steamlibreview so it loads"
+            }]
+        }));
+        assert!(skill.contains("activate skill"), "{skill}");
+    }
+
+    #[test]
+    fn parse_drops_impossible_one_taps_already_on_disk() {
+        let body = "Findings from this run\n\n\
+             - Medium: Not finished: Activate skill steamlibreview so it loads\n\n\
+             One-tap fixes\n\n\
+             - Finish the rest: Finish what the last run left open: Activate skill steamlibreview so it loads.\n\
+             - Fix nginx: Restart nginx and confirm it is listening.";
+        let card = Findings::parse(body).unwrap();
+        assert_eq!(card.fixes.len(), 1);
+        assert_eq!(card.fixes[0].label, "Fix nginx");
+        assert!(
+            is_impossible_one_tap(
+                "Finish the rest",
+                "Finish what the last run left open: Activate skill steamlibreview so it loads."
+            ),
+            "needle must still catch activate skill in fallback goals"
         );
     }
 }

@@ -691,10 +691,12 @@ fn paint_done_for_you(ui: &mut egui::Ui, card: &UpdateCard) -> Option<FeedPostAc
 
 /// Title, short takeaway, Read at, images, then Like / Discuss.
 /// `thumbs` is empty when the post has no image yet.
+/// `looking_more` is true while a More like this check is in flight.
 pub(super) fn paint_post_body(
     ui: &mut egui::Ui,
     card: &UpdateCard,
     thumbs: &[Thumb],
+    looking_more: bool,
 ) -> Option<FeedPostAct> {
     let mut act = None;
     ui.add(
@@ -750,7 +752,7 @@ pub(super) fn paint_post_body(
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 14.0;
         if grokhub_core::pulse_sources::is_source_post(card) {
-            if let Some(did) = paint_source_actions(ui, card) {
+            if let Some(did) = paint_source_actions(ui, card, looking_more) {
                 act = Some(FeedPostAct::Source(did));
             }
         } else if paint_heart_button(ui, card.reaction == Some(CardReaction::Up)) {
@@ -783,20 +785,33 @@ pub(super) fn paint_post_body(
 }
 
 /// Save, Not interested and More like this under a source post. Save reads Saved
-/// once the post is in Saved Finds.
-fn paint_source_actions(ui: &mut egui::Ui, card: &UpdateCard) -> Option<SourceAct> {
+/// once the post is in Saved Finds. More like this reads Looking… while a check
+/// it started is still running.
+fn paint_source_actions(
+    ui: &mut egui::Ui,
+    card: &UpdateCard,
+    looking_more: bool,
+) -> Option<SourceAct> {
     let saved = card.reaction == Some(CardReaction::Up);
     let mut act = None;
     for (label, did) in [
         (if saved { "Saved" } else { "Save" }, SourceAct::Save),
         ("Not interested", SourceAct::NotInterested),
-        ("More like this", SourceAct::MoreLike),
+        (
+            if looking_more {
+                "Looking…"
+            } else {
+                "More like this"
+            },
+            SourceAct::MoreLike,
+        ),
     ] {
-        let color = if did == SourceAct::Save && saved {
-            crate::theme::fg()
-        } else {
-            crate::theme::muted()
-        };
+        let color =
+            if (did == SourceAct::Save && saved) || (did == SourceAct::MoreLike && looking_more) {
+                crate::theme::fg()
+            } else {
+                crate::theme::muted()
+            };
         let button = ui.add(
             egui::Button::new(
                 RichText::new(label)
@@ -1233,6 +1248,14 @@ impl Cabin {
         let now = now_ms();
         let posts = self.pulse_feed_posts(now);
         self.kick_pulse_images(&posts);
+        if !self.sources.note.is_empty() {
+            ui.label(
+                RichText::new(&self.sources.note)
+                    .size(crate::theme::FONT_TIP)
+                    .color(crate::theme::muted()),
+            );
+            ui.add_space(8.0);
+        }
         if posts.is_empty() {
             self.paint_pulse_silence(ui, true);
             return;
@@ -1288,7 +1311,7 @@ impl Cabin {
                         });
                     });
                 });
-                if let Some(did) = paint_post_body(ui, card, &thumbs) {
+                if let Some(did) = paint_post_body(ui, card, &thumbs, self.sources.looking_more) {
                     act = Some(match did {
                         FeedPostAct::Like => PulseAct::Like(card.id.clone()),
                         FeedPostAct::Discuss => PulseAct::Discuss(card.id.clone()),
@@ -1317,11 +1340,17 @@ impl Cabin {
         if let Some(tex) = self.pulse_texture(ctx, url) {
             return Some(Thumb::Ready(tex));
         }
-        if pulse_image_path(url).exists() {
-            // On disk but not an image.
+        // Decode finished with failure: drop the slot (same as a bad download).
+        if self
+            .pulse_view
+            .textures
+            .get(&name)
+            .is_some_and(|t| t.is_none())
+        {
             self.pulse_view.image_failed.insert(name);
             return None;
         }
+        // Still downloading, or on disk and decoding off-thread.
         Some(Thumb::Loading)
     }
 
@@ -1342,30 +1371,31 @@ impl Cabin {
             .and_then(|t| t.as_ref().map(|t| t.size()))
     }
 
+    /// Upload a ready CPU thumb into egui, or kick an off-thread read+decode.
+    /// The paint path never calls `fs::read` or `load_from_memory`.
     fn pulse_texture(&mut self, ctx: &egui::Context, url: &str) -> Option<egui::TextureHandle> {
         let name = pc::image_cache_name(url);
         if let Some(tex) = self.pulse_view.textures.get(&name) {
             return tex.clone();
         }
+        if let Some(ready) = take_pulse_rgba(&name) {
+            let tex = ready.map(|thumb| {
+                let size = [thumb.width() as usize, thumb.height() as usize];
+                ctx.load_texture(
+                    format!("pulse-img-{name}"),
+                    egui::ColorImage::from_rgba_unmultiplied(size, thumb.as_raw()),
+                    egui::TextureOptions::LINEAR,
+                )
+            });
+            // None stays cached so a bad file is not decoded again.
+            self.pulse_view.textures.insert(name, tex.clone());
+            return tex;
+        }
         let path = pulse_image_path(url);
-        let bytes = std::fs::read(&path).ok()?;
-        let tex = image::load_from_memory(&bytes).ok().map(|img| {
-            let img = if img.width() > 480 || img.height() > 480 {
-                img.thumbnail(480, 480)
-            } else {
-                img
-            };
-            let thumb = img.to_rgba8();
-            let size = [thumb.width() as usize, thumb.height() as usize];
-            ctx.load_texture(
-                format!("pulse-img-{name}"),
-                egui::ColorImage::from_rgba_unmultiplied(size, thumb.as_raw()),
-                egui::TextureOptions::LINEAR,
-            )
-        });
-        // A file that does not decode stays a placeholder; it is not read again.
-        self.pulse_view.textures.insert(name, tex.clone());
-        tex
+        if path.exists() {
+            kick_pulse_decode(ctx.clone(), name, path);
+        }
+        None
     }
 
     /// One post at a time, off the UI thread: the source page's own preview
@@ -2013,11 +2043,63 @@ pub(super) fn pulse_image_path(url: &str) -> std::path::PathBuf {
         .join(pc::image_cache_name(url))
 }
 
+/// Off-thread Pulse thumb decode (same shape as Eyes / Imagine stills).
+struct PulseTexGate {
+    inflight: HashSet<String>,
+    /// `None` means the file did not decode; do not retry.
+    ready: HashMap<String, Option<image::RgbaImage>>,
+}
+
+fn pulse_tex_gate() -> &'static Mutex<PulseTexGate> {
+    static G: OnceLock<Mutex<PulseTexGate>> = OnceLock::new();
+    G.get_or_init(|| {
+        Mutex::new(PulseTexGate {
+            inflight: HashSet::new(),
+            ready: HashMap::new(),
+        })
+    })
+}
+
+fn take_pulse_rgba(name: &str) -> Option<Option<image::RgbaImage>> {
+    let mut g = pulse_tex_gate().lock().ok()?;
+    g.ready.remove(name)
+}
+
+fn kick_pulse_decode(ctx: egui::Context, name: String, path: std::path::PathBuf) {
+    {
+        let Ok(mut g) = pulse_tex_gate().lock() else {
+            return;
+        };
+        if g.ready.contains_key(&name) || !g.inflight.insert(name.clone()) {
+            return;
+        }
+    }
+    std::thread::spawn(move || {
+        let decoded = std::fs::read(&path)
+            .ok()
+            .and_then(|bytes| image::load_from_memory(&bytes).ok())
+            .map(|img| {
+                let img = if img.width() > 480 || img.height() > 480 {
+                    img.thumbnail(480, 480)
+                } else {
+                    img
+                };
+                img.to_rgba8()
+            });
+        if let Ok(mut g) = pulse_tex_gate().lock() {
+            g.inflight.remove(&name);
+            g.ready.insert(name, decoded);
+        }
+        ctx.request_repaint();
+    });
+}
+
 fn fetch_agent() -> ureq::Agent {
     // No redirects: a public URL can't bounce the fetch onto a private host.
     // Dial resolver blocks DNS→private/CGNAT even when the hostname looked public.
+    // No env proxy: HTTP(S)_PROXY would dial the proxy and skip public_only_resolve
+    // on the target (same as web_fetch).
     ureq::AgentBuilder::new()
-        .try_proxy_from_env(true)
         .redirects(0)
         .timeout(std::time::Duration::from_secs(8))
         .resolver(grokhub_agent::public_only_resolve)
@@ -2093,5 +2175,137 @@ mod fetch_agent_tests {
             arm.contains(".redirects(0)"),
             "Pulse image agent must not auto-follow redirects: {arm}"
         );
+        assert!(
+            !arm.contains("try_proxy_from_env"),
+            "env proxy would skip public_only_resolve on the target: {arm}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod pulse_tex_tests {
+    use super::*;
+
+    #[test]
+    fn pulse_texture_decodes_off_the_ui_thread() {
+        let src = include_str!("pulse_ui.rs");
+        let tex = src
+            .split("fn pulse_texture(")
+            .nth(1)
+            .and_then(|s| s.split("/// One post at a time").next())
+            .expect("pulse_texture");
+        assert!(
+            !tex.contains("load_from_memory") && !tex.contains("std::fs::read"),
+            "Feed first paint must not read or decode thumbs on the UI thread: {tex}"
+        );
+        assert!(
+            tex.contains("take_pulse_rgba") && tex.contains("kick_pulse_decode"),
+            "pulse_texture must hand off to the decode gate: {tex}"
+        );
+        let kick = src
+            .split("fn kick_pulse_decode(")
+            .nth(1)
+            .and_then(|s| s.split("fn fetch_agent(").next())
+            .expect("kick_pulse_decode");
+        let spawn = kick
+            .find("thread::spawn")
+            .expect("decode must leave the UI thread");
+        let decode = kick.find("load_from_memory").expect("JPEG/PNG decode");
+        let read = kick.find("std::fs::read").expect("disk read");
+        assert!(
+            spawn < read && spawn < decode && kick.contains("inflight"),
+            "Pulse cache thumbs must not decode on the UI thread: {kick}"
+        );
+    }
+
+    #[test]
+    fn pulse_thumb_loads_a_cached_file_after_off_thread_decode() {
+        let root = std::env::temp_dir().join(format!(
+            "grokhub-pulse-tex-{}-{}",
+            std::process::id(),
+            now_ms()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let prev = std::env::var_os("GROKHUB_CONFIG");
+        std::env::set_var("GROKHUB_CONFIG", &root);
+
+        let url = "https://example.com/pulse-opt-thumb.png";
+        let path = pulse_image_path(url);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        image::RgbaImage::from_pixel(12, 8, image::Rgba([40, 120, 200, 255]))
+            .save_with_format(&path, image::ImageFormat::Png)
+            .unwrap();
+
+        let mut cabin = Cabin::quiet_for_test();
+        let ctx = egui::Context::default();
+        assert!(
+            matches!(cabin.pulse_thumb(&ctx, url), Some(Thumb::Loading)),
+            "first paint shows Loading while decode runs off-thread"
+        );
+
+        let mut ready = false;
+        for _ in 0..200 {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            match cabin.pulse_thumb(&ctx, url) {
+                Some(Thumb::Ready(_)) => {
+                    ready = true;
+                    break;
+                }
+                Some(Thumb::Loading) => {}
+                None => panic!("valid PNG must not mark the thumb failed"),
+            }
+        }
+        assert!(ready, "off-thread decode must yield a Ready thumb");
+        assert_eq!(cabin.pulse_view_texture_size(url), Some([12, 8]));
+
+        match prev {
+            Some(v) => std::env::set_var("GROKHUB_CONFIG", v),
+            None => std::env::remove_var("GROKHUB_CONFIG"),
+        }
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn pulse_thumb_drops_a_file_that_does_not_decode() {
+        let root = std::env::temp_dir().join(format!(
+            "grokhub-pulse-bad-{}-{}",
+            std::process::id(),
+            now_ms()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let prev = std::env::var_os("GROKHUB_CONFIG");
+        std::env::set_var("GROKHUB_CONFIG", &root);
+
+        let url = "https://example.com/pulse-bad-thumb.bin";
+        let path = pulse_image_path(url);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, b"not-an-image").unwrap();
+
+        let mut cabin = Cabin::quiet_for_test();
+        let ctx = egui::Context::default();
+        assert!(matches!(cabin.pulse_thumb(&ctx, url), Some(Thumb::Loading)));
+
+        let mut failed = false;
+        for _ in 0..200 {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            match cabin.pulse_thumb(&ctx, url) {
+                None => {
+                    failed = true;
+                    break;
+                }
+                Some(Thumb::Loading) => {}
+                Some(Thumb::Ready(_)) => panic!("garbage bytes must not upload a texture"),
+            }
+        }
+        assert!(failed, "bad cache file must drop the thumb slot");
+        assert!(cabin.pulse_image_failed(url));
+
+        match prev {
+            Some(v) => std::env::set_var("GROKHUB_CONFIG", v),
+            None => std::env::remove_var("GROKHUB_CONFIG"),
+        }
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

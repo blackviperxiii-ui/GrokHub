@@ -1,4 +1,4 @@
-//! Auto router acceptance: live plan discovery, tier/effort rules, and the
+//! Auto router acceptance: capability-aware picks, tier/effort rules, and the
 //! redirected-flag fix. Pure unit tests, Windows-safe (no network).
 
 use std::collections::BTreeMap;
@@ -9,6 +9,7 @@ use grokhub_core::model_registry::{
     Credential, Listing, ModelMeta, ModelState, Prices, Registry, SourceKind,
 };
 
+use super::capabilities::{self, class_need};
 use super::policy::{self, CLASS_TABLE};
 use super::table::{self, build_table, EvalCache, SpeedQuality, TableInputs};
 use super::{RouteInput, Router};
@@ -21,14 +22,22 @@ fn meta(id: &str, reasoning: bool) -> ModelMeta {
         .next()
         .and_then(|n| n.parse().ok())
         .unwrap_or(1);
+    // Non-reasoning / mid / flagship price ladder so cost_efficiency differs.
+    let prompt = if id.contains("non-reasoning") {
+        8_000
+    } else if id.contains("4.20") {
+        20_000
+    } else {
+        10_000 * v.max(1)
+    };
     ModelMeta {
         id: id.into(),
         context_length: Some(256_000),
         max_output: Some(32_000),
         prices: Prices {
-            prompt: Some(10_000 * v),
-            cached: Some(2_500 * v),
-            completion: Some(50_000 * v),
+            prompt: Some(prompt),
+            cached: Some(prompt / 4),
+            completion: Some(prompt * 5),
             long_context_threshold: Some(200_000),
             ..Prices::default()
         },
@@ -98,6 +107,19 @@ fn ask<'a>(class: &'a str, model: &'a str) -> RouteInput<'a> {
     }
 }
 
+fn ask_text<'a>(class: &'a str, model: &'a str, text: &'a str, d: f64) -> RouteInput<'a> {
+    RouteInput {
+        text,
+        d,
+        needs_tools: true,
+        ..ask(class, model)
+    }
+}
+
+fn top_of(table: &table::RoutingTable, class: &str) -> String {
+    table.rows(class)[0].model.clone()
+}
+
 #[test]
 fn each_class_maps_to_its_tier_and_start_effort() {
     let want: &[(&str, SpeedQuality, &str)] = &[
@@ -106,16 +128,16 @@ fn each_class_maps_to_its_tier_and_start_effort() {
         ("background:redact", SpeedQuality::Speed, "low"),
         ("background:summarize", SpeedQuality::Speed, "low"),
         ("background:compact", SpeedQuality::Speed, "low"),
-        ("background:memory", SpeedQuality::Speed, "low"),
+        ("background:memory", SpeedQuality::Balanced, "low"),
         ("chat:quick", SpeedQuality::Speed, "low"),
-        ("background:judge", SpeedQuality::Quality, "low"),
-        ("background:dream", SpeedQuality::Quality, "low"),
-        ("chat:default", SpeedQuality::Quality, "medium"),
-        ("code:edit-small", SpeedQuality::Quality, "low"),
+        ("background:judge", SpeedQuality::Balanced, "low"),
+        ("background:dream", SpeedQuality::Balanced, "low"),
+        ("chat:default", SpeedQuality::Balanced, "medium"),
+        ("code:edit-small", SpeedQuality::Balanced, "low"),
         ("plan", SpeedQuality::Quality, "high"),
         ("design", SpeedQuality::Quality, "high"),
         ("debug", SpeedQuality::Quality, "high"),
-        ("desktop:soft", SpeedQuality::Quality, "medium"),
+        ("desktop:soft", SpeedQuality::Balanced, "medium"),
         ("repair:diagnose", SpeedQuality::Quality, "high"),
         ("code:multi-file", SpeedQuality::Quality, "high"),
         ("prepare:hard", SpeedQuality::Quality, "high"),
@@ -142,8 +164,13 @@ fn each_class_maps_to_its_tier_and_start_effort() {
 }
 
 #[test]
-fn quality_never_picks_non_reasoning_and_speed_never_gets_high_effort() {
-    let ids = ["grok-4.7", "grok-4.6", "grok-4.20-0309-non-reasoning"];
+fn quality_and_balanced_never_pick_non_reasoning_and_speed_never_gets_high_effort() {
+    let ids = [
+        "grok-4.7",
+        "grok-4.3",
+        "grok-4.20-0309-reasoning",
+        "grok-4.20-0309-non-reasoning",
+    ];
     let (reg, profiles) = plan_with(&ids);
     let table = build_table(
         &TableInputs {
@@ -161,7 +188,8 @@ fn quality_never_picks_non_reasoning_and_speed_never_gets_high_effort() {
             &table,
             NOW,
         );
-        if SpeedQuality::of(row.class).needs_reasoning() {
+        let need = class_need(row.class);
+        if SpeedQuality::of(row.class).needs_reasoning() || need.require_reasoning {
             assert!(
                 !r.model.contains("non-reasoning"),
                 "{} → {}",
@@ -195,9 +223,9 @@ fn quality_never_picks_non_reasoning_and_speed_never_gets_high_effort() {
             r.reason
         );
     }
-    // Non-reasoning never ranks in a quality class.
     for row in CLASS_TABLE {
-        if SpeedQuality::of(row.class).needs_reasoning() {
+        if SpeedQuality::of(row.class).needs_reasoning() || class_need(row.class).require_reasoning
+        {
             assert!(
                 table
                     .rows(row.class)
@@ -210,9 +238,18 @@ fn quality_never_picks_non_reasoning_and_speed_never_gets_high_effort() {
     }
 }
 
+/// Literal pick diversity: given a mixed plan catalog, classes must not all
+/// collapse to the same two model ids (the v11 failure mode).
 #[test]
-fn a_newer_plan_model_is_selected_and_adding_one_moves_quality_picks() {
-    let (reg, profiles) = plan_with(&["grok-4.3", "grok-4.5", "grok-4.6", "grok-4.7"]);
+fn capability_fit_diversifies_picks_across_task_classes() {
+    let ids = [
+        "grok-4.7",
+        "grok-4.5",
+        "grok-4.3",
+        "grok-4.20-0309-reasoning",
+        "grok-4.20-0309-non-reasoning",
+    ];
+    let (reg, profiles) = plan_with(&ids);
     let table = build_table(
         &TableInputs {
             reg: &reg,
@@ -221,20 +258,102 @@ fn a_newer_plan_model_is_selected_and_adding_one_moves_quality_picks() {
         &EvalCache::default(),
         NOW,
     );
-    let mut quality_tops = Vec::new();
-    for row in CLASS_TABLE {
-        if SpeedQuality::of(row.class).needs_reasoning() {
-            let top = &table.rows(row.class)[0].model;
-            assert_eq!(top, "grok-4.7", "{} top {top}", row.class);
-            quality_tops.push(top.clone());
-            let r = Router::choose(&ask(row.class, "grok-4.3"), &reg, &profiles, &table, NOW);
-            assert_eq!(r.model, "grok-4.7", "{}", row.class);
-        }
+
+    // Speed / light work → cheapest fast non-reasoning.
+    for class in [
+        "background:triage",
+        "background:redact",
+        "background:summarize",
+        "background:compact",
+        "chat:quick",
+    ] {
+        assert_eq!(
+            top_of(&table, class),
+            "grok-4.20-0309-non-reasoning",
+            "{class}"
+        );
     }
-    assert!(!quality_tops.is_empty());
-    // Adding grok-4.8 on the plan moves every quality top with no code change.
-    let (reg8, profiles8) =
-        plan_with(&["grok-4.3", "grok-4.5", "grok-4.6", "grok-4.7", "grok-4.8"]);
+
+    // Workhorse backgrounds / chat: mid reasoning, not flagship or non-reasoning.
+    for class in [
+        "background:memory",
+        "background:judge",
+        "background:dream",
+        "chat:default",
+        "code:edit-small",
+    ] {
+        assert_eq!(top_of(&table, class), "grok-4.20-0309-reasoning", "{class}");
+    }
+
+    // Multi-file prefers the coding-strong family; Flagship classes take 4.7.
+    assert_eq!(top_of(&table, "code:multi-file"), "grok-4.3");
+    assert_eq!(top_of(&table, "debug"), "grok-4.7");
+    assert_eq!(top_of(&table, "prepare:hard"), "grok-4.7");
+    assert_eq!(top_of(&table, "repair:diagnose"), "grok-4.7");
+    assert_eq!(top_of(&table, "plan"), "grok-4.7");
+    assert_eq!(
+        table.classes["repair:diagnose"].speed_quality,
+        SpeedQuality::Quality
+    );
+
+    let mut tops: BTreeMap<String, Vec<&str>> = BTreeMap::new();
+    for row in CLASS_TABLE {
+        tops.entry(top_of(&table, row.class))
+            .or_default()
+            .push(row.class);
+    }
+    // At least three distinct model ids across the table (was two in v11).
+    assert!(
+        tops.len() >= 3,
+        "only {} distinct tops: {tops:?}",
+        tops.len()
+    );
+
+    // Router::choose matches the table tops for these classes.
+    for (class, want) in [
+        ("background:triage", "grok-4.20-0309-non-reasoning"),
+        ("background:memory", "grok-4.20-0309-reasoning"),
+        ("chat:default", "grok-4.20-0309-reasoning"),
+        ("code:multi-file", "grok-4.3"),
+        ("debug", "grok-4.7"),
+        ("plan", "grok-4.7"),
+    ] {
+        let r = Router::choose(&ask(class, "grok-4.5"), &reg, &profiles, &table, NOW);
+        assert_eq!(r.model, want, "{class}");
+    }
+}
+
+#[test]
+fn adding_a_stronger_flagship_moves_reasoning_heavy_classes_not_speed() {
+    let base = [
+        "grok-4.3",
+        "grok-4.5",
+        "grok-4.7",
+        "grok-4.20-0309-non-reasoning",
+    ];
+    let (reg, profiles) = plan_with(&base);
+    let table = build_table(
+        &TableInputs {
+            reg: &reg,
+            profiles: &profiles,
+        },
+        &EvalCache::default(),
+        NOW,
+    );
+    assert_eq!(top_of(&table, "debug"), "grok-4.7");
+    assert_eq!(
+        top_of(&table, "background:triage"),
+        "grok-4.20-0309-non-reasoning"
+    );
+
+    let with8 = [
+        "grok-4.3",
+        "grok-4.5",
+        "grok-4.7",
+        "grok-4.8",
+        "grok-4.20-0309-non-reasoning",
+    ];
+    let (reg8, profiles8) = plan_with(&with8);
     let table8 = build_table(
         &TableInputs {
             reg: &reg8,
@@ -243,19 +362,22 @@ fn a_newer_plan_model_is_selected_and_adding_one_moves_quality_picks() {
         &EvalCache::default(),
         NOW,
     );
-    for row in CLASS_TABLE {
-        if SpeedQuality::of(row.class).needs_reasoning() {
-            assert_eq!(table8.rows(row.class)[0].model, "grok-4.8", "{}", row.class);
-            let r = Router::choose(&ask(row.class, "grok-4.7"), &reg8, &profiles8, &table8, NOW);
-            assert_eq!(r.model, "grok-4.8", "{}", row.class);
-        }
-    }
+    // Flagship reasoning classes (including repair) move to 4.8; speed and code-specialist stay put.
+    assert_eq!(top_of(&table8, "debug"), "grok-4.8");
+    assert_eq!(top_of(&table8, "prepare:hard"), "grok-4.8");
+    assert_eq!(top_of(&table8, "repair:diagnose"), "grok-4.8");
+    assert_eq!(
+        top_of(&table8, "background:triage"),
+        "grok-4.20-0309-non-reasoning"
+    );
+    assert_eq!(top_of(&table8, "code:multi-file"), "grok-4.3");
+    let r = Router::choose(&ask("debug", "grok-4.7"), &reg8, &profiles8, &table8, NOW);
+    assert_eq!(r.model, "grok-4.8");
 }
 
 #[test]
 fn a_model_outside_the_plan_is_never_picked_even_when_plan_models_are_down() {
     let (mut reg, profiles) = plan_with(&["grok-4.7", "grok-4.6"]);
-    // Premium / out-of-plan row that still looks healthy.
     let outside = meta("grok-4.8", true);
     reg.models.insert(
         "grok-4.8".into(),
@@ -271,7 +393,6 @@ fn a_model_outside_the_plan_is_never_picked_even_when_plan_models_are_down() {
         "grok-4.8".into(),
         ModelProfile::build(&outside, ok_probe(), 1),
     );
-    // Quarantine every plan model.
     for id in ["grok-4.7", "grok-4.6"] {
         reg.models.get_mut(id).unwrap().state = ModelState::Quarantined;
     }
@@ -332,4 +453,207 @@ fn dated_and_alias_response_ids_are_not_redirected() {
     let (events, _) = reg.fold(&[obs]);
     assert!(events.is_empty(), "{events:?}");
     assert_eq!(reg.get("grok-4.7").unwrap().state, ModelState::Live);
+}
+
+/// Hard rule: host repair must never land on a balanced/cheap/mid model when a
+/// stronger reasoning model is on the plan.
+#[test]
+fn repair_diagnose_always_picks_the_strongest_reasoning_model() {
+    let ids = [
+        "grok-4.7",
+        "grok-4.5",
+        "grok-4.3",
+        "grok-4.20-0309-reasoning",
+        "grok-4.20-0309-non-reasoning",
+    ];
+    let (reg, profiles) = plan_with(&ids);
+    let table = build_table(
+        &TableInputs {
+            reg: &reg,
+            profiles: &profiles,
+        },
+        &EvalCache::default(),
+        NOW,
+    );
+    assert_eq!(SpeedQuality::of("repair:diagnose"), SpeedQuality::Quality);
+    assert!(class_need("repair:diagnose").require_reasoning);
+    assert_eq!(class_need("repair:diagnose").cost, 0);
+    assert_eq!(class_need("repair:diagnose").speed, 0);
+    assert_eq!(top_of(&table, "repair:diagnose"), "grok-4.7");
+    assert_ne!(top_of(&table, "repair:diagnose"), "grok-4.3");
+    assert_ne!(
+        top_of(&table, "repair:diagnose"),
+        "grok-4.20-0309-reasoning"
+    );
+    let r = Router::choose(
+        &ask("repair:diagnose", "grok-4.20-0309-non-reasoning"),
+        &reg,
+        &profiles,
+        &table,
+        NOW,
+    );
+    assert_eq!(r.model, "grok-4.7");
+    assert!(r.reason.contains("quality"), "{}", r.reason);
+    // Stronger flagship on the plan moves repair with it.
+    let with8 = [
+        "grok-4.7",
+        "grok-4.8",
+        "grok-4.3",
+        "grok-4.20-0309-non-reasoning",
+    ];
+    let (reg8, profiles8) = plan_with(&with8);
+    let table8 = build_table(
+        &TableInputs {
+            reg: &reg8,
+            profiles: &profiles8,
+        },
+        &EvalCache::default(),
+        NOW,
+    );
+    assert_eq!(top_of(&table8, "repair:diagnose"), "grok-4.8");
+    let r8 = Router::choose(
+        &ask("repair:diagnose", "grok-4.7"),
+        &reg8,
+        &profiles8,
+        &table8,
+        NOW,
+    );
+    assert_eq!(r8.model, "grok-4.8");
+}
+
+#[test]
+fn high_risk_ask_escalates_off_chat_baseline_and_trivial_background_stays_cheap() {
+    let ids = [
+        "grok-4.7",
+        "grok-4.3",
+        "grok-4.20-0309-reasoning",
+        "grok-4.20-0309-non-reasoning",
+    ];
+    let (reg, profiles) = plan_with(&ids);
+    let table = build_table(
+        &TableInputs {
+            reg: &reg,
+            profiles: &profiles,
+        },
+        &EvalCache::default(),
+        NOW,
+    );
+    // Baseline chat is mid workhorse.
+    assert_eq!(top_of(&table, "chat:default"), "grok-4.20-0309-reasoning");
+    // Host-risk ask escalates to strongest reasoning (built-in logic, no LLM).
+    let hot = Router::choose(
+        &ask_text(
+            "chat:default",
+            "grok-4.20-0309-reasoning",
+            "Please sudo rm -rf /etc/old after backup — diagnose the boot issue",
+            0.4,
+        ),
+        &reg,
+        &profiles,
+        &table,
+        NOW,
+    );
+    assert_eq!(hot.model, "grok-4.7");
+    assert!(
+        hot.rule_ids.iter().any(|r| r.starts_with("attn:escalate")),
+        "{:?}",
+        hot.rule_ids
+    );
+    assert!(
+        hot.reason.contains("host") || hot.reason.contains("escalat"),
+        "{}",
+        hot.reason
+    );
+
+    // Trivial background stays on the cheap task model.
+    let cold = Router::choose(
+        &ask_text(
+            "background:triage",
+            "grok-4.7",
+            "Label this line as bug or feature",
+            0.1,
+        ),
+        &reg,
+        &profiles,
+        &table,
+        NOW,
+    );
+    assert_eq!(cold.model, "grok-4.20-0309-non-reasoning");
+    assert!(!cold.rule_ids.iter().any(|r| r.starts_with("attn:escalate")));
+}
+
+/// SuperGrok-shaped plan: flagship + coding mid + non-reasoning speed slug
+/// (no dated mid workhorse). Baselines must still reserve 4.7 for Flagship.
+#[test]
+fn supergrok_shaped_plan_baselines_reserve_flagship_for_quality() {
+    let ids = ["grok-4.7", "grok-4.3", "grok-4.20-0309-non-reasoning"];
+    let (reg, profiles) = plan_with(&ids);
+    let table = build_table(
+        &TableInputs {
+            reg: &reg,
+            profiles: &profiles,
+        },
+        &EvalCache::default(),
+        NOW,
+    );
+
+    for class in [
+        "background:triage",
+        "background:redact",
+        "background:summarize",
+        "background:compact",
+        "chat:quick",
+    ] {
+        assert_eq!(
+            top_of(&table, class),
+            "grok-4.20-0309-non-reasoning",
+            "{class}"
+        );
+    }
+    // Workhorse: coding mid, not flagship.
+    for class in [
+        "background:memory",
+        "background:judge",
+        "background:dream",
+        "chat:default",
+        "code:edit-small",
+        "desktop:soft",
+    ] {
+        assert_eq!(top_of(&table, class), "grok-4.3", "{class}");
+    }
+    assert_eq!(top_of(&table, "code:multi-file"), "grok-4.3");
+    // Flagship: strongest reasoner — including repair:diagnose.
+    for class in ["plan", "design", "debug", "prepare:hard", "repair:diagnose"] {
+        assert_eq!(top_of(&table, class), "grok-4.7", "{class}");
+    }
+
+    let hot = Router::choose(
+        &ask_text(
+            "chat:default",
+            "grok-4.3",
+            "Please sudo rm -rf /etc/old after backup",
+            0.4,
+        ),
+        &reg,
+        &profiles,
+        &table,
+        NOW,
+    );
+    assert_eq!(
+        hot.model, "grok-4.7",
+        "attention escalate still reaches flagship"
+    );
+}
+
+#[test]
+fn catalog_build_covers_every_live_plan_model() {
+    let ids = ["grok-4.7", "grok-4.3", "grok-4.20-0309-non-reasoning"];
+    let (reg, _) = plan_with(&ids);
+    let cat = capabilities::build_catalog(&reg, NOW);
+    assert_eq!(cat.seed_version, capabilities::SEED_VERSION);
+    for id in ids {
+        assert!(cat.entries.contains_key(id), "missing {id}");
+        assert!(cat.entries[id].caps.speed > 0);
+    }
+    assert!(cat.entries["grok-4.3"].caps.code > cat.entries["grok-4.7"].caps.code);
 }

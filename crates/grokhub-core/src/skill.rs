@@ -170,7 +170,33 @@ pub fn match_skill<'a>(user_text: &str, skills: &'a [SkillMd]) -> Option<&'a Ski
             return Some(hit);
         }
     }
+    // Whole-phrase / OR-split triggers beat bag-of-words: "deploy OR update the
+    // install" must hit "please update the install" without a false Jaccard win.
+    let norm = normalize_skill_ask(t);
+    let mut phrase_hit: Option<&SkillMd> = None;
+    let mut phrase_len = 0usize;
+    for s in skills {
+        let raw = if s.trigger.trim().is_empty() {
+            s.name.as_str()
+        } else {
+            s.trigger.as_str()
+        };
+        for phrase in trigger_phrases(raw) {
+            let p = normalize_skill_ask(&phrase);
+            if p.len() < 4 {
+                continue;
+            }
+            if ask_contains_phrase(&norm, &p) && p.len() > phrase_len {
+                phrase_hit = Some(s);
+                phrase_len = p.len();
+            }
+        }
+    }
+    if phrase_hit.is_some() {
+        return phrase_hit;
+    }
     let q = words(t);
+    // Short asks + low Jaccard are noise; require a longer query or a stronger score.
     let mut best: Option<&SkillMd> = None;
     let mut best_score = 0.0f32;
     for s in skills {
@@ -180,12 +206,54 @@ pub fn match_skill<'a>(user_text: &str, skills: &'a [SkillMd]) -> Option<&'a Ski
             &s.trigger
         });
         let score = jaccard(&q, &trig);
-        if score >= 0.5 && score > best_score {
+        let ok = if q.len() >= 3 {
+            score >= 0.5
+        } else {
+            score >= 0.66
+        };
+        if ok && score > best_score {
             best = Some(s);
             best_score = score;
         }
     }
     best
+}
+
+fn normalize_skill_ask(s: &str) -> String {
+    s.to_ascii_lowercase()
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|w| !w.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Split a skill trigger on OR / commas into candidate phrases.
+fn trigger_phrases(trigger: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for chunk in trigger.split([',', '/']) {
+        for part in chunk.split(" OR ").flat_map(|p| p.split(" or ")) {
+            let t = part.trim();
+            if !t.is_empty() {
+                out.push(t.to_string());
+            }
+        }
+    }
+    if out.is_empty() {
+        let t = trigger.trim();
+        if !t.is_empty() {
+            out.push(t.to_string());
+        }
+    }
+    out
+}
+
+fn ask_contains_phrase(norm_ask: &str, norm_phrase: &str) -> bool {
+    if norm_ask == norm_phrase {
+        return true;
+    }
+    let padded = format!(" {norm_ask} ");
+    let needle = format!(" {norm_phrase} ");
+    padded.contains(&needle)
 }
 
 fn follow_skill_name(t: &str) -> Option<&str> {
@@ -548,6 +616,28 @@ mod tests {
             match_skill("Follow skill flash-pi", &skills).unwrap().name,
             "flash-pi",
             "anticipate / Use in chat must hit Follow skill <name>"
+        );
+        let deploy = SkillMd {
+            name: "deploy-user-install".into(),
+            description: "Sync and restart".into(),
+            slash: "/deploy".into(),
+            trigger: "deploy OR update the install".into(),
+            instructions: "1. sync".into(),
+            pitfalls: "do not sudo rm".into(),
+            verify: "version".into(),
+            runs: 0,
+        };
+        let both = [flash.clone(), deploy];
+        assert_eq!(
+            match_skill("please update the install tonight", &both)
+                .unwrap()
+                .name,
+            "deploy-user-install",
+            "OR-split trigger phrases must activate without Jaccard"
+        );
+        assert!(
+            match_skill("pi", &both).is_none(),
+            "a one-token ask must not Jaccard-activate a skill"
         );
         assert!(
             propose_skill_from_turn("flash the pi", "ok", &["dd if=a".into()]).is_none(),

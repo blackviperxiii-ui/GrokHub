@@ -705,6 +705,7 @@ impl Cabin {
             "settings" => Nav::Settings,
             "imagine" => Nav::Imagine,
             "history" => Nav::History,
+            "journal" => Nav::Journal,
             "workboard" => Nav::Workboard,
             "pulse" | "ideas" => Nav::Pulse,
             "skills" => Nav::Skills,

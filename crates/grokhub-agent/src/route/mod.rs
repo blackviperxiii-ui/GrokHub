@@ -7,10 +7,13 @@
 //! [`ModelClient`]); a provider you added with your own key (R3b) goes over
 //! [`providers::call_model`], only under its key and your destination grant.
 
+pub mod attention;
 pub mod budget;
 pub mod cabin;
+pub mod capabilities;
 pub mod connectivity;
 pub mod difficulty;
+pub mod feedback;
 pub mod goal;
 pub mod guard;
 pub mod heal;
@@ -303,6 +306,13 @@ pub struct RouteInput<'a> {
     /// Brain 2: the turn's goal and reason from the policy row. Moves a
     /// user-facing step's starting effort inside its band ([`goal::goal_start`]).
     pub goal: Option<goal::RouteGoal>,
+    /// Newest user text for attention (risk / ambiguity / blast radius). Empty
+    /// when the call site has none; never stored on the route record.
+    pub text: &'a str,
+    /// Learned escalate bias (−2..=+2) from [`feedback`] for this class.
+    pub escalate_bias: i8,
+    /// This episode already escalated (stronger model mid-flow).
+    pub prior_escalated: bool,
 }
 
 /// The pick: provider, model, effort, one plain sentence, and the rules that fired.
@@ -357,8 +367,25 @@ fn why_clause(plain: &str, rules: &[String]) -> String {
         "goal:quality",
         "goal:speed",
         "goal:cost",
+        "attn:escalate:host",
+        "attn:escalate:blast",
+        "attn:escalate:multi",
+        "attn:escalate:hard",
+        "attn:escalate:steer",
+        "attn:escalate:diagnosis",
+        "attn:escalate:ambiguous",
+        "attn:escalate:learned",
+        "attn:escalate:episode",
+        "attn:force_top:repair",
+        "attn:force_top:prepare",
+        "attn:deescalate:light",
     ];
-    let last = rules.iter().rev().find(|r| MOVES.contains(&r.as_str()));
+    let last = rules.iter().rev().find(|r| {
+        MOVES.contains(&r.as_str())
+            || r.starts_with("attn:escalate")
+            || r.starts_with("attn:force_top")
+            || r.starts_with("attn:deescalate")
+    });
     match last.map(String::as_str) {
         Some("E1") => "a tool failed, so it thinks harder".into(),
         Some("E2") => "the check rejected the work".into(),
@@ -375,6 +402,18 @@ fn why_clause(plain: &str, rules: &[String]) -> String {
         Some("goal:quality") => format!("{plain}, and this one needs care"),
         Some("goal:speed") => format!("{plain}, and a fast reply matters here"),
         Some("goal:cost") => format!("{plain}, kept cheap"),
+        Some("attn:force_top:repair") => {
+            format!("{plain}; host repair always uses the strongest model")
+        }
+        Some("attn:force_top:prepare") => {
+            format!("{plain}; hard prepare stays on the strongest model")
+        }
+        Some(r) if r.starts_with("attn:escalate") => {
+            format!("{plain}; escalated for more care")
+        }
+        Some("attn:deescalate:light") => {
+            format!("{plain}; light follow-up, cheaper task model")
+        }
         _ => plain.to_string(),
     }
 }
@@ -426,11 +465,11 @@ impl Router {
             rules.push("cost:premium_ungranted".into());
         }
         let tier = table::SpeedQuality::of(input.class);
-        // Quality Auto pool: reasoning models only (pins / Settings pick still use `ids`).
+        let need_reasoning =
+            tier.needs_reasoning() || capabilities::class_need(input.class).require_reasoning;
+        // Balanced/Quality Auto pool: reasoning models only (pins / Settings pick still use `ids`).
         let auto_ok = |m: &str| {
-            local::is_local(m)
-                || !tier.needs_reasoning()
-                || table::is_reasoning_model(reg, profiles, m)
+            local::is_local(m) || !need_reasoning || table::is_reasoning_model(reg, profiles, m)
         };
         // R3b: a provider you added is never a stand-in or a fallback, and never
         // the cheapest pick: only a pin or the class preference (a table row) takes it.
@@ -543,12 +582,37 @@ impl Router {
             }
             return stand_in(current, rules, "pin");
         }
+        let attn = attention::decide(&attention::AttentionInput {
+            class: input.class,
+            text: input.text,
+            d: input.d,
+            needs_tools: input.needs_tools,
+            ctx_tokens: input.ctx_tokens,
+            hard_tool: input.local.hard_tool,
+            steer: input.steer,
+            escalate_bias: input.escalate_bias,
+            prior_escalated: input.prior_escalated,
+        });
         if let Some(ep) = input.episode_model.map(str::trim).filter(|m| !m.is_empty()) {
             if sound(ep) && !e2 {
-                rules.push("episode:keep".into());
-                return keep(ep);
-            }
-            if !e2 {
+                // Mid-flow: break sticky when attention says the ask needs a stronger model.
+                let ranked = attention::rank_models(
+                    attn.kind,
+                    input.class,
+                    &preferred,
+                    table,
+                    reg,
+                    current,
+                    input.ctx_tokens,
+                );
+                let stronger = attn.kind.breaks_episode_sticky()
+                    && ranked.first().is_some_and(|m| m.as_str() != ep);
+                if !stronger {
+                    rules.push("episode:keep".into());
+                    return keep(ep);
+                }
+                rules.push(format!("{}:mid_flow", attn.rule));
+            } else if !e2 {
                 rules.push("episode:unhealthy".into());
                 return stand_in(ep, rules, "episode");
             }
@@ -558,13 +622,15 @@ impl Router {
             && table.rows(input.class).is_empty()
             && ids.contains(&current)
             && !e2
+            && !attn.kind.breaks_episode_sticky()
         {
             // A key has no evals (they spend only the plan pool), so with no table
             // row the call keeps its own included model instead of the cheapest.
             rules.push("key:keep".into());
             return keep(current);
         }
-        let mut ranked = policy::rank(
+        let mut ranked = attention::rank_models(
+            attn.kind,
             input.class,
             &preferred,
             table,
@@ -576,6 +642,10 @@ impl Router {
             let away = input.episode_model.unwrap_or(current).trim().to_string();
             ranked.retain(|m| *m != away);
             rules.push("model:next".into());
+        }
+        // Log attention only when it moves off the quiet Stay baseline.
+        if attn.kind != attention::Attention::Stay {
+            rules.push(attn.rule.into());
         }
         match ranked.first() {
             Some(m) => {
@@ -611,6 +681,17 @@ impl Router {
             grok_build: provider == live::PROVIDER_GROK_BUILD,
         };
         let tier = table::SpeedQuality::of(input.class);
+        let attn = attention::decide(&attention::AttentionInput {
+            class: input.class,
+            text: input.text,
+            d: input.d,
+            needs_tools: input.needs_tools,
+            ctx_tokens: input.ctx_tokens,
+            hard_tool: input.local.hard_tool,
+            steer: input.steer,
+            escalate_bias: input.escalate_bias,
+            prior_escalated: input.prior_escalated,
+        });
         // A local route only while the flag is on, for an eligible class, on the live tier.
         // Pins and a Settings pick may still name any fitting model; Auto's quality pool
         // drops non-reasoning ones in [`Self::pick_model`].
@@ -626,7 +707,7 @@ impl Router {
             .collect();
         let row = policy::class_row(input.class);
         let band = row.map(|r| ladder::Band::tuned(r, input.bump, input.start));
-        let pick = match (row, band) {
+        let mut pick = match (row, band) {
             (Some(row), Some(band)) => Some(input.pick.clone().unwrap_or_else(|| {
                 let user = ladder::user_facing(row.class);
                 let start = goal::goal_start(
@@ -650,6 +731,22 @@ impl Router {
             })),
             _ => None,
         };
+        // Escalate (not ForceTop — those classes already start high) may raise
+        // effort one rung toward High; xhigh stays for steer/E2, not attention alone.
+        if let (Some(band), Some(p)) = (band, pick.as_mut()) {
+            if attn.kind == attention::Attention::Escalate && p.rung < band.ceiling {
+                let high = grokhub_core::model_registry::EFFORT_LADDER
+                    .iter()
+                    .position(|e| *e == "high")
+                    .unwrap_or(band.ceiling);
+                let target = (p.rung + 1).min(band.ceiling).min(high);
+                if target > p.rung {
+                    p.rung = target;
+                    p.moved = ladder::Move::Up;
+                    p.rules.push(attn.rule.into());
+                }
+            }
+        }
         let e2 = pick.as_ref().is_some_and(|p| {
             p.rules
                 .iter()
@@ -876,8 +973,17 @@ impl Router {
         } else {
             format!("{what} keeps its set effort")
         };
-        // One-line pick reason: tier, effort, why. `/why` and the Auto chip put class and model in front.
+        // One-line pick reason: tier, effort, why (+ attention when off baseline).
         let tier_word = tier.word();
+        // Steer/ladder already names "think hard"; suffix is for host/risk/force-top/learned.
+        let attn_suffix = if attn.kind != attention::Attention::Stay
+            && attn.rule != "attn:escalate:steer"
+            && rules.iter().any(|r| r.starts_with("attn:"))
+        {
+            format!(" ({})", attn.why)
+        } else {
+            String::new()
+        };
         let reason = match (&chosen.replaced, rules.iter().any(|r| r == "table")) {
             _ if base.is_some() => format!(
                 "{tier_word} · {}: you're waiting, so the faster model is worth it.",
@@ -932,10 +1038,13 @@ impl Router {
                     .row(input.class, &model)
                     .map(|r| r.why.clone())
                     .unwrap_or_default();
-                format!("{tier_word} · {}: {why}.", effort_word(effort.as_deref()))
+                format!(
+                    "{tier_word} · {}: {why}.{attn_suffix}",
+                    effort_word(effort.as_deref())
+                )
             }
             _ => format!(
-                "{tier_word} · {}: {clause}.",
+                "{tier_word} · {}: {clause}.{attn_suffix}",
                 effort_word(effort.as_deref())
             ),
         };
@@ -1119,12 +1228,12 @@ mod tests {
                 10
             )
         );
+        // Workhorse baseline: prefer the non-flagship reasoner (4.5) over 4.7.
         assert_eq!(
             (a.model.as_str(), a.effort.as_deref()),
-            ("grok-4.7", Some("medium"))
+            ("grok-4.5", Some("medium"))
         );
-        assert_eq!(a.reason, "quality · Medium: everyday chat.");
-        // No table yet: equal prices, so the session's own model wins the tie.
+        assert_eq!(a.reason, "balanced · Medium: everyday chat.");
         assert_eq!(
             a.rule_ids,
             vec!["model:cheapest".to_string(), "class:chat:default".into()]
@@ -1141,7 +1250,7 @@ mod tests {
             (easy.effort.as_deref(), easy.reason.as_str()),
             (
                 Some("low"),
-                "quality · Low: everyday chat, and this looks routine."
+                "balanced · Low: everyday chat, and this looks routine."
             )
         );
         // d > 0.7 goes up one rung but never past high on its own; the menu clamps xhigh anyway.
@@ -1217,7 +1326,7 @@ mod tests {
             ),
             ("grok-4.7", "pin:fallback", Some("grok-4.5"))
         );
-        assert_eq!(r.reason, "quality · Medium: grok-4.5 isn't answering.");
+        assert_eq!(r.reason, "balanced · Medium: grok-4.5 isn't answering.");
         let mut profiles = BTreeMap::new();
         let meta = reg.get("grok-4.7").unwrap().meta.clone();
         let mut bad = ProbeResult::status("failed");
@@ -1411,7 +1520,7 @@ mod tests {
             (effort.as_deref(), reason.as_str()),
             (
                 Some("medium"),
-                "quality · Medium: you corrected the last answer."
+                "balanced · Medium: you corrected the last answer."
             )
         );
         let _ = std::fs::remove_dir_all(dir);
@@ -1440,7 +1549,7 @@ mod tests {
         let rec: crate::harness::Span = serde_json::from_str(raw.lines().last().unwrap()).unwrap();
         let route = rec.route.unwrap();
         assert!(route.holdout && !route.shadow);
-        assert_eq!(route.reason, "quality · High: everyday chat.");
+        assert_eq!(route.reason, "balanced · High: everyday chat.");
         assert!(!why_text(&dir).to_ascii_lowercase().contains("holdout"));
         // prepare:hard is never held out.
         let hard = (0..)
@@ -1535,7 +1644,7 @@ mod tests {
         assert_eq!(why.lines().count(), 10);
         assert_eq!(
             why.lines().next(),
-            Some("background:judge · grok-4.7 · quality · Low: an independent check.")
+            Some("background:judge · grok-4.7 · balanced · Low: an independent check.")
         );
         // Brain 1: the newest Brief leads, and the list stays at ten lines.
         let brief = crate::brain::rules(&crate::brain::BriefInput {
@@ -1561,7 +1670,7 @@ mod tests {
         );
         assert_eq!(
             why.lines().nth(1),
-            Some("background:judge · grok-4.7 · quality · Low: an independent check.")
+            Some("background:judge · grok-4.7 · balanced · Low: an independent check.")
         );
         let health =
             std::fs::read_to_string(grokhub_core::model_registry::store::health_path(&dir))
