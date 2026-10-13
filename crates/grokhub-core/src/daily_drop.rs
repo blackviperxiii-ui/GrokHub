@@ -57,6 +57,17 @@ impl DailyDropSettings {
         }
     }
 
+    pub fn set_on(&mut self, kind: SourceKind, on: bool) {
+        match kind {
+            SourceKind::HackerNews => self.hacker_news = on,
+            SourceKind::Reddit => self.reddit = on,
+            SourceKind::WebSearch => self.web_search = on,
+            SourceKind::GithubReleases => self.github = on,
+            SourceKind::YouTube => self.youtube = on,
+            SourceKind::Rss => self.rss = on,
+        }
+    }
+
     /// True when the feature is on and at least one free Pulse source is opted in.
     pub fn active(&self) -> bool {
         self.enabled && SourceKind::ALL.iter().any(|k| self.on(*k))
