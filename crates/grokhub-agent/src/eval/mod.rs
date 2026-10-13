@@ -25,6 +25,9 @@ use crate::{
 #[cfg(unix)]
 mod scan;
 
+pub mod ab;
+pub mod metrics;
+
 pub const SUITE_ITEMS: [&str; 8] = [
     "xvfb-desktop",
     "repo-bugfix",
@@ -171,6 +174,14 @@ pub fn run_suite(opts: &Opts) -> Vec<ItemResult> {
     items.push(measure("compaction", "native", compact_native));
     items.push(measure("imagine", "native", imagine_native));
     items.push(measure("system-scan", "native", system_scan_native));
+    if !opts.live {
+        if let Ok(report) = ab::run_ab(ab::DEFAULT_MODEL, &ab::CandidateSuffix) {
+            let _ = &report.comparison;
+            let _ = report.tasks.len();
+            let _ = report.report_markdown.len();
+            let _ = report.gate();
+        }
+    }
     cleanup_sessions();
     if let Some(dir) = cfg {
         let _ = std::fs::remove_dir_all(dir);
@@ -1416,5 +1427,13 @@ mod tests {
         if report.contains(SKIP_XVFB) {
             assert!(report.contains("- xvfb-desktop: skipped: no Xvfb\n"));
         }
+    }
+
+    #[test]
+    fn ab_prompt_eval_passes_gate() {
+        let report = ab::run_ab(ab::DEFAULT_MODEL, &ab::CandidateSuffix).expect("ab eval");
+        report
+            .gate()
+            .expect("variant must not regress success rate");
     }
 }

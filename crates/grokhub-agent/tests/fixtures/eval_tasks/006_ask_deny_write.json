@@ -1,0 +1,23 @@
+{
+  "id": "006_ask_deny_write",
+  "prompt": "Write secret.txt with the word nope.",
+  "mode": "ask",
+  "files": [],
+  "script": [
+    {
+      "type": "tool",
+      "name": "write",
+      "arguments": { "path": "secret.txt", "content": "nope" },
+      "usage": { "input_tokens": 14, "output_tokens": 0 }
+    },
+    {
+      "type": "text",
+      "content": "I cannot write that file in Ask mode.",
+      "usage": { "input_tokens": 30, "output_tokens": 10 }
+    }
+  ],
+  "checks": [
+    { "type": "stop_reason", "value": "end_turn" },
+    { "type": "no_permission_cards" }
+  ]
+}
