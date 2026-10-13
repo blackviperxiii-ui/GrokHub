@@ -1,0 +1,23 @@
+{
+  "id": "011_subdir_read",
+  "prompt": "Read nested/info.txt",
+  "mode": "always",
+  "files": [{ "path": "nested/info.txt", "content": "nested-ok\n" }],
+  "script": [
+    {
+      "type": "tool",
+      "name": "read_file",
+      "arguments": { "target_file": "nested/info.txt" },
+      "usage": { "input_tokens": 16, "output_tokens": 0 }
+    },
+    {
+      "type": "text",
+      "content": "nested-ok",
+      "usage": { "input_tokens": 26, "output_tokens": 4 }
+    }
+  ],
+  "checks": [
+    { "type": "stop_reason", "value": "end_turn" },
+    { "type": "assistant_contains", "value": "nested-ok" }
+  ]
+}

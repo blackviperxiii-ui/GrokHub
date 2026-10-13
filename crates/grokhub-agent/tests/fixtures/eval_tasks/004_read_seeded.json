@@ -1,0 +1,23 @@
+{
+  "id": "004_read_seeded",
+  "prompt": "Read note.txt and quote the first word.",
+  "mode": "always",
+  "files": [{ "path": "note.txt", "content": "alpha beta gamma\n" }],
+  "script": [
+    {
+      "type": "tool",
+      "name": "read_file",
+      "arguments": { "target_file": "note.txt" },
+      "usage": { "input_tokens": 20, "output_tokens": 0 }
+    },
+    {
+      "type": "text",
+      "content": "The first word is alpha.",
+      "usage": { "input_tokens": 40, "output_tokens": 8 }
+    }
+  ],
+  "checks": [
+    { "type": "stop_reason", "value": "end_turn" },
+    { "type": "assistant_contains", "value": "alpha" }
+  ]
+}

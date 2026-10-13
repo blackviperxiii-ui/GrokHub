@@ -1,0 +1,24 @@
+{
+  "id": "005_write_file",
+  "prompt": "Create out.txt with the word saved.",
+  "mode": "always",
+  "files": [],
+  "script": [
+    {
+      "type": "tool",
+      "name": "write",
+      "arguments": { "path": "out.txt", "content": "saved" },
+      "usage": { "input_tokens": 15, "output_tokens": 0 }
+    },
+    {
+      "type": "text",
+      "content": "Wrote out.txt",
+      "usage": { "input_tokens": 25, "output_tokens": 4 }
+    }
+  ],
+  "checks": [
+    { "type": "stop_reason", "value": "end_turn" },
+    { "type": "file_exists", "path": "out.txt" },
+    { "type": "file_contains", "path": "out.txt", "value": "saved" }
+  ]
+}

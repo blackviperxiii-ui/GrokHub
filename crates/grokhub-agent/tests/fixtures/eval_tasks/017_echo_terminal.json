@@ -1,0 +1,22 @@
+{
+  "id": "017_echo_terminal",
+  "prompt": "Run echo eval-terminal in the shell.",
+  "mode": "always",
+  "files": [],
+  "script": [
+    {
+      "type": "tool",
+      "name": "run_terminal_command",
+      "arguments": { "command": "echo eval-terminal", "is_background": false },
+      "usage": { "input_tokens": 21, "output_tokens": 0 }
+    },
+    {
+      "type": "text",
+      "content": "eval-terminal",
+      "usage": { "input_tokens": 31, "output_tokens": 4 }
+    }
+  ],
+  "checks": [
+    { "type": "assistant_contains", "value": "eval-terminal" }
+  ]
+}
