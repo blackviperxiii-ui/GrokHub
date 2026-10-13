@@ -16290,6 +16290,7 @@ fn quiet_cabin() -> Cabin {
         automations: Vec::new(),
         grok_loops: Vec::new(),
         updates: Vec::new(),
+        daily_drop_file: None,
         card_prefs: grokhub_core::CardPrefs::default(),
         grok_loop_rx: None,
         night_nl: String::new(),
@@ -18113,6 +18114,28 @@ fn every_home_card_the_cabin_posts_names_its_item() {
             c.source_id.starts_with("source:")
         }),
         "Rust 1.99",
+    ));
+    rows.push((
+        "tick_daily_drop",
+        grokhub_core::pulse_sources::item_card(
+            &grokhub_core::pulse_sources::Ranked {
+                item: grokhub_core::pulse_sources::SourceItem {
+                    title: "Daily drop story".into(),
+                    url: "https://hn.test/daily-drop".into(),
+                    kind: grokhub_core::pulse_sources::SourceKind::HackerNews,
+                    source_name: "Hacker News".into(),
+                    published_ms: now,
+                    summary: "A ranked pick for the overnight drop.".into(),
+                    image: None,
+                    topic: None,
+                    engagement: 0,
+                },
+                score: 80,
+                because: None,
+            },
+            now,
+        ),
+        "Daily drop story",
     ));
     rows.push((
         "model_wait_card",
