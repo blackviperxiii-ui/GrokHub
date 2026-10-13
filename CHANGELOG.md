@@ -2,14 +2,11 @@
 
 ## Unreleased
 
-<<<<<<< HEAD
 - Security: MCP legacy SSE absolute `endpoint` URLs must stay on the connect host (no pivot to link-local / LAN / loopback). Custom provider base URLs and marketplace index URLs refuse non-public addresses and dial through `public_only_resolve` with redirects off (same rail as Pulse / `web_fetch`). `hub-state.json` writes use a user-only Windows DACL before bytes land (pair tokens), matching `secrets.json`.
-=======
 - Fixed: Pulse **More like this** no longer clears the related-search queue when Hacker News, Reddit, and Web search are all off, and the status says to turn one on instead of claiming the ask is queued.
 - Fixed: AMR `remember` publishes nodes via temp + exclusive hard_link/rename (with `sync_all`), so a trail file is never visible empty mid-write; the turn-end trail test waits for the body, not just `is_file()`.
 - Fixed: proactive dismiss mute expiry in tests is driven from the dismiss wall clock (not `t0 + DAY + 2s`), and Pulse feed-instruction rewrite waits up to 30s so Windows CI load does not flake the mock rewrite.
 - Pulse Feed thumbs decode cached images off the UI thread (same gate as Eyes / Imagine stills), so the first paint of a post with on-disk images no longer hitch on `fs::read` + JPEG/PNG decode.
->>>>>>> origin/beta
 - The main chat empty surface no longer shows the Home/event card deck; cards live in Pulse.
 - Chat turns that ran harness tools show an expandable **Evidence** receipt under the reply: goal, plan status, actions, checks, changes, confidence, and recovery. Built from existing redacted spans and outcomes (no new log). A successful tool is not treated as proof the goal succeeded; missing sections say unavailable.
 - Imagine UI finish: Agent More offers model and 1–10 image count (sprite stills, not an empty menu); image count is a ± stepper to the API’s 1–10 range; Results use ghost pills like the stage; a failed stage shows Retry; More sits with Style/Aspect instead of a lone second row; docs match Account-reuse auth.
