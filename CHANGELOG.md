@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- The main chat empty surface no longer shows the Home/event card deck; cards live in Pulse.
 - Chat turns that ran harness tools show an expandable **Evidence** receipt under the reply: goal, plan status, actions, checks, changes, confidence, and recovery. Built from existing redacted spans and outcomes (no new log). A successful tool is not treated as proof the goal succeeded; missing sections say unavailable.
 - Imagine UI finish: Agent More offers model and 1–10 image count (sprite stills, not an empty menu); image count is a ± stepper to the API’s 1–10 range; Results use ghost pills like the stage; a failed stage shows Retry; More sits with Style/Aspect instead of a lone second row; docs match Account-reuse auth.
 - Mission-based OS v1: one foreground mission in the Work tree, projected from Brief, checklist todos, desktop episode, approval parks and outcomes (active / needs-approval / paused / blocked / done). Distinguishes planned, attempted, verified and unverified checklist rows; a failed step cannot look complete; Continue resumes without duplicating finished steps. No second run loop and no approval-policy change.
