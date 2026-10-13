@@ -668,6 +668,7 @@ impl Router {
         table: &RoutingTable,
         now_ms: u64,
     ) -> Route {
+        connectivity::sync_from_core();
         let mut rules: Vec<String> = Vec::new();
         let provider = if input.provider.is_empty() {
             PROVIDER_XAI
@@ -1898,3 +1899,6 @@ mod r3a_tests;
 
 #[cfg(test)]
 mod offline_tests;
+
+#[cfg(test)]
+mod local_bootstrap_tests;

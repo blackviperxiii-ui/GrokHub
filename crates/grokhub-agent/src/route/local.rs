@@ -91,10 +91,32 @@ pub fn enabled() -> bool {
     (ENABLED.load(Ordering::SeqCst) && installed()) || test_on()
 }
 
+/// Last `ensure_global` failure when production assets are present (cleared on success).
+pub fn bootstrap_error() -> Option<String> {
+    bootstrap_slot().lock().ok().and_then(|g| g.clone())
+}
+
+fn bootstrap_slot() -> &'static Mutex<Option<String>> {
+    static SLOT: OnceLock<Mutex<Option<String>>> = OnceLock::new();
+    SLOT.get_or_init(|| Mutex::new(None))
+}
+
+fn set_bootstrap_error(err: Option<String>) {
+    if let Ok(mut slot) = bootstrap_slot().lock() {
+        *slot = err;
+    }
+}
+
 /// An on-device runtime and model are present: a test fake, or a binary + GGUF
-/// under the config dir / env overrides.
+/// under the config dir / env overrides (not when bootstrap failed).
 pub fn installed() -> bool {
-    test_runtime().is_some() || production_assets_present()
+    if test_runtime().is_some() {
+        return true;
+    }
+    if !production_assets_present() {
+        return false;
+    }
+    bootstrap_error().is_none()
 }
 
 fn production_assets_present() -> bool {
@@ -370,7 +392,10 @@ fn ensure_production_runtime() {
     let Some(dir) = config_dir() else {
         return;
     };
-    let _ = super::local_sidecar::ensure_global(&dir);
+    match super::local_sidecar::ensure_global(&dir) {
+        Ok(()) => set_bootstrap_error(None),
+        Err(e) => set_bootstrap_error(Some(e)),
+    }
 }
 
 #[cfg(not(test))]
