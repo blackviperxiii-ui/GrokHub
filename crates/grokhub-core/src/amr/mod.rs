@@ -668,9 +668,14 @@ Glow stays white.
             .filter(|e| e.file_name().to_string_lossy().contains(".tmp"))
             .map(|e| e.file_name())
             .collect();
-        assert!(temps.is_empty(), "temp must not survive remember: {temps:?}");
+        assert!(
+            temps.is_empty(),
+            "temp must not survive remember: {temps:?}"
+        );
         assert_eq!(
-            store.remember(&draft("fact-complete", "again\n")).unwrap_err(),
+            store
+                .remember(&draft("fact-complete", "again\n"))
+                .unwrap_err(),
             AmrError::DuplicateId("fact-complete".into())
         );
     }
