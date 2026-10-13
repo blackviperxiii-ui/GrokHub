@@ -476,7 +476,9 @@ pub use slash::{
     unknown_cabin_slash, Slash, SlashDef, SlashHit, WorkflowVerb, EFFORT_AUTO_MSG, SLASH_COMMANDS,
     SLASH_RESULT_PREFIX,
 };
-pub use ssrf::{host_name_blocked, ip_blocked};
+pub use ssrf::{
+    guard_mcp_registry_url, host_name_blocked, ip_blocked, public_only_resolve, MCP_REGISTRY_HOST,
+};
 pub use state::{
     clear_pending_after_complete, is_phone_name, load_hub_state, merge_put_snapshot,
     save_hub_state, state_for_disk, CompleteError, HubState, PairError, DEFAULT_PORT, HUB_KIND,
