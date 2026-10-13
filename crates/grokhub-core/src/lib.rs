@@ -23,6 +23,7 @@ pub mod chat_job;
 pub mod chat_view;
 pub mod chips;
 pub mod cli_history;
+pub mod connectivity;
 pub mod connector;
 pub mod consult;
 pub mod context;
