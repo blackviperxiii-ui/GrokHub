@@ -19,8 +19,8 @@ pub(crate) mod shell;
 mod web_fetch;
 mod write;
 
-pub use web_fetch::public_only_resolve;
 pub use registry::Settings as DeferredToolsSettings;
+pub use web_fetch::public_only_resolve;
 
 /// Whether `{config_dir}/deferred_tools.toml` has `enabled = true`.
 pub fn deferred_tools_enabled(config_dir: &Path) -> bool {
