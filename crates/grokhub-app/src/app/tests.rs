@@ -7020,17 +7020,17 @@ fn empty_home_pulse_stays_off_scratch_and_off_about() {
         "pulse clicks reuse Workboard and Automations"
     );
     assert!(
-            home.contains("paint_device_glance_row")
-                && home.contains("pulse_should_paint")
-                && !home.contains("paint_update_feed")
-                && !home.contains("paint_home_deck_over_chat")
-                && !home.contains("collapsed_stack_h")
-                && !home.contains("home_feed_count")
-                && !home.contains("stacked_feed_h")
-                && !home.contains("paint_lane_chip")
-                && !home.contains("No updates"),
-            "empty home keeps device glance and does not paint the Home card deck: {home}"
-        );
+        home.contains("paint_device_glance_row")
+            && home.contains("pulse_should_paint")
+            && !home.contains("paint_update_feed")
+            && !home.contains("paint_home_deck_over_chat")
+            && !home.contains("collapsed_stack_h")
+            && !home.contains("home_feed_count")
+            && !home.contains("stacked_feed_h")
+            && !home.contains("paint_lane_chip")
+            && !home.contains("No updates"),
+        "empty home keeps device glance and does not paint the Home card deck: {home}"
+    );
     assert!(
         !home.contains("\"Personal\"") && !home.contains("Nav::"),
         "home chrome must not add a Personal rail or nav id: {home}"
@@ -24114,11 +24114,17 @@ fn legacy_hidden_run_stays_off_home_until_undo() {
     );
     assert!(grokhub_core::HOME_HIDDEN_NOTE.contains("Undo"));
     let feed = include_str!("feed_ui.rs");
-    assert!(feed.contains("fn close_home_card("), "close_home_card stays");
+    assert!(
+        feed.contains("fn close_home_card("),
+        "close_home_card stays"
+    );
     assert!(!feed.contains("Popup"), "feed module has no card menu");
     assert!(!feed.contains("secondary_clicked"), "no right-click menu");
     assert!(!feed.contains("\"⋯\""), "no ⋯ button");
-    assert!(!feed.contains("fn paint_feed_card("), "Home deck paint is gone");
+    assert!(
+        !feed.contains("fn paint_feed_card("),
+        "Home deck paint is gone"
+    );
 
     let app_json = root.join("app.json");
     let mut saw_hide = false;
