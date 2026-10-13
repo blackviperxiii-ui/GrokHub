@@ -476,87 +476,84 @@ pub(super) fn paint_pulse_row(
     let active = st.hovered || st.focused;
     let cat = pc::card_category(card);
     let resp = super::feed_ui::kit_pulse_ideas_row(ui, active, |ui| {
-            ui.set_width(ui.available_width());
-            ui.horizontal_top(|ui| {
-                ui.add_space(2.0);
-                icon(ui, category_glyph(cat), category_tint(cat));
-                ui.add_space(10.0);
-                let text_w = (ui.available_width() - 36.0).max(80.0);
-                ui.vertical(|ui| {
-                    ui.set_width(text_w);
-                    ui.spacing_mut().item_spacing.y = 3.0;
-                    let hot = st.title_hot || st.focused;
-                    let mut title = RichText::new(pc::i_can_title(card))
-                        .size(crate::theme::FONT_UI)
-                        .strong()
-                        .color(if hot {
-                            egui::Color32::WHITE
-                        } else {
-                            crate::theme::fg()
+        ui.set_width(ui.available_width());
+        ui.horizontal_top(|ui| {
+            ui.add_space(2.0);
+            icon(ui, category_glyph(cat), category_tint(cat));
+            ui.add_space(10.0);
+            let text_w = (ui.available_width() - 36.0).max(80.0);
+            ui.vertical(|ui| {
+                ui.set_width(text_w);
+                ui.spacing_mut().item_spacing.y = 3.0;
+                let hot = st.title_hot || st.focused;
+                let mut title = RichText::new(pc::i_can_title(card))
+                    .size(crate::theme::FONT_UI)
+                    .strong()
+                    .color(if hot {
+                        egui::Color32::WHITE
+                    } else {
+                        crate::theme::fg()
+                    });
+                if hot {
+                    title = title.underline();
+                }
+                let t = ui.add(egui::Label::new(title).wrap().sense(egui::Sense::click()));
+                title_hover = t.hovered();
+                if t.hovered() {
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                }
+                if t.clicked() {
+                    act = Some(PulseAct::Open(card.id.clone()));
+                }
+                let blurb = idea_blurb(card);
+                if !blurb.is_empty() {
+                    clamp_label(
+                        ui,
+                        &blurb,
+                        crate::theme::FONT_BODY,
+                        crate::theme::muted(),
+                        3,
+                    );
+                }
+                ui.horizontal(|ui| {
+                    ui.label(
+                        RichText::new(kind.label().to_ascii_uppercase())
+                            .size(crate::theme::FONT_TIP - 1.0)
+                            .strong()
+                            .color(type_color(kind)),
+                    );
+                    if active {
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            ui.spacing_mut().item_spacing.x = 2.0;
+                            let dot = |ui: &mut egui::Ui| {
+                                ui.label(
+                                    RichText::new("·")
+                                        .size(crate::theme::FONT_TIP)
+                                        .color(crate::theme::subtle()),
+                                );
+                            };
+                            if quick_button(ui, "Dismiss") {
+                                act = Some(PulseAct::Dismiss(card.id.clone()));
+                            }
+                            dot(ui);
+                            if quick_button(ui, "Snooze") {
+                                act = Some(PulseAct::Snooze(card.id.clone()));
+                            }
+                            dot(ui);
+                            if quick_button(ui, run_label(card)) {
+                                act = Some(PulseAct::Run(card.id.clone()));
+                            }
                         });
-                    if hot {
-                        title = title.underline();
                     }
-                    let t = ui.add(egui::Label::new(title).wrap().sense(egui::Sense::click()));
-                    title_hover = t.hovered();
-                    if t.hovered() {
-                        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-                    }
-                    if t.clicked() {
-                        act = Some(PulseAct::Open(card.id.clone()));
-                    }
-                    let blurb = idea_blurb(card);
-                    if !blurb.is_empty() {
-                        clamp_label(
-                            ui,
-                            &blurb,
-                            crate::theme::FONT_BODY,
-                            crate::theme::muted(),
-                            3,
-                        );
-                    }
-                    ui.horizontal(|ui| {
-                        ui.label(
-                            RichText::new(kind.label().to_ascii_uppercase())
-                                .size(crate::theme::FONT_TIP - 1.0)
-                                .strong()
-                                .color(type_color(kind)),
-                        );
-                        if active {
-                            ui.with_layout(
-                                egui::Layout::right_to_left(egui::Align::Center),
-                                |ui| {
-                                    ui.spacing_mut().item_spacing.x = 2.0;
-                                    let dot = |ui: &mut egui::Ui| {
-                                        ui.label(
-                                            RichText::new("·")
-                                                .size(crate::theme::FONT_TIP)
-                                                .color(crate::theme::subtle()),
-                                        );
-                                    };
-                                    if quick_button(ui, "Dismiss") {
-                                        act = Some(PulseAct::Dismiss(card.id.clone()));
-                                    }
-                                    dot(ui);
-                                    if quick_button(ui, "Snooze") {
-                                        act = Some(PulseAct::Snooze(card.id.clone()));
-                                    }
-                                    dot(ui);
-                                    if quick_button(ui, run_label(card)) {
-                                        act = Some(PulseAct::Run(card.id.clone()));
-                                    }
-                                },
-                            );
-                        }
-                    });
                 });
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
-                    crate::cards::dots_menu(ui, active, |ui| {
-                        pulse_menu(ui, card, kind, false, &mut act)
-                    });
+            });
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
+                crate::cards::dots_menu(ui, active, |ui| {
+                    pulse_menu(ui, card, kind, false, &mut act)
                 });
             });
         });
+    });
     (act, resp.rect, title_hover)
 }
 
@@ -1284,8 +1281,7 @@ impl Cabin {
                             });
                         });
                     });
-                    if let Some(did) =
-                        paint_post_body(ui, card, &thumbs, self.sources.looking_more)
+                    if let Some(did) = paint_post_body(ui, card, &thumbs, self.sources.looking_more)
                     {
                         act = Some(match did {
                             FeedPostAct::Like => PulseAct::Like(card.id.clone()),
@@ -1295,7 +1291,9 @@ impl Cabin {
                             FeedPostAct::NeverAgain => PulseAct::NeverAgain(card.id.clone()),
                             FeedPostAct::Open => PulseAct::Open(card.id.clone()),
                             FeedPostAct::Retry => PulseAct::Retry(card.id.clone()),
-                            FeedPostAct::DeleteRecording => PulseAct::DeleteRecording(card.id.clone()),
+                            FeedPostAct::DeleteRecording => {
+                                PulseAct::DeleteRecording(card.id.clone())
+                            }
                             FeedPostAct::RetryNow => PulseAct::RetryNow,
                             FeedPostAct::Source(did) => PulseAct::Source(card.id.clone(), did),
                         });
