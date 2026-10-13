@@ -4916,6 +4916,25 @@ impl Cabin {
         }
     }
 
+    /// Tray **Quit**: stop background work, persist, tear down the tray, then exit.
+    /// Titlebar × keeps close-to-tray; only this path sets `want_quit`.
+    fn quit_from_tray(&mut self, ctx: &egui::Context) {
+        self.want_quit = true;
+        self.kill_bg_runs();
+        self.halt_in_flight();
+        if self.hub_on {
+            if let Ok(mut st) = self.hub.lock() {
+                st.sharing = false;
+            }
+            self.hub_on = false;
+        }
+        self.persist_if_dirty();
+        if let Some(tray) = self.tray.take() {
+            crate::tray::drop_tray(tray);
+        }
+        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+    }
+
     fn poll_tray(&mut self, ctx: &egui::Context) {
         let ready = self
             .tray_rx
@@ -4933,13 +4952,7 @@ impl Cabin {
         match tray.try_recv() {
             Some(crate::tray::TrayCmd::Show) => self.show_from_tray(ctx),
             Some(crate::tray::TrayCmd::Halt) => self.halt_everything("Stopped"),
-            Some(crate::tray::TrayCmd::Quit) => {
-                self.want_quit = true;
-                if let Some(tray) = self.tray.take() {
-                    crate::tray::drop_tray(tray);
-                }
-                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-            }
+            Some(crate::tray::TrayCmd::Quit) => self.quit_from_tray(ctx),
             None => {}
         }
     }
@@ -4993,6 +5006,13 @@ impl eframe::App for Cabin {
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
         // No background run outlives the cabin.
         self.kill_bg_runs();
+        self.halt_in_flight();
+        if self.hub_on {
+            if let Ok(mut st) = self.hub.lock() {
+                st.sharing = false;
+            }
+            self.hub_on = false;
+        }
         // The close frame spawned a persist. Wait for it: the process exits right after this,
         // and two writers of app.json share one temp file.
         {
@@ -5013,6 +5033,8 @@ impl eframe::App for Cabin {
             grokhub_agent::halt_all_sessions();
             grokhub_agent::mcp::shutdown_all();
         });
+        // Hub accept and desktop broker loops are not joined; exit so Quit leaves no process.
+        std::process::exit(0);
     }
 
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
@@ -5103,17 +5125,23 @@ impl eframe::App for Cabin {
         self.note_window_resume(ctx);
         let close_requested = ctx.input(|i| i.viewport().close_requested());
         let mut just_hid = false;
-        if crate::tray::ignore_close_request(self.window_visible, close_requested, self.want_quit) {
-            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-        } else if close_requested {
-            let hide =
-                crate::tray::should_hide_on_close(self.cfg.close_to_tray, self.tray.is_some())
-                    && !self.want_quit;
-            if hide {
+        match crate::tray::cabin_close_action(
+            close_requested,
+            self.window_visible,
+            self.want_quit,
+            self.cfg.close_to_tray,
+            self.tray.is_some(),
+        ) {
+            crate::tray::CabinCloseAction::Ignore => {}
+            crate::tray::CabinCloseAction::CancelStickyClose => {
+                ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            }
+            crate::tray::CabinCloseAction::HideToTray => {
                 ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
                 self.hide_to_tray(ctx);
                 just_hid = true;
-            } else {
+            }
+            crate::tray::CabinCloseAction::Exit => {
                 self.capture_window(ctx);
                 self.persist_if_dirty();
                 self.geom_dirty = false;
