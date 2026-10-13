@@ -14,6 +14,7 @@ use crate::cards::ChipTone;
 pub(super) enum ConnectorState {
     Connected,
     NeedsSignIn,
+    NeedsKey,
     /// The last error, as the server named it. Empty when none was given.
     Error(String),
     Off,
@@ -25,6 +26,7 @@ impl ConnectorState {
         match self {
             Self::Connected => ("Connected", ChipTone::Live),
             Self::NeedsSignIn => ("Needs sign-in", ChipTone::Setup),
+            Self::NeedsKey => ("Needs key", ChipTone::Setup),
             Self::Error(_) => ("Error", ChipTone::Offline),
             Self::Off => ("Off", ChipTone::Mute),
             Self::NotChecked => ("Not checked", ChipTone::Mute),
@@ -36,6 +38,7 @@ impl ConnectorState {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum ConnectorAct {
     SignIn,
+    SaveKey,
     Reconnect,
     SignOut,
     Disconnect,
@@ -45,6 +48,7 @@ impl ConnectorAct {
     pub(super) fn label(self) -> &'static str {
         match self {
             Self::SignIn => "Connect",
+            Self::SaveKey => "Save key",
             Self::Reconnect => "Reconnect",
             Self::SignOut => "Sign out",
             Self::Disconnect => "Disconnect",
@@ -80,18 +84,28 @@ impl ConnectorRow {
     }
 }
 
+fn catalog_key_connector(name: &str) -> bool {
+    grokhub_core::mcp_catalog::bundled()
+        .get(name)
+        .is_some_and(|e| e.auth == grokhub_core::mcp_catalog::CatalogAuth::Key)
+}
+
 /// Rows for the cabin's own servers, from the last configured/doctor read.
 pub(super) fn cabin_connector_rows(rows: &[grokhub_agent::mcp::DoctorRow]) -> Vec<ConnectorRow> {
     use grokhub_agent::mcp::SignIn;
     rows.iter()
         .map(|r| {
             let signed_in = matches!(r.sign_in, SignIn::SignedIn(_));
+            let needs_key = catalog_key_connector(&r.name)
+                && crate::secrets::open_connector_token(&r.name).is_none();
             let state = if r.status == "disabled" {
                 ConnectorState::Off
+            } else if r.status == "error" && !needs_key {
+                ConnectorState::Error(r.last_error.clone())
+            } else if needs_key {
+                ConnectorState::NeedsKey
             } else if r.sign_in == SignIn::SignedOut {
                 ConnectorState::NeedsSignIn
-            } else if r.status == "error" {
-                ConnectorState::Error(r.last_error.clone())
             } else if r.status == "connected" {
                 ConnectorState::Connected
             } else {
@@ -100,6 +114,7 @@ pub(super) fn cabin_connector_rows(rows: &[grokhub_agent::mcp::DoctorRow]) -> Ve
             let mut acts = match state {
                 ConnectorState::Off => Vec::new(),
                 ConnectorState::NeedsSignIn => vec![ConnectorAct::SignIn],
+                ConnectorState::NeedsKey => vec![ConnectorAct::SaveKey],
                 _ => vec![ConnectorAct::Reconnect],
             };
             if signed_in {
@@ -208,7 +223,9 @@ fn paint_connector_row(ui: &mut egui::Ui, row: &ConnectorRow) -> Option<Connecto
                     for act in row.acts.iter().rev() {
                         let clicked = match act {
                             ConnectorAct::Disconnect => crate::cards::ghost_pill(ui, act.label()),
-                            ConnectorAct::SignIn => crate::cards::white_pill(ui, act.label()),
+                            ConnectorAct::SignIn | ConnectorAct::SaveKey => {
+                                crate::cards::white_pill(ui, act.label())
+                            }
                             _ => crate::cards::ghost_pill(ui, act.label()),
                         };
                         if clicked {
@@ -250,6 +267,11 @@ impl Cabin {
         match act {
             ConnectorAct::Disconnect => self.arm_disconnect(&name),
             ConnectorAct::SignIn => spawn(Job::SignIn(name)),
+            ConnectorAct::SaveKey => {
+                if let Some(e) = grokhub_core::mcp_catalog::bundled().get(&name) {
+                    self.start_save_connector_key(e);
+                }
+            }
             ConnectorAct::Reconnect => spawn(Job::Restart(name)),
             ConnectorAct::SignOut => spawn(Job::SignOut(name)),
         }
@@ -305,9 +327,31 @@ impl Cabin {
         } else if rows.is_empty() {
             crate::cards::settings_note(ui, "None matched.");
         }
+        let mut key_row = None;
         for row in &rows {
+            if row.state == ConnectorState::NeedsKey {
+                key_row = Some(row.name.clone());
+            }
             if let Some(act) = paint_connector_row(ui, row) {
                 picked = Some((row.clone(), act));
+            }
+        }
+        if let Some(name) = key_row {
+            if let Some(e) = grokhub_core::mcp_catalog::bundled().get(&name) {
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    ui.label(
+                        RichText::new(format!("{} API key", e.name))
+                            .size(12.0)
+                            .color(crate::theme::muted()),
+                    );
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.market.key)
+                            .password(true)
+                            .hint_text(crate::theme::hint("Paste the key"))
+                            .desired_width(280.0),
+                    );
+                });
             }
         }
         if snap.busy {
@@ -390,7 +434,12 @@ mod tests {
                 SignIn::SignedIn("Signed in to linear as ada@example.com".into()),
             ),
             doctor("notion", "not checked", "", SignIn::SignedOut),
-            doctor("github", "error", "timed out after 5s", SignIn::NotOffered),
+            doctor(
+                "custom-api",
+                "error",
+                "timed out after 5s",
+                SignIn::NotOffered,
+            ),
             doctor("old", "disabled", "", SignIn::NotOffered),
             doctor("files", "stopped", "", SignIn::NotOffered),
         ]);
@@ -413,7 +462,7 @@ mod tests {
                     vec!["Reconnect", "Sign out", "Disconnect"]
                 ),
                 ("notion", "Needs sign-in", vec!["Connect", "Disconnect"]),
-                ("github", "Error", vec!["Reconnect", "Disconnect"]),
+                ("custom-api", "Error", vec!["Reconnect", "Disconnect"]),
                 ("old", "Off", vec!["Disconnect"]),
                 ("files", "Not checked", vec!["Reconnect", "Disconnect"]),
             ]
@@ -459,6 +508,21 @@ mod tests {
         assert_eq!(names("ada@"), ["linear"]);
         assert_eq!(names("notion.example"), ["notion"]);
         assert!(names("zzz").is_empty());
+    }
+
+    #[test]
+    fn a_key_connector_without_a_sealed_token_needs_a_key() {
+        let rows = cabin_connector_rows(&[doctor(
+            "brave-search",
+            "error",
+            "its key is missing or locked",
+            SignIn::NotOffered,
+        )]);
+        assert_eq!(rows[0].state.chip().0, "Needs key");
+        assert_eq!(
+            rows[0].acts,
+            vec![ConnectorAct::SaveKey, ConnectorAct::Disconnect]
+        );
     }
 
     #[test]
