@@ -25,6 +25,8 @@ makepkg -si
 
 `makepkg -si` / `yay -S grokhub` install the cabin GUI and hub. Desktop control is the cabin's own `grokhub-desktop` MCP, so there are no grim/ydotool sidecars.
 
+For on-device models, install optional `llama-cpp` from extra (`pacman -S llama-cpp`) so `llama-server` is on PATH, or use the in-app engine download in Settings.
+
 ## Layout
 
 | Path | Role |
