@@ -2427,7 +2427,8 @@ pub fn imagine_stage(
     ui.allocate_rect(wall, Sense::hover());
     let r = wall.shrink(1.0);
     let stage_radius = crate::theme::RADIUS_LG;
-    ui.painter().rect_filled(r, stage_radius, crate::theme::elevated());
+    ui.painter()
+        .rect_filled(r, stage_radius, crate::theme::elevated());
     ui.painter().rect_stroke(
         r,
         stage_radius,
