@@ -158,6 +158,7 @@ mod daily_drop_ui;
 mod episode_ui;
 mod evidence_ui;
 mod feed_ui;
+mod fix_it;
 mod findings_ui;
 mod glance;
 mod harness_ui;

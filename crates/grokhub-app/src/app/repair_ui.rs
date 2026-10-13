@@ -23,6 +23,8 @@ pub(super) type DiagnoseDone = (String, bool, Vec<repair::FixPlan>);
 pub(super) struct FixUi {
     /// One card per plan, worst finding first. Hidden while a fix runs.
     pub proposals: Vec<repair::FixPlan>,
+    /// Screen / audio diagnosis fix plans (Phase C).
+    pub diagnosis: super::fix_it::DiagnosisFixUi,
     pub run: Option<repair::ApplyRun>,
     /// Grok Build picked up the step this run is waiting on.
     pub gb_started: bool,
@@ -36,7 +38,13 @@ pub(super) struct FixUi {
 
 impl FixUi {
     pub fn busy(&self) -> bool {
-        self.verify_rx.is_some() || self.run.as_ref().is_some_and(|r| !r.is_done())
+        self.verify_rx.is_some()
+            || self.run.as_ref().is_some_and(|r| !r.is_done())
+            || self
+                .diagnosis
+                .run
+                .as_ref()
+                .is_some_and(|r| !r.done())
     }
 }
 
@@ -329,6 +337,9 @@ impl Cabin {
 
     /// The hard card for a fix step was answered (click, Esc, TTL or Halt).
     pub(super) fn fix_hard_answered(&mut self, approve: bool) {
+        if self.fix_plan_hard_answered(approve) {
+            return;
+        }
         if let Some(run) = self.harness.fixes.run.as_mut() {
             run.answer_hard(approve);
         }
