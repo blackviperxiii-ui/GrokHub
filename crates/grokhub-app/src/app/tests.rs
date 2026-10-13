@@ -16290,6 +16290,7 @@ fn quiet_cabin() -> Cabin {
         automations: Vec::new(),
         grok_loops: Vec::new(),
         updates: Vec::new(),
+        daily_drop_file: None,
         card_prefs: grokhub_core::CardPrefs::default(),
         grok_loop_rx: None,
         night_nl: String::new(),

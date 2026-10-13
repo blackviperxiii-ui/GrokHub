@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- Dreambeans daily drop: Brain 4 registers an overnight `daily_drop` local job that calls the core picker on ranked Pulse rows (off by default; no model or Google I/O).
+- Dreambeans daily drop: Brain 4 registers an overnight `daily_drop` local job that calls the core picker on ranked Pulse rows (off by default; no model or Google I/O). Settings → Pulse exposes opt-in toggles; the ledger and last run persist in `daily_drop.json`; picked cards show on the Feed.
 
 ## 3.0.2 — 2026-10-13
 
