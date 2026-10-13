@@ -2,12 +2,9 @@
 
 ## Unreleased
 
-<<<<<<< HEAD
 - Dreambeans daily drop: Brain 4 registers an overnight `daily_drop` local job that calls the core picker on ranked Pulse rows (off by default; no model or Google I/O). Settings → Pulse exposes opt-in toggles; the ledger and last run persist in `daily_drop.json`; picked cards show on the Feed.
-=======
-- Dreambeans daily drop: Brain 4 registers an overnight `daily_drop` local job that calls the core picker on ranked Pulse rows (off by default; no model or Google I/O).
 - Agent: optional provider prompt-prefix cache (`prefix_cache.toml`, off by default). When enabled, the stable cabin system prompt stays fixed across turns; talk style, playbook, and memory snippets move into a `<cabin-volatile>` block on the user message instead of rewriting the system row.
->>>>>>> origin/beta
+- Agent: optional compaction of large tool outputs (`tool_output_compact.toml`, off by default). When enabled, oversized tool results are summarized for the model with key facts plus a handle and workspace spool path so `read_file` can recover the full text; the stable system prompt is unchanged.
 
 ## 3.0.2 — 2026-10-13
 
