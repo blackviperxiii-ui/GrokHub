@@ -1,9 +1,22 @@
 //! Rail, titlebar, and avatar.
 
 use super::*;
+use crate::ui_kit::{card_frame, chip, empty_state, CardVariant, ChipVariant};
 
 /// Shown at the right of the rail's Search row: the key that opens the palette.
 pub(super) const SEARCH_KEY_HINT: &str = "Ctrl+K";
+
+fn rail_section_caption(ui: &mut egui::Ui, label: RichText) {
+    ui.label(
+        label
+            .size(crate::theme::TYPE_CAPTION)
+            .color(crate::theme::blend_color(
+                crate::theme::fg(),
+                crate::theme::bg(),
+                0.35,
+            )),
+    );
+}
 
 pub(super) fn fit_rail_label(ui: &egui::Ui, label: &str, max_w: f32) -> String {
     let font = egui::FontId::proportional(crate::theme::FONT_CHROME);
@@ -239,6 +252,7 @@ impl Cabin {
             egui::FontId::proportional(crate::theme::FONT_CHROME),
             color,
         );
+        crate::theme::paint_focus_ring(ui, rect, rect.height() * 0.5, &resp);
         if painted != label {
             resp.on_hover_text(label)
         } else {
@@ -336,18 +350,29 @@ impl Cabin {
                 crate::theme::glide_paint(ui, "rail");
                 let search =
                     Self::nav_row(ui, false, crate::icons::RailIcon::Search, "Search", false);
-                // The palette's key, where the action lives.
-                ui.painter().text(
-                    egui::pos2(search.rect.right() - 12.0, search.rect.center().y),
-                    egui::Align2::RIGHT_CENTER,
-                    SEARCH_KEY_HINT,
-                    egui::FontId::proportional(crate::theme::FONT_TIP),
-                    crate::theme::subtle(),
-                );
+                {
+                    let pad = egui::vec2(crate::theme::SPACING_8, crate::theme::SPACING_4);
+                    let font = egui::FontId::proportional(crate::theme::TYPE_CAPTION);
+                    let text_c = crate::theme::fg();
+                    let galley = ui.fonts_mut(|f| {
+                        f.layout_no_wrap(SEARCH_KEY_HINT.to_owned(), font, text_c)
+                    });
+                    let size = galley.size() + pad * 2.0;
+                    let rect = egui::Rect::from_center_size(
+                        egui::pos2(search.rect.right() - 12.0 - size.x * 0.5, search.rect.center().y),
+                        size,
+                    );
+                    ui.painter().rect_filled(rect, crate::theme::RADIUS_SM, crate::theme::surface());
+                    ui.painter().galley(
+                        egui::pos2(rect.min.x + pad.x, rect.center().y - galley.size().y * 0.5),
+                        galley,
+                        text_c,
+                    );
+                }
                 if search.clicked() {
                     self.open_palette();
                 }
-                ui.add_space(6.0);
+                ui.add_space(crate::theme::SPACING_8);
                 let cur = self.nav_id();
                 for (id, label) in crate::theme::GROK_NAV {
                     if Self::nav_row(
@@ -362,13 +387,9 @@ impl Cabin {
                         self.set_nav_id(id);
                     }
                 }
-                ui.add_space(10.0);
+                ui.add_space(crate::theme::SPACING_12);
                 ui.horizontal(|ui| {
-                    ui.label(
-                        RichText::new("Projects")
-                            .size(12.0)
-                            .color(crate::theme::subtle()),
-                    );
+                    rail_section_caption(ui, RichText::new("Projects"));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         let plus =
                             crate::theme::felt_icon_hit(ui, "+", 22.0, crate::theme::muted(), 16.0)
@@ -422,13 +443,14 @@ impl Cabin {
                                                 .frame(
                                                     egui::Frame::NONE
                                                         .fill(crate::theme::elevated())
-                                                        .corner_radius(15.0)
+                                                        .corner_radius(crate::theme::RADIUS_MD)
                                                         .stroke(egui::Stroke::new(
                                                             2.0_f32,
                                                             crate::theme::fg(),
                                                         ))
                                                         .inner_margin(egui::Margin::symmetric(
-                                                            10, 6,
+                                                            crate::theme::SPACING_8 as i8,
+                                                            crate::theme::SPACING_4 as i8,
                                                         )),
                                                 )
                                                 .hint_text(crate::theme::hint("Name"))
@@ -548,60 +570,70 @@ impl Cabin {
                     self.proj_menu_pos = pos;
                     self.apply_project_menu(id, act);
                 }
-                ui.add_space(8.0);
+                ui.add_space(crate::theme::SPACING_8);
                 ui.horizontal(|ui| {
-                    ui.label(
-                        RichText::new("History")
-                            .size(12.0)
-                            .color(crate::theme::subtle()),
-                    );
+                    rail_section_caption(ui, RichText::new("History"));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if crate::theme::felt_label_button(
-                            ui,
-                            "See all",
-                            egui::Color32::TRANSPARENT,
-                            crate::theme::subtle(),
-                            6.0,
-                            egui::vec2(0.0, 20.0),
-                            None,
-                            false,
-                        )
-                        .clicked()
-                        {
+                        if chip(ui, "See all", ChipVariant::Outlined, true).clicked() {
                             self.nav = Nav::History;
                         }
                     });
                 });
-                crate::cards::search_bar(
-                    ui,
-                    &mut self.sidebar_q,
-                    "Filter chats…",
-                    (ui.available_width() - 8.0).max(80.0),
-                );
-                let hist_h = ui.available_height().max(0.0);
-                egui::ScrollArea::vertical()
-                    .id_salt("rail-history")
-                    .auto_shrink([false, true])
-                    .max_height(hist_h)
-                    .show(ui, |ui| {
-                        let q = self.sidebar_q.to_ascii_lowercase();
-                        let live_empty = self.messages.is_empty();
-                        let listed = threads::chat_section_indices(
-                            &self.threads,
-                            Some(self.thread_idx),
-                            live_empty,
-                        );
-                        let listed: Vec<usize> = listed
-                            .into_iter()
-                            .filter(|&i| {
-                                q.is_empty()
-                                    || self.thread_rail_title(i).to_ascii_lowercase().contains(&q)
-                            })
-                            .collect();
-                        if let Some(act) = self.paint_section_chats(ui, &listed, 0) {
-                            self.apply_tab_act(act);
-                        }
-                    });
+                card_frame(ui, CardVariant::Subtle, true, |ui| {
+                    crate::cards::search_bar(
+                        ui,
+                        &mut self.sidebar_q,
+                        "Filter chats…",
+                        (ui.available_width() - crate::theme::SPACING_8).max(80.0),
+                    );
+                    ui.add_space(crate::theme::SPACING_4);
+                    let hist_h = ui.available_height().max(0.0);
+                    egui::ScrollArea::vertical()
+                        .id_salt("rail-history")
+                        .auto_shrink([false, true])
+                        .max_height(hist_h)
+                        .show(ui, |ui| {
+                            let q = self.sidebar_q.to_ascii_lowercase();
+                            let live_empty = self.messages.is_empty();
+                            let listed = threads::chat_section_indices(
+                                &self.threads,
+                                Some(self.thread_idx),
+                                live_empty,
+                            );
+                            let listed: Vec<usize> = listed
+                                .into_iter()
+                                .filter(|&i| {
+                                    q.is_empty()
+                                        || self
+                                            .thread_rail_title(i)
+                                            .to_ascii_lowercase()
+                                            .contains(&q)
+                                })
+                                .collect();
+                            if listed.is_empty() {
+                                let filtered = !q.is_empty();
+                                if filtered {
+                                    if empty_state(
+                                        ui,
+                                        "No matches",
+                                        "Try another filter.",
+                                        Some("Clear"),
+                                    ) {
+                                        self.sidebar_q.clear();
+                                    }
+                                } else {
+                                    let _ = empty_state(
+                                        ui,
+                                        "No chats yet",
+                                        "Start a new chat from the rail.",
+                                        None,
+                                    );
+                                }
+                            } else if let Some(act) = self.paint_section_chats(ui, &listed, 0) {
+                                self.apply_tab_act(act);
+                            }
+                        });
+                });
                 crate::theme::glide_aim(ui, "rail");
             });
     }
