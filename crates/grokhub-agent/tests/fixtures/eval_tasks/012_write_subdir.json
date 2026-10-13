@@ -1,0 +1,23 @@
+{
+  "id": "012_write_subdir",
+  "prompt": "Write deep/x.txt containing deep.",
+  "mode": "always",
+  "files": [],
+  "script": [
+    {
+      "type": "tool",
+      "name": "write",
+      "arguments": { "path": "deep/x.txt", "content": "deep" },
+      "usage": { "input_tokens": 17, "output_tokens": 0 }
+    },
+    {
+      "type": "text",
+      "content": "done",
+      "usage": { "input_tokens": 27, "output_tokens": 2 }
+    }
+  ],
+  "checks": [
+    { "type": "file_exists", "path": "deep/x.txt" },
+    { "type": "file_contains", "path": "deep/x.txt", "value": "deep" }
+  ]
+}
