@@ -32,6 +32,10 @@ pub(super) struct SetupWizard {
     pub(super) dl: Option<super::model_download_ui::ModelDl>,
     /// The model that finished downloading and passed its check.
     pub(super) installed: Option<grokhub_core::model_download::Installed>,
+    /// The llama-server engine download in flight.
+    pub(super) runtime_dl: Option<super::local_ai_ui::RuntimeDl>,
+    /// Last engine download failure (cleared by the user).
+    pub(super) runtime_dl_error: Option<String>,
 }
 
 /// Open on its own only on a fresh profile that hasn't finished or skipped it.
@@ -253,6 +257,7 @@ impl Cabin {
             }
         }
         self.poll_model_download();
+        self.poll_runtime_download();
         let Some(rx) = self.setup.hw_rx.take() else {
             return;
         };
@@ -397,7 +402,9 @@ impl Cabin {
         let installed = local::installed();
         let mut on = self.cfg.local_model;
         let downloaded = self.downloaded_model_name();
-        let hint = super::local_ai_ui::local_model_hint(on, installed, downloaded);
+        let engine =
+            grokhub_core::runtime_download::engine_binary_available(&crate::config::config_dir());
+        let hint = super::local_ai_ui::local_model_hint(on, installed, engine, downloaded);
         if crate::cards::settings_toggle(ui, "On-device model for background tasks", &hint, &mut on)
         {
             self.set_local_model(on);
