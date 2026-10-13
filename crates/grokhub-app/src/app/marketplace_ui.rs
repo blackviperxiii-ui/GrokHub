@@ -7,10 +7,63 @@
 //! credential: Save key parks a hard credentials card first, and Cancel on
 //! that card clears the field.
 
-use grokhub_core::mcp_catalog::{self, CatalogAuth, CatalogEntry};
+use std::sync::{Mutex, OnceLock};
+
+use grokhub_core::mcp_catalog::{self, Catalog, CatalogAuth, CatalogEntry};
 
 use super::*;
 use crate::cards::ChipTone;
+
+struct CatalogRefresh {
+    overlay: Option<Catalog>,
+    note: String,
+    busy: bool,
+}
+
+fn catalog_refresh() -> &'static Mutex<CatalogRefresh> {
+    static STATE: OnceLock<Mutex<CatalogRefresh>> = OnceLock::new();
+    STATE.get_or_init(|| {
+        Mutex::new(CatalogRefresh {
+            overlay: None,
+            note: String::new(),
+            busy: false,
+        })
+    })
+}
+
+fn start_catalog_refresh() {
+    {
+        let mut held = catalog_refresh().lock().unwrap_or_else(|e| e.into_inner());
+        if held.busy {
+            return;
+        }
+        held.busy = true;
+        held.note = "Refreshing catalog from the official MCP registry…".into();
+    }
+    std::thread::spawn(|| {
+        let result = mcp_catalog::refresh_from_official_registry();
+        let mut held = catalog_refresh().lock().unwrap_or_else(|e| e.into_inner());
+        held.busy = false;
+        match result {
+            Ok((catalog, updated)) => {
+                held.overlay = Some(catalog);
+                held.note = if updated > 0 {
+                    format!(
+                        "Updated {updated} connector{} from the official registry.",
+                        if updated == 1 { "" } else { "s" }
+                    )
+                } else {
+                    "Catalog already matches the official registry.".into()
+                };
+            }
+            Err(err) => {
+                held.note = format!(
+                    "Couldn't refresh the catalog ({err}). Still showing the bundled list."
+                );
+            }
+        }
+    });
+}
 
 /// Which tab of the Connectors page is open.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -181,11 +234,13 @@ impl Cabin {
     /// Install one catalog entry. Nothing to approve: it only writes an
     /// entry the user can disconnect or undo. A browser sign-in follows.
     pub(super) fn market_install(&mut self, e: &CatalogEntry) {
+        let bundled = mcp_catalog::bundled();
+        let recipe = bundled.get(&e.id).unwrap_or(e);
         crate::native_mcp::spawn(crate::native_mcp::Job::Install {
-            name: e.id.clone(),
+            name: recipe.id.clone(),
             label: e.name.clone(),
-            entry: e.config_entry(),
-            sign_in: e.auth == CatalogAuth::Oauth,
+            entry: recipe.config_entry(),
+            sign_in: recipe.auth == CatalogAuth::Oauth,
         });
         self.status = format!("Installing {}", e.name);
     }
@@ -234,12 +289,34 @@ impl Cabin {
     }
 
     pub(super) fn ui_marketplace(&mut self, ui: &mut egui::Ui) {
-        let catalog = mcp_catalog::bundled();
+        let (catalog, refresh_note, refresh_busy) = {
+            let held = catalog_refresh().lock().unwrap_or_else(|e| e.into_inner());
+            (
+                held.overlay.clone().unwrap_or_else(mcp_catalog::bundled),
+                held.note.clone(),
+                held.busy,
+            )
+        };
+        if refresh_busy {
+            ui.ctx()
+                .request_repaint_after(std::time::Duration::from_millis(200));
+        }
         let installed = self.installed_names();
         let snap = crate::native_mcp::snapshot();
         if snap.busy {
             ui.ctx()
                 .request_repaint_after(std::time::Duration::from_millis(200));
+        }
+        ui.horizontal(|ui| {
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if crate::cards::ghost_pill(ui, "Refresh catalog") && !refresh_busy {
+                    start_catalog_refresh();
+                }
+            });
+        });
+        ui.add_space(4.0);
+        if !refresh_note.is_empty() {
+            crate::cards::settings_note(ui, &refresh_note);
         }
         if !snap.note.is_empty() {
             crate::cards::settings_note(ui, &snap.note);
@@ -518,6 +595,25 @@ mod tests {
         assert!(
             body.contains("Job::Install") && !body.contains("confirm"),
             "{body}"
+        );
+    }
+
+    #[test]
+    fn refresh_catalog_fetches_only_on_click() {
+        let src = include_str!("marketplace_ui.rs").replace("\r\n", "\n");
+        let code = &src[..src.find("#[cfg(test)]").unwrap()];
+        assert!(
+            code.contains("Refresh catalog") && code.contains("start_catalog_refresh"),
+            "Marketplace must offer a manual refresh"
+        );
+        assert_eq!(
+            code.matches("refresh_from_official_registry").count(),
+            1,
+            "registry fetch must run only from the refresh click handler"
+        );
+        assert!(
+            code.contains("mcp_catalog::bundled()"),
+            "install must keep bundled recipes"
         );
     }
 }

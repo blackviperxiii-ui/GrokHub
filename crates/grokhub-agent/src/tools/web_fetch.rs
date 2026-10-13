@@ -11,7 +11,9 @@ use std::time::Duration;
 
 use serde_json::{json, Value};
 
-use grokhub_core::{host_name_blocked, ip_blocked};
+use grokhub_core::{
+    host_name_blocked, ip_blocked, public_only_resolve as core_public_only_resolve,
+};
 
 use super::html_md;
 use super::ToolOutput;
@@ -526,35 +528,9 @@ fn check_ssrf(url: &UrlParts, fetch: &dyn PageFetch) -> Result<(), String> {
     Ok(())
 }
 
-/// The resolver ureq dials with. It drops every non-public address, so a DNS answer
-/// that changes between `check_ssrf` and the connect (rebinding) still can't reach
-/// localhost, link-local or private ranges. Pulse and media share this helper.
+/// The resolver ureq dials with. Implemented in `grokhub_core::ssrf`.
 pub fn public_only_resolve(netloc: &str) -> std::io::Result<Vec<std::net::SocketAddr>> {
-    let host = netloc
-        .rsplit_once(':')
-        .map(|(host, _)| host)
-        .unwrap_or(netloc)
-        .trim_matches(|c| c == '[' || c == ']');
-    if host_name_blocked(host) {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::PermissionDenied,
-            format!("refused non-public address {host}"),
-        ));
-    }
-    let all: Vec<std::net::SocketAddr> = netloc.to_socket_addrs()?.collect();
-    if all.iter().any(|addr| ip_blocked(addr.ip())) {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::PermissionDenied,
-            format!("refused non-public address {host}"),
-        ));
-    }
-    if all.is_empty() {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::NotFound,
-            format!("dns failed for {host}: no addresses"),
-        ));
-    }
-    Ok(all)
+    core_public_only_resolve(netloc)
 }
 
 #[cfg(test)]
