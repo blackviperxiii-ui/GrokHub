@@ -5924,6 +5924,15 @@ fn composer_stack_drops_approve_slots() {
         "the context usage bar stays above the composer: {bar}"
     );
     assert!(
+        bar.contains("paint_connectivity_status_chip"),
+        "connectivity chip sits in the context bar above the composer: {bar}"
+    );
+    let chip = fn_src(&src, "paint_connectivity_status_chip");
+    assert!(
+        chip.contains("global_ui_phase") && chip.contains("badge(ui"),
+        "connectivity chip uses the U1 kit badge: {chip}"
+    );
+    assert!(
         !bar.contains("ghost_pill(ui, \"Compact\")") && !bar.contains("Slash::Compact"),
         "Compact leaves the context bar for the titlebar menu: {bar}"
     );
