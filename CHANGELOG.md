@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Arch (AUR): optional `llama-cpp` dependency for a system `llama-server` instead of the in-app engine download.
 - Dreambeans daily drop: Brain 4 registers an overnight `daily_drop` local job that calls the core picker on ranked Pulse rows (off by default; no model or Google I/O). Settings → Pulse exposes opt-in toggles; the ledger and last run persist in `daily_drop.json`; picked cards show on the Feed.
 - Agent: optional provider prompt-prefix cache (`prefix_cache.toml`, off by default). When enabled, the stable cabin system prompt stays fixed across turns; talk style, playbook, and memory snippets move into a `<cabin-volatile>` block on the user message instead of rewriting the system row.
 - Connectors: Marketplace and Settings sign-in for installed MCP connectors — browser OAuth seals behind a credentials card; API keys seal in the OS keyring after the same card.
