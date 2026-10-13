@@ -995,7 +995,7 @@ fn note_tool(
     nested: &mut crate::prompt::NestedAgents,
 ) -> (ToolOutput, Usage) {
     let _lap = crate::timing::lap("loop:tool_run");
-    let (mut output, usage) = run_allowed(
+    let (mut output, mut usage) = run_allowed(
         input,
         gate,
         base_readonly,
@@ -1040,6 +1040,29 @@ fn note_tool(
             output.text.push('\n');
         }
         output.text.push_str(&extra);
+    }
+    if !output.failed {
+        let config_dir = crate::perm::config_dir();
+        match crate::compact::maybe_compact_tool_output(
+            &config_dir,
+            input.workspace,
+            input.conversation_id,
+            input.client,
+            input.cancel,
+            input.model,
+            input.effort,
+            id,
+            &call.name,
+            &output.text,
+        ) {
+            Ok(crate::compact::ToolOutputCompactOutcome::Replaced { text, usage: extra }) => {
+                output.text = text;
+                usage.add(&extra);
+            }
+            Ok(crate::compact::ToolOutputCompactOutcome::Unchanged) => {}
+            Err(crate::compact::CompactError::Cancelled) => {}
+            Err(_) => {}
+        }
     }
     (output, usage)
 }
