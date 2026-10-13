@@ -104,7 +104,7 @@ fn restrict_private(path: &Path) {
 #[cfg(not(any(unix, windows)))]
 fn restrict_private(_path: &Path) {}
 
-#[cfg(any(windows, test))]
+#[cfg(test)]
 pub(crate) use grokhub_core::sddl::sddl_allows_world;
 
 fn is_private_file(path: &Path) -> bool {
