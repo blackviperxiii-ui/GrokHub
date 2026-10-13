@@ -354,15 +354,21 @@ impl Cabin {
                     let pad = egui::vec2(crate::theme::SPACING_8, crate::theme::SPACING_4);
                     let font = egui::FontId::proportional(crate::theme::TYPE_CAPTION);
                     let text_c = crate::theme::fg();
-                    let galley = ui.fonts_mut(|f| {
-                        f.layout_no_wrap(SEARCH_KEY_HINT.to_owned(), font, text_c)
-                    });
+                    let galley = ui
+                        .fonts_mut(|f| f.layout_no_wrap(SEARCH_KEY_HINT.to_owned(), font, text_c));
                     let size = galley.size() + pad * 2.0;
                     let rect = egui::Rect::from_center_size(
-                        egui::pos2(search.rect.right() - 12.0 - size.x * 0.5, search.rect.center().y),
+                        egui::pos2(
+                            search.rect.right() - 12.0 - size.x * 0.5,
+                            search.rect.center().y,
+                        ),
                         size,
                     );
-                    ui.painter().rect_filled(rect, crate::theme::RADIUS_SM, crate::theme::surface());
+                    ui.painter().rect_filled(
+                        rect,
+                        crate::theme::RADIUS_SM,
+                        crate::theme::surface(),
+                    );
                     ui.painter().galley(
                         egui::pos2(rect.min.x + pad.x, rect.center().y - galley.size().y * 0.5),
                         galley,
@@ -443,14 +449,13 @@ impl Cabin {
                                                 .frame(
                                                     egui::Frame::NONE
                                                         .fill(crate::theme::elevated())
-                                                        .corner_radius(crate::theme::RADIUS_MD)
+                                                        .corner_radius(15.0)
                                                         .stroke(egui::Stroke::new(
                                                             2.0_f32,
                                                             crate::theme::fg(),
                                                         ))
                                                         .inner_margin(egui::Margin::symmetric(
-                                                            crate::theme::SPACING_8 as i8,
-                                                            crate::theme::SPACING_4 as i8,
+                                                            10, 6,
                                                         )),
                                                 )
                                                 .hint_text(crate::theme::hint("Name"))
