@@ -279,10 +279,15 @@ impl Cabin {
             }
         }
         if !related.is_empty() {
-            reqs.extend(ps::related_requests(&self.cfg.pulse_sources, &related, now));
-            cache.related.clear();
-            if let Err(err) = ps::save_cache(&path, &cache) {
-                self.status = err;
+            let related_reqs = ps::related_requests(&self.cfg.pulse_sources, &related, now);
+            // Only drain related when at least one search kind is on. Clearing
+            // first dropped More like this asks when HN/Reddit/Web were all off.
+            if !related_reqs.is_empty() {
+                reqs.extend(related_reqs);
+                cache.related.clear();
+                if let Err(err) = ps::save_cache(&path, &cache) {
+                    self.status = err;
+                }
             }
         }
         // Counted as a run either way, so an empty setup does not retry every tick.
@@ -604,6 +609,9 @@ impl Cabin {
                 self.nudge_post_source(&card, 1, true);
                 let followed = self.learn_place_from_card(&card);
                 let was_busy = self.sources_busy();
+                let search_on = self.cfg.pulse_sources.hacker_news
+                    || self.cfg.pulse_sources.reddit
+                    || self.cfg.pulse_sources.web_search;
                 self.kick_source_fetch();
                 if self.sources.rx.is_some() && !was_busy {
                     self.sources.looking_more = true;
@@ -615,6 +623,9 @@ impl Cabin {
                     if !followed {
                         self.status = "More like this queued — check already running.".into();
                     }
+                } else if !followed && !search_on {
+                    self.status =
+                        "Turn on Hacker News, Reddit, or Web search to look for more.".into();
                 } else if !followed {
                     self.status = "More like this queued for the next check.".into();
                 }
@@ -1352,6 +1363,50 @@ mod tests {
     }
 
     #[test]
+    fn more_like_this_keeps_related_when_search_kinds_are_off() {
+        let (_lock, _root, mut cabin) = cabin();
+        cabin.updates.clear();
+        cabin.add_interest("Rust");
+        cabin.cfg.pulse_sources.hacker_news = false;
+        cabin.cfg.pulse_sources.reddit = false;
+        cabin.cfg.pulse_sources.web_search = false;
+        let now = now_ms();
+        let added = cabin.post_source_run(one_item_run(
+            vec![item("Rust async book", "https://book.test/async", now)],
+            now,
+        ));
+        assert_eq!(added, 1);
+        let more = cabin
+            .updates
+            .iter()
+            .find(|c| c.title == "Rust async book")
+            .map(|c| c.id.clone())
+            .expect("posted");
+        cabin.source_post_act(&more, SourceAct::MoreLike);
+        assert_eq!(
+            cabin.status,
+            "Turn on Hacker News, Reddit, or Web search to look for more."
+        );
+        assert!(
+            !cabin.sources.looking_more,
+            "no Looking… when nothing can run"
+        );
+        assert!(cabin.sources.rx.is_none(), "no in-flight check");
+        let cache = ps::load_cache(&sources_cache_path());
+        assert_eq!(
+            cache.related.len(),
+            1,
+            "related ask must stay queued until a search kind is on: {:?}",
+            cache.related
+        );
+        assert!(
+            !cache.related[0].query.trim().is_empty(),
+            "queued query must be non-empty: {:?}",
+            cache.related[0]
+        );
+    }
+
+    #[test]
     fn more_like_this_kicks_a_check_and_shows_looking() {
         let act = include_str!("pulse_sources_ui.rs")
             .split("SourceAct::MoreLike => {")
@@ -1369,6 +1424,19 @@ mod tests {
         assert!(
             act.contains("looking_more = true"),
             "Feed button needs looking_more: {act}"
+        );
+        assert!(
+            act.contains("Turn on Hacker News, Reddit, or Web search"),
+            "off-search path must say what to turn on: {act}"
+        );
+        let kick = include_str!("pulse_sources_ui.rs")
+            .split("fn kick_source_fetch(")
+            .nth(1)
+            .and_then(|rest| rest.split("\n    pub(super) fn ").next())
+            .expect("kick_source_fetch");
+        assert!(
+            kick.contains("if !related_reqs.is_empty()") && kick.contains("cache.related.clear()"),
+            "related queue clears only after search reqs exist: {kick}"
         );
         let ui = include_str!("pulse_ui.rs");
         assert!(ui.contains("\"Looking…\""), "button label while looking");

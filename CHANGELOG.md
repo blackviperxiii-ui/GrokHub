@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Fixed: Pulse **More like this** no longer clears the related-search queue when Hacker News, Reddit, and Web search are all off, and the status says to turn one on instead of claiming the ask is queued.
 - Fixed: AMR `remember` publishes nodes via temp + exclusive hard_link/rename (with `sync_all`), so a trail file is never visible empty mid-write; the turn-end trail test waits for the body, not just `is_file()`.
 - Fixed: proactive dismiss mute expiry in tests is driven from the dismiss wall clock (not `t0 + DAY + 2s`), and Pulse feed-instruction rewrite waits up to 30s so Windows CI load does not flake the mock rewrite.
 - Pulse Feed thumbs decode cached images off the UI thread (same gate as Eyes / Imagine stills), so the first paint of a post with on-disk images no longer hitch on `fs::read` + JPEG/PNG decode.
