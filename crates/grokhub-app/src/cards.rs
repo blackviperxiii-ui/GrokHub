@@ -1,6 +1,7 @@
 //! Grok catalog chrome — huge title, white pills, 3-column icon tiles.
 
 use crate::icons::{self, TileIcon};
+use crate::ui_kit::{card_frame, CardVariant};
 use eframe::egui::text::{LayoutJob, TextFormat, TextWrapping};
 use eframe::egui::{
     self, Align2, Color32, ColorImage, FontId, RichText, Sense, Stroke, TextureHandle,
@@ -643,14 +644,13 @@ pub fn chip_tone_color(tone: ChipTone) -> Color32 {
 
 pub fn status_chip(ui: &mut egui::Ui, label: &str, tone: ChipTone) {
     let color = chip_tone_color(tone);
-    egui::Frame::NONE
-        .fill(crate::theme::elevated())
-        .corner_radius(12.0)
-        .stroke(Stroke::new(1.0_f32, crate::theme::border()))
-        .inner_margin(egui::Margin::symmetric(10, 4))
-        .show(ui, |ui| {
-            ui.label(RichText::new(label).size(12.0).color(color));
-        });
+    card_frame(ui, CardVariant::Outlined, true, |ui| {
+        ui.label(
+            RichText::new(label)
+                .size(crate::theme::TYPE_CAPTION)
+                .color(color),
+        );
+    });
 }
 
 /// Glanceable in-progress chrome: pulsing live dot + phase label.
@@ -723,15 +723,13 @@ pub fn framed_preview(
 ) -> egui::Rect {
     let scale = max_w / size[0].max(1) as f32;
     let h = size[1] as f32 * scale;
-    egui::Frame::NONE
-        .corner_radius(12.0)
-        .stroke(Stroke::new(1.0_f32, crate::theme::border()))
-        .inner_margin(egui::Margin::same(2))
-        .show(ui, |ui| {
-            ui.add(egui::Image::new((tex.id(), egui::vec2(max_w, h))).corner_radius(10.0))
-                .rect
-        })
-        .inner
+    let mut image_rect = egui::Rect::NOTHING;
+    card_frame(ui, CardVariant::Outlined, true, |ui| {
+        image_rect = ui
+            .add(egui::Image::new((tex.id(), egui::vec2(max_w, h))).corner_radius(10.0))
+            .rect;
+    });
+    image_rect
 }
 
 pub fn composer_modes() -> &'static [(&'static str, &'static str)] {
@@ -1581,26 +1579,21 @@ pub fn settings_dropdown(
         ui.label(RichText::new(hint).size(12.0).color(crate::theme::muted()));
     }
     ui.add_space(6.0);
-    egui::Frame::NONE
-        .fill(crate::theme::elevated())
-        .corner_radius(10.0)
-        .stroke(Stroke::new(1.0_f32, crate::theme::border()))
-        .inner_margin(egui::Margin::symmetric(10, 8))
-        .show(ui, |ui| {
-            egui::ComboBox::from_id_salt(title)
-                .selected_text(RichText::new(selected).size(15.0).color(crate::theme::fg()))
-                .width(ui.available_width().max(160.0))
-                .show_ui(ui, |ui| {
-                    for (i, label) in choices.iter().enumerate() {
-                        if ui
-                            .selectable_label(label == selected, label.as_str())
-                            .clicked()
-                        {
-                            picked = Some(i);
-                        }
+    card_frame(ui, CardVariant::Outlined, true, |ui| {
+        egui::ComboBox::from_id_salt(title)
+            .selected_text(RichText::new(selected).size(15.0).color(crate::theme::fg()))
+            .width(ui.available_width().max(160.0))
+            .show_ui(ui, |ui| {
+                for (i, label) in choices.iter().enumerate() {
+                    if ui
+                        .selectable_label(label == selected, label.as_str())
+                        .clicked()
+                    {
+                        picked = Some(i);
                     }
-                });
-        });
+                }
+            });
+    });
     ui.add_space(10.0);
     picked
 }
@@ -1618,20 +1611,15 @@ pub fn settings_field(
         ui.label(RichText::new(hint).size(12.0).color(crate::theme::muted()));
     }
     ui.add_space(6.0);
-    egui::Frame::NONE
-        .fill(crate::theme::elevated())
-        .corner_radius(10.0)
-        .stroke(Stroke::new(1.0_f32, crate::theme::border()))
-        .inner_margin(egui::Margin::symmetric(10, 8))
-        .show(ui, |ui| {
-            let mut edit = egui::TextEdit::singleline(value)
-                .desired_width(f32::INFINITY)
-                .frame(egui::Frame::NONE.inner_margin(egui::Margin::symmetric(4, 2)));
-            if masked {
-                edit = edit.password(true);
-            }
-            ui.add(edit);
-        });
+    card_frame(ui, CardVariant::Outlined, true, |ui| {
+        let mut edit = egui::TextEdit::singleline(value)
+            .desired_width(f32::INFINITY)
+            .frame(egui::Frame::NONE.inner_margin(egui::Margin::symmetric(4, 2)));
+        if masked {
+            edit = edit.password(true);
+        }
+        ui.add(edit);
+    });
     ui.add_space(10.0);
 }
 
@@ -1916,22 +1904,17 @@ pub fn search_field(ui: &mut egui::Ui, q: &mut String) {
 }
 
 pub fn search_bar(ui: &mut egui::Ui, q: &mut String, hint: &str, width: f32) {
-    egui::Frame::NONE
-        .fill(crate::theme::elevated())
-        .corner_radius(18.0)
-        .stroke(Stroke::new(1.0_f32, crate::theme::border()))
-        .inner_margin(egui::Margin::symmetric(10, 5))
-        .show(ui, |ui| {
-            ui.horizontal(|ui| {
-                icons::paint_bar_icon(ui, icons::BarIcon::Search, 16.0, crate::theme::subtle());
-                ui.add(
-                    egui::TextEdit::singleline(q)
-                        .hint_text(crate::theme::hint(hint.to_owned()))
-                        .desired_width(width)
-                        .frame(egui::Frame::NONE.inner_margin(egui::Margin::symmetric(4, 2))),
-                );
-            });
+    card_frame(ui, CardVariant::Outlined, true, |ui| {
+        ui.horizontal(|ui| {
+            icons::paint_bar_icon(ui, icons::BarIcon::Search, 16.0, crate::theme::subtle());
+            ui.add(
+                egui::TextEdit::singleline(q)
+                    .hint_text(crate::theme::hint(hint.to_owned()))
+                    .desired_width(width)
+                    .frame(egui::Frame::NONE.inner_margin(egui::Margin::symmetric(4, 2))),
+            );
         });
+    });
 }
 
 fn paint_slot_card(
@@ -2145,11 +2128,15 @@ pub fn grok_tile(
     let extra = slot
         .map(|(prev, fill)| tile_row_slack(prev, fill))
         .unwrap_or(0.0);
-    let mut prepared = egui::Frame::NONE
-        .fill(crate::theme::elevated())
-        .corner_radius(crate::theme::CARD_RADIUS)
-        .inner_margin(egui::Margin::same(14))
-        .begin(ui);
+    let mut prepared = egui::Frame {
+        fill: crate::theme::elevated(),
+        stroke: Stroke::NONE,
+        shadow: crate::theme::kit_shadow(crate::theme::ShadowLevel::Lift),
+        inner_margin: egui::Margin::same(14),
+        outer_margin: egui::Margin::ZERO,
+        corner_radius: crate::theme::CARD_RADIUS.into(),
+    }
+    .begin(ui);
     {
         let ui = &mut prepared.content_ui;
         ui.horizontal(|ui| {
@@ -2439,10 +2426,12 @@ pub fn imagine_stage(
     }
     ui.allocate_rect(wall, Sense::hover());
     let r = wall.shrink(1.0);
-    ui.painter().rect_filled(r, 14.0, crate::theme::elevated());
+    let stage_radius = crate::theme::RADIUS_LG;
+    ui.painter()
+        .rect_filled(r, stage_radius, crate::theme::elevated());
     ui.painter().rect_stroke(
         r,
-        14.0,
+        stage_radius,
         Stroke::new(1.0_f32, crate::theme::border()),
         egui::StrokeKind::Middle,
     );
@@ -2991,11 +2980,15 @@ fn wall_slot_feel(ui: &egui::Ui, resp: egui::Response, selected: bool) -> egui::
 }
 
 pub fn empty_prompt_tile(ui: &mut egui::Ui, icon: TileIcon, title: &str, hint: &str) -> bool {
-    let mut prepared = egui::Frame::NONE
-        .fill(crate::theme::elevated())
-        .corner_radius(crate::theme::CARD_RADIUS)
-        .inner_margin(egui::Margin::same(14))
-        .begin(ui);
+    let mut prepared = egui::Frame {
+        fill: crate::theme::elevated(),
+        stroke: Stroke::NONE,
+        shadow: crate::theme::kit_shadow(crate::theme::ShadowLevel::Lift),
+        inner_margin: egui::Margin::same(14),
+        outer_margin: egui::Margin::ZERO,
+        corner_radius: crate::theme::CARD_RADIUS.into(),
+    }
+    .begin(ui);
     {
         let ui = &mut prepared.content_ui;
         ui.set_min_height(100.0);
@@ -3045,6 +3038,26 @@ mod tests {
 
     /// SY-10: a group heading gets 8–12px more room above it than a plain
     /// label, at the same size.
+    #[test]
+    fn catalog_chrome_wires_ui_kit_frames() {
+        let src = include_str!("cards.rs");
+        assert!(
+            src.contains("use crate::ui_kit::{card_frame, CardVariant}"),
+            "cards must import the U1 kit"
+        );
+        assert!(
+            src.contains("card_frame(ui, CardVariant::Outlined")
+                && src.contains("kit_shadow(crate::theme::ShadowLevel::Lift)"),
+            "catalog surfaces must use kit card_frame and shadow tokens"
+        );
+        assert!(
+            src.contains("pub fn status_chip(")
+                && src.contains("pub fn grok_tile(")
+                && src.contains("pub fn search_bar("),
+            "primary card entry points stay in cards.rs"
+        );
+    }
+
     #[test]
     fn section_heading_adds_room_above_at_the_same_size() {
         assert!(
