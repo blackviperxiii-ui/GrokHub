@@ -150,7 +150,7 @@ mod canary_ui;
 mod change_history_ui;
 mod change_undo;
 mod chat_ui;
-mod chips;
+pub(crate) mod chips;
 mod confirm;
 mod connectivity_ui;
 mod connectors_ui;

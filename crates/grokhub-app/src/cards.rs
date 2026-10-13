@@ -13,7 +13,10 @@ use grokhub_core::{
     IMAGE_FILE_CAP,
 };
 use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Mutex, OnceLock};
+
+#[cfg(test)]
+use std::sync::Arc;
 
 pub use grokhub_core::ImagineKind;
 
@@ -983,429 +986,18 @@ pub fn voice_mode_row(ui: &mut egui::Ui, label: &str) -> bool {
     stop
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ChipRowAct {
-    Apply(usize),
-    Dismiss(usize),
-}
-
-pub(crate) fn chip_paint_label(label: &str) -> String {
-    label
-        .split_whitespace()
-        .flat_map(|w| w.split('…'))
-        .filter(|w| !w.is_empty())
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-
-/// Max width of one chip label before an ellipsis. Single line only.
-pub const CHIP_LABEL_MAX_W: f32 = 180.0;
-/// Pad inside the fill. Drawn in the pill rect — Frame inner_margin clips the first glyphs.
-pub const CHIP_PAD_X: f32 = 14.0;
-/// Vertical pad budget so 13px type and descenders sit inside `CHIP_ROW_H`.
-#[cfg(test)]
-pub const CHIP_PAD_Y: f32 = 8.0;
-/// Gap between chips. Fluid fit uses the same gap the row paints.
-pub const CHIP_GAP: f32 = 6.0;
-/// Hover dismiss control. Reserved on every pill so hover does not reflow the row.
-/// The slot is part of the chip hit. A second widget would steal hover, flash the
-/// pointer, and drop the click.
-pub const CHIP_DISMISS_SLOT: f32 = 16.0;
-/// Space between the label and the dismiss slot.
-pub const CHIP_DISMISS_GAP: f32 = 4.0;
-/// One fixed chip height. Does not grow when a label is long.
-pub const CHIP_ROW_H: f32 = 40.0;
-
-/// Max width of the chip cluster — Ask anything column, never the inflated pane.
-pub fn chip_row_width_lock(avail: f32) -> f32 {
-    avail.clamp(120.0, crate::theme::CHAT_COL_W)
-}
-
-/// Width the chip row may actually paint. `composer_pill_w` floors at 360,
-/// which is wider than a narrow pane and cuts the last chip on the window edge.
-/// The visible clip wins, then the Ask anything column.
-pub fn chip_row_visible_w(ui: &egui::Ui) -> f32 {
-    let left = ui.cursor().left();
-    let clip_w = (ui.clip_rect().right() - left).max(0.0);
-    let avail = ui.available_width().min(clip_w);
-    let col = composer_pill_w(ui.ctx().content_rect().width());
-    chip_row_width_lock(avail.min(col))
-}
-
-/// Pill width for a measured single-line label, including the reserved dismiss slot.
-pub fn chip_pill_width(label_w: f32) -> f32 {
-    CHIP_PAD_X + label_w.max(0.0) + CHIP_DISMISS_GAP + CHIP_DISMISS_SLOT + CHIP_PAD_X
-}
-
-/// Dismiss hit inside a chip pill. Same rect at rest and while the pointer is on it.
-pub fn chip_dismiss_rect(pill: egui::Rect) -> egui::Rect {
-    egui::Rect::from_center_size(
-        egui::pos2(
-            pill.right() - CHIP_PAD_X - CHIP_DISMISS_SLOT * 0.5,
-            pill.center().y,
-        ),
-        egui::vec2(CHIP_DISMISS_SLOT, CHIP_DISMISS_SLOT),
-    )
-}
-
-/// A click in the reserved slot dismisses. Anywhere else on the pill applies.
-pub fn chip_hit_act(index: usize, dismiss: egui::Rect, pointer: egui::Pos2) -> ChipRowAct {
-    if dismiss.contains(pointer) {
-        ChipRowAct::Dismiss(index)
-    } else {
-        ChipRowAct::Apply(index)
-    }
-}
+#[allow(unused_imports)]
+pub use crate::app::chips::row::{
+    chip_cluster_lead, chip_cluster_w, chip_dismiss_rect, chip_hit_act, chip_label_budget,
+    chip_paint_label, chip_pill_width, chip_row_visible_w, chip_row_width_lock, chip_why_tip,
+    fluid_chip_count, layout_chip_label, paint_empty_chip_state, quick_chip_fg, quick_chip_fill,
+    quick_chip_row, quick_chip_stroke, quick_chip_stroke_w, quick_chip_strong, ChipRowAct,
+    CHIP_DISMISS_GAP, CHIP_DISMISS_SLOT, CHIP_EMPTY_LABEL, CHIP_GAP, CHIP_LABEL_MAX_W, CHIP_PAD_X,
+    CHIP_ROW_H,
+};
 
 #[cfg(test)]
-fn begin_chip_dismiss_hits(ui: &egui::Ui) {
-    ui.ctx().data_mut(|d| {
-        d.insert_temp(
-            egui::Id::new("qchip-dismiss-hits"),
-            Vec::<egui::Rect>::new(),
-        );
-        d.insert_temp(egui::Id::new("qchip-pills"), Vec::<egui::Rect>::new());
-    });
-}
-
-#[cfg(test)]
-fn remember_chip_dismiss_hit(ui: &egui::Ui, rect: egui::Rect) {
-    ui.ctx().data_mut(|d| {
-        let id = egui::Id::new("qchip-dismiss-hits");
-        let mut hits = d.get_temp::<Vec<egui::Rect>>(id).unwrap_or_default();
-        hits.push(rect);
-        d.insert_temp(id, hits);
-    });
-}
-
-/// Label width cap for this row. Never above `CHIP_LABEL_MAX_W`. A narrow row
-/// ellipsizes sooner so the first chip still fits.
-pub fn chip_label_budget(row_w: f32) -> f32 {
-    let chrome = chip_pill_width(0.0);
-    (row_w - chrome).clamp(32.0, CHIP_LABEL_MAX_W)
-}
-
-/// How many leading chips fit in `row_w` with `gap` between them.
-/// Later chips are dropped. The row does not wrap.
-pub fn fluid_chip_count(widths: &[f32], row_w: f32, gap: f32) -> usize {
-    if widths.is_empty() || row_w <= 0.0 {
-        return 0;
-    }
-    let mut used = 0.0;
-    let mut n = 0usize;
-    for (i, w) in widths.iter().enumerate() {
-        let add = if i == 0 { *w } else { gap + *w };
-        // A chip that starts inside the row and ends past it is the owner
-        // cut-off ("control my mou"). Drop the whole pill.
-        if used + add > row_w + 0.5 {
-            break;
-        }
-        used += add;
-        n += 1;
-    }
-    n
-}
-
-/// Width of the first `fit` pills plus the gaps between them.
-pub fn chip_cluster_w(widths: &[f32], fit: usize, gap: f32) -> f32 {
-    let n = fit.min(widths.len());
-    let pills: f32 = widths[..n].iter().sum();
-    pills + gap * n.saturating_sub(1) as f32
-}
-
-/// Leading space that centers a `cluster_w` chip cluster in a `row_w` row, the
-/// chat box column. Snapped to a whole physical pixel at `ppp` so the cluster
-/// sits on the midline at every scale factor. A cluster wider than the row
-/// starts at the row's left edge.
-pub fn chip_cluster_lead(row_w: f32, cluster_w: f32, ppp: f32) -> f32 {
-    let lead = ((row_w - cluster_w) * 0.5).max(0.0);
-    let ppp = if ppp > 0.0 { ppp } else { 1.0 };
-    (lead * ppp).round() / ppp
-}
-
-#[cfg(test)]
-fn remember_chip_pill(ui: &egui::Ui, rect: egui::Rect) {
-    ui.ctx().data_mut(|d| {
-        let id = egui::Id::new("qchip-pills");
-        let mut pills = d.get_temp::<Vec<egui::Rect>>(id).unwrap_or_default();
-        pills.push(rect);
-        d.insert_temp(id, pills);
-    });
-}
-
-/// Single-line label. Overflow becomes an ellipsis at `max_w` instead of a second line.
-pub fn layout_chip_label(
-    ui: &egui::Ui,
-    text: &str,
-    font: FontId,
-    color: Color32,
-    max_w: f32,
-) -> Arc<egui::Galley> {
-    let mut job = LayoutJob::single_section(
-        text.to_owned(),
-        TextFormat {
-            font_id: font,
-            color,
-            ..Default::default()
-        },
-    );
-    job.wrap = TextWrapping::truncate_at_width(max_w.max(1.0));
-    job.break_on_newline = false;
-    ui.fonts_mut(|f| f.layout_job(job))
-}
-
-/// Empty-home placeholder when ranking yields none. Not a ranked action chip.
-pub const CHIP_EMPTY_LABEL: &str = "Nothing queued";
-
-pub fn quick_chip_fill(primary: bool) -> Color32 {
-    if primary {
-        crate::theme::surface_hover()
-    } else {
-        crate::theme::elevated()
-    }
-}
-
-pub fn quick_chip_stroke(primary: bool) -> Color32 {
-    if primary {
-        crate::theme::border_strong()
-    } else {
-        crate::theme::border()
-    }
-}
-
-pub fn quick_chip_stroke_w(primary: bool) -> f32 {
-    if primary {
-        2.0
-    } else {
-        1.0
-    }
-}
-
-pub fn quick_chip_fg(primary: bool) -> Color32 {
-    if primary {
-        crate::theme::fg()
-    } else {
-        crate::theme::muted()
-    }
-}
-
-pub fn quick_chip_strong(primary: bool) -> bool {
-    primary
-}
-
-/// Hover-only why-this copy. No second chip row.
-pub fn chip_why_tip(hint: &str, label: &str) -> String {
-    let why = hint.trim();
-    // CD-05 / HO-05: guide chips use a full sentence, not "Why this? / New here".
-    if why == "New here" {
-        return "Suggested because you're new here".into();
-    }
-    if !why.is_empty() {
-        format!("Why this?\n{why}")
-    } else {
-        let label = label.trim();
-        if label.is_empty() {
-            "Why this?".into()
-        } else {
-            format!("Why this?\n{label}")
-        }
-    }
-}
-
-fn paint_chip_pill(ui: &mut egui::Ui, rect: egui::Rect, fill: Color32, primary: bool) {
-    let stroke_w = quick_chip_stroke_w(primary);
-    let stroke = Stroke::new(stroke_w, quick_chip_stroke(primary));
-    let body = rect.shrink(stroke_w * 0.5);
-    ui.painter().rect(
-        body,
-        CHIP_ROW_H * 0.5,
-        fill,
-        stroke,
-        egui::StrokeKind::Middle,
-    );
-}
-
-pub fn paint_empty_chip_state(ui: &mut egui::Ui) {
-    let max_w = chip_row_visible_w(ui);
-    ui.allocate_ui_with_layout(
-        egui::vec2(max_w, CHIP_ROW_H),
-        egui::Layout::left_to_right(egui::Align::Center)
-            .with_main_wrap(false)
-            .with_main_align(egui::Align::Min),
-        |ui| {
-            ui.set_max_width(max_w);
-            let fill = quick_chip_fill(false);
-            let color = quick_chip_fg(false);
-            let budget = chip_label_budget(max_w);
-            let galley = layout_chip_label(
-                ui,
-                CHIP_EMPTY_LABEL,
-                FontId::proportional(13.0),
-                color,
-                budget,
-            );
-            let pill_w = (CHIP_PAD_X + galley.size().x.max(8.0) + CHIP_PAD_X).min(max_w);
-            #[cfg(test)]
-            begin_chip_dismiss_hits(ui);
-            ui.add_space(chip_cluster_lead(
-                max_w,
-                pill_w,
-                ui.ctx().pixels_per_point(),
-            ));
-            let (rect, resp) =
-                ui.allocate_exact_size(egui::vec2(pill_w, CHIP_ROW_H), Sense::hover());
-            #[cfg(test)]
-            remember_chip_pill(ui, rect);
-            paint_chip_pill(ui, rect, fill, false);
-            let text_pos = egui::pos2(
-                rect.left() + CHIP_PAD_X,
-                rect.center().y - galley.size().y * 0.5,
-            );
-            ui.painter().galley(text_pos, galley, color);
-            let _ = resp.hovered();
-        },
-    );
-}
-
-pub fn quick_chip_row(ui: &mut egui::Ui, chips: &[grokhub_core::QuickChip]) -> Option<ChipRowAct> {
-    if chips.is_empty() {
-        paint_empty_chip_state(ui);
-        return None;
-    }
-    let mut act = None;
-    let max_w = chip_row_visible_w(ui);
-    let budget = chip_label_budget(max_w);
-    let measured: Vec<Arc<egui::Galley>> = chips
-        .iter()
-        .map(|c| {
-            let font = if quick_chip_strong(c.primary) {
-                crate::theme::title_font(13.0)
-            } else {
-                FontId::proportional(13.0)
-            };
-            let color = quick_chip_fg(c.primary);
-            layout_chip_label(ui, &chip_paint_label(&c.label), font, color, budget)
-        })
-        .collect();
-    let widths: Vec<f32> = measured
-        .iter()
-        .map(|g| chip_pill_width(g.size().x.min(budget)).min(max_w))
-        .collect();
-    let fit = fluid_chip_count(&widths, max_w, CHIP_GAP);
-    ui.allocate_ui_with_layout(
-        egui::vec2(max_w, CHIP_ROW_H),
-        egui::Layout::left_to_right(egui::Align::Center)
-            .with_main_wrap(false)
-            .with_main_align(egui::Align::Min),
-        |ui| {
-            ui.set_max_width(max_w);
-            ui.spacing_mut().item_spacing = egui::vec2(CHIP_GAP, 0.0);
-            crate::theme::glide_paint(ui, "quick-chips");
-            let mut chip_hover: Option<egui::Rect> = None;
-            #[cfg(test)]
-            begin_chip_dismiss_hits(ui);
-            let cluster_w = chip_cluster_w(&widths, fit, CHIP_GAP);
-            ui.add_space(chip_cluster_lead(
-                max_w,
-                cluster_w,
-                ui.ctx().pixels_per_point(),
-            ));
-            let mut used = 0.0f32;
-            for (i, c) in chips.iter().enumerate().take(fit) {
-                let galley = measured[i].clone();
-                debug_assert!(
-                    galley.rows.len() <= 1,
-                    "chip labels stay one line: {}",
-                    galley.text()
-                );
-                let pill_w = widths[i];
-                let add = if used == 0.0 {
-                    pill_w
-                } else {
-                    CHIP_GAP + pill_w
-                };
-                if used + add > max_w + 0.5 {
-                    break;
-                }
-                used += add;
-                let chip_id = ui.id().with(("qchip", i));
-                let fill = quick_chip_fill(c.primary);
-                let color = quick_chip_fg(c.primary);
-                let paint = chip_paint_label(&c.label);
-                let why = if c.hint.is_empty() && paint != c.label {
-                    c.label.as_str()
-                } else {
-                    c.hint.as_str()
-                };
-                let tip = chip_why_tip(why, &c.label);
-                let (rect, hit_resp) =
-                    ui.allocate_exact_size(egui::vec2(pill_w, CHIP_ROW_H), Sense::click());
-                // Quiet chips stay in their slot. Hover still sets the hand cursor.
-                let hit_resp = crate::theme::pointing(hit_resp);
-                if hit_resp.hovered() {
-                    chip_hover = Some(rect);
-                }
-                paint_chip_pill(ui, rect, fill, c.primary);
-                #[cfg(test)]
-                remember_chip_pill(ui, rect);
-                let text_pos = egui::pos2(
-                    rect.left() + CHIP_PAD_X,
-                    rect.center().y - galley.size().y * 0.5,
-                );
-                ui.painter().galley(text_pos, galley, color);
-                let x_rect = chip_dismiss_rect(rect);
-                #[cfg(test)]
-                remember_chip_dismiss_hit(ui, x_rect);
-                let dismiss_t = ui.ctx().animate_bool_with_time(
-                    chip_id.with("dismiss"),
-                    hit_resp.hovered(),
-                    grokhub_core::SELECT_SECS,
-                );
-                let over_x = hit_resp.hover_pos().is_some_and(|p| x_rect.contains(p));
-                let hit = if over_x {
-                    hit_resp.on_hover_text("Hide this suggestion")
-                } else {
-                    hit_resp.on_hover_text(tip)
-                };
-                if dismiss_t > 0.01 {
-                    if over_x {
-                        ui.painter().rect_filled(
-                            x_rect,
-                            6.0,
-                            crate::theme::lift_fill(
-                                Color32::TRANSPARENT,
-                                grokhub_core::HOVER_WASH * dismiss_t,
-                            ),
-                        );
-                    }
-                    let x_color = crate::theme::blend_color(
-                        Color32::TRANSPARENT,
-                        crate::theme::subtle(),
-                        dismiss_t,
-                    );
-                    ui.painter().text(
-                        x_rect.center(),
-                        Align2::CENTER_CENTER,
-                        "×",
-                        FontId::proportional(12.0),
-                        x_color,
-                    );
-                }
-                if hit.clicked() {
-                    act = Some(match hit.interact_pointer_pos() {
-                        Some(pos) => chip_hit_act(i, x_rect, pos),
-                        None => ChipRowAct::Apply(i),
-                    });
-                }
-            }
-            if let Some(rect) = chip_hover {
-                crate::theme::glide_candidate(ui, "quick-chips", rect, true, false);
-            }
-            crate::theme::glide_aim(ui, "quick-chips");
-        },
-    );
-    act
-}
+pub use crate::app::chips::row::CHIP_PAD_Y;
 
 pub fn tab_pill(ui: &mut egui::Ui, label: &str, active: bool) -> bool {
     felt_tab(ui, label, active)
@@ -3790,11 +3382,11 @@ mod tests {
             crate::theme::CHAT_COL_W,
             "inflated pane width must not stretch chips past Ask anything"
         );
-        let src = include_str!("cards.rs");
+        let src = include_str!("app/chips.rs");
         let slice = src
             .split("pub fn quick_chip_row(")
             .nth(1)
-            .and_then(|s| s.split("pub fn tab_pill(").next())
+            .and_then(|s| s.split("// quick_chip_row_end").next())
             .expect("chip row");
         assert!(
             slice.contains("left_to_right(egui::Align::Center)") && slice.contains("CHIP_ROW_H"),
@@ -3843,7 +3435,7 @@ mod tests {
             slice.contains("paint_empty_chip_state(ui)"),
             "empty ranking must paint a muted placeholder, not a blank row: {slice}"
         );
-        let empty = include_str!("cards.rs")
+        let empty = include_str!("app/chips.rs")
             .split("pub fn paint_empty_chip_state(")
             .nth(1)
             .and_then(|s| s.split("pub fn quick_chip_row(").next())
