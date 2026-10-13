@@ -1432,6 +1432,8 @@ mod tests {
     #[test]
     fn ab_prompt_eval_passes_gate() {
         let report = ab::run_ab(ab::DEFAULT_MODEL, &ab::CandidateSuffix).expect("ab eval");
-        report.gate().expect("variant must not regress success rate");
+        report
+            .gate()
+            .expect("variant must not regress success rate");
     }
 }
