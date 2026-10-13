@@ -4920,6 +4920,11 @@ impl Cabin {
     /// Titlebar × keeps close-to-tray; only this path sets `want_quit`.
     fn quit_from_tray(&mut self, ctx: &egui::Context) {
         self.want_quit = true;
+        #[cfg(debug_assertions)]
+        assert!(
+            !crate::tray::ignore_close_request(self.window_visible, true, true),
+            "tray Quit must not CancelClose on a hidden cabin"
+        );
         self.kill_bg_runs();
         self.halt_in_flight();
         if self.hub_on {
