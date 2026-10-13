@@ -28127,13 +28127,18 @@ fn memory_repo_turn_end_writes_one_trail_and_a_scratch_chat_writes_none() {
         .join("amr")
         .join("nodes")
         .join(format!("{}.md", grokhub_core::amr::trail_id(&dock_id, 1)));
-    spike3a_wait(&mut || trail.is_file());
-    let md = std::fs::read_to_string(&trail).unwrap();
+    let expected_tail = format!(
+        "---\nTurn 1: 1 step.\nTools: click x1\nDecisions: allow 1\nScreen changed: not measured\nFindings: none\nVerify: none\nSpans: {dock_id}:1791331200000\n"
+    );
+    // Wait for the body, not just create: remember used to publish an empty file first.
+    let mut md = String::new();
+    spike3a_wait(&mut || {
+        md = std::fs::read_to_string(&trail).unwrap_or_default();
+        md.ends_with(&expected_tail)
+    });
     assert!(
-        md.ends_with(&format!(
-            "---\nTurn 1: 1 step.\nTools: click x1\nDecisions: allow 1\nScreen changed: not measured\nFindings: none\nVerify: none\nSpans: {dock_id}:1791331200000\n"
-        )),
-        "{md}"
+        md.ends_with(&expected_tail),
+        "trail body missing after wait: {md}"
     );
     assert!(
         md.contains(&format!("source: span:{dock_id}:1791331200000\n")),

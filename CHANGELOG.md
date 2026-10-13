@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Fixed: AMR `remember` publishes nodes via temp + exclusive hard_link/rename (with `sync_all`), so a trail file is never visible empty mid-write; the turn-end trail test waits for the body, not just `is_file()`.
+- Fixed: proactive dismiss mute expiry in tests is driven from the dismiss wall clock (not `t0 + DAY + 2s`), and Pulse feed-instruction rewrite waits up to 30s so Windows CI load does not flake the mock rewrite.
 - The main chat empty surface no longer shows the Home/event card deck; cards live in Pulse.
 - Chat turns that ran harness tools show an expandable **Evidence** receipt under the reply: goal, plan status, actions, checks, changes, confidence, and recovery. Built from existing redacted spans and outcomes (no new log). A successful tool is not treated as proof the goal succeeded; missing sections say unavailable.
 - Imagine UI finish: Agent More offers model and 1–10 image count (sprite stills, not an empty menu); image count is a ± stepper to the API’s 1–10 range; Results use ghost pills like the stage; a failed stage shows Retry; More sits with Style/Aspect instead of a lone second row; docs match Account-reuse auth.
