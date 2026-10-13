@@ -1,0 +1,29 @@
+{
+  "version": "b11602",
+  "platforms": {
+    "linux-x86_64": {
+      "url": "https://github.com/ggml-org/llama.cpp/releases/download/b11602/llama-b11602-bin-ubuntu-x64.tar.gz",
+      "size": 17734896,
+      "sha256": "3dd92047a04a69c331fb3674d0b381b0234eadb2794b7496f6e315fa940b6ae6",
+      "format": "tar.gz"
+    },
+    "linux-aarch64": {
+      "url": "https://github.com/ggml-org/llama.cpp/releases/download/b11602/llama-b11602-bin-ubuntu-arm64.tar.gz",
+      "size": 13842373,
+      "sha256": "442ddd53f40d7d84c996abe2c9f41829bfacf1a84f535d7964e56d62495cbcc1",
+      "format": "tar.gz"
+    },
+    "windows-x86_64": {
+      "url": "https://github.com/ggml-org/llama.cpp/releases/download/b11602/llama-b11602-bin-win-cpu-x64.zip",
+      "size": 19513972,
+      "sha256": "4f3da792ec5eee550eca467807bfc5f8bc3e30836870587fdd73dc4a4ea24a5f",
+      "format": "zip"
+    },
+    "windows-aarch64": {
+      "url": "https://github.com/ggml-org/llama.cpp/releases/download/b11602/llama-b11602-bin-win-cpu-arm64.zip",
+      "size": 12383328,
+      "sha256": "ae948d97623572f1a9a937a53c7e0cc1491fab4528f1ed0ee4d612895062bbf4",
+      "format": "zip"
+    }
+  }
+}

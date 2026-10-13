@@ -11,6 +11,7 @@
 - Connectors: Marketplace and Settings sign-in for installed MCP connectors — browser OAuth seals behind a credentials card; API keys seal in the OS keyring after the same card.
 - Agent: optional compaction of large tool outputs (`tool_output_compact.toml`, off by default). When enabled, oversized tool results are summarized for the model with key facts plus a handle and workspace spool path so `read_file` can recover the full text; the stable system prompt is unchanged.
 - Connectors: Marketplace **Refresh catalog** pulls display metadata from the official MCP registry (https allowlist + SSRF rail) for connectors already in the bundled list; install recipes stay bundled.
+- Local AI: Settings → Cabin defaults → **Get engine** downloads a pinned official llama.cpp `llama-server` build for this OS/arch into `{config}/bin` (HTTPS to GitHub only, resumable, SHA-256 checked). No engine ships in installers; local AI stays off until you opt in.
 
 ## 3.0.2 — 2026-10-13
 
