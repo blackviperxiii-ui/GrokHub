@@ -104,19 +104,8 @@ fn restrict_private(path: &Path) {
 #[cfg(not(any(unix, windows)))]
 fn restrict_private(_path: &Path) {}
 
-/// True when an SDDL DACL grants read/write to Everyone, Users, Authenticated Users,
-/// Guests, or Anonymous. Owner / SYSTEM SIDs are fine (`OW` expands to `S-1-5-21-…`).
-#[cfg(any(windows, test))]
-pub(crate) fn sddl_allows_world(sddl: &str) -> bool {
-    sddl.split('(')
-        .skip(1)
-        .map(|ace| ace.split(')').next().unwrap_or(""))
-        .filter(|ace| ace.starts_with('A') || ace.starts_with("OA"))
-        .any(|ace| {
-            let trustee = ace.rsplit(';').next().unwrap_or("");
-            matches!(trustee, "WD" | "BU" | "AU" | "BG" | "AN")
-        })
-}
+#[cfg(test)]
+pub(crate) use grokhub_core::sddl::sddl_allows_world;
 
 fn is_private_file(path: &Path) -> bool {
     #[cfg(unix)]
@@ -1840,7 +1829,7 @@ mod tests {
             !src.contains(concat!("File::", "create(path)")),
             "Windows create_private must not be a no-op File create"
         );
-        let acl = include_str!("win_acl.rs");
+        let acl = include_str!("../../grokhub-core/src/win_acl.rs");
         assert!(
             acl.contains("USER_ONLY_SDDL")
                 && acl.contains("D:P(A;;FA;;;SY)(A;;FA;;;OW)")

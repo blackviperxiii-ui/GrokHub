@@ -91,6 +91,7 @@ pub mod review;
 pub mod rewind;
 pub mod run_metrics;
 pub mod screen_record;
+pub mod sddl;
 pub mod self_review;
 pub mod shortcuts;
 pub mod situation;
@@ -112,6 +113,8 @@ pub mod usage;
 pub mod verify;
 pub mod voice;
 pub mod what_changed;
+#[cfg(windows)]
+pub mod win_acl;
 pub mod windshield;
 pub mod wire;
 pub mod workboard;

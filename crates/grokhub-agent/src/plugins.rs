@@ -379,9 +379,12 @@ pub fn fetch_marketplace(url: &str) -> Result<Vec<MarketEntry>, String> {
         &crate::perm::config_dir(),
         &crate::harness::EgressReq::new(url, &[]),
     )?;
+    // No env proxy: HTTP(S)_PROXY would dial the proxy and skip public_only_resolve
+    // on the target (same as web_fetch / Pulse).
     let agent = ureq::AgentBuilder::new()
         .timeout(Duration::from_secs(20))
         .redirects(0)
+        .resolver(crate::public_only_resolve)
         .build();
     let response = agent
         .get(url)
@@ -1722,6 +1725,10 @@ fn https_index_url(url: &str) -> Result<&str, String> {
     if rest.is_empty() || rest.starts_with('/') {
         return Err("marketplace index url has no host".into());
     }
+    // Same public-address rail as Pulse / web_fetch before the GET.
+    if !grokhub_core::public_http_url(url) {
+        return Err("marketplace index url is not a public address".into());
+    }
     Ok(url)
 }
 
@@ -2505,6 +2512,39 @@ mod tests {
         assert!(fetch_marketplace("file:///tmp/index.json").is_err());
         assert!(fetch_marketplace("http://127.0.0.1/index.json").is_err());
         assert!(fetch_marketplace("-https://example.invalid/index.json").is_err());
+        assert_eq!(
+            https_index_url("https://127.0.0.1/index.json").unwrap_err(),
+            "marketplace index url is not a public address"
+        );
+        assert_eq!(
+            https_index_url("https://169.254.169.254/latest").unwrap_err(),
+            "marketplace index url is not a public address"
+        );
+        assert_eq!(
+            https_index_url("https://10.1.2.3/index.json").unwrap_err(),
+            "marketplace index url is not a public address"
+        );
+        assert_eq!(
+            https_index_url("https://example.invalid/index.json").unwrap(),
+            "https://example.invalid/index.json"
+        );
+    }
+
+    #[test]
+    fn marketplace_fetch_dials_through_the_public_only_resolver() {
+        let arm = include_str!("plugins.rs")
+            .split("pub fn fetch_marketplace(")
+            .nth(1)
+            .and_then(|s| s.split("pub fn load_marketplace_file(").next())
+            .expect("fetch_marketplace");
+        assert!(
+            arm.contains(".resolver(crate::public_only_resolve)"),
+            "marketplace index must dial through public_only_resolve: {arm}"
+        );
+        assert!(
+            !arm.contains("env_proxy") && !arm.to_ascii_lowercase().contains("http_proxy"),
+            "env proxy would skip public_only_resolve on the target: {arm}"
+        );
     }
 
     #[test]

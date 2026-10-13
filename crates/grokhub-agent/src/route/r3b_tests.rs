@@ -307,6 +307,27 @@ fn usable_needs_a_key_and_a_grant_that_covers_the_data() {
 }
 
 #[test]
+fn provider_agent_dials_through_the_public_only_resolver() {
+    let arm = include_str!("providers.rs")
+        .split("fn agent() -> ureq::Agent {")
+        .nth(1)
+        .and_then(|s| s.split("fn reply(").next())
+        .expect("provider agent");
+    assert!(
+        arm.contains(".resolver(crate::public_only_resolve)"),
+        "provider dials must use public_only_resolve: {arm}"
+    );
+    assert!(
+        arm.contains(".redirects(0)"),
+        "provider dials must not follow redirects blindly: {arm}"
+    );
+    assert!(
+        !arm.contains("env_proxy") && !arm.to_ascii_lowercase().contains("http_proxy"),
+        "env proxy would skip public_only_resolve on the target: {arm}"
+    );
+}
+
+#[test]
 fn base_urls_are_https_hosts_and_xai_is_built_in() {
     assert_eq!(
         parse_base_url(" https://openrouter.ai/api/v1/ ").unwrap(),
@@ -338,7 +359,19 @@ fn base_urls_are_https_hosts_and_xai_is_built_in() {
     );
     assert_eq!(
         parse_base_url("https://localhost").unwrap_err(),
-        "That address has no host."
+        "That address isn't a public https URL."
+    );
+    assert_eq!(
+        parse_base_url("https://127.0.0.1/v1").unwrap_err(),
+        "That address isn't a public https URL."
+    );
+    assert_eq!(
+        parse_base_url("https://169.254.169.254/latest").unwrap_err(),
+        "That address isn't a public https URL."
+    );
+    assert_eq!(
+        parse_base_url("https://10.0.0.5/v1").unwrap_err(),
+        "That address isn't a public https URL."
     );
     let a = providers::Provider {
         id: "anthropic".into(),

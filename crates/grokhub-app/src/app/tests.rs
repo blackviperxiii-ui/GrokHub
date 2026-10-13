@@ -21260,6 +21260,13 @@ fn reflect_poll_reports_a_drop() {
 // Folded from PR #298.
 #[test]
 fn hub_sync_poll_reports_a_drop() {
+    // Pin a fresh config root: poll_sync on disconnect consults read_key, and a
+    // leftover learned-key.id / sealed file under the shared home config would
+    // turn a plain drop into "Hub sync not sent: … key missing".
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("hub-sync-drop");
+    let _ = std::fs::create_dir_all(&root);
+    let _pin = crate::config::TestConfigDir::set(root);
     let mut cabin = Cabin::quiet_for_test();
     cabin.status = "Harbor".into();
     let nav = cabin.nav;
