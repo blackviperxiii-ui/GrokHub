@@ -35,6 +35,24 @@ impl ConnectivityState {
     }
 }
 
+/// Cabin UI chip: Online / Reconnecting / Offline (local engine).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConnectivityUiPhase {
+    Online,
+    Reconnecting,
+    OfflineLocal,
+}
+
+impl ConnectivityUiPhase {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Online => "Online",
+            Self::Reconnecting => "Reconnecting",
+            Self::OfflineLocal => "Offline (local engine)",
+        }
+    }
+}
+
 /// What a transport failure might mean for connectivity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TransportHint {
@@ -152,6 +170,22 @@ impl Connectivity {
         self.live
     }
 
+    /// Chip phase from live + debounced pending state.
+    pub fn ui_phase(&self) -> ConnectivityUiPhase {
+        if let Some(pending) = self.pending {
+            if pending == ConnectivityState::Online && self.live != ConnectivityState::Online {
+                return ConnectivityUiPhase::Reconnecting;
+            }
+            if pending == ConnectivityState::Offline && self.live == ConnectivityState::Online {
+                return ConnectivityUiPhase::Online;
+            }
+        }
+        match self.live {
+            ConnectivityState::Offline => ConnectivityUiPhase::OfflineLocal,
+            ConnectivityState::Online | ConnectivityState::Unknown => ConnectivityUiPhase::Online,
+        }
+    }
+
     /// Windows NLM (or any OS hook): `true` when the OS says internet is up.
     pub fn note_os_online(&mut self, online: bool, now_ms: u64) {
         self.os_online = Some(online);
@@ -161,7 +195,12 @@ impl Connectivity {
 
     /// Classified provider / transport failure.
     pub fn note_transport_error(&mut self, err: &reqwest::Error, now_ms: u64) {
-        match classify_reqwest_error(err) {
+        self.note_transport_hint(classify_reqwest_error(err), now_ms);
+    }
+
+    /// Classified provider / transport signal (reqwest, ureq, probes).
+    pub fn note_transport_hint(&mut self, hint: TransportHint, now_ms: u64) {
+        match hint {
             TransportHint::OfflineCandidate => {
                 self.queue_pending(ConnectivityState::Offline, now_ms);
             }
@@ -279,13 +318,53 @@ fn global_slot() -> &'static Mutex<Option<Arc<Mutex<Connectivity>>>> {
 
 /// Feed transport errors into the installed global engine, if any.
 pub fn note_global_transport_error(err: &reqwest::Error, now_ms: u64) {
+    note_global_transport_hint(classify_reqwest_error(err), now_ms);
+}
+
+/// Feed a classified transport hint into the installed global engine, if any.
+pub fn note_global_transport_hint(hint: TransportHint, now_ms: u64) {
+    if hint == TransportHint::Inconclusive {
+        return;
+    }
     let Ok(slot) = global_slot().lock() else {
         return;
     };
     if let Some(inner) = slot.as_ref() {
         if let Ok(mut g) = inner.lock() {
-            g.note_transport_error(err, now_ms);
+            g.note_transport_hint(hint, now_ms);
         }
+    }
+}
+
+/// Any successful HTTP response to the provider means reachable.
+pub fn note_global_transport_success(now_ms: u64) {
+    let Ok(slot) = global_slot().lock() else {
+        return;
+    };
+    if let Some(inner) = slot.as_ref() {
+        if let Ok(mut g) = inner.lock() {
+            g.note_transport_success(now_ms);
+        }
+    }
+}
+
+/// UI chip phase from the installed global engine, or debounced live state.
+pub fn global_ui_phase() -> ConnectivityUiPhase {
+    let Ok(slot) = global_slot().lock() else {
+        return ui_phase_from_live(state());
+    };
+    if let Some(inner) = slot.as_ref() {
+        if let Ok(g) = inner.lock() {
+            return g.ui_phase();
+        }
+    }
+    ui_phase_from_live(state())
+}
+
+fn ui_phase_from_live(live: ConnectivityState) -> ConnectivityUiPhase {
+    match live {
+        ConnectivityState::Offline => ConnectivityUiPhase::OfflineLocal,
+        ConnectivityState::Online | ConnectivityState::Unknown => ConnectivityUiPhase::Online,
     }
 }
 
@@ -452,6 +531,25 @@ mod tests {
 
         c.note_transport_success(6_000);
         assert_eq!(c.tick(8_100), Some(ConnectivityState::Online));
+    }
+
+    #[test]
+    fn ui_phase_reconnecting_while_pending_online() {
+        let mut c = Connectivity::new(2_000);
+        c.live = ConnectivityState::Offline;
+        c.pending = Some(ConnectivityState::Online);
+        c.pending_since_ms = 0;
+        assert_eq!(c.ui_phase(), ConnectivityUiPhase::Reconnecting);
+        c.live = ConnectivityState::Online;
+        c.pending = None;
+        assert_eq!(c.ui_phase(), ConnectivityUiPhase::Online);
+        c.live = ConnectivityState::Offline;
+        c.pending = None;
+        assert_eq!(c.ui_phase(), ConnectivityUiPhase::OfflineLocal);
+        assert_eq!(
+            ConnectivityUiPhase::OfflineLocal.label(),
+            "Offline (local engine)"
+        );
     }
 
     #[test]
