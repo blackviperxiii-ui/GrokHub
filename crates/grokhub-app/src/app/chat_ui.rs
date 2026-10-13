@@ -122,6 +122,19 @@ fn paint_find_mark(ui: &egui::Ui, row: egui::Rect, current: bool) {
     }
 }
 
+/// U1 kit badge for cabin connectivity (Online / Reconnecting / Offline local).
+pub(super) fn paint_connectivity_status_chip(ui: &mut egui::Ui) {
+    use crate::ui_kit::{badge, BadgeTone};
+    use grokhub_core::connectivity::{global_ui_phase, ConnectivityUiPhase};
+    let phase = global_ui_phase();
+    let tone = match phase {
+        ConnectivityUiPhase::Online => BadgeTone::Neutral,
+        ConnectivityUiPhase::Reconnecting => BadgeTone::Accent,
+        ConnectivityUiPhase::OfflineLocal => BadgeTone::Warning,
+    };
+    badge(ui, phase.label(), tone);
+}
+
 /// Compact, Copy session, Export. Same gates the composer pills used.
 pub(super) fn session_menu_enabled(has_messages: bool, usage_empty: bool) -> (bool, bool, bool) {
     let compact = has_messages || !usage_empty;
@@ -2490,14 +2503,15 @@ impl Cabin {
                 match slot {
                     ComposerStackSlot::AuthBanner => self.ui_native_auth_banner(ui),
                     ComposerStackSlot::ContextBar => {
-                        if !self.grok_usage.is_empty() {
-                            ui.horizontal(|ui| {
-                                ui.spacing_mut().item_spacing.x = 8.0;
+                        let show_usage = !self.grok_usage.is_empty();
+                        ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing.x = 8.0;
+                            if show_usage {
                                 let used = self.grok_usage.context_used();
                                 let window = self.grok_usage.context_window().max(1);
                                 let frac = (used as f32 / window as f32).clamp(0.0, 1.0);
                                 let line = grok_context_line(&self.grok_usage);
-                                let bar_w = ui.available_width().max(48.0);
+                                let bar_w = (ui.available_width() - 120.0).max(48.0);
                                 let (rect, _) = ui.allocate_exact_size(
                                     egui::vec2(bar_w, 14.0),
                                     egui::Sense::hover(),
@@ -2515,9 +2529,20 @@ impl Cabin {
                                     egui::FontId::proportional(11.0),
                                     crate::theme::muted(),
                                 );
-                            });
-                            ui.add_space(4.0);
-                        }
+                            } else {
+                                ui.allocate_space(egui::vec2(
+                                    (ui.available_width() - 120.0).max(0.0),
+                                    0.0,
+                                ));
+                            }
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    paint_connectivity_status_chip(ui);
+                                },
+                            );
+                        });
+                        ui.add_space(4.0);
                     }
                     ComposerStackSlot::SessionTools => {
                         self.paint_session_tools(ui);
