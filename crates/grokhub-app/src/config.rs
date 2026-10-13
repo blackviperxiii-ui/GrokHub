@@ -476,10 +476,6 @@ pub struct AppConfig {
     /// Settings → Pulse → Sources: which free sources run and what they follow.
     #[serde(default)]
     pub pulse_sources: grokhub_core::pulse_sources::SourceSettings,
-    /// Settings → Behavior. The old card deck over the empty chat. Pulse holds
-    /// the cards now, so it is off unless turned back on.
-    #[serde(default)]
-    pub home_deck: bool,
     /// Where `/recall` reads memory. Omitted from `app.json` while this stays
     /// legacy, so an old file and a default save do not grow a new key.
     /// Opt in with `"memory_backend": "amr"` (snake_case, not camelCase).
@@ -670,7 +666,6 @@ impl Default for AppConfig {
             feed_pulse: FeedPulse::default(),
             feed_instructions: String::new(),
             pulse_sources: Default::default(),
-            home_deck: false,
             memory_backend: grokhub_core::amr::MemoryBackend::Legacy,
         }
     }

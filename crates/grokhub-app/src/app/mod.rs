@@ -227,6 +227,7 @@ pub(super) fn token_budget_notice(
     }
 }
 use confirm::*;
+#[cfg(test)]
 use feed_ui::*;
 use glance::*;
 use imagine::*;
@@ -503,8 +504,6 @@ pub struct Cabin {
     updates: Vec<grokhub_core::UpdateCard>,
     /// Learned Home weights. `card_prefs.json`. Not part of AppConfig.
     card_prefs: grokhub_core::CardPrefs,
-    /// The folded "More (n)" list stays open until the cabin exits.
-    home_fold_open: bool,
     grok_loop_rx: Option<(String, mpsc::Receiver<String>)>,
     night_nl: String,
     /// One-shot watch on the Automations page. Not a second clock.
@@ -1113,7 +1112,6 @@ impl Cabin {
             grok_loops: crate::loops::load(),
             updates: crate::feed::load(),
             card_prefs: crate::card_prefs::load(),
-            home_fold_open: false,
             grok_loop_rx: None,
             night_nl: String::new(),
             watch_once: false,
@@ -1558,7 +1556,6 @@ impl Cabin {
             grok_loops: Vec::new(),
             updates: Vec::new(),
             card_prefs: grokhub_core::CardPrefs::default(),
-            home_fold_open: false,
             grok_loop_rx: None,
             night_nl: String::new(),
             watch_once: false,

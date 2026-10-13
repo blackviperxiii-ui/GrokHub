@@ -2328,13 +2328,6 @@ impl Cabin {
         } else {
             0.0
         };
-        // The deck moved to Pulse (2.10.91). Settings → Behavior can bring it back.
-        let feed_n = if pulse_on && self.cfg.home_deck {
-            home_feed_count(&self.updates, &self.cfg.feed_pulse, now_ms())
-        } else {
-            0
-        };
-        let feed_h = collapsed_stack_h(feed_n);
         let device_on =
             pulse_on && device_glance(self.hub_on, self.last_frame_url.as_deref()).is_some();
         let device_h = if device_on { 26.0 } else { 0.0 };
@@ -2386,25 +2379,14 @@ impl Cabin {
                         self.paint_inbox_only(ui);
                     }
                     self.paint_try_again(ui);
-                    if pulse_on && (feed_n > 0 || device_on) {
-                        let below =
-                            feed_h + device_h + if feed_n > 0 && device_on { 4.0 } else { 0.0 };
+                    if pulse_on && device_on {
                         let gap = ui.available_height();
-                        ui.add_space(((gap - below) * 0.5).max(0.0));
-                        if feed_n > 0 {
-                            self.paint_update_feed(ui, pane_w);
-                        }
-                        if device_on {
-                            if feed_n > 0 {
-                                ui.add_space(4.0);
-                            }
-                            self.paint_device_glance_row(ui, pane_w);
-                        }
+                        ui.add_space(((gap - device_h) * 0.5).max(0.0));
+                        self.paint_device_glance_row(ui, pane_w);
                     }
                 },
             );
         });
-        self.paint_home_deck_over_chat(ui);
     }
 
     /// View plan. Not slash-only.
