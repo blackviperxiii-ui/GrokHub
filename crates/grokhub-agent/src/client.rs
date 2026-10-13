@@ -518,8 +518,15 @@ impl XaiClient {
         let response = call.send_json(body);
         drop(sent);
         let response = match response {
-            Ok(resp) => resp,
+            Ok(resp) => {
+                grokhub_core::connectivity::note_global_transport_success(grokhub_core::now_ms());
+                resp
+            }
             Err(ureq::Error::Status(status, resp)) => {
+                grokhub_core::connectivity::note_global_transport_hint(
+                    grokhub_core::connectivity::classify_http_status(status),
+                    grokhub_core::now_ms(),
+                );
                 let retry_after = retry_after_header(&resp);
                 let message = read_error_body(resp);
                 return Err(map_http_status(
@@ -529,7 +536,11 @@ impl XaiClient {
                     self.auth_kind,
                 ));
             }
-            Err(ureq::Error::Transport(err)) => return Err(classify_transport(&err)),
+            Err(ureq::Error::Transport(err)) => {
+                let client_err = classify_transport(&err);
+                crate::route::connectivity::note_ureq_transport(&ureq::Error::Transport(err));
+                return Err(client_err);
+            }
         };
         read_sse(response.into_reader(), cancel, sink)
     }
