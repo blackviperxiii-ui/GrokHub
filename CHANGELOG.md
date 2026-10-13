@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Dreambeans daily drop: Brain 4 registers an overnight `daily_drop` local job that calls the core picker on ranked Pulse rows (off by default; no model or Google I/O).
+
 ## 3.0.2 — 2026-10-13
 
 - Security: MCP legacy SSE absolute `endpoint` URLs must stay on the connect host (no pivot to link-local / LAN / loopback). Custom provider base URLs and marketplace index URLs refuse non-public addresses and dial through `public_only_resolve` with redirects off (same rail as Pulse / `web_fetch`). `hub-state.json` writes use a user-only Windows DACL before bytes land (pair tokens), matching `secrets.json`.
