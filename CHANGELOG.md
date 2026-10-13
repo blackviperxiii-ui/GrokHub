@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 3.0.2 — 2026-10-13
+
 - Security: MCP legacy SSE absolute `endpoint` URLs must stay on the connect host (no pivot to link-local / LAN / loopback). Custom provider base URLs and marketplace index URLs refuse non-public addresses and dial through `public_only_resolve` with redirects off (same rail as Pulse / `web_fetch`). `hub-state.json` writes use a user-only Windows DACL before bytes land (pair tokens), matching `secrets.json`.
 - Fixed: Pulse **More like this** no longer clears the related-search queue when Hacker News, Reddit, and Web search are all off, and the status says to turn one on instead of claiming the ask is queued.
 - Fixed: AMR `remember` publishes nodes via temp + exclusive hard_link/rename (with `sync_all`), so a trail file is never visible empty mid-write; the turn-end trail test waits for the body, not just `is_file()`.
@@ -29,6 +31,9 @@
 - Fixed: cabin skills under the settings `skills/` folder (the same ones `skill_list` shows) load with the `skill` tool; names normalize so `GamingProfile` and `steamlibreview` resolve instead of `unknown skill`.
 - Fixed: the system prompt no longer claims every chat is a permanent read-only phase; it says what tools are available, to prefer sealed Installed-app Memory over `~/.steam` workspace walks, and not to invent OS-permission "fixes".
 - Fixed: `report_findings` one-tap pills that ask to grant workspace/OS path access or "activate" a skill are refused, so path-restriction and skill-activation doom-loops cannot post.
+
+- Linux: `grokhub-linux-v3.0.2.tar.gz` and AUR `pkgver=3.0.2`.
+- Windows: `GrokHub-Setup-3.0.2.exe` and `grokhub-windows-v3.0.2.zip`.
 
 ## 3.0.1 — 2026-10-12
 
