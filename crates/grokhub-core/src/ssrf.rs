@@ -9,6 +9,40 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, ToSocketAddrs};
 /// Official MCP registry host for Marketplace catalog refresh.
 pub const MCP_REGISTRY_HOST: &str = "registry.modelcontextprotocol.io";
 
+/// Hosts allowed for the pinned on-device engine download (llama.cpp releases).
+pub const RUNTIME_DOWNLOAD_HOSTS: &[&str] = &["github.com", "objects.githubusercontent.com"];
+
+/// `true` when `host` may serve a runtime engine download.
+pub fn runtime_download_host_ok(host: &str) -> bool {
+    let host = host.trim().trim_end_matches('.').to_ascii_lowercase();
+    RUNTIME_DOWNLOAD_HOSTS.iter().any(|h| host == *h)
+}
+
+/// Refuse non-HTTPS runtime downloads and hosts outside [`RUNTIME_DOWNLOAD_HOSTS`].
+pub fn runtime_download_url_ok(url: &str) -> Result<(), String> {
+    let url = url.trim();
+    if !url.starts_with("https://") {
+        return Err("engine download must use HTTPS".into());
+    }
+    let rest = url
+        .strip_prefix("https://")
+        .ok_or_else(|| "engine download URL is invalid".to_string())?;
+    let host = rest
+        .split(['/', '?', '#'])
+        .next()
+        .filter(|h| !h.is_empty())
+        .ok_or_else(|| "engine download URL is missing a host".to_string())?;
+    if host_name_blocked(host) {
+        return Err(format!("engine download host {host} is not allowed"));
+    }
+    if !runtime_download_host_ok(host) {
+        return Err(format!(
+            "engine download host {host} is not on the allowlist"
+        ));
+    }
+    Ok(())
+}
+
 /// True when a hostname is loopback-by-name (no DNS).
 pub fn host_name_blocked(host: &str) -> bool {
     let host = host.trim().trim_end_matches('.').to_ascii_lowercase();
@@ -193,6 +227,17 @@ mod tests {
         assert!(host_name_blocked("LOCALHOST."));
         assert!(host_name_blocked("foo.localhost"));
         assert!(!host_name_blocked("example.com"));
+    }
+
+    #[test]
+    fn runtime_download_urls_are_https_and_allowlisted() {
+        let ok = "https://github.com/ggml-org/llama.cpp/releases/download/b11602/llama-b11602-bin-ubuntu-x64.tar.gz";
+        assert_eq!(runtime_download_url_ok(ok), Ok(()));
+        let cdn = "https://objects.githubusercontent.com/github-production-release-asset-2e65be/123/456?X-Amz=1";
+        assert_eq!(runtime_download_url_ok(cdn), Ok(()));
+        assert!(runtime_download_url_ok("http://github.com/x").is_err());
+        assert!(runtime_download_url_ok("https://evil.com/x").is_err());
+        assert!(runtime_download_url_ok("https://localhost/x").is_err());
     }
 
     #[test]
