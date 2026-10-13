@@ -208,151 +208,146 @@ impl Cabin {
             .cloned()
             .unwrap_or_default();
         let resp = card_frame(ui, CardVariant::Outlined, true, |ui| {
-                ui.set_width(ui.available_width());
-                ui.horizontal(|ui| {
-                    type_line(ui, card);
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if crate::cards::ghost_pill(ui, "Close") {
-                            *act = Some(IdeaAct::Close(id.clone()));
-                        }
-                        if crate::cards::ghost_pill(ui, "Delete") {
-                            *act = Some(IdeaAct::Delete(id.clone()));
-                        }
-                        if !card.built && crate::cards::ghost_pill(ui, "To workboard") {
-                            *act = Some(IdeaAct::Board(id.clone()));
-                        }
-                        if crate::cards::white_pill(ui, "Apply") {
-                            *act = Some(IdeaAct::Apply(id.clone()));
-                        }
-                    });
-                });
-                ui.label(
-                    RichText::new(&card.title)
-                        .size(crate::theme::FONT_SECTION)
-                        .strong()
-                        .color(crate::theme::fg()),
-                );
-                if let Some(body) = card.body.as_deref().filter(|b| !b.trim().is_empty()) {
-                    ui.label(
-                        RichText::new(body)
-                            .size(crate::theme::FONT_BODY)
-                            .color(crate::theme::muted()),
-                    );
-                }
-                if let Some(details) = card.details.as_deref().filter(|d| {
-                    !d.trim().is_empty() && Some(d.trim()) != card.body.as_deref().map(str::trim)
-                }) {
-                    ui.add_space(8.0);
-                    crate::cards::section_label(ui, "Details");
-                    ui.label(
-                        RichText::new(details)
-                            .size(crate::theme::FONT_BODY)
-                            .color(crate::theme::fg()),
-                    );
-                }
-                ui.add_space(8.0);
-                crate::cards::section_label(
-                    ui,
-                    grokhub_core::pulse::pulse_type(card).apply_heading(),
-                );
-                let mut action = card.idea_action();
-                let edit = ui.add(
-                    egui::TextEdit::multiline(&mut action)
-                        .id(action_edit_id(&id))
-                        .desired_rows(3)
-                        .hint_text(crate::theme::hint("Write what this should do"))
-                        .desired_width(f32::INFINITY),
-                );
-                if edit.changed() {
-                    *act = Some(IdeaAct::Draft {
-                        id: id.clone(),
-                        text: action.clone(),
-                        save: false,
-                    });
-                } else if edit.lost_focus() && card.modified {
-                    *act = Some(IdeaAct::Draft {
-                        id: id.clone(),
-                        text: action.clone(),
-                        save: true,
-                    });
-                }
-                ui.add_space(8.0);
-                crate::cards::section_label(ui, "Talk it through");
-                egui::ScrollArea::vertical()
-                    .id_salt(("idea-chat-scroll", id.as_str()))
-                    .stick_to_bottom(true)
-                    .max_height(220.0)
-                    .show(ui, |ui| {
-                        ui.set_width(ui.available_width());
-                        let opening = [("assistant".to_string(), idea_chat_open_line(card))];
-                        let messages: Vec<(String, String)> = match &thread {
-                            Some((_, m)) if !m.is_empty() => m.iter().cloned().collect(),
-                            _ => opening.to_vec(),
-                        };
-                        for (role, text) in &messages {
-                            let mine = role == "user";
-                            // A stored turn can carry thoughts and tool rows; the card shows replies.
-                            let text = if mine {
-                                text.clone()
-                            } else {
-                                grokhub_core::assistant_prose(text)
-                            };
-                            if text.trim().is_empty() {
-                                continue;
-                            }
-                            ui.label(
-                                RichText::new(if mine { "You" } else { "Agent" })
-                                    .size(crate::theme::FONT_TIP)
-                                    .color(crate::theme::subtle()),
-                            );
-                            ui.label(RichText::new(&text).size(crate::theme::FONT_BODY).color(
-                                if mine {
-                                    crate::theme::fg()
-                                } else {
-                                    crate::theme::muted()
-                                },
-                            ));
-                            ui.add_space(6.0);
-                        }
-                        if thinking {
-                            let live = if stream.trim().is_empty() {
-                                "Thinking…".to_string()
-                            } else {
-                                stream.clone()
-                            };
-                            ui.label(
-                                RichText::new(live)
-                                    .size(crate::theme::FONT_BODY)
-                                    .color(crate::theme::muted()),
-                            );
-                        }
-                    });
-                ui.add_space(6.0);
-                ui.horizontal(|ui| {
-                    let send_w = 64.0;
-                    let edit = ui.add(
-                        egui::TextEdit::singleline(&mut composer)
-                            .id(chat_edit_id(&id))
-                            .hint_text(crate::theme::hint("Ask the agent to change this…"))
-                            .desired_width((ui.available_width() - send_w).max(120.0)),
-                    );
-                    let enter = edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-                    if (enter || crate::cards::ghost_pill(ui, "Send"))
-                        && !composer.trim().is_empty()
-                    {
-                        *act = Some(IdeaAct::Send(id.clone()));
-                        // Stay in the box for the next line; the card stays open while you type.
-                        ui.memory_mut(|m| m.request_focus(chat_edit_id(&id)));
+            ui.set_width(ui.available_width());
+            ui.horizontal(|ui| {
+                type_line(ui, card);
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if crate::cards::ghost_pill(ui, "Close") {
+                        *act = Some(IdeaAct::Close(id.clone()));
+                    }
+                    if crate::cards::ghost_pill(ui, "Delete") {
+                        *act = Some(IdeaAct::Delete(id.clone()));
+                    }
+                    if !card.built && crate::cards::ghost_pill(ui, "To workboard") {
+                        *act = Some(IdeaAct::Board(id.clone()));
+                    }
+                    if crate::cards::white_pill(ui, "Apply") {
+                        *act = Some(IdeaAct::Apply(id.clone()));
                     }
                 });
-                if let Some(note) = &note {
-                    ui.label(
-                        RichText::new(note)
-                            .size(crate::theme::FONT_TIP)
-                            .color(crate::theme::setup()),
-                    );
+            });
+            ui.label(
+                RichText::new(&card.title)
+                    .size(crate::theme::FONT_SECTION)
+                    .strong()
+                    .color(crate::theme::fg()),
+            );
+            if let Some(body) = card.body.as_deref().filter(|b| !b.trim().is_empty()) {
+                ui.label(
+                    RichText::new(body)
+                        .size(crate::theme::FONT_BODY)
+                        .color(crate::theme::muted()),
+                );
+            }
+            if let Some(details) = card.details.as_deref().filter(|d| {
+                !d.trim().is_empty() && Some(d.trim()) != card.body.as_deref().map(str::trim)
+            }) {
+                ui.add_space(8.0);
+                crate::cards::section_label(ui, "Details");
+                ui.label(
+                    RichText::new(details)
+                        .size(crate::theme::FONT_BODY)
+                        .color(crate::theme::fg()),
+                );
+            }
+            ui.add_space(8.0);
+            crate::cards::section_label(ui, grokhub_core::pulse::pulse_type(card).apply_heading());
+            let mut action = card.idea_action();
+            let edit = ui.add(
+                egui::TextEdit::multiline(&mut action)
+                    .id(action_edit_id(&id))
+                    .desired_rows(3)
+                    .hint_text(crate::theme::hint("Write what this should do"))
+                    .desired_width(f32::INFINITY),
+            );
+            if edit.changed() {
+                *act = Some(IdeaAct::Draft {
+                    id: id.clone(),
+                    text: action.clone(),
+                    save: false,
+                });
+            } else if edit.lost_focus() && card.modified {
+                *act = Some(IdeaAct::Draft {
+                    id: id.clone(),
+                    text: action.clone(),
+                    save: true,
+                });
+            }
+            ui.add_space(8.0);
+            crate::cards::section_label(ui, "Talk it through");
+            egui::ScrollArea::vertical()
+                .id_salt(("idea-chat-scroll", id.as_str()))
+                .stick_to_bottom(true)
+                .max_height(220.0)
+                .show(ui, |ui| {
+                    ui.set_width(ui.available_width());
+                    let opening = [("assistant".to_string(), idea_chat_open_line(card))];
+                    let messages: Vec<(String, String)> = match &thread {
+                        Some((_, m)) if !m.is_empty() => m.iter().cloned().collect(),
+                        _ => opening.to_vec(),
+                    };
+                    for (role, text) in &messages {
+                        let mine = role == "user";
+                        // A stored turn can carry thoughts and tool rows; the card shows replies.
+                        let text = if mine {
+                            text.clone()
+                        } else {
+                            grokhub_core::assistant_prose(text)
+                        };
+                        if text.trim().is_empty() {
+                            continue;
+                        }
+                        ui.label(
+                            RichText::new(if mine { "You" } else { "Agent" })
+                                .size(crate::theme::FONT_TIP)
+                                .color(crate::theme::subtle()),
+                        );
+                        ui.label(RichText::new(&text).size(crate::theme::FONT_BODY).color(
+                            if mine {
+                                crate::theme::fg()
+                            } else {
+                                crate::theme::muted()
+                            },
+                        ));
+                        ui.add_space(6.0);
+                    }
+                    if thinking {
+                        let live = if stream.trim().is_empty() {
+                            "Thinking…".to_string()
+                        } else {
+                            stream.clone()
+                        };
+                        ui.label(
+                            RichText::new(live)
+                                .size(crate::theme::FONT_BODY)
+                                .color(crate::theme::muted()),
+                        );
+                    }
+                });
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                let send_w = 64.0;
+                let edit = ui.add(
+                    egui::TextEdit::singleline(&mut composer)
+                        .id(chat_edit_id(&id))
+                        .hint_text(crate::theme::hint("Ask the agent to change this…"))
+                        .desired_width((ui.available_width() - send_w).max(120.0)),
+                );
+                let enter = edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                if (enter || crate::cards::ghost_pill(ui, "Send")) && !composer.trim().is_empty() {
+                    *act = Some(IdeaAct::Send(id.clone()));
+                    // Stay in the box for the next line; the card stays open while you type.
+                    ui.memory_mut(|m| m.request_focus(chat_edit_id(&id)));
                 }
             });
+            if let Some(note) = &note {
+                ui.label(
+                    RichText::new(note)
+                        .size(crate::theme::FONT_TIP)
+                        .color(crate::theme::setup()),
+                );
+            }
+        });
         if thinking {
             ui.ctx().request_repaint();
         }
