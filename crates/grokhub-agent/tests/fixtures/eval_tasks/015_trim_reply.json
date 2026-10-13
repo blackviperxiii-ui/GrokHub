@@ -1,0 +1,17 @@
+{
+  "id": "015_trim_reply",
+  "prompt": "Reply with the word trim with no extra punctuation.",
+  "mode": "always",
+  "files": [],
+  "script": [
+    {
+      "type": "text",
+      "content": "trim",
+      "usage": { "input_tokens": 9, "output_tokens": 2 }
+    }
+  ],
+  "checks": [
+    { "type": "assistant_contains", "value": "trim" },
+    { "type": "no_permission_cards" }
+  ]
+}

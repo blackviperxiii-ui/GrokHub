@@ -1,0 +1,17 @@
+{
+  "id": "003_exact_ok",
+  "prompt": "Reply with exactly: ok",
+  "mode": "always",
+  "files": [],
+  "script": [
+    {
+      "type": "text",
+      "content": "ok",
+      "usage": { "input_tokens": 8, "output_tokens": 2 }
+    }
+  ],
+  "checks": [
+    { "type": "stop_reason", "value": "end_turn" },
+    { "type": "assistant_contains", "value": "ok" }
+  ]
+}
