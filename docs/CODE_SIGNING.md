@@ -15,12 +15,14 @@ Artifact layout and SignPath XML: [`.signpath/windows-release.xml`](../.signpath
 
 ## Team roles
 
-- **Committers and reviewers:** repository collaborators with write access to `blackviperxiii-ui/GrokHub`.
-- **Approvers:** repository owners who hold SignPath approval rights for the GrokHub signing policy (each release signing request is approved manually).
+- **Committers and reviewers:** Viper / [blackviperxiii-ui](https://github.com/blackviperxiii-ui)
+- **Approvers:** Viper / [blackviperxiii-ui](https://github.com/blackviperxiii-ui)
 
 ## Privacy
 
-This program will not transfer any information to other networked systems unless specifically requested by the user or the person installing or operating it. Chat, memory, and keys stay on the user’s computer. Optional features (account sign-in, updates, Pulse, connectors) contact remote services only when the user enables or uses them.
+GrokHub sends data only to the AI services and accounts the user configures, and only when the user asks. It collects no telemetry and transfers no information to the maintainer or other networked systems.
+
+See also [PRIVACY.md](../PRIVACY.md).
 
 ## SmartScreen
 
