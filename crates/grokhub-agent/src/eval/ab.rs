@@ -8,16 +8,12 @@ use std::time::Instant;
 use serde::Deserialize;
 use serde_json::Value;
 
-use crate::client::{
-    ClientError, FunctionCall, ResponsesRequest, StreamEvent, TurnOutput,
-};
+use crate::client::{ClientError, FunctionCall, ResponsesRequest, StreamEvent, TurnOutput};
 use crate::gate::PermMode;
-use crate::prompt::{PromptNeed, PromptProfile, system_prompt_with};
-use crate::{
-    run_unattended, AuthKind, CancelToken, HaltCheck, ModelClient, UnattendedRun, Usage,
-};
+use crate::prompt::{system_prompt_with, PromptNeed, PromptProfile};
+use crate::{run_unattended, AuthKind, CancelToken, HaltCheck, ModelClient, UnattendedRun, Usage};
 
-use super::metrics::{AbComparison, AbGateFailure, ArmMetrics, format_report, gate};
+use super::metrics::{format_report, gate, AbComparison, AbGateFailure, ArmMetrics};
 
 pub const EVAL_TASKS_DIR: &str = "tests/fixtures/eval_tasks";
 pub const DEFAULT_MODEL: &str = "grok-4.7";
@@ -98,13 +94,7 @@ pub struct BaselineSystem;
 
 impl BaselineSystem {
     pub fn system(workspace: &Path) -> String {
-        system_prompt_with(
-            PromptProfile::Chat,
-            "",
-            "",
-            workspace,
-            PromptNeed::FULL,
-        )
+        system_prompt_with(PromptProfile::Chat, "", "", workspace, PromptNeed::FULL)
     }
 }
 
@@ -151,7 +141,8 @@ pub fn fixtures_dir() -> PathBuf {
 
 pub fn load_tasks() -> Result<Vec<TaskFixture>, String> {
     let dir = fixtures_dir();
-    let entries = std::fs::read_dir(&dir).map_err(|err| format!("read {}: {err}", dir.display()))?;
+    let entries =
+        std::fs::read_dir(&dir).map_err(|err| format!("read {}: {err}", dir.display()))?;
     let mut tasks = Vec::new();
     for entry in entries {
         let entry = entry.map_err(|err| err.to_string())?;
@@ -161,8 +152,8 @@ pub fn load_tasks() -> Result<Vec<TaskFixture>, String> {
         }
         let raw = std::fs::read_to_string(&path)
             .map_err(|err| format!("read {}: {err}", path.display()))?;
-        let task: TaskFixture = serde_json::from_str(&raw)
-            .map_err(|err| format!("parse {}: {err}", path.display()))?;
+        let task: TaskFixture =
+            serde_json::from_str(&raw).map_err(|err| format!("parse {}: {err}", path.display()))?;
         tasks.push(task);
     }
     tasks.sort_by(|a, b| a.id.cmp(&b.id));
@@ -223,13 +214,7 @@ fn format_full_report(cmp: &AbComparison, runs: &[TaskRun]) -> String {
         let _ = writeln!(
             out,
             "- {} {} {}: {} ({} ms, {} tokens, {} tool calls)",
-            run.task_id,
-            arm,
-            status,
-            run.detail,
-            run.wall_ms,
-            tokens,
-            run.tool_calls
+            run.task_id, arm, status, run.detail, run.wall_ms, tokens, run.tool_calls
         );
     }
     out
@@ -328,7 +313,10 @@ fn evaluate_checks(
         let (pass, msg) = match check {
             TaskCheck::StopReason { value } => {
                 let pass = done.stop_reason == *value;
-                (pass, format!("stop_reason={} want={}", done.stop_reason, value))
+                (
+                    pass,
+                    format!("stop_reason={} want={}", done.stop_reason, value),
+                )
             }
             TaskCheck::AssistantContains { value } => {
                 let pass = done.text.contains(value);
@@ -360,12 +348,8 @@ fn evaluate_checks(
 fn scratch(label: &str) -> Result<PathBuf, String> {
     static SEQ: AtomicUsize = AtomicUsize::new(0);
     let n = SEQ.fetch_add(1, Ordering::Relaxed);
-    let dir = std::env::temp_dir().join(format!(
-        "gh-eval-ab-{}-{}-{}",
-        label,
-        std::process::id(),
-        n
-    ));
+    let dir =
+        std::env::temp_dir().join(format!("gh-eval-ab-{}-{}-{}", label, std::process::id(), n));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).map_err(|err| err.to_string())?;
     Ok(dir)
@@ -411,10 +395,7 @@ impl ModelClient for ScriptedTask {
         }
         self.turns.fetch_add(1, Ordering::SeqCst);
         let step = {
-            let mut steps = self
-                .steps
-                .lock()
-                .unwrap_or_else(|err| err.into_inner());
+            let mut steps = self.steps.lock().unwrap_or_else(|err| err.into_inner());
             if steps.is_empty() {
                 ScriptStep::Text {
                     content: "done".into(),

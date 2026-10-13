@@ -69,8 +69,7 @@ impl AbGateFailure {
     pub fn message(&self) -> String {
         format!(
             "variant success rate {:.4} is below control {:.4}",
-            self.variant_rate,
-            self.control_rate
+            self.variant_rate, self.control_rate
         )
     }
 }
@@ -90,11 +89,7 @@ pub fn gate(comparison: &AbComparison) -> Result<(), AbGateFailure> {
 
 pub fn format_report(cmp: &AbComparison) -> String {
     let mut out = String::new();
-    let _ = writeln!(
-        out,
-        "# Agent prompt A/B eval\n\nModel: {}\n",
-        cmp.model
-    );
+    let _ = writeln!(out, "# Agent prompt A/B eval\n\nModel: {}\n", cmp.model);
     out.push_str("## Summary\n\n");
     out.push_str("| Arm | Success rate | Tasks | Tokens | Wall ms | Tool calls |\n");
     out.push_str("|---|---|---|---|---|---|\n");
