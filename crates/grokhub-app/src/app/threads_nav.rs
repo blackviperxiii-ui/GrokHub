@@ -1,6 +1,7 @@
 //! Chat tabs and history delete.
 
 use super::*;
+use crate::ui_kit::{setting_row, SettingRowControl};
 
 impl Cabin {
     pub(super) fn switch_thread(&mut self, idx: usize) {
@@ -277,28 +278,24 @@ impl Cabin {
     /// Settings → Behavior → Auto-archive idle chats.
     pub(super) fn ui_chat_archive_row(&mut self, ui: &mut egui::Ui) {
         const CHOICES: &[u32] = &[0, 7, 14, 30, 90];
-        let labels: Vec<String> = CHOICES
-            .iter()
-            .map(|d| {
-                if *d == 0 {
-                    "Off".into()
-                } else if *d == 1 {
-                    "1 day".into()
-                } else {
-                    format!("{d} days")
-                }
-            })
-            .collect();
+        const LABELS: [&str; 5] = ["Off", "7 days", "14 days", "30 days", "90 days"];
         let hint = "Chats with no messages, opens or edits for this long leave History and search (still on disk; open the chat or Unarchive from its menu). Pinned chats and chats with a running or parked task stay. Nothing is deleted.";
-        let current = if self.cfg.chat_archive_days == 0 {
-            "Off".to_string()
-        } else {
-            format!("{} days", self.cfg.chat_archive_days)
-        };
-        if let Some(i) =
-            crate::cards::settings_dropdown(ui, "Auto-archive idle chats", hint, &current, &labels)
-        {
-            self.cfg.chat_archive_days = CHOICES[i];
+        let mut pick = CHOICES
+            .iter()
+            .position(|&d| d == self.cfg.chat_archive_days)
+            .unwrap_or(0);
+        let before = pick;
+        setting_row(
+            ui,
+            "Auto-archive idle chats",
+            hint,
+            SettingRowControl::Select {
+                selected: &mut pick,
+                labels: &LABELS,
+            },
+        );
+        if pick != before {
+            self.cfg.chat_archive_days = CHOICES[pick];
             self.persist_cfg();
             self.status = if self.cfg.chat_archive_days == 0 {
                 "Auto-archive off".into()
