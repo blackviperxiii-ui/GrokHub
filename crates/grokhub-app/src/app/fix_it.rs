@@ -8,9 +8,7 @@
 use super::*;
 use grokhub_agent::harness::{self as hx, GateOutcome, Step};
 use grokhub_agent::HardClass;
-use grokhub_core::fix_plan::{
-    self, FixPlan, FixPlanStep, HardApproval, PlanBuild,
-};
+use grokhub_core::fix_plan::{self, FixPlan, FixPlanStep, HardApproval, PlanBuild};
 use std::collections::HashMap;
 
 /// Hard-class floor covers computer-use / CUA (#619 on beta — Harness 6).
@@ -120,16 +118,12 @@ fn gate_for_step(step: &FixPlanStep) -> GateOutcome {
 }
 
 fn planned_hard(step: &FixPlanStep) -> Option<HardClass> {
-    step.approval
-        .hard_class()
-        .map(hard_class)
+    step.approval.hard_class().map(hard_class)
 }
 
 fn gate_hard(outcome: &GateOutcome) -> Option<HardClass> {
     match outcome {
-        GateOutcome::Park {
-            hard: Some(c), ..
-        } => Some(*c),
+        GateOutcome::Park { hard: Some(c), .. } => Some(*c),
         _ => None,
     }
 }
@@ -148,7 +142,14 @@ impl Cabin {
 
     /// **Fix it** on a screen or audio report card (click only).
     pub(super) fn tap_diagnosis_fix(&mut self, card_id: &str) {
-        if self.harness.fixes.diagnosis.run.as_ref().is_some_and(|r| !r.done()) {
+        if self
+            .harness
+            .fixes
+            .diagnosis
+            .run
+            .as_ref()
+            .is_some_and(|r| !r.done())
+        {
             self.status = "A fix plan is already running.".into();
             return;
         }
@@ -188,10 +189,7 @@ impl Cabin {
             chat_id: chat,
             notes: Vec::new(),
         });
-        self.status = format!(
-            "Fix plan ready for {} — one step at a time.",
-            card_id
-        );
+        self.status = format!("Fix plan ready for {} — one step at a time.", card_id);
         self.advance_diagnosis_fix();
     }
 
@@ -206,8 +204,10 @@ impl Cabin {
         if !approve {
             run.stopped = true;
             self.status = "Fix stopped at your request.".into();
-            self.live_mut()
-                .push(("assistant".into(), "Fix stopped. Nothing else will run.".into()));
+            self.live_mut().push((
+                "assistant".into(),
+                "Fix stopped. Nothing else will run.".into(),
+            ));
             self.persist();
             return true;
         }
@@ -409,8 +409,7 @@ pub(super) fn paint_diagnosis_report_actions(
 }
 
 pub(super) fn is_diagnosis_report_card(card: &grokhub_core::UpdateCard) -> bool {
-    grokhub_core::screen_recording_dir(card).is_some()
-        || card.source_id.starts_with("audiocheck:")
+    grokhub_core::screen_recording_dir(card).is_some() || card.source_id.starts_with("audiocheck:")
 }
 
 #[cfg(test)]
@@ -439,11 +438,7 @@ mod tests {
         cabin.remember_diagnosis("c1".into(), StoredDiagnosis::Screen(report));
         cabin.tap_diagnosis_fix("c1");
         assert!(cabin.harness.fixes.diagnosis.run.is_none());
-        assert!(
-            cabin
-                .status
-                .contains("didn't suggest any fix steps")
-        );
+        assert!(cabin.status.contains("didn't suggest any fix steps"));
     }
 
     #[test]

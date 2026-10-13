@@ -40,11 +40,7 @@ impl FixUi {
     pub fn busy(&self) -> bool {
         self.verify_rx.is_some()
             || self.run.as_ref().is_some_and(|r| !r.is_done())
-            || self
-                .diagnosis
-                .run
-                .as_ref()
-                .is_some_and(|r| !r.done())
+            || self.diagnosis.run.as_ref().is_some_and(|r| !r.done())
     }
 }
 
