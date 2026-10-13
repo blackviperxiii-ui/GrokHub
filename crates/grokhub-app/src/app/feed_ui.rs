@@ -2,6 +2,7 @@
 //! Cards paint on Pulse. The empty main chat no longer stacks a Home deck.
 
 use super::*;
+use crate::ui_kit::{badge, card_frame, empty_state, BadgeTone, CardVariant};
 use grokhub_core::{
     automation_done_card, dismiss_update_at, file_idea_todo, hold_if_quiet, idea_todo_title,
     mark_update_opened, parse_lookup, post_help, post_update, quiet_hours_active,
@@ -1001,6 +1002,124 @@ impl Cabin {
             }
             None => {}
         }
+    }
+}
+
+// --- Pulse / Feed paint (ui kit) ---
+
+/// Ideas row chrome on Pulse → Ideas.
+pub(super) fn kit_pulse_ideas_row(
+    ui: &mut eframe::egui::Ui,
+    active: bool,
+    contents: impl FnOnce(&mut eframe::egui::Ui),
+) -> eframe::egui::Response {
+    let variant = if active {
+        CardVariant::Interactive
+    } else {
+        CardVariant::Subtle
+    };
+    card_frame(ui, variant, true, contents)
+}
+
+/// One Feed post on Pulse (includes D3 daily-drop rows).
+pub(super) fn kit_pulse_feed_post(
+    ui: &mut eframe::egui::Ui,
+    contents: impl FnOnce(&mut eframe::egui::Ui),
+) -> eframe::egui::Response {
+    card_frame(ui, CardVariant::Outlined, true, contents)
+}
+
+pub(super) fn kit_daily_drop_badge(ui: &mut eframe::egui::Ui) {
+    badge(ui, "Daily drop", BadgeTone::Accent);
+}
+
+/// Feed tab empty line with a Feed instructions link. Returns true when the link is clicked.
+pub(super) fn paint_feed_empty_prompt(ui: &mut eframe::egui::Ui) -> bool {
+    use grokhub_core::pulse::{FEED_EMPTY_LEAD, FEED_EMPTY_LINK};
+    let mut open = false;
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing.x = 0.0;
+        ui.label(
+            RichText::new(FEED_EMPTY_LEAD)
+                .size(crate::theme::FONT_BODY)
+                .color(crate::theme::muted()),
+        );
+        let link = ui.add(
+            egui::Label::new(
+                RichText::new(FEED_EMPTY_LINK)
+                    .size(crate::theme::FONT_BODY)
+                    .underline()
+                    .color(crate::theme::link()),
+            )
+            .sense(egui::Sense::click())
+            .selectable(false),
+        );
+        if link.hovered() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        }
+        if link.clicked() {
+            open = true;
+        }
+        ui.label(
+            RichText::new(".")
+                .size(crate::theme::FONT_BODY)
+                .color(crate::theme::muted()),
+        );
+    });
+    open
+}
+
+/// Ideas tab empty body. Returns true when Suggest ideas is pressed.
+pub(super) fn paint_ideas_empty_prompt(ui: &mut eframe::egui::Ui) -> bool {
+    use grokhub_core::pulse::IDEAS_EMPTY;
+    empty_state(ui, "Ideas", IDEAS_EMPTY, Some("Suggest ideas"))
+}
+
+/// Placeholder row while ideas load.
+pub(super) fn kit_skeleton_row(ui: &mut eframe::egui::Ui) {
+    const ICON: f32 = 32.0;
+    kit_pulse_ideas_row(ui, false, |ui| {
+        let w = ui.available_width();
+        let (rect, _) = ui.allocate_exact_size(egui::vec2(w, 40.0), egui::Sense::hover());
+        let block = crate::theme::elevated();
+        let p = ui.painter();
+        p.rect_filled(
+            egui::Rect::from_min_size(rect.min + egui::vec2(10.0, 4.0), egui::vec2(ICON, ICON)),
+            crate::theme::RADIUS_MD,
+            block,
+        );
+        let left = rect.left() + 10.0 + ICON + 10.0;
+        p.rect_filled(
+            egui::Rect::from_min_size(
+                egui::pos2(left, rect.top() + 6.0),
+                egui::vec2((w * 0.55).min(360.0), 12.0),
+            ),
+            crate::theme::RADIUS_SM,
+            block,
+        );
+        p.rect_filled(
+            egui::Rect::from_min_size(
+                egui::pos2(left, rect.top() + 26.0),
+                egui::vec2((w * 0.75).min(480.0), 10.0),
+            ),
+            crate::theme::RADIUS_SM,
+            block,
+        );
+    });
+}
+
+#[cfg(test)]
+mod feed_pulse_kit_tests {
+    #[test]
+    fn feed_ui_wires_ui_kit_for_pulse() {
+        let src = include_str!("feed_ui.rs");
+        assert!(
+            src.contains("kit_pulse_ideas_row")
+                && src.contains("kit_pulse_feed_post")
+                && src.contains("card_frame")
+                && src.contains("kit_daily_drop_badge"),
+            "Pulse/Feed paint must use the ui kit"
+        );
     }
 }
 
