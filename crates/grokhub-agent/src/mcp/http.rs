@@ -555,13 +555,10 @@ fn read_sse(reader: &mut impl BufRead) -> Result<Option<(String, String)>, Strin
 /// Scheme + host[:port] for an http(s) URL. Userinfo is dropped; host is lowercased.
 fn http_origin(url: &str) -> Option<String> {
     let url = url.trim();
-    let (scheme, rest) = if let Some(rest) = url.strip_prefix("https://") {
-        ("https", rest)
-    } else if let Some(rest) = url.strip_prefix("http://") {
-        ("http", rest)
-    } else {
-        return None;
-    };
+    let (scheme, rest) = url
+        .strip_prefix("https://")
+        .map(|rest| ("https", rest))
+        .or_else(|| url.strip_prefix("http://").map(|rest| ("http", rest)))?;
     let authority = rest.split(['/', '?', '#']).next()?.trim();
     if authority.is_empty() {
         return None;
@@ -852,11 +849,8 @@ pub(crate) mod tests {
             "MCP endpoint must stay on the same host"
         );
         assert_eq!(
-            resolve_endpoint(
-                "https://mcp.example.test/sse",
-                "https://10.0.0.1/internal"
-            )
-            .unwrap_err(),
+            resolve_endpoint("https://mcp.example.test/sse", "https://10.0.0.1/internal")
+                .unwrap_err(),
             "MCP endpoint must stay on the same host"
         );
         assert_eq!(

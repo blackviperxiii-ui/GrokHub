@@ -98,8 +98,6 @@ pub mod skill;
 pub mod slash;
 pub mod ssrf;
 pub mod state;
-#[cfg(windows)]
-pub mod win_acl;
 pub mod stream;
 pub mod systems_brief;
 pub mod talk;
@@ -114,6 +112,8 @@ pub mod usage;
 pub mod verify;
 pub mod voice;
 pub mod what_changed;
+#[cfg(windows)]
+pub mod win_acl;
 pub mod windshield;
 pub mod wire;
 pub mod workboard;

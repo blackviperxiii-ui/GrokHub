@@ -408,7 +408,7 @@ fn write_private_synced(path: &std::path::Path, bytes: &[u8]) -> Result<(), Stri
         let mut f = crate::win_acl::create_user_only(path).map_err(|e| e.to_string())?;
         f.write_all(bytes).map_err(|e| e.to_string())?;
         f.sync_all().map_err(|e| e.to_string())?;
-        return Ok(());
+        Ok(())
     }
     #[cfg(not(windows))]
     {
