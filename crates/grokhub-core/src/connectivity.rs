@@ -297,8 +297,9 @@ mod windows_nlm {
     use std::thread;
     use std::time::Duration;
 
+    use windows::Win32::Foundation::VARIANT_FALSE;
     use windows::Win32::Networking::NetworkListManager::{
-        CLSID_NetworkListManager, INetworkListManager,
+        INetworkListManager, NetworkListManager,
     };
     use windows::Win32::System::Com::{
         CoCreateInstance, CoInitializeEx, CLSCTX_ALL, COINIT_APARTMENTTHREADED,
@@ -315,10 +316,9 @@ mod windows_nlm {
         unsafe {
             let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
             let nlm: INetworkListManager =
-                CoCreateInstance(&CLSID_NetworkListManager, None, CLSCTX_ALL)?;
-            let mut connected = windows::Win32::Foundation::VARIANT_BOOL::default();
-            nlm.IsConnectedToInternet(&mut connected)?;
-            Ok(connected != windows::Win32::Foundation::VARIANT_FALSE)
+                CoCreateInstance(&NetworkListManager, None, CLSCTX_ALL)?;
+            let connected = nlm.IsConnectedToInternet()?;
+            Ok(connected != VARIANT_FALSE)
         }
     }
 
