@@ -26,6 +26,7 @@ reqwest = { version = "0.12", default-features = false, features = [
     "http2",
     "blocking",
 ] }
+ureq = { workspace = true }
 
 # User-only DACL for hub-state.json (pair tokens) — matches secrets.json on Windows.
 [target.'cfg(windows)'.dependencies]
