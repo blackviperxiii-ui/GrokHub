@@ -79,10 +79,12 @@ pub enum JobKind {
     Reflect,
     /// The local indexers (Spike-8a).
     Indexers,
+    /// Dreambeans daily drop: local pick from ranked Pulse sources once a local night.
+    DailyDrop,
 }
 
 impl JobKind {
-    pub const ALL: [JobKind; 12] = [
+    pub const ALL: [JobKind; 13] = [
         Self::Automations,
         Self::PulseRefresh,
         Self::ModelRegistry,
@@ -93,6 +95,7 @@ impl JobKind {
         Self::Review,
         Self::NightPasses,
         Self::MemoryRetention,
+        Self::DailyDrop,
         Self::Reflect,
         Self::Indexers,
     ];
@@ -112,6 +115,7 @@ impl JobKind {
             Self::MemoryRetention => "memory_retention",
             Self::Reflect => "reflect",
             Self::Indexers => "indexers",
+            Self::DailyDrop => "daily_drop",
         }
     }
 
@@ -130,6 +134,7 @@ impl JobKind {
             Self::MemoryRetention => "Memory retention",
             Self::Reflect => "Idle reflect",
             Self::Indexers => "Indexers",
+            Self::DailyDrop => "Daily drop",
         }
     }
 
@@ -274,6 +279,15 @@ pub fn cabin_jobs() -> Vec<JobSpec> {
         job(
             JobKind::MemoryRetention,
             40,
+            false,
+            Local,
+            DAILY_CHECK_MS,
+            Runs,
+            false,
+        ),
+        job(
+            JobKind::DailyDrop,
+            38,
             false,
             Local,
             DAILY_CHECK_MS,
@@ -611,6 +625,57 @@ impl Governor {
     }
 }
 
+/// Inputs for the governor's [`JobKind::DailyDrop`] beat. Ranked rows are already on
+/// this machine (no fetch, no Google APIs, no model).
+#[derive(Debug)]
+pub struct DailyDropRefreshCtx<'a> {
+    pub settings: &'a crate::daily_drop::DailyDropSettings,
+    pub ranked: &'a [crate::pulse_sources::Ranked],
+    pub ledger: &'a mut crate::daily_drop::DailyDropLedger,
+    /// Local calendar day (`YYYY-MM-DD`) of the last successful overnight pass.
+    pub last_run_day: Option<&'a str>,
+    pub today: &'a str,
+    pub clock: &'a crate::organs::LocalClock,
+    /// Same night hour as the nightly review (`dream_hour`).
+    pub night_hour: u32,
+    pub now_ms: u64,
+}
+
+/// Outcome of one daily-drop refresh attempt.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DailyDropRefreshResult {
+    pub cards: Vec<crate::update_feed::UpdateCard>,
+    /// When set, persist as `last_run_day` so the job does not spin every minute overnight.
+    pub mark_day: Option<String>,
+}
+
+/// Overnight refresh: calls the daily-drop picker on local ranked source rows. Off by
+/// default ([`crate::daily_drop::DailyDropSettings::active`]); no external I/O.
+pub fn daily_drop_refresh(ctx: DailyDropRefreshCtx<'_>) -> DailyDropRefreshResult {
+    if !ctx.settings.active() {
+        return DailyDropRefreshResult {
+            cards: Vec::new(),
+            mark_day: None,
+        };
+    }
+    if !crate::review::review_due(ctx.last_run_day, ctx.today, ctx.clock, ctx.night_hour) {
+        return DailyDropRefreshResult {
+            cards: Vec::new(),
+            mark_day: None,
+        };
+    }
+    let cards = crate::daily_drop::pick_cards(
+        ctx.settings,
+        ctx.ranked,
+        ctx.ledger,
+        ctx.now_ms,
+    );
+    DailyDropRefreshResult {
+        cards,
+        mark_day: Some(ctx.today.to_string()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -654,6 +719,7 @@ mod tests {
                 JobKind::Review,
                 JobKind::NightPasses,
                 JobKind::MemoryRetention,
+                JobKind::DailyDrop,
                 JobKind::Reflect,
                 JobKind::Indexers,
             ]
@@ -703,12 +769,13 @@ mod tests {
             again.register(dup),
             Err(RegisterError::Duplicate(JobKind::Proactive))
         );
-        assert_eq!(again.kinds().len(), 12);
+        assert_eq!(again.kinds().len(), 13);
         let mut tags: Vec<&str> = JobKind::ALL.iter().map(|k| k.as_str()).collect();
         tags.sort_unstable();
         tags.dedup();
-        assert_eq!(tags.len(), 12, "tags are unique");
+        assert_eq!(tags.len(), 13, "tags are unique");
         assert_eq!(JobKind::parse("night_passes"), Some(JobKind::NightPasses));
+        assert_eq!(JobKind::parse("daily_drop"), Some(JobKind::DailyDrop));
         assert_eq!(JobKind::parse("nope"), None);
     }
 
@@ -716,7 +783,7 @@ mod tests {
     fn a_tick_runs_each_kind_at_most_once_per_due_time() {
         let budgets = BackgroundBudgets::default();
         let mut g = Governor::cabin();
-        assert_eq!(g.tick(&ctx(T0, DAY, "12:00", &budgets)).run.len(), 12);
+        assert_eq!(g.tick(&ctx(T0, DAY, "12:00", &budgets)).run.len(), 13);
         // Same moment, and just before the pulse: nothing is due again.
         assert_eq!(
             g.tick(&ctx(T0, DAY, "12:00", &budgets)).run,
@@ -866,7 +933,7 @@ mod tests {
             plan.run,
             vec![JobKind::PulseRefresh, JobKind::ModelRegistry]
         );
-        assert_eq!(plan.held.len(), 10);
+        assert_eq!(plan.held.len(), 11);
         assert!(plan.held.contains(&(JobKind::Digest, JobHold::Halted)));
 
         let mut g = Governor::cabin();
@@ -920,6 +987,7 @@ mod tests {
                 JobKind::Digest,
                 JobKind::Review,
                 JobKind::MemoryRetention,
+                JobKind::DailyDrop,
                 JobKind::Reflect,
             ]
         );
@@ -1050,5 +1118,116 @@ mod tests {
         assert_eq!(b.daily_tokens(JobKind::Digest), 5_000);
         assert_eq!(b.daily_tokens(JobKind::Ideas), 100_000);
         assert!(!b.is_default());
+    }
+
+    #[test]
+    fn daily_drop_refresh_is_off_until_settings_are_active() {
+        use crate::daily_drop::{DailyDropLedger, DailyDropSettings};
+        use crate::organs::LocalClock;
+        use crate::pulse_sources::{Ranked, SourceItem, SourceKind};
+
+        let today = "2026-10-11";
+        let clock = LocalClock {
+            now_ms: T0,
+            weekday: 6,
+            hour: 22,
+            minute: 0,
+        };
+        let item = SourceItem {
+            kind: SourceKind::HackerNews,
+            source_name: "HN".into(),
+            title: "Story".into(),
+            url: "https://news.ycombinator.com/item?id=1".into(),
+            published_ms: T0,
+            summary: String::new(),
+            image: None,
+            topic: None,
+            engagement: 0,
+        };
+        let ranked = vec![Ranked {
+            item,
+            score: 90,
+            because: None,
+        }];
+        let mut ledger = DailyDropLedger::default();
+        let off = daily_drop_refresh(DailyDropRefreshCtx {
+            settings: &DailyDropSettings::default(),
+            ranked: &ranked,
+            ledger: &mut ledger,
+            last_run_day: None,
+            today,
+            clock: &clock,
+            night_hour: 21,
+            now_ms: T0,
+        });
+        assert!(off.cards.is_empty());
+        assert!(off.mark_day.is_none());
+        assert_eq!(ledger.picked_today, 0);
+
+        let on_settings = DailyDropSettings {
+            enabled: true,
+            hacker_news: true,
+            ..DailyDropSettings::default()
+        };
+        let mut ledger = DailyDropLedger::default();
+        let on = daily_drop_refresh(DailyDropRefreshCtx {
+            settings: &on_settings,
+            ranked: &ranked,
+            ledger: &mut ledger,
+            last_run_day: None,
+            today,
+            clock: &clock,
+            night_hour: 21,
+            now_ms: T0,
+        });
+        assert_eq!(on.cards.len(), 1);
+        assert_eq!(on.mark_day.as_deref(), Some(today));
+        assert_eq!(ledger.picked_today, 1);
+    }
+
+    #[test]
+    fn daily_drop_refresh_waits_for_night_hour_and_marks_day_without_cards() {
+        use crate::daily_drop::{DailyDropLedger, DailyDropSettings};
+        use crate::organs::LocalClock;
+
+        let today = "2026-10-11";
+        let early = LocalClock {
+            now_ms: T0,
+            weekday: 6,
+            hour: 12,
+            minute: 0,
+        };
+        let settings = DailyDropSettings {
+            enabled: true,
+            hacker_news: true,
+            ..DailyDropSettings::default()
+        };
+        let mut ledger = DailyDropLedger::default();
+        let wait = daily_drop_refresh(DailyDropRefreshCtx {
+            settings: &settings,
+            ranked: &[],
+            ledger: &mut ledger,
+            last_run_day: None,
+            today,
+            clock: &early,
+            night_hour: 21,
+            now_ms: T0,
+        });
+        assert!(wait.cards.is_empty());
+        assert!(wait.mark_day.is_none());
+
+        let mut ledger = DailyDropLedger::default();
+        let ran = daily_drop_refresh(DailyDropRefreshCtx {
+            settings: &settings,
+            ranked: &[],
+            ledger: &mut ledger,
+            last_run_day: Some("2026-10-10"),
+            today,
+            clock: &early,
+            night_hour: 21,
+            now_ms: T0,
+        });
+        assert!(ran.cards.is_empty());
+        assert_eq!(ran.mark_day.as_deref(), Some(today));
     }
 }
