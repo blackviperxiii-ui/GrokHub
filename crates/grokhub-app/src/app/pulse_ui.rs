@@ -19,8 +19,6 @@ const ICON: f32 = 32.0;
 /// list already paints Suggest in the body, so the header slot stays blank.
 /// One width, so the Feed | Ideas switch never moves.
 pub(super) const HEADER_SLOT_W: f32 = 150.0;
-/// Behind a hovered or focused row.
-const ROW_HOVER: egui::Color32 = egui::Color32::from_rgb(0x0f, 0x10, 0x12);
 /// Keyboard focus: a 2px ring.
 pub(super) const FOCUS_RING: egui::Color32 = egui::Color32::from_rgb(0x4a, 0x90, 0xe2);
 /// The sign-in line under Suggest ideas.
@@ -477,106 +475,85 @@ pub(super) fn paint_pulse_row(
     let mut title_hover = false;
     let active = st.hovered || st.focused;
     let cat = pc::card_category(card);
-    let frame = egui::Frame::NONE
-        .fill(if active {
-            ROW_HOVER
-        } else {
-            egui::Color32::TRANSPARENT
-        })
-        .corner_radius(10.0)
-        .inner_margin(egui::Margin::symmetric(8, 6));
-    let resp = frame
-        .show(ui, |ui| {
-            ui.set_width(ui.available_width());
-            ui.horizontal_top(|ui| {
-                ui.add_space(2.0);
-                icon(ui, category_glyph(cat), category_tint(cat));
-                ui.add_space(10.0);
-                let text_w = (ui.available_width() - 36.0).max(80.0);
-                ui.vertical(|ui| {
-                    ui.set_width(text_w);
-                    ui.spacing_mut().item_spacing.y = 3.0;
-                    let hot = st.title_hot || st.focused;
-                    let mut title = RichText::new(pc::i_can_title(card))
-                        .size(crate::theme::FONT_UI)
-                        .strong()
-                        .color(if hot {
-                            egui::Color32::WHITE
-                        } else {
-                            crate::theme::fg()
+    let resp = super::feed_ui::kit_pulse_ideas_row(ui, active, |ui| {
+        ui.set_width(ui.available_width());
+        ui.horizontal_top(|ui| {
+            ui.add_space(2.0);
+            icon(ui, category_glyph(cat), category_tint(cat));
+            ui.add_space(10.0);
+            let text_w = (ui.available_width() - 36.0).max(80.0);
+            ui.vertical(|ui| {
+                ui.set_width(text_w);
+                ui.spacing_mut().item_spacing.y = 3.0;
+                let hot = st.title_hot || st.focused;
+                let mut title = RichText::new(pc::i_can_title(card))
+                    .size(crate::theme::FONT_UI)
+                    .strong()
+                    .color(if hot {
+                        egui::Color32::WHITE
+                    } else {
+                        crate::theme::fg()
+                    });
+                if hot {
+                    title = title.underline();
+                }
+                let t = ui.add(egui::Label::new(title).wrap().sense(egui::Sense::click()));
+                title_hover = t.hovered();
+                if t.hovered() {
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                }
+                if t.clicked() {
+                    act = Some(PulseAct::Open(card.id.clone()));
+                }
+                let blurb = idea_blurb(card);
+                if !blurb.is_empty() {
+                    clamp_label(
+                        ui,
+                        &blurb,
+                        crate::theme::FONT_BODY,
+                        crate::theme::muted(),
+                        3,
+                    );
+                }
+                ui.horizontal(|ui| {
+                    ui.label(
+                        RichText::new(kind.label().to_ascii_uppercase())
+                            .size(crate::theme::FONT_TIP - 1.0)
+                            .strong()
+                            .color(type_color(kind)),
+                    );
+                    if active {
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            ui.spacing_mut().item_spacing.x = 2.0;
+                            let dot = |ui: &mut egui::Ui| {
+                                ui.label(
+                                    RichText::new("·")
+                                        .size(crate::theme::FONT_TIP)
+                                        .color(crate::theme::subtle()),
+                                );
+                            };
+                            if quick_button(ui, "Dismiss") {
+                                act = Some(PulseAct::Dismiss(card.id.clone()));
+                            }
+                            dot(ui);
+                            if quick_button(ui, "Snooze") {
+                                act = Some(PulseAct::Snooze(card.id.clone()));
+                            }
+                            dot(ui);
+                            if quick_button(ui, run_label(card)) {
+                                act = Some(PulseAct::Run(card.id.clone()));
+                            }
                         });
-                    if hot {
-                        title = title.underline();
                     }
-                    let t = ui.add(egui::Label::new(title).wrap().sense(egui::Sense::click()));
-                    title_hover = t.hovered();
-                    if t.hovered() {
-                        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-                    }
-                    if t.clicked() {
-                        act = Some(PulseAct::Open(card.id.clone()));
-                    }
-                    let blurb = idea_blurb(card);
-                    if !blurb.is_empty() {
-                        clamp_label(
-                            ui,
-                            &blurb,
-                            crate::theme::FONT_BODY,
-                            crate::theme::muted(),
-                            3,
-                        );
-                    }
-                    ui.horizontal(|ui| {
-                        ui.label(
-                            RichText::new(kind.label().to_ascii_uppercase())
-                                .size(crate::theme::FONT_TIP - 1.0)
-                                .strong()
-                                .color(type_color(kind)),
-                        );
-                        if active {
-                            ui.with_layout(
-                                egui::Layout::right_to_left(egui::Align::Center),
-                                |ui| {
-                                    ui.spacing_mut().item_spacing.x = 2.0;
-                                    let dot = |ui: &mut egui::Ui| {
-                                        ui.label(
-                                            RichText::new("·")
-                                                .size(crate::theme::FONT_TIP)
-                                                .color(crate::theme::subtle()),
-                                        );
-                                    };
-                                    if quick_button(ui, "Dismiss") {
-                                        act = Some(PulseAct::Dismiss(card.id.clone()));
-                                    }
-                                    dot(ui);
-                                    if quick_button(ui, "Snooze") {
-                                        act = Some(PulseAct::Snooze(card.id.clone()));
-                                    }
-                                    dot(ui);
-                                    if quick_button(ui, run_label(card)) {
-                                        act = Some(PulseAct::Run(card.id.clone()));
-                                    }
-                                },
-                            );
-                        }
-                    });
-                });
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
-                    crate::cards::dots_menu(ui, active, |ui| {
-                        pulse_menu(ui, card, kind, false, &mut act)
-                    });
                 });
             });
-        })
-        .response;
-    if st.focused {
-        ui.painter().rect_stroke(
-            resp.rect,
-            10.0,
-            egui::Stroke::new(2.0_f32, FOCUS_RING),
-            egui::StrokeKind::Outside,
-        );
-    }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
+                crate::cards::dots_menu(ui, active, |ui| {
+                    pulse_menu(ui, card, kind, false, &mut act)
+                });
+            });
+        });
+    });
     (act, resp.rect, title_hover)
 }
 
@@ -1107,45 +1084,11 @@ impl Cabin {
             return;
         }
         if feed {
-            ui.horizontal_wrapped(|ui| {
-                ui.spacing_mut().item_spacing.x = 0.0;
-                ui.label(
-                    RichText::new(pc::FEED_EMPTY_LEAD)
-                        .size(crate::theme::FONT_BODY)
-                        .color(crate::theme::muted()),
-                );
-                let link = ui.add(
-                    egui::Label::new(
-                        RichText::new(pc::FEED_EMPTY_LINK)
-                            .size(crate::theme::FONT_BODY)
-                            .underline()
-                            .color(crate::theme::link()),
-                    )
-                    .sense(egui::Sense::click())
-                    .selectable(false),
-                );
-                if link.hovered() {
-                    ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-                }
-                if link.clicked() {
-                    self.open_feed_instructions();
-                }
-                ui.label(
-                    RichText::new(".")
-                        .size(crate::theme::FONT_BODY)
-                        .color(crate::theme::muted()),
-                );
-            });
-        } else {
-            ui.label(
-                RichText::new(pc::IDEAS_EMPTY)
-                    .size(crate::theme::FONT_BODY)
-                    .color(crate::theme::muted()),
-            );
-            ui.add_space(8.0);
-            if crate::cards::ghost_pill(ui, "Suggest ideas") {
-                self.suggest_ideas_pressed();
+            if super::feed_ui::paint_feed_empty_prompt(ui) {
+                self.open_feed_instructions();
             }
+        } else if super::feed_ui::paint_ideas_empty_prompt(ui) {
+            self.suggest_ideas_pressed();
         }
         ui.add_space(4.0);
         ui.label(
@@ -1290,11 +1233,7 @@ impl Cabin {
             if let Some(a) = self.paint_pulse_post(ui, card, now) {
                 act = Some(a);
             }
-            ui.add_space(6.0);
-            let w = ui.available_width();
-            let (line, _) = ui.allocate_exact_size(egui::vec2(w, 1.0), egui::Sense::hover());
-            ui.painter().rect_filled(line, 0.0, crate::theme::border());
-            ui.add_space(10.0);
+            ui.add_space(crate::theme::SPACING_8);
         }
         if let Some(a) = act {
             self.apply_pulse_act(a);
@@ -1311,6 +1250,7 @@ impl Cabin {
     ) -> Option<PulseAct> {
         let mut act = None;
         let kind = pc::pulse_type(card);
+        let daily_drop = grokhub_core::daily_drop::is_daily_drop_card(card, &self.cfg.daily_drop);
         let thumbs: Vec<Thumb> = card
             .pulse
             .image_urls
@@ -1318,38 +1258,47 @@ impl Cabin {
             .take(THUMB_MAX)
             .filter_map(|url| self.pulse_thumb(ui.ctx(), url))
             .collect();
-        ui.horizontal_top(|ui| {
-            paint_feed_icon(ui, card);
-            ui.add_space(10.0);
-            ui.vertical(|ui| {
-                ui.set_width(ui.available_width());
-                ui.spacing_mut().item_spacing.y = 4.0;
-                ui.horizontal(|ui| {
-                    ui.label(
-                        RichText::new(post_age_line(card, now))
-                            .size(crate::theme::FONT_TIP)
-                            .color(crate::theme::subtle()),
-                    );
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        crate::cards::dots_menu(ui, false, |ui| {
-                            pulse_menu(ui, card, kind, true, &mut act)
+        super::feed_ui::kit_pulse_feed_post(ui, |ui| {
+            ui.horizontal_top(|ui| {
+                paint_feed_icon(ui, card);
+                ui.add_space(10.0);
+                ui.vertical(|ui| {
+                    ui.set_width(ui.available_width());
+                    ui.spacing_mut().item_spacing.y = 4.0;
+                    ui.horizontal(|ui| {
+                        if daily_drop {
+                            super::feed_ui::kit_daily_drop_badge(ui);
+                            ui.add_space(crate::theme::SPACING_4);
+                        }
+                        ui.label(
+                            RichText::new(post_age_line(card, now))
+                                .size(crate::theme::FONT_TIP)
+                                .color(crate::theme::subtle()),
+                        );
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            crate::cards::dots_menu(ui, false, |ui| {
+                                pulse_menu(ui, card, kind, true, &mut act)
+                            });
                         });
                     });
+                    if let Some(did) = paint_post_body(ui, card, &thumbs, self.sources.looking_more)
+                    {
+                        act = Some(match did {
+                            FeedPostAct::Like => PulseAct::Like(card.id.clone()),
+                            FeedPostAct::Discuss => PulseAct::Discuss(card.id.clone()),
+                            FeedPostAct::Link(url) => PulseAct::Link(url),
+                            FeedPostAct::Undo => PulseAct::Undo(card.id.clone()),
+                            FeedPostAct::NeverAgain => PulseAct::NeverAgain(card.id.clone()),
+                            FeedPostAct::Open => PulseAct::Open(card.id.clone()),
+                            FeedPostAct::Retry => PulseAct::Retry(card.id.clone()),
+                            FeedPostAct::DeleteRecording => {
+                                PulseAct::DeleteRecording(card.id.clone())
+                            }
+                            FeedPostAct::RetryNow => PulseAct::RetryNow,
+                            FeedPostAct::Source(did) => PulseAct::Source(card.id.clone(), did),
+                        });
+                    }
                 });
-                if let Some(did) = paint_post_body(ui, card, &thumbs, self.sources.looking_more) {
-                    act = Some(match did {
-                        FeedPostAct::Like => PulseAct::Like(card.id.clone()),
-                        FeedPostAct::Discuss => PulseAct::Discuss(card.id.clone()),
-                        FeedPostAct::Link(url) => PulseAct::Link(url),
-                        FeedPostAct::Undo => PulseAct::Undo(card.id.clone()),
-                        FeedPostAct::NeverAgain => PulseAct::NeverAgain(card.id.clone()),
-                        FeedPostAct::Open => PulseAct::Open(card.id.clone()),
-                        FeedPostAct::Retry => PulseAct::Retry(card.id.clone()),
-                        FeedPostAct::DeleteRecording => PulseAct::DeleteRecording(card.id.clone()),
-                        FeedPostAct::RetryNow => PulseAct::RetryNow,
-                        FeedPostAct::Source(did) => PulseAct::Source(card.id.clone(), did),
-                    });
-                }
             });
         });
         act
