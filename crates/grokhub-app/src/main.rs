@@ -41,6 +41,8 @@ mod store;
 mod theme;
 mod threads;
 mod titlebar;
+#[allow(dead_code)]
+mod ui_kit;
 mod tray;
 mod update;
 #[cfg(windows)]

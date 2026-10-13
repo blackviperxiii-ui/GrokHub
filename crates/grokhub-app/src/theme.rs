@@ -377,6 +377,111 @@ pub const CARD_RADIUS: f32 = 12.0;
 pub const MENU_RADIUS: f32 = 12.0;
 /// Modal sheets (settings, get started).
 pub const SHEET_RADIUS: f32 = 16.0;
+
+// UI kit spacing scale (px). Consumed by `ui_kit` and pinned in `grok_com_chrome_tokens`.
+#[cfg_attr(not(test), allow(dead_code))]
+pub const SPACING_4: f32 = 4.0;
+#[cfg_attr(not(test), allow(dead_code))]
+pub const SPACING_8: f32 = 8.0;
+#[cfg_attr(not(test), allow(dead_code))]
+pub const SPACING_12: f32 = 12.0;
+#[cfg_attr(not(test), allow(dead_code))]
+pub const SPACING_16: f32 = 16.0;
+#[cfg_attr(not(test), allow(dead_code))]
+pub const SPACING_24: f32 = 24.0;
+
+/// UI kit corner radii — small matches quiet chrome.
+#[cfg_attr(not(test), allow(dead_code))]
+pub const RADIUS_SM: f32 = 6.0;
+#[cfg_attr(not(test), allow(dead_code))]
+pub const RADIUS_MD: f32 = 10.0;
+#[cfg_attr(not(test), allow(dead_code))]
+pub const RADIUS_LG: f32 = 14.0;
+
+/// UI kit type scale (Inter). Maps to existing body/chrome tokens where they overlap.
+#[cfg_attr(not(test), allow(dead_code))]
+pub const TYPE_CAPTION: f32 = 12.0;
+#[cfg_attr(not(test), allow(dead_code))]
+pub const TYPE_BODY: f32 = 13.0;
+#[cfg_attr(not(test), allow(dead_code))]
+pub const TYPE_LABEL: f32 = 14.0;
+#[cfg_attr(not(test), allow(dead_code))]
+pub const TYPE_TITLE: f32 = 16.0;
+#[cfg_attr(not(test), allow(dead_code))]
+pub const TYPE_HEADLINE: f32 = 22.0;
+
+/// Minimum interactive target for kit controls (settings rows, chips).
+#[cfg_attr(not(test), allow(dead_code))]
+pub const MIN_HIT: f32 = 28.0;
+
+/// Elevation shadows for cards and sheets in the UI kit.
+#[cfg_attr(not(test), allow(dead_code))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ShadowLevel {
+    None = 0,
+    Soft = 1,
+    Lift = 2,
+}
+
+/// Shadow token for [`ShadowLevel`]. Level 0 is flat; 1–2 step up from [`sheet_shadow`].
+#[cfg_attr(not(test), allow(dead_code))]
+pub fn kit_shadow(level: ShadowLevel) -> egui::Shadow {
+    match level {
+        ShadowLevel::None => egui::Shadow::NONE,
+        ShadowLevel::Soft => sheet_shadow(),
+        ShadowLevel::Lift => {
+            let base = sheet_shadow();
+            egui::Shadow {
+                offset: [base.offset[0], base.offset[1] + 2],
+                blur: base.blur + 4,
+                spread: base.spread,
+                color: Color32::from_rgba_unmultiplied(
+                    base.color.r(),
+                    base.color.g(),
+                    base.color.b(),
+                    (base.color.a() as f32 * 1.35).round() as u8,
+                ),
+            }
+        }
+    }
+}
+
+/// WCAG relative luminance for sRGB (used by kit contrast tests).
+#[cfg_attr(not(test), allow(dead_code))]
+pub fn relative_luminance(c: Color32) -> f32 {
+    fn channel(v: u8) -> f32 {
+        let x = v as f32 / 255.0;
+        if x <= 0.03928 {
+            x / 12.92
+        } else {
+            ((x + 0.055) / 1.055).powf(2.4)
+        }
+    }
+    0.2126 * channel(c.r()) + 0.7152 * channel(c.g()) + 0.0722 * channel(c.b())
+}
+
+/// Contrast ratio between two opaque colors (≥ 4.5 for normal body text).
+#[cfg_attr(not(test), allow(dead_code))]
+pub fn contrast_ratio(fg: Color32, bg: Color32) -> f32 {
+    let l1 = relative_luminance(fg);
+    let l2 = relative_luminance(bg);
+    let (hi, lo) = if l1 > l2 { (l1, l2) } else { (l2, l1) };
+    (hi + 0.05) / (lo + 0.05)
+}
+
+/// Keyboard-focus ring shared by UI kit widgets (same as [`feel_motion`]).
+#[cfg_attr(not(test), allow(dead_code))]
+pub fn paint_focus_ring(ui: &egui::Ui, rect: egui::Rect, radius: f32, resp: &egui::Response) {
+    if resp.has_focus() && kb_nav_active(ui.ctx()) {
+        ui.painter().rect_stroke(
+            rect,
+            radius,
+            Stroke::new(1.5, link()),
+            egui::StrokeKind::Outside,
+        );
+    }
+}
+
 /// Catalog icon well that holds a 20px Fluent glyph.
 pub const TILE_ICON: f32 = 28.0;
 /// Rail / composer chrome glyph.
@@ -1292,6 +1397,40 @@ mod tests {
         assert_eq!(USER_BUBBLE_RADIUS, 20.0);
         assert!(USER_BUBBLE_RADIUS < QUERY_RADIUS);
         assert_eq!(CHROME_RADIUS, 6.0);
+        assert_eq!(RADIUS_SM, 6.0);
+        assert_eq!(RADIUS_MD, 10.0);
+        assert_eq!(RADIUS_LG, 14.0);
+        assert_eq!(SPACING_4, 4.0);
+        assert_eq!(SPACING_8, 8.0);
+        assert_eq!(SPACING_12, 12.0);
+        assert_eq!(SPACING_16, 16.0);
+        assert_eq!(SPACING_24, 24.0);
+        assert_eq!(TYPE_CAPTION, FONT_TIP);
+        assert_eq!(TYPE_BODY, FONT_BODY);
+        assert_eq!(TYPE_LABEL, FONT_CHROME);
+        assert_eq!(TYPE_TITLE, FONT_SECTION);
+        assert_eq!(TYPE_HEADLINE, FONT_HEADING);
+        assert_eq!(MIN_HIT, TILE_ICON);
+        assert!(kit_shadow(ShadowLevel::None).blur == 0);
+        assert!(kit_shadow(ShadowLevel::Soft).blur > 0);
+        assert!(
+            kit_shadow(ShadowLevel::Lift).blur > kit_shadow(ShadowLevel::Soft).blur
+        );
+        set_paint_dark(true);
+        assert!(
+            contrast_ratio(fg(), bg()) >= 4.5,
+            "dark body text on canvas"
+        );
+        set_paint_dark(false);
+        assert!(
+            contrast_ratio(fg(), bg()) >= 4.5,
+            "light body text on canvas"
+        );
+        assert!(
+            contrast_ratio(SUBTLE, BG) >= 4.5,
+            "dark meta on canvas"
+        );
+        set_paint_dark(true);
         assert_eq!(CARD_RADIUS, 12.0);
         assert_eq!(MENU_RADIUS, 12.0);
         assert_eq!(SHEET_RADIUS, 16.0);
