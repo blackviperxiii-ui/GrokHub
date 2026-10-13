@@ -214,7 +214,9 @@ pub fn is_daily_drop_card(card: &UpdateCard, settings: &DailyDropSettings) -> bo
     }
     let rest = card.source_id.strip_prefix("source:").unwrap_or("");
     let key = rest.split(':').next().unwrap_or("");
-    SourceKind::ALL.iter().any(|k| k.key() == key && settings.on(*k))
+    SourceKind::ALL
+        .iter()
+        .any(|k| k.key() == key && settings.on(*k))
 }
 
 #[cfg(test)]
