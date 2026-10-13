@@ -1840,7 +1840,7 @@ mod tests {
             !src.contains(concat!("File::", "create(path)")),
             "Windows create_private must not be a no-op File create"
         );
-        let acl = include_str!("win_acl.rs");
+        let acl = include_str!("../../grokhub-core/src/win_acl.rs");
         assert!(
             acl.contains("USER_ONLY_SDDL")
                 && acl.contains("D:P(A;;FA;;;SY)(A;;FA;;;OW)")
