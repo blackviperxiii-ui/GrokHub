@@ -4,6 +4,7 @@
 //! until it is applied or deleted.
 
 use super::*;
+use crate::ui_kit::{card_frame, CardVariant};
 use grokhub_core::{
     dismiss_idea, idea_chat_open_line, mark_idea_modified, set_idea_draft, take_card_action,
     UpdateCard, UpdateKind, UpdateStatus, CARD_ACTION_TAG,
@@ -206,12 +207,7 @@ impl Cabin {
             .get(&id)
             .cloned()
             .unwrap_or_default();
-        let resp = egui::Frame::NONE
-            .fill(crate::theme::elevated())
-            .stroke(egui::Stroke::new(1.0_f32, crate::theme::border_strong()))
-            .corner_radius(crate::theme::CARD_RADIUS)
-            .inner_margin(egui::Margin::same(14))
-            .show(ui, |ui| {
+        let resp = card_frame(ui, CardVariant::Outlined, true, |ui| {
                 ui.set_width(ui.available_width());
                 ui.horizontal(|ui| {
                     type_line(ui, card);
@@ -356,8 +352,7 @@ impl Cabin {
                             .color(crate::theme::setup()),
                     );
                 }
-            })
-            .response;
+            });
         if thinking {
             ui.ctx().request_repaint();
         }

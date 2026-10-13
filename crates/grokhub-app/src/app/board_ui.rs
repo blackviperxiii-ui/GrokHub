@@ -12,6 +12,7 @@
 
 use super::pages::{BoardAct, BoardDrag};
 use super::*;
+use crate::ui_kit::{badge, card_frame, BadgeTone, CardVariant};
 use grokhub_core::{
     encode_turn, views_up_to_last_user, visible_chat, visible_chat_refs, ChatView, ThoughtFold,
     UpdateAction,
@@ -342,12 +343,7 @@ pub(super) fn paint_grip(ui: &mut egui::Ui) {
 }
 
 fn fresh_badge(ui: &mut egui::Ui) {
-    ui.label(
-        RichText::new("NEW")
-            .size(crate::theme::FONT_TIP)
-            .strong()
-            .color(crate::theme::live()),
-    );
+    badge(ui, "NEW", BadgeTone::Accent);
 }
 
 impl Cabin {
@@ -367,7 +363,7 @@ impl Cabin {
         let open = !dragging_any && self.board_view.open.as_deref() == Some(id);
         // The card under the pointer, and the one open card, stay interactive.
         // Every other card keeps its last measured slot when it is fully outside
-        // the column's clip. `Frame::show` burns two parent auto-ids (the child
+        // the column's clip. `card_frame` burns two parent auto-ids (the child
         // scope, then `allocate_rect`); a skipped card burns the same two.
         let dragged = egui::DragAndDrop::payload::<BoardDrag>(ui.ctx()).is_some_and(|d| d.0 == id);
         let width = ui.available_width().max(1.0);
@@ -420,77 +416,68 @@ impl Cabin {
     ) -> egui::Rect {
         let id = card.id.clone();
         let dragging = egui::DragAndDrop::payload::<BoardDrag>(ui.ctx()).is_some_and(|d| d.0 == id);
-        let fill = if dragging {
-            crate::theme::elevated().gamma_multiply(0.5)
-        } else {
-            crate::theme::elevated()
-        };
         let meta = card_meta_line(card, now_ms());
         let (filled, total) = board_card_progress(card.status);
         let chips = board_presence_chips(card);
-        let frame = egui::Frame::NONE
-            .fill(fill)
-            .corner_radius(BOARD_PILL_RADIUS)
-            .stroke(egui::Stroke::new(1.0_f32, crate::theme::border()))
-            .shadow(crate::theme::sheet_shadow())
-            .inner_margin(egui::Margin::symmetric(12, 10))
-            .show(ui, |ui| {
-                ui.set_width(ui.available_width());
-                ui.spacing_mut().item_spacing.x = 8.0;
-                ui.horizontal(|ui| {
-                    paint_grip(ui);
-                    paint_board_progress_ring(ui, filled, total);
-                    let gap = ui.spacing().item_spacing.x;
-                    let stack_w = if chips.is_empty() {
-                        0.0
-                    } else {
-                        BOARD_CHIP_SIZE
-                            + (BOARD_CHIP_SIZE - 7.0) * (chips.len().saturating_sub(1) as f32)
-                            + 4.0
-                    };
-                    let show_stack = !chips.is_empty() && ui.available_width() >= stack_w + gap;
-                    let reserved = if show_stack { stack_w + gap } else { 0.0 };
-                    let mid_w = (ui.available_width() - reserved).max(0.0);
-                    ui.vertical(|ui| {
-                        ui.set_width(mid_w);
-                        ui.spacing_mut().item_spacing.y = 4.0;
-                        ui.horizontal(|ui| {
-                            if card.fresh {
-                                fresh_badge(ui);
-                            }
+        // Flo compact cards used `sheet_shadow()`; kit `card_frame` paints lift via `kit_shadow`.
+        let _ = crate::theme::sheet_shadow();
+        let frame = card_frame(ui, CardVariant::Outlined, !dragging, |ui| {
+            ui.set_width(ui.available_width());
+            ui.spacing_mut().item_spacing.x = crate::theme::SPACING_8;
+            ui.horizontal(|ui| {
+                paint_grip(ui);
+                paint_board_progress_ring(ui, filled, total);
+                let gap = ui.spacing().item_spacing.x;
+                let stack_w = if chips.is_empty() {
+                    0.0
+                } else {
+                    BOARD_CHIP_SIZE
+                        + (BOARD_CHIP_SIZE - 7.0) * (chips.len().saturating_sub(1) as f32)
+                        + 4.0
+                };
+                let show_stack = !chips.is_empty() && ui.available_width() >= stack_w + gap;
+                let reserved = if show_stack { stack_w + gap } else { 0.0 };
+                let mid_w = (ui.available_width() - reserved).max(0.0);
+                ui.vertical(|ui| {
+                    ui.set_width(mid_w);
+                    ui.spacing_mut().item_spacing.y = crate::theme::SPACING_4;
+                    ui.horizontal(|ui| {
+                        if card.fresh {
+                            fresh_badge(ui);
+                        }
+                        ui.add(
+                            egui::Label::new(
+                                RichText::new(&card.title)
+                                    .size(crate::theme::FONT_BODY)
+                                    .strong()
+                                    .color(crate::theme::fg()),
+                            )
+                            .truncate()
+                            .selectable(false),
+                        );
+                    });
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = crate::theme::SPACING_8;
+                        paint_status_chip(ui, card.status);
+                        if !meta.is_empty() {
                             ui.add(
                                 egui::Label::new(
-                                    RichText::new(&card.title)
-                                        .size(crate::theme::FONT_BODY)
-                                        .strong()
-                                        .color(crate::theme::fg()),
+                                    RichText::new(&meta)
+                                        .size(crate::theme::FONT_TIP)
+                                        .color(crate::theme::subtle()),
                                 )
                                 .truncate()
                                 .selectable(false),
                             );
-                        });
-                        ui.horizontal(|ui| {
-                            ui.spacing_mut().item_spacing.x = 8.0;
-                            paint_status_chip(ui, card.status);
-                            if !meta.is_empty() {
-                                ui.add(
-                                    egui::Label::new(
-                                        RichText::new(&meta)
-                                            .size(crate::theme::FONT_TIP)
-                                            .color(crate::theme::subtle()),
-                                    )
-                                    .truncate()
-                                    .selectable(false),
-                                );
-                            }
-                        });
+                        }
                     });
-                    if show_stack {
-                        paint_presence_stack(ui, &chips);
-                    }
                 });
+                if show_stack {
+                    paint_presence_stack(ui, &chips);
+                }
             });
-        let rect = frame.response.rect;
+        });
+        let rect = frame.rect;
         let resp = ui
             .interact(
                 rect,
@@ -544,13 +531,7 @@ impl Cabin {
             .as_ref()
             .filter(|(n, _)| n == &id)
             .map(|(_, t)| t.clone());
-        let resp = egui::Frame::NONE
-            .fill(crate::theme::elevated())
-            .corner_radius(crate::theme::SHEET_RADIUS)
-            .stroke(egui::Stroke::new(1.0_f32, crate::theme::border_strong()))
-            .shadow(crate::theme::sheet_shadow())
-            .inner_margin(egui::Margin::same(14))
-            .show(ui, |ui| {
+        let resp = card_frame(ui, CardVariant::Default, true, |ui| {
                 ui.set_width(ui.available_width());
                 // Only the title row drags (or folds the card on a click); the rest
                 // of the card has controls.
@@ -677,8 +658,7 @@ impl Cabin {
                             .color(crate::theme::setup()),
                     );
                 }
-            })
-            .response;
+            });
         if busy_here {
             ui.ctx().request_repaint();
         }
