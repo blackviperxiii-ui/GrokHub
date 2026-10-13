@@ -62,6 +62,51 @@ pub fn console_key<'a>(secrets: &'a Secrets, cfg_key: &'a str) -> &'a str {
 }
 
 /// Move a leftover app.json console key into secrets.json and wipe it from config.
+/// The sealed API key for one installed connector, if any.
+pub fn open_connector_token(name: &str) -> Option<String> {
+    grokhub_agent::harness::open_connection_token(&crate::config::config_dir(), name)
+}
+
+/// Block until the cabin approves or denies a credentials hard card for this
+/// connector. Returns false on deny, timeout, or halt.
+pub fn wait_connector_credentials(name: &str, action: &str) -> bool {
+    use grokhub_agent::harness::{post_park, wait_park, ParkRequest};
+    use std::time::Duration;
+    let config = crate::config::config_dir();
+    let id = format!(
+        "mcp-key-{}-{}",
+        name,
+        grokhub_core::pkce::oauth_nonce()
+    );
+    let req = ParkRequest {
+        id: id.clone(),
+        path: "E".into(),
+        tool: "mcp_connector".into(),
+        action: format!("{action} ({name})"),
+        class: "credentials".into(),
+        ts_ms: grokhub_core::now_ms(),
+    };
+    if post_park(&config, &req).is_err() {
+        return false;
+    }
+    wait_park(
+        &config,
+        &id,
+        grokhub_agent::harness::APPROVAL_TTL,
+        Duration::from_millis(200),
+        &mut || false,
+    )
+}
+
+/// After the credentials card approves, seal the key and wire `tokenRef` in
+/// `mcp.json`.
+pub fn save_connector_key(name: &str, key: &str) -> Result<String, String> {
+    if !wait_connector_credentials(name, "save its API key") {
+        return Err(format!("Nothing saved. {name}'s key was denied."));
+    }
+    grokhub_agent::mcp::save_key(name, key)
+}
+
 pub fn migrate_console_key(cfg: &mut crate::config::AppConfig, secrets: &mut Secrets) {
     if cfg.api_key.trim().is_empty() {
         return;
@@ -190,6 +235,86 @@ mod tests {
                 && !ens.contains("save("),
             "boot rewrite must keep leftover bytes, not load/save JSON: {ens}"
         );
+    }
+
+    #[test]
+    fn connector_keys_seal_in_the_keyring_and_open_round_trip() {
+        let _g = crate::config::hold_test_config();
+        let root = crate::config::test_config_root("sec-conn");
+        let _ = fs::remove_dir_all(&root);
+        std::env::set_var("GROKHUB_CONFIG", &root);
+        let _guard = grokhub_agent::perm::ConfigGuard::set(&root);
+        let catalog = grokhub_core::mcp_catalog::bundled();
+        let entry = catalog.get("brave-search").expect("brave-search");
+        let config_entry = entry.config_entry();
+        grokhub_agent::mcp::install("brave-search", &config_entry).unwrap();
+        let token = "sk-abcdefghijklmnopqrstuv";
+        let waiter = std::thread::spawn({
+            let root = root.clone();
+            move || {
+                for _ in 0..200 {
+                    if let Some(req) = grokhub_agent::harness::pending_parks(&root).pop() {
+                        assert_eq!(req.class, "credentials");
+                        let _ = grokhub_agent::harness::answer_park(&root, &req.id, true);
+                        return req.action;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+                panic!("no credentials park");
+            }
+        });
+        let line = save_connector_key("brave-search", token).unwrap();
+        assert_eq!(line, "Saved the key for brave-search");
+        let action = waiter.join().unwrap();
+        assert!(
+            action.contains("save its API key") && action.contains("brave-search"),
+            "{action}"
+        );
+        assert_eq!(open_connector_token("brave-search").as_deref(), Some(token));
+        let on_disk =
+            fs::read_to_string(root.join("connection-tokens").join("brave-search.sealed")).unwrap();
+        assert!(
+            !on_disk.contains("abcdefghijklmnopqrstuv"),
+            "sealed blob must not hold the key plain"
+        );
+        let cfg = fs::read_to_string(root.join("mcp.json")).unwrap();
+        assert!(cfg.contains("\"tokenRef\""), "{cfg}");
+        assert!(!cfg.contains(token), "{cfg}");
+        let _ = fs::remove_dir_all(&root);
+        std::env::remove_var("GROKHUB_CONFIG");
+    }
+
+    #[test]
+    fn connector_key_save_denied_writes_nothing() {
+        let _g = crate::config::hold_test_config();
+        let root = crate::config::test_config_root("sec-conn-deny");
+        let _ = fs::remove_dir_all(&root);
+        std::env::set_var("GROKHUB_CONFIG", &root);
+        let _guard = grokhub_agent::perm::ConfigGuard::set(&root);
+        let catalog = grokhub_core::mcp_catalog::bundled();
+        let entry = catalog.get("brave-search").expect("brave-search");
+        let config_entry = entry.config_entry();
+        grokhub_agent::mcp::install("brave-search", &config_entry).unwrap();
+        let waiter = std::thread::spawn({
+            let root = root.clone();
+            move || {
+                for _ in 0..200 {
+                    if let Some(req) = grokhub_agent::harness::pending_parks(&root).pop() {
+                        let _ = grokhub_agent::harness::answer_park(&root, &req.id, false);
+                        return;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+            }
+        });
+        let err = save_connector_key("brave-search", "sk-abcdefghijklmnopqrstuv").unwrap_err();
+        assert_eq!(err, "Nothing saved. brave-search's key was denied.");
+        waiter.join().unwrap();
+        assert_eq!(open_connector_token("brave-search"), None);
+        let cfg = fs::read_to_string(root.join("mcp.json")).unwrap();
+        assert!(!cfg.contains("tokenRef"), "{cfg}");
+        let _ = fs::remove_dir_all(&root);
+        std::env::remove_var("GROKHUB_CONFIG");
     }
 
     #[test]

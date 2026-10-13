@@ -95,8 +95,8 @@ pub(super) enum ConfirmKind {
     Disconnect {
         name: String,
     },
-    /// Marketplace: seal the key typed for `name`. The key stays in the
-    /// Marketplace field, never in this card.
+    /// Legacy Marketplace confirm; CN2 uses the credentials hard card instead.
+    #[expect(dead_code)]
     SaveKey {
         name: String,
         label: String,

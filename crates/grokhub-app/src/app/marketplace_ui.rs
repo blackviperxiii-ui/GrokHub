@@ -4,8 +4,8 @@
 //!
 //! Installing is reversible (`/connections` undo, or Disconnect), so it asks
 //! nothing. A browser sign-in opens right after Install. A typed API key is a
-//! credential: Save key goes through the confirm sheet first, and Cancel
-//! clears the field.
+//! credential: Save key parks a hard credentials card first, and Cancel on
+//! that card clears the field.
 
 use grokhub_core::mcp_catalog::{self, CatalogAuth, CatalogEntry};
 
@@ -190,25 +190,32 @@ impl Cabin {
         self.status = format!("Installing {}", e.name);
     }
 
-    /// Save key: ask on the confirm sheet first.
-    pub(super) fn arm_save_key(&mut self, e: &CatalogEntry) {
+    /// Confirm sheet legacy entry: same path as Save key on the detail view.
+    pub(super) fn save_key_confirmed(&mut self, name: &str) {
+        if let Some(e) = mcp_catalog::bundled().get(name) {
+            self.start_save_connector_key(e);
+        }
+    }
+
+    /// Save key: the hard credentials card first, then seal in the keyring.
+    pub(super) fn start_save_connector_key(&mut self, e: &CatalogEntry) {
         if self.market.key.trim().is_empty() {
             self.status = format!("Type the {} key first", e.name);
             return;
         }
-        self.confirm = Some(confirm::ConfirmKind::SaveKey {
-            name: e.id.clone(),
-            label: e.name.clone(),
-        });
-    }
-
-    /// The confirm sheet said yes: seal the typed key, then clear the field.
-    pub(super) fn save_key_confirmed(&mut self, name: &str) {
+        self.status = format!("Approve the card to save the key for {}.", e.name);
+        let name = e.id.clone();
         let key = std::mem::take(&mut self.market.key);
-        crate::native_mcp::spawn(crate::native_mcp::Job::SaveKey {
-            name: name.to_string(),
-            key,
-        });
+        match crate::secrets::save_connector_key(&name, &key) {
+            Ok(note) => {
+                self.status = note;
+                crate::native_mcp::spawn(crate::native_mcp::Job::Doctor);
+            }
+            Err(err) => {
+                self.status = err;
+                self.market.key.clear();
+            }
+        }
     }
 
     /// The tab pills at the top of Settings → Connectors.
@@ -372,7 +379,7 @@ impl Cabin {
                             .desired_width(280.0),
                     );
                     if crate::cards::white_pill(ui, "Save key") {
-                        self.arm_save_key(e);
+                        self.start_save_connector_key(e);
                     }
                 });
             }
@@ -425,30 +432,43 @@ mod tests {
     }
 
     #[test]
-    fn save_key_asks_first_and_cancel_clears_the_key() {
+    fn save_key_parks_credentials_and_denied_clears_the_field() {
+        let _hold = crate::config::hold_test_config();
+        let root = crate::config::test_config_root("market-key");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        std::env::set_var("GROKHUB_CONFIG", &root);
+        let _guard = grokhub_agent::perm::ConfigGuard::set(&root);
         let mut cabin = Cabin::quiet_for_test();
         let brave = entry("brave-search");
-        cabin.arm_save_key(&brave);
-        assert!(cabin.confirm.is_none(), "an empty field asks nothing");
+        grokhub_agent::mcp::install("brave-search", &brave.config_entry()).unwrap();
+        cabin.start_save_connector_key(&brave);
         assert_eq!(cabin.status, "Type the Brave Search key first");
 
         cabin.market.key = "sk-abcdefghijklmnopqrstuv".into();
-        cabin.arm_save_key(&brave);
-        assert!(matches!(
-            &cabin.confirm,
-            Some(confirm::ConfirmKind::SaveKey { name, label }) if name == "brave-search" && label == "Brave Search"
-        ));
-        let src = include_str!("confirm.rs");
-        let cancel = src.split("Some(ConfirmAct::Cancel) => {").nth(1).unwrap();
-        let cancel = &cancel[..cancel.find("None => {}").unwrap()];
-        assert!(
-            cancel.contains("ConfirmKind::SaveKey") && cancel.contains("self.market.key.clear()"),
-            "{cancel}"
+        let waiter = std::thread::spawn({
+            let root = root.clone();
+            move || {
+                for _ in 0..400 {
+                    if let Some(req) = grokhub_agent::harness::pending_parks(&root).pop() {
+                        assert_eq!(req.class, "credentials");
+                        let _ = grokhub_agent::harness::answer_park(&root, &req.id, false);
+                        return;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+                panic!("no credentials park");
+            }
+        });
+        cabin.start_save_connector_key(&brave);
+        waiter.join().expect("park waiter");
+        assert_eq!(
+            cabin.status,
+            "Nothing saved. brave-search's key was denied."
         );
-        assert!(
-            !format!("{:?}", cabin.confirm).contains("sk-abc"),
-            "the key never rides on the card"
-        );
+        assert!(cabin.market.key.is_empty());
+        assert!(crate::secrets::open_connector_token("brave-search").is_none());
+        std::env::remove_var("GROKHUB_CONFIG");
     }
 
     #[test]

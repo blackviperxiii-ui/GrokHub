@@ -128,7 +128,43 @@ fn discover(server: &str, url: &str) -> Result<(AuthServer, Option<String>), Str
     Err(format!("{server} doesn't offer a browser sign-in"))
 }
 
+/// When true (tests only), [`credentials_before_save`] parks like production.
+#[cfg(test)]
+pub(crate) static TEST_CREDENTIALS_REQUIRED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+fn credentials_before_save(server: &str, what: &str) -> Result<(), String> {
+    #[cfg(test)]
+    if !TEST_CREDENTIALS_REQUIRED.load(std::sync::atomic::Ordering::Relaxed) {
+        return Ok(());
+    }
+    use crate::harness::{post_park, wait_park, ParkRequest};
+    let config = crate::perm::config_dir();
+    let id = format!("mcp-oauth-{}-{}", server, grokhub_core::pkce::oauth_nonce());
+    let req = ParkRequest {
+        id: id.clone(),
+        path: "E".into(),
+        tool: "mcp_sign_in".into(),
+        action: format!("{what} for {server}"),
+        class: "credentials".into(),
+        ts_ms: grokhub_core::now_ms(),
+    };
+    post_park(&config, &req)?;
+    if wait_park(
+        &config,
+        &id,
+        crate::harness::APPROVAL_TTL,
+        Duration::from_millis(200),
+        &mut || false,
+    ) {
+        Ok(())
+    } else {
+        Err(format!("{server}: saving sign-in was denied"))
+    }
+}
+
 fn save(server: &str, signin: &McpSignIn) -> Result<(), String> {
+    credentials_before_save(server, "seal the browser sign-in")?;
     let json = serde_json::to_string(signin).map_err(|e| e.to_string())?;
     crate::harness::seal_mcp_signin(&crate::perm::config_dir(), server, &json)
 }
@@ -569,6 +605,42 @@ pub(super) mod tests {
         )
         .unwrap_err();
         assert_eq!(err, "linear sign-in timed out");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn denied_sign_in_save_parks_credentials_and_seals_nothing() {
+        TEST_CREDENTIALS_REQUIRED.store(true, std::sync::atomic::Ordering::SeqCst);
+        let dir = hx::test_dir("mcp-oauth-deny-save");
+        let _cfg = crate::perm::ConfigGuard::set(&dir);
+        let server = AuthMcp::start();
+        let root = dir.clone();
+        let waiter = std::thread::spawn(move || {
+            for _ in 0..400 {
+                if let Some(req) = crate::harness::pending_parks(&root).pop() {
+                    assert_eq!(req.class, "credentials");
+                    let _ = crate::harness::answer_park(&root, &req.id, false);
+                    return;
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            panic!("no credentials park");
+        });
+        let err = sign_in(
+            "linear",
+            &server.url(),
+            &approving_browser("good-code"),
+            Duration::from_secs(10),
+        )
+        .unwrap_err();
+        waiter.join().unwrap();
+        assert_eq!(err, "linear: saving sign-in was denied");
+        assert!(load("linear").is_none());
+        assert!(
+            !dir.join("connection-tokens").join("linear.signin.sealed").exists(),
+            "denied save must not write a sealed sign-in"
+        );
+        TEST_CREDENTIALS_REQUIRED.store(false, std::sync::atomic::Ordering::SeqCst);
         let _ = std::fs::remove_dir_all(dir);
     }
 
