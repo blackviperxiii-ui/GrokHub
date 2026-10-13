@@ -1,0 +1,18 @@
+{
+  "id": "020_final_checkpoint",
+  "prompt": "Reply with exactly: checkpoint",
+  "mode": "always",
+  "files": [],
+  "script": [
+    {
+      "type": "text",
+      "content": "checkpoint",
+      "usage": { "input_tokens": 7, "output_tokens": 2 }
+    }
+  ],
+  "checks": [
+    { "type": "stop_reason", "value": "end_turn" },
+    { "type": "assistant_contains", "value": "checkpoint" },
+    { "type": "no_permission_cards" }
+  ]
+}

@@ -1,0 +1,27 @@
+{
+  "id": "008_search_replace",
+  "prompt": "Fix lib.txt so it says plus instead of minus.",
+  "mode": "always",
+  "files": [{ "path": "lib.txt", "content": "2 minus 2\n" }],
+  "script": [
+    {
+      "type": "tool",
+      "name": "search_replace",
+      "arguments": {
+        "file_path": "lib.txt",
+        "old_string": "minus",
+        "new_string": "plus"
+      },
+      "usage": { "input_tokens": 22, "output_tokens": 0 }
+    },
+    {
+      "type": "text",
+      "content": "Updated lib.txt",
+      "usage": { "input_tokens": 35, "output_tokens": 5 }
+    }
+  ],
+  "checks": [
+    { "type": "stop_reason", "value": "end_turn" },
+    { "type": "file_contains", "path": "lib.txt", "value": "plus" }
+  ]
+}
