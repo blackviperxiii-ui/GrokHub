@@ -73,11 +73,7 @@ pub fn wait_connector_credentials(name: &str, action: &str) -> bool {
     use grokhub_agent::harness::{post_park, wait_park, ParkRequest};
     use std::time::Duration;
     let config = crate::config::config_dir();
-    let id = format!(
-        "mcp-key-{}-{}",
-        name,
-        grokhub_core::pkce::oauth_nonce()
-    );
+    let id = format!("mcp-key-{}-{}", name, grokhub_core::pkce::oauth_nonce());
     let req = ParkRequest {
         id: id.clone(),
         path: "E".into(),

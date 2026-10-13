@@ -100,12 +100,12 @@ pub(super) fn cabin_connector_rows(rows: &[grokhub_agent::mcp::DoctorRow]) -> Ve
                 && crate::secrets::open_connector_token(&r.name).is_none();
             let state = if r.status == "disabled" {
                 ConnectorState::Off
+            } else if r.status == "error" && !needs_key {
+                ConnectorState::Error(r.last_error.clone())
             } else if needs_key {
                 ConnectorState::NeedsKey
             } else if r.sign_in == SignIn::SignedOut {
                 ConnectorState::NeedsSignIn
-            } else if r.status == "error" {
-                ConnectorState::Error(r.last_error.clone())
             } else if r.status == "connected" {
                 ConnectorState::Connected
             } else {
@@ -434,7 +434,12 @@ mod tests {
                 SignIn::SignedIn("Signed in to linear as ada@example.com".into()),
             ),
             doctor("notion", "not checked", "", SignIn::SignedOut),
-            doctor("github", "error", "timed out after 5s", SignIn::NotOffered),
+            doctor(
+                "custom-api",
+                "error",
+                "timed out after 5s",
+                SignIn::NotOffered,
+            ),
             doctor("old", "disabled", "", SignIn::NotOffered),
             doctor("files", "stopped", "", SignIn::NotOffered),
         ]);
@@ -457,7 +462,7 @@ mod tests {
                     vec!["Reconnect", "Sign out", "Disconnect"]
                 ),
                 ("notion", "Needs sign-in", vec!["Connect", "Disconnect"]),
-                ("github", "Error", vec!["Reconnect", "Disconnect"]),
+                ("custom-api", "Error", vec!["Reconnect", "Disconnect"]),
                 ("old", "Off", vec!["Disconnect"]),
                 ("files", "Not checked", vec!["Reconnect", "Disconnect"]),
             ]
@@ -514,7 +519,10 @@ mod tests {
             SignIn::NotOffered,
         )]);
         assert_eq!(rows[0].state.chip().0, "Needs key");
-        assert_eq!(rows[0].acts, vec![ConnectorAct::SaveKey, ConnectorAct::Disconnect]);
+        assert_eq!(
+            rows[0].acts,
+            vec![ConnectorAct::SaveKey, ConnectorAct::Disconnect]
+        );
     }
 
     #[test]
