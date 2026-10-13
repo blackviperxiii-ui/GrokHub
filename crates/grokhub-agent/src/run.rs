@@ -253,41 +253,56 @@ pub fn run_loop(
     let playbook = (input.depth == 0)
         .then(|| crate::checkpoint::turn_playbook(input.conversation_id))
         .flatten();
-    if first_turn {
-        let base = style.map(|s| grokhub_core::talk::restyle(input.system, s));
-        let base = base.as_deref().unwrap_or(input.system);
-        let base = match &playbook {
-            Some(block) => grokhub_core::playbook::with_playbook(base, Some(block)),
-            None => base.to_string(),
-        };
-        let system = match crate::memory::first_turn_injection(input.workspace, user_text) {
-            Some(block) if base.trim().is_empty() => block,
-            Some(block) => format!("{base}\n\n{block}"),
-            None => base.to_string(),
-        };
-        if !system.trim().is_empty() {
-            history.push(InputItem::Message {
-                role: "system".into(),
-                content: vec![ContentPart::InputText(system)],
-            });
+    let config_dir = crate::perm::config_dir();
+    if crate::prefix_cache::enabled(&config_dir) {
+        if first_turn {
+            crate::prefix_cache::push_stable_system(history, input.system);
         }
+        let volatile = crate::prefix_cache::TurnVolatile::assemble(
+            input.workspace,
+            user_text,
+            first_turn,
+            style,
+            playbook.as_deref(),
+        );
+        crate::prefix_cache::push_user_turn(history, &volatile, user_text, image);
     } else {
-        if let Some(style) = style {
-            restyle_history(history, style);
+        if first_turn {
+            let base = style.map(|s| grokhub_core::talk::restyle(input.system, s));
+            let base = base.as_deref().unwrap_or(input.system);
+            let base = match &playbook {
+                Some(block) => grokhub_core::playbook::with_playbook(base, Some(block)),
+                None => base.to_string(),
+            };
+            let system = match crate::memory::first_turn_injection(input.workspace, user_text) {
+                Some(block) if base.trim().is_empty() => block,
+                Some(block) => format!("{base}\n\n{block}"),
+                None => base.to_string(),
+            };
+            if !system.trim().is_empty() {
+                history.push(InputItem::Message {
+                    role: "system".into(),
+                    content: vec![ContentPart::InputText(system)],
+                });
+            }
+        } else {
+            if let Some(style) = style {
+                restyle_history(history, style);
+            }
+            if input.depth == 0 {
+                replaybook_history(history, playbook.as_deref());
+            }
+            // Later turns: surface sealed installed-app learnings when the user
+            // asks about games / Steam / library (first turn was often "hi").
+            if let Some(block) = crate::memory::followup_injection(user_text) {
+                history.push(InputItem::Message {
+                    role: "system".into(),
+                    content: vec![ContentPart::InputText(block)],
+                });
+            }
         }
-        if input.depth == 0 {
-            replaybook_history(history, playbook.as_deref());
-        }
-        // Later turns: surface sealed installed-app learnings when the user
-        // asks about games / Steam / library (first turn was often "hi").
-        if let Some(block) = crate::memory::followup_injection(user_text) {
-            history.push(InputItem::Message {
-                role: "system".into(),
-                content: vec![ContentPart::InputText(block)],
-            });
-        }
+        history.push(user_message(user_text, image));
     }
-    history.push(user_message(user_text, image));
     // Spike-4c: a tool call that carries a recalled line is personal egress.
     let _recall = crate::harness::RecallScope::enter(crate::memory::recall_lines(history));
     input.permits.drain();
