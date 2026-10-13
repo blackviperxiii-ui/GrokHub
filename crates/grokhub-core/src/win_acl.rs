@@ -97,18 +97,7 @@ fn dacl_ptr(sd: PSECURITY_DESCRIPTOR) -> io::Result<*mut ACL> {
     Ok(dacl)
 }
 
-/// True when an SDDL DACL grants read/write to Everyone, Users, Authenticated Users,
-/// Guests, or Anonymous. Owner / SYSTEM SIDs are fine (`OW` expands to `S-1-5-21-…`).
-pub fn sddl_allows_world(sddl: &str) -> bool {
-    sddl.split('(')
-        .skip(1)
-        .map(|ace| ace.split(')').next().unwrap_or(""))
-        .filter(|ace| ace.starts_with('A') || ace.starts_with("OA"))
-        .any(|ace| {
-            let trustee = ace.rsplit(';').next().unwrap_or("");
-            matches!(trustee, "WD" | "BU" | "AU" | "BG" | "AN")
-        })
-}
+pub use crate::sddl::sddl_allows_world;
 
 pub fn create_user_only(path: &Path) -> io::Result<fs::File> {
     // `CreateFileW` CREATE_ALWAYS on an existing inode keeps that inode's DACL.

@@ -91,6 +91,7 @@ pub mod review;
 pub mod rewind;
 pub mod run_metrics;
 pub mod screen_record;
+pub mod sddl;
 pub mod self_review;
 pub mod shortcuts;
 pub mod situation;
