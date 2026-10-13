@@ -390,25 +390,43 @@ pub fn save_hub_state(path: &std::path::Path, st: &HubState) -> Result<(), Strin
         use std::os::unix::fs::PermissionsExt;
         let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
     }
+    #[cfg(windows)]
+    {
+        // Rename keeps the destination inode's DACL on Windows; force user-only
+        // so a leftover world-readable hub-state.json cannot keep Everyone read.
+        crate::win_acl::restrict_user_only(path);
+    }
     Ok(())
 }
 
 fn write_private_synced(path: &std::path::Path, bytes: &[u8]) -> Result<(), String> {
     use std::io::Write;
-    let _ = std::fs::remove_file(path);
-    let mut opts = std::fs::OpenOptions::new();
-    opts.write(true).create(true).truncate(true);
-    #[cfg(unix)]
+    #[cfg(windows)]
     {
-        use std::os::unix::fs::OpenOptionsExt;
-        opts.mode(0o600);
+        // Pair bearer tokens are in these bytes: create the temp with a user-only
+        // DACL before any write (same rail as secrets.json).
+        let mut f = crate::win_acl::create_user_only(path).map_err(|e| e.to_string())?;
+        f.write_all(bytes).map_err(|e| e.to_string())?;
+        f.sync_all().map_err(|e| e.to_string())?;
+        Ok(())
     }
-    let mut f = opts.open(path).map_err(|e| e.to_string())?;
-    f.write_all(bytes).map_err(|e| e.to_string())?;
-    // Without the fsync a power loss can leave a zero-length file that the rename already
-    // published, which reads back as "no peers" and unpairs every device.
-    f.sync_all().map_err(|e| e.to_string())?;
-    Ok(())
+    #[cfg(not(windows))]
+    {
+        let _ = std::fs::remove_file(path);
+        let mut opts = std::fs::OpenOptions::new();
+        opts.write(true).create(true).truncate(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            opts.mode(0o600);
+        }
+        let mut f = opts.open(path).map_err(|e| e.to_string())?;
+        f.write_all(bytes).map_err(|e| e.to_string())?;
+        // Without the fsync a power loss can leave a zero-length file that the rename already
+        // published, which reads back as "no peers" and unpairs every device.
+        f.sync_all().map_err(|e| e.to_string())?;
+        Ok(())
+    }
 }
 
 pub fn load_hub_state(path: &std::path::Path) -> Option<HubState> {
@@ -512,7 +530,38 @@ mod tests {
             let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
             assert_eq!(mode, 0o600, "hub-state.json holds pair tokens");
         }
+        #[cfg(windows)]
+        {
+            let sddl = crate::win_acl::file_sddl(&path).expect("hub-state sddl");
+            assert!(
+                !crate::win_acl::sddl_allows_world(&sddl),
+                "hub-state.json holds pair tokens; must be user-only DACL: {sddl}"
+            );
+        }
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn hub_state_write_creates_private_before_bytes_land() {
+        let src = include_str!("state.rs");
+        let write = src
+            .split("fn write_private_synced(")
+            .nth(1)
+            .and_then(|s| s.split("pub fn load_hub_state(").next())
+            .expect("write_private_synced");
+        assert!(
+            write.contains("create_user_only") || write.contains("mode(0o600)"),
+            "hub-state temp must be private before bytes land: {write}"
+        );
+        let save = src
+            .split("pub fn save_hub_state(")
+            .nth(1)
+            .and_then(|s| s.split("fn write_private_synced(").next())
+            .expect("save_hub_state");
+        assert!(
+            save.contains("restrict_user_only") || save.contains("set_permissions"),
+            "hub-state rename must re-assert private perms: {save}"
+        );
     }
 
     #[test]

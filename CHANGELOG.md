@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Security: MCP legacy SSE absolute `endpoint` URLs must stay on the connect host (no pivot to link-local / LAN / loopback). Custom provider base URLs and marketplace index URLs refuse non-public addresses and dial through `public_only_resolve` with redirects off (same rail as Pulse / `web_fetch`). `hub-state.json` writes use a user-only Windows DACL before bytes land (pair tokens), matching `secrets.json`.
 - Fixed: Pulse **More like this** no longer clears the related-search queue when Hacker News, Reddit, and Web search are all off, and the status says to turn one on instead of claiming the ask is queued.
 - Fixed: AMR `remember` publishes nodes via temp + exclusive hard_link/rename (with `sync_all`), so a trail file is never visible empty mid-write; the turn-end trail test waits for the body, not just `is_file()`.
 - Fixed: proactive dismiss mute expiry in tests is driven from the dismiss wall clock (not `t0 + DAY + 2s`), and Pulse feed-instruction rewrite waits up to 30s so Windows CI load does not flake the mock rewrite.
