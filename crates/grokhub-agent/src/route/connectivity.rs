@@ -107,6 +107,26 @@ pub fn cloud_queue_note(class: &str) -> String {
     format!("Waiting for the network: {what} needs the cloud.")
 }
 
+/// Classify a `ureq` error for [`grokhub_core::connectivity::note_global_transport_hint`].
+pub fn classify_ureq_error(err: &ureq::Error) -> grokhub_core::connectivity::TransportHint {
+    use grokhub_core::connectivity::{classify_http_status, TransportHint};
+    match err {
+        ureq::Error::Status(code, _) => classify_http_status(*code),
+        ureq::Error::Transport(t) => match t.kind() {
+            ureq::ErrorKind::Dns | ureq::ErrorKind::ConnectionFailed | ureq::ErrorKind::Io => {
+                TransportHint::OfflineCandidate
+            }
+            _ => TransportHint::Inconclusive,
+        },
+    }
+}
+
+/// Feed ureq transport failures into the cabin connectivity engine.
+pub fn note_ureq_transport(err: &ureq::Error) {
+    let hint = classify_ureq_error(err);
+    grokhub_core::connectivity::note_global_transport_hint(hint, grokhub_core::now_ms());
+}
+
 pub fn is_cloud_only(class: &str) -> bool {
     let class = super::policy::class_row(class)
         .map(|r| r.class)
@@ -189,6 +209,13 @@ mod tests {
         assert!(state().prefer_local());
         set_state(NetState::Online);
         assert!(!state().prefer_local());
+    }
+
+    #[test]
+    fn ureq_connect_errors_are_offline_candidates() {
+        use grokhub_core::connectivity::TransportHint;
+        let err = ureq::get("http://127.0.0.1:1/").call().unwrap_err();
+        assert_eq!(classify_ureq_error(&err), TransportHint::OfflineCandidate);
     }
 
     #[test]
