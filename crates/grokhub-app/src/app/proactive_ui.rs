@@ -560,6 +560,9 @@ mod tests {
             .unwrap();
         let status = cabin.status.clone();
         cabin.pulse_dismiss(&again.id, "2027-01-15");
+        // Mute is dismiss_wall + DAY_MS. Drive from now after dismiss — not t0 —
+        // so a slow Windows run cannot still be muted at t0 + DAY_MS + 2s.
+        let dismiss_ms = now_ms();
         assert_eq!(cabin.status, status, "dismiss is quiet");
         assert!(cabin.harness.park.is_none());
         let prior = cabin
@@ -572,11 +575,11 @@ mod tests {
         );
         assert_eq!(approvals(&root), 1, "dismiss ran nothing");
         assert_eq!(
-            cabin.post_proactive(vec![tidy()], t0 + 2_000),
+            cabin.post_proactive(vec![tidy()], dismiss_ms),
             0,
             "not posted again that day"
         );
-        assert_eq!(cabin.post_proactive(vec![tidy()], t0 + day + 2_000), 1);
+        assert_eq!(cabin.post_proactive(vec![tidy()], dismiss_ms + day), 1);
     }
 
     #[test]
