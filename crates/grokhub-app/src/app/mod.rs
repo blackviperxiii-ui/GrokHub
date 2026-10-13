@@ -153,6 +153,7 @@ mod chat_ui;
 mod chips;
 mod confirm;
 mod connectors_ui;
+mod daily_drop_ui;
 mod episode_ui;
 mod evidence_ui;
 mod feed_ui;
@@ -502,6 +503,8 @@ pub struct Cabin {
     grok_loops: Vec<GrokLoop>,
     /// Home update feed. `updates.json`. Not an AppConfig field.
     updates: Vec<grokhub_core::UpdateCard>,
+    /// `daily_drop.json` ledger and last overnight pass, cached after first read.
+    daily_drop_file: Option<daily_drop_ui::DailyDropFile>,
     /// Learned Home weights. `card_prefs.json`. Not part of AppConfig.
     card_prefs: grokhub_core::CardPrefs,
     grok_loop_rx: Option<(String, mpsc::Receiver<String>)>,
@@ -1111,6 +1114,7 @@ impl Cabin {
             automations: crate::night::load(),
             grok_loops: crate::loops::load(),
             updates: crate::feed::load(),
+            daily_drop_file: None,
             card_prefs: crate::card_prefs::load(),
             grok_loop_rx: None,
             night_nl: String::new(),
@@ -1555,6 +1559,7 @@ impl Cabin {
             automations: Vec::new(),
             grok_loops: Vec::new(),
             updates: Vec::new(),
+            daily_drop_file: None,
             card_prefs: grokhub_core::CardPrefs::default(),
             grok_loop_rx: None,
             night_nl: String::new(),
@@ -3474,43 +3479,6 @@ impl Cabin {
         let mut night_fired = false;
         for job in plan.run.iter().copied() {
             night_fired |= self.run_job(job, plan.quiet, halted, &day, night_fired);
-        }
-    }
-
-    /// Governor [`JobKind::DailyDrop`]: overnight local pick from ranked Pulse rows.
-    /// Settings and ledger wiring land with Dreambeans UI; off by default.
-    fn tick_daily_drop(&mut self, today: &str) {
-        use grokhub_core::{
-            daily_drop::{DailyDropLedger, DailyDropSettings},
-            governor::{daily_drop_refresh, DailyDropRefreshCtx},
-            post_update,
-        };
-        let settings = DailyDropSettings::default();
-        let mut ledger = DailyDropLedger::default();
-        let ranked: Vec<grokhub_core::pulse_sources::Ranked> = Vec::new();
-        let clock = Self::local_clock();
-        let now = now_ms();
-        let out = daily_drop_refresh(DailyDropRefreshCtx {
-            settings: &settings,
-            ranked: &ranked,
-            ledger: &mut ledger,
-            last_run_day: None,
-            today,
-            clock: &clock,
-            night_hour: self.dream_hour(),
-            now_ms: now,
-        });
-        if out.cards.is_empty() {
-            return;
-        }
-        let mut changed = false;
-        for card in out.cards {
-            if post_update(&mut self.updates, card) {
-                changed = true;
-            }
-        }
-        if changed {
-            self.persist_updates();
         }
     }
 

@@ -1236,10 +1236,35 @@ impl Cabin {
             now_ms: now,
         };
         let muted = &self.cfg.feed_pulse.muted_sources;
-        pc::feed_posts(&self.updates, &inputs)
+        let mut posts: Vec<UpdateCard> = pc::feed_posts(&self.updates, &inputs)
             .into_iter()
             .filter(|c| c.source_id.is_empty() || !muted.iter().any(|m| m == &c.source_id))
-            .collect()
+            .collect();
+        if self.cfg.daily_drop.active() {
+            use grokhub_core::daily_drop::{day_index, is_daily_drop_card};
+            use grokhub_core::pulse::{pulse_visible, PULSE_THRESHOLD};
+            let today = day_index(now);
+            for card in &self.updates {
+                if !is_daily_drop_card(card, &self.cfg.daily_drop)
+                    || day_index(card.created_at) != today
+                    || !pulse_visible(card, now)
+                {
+                    continue;
+                }
+                if card.source_id.is_empty() || muted.iter().any(|m| m == &card.source_id) {
+                    continue;
+                }
+                if pc::pulse_score(card, &inputs) >= PULSE_THRESHOLD {
+                    continue;
+                }
+                if posts.iter().any(|p| p.id == card.id) {
+                    continue;
+                }
+                posts.push(card.clone());
+            }
+            posts.sort_by(|a, b| b.created_at.cmp(&a.created_at).then(a.id.cmp(&b.id)));
+        }
+        posts
     }
 
     // feed view
