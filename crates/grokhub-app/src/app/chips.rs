@@ -38,7 +38,10 @@ fn polish_chip_hints(chips: &mut [QuickChip], composer_draft: &str) {
     for c in chips {
         if c.hint.trim().is_empty() {
             c.hint = chip_action_tip(c, composer_draft);
-        } else if !c.hint.contains("send") && !c.hint.contains("Inserts") && !c.hint.contains("Opens") {
+        } else if !c.hint.contains("send")
+            && !c.hint.contains("Inserts")
+            && !c.hint.contains("Opens")
+        {
             let action = chip_action_tip(c, composer_draft);
             if action != c.hint {
                 c.hint = format!("{}\n{}", c.hint.trim(), action);
@@ -901,7 +904,11 @@ pub mod row {
     }
 
     pub fn quick_chip_stroke_w(primary: bool) -> f32 {
-        if primary { 1.5 } else { 1.0 }
+        if primary {
+            1.5
+        } else {
+            1.0
+        }
     }
 
     pub fn quick_chip_stroke(primary: bool) -> Color32 {
@@ -946,7 +953,8 @@ pub mod row {
         let stroke = quick_chip_stroke_paint(primary);
         let body = rect.shrink(stroke.width * 0.5);
         let radius = crate::theme::RADIUS_MD;
-        ui.painter().rect(body, radius, fill, stroke, StrokeKind::Inside);
+        ui.painter()
+            .rect(body, radius, fill, stroke, StrokeKind::Inside);
         crate::theme::paint_focus_ring(ui, body, radius, resp);
     }
 

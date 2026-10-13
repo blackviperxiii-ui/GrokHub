@@ -990,10 +990,10 @@ pub fn voice_mode_row(ui: &mut egui::Ui, label: &str) -> bool {
 pub use crate::app::chips::row::{
     chip_cluster_lead, chip_cluster_w, chip_dismiss_rect, chip_hit_act, chip_label_budget,
     chip_paint_label, chip_pill_width, chip_row_visible_w, chip_row_width_lock, chip_why_tip,
-    fluid_chip_count, layout_chip_label, paint_empty_chip_state, quick_chip_fill, quick_chip_fg,
-    quick_chip_row, quick_chip_stroke, quick_chip_stroke_w, ChipRowAct, CHIP_DISMISS_GAP,
-    CHIP_DISMISS_SLOT, CHIP_EMPTY_LABEL, CHIP_GAP, CHIP_LABEL_MAX_W, CHIP_PAD_X, CHIP_ROW_H,
-    quick_chip_strong,
+    fluid_chip_count, layout_chip_label, paint_empty_chip_state, quick_chip_fg, quick_chip_fill,
+    quick_chip_row, quick_chip_stroke, quick_chip_stroke_w, quick_chip_strong, ChipRowAct,
+    CHIP_DISMISS_GAP, CHIP_DISMISS_SLOT, CHIP_EMPTY_LABEL, CHIP_GAP, CHIP_LABEL_MAX_W, CHIP_PAD_X,
+    CHIP_ROW_H,
 };
 
 #[cfg(test)]
