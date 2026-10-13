@@ -2,9 +2,12 @@
 //! Auto-compact at 85% and manual compaction. The summary prompt is the detailed
 //! prompt from `xai-grok-shell` `helpers/session_compact.rs`.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
-use crate::client::{ClientError, ContentPart, InputItem, ModelClient, ResponsesRequest, Usage};
+use crate::client::{
+    ClientError, ContentPart, InputItem, ModelClient, ResponsesRequest, StreamEvent, TurnOutput,
+    Usage,
+};
 use crate::tokens::{self, estimate_token_bytes};
 use crate::CancelToken;
 
@@ -17,6 +20,462 @@ pub const RECENT_TAIL_TOKEN_BUDGET: u64 = 4_000;
 
 /// Stop reason when a second context-length error follows a reactive compact.
 pub const CONTEXT_STILL_TOO_LARGE: &str = "context still too large after compaction";
+
+/// Config file under [`crate::perm::config_dir`] (off by default).
+pub const TOOL_OUTPUT_COMPACT_CONFIG: &str = "tool_output_compact.toml";
+
+/// Default minimum UTF-8 size before a tool result is summarized and spooled.
+pub const TOOL_OUTPUT_COMPACT_MIN_BYTES: usize = 12_000;
+
+/// Workspace-relative directory for spooled full tool outputs (re-read with `read_file`).
+pub const TOOL_OUTPUT_SPOOL_DIR: &str = ".grokhub/tool-output-compact";
+
+const TOOL_OUTPUT_SUMMARY_PROMPT: &str = r#"<tool_output_summary_request>
+Summarize this tool result so another assistant can keep working. Keep exact error lines,
+counts, file paths, command names, and any fact that would change the next step. Be concise;
+do not invent details. Respond with plain text only (no tools, no markdown fences).
+</tool_output_summary_request>"#;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ToolOutputCompactSettings {
+    pub enabled: bool,
+    pub min_bytes: usize,
+}
+
+impl Default for ToolOutputCompactSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            min_bytes: TOOL_OUTPUT_COMPACT_MIN_BYTES,
+        }
+    }
+}
+
+static TOOL_OUTPUT_COMPACT_TEST: std::sync::Mutex<Option<ToolOutputCompactSettings>> =
+    std::sync::Mutex::new(None);
+
+/// Test hook: `Some(settings)` overrides the on-disk file; `None` reads the file again.
+pub fn set_tool_output_compact_for_tests(settings: Option<ToolOutputCompactSettings>) {
+    *TOOL_OUTPUT_COMPACT_TEST
+        .lock()
+        .unwrap_or_else(|e| e.into_inner()) = settings;
+}
+
+pub fn tool_output_compact_settings(config_dir: &Path) -> ToolOutputCompactSettings {
+    if let Some(settings) = *TOOL_OUTPUT_COMPACT_TEST
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+    {
+        return settings;
+    }
+    let path = config_dir.join(TOOL_OUTPUT_COMPACT_CONFIG);
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return ToolOutputCompactSettings::default();
+    };
+    parse_tool_output_compact_file(&text)
+}
+
+fn parse_tool_output_compact_file(text: &str) -> ToolOutputCompactSettings {
+    let mut settings = ToolOutputCompactSettings::default();
+    for line in text.lines() {
+        let line = line.split('#').next().unwrap_or("").trim();
+        if line.is_empty() {
+            continue;
+        }
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+        let key = key.trim();
+        let value = value.trim();
+        if key.eq_ignore_ascii_case("enabled") && value.eq_ignore_ascii_case("true") {
+            settings.enabled = true;
+        } else if key.eq_ignore_ascii_case("min_bytes") {
+            if let Ok(n) = value.parse::<usize>() {
+                settings.min_bytes = n.max(1);
+            }
+        }
+    }
+    settings
+}
+
+/// Outcome of [`maybe_compact_tool_output`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ToolOutputCompactOutcome {
+    Unchanged,
+    Replaced { text: String, usage: Usage },
+}
+
+/// When settings allow, spool a large tool body under the workspace and replace it with a
+/// short summary plus a stable handle and `read_file` path.
+pub fn maybe_compact_tool_output(
+    config_dir: &Path,
+    workspace: &Path,
+    conversation_id: &str,
+    client: &dyn ModelClient,
+    cancel: &CancelToken,
+    model: &str,
+    effort: Option<&str>,
+    call_id: &str,
+    tool_name: &str,
+    output: &str,
+) -> Result<ToolOutputCompactOutcome, CompactError> {
+    let settings = tool_output_compact_settings(config_dir);
+    if !settings.enabled || output.len() < settings.min_bytes {
+        return Ok(ToolOutputCompactOutcome::Unchanged);
+    }
+    if cancel.is_cancelled() {
+        return Err(CompactError::Cancelled);
+    }
+    let (handle, rel_path) = spool_tool_output(workspace, conversation_id, call_id, output)?;
+    let (summary, usage) = match request_tool_output_summary(
+        client,
+        cancel,
+        model,
+        effort,
+        conversation_id,
+        tool_name,
+        call_id,
+        &rel_path,
+        output,
+    ) {
+        Ok(call) => (call.summary, call.usage),
+        Err(CompactError::Cancelled) => return Err(CompactError::Cancelled),
+        Err(_) => (extractive_tool_output_summary(output), Usage::default()),
+    };
+    let body =
+        format_tool_output_compact_message(tool_name, &handle, &rel_path, &summary, output.len());
+    Ok(ToolOutputCompactOutcome::Replaced { text: body, usage })
+}
+
+/// Load a spooled tool body by handle (same conversation id used when it was written).
+pub fn read_spooled_tool_output(
+    workspace: &Path,
+    conversation_id: &str,
+    handle: &str,
+) -> Option<String> {
+    let path = spool_file_path(workspace, conversation_id, handle);
+    std::fs::read_to_string(path).ok()
+}
+
+fn spool_tool_output(
+    workspace: &Path,
+    conversation_id: &str,
+    call_id: &str,
+    body: &str,
+) -> Result<(String, String), CompactError> {
+    let handle = spool_handle(call_id);
+    let path = spool_file_path(workspace, conversation_id, &handle);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| CompactError::Failed(e.to_string()))?;
+    }
+    let tmp = path.with_extension("tmp");
+    std::fs::write(&tmp, body).map_err(|e| CompactError::Failed(e.to_string()))?;
+    std::fs::rename(&tmp, &path).map_err(|e| CompactError::Failed(e.to_string()))?;
+    let rel = format!(
+        "{}/{}",
+        TOOL_OUTPUT_SPOOL_DIR,
+        session_dir_name(conversation_id)
+    );
+    let rel_path = format!("{}/{}.txt", rel, handle);
+    Ok((handle, rel_path))
+}
+
+fn spool_handle(call_id: &str) -> String {
+    let mut slug: String = call_id
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    if slug.is_empty() {
+        slug = "out".into();
+    }
+    if slug.len() > 48 {
+        slug.truncate(48);
+    }
+    format!("to-{slug}")
+}
+
+fn session_dir_name(conversation_id: &str) -> String {
+    let mut slug: String = conversation_id
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    if slug.is_empty() {
+        slug = "session".into();
+    }
+    if slug.len() > 64 {
+        slug.truncate(64);
+    }
+    slug
+}
+
+fn spool_file_path(workspace: &Path, conversation_id: &str, handle: &str) -> PathBuf {
+    workspace
+        .join(TOOL_OUTPUT_SPOOL_DIR)
+        .join(session_dir_name(conversation_id))
+        .join(format!("{handle}.txt"))
+}
+
+fn format_tool_output_compact_message(
+    tool_name: &str,
+    handle: &str,
+    rel_path: &str,
+    summary: &str,
+    full_bytes: usize,
+) -> String {
+    format!(
+        "<tool_output_compact tool=\"{tool_name}\" handle=\"{handle}\" bytes=\"{full_bytes}\">\n\
+         {summary}\n\
+         </tool_output_compact>\n\
+         Full output ({full_bytes} bytes) is spooled at `{rel_path}`. \
+         Re-read it with read_file (or grep that path) when you need exact text."
+    )
+}
+
+fn extractive_tool_output_summary(output: &str) -> String {
+    let lines: Vec<&str> = output.lines().collect();
+    let line_count = lines.len();
+    let mut errors: Vec<String> = Vec::new();
+    for line in lines.iter().take(400) {
+        let lower = line.to_ascii_lowercase();
+        if lower.contains("error")
+            || lower.contains("failed")
+            || lower.contains("panic")
+            || lower.contains("fatal")
+        {
+            let trimmed = line.trim();
+            if !trimmed.is_empty() && errors.len() < 8 {
+                errors.push(trimmed.to_string());
+            }
+        }
+    }
+    let head: String = lines
+        .iter()
+        .take(12)
+        .map(|l| l.trim())
+        .filter(|l| !l.is_empty())
+        .take(8)
+        .map(|l| l.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let tail: String = lines
+        .iter()
+        .rev()
+        .take(6)
+        .map(|l| l.trim())
+        .filter(|l| !l.is_empty())
+        .take(4)
+        .map(|l| l.to_string())
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect::<Vec<_>>()
+        .join("\n");
+    let mut out = format!("Lines: {line_count}. Bytes: {}.", output.len());
+    if !errors.is_empty() {
+        out.push_str("\nNotable errors:\n");
+        for e in errors {
+            out.push_str("- ");
+            out.push_str(&e);
+            out.push('\n');
+        }
+    }
+    if !head.is_empty() {
+        out.push_str("\nHead:\n");
+        out.push_str(&head);
+        out.push('\n');
+    }
+    if !tail.is_empty() && tail != head {
+        out.push_str("\nTail:\n");
+        out.push_str(&tail);
+        out.push('\n');
+    }
+    out.trim().to_string()
+}
+
+struct ToolOutputSummaryCall {
+    summary: String,
+    usage: Usage,
+}
+
+fn request_tool_output_summary(
+    client: &dyn ModelClient,
+    cancel: &CancelToken,
+    model: &str,
+    effort: Option<&str>,
+    conversation_id: &str,
+    tool_name: &str,
+    call_id: &str,
+    rel_path: &str,
+    output: &str,
+) -> Result<ToolOutputSummaryCall, CompactError> {
+    if cancel.is_cancelled() {
+        return Err(CompactError::Cancelled);
+    }
+    let preview_cap = 48_000usize;
+    let (preview, clipped) = if output.len() > preview_cap {
+        (output.get(..preview_cap).unwrap_or(output), true)
+    } else {
+        (output, false)
+    };
+    let clip_note = if clipped {
+        "\n(note: body truncated for the summary call; the full text is spooled on disk)\n"
+    } else {
+        ""
+    };
+    let user = format!(
+        "{TOOL_OUTPUT_SUMMARY_PROMPT}\n\n\
+         Tool: {tool_name}\nCall id: {call_id}\nSpool path: {rel_path}\n{clip_note}\n\
+         <tool_output_body>\n{preview}\n</tool_output_body>"
+    );
+    let input = vec![InputItem::Message {
+        role: "user".into(),
+        content: vec![ContentPart::InputText(user)],
+    }];
+    let req = ResponsesRequest {
+        model: model.to_string(),
+        effort: effort.map(str::to_string),
+        input,
+        conversation_id: conversation_id.to_string(),
+        tools: Vec::new(),
+        hosted_search: false,
+        call_timeout: None,
+    };
+    match crate::route::live::stream_routed(
+        client,
+        &req,
+        cancel,
+        &mut |_| {},
+        crate::route::CLASS_COMPACT,
+    ) {
+        Ok(turn) => {
+            if cancel.is_cancelled() {
+                return Err(CompactError::Cancelled);
+            }
+            let summary = turn.text.trim();
+            if summary.is_empty() {
+                return Err(CompactError::Failed("tool output summary was empty".into()));
+            }
+            Ok(ToolOutputSummaryCall {
+                summary: summary.to_string(),
+                usage: turn.usage,
+            })
+        }
+        Err(ClientError::Cancelled) => Err(CompactError::Cancelled),
+        Err(err) => Err(CompactError::Failed(err.to_string())),
+    }
+}
+
+/// Eval harness (`src/eval.rs`): settings on, large output spooled and summarized.
+pub fn eval_tool_output_compact_native() -> (&'static str, u32) {
+    let dir = std::env::temp_dir().join(format!(
+        "gh-tool-out-compact-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    ));
+    if std::fs::create_dir_all(&dir).is_err() {
+        return ("failed: scratch", 0);
+    }
+    let _guard = crate::perm::ConfigGuard::set(&dir);
+    set_tool_output_compact_for_tests(Some(ToolOutputCompactSettings {
+        enabled: true,
+        min_bytes: 100,
+    }));
+    let big = "LINE\n".repeat(80);
+    let script = EvalToolOutputScript {
+        summary: "errors: none; lines: 80".into(),
+        seen: std::sync::Mutex::new(0),
+    };
+    let cancel = CancelToken::new();
+    let outcome = maybe_compact_tool_output(
+        &dir,
+        &dir,
+        "eval-tool-out",
+        &script,
+        &cancel,
+        "grok-4.7",
+        None,
+        "c1",
+        "run_terminal_command",
+        &big,
+    );
+    set_tool_output_compact_for_tests(None);
+    let turns = script.turns();
+    let ok = match outcome {
+        Ok(ToolOutputCompactOutcome::Replaced { text, .. }) => {
+            text.contains("<tool_output_compact")
+                && text.contains("handle=\"to-c1\"")
+                && text.contains(".grokhub/tool-output-compact")
+                && read_spooled_tool_output(&dir, "eval-tool-out", "to-c1").as_deref() == Some(&big)
+        }
+        _ => false,
+    };
+    let _ = std::fs::remove_dir_all(&dir);
+    if ok {
+        ("spooled", turns)
+    } else {
+        ("failed: tool-output-compact", turns)
+    }
+}
+
+struct EvalToolOutputScript {
+    summary: String,
+    seen: std::sync::Mutex<usize>,
+}
+
+impl EvalToolOutputScript {
+    fn turns(&self) -> u32 {
+        *self.seen.lock().unwrap_or_else(|e| e.into_inner()) as u32
+    }
+}
+
+impl ModelClient for EvalToolOutputScript {
+    fn stream(
+        &self,
+        req: &ResponsesRequest,
+        _cancel: &CancelToken,
+        sink: &mut dyn FnMut(StreamEvent),
+    ) -> Result<TurnOutput, ClientError> {
+        *self.seen.lock().unwrap_or_else(|e| e.into_inner()) += 1;
+        let prompt = req
+            .input
+            .iter()
+            .map(message_text)
+            .find(|t| t.contains("tool_output_summary_request"))
+            .unwrap_or_default();
+        if !prompt.contains("tool_output_summary_request") {
+            return Err(ClientError::Protocol("unexpected eval prompt".into()));
+        }
+        sink(StreamEvent::TextDelta(self.summary.clone()));
+        Ok(TurnOutput {
+            text: self.summary.clone(),
+            reasoning: String::new(),
+            calls: Vec::new(),
+            usage: Usage {
+                input_tokens: 3,
+                output_tokens: 2,
+                reasoning_tokens: 0,
+                cost_in_usd_ticks: 1,
+                cached_tokens: 0,
+            },
+            ..Default::default()
+        })
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OpenTodo {
@@ -1315,6 +1774,86 @@ mod tests {
         let seen = script.seen.lock().unwrap();
         assert!(contains_prompt(&seen[1]));
         assert!(!contains_prompt(&seen[2]));
+    }
+
+    #[test]
+    fn tool_output_compact_off_by_default_and_spools_when_enabled() {
+        let dir = workspace();
+        let _guard = crate::perm::ConfigGuard::set(&dir);
+        set_tool_output_compact_for_tests(None);
+        assert!(!tool_output_compact_settings(&dir).enabled);
+        let big = "x".repeat(200);
+        let script = Script {
+            turns: Mutex::new(vec![]),
+            seen: Mutex::new(Vec::new()),
+        };
+        let unchanged = maybe_compact_tool_output(
+            &dir,
+            &dir,
+            "sess",
+            &script,
+            &CancelToken::new(),
+            "grok-4.7",
+            None,
+            "c1",
+            "grep",
+            &big,
+        )
+        .expect("unchanged");
+        assert_eq!(unchanged, ToolOutputCompactOutcome::Unchanged);
+
+        set_tool_output_compact_for_tests(Some(ToolOutputCompactSettings {
+            enabled: true,
+            min_bytes: 50,
+        }));
+        let script = Script {
+            turns: Mutex::new(vec![Ok(TurnOutput {
+                text: "found 3 matches in src/main.rs".into(),
+                reasoning: String::new(),
+                calls: Vec::new(),
+                usage: usage(2, 1, 1),
+                ..Default::default()
+            })]),
+            seen: Mutex::new(Vec::new()),
+        };
+        let replaced = maybe_compact_tool_output(
+            &dir,
+            &dir,
+            "sess",
+            &script,
+            &CancelToken::new(),
+            "grok-4.7",
+            None,
+            "call-9",
+            "grep",
+            &big,
+        )
+        .expect("replaced");
+        let ToolOutputCompactOutcome::Replaced { text, usage } = replaced else {
+            panic!("expected replacement");
+        };
+        assert!(text.contains("handle=\"to-call-9\""), "{text}");
+        assert!(text.contains("read_file"), "{text}");
+        assert_eq!(usage.cost_in_usd_ticks, 1);
+        let full = read_spooled_tool_output(&dir, "sess", "to-call-9").expect("spool");
+        assert_eq!(full, big);
+        set_tool_output_compact_for_tests(None);
+        drop(_guard);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn tool_output_compact_parse_settings_from_toml() {
+        let dir = workspace();
+        let cfg = dir.join(TOOL_OUTPUT_COMPACT_CONFIG);
+        std::fs::write(&cfg, "# comment\nenabled = true\nmin_bytes = 999\n").expect("write cfg");
+        let _guard = crate::perm::ConfigGuard::set(&dir);
+        set_tool_output_compact_for_tests(None);
+        let parsed = tool_output_compact_settings(&dir);
+        assert!(parsed.enabled);
+        assert_eq!(parsed.min_bytes, 999);
+        drop(_guard);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

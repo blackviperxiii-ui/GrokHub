@@ -1976,6 +1976,7 @@ dependencies = [
  "keyring",
  "libc",
  "regex",
+ "reqwest",
  "ring",
  "rusqlite",
  "serde",
