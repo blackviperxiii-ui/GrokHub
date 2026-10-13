@@ -491,8 +491,18 @@ impl AmrStore {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).map_err(io_err)?;
         }
+        // Temp + exclusive publish: create_new+write_all left an empty file visible
+        // mid-write (Windows CI read trails before the body landed).
+        let tmp = path.with_file_name(format!(
+            ".{}.{}.tmp",
+            path.file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("node.md"),
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&tmp);
         let mut opts = OpenOptions::new();
-        opts.write(true).create_new(true);
+        opts.write(true).create(true).truncate(true);
         #[cfg(unix)]
         {
             use std::os::unix::fs::OpenOptionsExt;
@@ -500,14 +510,19 @@ impl AmrStore {
                 opts.mode(0o600);
             }
         }
-        let mut file = match opts.open(&path) {
-            Ok(file) => file,
-            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
-                return Err(AmrError::DuplicateId(id.as_str().to_string()));
-            }
-            Err(err) => return Err(io_err(err)),
-        };
-        file.write_all(bytes.as_bytes()).map_err(io_err)?;
+        let mut file = opts.open(&tmp).map_err(io_err)?;
+        file.write_all(bytes.as_bytes()).map_err(|err| {
+            let _ = fs::remove_file(&tmp);
+            io_err(err)
+        })?;
+        file.sync_all().map_err(|err| {
+            let _ = fs::remove_file(&tmp);
+            io_err(err)
+        })?;
+        drop(file);
+        publish_new_node(&tmp, &path).inspect_err(|_| {
+            let _ = fs::remove_file(&tmp);
+        })?;
         if !draft.sensitivity.sealed() && self.index_path().is_file() {
             AmrIndex::open(&self.index_path())?.add(&node)?;
         }
@@ -621,8 +636,53 @@ impl AmrStore {
 }
 
 /// How long a node file must sit untouched before a parse failure counts as damage.
-/// `remember` creates the file and then writes it, so a younger file may be mid-write.
+/// `remember` publishes via temp+rename/hard_link, so a visible node is complete; settle
+/// still guards against a torn write from an older cabin or a crash mid-index.
 const NODE_SETTLE: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Publish `tmp` as `path` only when `path` does not already exist.
+fn publish_new_node(tmp: &Path, path: &Path) -> Result<(), AmrError> {
+    #[cfg(unix)]
+    {
+        // hard_link fails if `path` exists; rename would replace and hide a race.
+        match fs::hard_link(tmp, path) {
+            Ok(()) => {
+                let _ = fs::remove_file(tmp);
+                Ok(())
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
+                Err(AmrError::DuplicateId(
+                    path.file_stem()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("node")
+                        .to_string(),
+                ))
+            }
+            Err(err) => Err(io_err(err)),
+        }
+    }
+    #[cfg(windows)]
+    {
+        // Windows rename refuses to replace an existing destination.
+        match fs::rename(tmp, path) {
+            Ok(()) => Ok(()),
+            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
+                Err(AmrError::DuplicateId(
+                    path.file_stem()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("node")
+                        .to_string(),
+                ))
+            }
+            Err(err) => Err(io_err(err)),
+        }
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = (tmp, path);
+        Err(AmrError::Io("amr remember needs unix or windows".into()))
+    }
+}
 
 /// Move a settled node file that will not parse aside (`<id>.md.corrupt-<ms>`) so it
 /// stops failing every recall, and note it for the Home card. The copy is kept.
