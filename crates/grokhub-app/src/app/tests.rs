@@ -28773,6 +28773,7 @@ fn each_background_job_runs_only_from_its_governor_arm() {
         ("Review", "self.tick_review("),
         ("NightPasses", "self.tick_night_passes("),
         ("MemoryRetention", "self.tick_amr_retention("),
+        ("DailyDrop", "self.tick_daily_drop("),
         ("Indexers", "self.tick_indexers("),
     ] {
         assert_eq!(
@@ -28789,7 +28790,7 @@ fn each_background_job_runs_only_from_its_governor_arm() {
     // Every registered kind has exactly one arm, and the pulse reaches them only
     // through the governor's queue.
     let kinds = grokhub_core::Governor::cabin().kinds();
-    assert_eq!(kinds.len(), 12);
+    assert_eq!(kinds.len(), 13);
     for kind in kinds {
         let name = format!("{kind:?}");
         assert_eq!(
