@@ -1,0 +1,23 @@
+{
+  "id": "010_tool_then_answer",
+  "prompt": "Read data.txt and answer with its only line.",
+  "mode": "always",
+  "files": [{ "path": "data.txt", "content": "line42\n" }],
+  "script": [
+    {
+      "type": "tool",
+      "name": "read_file",
+      "arguments": { "target_file": "data.txt" },
+      "usage": { "input_tokens": 18, "output_tokens": 0 }
+    },
+    {
+      "type": "text",
+      "content": "line42",
+      "usage": { "input_tokens": 28, "output_tokens": 3 }
+    }
+  ],
+  "checks": [
+    { "type": "stop_reason", "value": "end_turn" },
+    { "type": "assistant_contains", "value": "line42" }
+  ]
+}

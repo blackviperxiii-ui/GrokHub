@@ -1,0 +1,17 @@
+{
+  "id": "013_short_json",
+  "prompt": "Reply with JSON {\"status\":\"ok\"}",
+  "mode": "always",
+  "files": [],
+  "script": [
+    {
+      "type": "text",
+      "content": "{\"status\":\"ok\"}",
+      "usage": { "input_tokens": 11, "output_tokens": 6 }
+    }
+  ],
+  "checks": [
+    { "type": "assistant_contains", "value": "\"status\"" },
+    { "type": "assistant_contains", "value": "ok" }
+  ]
+}

@@ -1,0 +1,18 @@
+{
+  "id": "001_reply_four",
+  "prompt": "What is 2+2? Reply with only the digit 4.",
+  "mode": "always",
+  "files": [],
+  "script": [
+    {
+      "type": "text",
+      "content": "4",
+      "usage": { "input_tokens": 12, "output_tokens": 2 }
+    }
+  ],
+  "checks": [
+    { "type": "stop_reason", "value": "end_turn" },
+    { "type": "assistant_contains", "value": "4" },
+    { "type": "no_permission_cards" }
+  ]
+}

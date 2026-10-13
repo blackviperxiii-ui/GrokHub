@@ -1,0 +1,17 @@
+{
+  "id": "002_hello",
+  "prompt": "Say hello in one word.",
+  "mode": "always",
+  "files": [],
+  "script": [
+    {
+      "type": "text",
+      "content": "hello",
+      "usage": { "input_tokens": 10, "output_tokens": 3 }
+    }
+  ],
+  "checks": [
+    { "type": "stop_reason", "value": "end_turn" },
+    { "type": "assistant_contains", "value": "hello" }
+  ]
+}

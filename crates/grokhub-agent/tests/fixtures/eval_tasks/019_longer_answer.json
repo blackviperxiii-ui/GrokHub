@@ -1,0 +1,17 @@
+{
+  "id": "019_longer_answer",
+  "prompt": "Give a one-sentence summary of GrokHub as a native cabin app.",
+  "mode": "always",
+  "files": [],
+  "script": [
+    {
+      "type": "text",
+      "content": "GrokHub is a native Rust cabin app for chatting with Grok on Linux and Windows.",
+      "usage": { "input_tokens": 25, "output_tokens": 20 }
+    }
+  ],
+  "checks": [
+    { "type": "assistant_contains", "value": "GrokHub" },
+    { "type": "assistant_contains", "value": "native" }
+  ]
+}
