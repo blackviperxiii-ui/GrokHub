@@ -37,6 +37,7 @@ pub mod export;
 pub mod feel;
 pub mod file_watch;
 pub mod findings;
+pub mod fix_plan;
 pub mod frame;
 pub mod goal;
 pub mod governor;
