@@ -5223,8 +5223,8 @@ fn chat_side_effects_keep_the_origin_thread() {
         "empty-chat greeting must not clone USER/MEMORY every paint: {greet}"
     );
     assert!(
-        greet.contains("greeting_prompt"),
-        "greeting Fast prompt must be built from borrowed USER/MEMORY: {greet}"
+        greet.contains("local_greeting") && !greet.contains("spawn_greeting_llm"),
+        "empty-home greeting must stay local (no Fast-model paraphrase on paint): {greet}"
     );
     let dream = src
         .split("fn run_dream")
@@ -5585,13 +5585,17 @@ fn empty_home_paints_faint_greeting() {
         "empty home must still show a live permission bar: {slice}"
     );
     assert!(
-            slice.contains("paint_update_feed")
-                && slice.contains("pulse_should_paint")
+            slice.contains("pulse_should_paint")
                 && slice.contains("empty_home_composer_top")
+                && slice.contains("paint_device_glance_row")
+                && !slice.contains("paint_update_feed")
+                && !slice.contains("paint_home_deck_over_chat")
+                && !slice.contains("home_feed_count")
+                && !slice.contains("collapsed_stack_h")
                 && !slice.contains("paint_empty_pulse")
                 && !slice.contains("paint_lane_chip")
                 && !slice.contains("No updates"),
-            "signed-in empty home paints the update feed under the greeting and hides it when empty: {slice}"
+            "signed-in empty home is chat-first: greeting, composer, device glance; no Home card deck: {slice}"
         );
     assert!(
         !slice.contains("weather")
@@ -7016,14 +7020,17 @@ fn empty_home_pulse_stays_off_scratch_and_off_about() {
         "pulse clicks reuse Workboard and Automations"
     );
     assert!(
-            home.contains("paint_update_feed")
-                && home.contains("paint_device_glance_row")
-                && home.contains("collapsed_stack_h")
-                && !home.contains("stacked_feed_h")
-                && !home.contains("paint_lane_chip")
-                && !home.contains("No updates"),
-            "empty home paints the update feed only when a card exists, plus a fail-soft device glance: {home}"
-        );
+        home.contains("paint_device_glance_row")
+            && home.contains("pulse_should_paint")
+            && !home.contains("paint_update_feed")
+            && !home.contains("paint_home_deck_over_chat")
+            && !home.contains("collapsed_stack_h")
+            && !home.contains("home_feed_count")
+            && !home.contains("stacked_feed_h")
+            && !home.contains("paint_lane_chip")
+            && !home.contains("No updates"),
+        "empty home keeps device glance and does not paint the Home card deck: {home}"
+    );
     assert!(
         !home.contains("\"Personal\"") && !home.contains("Nav::"),
         "home chrome must not add a Personal rail or nav id: {home}"
@@ -7032,13 +7039,15 @@ fn empty_home_pulse_stays_off_scratch_and_off_about() {
     assert!(
         feed.contains("note_automation_done")
             && feed.contains("note_schedule_created")
-            && feed.contains("feed_visible")
-            && feed.contains("paint_home_deck_over_chat")
+            && feed.contains("close_home_card")
+            && feed.contains("apply_feed_act")
+            && !feed.contains("paint_update_feed")
+            && !feed.contains("paint_home_deck_over_chat")
+            && !feed.contains("HOME_STACK_SHOW")
             && !feed.contains("Order::Foreground")
-            && feed.contains("HOME_STACK_SHOW")
             && !feed.contains("No updates")
             && !feed.contains("interest_update"),
-        "feed hook is typed and hidden when empty: {feed}"
+        "feed posting and card actions stay; Home deck paint is gone: {feed}"
     );
     let night = include_str!("night.rs");
     let poll = night
@@ -7384,7 +7393,7 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     let ping = pulse
         .split("fn release_situation_ping(")
         .nth(1)
-        .and_then(|s| s.split("fn paint_update_feed(").next())
+        .and_then(|s| s.split("fn apply_feed_act(").next())
         .expect("release_situation_ping");
     assert!(
         ping.contains("notify::ping")
@@ -7428,19 +7437,15 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
             && !build.contains("idea.body.clone()"),
         "Idea Accept files the task line, not the raw message: {build}"
     );
-    let paint = pulse
-        .split("fn paint_feed_card(")
-        .nth(1)
-        .and_then(|s| s.split("mod stack_tests").next())
-        .expect("paint_feed_card");
     assert!(
-        !paint.contains("ghost_pill")
-            && paint.contains("\"×\"")
-            && !paint.contains("FeedAct::Archive")
-            && paint.contains("FeedAct::Discuss")
-            && paint.contains("FeedAct::Dismiss")
-            && paint.contains("FeedAct::Open"),
-        "a home card is a click plus ×, with no pill row: {paint}"
+        pulse.contains("FeedAct::Discuss")
+            && pulse.contains("FeedAct::Dismiss")
+            && pulse.contains("FeedAct::Open")
+            && !pulse.contains("FeedAct::Archive")
+            && pulse.contains("fn close_home_card(")
+            && !pulse.contains("fn paint_feed_card(")
+            && !pulse.contains("fn paint_update_feed("),
+        "feed card acts and close_home_card remain; Home deck paint is gone: {pulse}"
     );
     let offer_open = pulse
         .split("fn open_offer_on_automations(")
@@ -9622,21 +9627,16 @@ fn home_x_on_a_digest_keeps_it_in_pulse() {
     let card = grokhub_core::digest_card("week", "Week notes", "rolled up", 2);
     let id = card.id.clone();
     cabin.updates.push(card);
-    let on_deck = |cabin: &Cabin| {
-        super::feed_ui::home_deck(
-            &cabin.updates,
-            &cabin.cfg.feed_pulse,
-            &cabin.card_prefs,
-            now_ms(),
-        )
-        .cards
-        .iter()
-        .any(|c| c.id == id)
+    let on_home = |cabin: &Cabin| {
+        cabin
+            .updates
+            .iter()
+            .any(|c| c.id == id && !c.pulse.off_home)
     };
-    assert!(on_deck(&cabin), "the digest starts on the main deck");
+    assert!(on_home(&cabin), "the digest starts visible for home");
     cabin.apply_feed_act(Some(FeedAct::Dismiss(id.clone())));
     wait_tree_contains(&cfg.root, "offHome");
-    assert!(!on_deck(&cabin), "× takes it off the main deck");
+    assert!(!on_home(&cabin), "× sets off_home");
     assert!(
         grokhub_core::visible_digests(&cabin.updates)
             .iter()
@@ -13238,12 +13238,14 @@ fn board_add_move_archive_restore_and_link() {
 fn background_model_calls_run_at_low_effort() {
     assert_eq!(grokhub_core::BACKGROUND_EFFORT, "low");
     let src = cabin_src() + include_str!("feed_ui.rs") + include_str!("native_unattended.rs");
-    for name in [
-        "fast_once",
-        "spawn_native_review",
-        "spawn_thread_goal_on",
-        "spawn_native_loop",
-    ] {
+    // Thread titles use built-in topics_from_turns (no model). Remaining
+    // background asks still pin BACKGROUND_EFFORT.
+    let goal = fn_src(&src, "spawn_thread_goal_on");
+    assert!(
+        goal.contains("topics_from_turns") && !goal.contains("BACKGROUND_EFFORT"),
+        "thread titles must be local, not a low-effort model ask: {goal}"
+    );
+    for name in ["fast_once", "spawn_native_review", "spawn_native_loop"] {
         let body = fn_src(&src, name);
         assert!(
             body.contains("BACKGROUND_EFFORT"),
@@ -13835,6 +13837,10 @@ fn set_nav_id_opens_each_page() {
 
     cabin.set_nav_id("history");
     assert!(matches!(cabin.nav, super::Nav::History));
+    assert!(!cabin.running);
+
+    cabin.set_nav_id("journal");
+    assert!(matches!(cabin.nav, super::Nav::Journal));
     assert!(!cabin.running);
 
     cabin.set_nav_id("imagine");
@@ -16237,6 +16243,8 @@ fn quiet_cabin() -> Cabin {
         board: Vec::new(),
         board_title: String::new(),
         board_notes: String::new(),
+        journal: Vec::new(),
+        journal_view: super::journal_ui::JournalView::default(),
         imagine_prompt: String::new(),
         imagine_last: String::new(),
         skill_name: String::new(),
@@ -16283,7 +16291,6 @@ fn quiet_cabin() -> Cabin {
         grok_loops: Vec::new(),
         updates: Vec::new(),
         card_prefs: grokhub_core::CardPrefs::default(),
-        home_fold_open: false,
         grok_loop_rx: None,
         night_nl: String::new(),
         watch_once: false,
@@ -21253,6 +21260,13 @@ fn reflect_poll_reports_a_drop() {
 // Folded from PR #298.
 #[test]
 fn hub_sync_poll_reports_a_drop() {
+    // Pin a fresh config root: poll_sync on disconnect consults read_key, and a
+    // leftover learned-key.id / sealed file under the shared home config would
+    // turn a plain drop into "Hub sync not sent: … key missing".
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("hub-sync-drop");
+    let _ = std::fs::create_dir_all(&root);
+    let _pin = crate::config::TestConfigDir::set(root);
     let mut cabin = Cabin::quiet_for_test();
     cabin.status = "Harbor".into();
     let nav = cabin.nav;
@@ -22650,6 +22664,37 @@ fn apply_thread_goal_empty_topics_stays_idle() {
     assert!(cabin.rx.is_none());
 }
 
+#[test]
+fn spawn_thread_goal_titles_from_user_words_without_a_model() {
+    let (root, mut cabin) = isolated_cabin("local-thread-title");
+    cabin
+        .threads
+        .push(crate::threads::ChatThread::new("Chat", false));
+    cabin.thread_idx = cabin.threads.len() - 1;
+    let tid = cabin.threads[cabin.thread_idx].id.clone();
+    cabin.messages = vec![("user".into(), "draw porn comics please".into())].into();
+    cabin.spawn_thread_goal_on(Some(&tid));
+    assert!(
+        cabin.goal_rx.is_none() && !cabin.goal_busy,
+        "titles must not open a model channel"
+    );
+    assert_eq!(cabin.threads[cabin.thread_idx].goal.label, "draw");
+    assert!(
+        cabin.threads[cabin.thread_idx]
+            .goal
+            .topics
+            .iter()
+            .any(|t| t == "porn"),
+        "content words from the user turn become topics: {:?}",
+        cabin.threads[cabin.thread_idx].goal.topics
+    );
+    assert_ne!(
+        cabin.threads[cabin.thread_idx].title, "Chat",
+        "auto-title must rename the rail from local topics"
+    );
+    release_isolated(&root, cabin);
+}
+
 // Folded from PR #425.
 #[test]
 fn chip_chat_pairs_empty_when_idle() {
@@ -23874,95 +23919,6 @@ fn pulse_paints_only_on_an_empty_signed_in_chat() {
     assert!(!should_paint_pulse(true, false, false));
 }
 
-// Folded from PR #280.
-#[test]
-fn feed_deck_hover_lifts_the_card_behind() {
-    let open = super::feed_ui::deck_poses(3, true, Some(1), 1_000.0);
-    assert_eq!(
-        open[0],
-        super::SlidePose {
-            dy: 0.0,
-            scale: 1.0
-        }
-    );
-    assert_eq!(
-        open[1],
-        super::SlidePose {
-            dy: -super::feed_ui::LIFT_STEP,
-            scale: 1.0
-        }
-    );
-    assert_eq!(
-        open[2],
-        super::SlidePose {
-            dy: -(super::feed_ui::LIFT_STEP + super::feed_ui::PEEK_H),
-            scale: 1.0
-        }
-    );
-    let rest = super::feed_ui::deck_poses(3, false, Some(1), 1_000.0);
-    assert_eq!(rest[1], super::rest_slide(1));
-    assert!(rest[1].dy > 0.0 && rest[1].scale < 1.0);
-
-    let pile = super::next_feed_stack(3, true, Some("back".into()), Some("front"));
-    assert_eq!(
-        pile,
-        super::StackView {
-            expanded: true,
-            popped: Some("back".into()),
-        }
-    );
-    assert_eq!(
-        super::next_feed_stack(3, false, Some("back".into()), Some("front")),
-        super::StackView::default()
-    );
-    assert_eq!(
-        super::next_feed_stack(1, true, Some("front".into()), Some("front")),
-        super::StackView::default()
-    );
-}
-
-// Folded from PR #289.
-#[test]
-fn feed_deck_shift_keeps_the_top_card_on_screen() {
-    let tops: Vec<f32> = super::feed_ui::deck_poses(3, true, Some(2), 40.0)
-        .iter()
-        .map(|pose| pose.dy)
-        .collect();
-    // room=40 caps the lifted back card; open peek uses PEEK_H.
-    assert_eq!(tops, vec![0.0, -super::feed_ui::PEEK_H, -40.0]);
-    let none: Vec<f32> = super::feed_ui::deck_poses(3, true, None, 0.0)
-        .iter()
-        .map(|pose| pose.dy)
-        .collect();
-    assert_eq!(none, vec![0.0, 0.0, 0.0]);
-}
-
-// Folded from PR #292.
-#[test]
-fn feed_stack_height_peeks_two_edges() {
-    assert_eq!(super::feed_ui::collapsed_stack_h(0), 0.0);
-    assert_eq!(super::feed_ui::collapsed_stack_h(1), 96.0);
-    assert_eq!(
-        super::feed_ui::collapsed_stack_h(2),
-        96.0 + super::feed_ui::STACK_REST_DY_1
-    );
-    assert_eq!(
-        super::feed_ui::collapsed_stack_h(3),
-        96.0 + super::feed_ui::STACK_REST_DY_2
-    );
-    assert!(super::feed_ui::collapsed_stack_h(1) < super::feed_ui::collapsed_stack_h(2));
-    assert!(super::feed_ui::collapsed_stack_h(2) < super::feed_ui::collapsed_stack_h(3));
-    assert_eq!(
-        super::feed_ui::collapsed_stack_h(9),
-        super::feed_ui::collapsed_stack_h(3)
-    );
-    assert_eq!(super::feed_ui::STACK_REST_DY_1, 8.0);
-    assert_eq!(super::feed_ui::STACK_REST_DY_2, 16.0);
-    assert_eq!(super::feed_ui::stacked_feed_h(0), 0.0);
-    assert_eq!(super::feed_ui::stacked_feed_h(2), 96.0 * 2.0 + 6.0);
-    assert!(super::feed_ui::stacked_feed_h(2) > super::feed_ui::collapsed_stack_h(2));
-}
-
 // Folded from PR #330.
 #[test]
 fn roll_today_stays_put_on_same_day() {
@@ -24081,15 +24037,14 @@ fn device_glance_none_when_hub_off() {
     assert!(!share.has_thumb);
 }
 
-// Folded from PR #409.
+// Folded from PR #409. Empty main chat no longer counts a Home deck; ranking stays for Pulse floors.
 #[test]
-fn home_feed_count_empty_and_one_event() {
-    // Real `home_feed_count` on a quiet slice — no cabin, spawn, or network.
+fn home_event_cards_empty_and_one_event() {
     let pulse = grokhub_core::FeedPulse::default();
-    assert_eq!(home_feed_count(&[], &pulse, 0), 0);
+    assert!(grokhub_core::home_event_cards(&[], &pulse, 0).is_empty());
 
     let cards = vec![feed_card("event-1", UpdateKind::AutomationDone, false)];
-    assert_eq!(home_feed_count(&cards, &pulse, 0), 1);
+    assert_eq!(grokhub_core::home_event_cards(&cards, &pulse, 0).len(), 1);
 }
 
 /// The card menu is gone (2.10.86). A run hidden from Home by an older build
@@ -24118,7 +24073,7 @@ fn legacy_hidden_run_stays_off_home_until_undo() {
         .map(|card| card.id.clone())
         .expect("run card");
     assert_eq!(
-        home_feed_count(&cabin.updates, &cabin.cfg.feed_pulse, now_ms()),
+        grokhub_core::home_event_cards(&cabin.updates, &cabin.cfg.feed_pulse, now_ms()).len(),
         1
     );
 
@@ -24166,15 +24121,17 @@ fn legacy_hidden_run_stays_off_home_until_undo() {
     );
     assert!(grokhub_core::HOME_HIDDEN_NOTE.contains("Undo"));
     let feed = include_str!("feed_ui.rs");
-    let paint = feed
-        .split("fn paint_feed_card(")
-        .nth(1)
-        .and_then(|rest| rest.split("\n}\n").next())
-        .expect("paint_feed_card");
-    assert!(!paint.contains("Popup"), "feed cards have no menu");
-    assert!(!paint.contains("secondary_clicked"), "no right-click menu");
-    assert!(!paint.contains("\"⋯\""), "no ⋯ button");
-    assert!(paint.contains("\"×\""), "the X stays");
+    assert!(
+        feed.contains("fn close_home_card("),
+        "close_home_card stays"
+    );
+    assert!(!feed.contains("Popup"), "feed module has no card menu");
+    assert!(!feed.contains("secondary_clicked"), "no right-click menu");
+    assert!(!feed.contains("\"⋯\""), "no ⋯ button");
+    assert!(
+        !feed.contains("fn paint_feed_card("),
+        "Home deck paint is gone"
+    );
 
     let app_json = root.join("app.json");
     let mut saw_hide = false;
@@ -24192,7 +24149,7 @@ fn legacy_hidden_run_stays_off_home_until_undo() {
 
     cabin.undo_hide_automation_from_home("zephyr-src-9f3a");
     assert_eq!(
-        home_feed_count(&cabin.updates, &cabin.cfg.feed_pulse, now_ms()),
+        grokhub_core::home_event_cards(&cabin.updates, &cabin.cfg.feed_pulse, now_ms()).len(),
         1
     );
     let mut saw_undo = false;
@@ -26129,6 +26086,137 @@ fn imagine_aspect_pill_drives_every_request() {
     );
 }
 
+#[test]
+fn imagine_more_finishes_agent_count_and_results_chrome() {
+    let src = include_str!("imagine.rs");
+    let more = src
+        .split("fn ui_imagine_more(")
+        .nth(1)
+        .and_then(|s| s.split("fn ui_imagine_results(").next())
+        .expect("ui_imagine_more");
+    assert!(
+        more.contains("ui_imagine_more_agent")
+            && more.contains("Character sprite still")
+            && more.contains("ui_imagine_more_count")
+            && more.contains("clamp(1, 10)")
+            && !more.contains("ImagineKind::Agent => {}"),
+        "Agent More must offer model + 1–10 count, not stay empty: {more}"
+    );
+    assert!(
+        !more.contains("&[\"1\", \"2\", \"3\", \"4\"]") && !more.contains("clamp(1, 4)"),
+        "image count UI must reach the API's 1–10 range: {more}"
+    );
+    let results = src
+        .split("fn ui_imagine_results(")
+        .nth(1)
+        .and_then(|s| s.split("fn imagine_more_title(").next())
+        .expect("ui_imagine_results");
+    assert!(
+        results.contains("ghost_pill(ui, \"Save\")")
+            && results.contains("ghost_pill(ui, \"Open folder\")")
+            && !results.contains("small_button"),
+        "Results must use cabin pills, not raw egui buttons: {results}"
+    );
+    let bar = src
+        .split("fn ui_imagine_bar(")
+        .nth(1)
+        .and_then(|s| s.split("fn poll_wall(").next())
+        .expect("ui_imagine_bar");
+    assert!(
+        !bar.contains("if self.imagine_kind != ImagineKind::Video")
+            || !bar
+                .split("imagine-aspect-hit")
+                .nth(1)
+                .expect("aspect")
+                .split("imagine-more-hit")
+                .next()
+                .expect("before more")
+                .contains("ui.end_row()"),
+        "More must sit with Style/Aspect, not alone on a forced second row"
+    );
+    let stage_wire = src
+        .split("fn ui_imagine(")
+        .nth(1)
+        .and_then(|s| s.split("fn ui_imagine_bar(").next())
+        .expect("ui_imagine");
+    assert!(
+        stage_wire.contains("stage_hit.retry") && stage_wire.contains("kick_imagine()"),
+        "stage Retry must re-kick Imagine: {stage_wire}"
+    );
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.imagine_kind = grokhub_core::ImagineKind::Agent;
+    cabin.imagine_native.count = 7;
+    cabin.imagine_native.image_model = 1;
+    match cabin.imagine_call() {
+        super::imagine::ImagineCall::Generate { n, model, .. } => {
+            assert_eq!(n, 7);
+            assert_eq!(model, "grok-imagine-image-quality");
+        }
+        _ => panic!("Agent must generate stills"),
+    }
+    cabin.imagine_native.count = 10;
+    match cabin.imagine_call() {
+        super::imagine::ImagineCall::Generate { n, .. } => assert_eq!(n, 10),
+        _ => panic!("count 10"),
+    }
+
+    // Paint Agent More and a failed stage so the finished chrome is visible in-process.
+    let _cfg = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("imagine-more-paint");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("config root");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.nav = Nav::Imagine;
+    cabin.imagine_kind = grokhub_core::ImagineKind::Agent;
+    cabin.imagine_native.more_open = true;
+    cabin.imagine_native.more_anchor =
+        egui::Rect::from_min_size(egui::pos2(200.0, 400.0), egui::vec2(80.0, 36.0));
+    cabin.imagine_native.count = 3;
+    let _paint = crate::theme::hold_paint_test();
+    let ctx = egui::Context::default();
+    crate::theme::install_fonts_on(&ctx);
+    let raw = egui::RawInput {
+        screen_rect: Some(egui::Rect::from_min_size(
+            egui::Pos2::ZERO,
+            egui::vec2(1280.0, 900.0),
+        )),
+        ..Default::default()
+    };
+    let mut texts = Vec::new();
+    for _ in 0..2 {
+        texts.clear();
+        let out = crate::theme::test_pass(&ctx, raw.clone(), |ui| {
+            cabin.ui_imagine(ui);
+            cabin.ui_imagine_overlays(ui.ctx());
+        });
+        for clipped in &out.shapes {
+            collect_shape_text(&clipped.shape, &mut texts);
+        }
+    }
+    let blob = texts.join(" | ");
+    assert!(
+        blob.contains("Character sprite still")
+            && blob.contains("Model")
+            && blob.contains("Images")
+            && blob.contains("3"),
+        "Agent More must paint model + count: {blob}"
+    );
+    cabin.imagine_native.more_open = false;
+    cabin.imagine_error = "network interrupted".into();
+    cabin.imagine_last.clear();
+    texts.clear();
+    let out = crate::theme::test_pass(&ctx, raw, |ui| cabin.ui_imagine(ui));
+    for clipped in &out.shapes {
+        collect_shape_text(&clipped.shape, &mut texts);
+    }
+    let fail = texts.join(" | ");
+    assert!(
+        fail.contains("Imagine failed") && fail.contains("Retry"),
+        "failed stage must offer Retry: {fail}"
+    );
+}
+
 // Pulse (2.10.91): Ideas and the Home deck became one page.
 
 fn pulse_idea(id: &str, title: &str, prompt: &str, created_at: u64) -> grokhub_core::UpdateCard {
@@ -26197,12 +26285,15 @@ fn pulse_replaces_ideas_on_the_rail_and_old_links_still_land() {
     cabin.nav = super::Nav::Chat;
     cabin.run_palette(&egui::Context::default(), "nav:pulse");
     assert_eq!(cabin.nav, super::Nav::Pulse);
-    // The deck no longer stacks over a new chat unless Settings turns it back on.
-    assert!(!crate::config::AppConfig::default().home_deck);
+    // Empty main chat is chat-first; cards live in Pulse (no Settings deck toggle).
     let home = fn_src(&cabin_src(), "ui_empty_home").to_string();
     assert!(
-        home.contains("let feed_n = if pulse_on && self.cfg.home_deck {"),
-        "{home}"
+        !home.contains("home_deck")
+            && !home.contains("paint_update_feed")
+            && !home.contains("paint_home_deck_over_chat")
+            && !home.contains("home_feed_count")
+            && home.contains("paint_device_glance_row"),
+        "empty home must not paint the Home card deck: {home}"
     );
     let texts = pulse_texts(cabin, 900.0);
     assert_eq!(
@@ -28043,13 +28134,18 @@ fn memory_repo_turn_end_writes_one_trail_and_a_scratch_chat_writes_none() {
         .join("amr")
         .join("nodes")
         .join(format!("{}.md", grokhub_core::amr::trail_id(&dock_id, 1)));
-    spike3a_wait(&mut || trail.is_file());
-    let md = std::fs::read_to_string(&trail).unwrap();
+    let expected_tail = format!(
+        "---\nTurn 1: 1 step.\nTools: click x1\nDecisions: allow 1\nScreen changed: not measured\nFindings: none\nVerify: none\nSpans: {dock_id}:1791331200000\n"
+    );
+    // Wait for the body, not just create: remember used to publish an empty file first.
+    let mut md = String::new();
+    spike3a_wait(&mut || {
+        md = std::fs::read_to_string(&trail).unwrap_or_default();
+        md.ends_with(&expected_tail)
+    });
     assert!(
-        md.ends_with(&format!(
-            "---\nTurn 1: 1 step.\nTools: click x1\nDecisions: allow 1\nScreen changed: not measured\nFindings: none\nVerify: none\nSpans: {dock_id}:1791331200000\n"
-        )),
-        "{md}"
+        md.ends_with(&expected_tail),
+        "trail body missing after wait: {md}"
     );
     assert!(
         md.contains(&format!("source: span:{dock_id}:1791331200000\n")),
@@ -28086,6 +28182,7 @@ fn spike3a_adds_no_nav_page() {
         Nav::Skills,
         Nav::Night,
         Nav::History,
+        Nav::Journal,
         Nav::Command,
         Nav::Agents,
         Nav::Settings,
@@ -28102,12 +28199,13 @@ fn spike3a_adds_no_nav_page() {
             Nav::Skills => "skills",
             Nav::Night => "night",
             Nav::History => "history",
+            Nav::Journal => "journal",
             Nav::Command => "command",
             Nav::Agents => "agents",
             Nav::Settings => "settings",
         })
         .collect();
-    assert_eq!(named.len(), 12);
+    assert_eq!(named.len(), 13);
     let _g = crate::config::hold_test_config();
     let root = crate::config::test_config_root("spike3a-nav");
     std::env::set_var("GROKHUB_CONFIG", &root);
@@ -28791,4 +28889,78 @@ fn being_active_holds_heavy_jobs_and_light_model_jobs_go_cheap_until_idle() {
     // A key or click a moment ago counts as active again.
     cabin.last_activity = std::time::Instant::now();
     assert!(cabin.user_active_now());
+}
+
+#[test]
+fn journal_create_promote_persists_and_slash_opens() {
+    let _hold = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("journal-v1");
+    let _ = std::fs::create_dir_all(&root);
+    std::env::set_var("GROKHUB_CONFIG", &root);
+
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.run_slash_line("/journal");
+    assert!(
+        matches!(cabin.nav, Nav::Journal),
+        "/journal must open the Journal page"
+    );
+
+    let id = grokhub_core::create_entry(&mut cabin.journal, "Should we keep a decision journal?")
+        .expect("create");
+    assert_eq!(cabin.journal.len(), 1);
+    assert!(grokhub_core::edit_entry(
+        &mut cabin.journal,
+        &id,
+        None,
+        Some("Ideas were becoming silent commitments."),
+        Some("Ship local decisions.json."),
+        None,
+        None,
+    ));
+    let board_id =
+        grokhub_core::promote_to_board(&mut cabin.journal, &mut cabin.board, &id).expect("promote");
+    assert_eq!(
+        cabin.journal[0].board_id.as_deref(),
+        Some(board_id.as_str())
+    );
+    assert_eq!(cabin.board.len(), 1);
+    assert!(
+        cabin.board[0].detail.contains("Ideas were becoming")
+            || cabin.board[0].detail.contains("journal"),
+        "context must survive promote: {}",
+        cabin.board[0].detail
+    );
+
+    crate::config::save_journal(&cabin.journal).expect("save decisions.json");
+    let path = crate::config::decisions_path();
+    assert!(
+        path.starts_with(&root),
+        "journal must land under GROKHUB_CONFIG: {} vs {}",
+        path.display(),
+        root.display()
+    );
+    let loaded = crate::config::load_journal();
+    assert_eq!(loaded.len(), 1, "decisions.json at {}", path.display());
+    assert_eq!(loaded[0].question, "Should we keep a decision journal?");
+    assert_eq!(loaded[0].board_id.as_deref(), Some(board_id.as_str()));
+    // Background flush uses the same save path.
+    cabin.flush_journal();
+    let src = include_str!("journal_ui.rs");
+    assert!(
+        src.contains("config::save_journal") && src.contains("flush_journal"),
+        "UI flush must write decisions.json"
+    );
+
+    assert!(grokhub_core::decide_entry(
+        &mut cabin.journal,
+        &id,
+        None,
+        "Local journal is enough for v1."
+    ));
+    assert_eq!(
+        cabin.journal[0].status,
+        grokhub_core::JournalStatus::Decided
+    );
+
+    std::env::remove_var("GROKHUB_CONFIG");
 }

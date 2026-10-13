@@ -162,6 +162,10 @@ impl Cabin {
                 self.nav = Nav::Workboard;
                 self.status = format!("{} cards", self.board.len());
             }
+            Slash::Journal => {
+                self.nav = Nav::Journal;
+                self.status = format!("{} journal entries", self.journal.len());
+            }
             Slash::ImagineVideo(p) => {
                 self.nav = Nav::Imagine;
                 self.imagine_kind = grokhub_core::ImagineKind::Video;
@@ -400,6 +404,7 @@ impl Cabin {
                 self.persist();
                 self.status = grokhub_core::health::health_status(&health);
             }
+            Slash::Brief => self.run_systems_brief_slash(),
             Slash::Fix => {
                 self.halt_work("Stopped");
                 self.nav = Nav::Settings;

@@ -1253,6 +1253,16 @@ impl Cabin {
                                 &self.harness.findings_dismissed,
                             );
                             let findings_at = findings.as_ref().map(|(i, _)| *i);
+                            self.ensure_run_evidence();
+                            let evidence = self
+                                .harness
+                                .evidence
+                                .as_ref()
+                                .filter(|e| e.chat_id == thread_id)
+                                .cloned();
+                            let evidence_at = evidence.as_ref().and_then(|_| {
+                                super::evidence_ui::evidence_host_row(&self.chat_views)
+                            });
                             let (views, keys) = (&self.chat_views, &self.chat_view_keys);
                             let shown = if live {
                                 views_up_to_last_user(views)
@@ -1332,6 +1342,7 @@ impl Cabin {
                                     || (skill_at == Some(i) && !skill_rows.is_empty())
                                     || (change_at == Some(i) && !change_rows.is_empty())
                                     || findings_at == Some(i);
+                                let evidence_here = evidence_at == Some(i);
                                 let painted = ui.push_id(chat_row_id_salt(&thread_id, i), |ui| {
                                     let mut p = paint_chat_block_with(
                                         ui,
@@ -1376,6 +1387,11 @@ impl Cabin {
                                             p.act =
                                                 paint_msg_acts(ui, false, &block.body, avail, w)
                                                     .act;
+                                        }
+                                    }
+                                    if evidence_here {
+                                        if let Some(ev) = evidence.as_ref() {
+                                            super::evidence_ui::paint_evidence_panel(ui, ev);
                                         }
                                     }
                                     p
@@ -1937,6 +1953,7 @@ impl Cabin {
         .id_salt("chat-work-tree")
         .default_open(false)
         .show(ui, |ui| {
+            self.paint_mission_header(ui);
             self.paint_episode_header(ui);
             for card in &self.tool_cards {
                 paint_tool_card_body(ui, card);
@@ -2311,13 +2328,6 @@ impl Cabin {
         } else {
             0.0
         };
-        // The deck moved to Pulse (2.10.91). Settings → Behavior can bring it back.
-        let feed_n = if pulse_on && self.cfg.home_deck {
-            home_feed_count(&self.updates, &self.cfg.feed_pulse, now_ms())
-        } else {
-            0
-        };
-        let feed_h = collapsed_stack_h(feed_n);
         let device_on =
             pulse_on && device_glance(self.hub_on, self.last_frame_url.as_deref()).is_some();
         let device_h = if device_on { 26.0 } else { 0.0 };
@@ -2369,25 +2379,14 @@ impl Cabin {
                         self.paint_inbox_only(ui);
                     }
                     self.paint_try_again(ui);
-                    if pulse_on && (feed_n > 0 || device_on) {
-                        let below =
-                            feed_h + device_h + if feed_n > 0 && device_on { 4.0 } else { 0.0 };
+                    if pulse_on && device_on {
                         let gap = ui.available_height();
-                        ui.add_space(((gap - below) * 0.5).max(0.0));
-                        if feed_n > 0 {
-                            self.paint_update_feed(ui, pane_w);
-                        }
-                        if device_on {
-                            if feed_n > 0 {
-                                ui.add_space(4.0);
-                            }
-                            self.paint_device_glance_row(ui, pane_w);
-                        }
+                        ui.add_space(((gap - device_h) * 0.5).max(0.0));
+                        self.paint_device_glance_row(ui, pane_w);
                     }
                 },
             );
         });
-        self.paint_home_deck_over_chat(ui);
     }
 
     /// View plan. Not slash-only.

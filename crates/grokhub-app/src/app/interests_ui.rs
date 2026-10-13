@@ -1,6 +1,7 @@
 //! Settings → Pulse → Interests, and the interest profile behind it. The profile lives in
 //! `{config}/interests.json`. It is seeded once from memory, recent chats and liked cards,
 //! steers every feed lookup, and moves a little with each open, like and skip.
+//! Chat titles only become Interests after cross-chat evidence; edges link related topics.
 
 use super::*;
 use grokhub_core::interests::{self, InterestProfile, InterestSignal, InterestSource, SeedFrom};
@@ -31,30 +32,37 @@ impl Cabin {
             .get_or_insert_with(|| interests::load(&interests_path()))
     }
 
-    fn persist_interests(&mut self) {
+    pub(super) fn persist_interests(&mut self) {
         let profile = self.interests_now().clone();
         if let Err(err) = interests::save(&interests_path(), &profile) {
             self.status = err;
         }
     }
 
+    /// Edge-only feedback (topic weights already moved elsewhere).
+    pub(super) fn interests_edge_feedback(
+        &mut self,
+        title: &str,
+        anchor: Option<&str>,
+        signal: InterestSignal,
+    ) {
+        let now = now_ms();
+        let profile = self.interests_now();
+        let before = profile.clone();
+        profile.edge_feedback(title, anchor, signal, now);
+        if *profile != before {
+            self.persist_interests();
+        }
+    }
+
     /// First feed lookup only: topics from USER.md, MEMORY.md, the newest chats and
-    /// liked cards. Topics the person removed never come back.
+    /// liked cards. Topics the person removed never come back. Chat titles are
+    /// observed into the interest graph and promoted only with cross-chat evidence.
     pub(super) fn seed_interests(&mut self, user_md: &str, memory_md: &str) {
         if self.interests_now().seeded {
             return;
         }
-        let mut chats: Vec<&threads::ChatThread> = self
-            .threads
-            .iter()
-            .filter(|t| !t.scratch && !t.title.trim().is_empty())
-            .collect();
-        chats.sort_by_key(|t| std::cmp::Reverse(t.accessed_ms));
-        let chat_titles: Vec<String> = chats
-            .into_iter()
-            .take(interests::SEED_CHATS)
-            .map(|t| t.title.clone())
-            .collect();
+        let chats = self.recent_chat_mentions(interests::SEED_CHATS);
         let saved_titles: Vec<String> = self
             .updates
             .iter()
@@ -64,11 +72,40 @@ impl Cabin {
         let from = SeedFrom {
             user_md,
             memory_md,
-            chat_titles: &chat_titles,
+            chats: &chats,
             saved_titles: &saved_titles,
         };
         self.interests_now().seed(&from, now_ms());
         self.persist_interests();
+    }
+
+    /// Recent user chats as (id, title) for graph observe / seed.
+    /// Skips scratch and background cabin threads (e.g. the hidden "Background" job chat).
+    fn recent_chat_mentions(&self, limit: usize) -> Vec<(String, String)> {
+        let mut chats: Vec<&threads::ChatThread> = self
+            .threads
+            .iter()
+            .filter(|t| !t.scratch && !t.background && !t.title.trim().is_empty())
+            .collect();
+        chats.sort_by_key(|t| std::cmp::Reverse(t.accessed_ms));
+        chats
+            .into_iter()
+            .take(limit)
+            .map(|t| (t.id.clone(), t.title.clone()))
+            .collect()
+    }
+
+    /// Observe recent chats, promote evidence-gated Interests, persist if anything moved.
+    pub(super) fn interests_observe_recent(&mut self) {
+        let chats = self.recent_chat_mentions(interests::OBSERVE_CHATS);
+        let now = now_ms();
+        let profile = self.interests_now();
+        let before = profile.clone();
+        profile.observe_chats(&chats, now);
+        profile.promote_from_evidence(now);
+        if *profile != before {
+            self.persist_interests();
+        }
     }
 
     /// What the next lookup is told about the person's interests.
@@ -78,10 +115,20 @@ impl Cabin {
 
     /// A card was opened, liked or skipped: topics its title names move.
     pub(super) fn interests_feedback(&mut self, title: &str, signal: InterestSignal) {
+        self.interests_feedback_anchored(title, None, signal);
+    }
+
+    /// Like [`interests_feedback`], with the card's interest topic as the graph anchor.
+    pub(super) fn interests_feedback_anchored(
+        &mut self,
+        title: &str,
+        anchor: Option<&str>,
+        signal: InterestSignal,
+    ) {
         let now = now_ms();
         let profile = self.interests_now();
         let before = profile.clone();
-        profile.feedback(title, signal, now);
+        profile.feedback_anchored(title, anchor, signal, now);
         if *profile != before {
             self.persist_interests();
         }
@@ -245,7 +292,7 @@ mod tests {
     }
 
     #[test]
-    fn seeding_reads_the_newest_chats_and_liked_cards_then_persists() {
+    fn seeding_reads_liked_cards_and_evidence_gates_chat_titles() {
         let (_lock, _root, mut cabin) = cabin();
         let mut old = threads::ChatThread::new("old", false);
         old.title = "Sourdough".into();
@@ -253,7 +300,15 @@ mod tests {
         let mut new = threads::ChatThread::new("new", false);
         new.title = "Home espresso".into();
         new.accessed_ms = 9;
-        cabin.threads = vec![old, new];
+        // Second chat with the same title supplies the evidence threshold.
+        let mut again = threads::ChatThread::new("again", false);
+        again.title = "Home espresso".into();
+        again.accessed_ms = 10;
+        // Hidden cabin job chat must not enter the interest graph.
+        let mut bg = threads::ChatThread::new(threads::BACKGROUND_THREAD_TITLE, false);
+        bg.background = true;
+        bg.accessed_ms = 11;
+        cabin.threads = vec![old, new, again, bg];
         let mut liked = grokhub_core::digest_card("edition", "Bambu printers", "body", 5);
         liked.reaction = Some(grokhub_core::CardReaction::Up);
         cabin.updates = vec![liked];
@@ -264,16 +319,25 @@ mod tests {
             .iter()
             .map(|t| t.topic.clone())
             .collect();
-        assert_eq!(
-            topics,
-            vec!["Rust", "Bambu printers", "Home espresso", "Sourdough"]
-        );
+        assert_eq!(topics, vec!["Rust", "Bambu printers", "Home espresso"]);
+        assert!(cabin.interests_now().find("Sourdough").is_none());
+        assert!(cabin.interests_now().find("Background").is_none());
         let on_disk = interests::load(&interests_path());
         assert!(on_disk.seeded);
-        assert_eq!(on_disk.topics.len(), 4);
+        assert_eq!(on_disk.topics.len(), 3);
+        assert!(on_disk
+            .graph
+            .evidence
+            .iter()
+            .any(|e| e.topic == "Sourdough" && e.chat_ids.len() == 1));
+        assert!(!on_disk
+            .graph
+            .evidence
+            .iter()
+            .any(|e| e.topic.eq_ignore_ascii_case("Background")));
         assert_eq!(
             cabin.interests_prompt(),
-            "Their interests, strongest first: Rust, Bambu printers, Home espresso, Sourdough."
+            "Their interests, strongest first: Rust, Bambu printers, Home espresso."
         );
     }
 

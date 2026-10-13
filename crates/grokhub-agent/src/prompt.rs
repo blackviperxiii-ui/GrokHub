@@ -479,7 +479,11 @@ mod tests {
         assert!(text.contains("read_file"));
         assert!(text.contains("Cabin rule line."));
         assert!(text.contains("Prefer small patches."));
-        assert!(text.contains("read-only"));
+        // Chat is not permanently read-only; Plan/Ask are. Never invent a
+        // blanket "read-only phase" that blocks host work when tools are listed.
+        assert!(text.contains("Never invent a permanent \"read-only phase\""));
+        assert!(text.contains("sealed Installed-app learnings"));
+        assert!(!text.contains("You are Grok, a read-only coding assistant"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

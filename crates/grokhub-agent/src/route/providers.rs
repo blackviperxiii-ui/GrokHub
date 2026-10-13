@@ -168,6 +168,12 @@ pub fn parse_base_url(raw: &str) -> Result<(String, ProviderKind, String), Strin
     if authority.contains('@') || url.contains(char::is_whitespace) {
         return Err("That address isn't a plain https URL.".into());
     }
+    // Same public-address rail as Pulse / web_fetch: no loopback, RFC1918,
+    // link-local (incl. cloud metadata), or CGNAT literals. Local models use
+    // the sidecar path, not a custom provider base URL.
+    if !grokhub_core::public_http_url(url) {
+        return Err("That address isn't a public https URL.".into());
+    }
     let host = egress_dest(url);
     if host.is_empty() || !host.contains('.') {
         return Err("That address has no host.".into());
@@ -596,9 +602,13 @@ pub trait ProviderTransport: Send + Sync {
 pub struct UreqTransport;
 
 fn agent() -> ureq::Agent {
+    // No env proxy: HTTP(S)_PROXY would dial the proxy and skip public_only_resolve
+    // on the target (same as web_fetch / Pulse).
     ureq::AgentBuilder::new()
         .timeout_connect(Duration::from_secs(20))
         .timeout(Duration::from_secs(600))
+        .redirects(0)
+        .resolver(crate::public_only_resolve)
         .build()
 }
 
