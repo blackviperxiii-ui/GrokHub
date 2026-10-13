@@ -23,33 +23,32 @@ pub fn setting_row(
     control: SettingRowControl<'_>,
 ) -> Response {
     let row_h = crate::theme::MIN_HIT.max(crate::theme::NAV_ROW_H);
-    ui
-        .horizontal(|ui| {
-            ui.set_min_height(row_h);
-            ui.with_layout(egui::Layout::top_down_justified(egui::Align::LEFT), |ui| {
-                ui.set_width(ui.available_width() * 0.55);
+    ui.horizontal(|ui| {
+        ui.set_min_height(row_h);
+        ui.with_layout(egui::Layout::top_down_justified(egui::Align::LEFT), |ui| {
+            ui.set_width(ui.available_width() * 0.55);
+            ui.label(
+                egui::RichText::new(label)
+                    .size(crate::theme::TYPE_LABEL)
+                    .color(crate::theme::fg()),
+            );
+            if !description.is_empty() {
                 ui.label(
-                    egui::RichText::new(label)
-                        .size(crate::theme::TYPE_LABEL)
-                        .color(crate::theme::fg()),
-                );
-                if !description.is_empty() {
-                    ui.label(
-                        egui::RichText::new(description)
-                            .size(crate::theme::TYPE_BODY)
-                            .color(crate::theme::blend_color(
+                    egui::RichText::new(description)
+                        .size(crate::theme::TYPE_BODY)
+                        .color(crate::theme::blend_color(
                             crate::theme::fg(),
                             crate::theme::bg(),
                             0.35,
                         )),
-                    );
-                }
-            });
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                paint_control(ui, control);
-            });
-        })
-        .response
+                );
+            }
+        });
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            paint_control(ui, control);
+        });
+    })
+    .response
 }
 
 fn paint_control(ui: &mut Ui, control: SettingRowControl<'_>) {
@@ -98,12 +97,7 @@ mod tests {
             ..Default::default()
         };
         let out = crate::theme::test_pass(&ctx, input, |ui| {
-            setting_row(
-                ui,
-                "Row",
-                "Help",
-                SettingRowControl::Switch(&mut on),
-            );
+            setting_row(ui, "Row", "Help", SettingRowControl::Switch(&mut on));
             setting_row(
                 ui,
                 "Level",

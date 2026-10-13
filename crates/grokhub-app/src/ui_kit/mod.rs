@@ -28,26 +28,15 @@ pub fn section_header(ui: &mut Ui, title: &str, description: Option<&str>) {
     );
     if let Some(desc) = description {
         ui.add_space(crate::theme::SPACING_4);
-        ui.label(
-            RichText::new(desc)
-                .size(crate::theme::TYPE_BODY)
-                .color(crate::theme::blend_color(
-                    crate::theme::fg(),
-                    crate::theme::bg(),
-                    0.35,
-                )),
-        );
+        ui.label(RichText::new(desc).size(crate::theme::TYPE_BODY).color(
+            crate::theme::blend_color(crate::theme::fg(), crate::theme::bg(), 0.35),
+        ));
     }
     ui.add_space(crate::theme::SPACING_8);
 }
 
 /// Centered empty state with optional action button.
-pub fn empty_state(
-    ui: &mut Ui,
-    title: &str,
-    message: &str,
-    action_label: Option<&str>,
-) -> bool {
+pub fn empty_state(ui: &mut Ui, title: &str, message: &str, action_label: Option<&str>) -> bool {
     let mut clicked = false;
     ui.vertical_centered(|ui| {
         ui.add_space(crate::theme::SPACING_24);
@@ -57,15 +46,9 @@ pub fn empty_state(
                 .color(crate::theme::fg()),
         );
         ui.add_space(crate::theme::SPACING_8);
-        ui.label(
-            RichText::new(message)
-                .size(crate::theme::TYPE_BODY)
-                .color(crate::theme::blend_color(
-                    crate::theme::fg(),
-                    crate::theme::bg(),
-                    0.35,
-                )),
-        );
+        ui.label(RichText::new(message).size(crate::theme::TYPE_BODY).color(
+            crate::theme::blend_color(crate::theme::fg(), crate::theme::bg(), 0.35),
+        ));
         if let Some(label) = action_label {
             ui.add_space(crate::theme::SPACING_16);
             let min = Vec2::new(crate::theme::MIN_HIT * 2.0, crate::theme::MIN_HIT);

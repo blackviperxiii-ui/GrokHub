@@ -41,9 +41,9 @@ mod store;
 mod theme;
 mod threads;
 mod titlebar;
+mod tray;
 #[allow(dead_code)]
 mod ui_kit;
-mod tray;
 mod update;
 #[cfg(windows)]
 mod win_acl;

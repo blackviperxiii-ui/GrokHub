@@ -49,7 +49,14 @@ pub fn chip(ui: &mut Ui, label: &str, variant: ChipVariant, enabled: bool) -> Re
         size.x.max(crate::theme::MIN_HIT * 0.75),
         size.y.max(crate::theme::MIN_HIT * 0.65),
     );
-    let (rect, resp) = ui.allocate_exact_size(min, if enabled { Sense::click() } else { Sense::hover() });
+    let (rect, resp) = ui.allocate_exact_size(
+        min,
+        if enabled {
+            Sense::click()
+        } else {
+            Sense::hover()
+        },
+    );
     let resp = if enabled {
         ui.interact(rect, id, Sense::click())
     } else {
@@ -61,16 +68,18 @@ pub fn chip(ui: &mut Ui, label: &str, variant: ChipVariant, enabled: bool) -> Re
         (resp, rect, fill)
     };
     if stroke.width > 0.0 {
-        ui.painter()
-            .rect_stroke(felt, crate::theme::RADIUS_MD, stroke, egui::StrokeKind::Inside);
+        ui.painter().rect_stroke(
+            felt,
+            crate::theme::RADIUS_MD,
+            stroke,
+            egui::StrokeKind::Inside,
+        );
     }
-    ui.painter().rect_filled(felt, crate::theme::RADIUS_MD, painted);
+    ui.painter()
+        .rect_filled(felt, crate::theme::RADIUS_MD, painted);
     crate::theme::paint_focus_ring(ui, felt, crate::theme::RADIUS_MD, &resp);
     ui.painter().galley(
-        egui::pos2(
-            felt.min.x + pad.x,
-            felt.center().y - galley.size().y * 0.5,
-        ),
+        egui::pos2(felt.min.x + pad.x, felt.center().y - galley.size().y * 0.5),
         galley,
         text,
     );

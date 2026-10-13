@@ -35,9 +35,7 @@ pub fn card_frame(
     };
     let shadow = match variant {
         CardVariant::Default => crate::theme::kit_shadow(crate::theme::ShadowLevel::Lift),
-        CardVariant::Interactive => {
-            crate::theme::kit_shadow(crate::theme::ShadowLevel::Soft)
-        }
+        CardVariant::Interactive => crate::theme::kit_shadow(crate::theme::ShadowLevel::Soft),
         CardVariant::Subtle | CardVariant::Outlined => {
             crate::theme::kit_shadow(crate::theme::ShadowLevel::None)
         }

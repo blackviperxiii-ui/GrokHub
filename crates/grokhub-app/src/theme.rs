@@ -1413,9 +1413,7 @@ mod tests {
         assert_eq!(MIN_HIT, TILE_ICON);
         assert!(kit_shadow(ShadowLevel::None).blur == 0);
         assert!(kit_shadow(ShadowLevel::Soft).blur > 0);
-        assert!(
-            kit_shadow(ShadowLevel::Lift).blur > kit_shadow(ShadowLevel::Soft).blur
-        );
+        assert!(kit_shadow(ShadowLevel::Lift).blur > kit_shadow(ShadowLevel::Soft).blur);
         set_paint_dark(true);
         assert!(
             contrast_ratio(fg(), bg()) >= 4.5,
@@ -1426,10 +1424,7 @@ mod tests {
             contrast_ratio(fg(), bg()) >= 4.5,
             "light body text on canvas"
         );
-        assert!(
-            contrast_ratio(SUBTLE, BG) >= 4.5,
-            "dark meta on canvas"
-        );
+        assert!(contrast_ratio(SUBTLE, BG) >= 4.5, "dark meta on canvas");
         set_paint_dark(true);
         assert_eq!(CARD_RADIUS, 12.0);
         assert_eq!(MENU_RADIUS, 12.0);
