@@ -61,13 +61,12 @@ use grokhub_core::{
     doctor_cabin_line, doctor_lines, doctor_ok, hub_kind_from_health, DEFAULT_PORT,
 };
 use std::env;
-use std::time::Duration;
 
 /// Cabin-wide async worker (Linux portal / ashpd). Owned in `main` so Quit can
 /// `shutdown_timeout` after `eframe::run_native` returns instead of hanging on drop.
 mod cabin_async {
     #[cfg(target_os = "linux")]
-    use super::Duration;
+    use std::time::Duration;
     #[cfg(target_os = "linux")]
     use std::sync::{Mutex, OnceLock};
 
