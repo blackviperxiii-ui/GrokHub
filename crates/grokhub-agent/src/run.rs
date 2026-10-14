@@ -1052,14 +1052,8 @@ fn note_tool(
 ) -> (ToolOutput, Usage) {
     let _lap = crate::timing::lap("loop:tool_run");
     emit_tool(on_event, id, call, "in_progress", &call.arguments, None);
-    let (output, usage) = dispatch_tool_call(
-        input,
-        gate,
-        base_readonly,
-        plan_at_start,
-        call,
-        on_event,
-    );
+    let (output, usage) =
+        dispatch_tool_call(input, gate, base_readonly, plan_at_start, call, on_event);
     let (output, usage) = finish_tool_output(
         input,
         call,
@@ -1260,9 +1254,7 @@ fn run_readonly_tool_batch(
     let tasks = input.tasks.clone();
     let owner = input.agent_id;
     let cancel = input.cancel.clone();
-    let should_stop = || {
-        cancel.is_cancelled() || tasks.as_ref().is_some_and(|hub| hub.is_halted())
-    };
+    let should_stop = || cancel.is_cancelled() || tasks.as_ref().is_some_and(|hub| hub.is_halted());
     let indices: Vec<usize> = (0..calls.len()).collect();
     let raw_outputs = tools::batch::run_parallel(&indices, Some(session), &should_stop, |slot| {
         let call = &calls[slot];

@@ -98,28 +98,25 @@ where
     if indices.is_empty() {
         return Vec::new();
     }
-    let results: Mutex<Vec<Option<ToolOutput>>> =
-        Mutex::new(vec![None; indices.len()]);
+    let results: Mutex<Vec<Option<ToolOutput>>> = Mutex::new(vec![None; indices.len()]);
     let next = AtomicUsize::new(0);
     let workers = indices.len().min(MAX_PARALLEL);
     std::thread::scope(|scope| {
         for _ in 0..workers {
-            scope.spawn(|| {
-                loop {
-                    let slot = next.fetch_add(1, Ordering::SeqCst);
-                    if slot >= indices.len() {
-                        break;
-                    }
-                    let out = if should_stop() {
-                        cancelled_output()
-                    } else {
-                        if let Some(session) = session {
-                            bind_deferred_session(session);
-                        }
-                        dispatch(indices[slot])
-                    };
-                    results.lock().unwrap_or_else(|e| e.into_inner())[slot] = Some(out);
+            scope.spawn(|| loop {
+                let slot = next.fetch_add(1, Ordering::SeqCst);
+                if slot >= indices.len() {
+                    break;
                 }
+                let out = if should_stop() {
+                    cancelled_output()
+                } else {
+                    if let Some(session) = session {
+                        bind_deferred_session(session);
+                    }
+                    dispatch(indices[slot])
+                };
+                results.lock().unwrap_or_else(|e| e.into_inner())[slot] = Some(out);
             });
         }
     });
@@ -215,7 +212,9 @@ mod tests {
     #[test]
     fn parallel_preserves_order() {
         let indices: Vec<usize> = (0..5).collect();
-        let outs = run_parallel(&indices, None, &|| false, |i| ToolOutput::ok(format!("v{i}")));
+        let outs = run_parallel(&indices, None, &|| false, |i| {
+            ToolOutput::ok(format!("v{i}"))
+        });
         assert_eq!(
             outs.iter().map(|o| o.text.as_str()).collect::<Vec<_>>(),
             vec!["v0", "v1", "v2", "v3", "v4"]
@@ -226,11 +225,16 @@ mod tests {
     fn parallel_honours_stop_before_start() {
         let started = AtomicUsize::new(0);
         let indices: Vec<usize> = (0..4).collect();
-        let outs = run_parallel(&indices, None, &|| started.load(Ordering::SeqCst) >= 1, |i| {
-            started.fetch_add(1, Ordering::SeqCst);
-            std::thread::sleep(Duration::from_millis(20));
-            ToolOutput::ok(format!("ran{i}"))
-        });
+        let outs = run_parallel(
+            &indices,
+            None,
+            &|| started.load(Ordering::SeqCst) >= 1,
+            |i| {
+                started.fetch_add(1, Ordering::SeqCst);
+                std::thread::sleep(Duration::from_millis(20));
+                ToolOutput::ok(format!("ran{i}"))
+            },
+        );
         assert_eq!(started.load(Ordering::SeqCst), 1);
         assert_eq!(outs.len(), 4);
         assert!(!outs[0].failed);
@@ -266,10 +270,7 @@ mod tests {
         assert!(!outs[0].failed);
         assert!(!outs[1].failed);
         let tools = crate::tools::schemas_for(&gate);
-        let names: Vec<_> = tools
-            .iter()
-            .filter_map(|s| s["name"].as_str())
-            .collect();
+        let names: Vec<_> = tools.iter().filter_map(|s| s["name"].as_str()).collect();
         assert!(names.contains(&"write"));
         assert!(names.contains(&"run_terminal_command"));
         let _ = std::fs::remove_dir_all(&dir);
