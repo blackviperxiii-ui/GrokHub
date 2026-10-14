@@ -1,6 +1,37 @@
 //! Host, connector, consult, and leftover JobOut poll.
 
 use super::*;
+use std::time::Duration;
+
+/// One harness fix-plan shell step, synchronously (Phase C). Does not start a chat job.
+pub(super) fn run_fix_host_step(cmd: &str) -> Result<String, String> {
+    let line = if cmd.trim_start().starts_with("HOST_CMD") {
+        cmd.trim().to_string()
+    } else {
+        format!("HOST_CMD: {}", cmd.trim())
+    };
+    if let Some(why) = forbidden_reason(&line) {
+        return Err(why.to_string());
+    }
+    let host = grokhub_core::strip_host_cmd_line(&line).unwrap_or(cmd);
+    let out = crate::host::run_host(host, Duration::from_secs(90));
+    if out.contains("blocked:") || out.contains("HOST_RECEIPT: halted") {
+        return Err(out);
+    }
+    Ok(out)
+}
+
+/// One harness fix-plan desktop step via the same host path as `run_cmds`.
+pub(super) fn run_fix_desktop_step(line: &str) -> Result<String, String> {
+    if let Some(op) = parse_computer_op(line) {
+        let out = run_computer_op_cancel(&op, None);
+        if out.contains("Denied:") || out.contains("blocked:") {
+            return Err(out);
+        }
+        return Ok(out);
+    }
+    Err("not a desktop command".into())
+}
 
 impl Cabin {
     pub(super) fn poll_job(&mut self) {
