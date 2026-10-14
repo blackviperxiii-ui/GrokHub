@@ -1,5 +1,6 @@
 //! Workspace tools. `execute` stays read-only. `dispatch` runs the gated set.
 
+pub(crate) mod batch;
 pub(crate) mod connections;
 pub(crate) mod control;
 mod defs;
