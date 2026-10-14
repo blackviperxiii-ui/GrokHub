@@ -254,6 +254,9 @@ impl Cabin {
         let effort = self.bg_effort(origin);
         let (stable, volatile) = self.chat_prompt_parts();
         let need = grokhub_agent::prompt_need_from_job(task);
+        // Undeclared jobs stay FULL (card assumption); NEED_SHELL / TOOLS: lean the set.
+        let tool_set = grokhub_agent::tool_set_from_job(task);
+        log_job_tool_schemas("background", &gate, &tool_set);
         let system = grokhub_agent::system_prompt_with(
             grokhub_agent::PromptProfile::Background,
             &stable,
@@ -271,6 +274,7 @@ impl Cabin {
         std::thread::spawn(move || {
             // The engine and its egress lines take this thread's origin.
             let _origin = grokhub_agent::harness::OriginScope::enter(started_by);
+            let _tool_set = grokhub_agent::bind_job_tool_set(&session, tool_set);
             run_native_bg(
                 session, workspace, client, auth_kind, bearer, gate, model, effort, system, prompt,
                 cancel, tx,
@@ -920,6 +924,17 @@ fn native_bg_model(cabin: &mut Cabin) -> Result<BgModel, String> {
     }
 }
 
+/// Schema payload size for one job start (measurement; no tracing dep in-tree).
+fn log_job_tool_schemas(job_kind: &str, gate: &grokhub_agent::Gate, set: &grokhub_agent::ToolSet) {
+    let schemas = grokhub_agent::schemas_for_job(gate, set);
+    let tool_count = schemas.len();
+    let schema_bytes = serde_json::to_vec(&schemas).map(|b| b.len()).unwrap_or(0);
+    let approx_tokens = schema_bytes / 4;
+    eprintln!(
+        "job_tool_schemas job_kind={job_kind} tool_count={tool_count} schema_bytes={schema_bytes} approx_tokens={approx_tokens}"
+    );
+}
+
 fn run_native_bg(
     session: String,
     workspace: std::path::PathBuf,
@@ -1136,5 +1151,58 @@ mod automation_sync_tests {
         assert_eq!(ids, vec!["keep", "edit", "new"]);
         assert_eq!(list[1].heartbeat_every_min, 30);
         assert_eq!(list[2].heartbeat_every_min, 10);
+    }
+}
+
+#[cfg(test)]
+mod sp2_tool_set_tests {
+    use grokhub_agent::{schemas_for, schemas_for_job, tool_set_from_job, Gate, PermMode};
+
+    fn chat_gate() -> Gate {
+        Gate {
+            mode: PermMode::Always,
+            readonly_session: false,
+            attended: true,
+            desktop: false,
+        }
+    }
+
+    fn names(tools: &[serde_json::Value]) -> Vec<&str> {
+        tools.iter().filter_map(|t| t["name"].as_str()).collect()
+    }
+
+    #[test]
+    fn need_shell_background_schemas_are_lean_subset_with_shell() {
+        let gate = chat_gate();
+        let chat = schemas_for(&gate);
+        let set = tool_set_from_job("NEED_SHELL\nfinish the weekly report");
+        let job = schemas_for_job(&gate, &set);
+        let chat_names = names(&chat);
+        let job_names = names(&job);
+        assert!(
+            job_names.iter().all(|n| chat_names.contains(n)),
+            "job schemas must be a subset of chat: {job_names:?}"
+        );
+        assert!(
+            job_names.contains(&"run_terminal_command"),
+            "NEED_SHELL must offer run_terminal_command: {job_names:?}"
+        );
+        let chat_bytes = serde_json::to_vec(&chat).unwrap().len();
+        let job_bytes = serde_json::to_vec(&job).unwrap().len();
+        assert!(
+            job_bytes * 10 <= chat_bytes * 7,
+            "job schema payload must be ≥30% smaller: job={job_bytes} chat={chat_bytes}"
+        );
+    }
+
+    #[test]
+    fn undeclared_job_schemas_match_full_gate_list() {
+        let gate = chat_gate();
+        let set = tool_set_from_job("plain weekly report with no tool tokens");
+        assert!(set.is_full());
+        assert_eq!(
+            names(&schemas_for_job(&gate, &set)),
+            names(&schemas_for(&gate))
+        );
     }
 }

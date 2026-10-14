@@ -171,6 +171,17 @@ fn fast_gate() -> grokhub_agent::Gate {
     }
 }
 
+/// Schema payload size for one unattended/scheduled job start.
+fn log_job_tool_schemas(job_kind: &str, gate: &grokhub_agent::Gate, set: &grokhub_agent::ToolSet) {
+    let schemas = grokhub_agent::schemas_for_job(gate, set);
+    let tool_count = schemas.len();
+    let schema_bytes = serde_json::to_vec(&schemas).map(|b| b.len()).unwrap_or(0);
+    let approx_tokens = schema_bytes / 4;
+    eprintln!(
+        "job_tool_schemas job_kind={job_kind} tool_count={tool_count} schema_bytes={schema_bytes} approx_tokens={approx_tokens}"
+    );
+}
+
 fn execute(job: Prepared) -> grokhub_agent::UnattendedDone {
     let cancel = grokhub_agent::CancelToken::new();
     let session = job.session_id.clone();
@@ -178,6 +189,10 @@ fn execute(job: Prepared) -> grokhub_agent::UnattendedDone {
     if goal {
         pin_goal(&session, job.goal.clone());
     }
+    // Undeclared jobs stay FULL; NEED_SHELL / TOOLS: / NEED_MCP lean the set.
+    let tool_set = grokhub_agent::tool_set_from_job(&job.prompt);
+    log_job_tool_schemas("unattended", &job.gate, &tool_set);
+    let _tool_set = grokhub_agent::bind_job_tool_set(&session, tool_set);
     let _ = grokhub_agent::hub_for(&session);
     grokhub_agent::watch_cancel(&session, cancel.clone());
     let desktop_ops = if job.gate.desktop {
@@ -1230,6 +1245,37 @@ mod tests {
             "unattended drops skills unless NEED_SKILLS: {night}"
         );
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn unattended_tool_outside_set_is_named_refusal() {
+        // Tight allowlist (not TOOLS: which starts from the lean background set).
+        let set = grokhub_agent::ToolSet::only(["read_file"]);
+        assert!(!set.is_full());
+        assert!(set.allows("read_file"));
+        assert!(!set.allows("write"));
+        let refusal = grokhub_agent::tool_set_refusal("write");
+        assert!(
+            refusal.contains(grokhub_agent::TOOL_SET_OUTSIDE),
+            "{refusal}"
+        );
+        let session = "native-unattended-sp2-outside";
+        let _guard = grokhub_agent::bind_job_tool_set(session, set.clone());
+        let schemas = grokhub_agent::schemas_for_job(
+            &grokhub_agent::Gate {
+                mode: grokhub_agent::PermMode::Always,
+                readonly_session: false,
+                attended: false,
+                desktop: false,
+            },
+            &set,
+        );
+        let names: Vec<&str> = schemas
+            .iter()
+            .filter_map(|t| t["name"].as_str())
+            .collect();
+        assert!(names.contains(&"read_file"), "{names:?}");
+        assert!(!names.contains(&"write"), "{names:?}");
     }
 
     /// Approval cards, park titles and other hard text never see the personality: only

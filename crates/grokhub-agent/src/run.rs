@@ -4,15 +4,56 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use crate::gate::{self, Decision, Gate, PermAnswer, PermitWait, Waited};
 use crate::tasks::TaskHub;
-use crate::tools::{self, DesktopOps, ToolCtx, ToolOutput};
+use crate::tools::{self, DesktopOps, ToolCtx, ToolOutput, ToolSet};
 use crate::{
     CancelToken, ClientError, ContentPart, FunctionCall, InputItem, ModelClient, ResponsesRequest,
     StreamEvent, Usage,
 };
+
+/// Per-session [`ToolSet`] for background / unattended runs (SP2).
+///
+/// Callers bind before `run_loop` / `NativeEngine::prompt`; `None` on a session
+/// keeps today's full `schemas_for` / `dispatch` behavior. Stored here so app
+/// callers do not need a `LoopIn` field (that would force edits across eval and
+/// chat engine construction sites owned by other cards).
+static JOB_TOOL_SETS: OnceLock<Mutex<HashMap<String, ToolSet>>> = OnceLock::new();
+
+fn job_tool_sets() -> &'static Mutex<HashMap<String, ToolSet>> {
+    JOB_TOOL_SETS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Drops the session's job [`ToolSet`] when the run ends.
+pub struct JobToolSetGuard {
+    session: String,
+}
+
+impl Drop for JobToolSetGuard {
+    fn drop(&mut self) {
+        if let Ok(mut map) = job_tool_sets().lock() {
+            map.remove(&self.session);
+        }
+    }
+}
+
+/// Bind `set` for `session` until the guard drops. Overwrites a prior bind.
+pub fn bind_job_tool_set(session: impl Into<String>, set: ToolSet) -> JobToolSetGuard {
+    let session = session.into();
+    if let Ok(mut map) = job_tool_sets().lock() {
+        map.insert(session.clone(), set);
+    }
+    JobToolSetGuard { session }
+}
+
+fn bound_job_tool_set(session: &str) -> Option<ToolSet> {
+    job_tool_sets()
+        .lock()
+        .ok()
+        .and_then(|map| map.get(session).cloned())
+}
 
 const REPEAT_LIMIT: u32 = 3;
 /// What a call repeated [`REPEAT_LIMIT`] times gets back instead of running.
@@ -407,12 +448,16 @@ pub fn run_loop(
         }
         let mut wire = history.clone();
         crate::image_budget::apply_image_budget(&mut wire);
+        let tools = match bound_job_tool_set(input.conversation_id) {
+            Some(set) => tools::schemas_for_job(&gate, &set),
+            None => tools::schemas_for(&gate),
+        };
         let req = ResponsesRequest {
             model: input.model.to_string(),
             effort: input.effort.map(str::to_string),
             input: wire,
             conversation_id: input.conversation_id.to_string(),
-            tools: tools::schemas_for(&gate),
+            tools,
             hosted_search: true,
             call_timeout: None,
         };
@@ -1269,7 +1314,8 @@ fn run_readonly_tool_batch(
             owner,
             session: Some(session),
         };
-        tools::dispatch(&ctx, &call.name, &call.arguments)
+        let set = bound_job_tool_set(session);
+        tools::dispatch_for_job(&ctx, &call.name, &call.arguments, set.as_ref())
     });
 
     for (slot, (call, id, pre_context)) in prepared.into_iter().enumerate() {
@@ -1381,8 +1427,9 @@ fn dispatch_tool_call(
         on_event(LoopEvent::Elicit(view));
     };
     let mut wait_card = |eid: &str| crate::mcp::wait_elicit(&session, eid, &cancel, &halted);
+    let job_set = bound_job_tool_set(input.conversation_id);
     let output = crate::mcp::with_elicit(attended, &mut emit_card, &mut wait_card, || {
-        tools::dispatch(&ctx, &call.name, &call.arguments)
+        tools::dispatch_for_job(&ctx, &call.name, &call.arguments, job_set.as_ref())
     });
     (output, Usage::default())
 }
