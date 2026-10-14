@@ -58,3 +58,5 @@ cargo clippy --workspace --all-targets -- -D warnings
 ## Semgrep / dyl-review / Continual Learning
 - Semgrep before Ready; dyl-review quick only; Continual Learning → AGENTS.md. Never dyl-ready-pr merge/babysit.
 
+
+- **vstack:** Always load and follow the vstack skills in .cursor/skills (start with viper-mode); never use pstack.
