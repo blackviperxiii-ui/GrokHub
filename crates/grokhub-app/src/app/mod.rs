@@ -159,6 +159,7 @@ mod episode_ui;
 mod evidence_ui;
 mod feed_ui;
 mod findings_ui;
+mod fix_it;
 mod glance;
 mod harness_ui;
 mod heartbeat_gate;

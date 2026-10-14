@@ -251,17 +251,19 @@ impl Cabin {
         chat: &str,
         reply: Result<String, String>,
     ) {
-        let (text, summary) = match reply {
+        let (text, summary, stored) = match reply {
             Ok(raw) => {
                 let report = sr::parse_report(&raw);
                 (
                     sr::report_text(title, &report, dir),
                     report_summary(&report),
+                    Some(super::fix_it::StoredDiagnosis::Screen(report)),
                 )
             }
             Err(why) => (
                 sr::local_only_text(title, dir, &why),
                 format!("Saved on this computer, not diagnosed: {}", why.trim()),
+                None,
             ),
         };
         self.post_into_chat(chat, text);
@@ -272,6 +274,9 @@ impl Cabin {
             chat,
             now_ms(),
         );
+        if let Some(stored) = stored {
+            self.remember_diagnosis(card.id.clone(), stored);
+        }
         self.post_feed_card(card);
         self.status = title.to_string();
     }
