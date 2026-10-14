@@ -247,20 +247,21 @@ fn name_save_does_not_overwrite_a_newer_picture() {
     assert!(current.api_key.is_empty());
 
     let src = cabin_src();
-    let persist = src
-        .split("fn persist_cfg(")
-        .nth(1)
-        .and_then(|s| s.split("fn persist_if_dirty(").next())
-        .expect("persist_cfg");
-    let check = persist.find("cfg_if_current").expect("generation check");
-    let save = persist.find("config::save").expect("save");
+    let persist = fn_src(&src, "persist_cfg");
     assert!(
         persist.contains("publish_cfg")
-            && persist.contains("thread::spawn")
-            && persist.contains("persist_io")
+            && persist.contains("submit_settings")
+            && persist.contains("persist_svc")
             && persist.contains("api_key.clear")
-            && check < save,
-        "a config save must write the latest generation, not the clone it spawned with: {persist}"
+            && !persist.contains("thread::spawn"),
+        "a config save must schedule PersistService with the latest generation: {persist}"
+    );
+    let worker = fn_src(&src, "persist_service_worker");
+    let check = worker.find("cfg_if_current").expect("generation check");
+    let save = worker.find("config::save").expect("save");
+    assert!(
+        worker.contains("io.lock()") && check < save,
+        "PersistService must write the latest generation under persist_io: {worker}"
     );
 }
 
@@ -9360,7 +9361,7 @@ fn an_older_persist_snapshot_never_overwrites_a_newer_one() {
     assert_eq!((old_gen, new_gen), (1, 2));
     assert!(old.projects.is_some() && new.projects.is_none());
     assert!(new.secrets.is_none());
-    let mark = cabin.persist_mark.clone();
+    let mark = std::sync::Arc::new(std::sync::Mutex::new(PersistMark::default()));
     // The newer worker takes persist_io first, the older one second.
     write_persist_disk_in_order(&cfg.root, &new, new_gen, &mark);
     write_persist_disk_in_order(&cfg.root, &old, old_gen, &mark);
@@ -16003,8 +16004,10 @@ fn finish_staged_folder_renames_it() {
 fn quiet_cabin() -> Cabin {
     let cfg = AppConfig::default();
     let persist_io = std::sync::Arc::new(std::sync::Mutex::new(()));
-    let persist_mark = std::sync::Arc::new(std::sync::Mutex::new(PersistMark::default()));
-    let persist_svc = PersistService::start(persist_io.clone(), persist_mark.clone());
+    let persist_svc = PersistService::start(
+        persist_io.clone(),
+        std::sync::Arc::new(std::sync::Mutex::new(PersistMark::default())),
+    );
     Cabin {
         nav: super::Nav::Chat,
         cfg: cfg.clone(),
@@ -16035,7 +16038,6 @@ fn quiet_cabin() -> Cabin {
         setup: super::setup_wizard::SetupWizard::default(),
         persist_gen: 0,
         persist_err: std::sync::Arc::new(std::sync::Mutex::new(None)),
-        persist_mark,
         cfg_slot: std::sync::Arc::new(std::sync::Mutex::new(super::CfgSlot { gen: 0, cfg })),
         board: Vec::new(),
         board_title: String::new(),

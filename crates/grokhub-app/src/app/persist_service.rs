@@ -7,7 +7,7 @@ use std::path::PathBuf;
 enum PersistMsg {
     FullSnap {
         dir: PathBuf,
-        snap: PersistSnap,
+        snap: Box<PersistSnap>,
         gen: u64,
         done: Option<mpsc::Sender<()>>,
     },
@@ -21,7 +21,7 @@ enum PersistMsg {
         nodes: Vec<ProjectNode>,
     },
     WindowCfg {
-        cfg: AppConfig,
+        cfg: Box<AppConfig>,
     },
     Flush(mpsc::Sender<()>),
 }
@@ -50,7 +50,7 @@ impl PersistService {
     ) {
         let _ = self.tx.send(PersistMsg::FullSnap {
             dir,
-            snap,
+            snap: Box::new(snap),
             gen,
             done,
         });
@@ -76,7 +76,7 @@ impl PersistService {
     }
 
     pub(super) fn submit_window_cfg(&self, cfg: AppConfig) {
-        let _ = self.tx.send(PersistMsg::WindowCfg { cfg });
+        let _ = self.tx.send(PersistMsg::WindowCfg { cfg: Box::new(cfg) });
     }
 
     /// Drain every message queued before this call. Used by tests and `on_exit`.

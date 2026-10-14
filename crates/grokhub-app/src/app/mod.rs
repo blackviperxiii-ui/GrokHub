@@ -455,9 +455,6 @@ pub struct Cabin {
     persist_err: Arc<Mutex<Option<String>>>,
     /// Generation of the newest full snapshot handed to a persist worker.
     persist_gen: u64,
-    /// What the persist workers have written, so an older snapshot that takes
-    /// `persist_io` late never overwrites a newer one.
-    persist_mark: Arc<Mutex<PersistMark>>,
     cfg_slot: Arc<Mutex<CfgSlot>>,
     board: Vec<BoardCard>,
     board_title: String,
@@ -1050,8 +1047,10 @@ impl Cabin {
             cfg: cfg.clone(),
         }));
         let persist_io = Arc::new(Mutex::new(()));
-        let persist_mark = Arc::new(Mutex::new(PersistMark::default()));
-        let persist_svc = PersistService::start(persist_io.clone(), persist_mark.clone());
+        let persist_svc = PersistService::start(
+            persist_io.clone(),
+            Arc::new(Mutex::new(PersistMark::default())),
+        );
         let mut c = Self {
             nav: Nav::Chat,
             cfg,
@@ -1082,7 +1081,6 @@ impl Cabin {
             setup: setup_wizard::SetupWizard::default(),
             persist_err: Arc::new(Mutex::new(None)),
             persist_gen: 0,
-            persist_mark,
             cfg_slot,
             board: config::load_board(),
             board_title: String::new(),
@@ -1517,8 +1515,10 @@ impl Cabin {
         crate::config::use_test_key_store();
         let cfg = AppConfig::default();
         let persist_io = Arc::new(Mutex::new(()));
-        let persist_mark = Arc::new(Mutex::new(PersistMark::default()));
-        let persist_svc = PersistService::start(persist_io.clone(), persist_mark.clone());
+        let persist_svc = PersistService::start(
+            persist_io.clone(),
+            Arc::new(Mutex::new(PersistMark::default())),
+        );
         Self {
             nav: Nav::Chat,
             cfg: cfg.clone(),
@@ -1549,7 +1549,6 @@ impl Cabin {
             setup: setup_wizard::SetupWizard::default(),
             persist_err: Arc::new(Mutex::new(None)),
             persist_gen: 0,
-            persist_mark,
             cfg_slot: Arc::new(Mutex::new(CfgSlot { gen: 0, cfg })),
             board: Vec::new(),
             board_title: String::new(),
