@@ -64,6 +64,10 @@ impl Cabin {
     pub(super) fn run_plus_act(&mut self, target: PlusTarget, act: PlusAct) {
         match act {
             PlusAct::Upload => {
+                if target == PlusTarget::Chat {
+                    self.start_chat_file_pick();
+                    return;
+                }
                 if self.pick_rx.is_some() {
                     self.status = "Choose a file…".into();
                     return;
@@ -157,24 +161,12 @@ impl Cabin {
 
     pub(super) fn apply_plus_ready(&mut self, target: PlusTarget, ready: PlusReady) {
         match target {
-            PlusTarget::Chat => match ready.kind {
-                AttachKind::Image => {
-                    if let Some(url) = ready.image_url {
-                        self.attach_url = Some(url);
-                        self.attach_name = Some(ready.name.clone());
-                        self.attach_path = Some(ready.raw);
-                        self.attach_kind = Some(ready.kind);
-                        self.status = chat_attach_status(ready.kind, &ready.name);
-                    }
+            PlusTarget::Chat => {
+                if ready.kind == AttachKind::Image && ready.image_url.is_none() {
+                    return;
                 }
-                AttachKind::Text | AttachKind::Video | AttachKind::Doc | AttachKind::Other => {
-                    self.attach_url = None;
-                    self.attach_name = Some(ready.name.clone());
-                    self.attach_path = Some(ready.raw);
-                    self.attach_kind = Some(ready.kind);
-                    self.status = chat_attach_status(ready.kind, &ready.name);
-                }
-            },
+                self.stage_plus_ready_chat(ready);
+            }
             PlusTarget::Imagine => match ready.kind {
                 AttachKind::Image => {
                     self.imagine_ref = Some(ready.name.clone());
@@ -212,11 +204,7 @@ impl Cabin {
     }
 
     pub(super) fn clear_chat_attach(&mut self) {
-        self.attach_url = None;
-        self.attach_name = None;
-        self.attach_path = None;
-        self.attach_kind = None;
-        self.status.clear();
+        self.clear_chat_attach_tray();
     }
 
     /// While a file is dragged over the window, say what a drop will do.
@@ -257,18 +245,35 @@ impl Cabin {
             i.raw
                 .dropped_files
                 .iter()
-                .map(|f| f.path().to_path_buf())
+                .map(|f| PathBuf::from(f.path()))
                 .collect()
         });
-        let Some(path) = paths.first().cloned() else {
+        if paths.is_empty() {
+            #[cfg(windows)]
+            if ctx.input(|i| i.raw.hovered_files.len() > 0 || i.raw.dropped_files.len() > 0) {
+                self.status =
+                    "Drop had no file paths — Windows may need drag-and-drop enabled in the window"
+                        .into();
+            }
             return;
-        };
-        self.drop_extra = paths.len() - 1;
+        }
         let target = if self.page_nav() == Nav::Imagine {
             PlusTarget::Imagine
         } else {
             PlusTarget::Chat
         };
+        if target == PlusTarget::Chat {
+            self.drop_extra = paths.len().saturating_sub(1);
+            self.enqueue_attach_paths(paths);
+            if let Some(note) = drop_extra_note(self.drop_extra) {
+                self.status = note;
+            }
+            return;
+        }
+        let Some(path) = paths.first().cloned() else {
+            return;
+        };
+        self.drop_extra = paths.len() - 1;
         self.start_plus_path(target, path);
     }
 
@@ -285,10 +290,7 @@ impl Cabin {
         // chat engine. Drop a stale handle without stopping that run.
         let keep_acp = self.background_tasks_open()
             || (keep_run && self.grok_p_rx.is_none() && !self.job_on_background_thread());
-        self.attach_url = None;
-        self.attach_name = None;
-        self.attach_path = None;
-        self.attach_kind = None;
+        self.clear_chat_attach_tray();
         self.followup_step = 0;
         self.active_skill_follow = None;
         self.hands_attach = false;
@@ -604,29 +606,12 @@ impl Cabin {
     }
 }
 
-/// What a drop will do. The cabin takes one file per message.
+/// What a drop will do.
 pub(super) fn drop_hint_line(imagine: bool, files: usize) -> String {
-    let what = if imagine {
-        "Drop to use as the Imagine reference"
-    } else {
-        "Drop to attach to your next message"
-    };
-    if files > 1 {
-        format!("{what} — the first of {files} files")
-    } else {
-        what.to_string()
-    }
+    attach_tray::drop_hint_line(imagine, files)
 }
 
-/// Status after a multi-file drop attached only the first file.
+/// Status after a multi-file drop.
 pub(super) fn drop_extra_note(extra: usize) -> Option<String> {
-    match extra {
-        0 => None,
-        1 => Some(
-            "Attached the first file. The other one was left out — one file per message.".into(),
-        ),
-        n => Some(format!(
-            "Attached the first file. {n} others were left out — one file per message."
-        )),
-    }
+    attach_tray::drop_extra_note(extra)
 }

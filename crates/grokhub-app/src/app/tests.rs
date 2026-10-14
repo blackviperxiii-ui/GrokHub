@@ -9106,8 +9106,8 @@ fn apply_plus_ready_image_and_pasted_text() {
         "a file must stay attached, not pasted, got {}",
         cabin.composer
     );
-    assert_eq!(cabin.attach_name.as_deref(), Some("notes.txt"));
-    assert_eq!(cabin.attach_path.as_deref(), Some("notes.txt"));
+    assert_eq!(cabin.attach_tray.len(), 2);
+    assert_eq!(cabin.attach_name.as_deref(), Some("harbor.png"));
     assert_eq!(cabin.status, "File notes.txt — the agent will read it");
     assert!(!cabin.running);
     quiet.settle();
@@ -13460,8 +13460,8 @@ fn attach_sets_the_chip_and_paste_lands_in_the_composer() {
         },
     );
     assert_eq!(cabin.composer, "hello\nharbor light");
-    assert_eq!(cabin.attach_name.as_deref(), Some("note.txt"));
-    assert_eq!(cabin.attach_path.as_deref(), Some("/tmp/note.txt"));
+    assert_eq!(cabin.attach_tray.len(), 2);
+    assert_eq!(cabin.attach_name.as_deref(), Some("harbor.png"));
     assert_eq!(cabin.status, "File note.txt — the agent will read it");
     assert!(!cabin.running);
     assert!(cabin.messages.is_empty());
@@ -16482,6 +16482,10 @@ fn quiet_cabin() -> Cabin {
         attach_name: None,
         attach_path: None,
         attach_kind: None,
+        attach_tray: super::attach_tray::AttachTray::default(),
+        attach_ingest: None,
+        attach_thumb_cache: Vec::new(),
+        attach_pick_rx: None,
         imagine_ref: None,
         plus_menu: None,
         plus_anchor: egui::Pos2::ZERO,
@@ -20759,11 +20763,11 @@ fn drop_hint_line_matches_shipped_wording() {
     );
     assert_eq!(
         drop_hint_line(false, 3),
-        "Drop to attach to your next message — the first of 3 files"
+        "Drop to attach to your next message — 3 files"
     );
     assert_eq!(
         drop_hint_line(true, 3),
-        "Drop to use as the Imagine reference — the first of 3 files"
+        "Drop to use as the Imagine reference — 3 files"
     );
 }
 
