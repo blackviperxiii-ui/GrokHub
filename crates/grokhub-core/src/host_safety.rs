@@ -355,8 +355,8 @@ fn looks_like_chr_call(bytes: &[u8], i: usize) -> bool {
     j < bytes.len() && bytes[j] == b'('
 }
 
-/// Parse one `chr (…)` / `chr(46.0)` call at `i`. Returns `(char, index_after_call)`.
-fn try_collapse_one_chr(bytes: &[u8], lower: &str, i: usize) -> Option<(char, usize)> {
+/// Parse one `chr (…)` / `chr(46.0)` / `chr(4_6)` / `chr(+46)` / `chr(46,)` call.
+fn try_collapse_one_chr(bytes: &[u8], _lower: &str, i: usize) -> Option<(char, usize)> {
     if !looks_like_chr_call(bytes, i) {
         return None;
     }
@@ -368,6 +368,13 @@ fn try_collapse_one_chr(bytes: &[u8], lower: &str, i: usize) -> Option<(char, us
     j += 1;
     while j < bytes.len() && bytes[j].is_ascii_whitespace() {
         j += 1;
+    }
+    // Unary plus: `chr(+46)`.
+    if j < bytes.len() && bytes[j] == b'+' {
+        j += 1;
+        while j < bytes.len() && bytes[j].is_ascii_whitespace() {
+            j += 1;
+        }
     }
     let mut base = 10u32;
     if j + 2 <= bytes.len() && bytes[j] == b'0' {
@@ -387,39 +394,65 @@ fn try_collapse_one_chr(bytes: &[u8], lower: &str, i: usize) -> Option<(char, us
             _ => {}
         }
     }
-    let num_start = j;
-    while j < bytes.len()
-        && match base {
-            16 => bytes[j].is_ascii_hexdigit(),
-            8 => matches!(bytes[j], b'0'..=b'7'),
-            2 => matches!(bytes[j], b'0' | b'1'),
-            _ => bytes[j].is_ascii_digit(),
+    // Digits with optional Python underscores (`4_6`, `0b10_1110`).
+    let mut digits = String::new();
+    let mut last_was_underscore = false;
+    while j < bytes.len() {
+        let b = bytes[j];
+        let is_digit = match base {
+            16 => b.is_ascii_hexdigit(),
+            8 => matches!(b, b'0'..=b'7'),
+            2 => matches!(b, b'0' | b'1'),
+            _ => b.is_ascii_digit(),
+        };
+        if is_digit {
+            digits.push(b.to_ascii_lowercase() as char);
+            last_was_underscore = false;
+            j += 1;
+            continue;
         }
-    {
-        j += 1;
+        if b == b'_' {
+            if digits.is_empty() || last_was_underscore {
+                return None;
+            }
+            last_was_underscore = true;
+            j += 1;
+            continue;
+        }
+        break;
     }
-    let num_end = j;
-    if num_end == num_start {
+    if digits.is_empty() || last_was_underscore {
         return None;
     }
-    // Integer-valued floats: `46.0`, `46.`, `46.000` (decimal only).
+    // Integer-valued floats: `46.0`, `46.`, `4_6.0` (decimal only).
     if base == 10 && j < bytes.len() && bytes[j] == b'.' {
         j += 1;
         let frac_start = j;
-        while j < bytes.len() && bytes[j].is_ascii_digit() {
+        while j < bytes.len() && (bytes[j].is_ascii_digit() || bytes[j] == b'_') {
+            if bytes[j] != b'_' && bytes[j] != b'0' {
+                return None;
+            }
             j += 1;
         }
-        if !bytes[frac_start..j].iter().all(|&b| b == b'0') {
+        // Trailing underscore in fraction is invalid.
+        if j > frac_start && bytes[j - 1] == b'_' {
             return None;
         }
     }
     while j < bytes.len() && bytes[j].is_ascii_whitespace() {
         j += 1;
     }
+    // Trailing comma: `chr(46,)`.
+    if j < bytes.len() && bytes[j] == b',' {
+        j += 1;
+        while j < bytes.len() && bytes[j].is_ascii_whitespace() {
+            j += 1;
+        }
+    }
     if j >= bytes.len() || bytes[j] != b')' {
         return None;
     }
-    let n = u32::from_str_radix(&lower[num_start..num_end], base).ok()?;
+    let n = u32::from_str_radix(&digits, base).ok()?;
     let ch = char::from_u32(n)?;
     if !ch.is_ascii() {
         return None;
@@ -485,11 +518,12 @@ fn pipes_or_chains_to_shell(cmd: &str) -> bool {
 /// Leading tokens that exec another command — peel them so `| env sh` / `| sudo bash`
 /// / `| exec sh` / `| timeout 5 sh` still count as shell sinks.
 const SHELL_WRAPPERS: &[&str] = &[
-    "env", "sudo", "command", "nice", "nohup", "exec", "timeout", "setsid", "busybox",
+    "env", "sudo", "command", "nice", "nohup", "exec", "timeout", "setsid", "busybox", "unshare",
+    "stdbuf", "ionice",
 ];
 
 fn is_shell_basename(base: &str) -> bool {
-    matches!(base, "sh" | "bash" | "zsh" | "dash")
+    matches!(base, "sh" | "bash" | "zsh" | "dash" | "ash" | "ksh")
 }
 
 fn next_token_is_shell(rest: &str) -> bool {
@@ -573,7 +607,15 @@ fn flag_takes_value(wrapper: &str, flag: &str) -> bool {
         "env" => matches!(flag, "-u" | "-C" | "--unset" | "--chdir"),
         "exec" => matches!(flag, "-a" | "--as"),
         "timeout" => matches!(flag, "-k" | "-s" | "--kill-after" | "--signal"),
-        // `command -p`, `nohup`, `setsid`, `busybox` flags are boolean / unused here.
+        "stdbuf" => matches!(
+            flag,
+            "-o" | "-e" | "-i" | "--output" | "--error" | "--input"
+        ),
+        "ionice" => matches!(
+            flag,
+            "-c" | "-n" | "-p" | "--class" | "--classdata" | "--pid"
+        ),
+        // `command -p`, `nohup`, `setsid`, `busybox`, `unshare` flags are boolean here.
         _ => false,
     }
 }
@@ -992,6 +1034,65 @@ mod tests {
         assert!(
             forbidden_reason("echo abc | base64 | sha256sum").is_none(),
             "| sha256sum must stay allowed after dash/timeout peel"
+        );
+        assert_eq!(
+            forbidden_reason("cat ~/chr(4_6)ssh/id_rsa"),
+            Some("forbidden path: ssh keys"),
+            "chr(4_6) underscore literal must rebuild .ssh"
+        );
+        assert_eq!(
+            forbidden_reason("cat ~/chr(0b10_1110)ssh/id_rsa"),
+            Some("forbidden path: ssh keys"),
+            "chr(0b10_1110) must rebuild .ssh"
+        );
+        assert_eq!(
+            forbidden_reason("cat ~/chr(0x2_e)ssh/id_rsa"),
+            Some("forbidden path: ssh keys"),
+            "chr(0x2_e) must rebuild .ssh"
+        );
+        assert_eq!(
+            forbidden_reason("cat ~/chr(+46)ssh/id_rsa"),
+            Some("forbidden path: ssh keys"),
+            "chr(+46) unary plus must rebuild .ssh"
+        );
+        assert_eq!(
+            forbidden_reason("cat ~/chr(46,)ssh/id_rsa"),
+            Some("forbidden path: ssh keys"),
+            "chr(46,) trailing comma must rebuild .ssh"
+        );
+        assert_eq!(
+            forbidden_reason("echo Y2F0IH4vLnNzaC9pZF9yc2E= | base64 -d | unshare sh"),
+            Some("base64|shell rebuild"),
+            "| unshare sh must count as a shell sink"
+        );
+        assert_eq!(
+            forbidden_reason("echo Y2F0IH4vLnNzaC9pZF9yc2E= | base64 -d | stdbuf -oL sh"),
+            Some("base64|shell rebuild"),
+            "| stdbuf -oL sh must count as a shell sink"
+        );
+        assert_eq!(
+            forbidden_reason("echo Y2F0IH4vLnNzaC9pZF9yc2E= | base64 -d | ionice sh"),
+            Some("base64|shell rebuild"),
+            "| ionice sh must count as a shell sink"
+        );
+        assert_eq!(
+            forbidden_reason("echo Y2F0IH4vLnNzaC9pZF9yc2E= | base64 -d | ash"),
+            Some("base64|shell rebuild"),
+            "| ash must count as a shell sink"
+        );
+        assert_eq!(
+            forbidden_reason("echo Y2F0IH4vLnNzaC9pZF9yc2E= | base64 -d | ksh"),
+            Some("base64|shell rebuild"),
+            "| ksh must count as a shell sink"
+        );
+        assert_eq!(
+            forbidden_reason("echo Y2F0IH4vLnNzaC9pZF9yc2E= | base64 -d | busybox ash"),
+            Some("base64|shell rebuild"),
+            "| busybox ash must count as a shell sink"
+        );
+        assert!(
+            forbidden_reason("echo abc | base64 | shuf").is_none(),
+            "| shuf must stay allowed after unshare/ash peel"
         );
     }
 
