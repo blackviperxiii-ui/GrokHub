@@ -91,12 +91,14 @@ jobs:
           components: rustfmt
       - run: cargo fmt --all -- --check
 
-  # Rearch stage 1 friction guards: conflict markers, god-file line budgets,
-  # and Cargo.lock changes that need the dependencies label (or a Cargo.toml
-  # dep edit). Runs on every event so docs-only PRs cannot land markers either.
+  # Rearch stages 1–2 friction guards: conflict markers, god-file line
+  # budgets, Cargo.lock label hatch, and `cargo xtask bump --check`. Runs on
+  # every event (docs-only included) so markers and VERSION drift cannot land.
+  # Needs a Rust toolchain because bump --check is an xtask binary; xtask has
+  # no crates.io deps so the compile stays small.
   guards:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     permissions:
       contents: read
       pull-requests: read
@@ -104,6 +106,13 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: guards-xtask
+          cache-on-failure: true
+          save-if: ${{ github.event_name == 'push' }}
+          workspaces: ". -> target"
       - name: Repo friction guards
         env:
           # Live label fetch for the Cargo.lock escape hatch (gh / API).

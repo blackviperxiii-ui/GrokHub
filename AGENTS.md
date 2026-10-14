@@ -1,7 +1,7 @@
 # AGENTS.md — GrokHub cabin notes
 
 ## Base branch
-Feature/fix PRs → `beta`. Hotfixes → `main` only on Jeremy's say, then merge-back PR into beta (merge commit). No version bump on beta PRs.
+Feature/fix PRs → `beta`. Hotfixes → `main` only on Jeremy's say, then merge-back PR into beta (merge commit). No version bump on beta PRs — add `changelog.d/<slug>.md`; promotions run `cargo xtask bump`.
 
 ## Bot
 Prefer Grok Build on the box (roles: explore, plan, implementer). Cursor Cloud paused until Oct 11. One bot per job.
