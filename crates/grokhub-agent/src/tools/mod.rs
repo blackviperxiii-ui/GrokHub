@@ -16,6 +16,7 @@ mod read_file;
 pub(crate) mod registry;
 mod search_replace;
 pub(crate) mod shell;
+mod show_panel;
 mod web_fetch;
 mod write;
 
@@ -147,6 +148,9 @@ pub fn dispatch(ctx: &ToolCtx<'_>, name: &str, arguments: &str) -> ToolOutput {
     if name == registry::LOAD_TOOL_SCHEMA {
         return registry::run_load_tool_schema(&args);
     }
+    if name == show_panel::SHOW_PANEL {
+        return show_panel::run(&args);
+    }
     if is_readonly(name) {
         return dispatch_readonly(ctx, name, &args);
     }
@@ -221,6 +225,9 @@ pub fn desk_flags(name: &str, gate: &Gate, desktop: Option<&dyn DesktopOps>) -> 
 }
 
 fn dispatch_readonly(ctx: &ToolCtx<'_>, name: &str, args: &Value) -> ToolOutput {
+    if name == show_panel::SHOW_PANEL {
+        return show_panel::run(args);
+    }
     match name {
         "read_file" => read_file::run(ctx.workspace, args),
         "list_dir" => list_dir::run(ctx.workspace, args),
