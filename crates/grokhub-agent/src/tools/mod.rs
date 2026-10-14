@@ -15,8 +15,8 @@ pub(crate) mod ports;
 mod read_file;
 pub(crate) mod registry;
 mod search_replace;
-mod show_panel;
 pub(crate) mod shell;
+mod show_panel;
 mod web_fetch;
 mod write;
 

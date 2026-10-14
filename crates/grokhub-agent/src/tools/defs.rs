@@ -5,8 +5,8 @@ use serde_json::Value;
 use crate::gate::Gate;
 
 use super::{
-    connections, control, desktop, glob, grep, list_dir, media, read_file, search_replace,
-    show_panel, shell, web_fetch, write,
+    connections, control, desktop, glob, grep, list_dir, media, read_file, search_replace, shell,
+    show_panel, web_fetch, write,
 };
 
 /// One row in the native catalog. `defer` tools ship as index lines until

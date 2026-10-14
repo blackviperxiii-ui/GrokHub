@@ -2,7 +2,7 @@
 
 use std::path::Path;
 
-use grokhub_core::panel_spec::{parse_panel_spec, panel_spec_json_schema, PanelElement, PanelSpec};
+use grokhub_core::panel_spec::{panel_spec_json_schema, parse_panel_spec, PanelElement, PanelSpec};
 use serde_json::{json, Value};
 
 use super::ToolOutput;
@@ -226,10 +226,7 @@ mod tests {
         let _cfg = setup_config(&dir, false, false);
         let gate = chat();
         let tools = schemas_for(&gate);
-        let names: Vec<_> = tools
-            .iter()
-            .filter_map(|t| t["name"].as_str())
-            .collect();
+        let names: Vec<_> = tools.iter().filter_map(|t| t["name"].as_str()).collect();
         assert!(!names.contains(&SHOW_PANEL));
 
         let _cfg2 = setup_config(&dir, false, true);
@@ -265,10 +262,7 @@ mod tests {
         let _cfg = setup_config(&dir, true, false);
         let gate = chat();
         let tools = schemas_for(&gate);
-        let names: Vec<_> = tools
-            .iter()
-            .filter_map(|t| t["name"].as_str())
-            .collect();
+        let names: Vec<_> = tools.iter().filter_map(|t| t["name"].as_str()).collect();
         assert!(names.contains(&SHOW_PANEL));
     }
 
@@ -319,10 +313,9 @@ mod tests {
             let marker_start = out.text.find('{').expect("json marker");
             let parsed: Value = serde_json::from_str(&out.text[marker_start..]).unwrap();
             assert!(parsed.get("panel").is_some());
-            let round = parse_panel_spec(
-                &serde_json::to_string(parsed.get("panel").unwrap()).unwrap(),
-            )
-            .unwrap();
+            let round =
+                parse_panel_spec(&serde_json::to_string(parsed.get("panel").unwrap()).unwrap())
+                    .unwrap();
             let again = serde_json::to_value(&round).unwrap();
             assert_eq!(parsed["panel"], again);
         }
@@ -350,11 +343,7 @@ mod tests {
         );
         assert!(out.failed);
 
-        let out = dispatch(
-            &ctx(&workspace),
-            SHOW_PANEL,
-            r#"{"title":"no elements"}"#,
-        );
+        let out = dispatch(&ctx(&workspace), SHOW_PANEL, r#"{"title":"no elements"}"#);
         assert!(out.failed);
         assert!(out.text.contains("invalid panel spec"));
     }
