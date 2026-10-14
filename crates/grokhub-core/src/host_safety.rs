@@ -307,8 +307,8 @@ fn deobfuscate(cmd: &str) -> String {
     s
 }
 
-/// Collapse Python-style `chr(46)` / `chr(0x2e)` / `chr(0o56)` so leaf path checks
-/// still fire. Adjacent `chr()` results joined with `+` are glued (`.ssh` rebuild).
+/// Collapse Python-style `chr(46)` / `chr(0x2e)` / `chr(0o56)` / `chr(0b101110)` so
+/// leaf path checks still fire. Adjacent `chr()` results joined with `+` are glued.
 fn collapse_chr_calls(cmd: &str) -> String {
     let mut out = String::with_capacity(cmd.len());
     let lower = cmd.to_ascii_lowercase();
@@ -331,6 +331,10 @@ fn collapse_chr_calls(cmd: &str) -> String {
                         base = 8;
                         j += 2;
                     }
+                    b'b' | b'B' => {
+                        base = 2;
+                        j += 2;
+                    }
                     _ => {}
                 }
             }
@@ -339,6 +343,7 @@ fn collapse_chr_calls(cmd: &str) -> String {
                 && match base {
                     16 => bytes[j].is_ascii_hexdigit(),
                     8 => matches!(bytes[j], b'0'..=b'7'),
+                    2 => matches!(bytes[j], b'0' | b'1'),
                     _ => bytes[j].is_ascii_digit(),
                 }
             {
@@ -435,8 +440,8 @@ fn pipes_or_chains_to_shell(cmd: &str) -> bool {
 }
 
 /// Leading tokens that exec another command — peel them so `| env sh` / `| sudo bash`
-/// still count as shell sinks.
-const SHELL_WRAPPERS: &[&str] = &["env", "sudo", "command", "nice", "nohup"];
+/// / `| exec sh` still count as shell sinks.
+const SHELL_WRAPPERS: &[&str] = &["env", "sudo", "command", "nice", "nohup", "exec"];
 
 fn next_token_is_shell(rest: &str) -> bool {
     let mut rest = rest.trim_start();
@@ -455,26 +460,93 @@ fn next_token_is_shell(rest: &str) -> bool {
         if !SHELL_WRAPPERS.contains(&base) {
             return false;
         }
-        // `| env -i sh` / `| sudo -n sh` / `| command -p sh` — skip option flags.
-        rest = skip_option_flags(after);
+        // Skip flags, arity-1 values (`sudo -u root`), and `KEY=VAL` (`env FOO=1 sh`).
+        rest = skip_wrapper_args(base, after);
     }
     false
 }
 
-/// Drop leading `-…` / `--…` tokens after a wrapper so the sink basename is reached.
-fn skip_option_flags(rest: &str) -> &str {
+/// Drop leading wrapper args so the sink basename is reached: boolean flags (`-n`),
+/// arity-1 flags + values (`-u root`, `-n 10`), and `NAME=value` assignments.
+fn skip_wrapper_args<'a>(wrapper: &str, rest: &'a str) -> &'a str {
     let mut rest = rest.trim_start();
-    for _ in 0..8 {
+    for _ in 0..12 {
+        if let Some(after) = take_env_assignment(rest) {
+            rest = after;
+            continue;
+        }
         let Some((tok, after)) = take_cmd_token(rest) else {
             break;
         };
-        if tok.starts_with('-') {
-            rest = after.trim_start();
+        if !tok.starts_with('-') {
+            break;
+        }
+        rest = after.trim_start();
+        // `--user=root` arrives as `--user` + `=root` because `=` ends tokens.
+        if let Some(stripped) = rest.strip_prefix('=') {
+            rest = skip_one_value(stripped);
             continue;
         }
-        break;
+        if flag_takes_value(wrapper, tok) {
+            rest = skip_one_value(rest);
+        }
     }
     rest
+}
+
+fn flag_takes_value(wrapper: &str, flag: &str) -> bool {
+    match wrapper {
+        "sudo" => matches!(
+            flag,
+            "-u" | "-g"
+                | "-C"
+                | "-D"
+                | "-R"
+                | "-T"
+                | "--user"
+                | "--group"
+                | "--close-from"
+                | "--chdir"
+                | "--chroot"
+                | "--other-user"
+        ),
+        "nice" => matches!(flag, "-n" | "--adjustment"),
+        "env" => matches!(
+            flag,
+            "-u" | "-C" | "-S" | "--unset" | "--chdir" | "--split-string"
+        ),
+        "exec" => matches!(flag, "-a" | "--as"),
+        // `command -p`, `nohup` flags are boolean / unused here.
+        _ => false,
+    }
+}
+
+/// `NAME=value` (possibly empty value) — used by `env FOO=bar sh`.
+fn take_env_assignment(rest: &str) -> Option<&str> {
+    let rest = rest.trim_start();
+    let (name, after) = take_cmd_token(rest)?;
+    let mut chars = name.chars();
+    let first = chars.next()?;
+    if !(first.is_ascii_alphabetic() || first == '_') {
+        return None;
+    }
+    if !chars.all(|ch| ch.is_ascii_alphanumeric() || ch == '_') {
+        return None;
+    }
+    let after = after.trim_start();
+    let after_eq = after.strip_prefix('=')?;
+    Some(skip_one_value(after_eq))
+}
+
+fn skip_one_value(rest: &str) -> &str {
+    let rest = rest.trim_start();
+    if rest.is_empty() {
+        return rest;
+    }
+    match take_cmd_token(rest) {
+        Some((_, after)) => after.trim_start(),
+        None => rest,
+    }
 }
 
 /// Next command token, stripping a matching pair of `'` / `"` when present.
@@ -760,6 +832,36 @@ mod tests {
             ),
             Some("forbidden path: ssh keys"),
             "adjacent chr() joined with + must rebuild .ssh"
+        );
+        assert_eq!(
+            forbidden_reason("echo Y2F0IH4vLnNzaC9pZF9yc2E= | base64 -d | sudo -u root sh"),
+            Some("base64|shell rebuild"),
+            "| sudo -u root sh must count as a shell sink"
+        );
+        assert_eq!(
+            forbidden_reason("echo Y2F0IH4vLnNzaC9pZF9yc2E= | base64 -d | nice -n 10 sh"),
+            Some("base64|shell rebuild"),
+            "| nice -n 10 sh must count as a shell sink"
+        );
+        assert_eq!(
+            forbidden_reason("echo Y2F0IH4vLnNzaC9pZF9yc2E= | base64 -d | env -u HOME sh"),
+            Some("base64|shell rebuild"),
+            "| env -u HOME sh must count as a shell sink"
+        );
+        assert_eq!(
+            forbidden_reason("echo Y2F0IH4vLnNzaC9pZF9yc2E= | base64 -d | exec sh"),
+            Some("base64|shell rebuild"),
+            "| exec sh must count as a shell sink"
+        );
+        assert_eq!(
+            forbidden_reason("echo Y2F0IH4vLnNzaC9pZF9yc2E= | base64 -d | env FOO=bar sh"),
+            Some("base64|shell rebuild"),
+            "| env FOO=bar sh must count as a shell sink"
+        );
+        assert_eq!(
+            forbidden_reason("cat ~/chr(0b101110)ssh/id_rsa"),
+            Some("forbidden path: ssh keys"),
+            "python binary chr(0b101110) must rebuild .ssh"
         );
     }
 
