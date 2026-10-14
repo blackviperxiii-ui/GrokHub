@@ -141,6 +141,7 @@ mod palette;
 mod persist;
 mod step_search;
 use step_search::{parse_step_target, step_hits, turn_jump_row};
+mod attach_tray;
 mod audio_check_ui;
 mod background;
 mod background_ui;
@@ -722,6 +723,10 @@ pub struct Cabin {
     attach_name: Option<String>,
     attach_path: Option<String>,
     attach_kind: Option<AttachKind>,
+    attach_tray: attach_tray::AttachTray,
+    attach_ingest: Option<attach_tray::AttachIngestHandle>,
+    attach_thumb_cache: Vec<TextureHandle>,
+    attach_pick_rx: Option<mpsc::Receiver<Option<Vec<PathBuf>>>>,
     imagine_ref: Option<String>,
     plus_menu: Option<PlusTarget>,
     plus_anchor: egui::Pos2,
@@ -1299,6 +1304,10 @@ impl Cabin {
             attach_name: None,
             attach_path: None,
             attach_kind: None,
+            attach_tray: attach_tray::AttachTray::default(),
+            attach_ingest: None,
+            attach_thumb_cache: Vec::new(),
+            attach_pick_rx: None,
             imagine_ref: None,
             plus_menu: None,
             plus_anchor: egui::Pos2::ZERO,
@@ -1744,6 +1753,10 @@ impl Cabin {
             attach_name: None,
             attach_path: None,
             attach_kind: None,
+            attach_tray: attach_tray::AttachTray::default(),
+            attach_ingest: None,
+            attach_thumb_cache: Vec::new(),
+            attach_pick_rx: None,
             imagine_ref: None,
             plus_menu: None,
             plus_anchor: egui::Pos2::ZERO,
@@ -5113,6 +5126,8 @@ impl eframe::App for Cabin {
         self.poll_self_changes();
         self.poll_native_side_events();
         self.poll_pick();
+        self.poll_attach_pick();
+        self.poll_attach_ingest();
         // While hidden, eframe hands `logic` the last shown frame's input every
         // tick: keys, clicks, and drops are acted on once, on the pass they came in.
         let pass = ctx.cumulative_pass_nr();

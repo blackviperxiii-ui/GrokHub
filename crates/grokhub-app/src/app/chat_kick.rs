@@ -103,7 +103,9 @@ impl Cabin {
             self.status = self.no_agent_note().into();
             return;
         }
-        if let Some(name) = self.attach_name.clone() {
+        if !self.attach_tray.is_empty() {
+            self.append_pending_attach_lines(&mut text);
+        } else if let Some(name) = self.attach_name.clone() {
             if !name.trim().is_empty() {
                 let kind = self.attach_kind.unwrap_or(AttachKind::Image);
                 let path = self.attach_path.clone().unwrap_or_default();
@@ -304,12 +306,13 @@ impl Cabin {
         self.elicit_ask = None;
         self.elicit_draft.clear();
         let image = if consume_attach {
-            let url =
-                next_chat_image(self.attach_url.as_deref(), cabin.as_deref()).map(str::to_string);
-            self.attach_url = None;
-            self.attach_name = None;
-            self.attach_path = None;
-            self.attach_kind = None;
+            let tray_url = self.first_pending_vision_url();
+            let url = next_chat_image(
+                tray_url.as_deref().or(self.attach_url.as_deref()),
+                cabin.as_deref(),
+            )
+            .map(str::to_string);
+            self.consume_pending_attach_on_send();
             url
         } else {
             None
