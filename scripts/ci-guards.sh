@@ -190,16 +190,19 @@ if [[ "${GITHUB_EVENT_NAME:-}" == "pull_request" ]]; then
           toml_dep=1
         fi
       fi
-      has_deps_label=0
+      # `release` also allows lock churn: `cargo xtask bump` rewrites grokhub-*
+      # versions and only the workspace `version =` line in Cargo.toml (no dep
+      # edit), so the dependencies hatch alone would still block a promotion.
+      has_lock_hatch=0
       case ",${pr_labels_csv}," in
-        *,dependencies,*|*,deps,*) has_deps_label=1 ;;
+        *,dependencies,*|*,deps,*|*,release,*) has_lock_hatch=1 ;;
       esac
-      if (( toml_dep == 0 && has_deps_label == 0 )); then
-        echo "ci-guards: Cargo.lock changed without a Cargo.toml dependency edit or the 'dependencies' label." >&2
-        echo "ci-guards: add label 'dependencies' for a lock-only bump, or include the Cargo.toml dep change." >&2
+      if (( toml_dep == 0 && has_lock_hatch == 0 )); then
+        echo "ci-guards: Cargo.lock changed without a Cargo.toml dependency edit or the 'dependencies'/'release' label." >&2
+        echo "ci-guards: add label 'dependencies' for a lock-only dep bump, 'release' for xtask bump, or include the Cargo.toml dep change." >&2
         fail=1
       else
-        echo "ci-guards: Cargo.lock change allowed (toml_dep=$toml_dep label=$has_deps_label)"
+        echo "ci-guards: Cargo.lock change allowed (toml_dep=$toml_dep hatch=$has_lock_hatch)"
       fi
     else
       echo "ci-guards: Cargo.lock unchanged"
