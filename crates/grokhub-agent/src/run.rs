@@ -26,30 +26,43 @@ fn job_tool_sets() -> &'static Mutex<HashMap<String, ToolSet>> {
     JOB_TOOL_SETS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-/// Drops the session's job [`ToolSet`] when the run ends.
+/// RAII token from [`bind_job_tool_set`]. Dropping it does **not** clear the
+/// bind: a `background: true` `spawn_subagent` child (`parent/id`) can outlive
+/// the parent `run_loop`, and removing the parent entry would fail open to the
+/// full tool list. Overwrite with a later bind on the same session id, or call
+/// [`clear_job_tool_set`].
 pub struct JobToolSetGuard {
     session: String,
 }
 
 impl Drop for JobToolSetGuard {
     fn drop(&mut self) {
-        if let Ok(mut map) = job_tool_sets().lock() {
-            map.remove(&self.session);
-        }
+        let _ = &self.session;
     }
 }
 
-/// Bind `set` for `session` until the guard drops. Overwrites a prior bind.
+/// Bind `set` for `session`. Overwrites a prior bind. Survives the returned
+/// guard so detached subagents keep the allowlist. Clears any previously
+/// materialized `session/…` descendants so a tighter rebind wins on next lookup.
 pub fn bind_job_tool_set(session: impl Into<String>, set: ToolSet) -> JobToolSetGuard {
     let session = session.into();
     if let Ok(mut map) = job_tool_sets().lock() {
+        let prefix = format!("{session}/");
+        map.retain(|key, _| !key.starts_with(&prefix));
         map.insert(session.clone(), set);
     }
     JobToolSetGuard { session }
 }
 
+/// Remove a session's job [`ToolSet`] (tests / explicit teardown).
+pub fn clear_job_tool_set(session: &str) {
+    if let Ok(mut map) = job_tool_sets().lock() {
+        map.remove(session);
+    }
+}
+
 fn bound_job_tool_set(session: &str) -> Option<ToolSet> {
-    let Ok(map) = job_tool_sets().lock() else {
+    let Ok(mut map) = job_tool_sets().lock() else {
         return None;
     };
     if let Some(set) = map.get(session) {
@@ -57,10 +70,12 @@ fn bound_job_tool_set(session: &str) -> Option<ToolSet> {
     }
     // Child sessions are `parent/id` (nested `parent/id/id2`). Inherit the
     // nearest bound ancestor so spawn_subagent keeps the job allowlist.
+    // Materialize onto the child so a later parent clear still leaves the set.
     let mut rest = session;
     while let Some((parent, _)) = rest.rsplit_once('/') {
-        if let Some(set) = map.get(parent) {
-            return Some(set.clone());
+        if let Some(set) = map.get(parent).cloned() {
+            map.insert(session.to_string(), set.clone());
+            return Some(set);
         }
         rest = parent;
     }
@@ -1709,6 +1724,28 @@ mod tests {
         assert_eq!(bound_job_tool_set(&child).as_ref(), Some(&tighter));
         assert_eq!(bound_job_tool_set(&nested).as_ref(), Some(&tighter));
         assert_eq!(bound_job_tool_set(parent).as_ref(), Some(&set));
+        clear_job_tool_set(parent);
+        clear_job_tool_set(&child);
+        clear_job_tool_set(&nested);
+    }
+
+    #[test]
+    fn detached_child_keeps_tool_set_after_parent_guard_drops() {
+        // Security: background spawn_subagent outlives the parent run_loop guard.
+        let parent = "native-sp2-detached-parent";
+        let child = format!("{parent}/bg-agent");
+        let set = ToolSet::only(["read_file", "run_terminal_command"]);
+        let guard = bind_job_tool_set(parent, set.clone());
+        drop(guard);
+        // Parent bind must remain so ancestor walk (and materialize) still work.
+        assert_eq!(bound_job_tool_set(parent).as_ref(), Some(&set));
+        assert_eq!(bound_job_tool_set(&child).as_ref(), Some(&set));
+        // After materialize, clearing the parent must not fail-open the child.
+        clear_job_tool_set(parent);
+        assert!(bound_job_tool_set(parent).is_none());
+        assert_eq!(bound_job_tool_set(&child).as_ref(), Some(&set));
+        assert!(!set.allows("write"));
+        clear_job_tool_set(&child);
     }
 
     #[test]
