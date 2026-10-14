@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- CI: friction guards for conflict markers, god-file line budgets (`app/mod.rs`, `cards.rs`, `slash.rs`, `app/tests.rs`), and Cargo.lock edits that need the `dependencies` label or a Cargo.toml dep change (rearch stage 1).
 - UI: egui_extras TableBuilder for generative panel / compare tables (U7b; egui 0.36, no egui/eframe bump).
 - Deps: bump rustls to 0.23.46 (RUSTSEC-2026-0346/0347/0348/0349; lockfile only, no advisory ignores).
 - UI: egui-notify toasts for Saved, run-finished, and error status lines (U7a; egui 0.36, no egui/eframe bump).

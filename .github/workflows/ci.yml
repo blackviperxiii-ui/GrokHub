@@ -88,6 +88,22 @@ jobs:
           components: rustfmt
       - run: cargo fmt --all -- --check
 
+  # Rearch stage 1 friction guards: conflict markers, god-file line budgets,
+  # and Cargo.lock changes that need the dependencies label (or a Cargo.toml
+  # dep edit). Runs on every event so docs-only PRs cannot land markers either.
+  guards:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Repo friction guards
+        run: bash scripts/ci-guards.sh
+
   linux:
     needs: changes
     if: needs.changes.outputs.code == 'true'
