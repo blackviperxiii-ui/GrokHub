@@ -75,10 +75,33 @@ if [[ "${GITHUB_EVENT_NAME:-}" == "pull_request" ]]; then
         fi
       fi
       has_label=0
+      # Prefer live PR labels (API/gh). The pull_request event payload is a
+      # snapshot: a workflow re-run after adding `dependencies` still sees the
+      # old labels unless we refetch. labeled/unlabeled triggers also re-run CI.
       labels_csv="${GITHUB_PR_LABELS:-}"
+      if [[ -z "$labels_csv" ]]; then
+        pr_number=""
+        if [[ -n "${GITHUB_EVENT_PATH:-}" && -f "${GITHUB_EVENT_PATH}" ]]; then
+          pr_number=$(python3 -c 'import json,os; e=json.load(open(os.environ["GITHUB_EVENT_PATH"])); print(e.get("pull_request",{}).get("number") or e.get("number") or "")')
+        fi
+        if [[ -n "$pr_number" && -n "${GITHUB_REPOSITORY:-}" ]]; then
+          if command -v gh >/dev/null 2>&1; then
+            labels_csv=$(GH_TOKEN="${GH_TOKEN:-${GITHUB_TOKEN:-}}" gh api "repos/${GITHUB_REPOSITORY}/pulls/${pr_number}" --jq '[.labels[].name]|join(",")' 2>/dev/null || true)
+          elif [[ -n "${GITHUB_TOKEN:-}" ]]; then
+            labels_csv=$(python3 -c "
+import json,os,urllib.request
+req=urllib.request.Request(
+    f\"https://api.github.com/repos/{os.environ['GITHUB_REPOSITORY']}/pulls/{os.environ['PR_NUMBER']}\",
+    headers={'Authorization': f\"Bearer {os.environ['GITHUB_TOKEN']}\", 'Accept': 'application/vnd.github+json', 'User-Agent': 'ci-guards'})
+print(','.join(l['name'] for l in json.load(urllib.request.urlopen(req)).get('labels',[])))
+" PR_NUMBER="$pr_number" 2>/dev/null || true)
+          fi
+        fi
+      fi
       if [[ -z "$labels_csv" && -n "${GITHUB_EVENT_PATH:-}" && -f "${GITHUB_EVENT_PATH}" ]]; then
         labels_csv=$(python3 -c 'import json,os; e=json.load(open(os.environ["GITHUB_EVENT_PATH"])); print(",".join(l["name"] for l in e.get("pull_request",{}).get("labels",[])))')
       fi
+      echo "ci-guards: PR labels=[${labels_csv}]"
       case ",${labels_csv}," in
         *,dependencies,*|*,deps,*) has_label=1 ;;
       esac

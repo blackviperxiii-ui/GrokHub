@@ -5,6 +5,9 @@ on:
     branches: [main, beta]
   pull_request:
     branches: [main, beta]
+    # labeled/unlabeled so the Cargo.lock → dependencies escape hatch retriggers
+    # when the label is added (guards job reads live labels too).
+    types: [opened, synchronize, reopened, ready_for_review, labeled, unlabeled]
   workflow_dispatch:
 
 permissions:
@@ -102,6 +105,10 @@ jobs:
         with:
           fetch-depth: 0
       - name: Repo friction guards
+        env:
+          # Live label fetch for the Cargo.lock escape hatch (gh / API).
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_TOKEN: ${{ github.token }}
         run: bash scripts/ci-guards.sh
 
   linux:
