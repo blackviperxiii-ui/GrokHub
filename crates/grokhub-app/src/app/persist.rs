@@ -23,6 +23,7 @@ pub(super) fn pin_scheduled_dir(dir: std::path::PathBuf) -> ScheduledDir {
     }
 }
 
+#[derive(Clone)]
 pub(super) struct PersistSnap {
     pub(super) threads: Vec<ChatThread>,
     pub(super) msgs: Vec<(String, String)>,
@@ -86,12 +87,11 @@ pub(super) struct PersistMark {
     secrets: u64,
 }
 
-/// Write a full snapshot unless a newer one already reached the disk. Persist
-/// workers are separate threads, so two of them can take `persist_io` in either
-/// order: Delete all persists once from `halt_in_flight` (old chats) and once
-/// at the end (one fresh Chat), and the old snapshot used to land last. An older
-/// snapshot only writes the projects or secrets it alone carries. Call this
-/// with `persist_io` held.
+/// Write a full snapshot unless a newer one already reached the disk. The
+/// PersistService worker serializes through `persist_io`, but Delete all still
+/// queues two gens (halt_in_flight old chats, then one fresh Chat); generation
+/// order keeps the older snap from landing last. An older snapshot only writes
+/// the projects or secrets it alone carries. Call this with `persist_io` held.
 pub(super) fn write_persist_disk_in_order(
     dir: &std::path::Path,
     snap: &PersistSnap,
@@ -134,16 +134,10 @@ impl Cabin {
         self.persist_idle_key = self.persist_idle_now();
         self.last_persist = Instant::now();
         self.geom_dirty = false;
-        let io = self.persist_io.clone();
         let dir = config::config_dir();
         let gen = self.next_persist_gen();
-        let mark = self.persist_mark.clone();
-        std::thread::spawn(move || {
-            let _pin = pin_scheduled_dir(dir.clone());
-            if let Ok(_g) = io.lock() {
-                write_persist_disk_in_order(&dir, &snap, gen, &mark);
-            }
-        });
+        // PersistService worker takes persist_io + write_persist_disk_in_order.
+        self.persist_svc.submit_full(dir, snap, gen, None);
     }
 
     pub(super) fn next_persist_gen(&mut self) -> u64 {
@@ -229,19 +223,12 @@ impl Cabin {
         }
         self.last_persist = Instant::now();
         self.geom_dirty = false;
-        let io = self.persist_io.clone();
         let dir = config::config_dir();
         let (tx, rx) = mpsc::channel();
         self.persist_rx = Some(rx);
         let gen = self.next_persist_gen();
-        let mark = self.persist_mark.clone();
-        std::thread::spawn(move || {
-            let _pin = pin_scheduled_dir(dir.clone());
-            if let Ok(_g) = io.lock() {
-                write_persist_disk_in_order(&dir, &snap, gen, &mark);
-            }
-            let _ = tx.send(());
-        });
+        // PersistService worker takes persist_io + write_persist_disk_in_order.
+        self.persist_svc.submit_full(dir, snap, gen, Some(tx));
     }
 
     pub(super) fn poll_persist(&mut self) {
@@ -272,7 +259,6 @@ impl Cabin {
     }
 
     pub(super) fn persist_cfg(&self) {
-        let io = self.persist_io.clone();
         let slot = self.cfg_slot.clone();
         let dir = config::config_dir();
         let mut cfg = self.cfg.clone();
@@ -282,19 +268,8 @@ impl Cabin {
             Err(_) => return,
         };
         let err = self.persist_err.clone();
-        std::thread::spawn(move || {
-            let _pin = pin_scheduled_dir(dir.clone());
-            let Ok(_disk) = io.lock() else {
-                return;
-            };
-            let cfg = match slot.lock() {
-                Ok(g) => cfg_if_current(&g, gen),
-                Err(_) => return,
-            };
-            if let Some(cfg) = cfg {
-                note_persist_err(&err, config::save_in(&dir, &cfg), "settings");
-            }
-        });
+        // PersistService worker takes persist_io before save_in.
+        self.persist_svc.submit_settings(dir, slot, gen, err);
     }
 
     /// Show a failed background write instead of leaving "Saved" up.
@@ -384,7 +359,11 @@ impl Cabin {
     }
 }
 
-fn note_persist_err(slot: &Mutex<Option<String>>, result: Result<(), String>, what: &str) {
+pub(super) fn note_persist_err(
+    slot: &Mutex<Option<String>>,
+    result: Result<(), String>,
+    what: &str,
+) {
     if let Err(e) = result {
         if let Ok(mut slot) = slot.lock() {
             *slot = Some(format!("Could not save {what}: {e}"));

@@ -139,6 +139,7 @@ mod native_sessions;
 mod native_unattended;
 mod palette;
 mod persist;
+mod persist_service;
 mod step_search;
 use step_search::{parse_step_target, step_hits, turn_jump_row};
 mod attach_tray;
@@ -241,6 +242,7 @@ use glance::*;
 use imagine::*;
 use oauth::*;
 use persist::*;
+use persist_service::*;
 use plus::*;
 #[cfg(test)]
 use pulse::*;
@@ -445,6 +447,8 @@ pub struct Cabin {
     persist_idle_key: String,
     persist_rx: Option<mpsc::Receiver<()>>,
     persist_io: Arc<Mutex<()>>,
+    /// Ordered worker for threads / projects / settings (Stage 6).
+    persist_svc: PersistService,
     /// The first-run setup wizard (welcome, app setup, on-device model).
     setup: setup_wizard::SetupWizard,
     /// Last settings or key write that failed, for the status line.
@@ -1045,6 +1049,9 @@ impl Cabin {
             gen: 0,
             cfg: cfg.clone(),
         }));
+        let persist_io = Arc::new(Mutex::new(()));
+        let persist_mark = Arc::new(Mutex::new(PersistMark::default()));
+        let persist_svc = PersistService::start(persist_io.clone(), persist_mark.clone());
         let mut c = Self {
             nav: Nav::Chat,
             cfg,
@@ -1070,11 +1077,12 @@ impl Cabin {
             last_persist: Instant::now(),
             persist_idle_key: String::new(),
             persist_rx: None,
-            persist_io: Arc::new(Mutex::new(())),
+            persist_io,
+            persist_svc,
             setup: setup_wizard::SetupWizard::default(),
             persist_err: Arc::new(Mutex::new(None)),
             persist_gen: 0,
-            persist_mark: Arc::new(Mutex::new(PersistMark::default())),
+            persist_mark,
             cfg_slot,
             board: config::load_board(),
             board_title: String::new(),
@@ -1508,6 +1516,9 @@ impl Cabin {
     pub(super) fn quiet_for_test() -> Self {
         crate::config::use_test_key_store();
         let cfg = AppConfig::default();
+        let persist_io = Arc::new(Mutex::new(()));
+        let persist_mark = Arc::new(Mutex::new(PersistMark::default()));
+        let persist_svc = PersistService::start(persist_io.clone(), persist_mark.clone());
         Self {
             nav: Nav::Chat,
             cfg: cfg.clone(),
@@ -1533,11 +1544,12 @@ impl Cabin {
             last_persist: Instant::now(),
             persist_idle_key: String::new(),
             persist_rx: None,
-            persist_io: Arc::new(Mutex::new(())),
+            persist_io,
+            persist_svc,
             setup: setup_wizard::SetupWizard::default(),
             persist_err: Arc::new(Mutex::new(None)),
             persist_gen: 0,
-            persist_mark: Arc::new(Mutex::new(PersistMark::default())),
+            persist_mark,
             cfg_slot: Arc::new(Mutex::new(CfgSlot { gen: 0, cfg })),
             board: Vec::new(),
             board_title: String::new(),
@@ -1971,14 +1983,10 @@ impl Cabin {
             crate::window::GeomFlush::Skip => {}
             crate::window::GeomFlush::Now => {
                 self.geom_dirty = false;
-                let io = self.persist_io.clone();
                 let mut cfg = self.cfg.clone();
                 cfg.api_key.clear();
-                std::thread::spawn(move || {
-                    if let Ok(_g) = io.lock() {
-                        let _ = config::save(&cfg);
-                    }
-                });
+                // PersistService worker takes persist_io before config::save.
+                self.persist_svc.submit_window_cfg(cfg);
             }
             crate::window::GeomFlush::AfterMs(ms) => {
                 ctx.request_repaint_after(Duration::from_millis(ms));
@@ -3148,18 +3156,17 @@ impl Cabin {
         let device_name = self.cfg.device_name.clone();
         let exported_at = now_ms();
         let hub = self.hub.clone();
-        let io = self.persist_io.clone();
         let dir = config::config_dir();
         let (tx, rx) = mpsc::channel();
         self.sync_rx = Some(rx);
         self.status = "Syncing…".into();
         let gen = self.next_persist_gen();
-        let mark = self.persist_mark.clone();
+        let (persist_done_tx, persist_done_rx) = mpsc::channel();
+        // PersistService pins config_dir and write_persist_disk_in_order.
+        self.persist_svc
+            .submit_full(dir.clone(), snap.clone(), gen, Some(persist_done_tx));
         std::thread::spawn(move || {
-            let _pin = pin_scheduled_dir(dir.clone());
-            if let Ok(_g) = io.lock() {
-                write_persist_disk_in_order(&dir, &snap, gen, &mark);
-            }
+            let _ = persist_done_rx.recv();
             // EgressGuard: log the send (no content) or send nothing. A grant
             // revoked since the click blocks here; dropping `tx` reads as failed.
             let egress = grokhub_agent::harness::EgressReq {
@@ -5057,8 +5064,10 @@ impl eframe::App for Cabin {
             }
             self.hub_on = false;
         }
-        // The close frame spawned a persist. Wait for it: the process exits right after this,
-        // and two writers of app.json share one temp file.
+        // The close frame queued a persist. Drain the actor, then write geom under
+        // persist_io: the process exits right after this, and two writers of
+        // app.json share one temp file.
+        self.persist_svc.flush();
         {
             let _io = self.persist_io.lock();
             let mut cfg = self.cfg.clone();
