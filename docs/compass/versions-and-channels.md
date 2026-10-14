@@ -14,12 +14,12 @@
 - `xtask/src/main.rs` + `changelog.d/README.md`: release ownership; feature PRs add fragments, bump folds them.
 - `CHANGELOG.md`: dated sections; leftover `## Unreleased` is folded by `xtask bump`.
 ## Change recipe
-- PR into beta: no bump. Add `changelog.d/<slug>.md` and stop (do not edit `CHANGELOG.md` or version files).
-- Promotion or hotfix only, on Jeremy's say: `cargo xtask bump <X.Y.Z>` updates `VERSION`, `Cargo.toml`, `Cargo.lock` `grokhub-*`, `docs/REFERENCE.md`, both PKGBUILDs, `packaging/windows/grokhub.iss`, and `cabin_reports_version` in `crates/grokhub-app/src/cli.rs`, then folds fragments (`CLAUDE.md`).
+- PR into beta: no bump. Add `changelog.d/<slug>.md` and stop (do not edit `CHANGELOG.md` or version files). CI fails version-file edits without the `release` label (`scripts/ci-guards.sh`).
+- Promotion or hotfix only, on Jeremy's say: label `release`, then `cargo xtask bump <X.Y.Z>` updates `VERSION`, `Cargo.toml`, `Cargo.lock` `grokhub-*`, `docs/REFERENCE.md`, both PKGBUILDs, `packaging/windows/grokhub.iss`, and `cabin_reports_version` in `crates/grokhub-app/src/cli.rs`, then folds fragments (`CLAUDE.md`).
 ## What breaks it
 - Editing the Cargo version to get a beta label: build.rs derives `-beta.N` from the branch or `GROKHUB_CHANNEL` plus commit count since the newest `vX.Y.Z` tag.
 - Bumping things that must not move: Imagine `Quality (v2.0)`, specs marked `(do not bump)`, the diagnostics fixture, and `Version=` in `packaging/grokhub.desktop`.
-- A partial bump: `cabin_reports_version` asserts the literal version; `scripts/ci-guards.sh` runs `cargo xtask bump --check`; `--locked` CI fails if `Cargo.lock` lags.
+- A partial bump: `cabin_reports_version` asserts the literal; `ci-guards` runs `cargo xtask bump --check` and blocks non-`release` version edits; `--locked` CI fails if `Cargo.lock` lags.
 ## What depends on it
 - In-app Update (refuses a clone on the other channel), the Labs Beta toggle, `scripts/install.sh` (writes the receipt), and `grokhub --version`.
 ## Non-obvious
