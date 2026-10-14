@@ -245,6 +245,18 @@ impl Cabin {
         self.status = "Saved".into();
     }
 
+    pub(super) fn set_composer_autocomplete(&mut self, on: bool) {
+        if self.cfg.composer_autocomplete == on {
+            return;
+        }
+        self.cfg.composer_autocomplete = on;
+        if !on {
+            self.composer_ghost.clear();
+        }
+        self.persist_cfg();
+        self.status = "Saved".into();
+    }
+
     pub(super) fn ui_settings_menu(&mut self, ctx: &egui::Context) {
         if !self.settings_menu_open {
             return;
@@ -581,6 +593,18 @@ impl Cabin {
                                                                 ) {
                                                                     self.set_composer_glow(composer_glow);
                                                                 }
+                                                            }
+                                                            let mut composer_autocomplete =
+                                                                self.cfg.composer_autocomplete;
+                                                            if settings_toggle(
+                                                                ui,
+                                                                "Sentence autocomplete",
+                                                                "Muted ghost text finishes your line in the composer. Tab accepts; off by default.",
+                                                                &mut composer_autocomplete,
+                                                            ) {
+                                                                self.set_composer_autocomplete(
+                                                                    composer_autocomplete,
+                                                                );
                                                             }
                                                             crate::ui_kit::section_header(
                                                                 ui,
