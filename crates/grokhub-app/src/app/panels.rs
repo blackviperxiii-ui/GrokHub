@@ -6,6 +6,7 @@ use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use eframe::egui::{self, RichText, Ui};
+use egui_extras::{Column, TableBuilder};
 use grokhub_core::panel_spec::{
     parse_panel_spec as parse_core_panel_spec, PanelElement as CoreElement, PanelSpec as CoreSpec,
 };
@@ -503,31 +504,12 @@ fn paint_core(ui: &mut Ui, spec: &CoreSpec, panel_id: &str, actions: &mut Vec<Pa
                 if table.headers.is_empty() {
                     continue;
                 }
-                egui::Grid::new(ui.id().with(("core-table", panel_id)))
-                    .spacing(egui::vec2(
-                        crate::theme::SPACING_12,
-                        crate::theme::SPACING_4,
-                    ))
-                    .show(ui, |ui| {
-                        for h in &table.headers {
-                            ui.label(
-                                RichText::new(h)
-                                    .size(crate::theme::TYPE_CAPTION)
-                                    .color(crate::theme::fg()),
-                            );
-                        }
-                        ui.end_row();
-                        for row in &table.rows {
-                            for cell in row {
-                                ui.label(
-                                    RichText::new(cell)
-                                        .size(crate::theme::TYPE_BODY)
-                                        .color(crate::theme::fg()),
-                                );
-                            }
-                            ui.end_row();
-                        }
-                    });
+                paint_string_table(
+                    ui,
+                    ("core-table", panel_id),
+                    &table.headers,
+                    &table.rows,
+                );
             }
             CoreElement::KeyValue(kv) => {
                 for pair in &kv.pairs {
@@ -647,32 +629,63 @@ fn paint_compare_table(
         );
         return;
     }
-    egui::Grid::new(ui.id().with("compare"))
-        .spacing(egui::vec2(
-            crate::theme::SPACING_12,
-            crate::theme::SPACING_4,
-        ))
-        .show(ui, |ui| {
-            for h in &ct.headers {
-                ui.label(
-                    RichText::new(h)
-                        .size(crate::theme::TYPE_CAPTION)
-                        .color(crate::theme::fg()),
-                );
-            }
-            ui.end_row();
-            for row in &ct.rows {
-                for cell in row {
+    paint_string_table(ui, ("compare", panel_id), &ct.headers, &ct.rows);
+    paint_action_row(ui, &ct.actions, panel_id, actions);
+}
+
+/// Embedded string table via egui_extras TableBuilder (no inner vscroll).
+fn paint_string_table(
+    ui: &mut Ui,
+    id_salt: impl egui::AsIdSalt,
+    headers: &[String],
+    rows: &[Vec<String>],
+) {
+    let cols = headers.len();
+    if cols == 0 {
+        return;
+    }
+    let header_h = crate::theme::TYPE_CAPTION + crate::theme::SPACING_4;
+    let row_h = crate::theme::TYPE_BODY + crate::theme::SPACING_4;
+    let mut builder = TableBuilder::new(ui)
+        .id_salt(id_salt)
+        .vscroll(false)
+        .cell_layout(egui::Layout::left_to_right(egui::Align::Center));
+    for i in 0..cols {
+        let col = if i + 1 == cols {
+            Column::remainder()
+        } else {
+            Column::auto()
+        };
+        builder = builder.column(col);
+    }
+    builder
+        .header(header_h, |mut header| {
+            for h in headers {
+                header.col(|ui| {
                     ui.label(
-                        RichText::new(cell)
-                            .size(crate::theme::TYPE_BODY)
+                        RichText::new(h)
+                            .size(crate::theme::TYPE_CAPTION)
                             .color(crate::theme::fg()),
                     );
-                }
-                ui.end_row();
+                });
+            }
+        })
+        .body(|mut body| {
+            for row in rows {
+                body.row(row_h, |mut table_row| {
+                    for i in 0..cols {
+                        let cell = row.get(i).map(String::as_str).unwrap_or("");
+                        table_row.col(|ui| {
+                            ui.label(
+                                RichText::new(cell)
+                                    .size(crate::theme::TYPE_BODY)
+                                    .color(crate::theme::fg()),
+                            );
+                        });
+                    }
+                });
             }
         });
-    paint_action_row(ui, &ct.actions, panel_id, actions);
 }
 
 fn paint_action_row(
