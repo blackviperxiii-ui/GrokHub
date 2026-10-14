@@ -431,58 +431,84 @@ impl Cabin {
             cap - 40.0
         };
         let mut stage_hit = crate::cards::ImagineStageHit::default();
-        let panel = egui::CentralPanel::default()
-            .frame(
-                egui::Frame::NONE
-                    .fill(crate::theme::bg())
-                    .inner_margin(egui::Margin::ZERO),
-            )
-            .show(ui, |ui| {
-                let content = ui.max_rect();
-                let toolbox_top = imagine_toolbox_top(content.top(), content.height(), box_h, dock);
-                let stage_w = (content.width() - 48.0).max(280.0);
-                if dock == ImagineToolboxDock::Bottom {
-                    let view_h = (toolbox_top - content.top() - IMAGINE_WALL_GAP).max(0.0);
-                    let viewport =
-                        egui::Rect::from_min_size(content.min, egui::vec2(content.width(), view_h));
-                    let leftover = view_h;
-                    let stage_h = if stage_on {
-                        imagine_stage_h(leftover, &aspect, stage_w)
-                    } else {
-                        0.0
-                    };
-                    ui.scope_builder(egui::UiBuilder::new().max_rect(viewport), |ui| {
-                        ui.set_clip_rect(viewport);
+        let page_frame = egui::Frame::NONE
+            .fill(crate::theme::bg())
+            .inner_margin(egui::Margin::ZERO);
+        let content = super::dock_ui::page_panel(ui, self.cfg.dock_panels, page_frame, |ui| {
+            let content = ui.max_rect();
+            let toolbox_top = imagine_toolbox_top(content.top(), content.height(), box_h, dock);
+            let stage_w = (content.width() - 48.0).max(280.0);
+            if dock == ImagineToolboxDock::Bottom {
+                let view_h = (toolbox_top - content.top() - IMAGINE_WALL_GAP).max(0.0);
+                let viewport =
+                    egui::Rect::from_min_size(content.min, egui::vec2(content.width(), view_h));
+                let leftover = view_h;
+                let stage_h = if stage_on {
+                    imagine_stage_h(leftover, &aspect, stage_w)
+                } else {
+                    0.0
+                };
+                ui.scope_builder(egui::UiBuilder::new().max_rect(viewport), |ui| {
+                    ui.set_clip_rect(viewport);
+                    egui::ScrollArea::vertical()
+                        .id_salt("imagine-scroll")
+                        .auto_shrink([false, false])
+                        .show(ui, |ui| {
+                            ui.set_min_width(viewport.width());
+                            if stage_on && stage_h > 8.0 {
+                                let x = viewport.center().x - stage_w * 0.5;
+                                let (st, _) = ui.allocate_exact_size(
+                                    egui::vec2(viewport.width(), stage_h),
+                                    egui::Sense::hover(),
+                                );
+                                let stage = egui::Rect::from_center_size(
+                                    egui::pos2(x + stage_w * 0.5, st.center().y),
+                                    egui::vec2(stage_w, stage_h),
+                                );
+                                ui.scope_builder(egui::UiBuilder::new().max_rect(stage), |ui| {
+                                    ui.set_clip_rect(stage);
+                                    stage_hit = crate::cards::imagine_stage(
+                                        ui,
+                                        &last,
+                                        working,
+                                        video,
+                                        &imagine_err,
+                                    );
+                                });
+                                ui.add_space(IMAGINE_WALL_GAP);
+                            }
+                            crate::cards::imagine_masonry(
+                                ui,
+                                &selected,
+                                now_ms(),
+                                &self.wall.gifs,
+                                |p| {
+                                    seed = Some(p);
+                                },
+                            );
+                            self.ui_imagine_results(ui);
+                        });
+                });
+            } else {
+                let (wall_top, wall_h) = imagine_wall_bounds(
+                    content.top(),
+                    content.height(),
+                    toolbox_top,
+                    box_h,
+                    dock,
+                    0.0,
+                );
+                if wall_h > 8.0 {
+                    let wall = egui::Rect::from_min_size(
+                        egui::pos2(content.left(), wall_top),
+                        egui::vec2(content.width(), wall_h),
+                    );
+                    ui.scope_builder(egui::UiBuilder::new().max_rect(wall), |ui| {
+                        ui.set_clip_rect(wall);
                         egui::ScrollArea::vertical()
-                            .id_salt("imagine-scroll")
                             .auto_shrink([false, false])
                             .show(ui, |ui| {
-                                ui.set_min_width(viewport.width());
-                                if stage_on && stage_h > 8.0 {
-                                    let x = viewport.center().x - stage_w * 0.5;
-                                    let (st, _) = ui.allocate_exact_size(
-                                        egui::vec2(viewport.width(), stage_h),
-                                        egui::Sense::hover(),
-                                    );
-                                    let stage = egui::Rect::from_center_size(
-                                        egui::pos2(x + stage_w * 0.5, st.center().y),
-                                        egui::vec2(stage_w, stage_h),
-                                    );
-                                    ui.scope_builder(
-                                        egui::UiBuilder::new().max_rect(stage),
-                                        |ui| {
-                                            ui.set_clip_rect(stage);
-                                            stage_hit = crate::cards::imagine_stage(
-                                                ui,
-                                                &last,
-                                                working,
-                                                video,
-                                                &imagine_err,
-                                            );
-                                        },
-                                    );
-                                    ui.add_space(IMAGINE_WALL_GAP);
-                                }
+                                ui.spacing_mut().item_spacing = egui::vec2(0.0, 0.0);
                                 crate::cards::imagine_masonry(
                                     ui,
                                     &selected,
@@ -495,42 +521,9 @@ impl Cabin {
                                 self.ui_imagine_results(ui);
                             });
                     });
-                } else {
-                    let (wall_top, wall_h) = imagine_wall_bounds(
-                        content.top(),
-                        content.height(),
-                        toolbox_top,
-                        box_h,
-                        dock,
-                        0.0,
-                    );
-                    if wall_h > 8.0 {
-                        let wall = egui::Rect::from_min_size(
-                            egui::pos2(content.left(), wall_top),
-                            egui::vec2(content.width(), wall_h),
-                        );
-                        ui.scope_builder(egui::UiBuilder::new().max_rect(wall), |ui| {
-                            ui.set_clip_rect(wall);
-                            egui::ScrollArea::vertical()
-                                .auto_shrink([false, false])
-                                .show(ui, |ui| {
-                                    ui.spacing_mut().item_spacing = egui::vec2(0.0, 0.0);
-                                    crate::cards::imagine_masonry(
-                                        ui,
-                                        &selected,
-                                        now_ms(),
-                                        &self.wall.gifs,
-                                        |p| {
-                                            seed = Some(p);
-                                        },
-                                    );
-                                    self.ui_imagine_results(ui);
-                                });
-                        });
-                    }
                 }
-            });
-        let content = panel.response.rect;
+            }
+        });
         let bar_w = (content.width() - 48.0).clamp(280.0, crate::theme::IMAGINE_BAR_W);
         let y = imagine_toolbox_top(content.top(), content.height(), box_h, dock);
         let x = content.center().x - bar_w * 0.5;

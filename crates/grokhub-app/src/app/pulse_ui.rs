@@ -904,60 +904,56 @@ impl Cabin {
     pub(super) fn ui_pulse(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
         self.poll_pulse_images();
-        egui::CentralPanel::default()
-            .frame(
-                egui::Frame::NONE
-                    .fill(crate::theme::bg())
-                    .inner_margin(egui::Margin::symmetric(24, 20)),
-            )
-            .show(ui, |ui| {
-                let full = ui.available_width();
-                let col = full.min(COL_MAX_W);
-                let pad = ((full - col) * 0.5).max(0.0);
-                egui::ScrollArea::vertical()
-                    .id_salt("pulse-scroll")
-                    .auto_shrink([false, false])
-                    .show(ui, |ui| {
-                        ui.horizontal_top(|ui| {
-                            ui.add_space(pad);
-                            ui.vertical(|ui| {
-                                ui.set_width(col);
-                                self.paint_pulse_header(ui);
-                                // Wave 2E: Feed↔Ideas crossfade 180ms + shared-axis ±8px.
-                                // Only the active tab paints (avoids stacked layout); opacity+x carry the feel.
-                                // Header Feed|Ideas control stays put (painted above).
-                                let ideas_on = self.pulse_view.tab == PulseTab::Ideas;
-                                let tab_t = crate::motion::pulse_tab_t(ui.ctx(), ideas_on);
-                                self.pulse_view.tab_t = tab_t;
-                                let (opacity, x) = if ideas_on {
-                                    (tab_t.clamp(0.0, 1.0), crate::motion::ideas_axis_x(tab_t))
-                                } else {
-                                    (
-                                        (1.0 - tab_t).clamp(0.0, 1.0),
-                                        crate::motion::feed_axis_x(tab_t),
-                                    )
-                                };
-                                let avail = ui.available_rect_before_wrap();
-                                let rect = avail.translate(egui::vec2(x, 0.0));
-                                ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
-                                    ui.set_min_width(avail.width());
-                                    ui.multiply_opacity(opacity.max(0.001));
-                                    match self.pulse_view.tab {
-                                        PulseTab::Ideas => self.ui_ideas(ui),
-                                        PulseTab::Feed => self.ui_pulse_feed(ui),
-                                    }
-                                });
-                                // Crossfade only: settled tabs and reduced motion stay idle.
-                                if crate::theme::motion_ok(ui) && 0.001 < tab_t && tab_t < 0.999 {
-                                    ui.ctx().request_repaint_after(
-                                        std::time::Duration::from_millis(16),
-                                    );
+        let frame = egui::Frame::NONE
+            .fill(crate::theme::bg())
+            .inner_margin(egui::Margin::symmetric(24, 20));
+        let _ = super::dock_ui::page_panel(ui, self.cfg.dock_panels, frame, |ui| {
+            let full = ui.available_width();
+            let col = full.min(COL_MAX_W);
+            let pad = ((full - col) * 0.5).max(0.0);
+            egui::ScrollArea::vertical()
+                .id_salt("pulse-scroll")
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    ui.horizontal_top(|ui| {
+                        ui.add_space(pad);
+                        ui.vertical(|ui| {
+                            ui.set_width(col);
+                            self.paint_pulse_header(ui);
+                            // Wave 2E: Feed↔Ideas crossfade 180ms + shared-axis ±8px.
+                            // Only the active tab paints (avoids stacked layout); opacity+x carry the feel.
+                            // Header Feed|Ideas control stays put (painted above).
+                            let ideas_on = self.pulse_view.tab == PulseTab::Ideas;
+                            let tab_t = crate::motion::pulse_tab_t(ui.ctx(), ideas_on);
+                            self.pulse_view.tab_t = tab_t;
+                            let (opacity, x) = if ideas_on {
+                                (tab_t.clamp(0.0, 1.0), crate::motion::ideas_axis_x(tab_t))
+                            } else {
+                                (
+                                    (1.0 - tab_t).clamp(0.0, 1.0),
+                                    crate::motion::feed_axis_x(tab_t),
+                                )
+                            };
+                            let avail = ui.available_rect_before_wrap();
+                            let rect = avail.translate(egui::vec2(x, 0.0));
+                            ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
+                                ui.set_min_width(avail.width());
+                                ui.multiply_opacity(opacity.max(0.001));
+                                match self.pulse_view.tab {
+                                    PulseTab::Ideas => self.ui_ideas(ui),
+                                    PulseTab::Feed => self.ui_pulse_feed(ui),
                                 }
-                                ui.add_space(24.0);
                             });
+                            // Crossfade only: settled tabs and reduced motion stay idle.
+                            if crate::theme::motion_ok(ui) && 0.001 < tab_t && tab_t < 0.999 {
+                                ui.ctx()
+                                    .request_repaint_after(std::time::Duration::from_millis(16));
+                            }
+                            ui.add_space(24.0);
                         });
                     });
-            });
+                });
+        });
         self.paint_feed_instructions_sheet(&ctx);
     }
 
