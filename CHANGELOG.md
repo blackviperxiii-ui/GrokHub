@@ -2,11 +2,8 @@
 
 ## Unreleased
 
-<<<<<<< HEAD
 - Fixed: tray **Quit** tears down the cabin async runtime with a bounded `shutdown_timeout` after the UI loop returns, then exits from `main` so the tray icon is dropped before the last-resort `process::exit` (Windows ghost-icon case).
-=======
 - Screen recording and audio check report cards get a **Fix it** action that builds a harness fix plan from the diagnosis and runs it step by step through the existing hard approval cards (Phase C / SC2).
->>>>>>> origin/beta
 - Docs: SignPath Foundation privacy notice in [PRIVACY.md](PRIVACY.md) and [docs/CODE_SIGNING.md](docs/CODE_SIGNING.md); Windows Setup shows the statement before install (`packaging/windows/privacy.txt`).
 - Chat shows a small connectivity chip (Online / Reconnecting / Offline (local engine)) above the composer from the cabin connectivity engine; ureq provider and xAI client transport failures nudge that state.
 - Arch (AUR): optional `llama-cpp` dependency for a system `llama-server` instead of the in-app engine download.
