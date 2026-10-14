@@ -361,9 +361,10 @@ fn base64_pipe_shell(cmd: &str) -> bool {
     pipes_or_chains_to_shell(&c)
 }
 
-/// True when `|`, `;`, or `&&` is followed by a shell token (`sh` / `bash` / `zsh`),
-/// optionally as a path basename (`/bin/sh`). Word-boundary only — never a prefix of
-/// `sha256sum`, `shuf`, `shred`, etc.
+/// True when `|`, `|&`, `;`, or `&&` is followed by a shell token (`sh` / `bash` / `zsh`),
+/// optionally as a path basename (`/bin/sh`), after simple quotes and common wrappers
+/// (`env` / `sudo` / `command` / `nice` / `nohup`). Word-boundary only — never a
+/// prefix of `sha256sum`, `shuf`, `shred`, etc.
 fn pipes_or_chains_to_shell(cmd: &str) -> bool {
     let bytes = cmd.as_bytes();
     let mut i = 0;
@@ -379,7 +380,20 @@ fn pipes_or_chains_to_shell(cmd: &str) -> bool {
             i += 2;
             continue;
         }
-        if (bytes[i] == b'|' || bytes[i] == b';') && next_token_is_shell(&cmd[i + 1..]) {
+        // bash `|&` pipes stdout+stderr; skip the `&` so the shell sink is seen.
+        if bytes[i] == b'|' {
+            let after = if i + 1 < bytes.len() && bytes[i + 1] == b'&' {
+                i + 2
+            } else {
+                i + 1
+            };
+            if next_token_is_shell(&cmd[after..]) {
+                return true;
+            }
+            i = after;
+            continue;
+        }
+        if bytes[i] == b';' && next_token_is_shell(&cmd[i + 1..]) {
             return true;
         }
         i += 1;
@@ -387,10 +401,52 @@ fn pipes_or_chains_to_shell(cmd: &str) -> bool {
     false
 }
 
+/// Leading tokens that exec another command — peel them so `| env sh` / `| sudo bash`
+/// still count as shell sinks.
+const SHELL_WRAPPERS: &[&str] = &["env", "sudo", "command", "nice", "nohup"];
+
 fn next_token_is_shell(rest: &str) -> bool {
+    let mut rest = rest.trim_start();
+    // Peel a short chain of wrappers (`env`, `sudo`, …) before the sink basename.
+    for _ in 0..4 {
+        if rest.is_empty() {
+            return false;
+        }
+        let Some((tok, after)) = take_cmd_token(rest) else {
+            return false;
+        };
+        let base = tok.rsplit('/').next().unwrap_or(tok);
+        if matches!(base, "sh" | "bash" | "zsh") {
+            return true;
+        }
+        if !SHELL_WRAPPERS.contains(&base) {
+            return false;
+        }
+        rest = after.trim_start();
+    }
+    false
+}
+
+/// Next command token, stripping a matching pair of `'` / `"` when present.
+/// Returns `(token, remainder)`.
+fn take_cmd_token(rest: &str) -> Option<(&str, &str)> {
     let rest = rest.trim_start();
     if rest.is_empty() {
-        return false;
+        return None;
+    }
+    let bytes = rest.as_bytes();
+    if bytes[0] == b'\'' || bytes[0] == b'"' {
+        let quote = bytes[0];
+        let end = rest[1..]
+            .as_bytes()
+            .iter()
+            .position(|&b| b == quote)
+            .map(|i| i + 1)?;
+        let tok = &rest[1..end];
+        if tok.is_empty() {
+            return None;
+        }
+        return Some((tok, &rest[end + 1..]));
     }
     let tok_end = rest
         .char_indices()
@@ -398,11 +454,9 @@ fn next_token_is_shell(rest: &str) -> bool {
         .map(|(i, _)| i)
         .unwrap_or(rest.len());
     if tok_end == 0 {
-        return false;
+        return None;
     }
-    let tok = &rest[..tok_end];
-    let base = tok.rsplit('/').next().unwrap_or(tok);
-    matches!(base, "sh" | "bash" | "zsh")
+    Some((&rest[..tok_end], &rest[tok_end..]))
 }
 
 pub fn forbidden_reason(cmd: &str) -> Option<&'static str> {
@@ -581,6 +635,50 @@ mod tests {
         assert!(
             forbidden_reason("echo abc | base64 | shred -u").is_none(),
             "| shred must not false-positive as | sh"
+        );
+        assert_eq!(
+            forbidden_reason("echo Y2F0IH4vLnNzaC9pZF9yc2E= | base64 -d | 'sh'"),
+            Some("base64|shell rebuild"),
+            "single-quoted | 'sh' must count as a shell sink"
+        );
+        assert_eq!(
+            forbidden_reason(r#"echo Y2F0IH4vLnNzaC9pZF9yc2E= | base64 -d | "sh""#),
+            Some("base64|shell rebuild"),
+            "double-quoted | \"sh\" must count as a shell sink"
+        );
+        assert_eq!(
+            forbidden_reason("echo Y2F0IH4vLnNzaC9pZF9yc2E= | base64 -d | env sh"),
+            Some("base64|shell rebuild"),
+            "| env sh must count as a shell sink"
+        );
+        assert_eq!(
+            forbidden_reason("echo Y2F0IH4vLnNzaC9pZF9yc2E= | base64 -d | sudo sh"),
+            Some("base64|shell rebuild"),
+            "| sudo sh must count as a shell sink"
+        );
+        assert_eq!(
+            forbidden_reason("echo Y2F0IH4vLnNzaC9pZF9yc2E= | base64 -d | command sh"),
+            Some("base64|shell rebuild"),
+            "| command sh must count as a shell sink"
+        );
+        assert_eq!(
+            forbidden_reason("echo Y2F0IH4vLnNzaC9pZF9yc2E= | base64 -d |& sh"),
+            Some("base64|shell rebuild"),
+            "|& sh must count as a shell sink"
+        );
+        assert_eq!(
+            forbidden_reason("echo Y2F0IH4vLnNzaC9pZF9yc2E= | base64 -d | nice /bin/bash"),
+            Some("base64|shell rebuild"),
+            "| nice /bin/bash must count as a shell sink"
+        );
+        assert_eq!(
+            forbidden_reason("echo Y2F0IH4vLnNzaC9pZF9yc2E= | base64 -d | nohup zsh"),
+            Some("base64|shell rebuild"),
+            "| nohup zsh must count as a shell sink"
+        );
+        assert!(
+            forbidden_reason("echo abc | base64 | env sha256sum").is_none(),
+            "| env sha256sum must stay allowed"
         );
     }
 
