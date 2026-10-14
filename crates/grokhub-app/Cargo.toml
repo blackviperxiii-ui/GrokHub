@@ -50,6 +50,7 @@ evdev = { version = "0.13.2", default-features = false }
 winresource = { version = "0.1", default-features = false }
 
 [target.'cfg(windows)'.dependencies]
+clipboard-win = "5.4"
 # No libxdo (X11) — that default is for Linux menus and only bloated the lockfile.
 tray-icon = { version = "0.19", default-features = false }
 xcap = "0.9.8"

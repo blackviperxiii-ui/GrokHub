@@ -2,7 +2,11 @@
 
 ## Unreleased
 
+<<<<<<< HEAD
 - Generative UI: phase 1 controlled panel renderer (CI status, build errors, compare table) with dismiss/pin store; off by default until Settings exposes the toggle.
+=======
+- Chat composer attachment tray: multi-file picker, drag-drop, and paste share one ingest worker; thumbnails and errors show above the composer (up to 10 files).
+>>>>>>> origin/beta
 - Screen recording and audio check report cards get a **Fix it** action that builds a harness fix plan from the diagnosis and runs it step by step through the existing hard approval cards (Phase C / SC2).
 - Docs: SignPath Foundation privacy notice in [PRIVACY.md](PRIVACY.md) and [docs/CODE_SIGNING.md](docs/CODE_SIGNING.md); Windows Setup shows the statement before install (`packaging/windows/privacy.txt`).
 - Chat shows a small connectivity chip (Online / Reconnecting / Offline (local engine)) above the composer from the cabin connectivity engine; ureq provider and xAI client transport failures nudge that state.
@@ -12,6 +16,7 @@
 - Agent: optional provider prompt-prefix cache (`prefix_cache.toml`, off by default). When enabled, the stable cabin system prompt stays fixed across turns; talk style, playbook, and memory snippets move into a `<cabin-volatile>` block on the user message instead of rewriting the system row.
 - Connectors: Marketplace and Settings sign-in for installed MCP connectors — browser OAuth seals behind a credentials card; API keys seal in the OS keyring after the same card.
 - Agent: optional compaction of large tool outputs (`tool_output_compact.toml`, off by default). When enabled, oversized tool results are summarized for the model with key facts plus a handle and workspace spool path so `read_file` can recover the full text; the stable system prompt is unchanged.
+- Agent: optional deferred native tool schemas (`deferred_tools.toml`, off by default). When enabled, rarely used tools are listed in a compact index and the model calls `load_tool_schema` to pull full schemas into the volatile tail of the tools list so the stable prefix stays cache-friendly.
 - Connectors: Marketplace **Refresh catalog** pulls display metadata from the official MCP registry (https allowlist + SSRF rail) for connectors already in the bundled list; install recipes stay bundled.
 - Local AI: Settings → Cabin defaults → **Get engine** downloads a pinned official llama.cpp `llama-server` build for this OS/arch into `{config}/bin` (HTTPS to GitHub only, resumable, SHA-256 checked). No engine ships in installers; local AI stays off until you opt in.
 

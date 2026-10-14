@@ -181,6 +181,7 @@ pub fn run_auto_act(
         stop: &stop,
         tasks: None,
         owner: None,
+        session: None,
     };
     let out = crate::tools::dispatch(&ctx, &c.tool, &c.arguments);
     let mut span = proactive_span(&c.tool, &c.arguments, DECISION_AUTO, &c.summary, access);
@@ -221,6 +222,7 @@ pub fn run_approved_once(workspace: &Path, tool: &str, arguments: &str) -> (Stri
         stop: &stop,
         tasks: None,
         owner: None,
+        session: None,
     };
     let out = crate::tools::dispatch(&ctx, tool, arguments);
     (out.text, out.failed)
