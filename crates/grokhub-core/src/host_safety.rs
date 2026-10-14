@@ -437,8 +437,7 @@ fn take_cmd_token(rest: &str) -> Option<(&str, &str)> {
     let bytes = rest.as_bytes();
     if bytes[0] == b'\'' || bytes[0] == b'"' {
         let quote = bytes[0];
-        let end = rest[1..]
-            .as_bytes()
+        let end = rest.as_bytes()[1..]
             .iter()
             .position(|&b| b == quote)
             .map(|i| i + 1)?;
