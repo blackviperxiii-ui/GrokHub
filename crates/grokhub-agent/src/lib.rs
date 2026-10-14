@@ -100,8 +100,8 @@ pub use retry::{
     TRANSPORT_REBUILD_BACKOFF,
 };
 pub use run::{
-    run_loop, HaltCheck, LoopEvent, LoopIn, LoopOut, SteerQueue, StopReason, REPEAT_REPLAN,
-    TRUNCATED_TOOL,
+    bind_job_tool_set, clear_job_tool_set, run_loop, HaltCheck, JobToolSetGuard, LoopEvent, LoopIn,
+    LoopOut, SteerQueue, StopReason, REPEAT_REPLAN, TRUNCATED_TOOL,
 };
 pub use session::{
     attach_run, cancel_session, delete_session, export_markdown, fork_session, format_cost_ticks,
