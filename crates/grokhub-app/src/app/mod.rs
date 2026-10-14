@@ -1419,7 +1419,7 @@ impl Cabin {
             scroll_to_hooks: false,
             composer_geom: None,
             composer_ghost: ghost::ComposerGhost::default(),
-            toasts: egui_notify::Toasts::default(),
+            toasts: status_toasts::cabin_toasts(),
             status_toasted: String::new(),
         };
         steps.mark("startup:new:fields");
@@ -1869,7 +1869,7 @@ impl Cabin {
             scroll_to_hooks: false,
             composer_geom: None,
             composer_ghost: ghost::ComposerGhost::default(),
-            toasts: egui_notify::Toasts::default(),
+            toasts: status_toasts::cabin_toasts(),
             status_toasted: String::new(),
         }
     }

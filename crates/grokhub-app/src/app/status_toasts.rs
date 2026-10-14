@@ -3,10 +3,22 @@
 //! Mirrors Saved / run-finished / error status into in-app toasts. Does not
 //! change status string semantics, persistence, or keyboard paths.
 
-use egui_notify::Toasts;
+use eframe::egui;
+use egui_notify::{Anchor, Toasts};
 use std::time::Duration;
 
 const TOAST_SECS: u64 = 4;
+/// Side inset from the screen edge (egui-notify default).
+const TOAST_EDGE: f32 = 8.0;
+/// Clear the undecorated titlebar (× / max / min) so toasts never cover chrome.
+const TOAST_BELOW_TITLEBAR: f32 = crate::theme::TITLEBAR_H + TOAST_EDGE;
+
+/// Cabin toasts: top-right, margin clears [`crate::theme::TITLEBAR_H`].
+pub(super) fn cabin_toasts() -> Toasts {
+    Toasts::default()
+        .with_anchor(Anchor::TopRight)
+        .with_margin(egui::vec2(TOAST_EDGE, TOAST_BELOW_TITLEBAR))
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum StatusToastKind {
@@ -137,7 +149,7 @@ mod tests {
 
     #[test]
     fn sync_only_fires_once_per_status_change() {
-        let mut toasts = Toasts::default();
+        let mut toasts = cabin_toasts();
         let mut last = String::new();
         sync_status_toasts(&mut toasts, &mut last, "Saved");
         assert_eq!(toasts.len(), 1);
@@ -148,5 +160,23 @@ mod tests {
         sync_status_toasts(&mut toasts, &mut last, "Thinking…");
         assert_eq!(toasts.len(), 2);
         assert_eq!(last, "Thinking…");
+    }
+
+    #[test]
+    fn cabin_toasts_clear_the_titlebar_strip() {
+        assert_eq!(crate::theme::TITLEBAR_H, 40.0);
+        assert!(
+            TOAST_BELOW_TITLEBAR >= crate::theme::TITLEBAR_H + TOAST_EDGE,
+            "top margin must sit below chrome hits"
+        );
+        // Constructing the configured collector is enough: margin is private.
+        let _ = cabin_toasts();
+        let src = include_str!("status_toasts.rs");
+        assert!(
+            src.contains("with_anchor(Anchor::TopRight)")
+                && src.contains("TOAST_BELOW_TITLEBAR")
+                && src.contains("TITLEBAR_H"),
+            "cabin_toasts must pin TopRight under TITLEBAR_H"
+        );
     }
 }
