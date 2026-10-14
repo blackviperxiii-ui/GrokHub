@@ -1178,6 +1178,7 @@ impl Cabin {
                     self.ui_empty_home(ui);
                     return;
                 }
+                self.drain_show_panel_results();
                 let avail = clamp_row_width(ui.available_width());
                 let pane = avail;
                 if self.find.open {
@@ -1494,6 +1495,12 @@ impl Cabin {
                             // A finished turn keeps its tools inline in the transcript.
                             self.paint_tool_cards(ui);
                         }
+                        // G4: when the turn is idle, paint all live panels under the chat
+                        // (live tool groups paint theirs by anchor inside paint_live_blocks).
+                        if !live && !self.panels.is_empty() {
+                            let actions = panels::show(ui, &mut self.panels);
+                            self.queue_panel_actions(actions);
+                        }
                         if collapse_session {
                             let stored = self.cached_chat_views().to_vec();
                             minimize_session_thoughts(
@@ -1765,6 +1772,10 @@ impl Cabin {
         let thread_id = self.visible_thread_id();
         let n = self.live_blocks.len();
         self.live_keys.resize(n, (0, usize::MAX, 0));
+        // Take panels so live tool rows can paint anchors without fighting the
+        // live_blocks borrow.
+        let mut panels = std::mem::take(&mut self.panels);
+        let mut panel_followups = Vec::new();
         // A long agent turn holds hundreds of blocks. Like stored rows, one scrolled
         // out of the pane reserves its last height instead of re-laying its markdown.
         let row_h_id = live_row_height_id(&thread_id, ui.available_width());
@@ -1934,7 +1945,18 @@ impl Cabin {
                                     }),
                                 })
                                 .collect();
+                            let tool_ids: Vec<String> =
+                                cards.iter().map(|c| c.id.to_string()).collect();
                             paint_tool_group(ui, &cards);
+                            // G4: panels anchored to these tool calls paint under the group.
+                            for tid in &tool_ids {
+                                for a in panels::show_for_anchor(ui, &mut panels, tid) {
+                                    panel_followups.push(format!(
+                                        "[panel action] {} on {}",
+                                        a.action, a.panel_id
+                                    ));
+                                }
+                            }
                         }
                     }
                     if drawn {
@@ -1950,6 +1972,8 @@ impl Cabin {
             next_heights[i] = (ident, shape, (ui.cursor().min.y - y0).max(0.0));
         }
         ui.ctx().data_mut(|d| d.insert_temp(row_h_id, next_heights));
+        self.panels = panels;
+        self.followup_queue.extend(panel_followups);
         act
     }
 

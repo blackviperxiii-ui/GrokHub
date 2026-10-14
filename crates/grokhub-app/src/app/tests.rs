@@ -16537,6 +16537,7 @@ fn quiet_cabin() -> Cabin {
         side_ask_kick: false,
         plan_open: false,
         tool_cards: Vec::new(),
+        panels: super::panels::PanelStore::default(),
         live_blocks: Vec::new(),
         live_keys: Vec::new(),
         turn_log: Vec::new(),
@@ -28994,4 +28995,88 @@ fn journal_create_promote_persists_and_slash_opens() {
     );
 
     std::env::remove_var("GROKHUB_CONFIG");
+}
+
+#[test]
+fn g4_show_panel_paints_in_chat_when_enabled() {
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin) = isolated_cabin("g4-panel-chat");
+    cabin.messages = std::sync::Arc::new(vec![("You".into(), "show ci".into())]);
+    let marker = "Panel: CI\n\n{\n  \"panel\": {\n  \"type\": \"ci_status\",\n  \"pr_number\": 756,\n  \"checks\": [{\"name\": \"linux\", \"state\": \"pass\"}],\n  \"actions\": []\n}\n}";
+    assert!(cabin.panels.upsert_from_tool_result("call-756", marker));
+    super::panels::PANELS_UI_ENABLED.store(true, std::sync::atomic::Ordering::Relaxed);
+    let ctx = crate::ui_kit::test_ctx(true);
+    let input = egui::RawInput {
+        screen_rect: Some(egui::Rect::from_min_size(
+            egui::Pos2::ZERO,
+            egui::vec2(900.0, 1200.0),
+        )),
+        ..Default::default()
+    };
+    let out = crate::theme::test_pass(&ctx, input, |ui| {
+        cabin.ui_chat(ui);
+    });
+    let has_pr = out.shapes.iter().any(|c| {
+        if let egui::Shape::Text(t) = &c.shape {
+            t.galley.text().contains("PR #756")
+        } else {
+            false
+        }
+    });
+    assert!(has_pr, "enabled chat should paint PR #756");
+    super::panels::PANELS_UI_ENABLED.store(false, std::sync::atomic::Ordering::Relaxed);
+    let out_off = crate::theme::test_pass(&ctx, Default::default(), |ui| {
+        cabin.ui_chat(ui);
+    });
+    let has_pr_off = out_off.shapes.iter().any(|c| {
+        if let egui::Shape::Text(t) = &c.shape {
+            t.galley.text().contains("PR #756")
+        } else {
+            false
+        }
+    });
+    assert!(!has_pr_off, "disabled chat must not paint the panel");
+    release_isolated(&root, cabin);
+}
+
+#[test]
+fn g4_panel_action_queues_followup_without_tool_dispatch() {
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin) = isolated_cabin("g4-panel-action");
+    assert!(cabin.followup_queue.is_empty());
+    assert!(cabin.tool_cards.is_empty());
+    cabin.queue_panel_actions(vec![super::panels::PanelAction {
+        panel_id: "panel-1".into(),
+        action: "rerun_ci".into(),
+    }]);
+    assert_eq!(
+        cabin.followup_queue,
+        vec!["[panel action] rerun_ci on panel-1".to_string()]
+    );
+    assert!(
+        cabin.tool_cards.is_empty(),
+        "panel actions must not dispatch tools directly"
+    );
+    assert!(!cabin.running);
+    release_isolated(&root, cabin);
+}
+
+#[test]
+fn g4_drain_show_panel_from_tool_card() {
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin) = isolated_cabin("g4-drain-card");
+    let detail = "{\n  \"panel\": {\n  \"type\": \"ci_status\",\n  \"pr_number\": 42,\n  \"checks\": [],\n  \"actions\": []\n}\n}".to_string();
+    cabin.tool_cards.push(grokhub_core::wire::ToolCard {
+        id: "tc-1".into(),
+        title: "show_panel".into(),
+        kind: "show_panel".into(),
+        status: "completed".into(),
+        detail,
+        diff: String::new(),
+        image_data_url: None,
+        raw_input: String::new(),
+    });
+    cabin.drain_show_panel_results();
+    assert_eq!(cabin.panels.len(), 1);
+    release_isolated(&root, cabin);
 }
