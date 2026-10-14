@@ -2812,6 +2812,7 @@ impl Cabin {
                                                 )
                                             })
                                             .inner;
+                                        self.composer_ghost_touch(ui, composer_id, &edit, text_w);
                                         if self.composer.is_empty() && !edit.has_focus() {
                                             let ghost = composer_hint_ink();
                                             let hint_font = egui::FontId::new(

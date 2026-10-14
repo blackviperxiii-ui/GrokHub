@@ -161,6 +161,7 @@ mod evidence_ui;
 mod feed_ui;
 mod findings_ui;
 mod fix_it;
+mod ghost;
 mod glance;
 mod harness_ui;
 mod heartbeat_gate;
@@ -857,6 +858,7 @@ pub struct Cabin {
     scroll_to_hooks: bool,
     /// Last frame's composer pill, mic, and Send/Stop disc. Not saved.
     composer_geom: Option<(egui::Rect, egui::Rect, egui::Rect)>,
+    composer_ghost: ghost::ComposerGhost,
 }
 
 #[cfg(test)]
@@ -1407,6 +1409,7 @@ impl Cabin {
             audio_check: None,
             scroll_to_hooks: false,
             composer_geom: None,
+            composer_ghost: ghost::ComposerGhost::default(),
         };
         steps.mark("startup:new:fields");
         if !quiet {
@@ -1853,6 +1856,7 @@ impl Cabin {
             audio_check: None,
             scroll_to_hooks: false,
             composer_geom: None,
+            composer_ghost: ghost::ComposerGhost::default(),
         }
     }
 
