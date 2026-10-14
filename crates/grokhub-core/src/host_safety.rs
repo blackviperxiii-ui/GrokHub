@@ -5,9 +5,11 @@ use std::sync::Arc;
 
 fn contains_path_leaf(cmd: &str, leaf: &str) -> bool {
     let cmd = cmd.replace('\\', "/");
-    cmd.split(|ch: char| ch.is_whitespace() || matches!(ch, '"' | '\'' | '=' | ',' | ';'))
+    // `+` splits python concat leftovers (`"/home/j/"+.ssh+"/id_rsa"`) so a
+    // rebuilt leaf is still visible after chr() collapse.
+    cmd.split(|ch: char| ch.is_whitespace() || matches!(ch, '"' | '\'' | '=' | ',' | ';' | '+'))
         .any(|tok| {
-            let t = tok.trim_matches(|ch: char| matches!(ch, '"' | '\''));
+            let t = tok.trim_matches(|ch: char| matches!(ch, '"' | '\'' | '(' | ')'));
             t == leaf
                 || t.ends_with(&format!("/{leaf}"))
                 || t.starts_with(&format!("{leaf}/"))
@@ -305,7 +307,8 @@ fn deobfuscate(cmd: &str) -> String {
     s
 }
 
-/// Collapse Python-style `chr(46)` / `chr(0x2e)` so leaf path checks still fire.
+/// Collapse Python-style `chr(46)` / `chr(0x2e)` / `chr(0o56)` so leaf path checks
+/// still fire. Adjacent `chr()` results joined with `+` are glued (`.ssh` rebuild).
 fn collapse_chr_calls(cmd: &str) -> String {
     let mut out = String::with_capacity(cmd.len());
     let lower = cmd.to_ascii_lowercase();
@@ -318,14 +321,26 @@ fn collapse_chr_calls(cmd: &str) -> String {
                 j += 1;
             }
             let mut base = 10u32;
-            if j + 2 <= bytes.len() && bytes[j] == b'0' && matches!(bytes[j + 1], b'x' | b'X') {
-                base = 16;
-                j += 2;
+            if j + 2 <= bytes.len() && bytes[j] == b'0' {
+                match bytes[j + 1] {
+                    b'x' | b'X' => {
+                        base = 16;
+                        j += 2;
+                    }
+                    b'o' | b'O' => {
+                        base = 8;
+                        j += 2;
+                    }
+                    _ => {}
+                }
             }
             let num_start = j;
             while j < bytes.len()
-                && (bytes[j].is_ascii_digit()
-                    || (base == 16 && matches!(bytes[j], b'a'..=b'f' | b'A'..=b'F')))
+                && match base {
+                    16 => bytes[j].is_ascii_hexdigit(),
+                    8 => matches!(bytes[j], b'0'..=b'7'),
+                    _ => bytes[j].is_ascii_digit(),
+                }
             {
                 j += 1;
             }
@@ -339,6 +354,20 @@ fn collapse_chr_calls(cmd: &str) -> String {
                         if ch.is_ascii() {
                             out.push(ch);
                             i = j + 1;
+                            // Skip `+` between adjacent chr() so `.`+`s`+`s`+`h` → `.ssh`.
+                            let mut k = i;
+                            while k < bytes.len() && bytes[k].is_ascii_whitespace() {
+                                k += 1;
+                            }
+                            if k < bytes.len() && bytes[k] == b'+' {
+                                k += 1;
+                                while k < bytes.len() && bytes[k].is_ascii_whitespace() {
+                                    k += 1;
+                                }
+                                if k + 4 <= bytes.len() && &bytes[k..k + 4] == b"chr(" {
+                                    i = k;
+                                }
+                            }
                             continue;
                         }
                     }
@@ -361,10 +390,11 @@ fn base64_pipe_shell(cmd: &str) -> bool {
     pipes_or_chains_to_shell(&c)
 }
 
-/// True when `|`, `|&`, `;`, or `&&` is followed by a shell token (`sh` / `bash` / `zsh`),
-/// optionally as a path basename (`/bin/sh`), after simple quotes and common wrappers
-/// (`env` / `sudo` / `command` / `nice` / `nohup`). Word-boundary only — never a
-/// prefix of `sha256sum`, `shuf`, `shred`, etc.
+/// True when `|`, `|&`, `;`, newline, or `&&` is followed by a shell token
+/// (`sh` / `bash` / `zsh`), optionally as a path basename (`/bin/sh`), after simple
+/// quotes and common wrappers (`env` / `sudo` / `command` / `nice` / `nohup`),
+/// skipping wrapper option flags (`-i`, `-n`, `-p`, `--…`). Word-boundary only —
+/// never a prefix of `sha256sum`, `shuf`, `shred`, etc.
 fn pipes_or_chains_to_shell(cmd: &str) -> bool {
     let bytes = cmd.as_bytes();
     let mut i = 0;
@@ -393,7 +423,10 @@ fn pipes_or_chains_to_shell(cmd: &str) -> bool {
             i = after;
             continue;
         }
-        if bytes[i] == b';' && next_token_is_shell(&cmd[i + 1..]) {
+        // `;` and newline are both command separators under `bash -lc`.
+        if (bytes[i] == b';' || bytes[i] == b'\n' || bytes[i] == b'\r')
+            && next_token_is_shell(&cmd[i + 1..])
+        {
             return true;
         }
         i += 1;
@@ -422,9 +455,26 @@ fn next_token_is_shell(rest: &str) -> bool {
         if !SHELL_WRAPPERS.contains(&base) {
             return false;
         }
-        rest = after.trim_start();
+        // `| env -i sh` / `| sudo -n sh` / `| command -p sh` — skip option flags.
+        rest = skip_option_flags(after);
     }
     false
+}
+
+/// Drop leading `-…` / `--…` tokens after a wrapper so the sink basename is reached.
+fn skip_option_flags(rest: &str) -> &str {
+    let mut rest = rest.trim_start();
+    for _ in 0..8 {
+        let Some((tok, after)) = take_cmd_token(rest) else {
+            break;
+        };
+        if tok.starts_with('-') {
+            rest = after.trim_start();
+            continue;
+        }
+        break;
+    }
+    rest
 }
 
 /// Next command token, stripping a matching pair of `'` / `"` when present.
@@ -678,6 +728,38 @@ mod tests {
         assert!(
             forbidden_reason("echo abc | base64 | env sha256sum").is_none(),
             "| env sha256sum must stay allowed"
+        );
+        assert_eq!(
+            forbidden_reason("echo Y2F0IH4vLnNzaC9pZF9yc2E= | base64 -d | env -i sh"),
+            Some("base64|shell rebuild"),
+            "| env -i sh must count as a shell sink"
+        );
+        assert_eq!(
+            forbidden_reason("echo Y2F0IH4vLnNzaC9pZF9yc2E= | base64 -d | sudo -n sh"),
+            Some("base64|shell rebuild"),
+            "| sudo -n sh must count as a shell sink"
+        );
+        assert_eq!(
+            forbidden_reason("echo Y2F0IH4vLnNzaC9pZF9yc2E= | base64 -d | command -p sh"),
+            Some("base64|shell rebuild"),
+            "| command -p sh must count as a shell sink"
+        );
+        assert_eq!(
+            forbidden_reason("echo Y2F0IH4vLnNzaC9pZF9yc2E= | base64 -d\nsh"),
+            Some("base64|shell rebuild"),
+            "newline before sh must count as a command separator"
+        );
+        assert_eq!(
+            forbidden_reason("cat ~/chr(0o56)ssh/id_rsa"),
+            Some("forbidden path: ssh keys"),
+            "python octal chr(0o56) must rebuild .ssh"
+        );
+        assert_eq!(
+            forbidden_reason(
+                r#"python3 -c 'open("/home/j/"+chr(46)+chr(115)+chr(115)+chr(104)+"/id_rsa").read()'"#
+            ),
+            Some("forbidden path: ssh keys"),
+            "adjacent chr() joined with + must rebuild .ssh"
         );
     }
 
