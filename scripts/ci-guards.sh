@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# Repo friction guards (rearch stage 1). Fail CI when:
+# Repo friction guards (rearch stages 1–2). Fail CI when:
 #   1) conflict markers are committed
 #   2) god-file line budgets are exceeded (ratchet; raise only when intentional)
 #   3) a PR edits Cargo.lock without a Cargo.toml dep edit or the dependencies label
+#   4) VERSION copies disagree (cargo xtask bump --check)
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -125,6 +126,14 @@ PY
   fi
 else
   echo "ci-guards: skip Cargo.lock label rule (event=${GITHUB_EVENT_NAME:-local})"
+fi
+
+# --- 4. Version lockstep (rearch stage 2) --------------------------------------
+if cargo xtask bump --check; then
+  echo "ci-guards: xtask bump --check ok"
+else
+  echo "ci-guards: xtask bump --check failed (VERSION copies disagree)" >&2
+  fail=1
 fi
 
 if (( fail != 0 )); then
