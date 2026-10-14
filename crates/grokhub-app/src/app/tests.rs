@@ -16594,6 +16594,8 @@ fn quiet_cabin() -> Cabin {
         scroll_to_hooks: false,
         composer_geom: None,
         composer_ghost: ghost::ComposerGhost::default(),
+        toasts: super::status_toasts::cabin_toasts(),
+        status_toasted: String::new(),
     }
 }
 

@@ -18,6 +18,8 @@ grokhub-agent = { path = "../grokhub-agent" }
 serde.workspace = true
 serde_json.workspace = true
 eframe = { version = "0.36.2", default-features = false, features = ["default_fonts", "glow"] }
+# U7a: in-app toasts for Saved / run-finished / error status lines (egui 0.36).
+egui-notify = "0.23"
 ureq = { workspace = true }
 tungstenite = { version = "0.24", default-features = false, features = ["handshake", "rustls-tls-webpki-roots"] }
 global-hotkey = "0.6"
