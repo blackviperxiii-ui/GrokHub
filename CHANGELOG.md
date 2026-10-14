@@ -2,8 +2,15 @@
 
 ## Unreleased
 
+<<<<<<< HEAD
 - Eval: R6 offline technique A/B matrix (prefix cache, tool-output summaries, deferred tools, batched read-only, all-on) with cost/success metrics and adopt/spike/reject report in `docs/eval/r6-technique-ab.md`.
+=======
+<<<<<<< HEAD
+- Agent: per-job `ToolSet` allowlists (`schemas_for_job` / `dispatch_for_job` / `tool_set_from_job`) so background and unattended jobs can send a lean tool schema list; deferred mode keeps self-manage schemas on the stable list.
+=======
+>>>>>>> origin/beta
 - Watch-and-learn (SD1): pure core step extractor turns a screen-recording vision reply into ordered, classified steps and an unsaved skill draft (no network, save, or UI — SD2).
+>>>>>>> origin/beta
 - Agent: optional batched read-only tool round (`batched_tools.toml`, off by default). When enabled, consecutive gate-readonly tool calls in one model reply run dispatch in parallel (up to four at a time) with results appended in original order; approvals, MCP, and write paths stay sequential.
 - Chat composer: optional sentence autocomplete paints muted ghost text after your draft (off by default; Settings → Sentence autocomplete). Tab accepts when the slash menu is closed; Esc dismisses; click the ghost text to accept.
 - Connectors: Marketplace installs reload MCP tool lists in chat immediately; stdio entries accept catalog `command`/`args` or a single argv array.

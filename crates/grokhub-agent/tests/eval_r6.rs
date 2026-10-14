@@ -82,6 +82,8 @@ fn r6_technique_matrix_matches_golden_and_baseline() {
             path.display()
         )
     });
+    // Git on Windows may check out the golden with CRLF; compare on LF.
+    let golden = golden.replace("\r\n", "\n");
     assert_eq!(
         rendered, golden,
         "docs/eval/r6-technique-ab.md must match render_markdown output"
