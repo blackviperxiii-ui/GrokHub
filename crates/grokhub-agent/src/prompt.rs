@@ -215,6 +215,57 @@ pub fn prompt_need_from_job(job: &str) -> PromptNeed {
     }
 }
 
+/// Parse a per-job [`crate::tools::ToolSet`] from a brief or task body.
+///
+/// - No tool tokens → [`crate::tools::ToolSet::Full`] (same as chat).
+/// - `NEED_SHELL` / `TOOLS:shell` adds the shell family to a lean background set.
+/// - `NEED_MCP` / `TOOLS:mcp` keeps MCP discovery tools.
+/// - `TOOLS:a,b,c` starts from the background set and adds those names.
+///
+/// SP2 wires callers; SP1 only defines the mapping next to [`prompt_need_from_job`].
+pub fn tool_set_from_job(job: &str) -> crate::tools::ToolSet {
+    use crate::tools::ToolSet;
+
+    let has_tools_line = job.lines().any(|line| {
+        let t = line.trim();
+        t.starts_with("TOOLS:") || t.starts_with("TOOLS=")
+    });
+    let need_shell = job.contains("NEED_SHELL");
+    let need_mcp = job.contains("NEED_MCP");
+    if !has_tools_line && !need_shell && !need_mcp {
+        return ToolSet::FULL;
+    }
+
+    let mut set = ToolSet::background();
+    if need_shell {
+        set = set.with_tool("shell");
+    }
+    if need_mcp {
+        set = set.with_mcp();
+    }
+    for line in job.lines() {
+        let t = line.trim();
+        let rest = t
+            .strip_prefix("TOOLS:")
+            .or_else(|| t.strip_prefix("TOOLS="));
+        let Some(rest) = rest else {
+            continue;
+        };
+        for part in rest.split(|c: char| c == ',' || c.is_whitespace()) {
+            let part = part.trim();
+            if part.is_empty() {
+                continue;
+            }
+            if part.eq_ignore_ascii_case("mcp") {
+                set = set.with_mcp();
+            } else {
+                set = set.with_tool(part);
+            }
+        }
+    }
+    set
+}
+
 impl PromptProfile {
     fn want_skills(self, need: PromptNeed) -> bool {
         matches!(self, PromptProfile::Chat) || need.skills
@@ -723,6 +774,24 @@ mod tests {
             prompt_need_from_job("NEED_SKILLS\nNEED_PLUGINS"),
             PromptNeed::FULL
         );
+    }
+
+    #[test]
+    fn tool_set_from_job_parses_shell_and_tools_line() {
+        use crate::tools::ToolSet;
+
+        assert!(tool_set_from_job("plain task").is_full());
+        let shell = tool_set_from_job("NEED_SHELL\nfinish the report");
+        assert!(!shell.is_full());
+        assert!(shell.allows("run_terminal_command"));
+        assert!(shell.allows("read_file"));
+        let explicit = tool_set_from_job("TOOLS:read_file,write\nNEED_MCP");
+        assert!(explicit.allows("read_file"));
+        assert!(explicit.allows("write"));
+        assert!(explicit.allows("search_tool"));
+        assert!(explicit.allows("use_tool"));
+        // Background base still includes shell unless a future SP2 drops it.
+        assert!(ToolSet::background().allows("run_terminal_command"));
     }
 
     fn nested_scratch(tag: &str) -> PathBuf {
