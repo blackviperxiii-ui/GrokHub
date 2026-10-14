@@ -79,7 +79,12 @@ fn catalog_stdio_entry(command: &str, extra_args: &[&str]) -> Value {
 fn tool_names(gate: &Gate) -> Vec<String> {
     schemas_for(gate)
         .iter()
-        .filter_map(|schema| schema.get("name").and_then(|v| v.as_str()).map(str::to_string))
+        .filter_map(|schema| {
+            schema
+                .get("name")
+                .and_then(|v| v.as_str())
+                .map(str::to_string)
+        })
         .collect()
 }
 
@@ -338,7 +343,12 @@ fn brave_catalog_config_entry_keeps_args_and_token_env() {
     assert_eq!(entry["command"], json!("npx"));
     assert_eq!(
         entry["args"],
-        json!(["-y", "@brave/brave-search-mcp-server", "--transport", "stdio"])
+        json!([
+            "-y",
+            "@brave/brave-search-mcp-server",
+            "--transport",
+            "stdio"
+        ])
     );
     assert_eq!(entry["tokenEnv"], json!("BRAVE_API_KEY"));
 }
