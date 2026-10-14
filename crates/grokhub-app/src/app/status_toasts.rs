@@ -164,11 +164,11 @@ mod tests {
 
     #[test]
     fn cabin_toasts_clear_the_titlebar_strip() {
-        assert_eq!(crate::theme::TITLEBAR_H, 40.0);
-        assert!(
-            TOAST_BELOW_TITLEBAR >= crate::theme::TITLEBAR_H + TOAST_EDGE,
-            "top margin must sit below chrome hits"
-        );
+        // Compile-time: margin clears chrome (runtime assert! on consts trips clippy).
+        const {
+            assert!(TOAST_BELOW_TITLEBAR >= crate::theme::TITLEBAR_H + TOAST_EDGE);
+            assert!(crate::theme::TITLEBAR_H == 40.0);
+        }
         // Constructing the configured collector is enough: margin is private.
         let _ = cabin_toasts();
         let src = include_str!("status_toasts.rs");
