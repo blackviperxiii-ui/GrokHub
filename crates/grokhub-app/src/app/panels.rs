@@ -628,7 +628,17 @@ fn paint_compare_table(
     paint_action_row(ui, &ct.actions, panel_id, actions);
 }
 
+/// Wrap height for a cell at `wrap_w` (matches previous Grid wrapping).
+fn table_cell_wrap_h(ui: &Ui, text: &str, font_size: f32, wrap_w: f32) -> f32 {
+    let font = egui::FontId::proportional(font_size);
+    let galley =
+        ui.fonts_mut(|f| f.layout(text.to_owned(), font, egui::Color32::WHITE, wrap_w.max(1.0)));
+    galley.size().y
+}
+
 /// Embedded string table via egui_extras TableBuilder (no inner vscroll).
+/// Equal remainder columns + top-down cells so long TEXT_MAX cells wrap in-pane
+/// instead of stretching the card (Column::auto + horizontal layout does not wrap).
 fn paint_string_table(
     ui: &mut Ui,
     id_salt: impl egui::AsIdSalt,
@@ -639,19 +649,32 @@ fn paint_string_table(
     if cols == 0 {
         return;
     }
-    let header_h = crate::theme::TYPE_CAPTION + crate::theme::SPACING_4;
-    let row_h = crate::theme::TYPE_BODY + crate::theme::SPACING_4;
+    let spacing_x = ui.spacing().item_spacing.x;
+    let avail = ui.available_width();
+    let col_w = ((avail - spacing_x * cols.saturating_sub(1) as f32) / cols as f32).max(48.0);
+    let pad_y = crate::theme::SPACING_4;
+    let min_row_h = crate::theme::TYPE_BODY + pad_y;
+    let header_h = headers
+        .iter()
+        .map(|h| table_cell_wrap_h(ui, h, crate::theme::TYPE_CAPTION, col_w) + pad_y)
+        .fold(crate::theme::TYPE_CAPTION + pad_y, f32::max);
+    let row_heights: Vec<f32> = rows
+        .iter()
+        .map(|row| {
+            (0..cols)
+                .map(|i| {
+                    let cell = row.get(i).map(String::as_str).unwrap_or("");
+                    table_cell_wrap_h(ui, cell, crate::theme::TYPE_BODY, col_w) + pad_y
+                })
+                .fold(min_row_h, f32::max)
+        })
+        .collect();
     let mut builder = TableBuilder::new(ui)
         .id_salt(id_salt)
         .vscroll(false)
-        .cell_layout(egui::Layout::left_to_right(egui::Align::Center));
-    for i in 0..cols {
-        let col = if i + 1 == cols {
-            Column::remainder()
-        } else {
-            Column::auto()
-        };
-        builder = builder.column(col);
+        .cell_layout(egui::Layout::top_down(egui::Align::LEFT));
+    for _ in 0..cols {
+        builder = builder.column(Column::remainder().at_least(48.0).clip(true));
     }
     builder
         .header(header_h, |mut header| {
@@ -665,21 +688,23 @@ fn paint_string_table(
                 });
             }
         })
-        .body(|mut body| {
-            for row in rows {
-                body.row(row_h, |mut table_row| {
-                    for i in 0..cols {
-                        let cell = row.get(i).map(String::as_str).unwrap_or("");
-                        table_row.col(|ui| {
-                            ui.label(
-                                RichText::new(cell)
-                                    .size(crate::theme::TYPE_BODY)
-                                    .color(crate::theme::fg()),
-                            );
-                        });
-                    }
-                });
-            }
+        .body(|body| {
+            body.heterogeneous_rows(row_heights.into_iter(), |mut table_row| {
+                let row = rows
+                    .get(table_row.index())
+                    .map(Vec::as_slice)
+                    .unwrap_or(&[]);
+                for i in 0..cols {
+                    let cell = row.get(i).map(String::as_str).unwrap_or("");
+                    table_row.col(|ui| {
+                        ui.label(
+                            RichText::new(cell)
+                                .size(crate::theme::TYPE_BODY)
+                                .color(crate::theme::fg()),
+                        );
+                    });
+                }
+            });
         });
 }
 
@@ -853,6 +878,47 @@ mod tests {
         store.upsert("ct", compare_json());
         let (shapes, _) = headless_show(&mut store);
         assert!(text_in_shapes(&shapes, "beta vs main"));
+        disable_panels();
+    }
+
+    #[test]
+    fn paint_string_table_wraps_long_cells() {
+        // Narrow wrap_w must grow height vs a wide measure (Bugbot: no fixed single-line row).
+        let ctx = crate::ui_kit::test_ctx(true);
+        let long = "word ".repeat(80);
+        let mut narrow_h = 0.0;
+        let mut wide_h = 0.0;
+        let _ = crate::theme::test_pass(
+            &ctx,
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(480.0, 720.0))),
+                ..Default::default()
+            },
+            |ui| {
+                narrow_h = table_cell_wrap_h(ui, &long, crate::theme::TYPE_BODY, 120.0);
+                wide_h = table_cell_wrap_h(ui, &long, crate::theme::TYPE_BODY, 800.0);
+            },
+        );
+        assert!(
+            narrow_h > wide_h + 4.0,
+            "narrow wrap grows height: narrow={narrow_h} wide={wide_h}"
+        );
+        // Headless paint must keep the long cell text (wrapping, not dropped).
+        let json = format!(
+            r#"{{
+  "type": "compare_table",
+  "subject": "wrap check",
+  "headers": ["Col"],
+  "rows": [["{long}"]],
+  "actions": []
+}}"#
+        );
+        enable_panels();
+        let mut store = PanelStore::default();
+        store.upsert("wrap", &json);
+        let (shapes, _) = headless_show(&mut store);
+        assert!(text_in_shapes(&shapes, "wrap check"));
+        assert!(text_in_shapes(&shapes, "word "));
         disable_panels();
     }
 
