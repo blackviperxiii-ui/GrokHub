@@ -978,9 +978,18 @@ mod tests {
             .nth(1)
             .and_then(|s| s.split("fn run_cabin(").next())
             .expect("cabin_shutdown_last_resort");
+        let async_mod = main_rs
+            .split("mod cabin_async {")
+            .nth(1)
+            .and_then(|s| s.split("\n}\n\n/// After the cabin").next())
+            .expect("cabin_async");
         assert!(
-            shutdown.contains("shutdown_timeout") && shutdown.contains("process::exit(0)"),
-            "a clean tray Quit must shut down async work then exit from main: {shutdown}"
+            async_mod.contains("shutdown_timeout"),
+            "a clean tray Quit must shut down async work before exit: {async_mod}"
+        );
+        assert!(
+            shutdown.contains("cabin_async::shutdown()") && shutdown.contains("process::exit(0)"),
+            "last-resort exit runs from main after run_native: {shutdown}"
         );
         assert!(
             !on_exit.contains("process::exit(0)"),

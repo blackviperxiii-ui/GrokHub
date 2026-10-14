@@ -66,7 +66,9 @@ use std::time::Duration;
 /// Cabin-wide async worker (Linux portal / ashpd). Owned in `main` so Quit can
 /// `shutdown_timeout` after `eframe::run_native` returns instead of hanging on drop.
 mod cabin_async {
+    #[cfg(target_os = "linux")]
     use super::Duration;
+    #[cfg(target_os = "linux")]
     use std::sync::{Mutex, OnceLock};
 
     #[cfg(target_os = "linux")]
