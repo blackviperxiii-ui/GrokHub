@@ -392,11 +392,7 @@ fn skill_disable_and_enable_move_the_folder_and_log_each_move() {
     // the `skill` tool rejects those as unknown skill.
     let bare = root.join("skills").join("bare-import").join("SKILL.md");
     std::fs::create_dir_all(bare.parent().unwrap()).unwrap();
-    std::fs::write(
-        &bare,
-        "# Bare Import\n\n## Steps\n1. Do a thing\n",
-    )
-    .unwrap();
+    std::fs::write(&bare, "# Bare Import\n\n## Steps\n1. Do a thing\n").unwrap();
     assert_eq!(
         run_with(&ctx, "skill_list", &json!({})).text,
         "no skills",
