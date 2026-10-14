@@ -18,3 +18,5 @@ Delete own head after merge/close; scratch ASAP; never main/beta. GitHub auto-de
 ## UI theme (Wave 1 + Critiquito motion 4–5)
 - Composer glow: white `#e7e9ea` (`composer_glow_rgb` / FG). Breath via `icons::composer_breath`. Idle α≈0.25; streaming 0.25↔0.55; settle to idle in `GLOW_SETTLE_SECS` (200ms). Skip when `motion_ok` is false.
 - Always permission: white ring on dark; settle fill α 0→1 and scale 0.98→1.0 over `ALWAYS_SETTLE_SECS` (140ms), then stop — no perpetual pulse.
+
+- **vstack:** Always load and follow the vstack skills in .cursor/skills (start with viper-mode); never use pstack.
