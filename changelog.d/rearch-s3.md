@@ -1,0 +1,1 @@
+- CI: non-release PRs cannot touch version lockstep files without the `release` label; CODEOWNERS for gate/perm/harness/host_safety (rearch stage 3).
