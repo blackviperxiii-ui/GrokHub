@@ -2773,14 +2773,6 @@ impl Cabin {
                                     |ui| {
                                         ui.spacing_mut().item_spacing.x = 8.0;
                                         let text_w = (mid - 8.0 - 22.0).max(80.0);
-                                        let slash_open = !filter_slash_hits(
-                                            &self.composer,
-                                            &self.grok_commands,
-                                        )
-                                        .is_empty();
-                                        self.composer_ghost.note_ime(
-                                            ui.input(|i| i.events.clone()).as_slice(),
-                                        );
                                         let edit = egui::ScrollArea::vertical()
                                             .id_salt("chat-composer-scroll")
                                             .max_width(text_w)
@@ -2820,39 +2812,7 @@ impl Cabin {
                                                 )
                                             })
                                             .inner;
-                                        if edit.has_focus() {
-                                            if ui.input(|i| i.key_pressed(egui::Key::Tab))
-                                                && self.composer_ghost.can_accept(slash_open)
-                                            {
-                                                self.composer_ghost.accept(&mut self.composer);
-                                                ui.input_mut(|i| {
-                                                    i.consume_key(egui::Modifiers::NONE, egui::Key::Tab);
-                                                });
-                                            } else if ui.input(|i| i.key_pressed(egui::Key::Escape))
-                                                && self.composer_ghost.dismiss()
-                                            {
-                                                ui.input_mut(|i| {
-                                                    i.consume_key(
-                                                        egui::Modifiers::NONE,
-                                                        egui::Key::Escape,
-                                                    );
-                                                });
-                                            }
-                                        }
-                                        if self.cfg.composer_autocomplete
-                                            && self.composer_ghost.has_suggestion()
-                                        {
-                                            let clicked = self.composer_ghost.paint(
-                                                ui,
-                                                edit.rect,
-                                                &self.composer,
-                                                text_w,
-                                            );
-                                            if clicked && self.composer_ghost.can_accept(slash_open) {
-                                                self.composer_ghost.accept(&mut self.composer);
-                                            }
-                                        }
-                                        self.poll_composer_ghost(ui.ctx(), composer_id);
+                                        self.composer_ghost_touch(ui, composer_id, &edit, text_w);
                                         if self.composer.is_empty() && !edit.has_focus() {
                                             let ghost = composer_hint_ink();
                                             let hint_font = egui::FontId::new(

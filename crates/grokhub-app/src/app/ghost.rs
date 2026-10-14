@@ -247,6 +247,38 @@ impl ComposerGhost {
 }
 
 impl Cabin {
+    pub(super) fn composer_ghost_touch(
+        &mut self,
+        ui: &mut egui::Ui,
+        composer_id: egui::Id,
+        edit: &egui::Response,
+        text_w: f32,
+    ) {
+        let slash_open =
+            !filter_slash_hits(&self.composer, &self.grok_commands).is_empty();
+        self.composer_ghost
+            .note_ime(ui.input(|i| i.events.clone()).as_slice());
+        if edit.has_focus() {
+            if ui.input(|i| i.key_pressed(egui::Key::Tab))
+                && self.composer_ghost.can_accept(slash_open)
+            {
+                self.composer_ghost.accept(&mut self.composer);
+                ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Tab));
+            } else if ui.input(|i| i.key_pressed(egui::Key::Escape))
+                && self.composer_ghost.dismiss()
+            {
+                ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
+            }
+        }
+        if self.cfg.composer_autocomplete && self.composer_ghost.has_suggestion() {
+            let clicked = self.composer_ghost.paint(ui, edit.rect, &self.composer, text_w);
+            if clicked && self.composer_ghost.can_accept(slash_open) {
+                self.composer_ghost.accept(&mut self.composer);
+            }
+        }
+        self.poll_composer_ghost(ui.ctx(), composer_id);
+    }
+
     pub(super) fn attach_fingerprint(&self) -> u64 {
         let mut h = DefaultHasher::new();
         self.attach_url.hash(&mut h);
