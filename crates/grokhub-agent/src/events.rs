@@ -759,6 +759,7 @@ fn grok_usage(usage: &Usage, kind: AuthKind, used: u64, limit: u64) -> GrokUsage
         input_tokens: usage.input_tokens,
         output_tokens: usage.output_tokens,
         reasoning_tokens: usage.reasoning_tokens,
+        cache_read_input_tokens: usage.cached_tokens,
         total_tokens: usage
             .input_tokens
             .saturating_add(usage.output_tokens)
@@ -815,7 +816,7 @@ mod tests {
                     output_tokens: 1,
                     reasoning_tokens: 1,
                     cost_in_usd_ticks: 9,
-                    cached_tokens: 0,
+                    cached_tokens: 2,
                 },
                 ..Default::default()
             })
@@ -865,6 +866,7 @@ mod tests {
         assert!(events.iter().any(|ev| matches!(
             ev,
             AcpEvent::Usage(u) if u.meter == "SuperGrok pool" && u.input_tokens == 3 && u.cost_in_usd_ticks == 9
+                && u.cache_read_input_tokens == 2
                 && u.context_window_tokens == crate::models::GROK_47_CONTEXT_LENGTH
                 && u.context_tokens_used > 0
         )));
