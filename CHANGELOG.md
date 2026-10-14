@@ -2,7 +2,11 @@
 
 ## Unreleased
 
+<<<<<<< HEAD
 - Agent: optional batched read-only tool round (`batched_tools.toml`, off by default). When enabled, consecutive gate-readonly tool calls in one model reply run dispatch in parallel (up to four at a time) with results appended in original order; approvals, MCP, and write paths stay sequential.
+=======
+- Connectors: Marketplace installs reload MCP tool lists in chat immediately; stdio entries accept catalog `command`/`args` or a single argv array.
+>>>>>>> origin/beta
 - Agent: optional `show_panel` native tool (`generative_ui.toml`, off by default). When enabled, the model can emit a validated G1 panel spec as tool output (`{"panel": …}`) with no render or side effects; the tool stays deferred like other rarely used natives when deferred tool schemas are on.
 - Fixed: tray **Quit** tears down the cabin async runtime with a bounded `shutdown_timeout` after the UI loop returns, then exits from `main` so the tray icon is dropped before the last-resort `process::exit` (Windows ghost-icon case).
 - Generative UI: phase 1 controlled panel renderer (CI status, build errors, compare table) with dismiss/pin store; off by default until Settings exposes the toggle.
