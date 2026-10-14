@@ -4,15 +4,83 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use crate::gate::{self, Decision, Gate, PermAnswer, PermitWait, Waited};
 use crate::tasks::TaskHub;
-use crate::tools::{self, DesktopOps, ToolCtx, ToolOutput};
+use crate::tools::{self, DesktopOps, ToolCtx, ToolOutput, ToolSet};
 use crate::{
     CancelToken, ClientError, ContentPart, FunctionCall, InputItem, ModelClient, ResponsesRequest,
     StreamEvent, Usage,
 };
+
+/// Per-session [`ToolSet`] for background / unattended runs (SP2).
+///
+/// Callers bind before `run_loop` / `NativeEngine::prompt`; `None` on a session
+/// keeps today's full `schemas_for` / `dispatch` behavior. Stored here so app
+/// callers do not need a `LoopIn` field (that would force edits across eval and
+/// chat engine construction sites owned by other cards).
+static JOB_TOOL_SETS: OnceLock<Mutex<HashMap<String, ToolSet>>> = OnceLock::new();
+
+fn job_tool_sets() -> &'static Mutex<HashMap<String, ToolSet>> {
+    JOB_TOOL_SETS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// RAII token from [`bind_job_tool_set`]. Dropping it does **not** clear the
+/// bind: a `background: true` `spawn_subagent` child (`parent/id`) can outlive
+/// the parent `run_loop`, and removing the parent entry would fail open to the
+/// full tool list. Overwrite with a later bind on the same session id, or call
+/// [`clear_job_tool_set`].
+pub struct JobToolSetGuard {
+    session: String,
+}
+
+impl Drop for JobToolSetGuard {
+    fn drop(&mut self) {
+        let _ = &self.session;
+    }
+}
+
+/// Bind `set` for `session`. Overwrites a prior bind. Survives the returned
+/// guard so detached subagents keep the allowlist. Clears any previously
+/// materialized `session/…` descendants so a tighter rebind wins on next lookup.
+pub fn bind_job_tool_set(session: impl Into<String>, set: ToolSet) -> JobToolSetGuard {
+    let session = session.into();
+    if let Ok(mut map) = job_tool_sets().lock() {
+        let prefix = format!("{session}/");
+        map.retain(|key, _| !key.starts_with(&prefix));
+        map.insert(session.clone(), set);
+    }
+    JobToolSetGuard { session }
+}
+
+/// Remove a session's job [`ToolSet`] (tests / explicit teardown).
+pub fn clear_job_tool_set(session: &str) {
+    if let Ok(mut map) = job_tool_sets().lock() {
+        map.remove(session);
+    }
+}
+
+fn bound_job_tool_set(session: &str) -> Option<ToolSet> {
+    let Ok(mut map) = job_tool_sets().lock() else {
+        return None;
+    };
+    if let Some(set) = map.get(session) {
+        return Some(set.clone());
+    }
+    // Child sessions are `parent/id` (nested `parent/id/id2`). Inherit the
+    // nearest bound ancestor so spawn_subagent keeps the job allowlist.
+    // Materialize onto the child so a later parent clear still leaves the set.
+    let mut rest = session;
+    while let Some((parent, _)) = rest.rsplit_once('/') {
+        if let Some(set) = map.get(parent).cloned() {
+            map.insert(session.to_string(), set.clone());
+            return Some(set);
+        }
+        rest = parent;
+    }
+    None
+}
 
 const REPEAT_LIMIT: u32 = 3;
 /// What a call repeated [`REPEAT_LIMIT`] times gets back instead of running.
@@ -407,12 +475,16 @@ pub fn run_loop(
         }
         let mut wire = history.clone();
         crate::image_budget::apply_image_budget(&mut wire);
+        let tools = match bound_job_tool_set(input.conversation_id) {
+            Some(set) => tools::schemas_for_job(&gate, &set),
+            None => tools::schemas_for(&gate),
+        };
         let req = ResponsesRequest {
             model: input.model.to_string(),
             effort: input.effort.map(str::to_string),
             input: wire,
             conversation_id: input.conversation_id.to_string(),
-            tools: tools::schemas_for(&gate),
+            tools,
             hosted_search: true,
             call_timeout: None,
         };
@@ -1269,7 +1341,8 @@ fn run_readonly_tool_batch(
             owner,
             session: Some(session),
         };
-        tools::dispatch(&ctx, &call.name, &call.arguments)
+        let set = bound_job_tool_set(session);
+        tools::dispatch_for_job(&ctx, &call.name, &call.arguments, set.as_ref())
     });
 
     for (slot, (call, id, pre_context)) in prepared.into_iter().enumerate() {
@@ -1381,8 +1454,9 @@ fn dispatch_tool_call(
         on_event(LoopEvent::Elicit(view));
     };
     let mut wait_card = |eid: &str| crate::mcp::wait_elicit(&session, eid, &cancel, &halted);
+    let job_set = bound_job_tool_set(input.conversation_id);
     let output = crate::mcp::with_elicit(attended, &mut emit_card, &mut wait_card, || {
-        tools::dispatch(&ctx, &call.name, &call.arguments)
+        tools::dispatch_for_job(&ctx, &call.name, &call.arguments, job_set.as_ref())
     });
     (output, Usage::default())
 }
@@ -1631,6 +1705,47 @@ mod tests {
             events.push(ev)
         });
         (out, history, events)
+    }
+
+    #[test]
+    fn child_session_inherits_parent_job_tool_set() {
+        let parent = "native-sp2-parent";
+        let child = format!("{parent}/agent-1");
+        let nested = format!("{child}/agent-2");
+        let set = ToolSet::only(["read_file"]);
+        let _guard = bind_job_tool_set(parent, set.clone());
+        assert_eq!(bound_job_tool_set(parent).as_ref(), Some(&set));
+        assert_eq!(bound_job_tool_set(&child).as_ref(), Some(&set));
+        assert_eq!(bound_job_tool_set(&nested).as_ref(), Some(&set));
+        assert!(bound_job_tool_set("unrelated-session").is_none());
+        // A tighter bind on the child wins over the parent.
+        let tighter = ToolSet::only(["list_dir"]);
+        let _child_guard = bind_job_tool_set(&child, tighter.clone());
+        assert_eq!(bound_job_tool_set(&child).as_ref(), Some(&tighter));
+        assert_eq!(bound_job_tool_set(&nested).as_ref(), Some(&tighter));
+        assert_eq!(bound_job_tool_set(parent).as_ref(), Some(&set));
+        clear_job_tool_set(parent);
+        clear_job_tool_set(&child);
+        clear_job_tool_set(&nested);
+    }
+
+    #[test]
+    fn detached_child_keeps_tool_set_after_parent_guard_drops() {
+        // Security: background spawn_subagent outlives the parent run_loop guard.
+        let parent = "native-sp2-detached-parent";
+        let child = format!("{parent}/bg-agent");
+        let set = ToolSet::only(["read_file", "run_terminal_command"]);
+        let guard = bind_job_tool_set(parent, set.clone());
+        drop(guard);
+        // Parent bind must remain so ancestor walk (and materialize) still work.
+        assert_eq!(bound_job_tool_set(parent).as_ref(), Some(&set));
+        assert_eq!(bound_job_tool_set(&child).as_ref(), Some(&set));
+        // After materialize, clearing the parent must not fail-open the child.
+        clear_job_tool_set(parent);
+        assert!(bound_job_tool_set(parent).is_none());
+        assert_eq!(bound_job_tool_set(&child).as_ref(), Some(&set));
+        assert!(!set.allows("write"));
+        clear_job_tool_set(&child);
     }
 
     #[test]
