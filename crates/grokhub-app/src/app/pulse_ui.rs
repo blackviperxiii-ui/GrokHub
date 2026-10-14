@@ -102,6 +102,7 @@ pub(super) enum PulseAct {
     NeverAgain(String),
     Retry(String),
     DeleteRecording(String),
+    FixIt(String),
     /// A code-idea card's Copy as GitHub issue (card 32 PR D).
     CopyIssue(String),
     RetryNow,
@@ -585,6 +586,8 @@ pub(super) enum FeedPostAct {
     Retry,
     /// Screen recording card: delete its folder (after a confirm).
     DeleteRecording,
+    /// Screen or audio report card: run the diagnosis fix plan.
+    FixIt(String),
     /// No-route wait card: check the models now.
     RetryNow,
     /// Save / Not interested / More like this on a source post.
@@ -626,24 +629,9 @@ fn paint_model_wait(ui: &mut egui::Ui, card: &UpdateCard) -> Option<FeedPostAct>
     super::change_undo::click_pill(ui, "Retry now").then_some(FeedPostAct::RetryNow)
 }
 
-/// Open and Delete recording on a screen recording card.
+/// Open, Fix it, and Delete recording on a screen or audio report card.
 fn paint_recording(ui: &mut egui::Ui, card: &UpdateCard) -> Option<FeedPostAct> {
-    if grokhub_core::screen_recording_dir(card).is_none()
-        || card.status == grokhub_core::UpdateStatus::Dismissed
-    {
-        return None;
-    }
-    let mut act = None;
-    ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = 8.0;
-        if card.action.is_some() && super::change_undo::click_pill(ui, "Open") {
-            act = Some(FeedPostAct::Open);
-        }
-        if super::change_undo::click_pill(ui, "Delete recording") {
-            act = Some(FeedPostAct::DeleteRecording);
-        }
-    });
-    act
+    super::fix_it::paint_diagnosis_report_actions(ui, card)
 }
 
 /// The Done-for-you pills, while the card is unanswered.
@@ -752,8 +740,10 @@ pub(super) fn paint_post_body(
     if let Some(crash) = paint_crash(ui, card) {
         act = Some(crash);
     }
-    if let Some(rec) = paint_recording(ui, card) {
-        act = Some(rec);
+    if super::fix_it::is_diagnosis_report_card(card) {
+        if let Some(rec) = paint_recording(ui, card) {
+            act = Some(rec);
+        }
     }
     if let Some(wait) = paint_model_wait(ui, card) {
         act = Some(wait);
@@ -1294,6 +1284,7 @@ impl Cabin {
                             FeedPostAct::DeleteRecording => {
                                 PulseAct::DeleteRecording(card.id.clone())
                             }
+                            FeedPostAct::FixIt(id) => PulseAct::FixIt(id),
                             FeedPostAct::RetryNow => PulseAct::RetryNow,
                             FeedPostAct::Source(did) => PulseAct::Source(card.id.clone(), did),
                         });
@@ -1575,6 +1566,7 @@ impl Cabin {
             PulseAct::NeverAgain(id) => self.done_for_you_never(&id),
             PulseAct::Retry(id) => self.crash_retry(&id),
             PulseAct::DeleteRecording(id) => self.arm_delete_recording(&id),
+            PulseAct::FixIt(id) => self.tap_diagnosis_fix(&id),
             PulseAct::CopyIssue(id) => self.copy_code_idea(&id),
             PulseAct::RetryNow => self.retry_model_wait_now(),
             PulseAct::Source(id, did) => self.source_post_act(&id, did),
