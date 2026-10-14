@@ -4,8 +4,7 @@
 //! splits (stage 5) do not re-copy them. Declared from `tests.rs` via `#[path]`.
 
 // Loaded as a child of `tests` via `#[path]`, so Cabin lives two modules up.
-use super::super::Cabin;
-use std::sync::Arc;
+use super::super::{Cabin, PersistService};
 
 /// Restore one env var on drop.
 pub(super) struct RestoreEnv {
@@ -262,8 +261,9 @@ pub(super) fn wait_tree_contains(root: &std::path::Path, needle: &str) {
     }
 }
 
-pub(super) fn join_persist(io: &Arc<std::sync::Mutex<()>>) {
-    drop(io.lock().unwrap_or_else(|e| e.into_inner()));
+/// Drain the PersistService queue so disk catches up with scheduled writes.
+pub(super) fn join_persist(svc: &PersistService) {
+    svc.flush();
 }
 
 #[test]

@@ -21,6 +21,7 @@ fn cabin_src() -> String {
     concat!(
         include_str!("mod.rs"),
         include_str!("persist.rs"),
+        include_str!("persist_service.rs"),
         include_str!("acp.rs"),
         include_str!("chat_kick.rs"),
         include_str!("palette.rs"),
@@ -246,20 +247,21 @@ fn name_save_does_not_overwrite_a_newer_picture() {
     assert!(current.api_key.is_empty());
 
     let src = cabin_src();
-    let persist = src
-        .split("fn persist_cfg(")
-        .nth(1)
-        .and_then(|s| s.split("fn persist_if_dirty(").next())
-        .expect("persist_cfg");
-    let check = persist.find("cfg_if_current").expect("generation check");
-    let save = persist.find("config::save").expect("save");
+    let persist = fn_src(&src, "persist_cfg");
     assert!(
         persist.contains("publish_cfg")
-            && persist.contains("thread::spawn")
-            && persist.contains("persist_io")
+            && persist.contains("submit_settings")
+            && persist.contains("persist_svc")
             && persist.contains("api_key.clear")
-            && check < save,
-        "a config save must write the latest generation, not the clone it spawned with: {persist}"
+            && !persist.contains("thread::spawn"),
+        "a config save must schedule PersistService with the latest generation: {persist}"
+    );
+    let worker = fn_src(&src, "persist_service_worker");
+    let check = worker.find("cfg_if_current").expect("generation check");
+    let save = worker.find("config::save").expect("save");
+    assert!(
+        worker.contains("io.lock()") && check < save,
+        "PersistService must write the latest generation under persist_io: {worker}"
     );
 }
 
@@ -2541,16 +2543,17 @@ fn grok_login_powers_history_and_imagine() {
         .and_then(|s| s.split("fn persist_snap(").next())
         .expect("persist");
     assert!(
-        persist.contains("snap.secrets = Some") && persist.contains("persist_io"),
-        "foreground persist must write secrets under persist_io: {persist}"
+        persist.contains("snap.secrets = Some") && persist.contains("submit_full"),
+        "foreground persist must hand secrets to PersistService: {persist}"
     );
-    let persist_spawn = persist
-        .find("thread::spawn")
-        .expect("persist must leave the UI thread");
-    let persist_write = persist.find("write_persist_disk").expect("persist writes");
     assert!(
-        persist_spawn < persist_write && persist.contains("io.lock()"),
-        "foreground persist must not freeze the cabin writing threads.json: {persist}"
+        persist.contains("persist_svc") && !persist.contains("thread::spawn"),
+        "foreground persist must leave the UI thread via PersistService: {persist}"
+    );
+    let svc = fn_src(&src, "persist_service_worker");
+    assert!(
+        svc.contains("write_persist_disk_in_order") && svc.contains("io.lock()"),
+        "PersistService worker must take persist_io before threads.json: {svc}"
     );
     assert!(
             persist.contains("persist_idle_key") && persist.contains("persist_idle_now"),
@@ -3169,35 +3172,22 @@ fn periodic_persist_leaves_the_ui_thread() {
             || exit.contains("config::save(&cfg)"),
         "SIGTERM must write the remembered window: {exit}"
     );
-    let flush = src
-        .split("fn flush_window(")
-        .nth(1)
-        .and_then(|s| s.split("fn persist(").next())
-        .expect("flush_window");
-    let flush_spawn = flush
-        .find("thread::spawn")
-        .expect("geom flush must leave the UI thread");
-    let flush_save = flush
-        .find("config::save")
-        .expect("geom flush writes app.json");
+    let flush = fn_src(&src, "flush_window");
     assert!(
-        flush_spawn < flush_save && flush.contains("persist_io"),
+        flush.contains("submit_window_cfg")
+            && flush.contains("persist_svc")
+            && !flush.contains("thread::spawn"),
         "window geom must not freeze the cabin writing app.json: {flush}"
     );
-    let bg = src
-        .split("fn persist_bg(")
-        .nth(1)
-        .and_then(|s| s.split("\n    fn ").next())
-        .expect("persist_bg");
-    let spawn = bg
-        .find("thread::spawn")
-        .expect("persist_bg must leave the UI thread");
-    let save = bg
-        .find("write_persist_disk")
-        .expect("periodic persist must write on the worker");
+    let bg = fn_src(&src, "persist_bg");
     assert!(
-        spawn < save,
-        "periodic persist must write after spawn: {bg}"
+        bg.contains("submit_full") && bg.contains("persist_svc") && !bg.contains("thread::spawn"),
+        "persist_bg must leave the UI thread via PersistService: {bg}"
+    );
+    let svc = include_str!("persist_service.rs").replace("\r\n", "\n");
+    assert!(
+        svc.contains("thread::spawn") && svc.contains("write_persist_disk_in_order"),
+        "PersistService must own the one worker that writes threads.json: {svc}"
     );
     assert!(
         bg.contains("persist_idle_key") && bg.contains("return;"),
@@ -3809,12 +3799,10 @@ fn chat_side_effects_keep_the_origin_thread() {
         .nth(1)
         .and_then(|s| s.split("fn bind_project_id").next())
         .expect("flush_projects");
-    let flush_spawn = flush_p
-        .find("thread::spawn")
-        .expect("folder click must leave the UI thread");
-    let flush_save = flush_p.find("save_projects").expect("save_projects");
     assert!(
-        flush_spawn < flush_save && flush_p.contains("persist_io"),
+        flush_p.contains("submit_projects")
+            && flush_p.contains("persist_svc")
+            && !flush_p.contains("thread::spawn"),
         "folder click must not freeze the cabin writing projects.json: {flush_p}"
     );
     let drop_proj = src
@@ -5059,8 +5047,8 @@ fn chat_side_effects_keep_the_origin_thread() {
         "/sync must slurp SOUL/USER/MEMORY off the UI thread: {sync}"
     );
     assert!(
-        sync.contains("pin_scheduled_dir"),
-        "/sync worker must pin config_dir like other persist workers: {sync}"
+        sync.contains("submit_full") && sync.contains("persist_done"),
+        "/sync must schedule PersistService before egress: {sync}"
     );
     let thread_rows = sync
         .split("let threads = snap")
@@ -5072,7 +5060,7 @@ fn chat_side_effects_keep_the_origin_thread() {
         "/sync must not stamp every thread now or local stale data wins LWW: {thread_rows}"
     );
     assert!(
-        !sync.contains("t.messages.clone()") && sync.contains("write_persist_disk"),
+        !sync.contains("t.messages.clone()") && sync.contains("snap.clone()"),
         "/sync must reuse the persist snap instead of cloning every thread twice: {sync}"
     );
     let push = src
@@ -9295,7 +9283,7 @@ fn make_folder_saves_harbor_notes() {
     let mut cabin = Cabin::quiet_for_test();
     cabin.make_folder("Harbor notes");
     let saved = wait_file_has(&crate::store::projects_path(), "Harbor notes");
-    join_persist(&cabin.persist_io);
+    join_persist(&cabin.persist_svc);
     let folders: Vec<_> = cabin
         .projects
         .iter()
@@ -9330,7 +9318,7 @@ fn delete_all_history_clears_seeded_chats() {
     cabin.messages = cabin.threads[0].messages.clone();
     cabin.delete_all_history();
     wait_tree_contains(&cfg.root, "Chat");
-    join_persist(&cabin.persist_io);
+    join_persist(&cabin.persist_svc);
     let saved = std::fs::read_to_string(cfg.root.join("threads.json")).expect("threads.json");
     assert!(
         !saved.contains("Pier light") && !saved.contains("Salt lane"),
@@ -9373,7 +9361,7 @@ fn an_older_persist_snapshot_never_overwrites_a_newer_one() {
     assert_eq!((old_gen, new_gen), (1, 2));
     assert!(old.projects.is_some() && new.projects.is_none());
     assert!(new.secrets.is_none());
-    let mark = cabin.persist_mark.clone();
+    let mark = std::sync::Arc::new(std::sync::Mutex::new(PersistMark::default()));
     // The newer worker takes persist_io first, the older one second.
     write_persist_disk_in_order(&cfg.root, &new, new_gen, &mark);
     write_persist_disk_in_order(&cfg.root, &old, old_gen, &mark);
@@ -9389,6 +9377,39 @@ fn an_older_persist_snapshot_never_overwrites_a_newer_one() {
     assert!(!crate::store::projects_path().exists());
     let again = std::fs::read_to_string(cfg.root.join("threads.json")).expect("threads.json");
     assert_eq!(again, threads);
+    drop(cfg);
+}
+
+#[test]
+fn persist_service_queues_out_of_order_full_snaps() {
+    let _lock = crate::config::hold_test_config();
+    let cfg = IsolatedConfig::arm("persist-svc-order");
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.threads = vec![crate::threads::ChatThread::new("Pier light", false)];
+    cabin.thread_idx = 0;
+    cabin.messages = std::sync::Arc::new(Vec::new());
+    cabin.projects_dirty = true;
+    let mut old = cabin.persist_snap();
+    old.secrets = Some(cabin.secrets.clone());
+    let old_gen = cabin.next_persist_gen();
+    cabin.threads = vec![crate::threads::ChatThread::new("Chat", false)];
+    cabin.projects_dirty = false;
+    let new = cabin.persist_snap();
+    let new_gen = cabin.next_persist_gen();
+    assert_eq!((old_gen, new_gen), (1, 2));
+    // Newer gen first, then older — through the actor, not the free fn.
+    cabin
+        .persist_svc
+        .submit_full(cfg.root.clone(), new, new_gen, None);
+    cabin
+        .persist_svc
+        .submit_full(cfg.root.clone(), old, old_gen, None);
+    join_persist(&cabin.persist_svc);
+    let threads = std::fs::read_to_string(cfg.root.join("threads.json")).expect("threads.json");
+    assert!(threads.contains("\"title\": \"Chat\""), "{threads}");
+    assert!(!threads.contains("Pier light"), "{threads}");
+    assert!(crate::store::projects_path().is_file());
+    assert!(cfg.root.join("secrets.json").is_file());
     drop(cfg);
 }
 
@@ -15982,6 +16003,11 @@ fn finish_staged_folder_renames_it() {
 #[allow(clippy::too_many_lines)]
 fn quiet_cabin() -> Cabin {
     let cfg = AppConfig::default();
+    let persist_io = std::sync::Arc::new(std::sync::Mutex::new(()));
+    let persist_svc = PersistService::start(
+        persist_io.clone(),
+        std::sync::Arc::new(std::sync::Mutex::new(PersistMark::default())),
+    );
     Cabin {
         nav: super::Nav::Chat,
         cfg: cfg.clone(),
@@ -16007,11 +16033,11 @@ fn quiet_cabin() -> Cabin {
         last_persist: std::time::Instant::now(),
         persist_idle_key: String::new(),
         persist_rx: None,
-        persist_io: std::sync::Arc::new(std::sync::Mutex::new(())),
+        persist_io,
+        persist_svc,
         setup: super::setup_wizard::SetupWizard::default(),
         persist_gen: 0,
         persist_err: std::sync::Arc::new(std::sync::Mutex::new(None)),
-        persist_mark: std::sync::Arc::new(std::sync::Mutex::new(PersistMark::default())),
         cfg_slot: std::sync::Arc::new(std::sync::Mutex::new(super::CfgSlot { gen: 0, cfg })),
         board: Vec::new(),
         board_title: String::new(),
