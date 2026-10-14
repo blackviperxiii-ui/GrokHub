@@ -149,6 +149,10 @@ fn offer(gate: &Gate, cfg: Settings) -> Offer {
             volatile: Vec::new(),
         };
     }
+    // Self-manage stays on the stable list (same as legacy). Deferring them into
+    // the index left full schemas missing after load_tool_schema because find_def
+    // does not know those names.
+    stable.extend(crate::self_manage::native_schemas());
     stable.push(load_tool_schema_schema(index_lines(gate)));
     let session = current_session().unwrap_or_default();
     let loaded = loaded_names(&session);
@@ -207,14 +211,6 @@ fn index_lines(gate: &Gate) -> String {
             lines.push(format!("{} — {}", def.name, def.blurb));
         }
     }
-    for schema in crate::self_manage::native_schemas() {
-        let name = schema["name"].as_str().unwrap_or("?");
-        let blurb = schema["description"]
-            .as_str()
-            .unwrap_or("native self-manage tool");
-        let short = blurb.split('.').next().unwrap_or(blurb);
-        lines.push(format!("{} — {}", name, short.trim()));
-    }
     lines.join("\n")
 }
 
@@ -250,16 +246,12 @@ pub fn run_load_tool_schema(args: &Value) -> ToolOutput {
     if name.is_empty() {
         return ToolOutput::err("name is required");
     }
+    if crate::self_manage::self_tool(name).is_some() {
+        return ToolOutput::err(format!(
+            "`{name}` is always available with its full schema; load_tool_schema is only for deferred tools"
+        ));
+    }
     let Some(def) = find_def(name) else {
-        if crate::self_manage::self_tool(name).is_some() {
-            let schema = crate::self_manage::native_schemas()
-                .into_iter()
-                .find(|s| s["name"].as_str() == Some(name));
-            return match schema {
-                Some(schema) => finish_load(name, schema),
-                None => ToolOutput::err(format!("unknown tool `{name}`")),
-            };
-        }
         return ToolOutput::err(format!("unknown tool `{name}`"));
     };
     if !def.defer {
@@ -372,5 +364,32 @@ mod tests {
         let out = run_load_tool_schema(&json!({"name": "read_file"}));
         assert!(out.failed);
         assert!(out.text.contains("always available"));
+    }
+
+    #[test]
+    fn deferred_mode_keeps_self_manage_on_stable_list() {
+        let gate = chat(false, false);
+        begin_turn("conv-self-manage");
+        let stable = stable_schemas(&gate, ON);
+        assert!(
+            stable.iter().any(|t| t["name"] == "skill_list"),
+            "skill_list must stay on the stable list when deferred tools are on"
+        );
+        assert!(
+            stable.iter().any(|t| t["name"] == "automation_create"),
+            "automation_create must stay on the stable list when deferred tools are on"
+        );
+        let index = stable
+            .iter()
+            .find(|t| t["name"] == LOAD_TOOL_SCHEMA)
+            .and_then(|t| t["description"].as_str())
+            .unwrap_or("");
+        assert!(
+            !index.contains("skill_list —"),
+            "self-manage must not be deferred into the load_tool_schema index"
+        );
+        let out = run_load_tool_schema(&json!({"name": "skill_list"}));
+        assert!(out.failed, "{}", out.text);
+        assert!(out.text.contains("always available"), "{}", out.text);
     }
 }
