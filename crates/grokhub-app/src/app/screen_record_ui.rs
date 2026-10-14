@@ -4,9 +4,17 @@
 //! page, and a 2-minute cap. On stop a few keyframes and the note go to Grok
 //! once; the report lands in the chat that asked and on a feed card. Nothing
 //! on the computer is changed. Delete recording asks first.
+//!
+//! SD2: after a recording finishes, a **Save as skill** offer (same floating
+//! chrome as the Stop indicator) runs the watch-and-learn vision call, shows
+//! the draft with hard steps flagged, and saves only after the user confirms.
 
 use super::*;
+use grokhub_core::fix_plan::ApprovalNeed;
 use grokhub_core::screen_record as sr;
+use grokhub_core::watch_learn;
+use grokhub_core::SkillMd;
+use std::sync::Mutex;
 
 /// What the capture thread hands back.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -28,6 +36,119 @@ pub(super) struct LiveRecording {
 
 /// `(title, folder, chat, reply or error)` from the diagnosis thread.
 pub(super) type DiagDone = (String, PathBuf, String, Result<String, String>);
+
+/// Pure helper for tests and the vision-reply path: fixture model text → draft.
+pub(super) fn draft_from_reply(note: &str, raw: &str) -> Option<SkillMd> {
+    let steps = watch_learn::parse_steps(raw);
+    watch_learn::skill_draft(note, &steps)
+}
+
+/// A finished recording the user may turn into a skill.
+#[derive(Debug, Clone)]
+struct WatchOffer {
+    dir: PathBuf,
+    note: String,
+    secs: u64,
+    chat: String,
+    title: String,
+}
+
+#[derive(Debug)]
+enum WatchPhase {
+    /// Floating **Save as skill** after the recording card posts.
+    Offer(WatchOffer),
+    /// Vision call in flight.
+    Extracting {
+        offer: WatchOffer,
+        rx: mpsc::Receiver<Result<String, String>>,
+    },
+    /// Draft ready: Save / Cancel.
+    Draft {
+        offer: WatchOffer,
+        draft: SkillMd,
+        hard_lines: Vec<String>,
+    },
+    /// Vision returned nothing usable.
+    Empty(WatchOffer),
+}
+
+/// Cabin has no extra field for SD2 (mod.rs owned elsewhere); keep the offer
+/// here and drive it from `paint_record_indicator` / `poll_screen_diagnosis`,
+/// which mod.rs already calls every frame.
+static WATCH_LEARN: Mutex<Option<WatchPhase>> = Mutex::new(None);
+
+/// Tests that touch [`WATCH_LEARN`] hold this so parallel cargo-test threads
+/// (and any in-process callers) cannot clobber each other's phase.
+#[cfg(test)]
+static WATCH_LEARN_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+#[cfg(test)]
+fn watch_learn_test_guard() -> std::sync::MutexGuard<'static, ()> {
+    WATCH_LEARN_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+}
+
+fn watch_take() -> Option<WatchPhase> {
+    WATCH_LEARN.lock().unwrap_or_else(|p| p.into_inner()).take()
+}
+
+fn watch_set(phase: Option<WatchPhase>) {
+    *WATCH_LEARN.lock().unwrap_or_else(|p| p.into_inner()) = phase;
+}
+
+fn watch_with_mut<R>(f: impl FnOnce(&mut Option<WatchPhase>) -> R) -> R {
+    let mut g = WATCH_LEARN.lock().unwrap_or_else(|p| p.into_inner());
+    f(&mut g)
+}
+
+/// Drop any Save-as-skill chrome tied to a recording folder (e.g. after delete).
+fn clear_watch_learn_for_dir(dir: &Path) {
+    watch_with_mut(|slot| {
+        let same = match slot.as_ref() {
+            Some(
+                WatchPhase::Offer(o)
+                | WatchPhase::Extracting { offer: o, .. }
+                | WatchPhase::Draft { offer: o, .. }
+                | WatchPhase::Empty(o),
+            ) => o.dir == dir,
+            None => false,
+        };
+        if same {
+            *slot = None;
+        }
+    });
+}
+
+fn list_frame_paths(dir: &Path) -> Vec<PathBuf> {
+    let mut frames = Vec::new();
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return frames;
+    };
+    for e in rd.flatten() {
+        let p = e.path();
+        let name = p
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        if name.starts_with("frame-")
+            && (name.ends_with(".png") || name.ends_with(".jpg") || name.ends_with(".jpeg"))
+        {
+            frames.push(p);
+        }
+    }
+    frames.sort();
+    frames
+}
+
+fn hard_step_lines(draft: &SkillMd) -> Vec<String> {
+    watch_learn::parse_steps(&draft.instructions)
+        .into_iter()
+        .filter(|s| matches!(s.approval, ApprovalNeed::Hard(_)))
+        .map(|s| s.description)
+        .collect()
+}
 
 fn still_ext(mime: &str) -> &'static str {
     if mime.contains("jpeg") || mime.contains("jpg") {
@@ -206,6 +327,14 @@ impl Cabin {
             self.status = format!("Screen recording failed: {why}");
             return;
         }
+        // SD2: offer Save as skill once stills exist (vision needs a key on tap).
+        watch_set(Some(WatchPhase::Offer(WatchOffer {
+            dir: done.dir.clone(),
+            note: note.to_string(),
+            secs: done.secs,
+            chat: chat.to_string(),
+            title: title.clone(),
+        })));
         let picks = sr::sample_keyframes(done.frames.len(), sr::KEYFRAMES);
         let stills: Vec<String> = picks
             .iter()
@@ -233,14 +362,172 @@ impl Cabin {
     }
 
     pub(super) fn poll_screen_diagnosis(&mut self) {
-        let Some(rx) = self.screen_diag_rx.take() else {
+        if let Some(rx) = self.screen_diag_rx.take() {
+            match rx.try_recv() {
+                Ok((title, dir, chat, reply)) => self.post_screen_done(&title, &dir, &chat, reply),
+                Err(mpsc::TryRecvError::Empty) => self.screen_diag_rx = Some(rx),
+                Err(mpsc::TryRecvError::Disconnected) => {}
+            }
+        }
+        self.poll_watch_learn();
+    }
+
+    /// Advance the watch-and-learn vision thread, if one is running.
+    pub(super) fn poll_watch_learn(&mut self) {
+        let extracting =
+            watch_with_mut(|slot| matches!(slot.as_ref(), Some(WatchPhase::Extracting { .. })));
+        if !extracting {
+            return;
+        }
+        let Some(WatchPhase::Extracting { offer, rx }) = watch_take() else {
             return;
         };
         match rx.try_recv() {
-            Ok((title, dir, chat, reply)) => self.post_screen_done(&title, &dir, &chat, reply),
-            Err(mpsc::TryRecvError::Empty) => self.screen_diag_rx = Some(rx),
-            Err(mpsc::TryRecvError::Disconnected) => {}
+            Ok(Ok(raw)) => match draft_from_reply(&offer.note, &raw) {
+                Some(draft) => {
+                    let hard_lines = hard_step_lines(&draft);
+                    self.status = format!("Skill draft ready: {}", draft.name);
+                    watch_set(Some(WatchPhase::Draft {
+                        offer,
+                        draft,
+                        hard_lines,
+                    }));
+                }
+                None => {
+                    self.status = "No clear steps found".into();
+                    self.post_into_chat(
+                        &offer.chat,
+                        format!(
+                            "{}\n\nNo clear steps found in the recording. Nothing was saved.",
+                            offer.title
+                        ),
+                    );
+                    watch_set(Some(WatchPhase::Empty(offer)));
+                }
+            },
+            Ok(Err(why)) => {
+                self.status = format!("Could not read steps: {why}");
+                self.post_into_chat(
+                    &offer.chat,
+                    format!(
+                        "{}\n\nCould not turn this recording into a skill: {why}",
+                        offer.title
+                    ),
+                );
+                watch_set(Some(WatchPhase::Offer(offer)));
+            }
+            Err(mpsc::TryRecvError::Empty) => {
+                watch_set(Some(WatchPhase::Extracting { offer, rx }));
+            }
+            Err(mpsc::TryRecvError::Disconnected) => {
+                watch_set(Some(WatchPhase::Offer(offer)));
+            }
         }
+    }
+
+    /// Start the watch-and-learn vision call for the current offer.
+    pub(super) fn start_watch_learn_extract(&mut self) {
+        let Some(WatchPhase::Offer(offer)) = watch_take() else {
+            self.status = "No recording ready to save as a skill.".into();
+            return;
+        };
+        let key = self.bearer();
+        if key.trim().is_empty() {
+            self.status = "Connect Grok in Settings to save a skill from a recording.".into();
+            watch_set(Some(WatchPhase::Offer(offer)));
+            return;
+        }
+        let frames = list_frame_paths(&offer.dir);
+        if frames.is_empty() {
+            self.status = "No stills left in that recording folder.".into();
+            watch_set(Some(WatchPhase::Offer(offer)));
+            return;
+        }
+        let picks = sr::sample_keyframes(frames.len(), sr::KEYFRAMES);
+        let stills: Vec<String> = picks
+            .iter()
+            .filter_map(|&i| crate::desktop::load_image_data_url(&frames[i]).ok())
+            .collect();
+        if stills.is_empty() {
+            self.status = "The stills could not be read back.".into();
+            watch_set(Some(WatchPhase::Offer(offer)));
+            return;
+        }
+        let messages = watch_learn::steps_messages(&offer.note, offer.secs, stills.len());
+        let model = model_for_mode("fast").to_string();
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let reply = crate::xai::grok_chat_images(&key, &model, &messages, &stills);
+            let _ = tx.send(reply);
+        });
+        self.status = format!(
+            "{} · reading steps from {} stills…",
+            offer.title,
+            picks.len()
+        );
+        watch_set(Some(WatchPhase::Extracting { offer, rx }));
+    }
+
+    /// User confirmed Save on the draft.
+    pub(super) fn confirm_watch_learn_save(&mut self) {
+        let Some(WatchPhase::Draft {
+            offer,
+            draft,
+            hard_lines: _,
+        }) = watch_take()
+        else {
+            return;
+        };
+        let skills = skills::skills_dir();
+        match super::skill_undo::save_watched_skill_for_undo(&config::config_dir(), &skills, &draft)
+        {
+            Ok(path) => {
+                self.remember_skill(draft.clone());
+                let hard_note = if draft.pitfalls.contains("asks for approval") {
+                    " Hard steps will ask again on every replay."
+                } else {
+                    ""
+                };
+                let line = format!(
+                    "Saved skill {} at {}. Undo from /skills changes removes it.{}",
+                    draft.name,
+                    path.display(),
+                    hard_note
+                );
+                self.post_into_chat(&offer.chat, line.clone());
+                self.status = format!("Saved skill {}", draft.name);
+                watch_set(None);
+            }
+            Err(e) => {
+                self.status = format!("Could not save skill: {e}");
+                self.post_into_chat(&offer.chat, format!("Could not save skill: {e}"));
+                let hard_lines = hard_step_lines(&draft);
+                watch_set(Some(WatchPhase::Draft {
+                    offer,
+                    draft,
+                    hard_lines,
+                }));
+            }
+        }
+    }
+
+    pub(super) fn cancel_watch_learn(&mut self) {
+        if let Some(phase) = watch_take() {
+            let chat = match &phase {
+                WatchPhase::Offer(o)
+                | WatchPhase::Extracting { offer: o, .. }
+                | WatchPhase::Draft { offer: o, .. }
+                | WatchPhase::Empty(o) => o.chat.clone(),
+            };
+            if matches!(phase, WatchPhase::Draft { .. }) {
+                self.post_into_chat(
+                    &chat,
+                    "Skill draft discarded. The recording is still local.".into(),
+                );
+            }
+            self.status = "Skill draft cancelled.".into();
+        }
+        watch_set(None);
     }
 
     /// The report in its chat and one feed card naming the recording.
@@ -320,6 +607,8 @@ impl Cabin {
             );
             return;
         }
+        // Drop Save-as-skill chrome for this folder before (or even if) remove fails.
+        clear_watch_learn_for_dir(&dir);
         match std::fs::remove_dir_all(&dir) {
             Ok(()) => {
                 if grokhub_core::dismiss_update_at(&mut self.updates, card_id, now_ms()) {
@@ -332,31 +621,157 @@ impl Cabin {
     }
 
     /// Red indicator with the clock and Stop, above every page while recording,
-    /// under the title bar so the window buttons stay reachable.
+    /// under the title bar so the window buttons stay reachable. When idle,
+    /// paints the SD2 Save as skill / draft chrome for the latest recording.
     pub(super) fn paint_record_indicator(&mut self, ctx: &egui::Context) {
-        let Some(live) = self.screen_rec.as_ref() else {
+        if let Some(live) = self.screen_rec.as_ref() {
+            let line = sr::indicator_line(live.started.elapsed().as_secs().min(sr::MAX_SECS));
+            let mut stop = false;
+            egui::Area::new(egui::Id::new("screen-record-indicator"))
+                .order(egui::Order::Foreground)
+                .anchor(egui::Align2::RIGHT_TOP, [-16.0, 52.0])
+                .show(ctx, |ui| {
+                    egui::Frame::NONE
+                        .fill(crate::theme::elevated())
+                        .corner_radius(crate::theme::CHROME_RADIUS)
+                        .stroke(egui::Stroke::new(2.0_f32, crate::theme::offline()))
+                        .inner_margin(egui::Margin::same(8))
+                        .show(ui, |ui| {
+                            ui.horizontal(|ui| {
+                                ui.label(RichText::new(&line).size(13.0).color(crate::theme::fg()));
+                                stop = crate::cards::danger_pill(ui, "Stop");
+                            });
+                        });
+                });
+            if stop {
+                self.stop_screen_recording();
+            }
+            return;
+        }
+        self.paint_watch_learn_chrome(ctx);
+    }
+
+    fn paint_watch_learn_chrome(&mut self, ctx: &egui::Context) {
+        let kind = watch_with_mut(|slot| {
+            slot.as_ref().map(|p| match p {
+                WatchPhase::Offer(_) => 0u8,
+                WatchPhase::Extracting { .. } => 1,
+                WatchPhase::Draft { .. } => 2,
+                WatchPhase::Empty(_) => 3,
+            })
+        });
+        let Some(kind) = kind else {
             return;
         };
-        let line = sr::indicator_line(live.started.elapsed().as_secs().min(sr::MAX_SECS));
-        let mut stop = false;
-        egui::Area::new(egui::Id::new("screen-record-indicator"))
+        let mut save_as = false;
+        let mut save_draft = false;
+        let mut cancel = false;
+        let mut dismiss = false;
+        let (title, body, hard): (String, String, Vec<String>) =
+            watch_with_mut(|slot| match slot.as_ref() {
+                Some(WatchPhase::Offer(o)) => (
+                    o.title.clone(),
+                    "Save the steps you showed as a skill?".into(),
+                    Vec::new(),
+                ),
+                Some(WatchPhase::Extracting { offer, .. }) => (
+                    offer.title.clone(),
+                    "Reading steps from the stills…".into(),
+                    Vec::new(),
+                ),
+                Some(WatchPhase::Draft {
+                    offer,
+                    draft,
+                    hard_lines,
+                }) => (
+                    format!("Skill draft: {}", draft.name),
+                    {
+                        let mut lines = vec![offer.title.clone(), String::new()];
+                        for (i, line) in draft.instructions.lines().enumerate() {
+                            let bare = line.trim();
+                            if bare.is_empty() {
+                                continue;
+                            }
+                            let flagged = hard_lines.iter().any(|h| bare.contains(h.as_str()));
+                            if flagged {
+                                lines.push(format!("{bare}  (asks for approval)"));
+                            } else {
+                                lines.push(bare.to_string());
+                            }
+                            if i > 14 {
+                                lines.push("…".into());
+                                break;
+                            }
+                        }
+                        lines.join("\n")
+                    },
+                    hard_lines.clone(),
+                ),
+                Some(WatchPhase::Empty(o)) => {
+                    (o.title.clone(), "No clear steps found".into(), Vec::new())
+                }
+                None => (String::new(), String::new(), Vec::new()),
+            });
+        let _ = hard;
+        egui::Area::new(egui::Id::new("watch-learn-chrome"))
             .order(egui::Order::Foreground)
             .anchor(egui::Align2::RIGHT_TOP, [-16.0, 52.0])
             .show(ctx, |ui| {
                 egui::Frame::NONE
                     .fill(crate::theme::elevated())
                     .corner_radius(crate::theme::CHROME_RADIUS)
-                    .stroke(egui::Stroke::new(2.0_f32, crate::theme::offline()))
-                    .inner_margin(egui::Margin::same(8))
+                    .stroke(egui::Stroke::new(1.0_f32, crate::theme::border()))
+                    .inner_margin(egui::Margin::same(10))
                     .show(ui, |ui| {
+                        ui.set_max_width(360.0);
+                        ui.label(RichText::new(&title).size(13.0).color(crate::theme::fg()));
+                        ui.add_space(4.0);
+                        ui.label(RichText::new(&body).size(12.0).color(crate::theme::muted()));
+                        ui.add_space(6.0);
                         ui.horizontal(|ui| {
-                            ui.label(RichText::new(&line).size(13.0).color(crate::theme::fg()));
-                            stop = crate::cards::danger_pill(ui, "Stop");
+                            ui.spacing_mut().item_spacing.x = 8.0;
+                            match kind {
+                                0 => {
+                                    if super::change_undo::click_pill(ui, "Save as skill") {
+                                        save_as = true;
+                                    }
+                                    if super::change_undo::click_pill(ui, "Dismiss") {
+                                        dismiss = true;
+                                    }
+                                }
+                                1 => {
+                                    ui.label(
+                                        RichText::new("Working…")
+                                            .size(12.0)
+                                            .color(crate::theme::muted()),
+                                    );
+                                    if super::change_undo::click_pill(ui, "Cancel") {
+                                        cancel = true;
+                                    }
+                                }
+                                2 => {
+                                    if super::change_undo::click_pill(ui, "Save") {
+                                        save_draft = true;
+                                    }
+                                    if super::change_undo::click_pill(ui, "Cancel") {
+                                        cancel = true;
+                                    }
+                                }
+                                _ => {
+                                    if super::change_undo::click_pill(ui, "Dismiss") {
+                                        dismiss = true;
+                                    }
+                                }
+                            }
                         });
                     });
             });
-        if stop {
-            self.stop_screen_recording();
+        if save_as {
+            self.start_watch_learn_extract();
+        } else if save_draft {
+            self.confirm_watch_learn_save();
+        } else if cancel || dismiss {
+            self.cancel_watch_learn();
         }
     }
 }
@@ -619,5 +1034,118 @@ mod tests {
         assert_eq!(report_summary(&r), "Firefox freezes.");
         r.seen.clear();
         assert_eq!(report_summary(&r), "Nothing stood out in the stills.");
+    }
+
+    const OPEN_SETTINGS_REPLY: &str = r#"
+**Steps:**
+
+1. Open Settings
+2) Click Display in the sidebar
+- Choose the built-in display
+3. Confirm the resolution looks right
+"#;
+
+    #[test]
+    fn draft_from_reply_builds_expected_draft_and_garbage_is_none() {
+        let _wl = watch_learn_test_guard();
+        let draft = draft_from_reply("open Settings → Display", OPEN_SETTINGS_REPLY)
+            .expect("fixture reply");
+        assert_eq!(draft.name, "open-settings-display");
+        assert_eq!(draft.runs, 0);
+        assert!(draft.instructions.contains("1. Open Settings"));
+        assert!(draft
+            .instructions
+            .contains("2. Click Display in the sidebar"));
+        assert!(draft
+            .instructions
+            .contains("3. Choose the built-in display"));
+        assert!(draft
+            .instructions
+            .contains("4. Confirm the resolution looks right"));
+        assert!(draft_from_reply("open Settings → Display", "asdf no list markers").is_none());
+        assert!(draft_from_reply("open Settings → Display", "").is_none());
+        assert!(draft_from_reply("open Settings → Display", "**Summary:**\nNope.\n").is_none());
+    }
+
+    #[test]
+    fn finish_recording_arms_save_as_skill_offer_without_calling_vision() {
+        let _wl = watch_learn_test_guard();
+        watch_set(None);
+        let (_g, root, home) = pinned("screenrec-watch-offer");
+        let mut cabin = Cabin::quiet_for_test();
+        let dir = sr::recording_dir(&root, "2026-10-14-learn");
+        std::fs::create_dir_all(&dir).unwrap();
+        let frames: Vec<PathBuf> = (0..3).map(|i| dir.join(sr::frame_name(i, "png"))).collect();
+        frames.iter().for_each(|f| png(f));
+        let done = RecordDone {
+            secs: 18,
+            frames,
+            dir: dir.clone(),
+            err: None,
+        };
+        cabin.finish_screen_recording(done, "open Settings → Display", "", String::new());
+        assert!(
+            cabin.screen_diag_rx.is_none(),
+            "no diagnosis call without a key"
+        );
+        let armed = watch_with_mut(|s| {
+            matches!(
+                s.as_ref(),
+                Some(WatchPhase::Offer(o)) if o.dir == dir && o.note == "open Settings → Display"
+            )
+        });
+        assert!(armed, "Save as skill offer armed after recording");
+        // Confirming a fixture reply (no network) saves via the undo path.
+        let draft = draft_from_reply("open Settings → Display", OPEN_SETTINGS_REPLY).unwrap();
+        watch_set(Some(WatchPhase::Draft {
+            offer: WatchOffer {
+                dir: dir.clone(),
+                note: "open Settings → Display".into(),
+                secs: 18,
+                chat: String::new(),
+                title: sr::recording_title(18, "open Settings → Display"),
+            },
+            hard_lines: hard_step_lines(&draft),
+            draft,
+        }));
+        cabin.confirm_watch_learn_save();
+        assert!(skills::skills_dir()
+            .join("open-settings-display")
+            .join("SKILL.md")
+            .is_file());
+        assert!(
+            cabin
+                .skill_list
+                .iter()
+                .any(|s| s.name == "open-settings-display"),
+            "saved skill is remembered in the cabin list"
+        );
+        watch_set(None);
+        unpin(home);
+    }
+
+    #[test]
+    fn delete_recording_clears_save_as_skill_offer() {
+        let _wl = watch_learn_test_guard();
+        watch_set(None);
+        let (_g, root, home) = pinned("screenrec-watch-delete");
+        let mut cabin = Cabin::quiet_for_test();
+        let dir = sr::recording_dir(&root, "2026-10-14-delete");
+        std::fs::create_dir_all(&dir).unwrap();
+        png(&dir.join(sr::frame_name(0, "png")));
+        watch_set(Some(WatchPhase::Offer(WatchOffer {
+            dir: dir.clone(),
+            note: "open Settings".into(),
+            secs: 6,
+            chat: String::new(),
+            title: sr::recording_title(6, "open Settings"),
+        })));
+        cabin.delete_recording("card-x", &dir.display().to_string(), "Screen recording");
+        assert!(!dir.exists());
+        assert!(
+            watch_with_mut(|s| s.is_none()),
+            "deleting the recording must clear the Save as skill offer"
+        );
+        unpin(home);
     }
 }

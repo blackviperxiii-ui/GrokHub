@@ -320,6 +320,31 @@ pub(super) fn newest_skill_changes_row(views: &[grokhub_core::ChatView]) -> Opti
     })
 }
 
+/// Persist a watch-and-learn skill and log it on the ChangeLedger so
+/// `/skills undo <name>` (or the Undo row) removes the user's just-saved
+/// skill. Other deletes still go through the delete approval path.
+pub(super) fn save_watched_skill_for_undo(
+    config_dir: &std::path::Path,
+    skills_dir: &std::path::Path,
+    skill: &grokhub_core::SkillMd,
+) -> Result<std::path::PathBuf, String> {
+    let mut saved = None;
+    hx::record_skill_change(
+        config_dir,
+        skills_dir,
+        &skill.name,
+        Origin::User,
+        "saved from screen recording (watch and learn)",
+        || {
+            let path = grokhub_core::skill::save_watched_skill(skills_dir, skill)
+                .map_err(|e| e.to_string())?;
+            saved = Some(path);
+            Ok(())
+        },
+    )?;
+    saved.ok_or_else(|| "skill write produced no path".into())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -536,5 +561,83 @@ mod tests {
             egui::Shape::Vec(v) => v.iter().for_each(|c| collect_text(c, out)),
             _ => {}
         }
+    }
+
+    fn watched_skill(name: &str) -> grokhub_core::SkillMd {
+        grokhub_core::SkillMd {
+            name: name.into(),
+            description: format!("Replay the watched steps for {name}"),
+            slash: format!("/{name}"),
+            trigger: name.replace('-', " "),
+            instructions:
+                "1. Open Settings\n2. Delete the old profile folder\n3. Confirm it is gone".into(),
+            pitfalls: "Step 2 asks for approval on replay (delete).".into(),
+            verify: "After the last step: Confirm it is gone".into(),
+            runs: 0,
+        }
+    }
+
+    #[test]
+    fn watched_skill_save_registers_undo_and_undo_removes_the_dir() {
+        let root = crate::config::test_config_root("watched-skill-undo");
+        let _ = std::fs::remove_dir_all(&root);
+        let skills = root.join("skills");
+        std::fs::create_dir_all(&skills).unwrap();
+        let skill = watched_skill("open-settings-display");
+        let path = save_watched_skill_for_undo(&root, &skills, &skill).expect("save");
+        assert!(path.is_file());
+        assert_eq!(hx::ChangeLedger::load(&root).all()[0].op, ChangeOp::Create);
+        assert_eq!(hx::ChangeLedger::load(&root).all()[0].origin, Origin::User);
+
+        let done =
+            hx::undo_skill_change(&root, &skills, &skill.name, hx::UndoAsk::from_click()).unwrap();
+        assert_eq!(done.change.op, ChangeOp::Undo);
+        assert!(done.now.is_none(), "create undo removes the skill");
+        assert!(
+            !skills.join("open-settings-display").exists(),
+            "undo deletes the user's just-saved skill dir"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn watched_skill_delete_step_parks_hard_and_always_cannot_skip() {
+        // Saved skill keeps delete wording classified hard (SC1); harness
+        // replay of a delete action parks Delete and Always cannot skip
+        // (saved approvals are never reused).
+        let skill = watched_skill("clean-old-profile");
+        let root = crate::config::test_config_root("watched-skill-replay");
+        let _ = std::fs::remove_dir_all(&root);
+        let skills = root.join("skills");
+        std::fs::create_dir_all(&skills).unwrap();
+        let path = save_watched_skill_for_undo(&root, &skills, &skill).unwrap();
+        let raw = std::fs::read_to_string(&path).unwrap();
+        let round = grokhub_core::parse_skill_md(&raw);
+        assert_eq!(round.runs, 0);
+        assert!(round.instructions.contains("Delete the old profile"));
+        assert!(round.pitfalls.contains("delete"));
+        let need =
+            grokhub_core::fix_plan::classify_step("Delete the old profile folder", None, None);
+        assert_eq!(
+            need,
+            grokhub_core::fix_plan::ApprovalNeed::Hard(
+                grokhub_core::fix_plan::HardApproval::Delete
+            )
+        );
+        let gate = hx::decide(hx::Step::Ask {
+            title: "bash",
+            action: "rm -rf ~/old-profile",
+        });
+        assert_eq!(
+            gate,
+            hx::GateOutcome::Park {
+                reason: "hard-class delete: Delete — Always cannot skip".into(),
+                hard: Some(hx::HardClass::Delete),
+                needs_jeremy: true,
+            }
+        );
+        let soft = grokhub_core::fix_plan::classify_step("Open Settings", None, None);
+        assert_eq!(soft, grokhub_core::fix_plan::ApprovalNeed::None);
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

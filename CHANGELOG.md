@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Agent: background and unattended callers bind a per-job `ToolSet` (`schemas_for_job` / `dispatch_for_job`) and log schema size at job start (SP2).
+- Watch-and-learn (SD2): after a screen recording, **Save as skill** runs the vision step extractor, shows the draft (hard steps flagged), and saves only on confirm; undo removes it; replay still re-asks hard approvals.
 - Generative UI (G4): `show_panel` tool results with a `{"panel": …}` marker upsert into the chat `PanelStore` and paint inline under the turn (off by default via `generative_ui.toml`); panel buttons queue a `[panel action]` follow-up through the normal approval path.
 - Agent: per-job `ToolSet` allowlists (`schemas_for_job` / `dispatch_for_job` / `tool_set_from_job`) so background and unattended jobs can send a lean tool schema list; deferred mode keeps self-manage schemas on the stable list.
 - Watch-and-learn (SD1): pure core step extractor turns a screen-recording vision reply into ordered, classified steps and an unsaved skill draft (no network, save, or UI — SD2).
