@@ -1187,6 +1187,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "egui-notify"
+version = "0.23.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0d9a4fdd9da87f468f8adce88cf35d40b6097467f7bd3f5798d8550479dd22fa"
+dependencies = [
+ "egui",
+]
+
+[[package]]
 name = "egui-wgpu"
 version = "0.36.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2024,6 +2033,7 @@ dependencies = [
  "ashpd",
  "clipboard-win",
  "eframe",
+ "egui-notify",
  "evdev",
  "global-hotkey",
  "grokhub-agent",
