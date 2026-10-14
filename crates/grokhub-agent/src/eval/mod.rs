@@ -28,6 +28,9 @@ mod scan;
 pub mod ab;
 pub mod metrics;
 
+pub use ab::{load_tasks, run_technique_matrix, Technique, TechniqueMatrixReport};
+pub use metrics::Recommendation;
+
 pub const SUITE_ITEMS: [&str; 9] = [
     "xvfb-desktop",
     "repo-bugfix",
@@ -193,6 +196,147 @@ pub fn run_suite(opts: &Opts) -> Vec<ItemResult> {
         let _ = std::fs::remove_dir_all(dir);
     }
     items
+}
+
+/// Render the R6 technique matrix as deterministic markdown (no wall times).
+pub fn render_markdown(report: &TechniqueMatrixReport) -> String {
+    use std::fmt::Write as _;
+    let mut out = String::new();
+    let _ = writeln!(
+        out,
+        "# R6 technique A/B eval\n\nModel: {} (fixed; offline scripted replay)\n",
+        report.model
+    );
+    out.push_str("## Method\n\n");
+    out.push_str(
+        "A = all cost techniques off. Each B arm enables exactly one technique via a temp \
+config dir (`prefix_cache.toml`, `tool_output_compact.toml`, `deferred_tools.toml`, \
+`batched_tools.toml`), then an all-on arm. Same 20 fixture tasks and scripted model \
+replies as R1. No network, no paid runs. Cost uses the offline tick model in \
+`metrics::offline_cost_ticks` (1 tick / billable input + 4 / output + 4 / reasoning). \
+Wall time is omitted so the report is byte-stable.\n\n",
+    );
+    out.push_str(
+        "Recommendation rule: **adopt** only if cost per solved task falls and success \
+delta is within ±1 task (noise); **reject** if success leaves noise or cost rises; \
+otherwise **spike** (success within noise, cost flat — needs richer/live measurement \
+before flipping any default).\n\n",
+    );
+    out.push_str("## Arms\n\n");
+    out.push_str(
+        "| Arm | Success | Cost/task | Cost/solved | Cache hit | In tokens | Out tokens | Δ success | Δ cost/solved | Noise | Rec |\n",
+    );
+    out.push_str("|---|---|---|---|---|---|---|---|---|---|---|\n");
+    let baseline = report
+        .arms
+        .iter()
+        .find(|arm| arm.technique == Technique::Baseline)
+        .map(|arm| &arm.metrics);
+    for arm in &report.arms {
+        let m = &arm.metrics;
+        let cps = format_cost(m.cost_per_solved_task());
+        let cpt = format_cost(m.cost_per_task());
+        let rec = if arm.technique == Technique::Baseline {
+            "—"
+        } else {
+            arm.recommendation.as_str()
+        };
+        let noise = if arm.technique == Technique::Baseline {
+            "—"
+        } else if arm.success_within_noise {
+            "yes"
+        } else {
+            "no"
+        };
+        let d_success = if arm.technique == Technique::Baseline {
+            "—".into()
+        } else {
+            format!("{:+.2}%", arm.delta.success_rate * 100.0)
+        };
+        let d_cps = if arm.technique == Technique::Baseline {
+            "—".into()
+        } else {
+            format_cost_delta(arm.delta.cost_per_solved_task)
+        };
+        let _ = writeln!(
+            out,
+            "| {} | {:.2}% ({}/{}) | {} | {} | {:.2}% | {} | {} | {} | {} | {} | {} |",
+            arm.technique.label(),
+            m.success_rate() * 100.0,
+            m.successes,
+            m.tasks,
+            cpt,
+            cps,
+            m.cache_hit_rate() * 100.0,
+            m.input_tokens,
+            m.output_tokens,
+            d_success,
+            d_cps,
+            noise,
+            rec
+        );
+    }
+    out.push_str("\n## Per-technique notes\n\n");
+    for arm in &report.arms {
+        if arm.technique == Technique::Baseline {
+            if let Some(base) = baseline {
+                let _ = writeln!(
+                    out,
+                    "- **{}**: R1 baseline — {}/{} success, {} input / {} output tokens, \
+cost/solved {} (offline ticks).",
+                    arm.technique.label(),
+                    base.successes,
+                    base.tasks,
+                    base.input_tokens,
+                    base.output_tokens,
+                    format_cost(base.cost_per_solved_task())
+                );
+            }
+            continue;
+        }
+        let _ = writeln!(
+            out,
+            "- **{}**: recommendation **{}** (success within noise: {}; Δ cost/solved {}).",
+            arm.technique.label(),
+            arm.recommendation.as_str(),
+            if arm.success_within_noise {
+                "yes"
+            } else {
+                "no"
+            },
+            format_cost_delta(arm.delta.cost_per_solved_task)
+        );
+    }
+    out.push_str("\n## Verdict\n\n");
+    out.push_str(
+        "Scripted offline replay does not yet attribute cache hits or token savings to \
+technique toggles (fixtures carry fixed usage). Every B arm therefore shows flat cost \
+with success within noise → **spike** each technique pending instrumented measurement; \
+do not flip defaults on without Viper's yes.\n",
+    );
+    out
+}
+
+fn format_cost(v: f64) -> String {
+    if !v.is_finite() {
+        "inf".into()
+    } else if (v - v.round()).abs() < 1e-9 {
+        format!("{}", v.round() as i64)
+    } else {
+        format!("{v:.2}")
+    }
+}
+
+fn format_cost_delta(v: f64) -> String {
+    if !v.is_finite() {
+        "inf".into()
+    } else if v.abs() < 1e-12 {
+        "0".into()
+    } else if (v - v.round()).abs() < 1e-9 {
+        format!("{:+}", v.round() as i64)
+    } else {
+        format!("{v:+.2}")
+    }
 }
 
 pub fn render_report(items: &[ItemResult]) -> String {

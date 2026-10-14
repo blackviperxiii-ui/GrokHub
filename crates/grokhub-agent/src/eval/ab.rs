@@ -13,7 +13,12 @@ use crate::gate::PermMode;
 use crate::prompt::{system_prompt_with, PromptNeed, PromptProfile};
 use crate::{run_unattended, AuthKind, CancelToken, HaltCheck, ModelClient, UnattendedRun, Usage};
 
-use super::metrics::{format_report, gate, AbComparison, AbGateFailure, ArmMetrics};
+use super::metrics::{
+    format_report, gate, offline_cost_ticks, recommend, success_within_noise, AbComparison,
+    AbGateFailure, ArmMetrics, Recommendation, TechniqueDelta,
+};
+use crate::compact::TOOL_OUTPUT_COMPACT_CONFIG;
+use crate::perm::ConfigGuard;
 
 pub const EVAL_TASKS_DIR: &str = "tests/fixtures/eval_tasks";
 pub const DEFAULT_MODEL: &str = "grok-4.7";
@@ -66,6 +71,11 @@ pub struct StepUsage {
     pub output_tokens: u64,
     #[serde(default)]
     pub reasoning_tokens: u64,
+    #[serde(default)]
+    pub cached_tokens: u64,
+    /// When set (including 0), used as-is; when absent, offline cost is derived.
+    #[serde(default)]
+    pub cost_in_usd_ticks: Option<i64>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -82,6 +92,79 @@ pub enum TaskCheck {
 pub enum ArmKind {
     Control,
     Variant,
+}
+
+/// R6 technique matrix arms. A = [`Technique::Baseline`] (all settings off).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Technique {
+    Baseline,
+    PrefixCache,
+    ToolOutputSummaries,
+    DeferredTools,
+    BatchedReadOnly,
+    AllOn,
+}
+
+impl Technique {
+    pub const ALL: [Technique; 6] = [
+        Technique::Baseline,
+        Technique::PrefixCache,
+        Technique::ToolOutputSummaries,
+        Technique::DeferredTools,
+        Technique::BatchedReadOnly,
+        Technique::AllOn,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Technique::Baseline => "baseline (all off)",
+            Technique::PrefixCache => "R2 prefix cache",
+            Technique::ToolOutputSummaries => "R3 tool-output summaries",
+            Technique::DeferredTools => "R4 deferred tools",
+            Technique::BatchedReadOnly => "R5 batched read-only",
+            Technique::AllOn => "all on",
+        }
+    }
+
+    pub fn id(self) -> &'static str {
+        match self {
+            Technique::Baseline => "baseline",
+            Technique::PrefixCache => "prefix_cache",
+            Technique::ToolOutputSummaries => "tool_output_summaries",
+            Technique::DeferredTools => "deferred_tools",
+            Technique::BatchedReadOnly => "batched_readonly",
+            Technique::AllOn => "all_on",
+        }
+    }
+}
+
+/// Write technique toggles into a temp config dir (never the user's config).
+/// Exactly one B-arm setting (or all / none) — files always rewritten so leftover
+/// state from a prior arm cannot leak.
+pub fn arm_settings(technique: Technique, config_dir: &Path) -> Result<(), String> {
+    std::fs::create_dir_all(config_dir).map_err(|err| err.to_string())?;
+    let (prefix, summaries, deferred, batched) = match technique {
+        Technique::Baseline => (false, false, false, false),
+        Technique::PrefixCache => (true, false, false, false),
+        Technique::ToolOutputSummaries => (false, true, false, false),
+        Technique::DeferredTools => (false, false, true, false),
+        Technique::BatchedReadOnly => (false, false, false, true),
+        Technique::AllOn => (true, true, true, true),
+    };
+    write_enabled(config_dir, "prefix_cache.toml", prefix)?;
+    write_enabled(config_dir, TOOL_OUTPUT_COMPACT_CONFIG, summaries)?;
+    write_enabled(config_dir, "deferred_tools.toml", deferred)?;
+    write_enabled(config_dir, "batched_tools.toml", batched)?;
+    Ok(())
+}
+
+fn write_enabled(config_dir: &Path, name: &str, on: bool) -> Result<(), String> {
+    let body = if on {
+        "enabled = true\n"
+    } else {
+        "enabled = false\n"
+    };
+    std::fs::write(config_dir.join(name), body).map_err(|err| err.to_string())
 }
 
 /// How the variant arm builds its system prompt (control uses [`BaselineSystem`]).
@@ -119,6 +202,8 @@ pub struct TaskRun {
     pub output_tokens: u64,
     pub reasoning_tokens: u64,
     pub tool_calls: u64,
+    pub cached_tokens: u64,
+    pub cost_ticks: i64,
 }
 
 #[derive(Debug, Clone)]
@@ -132,6 +217,24 @@ impl AbReport {
     pub fn gate(&self) -> Result<(), AbGateFailure> {
         gate(&self.comparison)
     }
+}
+
+/// One arm of the R6 technique matrix.
+#[derive(Debug, Clone)]
+pub struct TechniqueArm {
+    pub technique: Technique,
+    pub metrics: ArmMetrics,
+    pub tasks: Vec<TaskRun>,
+    pub delta: TechniqueDelta,
+    pub success_within_noise: bool,
+    pub recommendation: Recommendation,
+}
+
+/// Full R6 matrix: baseline A plus each B technique arm.
+#[derive(Debug, Clone)]
+pub struct TechniqueMatrixReport {
+    pub model: String,
+    pub arms: Vec<TechniqueArm>,
 }
 
 /// Load every `*.json` task under [`fixtures_dir`].
@@ -176,13 +279,15 @@ pub fn run_ab(model: &str, variant: &dyn VariantSystem) -> Result<AbReport, Stri
             (ArmKind::Variant, &mut variant_metrics),
         ] {
             let run = run_one_task(model, task, arm, variant)?;
-            metrics.record_task(
+            metrics.record_task_full(
                 run.success,
                 run.wall_ms,
                 run.input_tokens,
                 run.output_tokens,
                 run.reasoning_tokens,
                 run.tool_calls,
+                run.cached_tokens,
+                run.cost_ticks,
             );
             runs.push(run);
         }
@@ -198,6 +303,90 @@ pub fn run_ab(model: &str, variant: &dyn VariantSystem) -> Result<AbReport, Stri
         tasks: runs,
         report_markdown,
     })
+}
+
+/// Offline fixed-model technique matrix: A = all settings off; each B arm toggles
+/// exactly one technique (plus an all-on arm) via [`arm_settings`] in a temp config.
+pub fn run_technique_matrix(
+    model: &str,
+    fixtures: &[TaskFixture],
+) -> Result<TechniqueMatrixReport, String> {
+    let _class = crate::route::live::ClassScope::enter(AB_EVAL_CLASS);
+    let mut arms = Vec::with_capacity(Technique::ALL.len());
+    let mut baseline_metrics = None;
+    for technique in Technique::ALL {
+        let arm = run_technique_arm(model, fixtures, technique)?;
+        if technique == Technique::Baseline {
+            baseline_metrics = Some(arm.metrics.clone());
+        }
+        let baseline = baseline_metrics
+            .as_ref()
+            .expect("baseline is first in Technique::ALL");
+        let delta = TechniqueDelta::between(baseline, &arm.metrics);
+        let success_within_noise = success_within_noise(baseline, &arm.metrics);
+        let recommendation = if technique == Technique::Baseline {
+            Recommendation::Spike
+        } else {
+            recommend(baseline, &arm.metrics)
+        };
+        arms.push(TechniqueArm {
+            technique,
+            metrics: arm.metrics,
+            tasks: arm.tasks,
+            delta,
+            success_within_noise,
+            recommendation,
+        });
+    }
+    Ok(TechniqueMatrixReport {
+        model: model.to_string(),
+        arms,
+    })
+}
+
+struct TechniqueArmRaw {
+    metrics: ArmMetrics,
+    tasks: Vec<TaskRun>,
+}
+
+fn run_technique_arm(
+    model: &str,
+    fixtures: &[TaskFixture],
+    technique: Technique,
+) -> Result<TechniqueArmRaw, String> {
+    let cfg = scratch(&format!("tech-{}", technique.id()))?;
+    arm_settings(technique, &cfg)?;
+    let _guard = ConfigGuard::set(&cfg);
+    // Clear test overrides so on-disk arm_settings win.
+    #[cfg(test)]
+    crate::prefix_cache::set_enabled_for_tests(None);
+    crate::compact::set_tool_output_compact_for_tests(None);
+    let mut metrics = ArmMetrics::default();
+    let mut tasks = Vec::with_capacity(fixtures.len());
+    for task in fixtures {
+        let run = run_one_task(model, task, ArmKind::Control, &BaselineSystem)?;
+        metrics.record_task_full(
+            run.success,
+            0, // wall omitted from matrix aggregates for deterministic reports
+            run.input_tokens,
+            run.output_tokens,
+            run.reasoning_tokens,
+            run.tool_calls,
+            run.cached_tokens,
+            run.cost_ticks,
+        );
+        tasks.push(run);
+    }
+    let _ = std::fs::remove_dir_all(&cfg);
+    Ok(TechniqueArmRaw { metrics, tasks })
+}
+
+/// BaselineSystem also implements VariantSystem so technique arms can reuse
+/// [`run_one_task`] with the production control prompt.
+impl VariantSystem for BaselineSystem {
+    fn system(&self, workspace: &Path) -> String {
+        BaselineSystem::system(workspace)
+    }
 }
 
 fn format_full_report(cmp: &AbComparison, runs: &[TaskRun]) -> String {
@@ -261,6 +450,17 @@ fn run_one_task(
     let (success, detail) = evaluate_checks(&task.checks, &done, &dir);
     let tool_calls = client.tool_calls();
     let usage = done.usage;
+    let cached_tokens = usage.cached_tokens;
+    let cost_ticks = if usage.cost_in_usd_ticks != 0 {
+        usage.cost_in_usd_ticks
+    } else {
+        offline_cost_ticks(
+            usage.input_tokens,
+            usage.output_tokens,
+            usage.reasoning_tokens,
+            cached_tokens,
+        )
+    };
     let _ = std::fs::remove_dir_all(&dir);
     Ok(TaskRun {
         task_id: task.id.clone(),
@@ -272,6 +472,8 @@ fn run_one_task(
         output_tokens: usage.output_tokens,
         reasoning_tokens: usage.reasoning_tokens,
         tool_calls,
+        cached_tokens,
+        cost_ticks,
     })
 }
 
@@ -439,12 +641,21 @@ impl ModelClient for ScriptedTask {
 }
 
 fn usage_from(step: &StepUsage) -> Usage {
+    let cached_tokens = step.cached_tokens;
+    let cost_in_usd_ticks = step.cost_in_usd_ticks.unwrap_or_else(|| {
+        offline_cost_ticks(
+            step.input_tokens,
+            step.output_tokens,
+            step.reasoning_tokens,
+            cached_tokens,
+        )
+    });
     Usage {
         input_tokens: step.input_tokens,
         output_tokens: step.output_tokens,
         reasoning_tokens: step.reasoning_tokens,
-        cost_in_usd_ticks: 0,
-        cached_tokens: 0,
+        cost_in_usd_ticks,
+        cached_tokens,
     }
 }
 
@@ -482,5 +693,22 @@ mod tests {
             "expected ~20 tasks, got {}",
             tasks.len()
         );
+    }
+
+    #[test]
+    fn arm_settings_toggles_exactly_one_file_per_b_arm() {
+        let dir = scratch("arm-settings").expect("scratch");
+        arm_settings(Technique::PrefixCache, &dir).expect("write");
+        let read = |name: &str| std::fs::read_to_string(dir.join(name)).expect("read");
+        assert!(read("prefix_cache.toml").contains("enabled = true"));
+        assert!(read(TOOL_OUTPUT_COMPACT_CONFIG).contains("enabled = false"));
+        assert!(read("deferred_tools.toml").contains("enabled = false"));
+        assert!(read("batched_tools.toml").contains("enabled = false"));
+        arm_settings(Technique::AllOn, &dir).expect("all");
+        assert!(read("prefix_cache.toml").contains("enabled = true"));
+        assert!(read(TOOL_OUTPUT_COMPACT_CONFIG).contains("enabled = true"));
+        assert!(read("deferred_tools.toml").contains("enabled = true"));
+        assert!(read("batched_tools.toml").contains("enabled = true"));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
