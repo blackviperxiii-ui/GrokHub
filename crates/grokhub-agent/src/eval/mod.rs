@@ -299,7 +299,11 @@ cost/solved {} (offline ticks).",
             "- **{}**: recommendation **{}** (success within noise: {}; Δ cost/solved {}).",
             arm.technique.label(),
             arm.recommendation.as_str(),
-            if arm.success_within_noise { "yes" } else { "no" },
+            if arm.success_within_noise {
+                "yes"
+            } else {
+                "no"
+            },
             format_cost_delta(arm.delta.cost_per_solved_task)
         );
     }
