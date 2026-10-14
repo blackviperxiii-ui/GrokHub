@@ -254,6 +254,7 @@ pub fn run_loop(
         .then(|| crate::checkpoint::turn_playbook(input.conversation_id))
         .flatten();
     let config_dir = crate::perm::config_dir();
+    tools::begin_deferred_turn(input.conversation_id);
     if crate::prefix_cache::enabled(&config_dir) {
         if first_turn {
             crate::prefix_cache::push_stable_system(history, input.system);
@@ -1088,6 +1089,7 @@ fn run_allowed(
         stop: &|| input.cancel.is_cancelled() || stop_for_halt(input),
         tasks: input.tasks.clone(),
         owner: input.agent_id,
+        session: Some(input.conversation_id),
     };
     let halted = || halt.halted() || tasks.as_ref().is_some_and(|hub| hub.is_halted());
     let (output, extra) = if let Some(done) =
