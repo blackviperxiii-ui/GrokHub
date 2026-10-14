@@ -88,13 +88,20 @@ if [[ "${GITHUB_EVENT_NAME:-}" == "pull_request" ]]; then
           if command -v gh >/dev/null 2>&1; then
             labels_csv=$(GH_TOKEN="${GH_TOKEN:-${GITHUB_TOKEN:-}}" gh api "repos/${GITHUB_REPOSITORY}/pulls/${pr_number}" --jq '[.labels[].name]|join(",")' 2>/dev/null || true)
           elif [[ -n "${GITHUB_TOKEN:-}" ]]; then
-            labels_csv=$(python3 -c "
-import json,os,urllib.request
-req=urllib.request.Request(
-    f\"https://api.github.com/repos/{os.environ['GITHUB_REPOSITORY']}/pulls/{os.environ['PR_NUMBER']}\",
-    headers={'Authorization': f\"Bearer {os.environ['GITHUB_TOKEN']}\", 'Accept': 'application/vnd.github+json', 'User-Agent': 'ci-guards'})
-print(','.join(l['name'] for l in json.load(urllib.request.urlopen(req)).get('labels',[])))
-" PR_NUMBER="$pr_number" 2>/dev/null || true)
+            labels_csv=$(
+              PR_NUMBER="$pr_number" python3 <<'PY' 2>/dev/null || true
+import json, os, urllib.request
+req = urllib.request.Request(
+    f"https://api.github.com/repos/{os.environ['GITHUB_REPOSITORY']}/pulls/{os.environ['PR_NUMBER']}",
+    headers={
+        "Authorization": f"Bearer {os.environ['GITHUB_TOKEN']}",
+        "Accept": "application/vnd.github+json",
+        "User-Agent": "ci-guards",
+    },
+)
+print(",".join(l["name"] for l in json.load(urllib.request.urlopen(req)).get("labels", [])))
+PY
+            )
           fi
         fi
       fi
