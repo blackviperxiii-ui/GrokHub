@@ -136,16 +136,24 @@ pub fn save_watched_skill(skills_dir: &Path, skill: &SkillMd) -> io::Result<Path
         ));
     }
     let dir = skills_dir.join(&name);
-    if dir.exists() {
+    let skill_md = dir.join("SKILL.md");
+    if skill_md.is_file() {
         return Err(io::Error::new(
             io::ErrorKind::AlreadyExists,
             format!("skill `{name}` already exists"),
         ));
     }
+    // A leftover empty (or SKILL.md-less) dir from a failed prior write must
+    // not block retry — reclaim it instead of reporting AlreadyExists.
+    if dir.exists() {
+        fs::remove_dir_all(&dir)?;
+    }
     fs::create_dir_all(&dir)?;
-    let path = dir.join("SKILL.md");
-    fs::write(&path, render_skill_md(skill))?;
-    Ok(path)
+    if let Err(e) = fs::write(&skill_md, render_skill_md(skill)) {
+        let _ = fs::remove_dir_all(&dir);
+        return Err(e);
+    }
+    Ok(skill_md)
 }
 
 pub fn bump_skill_run(runs: u32) -> u32 {
@@ -645,16 +653,31 @@ mod tests {
         assert_eq!(
             again.unwrap_err().kind(),
             io::ErrorKind::AlreadyExists,
-            "never overwrite an existing skill dir"
+            "never overwrite an existing skill with SKILL.md"
         );
 
+        // Leftover dir without SKILL.md (failed prior write) must be reclaimable.
+        let orphan = skills.join("orphan-retry");
+        fs::create_dir_all(&orphan).unwrap();
+        assert!(!orphan.join("SKILL.md").exists());
+        let orphan_draft = watched_draft("orphan-retry", "1. Open Settings\n2. Click Display");
+        let path2 = save_watched_skill(&skills, &orphan_draft).expect("retry after orphan dir");
+        assert_eq!(path2, orphan.join("SKILL.md"));
+        assert!(path2.is_file());
+
         let mut unsafe_skill = draft.clone();
+        unsafe_skill.name = "unsafe-retry".into();
+        unsafe_skill.slash = "/unsafe-retry".into();
         unsafe_skill.instructions = "1. Paste sk-abcdefghijklmnopqrstuv into the field".into();
         assert_eq!(
-            save_watched_skill(&skills.join("other"), &unsafe_skill)
+            save_watched_skill(&skills, &unsafe_skill)
                 .unwrap_err()
                 .kind(),
             io::ErrorKind::InvalidData
+        );
+        assert!(
+            !skills.join("unsafe-retry").exists(),
+            "failed save must not leave a dir that blocks retry"
         );
 
         let _ = fs::remove_dir_all(&root);

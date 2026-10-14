@@ -77,6 +77,18 @@ enum WatchPhase {
 /// which mod.rs already calls every frame.
 static WATCH_LEARN: Mutex<Option<WatchPhase>> = Mutex::new(None);
 
+/// Tests that touch [`WATCH_LEARN`] hold this so parallel cargo-test threads
+/// (and any in-process callers) cannot clobber each other's phase.
+#[cfg(test)]
+static WATCH_LEARN_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+#[cfg(test)]
+fn watch_learn_test_guard() -> std::sync::MutexGuard<'static, ()> {
+    WATCH_LEARN_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+}
+
 fn watch_take() -> Option<WatchPhase> {
     WATCH_LEARN.lock().unwrap_or_else(|p| p.into_inner()).take()
 }
@@ -88,6 +100,24 @@ fn watch_set(phase: Option<WatchPhase>) {
 fn watch_with_mut<R>(f: impl FnOnce(&mut Option<WatchPhase>) -> R) -> R {
     let mut g = WATCH_LEARN.lock().unwrap_or_else(|p| p.into_inner());
     f(&mut g)
+}
+
+/// Drop any Save-as-skill chrome tied to a recording folder (e.g. after delete).
+fn clear_watch_learn_for_dir(dir: &Path) {
+    watch_with_mut(|slot| {
+        let same = match slot.as_ref() {
+            Some(
+                WatchPhase::Offer(o)
+                | WatchPhase::Extracting { offer: o, .. }
+                | WatchPhase::Draft { offer: o, .. }
+                | WatchPhase::Empty(o),
+            ) => o.dir == dir,
+            None => false,
+        };
+        if same {
+            *slot = None;
+        }
+    });
 }
 
 fn list_frame_paths(dir: &Path) -> Vec<PathBuf> {
@@ -577,6 +607,8 @@ impl Cabin {
             );
             return;
         }
+        // Drop Save-as-skill chrome for this folder before (or even if) remove fails.
+        clear_watch_learn_for_dir(&dir);
         match std::fs::remove_dir_all(&dir) {
             Ok(()) => {
                 if grokhub_core::dismiss_update_at(&mut self.updates, card_id, now_ms()) {
@@ -713,6 +745,9 @@ impl Cabin {
                                             .size(12.0)
                                             .color(crate::theme::muted()),
                                     );
+                                    if super::change_undo::click_pill(ui, "Cancel") {
+                                        cancel = true;
+                                    }
                                 }
                                 2 => {
                                     if super::change_undo::click_pill(ui, "Save") {
@@ -1012,7 +1047,7 @@ mod tests {
 
     #[test]
     fn draft_from_reply_builds_expected_draft_and_garbage_is_none() {
-        watch_set(None);
+        let _wl = watch_learn_test_guard();
         let draft = draft_from_reply("open Settings → Display", OPEN_SETTINGS_REPLY)
             .expect("fixture reply");
         assert_eq!(draft.name, "open-settings-display");
@@ -1034,6 +1069,7 @@ mod tests {
 
     #[test]
     fn finish_recording_arms_save_as_skill_offer_without_calling_vision() {
+        let _wl = watch_learn_test_guard();
         watch_set(None);
         let (_g, root, home) = pinned("screenrec-watch-offer");
         let mut cabin = Cabin::quiet_for_test();
@@ -1085,6 +1121,31 @@ mod tests {
             "saved skill is remembered in the cabin list"
         );
         watch_set(None);
+        unpin(home);
+    }
+
+    #[test]
+    fn delete_recording_clears_save_as_skill_offer() {
+        let _wl = watch_learn_test_guard();
+        watch_set(None);
+        let (_g, root, home) = pinned("screenrec-watch-delete");
+        let mut cabin = Cabin::quiet_for_test();
+        let dir = sr::recording_dir(&root, "2026-10-14-delete");
+        std::fs::create_dir_all(&dir).unwrap();
+        png(&dir.join(sr::frame_name(0, "png")));
+        watch_set(Some(WatchPhase::Offer(WatchOffer {
+            dir: dir.clone(),
+            note: "open Settings".into(),
+            secs: 6,
+            chat: String::new(),
+            title: sr::recording_title(6, "open Settings"),
+        })));
+        cabin.delete_recording("card-x", &dir.display().to_string(), "Screen recording");
+        assert!(!dir.exists());
+        assert!(
+            watch_with_mut(|s| s.is_none()),
+            "deleting the recording must clear the Save as skill offer"
+        );
         unpin(home);
     }
 }
