@@ -790,8 +790,11 @@ mod tests {
         assert!(explicit.allows("write"));
         assert!(explicit.allows("search_tool"));
         assert!(explicit.allows("use_tool"));
-        // Background base still includes shell unless a future SP2 drops it.
-        assert!(ToolSet::background().allows("run_terminal_command"));
+        // SP2 keeps shell on the background base; change only with an explicit allowlist decision.
+        assert!(
+            ToolSet::background().allows("run_terminal_command"),
+            "background ToolSet must keep run_terminal_command unless an allowlist PR drops it"
+        );
     }
 
     fn nested_scratch(tag: &str) -> PathBuf {

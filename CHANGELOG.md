@@ -2,7 +2,11 @@
 
 ## Unreleased
 
+<<<<<<< HEAD
 - UI: egui-notify toasts for Saved, run-finished, and error status lines (U7a; egui 0.36, no egui/eframe bump).
+=======
+- Nightly deep pass: `show_panel` drains into the owning chat (not the visible tab); Save-as-skill refuses to clobber Extracting/Draft; `/recall` and Settings archive copy match #712; `library_intent` / findings paraphrase / `skill_list` frontmatter honesty; host_safety `chr()` and `base64|sh` rails; deslop stale ui_kit/panels/journal/SP2 comments and archive docs.
+>>>>>>> origin/beta
 - Eval: R6 offline technique A/B matrix (prefix cache, tool-output summaries, deferred tools, batched read-only, all-on) with cost/success metrics and adopt/spike/reject report in `docs/eval/r6-technique-ab.md`.
 - Agent: background and unattended callers bind a per-job `ToolSet` (`schemas_for_job` / `dispatch_for_job`) and log schema size at job start (SP2).
 - Watch-and-learn (SD2): after a screen recording, **Save as skill** runs the vision step extractor, shows the draft (hard steps flagged), and saves only on confirm; undo removes it; replay still re-asks hard approvals.
@@ -14,7 +18,7 @@
 - Connectors: Marketplace installs reload MCP tool lists in chat immediately; stdio entries accept catalog `command`/`args` or a single argv array.
 - Agent: optional `show_panel` native tool (`generative_ui.toml`, off by default). When enabled, the model can emit a validated G1 panel spec as tool output (`{"panel": …}`) with no render or side effects; the tool stays deferred like other rarely used natives when deferred tool schemas are on.
 - Fixed: tray **Quit** tears down the cabin async runtime with a bounded `shutdown_timeout` after the UI loop returns, then exits from `main` so the tray icon is dropped before the last-resort `process::exit` (Windows ghost-icon case).
-- Generative UI: phase 1 controlled panel renderer (CI status, build errors, compare table) with dismiss/pin store; off by default until Settings exposes the toggle.
+- Generative UI: phase 1 controlled panel renderer (CI status, build errors, compare table) with dismiss/pin store; off unless `generative_ui.toml` sets `enabled = true`.
 - Chat composer attachment tray: multi-file picker, drag-drop, and paste share one ingest worker; thumbnails and errors show above the composer (up to 10 files).
 - Screen recording and audio check report cards get a **Fix it** action that builds a harness fix plan from the diagnosis and runs it step by step through the existing hard approval cards (Phase C / SC2).
 - Docs: SignPath Foundation privacy notice in [PRIVACY.md](PRIVACY.md) and [docs/CODE_SIGNING.md](docs/CODE_SIGNING.md); Windows Setup shows the statement before install (`packaging/windows/privacy.txt`).
@@ -83,7 +87,7 @@
 - Folder-level AGENTS.md and CLAUDE.md files are picked up when the agent first works in that folder, not only the project root.
 - Short UI repaint timers (palette search, Pulse tab crossfade, Permissions keyring wait, folder picker) only run while something is actually busy or animating, so an idle cabin is not woken every few dozen milliseconds.
 - Background and unattended jobs use a slimmer system prompt: they keep the cabin safety rules and AGENTS layers, and drop the skills list and plugin extras unless the job text declares `NEED_SKILLS` or `NEED_PLUGINS`. Chat is unchanged; the nightly review still uses its lean review prompt.
-- Archive finished chats so they leave the main History list but stay searchable and restorable: Archive / Unarchive from the row menu, chat header menu and Ctrl+Shift+A; an Archived sidebar drawer (newest first); search marks archived hits; opening works; a reply restores the chat with a quiet note; toasts name the chat and offer Undo. Idle chats auto-archive after 14 days (Settings → Behavior, off switch), skipping pinned chats and chats with a running or parked task or background job, on app start and once a day.
+- Archive finished chats so they leave the main History list (still on disk; restorable while the chat is open): Archive / Unarchive from the row menu, chat header menu and Ctrl+Shift+A; opening works; a reply restores the chat with a quiet note; toasts name the chat and offer Undo. *(3.0.1 #712 later dropped the Archived sidebar drawer and searchable archived hits — idle chats leave History and search.)* Idle chats auto-archive after 14 days (Settings → Behavior, off switch), skipping pinned chats and chats with a running or parked task or background job, on app start and once a day.
 - Settings → Behavior no longer reads `self_review.json` (or the change-version ledger) on every paint: the cabin keeps a cache that writers update, so the Settings page stays off the disk while it is open.
 - Added: GrokHub keeps a copy of each file before the agent edits it; `/rewind step` lists the agent's steps and puts any file back as it was.
 - Fixed: channel switch no longer force-moves a local `main`/`beta` that is ahead of origin (fast-forward or refuse); Update recover resets to `origin/main`/`origin/beta` (not an old release tag); backup commits ignore GPG signing.

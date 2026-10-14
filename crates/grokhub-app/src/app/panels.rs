@@ -14,7 +14,7 @@ use serde::Serialize;
 
 use crate::ui_kit::{badge, card_frame, BadgeTone, CardVariant};
 
-/// Off by default until Settings owns a toggle (G3). Gated by `generative_ui.toml`.
+/// Off unless `generative_ui.toml` sets `enabled = true` (no Settings toggle yet).
 pub static PANELS_UI_ENABLED: AtomicBool = AtomicBool::new(false);
 
 pub fn panels_enabled() -> bool {

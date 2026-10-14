@@ -3,7 +3,7 @@
 //! A journal entry is not a workboard task. It captures what is uncertain,
 //! which options exist, what evidence would change the call, and the cheapest
 //! next experiment. Promote into a Workboard Todo when an experiment or
-//! implementation is chosen (Mission promotion waits on Mission-based OS).
+//! implementation is chosen (Mission v1 exists; promote-to-mission is not wired).
 
 use serde::{Deserialize, Serialize};
 
@@ -188,7 +188,7 @@ pub struct JournalEntry {
     pub status: JournalStatus,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub outcome: Option<JournalOutcome>,
-    /// Workboard card filed when promoted (interim follow-up until Mission exists).
+    /// Workboard card filed when promoted (promote-to-mission is not wired).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub board_id: Option<String>,
     /// Optional chat that spawned this decision.
@@ -493,7 +493,7 @@ pub fn set_leaning(entries: &mut [JournalEntry], id: &str, option_id: &str, note
 }
 
 /// File a Workboard Todo from this decision and link `board_id`.
-/// Interim stand-in for promote-to-mission until Mission-based OS lands.
+/// Files a Workboard Todo; promote-to-mission is not wired.
 /// Uses the question as the card title (decision questions are not work-verbs,
 /// so `file_idea_todo` / `idea_todo_title` would fall back to a generic label).
 pub fn promote_to_board(
