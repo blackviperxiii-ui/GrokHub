@@ -79,6 +79,44 @@ pub(super) fn domain_block(rows: &[grokhub_core::run_metrics::DomainRow]) -> Opt
     Some(format!("{DOMAINS_HEAD}\n{}", lines.join("\n")))
 }
 
+/// U7e: bar chart of run counts per Brief domain (Settings history).
+fn paint_domain_runs_plot(ui: &mut egui::Ui, rows: &[grokhub_core::run_metrics::DomainRow]) {
+    let fill = crate::theme::live();
+    let bars: Vec<egui_plot::Bar> = rows
+        .iter()
+        .enumerate()
+        .map(|(i, r)| {
+            egui_plot::Bar::new(i as f64, r.runs as f64)
+                .name(r.domain.clone())
+                .width(0.65)
+                .fill(fill)
+        })
+        .collect();
+    let labels: Vec<String> = rows.iter().map(|r| r.domain.clone()).collect();
+    egui_plot::Plot::new("self_improve_domain_runs")
+        .height(120.0)
+        .allow_zoom(false)
+        .allow_drag(false)
+        .allow_scroll(false)
+        .allow_boxed_zoom(false)
+        .show_axes([true, true])
+        .show_grid(false)
+        .include_y(0.0)
+        .x_axis_formatter(move |mark, _range| {
+            let i = mark.value.round() as isize;
+            if i >= 0 && (i as usize) < labels.len() {
+                labels[i as usize].clone()
+            } else {
+                String::new()
+            }
+        })
+        .y_axis_label("runs")
+        .set_margin_fraction(egui::vec2(0.08, 0.12))
+        .show(ui, |plot_ui| {
+            plot_ui.bar_chart(egui_plot::BarChart::new("Runs", bars).width(0.65));
+        });
+}
+
 impl Cabin {
     /// A code-idea card's Save: keep it in the local list, change nothing else.
     pub(super) fn save_code_idea(&mut self, title: &str, text: &str) -> bool {
@@ -137,7 +175,9 @@ impl Cabin {
         if rows.is_empty() {
             crate::cards::settings_note(ui, HISTORY_EMPTY);
         }
-        if let Some(block) = domain_block(&self.domain_rows_now()) {
+        let domain_rows = self.domain_rows_now();
+        if let Some(block) = domain_block(&domain_rows) {
+            paint_domain_runs_plot(ui, &domain_rows);
             crate::cards::settings_note(ui, &block);
         }
         for row in rows {
