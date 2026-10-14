@@ -6,7 +6,7 @@ use crate::gate::Gate;
 
 use super::{
     connections, control, desktop, glob, grep, list_dir, media, read_file, search_replace, shell,
-    web_fetch, write,
+    show_panel, web_fetch, write,
 };
 
 /// One row in the native catalog. `defer` tools ship as index lines until
@@ -30,6 +30,10 @@ fn not_readonly(gate: &Gate) -> bool {
 
 fn desktop_on(gate: &Gate) -> bool {
     gate.desktop
+}
+
+fn generative_ui_on(_gate: &Gate) -> bool {
+    show_panel::enabled(&crate::perm::config_dir())
 }
 
 fn media_schema(i: usize) -> Value {
@@ -105,7 +109,7 @@ pub fn eager_defs() -> &'static [ToolDef] {
 
 /// Tools that may be deferred (full schema only after `load_tool_schema`).
 pub fn deferred_native_defs() -> &'static [ToolDef] {
-    static DEFS: [ToolDef; 18] = [
+    static DEFS: [ToolDef; 19] = [
         ToolDef {
             name: "send_subagent_message",
             blurb: "Send a message to a spawned subagent",
@@ -210,6 +214,13 @@ pub fn deferred_native_defs() -> &'static [ToolDef] {
             defer: true,
             schema: connections::delete_schema,
             visible: not_readonly,
+        },
+        ToolDef {
+            name: show_panel::SHOW_PANEL,
+            blurb: "Emit a validated generative UI panel spec",
+            defer: true,
+            schema: show_panel::schema,
+            visible: generative_ui_on,
         },
         ToolDef {
             name: "screenshot",

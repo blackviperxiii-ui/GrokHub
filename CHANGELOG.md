@@ -3,6 +3,9 @@
 ## Unreleased
 
 - Chat composer: optional sentence autocomplete paints muted ghost text after your draft (off by default; Settings → Sentence autocomplete). Tab accepts when the slash menu is closed; Esc dismisses; click the ghost text to accept.
+- Connectors: Marketplace installs reload MCP tool lists in chat immediately; stdio entries accept catalog `command`/`args` or a single argv array.
+- Agent: optional `show_panel` native tool (`generative_ui.toml`, off by default). When enabled, the model can emit a validated G1 panel spec as tool output (`{"panel": …}`) with no render or side effects; the tool stays deferred like other rarely used natives when deferred tool schemas are on.
+- Fixed: tray **Quit** tears down the cabin async runtime with a bounded `shutdown_timeout` after the UI loop returns, then exits from `main` so the tray icon is dropped before the last-resort `process::exit` (Windows ghost-icon case).
 - Generative UI: phase 1 controlled panel renderer (CI status, build errors, compare table) with dismiss/pin store; off by default until Settings exposes the toggle.
 - Chat composer attachment tray: multi-file picker, drag-drop, and paste share one ingest worker; thumbnails and errors show above the composer (up to 10 files).
 - Screen recording and audio check report cards get a **Fix it** action that builds a harness fix plan from the diagnosis and runs it step by step through the existing hard approval cards (Phase C / SC2).

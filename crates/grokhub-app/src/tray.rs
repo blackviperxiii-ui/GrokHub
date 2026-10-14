@@ -972,9 +972,28 @@ mod tests {
             .nth(1)
             .and_then(|s| s.split("fn logic(").next())
             .expect("on_exit");
+        let main_rs = include_str!("main.rs");
+        let shutdown = main_rs
+            .split("fn cabin_shutdown_last_resort()")
+            .nth(1)
+            .and_then(|s| s.split("fn run_cabin(").next())
+            .expect("cabin_shutdown_last_resort");
+        let async_mod = main_rs
+            .split("mod cabin_async {")
+            .nth(1)
+            .and_then(|s| s.split("\n}\n\n/// After the cabin").next())
+            .expect("cabin_async");
         assert!(
-            on_exit.contains("process::exit(0)"),
-            "a clean tray Quit must not leave hub or broker threads running: {on_exit}"
+            async_mod.contains("shutdown_timeout"),
+            "a clean tray Quit must shut down async work before exit: {async_mod}"
+        );
+        assert!(
+            shutdown.contains("cabin_async::shutdown()") && shutdown.contains("process::exit(0)"),
+            "last-resort exit runs from main after run_native: {shutdown}"
+        );
+        assert!(
+            !on_exit.contains("process::exit(0)"),
+            "on_exit must drop the tray before main's last-resort exit: {on_exit}"
         );
     }
 
