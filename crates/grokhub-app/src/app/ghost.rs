@@ -187,10 +187,7 @@ impl ComposerGhost {
         std::thread::spawn(move || {
             let messages = [
                 ("system".to_string(), SYSTEM.to_string()),
-                (
-                    "user".to_string(),
-                    format!("Continue this draft:\n{draft}"),
-                ),
+                ("user".to_string(), format!("Continue this draft:\n{draft}")),
             ];
             let suggestion = crate::xai::grok_chat(
                 &api_key,
@@ -254,8 +251,7 @@ impl Cabin {
         edit: &egui::Response,
         text_w: f32,
     ) {
-        let slash_open =
-            !filter_slash_hits(&self.composer, &self.grok_commands).is_empty();
+        let slash_open = !filter_slash_hits(&self.composer, &self.grok_commands).is_empty();
         self.composer_ghost
             .note_ime(ui.input(|i| i.events.clone()).as_slice());
         if edit.has_focus() {
@@ -271,7 +267,9 @@ impl Cabin {
             }
         }
         if self.cfg.composer_autocomplete && self.composer_ghost.has_suggestion() {
-            let clicked = self.composer_ghost.paint(ui, edit.rect, &self.composer, text_w);
+            let clicked = self
+                .composer_ghost
+                .paint(ui, edit.rect, &self.composer, text_w);
             if clicked && self.composer_ghost.can_accept(slash_open) {
                 self.composer_ghost.accept(&mut self.composer);
             }
@@ -294,7 +292,11 @@ impl Cabin {
         h.finish()
     }
 
-    pub(super) fn composer_cursor_index(&self, ctx: &egui::Context, composer_id: egui::Id) -> usize {
+    pub(super) fn composer_cursor_index(
+        &self,
+        ctx: &egui::Context,
+        composer_id: egui::Id,
+    ) -> usize {
         egui::TextEdit::load_state(ctx, composer_id)
             .and_then(|s| s.cursor.char_range())
             .map(|r| usize::from(r.primary.index))
@@ -302,8 +304,7 @@ impl Cabin {
     }
 
     pub(super) fn poll_composer_ghost(&mut self, ctx: &egui::Context, composer_id: egui::Id) {
-        let slash_open =
-            !filter_slash_hits(&self.composer, &self.grok_commands).is_empty();
+        let slash_open = !filter_slash_hits(&self.composer, &self.grok_commands).is_empty();
         let cursor = self.composer_cursor_index(ctx, composer_id);
         let attach_fp = self.attach_fingerprint();
         let model = resolve_chat_model(&self.cfg.mode, &self.cfg.model);
@@ -362,7 +363,16 @@ mod tests {
     fn setting_off_should_not_request() {
         assert!(should_request("hello there", false, false));
         let mut g = ComposerGhost::default();
-        g.frame(false, "hello there", 11, 0, false, false, "sk-test", "grok-4.7");
+        g.frame(
+            false,
+            "hello there",
+            11,
+            0,
+            false,
+            false,
+            "sk-test",
+            "grok-4.7",
+        );
         assert!(g.scheduled_draft().is_empty());
         assert!(!g.has_suggestion());
         assert!(g.pending_rx.is_none());
@@ -385,12 +395,30 @@ mod tests {
     #[test]
     fn debounce_waits_before_schedule() {
         let mut g = ComposerGhost::default();
-        g.frame(true, "hello there", 11, 0, false, false, "sk-test", "grok-4.7");
+        g.frame(
+            true,
+            "hello there",
+            11,
+            0,
+            false,
+            false,
+            "sk-test",
+            "grok-4.7",
+        );
         assert!(g.debounce_at.is_some());
         assert!(g.pending_rx.is_none());
         assert!(g.scheduled_draft().is_empty());
         g.set_debounce_ready();
-        g.frame(true, "hello there", 11, 0, false, false, "sk-test", "grok-4.7");
+        g.frame(
+            true,
+            "hello there",
+            11,
+            0,
+            false,
+            false,
+            "sk-test",
+            "grok-4.7",
+        );
         assert_eq!(g.scheduled_draft(), "hello there");
         assert!(g.pending_rx.is_some());
     }
@@ -448,10 +476,7 @@ mod tests {
 
     #[test]
     fn normalize_single_line() {
-        assert_eq!(
-            normalize_suggestion("one line\nand more", "hi"),
-            "one line"
-        );
+        assert_eq!(normalize_suggestion("one line\nand more", "hi"), "one line");
         assert_eq!(normalize_suggestion("\"quoted\"", "hi"), "quoted");
     }
 
