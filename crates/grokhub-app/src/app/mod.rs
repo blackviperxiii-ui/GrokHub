@@ -179,6 +179,7 @@ mod native_signin_tests;
 mod night;
 mod oauth;
 mod pages;
+pub mod panels;
 mod personality_ui;
 mod playbook_ui;
 mod plus;

@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Generative UI: phase 1 controlled panel renderer (CI status, build errors, compare table) with dismiss/pin store; off by default until Settings exposes the toggle.
 - Docs: SignPath Foundation privacy notice in [PRIVACY.md](PRIVACY.md) and [docs/CODE_SIGNING.md](docs/CODE_SIGNING.md); Windows Setup shows the statement before install (`packaging/windows/privacy.txt`).
 - Chat shows a small connectivity chip (Online / Reconnecting / Offline (local engine)) above the composer from the cabin connectivity engine; ureq provider and xAI client transport failures nudge that state.
 - Arch (AUR): optional `llama-cpp` dependency for a system `llama-server` instead of the in-app engine download.
