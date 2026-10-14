@@ -755,10 +755,7 @@ mod tests {
     }
 
     fn g2_marker(pr: u32) -> String {
-        format!(
-            "Panel: CI status\n\n{{\n  \"panel\": {}\n}}",
-            ci_json(pr)
-        )
+        format!("Panel: CI status\n\n{{\n  \"panel\": {}\n}}", ci_json(pr))
     }
 
     #[test]
