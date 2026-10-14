@@ -351,22 +351,54 @@ fn collapse_chr_calls(cmd: &str) -> String {
 }
 
 /// `echo … | base64 -d | sh` (and decode|bash) rebuilds a forbidden leaf after rails.
+/// Shell sinks are token-matched so `| sha256sum` / `|shuf` / `|shred` stay allowed.
 fn base64_pipe_shell(cmd: &str) -> bool {
     let c = cmd.to_ascii_lowercase().replace('\\', "/");
     let has_b64 = c.contains("base64") || c.contains("b64decode");
     if !has_b64 {
         return false;
     }
-    c.contains("|sh")
-        || c.contains("| sh")
-        || c.contains("|bash")
-        || c.contains("| bash")
-        || c.contains("|zsh")
-        || c.contains("| zsh")
-        || c.contains(";sh")
-        || c.contains("; sh")
-        || c.contains("&& sh")
-        || c.contains("&& bash")
+    pipes_or_chains_to_shell(&c)
+}
+
+/// True when `|`, `;`, or `&&` is followed by a shell token (`sh` / `bash` / `zsh`),
+/// optionally as a path basename (`/bin/sh`). Word-boundary only — never a prefix of
+/// `sha256sum`, `shuf`, `shred`, etc.
+fn pipes_or_chains_to_shell(cmd: &str) -> bool {
+    let bytes = cmd.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if i + 1 < bytes.len() && bytes[i] == b'&' && bytes[i + 1] == b'&' {
+            if next_token_is_shell(&cmd[i + 2..]) {
+                return true;
+            }
+            i += 2;
+            continue;
+        }
+        if (bytes[i] == b'|' || bytes[i] == b';') && next_token_is_shell(&cmd[i + 1..]) {
+            return true;
+        }
+        i += 1;
+    }
+    false
+}
+
+fn next_token_is_shell(rest: &str) -> bool {
+    let rest = rest.trim_start();
+    if rest.is_empty() {
+        return false;
+    }
+    let tok_end = rest
+        .char_indices()
+        .find(|(_, c)| !c.is_ascii_alphanumeric() && !matches!(c, '.' | '/' | '-' | '_'))
+        .map(|(i, _)| i)
+        .unwrap_or(rest.len());
+    if tok_end == 0 {
+        return false;
+    }
+    let tok = &rest[..tok_end];
+    let base = tok.rsplit('/').next().unwrap_or(tok);
+    matches!(base, "sh" | "bash" | "zsh")
 }
 
 pub fn forbidden_reason(cmd: &str) -> Option<&'static str> {
@@ -501,9 +533,30 @@ mod tests {
             Some("base64|shell rebuild"),
             "base64 decode piped to a shell rebuilds a forbidden leaf"
         );
+        assert_eq!(
+            forbidden_reason("echo Y2F0IH4vLnNzaC9pZF9yc2E= | base64 -d |sh"),
+            Some("base64|shell rebuild"),
+            "tight |sh must still count as a shell sink"
+        );
         assert!(
             forbidden_reason("echo hello | base64").is_none(),
             "encode-only base64 without a shell sink must stay allowed"
+        );
+        assert!(
+            forbidden_reason("echo abc | base64 | sha256sum").is_none(),
+            "| sha256sum must not false-positive as | sh"
+        );
+        assert!(
+            forbidden_reason("echo abc | base64 |sha1sum").is_none(),
+            "|sha1sum must not false-positive as |sh"
+        );
+        assert!(
+            forbidden_reason("echo abc | base64 | shuf").is_none(),
+            "| shuf must not false-positive as | sh"
+        );
+        assert!(
+            forbidden_reason("echo abc | base64 | shred -u").is_none(),
+            "| shred must not false-positive as | sh"
         );
     }
 
