@@ -273,4 +273,3 @@ fn drop_hint_line_matches_shipped_wording() {
         "Drop to use as the Imagine reference — 3 files"
     );
 }
-
