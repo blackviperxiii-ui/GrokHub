@@ -2,7 +2,11 @@
 
 ## Unreleased
 
+<<<<<<< Updated upstream
 - CI: friction guards for conflict markers, god-file line budgets (`app/mod.rs`, `cards.rs`, `slash.rs`, `app/tests.rs`), and Cargo.lock edits that need the `dependencies` label or a Cargo.toml dep change (rearch stage 1).
+=======
+- UI: egui_plot bar chart for self-improvement runs-by-area (U7e; egui 0.36, no egui/eframe bump).
+>>>>>>> Stashed changes
 - UI: egui-phosphor icons for sidebar, card tiles, and bar glyphs (U7c; egui 0.36, subset regular, no egui/eframe bump).
 - UI: egui_extras TableBuilder for generative panel / compare tables (U7b; egui 0.36, no egui/eframe bump).
 - Deps: bump rustls to 0.23.46 (RUSTSEC-2026-0346/0347/0348/0349; lockfile only, no advisory ignores).
