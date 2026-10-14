@@ -8,9 +8,9 @@ use grokhub_core::{ProjectKind, ProjectNode};
 use grokhub_core::{UpdateCard, UpdateKind, UpdateStatus};
 use std::sync::Arc;
 
-#[path = "test_support.rs"]
-mod test_support;
-use test_support::*;
+#[path = "test_support_tests.rs"]
+mod test_support_tests;
+use test_support_tests::*;
 
 fn cabin_src() -> String {
     // Windows CI checkouts often embed CRLF via include_str; source-inspection
