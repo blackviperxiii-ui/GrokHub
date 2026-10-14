@@ -64,35 +64,29 @@ use std::env;
 
 /// Cabin-wide async worker (Linux portal / ashpd). Owned in `main` so Quit can
 /// `shutdown_timeout` after `eframe::run_native` returns instead of hanging on drop.
+#[cfg(target_os = "linux")]
 mod cabin_async {
-    #[cfg(target_os = "linux")]
-    use std::time::Duration;
-    #[cfg(target_os = "linux")]
     use std::sync::{Mutex, OnceLock};
+    use std::time::Duration;
 
-    #[cfg(target_os = "linux")]
     static RUNTIME: OnceLock<Mutex<Option<tokio::runtime::Runtime>>> = OnceLock::new();
 
     pub fn install() {
-        #[cfg(target_os = "linux")]
+        let slot = RUNTIME.get_or_init(|| Mutex::new(None));
+        let mut guard = slot.lock().unwrap_or_else(|e| e.into_inner());
+        if guard.is_some() {
+            return;
+        }
+        match tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
         {
-            let slot = RUNTIME.get_or_init(|| Mutex::new(None));
-            let mut guard = slot.lock().unwrap_or_else(|e| e.into_inner());
-            if guard.is_some() {
-                return;
-            }
-            match tokio::runtime::Builder::new_current_thread()
-                .enable_time()
-                .build()
-            {
-                Ok(rt) => *guard = Some(rt),
-                Err(err) => eprintln!("cabin tokio runtime: {err}"),
-            }
+            Ok(rt) => *guard = Some(rt),
+            Err(err) => eprintln!("cabin tokio runtime: {err}"),
         }
     }
 
     pub fn shutdown() {
-        #[cfg(target_os = "linux")]
         if let Some(slot) = RUNTIME.get() {
             let mut guard = slot.lock().unwrap_or_else(|e| e.into_inner());
             if let Some(rt) = guard.take() {
@@ -100,6 +94,12 @@ mod cabin_async {
             }
         }
     }
+}
+
+#[cfg(not(target_os = "linux"))]
+mod cabin_async {
+    pub fn install() {}
+    pub fn shutdown() {}
 }
 
 /// After the cabin window closes: stop the async runtime, then leave the process.
