@@ -59,22 +59,17 @@ fn read_version(root: &Path) -> Result<String, String> {
 
 fn is_semver(v: &str) -> bool {
     let parts: Vec<_> = v.split('.').collect();
-    parts.len() == 3 && parts.iter().all(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_digit()))
+    parts.len() == 3
+        && parts
+            .iter()
+            .all(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_digit()))
 }
 
 fn bump_check(root: &Path) -> Result<(), String> {
     let version = read_version(root)?;
     check_cargo_toml(root, &version)?;
-    check_contains(
-        root,
-        "packaging/PKGBUILD",
-        &format!("pkgver={version}"),
-    )?;
-    check_contains(
-        root,
-        "packaging/aur/PKGBUILD",
-        &format!("pkgver={version}"),
-    )?;
+    check_contains(root, "packaging/PKGBUILD", &format!("pkgver={version}"))?;
+    check_contains(root, "packaging/aur/PKGBUILD", &format!("pkgver={version}"))?;
     check_contains(
         root,
         "packaging/windows/grokhub.iss",
@@ -116,8 +111,8 @@ fn check_contains(root: &Path, rel: &str, needle: &str) -> Result<(), String> {
 }
 
 fn check_reference(root: &Path, version: &str) -> Result<(), String> {
-    let text =
-        fs::read_to_string(root.join("docs/REFERENCE.md")).map_err(|e| format!("REFERENCE.md: {e}"))?;
+    let text = fs::read_to_string(root.join("docs/REFERENCE.md"))
+        .map_err(|e| format!("REFERENCE.md: {e}"))?;
     check_reference_text(&text, version)
 }
 
@@ -132,23 +127,11 @@ fn check_reference_text(text: &str, version: &str) -> Result<(), String> {
         ));
     }
     for (needle, label) in [
-        (
-            format!("grokhub-linux-v{version}.tar.gz"),
-            "Linux tarball",
-        ),
+        (format!("grokhub-linux-v{version}.tar.gz"), "Linux tarball"),
         (format!("GrokHub-Setup-{version}.exe"), "Windows Setup"),
-        (
-            format!("grokhub-windows-v{version}.zip"),
-            "Windows zip",
-        ),
-        (
-            format!("GrokHub {version}-beta."),
-            "--version beta example",
-        ),
-        (
-            format!("GrokHub {version} (main"),
-            "--version main example",
-        ),
+        (format!("grokhub-windows-v{version}.zip"), "Windows zip"),
+        (format!("GrokHub {version}-beta."), "--version beta example"),
+        (format!("GrokHub {version} (main"), "--version main example"),
     ] {
         if !text.contains(&needle) {
             return Err(format!("docs/REFERENCE.md missing {label}: {needle:?}"));
@@ -428,7 +411,10 @@ fn today_utc() -> String {
             }
         }
     }
-    if let Ok(out) = process::Command::new("date").args(["-u", "+%Y-%m-%d"]).output() {
+    if let Ok(out) = process::Command::new("date")
+        .args(["-u", "+%Y-%m-%d"])
+        .output()
+    {
         if out.status.success() {
             let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
             if s.len() == 10 {
