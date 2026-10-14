@@ -16581,6 +16581,7 @@ fn quiet_cabin() -> Cabin {
         audio_check: None,
         scroll_to_hooks: false,
         composer_geom: None,
+        composer_ghost: ghost::ComposerGhost::default(),
     }
 }
 
