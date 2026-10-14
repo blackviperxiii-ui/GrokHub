@@ -1,16 +1,12 @@
-//! GrokHub UI kit — shared settings and catalog primitives (light + dark).
-//!
-//! Not wired into cabin screens yet; import from here when migrating settings rows.
+//! GrokHub UI kit — shared settings, catalog, feed, board, and panel primitives
+//! (light + dark). Callers import from here; keep new shared chrome in this module.
 
 mod card;
 mod chip;
 mod row;
 
-#[allow(unused_imports)]
 pub use card::{card_frame, CardVariant};
-#[allow(unused_imports)]
-pub use chip::{badge, chip, BadgeTone, ChipVariant};
-#[allow(unused_imports)]
+pub use chip::{badge, chip, BadgeTone};
 pub use row::{setting_row, SettingRowControl};
 
 use eframe::egui::{self, RichText, Ui, Vec2};
@@ -90,28 +86,18 @@ pub fn paint_kit_gallery(ui: &mut Ui) {
         ui.add_space(crate::theme::SPACING_8);
         badge(ui, "Offline", BadgeTone::Warning);
         ui.add_space(crate::theme::SPACING_8);
-        chip(ui, "Filters", ChipVariant::Default, true);
+        chip(ui, "Filters", false, true);
         ui.add_space(crate::theme::SPACING_8);
-        chip(ui, "Disabled", ChipVariant::Outlined, false);
+        chip(ui, "Disabled", true, false);
     });
     ui.add_space(crate::theme::SPACING_12);
     let mut on = true;
-    let mut level = 0.4_f32;
     let mut pick = 0_usize;
     setting_row(
         ui,
         "Notifications",
         "Desktop alerts for agent replies.",
         SettingRowControl::Switch(&mut on),
-    );
-    setting_row(
-        ui,
-        "Volume",
-        "Alert loudness.",
-        SettingRowControl::Slider {
-            value: &mut level,
-            range: 0.0..=1.0,
-        },
     );
     setting_row(
         ui,

@@ -24,10 +24,10 @@
 ## What depends on it
 - `crates/grokhub-app/src/main.rs` launches it for the window and `--agent` (tray) modes.
 ## Non-obvious
+- G4/SD2/#712: `show_panel` queues with owning thread id (drain only when visible); Save-as-skill refuses to clobber Extracting/Draft; archived chats leave History+`/recall` (no drawer).
 - `/sync` with no paired computer only posts `SYNC_NO_PEERS` (no card, no egress line). Otherwise `gate_hub_sync` (hard Send card without a grant) runs before `run_hub_sync`, and `poll_sync` posts the result line. Tests call `pair_test_peer` and grant `HUB_DEST` with `UserClick::from_click` first. A locked keyring (`private_lock`) stops `/sync` before any card, with the short per-OS next step (`lock_next_step_short`).
 - `/skills undo` and `/skills restore` act only while `send_from_composer` holds `typed_send`; from any other send they post the `/skills changes` bubble, whose rows (`paint_skill_undo_rows`, pointer click) do the undo. Writers call `save_skill_logged`, and `apply_review_skill_patches` skips a patch the user undid (`undone_by_user`).
-- Chat rows come from `visible_chat` (`crates/grokhub-core/src/chat_view.rs`). Only `ChatKind::Thought` takes the thought frame and fold; a cabin result is `ChatKind::Result` and paints with `paint_result_bubble`. Settings group headings use `section_heading` (`SECTION_HEAD_GAP` above).
-- `cabin_src()` does not include every submodule (for example `harness_ui.rs`, `feed_ui.rs`, `pulse_ui.rs`); those tests `include_str!` the file directly.
+- Chat rows come from `visible_chat` (`crates/grokhub-core/src/chat_view.rs`). Only `ChatKind::Thought` takes the thought frame and fold; a cabin result is `ChatKind::Result` and paints with `paint_result_bubble`. Settings group headings use `section_heading` (`SECTION_HEAD_GAP` above). `cabin_src()` omits some submodules (`harness_ui`, `feed_ui`, `pulse_ui`); those tests `include_str!` the file.
 - `on_exit` stops background native runs (`kill_bg_runs`) and waits on `persist_io` because two writers of `app.json` share one temp file.
 - The composer glow and Always ring timings come from `GLOW_SETTLE_SECS` / `ALWAYS_SETTLE_SECS` in grokhub-core, and motion is skipped when `motion_ok` is false (AGENTS.md UI theme).
 - `cabin_signed_in` reads only the cabin's own OAuth in `secrets.json` (`cabin_signed_in_false_when_idle`), so a Grok CLI logged in under HOME does not change cabin tests. `isolated_cabin` only pins config, so isolate HOME too for tests that touch the user's files.
