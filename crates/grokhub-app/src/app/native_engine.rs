@@ -59,7 +59,10 @@ const VOLATILE_SAFETY_CLOSER: &str = grokhub_core::talk::VOLATILE_SAFETY_CLOSER;
 
 impl Cabin {
     /// Drain `show_panel` tool results captured on the native engine thread into [`Self::panels`].
+    /// Only the pending queue — never re-scan `tool_cards` each frame (that revived dismissals
+    /// and cloned diffs/screenshots).
     pub(super) fn drain_show_panel_results(&mut self) {
+        self.panels.bind_thread(&self.visible_thread_id());
         let queued = std::mem::take(
             &mut *pending_show_panels()
                 .lock()
@@ -68,14 +71,21 @@ impl Cabin {
         for (call_id, detail) in queued {
             let _ = self.panels.upsert_from_tool_result(&call_id, &detail);
         }
-        // Also pick up cards already on the UI thread (tests / late merges).
-        for card in self.tool_cards.clone() {
-            if (card.kind == "show_panel" || card.title == "show_panel")
-                && card.status.eq_ignore_ascii_case("completed")
-            {
-                let _ = self.panels.upsert_from_tool_result(&card.id, &card.detail);
-            }
-        }
+    }
+
+    /// Test helper: enqueue a completed `show_panel` result as the native thread would.
+    #[cfg(test)]
+    pub(super) fn enqueue_show_panel_for_test(&self, call_id: &str, detail: &str) {
+        maybe_queue_show_panel(&ToolCard {
+            id: call_id.to_string(),
+            title: "show_panel".into(),
+            kind: "show_panel".into(),
+            status: "completed".into(),
+            detail: detail.to_string(),
+            diff: String::new(),
+            image_data_url: None,
+            raw_input: String::new(),
+        });
     }
 
     /// Queue panel button intents as user-visible follow-ups (approval-gated).

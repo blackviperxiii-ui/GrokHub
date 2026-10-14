@@ -6,6 +6,9 @@ use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use eframe::egui::{self, RichText, Ui};
+use grokhub_core::panel_spec::{
+    parse_panel_spec as parse_core_panel_spec, PanelElement as CoreElement, PanelSpec as CoreSpec,
+};
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -121,9 +124,12 @@ pub struct PanelButton {
     pub action: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 enum PanelBody {
+    /// G3 controlled tagged forms (`ci_status` / `build_errors` / `compare_table`).
     Spec(PanelSpec),
+    /// Live G1/G2 agent shape from `grokhub_core::panel_spec` (`title` + `elements`).
+    Core(CoreSpec),
     Fallback(String),
 }
 
@@ -146,6 +152,8 @@ struct PanelEntry {
 /// Live panels keyed by id (upsert updates in place).
 #[derive(Debug, Default)]
 pub struct PanelStore {
+    /// Open chat thread this store is bound to; switching clears panels.
+    thread_id: String,
     order: Vec<String>,
     entries: HashMap<String, PanelEntry>,
 }
@@ -161,8 +169,11 @@ impl PanelStore {
         let id = id.into();
         let body = parse_panel_json(spec_json);
         if let Some(entry) = self.entries.get_mut(&id) {
-            entry.body = body;
-            entry.dismissed = false;
+            // Same body (re-drain / re-emit) must not revive a dismissed panel.
+            if entry.body != body {
+                entry.body = body;
+                entry.dismissed = false;
+            }
             if !anchor.is_empty() {
                 entry.anchor = anchor.to_string();
             }
@@ -177,6 +188,20 @@ impl PanelStore {
                     anchor: anchor.to_string(),
                 },
             );
+        }
+    }
+
+    /// Drop all panels when the open chat changes.
+    pub fn clear(&mut self) {
+        self.order.clear();
+        self.entries.clear();
+    }
+
+    /// Bind panels to `thread_id`; clears the store when the thread changes.
+    pub fn bind_thread(&mut self, thread_id: &str) {
+        if self.thread_id != thread_id {
+            self.clear();
+            self.thread_id = thread_id.to_string();
         }
     }
 
@@ -259,10 +284,23 @@ fn parse_panel_json(json: &str) -> PanelBody {
         Ok(v) => v,
         Err(e) => return PanelBody::Fallback(format!("Invalid panel JSON: {e}")),
     };
-    match serde_json::from_value::<PanelSpec>(value) {
-        Ok(spec) => PanelBody::Spec(spec),
-        Err(e) => PanelBody::Fallback(format!("Unsupported panel spec: {e}")),
+    // G3 controlled tagged forms used by cabin fixtures / tests.
+    if let Some(ty) = value.get("type").and_then(|v| v.as_str()) {
+        if matches!(ty, "ci_status" | "build_errors" | "compare_table") {
+            return match serde_json::from_value::<PanelSpec>(value) {
+                Ok(spec) => PanelBody::Spec(spec),
+                Err(e) => PanelBody::Fallback(format!("Unsupported panel spec: {e}")),
+            };
+        }
     }
+    // Live G1/G2 agent shape: `{ "title"?, "elements": [...] }`.
+    if value.get("elements").is_some() {
+        return match parse_core_panel_spec(trimmed) {
+            Ok(spec) => PanelBody::Core(spec),
+            Err(e) => PanelBody::Fallback(format!("Unsupported panel spec: {e}")),
+        };
+    }
+    PanelBody::Fallback("Unsupported panel spec: missing type or elements".into())
 }
 
 /// Pull the G2 `{"panel": …}` marker out of a tool result body (summary + JSON).
@@ -297,8 +335,27 @@ fn header_title(id: &str, body: &PanelBody) -> String {
         }
         PanelBody::Spec(PanelSpec::BuildErrors(be)) => be.target.clone(),
         PanelBody::Spec(PanelSpec::CompareTable(ct)) => ct.subject.clone(),
+        PanelBody::Core(spec) => core_header_title(id, spec),
         PanelBody::Fallback(_) => format!("Panel {id}"),
     }
+}
+
+fn core_header_title(id: &str, spec: &CoreSpec) -> String {
+    if let Some(title) = &spec.title {
+        let t = title.trim();
+        if !t.is_empty() {
+            return t.to_string();
+        }
+    }
+    for el in &spec.elements {
+        if let CoreElement::Heading(h) = el {
+            let t = h.text.trim();
+            if !t.is_empty() {
+                return t.to_string();
+            }
+        }
+    }
+    format!("Panel {id}")
 }
 
 /// Paint visible panels and collect action intents. No I/O or tool calls.
@@ -349,6 +406,9 @@ fn show_filtered(
             match &panel.body {
                 PanelBody::Spec(spec) => {
                     paint_spec(ui, spec, &panel.id, &mut actions);
+                }
+                PanelBody::Core(spec) => {
+                    paint_core(ui, spec, &panel.id, &mut actions);
                 }
                 PanelBody::Fallback(msg) => {
                     ui.label(
@@ -405,6 +465,112 @@ fn paint_spec(ui: &mut Ui, spec: &PanelSpec, panel_id: &str, actions: &mut Vec<P
         PanelSpec::CiStatus(ci) => paint_ci_status(ui, ci, panel_id, actions),
         PanelSpec::BuildErrors(be) => paint_build_errors(ui, be, panel_id, actions),
         PanelSpec::CompareTable(ct) => paint_compare_table(ui, ct, panel_id, actions),
+    }
+}
+
+fn paint_core(ui: &mut Ui, spec: &CoreSpec, panel_id: &str, actions: &mut Vec<PanelAction>) {
+    for el in &spec.elements {
+        match el {
+            CoreElement::Heading(h) => {
+                ui.label(
+                    RichText::new(&h.text)
+                        .font(crate::theme::title_font(crate::theme::TYPE_LABEL))
+                        .color(crate::theme::fg()),
+                );
+            }
+            CoreElement::Text(t) => {
+                ui.label(
+                    RichText::new(&t.text)
+                        .size(crate::theme::TYPE_BODY)
+                        .color(crate::theme::fg()),
+                );
+            }
+            CoreElement::List(list) => {
+                for (i, item) in list.items.iter().enumerate() {
+                    let bullet = if list.ordered {
+                        format!("{}. {item}", i + 1)
+                    } else {
+                        format!("• {item}")
+                    };
+                    ui.label(
+                        RichText::new(bullet)
+                            .size(crate::theme::TYPE_BODY)
+                            .color(crate::theme::fg()),
+                    );
+                }
+            }
+            CoreElement::Table(table) => {
+                if table.headers.is_empty() {
+                    continue;
+                }
+                egui::Grid::new(ui.id().with(("core-table", panel_id)))
+                    .spacing(egui::vec2(
+                        crate::theme::SPACING_12,
+                        crate::theme::SPACING_4,
+                    ))
+                    .show(ui, |ui| {
+                        for h in &table.headers {
+                            ui.label(
+                                RichText::new(h)
+                                    .size(crate::theme::TYPE_CAPTION)
+                                    .color(crate::theme::fg()),
+                            );
+                        }
+                        ui.end_row();
+                        for row in &table.rows {
+                            for cell in row {
+                                ui.label(
+                                    RichText::new(cell)
+                                        .size(crate::theme::TYPE_BODY)
+                                        .color(crate::theme::fg()),
+                                );
+                            }
+                            ui.end_row();
+                        }
+                    });
+            }
+            CoreElement::KeyValue(kv) => {
+                for pair in &kv.pairs {
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            RichText::new(format!("{}:", pair.key))
+                                .size(crate::theme::TYPE_CAPTION)
+                                .color(crate::theme::muted()),
+                        );
+                        ui.label(
+                            RichText::new(&pair.value)
+                                .size(crate::theme::TYPE_BODY)
+                                .color(crate::theme::fg()),
+                        );
+                    });
+                }
+            }
+            CoreElement::Button(btn) => {
+                if action_btn(ui, &btn.label).clicked() {
+                    actions.push(PanelAction {
+                        panel_id: panel_id.to_string(),
+                        action: btn.action.clone(),
+                    });
+                }
+            }
+            CoreElement::Input(input) => {
+                let value = input.value.as_deref().unwrap_or("");
+                ui.label(
+                    RichText::new(format!("{}: {value}", input.label))
+                        .size(crate::theme::TYPE_BODY)
+                        .color(crate::theme::fg()),
+                );
+            }
+            CoreElement::Progress(p) => {
+                let pct = (p.value.clamp(0.0, 1.0) * 100.0).round() as i32;
+                ui.label(
+                    RichText::new(format!("{} — {pct}%", p.label))
+                        .size(crate::theme::TYPE_BODY)
+                        .color(crate::theme::fg()),
+                );
+            }
+        }
+        ui.add_space(crate::theme::SPACING_4);
     }
 }
 
@@ -820,5 +986,66 @@ mod tests {
         assert!(text_in_shapes(&out.shapes, "PR #1"));
         assert!(!text_in_shapes(&out.shapes, "PR #2"));
         disable_panels();
+    }
+
+    fn g1_core_marker() -> &'static str {
+        r#"Panel: CI status
+
+{
+  "panel": {
+    "title": "Linux CI",
+    "elements": [
+      { "type": "heading", "level": 2, "text": "Checks" },
+      {
+        "type": "key_value",
+        "pairs": [
+          { "key": "Workflow", "value": "ci" },
+          { "key": "Branch", "value": "beta" }
+        ]
+      },
+      { "type": "button", "label": "Re-run", "action": "rerun_ci" }
+    ]
+  }
+}"#
+    }
+
+    #[test]
+    fn live_g1_core_panel_renders_title() {
+        enable_panels();
+        let mut store = PanelStore::default();
+        assert!(store.upsert_from_tool_result("live-1", g1_core_marker()));
+        assert_eq!(store.len(), 1);
+        let (shapes, _) = headless_show(&mut store);
+        assert!(text_in_shapes(&shapes, "Linux CI"));
+        assert!(text_in_shapes(&shapes, "Workflow"));
+        disable_panels();
+    }
+
+    #[test]
+    fn dismissed_survives_same_body_reupsert() {
+        enable_panels();
+        let mut store = PanelStore::default();
+        assert!(store.upsert_from_tool_result("call-1", &g2_marker(756)));
+        store.dismiss("call-1");
+        assert_eq!(store.len(), 0);
+        assert!(store.upsert_from_tool_result("call-1", &g2_marker(756)));
+        assert_eq!(store.len(), 0, "same body must not clear dismissed");
+        let (shapes, _) = headless_show(&mut store);
+        assert!(!text_in_shapes(&shapes, "PR #756"));
+        assert!(store.upsert_from_tool_result("call-1", &g2_marker(757)));
+        assert_eq!(store.len(), 1, "changed body revives the panel");
+        disable_panels();
+    }
+
+    #[test]
+    fn bind_thread_clears_panels() {
+        let mut store = PanelStore::default();
+        store.bind_thread("t1");
+        assert!(store.upsert_from_tool_result("c", &g2_marker(1)));
+        assert_eq!(store.len(), 1);
+        store.bind_thread("t1");
+        assert_eq!(store.len(), 1, "same thread keeps panels");
+        store.bind_thread("t2");
+        assert!(store.is_empty());
     }
 }

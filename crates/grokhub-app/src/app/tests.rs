@@ -29062,21 +29062,33 @@ fn g4_panel_action_queues_followup_without_tool_dispatch() {
 }
 
 #[test]
-fn g4_drain_show_panel_from_tool_card() {
+fn g4_drain_show_panel_from_pending_queue() {
     let _g = crate::config::hold_test_config();
     let (root, mut cabin) = isolated_cabin("g4-drain-card");
-    let detail = "{\n  \"panel\": {\n  \"type\": \"ci_status\",\n  \"pr_number\": 42,\n  \"checks\": [],\n  \"actions\": []\n}\n}".to_string();
-    cabin.tool_cards.push(grokhub_core::wire::ToolCard {
-        id: "tc-1".into(),
-        title: "show_panel".into(),
-        kind: "show_panel".into(),
-        status: "completed".into(),
-        detail,
-        diff: String::new(),
-        image_data_url: None,
-        raw_input: String::new(),
-    });
+    let detail = "{\n  \"panel\": {\n  \"type\": \"ci_status\",\n  \"pr_number\": 42,\n  \"checks\": [],\n  \"actions\": []\n}\n}";
+    cabin.enqueue_show_panel_for_test("tc-1", detail);
     cabin.drain_show_panel_results();
     assert_eq!(cabin.panels.len(), 1);
+    // Re-drain must not revive a dismissal or require cloning tool_cards.
+    cabin.panels.dismiss("tc-1");
+    cabin.enqueue_show_panel_for_test("tc-1", detail);
+    cabin.drain_show_panel_results();
+    assert_eq!(cabin.panels.len(), 0);
+    release_isolated(&root, cabin);
+}
+
+#[test]
+fn g4_panels_clear_on_thread_bind() {
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin) = isolated_cabin("g4-thread-panels");
+    let open = cabin.visible_thread_id();
+    cabin.panels.bind_thread(&open);
+    assert!(cabin.panels.upsert_from_tool_result(
+        "c",
+        "{\n  \"panel\": {\n  \"type\": \"ci_status\",\n  \"pr_number\": 1,\n  \"checks\": [],\n  \"actions\": []\n}\n}"
+    ));
+    assert_eq!(cabin.panels.len(), 1);
+    cabin.panels.bind_thread("other-thread");
+    assert!(cabin.panels.is_empty());
     release_isolated(&root, cabin);
 }

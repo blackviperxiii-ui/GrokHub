@@ -1178,6 +1178,7 @@ impl Cabin {
                     self.ui_empty_home(ui);
                     return;
                 }
+                self.panels.bind_thread(&self.visible_thread_id());
                 self.drain_show_panel_results();
                 let avail = clamp_row_width(ui.available_width());
                 let pane = avail;
