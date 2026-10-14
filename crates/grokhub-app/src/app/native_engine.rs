@@ -30,12 +30,74 @@ fn live_map() -> &'static Mutex<HashMap<String, LiveCfg>> {
     MAP.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+/// Completed `show_panel` tool results queued from the native engine thread for the UI.
+fn pending_show_panels() -> &'static Mutex<Vec<(String, String)>> {
+    static Q: OnceLock<Mutex<Vec<(String, String)>>> = OnceLock::new();
+    Q.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+fn maybe_queue_show_panel(card: &ToolCard) {
+    if !card.status.eq_ignore_ascii_case("completed") {
+        return;
+    }
+    if card.kind != "show_panel" && card.title != "show_panel" {
+        return;
+    }
+    if !card.detail.contains("\"panel\"") {
+        return;
+    }
+    pending_show_panels()
+        .lock()
+        .unwrap_or_else(|err| err.into_inner())
+        .push((card.id.clone(), card.detail.clone()));
+}
+
 /// Closes the volatile voice/notes tail so cabin safety (earlier, in the stable
 /// prefix) still outranks a custom personality or tuned note that lands last.
 /// The agent puts each turn's talk style just before it.
 const VOLATILE_SAFETY_CLOSER: &str = grokhub_core::talk::VOLATILE_SAFETY_CLOSER;
 
 impl Cabin {
+    /// Drain `show_panel` tool results captured on the native engine thread into [`Self::panels`].
+    /// Only the pending queue — never re-scan `tool_cards` each frame (that revived dismissals
+    /// and cloned diffs/screenshots).
+    pub(super) fn drain_show_panel_results(&mut self) {
+        self.panels.bind_thread(&self.visible_thread_id());
+        let queued = std::mem::take(
+            &mut *pending_show_panels()
+                .lock()
+                .unwrap_or_else(|err| err.into_inner()),
+        );
+        for (call_id, detail) in queued {
+            let _ = self.panels.upsert_from_tool_result(&call_id, &detail);
+        }
+    }
+
+    /// Test helper: enqueue a completed `show_panel` result as the native thread would.
+    #[cfg(test)]
+    pub(super) fn enqueue_show_panel_for_test(&self, call_id: &str, detail: &str) {
+        maybe_queue_show_panel(&ToolCard {
+            id: call_id.to_string(),
+            title: "show_panel".into(),
+            kind: "show_panel".into(),
+            status: "completed".into(),
+            detail: detail.to_string(),
+            diff: String::new(),
+            image_data_url: None,
+            raw_input: String::new(),
+        });
+    }
+
+    /// Queue panel button intents as user-visible follow-ups (approval-gated).
+    pub(super) fn queue_panel_actions(&mut self, actions: Vec<panels::PanelAction>) {
+        for action in actions {
+            self.followup_queue.push(format!(
+                "[panel action] {} on {}",
+                action.action, action.panel_id
+            ));
+        }
+    }
+
     /// `/compact` on the open thread. False only when no thread is open.
     /// The job thread is bound after the engine, so the session id stays on this tab.
     /// `running` stays false: the compact `Done` must not append an assistant bubble.
@@ -583,6 +645,9 @@ fn serve_native(
         }));
         let tx = evt_tx.clone();
         let _ = engine.prompt(&text, image.as_deref(), &mut |ev| {
+            if let AcpEvent::Tool(ref card) = ev {
+                maybe_queue_show_panel(card);
+            }
             let _ = tx.send(ev);
         });
     }
