@@ -290,7 +290,7 @@ impl Cabin {
         // chat engine. Drop a stale handle without stopping that run.
         let keep_acp = self.background_tasks_open()
             || (keep_run && self.grok_p_rx.is_none() && !self.job_on_background_thread());
-        self.clear_chat_attach_tray();
+        self.clear_pending_attach_only();
         self.followup_step = 0;
         self.active_skill_follow = None;
         self.hands_attach = false;

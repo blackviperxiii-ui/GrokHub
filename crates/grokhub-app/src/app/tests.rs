@@ -19325,14 +19325,10 @@ fn dropping_files_says_what_happens() {
         drop_hint_line(true, 1),
         "Drop to use as the Imagine reference"
     );
-    assert!(drop_hint_line(false, 3).ends_with("the first of 3 files"));
+    assert!(drop_hint_line(false, 3).ends_with("3 files"));
     assert_eq!(drop_extra_note(0), None);
-    assert!(drop_extra_note(1)
-        .unwrap()
-        .contains("The other one was left out"));
-    assert!(drop_extra_note(4)
-        .unwrap()
-        .contains("4 others were left out"));
+    assert!(drop_extra_note(1).unwrap().contains("1 more file"));
+    assert!(drop_extra_note(4).unwrap().contains("4 more file"));
     let app = Cabin::quiet_for_test();
     let ctx = egui::Context::default();
     let mut input = egui::RawInput::default();
@@ -24292,14 +24288,11 @@ fn drop_extra_note_none_for_zero_extras() {
     assert_eq!(drop_extra_note(0), None);
     let one = drop_extra_note(1).expect("singular");
     assert!(
-        one.contains("The other one was left out"),
+        one.contains("1 more file"),
         "one extra uses singular wording: {one}"
     );
     let many = drop_extra_note(4).expect("plural");
-    assert!(
-        many.contains("4 others were left out"),
-        "n>1 extras mention n: {many}"
-    );
+    assert!(many.contains("4 more file"), "n>1 extras mention n: {many}");
 }
 
 // Folded from PR #423.

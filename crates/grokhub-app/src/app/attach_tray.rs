@@ -3,12 +3,11 @@
 use super::plus::PlusReady;
 use super::*;
 use eframe::egui::{ColorImage, TextureHandle, TextureOptions};
-use grokhub_core::model_registry::store::load_registry;
 use grokhub_core::attach::{
-    attach_kind, attach_name, attach_prompt_line, attach_send_line, AttachKind,
-    PENDING_ATTACH_MAX, PendingAttach, PendingItemStatus,
-    PendingValidateIssue, pending_item_user_message,
+    attach_kind, attach_name, attach_prompt_line, attach_send_line, pending_item_user_message,
+    AttachKind, PendingAttach, PendingItemStatus, PendingValidateIssue, PENDING_ATTACH_MAX,
 };
+use grokhub_core::model_registry::store::load_registry;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::thread;
@@ -184,15 +183,16 @@ fn thumb_for_path(path: &Path) -> Option<ColorImage> {
 
 #[cfg(windows)]
 fn clipboard_file_paths() -> Option<Vec<PathBuf>> {
-    use clipboard_win::{formats::FileListReader, get_clipboard, formats::FileList};
-    get_clipboard(FileList).and_then(|fl| {
-        let list = FileListReader::new(fl);
-        let mut out = Vec::new();
-        for p in list.iter() {
-            out.push(PathBuf::from(p));
-        }
-        if out.is_empty() { None } else { Some(out) }
-    })
+    use clipboard_win::{formats::FileList, Getter};
+    let mut out = Vec::new();
+    if FileList.read_clipboard(&mut out).ok()? == 0 {
+        return None;
+    }
+    if out.is_empty() {
+        None
+    } else {
+        Some(out)
+    }
 }
 
 #[cfg(not(windows))]
@@ -200,13 +200,10 @@ fn clipboard_file_paths() -> Option<Vec<PathBuf>> {
     None
 }
 
-
 pub(super) fn pick_chat_files() -> mpsc::Receiver<Option<Vec<PathBuf>>> {
     let (tx, rx) = mpsc::channel();
     let run = move || {
-        let picked = rfd::FileDialog::new()
-            .set_title("Add to chat")
-            .pick_files();
+        let picked = rfd::FileDialog::new().set_title("Add to chat").pick_files();
         let _ = tx.send(picked);
     };
     if cfg!(target_os = "macos") {
@@ -293,9 +290,9 @@ impl Cabin {
                 worker_err,
             } => {
                 if self.attach_tray.len() >= PENDING_ATTACH_MAX {
-                    self.status = pending_item_user_message(
-                        PendingItemStatus::Invalid(PendingValidateIssue::TooMany),
-                    )
+                    self.status = pending_item_user_message(PendingItemStatus::Invalid(
+                        PendingValidateIssue::TooMany,
+                    ))
                     .unwrap_or("too many attachments")
                     .into();
                     return;
@@ -319,10 +316,8 @@ impl Cabin {
                         }
                     }
                     Err(issue) => {
-                        let msg = pending_item_user_message(
-                            PendingItemStatus::Invalid(issue),
-                        )
-                        .unwrap_or("could not attach file");
+                        let msg = pending_item_user_message(PendingItemStatus::Invalid(issue))
+                            .unwrap_or("could not attach file");
                         self.status = msg.into();
                     }
                 }
@@ -335,10 +330,13 @@ impl Cabin {
             self.status = "too many attachments".into();
             return;
         }
-        let size = std::fs::metadata(&ready.raw)
-            .map(|m| m.len())
-            .unwrap_or(0);
-        if self.attach_tray.queue.stage(ready.raw.clone(), size).is_err() {
+        let size = std::fs::metadata(&ready.raw).map(|m| m.len()).unwrap_or(0);
+        if self
+            .attach_tray
+            .queue
+            .stage(ready.raw.clone(), size)
+            .is_err()
+        {
             self.status = "too many attachments".into();
             return;
         }
@@ -365,7 +363,13 @@ impl Cabin {
         self.attach_name = None;
         self.attach_path = None;
         self.attach_kind = None;
-        for (entry, row) in self.attach_tray.queue.items().iter().zip(self.attach_tray.rows.iter()) {
+        for (entry, row) in self
+            .attach_tray
+            .queue
+            .items()
+            .iter()
+            .zip(self.attach_tray.rows.iter())
+        {
             let status = entry.status;
             if matches!(
                 status,
@@ -386,12 +390,17 @@ impl Cabin {
     }
 
     pub(super) fn clear_chat_attach_tray(&mut self) {
+        self.clear_pending_attach_only();
+        self.status.clear();
+    }
+
+    pub(super) fn clear_pending_attach_only(&mut self) {
         self.attach_tray.clear();
+        self.attach_thumb_cache.clear();
         self.attach_url = None;
         self.attach_name = None;
         self.attach_path = None;
         self.attach_kind = None;
-        self.status.clear();
     }
 
     pub(super) fn append_pending_attach_lines(&mut self, text: &mut String) {
@@ -451,7 +460,11 @@ impl Cabin {
         self.attach_kind = None;
     }
 
-    pub(super) fn try_composer_attach_paste(&mut self, ui: &egui::Ui, composer_id: egui::Id) -> bool {
+    pub(super) fn try_composer_attach_paste(
+        &mut self,
+        ui: &egui::Ui,
+        composer_id: egui::Id,
+    ) -> bool {
         if !ui.memory(|m| m.has_focus(composer_id)) {
             return false;
         }
@@ -503,9 +516,7 @@ impl Cabin {
             let err = row
                 .worker_err
                 .clone()
-                .or_else(|| {
-                    pending_item_user_message(entry.status).map(str::to_string)
-                });
+                .or_else(|| pending_item_user_message(entry.status).map(str::to_string));
             paint.push((
                 idx,
                 attach_name(&entry.path),
@@ -531,11 +542,7 @@ impl Cabin {
                             ui.image((id, egui::vec2(40.0, 40.0)));
                         }
                         ui.vertical(|ui| {
-                            ui.label(
-                                RichText::new(name)
-                                    .size(12.0)
-                                    .color(crate::theme::fg()),
-                            );
+                            ui.label(RichText::new(name).size(12.0).color(crate::theme::fg()));
                             let meta = if preparing {
                                 "Preparing…"
                             } else if let Some(e) = err.as_deref() {
@@ -616,9 +623,7 @@ pub(super) fn drop_extra_note(extra: usize) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use grokhub_core::attach::{
-        MODEL_CANT_READ_FILE, PendingFileRole, PendingItemStatus,
-    };
+    use grokhub_core::attach::{PendingFileRole, PendingItemStatus, MODEL_CANT_READ_FILE};
 
     #[test]
     fn paste_routing_text_stays_text() {
@@ -643,13 +648,11 @@ mod tests {
     fn cap_ten_blocks_eleventh() {
         let mut cabin = Cabin::quiet_for_test();
         for i in 0..PENDING_ATTACH_MAX {
-            assert!(
-                cabin
-                    .attach_tray
-                    .queue
-                    .stage(format!("/tmp/f{i}.txt"), 1)
-                    .is_ok()
-            );
+            assert!(cabin
+                .attach_tray
+                .queue
+                .stage(format!("/tmp/f{i}.txt"), 1)
+                .is_ok());
             cabin.attach_tray.rows.push(AttachTrayRow::default());
         }
         cabin.apply_ingest_out(AttachIngestOut::Row {
