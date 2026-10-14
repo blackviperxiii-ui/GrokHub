@@ -16,12 +16,14 @@ pub(crate) mod ports;
 mod read_file;
 pub(crate) mod registry;
 mod search_replace;
+pub(crate) mod set;
 pub(crate) mod shell;
 mod show_panel;
 mod web_fetch;
 mod write;
 
 pub use registry::Settings as DeferredToolsSettings;
+pub use set::{schemas_for_job, tool_set_for_kind, tool_set_refusal, ToolSet, TOOL_SET_OUTSIDE};
 pub use web_fetch::public_only_resolve;
 
 /// Whether `{config_dir}/deferred_tools.toml` has `enabled = true`.
@@ -139,8 +141,23 @@ pub fn execute(workspace: &Path, name: &str, arguments: &str) -> ToolOutput {
 }
 
 pub fn dispatch(ctx: &ToolCtx<'_>, name: &str, arguments: &str) -> ToolOutput {
+    dispatch_for_job(ctx, name, arguments, None)
+}
+
+/// Like [`dispatch`], but refuses tools outside `set` with [`TOOL_SET_OUTSIDE`].
+pub fn dispatch_for_job(
+    ctx: &ToolCtx<'_>,
+    name: &str,
+    arguments: &str,
+    set: Option<&ToolSet>,
+) -> ToolOutput {
     if let Some(session) = ctx.session {
         registry::bind_session(session);
+    }
+    if let Some(set) = set {
+        if !set.allows(name) {
+            return ToolOutput::err(set::tool_set_refusal(name));
+        }
     }
     let args = match parse_args(arguments) {
         Ok(args) => args,
