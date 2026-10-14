@@ -489,6 +489,7 @@ impl Run<'_, '_> {
     }
 
     fn ask_worker(&mut self) -> Result<crate::client::TurnOutput, String> {
+        tools::bind_deferred_session(&self.ep.chat_id);
         let mut call = ModelCall::xai(
             self.k.model,
             self.k.effort,
@@ -833,6 +834,7 @@ impl Run<'_, '_> {
             stop: &stop,
             tasks: None,
             owner: None,
+            session: Some(&self.ep.chat_id),
         };
         let out = tools::dispatch(&ctx, &call.name, &call.arguments);
         if call.name == "screenshot" {
