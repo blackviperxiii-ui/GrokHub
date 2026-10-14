@@ -146,6 +146,7 @@ impl CatalogEntry {
             out.insert("url".into(), json!(self.url));
             out.insert("type".into(), json!("http"));
         } else {
+            out.insert("type".into(), json!("stdio"));
             out.insert("command".into(), json!(self.command[0]));
             if self.command.len() > 1 {
                 out.insert("args".into(), json!(self.command[1..]));
@@ -467,7 +468,11 @@ mod tests {
         let c = bundled();
         assert_eq!(
             c.get("playwright").unwrap().config_entry(),
-            json!({"command": "npx", "args": ["-y", "@playwright/mcp@latest"]})
+            json!({
+                "type": "stdio",
+                "command": "npx",
+                "args": ["-y", "@playwright/mcp@latest"]
+            })
         );
         assert_eq!(
             c.get("linear").unwrap().config_entry(),
