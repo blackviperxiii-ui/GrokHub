@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Eval: R6 offline technique A/B matrix (prefix cache, tool-output summaries, deferred tools, batched read-only, all-on) with cost/success metrics and adopt/spike/reject report in `docs/eval/r6-technique-ab.md`.
 - Agent: background and unattended callers bind a per-job `ToolSet` (`schemas_for_job` / `dispatch_for_job`) and log schema size at job start (SP2).
 - Watch-and-learn (SD2): after a screen recording, **Save as skill** runs the vision step extractor, shows the draft (hard steps flagged), and saves only on confirm; undo removes it; replay still re-asks hard approvals.
 - Generative UI (G4): `show_panel` tool results with a `{"panel": …}` marker upsert into the chat `PanelStore` and paint inline under the turn (off by default via `generative_ui.toml`); panel buttons queue a `[panel action]` follow-up through the normal approval path.
