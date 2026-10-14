@@ -598,6 +598,8 @@ fn install_inter(ctx: &egui::Context) {
             fam.insert(0, "mono".into());
         }
     }
+    // U7c: Phosphor fallback after Inter so icon codepoints resolve without shadowing text.
+    crate::icons::add_phosphor_fonts(&mut fonts);
     ctx.set_fonts(fonts);
 }
 
