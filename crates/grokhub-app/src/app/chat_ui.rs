@@ -2645,7 +2645,7 @@ impl Cabin {
                         }
                     }
                     ComposerStackSlot::Attach => {
-                        self.ui_attach_chip(ui, PlusTarget::Chat);
+                        self.ui_attach_tray(ui);
                     }
                     ComposerStackSlot::Voice => {
                         self.paint_voice_mode_row(ui);
@@ -2831,6 +2831,7 @@ impl Cabin {
                                             );
                                             ui.painter().galley(hint_pos, hint, ghost);
                                         }
+                                        self.try_composer_attach_paste(ui, composer_id);
                                         if let Some(t) = take_focused_composer(
                                             ui,
                                             &mut self.composer,
