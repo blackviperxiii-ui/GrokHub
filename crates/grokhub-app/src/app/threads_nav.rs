@@ -279,7 +279,7 @@ impl Cabin {
     pub(super) fn ui_chat_archive_row(&mut self, ui: &mut egui::Ui) {
         const CHOICES: &[u32] = &[0, 7, 14, 30, 90];
         const LABELS: [&str; 5] = ["Off", "7 days", "14 days", "30 days", "90 days"];
-        let hint = "Chats with no messages, opens or edits for this long leave History and search (still on disk; open the chat or Unarchive from its menu). Pinned chats and chats with a running or parked task stay. Nothing is deleted.";
+        let hint = "Chats with no messages, opens or edits for this long leave History and search (still on disk; nothing is deleted). Pinned chats and chats with a running or parked task stay. There is no Archived drawer — stay on the chat and use Unarchive from its menu before you leave, or reply in it to restore.";
         let mut pick = CHOICES
             .iter()
             .position(|&d| d == self.cfg.chat_archive_days)

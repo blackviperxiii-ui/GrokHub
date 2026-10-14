@@ -328,13 +328,23 @@ impl Cabin {
             return;
         }
         // SD2: offer Save as skill once stills exist (vision needs a key on tap).
-        watch_set(Some(WatchPhase::Offer(WatchOffer {
-            dir: done.dir.clone(),
-            note: note.to_string(),
-            secs: done.secs,
-            chat: chat.to_string(),
-            title: title.clone(),
-        })));
+        // Do not clobber an in-flight Extracting/Draft — a second finish would drop
+        // the vision rx and the first skill draft with no way back from chrome.
+        let watch_busy = watch_with_mut(|slot| {
+            matches!(
+                slot.as_ref(),
+                Some(WatchPhase::Extracting { .. } | WatchPhase::Draft { .. })
+            )
+        });
+        if !watch_busy {
+            watch_set(Some(WatchPhase::Offer(WatchOffer {
+                dir: done.dir.clone(),
+                note: note.to_string(),
+                secs: done.secs,
+                chat: chat.to_string(),
+                title: title.clone(),
+            })));
+        }
         let picks = sr::sample_keyframes(done.frames.len(), sr::KEYFRAMES);
         let stills: Vec<String> = picks
             .iter()
@@ -347,6 +357,10 @@ impl Cabin {
                 "Connect Grok in Settings"
             };
             self.post_screen_done(&title, &done.dir, chat, Err(why.to_string()));
+            if watch_busy {
+                self.status = "Save as skill still in progress — finish or cancel it before a new offer"
+                    .into();
+            }
             return;
         }
         let messages = sr::diagnosis_messages(note, done.secs, stills.len());
@@ -358,7 +372,11 @@ impl Cabin {
             let reply = crate::xai::grok_chat_images(&key, &model, &messages, &stills);
             let _ = tx.send((t, dir, c, reply));
         });
-        self.status = format!("{title} · looking at {} stills…", picks.len());
+        self.status = if watch_busy {
+            "Save as skill still in progress — finish or cancel it before a new offer".into()
+        } else {
+            format!("{title} · looking at {} stills…", picks.len())
+        };
     }
 
     pub(super) fn poll_screen_diagnosis(&mut self) {
@@ -1119,6 +1137,53 @@ mod tests {
                 .iter()
                 .any(|s| s.name == "open-settings-display"),
             "saved skill is remembered in the cabin list"
+        );
+        watch_set(None);
+        unpin(home);
+    }
+
+    #[test]
+    fn finish_recording_does_not_clobber_in_flight_save_as_skill_draft() {
+        let _wl = watch_learn_test_guard();
+        watch_set(None);
+        let (_g, root, home) = pinned("screenrec-watch-noclobber");
+        let mut cabin = Cabin::quiet_for_test();
+        let dir_a = sr::recording_dir(&root, "2026-10-14-a");
+        let dir_b = sr::recording_dir(&root, "2026-10-14-b");
+        std::fs::create_dir_all(&dir_a).unwrap();
+        std::fs::create_dir_all(&dir_b).unwrap();
+        png(&dir_a.join(sr::frame_name(0, "png")));
+        png(&dir_b.join(sr::frame_name(0, "png")));
+        let draft = draft_from_reply("open Settings → Display", OPEN_SETTINGS_REPLY).unwrap();
+        watch_set(Some(WatchPhase::Draft {
+            offer: WatchOffer {
+                dir: dir_a.clone(),
+                note: "open Settings → Display".into(),
+                secs: 12,
+                chat: String::new(),
+                title: sr::recording_title(12, "open Settings → Display"),
+            },
+            hard_lines: hard_step_lines(&draft),
+            draft,
+        }));
+        let done_b = RecordDone {
+            secs: 9,
+            frames: vec![dir_b.join(sr::frame_name(0, "png"))],
+            dir: dir_b,
+            err: None,
+        };
+        cabin.finish_screen_recording(done_b, "other capture", "", String::new());
+        let kept = watch_with_mut(|s| {
+            matches!(
+                s.as_ref(),
+                Some(WatchPhase::Draft { offer, .. }) if offer.dir == dir_a
+            )
+        });
+        assert!(kept, "in-flight Draft must survive a second recording finish");
+        assert!(
+            cabin.status.contains("Save as skill still in progress"),
+            "status explains why the new offer was refused: {}",
+            cabin.status
         );
         watch_set(None);
         unpin(home);

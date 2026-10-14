@@ -1,7 +1,7 @@
 //! Rail, titlebar, and avatar.
 
 use super::*;
-use crate::ui_kit::{card_frame, chip, empty_state, CardVariant, ChipVariant};
+use crate::ui_kit::{card_frame, chip, empty_state, CardVariant};
 
 /// Shown at the right of the rail's Search row: the key that opens the palette.
 pub(super) const SEARCH_KEY_HINT: &str = "Ctrl+K";
@@ -579,7 +579,7 @@ impl Cabin {
                 ui.horizontal(|ui| {
                     rail_section_caption(ui, RichText::new("History"));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if chip(ui, "See all", ChipVariant::Outlined, true).clicked() {
+                        if chip(ui, "See all", true, true).clicked() {
                             self.nav = Nav::History;
                         }
                     });

@@ -680,6 +680,10 @@ impl Cabin {
                 let vis = self.thread_idx;
                 let mut thread_rows = Vec::new();
                 for (i, t) in self.threads.iter().enumerate() {
+                    // Match History search (#712): archived chats leave recall too.
+                    if threads::is_archived(t) {
+                        continue;
+                    }
                     let body = if i == vis {
                         search_thread_body(self.messages.iter().map(|m| m.1.as_str()))
                     } else {
