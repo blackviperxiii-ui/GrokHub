@@ -75,14 +75,16 @@ pub fn parse_steps(raw: &str) -> Vec<WatchedStep> {
         if plain.is_empty() {
             continue;
         }
-        let lower = plain.to_ascii_lowercase();
-        if is_header_line(&lower) {
-            continue;
-        }
+        // List markers win over header heuristics so wording like
+        // "1. Repeat the previous steps" is kept, not dropped as a heading.
         let Some(text) = list_item_text(plain) else {
             continue;
         };
         if text.is_empty() {
+            continue;
+        }
+        // Exact section titles only (after stripping the list marker).
+        if is_header_line(&text.to_ascii_lowercase()) {
             continue;
         }
         let description = clip_step(text);
@@ -190,12 +192,13 @@ fn pitfalls_for(steps: &[WatchedStep]) -> String {
 }
 
 fn is_header_line(lower: &str) -> bool {
+    // Exact section titles only. Do not match suffixes like "previous steps" —
+    // those are real watched actions when they appear as list items.
     let bare = lower.trim_end_matches(':').trim();
     matches!(
         bare,
         "steps" | "fix steps" | "watched steps" | "the steps" | "task" | "what i saw" | "summary"
-    ) || bare.starts_with("steps ")
-        || bare.ends_with(" steps")
+    )
 }
 
 fn peel_bold(line: &str) -> &str {
@@ -281,6 +284,25 @@ mod tests {
             classify_step("Open Settings", None, None)
         );
         assert_eq!(steps[0].approval, ApprovalNeed::None);
+    }
+
+    #[test]
+    fn list_step_ending_in_steps_is_kept() {
+        // Bugbot: ends_with(" steps") must not drop real watched actions.
+        let steps = parse_steps(
+            "**Steps:**\n1. Open Settings\n2. Repeat the previous steps\n3. Click Apply\n",
+        );
+        assert_eq!(steps.len(), 3);
+        assert_eq!(steps[0].description, "Open Settings");
+        assert_eq!(steps[1].description, "Repeat the previous steps");
+        assert_eq!(steps[2].description, "Click Apply");
+        // Exact title-only list items are still skipped as section noise.
+        assert!(parse_steps("1. Steps\n2. Do the real thing\n")
+            .iter()
+            .all(|s| s.description != "Steps"));
+        let kept = parse_steps("1. Steps\n2. Do the real thing\n");
+        assert_eq!(kept.len(), 1);
+        assert_eq!(kept[0].description, "Do the real thing");
     }
 
     #[test]
