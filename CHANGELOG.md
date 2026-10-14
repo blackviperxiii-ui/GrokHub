@@ -2,11 +2,8 @@
 
 ## Unreleased
 
-<<<<<<< HEAD
 - Watch-and-learn (SD2): after a screen recording, **Save as skill** runs the vision step extractor, shows the draft (hard steps flagged), and saves only on confirm; undo removes it; replay still re-asks hard approvals.
-=======
 - Generative UI (G4): `show_panel` tool results with a `{"panel": …}` marker upsert into the chat `PanelStore` and paint inline under the turn (off by default via `generative_ui.toml`); panel buttons queue a `[panel action]` follow-up through the normal approval path.
->>>>>>> origin/beta
 - Agent: per-job `ToolSet` allowlists (`schemas_for_job` / `dispatch_for_job` / `tool_set_from_job`) so background and unattended jobs can send a lean tool schema list; deferred mode keeps self-manage schemas on the stable list.
 - Watch-and-learn (SD1): pure core step extractor turns a screen-recording vision reply into ordered, classified steps and an unsaved skill draft (no network, save, or UI — SD2).
 - Agent: optional batched read-only tool round (`batched_tools.toml`, off by default). When enabled, consecutive gate-readonly tool calls in one model reply run dispatch in parallel (up to four at a time) with results appended in original order; approvals, MCP, and write paths stay sequential.
