@@ -1,4 +1,7 @@
 use crate::is_plain_text;
+use std::fs;
+use std::io;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct SkillMd {
@@ -107,6 +110,42 @@ pub fn parse_skill_md(raw: &str) -> SkillMd {
 
 pub fn skill_safe(body: &str) -> bool {
     is_plain_text(body)
+}
+
+/// Write a watch-and-learn skill draft under `{skills_dir}/<name>/SKILL.md`.
+/// Refuses when the folder already exists (no overwrite) or [`skill_safe`] fails.
+/// Pure filesystem helper for SD2 — no ledger, no network.
+pub fn save_watched_skill(skills_dir: &Path, skill: &SkillMd) -> io::Result<PathBuf> {
+    if !skill_safe(&skill.instructions)
+        || !skill_safe(&skill.pitfalls)
+        || !skill_safe(&skill.description)
+        || !skill_safe(&skill.trigger)
+        || !skill_safe(&skill.verify)
+        || !skill_safe(&skill.name)
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "skill text is not safe to save",
+        ));
+    }
+    let name = skill_dir_name(&skill.name);
+    if name.is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "skill name is empty",
+        ));
+    }
+    let dir = skills_dir.join(&name);
+    if dir.exists() {
+        return Err(io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            format!("skill `{name}` already exists"),
+        ));
+    }
+    fs::create_dir_all(&dir)?;
+    let path = dir.join("SKILL.md");
+    fs::write(&path, render_skill_md(skill))?;
+    Ok(path)
 }
 
 pub fn bump_skill_run(runs: u32) -> u32 {
@@ -564,6 +603,69 @@ pub fn is_junk_skill(s: &SkillMd) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn watched_draft(name: &str, instructions: &str) -> SkillMd {
+        SkillMd {
+            name: name.into(),
+            description: format!("Replay the watched steps for {name}"),
+            slash: format!("/{name}"),
+            trigger: name.replace('-', " "),
+            instructions: instructions.into(),
+            pitfalls: "Step 2 asks for approval on replay (delete).".into(),
+            verify: "After the last step: Confirm the folder is gone".into(),
+            runs: 0,
+        }
+    }
+
+    #[test]
+    fn save_watched_skill_round_trips_and_refuses_existing_or_unsafe() {
+        let root = std::env::temp_dir().join(format!(
+            "gh-save-watched-{}-{}",
+            std::process::id(),
+            now_stamp()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        let skills = root.join("skills");
+        fs::create_dir_all(&skills).unwrap();
+
+        let draft = watched_draft(
+            "open-settings-display",
+            "1. Open Settings\n2. Delete the old profile\n3. Confirm the folder is gone",
+        );
+        let path = save_watched_skill(&skills, &draft).expect("save");
+        assert_eq!(path, skills.join("open-settings-display").join("SKILL.md"));
+        let raw = fs::read_to_string(&path).unwrap();
+        let round = parse_skill_md(&raw);
+        assert_eq!(round.name, draft.name);
+        assert_eq!(round.runs, 0);
+        assert_eq!(round.instructions.trim(), draft.instructions.trim());
+        assert!(round.pitfalls.contains("delete"));
+
+        let again = save_watched_skill(&skills, &draft);
+        assert_eq!(
+            again.unwrap_err().kind(),
+            io::ErrorKind::AlreadyExists,
+            "never overwrite an existing skill dir"
+        );
+
+        let mut unsafe_skill = draft.clone();
+        unsafe_skill.instructions = "1. Paste sk-abcdefghijklmnopqrstuv into the field".into();
+        assert_eq!(
+            save_watched_skill(&skills.join("other"), &unsafe_skill)
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::InvalidData
+        );
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    fn now_stamp() -> u64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos() as u64)
+            .unwrap_or(0)
+    }
 
     #[test]
     fn dir_and_roundtrip() {
