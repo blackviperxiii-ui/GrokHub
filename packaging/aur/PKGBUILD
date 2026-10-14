@@ -10,6 +10,8 @@ depends=('gtk3' 'libxkbcommon' 'libxkbcommon-x11' 'hicolor-icon-theme')
 optdepends=(
   'ffmpeg: Imagine video'
   'alsa-utils: Hey Grok mic'
+  # CPU llama.cpp in extra; add ggml-vulkan / ggml-cuda / ggml-hip for GPU backends.
+  'llama-cpp: local model engine (alternative to in-app download)'
 )
 makedepends=('cargo' 'rust' 'pkgconf' 'git')
 options=('!debug')

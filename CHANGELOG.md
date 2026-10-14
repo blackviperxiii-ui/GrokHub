@@ -5,11 +5,14 @@
 - Screen recording and audio check report cards get a **Fix it** action that builds a harness fix plan from the diagnosis and runs it step by step through the existing hard approval cards (Phase C / SC2).
 - Docs: SignPath Foundation privacy notice in [PRIVACY.md](PRIVACY.md) and [docs/CODE_SIGNING.md](docs/CODE_SIGNING.md); Windows Setup shows the statement before install (`packaging/windows/privacy.txt`).
 - Chat shows a small connectivity chip (Online / Reconnecting / Offline (local engine)) above the composer from the cabin connectivity engine; ureq provider and xAI client transport failures nudge that state.
+- Arch (AUR): optional `llama-cpp` dependency for a system `llama-server` instead of the in-app engine download.
+- Composer quick chips: ui_kit spacing, radius, focus ring, and clearer insert-vs-action hints; draft chips insert into the composer without clearing attachments or auto-sending.
 - Dreambeans daily drop: Brain 4 registers an overnight `daily_drop` local job that calls the core picker on ranked Pulse rows (off by default; no model or Google I/O). Settings → Pulse exposes opt-in toggles; the ledger and last run persist in `daily_drop.json`; picked cards show on the Feed.
 - Agent: optional provider prompt-prefix cache (`prefix_cache.toml`, off by default). When enabled, the stable cabin system prompt stays fixed across turns; talk style, playbook, and memory snippets move into a `<cabin-volatile>` block on the user message instead of rewriting the system row.
 - Connectors: Marketplace and Settings sign-in for installed MCP connectors — browser OAuth seals behind a credentials card; API keys seal in the OS keyring after the same card.
 - Agent: optional compaction of large tool outputs (`tool_output_compact.toml`, off by default). When enabled, oversized tool results are summarized for the model with key facts plus a handle and workspace spool path so `read_file` can recover the full text; the stable system prompt is unchanged.
 - Connectors: Marketplace **Refresh catalog** pulls display metadata from the official MCP registry (https allowlist + SSRF rail) for connectors already in the bundled list; install recipes stay bundled.
+- Local AI: Settings → Cabin defaults → **Get engine** downloads a pinned official llama.cpp `llama-server` build for this OS/arch into `{config}/bin` (HTTPS to GitHub only, resumable, SHA-256 checked). No engine ships in installers; local AI stays off until you opt in.
 
 ## 3.0.2 — 2026-10-13
 
