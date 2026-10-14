@@ -5373,11 +5373,7 @@ impl eframe::App for Cabin {
                 });
         }
         self.sync_idea_card_actions();
-        status_toasts::sync_status_toasts(
-            &mut self.toasts,
-            &mut self.status_toasted,
-            &self.status,
-        );
+        status_toasts::sync_status_toasts(&mut self.toasts, &mut self.status_toasted, &self.status);
         self.toasts.show(&ctx);
         // The pass after this one grabs the hotkeys in `logic`, which runs
         // even while the window is covered or minimized.
