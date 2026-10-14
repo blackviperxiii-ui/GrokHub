@@ -112,7 +112,8 @@ fn default_dock_state() -> DockState<DockTab> {
 
 pub(super) fn load_dock_state() -> DockState<DockTab> {
     let path = crate::config::config_dir().join(DOCK_FILE);
-    let state = crate::config::load_json_or(&path, crate::config::JSON_STORE_CAP, default_dock_state);
+    let state =
+        crate::config::load_json_or(&path, crate::config::JSON_STORE_CAP, default_dock_state);
     if state.main_surface().is_empty() {
         default_dock_state()
     } else {
@@ -212,9 +213,7 @@ impl Cabin {
                 });
         }
         // Dock tab / leaf click → page_nav from the focused leaf only.
-        let focused = dock_state
-            .find_active_focused()
-            .map(|(_, tab)| *tab);
+        let focused = dock_state.find_active_focused().map(|(_, tab)| *tab);
         self.dock_state = dock_state;
         if let Some(id) = nav_id_from_focused_leaf(self.nav, self.page_nav(), focused) {
             self.select_main_nav(id);

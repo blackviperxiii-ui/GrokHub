@@ -1147,14 +1147,15 @@ impl Cabin {
         let ctx = ui.ctx().clone();
         let empty = self.messages.is_empty();
         let docked = self.cfg.dock_panels;
-        let composer_frame = egui::Frame::NONE
-            .fill(crate::theme::bg())
-            .inner_margin(egui::Margin {
-                left: 32,
-                right: 32,
-                top: 10,
-                bottom: 22,
-            });
+        let composer_frame =
+            egui::Frame::NONE
+                .fill(crate::theme::bg())
+                .inner_margin(egui::Margin {
+                    left: 32,
+                    right: 32,
+                    top: 10,
+                    bottom: 22,
+                });
         if !empty && !docked {
             egui::Panel::bottom("composer")
                 .frame(composer_frame)
@@ -1171,402 +1172,394 @@ impl Cabin {
                 bottom: 8,
             });
         super::dock_ui::page_panel(ui, docked, page_frame, |ui| {
-                if empty {
-                    self.ui_empty_home(ui);
-                    return;
-                }
-                // Dock leaf has no window-level Bottom panel; reserve composer inside the leaf.
-                if docked {
-                    egui::Panel::bottom("composer-docked")
-                        .frame(composer_frame)
-                        .show(ui, |ui| {
-                            self.ui_composer_stack(ui);
-                        });
-                }
-                self.panels.bind_thread(&self.visible_thread_id());
-                self.drain_show_panel_results();
-                let avail = clamp_row_width(ui.available_width());
-                let pane = avail;
-                if self.find.open {
-                    let tid = self.visible_thread_id();
-                    self.cached_chat_views();
-                    let (views, find) = (&self.chat_views, &mut self.find);
-                    find.refresh(&tid, views);
-                    if find.jump {
-                        // A find jump wins over pinning the tail this frame.
-                        self.chat_tail_frames = 0;
-                    }
-                }
-                if self.jump_turn.is_some() {
-                    // A step search jump wins over pinning the tail, like find.
+            if empty {
+                self.ui_empty_home(ui);
+                return;
+            }
+            // Dock leaf has no window-level Bottom panel; reserve composer inside the leaf.
+            if docked {
+                egui::Panel::bottom("composer-docked")
+                    .frame(composer_frame)
+                    .show(ui, |ui| {
+                        self.ui_composer_stack(ui);
+                    });
+            }
+            self.panels.bind_thread(&self.visible_thread_id());
+            self.drain_show_panel_results();
+            let avail = clamp_row_width(ui.available_width());
+            let pane = avail;
+            if self.find.open {
+                let tid = self.visible_thread_id();
+                self.cached_chat_views();
+                let (views, find) = (&self.chat_views, &mut self.find);
+                find.refresh(&tid, views);
+                if find.jump {
+                    // A find jump wins over pinning the tail this frame.
                     self.chat_tail_frames = 0;
                 }
-                let find_hits = self.find.hits().to_vec();
-                let find_row = self.find.current_row();
-                let find_jump = self.find.jump;
-                let mut find_jumped = false;
-                let pin_tail = self.chat_tail_frames > 0;
-                let out = egui::ScrollArea::vertical()
-                    .stick_to_bottom(true)
-                    .auto_shrink([false, true])
-                    .show(ui, |ui| {
-                        ui.set_width(pane);
-                        ui.set_max_width(pane);
-                        let thinking = self.thinking_here();
-                        let live = thinking && !self.live_blocks.is_empty();
-                        let mut act = ChatBlockAct::None;
-                        let jump_you = self.jump_last_you;
-                        let mut jumped_you = false;
-                        let no_turn_row;
-                        let fold_thread = self.visible_thread_id();
-                        let start_collapsed = grokhub_core::session_thoughts_start_collapsed(
-                            self.cfg.always_collapse_thoughts,
-                            read_session_thoughts_collapsed(ui.ctx(), &fold_thread),
+            }
+            if self.jump_turn.is_some() {
+                // A step search jump wins over pinning the tail, like find.
+                self.chat_tail_frames = 0;
+            }
+            let find_hits = self.find.hits().to_vec();
+            let find_row = self.find.current_row();
+            let find_jump = self.find.jump;
+            let mut find_jumped = false;
+            let pin_tail = self.chat_tail_frames > 0;
+            let out = egui::ScrollArea::vertical()
+                .stick_to_bottom(true)
+                .auto_shrink([false, true])
+                .show(ui, |ui| {
+                    ui.set_width(pane);
+                    ui.set_max_width(pane);
+                    let thinking = self.thinking_here();
+                    let live = thinking && !self.live_blocks.is_empty();
+                    let mut act = ChatBlockAct::None;
+                    let jump_you = self.jump_last_you;
+                    let mut jumped_you = false;
+                    let no_turn_row;
+                    let fold_thread = self.visible_thread_id();
+                    let start_collapsed = grokhub_core::session_thoughts_start_collapsed(
+                        self.cfg.always_collapse_thoughts,
+                        read_session_thoughts_collapsed(ui.ctx(), &fold_thread),
+                    );
+                    let mut collapse_session = false;
+                    let mut privacy_revoke: Option<String> = None;
+                    let mut skill_hit: Option<super::skill_undo::SkillRow> = None;
+                    let mut findings_hit: Option<(super::findings_ui::FindingsAct, String)> = None;
+                    let mut change_hit: Option<(
+                        super::change_undo::ChangeRow,
+                        super::change_undo::ChangeAct,
+                    )> = None;
+                    {
+                        let thread_id = fold_thread.clone();
+                        let row_h_id = chat_row_height_id(&thread_id, pane);
+                        self.cached_chat_views();
+                        // SY-04: the newest /privacy bubble gets a ghost Revoke per
+                        // live grant. Read the ledger only when that bubble exists.
+                        let privacy_at = super::privacy_ui::newest_privacy_row(&self.chat_views);
+                        let privacy_grants = if privacy_at.is_some() {
+                            self.privacy_revoke_rows()
+                        } else {
+                            Vec::new()
+                        };
+                        let privacy_locked = if privacy_at.is_some() {
+                            self.private_lock_for_paint()
+                                .map(|why| super::privacy_ui::lock_hover(&why))
+                        } else {
+                            None
+                        };
+                        // The newest /skills changes bubble gets Undo / Restore rows.
+                        let skill_at =
+                            super::skill_undo::newest_skill_changes_row(&self.chat_views);
+                        let skill_rows = if skill_at.is_some() {
+                            self.skill_rows_now()
+                        } else {
+                            Vec::new()
+                        };
+                        // Same for /connections changes and /automations changes.
+                        let change_at = super::change_undo::newest_change_report(&self.chat_views);
+                        let change_rows = match change_at {
+                            Some((_, kind)) => self.change_rows_now(kind),
+                            None => Vec::new(),
+                        };
+                        let change_at = change_at.map(|(i, _)| i);
+                        // The newest findings card gets a pill per fix.
+                        let findings = super::findings_ui::newest_findings_row(
+                            &self.chat_views,
+                            &self.harness.findings_dismissed,
                         );
-                        let mut collapse_session = false;
-                        let mut privacy_revoke: Option<String> = None;
-                        let mut skill_hit: Option<super::skill_undo::SkillRow> = None;
-                        let mut findings_hit: Option<(super::findings_ui::FindingsAct, String)> =
-                            None;
-                        let mut change_hit: Option<(
-                            super::change_undo::ChangeRow,
-                            super::change_undo::ChangeAct,
-                        )> = None;
-                        {
-                            let thread_id = fold_thread.clone();
-                            let row_h_id = chat_row_height_id(&thread_id, pane);
-                            self.cached_chat_views();
-                            // SY-04: the newest /privacy bubble gets a ghost Revoke per
-                            // live grant. Read the ledger only when that bubble exists.
-                            let privacy_at =
-                                super::privacy_ui::newest_privacy_row(&self.chat_views);
-                            let privacy_grants = if privacy_at.is_some() {
-                                self.privacy_revoke_rows()
-                            } else {
-                                Vec::new()
-                            };
-                            let privacy_locked = if privacy_at.is_some() {
-                                self.private_lock_for_paint()
-                                    .map(|why| super::privacy_ui::lock_hover(&why))
-                            } else {
-                                None
-                            };
-                            // The newest /skills changes bubble gets Undo / Restore rows.
-                            let skill_at =
-                                super::skill_undo::newest_skill_changes_row(&self.chat_views);
-                            let skill_rows = if skill_at.is_some() {
-                                self.skill_rows_now()
-                            } else {
-                                Vec::new()
-                            };
-                            // Same for /connections changes and /automations changes.
-                            let change_at =
-                                super::change_undo::newest_change_report(&self.chat_views);
-                            let change_rows = match change_at {
-                                Some((_, kind)) => self.change_rows_now(kind),
-                                None => Vec::new(),
-                            };
-                            let change_at = change_at.map(|(i, _)| i);
-                            // The newest findings card gets a pill per fix.
-                            let findings = super::findings_ui::newest_findings_row(
-                                &self.chat_views,
-                                &self.harness.findings_dismissed,
-                            );
-                            let findings_at = findings.as_ref().map(|(i, _)| *i);
-                            self.ensure_run_evidence();
-                            let evidence = self
-                                .harness
-                                .evidence
-                                .as_ref()
-                                .filter(|e| e.chat_id == thread_id)
-                                .cloned();
-                            let evidence_at = evidence.as_ref().and_then(|_| {
-                                super::evidence_ui::evidence_host_row(&self.chat_views)
-                            });
-                            let (views, keys) = (&self.chat_views, &self.chat_view_keys);
-                            let shown = if live {
-                                views_up_to_last_user(views)
-                            } else {
-                                views
-                            };
-                            let fold_ctx = ui.ctx().clone();
-                            // Stored thought fold for row `j`, from the cached body key.
-                            let fold_at = |j: usize| {
-                                resolve_thought_fold(
-                                    &fold_ctx,
-                                    thought_fold_id(&thread_id, "body", keys[j]),
-                                    start_collapsed,
-                                )
-                            };
-                            let last_you_i = shown.iter().rposition(|v| v.kind == ChatKind::User);
-                            // "Last you", or the turn a step search hit opened.
-                            let turn_i = self.jump_turn.and_then(|t| turn_jump_row(shown, t));
-                            no_turn_row = self.jump_turn.is_some() && turn_i.is_none();
-                            let turn_i = if jump_you { None } else { turn_i };
-                            let prev_heights: Vec<f32> =
-                                ui.ctx().data(|d| d.get_temp(row_h_id)).unwrap_or_default();
-                            let mut next_heights = Vec::with_capacity(shown.len());
-                            for (i, block) in shown.iter().enumerate() {
-                                let cached_h = prev_heights.get(i).copied().unwrap_or(0.0);
-                                let origin = ui.cursor().min;
-                                let row_w = ui.available_width().max(1.0);
-                                if reserve_offscreen_chat_row(ui, cached_h) {
-                                    // `push_id` still consumes one parent auto-id
-                                    // (`advance_cursor_after_rect`). A culled row must
-                                    // burn that same slot or the next painted row renumbers.
-                                    ui.skip_ahead_auto_ids(1);
-                                    next_heights.push(cached_h);
-                                    if (jump_you && last_you_i == Some(i)) || turn_i == Some(i) {
-                                        let slot = egui::Rect::from_min_size(
-                                            origin,
-                                            egui::vec2(row_w, cached_h),
-                                        );
-                                        ui.scroll_to_rect(slot, Some(egui::Align::Center));
-                                        jumped_you = true;
-                                    }
-                                    if find_jump && find_row == Some(i) {
-                                        let slot = egui::Rect::from_min_size(
-                                            origin,
-                                            egui::vec2(row_w, cached_h),
-                                        );
-                                        ui.scroll_to_rect(slot, Some(egui::Align::Center));
-                                        find_jumped = true;
-                                    }
-                                    continue;
-                                }
-                                // Neighbour folds only matter for a row that paints.
-                                let is_thought = |j: usize| {
-                                    shown.get(j).is_some_and(|v| v.kind == ChatKind::Thought)
-                                };
-                                let prev_expanded = i
-                                    .checked_sub(1)
-                                    .filter(|&p| is_thought(p))
-                                    .is_some_and(|p| fold_at(p).paints_body());
-                                let next_fold = Some(i + 1).filter(|&n| is_thought(n)).map(fold_at);
-                                let next_expanded = next_fold.is_some_and(|f| f.paints_body());
-                                let next_drawn_thought = next_fold.is_some_and(|f| f.paints_row());
-                                let fold = if block.kind == ChatKind::Thought {
-                                    fold_at(i)
-                                } else {
-                                    ThoughtFold::Expanded
-                                };
-                                let y0 = ui.cursor().min.y;
-                                // Copy / Reply sit under the last reply before the next ask.
-                                let reply_acts = block.kind != ChatKind::Assistant
-                                    || !shown[i + 1..]
-                                        .iter()
-                                        .take_while(|v| v.kind != ChatKind::User)
-                                        .any(|v| v.kind == ChatKind::Assistant);
-                                let privacy_here = (privacy_at == Some(i)
-                                    && !privacy_grants.is_empty())
-                                    || (skill_at == Some(i) && !skill_rows.is_empty())
-                                    || (change_at == Some(i) && !change_rows.is_empty())
-                                    || findings_at == Some(i);
-                                let evidence_here = evidence_at == Some(i);
-                                let painted = ui.push_id(chat_row_id_salt(&thread_id, i), |ui| {
-                                    let mut p = paint_chat_block_with(
-                                        ui,
-                                        block,
-                                        thought_shows_label(prev_expanded),
-                                        thought_shows_acts(next_expanded),
-                                        fold,
-                                        reply_acts && !privacy_here,
-                                    );
-                                    if privacy_here {
-                                        if skill_at == Some(i) {
-                                            skill_hit = super::skill_undo::paint_skill_undo_rows(
-                                                ui,
-                                                &skill_rows,
-                                            );
-                                        } else if let Some((_, card)) =
-                                            findings.as_ref().filter(|_| findings_at == Some(i))
-                                        {
-                                            findings_hit =
-                                                super::findings_ui::paint_findings_fixes(ui, card)
-                                                    .map(|act| (act, block.body.clone()));
-                                        } else if change_at == Some(i) {
-                                            change_hit = super::change_undo::paint_change_rows(
-                                                ui,
-                                                "change-report",
-                                                &change_rows,
-                                                true,
-                                            );
-                                        } else {
-                                            privacy_revoke =
-                                                super::privacy_ui::paint_privacy_revokes(
-                                                    ui,
-                                                    &privacy_grants,
-                                                    privacy_locked,
-                                                );
-                                        }
-                                        if reply_acts {
-                                            let avail = clamp_row_width(
-                                                ui.available_width().min(ui.max_rect().width()),
-                                            );
-                                            let w = crate::markdown::bubble_width(avail);
-                                            p.act =
-                                                paint_msg_acts(ui, false, &block.body, avail, w)
-                                                    .act;
-                                        }
-                                    }
-                                    if evidence_here {
-                                        if let Some(ev) = evidence.as_ref() {
-                                            super::evidence_ui::paint_evidence_panel(ui, ev);
-                                        }
-                                    }
-                                    p
-                                });
+                        let findings_at = findings.as_ref().map(|(i, _)| *i);
+                        self.ensure_run_evidence();
+                        let evidence = self
+                            .harness
+                            .evidence
+                            .as_ref()
+                            .filter(|e| e.chat_id == thread_id)
+                            .cloned();
+                        let evidence_at = evidence
+                            .as_ref()
+                            .and_then(|_| super::evidence_ui::evidence_host_row(&self.chat_views));
+                        let (views, keys) = (&self.chat_views, &self.chat_view_keys);
+                        let shown = if live {
+                            views_up_to_last_user(views)
+                        } else {
+                            views
+                        };
+                        let fold_ctx = ui.ctx().clone();
+                        // Stored thought fold for row `j`, from the cached body key.
+                        let fold_at = |j: usize| {
+                            resolve_thought_fold(
+                                &fold_ctx,
+                                thought_fold_id(&thread_id, "body", keys[j]),
+                                start_collapsed,
+                            )
+                        };
+                        let last_you_i = shown.iter().rposition(|v| v.kind == ChatKind::User);
+                        // "Last you", or the turn a step search hit opened.
+                        let turn_i = self.jump_turn.and_then(|t| turn_jump_row(shown, t));
+                        no_turn_row = self.jump_turn.is_some() && turn_i.is_none();
+                        let turn_i = if jump_you { None } else { turn_i };
+                        let prev_heights: Vec<f32> =
+                            ui.ctx().data(|d| d.get_temp(row_h_id)).unwrap_or_default();
+                        let mut next_heights = Vec::with_capacity(shown.len());
+                        for (i, block) in shown.iter().enumerate() {
+                            let cached_h = prev_heights.get(i).copied().unwrap_or(0.0);
+                            let origin = ui.cursor().min;
+                            let row_w = ui.available_width().max(1.0);
+                            if reserve_offscreen_chat_row(ui, cached_h) {
+                                // `push_id` still consumes one parent auto-id
+                                // (`advance_cursor_after_rect`). A culled row must
+                                // burn that same slot or the next painted row renumbers.
+                                ui.skip_ahead_auto_ids(1);
+                                next_heights.push(cached_h);
                                 if (jump_you && last_you_i == Some(i)) || turn_i == Some(i) {
+                                    let slot = egui::Rect::from_min_size(
+                                        origin,
+                                        egui::vec2(row_w, cached_h),
+                                    );
+                                    ui.scroll_to_rect(slot, Some(egui::Align::Center));
+                                    jumped_you = true;
+                                }
+                                if find_jump && find_row == Some(i) {
+                                    let slot = egui::Rect::from_min_size(
+                                        origin,
+                                        egui::vec2(row_w, cached_h),
+                                    );
+                                    ui.scroll_to_rect(slot, Some(egui::Align::Center));
+                                    find_jumped = true;
+                                }
+                                continue;
+                            }
+                            // Neighbour folds only matter for a row that paints.
+                            let is_thought = |j: usize| {
+                                shown.get(j).is_some_and(|v| v.kind == ChatKind::Thought)
+                            };
+                            let prev_expanded = i
+                                .checked_sub(1)
+                                .filter(|&p| is_thought(p))
+                                .is_some_and(|p| fold_at(p).paints_body());
+                            let next_fold = Some(i + 1).filter(|&n| is_thought(n)).map(fold_at);
+                            let next_expanded = next_fold.is_some_and(|f| f.paints_body());
+                            let next_drawn_thought = next_fold.is_some_and(|f| f.paints_row());
+                            let fold = if block.kind == ChatKind::Thought {
+                                fold_at(i)
+                            } else {
+                                ThoughtFold::Expanded
+                            };
+                            let y0 = ui.cursor().min.y;
+                            // Copy / Reply sit under the last reply before the next ask.
+                            let reply_acts = block.kind != ChatKind::Assistant
+                                || !shown[i + 1..]
+                                    .iter()
+                                    .take_while(|v| v.kind != ChatKind::User)
+                                    .any(|v| v.kind == ChatKind::Assistant);
+                            let privacy_here = (privacy_at == Some(i)
+                                && !privacy_grants.is_empty())
+                                || (skill_at == Some(i) && !skill_rows.is_empty())
+                                || (change_at == Some(i) && !change_rows.is_empty())
+                                || findings_at == Some(i);
+                            let evidence_here = evidence_at == Some(i);
+                            let painted = ui.push_id(chat_row_id_salt(&thread_id, i), |ui| {
+                                let mut p = paint_chat_block_with(
+                                    ui,
+                                    block,
+                                    thought_shows_label(prev_expanded),
+                                    thought_shows_acts(next_expanded),
+                                    fold,
+                                    reply_acts && !privacy_here,
+                                );
+                                if privacy_here {
+                                    if skill_at == Some(i) {
+                                        skill_hit = super::skill_undo::paint_skill_undo_rows(
+                                            ui,
+                                            &skill_rows,
+                                        );
+                                    } else if let Some((_, card)) =
+                                        findings.as_ref().filter(|_| findings_at == Some(i))
+                                    {
+                                        findings_hit =
+                                            super::findings_ui::paint_findings_fixes(ui, card)
+                                                .map(|act| (act, block.body.clone()));
+                                    } else if change_at == Some(i) {
+                                        change_hit = super::change_undo::paint_change_rows(
+                                            ui,
+                                            "change-report",
+                                            &change_rows,
+                                            true,
+                                        );
+                                    } else {
+                                        privacy_revoke = super::privacy_ui::paint_privacy_revokes(
+                                            ui,
+                                            &privacy_grants,
+                                            privacy_locked,
+                                        );
+                                    }
+                                    if reply_acts {
+                                        let avail = clamp_row_width(
+                                            ui.available_width().min(ui.max_rect().width()),
+                                        );
+                                        let w = crate::markdown::bubble_width(avail);
+                                        p.act =
+                                            paint_msg_acts(ui, false, &block.body, avail, w).act;
+                                    }
+                                }
+                                if evidence_here {
+                                    if let Some(ev) = evidence.as_ref() {
+                                        super::evidence_ui::paint_evidence_panel(ui, ev);
+                                    }
+                                }
+                                p
+                            });
+                            if (jump_you && last_you_i == Some(i)) || turn_i == Some(i) {
+                                ui.scroll_to_rect(painted.response.rect, Some(egui::Align::Center));
+                                jumped_you = true;
+                            }
+                            if find_hits.contains(&i) {
+                                paint_find_mark(ui, painted.response.rect, find_row == Some(i));
+                                if find_jump && find_row == Some(i) {
                                     ui.scroll_to_rect(
                                         painted.response.rect,
                                         Some(egui::Align::Center),
                                     );
-                                    jumped_you = true;
+                                    find_jumped = true;
                                 }
-                                if find_hits.contains(&i) {
-                                    paint_find_mark(ui, painted.response.rect, find_row == Some(i));
-                                    if find_jump && find_row == Some(i) {
-                                        ui.scroll_to_rect(
-                                            painted.response.rect,
-                                            Some(egui::Align::Center),
-                                        );
-                                        find_jumped = true;
-                                    }
-                                }
-                                let painted = painted.inner;
-                                if block.kind == ChatKind::Thought {
-                                    note_thought_fold_click(
-                                        ui.ctx(),
-                                        &thread_id,
-                                        None,
-                                        keys[i],
-                                        fold,
-                                        painted.thought_fold,
-                                        &mut collapse_session,
-                                    );
-                                }
-                                match painted.act {
-                                    ChatBlockAct::None => {}
-                                    other => act = other,
-                                }
-                                if painted.drawn {
-                                    ui.add_space(cluster_gap(
-                                        block.kind == ChatKind::Thought,
-                                        next_drawn_thought,
-                                    ));
-                                }
-                                next_heights.push((ui.cursor().min.y - y0).max(0.0));
                             }
-                            ui.ctx().data_mut(|d| d.insert_temp(row_h_id, next_heights));
-                        }
-                        if let Some(id) = privacy_revoke {
-                            self.revoke_from_privacy(&id);
-                        }
-                        if let Some(row) = skill_hit {
-                            self.skill_row_clicked(&row);
-                        }
-                        if let Some((row, act)) = change_hit {
-                            self.change_row_clicked(&row, act);
-                        }
-                        if let Some((act, body)) = findings_hit {
-                            self.findings_clicked(act, &body);
-                        }
-                        if jumped_you || no_turn_row {
-                            self.jump_last_you = false;
-                            self.jump_turn = None;
-                        }
-                        if find_jumped {
-                            self.find.jump = false;
-                        }
-                        if live {
-                            match self.paint_live_blocks(
-                                ui,
-                                thinking,
-                                start_collapsed,
-                                &mut collapse_session,
-                            ) {
+                            let painted = painted.inner;
+                            if block.kind == ChatKind::Thought {
+                                note_thought_fold_click(
+                                    ui.ctx(),
+                                    &thread_id,
+                                    None,
+                                    keys[i],
+                                    fold,
+                                    painted.thought_fold,
+                                    &mut collapse_session,
+                                );
+                            }
+                            match painted.act {
                                 ChatBlockAct::None => {}
                                 other => act = other,
                             }
-                            if stretch_saved_skill(
-                                self.messages.iter().map(|m| (m.0.as_str(), m.1.as_str())),
-                            ) {
-                                ui.label(
-                                    RichText::new(SKILL_SAVED_NOTE)
-                                        .size(12.0)
-                                        .color(crate::theme::muted()),
-                                );
+                            if painted.drawn {
+                                ui.add_space(cluster_gap(
+                                    block.kind == ChatKind::Thought,
+                                    next_drawn_thought,
+                                ));
                             }
-                        } else if self.thinking_here() {
-                            // A finished turn keeps its tools inline in the transcript.
-                            self.paint_tool_cards(ui);
+                            next_heights.push((ui.cursor().min.y - y0).max(0.0));
                         }
-                        // G4: when the turn is idle, paint all live panels under the chat
-                        // (live tool groups paint theirs by anchor inside paint_live_blocks).
-                        if !live && !self.panels.is_empty() {
-                            let actions = panels::show(ui, &mut self.panels);
-                            self.queue_panel_actions(actions);
+                        ui.ctx().data_mut(|d| d.insert_temp(row_h_id, next_heights));
+                    }
+                    if let Some(id) = privacy_revoke {
+                        self.revoke_from_privacy(&id);
+                    }
+                    if let Some(row) = skill_hit {
+                        self.skill_row_clicked(&row);
+                    }
+                    if let Some((row, act)) = change_hit {
+                        self.change_row_clicked(&row, act);
+                    }
+                    if let Some((act, body)) = findings_hit {
+                        self.findings_clicked(act, &body);
+                    }
+                    if jumped_you || no_turn_row {
+                        self.jump_last_you = false;
+                        self.jump_turn = None;
+                    }
+                    if find_jumped {
+                        self.find.jump = false;
+                    }
+                    if live {
+                        match self.paint_live_blocks(
+                            ui,
+                            thinking,
+                            start_collapsed,
+                            &mut collapse_session,
+                        ) {
+                            ChatBlockAct::None => {}
+                            other => act = other,
                         }
-                        if collapse_session {
-                            let stored = self.cached_chat_views().to_vec();
-                            minimize_session_thoughts(
-                                ui.ctx(),
-                                &fold_thread,
-                                &stored,
-                                &self.live_blocks,
+                        if stretch_saved_skill(
+                            self.messages.iter().map(|m| (m.0.as_str(), m.1.as_str())),
+                        ) {
+                            ui.label(
+                                RichText::new(SKILL_SAVED_NOTE)
+                                    .size(12.0)
+                                    .color(crate::theme::muted()),
                             );
                         }
-                        if let Some(code) = crate::markdown::take_code_copy(ui.ctx()) {
-                            act = ChatBlockAct::Copy(code);
-                        }
-                        match act {
-                            ChatBlockAct::Copy(body) => {
-                                ui.ctx().copy_text(body);
-                            }
-                            ChatBlockAct::Reply(body) => {
-                                self.composer =
-                                    append_composer(&self.composer, &quote_for_reply(&body));
-                                if !self.composer.ends_with('\n') {
-                                    self.composer.push('\n');
-                                }
-                                self.composer_want_focus = true;
-                            }
-                            ChatBlockAct::Edit(body) => {
-                                self.composer = edit_into_composer(&self.composer, &body);
-                                self.composer_want_focus = true;
-                                self.status = "Edit and send to ask again".into();
-                            }
-                            ChatBlockAct::None => {}
-                        }
-                        if self.chrome_here() {
-                            self.paint_approval_stack(ui);
-                        } else {
-                            // Another chat's turn: its cards stay there, its rows show here.
-                            self.paint_inbox_only(ui);
-                        }
-                        self.paint_try_again(ui);
-                        if pin_tail {
-                            // The transcript is laid out now, so the bottom is a real place.
-                            ui.scroll_to_cursor(Some(egui::Align::BOTTOM));
-                        }
-                    });
-                self.chat_tail_frames = self.chat_tail_frames.saturating_sub(1);
-                if self.find.open {
-                    self.paint_find_bar(&ctx, out.inner_rect);
-                }
-                if scrolled_off_tail(
-                    out.state.offset.y,
-                    out.content_size.y,
-                    out.inner_rect.height(),
-                    CHAT_TAIL_SLACK,
-                ) {
-                    match self.jump_to_latest(&ctx, out.inner_rect) {
-                        ChatJump::Latest => self.pin_chat_tail(),
-                        ChatJump::LastYou => self.jump_last_you = true,
-                        ChatJump::None => {}
+                    } else if self.thinking_here() {
+                        // A finished turn keeps its tools inline in the transcript.
+                        self.paint_tool_cards(ui);
                     }
+                    // G4: when the turn is idle, paint all live panels under the chat
+                    // (live tool groups paint theirs by anchor inside paint_live_blocks).
+                    if !live && !self.panels.is_empty() {
+                        let actions = panels::show(ui, &mut self.panels);
+                        self.queue_panel_actions(actions);
+                    }
+                    if collapse_session {
+                        let stored = self.cached_chat_views().to_vec();
+                        minimize_session_thoughts(
+                            ui.ctx(),
+                            &fold_thread,
+                            &stored,
+                            &self.live_blocks,
+                        );
+                    }
+                    if let Some(code) = crate::markdown::take_code_copy(ui.ctx()) {
+                        act = ChatBlockAct::Copy(code);
+                    }
+                    match act {
+                        ChatBlockAct::Copy(body) => {
+                            ui.ctx().copy_text(body);
+                        }
+                        ChatBlockAct::Reply(body) => {
+                            self.composer =
+                                append_composer(&self.composer, &quote_for_reply(&body));
+                            if !self.composer.ends_with('\n') {
+                                self.composer.push('\n');
+                            }
+                            self.composer_want_focus = true;
+                        }
+                        ChatBlockAct::Edit(body) => {
+                            self.composer = edit_into_composer(&self.composer, &body);
+                            self.composer_want_focus = true;
+                            self.status = "Edit and send to ask again".into();
+                        }
+                        ChatBlockAct::None => {}
+                    }
+                    if self.chrome_here() {
+                        self.paint_approval_stack(ui);
+                    } else {
+                        // Another chat's turn: its cards stay there, its rows show here.
+                        self.paint_inbox_only(ui);
+                    }
+                    self.paint_try_again(ui);
+                    if pin_tail {
+                        // The transcript is laid out now, so the bottom is a real place.
+                        ui.scroll_to_cursor(Some(egui::Align::BOTTOM));
+                    }
+                });
+            self.chat_tail_frames = self.chat_tail_frames.saturating_sub(1);
+            if self.find.open {
+                self.paint_find_bar(&ctx, out.inner_rect);
+            }
+            if scrolled_off_tail(
+                out.state.offset.y,
+                out.content_size.y,
+                out.inner_rect.height(),
+                CHAT_TAIL_SLACK,
+            ) {
+                match self.jump_to_latest(&ctx, out.inner_rect) {
+                    ChatJump::Latest => self.pin_chat_tail(),
+                    ChatJump::LastYou => self.jump_last_you = true,
+                    ChatJump::None => {}
                 }
-            });
+            }
+        });
     }
 
     /// Floating find box at the top right of the transcript.

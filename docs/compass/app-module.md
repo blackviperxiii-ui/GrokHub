@@ -9,8 +9,7 @@
 ## Key files
 - `crates/grokhub-app/src/app/mod.rs`: `Cabin` fields, `new`, `quiet_for_test`, the frame loop.
 - `crates/grokhub-app/src/app/tests.rs`: most cabin tests, plus `cabin_src`, `fn_src`, `isolated_cabin`, `release_isolated`.
-- `crates/grokhub-app/src/app/chat_ui.rs` (pane and composer) and `crates/grokhub-app/src/app/chat_kick.rs` (send, then `kick_native_turn`).
-- `crates/grokhub-app/src/app/dock_ui.rs`: optional egui_dock main-panel tabs (`cfg.dock_panels`, default off); layout in `dock.json`; `page_panel` so dock leaves do not nest CentralPanel.
+- `crates/grokhub-app/src/app/chat_ui.rs` (pane and composer), `chat_kick.rs` (send → `kick_native_turn`), and `dock_ui.rs` (optional egui_dock tabs; `dock.json`; `page_panel`).
 - `crates/grokhub-app/src/app/persist.rs`: off-thread writes behind `persist_io`.
 ## Change recipe
 - New UI state: add a `Cabin` field and initialize it in both `new` and `quiet_for_test`.
