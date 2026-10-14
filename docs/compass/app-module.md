@@ -8,7 +8,7 @@
 - `GROKHUB_CONFIG=$(mktemp -d) cargo test -p grokhub-app native_ -- --test-threads=1` (the native engine, sessions, and unattended runs)
 ## Key files
 - `crates/grokhub-app/src/app/mod.rs`: `Cabin` fields, `new`, `quiet_for_test`, the frame loop.
-- `crates/grokhub-app/src/app/tests.rs`: most cabin tests, plus `cabin_src`, `fn_src`, `isolated_cabin`, `release_isolated`.
+- `crates/grokhub-app/src/app/tests.rs`: most cabin tests; `test_support_tests.rs` / `composer_attach_tests.rs` load via `#[path]` (stage 4–5).
 - `crates/grokhub-app/src/app/chat_ui.rs` (pane and composer), `chat_kick.rs` (send → `kick_native_turn`), and `dock_ui.rs` (optional egui_dock tabs; `dock.json`; `page_panel`).
 - `crates/grokhub-app/src/app/persist.rs`: off-thread writes behind `persist_io`.
 ## Change recipe
