@@ -19,12 +19,8 @@ impl Cabin {
         }
         self.projects_dirty = false;
         let nodes = self.projects.clone();
-        let io = self.persist_io.clone();
-        std::thread::spawn(move || {
-            if let Ok(_g) = io.lock() {
-                let _ = crate::store::save_projects(&nodes);
-            }
-        });
+        // PersistService worker takes persist_io before save_projects.
+        self.persist_svc.submit_projects(nodes);
     }
 
     pub(super) fn bind_project_id(&mut self, id: &str) {
