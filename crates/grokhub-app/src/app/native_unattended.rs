@@ -1270,10 +1270,7 @@ mod tests {
             },
             &set,
         );
-        let names: Vec<&str> = schemas
-            .iter()
-            .filter_map(|t| t["name"].as_str())
-            .collect();
+        let names: Vec<&str> = schemas.iter().filter_map(|t| t["name"].as_str()).collect();
         assert!(names.contains(&"read_file"), "{names:?}");
         assert!(!names.contains(&"write"), "{names:?}");
     }
