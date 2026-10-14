@@ -1,14 +1,10 @@
 //! Settings rows with trailing controls.
 
-use eframe::egui::{self, ComboBox, Response, Slider, Ui, Vec2};
+use eframe::egui::{self, ComboBox, Response, Ui, Vec2};
 
 /// Trailing control for [`setting_row`].
 pub enum SettingRowControl<'a> {
     Switch(&'a mut bool),
-    Slider {
-        value: &'a mut f32,
-        range: std::ops::RangeInclusive<f32>,
-    },
     Select {
         selected: &'a mut usize,
         labels: &'a [&'a str],
@@ -57,15 +53,6 @@ fn paint_control(ui: &mut Ui, control: SettingRowControl<'_>) {
             let min = Vec2::splat(crate::theme::MIN_HIT);
             ui.add_sized(min, egui::Checkbox::new(on, ""));
         }
-        SettingRowControl::Slider { value, range } => {
-            ui.add(
-                Slider::new(value, range)
-                    .show_value(true)
-                    .min_decimals(1)
-                    .max_decimals(2),
-            );
-            ui.set_min_height(crate::theme::MIN_HIT);
-        }
         SettingRowControl::Select { selected, labels } => {
             let current = labels.get(*selected).copied().unwrap_or("—");
             ComboBox::from_id_salt(ui.id().with("select"))
@@ -90,7 +77,6 @@ mod tests {
     fn setting_row_meets_min_hit() {
         let ctx = crate::ui_kit::test_ctx(false);
         let mut on = false;
-        let mut level = 0.5;
         let mut pick = 1_usize;
         let input = egui::RawInput {
             screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(520.0, 200.0))),
@@ -98,15 +84,6 @@ mod tests {
         };
         let out = crate::theme::test_pass(&ctx, input, |ui| {
             setting_row(ui, "Row", "Help", SettingRowControl::Switch(&mut on));
-            setting_row(
-                ui,
-                "Level",
-                "",
-                SettingRowControl::Slider {
-                    value: &mut level,
-                    range: 0.0..=1.0,
-                },
-            );
             setting_row(
                 ui,
                 "Pick",
@@ -130,7 +107,6 @@ mod tests {
     fn setting_row_wires_all_controls() {
         let src = include_str!("row.rs");
         assert!(src.contains("Checkbox"));
-        assert!(src.contains("Slider::new"));
         assert!(src.contains("ComboBox"));
     }
 }

@@ -35,6 +35,14 @@ pub fn apply_image_budget_with_limits(
     trigger_bytes: usize,
     reclaim_bytes: usize,
 ) -> usize {
+    // Skip the wire-len serialize when the history has no images (common chat turns).
+    if !items.iter().any(|item| {
+        matches!(item, InputItem::Message { content, .. } if content
+            .iter()
+            .any(|p| matches!(p, ContentPart::InputImage(_))))
+    }) {
+        return 0;
+    }
     if input_wire_len(items) < trigger_bytes {
         return 0;
     }
@@ -172,6 +180,20 @@ mod tests {
             items[0],
             InputItem::Message { ref content, .. }
                 if matches!(content.get(1), Some(ContentPart::InputImage(_)))
+        ));
+    }
+
+    #[test]
+    fn text_only_history_skips_budget_without_evicting() {
+        let mut items = vec![InputItem::Message {
+            role: "user".into(),
+            content: vec![ContentPart::InputText("hello".into())],
+        }];
+        assert_eq!(apply_image_budget(&mut items), 0);
+        assert!(matches!(
+            items[0],
+            InputItem::Message { ref content, .. }
+                if matches!(content.first(), Some(ContentPart::InputText(t)) if t == "hello")
         ));
     }
 }

@@ -148,7 +148,20 @@ fn skill_path(ctx: &SelfCtx<'_>, name: &str) -> Result<PathBuf, String> {
 
 fn read_skill(path: &Path) -> Option<grokhub_core::SkillMd> {
     let raw = std::fs::read_to_string(path).ok()?;
-    grokhub_core::skill_safe(&raw).then(|| grokhub_core::parse_skill_md(&raw))
+    if !grokhub_core::skill_safe(&raw) {
+        return None;
+    }
+    // The `skill` tool only discovers YAML-frontmatter skills (`---` … `---`).
+    // Listing heading-only imports advertised names that then returned `unknown skill`.
+    let trimmed = raw.trim_start_matches('\u{feff}').trim_start();
+    if !trimmed.starts_with("---") {
+        return None;
+    }
+    let s = grokhub_core::parse_skill_md(&raw);
+    if s.name.trim().is_empty() {
+        return None;
+    }
+    Some(s)
 }
 
 fn write_skill(path: &Path, s: &grokhub_core::SkillMd) -> Result<(), String> {

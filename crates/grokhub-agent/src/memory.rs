@@ -320,6 +320,13 @@ pub fn library_intent(user_text: &str) -> bool {
         "steam library",
         "installed app",
         "installed apps",
+        "what's installed",
+        "whats installed",
+        "what is installed",
+        "which apps",
+        "any games",
+        "games on this",
+        "games on my",
         "my library",
         "your library",
         "gaming library",
@@ -328,12 +335,56 @@ pub fn library_intent(user_text: &str) -> bool {
         "what games",
         "which games",
         "my games",
+        "steamapps",
     ];
     if PHRASES.iter().any(|n| q.contains(n)) {
         return true;
     }
+    // "is X installed" / "do I have X installed" without requiring "app".
+    if q.contains("installed")
+        && (library_word(&q, "is")
+            || library_word(&q, "are")
+            || q.contains("do i have")
+            || q.contains("do you have")
+            || q.contains("have i"))
+    {
+        return true;
+    }
+    // Named sealed apps: "do I have ACE COMBAT 8" when the index already knows the title.
+    if named_sealed_app_ask(&q) {
+        return true;
+    }
     // Whole-word "steam" only — never substring-match `upstream` / `downstream`.
     library_word(&q, "steam")
+}
+
+/// True when the ask names a sealed `scope:apps` title (≥4 chars) with have/own/play framing.
+fn named_sealed_app_ask(q: &str) -> bool {
+    let framed = q.contains("do i have")
+        || q.contains("do you have")
+        || q.contains("have i")
+        || library_word(q, "own")
+        || library_word(q, "play")
+        || q.contains("on this machine")
+        || q.contains("on my machine");
+    if !framed {
+        return false;
+    }
+    let index = crate::indexers::ScopeIndex::load(&crate::perm::config_dir());
+    for fact in index.for_scope("apps") {
+        let line = fact.line.trim().to_ascii_lowercase();
+        let name = line
+            .strip_prefix("installed app:")
+            .or_else(|| line.strip_prefix("app:"))
+            .or_else(|| line.strip_prefix("name:"))
+            .unwrap_or(line.as_str())
+            .trim();
+        let needle = name.split(':').next().unwrap_or(name).trim();
+        if needle.len() >= 4 && q.contains(needle) {
+            return true;
+        }
+    }
+    false
 }
 
 /// Alphanumeric token match (word boundaries). `~/.steam/path` still hits
@@ -1341,6 +1392,9 @@ mod tests {
         assert!(library_intent("my steam"));
         assert!(library_intent("what's on Steam?"));
         assert!(library_intent("look under ~/.steam/steamapps"));
+        assert!(library_intent("what's installed on this machine"));
+        assert!(library_intent("is steamlibreview installed"));
+        assert!(library_intent("any games on this machine"));
         assert!(!library_intent("what is 2+2"));
     }
 

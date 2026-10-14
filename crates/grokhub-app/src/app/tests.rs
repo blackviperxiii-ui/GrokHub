@@ -8897,8 +8897,19 @@ fn composer_and_history_omit_archived_idle_chrome() {
     assert!(
         !archive_row.contains("move to Archived")
             && archive_row.contains("leave History and search")
-            && archive_row.contains("still on disk"),
-        "Settings auto-archive must not promise an Archived drawer: {archive_row}"
+            && archive_row.contains("still on disk")
+            && archive_row.contains("no Archived drawer")
+            && !archive_row.contains("open the chat or Unarchive from its menu"),
+        "Settings auto-archive must not promise an Archived drawer or post-leave recovery: {archive_row}"
+    );
+    let recall = src
+        .split("Slash::Recall(q)")
+        .nth(1)
+        .and_then(|s| s.split("fn kick_model_retry").next())
+        .expect("Recall");
+    assert!(
+        recall.contains("is_archived") && recall.contains("continue"),
+        "/recall must skip archived chats like History search: {recall}"
     );
 }
 
@@ -29065,6 +29076,10 @@ fn g4_panel_action_queues_followup_without_tool_dispatch() {
 fn g4_drain_show_panel_from_pending_queue() {
     let _g = crate::config::hold_test_config();
     let (root, mut cabin) = isolated_cabin("g4-drain-card");
+    cabin
+        .threads
+        .push(crate::threads::ChatThread::new("Chat", false));
+    cabin.thread_idx = 0;
     let detail = "{\n  \"panel\": {\n  \"type\": \"ci_status\",\n  \"pr_number\": 42,\n  \"checks\": [],\n  \"actions\": []\n}\n}";
     cabin.enqueue_show_panel_for_test("tc-1", detail);
     cabin.drain_show_panel_results();
@@ -29090,5 +29105,32 @@ fn g4_panels_clear_on_thread_bind() {
     assert_eq!(cabin.panels.len(), 1);
     cabin.panels.bind_thread("other-thread");
     assert!(cabin.panels.is_empty());
+    release_isolated(&root, cabin);
+}
+
+#[test]
+fn g4_drain_defers_show_panel_for_other_thread() {
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin) = isolated_cabin("g4-drain-other");
+    let mut owner_thread = crate::threads::ChatThread::new("Owner", false);
+    owner_thread.id = "owner-thread".into();
+    let mut other = crate::threads::ChatThread::new("Other", false);
+    other.id = "other-visible".into();
+    cabin.threads = vec![owner_thread, other];
+    cabin.thread_idx = 0;
+    let detail = "{\n  \"panel\": {\n  \"type\": \"ci_status\",\n  \"pr_number\": 99,\n  \"checks\": [],\n  \"actions\": []\n}\n}";
+    cabin.enqueue_show_panel_for_thread_for_test("owner-thread", "tc-owner", detail);
+    // User switched tabs mid-turn before drain.
+    cabin.thread_idx = 1;
+    cabin.drain_show_panel_results();
+    assert_eq!(
+        cabin.panels.len(),
+        0,
+        "must not paint owner panels onto the visible other chat"
+    );
+    // Switch back to owner — deferred row should apply.
+    cabin.thread_idx = 0;
+    cabin.drain_show_panel_results();
+    assert_eq!(cabin.panels.len(), 1, "owner chat receives deferred panel");
     release_isolated(&root, cabin);
 }
