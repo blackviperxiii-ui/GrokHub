@@ -333,13 +333,22 @@ fn ci_badge(state: CiCheckState) -> (&'static str, BadgeTone) {
     }
 }
 
-fn paint_build_errors(ui: &mut Ui, be: &BuildErrors, panel_id: &str, actions: &mut Vec<PanelAction>) {
+fn paint_build_errors(
+    ui: &mut Ui,
+    be: &BuildErrors,
+    panel_id: &str,
+    actions: &mut Vec<PanelAction>,
+) {
     for err in &be.errors {
         ui.horizontal_wrapped(|ui| {
             ui.label(
                 RichText::new(format!("{}:{}", err.file, err.line))
                     .size(crate::theme::TYPE_CAPTION)
-                    .color(crate::theme::blend_color(crate::theme::fg(), crate::theme::bg(), 0.25)),
+                    .color(crate::theme::blend_color(
+                        crate::theme::fg(),
+                        crate::theme::bg(),
+                        0.25,
+                    )),
             );
             ui.label(
                 RichText::new(&err.message)
@@ -359,7 +368,12 @@ fn paint_build_errors(ui: &mut Ui, be: &BuildErrors, panel_id: &str, actions: &m
     paint_action_row(ui, &be.actions, panel_id, actions);
 }
 
-fn paint_compare_table(ui: &mut Ui, ct: &CompareTable, panel_id: &str, actions: &mut Vec<PanelAction>) {
+fn paint_compare_table(
+    ui: &mut Ui,
+    ct: &CompareTable,
+    panel_id: &str,
+    actions: &mut Vec<PanelAction>,
+) {
     if ct.headers.is_empty() {
         ui.label(
             RichText::new("(empty table)")
@@ -369,7 +383,10 @@ fn paint_compare_table(ui: &mut Ui, ct: &CompareTable, panel_id: &str, actions: 
         return;
     }
     egui::Grid::new(ui.id().with("compare"))
-        .spacing(egui::vec2(crate::theme::SPACING_12, crate::theme::SPACING_4))
+        .spacing(egui::vec2(
+            crate::theme::SPACING_12,
+            crate::theme::SPACING_4,
+        ))
         .show(ui, |ui| {
             for h in &ct.headers {
                 ui.label(
@@ -393,7 +410,12 @@ fn paint_compare_table(ui: &mut Ui, ct: &CompareTable, panel_id: &str, actions: 
     paint_action_row(ui, &ct.actions, panel_id, actions);
 }
 
-fn paint_action_row(ui: &mut Ui, buttons: &[PanelButton], panel_id: &str, actions: &mut Vec<PanelAction>) {
+fn paint_action_row(
+    ui: &mut Ui,
+    buttons: &[PanelButton],
+    panel_id: &str,
+    actions: &mut Vec<PanelAction>,
+) {
     if buttons.is_empty() {
         return;
     }
@@ -437,7 +459,9 @@ mod tests {
         PANELS_UI_ENABLED.store(false, Ordering::Relaxed);
     }
 
-    fn headless_show(store: &mut PanelStore) -> (Vec<egui::epaint::ClippedShape>, Vec<PanelAction>) {
+    fn headless_show(
+        store: &mut PanelStore,
+    ) -> (Vec<egui::epaint::ClippedShape>, Vec<PanelAction>) {
         let ctx = crate::ui_kit::test_ctx(true);
         let input = egui::RawInput {
             screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(480.0, 720.0))),
@@ -613,7 +637,9 @@ mod tests {
             });
         });
         assert!(
-            actions.iter().any(|a| a.panel_id == "ci" && a.action == "rerun_ci"),
+            actions
+                .iter()
+                .any(|a| a.panel_id == "ci" && a.action == "rerun_ci"),
             "expected rerun_ci action, got {actions:?}"
         );
         disable_panels();
