@@ -407,6 +407,9 @@ pub struct AppConfig {
     /// Inline sentence autocomplete in the chat composer (ghost text). Off by default.
     #[serde(default)]
     pub composer_autocomplete: bool,
+    /// Settings → Behavior: dockable main panels (egui_dock). Off by default; layout in dock.json.
+    #[serde(default)]
+    pub dock_panels: bool,
     /// Settings → Let Grok control the desktop. Off until the user turns it on.
     #[serde(default)]
     pub desktop_control: bool,
@@ -647,6 +650,7 @@ impl Default for AppConfig {
             imagine_wall: default_imagine_wall(),
             composer_glow: false,
             composer_autocomplete: false,
+            dock_panels: false,
             desktop_control: false,
             screen_record: false,
             self_improve_quiet: false,
@@ -1197,6 +1201,33 @@ mod tests {
         assert!(!load().composer_autocomplete);
         fs::write(root.join("app.json"), r#"{"deviceName":"cabin"}"#).unwrap();
         assert!(!load().composer_autocomplete);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn dock_panels_defaults_off() {
+        assert!(!AppConfig::default().dock_panels);
+        let absent: AppConfig = serde_json::from_str(r#"{"deviceName":"cabin"}"#).unwrap();
+        assert!(!absent.dock_panels);
+        let _g = hold_test_config();
+        let root = test_config_root("dock-panels");
+        let _ = fs::remove_dir_all(&root);
+        let _pin = TestConfigDir::set(root.clone());
+        let mut cfg = AppConfig {
+            device_name: "cabin".into(),
+            dock_panels: true,
+            ..Default::default()
+        };
+        save_in(&root, &cfg).expect("save");
+        assert!(load().dock_panels);
+        let text = fs::read_to_string(root.join("app.json")).unwrap();
+        assert!(
+            text.contains("\"dockPanels\""),
+            "camelCase key must round-trip: {text}"
+        );
+        cfg.dock_panels = false;
+        save_in(&root, &cfg).expect("save off");
+        assert!(!load().dock_panels);
         let _ = fs::remove_dir_all(&root);
     }
 
