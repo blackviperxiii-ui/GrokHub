@@ -250,9 +250,7 @@ impl Cabin {
         });
         if paths.is_empty() {
             #[cfg(windows)]
-            if ctx.input(|i| {
-                !i.raw.hovered_files.is_empty() || !i.raw.dropped_files.is_empty()
-            }) {
+            if ctx.input(|i| !i.raw.hovered_files.is_empty() || !i.raw.dropped_files.is_empty()) {
                 self.status =
                     "Drop had no file paths — Windows may need drag-and-drop enabled in the window"
                         .into();
