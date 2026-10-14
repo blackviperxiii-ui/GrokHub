@@ -118,15 +118,40 @@ fn check_contains(root: &Path, rel: &str, needle: &str) -> Result<(), String> {
 fn check_reference(root: &Path, version: &str) -> Result<(), String> {
     let text =
         fs::read_to_string(root.join("docs/REFERENCE.md")).map_err(|e| format!("REFERENCE.md: {e}"))?;
-    for needle in [
-        format!("**v{version}**"),
-        format!("grokhub-linux-v{version}.tar.gz"),
-        format!("GrokHub-Setup-{version}.exe"),
-        format!("grokhub-windows-v{version}.zip"),
-        format!("**v{version}**"),
+    check_reference_text(&text, version)
+}
+
+/// Headline + both Latest cells use `**vX.Y.Z**`; `--version` examples use
+/// `GrokHub X.Y.Z-beta…` and `GrokHub X.Y.Z (main…)`.
+fn check_reference_text(text: &str, version: &str) -> Result<(), String> {
+    let bold = format!("**v{version}**");
+    let bold_n = text.matches(&bold).count();
+    if bold_n < 3 {
+        return Err(format!(
+            "docs/REFERENCE.md: expected >=3 {bold:?} (headline + Latest rows), found {bold_n}"
+        ));
+    }
+    for (needle, label) in [
+        (
+            format!("grokhub-linux-v{version}.tar.gz"),
+            "Linux tarball",
+        ),
+        (format!("GrokHub-Setup-{version}.exe"), "Windows Setup"),
+        (
+            format!("grokhub-windows-v{version}.zip"),
+            "Windows zip",
+        ),
+        (
+            format!("GrokHub {version}-beta."),
+            "--version beta example",
+        ),
+        (
+            format!("GrokHub {version} (main"),
+            "--version main example",
+        ),
     ] {
         if !text.contains(&needle) {
-            return Err(format!("docs/REFERENCE.md missing {needle:?}"));
+            return Err(format!("docs/REFERENCE.md missing {label}: {needle:?}"));
         }
     }
     Ok(())
@@ -229,7 +254,11 @@ fn replace_workspace_version(root: &Path, old: &str, new: &str) -> Result<(), St
 fn replace_reference(root: &Path, old: &str, new: &str) -> Result<(), String> {
     let path = root.join("docs/REFERENCE.md");
     let text = fs::read_to_string(&path).map_err(|e| e.to_string())?;
-    let mut next = text.clone();
+    // Refuse a partial bump: every lockstep token must already be present.
+    check_reference_text(&text, old)?;
+    let mut next = text;
+    // Longer / more specific tokens first so `GrokHub X.Y.Z-beta.` is not
+    // rewritten only as a prefix of a looser pattern.
     for (from, to) in [
         (format!("**v{old}**"), format!("**v{new}**")),
         (
@@ -244,17 +273,29 @@ fn replace_reference(root: &Path, old: &str, new: &str) -> Result<(), String> {
             format!("grokhub-windows-v{old}.zip"),
             format!("grokhub-windows-v{new}.zip"),
         ),
+        (
+            format!("GrokHub {old}-beta."),
+            format!("GrokHub {new}-beta."),
+        ),
+        (
+            format!("GrokHub {old} (main"),
+            format!("GrokHub {new} (main"),
+        ),
+        // Remaining plain `GrokHub X.Y.Z` (no-git build line, etc.).
         (format!("GrokHub {old}"), format!("GrokHub {new}")),
-        (format!("GrokHub {old}-"), format!("GrokHub {new}-")),
     ] {
-        if next.contains(&from) {
-            next = next.replace(&from, &to);
+        if !next.contains(&from) {
+            // Plain `GrokHub {old}` may already be gone after the beta/main
+            // replacements when those were the only occurrences — only the
+            // required tokens above are mandatory (checked via check_reference_text).
+            if from == format!("GrokHub {old}") {
+                continue;
+            }
+            return Err(format!("docs/REFERENCE.md missing required token {from:?}"));
         }
+        next = next.replace(&from, &to);
     }
-    // Headline **vX.Y.Z** and Latest cells may share the same token; replace_all is fine.
-    if next == text {
-        return Err("docs/REFERENCE.md: no version tokens replaced".into());
-    }
+    check_reference_text(&next, new)?;
     fs::write(&path, next).map_err(|e| e.to_string())
 }
 
@@ -432,6 +473,46 @@ mod tests {
         assert_eq!(
             civil_date_from_unix(1_791_936_000).as_deref(),
             Some("2026-10-14")
+        );
+    }
+
+    fn sample_reference(version: &str) -> String {
+        format!(
+            "**v{version}** — notes\n\
+             | Linux | `grokhub-linux-v{version}.tar.gz` | **v{version}** |\n\
+             | Windows | `GrokHub-Setup-{version}.exe`, `grokhub-windows-v{version}.zip` | **v{version}** |\n\
+             grokhub --version # GrokHub {version}-beta.3 (beta @ abc) or GrokHub {version} (main @ def)\n\
+             A build without git shows just `GrokHub {version}`.\n"
+        )
+    }
+
+    #[test]
+    fn check_reference_requires_bold_count_and_version_examples() {
+        let ok = sample_reference("3.0.2");
+        assert!(check_reference_text(&ok, "3.0.2").is_ok());
+
+        // Only two **v…** cells — must fail (headline + Latest need three).
+        let two_bold = ok.replacen("**v3.0.2**", "v3.0.2", 1);
+        let err = check_reference_text(&two_bold, "3.0.2").unwrap_err();
+        assert!(
+            err.contains("expected >=3"),
+            "expected bold-count error, got {err}"
+        );
+
+        // Stale --version beta example.
+        let stale_beta = ok.replace("GrokHub 3.0.2-beta.", "GrokHub 9.9.9-beta.");
+        let err = check_reference_text(&stale_beta, "3.0.2").unwrap_err();
+        assert!(
+            err.contains("--version beta example"),
+            "expected beta example error, got {err}"
+        );
+
+        // Stale --version main example.
+        let stale_main = ok.replace("GrokHub 3.0.2 (main", "GrokHub 9.9.9 (main");
+        let err = check_reference_text(&stale_main, "3.0.2").unwrap_err();
+        assert!(
+            err.contains("--version main example"),
+            "expected main example error, got {err}"
         );
     }
 }
