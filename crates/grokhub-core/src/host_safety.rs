@@ -368,10 +368,14 @@ fn pipes_or_chains_to_shell(cmd: &str) -> bool {
     let bytes = cmd.as_bytes();
     let mut i = 0;
     while i < bytes.len() {
+        if i + 1 < bytes.len()
+            && bytes[i] == b'&'
+            && bytes[i + 1] == b'&'
+            && next_token_is_shell(&cmd[i + 2..])
+        {
+            return true;
+        }
         if i + 1 < bytes.len() && bytes[i] == b'&' && bytes[i + 1] == b'&' {
-            if next_token_is_shell(&cmd[i + 2..]) {
-                return true;
-            }
             i += 2;
             continue;
         }
@@ -537,6 +541,26 @@ mod tests {
             forbidden_reason("echo Y2F0IH4vLnNzaC9pZF9yc2E= | base64 -d |sh"),
             Some("base64|shell rebuild"),
             "tight |sh must still count as a shell sink"
+        );
+        assert_eq!(
+            forbidden_reason("echo Y2F0IH4vLnNzaC9pZF9yc2E= | base64 -d | /bin/sh"),
+            Some("base64|shell rebuild"),
+            "path-qualified | /bin/sh must count as a shell sink"
+        );
+        assert_eq!(
+            forbidden_reason("echo Y2F0IH4vLnNzaC9pZF9yc2E= | base64 -d | /usr/bin/bash"),
+            Some("base64|shell rebuild"),
+            "path-qualified | /usr/bin/bash must count as a shell sink"
+        );
+        assert_eq!(
+            forbidden_reason("echo Y2F0IH4vLnNzaC9pZF9yc2E= | base64 -d && zsh"),
+            Some("base64|shell rebuild"),
+            "&& zsh must count as a shell sink"
+        );
+        assert_eq!(
+            forbidden_reason("echo Y2F0IH4vLnNzaC9pZF9yc2E= | base64 -d ;zsh"),
+            Some("base64|shell rebuild"),
+            ";zsh must count as a shell sink"
         );
         assert!(
             forbidden_reason("echo hello | base64").is_none(),
