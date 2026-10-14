@@ -141,6 +141,7 @@ mod palette;
 mod persist;
 mod step_search;
 use step_search::{parse_step_target, step_hits, turn_jump_row};
+mod attach_tray;
 mod audio_check_ui;
 mod background;
 mod background_ui;
@@ -180,6 +181,7 @@ mod native_signin_tests;
 mod night;
 mod oauth;
 mod pages;
+pub mod panels;
 mod personality_ui;
 mod playbook_ui;
 mod plus;
@@ -722,6 +724,10 @@ pub struct Cabin {
     attach_name: Option<String>,
     attach_path: Option<String>,
     attach_kind: Option<AttachKind>,
+    attach_tray: attach_tray::AttachTray,
+    attach_ingest: Option<attach_tray::AttachIngestHandle>,
+    attach_thumb_cache: Vec<TextureHandle>,
+    attach_pick_rx: Option<mpsc::Receiver<Option<Vec<PathBuf>>>>,
     imagine_ref: Option<String>,
     plus_menu: Option<PlusTarget>,
     plus_anchor: egui::Pos2,
@@ -1299,6 +1305,10 @@ impl Cabin {
             attach_name: None,
             attach_path: None,
             attach_kind: None,
+            attach_tray: attach_tray::AttachTray::default(),
+            attach_ingest: None,
+            attach_thumb_cache: Vec::new(),
+            attach_pick_rx: None,
             imagine_ref: None,
             plus_menu: None,
             plus_anchor: egui::Pos2::ZERO,
@@ -1744,6 +1754,10 @@ impl Cabin {
             attach_name: None,
             attach_path: None,
             attach_kind: None,
+            attach_tray: attach_tray::AttachTray::default(),
+            attach_ingest: None,
+            attach_thumb_cache: Vec::new(),
+            attach_pick_rx: None,
             imagine_ref: None,
             plus_menu: None,
             plus_anchor: egui::Pos2::ZERO,
@@ -5040,8 +5054,7 @@ impl eframe::App for Cabin {
             grokhub_agent::halt_all_sessions();
             grokhub_agent::mcp::shutdown_all();
         });
-        // Hub accept and desktop broker loops are not joined; exit so Quit leaves no process.
-        std::process::exit(0);
+        // Process exit runs in `main` after `run_native` returns (tokio shutdown, then last resort).
     }
 
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
@@ -5113,6 +5126,8 @@ impl eframe::App for Cabin {
         self.poll_self_changes();
         self.poll_native_side_events();
         self.poll_pick();
+        self.poll_attach_pick();
+        self.poll_attach_ingest();
         // While hidden, eframe hands `logic` the last shown frame's input every
         // tick: keys, clicks, and drops are acted on once, on the pass they came in.
         let pass = ctx.cumulative_pass_nr();
