@@ -60,3 +60,5 @@ Grok Build 1.0.49+ ships explore / plan / implementer (and reviewer, test-writer
 - **dyl-review** (quick): draft review asks for the human; never auto-post merge.
 - **Continual Learning**: when mining chats, update `AGENTS.md` via the continual-learning skill / agents-memory-updater. Keep AGENTS.md short and factual.
 
+
+- **vstack:** Always load and follow the vstack skills in .cursor/skills (start with viper-mode); never use pstack.
