@@ -208,6 +208,7 @@ mod setup_wizard;
 mod sidebar;
 mod skill_undo;
 mod slash;
+mod status_toasts;
 mod systems_brief_ui;
 #[cfg(test)]
 mod tests;
@@ -861,6 +862,10 @@ pub struct Cabin {
     /// Last frame's composer pill, mic, and Send/Stop disc. Not saved.
     composer_geom: Option<(egui::Rect, egui::Rect, egui::Rect)>,
     composer_ghost: ghost::ComposerGhost,
+    /// In-app toasts (egui-notify) for Saved / finished / error status.
+    toasts: egui_notify::Toasts,
+    /// Last `status` already mirrored into `toasts` (dedupe).
+    status_toasted: String,
 }
 
 #[cfg(test)]
@@ -1414,6 +1419,8 @@ impl Cabin {
             scroll_to_hooks: false,
             composer_geom: None,
             composer_ghost: ghost::ComposerGhost::default(),
+            toasts: status_toasts::cabin_toasts(),
+            status_toasted: String::new(),
         };
         steps.mark("startup:new:fields");
         if !quiet {
@@ -1862,6 +1869,8 @@ impl Cabin {
             scroll_to_hooks: false,
             composer_geom: None,
             composer_ghost: ghost::ComposerGhost::default(),
+            toasts: status_toasts::cabin_toasts(),
+            status_toasted: String::new(),
         }
     }
 
@@ -5364,6 +5373,8 @@ impl eframe::App for Cabin {
                 });
         }
         self.sync_idea_card_actions();
+        status_toasts::sync_status_toasts(&mut self.toasts, &mut self.status_toasted, &self.status);
+        self.toasts.show(&ctx);
         // The pass after this one grabs the hotkeys in `logic`, which runs
         // even while the window is covered or minimized.
         #[cfg(not(test))]

@@ -209,7 +209,9 @@ mod tests {
         cabin.cfg.dream_hour = 0;
         cabin.cfg.daily_drop.enabled = true;
         cabin.cfg.daily_drop.hacker_news = true;
-        let now = 1_791_705_600_000;
+        // Wall-clock-relative: tick_daily_drop ranks with now_ms(); a frozen
+        // published_ms ages past the 72h freshness band and falls under RANK_MIN.
+        let now = now_ms();
         let item = SourceItem {
             title: "HN pick".into(),
             url: "https://hn.test/drop-1".into(),
