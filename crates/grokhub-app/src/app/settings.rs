@@ -257,6 +257,15 @@ impl Cabin {
         self.status = "Saved".into();
     }
 
+    pub(super) fn set_dock_panels(&mut self, on: bool) {
+        if self.cfg.dock_panels == on {
+            return;
+        }
+        self.cfg.dock_panels = on;
+        self.persist_cfg();
+        self.status = "Saved".into();
+    }
+
     pub(super) fn ui_settings_menu(&mut self, ctx: &egui::Context) {
         if !self.settings_menu_open {
             return;
@@ -605,6 +614,15 @@ impl Cabin {
                                                                 self.set_composer_autocomplete(
                                                                     composer_autocomplete,
                                                                 );
+                                                            }
+                                                            let mut dock_panels = self.cfg.dock_panels;
+                                                            if settings_toggle(
+                                                                ui,
+                                                                "Dockable panels",
+                                                                "Main pages become rearrangeable tabs. Off keeps today's fixed layout. Layout saves in dock.json.",
+                                                                &mut dock_panels,
+                                                            ) {
+                                                                self.set_dock_panels(dock_panels);
                                                             }
                                                             crate::ui_kit::section_header(
                                                                 ui,

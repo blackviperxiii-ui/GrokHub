@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- UI: optional egui_dock main-panel tabs behind Settings → Dockable panels (U7f; default off; layout in dock.json; egui 0.36, no egui/eframe bump).
 - Tests: shared `app/test_support_tests` module for QuietCabin, IsolatedConfig, and `wait_until` helpers (rearch stage 4; prepares feature test splits).
 - UI: egui_plot bar chart for self-improvement runs-by-area (U7e; egui 0.36, no egui/eframe bump).
 - CI: friction guards for conflict markers, god-file line budgets (`app/mod.rs`, `cards.rs`, `slash.rs`, `app/tests.rs`), and Cargo.lock edits that need the `dependencies` label or a Cargo.toml dep change (rearch stage 1).
