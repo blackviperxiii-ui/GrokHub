@@ -790,6 +790,8 @@ pub struct Cabin {
     /// Plan card open. The body lives on the thread (`plan_body`).
     plan_open: bool,
     tool_cards: Vec<ToolCard>,
+    /// Generative UI panels from `show_panel` tool results (G4).
+    panels: panels::PanelStore,
     live_blocks: Vec<LiveBlock>,
     /// `(fold_slot, body len, thought_body_key)` per live block, so a frame does not
     /// rescrub every thought in the turn.
@@ -965,6 +967,7 @@ impl Cabin {
             (threads, dropped_leftover, thread_idx)
         };
         steps.mark("startup:new:config");
+        panels::apply_generative_ui_setting(&config::config_dir());
         #[cfg(test)]
         let (threads, dropped_leftover, thread_idx, quiet) =
             if let Some((threads, idx)) = QUIET_THREADS.with(|slot| slot.borrow_mut().take()) {
@@ -1362,6 +1365,7 @@ impl Cabin {
             side_ask_kick: false,
             plan_open: false,
             tool_cards: Vec::new(),
+            panels: panels::PanelStore::default(),
             live_blocks: Vec::new(),
             live_keys: Vec::new(),
             turn_log: Vec::new(),
@@ -1812,6 +1816,7 @@ impl Cabin {
             side_ask_kick: false,
             plan_open: false,
             tool_cards: Vec::new(),
+            panels: panels::PanelStore::default(),
             live_blocks: Vec::new(),
             live_keys: Vec::new(),
             turn_log: Vec::new(),
