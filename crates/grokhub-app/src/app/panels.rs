@@ -504,12 +504,7 @@ fn paint_core(ui: &mut Ui, spec: &CoreSpec, panel_id: &str, actions: &mut Vec<Pa
                 if table.headers.is_empty() {
                     continue;
                 }
-                paint_string_table(
-                    ui,
-                    ("core-table", panel_id),
-                    &table.headers,
-                    &table.rows,
-                );
+                paint_string_table(ui, ("core-table", panel_id), &table.headers, &table.rows);
             }
             CoreElement::KeyValue(kv) => {
                 for pair in &kv.pairs {
