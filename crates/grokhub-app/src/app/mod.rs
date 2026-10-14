@@ -5039,8 +5039,7 @@ impl eframe::App for Cabin {
             grokhub_agent::halt_all_sessions();
             grokhub_agent::mcp::shutdown_all();
         });
-        // Hub accept and desktop broker loops are not joined; exit so Quit leaves no process.
-        std::process::exit(0);
+        // Process exit runs in `main` after `run_native` returns (tokio shutdown, then last resort).
     }
 
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
