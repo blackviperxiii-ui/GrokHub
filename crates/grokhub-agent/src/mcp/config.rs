@@ -251,12 +251,7 @@ fn parse_server(spec: &Value) -> Option<ServerDef> {
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(str::to_string);
-    let command = kept
-        .get("command")
-        .and_then(|v| v.as_str())
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(str::to_string);
+    let stdio_command = parse_stdio_command(&kept);
     let sse = matches!(kind.as_str(), "sse" | "sse-legacy" | "legacy-sse");
     let http = sse
         || matches!(
@@ -264,15 +259,15 @@ fn parse_server(spec: &Value) -> Option<ServerDef> {
             "http" | "streamable-http" | "streamable_http"
         );
     let transport = if let Some(url) = url {
-        if kind == "stdio" || (!http && !kind.is_empty() && command.is_some()) {
+        if kind == "stdio" || (!http && !kind.is_empty() && stdio_command.is_some()) {
             return None;
         }
         TransportDef::Http { url, sse }
     } else {
-        let command = command?;
+        let (command, args) = stdio_command?;
         TransportDef::Stdio {
             command,
-            args: string_list(kept.get("args")),
+            args,
             env: string_map(kept.get("env")),
             cwd: kept
                 .get("cwd")
@@ -339,6 +334,39 @@ fn secs_field(spec: &Map<String, Value>, a: &str, b: &str, default: u64) -> Dura
         .filter(|n| *n > 0)
         .unwrap_or(default);
     Duration::from_secs(secs.min(600))
+}
+
+/// `command` as a string plus optional `args`, or a single argv array.
+fn parse_stdio_command(spec: &Map<String, Value>) -> Option<(String, Vec<String>)> {
+    let extra = string_list(spec.get("args"));
+    match spec.get("command")? {
+        Value::String(cmd) => {
+            let cmd = cmd.trim();
+            if cmd.is_empty() {
+                return None;
+            }
+            Some((cmd.to_string(), extra))
+        }
+        Value::Array(items) => {
+            let parts: Vec<String> = items
+                .iter()
+                .filter_map(|item| {
+                    item.as_str()
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty())
+                        .map(str::to_string)
+                })
+                .collect();
+            if parts.is_empty() {
+                return None;
+            }
+            let command = parts[0].clone();
+            let mut args = parts[1..].to_vec();
+            args.extend(extra);
+            Some((command, args))
+        }
+        _ => None,
+    }
 }
 
 fn string_list(value: Option<&Value>) -> Vec<String> {
@@ -409,6 +437,31 @@ pub fn target_label(def: &ServerDef) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stdio_command_accepts_a_string_or_argv_array() {
+        let doc = r#"{"mcpServers":{
+            "a":{"command":"one","args":["two"]},
+            "b":{"command":["three","four","five"]}
+        }}"#;
+        let servers = servers_from_document(doc).unwrap();
+        let a = servers.get("a").unwrap();
+        let b = servers.get("b").unwrap();
+        match &a.transport {
+            TransportDef::Stdio { command, args, .. } => {
+                assert_eq!(command, "one");
+                assert_eq!(args, &["two".to_string()]);
+            }
+            _ => panic!("stdio"),
+        }
+        match &b.transport {
+            TransportDef::Stdio { command, args, .. } => {
+                assert_eq!(command, "three");
+                assert_eq!(args, &["four".to_string(), "five".to_string()]);
+            }
+            _ => panic!("stdio"),
+        }
+    }
 
     #[test]
     fn the_cabin_desktop_server_is_never_loaded_or_imported() {
