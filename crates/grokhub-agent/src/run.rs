@@ -49,10 +49,22 @@ pub fn bind_job_tool_set(session: impl Into<String>, set: ToolSet) -> JobToolSet
 }
 
 fn bound_job_tool_set(session: &str) -> Option<ToolSet> {
-    job_tool_sets()
-        .lock()
-        .ok()
-        .and_then(|map| map.get(session).cloned())
+    let Ok(map) = job_tool_sets().lock() else {
+        return None;
+    };
+    if let Some(set) = map.get(session) {
+        return Some(set.clone());
+    }
+    // Child sessions are `parent/id` (nested `parent/id/id2`). Inherit the
+    // nearest bound ancestor so spawn_subagent keeps the job allowlist.
+    let mut rest = session;
+    while let Some((parent, _)) = rest.rsplit_once('/') {
+        if let Some(set) = map.get(parent) {
+            return Some(set.clone());
+        }
+        rest = parent;
+    }
+    None
 }
 
 const REPEAT_LIMIT: u32 = 3;
@@ -1678,6 +1690,25 @@ mod tests {
             events.push(ev)
         });
         (out, history, events)
+    }
+
+    #[test]
+    fn child_session_inherits_parent_job_tool_set() {
+        let parent = "native-sp2-parent";
+        let child = format!("{parent}/agent-1");
+        let nested = format!("{child}/agent-2");
+        let set = ToolSet::only(["read_file"]);
+        let _guard = bind_job_tool_set(parent, set.clone());
+        assert_eq!(bound_job_tool_set(parent).as_ref(), Some(&set));
+        assert_eq!(bound_job_tool_set(&child).as_ref(), Some(&set));
+        assert_eq!(bound_job_tool_set(&nested).as_ref(), Some(&set));
+        assert!(bound_job_tool_set("unrelated-session").is_none());
+        // A tighter bind on the child wins over the parent.
+        let tighter = ToolSet::only(["list_dir"]);
+        let _child_guard = bind_job_tool_set(&child, tighter.clone());
+        assert_eq!(bound_job_tool_set(&child).as_ref(), Some(&tighter));
+        assert_eq!(bound_job_tool_set(&nested).as_ref(), Some(&tighter));
+        assert_eq!(bound_job_tool_set(parent).as_ref(), Some(&set));
     }
 
     #[test]
