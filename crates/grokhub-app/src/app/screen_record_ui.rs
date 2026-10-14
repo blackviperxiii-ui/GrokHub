@@ -358,8 +358,9 @@ impl Cabin {
             };
             self.post_screen_done(&title, &done.dir, chat, Err(why.to_string()));
             if watch_busy {
-                self.status = "Save as skill still in progress — finish or cancel it before a new offer"
-                    .into();
+                self.status =
+                    "Save as skill still in progress — finish or cancel it before a new offer"
+                        .into();
             }
             return;
         }
@@ -1179,7 +1180,10 @@ mod tests {
                 Some(WatchPhase::Draft { offer, .. }) if offer.dir == dir_a
             )
         });
-        assert!(kept, "in-flight Draft must survive a second recording finish");
+        assert!(
+            kept,
+            "in-flight Draft must survive a second recording finish"
+        );
         assert!(
             cabin.status.contains("Save as skill still in progress"),
             "status explains why the new offer was refused: {}",

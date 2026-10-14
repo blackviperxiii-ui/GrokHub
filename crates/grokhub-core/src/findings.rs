@@ -373,7 +373,10 @@ mod tests {
             "paraphrase without the exact 'activate skill' needle must still block"
         );
         assert!(
-            is_impossible_one_tap("Allow Steam reads", "Allow Steam workspace reads for the agent"),
+            is_impossible_one_tap(
+                "Allow Steam reads",
+                "Allow Steam workspace reads for the agent"
+            ),
             "host/workspace grant paraphrase must still block"
         );
         assert!(
