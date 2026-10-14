@@ -9,7 +9,8 @@
 ## Key files
 - `crates/grokhub-core/src/lib.rs`: the `pub mod` list and the flat `pub use` re-exports that other crates import.
 - `crates/grokhub-core/src/state.rs` (`HubState`, `state_for_disk`) and `crates/grokhub-core/src/pair.rs`.
-- `crates/grokhub-core/src/host_safety.rs`: `forbidden_reason` (leaf match plus assignment/`+`/`$(echo)` deobfuscation) and `recall_hits`. `crates/grokhub-core/src/ssrf.rs`: `ip_blocked` / `host_name_blocked`; `public_http_url` uses them (dialers add `public_only_resolve`, never env proxy).
+- `crates/grokhub-core/src/host_safety.rs`: `forbidden_reason` (leaf match plus assignment/`+`/`$(echo)`/`chr()` deobfuscation and `base64|sh` rebuild refuse) and `recall_hits`. `crates/grokhub-core/src/ssrf.rs`: `ip_blocked` / `host_name_blocked`; `public_http_url` uses them (dialers add `public_only_resolve`, never env proxy).
+- Also: `panel_spec.rs` (generative UI validate-only), `watch_learn.rs` (pure SD1 step extract), `connectivity.rs`, `fix_plan.rs` (SC2).
 - `crates/grokhub-core/src/feel.rs`: `ALWAYS_SETTLE_SECS`, `GLOW_SETTLE_SECS`, and the other motion timings.
 - `crates/grokhub-core/src/paths.rs`: `user_home`.
 - `crates/grokhub-core/src/wire.rs`: chat wire types (`AcpEvent`, `ToolCard`, `PermissionAsk`, `ElicitAsk`, `SessionMode`, `PermissionMode`, `GrokUsage`). `crates/grokhub-core/src/proc_util.rs`: `hide_windows_console`, `kill_pid`, `is_sigterm_status`.

@@ -92,12 +92,45 @@ fn impossible_host_fix_reason(label: &str, goal: &str) -> Option<String> {
         "~/.steam",
         "escape the workspace",
     ];
-    NEEDLES.iter().find(|n| blob.contains(*n)).map(|n| {
-        format!(
+    if let Some(n) = NEEDLES.iter().find(|n| blob.contains(*n)) {
+        return Some(format!(
             "fix `{label}` is not a one-tap the agent can do (`{n}`). \
 Use Memory, sealed learnings, or a loadable skill instead of OS permission pills."
-        )
-    })
+        ));
+    }
+    // Paraphrases that skip the exact needles still doom-loop (Activate steamlibreview,
+    // Allow Steam reads, Load X from cabin skills).
+    let skill_verb = ["activate ", "enable ", "load ", "allow "]
+        .iter()
+        .any(|v| blob.contains(v));
+    if skill_verb
+        && (blob.contains("skill")
+            || blob.contains("steamlib")
+            || blob.contains("from cabin")
+            || blob.contains("cabin skills"))
+    {
+        return Some(format!(
+            "fix `{label}` is not a one-tap the agent can do (skill activate family). \
+Use Memory, sealed learnings, or a loadable skill instead of OS permission pills."
+        ));
+    }
+    let host_verb = blob.contains("grant")
+        || blob.contains("allow ")
+        || blob.contains("enable ")
+        || blob.contains("unblock");
+    if host_verb
+        && (blob.contains("steam")
+            || blob.contains("workspace")
+            || blob.contains("~/.")
+            || blob.contains("host path")
+            || blob.contains("os path"))
+    {
+        return Some(format!(
+            "fix `{label}` is not a one-tap the agent can do (host/workspace grant family). \
+Use Memory, sealed learnings, or a loadable skill instead of OS permission pills."
+        ));
+    }
+    None
 }
 
 /// True when a one-tap label/goal (or open-todo text used as a goal) is an
@@ -334,6 +367,21 @@ mod tests {
                 "Finish what the last run left open: Activate skill steamlibreview so it loads."
             ),
             "needle must still catch activate skill in fallback goals"
+        );
+        assert!(
+            is_impossible_one_tap("Activate steamlibreview", "Enable steamlibreview in cabin"),
+            "paraphrase without the exact 'activate skill' needle must still block"
+        );
+        assert!(
+            is_impossible_one_tap("Allow Steam reads", "Allow Steam workspace reads for the agent"),
+            "host/workspace grant paraphrase must still block"
+        );
+        assert!(
+            is_impossible_one_tap(
+                "Load steamlibreview",
+                "Load steamlibreview from cabin skills"
+            ),
+            "load-from-cabin-skills paraphrase must still block"
         );
     }
 }

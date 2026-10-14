@@ -11,15 +11,6 @@ pub enum CardVariant {
     Interactive,
 }
 
-fn card_tag(variant: CardVariant) -> &'static str {
-    match variant {
-        CardVariant::Default => "default",
-        CardVariant::Subtle => "subtle",
-        CardVariant::Outlined => "outlined",
-        CardVariant::Interactive => "interactive",
-    }
-}
-
 /// Paint a rounded card with kit spacing, shadow, and interaction states.
 pub fn card_frame(
     ui: &mut Ui,
@@ -120,7 +111,7 @@ mod tests {
             };
             let out = crate::theme::test_pass(&ctx, input, |ui| {
                 card_frame(ui, variant, true, |ui| {
-                    ui.label(card_tag(variant));
+                    ui.label(format!("{variant:?}"));
                 });
             });
             let max_h = out

@@ -16,16 +16,17 @@ pub fn badge(ui: &mut Ui, label: &str, tone: BadgeTone) -> Response {
     paint_pill(ui, label, fill, text, crate::theme::RADIUS_SM, false, true)
 }
 
-/// Filter / tag chip. `enabled` drives hover and focus; disabled chips are flat.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ChipVariant {
-    Default,
-    Outlined,
-}
-
-pub fn chip(ui: &mut Ui, label: &str, variant: ChipVariant, enabled: bool) -> Response {
-    let (fill, stroke, text) = match variant {
-        ChipVariant::Default => (
+/// Filter / tag chip. `outlined` draws a border on transparent fill; otherwise a surface fill.
+/// `enabled` drives hover and focus; disabled chips are flat.
+pub fn chip(ui: &mut Ui, label: &str, outlined: bool, enabled: bool) -> Response {
+    let (fill, stroke, text) = if outlined {
+        (
+            Color32::TRANSPARENT,
+            Stroke::new(1.0, crate::theme::border()),
+            crate::theme::fg(),
+        )
+    } else {
+        (
             if enabled {
                 crate::theme::surface()
             } else {
@@ -33,12 +34,7 @@ pub fn chip(ui: &mut Ui, label: &str, variant: ChipVariant, enabled: bool) -> Re
             },
             Stroke::NONE,
             crate::theme::fg(),
-        ),
-        ChipVariant::Outlined => (
-            Color32::TRANSPARENT,
-            Stroke::new(1.0, crate::theme::border()),
-            crate::theme::fg(),
-        ),
+        )
     };
     let id = ui.id().with(("ui-kit-chip", label));
     let font = FontId::proportional(crate::theme::TYPE_CAPTION);
@@ -141,7 +137,7 @@ mod tests {
         };
         let out = crate::theme::test_pass(&ctx, input, |ui| {
             badge(ui, "New", BadgeTone::Accent);
-            chip(ui, "Tag", ChipVariant::Default, true);
+            chip(ui, "Tag", false, true);
         });
         let text = out
             .shapes

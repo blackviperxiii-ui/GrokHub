@@ -29,8 +29,8 @@ pub struct ChatThread {
     /// when still zero). Opening a chat bumps this without moving History order.
     #[serde(default)]
     pub last_active_ms: u64,
-    /// When set, the chat is archived: hidden from the main list, kept in full,
-    /// kept on disk; Unarchive from the open chat's menu.
+    /// When set, the chat is archived: hidden from History lists and search,
+    /// kept in full on disk; Unarchive / reply from the open chat restores it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub archived_at: Option<u64>,
     #[serde(default)]
@@ -584,13 +584,10 @@ pub fn should_auto_archive(thread: &ChatThread, now_ms: u64, days: u32, busy: bo
     idle >= u64::from(days) * DAY_MS
 }
 
-/// Search title for a chat: archived rows get an "Archived" tag.
-pub fn search_thread_title(title: &str, archived: bool) -> String {
-    if archived {
-        format!("Archived · {title}")
-    } else {
-        title.to_string()
-    }
+/// Search title for a History hit. Archived chats are omitted before this runs
+/// (#712); the `archived` flag is ignored so production never paints `Archived ·`.
+pub fn search_thread_title(title: &str, _archived: bool) -> String {
+    title.to_string()
 }
 
 /// Chat section. Project selection is not an input, so a project click cannot
@@ -2170,7 +2167,7 @@ mod tests {
     }
 
     #[test]
-    fn archive_hides_from_main_list_and_shows_in_archived() {
+    fn archive_hides_from_main_list() {
         let mut keep = ChatThread::new("Keep me", false);
         keep.messages_mut().push(("user".into(), "stay".into()));
         keep.accessed_ms = 100;
@@ -2224,13 +2221,14 @@ mod tests {
     }
 
     #[test]
-    fn unarchive_and_search_title_tag() {
+    fn unarchive_and_search_title_never_tags_archived() {
         let mut t = ChatThread::new("Night watch", false);
         t.messages_mut().push(("user".into(), "keep".into()));
         assert!(archive_thread(&mut t, 9));
         assert_eq!(
             search_thread_title(&t.title, is_archived(&t)),
-            "Archived · Night watch"
+            "Night watch",
+            "History search never formats an Archived · tag (#712)"
         );
         assert!(unarchive_thread(&mut t));
         assert!(!is_archived(&t));

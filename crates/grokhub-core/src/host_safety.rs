@@ -301,16 +301,87 @@ fn deobfuscate(cmd: &str) -> String {
     s = expand_shell_assignments(&s);
     s = collapse_string_concats(&s);
     s = collapse_echo_subs(&s);
+    s = collapse_chr_calls(&s);
     s
+}
+
+/// Collapse Python-style `chr(46)` / `chr(0x2e)` so leaf path checks still fire.
+fn collapse_chr_calls(cmd: &str) -> String {
+    let mut out = String::with_capacity(cmd.len());
+    let lower = cmd.to_ascii_lowercase();
+    let bytes = lower.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if i + 4 <= bytes.len() && &bytes[i..i + 4] == b"chr(" {
+            let mut j = i + 4;
+            while j < bytes.len() && bytes[j].is_ascii_whitespace() {
+                j += 1;
+            }
+            let mut base = 10u32;
+            if j + 2 <= bytes.len() && bytes[j] == b'0' && matches!(bytes[j + 1], b'x' | b'X') {
+                base = 16;
+                j += 2;
+            }
+            let num_start = j;
+            while j < bytes.len()
+                && (bytes[j].is_ascii_digit()
+                    || (base == 16 && matches!(bytes[j], b'a'..=b'f' | b'A'..=b'F')))
+            {
+                j += 1;
+            }
+            let num_end = j;
+            while j < bytes.len() && bytes[j].is_ascii_whitespace() {
+                j += 1;
+            }
+            if num_end > num_start && j < bytes.len() && bytes[j] == b')' {
+                if let Ok(n) = u32::from_str_radix(&lower[num_start..num_end], base) {
+                    if let Some(ch) = char::from_u32(n) {
+                        if ch.is_ascii() {
+                            out.push(ch);
+                            i = j + 1;
+                            continue;
+                        }
+                    }
+                }
+            }
+        }
+        push_utf8_char(cmd, &mut i, &mut out);
+    }
+    out
+}
+
+/// `echo … | base64 -d | sh` (and decode|bash) rebuilds a forbidden leaf after rails.
+fn base64_pipe_shell(cmd: &str) -> bool {
+    let c = cmd.to_ascii_lowercase().replace('\\', "/");
+    let has_b64 = c.contains("base64") || c.contains("b64decode");
+    if !has_b64 {
+        return false;
+    }
+    c.contains("|sh")
+        || c.contains("| sh")
+        || c.contains("|bash")
+        || c.contains("| bash")
+        || c.contains("|zsh")
+        || c.contains("| zsh")
+        || c.contains(";sh")
+        || c.contains("; sh")
+        || c.contains("&& sh")
+        || c.contains("&& bash")
 }
 
 pub fn forbidden_reason(cmd: &str) -> Option<&'static str> {
     let c = cmd.to_ascii_lowercase().replace('\\', "/");
+    if base64_pipe_shell(&c) {
+        return Some("base64|shell rebuild");
+    }
     if let Some(why) = forbidden_on(&c) {
         return Some(why);
     }
     let d = deobfuscate(cmd);
     if d != c {
+        if base64_pipe_shell(&d) {
+            return Some("base64|shell rebuild");
+        }
         if let Some(why) = forbidden_on(&d) {
             return Some(why);
         }
@@ -419,6 +490,20 @@ mod tests {
         assert!(
             forbidden_reason("click \u{201c}Reset zoom\u{201d}").is_none(),
             "curly-quoted ask labels must stay allowed and finish"
+        );
+        assert_eq!(
+            forbidden_reason("cat ~/chr(46)ssh/id_rsa"),
+            Some("forbidden path: ssh keys"),
+            "python chr() must not rebuild .ssh under the leaf check"
+        );
+        assert_eq!(
+            forbidden_reason("echo Y2F0IH4vLnNzaC9pZF9yc2E= | base64 -d | sh"),
+            Some("base64|shell rebuild"),
+            "base64 decode piped to a shell rebuilds a forbidden leaf"
+        );
+        assert!(
+            forbidden_reason("echo hello | base64").is_none(),
+            "encode-only base64 without a shell sink must stay allowed"
         );
     }
 
