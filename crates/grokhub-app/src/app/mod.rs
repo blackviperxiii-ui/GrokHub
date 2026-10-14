@@ -151,6 +151,7 @@ mod canary_ui;
 mod change_history_ui;
 mod change_undo;
 mod chat_ui;
+mod dock_ui;
 pub(crate) mod chips;
 mod confirm;
 mod connectivity_ui;
@@ -862,6 +863,8 @@ pub struct Cabin {
     /// Last frame's composer pill, mic, and Send/Stop disc. Not saved.
     composer_geom: Option<(egui::Rect, egui::Rect, egui::Rect)>,
     composer_ghost: ghost::ComposerGhost,
+    /// U7f: egui_dock layout when `cfg.dock_panels` is on (persisted in dock.json).
+    dock_state: egui_dock::DockState<dock_ui::DockTab>,
     /// In-app toasts (egui-notify) for Saved / finished / error status.
     toasts: egui_notify::Toasts,
     /// Last `status` already mirrored into `toasts` (dedupe).
@@ -1419,6 +1422,7 @@ impl Cabin {
             scroll_to_hooks: false,
             composer_geom: None,
             composer_ghost: ghost::ComposerGhost::default(),
+            dock_state: dock_ui::load_dock_state(),
             toasts: status_toasts::cabin_toasts(),
             status_toasted: String::new(),
         };
@@ -1869,6 +1873,7 @@ impl Cabin {
             scroll_to_hooks: false,
             composer_geom: None,
             composer_ghost: ghost::ComposerGhost::default(),
+            dock_state: dock_ui::load_dock_state(),
             toasts: status_toasts::cabin_toasts(),
             status_toasted: String::new(),
         }
@@ -5323,23 +5328,27 @@ impl eframe::App for Cabin {
             self.ui_sidebar(ui);
             self.ui_settings_menu(&ctx);
 
-            match self.page_nav() {
-                Nav::Chat => {
-                    self.paint_native_badge(ui);
-                    self.ui_chat(ui);
+            if self.cfg.dock_panels && self.dock_covers_page() {
+                self.ui_docked_main(ui);
+            } else {
+                match self.page_nav() {
+                    Nav::Chat => {
+                        self.paint_native_badge(ui);
+                        self.ui_chat(ui);
+                    }
+                    Nav::Devices => self.ui_devices(ui),
+                    Nav::Memory => self.ui_memory(ui),
+                    Nav::Workboard => self.ui_board(ui),
+                    Nav::Pulse => self.ui_pulse(ui),
+                    Nav::Imagine => self.ui_imagine(ui),
+                    Nav::Skills => self.ui_skills(ui),
+                    Nav::Night => self.ui_night(ui),
+                    Nav::History => self.ui_history(ui),
+                    Nav::Journal => self.ui_journal(ui),
+                    Nav::Command => self.ui_command(ui),
+                    Nav::Agents => self.ui_agents(ui),
+                    Nav::Settings => self.ui_chat(ui),
                 }
-                Nav::Devices => self.ui_devices(ui),
-                Nav::Memory => self.ui_memory(ui),
-                Nav::Workboard => self.ui_board(ui),
-                Nav::Pulse => self.ui_pulse(ui),
-                Nav::Imagine => self.ui_imagine(ui),
-                Nav::Skills => self.ui_skills(ui),
-                Nav::Night => self.ui_night(ui),
-                Nav::History => self.ui_history(ui),
-                Nav::Journal => self.ui_journal(ui),
-                Nav::Command => self.ui_command(ui),
-                Nav::Agents => self.ui_agents(ui),
-                Nav::Settings => self.ui_chat(ui),
             }
         }
         // Latest chip → Settings → Update must paint on top of Get Started.

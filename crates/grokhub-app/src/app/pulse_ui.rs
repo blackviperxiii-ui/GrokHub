@@ -904,13 +904,10 @@ impl Cabin {
     pub(super) fn ui_pulse(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
         self.poll_pulse_images();
-        egui::CentralPanel::default()
-            .frame(
-                egui::Frame::NONE
-                    .fill(crate::theme::bg())
-                    .inner_margin(egui::Margin::symmetric(24, 20)),
-            )
-            .show(ui, |ui| {
+        let frame = egui::Frame::NONE
+            .fill(crate::theme::bg())
+            .inner_margin(egui::Margin::symmetric(24, 20));
+        let _ = super::dock_ui::page_panel(ui, self.cfg.dock_panels, frame, |ui| {
                 let full = ui.available_width();
                 let col = full.min(COL_MAX_W);
                 let pad = ((full - col) * 0.5).max(0.0);

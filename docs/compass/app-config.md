@@ -2,7 +2,7 @@
 
 ## Owns
 - `AppConfig` (persisted as `app.json`), `config_dir()` resolution, and the safe-disk helpers every store uses: `atomic_write`, `create_private`, `load_json_or` / `load_json`, `quarantine`, `fit_history_json`, and the size caps (`MEMORY_FILE_CAP`, `JSON_STORE_CAP`, `HISTORY_STORE_CAP`).
-- Paths for `chat.json`, `workboard.json`, `decisions.json` (journal), `hub-state.json`, `memory/` (SOUL/USER/MEMORY), and the Imagine dirs.
+- Paths for `chat.json`, `workboard.json`, `decisions.json` (journal), `hub-state.json`, `dock.json` (U7f egui_dock layout when `dockPanels` is on), `memory/` (SOUL/USER/MEMORY), and the Imagine dirs.
 ## Quick commands
 - `cargo test -p grokhub-app config::` (isolates itself via `test_config_root`)
 - `GROKHUB_CONFIG=$(mktemp -d) cargo run -p grokhub-app` (a throwaway cabin config)

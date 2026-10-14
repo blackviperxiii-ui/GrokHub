@@ -431,13 +431,10 @@ impl Cabin {
             cap - 40.0
         };
         let mut stage_hit = crate::cards::ImagineStageHit::default();
-        let panel = egui::CentralPanel::default()
-            .frame(
-                egui::Frame::NONE
-                    .fill(crate::theme::bg())
-                    .inner_margin(egui::Margin::ZERO),
-            )
-            .show(ui, |ui| {
+        let page_frame = egui::Frame::NONE
+            .fill(crate::theme::bg())
+            .inner_margin(egui::Margin::ZERO);
+        let content = super::dock_ui::page_panel(ui, self.cfg.dock_panels, page_frame, |ui| {
                 let content = ui.max_rect();
                 let toolbox_top = imagine_toolbox_top(content.top(), content.height(), box_h, dock);
                 let stage_w = (content.width() - 48.0).max(280.0);
@@ -530,7 +527,6 @@ impl Cabin {
                     }
                 }
             });
-        let content = panel.response.rect;
         let bar_w = (content.width() - 48.0).clamp(280.0, crate::theme::IMAGINE_BAR_W);
         let y = imagine_toolbox_top(content.top(), content.height(), box_h, dock);
         let x = content.center().x - bar_w * 0.5;

@@ -1146,37 +1146,42 @@ impl Cabin {
     pub(super) fn ui_chat(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
         let empty = self.messages.is_empty();
-        if !empty {
+        let docked = self.cfg.dock_panels;
+        let composer_frame = egui::Frame::NONE
+            .fill(crate::theme::bg())
+            .inner_margin(egui::Margin {
+                left: 32,
+                right: 32,
+                top: 10,
+                bottom: 22,
+            });
+        if !empty && !docked {
             egui::Panel::bottom("composer")
-                .frame(
-                    egui::Frame::NONE
-                        .fill(crate::theme::bg())
-                        .inner_margin(egui::Margin {
-                            left: 32,
-                            right: 32,
-                            top: 10,
-                            bottom: 22,
-                        }),
-                )
+                .frame(composer_frame)
                 .show(ui, |ui| {
                     self.ui_composer_stack(ui);
                 });
         }
-        egui::CentralPanel::default()
-            .frame(
-                egui::Frame::NONE
-                    .fill(crate::theme::bg())
-                    .inner_margin(egui::Margin {
-                        left: 8,
-                        right: 16,
-                        top: 12,
-                        bottom: 8,
-                    }),
-            )
-            .show(ui, |ui| {
+        let page_frame = egui::Frame::NONE
+            .fill(crate::theme::bg())
+            .inner_margin(egui::Margin {
+                left: 8,
+                right: 16,
+                top: 12,
+                bottom: 8,
+            });
+        super::dock_ui::page_panel(ui, docked, page_frame, |ui| {
                 if empty {
                     self.ui_empty_home(ui);
                     return;
+                }
+                // Dock leaf has no window-level Bottom panel; reserve composer inside the leaf.
+                if docked {
+                    egui::Panel::bottom("composer-docked")
+                        .frame(composer_frame)
+                        .show(ui, |ui| {
+                            self.ui_composer_stack(ui);
+                        });
                 }
                 self.panels.bind_thread(&self.visible_thread_id());
                 self.drain_show_panel_results();

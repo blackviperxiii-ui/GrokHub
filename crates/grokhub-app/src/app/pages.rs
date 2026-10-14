@@ -817,13 +817,10 @@ impl Cabin {
             || self.palette_open
             || self.shortcuts_open
             || self.confirm.as_ref().is_some_and(|c| c.paints_overlay());
-        egui::CentralPanel::default()
-            .frame(
-                egui::Frame::NONE
-                    .fill(crate::theme::bg())
-                    .inner_margin(egui::Margin::same(24)),
-            )
-            .show(ui, |ui| {
+        let frame = egui::Frame::NONE
+            .fill(crate::theme::bg())
+            .inner_margin(egui::Margin::same(24));
+        let _ = super::dock_ui::page_panel(ui, self.cfg.dock_panels, frame, |ui| {
                 if crate::cards::page_header(ui, "Workboards", "New card") {
                     self.board_edit = None;
                     self.board_title.clear();
@@ -1283,9 +1280,9 @@ impl Cabin {
 
     pub(super) fn ui_skills(&mut self, ui: &mut egui::Ui) {
         self.ensure_native_listing();
-        egui::CentralPanel::default()
-            .frame(egui::Frame::NONE.fill(crate::theme::bg()).inner_margin(egui::Margin::same(24)))
-            .show(ui, |ui| {
+        let frame =
+            egui::Frame::NONE.fill(crate::theme::bg()).inner_margin(egui::Margin::same(24));
+        let _ = super::dock_ui::page_panel(ui, self.cfg.dock_panels, frame, |ui| {
             if crate::cards::page_header(ui, "Skills", "Refresh") {
                 self.native_listing_cwd.clear();
                 self.ensure_native_listing();

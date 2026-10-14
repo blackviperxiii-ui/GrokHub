@@ -26,6 +26,8 @@ egui_extras = { version = "0.36.2", default-features = false }
 egui-phosphor = { version = "0.14", default-features = false, features = ["regular", "subset"] }
 # U7e: bar charts for existing numeric views (egui ^0.36; no egui/eframe bump).
 egui_plot = "0.37"
+# U7f: optional dockable main panels (egui ^0.36; serde persists dock.json; no egui/eframe bump).
+egui_dock = { version = "0.21", features = ["serde"] }
 ureq = { workspace = true }
 tungstenite = { version = "0.24", default-features = false, features = ["handshake", "rustls-tls-webpki-roots"] }
 global-hotkey = "0.6"

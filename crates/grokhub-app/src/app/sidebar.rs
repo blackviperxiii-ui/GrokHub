@@ -672,6 +672,22 @@ impl Cabin {
         }
     }
 
+    /// Switch a GROK_NAV page without side effects (Chat does not open a new thread).
+    pub(super) fn select_main_nav(&mut self, id: &str) {
+        self.nav = match id {
+            "imagine" => {
+                self.imagine_want_focus = true;
+                Nav::Imagine
+            }
+            "workboard" => Nav::Workboard,
+            "pulse" | "ideas" => Nav::Pulse,
+            "skills" => Nav::Skills,
+            "automations" => Nav::Night,
+            "chat" => Nav::Chat,
+            _ => return,
+        };
+    }
+
     pub(super) fn set_nav_id(&mut self, id: &str) {
         self.nav = match id {
             "history" => Nav::History,

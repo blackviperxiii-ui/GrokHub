@@ -1,7 +1,7 @@
 # Compass: grokhub-app app/ (the Cabin UI)
 
 ## Owns
-- `Cabin`, the eframe app: one struct in `crates/grokhub-app/src/app/mod.rs` plus `impl Cabin` blocks split by page or feature (`chat_ui`, `chat_kick`, `acp`, `settings`, `sidebar`, `pages`, `pulse_ui`, `feed_ui`, `board_ui`, `night`, `harness_ui`, `evidence_ui`, `privacy_ui`, `scope_ui`, `skill_undo`, `background`, `heartbeat_gate`, `native_*`, ...). Each submodule starts with `use super::*;`.
+- `Cabin`, the eframe app: one struct in `crates/grokhub-app/src/app/mod.rs` plus `impl Cabin` blocks split by page or feature (`chat_ui`, `chat_kick`, `acp`, `settings`, `sidebar`, `pages`, `pulse_ui`, `feed_ui`, `board_ui`, `night`, `dock_ui`, `harness_ui`, `evidence_ui`, `privacy_ui`, `scope_ui`, `skill_undo`, `background`, `heartbeat_gate`, `native_*`, ...). Each submodule starts with `use super::*;`.
 - The frame loop (`impl eframe::App for Cabin`: `logic`, `ui`, `on_exit`) and the background job polls it drives.
 ## Quick commands
 - `GROKHUB_CONFIG=$(mktemp -d) cargo test -p grokhub-app app::tests::<name> -- --test-threads=1`
@@ -10,6 +10,7 @@
 - `crates/grokhub-app/src/app/mod.rs`: `Cabin` fields, `new`, `quiet_for_test`, the frame loop.
 - `crates/grokhub-app/src/app/tests.rs`: most cabin tests, plus `cabin_src`, `fn_src`, `isolated_cabin`, `release_isolated`.
 - `crates/grokhub-app/src/app/chat_ui.rs` (pane and composer) and `crates/grokhub-app/src/app/chat_kick.rs` (send, then `kick_native_turn`).
+- `crates/grokhub-app/src/app/dock_ui.rs`: optional egui_dock main-panel tabs (`cfg.dock_panels`, default off); layout in `dock.json`; `page_panel` so dock leaves do not nest CentralPanel.
 - `crates/grokhub-app/src/app/persist.rs`: off-thread writes behind `persist_io`.
 ## Change recipe
 - New UI state: add a `Cabin` field and initialize it in both `new` and `quiet_for_test`.
