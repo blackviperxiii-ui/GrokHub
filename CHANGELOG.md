@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Tests: shared `app/test_support_tests` module for QuietCabin, IsolatedConfig, and `wait_until` helpers (rearch stage 4; prepares feature test splits).
+- UI: egui-phosphor icons for sidebar, card tiles, and bar glyphs (U7c; egui 0.36, subset regular, no egui/eframe bump).
 - UI: egui_extras TableBuilder for generative panel / compare tables (U7b; egui 0.36, no egui/eframe bump).
 - Deps: bump rustls to 0.23.46 (RUSTSEC-2026-0346/0347/0348/0349; lockfile only, no advisory ignores).
 - UI: egui-notify toasts for Saved, run-finished, and error status lines (U7a; egui 0.36, no egui/eframe bump).
