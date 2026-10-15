@@ -9445,6 +9445,41 @@ fn persist_worker_survives_a_panicking_job_then_writes() {
 }
 
 #[test]
+fn persist_writes_directly_when_the_worker_is_gone() {
+    let _lock = crate::config::hold_test_config();
+    let cfg = IsolatedConfig::arm("persist-dead-worker");
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.threads = vec![crate::threads::ChatThread::new("Dead worker dock", false)];
+    cabin.thread_idx = 0;
+    cabin.messages = std::sync::Arc::new(vec![("user".into(), "no worker".into())]);
+    cabin.persist_svc = super::dead_persist_service(
+        cabin.persist_io.clone(),
+        std::sync::Arc::new(std::sync::Mutex::new(PersistMark::default())),
+    );
+    cabin.persist();
+    let threads = std::fs::read_to_string(cfg.root.join("threads.json")).expect("threads.json");
+    assert!(threads.contains("Dead worker dock"), "{threads}");
+    cabin.poll_persist_err();
+    assert!(
+        !cabin.status.contains("Could not save"),
+        "a successful fallback write must not report failure: {status}",
+        status = cabin.status
+    );
+    // A panic inside the fallback is caught and reported, not propagated.
+    super::persist_panic_next();
+    cabin.persist();
+    cabin.poll_persist_err();
+    assert!(
+        cabin
+            .status
+            .starts_with("Could not save chats: persist worker panicked"),
+        "got status={status}",
+        status = cabin.status
+    );
+    drop(cfg);
+}
+
+#[test]
 fn an_older_persist_snapshot_never_overwrites_a_newer_one() {
     let _lock = crate::config::hold_test_config();
     let cfg = IsolatedConfig::arm("persist-order");
@@ -16485,7 +16520,7 @@ fn quiet_cabin() -> Cabin {
         composer_ghost: ghost::ComposerGhost::default(),
         dock_state: super::dock_ui::default_dock_state(),
         toasts: super::status_toasts::cabin_toasts(),
-        status_toasted: String::new(),
+        status_toasted: Default::default(),
     }
 }
 

@@ -13,8 +13,13 @@ cd "$ROOT"
 fail=0
 
 # --- 1. Conflict markers (study: ^<<<<<<< / ^>>>>>>>) ---------------------------
-markers=$(git grep -nE '^(<<<<<<<|>>>>>>>)' -- . ':!.git/**' 2>/dev/null || true)
-if [[ -n "$markers" ]]; then
+# git grep exits 1 for "no match"; anything else is an error and must fail.
+grep_rc=0
+markers=$(git grep -nE '^(<<<<<<<|>>>>>>>)' -- . ':!.git/**' 2>/dev/null) || grep_rc=$?
+if (( grep_rc > 1 )); then
+  echo "ci-guards: git grep for conflict markers errored (rc=$grep_rc)" >&2
+  fail=1
+elif [[ -n "$markers" ]]; then
   echo "ci-guards: conflict markers found:" >&2
   echo "$markers" >&2
   fail=1
@@ -168,7 +173,15 @@ if [[ "${GITHUB_EVENT_NAME:-}" == "pull_request" ]]; then
     echo "ci-guards: could not resolve merge-base against origin/${base_ref}; failing PR file rules" >&2
     fail=1
   else
-    mapfile -t pr_changed < <(git diff --name-only "$pr_merge_base"...HEAD)
+    # Capture first: mapfile < <(...) would swallow a git diff failure and
+    # leave an empty file list that skips every PR rule.
+    if ! changed_out=$(git diff --name-only "$pr_merge_base"...HEAD); then
+      echo "ci-guards: git diff against merge-base failed; failing PR file rules" >&2
+      fail=1
+      changed_out=""
+    fi
+    mapfile -t pr_changed <<<"$changed_out"
+    [[ -n "$changed_out" ]] || pr_changed=()
     fetch_pr_labels
     echo "ci-guards: PR labels=[${pr_labels_csv}]"
 
@@ -243,7 +256,10 @@ if [[ "${GITHUB_EVENT_NAME:-}" == "pull_request" ]]; then
       old_ver=$(workspace_package_version "$old_toml")
       new_ver=$(workspace_package_version "Cargo.toml")
       rm -f "$old_toml"
-      if [[ -n "$old_ver" && -n "$new_ver" && "$old_ver" != "$new_ver" ]]; then
+      if [[ -z "$old_ver" || -z "$new_ver" ]]; then
+        echo "ci-guards: could not parse Cargo.toml [workspace.package].version (old='${old_ver}' new='${new_ver}')" >&2
+        fail=1
+      elif [[ "$old_ver" != "$new_ver" ]]; then
         version_hits+=("Cargo.toml[workspace.package].version (${old_ver}->${new_ver})")
       fi
     fi
@@ -254,7 +270,10 @@ if [[ "${GITHUB_EVENT_NAME:-}" == "pull_request" ]]; then
       old_line=$(cabin_reports_version_line "$old_cli")
       new_line=$(cabin_reports_version_line "crates/grokhub-app/src/cli.rs")
       rm -f "$old_cli"
-      if [[ "$old_line" != "$new_line" ]]; then
+      if [[ -z "$old_line" || -z "$new_line" ]]; then
+        echo "ci-guards: could not find the cabin_reports_version line in cli.rs (old/new)" >&2
+        fail=1
+      elif [[ "$old_line" != "$new_line" ]]; then
         version_hits+=("crates/grokhub-app/src/cli.rs (cabin_reports_version)")
       fi
     fi
@@ -265,7 +284,10 @@ if [[ "${GITHUB_EVENT_NAME:-}" == "pull_request" ]]; then
       old_gv=$(grokhub_lock_versions "$old_lock")
       new_gv=$(grokhub_lock_versions "Cargo.lock")
       rm -f "$old_lock"
-      if [[ -n "$old_gv" && -n "$new_gv" && "$old_gv" != "$new_gv" ]]; then
+      if [[ -z "$old_gv" || -z "$new_gv" ]]; then
+        echo "ci-guards: could not read grokhub-* versions from Cargo.lock (old/new)" >&2
+        fail=1
+      elif [[ "$old_gv" != "$new_gv" ]]; then
         version_hits+=("Cargo.lock (grokhub-* version)")
       fi
     fi
