@@ -1,1 +1,0 @@
-- Persist: one PersistService worker orders threads/projects/settings disk writes (rearch stage 6; secrets/OAuth still Stage 7).

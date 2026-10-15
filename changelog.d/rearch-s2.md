@@ -1,1 +1,0 @@
-- Release: feature PRs add `changelog.d/` fragments; `cargo xtask bump` owns VERSION lockstep and folds notes on promotion (rearch stage 2).
