@@ -366,6 +366,35 @@ pub fn should_hide_on_close(close_to_tray: bool, tray_alive: bool) -> bool {
     close_to_tray && (tray_alive || tray_wanted())
 }
 
+/// What a viewport `close_requested` should do. Tray **Quit** sets `want_quit`
+/// so a hidden cabin still exits instead of canceling close or hiding again.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CabinCloseAction {
+    Ignore,
+    CancelStickyClose,
+    HideToTray,
+    Exit,
+}
+
+pub fn cabin_close_action(
+    close_requested: bool,
+    window_visible: bool,
+    want_quit: bool,
+    close_to_tray: bool,
+    tray_alive: bool,
+) -> CabinCloseAction {
+    if !close_requested {
+        return CabinCloseAction::Ignore;
+    }
+    if ignore_close_request(window_visible, close_requested, want_quit) {
+        return CabinCloseAction::CancelStickyClose;
+    }
+    if should_hide_on_close(close_to_tray, tray_alive) && !want_quit {
+        return CabinCloseAction::HideToTray;
+    }
+    CabinCloseAction::Exit
+}
+
 /// What the cabin window should be after close-to-tray or Show cabin.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TrayWindow {
@@ -890,6 +919,81 @@ mod tests {
                 && hide.contains("Still running in the tray")
                 && hide.contains("In the tray — Show cabin to sit down"),
             "first tip persists only when shown; cabin status stays: {hide}"
+        );
+    }
+
+    #[test]
+    fn tray_quit_takes_the_exit_path() {
+        assert_eq!(
+            cabin_close_action(true, false, true, true, true),
+            CabinCloseAction::Exit,
+            "tray Quit on a hidden cabin must exit, not cancel close"
+        );
+        assert_eq!(
+            cabin_close_action(true, true, true, true, true),
+            CabinCloseAction::Exit,
+            "tray Quit on a visible cabin must exit, not hide to tray"
+        );
+        assert_eq!(
+            cabin_close_action(true, true, false, true, true),
+            CabinCloseAction::HideToTray,
+            "titlebar × still hides when close-to-tray is on"
+        );
+        assert_eq!(
+            cabin_close_action(true, false, false, true, true),
+            CabinCloseAction::CancelStickyClose,
+            "sticky close after hide must not re-hide"
+        );
+        let app = include_str!("app/mod.rs");
+        let quit = app
+            .split("fn quit_from_tray(")
+            .nth(1)
+            .and_then(|s| s.split("fn poll_tray(").next())
+            .expect("quit_from_tray");
+        assert!(
+            quit.contains("want_quit = true")
+                && quit.contains("kill_bg_runs")
+                && quit.contains("halt_in_flight")
+                && quit.contains("drop_tray")
+                && quit.contains("ViewportCommand::Close"),
+            "tray Quit must stop work and close the cabin: {quit}"
+        );
+        let poll = app
+            .split("fn poll_tray(")
+            .nth(1)
+            .and_then(|s| s.split("fn start_hub").next())
+            .expect("poll_tray");
+        assert!(
+            poll.contains("TrayCmd::Quit") && poll.contains("quit_from_tray"),
+            "poll_tray must route Quit through quit_from_tray: {poll}"
+        );
+        let on_exit = app
+            .split("fn on_exit(")
+            .nth(1)
+            .and_then(|s| s.split("fn logic(").next())
+            .expect("on_exit");
+        let main_rs = include_str!("main.rs");
+        let shutdown = main_rs
+            .split("fn cabin_shutdown_last_resort()")
+            .nth(1)
+            .and_then(|s| s.split("fn run_cabin(").next())
+            .expect("cabin_shutdown_last_resort");
+        let async_mod = main_rs
+            .split("mod cabin_async {")
+            .nth(1)
+            .and_then(|s| s.split("\n}\n\n/// After the cabin").next())
+            .expect("cabin_async");
+        assert!(
+            async_mod.contains("shutdown_timeout"),
+            "a clean tray Quit must shut down async work before exit: {async_mod}"
+        );
+        assert!(
+            shutdown.contains("cabin_async::shutdown()") && shutdown.contains("process::exit(0)"),
+            "last-resort exit runs from main after run_native: {shutdown}"
+        );
+        assert!(
+            !on_exit.contains("process::exit(0)"),
+            "on_exit must drop the tray before main's last-resort exit: {on_exit}"
         );
     }
 

@@ -257,6 +257,7 @@ impl Cabin {
         }
         ui.add_space(16.0);
         self.ui_pulse_sources(ui);
+        self.ui_daily_drop(ui);
     }
 }
 

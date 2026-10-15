@@ -161,13 +161,32 @@ pub fn run_host_stream(
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {
                 if let Ok(Some(_)) = child.try_wait() {
-                    while let Ok((is_err, line)) = rx.try_recv() {
-                        let room = if is_err { &mut err_buf } else { &mut out_buf };
-                        if !push_host_line(room, &line, TEXT_FILE_CAP) {
-                            kill_host(&mut child);
-                            return format!("$ {cmd}\nHOST_RECEIPT: output capped\n{out_buf}");
+                    // Child exited, but pump threads may still be flushing pipes.
+                    // A one-shot non-blocking drain races under CI and drops late stderr.
+                    loop {
+                        match rx.recv_timeout(Duration::from_millis(50)) {
+                            Ok((is_err, line)) => {
+                                let room = if is_err { &mut err_buf } else { &mut out_buf };
+                                if !push_host_line(room, &line, TEXT_FILE_CAP) {
+                                    kill_host(&mut child);
+                                    return format!(
+                                        "$ {cmd}\nHOST_RECEIPT: output capped\n{out_buf}"
+                                    );
+                                }
+                                on_line(&line);
+                            }
+                            Err(mpsc::RecvTimeoutError::Timeout) => {
+                                if cancelled() {
+                                    kill_host(&mut child);
+                                    return format!("$ {cmd}\nHOST_RECEIPT: halted\n{out_buf}");
+                                }
+                                if start.elapsed() > timeout {
+                                    kill_host(&mut child);
+                                    return format!("$ {cmd}\nHOST_RECEIPT: timed out\n{out_buf}");
+                                }
+                            }
+                            Err(mpsc::RecvTimeoutError::Disconnected) => break,
                         }
-                        on_line(&line);
                     }
                     break;
                 }
@@ -448,14 +467,23 @@ mod tests {
             "printf 'before\\n\\xff\\xfe latin\\nafter\\n'; printf 'err \\xc3\\x28\\n' >&2",
             Duration::from_secs(5),
         );
-        assert!(out.contains("before"), "{out}");
+        assert!(out.contains("exit 0"), "{out}");
+        // Assert against the body after the status line. The echoed `$ cmd`
+        // already contains "before"/"latin"/"after"/"err", so matching the
+        // whole receipt can pass even when both pumps were raced away.
+        let body = out.split_once("ms\n").map(|(_, rest)| rest).unwrap_or("");
         assert!(
-            out.contains("latin"),
+            body.contains("before") && body.contains("after"),
+            "stdout lines must land after the status line: {out}"
+        );
+        assert!(
+            body.contains('\u{FFFD}') && body.contains("latin"),
             "a line with invalid UTF-8 must be shown lossily, not dropped: {out}"
         );
-        assert!(out.contains("after"), "{out}");
-        assert!(out.contains("[stderr]") && out.contains("err"), "{out}");
-        assert!(out.contains("exit 0"), "{out}");
+        assert!(
+            body.contains("[stderr]") && body.contains("err"),
+            "stderr must land in the receipt after pumps finish: {out}"
+        );
     }
 
     #[test]
@@ -477,6 +505,12 @@ mod tests {
         assert!(
             stream.contains("TEXT_FILE_CAP"),
             "a huge host dump must not grow the receipt without bound: {stream}"
+        );
+        assert!(
+            stream.contains("try_wait()")
+                && stream.contains("RecvTimeoutError::Disconnected")
+                && !stream.contains("try_recv("),
+            "after the child exits, drain until pumps disconnect — a non-blocking drain drops late stderr: {stream}"
         );
         assert_eq!(
             stream.matches("pump_host_lines(").count(),

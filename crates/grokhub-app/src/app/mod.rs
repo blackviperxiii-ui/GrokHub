@@ -139,8 +139,10 @@ mod native_sessions;
 mod native_unattended;
 mod palette;
 mod persist;
+mod persist_service;
 mod step_search;
 use step_search::{parse_step_target, step_hits, turn_jump_row};
+mod attach_tray;
 mod audio_check_ui;
 mod background;
 mod background_ui;
@@ -150,13 +152,18 @@ mod canary_ui;
 mod change_history_ui;
 mod change_undo;
 mod chat_ui;
-mod chips;
+pub(crate) mod chips;
 mod confirm;
+mod connectivity_ui;
 mod connectors_ui;
+mod daily_drop_ui;
+mod dock_ui;
 mod episode_ui;
 mod evidence_ui;
 mod feed_ui;
 mod findings_ui;
+mod fix_it;
+mod ghost;
 mod glance;
 mod harness_ui;
 mod heartbeat_gate;
@@ -177,6 +184,7 @@ mod native_signin_tests;
 mod night;
 mod oauth;
 mod pages;
+pub mod panels;
 mod personality_ui;
 mod playbook_ui;
 mod plus;
@@ -202,6 +210,7 @@ mod setup_wizard;
 mod sidebar;
 mod skill_undo;
 mod slash;
+mod status_toasts;
 mod systems_brief_ui;
 #[cfg(test)]
 mod tests;
@@ -233,6 +242,7 @@ use glance::*;
 use imagine::*;
 use oauth::*;
 use persist::*;
+use persist_service::*;
 use plus::*;
 #[cfg(test)]
 use pulse::*;
@@ -437,15 +447,14 @@ pub struct Cabin {
     persist_idle_key: String,
     persist_rx: Option<mpsc::Receiver<()>>,
     persist_io: Arc<Mutex<()>>,
+    /// Ordered worker for threads / projects / settings (Stage 6).
+    persist_svc: PersistService,
     /// The first-run setup wizard (welcome, app setup, on-device model).
     setup: setup_wizard::SetupWizard,
     /// Last settings or key write that failed, for the status line.
     persist_err: Arc<Mutex<Option<String>>>,
     /// Generation of the newest full snapshot handed to a persist worker.
     persist_gen: u64,
-    /// What the persist workers have written, so an older snapshot that takes
-    /// `persist_io` late never overwrites a newer one.
-    persist_mark: Arc<Mutex<PersistMark>>,
     cfg_slot: Arc<Mutex<CfgSlot>>,
     board: Vec<BoardCard>,
     board_title: String,
@@ -502,6 +511,8 @@ pub struct Cabin {
     grok_loops: Vec<GrokLoop>,
     /// Home update feed. `updates.json`. Not an AppConfig field.
     updates: Vec<grokhub_core::UpdateCard>,
+    /// `daily_drop.json` ledger and last overnight pass, cached after first read.
+    daily_drop_file: Option<daily_drop_ui::DailyDropFile>,
     /// Learned Home weights. `card_prefs.json`. Not part of AppConfig.
     card_prefs: grokhub_core::CardPrefs,
     grok_loop_rx: Option<(String, mpsc::Receiver<String>)>,
@@ -717,6 +728,10 @@ pub struct Cabin {
     attach_name: Option<String>,
     attach_path: Option<String>,
     attach_kind: Option<AttachKind>,
+    attach_tray: attach_tray::AttachTray,
+    attach_ingest: Option<attach_tray::AttachIngestHandle>,
+    attach_thumb_cache: Vec<TextureHandle>,
+    attach_pick_rx: Option<mpsc::Receiver<Option<Vec<PathBuf>>>>,
     imagine_ref: Option<String>,
     plus_menu: Option<PlusTarget>,
     plus_anchor: egui::Pos2,
@@ -778,6 +793,8 @@ pub struct Cabin {
     /// Plan card open. The body lives on the thread (`plan_body`).
     plan_open: bool,
     tool_cards: Vec<ToolCard>,
+    /// Generative UI panels from `show_panel` tool results (G4).
+    panels: panels::PanelStore,
     live_blocks: Vec<LiveBlock>,
     /// `(fold_slot, body len, thought_body_key)` per live block, so a frame does not
     /// rescrub every thought in the turn.
@@ -846,6 +863,13 @@ pub struct Cabin {
     scroll_to_hooks: bool,
     /// Last frame's composer pill, mic, and Send/Stop disc. Not saved.
     composer_geom: Option<(egui::Rect, egui::Rect, egui::Rect)>,
+    composer_ghost: ghost::ComposerGhost,
+    /// U7f: egui_dock layout when `cfg.dock_panels` is on (persisted in dock.json).
+    dock_state: egui_dock::DockState<dock_ui::DockTab>,
+    /// In-app toasts (egui-notify) for Saved / finished / error status.
+    toasts: egui_notify::Toasts,
+    /// Last `status` already mirrored into `toasts` (dedupe).
+    status_toasted: String,
 }
 
 #[cfg(test)]
@@ -952,6 +976,7 @@ impl Cabin {
             (threads, dropped_leftover, thread_idx)
         };
         steps.mark("startup:new:config");
+        panels::apply_generative_ui_setting(&config::config_dir());
         #[cfg(test)]
         let (threads, dropped_leftover, thread_idx, quiet) =
             if let Some((threads, idx)) = QUIET_THREADS.with(|slot| slot.borrow_mut().take()) {
@@ -1021,6 +1046,11 @@ impl Cabin {
             gen: 0,
             cfg: cfg.clone(),
         }));
+        let persist_io = Arc::new(Mutex::new(()));
+        let persist_svc = PersistService::start(
+            persist_io.clone(),
+            Arc::new(Mutex::new(PersistMark::default())),
+        );
         let mut c = Self {
             nav: Nav::Chat,
             cfg,
@@ -1046,11 +1076,11 @@ impl Cabin {
             last_persist: Instant::now(),
             persist_idle_key: String::new(),
             persist_rx: None,
-            persist_io: Arc::new(Mutex::new(())),
+            persist_io,
+            persist_svc,
             setup: setup_wizard::SetupWizard::default(),
             persist_err: Arc::new(Mutex::new(None)),
             persist_gen: 0,
-            persist_mark: Arc::new(Mutex::new(PersistMark::default())),
             cfg_slot,
             board: config::load_board(),
             board_title: String::new(),
@@ -1111,6 +1141,7 @@ impl Cabin {
             automations: crate::night::load(),
             grok_loops: crate::loops::load(),
             updates: crate::feed::load(),
+            daily_drop_file: None,
             card_prefs: crate::card_prefs::load(),
             grok_loop_rx: None,
             night_nl: String::new(),
@@ -1293,6 +1324,10 @@ impl Cabin {
             attach_name: None,
             attach_path: None,
             attach_kind: None,
+            attach_tray: attach_tray::AttachTray::default(),
+            attach_ingest: None,
+            attach_thumb_cache: Vec::new(),
+            attach_pick_rx: None,
             imagine_ref: None,
             plus_menu: None,
             plus_anchor: egui::Pos2::ZERO,
@@ -1344,6 +1379,7 @@ impl Cabin {
             side_ask_kick: false,
             plan_open: false,
             tool_cards: Vec::new(),
+            panels: panels::PanelStore::default(),
             live_blocks: Vec::new(),
             live_keys: Vec::new(),
             turn_log: Vec::new(),
@@ -1391,6 +1427,10 @@ impl Cabin {
             audio_check: None,
             scroll_to_hooks: false,
             composer_geom: None,
+            composer_ghost: ghost::ComposerGhost::default(),
+            dock_state: dock_ui::load_dock_state(),
+            toasts: status_toasts::cabin_toasts(),
+            status_toasted: String::new(),
         };
         steps.mark("startup:new:fields");
         if !quiet {
@@ -1474,6 +1514,11 @@ impl Cabin {
     pub(super) fn quiet_for_test() -> Self {
         crate::config::use_test_key_store();
         let cfg = AppConfig::default();
+        let persist_io = Arc::new(Mutex::new(()));
+        let persist_svc = PersistService::start(
+            persist_io.clone(),
+            Arc::new(Mutex::new(PersistMark::default())),
+        );
         Self {
             nav: Nav::Chat,
             cfg: cfg.clone(),
@@ -1499,11 +1544,11 @@ impl Cabin {
             last_persist: Instant::now(),
             persist_idle_key: String::new(),
             persist_rx: None,
-            persist_io: Arc::new(Mutex::new(())),
+            persist_io,
+            persist_svc,
             setup: setup_wizard::SetupWizard::default(),
             persist_err: Arc::new(Mutex::new(None)),
             persist_gen: 0,
-            persist_mark: Arc::new(Mutex::new(PersistMark::default())),
             cfg_slot: Arc::new(Mutex::new(CfgSlot { gen: 0, cfg })),
             board: Vec::new(),
             board_title: String::new(),
@@ -1555,6 +1600,7 @@ impl Cabin {
             automations: Vec::new(),
             grok_loops: Vec::new(),
             updates: Vec::new(),
+            daily_drop_file: None,
             card_prefs: grokhub_core::CardPrefs::default(),
             grok_loop_rx: None,
             night_nl: String::new(),
@@ -1737,6 +1783,10 @@ impl Cabin {
             attach_name: None,
             attach_path: None,
             attach_kind: None,
+            attach_tray: attach_tray::AttachTray::default(),
+            attach_ingest: None,
+            attach_thumb_cache: Vec::new(),
+            attach_pick_rx: None,
             imagine_ref: None,
             plus_menu: None,
             plus_anchor: egui::Pos2::ZERO,
@@ -1788,6 +1838,7 @@ impl Cabin {
             side_ask_kick: false,
             plan_open: false,
             tool_cards: Vec::new(),
+            panels: panels::PanelStore::default(),
             live_blocks: Vec::new(),
             live_keys: Vec::new(),
             turn_log: Vec::new(),
@@ -1832,6 +1883,10 @@ impl Cabin {
             audio_check: None,
             scroll_to_hooks: false,
             composer_geom: None,
+            composer_ghost: ghost::ComposerGhost::default(),
+            dock_state: dock_ui::default_dock_state(),
+            toasts: status_toasts::cabin_toasts(),
+            status_toasted: String::new(),
         }
     }
 
@@ -1927,14 +1982,12 @@ impl Cabin {
             crate::window::GeomFlush::Skip => {}
             crate::window::GeomFlush::Now => {
                 self.geom_dirty = false;
-                let io = self.persist_io.clone();
                 let mut cfg = self.cfg.clone();
                 cfg.api_key.clear();
-                std::thread::spawn(move || {
-                    if let Ok(_g) = io.lock() {
-                        let _ = config::save(&cfg);
-                    }
-                });
+                // PersistService worker pins dir + takes persist_io before save_in.
+                let err = self.persist_err.clone();
+                let dir = config::config_dir();
+                self.persist_svc.submit_window_cfg(dir, cfg, err);
             }
             crate::window::GeomFlush::AfterMs(ms) => {
                 ctx.request_repaint_after(Duration::from_millis(ms));
@@ -3104,18 +3157,18 @@ impl Cabin {
         let device_name = self.cfg.device_name.clone();
         let exported_at = now_ms();
         let hub = self.hub.clone();
-        let io = self.persist_io.clone();
         let dir = config::config_dir();
         let (tx, rx) = mpsc::channel();
         self.sync_rx = Some(rx);
         self.status = "Syncing…".into();
         let gen = self.next_persist_gen();
-        let mark = self.persist_mark.clone();
+        let (persist_done_tx, persist_done_rx) = mpsc::channel();
+        // PersistService pins config_dir and write_persist_disk_in_order.
+        let err = self.persist_err.clone();
+        self.persist_svc
+            .submit_full(dir.clone(), snap.clone(), gen, Some(persist_done_tx), err);
         std::thread::spawn(move || {
-            let _pin = pin_scheduled_dir(dir.clone());
-            if let Ok(_g) = io.lock() {
-                write_persist_disk_in_order(&dir, &snap, gen, &mark);
-            }
+            let _ = persist_done_rx.recv();
             // EgressGuard: log the send (no content) or send nothing. A grant
             // revoked since the click blocks here; dropping `tx` reads as failed.
             let egress = grokhub_agent::harness::EgressReq {
@@ -3539,6 +3592,7 @@ impl Cabin {
                 // Same once-a-day beat as memory retention: archive idle chats.
                 self.tick_chat_auto_archive(day);
             }
+            JobKind::DailyDrop => self.tick_daily_drop(day),
             JobKind::Reflect => {
                 if should_idle_reflect(
                     self.last_activity.elapsed().as_millis() as u64,
@@ -4910,6 +4964,30 @@ impl Cabin {
         }
     }
 
+    /// Tray **Quit**: stop background work, persist, tear down the tray, then exit.
+    /// Titlebar × keeps close-to-tray; only this path sets `want_quit`.
+    fn quit_from_tray(&mut self, ctx: &egui::Context) {
+        self.want_quit = true;
+        #[cfg(debug_assertions)]
+        assert!(
+            !crate::tray::ignore_close_request(self.window_visible, true, true),
+            "tray Quit must not CancelClose on a hidden cabin"
+        );
+        self.kill_bg_runs();
+        self.halt_in_flight();
+        if self.hub_on {
+            if let Ok(mut st) = self.hub.lock() {
+                st.sharing = false;
+            }
+            self.hub_on = false;
+        }
+        self.persist_if_dirty();
+        if let Some(tray) = self.tray.take() {
+            crate::tray::drop_tray(tray);
+        }
+        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+    }
+
     fn poll_tray(&mut self, ctx: &egui::Context) {
         let ready = self
             .tray_rx
@@ -4927,13 +5005,7 @@ impl Cabin {
         match tray.try_recv() {
             Some(crate::tray::TrayCmd::Show) => self.show_from_tray(ctx),
             Some(crate::tray::TrayCmd::Halt) => self.halt_everything("Stopped"),
-            Some(crate::tray::TrayCmd::Quit) => {
-                self.want_quit = true;
-                if let Some(tray) = self.tray.take() {
-                    crate::tray::drop_tray(tray);
-                }
-                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-            }
+            Some(crate::tray::TrayCmd::Quit) => self.quit_from_tray(ctx),
             None => {}
         }
     }
@@ -4987,8 +5059,17 @@ impl eframe::App for Cabin {
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
         // No background run outlives the cabin.
         self.kill_bg_runs();
-        // The close frame spawned a persist. Wait for it: the process exits right after this,
-        // and two writers of app.json share one temp file.
+        self.halt_in_flight();
+        if self.hub_on {
+            if let Ok(mut st) = self.hub.lock() {
+                st.sharing = false;
+            }
+            self.hub_on = false;
+        }
+        // The close frame queued a persist. Drain the actor, then write geom under
+        // persist_io: the process exits right after this, and two writers of
+        // app.json share one temp file.
+        self.persist_svc.flush();
         {
             let _io = self.persist_io.lock();
             let mut cfg = self.cfg.clone();
@@ -5007,6 +5088,7 @@ impl eframe::App for Cabin {
             grokhub_agent::halt_all_sessions();
             grokhub_agent::mcp::shutdown_all();
         });
+        // Process exit runs in `main` after `run_native` returns (tokio shutdown, then last resort).
     }
 
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
@@ -5078,6 +5160,8 @@ impl eframe::App for Cabin {
         self.poll_self_changes();
         self.poll_native_side_events();
         self.poll_pick();
+        self.poll_attach_pick();
+        self.poll_attach_ingest();
         // While hidden, eframe hands `logic` the last shown frame's input every
         // tick: keys, clicks, and drops are acted on once, on the pass they came in.
         let pass = ctx.cumulative_pass_nr();
@@ -5097,17 +5181,23 @@ impl eframe::App for Cabin {
         self.note_window_resume(ctx);
         let close_requested = ctx.input(|i| i.viewport().close_requested());
         let mut just_hid = false;
-        if crate::tray::ignore_close_request(self.window_visible, close_requested, self.want_quit) {
-            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-        } else if close_requested {
-            let hide =
-                crate::tray::should_hide_on_close(self.cfg.close_to_tray, self.tray.is_some())
-                    && !self.want_quit;
-            if hide {
+        match crate::tray::cabin_close_action(
+            close_requested,
+            self.window_visible,
+            self.want_quit,
+            self.cfg.close_to_tray,
+            self.tray.is_some(),
+        ) {
+            crate::tray::CabinCloseAction::Ignore => {}
+            crate::tray::CabinCloseAction::CancelStickyClose => {
+                ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            }
+            crate::tray::CabinCloseAction::HideToTray => {
                 ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
                 self.hide_to_tray(ctx);
                 just_hid = true;
-            } else {
+            }
+            crate::tray::CabinCloseAction::Exit => {
                 self.capture_window(ctx);
                 self.persist_if_dirty();
                 self.geom_dirty = false;
@@ -5249,23 +5339,27 @@ impl eframe::App for Cabin {
             self.ui_sidebar(ui);
             self.ui_settings_menu(&ctx);
 
-            match self.page_nav() {
-                Nav::Chat => {
-                    self.paint_native_badge(ui);
-                    self.ui_chat(ui);
+            if self.cfg.dock_panels && self.dock_covers_page() {
+                self.ui_docked_main(ui);
+            } else {
+                match self.page_nav() {
+                    Nav::Chat => {
+                        self.paint_native_badge(ui);
+                        self.ui_chat(ui);
+                    }
+                    Nav::Devices => self.ui_devices(ui),
+                    Nav::Memory => self.ui_memory(ui),
+                    Nav::Workboard => self.ui_board(ui),
+                    Nav::Pulse => self.ui_pulse(ui),
+                    Nav::Imagine => self.ui_imagine(ui),
+                    Nav::Skills => self.ui_skills(ui),
+                    Nav::Night => self.ui_night(ui),
+                    Nav::History => self.ui_history(ui),
+                    Nav::Journal => self.ui_journal(ui),
+                    Nav::Command => self.ui_command(ui),
+                    Nav::Agents => self.ui_agents(ui),
+                    Nav::Settings => self.ui_chat(ui),
                 }
-                Nav::Devices => self.ui_devices(ui),
-                Nav::Memory => self.ui_memory(ui),
-                Nav::Workboard => self.ui_board(ui),
-                Nav::Pulse => self.ui_pulse(ui),
-                Nav::Imagine => self.ui_imagine(ui),
-                Nav::Skills => self.ui_skills(ui),
-                Nav::Night => self.ui_night(ui),
-                Nav::History => self.ui_history(ui),
-                Nav::Journal => self.ui_journal(ui),
-                Nav::Command => self.ui_command(ui),
-                Nav::Agents => self.ui_agents(ui),
-                Nav::Settings => self.ui_chat(ui),
             }
         }
         // Latest chip → Settings → Update must paint on top of Get Started.
@@ -5299,6 +5393,8 @@ impl eframe::App for Cabin {
                 });
         }
         self.sync_idea_card_actions();
+        status_toasts::sync_status_toasts(&mut self.toasts, &mut self.status_toasted, &self.status);
+        self.toasts.show(&ctx);
         // The pass after this one grabs the hotkeys in `logic`, which runs
         // even while the window is covered or minimized.
         #[cfg(not(test))]

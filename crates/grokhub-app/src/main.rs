@@ -42,6 +42,7 @@ mod theme;
 mod threads;
 mod titlebar;
 mod tray;
+mod ui_kit;
 mod update;
 #[cfg(windows)]
 mod win_acl;
@@ -59,6 +60,53 @@ use grokhub_core::{
     doctor_cabin_line, doctor_lines, doctor_ok, hub_kind_from_health, DEFAULT_PORT,
 };
 use std::env;
+
+/// Cabin-wide async worker (Linux portal / ashpd). Owned in `main` so Quit can
+/// `shutdown_timeout` after `eframe::run_native` returns instead of hanging on drop.
+#[cfg(target_os = "linux")]
+mod cabin_async {
+    use std::sync::{Mutex, OnceLock};
+    use std::time::Duration;
+
+    static RUNTIME: OnceLock<Mutex<Option<tokio::runtime::Runtime>>> = OnceLock::new();
+
+    pub fn install() {
+        let slot = RUNTIME.get_or_init(|| Mutex::new(None));
+        let mut guard = slot.lock().unwrap_or_else(|e| e.into_inner());
+        if guard.is_some() {
+            return;
+        }
+        match tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+        {
+            Ok(rt) => *guard = Some(rt),
+            Err(err) => eprintln!("cabin tokio runtime: {err}"),
+        }
+    }
+
+    pub fn shutdown() {
+        if let Some(slot) = RUNTIME.get() {
+            let mut guard = slot.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some(rt) = guard.take() {
+                rt.shutdown_timeout(Duration::from_secs(2));
+            }
+        }
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+mod cabin_async {
+    pub fn install() {}
+    pub fn shutdown() {}
+}
+
+/// After the cabin window closes: stop the async runtime, then leave the process.
+/// Tray teardown runs in `Cabin::on_exit` (icon dropped on the UI thread) before this.
+fn cabin_shutdown_last_resort() {
+    cabin_async::shutdown();
+    std::process::exit(0);
+}
 
 fn main() {
     startup::begin();
@@ -351,6 +399,7 @@ fn run_cabin(hidden: bool) -> eframe::Result<()> {
     if !tray::try_claim_cabin() {
         return Ok(());
     }
+    cabin_async::install();
     #[cfg(windows)]
     crate::win_native::set_app_user_model_id();
     tray::pin_session_bus();
@@ -391,7 +440,7 @@ fn run_cabin(hidden: bool) -> eframe::Result<()> {
             persist_window: false,
             ..Default::default()
         };
-        eframe::run_native(
+        let result = eframe::run_native(
             "GrokHub",
             opts,
             Box::new(move |cc| {
@@ -402,7 +451,9 @@ fn run_cabin(hidden: bool) -> eframe::Result<()> {
                 startup::mark("startup:cabin");
                 Ok(Box::new(cabin))
             }),
-        )
+        );
+        cabin_shutdown_last_resort();
+        result
     }
 }
 
@@ -445,7 +496,10 @@ fn run_cabin_with_fx(hidden: bool, viewport: egui::ViewportBuilder) -> eframe::R
                 renderer = eframe::Renderer::Glow;
                 tried_fallback = true;
             }
-            other => return other,
+            other => {
+                cabin_shutdown_last_resort();
+                return other;
+            }
         }
     }
 }
@@ -491,6 +545,53 @@ mod tests {
                 && !upd.contains("no GrokHub source tree")
                 && !upd.contains("grok update"),
             "grokhub --update runs only when the cabin is newer, takes the Windows zip without a clone, and never updates the CLI: {upd}"
+        );
+    }
+
+    #[test]
+    fn cabin_quit_shuts_down_async_before_last_resort_exit() {
+        let src = include_str!("main.rs");
+        let run = src
+            .split("fn run_cabin(")
+            .nth(1)
+            .and_then(|s| s.split("fn run_cabin_with_fx").next())
+            .expect("run_cabin");
+        assert!(
+            run.contains("cabin_async::install()"),
+            "cabin must own the tokio runtime for bounded shutdown: {run}"
+        );
+        assert!(
+            run.find("eframe::run_native").expect("run_native")
+                < run.find("cabin_shutdown_last_resort").expect("shutdown"),
+            "shutdown runs only after the UI loop returns: {run}"
+        );
+        let shutdown = src
+            .split("fn cabin_shutdown_last_resort()")
+            .nth(1)
+            .and_then(|s| s.split("fn run_cabin(").next())
+            .expect("cabin_shutdown_last_resort");
+        assert!(
+            shutdown.contains("cabin_async::shutdown()") && shutdown.contains("process::exit(0)"),
+            "tray icon is dropped in on_exit before this last-resort exit: {shutdown}"
+        );
+        let async_mod = src
+            .split("mod cabin_async {")
+            .nth(1)
+            .and_then(|s| s.split("\n}\n\n/// After the cabin").next())
+            .expect("cabin_async");
+        assert!(
+            async_mod.contains("shutdown_timeout"),
+            "async runtime must not hang on drop: {async_mod}"
+        );
+        let app = include_str!("app/mod.rs");
+        let on_exit = app
+            .split("fn on_exit(")
+            .nth(1)
+            .and_then(|s| s.split("fn logic(").next())
+            .expect("on_exit");
+        assert!(
+            !on_exit.contains("process::exit(0)"),
+            "exit must run from main after run_native so Drop order is predictable: {on_exit}"
         );
     }
 

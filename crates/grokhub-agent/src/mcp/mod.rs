@@ -395,6 +395,7 @@ pub fn disconnect(name: &str) -> Result<String, String> {
     }
     crate::harness::forget_connection_token(&config, name);
     invalidate();
+    shutdown_all();
     Ok(format!("Disconnected {name}"))
 }
 
@@ -404,6 +405,26 @@ pub enum Installed {
     Added,
     /// The same entry was already there; nothing was written.
     AlreadyThere,
+}
+
+fn normalize_install_entry(entry: &Value) -> Value {
+    let mut bare = entry.as_object().cloned().unwrap_or_default();
+    bare.remove("tokenRef");
+    let has_url = bare
+        .get("url")
+        .and_then(|v| v.as_str())
+        .is_some_and(|url| !url.trim().is_empty());
+    if !has_url && bare.contains_key("command") && !bare.contains_key("type") {
+        bare.insert("type".into(), json!("stdio"));
+    }
+    if bare
+        .get("args")
+        .and_then(|v| v.as_array())
+        .is_some_and(|items| items.is_empty())
+    {
+        bare.remove("args");
+    }
+    Value::Object(bare)
 }
 
 /// Marketplace Install, from the user's own click: `entry` (an `mcpServers`
@@ -428,9 +449,7 @@ pub fn install(name: &str, entry: &Value) -> Result<Installed, String> {
     let target = crate::harness::McpFile { path: &path, name };
     if let Some(cur) = crate::harness::ChangeTarget::read(&target)? {
         let cur: Value = serde_json::from_slice(&cur).map_err(|e| e.to_string())?;
-        let mut bare = cur.as_object().cloned().unwrap_or_default();
-        bare.remove("tokenRef");
-        if Value::Object(bare) == *entry {
+        if normalize_install_entry(&cur) == normalize_install_entry(entry) {
             return Ok(Installed::AlreadyThere);
         }
         return Err(format!(
@@ -446,6 +465,7 @@ pub fn install(name: &str, entry: &Value) -> Result<Installed, String> {
         || crate::harness::ChangeTarget::put(&target, Some(&bytes)),
     )?;
     invalidate();
+    shutdown_all();
     Ok(Installed::Added)
 }
 

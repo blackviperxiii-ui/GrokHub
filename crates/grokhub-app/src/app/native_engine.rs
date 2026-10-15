@@ -23,11 +23,44 @@ struct LiveCfg {
     origin: grokhub_agent::harness::Origin,
     /// Spike-3b: the open desktop episode on this chat.
     episode: Option<grokhub_agent::EpisodeSeed>,
+    /// Cabin chat thread that owns this native session (G4 panel drain).
+    cabin_thread_id: String,
 }
 
 fn live_map() -> &'static Mutex<HashMap<String, LiveCfg>> {
     static MAP: OnceLock<Mutex<HashMap<String, LiveCfg>>> = OnceLock::new();
     MAP.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Completed `show_panel` tool results queued from the native engine thread for the UI.
+/// Each row is `(cabin_thread_id, call_id, detail)` so drain paints the owning chat,
+/// not whichever tab is visible when the frame runs.
+fn pending_show_panels() -> &'static Mutex<Vec<(String, String, String)>> {
+    static Q: OnceLock<Mutex<Vec<(String, String, String)>>> = OnceLock::new();
+    Q.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+fn maybe_queue_show_panel(cabin_thread_id: &str, card: &ToolCard) {
+    if !card.status.eq_ignore_ascii_case("completed") {
+        return;
+    }
+    if card.kind != "show_panel" && card.title != "show_panel" {
+        return;
+    }
+    if !card.detail.contains("\"panel\"") {
+        return;
+    }
+    if cabin_thread_id.trim().is_empty() {
+        return;
+    }
+    pending_show_panels()
+        .lock()
+        .unwrap_or_else(|err| err.into_inner())
+        .push((
+            cabin_thread_id.to_string(),
+            card.id.clone(),
+            card.detail.clone(),
+        ));
 }
 
 /// Closes the volatile voice/notes tail so cabin safety (earlier, in the stable
@@ -36,6 +69,73 @@ fn live_map() -> &'static Mutex<HashMap<String, LiveCfg>> {
 const VOLATILE_SAFETY_CLOSER: &str = grokhub_core::talk::VOLATILE_SAFETY_CLOSER;
 
 impl Cabin {
+    /// Drain `show_panel` tool results captured on the native engine thread into [`Self::panels`].
+    /// Only the pending queue — never re-scan `tool_cards` each frame (that revived dismissals
+    /// and cloned diffs/screenshots). Rows for other chats stay queued until that chat is
+    /// visible so a mid-turn tab switch cannot paint or clear the wrong PanelStore.
+    pub(super) fn drain_show_panel_results(&mut self) {
+        let visible = self.visible_thread_id();
+        self.panels.bind_thread(&visible);
+        let queued = std::mem::take(
+            &mut *pending_show_panels()
+                .lock()
+                .unwrap_or_else(|err| err.into_inner()),
+        );
+        let mut deferred = Vec::new();
+        for (thread_id, call_id, detail) in queued {
+            if thread_id == visible {
+                let _ = self.panels.upsert_from_tool_result(&call_id, &detail);
+            } else {
+                deferred.push((thread_id, call_id, detail));
+            }
+        }
+        if !deferred.is_empty() {
+            pending_show_panels()
+                .lock()
+                .unwrap_or_else(|err| err.into_inner())
+                .extend(deferred);
+        }
+    }
+
+    /// Test helper: enqueue a completed `show_panel` result as the native thread would.
+    #[cfg(test)]
+    pub(super) fn enqueue_show_panel_for_test(&self, call_id: &str, detail: &str) {
+        self.enqueue_show_panel_for_thread_for_test(&self.visible_thread_id(), call_id, detail);
+    }
+
+    /// Test helper: enqueue for an explicit cabin thread id (cross-chat drain cases).
+    #[cfg(test)]
+    pub(super) fn enqueue_show_panel_for_thread_for_test(
+        &self,
+        thread_id: &str,
+        call_id: &str,
+        detail: &str,
+    ) {
+        maybe_queue_show_panel(
+            thread_id,
+            &ToolCard {
+                id: call_id.to_string(),
+                title: "show_panel".into(),
+                kind: "show_panel".into(),
+                status: "completed".into(),
+                detail: detail.to_string(),
+                diff: String::new(),
+                image_data_url: None,
+                raw_input: String::new(),
+            },
+        );
+    }
+
+    /// Queue panel button intents as user-visible follow-ups (approval-gated).
+    pub(super) fn queue_panel_actions(&mut self, actions: Vec<panels::PanelAction>) {
+        for action in actions {
+            self.followup_queue.push(format!(
+                "[panel action] {} on {}",
+                action.action, action.panel_id
+            ));
+        }
+    }
+
     /// `/compact` on the open thread. False only when no thread is open.
     /// The job thread is bound after the engine, so the session id stays on this tab.
     /// `running` stays false: the compact `Done` must not append an assistant bubble.
@@ -237,6 +337,10 @@ impl Cabin {
             matches!(self.session_mode, grokhub_core::wire::SessionMode::Plan)
                 && !self.side_ask_kick,
         );
+        let cabin_thread_id = self
+            .chat_job_thread
+            .clone()
+            .unwrap_or_else(|| self.visible_thread_id());
         let cfg = LiveCfg {
             workspace,
             model,
@@ -247,6 +351,7 @@ impl Cabin {
             gate: self.native_gate(),
             origin: self.harness.turn_origin,
             episode: self.native_episode_seed(),
+            cabin_thread_id,
         };
         live_map()
             .lock()
@@ -582,7 +687,11 @@ fn serve_native(
             read: || crate::desktop_mcp::read_halt_stamp(),
         }));
         let tx = evt_tx.clone();
+        let panel_thread = cfg.cabin_thread_id.clone();
         let _ = engine.prompt(&text, image.as_deref(), &mut |ev| {
+            if let AcpEvent::Tool(ref card) = ev {
+                maybe_queue_show_panel(&panel_thread, card);
+            }
             let _ = tx.send(ev);
         });
     }

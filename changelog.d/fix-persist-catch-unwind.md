@@ -1,0 +1,1 @@
+- Persist: PersistService worker catches panics per job so one bad write cannot kill the thread; surfaces via persist_err and keeps later jobs running.

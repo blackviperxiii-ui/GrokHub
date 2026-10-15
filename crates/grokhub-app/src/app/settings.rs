@@ -118,6 +118,47 @@ fn choice_label(choices: &[(&str, &str)], id: &str, fallback: &str) -> String {
         .unwrap_or_else(|| fallback.to_string())
 }
 
+/// Settings toggle via the UI kit row (same return shape as `cards::settings_toggle`).
+fn settings_toggle(ui: &mut egui::Ui, title: &str, hint: &str, on: &mut bool) -> bool {
+    let before = *on;
+    crate::ui_kit::setting_row(
+        ui,
+        title,
+        hint,
+        crate::ui_kit::SettingRowControl::Switch(on),
+    );
+    *on != before
+}
+
+/// Settings select via the UI kit row (same return shape as `cards::settings_dropdown`).
+fn settings_dropdown(
+    ui: &mut egui::Ui,
+    title: &str,
+    hint: &str,
+    selected: &str,
+    choices: &[String],
+) -> Option<usize> {
+    if choices.is_empty() {
+        return None;
+    }
+    let mut idx = choices
+        .iter()
+        .position(|label| label == selected)
+        .unwrap_or(0);
+    let prev = idx;
+    let labels: Vec<&str> = choices.iter().map(String::as_str).collect();
+    crate::ui_kit::setting_row(
+        ui,
+        title,
+        hint,
+        crate::ui_kit::SettingRowControl::Select {
+            selected: &mut idx,
+            labels: &labels,
+        },
+    );
+    (idx != prev).then_some(idx)
+}
+
 impl Cabin {
     pub(super) fn reset_home_learned(&mut self) {
         self.card_prefs = grokhub_core::CardPrefs::default();
@@ -131,19 +172,11 @@ impl Cabin {
     }
 
     fn ui_home_learned(&mut self, ui: &mut egui::Ui) {
-        ui.label(
-            RichText::new("What Home learned")
-                .size(15.0)
-                .color(crate::theme::fg()),
+        crate::ui_kit::section_header(
+            ui,
+            "What Home learned",
+            Some("Groups and topics from cards you open or dismiss. Stays on this computer."),
         );
-        ui.label(
-            RichText::new(
-                "Groups and topics from cards you open or dismiss. Stays on this computer.",
-            )
-            .size(12.0)
-            .color(crate::theme::muted()),
-        );
-        ui.add_space(6.0);
         let (liked, disliked) = grokhub_core::top_learned(&self.card_prefs, now_ms());
         let mut forget = None;
         if liked.is_empty() && disliked.is_empty() {
@@ -208,6 +241,27 @@ impl Cabin {
             return;
         }
         self.cfg.composer_glow = on;
+        self.persist_cfg();
+        self.status = "Saved".into();
+    }
+
+    pub(super) fn set_composer_autocomplete(&mut self, on: bool) {
+        if self.cfg.composer_autocomplete == on {
+            return;
+        }
+        self.cfg.composer_autocomplete = on;
+        if !on {
+            self.composer_ghost.clear();
+        }
+        self.persist_cfg();
+        self.status = "Saved".into();
+    }
+
+    pub(super) fn set_dock_panels(&mut self, on: bool) {
+        if self.cfg.dock_panels == on {
+            return;
+        }
+        self.cfg.dock_panels = on;
         self.persist_cfg();
         self.status = "Saved".into();
     }
@@ -519,12 +573,17 @@ impl Cabin {
                                                             });
                                                         }
                                                         SettingsSec::Behavior => {
+                                                            crate::ui_kit::section_header(
+                                                                ui,
+                                                                "Tray & wall",
+                                                                None,
+                                                            );
                                                             let mut close_to_tray = self.cfg.close_to_tray;
-                                                            if crate::cards::settings_toggle(ui, "Close to tray", "The cabin keeps working in the background.", &mut close_to_tray) {
+                                                            if settings_toggle(ui, "Close to tray", "The cabin keeps working in the background.", &mut close_to_tray) {
                                                                 self.set_close_to_tray(close_to_tray);
                                                             }
                                                             let mut living_wall = self.cfg.imagine_wall;
-                                                            if crate::cards::settings_toggle(
+                                                            if settings_toggle(
                                                                 ui,
                                                                 "Living wall",
                                                                 "Every few hours the cabin paints a new cover. Twenty live. Oldest leaves first.",
@@ -535,7 +594,7 @@ impl Cabin {
                                                             #[cfg(feature = "fx")]
                                                             {
                                                                 let mut composer_glow = self.cfg.composer_glow;
-                                                                if crate::cards::settings_toggle(
+                                                                if settings_toggle(
                                                                     ui,
                                                                     "Composer glow (GPU effects)",
                                                                     crate::fx::settings_caption(),
@@ -544,6 +603,32 @@ impl Cabin {
                                                                     self.set_composer_glow(composer_glow);
                                                                 }
                                                             }
+                                                            let mut composer_autocomplete =
+                                                                self.cfg.composer_autocomplete;
+                                                            if settings_toggle(
+                                                                ui,
+                                                                "Sentence autocomplete",
+                                                                "Muted ghost text finishes your line in the composer. Tab accepts; off by default.",
+                                                                &mut composer_autocomplete,
+                                                            ) {
+                                                                self.set_composer_autocomplete(
+                                                                    composer_autocomplete,
+                                                                );
+                                                            }
+                                                            let mut dock_panels = self.cfg.dock_panels;
+                                                            if settings_toggle(
+                                                                ui,
+                                                                "Dockable panels",
+                                                                "Main pages become rearrangeable tabs. Off keeps today's fixed layout. Layout saves in dock.json.",
+                                                                &mut dock_panels,
+                                                            ) {
+                                                                self.set_dock_panels(dock_panels);
+                                                            }
+                                                            crate::ui_kit::section_header(
+                                                                ui,
+                                                                "Automations & limits",
+                                                                None,
+                                                            );
                                                             let quiet_menu = quiet_hours_menu(
                                                                 &self.cfg.quiet_start,
                                                                 &self.cfg.quiet_end,
@@ -554,7 +639,7 @@ impl Cabin {
                                                                 &self.cfg.quiet_start,
                                                                 &self.cfg.quiet_end,
                                                             );
-                                                            if let Some(i) = crate::cards::settings_dropdown(
+                                                            if let Some(i) = settings_dropdown(
                                                                 ui,
                                                                 "Quiet hours",
                                                                 "Inside quiet hours the cabin holds a destructive automation and stops anticipating. Off is start and end equal.",
@@ -590,7 +675,7 @@ impl Cabin {
                                                                     self.cfg.daily_token_budget,
                                                                 )
                                                             );
-                                                            if let Some(i) = crate::cards::settings_dropdown(
+                                                            if let Some(i) = settings_dropdown(
                                                                 ui,
                                                                 "Daily token budget",
                                                                 &budget_hint,
@@ -607,7 +692,7 @@ impl Cabin {
                                                             }
                                                             if self.cfg.daily_token_budget > 0 {
                                                                 let mut pause = self.cfg.budget_pauses_scheduled;
-                                                                if crate::cards::settings_toggle(
+                                                                if settings_toggle(
                                                                     ui,
                                                                     "Pause scheduled work over budget",
                                                                     "Night jobs, loops, and anticipate wait until tomorrow. Chat still sends.",
@@ -675,6 +760,11 @@ impl Cabin {
                                                             }
                                                         }
                                                         SettingsSec::Defaults => {
+                                                            crate::ui_kit::section_header(
+                                                                ui,
+                                                                "Models & providers",
+                                                                None,
+                                                            );
                                                             let models = self.router_model_choices();
                                                             let model_labels: Vec<String> =
                                                                 models.iter().map(|(_, label)| label.clone()).collect();
@@ -684,7 +774,7 @@ impl Cabin {
                                                                 .find(|(id, _)| *id == pin)
                                                                 .map(|(_, label)| label.clone())
                                                                 .unwrap_or_else(|| cabin_default_model_label(&pin).to_string());
-                                                            if let Some(i) = crate::cards::settings_dropdown(
+                                                            if let Some(i) = settings_dropdown(
                                                                 ui,
                                                                 ROW_MODEL,
                                                                 "Auto picks the model for each step. A model you pick here is kept while it answers.",
@@ -712,6 +802,11 @@ impl Cabin {
                                                             self.ui_provider_rows(ui);
                                                             crate::cards::settings_note(ui, &self.how_auto_picks_lines());
                                                             self.ui_spend_rows(ui);
+                                                            crate::ui_kit::section_header(
+                                                                ui,
+                                                                "Permissions & session",
+                                                                None,
+                                                            );
                                                             let perms = cabin_default_permissions();
                                                             let perm_labels: Vec<String> = perms
                                                                 .iter()
@@ -722,7 +817,7 @@ impl Cabin {
                                                             );
                                                             let perm_selected =
                                                                 choice_label(perms, &perm_id, "Ask");
-                                                            if let Some(i) = crate::cards::settings_dropdown(
+                                                            if let Some(i) = settings_dropdown(
                                                                 ui,
                                                                 ROW_PERMISSION,
                                                                 "Ask or Auto. Always stays on the composer for this launch.",
@@ -744,7 +839,7 @@ impl Cabin {
                                                                     }
                                                                 }
                                                             }
-                                                            if crate::cards::settings_toggle(
+                                                            if settings_toggle(
                                                                 ui,
                                                                 ROW_DESKTOP,
                                                                 DESKTOP_CONTROL_HINT,
@@ -770,7 +865,7 @@ impl Cabin {
                                                                     self.cfg.desktop_control,
                                                                 );
                                                             }
-                                                            if crate::cards::settings_toggle(
+                                                            if settings_toggle(
                                                                 ui,
                                                                 ROW_SCREEN_RECORD,
                                                                 SCREEN_RECORD_HINT,
@@ -788,7 +883,7 @@ impl Cabin {
                                                                 cabin_default_session_id(&self.cfg.session_mode);
                                                             let session_selected =
                                                                 choice_label(sessions, session_id, "Chat");
-                                                            if let Some(i) = crate::cards::settings_dropdown(
+                                                            if let Some(i) = settings_dropdown(
                                                                 ui,
                                                                 ROW_SESSION,
                                                                 "Chat, Plan, or btw. Composer pills still change this launch.",
@@ -807,7 +902,7 @@ impl Cabin {
                                                                     }
                                                                 }
                                                             }
-                                                            if crate::cards::settings_toggle(
+                                                            if settings_toggle(
                                                                 ui,
                                                                 ROW_COLLAPSE,
                                                                 "Thoughts start collapsed in every session. Expand opens one at a time.",
@@ -818,6 +913,11 @@ impl Cabin {
                                                             }
                                                         }
                                                         SettingsSec::Labs => {
+                                                            crate::ui_kit::section_header(
+                                                                ui,
+                                                                "Release channel",
+                                                                None,
+                                                            );
                                                             // Beta channel: a Linux clone switches via install.sh --channel;
                                                             // without one (every Windows install) via the signed releases.
                                                             // Also: when beta caught up to main (same tree), auto-turn off (cooldown).
@@ -837,7 +937,7 @@ impl Cabin {
                                                                     "On = beta branch. Off = stable (main). Same as install.sh --channel."
                                                                 };
                                                                 ui.add_enabled_ui(!channel_busy, |ui| {
-                                                                    if crate::cards::settings_toggle(
+                                                                    if settings_toggle(
                                                                         ui,
                                                                         "Beta channel",
                                                                         hint,
@@ -915,7 +1015,7 @@ impl Cabin {
                                                             );
                                                             ui.label(
                                                                 egui::RichText::new(
-                                                                    "White/gray Cua-like path stub. Full desktop agent comes later.",
+                                                                    "White/gray cursor-motion preview only (not the desktop-agent path).",
                                                                 )
                                                                 .size(crate::theme::FONT_TIP)
                                                                 .color(crate::theme::muted()),

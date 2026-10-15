@@ -109,6 +109,10 @@ impl Cabin {
                     chat,
                     now_ms(),
                 );
+                self.remember_diagnosis(
+                    card.id.clone(),
+                    super::fix_it::StoredDiagnosis::Audio(report.clone()),
+                );
                 self.post_feed_card(card);
                 self.status = report.title;
             }

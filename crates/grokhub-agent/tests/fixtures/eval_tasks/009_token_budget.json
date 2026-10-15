@@ -1,0 +1,17 @@
+{
+  "id": "009_token_budget",
+  "prompt": "Reply with the word tokens.",
+  "mode": "always",
+  "files": [],
+  "script": [
+    {
+      "type": "text",
+      "content": "tokens",
+      "usage": { "input_tokens": 100, "output_tokens": 50, "reasoning_tokens": 25 }
+    }
+  ],
+  "checks": [
+    { "type": "stop_reason", "value": "end_turn" },
+    { "type": "assistant_contains", "value": "tokens" }
+  ]
+}

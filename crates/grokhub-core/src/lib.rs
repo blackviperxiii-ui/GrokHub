@@ -23,10 +23,12 @@ pub mod chat_job;
 pub mod chat_view;
 pub mod chips;
 pub mod cli_history;
+pub mod connectivity;
 pub mod connector;
 pub mod consult;
 pub mod context;
 pub mod cursor_motion;
+pub mod daily_drop;
 pub mod desktop_entry;
 pub mod desktop_mcp;
 pub mod diagnostics;
@@ -35,6 +37,7 @@ pub mod export;
 pub mod feel;
 pub mod file_watch;
 pub mod findings;
+pub mod fix_plan;
 pub mod frame;
 pub mod goal;
 pub mod governor;
@@ -70,6 +73,7 @@ pub mod openclaw;
 pub mod organs;
 pub mod outcome;
 pub mod pair;
+pub mod panel_spec;
 pub mod paths;
 pub mod personality;
 pub mod pii;
@@ -90,6 +94,7 @@ pub mod release_verify;
 pub mod review;
 pub mod rewind;
 pub mod run_metrics;
+pub mod runtime_download;
 pub mod screen_record;
 pub mod sddl;
 pub mod self_review;
@@ -112,6 +117,7 @@ pub mod update_feed;
 pub mod usage;
 pub mod verify;
 pub mod voice;
+pub mod watch_learn;
 pub mod what_changed;
 #[cfg(windows)]
 pub mod win_acl;
@@ -472,7 +478,9 @@ pub use slash::{
     unknown_cabin_slash, Slash, SlashDef, SlashHit, WorkflowVerb, EFFORT_AUTO_MSG, SLASH_COMMANDS,
     SLASH_RESULT_PREFIX,
 };
-pub use ssrf::{host_name_blocked, ip_blocked};
+pub use ssrf::{
+    guard_mcp_registry_url, host_name_blocked, ip_blocked, public_only_resolve, MCP_REGISTRY_HOST,
+};
 pub use state::{
     clear_pending_after_complete, is_phone_name, load_hub_state, merge_put_snapshot,
     save_hub_state, state_for_disk, CompleteError, HubState, PairError, DEFAULT_PORT, HUB_KIND,

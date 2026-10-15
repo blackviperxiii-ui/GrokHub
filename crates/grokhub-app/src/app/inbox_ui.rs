@@ -58,7 +58,7 @@ impl InboxKey {
         }
     }
 
-    fn salt(self) -> String {
+    fn id_key(self) -> String {
         format!("{self:?}")
     }
 }
@@ -358,8 +358,8 @@ fn inbox_open_t(ui: &egui::Ui, open: bool) -> f32 {
 /// Ids of a row's two buttons, so a key handler can tell when they have focus.
 pub(super) fn row_button_ids(key: InboxKey) -> (egui::Id, egui::Id) {
     (
-        egui::Id::new(("inbox-approve", key.salt())),
-        egui::Id::new(("inbox-deny", key.salt())),
+        egui::Id::new(("inbox-approve", key.id_key())),
+        egui::Id::new(("inbox-deny", key.id_key())),
     )
 }
 

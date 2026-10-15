@@ -1,6 +1,67 @@
-//! Painted catalog icons. Unicode glyphs miss in the default cabin font.
+//! Catalog and rail icons — Phosphor glyphs (U7c) with card chrome plates.
+//! Composer Stop / mic / paperclip keep custom motion paint below.
 
 use eframe::egui::{self, Pos2, Sense, Stroke, Vec2};
+
+egui_phosphor::subset! {
+    /// Subset Phosphor regular icons used by tile / rail / bar paint.
+    pub mod ph {
+        use regular::{
+            ARROW_DOWN, ARROW_UP, BRAIN, CHAT, CHECK_CIRCLE, CLOCK, CLOCK_COUNTER_CLOCKWISE,
+            DESKTOP, FILE, FOLDER, GITHUB_LOGO, IMAGE, KANBAN, LIGHTNING, LIST, MAGNIFYING_GLASS,
+            MOON, NOTE_PENCIL, PAPER_PLANE_TILT, PLUGS, PUSH_PIN, QUESTION, SQUARES_FOUR, SUN,
+        };
+    }
+}
+
+/// Register the Phosphor subset as a proportional fallback (after Inter).
+pub fn add_phosphor_fonts(fonts: &mut egui::FontDefinitions) {
+    ph::regular::add_to_fonts(fonts);
+}
+
+fn phosphor_glyph(painter: &egui::Painter, rect: egui::Rect, glyph: &str, color: egui::Color32) {
+    let size = (rect.height() * 0.78).max(10.0);
+    painter.text(
+        rect.center(),
+        egui::Align2::CENTER_CENTER,
+        glyph,
+        egui::FontId::proportional(size),
+        color,
+    );
+}
+
+fn tile_phosphor(icon: TileIcon) -> &'static str {
+    match icon {
+        TileIcon::Sun => ph::regular::SUN,
+        TileIcon::Host => ph::regular::DESKTOP,
+        TileIcon::List => ph::regular::LIST,
+        TileIcon::Image => ph::regular::IMAGE,
+        TileIcon::Github => ph::regular::GITHUB_LOGO,
+        TileIcon::Check => ph::regular::CHECK_CIRCLE,
+        TileIcon::Board => ph::regular::KANBAN,
+        TileIcon::Bolt => ph::regular::LIGHTNING,
+        TileIcon::Moon => ph::regular::MOON,
+        TileIcon::Connect => ph::regular::PLUGS,
+        TileIcon::Think => ph::regular::BRAIN,
+        TileIcon::Help => ph::regular::QUESTION,
+        TileIcon::Chat => ph::regular::CHAT,
+    }
+}
+
+fn rail_phosphor(icon: RailIcon) -> &'static str {
+    match icon {
+        RailIcon::Search => ph::regular::MAGNIFYING_GLASS,
+        RailIcon::Compose => ph::regular::NOTE_PENCIL,
+        RailIcon::Imagine => ph::regular::IMAGE,
+        RailIcon::Clock => ph::regular::CLOCK,
+        RailIcon::History => ph::regular::CLOCK_COUNTER_CLOCKWISE,
+        RailIcon::Grid => ph::regular::SQUARES_FOUR,
+        RailIcon::Folder => ph::regular::FOLDER,
+        RailIcon::Chat => ph::regular::CHAT,
+        RailIcon::File => ph::regular::FILE,
+        RailIcon::Pin => ph::regular::PUSH_PIN,
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TileIcon {
@@ -23,7 +84,6 @@ pub fn paint_icon(ui: &mut egui::Ui, icon: TileIcon, size: f32) {
     let (rect, _) = ui.allocate_exact_size(Vec2::splat(size), Sense::hover());
     let painter = ui.painter();
     let fill = crate::theme::elevated();
-    let stroke = Stroke::new(crate::theme::ICON_STROKE, crate::theme::fg());
     painter.rect_filled(rect, 6.0, fill);
     painter.rect_stroke(
         rect,
@@ -31,189 +91,8 @@ pub fn paint_icon(ui: &mut egui::Ui, icon: TileIcon, size: f32) {
         Stroke::new(1.0_f32, crate::theme::border()),
         egui::StrokeKind::Middle,
     );
-    let r = rect.shrink(size * 0.22);
-    let c = r.center();
-    let w = r.width();
-    match icon {
-        TileIcon::Sun => {
-            painter.circle_stroke(c, w * 0.18, stroke);
-            for i in 0..8 {
-                let a = i as f32 * std::f32::consts::TAU / 8.0;
-                let inner = w * 0.28;
-                let outer = w * 0.46;
-                painter.line_segment(
-                    [
-                        c + Vec2::new(a.cos() * inner, a.sin() * inner),
-                        c + Vec2::new(a.cos() * outer, a.sin() * outer),
-                    ],
-                    stroke,
-                );
-            }
-        }
-        TileIcon::Host => {
-            painter.rect_stroke(r, 3.0, stroke, egui::StrokeKind::Middle);
-            let p = Pos2::new(r.left() + 5.0, r.center().y);
-            painter.line_segment([p, Pos2::new(p.x + 5.0, p.y + 4.0)], stroke);
-            painter.line_segment([p, Pos2::new(p.x + 5.0, p.y - 4.0)], stroke);
-            painter.line_segment(
-                [
-                    Pos2::new(p.x + 8.0, r.bottom() - 6.0),
-                    Pos2::new(r.right() - 6.0, r.bottom() - 6.0),
-                ],
-                stroke,
-            );
-        }
-        TileIcon::List => {
-            for i in 0..3 {
-                let y = r.top() + 5.0 + i as f32 * (w * 0.28);
-                painter.circle_filled(Pos2::new(r.left() + 4.0, y), 1.8, crate::theme::fg());
-                painter.line_segment(
-                    [Pos2::new(r.left() + 10.0, y), Pos2::new(r.right() - 3.0, y)],
-                    stroke,
-                );
-            }
-        }
-        TileIcon::Image => {
-            painter.rect_stroke(r, 3.0, stroke, egui::StrokeKind::Middle);
-            painter.circle_filled(
-                Pos2::new(r.left() + w * 0.28, r.top() + w * 0.28),
-                2.4,
-                crate::theme::fg(),
-            );
-            painter.line_segment(
-                [
-                    Pos2::new(r.left() + 3.0, r.bottom() - 5.0),
-                    Pos2::new(r.center().x, r.center().y + 2.0),
-                ],
-                stroke,
-            );
-            painter.line_segment(
-                [
-                    Pos2::new(r.center().x, r.center().y + 2.0),
-                    Pos2::new(r.right() - 3.0, r.bottom() - 6.0),
-                ],
-                stroke,
-            );
-        }
-        TileIcon::Github => {
-            painter.circle_filled(Pos2::new(c.x, c.y + w * 0.04), w * 0.28, crate::theme::fg());
-            painter.circle_filled(
-                Pos2::new(c.x - w * 0.18, c.y - w * 0.16),
-                w * 0.10,
-                crate::theme::fg(),
-            );
-            painter.circle_filled(
-                Pos2::new(c.x + w * 0.18, c.y - w * 0.16),
-                w * 0.10,
-                crate::theme::fg(),
-            );
-            painter.line_segment(
-                [
-                    Pos2::new(c.x, c.y + w * 0.28),
-                    Pos2::new(c.x, c.y + w * 0.42),
-                ],
-                stroke,
-            );
-        }
-        TileIcon::Check => {
-            painter.circle_stroke(c, w * 0.40, stroke);
-            painter.line_segment(
-                [Pos2::new(c.x - 5.0, c.y), Pos2::new(c.x - 1.0, c.y + 4.0)],
-                stroke,
-            );
-            painter.line_segment(
-                [
-                    Pos2::new(c.x - 1.0, c.y + 4.0),
-                    Pos2::new(c.x + 6.0, c.y - 4.0),
-                ],
-                stroke,
-            );
-        }
-        TileIcon::Board => {
-            painter.rect_stroke(r, 3.0, stroke, egui::StrokeKind::Middle);
-            painter.line_segment(
-                [
-                    Pos2::new(r.center().x, r.top()),
-                    Pos2::new(r.center().x, r.bottom()),
-                ],
-                stroke,
-            );
-            painter.line_segment(
-                [
-                    Pos2::new(r.left(), r.center().y),
-                    Pos2::new(r.right(), r.center().y),
-                ],
-                stroke,
-            );
-        }
-        TileIcon::Bolt => {
-            let pts = [
-                Pos2::new(c.x + 2.0, r.top()),
-                Pos2::new(c.x - 4.0, c.y + 1.0),
-                Pos2::new(c.x + 1.0, c.y + 1.0),
-                Pos2::new(c.x - 2.0, r.bottom()),
-            ];
-            painter.line_segment([pts[0], pts[1]], stroke);
-            painter.line_segment([pts[1], pts[2]], stroke);
-            painter.line_segment([pts[2], pts[3]], stroke);
-        }
-        TileIcon::Moon => {
-            painter.circle_filled(c, w * 0.32, crate::theme::fg());
-            painter.circle_filled(Pos2::new(c.x + w * 0.14, c.y - w * 0.08), w * 0.26, fill);
-        }
-        TileIcon::Connect => {
-            painter.circle_stroke(Pos2::new(c.x - 5.0, c.y), 4.0, stroke);
-            painter.circle_stroke(Pos2::new(c.x + 5.0, c.y), 4.0, stroke);
-            painter.line_segment(
-                [Pos2::new(c.x - 1.0, c.y), Pos2::new(c.x + 1.0, c.y)],
-                stroke,
-            );
-        }
-        TileIcon::Think => {
-            painter.circle_stroke(c + Vec2::new(0.0, -w * 0.06), w * 0.26, stroke);
-            painter.line_segment(
-                [
-                    Pos2::new(c.x - w * 0.10, c.y + w * 0.18),
-                    Pos2::new(c.x + w * 0.10, c.y + w * 0.18),
-                ],
-                stroke,
-            );
-            painter.line_segment(
-                [
-                    Pos2::new(c.x - w * 0.08, c.y + w * 0.28),
-                    Pos2::new(c.x + w * 0.08, c.y + w * 0.28),
-                ],
-                stroke,
-            );
-            painter.line_segment(
-                [
-                    Pos2::new(c.x - w * 0.05, c.y + w * 0.38),
-                    Pos2::new(c.x + w * 0.05, c.y + w * 0.38),
-                ],
-                stroke,
-            );
-        }
-        TileIcon::Help => {
-            painter.circle_stroke(c, w * 0.40, stroke);
-            painter.text(
-                c,
-                egui::Align2::CENTER_CENTER,
-                "?",
-                egui::FontId::proportional(size * 0.42),
-                crate::theme::fg(),
-            );
-        }
-        TileIcon::Chat => {
-            painter.rect_stroke(r.shrink(1.0), 6.0, stroke, egui::StrokeKind::Middle);
-            painter.line_segment(
-                [
-                    Pos2::new(r.left() + 6.0, r.bottom() - 2.0),
-                    Pos2::new(r.left() + 4.0, r.bottom() + 2.0),
-                ],
-                stroke,
-            );
-        }
-    }
+    let glyph_rect = rect.shrink(size * 0.18);
+    phosphor_glyph(painter, glyph_rect, tile_phosphor(icon), crate::theme::fg());
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -234,6 +113,7 @@ pub enum RailIcon {
     Compose,
     Imagine,
     Clock,
+    History,
     Grid,
     Folder,
     Chat,
@@ -249,7 +129,7 @@ pub fn rail_icon_for(id: &str) -> RailIcon {
         "skills" | "connectors" => RailIcon::Grid,
         "workboard" => RailIcon::Folder,
         "pulse" | "ideas" => RailIcon::File,
-        "history" => RailIcon::Clock,
+        "history" => RailIcon::History,
         "search" => RailIcon::Search,
         "new" => RailIcon::Compose,
         _ => RailIcon::Chat,
@@ -267,150 +147,7 @@ pub fn paint_rail_icon_at(
     icon: RailIcon,
     color: egui::Color32,
 ) {
-    let c = rect.center();
-    let w = rect.width();
-    let stroke = Stroke::new(crate::theme::ICON_STROKE, color);
-    match icon {
-        RailIcon::Search => {
-            painter.circle_stroke(Pos2::new(c.x - 1.0, c.y - 1.0), w * 0.22, stroke);
-            painter.line_segment(
-                [
-                    Pos2::new(c.x + w * 0.10, c.y + w * 0.10),
-                    Pos2::new(c.x + w * 0.24, c.y + w * 0.24),
-                ],
-                stroke,
-            );
-        }
-        RailIcon::Compose => {
-            let r = rect.shrink(w * 0.22);
-            painter.rect_stroke(r, 3.0, stroke, egui::StrokeKind::Middle);
-            painter.line_segment(
-                [
-                    Pos2::new(c.x, r.top() + 3.0),
-                    Pos2::new(c.x, r.bottom() - 3.0),
-                ],
-                stroke,
-            );
-            painter.line_segment(
-                [
-                    Pos2::new(r.left() + 3.0, c.y),
-                    Pos2::new(r.right() - 3.0, c.y),
-                ],
-                stroke,
-            );
-        }
-        RailIcon::Imagine => {
-            let r = rect.shrink(w * 0.20);
-            painter.rect_stroke(r, 3.0, stroke, egui::StrokeKind::Middle);
-            painter.circle_filled(
-                Pos2::new(r.left() + w * 0.22, r.top() + w * 0.20),
-                1.6,
-                color,
-            );
-            painter.line_segment(
-                [
-                    Pos2::new(r.left() + 2.0, r.bottom() - 3.0),
-                    Pos2::new(c.x, c.y + 1.0),
-                ],
-                stroke,
-            );
-            painter.line_segment(
-                [
-                    Pos2::new(c.x, c.y + 1.0),
-                    Pos2::new(r.right() - 2.0, r.bottom() - 3.0),
-                ],
-                stroke,
-            );
-        }
-        RailIcon::Clock => {
-            painter.circle_stroke(c, w * 0.32, stroke);
-            painter.line_segment([c, Pos2::new(c.x, c.y - w * 0.16)], stroke);
-            painter.line_segment([c, Pos2::new(c.x + w * 0.14, c.y + w * 0.08)], stroke);
-        }
-        RailIcon::Grid => {
-            let s = w * 0.16;
-            let g = w * 0.10;
-            for row in 0..2 {
-                for col in 0..2 {
-                    let p = Pos2::new(
-                        c.x - s - g * 0.5 + col as f32 * (s * 2.0 + g),
-                        c.y - s - g * 0.5 + row as f32 * (s * 2.0 + g),
-                    );
-                    painter.rect_stroke(
-                        egui::Rect::from_center_size(p, Vec2::splat(s * 2.0)),
-                        2.0,
-                        stroke,
-                        egui::StrokeKind::Middle,
-                    );
-                }
-            }
-        }
-        RailIcon::Folder => {
-            let r = rect.shrink(w * 0.20);
-            painter.rect_stroke(
-                egui::Rect::from_min_max(
-                    Pos2::new(r.left(), r.top() + 4.0),
-                    Pos2::new(r.right(), r.bottom()),
-                ),
-                3.0,
-                stroke,
-                egui::StrokeKind::Middle,
-            );
-            painter.line_segment(
-                [
-                    Pos2::new(r.left(), r.top() + 4.0),
-                    Pos2::new(r.left() + 4.0, r.top()),
-                ],
-                stroke,
-            );
-            painter.line_segment(
-                [
-                    Pos2::new(r.left() + 4.0, r.top()),
-                    Pos2::new(c.x + 1.0, r.top()),
-                ],
-                stroke,
-            );
-            painter.line_segment(
-                [
-                    Pos2::new(c.x + 1.0, r.top()),
-                    Pos2::new(c.x + 4.0, r.top() + 4.0),
-                ],
-                stroke,
-            );
-        }
-        RailIcon::Chat => {
-            let r = rect.shrink(w * 0.20);
-            painter.rect_stroke(r, 5.0, stroke, egui::StrokeKind::Middle);
-            painter.line_segment(
-                [
-                    Pos2::new(r.left() + 4.0, r.bottom()),
-                    Pos2::new(r.left() + 2.0, r.bottom() + 3.0),
-                ],
-                stroke,
-            );
-        }
-        RailIcon::File => {
-            let r = rect.shrink(w * 0.22);
-            painter.rect_stroke(r, 2.0, stroke, egui::StrokeKind::Middle);
-            painter.line_segment(
-                [
-                    Pos2::new(r.right() - 5.0, r.top()),
-                    Pos2::new(r.right(), r.top() + 5.0),
-                ],
-                stroke,
-            );
-        }
-        RailIcon::Pin => {
-            painter.circle_filled(Pos2::new(c.x, c.y - w * 0.10), w * 0.14, color);
-            painter.line_segment(
-                [
-                    Pos2::new(c.x, c.y - w * 0.02),
-                    Pos2::new(c.x, c.y + w * 0.28),
-                ],
-                stroke,
-            );
-        }
-    }
+    phosphor_glyph(painter, rect, rail_phosphor(icon), color);
 }
 
 /// Indent gutter for a sidebar tree row. One spine per depth, with a branch on the deepest.
@@ -422,7 +159,7 @@ pub fn paint_tree_gutter(ui: &mut egui::Ui, depth: u8) {
     let w = step * depth as f32;
     let h = crate::theme::NAV_ROW_H;
     let (rect, _) = ui.allocate_exact_size(egui::vec2(w, h), Sense::hover());
-    let stroke = Stroke::new(1.0_f32, crate::theme::border());
+    let stroke = Stroke::new(crate::theme::ICON_STROKE.min(1.0), crate::theme::border());
     for level in 1..=depth {
         let x = rect.left() + step * (level as f32 - 0.45);
         ui.painter().line_segment(
@@ -891,93 +628,26 @@ pub fn paint_bar_icon(
     let glyph = rect.shrink(((rect.width() - optical) * 0.5).max(0.0));
     let c = glyph.center();
     let w = glyph.width();
-    let stroke = Stroke::new(crate::theme::ICON_STROKE, color);
     match icon {
         // Painted above, before this allocate. Kept so the match stays exhaustive.
-        BarIcon::Plus => {}
+        BarIcon::Plus | BarIcon::Mic | BarIcon::Stop => {}
         BarIcon::Send => {
             painter.circle_filled(c, w * 0.46, crate::theme::send_on());
-            let arrow = Stroke::new(1.8_f32, crate::theme::send_on_ink());
-            painter.line_segment(
-                [
-                    Pos2::new(c.x, c.y + w * 0.16),
-                    Pos2::new(c.x, c.y - w * 0.16),
-                ],
-                arrow,
-            );
-            painter.line_segment(
-                [
-                    Pos2::new(c.x - w * 0.12, c.y - w * 0.02),
-                    Pos2::new(c.x, c.y - w * 0.16),
-                ],
-                arrow,
-            );
-            painter.line_segment(
-                [
-                    Pos2::new(c.x + w * 0.12, c.y - w * 0.02),
-                    Pos2::new(c.x, c.y - w * 0.16),
-                ],
-                arrow,
+            phosphor_glyph(
+                painter,
+                glyph.shrink(w * 0.18),
+                ph::regular::PAPER_PLANE_TILT,
+                crate::theme::send_on_ink(),
             );
         }
-        // Painted above, before this allocate. Kept so the match stays exhaustive.
-        BarIcon::Mic | BarIcon::Stop => {}
         BarIcon::ArrowUp => {
-            // grok.com Submit: M6 11L12 5M12 5L18 11M12 5V19 square-cap
-            painter.line_segment(
-                [
-                    Pos2::new(c.x, c.y + w * 0.22),
-                    Pos2::new(c.x, c.y - w * 0.22),
-                ],
-                stroke,
-            );
-            painter.line_segment(
-                [
-                    Pos2::new(c.x - w * 0.20, c.y - w * 0.02),
-                    Pos2::new(c.x, c.y - w * 0.22),
-                ],
-                stroke,
-            );
-            painter.line_segment(
-                [
-                    Pos2::new(c.x + w * 0.20, c.y - w * 0.02),
-                    Pos2::new(c.x, c.y - w * 0.22),
-                ],
-                stroke,
-            );
+            phosphor_glyph(painter, glyph, ph::regular::ARROW_UP, color);
         }
         BarIcon::ArrowDown => {
-            painter.line_segment(
-                [
-                    Pos2::new(c.x, c.y - w * 0.22),
-                    Pos2::new(c.x, c.y + w * 0.22),
-                ],
-                stroke,
-            );
-            painter.line_segment(
-                [
-                    Pos2::new(c.x - w * 0.20, c.y + w * 0.02),
-                    Pos2::new(c.x, c.y + w * 0.22),
-                ],
-                stroke,
-            );
-            painter.line_segment(
-                [
-                    Pos2::new(c.x + w * 0.20, c.y + w * 0.02),
-                    Pos2::new(c.x, c.y + w * 0.22),
-                ],
-                stroke,
-            );
+            phosphor_glyph(painter, glyph, ph::regular::ARROW_DOWN, color);
         }
         BarIcon::Search => {
-            painter.circle_stroke(Pos2::new(c.x - 1.0, c.y - 1.0), w * 0.22, stroke);
-            painter.line_segment(
-                [
-                    Pos2::new(c.x + w * 0.10, c.y + w * 0.10),
-                    Pos2::new(c.x + w * 0.22, c.y + w * 0.22),
-                ],
-                stroke,
-            );
+            phosphor_glyph(painter, glyph, ph::regular::MAGNIFYING_GLASS, color);
         }
     }
     name_control(&resp, bar_icon_name(icon));
@@ -1180,6 +850,12 @@ mod tests {
         assert_eq!(rail_icon_for("chat"), RailIcon::Chat);
         assert_eq!(rail_icon_for("imagine"), RailIcon::Imagine);
         assert_eq!(rail_icon_for("automations"), RailIcon::Clock);
+        assert_eq!(rail_icon_for("history"), RailIcon::History);
+        assert_ne!(
+            rail_icon_for("history"),
+            rail_icon_for("automations"),
+            "History and Automations must not share one rail glyph"
+        );
         assert_eq!(rail_icon_for("skills"), RailIcon::Grid);
         assert_eq!(rail_icon_for("workboard"), RailIcon::Folder);
         assert_ne!(RailIcon::Search, RailIcon::Compose);

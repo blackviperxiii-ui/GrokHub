@@ -313,6 +313,207 @@ pub fn chat_attach_status(kind: AttachKind, name: &str) -> String {
     }
 }
 
+/// Composer plus-button queue. Staged files are not sent until the user sends a message.
+pub const PENDING_ATTACH_MAX: usize = 10;
+/// xAI vision accepts JPEG/PNG up to this size.
+pub const PENDING_VISION_IMAGE_MAX: u64 = 20 * 1024 * 1024;
+pub const MODEL_CANT_READ_FILE: &str = "model can't read this file";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PendingFileRole {
+    VisionImage,
+    Document,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PendingValidateIssue {
+    TooMany,
+    TooLarge,
+    UnsupportedType,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PendingItemStatus {
+    Valid(PendingFileRole),
+    NeedsTranscode,
+    Invalid(PendingValidateIssue),
+    ModelCantRead,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingAttachEntry {
+    pub path: String,
+    pub size_bytes: u64,
+    pub status: PendingItemStatus,
+}
+
+/// Staged attachments waiting on the composer (never auto-send).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct PendingAttach {
+    items: Vec<PendingAttachEntry>,
+}
+
+impl PendingAttach {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn len(&self) -> usize {
+        self.items.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.items.is_empty()
+    }
+
+    pub fn items(&self) -> &[PendingAttachEntry] {
+        &self.items
+    }
+
+    pub fn clear(&mut self) {
+        self.items.clear();
+    }
+
+    /// Stage one file. Returns `TooMany` when the list is already at [`PENDING_ATTACH_MAX`].
+    pub fn stage(&mut self, path: String, size_bytes: u64) -> Result<(), PendingValidateIssue> {
+        if self.items.len() >= PENDING_ATTACH_MAX {
+            return Err(PendingValidateIssue::TooMany);
+        }
+        let status = validate_pending_path(&path, size_bytes);
+        self.items.push(PendingAttachEntry {
+            path,
+            size_bytes,
+            status,
+        });
+        Ok(())
+    }
+
+    /// Mark items the active model cannot consume (for example vision images on a text-only model).
+    pub fn apply_model_input_modalities(&mut self, input_modalities: &[&str]) {
+        for item in &mut self.items {
+            item.status = pending_item_with_model(item.status, input_modalities);
+        }
+    }
+
+    pub fn valid_items(&self) -> usize {
+        self.items
+            .iter()
+            .filter(|e| {
+                matches!(
+                    e.status,
+                    PendingItemStatus::Valid(_) | PendingItemStatus::NeedsTranscode
+                )
+            })
+            .count()
+    }
+}
+
+fn path_ext_lower(path: &str) -> String {
+    std::path::Path::new(path)
+        .extension()
+        .and_then(|s| s.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase()
+}
+
+fn vision_native_ext(ext: &str) -> bool {
+    matches!(ext, "png" | "jpg" | "jpeg")
+}
+
+fn pending_doc_path(path: &str) -> bool {
+    let kind = attach_kind(path);
+    match kind {
+        AttachKind::Text => true,
+        AttachKind::Doc => path_ext_lower(path) == "pdf",
+        AttachKind::Image | AttachKind::Video | AttachKind::Other => false,
+    }
+}
+
+/// File-type and size rules for one staged path (no model check).
+pub fn validate_pending_path(path: &str, size_bytes: u64) -> PendingItemStatus {
+    let ext = path_ext_lower(path);
+    let kind = attach_kind(path);
+    match kind {
+        AttachKind::Video | AttachKind::Other => {
+            PendingItemStatus::Invalid(PendingValidateIssue::UnsupportedType)
+        }
+        AttachKind::Doc if ext != "pdf" => {
+            PendingItemStatus::Invalid(PendingValidateIssue::UnsupportedType)
+        }
+        AttachKind::Image => {
+            if size_bytes > PENDING_VISION_IMAGE_MAX {
+                return PendingItemStatus::Invalid(PendingValidateIssue::TooLarge);
+            }
+            if vision_native_ext(&ext) {
+                PendingItemStatus::Valid(PendingFileRole::VisionImage)
+            } else {
+                PendingItemStatus::NeedsTranscode
+            }
+        }
+        AttachKind::Text | AttachKind::Doc => {
+            if pending_doc_path(path) {
+                PendingItemStatus::Valid(PendingFileRole::Document)
+            } else {
+                PendingItemStatus::Invalid(PendingValidateIssue::UnsupportedType)
+            }
+        }
+    }
+}
+
+fn model_reads_role(role: PendingFileRole, input_modalities: &[&str]) -> bool {
+    match role {
+        PendingFileRole::Document => input_modalities.contains(&"text"),
+        PendingFileRole::VisionImage => input_modalities.contains(&"image"),
+    }
+}
+
+fn model_reads_transcoded_image(input_modalities: &[&str]) -> bool {
+    input_modalities.contains(&"image")
+}
+
+/// Apply model listing modalities to a validated item status.
+pub fn pending_item_with_model(
+    status: PendingItemStatus,
+    input_modalities: &[&str],
+) -> PendingItemStatus {
+    match status {
+        PendingItemStatus::Valid(PendingFileRole::VisionImage) => {
+            if model_reads_role(PendingFileRole::VisionImage, input_modalities) {
+                status
+            } else {
+                PendingItemStatus::ModelCantRead
+            }
+        }
+        PendingItemStatus::NeedsTranscode => {
+            if model_reads_transcoded_image(input_modalities) {
+                status
+            } else {
+                PendingItemStatus::ModelCantRead
+            }
+        }
+        PendingItemStatus::Valid(PendingFileRole::Document) => {
+            if model_reads_role(PendingFileRole::Document, input_modalities) {
+                status
+            } else {
+                PendingItemStatus::ModelCantRead
+            }
+        }
+        PendingItemStatus::Invalid(_) | PendingItemStatus::ModelCantRead => status,
+    }
+}
+
+pub fn pending_item_user_message(status: PendingItemStatus) -> Option<&'static str> {
+    match status {
+        PendingItemStatus::ModelCantRead => Some(MODEL_CANT_READ_FILE),
+        PendingItemStatus::Invalid(PendingValidateIssue::TooLarge) => Some("file is too large"),
+        PendingItemStatus::Invalid(PendingValidateIssue::UnsupportedType) => {
+            Some("file type is not supported")
+        }
+        PendingItemStatus::Invalid(PendingValidateIssue::TooMany) => Some("too many attachments"),
+        PendingItemStatus::Valid(_) | PendingItemStatus::NeedsTranscode => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -481,5 +682,152 @@ mod tests {
         );
         let _ = PlusTarget::Chat;
         let _ = PlusTarget::Imagine;
+    }
+
+    #[test]
+    fn pending_attach_validation_table() {
+        struct Row {
+            path: &'static str,
+            size: u64,
+            expect: PendingItemStatus,
+        }
+        let rows = [
+            Row {
+                path: "shot.png",
+                size: 1,
+                expect: PendingItemStatus::Valid(PendingFileRole::VisionImage),
+            },
+            Row {
+                path: "shot.JPG",
+                size: PENDING_VISION_IMAGE_MAX,
+                expect: PendingItemStatus::Valid(PendingFileRole::VisionImage),
+            },
+            Row {
+                path: "big.png",
+                size: PENDING_VISION_IMAGE_MAX + 1,
+                expect: PendingItemStatus::Invalid(PendingValidateIssue::TooLarge),
+            },
+            Row {
+                path: "anim.webp",
+                size: 1024,
+                expect: PendingItemStatus::NeedsTranscode,
+            },
+            Row {
+                path: "notes.md",
+                size: 50,
+                expect: PendingItemStatus::Valid(PendingFileRole::Document),
+            },
+            Row {
+                path: "data.csv",
+                size: 50,
+                expect: PendingItemStatus::Valid(PendingFileRole::Document),
+            },
+            Row {
+                path: "packet.json",
+                size: 50,
+                expect: PendingItemStatus::Valid(PendingFileRole::Document),
+            },
+            Row {
+                path: "/tmp/readme.pdf",
+                size: 50,
+                expect: PendingItemStatus::Valid(PendingFileRole::Document),
+            },
+            Row {
+                path: "main.rs",
+                size: 50,
+                expect: PendingItemStatus::Valid(PendingFileRole::Document),
+            },
+            Row {
+                path: "clip.mp4",
+                size: 50,
+                expect: PendingItemStatus::Invalid(PendingValidateIssue::UnsupportedType),
+            },
+            Row {
+                path: "memo.docx",
+                size: 50,
+                expect: PendingItemStatus::Invalid(PendingValidateIssue::UnsupportedType),
+            },
+            Row {
+                path: "bin.elf",
+                size: 50,
+                expect: PendingItemStatus::Invalid(PendingValidateIssue::UnsupportedType),
+            },
+        ];
+        for row in rows {
+            assert_eq!(
+                validate_pending_path(row.path, row.size),
+                row.expect,
+                "path={}",
+                row.path
+            );
+        }
+        assert_eq!(
+            pending_item_with_model(
+                PendingItemStatus::Valid(PendingFileRole::VisionImage),
+                &["text"],
+            ),
+            PendingItemStatus::ModelCantRead
+        );
+        assert_eq!(
+            pending_item_user_message(PendingItemStatus::ModelCantRead),
+            Some(MODEL_CANT_READ_FILE)
+        );
+        assert_eq!(
+            pending_item_with_model(
+                PendingItemStatus::Valid(PendingFileRole::VisionImage),
+                &["text", "image"],
+            ),
+            PendingItemStatus::Valid(PendingFileRole::VisionImage)
+        );
+        assert_eq!(
+            pending_item_with_model(PendingItemStatus::NeedsTranscode, &["text"]),
+            PendingItemStatus::ModelCantRead
+        );
+    }
+
+    #[test]
+    fn pending_attach_caps_at_ten_items() {
+        let mut q = PendingAttach::new();
+        for i in 0..PENDING_ATTACH_MAX {
+            assert!(q.stage(format!("/tmp/file{i}.png"), 1).is_ok());
+        }
+        assert_eq!(q.len(), PENDING_ATTACH_MAX);
+        assert_eq!(
+            q.stage("/tmp/overflow.png".into(), 1),
+            Err(PendingValidateIssue::TooMany)
+        );
+        assert_eq!(q.len(), PENDING_ATTACH_MAX);
+    }
+
+    #[test]
+    fn pending_attach_one_bad_file_leaves_siblings_valid() {
+        let mut q = PendingAttach::new();
+        q.stage("good.png".into(), 100).unwrap();
+        q.stage("bad.bin".into(), 100).unwrap();
+        q.stage("notes.txt".into(), 100).unwrap();
+        assert_eq!(q.len(), 3);
+        assert_eq!(q.valid_items(), 2);
+        assert_eq!(
+            q.items()[0].status,
+            PendingItemStatus::Valid(PendingFileRole::VisionImage)
+        );
+        assert_eq!(
+            q.items()[1].status,
+            PendingItemStatus::Invalid(PendingValidateIssue::UnsupportedType)
+        );
+        assert_eq!(
+            q.items()[2].status,
+            PendingItemStatus::Valid(PendingFileRole::Document)
+        );
+        q.apply_model_input_modalities(&["text"]);
+        assert_eq!(q.items()[0].status, PendingItemStatus::ModelCantRead);
+        assert_eq!(
+            q.items()[1].status,
+            PendingItemStatus::Invalid(PendingValidateIssue::UnsupportedType)
+        );
+        assert_eq!(
+            q.items()[2].status,
+            PendingItemStatus::Valid(PendingFileRole::Document)
+        );
     }
 }

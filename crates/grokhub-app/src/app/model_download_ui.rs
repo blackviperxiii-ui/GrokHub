@@ -286,10 +286,17 @@ impl Cabin {
         let name = ls::model_by_id(&rec.id)
             .map(|m| m.name)
             .unwrap_or(rec.file.as_str());
+        let tail = if grokhub_core::runtime_download::engine_binary_available(
+            &crate::config::config_dir(),
+        ) {
+            "Turn on the on-device toggle when you are ready."
+        } else {
+            "Get engine in Settings first, then turn on the on-device toggle."
+        };
         crate::cards::settings_note(
             ui,
             &format!(
-                "Downloaded {name} ({}) to {}. This build can't run it yet, so background work stays on your cloud model for now.",
+                "Downloaded {name} ({}) to {}. {tail}",
                 ls::size_label(rec.bytes / MIB),
                 models_dir().display()
             ),

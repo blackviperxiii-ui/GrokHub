@@ -4,13 +4,66 @@
 //!
 //! Installing is reversible (`/connections` undo, or Disconnect), so it asks
 //! nothing. A browser sign-in opens right after Install. A typed API key is a
-//! credential: Save key goes through the confirm sheet first, and Cancel
-//! clears the field.
+//! credential: Save key parks a hard credentials card first, and Cancel on
+//! that card clears the field.
 
-use grokhub_core::mcp_catalog::{self, CatalogAuth, CatalogEntry};
+use std::sync::{Mutex, OnceLock};
+
+use grokhub_core::mcp_catalog::{self, Catalog, CatalogAuth, CatalogEntry};
 
 use super::*;
 use crate::cards::ChipTone;
+
+struct CatalogRefresh {
+    overlay: Option<Catalog>,
+    note: String,
+    busy: bool,
+}
+
+fn catalog_refresh() -> &'static Mutex<CatalogRefresh> {
+    static STATE: OnceLock<Mutex<CatalogRefresh>> = OnceLock::new();
+    STATE.get_or_init(|| {
+        Mutex::new(CatalogRefresh {
+            overlay: None,
+            note: String::new(),
+            busy: false,
+        })
+    })
+}
+
+fn start_catalog_refresh() {
+    {
+        let mut held = catalog_refresh().lock().unwrap_or_else(|e| e.into_inner());
+        if held.busy {
+            return;
+        }
+        held.busy = true;
+        held.note = "Refreshing catalog from the official MCP registry…".into();
+    }
+    std::thread::spawn(|| {
+        let result = mcp_catalog::refresh_from_official_registry();
+        let mut held = catalog_refresh().lock().unwrap_or_else(|e| e.into_inner());
+        held.busy = false;
+        match result {
+            Ok((catalog, updated)) => {
+                held.overlay = Some(catalog);
+                held.note = if updated > 0 {
+                    format!(
+                        "Updated {updated} connector{} from the official registry.",
+                        if updated == 1 { "" } else { "s" }
+                    )
+                } else {
+                    "Catalog already matches the official registry.".into()
+                };
+            }
+            Err(err) => {
+                held.note = format!(
+                    "Couldn't refresh the catalog ({err}). Still showing the bundled list."
+                );
+            }
+        }
+    });
+}
 
 /// Which tab of the Connectors page is open.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -181,34 +234,43 @@ impl Cabin {
     /// Install one catalog entry. Nothing to approve: it only writes an
     /// entry the user can disconnect or undo. A browser sign-in follows.
     pub(super) fn market_install(&mut self, e: &CatalogEntry) {
+        let bundled = mcp_catalog::bundled();
+        let recipe = bundled.get(&e.id).unwrap_or(e);
         crate::native_mcp::spawn(crate::native_mcp::Job::Install {
-            name: e.id.clone(),
+            name: recipe.id.clone(),
             label: e.name.clone(),
-            entry: e.config_entry(),
-            sign_in: e.auth == CatalogAuth::Oauth,
+            entry: recipe.config_entry(),
+            sign_in: recipe.auth == CatalogAuth::Oauth,
         });
         self.status = format!("Installing {}", e.name);
     }
 
-    /// Save key: ask on the confirm sheet first.
-    pub(super) fn arm_save_key(&mut self, e: &CatalogEntry) {
+    /// Confirm sheet legacy entry: same path as Save key on the detail view.
+    pub(super) fn save_key_confirmed(&mut self, name: &str) {
+        if let Some(e) = mcp_catalog::bundled().get(name) {
+            self.start_save_connector_key(e);
+        }
+    }
+
+    /// Save key: the hard credentials card first, then seal in the keyring.
+    pub(super) fn start_save_connector_key(&mut self, e: &CatalogEntry) {
         if self.market.key.trim().is_empty() {
             self.status = format!("Type the {} key first", e.name);
             return;
         }
-        self.confirm = Some(confirm::ConfirmKind::SaveKey {
-            name: e.id.clone(),
-            label: e.name.clone(),
-        });
-    }
-
-    /// The confirm sheet said yes: seal the typed key, then clear the field.
-    pub(super) fn save_key_confirmed(&mut self, name: &str) {
+        self.status = format!("Approve the card to save the key for {}.", e.name);
+        let name = e.id.clone();
         let key = std::mem::take(&mut self.market.key);
-        crate::native_mcp::spawn(crate::native_mcp::Job::SaveKey {
-            name: name.to_string(),
-            key,
-        });
+        match crate::secrets::save_connector_key(&name, &key) {
+            Ok(note) => {
+                self.status = note;
+                crate::native_mcp::spawn(crate::native_mcp::Job::Doctor);
+            }
+            Err(err) => {
+                self.status = err;
+                self.market.key.clear();
+            }
+        }
     }
 
     /// The tab pills at the top of Settings → Connectors.
@@ -227,12 +289,34 @@ impl Cabin {
     }
 
     pub(super) fn ui_marketplace(&mut self, ui: &mut egui::Ui) {
-        let catalog = mcp_catalog::bundled();
+        let (catalog, refresh_note, refresh_busy) = {
+            let held = catalog_refresh().lock().unwrap_or_else(|e| e.into_inner());
+            (
+                held.overlay.clone().unwrap_or_else(mcp_catalog::bundled),
+                held.note.clone(),
+                held.busy,
+            )
+        };
+        if refresh_busy {
+            ui.ctx()
+                .request_repaint_after(std::time::Duration::from_millis(200));
+        }
         let installed = self.installed_names();
         let snap = crate::native_mcp::snapshot();
         if snap.busy {
             ui.ctx()
                 .request_repaint_after(std::time::Duration::from_millis(200));
+        }
+        ui.horizontal(|ui| {
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if crate::cards::ghost_pill(ui, "Refresh catalog") && !refresh_busy {
+                    start_catalog_refresh();
+                }
+            });
+        });
+        ui.add_space(4.0);
+        if !refresh_note.is_empty() {
+            crate::cards::settings_note(ui, &refresh_note);
         }
         if !snap.note.is_empty() {
             crate::cards::settings_note(ui, &snap.note);
@@ -372,7 +456,7 @@ impl Cabin {
                             .desired_width(280.0),
                     );
                     if crate::cards::white_pill(ui, "Save key") {
-                        self.arm_save_key(e);
+                        self.start_save_connector_key(e);
                     }
                 });
             }
@@ -425,30 +509,43 @@ mod tests {
     }
 
     #[test]
-    fn save_key_asks_first_and_cancel_clears_the_key() {
+    fn save_key_parks_credentials_and_denied_clears_the_field() {
+        let _hold = crate::config::hold_test_config();
+        let root = crate::config::test_config_root("market-key");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        std::env::set_var("GROKHUB_CONFIG", &root);
+        let _guard = grokhub_agent::perm::ConfigGuard::set(&root);
         let mut cabin = Cabin::quiet_for_test();
         let brave = entry("brave-search");
-        cabin.arm_save_key(&brave);
-        assert!(cabin.confirm.is_none(), "an empty field asks nothing");
+        grokhub_agent::mcp::install("brave-search", &brave.config_entry()).unwrap();
+        cabin.start_save_connector_key(&brave);
         assert_eq!(cabin.status, "Type the Brave Search key first");
 
         cabin.market.key = "sk-abcdefghijklmnopqrstuv".into();
-        cabin.arm_save_key(&brave);
-        assert!(matches!(
-            &cabin.confirm,
-            Some(confirm::ConfirmKind::SaveKey { name, label }) if name == "brave-search" && label == "Brave Search"
-        ));
-        let src = include_str!("confirm.rs");
-        let cancel = src.split("Some(ConfirmAct::Cancel) => {").nth(1).unwrap();
-        let cancel = &cancel[..cancel.find("None => {}").unwrap()];
-        assert!(
-            cancel.contains("ConfirmKind::SaveKey") && cancel.contains("self.market.key.clear()"),
-            "{cancel}"
+        let waiter = std::thread::spawn({
+            let root = root.clone();
+            move || {
+                for _ in 0..400 {
+                    if let Some(req) = grokhub_agent::harness::pending_parks(&root).pop() {
+                        assert_eq!(req.class, "credentials");
+                        let _ = grokhub_agent::harness::answer_park(&root, &req.id, false);
+                        return;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+                panic!("no credentials park");
+            }
+        });
+        cabin.start_save_connector_key(&brave);
+        waiter.join().expect("park waiter");
+        assert_eq!(
+            cabin.status,
+            "Nothing saved. brave-search's key was denied."
         );
-        assert!(
-            !format!("{:?}", cabin.confirm).contains("sk-abc"),
-            "the key never rides on the card"
-        );
+        assert!(cabin.market.key.is_empty());
+        assert!(crate::secrets::open_connector_token("brave-search").is_none());
+        std::env::remove_var("GROKHUB_CONFIG");
     }
 
     #[test]
@@ -498,6 +595,25 @@ mod tests {
         assert!(
             body.contains("Job::Install") && !body.contains("confirm"),
             "{body}"
+        );
+    }
+
+    #[test]
+    fn refresh_catalog_fetches_only_on_click() {
+        let src = include_str!("marketplace_ui.rs").replace("\r\n", "\n");
+        let code = &src[..src.find("#[cfg(test)]").unwrap()];
+        assert!(
+            code.contains("Refresh catalog") && code.contains("start_catalog_refresh"),
+            "Marketplace must offer a manual refresh"
+        );
+        assert_eq!(
+            code.matches("refresh_from_official_registry").count(),
+            1,
+            "registry fetch must run only from the refresh click handler"
+        );
+        assert!(
+            code.contains("mcp_catalog::bundled()"),
+            "install must keep bundled recipes"
         );
     }
 }
