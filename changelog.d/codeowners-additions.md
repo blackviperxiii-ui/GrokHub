@@ -1,0 +1,1 @@
+- CODEOWNERS now also covers the harness access, approval, at-rest, audit, canary, park and path D modules.
