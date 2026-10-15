@@ -1753,3 +1753,81 @@ fn the_change_history_shows_one_row_per_domain() {
         "the block paints from the cache: {paint}"
     );
 }
+
+fn plot_row(domain: &str, runs: usize) -> run_metrics::DomainRow {
+    run_metrics::DomainRow {
+        domain: domain.into(),
+        runs,
+        ..Default::default()
+    }
+}
+
+/// U7e: each domain row becomes one bar at its slot, height = run count.
+#[test]
+fn the_domain_plot_maps_rows_to_bars_in_order() {
+    use super::change_history_ui::domain_bar_points;
+    let rows = vec![
+        plot_row("code", 5),
+        plot_row("files", 0),
+        plot_row("web", 2),
+    ];
+    assert_eq!(
+        domain_bar_points(&rows),
+        vec![
+            (0.0, 5.0, "code".to_string()),
+            (1.0, 0.0, "files".to_string()),
+            (2.0, 2.0, "web".to_string()),
+        ]
+    );
+    assert!(domain_bar_points(&[]).is_empty(), "empty series, no bars");
+}
+
+/// The X axis names the nearest bar and stays blank off the bars.
+#[test]
+fn the_domain_plot_axis_labels_stay_inside_the_series() {
+    use super::change_history_ui::domain_axis_label;
+    let labels = vec!["code".to_string(), "files".to_string()];
+    assert_eq!(domain_axis_label(&labels, 0.0), "code");
+    assert_eq!(domain_axis_label(&labels, 0.4), "code");
+    assert_eq!(domain_axis_label(&labels, 0.6), "files");
+    assert_eq!(domain_axis_label(&labels, -1.0), "");
+    assert_eq!(domain_axis_label(&labels, 2.0), "");
+    assert_eq!(domain_axis_label(&[], 0.0), "");
+}
+
+/// Painting never panics, and the bounds keep the zero baseline and every bar.
+#[test]
+fn the_domain_plot_bounds_include_zero_and_every_bar() {
+    use super::change_history_ui::paint_domain_runs_plot;
+    let paint = |rows: &[run_metrics::DomainRow]| {
+        let ctx = crate::ui_kit::test_ctx(true);
+        let mut bounds = None;
+        let _ = crate::theme::test_pass(
+            &ctx,
+            eframe::egui::RawInput {
+                screen_rect: Some(eframe::egui::Rect::from_min_size(
+                    eframe::egui::Pos2::ZERO,
+                    eframe::egui::vec2(480.0, 360.0),
+                )),
+                ..Default::default()
+            },
+            |ui| {
+                bounds = Some(paint_domain_runs_plot(ui, rows));
+            },
+        );
+        bounds.expect("the plot painted")
+    };
+    let rows = vec![plot_row("code", 9), plot_row("files", 3)];
+    let b = paint(&rows);
+    assert!(b.min()[1] <= 0.0, "baseline at zero: {b:?}");
+    assert!(b.max()[1] >= 9.0, "tallest bar fits: {b:?}");
+    assert!(
+        b.min()[0] <= 0.0 && b.max()[0] >= 1.0,
+        "both slots fit: {b:?}"
+    );
+    let empty = paint(&[]);
+    assert!(
+        empty.min()[1] <= 0.0 && empty.max()[1] >= 0.0,
+        "empty series still shows zero: {empty:?}"
+    );
+}
