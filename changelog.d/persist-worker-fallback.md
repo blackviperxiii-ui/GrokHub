@@ -1,0 +1,1 @@
+- Saving: if the background save worker has stopped, chats, projects, and settings are now written directly instead of being dropped, and a panicked write is reported as "Could not save ..." without killing later saves.
