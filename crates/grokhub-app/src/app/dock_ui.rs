@@ -106,7 +106,7 @@ pub(super) fn page_panel(
     }
 }
 
-fn default_dock_state() -> DockState<DockTab> {
+pub(super) fn default_dock_state() -> DockState<DockTab> {
     DockState::new(DockTab::all().to_vec())
 }
 
