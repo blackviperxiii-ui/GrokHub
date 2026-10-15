@@ -1,1 +1,0 @@
-- CI: ci-guards no longer shallow-fetches or warn-skips PR rules on a missing merge-base; `release` only unlocks Cargo.lock when grokhub-* versions change.
