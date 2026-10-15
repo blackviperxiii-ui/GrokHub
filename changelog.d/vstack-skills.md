@@ -1,1 +1,0 @@
-- Agent tooling: vendor vstack skills (`242d4f9`) under `.cursor/skills/` so Cursor Cloud agents load them; CodeBot keeps them in sync.
