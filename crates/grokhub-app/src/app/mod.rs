@@ -146,6 +146,7 @@ mod attach_tray;
 mod audio_check_ui;
 mod background;
 mod background_ui;
+mod board_cards;
 mod board_ui;
 mod budget_ui;
 mod canary_ui;
