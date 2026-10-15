@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 3.1.0 — 2026-10-15
+
 - UI: optional egui_dock main-panel tabs behind Settings → Dockable panels (U7f; default off; layout in dock.json; egui 0.36, no egui/eframe bump).
 - Tests: shared `app/test_support_tests` module for QuietCabin, IsolatedConfig, and `wait_until` helpers (rearch stage 4; prepares feature test splits).
 - UI: egui_plot bar chart for self-improvement runs-by-area (U7e; egui 0.36, no egui/eframe bump).
@@ -36,6 +38,24 @@
 - Agent: optional deferred native tool schemas (`deferred_tools.toml`, off by default). When enabled, rarely used tools are listed in a compact index and the model calls `load_tool_schema` to pull full schemas into the volatile tail of the tools list so the stable prefix stays cache-friendly.
 - Connectors: Marketplace **Refresh catalog** pulls display metadata from the official MCP registry (https allowlist + SSRF rail) for connectors already in the bundled list; install recipes stay bundled.
 - Local AI: Settings → Cabin defaults → **Get engine** downloads a pinned official llama.cpp `llama-server` build for this OS/arch into `{config}/bin` (HTTPS to GitHub only, resumable, SHA-256 checked). No engine ships in installers; local AI stays off until you opt in.
+- CI: ci-guards no longer shallow-fetches or warn-skips PR rules on a missing merge-base; `release` only unlocks Cargo.lock when grokhub-* versions change.
+- Safety: CODEOWNERS also covers scripts/ci-guards.sh, .github/workflows/, xtask/, and .cursor/rules/.
+- Agent: named sealed-app library asks use word/phrase boundaries; read_skill loads frontmatter-less skills while skill_list still filters them.
+- Persist: PersistService worker catches panics per job so one bad write cannot kill the thread; surfaces via persist_err and keeps later jobs running.
+- Tests: QuietCabin/release_isolated flush PersistService before removing config dirs; Projects/WindowCfg pin scheduled dir; quiet cabins use default_dock_state.
+- Host receipts: after a command exits, drain stdout/stderr until the pump threads finish so late (or non-UTF-8) lines are not raced away under CI load.
+- Nightly adaptive: PersistService surfaces FullSnap/projects/window save errors and retries after lock failure; side loop/suggestion/automation/feed writers take `persist_io`; dock.json save leaves the UI thread; History rail glyph distinct from Automations; Labs cursor-preview copy; CodeQL egui `salt` rename + test PROOF redact; deslop panels dead_code/ticket tags.
+- Release: feature PRs add `changelog.d/` fragments; `cargo xtask bump` owns VERSION lockstep and folds notes on promotion (rearch stage 2).
+- CI: CODEOWNERS for gate, perm, harness consent/egress/hard, and host_safety (rearch stage 3b; needs-human-review).
+- CI: non-release PRs cannot touch version lockstep files without the `release` label (rearch stage 3a).
+- Tests: move Composer/plus/attach Cursor-fold tests into `app/composer_attach_tests.rs` (rearch stage 5 pilot).
+- Persist: one PersistService worker orders threads/projects/settings disk writes (rearch stage 6; secrets/OAuth still Stage 7).
+- Agent tooling: always-apply `.cursor/rules/vstack.mdc` plus AGENTS.md/CLAUDE.md line: always use vstack skills (viper-mode first), never pstack.
+- Agent tooling: vendor vstack skills (`242d4f9`) under `.cursor/skills/` so Cursor Cloud agents load them; CodeBot keeps them in sync.
+- Agent tooling: sync vendored vstack skills in `.cursor/skills/` to vstack `6f2fbd3` (tighter `viper-mode` and `setup-vstack` wording).
+
+- Linux: `grokhub-linux-v3.1.0.tar.gz` and AUR `pkgver=3.1.0`.
+- Windows: `GrokHub-Setup-3.1.0.exe` and `grokhub-windows-v3.1.0.zip`.
 
 ## 3.0.2 — 2026-10-13
 
