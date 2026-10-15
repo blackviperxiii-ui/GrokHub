@@ -19,3 +19,9 @@
 
 # This file
 /.github/CODEOWNERS @blackviperxiii-ui
+
+# CI / agent surface (safety-adjacent). Label needs-human-review — not merged on green.
+/scripts/ci-guards.sh @blackviperxiii-ui
+/.github/workflows/ @blackviperxiii-ui
+/xtask/ @blackviperxiii-ui
+/.cursor/rules/ @blackviperxiii-ui
