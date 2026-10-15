@@ -212,10 +212,17 @@ fn handle_persist_msg(msg: PersistMsg, io: &Arc<Mutex<()>>, mark: &Arc<Mutex<Per
             }
         }
         PersistMsg::Projects { dir, nodes, err } => {
-            let _pin = pin_scheduled_dir(dir);
+            let _pin = pin_scheduled_dir(dir.clone());
             match io.lock() {
                 Ok(_g) => {
-                    note_persist_err(&err, crate::store::save_projects(&nodes), "projects");
+                    // Write into the dir the job was queued for, not whatever
+                    // `config_dir()` says by the time the worker runs.
+                    let saved = serde_json::to_string(&nodes)
+                        .map_err(|e| e.to_string())
+                        .and_then(|body| {
+                            config::atomic_write(&dir.join("projects.json"), body.as_bytes())
+                        });
+                    note_persist_err(&err, saved, "projects");
                 }
                 Err(_) => {
                     note_persist_err(&err, Err("persist lock poisoned".into()), "projects");
@@ -253,6 +260,23 @@ fn maybe_panic_for_test() {
     if PANIC_NEXT.swap(false, std::sync::atomic::Ordering::SeqCst) {
         panic!("persist test panic");
     }
+}
+
+#[cfg(test)]
+#[test]
+fn projects_job_writes_into_its_own_dir() {
+    let dir = std::env::temp_dir().join(format!("gh-persist-proj-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let svc = PersistService::start(
+        Arc::new(Mutex::new(())),
+        Arc::new(Mutex::new(PersistMark::default())),
+    );
+    let err = Arc::new(Mutex::new(None));
+    svc.submit_projects(dir.clone(), Vec::new(), err.clone());
+    svc.flush();
+    assert!(dir.join("projects.json").exists());
+    assert!(err.lock().unwrap().is_none());
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// A service whose worker already exited, to exercise the direct-write fallback.
