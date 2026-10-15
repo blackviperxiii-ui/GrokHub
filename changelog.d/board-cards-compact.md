@@ -1,0 +1,1 @@
+- Workboard cards: compact cards are now a calm two-line row: a status icon, the title, and an elapsed timer on top; a one-line description, the chat's model, and small presence dots below. No border until hover, in light and dark.

@@ -1,6 +1,6 @@
-//! Workboard cards. Compact cards follow Flo Hoeller's project-card look: a soft
-//! pill with a segmented progress ring, title + status chip + meta, and overlapping
-//! presence chips (chat / notes / automation). A click opens the card in place with
+//! Workboard cards. Compact cards are minimal Flo agent-inbox rows painted by
+//! `board_cards` (status icon, title, timer, one-line description, model, and
+//! presence dots). A click opens the card in place with
 //! the full text, its notes, and a real chat with the agent: the same bubbles,
 //! thoughts, and tool rows as the Chat page, streaming while it works. A second
 //! click on its title row or Esc folds it; hover alone does nothing. Starting a
@@ -21,13 +21,6 @@ use grokhub_core::{
 /// Chat height inside an open card: a column card, and a full-width Follow up card.
 pub(super) const CARD_CHAT_H: f32 = 260.0;
 pub(super) const FOLLOW_CHAT_H: f32 = 340.0;
-/// Flo-style capsule ends on a compact workboard card (half of ~44px row height).
-pub(super) const BOARD_PILL_RADIUS: f32 = 22.0;
-/// Progress ring diameter on a compact card.
-const BOARD_RING_SIZE: f32 = 34.0;
-/// Presence chip diameter (chat / notes / automation).
-const BOARD_CHIP_SIZE: f32 = 22.0;
-
 /// What the Workboards page remembers between frames.
 #[derive(Clone, Debug, Default)]
 pub(super) struct BoardView {
@@ -51,30 +44,7 @@ fn board_notes_edit_id(id: &str) -> egui::Id {
     egui::Id::new(("board-notes-edit", id))
 }
 
-/// The short line under a card's title: what it has, not buttons.
-pub(super) fn card_meta_line(card: &BoardCard, now_ms: u64) -> String {
-    let mut parts: Vec<String> = Vec::new();
-    if card.automation.is_some() {
-        parts.push(if card.updated_ms == 0 {
-            "From an automation".into()
-        } else {
-            let ago = grokhub_core::pulse::ago_label(card.updated_ms, now_ms);
-            format!("Ran {ago}")
-        });
-    } else if card.updated_ms > 0 {
-        let ago = grokhub_core::pulse::ago_label(card.updated_ms, now_ms);
-        parts.push(format!("Updated {ago}"));
-    }
-    if card.thread_id.is_some() {
-        parts.push("Chat".into());
-    }
-    if !card.notes.trim().is_empty() {
-        parts.push("Notes".into());
-    }
-    parts.join(" · ")
-}
-
-/// Flo status chip copy for a board column status.
+/// A board column status in words (the compact card's accessible label).
 pub(super) fn board_status_label(status: BoardStatus) -> &'static str {
     match status {
         BoardStatus::InProgress => "In progress",
@@ -88,82 +58,7 @@ pub(super) fn board_status_label(status: BoardStatus) -> &'static str {
     }
 }
 
-/// Segmented ring fill for a card's status: `(filled, total)`.
-/// The ring center shows remaining = total − filled (or a check when done).
-pub(super) fn board_card_progress(status: BoardStatus) -> (u32, u32) {
-    match status {
-        BoardStatus::Done => (4, 4),
-        BoardStatus::FollowUp => (3, 4),
-        BoardStatus::InProgress => (2, 4),
-        BoardStatus::Blocked => (1, 4),
-        BoardStatus::Dismissed => (0, 4),
-        BoardStatus::Proposed | BoardStatus::Approved | BoardStatus::Staged | BoardStatus::Todo => {
-            (0, 4)
-        }
-    }
-}
-
-/// Soft Flo chip colors on the cabin canvas (dark and light).
-fn board_status_chip_colors(status: BoardStatus) -> (egui::Color32, egui::Color32) {
-    use egui::Color32;
-    match status {
-        BoardStatus::InProgress => (
-            crate::theme::tok_pair(
-                Color32::from_rgb(0x3a, 0x2a, 0x14),
-                Color32::from_rgb(0xff, 0xf3, 0xe0),
-            ),
-            crate::theme::tok_pair(
-                Color32::from_rgb(0xf0, 0xb4, 0x5c),
-                Color32::from_rgb(0xd9, 0x77, 0x06),
-            ),
-        ),
-        BoardStatus::Done => (
-            crate::theme::tok_pair(
-                Color32::from_rgb(0x0e, 0x2a, 0x1c),
-                Color32::from_rgb(0xe6, 0xf4, 0xea),
-            ),
-            crate::theme::tok_pair(
-                Color32::from_rgb(0x4a, 0xde, 0x80),
-                Color32::from_rgb(0x15, 0x80, 0x3d),
-            ),
-        ),
-        BoardStatus::Blocked => (
-            crate::theme::tok_pair(
-                Color32::from_rgb(0x3a, 0x14, 0x14),
-                Color32::from_rgb(0xfe, 0xe2, 0xe2),
-            ),
-            crate::theme::tok_pair(
-                Color32::from_rgb(0xf8, 0x71, 0x71),
-                Color32::from_rgb(0xdc, 0x26, 0x26),
-            ),
-        ),
-        BoardStatus::FollowUp => (
-            crate::theme::tok_pair(
-                Color32::from_rgb(0x12, 0x24, 0x3a),
-                Color32::from_rgb(0xdb, 0xea, 0xfe),
-            ),
-            crate::theme::tok_pair(
-                Color32::from_rgb(0x60, 0xa5, 0xfa),
-                Color32::from_rgb(0x1d, 0x4e, 0xd8),
-            ),
-        ),
-        BoardStatus::Dismissed => (crate::theme::panel(), crate::theme::muted()),
-        BoardStatus::Proposed | BoardStatus::Approved | BoardStatus::Staged | BoardStatus::Todo => {
-            (
-                crate::theme::tok_pair(
-                    Color32::from_rgb(0x24, 0x1a, 0x36),
-                    Color32::from_rgb(0xf3, 0xe8, 0xff),
-                ),
-                crate::theme::tok_pair(
-                    Color32::from_rgb(0xc4, 0xb5, 0xfd),
-                    Color32::from_rgb(0x7c, 0x3a, 0xed),
-                ),
-            )
-        }
-    }
-}
-
-/// Presence chips for the Flo avatar stack: chat, notes, automation.
+/// Presence chips, drawn as small dots on a compact card: chat, notes, automation.
 pub(super) fn board_presence_chips(card: &BoardCard) -> Vec<(char, egui::Color32, egui::Color32)> {
     use egui::Color32;
     let mut chips = Vec::new();
@@ -207,99 +102,6 @@ pub(super) fn board_presence_chips(card: &BoardCard) -> Vec<(char, egui::Color32
         ));
     }
     chips
-}
-
-fn paint_board_progress_ring(ui: &mut egui::Ui, filled: u32, total: u32) {
-    let (rect, _) = ui.allocate_exact_size(
-        egui::vec2(BOARD_RING_SIZE, BOARD_RING_SIZE),
-        egui::Sense::hover(),
-    );
-    let center = rect.center();
-    let radius = BOARD_RING_SIZE * 0.38;
-    let total = total.max(1);
-    let gap = 0.22_f32;
-    let sweep = (std::f32::consts::TAU / total as f32) - gap;
-    let start0 = -std::f32::consts::FRAC_PI_2 + gap * 0.5;
-    let track = egui::Stroke::new(2.4, crate::theme::border());
-    let ink = egui::Stroke::new(2.6, crate::theme::fg());
-    for i in 0..total {
-        let a0 = start0 + i as f32 * (sweep + gap);
-        let a1 = a0 + sweep;
-        let stroke = if i < filled { ink } else { track };
-        paint_arc(ui.painter(), center, radius, a0, a1, stroke);
-    }
-    let remaining = total.saturating_sub(filled);
-    let label = if remaining == 0 {
-        "✓".to_string()
-    } else {
-        remaining.to_string()
-    };
-    ui.painter().text(
-        center,
-        egui::Align2::CENTER_CENTER,
-        label,
-        egui::FontId::proportional(crate::theme::FONT_BODY),
-        crate::theme::fg(),
-    );
-}
-
-fn paint_arc(
-    painter: &egui::Painter,
-    center: egui::Pos2,
-    radius: f32,
-    a0: f32,
-    a1: f32,
-    stroke: egui::Stroke,
-) {
-    let steps = (((a1 - a0).abs() * radius).ceil() as i32).clamp(6, 48);
-    let mut points = Vec::with_capacity(steps as usize + 1);
-    for i in 0..=steps {
-        let t = i as f32 / steps as f32;
-        let a = a0 + (a1 - a0) * t;
-        points.push(center + egui::vec2(a.cos(), a.sin()) * radius);
-    }
-    painter.add(egui::Shape::line(points, stroke));
-}
-
-fn paint_status_chip(ui: &mut egui::Ui, status: BoardStatus) {
-    let (bg, fg) = board_status_chip_colors(status);
-    egui::Frame::NONE
-        .fill(bg)
-        .corner_radius(999.0)
-        .inner_margin(egui::Margin::symmetric(8, 3))
-        .show(ui, |ui| {
-            ui.add(
-                egui::Label::new(
-                    RichText::new(board_status_label(status))
-                        .size(crate::theme::FONT_TIP)
-                        .color(fg),
-                )
-                .truncate(),
-            );
-        });
-}
-
-fn paint_presence_stack(ui: &mut egui::Ui, chips: &[(char, egui::Color32, egui::Color32)]) {
-    if chips.is_empty() {
-        return;
-    }
-    let d = BOARD_CHIP_SIZE;
-    let step = d - 7.0;
-    let w = d + step * (chips.len().saturating_sub(1) as f32);
-    let (rect, _) = ui.allocate_exact_size(egui::vec2(w, d), egui::Sense::hover());
-    for (i, &(ch, bg, fg)) in chips.iter().enumerate() {
-        let c = egui::pos2(rect.min.x + d * 0.5 + step * i as f32, rect.center().y);
-        ui.painter().circle_filled(c, d * 0.5, bg);
-        ui.painter()
-            .circle_stroke(c, d * 0.5, egui::Stroke::new(1.5, crate::theme::elevated()));
-        ui.painter().text(
-            c,
-            egui::Align2::CENTER_CENTER,
-            ch.to_string(),
-            egui::FontId::proportional(11.0),
-            fg,
-        );
-    }
 }
 
 /// A click opens a card in place and a second click on it folds it. Clicking
@@ -363,8 +165,9 @@ impl Cabin {
         let open = !dragging_any && self.board_view.open.as_deref() == Some(id);
         // The card under the pointer, and the one open card, stay interactive.
         // Every other card keeps its last measured slot when it is fully outside
-        // the column's clip. `card_frame` burns two parent auto-ids (the child
-        // scope, then `allocate_rect`); a skipped card burns the same two.
+        // the column's clip. A compact card burns one parent auto-id
+        // (`allocate_space` in `board_cards::paint_compact_card`); a skipped
+        // card burns the same one.
         let dragged = egui::DragAndDrop::payload::<BoardDrag>(ui.ctx()).is_some_and(|d| d.0 == id);
         let width = ui.available_width().max(1.0);
         let cache_id = egui::Id::new((
@@ -378,7 +181,7 @@ impl Cabin {
             .data(|d| d.get_temp::<f32>(cache_id))
             .unwrap_or(0.0);
         if !open && !dragged && super::chat_ui::reserve_offscreen_chat_row(ui, cached) {
-            ui.skip_ahead_auto_ids(2);
+            ui.skip_ahead_auto_ids(1);
             return egui::Rect::NOTHING;
         }
         let y0 = ui.cursor().min.y;
@@ -406,8 +209,8 @@ impl Cabin {
         rect
     }
 
-    /// Flo project-card compact: pill, progress ring, status chip, presence stack.
-    /// The whole card drags; a click opens it.
+    /// The compact Flo agent-inbox row (`board_cards`). The whole card drags;
+    /// a click opens it.
     fn paint_board_card_compact(
         &mut self,
         ui: &mut egui::Ui,
@@ -416,83 +219,25 @@ impl Cabin {
     ) -> egui::Rect {
         let id = card.id.clone();
         let dragging = egui::DragAndDrop::payload::<BoardDrag>(ui.ctx()).is_some_and(|d| d.0 == id);
-        let meta = card_meta_line(card, now_ms());
-        let (filled, total) = board_card_progress(card.status);
         let chips = board_presence_chips(card);
-        // Flo compact cards used `sheet_shadow()`; kit `card_frame` paints lift via `kit_shadow`.
-        let _ = crate::theme::sheet_shadow();
-        let frame = card_frame(ui, CardVariant::Outlined, !dragging, |ui| {
-            ui.set_width(ui.available_width());
-            ui.spacing_mut().item_spacing.x = crate::theme::SPACING_8;
-            ui.horizontal(|ui| {
-                paint_grip(ui);
-                paint_board_progress_ring(ui, filled, total);
-                let gap = ui.spacing().item_spacing.x;
-                let stack_w = if chips.is_empty() {
-                    0.0
-                } else {
-                    BOARD_CHIP_SIZE
-                        + (BOARD_CHIP_SIZE - 7.0) * (chips.len().saturating_sub(1) as f32)
-                        + 4.0
-                };
-                let show_stack = !chips.is_empty() && ui.available_width() >= stack_w + gap;
-                let reserved = if show_stack { stack_w + gap } else { 0.0 };
-                let mid_w = (ui.available_width() - reserved).max(0.0);
-                ui.vertical(|ui| {
-                    ui.set_width(mid_w);
-                    ui.spacing_mut().item_spacing.y = crate::theme::SPACING_4;
-                    ui.horizontal(|ui| {
-                        if card.fresh {
-                            fresh_badge(ui);
-                        }
-                        ui.add(
-                            egui::Label::new(
-                                RichText::new(&card.title)
-                                    .size(crate::theme::FONT_BODY)
-                                    .strong()
-                                    .color(crate::theme::fg()),
-                            )
-                            .truncate()
-                            .selectable(false),
-                        );
-                    });
-                    ui.horizontal(|ui| {
-                        ui.spacing_mut().item_spacing.x = crate::theme::SPACING_8;
-                        paint_status_chip(ui, card.status);
-                        if !meta.is_empty() {
-                            ui.add(
-                                egui::Label::new(
-                                    RichText::new(&meta)
-                                        .size(crate::theme::FONT_TIP)
-                                        .color(crate::theme::subtle()),
-                                )
-                                .truncate()
-                                .selectable(false),
-                            );
-                        }
-                    });
-                });
-                if show_stack {
-                    paint_presence_stack(ui, &chips);
-                }
-            });
-        });
-        let rect = frame.rect;
-        let resp = ui
-            .interact(
-                rect,
-                egui::Id::new(("board-card", id.as_str())),
-                egui::Sense::click_and_drag(),
-            )
+        let live = self.running
+            && card.thread_id.is_some()
+            && self.chat_job_thread.as_deref() == card.thread_id.as_deref();
+        let model = card
+            .thread_id
+            .as_ref()
+            .map(|_| resolve_chat_model(&self.cfg.mode, &self.cfg.model));
+        let row = super::board_cards::CompactRow {
+            card,
+            model: model.as_deref(),
+            live,
+            dragging,
+            now_ms: now_ms(),
+            chips: &chips,
+        };
+        let resp = super::board_cards::paint_compact_card(ui, &row)
             .on_hover_cursor(egui::CursorIcon::Grab);
-        if resp.hovered() {
-            ui.painter().rect_stroke(
-                rect,
-                BOARD_PILL_RADIUS,
-                egui::Stroke::new(1.0_f32, crate::theme::border_strong()),
-                egui::StrokeKind::Middle,
-            );
-        }
+        let rect = resp.rect;
         if resp.drag_started() {
             egui::DragAndDrop::set_payload(ui.ctx(), BoardDrag(id.clone()));
         } else if resp.clicked() {
