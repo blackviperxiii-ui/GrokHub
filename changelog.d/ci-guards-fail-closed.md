@@ -1,0 +1,1 @@
+- CI: `ci-guards` now fails closed when `git grep` or `git diff` errors, or when the Cargo.toml, Cargo.lock, or cli.rs version inputs cannot be parsed, instead of skipping those rules; added `scripts/test-ci-guards.sh` regression tests.
