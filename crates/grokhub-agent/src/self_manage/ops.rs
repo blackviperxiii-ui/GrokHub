@@ -151,17 +151,16 @@ fn read_skill(path: &Path) -> Option<grokhub_core::SkillMd> {
     if !grokhub_core::skill_safe(&raw) {
         return None;
     }
-    // The `skill` tool only discovers YAML-frontmatter skills (`---` … `---`).
-    // Listing heading-only imports advertised names that then returned `unknown skill`.
-    let trimmed = raw.trim_start_matches('\u{feff}').trim_start();
-    if !trimmed.starts_with("---") {
-        return None;
-    }
     let s = grokhub_core::parse_skill_md(&raw);
     if s.name.trim().is_empty() {
         return None;
     }
     Some(s)
+}
+
+fn skill_has_yaml_frontmatter(raw: &str) -> bool {
+    let trimmed = raw.trim_start_matches('\u{feff}').trim_start();
+    trimmed.starts_with("---")
 }
 
 fn write_skill(path: &Path, s: &grokhub_core::SkillMd) -> Result<(), String> {
@@ -182,7 +181,16 @@ fn skill_list(ctx: &SelfCtx<'_>) -> String {
         .flatten()
         .flatten()
         .filter(|e| !e.file_name().to_string_lossy().starts_with('.'))
-        .filter_map(|e| read_skill(&e.path().join("SKILL.md")))
+        .filter_map(|e| {
+            let path = e.path().join("SKILL.md");
+            let raw = std::fs::read_to_string(&path).ok()?;
+            // Frontmatter filter stays on the list only — read_skill still loads
+            // heading-only skills for modify/enable paths.
+            if !skill_has_yaml_frontmatter(&raw) {
+                return None;
+            }
+            read_skill(&path)
+        })
         // List the loadable id (`skill` normalizes the same way) so
         // skill_list never advertises a name the skill tool rejects.
         .map(|s| {
