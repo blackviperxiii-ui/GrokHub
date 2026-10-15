@@ -138,6 +138,7 @@ fn take_usage(done: &mut UnattendedDone, usage: &GrokUsage) {
     done.usage.input_tokens = usage.input_tokens;
     done.usage.output_tokens = usage.output_tokens;
     done.usage.reasoning_tokens = usage.reasoning_tokens;
+    done.usage.cached_tokens = usage.cache_read_input_tokens;
     done.usage.cost_in_usd_ticks = usage.cost_in_usd_ticks;
     if !usage.meter.is_empty() {
         done.meter = usage.meter.clone();
@@ -556,7 +557,7 @@ mod tests {
                     output_tokens: 7,
                     reasoning_tokens: 3,
                     cost_in_usd_ticks: 42,
-                    cached_tokens: 0,
+                    cached_tokens: 5,
                 },
                 ..Default::default()
             })
@@ -696,12 +697,14 @@ mod tests {
         assert_eq!(done.usage.input_tokens, 11);
         assert_eq!(done.usage.output_tokens, 7);
         assert_eq!(done.usage.reasoning_tokens, 3);
+        assert_eq!(done.usage.cached_tokens, 5);
         assert_eq!(done.usage.cost_in_usd_ticks, 42);
         assert_eq!(done.meter, "API credits");
         let info = crate::session::load_session("native-u-usage").expect("session");
         assert_eq!(info.usage.input_tokens, 11);
         assert_eq!(info.usage.output_tokens, 7);
         assert_eq!(info.usage.reasoning_tokens, 3);
+        assert_eq!(info.usage.cached_tokens, 5);
         assert_eq!(info.usage.cost_in_usd_ticks, 42);
         assert_eq!(info.meter, "API credits");
         let _ = std::fs::remove_dir_all(&dir);

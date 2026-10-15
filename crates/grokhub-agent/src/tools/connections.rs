@@ -321,6 +321,7 @@ mod tests {
             stop: &|| false,
             tasks: None,
             owner: None,
+            session: None,
         };
         dispatch(&ctx, name, args)
     }

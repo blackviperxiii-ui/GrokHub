@@ -614,9 +614,22 @@ fn agent() -> ureq::Agent {
 
 fn reply(r: Result<ureq::Response, ureq::Error>) -> Result<HttpReply, String> {
     let resp = match r {
-        Ok(resp) => resp,
-        Err(ureq::Error::Status(_, resp)) => resp,
-        Err(ureq::Error::Transport(t)) => return Err(t.to_string()),
+        Ok(resp) => {
+            grokhub_core::connectivity::note_global_transport_success(grokhub_core::now_ms());
+            resp
+        }
+        Err(ureq::Error::Status(code, resp)) => {
+            grokhub_core::connectivity::note_global_transport_hint(
+                grokhub_core::connectivity::classify_http_status(code),
+                grokhub_core::now_ms(),
+            );
+            resp
+        }
+        Err(ureq::Error::Transport(t)) => {
+            let msg = t.to_string();
+            super::connectivity::note_ureq_transport(&ureq::Error::Transport(t));
+            return Err(msg);
+        }
     };
     let status = resp.status();
     let mut body = String::new();

@@ -1,7 +1,9 @@
 //! Workspace tools. `execute` stays read-only. `dispatch` runs the gated set.
 
+pub(crate) mod batch;
 pub(crate) mod connections;
 pub(crate) mod control;
+mod defs;
 mod desktop;
 pub(crate) mod fence;
 mod glob;
@@ -12,12 +14,26 @@ mod lock;
 mod media;
 pub(crate) mod ports;
 mod read_file;
+pub(crate) mod registry;
 mod search_replace;
+pub(crate) mod set;
 pub(crate) mod shell;
+mod show_panel;
 mod web_fetch;
 mod write;
 
+pub use registry::Settings as DeferredToolsSettings;
+pub use set::{schemas_for_job, tool_set_for_kind, tool_set_refusal, ToolSet, TOOL_SET_OUTSIDE};
 pub use web_fetch::public_only_resolve;
+
+/// Whether `{config_dir}/deferred_tools.toml` has `enabled = true`.
+pub fn deferred_tools_enabled(config_dir: &Path) -> bool {
+    registry::settings(config_dir).enabled
+}
+
+pub fn deferred_tools_settings(config_dir: &Path) -> DeferredToolsSettings {
+    registry::settings(config_dir)
+}
 
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
@@ -73,6 +89,8 @@ pub struct ToolCtx<'a> {
     pub tasks: Option<Arc<TaskHub>>,
     /// Subagent that started this call. Its commands are killed with it.
     pub owner: Option<&'a str>,
+    /// Chat session id for deferred tool schema state (R4).
+    pub session: Option<&'a str>,
 }
 
 pub fn tool_schemas() -> Vec<Value> {
@@ -89,33 +107,17 @@ pub fn tool_schemas() -> Vec<Value> {
 }
 
 pub fn schemas_for(gate: &Gate) -> Vec<Value> {
-    let mut tools = tool_schemas();
-    tools.extend(crate::session_tools::schemas());
-    tools.push(crate::subagent::spawn_schema());
-    if gate.readonly_session {
-        return tools;
-    }
-    tools.push(crate::subagent::send_schema());
-    tools.push(write::schema());
-    tools.push(search_replace::schema());
-    tools.push(shell::schema());
-    tools.push(web_fetch::schema());
-    tools.extend(media::schemas());
-    tools.push(control::kill_schema());
-    tools.push(control::monitor_schema());
-    tools.push(control::scheduler_create_schema());
-    tools.push(control::scheduler_delete_schema());
-    tools.push(connections::delete_schema());
-    let desk = if gate.desktop {
-        desktop::schemas()
-    } else {
-        Vec::new()
-    };
-    let native = desk.len();
-    tools.extend(desk);
-    tools.extend(crate::self_manage::native_schemas());
-    tools.extend(crate::mcp::schema_tools(native));
-    tools
+    registry::schemas_for(gate)
+}
+
+/// Bind the chat session for deferred tool schemas on this thread (R4).
+pub fn bind_deferred_session(session: &str) {
+    registry::bind_session(session);
+}
+
+/// Reset loaded deferred schemas for a new user turn.
+pub fn begin_deferred_turn(session: &str) {
+    registry::begin_turn(session);
 }
 
 pub fn execute(workspace: &Path, name: &str, arguments: &str) -> ToolOutput {
@@ -133,15 +135,40 @@ pub fn execute(workspace: &Path, name: &str, arguments: &str) -> ToolOutput {
         stop: &stop,
         tasks: None,
         owner: None,
+        session: None,
     };
     dispatch_readonly(&ctx, name, &args)
 }
 
 pub fn dispatch(ctx: &ToolCtx<'_>, name: &str, arguments: &str) -> ToolOutput {
+    dispatch_for_job(ctx, name, arguments, None)
+}
+
+/// Like [`dispatch`], but refuses tools outside `set` with [`TOOL_SET_OUTSIDE`].
+pub fn dispatch_for_job(
+    ctx: &ToolCtx<'_>,
+    name: &str,
+    arguments: &str,
+    set: Option<&ToolSet>,
+) -> ToolOutput {
+    if let Some(session) = ctx.session {
+        registry::bind_session(session);
+    }
+    if let Some(set) = set {
+        if !set.allows(name) {
+            return ToolOutput::err(set::tool_set_refusal(name));
+        }
+    }
     let args = match parse_args(arguments) {
         Ok(args) => args,
         Err(output) => return output,
     };
+    if name == registry::LOAD_TOOL_SCHEMA {
+        return registry::run_load_tool_schema(&args);
+    }
+    if name == show_panel::SHOW_PANEL {
+        return show_panel::run(&args);
+    }
     if is_readonly(name) {
         return dispatch_readonly(ctx, name, &args);
     }
@@ -216,6 +243,9 @@ pub fn desk_flags(name: &str, gate: &Gate, desktop: Option<&dyn DesktopOps>) -> 
 }
 
 fn dispatch_readonly(ctx: &ToolCtx<'_>, name: &str, args: &Value) -> ToolOutput {
+    if name == show_panel::SHOW_PANEL {
+        return show_panel::run(args);
+    }
     match name {
         "read_file" => read_file::run(ctx.workspace, args),
         "list_dir" => list_dir::run(ctx.workspace, args),
@@ -224,6 +254,7 @@ fn dispatch_readonly(ctx: &ToolCtx<'_>, name: &str, args: &Value) -> ToolOutput 
         "get_command_or_subagent_output" => control::output(ctx.tasks.as_ref(), args),
         "scheduler_list" => control::scheduler_list(),
         "search_tool" => crate::mcp::search_output(args),
+        registry::LOAD_TOOL_SCHEMA => registry::run_load_tool_schema(args),
         "skill" => crate::skills::tool_run(ctx.workspace, args),
         "diagnose" => crate::repair::tool_run(args),
         other => ToolOutput::err(format!("{READ_ONLY_PHASE}: `{other}` is not available.")),

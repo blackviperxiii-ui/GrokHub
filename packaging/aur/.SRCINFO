@@ -1,6 +1,6 @@
 pkgbase = grokhub
 	pkgdesc = Grok-native Linux cabin — Rust binary, no Electron
-	pkgver = 2.10.31
+	pkgver = 3.0.2
 	pkgrel = 1
 	url = https://github.com/blackviperxiii-ui/GrokHub
 	arch = x86_64
@@ -15,7 +15,8 @@ pkgbase = grokhub
 	depends = hicolor-icon-theme
 	optdepends = ffmpeg: Imagine video
 	optdepends = alsa-utils: Hey Grok mic
-	source = grokhub::git+https://github.com/blackviperxiii-ui/GrokHub.git#tag=v2.10.31
+	optdepends = llama-cpp: local model engine (alternative to in-app download)
+	source = grokhub::git+https://github.com/blackviperxiii-ui/GrokHub.git#tag=v3.0.2
 	sha256sums = SKIP
 
 pkgname = grokhub

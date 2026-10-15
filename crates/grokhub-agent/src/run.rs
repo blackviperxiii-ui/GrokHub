@@ -4,15 +4,83 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use crate::gate::{self, Decision, Gate, PermAnswer, PermitWait, Waited};
 use crate::tasks::TaskHub;
-use crate::tools::{self, DesktopOps, ToolCtx, ToolOutput};
+use crate::tools::{self, DesktopOps, ToolCtx, ToolOutput, ToolSet};
 use crate::{
     CancelToken, ClientError, ContentPart, FunctionCall, InputItem, ModelClient, ResponsesRequest,
     StreamEvent, Usage,
 };
+
+/// Per-session [`ToolSet`] for background / unattended runs (SP2).
+///
+/// Callers bind before `run_loop` / `NativeEngine::prompt`; `None` on a session
+/// keeps today's full `schemas_for` / `dispatch` behavior. Stored here so app
+/// callers do not need a `LoopIn` field (that would force edits across eval and
+/// chat engine construction sites owned by other cards).
+static JOB_TOOL_SETS: OnceLock<Mutex<HashMap<String, ToolSet>>> = OnceLock::new();
+
+fn job_tool_sets() -> &'static Mutex<HashMap<String, ToolSet>> {
+    JOB_TOOL_SETS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// RAII token from [`bind_job_tool_set`]. Dropping it does **not** clear the
+/// bind: a `background: true` `spawn_subagent` child (`parent/id`) can outlive
+/// the parent `run_loop`, and removing the parent entry would fail open to the
+/// full tool list. Overwrite with a later bind on the same session id, or call
+/// [`clear_job_tool_set`].
+pub struct JobToolSetGuard {
+    session: String,
+}
+
+impl Drop for JobToolSetGuard {
+    fn drop(&mut self) {
+        let _ = &self.session;
+    }
+}
+
+/// Bind `set` for `session`. Overwrites a prior bind. Survives the returned
+/// guard so detached subagents keep the allowlist. Clears any previously
+/// materialized `session/…` descendants so a tighter rebind wins on next lookup.
+pub fn bind_job_tool_set(session: impl Into<String>, set: ToolSet) -> JobToolSetGuard {
+    let session = session.into();
+    if let Ok(mut map) = job_tool_sets().lock() {
+        let prefix = format!("{session}/");
+        map.retain(|key, _| !key.starts_with(&prefix));
+        map.insert(session.clone(), set);
+    }
+    JobToolSetGuard { session }
+}
+
+/// Remove a session's job [`ToolSet`] (tests / explicit teardown).
+pub fn clear_job_tool_set(session: &str) {
+    if let Ok(mut map) = job_tool_sets().lock() {
+        map.remove(session);
+    }
+}
+
+fn bound_job_tool_set(session: &str) -> Option<ToolSet> {
+    let Ok(mut map) = job_tool_sets().lock() else {
+        return None;
+    };
+    if let Some(set) = map.get(session) {
+        return Some(set.clone());
+    }
+    // Child sessions are `parent/id` (nested `parent/id/id2`). Inherit the
+    // nearest bound ancestor so spawn_subagent keeps the job allowlist.
+    // Materialize onto the child so a later parent clear still leaves the set.
+    let mut rest = session;
+    while let Some((parent, _)) = rest.rsplit_once('/') {
+        if let Some(set) = map.get(parent).cloned() {
+            map.insert(session.to_string(), set.clone());
+            return Some(set);
+        }
+        rest = parent;
+    }
+    None
+}
 
 const REPEAT_LIMIT: u32 = 3;
 /// What a call repeated [`REPEAT_LIMIT`] times gets back instead of running.
@@ -253,41 +321,57 @@ pub fn run_loop(
     let playbook = (input.depth == 0)
         .then(|| crate::checkpoint::turn_playbook(input.conversation_id))
         .flatten();
-    if first_turn {
-        let base = style.map(|s| grokhub_core::talk::restyle(input.system, s));
-        let base = base.as_deref().unwrap_or(input.system);
-        let base = match &playbook {
-            Some(block) => grokhub_core::playbook::with_playbook(base, Some(block)),
-            None => base.to_string(),
-        };
-        let system = match crate::memory::first_turn_injection(input.workspace, user_text) {
-            Some(block) if base.trim().is_empty() => block,
-            Some(block) => format!("{base}\n\n{block}"),
-            None => base.to_string(),
-        };
-        if !system.trim().is_empty() {
-            history.push(InputItem::Message {
-                role: "system".into(),
-                content: vec![ContentPart::InputText(system)],
-            });
+    let config_dir = crate::perm::config_dir();
+    tools::begin_deferred_turn(input.conversation_id);
+    if crate::prefix_cache::enabled(&config_dir) {
+        if first_turn {
+            crate::prefix_cache::push_stable_system(history, input.system);
         }
+        let volatile = crate::prefix_cache::TurnVolatile::assemble(
+            input.workspace,
+            user_text,
+            first_turn,
+            style,
+            playbook.as_deref(),
+        );
+        crate::prefix_cache::push_user_turn(history, &volatile, user_text, image);
     } else {
-        if let Some(style) = style {
-            restyle_history(history, style);
+        if first_turn {
+            let base = style.map(|s| grokhub_core::talk::restyle(input.system, s));
+            let base = base.as_deref().unwrap_or(input.system);
+            let base = match &playbook {
+                Some(block) => grokhub_core::playbook::with_playbook(base, Some(block)),
+                None => base.to_string(),
+            };
+            let system = match crate::memory::first_turn_injection(input.workspace, user_text) {
+                Some(block) if base.trim().is_empty() => block,
+                Some(block) => format!("{base}\n\n{block}"),
+                None => base.to_string(),
+            };
+            if !system.trim().is_empty() {
+                history.push(InputItem::Message {
+                    role: "system".into(),
+                    content: vec![ContentPart::InputText(system)],
+                });
+            }
+        } else {
+            if let Some(style) = style {
+                restyle_history(history, style);
+            }
+            if input.depth == 0 {
+                replaybook_history(history, playbook.as_deref());
+            }
+            // Later turns: surface sealed installed-app learnings when the user
+            // asks about games / Steam / library (first turn was often "hi").
+            if let Some(block) = crate::memory::followup_injection(user_text) {
+                history.push(InputItem::Message {
+                    role: "system".into(),
+                    content: vec![ContentPart::InputText(block)],
+                });
+            }
         }
-        if input.depth == 0 {
-            replaybook_history(history, playbook.as_deref());
-        }
-        // Later turns: surface sealed installed-app learnings when the user
-        // asks about games / Steam / library (first turn was often "hi").
-        if let Some(block) = crate::memory::followup_injection(user_text) {
-            history.push(InputItem::Message {
-                role: "system".into(),
-                content: vec![ContentPart::InputText(block)],
-            });
-        }
+        history.push(user_message(user_text, image));
     }
-    history.push(user_message(user_text, image));
     // Spike-4c: a tool call that carries a recalled line is personal egress.
     let _recall = crate::harness::RecallScope::enter(crate::memory::recall_lines(history));
     input.permits.drain();
@@ -391,12 +475,16 @@ pub fn run_loop(
         }
         let mut wire = history.clone();
         crate::image_budget::apply_image_budget(&mut wire);
+        let tools = match bound_job_tool_set(input.conversation_id) {
+            Some(set) => tools::schemas_for_job(&gate, &set),
+            None => tools::schemas_for(&gate),
+        };
         let req = ResponsesRequest {
             model: input.model.to_string(),
             effort: input.effort.map(str::to_string),
             input: wire,
             conversation_id: input.conversation_id.to_string(),
-            tools: tools::schemas_for(&gate),
+            tools,
             hosted_search: true,
             call_timeout: None,
         };
@@ -568,7 +656,10 @@ pub fn run_loop(
         let _ = crate::file_checkpoint::begin_step(input.conversation_id);
         // Spike-2b: a denied hard step stops the rest of this batch.
         let mut batch_failed = false;
-        for call in &turn.calls {
+        let batched_tools_on = tools::batch::settings(&config_dir).enabled;
+        let mut call_i = 0usize;
+        while call_i < turn.calls.len() {
+            let call = &turn.calls[call_i];
             if input.cancel.is_cancelled() {
                 return finish(input, StopReason::Cancelled, usage, compacted_once, true);
             }
@@ -579,7 +670,57 @@ pub fn run_loop(
                 let output = ToolOutput::err(gate::NOT_EXECUTED);
                 emit_tool(on_event, &tool_id(call), call, "failed", &output.text, None);
                 push_output(history, call, output);
+                call_i += 1;
                 continue;
+            }
+            if batched_tools_on {
+                let run_len = tools::batch::batch_run_len(&turn.calls, call_i);
+                if run_len > 1 {
+                    match run_readonly_tool_batch(
+                        &turn.calls[call_i..call_i + run_len],
+                        input,
+                        &mut gate,
+                        base_readonly,
+                        plan_at_start,
+                        &mut always,
+                        &mut batch_failed,
+                        &mut repeats,
+                        &mut nested_agents,
+                        &mut evidence,
+                        &mut fresh,
+                        &mut modified_paths,
+                        history,
+                        &mut usage,
+                        on_event,
+                    ) {
+                        ReadonlyBatchOutcome::Ran(n) => {
+                            call_i += n;
+                            if input.cancel.is_cancelled() {
+                                return finish(
+                                    input,
+                                    StopReason::Cancelled,
+                                    usage,
+                                    compacted_once,
+                                    true,
+                                );
+                            }
+                            if stop_for_halt(input) {
+                                return finish(
+                                    input,
+                                    StopReason::Halted,
+                                    usage,
+                                    compacted_once,
+                                    true,
+                                );
+                            }
+                            continue;
+                        }
+                        ReadonlyBatchOutcome::Fallback => {}
+                        ReadonlyBatchOutcome::Stop(reason) => {
+                            return finish(input, reason, usage, compacted_once, true);
+                        }
+                    }
+                }
             }
             let key = format!("{}\\n{}", call.name, call.arguments);
             let seen = repeats.entry(key).or_insert(0);
@@ -587,6 +728,7 @@ pub fn run_loop(
             if *seen >= REPEAT_LIMIT {
                 let output = ToolOutput::err(REPEAT_REPLAN);
                 push_output(history, call, output);
+                call_i += 1;
                 continue;
             }
             let id = tool_id(call);
@@ -788,6 +930,7 @@ pub fn run_loop(
             if halted {
                 return finish(input, StopReason::Halted, usage, compacted_once, true);
             }
+            call_i += 1;
         }
         if drive.is_some() && evidence >= checkpoint_at + crate::checkpoint::CHECKPOINT_EVERY {
             // A checkpoint between phases: name the Brief's done items still uncovered, once per change.
@@ -980,15 +1123,41 @@ fn note_tool(
     nested: &mut crate::prompt::NestedAgents,
 ) -> (ToolOutput, Usage) {
     let _lap = crate::timing::lap("loop:tool_run");
-    let (mut output, usage) = run_allowed(
+    emit_tool(on_event, id, call, "in_progress", &call.arguments, None);
+    let (output, usage) =
+        dispatch_tool_call(input, gate, base_readonly, plan_at_start, call, on_event);
+    let (output, usage) = finish_tool_output(
         input,
-        gate,
-        base_readonly,
-        plan_at_start,
         call,
         id,
         on_event,
+        pre_context,
+        nested,
+        output,
+        usage,
     );
+    let status = if output.failed { "failed" } else { "completed" };
+    emit_tool(
+        on_event,
+        id,
+        call,
+        status,
+        &output.text,
+        output.image_data_url.clone(),
+    );
+    (output, usage)
+}
+
+fn finish_tool_output(
+    input: &LoopIn<'_>,
+    call: &FunctionCall,
+    id: &str,
+    _on_event: &mut dyn FnMut(LoopEvent),
+    pre_context: &str,
+    nested: &mut crate::prompt::NestedAgents,
+    mut output: ToolOutput,
+    mut usage: Usage,
+) -> (ToolOutput, Usage) {
     if !pre_context.is_empty() {
         if !output.text.is_empty() && !output.text.ends_with('\n') {
             output.text.push('\n');
@@ -1026,19 +1195,210 @@ fn note_tool(
         }
         output.text.push_str(&extra);
     }
+    if !output.failed {
+        let config_dir = crate::perm::config_dir();
+        match crate::compact::maybe_compact_tool_output(
+            &config_dir,
+            input.workspace,
+            input.conversation_id,
+            input.client,
+            input.cancel,
+            input.model,
+            input.effort,
+            id,
+            &call.name,
+            &output.text,
+        ) {
+            Ok(crate::compact::ToolOutputCompactOutcome::Replaced { text, usage: extra }) => {
+                output.text = text;
+                usage.add(&extra);
+            }
+            Ok(crate::compact::ToolOutputCompactOutcome::Unchanged) => {}
+            Err(crate::compact::CompactError::Cancelled) => {}
+            Err(_) => {}
+        }
+    }
     (output, usage)
 }
 
-fn run_allowed(
+enum ReadonlyBatchOutcome {
+    Ran(usize),
+    Fallback,
+    Stop(StopReason),
+}
+
+/// Gate a consecutive read-only run and dispatch in parallel when every call is `Run`.
+#[allow(clippy::too_many_arguments)]
+fn run_readonly_tool_batch(
+    calls: &[FunctionCall],
+    input: &LoopIn<'_>,
+    gate: &mut Gate,
+    _base_readonly: bool,
+    _plan_at_start: bool,
+    always: &mut bool,
+    _batch_failed: &mut bool,
+    repeats: &mut HashMap<String, u32>,
+    nested_agents: &mut crate::prompt::NestedAgents,
+    evidence: &mut usize,
+    fresh: &mut crate::checkpoint::Fresh,
+    modified_paths: &mut Vec<String>,
+    history: &mut Vec<InputItem>,
+    usage: &mut Usage,
+    on_event: &mut dyn FnMut(LoopEvent),
+) -> ReadonlyBatchOutcome {
+    let mut prepared = Vec::with_capacity(calls.len());
+    for call in calls {
+        let key = format!("{}\\n{}", call.name, call.arguments);
+        let seen = repeats.entry(key).or_insert(0);
+        if *seen >= REPEAT_LIMIT {
+            return ReadonlyBatchOutcome::Fallback;
+        }
+        let id = tool_id(call);
+        let gate_lap = crate::timing::lap("loop:tool_gate");
+        let desk = tools::desk_flags(&call.name, gate, input.desktop);
+        let gate_args = hinted_args(gate, input.desktop, call);
+        let base = gate::decide_with(
+            gate,
+            &call.name,
+            &gate_args,
+            *always,
+            desk,
+            input.workspace,
+            input.perms,
+        );
+        let reviewed = crate::auto_review::review(&crate::auto_review::ReviewIn {
+            client: input.client,
+            cancel: input.cancel,
+            halt: &|| stop_for_halt(input),
+            gate,
+            name: &call.name,
+            arguments: &call.arguments,
+            workspace: input.workspace,
+            policy: input.perms,
+            latched_always: *always,
+            desk,
+            history,
+            conversation_id: input.conversation_id,
+            base,
+            timeout: crate::auto_review::JUDGE_TIMEOUT,
+        });
+        if let Some(extra) = &reviewed.judge_usage {
+            usage.add(extra);
+            emit_usage(on_event, usage, history, input.context_length);
+        }
+        if reviewed.cancelled {
+            return ReadonlyBatchOutcome::Stop(StopReason::Cancelled);
+        }
+        if reviewed.halted {
+            let _ = stop_for_halt(input);
+            return ReadonlyBatchOutcome::Stop(StopReason::Halted);
+        }
+        let constrained = crate::hooks::constrain_tool(crate::hooks::ToolHook {
+            session: input.conversation_id,
+            workspace: input.workspace,
+            attended: gate.attended,
+            decision: reviewed.decision,
+            ask_reason: reviewed.ask_reason,
+            name: &call.name,
+            arguments: &call.arguments,
+            tool_use_id: &id,
+        });
+        drop(gate_lap);
+        match constrained.decision {
+            Decision::Run => {
+                *seen = seen.saturating_add(1);
+                prepared.push((call, id, constrained.context));
+            }
+            Decision::Refuse(_) | Decision::Ask => return ReadonlyBatchOutcome::Fallback,
+        }
+    }
+
+    for (call, id, _) in &prepared {
+        emit_tool(on_event, id, call, "in_progress", &call.arguments, None);
+    }
+
+    if stop_for_halt(input) {
+        let _ = stop_for_halt(input);
+        return ReadonlyBatchOutcome::Stop(StopReason::Halted);
+    }
+    let session = input.conversation_id;
+    let workspace = input.workspace;
+    let tasks = input.tasks.clone();
+    let owner = input.agent_id;
+    let cancel = input.cancel.clone();
+    let should_stop = || cancel.is_cancelled() || tasks.as_ref().is_some_and(|hub| hub.is_halted());
+    let indices: Vec<usize> = (0..calls.len()).collect();
+    let raw_outputs = tools::batch::run_parallel(&indices, Some(session), &should_stop, |slot| {
+        let call = &calls[slot];
+        if should_stop() {
+            return ToolOutput::err(gate::user_cancelled(&call.name));
+        }
+        let ctx = ToolCtx {
+            workspace,
+            desktop: None,
+            stop: &should_stop,
+            tasks: tasks.clone(),
+            owner,
+            session: Some(session),
+        };
+        let set = bound_job_tool_set(session);
+        tools::dispatch_for_job(&ctx, &call.name, &call.arguments, set.as_ref())
+    });
+
+    for (slot, (call, id, pre_context)) in prepared.into_iter().enumerate() {
+        let output = raw_outputs[slot].clone();
+        let (output, extra_usage) = finish_tool_output(
+            input,
+            call,
+            &id,
+            on_event,
+            &pre_context,
+            nested_agents,
+            output,
+            Usage::default(),
+        );
+        let status = if output.failed { "failed" } else { "completed" };
+        emit_tool(
+            on_event,
+            &id,
+            call,
+            status,
+            &output.text,
+            output.image_data_url.clone(),
+        );
+        if usage_pending(&extra_usage) {
+            usage.add(&extra_usage);
+            emit_usage(on_event, usage, history, input.context_length);
+        }
+        if !output.failed && !crate::drive::is_session_tool(&call.name) {
+            *evidence += 1;
+            fresh.note(
+                &call.name,
+                &serde_json::from_str(&call.arguments).unwrap_or_default(),
+            );
+            if let Some(path) = crate::compact::path_from_write_call(&call.name, &call.arguments) {
+                if !modified_paths.iter().any(|p| p == &path) {
+                    modified_paths.push(path);
+                }
+            }
+        }
+        if !output.failed && call.name == "report_findings" {
+            fresh.note_findings();
+        }
+        push_output(history, call, output);
+    }
+
+    ReadonlyBatchOutcome::Ran(calls.len())
+}
+
+fn dispatch_tool_call(
     input: &LoopIn<'_>,
     gate: &mut Gate,
     base_readonly: bool,
     plan_at_start: bool,
     call: &FunctionCall,
-    id: &str,
     on_event: &mut dyn FnMut(LoopEvent),
 ) -> (ToolOutput, Usage) {
-    emit_tool(on_event, id, call, "in_progress", &call.arguments, None);
     let attended = gate.attended;
     let session = input.conversation_id.to_string();
     let cancel = input.cancel.clone();
@@ -1050,23 +1410,24 @@ fn run_allowed(
         stop: &|| input.cancel.is_cancelled() || stop_for_halt(input),
         tasks: input.tasks.clone(),
         owner: input.agent_id,
+        session: Some(input.conversation_id),
     };
     let halted = || halt.halted() || tasks.as_ref().is_some_and(|hub| hub.is_halted());
-    let (output, extra) = if let Some(done) =
-        crate::session_tools::try_run(crate::session_tools::SessionCall {
-            name: &call.name,
-            arguments: &call.arguments,
-            gate,
-            session: &session,
-            attended,
-            cancel: &cancel,
-            halted: &halted,
-            base_readonly,
-            plan_at_start,
-            on_event,
-        }) {
-        done
-    } else if let Some(done) = crate::subagent::try_run(crate::subagent::SpawnCall {
+    if let Some(done) = crate::session_tools::try_run(crate::session_tools::SessionCall {
+        name: &call.name,
+        arguments: &call.arguments,
+        gate,
+        session: &session,
+        attended,
+        cancel: &cancel,
+        halted: &halted,
+        base_readonly,
+        plan_at_start,
+        on_event,
+    }) {
+        return done;
+    }
+    if let Some(done) = crate::subagent::try_run(crate::subagent::SpawnCall {
         name: &call.name,
         arguments: &call.arguments,
         gate,
@@ -1087,27 +1448,17 @@ fn run_allowed(
         policy: input.perms,
         on_event,
     }) {
-        done
-    } else {
-        let mut emit_card = |view: crate::mcp::ElicitView| {
-            on_event(LoopEvent::Elicit(view));
-        };
-        let mut wait_card = |eid: &str| crate::mcp::wait_elicit(&session, eid, &cancel, &halted);
-        let output = crate::mcp::with_elicit(attended, &mut emit_card, &mut wait_card, || {
-            tools::dispatch(&ctx, &call.name, &call.arguments)
-        });
-        (output, Usage::default())
+        return done;
+    }
+    let mut emit_card = |view: crate::mcp::ElicitView| {
+        on_event(LoopEvent::Elicit(view));
     };
-    let status = if output.failed { "failed" } else { "completed" };
-    emit_tool(
-        on_event,
-        id,
-        call,
-        status,
-        &output.text,
-        output.image_data_url.clone(),
-    );
-    (output, extra)
+    let mut wait_card = |eid: &str| crate::mcp::wait_elicit(&session, eid, &cancel, &halted);
+    let job_set = bound_job_tool_set(input.conversation_id);
+    let output = crate::mcp::with_elicit(attended, &mut emit_card, &mut wait_card, || {
+        tools::dispatch_for_job(&ctx, &call.name, &call.arguments, job_set.as_ref())
+    });
+    (output, Usage::default())
 }
 
 fn action_line(name: &str, arguments: &str) -> String {
@@ -1354,6 +1705,47 @@ mod tests {
             events.push(ev)
         });
         (out, history, events)
+    }
+
+    #[test]
+    fn child_session_inherits_parent_job_tool_set() {
+        let parent = "native-sp2-parent";
+        let child = format!("{parent}/agent-1");
+        let nested = format!("{child}/agent-2");
+        let set = ToolSet::only(["read_file"]);
+        let _guard = bind_job_tool_set(parent, set.clone());
+        assert_eq!(bound_job_tool_set(parent).as_ref(), Some(&set));
+        assert_eq!(bound_job_tool_set(&child).as_ref(), Some(&set));
+        assert_eq!(bound_job_tool_set(&nested).as_ref(), Some(&set));
+        assert!(bound_job_tool_set("unrelated-session").is_none());
+        // A tighter bind on the child wins over the parent.
+        let tighter = ToolSet::only(["list_dir"]);
+        let _child_guard = bind_job_tool_set(&child, tighter.clone());
+        assert_eq!(bound_job_tool_set(&child).as_ref(), Some(&tighter));
+        assert_eq!(bound_job_tool_set(&nested).as_ref(), Some(&tighter));
+        assert_eq!(bound_job_tool_set(parent).as_ref(), Some(&set));
+        clear_job_tool_set(parent);
+        clear_job_tool_set(&child);
+        clear_job_tool_set(&nested);
+    }
+
+    #[test]
+    fn detached_child_keeps_tool_set_after_parent_guard_drops() {
+        // Security: background spawn_subagent outlives the parent run_loop guard.
+        let parent = "native-sp2-detached-parent";
+        let child = format!("{parent}/bg-agent");
+        let set = ToolSet::only(["read_file", "run_terminal_command"]);
+        let guard = bind_job_tool_set(parent, set.clone());
+        drop(guard);
+        // Parent bind must remain so ancestor walk (and materialize) still work.
+        assert_eq!(bound_job_tool_set(parent).as_ref(), Some(&set));
+        assert_eq!(bound_job_tool_set(&child).as_ref(), Some(&set));
+        // After materialize, clearing the parent must not fail-open the child.
+        clear_job_tool_set(parent);
+        assert!(bound_job_tool_set(parent).is_none());
+        assert_eq!(bound_job_tool_set(&child).as_ref(), Some(&set));
+        assert!(!set.allows("write"));
+        clear_job_tool_set(&child);
     }
 
     #[test]

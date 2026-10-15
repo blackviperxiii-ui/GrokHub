@@ -1,4 +1,7 @@
-use grokhub_core::{is_plain_text, BackgroundBudgets, BoardCard, FeedPulse, HeartbeatPace};
+use grokhub_core::{
+    daily_drop::DailyDropSettings, is_plain_text, BackgroundBudgets, BoardCard, FeedPulse,
+    HeartbeatPace,
+};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::{Read, Write};
@@ -401,6 +404,12 @@ pub struct AppConfig {
     /// Soft GPU glow around the composer while a reply streams. Off until Settings turns it on.
     #[serde(default)]
     pub composer_glow: bool,
+    /// Inline sentence autocomplete in the chat composer (ghost text). Off by default.
+    #[serde(default)]
+    pub composer_autocomplete: bool,
+    /// Settings → Behavior: dockable main panels (egui_dock). Off by default; layout in dock.json.
+    #[serde(default)]
+    pub dock_panels: bool,
     /// Settings → Let Grok control the desktop. Off until the user turns it on.
     #[serde(default)]
     pub desktop_control: bool,
@@ -465,6 +474,9 @@ pub struct AppConfig {
     /// Settings → Pulse → Sources: which free sources run and what they follow.
     #[serde(default)]
     pub pulse_sources: grokhub_core::pulse_sources::SourceSettings,
+    /// Settings → Pulse → Daily drop: overnight ranked source posts (off by default).
+    #[serde(default)]
+    pub daily_drop: DailyDropSettings,
     /// Where `/recall` reads memory. Omitted from `app.json` while this stays
     /// legacy, so an old file and a default save do not grow a new key.
     /// Opt in with `"memory_backend": "amr"` (snake_case, not camelCase).
@@ -637,6 +649,8 @@ impl Default for AppConfig {
             goal_pin: String::new(),
             imagine_wall: default_imagine_wall(),
             composer_glow: false,
+            composer_autocomplete: false,
+            dock_panels: false,
             desktop_control: false,
             screen_record: false,
             self_improve_quiet: false,
@@ -655,6 +669,7 @@ impl Default for AppConfig {
             feed_pulse: FeedPulse::default(),
             feed_instructions: String::new(),
             pulse_sources: Default::default(),
+            daily_drop: DailyDropSettings::default(),
             memory_backend: grokhub_core::amr::MemoryBackend::Legacy,
         }
     }
@@ -1157,6 +1172,62 @@ mod tests {
         assert!(!load().composer_glow);
         fs::write(root.join("app.json"), r#"{"deviceName":"cabin"}"#).unwrap();
         assert!(!load().composer_glow);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn composer_autocomplete() {
+        assert!(!AppConfig::default().composer_autocomplete);
+        let absent: AppConfig = serde_json::from_str(r#"{"deviceName":"cabin"}"#).unwrap();
+        assert!(!absent.composer_autocomplete);
+        let _g = hold_test_config();
+        let root = test_config_root("composer-autocomplete");
+        let _ = fs::remove_dir_all(&root);
+        let _pin = TestConfigDir::set(root.clone());
+        let mut cfg = AppConfig {
+            device_name: "cabin".into(),
+            composer_autocomplete: true,
+            ..Default::default()
+        };
+        save_in(&root, &cfg).expect("save");
+        assert!(load().composer_autocomplete);
+        let text = fs::read_to_string(root.join("app.json")).unwrap();
+        assert!(
+            text.contains("\"composerAutocomplete\""),
+            "camelCase key must round-trip: {text}"
+        );
+        cfg.composer_autocomplete = false;
+        save_in(&root, &cfg).expect("save off");
+        assert!(!load().composer_autocomplete);
+        fs::write(root.join("app.json"), r#"{"deviceName":"cabin"}"#).unwrap();
+        assert!(!load().composer_autocomplete);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn dock_panels_defaults_off() {
+        assert!(!AppConfig::default().dock_panels);
+        let absent: AppConfig = serde_json::from_str(r#"{"deviceName":"cabin"}"#).unwrap();
+        assert!(!absent.dock_panels);
+        let _g = hold_test_config();
+        let root = test_config_root("dock-panels");
+        let _ = fs::remove_dir_all(&root);
+        let _pin = TestConfigDir::set(root.clone());
+        let mut cfg = AppConfig {
+            device_name: "cabin".into(),
+            dock_panels: true,
+            ..Default::default()
+        };
+        save_in(&root, &cfg).expect("save");
+        assert!(load().dock_panels);
+        let text = fs::read_to_string(root.join("app.json")).unwrap();
+        assert!(
+            text.contains("\"dockPanels\""),
+            "camelCase key must round-trip: {text}"
+        );
+        cfg.dock_panels = false;
+        save_in(&root, &cfg).expect("save off");
+        assert!(!load().dock_panels);
         let _ = fs::remove_dir_all(&root);
     }
 

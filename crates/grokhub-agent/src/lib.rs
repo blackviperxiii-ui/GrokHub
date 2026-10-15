@@ -21,6 +21,7 @@ mod memory;
 mod models;
 pub mod perm;
 pub mod plugins;
+mod prefix_cache;
 mod prompt;
 mod recovery;
 pub mod repair;
@@ -49,7 +50,11 @@ pub use client::{
     Usage, XaiClient, DEFAULT_MODEL, RESPONSES_URL, USER_AGENT,
 };
 pub use compact::{estimate_input_tokens, message_text};
-pub use eval::{parse_args, reject_live, render_report, run_suite, ItemResult, Opts, SUITE_ITEMS};
+pub use eval::{
+    load_tasks, parse_args, reject_live, render_markdown, render_report, run_suite,
+    run_technique_matrix, ItemResult, Opts, Recommendation, Technique, TechniqueMatrixReport,
+    SUITE_ITEMS,
+};
 pub use events::{Engine, EngineParts, EpisodeSeed, NativeEngine, StampHalt};
 pub use file_checkpoint::{
     before_write, begin_step, format_steps, list_steps, restore_step, StepInfo, MAX_BYTES, MAX_RUNS,
@@ -76,9 +81,13 @@ pub use models::{
     context_length_for, parse_listed_models, parse_xai_models, pick_model, ListedModel,
     GROK_47_CONTEXT_LENGTH, XAI_MODELS_URL,
 };
+pub use prefix_cache::{
+    enabled as prefix_cache_enabled, settings as prefix_cache_settings,
+    Settings as PrefixCacheSettings,
+};
 pub use prompt::{
-    prompt_need_from_job, system_prompt, system_prompt_parts, system_prompt_with, PromptNeed,
-    PromptProfile,
+    prompt_need_from_job, system_prompt, system_prompt_parts, system_prompt_with,
+    tool_set_from_job, PromptNeed, PromptProfile,
 };
 pub use recovery::{
     project as project_recovery, state_for_rung, DriveFact, RecoveryFacts, RecoverySnapshot,
@@ -91,8 +100,8 @@ pub use retry::{
     TRANSPORT_REBUILD_BACKOFF,
 };
 pub use run::{
-    run_loop, HaltCheck, LoopEvent, LoopIn, LoopOut, SteerQueue, StopReason, REPEAT_REPLAN,
-    TRUNCATED_TOOL,
+    bind_job_tool_set, clear_job_tool_set, run_loop, HaltCheck, JobToolSetGuard, LoopEvent, LoopIn,
+    LoopOut, SteerQueue, StopReason, REPEAT_REPLAN, TRUNCATED_TOOL,
 };
 pub use session::{
     attach_run, cancel_session, delete_session, export_markdown, fork_session, format_cost_ticks,
@@ -111,7 +120,9 @@ pub use tasks::{
 };
 pub use tools::control::{take_automation_changes, AutomationChange};
 pub use tools::{
-    execute, is_readonly, public_only_resolve, schemas_for, tool_schemas, DesktopOps, ToolOutput,
-    READ_ONLY_PHASE,
+    deferred_tools_enabled, deferred_tools_settings, dispatch_for_job, execute, is_readonly,
+    public_only_resolve, schemas_for, schemas_for_job, tool_schemas, tool_set_for_kind,
+    tool_set_refusal, DeferredToolsSettings, DesktopOps, ToolOutput, ToolSet, READ_ONLY_PHASE,
+    TOOL_SET_OUTSIDE,
 };
 pub use unattended::{run_unattended, UnattendedDone, UnattendedRun};

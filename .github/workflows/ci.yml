@@ -5,6 +5,9 @@ on:
     branches: [main, beta]
   pull_request:
     branches: [main, beta]
+    # labeled/unlabeled so the Cargo.lock → dependencies escape hatch retriggers
+    # when the label is added (guards job reads live labels too).
+    types: [opened, synchronize, reopened, ready_for_review, labeled, unlabeled]
   workflow_dispatch:
 
 permissions:
@@ -87,6 +90,35 @@ jobs:
         with:
           components: rustfmt
       - run: cargo fmt --all -- --check
+
+  # Rearch stages 1–2 friction guards: conflict markers, god-file line
+  # budgets, Cargo.lock label hatch, and `cargo xtask bump --check`. Runs on
+  # every event (docs-only included) so markers and VERSION drift cannot land.
+  # Needs a Rust toolchain because bump --check is an xtask binary; xtask has
+  # no crates.io deps so the compile stays small.
+  guards:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: guards-xtask
+          cache-on-failure: true
+          save-if: ${{ github.event_name == 'push' }}
+          workspaces: ". -> target"
+      - name: Repo friction guards
+        env:
+          # Live label fetch for the Cargo.lock escape hatch (gh / API).
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: bash scripts/ci-guards.sh
 
   linux:
     needs: changes

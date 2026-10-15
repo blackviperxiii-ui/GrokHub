@@ -1,0 +1,22 @@
+{
+  "id": "018_read_empty_line",
+  "prompt": "Read blank.txt; it is empty.",
+  "mode": "always",
+  "files": [{ "path": "blank.txt", "content": "" }],
+  "script": [
+    {
+      "type": "tool",
+      "name": "read_file",
+      "arguments": { "target_file": "blank.txt" },
+      "usage": { "input_tokens": 13, "output_tokens": 0 }
+    },
+    {
+      "type": "text",
+      "content": "The file is empty.",
+      "usage": { "input_tokens": 23, "output_tokens": 6 }
+    }
+  ],
+  "checks": [
+    { "type": "assistant_contains", "value": "empty" }
+  ]
+}

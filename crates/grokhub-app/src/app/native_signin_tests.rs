@@ -234,8 +234,8 @@ fn native_signin_grok_oauth_without_api_key_sends_bearer() {
         "a live token is not refreshed"
     );
     eprintln!(
-        "PROOF live: POST {} Authorization: {} -> {:?}",
-        sent[0].path, sent[0].authorization, text
+        "PROOF live: POST {} Authorization: [redacted] -> {:?}",
+        sent[0].path, text
     );
 }
 
@@ -314,10 +314,9 @@ fn native_signin_expired_grok_oauth_refreshes_once() {
         "Lab mode never writes the Grok CLI's home"
     );
     eprintln!(
-        "PROOF refresh: token endpoint calls={} then POST {} Authorization: {} -> {:?}",
+        "PROOF refresh: token endpoint calls={} then POST {} Authorization: [redacted] -> {:?}",
         server.token_calls.load(Ordering::SeqCst),
         sent[0].path,
-        sent[0].authorization,
         text
     );
 }

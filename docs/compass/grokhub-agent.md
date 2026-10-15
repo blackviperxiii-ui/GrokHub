@@ -11,7 +11,7 @@
 - `crates/grokhub-agent/src/lib.rs`: module list and the public surface the app uses.
 - `crates/grokhub-agent/src/run.rs` (`run_loop`) and `crates/grokhub-agent/src/events.rs` (loop events to the `AcpEvent`s the cabin polls in `poll_acp`).
 - `crates/grokhub-agent/src/gate.rs` (gate v0) and `crates/grokhub-agent/src/perm/mod.rs` (rule engine).
-- `crates/grokhub-agent/src/tools/mod.rs`: `tool_schemas`, `schemas_for`, `execute` (read-only), `dispatch` (gated set).
+- `crates/grokhub-agent/src/tools/mod.rs`: `tool_schemas`, `schemas_for`, `schemas_for_job` / `ToolSet` (per-job allowlist filter), `execute` (read-only), `dispatch` / `dispatch_for_job` (gated set; job set refuses with `tool_set_outside`).
 - `crates/grokhub-agent/src/tools/fence.rs`, `crates/grokhub-agent/src/file_checkpoint.rs`, `crates/grokhub-agent/src/recovery.rs`: fences; copy-before-write (`/rewind step`; Brain 2 `checkpoint.rs` = gaps); `RecoveryState` projects ladder/parks/drive (no second retry stack).
 ## Change recipe
 - New tool: add a module under `crates/grokhub-agent/src/tools/`, register its schema in `schemas_for` on the right side of the `readonly_session` / `desktop` checks, dispatch it, and make sure `gate::decide` and the harness see it.
@@ -26,10 +26,10 @@
 - Gate v0 still treats Auto like Ask; Plan and btw stay read-only (`READ_ONLY_PHASE`).
 - Unattended runs (`run_unattended`): Ask denies every non-read-only tool; Auto uses the Phase 5 judge and fails closed.
 - Subagents: Explore is read-only, General copies the parent gate, depth 2 stops grandchildren, a worktree never falls back to the parent tree.
-- `system_prompt_parts` / `system_prompt_with` (`prompt.rs`): `PromptProfile` (Chat, Background, Unattended, Review). Chat keeps skills reminder and plugin extras; Background/Unattended drop them unless the job declares `NEED_SKILLS` / `NEED_PLUGINS` (`prompt_need_from_job`). Review is the lean nightly body. Stable cabin rules then AGENTS/skills (mtime-memoized); personality and learned brief are the volatile tail. Prefer `system_prompt_parts` (chat) or `system_prompt_with` over `system_prompt`.
+- `system_prompt_parts` / `system_prompt_with` (`prompt.rs`) and optional `prefix_cache.rs` (`{config}/prefix_cache.toml`, off by default): cache-friendly stable prefix (cabin + AGENTS/skills) then volatile tail; when prefix cache is on, per-turn style/playbook/memory ride in `<cabin-volatile>` on the user message instead of rewriting the system row. `prompt_need_from_job` / `tool_set_from_job` parse `NEED_*` / `TOOLS:` tokens from a job brief; SP2 wires background and unattended callers.
+- Optional `show_panel` native tool (`tools/show_panel.rs`, `generative_ui.toml` off by default): validates a panel spec as tool output; the cabin drains and paints it (G4).
 - Auto-compact (`compact.rs` / `run.rs`): re-arms after a new turn; context-length errors compact once and retry, then stop with `context still too large after compaction`.
 - Its `memory.rs` keeps `MEMORY.md` plus a rebuildable `index.sqlite` (bundled rusqlite); it never touches USER.md or SOUL.md and is not AMR; its recall pack (`first_turn_injection` / `followup_injection`) goes through `redact_recall` before the model sees it. Gaming / Steam / library asks also inject sealed `scope:apps` Installed-app lines from `ScopeIndex` (even when `memory_backend` is legacy). Cabin skills live under `{config}/skills` and are discovered by `skills::discover` (source `cabin`) so `skill_list` and `skill` share ids.
-- No tokio: MCP uses one worker thread per stdio child or HTTP read.
 - MCP browser sign-in (`crates/grokhub-agent/src/mcp/oauth.rs`, pure parts in `crates/grokhub-core/src/mcp_oauth.rs`, PKCE in `crates/grokhub-core/src/pkce.rs`): a remote server with no `Authorization` on its entry signs in from its Native MCP row. The sign-in is sealed by `seal_mcp_signin` (keyring key, next to the connection tokens), refreshed a minute before expiry, and refreshed once on a 401 before the row asks for a new sign-in. An entry that carries its own header or `tokenRef` never uses it. `file_checkpoint::before_write` hooks `write` / `search_replace` only; `run.rs` calls `begin_step` per tool batch; store `<config>/checkpoints/<conversation>/<step>/`.
 ## See also
 - [harness](harness.md), [desktop-mcp](desktop-mcp.md), [slash](slash.md), [app-config](app-config.md)
