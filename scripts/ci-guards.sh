@@ -161,10 +161,12 @@ PY
 # --- 3 + 5. PR-only rules (Cargo.lock hatch + non-release version files) -------
 if [[ "${GITHUB_EVENT_NAME:-}" == "pull_request" ]]; then
   base_ref="${GITHUB_BASE_REF:-beta}"
-  git fetch --no-tags --depth=100 origin "$base_ref" >/dev/null 2>&1 || true
+  # Full history for merge-base (no shallow --depth that can miss the fork point).
+  git fetch --no-tags origin "$base_ref" >/dev/null 2>&1 || true
   pr_merge_base=$(git merge-base "origin/${base_ref}" HEAD 2>/dev/null || true)
   if [[ -z "$pr_merge_base" ]]; then
-    echo "ci-guards: warn: could not resolve merge-base against origin/${base_ref}; skipping PR file rules" >&2
+    echo "ci-guards: could not resolve merge-base against origin/${base_ref}; failing PR file rules" >&2
+    fail=1
   else
     mapfile -t pr_changed < <(git diff --name-only "$pr_merge_base"...HEAD)
     fetch_pr_labels
@@ -190,16 +192,27 @@ if [[ "${GITHUB_EVENT_NAME:-}" == "pull_request" ]]; then
           toml_dep=1
         fi
       fi
-      # `release` also allows lock churn: `cargo xtask bump` rewrites grokhub-*
-      # versions and only the workspace `version =` line in Cargo.toml (no dep
-      # edit), so the dependencies hatch alone would still block a promotion.
+      # `release` only unlocks Cargo.lock when grokhub-* package versions changed
+      # (xtask bump). Other lock churn still needs `dependencies` or a toml dep edit.
       has_lock_hatch=0
       case ",${pr_labels_csv}," in
-        *,dependencies,*|*,deps,*|*,release,*) has_lock_hatch=1 ;;
+        *,dependencies,*|*,deps,*) has_lock_hatch=1 ;;
+      esac
+      case ",${pr_labels_csv}," in
+        *,release,*)
+          old_lock=$(mktemp)
+          git show "$pr_merge_base:Cargo.lock" >"$old_lock" 2>/dev/null || true
+          old_gv=$(grokhub_lock_versions "$old_lock")
+          new_gv=$(grokhub_lock_versions "Cargo.lock")
+          rm -f "$old_lock"
+          if [[ -n "$old_gv" && -n "$new_gv" && "$old_gv" != "$new_gv" ]]; then
+            has_lock_hatch=1
+          fi
+          ;;
       esac
       if (( toml_dep == 0 && has_lock_hatch == 0 )); then
-        echo "ci-guards: Cargo.lock changed without a Cargo.toml dependency edit or the 'dependencies'/'release' label." >&2
-        echo "ci-guards: add label 'dependencies' for a lock-only dep bump, 'release' for xtask bump, or include the Cargo.toml dep change." >&2
+        echo "ci-guards: Cargo.lock changed without a Cargo.toml dependency edit or the 'dependencies'/'release' (grokhub-* versions) label." >&2
+        echo "ci-guards: add label 'dependencies' for a lock-only dep bump, 'release' for xtask bump of grokhub-* versions, or include the Cargo.toml dep change." >&2
         fail=1
       else
         echo "ci-guards: Cargo.lock change allowed (toml_dep=$toml_dep hatch=$has_lock_hatch)"
