@@ -88,11 +88,7 @@ impl PersistService {
         }
     }
 
-    pub(super) fn submit_projects(
-        &self,
-        nodes: Vec<ProjectNode>,
-        err: Arc<Mutex<Option<String>>>,
-    ) {
+    pub(super) fn submit_projects(&self, nodes: Vec<ProjectNode>, err: Arc<Mutex<Option<String>>>) {
         if self
             .tx
             .send(PersistMsg::Projects {
@@ -177,26 +173,22 @@ fn persist_service_worker(
                     note_persist_err(&err, config::save_in(&dir, &cfg), "settings");
                 }
             }
-            PersistMsg::Projects { nodes, err } => {
-                match io.lock() {
-                    Ok(_g) => {
-                        note_persist_err(&err, crate::store::save_projects(&nodes), "projects");
-                    }
-                    Err(_) => {
-                        note_persist_err(&err, Err("persist lock poisoned".into()), "projects");
-                    }
+            PersistMsg::Projects { nodes, err } => match io.lock() {
+                Ok(_g) => {
+                    note_persist_err(&err, crate::store::save_projects(&nodes), "projects");
                 }
-            }
-            PersistMsg::WindowCfg { cfg, err } => {
-                match io.lock() {
-                    Ok(_g) => {
-                        note_persist_err(&err, config::save(&cfg), "window");
-                    }
-                    Err(_) => {
-                        note_persist_err(&err, Err("persist lock poisoned".into()), "window");
-                    }
+                Err(_) => {
+                    note_persist_err(&err, Err("persist lock poisoned".into()), "projects");
                 }
-            }
+            },
+            PersistMsg::WindowCfg { cfg, err } => match io.lock() {
+                Ok(_g) => {
+                    note_persist_err(&err, config::save(&cfg), "window");
+                }
+                Err(_) => {
+                    note_persist_err(&err, Err("persist lock poisoned".into()), "window");
+                }
+            },
             PersistMsg::Flush(done) => {
                 let _ = done.send(());
             }

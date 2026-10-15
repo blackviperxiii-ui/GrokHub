@@ -9459,12 +9459,20 @@ fn persist_service_queues_out_of_order_full_snaps() {
     let new_gen = cabin.next_persist_gen();
     assert_eq!((old_gen, new_gen), (1, 2));
     // Newer gen first, then older — through the actor, not the free fn.
-    cabin
-        .persist_svc
-        .submit_full(cfg.root.clone(), new, new_gen, None, cabin.persist_err.clone());
-    cabin
-        .persist_svc
-        .submit_full(cfg.root.clone(), old, old_gen, None, cabin.persist_err.clone());
+    cabin.persist_svc.submit_full(
+        cfg.root.clone(),
+        new,
+        new_gen,
+        None,
+        cabin.persist_err.clone(),
+    );
+    cabin.persist_svc.submit_full(
+        cfg.root.clone(),
+        old,
+        old_gen,
+        None,
+        cabin.persist_err.clone(),
+    );
     join_persist(&cabin.persist_svc);
     let threads = std::fs::read_to_string(cfg.root.join("threads.json")).expect("threads.json");
     assert!(threads.contains("\"title\": \"Chat\""), "{threads}");

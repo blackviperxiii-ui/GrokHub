@@ -365,9 +365,11 @@ impl Cabin {
         std::thread::spawn(move || {
             let _pin = pin_scheduled_dir(dir);
             match io.lock() {
-                Ok(_g) => {
-                    note_persist_err(&err, crate::store::save_suggestions(&suggestions), "suggestions")
-                }
+                Ok(_g) => note_persist_err(
+                    &err,
+                    crate::store::save_suggestions(&suggestions),
+                    "suggestions",
+                ),
                 Err(_) => {
                     note_persist_err(&err, Err("persist lock poisoned".into()), "suggestions")
                 }

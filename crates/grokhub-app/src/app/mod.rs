@@ -3164,13 +3164,8 @@ impl Cabin {
         let (persist_done_tx, persist_done_rx) = mpsc::channel();
         // PersistService pins config_dir and write_persist_disk_in_order.
         let err = self.persist_err.clone();
-        self.persist_svc.submit_full(
-            dir.clone(),
-            snap.clone(),
-            gen,
-            Some(persist_done_tx),
-            err,
-        );
+        self.persist_svc
+            .submit_full(dir.clone(), snap.clone(), gen, Some(persist_done_tx), err);
         std::thread::spawn(move || {
             let _ = persist_done_rx.recv();
             // EgressGuard: log the send (no content) or send nothing. A grant
