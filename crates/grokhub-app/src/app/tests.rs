@@ -9404,6 +9404,47 @@ fn poisoned_persist_io_surfaces_error_and_retries_idle() {
 }
 
 #[test]
+fn persist_worker_survives_a_panicking_job_then_writes() {
+    let _lock = crate::config::hold_test_config();
+    let cfg = IsolatedConfig::arm("persist-panic-survive");
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.threads = vec![crate::threads::ChatThread::new("Panic pier", false)];
+    cabin.thread_idx = 0;
+    cabin.messages = std::sync::Arc::new(vec![("user".into(), "before panic".into())]);
+    // First job panics inside the worker; catch_unwind must keep the thread up.
+    super::persist_panic_next();
+    cabin.persist();
+    cabin.persist_svc.flush();
+    cabin.poll_persist_err();
+    assert!(
+        cabin.status.contains("persist worker panicked") || cabin.status.contains("Could not save"),
+        "panicked job must surface via persist_err, got status={status}",
+        status = cabin.status
+    );
+    // Second job must still land on disk through the same worker.
+    cabin.status.clear();
+    cabin.persist_idle_key.clear();
+    if let Ok(mut slot) = cabin.persist_err.lock() {
+        *slot = None;
+    }
+    cabin.messages = std::sync::Arc::new(vec![("user".into(), "after panic".into())]);
+    cabin.persist();
+    cabin.persist_svc.flush();
+    cabin.poll_persist_err();
+    let threads = std::fs::read_to_string(cfg.root.join("threads.json")).expect("threads.json");
+    assert!(
+        threads.contains("after panic") || threads.contains("Panic pier"),
+        "worker must still write after a panicked job: {threads}"
+    );
+    assert!(
+        !cabin.status.contains("persist worker panicked"),
+        "successful write must not leave the panic status: {status}",
+        status = cabin.status
+    );
+    drop(cfg);
+}
+
+#[test]
 fn an_older_persist_snapshot_never_overwrites_a_newer_one() {
     let _lock = crate::config::hold_test_config();
     let cfg = IsolatedConfig::arm("persist-order");
@@ -16442,7 +16483,7 @@ fn quiet_cabin() -> Cabin {
         scroll_to_hooks: false,
         composer_geom: None,
         composer_ghost: ghost::ComposerGhost::default(),
-        dock_state: super::dock_ui::load_dock_state(),
+        dock_state: super::dock_ui::default_dock_state(),
         toasts: super::status_toasts::cabin_toasts(),
         status_toasted: String::new(),
     }
