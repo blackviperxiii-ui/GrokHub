@@ -28758,3 +28758,72 @@ fn g4_drain_defers_show_panel_for_other_thread() {
     assert_eq!(cabin.panels.len(), 1, "owner chat receives deferred panel");
     release_isolated(&root, cabin);
 }
+
+const G4_PANEL_DETAIL: &str = "{\n  \"panel\": {\n  \"type\": \"ci_status\",\n  \"pr_number\": 7,\n  \"checks\": [],\n  \"actions\": []\n}\n}";
+
+fn g4_two_thread_cabin(tag: &str) -> (std::path::PathBuf, Cabin, String, String) {
+    let (root, mut cabin) = isolated_cabin(tag);
+    let mut visible = crate::threads::ChatThread::new("Visible", false);
+    visible.id = format!("{tag}-visible");
+    let mut hidden = crate::threads::ChatThread::new("Hidden", false);
+    hidden.id = format!("{tag}-hidden");
+    let ids = (visible.id.clone(), hidden.id.clone());
+    cabin.threads = vec![visible, hidden];
+    cabin.thread_idx = 0;
+    (root, cabin, ids.0, ids.1)
+}
+
+#[test]
+fn g4_drain_drops_show_panel_for_unknown_thread() {
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin, _visible, _hidden) = g4_two_thread_cabin("g4-drop-unknown");
+    cabin.enqueue_show_panel_for_thread_for_test(
+        "g4-drop-unknown-gone",
+        "tc-gone",
+        G4_PANEL_DETAIL,
+    );
+    cabin.drain_show_panel_results();
+    let (ids, _) = Cabin::pending_show_panel_snapshot_for_test();
+    assert!(
+        !ids.contains(&"tc-gone".to_string()),
+        "deleted-thread row must not re-queue"
+    );
+    assert_eq!(cabin.panels.len(), 0);
+    release_isolated(&root, cabin);
+}
+
+#[test]
+fn g4_drain_keeps_show_panel_for_known_hidden_thread() {
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin, _visible, hidden) = g4_two_thread_cabin("g4-keep-hidden");
+    cabin.enqueue_show_panel_for_thread_for_test(&hidden, "tc-kept", G4_PANEL_DETAIL);
+    cabin.drain_show_panel_results();
+    let (ids, _) = Cabin::pending_show_panel_snapshot_for_test();
+    assert_eq!(ids.iter().filter(|id| *id == "tc-kept").count(), 1);
+    cabin.thread_idx = 1;
+    cabin.drain_show_panel_results();
+    assert_eq!(cabin.panels.len(), 1);
+    release_isolated(&root, cabin);
+}
+
+#[test]
+fn g4_drain_caps_deferred_show_panel_queue() {
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin, _visible, hidden) = g4_two_thread_cabin("g4-cap");
+    for i in 0..100 {
+        cabin.enqueue_show_panel_for_thread_for_test(
+            &hidden,
+            &format!("g4cap-{i}"),
+            G4_PANEL_DETAIL,
+        );
+    }
+    cabin.drain_show_panel_results();
+    let (ids, total) = Cabin::pending_show_panel_snapshot_for_test();
+    assert_eq!(total, 64);
+    assert!(
+        !ids.contains(&"g4cap-0".to_string()),
+        "oldest dropped first"
+    );
+    assert!(ids.contains(&"g4cap-99".to_string()), "newest kept");
+    release_isolated(&root, cabin);
+}
