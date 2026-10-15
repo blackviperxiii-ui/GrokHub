@@ -36,14 +36,25 @@ enum PersistMsg {
 #[derive(Clone)]
 pub(super) struct PersistService {
     tx: mpsc::Sender<PersistMsg>,
+    // Kept so a dead worker still lets `send` write the job on the caller.
+    io: Arc<Mutex<()>>,
+    mark: Arc<Mutex<PersistMark>>,
 }
 
 impl PersistService {
     pub(super) fn start(io: Arc<Mutex<()>>, mark: Arc<Mutex<PersistMark>>) -> Self {
         let (tx, rx) = mpsc::channel();
+        let (wio, wmark) = (io.clone(), mark.clone());
         // The only persist spawn for threads/projects/settings (Stage 6).
-        std::thread::spawn(move || persist_service_worker(rx, io, mark));
-        Self { tx }
+        std::thread::spawn(move || persist_service_worker(rx, wio, wmark));
+        Self { tx, io, mark }
+    }
+
+    /// Queue a job; if the worker is gone, write it directly so data is not lost.
+    fn send(&self, msg: PersistMsg) {
+        if let Err(mpsc::SendError(msg)) = self.tx.send(msg) {
+            run_persist_msg(msg, &self.io, &self.mark);
+        }
     }
 
     pub(super) fn submit_full(
@@ -54,19 +65,13 @@ impl PersistService {
         done: Option<mpsc::Sender<()>>,
         err: Arc<Mutex<Option<String>>>,
     ) {
-        if self
-            .tx
-            .send(PersistMsg::FullSnap {
-                dir,
-                snap: Box::new(snap),
-                gen,
-                done,
-                err: err.clone(),
-            })
-            .is_err()
-        {
-            note_persist_err(&err, Err("persist worker stopped".into()), "chats");
-        }
+        self.send(PersistMsg::FullSnap {
+            dir,
+            snap: Box::new(snap),
+            gen,
+            done,
+            err,
+        });
     }
 
     pub(super) fn submit_settings(
@@ -76,18 +81,12 @@ impl PersistService {
         gen: u64,
         err: Arc<Mutex<Option<String>>>,
     ) {
-        if self
-            .tx
-            .send(PersistMsg::Settings {
-                dir,
-                slot,
-                gen,
-                err: err.clone(),
-            })
-            .is_err()
-        {
-            note_persist_err(&err, Err("persist worker stopped".into()), "settings");
-        }
+        self.send(PersistMsg::Settings {
+            dir,
+            slot,
+            gen,
+            err,
+        });
     }
 
     pub(super) fn submit_projects(
@@ -96,17 +95,7 @@ impl PersistService {
         nodes: Vec<ProjectNode>,
         err: Arc<Mutex<Option<String>>>,
     ) {
-        if self
-            .tx
-            .send(PersistMsg::Projects {
-                dir,
-                nodes,
-                err: err.clone(),
-            })
-            .is_err()
-        {
-            note_persist_err(&err, Err("persist worker stopped".into()), "projects");
-        }
+        self.send(PersistMsg::Projects { dir, nodes, err });
     }
 
     pub(super) fn submit_window_cfg(
@@ -115,17 +104,11 @@ impl PersistService {
         cfg: AppConfig,
         err: Arc<Mutex<Option<String>>>,
     ) {
-        if self
-            .tx
-            .send(PersistMsg::WindowCfg {
-                dir,
-                cfg: Box::new(cfg),
-                err: err.clone(),
-            })
-            .is_err()
-        {
-            note_persist_err(&err, Err("persist worker stopped".into()), "window");
-        }
+        self.send(PersistMsg::WindowCfg {
+            dir,
+            cfg: Box::new(cfg),
+            err,
+        });
     }
 
     /// Drain every message queued before this call. Used by tests and `on_exit`.
@@ -163,16 +146,20 @@ fn persist_service_worker(
     mark: Arc<Mutex<PersistMark>>,
 ) {
     while let Ok(msg) = rx.recv() {
-        let err = persist_msg_err(&msg);
-        let what = persist_msg_what(&msg);
-        // One panicked write must not kill the worker; later jobs still run.
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            handle_persist_msg(msg, &io, &mark);
-        }));
-        if result.is_err() {
-            if let Some(err) = err {
-                note_persist_err(&err, Err("persist worker panicked".into()), what);
-            }
+        run_persist_msg(msg, &io, &mark);
+    }
+}
+
+/// One panicked write must not kill the worker (or the caller on fallback).
+fn run_persist_msg(msg: PersistMsg, io: &Arc<Mutex<()>>, mark: &Arc<Mutex<PersistMark>>) {
+    let err = persist_msg_err(&msg);
+    let what = persist_msg_what(&msg);
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        handle_persist_msg(msg, io, mark);
+    }));
+    if result.is_err() {
+        if let Some(err) = err {
+            note_persist_err(&err, Err("persist worker panicked".into()), what);
         }
     }
 }
@@ -266,4 +253,15 @@ fn maybe_panic_for_test() {
     if PANIC_NEXT.swap(false, std::sync::atomic::Ordering::SeqCst) {
         panic!("persist test panic");
     }
+}
+
+/// A service whose worker already exited, to exercise the direct-write fallback.
+#[cfg(test)]
+pub(super) fn dead_persist_service(
+    io: Arc<Mutex<()>>,
+    mark: Arc<Mutex<PersistMark>>,
+) -> PersistService {
+    let (tx, rx) = mpsc::channel();
+    drop(rx);
+    PersistService { tx, io, mark }
 }
