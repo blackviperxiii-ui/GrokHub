@@ -1,0 +1,1 @@
+- Agent: named sealed-app library asks use word/phrase boundaries; read_skill loads frontmatter-less skills while skill_list still filters them.
