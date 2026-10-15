@@ -16485,7 +16485,7 @@ fn quiet_cabin() -> Cabin {
         composer_ghost: ghost::ComposerGhost::default(),
         dock_state: super::dock_ui::default_dock_state(),
         toasts: super::status_toasts::cabin_toasts(),
-        status_toasted: String::new(),
+        status_toasted: Default::default(),
     }
 }
 
