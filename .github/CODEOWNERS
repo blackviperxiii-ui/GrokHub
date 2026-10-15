@@ -11,6 +11,13 @@
 /crates/grokhub-agent/src/harness/egress.rs @blackviperxiii-ui
 /crates/grokhub-agent/src/harness/egress_coverage.rs @blackviperxiii-ui
 /crates/grokhub-agent/src/harness/hard.rs @blackviperxiii-ui
+/crates/grokhub-agent/src/harness/access.rs @blackviperxiii-ui
+/crates/grokhub-agent/src/harness/approval.rs @blackviperxiii-ui
+/crates/grokhub-agent/src/harness/at_rest.rs @blackviperxiii-ui
+/crates/grokhub-agent/src/harness/audit.rs @blackviperxiii-ui
+/crates/grokhub-agent/src/harness/canary.rs @blackviperxiii-ui
+/crates/grokhub-agent/src/harness/park.rs @blackviperxiii-ui
+/crates/grokhub-agent/src/harness/path_d.rs @blackviperxiii-ui
 
 # Host rails + app gate adapters
 /crates/grokhub-core/src/host_safety.rs @blackviperxiii-ui
