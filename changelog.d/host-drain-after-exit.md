@@ -1,1 +1,0 @@
-- Host receipts: after a command exits, drain stdout/stderr until the pump threads finish so late (or non-UTF-8) lines are not raced away under CI load.
