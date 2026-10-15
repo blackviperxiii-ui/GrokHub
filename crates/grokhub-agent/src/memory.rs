@@ -1404,7 +1404,10 @@ mod tests {
 
     #[test]
     fn library_phrase_uses_word_boundaries_not_substrings() {
-        assert!(library_phrase("do i have ace combat 8 installed", "ace combat 8"));
+        assert!(library_phrase(
+            "do i have ace combat 8 installed",
+            "ace combat 8"
+        ));
         assert!(!library_phrase("do i have a place for dinner", "ace"));
         assert!(!library_phrase("have i placed the order", "ace"));
         assert!(library_phrase("own steamlibreview", "steamlibreview"));

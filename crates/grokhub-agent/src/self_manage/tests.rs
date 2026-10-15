@@ -451,7 +451,6 @@ fn read_skill_loads_frontmatter_less_skills_for_modify() {
     let _ = std::fs::remove_dir_all(root);
 }
 
-
 #[test]
 fn connection_tools_use_the_spike5b_writers_and_never_touch_dot_grok() {
     use crate::harness::ChangeKind;
