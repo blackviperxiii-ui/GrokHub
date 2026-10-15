@@ -8,12 +8,20 @@ use grokhub_core::{ProjectKind, ProjectNode};
 use grokhub_core::{UpdateCard, UpdateKind, UpdateStatus};
 use std::sync::Arc;
 
+#[path = "test_support_tests.rs"]
+mod test_support_tests;
+use test_support_tests::*;
+
+#[path = "composer_attach_tests.rs"]
+mod composer_attach_tests;
+
 fn cabin_src() -> String {
     // Windows CI checkouts often embed CRLF via include_str; source-inspection
     // asserts match on \n, so normalize once here.
     concat!(
         include_str!("mod.rs"),
         include_str!("persist.rs"),
+        include_str!("persist_service.rs"),
         include_str!("acp.rs"),
         include_str!("chat_kick.rs"),
         include_str!("palette.rs"),
@@ -239,20 +247,21 @@ fn name_save_does_not_overwrite_a_newer_picture() {
     assert!(current.api_key.is_empty());
 
     let src = cabin_src();
-    let persist = src
-        .split("fn persist_cfg(")
-        .nth(1)
-        .and_then(|s| s.split("fn persist_if_dirty(").next())
-        .expect("persist_cfg");
-    let check = persist.find("cfg_if_current").expect("generation check");
-    let save = persist.find("config::save").expect("save");
+    let persist = fn_src(&src, "persist_cfg");
     assert!(
         persist.contains("publish_cfg")
-            && persist.contains("thread::spawn")
-            && persist.contains("persist_io")
+            && persist.contains("submit_settings")
+            && persist.contains("persist_svc")
             && persist.contains("api_key.clear")
-            && check < save,
-        "a config save must write the latest generation, not the clone it spawned with: {persist}"
+            && !persist.contains("thread::spawn"),
+        "a config save must schedule PersistService with the latest generation: {persist}"
+    );
+    let worker = fn_src(&src, "persist_service_worker");
+    let check = worker.find("cfg_if_current").expect("generation check");
+    let save = worker.find("config::save").expect("save");
+    assert!(
+        worker.contains("io.lock()") && check < save,
+        "PersistService must write the latest generation under persist_io: {worker}"
     );
 }
 
@@ -1281,7 +1290,7 @@ fn skipped_row_advances_by_cached_height_only() {
 
 #[test]
 fn culled_row_does_not_steal_the_next_rows_widget_id() {
-    fn copy_id(skip_earlier: bool, salt: bool) -> egui::Id {
+    fn copy_id(skip_earlier: bool, use_stable_id: bool) -> egui::Id {
         let ctx = egui::Context::default();
         let mut id = egui::Id::NULL;
         let _ = crate::theme::test_pass(&ctx, Default::default(), |ui| {
@@ -1289,13 +1298,13 @@ fn culled_row_does_not_steal_the_next_rows_widget_id() {
                 for i in 0..2 {
                     if skip_earlier && i == 0 {
                         ui.add_space(20.0);
-                        if salt {
+                        if use_stable_id {
                             ui.skip_ahead_auto_ids(1);
                         }
                         continue;
                     }
                     let button = |ui: &mut egui::Ui| ui.button("Copy");
-                    let resp = if salt {
+                    let resp = if use_stable_id {
                         ui.push_id(super::chat_row_id_salt("thr", i), button).inner
                     } else {
                         button(ui)
@@ -1317,7 +1326,7 @@ fn culled_row_does_not_steal_the_next_rows_widget_id() {
     assert_ne!(
         copy_id(false, false),
         copy_id(true, false),
-        "egui auto ids still shift when a row is skipped; the salt is what holds them"
+        "egui auto ids still shift when a row is skipped; the stable id is what holds them"
     );
 }
 
@@ -2485,6 +2494,33 @@ fn grok_login_powers_history_and_imagine() {
             && !persist_usage.contains("self.persist()"),
         "night usage must not freeze the cabin writing usage.json: {persist_usage}"
     );
+    for name in [
+        "persist_loops",
+        "persist_suggestions",
+        "persist_automations",
+        "persist_updates",
+    ] {
+        let body = fn_src(&src, name);
+        assert!(
+            body.contains("persist_io") && body.contains("thread::spawn"),
+            "{name} must take persist_io off the UI thread so FullSnap cannot tear JSON: {body}"
+        );
+    }
+    let poll_err = fn_src(&src, "poll_persist_err");
+    assert!(
+        poll_err.contains("persist_idle_key.clear"),
+        "a failed persist must clear the idle key so the next tick retries: {poll_err}"
+    );
+    let persist_svc_src = include_str!("persist_service.rs");
+    assert!(
+        persist_svc_src.contains("note_persist_err")
+            && persist_svc_src.contains("persist lock poisoned"),
+        "FullSnap must surface a poisoned persist_io instead of claiming disk is clean: {persist_svc_src}"
+    );
+    assert!(
+        !include_str!("change_undo.rs").contains("salt: &str"),
+        "egui id namespace param must not be named salt (CodeQL hard-coded salt FP)"
+    );
     let bg = src
         .split("fn persist_idle_now(")
         .nth(1)
@@ -2534,16 +2570,17 @@ fn grok_login_powers_history_and_imagine() {
         .and_then(|s| s.split("fn persist_snap(").next())
         .expect("persist");
     assert!(
-        persist.contains("snap.secrets = Some") && persist.contains("persist_io"),
-        "foreground persist must write secrets under persist_io: {persist}"
+        persist.contains("snap.secrets = Some") && persist.contains("submit_full"),
+        "foreground persist must hand secrets to PersistService: {persist}"
     );
-    let persist_spawn = persist
-        .find("thread::spawn")
-        .expect("persist must leave the UI thread");
-    let persist_write = persist.find("write_persist_disk").expect("persist writes");
     assert!(
-        persist_spawn < persist_write && persist.contains("io.lock()"),
-        "foreground persist must not freeze the cabin writing threads.json: {persist}"
+        persist.contains("persist_svc") && !persist.contains("thread::spawn"),
+        "foreground persist must leave the UI thread via PersistService: {persist}"
+    );
+    let svc = fn_src(&src, "persist_service_worker");
+    assert!(
+        svc.contains("write_persist_disk_in_order") && svc.contains("io.lock()"),
+        "PersistService worker must take persist_io before threads.json: {svc}"
     );
     assert!(
             persist.contains("persist_idle_key") && persist.contains("persist_idle_now"),
@@ -3162,35 +3199,22 @@ fn periodic_persist_leaves_the_ui_thread() {
             || exit.contains("config::save(&cfg)"),
         "SIGTERM must write the remembered window: {exit}"
     );
-    let flush = src
-        .split("fn flush_window(")
-        .nth(1)
-        .and_then(|s| s.split("fn persist(").next())
-        .expect("flush_window");
-    let flush_spawn = flush
-        .find("thread::spawn")
-        .expect("geom flush must leave the UI thread");
-    let flush_save = flush
-        .find("config::save")
-        .expect("geom flush writes app.json");
+    let flush = fn_src(&src, "flush_window");
     assert!(
-        flush_spawn < flush_save && flush.contains("persist_io"),
+        flush.contains("submit_window_cfg")
+            && flush.contains("persist_svc")
+            && !flush.contains("thread::spawn"),
         "window geom must not freeze the cabin writing app.json: {flush}"
     );
-    let bg = src
-        .split("fn persist_bg(")
-        .nth(1)
-        .and_then(|s| s.split("\n    fn ").next())
-        .expect("persist_bg");
-    let spawn = bg
-        .find("thread::spawn")
-        .expect("persist_bg must leave the UI thread");
-    let save = bg
-        .find("write_persist_disk")
-        .expect("periodic persist must write on the worker");
+    let bg = fn_src(&src, "persist_bg");
     assert!(
-        spawn < save,
-        "periodic persist must write after spawn: {bg}"
+        bg.contains("submit_full") && bg.contains("persist_svc") && !bg.contains("thread::spawn"),
+        "persist_bg must leave the UI thread via PersistService: {bg}"
+    );
+    let svc = include_str!("persist_service.rs").replace("\r\n", "\n");
+    assert!(
+        svc.contains("thread::spawn") && svc.contains("write_persist_disk_in_order"),
+        "PersistService must own the one worker that writes threads.json: {svc}"
     );
     assert!(
         bg.contains("persist_idle_key") && bg.contains("return;"),
@@ -3802,12 +3826,10 @@ fn chat_side_effects_keep_the_origin_thread() {
         .nth(1)
         .and_then(|s| s.split("fn bind_project_id").next())
         .expect("flush_projects");
-    let flush_spawn = flush_p
-        .find("thread::spawn")
-        .expect("folder click must leave the UI thread");
-    let flush_save = flush_p.find("save_projects").expect("save_projects");
     assert!(
-        flush_spawn < flush_save && flush_p.contains("persist_io"),
+        flush_p.contains("submit_projects")
+            && flush_p.contains("persist_svc")
+            && !flush_p.contains("thread::spawn"),
         "folder click must not freeze the cabin writing projects.json: {flush_p}"
     );
     let drop_proj = src
@@ -5052,8 +5074,8 @@ fn chat_side_effects_keep_the_origin_thread() {
         "/sync must slurp SOUL/USER/MEMORY off the UI thread: {sync}"
     );
     assert!(
-        sync.contains("pin_scheduled_dir"),
-        "/sync worker must pin config_dir like other persist workers: {sync}"
+        sync.contains("submit_full") && sync.contains("persist_done"),
+        "/sync must schedule PersistService before egress: {sync}"
     );
     let thread_rows = sync
         .split("let threads = snap")
@@ -5065,7 +5087,7 @@ fn chat_side_effects_keep_the_origin_thread() {
         "/sync must not stamp every thread now or local stale data wins LWW: {thread_rows}"
     );
     assert!(
-        !sync.contains("t.messages.clone()") && sync.contains("write_persist_disk"),
+        !sync.contains("t.messages.clone()") && sync.contains("snap.clone()"),
         "/sync must reuse the persist snap instead of cloning every thread twice: {sync}"
     );
     let push = src
@@ -5922,6 +5944,15 @@ fn composer_stack_drops_approve_slots() {
     assert!(
         bar.contains("rect_filled") && bar.contains("grok_context_line"),
         "the context usage bar stays above the composer: {bar}"
+    );
+    assert!(
+        bar.contains("paint_connectivity_status_chip"),
+        "connectivity chip sits in the context bar above the composer: {bar}"
+    );
+    let chip = fn_src(&src, "paint_connectivity_status_chip");
+    assert!(
+        chip.contains("global_ui_phase") && chip.contains("badge(ui"),
+        "connectivity chip uses the U1 kit badge: {chip}"
     );
     assert!(
         !bar.contains("ghost_pill(ui, \"Compact\")") && !bar.contains("Slash::Compact"),
@@ -7160,11 +7191,11 @@ fn cabin_2109_must_ships() {
     );
     let review = fn_src(&src, "tick_review");
     assert!(review.contains("tick_session_suggestions"), "{review}");
-    let chips = include_str!("../cards.rs");
+    let chips = include_str!("chips.rs");
     let chip_row = chips
         .split("pub fn quick_chip_row(")
         .nth(1)
-        .and_then(|s| s.split("pub fn tab_pill(").next())
+        .and_then(|s| s.split("// quick_chip_row_end").next())
         .expect("quick_chip_row");
     assert!(
         chip_row.contains("with_main_wrap(false)")
@@ -7487,28 +7518,6 @@ fn history_row_titles(cabin: &Cabin) -> Vec<String> {
         .collect()
 }
 
-struct RestoreEnv {
-    key: &'static str,
-    prev: Option<String>,
-}
-
-impl RestoreEnv {
-    fn set(key: &'static str, value: impl AsRef<std::ffi::OsStr>) -> Self {
-        let prev = std::env::var(key).ok();
-        std::env::set_var(key, value);
-        Self { key, prev }
-    }
-}
-
-impl Drop for RestoreEnv {
-    fn drop(&mut self) {
-        match self.prev.take() {
-            Some(value) => std::env::set_var(self.key, value),
-            None => std::env::remove_var(self.key),
-        }
-    }
-}
-
 fn spoke(title: &str, accessed_ms: u64) -> crate::threads::ChatThread {
     let mut thread = crate::threads::ChatThread::new(title, false);
     thread.accessed_ms = accessed_ms;
@@ -7694,30 +7703,6 @@ fn park_fresh_chat_keeps_the_running_reply_and_opens_an_empty_chat() {
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
     let _ = std::fs::remove_dir_all(&root);
-    std::env::remove_var("GROKHUB_CONFIG");
-}
-
-fn isolated_cabin(label: &str) -> (std::path::PathBuf, super::Cabin) {
-    let root = crate::config::test_config_root(label);
-    let _ = std::fs::remove_dir_all(&root);
-    std::env::set_var("GROKHUB_CONFIG", &root);
-    (root, super::Cabin::quiet_for_test())
-}
-
-fn release_isolated(root: &std::path::Path, cabin: super::Cabin) {
-    let io = cabin.persist_io.clone();
-    drop(cabin);
-    let start = std::time::Instant::now();
-    while start.elapsed() < std::time::Duration::from_secs(3) {
-        if io.try_lock().is_ok() {
-            std::thread::sleep(std::time::Duration::from_millis(30));
-            if io.try_lock().is_ok() {
-                break;
-            }
-        }
-        std::thread::sleep(std::time::Duration::from_millis(10));
-    }
-    let _ = std::fs::remove_dir_all(root);
     std::env::remove_var("GROKHUB_CONFIG");
 }
 
@@ -8637,134 +8622,6 @@ fn kick_imagine_local_send_stores_harbor_url() {
     let _ = restore;
 }
 
-// Landed from PR #92.
-/// Isolated cabin. Skips the grok installer and the update probe. Restores env on drop.
-struct QuietCabin {
-    cabin: super::Cabin,
-    boot: QuietBoot,
-    _lock: std::sync::MutexGuard<'static, ()>,
-}
-
-struct QuietBoot {
-    root: std::path::PathBuf,
-    prev_config: Option<std::ffi::OsString>,
-    prev_grok: Option<std::ffi::OsString>,
-    prev_quiet: Option<std::ffi::OsString>,
-    prev_tray: Option<std::ffi::OsString>,
-    restored: bool,
-}
-
-impl QuietBoot {
-    fn apply(label: &str) -> Self {
-        let prev_config = std::env::var_os("GROKHUB_CONFIG");
-        let prev_grok = std::env::var_os("GROKHUB_GROK");
-        let prev_quiet = std::env::var_os("GROKHUB_QUIET_BOOT");
-        let prev_tray = std::env::var_os("GROKHUB_TRAY");
-        let root = crate::config::test_config_root(label);
-        let _ = std::fs::remove_dir_all(&root);
-        std::env::set_var("GROKHUB_CONFIG", &root);
-        std::env::set_var("GROKHUB_GROK", "/no/such/grok-binary-xyz");
-        std::env::set_var("GROKHUB_QUIET_BOOT", "1");
-        std::env::set_var("GROKHUB_TRAY", "0");
-        Self {
-            root,
-            prev_config,
-            prev_grok,
-            prev_quiet,
-            prev_tray,
-            restored: false,
-        }
-    }
-
-    fn restore(&mut self) {
-        if self.restored {
-            return;
-        }
-        self.restored = true;
-        restore_env("GROKHUB_CONFIG", self.prev_config.take());
-        restore_env("GROKHUB_GROK", self.prev_grok.take());
-        restore_env("GROKHUB_QUIET_BOOT", self.prev_quiet.take());
-        restore_env("GROKHUB_TRAY", self.prev_tray.take());
-        let _ = std::fs::remove_dir_all(&self.root);
-    }
-}
-
-fn restore_env(key: &str, prev: Option<std::ffi::OsString>) {
-    match prev {
-        Some(v) => std::env::set_var(key, v),
-        None => std::env::remove_var(key),
-    }
-}
-
-impl Drop for QuietBoot {
-    fn drop(&mut self) {
-        self.restore();
-    }
-}
-
-impl QuietCabin {
-    fn boot(label: &str) -> Self {
-        let lock = crate::config::hold_test_config();
-        let boot = QuietBoot::apply(label);
-        let mut cabin = super::Cabin::quiet_for_test();
-        // `Cabin::new` loaded this isolated config and opened one chat. Keep that
-        // home without the installer, tray, hotkey, or update probe.
-        let mut cfg = crate::config::load();
-        if cfg.device_name.trim().is_empty() {
-            cfg.device_name = crate::config::default_device_name();
-            let _ = crate::config::save(&cfg);
-        }
-        crate::config::ensure_memory_seeds();
-        cabin.mem_name = "SOUL.md".into();
-        cabin.mem_body = crate::config::read_memory(&cabin.mem_name);
-        cabin.mem_cache_at = [crate::config::memory_updated_at("SOUL.md"), 0, 0];
-        cabin.mem_cache_body = [cabin.mem_body.clone(), String::new(), String::new()];
-        let mut threads = crate::threads::load();
-        if threads.is_empty() {
-            let mut thread = crate::threads::ChatThread::new("Chat", false);
-            thread.messages = std::sync::Arc::new(crate::config::load_chat());
-            threads.push(thread);
-        }
-        cabin.messages = threads
-            .first()
-            .map(|t| t.messages.clone())
-            .unwrap_or_else(|| std::sync::Arc::new(Vec::new()));
-        cabin.threads = threads;
-        cabin.thread_idx = 0;
-        cabin.session_mode = grokhub_core::wire::SessionMode::parse(&cfg.session_mode)
-            .unwrap_or(grokhub_core::wire::SessionMode::Chat);
-        cabin.permission_mode = grokhub_core::wire::PermissionMode::parse(&cfg.permission_mode)
-            .unwrap_or(grokhub_core::wire::PermissionMode::Ask);
-        cabin.cfg = cfg.clone();
-        if let Ok(mut slot) = cabin.cfg_slot.lock() {
-            slot.cfg = cfg;
-        }
-        Self {
-            cabin,
-            boot,
-            _lock: lock,
-        }
-    }
-
-    /// Let background config writes finish before the config dir changes.
-    fn settle(&self) {
-        let io = self.cabin.persist_io.clone();
-        std::thread::sleep(std::time::Duration::from_millis(40));
-        for _ in 0..8 {
-            drop(io.lock().ok());
-            std::thread::sleep(std::time::Duration::from_millis(15));
-        }
-    }
-}
-
-impl Drop for QuietCabin {
-    fn drop(&mut self) {
-        self.settle();
-        // The config lock field is still held until this Drop returns.
-        self.boot.restore();
-    }
-}
-
 #[test]
 fn send_from_composer_runs_help_and_refuses_without_grok() {
     let mut quiet = QuietCabin::boot("send-help");
@@ -8888,8 +8745,19 @@ fn composer_and_history_omit_archived_idle_chrome() {
     assert!(
         !archive_row.contains("move to Archived")
             && archive_row.contains("leave History and search")
-            && archive_row.contains("still on disk"),
-        "Settings auto-archive must not promise an Archived drawer: {archive_row}"
+            && archive_row.contains("still on disk")
+            && archive_row.contains("no Archived drawer")
+            && !archive_row.contains("open the chat or Unarchive from its menu"),
+        "Settings auto-archive must not promise an Archived drawer or post-leave recovery: {archive_row}"
+    );
+    let recall = src
+        .split("Slash::Recall(q)")
+        .nth(1)
+        .and_then(|s| s.split("fn kick_model_retry").next())
+        .expect("Recall");
+    assert!(
+        recall.contains("is_archived") && recall.contains("continue"),
+        "/recall must skip archived chats like History search: {recall}"
     );
 }
 
@@ -9043,16 +8911,6 @@ fn apply_board_act_add_files_one_todo() {
     quiet.settle();
 }
 
-fn wait_for(label: &str, mut ready: impl FnMut() -> bool) {
-    for _ in 0..80 {
-        if ready() {
-            return;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(25));
-    }
-    panic!("{label}");
-}
-
 #[test]
 fn apply_plus_ready_image_and_pasted_text() {
     let mut quiet = QuietCabin::boot("plus-ready");
@@ -9097,8 +8955,8 @@ fn apply_plus_ready_image_and_pasted_text() {
         "a file must stay attached, not pasted, got {}",
         cabin.composer
     );
-    assert_eq!(cabin.attach_name.as_deref(), Some("notes.txt"));
-    assert_eq!(cabin.attach_path.as_deref(), Some("notes.txt"));
+    assert_eq!(cabin.attach_tray.len(), 2);
+    assert_eq!(cabin.attach_name.as_deref(), Some("harbor.png"));
     assert_eq!(cabin.status, "File notes.txt — the agent will read it");
     assert!(!cabin.running);
     quiet.settle();
@@ -9445,76 +9303,6 @@ fn clear_profile_picture_removes_the_saved_picture() {
     quiet.settle();
 }
 
-// Landed from PR #93.
-struct IsolatedConfig {
-    prev: Option<std::ffi::OsString>,
-    root: std::path::PathBuf,
-}
-
-impl IsolatedConfig {
-    fn arm(label: &str) -> Self {
-        let root = crate::config::test_config_root(label);
-        let _ = std::fs::remove_dir_all(&root);
-        std::fs::create_dir_all(&root).expect("config root");
-        let prev = std::env::var_os("GROKHUB_CONFIG");
-        std::env::set_var("GROKHUB_CONFIG", &root);
-        Self { prev, root }
-    }
-}
-
-impl Drop for IsolatedConfig {
-    fn drop(&mut self) {
-        match self.prev.take() {
-            Some(v) => std::env::set_var("GROKHUB_CONFIG", v),
-            None => std::env::remove_var("GROKHUB_CONFIG"),
-        }
-        let _ = std::fs::remove_dir_all(&self.root);
-    }
-}
-
-fn wait_file_has(path: &std::path::Path, needle: &str) -> String {
-    let start = std::time::Instant::now();
-    loop {
-        if let Ok(body) = std::fs::read_to_string(path) {
-            if body.contains(needle) {
-                return body;
-            }
-        }
-        if start.elapsed() > std::time::Duration::from_secs(5) {
-            panic!("{} never contained {needle}", path.display());
-        }
-        std::thread::sleep(std::time::Duration::from_millis(15));
-    }
-}
-
-fn wait_tree_contains(root: &std::path::Path, needle: &str) {
-    let start = std::time::Instant::now();
-    loop {
-        if let Ok(rd) = std::fs::read_dir(root) {
-            for ent in rd.filter_map(|e| e.ok()) {
-                let path = ent.path();
-                if !path.is_file() {
-                    continue;
-                }
-                if std::fs::read_to_string(&path)
-                    .ok()
-                    .is_some_and(|body| body.contains(needle))
-                {
-                    return;
-                }
-            }
-        }
-        if start.elapsed() > std::time::Duration::from_secs(5) {
-            panic!("{} never contained {needle}", root.display());
-        }
-        std::thread::sleep(std::time::Duration::from_millis(15));
-    }
-}
-
-fn join_persist(io: &std::sync::Arc<std::sync::Mutex<()>>) {
-    drop(io.lock().unwrap_or_else(|e| e.into_inner()));
-}
-
 #[test]
 fn make_folder_saves_harbor_notes() {
     let _lock = crate::config::hold_test_config();
@@ -9522,7 +9310,7 @@ fn make_folder_saves_harbor_notes() {
     let mut cabin = Cabin::quiet_for_test();
     cabin.make_folder("Harbor notes");
     let saved = wait_file_has(&crate::store::projects_path(), "Harbor notes");
-    join_persist(&cabin.persist_io);
+    join_persist(&cabin.persist_svc);
     let folders: Vec<_> = cabin
         .projects
         .iter()
@@ -9557,7 +9345,7 @@ fn delete_all_history_clears_seeded_chats() {
     cabin.messages = cabin.threads[0].messages.clone();
     cabin.delete_all_history();
     wait_tree_contains(&cfg.root, "Chat");
-    join_persist(&cabin.persist_io);
+    join_persist(&cabin.persist_svc);
     let saved = std::fs::read_to_string(cfg.root.join("threads.json")).expect("threads.json");
     assert!(
         !saved.contains("Pier light") && !saved.contains("Salt lane"),
@@ -9582,6 +9370,81 @@ fn delete_all_history_clears_seeded_chats() {
 }
 
 #[test]
+fn poisoned_persist_io_surfaces_error_and_retries_idle() {
+    let _lock = crate::config::hold_test_config();
+    let cfg = IsolatedConfig::arm("persist-poison");
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.threads = vec![crate::threads::ChatThread::new("Pier", false)];
+    cabin.thread_idx = 0;
+    cabin.messages = std::sync::Arc::new(Vec::new());
+    // Poison the shared mutex the PersistService worker takes before disk I/O.
+    let io = cabin.persist_io.clone();
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _g = io.lock().unwrap();
+        panic!("poison persist_io");
+    }));
+    cabin.persist_idle_key.clear();
+    cabin.persist_bg();
+    let start = std::time::Instant::now();
+    while cabin.persist_rx.is_some() && start.elapsed() < std::time::Duration::from_secs(3) {
+        cabin.poll_persist();
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    cabin.poll_persist_err();
+    assert!(
+        cabin.status.contains("persist lock poisoned") || cabin.status.contains("Could not save"),
+        "poisoned lock must surface via persist_err, got status={status}",
+        status = cabin.status
+    );
+    assert!(
+        cabin.persist_idle_key.is_empty(),
+        "failed write must clear the idle key so the next tick retries"
+    );
+    drop(cfg);
+}
+
+#[test]
+fn persist_worker_survives_a_panicking_job_then_writes() {
+    let _lock = crate::config::hold_test_config();
+    let cfg = IsolatedConfig::arm("persist-panic-survive");
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.threads = vec![crate::threads::ChatThread::new("Panic pier", false)];
+    cabin.thread_idx = 0;
+    cabin.messages = std::sync::Arc::new(vec![("user".into(), "before panic".into())]);
+    // First job panics inside the worker; catch_unwind must keep the thread up.
+    super::persist_panic_next();
+    cabin.persist();
+    cabin.persist_svc.flush();
+    cabin.poll_persist_err();
+    assert!(
+        cabin.status.contains("persist worker panicked") || cabin.status.contains("Could not save"),
+        "panicked job must surface via persist_err, got status={status}",
+        status = cabin.status
+    );
+    // Second job must still land on disk through the same worker.
+    cabin.status.clear();
+    cabin.persist_idle_key.clear();
+    if let Ok(mut slot) = cabin.persist_err.lock() {
+        *slot = None;
+    }
+    cabin.messages = std::sync::Arc::new(vec![("user".into(), "after panic".into())]);
+    cabin.persist();
+    cabin.persist_svc.flush();
+    cabin.poll_persist_err();
+    let threads = std::fs::read_to_string(cfg.root.join("threads.json")).expect("threads.json");
+    assert!(
+        threads.contains("after panic") || threads.contains("Panic pier"),
+        "worker must still write after a panicked job: {threads}"
+    );
+    assert!(
+        !cabin.status.contains("persist worker panicked"),
+        "successful write must not leave the panic status: {status}",
+        status = cabin.status
+    );
+    drop(cfg);
+}
+
+#[test]
 fn an_older_persist_snapshot_never_overwrites_a_newer_one() {
     let _lock = crate::config::hold_test_config();
     let cfg = IsolatedConfig::arm("persist-order");
@@ -9600,10 +9463,10 @@ fn an_older_persist_snapshot_never_overwrites_a_newer_one() {
     assert_eq!((old_gen, new_gen), (1, 2));
     assert!(old.projects.is_some() && new.projects.is_none());
     assert!(new.secrets.is_none());
-    let mark = cabin.persist_mark.clone();
+    let mark = std::sync::Arc::new(std::sync::Mutex::new(PersistMark::default()));
     // The newer worker takes persist_io first, the older one second.
-    write_persist_disk_in_order(&cfg.root, &new, new_gen, &mark);
-    write_persist_disk_in_order(&cfg.root, &old, old_gen, &mark);
+    let _ = write_persist_disk_in_order(&cfg.root, &new, new_gen, &mark);
+    let _ = write_persist_disk_in_order(&cfg.root, &old, old_gen, &mark);
     let threads = std::fs::read_to_string(cfg.root.join("threads.json")).expect("threads.json");
     assert!(threads.contains("\"title\": \"Chat\""), "{threads}");
     assert!(!threads.contains("Pier light"), "{threads}");
@@ -9612,10 +9475,51 @@ fn an_older_persist_snapshot_never_overwrites_a_newer_one() {
     assert!(cfg.root.join("secrets.json").is_file());
     // A second older write of the same generation changes nothing.
     std::fs::remove_file(crate::store::projects_path()).expect("projects");
-    write_persist_disk_in_order(&cfg.root, &old, old_gen, &mark);
+    let _ = write_persist_disk_in_order(&cfg.root, &old, old_gen, &mark);
     assert!(!crate::store::projects_path().exists());
     let again = std::fs::read_to_string(cfg.root.join("threads.json")).expect("threads.json");
     assert_eq!(again, threads);
+    drop(cfg);
+}
+
+#[test]
+fn persist_service_queues_out_of_order_full_snaps() {
+    let _lock = crate::config::hold_test_config();
+    let cfg = IsolatedConfig::arm("persist-svc-order");
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.threads = vec![crate::threads::ChatThread::new("Pier light", false)];
+    cabin.thread_idx = 0;
+    cabin.messages = std::sync::Arc::new(Vec::new());
+    cabin.projects_dirty = true;
+    let mut old = cabin.persist_snap();
+    old.secrets = Some(cabin.secrets.clone());
+    let old_gen = cabin.next_persist_gen();
+    cabin.threads = vec![crate::threads::ChatThread::new("Chat", false)];
+    cabin.projects_dirty = false;
+    let new = cabin.persist_snap();
+    let new_gen = cabin.next_persist_gen();
+    assert_eq!((old_gen, new_gen), (1, 2));
+    // Newer gen first, then older — through the actor, not the free fn.
+    cabin.persist_svc.submit_full(
+        cfg.root.clone(),
+        new,
+        new_gen,
+        None,
+        cabin.persist_err.clone(),
+    );
+    cabin.persist_svc.submit_full(
+        cfg.root.clone(),
+        old,
+        old_gen,
+        None,
+        cabin.persist_err.clone(),
+    );
+    join_persist(&cabin.persist_svc);
+    let threads = std::fs::read_to_string(cfg.root.join("threads.json")).expect("threads.json");
+    assert!(threads.contains("\"title\": \"Chat\""), "{threads}");
+    assert!(!threads.contains("Pier light"), "{threads}");
+    assert!(crate::store::projects_path().is_file());
+    assert!(cfg.root.join("secrets.json").is_file());
     drop(cfg);
 }
 
@@ -13451,8 +13355,8 @@ fn attach_sets_the_chip_and_paste_lands_in_the_composer() {
         },
     );
     assert_eq!(cabin.composer, "hello\nharbor light");
-    assert_eq!(cabin.attach_name.as_deref(), Some("note.txt"));
-    assert_eq!(cabin.attach_path.as_deref(), Some("/tmp/note.txt"));
+    assert_eq!(cabin.attach_tray.len(), 2);
+    assert_eq!(cabin.attach_name.as_deref(), Some("harbor.png"));
     assert_eq!(cabin.status, "File note.txt — the agent will read it");
     assert!(!cabin.running);
     assert!(cabin.messages.is_empty());
@@ -16209,6 +16113,11 @@ fn finish_staged_folder_renames_it() {
 #[allow(clippy::too_many_lines)]
 fn quiet_cabin() -> Cabin {
     let cfg = AppConfig::default();
+    let persist_io = std::sync::Arc::new(std::sync::Mutex::new(()));
+    let persist_svc = PersistService::start(
+        persist_io.clone(),
+        std::sync::Arc::new(std::sync::Mutex::new(PersistMark::default())),
+    );
     Cabin {
         nav: super::Nav::Chat,
         cfg: cfg.clone(),
@@ -16234,11 +16143,11 @@ fn quiet_cabin() -> Cabin {
         last_persist: std::time::Instant::now(),
         persist_idle_key: String::new(),
         persist_rx: None,
-        persist_io: std::sync::Arc::new(std::sync::Mutex::new(())),
+        persist_io,
+        persist_svc,
         setup: super::setup_wizard::SetupWizard::default(),
         persist_gen: 0,
         persist_err: std::sync::Arc::new(std::sync::Mutex::new(None)),
-        persist_mark: std::sync::Arc::new(std::sync::Mutex::new(PersistMark::default())),
         cfg_slot: std::sync::Arc::new(std::sync::Mutex::new(super::CfgSlot { gen: 0, cfg })),
         board: Vec::new(),
         board_title: String::new(),
@@ -16290,6 +16199,7 @@ fn quiet_cabin() -> Cabin {
         automations: Vec::new(),
         grok_loops: Vec::new(),
         updates: Vec::new(),
+        daily_drop_file: None,
         card_prefs: grokhub_core::CardPrefs::default(),
         grok_loop_rx: None,
         night_nl: String::new(),
@@ -16472,6 +16382,10 @@ fn quiet_cabin() -> Cabin {
         attach_name: None,
         attach_path: None,
         attach_kind: None,
+        attach_tray: super::attach_tray::AttachTray::default(),
+        attach_ingest: None,
+        attach_thumb_cache: Vec::new(),
+        attach_pick_rx: None,
         imagine_ref: None,
         plus_menu: None,
         plus_anchor: egui::Pos2::ZERO,
@@ -16523,6 +16437,7 @@ fn quiet_cabin() -> Cabin {
         side_ask_kick: false,
         plan_open: false,
         tool_cards: Vec::new(),
+        panels: super::panels::PanelStore::default(),
         live_blocks: Vec::new(),
         live_keys: Vec::new(),
         turn_log: Vec::new(),
@@ -16567,6 +16482,10 @@ fn quiet_cabin() -> Cabin {
         audio_check: None,
         scroll_to_hooks: false,
         composer_geom: None,
+        composer_ghost: ghost::ComposerGhost::default(),
+        dock_state: super::dock_ui::default_dock_state(),
+        toasts: super::status_toasts::cabin_toasts(),
+        status_toasted: String::new(),
     }
 }
 
@@ -18115,6 +18034,28 @@ fn every_home_card_the_cabin_posts_names_its_item() {
         "Rust 1.99",
     ));
     rows.push((
+        "tick_daily_drop",
+        grokhub_core::pulse_sources::item_card(
+            &grokhub_core::pulse_sources::Ranked {
+                item: grokhub_core::pulse_sources::SourceItem {
+                    title: "Daily drop story".into(),
+                    url: "https://hn.test/daily-drop".into(),
+                    kind: grokhub_core::pulse_sources::SourceKind::HackerNews,
+                    source_name: "Hacker News".into(),
+                    published_ms: now,
+                    summary: "A ranked pick for the overnight drop.".into(),
+                    image: None,
+                    topic: None,
+                    engagement: 0,
+                },
+                score: 80,
+                because: None,
+            },
+            now,
+        ),
+        "Daily drop story",
+    ));
+    rows.push((
         "model_wait_card",
         super::model_wait_ui::model_wait_card(
             &["grok-4.6".into()],
@@ -19289,14 +19230,10 @@ fn dropping_files_says_what_happens() {
         drop_hint_line(true, 1),
         "Drop to use as the Imagine reference"
     );
-    assert!(drop_hint_line(false, 3).ends_with("the first of 3 files"));
+    assert!(drop_hint_line(false, 3).ends_with("3 files"));
     assert_eq!(drop_extra_note(0), None);
-    assert!(drop_extra_note(1)
-        .unwrap()
-        .contains("The other one was left out"));
-    assert!(drop_extra_note(4)
-        .unwrap()
-        .contains("4 others were left out"));
+    assert!(drop_extra_note(1).unwrap().contains("1 more file"));
+    assert!(drop_extra_note(4).unwrap().contains("4 more file"));
     let app = Cabin::quiet_for_test();
     let ctx = egui::Context::default();
     let mut input = egui::RawInput::default();
@@ -20466,274 +20403,6 @@ fn note_cabin_update_landed_flips_only_for_its_steps() {
 }
 
 // ---- Folded Cursor test drafts (#251–#431, base v2.10.54). Each test notes its source PR. ----
-
-// ---- Cursor fold: Composer, plus menu, file pick and attach ----
-
-// Folded from PR #251.
-#[test]
-fn blank_composer_send_stays_off_a_run() {
-    let mut app = Cabin::quiet_for_test();
-    app.chat_tail_frames = 0;
-    app.send_from_composer("   ".into());
-    assert_eq!(app.chat_tail_frames, 3);
-    assert!(app.messages.is_empty());
-    assert!(!app.running);
-    assert!(app.chat_job_thread.is_none());
-    assert!(!app.turn_retried);
-}
-
-// Folded from PR #252.
-#[test]
-fn open_plus_menu_stays_off_a_run() {
-    let mut app = Cabin::quiet_for_test();
-    app.open_plus(PlusTarget::Chat, egui::pos2(4.0, 8.0));
-    assert!(matches!(app.plus_menu, Some(PlusTarget::Chat)));
-    assert_eq!(app.plus_anchor, egui::pos2(4.0, 8.0));
-    assert!(app.plus_ignore_close);
-    assert!(app.file_pick.is_none());
-    assert!(!app.running);
-    assert!(app.chat_job_thread.is_none());
-}
-
-// Folded from PR #256.
-#[test]
-fn cancelled_file_pick_clears_the_status() {
-    let mut app = Cabin::quiet_for_test();
-    app.status = "Harbor".into();
-    app.poll_pick();
-    assert_eq!(app.status, "Harbor");
-    assert!(app.pick_rx.is_none());
-
-    app.status = "Choose a file…".into();
-    let (tx, rx) = std::sync::mpsc::channel::<(PlusTarget, PlusPick)>();
-    drop(tx);
-    app.pick_rx = Some(rx);
-    app.poll_pick();
-    assert!(app.pick_rx.is_none());
-    assert!(app.status.is_empty());
-    assert!(!app.running);
-    assert!(app.chat_job_thread.is_none());
-}
-
-// Folded from PR #258.
-/// A pick already in flight must not start another file dialog or clipboard read.
-#[test]
-fn plus_act_while_busy_stays_off_a_run() {
-    let mut app = Cabin::quiet_for_test();
-    let (_tx, rx) = std::sync::mpsc::channel::<(PlusTarget, PlusPick)>();
-    app.pick_rx = Some(rx);
-    app.run_plus_act(PlusTarget::Chat, PlusAct::Upload);
-    assert_eq!(app.status, "Choose a file…");
-    assert!(app.pick_rx.is_some());
-    assert!(!app.running);
-    assert!(app.chat_job_thread.is_none());
-    let (_tx2, rx2) = std::sync::mpsc::channel::<(PlusTarget, PlusPick)>();
-    app.pick_rx = Some(rx2);
-    app.run_plus_act(PlusTarget::Imagine, PlusAct::Paste);
-    assert_eq!(app.status, "Reading clipboard…");
-    assert!(app.pick_rx.is_some());
-    assert!(!app.running);
-    assert!(app.chat_job_thread.is_none());
-}
-
-// Folded from PR #260.
-#[test]
-fn dropped_read_clears_the_status() {
-    let mut app = Cabin::quiet_for_test();
-    app.status = "Harbor".into();
-    let (tx, rx) = std::sync::mpsc::channel::<(PlusTarget, PlusPick)>();
-    drop(tx);
-    app.pick_rx = Some(rx);
-    app.poll_pick();
-    assert!(app.pick_rx.is_none());
-    assert_eq!(app.status, "Harbor");
-    assert!(!app.running);
-    assert!(app.chat_job_thread.is_none());
-
-    app.status = "Reading clipboard…".into();
-    let (tx, rx) = std::sync::mpsc::channel::<(PlusTarget, PlusPick)>();
-    drop(tx);
-    app.pick_rx = Some(rx);
-    app.poll_pick();
-    assert!(app.pick_rx.is_none());
-    assert!(app.status.is_empty());
-    assert!(!app.running);
-    assert!(app.chat_job_thread.is_none());
-
-    app.status = "Reading file…".into();
-    let (tx, rx) = std::sync::mpsc::channel::<(PlusTarget, PlusPick)>();
-    drop(tx);
-    app.pick_rx = Some(rx);
-    app.poll_pick();
-    assert!(app.pick_rx.is_none());
-    assert!(app.status.is_empty());
-    assert!(!app.running);
-    assert!(app.chat_job_thread.is_none());
-}
-
-// Folded from PR #262.
-#[test]
-fn plus_path_while_busy_stays_off_a_run() {
-    let mut app = Cabin::quiet_for_test();
-    let (_tx, rx) = std::sync::mpsc::channel::<(PlusTarget, PlusPick)>();
-    app.pick_rx = Some(rx);
-    app.status = "Harbor".into();
-    app.start_plus_path(PlusTarget::Chat, std::path::PathBuf::from("harbor.png"));
-    assert_eq!(app.status, "Reading file…");
-    assert!(app.pick_rx.is_some());
-    assert!(!app.running);
-    assert!(app.chat_job_thread.is_none());
-    app.start_plus_path(PlusTarget::Imagine, std::path::PathBuf::from("sunset.png"));
-    assert_eq!(app.status, "Reading file…");
-    assert!(app.pick_rx.is_some());
-    assert!(!app.running);
-    assert!(app.chat_job_thread.is_none());
-}
-
-// Folded from PR #278.
-#[test]
-fn file_list_poll_keeps_the_matching_dir() {
-    let mut app = Cabin::quiet_for_test();
-    app.pick_dir = "/tmp/harbor".into();
-    app.poll_pick_list();
-    assert!(app.pick_list_rx.is_none());
-    assert!(app.pick_cache.is_none());
-
-    let (tx, rx) = std::sync::mpsc::channel();
-    app.pick_list_rx = Some(rx);
-    app.poll_pick_list();
-    assert!(app.pick_list_rx.is_some());
-    assert!(app.pick_cache.is_none());
-    assert_eq!(app.status, "");
-
-    tx.send(("/tmp/other".into(), vec![("a.txt".into(), false)]))
-        .unwrap();
-    app.poll_pick_list();
-    assert!(app.pick_list_rx.is_none());
-    assert!(
-        app.pick_cache.is_none(),
-        "a different dir must not fill the cache"
-    );
-
-    let (tx, rx) = std::sync::mpsc::channel();
-    app.pick_list_rx = Some(rx);
-    tx.send(("/tmp/harbor".into(), vec![("shot.png".into(), false)]))
-        .unwrap();
-    app.poll_pick_list();
-    assert!(app.pick_list_rx.is_none());
-    let (dir, entries) = app
-        .pick_cache
-        .as_ref()
-        .expect("matching dir fills the cache");
-    assert_eq!(dir, "/tmp/harbor");
-    assert_eq!(entries, &vec![("shot.png".to_string(), false)]);
-
-    let (tx, rx) = std::sync::mpsc::channel::<(String, Vec<(String, bool)>)>();
-    drop(tx);
-    app.pick_list_rx = Some(rx);
-    app.poll_pick_list();
-    assert!(app.pick_list_rx.is_none());
-    assert!(
-        app.pick_cache.is_some(),
-        "a dropped list must not clear a filled cache"
-    );
-    assert!(!app.running);
-    assert!(app.chat_job_thread.is_none());
-}
-
-// Folded from PR #333.
-#[test]
-fn clear_chat_attach_drops_pending_files() {
-    let mut cabin = Cabin::quiet_for_test();
-    cabin.status = "Harbor".into();
-    cabin.attach_url = Some("data:image/png;base64,aGFyYm9y".into());
-    cabin.attach_name = Some("harbor.png".into());
-    cabin.attach_path = Some("/tmp/harbor.png".into());
-    cabin.attach_kind = Some(grokhub_core::AttachKind::Image);
-    cabin.clear_chat_attach();
-    assert!(cabin.attach_url.is_none());
-    assert!(cabin.attach_name.is_none());
-    assert!(cabin.attach_path.is_none());
-    assert!(cabin.attach_kind.is_none());
-    assert!(cabin.status.is_empty());
-    assert!(!cabin.running);
-    assert!(cabin.chat_job_thread.is_none());
-}
-
-// Folded from PR #334.
-#[test]
-fn drop_leaving_thread_chrome_clears_edit_state() {
-    let mut cabin = Cabin::quiet_for_test();
-    cabin.running = false;
-    cabin.attach_name = Some("shot.png".into());
-    cabin.attach_url = Some("file://shot.png".into());
-    cabin.attach_path = Some("/tmp/shot.png".into());
-    cabin.attach_kind = Some(grokhub_core::AttachKind::Image);
-    cabin.followup_step = 3;
-    cabin.active_skill_follow = Some("follow".into());
-    cabin.hands_attach = true;
-    cabin.eyes_attach = true;
-    cabin.last_receipt_ok = Some(true);
-    cabin.elicit_draft = "typed".into();
-    cabin.tool_cards.push(grokhub_core::wire::ToolCard {
-        id: "t1".into(),
-        title: "grep".into(),
-        kind: String::new(),
-        status: "completed".into(),
-        detail: String::new(),
-        diff: String::new(),
-        image_data_url: None,
-        raw_input: String::new(),
-    });
-    cabin.live_blocks.push(grokhub_core::LiveBlock {
-        kind: grokhub_core::LiveKind::Say,
-        body: "hello".into(),
-        tool_id: String::new(),
-        tool_title: String::new(),
-        tool_status: String::new(),
-        tool_detail: String::new(),
-        fold_slot: 1,
-    });
-
-    cabin.drop_leaving_thread_chrome();
-
-    assert!(cabin.attach_name.is_none());
-    assert!(cabin.attach_url.is_none());
-    assert!(cabin.attach_path.is_none());
-    assert!(cabin.attach_kind.is_none());
-    assert_eq!(cabin.followup_step, 0);
-    assert!(cabin.active_skill_follow.is_none());
-    assert!(!cabin.hands_attach);
-    assert!(!cabin.eyes_attach);
-    assert!(cabin.last_receipt_ok.is_none());
-    assert!(cabin.elicit_draft.is_empty());
-    assert!(cabin.tool_cards.is_empty());
-    assert!(cabin.live_blocks.is_empty());
-    assert!(!cabin.running);
-    assert!(cabin.chat_job_thread.is_none());
-}
-
-// Folded from PR #413.
-#[test]
-fn drop_hint_line_matches_shipped_wording() {
-    use super::plus::drop_hint_line;
-    assert_eq!(
-        drop_hint_line(false, 1),
-        "Drop to attach to your next message"
-    );
-    assert_eq!(
-        drop_hint_line(true, 1),
-        "Drop to use as the Imagine reference"
-    );
-    assert_eq!(
-        drop_hint_line(false, 3),
-        "Drop to attach to your next message — the first of 3 files"
-    );
-    assert_eq!(
-        drop_hint_line(true, 3),
-        "Drop to use as the Imagine reference — the first of 3 files"
-    );
-}
 
 // ---- Cursor fold: Connectors and Grok Build CLI polls ----
 
@@ -24256,14 +23925,11 @@ fn drop_extra_note_none_for_zero_extras() {
     assert_eq!(drop_extra_note(0), None);
     let one = drop_extra_note(1).expect("singular");
     assert!(
-        one.contains("The other one was left out"),
+        one.contains("1 more file"),
         "one extra uses singular wording: {one}"
     );
     let many = drop_extra_note(4).expect("plural");
-    assert!(
-        many.contains("4 others were left out"),
-        "n>1 extras mention n: {many}"
-    );
+    assert!(many.contains("4 more file"), "n>1 extras mention n: {many}");
 }
 
 // Folded from PR #423.
@@ -28773,6 +28439,7 @@ fn each_background_job_runs_only_from_its_governor_arm() {
         ("Review", "self.tick_review("),
         ("NightPasses", "self.tick_night_passes("),
         ("MemoryRetention", "self.tick_amr_retention("),
+        ("DailyDrop", "self.tick_daily_drop("),
         ("Indexers", "self.tick_indexers("),
     ] {
         assert_eq!(
@@ -28789,7 +28456,7 @@ fn each_background_job_runs_only_from_its_governor_arm() {
     // Every registered kind has exactly one arm, and the pulse reaches them only
     // through the governor's queue.
     let kinds = grokhub_core::Governor::cabin().kinds();
-    assert_eq!(kinds.len(), 12);
+    assert_eq!(kinds.len(), 13);
     for kind in kinds {
         let name = format!("{kind:?}");
         assert_eq!(
@@ -28963,4 +28630,131 @@ fn journal_create_promote_persists_and_slash_opens() {
     );
 
     std::env::remove_var("GROKHUB_CONFIG");
+}
+
+#[test]
+fn g4_show_panel_paints_in_chat_when_enabled() {
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin) = isolated_cabin("g4-panel-chat");
+    cabin.messages = std::sync::Arc::new(vec![("You".into(), "show ci".into())]);
+    let marker = "Panel: CI\n\n{\n  \"panel\": {\n  \"type\": \"ci_status\",\n  \"pr_number\": 756,\n  \"checks\": [{\"name\": \"linux\", \"state\": \"pass\"}],\n  \"actions\": []\n}\n}";
+    assert!(cabin.panels.upsert_from_tool_result("call-756", marker));
+    super::panels::PANELS_UI_ENABLED.store(true, std::sync::atomic::Ordering::Relaxed);
+    let ctx = crate::ui_kit::test_ctx(true);
+    let input = egui::RawInput {
+        screen_rect: Some(egui::Rect::from_min_size(
+            egui::Pos2::ZERO,
+            egui::vec2(900.0, 1200.0),
+        )),
+        ..Default::default()
+    };
+    let out = crate::theme::test_pass(&ctx, input, |ui| {
+        cabin.ui_chat(ui);
+    });
+    let has_pr = out.shapes.iter().any(|c| {
+        if let egui::Shape::Text(t) = &c.shape {
+            t.galley.text().contains("PR #756")
+        } else {
+            false
+        }
+    });
+    assert!(has_pr, "enabled chat should paint PR #756");
+    super::panels::PANELS_UI_ENABLED.store(false, std::sync::atomic::Ordering::Relaxed);
+    let out_off = crate::theme::test_pass(&ctx, Default::default(), |ui| {
+        cabin.ui_chat(ui);
+    });
+    let has_pr_off = out_off.shapes.iter().any(|c| {
+        if let egui::Shape::Text(t) = &c.shape {
+            t.galley.text().contains("PR #756")
+        } else {
+            false
+        }
+    });
+    assert!(!has_pr_off, "disabled chat must not paint the panel");
+    release_isolated(&root, cabin);
+}
+
+#[test]
+fn g4_panel_action_queues_followup_without_tool_dispatch() {
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin) = isolated_cabin("g4-panel-action");
+    assert!(cabin.followup_queue.is_empty());
+    assert!(cabin.tool_cards.is_empty());
+    cabin.queue_panel_actions(vec![super::panels::PanelAction {
+        panel_id: "panel-1".into(),
+        action: "rerun_ci".into(),
+    }]);
+    assert_eq!(
+        cabin.followup_queue,
+        vec!["[panel action] rerun_ci on panel-1".to_string()]
+    );
+    assert!(
+        cabin.tool_cards.is_empty(),
+        "panel actions must not dispatch tools directly"
+    );
+    assert!(!cabin.running);
+    release_isolated(&root, cabin);
+}
+
+#[test]
+fn g4_drain_show_panel_from_pending_queue() {
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin) = isolated_cabin("g4-drain-card");
+    cabin
+        .threads
+        .push(crate::threads::ChatThread::new("Chat", false));
+    cabin.thread_idx = 0;
+    let detail = "{\n  \"panel\": {\n  \"type\": \"ci_status\",\n  \"pr_number\": 42,\n  \"checks\": [],\n  \"actions\": []\n}\n}";
+    cabin.enqueue_show_panel_for_test("tc-1", detail);
+    cabin.drain_show_panel_results();
+    assert_eq!(cabin.panels.len(), 1);
+    // Re-drain must not revive a dismissal or require cloning tool_cards.
+    cabin.panels.dismiss("tc-1");
+    cabin.enqueue_show_panel_for_test("tc-1", detail);
+    cabin.drain_show_panel_results();
+    assert_eq!(cabin.panels.len(), 0);
+    release_isolated(&root, cabin);
+}
+
+#[test]
+fn g4_panels_clear_on_thread_bind() {
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin) = isolated_cabin("g4-thread-panels");
+    let open = cabin.visible_thread_id();
+    cabin.panels.bind_thread(&open);
+    assert!(cabin.panels.upsert_from_tool_result(
+        "c",
+        "{\n  \"panel\": {\n  \"type\": \"ci_status\",\n  \"pr_number\": 1,\n  \"checks\": [],\n  \"actions\": []\n}\n}"
+    ));
+    assert_eq!(cabin.panels.len(), 1);
+    cabin.panels.bind_thread("other-thread");
+    assert!(cabin.panels.is_empty());
+    release_isolated(&root, cabin);
+}
+
+#[test]
+fn g4_drain_defers_show_panel_for_other_thread() {
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin) = isolated_cabin("g4-drain-other");
+    let mut owner_thread = crate::threads::ChatThread::new("Owner", false);
+    owner_thread.id = "owner-thread".into();
+    let mut other = crate::threads::ChatThread::new("Other", false);
+    other.id = "other-visible".into();
+    cabin.threads = vec![owner_thread, other];
+    cabin.thread_idx = 0;
+    let detail = "{\n  \"panel\": {\n  \"type\": \"ci_status\",\n  \"pr_number\": 99,\n  \"checks\": [],\n  \"actions\": []\n}\n}";
+    cabin.enqueue_show_panel_for_thread_for_test("owner-thread", "tc-owner", detail);
+    // User switched tabs mid-turn before drain.
+    cabin.thread_idx = 1;
+    cabin.drain_show_panel_results();
+    assert_eq!(
+        cabin.panels.len(),
+        0,
+        "must not paint owner panels onto the visible other chat"
+    );
+    // Switch back to owner — deferred row should apply.
+    cabin.thread_idx = 0;
+    cabin.drain_show_panel_results();
+    assert_eq!(cabin.panels.len(), 1, "owner chat receives deferred panel");
+    release_isolated(&root, cabin);
 }

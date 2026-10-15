@@ -2,7 +2,7 @@
 
 ## Owns
 - Local-first decision backlog / experiment journal: open questions with options, evidence, next experiment, and statuses Open / Investigating / Ready to decide / Decided / Deferred / Abandoned.
-- Quiet dismissible due nudges and promote into a Workboard Todo (Mission promotion waits on Mission-based OS).
+- Quiet dismissible due nudges and promote into a Workboard Todo (Mission v1 exists; promote-to-mission is not wired).
 ## Quick commands
 - `cargo test -p grokhub-core journal::`
 - `GROKHUB_CONFIG=$(mktemp -d) cargo test -p grokhub-app journal_ -- --test-threads=1`
@@ -15,7 +15,7 @@
 - Keep the UI label **Journal**, never "Decisions" alone — the permission inbox already uses `decisions_waiting`.
 ## What breaks it
 - Using AMR `NodeType::Decision`, `updates.json` Ideas, or `workboard.json` as the primary list store.
-- Inventing a Mission type here instead of coordinating with Mission-based OS.
+- Filing Mission rows from promote — use Workboard Todo until promote-to-mission is wired.
 ## What depends on it
 - `/journal` slash, `Nav::Journal`, Workboards via `promote_to_board` / `file_idea_todo`.
 ## Non-obvious

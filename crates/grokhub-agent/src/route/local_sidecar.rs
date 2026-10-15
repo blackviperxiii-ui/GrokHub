@@ -235,7 +235,7 @@ fn spawn_llama(
 pub fn start(paths: &SidecarPaths) -> Result<Sidecar, String> {
     if !paths.binary.is_file() {
         return Err(format!(
-            "local model binary missing: {}",
+            "local model binary missing: {}. In Settings, use Get engine to download it.",
             paths.binary.display()
         ));
     }
@@ -289,7 +289,7 @@ pub fn health_ok(host: &str, port: u16, token: &str, timeout: Duration) -> bool 
 ///
 /// - `GROKHUB_LLAMA_SERVER`: path to `llama-server`
 /// - `GROKHUB_LOCAL_MODEL`: path to a `.gguf`
-/// - binary else: `{config}/bin/llama-server`
+/// - binary else: `{config}/bin/llama-server`, else `llama-server` on `PATH`
 /// - model else: `model_download::installed` under `~/GrokHub/models` (or
 ///   `{config}/models`), then the first `*.gguf` in those folders
 pub fn resolve_paths(config_dir: &Path) -> Option<SidecarPaths> {
@@ -299,7 +299,8 @@ pub fn resolve_paths(config_dir: &Path) -> Option<SidecarPaths> {
         .or_else(|| {
             let p = config_dir.join("bin").join(llama_server_name());
             p.is_file().then_some(p)
-        })?;
+        })
+        .or_else(|| grokhub_core::runtime_download::find_on_path(llama_server_name()))?;
     let model = std::env::var_os("GROKHUB_LOCAL_MODEL")
         .map(PathBuf::from)
         .filter(|p| p.is_file())
@@ -777,6 +778,39 @@ mod tests {
         assert!(p.binary.ends_with(llama_server_name()));
         assert!(p.model.ends_with("a.gguf"));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn resolve_paths_falls_back_to_path_after_config_bin() {
+        let dir = std::env::temp_dir().join(format!("gh-sidecar-path-{}", std::process::id()));
+        let path_dir = dir.join("pathbin");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("models")).unwrap();
+        std::fs::create_dir_all(&path_dir).unwrap();
+        std::fs::write(path_dir.join(llama_server_name()), b"x").unwrap();
+        std::fs::write(dir.join("models").join("a.gguf"), b"gguf").unwrap();
+        let prev = std::env::var_os("PATH");
+        std::env::set_var("PATH", &path_dir);
+        let p = resolve_paths(&dir).expect("paths");
+        assert!(p.binary.ends_with(llama_server_name()));
+        match prev {
+            Some(v) => std::env::set_var("PATH", v),
+            None => std::env::remove_var("PATH"),
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn missing_binary_error_mentions_get_engine() {
+        let paths = SidecarPaths {
+            binary: PathBuf::from("/no/such/llama-server"),
+            model: PathBuf::from("/m.gguf"),
+        };
+        let err = start(&paths).unwrap_err();
+        assert!(
+            err.contains("Get engine"),
+            "missing binary should name Settings action: {err}"
+        );
     }
 
     #[test]

@@ -320,6 +320,13 @@ pub fn library_intent(user_text: &str) -> bool {
         "steam library",
         "installed app",
         "installed apps",
+        "what's installed",
+        "whats installed",
+        "what is installed",
+        "which apps",
+        "any games",
+        "games on this",
+        "games on my",
         "my library",
         "your library",
         "gaming library",
@@ -328,12 +335,56 @@ pub fn library_intent(user_text: &str) -> bool {
         "what games",
         "which games",
         "my games",
+        "steamapps",
     ];
     if PHRASES.iter().any(|n| q.contains(n)) {
         return true;
     }
+    // "is X installed" / "do I have X installed" without requiring "app".
+    if q.contains("installed")
+        && (library_word(&q, "is")
+            || library_word(&q, "are")
+            || q.contains("do i have")
+            || q.contains("do you have")
+            || q.contains("have i"))
+    {
+        return true;
+    }
+    // Named sealed apps: "do I have ACE COMBAT 8" when the index already knows the title.
+    if named_sealed_app_ask(&q) {
+        return true;
+    }
     // Whole-word "steam" only — never substring-match `upstream` / `downstream`.
     library_word(&q, "steam")
+}
+
+/// True when the ask names a sealed `scope:apps` title (≥4 chars) with have/own/play framing.
+fn named_sealed_app_ask(q: &str) -> bool {
+    let framed = q.contains("do i have")
+        || q.contains("do you have")
+        || q.contains("have i")
+        || library_word(q, "own")
+        || library_word(q, "play")
+        || q.contains("on this machine")
+        || q.contains("on my machine");
+    if !framed {
+        return false;
+    }
+    let index = crate::indexers::ScopeIndex::load(&crate::perm::config_dir());
+    for fact in index.for_scope("apps") {
+        let line = fact.line.trim().to_ascii_lowercase();
+        let name = line
+            .strip_prefix("installed app:")
+            .or_else(|| line.strip_prefix("app:"))
+            .or_else(|| line.strip_prefix("name:"))
+            .unwrap_or(line.as_str())
+            .trim();
+        let needle = name.split(':').next().unwrap_or(name).trim();
+        if needle.len() >= 4 && library_phrase(q, needle) {
+            return true;
+        }
+    }
+    false
 }
 
 /// Alphanumeric token match (word boundaries). `~/.steam/path` still hits
@@ -341,6 +392,26 @@ pub fn library_intent(user_text: &str) -> bool {
 fn library_word(hay: &str, word: &str) -> bool {
     hay.split(|c: char| !c.is_ascii_alphanumeric())
         .any(|tok| tok == word)
+}
+
+/// Contiguous alphanumeric-token match for multi-word titles (word boundaries).
+fn library_phrase(hay: &str, phrase: &str) -> bool {
+    let needles: Vec<&str> = phrase
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|t| !t.is_empty())
+        .collect();
+    if needles.is_empty() {
+        return false;
+    }
+    if needles.len() == 1 {
+        return library_word(hay, needles[0]);
+    }
+    let toks: Vec<&str> = hay
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|t| !t.is_empty())
+        .collect();
+    toks.windows(needles.len())
+        .any(|w| w.iter().copied().eq(needles.iter().copied()))
 }
 
 /// Sealed installed-app (and related scope) lines for a library-shaped ask.
@@ -1332,6 +1403,18 @@ mod tests {
     }
 
     #[test]
+    fn library_phrase_uses_word_boundaries_not_substrings() {
+        assert!(library_phrase(
+            "do i have ace combat 8 installed",
+            "ace combat 8"
+        ));
+        assert!(!library_phrase("do i have a place for dinner", "ace"));
+        assert!(!library_phrase("have i placed the order", "ace"));
+        assert!(library_phrase("own steamlibreview", "steamlibreview"));
+        assert!(!library_phrase("fix the upstream merge", "steam"));
+    }
+
+    #[test]
     fn library_intent_matches_steam_as_a_word_not_a_substring() {
         assert!(!library_intent("fix the upstream merge conflict"));
         assert!(!library_intent("push the downstream branch"));
@@ -1341,6 +1424,9 @@ mod tests {
         assert!(library_intent("my steam"));
         assert!(library_intent("what's on Steam?"));
         assert!(library_intent("look under ~/.steam/steamapps"));
+        assert!(library_intent("what's installed on this machine"));
+        assert!(library_intent("is steamlibreview installed"));
+        assert!(library_intent("any games on this machine"));
         assert!(!library_intent("what is 2+2"));
     }
 

@@ -539,6 +539,7 @@ mod tests {
             stop: &|| false,
             tasks: None,
             owner: None,
+            session: None,
         };
         let made = dispatch(
             &ctx,

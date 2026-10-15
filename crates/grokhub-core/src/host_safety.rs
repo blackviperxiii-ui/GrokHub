@@ -5,9 +5,11 @@ use std::sync::Arc;
 
 fn contains_path_leaf(cmd: &str, leaf: &str) -> bool {
     let cmd = cmd.replace('\\', "/");
-    cmd.split(|ch: char| ch.is_whitespace() || matches!(ch, '"' | '\'' | '=' | ',' | ';'))
+    // `+` splits python concat leftovers (`"/home/j/"+.ssh+"/id_rsa"`) so a
+    // rebuilt leaf is still visible after chr() collapse.
+    cmd.split(|ch: char| ch.is_whitespace() || matches!(ch, '"' | '\'' | '=' | ',' | ';' | '+'))
         .any(|tok| {
-            let t = tok.trim_matches(|ch: char| matches!(ch, '"' | '\''));
+            let t = tok.trim_matches(|ch: char| matches!(ch, '"' | '\'' | '(' | ')'));
             t == leaf
                 || t.ends_with(&format!("/{leaf}"))
                 || t.starts_with(&format!("{leaf}/"))
@@ -301,16 +303,517 @@ fn deobfuscate(cmd: &str) -> String {
     s = expand_shell_assignments(&s);
     s = collapse_string_concats(&s);
     s = collapse_echo_subs(&s);
+    s = collapse_chr_calls(&s);
     s
+}
+
+/// Collapse Python-style `chr(46)` / `chr (46)` / `chr(46.0)` / `chr(0x2e)` /
+/// `chr(0o56)` / `chr(0b101110)` so leaf path checks still fire. Adjacent
+/// `chr()` results joined with `+` are glued.
+fn collapse_chr_calls(cmd: &str) -> String {
+    let mut out = String::with_capacity(cmd.len());
+    let lower = cmd.to_ascii_lowercase();
+    let bytes = lower.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if let Some(after_call) = try_collapse_one_chr(bytes, &lower, i) {
+            let (ch, next_i) = after_call;
+            out.push(ch);
+            i = next_i;
+            // Skip `+` between adjacent chr() / `"ssh"` so `.`+`"ssh"` → `.ssh`.
+            let mut k = i;
+            while k < bytes.len() && bytes[k].is_ascii_whitespace() {
+                k += 1;
+            }
+            if k < bytes.len() && bytes[k] == b'+' {
+                k += 1;
+                while k < bytes.len() && bytes[k].is_ascii_whitespace() {
+                    k += 1;
+                }
+                if looks_like_chr_call(bytes, k) {
+                    i = k;
+                } else if let Some((lit, after)) = take_quoted_literal(bytes, k) {
+                    out.push_str(lit);
+                    i = after;
+                }
+            }
+            continue;
+        }
+        push_utf8_char(cmd, &mut i, &mut out);
+    }
+    out
+}
+
+/// `"ssh"` / `'ssh'` at `i` → `(literal, index_after_closing_quote)`.
+fn take_quoted_literal(bytes: &[u8], i: usize) -> Option<(&str, usize)> {
+    if i >= bytes.len() {
+        return None;
+    }
+    let q = bytes[i];
+    if q != b'\'' && q != b'"' {
+        return None;
+    }
+    let end = bytes[i + 1..]
+        .iter()
+        .position(|&b| b == q)
+        .map(|p| i + 1 + p)?;
+    let lit = std::str::from_utf8(&bytes[i + 1..end]).ok()?;
+    Some((lit, end + 1))
+}
+
+fn looks_like_chr_call(bytes: &[u8], i: usize) -> bool {
+    if i + 3 > bytes.len() || &bytes[i..i + 3] != b"chr" {
+        return false;
+    }
+    if i > 0 && bytes[i - 1].is_ascii_alphanumeric() {
+        return false;
+    }
+    let mut j = i + 3;
+    while j < bytes.len() && bytes[j].is_ascii_whitespace() {
+        j += 1;
+    }
+    j < bytes.len() && bytes[j] == b'('
+}
+
+/// Parse one `chr (…)` / `chr((46))` / `chr(0x_2e)` / `chr(+46)` / `chr(46,)` call.
+fn try_collapse_one_chr(bytes: &[u8], _lower: &str, i: usize) -> Option<(char, usize)> {
+    if !looks_like_chr_call(bytes, i) {
+        return None;
+    }
+    let mut j = i + 3;
+    while j < bytes.len() && bytes[j].is_ascii_whitespace() {
+        j += 1;
+    }
+    // `looks_like_chr_call` already verified `(`
+    j += 1;
+    while j < bytes.len() && bytes[j].is_ascii_whitespace() {
+        j += 1;
+    }
+    // One grouping level: `chr((46))`.
+    let mut grouped = false;
+    if j < bytes.len() && bytes[j] == b'(' {
+        grouped = true;
+        j += 1;
+        while j < bytes.len() && bytes[j].is_ascii_whitespace() {
+            j += 1;
+        }
+    }
+    // Unary plus: `chr(+46)`.
+    if j < bytes.len() && bytes[j] == b'+' {
+        j += 1;
+        while j < bytes.len() && bytes[j].is_ascii_whitespace() {
+            j += 1;
+        }
+    }
+    let mut base = 10u32;
+    if j + 2 <= bytes.len() && bytes[j] == b'0' {
+        match bytes[j + 1] {
+            b'x' | b'X' => {
+                base = 16;
+                j += 2;
+            }
+            b'o' | b'O' => {
+                base = 8;
+                j += 2;
+            }
+            b'b' | b'B' => {
+                base = 2;
+                j += 2;
+            }
+            _ => {}
+        }
+    }
+    // Digits with optional Python underscores, including after the base prefix
+    // (`0x_2e`, `4_6`, `0b10_1110`).
+    let mut digits = String::new();
+    let mut last_was_underscore = false;
+    while j < bytes.len() {
+        let b = bytes[j];
+        let is_digit = match base {
+            16 => b.is_ascii_hexdigit(),
+            8 => matches!(b, b'0'..=b'7'),
+            2 => matches!(b, b'0' | b'1'),
+            _ => b.is_ascii_digit(),
+        };
+        if is_digit {
+            digits.push(b.to_ascii_lowercase() as char);
+            last_was_underscore = false;
+            j += 1;
+            continue;
+        }
+        if b == b'_' {
+            // Allow `_` after base prefix before the first digit (`0x_2e`).
+            if last_was_underscore {
+                return None;
+            }
+            last_was_underscore = true;
+            j += 1;
+            continue;
+        }
+        break;
+    }
+    if digits.is_empty() || last_was_underscore {
+        return None;
+    }
+    // Integer-valued floats: `46.0`, `46.`, `4_6.0` (decimal only).
+    if base == 10 && j < bytes.len() && bytes[j] == b'.' {
+        j += 1;
+        let frac_start = j;
+        while j < bytes.len() && (bytes[j].is_ascii_digit() || bytes[j] == b'_') {
+            if bytes[j] != b'_' && bytes[j] != b'0' {
+                return None;
+            }
+            j += 1;
+        }
+        if j > frac_start && bytes[j - 1] == b'_' {
+            return None;
+        }
+    }
+    while j < bytes.len() && bytes[j].is_ascii_whitespace() {
+        j += 1;
+    }
+    // Trailing comma: `chr(46,)`.
+    if j < bytes.len() && bytes[j] == b',' {
+        j += 1;
+        while j < bytes.len() && bytes[j].is_ascii_whitespace() {
+            j += 1;
+        }
+    }
+    if grouped {
+        if j >= bytes.len() || bytes[j] != b')' {
+            return None;
+        }
+        j += 1;
+        while j < bytes.len() && bytes[j].is_ascii_whitespace() {
+            j += 1;
+        }
+    }
+    if j >= bytes.len() || bytes[j] != b')' {
+        return None;
+    }
+    let n = u32::from_str_radix(&digits, base).ok()?;
+    let ch = char::from_u32(n)?;
+    if !ch.is_ascii() {
+        return None;
+    }
+    Some((ch, j + 1))
+}
+
+/// `echo … | base64 -d | sh` (and decode|bash) rebuilds a forbidden leaf after rails.
+/// Shell sinks are token-matched so `| sha256sum` / `|shuf` / `|shred` stay allowed.
+fn base64_pipe_shell(cmd: &str) -> bool {
+    let c = cmd.to_ascii_lowercase().replace('\\', "/");
+    let has_b64 = c.contains("base64") || c.contains("b64decode");
+    if !has_b64 {
+        return false;
+    }
+    pipes_or_chains_to_shell(&c)
+}
+
+/// True when `|`, `|&`, `;`, newline, or `&&` is followed by a shell token
+/// (`sh` / `bash` / `zsh` / `dash`), optionally as a path basename (`/bin/sh`),
+/// after simple quotes and common wrappers (`env` / `sudo` / `timeout` / …),
+/// skipping wrapper option flags (`-i`, `-n`, `-p`, `--…`). Word-boundary only —
+/// never a prefix of `sha256sum`, `shuf`, `shred`, etc.
+fn pipes_or_chains_to_shell(cmd: &str) -> bool {
+    let bytes = cmd.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if i + 1 < bytes.len()
+            && bytes[i] == b'&'
+            && bytes[i + 1] == b'&'
+            && next_token_is_shell(&cmd[i + 2..])
+        {
+            return true;
+        }
+        if i + 1 < bytes.len() && bytes[i] == b'&' && bytes[i + 1] == b'&' {
+            i += 2;
+            continue;
+        }
+        // bash `|&` pipes stdout+stderr; skip the `&` so the shell sink is seen.
+        if bytes[i] == b'|' {
+            let after = if i + 1 < bytes.len() && bytes[i + 1] == b'&' {
+                i + 2
+            } else {
+                i + 1
+            };
+            if next_token_is_shell(&cmd[after..]) {
+                return true;
+            }
+            i = after;
+            continue;
+        }
+        // `;` and newline are both command separators under `bash -lc`.
+        if (bytes[i] == b';' || bytes[i] == b'\n' || bytes[i] == b'\r')
+            && next_token_is_shell(&cmd[i + 1..])
+        {
+            return true;
+        }
+        i += 1;
+    }
+    false
+}
+
+/// Leading tokens that exec another command — peel them so `| env sh` / `| sudo bash`
+/// / `| exec sh` / `| timeout 5 sh` still count as shell sinks.
+const SHELL_WRAPPERS: &[&str] = &[
+    "env", "sudo", "command", "nice", "nohup", "exec", "timeout", "setsid", "busybox", "unshare",
+    "stdbuf", "ionice", "xargs",
+];
+
+fn is_shell_basename(base: &str) -> bool {
+    matches!(base, "sh" | "bash" | "zsh" | "dash" | "ash" | "ksh")
+}
+
+/// `$SHELL` / `${SHELL}` (command is lowercased before matching).
+fn is_shell_var(rest: &str) -> bool {
+    let rest = rest.trim_start();
+    if let Some(after) = rest.strip_prefix("${shell}") {
+        return after.is_empty()
+            || !after
+                .chars()
+                .next()
+                .is_some_and(|c| c.is_ascii_alphanumeric() || c == '_');
+    }
+    if let Some(after) = rest.strip_prefix("$shell") {
+        return after.is_empty()
+            || !after
+                .chars()
+                .next()
+                .is_some_and(|c| c.is_ascii_alphanumeric() || c == '_');
+    }
+    false
+}
+
+fn next_token_is_shell(rest: &str) -> bool {
+    let mut rest = rest.trim_start();
+    // Peel a short chain of wrappers (`env`, `sudo`, …) before the sink basename.
+    for _ in 0..6 {
+        if rest.is_empty() {
+            return false;
+        }
+        if is_shell_var(rest) {
+            return true;
+        }
+        let Some((tok, after)) = take_cmd_token(rest) else {
+            return false;
+        };
+        let base = tok.rsplit('/').next().unwrap_or(tok);
+        if is_shell_basename(base) {
+            return true;
+        }
+        // `| env -Ssh` lowercases to `-ssh` — shell attached to the flag.
+        if let Some(shell) = tok.strip_prefix("-s") {
+            if is_shell_basename(shell) {
+                return true;
+            }
+        }
+        if !SHELL_WRAPPERS.contains(&base) {
+            return false;
+        }
+        // Skip flags, arity-1 values (`sudo -u root`), and `KEY=VAL` (`env FOO=1 sh`).
+        rest = skip_wrapper_args(base, after);
+        // `timeout [opts] DURATION COMMAND` — peel the duration so `sh` is visible.
+        if base == "timeout" {
+            rest = skip_timeout_duration(rest);
+        }
+    }
+    false
+}
+
+/// Drop leading wrapper args so the sink basename is reached: boolean flags (`-n`),
+/// arity-1 flags + values (`-u root`, `-n 10`), and `NAME=value` assignments.
+fn skip_wrapper_args<'a>(wrapper: &str, rest: &'a str) -> &'a str {
+    let mut rest = rest.trim_start();
+    for _ in 0..12 {
+        if let Some(after) = take_env_assignment(rest) {
+            rest = after;
+            continue;
+        }
+        let Some((tok, after)) = take_cmd_token(rest) else {
+            break;
+        };
+        if !tok.starts_with('-') {
+            break;
+        }
+        // `| env -Ssh` → token `-ssh` after lowercase; leave for next_token_is_shell.
+        if wrapper == "env" {
+            if let Some(shell) = tok.strip_prefix("-s") {
+                if is_shell_basename(shell) {
+                    break;
+                }
+            }
+        }
+        rest = after.trim_start();
+        // `--user=root` arrives as `--user` + `=root` because `=` ends tokens.
+        // `env -S` / `-s` / `--split-string[=…]` must not swallow a following shell.
+        // (Command is lowercased, so `-S` is `-s`.)
+        if let Some(stripped) = rest.strip_prefix('=') {
+            if wrapper == "env" && matches!(tok, "-s" | "--split-string") {
+                rest = stripped.trim_start();
+                break;
+            }
+            rest = skip_one_value(stripped);
+            continue;
+        }
+        if wrapper == "env" && matches!(tok, "-s" | "--split-string") {
+            // Bare `-s` / `--split-string`; next token is often `sh`.
+            break;
+        }
+        if flag_takes_value(wrapper, tok) {
+            rest = skip_one_value(rest);
+        }
+    }
+    rest
+}
+
+fn flag_takes_value(wrapper: &str, flag: &str) -> bool {
+    match wrapper {
+        "sudo" => matches!(
+            flag,
+            "-u" | "-g"
+                | "-C"
+                | "-D"
+                | "-R"
+                | "-T"
+                | "--user"
+                | "--group"
+                | "--close-from"
+                | "--chdir"
+                | "--chroot"
+                | "--other-user"
+        ),
+        "nice" => matches!(flag, "-n" | "--adjustment"),
+        // `-S` / `--split-string` omitted on purpose — their "value" is often `sh`.
+        "env" => matches!(flag, "-u" | "-C" | "--unset" | "--chdir"),
+        "exec" => matches!(flag, "-a" | "--as"),
+        "timeout" => matches!(flag, "-k" | "-s" | "--kill-after" | "--signal"),
+        "stdbuf" => matches!(
+            flag,
+            "-o" | "-e" | "-i" | "--output" | "--error" | "--input"
+        ),
+        "ionice" => matches!(
+            flag,
+            "-c" | "-n" | "-p" | "--class" | "--classdata" | "--pid"
+        ),
+        "xargs" => matches!(
+            flag,
+            "-n" | "-P"
+                | "-s"
+                | "-i"
+                | "-I"
+                | "-E"
+                | "-a"
+                | "-d"
+                | "--max-args"
+                | "--max-procs"
+                | "--max-chars"
+                | "--replace"
+                | "--eof"
+                | "--arg-file"
+                | "--delimiter"
+        ),
+        // `command -p`, `nohup`, `setsid`, `busybox`, `unshare` flags are boolean here.
+        _ => false,
+    }
+}
+
+fn skip_timeout_duration(rest: &str) -> &str {
+    let rest = rest.trim_start();
+    let Some((tok, after)) = take_cmd_token(rest) else {
+        return rest;
+    };
+    if looks_like_duration(tok) {
+        after.trim_start()
+    } else {
+        rest
+    }
+}
+
+fn looks_like_duration(tok: &str) -> bool {
+    let mut chars = tok.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    if !first.is_ascii_digit() {
+        return false;
+    }
+    tok.chars()
+        .all(|c| c.is_ascii_digit() || matches!(c, '.' | 's' | 'm' | 'h' | 'd'))
+}
+
+/// `NAME=value` (possibly empty value) — used by `env FOO=bar sh`.
+fn take_env_assignment(rest: &str) -> Option<&str> {
+    let rest = rest.trim_start();
+    let (name, after) = take_cmd_token(rest)?;
+    let mut chars = name.chars();
+    let first = chars.next()?;
+    if !(first.is_ascii_alphabetic() || first == '_') {
+        return None;
+    }
+    if !chars.all(|ch| ch.is_ascii_alphanumeric() || ch == '_') {
+        return None;
+    }
+    let after = after.trim_start();
+    let after_eq = after.strip_prefix('=')?;
+    Some(skip_one_value(after_eq))
+}
+
+fn skip_one_value(rest: &str) -> &str {
+    let rest = rest.trim_start();
+    if rest.is_empty() {
+        return rest;
+    }
+    match take_cmd_token(rest) {
+        Some((_, after)) => after.trim_start(),
+        None => rest,
+    }
+}
+
+/// Next command token, stripping a matching pair of `'` / `"` when present.
+/// Returns `(token, remainder)`.
+fn take_cmd_token(rest: &str) -> Option<(&str, &str)> {
+    let rest = rest.trim_start();
+    if rest.is_empty() {
+        return None;
+    }
+    let bytes = rest.as_bytes();
+    if bytes[0] == b'\'' || bytes[0] == b'"' {
+        let quote = bytes[0];
+        let end = rest.as_bytes()[1..]
+            .iter()
+            .position(|&b| b == quote)
+            .map(|i| i + 1)?;
+        let tok = &rest[1..end];
+        if tok.is_empty() {
+            return None;
+        }
+        return Some((tok, &rest[end + 1..]));
+    }
+    let tok_end = rest
+        .char_indices()
+        .find(|(_, c)| !c.is_ascii_alphanumeric() && !matches!(c, '.' | '/' | '-' | '_'))
+        .map(|(i, _)| i)
+        .unwrap_or(rest.len());
+    if tok_end == 0 {
+        return None;
+    }
+    Some((&rest[..tok_end], &rest[tok_end..]))
 }
 
 pub fn forbidden_reason(cmd: &str) -> Option<&'static str> {
     let c = cmd.to_ascii_lowercase().replace('\\', "/");
+    if base64_pipe_shell(&c) {
+        return Some("base64|shell rebuild");
+    }
     if let Some(why) = forbidden_on(&c) {
         return Some(why);
     }
     let d = deobfuscate(cmd);
     if d != c {
+        if base64_pipe_shell(&d) {
+            return Some("base64|shell rebuild");
+        }
         if let Some(why) = forbidden_on(&d) {
             return Some(why);
         }
@@ -419,6 +922,333 @@ mod tests {
         assert!(
             forbidden_reason("click \u{201c}Reset zoom\u{201d}").is_none(),
             "curly-quoted ask labels must stay allowed and finish"
+        );
+        assert_eq!(
+            forbidden_reason("cat ~/chr(46)ssh/id_rsa"),
+            Some("forbidden path: ssh keys"),
+            "python chr() must not rebuild .ssh under the leaf check"
+        );
+        assert_eq!(
+            forbidden_reason("echo Y2F0IH4vLnNzaC9pZF9yc2E= | base64 -d | sh"),
+            Some("base64|shell rebuild"),
+            "base64 decode piped to a shell rebuilds a forbidden leaf"
+        );
+        assert_eq!(
+            forbidden_reason("echo Y2F0IH4vLnNzaC9pZF9yc2E= | base64 -d |sh"),
+            Some("base64|shell rebuild"),
+            "tight |sh must still count as a shell sink"
+        );
+        assert_eq!(
+            forbidden_reason("echo Y2F0IH4vLnNzaC9pZF9yc2E= | base64 -d | /bin/sh"),
+            Some("base64|shell rebuild"),
+            "path-qualified | /bin/sh must count as a shell sink"
+        );
+        assert_eq!(
+            forbidden_reason("echo Y2F0IH4vLnNzaC9pZF9yc2E= | base64 -d | /usr/bin/bash"),
+            Some("base64|shell rebuild"),
+            "path-qualified | /usr/bin/bash must count as a shell sink"
+        );
+        assert_eq!(
+            forbidden_reason("echo Y2F0IH4vLnNzaC9pZF9yc2E= | base64 -d && zsh"),
+            Some("base64|shell rebuild"),
+            "&& zsh must count as a shell sink"
+        );
+        assert_eq!(
+            forbidden_reason("echo Y2F0IH4vLnNzaC9pZF9yc2E= | base64 -d ;zsh"),
+            Some("base64|shell rebuild"),
+            ";zsh must count as a shell sink"
+        );
+        assert!(
+            forbidden_reason("echo hello | base64").is_none(),
+            "encode-only base64 without a shell sink must stay allowed"
+        );
+        assert!(
+            forbidden_reason("echo abc | base64 | sha256sum").is_none(),
+            "| sha256sum must not false-positive as | sh"
+        );
+        assert!(
+            forbidden_reason("echo abc | base64 |sha1sum").is_none(),
+            "|sha1sum must not false-positive as |sh"
+        );
+        assert!(
+            forbidden_reason("echo abc | base64 | shuf").is_none(),
+            "| shuf must not false-positive as | sh"
+        );
+        assert!(
+            forbidden_reason("echo abc | base64 | shred -u").is_none(),
+            "| shred must not false-positive as | sh"
+        );
+        assert_eq!(
+            forbidden_reason("echo Y2F0IH4vLnNzaC9pZF9yc2E= | base64 -d | 'sh'"),
+            Some("base64|shell rebuild"),
+            "single-quoted | 'sh' must count as a shell sink"
+        );
+        assert_eq!(
+            forbidden_reason(r#"echo Y2F0IH4vLnNzaC9pZF9yc2E= | base64 -d | "sh""#),
+            Some("base64|shell rebuild"),
+            "double-quoted | \"sh\" must count as a shell sink"
+        );
+        assert_eq!(
+            forbidden_reason("echo Y2F0IH4vLnNzaC9pZF9yc2E= | base64 -d | env sh"),
+            Some("base64|shell rebuild"),
+            "| env sh must count as a shell sink"
+        );
+        assert_eq!(
+            forbidden_reason("echo Y2F0IH4vLnNzaC9pZF9yc2E= | base64 -d | sudo sh"),
+            Some("base64|shell rebuild"),
+            "| sudo sh must count as a shell sink"
+        );
+        assert_eq!(
+            forbidden_reason("echo Y2F0IH4vLnNzaC9pZF9yc2E= | base64 -d | command sh"),
+            Some("base64|shell rebuild"),
+            "| command sh must count as a shell sink"
+        );
+        assert_eq!(
+            forbidden_reason("echo Y2F0IH4vLnNzaC9pZF9yc2E= | base64 -d |& sh"),
+            Some("base64|shell rebuild"),
+            "|& sh must count as a shell sink"
+        );
+        assert_eq!(
+            forbidden_reason("echo Y2F0IH4vLnNzaC9pZF9yc2E= | base64 -d | nice /bin/bash"),
+            Some("base64|shell rebuild"),
+            "| nice /bin/bash must count as a shell sink"
+        );
+        assert_eq!(
+            forbidden_reason("echo Y2F0IH4vLnNzaC9pZF9yc2E= | base64 -d | nohup zsh"),
+            Some("base64|shell rebuild"),
+            "| nohup zsh must count as a shell sink"
+        );
+        assert!(
+            forbidden_reason("echo abc | base64 | env sha256sum").is_none(),
+            "| env sha256sum must stay allowed"
+        );
+        assert_eq!(
+            forbidden_reason("echo Y2F0IH4vLnNzaC9pZF9yc2E= | base64 -d | env -i sh"),
+            Some("base64|shell rebuild"),
+            "| env -i sh must count as a shell sink"
+        );
+        assert_eq!(
+            forbidden_reason("echo Y2F0IH4vLnNzaC9pZF9yc2E= | base64 -d | sudo -n sh"),
+            Some("base64|shell rebuild"),
+            "| sudo -n sh must count as a shell sink"
+        );
+        assert_eq!(
+            forbidden_reason("echo Y2F0IH4vLnNzaC9pZF9yc2E= | base64 -d | command -p sh"),
+            Some("base64|shell rebuild"),
+            "| command -p sh must count as a shell sink"
+        );
+        assert_eq!(
+            forbidden_reason("echo Y2F0IH4vLnNzaC9pZF9yc2E= | base64 -d\nsh"),
+            Some("base64|shell rebuild"),
+            "newline before sh must count as a command separator"
+        );
+        assert_eq!(
+            forbidden_reason("cat ~/chr(0o56)ssh/id_rsa"),
+            Some("forbidden path: ssh keys"),
+            "python octal chr(0o56) must rebuild .ssh"
+        );
+        assert_eq!(
+            forbidden_reason(
+                r#"python3 -c 'open("/home/j/"+chr(46)+chr(115)+chr(115)+chr(104)+"/id_rsa").read()'"#
+            ),
+            Some("forbidden path: ssh keys"),
+            "adjacent chr() joined with + must rebuild .ssh"
+        );
+        assert_eq!(
+            forbidden_reason("echo Y2F0IH4vLnNzaC9pZF9yc2E= | base64 -d | sudo -u root sh"),
+            Some("base64|shell rebuild"),
+            "| sudo -u root sh must count as a shell sink"
+        );
+        assert_eq!(
+            forbidden_reason("echo Y2F0IH4vLnNzaC9pZF9yc2E= | base64 -d | nice -n 10 sh"),
+            Some("base64|shell rebuild"),
+            "| nice -n 10 sh must count as a shell sink"
+        );
+        assert_eq!(
+            forbidden_reason("echo Y2F0IH4vLnNzaC9pZF9yc2E= | base64 -d | env -u HOME sh"),
+            Some("base64|shell rebuild"),
+            "| env -u HOME sh must count as a shell sink"
+        );
+        assert_eq!(
+            forbidden_reason("echo Y2F0IH4vLnNzaC9pZF9yc2E= | base64 -d | exec sh"),
+            Some("base64|shell rebuild"),
+            "| exec sh must count as a shell sink"
+        );
+        assert_eq!(
+            forbidden_reason("echo Y2F0IH4vLnNzaC9pZF9yc2E= | base64 -d | env FOO=bar sh"),
+            Some("base64|shell rebuild"),
+            "| env FOO=bar sh must count as a shell sink"
+        );
+        assert_eq!(
+            forbidden_reason("cat ~/chr(0b101110)ssh/id_rsa"),
+            Some("forbidden path: ssh keys"),
+            "python binary chr(0b101110) must rebuild .ssh"
+        );
+        assert_eq!(
+            forbidden_reason("cat ~/chr (46)ssh/id_rsa"),
+            Some("forbidden path: ssh keys"),
+            "chr with space before ( must rebuild .ssh"
+        );
+        assert_eq!(
+            forbidden_reason("cat ~/chr(46.0)ssh/id_rsa"),
+            Some("forbidden path: ssh keys"),
+            "chr(46.0) integer-valued float must rebuild .ssh"
+        );
+        assert_eq!(
+            forbidden_reason("echo Y2F0IH4vLnNzaC9pZF9yc2E= | base64 -d | dash"),
+            Some("base64|shell rebuild"),
+            "| dash must count as a shell sink"
+        );
+        assert_eq!(
+            forbidden_reason("echo Y2F0IH4vLnNzaC9pZF9yc2E= | base64 -d | /bin/dash"),
+            Some("base64|shell rebuild"),
+            "| /bin/dash must count as a shell sink"
+        );
+        assert_eq!(
+            forbidden_reason("echo Y2F0IH4vLnNzaC9pZF9yc2E= | base64 -d | timeout 5 sh"),
+            Some("base64|shell rebuild"),
+            "| timeout 5 sh must count as a shell sink"
+        );
+        assert_eq!(
+            forbidden_reason("echo Y2F0IH4vLnNzaC9pZF9yc2E= | base64 -d | setsid sh"),
+            Some("base64|shell rebuild"),
+            "| setsid sh must count as a shell sink"
+        );
+        assert_eq!(
+            forbidden_reason("echo Y2F0IH4vLnNzaC9pZF9yc2E= | base64 -d | busybox sh"),
+            Some("base64|shell rebuild"),
+            "| busybox sh must count as a shell sink"
+        );
+        assert_eq!(
+            forbidden_reason("echo Y2F0IH4vLnNzaC9pZF9yc2E= | base64 -d | env -S sh"),
+            Some("base64|shell rebuild"),
+            "| env -S sh must not swallow sh as an arity-1 value"
+        );
+        assert_eq!(
+            forbidden_reason("echo Y2F0IH4vLnNzaC9pZF9yc2E= | base64 -d | env --split-string sh"),
+            Some("base64|shell rebuild"),
+            "| env --split-string sh must not swallow sh"
+        );
+        assert!(
+            forbidden_reason("echo abc | base64 | sha256sum").is_none(),
+            "| sha256sum must stay allowed after dash/timeout peel"
+        );
+        assert_eq!(
+            forbidden_reason("cat ~/chr(4_6)ssh/id_rsa"),
+            Some("forbidden path: ssh keys"),
+            "chr(4_6) underscore literal must rebuild .ssh"
+        );
+        assert_eq!(
+            forbidden_reason("cat ~/chr(0b10_1110)ssh/id_rsa"),
+            Some("forbidden path: ssh keys"),
+            "chr(0b10_1110) must rebuild .ssh"
+        );
+        assert_eq!(
+            forbidden_reason("cat ~/chr(0x2_e)ssh/id_rsa"),
+            Some("forbidden path: ssh keys"),
+            "chr(0x2_e) must rebuild .ssh"
+        );
+        assert_eq!(
+            forbidden_reason("cat ~/chr(+46)ssh/id_rsa"),
+            Some("forbidden path: ssh keys"),
+            "chr(+46) unary plus must rebuild .ssh"
+        );
+        assert_eq!(
+            forbidden_reason("cat ~/chr(46,)ssh/id_rsa"),
+            Some("forbidden path: ssh keys"),
+            "chr(46,) trailing comma must rebuild .ssh"
+        );
+        assert_eq!(
+            forbidden_reason("echo Y2F0IH4vLnNzaC9pZF9yc2E= | base64 -d | unshare sh"),
+            Some("base64|shell rebuild"),
+            "| unshare sh must count as a shell sink"
+        );
+        assert_eq!(
+            forbidden_reason("echo Y2F0IH4vLnNzaC9pZF9yc2E= | base64 -d | stdbuf -oL sh"),
+            Some("base64|shell rebuild"),
+            "| stdbuf -oL sh must count as a shell sink"
+        );
+        assert_eq!(
+            forbidden_reason("echo Y2F0IH4vLnNzaC9pZF9yc2E= | base64 -d | ionice sh"),
+            Some("base64|shell rebuild"),
+            "| ionice sh must count as a shell sink"
+        );
+        assert_eq!(
+            forbidden_reason("echo Y2F0IH4vLnNzaC9pZF9yc2E= | base64 -d | ash"),
+            Some("base64|shell rebuild"),
+            "| ash must count as a shell sink"
+        );
+        assert_eq!(
+            forbidden_reason("echo Y2F0IH4vLnNzaC9pZF9yc2E= | base64 -d | ksh"),
+            Some("base64|shell rebuild"),
+            "| ksh must count as a shell sink"
+        );
+        assert_eq!(
+            forbidden_reason("echo Y2F0IH4vLnNzaC9pZF9yc2E= | base64 -d | busybox ash"),
+            Some("base64|shell rebuild"),
+            "| busybox ash must count as a shell sink"
+        );
+        assert_eq!(
+            forbidden_reason("cat ~/chr(0x_2e)ssh/id_rsa"),
+            Some("forbidden path: ssh keys"),
+            "chr(0x_2e) underscore after base prefix must rebuild .ssh"
+        );
+        assert_eq!(
+            forbidden_reason("cat ~/chr(0o_56)ssh/id_rsa"),
+            Some("forbidden path: ssh keys"),
+            "chr(0o_56) underscore after base prefix must rebuild .ssh"
+        );
+        assert_eq!(
+            forbidden_reason("cat ~/chr(0b_101110)ssh/id_rsa"),
+            Some("forbidden path: ssh keys"),
+            "chr(0b_101110) underscore after base prefix must rebuild .ssh"
+        );
+        assert_eq!(
+            forbidden_reason("cat ~/chr((46))ssh/id_rsa"),
+            Some("forbidden path: ssh keys"),
+            "chr((46)) grouped code point must rebuild .ssh"
+        );
+        assert_eq!(
+            forbidden_reason(r#"cat ~/chr(46)+"ssh"/id_rsa"#),
+            Some("forbidden path: ssh keys"),
+            r#"chr(46)+"ssh" mixed concat must rebuild .ssh"#
+        );
+        assert_eq!(
+            forbidden_reason("echo Y2F0IH4vLnNzaC9pZF9yc2E= | base64 -d | xargs sh"),
+            Some("base64|shell rebuild"),
+            "| xargs sh must count as a shell sink"
+        );
+        assert_eq!(
+            forbidden_reason("echo Y2F0IH4vLnNzaC9pZF9yc2E= | base64 -d | $SHELL"),
+            Some("base64|shell rebuild"),
+            "| $SHELL must count as a shell sink"
+        );
+        assert_eq!(
+            forbidden_reason("echo Y2F0IH4vLnNzaC9pZF9yc2E= | base64 -d | ${SHELL}"),
+            Some("base64|shell rebuild"),
+            "| ${{SHELL}} must count as a shell sink"
+        );
+        assert_eq!(
+            forbidden_reason("echo Y2F0IH4vLnNzaC9pZF9yc2E= | base64 -d | env -Ssh"),
+            Some("base64|shell rebuild"),
+            "| env -Ssh (attached) must count as a shell sink"
+        );
+        assert_eq!(
+            forbidden_reason("echo Y2F0IH4vLnNzaC9pZF9yc2E= | base64 -d | env -S=sh"),
+            Some("base64|shell rebuild"),
+            "| env -S=sh must not swallow sh"
+        );
+        assert!(
+            forbidden_reason("echo abc | base64 | shuf").is_none(),
+            "| shuf must stay allowed after unshare/ash peel"
+        );
+        assert!(
+            forbidden_reason("echo abc | base64 | sha256sum").is_none(),
+            "| sha256sum must stay allowed after xargs/$SHELL peel"
+        );
+        assert!(
+            forbidden_reason("echo abc | base64 | shred").is_none(),
+            "| shred must stay allowed after xargs/$SHELL peel"
         );
     }
 

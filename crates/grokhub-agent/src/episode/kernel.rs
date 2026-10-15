@@ -445,11 +445,6 @@ impl Run<'_, '_> {
     }
 
     fn input(&self) -> Vec<InputItem> {
-        let system = if self.k.system.trim().is_empty() {
-            super::kernel::EPISODE_RULES.to_string()
-        } else {
-            format!("{}\n\n{EPISODE_RULES}", self.k.system)
-        };
         let mut now = format!(
             "Step {} of this episode.\nGoal step: {}\n",
             self.ep.steps + 1,
@@ -461,34 +456,22 @@ impl Run<'_, '_> {
         for park in self.ep.parks.iter().filter(|p| p.waiting) {
             now.push_str(&waiting_line(park));
         }
-        let mut content = Vec::new();
-        match &self.obs {
+        let (step_text, image) = match &self.obs {
             Some(obs) => {
                 now.push_str(&format!("Latest observation:\n{}", obs.line()));
-                content.push(ContentPart::InputText(now));
-                if let Some(img) = &obs.image {
-                    content.push(ContentPart::InputImage(img.clone()));
-                }
+                (now, obs.image.as_deref())
             }
             None => {
                 now.push_str("Latest observation: none yet (take a screenshot).");
-                content.push(ContentPart::InputText(now));
+                (now, None)
             }
-        }
-        vec![
-            InputItem::Message {
-                role: "system".into(),
-                content: vec![ContentPart::InputText(system)],
-            },
-            InputItem::Message {
-                role: "user".into(),
-                content: vec![ContentPart::InputText(self.view.render())],
-            },
-            InputItem::Message {
-                role: "user".into(),
-                content,
-            },
-        ]
+        };
+        crate::prefix_cache::episode_worker_input(
+            self.k.system,
+            &self.view.render(),
+            &step_text,
+            image,
+        )
     }
 
     /// The native tool set the gate allows, minus what needs the run loop
@@ -506,6 +489,7 @@ impl Run<'_, '_> {
     }
 
     fn ask_worker(&mut self) -> Result<crate::client::TurnOutput, String> {
+        tools::bind_deferred_session(&self.ep.chat_id);
         let mut call = ModelCall::xai(
             self.k.model,
             self.k.effort,
@@ -850,6 +834,7 @@ impl Run<'_, '_> {
             stop: &stop,
             tasks: None,
             owner: None,
+            session: Some(&self.ep.chat_id),
         };
         let out = tools::dispatch(&ctx, &call.name, &call.arguments);
         if call.name == "screenshot" {

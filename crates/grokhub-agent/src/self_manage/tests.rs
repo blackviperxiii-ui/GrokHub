@@ -388,6 +388,17 @@ fn skill_disable_and_enable_move_the_folder_and_log_each_move() {
         v1
     );
     assert_eq!(run_with(&ctx, "skill_list", &json!({})).text, "no skills");
+    // Heading-only SKILL.md (no YAML frontmatter) must not appear in skill_list —
+    // the `skill` tool rejects those as unknown skill.
+    let bare = root.join("skills").join("bare-import").join("SKILL.md");
+    std::fs::create_dir_all(bare.parent().unwrap()).unwrap();
+    std::fs::write(&bare, "# Bare Import\n\n## Steps\n1. Do a thing\n").unwrap();
+    assert_eq!(
+        run_with(&ctx, "skill_list", &json!({})).text,
+        "no skills",
+        "skill_list must not advertise frontmatter-less imports"
+    );
+    let _ = std::fs::remove_dir_all(bare.parent().unwrap());
     let back = run_with(&ctx, "skill_enable", &json!({ "name": "board" }));
     assert_eq!(
         back.text,
@@ -411,6 +422,31 @@ fn skill_disable_and_enable_move_the_folder_and_log_each_move() {
             ("delete", "noisy"),
             ("create", "turned back on by Grok")
         ]
+    );
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn read_skill_loads_frontmatter_less_skills_for_modify() {
+    let root = dir("skill-bare-read");
+    let ctx = SelfCtx::new(&root);
+    let bare = root.join("skills").join("bare-import").join("SKILL.md");
+    std::fs::create_dir_all(bare.parent().unwrap()).unwrap();
+    std::fs::write(&bare, "# Bare Import\n\n## Steps\n1. Do a thing\n").unwrap();
+    assert_eq!(
+        run_with(&ctx, "skill_list", &json!({})).text,
+        "no skills",
+        "skill_list still hides frontmatter-less imports"
+    );
+    let mod_bare = run_with(
+        &ctx,
+        "skill_modify",
+        &json!({ "name": "bare-import", "description": "now described" }),
+    );
+    assert!(
+        mod_bare.text.starts_with("changed skill bare-import"),
+        "read_skill must load frontmatter-less skills: {}",
+        mod_bare.text
     );
     let _ = std::fs::remove_dir_all(root);
 }

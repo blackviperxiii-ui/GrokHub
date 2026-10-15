@@ -1,0 +1,1 @@
+- CI: non-release PRs cannot touch version lockstep files without the `release` label (rearch stage 3a).

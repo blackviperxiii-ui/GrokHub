@@ -9,7 +9,7 @@ GrokHub is a desktop assistant powered by Grok, for Windows and Linux. It runs o
 - **Pulse** brings you a personal feed and ideas, things it noticed you might want done.
 - **Automations** run jobs on a schedule, like a weekday summary at 9 AM.
 - **Remembers you.** It learns your preferences over time, and the memory stays on your computer.
-- **Privacy first.** Your chats, memory and keys are stored on your computer.
+- **Privacy first.** Your chats, memory and keys are stored on your computer. See [PRIVACY.md](PRIVACY.md).
 
 ## Get it
 
@@ -26,6 +26,6 @@ Want new features early? On Linux, turn on **Settings → General → Labs → B
 
 Full technical details, build steps and settings reference: [docs/REFERENCE.md](docs/REFERENCE.md).
 
-**Code signing policy:** Windows release binaries may be signed through SignPath — see [docs/CODE_SIGNING.md](docs/CODE_SIGNING.md).
+**Privacy:** [PRIVACY.md](PRIVACY.md). **Code signing policy:** Windows release binaries may be signed through SignPath — see [docs/CODE_SIGNING.md](docs/CODE_SIGNING.md).
 
 License: MIT

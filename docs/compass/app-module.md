@@ -1,20 +1,20 @@
 # Compass: grokhub-app app/ (the Cabin UI)
 
 ## Owns
-- `Cabin`, the eframe app: one struct in `crates/grokhub-app/src/app/mod.rs` plus `impl Cabin` blocks split by page or feature (`chat_ui`, `chat_kick`, `acp`, `settings`, `sidebar`, `pages`, `pulse_ui`, `feed_ui`, `board_ui`, `night`, `harness_ui`, `evidence_ui`, `privacy_ui`, `scope_ui`, `skill_undo`, `background`, `heartbeat_gate`, `native_*`, ...). Each submodule starts with `use super::*;`.
+- `Cabin`, the eframe app: one struct in `crates/grokhub-app/src/app/mod.rs` plus `impl Cabin` blocks split by page or feature (`chat_ui`, `chat_kick`, `acp`, `settings`, `sidebar`, `pages`, `pulse_ui`, `feed_ui`, `board_ui`, `night`, `dock_ui`, `harness_ui`, `evidence_ui`, `privacy_ui`, `scope_ui`, `skill_undo`, `background`, `heartbeat_gate`, `native_*`, ...). Each submodule starts with `use super::*;`.
 - The frame loop (`impl eframe::App for Cabin`: `logic`, `ui`, `on_exit`) and the background job polls it drives.
 ## Quick commands
 - `GROKHUB_CONFIG=$(mktemp -d) cargo test -p grokhub-app app::tests::<name> -- --test-threads=1`
 - `GROKHUB_CONFIG=$(mktemp -d) cargo test -p grokhub-app native_ -- --test-threads=1` (the native engine, sessions, and unattended runs)
 ## Key files
 - `crates/grokhub-app/src/app/mod.rs`: `Cabin` fields, `new`, `quiet_for_test`, the frame loop.
-- `crates/grokhub-app/src/app/tests.rs`: most cabin tests, plus `cabin_src`, `fn_src`, `isolated_cabin`, `release_isolated`.
-- `crates/grokhub-app/src/app/chat_ui.rs` (pane and composer) and `crates/grokhub-app/src/app/chat_kick.rs` (send, then `kick_native_turn`).
-- `crates/grokhub-app/src/app/persist.rs`: off-thread writes behind `persist_io`.
+- `crates/grokhub-app/src/app/tests.rs`: most cabin tests; `test_support_tests.rs` / `composer_attach_tests.rs` load via `#[path]` (stage 4–5).
+- `crates/grokhub-app/src/app/chat_ui.rs` (pane and composer), `chat_kick.rs` (send → `kick_native_turn`), and `dock_ui.rs` (optional egui_dock tabs; `dock.json`; `page_panel`).
+- `crates/grokhub-app/src/app/persist.rs` + `persist_service.rs`: one PersistService worker; FullSnap/settings/projects/window errors → `persist_err` (clears idle key); secrets/OAuth still Stage 7 spawns.
 ## Change recipe
 - New UI state: add a `Cabin` field and initialize it in both `new` and `quiet_for_test`.
 - New behavior: put logic in a pure fn (often in grokhub-core) and unit-test it; keep the egui code thin. Then add a cabin test with `isolated_cabin` and finish with `release_isolated`.
-- Disk work stays off the UI thread: spawn it and poll a channel, as `/recall` and persist do. The one exception is the final `config::save` in `on_exit`. Settings → Behavior self-review rows paint from `harness.self_review.file` / `.history` (filled by `ensure_self_review_file` / `history_versions_now`); writers go through `mutate_self_review_file` and clear `.history` when a version changes. Settings → Cabin defaults / Permissions provider rows paint from `harness.router.providers.list` / `.model_choices` (`ensure_providers`); writers call `invalidate_providers`. Pulse Feed thumbs read+decode cached `pulse-images/` files off-thread (`kick_pulse_decode` / `take_pulse_rgba`), same gate shape as Eyes / Imagine stills. Short `request_repaint_after` timers (palette, Pulse crossfade, Permissions, folder pick, Background sub-minute countdowns) only schedule while a search/dialog/keyring wait is in flight, a crossfade is mid-motion (`motion_ok` + mid `tab_t`), or a Background next-run is under a minute; idle pages request none.
+- Disk work stays off the UI thread: `persist_svc.submit_*` (and `dock.json` under `persist_io`); `status_toasts.rs` mirrors status. Settings → Behavior self-review rows paint from `harness.self_review.file` / `.history`; writers go through `mutate_self_review_file`. Settings → Cabin defaults / Permissions provider rows paint from `harness.router.providers.list` / `.model_choices` (`ensure_providers`); writers call `invalidate_providers`. Pulse Feed thumbs decode off-thread (`kick_pulse_decode` / `take_pulse_rgba`). Short `request_repaint_after` timers only while a wait/crossfade/Background sub-minute countdown is in flight.
 ## What breaks it
 - Growing the `ComposerStackSlot::Pill` arm in `chat_ui.rs`: `chat_composer_pins_stop_on_the_right` reads a fixed 15,000-byte window after it (`CLAUDE.md`). Move code into helpers.
 - Moving a fn between files or renaming it: `fn_src` finds `fn name(` in `cabin_src()` (a fixed list of submodules) and ends at the next same-indent fn, and many tests assert on that slice.
@@ -24,11 +24,11 @@
 ## What depends on it
 - `crates/grokhub-app/src/main.rs` launches it for the window and `--agent` (tray) modes.
 ## Non-obvious
+- G4/SD2/#712: `show_panel` queues with owning thread id (drain only when visible); Save-as-skill refuses to clobber Extracting/Draft; archived chats leave History+`/recall` (no drawer).
 - `/sync` with no paired computer only posts `SYNC_NO_PEERS` (no card, no egress line). Otherwise `gate_hub_sync` (hard Send card without a grant) runs before `run_hub_sync`, and `poll_sync` posts the result line. Tests call `pair_test_peer` and grant `HUB_DEST` with `UserClick::from_click` first. A locked keyring (`private_lock`) stops `/sync` before any card, with the short per-OS next step (`lock_next_step_short`).
 - `/skills undo` and `/skills restore` act only while `send_from_composer` holds `typed_send`; from any other send they post the `/skills changes` bubble, whose rows (`paint_skill_undo_rows`, pointer click) do the undo. Writers call `save_skill_logged`, and `apply_review_skill_patches` skips a patch the user undid (`undone_by_user`).
-- Chat rows come from `visible_chat` (`crates/grokhub-core/src/chat_view.rs`). Only `ChatKind::Thought` takes the thought frame and fold; a cabin result is `ChatKind::Result` and paints with `paint_result_bubble`. Settings group headings use `section_heading` (`SECTION_HEAD_GAP` above).
-- `cabin_src()` does not include every submodule (for example `harness_ui.rs`, `feed_ui.rs`, `pulse_ui.rs`); those tests `include_str!` the file directly.
-- `on_exit` stops background native runs (`kill_bg_runs`) and waits on `persist_io` because two writers of `app.json` share one temp file.
+- Chat rows come from `visible_chat` (`crates/grokhub-core/src/chat_view.rs`). Only `ChatKind::Thought` takes the thought frame and fold; a cabin result is `ChatKind::Result` and paints with `paint_result_bubble`. Settings group headings use `section_heading` (`SECTION_HEAD_GAP` above). `cabin_src()` omits some submodules (`harness_ui`, `feed_ui`, `pulse_ui`); those tests `include_str!` the file.
+- `on_exit` stops background native runs (`kill_bg_runs`), flushes PersistService, then waits on `persist_io` because two writers of `app.json` share one temp file.
 - The composer glow and Always ring timings come from `GLOW_SETTLE_SECS` / `ALWAYS_SETTLE_SECS` in grokhub-core, and motion is skipped when `motion_ok` is false (AGENTS.md UI theme).
 - `cabin_signed_in` reads only the cabin's own OAuth in `secrets.json` (`cabin_signed_in_false_when_idle`), so a Grok CLI logged in under HOME does not change cabin tests. `isolated_cabin` only pins config, so isolate HOME too for tests that touch the user's files.
 ## See also

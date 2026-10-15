@@ -817,103 +817,104 @@ impl Cabin {
             || self.palette_open
             || self.shortcuts_open
             || self.confirm.as_ref().is_some_and(|c| c.paints_overlay());
-        egui::CentralPanel::default()
-            .frame(
+        let frame = egui::Frame::NONE
+            .fill(crate::theme::bg())
+            .inner_margin(egui::Margin::same(24));
+        let _ = super::dock_ui::page_panel(ui, self.cfg.dock_panels, frame, |ui| {
+            if crate::cards::page_header(ui, "Workboards", "New card") {
+                self.board_edit = None;
+                self.board_title.clear();
+                self.board_notes.clear();
+                self.board_link = false;
+                self.board_compose = true;
+            }
+            crate::cards::help_text(
+                    ui,
+                    "Tasks from your chats and the ones you add, by status. Click a card to open it and talk to the agent, click its title or press Esc to fold it, and drag it to move it.",
+                );
+            ui.add_space(12.0);
+            // The same needs-attention line and decision rows as Home (Spike-1b).
+            if self.decisions_waiting() > 0 {
+                self.paint_inbox(ui);
+                ui.add_space(12.0);
+            }
+            if self.board_compose {
                 egui::Frame::NONE
-                    .fill(crate::theme::bg())
-                    .inner_margin(egui::Margin::same(24)),
-            )
-            .show(ui, |ui| {
-                if crate::cards::page_header(ui, "Workboards", "New card") {
+                    .fill(crate::theme::elevated())
+                    .corner_radius(crate::theme::CARD_RADIUS)
+                    .stroke(egui::Stroke::new(1.0_f32, crate::theme::border()))
+                    .inner_margin(egui::Margin::same(14))
+                    .show(ui, |ui| {
+                        ui.add(
+                            egui::TextEdit::singleline(&mut self.board_title)
+                                .hint_text(crate::theme::hint("Card title"))
+                                .desired_width(f32::INFINITY)
+                                .frame(
+                                    egui::Frame::NONE.inner_margin(egui::Margin::symmetric(4, 2)),
+                                ),
+                        );
+                        ui.add_space(8.0);
+                        ui.add(
+                            egui::TextEdit::multiline(&mut self.board_notes)
+                                .hint_text(crate::theme::hint("Notes"))
+                                .desired_width(f32::INFINITY)
+                                .desired_rows(3)
+                                .frame(
+                                    egui::Frame::NONE.inner_margin(egui::Margin::symmetric(4, 2)),
+                                ),
+                        );
+                        ui.add_space(8.0);
+                        ui.checkbox(&mut self.board_link, "Link current chat");
+                        ui.add_space(8.0);
+                        ui.horizontal(|ui| {
+                            let save = if self.board_edit.is_some() {
+                                "Save"
+                            } else {
+                                "Add"
+                            };
+                            if crate::cards::white_pill(ui, save)
+                                && !self.board_title.trim().is_empty()
+                            {
+                                act = Some(if let Some(id) = self.board_edit.clone() {
+                                    BoardAct::Save(id)
+                                } else {
+                                    BoardAct::Add
+                                });
+                            }
+                            if crate::cards::ghost_pill(ui, "Cancel") {
+                                self.board_compose = false;
+                                self.board_edit = None;
+                                self.board_title.clear();
+                                self.board_notes.clear();
+                                self.board_link = false;
+                            }
+                        });
+                    });
+                ui.add_space(16.0);
+            }
+            // With no live card, the empty tile is the whole board: no row of "—" columns.
+            let board_empty = self.board.iter().all(|c| c.status.column().is_none());
+            if board_empty {
+                if crate::cards::empty_prompt_tile(
+                    ui,
+                    crate::icons::TileIcon::Board,
+                    "No cards yet",
+                    "A chat run files a card here, or click to add one.",
+                ) && !self.board_compose
+                {
                     self.board_edit = None;
                     self.board_title.clear();
                     self.board_notes.clear();
                     self.board_link = false;
                     self.board_compose = true;
                 }
-                crate::cards::help_text(
-                    ui,
-                    "Tasks from your chats and the ones you add, by status. Click a card to open it and talk to the agent, click its title or press Esc to fold it, and drag it to move it.",
-                );
                 ui.add_space(12.0);
-                // The same needs-attention line and decision rows as Home (Spike-1b).
-                if self.decisions_waiting() > 0 {
-                    self.paint_inbox(ui);
-                    ui.add_space(12.0);
-                }
-                if self.board_compose {
-                    egui::Frame::NONE
-                        .fill(crate::theme::elevated())
-                        .corner_radius(crate::theme::CARD_RADIUS)
-                        .stroke(egui::Stroke::new(1.0_f32, crate::theme::border()))
-                        .inner_margin(egui::Margin::same(14))
-                        .show(ui, |ui| {
-                            ui.add(
-                                egui::TextEdit::singleline(&mut self.board_title)
-                                    .hint_text(crate::theme::hint("Card title"))
-                                    .desired_width(f32::INFINITY)
-                                    .frame(egui::Frame::NONE.inner_margin(egui::Margin::symmetric(4, 2))),
-                            );
-                            ui.add_space(8.0);
-                            ui.add(
-                                egui::TextEdit::multiline(&mut self.board_notes)
-                                    .hint_text(crate::theme::hint("Notes"))
-                                    .desired_width(f32::INFINITY)
-                                    .desired_rows(3)
-                                    .frame(egui::Frame::NONE.inner_margin(egui::Margin::symmetric(4, 2))),
-                            );
-                            ui.add_space(8.0);
-                            ui.checkbox(&mut self.board_link, "Link current chat");
-                            ui.add_space(8.0);
-                            ui.horizontal(|ui| {
-                                let save = if self.board_edit.is_some() {
-                                    "Save"
-                                } else {
-                                    "Add"
-                                };
-                                if crate::cards::white_pill(ui, save)
-                                    && !self.board_title.trim().is_empty()
-                                {
-                                    act = Some(if let Some(id) = self.board_edit.clone() {
-                                        BoardAct::Save(id)
-                                    } else {
-                                        BoardAct::Add
-                                    });
-                                }
-                                if crate::cards::ghost_pill(ui, "Cancel") {
-                                    self.board_compose = false;
-                                    self.board_edit = None;
-                                    self.board_title.clear();
-                                    self.board_notes.clear();
-                                    self.board_link = false;
-                                }
-                            });
-                        });
-                    ui.add_space(16.0);
-                }
-                // With no live card, the empty tile is the whole board: no row of "—" columns.
-                let board_empty = self.board.iter().all(|c| c.status.column().is_none());
-                if board_empty {
-                    if crate::cards::empty_prompt_tile(
-                        ui,
-                        crate::icons::TileIcon::Board,
-                        "No cards yet",
-                        "A chat run files a card here, or click to add one.",
-                    ) && !self.board_compose
-                    {
-                        self.board_edit = None;
-                        self.board_title.clear();
-                        self.board_notes.clear();
-                        self.board_link = false;
-                        self.board_compose = true;
-                    }
-                    ui.add_space(12.0);
-                }
-                let dragging = egui::DragAndDrop::has_payload_of_type::<BoardDrag>(ui.ctx());
-                let from = |board: &[BoardCard], drag: &BoardDrag| {
-                    board.iter().find(|c| c.id == drag.0).map(|c| c.status)
-                };
-                egui::ScrollArea::vertical()
+            }
+            let dragging = egui::DragAndDrop::has_payload_of_type::<BoardDrag>(ui.ctx());
+            let from = |board: &[BoardCard], drag: &BoardDrag| {
+                board.iter().find(|c| c.id == drag.0).map(|c| c.status)
+            };
+            egui::ScrollArea::vertical()
                     .id_salt("workboards")
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
@@ -1088,7 +1089,7 @@ impl Cabin {
                             }
                         }
                     });
-            });
+        });
         // Only a click opens a card; hover does nothing. A drag folds it at once.
         let dragging = egui::DragAndDrop::has_payload_of_type::<BoardDrag>(&ctx);
         super::board_ui::fold_board_on_drag(&mut self.board_view, dragging);
@@ -1283,9 +1284,10 @@ impl Cabin {
 
     pub(super) fn ui_skills(&mut self, ui: &mut egui::Ui) {
         self.ensure_native_listing();
-        egui::CentralPanel::default()
-            .frame(egui::Frame::NONE.fill(crate::theme::bg()).inner_margin(egui::Margin::same(24)))
-            .show(ui, |ui| {
+        let frame = egui::Frame::NONE
+            .fill(crate::theme::bg())
+            .inner_margin(egui::Margin::same(24));
+        let _ = super::dock_ui::page_panel(ui, self.cfg.dock_panels, frame, |ui| {
             if crate::cards::page_header(ui, "Skills", "Refresh") {
                 self.native_listing_cwd.clear();
                 self.ensure_native_listing();

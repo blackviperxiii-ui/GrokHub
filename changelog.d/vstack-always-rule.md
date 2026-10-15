@@ -1,0 +1,1 @@
+- Agent tooling: always-apply `.cursor/rules/vstack.mdc` plus AGENTS.md/CLAUDE.md line: always use vstack skills (viper-mode first), never pstack.

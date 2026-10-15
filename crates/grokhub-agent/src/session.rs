@@ -898,7 +898,7 @@ fn parse_record(value: &Value) -> Option<Record> {
                 output_tokens: u64_field(value, "output_tokens"),
                 reasoning_tokens: u64_field(value, "reasoning_tokens"),
                 cost_in_usd_ticks: i64_field(value, "cost_in_usd_ticks"),
-                cached_tokens: 0,
+                cached_tokens: u64_field(value, "cached_tokens"),
             },
             meter: string_field(value, "meter"),
         }),
@@ -1004,6 +1004,7 @@ fn usage_json(usage: &Usage, meter: &str) -> Value {
         "output_tokens": usage.output_tokens,
         "reasoning_tokens": usage.reasoning_tokens,
         "cost_in_usd_ticks": usage.cost_in_usd_ticks,
+        "cached_tokens": usage.cached_tokens,
         "meter": meter,
     })
 }

@@ -102,6 +102,12 @@ impl Control {
     pub fn cancel(&self) {
         self.0.store(CANCEL, Ordering::SeqCst);
     }
+    pub fn paused(&self) -> bool {
+        self.state() == PAUSE
+    }
+    pub fn cancelled(&self) -> bool {
+        self.state() == CANCEL
+    }
     fn state(&self) -> u8 {
         self.0.load(Ordering::SeqCst)
     }
@@ -232,7 +238,8 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
     hex::encode(Sha256::digest(bytes))
 }
 
-fn sha256_file(path: &Path) -> std::io::Result<String> {
+/// Lowercase hex SHA-256 of a file on disk (streaming).
+pub fn sha256_file(path: &Path) -> std::io::Result<String> {
     let mut f = File::open(path)?;
     let mut h = Sha256::new();
     let mut buf = vec![0u8; CHUNK];
