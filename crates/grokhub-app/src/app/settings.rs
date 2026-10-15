@@ -1015,7 +1015,7 @@ impl Cabin {
                                                             );
                                                             ui.label(
                                                                 egui::RichText::new(
-                                                                    "White/gray Cua-like path stub. Full desktop agent comes later.",
+                                                                    "White/gray cursor-motion preview only (not the desktop-agent path).",
                                                                 )
                                                                 .size(crate::theme::FONT_TIP)
                                                                 .color(crate::theme::muted()),
