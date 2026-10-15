@@ -340,8 +340,22 @@ pub fn library_intent(user_text: &str) -> bool {
     if PHRASES.iter().any(|n| q.contains(n)) {
         return true;
     }
-    // "is X installed" / "do I have X installed" without requiring "app".
+    // "is the app installed" / "do I have any games installed": needs an
+    // app/game noun so "is the patch installed" stays out. A named sealed app
+    // is covered by `named_sealed_app_ask` below.
+    const LIBRARY_NOUNS: &[&str] = &[
+        "app",
+        "apps",
+        "application",
+        "applications",
+        "game",
+        "games",
+        "program",
+        "programs",
+        "software",
+    ];
     if q.contains("installed")
+        && LIBRARY_NOUNS.iter().any(|n| library_word(&q, n))
         && (library_word(&q, "is")
             || library_word(&q, "are")
             || q.contains("do i have")
@@ -365,6 +379,7 @@ fn named_sealed_app_ask(q: &str) -> bool {
         || q.contains("have i")
         || library_word(q, "own")
         || library_word(q, "play")
+        || (q.contains("installed") && (library_word(q, "is") || library_word(q, "are")))
         || q.contains("on this machine")
         || q.contains("on my machine");
     if !framed {
@@ -1412,6 +1427,10 @@ mod tests {
         assert!(!library_phrase("have i placed the order", "ace"));
         assert!(library_phrase("own steamlibreview", "steamlibreview"));
         assert!(!library_phrase("fix the upstream merge", "steam"));
+        assert!(!library_phrase("do i have to determine this", "term"));
+        assert!(!library_phrase("do i have my codebase", "code"));
+        assert!(library_phrase("do i have term", "term"));
+        assert!(library_phrase("do i have my code", "code"));
     }
 
     #[test]
@@ -1425,7 +1444,11 @@ mod tests {
         assert!(library_intent("what's on Steam?"));
         assert!(library_intent("look under ~/.steam/steamapps"));
         assert!(library_intent("what's installed on this machine"));
-        assert!(library_intent("is steamlibreview installed"));
+        assert!(library_intent("is the app installed"));
+        assert!(library_intent("do i have any games installed"));
+        assert!(!library_intent("is the patch installed"));
+        assert!(!library_intent("is the driver installed correctly"));
+        assert!(!library_intent("have i installed the update"));
         assert!(library_intent("any games on this machine"));
         assert!(!library_intent("what is 2+2"));
     }
