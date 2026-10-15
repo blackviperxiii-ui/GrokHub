@@ -869,7 +869,7 @@ pub struct Cabin {
     /// In-app toasts (egui-notify) for Saved / finished / error status.
     toasts: egui_notify::Toasts,
     /// Last `status` already mirrored into `toasts` (dedupe).
-    status_toasted: String,
+    status_toasted: status_toasts::StatusToastState,
 }
 
 #[cfg(test)]
@@ -1430,7 +1430,7 @@ impl Cabin {
             composer_ghost: ghost::ComposerGhost::default(),
             dock_state: dock_ui::load_dock_state(),
             toasts: status_toasts::cabin_toasts(),
-            status_toasted: String::new(),
+            status_toasted: Default::default(),
         };
         steps.mark("startup:new:fields");
         if !quiet {
@@ -1886,7 +1886,7 @@ impl Cabin {
             composer_ghost: ghost::ComposerGhost::default(),
             dock_state: dock_ui::default_dock_state(),
             toasts: status_toasts::cabin_toasts(),
-            status_toasted: String::new(),
+            status_toasted: Default::default(),
         }
     }
 

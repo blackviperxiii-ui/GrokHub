@@ -5,7 +5,7 @@
 
 use eframe::egui;
 use egui_notify::{Anchor, Toasts};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 const TOAST_SECS: u64 = 4;
 /// Side inset from the screen edge (egui-notify default).
@@ -64,22 +64,83 @@ fn is_status_error(t: &str) -> bool {
         || lower.starts_with("refusing")
 }
 
-/// When `status` changes to a toast-worthy line, enqueue one toast.
-pub(super) fn sync_status_toasts(toasts: &mut Toasts, last: &mut String, status: &str) {
-    if status == last.as_str() {
+/// Identical toasts (same kind and text) raised within this window collapse
+/// into the newest toast instead of stacking.
+const DEDUPE_WINDOW: Duration = Duration::from_secs(TOAST_SECS);
+
+/// The most recently raised toast, kept so a repeat can fold into it.
+#[derive(Debug)]
+struct RecentToast {
+    kind: StatusToastKind,
+    text: String,
+    at: Instant,
+    count: u32,
+}
+
+/// Per-app toast bookkeeping: last seen status plus the latest raised toast.
+#[derive(Debug, Default)]
+pub(super) struct StatusToastState {
+    last_status: String,
+    recent: Option<RecentToast>,
+}
+
+impl StatusToastState {
+    /// Count for this toast: 1 if it is new, n if it repeats the latest toast
+    /// within [`DEDUPE_WINDOW`]. Records it as the latest either way.
+    fn register(&mut self, kind: StatusToastKind, text: &str, now: Instant) -> u32 {
+        if let Some(r) = &mut self.recent {
+            if r.kind == kind
+                && r.text == text
+                && now.saturating_duration_since(r.at) < DEDUPE_WINDOW
+            {
+                r.at = now;
+                r.count += 1;
+                return r.count;
+            }
+        }
+        self.recent = Some(RecentToast {
+            kind,
+            text: text.to_string(),
+            at: now,
+            count: 1,
+        });
+        1
+    }
+}
+
+/// When `status` changes to a toast-worthy line, enqueue one toast. A repeat of
+/// the latest toast inside the window replaces it with a counted one (fresh timer).
+pub(super) fn sync_status_toasts(toasts: &mut Toasts, state: &mut StatusToastState, status: &str) {
+    sync_status_toasts_at(toasts, state, status, Instant::now());
+}
+
+fn sync_status_toasts_at(
+    toasts: &mut Toasts,
+    state: &mut StatusToastState,
+    status: &str,
+    now: Instant,
+) {
+    if status == state.last_status {
         return;
     }
-    *last = status.to_string();
+    state.last_status = status.to_string();
     let Some(kind) = status_toast_kind(status) else {
         return;
+    };
+    let count = state.register(kind, status, now);
+    let text = if count > 1 {
+        toasts.dismiss_latest_toast();
+        format!("{status} (x{count})")
+    } else {
+        status.to_string()
     };
     let duration = Some(Duration::from_secs(TOAST_SECS));
     match kind {
         StatusToastKind::Success => {
-            toasts.success(status).duration(duration).closable(true);
+            toasts.success(text).duration(duration).closable(true);
         }
         StatusToastKind::Error => {
-            toasts.error(status).duration(duration).closable(true);
+            toasts.error(text).duration(duration).closable(true);
         }
     }
 }
@@ -150,16 +211,51 @@ mod tests {
     #[test]
     fn sync_only_fires_once_per_status_change() {
         let mut toasts = cabin_toasts();
-        let mut last = String::new();
-        sync_status_toasts(&mut toasts, &mut last, "Saved");
+        let mut st = StatusToastState::default();
+        sync_status_toasts(&mut toasts, &mut st, "Saved");
         assert_eq!(toasts.len(), 1);
-        sync_status_toasts(&mut toasts, &mut last, "Saved");
+        sync_status_toasts(&mut toasts, &mut st, "Saved");
         assert_eq!(toasts.len(), 1);
-        sync_status_toasts(&mut toasts, &mut last, "OpenClaw import failed");
+        sync_status_toasts(&mut toasts, &mut st, "OpenClaw import failed");
         assert_eq!(toasts.len(), 2);
-        sync_status_toasts(&mut toasts, &mut last, "Thinking…");
+        sync_status_toasts(&mut toasts, &mut st, "Thinking…");
         assert_eq!(toasts.len(), 2);
-        assert_eq!(last, "Thinking…");
+        assert_eq!(st.last_status, "Thinking…");
+    }
+
+    #[test]
+    fn identical_toast_in_window_counts_up() {
+        let t0 = Instant::now();
+        let mut st = StatusToastState::default();
+        let k = StatusToastKind::Success;
+        assert_eq!(st.register(k, "Saved", t0), 1);
+        assert_eq!(st.register(k, "Saved", t0 + Duration::from_secs(1)), 2);
+        // Timer refreshes on each repeat, so 3s after the last one still collapses.
+        assert_eq!(st.register(k, "Saved", t0 + Duration::from_secs(4)), 3);
+    }
+
+    #[test]
+    fn toast_after_window_or_with_other_text_or_kind_is_new() {
+        let t0 = Instant::now();
+        let mut st = StatusToastState::default();
+        assert_eq!(st.register(StatusToastKind::Success, "Saved", t0), 1);
+        let late = t0 + DEDUPE_WINDOW;
+        assert_eq!(st.register(StatusToastKind::Success, "Saved", late), 1);
+        assert_eq!(st.register(StatusToastKind::Success, "Saved a", late), 1);
+        assert_eq!(st.register(StatusToastKind::Error, "Saved a", late), 1);
+    }
+
+    #[test]
+    fn repeated_status_through_idle_collapses_instead_of_stacking() {
+        let t0 = Instant::now();
+        let mut toasts = cabin_toasts();
+        let mut st = StatusToastState::default();
+        sync_status_toasts_at(&mut toasts, &mut st, "Saved", t0);
+        sync_status_toasts_at(&mut toasts, &mut st, "Thinking…", t0);
+        sync_status_toasts_at(&mut toasts, &mut st, "Saved", t0 + Duration::from_secs(1));
+        // Original is dismissed (fading) and replaced by one counted toast.
+        assert_eq!(toasts.len(), 2);
+        assert_eq!(st.recent.as_ref().map(|r| r.count), Some(2));
     }
 
     #[test]
