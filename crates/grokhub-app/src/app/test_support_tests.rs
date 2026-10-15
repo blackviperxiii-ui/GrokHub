@@ -44,6 +44,7 @@ pub(super) fn isolated_cabin(label: &str) -> (std::path::PathBuf, Cabin) {
 }
 
 pub(super) fn release_isolated(root: &std::path::Path, cabin: Cabin) {
+    cabin.persist_svc.flush();
     let io = cabin.persist_io.clone();
     drop(cabin);
     let start = std::time::Instant::now();
@@ -163,6 +164,7 @@ impl QuietCabin {
 
     /// Let background config writes finish before the config dir changes.
     pub(super) fn settle(&self) {
+        self.cabin.persist_svc.flush();
         let io = self.cabin.persist_io.clone();
         std::thread::sleep(std::time::Duration::from_millis(40));
         for _ in 0..8 {

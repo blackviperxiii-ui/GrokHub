@@ -1,0 +1,1 @@
+- Tests: QuietCabin/release_isolated flush PersistService before removing config dirs; Projects/WindowCfg pin scheduled dir; quiet cabins use default_dock_state.
