@@ -1,0 +1,1 @@
+- Agent tooling: sync vendored vstack skills in `.cursor/skills/` to vstack `6f2fbd3` (tighter `viper-mode` and `setup-vstack` wording).

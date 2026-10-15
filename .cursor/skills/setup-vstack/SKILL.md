@@ -1,15 +1,15 @@
 ---
 name: setup-vstack
-description: Configure Viper Stack models and budget for token efficiency. Detects available models and writes an always-applied rule preferring Auto or Composer 2.5 Standard.
+description: Configure Viper Stack for token efficiency. Writes an always-applied rule preferring Auto or Composer 2.5 Standard.
 ---
 
 # Setup Vstack
 
-Write `~/.cursor/rules/vstack-models.mdc` (or project `.cursor/rules/`) that sets every role to `auto` so subagents inherit the parent chat model.
+Write `~/.cursor/rules/vstack-models.mdc` (or project `.cursor/rules/`) so every role uses `auto` (inherit parent).
 
 ## Steps
 
-1. Detect available models in this session (Task subagent slugs). `auto` and `inherit-parent` are always valid.
+1. Detect available models (Task subagent slugs). `auto` and `inherit-parent` always valid.
 2. Prefer budget: medium (high effort) or small (medium effort).
 3. Write the rule:
 
@@ -35,6 +35,6 @@ architect runners: auto
 interrogate reviewers: auto
 ```
 
-4. Tell the user to set the parent chat to Auto (Cost/Balance) or Composer 2.5 with Fast OFF, then start a fresh session.
+4. Tell the user: parent chat Auto (Cost/Balance) or Composer 2.5 Fast OFF, then fresh session.
 
-This keeps full rigor while protecting token allowance.
+Keeps rigor while protecting token allowance.
