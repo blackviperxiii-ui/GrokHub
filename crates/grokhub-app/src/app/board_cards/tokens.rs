@@ -54,21 +54,38 @@ pub(super) const fn card_tokens(dark: bool) -> CardTokens {
 /// Compact card geometry (logical px).
 pub(super) const COMPACT_H: f32 = 56.0;
 pub(super) const CARD_RADIUS: f32 = 12.0;
+// Test-only until their slice paints with them (drag pill S5, actions S4).
+#[cfg(test)]
 pub(super) const PILL_H: f32 = 36.0;
+#[cfg(test)]
 pub(super) const ACTION_H: f32 = 28.0;
 
 /// Motion timings (seconds). Every one snaps under `motion::reduced_motion`.
+/// All but the hover fill are test-only until their slice (S3–S7) lands.
 pub(super) const HOVER_FILL_SECS: f32 = 0.120;
+#[cfg(test)]
 pub(super) const EXPAND_SECS: f32 = 0.220;
+#[cfg(test)]
 pub(super) const EXPAND_FADE_DELAY_SECS: f32 = 0.060;
+#[cfg(test)]
 pub(super) const COLLAPSE_SECS: f32 = 0.180;
+#[cfg(test)]
 pub(super) const ACTION_MORPH_SECS: f32 = 0.160;
+#[cfg(test)]
 pub(super) const DRAG_SHRINK_SECS: f32 = 0.120;
+#[cfg(test)]
 pub(super) const DRAG_RESTORE_SECS: f32 = 0.140;
+#[cfg(test)]
 pub(super) const DRAG_SCALE: f32 = 0.97;
+#[cfg(test)]
 pub(super) const EMPTY_FADE_IN_SECS: f32 = 0.240;
+#[cfg(test)]
 pub(super) const EMPTY_FADE_DELAY_SECS: f32 = 0.150;
+#[cfg(test)]
 pub(super) const EMPTY_FADE_OUT_SECS: f32 = 0.120;
+#[cfg(test)]
 pub(super) const LAYOUT_SWITCH_SECS: f32 = 0.260;
+#[cfg(test)]
 pub(super) const LAYOUT_STAGGER_SECS: f32 = 0.020;
+#[cfg(test)]
 pub(super) const LAYOUT_STAGGER_MAX_SECS: f32 = 0.200;

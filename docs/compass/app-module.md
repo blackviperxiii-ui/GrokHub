@@ -1,7 +1,7 @@
 # Compass: grokhub-app app/ (the Cabin UI)
 
 ## Owns
-- `Cabin`, the eframe app: one struct in `crates/grokhub-app/src/app/mod.rs` plus `impl Cabin` blocks split by page or feature (`chat_ui`, `chat_kick`, `acp`, `settings`, `sidebar`, `pages`, `pulse_ui`, `feed_ui`, `board_ui`, `board_cards` (card tokens and, as slices land, the card look), `night`, `dock_ui`, `harness_ui`, `evidence_ui`, `privacy_ui`, `scope_ui`, `skill_undo`, `background`, `heartbeat_gate`, `native_*`, ...). Each submodule starts with `use super::*;`.
+- `Cabin`, the eframe app: one struct in `crates/grokhub-app/src/app/mod.rs` plus `impl Cabin` blocks split by page or feature (`chat_ui`, `chat_kick`, `acp`, `settings`, `sidebar`, `pages`, `pulse_ui`, `feed_ui`, `board_ui`, `board_cards` (card tokens and the compact card row; more of the card look as slices land), `night`, `dock_ui`, `harness_ui`, `evidence_ui`, `privacy_ui`, `scope_ui`, `skill_undo`, `background`, `heartbeat_gate`, `native_*`, ...). Each submodule starts with `use super::*;`.
 - The frame loop (`impl eframe::App for Cabin`: `logic`, `ui`, `on_exit`) and the background job polls it drives.
 ## Quick commands
 - `GROKHUB_CONFIG=$(mktemp -d) cargo test -p grokhub-app app::tests::<name> -- --test-threads=1`
