@@ -79,15 +79,37 @@ pub(super) fn domain_block(rows: &[grokhub_core::run_metrics::DomainRow]) -> Opt
     Some(format!("{DOMAINS_HEAD}\n{}", lines.join("\n")))
 }
 
-/// U7e: bar chart of run counts per Brief domain (Settings history).
-fn paint_domain_runs_plot(ui: &mut egui::Ui, rows: &[grokhub_core::run_metrics::DomainRow]) {
-    let fill = crate::theme::live();
-    let bars: Vec<egui_plot::Bar> = rows
-        .iter()
+/// One bar per domain: (x slot, run count, domain name).
+pub(super) fn domain_bar_points(
+    rows: &[grokhub_core::run_metrics::DomainRow],
+) -> Vec<(f64, f64, String)> {
+    rows.iter()
         .enumerate()
-        .map(|(i, r)| {
-            egui_plot::Bar::new(i as f64, r.runs as f64)
-                .name(r.domain.clone())
+        .map(|(i, r)| (i as f64, r.runs as f64, r.domain.clone()))
+        .collect()
+}
+
+/// X axis tick text: the domain at the nearest slot, blank off the bars.
+pub(super) fn domain_axis_label(labels: &[String], value: f64) -> String {
+    let i = value.round() as isize;
+    if i >= 0 && (i as usize) < labels.len() {
+        labels[i as usize].clone()
+    } else {
+        String::new()
+    }
+}
+
+/// U7e: bar chart of run counts per Brief domain (Settings history).
+pub(super) fn paint_domain_runs_plot(
+    ui: &mut egui::Ui,
+    rows: &[grokhub_core::run_metrics::DomainRow],
+) -> egui_plot::PlotBounds {
+    let fill = crate::theme::live();
+    let bars: Vec<egui_plot::Bar> = domain_bar_points(rows)
+        .into_iter()
+        .map(|(x, runs, name)| {
+            egui_plot::Bar::new(x, runs)
+                .name(name)
                 .width(0.65)
                 .fill(fill)
         })
@@ -102,19 +124,15 @@ fn paint_domain_runs_plot(ui: &mut egui::Ui, rows: &[grokhub_core::run_metrics::
         .show_axes([true, true])
         .show_grid(false)
         .include_y(0.0)
-        .x_axis_formatter(move |mark, _range| {
-            let i = mark.value.round() as isize;
-            if i >= 0 && (i as usize) < labels.len() {
-                labels[i as usize].clone()
-            } else {
-                String::new()
-            }
-        })
+        .x_axis_formatter(move |mark, _range| domain_axis_label(&labels, mark.value))
         .y_axis_label("runs")
         .set_margin_fraction(egui::vec2(0.08, 0.12))
         .show(ui, |plot_ui| {
             plot_ui.bar_chart(egui_plot::BarChart::new("Runs", bars).width(0.65));
-        });
+        })
+        .transform
+        .bounds()
+        .to_owned()
 }
 
 impl Cabin {
@@ -177,7 +195,7 @@ impl Cabin {
         }
         let domain_rows = self.domain_rows_now();
         if let Some(block) = domain_block(&domain_rows) {
-            paint_domain_runs_plot(ui, &domain_rows);
+            let _ = paint_domain_runs_plot(ui, &domain_rows);
             crate::cards::settings_note(ui, &block);
         }
         for row in rows {
