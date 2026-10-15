@@ -380,7 +380,7 @@ fn named_sealed_app_ask(q: &str) -> bool {
             .unwrap_or(line.as_str())
             .trim();
         let needle = name.split(':').next().unwrap_or(name).trim();
-        if needle.len() >= 4 && q.contains(needle) {
+        if needle.len() >= 4 && library_phrase(q, needle) {
             return true;
         }
     }
@@ -392,6 +392,26 @@ fn named_sealed_app_ask(q: &str) -> bool {
 fn library_word(hay: &str, word: &str) -> bool {
     hay.split(|c: char| !c.is_ascii_alphanumeric())
         .any(|tok| tok == word)
+}
+
+/// Contiguous alphanumeric-token match for multi-word titles (word boundaries).
+fn library_phrase(hay: &str, phrase: &str) -> bool {
+    let needles: Vec<&str> = phrase
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|t| !t.is_empty())
+        .collect();
+    if needles.is_empty() {
+        return false;
+    }
+    if needles.len() == 1 {
+        return library_word(hay, needles[0]);
+    }
+    let toks: Vec<&str> = hay
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|t| !t.is_empty())
+        .collect();
+    toks.windows(needles.len())
+        .any(|w| w.iter().copied().eq(needles.iter().copied()))
 }
 
 /// Sealed installed-app (and related scope) lines for a library-shaped ask.
@@ -1380,6 +1400,15 @@ mod tests {
             followup_injection("scan my steam library").expect("follow-up library ask injects");
         assert!(follow.contains("Installed app: ARC Raiders"), "{follow}");
         assert!(followup_injection("what is 2+2").is_none());
+    }
+
+    #[test]
+    fn library_phrase_uses_word_boundaries_not_substrings() {
+        assert!(library_phrase("do i have ace combat 8 installed", "ace combat 8"));
+        assert!(!library_phrase("do i have a place for dinner", "ace"));
+        assert!(!library_phrase("have i placed the order", "ace"));
+        assert!(library_phrase("own steamlibreview", "steamlibreview"));
+        assert!(!library_phrase("fix the upstream merge", "steam"));
     }
 
     #[test]
