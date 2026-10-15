@@ -14,6 +14,13 @@ someone runs:
 cargo xtask bump <X.Y.Z>
 ```
 
+Preview the exact set of files a bump would write or remove, without
+touching disk:
+
+```sh
+cargo xtask bump --dry-run <X.Y.Z>
+```
+
 Example fragment:
 
 ```md

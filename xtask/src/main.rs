@@ -3,20 +3,20 @@
 //! Feature PRs add a fragment under `changelog.d/`. A promotion or hotfix
 //! owns the version files via `cargo xtask bump <X.Y.Z>`. CI calls
 //! `cargo xtask bump --check` so every copy of the version stays in lockstep.
+//! `cargo xtask bump --dry-run <X.Y.Z>` plans the same edits and lists them
+//! without touching disk.
 
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process;
 
+const USAGE: &str = "usage: cargo xtask bump --check | cargo xtask bump [--dry-run] <X.Y.Z>";
+
 fn main() {
     let args: Vec<String> = env::args().skip(1).collect();
     let root = workspace_root();
     match args.as_slice() {
-        [cmd] if cmd == "bump" => {
-            eprintln!("usage: cargo xtask bump --check | cargo xtask bump <X.Y.Z>");
-            process::exit(2);
-        }
         [cmd, flag] if cmd == "bump" && flag == "--check" => {
             if let Err(e) = bump_check(&root) {
                 eprintln!("xtask bump --check: {e}");
@@ -24,7 +24,19 @@ fn main() {
             }
             println!("xtask bump --check: ok ({})", read_version(&root).unwrap());
         }
-        [cmd, ver] if cmd == "bump" => {
+        [cmd, flag, ver] if cmd == "bump" && flag == "--dry-run" => {
+            match plan_bump(&root, ver, &today_utc()) {
+                Ok(plan) => {
+                    println!("xtask bump --dry-run {ver}: no files written; would change:");
+                    print!("{}", plan.summary());
+                }
+                Err(e) => {
+                    eprintln!("xtask bump --dry-run {ver}: {e}");
+                    process::exit(1);
+                }
+            }
+        }
+        [cmd, ver] if cmd == "bump" && !ver.starts_with('-') => {
             if let Err(e) = bump_apply(&root, ver) {
                 eprintln!("xtask bump {ver}: {e}");
                 process::exit(1);
@@ -32,7 +44,7 @@ fn main() {
             println!("xtask bump: wrote {ver} and folded changelog.d into CHANGELOG.md");
         }
         _ => {
-            eprintln!("usage: cargo xtask bump --check | cargo xtask bump <X.Y.Z>");
+            eprintln!("{USAGE}");
             process::exit(2);
         }
     }
@@ -140,14 +152,16 @@ fn check_reference_text(text: &str, version: &str) -> Result<(), String> {
     Ok(())
 }
 
+const LOCK_PACKAGES: [&str; 4] = [
+    "grokhub-app",
+    "grokhub-agent",
+    "grokhub-core",
+    "grokhub-hub",
+];
+
 fn check_cargo_lock(root: &Path, version: &str) -> Result<(), String> {
     let text = fs::read_to_string(root.join("Cargo.lock")).map_err(|e| e.to_string())?;
-    for name in [
-        "grokhub-app",
-        "grokhub-agent",
-        "grokhub-core",
-        "grokhub-hub",
-    ] {
+    for name in LOCK_PACKAGES {
         let block = format!("name = \"{name}\"\nversion = \"{version}\"");
         if !text.contains(&block) {
             return Err(format!(
@@ -158,7 +172,44 @@ fn check_cargo_lock(root: &Path, version: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn bump_apply(root: &Path, new_version: &str) -> Result<(), String> {
+/// Every edit a bump would make, computed in memory before anything is written.
+/// A failure while planning therefore never leaves a half-bumped tree.
+#[derive(Debug, Default)]
+struct BumpPlan {
+    /// `(repo-relative path, full new contents)`.
+    writes: Vec<(String, String)>,
+    /// Repo-relative paths of consumed changelog fragments.
+    removes: Vec<String>,
+}
+
+impl BumpPlan {
+    fn summary(&self) -> String {
+        let mut out = String::new();
+        for (rel, _) in &self.writes {
+            out.push_str(&format!("  write  {rel}\n"));
+        }
+        for rel in &self.removes {
+            out.push_str(&format!("  remove {rel}\n"));
+        }
+        out
+    }
+
+    fn commit(&self, root: &Path) -> Result<(), String> {
+        for (rel, body) in &self.writes {
+            fs::write(root.join(rel), body).map_err(|e| format!("write {rel}: {e}"))?;
+        }
+        for rel in &self.removes {
+            fs::remove_file(root.join(rel)).map_err(|e| format!("remove {rel}: {e}"))?;
+        }
+        Ok(())
+    }
+}
+
+fn read_rel(root: &Path, rel: &str) -> Result<String, String> {
+    fs::read_to_string(root.join(rel)).map_err(|e| format!("{rel}: {e}"))
+}
+
+fn plan_bump(root: &Path, new_version: &str, today: &str) -> Result<BumpPlan, String> {
     if !is_semver(new_version) {
         return Err(format!("not semver X.Y.Z: {new_version}"));
     }
@@ -168,56 +219,77 @@ fn bump_apply(root: &Path, new_version: &str) -> Result<(), String> {
     }
     bump_check(root).map_err(|e| format!("refusing to bump while --check fails: {e}"))?;
 
-    write_str(root, "VERSION", &format!("{new_version}\n"))?;
-    replace_workspace_version(root, &old, new_version)?;
-    replace_in(
-        root,
-        "packaging/PKGBUILD",
-        &format!("pkgver={old}"),
-        &format!("pkgver={new_version}"),
-    )?;
-    replace_in(
-        root,
-        "packaging/aur/PKGBUILD",
-        &format!("pkgver={old}"),
-        &format!("pkgver={new_version}"),
-    )?;
-    replace_in(
-        root,
-        "packaging/windows/grokhub.iss",
-        &format!("#define MyAppVersion \"{old}\""),
-        &format!("#define MyAppVersion \"{new_version}\""),
-    )?;
-    replace_in(
-        root,
-        "crates/grokhub-app/src/cli.rs",
-        &format!("assert_eq!(env!(\"CARGO_PKG_VERSION\"), \"{old}\");"),
-        &format!("assert_eq!(env!(\"CARGO_PKG_VERSION\"), \"{new_version}\");"),
-    )?;
-    replace_reference(root, &old, new_version)?;
-    replace_cargo_lock(root, &old, new_version)?;
-    fold_changelog(root, new_version)?;
-    bump_check(root)?;
-    Ok(())
-}
-
-fn write_str(root: &Path, rel: &str, body: &str) -> Result<(), String> {
-    fs::write(root.join(rel), body).map_err(|e| format!("write {rel}: {e}"))
-}
-
-fn replace_in(root: &Path, rel: &str, from: &str, to: &str) -> Result<(), String> {
-    let path = root.join(rel);
-    let text = fs::read_to_string(&path).map_err(|e| format!("{rel}: {e}"))?;
-    if !text.contains(from) {
-        return Err(format!("{rel} missing {from:?}"));
+    let mut plan = BumpPlan::default();
+    plan.writes
+        .push(("VERSION".into(), format!("{new_version}\n")));
+    plan.writes.push((
+        "Cargo.toml".into(),
+        workspace_version_text(&read_rel(root, "Cargo.toml")?, &old, new_version)?,
+    ));
+    for (rel, from, to) in [
+        (
+            "packaging/PKGBUILD",
+            format!("pkgver={old}"),
+            format!("pkgver={new_version}"),
+        ),
+        (
+            "packaging/aur/PKGBUILD",
+            format!("pkgver={old}"),
+            format!("pkgver={new_version}"),
+        ),
+        (
+            "packaging/windows/grokhub.iss",
+            format!("#define MyAppVersion \"{old}\""),
+            format!("#define MyAppVersion \"{new_version}\""),
+        ),
+        (
+            "crates/grokhub-app/src/cli.rs",
+            format!("assert_eq!(env!(\"CARGO_PKG_VERSION\"), \"{old}\");"),
+            format!("assert_eq!(env!(\"CARGO_PKG_VERSION\"), \"{new_version}\");"),
+        ),
+    ] {
+        let text = read_rel(root, rel)?;
+        if !text.contains(&from) {
+            return Err(format!("{rel} missing {from:?}"));
+        }
+        plan.writes.push((rel.into(), text.replacen(&from, &to, 1)));
     }
-    let next = text.replacen(from, to, 1);
-    fs::write(&path, next).map_err(|e| format!("write {rel}: {e}"))
+    plan.writes.push((
+        "docs/REFERENCE.md".into(),
+        reference_text(&read_rel(root, "docs/REFERENCE.md")?, &old, new_version)?,
+    ));
+    plan.writes.push((
+        "Cargo.lock".into(),
+        cargo_lock_text(&read_rel(root, "Cargo.lock")?, &old, new_version)?,
+    ));
+
+    let names = sorted_fragment_names(root)?;
+    let mut fragments = Vec::new();
+    for name in &names {
+        fragments.push(read_rel(root, &format!("changelog.d/{name}"))?);
+    }
+    plan.writes.push((
+        "CHANGELOG.md".into(),
+        changelog_text(
+            &read_rel(root, "CHANGELOG.md")?,
+            &fragments,
+            new_version,
+            today,
+        )?,
+    ));
+    plan.removes = names
+        .into_iter()
+        .map(|n| format!("changelog.d/{n}"))
+        .collect();
+    Ok(plan)
 }
 
-fn replace_workspace_version(root: &Path, old: &str, new: &str) -> Result<(), String> {
-    let path = root.join("Cargo.toml");
-    let text = fs::read_to_string(&path).map_err(|e| e.to_string())?;
+fn bump_apply(root: &Path, new_version: &str) -> Result<(), String> {
+    plan_bump(root, new_version, &today_utc())?.commit(root)?;
+    bump_check(root)
+}
+
+fn workspace_version_text(text: &str, old: &str, new: &str) -> Result<String, String> {
     let (head, rest) = text
         .split_once("[workspace.package]")
         .ok_or_else(|| "Cargo.toml missing [workspace.package]".to_string())?;
@@ -230,16 +302,15 @@ fn replace_workspace_version(root: &Path, old: &str, new: &str) -> Result<(), St
         return Err("Cargo.toml [workspace.package] version mismatch".into());
     }
     let pkg = pkg.replacen(&from, &to, 1);
-    let next = format!("{head}[workspace.package]{pkg}[workspace.dependencies]{tail}");
-    fs::write(&path, next).map_err(|e| e.to_string())
+    Ok(format!(
+        "{head}[workspace.package]{pkg}[workspace.dependencies]{tail}"
+    ))
 }
 
-fn replace_reference(root: &Path, old: &str, new: &str) -> Result<(), String> {
-    let path = root.join("docs/REFERENCE.md");
-    let text = fs::read_to_string(&path).map_err(|e| e.to_string())?;
+fn reference_text(text: &str, old: &str, new: &str) -> Result<String, String> {
     // Refuse a partial bump: every lockstep token must already be present.
-    check_reference_text(&text, old)?;
-    let mut next = text;
+    check_reference_text(text, old)?;
+    let mut next = text.to_string();
     // Longer / more specific tokens first so `GrokHub X.Y.Z-beta.` is not
     // rewritten only as a prefix of a looser pattern.
     for (from, to) in [
@@ -267,31 +338,15 @@ fn replace_reference(root: &Path, old: &str, new: &str) -> Result<(), String> {
         // Remaining plain `GrokHub X.Y.Z` (no-git build line, etc.).
         (format!("GrokHub {old}"), format!("GrokHub {new}")),
     ] {
-        if !next.contains(&from) {
-            // Plain `GrokHub {old}` may already be gone after the beta/main
-            // replacements when those were the only occurrences — only the
-            // required tokens above are mandatory (checked via check_reference_text).
-            if from == format!("GrokHub {old}") {
-                continue;
-            }
-            return Err(format!("docs/REFERENCE.md missing required token {from:?}"));
-        }
         next = next.replace(&from, &to);
     }
     check_reference_text(&next, new)?;
-    fs::write(&path, next).map_err(|e| e.to_string())
+    Ok(next)
 }
 
-fn replace_cargo_lock(root: &Path, old: &str, new: &str) -> Result<(), String> {
-    let path = root.join("Cargo.lock");
-    let text = fs::read_to_string(&path).map_err(|e| e.to_string())?;
-    let mut next = text.clone();
-    for name in [
-        "grokhub-app",
-        "grokhub-agent",
-        "grokhub-core",
-        "grokhub-hub",
-    ] {
+fn cargo_lock_text(text: &str, old: &str, new: &str) -> Result<String, String> {
+    let mut next = text.to_string();
+    for name in LOCK_PACKAGES {
         let from = format!("name = \"{name}\"\nversion = \"{old}\"");
         let to = format!("name = \"{name}\"\nversion = \"{new}\"");
         if !next.contains(&from) {
@@ -299,14 +354,17 @@ fn replace_cargo_lock(root: &Path, old: &str, new: &str) -> Result<(), String> {
         }
         next = next.replacen(&from, &to, 1);
     }
-    fs::write(&path, next).map_err(|e| e.to_string())
+    Ok(next)
 }
 
-fn fold_changelog(root: &Path, new_version: &str) -> Result<(), String> {
-    let path = root.join("CHANGELOG.md");
-    let text = fs::read_to_string(&path).map_err(|e| e.to_string())?;
-    let fragments = collect_fragments(root)?;
-    let unreleased = extract_unreleased_body(&text)?;
+/// Fold `## Unreleased` bullets plus fragment bullets into a new release section.
+fn changelog_text(
+    text: &str,
+    fragments: &[String],
+    new_version: &str,
+    today: &str,
+) -> Result<String, String> {
+    let unreleased = extract_unreleased_body(text)?;
     let mut bullets = String::new();
     for line in unreleased.lines() {
         let t = line.trim_end();
@@ -316,7 +374,7 @@ fn fold_changelog(root: &Path, new_version: &str) -> Result<(), String> {
         bullets.push_str(t);
         bullets.push('\n');
     }
-    for frag in &fragments {
+    for frag in fragments {
         for line in frag.lines() {
             let t = line.trim_end();
             if t.is_empty() || t.starts_with('#') {
@@ -334,33 +392,14 @@ fn fold_changelog(root: &Path, new_version: &str) -> Result<(), String> {
     if bullets.is_empty() {
         bullets.push_str("- (no changelog fragments)\n");
     }
-    let today = today_utc();
     let section = format!(
         "## {new_version} — {today}\n\n{bullets}\n- Linux: `grokhub-linux-v{new_version}.tar.gz` and AUR `pkgver={new_version}`.\n- Windows: `GrokHub-Setup-{new_version}.exe` and `grokhub-windows-v{new_version}.zip`.\n"
     );
-    let rest = strip_unreleased(&text)?;
-    let next = format!("# Changelog\n\n## Unreleased\n\n{section}\n{rest}");
-    fs::write(&path, next).map_err(|e| e.to_string())?;
-    for name in fragment_names(root)? {
-        fs::remove_file(root.join("changelog.d").join(&name))
-            .map_err(|e| format!("remove changelog.d/{name}: {e}"))?;
-    }
-    Ok(())
+    let rest = strip_unreleased(text)?;
+    Ok(format!("# Changelog\n\n## Unreleased\n\n{section}\n{rest}"))
 }
 
-fn collect_fragments(root: &Path) -> Result<Vec<String>, String> {
-    let mut names = fragment_names(root)?;
-    names.sort();
-    let mut out = Vec::new();
-    for name in names {
-        let body = fs::read_to_string(root.join("changelog.d").join(&name))
-            .map_err(|e| format!("changelog.d/{name}: {e}"))?;
-        out.push(body);
-    }
-    Ok(out)
-}
-
-fn fragment_names(root: &Path) -> Result<Vec<String>, String> {
+fn sorted_fragment_names(root: &Path) -> Result<Vec<String>, String> {
     let dir = root.join("changelog.d");
     if !dir.is_dir() {
         return Ok(Vec::new());
@@ -374,6 +413,7 @@ fn fragment_names(root: &Path) -> Result<Vec<String>, String> {
         }
         names.push(name);
     }
+    names.sort();
     Ok(names)
 }
 
@@ -443,6 +483,7 @@ fn civil_date_from_unix(secs: i64) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     #[test]
     fn semver_accepts_plain_triples() {
@@ -500,5 +541,197 @@ mod tests {
             err.contains("--version main example"),
             "expected main example error, got {err}"
         );
+    }
+
+    // ---- temp-dir fixtures for bump_apply / dry-run ----
+
+    const OLD: &str = "3.0.2";
+    const NEW: &str = "3.1.0";
+    const FILES: [&str; 9] = [
+        "VERSION",
+        "Cargo.toml",
+        "Cargo.lock",
+        "packaging/PKGBUILD",
+        "packaging/aur/PKGBUILD",
+        "packaging/windows/grokhub.iss",
+        "crates/grokhub-app/src/cli.rs",
+        "docs/REFERENCE.md",
+        "CHANGELOG.md",
+    ];
+
+    struct Fixture(PathBuf);
+
+    impl Fixture {
+        fn new() -> Self {
+            static N: AtomicUsize = AtomicUsize::new(0);
+            let dir = env::temp_dir().join(format!(
+                "xtask-bump-{}-{}",
+                process::id(),
+                N.fetch_add(1, Ordering::SeqCst)
+            ));
+            let _ = fs::remove_dir_all(&dir);
+            let fx = Fixture(dir);
+            fx.put("VERSION", &format!("{OLD}\n"));
+            fx.put(
+                "Cargo.toml",
+                &format!(
+                    "[workspace]\n[workspace.package]\nversion = \"{OLD}\"\nedition = \"2021\"\n[workspace.dependencies]\nserde = {{ version = \"{OLD}\" }}\n"
+                ),
+            );
+            let mut lock = String::new();
+            for name in LOCK_PACKAGES {
+                lock.push_str(&format!(
+                    "[[package]]\nname = \"{name}\"\nversion = \"{OLD}\"\n\n"
+                ));
+            }
+            fx.put("Cargo.lock", &lock);
+            fx.put("packaging/PKGBUILD", &format!("pkgver={OLD}\n"));
+            fx.put("packaging/aur/PKGBUILD", &format!("pkgver={OLD}\n"));
+            fx.put(
+                "packaging/windows/grokhub.iss",
+                &format!("#define MyAppVersion \"{OLD}\"\n"),
+            );
+            fx.put(
+                "crates/grokhub-app/src/cli.rs",
+                &format!("assert_eq!(env!(\"CARGO_PKG_VERSION\"), \"{OLD}\");\n"),
+            );
+            fx.put("docs/REFERENCE.md", &sample_reference(OLD));
+            fx.put(
+                "CHANGELOG.md",
+                "# Changelog\n\n## Unreleased\n\n- Carried bullet.\n\n## 3.0.2 — 2026-01-01\n\n- Old.\n",
+            );
+            fx.put("changelog.d/README.md", "# readme\n");
+            fx.put("changelog.d/b-second.md", "# heading\n\nPlain line.\n");
+            fx.put("changelog.d/a-first.md", "- First bullet.\n");
+            fx
+        }
+
+        fn put(&self, rel: &str, body: &str) {
+            let p = self.0.join(rel);
+            fs::create_dir_all(p.parent().unwrap()).unwrap();
+            fs::write(p, body).unwrap();
+        }
+
+        fn get(&self, rel: &str) -> String {
+            fs::read_to_string(self.0.join(rel)).unwrap()
+        }
+
+        fn snapshot(&self) -> Vec<String> {
+            FILES
+                .iter()
+                .chain(
+                    [
+                        "changelog.d/README.md",
+                        "changelog.d/a-first.md",
+                        "changelog.d/b-second.md",
+                    ]
+                    .iter(),
+                )
+                .map(|r| self.get(r))
+                .collect()
+        }
+    }
+
+    impl Drop for Fixture {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn fixture_starts_consistent() {
+        let fx = Fixture::new();
+        bump_check(&fx.0).unwrap();
+    }
+
+    #[test]
+    fn apply_updates_every_copy_and_folds_changelog() {
+        let fx = Fixture::new();
+        bump_apply(&fx.0, NEW).unwrap();
+        bump_check(&fx.0).unwrap();
+        assert_eq!(read_version(&fx.0).unwrap(), NEW);
+        assert!(!fx.get("Cargo.lock").contains(OLD));
+        // Dependency version in [workspace.dependencies] is untouched.
+        assert!(fx
+            .get("Cargo.toml")
+            .contains(&format!("serde = {{ version = \"{OLD}\" }}")));
+
+        let log = fx.get("CHANGELOG.md");
+        assert!(log.starts_with("# Changelog\n\n## Unreleased\n\n## 3.1.0 — "));
+        let carried = log.find("- Carried bullet.").unwrap();
+        let first = log.find("- First bullet.").unwrap();
+        let plain = log.find("- Plain line.").unwrap();
+        assert!(carried < first && first < plain, "order: {log}");
+        assert!(!log.contains("# heading"));
+        assert!(log.contains("## 3.0.2 — 2026-01-01"));
+
+        assert!(fx.0.join("changelog.d/README.md").exists());
+        assert!(!fx.0.join("changelog.d/a-first.md").exists());
+        assert!(!fx.0.join("changelog.d/b-second.md").exists());
+    }
+
+    #[test]
+    fn dry_run_plans_but_writes_nothing() {
+        let fx = Fixture::new();
+        let before = fx.snapshot();
+        let plan = plan_bump(&fx.0, NEW, "2026-10-15").unwrap();
+        assert_eq!(fx.snapshot(), before);
+        let summary = plan.summary();
+        for rel in FILES {
+            assert!(summary.contains(&format!("write  {rel}")), "{rel} missing");
+        }
+        assert!(summary.contains("remove changelog.d/a-first.md"));
+        assert!(!summary.contains("README.md"));
+        let log = &plan
+            .writes
+            .iter()
+            .find(|(r, _)| r == "CHANGELOG.md")
+            .unwrap()
+            .1;
+        assert!(log.contains("## 3.1.0 — 2026-10-15"));
+    }
+
+    #[test]
+    fn rejects_bad_same_and_drifted_versions_without_writing() {
+        let fx = Fixture::new();
+        let before = fx.snapshot();
+        assert!(bump_apply(&fx.0, "3.1").unwrap_err().contains("not semver"));
+        assert!(bump_apply(&fx.0, OLD)
+            .unwrap_err()
+            .contains("nothing to bump"));
+
+        fx.put("packaging/PKGBUILD", "pkgver=9.9.9\n");
+        let drifted = fx.snapshot();
+        let err = bump_apply(&fx.0, NEW).unwrap_err();
+        assert!(err.contains("refusing to bump"), "{err}");
+        assert_eq!(fx.snapshot(), drifted);
+        assert_ne!(drifted, before);
+    }
+
+    #[test]
+    fn planning_failure_leaves_tree_untouched() {
+        let fx = Fixture::new();
+        // Passes --check but cannot be folded: no section after Unreleased.
+        fx.put("CHANGELOG.md", "# Changelog\n\n## Unreleased\n\n- x\n");
+        let before = fx.snapshot();
+        let err = bump_apply(&fx.0, NEW).unwrap_err();
+        assert!(err.contains("no version section"), "{err}");
+        assert_eq!(fx.snapshot(), before);
+        assert_eq!(read_version(&fx.0).unwrap(), OLD);
+    }
+
+    #[test]
+    fn empty_fragments_still_produce_a_section() {
+        let fx = Fixture::new();
+        fx.put(
+            "CHANGELOG.md",
+            "# Changelog\n\n## Unreleased\n\n## 3.0.2 — 2026-01-01\n\n- Old.\n",
+        );
+        fs::remove_file(fx.0.join("changelog.d/a-first.md")).unwrap();
+        fs::remove_file(fx.0.join("changelog.d/b-second.md")).unwrap();
+        bump_apply(&fx.0, NEW).unwrap();
+        assert!(fx
+            .get("CHANGELOG.md")
+            .contains("- (no changelog fragments)"));
     }
 }
