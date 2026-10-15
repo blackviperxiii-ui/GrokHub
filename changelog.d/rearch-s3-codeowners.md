@@ -1,1 +1,0 @@
-- CI: CODEOWNERS for gate, perm, harness consent/egress/hard, and host_safety (rearch stage 3b; needs-human-review).

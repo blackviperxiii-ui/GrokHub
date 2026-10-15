@@ -1,1 +1,0 @@
-- Tests: move Composer/plus/attach Cursor-fold tests into `app/composer_attach_tests.rs` (rearch stage 5 pilot).

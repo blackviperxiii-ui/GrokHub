@@ -1,1 +1,0 @@
-- Safety: CODEOWNERS also covers scripts/ci-guards.sh, .github/workflows/, xtask/, and .cursor/rules/.
