@@ -1,0 +1,1 @@
+- Fix: one-tap fix guard matches whole words, so fixes like "Unblock upstream DNS" or "Download skill report" are no longer refused as host grants. Adds negative tests for findings cards (malformed input, non-card bodies, word-boundary non-matches).
