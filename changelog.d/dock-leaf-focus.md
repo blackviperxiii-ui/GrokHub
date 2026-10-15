@@ -1,0 +1,1 @@
+- Fix: docking leaves keep keyboard focus on the active leaf after a sidebar tab switch, split, or close, instead of leaving it on a stale leaf.
