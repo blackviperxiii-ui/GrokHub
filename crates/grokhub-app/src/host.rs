@@ -471,10 +471,7 @@ mod tests {
         // Assert against the body after the status line. The echoed `$ cmd`
         // already contains "before"/"latin"/"after"/"err", so matching the
         // whole receipt can pass even when both pumps were raced away.
-        let body = out
-            .split_once("ms\n")
-            .map(|(_, rest)| rest)
-            .unwrap_or("");
+        let body = out.split_once("ms\n").map(|(_, rest)| rest).unwrap_or("");
         assert!(
             body.contains("before") && body.contains("after"),
             "stdout lines must land after the status line: {out}"
