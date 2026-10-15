@@ -19,10 +19,12 @@ enum PersistMsg {
         err: Arc<Mutex<Option<String>>>,
     },
     Projects {
+        dir: PathBuf,
         nodes: Vec<ProjectNode>,
         err: Arc<Mutex<Option<String>>>,
     },
     WindowCfg {
+        dir: PathBuf,
         cfg: Box<AppConfig>,
         err: Arc<Mutex<Option<String>>>,
     },
@@ -88,10 +90,16 @@ impl PersistService {
         }
     }
 
-    pub(super) fn submit_projects(&self, nodes: Vec<ProjectNode>, err: Arc<Mutex<Option<String>>>) {
+    pub(super) fn submit_projects(
+        &self,
+        dir: PathBuf,
+        nodes: Vec<ProjectNode>,
+        err: Arc<Mutex<Option<String>>>,
+    ) {
         if self
             .tx
             .send(PersistMsg::Projects {
+                dir,
                 nodes,
                 err: err.clone(),
             })
@@ -101,10 +109,16 @@ impl PersistService {
         }
     }
 
-    pub(super) fn submit_window_cfg(&self, cfg: AppConfig, err: Arc<Mutex<Option<String>>>) {
+    pub(super) fn submit_window_cfg(
+        &self,
+        dir: PathBuf,
+        cfg: AppConfig,
+        err: Arc<Mutex<Option<String>>>,
+    ) {
         if self
             .tx
             .send(PersistMsg::WindowCfg {
+                dir,
                 cfg: Box::new(cfg),
                 err: err.clone(),
             })
@@ -173,22 +187,28 @@ fn persist_service_worker(
                     note_persist_err(&err, config::save_in(&dir, &cfg), "settings");
                 }
             }
-            PersistMsg::Projects { nodes, err } => match io.lock() {
-                Ok(_g) => {
-                    note_persist_err(&err, crate::store::save_projects(&nodes), "projects");
+            PersistMsg::Projects { dir, nodes, err } => {
+                let _pin = pin_scheduled_dir(dir);
+                match io.lock() {
+                    Ok(_g) => {
+                        note_persist_err(&err, crate::store::save_projects(&nodes), "projects");
+                    }
+                    Err(_) => {
+                        note_persist_err(&err, Err("persist lock poisoned".into()), "projects");
+                    }
                 }
-                Err(_) => {
-                    note_persist_err(&err, Err("persist lock poisoned".into()), "projects");
+            }
+            PersistMsg::WindowCfg { dir, cfg, err } => {
+                let _pin = pin_scheduled_dir(dir.clone());
+                match io.lock() {
+                    Ok(_g) => {
+                        note_persist_err(&err, config::save_in(&dir, &cfg), "window");
+                    }
+                    Err(_) => {
+                        note_persist_err(&err, Err("persist lock poisoned".into()), "window");
+                    }
                 }
-            },
-            PersistMsg::WindowCfg { cfg, err } => match io.lock() {
-                Ok(_g) => {
-                    note_persist_err(&err, config::save(&cfg), "window");
-                }
-                Err(_) => {
-                    note_persist_err(&err, Err("persist lock poisoned".into()), "window");
-                }
-            },
+            }
             PersistMsg::Flush(done) => {
                 let _ = done.send(());
             }

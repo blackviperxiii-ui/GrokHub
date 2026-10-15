@@ -1884,7 +1884,7 @@ impl Cabin {
             scroll_to_hooks: false,
             composer_geom: None,
             composer_ghost: ghost::ComposerGhost::default(),
-            dock_state: dock_ui::load_dock_state(),
+            dock_state: dock_ui::default_dock_state(),
             toasts: status_toasts::cabin_toasts(),
             status_toasted: String::new(),
         }
@@ -1984,9 +1984,10 @@ impl Cabin {
                 self.geom_dirty = false;
                 let mut cfg = self.cfg.clone();
                 cfg.api_key.clear();
-                // PersistService worker takes persist_io before config::save.
+                // PersistService worker pins dir + takes persist_io before save_in.
                 let err = self.persist_err.clone();
-                self.persist_svc.submit_window_cfg(cfg, err);
+                let dir = config::config_dir();
+                self.persist_svc.submit_window_cfg(dir, cfg, err);
             }
             crate::window::GeomFlush::AfterMs(ms) => {
                 ctx.request_repaint_after(Duration::from_millis(ms));

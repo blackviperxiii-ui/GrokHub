@@ -20,8 +20,9 @@ impl Cabin {
         self.projects_dirty = false;
         let nodes = self.projects.clone();
         let err = self.persist_err.clone();
-        // PersistService worker takes persist_io before save_projects.
-        self.persist_svc.submit_projects(nodes, err);
+        let dir = config::config_dir();
+        // PersistService worker pins dir + takes persist_io before save_projects.
+        self.persist_svc.submit_projects(dir, nodes, err);
     }
 
     pub(super) fn bind_project_id(&mut self, id: &str) {
