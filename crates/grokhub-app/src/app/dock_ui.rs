@@ -198,6 +198,7 @@ impl Cabin {
                 ensure_tab_focused(&mut self.dock_state, want);
             }
         }
+        ensure_focused_leaf(&mut self.dock_state);
         let before = serde_json::to_vec(&self.dock_state).ok();
         let mut dock_state = std::mem::replace(&mut self.dock_state, default_dock_state());
         {
@@ -233,17 +234,72 @@ impl Cabin {
     }
 }
 
+/// Make the leaf holding `want` the focused leaf with `want` active. Activating a
+/// tab alone leaves focus on another split leaf, so the old leaf would win nav sync.
 fn ensure_tab_focused(state: &mut DockState<DockTab>, want: DockTab) {
+    ensure_focused_leaf(state);
     if let Some(path) = state.find_tab(&want) {
-        let _ = state.set_active_tab(path);
+        if state.set_active_tab(path).is_ok() {
+            state.set_focused_node_and_surface(path.node_path());
+        }
     } else {
         state.push_to_focused_leaf(want);
+    }
+}
+
+/// After a split or close, the focused node can dangle (removed or no longer a
+/// leaf). Move focus to the first remaining leaf so keyboard focus is never lost.
+fn ensure_focused_leaf(state: &mut DockState<DockTab>) {
+    if state.focused_leaf().is_some_and(|p| state.leaf(p).is_ok()) {
+        return;
+    }
+    let first = state.iter_all_tabs().next().map(|(p, _)| p.node_path());
+    if let Some(path) = first {
+        state.set_focused_node_and_surface(path);
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use egui_dock::NodeIndex;
+
+    fn split_state() -> DockState<DockTab> {
+        let mut s = DockState::new(vec![DockTab::Chat]);
+        s.main_surface_mut()
+            .split_right(NodeIndex::root(), 0.5, vec![DockTab::Imagine]);
+        let chat = s.find_tab(&DockTab::Chat).expect("chat").node_path();
+        s.set_focused_node_and_surface(chat);
+        s
+    }
+
+    #[test]
+    fn activating_tab_in_other_split_leaf_moves_focus_there() {
+        let mut s = split_state();
+        assert_eq!(
+            s.find_active_focused().map(|(_, t)| *t),
+            Some(DockTab::Chat)
+        );
+        ensure_tab_focused(&mut s, DockTab::Imagine);
+        assert_eq!(
+            s.find_active_focused().map(|(_, t)| *t),
+            Some(DockTab::Imagine)
+        );
+    }
+
+    #[test]
+    fn closing_focused_leaf_refocuses_a_remaining_leaf() {
+        let mut s = split_state();
+        let chat = s.find_tab(&DockTab::Chat).expect("chat");
+        s.remove_leaf(chat.node_path());
+        ensure_focused_leaf(&mut s);
+        let focused = s.focused_leaf().expect("focused leaf");
+        assert!(s.leaf(focused).is_ok());
+        assert_eq!(
+            s.find_active_focused().map(|(_, t)| *t),
+            Some(DockTab::Imagine)
+        );
+    }
 
     #[test]
     fn focused_leaf_moves_page_nav_between_dock_tabs() {
