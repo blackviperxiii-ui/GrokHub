@@ -7,9 +7,9 @@ egui_phosphor::subset! {
     /// Subset Phosphor regular icons used by tile / rail / bar paint.
     pub mod ph {
         use regular::{
-            ARROW_DOWN, ARROW_UP, BRAIN, CHAT, CHECK_CIRCLE, CLOCK, DESKTOP, FILE, FOLDER,
-            GITHUB_LOGO, IMAGE, KANBAN, LIGHTNING, LIST, MAGNIFYING_GLASS, MOON, NOTE_PENCIL,
-            PAPER_PLANE_TILT, PLUGS, PUSH_PIN, QUESTION, SQUARES_FOUR, SUN,
+            ARROW_DOWN, ARROW_UP, BRAIN, CHAT, CHECK_CIRCLE, CLOCK, CLOCK_COUNTER_CLOCKWISE,
+            DESKTOP, FILE, FOLDER, GITHUB_LOGO, IMAGE, KANBAN, LIGHTNING, LIST, MAGNIFYING_GLASS,
+            MOON, NOTE_PENCIL, PAPER_PLANE_TILT, PLUGS, PUSH_PIN, QUESTION, SQUARES_FOUR, SUN,
         };
     }
 }
@@ -54,6 +54,7 @@ fn rail_phosphor(icon: RailIcon) -> &'static str {
         RailIcon::Compose => ph::regular::NOTE_PENCIL,
         RailIcon::Imagine => ph::regular::IMAGE,
         RailIcon::Clock => ph::regular::CLOCK,
+        RailIcon::History => ph::regular::CLOCK_COUNTER_CLOCKWISE,
         RailIcon::Grid => ph::regular::SQUARES_FOUR,
         RailIcon::Folder => ph::regular::FOLDER,
         RailIcon::Chat => ph::regular::CHAT,
@@ -112,6 +113,7 @@ pub enum RailIcon {
     Compose,
     Imagine,
     Clock,
+    History,
     Grid,
     Folder,
     Chat,
@@ -127,7 +129,7 @@ pub fn rail_icon_for(id: &str) -> RailIcon {
         "skills" | "connectors" => RailIcon::Grid,
         "workboard" => RailIcon::Folder,
         "pulse" | "ideas" => RailIcon::File,
-        "history" => RailIcon::Clock,
+        "history" => RailIcon::History,
         "search" => RailIcon::Search,
         "new" => RailIcon::Compose,
         _ => RailIcon::Chat,
@@ -848,6 +850,12 @@ mod tests {
         assert_eq!(rail_icon_for("chat"), RailIcon::Chat);
         assert_eq!(rail_icon_for("imagine"), RailIcon::Imagine);
         assert_eq!(rail_icon_for("automations"), RailIcon::Clock);
+        assert_eq!(rail_icon_for("history"), RailIcon::History);
+        assert_ne!(
+            rail_icon_for("history"),
+            rail_icon_for("automations"),
+            "History and Automations must not share one rail glyph"
+        );
         assert_eq!(rail_icon_for("skills"), RailIcon::Grid);
         assert_eq!(rail_icon_for("workboard"), RailIcon::Folder);
         assert_ne!(RailIcon::Search, RailIcon::Compose);

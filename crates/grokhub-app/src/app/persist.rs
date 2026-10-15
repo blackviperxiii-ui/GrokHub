@@ -43,8 +43,17 @@ pub(super) struct PersistSnap {
     pub(super) secrets: Option<crate::secrets::Secrets>,
 }
 
-pub(super) fn write_persist_disk(dir: &std::path::Path, snap: &PersistSnap) {
-    let _ = threads::save(&snap.threads);
+/// Write every full-snap store. Returns the first failure; later stores still try.
+pub(super) fn write_persist_disk(dir: &std::path::Path, snap: &PersistSnap) -> Result<(), String> {
+    let mut first = Ok(());
+    let mut note = |r: Result<(), String>| {
+        if first.is_ok() {
+            if let Err(e) = r {
+                first = Err(e);
+            }
+        }
+    };
+    note(threads::save(&snap.threads));
     let msgs = snap
         .threads
         .iter()
@@ -52,30 +61,31 @@ pub(super) fn write_persist_disk(dir: &std::path::Path, snap: &PersistSnap) {
         .or_else(|| snap.threads.first())
         .map(|t| t.messages.as_slice())
         .unwrap_or(snap.msgs.as_slice());
-    let _ = config::save_chat(msgs);
-    let _ = config::save_board(&snap.board);
-    let _ = crate::night::save(&snap.automations);
-    let _ = crate::loops::save(&snap.grok_loops);
-    let _ = crate::feed::save(&snap.updates);
-    let _ = crate::night::save_rewinds(&snap.rewind_rows);
-    let _ = crate::store::save_learning(&snap.learning);
-    let _ = crate::store::save_suggestions(&snap.suggestions);
-    let _ = crate::store::save_usage(&snap.usage);
-    let _ = crate::store::save_chips(&snap.chip_memory);
-    let _ = crate::store::save_wall(&snap.wall);
+    note(config::save_chat(msgs));
+    note(config::save_board(&snap.board));
+    note(crate::night::save(&snap.automations));
+    note(crate::loops::save(&snap.grok_loops));
+    note(crate::feed::save(&snap.updates));
+    note(crate::night::save_rewinds(&snap.rewind_rows));
+    note(crate::store::save_learning(&snap.learning));
+    note(crate::store::save_suggestions(&snap.suggestions));
+    note(crate::store::save_usage(&snap.usage));
+    note(crate::store::save_chips(&snap.chip_memory));
+    note(crate::store::save_wall(&snap.wall));
     if let Some(p) = &snap.projects {
-        let _ = crate::store::save_projects(p);
+        note(crate::store::save_projects(p));
     }
-    let _ = config::save_in(dir, &snap.cfg);
+    note(config::save_in(dir, &snap.cfg));
     if let Some(s) = &snap.secrets {
-        let _ = secrets::save(s);
+        note(secrets::save(s));
     }
     if let Some(hub) = &snap.hub {
         let disk = hub.lock().ok().map(|st| state_for_disk(&st));
         if let Some(disk) = disk {
-            let _ = save_hub_state(&config::hub_state_path(), &disk);
+            note(save_hub_state(&config::hub_state_path(), &disk));
         }
     }
+    first
 }
 
 /// What the full-snapshot workers have written. Each snapshot carries the
@@ -97,10 +107,10 @@ pub(super) fn write_persist_disk_in_order(
     snap: &PersistSnap,
     gen: u64,
     mark: &Mutex<PersistMark>,
-) {
+) -> Result<(), String> {
     let mut mark = mark.lock().unwrap_or_else(|e| e.into_inner());
     if gen > mark.gen {
-        write_persist_disk(dir, snap);
+        let r = write_persist_disk(dir, snap);
         mark.gen = gen;
         if snap.projects.is_some() {
             mark.projects = gen;
@@ -108,20 +118,30 @@ pub(super) fn write_persist_disk_in_order(
         if snap.secrets.is_some() {
             mark.secrets = gen;
         }
-        return;
+        return r;
     }
+    let mut first = Ok(());
     if let Some(p) = &snap.projects {
         if gen > mark.projects {
-            let _ = crate::store::save_projects(p);
+            if let Err(e) = crate::store::save_projects(p) {
+                first = Err(e);
+            }
             mark.projects = gen;
         }
     }
     if let Some(s) = &snap.secrets {
         if gen > mark.secrets {
-            let _ = secrets::save(s);
+            if first.is_ok() {
+                if let Err(e) = secrets::save(s) {
+                    first = Err(e);
+                }
+            } else {
+                let _ = secrets::save(s);
+            }
             mark.secrets = gen;
         }
     }
+    first
 }
 
 impl Cabin {
@@ -136,8 +156,9 @@ impl Cabin {
         self.geom_dirty = false;
         let dir = config::config_dir();
         let gen = self.next_persist_gen();
+        let err = self.persist_err.clone();
         // PersistService worker takes persist_io + write_persist_disk_in_order.
-        self.persist_svc.submit_full(dir, snap, gen, None);
+        self.persist_svc.submit_full(dir, snap, gen, None, err);
     }
 
     pub(super) fn next_persist_gen(&mut self) -> u64 {
@@ -227,8 +248,9 @@ impl Cabin {
         let (tx, rx) = mpsc::channel();
         self.persist_rx = Some(rx);
         let gen = self.next_persist_gen();
+        let err = self.persist_err.clone();
         // PersistService worker takes persist_io + write_persist_disk_in_order.
-        self.persist_svc.submit_full(dir, snap, gen, Some(tx));
+        self.persist_svc.submit_full(dir, snap, gen, Some(tx), err);
     }
 
     pub(super) fn poll_persist(&mut self) {
@@ -281,6 +303,8 @@ impl Cabin {
             .and_then(|mut slot| slot.take());
         if let Some(line) = failed {
             self.status = line;
+            // Disk may be stale; do not treat the optimistic idle key as clean.
+            self.persist_idle_key.clear();
         }
     }
 
@@ -321,9 +345,14 @@ impl Cabin {
     pub(super) fn persist_loops(&mut self) {
         let list = self.grok_loops.clone();
         let dir = config::config_dir();
+        let io = self.persist_io.clone();
+        let err = self.persist_err.clone();
         std::thread::spawn(move || {
             let _pin = pin_scheduled_dir(dir);
-            let _ = crate::loops::save(&list);
+            match io.lock() {
+                Ok(_g) => note_persist_err(&err, crate::loops::save(&list), "loops"),
+                Err(_) => note_persist_err(&err, Err("persist lock poisoned".into()), "loops"),
+            }
         });
         self.persist_idle_key = self.persist_idle_now();
     }
@@ -331,9 +360,20 @@ impl Cabin {
     pub(super) fn persist_suggestions(&mut self) {
         let suggestions = self.suggestions.clone();
         let dir = config::config_dir();
+        let io = self.persist_io.clone();
+        let err = self.persist_err.clone();
         std::thread::spawn(move || {
             let _pin = pin_scheduled_dir(dir);
-            let _ = crate::store::save_suggestions(&suggestions);
+            match io.lock() {
+                Ok(_g) => note_persist_err(
+                    &err,
+                    crate::store::save_suggestions(&suggestions),
+                    "suggestions",
+                ),
+                Err(_) => {
+                    note_persist_err(&err, Err("persist lock poisoned".into()), "suggestions")
+                }
+            }
         });
         self.persist_idle_key = self.persist_idle_now();
     }
@@ -341,9 +381,16 @@ impl Cabin {
     pub(super) fn persist_automations(&mut self) {
         let list = self.automations.clone();
         let dir = config::config_dir();
+        let io = self.persist_io.clone();
+        let err = self.persist_err.clone();
         std::thread::spawn(move || {
             let _pin = pin_scheduled_dir(dir);
-            let _ = crate::night::save(&list);
+            match io.lock() {
+                Ok(_g) => note_persist_err(&err, crate::night::save(&list), "automations"),
+                Err(_) => {
+                    note_persist_err(&err, Err("persist lock poisoned".into()), "automations")
+                }
+            }
         });
         self.persist_idle_key = self.persist_idle_now();
     }
@@ -351,9 +398,14 @@ impl Cabin {
     pub(super) fn persist_updates(&mut self) {
         let list = self.updates.clone();
         let dir = config::config_dir();
+        let io = self.persist_io.clone();
+        let err = self.persist_err.clone();
         std::thread::spawn(move || {
             let _pin = pin_scheduled_dir(dir);
-            let _ = crate::feed::save(&list);
+            match io.lock() {
+                Ok(_g) => note_persist_err(&err, crate::feed::save(&list), "updates"),
+                Err(_) => note_persist_err(&err, Err("persist lock poisoned".into()), "updates"),
+            }
         });
         self.persist_idle_key = self.persist_idle_now();
     }

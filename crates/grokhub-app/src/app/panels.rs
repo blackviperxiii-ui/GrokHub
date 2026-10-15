@@ -1,4 +1,4 @@
-//! Phase 1 controlled generative UI panels (CI status, build errors, compare table).
+//! Controlled generative UI panels (CI status, build errors, compare table).
 //! Renderer only: actions are returned as [`PanelAction`] intents for approval-gated callers.
 
 use std::collections::HashMap;
@@ -22,7 +22,7 @@ pub fn panels_enabled() -> bool {
     PANELS_UI_ENABLED.load(Ordering::Relaxed)
 }
 
-/// Read G2 `generative_ui.toml` `enabled` and set [`PANELS_UI_ENABLED`].
+/// Read `generative_ui.toml` `enabled` and set [`PANELS_UI_ENABLED`].
 pub fn apply_generative_ui_setting(config_dir: &Path) {
     PANELS_UI_ENABLED.store(read_generative_ui_enabled(config_dir), Ordering::Relaxed);
 }
@@ -53,7 +53,7 @@ pub struct PanelAction {
     pub action: String,
 }
 
-/// Phase 1 controlled panel spec (JSON `type` discriminant).
+/// Controlled panel spec (JSON `type` discriminant).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum PanelSpec {
@@ -127,9 +127,9 @@ pub struct PanelButton {
 
 #[derive(Debug, Clone, PartialEq)]
 enum PanelBody {
-    /// G3 controlled tagged forms (`ci_status` / `build_errors` / `compare_table`).
+    /// Tagged forms (`ci_status` / `build_errors` / `compare_table`).
     Spec(PanelSpec),
-    /// Live G1/G2 agent shape from `grokhub_core::panel_spec` (`title` + `elements`).
+    /// Agent shape from `grokhub_core::panel_spec` (`title` + `elements`).
     Core(CoreSpec),
     Fallback(String),
 }
@@ -160,8 +160,8 @@ pub struct PanelStore {
 }
 
 impl PanelStore {
-    /// Insert or replace a panel by id (tests and direct hosts).
-    #[allow(dead_code)]
+    /// Insert or replace a panel by id (unit tests).
+    #[cfg(test)]
     pub fn upsert(&mut self, id: impl Into<String>, spec_json: &str) {
         self.upsert_anchored(id, "", spec_json);
     }
@@ -206,7 +206,7 @@ impl PanelStore {
         }
     }
 
-    /// Parse a G2 `show_panel` tool result (`{"panel": …}` marker). Same id updates
+    /// Parse a `show_panel` tool result (`{"panel": …}` marker). Same id updates
     /// in place. Returns false when the result is not a panel marker.
     pub fn upsert_from_tool_result(&mut self, call_id: &str, result: &str) -> bool {
         let Some((opt_id, spec_json)) = extract_panel_marker(result) else {
@@ -228,8 +228,8 @@ impl PanelStore {
         }
     }
 
-    /// Drop every unpinned panel (Settings / slash later).
-    #[allow(dead_code)]
+    /// Drop every unpinned panel (test helper; no Settings/slash path).
+    #[cfg(test)]
     pub fn dismiss_all(&mut self) {
         for id in self.order.clone() {
             let pinned = self.entries.get(&id).map(|e| e.pinned).unwrap_or(false);
@@ -254,7 +254,7 @@ impl PanelStore {
         }
     }
 
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub fn is_pinned(&self, id: &str) -> bool {
         self.entries.get(id).map(|e| e.pinned).unwrap_or(false)
     }
@@ -285,7 +285,7 @@ fn parse_panel_json(json: &str) -> PanelBody {
         Ok(v) => v,
         Err(e) => return PanelBody::Fallback(format!("Invalid panel JSON: {e}")),
     };
-    // G3 controlled tagged forms used by cabin fixtures / tests.
+    // Controlled tagged forms used by cabin fixtures / tests.
     if let Some(ty) = value.get("type").and_then(|v| v.as_str()) {
         if matches!(ty, "ci_status" | "build_errors" | "compare_table") {
             return match serde_json::from_value::<PanelSpec>(value) {
@@ -294,7 +294,7 @@ fn parse_panel_json(json: &str) -> PanelBody {
             };
         }
     }
-    // Live G1/G2 agent shape: `{ "title"?, "elements": [...] }`.
+    // Agent shape: `{ "title"?, "elements": [...] }`.
     if value.get("elements").is_some() {
         return match parse_core_panel_spec(trimmed) {
             Ok(spec) => PanelBody::Core(spec),
@@ -304,7 +304,7 @@ fn parse_panel_json(json: &str) -> PanelBody {
     PanelBody::Fallback("Unsupported panel spec: missing type or elements".into())
 }
 
-/// Pull the G2 `{"panel": …}` marker out of a tool result body (summary + JSON).
+/// Pull the `{"panel": …}` marker out of a tool result body (summary + JSON).
 fn extract_panel_marker(result: &str) -> Option<(Option<String>, String)> {
     let mut search = result;
     while let Some(rel) = search.find('{') {

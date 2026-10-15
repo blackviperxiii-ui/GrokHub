@@ -10,6 +10,7 @@ enum PersistMsg {
         snap: Box<PersistSnap>,
         gen: u64,
         done: Option<mpsc::Sender<()>>,
+        err: Arc<Mutex<Option<String>>>,
     },
     Settings {
         dir: PathBuf,
@@ -19,9 +20,11 @@ enum PersistMsg {
     },
     Projects {
         nodes: Vec<ProjectNode>,
+        err: Arc<Mutex<Option<String>>>,
     },
     WindowCfg {
         cfg: Box<AppConfig>,
+        err: Arc<Mutex<Option<String>>>,
     },
     Flush(mpsc::Sender<()>),
 }
@@ -47,13 +50,21 @@ impl PersistService {
         snap: PersistSnap,
         gen: u64,
         done: Option<mpsc::Sender<()>>,
+        err: Arc<Mutex<Option<String>>>,
     ) {
-        let _ = self.tx.send(PersistMsg::FullSnap {
-            dir,
-            snap: Box::new(snap),
-            gen,
-            done,
-        });
+        if self
+            .tx
+            .send(PersistMsg::FullSnap {
+                dir,
+                snap: Box::new(snap),
+                gen,
+                done,
+                err: err.clone(),
+            })
+            .is_err()
+        {
+            note_persist_err(&err, Err("persist worker stopped".into()), "chats");
+        }
     }
 
     pub(super) fn submit_settings(
@@ -63,20 +74,44 @@ impl PersistService {
         gen: u64,
         err: Arc<Mutex<Option<String>>>,
     ) {
-        let _ = self.tx.send(PersistMsg::Settings {
-            dir,
-            slot,
-            gen,
-            err,
-        });
+        if self
+            .tx
+            .send(PersistMsg::Settings {
+                dir,
+                slot,
+                gen,
+                err: err.clone(),
+            })
+            .is_err()
+        {
+            note_persist_err(&err, Err("persist worker stopped".into()), "settings");
+        }
     }
 
-    pub(super) fn submit_projects(&self, nodes: Vec<ProjectNode>) {
-        let _ = self.tx.send(PersistMsg::Projects { nodes });
+    pub(super) fn submit_projects(&self, nodes: Vec<ProjectNode>, err: Arc<Mutex<Option<String>>>) {
+        if self
+            .tx
+            .send(PersistMsg::Projects {
+                nodes,
+                err: err.clone(),
+            })
+            .is_err()
+        {
+            note_persist_err(&err, Err("persist worker stopped".into()), "projects");
+        }
     }
 
-    pub(super) fn submit_window_cfg(&self, cfg: AppConfig) {
-        let _ = self.tx.send(PersistMsg::WindowCfg { cfg: Box::new(cfg) });
+    pub(super) fn submit_window_cfg(&self, cfg: AppConfig, err: Arc<Mutex<Option<String>>>) {
+        if self
+            .tx
+            .send(PersistMsg::WindowCfg {
+                cfg: Box::new(cfg),
+                err: err.clone(),
+            })
+            .is_err()
+        {
+            note_persist_err(&err, Err("persist worker stopped".into()), "window");
+        }
     }
 
     /// Drain every message queued before this call. Used by tests and `on_exit`.
@@ -100,11 +135,21 @@ fn persist_service_worker(
                 snap,
                 gen,
                 done,
+                err,
             } => {
                 let _pin = pin_scheduled_dir(dir.clone());
-                if let Ok(_g) = io.lock() {
-                    write_persist_disk_in_order(&dir, &snap, gen, &mark);
+                match io.lock() {
+                    Ok(_g) => {
+                        if let Err(e) = write_persist_disk_in_order(&dir, &snap, gen, &mark) {
+                            note_persist_err(&err, Err(e), "chats");
+                        }
+                    }
+                    Err(_) => {
+                        note_persist_err(&err, Err("persist lock poisoned".into()), "chats");
+                    }
                 }
+                // Always release waiters; `poll_persist_err` clears the idle key on failure
+                // so the next idle tick retries instead of treating disk as clean.
                 if let Some(done) = done {
                     let _ = done.send(());
                 }
@@ -117,6 +162,7 @@ fn persist_service_worker(
             } => {
                 let _pin = pin_scheduled_dir(dir.clone());
                 let Ok(_disk) = io.lock() else {
+                    note_persist_err(&err, Err("persist lock poisoned".into()), "settings");
                     continue;
                 };
                 let cfg = match slot.lock() {
@@ -127,16 +173,22 @@ fn persist_service_worker(
                     note_persist_err(&err, config::save_in(&dir, &cfg), "settings");
                 }
             }
-            PersistMsg::Projects { nodes } => {
-                if let Ok(_g) = io.lock() {
-                    let _ = crate::store::save_projects(&nodes);
+            PersistMsg::Projects { nodes, err } => match io.lock() {
+                Ok(_g) => {
+                    note_persist_err(&err, crate::store::save_projects(&nodes), "projects");
                 }
-            }
-            PersistMsg::WindowCfg { cfg } => {
-                if let Ok(_g) = io.lock() {
-                    let _ = config::save(&cfg);
+                Err(_) => {
+                    note_persist_err(&err, Err("persist lock poisoned".into()), "projects");
                 }
-            }
+            },
+            PersistMsg::WindowCfg { cfg, err } => match io.lock() {
+                Ok(_g) => {
+                    note_persist_err(&err, config::save(&cfg), "window");
+                }
+                Err(_) => {
+                    note_persist_err(&err, Err("persist lock poisoned".into()), "window");
+                }
+            },
             PersistMsg::Flush(done) => {
                 let _ = done.send(());
             }

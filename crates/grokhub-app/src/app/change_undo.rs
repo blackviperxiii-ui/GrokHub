@@ -583,7 +583,7 @@ pub(super) fn click_pill(ui: &mut egui::Ui, label: &str) -> bool {
 /// row and pill. Typed text and keys never answer it.
 pub(super) fn paint_change_rows(
     ui: &mut egui::Ui,
-    salt: &str,
+    id_ns: &str,
     rows: &[ChangeRow],
     inset: bool,
 ) -> Option<(ChangeRow, ChangeAct)> {
@@ -591,7 +591,7 @@ pub(super) fn paint_change_rows(
     let labels: Vec<&str> = rows.iter().map(|r| r.label.as_str()).collect();
     let pads = super::chat_ui::result_row_label_pads(ui, &labels);
     for (row, pad) in rows.iter().zip(pads) {
-        ui.push_id((salt, row.kind.as_str(), row.id.as_str()), |ui| {
+        ui.push_id((id_ns, row.kind.as_str(), row.id.as_str()), |ui| {
             let size = egui::vec2(ui.available_width(), ROW_H);
             ui.allocate_ui_with_layout(
                 size,
