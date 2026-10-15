@@ -220,7 +220,15 @@ impl Cabin {
         }
         let after = serde_json::to_vec(&self.dock_state).ok();
         if before != after {
-            save_dock_state(&self.dock_state);
+            // Serialize + write off the UI thread under persist_io (same mutex as
+            // PersistService / window geom) so a dock drag does not hitch paint.
+            let state = self.dock_state.clone();
+            let io = self.persist_io.clone();
+            std::thread::spawn(move || {
+                if let Ok(_g) = io.lock() {
+                    save_dock_state(&state);
+                }
+            });
         }
     }
 }

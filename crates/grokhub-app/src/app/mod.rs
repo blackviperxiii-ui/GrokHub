@@ -1985,7 +1985,8 @@ impl Cabin {
                 let mut cfg = self.cfg.clone();
                 cfg.api_key.clear();
                 // PersistService worker takes persist_io before config::save.
-                self.persist_svc.submit_window_cfg(cfg);
+                let err = self.persist_err.clone();
+                self.persist_svc.submit_window_cfg(cfg, err);
             }
             crate::window::GeomFlush::AfterMs(ms) => {
                 ctx.request_repaint_after(Duration::from_millis(ms));
@@ -3162,8 +3163,14 @@ impl Cabin {
         let gen = self.next_persist_gen();
         let (persist_done_tx, persist_done_rx) = mpsc::channel();
         // PersistService pins config_dir and write_persist_disk_in_order.
-        self.persist_svc
-            .submit_full(dir.clone(), snap.clone(), gen, Some(persist_done_tx));
+        let err = self.persist_err.clone();
+        self.persist_svc.submit_full(
+            dir.clone(),
+            snap.clone(),
+            gen,
+            Some(persist_done_tx),
+            err,
+        );
         std::thread::spawn(move || {
             let _ = persist_done_rx.recv();
             // EgressGuard: log the send (no content) or send nothing. A grant

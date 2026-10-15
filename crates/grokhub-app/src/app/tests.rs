@@ -1290,7 +1290,7 @@ fn skipped_row_advances_by_cached_height_only() {
 
 #[test]
 fn culled_row_does_not_steal_the_next_rows_widget_id() {
-    fn copy_id(skip_earlier: bool, salt: bool) -> egui::Id {
+    fn copy_id(skip_earlier: bool, use_stable_id: bool) -> egui::Id {
         let ctx = egui::Context::default();
         let mut id = egui::Id::NULL;
         let _ = crate::theme::test_pass(&ctx, Default::default(), |ui| {
@@ -1298,13 +1298,13 @@ fn culled_row_does_not_steal_the_next_rows_widget_id() {
                 for i in 0..2 {
                     if skip_earlier && i == 0 {
                         ui.add_space(20.0);
-                        if salt {
+                        if use_stable_id {
                             ui.skip_ahead_auto_ids(1);
                         }
                         continue;
                     }
                     let button = |ui: &mut egui::Ui| ui.button("Copy");
-                    let resp = if salt {
+                    let resp = if use_stable_id {
                         ui.push_id(super::chat_row_id_salt("thr", i), button).inner
                     } else {
                         button(ui)
@@ -1326,7 +1326,7 @@ fn culled_row_does_not_steal_the_next_rows_widget_id() {
     assert_ne!(
         copy_id(false, false),
         copy_id(true, false),
-        "egui auto ids still shift when a row is skipped; the salt is what holds them"
+        "egui auto ids still shift when a row is skipped; the stable id is what holds them"
     );
 }
 
@@ -2493,6 +2493,33 @@ fn grok_login_powers_history_and_imagine() {
             && persist_usage.contains("persist_io")
             && !persist_usage.contains("self.persist()"),
         "night usage must not freeze the cabin writing usage.json: {persist_usage}"
+    );
+    for name in [
+        "persist_loops",
+        "persist_suggestions",
+        "persist_automations",
+        "persist_updates",
+    ] {
+        let body = fn_src(&src, name);
+        assert!(
+            body.contains("persist_io") && body.contains("thread::spawn"),
+            "{name} must take persist_io off the UI thread so FullSnap cannot tear JSON: {body}"
+        );
+    }
+    let poll_err = fn_src(&src, "poll_persist_err");
+    assert!(
+        poll_err.contains("persist_idle_key.clear"),
+        "a failed persist must clear the idle key so the next tick retries: {poll_err}"
+    );
+    let persist_svc_src = include_str!("persist_service.rs");
+    assert!(
+        persist_svc_src.contains("note_persist_err")
+            && persist_svc_src.contains("persist lock poisoned"),
+        "FullSnap must surface a poisoned persist_io instead of claiming disk is clean: {persist_svc_src}"
+    );
+    assert!(
+        !include_str!("change_undo.rs").contains("salt: &str"),
+        "egui id namespace param must not be named salt (CodeQL hard-coded salt FP)"
     );
     let bg = src
         .split("fn persist_idle_now(")
@@ -9343,6 +9370,40 @@ fn delete_all_history_clears_seeded_chats() {
 }
 
 #[test]
+fn poisoned_persist_io_surfaces_error_and_retries_idle() {
+    let _lock = crate::config::hold_test_config();
+    let cfg = IsolatedConfig::arm("persist-poison");
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.threads = vec![crate::threads::ChatThread::new("Pier", false)];
+    cabin.thread_idx = 0;
+    cabin.messages = std::sync::Arc::new(Vec::new());
+    // Poison the shared mutex the PersistService worker takes before disk I/O.
+    let io = cabin.persist_io.clone();
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _g = io.lock().unwrap();
+        panic!("poison persist_io");
+    }));
+    cabin.persist_idle_key.clear();
+    cabin.persist_bg();
+    let start = std::time::Instant::now();
+    while cabin.persist_rx.is_some() && start.elapsed() < std::time::Duration::from_secs(3) {
+        cabin.poll_persist();
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    cabin.poll_persist_err();
+    assert!(
+        cabin.status.contains("persist lock poisoned") || cabin.status.contains("Could not save"),
+        "poisoned lock must surface via persist_err, got status={status}",
+        status = cabin.status
+    );
+    assert!(
+        cabin.persist_idle_key.is_empty(),
+        "failed write must clear the idle key so the next tick retries"
+    );
+    drop(cfg);
+}
+
+#[test]
 fn an_older_persist_snapshot_never_overwrites_a_newer_one() {
     let _lock = crate::config::hold_test_config();
     let cfg = IsolatedConfig::arm("persist-order");
@@ -9363,8 +9424,8 @@ fn an_older_persist_snapshot_never_overwrites_a_newer_one() {
     assert!(new.secrets.is_none());
     let mark = std::sync::Arc::new(std::sync::Mutex::new(PersistMark::default()));
     // The newer worker takes persist_io first, the older one second.
-    write_persist_disk_in_order(&cfg.root, &new, new_gen, &mark);
-    write_persist_disk_in_order(&cfg.root, &old, old_gen, &mark);
+    let _ = write_persist_disk_in_order(&cfg.root, &new, new_gen, &mark);
+    let _ = write_persist_disk_in_order(&cfg.root, &old, old_gen, &mark);
     let threads = std::fs::read_to_string(cfg.root.join("threads.json")).expect("threads.json");
     assert!(threads.contains("\"title\": \"Chat\""), "{threads}");
     assert!(!threads.contains("Pier light"), "{threads}");
@@ -9373,7 +9434,7 @@ fn an_older_persist_snapshot_never_overwrites_a_newer_one() {
     assert!(cfg.root.join("secrets.json").is_file());
     // A second older write of the same generation changes nothing.
     std::fs::remove_file(crate::store::projects_path()).expect("projects");
-    write_persist_disk_in_order(&cfg.root, &old, old_gen, &mark);
+    let _ = write_persist_disk_in_order(&cfg.root, &old, old_gen, &mark);
     assert!(!crate::store::projects_path().exists());
     let again = std::fs::read_to_string(cfg.root.join("threads.json")).expect("threads.json");
     assert_eq!(again, threads);
@@ -9400,10 +9461,10 @@ fn persist_service_queues_out_of_order_full_snaps() {
     // Newer gen first, then older — through the actor, not the free fn.
     cabin
         .persist_svc
-        .submit_full(cfg.root.clone(), new, new_gen, None);
+        .submit_full(cfg.root.clone(), new, new_gen, None, cabin.persist_err.clone());
     cabin
         .persist_svc
-        .submit_full(cfg.root.clone(), old, old_gen, None);
+        .submit_full(cfg.root.clone(), old, old_gen, None, cabin.persist_err.clone());
     join_persist(&cabin.persist_svc);
     let threads = std::fs::read_to_string(cfg.root.join("threads.json")).expect("threads.json");
     assert!(threads.contains("\"title\": \"Chat\""), "{threads}");
