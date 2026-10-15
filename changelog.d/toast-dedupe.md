@@ -1,0 +1,1 @@
+- Fix: identical status toasts (same kind and text) raised within a few seconds collapse into one counted toast with a fresh timer instead of stacking.
