@@ -636,6 +636,12 @@ fn table_cell_wrap_h(ui: &Ui, text: &str, font_size: f32, wrap_w: f32) -> f32 {
     galley.size().y
 }
 
+/// Column count: the widest of the header and any row, so extra cells in a long
+/// row are shown (under a blank header) instead of dropped.
+fn string_table_cols(headers: &[String], rows: &[Vec<String>]) -> usize {
+    rows.iter().map(Vec::len).fold(headers.len(), usize::max)
+}
+
 /// Embedded string table via egui_extras TableBuilder (no inner vscroll).
 /// Equal remainder columns + top-down cells so long TEXT_MAX cells wrap in-pane
 /// instead of stretching the card (Column::auto + horizontal layout does not wrap).
@@ -645,8 +651,8 @@ fn paint_string_table(
     headers: &[String],
     rows: &[Vec<String>],
 ) {
-    let cols = headers.len();
-    if cols == 0 {
+    let cols = string_table_cols(headers, rows);
+    if headers.is_empty() {
         return;
     }
     let spacing_x = ui.spacing().item_spacing.x;
@@ -678,7 +684,8 @@ fn paint_string_table(
     }
     builder
         .header(header_h, |mut header| {
-            for h in headers {
+            for i in 0..cols {
+                let h = headers.get(i).map(String::as_str).unwrap_or("");
                 header.col(|ui| {
                     ui.label(
                         RichText::new(h)
@@ -878,6 +885,27 @@ mod tests {
         store.upsert("ct", compare_json());
         let (shapes, _) = headless_show(&mut store);
         assert!(text_in_shapes(&shapes, "beta vs main"));
+        disable_panels();
+    }
+
+    #[test]
+    fn string_table_keeps_cells_beyond_the_header() {
+        let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+        assert_eq!(string_table_cols(&s(&["A", "B"]), &[s(&["1"])]), 2);
+        assert_eq!(string_table_cols(&s(&["A"]), &[s(&["1", "2", "3"])]), 3);
+        let json = r#"{
+  "type": "compare_table",
+  "subject": "ragged",
+  "headers": ["A"],
+  "rows": [["one", "extra-cell-xyz"]],
+  "actions": []
+}"#;
+        enable_panels();
+        let mut store = PanelStore::default();
+        store.upsert("ragged", json);
+        let (shapes, _) = headless_show(&mut store);
+        assert!(text_in_shapes(&shapes, "one"));
+        assert!(text_in_shapes(&shapes, "extra-cell-xyz"));
         disable_panels();
     }
 
