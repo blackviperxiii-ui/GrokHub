@@ -693,11 +693,22 @@ mod tests {
 
     #[test]
     fn rejects_table_column_mismatch() {
-        let err = parse_panel_spec(
+        let short = parse_panel_spec(
             r#"{"elements":[{"type":"table","headers":["a","b"],"rows":[["only-one"]]}]}"#,
         )
         .unwrap_err();
-        assert!(err.contains("cells"), "{err}");
+        assert!(
+            short.contains("table row 0 has 1 cells; expected 2"),
+            "{short}"
+        );
+        let long = parse_panel_spec(
+            r#"{"elements":[{"type":"table","headers":["a","b"],"rows":[["1","2"],["1","2","3"]]}]}"#,
+        )
+        .unwrap_err();
+        assert!(
+            long.contains("table row 1 has 3 cells; expected 2"),
+            "{long}"
+        );
     }
 
     #[test]
