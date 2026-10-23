@@ -55,6 +55,10 @@ cargo clippy --workspace --all-targets -- -D warnings
 ## Grok Build roles (bundled)
 Grok Build 1.0.49+ ships explore / plan / implementer (and reviewer, test-writer, …) under `~/.grok/bundled/roles/`. There is no separate "build" role name — use **implementer** for build/code. Invoke with `grok --agent <role>` or project agent config when spawning subagents. Do not invent custom role TOML unless Jeremy asks.
 
+## Cross-platform recode
+- Jeremy approved Tauri 2 + React + TS for the cross-platform shell (2026-10-23). "No Electron. No Tauri." now covers only the egui cabin, which keeps shipping until parity. Electron stays out.
+- The repo rules here win over the Notion recode card: vstack, stop at green, Jeremy merges. Plan, phases and open decisions: `docs/cross-platform/README.md`.
+
 ## Semgrep + dyl-review + Continual Learning
 - Run **Semgrep** on touched paths before marking a PR Ready (`semgrep --config=auto` or the Semgrep plugin). Fix or justify findings in the PR body. Do **not** use dyl-ready-pr merge/babysit.
 - **dyl-review** (quick): draft review asks for the human; never auto-post merge.
