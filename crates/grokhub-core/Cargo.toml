@@ -8,6 +8,7 @@ description = "Shared GrokHub brain — pair, tasks, frames, inhabit."
 publish = false
 
 [dependencies]
+grokhub-proto = { path = "../grokhub-proto" }
 serde.workspace = true
 serde_json.workspace = true
 getrandom.workspace = true

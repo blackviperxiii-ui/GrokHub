@@ -1,0 +1,12 @@
+[package]
+name = "grokhub-proto"
+version.workspace = true
+rust-version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Hub wire types with no I/O, shared by native and wasm clients"
+publish = false
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
