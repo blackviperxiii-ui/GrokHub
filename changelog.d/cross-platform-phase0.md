@@ -1,0 +1,1 @@
+- Docs: cross-platform recode plan (Tauri 2 + React + TS) and Phase 0 decisions in `docs/cross-platform/README.md`.

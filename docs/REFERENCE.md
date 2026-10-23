@@ -1,6 +1,6 @@
 # GrokHub
 
-Native Rust cabin. No Electron. No Tauri. One repo, one `main`, one version — two ship artifacts.
+Native Rust cabin. No Electron. No Tauri in the egui cabin; the cross-platform Tauri shell is planned in [`docs/cross-platform/README.md`](cross-platform/README.md). One repo, one `main`, one version — two ship artifacts.
 
 **v3.1.0** — Patch on Cabin 3.0: MCP/provider/marketplace SSRF harden, Mission/Journal/Evidence/Recovery, Pulse free web search and interest graph, Auto built-in routing, Imagine UI finish.
 
