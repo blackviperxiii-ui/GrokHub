@@ -55,6 +55,9 @@ cargo clippy --workspace --all-targets -- -D warnings
 - Prefer Grok Build for coding/CI on this box; Cursor Cloud out until Oct 11. One bot per job.
 - Grok Build roles: explore, plan, implementer (no separate "build" role).
 
+## Cross-platform recode
+- Tauri 2 + React + TS approved for the cross-platform shell (Jeremy, 2026-10-23); "No Tauri" covers only the egui cabin. Repo rules win over the Notion card. Plan: `docs/cross-platform/README.md`.
+
 ## Semgrep / dyl-review / Continual Learning
 - Semgrep before Ready; dyl-review quick only; Continual Learning → AGENTS.md. Never dyl-ready-pr merge/babysit.
 

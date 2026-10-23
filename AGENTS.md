@@ -9,6 +9,9 @@ Prefer Grok Build on the box (roles: explore, plan, implementer). Cursor Cloud p
 ## Compass files
 Read the compass file before editing a module: `docs/compass/README.md` lists one short map per crate and hot module (owns, change recipe, what breaks, gotchas). Fix it in the same PR when you move code; `compass_paths` fails on stale paths.
 
+## Cross-platform recode
+Tauri 2 + React + TS shell approved (2026-10-23); egui cabin ships until parity. Plan and decisions: `docs/cross-platform/README.md`.
+
 ## Quality gates
 Semgrep before Ready. dyl-review quick for draft asks — never dyl-ready-pr merge/babysit. Continual Learning keeps this file current.
 
