@@ -127,7 +127,7 @@ grokhub_lock_versions() {
   python3 - "$file" <<'PY'
 import sys
 text = open(sys.argv[1], encoding="utf-8").read().splitlines()
-want = {"grokhub-app", "grokhub-agent", "grokhub-core", "grokhub-hub"}
+want = {"grokhub-app", "grokhub-agent", "grokhub-core", "grokhub-hub", "grokhub-proto"}
 out = []
 i = 0
 while i < len(text):
