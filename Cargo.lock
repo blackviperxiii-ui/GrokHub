@@ -2084,6 +2084,7 @@ dependencies = [
 name = "grokhub-agent"
 version = "3.1.0"
 dependencies = [
+ "apple-native-keyring-store",
  "base64 0.22.1",
  "globset",
  "grokhub-core",
@@ -2145,6 +2146,7 @@ version = "3.1.0"
 dependencies = [
  "flate2",
  "getrandom 0.2.17",
+ "grokhub-proto",
  "hex",
  "minisign-verify",
  "quick-xml",
@@ -2170,6 +2172,14 @@ dependencies = [
  "serde_json",
  "tiny_http",
  "winresource",
+]
+
+[[package]]
+name = "grokhub-proto"
+version = "3.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

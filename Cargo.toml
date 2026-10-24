@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
+    "crates/grokhub-proto",
     "crates/grokhub-core",
     "crates/grokhub-hub",
     "crates/grokhub-app",
