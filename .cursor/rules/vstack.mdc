@@ -1,6 +1,0 @@
----
-description: "Always use vstack skills; never pstack."
-alwaysApply: true
----
-
-Always load and follow the vstack skills in .cursor/skills (start with viper-mode); never use pstack.
