@@ -160,14 +160,24 @@ const LOCK_PACKAGES: [&str; 5] = [
     "grokhub-proto",
 ];
 
+/// The Tauri shell (`src-tauri/`) is its own Cargo workspace, so its lockfile
+/// holds its own copies of the grokhub-* crates it builds on.
+const SHELL_LOCK_PACKAGES: [&str; 3] = ["grokhub-agent", "grokhub-core", "grokhub-proto"];
+
+/// Every lockfile with grokhub-* entries, and the packages each must pin.
+const LOCKS: [(&str, &[&str]); 2] = [
+    ("Cargo.lock", &LOCK_PACKAGES),
+    ("src-tauri/Cargo.lock", &SHELL_LOCK_PACKAGES),
+];
+
 fn check_cargo_lock(root: &Path, version: &str) -> Result<(), String> {
-    let text = fs::read_to_string(root.join("Cargo.lock")).map_err(|e| e.to_string())?;
-    for name in LOCK_PACKAGES {
-        let block = format!("name = \"{name}\"\nversion = \"{version}\"");
-        if !text.contains(&block) {
-            return Err(format!(
-                "Cargo.lock package {name} is not version {version}"
-            ));
+    for (rel, packages) in LOCKS {
+        let text = read_rel(root, rel)?;
+        for name in packages {
+            let block = format!("name = \"{name}\"\nversion = \"{version}\"");
+            if !text.contains(&block) {
+                return Err(format!("{rel} package {name} is not version {version}"));
+            }
         }
     }
     Ok(())
@@ -259,10 +269,12 @@ fn plan_bump(root: &Path, new_version: &str, today: &str) -> Result<BumpPlan, St
         "docs/REFERENCE.md".into(),
         reference_text(&read_rel(root, "docs/REFERENCE.md")?, &old, new_version)?,
     ));
-    plan.writes.push((
-        "Cargo.lock".into(),
-        cargo_lock_text(&read_rel(root, "Cargo.lock")?, &old, new_version)?,
-    ));
+    for (rel, packages) in LOCKS {
+        plan.writes.push((
+            rel.into(),
+            cargo_lock_text(&read_rel(root, rel)?, rel, packages, &old, new_version)?,
+        ));
+    }
 
     let names = sorted_fragment_names(root)?;
     let mut fragments = Vec::new();
@@ -345,13 +357,19 @@ fn reference_text(text: &str, old: &str, new: &str) -> Result<String, String> {
     Ok(next)
 }
 
-fn cargo_lock_text(text: &str, old: &str, new: &str) -> Result<String, String> {
+fn cargo_lock_text(
+    text: &str,
+    rel: &str,
+    packages: &[&str],
+    old: &str,
+    new: &str,
+) -> Result<String, String> {
     let mut next = text.to_string();
-    for name in LOCK_PACKAGES {
+    for name in packages {
         let from = format!("name = \"{name}\"\nversion = \"{old}\"");
         let to = format!("name = \"{name}\"\nversion = \"{new}\"");
         if !next.contains(&from) {
-            return Err(format!("Cargo.lock missing {name} @ {old}"));
+            return Err(format!("{rel} missing {name} @ {old}"));
         }
         next = next.replacen(&from, &to, 1);
     }
@@ -548,10 +566,11 @@ mod tests {
 
     const OLD: &str = "3.0.2";
     const NEW: &str = "3.1.0";
-    const FILES: [&str; 9] = [
+    const FILES: [&str; 10] = [
         "VERSION",
         "Cargo.toml",
         "Cargo.lock",
+        "src-tauri/Cargo.lock",
         "packaging/PKGBUILD",
         "packaging/aur/PKGBUILD",
         "packaging/windows/grokhub.iss",
@@ -579,13 +598,15 @@ mod tests {
                     "[workspace]\n[workspace.package]\nversion = \"{OLD}\"\nedition = \"2021\"\n[workspace.dependencies]\nserde = {{ version = \"{OLD}\" }}\n"
                 ),
             );
-            let mut lock = String::new();
-            for name in LOCK_PACKAGES {
-                lock.push_str(&format!(
-                    "[[package]]\nname = \"{name}\"\nversion = \"{OLD}\"\n\n"
-                ));
+            for (rel, packages) in LOCKS {
+                let mut lock = String::new();
+                for name in packages {
+                    lock.push_str(&format!(
+                        "[[package]]\nname = \"{name}\"\nversion = \"{OLD}\"\n\n"
+                    ));
+                }
+                fx.put(rel, &lock);
             }
-            fx.put("Cargo.lock", &lock);
             fx.put("packaging/PKGBUILD", &format!("pkgver={OLD}\n"));
             fx.put("packaging/aur/PKGBUILD", &format!("pkgver={OLD}\n"));
             fx.put(
@@ -646,12 +667,31 @@ mod tests {
     }
 
     #[test]
+    fn check_catches_a_stale_shell_lock() {
+        let fx = Fixture::new();
+        fx.put(
+            "src-tauri/Cargo.lock",
+            "[[package]]\nname = \"grokhub-agent\"\nversion = \"3.0.1\"\n",
+        );
+        assert_eq!(
+            bump_check(&fx.0).unwrap_err(),
+            "src-tauri/Cargo.lock package grokhub-agent is not version 3.0.2"
+        );
+    }
+
+    #[test]
     fn apply_updates_every_copy_and_folds_changelog() {
         let fx = Fixture::new();
         bump_apply(&fx.0, NEW).unwrap();
         bump_check(&fx.0).unwrap();
         assert_eq!(read_version(&fx.0).unwrap(), NEW);
         assert!(!fx.get("Cargo.lock").contains(OLD));
+        assert_eq!(
+            fx.get("src-tauri/Cargo.lock"),
+            "[[package]]\nname = \"grokhub-agent\"\nversion = \"3.1.0\"\n\n\
+             [[package]]\nname = \"grokhub-core\"\nversion = \"3.1.0\"\n\n\
+             [[package]]\nname = \"grokhub-proto\"\nversion = \"3.1.0\"\n\n"
+        );
         // Dependency version in [workspace.dependencies] is untouched.
         assert!(fx
             .get("Cargo.toml")

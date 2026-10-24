@@ -12,12 +12,13 @@ Phase 0 started from `beta` @ `f0a5c7a` (2026-10-23).
 
 - **Tauri is approved** for the new cross-platform shell. "No Electron. No
   Tauri." now describes only the egui cabin. Electron stays out.
-- **Repo rules win** over the Notion card where they differ:
-  - vstack skills, never pstack.
-  - Bots get each phase PR green and ready, then stop. Jeremy merges (squash).
-  - Every PR targets `beta`. `.github/`, `clippy.toml` and release-script
-    changes still need his OK, so new CI jobs ship as a planned diff in the PR
-    body first.
+- **Repo rules win** over the Notion card where they differ. Since #832
+  (2026-10-24) those rules are:
+  - pstack skills (vstack is retired).
+  - Every PR targets `beta`. The agent squash-merges it once CI is green;
+    only `beta` → `main` needs Jeremy.
+  - `.github/`, `clippy.toml` and release-script changes still need his OK
+    before they merge.
 - **Still open:** the web backend (`grokhub-hub` as an HTTP service, or the
   web build as a remote control for a desktop instance). It is due before
   Phase 5. AUR and Inno packaging (keep or replace) is due before Phase 6.
@@ -83,3 +84,36 @@ In `grokhub-agent` they sit in `sudo_pass.rs`, `tools/shell.rs`,
   `keyring::Entry::new` will fail until the app enables
   `android-native-keyring-store`.
 
+
+## Phase 2 status
+
+The shell lives in `src-tauri/` (Rust, package `grokhub-shell`) and `ui/`
+(Vite + React + TS). It is its own Cargo workspace with its own
+`src-tauri/Cargo.lock`, so the main workspace's jobs never need the webview
+system libraries. `cargo xtask bump` keeps the grokhub-* versions in that
+lockfile in step, and `bump --check` fails if they drift.
+
+- Chat streams one reply per turn through `grokhub_agent::XaiClient` and shows
+  each text piece as it arrives. Stop keeps the partial reply. There are no
+  tools yet; the agent loop with approvals comes with Phase 3.
+- Settings: model and close-to-tray in `shell.json` in the GrokHub config
+  folder. The xAI API key lives in the OS keychain (service `GrokHub`, account
+  `shell-console-key`). Grok sign-in (OAuth) comes with Phase 3.
+- Tray: Show GrokHub and Quit. A left click shows the window.
+- `GROKHUB_SHELL_RESPONSES_URL` points chat at a local mock model. Only
+  plain-http loopback URLs are accepted, so it cannot move real traffic.
+- Tests: `npm test` in `ui/` (vitest), `cargo test` and clippy in
+  `src-tauri/`, and `node ui/e2e/smoke.mjs <binary>`. The smoke test drives the
+  built shell through tauri-driver, sends a chat to a mock model and waits for
+  the reply. tauri-driver has no macOS backend, so macOS only builds.
+
+Build locally (Linux needs `libwebkit2gtk-4.1-dev`,
+`libayatana-appindicator3-dev` and `librsvg2-dev`):
+
+```sh
+npm ci --prefix ui
+ui/node_modules/.bin/tauri build            # bundles in src-tauri/target/release/bundle
+ui/node_modules/.bin/tauri build --debug --no-bundle
+cargo install tauri-driver --locked
+xvfb-run -a node ui/e2e/smoke.mjs src-tauri/target/debug/grokhub-shell
+```
