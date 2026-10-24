@@ -1,0 +1,1 @@
+- Tests: split `app/tests.rs` into per-feature test files (rearch stage 5); the `tests.rs` line budget in ci-guards drops with each move.
