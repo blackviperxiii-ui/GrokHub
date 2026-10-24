@@ -1,0 +1,1 @@
+- Cross-platform recode, Phase 3b: the Tauri shell has an Automations page. It lists, adds (plain text such as "every weekday at 9am summarize my inbox"), pauses, resumes and removes the jobs in the same `automations.json` the cabin uses. Run now runs one job unattended in Ask mode: it can read, and anything that needs your OK is refused. The cabin keeps firing jobs on schedule.

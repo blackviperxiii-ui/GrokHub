@@ -73,3 +73,44 @@ export function closeChat(conversationId: string): Promise<void> {
 export function onChatEvent(handler: (envelope: ChatEnvelope) => void): Promise<UnlistenFn> {
   return listen<ChatEnvelope>(CHAT_EVENT, (event) => handler(event.payload));
 }
+
+export interface AutomationRow {
+  id: string;
+  name: string;
+  instructions: string;
+  enabled: boolean;
+  summary: string;
+  health: string | null;
+}
+
+export interface RunResult {
+  text: string;
+  error: string;
+  stop: string;
+  refused: number;
+}
+
+/** The local wall clock, so next-run times read in the user's own zone. */
+export function wallClock(now: Date = new Date()) {
+  return { weekday: now.getDay(), hour: now.getHours(), minute: now.getMinutes() };
+}
+
+export function listAutomations(): Promise<AutomationRow[]> {
+  return invoke<AutomationRow[]>("list_automations", { clock: wallClock() });
+}
+
+export function addAutomation(text: string): Promise<AutomationRow[]> {
+  return invoke<AutomationRow[]>("add_automation", { text, clock: wallClock() });
+}
+
+export function setAutomationEnabled(id: string, enabled: boolean): Promise<AutomationRow[]> {
+  return invoke<AutomationRow[]>("set_automation_enabled", { id, enabled, clock: wallClock() });
+}
+
+export function removeAutomation(id: string): Promise<AutomationRow[]> {
+  return invoke<AutomationRow[]>("remove_automation", { id, clock: wallClock() });
+}
+
+export function runAutomation(id: string): Promise<RunResult> {
+  return invoke<RunResult>("run_automation", { id });
+}
