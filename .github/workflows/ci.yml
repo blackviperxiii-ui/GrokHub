@@ -301,12 +301,21 @@ jobs:
       - name: Smoke test (Linux)
         if: runner.os == 'Linux'
         run: xvfb-run -a node ui/e2e/smoke.mjs src-tauri/target/debug/grokhub-shell
+      # msedgedriver must match the WebView2 runtime the shell runs on, which
+      # can differ from the runner's Edge, so fetch the driver for that version.
+      - name: msedgedriver for WebView2
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $key = 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}'
+          $version = (Get-ItemProperty $key).pv
+          Write-Host "WebView2 runtime $version"
+          Invoke-WebRequest "https://msedgedriver.microsoft.com/$version/edgedriver_win64.zip" -OutFile edgedriver.zip
+          Expand-Archive edgedriver.zip -DestinationPath edgedriver
+          "SMOKE_NATIVE_DRIVER=$PWD\edgedriver\msedgedriver.exe" >> $env:GITHUB_ENV
       - name: Smoke test (Windows)
         if: runner.os == 'Windows'
-        shell: bash
-        run: |
-          export SMOKE_NATIVE_DRIVER="$EDGEWEBDRIVER/msedgedriver.exe"
-          node ui/e2e/smoke.mjs src-tauri/target/debug/grokhub-shell.exe
+        run: node ui/e2e/smoke.mjs src-tauri/target/debug/grokhub-shell.exe
 
   windows:
     needs: changes
