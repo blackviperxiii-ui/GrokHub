@@ -470,6 +470,13 @@ pub(super) fn health_job(id: &str) -> grokhub_core::Automation {
     }
 }
 
+pub(super) fn with_fonts_ui(mut add: impl FnMut(&mut eframe::egui::Ui)) {
+    let ctx = eframe::egui::Context::default();
+    let _ = crate::theme::test_pass(&ctx, Default::default(), |ui| {
+        eframe::egui::CentralPanel::default().show(ui, |ui| add(ui));
+    });
+}
+
 #[test]
 fn wait_until_returns_when_ready() {
     let mut n = 0;
