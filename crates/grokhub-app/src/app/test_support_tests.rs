@@ -477,6 +477,43 @@ pub(super) fn with_fonts_ui(mut add: impl FnMut(&mut eframe::egui::Ui)) {
     });
 }
 
+pub(super) fn feed_card(
+    id: &str,
+    kind: grokhub_core::UpdateKind,
+    held: bool,
+) -> grokhub_core::UpdateCard {
+    grokhub_core::UpdateCard {
+        id: id.to_string(),
+        kind,
+        title: id.to_string(),
+        body: None,
+        created_at: 1,
+        status: grokhub_core::UpdateStatus::Unread,
+        action: None,
+        expires_at: None,
+        held,
+        citations: Vec::new(),
+        reaction: None,
+        discuss_thread: None,
+        built: false,
+        board_id: None,
+        why: None,
+        feed_pin: false,
+        feed_kept: false,
+        prompt: None,
+        idea_kind: None,
+        details: None,
+        draft: None,
+        modified: false,
+        source_id: String::new(),
+        skill: None,
+        runs: 1,
+        dismissed_at: 0,
+        done_for_you: None,
+        pulse: Default::default(),
+    }
+}
+
 #[test]
 fn wait_until_returns_when_ready() {
     let mut n = 0;
