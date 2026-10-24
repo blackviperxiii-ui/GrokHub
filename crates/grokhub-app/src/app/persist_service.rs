@@ -1,5 +1,4 @@
-//! Single ordered worker for threads / projects / settings disk writes.
-//! Secrets and OAuth refresh stay on their own spawn + `persist_io` (Stage 7).
+//! Single ordered worker for threads / projects / settings / secrets disk writes.
 
 use super::*;
 use std::path::PathBuf;
@@ -28,6 +27,13 @@ enum PersistMsg {
         cfg: Box<AppConfig>,
         err: Arc<Mutex<Option<String>>>,
     },
+    /// secrets.json; `err: None` keeps an OAuth refresh write quiet like before.
+    Secrets {
+        dir: PathBuf,
+        secrets: Box<secrets::Secrets>,
+        gen: u64,
+        err: Option<Arc<Mutex<Option<String>>>>,
+    },
     Flush(mpsc::Sender<()>),
 }
 
@@ -45,7 +51,7 @@ impl PersistService {
     pub(super) fn start(io: Arc<Mutex<()>>, mark: Arc<Mutex<PersistMark>>) -> Self {
         let (tx, rx) = mpsc::channel();
         let (wio, wmark) = (io.clone(), mark.clone());
-        // The only persist spawn for threads/projects/settings (Stage 6).
+        // The only persist spawn for threads/projects/settings/secrets (Stage 6, 7).
         std::thread::spawn(move || persist_service_worker(rx, wio, wmark));
         Self { tx, io, mark }
     }
@@ -111,6 +117,23 @@ impl PersistService {
         });
     }
 
+    /// Write secrets.json unless a newer generation already reached the disk, so
+    /// an older OAuth refresh can never overwrite a newer token.
+    pub(super) fn submit_secrets(
+        &self,
+        dir: PathBuf,
+        secrets: secrets::Secrets,
+        gen: u64,
+        err: Option<Arc<Mutex<Option<String>>>>,
+    ) {
+        self.send(PersistMsg::Secrets {
+            dir,
+            secrets: Box::new(secrets),
+            gen,
+            err,
+        });
+    }
+
     /// Drain every message queued before this call. Used by tests and `on_exit`.
     pub(super) fn flush(&self) {
         let (tx, rx) = mpsc::channel();
@@ -126,6 +149,7 @@ fn persist_msg_err(msg: &PersistMsg) -> Option<Arc<Mutex<Option<String>>>> {
         | PersistMsg::Settings { err, .. }
         | PersistMsg::Projects { err, .. }
         | PersistMsg::WindowCfg { err, .. } => Some(err.clone()),
+        PersistMsg::Secrets { err, .. } => err.clone(),
         PersistMsg::Flush(_) => None,
     }
 }
@@ -136,6 +160,7 @@ fn persist_msg_what(msg: &PersistMsg) -> &'static str {
         PersistMsg::Settings { .. } => "settings",
         PersistMsg::Projects { .. } => "projects",
         PersistMsg::WindowCfg { .. } => "window",
+        PersistMsg::Secrets { .. } => "keys",
         PersistMsg::Flush(_) => "persist",
     }
 }
@@ -238,6 +263,28 @@ fn handle_persist_msg(msg: PersistMsg, io: &Arc<Mutex<()>>, mark: &Arc<Mutex<Per
                 Err(_) => {
                     note_persist_err(&err, Err("persist lock poisoned".into()), "window");
                 }
+            }
+        }
+        PersistMsg::Secrets {
+            dir,
+            secrets,
+            gen,
+            err,
+        } => {
+            let _pin = pin_scheduled_dir(dir);
+            let Ok(_disk) = io.lock() else {
+                if let Some(err) = &err {
+                    note_persist_err(err, Err("persist lock poisoned".into()), "keys");
+                }
+                return;
+            };
+            let mut mark = mark.lock().unwrap_or_else(|e| e.into_inner());
+            if !mark.take_secrets(gen) {
+                return;
+            }
+            let saved = secrets::save(&secrets);
+            if let Some(err) = &err {
+                note_persist_err(err, saved, "keys");
             }
         }
         PersistMsg::Flush(done) => {

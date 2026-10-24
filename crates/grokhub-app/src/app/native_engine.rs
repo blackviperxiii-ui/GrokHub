@@ -518,13 +518,7 @@ impl Cabin {
 
     fn keep_account_tokens(&mut self, next: grokhub_core::XaiOAuthTokens) {
         self.secrets.oauth = Some(next);
-        let io = self.persist_io.clone();
-        let secrets = self.secrets.clone();
-        std::thread::spawn(move || {
-            if let Ok(_g) = io.lock() {
-                let _ = secrets::save(&secrets);
-            }
-        });
+        self.persist_oauth_secrets();
     }
 
     pub(super) fn paint_native_badge(&mut self, ui: &mut egui::Ui) {
