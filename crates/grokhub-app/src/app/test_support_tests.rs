@@ -358,6 +358,100 @@ pub(super) fn last_chat_text(cabin: &Cabin) -> String {
         .unwrap_or_default()
 }
 
+// Spike-4b: Settings → Permissions paints the scope rows under "What GrokHub
+// can read". Texts with their centers, and which rects are filled.
+pub(super) struct ScopePaint {
+    pub(super) texts: Vec<(String, eframe::egui::Pos2)>,
+    pub(super) filled: Vec<eframe::egui::Rect>,
+}
+
+impl ScopePaint {
+    pub(super) fn has(&self, want: &str) -> bool {
+        self.texts.iter().any(|t| t.0 == want)
+    }
+    pub(super) fn at(&self, want: &str) -> eframe::egui::Pos2 {
+        self.texts
+            .iter()
+            .find(|t| t.0 == want)
+            .unwrap_or_else(|| {
+                panic!(
+                    "{want} not painted: {:?}",
+                    self.texts.iter().map(|t| &t.0).collect::<Vec<_>>()
+                )
+            })
+            .1
+    }
+    /// The pill (`Allow` / `Revoke`) on the same row as `title`.
+    pub(super) fn pill_by(&self, title: &str, pill: &str) -> eframe::egui::Pos2 {
+        let y = self.at(title).y;
+        self.texts
+            .iter()
+            .filter(|t| t.0 == pill)
+            .min_by(|a, b| (a.1.y - y).abs().total_cmp(&(b.1.y - y).abs()))
+            .map(|t| t.1)
+            .unwrap_or_else(|| panic!("no {pill} by {title}"))
+    }
+}
+
+pub(super) fn paint_permissions(
+    ctx: &eframe::egui::Context,
+    cabin: &mut Cabin,
+    events: Vec<eframe::egui::Event>,
+) -> ScopePaint {
+    fn walk(shape: &eframe::egui::Shape, p: &mut ScopePaint) {
+        match shape {
+            eframe::egui::Shape::Text(t) => p.texts.push((
+                t.galley.text().to_string(),
+                t.pos + t.galley.rect.center().to_vec2(),
+            )),
+            eframe::egui::Shape::Rect(r) if r.fill == crate::theme::fg() => p.filled.push(r.rect),
+            eframe::egui::Shape::Vec(v) => v.iter().for_each(|c| walk(c, p)),
+            _ => {}
+        }
+    }
+    let input = eframe::egui::RawInput {
+        screen_rect: Some(eframe::egui::Rect::from_min_size(
+            eframe::egui::Pos2::ZERO,
+            eframe::egui::vec2(900.0, 2400.0),
+        )),
+        events,
+        ..Default::default()
+    };
+    let out = crate::theme::test_pass(ctx, input, |ui| {
+        eframe::egui::CentralPanel::default().show(ui, |ui| cabin.ui_permission_editor(ui));
+    });
+    let mut p = ScopePaint {
+        texts: Vec::new(),
+        filled: Vec::new(),
+    };
+    for clipped in &out.shapes {
+        walk(&clipped.shape, &mut p);
+    }
+    p
+}
+
+pub(super) fn click_at(ctx: &eframe::egui::Context, cabin: &mut Cabin, at: eframe::egui::Pos2) {
+    let press = |pressed| eframe::egui::Event::PointerButton {
+        pos: at,
+        button: eframe::egui::PointerButton::Primary,
+        pressed,
+        modifiers: eframe::egui::Modifiers::NONE,
+    };
+    let _ = paint_permissions(ctx, cabin, vec![eframe::egui::Event::PointerMoved(at)]);
+    let _ = paint_permissions(ctx, cabin, vec![press(true)]);
+    let _ = paint_permissions(ctx, cabin, vec![press(false)]);
+}
+
+pub(super) fn key(key: eframe::egui::Key) -> eframe::egui::Event {
+    eframe::egui::Event::Key {
+        key,
+        physical_key: None,
+        pressed: true,
+        repeat: false,
+        modifiers: eframe::egui::Modifiers::NONE,
+    }
+}
+
 #[test]
 fn wait_until_returns_when_ready() {
     let mut n = 0;
