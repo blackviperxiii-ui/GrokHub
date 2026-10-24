@@ -24,7 +24,9 @@ W="$TMP/work"
 mkdir -p "$W/scripts" "$W/crates/grokhub-app/src/app" "$W/crates/grokhub-core/src"
 cp "$SRC/scripts/ci-guards.sh" "$W/scripts/ci-guards.sh"
 for f in crates/grokhub-app/src/app/mod.rs crates/grokhub-app/src/cards.rs \
-  crates/grokhub-core/src/slash.rs crates/grokhub-app/src/app/tests.rs; do
+  crates/grokhub-core/src/slash.rs crates/grokhub-app/src/app/tests.rs \
+  crates/grokhub-app/src/app/persist.rs crates/grokhub-app/src/app/projects.rs \
+  crates/grokhub-app/src/app/dock_ui.rs; do
   printf 'fn main() {}\n' >"$W/$f"
 done
 printf '[workspace.package]\nversion = "1.0.0"\n\n[workspace.dependencies]\n' >"$W/Cargo.toml"
@@ -101,6 +103,26 @@ fresh_pr
 printf 'name = "grokhub-app"\nversion = "1.0.1"\n' >"$W/Cargo.lock"
 commit_pr
 LABELS=dependencies run_guard fail "grokhub-* lock version bump without release fails"
+
+fresh_pr
+printf 'fn f() {\n    std::thread::spawn(|| {});\n}\n' >>"$W/crates/grokhub-app/src/app/persist.rs"
+commit_pr
+run_guard fail "raw thread::spawn in a persist path fails"
+
+fresh_pr
+printf 'fn f() {\n    let _ = fs::write("x", "y");\n}\n' >>"$W/crates/grokhub-app/src/app/projects.rs"
+commit_pr
+run_guard fail "raw fs::write in a persist path fails"
+
+fresh_pr
+printf 'fn f() {\n    // ci-guard: allow-raw-io test reason\n    std::thread::spawn(|| {});\n}\n' >>"$W/crates/grokhub-app/src/app/dock_ui.rs"
+commit_pr
+run_guard pass "marked raw spawn in a persist path passes"
+
+fresh_pr
+rm "$W/crates/grokhub-app/src/app/persist.rs"
+commit_pr
+run_guard fail "missing raw-io guarded file fails"
 
 fresh_pr
 "$REAL_GIT" -C "$W" remote remove origin
