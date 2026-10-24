@@ -116,6 +116,20 @@ describe("Chat", () => {
     expect(screen.getByText("Always allowed")).toBeInTheDocument();
   });
 
+  it("a card nobody answered is retired when the turn ends", async () => {
+    const finish = holdTurn();
+    render(<Chat onOpenSettings={() => {}} />);
+    const id = await startTurn("write it");
+
+    emit(id, { kind: "permission", id: "c", title: "write", action: "c.txt", reason: "" });
+    await userEvent.click(screen.getByRole("button", { name: "Stop" }));
+    finish();
+
+    expect(await screen.findByText("Not run: the turn ended")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Allow once" })).toBeNull();
+    expect(api.answerPermission).not.toHaveBeenCalled();
+  });
+
   it("Stop cancels the turn in flight", async () => {
     const finish = holdTurn();
     render(<Chat onOpenSettings={() => {}} />);

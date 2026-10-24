@@ -19,7 +19,8 @@ export type Item =
       title: string;
       action: string;
       reason: string;
-      answer: Answer | null;
+      /** "ended": the turn stopped before anyone answered, so nothing ran. */
+      answer: Answer | "ended" | null;
     };
 
 function newConversationId(): string {
@@ -49,16 +50,20 @@ export function applyEvent(items: Item[], event: ChatEvent): Item[] {
   }
 }
 
+/** The turn ended: stop streaming, and retire cards nobody answered. */
 function settle(items: Item[]): Item[] {
-  return items.map((item) =>
-    item.kind === "assistant" && item.streaming ? { ...item, streaming: false } : item,
-  );
+  return items.map((item) => {
+    if (item.kind === "assistant" && item.streaming) return { ...item, streaming: false };
+    if (item.kind === "permission" && item.answer === null) return { ...item, answer: "ended" };
+    return item;
+  });
 }
 
-const ANSWERED: Record<Answer, string> = {
+const ANSWERED: Record<Answer | "ended", string> = {
   allow: "Allowed once",
   always: "Always allowed",
   deny: "Denied",
+  ended: "Not run: the turn ended",
 };
 
 function PermissionCard({
