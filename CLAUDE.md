@@ -4,7 +4,7 @@ Native Rust cabin (`crates/`). These rules apply to every Cursor, Claude, and Gr
 
 ## Branches, merges, releases
 - **Beta first.** Every new feature and fix PR from every bot (Cursor, Claude, GrokHub) branches off `beta` and targets `beta`. `beta` moves to `main` only on Jeremy's say, as one squash-merged `beta` → `main` PR. Hotfixes go to `main` only on his say, and then `main` is merged back into `beta` (a merge commit, no force). Never push straight to `main` or `beta`, never force-push, never delete branches unless Jeremy asks.
-- **Green and ready, then stop.** Bots get a PR green (Linux and Windows CI passing) and ready to merge, with proof of work, then report it. Never merge, tag, or release anything, Claude's and Cursor's PRs included, without Jeremy's explicit say. When he says merge, it's squash and merge. Steps: `.cursor/rules/merge-prs.mdc`.
+- **Green, then merge into beta.** Every agent (Cursor, Claude, GrokHub, any bot) finishes its own work: get the PR into `beta` green (Linux and Windows CI passing), then squash-merge it into `beta` right away, with no human-review hold (Jeremy, 2026-10-24). The only step that needs Jeremy's say is promoting `beta` to `main` (and the tag/release that follows). Stop and ask only when CI can't go green or a product decision only he can make comes up. Steps: `.cursor/rules/merge-prs.mdc`.
 - No changes to `.github/`, `clippy.toml`, or release scripts (`scripts/make-*release*`, `packaging/windows/`, `packaging/aur/`) without his OK. Version-bump lines (below) are the exception.
 
 ## Secrets
@@ -34,7 +34,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 - **Stacks:** order them so every PR ends green; one agent owns rebase and topology, others push only their own branch.
 - **Agent briefs** follow the template: intent, data shape, scope and non-goals, file boundaries, required evidence, file pointers, exact error plus at most 20 log lines.
 - **CI failures:** find and classify the cause before at most one rerun; a repeat failure is real.
-- **Latest base branch:** the base branch is `beta` for feature and fix PRs, and `main` for hotfixes and the `beta` → `main` promotion. Before touching a branch, fetch origin, confirm it is based on the latest base branch, and merge the base into it (a merge commit; no rebase or force-push). Fetch and re-check before reporting a PR ready, right before a merge he asked for, and again before a tag he asked for. Never render or screenshot from a stale checkout. Every PR body and report names the base branch and the SHA the work started from.
+- **Latest base branch:** the base branch is `beta` for feature and fix PRs, and `main` for hotfixes and the `beta` → `main` promotion. Before touching a branch, fetch origin, confirm it is based on the latest base branch, and merge the base into it (a merge commit; no rebase or force-push). Fetch and re-check before reporting a PR ready, right before merging into `beta`, and again before a tag he asked for. Never render or screenshot from a stale checkout. Every PR body and report names the base branch and the SHA the work started from.
 
 ## Commits, PRs, versions
 - Titles: a plain sentence for PRs into `beta`. A PR that bumps (a promotion or a hotfix) uses `Cabin X.Y.Z: <what changed>`, or a plain sentence ending in `(X.Y.Z)`. Add a short bullet body and the PR number when merged.
@@ -57,7 +57,7 @@ Grok Build 1.0.49+ ships explore / plan / implementer (and reviewer, test-writer
 
 ## Cross-platform recode
 - Jeremy approved Tauri 2 + React + TS for the cross-platform shell (2026-10-23). "No Electron. No Tauri." now covers only the egui cabin, which keeps shipping until parity. Electron stays out.
-- The repo rules here win over the Notion recode card: vstack, stop at green, Jeremy merges. Plan, phases and open decisions: `docs/cross-platform/README.md`.
+- The repo rules here win over the Notion recode card: pstack, squash-merge into `beta` on green, only `beta` → `main` needs Jeremy. Plan, phases and open decisions: `docs/cross-platform/README.md`.
 
 ## Semgrep + dyl-review + Continual Learning
 - Run **Semgrep** on touched paths before marking a PR Ready (`semgrep --config=auto` or the Semgrep plugin). Fix or justify findings in the PR body. Do **not** use dyl-ready-pr merge/babysit.
@@ -65,4 +65,4 @@ Grok Build 1.0.49+ ships explore / plan / implementer (and reviewer, test-writer
 - **Continual Learning**: when mining chats, update `AGENTS.md` via the continual-learning skill / agents-memory-updater. Keep AGENTS.md short and factual.
 
 
-- **vstack:** Always load and follow the vstack skills in .cursor/skills (start with viper-mode); never use pstack.
+- **pstack:** Always load and follow the pstack skills; vstack is retired (Jeremy's rule). Ignore the old vstack skill folders in `.cursor/skills`.

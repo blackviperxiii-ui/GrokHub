@@ -1,0 +1,1 @@
+- Agents now squash-merge their own PRs into beta once CI is green; only promoting beta to main needs the owner. House rules switch from vstack to pstack.
