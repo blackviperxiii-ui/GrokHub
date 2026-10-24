@@ -514,6 +514,19 @@ pub(super) fn feed_card(
     }
 }
 
+// Landed from PR #162.
+pub(super) fn collect_shape_text(shape: &eframe::egui::Shape, out: &mut Vec<String>) {
+    match shape {
+        eframe::egui::Shape::Text(text) => out.push(text.galley.job.text.clone()),
+        eframe::egui::Shape::Vec(shapes) => {
+            for shape in shapes {
+                collect_shape_text(shape, out);
+            }
+        }
+        _ => {}
+    }
+}
+
 #[test]
 fn wait_until_returns_when_ready() {
     let mut n = 0;
