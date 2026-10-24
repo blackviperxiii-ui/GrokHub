@@ -97,6 +97,17 @@ pub(super) struct PersistMark {
     secrets: u64,
 }
 
+impl PersistMark {
+    /// Claim the secrets.json write for `gen`; false when a newer one already landed.
+    pub(super) fn take_secrets(&mut self, gen: u64) -> bool {
+        if gen <= self.secrets {
+            return false;
+        }
+        self.secrets = gen;
+        true
+    }
+}
+
 /// Write a full snapshot unless a newer one already reached the disk. The
 /// PersistService worker serializes through `persist_io`, but Delete all still
 /// queues two gens (halt_in_flight old chats, then one fresh Chat); generation
@@ -110,13 +121,17 @@ pub(super) fn write_persist_disk_in_order(
 ) -> Result<(), String> {
     let mut mark = mark.lock().unwrap_or_else(|e| e.into_inner());
     if gen > mark.gen {
-        let r = write_persist_disk(dir, snap);
+        // A newer secrets-only write may have landed first; keep its tokens.
+        let r = if snap.secrets.is_some() && !mark.take_secrets(gen) {
+            let mut fresh = snap.clone();
+            fresh.secrets = None;
+            write_persist_disk(dir, &fresh)
+        } else {
+            write_persist_disk(dir, snap)
+        };
         mark.gen = gen;
         if snap.projects.is_some() {
             mark.projects = gen;
-        }
-        if snap.secrets.is_some() {
-            mark.secrets = gen;
         }
         return r;
     }
@@ -130,7 +145,7 @@ pub(super) fn write_persist_disk_in_order(
         }
     }
     if let Some(s) = &snap.secrets {
-        if gen > mark.secrets {
+        if mark.take_secrets(gen) {
             if first.is_ok() {
                 if let Err(e) = secrets::save(s) {
                     first = Err(e);
@@ -138,7 +153,6 @@ pub(super) fn write_persist_disk_in_order(
             } else {
                 let _ = secrets::save(s);
             }
-            mark.secrets = gen;
         }
     }
     first
@@ -318,18 +332,22 @@ impl Cabin {
         }
     }
 
-    pub(super) fn persist_secrets(&self) {
-        let io = self.persist_io.clone();
+    pub(super) fn persist_secrets(&mut self) {
+        let err = Some(self.persist_err.clone());
+        self.submit_secrets(err);
+    }
+
+    /// OAuth refresh, sign-in and sign-out write secrets.json quietly, as before.
+    pub(super) fn persist_oauth_secrets(&mut self) {
+        self.submit_secrets(None);
+    }
+
+    fn submit_secrets(&mut self, err: Option<Arc<Mutex<Option<String>>>>) {
+        let gen = self.next_persist_gen();
         let secrets = self.secrets.clone();
-        let dir = config::config_dir();
-        let err = self.persist_err.clone();
-        // ci-guard: allow-raw-io secrets save, moves to PersistService in rearch stage 7
-        std::thread::spawn(move || {
-            let _pin = pin_scheduled_dir(dir);
-            if let Ok(_g) = io.lock() {
-                note_persist_err(&err, secrets::save(&secrets), "keys");
-            }
-        });
+        // PersistService takes persist_io and drops a write older than the disk.
+        self.persist_svc
+            .submit_secrets(config::config_dir(), secrets, gen, err);
     }
 
     pub(super) fn persist_usage(&self) {

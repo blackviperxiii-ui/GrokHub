@@ -986,7 +986,7 @@ fn chat_side_effects_keep_the_origin_thread() {
         "Sign out must drop in-flight OAuth HTTP: {sign_out}"
     );
     assert!(
-        sign_out.contains("persist_io") && sign_out.contains("secrets::save"),
+        sign_out.contains("persist_oauth_secrets") && !sign_out.contains("secrets::save"),
         "Sign out must not freeze the cabin writing secrets.json: {sign_out}"
     );
     assert!(
@@ -1024,7 +1024,7 @@ fn chat_side_effects_keep_the_origin_thread() {
         "OAuth poll must not freeze the cabin on token HTTP: {poll_o}"
     );
     assert!(
-        poll_o.contains("persist_io") && poll_o.contains("secrets::save"),
+        poll_o.contains("persist_oauth_secrets") && !poll_o.contains("secrets::save"),
         "OAuth Ready must not freeze the cabin writing secrets.json: {poll_o}"
     );
     let ready = src
@@ -1136,7 +1136,7 @@ fn chat_side_effects_keep_the_origin_thread() {
         .and_then(|s| s.split("fn kick_oauth_photo(").next())
         .expect("poll_oauth_photo");
     assert!(
-        photo_poll.contains("persist_io") && photo_poll.contains("secrets::save"),
+        photo_poll.contains("persist_oauth_secrets") && !photo_poll.contains("secrets::save"),
         "OAuth profile enrich must not freeze the cabin writing secrets.json: {photo_poll}"
     );
     let kick = fn_src(&src, "kick_model");
