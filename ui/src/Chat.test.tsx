@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatDelta, ChatMessage } from "./api";
@@ -65,6 +65,21 @@ describe("Chat", () => {
     finish("one, two");
     await waitFor(() => expect(screen.getByText("one, two")).not.toHaveClass("streaming"));
     expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
+  });
+
+  it("ignores a delta that arrives after the reply resolved", async () => {
+    api.sendChat.mockResolvedValue("done");
+    render(<Chat onOpenSettings={() => {}} />);
+    await userEvent.type(screen.getByLabelText("Message"), "hi{Enter}");
+    expect(await screen.findByText("done")).not.toHaveClass("streaming");
+
+    const id = api.sendChat.mock.calls[0][0];
+    act(() => api.deltaHandler?.({ conversationId: id, text: "late" }));
+
+    expect(screen.queryByText("late")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Stop" })).toBeNull();
+    await userEvent.type(screen.getByLabelText("Message"), "again");
+    expect(screen.getByRole("button", { name: "Send" })).toBeEnabled();
   });
 
   it("shows the error and links to Settings", async () => {

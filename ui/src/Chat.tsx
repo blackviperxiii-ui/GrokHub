@@ -18,7 +18,8 @@ export function Chat({ onOpenSettings }: { onOpenSettings: () => void }) {
     let dropped = false;
     void onChatDelta((delta) => {
       if (delta.conversationId !== conversationId) return;
-      setPending((text) => (text ?? "") + delta.text);
+      // A delta that lands after the reply resolved must not reopen the stream.
+      setPending((text) => (text === null ? null : text + delta.text));
     }).then((unlisten) => {
       if (dropped) unlisten();
       else stop = unlisten;

@@ -99,19 +99,8 @@ async fn send_chat(
     messages: Vec<chat::Turn>,
 ) -> Result<String, String> {
     let model = current(&state).model;
-    let client = match credential::test_responses_url() {
-        Some(url) => XaiClient::new(
-            credential::LOOPBACK_TEST_BEARER,
-            AuthKind::ApiKey,
-            Duration::from_secs(120),
-        )
-        .with_loopback_url(&url)?,
-        None => XaiClient::new(
-            credential::load_key()?,
-            AuthKind::ApiKey,
-            Duration::from_secs(120),
-        ),
-    };
+    // Register the token first: the UI shows Stop as soon as it sends, and a
+    // Stop that finds no token would be lost.
     let cancel = CancelToken::new();
     state
         .chats
@@ -120,6 +109,19 @@ async fn send_chat(
         .insert(conversation_id.clone(), cancel.clone());
     let id = conversation_id.clone();
     let worker = tauri::async_runtime::spawn_blocking(move || {
+        let client = match credential::test_responses_url() {
+            Some(url) => XaiClient::new(
+                credential::LOOPBACK_TEST_BEARER,
+                AuthKind::ApiKey,
+                Duration::from_secs(120),
+            )
+            .with_loopback_url(&url)?,
+            None => XaiClient::new(
+                credential::load_key()?,
+                AuthKind::ApiKey,
+                Duration::from_secs(120),
+            ),
+        };
         chat::run_chat(&client, &model, &id, &messages, &cancel, &mut |text| {
             let _ = app.emit(
                 DELTA_EVENT,
