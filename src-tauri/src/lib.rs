@@ -191,6 +191,72 @@ fn build_tray(app: &tauri::App) -> tauri::Result<()> {
     Ok(())
 }
 
+/// wry's WebView2 defaults (wry `create_environment`). Passing our own
+/// arguments replaces them, so they are repeated here.
+#[cfg(windows)]
+const WEBVIEW2_DEFAULT_ARGS: &str =
+    "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection";
+
+/// msedgedriver hands WebView2 its DevTools port and profile folder through
+/// these two environment variables, but wry passes its own arguments and data
+/// folder, which win over them. Carry them over so tauri-driver can attach.
+/// Neither is set outside a WebDriver session.
+#[cfg(windows)]
+fn webview2_driver_args(extra: Option<&str>) -> Option<String> {
+    let extra = extra?.trim();
+    (!extra.is_empty()).then(|| format!("{WEBVIEW2_DEFAULT_ARGS} {extra}"))
+}
+
+#[cfg(windows)]
+fn webview2_driver_overrides<'a>(
+    mut builder: tauri::WebviewWindowBuilder<'a, tauri::Wry, tauri::AppHandle>,
+) -> tauri::WebviewWindowBuilder<'a, tauri::Wry, tauri::AppHandle> {
+    let extra = std::env::var("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS").ok();
+    if let Some(args) = webview2_driver_args(extra.as_deref()) {
+        builder = builder.additional_browser_args(&args);
+    }
+    if let Some(dir) = std::env::var_os("WEBVIEW2_USER_DATA_FOLDER") {
+        builder = builder.data_directory(PathBuf::from(dir));
+    }
+    builder
+}
+
+fn build_main_window(app: &tauri::App) -> tauri::Result<()> {
+    let Some(config) = app
+        .config()
+        .app
+        .windows
+        .iter()
+        .find(|w| w.label == "main")
+        .cloned()
+    else {
+        return Ok(());
+    };
+    let builder = tauri::WebviewWindowBuilder::from_config(app.handle(), &config)?;
+    #[cfg(windows)]
+    let builder = webview2_driver_overrides(builder);
+    builder.build()?;
+    Ok(())
+}
+
+#[cfg(all(test, windows))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn driver_args_keep_the_wry_defaults() {
+        assert_eq!(webview2_driver_args(None), None);
+        assert_eq!(webview2_driver_args(Some("  ")), None);
+        assert_eq!(
+            webview2_driver_args(Some("--remote-debugging-port=0")),
+            Some(
+                "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --remote-debugging-port=0"
+                    .to_string()
+            )
+        );
+    }
+}
+
 pub fn run() {
     let config_dir = grokhub_agent::perm::config_dir();
     let loaded = settings::load(&config_dir);
@@ -201,6 +267,7 @@ pub fn run() {
             chats: Mutex::new(HashMap::new()),
         })
         .setup(|app| {
+            build_main_window(app)?;
             build_tray(app)?;
             Ok(())
         })
