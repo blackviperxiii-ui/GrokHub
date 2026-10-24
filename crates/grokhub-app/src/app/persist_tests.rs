@@ -377,6 +377,111 @@ fn persist_service_queues_out_of_order_full_snaps() {
     drop(cfg);
 }
 
+fn test_tokens(access: &str) -> grokhub_core::XaiOAuthTokens {
+    grokhub_core::XaiOAuthTokens {
+        access_token: access.into(),
+        refresh_token: Some(format!("{access}-refresh")),
+        connected_at: 1,
+        ..Default::default()
+    }
+}
+
+fn disk_access_token(root: &std::path::Path) -> String {
+    let body = std::fs::read_to_string(root.join("secrets.json")).expect("secrets.json");
+    let disk: crate::secrets::Secrets = serde_json::from_str(&body).expect("secrets json");
+    disk.oauth.map(|t| t.access_token).unwrap_or_default()
+}
+
+#[test]
+fn an_older_oauth_refresh_never_overwrites_a_newer_token() {
+    let _lock = crate::config::hold_test_config();
+    let cfg = IsolatedConfig::arm("persist-secrets-order");
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.threads = vec![crate::threads::ChatThread::new("Chat", false)];
+    cabin.thread_idx = 0;
+    cabin.messages = std::sync::Arc::new(Vec::new());
+    let old = crate::secrets::Secrets {
+        oauth: Some(test_tokens("test-old-access")),
+        ..Default::default()
+    };
+    let new = crate::secrets::Secrets {
+        oauth: Some(test_tokens("test-new-access")),
+        ..Default::default()
+    };
+    let old_gen = cabin.next_persist_gen();
+    let new_gen = cabin.next_persist_gen();
+    assert_eq!((old_gen, new_gen), (1, 2));
+    // The newer refresh reaches the worker first, the older one second.
+    let svc = cabin.persist_svc.clone();
+    svc.submit_secrets(cfg.root.clone(), new, new_gen, None);
+    svc.submit_secrets(cfg.root.clone(), old.clone(), old_gen, None);
+    join_persist(&svc);
+    assert_eq!(disk_access_token(&cfg.root), "test-new-access");
+    // An older full snapshot still writes the chats but keeps the newer token.
+    let mut snap = cabin.persist_snap();
+    snap.secrets = Some(old);
+    let snap_gen = 1;
+    svc.submit_full(
+        cfg.root.clone(),
+        snap,
+        snap_gen,
+        None,
+        cabin.persist_err.clone(),
+    );
+    join_persist(&svc);
+    assert_eq!(disk_access_token(&cfg.root), "test-new-access");
+    let threads = std::fs::read_to_string(cfg.root.join("threads.json")).expect("threads.json");
+    assert!(threads.contains("\"title\": \"Chat\""), "{threads}");
+    assert!(cabin.persist_err.lock().unwrap().is_none());
+    drop(cfg);
+}
+
+#[test]
+fn oauth_refresh_and_settings_keys_write_through_persist_service() {
+    let _lock = crate::config::hold_test_config();
+    let cfg = IsolatedConfig::arm("persist-secrets-svc");
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.secrets.oauth = Some(test_tokens("test-refreshed-access"));
+    cabin.persist_oauth_secrets();
+    join_persist(&cabin.persist_svc);
+    assert_eq!(disk_access_token(&cfg.root), "test-refreshed-access");
+    cabin.secrets.api_key = "sk-abcdefghijklmnopqrstuv".into();
+    cabin.persist_secrets();
+    join_persist(&cabin.persist_svc);
+    let body = std::fs::read_to_string(cfg.root.join("secrets.json")).expect("secrets.json");
+    let disk: crate::secrets::Secrets = serde_json::from_str(&body).expect("secrets json");
+    assert_eq!(disk.api_key, "sk-abcdefghijklmnopqrstuv");
+    assert_eq!(disk_access_token(&cfg.root), "test-refreshed-access");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(cfg.root.join("secrets.json"))
+            .expect("meta")
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o600);
+    }
+    assert!(cabin.persist_err.lock().unwrap().is_none());
+    drop(cfg);
+}
+
+#[test]
+fn a_secrets_write_still_lands_when_the_persist_worker_is_gone() {
+    let _lock = crate::config::hold_test_config();
+    let cfg = IsolatedConfig::arm("persist-secrets-dead");
+    let svc = dead_persist_service(
+        std::sync::Arc::new(std::sync::Mutex::new(())),
+        std::sync::Arc::new(std::sync::Mutex::new(PersistMark::default())),
+    );
+    let secrets = crate::secrets::Secrets {
+        oauth: Some(test_tokens("test-direct-access")),
+        ..Default::default()
+    };
+    svc.submit_secrets(cfg.root.clone(), secrets, 1, None);
+    assert_eq!(disk_access_token(&cfg.root), "test-direct-access");
+    drop(cfg);
+}
+
 /// Corrupt settings, keys, Home feed and hub files: each loads defaults, keeps its
 /// bytes in a `.corrupt-<ms>` copy, and gets one Home card naming it and the copy.
 #[test]
