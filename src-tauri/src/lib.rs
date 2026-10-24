@@ -4,28 +4,28 @@
 
 #![cfg_attr(not(test), warn(clippy::unwrap_used, clippy::expect_used))]
 
-pub mod chat;
+pub mod agent;
 pub mod credential;
 pub mod settings;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use grokhub_agent::{AuthKind, CancelToken, XaiClient};
+use grokhub_agent::{AuthKind, XaiClient};
 use serde::Serialize;
 use settings::ShellSettings;
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Emitter, Manager, State, WindowEvent};
 
-pub const DELTA_EVENT: &str = "chat://delta";
+pub const CHAT_EVENT: &str = "chat://event";
 
 struct ShellState {
     config_dir: PathBuf,
     settings: Mutex<ShellSettings>,
-    chats: Mutex<HashMap<String, CancelToken>>,
+    chats: Mutex<HashMap<String, Arc<agent::Session>>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -34,13 +34,17 @@ pub struct SettingsView {
     pub model: String,
     pub close_to_tray: bool,
     pub has_api_key: bool,
+    /// The folder picked in Settings, empty for the default.
+    pub workspace: String,
+    /// The folder the agent actually works in.
+    pub workspace_path: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct ChatDelta<'a> {
+struct ChatEvent<'a> {
     conversation_id: &'a str,
-    text: &'a str,
+    event: &'a agent::UiEvent,
 }
 
 fn view(settings: &ShellSettings) -> SettingsView {
@@ -48,6 +52,10 @@ fn view(settings: &ShellSettings) -> SettingsView {
         model: settings.model.clone(),
         close_to_tray: settings.close_to_tray,
         has_api_key: credential::has_key(),
+        workspace: settings.workspace.clone(),
+        workspace_path: agent::workspace_for(&settings.workspace)
+            .display()
+            .to_string(),
     }
 }
 
@@ -69,10 +77,12 @@ fn save_settings(
     state: State<'_, ShellState>,
     model: String,
     close_to_tray: bool,
+    workspace: String,
 ) -> Result<SettingsView, String> {
     let next = ShellSettings {
         model: model.trim().to_string(),
         close_to_tray,
+        workspace: workspace.trim().to_string(),
     };
     settings::save(&state.config_dir, &next)?;
     *state.settings.lock().unwrap_or_else(|e| e.into_inner()) = next.clone();
@@ -91,65 +101,109 @@ fn clear_api_key(state: State<'_, ShellState>) -> Result<SettingsView, String> {
     Ok(view(&current(&state)))
 }
 
+fn session(state: &ShellState, conversation_id: &str) -> Arc<agent::Session> {
+    let mut chats = state.chats.lock().unwrap_or_else(|e| e.into_inner());
+    let session = chats.entry(conversation_id.to_string()).or_insert_with(|| {
+        Arc::new(agent::Session::spawn(
+            conversation_id,
+            state.config_dir.clone(),
+        ))
+    });
+    Arc::clone(session)
+}
+
+fn route(settings: &ShellSettings) -> Result<agent::Route, String> {
+    let client = match credential::test_responses_url() {
+        Some(url) => XaiClient::new(
+            credential::LOOPBACK_TEST_BEARER,
+            AuthKind::ApiKey,
+            Duration::from_secs(120),
+        )
+        .with_loopback_url(&url)?,
+        None => XaiClient::new(
+            credential::load_key()?,
+            AuthKind::ApiKey,
+            Duration::from_secs(120),
+        ),
+    };
+    Ok(agent::Route {
+        client: Arc::new(client),
+        auth_kind: AuthKind::ApiKey,
+        model: settings.model.clone(),
+        workspace: agent::workspace_for(&settings.workspace),
+    })
+}
+
+/// Runs one prompt through the agent loop. Text, tool cards and permission
+/// asks arrive as `chat://event`; this resolves with the stop reason.
 #[tauri::command]
 async fn send_chat(
     app: AppHandle,
     state: State<'_, ShellState>,
     conversation_id: String,
-    messages: Vec<chat::Turn>,
+    text: String,
 ) -> Result<String, String> {
-    let model = current(&state).model;
-    // Register the token first: the UI shows Stop as soon as it sends, and a
-    // Stop that finds no token would be lost.
-    let cancel = CancelToken::new();
-    state
-        .chats
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .insert(conversation_id.clone(), cancel.clone());
-    let id = conversation_id.clone();
-    let worker = tauri::async_runtime::spawn_blocking(move || {
-        let client = match credential::test_responses_url() {
-            Some(url) => XaiClient::new(
-                credential::LOOPBACK_TEST_BEARER,
-                AuthKind::ApiKey,
-                Duration::from_secs(120),
-            )
-            .with_loopback_url(&url)?,
-            None => XaiClient::new(
-                credential::load_key()?,
-                AuthKind::ApiKey,
-                Duration::from_secs(120),
-            ),
-        };
-        chat::run_chat(&client, &model, &id, &messages, &cancel, &mut |text| {
-            let _ = app.emit(
-                DELTA_EVENT,
-                ChatDelta {
-                    conversation_id: &id,
-                    text,
-                },
-            );
-        })
+    let settings = current(&state);
+    let session = session(&state, &conversation_id);
+    tauri::async_runtime::spawn_blocking(move || {
+        let route = route(&settings)?;
+        let id = conversation_id.clone();
+        session.prompt(
+            &text,
+            route,
+            Box::new(move |event| {
+                let _ = app.emit(
+                    CHAT_EVENT,
+                    ChatEvent {
+                        conversation_id: &id,
+                        event: &event,
+                    },
+                );
+            }),
+        )
     })
-    .await;
-    state
-        .chats
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .remove(&conversation_id);
-    worker.map_err(|e| e.to_string())?
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+fn answer_permission(
+    state: State<'_, ShellState>,
+    conversation_id: String,
+    call_id: String,
+    answer: String,
+) -> Result<(), String> {
+    let answer = agent::parse_answer(&answer)?;
+    let chats = state.chats.lock().unwrap_or_else(|e| e.into_inner());
+    let session = chats
+        .get(&conversation_id)
+        .ok_or_else(|| "That chat is closed.".to_string())?;
+    session.answer(&call_id, answer);
+    Ok(())
 }
 
 #[tauri::command]
 fn cancel_chat(state: State<'_, ShellState>, conversation_id: String) {
-    if let Some(cancel) = state
+    if let Some(session) = state
         .chats
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .get(&conversation_id)
     {
-        cancel.cancel();
+        session.cancel();
+    }
+}
+
+/// New chat: the old conversation's worker ends.
+#[tauri::command]
+fn close_chat(state: State<'_, ShellState>, conversation_id: String) {
+    let removed = state
+        .chats
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .remove(&conversation_id);
+    if let Some(session) = removed {
+        session.cancel();
     }
 }
 
@@ -286,7 +340,9 @@ pub fn run() {
             set_api_key,
             clear_api_key,
             send_chat,
-            cancel_chat
+            answer_permission,
+            cancel_chat,
+            close_chat
         ])
         .run(tauri::generate_context!());
     if let Err(err) = built {

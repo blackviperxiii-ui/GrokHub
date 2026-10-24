@@ -5,7 +5,7 @@ import type { Settings as Shape } from "./api";
 
 const api = vi.hoisted(() => ({
   getSettings: vi.fn<() => Promise<Shape>>(),
-  saveSettings: vi.fn<(model: string, closeToTray: boolean) => Promise<Shape>>(),
+  saveSettings: vi.fn<(model: string, closeToTray: boolean, workspace: string) => Promise<Shape>>(),
   setApiKey: vi.fn<(key: string) => Promise<Shape>>(),
   clearApiKey: vi.fn<() => Promise<Shape>>(),
 }));
@@ -14,31 +14,47 @@ vi.mock("./api", () => api);
 
 import { Settings } from "./Settings";
 
+function shape(over: Partial<Shape>): Shape {
+  return {
+    model: "grok-4.7",
+    closeToTray: true,
+    hasApiKey: false,
+    workspace: "",
+    workspacePath: "/home/viper/GrokHub",
+    ...over,
+  };
+}
+
 describe("Settings", () => {
   beforeEach(() => {
     for (const fn of Object.values(api)) fn.mockReset();
-    api.getSettings.mockResolvedValue({ model: "grok-4.7", closeToTray: true, hasApiKey: false });
+    api.getSettings.mockResolvedValue(shape({}));
   });
 
-  it("loads and saves the model and tray choice", async () => {
-    api.saveSettings.mockResolvedValue({ model: "grok-5", closeToTray: false, hasApiKey: false });
+  it("loads and saves the model, work folder and tray choice", async () => {
+    api.saveSettings.mockResolvedValue(
+      shape({ model: "grok-5", closeToTray: false, workspace: "/work", workspacePath: "/work" }),
+    );
     render(<Settings />);
 
     const model = await screen.findByLabelText("Model");
     expect(model).toHaveValue("grok-4.7");
     await userEvent.clear(model);
     await userEvent.type(model, " grok-5 ");
+    expect(screen.getByText("/home/viper/GrokHub")).toBeInTheDocument();
+    await userEvent.type(screen.getByLabelText("Work folder"), " /work ");
     await userEvent.click(screen.getByLabelText(/keeps GrokHub in the tray/));
     await userEvent.click(screen.getByRole("button", { name: "Save settings" }));
 
-    expect(api.saveSettings).toHaveBeenCalledWith("grok-5", false);
+    expect(api.saveSettings).toHaveBeenCalledWith("grok-5", false, "/work");
     expect(await screen.findByText("Settings saved.")).toBeInTheDocument();
     expect(screen.getByLabelText(/keeps GrokHub in the tray/)).not.toBeChecked();
+    expect(screen.getByText("/work")).toBeInTheDocument();
   });
 
   it("saves a key without echoing it, then removes it", async () => {
-    api.setApiKey.mockResolvedValue({ model: "grok-4.7", closeToTray: true, hasApiKey: true });
-    api.clearApiKey.mockResolvedValue({ model: "grok-4.7", closeToTray: true, hasApiKey: false });
+    api.setApiKey.mockResolvedValue(shape({ hasApiKey: true }));
+    api.clearApiKey.mockResolvedValue(shape({}));
     render(<Settings />);
 
     expect(await screen.findByText("No key saved yet.")).toBeInTheDocument();

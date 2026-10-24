@@ -11,6 +11,8 @@ pub const FILE: &str = "shell.json";
 pub struct ShellSettings {
     pub model: String,
     pub close_to_tray: bool,
+    /// The folder the agent works in. Empty means the cabin's default.
+    pub workspace: String,
 }
 
 impl Default for ShellSettings {
@@ -18,6 +20,7 @@ impl Default for ShellSettings {
         Self {
             model: grokhub_agent::DEFAULT_MODEL.to_string(),
             close_to_tray: true,
+            workspace: String::new(),
         }
     }
 }
@@ -74,6 +77,7 @@ mod tests {
             ShellSettings {
                 model: "grok-4.7".into(),
                 close_to_tray: true,
+                workspace: String::new(),
             }
         );
     }
@@ -84,11 +88,13 @@ mod tests {
         let wanted = ShellSettings {
             model: "grok-5".into(),
             close_to_tray: false,
+            workspace: "/work/notes".into(),
         };
         save(&dir, &wanted).expect("save");
         assert_eq!(load(&dir), wanted);
         let raw = std::fs::read_to_string(path(&dir)).expect("file");
         assert!(raw.contains("\"closeToTray\": false"), "{raw}");
+        assert!(raw.contains("\"workspace\": \"/work/notes\""), "{raw}");
         assert!(!dir.join("shell.json.tmp").exists());
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -105,6 +111,7 @@ mod tests {
             ShellSettings {
                 model: "grok-4.7".into(),
                 close_to_tray: false,
+                workspace: String::new(),
             }
         );
         let _ = std::fs::remove_dir_all(&dir);
@@ -116,6 +123,7 @@ mod tests {
         let blank = ShellSettings {
             model: " ".into(),
             close_to_tray: true,
+            workspace: String::new(),
         };
         assert_eq!(save(&dir, &blank), Err("Pick a model.".to_string()));
         assert!(!path(&dir).exists());
