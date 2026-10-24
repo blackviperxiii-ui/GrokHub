@@ -94,8 +94,8 @@ system libraries. `cargo xtask bump` keeps the grokhub-* versions in that
 lockfile in step, and `bump --check` fails if they drift.
 
 - Chat streams one reply per turn through `grokhub_agent::XaiClient` and shows
-  each text piece as it arrives. Stop keeps the partial reply. There are no
-  tools yet; the agent loop with approvals comes with Phase 3.
+  each text piece as it arrives. Stop keeps the partial reply. (Phase 3a
+  replaced this with the agent loop, below.)
 - Settings: model and close-to-tray in `shell.json` in the GrokHub config
   folder. The xAI API key lives in the OS keychain (service `GrokHub`, account
   `shell-console-key`). Grok sign-in (OAuth) comes with Phase 3.
@@ -117,3 +117,30 @@ ui/node_modules/.bin/tauri build --debug --no-bundle
 cargo install tauri-driver --locked
 xvfb-run -a node ui/e2e/smoke.mjs src-tauri/target/debug/grokhub-shell
 ```
+
+## Phase 3 status
+
+Phase 3 lands in slices, each its own PR into `beta`.
+
+**3a, agent loop with approvals.** Chat runs `grokhub_agent::NativeEngine`,
+the loop the egui cabin uses, on one worker thread per conversation
+(`src-tauri/src/agent.rs`).
+
+- The gate is the cabin's attended Ask mode with computer-use off: reads run,
+  while writes, commands and the other mutating tools emit a permission event and
+  park until the UI answers. The answers are Allow once, Always allow (saved
+  as a workspace rule, as in the cabin) or Deny. Stop cancels a parked tool
+  without running it.
+- Events reach the UI as `chat://event` (`text`, `tool`, `permission`,
+  `error`, `done`). Tool calls show as cards.
+- Settings has a work folder. When it is empty, the agent uses the cabin's
+  default session folder.
+- Gate tests in `src-tauri` run on Linux, Windows and macOS in the `shell` job.
+  A write and a shell command each wait for an answer. Deny leaves no file.
+  Allow writes it. Stop runs nothing. A read never asks. The tauri-driver smoke
+  test does the same through the built app: nothing is written and the model
+  is not called again until Allow once is clicked.
+
+Next slices: Pulse, Automations, memory, MCP, computer-use, and the Auto
+and Always permission modes.
+
