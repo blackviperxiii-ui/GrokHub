@@ -224,7 +224,8 @@ mod tests {
 
     #[test]
     fn samples_cover_every_slash_variant() {
-        let src = include_str!("mod.rs");
+        // Windows checkouts embed CRLF via include_str.
+        let src = include_str!("mod.rs").replace("\r\n", "\n");
         let body = src
             .split("pub enum Slash {")
             .nth(1)

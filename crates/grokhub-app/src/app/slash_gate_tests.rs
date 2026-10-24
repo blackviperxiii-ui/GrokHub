@@ -11,7 +11,12 @@ fn method_body<'a>(src: &'a str, name: &str) -> &'a str {
         .find(&needle)
         .unwrap_or_else(|| panic!("missing fn {name}"));
     let rest = &src[start..];
-    let end = rest.find("\n    }\n").unwrap_or(rest.len());
+    // Windows checkouts embed CRLF via include_str, so accept `}\r\n` too.
+    let end = rest
+        .match_indices("\n    }")
+        .map(|(i, m)| (i, &rest[i + m.len()..]))
+        .find(|(_, after)| after.starts_with('\n') || after.starts_with("\r\n"))
+        .map_or(rest.len(), |(i, _)| i);
     &rest[..end]
 }
 
