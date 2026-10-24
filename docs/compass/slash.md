@@ -8,12 +8,12 @@
 - `cargo test -p grokhub-app slash` (cabin dispatch)
 ## Key files
 - `crates/grokhub-core/src/slash/mod.rs`: `Slash`, `parse_slash`, `slash_kind`, `SLASH_COMMANDS` (picker rows), `slash_help`, `unknown_cabin_slash`, `is_cabin_slash_turn`.
-- `crates/grokhub-core/src/slash/registry.rs` and `crates/grokhub-core/src/slash/cmds/`: commands declared with `register_slash!`; `parse_slash` (`crates/grokhub-core/src/slash/parser.rs`) asks the registry before the old match. `crates/grokhub-core/src/slash/effect.rs`: `slash_effect` (Local, AgentTurn, Action) and one sample line per variant.
+- `crates/grokhub-core/src/slash/registry.rs` and `crates/grokhub-core/src/slash/cmds/`: every command, declared with `register_slash!` and listed in `SLASH_REGISTRY`; `parse_slash` (`crates/grokhub-core/src/slash/parser.rs`) splits the line and looks the command word up there. `crates/grokhub-core/src/slash/effect.rs`: `slash_effect` (Local, AgentTurn, Action) and one sample line per variant.
 - `crates/grokhub-app/src/app/slash.rs`: `run_slash` (one match arm per variant), `dispatch_native_slash`, `apply_unparsed_native_slash`.
 - `crates/grokhub-app/src/app/chat_kick.rs`: the send path that tries `parse_slash`, then `unknown_cabin_slash`, then native parity, then the model.
 - `crates/grokhub-agent/src/slash_parity.rs`: every Grok CLI builtin and what a native thread does with it.
 ## Change recipe
-- Add a `Slash` variant, `parse_slash` arm, `slash_kind`, `SLASH_COMMANDS` row, and `slash_help` line in `crates/grokhub-core/src/slash/mod.rs` (e.g. `/brief` → `Slash::Brief`).
+- Add a `Slash` variant, `slash_kind`, `SLASH_COMMANDS` row, and `slash_help` line in `crates/grokhub-core/src/slash/mod.rs`, and a `register_slash!` entry in a `crates/grokhub-core/src/slash/cmds/` file listed in `SLASH_REGISTRY` (e.g. `/brief` → `Slash::Brief` in `cmds/views.rs`).
 - Pick its `slash_effect` and add a `SLASH_SAMPLES` line. An `Action` needs a gate row in `crates/grokhub-app/src/app/slash_gate_tests.rs` naming its confirm, consent or permission path.
 - Handle it in `run_slash` (`crates/grokhub-app/src/app/slash.rs`); map habits in `home_slash_cmd` (`chips.rs`) only when needed.
 ## What breaks it
@@ -27,7 +27,7 @@
 - `/workflow pause|resume|stop` with no target is `WorkflowUsage` and is not forwarded; any other first word is a launch name.
 - `/btw` keeps persist id `ask`; `/bg` with no task moves the live reply to the background, except under Ask, where it shows `BG_ASK_OFF`.
 - Slash results are stored with `SLASH_RESULT_PREFIX` so they stay on the pane. `message_origin` reads that tag (never the text) and makes them `ChatKind::Result`, which keeps one bubble as it ages and never folds into a thought (GL-05).
-- `/skills changes|undo|restore` parse in `parse_skills_arg`; any other `/skills` word stays `GrokSkills`. Undo and restore run only from the user's typing (`typed_send`) or a row click in `crates/grokhub-app/src/app/skill_undo.rs`; from a night job, automation, Pulse run, or idea they only show the rows.
+- `/skills changes|undo|restore` parse in `parse_skills_arg` (`crates/grokhub-core/src/slash/cmds/changes.rs`); any other `/skills` word stays `GrokSkills`. Undo and restore run only from the user's typing (`typed_send`) or a row click in `crates/grokhub-app/src/app/skill_undo.rs`; from a night job, automation, Pulse run, or idea they only show the rows.
 - `/privacy` is a cabin view (`run_privacy`) and shadows the Grok CLI pager builtin. Slash text never writes a grant; only a Settings click in `ui_privacy_rows` or `ui_scope_rows` does. Its ghost Revoke rows (`paint_privacy_revokes`) answer a pointer click only.
 - `run_slash` calls `dispatch_native_slash` first on every thread. It returns false off native (Lab) threads; on them Remember, Dream, Inspect, Rewind, Usage, Models and Workflow return true and skip the cabin match.
 - `/rewind step` / `/rewind step <n>` (`Slash::RewindStep`) lists or restores `file_checkpoint` steps for the thread's `grok_session`; bare `/rewind` stays N/A on native.
