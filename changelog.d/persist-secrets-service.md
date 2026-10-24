@@ -1,0 +1,1 @@
+- Internal: secrets.json writes (Settings keys, OAuth refresh, sign-in and sign-out) now go through the single ordered persist worker, and an older token refresh can no longer overwrite a newer one (rearch stage 7).

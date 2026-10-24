@@ -492,17 +492,32 @@ fn grok_login_powers_history_and_imagine() {
         .nth(1)
         .and_then(|s| s.split("fn persist_usage").next())
         .expect("persist_secrets");
-    let secrets_spawn = persist_secrets
-        .find("thread::spawn")
-        .expect("secrets write must leave the UI thread");
-    let secrets_save = persist_secrets
-        .find("secrets::save")
-        .expect("secrets::save");
     assert!(
-        secrets_spawn < secrets_save
-            && persist_secrets.contains("persist_io")
+        persist_secrets.contains("persist_svc")
+            && persist_secrets.contains("submit_secrets")
+            && persist_secrets.contains("next_persist_gen")
+            && !persist_secrets.contains("thread::spawn")
+            && !persist_secrets.contains("secrets::save")
             && !persist_secrets.contains("self.persist()"),
-        "Settings Save must not freeze the cabin writing secrets.json: {persist_secrets}"
+        "Settings Save must hand secrets.json to PersistService, not write it on the UI thread: {persist_secrets}"
+    );
+    let svc_secrets = include_str!("persist_service.rs")
+        .split("PersistMsg::Secrets {")
+        .last()
+        .and_then(|s| s.split("PersistMsg::Flush(done)").next())
+        .expect("PersistService secrets arm");
+    let svc_lock = svc_secrets
+        .find("io.lock()")
+        .expect("secrets arm takes persist_io");
+    let svc_order = svc_secrets
+        .find("take_secrets(gen)")
+        .expect("secrets arm checks order");
+    let svc_save = svc_secrets
+        .find("secrets::save")
+        .expect("secrets arm writes");
+    assert!(
+        svc_lock < svc_order && svc_order < svc_save,
+        "PersistService must take persist_io and drop an older secrets write before secrets.json: {svc_secrets}"
     );
     let persist_usage = fn_src(&src, "persist_usage");
     let usage_spawn = persist_usage
@@ -608,16 +623,10 @@ fn grok_login_powers_history_and_imagine() {
             "persist must bump the idle key or persist_bg clones every thread again 2s later: {persist}"
         );
     assert!(
-        bearer.contains("persist_io") && bearer.contains("secrets::save"),
-        "OAuth refresh must take persist_io before writing secrets.json: {bearer}"
-    );
-    let bearer_spawn = bearer
-        .find("thread::spawn")
-        .expect("oauth persist must leave the UI thread");
-    let bearer_save = bearer.find("secrets::save").expect("oauth persist writes");
-    assert!(
-        bearer_spawn < bearer_save,
-        "OAuth refresh must not freeze the cabin writing secrets.json: {bearer}"
+        bearer.contains("persist_oauth_secrets")
+            && !bearer.contains("thread::spawn")
+            && !bearer.contains("secrets::save"),
+        "OAuth refresh must hand secrets.json to PersistService, not write it on the UI thread: {bearer}"
     );
     let kick = fn_src(&src, "kick_model");
     assert!(

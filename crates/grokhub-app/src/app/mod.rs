@@ -2593,13 +2593,7 @@ impl Cabin {
             if grokhub_core::token_needs_refresh(&tok, now_ms()) {
                 if let Some(next) = crate::oauth::refresh_cabin_oauth(&tok) {
                     self.secrets.oauth = Some(next.clone());
-                    let io = self.persist_io.clone();
-                    let secrets = self.secrets.clone();
-                    std::thread::spawn(move || {
-                        if let Ok(_g) = io.lock() {
-                            let _ = secrets::save(&secrets);
-                        }
-                    });
+                    self.persist_oauth_secrets();
                     tok = next;
                 }
             }
