@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 const HUB_STATE_CAP: u64 = 8 * 1024 * 1024;
 
-pub const HUB_KIND: &str = "grokhub-hub-v1";
+pub use grokhub_proto::HUB_KIND;
 pub const DEFAULT_PORT: u16 = 18766;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

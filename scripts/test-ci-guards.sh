@@ -93,6 +93,16 @@ commit_pr
 LABELS=dependencies run_guard fail "Cargo.lock without grokhub versions fails"
 
 fresh_pr
+printf 'name = "grokhub-app"\nversion = "1.0.0"\n\nname = "grokhub-proto"\nversion = "1.0.0"\n' >"$W/Cargo.lock"
+commit_pr
+LABELS=dependencies run_guard pass "new grokhub crate at the current version passes"
+
+fresh_pr
+printf 'name = "grokhub-app"\nversion = "1.0.1"\n' >"$W/Cargo.lock"
+commit_pr
+LABELS=dependencies run_guard fail "grokhub-* lock version bump without release fails"
+
+fresh_pr
 "$REAL_GIT" -C "$W" remote remove origin
 printf '// x\n' >>"$W/crates/grokhub-core/src/slash.rs"
 commit_pr
