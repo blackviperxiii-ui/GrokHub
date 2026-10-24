@@ -1,0 +1,6 @@
+---
+description: "Always use pstack skills; vstack is retired."
+alwaysApply: true
+---
+
+Always load and follow the pstack skills; vstack is retired (Jeremy's rule). Ignore the old vstack skill folders in `.cursor/skills`.
