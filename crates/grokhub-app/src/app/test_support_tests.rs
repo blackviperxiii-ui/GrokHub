@@ -350,6 +350,14 @@ pub(super) fn pin_skill_config(label: &str) -> (crate::config::TestConfigDir, st
     (crate::config::TestConfigDir::set(root.clone()), root)
 }
 
+pub(super) fn last_chat_text(cabin: &Cabin) -> String {
+    cabin
+        .messages
+        .last()
+        .map(|m| m.1.clone())
+        .unwrap_or_default()
+}
+
 #[test]
 fn wait_until_returns_when_ready() {
     let mut n = 0;
