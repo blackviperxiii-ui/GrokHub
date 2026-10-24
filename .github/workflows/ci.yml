@@ -246,6 +246,68 @@ jobs:
           echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=$bin/aarch64-linux-android24-clang" >> "$GITHUB_ENV"
       - run: cargo clippy --locked ${{ matrix.crates }} --target ${{ matrix.target }} -- -D warnings
 
+  # The Tauri desktop shell (src-tauri/ + ui/, cross-platform Phase 2). It is
+  # its own Cargo workspace, so only this job needs the webview libraries.
+  # Bundles build on all three OSes; the tauri-driver smoke test (a chat to a
+  # mock model) runs where tauri-driver has a backend: Linux and Windows.
+  shell:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    name: shell (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          shared-key: shell-${{ matrix.os }}
+          cache-on-failure: true
+          save-if: ${{ github.event_name == 'push' }}
+      - name: Linux webview libraries
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev webkit2gtk-driver xvfb
+      - run: npm ci --prefix ui
+      - run: npm test --prefix ui
+      - run: cargo fmt --manifest-path src-tauri/Cargo.toml --check
+      # clippy and tests compile against ui/dist, so build the UI first.
+      - run: npm run build --prefix ui
+      - run: cargo clippy --manifest-path src-tauri/Cargo.toml --locked --all-targets -- -D warnings
+      - run: cargo test --manifest-path src-tauri/Cargo.toml --locked
+      - name: Bundles
+        shell: bash
+        run: ui/node_modules/.bin/tauri build -- --locked
+      - name: Smoke-test build
+        if: runner.os != 'macOS'
+        shell: bash
+        run: ui/node_modules/.bin/tauri build --debug --no-bundle -- --locked
+      - name: tauri-driver
+        if: runner.os != 'macOS'
+        run: cargo install tauri-driver --locked
+      - name: Smoke test (Linux)
+        if: runner.os == 'Linux'
+        run: xvfb-run -a node ui/e2e/smoke.mjs src-tauri/target/debug/grokhub-shell
+      - name: Smoke test (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          export SMOKE_NATIVE_DRIVER="$EDGEWEBDRIVER/msedgedriver.exe"
+          node ui/e2e/smoke.mjs src-tauri/target/debug/grokhub-shell.exe
+
   windows:
     needs: changes
     if: needs.changes.outputs.code == 'true'
