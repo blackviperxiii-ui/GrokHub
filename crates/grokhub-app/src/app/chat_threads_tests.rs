@@ -1,0 +1,1366 @@
+//! Chat threads, history rail and chat find tests (rearch stage 5).
+//!
+//! Mechanical move from `tests.rs`. Wired via `#[path]` so
+//! `app/mod.rs` stays untouched.
+
+use super::*;
+use eframe::egui;
+
+#[test]
+fn rename_focus_selects_the_placeholder() {
+    egui::__run_test_ui(|ui| {
+        let mut buf = String::from("Project");
+        let edit = ui.add(egui::TextEdit::singleline(&mut buf));
+        select_all_edit(ui, edit.id, &buf);
+        let state = egui::TextEdit::load_state(ui.ctx(), edit.id).expect("edit state");
+        let range = state.cursor.char_range().expect("selection");
+        let [a, b] = range.sorted_cursors();
+        assert_eq!(a.index, egui::text::CharIndex(0));
+        assert_eq!(b.index, egui::text::CharIndex(7));
+    });
+}
+
+#[test]
+fn selecting_plan_does_not_change_the_thread_title() {
+    assert_eq!(
+        grokhub_core::cli_history::title_after_selecting_plan("Night watch"),
+        "Night watch"
+    );
+    assert_eq!(
+        grokhub_core::cli_history::preferred_history_title(
+            "Night watch",
+            false,
+            Some("Plan"),
+            Some("abc")
+        ),
+        "Night watch"
+    );
+    assert_eq!(
+        grokhub_core::cli_history::history_label_after_plan("Night watch", "fix the dock"),
+        "Night watch"
+    );
+}
+
+#[test]
+fn history_rail_uses_session_names_and_can_delete() {
+    let src = cabin_src();
+    let rail = src
+        .split("id_salt(\"rail-history\")")
+        .nth(1)
+        .and_then(|s| s.split("fn cached_chat_views(").next())
+        .expect("rail-history");
+    assert!(
+        rail.contains("chat_section_indices") && rail.contains("TabAct::Switch"),
+        "sidebar History is cabin chats, not grok sessions list: {rail}"
+    );
+    assert!(
+        !rail.contains("discover_session_files") && !rail.contains("reload_grok_sessions"),
+        "sidebar History must not walk session dirs or relist the CLI: {rail}"
+    );
+    assert!(
+        rail.contains("TabAct::Delete") && rail.contains("button(\"Delete\")"),
+        "sidebar chat rows must offer Delete: {rail}"
+    );
+    assert!(
+        rail.contains("session_list_order")
+            && rail.contains("\"Unpin\"")
+            && rail.contains("\"Pin\"")
+            && rail.contains("\"Rename\""),
+        "sidebar chat rows must pin and rename: {rail}"
+    );
+    assert!(
+        rail.contains("is_background_history_title"),
+        "sidebar History must drop workboard summarize and similar: {rail}"
+    );
+    let side = include_str!("sidebar.rs");
+    assert!(
+        !side.contains("rail-archived")
+            && !side.contains("RichText::new(\"Archived\")")
+            && !side.contains("No archived chats"),
+        "sidebar must not paint an Archived section: {side}"
+    );
+    let page = src
+        .split("crate::cards::section_label(ui, \"Chats\")")
+        .nth(1)
+        .and_then(|s| s.split("fn ui_board(").next())
+        .expect("history chats section");
+    assert!(
+        page.contains("thread_rail_title") && page.contains("chat_section_indices"),
+        "History page must paint cabin chats: {page}"
+    );
+    assert!(
+        page.contains("Delete") && page.contains("delete_thread_at"),
+        "History page must delete the cabin chat: {page}"
+    );
+    assert!(
+        page.contains("is_background_history_title"),
+        "History page must not list workboard summarize: {page}"
+    );
+    assert!(
+        !page.contains("Archived chats")
+            && !page.contains("No archived chats")
+            && !page.contains("\"Unarchive\""),
+        "History page must not paint an Archived drawer: {page}"
+    );
+    let dta = fn_src(&src, "delete_thread_at");
+    assert!(
+        dta.contains("delete_session") && !dta.contains("grok_user_stdout"),
+        "deleting a chat drops its native session and never runs the CLI: {dta}"
+    );
+    assert!(
+        page.contains("self.nav = Nav::History"),
+        "deleting a History chat must keep the See all pane: {page}"
+    );
+    let hist = src
+        .split("fn ui_history(")
+        .nth(1)
+        .and_then(|s| s.split("fn ui_board(").next())
+        .expect("ui_history");
+    assert!(
+        hist.contains("Delete all") && hist.contains("delete_all_history"),
+        "History See all must offer Delete all: {hist}"
+    );
+    let poll = src
+        .split("fn poll_single(")
+        .nth(1)
+        .and_then(|s| s.split("fn upsert_stream_assistant(").next())
+        .expect("poll_single");
+    assert!(
+        poll.contains("apply_auto_title"),
+        "a finished turn must name the tab from the session, not leave Chat: {poll}"
+    );
+    assert!(
+        poll.contains("GrokPEvent::Usage")
+            && poll.contains("GrokPEvent::Compact")
+            && poll.contains("thinking_status")
+            && poll.contains("turn_footer"),
+        "1.0.13 stream must paint usage, compact, and a turn footer: {poll}"
+    );
+    assert!(
+        poll.contains("GrokPEvent::Recovering") && poll.contains("apply_compact_status"),
+        "1.0.13 truncation/5xx recovery and compact errors must not kill the turn: {poll}"
+    );
+    assert!(
+        poll.contains("retry_status_line"),
+        "1.0.14 retry status must show a short reason: {poll}"
+    );
+    assert!(
+        poll.contains("scheduled_perm = false"),
+        "a finished or failed grok -p turn must drop scheduled_perm: {poll}"
+    );
+    let deleted = src
+        .split("fn delete_thread_at")
+        .nth(1)
+        .and_then(|s| s.split("fn send_chat").next())
+        .expect("delete_thread_at");
+    assert!(
+        deleted.contains("grokhub_agent::delete_session"),
+        "deleting a History chat must drop its native session: {deleted}"
+    );
+    let title = fn_src(&src, "thread_rail_title");
+    assert!(
+        title.contains("preferred_history_title"),
+        "rail titles must prefer the Grok Build session name: {title}"
+    );
+}
+
+#[test]
+#[allow(clippy::assertions_on_constants)] // pins design constants
+fn rail_footer_is_reserved() {
+    assert_eq!(super::RAIL_FOOTER_H, 52.0);
+    assert!(super::PALETTE_LIST_H < 400.0);
+}
+
+#[test]
+fn rail_chat_title_stays_short() {
+    assert_eq!(
+        grokhub_core::display_tab_title("chowder and food interest and cho"),
+        "chowder"
+    );
+    with_fonts_ui(|ui| {
+        let painted = super::fit_rail_label(ui, "chowder and food interest and cho", 72.0);
+        assert!(
+            painted.chars().count() < 20,
+            "rail label must not run off the pill: {painted}"
+        );
+        assert!(painted.ends_with('…') || painted == "chowder", "{painted}");
+    });
+}
+
+#[test]
+fn chat_rail_reuses_empty_draft() {
+    let src = cabin_src();
+    let theme = include_str!("../theme.rs");
+    let chat = theme.find("(\"chat\", \"Chat\")").expect("chat rail");
+    let imagine = theme
+        .find("(\"imagine\", \"Imagine\")")
+        .expect("imagine rail");
+    assert!(chat < imagine, "Chat sits above Imagine on the rail");
+    let set_nav = fn_src(&src, "set_nav_id");
+    let chat_arm = set_nav
+        .split("\"chat\" =>")
+        .nth(1)
+        .and_then(|s| s.split("_ =>").next())
+        .expect("chat arm");
+    assert!(
+        chat_arm.contains("self.new_thread(false)"),
+        "Chat rail click reuses or starts one empty draft: {chat_arm}"
+    );
+    assert!(
+        !chat_arm.contains("open_recent_chat"),
+        "Chat rail must not jump to last-access; History is for old convos: {chat_arm}"
+    );
+    let created = src
+        .split("fn new_thread")
+        .nth(1)
+        .and_then(|s| s.split("fn begin_chat_rename").next())
+        .expect("new_thread");
+    assert!(
+        created.contains("reuse_empty_thread_idx") && created.contains("has_session"),
+        "Chat must reuse an empty no-session draft instead of stacking Chats: {created}"
+    );
+    assert!(
+        created.contains("composer_want_focus = true"),
+        "Chat rail must put the cursor in the composer: {created}"
+    );
+    let side = fn_src(&src, "ui_sidebar");
+    assert!(
+        !side.contains("\"New chat\"") && !side.contains("RailIcon::Compose"),
+        "sidebar must not keep a separate New chat button: {side}"
+    );
+    assert!(
+        side.contains("apply_tab_act"),
+        "sidebar History clicks go through the shared chat-row action: {side}"
+    );
+    let tab_act = fn_src(&src, "apply_tab_act");
+    assert!(
+        tab_act.contains("composer_want_focus = true"),
+        "sidebar History clicks must focus the composer: {tab_act}"
+    );
+    let palette = src
+        .split("fn run_palette(")
+        .nth(1)
+        .and_then(|s| s.split("fn run_slash_line(").next())
+        .expect("run_palette");
+    assert!(
+        palette.contains("\"nav:chat\"") && palette.contains("self.new_thread(false)"),
+        "palette Chat uses the same empty-draft reuse as the rail: {palette}"
+    );
+    assert!(
+        palette.contains("file:")
+            && palette.contains("palette_file_shown")
+            && palette.contains("desktop::open_path"),
+        "picking a palette file must open it, not only write status: {palette}"
+    );
+    let land = src
+        .split("fn land_on_real_chat(")
+        .nth(1)
+        .and_then(|s| s.split("fn new_thread(").next())
+        .expect("land_on_real_chat");
+    assert!(
+        land.contains("scratch()") && land.contains("apply_switch_thread"),
+        "background chat must leave Scratch for the last real thread: {land}"
+    );
+    assert!(
+        land.contains("most_recently_accessed_index") && !land.contains("self.persist()"),
+        "leaving Scratch for a night/inbox job must not clone every thread twice: {land}"
+    );
+    let house = src
+        .split("HeartbeatAct::Housekeep =>")
+        .nth(1)
+        .and_then(|s| s.split("HeartbeatAct::Inbox =>").next())
+        .expect("housekeep");
+    assert!(
+        !house.contains("stamp_current_access"),
+        "sitting on a chat is not activity and must not move that History row: {house}"
+    );
+    let idle = src
+        .split("JobKind::Reflect =>")
+        .nth(1)
+        .and_then(|s| s.split("JobKind::Indexers =>").next())
+        .expect("idle reflect");
+    assert!(
+        idle.contains("scratch()"),
+        "idle reflect must not consume the slot on Scratch: {idle}"
+    );
+    let mut older = crate::threads::ChatThread::new("Older", false);
+    older.accessed_ms = 1_000;
+    let mut newer = crate::threads::ChatThread::new("Night cabin", false);
+    newer.accessed_ms = 8_000;
+    let mut scratch = crate::threads::ChatThread::new("Scratch", true);
+    scratch.accessed_ms = 9_000;
+    assert_eq!(
+        crate::threads::most_recently_accessed_index(&[older, newer, scratch]),
+        Some(1)
+    );
+}
+
+/// Sidebar History order: pins last-pinned-first, then last used.
+fn history_row_titles(cabin: &Cabin) -> Vec<String> {
+    let listed = crate::threads::chat_section_indices(
+        &cabin.threads,
+        Some(cabin.thread_idx),
+        cabin.messages.is_empty(),
+    );
+    let keys: Vec<crate::threads::SessionSortKey> = listed
+        .iter()
+        .map(|&i| {
+            let t = &cabin.threads[i];
+            crate::threads::SessionSortKey {
+                pinned: t.pinned,
+                pinned_ms: t.pinned_ms,
+                accessed_ms: t.accessed_ms,
+                list_rank: 0,
+            }
+        })
+        .collect();
+    crate::threads::session_list_order(&keys)
+        .into_iter()
+        .map(|pos| cabin.threads[listed[pos]].title.clone())
+        .collect()
+}
+
+fn spoke(title: &str, accessed_ms: u64) -> crate::threads::ChatThread {
+    let mut thread = crate::threads::ChatThread::new(title, false);
+    thread.accessed_ms = accessed_ms;
+    thread
+        .messages_mut()
+        .push(("user".into(), format!("keep {title}")));
+    thread
+}
+
+#[test]
+fn opening_a_history_row_keeps_its_place() {
+    let _lock = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("history-click");
+    let _ = std::fs::remove_dir_all(&root);
+    let _cfg = RestoreEnv::set("GROKHUB_CONFIG", &root);
+    let _tray = RestoreEnv::set("GROKHUB_TRAY", "0");
+
+    let mut last_pin = spoke("Last pin", 1);
+    last_pin.pinned = true;
+    last_pin.pinned_ms = 80;
+    let mut earlier_pin = spoke("Earlier pin", 9_000);
+    earlier_pin.pinned = true;
+    earlier_pin.pinned_ms = 20;
+    let newer = spoke("Newer chat", 500);
+    let older = spoke("Older chat", 100);
+    let earlier_idx = 1;
+    let newer_idx = 2;
+    let older_idx = 3;
+    let mut cabin = Cabin::quiet_cabin(vec![last_pin, earlier_pin, newer, older], newer_idx);
+    assert!(!cabin.running, "the cabin is quiet before the click");
+
+    let before = history_row_titles(&cabin);
+    assert_eq!(
+        before,
+        ["Last pin", "Earlier pin", "Newer chat", "Older chat"],
+        "pins stay last-pinned-first, then last used: {before:?}"
+    );
+    let opened_at = before.iter().position(|t| t == "Older chat").unwrap();
+    assert_ne!(opened_at, 0, "the chat we open is not already first");
+    let older_accessed = cabin.threads[older_idx].accessed_ms;
+    let earlier_pin_ms = cabin.threads[earlier_idx].pinned_ms;
+    let earlier_accessed = cabin.threads[earlier_idx].accessed_ms;
+
+    cabin.switch_thread(older_idx);
+    let after_click = history_row_titles(&cabin);
+    assert_eq!(
+        after_click, before,
+        "switch_thread is the History click and must not move the row: {after_click:?}"
+    );
+    assert_eq!(cabin.thread_idx, older_idx);
+    assert_eq!(
+        cabin.threads[older_idx].accessed_ms, older_accessed,
+        "the click must not bump accessed_ms"
+    );
+
+    // send_chat stamps the open thread with stamp_current_access. That is the
+    // sent-turn bump. The click above did not call it.
+    cabin.stamp_current_access();
+    let after_stamp = history_row_titles(&cabin);
+    assert_eq!(
+        after_stamp,
+        ["Last pin", "Earlier pin", "Older chat", "Newer chat"],
+        "a sent turn moves that chat up, under the pins: {after_stamp:?}"
+    );
+    let stamped_at = after_stamp.iter().position(|t| t == "Older chat").unwrap();
+    assert!(stamped_at < opened_at, "the messaged chat moved up");
+    assert!(cabin.threads[older_idx].accessed_ms > older_accessed);
+
+    let pins_before: Vec<_> = after_stamp
+        .iter()
+        .filter(|title| cabin.threads.iter().any(|t| t.title == **title && t.pinned))
+        .cloned()
+        .collect();
+    assert_eq!(pins_before, ["Last pin", "Earlier pin"]);
+    cabin.switch_thread(earlier_idx);
+    let after_pin_click = history_row_titles(&cabin);
+    let pins_after: Vec<_> = after_pin_click.iter().take(2).cloned().collect::<Vec<_>>();
+    assert_eq!(
+        pins_after, pins_before,
+        "clicking a pinned chat leaves the pin group last-pinned-first: {after_pin_click:?}"
+    );
+    assert!(cabin.threads[earlier_idx].pinned);
+    assert_eq!(cabin.threads[earlier_idx].pinned_ms, earlier_pin_ms);
+    assert_eq!(
+        cabin.threads[earlier_idx].accessed_ms, earlier_accessed,
+        "clicking a pin is not activity"
+    );
+    assert_eq!(
+        after_pin_click, after_stamp,
+        "the pin click does not reorder History"
+    );
+
+    let start = std::time::Instant::now();
+    while cabin.persist_rx.is_some() && start.elapsed() < std::time::Duration::from_secs(5) {
+        cabin.poll_persist();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn park_fresh_chat_keeps_the_running_reply_and_opens_an_empty_chat() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("park-fresh");
+    let _ = std::fs::remove_dir_all(&root);
+    std::env::set_var("GROKHUB_CONFIG", &root);
+
+    let mut live = crate::threads::ChatThread::new("Night watch", false);
+    live.pinned = true;
+    live.messages = std::sync::Arc::new(vec![
+        ("user".into(), "keep this reply".into()),
+        ("assistant".into(), "still writing".into()),
+    ]);
+    let live_id = live.id.clone();
+    let mut cabin = super::Cabin::quiet_for_test();
+    cabin.threads = vec![live];
+    cabin.thread_idx = 0;
+    cabin.messages = cabin.threads[0].messages.clone();
+    cabin.running = true;
+    cabin.chat_job_thread = Some(live_id.clone());
+    cabin.park_fresh_chat();
+
+    assert!(cabin.running, "parking must not halt the reply");
+    assert_eq!(cabin.chat_job_thread.as_deref(), Some(live_id.as_str()));
+    assert!(
+        cabin.messages.is_empty(),
+        "the open pane must be an empty chat"
+    );
+    assert_ne!(
+        cabin.threads[cabin.thread_idx].id, live_id,
+        "the empty chat must not be the thread that is still replying"
+    );
+    let old = cabin
+        .threads
+        .iter()
+        .find(|t| t.id == live_id)
+        .expect("the running thread stays in the list");
+    assert!(old.pinned);
+    assert_eq!(old.title, "Night watch");
+    assert_eq!(
+        old.messages.as_slice(),
+        [
+            ("user".into(), "keep this reply".into()),
+            ("assistant".into(), "still writing".into()),
+        ]
+    );
+
+    let io = cabin.persist_io.clone();
+    drop(cabin);
+    let start = std::time::Instant::now();
+    while start.elapsed() < std::time::Duration::from_secs(3) {
+        if io.try_lock().is_ok() {
+            std::thread::sleep(std::time::Duration::from_millis(30));
+            if io.try_lock().is_ok() {
+                break;
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    let _ = std::fs::remove_dir_all(&root);
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
+#[test]
+fn selecting_plan_leaves_the_title_and_sets_plan() {
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin) = isolated_cabin("plan-title");
+    let mut thread = crate::threads::ChatThread::new("Night watch", false);
+    thread.messages = std::sync::Arc::new(vec![("user".into(), "dock".into())]);
+    cabin.threads = vec![thread];
+    cabin.thread_idx = 0;
+    cabin.messages = cabin.threads[0].messages.clone();
+    cabin.session_mode = SessionMode::Chat;
+
+    cabin.select_plan_without_rename();
+
+    assert_eq!(cabin.threads[0].title, "Night watch");
+    assert_eq!(cabin.session_mode, SessionMode::Plan);
+    release_isolated(&root, cabin);
+}
+
+#[test]
+fn session_menu_sits_left_of_minimize() {
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin) = isolated_cabin("menu-place");
+    let ctx = egui::Context::default();
+    let raw = egui::RawInput {
+        screen_rect: Some(egui::Rect::from_min_size(
+            egui::Pos2::ZERO,
+            egui::vec2(900.0, 80.0),
+        )),
+        ..Default::default()
+    };
+    let mut menu = egui::Rect::NOTHING;
+    let mut mini = egui::Rect::NOTHING;
+    let _ = crate::theme::test_pass(&ctx, raw, |ui| {
+        egui::CentralPanel::default().show(ui, |ui| {
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.spacing_mut().item_spacing.x = 0.0;
+                mini = titlebar_chrome_btn(ui, ChromeBtn::Minimize).rect;
+                menu = cabin.paint_session_actions_menu(ui);
+            });
+        });
+    });
+    assert!(
+        menu.right() <= mini.left() + 0.5,
+        "the session menu must sit left of Minimize: menu {menu:?} minimize {mini:?}"
+    );
+    release_isolated(&root, cabin);
+}
+
+#[test]
+fn pin_thread_flips_the_pin() {
+    let mut quiet = QuietCabin::boot("pin-thread");
+    let cabin = &mut quiet.cabin;
+    let idx = cabin.thread_idx;
+    let title = cabin.threads[idx].title.clone();
+    assert!(!cabin.threads[idx].pinned);
+    cabin.pin_thread(idx);
+    assert!(
+        cabin.threads[idx].pinned,
+        "the pin control must pin this chat"
+    );
+    assert!(cabin.threads[idx].pinned_ms > 0);
+    assert_eq!(cabin.status, format!("Pinned {title}"));
+    quiet.settle();
+}
+
+#[test]
+fn composer_and_history_omit_archived_idle_chrome() {
+    let src = cabin_src();
+    let toast = fn_src(&src, "paint_archive_toast");
+    assert!(
+        !toast.contains("idle chat")
+            && !toast.contains("idle chats")
+            && !toast.contains("auto_archive_note")
+            && !toast.contains("ghost_pill(ui, \"Archived\")")
+            && !toast.contains("Nav::History"),
+        "composer archive toast must not show idle-archive chrome: {toast}"
+    );
+    assert!(
+        toast.contains("ghost_pill(ui, \"Undo\")"),
+        "manual archive Undo toast stays: {toast}"
+    );
+    let live = src
+        .split("ComposerStackSlot::LiveWork =>")
+        .nth(1)
+        .and_then(|s| s.split("ComposerStackSlot::SlashPalette =>").next())
+        .expect("LiveWork slot");
+    assert!(
+        live.contains("paint_archive_toast") && !live.contains("idle chat"),
+        "LiveWork must not embed idle-archive labels: {live}"
+    );
+    let hist = src
+        .split("fn ui_history(")
+        .nth(1)
+        .and_then(|s| s.split("fn ui_board(").next())
+        .expect("ui_history");
+    assert!(
+        !hist.contains("history_archived")
+            && !hist.contains("\"Archived\"")
+            && !hist.contains("Archived chats"),
+        "History must not offer an Archived view: {hist}"
+    );
+    let side = include_str!("sidebar.rs");
+    assert!(
+        !side.contains("rail-archived")
+            && !side.contains("RichText::new(\"Archived\")")
+            && !side.contains("No archived chats"),
+        "sidebar must not list Archived chats: {side}"
+    );
+    let kick = fn_src(&src, "kick_history_search");
+    assert!(
+        kick.contains("is_archived") && kick.contains("continue"),
+        "History search must skip archived chats: {kick}"
+    );
+    let archive_row = fn_src(&src, "ui_chat_archive_row");
+    assert!(
+        !archive_row.contains("move to Archived")
+            && archive_row.contains("leave History and search")
+            && archive_row.contains("still on disk")
+            && archive_row.contains("no Archived drawer")
+            && !archive_row.contains("open the chat or Unarchive from its menu"),
+        "Settings auto-archive must not promise an Archived drawer or post-leave recovery: {archive_row}"
+    );
+    let recall = src
+        .split("Slash::Recall(q)")
+        .nth(1)
+        .and_then(|s| s.split("fn kick_model_retry").next())
+        .expect("Recall");
+    assert!(
+        recall.contains("is_archived") && recall.contains("continue"),
+        "/recall must skip archived chats like History search: {recall}"
+    );
+}
+
+#[test]
+fn archive_hides_from_main_list_and_reply_restores() {
+    let mut quiet = QuietCabin::boot("chat-archive");
+    let cabin = &mut quiet.cabin;
+    cabin.threads.clear();
+    let mut keep = crate::threads::ChatThread::new("Keep", false);
+    keep.messages_mut().push(("user".into(), "stay".into()));
+    keep.accessed_ms = 100;
+    let mut done = crate::threads::ChatThread::new("Done chat", false);
+    done.messages_mut().push(("user".into(), "old".into()));
+    done.accessed_ms = 50;
+    cabin.threads = vec![keep, done];
+    cabin.thread_idx = 1;
+    cabin.messages = cabin.threads[1].messages.clone();
+    cabin.archive_thread_at(1);
+    assert!(crate::threads::is_archived(&cabin.threads[1]));
+    assert_eq!(
+        crate::threads::chat_section_indices(&cabin.threads, Some(1), false),
+        vec![0]
+    );
+    assert_eq!(cabin.status, "Archived Done chat");
+    assert_eq!(
+        cabin.archive_undo.as_deref(),
+        Some(cabin.threads[1].id.as_str())
+    );
+    cabin.unarchive_on_reply();
+    assert!(!crate::threads::is_archived(&cabin.threads[1]));
+    assert_eq!(cabin.status, "Restored Done chat to chats");
+    assert_eq!(
+        crate::threads::chat_section_indices(&cabin.threads, Some(1), false),
+        vec![0, 1]
+    );
+    quiet.settle();
+}
+
+#[test]
+fn auto_archive_15_day_idle_skips_13_day_pinned_and_busy() {
+    let mut quiet = QuietCabin::boot("auto-archive");
+    let cabin = &mut quiet.cabin;
+    let now = 30 * crate::threads::DAY_MS;
+    cabin.cfg.chat_archive_days = 14;
+    cabin.threads.clear();
+    let mut idle15 = crate::threads::ChatThread::new("Fifteen", false);
+    idle15.messages_mut().push(("user".into(), "hi".into()));
+    idle15.accessed_ms = now - 15 * crate::threads::DAY_MS;
+    let mut idle13 = crate::threads::ChatThread::new("Thirteen", false);
+    idle13.messages_mut().push(("user".into(), "hi".into()));
+    idle13.accessed_ms = now - 13 * crate::threads::DAY_MS;
+    let mut pinned = crate::threads::ChatThread::new("Pinned", false);
+    pinned.messages_mut().push(("user".into(), "hi".into()));
+    pinned.accessed_ms = now - 20 * crate::threads::DAY_MS;
+    pinned.pinned = true;
+    let mut busy = crate::threads::ChatThread::new("Busy", false);
+    busy.messages_mut().push(("user".into(), "hi".into()));
+    busy.accessed_ms = now - 20 * crate::threads::DAY_MS;
+    let busy_id = busy.id.clone();
+    cabin.threads = vec![idle15, idle13, pinned, busy];
+    cabin.thread_idx = 0;
+    cabin.messages = cabin.threads[0].messages.clone();
+    cabin.running = true;
+    cabin.chat_job_thread = Some(busy_id);
+    let n = cabin.run_auto_archive(now);
+    assert_eq!(n, 1, "only the 15-day idle chat archives");
+    assert!(crate::threads::is_archived(&cabin.threads[0]));
+    assert!(!crate::threads::is_archived(&cabin.threads[1]));
+    assert!(!crate::threads::is_archived(&cabin.threads[2]));
+    assert!(!crate::threads::is_archived(&cabin.threads[3]));
+    assert_eq!(cabin.status, "Archived 1 idle chat");
+    quiet.settle();
+}
+
+#[test]
+fn delete_thread_at_removes_that_row() {
+    let mut quiet = QuietCabin::boot("delete-thread");
+    let cabin = &mut quiet.cabin;
+    let keep = cabin.threads[cabin.thread_idx].title.clone();
+    cabin
+        .threads
+        .push(crate::threads::ChatThread::new("Harbor", false));
+    let idx = cabin.threads.len() - 1;
+    cabin.threads[idx].messages = std::sync::Arc::new(vec![("user".into(), "harbor row".into())]);
+    cabin.delete_thread_at(idx);
+    assert!(
+        cabin.threads.iter().all(|t| t.title != "Harbor"),
+        "deleting that chat must remove its sidebar row, left {:?}",
+        cabin
+            .threads
+            .iter()
+            .map(|t| t.title.as_str())
+            .collect::<Vec<_>>()
+    );
+    assert!(cabin.threads.iter().any(|t| t.title == keep));
+    assert_eq!(cabin.status, "Deleted Harbor");
+    quiet.settle();
+}
+
+#[test]
+fn delete_all_history_clears_seeded_chats() {
+    let _lock = crate::config::hold_test_config();
+    let cfg = IsolatedConfig::arm("delete-all");
+    let mut cabin = Cabin::quiet_for_test();
+    let mut pier = crate::threads::ChatThread::new("Pier light", false);
+    pier.messages_mut()
+        .push(("user".into(), "bring the lamp".into()));
+    let mut salt = crate::threads::ChatThread::new("Salt lane", false);
+    salt.messages_mut()
+        .push(("user".into(), "walk the lane".into()));
+    cabin.threads = vec![pier, salt];
+    cabin.thread_idx = 0;
+    cabin.messages = cabin.threads[0].messages.clone();
+    cabin.delete_all_history();
+    wait_tree_contains(&cfg.root, "Chat");
+    join_persist(&cabin.persist_svc);
+    let saved = std::fs::read_to_string(cfg.root.join("threads.json")).expect("threads.json");
+    assert!(
+        !saved.contains("Pier light") && !saved.contains("Salt lane"),
+        "the pre-delete snapshot from halt_in_flight must not land last: {saved}"
+    );
+    assert!(
+        cabin.threads.iter().all(|t| t.title != "Pier light"),
+        "Pier light must be gone"
+    );
+    assert!(
+        cabin.threads.iter().all(|t| t.title != "Salt lane"),
+        "Salt lane must be gone"
+    );
+    assert_eq!(cabin.status, "Deleted all chats");
+    assert_eq!(cabin.threads.len(), 1, "the fresh chat is the only row");
+    assert_eq!(cabin.threads[0].title, "Chat");
+    assert!(
+        cabin.threads[0].messages.is_empty(),
+        "the fresh chat has no transcript"
+    );
+    drop(cfg);
+}
+
+// Landed from PR #94.
+#[test]
+fn rename_thread_sets_locked_title() {
+    let _g = config::hold_test_config();
+    let root = config::test_config_root("rename-thread");
+    let _ = std::fs::remove_dir_all(&root);
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.threads.push(ChatThread::new("Chat", false));
+    cabin.rename_thread(0, "Harbor watch");
+    assert_eq!(cabin.threads[0].title, "Harbor watch");
+    assert!(cabin.threads[0].title_locked);
+    assert_eq!(cabin.status, "Renamed Harbor watch");
+    let _io = cabin.persist_io.lock().unwrap_or_else(|e| e.into_inner());
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
+// Landed from PR #101.
+#[test]
+fn new_thread_opens_another_chat_when_the_current_one_has_a_message() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("new-chat");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let mut cabin = Cabin::quiet_for_test();
+    if cabin.threads.is_empty() {
+        cabin
+            .threads
+            .push(crate::threads::ChatThread::new("Harbor", false));
+        cabin.thread_idx = 0;
+    }
+    let line = std::sync::Arc::new(vec![("user".into(), "paint the harbor".into())]);
+    for t in &mut cabin.threads {
+        t.messages = line.clone();
+    }
+    cabin.messages = line;
+    let before = cabin.threads.len();
+    cabin.new_thread(false);
+    assert_eq!(cabin.threads.len(), before + 1);
+    assert_eq!(cabin.status, "New chat");
+    assert!(cabin.messages.is_empty());
+    assert_eq!(cabin.threads[cabin.thread_idx].title, "Chat");
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
+// Landed from PR #102.
+#[test]
+fn open_history_hit_opens_pier_and_a_memory_file() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("history-open");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.threads.clear();
+    let mut harbor = crate::threads::ChatThread::new("Harbor", false);
+    let mut pier = crate::threads::ChatThread::new("Pier", false);
+    let line = std::sync::Arc::new(vec![("user".into(), "paint the harbor".into())]);
+    harbor.messages = line.clone();
+    pier.messages = line.clone();
+    let pier_id = pier.id.clone();
+    cabin.threads.push(harbor);
+    cabin.threads.push(pier);
+    cabin.thread_idx = 0;
+    cabin.messages = line;
+    cabin.open_history_hit(&format!("thread:{pier_id}"));
+    assert_eq!(cabin.threads[cabin.thread_idx].title, "Pier");
+    assert!(matches!(cabin.nav, Nav::Chat));
+    cabin.open_history_hit("thread:missing");
+    assert_eq!(cabin.status, "That chat is gone");
+    assert_eq!(cabin.threads[cabin.thread_idx].title, "Pier");
+    cabin.open_history_hit("mem:USER.md");
+    assert!(matches!(cabin.nav, Nav::Memory));
+    assert_eq!(cabin.status, "USER.md");
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
+// Landed from PR #146.
+#[test]
+fn grok_history_open_stays_off_a_run() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("grok-hist");
+    let _ = std::fs::remove_dir_all(&root);
+    std::env::set_var("GROKHUB_CONFIG", &root);
+
+    let id = "sess-quiet-known";
+    let title = "Known cabin title";
+    let mut cabin = super::Cabin::quiet_for_test();
+    cabin
+        .grok_sessions
+        .push(grokhub_core::cli_history::GrokSession {
+            id: id.to_string(),
+            title: title.to_string(),
+            path: None,
+            cwd: None,
+            cabin: false,
+        });
+
+    cabin.open_grok_session(id);
+    assert_eq!(cabin.threads.len(), 1);
+    assert_eq!(cabin.threads[0].grok_session.as_deref(), Some(id));
+    assert_eq!(cabin.threads[0].title, title);
+    assert!(cabin.nav == super::Nav::Chat);
+    assert_eq!(cabin.status, format!("Opened {title}"));
+    assert!(!cabin.running);
+
+    cabin.open_grok_session(id);
+    assert_eq!(cabin.threads.len(), 1);
+    assert_eq!(cabin.threads[0].grok_session.as_deref(), Some(id));
+    assert!(!cabin.running);
+}
+
+// Landed from PR #171.
+#[test]
+fn history_hit_opens_memory_or_chat() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("history-hit");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("config root");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+
+    let mut cabin = Cabin::quiet_for_test();
+    assert!(!cabin.running);
+
+    cabin.open_history_hit("mem:MEMORY.md");
+    assert!(matches!(cabin.nav, Nav::Memory));
+    assert_eq!(cabin.status, "MEMORY.md");
+    assert_eq!(cabin.mem_name, "MEMORY.md");
+    assert!(!cabin.running);
+
+    cabin.open_history_hit("thread:nope");
+    assert_eq!(cabin.status, "That chat is gone");
+    assert!(!cabin.running);
+
+    cabin.new_thread(false);
+    cabin.new_thread(false);
+    let id = cabin
+        .threads
+        .get(cabin.thread_idx)
+        .map(|t| t.id.clone())
+        .expect("seeded thread");
+    cabin.open_history_hit(&format!("thread:{id}"));
+    assert_eq!(cabin.threads[cabin.thread_idx].id, id);
+    assert!(matches!(cabin.nav, Nav::Chat));
+    assert!(!cabin.running);
+}
+
+// Landed from PR #172.
+#[test]
+fn delete_all_history_leaves_one_empty_chat() {
+    let _hold = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("delete-all-history");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("config root");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+
+    let mut cabin = super::Cabin::quiet_for_test();
+    cabin.new_thread(false);
+    cabin.messages = std::sync::Arc::new(vec![("user".into(), "note".into())]);
+    cabin.new_thread(false);
+    cabin.cfg.goal_pin = "harbor".into();
+    let seeded = cabin
+        .threads
+        .iter()
+        .position(|t| !t.messages.is_empty())
+        .expect("seeded message");
+    cabin.threads[seeded].grok_session = Some("sess".into());
+    assert!(cabin.threads.len() >= 2);
+    assert!(cabin
+        .threads
+        .iter()
+        .any(|t| t.grok_session.as_deref() == Some("sess")));
+    assert_eq!(cabin.cfg.goal_pin, "harbor");
+    assert!(!cabin.running);
+
+    cabin.delete_all_history();
+
+    assert_eq!(cabin.status, "Deleted all chats");
+    assert_eq!(cabin.threads.len(), 1);
+    assert_eq!(cabin.threads[0].title, "Chat");
+    assert!(cabin.threads[0].messages.is_empty());
+    assert!(cabin.messages.is_empty());
+    assert!(cabin.cfg.goal_pin.is_empty());
+    assert!(cabin.grok_sessions.is_empty());
+    assert!(!cabin.running);
+
+    let _ = std::fs::remove_dir_all(&root);
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
+// Landed from PR #214.
+#[test]
+fn rename_chat_stays_off_a_run() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("rename-chat");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("config root");
+    let prev = std::env::var("GROKHUB_CONFIG").ok();
+    std::env::set_var("GROKHUB_CONFIG", &root);
+
+    let mut cabin = Cabin::quiet_for_test();
+    if cabin.threads.is_empty() {
+        cabin.new_thread(false);
+    }
+    let thread_idx = cabin.thread_idx;
+    assert_eq!(cabin.threads[thread_idx].title, "Chat");
+    assert!(!cabin.running);
+
+    cabin.rename_thread(thread_idx, "");
+    assert_eq!(cabin.status, "Kept Chat");
+    assert_eq!(cabin.threads[thread_idx].title, "Chat");
+    assert!(!cabin.threads[thread_idx].title_locked);
+
+    cabin.rename_thread(thread_idx, "Harbor");
+    assert_eq!(cabin.status, "Renamed Harbor");
+    assert_eq!(cabin.threads[thread_idx].title, "Harbor");
+    assert!(cabin.threads[thread_idx].title_locked);
+    assert!(!cabin.running);
+
+    match prev {
+        Some(v) => std::env::set_var("GROKHUB_CONFIG", v),
+        None => std::env::remove_var("GROKHUB_CONFIG"),
+    }
+}
+
+// Landed from PR #215.
+#[test]
+fn pin_chat_stays_off_a_run() {
+    let _hold = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("pin-chat");
+    let _ = std::fs::remove_dir_all(&root);
+    std::env::set_var("GROKHUB_CONFIG", &root);
+
+    let mut cabin = Cabin::quiet_for_test();
+    if cabin.threads.is_empty() {
+        cabin.new_thread(false);
+    }
+    assert_eq!(cabin.threads[cabin.thread_idx].title, "Chat");
+    assert!(!cabin.running);
+
+    cabin.pin_thread(cabin.thread_idx);
+    assert_eq!(cabin.status, "Pinned Chat");
+    assert!(cabin.threads[cabin.thread_idx].pinned);
+    assert!(!cabin.running);
+
+    cabin.pin_thread(cabin.thread_idx);
+    assert_eq!(cabin.status, "Unpinned Chat");
+    assert!(!cabin.threads[cabin.thread_idx].pinned);
+    assert!(!cabin.running);
+}
+
+// Landed from PR #216.
+#[test]
+fn fresh_home_keeps_the_old_chat() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("fresh-home");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("config root");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+
+    let mut cabin = Cabin::quiet_for_test();
+    if cabin.threads.is_empty() {
+        cabin.new_thread(false);
+    }
+    cabin.messages = std::sync::Arc::new(vec![("user".into(), "hello".into())]);
+
+    cabin.open_fresh_home();
+
+    assert_eq!(cabin.status, "New chat");
+    assert!(cabin.messages.is_empty());
+    let kept = cabin.threads.iter().enumerate().any(|(i, thread)| {
+        i != cabin.thread_idx
+            && thread
+                .messages
+                .iter()
+                .any(|(role, line)| role == "user" && line == "hello")
+    });
+    assert!(kept);
+    assert!(!cabin.running);
+    assert!(matches!(cabin.nav, Nav::Chat));
+}
+
+// Landed from PR #217.
+#[test]
+fn delete_one_chat_stays_off_a_run() {
+    let _hold = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("delete-one-chat");
+    let _ = std::fs::remove_dir_all(&root);
+    std::env::set_var("GROKHUB_CONFIG", &root);
+
+    let mut cabin = super::Cabin::quiet_for_test();
+    if cabin.threads.is_empty() {
+        cabin.new_thread(false);
+    }
+    cabin.threads[cabin.thread_idx].title = "Harbor".into();
+    cabin.messages = Arc::new(vec![("user".into(), "hello".into())]);
+    cabin.new_thread(false);
+
+    let harbor = cabin
+        .threads
+        .iter()
+        .position(|t| t.title == "Harbor")
+        .expect("Harbor");
+    cabin.delete_thread_at(harbor);
+
+    assert_eq!(cabin.status, "Deleted Harbor");
+    assert!(cabin.threads.iter().all(|t| t.title != "Harbor"));
+    assert_eq!(cabin.threads[cabin.thread_idx].title, "Chat");
+    assert!(!cabin.running);
+    assert!(cabin.messages.is_empty());
+
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
+// Landed from PR #218.
+#[test]
+fn scratch_chat_stays_off_a_run() {
+    let _guard = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("scratch-chat");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let mut cabin = Cabin::quiet_for_test();
+    assert!(!cabin.running);
+    cabin.new_thread(true);
+    assert_eq!(cabin.status, "Scratch — no memory writes");
+    let thread = cabin.threads.get(cabin.thread_idx).expect("current thread");
+    assert_eq!(thread.title, "Scratch");
+    assert!(thread.scratch);
+    assert!(!cabin.running);
+}
+
+// Landed from PR #219.
+#[test]
+fn delete_last_chat_stays_off_a_run() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("delete-last");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("config root");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let mut cabin = Cabin::quiet_for_test();
+    if cabin.threads.is_empty() {
+        cabin.new_thread(false);
+    }
+    cabin.delete_thread_at(0);
+    assert_eq!(cabin.status, "Chat deleted");
+    assert_eq!(cabin.threads.len(), 1);
+    assert_eq!(cabin.threads[0].title, "Chat");
+    assert!(!cabin.running);
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
+// Landed from PR #220.
+#[test]
+fn land_on_real_chat_leaves_scratch() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("land-chat");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let mut cabin = Cabin::quiet_for_test();
+    if cabin.threads.is_empty() {
+        cabin.new_thread(false);
+    }
+    cabin.new_thread(true);
+    let current = &cabin.threads[cabin.thread_idx];
+    assert_eq!(current.title, "Scratch");
+    assert!(current.scratch);
+    assert!(cabin
+        .threads
+        .iter()
+        .enumerate()
+        .any(|(i, t)| { i != cabin.thread_idx && t.title == "Chat" && !t.scratch }));
+    assert_eq!(cabin.status, "Scratch — no memory writes");
+    cabin.land_on_real_chat();
+    let current = &cabin.threads[cabin.thread_idx];
+    assert_eq!(current.title, "Chat");
+    assert!(!current.scratch);
+    assert!(matches!(cabin.nav, Nav::Chat));
+    assert!(cabin
+        .threads
+        .iter()
+        .enumerate()
+        .any(|(i, t)| { i != cabin.thread_idx && t.title == "Scratch" && t.scratch }));
+    assert_eq!(cabin.status, "Scratch — no memory writes");
+    assert!(!cabin.running);
+}
+
+// Landed from PR #222.
+#[test]
+fn recent_chat_stays_off_a_run() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("recent-chat");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let mut cabin = Cabin::quiet_for_test();
+    if cabin.threads.is_empty() {
+        cabin.new_thread(false);
+    }
+    let idx = cabin.thread_idx;
+    assert_eq!(cabin.threads[idx].title, "Chat");
+    assert_eq!(cabin.status, "New chat");
+    cabin.open_recent_chat();
+    assert_eq!(cabin.threads[cabin.thread_idx].title, "Chat");
+    assert_eq!(cabin.thread_idx, idx);
+    assert!(cabin.composer_want_focus);
+    assert_eq!(cabin.status, "New chat");
+    assert!(!cabin.running);
+    assert_eq!(cabin.threads.len(), 1);
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
+// Landed from PR #223.
+#[test]
+fn begin_rename_stays_off_a_run() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("begin-rename");
+    let _ = std::fs::remove_dir_all(&root);
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let mut cabin = Cabin::quiet_for_test();
+    if cabin.threads.is_empty() {
+        cabin.new_thread(false);
+    }
+    let thread_idx = cabin.thread_idx;
+    assert_eq!(cabin.threads[thread_idx].title, "Chat");
+    assert!(!cabin.threads[thread_idx].title_locked);
+    assert_eq!(cabin.status, "New chat");
+    assert!(!cabin.running);
+    cabin.begin_chat_rename(thread_idx);
+    assert_eq!(cabin.rename_idx, Some(thread_idx));
+    assert!(cabin.rename_focus);
+    assert_eq!(cabin.rename_buf, "Chat");
+    assert_eq!(cabin.rename_lock, Some("Chat".into()));
+    assert_eq!(cabin.threads[thread_idx].title, "Chat");
+    assert!(!cabin.threads[thread_idx].title_locked);
+    assert_eq!(cabin.status, "New chat");
+    assert!(!cabin.running);
+}
+
+// Landed from PR #226.
+#[test]
+fn switch_chat_keeps_the_line() {
+    let _cfg = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("switch-chat-keeps");
+    let _ = std::fs::remove_dir_all(&root);
+    std::env::set_var("GROKHUB_CONFIG", &root);
+
+    let mut app = Cabin::quiet_for_test();
+    let mut held = crate::threads::ChatThread::new("Chat", false);
+    held.messages = std::sync::Arc::new(vec![("user".into(), "older line".into())]);
+    app.threads.push(held);
+    app.thread_idx = 0;
+    app.messages = app.threads[0].messages.clone();
+    app.new_thread(false);
+    let left = app.thread_idx;
+    assert!(left > 0);
+    app.live_mut().push(("user".into(), "harbor line".into()));
+    app.apply_switch_thread(0);
+    assert_eq!(app.thread_idx, 0);
+    assert!(app.messages.iter().all(|(_, c)| c != "harbor line"));
+    assert!(app.threads[left]
+        .messages
+        .iter()
+        .any(|(_, c)| c == "harbor line"));
+    assert!(app.composer_want_focus);
+    assert!(app.rename_idx.is_none());
+    assert!(!app.running);
+    assert!(app.chat_job_thread.is_none());
+    assert_eq!(app.status, "New chat");
+
+    std::env::remove_var("GROKHUB_CONFIG");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn edit_puts_your_message_back_without_dropping_a_draft() {
+    assert_eq!(
+        super::chat_ui::edit_into_composer("", "fix the tests"),
+        "fix the tests"
+    );
+    assert_eq!(
+        super::chat_ui::edit_into_composer("  \n", "fix the tests"),
+        "fix the tests"
+    );
+    assert_eq!(
+        super::chat_ui::edit_into_composer("half typed\n", "fix the tests"),
+        "half typed\n\nfix the tests"
+    );
+    assert_eq!(
+        super::chat_ui::msg_act_labels(true),
+        &["Copy", "Edit", "Reply"]
+    );
+    assert_eq!(super::chat_ui::msg_act_labels(false), &["Copy", "Reply"]);
+    let src = cabin_src();
+    let chat = fn_src(&src, "ui_chat");
+    assert!(chat.contains("ChatBlockAct::Edit(body)"), "{chat}");
+    assert!(chat.contains("edit_into_composer"), "{chat}");
+}
+
+#[test]
+fn user_act_row_with_edit_stays_inside_a_narrow_pane() {
+    for width in [300.0_f32, 360.0, 800.0] {
+        let ctx = egui::Context::default();
+        let _ = crate::theme::test_pass(&ctx, Default::default(), |ui| {
+            let ctx = ui.ctx().clone();
+            crate::theme::apply(&ctx, true);
+            egui::CentralPanel::default().show(ui, |ui| {
+                ui.allocate_ui(egui::vec2(width, 200.0), |ui| {
+                    ui.set_max_width(width);
+                    let row = ui.max_rect();
+                    let bubble = super::chat_ui::paint_speech_bubble(ui, "hey", true, false);
+                    let acts = super::chat_ui::paint_msg_acts(
+                        ui,
+                        true,
+                        "hey",
+                        row.width(),
+                        bubble.rect.width(),
+                    );
+                    assert!(
+                        acts.row.min.x >= row.min.x - 0.5,
+                        "width {width}: {:?}",
+                        acts.row
+                    );
+                    assert!(
+                        acts.row.max.x <= row.max.x + 1.0,
+                        "width {width}: {:?}",
+                        acts.row
+                    );
+                    let want = super::chat_ui::msg_acts_row_width(ui, true);
+                    assert!(
+                        acts.row.width() + 1.0 >= want,
+                        "width {width}: Edit row clipped {} < {want}",
+                        acts.row.width()
+                    );
+                });
+            });
+        });
+    }
+}
+
+fn find_views(bodies: &[(&str, &str)]) -> Vec<ChatView> {
+    grokhub_core::visible_chat_refs(bodies.iter().copied())
+}
+
+#[test]
+fn chat_find_starts_on_the_newest_hit_and_wraps() {
+    let views = find_views(&[
+        ("user", "build the cabin"),
+        ("assistant", "Building it."),
+        ("user", "now test"),
+        ("assistant", "Tests pass. Build is green."),
+    ]);
+    let mut find = super::chat_ui::ChatFind::default();
+    find.toggle();
+    assert!(find.open && find.want_focus);
+    find.query = "BUILD".into();
+    find.refresh("t1", &views);
+    let hits = find.hits().to_vec();
+    assert_eq!(hits.len(), 3, "{hits:?}");
+    assert_eq!(find.current_row(), hits.last().copied());
+    assert!(find.jump, "a new query scrolls to its hit");
+    assert_eq!(find.label(), "3 of 3");
+    find.jump = false;
+    find.step(true);
+    assert_eq!(find.current_row(), Some(hits[0]));
+    assert!(find.jump);
+    find.step(false);
+    assert_eq!(find.label(), "3 of 3");
+    // Same query, same transcript: no recount, pick stays.
+    find.step(false);
+    find.refresh("t1", &views);
+    assert_eq!(find.label(), "2 of 3");
+    find.query = "zzz".into();
+    find.refresh("t1", &views);
+    assert_eq!(find.label(), "No matches");
+    assert!(find.current_row().is_none());
+    find.close();
+    assert!(!find.open && !find.focused);
+    assert!(find.hits().is_empty(), "a closed find marks nothing");
+}
+
+#[test]
+fn chat_find_is_ctrl_f_on_chat_and_owns_enter_over_a_permission_card() {
+    let src = cabin_src();
+    assert!(src.contains("egui::Key::F"), "Ctrl+F must open find");
+    assert!(src.contains("self.find.toggle()"));
+    let chat = fn_src(&src, "ui_chat");
+    assert!(chat.contains("paint_find_bar"), "{chat}");
+    assert!(chat.contains("find_jump && find_row == Some(i)"), "{chat}");
+    assert!(
+        src.contains("self.palette_open || self.nav == Nav::Settings || self.find.focused"),
+        "Enter in the find box must not allow a tool"
+    );
+    let confirm = include_str!("confirm.rs");
+    assert!(
+        confirm.contains("self.find.focused"),
+        "Enter in the find box must not confirm a sheet"
+    );
+    assert!(grokhub_core::shortcut_help().contains("Ctrl+F"));
+}
+
+#[test]
+fn chat_find_bar_paints_and_steps_with_the_arrows() {
+    let mut app = Cabin::quiet_for_test();
+    app.find.toggle();
+    app.find.query = "x".into();
+    let views = find_views(&[("user", "x one"), ("assistant", "x two")]);
+    app.find.refresh("t", &views);
+    let ctx = egui::Context::default();
+    let _ = crate::theme::test_pass(&ctx, Default::default(), |ui| {
+        let ctx = ui.ctx().clone();
+        crate::theme::apply(&ctx, true);
+        app.paint_find_bar(
+            &ctx,
+            egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0)),
+        );
+    });
+    assert!(app.find.open);
+    assert_eq!(app.find.label(), "2 of 2");
+}
