@@ -1,7 +1,7 @@
-//! Splits a composer line into its command word and argument, then asks the
-//! registry before the commands still in the match in `mod.rs`.
+//! Splits a composer line into its command word and argument, then looks the
+//! command up in the registry. Unknown commands parse to `None`.
 
-use super::{parse_legacy, registry, Slash};
+use super::{registry, Slash};
 
 pub fn parse_slash(line: &str) -> Option<Slash> {
     let t = line.trim();
@@ -18,8 +18,5 @@ pub fn parse_slash(line: &str) -> Option<Slash> {
     let mut parts = t.splitn(2, char::is_whitespace);
     let cmd = parts.next().unwrap_or("").to_ascii_lowercase();
     let rest = parts.next().unwrap_or("").trim();
-    if let Some(entry) = registry::lookup(&cmd) {
-        return (entry.parse)(rest);
-    }
-    parse_legacy(&cmd, rest)
+    registry::lookup(&cmd).and_then(|entry| (entry.parse)(rest))
 }
