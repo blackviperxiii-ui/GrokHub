@@ -193,3 +193,53 @@ textarea {
 .note {
   color: var(--muted);
 }
+
+.card {
+  align-self: flex-start;
+  max-width: 80%;
+  padding: 8px 12px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  align-items: baseline;
+}
+
+.card pre {
+  flex-basis: 100%;
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 0.9em;
+}
+
+.card-status,
+.card-reason,
+.card-answer {
+  color: var(--muted);
+  margin: 0;
+}
+
+.card.permission {
+  border-color: var(--accent);
+  flex-direction: column;
+  flex-wrap: nowrap;
+  align-items: stretch;
+  gap: 8px;
+}
+
+.card.permission pre {
+  flex-basis: auto;
+}
+
+.card-buttons {
+  display: flex;
+  gap: 8px;
+}
+
+button.danger {
+  color: var(--danger);
+  border-color: var(--danger);
+}
