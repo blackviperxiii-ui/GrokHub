@@ -216,28 +216,11 @@ fn parse_legacy(cmd: &str, rest: &str) -> Option<Slash> {
                 .filter(|s| !s.is_empty())?;
             Some(Slash::MemoryNote(note.to_string()))
         }
-        "/recall" if !rest.is_empty() => Some(Slash::Recall(rest.to_string())),
-        "/board" => Some(Slash::Board),
-        "/journal" => Some(Slash::Journal),
-        "/imagine" => Some(Slash::Imagine(rest.to_string())),
-        "/imagine-video" => Some(Slash::ImagineVideo(rest.to_string())),
-        "/loop" => Some(Slash::Loop(rest.to_string())),
-        "/btw" => Some(Slash::Btw),
-        "/bg" | "/background" => Some(Slash::Background(rest.to_string())),
-        "/queue" if !rest.is_empty() => Some(Slash::Queue(rest.to_string())),
-        "/view-plan" | "/show-plan" | "/plan-view" => Some(Slash::ViewPlan),
         "/workflow" if rest.is_empty() => Some(Slash::GrokWorkflows),
         "/workflow" => Some(parse_workflow_arg(rest)),
-        "/worktree" => Some(Slash::Worktree),
         "/skills" => Some(parse_skills_arg(rest)),
         "/connections" if is_changes_arg(rest) => Some(Slash::ConnectionChanges),
         "/automations" if is_changes_arg(rest) => Some(Slash::AutomationChanges),
-        "/workflows" => Some(Slash::GrokWorkflows),
-        "/plugins" | "/marketplace" | "/mcps" | "/connectors" => Some(Slash::GrokConnectors),
-        "/hooks" => Some(Slash::GrokHooks),
-        "/model" | "/m" if !rest.is_empty() => Some(Slash::Model(rest.to_string())),
-        "/goal" => Some(Slash::Goal(rest.to_string())),
-        "/dashboard" | "/agents-dashboard" => Some(Slash::Sessions),
         "/mem" => {
             if rest.is_empty() || rest.eq_ignore_ascii_case("show") {
                 Some(Slash::MemoryShow)
@@ -245,42 +228,6 @@ fn parse_legacy(cmd: &str, rest: &str) -> Option<Slash> {
                 Some(Slash::Remember(rest.to_string()))
             }
         }
-        "/title" if !rest.is_empty() => Some(Slash::Rename(rest.to_string())),
-        "/status" | "/info" | "/session-info" | "/doctor" => Some(Slash::Inspect),
-        "/compact" => Some(Slash::Compact),
-        "/skill" if !rest.is_empty() => Some(Slash::Skill(rest.to_string())),
-        "/learn" => Some(Slash::LearnReflect),
-        "/update" => Some(Slash::Update),
-        "/new" => Some(Slash::New),
-        "/scratch" => Some(Slash::Scratch),
-        "/clear" => Some(Slash::Clear),
-        "/undo" => Some(Slash::Undo),
-        "/retry" => Some(Slash::Retry),
-        "/stop" => Some(Slash::Stop),
-        "/sh" if !rest.is_empty() => Some(Slash::Sh(rest.to_string())),
-        "/host" | "/tools" => Some(Slash::HostStatus),
-        "/rename" if !rest.is_empty() => Some(Slash::Rename(rest.to_string())),
-        "/pin" => Some(Slash::Pin),
-        "/delete" | "/close" => Some(Slash::Delete),
-        "/context" => Some(Slash::Context),
-        "/health" => Some(Slash::Health),
-        "/brief" => Some(Slash::Brief),
-        "/fix" => Some(Slash::Fix),
-        "/remember" if !rest.is_empty() => Some(Slash::Remember(rest.to_string())),
-        "/mode" if !rest.is_empty() => resolve_mode_arg(rest).map(Slash::Mode),
-        "/dream" => Some(Slash::Dream),
-        "/import" => Some(Slash::Import),
-        "/consult" if !rest.is_empty() => Some(Slash::Consult(rest.to_string())),
-        "/usage" => Some(Slash::Usage),
-        "/models" => Some(Slash::Models),
-        "/palette" => Some(Slash::Palette),
-        "/plan" => Some(Slash::Plan),
-        "/always-approve" | "/yolo" => Some(Slash::AlwaysApprove),
-        "/auto" => Some(Slash::AutoPerm),
-        // R1: effort is automatic. `/effort <anything>` only says so.
-        "/effort" => Some(Slash::Effort),
-        "/sessions" | "/resume" => Some(Slash::Sessions),
-        "/inspect" => Some(Slash::Inspect),
         "/project" => {
             if rest.eq_ignore_ascii_case("clear") || rest.eq_ignore_ascii_case("unbind") {
                 Some(Slash::ProjectClear)
@@ -328,18 +275,11 @@ fn parse_legacy(cmd: &str, rest: &str) -> Option<Slash> {
                 None
             }
         }
-        "/send" if !rest.is_empty() => Some(Slash::Send(rest.to_string())),
-        "/sync" => Some(Slash::Sync),
-        "/privacy" => Some(Slash::Privacy),
-        "/diagnose" => Some(Slash::Diagnose),
         "/record" if rest.eq_ignore_ascii_case("stop") => Some(Slash::RecordStop),
         "/record" => Some(Slash::Record(rest.to_string())),
-        "/audiocheck" => Some(Slash::AudioCheck(rest.to_string())),
         "/why" if rest.is_empty() => Some(Slash::Why),
         "/why" if rest.eq_ignore_ascii_case("models") => Some(Slash::WhyModels),
         "/why" if rest.eq_ignore_ascii_case("table") => Some(Slash::WhyTable),
-        "/hub" => Some(Slash::Hub),
-        "/inhabit" if !rest.is_empty() => Some(Slash::Inhabit(rest.to_string())),
         "/rewind" if rest == "--files" || rest == "--code" || rest == "files" => {
             Some(Slash::RewindFiles)
         }
@@ -354,7 +294,6 @@ fn parse_legacy(cmd: &str, rest: &str) -> Option<Slash> {
             }
         }
         "/rewind" => Some(Slash::Rewind),
-        "/room" if !rest.is_empty() => Some(Slash::Room(rest.to_string())),
         "/export" if rest.is_empty() => Some(Slash::Export),
         "/export" => Some(Slash::ExportAs(rest.to_string())),
         _ => None,
