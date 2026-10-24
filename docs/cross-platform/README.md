@@ -67,3 +67,19 @@ use.
 In `grokhub-agent` they sit in `sudo_pass.rs`, `tools/shell.rs`,
 `indexers/{power,paths}.rs`, `harness/{backend,at_rest}.rs`,
 `route/local_perf.rs` and `brain/playbook.rs`.
+
+## Phase 1 status
+
+- `crates/grokhub-proto` holds the hub wire types (`hub_sync`, `inhabit`,
+  `HUB_KIND`) with no I/O and builds for `wasm32-unknown-unknown`.
+  `grokhub-core` re-exports them at their old paths.
+- With the C toolchains in place, the Rust code in `grokhub-core`,
+  `grokhub-hub` and `grokhub-agent` already passes clippy for both macOS
+  targets, `aarch64-apple-ios` and `aarch64-linux-android`. The one fix was for
+  iOS: `apple-native-keyring-store` needs its `protected` feature there.
+- CI job `cross-check` runs that clippy matrix on macOS and Ubuntu (NDK)
+  runners.
+- Known for Phase 4: keyring's `v1` feature has no Android store. On Android,
+  `keyring::Entry::new` will fail until the app enables
+  `android-native-keyring-store`.
+

@@ -195,6 +195,57 @@ jobs:
           tool: cargo-deny
       - run: cargo deny --locked check
 
+  # Cross-platform recode, Phase 1 (docs/cross-platform/README.md): the
+  # non-UI crates must stay portable to the Tauri targets. Check-only (clippy,
+  # no tests, no bundles). macOS and iOS need Apple's toolchain, Android needs
+  # the runner's NDK for ring and bundled SQLite. grokhub-proto is the wasm
+  # piece the web client will share.
+  cross-check:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            crates: -p grokhub-proto -p grokhub-core -p grokhub-hub -p grokhub-agent
+          - target: x86_64-apple-darwin
+            os: macos-latest
+            crates: -p grokhub-proto -p grokhub-core -p grokhub-hub -p grokhub-agent
+          - target: aarch64-apple-ios
+            os: macos-latest
+            crates: -p grokhub-proto -p grokhub-core -p grokhub-hub -p grokhub-agent
+          - target: aarch64-linux-android
+            os: ubuntu-latest
+            crates: -p grokhub-proto -p grokhub-core -p grokhub-hub -p grokhub-agent
+          - target: wasm32-unknown-unknown
+            os: ubuntu-latest
+            crates: -p grokhub-proto
+    name: cross-check (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: cross-${{ matrix.target }}
+          cache-on-failure: true
+          save-if: ${{ github.event_name == 'push' }}
+      - name: Android NDK compiler
+        if: matrix.target == 'aarch64-linux-android'
+        shell: bash
+        run: |
+          bin="$ANDROID_NDK_LATEST_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          echo "CC_aarch64_linux_android=$bin/aarch64-linux-android24-clang" >> "$GITHUB_ENV"
+          echo "AR_aarch64_linux_android=$bin/llvm-ar" >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=$bin/aarch64-linux-android24-clang" >> "$GITHUB_ENV"
+      - run: cargo clippy --locked ${{ matrix.crates }} --target ${{ matrix.target }} -- -D warnings
+
   windows:
     needs: changes
     if: needs.changes.outputs.code == 'true'
