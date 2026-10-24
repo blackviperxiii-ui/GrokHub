@@ -269,6 +269,7 @@ impl Cabin {
         let hub = self.hub.clone();
         let io = self.persist_io.clone();
         let dir = config::config_dir();
+        // ci-guard: allow-raw-io hub state save, not on PersistService yet
         std::thread::spawn(move || {
             let _pin = pin_scheduled_dir(dir);
             if let Ok(_g) = io.lock() {
@@ -322,6 +323,7 @@ impl Cabin {
         let secrets = self.secrets.clone();
         let dir = config::config_dir();
         let err = self.persist_err.clone();
+        // ci-guard: allow-raw-io secrets save, moves to PersistService in rearch stage 7
         std::thread::spawn(move || {
             let _pin = pin_scheduled_dir(dir);
             if let Ok(_g) = io.lock() {
@@ -334,6 +336,7 @@ impl Cabin {
         let io = self.persist_io.clone();
         let usage = self.usage.clone();
         let dir = config::config_dir();
+        // ci-guard: allow-raw-io usage ledger save, not on PersistService yet
         std::thread::spawn(move || {
             let _pin = pin_scheduled_dir(dir);
             if let Ok(_g) = io.lock() {
@@ -347,6 +350,7 @@ impl Cabin {
         let dir = config::config_dir();
         let io = self.persist_io.clone();
         let err = self.persist_err.clone();
+        // ci-guard: allow-raw-io loops save, not on PersistService yet
         std::thread::spawn(move || {
             let _pin = pin_scheduled_dir(dir);
             match io.lock() {
@@ -362,6 +366,7 @@ impl Cabin {
         let dir = config::config_dir();
         let io = self.persist_io.clone();
         let err = self.persist_err.clone();
+        // ci-guard: allow-raw-io suggestions save, not on PersistService yet
         std::thread::spawn(move || {
             let _pin = pin_scheduled_dir(dir);
             match io.lock() {
@@ -383,6 +388,7 @@ impl Cabin {
         let dir = config::config_dir();
         let io = self.persist_io.clone();
         let err = self.persist_err.clone();
+        // ci-guard: allow-raw-io automations save, not on PersistService yet
         std::thread::spawn(move || {
             let _pin = pin_scheduled_dir(dir);
             match io.lock() {
@@ -400,6 +406,7 @@ impl Cabin {
         let dir = config::config_dir();
         let io = self.persist_io.clone();
         let err = self.persist_err.clone();
+        // ci-guard: allow-raw-io feed updates save, not on PersistService yet
         std::thread::spawn(move || {
             let _pin = pin_scheduled_dir(dir);
             match io.lock() {

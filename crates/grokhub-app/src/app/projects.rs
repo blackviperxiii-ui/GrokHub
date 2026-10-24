@@ -39,6 +39,7 @@ impl Cabin {
         if !path.trim().is_empty() {
             if !std::path::Path::new(&path).is_dir() {
                 let p = path.clone();
+                // ci-guard: allow-raw-io creates the project folder, not a persist write
                 std::thread::spawn(move || {
                     let _ = std::fs::create_dir_all(&p);
                 });
@@ -91,6 +92,7 @@ impl Cabin {
                 let path = self.projects[i].path.clone();
                 if !std::path::Path::new(&path).is_dir() {
                     let p = path.clone();
+                    // ci-guard: allow-raw-io creates the project folder, not a persist write
                     std::thread::spawn(move || {
                         let _ = std::fs::create_dir_all(&p);
                     });
@@ -254,6 +256,7 @@ impl Cabin {
                         if !path.is_empty() {
                             if !std::path::Path::new(&path).is_dir() {
                                 let p = path.clone();
+                                // ci-guard: allow-raw-io creates the project folder, not a persist write
                                 std::thread::spawn(move || {
                                     let _ = std::fs::create_dir_all(&p);
                                 });
