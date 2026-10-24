@@ -1,5 +1,14 @@
 //! Composer slash commands. Local — they never go to the model.
 
+mod cmds;
+mod effect;
+mod parser;
+mod registry;
+
+pub use effect::{slash_effect, SlashEffect, SLASH_SAMPLES};
+pub use parser::parse_slash;
+pub use registry::{SlashEntry, SLASH_REGISTRY};
+
 /// `pause` / `resume` / `stop` on `/workflow`. Matched case-insensitively.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WorkflowVerb {
@@ -181,22 +190,10 @@ fn strip_bind_word(rest: &str) -> Option<&str> {
     None
 }
 
-pub fn parse_slash(line: &str) -> Option<Slash> {
-    let t = line.trim();
-    if let Some(rest) = t.strip_prefix("$ ") {
-        let cmd = rest.trim();
-        if cmd.is_empty() {
-            return None;
-        }
-        return Some(Slash::Sh(cmd.to_string()));
-    }
-    if !t.starts_with('/') {
-        return None;
-    }
-    let mut parts = t.splitn(2, char::is_whitespace);
-    let cmd = parts.next().unwrap_or("").to_ascii_lowercase();
-    let rest = parts.next().unwrap_or("").trim();
-    match cmd.as_str() {
+/// The commands not yet in the registry. [`parser::parse_slash`] asks the
+/// registry first; a command moves out of this match into `cmds/` in one go.
+fn parse_legacy(cmd: &str, rest: &str) -> Option<Slash> {
+    match cmd {
         "/approve" => None,
         "/forget" => Some(Slash::Forget(if rest.is_empty() {
             None
@@ -254,7 +251,6 @@ pub fn parse_slash(line: &str) -> Option<Slash> {
         "/skill" if !rest.is_empty() => Some(Slash::Skill(rest.to_string())),
         "/learn" => Some(Slash::LearnReflect),
         "/update" => Some(Slash::Update),
-        "/help" => Some(Slash::Help),
         "/new" => Some(Slash::New),
         "/scratch" => Some(Slash::Scratch),
         "/clear" => Some(Slash::Clear),

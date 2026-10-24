@@ -23,7 +23,7 @@
 - Output reaching a span or the model before `redact_output`, or a span without `Origin::Repair`.
 - A fix step the cabin runs itself, a step sent before the `restore_point` span, a hard-floor step with a command or a Fix it button, Enter answering a fix card, an `UndoAsk` built outside a click (`only_typing_or_a_click_builds_an_undo_ask`), or a "fixed" line without a `pass` verify span.
 ## What depends on it
-- The native registry (`tool_schemas`, `dispatch` in `crates/grokhub-agent/src/tools/mod.rs`), `Slash::Diagnose` in `crates/grokhub-core/src/slash.rs`, and the send path in `crates/grokhub-app/src/app/chat_kick.rs`.
+- The native registry (`tool_schemas`, `dispatch` in `crates/grokhub-agent/src/tools/mod.rs`), `Slash::Diagnose` in `crates/grokhub-core/src/slash/mod.rs`, and the send path in `crates/grokhub-app/src/app/chat_kick.rs`.
 ## Non-obvious
 - Diagnose never elevates: a probe marked `needs_admin` (zypper verify) is skipped with "needs admin, skipped". Apt uses `dpkg --audit` because `apt-get check` takes the dpkg lock.
 - Findings are worded by the interpreter, so diagnose makes no model call. The first sentence never names a command.
