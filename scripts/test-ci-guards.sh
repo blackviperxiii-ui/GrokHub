@@ -21,10 +21,10 @@ chmod +x "$TMP/shim/cargo" "$TMP/shim/git"
 "$REAL_GIT" init -q --bare -b beta "$TMP/origin.git"
 "$REAL_GIT" clone -q "$TMP/origin.git" "$TMP/work" 2>/dev/null
 W="$TMP/work"
-mkdir -p "$W/scripts" "$W/crates/grokhub-app/src/app" "$W/crates/grokhub-core/src"
+mkdir -p "$W/scripts" "$W/crates/grokhub-app/src/app" "$W/crates/grokhub-core/src/slash"
 cp "$SRC/scripts/ci-guards.sh" "$W/scripts/ci-guards.sh"
 for f in crates/grokhub-app/src/app/mod.rs crates/grokhub-app/src/cards.rs \
-  crates/grokhub-core/src/slash.rs crates/grokhub-app/src/app/tests.rs \
+  crates/grokhub-core/src/slash/mod.rs crates/grokhub-app/src/app/tests.rs \
   crates/grokhub-app/src/app/persist.rs crates/grokhub-app/src/app/projects.rs \
   crates/grokhub-app/src/app/dock_ui.rs; do
   printf 'fn main() {}\n' >"$W/$f"
@@ -67,7 +67,7 @@ commit_pr() {
 }
 
 fresh_pr
-printf '// harmless\n' >>"$W/crates/grokhub-core/src/slash.rs"
+printf '// harmless\n' >>"$W/crates/grokhub-core/src/slash/mod.rs"
 commit_pr
 run_guard pass "baseline harmless PR passes"
 
@@ -126,7 +126,7 @@ run_guard fail "missing raw-io guarded file fails"
 
 fresh_pr
 "$REAL_GIT" -C "$W" remote remove origin
-printf '// x\n' >>"$W/crates/grokhub-core/src/slash.rs"
+printf '// x\n' >>"$W/crates/grokhub-core/src/slash/mod.rs"
 commit_pr
 run_guard fail "unresolvable merge-base fails"
 "$REAL_GIT" -C "$W" remote add origin "$TMP/origin.git"

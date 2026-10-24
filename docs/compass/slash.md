@@ -7,12 +7,14 @@
 - `cargo test -p grokhub-agent slash_parity`
 - `cargo test -p grokhub-app slash` (cabin dispatch)
 ## Key files
-- `crates/grokhub-core/src/slash.rs`: `Slash`, `parse_slash`, `slash_kind`, `SLASH_COMMANDS` (picker rows), `slash_help`, `unknown_cabin_slash`, `is_cabin_slash_turn`.
+- `crates/grokhub-core/src/slash/mod.rs`: `Slash`, `parse_slash`, `slash_kind`, `SLASH_COMMANDS` (picker rows), `slash_help`, `unknown_cabin_slash`, `is_cabin_slash_turn`.
+- `crates/grokhub-core/src/slash/registry.rs` and `crates/grokhub-core/src/slash/cmds/`: commands declared with `register_slash!`; `parse_slash` (`crates/grokhub-core/src/slash/parser.rs`) asks the registry before the old match. `crates/grokhub-core/src/slash/effect.rs`: `slash_effect` (Local, AgentTurn, Action) and one sample line per variant.
 - `crates/grokhub-app/src/app/slash.rs`: `run_slash` (one match arm per variant), `dispatch_native_slash`, `apply_unparsed_native_slash`.
 - `crates/grokhub-app/src/app/chat_kick.rs`: the send path that tries `parse_slash`, then `unknown_cabin_slash`, then native parity, then the model.
 - `crates/grokhub-agent/src/slash_parity.rs`: every Grok CLI builtin and what a native thread does with it.
 ## Change recipe
-- Add a `Slash` variant, `parse_slash` arm, `slash_kind`, `SLASH_COMMANDS` row, and `slash_help` line in `crates/grokhub-core/src/slash.rs` (e.g. `/brief` → `Slash::Brief`).
+- Add a `Slash` variant, `parse_slash` arm, `slash_kind`, `SLASH_COMMANDS` row, and `slash_help` line in `crates/grokhub-core/src/slash/mod.rs` (e.g. `/brief` → `Slash::Brief`).
+- Pick its `slash_effect` and add a `SLASH_SAMPLES` line. An `Action` needs a gate row in `crates/grokhub-app/src/app/slash_gate_tests.rs` naming its confirm, consent or permission path.
 - Handle it in `run_slash` (`crates/grokhub-app/src/app/slash.rs`); map habits in `home_slash_cmd` (`chips.rs`) only when needed.
 ## What breaks it
 - Renaming a `slash_kind` string: it is the input to `home_slash_cmd`, so home habits stop counting.
