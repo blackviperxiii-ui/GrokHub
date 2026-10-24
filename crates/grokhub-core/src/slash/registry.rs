@@ -1,5 +1,5 @@
-//! Slash commands that parse through a table instead of the match in `mod.rs`.
-//! Each `cmds/*.rs` file declares its commands with `register_slash!`.
+//! Every slash command, as a table. Each `cmds/*.rs` file declares its
+//! commands with `register_slash!`; list them in [`SLASH_REGISTRY`].
 
 use super::{cmds, Slash, SlashEffect};
 
@@ -7,6 +7,8 @@ use super::{cmds, Slash, SlashEffect};
 pub struct SlashEntry {
     /// `/name` and any aliases, lowercase.
     pub names: &'static [&'static str],
+    /// The strongest effect any line it parses can have (`/record stop` is
+    /// `Local`, but `/record` starts a recording, so the entry is `Action`).
     pub effect: SlashEffect,
     /// A line that parses to this command. Tests run it through `parse_slash`.
     pub sample: &'static str,
@@ -36,6 +38,18 @@ pub(super) use register_slash;
 
 pub const SLASH_REGISTRY: &[SlashEntry] = &[
     cmds::help::HELP,
+    cmds::memory::FORGET,
+    cmds::memory::MEMORY,
+    cmds::memory::MEM,
+    cmds::project::PROJECT,
+    cmds::changes::SKILLS,
+    cmds::changes::CONNECTIONS,
+    cmds::changes::AUTOMATIONS,
+    cmds::changes::WORKFLOW,
+    cmds::review::WHY,
+    cmds::review::REWIND,
+    cmds::review::EXPORT,
+    cmds::actions::RECORD,
     cmds::chat::BTW,
     cmds::chat::BG,
     cmds::chat::QUEUE,
@@ -105,7 +119,7 @@ pub(super) fn lookup(cmd: &str) -> Option<&'static SlashEntry> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::slash::{parse_legacy, parse_slash, slash_effect};
+    use crate::slash::{parse_slash, slash_effect, SLASH_COMMANDS};
 
     #[test]
     fn registered_commands_parse_their_sample_and_keep_their_effect() {
@@ -115,11 +129,6 @@ mod tests {
                 assert!(name.starts_with('/'), "{name}");
                 assert_eq!(*name, name.to_ascii_lowercase(), "{name}");
                 assert!(seen.insert(*name), "{name} registered twice");
-                assert_eq!(
-                    parse_legacy(name, ""),
-                    None,
-                    "{name} is still in the old match"
-                );
             }
             let s = parse_slash(e.sample).unwrap_or_else(|| panic!("{} parses", e.sample));
             assert_eq!(slash_effect(&s), e.effect, "{}", e.sample);
@@ -132,7 +141,26 @@ mod tests {
         assert_eq!(parse_slash("/help"), Some(Slash::Help));
         assert_eq!(parse_slash("  /HELP  "), Some(Slash::Help));
         assert_eq!(parse_slash("/help me please"), Some(Slash::Help));
-        assert_eq!(parse_legacy("/help", ""), None);
         assert!(lookup("/helpme").is_none());
+    }
+
+    #[test]
+    fn every_picker_row_and_retired_verb_resolves_as_before() {
+        for row in SLASH_COMMANDS {
+            let word = row.cmd.split_whitespace().next().unwrap_or("");
+            if !word.starts_with('/') {
+                continue; // `$ <cmd>` is the shell prefix, not a command word
+            }
+            assert!(
+                lookup(word).is_some(),
+                "picker row {word} has no registry entry"
+            );
+        }
+        assert_eq!(parse_slash("/approve on"), None);
+        assert_eq!(parse_slash("/approve"), None);
+        assert_eq!(parse_slash("/connections nope"), None);
+        assert_eq!(parse_slash("/why nope"), None);
+        assert_eq!(parse_slash("/project nope"), None);
+        assert_eq!(parse_slash("/project new  "), None);
     }
 }

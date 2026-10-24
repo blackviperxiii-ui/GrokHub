@@ -66,3 +66,19 @@ register_slash! {
         parse: |rest| (!rest.is_empty()).then(|| Slash::Inhabit(rest.to_string())),
     }
 }
+
+register_slash! {
+    /// `/record stop` ends a recording and is `Local`; anything else starts one.
+    RECORD {
+        names: ["/record"],
+        effect: Action,
+        sample: "/record the menu flickers",
+        parse: |rest| {
+            if rest.eq_ignore_ascii_case("stop") {
+                Some(Slash::RecordStop)
+            } else {
+                Some(Slash::Record(rest.to_string()))
+            }
+        },
+    }
+}
