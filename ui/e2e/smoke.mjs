@@ -1,5 +1,7 @@
 // tauri-driver smoke test: start a mock model server, launch the built shell
-// through WebDriver, send one chat and wait for the mocked reply.
+// through WebDriver and send one chat. The mock model asks to write a file:
+// the test checks that nothing is written and the model is not called again
+// until Allow once is clicked, then waits for the file and the mocked reply.
 //
 //   node e2e/smoke.mjs <path to grokhub-shell binary>
 //
@@ -9,13 +11,15 @@
 // SMOKE_SCREENSHOT=<file.png> to keep a screenshot of the rendered reply.
 
 import { spawn } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
-const REPLY = "Hello from the mock model";
-const PROMPT = "ping from the smoke test";
+const REPLY = "Wrote the note for the smoke test";
+const PROMPT = "write a note from the smoke test";
+const NOTE = "smoke-note.txt";
+const NOTE_TEXT = "written after Allow once";
 const DRIVER = "http://127.0.0.1:4444";
 
 const binary = process.argv[2];
@@ -26,6 +30,46 @@ if (!binary) {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+function sse(events) {
+  return events.map((e) => `data: ${JSON.stringify(e)}\n\n`).join("");
+}
+
+function toolCall(callId, name, args) {
+  const item = { type: "function_call", call_id: callId, name, arguments: JSON.stringify(args) };
+  return [
+    { type: "response.output_item.done", item },
+    {
+      type: "response.completed",
+      response: { usage: { input_tokens: 3, output_tokens: 5 }, output: [item] },
+    },
+  ];
+}
+
+// The loop holds a change to its done list ("the asked change is made",
+// "result checked"), as with a real model: write the note, re-read it, tick
+// the checklist, then reply in two pieces.
+function mockReply(callNumber) {
+  if (callNumber === 1) return toolCall("smoke-write", "write", { path: NOTE, content: NOTE_TEXT });
+  if (callNumber === 2) return toolCall("smoke-read", "read_file", { target_file: NOTE });
+  if (callNumber === 3) {
+    return toolCall("smoke-todo", "todo_write", {
+      todos: [
+        { id: "1", content: "the asked change is made", status: "completed" },
+        { id: "2", content: "result checked", status: "completed" },
+      ],
+    });
+  }
+  const half = REPLY.length >> 1;
+  return [
+    { type: "response.output_text.delta", delta: REPLY.slice(0, half) },
+    { type: "response.output_text.delta", delta: REPLY.slice(half) },
+    {
+      type: "response.completed",
+      response: { usage: { input_tokens: 3, output_tokens: 5 }, output: [] },
+    },
+  ];
+}
+
 function startMock() {
   const seen = [];
   const server = createServer((req, res) => {
@@ -33,16 +77,7 @@ function startMock() {
     req.on("data", (chunk) => (body += chunk));
     req.on("end", () => {
       seen.push({ path: req.url, auth: req.headers.authorization, body });
-      const half = REPLY.length >> 1;
-      const events = [
-        { type: "response.output_text.delta", delta: REPLY.slice(0, half) },
-        { type: "response.output_text.delta", delta: REPLY.slice(half) },
-        {
-          type: "response.completed",
-          response: { usage: { input_tokens: 3, output_tokens: 5 }, output: [] },
-        },
-      ];
-      const payload = events.map((e) => `data: ${JSON.stringify(e)}\n\n`).join("");
+      const payload = sse(mockReply(seen.filter((c) => c.path === "/v1/responses").length));
       res.writeHead(200, {
         "Content-Type": "text/event-stream",
         "Content-Length": Buffer.byteLength(payload),
@@ -87,6 +122,10 @@ const ELEMENT = "element-6066-11e4-a52e-4f735466cecf";
 async function main() {
   const mock = await startMock();
   const config = mkdtempSync(join(tmpdir(), "grokhub-shell-smoke-"));
+  const workspace = join(config, "work");
+  mkdirSync(workspace);
+  writeFileSync(join(config, "shell.json"), JSON.stringify({ workspace }));
+  const modelCalls = () => mock.seen.filter((c) => c.path === "/v1/responses");
   const native = process.env.SMOKE_NATIVE_DRIVER;
   const driver = spawn("tauri-driver", native ? ["--native-driver", native] : [], {
     stdio: ["ignore", "inherit", "inherit"],
@@ -117,6 +156,34 @@ async function main() {
     });
     await wd("POST", `${s}/element/${send[ELEMENT]}/click`, {});
 
+    const card = await waitFor("the permission card", async () => {
+      const el = await wd("POST", `${s}/element`, {
+        using: "css selector",
+        value: ".card.permission",
+      });
+      return el[ELEMENT];
+    });
+    const asked = await wd("GET", `${s}/element/${card}/text`);
+    if (!asked.includes("write") || !asked.includes(NOTE)) {
+      throw new Error(`permission card said ${JSON.stringify(asked)}`);
+    }
+    console.log(`permission card shown: ${JSON.stringify(asked.split("\n")[0])}`);
+
+    // Without an answer the write must not run and the turn must not go on.
+    await sleep(1500);
+    const notePath = join(workspace, NOTE);
+    if (existsSync(notePath)) throw new Error("the note was written before Allow once");
+    if (modelCalls().length !== 1) {
+      throw new Error(`the turn went on without an answer: ${modelCalls().length} model calls`);
+    }
+    console.log("nothing ran while the card waited");
+
+    const allow = await wd("POST", `${s}/element/${card}/element`, {
+      using: "css selector",
+      value: ".card-buttons button",
+    });
+    await wd("POST", `${s}/element/${allow[ELEMENT]}/click`, {});
+
     const text = await waitFor("the mocked reply", async () => {
       const el = await wd("POST", `${s}/element`, {
         using: "css selector",
@@ -132,14 +199,39 @@ async function main() {
       writeFileSync(process.env.SMOKE_SCREENSHOT, Buffer.from(png, "base64"));
     }
 
-    const calls = mock.seen.filter((c) => c.path === "/v1/responses");
-    if (calls.length !== 1) throw new Error(`expected 1 model call, saw ${calls.length}`);
-    const sent = JSON.parse(calls[0].body);
-    const userText = sent.input?.[0]?.content?.[0]?.text;
-    if (userText !== PROMPT) throw new Error(`model got ${JSON.stringify(userText)}`);
-    if (calls[0].auth !== "Bearer loopback-test") throw new Error(`auth was ${calls[0].auth}`);
-    console.log(`model got the prompt with model=${sent.model}`);
+    const written = readFileSync(notePath, "utf8");
+    if (written !== NOTE_TEXT) throw new Error(`the note says ${JSON.stringify(written)}`);
+    console.log(`note written after Allow once: ${JSON.stringify(written)}`);
+
+    const calls = modelCalls();
+    if (calls.length !== 4) throw new Error(`expected 4 model calls, saw ${calls.length}`);
+    const first = JSON.parse(calls[0].body);
+    const prompted = JSON.stringify(first.input).includes(PROMPT);
+    if (!prompted) throw new Error("the model never got the prompt");
+    const tools = (first.tools ?? []).map((t) => t.name);
+    if (!tools.includes("write")) throw new Error(`the model was not offered write: ${tools}`);
+    const second = calls[1].body;
+    if (!second.includes("function_call_output") || !second.includes("smoke-write")) {
+      throw new Error("the write's result never reached the model");
+    }
+    if (calls.some((c) => c.auth !== "Bearer loopback-test")) {
+      throw new Error(`auth was ${calls.map((c) => c.auth)}`);
+    }
+    console.log(`model got the prompt with model=${first.model} and ${tools.length} tools`);
     console.log("smoke ok");
+  } catch (err) {
+    // What the window and the mock saw, for a failed CI run.
+    if (session) {
+      const log = await wd("POST", `/session/${session}/element`, {
+        using: "css selector",
+        value: ".chat",
+      })
+        .then((el) => wd("GET", `/session/${session}/element/${el[ELEMENT]}/text`))
+        .catch((e) => `(no chat text: ${e.message})`);
+      console.error(`chat shows: ${JSON.stringify(log)}`);
+    }
+    console.error(`model calls: ${mock.seen.length}`);
+    throw err;
   } finally {
     if (session) await wd("DELETE", `/session/${session}`).catch(() => {});
     driver.kill();

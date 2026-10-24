@@ -1,0 +1,1 @@
+- Cross-platform recode, Phase 3a: the Tauri shell's chat now runs the cabin's agent loop (`NativeEngine`) in Ask mode. Tools that change things (writes, commands) show a card with Allow once, Always allow and Deny, and nothing runs until you answer. Stop cancels a waiting tool. Settings has a work folder. The smoke test checks that a write waits for Allow once.

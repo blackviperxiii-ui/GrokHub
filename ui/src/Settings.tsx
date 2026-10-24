@@ -5,6 +5,7 @@ export function Settings() {
   const [settings, setSettings] = useState<Shape | null>(null);
   const [model, setModel] = useState("");
   const [closeToTray, setCloseToTray] = useState(true);
+  const [workspace, setWorkspace] = useState("");
   const [key, setKey] = useState("");
   const [note, setNote] = useState<string | null>(null);
 
@@ -12,6 +13,7 @@ export function Settings() {
     setSettings(next);
     setModel(next.model);
     setCloseToTray(next.closeToTray);
+    setWorkspace(next.workspace);
   }
 
   useEffect(() => {
@@ -21,7 +23,7 @@ export function Settings() {
   async function save(event: FormEvent) {
     event.preventDefault();
     try {
-      show(await saveSettings(model.trim(), closeToTray));
+      show(await saveSettings(model.trim(), closeToTray, workspace.trim()));
       setNote("Settings saved.");
     } catch (err) {
       setNote(String(err));
@@ -59,6 +61,18 @@ export function Settings() {
           Model
           <input value={model} onChange={(e) => setModel(e.target.value)} />
         </label>
+        <label>
+          Work folder
+          <input
+            value={workspace}
+            placeholder={settings.workspacePath}
+            onChange={(e) => setWorkspace(e.target.value)}
+          />
+        </label>
+        <p className="note">
+          GrokHub works in <code>{settings.workspacePath}</code>. It asks before it changes a
+          file or runs a command.
+        </p>
         <label className="check">
           <input
             type="checkbox"
