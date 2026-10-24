@@ -268,6 +268,63 @@ pub(super) fn join_persist(svc: &PersistService) {
     svc.flush();
 }
 
+/// An Auto (unattended) cabin with one native chat. Native `/bg` runs talk to
+/// the in-process `BgFake` model under test: one write, then "bg finished".
+#[cfg(unix)]
+pub(super) fn bg_cabin(label: &str) -> (std::path::PathBuf, Cabin) {
+    let (root, mut cabin) = isolated_cabin(label);
+    let _ = std::fs::create_dir_all(&root);
+    cabin.permission_mode = grokhub_core::wire::PermissionMode::Auto;
+    cabin.session_mode = grokhub_core::wire::SessionMode::Chat;
+    cabin.cfg.project_dir = root.display().to_string();
+    let mut thread = crate::threads::ChatThread::new("Chat", false);
+    thread.native = true;
+    thread.grok_cwd = Some(root.display().to_string());
+    cabin.threads = vec![thread];
+    cabin.thread_idx = 0;
+    cabin.messages = cabin.threads[0].messages.clone();
+    (root, cabin)
+}
+
+/// A chat reply in flight on the open tab. The test holds the sender.
+#[cfg(unix)]
+pub(super) fn live_reply(
+    cabin: &mut Cabin,
+    ask: &str,
+    said: &str,
+) -> std::sync::mpsc::Sender<grokhub_core::wire::GrokPEvent> {
+    cabin.live_mut().push(("user".into(), ask.into()));
+    cabin.live_mut().push(("assistant".into(), said.into()));
+    let (tx, rx) = std::sync::mpsc::channel();
+    cabin.grok_p_rx = Some(rx);
+    cabin.running = true;
+    cabin.chat_job_thread = Some(cabin.visible_thread_id());
+    tx
+}
+
+/// Poll the live turn and the background runs until `done` or `secs` pass.
+#[cfg(unix)]
+pub(super) fn poll_until(cabin: &mut Cabin, secs: u64, done: impl Fn(&Cabin) -> bool) -> bool {
+    let start = std::time::Instant::now();
+    while start.elapsed() < std::time::Duration::from_secs(secs) {
+        cabin.poll_single();
+        cabin.poll_bg_runs();
+        if done(cabin) {
+            return true;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    false
+}
+
+#[cfg(unix)]
+pub(super) fn end_bg_test(root: std::path::PathBuf, mut cabin: Cabin) {
+    cabin.stop_all_bg_runs();
+    cabin.halt_in_flight();
+    cabin.kill_bg_runs();
+    release_isolated(&root, cabin);
+}
+
 #[test]
 fn wait_until_returns_when_ready() {
     let mut n = 0;
