@@ -1,0 +1,1 @@
+- CI: ci-guards fails a raw `thread::spawn` or `fs::write` in the app persist paths (`persist.rs`, `projects.rs`, `dock_ui.rs`) unless the site is marked `// ci-guard: allow-raw-io <reason>` (rearch stage 6).

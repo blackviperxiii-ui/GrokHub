@@ -225,6 +225,7 @@ impl Cabin {
             // PersistService / window geom) so a dock drag does not hitch paint.
             let state = self.dock_state.clone();
             let io = self.persist_io.clone();
+            // ci-guard: allow-raw-io dock layout save under persist_io, not on PersistService yet
             std::thread::spawn(move || {
                 if let Ok(_g) = io.lock() {
                     save_dock_state(&state);
