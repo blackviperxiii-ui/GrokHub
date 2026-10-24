@@ -316,6 +316,20 @@ jobs:
       - name: Smoke test (Windows)
         if: runner.os == 'Windows'
         run: node ui/e2e/smoke.mjs src-tauri/target/debug/grokhub-shell.exe
+      # Temporary diagnostics while the Windows smoke test is brought up: does
+      # the shell's WebView2 open a DevTools port, and does the app log errors?
+      - name: Smoke diagnostics (Windows)
+        if: failure() && runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = '--remote-debugging-port=9222'
+          $p = Start-Process src-tauri\target\debug\grokhub-shell.exe -PassThru -RedirectStandardError shell-err.txt -RedirectStandardOutput shell-out.txt
+          Start-Sleep 15
+          try { (Invoke-WebRequest http://127.0.0.1:9222/json/version -UseBasicParsing).Content } catch { "no devtools port: $_" }
+          "exited: $($p.HasExited) code: $($p.ExitCode)"
+          Get-Content shell-out.txt, shell-err.txt -ErrorAction SilentlyContinue
+          Get-ChildItem "$env:LOCALAPPDATA\dev.grokhub.shell" -Recurse -Filter DevToolsActivePort -ErrorAction SilentlyContinue | Select-Object FullName
+          Stop-Process $p -ErrorAction SilentlyContinue
 
   windows:
     needs: changes
