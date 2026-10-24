@@ -246,6 +246,91 @@ jobs:
           echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=$bin/aarch64-linux-android24-clang" >> "$GITHUB_ENV"
       - run: cargo clippy --locked ${{ matrix.crates }} --target ${{ matrix.target }} -- -D warnings
 
+  # The Tauri desktop shell (src-tauri/ + ui/, cross-platform Phase 2). It is
+  # its own Cargo workspace, so only this job needs the webview libraries.
+  # Bundles build on all three OSes; the tauri-driver smoke test (a chat to a
+  # mock model) runs where tauri-driver has a backend: Linux and Windows.
+  shell:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    name: shell (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          shared-key: shell-${{ matrix.os }}
+          cache-on-failure: true
+          save-if: ${{ github.event_name == 'push' }}
+      - name: Linux webview libraries
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev webkit2gtk-driver xvfb
+      - run: npm ci --prefix ui
+      - run: npm test --prefix ui
+      - run: cargo fmt --manifest-path src-tauri/Cargo.toml --check
+      # clippy and tests compile against ui/dist, so build the UI first.
+      - run: npm run build --prefix ui
+      - run: cargo clippy --manifest-path src-tauri/Cargo.toml --locked --all-targets -- -D warnings
+      - run: cargo test --manifest-path src-tauri/Cargo.toml --locked
+      - name: Bundles
+        shell: bash
+        run: ui/node_modules/.bin/tauri build -- --locked
+      - name: Smoke-test build
+        if: runner.os != 'macOS'
+        shell: bash
+        run: ui/node_modules/.bin/tauri build --debug --no-bundle -- --locked
+      - name: tauri-driver
+        if: runner.os != 'macOS'
+        run: cargo install tauri-driver --locked
+      - name: Smoke test (Linux)
+        if: runner.os == 'Linux'
+        run: xvfb-run -a node ui/e2e/smoke.mjs src-tauri/target/debug/grokhub-shell
+      # msedgedriver must match the WebView2 runtime the shell runs on, which
+      # can differ from the runner's Edge, so fetch the driver for that version.
+      - name: msedgedriver for WebView2
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $key = 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}'
+          $version = (Get-ItemProperty $key).pv
+          Write-Host "WebView2 runtime $version"
+          Invoke-WebRequest "https://msedgedriver.microsoft.com/$version/edgedriver_win64.zip" -OutFile edgedriver.zip
+          Expand-Archive edgedriver.zip -DestinationPath edgedriver
+          "SMOKE_NATIVE_DRIVER=$PWD\edgedriver\msedgedriver.exe" >> $env:GITHUB_ENV
+      - name: Smoke test (Windows)
+        if: runner.os == 'Windows'
+        run: node ui/e2e/smoke.mjs src-tauri/target/debug/grokhub-shell.exe
+      # Temporary diagnostics while the Windows smoke test is brought up: does
+      # the shell's WebView2 open a DevTools port, and does the app log errors?
+      - name: Smoke diagnostics (Windows)
+        if: failure() && runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = '--remote-debugging-port=9222'
+          $p = Start-Process src-tauri\target\debug\grokhub-shell.exe -PassThru -RedirectStandardError shell-err.txt -RedirectStandardOutput shell-out.txt
+          Start-Sleep 15
+          try { (Invoke-WebRequest http://127.0.0.1:9222/json/version -UseBasicParsing).Content } catch { "no devtools port: $_" }
+          "exited: $($p.HasExited) code: $($p.ExitCode)"
+          Get-Content shell-out.txt, shell-err.txt -ErrorAction SilentlyContinue
+          Get-ChildItem "$env:LOCALAPPDATA\dev.grokhub.shell" -Recurse -Filter DevToolsActivePort -ErrorAction SilentlyContinue | Select-Object FullName
+          Stop-Process $p -ErrorAction SilentlyContinue
+
   windows:
     needs: changes
     if: needs.changes.outputs.code == 'true'
