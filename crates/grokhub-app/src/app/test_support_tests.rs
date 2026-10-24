@@ -325,6 +325,21 @@ pub(super) fn end_bg_test(root: std::path::PathBuf, mut cabin: Cabin) {
     release_isolated(&root, cabin);
 }
 
+pub(super) fn test_automation(
+    id: &str,
+    name: &str,
+    instructions: &str,
+) -> grokhub_core::Automation {
+    serde_json::from_value(serde_json::json!({
+        "id": id,
+        "name": name,
+        "schedule": "daily",
+        "time": "09:00",
+        "instructions": instructions,
+    }))
+    .expect("automation")
+}
+
 #[test]
 fn wait_until_returns_when_ready() {
     let mut n = 0;

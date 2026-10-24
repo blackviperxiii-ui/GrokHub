@@ -50,7 +50,7 @@ budget() {
 budget "crates/grokhub-app/src/app/mod.rs" 5900
 budget "crates/grokhub-app/src/cards.rs" 4400
 budget "crates/grokhub-core/src/slash.rs" 1900
-budget "crates/grokhub-app/src/app/tests.rs" 24100
+budget "crates/grokhub-app/src/app/tests.rs" 22900
 
 # --- Shared PR helpers (labels + version fingerprints) -------------------------
 pr_labels_csv=""
