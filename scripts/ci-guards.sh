@@ -127,19 +127,20 @@ grokhub_lock_versions() {
   python3 - "$file" <<'PY'
 import sys
 text = open(sys.argv[1], encoding="utf-8").read().splitlines()
-want = {"grokhub-app", "grokhub-agent", "grokhub-core", "grokhub-hub"}
+want = {"grokhub-app", "grokhub-agent", "grokhub-core", "grokhub-hub", "grokhub-proto"}
 out = []
 i = 0
 while i < len(text):
     line = text[i]
     if line.startswith("name = \"") and line[8:-1] in want:
-        name = line[8:-1]
         ver = ""
         if i + 1 < len(text) and text[i + 1].startswith("version = \""):
             ver = text[i + 1][11:-1]
-        out.append(f"{name}={ver}")
+        out.append(ver)
     i += 1
-print(",".join(sorted(out)))
+# Distinct versions only: a new workspace crate at the current version is
+# not a version change, while a bump of any grokhub-* entry still is.
+print(",".join(sorted(set(out))))
 PY
 }
 

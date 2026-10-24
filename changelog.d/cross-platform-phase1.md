@@ -1,0 +1,1 @@
+- Cross-platform Phase 1: new `grokhub-proto` crate (hub wire types, wasm-safe), iOS keychain feature fix, and a `cross-check` CI job that runs clippy for macOS, iOS, Android and wasm.
