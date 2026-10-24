@@ -99,6 +99,8 @@ mod permission_ask_tests;
 #[path = "night_budget_tests.rs"]
 mod night_budget_tests;
 
+#[path = "slash_gate_tests.rs"]
+mod slash_gate_tests;
 #[path = "turn_routing_tests.rs"]
 mod turn_routing_tests;
 

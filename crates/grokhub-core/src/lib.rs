@@ -474,9 +474,9 @@ pub use skill::{
 };
 pub use slash::{
     filter_slash_commands, filter_slash_hits, grok_command_hits, is_cabin_slash_turn,
-    mark_slash_result, parse_slash, resolve_mode_arg, slash_help, slash_kind, strip_slash_result,
-    unknown_cabin_slash, Slash, SlashDef, SlashHit, WorkflowVerb, EFFORT_AUTO_MSG, SLASH_COMMANDS,
-    SLASH_RESULT_PREFIX,
+    mark_slash_result, parse_slash, resolve_mode_arg, slash_effect, slash_help, slash_kind,
+    strip_slash_result, unknown_cabin_slash, Slash, SlashDef, SlashEffect, SlashHit, WorkflowVerb,
+    EFFORT_AUTO_MSG, SLASH_COMMANDS, SLASH_RESULT_PREFIX, SLASH_SAMPLES,
 };
 pub use ssrf::{
     guard_mcp_registry_url, host_name_blocked, ip_blocked, public_only_resolve, MCP_REGISTRY_HOST,
