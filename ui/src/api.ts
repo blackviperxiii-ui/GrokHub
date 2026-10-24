@@ -2,32 +2,43 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
-export type Role = "user" | "assistant";
-
-export interface ChatMessage {
-  role: Role;
-  text: string;
-}
-
 export interface Settings {
   model: string;
   closeToTray: boolean;
   hasApiKey: boolean;
+  /** The folder picked in Settings, empty for the default. */
+  workspace: string;
+  /** The folder the agent actually works in. */
+  workspacePath: string;
 }
 
-export interface ChatDelta {
+export type Answer = "allow" | "always" | "deny";
+
+/** One engine event for a conversation, from `chat://event`. */
+export type ChatEvent =
+  | { kind: "text"; text: string }
+  | { kind: "tool"; id: string; title: string; status: string; detail: string }
+  | { kind: "permission"; id: string; title: string; action: string; reason: string }
+  | { kind: "error"; message: string }
+  | { kind: "done"; stop: string };
+
+export interface ChatEnvelope {
   conversationId: string;
-  text: string;
+  event: ChatEvent;
 }
 
-export const DELTA_EVENT = "chat://delta";
+export const CHAT_EVENT = "chat://event";
 
 export function getSettings(): Promise<Settings> {
   return invoke<Settings>("get_settings");
 }
 
-export function saveSettings(model: string, closeToTray: boolean): Promise<Settings> {
-  return invoke<Settings>("save_settings", { model, closeToTray });
+export function saveSettings(
+  model: string,
+  closeToTray: boolean,
+  workspace: string,
+): Promise<Settings> {
+  return invoke<Settings>("save_settings", { model, closeToTray, workspace });
 }
 
 export function setApiKey(key: string): Promise<Settings> {
@@ -38,15 +49,27 @@ export function clearApiKey(): Promise<Settings> {
   return invoke<Settings>("clear_api_key");
 }
 
-/** Sends the whole conversation; resolves with the full reply once the stream ends. */
-export function sendChat(conversationId: string, messages: ChatMessage[]): Promise<string> {
-  return invoke<string>("send_chat", { conversationId, messages });
+/** Runs one prompt through the agent loop; resolves with the stop reason. */
+export function sendChat(conversationId: string, text: string): Promise<string> {
+  return invoke<string>("send_chat", { conversationId, text });
+}
+
+export function answerPermission(
+  conversationId: string,
+  callId: string,
+  answer: Answer,
+): Promise<void> {
+  return invoke<void>("answer_permission", { conversationId, callId, answer });
 }
 
 export function cancelChat(conversationId: string): Promise<void> {
   return invoke<void>("cancel_chat", { conversationId });
 }
 
-export function onChatDelta(handler: (delta: ChatDelta) => void): Promise<UnlistenFn> {
-  return listen<ChatDelta>(DELTA_EVENT, (event) => handler(event.payload));
+export function closeChat(conversationId: string): Promise<void> {
+  return invoke<void>("close_chat", { conversationId });
+}
+
+export function onChatEvent(handler: (envelope: ChatEnvelope) => void): Promise<UnlistenFn> {
+  return listen<ChatEnvelope>(CHAT_EVENT, (event) => handler(event.payload));
 }
