@@ -13,6 +13,7 @@
     "windows": [
       {
         "label": "main",
+        "create": false,
         "title": "GrokHub",
         "width": 900,
         "height": 700,
