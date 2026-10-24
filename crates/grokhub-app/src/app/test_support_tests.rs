@@ -340,6 +340,16 @@ pub(super) fn test_automation(
     .expect("automation")
 }
 
+/// One config root for both this thread (`TestConfigDir`) and the skill-write
+/// threads (`GROKHUB_CONFIG`), with one skill saved the way the cabin saves it.
+pub(super) fn pin_skill_config(label: &str) -> (crate::config::TestConfigDir, std::path::PathBuf) {
+    let root = crate::config::test_config_root(label);
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("config root");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    (crate::config::TestConfigDir::set(root.clone()), root)
+}
+
 #[test]
 fn wait_until_returns_when_ready() {
     let mut n = 0;
