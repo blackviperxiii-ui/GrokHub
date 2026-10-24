@@ -452,6 +452,24 @@ pub(super) fn key(key: eframe::egui::Key) -> eframe::egui::Event {
     }
 }
 
+pub(super) fn health_job(id: &str) -> grokhub_core::Automation {
+    grokhub_core::Automation {
+        id: id.into(),
+        name: "Board summary".into(),
+        schedule: "daily".into(),
+        time: "09:00".into(),
+        times: Vec::new(),
+        instructions: "summarize the board".into(),
+        heartbeat_every_min: 0,
+        check_command: String::new(),
+        enabled: true,
+        last_run: None,
+        next_run: None,
+        run_count: 0,
+        health: Default::default(),
+    }
+}
+
 #[test]
 fn wait_until_returns_when_ready() {
     let mut n = 0;
