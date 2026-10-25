@@ -33,6 +33,7 @@ describe("paletteRows", () => {
       "Settings: General",
       "Settings: Account",
       "Settings: Personality",
+      "Settings: Playbooks",
       "Settings: Local AI",
       "Settings: Web access",
       "Settings: Labs",
@@ -48,6 +49,7 @@ describe("paletteRows", () => {
       "Settings: General",
       "Settings: Account",
       "Settings: Personality",
+      "Settings: Playbooks",
       "Settings: About",
     ]);
     expect(labels(WEB, "")).toEqual(["Chat", "Automations", "Memory", "Connectors", "Settings"]);
