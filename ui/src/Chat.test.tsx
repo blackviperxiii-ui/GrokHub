@@ -51,6 +51,19 @@ describe("Chat", () => {
     api.handler = null;
   });
 
+  it("puts a prefill in the box without sending it, and a new one replaces it", async () => {
+    const { rerender } = render(
+      <Chat onOpenSettings={() => {}} prefill={{ text: "close the done cards", n: 1 }} />,
+    );
+    const box = screen.getByRole("textbox", { name: "Message" });
+    expect(box).toHaveValue("close the done cards");
+    expect(api.sendChat).not.toHaveBeenCalled();
+
+    rerender(<Chat onOpenSettings={() => {}} prefill={{ text: "check the build", n: 2 }} />);
+    expect(box).toHaveValue("check the build");
+    expect(api.sendChat).not.toHaveBeenCalled();
+  });
+
   it("sends the text and streams its own conversation's reply", async () => {
     const finish = holdTurn();
     render(<Chat onOpenSettings={() => {}} />);

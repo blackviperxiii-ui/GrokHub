@@ -129,6 +129,7 @@ async function waitFor(what, fn, timeoutMs = 30000) {
 const ELEMENT = "element-6066-11e4-a52e-4f735466cecf";
 const AUTOMATION = "every day at 7am say hello from the smoke test";
 const MEMORY_NOTE = "the smoke test likes kumquats";
+const PULSE_ACTION = "close every done card on the smoke workboard";
 
 async function find(s, css) {
   const el = await wd("POST", `${s}/element`, { using: "css selector", value: css });
@@ -139,6 +140,15 @@ async function click(s, css) {
   await wd("POST", `${s}/element/${await find(s, css)}/click`, {});
 }
 
+/** A top tab by its label, so adding a tab moves no test. */
+async function tab(s, label) {
+  const el = await wd("POST", `${s}/element`, {
+    using: "xpath",
+    value: `//nav[contains(@class,'tabs')]/button[normalize-space()='${label}']`,
+  });
+  await wd("POST", `${s}/element/${el[ELEMENT]}/click`, {});
+}
+
 async function textOf(s, css) {
   return wd("GET", `${s}/element/${await find(s, css)}/text`);
 }
@@ -146,7 +156,7 @@ async function textOf(s, css) {
 // Automations: add one from plain text, check it lands in the cabin's
 // automations.json, then Run now and wait for the mocked reply on its row.
 async function automations(s, config) {
-  await click(s, "nav.tabs button:nth-child(2)");
+  await tab(s, "Automations");
   const input = await waitFor("the automations page", () => find(s, "input[aria-label='New automation']"));
   await wd("POST", `${s}/element/${input}/value`, { text: AUTOMATION });
   await click(s, "form.add button[type='submit']");
@@ -177,7 +187,7 @@ async function automations(s, config) {
 // Memory: Remember a line, check it lands in the work folder's MEMORY.md,
 // then search for it the way chat recall would.
 async function memory(s, workspace) {
-  await click(s, "nav.tabs button:nth-child(3)");
+  await tab(s, "Memory");
   const input = await waitFor("the memory page", () => find(s, "input[aria-label='New note']"));
   await wd("POST", `${s}/element/${input}/value`, { text: MEMORY_NOTE });
   await click(s, ".memory form.add button[type='submit']");
@@ -209,7 +219,7 @@ async function connectors(s, config) {
     mcpFile,
     JSON.stringify({ mcpServers: { box: { command: process.execPath, args: [script] } } }),
   );
-  await click(s, "nav.tabs button:nth-child(4)");
+  await tab(s, "Connectors");
   await waitFor("the connector row", async () => {
     const t = await textOf(s, ".card.connector .card-status");
     return t === "Not checked" ? t : null;
@@ -234,6 +244,75 @@ async function connectors(s, config) {
   const saved = readFileSync(mcpFile, "utf8");
   if (saved.includes("fake-mcp.mjs")) throw new Error(`mcp.json still has box: ${saved}`);
   console.log("connector disconnected after the OK");
+}
+
+// Pulse: a post and an idea in the cabin's updates.json show on Feed and
+// Ideas. Not this on the post writes the ledger line to the global MEMORY.md
+// and takes it off; Run on the idea puts its action in the chat box, unsent.
+async function pulse(s, config) {
+  const now = Date.now();
+  const cards = [
+    {
+      id: "smoke-post",
+      kind: "automation_done",
+      title: "Smoke board summary",
+      body: "Three cards moved to done.",
+      createdAt: now - 120000,
+      status: "unread",
+    },
+    {
+      id: "smoke-idea",
+      kind: "idea",
+      title: "Tidy the smoke workboard",
+      body: "Close the done cards.",
+      createdAt: now - 60000,
+      status: "unread",
+      prompt: PULSE_ACTION,
+    },
+  ];
+  writeFileSync(join(config, "updates.json"), JSON.stringify(cards));
+  await tab(s, "Pulse");
+  await waitFor("the feed post", async () => {
+    const t = await textOf(s, ".pulse .card.post .card-title");
+    return t === "Smoke board summary" ? t : null;
+  });
+  const notThis = await wd("POST", `${s}/element`, {
+    using: "xpath",
+    value: "//li[contains(@class,'post')]//button[normalize-space()='Not this']",
+  });
+  await wd("POST", `${s}/element/${notThis[ELEMENT]}/click`, {});
+  await waitFor("the not-this status", async () => {
+    const t = await textOf(s, ".pulse p.status");
+    return t === "Got it. Less like this." ? t : null;
+  });
+  const ledger = readFileSync(join(config, "memory", "MEMORY.md"), "utf8");
+  if (!ledger.includes('pulse: dismissed "Smoke board summary" reason=not-this')) {
+    throw new Error(`MEMORY.md says ${JSON.stringify(ledger)}`);
+  }
+  console.log(`ledger line: ${JSON.stringify(ledger.trim())}`);
+
+  const ideas = await wd("POST", `${s}/element`, {
+    using: "xpath",
+    value: "//div[@aria-label='Pulse view']/button[normalize-space()='Ideas']",
+  });
+  await wd("POST", `${s}/element/${ideas[ELEMENT]}/click`, {});
+  const run = await waitFor("the idea's Run", async () => {
+    const el = await wd("POST", `${s}/element`, {
+      using: "xpath",
+      value: "//li[contains(@class,'post')]//button[normalize-space()='Run']",
+    });
+    return el[ELEMENT];
+  });
+  const calls = mockSeen.length;
+  await wd("POST", `${s}/element/${run}/click`, {});
+  const box = await waitFor("the chat box", () => find(s, "textarea[aria-label='Message']"));
+  const filled = await waitFor("the filled chat box", async () => {
+    const v = await wd("GET", `${s}/element/${box}/property/value`);
+    return v === PULSE_ACTION ? v : null;
+  });
+  await sleep(1000);
+  if (mockSeen.length !== calls) throw new Error("Run sent the idea without the person");
+  console.log(`run filled the chat box: ${JSON.stringify(filled)}`);
 }
 
 // Settings → Local AI: the Auto status line renders, Manual takes a model
@@ -399,6 +478,7 @@ async function main() {
     await automations(s, config);
     await memory(s, workspace);
     await connectors(s, config);
+    await pulse(s, config);
     await localAi(s, config);
     console.log("smoke ok");
   } catch (err) {
