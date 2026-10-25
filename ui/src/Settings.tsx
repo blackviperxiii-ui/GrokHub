@@ -5,6 +5,7 @@ import {
   saveSettings,
   setApiKey,
   type Approvals,
+  type Capabilities,
   type Settings as Shape,
 } from "./api";
 import { LocalAi } from "./LocalAi";
@@ -27,7 +28,7 @@ const APPROVALS: Record<Approvals, { label: string; note: string }> = {
 export const DESKTOP_NOTE =
   "Grok can see your screen, click and type. Deleting, sending, paying and credentials always wait for your OK.";
 
-export function Settings() {
+export function Settings({ caps }: { caps: Capabilities }) {
   const [settings, setSettings] = useState<Shape | null>(null);
   const [model, setModel] = useState("");
   const [closeToTray, setCloseToTray] = useState(true);
@@ -117,23 +118,27 @@ export function Settings() {
         <p className={approvals === "always" ? "note warn" : "note"}>
           {APPROVALS[approvals].note}
         </p>
-        <label className="check">
-          <input
-            type="checkbox"
-            checked={desktopControl}
-            onChange={(e) => setDesktopControl(e.target.checked)}
-          />
-          Let Grok control the desktop
-        </label>
-        {desktopControl && <p className="note warn">{DESKTOP_NOTE}</p>}
-        <label className="check">
-          <input
-            type="checkbox"
-            checked={closeToTray}
-            onChange={(e) => setCloseToTray(e.target.checked)}
-          />
-          Closing the window keeps GrokHub in the tray
-        </label>
+        {caps.desktopControl && (
+          <label className="check">
+            <input
+              type="checkbox"
+              checked={desktopControl}
+              onChange={(e) => setDesktopControl(e.target.checked)}
+            />
+            Let Grok control the desktop
+          </label>
+        )}
+        {caps.desktopControl && desktopControl && <p className="note warn">{DESKTOP_NOTE}</p>}
+        {caps.tray && (
+          <label className="check">
+            <input
+              type="checkbox"
+              checked={closeToTray}
+              onChange={(e) => setCloseToTray(e.target.checked)}
+            />
+            Closing the window keeps GrokHub in the tray
+          </label>
+        )}
         <button type="submit">Save settings</button>
       </form>
       <div className="key">
@@ -157,7 +162,7 @@ export function Settings() {
         )}
       </div>
       {note && <p className="note">{note}</p>}
-      <LocalAi />
+      {caps.localAi && <LocalAi />}
     </section>
   );
 }

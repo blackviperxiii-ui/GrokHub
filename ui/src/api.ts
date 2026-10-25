@@ -18,6 +18,26 @@ export interface Settings {
   desktopControl: boolean;
 }
 
+/** What this platform runs (src-tauri/src/capabilities.rs). */
+export interface Capabilities {
+  desktopControl: boolean;
+  pulse: boolean;
+  localAi: boolean;
+  tray: boolean;
+}
+
+/** Until the report loads, or if it fails, only the core features show. */
+export const CORE_ONLY: Capabilities = {
+  desktopControl: false,
+  pulse: false,
+  localAi: false,
+  tray: false,
+};
+
+export function getCapabilities(): Promise<Capabilities> {
+  return invoke<Capabilities>("get_capabilities");
+}
+
 export type Answer = "allow" | "always" | "deny";
 
 /** One engine event for a conversation, from `chat://event`. */
