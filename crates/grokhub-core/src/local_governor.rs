@@ -377,9 +377,14 @@ pub fn parse_hyprctl_active(json: &str) -> (Option<bool>, Option<String>) {
     let Ok(v) = serde_json::from_str::<serde_json::Value>(json) else {
         return (None, None);
     };
+    // 0.42+ sends a mode mask (1 maximized, 2 fullscreen); older builds send
+    // a bool plus `fullscreenMode` (0 fullscreen, 1 maximized). Maximized
+    // windows don't count.
     let full = match v.get("fullscreen") {
-        Some(serde_json::Value::Bool(b)) => Some(*b),
-        Some(serde_json::Value::Number(n)) => n.as_u64().map(|n| n > 0),
+        Some(serde_json::Value::Bool(b)) => {
+            Some(*b && v.get("fullscreenMode").and_then(|m| m.as_u64()) != Some(1))
+        }
+        Some(serde_json::Value::Number(n)) => n.as_u64().map(|n| n & 2 != 0),
         _ => None,
     };
     let class = v

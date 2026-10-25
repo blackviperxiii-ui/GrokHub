@@ -76,3 +76,30 @@ fn three_failed_starts_open_the_crash_breaker() {
     assert_eq!(may_start(2_000 + 1_800_000), Ok(()));
     reset_for_test();
 }
+
+#[cfg(unix)]
+#[test]
+fn the_breaker_stops_starting_a_server_that_keeps_dying_without_leaking_a_request() {
+    use std::os::unix::fs::PermissionsExt;
+    reset_for_test();
+    let dir = crate::harness::test_dir("gov-breaker");
+    std::fs::create_dir_all(dir.join("bin")).unwrap();
+    std::fs::create_dir_all(dir.join("models")).unwrap();
+    let bin = dir.join("bin").join("llama-server");
+    std::fs::write(&bin, "#!/bin/sh\nexit 1\n").unwrap();
+    std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+    std::fs::write(dir.join("models").join("m.gguf"), b"x").unwrap();
+    for _ in 0..3 {
+        assert_eq!(
+            crate::route::local_sidecar::acquire(&dir).err(),
+            Some("local model server stopped before it was ready".into())
+        );
+    }
+    assert_eq!(
+        crate::route::local_sidecar::acquire(&dir).err(),
+        Some("the local model server kept stopping, so GrokHub paused it for 30 minutes".into())
+    );
+    assert_eq!(in_flight(), 0, "a failed start holds no request guard");
+    assert_eq!(crate::route::local_sidecar::global_pid(), None);
+    reset_for_test();
+}
