@@ -75,6 +75,7 @@ export function App() {
       <div hidden={view !== "chat"}>
         <Chat
           onOpenSettings={() => setView("settings")}
+          onSignIn={() => run({ kind: "settings", section: "account" })}
           prefill={prefill}
           active={view === "chat"}
           remote={Boolean(caps.remote)}

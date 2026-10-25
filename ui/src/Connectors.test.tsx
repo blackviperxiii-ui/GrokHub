@@ -127,7 +127,7 @@ describe("Connectors", () => {
   it("says when there are none and keeps Check all off", async () => {
     api.listConnectors.mockResolvedValue([]);
     render(<Connectors />);
-    expect(await screen.findByText("No connectors yet.")).toBeInTheDocument();
+    expect(await screen.findByText("No connectors yet. Connectors you add in the GrokHub cabin show up here.")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Check all" })).toBeDisabled();
   });
 });
