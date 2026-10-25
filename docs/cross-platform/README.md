@@ -13,12 +13,13 @@ Phase 0 started from `beta` @ `f0a5c7a` (2026-10-23).
 - **Tauri is approved** for the new cross-platform shell. "No Electron. No
   Tauri." now describes only the egui cabin. Electron stays out.
 - **Repo rules win** over the Notion card where they differ. Since #832
-  (2026-10-24) those rules are:
+  (2026-10-24; confirmed 2026-10-25) those rules are:
   - pstack skills (vstack is retired).
-  - Every PR targets `beta`. The agent squash-merges it once CI is green;
-    only `beta` → `main` needs Viper.
-  - `.github/`, `clippy.toml` and release-script changes still need his OK
-    before they merge.
+  - Every PR targets `beta`. The agent squash-merges it once CI is green,
+    with no review hold; only promoting `beta` → `main` (and tags/releases)
+    needs Viper.
+  - `.github/`, `clippy.toml` and release-script changes ship in the PR like
+    any other change. Notion card decisions need no OK from Viper.
 - **Web backend (Viper, 2026-10-25):** the web app is a remote for GrokHub
   running on your own computer, not `grokhub-hub` as a hosted service. The
   desktop runs the chats and keeps the key.
@@ -37,7 +38,7 @@ Each phase is one PR into `beta`, or smaller.
 | 4 | Android and iOS | Emulator and simulator smoke tests (sign-in mocked, chat round-trip) pass. Capability flags hide desktop-only features |
 | 5 | Web, using the chosen backend | `vite build` passes, a Playwright chat round-trip against the mocked backend passes, and no secret is kept in browser storage |
 | 6 | Release: `cargo xtask bump` and CHANGELOG artifact lines for the new platforms | A tag dry-run produces every artifact, signed where secrets exist |
-| 7 | Rework the open GrokHub Notion cards for the new app | Each card has a decision (rewrite, merge or close) that Viper has OK'd before Notion changes |
+| 7 | Rework the open GrokHub Notion cards for the new app | Each open GrokHub card has a decision (rewrite, merge or close) recorded on the card. The egui QA cards were triaged on 2026-10-24 and folded into the recode card |
 
 Desktop-only features (computer-use, screen capture, the indexers, local MCP
 stdio servers, D-Bus and systemd) sit behind a per-platform `Capabilities`

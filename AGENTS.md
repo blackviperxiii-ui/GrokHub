@@ -1,7 +1,7 @@
 # AGENTS.md — GrokHub cabin notes
 
 ## Base branch
-Feature/fix PRs → `beta`; every agent squash-merges its own PR into `beta` as soon as CI is green (no review hold). Only `beta` → `main` promotion needs Viper's say. Hotfixes → `main` only on Viper's say, then merge-back PR into beta (merge commit). No version bump on beta PRs — add `changelog.d/<slug>.md`; promotions run `cargo xtask bump`.
+Feature/fix PRs → `beta`; every agent squash-merges its own PR into `beta` as soon as CI is green (no review hold). `.github/`, clippy, and release-script changes ship the same way. Only `beta` → `main` promotion, tags, and releases need Viper's say. Hotfixes → `main` only on Viper's say, then merge-back PR into beta (merge commit). No version bump on beta PRs — add `changelog.d/<slug>.md`; promotions run `cargo xtask bump`.
 
 ## Bot
 Prefer Grok Build on the box (roles: explore, plan, implementer). Cursor Cloud paused until Oct 11. One bot per job.

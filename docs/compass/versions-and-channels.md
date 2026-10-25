@@ -26,6 +26,6 @@
 - Beta N is `git rev-list --count <newest-vX.Y.Z>..HEAD`; missing tags (shallow clone) → `beta.0` until `git fetch --tags`. build.rs reruns on `HEAD`, `packed-refs`, `logs/HEAD`, and the branch ref.
 - A missing, empty, or unknown receipt reads as stable. Updater compares with prerelease order; stable never gets a prerelease offer. Labs auto-off still uses trees (`beta_caught_up_to_main`); `beta_auto_off_for_versions` is the pure version rule.
 - Without a source clone both channels update from signed GitHub releases: stable from `releases/latest`, beta from the newest `vX.Y.Z-beta.N` or legacy `beta-v*` pre-release by `created_at` (`pick_release` in `crates/grokhub-core/src/release_verify.rs`). `.github/workflows/release.yml` publishes those tags as prerelease, never Latest.
-- Every Update or channel switch appends a redacted tail to `update.log`; `.github/` beyond the beta-tag path, `clippy.toml`, and release scripts change only with Viper's OK.
+- Every Update or channel switch appends a redacted tail to `update.log`. `.github/`, `clippy.toml`, and release scripts ship in PRs like other changes (squash-merge into `beta` on green).
 ## See also
 - [install-scripts](install-scripts.md), [grokhub-app](grokhub-app.md)
