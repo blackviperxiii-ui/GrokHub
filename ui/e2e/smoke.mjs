@@ -9,8 +9,10 @@
 // driver: WebKitWebDriver on Linux, msedgedriver on Windows. macOS has none.
 // Set SMOKE_NATIVE_DRIVER to that driver's path when it is not on PATH, and
 // SMOKE_SCREENSHOT=<file.png> to keep a screenshot of the rendered reply.
+// SMOKE_WEB=1 adds the web access step, which needs Playwright's Chromium.
 
 import { spawn } from "node:child_process";
+import { createRequire } from "node:module";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
@@ -50,6 +52,7 @@ function toolCall(callId, name, args) {
 // "result checked"), as with a real model: write the note, re-read it, tick
 // the checklist, then reply in two pieces.
 function mockReply(callNumber, body) {
+  if (body.includes(WEB_PROMPT)) return textReply(WEB_REPLY);
   if (body.includes(DESK_PROMPT)) {
     if (!body.includes("smoke-desk")) return toolCall("smoke-desk", "type", { text: DESK_TEXT });
     return textReply(DESK_REPLY);
@@ -142,6 +145,8 @@ const PULSE_ACTION = "close every done card on the smoke workboard";
 const DESK_PROMPT = "clear out the old folder from the terminal";
 const DESK_TEXT = "rm -rf ~/old";
 const DESK_REPLY = "Left the old folder alone";
+const WEB_PROMPT = "hello from the browser smoke test";
+const WEB_REPLY = "Hello, browser";
 
 async function find(s, css) {
   const el = await wd("POST", `${s}/element`, { using: "css selector", value: css });
@@ -496,6 +501,7 @@ async function main() {
     await pulse(s, config);
     await localAi(s, config);
     await desktop(s, config);
+    if (process.env.SMOKE_WEB === "1") await web(s);
     console.log("smoke ok");
   } catch (err) {
     // What the window and the mock saw, for a failed CI run.
@@ -583,6 +589,82 @@ async function desktop(s, config) {
     throw new Error("Deny never reached the model as a refusal");
   }
   console.log("Deny reached the model as a refusal");
+}
+
+// Web access: the window turns it on, and Chromium pairs from the localhost
+// link and chats through this shell's engine. Desktop control and Always
+// are still on from the step above, and the web chat must get no desktop
+// tools. Then a refused command, and turning it off ends the pairing.
+async function web(s) {
+  const { chromium } = createRequire(import.meta.url)("playwright");
+  await tab(s, "Settings");
+  const on = await waitFor("the web access button", () =>
+    wd("POST", `${s}/element`, {
+      using: "xpath",
+      value: "//button[normalize-space()='Turn on web access']",
+    }).then((el) => el[ELEMENT]),
+  );
+  await wd("POST", `${s}/element/${on}/click`, {});
+  const code = await waitFor("the pairing code", () => textOf(s, "[aria-label='Pairing code']"));
+  const links = await wd("POST", `${s}/elements`, { using: "css selector", value: ".web-access li code" });
+  const texts = await Promise.all(links.map((el) => wd("GET", `${s}/element/${el[ELEMENT]}/text`)));
+  const link = texts.find((t) => t.startsWith("http://127.0.0.1:"));
+  if (!link || !link.endsWith(`#code=${code}`)) throw new Error(`no localhost pairing link: ${texts}`);
+  console.log(`web access on: ${texts.length} link(s), a ${code.length}-character code`);
+  const origin = new URL(link).origin;
+
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage();
+    await page.goto(link);
+    const box = page.getByRole("textbox", { name: "Message" });
+    await box.waitFor({ timeout: 30000 });
+    await box.fill(WEB_PROMPT);
+    await page.locator("form.composer button[type='submit']").click();
+    await page
+      .locator(".bubble.assistant:not(.streaming)")
+      .filter({ hasText: WEB_REPLY })
+      .waitFor({ timeout: 30000 });
+    console.log(`the browser got the reply: ${JSON.stringify(WEB_REPLY)}`);
+
+    const asked = mockSeen.find((c) => c.body.includes(WEB_PROMPT));
+    const tools = (JSON.parse(asked.body).tools ?? []).map((t) => t.name);
+    if (tools.includes("type") || tools.includes("click")) {
+      throw new Error(`a web chat was offered desktop tools: ${tools}`);
+    }
+    if (asked.auth !== "Bearer loopback-test") throw new Error(`auth was ${asked.auth}`);
+    console.log(`the web chat ran on this shell with ${tools.length} tools and no desktop tools`);
+
+    const refused = await page.evaluate(async (pairing) => {
+      const call = (auth) =>
+        fetch("/remote/v1/call/set_api_key", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", ...auth },
+          body: JSON.stringify({ key: "sk-abcdefghijklmnopqrstuv" }),
+        });
+      const paired = await (await call({ Authorization: `Bearer ${pairing}` })).json();
+      return { paired, unpaired: (await call({})).status };
+    }, code);
+    if (refused.paired.ok !== false || refused.unpaired !== 401) {
+      throw new Error(`set_api_key from the web: ${JSON.stringify(refused)}`);
+    }
+    console.log(`the web can't set the key: ${JSON.stringify(refused.paired.error)}`);
+  } finally {
+    await browser.close();
+  }
+
+  await click(s, ".web-access button");
+  await waitFor("web access off", async () => {
+    // A stopped server may still take the connection but never answers.
+    const reachable = await fetch(`${origin}/remote/v1/hello`, {
+      signal: AbortSignal.timeout(2000),
+    }).then(
+      () => true,
+      () => false,
+    );
+    return !reachable;
+  });
+  console.log("web access off: the address no longer answers");
 }
 
 main().catch((err) => {

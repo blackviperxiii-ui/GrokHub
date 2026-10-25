@@ -12,6 +12,7 @@ pub mod credential;
 pub mod local_ai;
 pub mod memory;
 pub mod pulse;
+pub mod remote;
 pub mod settings;
 
 use std::collections::HashMap;
@@ -20,13 +21,15 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use grokhub_agent::{AuthKind, XaiClient};
+use serde::de::DeserializeOwned;
 use serde::Serialize;
+use serde_json::Value;
 use settings::ShellSettings;
 #[cfg(desktop)]
 use tauri::menu::{Menu, MenuItem};
 #[cfg(desktop)]
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-use tauri::{AppHandle, Emitter, Manager, State, WindowEvent};
+use tauri::{AppHandle, Emitter, Listener, Manager, State, WindowEvent};
 
 pub const CHAT_EVENT: &str = "chat://event";
 
@@ -168,8 +171,17 @@ async fn send_chat(
     conversation_id: String,
     text: String,
 ) -> Result<String, String> {
-    let settings = current(&state);
-    let session = session(&state, &conversation_id);
+    chat_turn(app, &state, conversation_id, text, current(&state)).await
+}
+
+async fn chat_turn(
+    app: AppHandle,
+    state: &ShellState,
+    conversation_id: String,
+    text: String,
+    settings: ShellSettings,
+) -> Result<String, String> {
+    let session = session(state, &conversation_id);
     tauri::async_runtime::spawn_blocking(move || {
         let route = route(&settings)?;
         let id = conversation_id.clone();
@@ -471,6 +483,142 @@ async fn run_local_speed_test(state: State<'_, ShellState>) -> Result<String, St
     off_main(move || local_ai::speed_test(&dir)).await?
 }
 
+#[tauri::command]
+fn get_web_access(web: State<'_, Arc<remote::WebAccess>>) -> remote::WebAccessView {
+    web.view()
+}
+
+/// Settings → Web access. On: serve the web app on the LAN with a new
+/// pairing code. Off: every paired browser is dropped.
+#[tauri::command]
+fn set_web_access(
+    app: AppHandle,
+    web: State<'_, Arc<remote::WebAccess>>,
+    on: bool,
+) -> Result<remote::WebAccessView, String> {
+    capabilities::needs(capabilities::current().web_access, "Web access")?;
+    if !on {
+        web.stop();
+        return Ok(web.view());
+    }
+    let dispatch_app = app.clone();
+    let dispatch: remote::Dispatch =
+        Arc::new(move |command, args| remote_call(&dispatch_app, command, &args));
+    let assets: remote::Assets = Arc::new(move |path| {
+        app.asset_resolver()
+            .get(path.to_string())
+            .map(|asset| (asset.bytes, asset.mime_type))
+    });
+    web.start(
+        std::net::Ipv4Addr::UNSPECIFIED.into(),
+        remote::PORT,
+        dispatch,
+        assets,
+    )
+}
+
+fn arg<T: DeserializeOwned>(args: &Value, name: &str) -> Result<T, String> {
+    serde_json::from_value(args.get(name).cloned().unwrap_or(Value::Null))
+        .map_err(|err| format!("{name}: {err}"))
+}
+
+fn out<T: Serialize>(value: T) -> Result<Value, String> {
+    serde_json::to_value(value).map_err(|err| err.to_string())
+}
+
+/// One of `remote::WEB_COMMANDS` from a paired browser, run as the window
+/// would run it. A web chat never gets the desktop tools.
+fn remote_call(app: &AppHandle, command: &str, args: &Value) -> Result<Value, String> {
+    use tauri::async_runtime::block_on;
+    let state = app.state::<ShellState>();
+    let web = app.state::<Arc<remote::WebAccess>>();
+    // A browser steers only the chats it started.
+    let own = |args: &Value| -> Result<String, String> {
+        let id: String = arg(args, "conversationId")?;
+        if web.owns(&id) {
+            Ok(id)
+        } else {
+            Err(remote::NOT_YOURS.into())
+        }
+    };
+    match command {
+        "get_settings" => out(get_settings(state)),
+        "send_chat" => {
+            let conversation_id: String = arg(args, "conversationId")?;
+            let taken = state
+                .chats
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .contains_key(&conversation_id);
+            if taken && !web.owns(&conversation_id) {
+                return Err(remote::NOT_YOURS.into());
+            }
+            web.adopt(&conversation_id);
+            let settings = ShellSettings {
+                desktop_control: false,
+                ..current(&state)
+            };
+            out(block_on(chat_turn(
+                app.clone(),
+                &state,
+                conversation_id,
+                arg(args, "text")?,
+                settings,
+            ))?)
+        }
+        "answer_permission" => {
+            answer_permission(
+                state,
+                own(args)?,
+                arg(args, "callId")?,
+                arg(args, "answer")?,
+            )?;
+            Ok(Value::Null)
+        }
+        "cancel_chat" => {
+            cancel_chat(state, own(args)?);
+            Ok(Value::Null)
+        }
+        "close_chat" => {
+            close_chat(state, own(args)?);
+            Ok(Value::Null)
+        }
+        "list_automations" => out(list_automations(state, arg(args, "clock")?)?),
+        "add_automation" => out(add_automation(
+            state,
+            arg(args, "text")?,
+            arg(args, "clock")?,
+        )?),
+        "set_automation_enabled" => out(set_automation_enabled(
+            state,
+            arg(args, "id")?,
+            arg(args, "enabled")?,
+            arg(args, "clock")?,
+        )?),
+        "remove_automation" => out(remove_automation(
+            state,
+            arg(args, "id")?,
+            arg(args, "clock")?,
+        )?),
+        "run_automation" => out(block_on(run_automation(state, arg(args, "id")?))?),
+        "get_memory" => out(get_memory(state)?),
+        "save_memory" => out(save_memory(
+            state,
+            arg(args, "global")?,
+            arg(args, "text")?,
+            arg(args, "base")?,
+        )?),
+        "add_memory" => out(add_memory(state, arg(args, "text")?, arg(args, "global")?)?),
+        "search_memory" => out(search_memory(state, arg(args, "query")?)?),
+        "list_connectors" => out(block_on(list_connectors(state))?),
+        "check_connectors" => out(block_on(check_connectors(state))?),
+        "restart_connector" => out(block_on(restart_connector(state, arg(args, "name")?))?),
+        "sign_out_connector" => out(block_on(sign_out_connector(state, arg(args, "name")?))?),
+        "disconnect_connector" => out(block_on(disconnect_connector(state, arg(args, "name")?))?),
+        _ => Err(remote::REFUSED.into()),
+    }
+}
+
 #[cfg(desktop)]
 fn show_main(app: &AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
@@ -646,6 +794,13 @@ pub fn run() {
                 settings: Mutex::new(loaded),
                 chats: Mutex::new(HashMap::new()),
             });
+            let web = Arc::new(remote::WebAccess::default());
+            app.manage(Arc::clone(&web));
+            // Chat events reach paired browsers too; each page keeps its own
+            // conversation's.
+            app.listen_any(CHAT_EVENT, move |event| {
+                web.broadcast(CHAT_EVENT, event.payload())
+            });
             build_main_window(app)?;
             #[cfg(desktop)]
             build_tray(app)?;
@@ -691,7 +846,9 @@ pub fn run() {
             save_local_ai,
             reset_local_ai,
             check_model_file,
-            run_local_speed_test
+            run_local_speed_test,
+            get_web_access,
+            set_web_access
         ])
         .run(tauri::generate_context!());
     if let Err(err) = built {

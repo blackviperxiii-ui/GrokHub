@@ -1,0 +1,1 @@
+- Cross-platform recode, Phase 5b: Settings → Web access in the Tauri shell. It serves the web app on your network, with a fresh pairing code each time it's turned on. Web chats can't control the desktop, can't change settings or the API key, and only see their own conversations. Turning it off, or quitting, ends every pairing.

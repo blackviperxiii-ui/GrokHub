@@ -306,8 +306,11 @@ jobs:
       - name: tauri-driver
         if: runner.os != 'macOS'
         run: cargo install tauri-driver --locked
+      # SMOKE_WEB adds the web access step (Chromium from the web smoke test).
       - name: Smoke test (Linux)
         if: runner.os == 'Linux'
+        env:
+          SMOKE_WEB: "1"
         run: xvfb-run -a node ui/e2e/smoke.mjs src-tauri/target/debug/grokhub-shell
       # msedgedriver must match the WebView2 runtime the shell runs on, which
       # can differ from the runner's Edge, so fetch the driver for that version.

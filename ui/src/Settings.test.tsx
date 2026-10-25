@@ -22,11 +22,12 @@ const api = vi.hoisted(() => ({
 vi.mock("./api", () => api);
 // Local AI has its own tests (LocalAi.test.tsx).
 vi.mock("./LocalAi", () => ({ LocalAi: () => <p>Local AI panel</p> }));
+vi.mock("./WebAccess", () => ({ WebAccess: () => <p>Web access panel</p> }));
 
 import { DESKTOP_NOTE, REMOTE_NOTE, Settings } from "./Settings";
 
-const DESKTOP: Capabilities = { desktopControl: true, pulse: true, localAi: true, tray: true };
-const PHONE: Capabilities = { desktopControl: false, pulse: false, localAi: false, tray: false };
+const DESKTOP: Capabilities = { desktopControl: true, pulse: true, localAi: true, tray: true, webAccess: true };
+const PHONE: Capabilities = { desktopControl: false, pulse: false, localAi: false, tray: false, webAccess: false };
 const WEB: Capabilities = { ...PHONE, remote: true };
 
 function shape(over: Partial<Shape>): Shape {
@@ -144,6 +145,7 @@ describe("Settings", () => {
     expect(screen.queryByText(DESKTOP_NOTE)).toBeNull();
     expect(screen.queryByLabelText(/keeps GrokHub in the tray/)).toBeNull();
     expect(screen.queryByText("Local AI panel")).toBeNull();
+    expect(screen.queryByText("Web access panel")).toBeNull();
   });
 
   it("shows them on a desktop", async () => {
@@ -151,7 +153,9 @@ describe("Settings", () => {
     expect(await screen.findByLabelText("Let Grok control the desktop")).toBeInTheDocument();
     expect(screen.getByLabelText(/keeps GrokHub in the tray/)).toBeInTheDocument();
     expect(screen.getByText("Local AI panel")).toBeInTheDocument();
+    expect(screen.getByText("Web access panel")).toBeInTheDocument();
   });
+
   it("shows the web app the desktop's settings but nothing to change them with", async () => {
     api.getSettings.mockResolvedValue(shape({ hasApiKey: true, approvals: "auto" }));
     render(<Settings caps={WEB} />);
@@ -165,5 +169,6 @@ describe("Settings", () => {
     expect(screen.queryByRole("button")).toBeNull();
     expect(screen.queryByRole("textbox")).toBeNull();
     expect(screen.queryByText("Local AI panel")).toBeNull();
+    expect(screen.queryByText("Web access panel")).toBeNull();
   });
 });
