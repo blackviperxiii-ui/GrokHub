@@ -199,6 +199,58 @@ export function disconnectConnector(name: string): Promise<ConnectorsChanged> {
   return invoke<ConnectorsChanged>("disconnect_connector", { name });
 }
 
+/** One Feed post: something that happened or was found. */
+export interface PulsePost {
+  id: string;
+  source: string;
+  title: string;
+  summary: string;
+  because: string;
+  /** "2h ago". */
+  ago: string;
+  /** The first source link, empty when there is none. */
+  link: string;
+  liked: boolean;
+}
+
+/** One Ideas row: something GrokHub could do next. */
+export interface PulseIdea {
+  id: string;
+  /** The bold "I can …" line. */
+  title: string;
+  summary: string;
+  /** Do, Automate, Learn or Watch. */
+  kind: string;
+  /** What Run puts in the chat box. */
+  action: string;
+}
+
+export interface PulsePage {
+  feed: PulsePost[];
+  /** An empty label is the unlabeled top group. */
+  ideas: { label: string; ideas: PulseIdea[] }[];
+}
+
+export type PulseAct = "dismiss" | "notThis" | "like" | "snooze" | "accept";
+
+/** Today's local date for the ledger line, and the time Snooze counts from. */
+export function localDay(now: Date = new Date()) {
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return {
+    date: `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`,
+    hour: now.getHours(),
+    minute: now.getMinutes(),
+  };
+}
+
+export function getPulse(): Promise<PulsePage> {
+  return invoke<PulsePage>("get_pulse");
+}
+
+export function pulseAct(id: string, act: PulseAct): Promise<PulsePage> {
+  return invoke<PulsePage>("pulse_act", { id, act, day: localDay() });
+}
+
 /** Settings → Local AI (src-tauri/src/local_ai.rs). */
 export type LocalMode = "auto" | "manual";
 
