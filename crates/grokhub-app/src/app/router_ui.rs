@@ -506,6 +506,15 @@ impl Cabin {
         self.stamp_current_access();
         self.persist();
     }
+
+    /// `/why local`: the on-device model's state, governor level and queue.
+    pub(super) fn run_why_local(&mut self) {
+        let body = grokhub_agent::route::local::why_local_text(&crate::config::config_dir());
+        self.live_mut()
+            .push(("assistant".into(), mark_slash_result(&body)));
+        self.stamp_current_access();
+        self.persist();
+    }
 }
 
 /// The Pulse Suggestion for a class the accuracy guard reverted. The title

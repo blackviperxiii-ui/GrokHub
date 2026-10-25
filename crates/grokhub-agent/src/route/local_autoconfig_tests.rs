@@ -280,7 +280,7 @@ fn out_of_memory_backs_off_three_times_then_asks_for_a_smaller_model() {
         &Overrides::default(),
     );
     let mut ngls = Vec::new();
-    let mut cur = a;
+    let mut cur = a.clone();
     for attempt in 1..=3 {
         match after_oom(&cur, attempt) {
             Retry::Again(next) => {
@@ -294,6 +294,26 @@ fn out_of_memory_backs_off_three_times_then_asks_for_a_smaller_model() {
     assert_eq!(after_oom(&cur, 4), Retry::SmallerModel);
     let cpu = LaunchArgs { ngl: 0, ..cur };
     assert_eq!(after_oom(&cpu, 1), Retry::SmallerModel);
+    // A launch with a drafter drops it before giving up any layers.
+    let drafted = LaunchArgs {
+        draft: Some(Box::new(DraftArgs {
+            kind: grokhub_core::local_draft::DraftKind::Simple,
+            model: Some(PathBuf::from("drafters/e2b.gguf")),
+            on_gpu: true,
+            flags: Default::default(),
+        })),
+        ..a.clone()
+    };
+    match after_oom(&drafted, 1) {
+        Retry::Again(next) => assert_eq!((next.ngl, next.draft), (a.ngl, None)),
+        Retry::SmallerModel => panic!("dropped the model, not the drafter"),
+    }
+    let cpu_drafted = LaunchArgs { ngl: 0, ..drafted };
+    match after_oom(&cpu_drafted, 2) {
+        Retry::Again(next) => assert_eq!((next.ngl, next.draft), (0, None)),
+        Retry::SmallerModel => panic!("a CPU launch keeps trying without its drafter"),
+    }
+    assert_eq!(after_oom(&cpu_drafted, 4), Retry::SmallerModel);
 
     let moe = autoconfig(
         &amd_16gb_desktop(),
