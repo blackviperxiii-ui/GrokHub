@@ -41,7 +41,7 @@ rfd = { version = "0.17", default-features = false, features = ["xdg-portal"] }
 eframe = { version = "0.36.2", default-features = false, features = ["x11", "wayland"] }
 # blocking API; ksni still needs its tokio feature (default) for the async D-Bus service.
 ksni = { version = "0.3.6", features = ["blocking"] }
-x11rb = { version = "0.13", default-features = false, features = ["randr", "xtest"] }
+x11rb = { version = "0.13", default-features = false, features = ["randr", "screensaver", "xtest"] }
 
 # Wayland portal input (Phase 2a). tokio matches the zbus runtime already in
 # the tree. reis stays blocking on that same worker; do not enable its tokio
@@ -87,6 +87,8 @@ windows-sys = { version = "0.59", features = [
     "Win32_System_StationsAndDesktops",
     "Win32_System_DataExchange",
     "Win32_System_Memory",
+    "Win32_System_Performance",
+    "Win32_System_ProcessStatus",
     "Win32_NetworkManagement_IpHelper",
     "Win32_NetworkManagement_Ndis",
     "Win32_Networking_WinSock",
