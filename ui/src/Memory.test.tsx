@@ -110,6 +110,49 @@ describe("Memory", () => {
     expect(screen.getByLabelText("New note")).toHaveValue("");
   });
 
+  it("Remember keeps an unsaved edit in the other editor", async () => {
+    api.getMemory.mockResolvedValue(notes());
+    api.addMemory.mockResolvedValue({
+      status: "Remembered in global MEMORY.md",
+      notes: notes({ global: "I like short answers\nnew\n" }),
+    });
+    render(<Memory />);
+    const project = await screen.findByLabelText("Project notes");
+    await userEvent.type(project, "half typed");
+    await userEvent.type(screen.getByLabelText("New note"), "new");
+    await userEvent.click(screen.getByRole("checkbox", { name: "Global" }));
+    await userEvent.click(screen.getByRole("button", { name: "Remember" }));
+
+    await waitFor(() =>
+      expect(screen.getByLabelText("Global notes")).toHaveValue("I like short answers\nnew\n"),
+    );
+    expect(project).toHaveValue("the build needs node 22\nhalf typed");
+    expect(screen.getByRole("button", { name: "Save project notes" })).toBeEnabled();
+  });
+
+  it("Save is off while a save is in flight", async () => {
+    api.getMemory.mockResolvedValue(notes());
+    let finish: () => void = () => {};
+    api.saveMemory.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          finish = () => resolve({ notes: notes({ workspace: "edited\n" }), redacted: false });
+        }),
+    );
+    render(<Memory />);
+    const box = await screen.findByLabelText("Project notes");
+    await userEvent.clear(box);
+    await userEvent.type(box, "edited");
+    await userEvent.click(screen.getByRole("button", { name: "Save project notes" }));
+    expect(screen.getByRole("button", { name: "Save project notes" })).toBeDisabled();
+    await userEvent.click(screen.getByRole("button", { name: "Save project notes" }));
+    expect(api.saveMemory).toHaveBeenCalledTimes(1);
+
+    finish();
+    expect(await screen.findByText("Saved.")).toBeInTheDocument();
+    expect(box).toHaveValue("edited\n");
+  });
+
   it("search lists hits by scope and says when nothing matches", async () => {
     api.getMemory.mockResolvedValue(notes({ amr: true }));
     api.searchMemory

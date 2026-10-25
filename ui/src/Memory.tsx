@@ -9,38 +9,65 @@ import {
 } from "./api";
 
 type Scope = "workspace" | "global";
+const SCOPES: Scope[] = ["workspace", "global"];
+
+/** One editor: the text it started from (sent as the save's base) and the edit. */
+type File = { base: string; draft: string };
 
 export function Memory() {
   const [notes, setNotes] = useState<MemoryNotes | null>(null);
-  const [drafts, setDrafts] = useState<Record<Scope, string>>({ workspace: "", global: "" });
+  const [files, setFiles] = useState<Record<Scope, File>>({
+    workspace: { base: "", draft: "" },
+    global: { base: "", draft: "" },
+  });
+  const [saving, setSaving] = useState(false);
   const [line, setLine] = useState("");
   const [lineGlobal, setLineGlobal] = useState(false);
   const [query, setQuery] = useState("");
   const [hits, setHits] = useState<MemoryHit[] | null>(null);
   const [note, setNote] = useState<string | null>(null);
 
-  function show(next: MemoryNotes) {
+  /** Shows what the files hold now. An editor with unsaved changes keeps
+   * them (and its old base, so its save is checked) unless it is in `replace`. */
+  function show(next: MemoryNotes, replace: Scope[]) {
     setNotes(next);
-    setDrafts({ workspace: next.workspace, global: next.global });
+    setFiles((now) => {
+      const out = { ...now };
+      for (const scope of SCOPES) {
+        if (replace.includes(scope) || now[scope].draft === now[scope].base) {
+          out[scope] = { base: next[scope], draft: next[scope] };
+        }
+      }
+      return out;
+    });
   }
 
   useEffect(() => {
-    getMemory().then(show, (err) => setNote(String(err)));
+    getMemory().then(
+      (next) => show(next, SCOPES),
+      (err) => setNote(String(err)),
+    );
   }, []);
 
   async function save(scope: Scope) {
+    setSaving(true);
     try {
       const { notes: next, redacted } = await saveMemory(
         scope === "global",
-        drafts[scope],
-        notes?.[scope] ?? "",
+        files[scope].draft,
+        files[scope].base,
       );
-      show(next);
+      show(next, [scope]);
       setNote(redacted ? "Saved. A secret was replaced with [redacted]." : "Saved.");
     } catch (err) {
       setNote(String(err));
       // The file may have changed under the editor; show what it holds now.
-      getMemory().then(show, () => {});
+      await getMemory().then(
+        (next) => show(next, [scope]),
+        () => {},
+      );
+    } finally {
+      setSaving(false);
     }
   }
 
@@ -49,7 +76,7 @@ export function Memory() {
     if (!line.trim()) return;
     try {
       const { status, notes: next } = await addMemory(line.trim(), lineGlobal);
-      show(next);
+      show(next, []);
       setLine("");
       setNote(`${status}.`);
     } catch (err) {
@@ -76,15 +103,18 @@ export function Memory() {
         {title}
         <textarea
           rows={6}
-          value={drafts[scope]}
-          onChange={(e) => setDrafts((now) => ({ ...now, [scope]: e.target.value }))}
+          value={files[scope].draft}
+          onChange={(e) => {
+            const draft = e.target.value;
+            setFiles((now) => ({ ...now, [scope]: { ...now[scope], draft } }));
+          }}
         />
       </label>
       <div className="memory-file-foot">
         <code>{path}</code>
         <button
           type="button"
-          disabled={drafts[scope] === notes[scope]}
+          disabled={saving || files[scope].draft === files[scope].base}
           onClick={() => void save(scope)}
         >
           Save {scope === "global" ? "global" : "project"} notes

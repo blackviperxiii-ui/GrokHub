@@ -27,9 +27,14 @@ pub struct Hit {
     pub body: String,
 }
 
+const LINKED: &str = "This MEMORY.md is a link to another file. GrokHub does not follow it.";
+
+/// A link is refused both ways, as `remember` refuses to write through one,
+/// so the editor never shows or replaces the file it points at.
 fn read(path: &Path) -> Result<String, String> {
-    match std::fs::metadata(path) {
+    match std::fs::symlink_metadata(path) {
         Err(_) => Ok(String::new()),
+        Ok(meta) if meta.file_type().is_symlink() => Err(LINKED.into()),
         Ok(meta) if meta.len() > NOTES_CAP => {
             Err(format!("{} is too large to edit here.", path.display()))
         }
@@ -80,6 +85,9 @@ pub fn save(
     let mut body = stored.trim_end().to_string();
     if !body.is_empty() {
         body.push('\n');
+    }
+    if body.len() as u64 > NOTES_CAP {
+        return Err("Notes are limited to 1 MB. Nothing was saved.".into());
     }
     std::fs::write(&path, body).map_err(|e| e.to_string())?;
     Ok((load(workspace)?, redacted))
@@ -206,6 +214,38 @@ mod tests {
         assert_eq!(
             load(&d.workspace).expect("reload").global,
             "added from chat\n"
+        );
+    }
+
+    #[test]
+    fn a_save_over_the_cap_writes_nothing() {
+        let d = dirs("cap");
+        let big = "a".repeat(NOTES_CAP as usize + 1);
+        assert_eq!(
+            save(&d.workspace, false, &big, "").err().as_deref(),
+            Some("Notes are limited to 1 MB. Nothing was saved.")
+        );
+        assert!(!grokhub_agent::workspace_memory_path(&d.workspace).exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_linked_memory_file_is_not_shown_or_replaced() {
+        let d = dirs("link");
+        let target = d.workspace.join("secrets.json");
+        std::fs::write(&target, "{\"token\":\"fake\"}").expect("target");
+        std::os::unix::fs::symlink(&target, grokhub_agent::workspace_memory_path(&d.workspace))
+            .expect("link");
+        assert_eq!(load(&d.workspace).err().as_deref(), Some(LINKED));
+        assert_eq!(
+            save(&d.workspace, false, "overwritten\n", "")
+                .err()
+                .as_deref(),
+            Some(LINKED)
+        );
+        assert_eq!(
+            std::fs::read_to_string(&target).expect("target"),
+            "{\"token\":\"fake\"}"
         );
     }
 
