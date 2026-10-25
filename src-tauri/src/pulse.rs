@@ -123,7 +123,14 @@ fn ledger() -> Vec<pc::LedgerEntry> {
     pc::parse_ledger(&text)
 }
 
+/// Appends one ledger line through a temp file and a rename, so a crash never
+/// leaves MEMORY.md half written. A line that would carry a secret is left
+/// out, as the cabin's `append_memory` does; the card action still goes on.
 fn note(title: &str, reason: LedgerReason, date: &str) -> Result<(), String> {
+    let line = pc::ledger_line(date, title, reason);
+    if !grokhub_core::is_plain_text(&line) {
+        return Ok(());
+    }
     let path = grokhub_agent::global_memory_path();
     if std::fs::symlink_metadata(&path).is_ok_and(|m| m.file_type().is_symlink()) {
         return Err("MEMORY.md is a link to another file. GrokHub does not follow it.".into());
@@ -135,12 +142,16 @@ fn note(title: &str, reason: LedgerReason, date: &str) -> Result<(), String> {
     if !body.is_empty() && !body.ends_with('\n') {
         body.push('\n');
     }
-    body.push_str(&pc::ledger_line(date, title, reason));
+    body.push_str(&line);
     body.push('\n');
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-    }
-    std::fs::write(&path, body).map_err(|e| e.to_string())
+    let parent = path.parent().ok_or("MEMORY.md has no folder.")?;
+    std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    let tmp = parent.join(format!("MEMORY.md.shell-{}.tmp", std::process::id()));
+    std::fs::write(&tmp, body).map_err(|e| e.to_string())?;
+    std::fs::rename(&tmp, &path).map_err(|e| {
+        let _ = std::fs::remove_file(&tmp);
+        e.to_string()
+    })
 }
 
 fn post(card: &UpdateCard, now_ms: u64) -> Post {
@@ -394,6 +405,35 @@ mod tests {
             memory(),
             "- [2026-10-25] pulse: accepted \"Tidy the workboard\" reason=accepted\n"
         );
+    }
+
+    #[test]
+    fn a_secret_in_a_title_never_reaches_the_notes() {
+        let mut cards = sample();
+        cards[1].title = "Rotated sk-abcdefghijklmnopqrstuv".into();
+        let d = dirs("secret", &cards);
+        std::fs::create_dir_all(grokhub_agent::global_memory_path().parent().unwrap())
+            .expect("memory dir");
+        std::fs::write(grokhub_agent::global_memory_path(), "- earlier note").expect("seed");
+        let page = act(&d.config, "post-1", Act::Dismiss, &day(), NOW).expect("dismiss");
+        assert!(page.feed.is_empty(), "{page:?}");
+        assert_eq!(memory(), "- earlier note");
+
+        act(&d.config, "idea-1", Act::Accept, &day(), NOW).expect("accept");
+        assert_eq!(
+            memory(),
+            "- earlier note\n- [2026-10-25] pulse: accepted \"Tidy the workboard\" reason=accepted\n"
+        );
+        let dir = grokhub_agent::global_memory_path()
+            .parent()
+            .unwrap()
+            .to_path_buf();
+        let left: Vec<_> = std::fs::read_dir(&dir)
+            .expect("dir")
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(left, vec!["MEMORY.md".to_string()], "no temp file is left");
     }
 
     #[test]

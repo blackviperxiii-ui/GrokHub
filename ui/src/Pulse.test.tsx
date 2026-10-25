@@ -118,6 +118,22 @@ describe("Pulse", () => {
     ).toBeInTheDocument();
   });
 
+  it("keeps the buttons off until the reload after a failed act lands", async () => {
+    let land: (page: PulsePage) => void = () => {};
+    api.getPulse
+      .mockResolvedValueOnce(PAGE)
+      .mockReturnValueOnce(new Promise<PulsePage>((resolve) => (land = resolve)));
+    api.pulseAct.mockRejectedValue("MEMORY.md is too large to add to. Nothing was changed.");
+    render(<Pulse onRun={vi.fn()} />);
+
+    await userEvent.click(await screen.findByRole("button", { name: "Ideas" }));
+    await userEvent.click(screen.getByRole("button", { name: "Run" }));
+    expect(await screen.findByRole("status")).toHaveTextContent("MEMORY.md is too large");
+    expect(screen.getByRole("button", { name: "Run" })).toBeDisabled();
+    land(PAGE);
+    await vi.waitFor(() => expect(screen.getByRole("button", { name: "Run" })).toBeEnabled());
+  });
+
   it("says where Snooze lands from the time of day", () => {
     expect(snoozedLine(new Date(2026, 9, 25, 7, 0))).toBe("Snoozed until 9 AM.");
     expect(snoozedLine(new Date(2026, 9, 25, 14, 30))).toBe("Snoozed until tomorrow 9 AM.");

@@ -31,8 +31,9 @@ export function Pulse({ onRun }: { onRun: (text: string) => void }) {
       return true;
     } catch (err) {
       setNote(String(err));
-      // The card may be gone; show what is left.
-      getPulse().then(setPage, () => {});
+      // The card may be gone; show what is left. Wait for it, so a later
+      // action can't be overwritten by this older page.
+      await getPulse().then(setPage, () => {});
       return false;
     } finally {
       setBusy(false);
