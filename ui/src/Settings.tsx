@@ -87,6 +87,8 @@ export function Settings({ caps }: { caps: Capabilities }) {
     return <section className="settings">{note ?? "Loading settings…"}</section>;
   }
 
+  if (caps.remote) return <RemoteSettings settings={settings} />;
+
   return (
     <section className="settings" aria-label="Settings">
       <form onSubmit={save}>
@@ -163,6 +165,30 @@ export function Settings({ caps }: { caps: Capabilities }) {
       </div>
       {note && <p className="note">{note}</p>}
       {caps.localAi && <LocalAi />}
+    </section>
+  );
+}
+
+export const REMOTE_NOTE =
+  "You're using GrokHub on your computer from this browser. Change settings and the API key there.";
+
+/** The web app shows the desktop's settings but can't change them. */
+function RemoteSettings({ settings }: { settings: Shape }) {
+  return (
+    <section className="settings" aria-label="Settings">
+      <p className="note">{REMOTE_NOTE}</p>
+      <dl>
+        <dt>Model</dt>
+        <dd>{settings.model}</dd>
+        <dt>Work folder</dt>
+        <dd>
+          <code>{settings.workspacePath}</code>
+        </dd>
+        <dt>Approvals</dt>
+        <dd>{APPROVALS[settings.approvals].label}</dd>
+        <dt>xAI API key</dt>
+        <dd>{settings.hasApiKey ? "Saved on your computer." : "Not set yet."}</dd>
+      </dl>
     </section>
   );
 }
