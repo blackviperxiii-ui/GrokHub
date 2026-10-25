@@ -113,3 +113,41 @@ export function removeAutomation(id: string): Promise<AutomationRow[]> {
 export function runAutomation(id: string): Promise<RunResult> {
   return invoke<RunResult>("run_automation", { id });
 }
+
+export interface MemoryNotes {
+  global: string;
+  workspace: string;
+  globalPath: string;
+  workspacePath: string;
+  /** The cabin's AMR store is on, so recall does not read these files. */
+  amr: boolean;
+}
+
+export interface MemoryHit {
+  scope: string;
+  body: string;
+}
+
+export function getMemory(): Promise<MemoryNotes> {
+  return invoke<MemoryNotes>("get_memory");
+}
+
+/** `base` is the text the editor started from; a file that changed since is not overwritten. */
+export function saveMemory(
+  global: boolean,
+  text: string,
+  base: string,
+): Promise<{ notes: MemoryNotes; redacted: boolean }> {
+  return invoke("save_memory", { global, text, base });
+}
+
+export function addMemory(
+  text: string,
+  global: boolean,
+): Promise<{ status: string; notes: MemoryNotes }> {
+  return invoke("add_memory", { text, global });
+}
+
+export function searchMemory(query: string): Promise<MemoryHit[]> {
+  return invoke<MemoryHit[]>("search_memory", { query });
+}
