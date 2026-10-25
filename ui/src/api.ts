@@ -198,3 +198,157 @@ export function signOutConnector(name: string): Promise<ConnectorsChanged> {
 export function disconnectConnector(name: string): Promise<ConnectorsChanged> {
   return invoke<ConnectorsChanged>("disconnect_connector", { name });
 }
+
+/** One Feed post: something that happened or was found. */
+export interface PulsePost {
+  id: string;
+  source: string;
+  title: string;
+  summary: string;
+  because: string;
+  /** "2h ago". */
+  ago: string;
+  /** The first source link, empty when there is none. */
+  link: string;
+  liked: boolean;
+}
+
+/** One Ideas row: something GrokHub could do next. */
+export interface PulseIdea {
+  id: string;
+  /** The bold "I can …" line. */
+  title: string;
+  summary: string;
+  /** Do, Automate, Learn or Watch. */
+  kind: string;
+  /** What Run puts in the chat box. */
+  action: string;
+}
+
+export interface PulsePage {
+  feed: PulsePost[];
+  /** An empty label is the unlabeled top group. */
+  ideas: { label: string; ideas: PulseIdea[] }[];
+}
+
+export type PulseAct = "dismiss" | "notThis" | "like" | "snooze" | "accept";
+
+/** Today's local date for the ledger line, and the time Snooze counts from. */
+export function localDay(now: Date = new Date()) {
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return {
+    date: `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`,
+    hour: now.getHours(),
+    minute: now.getMinutes(),
+  };
+}
+
+export function getPulse(): Promise<PulsePage> {
+  return invoke<PulsePage>("get_pulse");
+}
+
+export function pulseAct(id: string, act: PulseAct): Promise<PulsePage> {
+  return invoke<PulsePage>("pulse_act", { id, act, day: localDay() });
+}
+
+/** Settings → Local AI (src-tauri/src/local_ai.rs). */
+export type LocalMode = "auto" | "manual";
+
+export interface LocalCaps {
+  rampUp: number;
+  normal: number;
+  throttle: number;
+}
+
+export interface LocalManual {
+  /** "auto", "cuda", "rocm", "vulkan", "metal", "sycl" or "cpu". */
+  backend: string;
+  /** "auto", "on" or "off". */
+  draft: string;
+  ngl: number | null;
+  ctx: number | null;
+  threads: number | null;
+  /** "auto", "q8" or "q4". */
+  kv: string;
+  idleMinutes: number;
+  caps: LocalCaps;
+  neverUnload: boolean;
+  allowApps: string[];
+  denyApps: string[];
+}
+
+export interface LocalAiConfig {
+  mode: LocalMode;
+  pauseForGames: boolean;
+  useIdleTime: boolean;
+  throttleOnBattery: boolean;
+  manual: LocalManual;
+  /** A catalog id or a model file's path; empty for the tier default. */
+  localModel: { selected: string };
+  /** Model files whose notice was read. */
+  noticeSeen: string[];
+}
+
+export interface LocalModelRow {
+  id: string;
+  name: string;
+  size: string;
+  quant: string;
+  ctx: number;
+  tokS: string;
+  license: string;
+  badges: string[];
+  bucket: "recommended" | "maySlow" | "hidden";
+  reason: string;
+  preselected: boolean;
+  optional: boolean;
+}
+
+export interface LocalFileRow {
+  path: string;
+  name: string;
+  size: string;
+  source: string;
+  thirdParty: boolean;
+  abliterated: boolean;
+  needsNotice: boolean;
+}
+
+export interface LocalStatus {
+  tier: string;
+  model: string;
+  state: string;
+  reason: string;
+  tokS: string;
+  memory: string;
+}
+
+export interface LocalAiView {
+  config: LocalAiConfig;
+  status: LocalStatus;
+  picker: { models: LocalModelRow[]; onThisPc: LocalFileRow[]; selected: string };
+  /** What hardware detection couldn't see. */
+  limits: string[];
+  maxThreads: number;
+}
+
+/** Reads the hardware, so it can take a moment. */
+export function getLocalAi(): Promise<LocalAiView> {
+  return invoke<LocalAiView>("get_local_ai");
+}
+
+export function saveLocalAi(config: LocalAiConfig): Promise<LocalAiView> {
+  return invoke<LocalAiView>("save_local_ai", { config });
+}
+
+export function resetLocalAi(): Promise<LocalAiView> {
+  return invoke<LocalAiView>("reset_local_ai");
+}
+
+export function checkModelFile(path: string): Promise<LocalFileRow> {
+  return invoke<LocalFileRow>("check_model_file", { path });
+}
+
+export function runLocalSpeedTest(): Promise<string> {
+  return invoke<string>("run_local_speed_test");
+}

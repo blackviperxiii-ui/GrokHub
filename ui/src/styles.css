@@ -52,13 +52,15 @@ button:disabled {
 }
 
 button.quiet,
-.tabs button {
+.tabs button,
+.switch button {
   background: transparent;
   color: var(--text);
   border-color: var(--border);
 }
 
-.tabs button[aria-pressed="true"] {
+.tabs button[aria-pressed="true"],
+.switch button[aria-pressed="true"] {
   border-color: var(--accent);
 }
 
@@ -250,7 +252,8 @@ button.danger {
 
 .automations,
 .memory,
-.connectors {
+.connectors,
+.pulse {
   flex: 1;
   display: flex;
   flex-direction: column;
@@ -320,7 +323,8 @@ button.danger {
   margin: 0;
 }
 
-.connectors .rows {
+.connectors .rows,
+.pulse .rows {
   list-style: none;
   margin: 0;
   padding: 0;
@@ -329,7 +333,8 @@ button.danger {
   gap: 8px;
 }
 
-.card.connector {
+.card.connector,
+.card.post {
   max-width: none;
   flex-direction: column;
   flex-wrap: nowrap;
@@ -346,4 +351,146 @@ button.danger {
 .card.connector .card-health {
   color: var(--danger);
   margin: 0;
+}
+
+.switch {
+  display: flex;
+  gap: 4px;
+}
+
+.card-detail-line.plain {
+  font-family: inherit;
+  color: var(--text);
+}
+
+.idea-group h3 {
+  margin: 8px 0 4px;
+  font-size: 0.95em;
+  color: var(--muted);
+}
+
+/* Settings → Local AI */
+.local-ai {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: flex-start;
+  border-top: 1px solid var(--border);
+  padding-top: 16px;
+}
+
+.local-ai h3 {
+  font-size: 0.95rem;
+  margin: 8px 0 0;
+}
+
+.local-ai h4 {
+  font-size: 0.85rem;
+  margin: 4px 0;
+  color: var(--muted);
+}
+
+.local-ai ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.local-limits ul {
+  list-style: disc;
+  padding-left: 20px;
+}
+
+.local-mode {
+  display: flex;
+  gap: 8px;
+}
+
+.local-mode button[aria-pressed="true"] {
+  border-color: var(--accent);
+}
+
+.local-manual {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+}
+
+.local-model {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+}
+
+.local-model .check {
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.local-model-name {
+  font-weight: 600;
+}
+
+.local-model-meta,
+.local-model-reason {
+  color: var(--muted);
+  font-size: 0.9em;
+  overflow-wrap: anywhere;
+}
+
+.local-model.hidden {
+  opacity: 0.7;
+}
+
+.badge {
+  font-size: 0.8em;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0 8px;
+}
+
+.badge.warn {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+
+.local-file {
+  display: flex;
+  gap: 8px;
+  width: 100%;
+}
+
+.local-file input {
+  flex: 1;
+}
+
+.local-ai .notice {
+  border: 1px solid var(--danger);
+  border-radius: 8px;
+  padding: 8px 12px;
+  background: var(--panel);
+}
+
+.local-ai .notice p {
+  margin: 0 0 6px;
+}
+
+.local-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 8px;
+  width: 100%;
+}
+
+.local-grid select,
+.local-grid input {
+  width: 100%;
 }

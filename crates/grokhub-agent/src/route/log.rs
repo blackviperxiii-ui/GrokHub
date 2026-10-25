@@ -124,6 +124,12 @@ pub struct RouteRecord {
     pub goal: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub goal_reason: String,
+    /// An on-device step: the governor's level (`normal`, `throttle`,
+    /// `ramp_up`) and the installed model's hardware tier (`T1`…`T5`).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub gov_state: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub tier: String,
 }
 
 // `d` and `cost_usd` are finite (rounded rules and token math), so equality is total.

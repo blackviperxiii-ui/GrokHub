@@ -50,18 +50,22 @@ impl DraftArgs {
 
 /// Whether the drafter fits next to the planned launch: `Some(true)` on the
 /// GPU with the whole model, `Some(false)` in RAM for a CPU launch, `None`
-/// when there isn't room (a partly offloaded model has none to spare).
+/// when there isn't room (a partly offloaded model has none to spare). The
+/// drafter brings its own KV cache at the same context.
 pub fn fits(
     p: &LocalProfile,
     meta: &GgufMeta,
     a: &LaunchArgs,
     state: GovState,
-    drafter_mb: u64,
+    drafter: &GgufMeta,
 ) -> Option<bool> {
     let (gpu, ram) = autoconfig::budgets(p, a.backend, state);
     let model =
         meta.file_mb + autoconfig::kv_mb(meta, a.ctx, a.kv) + autoconfig::overhead_mb(a.ctx);
-    let need = model + drafter_mb + autoconfig::overhead_mb(a.ctx);
+    let need = model
+        + drafter.file_mb
+        + autoconfig::kv_mb(drafter, a.ctx, a.kv)
+        + autoconfig::overhead_mb(a.ctx);
     if gpu == 0 {
         return (need <= ram).then_some(false);
     }
@@ -118,10 +122,12 @@ fn candidate(model: &Path, meta: &GgufMeta, flags: &DraftFlags) -> Option<Candid
     let dir = drafters_dir(model);
     let file = model.file_name()?.to_str()?;
     if let Some(pair) = ld::pair_for_file(file) {
+        // An unreadable header can't pass the tokenizer and room checks.
         let path = dir.join(pair.drafter.file);
-        return path.is_file().then(|| Candidate {
+        let m = header(&path)?;
+        return Some(Candidate {
             kind: pair.kind,
-            meta: header(&path),
+            meta: Some(m),
             file: Some(path),
             name: pair.drafter.name.to_string(),
         });
@@ -257,7 +263,7 @@ pub fn plan(l: &Launch) -> Plan {
         None => (true, Some(args.ngl > 0)),
         Some(m) => (
             ld::same_tokenizer(meta.tokenizer.as_deref(), m.tokenizer.as_deref()),
-            fits(p, meta, args, state, m.file_mb),
+            fits(p, meta, args, state, m),
         ),
     };
     let verdict = match forced {
@@ -265,7 +271,8 @@ pub fn plan(l: &Launch) -> Plan {
         _ => ld::load_verdicts(tune_dir).get(&key).map(|v| v.keep),
     };
     let decision = ld::decide(Check {
-        level_ok: state != GovState::Throttle,
+        // The speed test runs whatever the level; it asked for the drafter.
+        level_ok: state != GovState::Throttle || forced == Some(true),
         engine_ok: flags.supports(c.kind),
         tokenizer_ok,
         fits: on_gpu.is_some(),
@@ -316,7 +323,12 @@ pub fn run_bench(config_dir: &Path) -> Option<String> {
     let paths = super::local_sidecar::resolve_paths(config_dir)?;
     let planned = autoconfig::draft_plan(&paths.binary, &paths.model)?;
     match planned.decision {
-        Decision::Off(r) if r != "the speed test found the draft model didn't help" => return None,
+        Decision::Off(r)
+            if r != "the speed test found the draft model didn't help"
+                && r != "the machine is busy, so the draft model is off" =>
+        {
+            return None
+        }
         _ => {}
     }
     let (key, name, dir) = (planned.key?, planned.name?, autoconfig::tune_dir()?);

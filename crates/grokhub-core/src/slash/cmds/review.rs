@@ -4,7 +4,7 @@ use crate::slash::registry::register_slash;
 use crate::slash::Slash;
 
 register_slash! {
-    /// `/why`, `/why models`, `/why table`; any other word parses to nothing.
+    /// `/why`, `/why models`, `/why table`, `/why local`; any other word parses to nothing.
     WHY {
         names: ["/why"],
         effect: Local,
@@ -16,6 +16,8 @@ register_slash! {
                 Some(Slash::WhyModels)
             } else if rest.eq_ignore_ascii_case("table") {
                 Some(Slash::WhyTable)
+            } else if rest.eq_ignore_ascii_case("local") {
+                Some(Slash::WhyLocal)
             } else {
                 None
             }

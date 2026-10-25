@@ -333,11 +333,20 @@ pub enum Retry {
     SmallerModel,
 }
 
-/// After the `attempt`th out-of-memory failure: 10% fewer GPU layers (for
-/// MoE, 10% more layers' experts in RAM), up to [`MAX_OOM_RETRIES`] times,
-/// then the next smaller model.
+/// After the `attempt`th out-of-memory failure: first the drafter goes,
+/// then 10% fewer GPU layers (for MoE, 10% more layers' experts in RAM), up
+/// to [`MAX_OOM_RETRIES`] times, then the next smaller model.
 pub fn after_oom(prev: &LaunchArgs, attempt: u8) -> Retry {
-    if attempt > MAX_OOM_RETRIES || prev.ngl == 0 {
+    if attempt > MAX_OOM_RETRIES {
+        return Retry::SmallerModel;
+    }
+    if prev.draft.is_some() {
+        return Retry::Again(LaunchArgs {
+            draft: None,
+            ..prev.clone()
+        });
+    }
+    if prev.ngl == 0 {
         return Retry::SmallerModel;
     }
     let blocks = prev.all_layers.saturating_sub(1);

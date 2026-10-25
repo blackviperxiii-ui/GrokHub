@@ -427,7 +427,13 @@ impl Decision {
 
     /// What a paused call returns.
     pub fn pause_msg(&self) -> &'static str {
-        self.budget_pause.unwrap_or(NO_ROUTE_MSG)
+        match self.budget_pause {
+            Some(m) => m,
+            None if self.route.rule_ids.iter().any(|r| r == "local:paused") => {
+                super::local::LOCAL_PAUSED_MSG
+            }
+            None => NO_ROUTE_MSG,
+        }
     }
 
     /// The effort to send: the router's for a listed class, the call's own otherwise.
@@ -701,7 +707,8 @@ pub fn decide(config_dir: &Path, call: &RouteCall<'_>, now_ms: u64) -> Decision 
     if let Some(ask) = &route.premium_ask {
         *PREMIUM_ASK.lock().unwrap_or_else(|e| e.into_inner()) = Some(ask.clone());
     }
-    if live && route.no_route {
+    // A governor pause lifts on its own; it isn't a model to wait for.
+    if live && route.no_route && !route.rule_ids.iter().any(|r| r == "local:paused") {
         let failed = reg
             .get(call.model)
             .map(|r| r.reason.clone())
@@ -857,6 +864,18 @@ pub fn route_record(
             .as_ref()
             .map(|g| g.reason.clone())
             .unwrap_or_default(),
+        gov_state: if decision.on_device() {
+            super::local_gov::level().label().to_string()
+        } else {
+            String::new()
+        },
+        tier: if decision.on_device() {
+            super::local::hw_tier(config_dir)
+                .unwrap_or_default()
+                .to_string()
+        } else {
+            String::new()
+        },
     }
 }
 
@@ -1092,7 +1111,7 @@ pub fn stream_routed(
     };
     let on_device = decision.on_device();
     let out = if on_device {
-        super::local::serve(class, &text)
+        super::local::serve(class, &text, cancel)
     } else if decision.on_provider() {
         // Not streamed: the whole answer arrives as one delta.
         let span_id = format!("{}:{now}", req.conversation_id);

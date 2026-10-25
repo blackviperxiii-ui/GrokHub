@@ -33,11 +33,12 @@ use std::sync::{Arc, Mutex, OnceLock};
 use regex::Regex;
 use serde_json::Value;
 
+use grokhub_core::local_governor::Level;
 use grokhub_core::model_registry::{CatalogSource, Listing, ModelMeta, Prices, SourceKind};
 
 use super::ladder::PREPARE_HARD;
 use super::policy::class_row;
-use crate::client::{ClientError, TurnOutput, Usage};
+use crate::client::{CancelToken, ClientError, TurnOutput, Usage};
 
 pub const PROVIDER_LOCAL: &str = "local";
 pub const LOCAL_PREFIX: &str = "local:";
@@ -91,11 +92,119 @@ pub fn switched_on() -> bool {
     ENABLED.load(Ordering::SeqCst)
 }
 
-/// The route is live: the toggle is on and a runtime is [`installed`].
-/// The governor's Unload pauses it.
-pub fn enabled() -> bool {
-    (ENABLED.load(Ordering::SeqCst) && installed() && !super::local_gov::paused()) || test_on()
+/// The route is live: the toggle is on, a runtime is [`installed`], and the
+/// governor isn't at Unload.
+pub fn available() -> bool {
+    LocalCapacity::now().available()
 }
+
+/// What the device can take right now, for [`super::Router::choose`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LocalCapacity {
+    /// The toggle is on and a runtime is installed (whatever the governor says).
+    pub ready: bool,
+    pub level: Level,
+}
+
+impl Default for LocalCapacity {
+    fn default() -> Self {
+        Self {
+            ready: false,
+            level: Level::Normal,
+        }
+    }
+}
+
+impl LocalCapacity {
+    pub fn now() -> Self {
+        Self {
+            ready: (ENABLED.load(Ordering::SeqCst) && installed()) || test_on(),
+            level: super::local_gov::level(),
+        }
+    }
+
+    pub fn available(self) -> bool {
+        self.ready && self.level != Level::Unload
+    }
+
+    /// Ready, but the governor paused it (a game, low battery, heat).
+    pub fn paused(self) -> bool {
+        self.ready && self.level == Level::Unload
+    }
+
+    /// Online background work goes local only in RampUp or Normal.
+    pub fn background_ok(self) -> bool {
+        matches!(self.level, Level::RampUp | Level::Normal)
+    }
+}
+
+/// The installed model's hardware tier (`T1`…`T5`), when it's a catalog model.
+pub fn hw_tier(config_dir: &std::path::Path) -> Option<&'static str> {
+    let paths = super::local_sidecar::resolve_paths(config_dir)?;
+    super::local_autoconfig::catalog_model_for(&paths.model).map(|m| m.tier)
+}
+
+/// `/why local`: whether the on-device model can take work, the governor's
+/// level and reason, the hardware tier, the heavy-step queue, and the log.
+pub fn why_local_text(config_dir: &std::path::Path) -> String {
+    let cap = LocalCapacity::now();
+    let gov = super::local_gov::level();
+    let state = if !switched_on() {
+        "off (Settings → Local AI)".to_string()
+    } else if !cap.ready {
+        "on, but no engine and model are installed".to_string()
+    } else if cap.paused() {
+        format!("{LOCAL_PAUSED_MSG} ({})", super::local_gov::reason())
+    } else {
+        "ready".to_string()
+    };
+    let takes = match gov {
+        Level::Unload => "nothing until the machine frees up",
+        Level::Throttle => "offline work and cloud outages only; background work goes to Grok",
+        Level::Normal => {
+            "background work, offline work and cloud outages; heavy steps wait for idle time"
+        }
+        Level::RampUp => "background work (heavy steps too), offline work and cloud outages",
+    };
+    [
+        format!("On-device model: {state}."),
+        format!(
+            "Governor: {} because {}. Local takes {takes}.",
+            gov.label(),
+            super::local_gov::reason()
+        ),
+        format!(
+            "Tier: {} on {}.",
+            live_tier(),
+            hw_tier(config_dir).unwrap_or("an unlisted model")
+        ),
+        format!(
+            "Heavy background steps waiting for idle time: {}.",
+            super::local_gov::queued()
+        ),
+        format!(
+            "Log: {} (this device only, 7 days, safe to delete).",
+            config_dir
+                .join("local")
+                .join(super::local_gov::LOG_FILE)
+                .display()
+        ),
+    ]
+    .join("\n")
+}
+
+/// The chip and pause message while the governor holds the local route.
+pub const LOCAL_PAUSED_MSG: &str = "Local paused: game or low power";
+
+/// A background step this long (over half the context cap) is heavy: it
+/// goes local only in RampUp and otherwise waits for it.
+pub fn heavy(class: &str, ctx_tokens: u64) -> bool {
+    let class = class_row(class).map(|r| r.class).unwrap_or(class.trim());
+    class.starts_with("background:") && ctx_tokens > ctx_cap() / 2
+}
+
+/// The longest a heavy background step waits for RampUp before it runs anyway.
+pub const HEAVY_WAIT: std::time::Duration = std::time::Duration::from_secs(15 * 60);
 
 /// Last `ensure_global` failure when production assets are present (cleared on success).
 pub fn bootstrap_error() -> Option<String> {
@@ -233,13 +342,17 @@ pub struct LocalGate {
     pub offline: bool,
     /// Last on-device answer failed a verify check (PR E): escalate to cloud when online.
     pub local_verify_failed: bool,
+    /// The governor's level and whether the runtime is there at all.
+    pub capacity: LocalCapacity,
 }
 
 impl LocalGate {
     /// The flag and the live tier as set now.
     pub fn now(sensitive: bool, cloud_grant: bool, hard_tool: bool) -> Self {
+        let capacity = LocalCapacity::now();
         Self {
-            enabled: enabled(),
+            enabled: capacity.available(),
+            capacity,
             tier: live_tier().into(),
             sensitive,
             cloud_grant,
@@ -275,6 +388,29 @@ pub fn eligible(gate: &LocalGate, class: &str, ctx_tokens: u64) -> bool {
 /// `id` may serve this step: the live tier, and [`eligible`].
 pub fn admits(gate: &LocalGate, id: &str, class: &str, ctx_tokens: u64) -> bool {
     is_local(id) && id.trim() == gate.tier && eligible(gate, class, ctx_tokens)
+}
+
+/// The class and context would go local if the governor weren't at Unload.
+pub fn eligible_if_running(gate: &LocalGate, class: &str, ctx_tokens: u64) -> bool {
+    let running = LocalGate {
+        enabled: gate.capacity.ready,
+        ..gate.clone()
+    };
+    eligible(&running, class, ctx_tokens)
+}
+
+/// Why online work that local could take goes to the cloud instead: the
+/// governor is throttling, or a heavy background step waits for RampUp.
+pub fn online_hold(gate: &LocalGate, class: &str, ctx_tokens: u64) -> Option<&'static str> {
+    if gate.offline || !eligible(gate, class, ctx_tokens) {
+        None
+    } else if !gate.capacity.background_ok() {
+        Some("local:throttled")
+    } else if heavy(class, ctx_tokens) && gate.capacity.level != Level::RampUp {
+        Some("local:heavy_waits")
+    } else {
+        None
+    }
 }
 
 /// Sensitive data with no cloud grant: the local route is the only route.
@@ -346,7 +482,7 @@ impl CatalogSource for LocalSource {
     }
 
     fn fetch(&self) -> Result<Listing, String> {
-        if !enabled() {
+        if !available() {
             return Err("the local model is off".into());
         }
         Ok(Listing::new(
@@ -384,7 +520,7 @@ pub trait LocalRuntime: Send + Sync {
 
 /// The installed runtime: test fake, else HTTP client to a loopback sidecar.
 pub fn runtime() -> Option<Arc<dyn LocalRuntime>> {
-    if !enabled() {
+    if !available() {
         return None;
     }
     if let Some(rt) = test_runtime() {
@@ -488,8 +624,28 @@ impl Drop for ForceOn {
 /// Labels the background classes ask the local model for.
 const CLASS_LABELS: &[&str] = &["routine", "needs_attention", "sensitive"];
 
-/// Answer one local call on the device. No network, no egress line.
-pub fn serve(class: &str, text: &str) -> Result<TurnOutput, ClientError> {
+/// Answer one local call on the device. No network, no egress line. A heavy
+/// background step first waits (up to [`HEAVY_WAIT`]) for RampUp; Stop ends the wait.
+pub fn serve(class: &str, text: &str, cancel: &CancelToken) -> Result<TurnOutput, ClientError> {
+    serve_within(class, text, HEAVY_WAIT, cancel)
+}
+
+pub(crate) fn serve_within(
+    class: &str,
+    text: &str,
+    heavy_wait: std::time::Duration,
+    cancel: &CancelToken,
+) -> Result<TurnOutput, ClientError> {
+    let tokens = (text.len() as u64).div_ceil(4);
+    if heavy(class, tokens) && super::local_gov::level() != Level::RampUp {
+        match super::local_gov::wait_for_ramp_up(heavy_wait, &|| cancel.is_cancelled()) {
+            None => return Err(ClientError::Cancelled),
+            Some(Level::Unload) => {
+                return Err(ClientError::Protocol(LOCAL_PAUSED_MSG.into()));
+            }
+            Some(_) => {}
+        }
+    }
     let Some(rt) = runtime() else {
         return Err(ClientError::Protocol(NO_RUNTIME_MSG.into()));
     };

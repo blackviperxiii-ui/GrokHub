@@ -55,6 +55,7 @@ pub(super) fn start(config_dir: PathBuf) {
                 super::local_probe::read_profile(&home),
                 config_dir.join("local"),
             );
+            local_gov::set_log_dir(config_dir.join("local"));
             sample_loop(&config_dir)
         });
 }

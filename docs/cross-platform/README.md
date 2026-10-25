@@ -221,5 +221,27 @@ approve, the cabin's three permission modes.
   connects with one tool, and checks the entry leaves `mcp.json` only after
   the question is answered.
 
-Next slices: Pulse, computer-use.
+**3f, Pulse.** A Pulse page shows the cabin's Feed and Ideas from the same
+`updates.json`, ranked by the same rules (`grokhub_core::pulse`), with the
+MEMORY.md ledger as input (`src-tauri/src/pulse.rs`).
+
+- Feed opens first: source, time, headline, summary, the source link as
+  text (the shell has no browser opener yet), and Like, Snooze, Not this,
+  Dismiss.
+- Ideas groups rows under the cabin's category headers. Run notes the idea
+  as accepted and puts its action in the chat box; nothing is sent until the
+  person sends it, so the chat's approvals still apply.
+- Dismiss, Not this, Like and Accept write the cabin's one-line ledger entry
+  to the global MEMORY.md, so the next ranking learns from them. Snooze hides
+  a card until the next 9 AM local.
+- Not yet: generating new ideas, Feed instructions, Undo on done-for-you
+  posts, and source images. The cabin still makes the cards. A dismissed
+  idea is not added to the cabin's turned-down list (that lives in its
+  `config.json`, which the shell does not write), so the cabin's next idea
+  pass can offer a reworded copy.
+- Rust tests cover the split, each act, the ledger lines and snooze. The
+  smoke test writes a post and an idea, checks Not this writes the ledger
+  line, and checks Run fills the chat box without a model call.
+
+Next slice: computer-use.
 
