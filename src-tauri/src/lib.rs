@@ -6,6 +6,7 @@
 
 pub mod agent;
 pub mod automations;
+pub mod connectors;
 pub mod credential;
 pub mod memory;
 pub mod settings;
@@ -336,6 +337,57 @@ fn search_memory(state: State<'_, ShellState>, query: String) -> Result<Vec<memo
     memory::search(&workspace(&state), &query)
 }
 
+/// Every connector call can wait on a server's slot while chat or a check
+/// holds it for up to the startup or tool timeout, so all of them run off
+/// the main thread.
+async fn off_main<T: Send + 'static>(
+    job: impl FnOnce() -> T + Send + 'static,
+) -> Result<T, String> {
+    tauri::async_runtime::spawn_blocking(job)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn list_connectors(state: State<'_, ShellState>) -> Result<Vec<connectors::Row>, String> {
+    let workspace = workspace(&state);
+    off_main(move || connectors::list(&workspace)).await
+}
+
+#[tauri::command]
+async fn check_connectors(state: State<'_, ShellState>) -> Result<Vec<connectors::Row>, String> {
+    let workspace = workspace(&state);
+    off_main(move || connectors::check(&workspace)).await
+}
+
+#[tauri::command]
+async fn restart_connector(
+    state: State<'_, ShellState>,
+    name: String,
+) -> Result<connectors::Changed, String> {
+    let workspace = workspace(&state);
+    off_main(move || connectors::restart(&workspace, &name)).await
+}
+
+#[tauri::command]
+async fn sign_out_connector(
+    state: State<'_, ShellState>,
+    name: String,
+) -> Result<connectors::Changed, String> {
+    let workspace = workspace(&state);
+    off_main(move || connectors::sign_out(&workspace, &name)).await
+}
+
+/// The page asks "Disconnect {name}?" first.
+#[tauri::command]
+async fn disconnect_connector(
+    state: State<'_, ShellState>,
+    name: String,
+) -> Result<connectors::Changed, String> {
+    let workspace = workspace(&state);
+    off_main(move || connectors::disconnect(&workspace, &name)).await?
+}
+
 fn show_main(app: &AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.unminimize();
@@ -480,7 +532,12 @@ pub fn run() {
             get_memory,
             save_memory,
             add_memory,
-            search_memory
+            search_memory,
+            list_connectors,
+            check_connectors,
+            restart_connector,
+            sign_out_connector,
+            disconnect_connector
         ])
         .run(tauri::generate_context!());
     if let Err(err) = built {

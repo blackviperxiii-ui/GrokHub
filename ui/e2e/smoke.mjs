@@ -14,7 +14,8 @@ import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 const REPLY = "Wrote the note for the smoke test";
 const PROMPT = "write a note from the smoke test";
@@ -198,6 +199,43 @@ async function memory(s, workspace) {
   console.log(`search found: ${JSON.stringify(hit)}`);
 }
 
+// Connectors: an mcp.json entry for the fake stdio server shows as not
+// checked, connects with its one tool on Check all, and leaves mcp.json only
+// after the Disconnect question is answered.
+async function connectors(s, config) {
+  const script = join(dirname(fileURLToPath(import.meta.url)), "fake-mcp.mjs");
+  const mcpFile = join(config, "mcp.json");
+  writeFileSync(
+    mcpFile,
+    JSON.stringify({ mcpServers: { box: { command: process.execPath, args: [script] } } }),
+  );
+  await click(s, "nav.tabs button:nth-child(4)");
+  await waitFor("the connector row", async () => {
+    const t = await textOf(s, ".card.connector .card-status");
+    return t === "Not checked" ? t : null;
+  });
+  await click(s, ".connectors > .card-buttons button");
+  const status = await waitFor("the connected row", async () => {
+    const t = await textOf(s, ".card.connector .card-status");
+    return t === "Connected · 1 tool" ? t : null;
+  });
+  console.log(`connector checked: ${JSON.stringify(status)}`);
+
+  await click(s, ".card.connector button.quiet.danger");
+  await waitFor("the disconnect question", () => find(s, ".card.connector [role='group']"));
+  if (!readFileSync(mcpFile, "utf8").includes("fake-mcp.mjs")) {
+    throw new Error("the entry left mcp.json before the question was answered");
+  }
+  await click(s, ".card.connector [role='group'] button.danger");
+  await waitFor("the disconnected status", async () => {
+    const t = await textOf(s, ".connectors p.status");
+    return t === "Disconnected box" ? t : null;
+  });
+  const saved = readFileSync(mcpFile, "utf8");
+  if (saved.includes("fake-mcp.mjs")) throw new Error(`mcp.json still has box: ${saved}`);
+  console.log("connector disconnected after the OK");
+}
+
 async function main() {
   const mock = await startMock();
   const config = mkdtempSync(join(tmpdir(), "grokhub-shell-smoke-"));
@@ -300,6 +338,7 @@ async function main() {
 
     await automations(s, config);
     await memory(s, workspace);
+    await connectors(s, config);
     console.log("smoke ok");
   } catch (err) {
     // What the window and the mock saw, for a failed CI run.

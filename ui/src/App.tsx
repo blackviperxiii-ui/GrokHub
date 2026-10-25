@@ -1,10 +1,11 @@
 import { useState } from "react";
 import { Automations } from "./Automations";
 import { Chat } from "./Chat";
+import { Connectors } from "./Connectors";
 import { Memory } from "./Memory";
 import { Settings } from "./Settings";
 
-type View = "chat" | "automations" | "memory" | "settings";
+type View = "chat" | "automations" | "memory" | "connectors" | "settings";
 
 export function App() {
   const [view, setView] = useState<View>("chat");
@@ -26,6 +27,13 @@ export function App() {
         </button>
         <button
           type="button"
+          aria-pressed={view === "connectors"}
+          onClick={() => setView("connectors")}
+        >
+          Connectors
+        </button>
+        <button
+          type="button"
           aria-pressed={view === "settings"}
           onClick={() => setView("settings")}
         >
@@ -41,6 +49,7 @@ export function App() {
         <Automations active={view === "automations"} />
       </div>
       {view === "memory" && <Memory />}
+      {view === "connectors" && <Connectors />}
       {view === "settings" && <Settings />}
     </div>
   );

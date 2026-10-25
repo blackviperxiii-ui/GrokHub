@@ -1,0 +1,1 @@
+- Cross-platform recode, Phase 3e: the Tauri shell has a Connectors page for the MCP servers in `mcp.json`. It checks them, reconnects one, signs one out, and disconnects one after you confirm. Signing in and adding connectors stay in the cabin for now.
