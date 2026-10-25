@@ -73,7 +73,12 @@ export function App() {
       {/* Chat and Automations stay mounted so a reply or a Run now in flight
           is not lost when another tab opens. */}
       <div hidden={view !== "chat"}>
-        <Chat onOpenSettings={() => setView("settings")} prefill={prefill} />
+        <Chat
+          onOpenSettings={() => setView("settings")}
+          prefill={prefill}
+          active={view === "chat"}
+          remote={Boolean(caps.remote)}
+        />
       </div>
       <div hidden={view !== "automations"}>
         <Automations active={view === "automations"} />
