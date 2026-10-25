@@ -167,6 +167,26 @@ app shows in both.
   refused. vitest covers the page. The smoke test adds a job through the UI,
   checks `automations.json`, runs it and waits for the reply.
 
-Next slices: Pulse, memory, MCP, computer-use, and the Auto and Always
-permission modes.
+**3c, Memory.** A Memory page shows and edits the same `MEMORY.md` files the
+cabin and the agent loop read (`src-tauri/src/memory.rs`): global notes in the
+config folder's `memory/MEMORY.md`, project notes in the work folder's
+`MEMORY.md`.
+
+- Remember adds one line the way `/remember` does; Global files it in the
+  global notes. Each file can also be edited and saved whole.
+  A save sends the text the editor started from; if the file changed since
+  (chat remembered something), nothing is written and the page reloads.
+- Secrets are redacted before anything is written, and the page says when that
+  happened. Files over 1 MB or not plain text are refused.
+- Search runs `grokhub_agent::search_memory`, the same index and scope recall
+  uses: this work folder's notes and the global notes, never another folder's.
+- When the cabin's AMR store is on, the page says recall does not read these
+  files.
+- Tests: Rust tests for add, edit with a redacted secret, a blank note, and a
+  search that keeps other work folders out. vitest covers the page. The smoke
+  test remembers a line through the UI, checks `MEMORY.md`, and finds it with
+  search.
+
+Next slices: Pulse, MCP, computer-use, and the Auto and Always permission
+modes.
 

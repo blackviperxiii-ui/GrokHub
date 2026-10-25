@@ -649,6 +649,16 @@ pub fn recall(query: &str, now: i64, paths: &[String]) -> Result<Vec<Hit>, Strin
     Ok(hits)
 }
 
+/// Search the notes one workspace may recall from (global, this workspace's
+/// `MEMORY.md`, its flush file), best first. Stale files are reindexed first.
+pub fn search(workspace: &Path, query: &str) -> Result<Vec<Hit>, String> {
+    if !memory_files_present(workspace) {
+        return Ok(Vec::new());
+    }
+    rebuild_if_stale(workspace)?;
+    recall(query, now_secs(), &scope_paths(workspace))
+}
+
 pub fn global_memory_path() -> PathBuf {
     crate::perm::config_dir().join("memory").join("MEMORY.md")
 }
@@ -1201,6 +1211,45 @@ mod tests {
             ..Default::default()
         })
         }
+    }
+
+    #[test]
+    fn search_finds_notes_from_this_workspace_and_global_only() {
+        let (cfg, ws, _guard) = temp_pair("search");
+        let other = cfg.join("other-ws");
+        fs::create_dir_all(&other).unwrap();
+        remember(&ws, "the harbor gate code lives in the blue binder").unwrap();
+        remember(&ws, "global: harbor tours start at noon").unwrap();
+        remember(&other, "harbor parking is on level three").unwrap();
+        let mut bodies: Vec<String> = search(&ws, "harbor")
+            .unwrap()
+            .into_iter()
+            .map(|hit| format!("{}: {}", hit.scope, hit.body))
+            .collect();
+        bodies.sort();
+        assert_eq!(
+            bodies,
+            vec![
+                "global: harbor tours start at noon".to_string(),
+                "workspace: the harbor gate code lives in the blue binder".to_string(),
+            ]
+        );
+        // A hand edit is picked up without a restart.
+        fs::write(workspace_memory_path(&ws), "harbor lights stay on\n").unwrap();
+        let hits = search(&ws, "lights").unwrap();
+        assert_eq!(
+            hits.iter().map(|h| h.body.as_str()).collect::<Vec<_>>(),
+            vec!["harbor lights stay on"]
+        );
+        // Another folder still sees the global notes, never this one's.
+        let elsewhere = search(&cfg.join("empty-ws"), "harbor").unwrap();
+        assert_eq!(
+            elsewhere
+                .iter()
+                .map(|h| h.body.as_str())
+                .collect::<Vec<_>>(),
+            vec!["harbor tours start at noon"]
+        );
     }
 
     #[test]

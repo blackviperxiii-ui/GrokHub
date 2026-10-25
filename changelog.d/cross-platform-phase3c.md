@@ -1,0 +1,1 @@
+- Cross-platform recode, Phase 3c: the Tauri shell has a Memory page. It shows and edits the global and project `MEMORY.md` notes the cabin uses, adds a line like `/remember`, and searches what chat recall would find. Secrets are redacted before anything is saved.

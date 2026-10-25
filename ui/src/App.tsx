@@ -1,9 +1,10 @@
 import { useState } from "react";
 import { Automations } from "./Automations";
 import { Chat } from "./Chat";
+import { Memory } from "./Memory";
 import { Settings } from "./Settings";
 
-type View = "chat" | "automations" | "settings";
+type View = "chat" | "automations" | "memory" | "settings";
 
 export function App() {
   const [view, setView] = useState<View>("chat");
@@ -19,6 +20,9 @@ export function App() {
           onClick={() => setView("automations")}
         >
           Automations
+        </button>
+        <button type="button" aria-pressed={view === "memory"} onClick={() => setView("memory")}>
+          Memory
         </button>
         <button
           type="button"
@@ -36,6 +40,7 @@ export function App() {
       <div hidden={view !== "automations"}>
         <Automations active={view === "automations"} />
       </div>
+      {view === "memory" && <Memory />}
       {view === "settings" && <Settings />}
     </div>
   );
