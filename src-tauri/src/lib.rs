@@ -7,6 +7,7 @@
 pub mod agent;
 pub mod automations;
 pub mod credential;
+pub mod memory;
 pub mod settings;
 
 use std::collections::HashMap;
@@ -277,6 +278,59 @@ async fn run_automation(
     .map_err(|e| e.to_string())?
 }
 
+fn workspace(state: &ShellState) -> PathBuf {
+    agent::workspace_for(&current(state).workspace)
+}
+
+#[tauri::command]
+fn get_memory(state: State<'_, ShellState>) -> Result<memory::Notes, String> {
+    memory::load(&workspace(&state))
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MemorySaved {
+    notes: memory::Notes,
+    redacted: bool,
+}
+
+#[tauri::command]
+fn save_memory(
+    state: State<'_, ShellState>,
+    global: bool,
+    text: String,
+    base: String,
+) -> Result<MemorySaved, String> {
+    let (notes, redacted) = memory::save(&workspace(&state), global, &text, &base)?;
+    Ok(MemorySaved { notes, redacted })
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MemoryAdded {
+    status: String,
+    notes: memory::Notes,
+}
+
+#[tauri::command]
+fn add_memory(
+    state: State<'_, ShellState>,
+    text: String,
+    global: bool,
+) -> Result<MemoryAdded, String> {
+    let workspace = workspace(&state);
+    let status = memory::add(&workspace, &text, global)?;
+    Ok(MemoryAdded {
+        status,
+        notes: memory::load(&workspace)?,
+    })
+}
+
+#[tauri::command]
+fn search_memory(state: State<'_, ShellState>, query: String) -> Result<Vec<memory::Hit>, String> {
+    memory::search(&workspace(&state), &query)
+}
+
 fn show_main(app: &AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.unminimize();
@@ -417,7 +471,11 @@ pub fn run() {
             add_automation,
             set_automation_enabled,
             remove_automation,
-            run_automation
+            run_automation,
+            get_memory,
+            save_memory,
+            add_memory,
+            search_memory
         ])
         .run(tauri::generate_context!());
     if let Err(err) = built {
