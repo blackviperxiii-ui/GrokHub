@@ -9,6 +9,7 @@ import {
   type Settings as Shape,
 } from "./api";
 import { LocalAi } from "./LocalAi";
+import { SECTION_LABELS, sections, type Section } from "./sections";
 import { WebAccess } from "./WebAccess";
 
 const APPROVALS: Record<Approvals, { label: string; note: string }> = {
@@ -26,31 +27,17 @@ const APPROVALS: Record<Approvals, { label: string; note: string }> = {
   },
 };
 
-type Section = "general" | "account" | "localAi" | "webAccess" | "about";
-
-const SECTION_LABELS: Record<Section, string> = {
-  general: "General",
-  account: "Account",
-  localAi: "Local AI",
-  webAccess: "Web access",
-  about: "About",
-};
-
-/** The sections this platform has, in nav order. */
-export function sections(caps: Capabilities): Section[] {
-  return [
-    "general",
-    "account",
-    ...(caps.localAi ? (["localAi"] as const) : []),
-    ...(caps.webAccess ? (["webAccess"] as const) : []),
-    "about",
-  ];
-}
-
 export const DESKTOP_NOTE =
   "Grok can see your screen, click and type. Deleting, sending, paying and credentials always wait for your OK.";
 
-export function Settings({ caps }: { caps: Capabilities }) {
+/** `goTo`: a section the command palette picked. A new `n` opens it. */
+export function Settings({
+  caps,
+  goTo,
+}: {
+  caps: Capabilities;
+  goTo?: { section: Section; n: number };
+}) {
   const [settings, setSettings] = useState<Shape | null>(null);
   const [model, setModel] = useState("");
   const [closeToTray, setCloseToTray] = useState(true);
@@ -59,7 +46,14 @@ export function Settings({ caps }: { caps: Capabilities }) {
   const [desktopControl, setDesktopControl] = useState(false);
   const [key, setKey] = useState("");
   const [note, setNote] = useState<string | null>(null);
-  const [section, setSection] = useState<Section>("general");
+  const [section, setSection] = useState<Section>(goTo?.section ?? "general");
+
+  useEffect(() => {
+    if (goTo) {
+      setSection(goTo.section);
+      setNote(null);
+    }
+  }, [goTo]);
 
   function show(next: Shape) {
     setSettings(next);

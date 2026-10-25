@@ -22,7 +22,7 @@ vi.mock("./api", () => ({
   },
 }));
 
-import { applyEvent, Chat, type Item } from "./Chat";
+import { applyEvent, Chat, MISSION_BUSY, type Item } from "./Chat";
 
 /** Holds sendChat open until `finish` is called, like a turn in flight. */
 function holdTurn() {
@@ -62,6 +62,44 @@ describe("Chat", () => {
     rerender(<Chat onOpenSettings={() => {}} prefill={{ text: "check the build", n: 2 }} />);
     expect(box).toHaveValue("check the build");
     expect(api.sendChat).not.toHaveBeenCalled();
+  });
+
+  it("a mission prefill moves to its chat once, then stays there", async () => {
+    api.sendChat.mockResolvedValue("end_turn");
+    const { rerender } = render(<Chat onOpenSettings={() => {}} />);
+    const first = await startTurn("hello");
+    await waitFor(() => expect(screen.getByLabelText("Message")).toBeEnabled());
+
+    const mission = { text: "Mission from my decision journal: Q", n: 1, conversationId: "shell-m1" };
+    rerender(<Chat onOpenSettings={() => {}} prefill={mission} />);
+    expect(api.closeChat).toHaveBeenCalledWith(first);
+    expect(screen.queryByText("hello")).toBeNull();
+    expect(screen.getByLabelText("Message")).toHaveValue("Mission from my decision journal: Q");
+
+    await userEvent.type(screen.getByLabelText("Message"), "{Enter}");
+    await waitFor(() =>
+      expect(api.sendChat).toHaveBeenLastCalledWith("shell-m1", "Mission from my decision journal: Q"),
+    );
+
+    rerender(<Chat onOpenSettings={() => {}} prefill={{ ...mission, text: "again", n: 2 }} />);
+    expect(api.closeChat).toHaveBeenCalledTimes(1);
+    expect(screen.getByText("Mission from my decision journal: Q")).toHaveAttribute("data-role", "user");
+    expect(screen.getByLabelText("Message")).toHaveValue("again");
+  });
+
+  it("a mission prefill waits for a running reply", async () => {
+    const finish = holdTurn();
+    const { rerender } = render(<Chat onOpenSettings={() => {}} />);
+    const id = await startTurn("hello");
+    rerender(
+      <Chat onOpenSettings={() => {}} prefill={{ text: "Mission", n: 1, conversationId: "shell-m1" }} />,
+    );
+    expect(screen.getByText(MISSION_BUSY)).toBeVisible();
+    expect(screen.getByLabelText("Message")).toHaveValue("");
+    expect(api.closeChat).not.toHaveBeenCalled();
+    expect(screen.getByText("hello")).toBeVisible();
+    finish();
+    await waitFor(() => expect(api.sendChat).toHaveBeenCalledWith(id, "hello"));
   });
 
   it("sends the text and streams its own conversation's reply", async () => {
