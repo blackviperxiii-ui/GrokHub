@@ -114,7 +114,7 @@ pub fn decide_unasked(name: &str, args: &serde_json::Value, access: AccessMode) 
     if !access.allows_computer() {
         return GateOutcome::Refuse {
             reason: format!(
-                "Access is {} — Grok Build's own computer use ran with desktop control off",
+                "Access is {} — the agent's own computer use ran with desktop control off",
                 access.label()
             ),
         };
@@ -205,7 +205,9 @@ mod tests {
         assert_eq!(
             decide_unasked("computer_screenshot", &json!({}), AccessMode::Readonly),
             GateOutcome::Refuse {
-                reason: "Access is Readonly — Grok Build's own computer use ran with desktop control off".into()
+                reason:
+                    "Access is Readonly — the agent's own computer use ran with desktop control off"
+                        .into()
             }
         );
         assert_eq!(
