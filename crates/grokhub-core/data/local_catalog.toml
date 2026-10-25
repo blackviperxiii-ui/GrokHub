@@ -9,6 +9,10 @@
 # that in RAM + VRAM the model is hidden. `tok_s` is a rough Q4_K_M generation
 # speed from public llama.cpp benchmarks; the speed test replaces it.
 #
+# `drafter` pairs a model with a speculative-decoding draft model
+# (`local_draft.rs`): it is only used when the tokenizers hash the same, the
+# engine has the flags, both fit, and the speed test finds it faster.
+#
 # Gemma 4 comes from lmstudio-community's straight Q4_K_M quants of Google's
 # weights (ggml-org publishes Q4_0 only). Community fine-tunes and abliterated
 # builds are never listed here.
@@ -28,6 +32,8 @@ route = "local:small"
 ctx_default = 32_768
 run_mb = 19_800
 needs_avx2 = true
+# Speculative decoding with E2B (same family; the tokenizer gate checks it).
+drafter = "gemma-4-e2b-it-q4_k_m"
 min_budget = { gpu = 20_480, unified = 40_960 }
 tok_s = { gpu = 35, unified = 25, cpu = 2 }
 
@@ -71,6 +77,8 @@ run_mb = 17_400
 needs_avx2 = true
 # Mixture of experts (about 4B active): on a 16 GB GPU the experts that don't
 # fit run from RAM and it stays fast.
+# Speculative decoding with E2B (same family; the tokenizer gate checks it).
+drafter = "gemma-4-e2b-it-q4_k_m"
 min_budget = { gpu = 15_360, unified = 20_480 }
 tok_s = { gpu = 60, unified = 50, cpu = 6 }
 
@@ -89,6 +97,8 @@ route = "local:small"
 ctx_default = 16_384
 run_mb = 8_400
 needs_avx2 = true
+# Speculative decoding with E2B (same family; the tokenizer gate checks it).
+drafter = "gemma-4-e2b-it-q4_k_m"
 min_budget = { gpu = 10_240, unified = 14_336 }
 tok_s = { gpu = 35, unified = 20, cpu = 3 }
 
@@ -107,6 +117,8 @@ route = "local:small"
 ctx_default = 8_192
 run_mb = 5_900
 needs_avx2 = true
+# Speculative decoding with E2B (same family; the tokenizer gate checks it).
+drafter = "gemma-4-e2b-it-q4_k_m"
 min_budget = { gpu = 6_144, unified = 8_192, cpu = 6_144 }
 tok_s = { gpu = 40, unified = 30, cpu = 5 }
 

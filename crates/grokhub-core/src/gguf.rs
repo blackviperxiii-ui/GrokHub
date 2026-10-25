@@ -1,11 +1,14 @@
 //! Reads the shape of a GGUF model from its header: architecture, layer
 //! count, attention heads, context length and experts. The auto-config sizes
 //! weights, KV cache and offload from this. Only the key/value section is
-//! read; tensor data is never touched.
+//! read; tensor data is never touched. The tokenizer's vocabulary is hashed
+//! so a draft model is only paired with a model that tokenizes the same.
 
 use std::fs::File;
 use std::io::{BufReader, Read};
 use std::path::Path;
+
+use sha2::{Digest, Sha256};
 
 /// What the auto-config needs from a GGUF header.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -22,6 +25,11 @@ pub struct GgufMeta {
     /// Zero for a dense model.
     pub expert_count: u32,
     pub file_mb: u64,
+    /// SHA-256 of `tokenizer.ggml.model` and every `tokenizer.ggml.tokens`
+    /// entry; `None` when the file carries no vocabulary.
+    pub tokenizer: Option<String>,
+    /// Multi-token-prediction layers (`{arch}.nextn_predict_layers`).
+    pub nextn_layers: u32,
 }
 
 impl GgufMeta {
@@ -115,16 +123,28 @@ fn int_of(t: u32, r: &mut impl Read) -> Result<Option<u64>, String> {
     Ok(matches!(t, 0..=5 | 10 | 11).then_some(v))
 }
 
-fn value(t: u32, r: &mut impl Read) -> Result<Value, String> {
+/// `tokens` hashes each item of a string array instead of skipping it.
+fn value(t: u32, r: &mut impl Read, tokens: Option<&mut Sha256>) -> Result<Value, String> {
     match t {
         8 => Ok(Value::Text(string(r)?)),
         9 => {
             let item = u32_le(r)?;
             let len = u64_le(r)?;
             if item == 8 {
-                for _ in 0..len {
-                    let n = u64_le(r)?;
-                    skip(r, n)?;
+                match tokens {
+                    Some(h) => {
+                        for _ in 0..len {
+                            let s = string(r)?;
+                            h.update((s.len() as u64).to_le_bytes());
+                            h.update(s.as_bytes());
+                        }
+                    }
+                    None => {
+                        for _ in 0..len {
+                            let n = u64_le(r)?;
+                            skip(r, n)?;
+                        }
+                    }
                 }
                 return Ok(Value::Other);
             }
@@ -161,15 +181,23 @@ pub fn parse_meta(r: &mut impl Read, file_bytes: u64) -> Result<GgufMeta, String
     }
     let mut ints = Vec::new();
     let mut arch = String::new();
+    let mut vocab_model = String::new();
+    let mut vocab: Option<Sha256> = None;
     for _ in 0..kv {
         let key = string(r)?;
         let t = u32_le(r)?;
-        match value(t, r)? {
+        let sink = (key == "tokenizer.ggml.tokens").then(|| vocab.insert(Sha256::new()));
+        match value(t, r, sink)? {
             Value::Text(s) if key == "general.architecture" => arch = s,
+            Value::Text(s) if key == "tokenizer.ggml.model" => vocab_model = s,
             Value::Int(v) => ints.push((key, v)),
             _ => {}
         }
     }
+    let tokenizer = vocab.map(|h| {
+        let tokens = hex::encode(h.finalize());
+        hex::encode(Sha256::digest(format!("{vocab_model}\0{tokens}")))
+    });
     let get = |suffix: &str| -> u32 {
         let key = format!("{arch}.{suffix}");
         ints.iter()
@@ -189,6 +217,8 @@ pub fn parse_meta(r: &mut impl Read, file_bytes: u64) -> Result<GgufMeta, String
         value_length: get("attention.value_length"),
         expert_count: get("expert_count"),
         file_mb: file_bytes / (1_024 * 1_024),
+        tokenizer,
+        nextn_layers: get("nextn_predict_layers"),
         arch,
     })
 }
@@ -297,7 +327,14 @@ mod tests {
                 value_length: 256,
                 expert_count: 0,
                 file_mb: 7_039,
+                tokenizer: meta.tokenizer.clone(),
+                nextn_layers: 0,
             }
+        );
+        assert_eq!(
+            meta.tokenizer.as_deref().map(str::len),
+            Some(64),
+            "a vocabulary gives a SHA-256"
         );
         assert!(!meta.is_moe());
         assert_eq!(meta.kv_width(), 16 * 512);
@@ -315,6 +352,43 @@ mod tests {
         let meta = parse_meta(&mut h.bytes().as_slice(), 0).unwrap();
         assert!(meta.is_moe());
         assert_eq!(meta.kv_width(), 4 * (64 + 64));
+    }
+
+    #[test]
+    fn the_tokenizer_hash_matches_only_the_same_vocabulary() {
+        let with = |model: &str, tokens: &[&str]| {
+            let h = Header::new()
+                .text("general.architecture", "gemma4")
+                .text("tokenizer.ggml.model", model)
+                .text_array("tokenizer.ggml.tokens", tokens)
+                .u32("gemma4.nextn_predict_layers", 1);
+            parse_meta(&mut h.bytes().as_slice(), 0).unwrap()
+        };
+        let big = with("gemma4", &["<pad>", "<eos>", "hello", "world"]);
+        let small = with("gemma4", &["<pad>", "<eos>", "hello", "world"]);
+        assert_eq!(big.nextn_layers, 1);
+        assert!(big.tokenizer.is_some());
+        assert_eq!(big.tokenizer, small.tokenizer);
+        assert_ne!(
+            big.tokenizer,
+            with("gemma4", &["<pad>", "<eos>", "hello", "world!"]).tokenizer
+        );
+        assert_ne!(
+            big.tokenizer,
+            with("llama", &["<pad>", "<eos>", "hello", "world"]).tokenizer
+        );
+        // Splitting differently is a different vocabulary.
+        assert_ne!(
+            big.tokenizer,
+            with("gemma4", &["<pad>", "<eos>", "helloworld"]).tokenizer
+        );
+        let none = Header::new().text("general.architecture", "llama");
+        assert_eq!(
+            parse_meta(&mut none.bytes().as_slice(), 0)
+                .unwrap()
+                .tokenizer,
+            None
+        );
     }
 
     #[test]
