@@ -57,6 +57,14 @@ function mockReply(callNumber, body) {
     if (!body.includes("smoke-desk")) return toolCall("smoke-desk", "type", { text: DESK_TEXT });
     return textReply(DESK_REPLY);
   }
+  // Checked after the desktop prompt, whose body carries this turn as history.
+  if (body.includes(PLAN_PROMPT)) {
+    if (body.includes("smoke-plan-exit")) return textReply(PLAN_REPLY);
+    if (body.includes("smoke-plan-write")) {
+      return toolCall("smoke-plan-exit", "exit_plan_mode", { plan: PLAN_TEXT });
+    }
+    return toolCall("smoke-plan-write", "write", { path: "plan-note.txt", content: "no" });
+  }
   if (callNumber === 1) return toolCall("smoke-write", "write", { path: NOTE, content: NOTE_TEXT });
   if (callNumber === 2) return toolCall("smoke-read", "read_file", { target_file: NOTE });
   if (callNumber === 3) {
@@ -143,6 +151,9 @@ const AUTOMATION = "every day at 7am say hello from the smoke test";
 const MEMORY_NOTE = "the smoke test likes kumquats";
 const PULSE_ACTION = "close every done card on the smoke workboard";
 const JOURNAL_QUESTION = "Should the smoke test ship the shell first?";
+const PLAN_PROMPT = "plan a tidy of the smoke notes";
+const PLAN_TEXT = "1. Read the smoke notes. 2. Merge the duplicates.";
+const PLAN_REPLY = "Plan approved, ready to tidy";
 const DESK_PROMPT = "clear out the old folder from the terminal";
 const DESK_TEXT = "rm -rf ~/old";
 const DESK_REPLY = "Left the old folder alone";
@@ -349,7 +360,8 @@ async function pulse(s, config) {
 
 // Journal: a question added here lands in the cabin's decisions.json, and To
 // mission links it to a chat and puts the mission prompt in the chat box,
-// unsent. The box is cleared after so the next step starts empty.
+// unsent. The box is emptied after (Ctrl+A, Backspace, so React sees it) for
+// the next step.
 async function journal(s, config) {
   await tab(s, "Journal");
   const input = await waitFor("the question box", () =>
@@ -379,7 +391,10 @@ async function journal(s, config) {
   await sleep(1000);
   if (mockSeen.length !== calls) throw new Error("To mission sent the prompt without the person");
   console.log(`journal mission in ${saved.missionThread}: ${JSON.stringify(filled.split("\n")[0])}`);
-  await wd("POST", `${s}/element/${box}/clear`, {});
+  await wd("POST", `${s}/element/${box}/value`, { text: "\uE009a\uE000\uE003" });
+  await waitFor("the emptied chat box", async () =>
+    (await wd("GET", `${s}/element/${box}/property/value`)) === "" ? true : null,
+  );
 }
 
 // Command palette: Ctrl+K opens it over any page, typing filters it, and
@@ -413,6 +428,42 @@ async function palette(s) {
   await wd("POST", `${s}/element/${again}/value`, { text: "journ\uE007" });
   await waitFor("the Journal page", () => find(s, "section.journal"));
   console.log("the Command button opened the Journal");
+}
+
+// Plan chip: the turn is read-only, so a write is refused without a card;
+// the plan waits on its card until Approve plan, and the chip goes back to Chat.
+async function plan(s, workspace) {
+  await tab(s, "Chat");
+  await click(s, "[aria-label='Session mode'] button[title^='Grok writes a plan']");
+  const box = await waitFor("the message box", () => find(s, "textarea[aria-label='Message']"));
+  await wd("POST", `${s}/element/${box}/value`, { text: PLAN_PROMPT });
+  await click(s, "form.composer button[type='submit']");
+  const card = await waitFor("the plan card", () => find(s, ".card.elicit[aria-label=\"Grok's plan\"]"));
+  const shown = await wd("GET", `${s}/element/${card}/text`);
+  if (!shown.includes(PLAN_TEXT)) throw new Error(`plan card said ${JSON.stringify(shown)}`);
+  if (existsSync(join(workspace, "plan-note.txt"))) throw new Error("plan mode wrote a file");
+  const refused = mockSeen.find((c) => c.body.includes("smoke-plan-write") && c.body.includes("function_call_output"));
+  if (!refused || !refused.body.includes("read-only")) throw new Error("the write was not refused as read-only");
+  console.log("plan mode refused the write and showed the plan");
+  const approve = await wd("POST", `${s}/element/${card}/element`, {
+    using: "xpath",
+    value: ".//button[normalize-space()='Approve plan']",
+  });
+  await wd("POST", `${s}/element/${approve[ELEMENT]}/click`, {});
+  await waitFor("the reply after the plan", async () => {
+    const els = await wd("POST", `${s}/elements`, {
+      using: "css selector",
+      value: ".bubble.assistant:not(.streaming)",
+    });
+    for (const el of els) {
+      if ((await wd("GET", `${s}/element/${el[ELEMENT]}/text`)) === PLAN_REPLY) return true;
+    }
+    return null;
+  });
+  const chat = await find(s, "[aria-label='Session mode'] button[title^='Normal chat']");
+  const pressed = await wd("GET", `${s}/element/${chat}/attribute/aria-pressed`);
+  if (pressed !== "true") throw new Error("the chip stayed on Plan after the approval");
+  console.log(`plan approved: ${JSON.stringify(PLAN_REPLY)}, chip back on Chat`);
 }
 
 // Settings → Local AI: the Auto status line renders, Manual takes a model
@@ -582,6 +633,7 @@ async function main() {
     await pulse(s, config);
     await journal(s, config);
     await palette(s);
+    await plan(s, workspace);
     await localAi(s, config);
     await desktop(s, config);
     if (process.env.SMOKE_WEB === "1") await web(s);
