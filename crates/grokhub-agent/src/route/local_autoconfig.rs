@@ -448,6 +448,11 @@ pub fn set_state(s: GovState) {
     }
 }
 
+#[cfg(test)]
+pub(crate) fn state() -> GovState {
+    live().lock().map(|l| l.state).unwrap_or_default()
+}
+
 pub fn set_overrides(o: Overrides) {
     if let Ok(mut l) = live().lock() {
         l.overrides = o;

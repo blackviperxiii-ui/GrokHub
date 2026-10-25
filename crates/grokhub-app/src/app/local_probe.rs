@@ -268,6 +268,28 @@ impl ThermalProbe for System {
     }
 }
 
+/// Power, thermal and free RAM for the governor's sampler.
+#[cfg(target_os = "linux")]
+pub(super) fn power_now() -> Option<PowerInfo> {
+    System {
+        home: PathBuf::new(),
+    }
+    .power()
+}
+
+#[cfg(target_os = "linux")]
+pub(super) fn thermal_now() -> Thermal {
+    System {
+        home: PathBuf::new(),
+    }
+    .thermal()
+}
+
+#[cfg(any(target_os = "linux", windows))]
+pub(super) fn free_ram_now() -> Option<u64> {
+    free_ram_mb()
+}
+
 /// Read this machine. Slow (it runs `nvidia-smi` and friends): call it off the UI thread.
 pub(super) fn read_profile(home: &Path) -> lp::LocalProfile {
     let system = System {

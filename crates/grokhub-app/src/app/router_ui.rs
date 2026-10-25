@@ -400,6 +400,9 @@ impl Cabin {
     /// The live router keeps a pin while it answers; Auto is an empty pin.
     fn sync_router_pin(&mut self) {
         grokhub_agent::route::local::set_enabled(self.cfg.local_model);
+        if self.cfg.local_model {
+            super::local_signals::start(crate::config::config_dir());
+        }
         self.sync_provider_pick();
         let pin = self.cfg.model.trim();
         if self.harness.router.pin.as_deref() != Some(pin) {
