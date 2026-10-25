@@ -58,8 +58,13 @@ impl Cabin {
             .map(|t| t.goal.label.trim().to_string())
             .filter(|s| !s.is_empty())
             .unwrap_or_default();
+        let journal_question = grokhub_core::mission_entry(&self.journal, &trace)
+            .map(|e| e.question.clone())
+            .unwrap_or_default();
         let title = if !thread_title.is_empty() {
             thread_title
+        } else if !journal_question.is_empty() {
+            journal_question.clone()
         } else if !playbook_title.is_empty() {
             playbook_title
         } else if mission_worthy_intent(&intent) {
@@ -139,6 +144,7 @@ impl Cabin {
             outcome_span_ids,
             uncertainty: String::new(),
             next_action: String::new(),
+            journal_question,
         }
     }
 
@@ -296,5 +302,86 @@ mod tests {
         let m = cabin.mission_view_here().expect("mission");
         assert_eq!(m.status, MissionStatus::NeedsApproval);
         assert!(m.approval.as_deref().unwrap_or("").contains("shell"));
+    }
+    #[test]
+    fn journal_to_mission_opens_a_chat_with_the_experiment_drafted() {
+        let root = crate::config::test_config_root("mission-journal");
+        let _ = std::fs::remove_dir_all(&root);
+        let _pin = crate::config::TestConfigDir::set(root);
+        let mut cabin = Cabin::quiet_for_test();
+        let id =
+            grokhub_core::create_entry(&mut cabin.journal, "Switch the cabin to Tauri?").unwrap();
+        cabin.journal[0].next_experiment = "Build the chat pane in Tauri".into();
+        cabin.nav = Nav::Journal;
+        cabin.promote_journal_to_mission(&id);
+
+        let trace = cabin.trace_id();
+        assert_eq!(cabin.nav, Nav::Chat);
+        assert_eq!(
+            cabin.journal[0].mission_thread.as_deref(),
+            Some(trace.as_str())
+        );
+        assert_eq!(
+            cabin.journal[0].status,
+            grokhub_core::JournalStatus::Investigating
+        );
+        let thread = &cabin.threads[cabin.thread_idx];
+        assert_eq!(thread.title, "Switch the cabin to Tauri?");
+        assert!(thread.title_locked);
+        assert_eq!(
+            cabin.messages.as_slice(),
+            &[(
+                "assistant".to_string(),
+                grokhub_core::mark_slash_result(
+                    "Mission from the Journal: Switch the cabin to Tauri?\nThe first message is drafted below. Press Send to run the next experiment."
+                )
+            )],
+            "only the mission note: nothing is sent for the user"
+        );
+        assert!(
+            cabin
+                .composer
+                .starts_with("Mission from my decision journal: Switch the cabin to Tauri?"),
+            "{}",
+            cabin.composer
+        );
+        assert!(cabin
+            .composer
+            .contains("Next experiment: Build the chat pane in Tauri"));
+        assert_eq!(
+            cabin.status,
+            "Mission ready: press Send to run the next experiment"
+        );
+        let m = cabin.mission_view_here().expect("journal mission");
+        assert_eq!(m.title, "Switch the cabin to Tauri?");
+        assert_eq!(m.status, MissionStatus::Active);
+
+        // A second promote goes back to the same chat instead of opening another.
+        let chats = cabin.threads.len();
+        cabin.nav = Nav::Journal;
+        cabin.new_thread(false);
+        cabin.promote_journal_to_mission(&id);
+        assert_eq!(cabin.trace_id(), trace);
+        assert_eq!(cabin.threads.len(), chats + 1);
+        assert_eq!(cabin.status, "Back on this decision's mission");
+
+        // Closed decisions start nothing.
+        let shut = grokhub_core::create_entry(&mut cabin.journal, "Keep AUR?").unwrap();
+        grokhub_core::abandon_entry(&mut cabin.journal, &shut);
+        let before = cabin.threads.len();
+        cabin.promote_journal_to_mission(&shut);
+        assert_eq!(cabin.threads.len(), before);
+        assert!(cabin.journal[0].mission_thread.is_none());
+    }
+
+    #[test]
+    fn systems_brief_lists_the_journal_open_questions() {
+        let root = crate::config::test_config_root("mission-brief-journal");
+        let _pin = crate::config::TestConfigDir::set(root);
+        let mut cabin = Cabin::quiet_for_test();
+        grokhub_core::create_entry(&mut cabin.journal, "Switch the cabin to Tauri?").unwrap();
+        let brief = cabin.build_systems_brief("2026-10-25", 1);
+        assert_eq!(brief.decisions[0].text, "Switch the cabin to Tauri?");
+        assert_eq!(brief.decisions[0].source, "decision:0");
     }
 }
