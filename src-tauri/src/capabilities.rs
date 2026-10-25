@@ -15,6 +15,8 @@ pub struct Capabilities {
     pub local_ai: bool,
     /// The tray icon and "Closing the window keeps GrokHub in the tray".
     pub tray: bool,
+    /// Settings → Web access: this computer serves the web app (Phase 5).
+    pub web_access: bool,
 }
 
 /// The report for an OS name as `std::env::consts::OS` spells it. Linux,
@@ -27,6 +29,7 @@ pub fn for_os(os: &str) -> Capabilities {
         pulse: desktop,
         local_ai: desktop,
         tray: desktop,
+        web_access: desktop,
     }
 }
 
@@ -56,6 +59,7 @@ mod tests {
             pulse: true,
             local_ai: true,
             tray: true,
+            web_access: true,
         };
         assert_eq!(for_os("linux"), all);
         assert_eq!(for_os("windows"), all);
@@ -69,6 +73,7 @@ mod tests {
             pulse: false,
             local_ai: false,
             tray: false,
+            web_access: false,
         };
         assert_eq!(for_os("android"), none);
         assert_eq!(for_os("ios"), none);
@@ -93,6 +98,7 @@ mod tests {
                 "pulse": false,
                 "localAi": false,
                 "tray": false,
+                "webAccess": false,
             })
         );
     }

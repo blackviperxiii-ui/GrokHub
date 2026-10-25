@@ -25,6 +25,8 @@ export interface Capabilities {
   pulse: boolean;
   localAi: boolean;
   tray: boolean;
+  /** Settings → Web access: this computer serves the web app. */
+  webAccess: boolean;
   /** The web app, a remote for the desktop: settings and the key stay there. */
   remote?: boolean;
 }
@@ -35,6 +37,7 @@ export const CORE_ONLY: Capabilities = {
   pulse: false,
   localAi: false,
   tray: false,
+  webAccess: false,
 };
 
 /** The web app gets chat, memory, automations and connectors only. */
@@ -387,4 +390,21 @@ export function checkModelFile(path: string): Promise<LocalFileRow> {
 
 export function runLocalSpeedTest(): Promise<string> {
   return invoke<string>("run_local_speed_test");
+}
+
+/** Settings → Web access (src-tauri/src/remote.rs). */
+export interface WebAccess {
+  on: boolean;
+  /** The pairing code; empty while off. */
+  code: string;
+  /** Pairing links, the LAN one first. */
+  links: string[];
+}
+
+export function getWebAccess(): Promise<WebAccess> {
+  return invoke<WebAccess>("get_web_access");
+}
+
+export function setWebAccess(on: boolean): Promise<WebAccess> {
+  return invoke<WebAccess>("set_web_access", { on });
 }

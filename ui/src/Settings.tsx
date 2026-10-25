@@ -9,6 +9,7 @@ import {
   type Settings as Shape,
 } from "./api";
 import { LocalAi } from "./LocalAi";
+import { WebAccess } from "./WebAccess";
 
 const APPROVALS: Record<Approvals, { label: string; note: string }> = {
   ask: {
@@ -164,6 +165,7 @@ export function Settings({ caps }: { caps: Capabilities }) {
         )}
       </div>
       {note && <p className="note">{note}</p>}
+      {caps.webAccess && <WebAccess />}
       {caps.localAi && <LocalAi />}
     </section>
   );
