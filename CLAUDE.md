@@ -57,7 +57,7 @@ Grok Build 1.0.49+ ships explore / plan / implementer (and reviewer, test-writer
 
 ## Cross-platform recode
 - Jeremy approved Tauri 2 + React + TS for the cross-platform shell (2026-10-23). "No Electron. No Tauri." now covers only the egui cabin, which keeps shipping until parity. Electron stays out.
-- The repo rules here win over the Notion recode card: pstack, squash-merge into `beta` on green; only `beta` → `main`, tags, and releases need Jeremy. Plan, phases and open decisions: `docs/cross-platform/README.md`.
+- The repo rules here win over the Notion recode card: squash-merge into `beta` on green; only `beta` → `main`, tags, and releases need Jeremy. Plan, phases and open decisions: `docs/cross-platform/README.md`.
 
 ## Semgrep + dyl-review + Continual Learning
 - Run **Semgrep** on touched paths before marking a PR Ready (`semgrep --config=auto` or the Semgrep plugin). Fix or justify findings in the PR body. Do **not** use dyl-ready-pr merge/babysit.
@@ -65,4 +65,3 @@ Grok Build 1.0.49+ ships explore / plan / implementer (and reviewer, test-writer
 - **Continual Learning**: when mining chats, update `AGENTS.md` via the continual-learning skill / agents-memory-updater. Keep AGENTS.md short and factual.
 
 
-- **pstack:** Always load and follow the pstack skills; vstack is retired (Jeremy's rule). Ignore the old vstack skill folders in `.cursor/skills`.
