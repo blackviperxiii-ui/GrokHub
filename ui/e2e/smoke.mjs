@@ -127,6 +127,7 @@ async function waitFor(what, fn, timeoutMs = 30000) {
 
 const ELEMENT = "element-6066-11e4-a52e-4f735466cecf";
 const AUTOMATION = "every day at 7am say hello from the smoke test";
+const MEMORY_NOTE = "the smoke test likes kumquats";
 
 async function find(s, css) {
   const el = await wd("POST", `${s}/element`, { using: "css selector", value: css });
@@ -170,6 +171,31 @@ async function automations(s, config) {
   }
   const ran = mockRunPrompt();
   if (!ran) throw new Error("the model never got the automation's instructions");
+}
+
+// Memory: Remember a line, check it lands in the work folder's MEMORY.md,
+// then search for it the way chat recall would.
+async function memory(s, workspace) {
+  await click(s, "nav.tabs button:nth-child(3)");
+  const input = await waitFor("the memory page", () => find(s, "input[aria-label='New note']"));
+  await wd("POST", `${s}/element/${input}/value`, { text: MEMORY_NOTE });
+  await click(s, ".memory form.add button[type='submit']");
+  await waitFor("the remembered note", async () => {
+    const t = await textOf(s, ".memory p.note");
+    return t.startsWith("Remembered in workspace") ? t : null;
+  });
+  const file = readFileSync(join(workspace, "MEMORY.md"), "utf8");
+  if (file !== `${MEMORY_NOTE}\n`) throw new Error(`MEMORY.md says ${JSON.stringify(file)}`);
+  console.log(`note remembered: ${JSON.stringify(file)}`);
+
+  const search = await find(s, "input[aria-label='Search memory']");
+  await wd("POST", `${s}/element/${search}/value`, { text: "kumquats" });
+  await click(s, ".memory form.add:last-of-type button[type='submit']");
+  const hit = await waitFor("the search hit", async () => {
+    const t = await textOf(s, ".card.hit .card-detail");
+    return t === MEMORY_NOTE ? t : null;
+  });
+  console.log(`search found: ${JSON.stringify(hit)}`);
 }
 
 async function main() {
@@ -273,6 +299,7 @@ async function main() {
     console.log(`model got the prompt with model=${first.model} and ${tools.length} tools`);
 
     await automations(s, config);
+    await memory(s, workspace);
     console.log("smoke ok");
   } catch (err) {
     // What the window and the mock saw, for a failed CI run.
