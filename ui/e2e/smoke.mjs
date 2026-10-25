@@ -153,11 +153,14 @@ async function click(s, css) {
 }
 
 /** A top tab by its label, so adding a tab moves no test. */
+// Waits for the tab, since Pulse shows only once the capability report loads.
 async function tab(s, label) {
-  const el = await wd("POST", `${s}/element`, {
-    using: "xpath",
-    value: `//nav[contains(@class,'tabs')]/button[normalize-space()='${label}']`,
-  });
+  const el = await waitFor(`the ${label} tab`, () =>
+    wd("POST", `${s}/element`, {
+      using: "xpath",
+      value: `//nav[contains(@class,'tabs')]/button[normalize-space()='${label}']`,
+    }),
+  );
   await wd("POST", `${s}/element/${el[ELEMENT]}/click`, {});
 }
 

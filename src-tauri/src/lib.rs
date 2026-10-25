@@ -6,6 +6,7 @@
 
 pub mod agent;
 pub mod automations;
+pub mod capabilities;
 pub mod connectors;
 pub mod credential;
 pub mod local_ai;
@@ -90,6 +91,9 @@ fn save_settings(
     approvals: settings::Approvals,
     desktop_control: bool,
 ) -> Result<SettingsView, String> {
+    let caps = capabilities::current();
+    let desktop_control = desktop_control && caps.desktop_control;
+    let close_to_tray = close_to_tray && caps.tray;
     let next = ShellSettings {
         model: model.trim().to_string(),
         close_to_tray,
@@ -148,7 +152,7 @@ fn route(settings: &ShellSettings) -> Result<agent::Route, String> {
         model: settings.model.clone(),
         workspace: agent::workspace_for(&settings.workspace),
         mode: settings.approvals.mode(),
-        desktop: settings.desktop_control,
+        desktop: settings.desktop_control && capabilities::current().desktop_control,
     })
 }
 
@@ -398,8 +402,15 @@ async fn disconnect_connector(
     off_main(move || connectors::disconnect(&workspace, &name)).await?
 }
 
+/// What this platform runs; the UI hides the rest.
+#[tauri::command]
+fn get_capabilities() -> capabilities::Capabilities {
+    capabilities::current()
+}
+
 #[tauri::command]
 async fn get_pulse(state: State<'_, ShellState>) -> Result<pulse::Page, String> {
+    capabilities::needs(capabilities::current().pulse, "Pulse")?;
     let dir = state.config_dir.clone();
     off_main(move || pulse::load(&dir, grokhub_core::now_ms())).await?
 }
@@ -411,12 +422,14 @@ async fn pulse_act(
     act: pulse::Act,
     day: pulse::Day,
 ) -> Result<pulse::Page, String> {
+    capabilities::needs(capabilities::current().pulse, "Pulse")?;
     let dir = state.config_dir.clone();
     off_main(move || pulse::act(&dir, &id, act, &day, grokhub_core::now_ms())).await?
 }
 
 #[tauri::command]
 async fn get_local_ai(state: State<'_, ShellState>) -> Result<local_ai::LocalAiView, String> {
+    capabilities::needs(capabilities::current().local_ai, "Local AI")?;
     let dir = state.config_dir.clone();
     off_main(move || local_ai::refreshed(&dir)).await
 }
@@ -426,12 +439,14 @@ async fn save_local_ai(
     state: State<'_, ShellState>,
     config: local_ai::LocalAiConfig,
 ) -> Result<local_ai::LocalAiView, String> {
+    capabilities::needs(capabilities::current().local_ai, "Local AI")?;
     let dir = state.config_dir.clone();
     off_main(move || local_ai::save_view(&dir, config)).await?
 }
 
 #[tauri::command]
 async fn reset_local_ai(state: State<'_, ShellState>) -> Result<local_ai::LocalAiView, String> {
+    capabilities::needs(capabilities::current().local_ai, "Local AI")?;
     let dir = state.config_dir.clone();
     off_main(move || local_ai::reset(&dir)).await?
 }
@@ -441,12 +456,14 @@ async fn check_model_file(
     state: State<'_, ShellState>,
     path: String,
 ) -> Result<local_ai::FileRow, String> {
+    capabilities::needs(capabilities::current().local_ai, "Local AI")?;
     let dir = state.config_dir.clone();
     off_main(move || local_ai::check_file(&dir, &path)).await?
 }
 
 #[tauri::command]
 async fn run_local_speed_test(state: State<'_, ShellState>) -> Result<String, String> {
+    capabilities::needs(capabilities::current().local_ai, "Local AI")?;
     let dir = state.config_dir.clone();
     off_main(move || local_ai::speed_test(&dir)).await?
 }
@@ -563,7 +580,8 @@ fn install_desktop_host() {
     grokhub_desktop::host::install(grokhub_desktop::host::Host {
         config_dir: grokhub_agent::perm::config_dir,
         settings: || grokhub_desktop::host::Settings {
-            desktop_control: settings::load(&grokhub_agent::perm::config_dir()).desktop_control,
+            desktop_control: settings::load(&grokhub_agent::perm::config_dir()).desktop_control
+                && capabilities::current().desktop_control,
             ..Default::default()
         },
         #[cfg(target_os = "linux")]
@@ -579,7 +597,7 @@ pub fn run() {
     install_desktop_host();
     let config_dir = grokhub_agent::perm::config_dir();
     let loaded = settings::load(&config_dir);
-    if loaded.desktop_control {
+    if loaded.desktop_control && capabilities::current().desktop_control {
         grokhub_desktop::set_desktop_enabled(true);
     }
     let built = tauri::Builder::default()
@@ -603,6 +621,7 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            get_capabilities,
             get_settings,
             save_settings,
             set_api_key,
