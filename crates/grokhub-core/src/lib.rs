@@ -586,7 +586,7 @@ pub use windshield::{
     lock_check_titles, parse_atspi_line, parse_wmctrl_line, parse_xdotool_mouse, pick_named_row,
     rank_atspi_rows, refused_lock, tab_list_from_rows, window_name_from_atspi,
     window_name_from_wmctrl, windshield_browser_line, windshield_prompt, AtspiRow, PendingStep,
-    WindshieldFrame,
+    WindshieldFrame, ATSPI_PY,
 };
 pub use workboard::{
     abandon_inflight_card, apply_assistant_work_marks, apply_work_update,

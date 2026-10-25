@@ -14,6 +14,8 @@ export interface Settings {
   /** The folder the agent actually works in. */
   workspacePath: string;
   approvals: Approvals;
+  /** Settings → Let Grok control the desktop. */
+  desktopControl: boolean;
 }
 
 export type Answer = "allow" | "always" | "deny";
@@ -42,8 +44,15 @@ export function saveSettings(
   closeToTray: boolean,
   workspace: string,
   approvals: Approvals,
+  desktopControl: boolean,
 ): Promise<Settings> {
-  return invoke<Settings>("save_settings", { model, closeToTray, workspace, approvals });
+  return invoke<Settings>("save_settings", {
+    model,
+    closeToTray,
+    workspace,
+    approvals,
+    desktopControl,
+  });
 }
 
 export function setApiKey(key: string): Promise<Settings> {
