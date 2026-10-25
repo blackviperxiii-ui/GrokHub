@@ -485,9 +485,10 @@ mod tests {
             free_disk_mb: 50_000,
         });
         assert_eq!(local::live_tier(), "local:tiny");
+        // 4 GB of RAM leaves nothing after the OS's share: cloud only.
         assert_eq!(
-            ls::suggest(app.setup.hw.as_ref().unwrap()).map(|m| m.name),
-            Some("Qwen 2.5 1.5B")
+            ls::suggest_for(app.setup.hw.as_ref().unwrap(), ls::CpuSimd::Avx2).map(|m| m.name),
+            None
         );
         app.take_setup_hardware(Hardware {
             gpu: "NVIDIA GeForce RTX 4070".into(),

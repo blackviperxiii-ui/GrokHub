@@ -176,8 +176,8 @@ mod tests {
     #[test]
     fn chip_and_queue_notes_are_literal() {
         assert_eq!(
-            offline_chip("Qwen 2.5 3B"),
-            "Offline · on Qwen 2.5 3B (local)"
+            offline_chip("Gemma 4 E2B"),
+            "Offline · on Gemma 4 E2B (local)"
         );
         assert_eq!(offline_chip("  "), "Offline · on local model");
         assert_eq!(
