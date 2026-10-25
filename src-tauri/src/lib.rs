@@ -5,6 +5,7 @@
 #![cfg_attr(not(test), warn(clippy::unwrap_used, clippy::expect_used))]
 
 pub mod agent;
+pub mod automations;
 pub mod credential;
 pub mod settings;
 
@@ -207,6 +208,75 @@ fn close_chat(state: State<'_, ShellState>, conversation_id: String) {
     }
 }
 
+fn now_clock(clock: automations::Clock) -> grokhub_core::LocalClock {
+    clock.at(grokhub_core::now_ms())
+}
+
+#[tauri::command]
+fn list_automations(
+    state: State<'_, ShellState>,
+    clock: automations::Clock,
+) -> Result<Vec<automations::Row>, String> {
+    let list = automations::load(&state.config_dir)?;
+    Ok(automations::rows(&list, now_clock(clock)))
+}
+
+#[tauri::command]
+fn add_automation(
+    state: State<'_, ShellState>,
+    text: String,
+    clock: automations::Clock,
+) -> Result<Vec<automations::Row>, String> {
+    let clock = now_clock(clock);
+    let list = automations::add(&state.config_dir, &text, clock)?;
+    Ok(automations::rows(&list, clock))
+}
+
+#[tauri::command]
+fn set_automation_enabled(
+    state: State<'_, ShellState>,
+    id: String,
+    enabled: bool,
+    clock: automations::Clock,
+) -> Result<Vec<automations::Row>, String> {
+    let clock = now_clock(clock);
+    let list = automations::set_enabled(&state.config_dir, &id, enabled, clock)?;
+    Ok(automations::rows(&list, clock))
+}
+
+#[tauri::command]
+fn remove_automation(
+    state: State<'_, ShellState>,
+    id: String,
+    clock: automations::Clock,
+) -> Result<Vec<automations::Row>, String> {
+    let list = automations::remove(&state.config_dir, &id)?;
+    Ok(automations::rows(&list, now_clock(clock)))
+}
+
+/// Runs one automation now, unattended: it can read, and every tool that
+/// would need an OK is refused.
+#[tauri::command]
+async fn run_automation(
+    state: State<'_, ShellState>,
+    id: String,
+) -> Result<automations::RunResult, String> {
+    let settings = current(&state);
+    let config_dir = state.config_dir.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let route = route(&settings)?;
+        automations::run_now(
+            &config_dir,
+            &id,
+            route.client,
+            &route.model,
+            route.workspace,
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 fn show_main(app: &AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.unminimize();
@@ -342,7 +412,12 @@ pub fn run() {
             send_chat,
             answer_permission,
             cancel_chat,
-            close_chat
+            close_chat,
+            list_automations,
+            add_automation,
+            set_automation_enabled,
+            remove_automation,
+            run_automation
         ])
         .run(tauri::generate_context!());
     if let Err(err) = built {

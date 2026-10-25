@@ -243,3 +243,46 @@ button.danger {
   color: var(--danger);
   border-color: var(--danger);
 }
+
+.automations {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  overflow-y: auto;
+}
+
+.automations .add {
+  display: flex;
+  gap: 8px;
+}
+
+.automations .add input {
+  flex: 1;
+}
+
+.automations .rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.card.automation {
+  max-width: none;
+  flex-direction: column;
+  flex-wrap: nowrap;
+  align-items: stretch;
+}
+
+.card.automation pre {
+  flex-basis: auto;
+}
+
+.card-health,
+.automations .error {
+  color: var(--danger);
+  margin: 0;
+}
