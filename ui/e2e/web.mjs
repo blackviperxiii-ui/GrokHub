@@ -47,6 +47,7 @@ function settings() {
     workspacePath: "/home/viper/GrokHub",
     approvals: "ask",
     desktopControl: false,
+    version: "3.1.0",
   };
 }
 
