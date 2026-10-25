@@ -131,8 +131,8 @@ fn offline_routes_chat_and_background_to_local_and_queues_image() {
         "Waiting for the network: image generation needs the cloud."
     );
     assert_eq!(
-        connectivity::offline_chip("Qwen 2.5 3B"),
-        "Offline · on Qwen 2.5 3B (local)"
+        connectivity::offline_chip("Gemma 4 E2B"),
+        "Offline · on Gemma 4 E2B (local)"
     );
 }
 
