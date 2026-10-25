@@ -1653,7 +1653,7 @@ fn plan_and_empty_video_stay_off_a_run() {
     }
 
     cabin.run_slash(super::Slash::Plan);
-    assert_eq!(cabin.status, "Plan mode — Grok Build will plan first");
+    assert_eq!(cabin.status, "Plan mode — Grok will plan first");
     assert!(matches!(cabin.session_mode, super::SessionMode::Plan));
     assert_eq!(cabin.cfg.session_mode, "plan");
     assert!(cabin.acp.is_none());

@@ -990,7 +990,7 @@ pub fn slash_help() -> String {
         "Typing while a reply runs steers it: Enter stops the turn where it is, keeps what it said and did, and carries on with your message folded in. Alt+Enter queues instead. Sending in another chat moves a running reply to the background instead of stopping it.",
         "/view-plan — show the plan from Plan mode (/show-plan and /plan-view too)",
         "/worktree — next chat starts in a git worktree",
-        "/workflow — workflows were a Grok Build CLI feature and are not in GrokHub",
+        "/workflow — workflows were a grok CLI feature and are not in GrokHub",
         "/room <name> — speak the room",
         "/export — write this chat as markdown (/export html or /export json for those)",
         "/rename <title> — name this chat (permanent)",
@@ -1493,9 +1493,8 @@ mod tests {
         assert!(filter_slash_commands("/workflow")
             .iter()
             .all(|s| !s.cmd.starts_with("/workflow")));
-        assert!(slash_help().contains(
-            "/workflow — workflows were a Grok Build CLI feature and are not in GrokHub"
-        ));
+        assert!(slash_help()
+            .contains("/workflow — workflows were a grok CLI feature and are not in GrokHub"));
         // Still parsed, so a typed /workflow gets that answer instead of going to the engine.
         assert!(!unknown_cabin_slash("/workflow pause review-changes-2"));
         assert!(!unknown_cabin_slash("/workflow pause"));
