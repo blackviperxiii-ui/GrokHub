@@ -142,7 +142,7 @@ fn session(state: &ShellState, conversation_id: &str) -> Arc<agent::Session> {
     Arc::clone(session)
 }
 
-fn route(settings: &ShellSettings) -> Result<agent::Route, String> {
+fn route(settings: &ShellSettings, session: agent::SessionMode) -> Result<agent::Route, String> {
     let client = match credential::test_responses_url() {
         Some(url) => XaiClient::new(
             credential::LOOPBACK_TEST_BEARER,
@@ -163,6 +163,7 @@ fn route(settings: &ShellSettings) -> Result<agent::Route, String> {
         workspace: agent::workspace_for(&settings.workspace),
         mode: settings.approvals.mode(),
         desktop: settings.desktop_control && capabilities::current().desktop_control,
+        session,
     })
 }
 
@@ -174,8 +175,10 @@ async fn send_chat(
     state: State<'_, ShellState>,
     conversation_id: String,
     text: String,
+    mode: Option<agent::SessionMode>,
 ) -> Result<String, String> {
-    chat_turn(app, &state, conversation_id, text, current(&state)).await
+    let mode = mode.unwrap_or_default();
+    chat_turn(app, &state, conversation_id, text, mode, current(&state)).await
 }
 
 async fn chat_turn(
@@ -183,11 +186,12 @@ async fn chat_turn(
     state: &ShellState,
     conversation_id: String,
     text: String,
+    mode: agent::SessionMode,
     settings: ShellSettings,
 ) -> Result<String, String> {
     let session = session(state, &conversation_id);
     tauri::async_runtime::spawn_blocking(move || {
-        let route = route(&settings)?;
+        let route = route(&settings, mode)?;
         let id = conversation_id.clone();
         session.prompt(
             &text,
@@ -220,6 +224,32 @@ fn answer_permission(
         .get(&conversation_id)
         .ok_or_else(|| "That chat is closed.".to_string())?;
     session.answer(&call_id, answer);
+    Ok(())
+}
+
+/// Answers a plan card, a question or a connector form in an open chat.
+#[tauri::command]
+fn answer_elicit(
+    state: State<'_, ShellState>,
+    conversation_id: String,
+    id: String,
+    action: String,
+    field: Option<String>,
+    value: Option<String>,
+) -> Result<(), String> {
+    if !matches!(action.as_str(), "accept" | "decline" | "cancel") {
+        return Err(format!("unknown answer: {action}"));
+    }
+    let chats = state.chats.lock().unwrap_or_else(|e| e.into_inner());
+    let session = chats
+        .get(&conversation_id)
+        .ok_or_else(|| "That chat is closed.".to_string())?;
+    session.answer_elicit(
+        &id,
+        &action,
+        field.as_deref(),
+        value.as_deref().unwrap_or(""),
+    );
     Ok(())
 }
 
@@ -304,7 +334,7 @@ async fn run_automation(
     let settings = current(&state);
     let config_dir = state.config_dir.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let route = route(&settings)?;
+        let route = route(&settings, agent::SessionMode::Chat)?;
         automations::run_now(
             &config_dir,
             &id,
@@ -602,8 +632,20 @@ fn remote_call(app: &AppHandle, command: &str, args: &Value) -> Result<Value, St
                 &state,
                 conversation_id,
                 arg(args, "text")?,
+                arg::<Option<agent::SessionMode>>(args, "mode")?.unwrap_or_default(),
                 settings,
             ))?)
+        }
+        "answer_elicit" => {
+            answer_elicit(
+                state,
+                own(args)?,
+                arg(args, "id")?,
+                arg(args, "action")?,
+                arg(args, "field")?,
+                arg(args, "value")?,
+            )?;
+            Ok(Value::Null)
         }
         "answer_permission" => {
             answer_permission(
@@ -863,6 +905,7 @@ pub fn run() {
             clear_api_key,
             send_chat,
             answer_permission,
+            answer_elicit,
             cancel_chat,
             close_chat,
             list_automations,

@@ -58,7 +58,26 @@ export type ChatEvent =
   | { kind: "tool"; id: string; title: string; status: string; detail: string }
   | { kind: "permission"; id: string; title: string; action: string; reason: string }
   | { kind: "error"; message: string }
-  | { kind: "done"; stop: string };
+  | { kind: "done"; stop: string }
+  | { kind: "plan"; text: string }
+  | {
+      kind: "elicit";
+      id: string;
+      /** "Plan" for a plan to approve, "Question" for Grok's question, or the connector. */
+      server: string;
+      message: string;
+      mode: "form" | "url";
+      url: string;
+      fieldName: string | null;
+      fieldTitle: string;
+      secret: boolean;
+    };
+
+/** The composer's chip: Chat, Plan (read-only until the plan is approved) or
+ * btw (a look-only side ask). */
+export type SessionMode = "chat" | "plan" | "btw";
+
+export type ElicitAction = "accept" | "decline" | "cancel";
 
 export interface ChatEnvelope {
   conversationId: string;
@@ -96,8 +115,23 @@ export function clearApiKey(): Promise<Settings> {
 }
 
 /** Runs one prompt through the agent loop; resolves with the stop reason. */
-export function sendChat(conversationId: string, text: string): Promise<string> {
-  return invoke<string>("send_chat", { conversationId, text });
+export function sendChat(
+  conversationId: string,
+  text: string,
+  mode: SessionMode = "chat",
+): Promise<string> {
+  return invoke<string>("send_chat", { conversationId, text, mode });
+}
+
+/** Answers a plan, a question or a connector form; `value` goes under `field`. */
+export function answerElicit(
+  conversationId: string,
+  id: string,
+  action: ElicitAction,
+  field: string | null = null,
+  value = "",
+): Promise<void> {
+  return invoke<void>("answer_elicit", { conversationId, id, action, field, value });
 }
 
 export function answerPermission(

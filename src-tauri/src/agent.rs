@@ -8,8 +8,9 @@ use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::Arc;
 
 use grokhub_agent::{
-    AuthKind, CancelToken, DesktopOps, Engine, EngineParts, Gate, HaltCheck, ModelClient,
-    NativeEngine, PermAnswer, PermMode, PermitInbox, PermitNote, SteerQueue,
+    AuthKind, CancelToken, DesktopOps, ElicitInbox, ElicitNote, Engine, EngineParts, Gate,
+    HaltCheck, ModelClient, NativeEngine, PermAnswer, PermMode, PermitInbox, PermitNote,
+    SteerQueue,
 };
 use grokhub_core::wire::AcpEvent;
 use serde::Serialize;
@@ -18,14 +19,28 @@ use serde::Serialize;
 /// that change things ask first; Auto and Always approve more, but hard-class
 /// steps (delete, send, money, credentials) still ask in every mode.
 /// `desktop` is Settings → Let Grok control the desktop: off, the desktop
-/// tools are refused; on, they go through the same hard gate.
-pub fn shell_gate(mode: PermMode, desktop: bool) -> Gate {
+/// tools are refused; on, they go through the same hard gate. Plan and btw
+/// are read-only, like the cabin's.
+pub fn shell_gate(mode: PermMode, desktop: bool, session: SessionMode) -> Gate {
     Gate {
         mode,
-        readonly_session: false,
+        readonly_session: session != SessionMode::Chat,
         attended: true,
         desktop,
     }
+}
+
+/// The composer's Chat / Plan / btw chip (the cabin's session modes).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SessionMode {
+    /// Grok can change files and run tools, through the approvals.
+    #[default]
+    Chat,
+    /// Read-only until you approve the plan Grok writes.
+    Plan,
+    /// A look-only side ask: Grok can read but changes nothing.
+    Btw,
 }
 
 /// The system prompt the cabin's native chat uses, with the desktop line
@@ -53,7 +68,11 @@ pub fn workspace_for(picked: &str) -> PathBuf {
 
 /// What the UI renders. Engine events the shell does not show yet map to `None`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(tag = "kind", rename_all = "camelCase")]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
 pub enum UiEvent {
     Text {
         text: String,
@@ -76,6 +95,23 @@ pub enum UiEvent {
     Done {
         stop: String,
     },
+    /// The plan Grok wrote, before it asks to leave plan mode.
+    Plan {
+        text: String,
+    },
+    /// Grok or a connector needs an answer: a plan to approve, a question, or
+    /// a connector's form or link. `server` is "Plan" for a plan.
+    Elicit {
+        id: String,
+        server: String,
+        message: String,
+        /// "form" or "url".
+        mode: String,
+        url: String,
+        field_name: Option<String>,
+        field_title: String,
+        secret: bool,
+    },
 }
 
 pub fn ui_event(event: AcpEvent) -> Option<UiEvent> {
@@ -95,6 +131,17 @@ pub fn ui_event(event: AcpEvent) -> Option<UiEvent> {
         },
         AcpEvent::Err(message) => UiEvent::Error { message },
         AcpEvent::Done { stop_reason } => UiEvent::Done { stop: stop_reason },
+        AcpEvent::Plan(text) => UiEvent::Plan { text },
+        AcpEvent::Elicit(ask) => UiEvent::Elicit {
+            id: ask.tool_call_id,
+            server: ask.server_name,
+            message: ask.message,
+            mode: ask.mode,
+            url: ask.url,
+            field_name: ask.field_name,
+            field_title: ask.field_title,
+            secret: ask.secret,
+        },
         _ => return None,
     })
 }
@@ -120,6 +167,8 @@ pub struct Route {
     pub mode: PermMode,
     /// Settings → Let Grok control the desktop, read the same way.
     pub desktop: bool,
+    /// The composer's chip for this message.
+    pub session: SessionMode,
 }
 
 struct Job {
@@ -139,8 +188,10 @@ impl HaltCheck for NeverHalted {
 
 /// One conversation. Dropping it ends the worker once its prompt returns.
 pub struct Session {
+    id: String,
     jobs: Sender<Job>,
     permits: Sender<PermitNote>,
+    elicits: Sender<ElicitNote>,
     cancel: CancelToken,
 }
 
@@ -159,13 +210,18 @@ impl Session {
     ) -> Self {
         let (jobs, rx) = channel::<Job>();
         let (permits, inbox) = PermitInbox::pair();
+        // Plan approvals, Grok's questions and connector forms wait here.
+        let (elicits, answers) = ElicitInbox::pair();
+        grokhub_agent::attach_elicit(conversation_id, answers);
         let cancel = CancelToken::new();
         let worker_cancel = cancel.clone();
         let id = conversation_id.to_string();
         std::thread::spawn(move || serve(id, config_dir, desktop, worker_cancel, inbox, rx));
         Self {
+            id: conversation_id.to_string(),
             jobs,
             permits,
+            elicits,
             cancel,
         }
     }
@@ -201,10 +257,31 @@ impl Session {
         });
     }
 
+    /// Answers a plan, a question or a connector form: "accept" with the
+    /// typed value under `field`, "decline" or "cancel".
+    pub fn answer_elicit(&self, id: &str, action: &str, field: Option<&str>, value: &str) {
+        let content = match (action, field) {
+            ("accept", Some(field)) => Some(serde_json::json!({ field: value })),
+            _ => None,
+        };
+        let _ = self.elicits.send(ElicitNote {
+            id: id.to_string(),
+            action: action.to_string(),
+            content,
+        });
+    }
+
     /// Stops the running prompt. A tool that waits for an answer is cancelled
     /// and does not run.
     pub fn cancel(&self) {
         self.cancel.cancel();
+    }
+}
+
+impl Drop for Session {
+    fn drop(&mut self) {
+        grokhub_agent::detach_elicit(&self.id);
+        grokhub_agent::set_plan_session(&self.id, false);
     }
 }
 
@@ -252,7 +329,10 @@ fn serve(
             done,
         } = job;
         let system = system_prompt(&route.workspace, route.desktop);
-        let gate = shell_gate(route.mode, route.desktop);
+        let gate = shell_gate(route.mode, route.desktop, route.session);
+        // Plan holds the turn read-only until its plan is approved; Chat and
+        // btw clear a plan left from an earlier message.
+        grokhub_agent::set_plan_session(&conversation_id, route.session == SessionMode::Plan);
         let engine = match (&mut engine, inbox.take()) {
             (Some(engine), _) => {
                 engine.set_workspace(route.workspace);
@@ -447,6 +527,17 @@ mod tests {
         workspace: &std::path::Path,
         config: &std::path::Path,
     ) -> Run {
+        start_full(mode, desktop, SessionMode::Chat, client, workspace, config)
+    }
+
+    fn start_full(
+        mode: PermMode,
+        desktop: bool,
+        chip: SessionMode,
+        client: Arc<OneTool>,
+        workspace: &std::path::Path,
+        config: &std::path::Path,
+    ) -> Run {
         let session = Arc::new(Session::spawn_with(
             "gate-test",
             config.to_path_buf(),
@@ -461,6 +552,7 @@ mod tests {
             workspace: workspace.to_path_buf(),
             mode,
             desktop,
+            session: chip,
         };
         let runner = Arc::clone(&session);
         let result = std::thread::spawn(move || {
@@ -574,6 +666,145 @@ mod tests {
         );
     }
 
+    fn wait_for_elicit(run: &Run) -> UiEvent {
+        for _ in 0..200 {
+            let found = run
+                .events
+                .lock()
+                .expect("events")
+                .iter()
+                .find(|e| matches!(e, UiEvent::Elicit { .. }))
+                .cloned();
+            if let Some(found) = found {
+                return found;
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        panic!("no elicit card: {:?}", run.events.lock().expect("events"));
+    }
+
+    fn elicit_id(event: &UiEvent) -> String {
+        match event {
+            UiEvent::Elicit { id, .. } => id.clone(),
+            other => panic!("not an elicit: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn plan_and_btw_refuse_a_write_without_asking() {
+        for chip in [SessionMode::Plan, SessionMode::Btw] {
+            let (workspace, config) = (temp_dir("ro-ws"), temp_dir("ro-cfg"));
+            let client = OneTool::new(
+                "write",
+                serde_json::json!({"path": "note.txt", "content": "hi"}),
+            );
+            let run = start_full(
+                PermMode::Always,
+                false,
+                chip,
+                Arc::clone(&client),
+                &workspace,
+                &config,
+            );
+            assert_eq!(run.result.join().expect("join"), Ok("end_turn".into()));
+            assert!(!workspace.join("note.txt").exists(), "{chip:?}");
+            let events = run.events.lock().expect("events");
+            assert!(
+                !events
+                    .iter()
+                    .any(|e| matches!(e, UiEvent::Permission { .. })),
+                "{chip:?}: {events:?}"
+            );
+            let refused = client.tool_output().expect("tool output");
+            assert!(refused.contains("read-only"), "{chip:?}: {refused}");
+        }
+    }
+
+    #[test]
+    fn a_plan_shows_then_waits_for_approve() {
+        let (workspace, config) = (temp_dir("plan-ws"), temp_dir("plan-cfg"));
+        let client = OneTool::new(
+            "exit_plan_mode",
+            serde_json::json!({"plan": "1. Read main.rs\n2. Fix the typo"}),
+        );
+        let run = start_full(
+            PermMode::Ask,
+            false,
+            SessionMode::Plan,
+            Arc::clone(&client),
+            &workspace,
+            &config,
+        );
+        let card = wait_for_elicit(&run);
+        assert_eq!(
+            card,
+            UiEvent::Elicit {
+                id: elicit_id(&card),
+                server: "Plan".into(),
+                message: "1. Read main.rs\n2. Fix the typo".into(),
+                mode: "form".into(),
+                url: String::new(),
+                field_name: None,
+                field_title: String::new(),
+                secret: false,
+            }
+        );
+        assert!(run.events.lock().expect("events").contains(&UiEvent::Plan {
+            text: "1. Read main.rs\n2. Fix the typo".into()
+        }));
+        assert_eq!(client.calls(), 1, "the turn went on before the answer");
+        assert!(grokhub_agent::plan_on("gate-test"));
+
+        run.session
+            .answer_elicit(&elicit_id(&card), "accept", None, "");
+        assert_eq!(run.result.join().expect("join"), Ok("end_turn".into()));
+        assert_eq!(
+            client.tool_output().as_deref(),
+            Some("Plan approved. Plan mode is off.")
+        );
+        assert!(!grokhub_agent::plan_on("gate-test"));
+    }
+
+    #[test]
+    fn a_question_takes_the_typed_answer() {
+        let (workspace, config) = (temp_dir("ask-ws"), temp_dir("ask-cfg"));
+        let client = OneTool::new(
+            "ask_user_question",
+            serde_json::json!({"questions": [{"question": "Which color?"}]}),
+        );
+        let run = start(Arc::clone(&client), &workspace, &config);
+        let card = wait_for_elicit(&run);
+        assert!(
+            matches!(&card, UiEvent::Elicit { server, field_name, field_title, .. }
+                if server == "Question"
+                    && field_name.as_deref() == Some("answer")
+                    && field_title == "Your answer"),
+            "{card:?}"
+        );
+        run.session
+            .answer_elicit(&elicit_id(&card), "accept", Some("answer"), "  blue ");
+        assert_eq!(run.result.join().expect("join"), Ok("end_turn".into()));
+        assert_eq!(client.tool_output().as_deref(), Some("answer: blue"));
+    }
+
+    #[test]
+    fn declining_a_question_tells_the_model() {
+        let (workspace, config) = (temp_dir("no-ws"), temp_dir("no-cfg"));
+        let client = OneTool::new(
+            "ask_user_question",
+            serde_json::json!({"questions": [{"question": "Which color?"}]}),
+        );
+        let run = start(Arc::clone(&client), &workspace, &config);
+        let card = wait_for_elicit(&run);
+        run.session
+            .answer_elicit(&elicit_id(&card), "decline", None, "");
+        assert_eq!(run.result.join().expect("join"), Ok("end_turn".into()));
+        assert_eq!(
+            client.tool_output().as_deref(),
+            Some("User declined the question")
+        );
+    }
+
     #[test]
     fn a_shell_command_waits_and_stop_runs_nothing() {
         let (workspace, config) = (temp_dir("stop-ws"), temp_dir("stop-cfg"));
@@ -640,6 +871,33 @@ mod tests {
             json,
             serde_json::json!({"kind": "permission", "id": "c", "title": "write", "action": "note.txt", "reason": ""})
         );
+        assert_eq!(
+            ui_event(AcpEvent::Plan("1. Read".into())),
+            Some(UiEvent::Plan {
+                text: "1. Read".into()
+            })
+        );
+        let card = serde_json::to_value(UiEvent::Elicit {
+            id: "ask-1".into(),
+            server: "Question".into(),
+            message: "Which color?".into(),
+            mode: "form".into(),
+            url: String::new(),
+            field_name: Some("answer".into()),
+            field_title: "Your answer".into(),
+            secret: false,
+        })
+        .expect("json");
+        assert_eq!(
+            card,
+            serde_json::json!({
+                "kind": "elicit", "id": "ask-1", "server": "Question", "message": "Which color?",
+                "mode": "form", "url": "", "fieldName": "answer", "fieldTitle": "Your answer",
+                "secret": false
+            })
+        );
+        let chip: SessionMode = serde_json::from_str("\"btw\"").expect("chip");
+        assert_eq!(chip, SessionMode::Btw);
     }
 
     #[test]
@@ -651,9 +909,24 @@ mod tests {
     }
 
     #[test]
+    fn plan_and_btw_gates_are_read_only() {
+        for (chip, readonly) in [
+            (SessionMode::Chat, false),
+            (SessionMode::Plan, true),
+            (SessionMode::Btw, true),
+        ] {
+            assert_eq!(
+                shell_gate(PermMode::Auto, false, chip).readonly_session,
+                readonly,
+                "{chip:?}"
+            );
+        }
+    }
+
+    #[test]
     fn the_gate_asks_and_follows_the_desktop_switch() {
         assert_eq!(
-            shell_gate(PermMode::Ask, false),
+            shell_gate(PermMode::Ask, false, SessionMode::Chat),
             Gate {
                 mode: PermMode::Ask,
                 readonly_session: false,
@@ -662,7 +935,7 @@ mod tests {
             }
         );
         assert_eq!(
-            shell_gate(PermMode::Always, true),
+            shell_gate(PermMode::Always, true, SessionMode::Chat),
             Gate {
                 mode: PermMode::Always,
                 readonly_session: false,
