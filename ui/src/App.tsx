@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { CORE_ONLY, getCapabilities, type Capabilities } from "./api";
 import { Automations } from "./Automations";
 import { Chat } from "./Chat";
 import { Connectors } from "./Connectors";
@@ -11,15 +12,23 @@ type View = "chat" | "pulse" | "automations" | "memory" | "connectors" | "settin
 export function App() {
   const [view, setView] = useState<View>("chat");
   const [prefill, setPrefill] = useState<{ text: string; n: number }>();
+  const [caps, setCaps] = useState<Capabilities>(CORE_ONLY);
+  useEffect(() => {
+    getCapabilities()
+      .catch(() => CORE_ONLY)
+      .then(setCaps);
+  }, []);
   return (
     <div className="app">
       <nav className="tabs" aria-label="Views">
         <button type="button" aria-pressed={view === "chat"} onClick={() => setView("chat")}>
           Chat
         </button>
-        <button type="button" aria-pressed={view === "pulse"} onClick={() => setView("pulse")}>
-          Pulse
-        </button>
+        {caps.pulse && (
+          <button type="button" aria-pressed={view === "pulse"} onClick={() => setView("pulse")}>
+            Pulse
+          </button>
+        )}
         <button
           type="button"
           aria-pressed={view === "automations"}
@@ -53,7 +62,7 @@ export function App() {
       <div hidden={view !== "automations"}>
         <Automations active={view === "automations"} />
       </div>
-      {view === "pulse" && (
+      {view === "pulse" && caps.pulse && (
         <Pulse
           onRun={(text) => {
             setPrefill((now) => ({ text, n: (now?.n ?? 0) + 1 }));
@@ -63,7 +72,7 @@ export function App() {
       )}
       {view === "memory" && <Memory />}
       {view === "connectors" && <Connectors />}
-      {view === "settings" && <Settings />}
+      {view === "settings" && <Settings caps={caps} />}
     </div>
   );
 }
