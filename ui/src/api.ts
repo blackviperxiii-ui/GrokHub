@@ -17,6 +17,8 @@ export interface Settings {
   approvals: Approvals;
   /** Settings → Let Grok control the desktop. */
   desktopControl: boolean;
+  /** Settings → About. */
+  version: string;
 }
 
 /** What this platform runs (src-tauri/src/capabilities.rs). */

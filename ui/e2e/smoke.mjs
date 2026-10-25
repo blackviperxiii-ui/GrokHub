@@ -169,6 +169,17 @@ async function tab(s, label) {
   await wd("POST", `${s}/element/${el[ELEMENT]}/click`, {});
 }
 
+/** A Settings section by its label in the Settings nav. */
+async function section(s, label) {
+  const el = await waitFor(`the ${label} section`, () =>
+    wd("POST", `${s}/element`, {
+      using: "xpath",
+      value: `//nav[contains(@class,'settings-nav')]/button[normalize-space()='${label}']`,
+    }),
+  );
+  await wd("POST", `${s}/element/${el[ELEMENT]}/click`, {});
+}
+
 async function textOf(s, css) {
   return wd("GET", `${s}/element/${await find(s, css)}/text`);
 }
@@ -344,6 +355,7 @@ async function localAi(s, config) {
     value: "//nav[contains(@class,'tabs')]/button[normalize-space()='Settings']",
   });
   await wd("POST", `${s}/element/${settingsTab[ELEMENT]}/click`, {});
+  await section(s, "Local AI");
   const status = await waitFor("the local AI status line", async () => {
     const t = await textOf(s, ".local-ai .local-status");
     return /^T\d/.test(t) ? t : null;
@@ -534,6 +546,7 @@ async function desktop(s, config) {
   if (offered(before).includes("type")) throw new Error("desktop tools were offered while off");
 
   await tab(s, "Settings");
+  await section(s, "General");
   const desk = await waitFor("the desktop switch", () =>
     wd("POST", `${s}/element`, {
       using: "xpath",
@@ -598,6 +611,7 @@ async function desktop(s, config) {
 async function web(s) {
   const { chromium } = createRequire(import.meta.url)("playwright");
   await tab(s, "Settings");
+  await section(s, "Web access");
   const on = await waitFor("the web access button", () =>
     wd("POST", `${s}/element`, {
       using: "xpath",

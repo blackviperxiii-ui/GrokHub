@@ -51,6 +51,8 @@ pub struct SettingsView {
     pub workspace_path: String,
     pub approvals: settings::Approvals,
     pub desktop_control: bool,
+    /// Settings → About.
+    pub version: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -71,6 +73,7 @@ fn view(settings: &ShellSettings) -> SettingsView {
             .to_string(),
         approvals: settings.approvals,
         desktop_control: settings.desktop_control,
+        version: env!("CARGO_PKG_VERSION").to_string(),
     }
 }
 

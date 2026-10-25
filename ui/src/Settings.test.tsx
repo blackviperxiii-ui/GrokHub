@@ -24,7 +24,11 @@ vi.mock("./api", () => api);
 vi.mock("./LocalAi", () => ({ LocalAi: () => <p>Local AI panel</p> }));
 vi.mock("./WebAccess", () => ({ WebAccess: () => <p>Web access panel</p> }));
 
-import { DESKTOP_NOTE, REMOTE_NOTE, Settings } from "./Settings";
+import { ABOUT_NOTE, DESKTOP_NOTE, REMOTE_NOTE, Settings } from "./Settings";
+
+async function openSection(name: string) {
+  await userEvent.click(await screen.findByRole("button", { name }));
+}
 
 const DESKTOP: Capabilities = { desktopControl: true, pulse: true, localAi: true, tray: true, webAccess: true };
 const PHONE: Capabilities = { desktopControl: false, pulse: false, localAi: false, tray: false, webAccess: false };
@@ -39,6 +43,7 @@ function shape(over: Partial<Shape>): Shape {
     workspacePath: "/home/viper/GrokHub",
     approvals: "ask",
     desktopControl: false,
+    version: "3.1.0",
     ...over,
   };
 }
@@ -112,6 +117,7 @@ describe("Settings", () => {
     api.setApiKey.mockResolvedValue(shape({ hasApiKey: true }));
     api.clearApiKey.mockResolvedValue(shape({}));
     render(<Settings caps={DESKTOP} />);
+    await openSection("Account");
 
     expect(await screen.findByText("No key saved yet.")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Remove key" })).toBeNull();
@@ -130,6 +136,7 @@ describe("Settings", () => {
   it("shows a keychain error instead of hanging", async () => {
     api.setApiKey.mockRejectedValue("No system keychain is available.");
     render(<Settings caps={DESKTOP} />);
+    await openSection("Account");
     await userEvent.type(await screen.findByLabelText("API key"), "sk-abcdefghijklmnopqrstuv");
     await userEvent.click(screen.getByRole("button", { name: "Save key" }));
     expect(await screen.findByText("No system keychain is available.")).toBeInTheDocument();
@@ -144,16 +151,51 @@ describe("Settings", () => {
     expect(screen.queryByLabelText("Let Grok control the desktop")).toBeNull();
     expect(screen.queryByText(DESKTOP_NOTE)).toBeNull();
     expect(screen.queryByLabelText(/keeps GrokHub in the tray/)).toBeNull();
-    expect(screen.queryByText("Local AI panel")).toBeNull();
-    expect(screen.queryByText("Web access panel")).toBeNull();
+    const nav = screen.getByRole("navigation", { name: "Settings sections" });
+    expect(Array.from(nav.querySelectorAll("button"), (b) => b.textContent)).toEqual([
+      "General",
+      "Account",
+      "About",
+    ]);
   });
 
   it("shows them on a desktop", async () => {
     render(<Settings caps={DESKTOP} />);
     expect(await screen.findByLabelText("Let Grok control the desktop")).toBeInTheDocument();
     expect(screen.getByLabelText(/keeps GrokHub in the tray/)).toBeInTheDocument();
+    const nav = screen.getByRole("navigation", { name: "Settings sections" });
+    expect(Array.from(nav.querySelectorAll("button"), (b) => b.textContent)).toEqual([
+      "General",
+      "Account",
+      "Local AI",
+      "Web access",
+      "About",
+    ]);
+  });
+
+  it("opens every section from the nav, one at a time", async () => {
+    render(<Settings caps={DESKTOP} />);
+    expect(await screen.findByLabelText("Model")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "General" })).toHaveAttribute("aria-pressed", "true");
+
+    await openSection("Account");
+    expect(screen.getByLabelText("API key")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Model")).toBeNull();
+    expect(screen.getByRole("button", { name: "Account" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "General" })).toHaveAttribute("aria-pressed", "false");
+
+    await openSection("Local AI");
     expect(screen.getByText("Local AI panel")).toBeInTheDocument();
+    expect(screen.queryByLabelText("API key")).toBeNull();
+
+    await openSection("Web access");
     expect(screen.getByText("Web access panel")).toBeInTheDocument();
+    expect(screen.queryByText("Local AI panel")).toBeNull();
+
+    await openSection("About");
+    expect(screen.getByText("Version 3.1.0")).toBeInTheDocument();
+    expect(screen.getByText(ABOUT_NOTE)).toBeInTheDocument();
+    expect(screen.queryByText("Web access panel")).toBeNull();
   });
 
   it("shows the web app the desktop's settings but nothing to change them with", async () => {
