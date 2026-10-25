@@ -40,6 +40,7 @@ pub struct SettingsView {
     pub workspace: String,
     /// The folder the agent actually works in.
     pub workspace_path: String,
+    pub approvals: settings::Approvals,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -58,6 +59,7 @@ fn view(settings: &ShellSettings) -> SettingsView {
         workspace_path: agent::workspace_for(&settings.workspace)
             .display()
             .to_string(),
+        approvals: settings.approvals,
     }
 }
 
@@ -80,11 +82,13 @@ fn save_settings(
     model: String,
     close_to_tray: bool,
     workspace: String,
+    approvals: settings::Approvals,
 ) -> Result<SettingsView, String> {
     let next = ShellSettings {
         model: model.trim().to_string(),
         close_to_tray,
         workspace: workspace.trim().to_string(),
+        approvals,
     };
     settings::save(&state.config_dir, &next)?;
     *state.settings.lock().unwrap_or_else(|e| e.into_inner()) = next.clone();
@@ -133,6 +137,7 @@ fn route(settings: &ShellSettings) -> Result<agent::Route, String> {
         auth_kind: AuthKind::ApiKey,
         model: settings.model.clone(),
         workspace: agent::workspace_for(&settings.workspace),
+        mode: settings.approvals.mode(),
     })
 }
 
