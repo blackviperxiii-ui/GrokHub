@@ -393,5 +393,8 @@ report).
 - Each new `CHANGELOG.md` section gets a `Shell (Tauri)` artifact line:
   `grokhub-shell-vX.Y.Z-linux-amd64.deb` and `.AppImage`,
   `GrokHub-Shell-Setup-X.Y.Z.exe`, and `grokhub-shell-vX.Y.Z-macos-arm64.dmg`.
-- Publishing those bundles from `release.yml` waits on Viper's OK for the
-  `.github/` change.
+- `release.yml` (Viper OK'd, 2026-10-25) builds the bundles on Linux, Windows
+  and macOS in `shell-bundles`, renames them with
+  `scripts/name-shell-bundles.sh`, and `publish` adds them to `SHA256SUMS`
+  (minisign-signed) and to every release and beta pre-release. The .dmg and
+  setup .exe aren't code-signed yet.
