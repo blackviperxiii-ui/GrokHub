@@ -1,0 +1,1 @@
+- Connectors: when the model asks for a connector GrokHub doesn't run, the reply and status line now point to Settings → Connectors instead of "not wired. GitHub is the only live connector." `/connectors`, `/mcps` and the Skills page Connectors button all open that one page (stage 10).
