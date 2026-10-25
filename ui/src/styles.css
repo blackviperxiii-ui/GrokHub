@@ -494,3 +494,48 @@ button.danger {
 .local-grid input {
   width: 100%;
 }
+
+/* The web app's pairing screen (Phase 5). */
+.pair {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-width: 420px;
+  margin: 48px auto;
+  padding: 0 16px;
+}
+
+.pair h1 {
+  font-size: 1.4rem;
+  margin: 0;
+}
+
+.pair form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: flex-start;
+}
+
+.pair label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 100%;
+}
+
+.settings dl {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 6px 16px;
+  margin: 0;
+}
+
+.settings dt {
+  color: var(--muted);
+}
+
+.settings dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}

@@ -19,9 +19,10 @@ Phase 0 started from `beta` @ `f0a5c7a` (2026-10-23).
     only `beta` → `main` needs Jeremy.
   - `.github/`, `clippy.toml` and release-script changes still need his OK
     before they merge.
-- **Still open:** the web backend (`grokhub-hub` as an HTTP service, or the
-  web build as a remote control for a desktop instance). It is due before
-  Phase 5. AUR and Inno packaging (keep or replace) is due before Phase 6.
+- **Web backend (Viper, 2026-10-25):** the web app is a remote for GrokHub
+  running on your own computer, not `grokhub-hub` as a hosted service. The
+  desktop runs the chats and keeps the key.
+- **Still open:** AUR and Inno packaging (keep or replace), due before Phase 6.
 
 ## Phases
 
@@ -307,3 +308,49 @@ connectors only.
 - Not yet: saving an API key on Android, because keyring has no Android store
   until the app enables `android-native-keyring-store`. Sign-in on phones is
   only mocked so far.
+
+## Phase 5 status
+
+The web app is the same `ui/` build, opened in a browser as a remote for the
+desktop shell. The desktop runs the chats, the approvals and the keychain, and
+the browser holds no key.
+
+**5a, the web client.**
+
+- `ui/src/transport.ts` is the one seam. Inside the shell it calls Tauri's
+  `invoke` and `listen`. In a browser it sends the same commands to the
+  paired desktop over HTTP. `api.ts` goes through it, so the pages don't
+  change.
+- The browser first shows the pairing screen (`ui/src/Pair.tsx`). A pairing
+  link `…/#code=<code>` pairs without typing, and the code is taken off the
+  address at once.
+- The code lives in memory only, never in localStorage, sessionStorage,
+  IndexedDB or a cookie. Requests use `credentials: "omit"`, and a reload
+  asks to pair again.
+- The web app gets chat (with tool approvals), automations, memory and
+  connectors (`WEB` in `api.ts`). Settings shows the desktop's model, folder,
+  approvals and whether a key is saved, read-only. Settings and the key are
+  changed on the desktop.
+- `ui/e2e/web.mjs` is the smoke test. A mocked desktop serves `ui/dist` and
+  the API on one origin. Chromium opens the pairing link, sends a chat,
+  allows the tool the mock asks for, and gets the reply. It then checks the
+  browser stores are empty and that a reload asks to pair again. The shell
+  CI job runs it on Linux.
+
+**Remote protocol v1.** The desktop serves the built UI and this API on one
+origin, so there's no CORS.
+
+| Request | Auth | Reply |
+|---------|------|-------|
+| `GET /remote/v1/hello` | none | `{"kind": "grokhub-remote", "version": 1}` |
+| `POST /remote/v1/call/<command>`, a JSON body of the command's arguments (the same names as `invoke`) | `Authorization: Bearer <code>` | `{"ok": true, "value": …}` or `{"ok": false, "error": "<message>"}`; 401 for a wrong code |
+| `GET /remote/v1/events` | `Authorization: Bearer <code>` | `text/event-stream`; each frame is `data: {"event": "chat://event", "payload": …}` |
+
+The desktop answers only the web app's commands: chat (`send_chat`,
+`answer_permission`, `cancel_chat`, `close_chat`), `get_settings`,
+automations, memory and connectors. Everything else gets `ok: false`: the
+key, settings changes, Pulse, Local AI and desktop control.
+
+**5b, the desktop side (next).** The shell gets Settings → Web access. That
+switch serves `ui/dist` and the API above on the LAN, behind a random pairing
+code and the command allowlist, and shows the pairing link.
