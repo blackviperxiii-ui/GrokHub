@@ -142,6 +142,7 @@ const ELEMENT = "element-6066-11e4-a52e-4f735466cecf";
 const AUTOMATION = "every day at 7am say hello from the smoke test";
 const MEMORY_NOTE = "the smoke test likes kumquats";
 const PULSE_ACTION = "close every done card on the smoke workboard";
+const JOURNAL_QUESTION = "Should the smoke test ship the shell first?";
 const DESK_PROMPT = "clear out the old folder from the terminal";
 const DESK_TEXT = "rm -rf ~/old";
 const DESK_REPLY = "Left the old folder alone";
@@ -346,6 +347,41 @@ async function pulse(s, config) {
   console.log(`run filled the chat box: ${JSON.stringify(filled)}`);
 }
 
+// Journal: a question added here lands in the cabin's decisions.json, and To
+// mission links it to a chat and puts the mission prompt in the chat box,
+// unsent. The box is cleared after so the next step starts empty.
+async function journal(s, config) {
+  await tab(s, "Journal");
+  const input = await waitFor("the question box", () =>
+    find(s, ".journal-add input"),
+  );
+  await wd("POST", `${s}/element/${input}/value`, { text: JOURNAL_QUESTION });
+  await click(s, ".journal-add button[type='submit']");
+  const mission = await waitFor("the question's To mission", async () => {
+    const el = await wd("POST", `${s}/element`, {
+      using: "xpath",
+      value: `//li[@aria-label='${JOURNAL_QUESTION}']//button[normalize-space()='To mission']`,
+    });
+    return el[ELEMENT];
+  });
+  const calls = mockSeen.length;
+  await wd("POST", `${s}/element/${mission}/click`, {});
+  const box = await waitFor("the chat box", () => find(s, "textarea[aria-label='Message']"));
+  const filled = await waitFor("the mission prompt", async () => {
+    const v = await wd("GET", `${s}/element/${box}/property/value`);
+    return v.startsWith(`Mission from my decision journal: ${JOURNAL_QUESTION}`) ? v : null;
+  });
+  const saved = await waitFor("the investigating entry", async () => {
+    const entries = JSON.parse(readFileSync(join(config, "decisions.json"), "utf8"));
+    const entry = entries.find((e) => e.question === JOURNAL_QUESTION);
+    return entry?.status === "investigating" && entry.missionThread ? entry : null;
+  });
+  await sleep(1000);
+  if (mockSeen.length !== calls) throw new Error("To mission sent the prompt without the person");
+  console.log(`journal mission in ${saved.missionThread}: ${JSON.stringify(filled.split("\n")[0])}`);
+  await wd("POST", `${s}/element/${box}/clear`, {});
+}
+
 // Settings → Local AI: the Auto status line renders, Manual takes a model
 // file whose name says its safety training was removed only after the
 // notice is read, and Reset to Auto puts local_ai.json back.
@@ -511,6 +547,7 @@ async function main() {
     await memory(s, workspace);
     await connectors(s, config);
     await pulse(s, config);
+    await journal(s, config);
     await localAi(s, config);
     await desktop(s, config);
     if (process.env.SMOKE_WEB === "1") await web(s);

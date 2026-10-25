@@ -1,17 +1,18 @@
 import { useEffect, useState } from "react";
 import { CORE_ONLY, getCapabilities, type Capabilities } from "./api";
 import { Automations } from "./Automations";
-import { Chat } from "./Chat";
+import { Chat, type Prefill } from "./Chat";
 import { Connectors } from "./Connectors";
+import { Journal } from "./Journal";
 import { Memory } from "./Memory";
 import { Pulse } from "./Pulse";
 import { Settings } from "./Settings";
 
-type View = "chat" | "pulse" | "automations" | "memory" | "connectors" | "settings";
+type View = "chat" | "pulse" | "journal" | "automations" | "memory" | "connectors" | "settings";
 
 export function App() {
   const [view, setView] = useState<View>("chat");
-  const [prefill, setPrefill] = useState<{ text: string; n: number }>();
+  const [prefill, setPrefill] = useState<Prefill>();
   const [caps, setCaps] = useState<Capabilities>(CORE_ONLY);
   useEffect(() => {
     getCapabilities()
@@ -27,6 +28,12 @@ export function App() {
         {caps.pulse && (
           <button type="button" aria-pressed={view === "pulse"} onClick={() => setView("pulse")}>
             Pulse
+          </button>
+        )}
+        {/* The journal is this computer's file; the web app leaves it there. */}
+        {!caps.remote && (
+          <button type="button" aria-pressed={view === "journal"} onClick={() => setView("journal")}>
+            Journal
           </button>
         )}
         <button
@@ -66,6 +73,14 @@ export function App() {
         <Pulse
           onRun={(text) => {
             setPrefill((now) => ({ text, n: (now?.n ?? 0) + 1 }));
+            setView("chat");
+          }}
+        />
+      )}
+      {view === "journal" && !caps.remote && (
+        <Journal
+          onMission={({ prompt, conversationId }) => {
+            setPrefill((now) => ({ text: prompt, n: (now?.n ?? 0) + 1, conversationId }));
             setView("chat");
           }}
         />

@@ -1,0 +1,1 @@
+- Shell: a Journal tab shows the cabin's decision journal from the same `decisions.json`. Add a question, add options, lean to one, then Decide, Defer, Reopen or Abandon. To mission links the question to a chat and puts its first message in the chat box without sending it; a second press goes back to the same chat. The web app leaves the journal on the desktop.

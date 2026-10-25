@@ -23,7 +23,15 @@ export type Item =
       answer: Answer | "ended" | null;
     };
 
-function newConversationId(): string {
+export interface Prefill {
+  text: string;
+  n: number;
+  conversationId?: string;
+}
+
+export const MISSION_BUSY = "A reply is still running. Stop it or wait, then press To mission again.";
+
+export function newConversationId(): string {
   return `shell-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
@@ -99,25 +107,41 @@ function PermissionCard({
   );
 }
 
-/** `prefill`: text another page put in the box (Pulse's Run). A new `n`
- * replaces the draft; nothing is sent until the person sends it. */
+/** `prefill`: text another page put in the box (Pulse's Run, Journal's To
+ * mission). A new `n` replaces the draft; nothing is sent until the person
+ * sends it. With `conversationId` the chat moves to that conversation first,
+ * like Start over, unless it is already there. */
 export function Chat({
   onOpenSettings,
   prefill,
 }: {
   onOpenSettings: () => void;
-  prefill?: { text: string; n: number };
+  prefill?: Prefill;
 }) {
   const [conversationId, setConversationId] = useState(newConversationId);
   const [items, setItems] = useState<Item[]>([]);
   const [draft, setDraft] = useState("");
 
-  useEffect(() => {
-    if (prefill) setDraft(prefill.text);
-  }, [prefill]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const busyRef = useRef(false);
+
+  useEffect(() => {
+    if (!prefill) return;
+    const to = prefill.conversationId;
+    if (to && to !== conversationId) {
+      if (busyRef.current) {
+        setError(MISSION_BUSY);
+        return;
+      }
+      void closeChat(conversationId);
+      setItems([]);
+      setError(null);
+      setConversationId(to);
+    }
+    setDraft(prefill.text);
+    // Only a new prefill acts; switching conversations must not re-run it.
+  }, [prefill]);
   const endRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {

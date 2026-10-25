@@ -590,3 +590,53 @@ button.danger {
   padding-left: 18px;
   overflow-wrap: anywhere;
 }
+
+.journal {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.journal-add,
+.journal-option {
+  display: flex;
+  gap: 8px;
+  align-items: end;
+  flex-wrap: wrap;
+}
+
+.journal-add label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1 1 240px;
+}
+
+.journal-option input {
+  flex: 1 1 160px;
+}
+
+.journal .rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.choices {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 6px 0;
+}
+
+.choices button[aria-pressed="true"] {
+  border-color: var(--accent);
+  font-weight: 600;
+}
+
+.card.question.done {
+  opacity: 0.8;
+}
