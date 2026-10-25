@@ -3,7 +3,8 @@ name: Release
 # A stable `vX.Y.Z` tag publishes Latest. A `vX.Y.Z-beta.N` tag publishes a
 # GitHub pre-release (never Latest) with the same assets. A push to `beta`
 # still publishes `beta-vX.Y.Z-<sha>` for the channel while that path remains.
-# Each release carries Linux and Windows builds, `SHA256SUMS`, and
+# Each release carries Linux and Windows builds, the Tauri shell's bundles
+# (Linux, Windows, macOS), `SHA256SUMS`, and
 # `SHA256SUMS.minisig` (minisign via `MINISIGN_SECRET_KEY`). The public key is
 # `packaging/minisign.pub`; the updater refuses unverified assets.
 
@@ -149,8 +150,44 @@ jobs:
             dist-release/grokhub-windows-v*.zip
           if-no-files-found: error
 
+  # The Tauri shell (cross-platform recode, Phase 6) ships as Tauri's own
+  # bundles next to the cabin's builds; scripts/name-shell-bundles.sh gives
+  # them release names. The macOS .dmg is unsigned until Apple signing exists.
+  shell-bundles:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    name: shell bundles (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Linux webview libraries
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev
+      - run: npm ci --prefix ui
+      - name: Bundles
+        shell: bash
+        run: ui/node_modules/.bin/tauri build -- --locked
+      - name: Release names
+        shell: bash
+        run: ./scripts/name-shell-bundles.sh "$RUNNER_OS"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: shell-${{ runner.os }}
+          path: dist-release/*
+          if-no-files-found: error
+
   publish:
-    needs: [linux-bundle, windows-installer]
+    needs: [linux-bundle, windows-installer, shell-bundles]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -225,6 +262,11 @@ jobs:
 
             **Windows:** run `GrokHub-Setup-*.exe` (no admin).
             Installs to `%LOCALAPPDATA%\Programs\GrokHub`.
+
+            **GrokHub Shell (preview, Tauri):** `grokhub-shell-v*-linux-amd64.deb` or
+            `.AppImage` on Linux, `GrokHub-Shell-Setup-*.exe` on Windows, and
+            `grokhub-shell-v*-macos-arm64.dmg` on Apple silicon Macs. The .dmg isn't
+            signed yet, so right-click the app and choose Open the first time.
 
             ## Verify
             `SHA256SUMS` lists every file's SHA-256 and `SHA256SUMS.minisig` signs it.

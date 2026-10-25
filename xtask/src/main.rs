@@ -92,6 +92,8 @@ fn bump_check(root: &Path) -> Result<(), String> {
         "crates/grokhub-app/src/cli.rs",
         &format!("assert_eq!(env!(\"CARGO_PKG_VERSION\"), \"{version}\");"),
     )?;
+    check_contains(root, SHELL_TOML, &shell_toml_line(&version))?;
+    check_contains(root, SHELL_CONF, &shell_conf_line(&version))?;
     check_reference(root, &version)?;
     check_cargo_lock(root, &version)?;
     Ok(())
@@ -162,8 +164,27 @@ const LOCK_PACKAGES: [&str; 6] = [
 ];
 
 /// The Tauri shell (`src-tauri/`) is its own Cargo workspace, so its lockfile
-/// holds its own copies of the grokhub-* crates it builds on.
-const SHELL_LOCK_PACKAGES: [&str; 3] = ["grokhub-agent", "grokhub-core", "grokhub-proto"];
+/// holds its own copies of the grokhub-* crates it builds on, plus the shell.
+const SHELL_LOCK_PACKAGES: [&str; 5] = [
+    "grokhub-agent",
+    "grokhub-core",
+    "grokhub-desktop",
+    "grokhub-proto",
+    "grokhub-shell",
+];
+
+/// The shell's own version copies: its crate and the bundle version Tauri
+/// stamps on the .deb, .AppImage, setup .exe and .dmg.
+const SHELL_TOML: &str = "src-tauri/Cargo.toml";
+const SHELL_CONF: &str = "src-tauri/tauri.conf.json";
+
+fn shell_toml_line(version: &str) -> String {
+    format!("[package]\nname = \"grokhub-shell\"\nversion = \"{version}\"\n")
+}
+
+fn shell_conf_line(version: &str) -> String {
+    format!("\"version\": \"{version}\",")
+}
 
 /// Every lockfile with grokhub-* entries, and the packages each must pin.
 const LOCKS: [(&str, &[&str]); 2] = [
@@ -258,6 +279,16 @@ fn plan_bump(root: &Path, new_version: &str, today: &str) -> Result<BumpPlan, St
             "crates/grokhub-app/src/cli.rs",
             format!("assert_eq!(env!(\"CARGO_PKG_VERSION\"), \"{old}\");"),
             format!("assert_eq!(env!(\"CARGO_PKG_VERSION\"), \"{new_version}\");"),
+        ),
+        (
+            SHELL_TOML,
+            shell_toml_line(&old),
+            shell_toml_line(new_version),
+        ),
+        (
+            SHELL_CONF,
+            shell_conf_line(&old),
+            shell_conf_line(new_version),
         ),
     ] {
         let text = read_rel(root, rel)?;
@@ -413,10 +444,19 @@ fn changelog_text(
         bullets.push_str("- (no changelog fragments)\n");
     }
     let section = format!(
-        "## {new_version} — {today}\n\n{bullets}\n- Linux: `grokhub-linux-v{new_version}.tar.gz` and AUR `pkgver={new_version}`.\n- Windows: `GrokHub-Setup-{new_version}.exe` and `grokhub-windows-v{new_version}.zip`.\n"
+        "## {new_version} — {today}\n\n{bullets}\n- Linux: `grokhub-linux-v{new_version}.tar.gz` and AUR `pkgver={new_version}`.\n- Windows: `GrokHub-Setup-{new_version}.exe` and `grokhub-windows-v{new_version}.zip`.\n{}",
+        shell_artifacts(new_version)
     );
     let rest = strip_unreleased(text)?;
     Ok(format!("# Changelog\n\n## Unreleased\n\n{section}\n{rest}"))
+}
+
+/// The changelog line for the Tauri shell's bundles, named as release.yml
+/// uploads them.
+fn shell_artifacts(v: &str) -> String {
+    format!(
+        "- Shell (Tauri): `grokhub-shell-v{v}-linux-amd64.deb`, `grokhub-shell-v{v}-linux-amd64.AppImage`, `GrokHub-Shell-Setup-{v}.exe` and `grokhub-shell-v{v}-macos-arm64.dmg`.\n"
+    )
 }
 
 fn sorted_fragment_names(root: &Path) -> Result<Vec<String>, String> {
@@ -567,11 +607,13 @@ mod tests {
 
     const OLD: &str = "3.0.2";
     const NEW: &str = "3.1.0";
-    const FILES: [&str; 10] = [
+    const FILES: [&str; 12] = [
         "VERSION",
         "Cargo.toml",
         "Cargo.lock",
         "src-tauri/Cargo.lock",
+        "src-tauri/Cargo.toml",
+        "src-tauri/tauri.conf.json",
         "packaging/PKGBUILD",
         "packaging/aur/PKGBUILD",
         "packaging/windows/grokhub.iss",
@@ -617,6 +659,17 @@ mod tests {
             fx.put(
                 "crates/grokhub-app/src/cli.rs",
                 &format!("assert_eq!(env!(\"CARGO_PKG_VERSION\"), \"{OLD}\");\n"),
+            );
+            fx.put(
+                SHELL_TOML,
+                &format!("{}edition = \"2021\"\n", shell_toml_line(OLD)),
+            );
+            fx.put(
+                SHELL_CONF,
+                &format!(
+                    "{{\n  \"productName\": \"GrokHub Shell\",\n  {}\n}}\n",
+                    shell_conf_line(OLD)
+                ),
             );
             fx.put("docs/REFERENCE.md", &sample_reference(OLD));
             fx.put(
@@ -681,6 +734,19 @@ mod tests {
     }
 
     #[test]
+    fn check_catches_a_stale_shell_version() {
+        let fx = Fixture::new();
+        fx.put(
+            "src-tauri/tauri.conf.json",
+            "{\n  \"version\": \"0.1.0\",\n}\n",
+        );
+        assert_eq!(
+            bump_check(&fx.0).unwrap_err(),
+            "src-tauri/tauri.conf.json missing \"\\\"version\\\": \\\"3.0.2\\\",\""
+        );
+    }
+
+    #[test]
     fn apply_updates_every_copy_and_folds_changelog() {
         let fx = Fixture::new();
         bump_apply(&fx.0, NEW).unwrap();
@@ -691,7 +757,17 @@ mod tests {
             fx.get("src-tauri/Cargo.lock"),
             "[[package]]\nname = \"grokhub-agent\"\nversion = \"3.1.0\"\n\n\
              [[package]]\nname = \"grokhub-core\"\nversion = \"3.1.0\"\n\n\
-             [[package]]\nname = \"grokhub-proto\"\nversion = \"3.1.0\"\n\n"
+             [[package]]\nname = \"grokhub-desktop\"\nversion = \"3.1.0\"\n\n\
+             [[package]]\nname = \"grokhub-proto\"\nversion = \"3.1.0\"\n\n\
+             [[package]]\nname = \"grokhub-shell\"\nversion = \"3.1.0\"\n\n"
+        );
+        assert_eq!(
+            fx.get("src-tauri/Cargo.toml"),
+            "[package]\nname = \"grokhub-shell\"\nversion = \"3.1.0\"\nedition = \"2021\"\n"
+        );
+        assert_eq!(
+            fx.get("src-tauri/tauri.conf.json"),
+            "{\n  \"productName\": \"GrokHub Shell\",\n  \"version\": \"3.1.0\",\n}\n"
         );
         // Dependency version in [workspace.dependencies] is untouched.
         assert!(fx
@@ -706,6 +782,12 @@ mod tests {
         assert!(carried < first && first < plain, "order: {log}");
         assert!(!log.contains("# heading"));
         assert!(log.contains("## 3.0.2 — 2026-01-01"));
+        assert!(log.contains(
+            "- Windows: `GrokHub-Setup-3.1.0.exe` and `grokhub-windows-v3.1.0.zip`.\n\
+             - Shell (Tauri): `grokhub-shell-v3.1.0-linux-amd64.deb`, \
+             `grokhub-shell-v3.1.0-linux-amd64.AppImage`, `GrokHub-Shell-Setup-3.1.0.exe` \
+             and `grokhub-shell-v3.1.0-macos-arm64.dmg`.\n"
+        ));
 
         assert!(fx.0.join("changelog.d/README.md").exists());
         assert!(!fx.0.join("changelog.d/a-first.md").exists());
