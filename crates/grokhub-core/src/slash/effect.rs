@@ -68,6 +68,7 @@ pub fn slash_effect(s: &Slash) -> SlashEffect {
         | Slash::Why
         | Slash::WhyModels
         | Slash::WhyTable
+        | Slash::WhyLocal
         | Slash::Hub
         | Slash::Rewind
         | Slash::RewindStep(_)
@@ -156,6 +157,7 @@ pub const SLASH_SAMPLES: &[&str] = &[
     "/why",
     "/why models",
     "/why table",
+    "/why local",
     "/hub",
     "/inhabit desk",
     "/rewind",

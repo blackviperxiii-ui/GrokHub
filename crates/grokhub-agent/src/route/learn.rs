@@ -259,6 +259,8 @@ pub fn steps_from(
                 .any(|x| matches!(x.as_str(), "E1" | "E2" | "E3" | "retry")),
             cost_usd: cost_of(r, reg),
             latency_ms: r.signals.latency.unwrap_or(0),
+            gov_state: r.gov_state.clone(),
+            tier: r.tier.clone(),
         });
     }
     log
