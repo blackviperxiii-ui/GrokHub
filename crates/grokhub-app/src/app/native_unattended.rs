@@ -196,8 +196,7 @@ fn execute(job: Prepared) -> grokhub_agent::UnattendedDone {
     let _ = grokhub_agent::hub_for(&session);
     grokhub_agent::watch_cancel(&session, cancel.clone());
     let desktop_ops = if job.gate.desktop {
-        Some(Box::new(crate::desktop_mcp::native_desktop())
-            as Box<dyn grokhub_agent::DesktopOps>)
+        Some(Box::new(crate::desktop_mcp::native_desktop()) as Box<dyn grokhub_agent::DesktopOps>)
     } else {
         None
     };

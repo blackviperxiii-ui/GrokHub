@@ -141,10 +141,7 @@ fn emit(line: &str) {
     let _ = out.flush();
 }
 
-pub fn read_line_capped(
-    reader: &mut impl BufRead,
-    cap: usize,
-) -> Result<Option<String>, String> {
+pub fn read_line_capped(reader: &mut impl BufRead, cap: usize) -> Result<Option<String>, String> {
     let mut buf = Vec::new();
     let mut byte = [0u8; 1];
     loop {
@@ -175,11 +172,7 @@ pub fn read_line_capped(
     Ok(Some(String::from_utf8_lossy(&buf).into_owned()))
 }
 
-pub fn encode_rgba(
-    rgba: &[u8],
-    w: u32,
-    h: u32,
-) -> Result<(Vec<u8>, String, u32, u32), String> {
+pub fn encode_rgba(rgba: &[u8], w: u32, h: u32) -> Result<(Vec<u8>, String, u32, u32), String> {
     if w == 0 || h == 0 {
         return Err("empty screenshot".into());
     }
@@ -742,9 +735,7 @@ pub fn windows_primary_frame() -> Result<image::RgbaImage, String> {
 /// Windows COMPUTER_CMD hands: SendInput through the desktop tools' own
 /// backend, since xdotool and ydotool are Linux tools.
 #[cfg(windows)]
-pub fn windows_hands(
-    op: &grokhub_core::recipe::ComputerOp,
-) -> Option<Result<String, String>> {
+pub fn windows_hands(op: &grokhub_core::recipe::ComputerOp) -> Option<Result<String, String>> {
     drive_hands(&mut windows::WindowsBackend::new(), op)
 }
 
