@@ -243,3 +243,74 @@ button.danger {
   color: var(--danger);
   border-color: var(--danger);
 }
+
+.automations,
+.memory {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  overflow-y: auto;
+}
+
+.automations .add,
+.memory .add {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.automations .add input:not([type="checkbox"]),
+.memory .add input:not([type="checkbox"]) {
+  flex: 1;
+}
+
+.memory-file label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.memory-file textarea {
+  resize: vertical;
+  font-family: ui-monospace, monospace;
+}
+
+.memory-file-foot {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.automations .rows,
+.memory .rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.card.automation,
+.card.hit {
+  max-width: none;
+  flex-direction: column;
+  flex-wrap: nowrap;
+  align-items: stretch;
+}
+
+.card.automation pre,
+.card.hit pre {
+  flex-basis: auto;
+}
+
+.card-health,
+.automations .error {
+  color: var(--danger);
+  margin: 0;
+}

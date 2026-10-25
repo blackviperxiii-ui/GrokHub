@@ -70,8 +70,16 @@ function mockReply(callNumber) {
   ];
 }
 
+let mockSeen = [];
+
+/** True when some model call carried the automation's instructions. */
+function mockRunPrompt() {
+  return mockSeen.some((c) => c.body.includes(AUTOMATION));
+}
+
 function startMock() {
   const seen = [];
+  mockSeen = seen;
   const server = createServer((req, res) => {
     let body = "";
     req.on("data", (chunk) => (body += chunk));
@@ -118,6 +126,77 @@ async function waitFor(what, fn, timeoutMs = 30000) {
 }
 
 const ELEMENT = "element-6066-11e4-a52e-4f735466cecf";
+const AUTOMATION = "every day at 7am say hello from the smoke test";
+const MEMORY_NOTE = "the smoke test likes kumquats";
+
+async function find(s, css) {
+  const el = await wd("POST", `${s}/element`, { using: "css selector", value: css });
+  return el[ELEMENT];
+}
+
+async function click(s, css) {
+  await wd("POST", `${s}/element/${await find(s, css)}/click`, {});
+}
+
+async function textOf(s, css) {
+  return wd("GET", `${s}/element/${await find(s, css)}/text`);
+}
+
+// Automations: add one from plain text, check it lands in the cabin's
+// automations.json, then Run now and wait for the mocked reply on its row.
+async function automations(s, config) {
+  await click(s, "nav.tabs button:nth-child(2)");
+  const input = await waitFor("the automations page", () => find(s, "input[aria-label='New automation']"));
+  await wd("POST", `${s}/element/${input}/value`, { text: AUTOMATION });
+  await click(s, "form.add button[type='submit']");
+  const summary = await waitFor("the new automation", async () => {
+    const t = await textOf(s, ".card.automation .card-status");
+    return t.startsWith("daily at 07:00") ? t : null;
+  });
+  console.log(`automation added: ${JSON.stringify(summary)}`);
+  const saved = JSON.parse(readFileSync(join(config, "automations.json"), "utf8"));
+  if (saved.length !== 1 || saved[0].schedule !== "daily" || saved[0].time !== "07:00") {
+    throw new Error(`automations.json holds ${JSON.stringify(saved)}`);
+  }
+
+  await click(s, ".card.automation .card-buttons button");
+  const result = await waitFor("the run's reply", async () => {
+    const t = await textOf(s, ".card.automation .card-detail");
+    return t.includes(REPLY) ? t : null;
+  });
+  console.log(`run now replied: ${JSON.stringify(result)}`);
+  const after = JSON.parse(readFileSync(join(config, "automations.json"), "utf8"));
+  if (after[0].runCount !== 1 || after[0].health?.outcome !== "ok") {
+    throw new Error(`the run was not recorded: ${JSON.stringify(after[0])}`);
+  }
+  const ran = mockRunPrompt();
+  if (!ran) throw new Error("the model never got the automation's instructions");
+}
+
+// Memory: Remember a line, check it lands in the work folder's MEMORY.md,
+// then search for it the way chat recall would.
+async function memory(s, workspace) {
+  await click(s, "nav.tabs button:nth-child(3)");
+  const input = await waitFor("the memory page", () => find(s, "input[aria-label='New note']"));
+  await wd("POST", `${s}/element/${input}/value`, { text: MEMORY_NOTE });
+  await click(s, ".memory form.add button[type='submit']");
+  await waitFor("the remembered note", async () => {
+    const t = await textOf(s, ".memory p.note");
+    return t.startsWith("Remembered in workspace") ? t : null;
+  });
+  const file = readFileSync(join(workspace, "MEMORY.md"), "utf8");
+  if (file !== `${MEMORY_NOTE}\n`) throw new Error(`MEMORY.md says ${JSON.stringify(file)}`);
+  console.log(`note remembered: ${JSON.stringify(file)}`);
+
+  const search = await find(s, "input[aria-label='Search memory']");
+  await wd("POST", `${s}/element/${search}/value`, { text: "kumquats" });
+  await click(s, ".memory form.add:last-of-type button[type='submit']");
+  const hit = await waitFor("the search hit", async () => {
+    const t = await textOf(s, ".card.hit .card-detail");
+    return t === MEMORY_NOTE ? t : null;
+  });
+  console.log(`search found: ${JSON.stringify(hit)}`);
+}
 
 async function main() {
   const mock = await startMock();
@@ -218,6 +297,9 @@ async function main() {
       throw new Error(`auth was ${calls.map((c) => c.auth)}`);
     }
     console.log(`model got the prompt with model=${first.model} and ${tools.length} tools`);
+
+    await automations(s, config);
+    await memory(s, workspace);
     console.log("smoke ok");
   } catch (err) {
     // What the window and the mock saw, for a failed CI run.

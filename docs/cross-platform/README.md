@@ -141,6 +141,52 @@ the loop the egui cabin uses, on one worker thread per conversation
   test does the same through the built app: nothing is written and the model
   is not called again until Allow once is clicked.
 
-Next slices: Pulse, Automations, memory, MCP, computer-use, and the Auto
-and Always permission modes.
+**3b, Automations.** An Automations page edits the cabin's own
+`automations.json` (`src-tauri/src/automations.rs`), so a job made in either
+app shows in both.
+
+- Add takes plain text and uses the cabin's parser
+  (`parse_nl_automation`): "every weekday at 9am …", "every day at 7am …" or
+  "heartbeat every 30 min …". Pause, Resume and Remove work on one row and
+  keep the rest. A file the shell cannot read is an error and is never
+  overwritten.
+- The UI sends its local weekday, hour and minute, so next-run times use the
+  user's zone on every platform without a time-zone crate.
+- Run now runs the job with `run_unattended` in Ask mode on a read-only
+  session, as the cabin's scheduled Ask jobs do, so an allow rule cannot let a
+  write through. It can read, every tool that needs an OK is refused, and the
+  run is recorded on the row (run count, health). One job runs once at a time,
+  and the page stays mounted so a run in flight is not lost on a tab change.
+- Edits take a lock and reload the file first, and a cabin row with no id gets
+  one written back, so Pause or Remove always finds the row it showed.
+- The cabin's pulse still fires jobs on schedule. The shell runs no second
+  scheduler, so a job never fires twice. Firing from the shell waits until
+  the shell replaces the cabin.
+- Tests: Rust tests for add, refusing text with no time, pause, resume,
+  remove, a broken file, rows the cabin wrote, and a Run now whose write is
+  refused. vitest covers the page. The smoke test adds a job through the UI,
+  checks `automations.json`, runs it and waits for the reply.
+
+**3c, Memory.** A Memory page shows and edits the same `MEMORY.md` files the
+cabin and the agent loop read (`src-tauri/src/memory.rs`): global notes in the
+config folder's `memory/MEMORY.md`, project notes in the work folder's
+`MEMORY.md`.
+
+- Remember adds one line the way `/remember` does; Global files it in the
+  global notes. Each file can also be edited and saved whole.
+  A save sends the text the editor started from; if the file changed since
+  (chat remembered something), nothing is written and the page reloads.
+- Secrets are redacted before anything is written, and the page says when that
+  happened. Files over 1 MB or not plain text are refused.
+- Search runs `grokhub_agent::search_memory`, the same index and scope recall
+  uses: this work folder's notes and the global notes, never another folder's.
+- When the cabin's AMR store is on, the page says recall does not read these
+  files.
+- Tests: Rust tests for add, edit with a redacted secret, a blank note, and a
+  search that keeps other work folders out. vitest covers the page. The smoke
+  test remembers a line through the UI, checks `MEMORY.md`, and finds it with
+  search.
+
+Next slices: Pulse, MCP, computer-use, and the Auto and Always permission
+modes.
 

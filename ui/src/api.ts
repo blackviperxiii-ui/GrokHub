@@ -73,3 +73,81 @@ export function closeChat(conversationId: string): Promise<void> {
 export function onChatEvent(handler: (envelope: ChatEnvelope) => void): Promise<UnlistenFn> {
   return listen<ChatEnvelope>(CHAT_EVENT, (event) => handler(event.payload));
 }
+
+export interface AutomationRow {
+  id: string;
+  name: string;
+  instructions: string;
+  enabled: boolean;
+  summary: string;
+  health: string | null;
+}
+
+export interface RunResult {
+  text: string;
+  error: string;
+  stop: string;
+}
+
+/** The local wall clock, so next-run times read in the user's own zone. */
+export function wallClock(now: Date = new Date()) {
+  return { weekday: now.getDay(), hour: now.getHours(), minute: now.getMinutes() };
+}
+
+export function listAutomations(): Promise<AutomationRow[]> {
+  return invoke<AutomationRow[]>("list_automations", { clock: wallClock() });
+}
+
+export function addAutomation(text: string): Promise<AutomationRow[]> {
+  return invoke<AutomationRow[]>("add_automation", { text, clock: wallClock() });
+}
+
+export function setAutomationEnabled(id: string, enabled: boolean): Promise<AutomationRow[]> {
+  return invoke<AutomationRow[]>("set_automation_enabled", { id, enabled, clock: wallClock() });
+}
+
+export function removeAutomation(id: string): Promise<AutomationRow[]> {
+  return invoke<AutomationRow[]>("remove_automation", { id, clock: wallClock() });
+}
+
+export function runAutomation(id: string): Promise<RunResult> {
+  return invoke<RunResult>("run_automation", { id });
+}
+
+export interface MemoryNotes {
+  global: string;
+  workspace: string;
+  globalPath: string;
+  workspacePath: string;
+  /** The cabin's AMR store is on, so recall does not read these files. */
+  amr: boolean;
+}
+
+export interface MemoryHit {
+  scope: string;
+  body: string;
+}
+
+export function getMemory(): Promise<MemoryNotes> {
+  return invoke<MemoryNotes>("get_memory");
+}
+
+/** `base` is the text the editor started from; a file that changed since is not overwritten. */
+export function saveMemory(
+  global: boolean,
+  text: string,
+  base: string,
+): Promise<{ notes: MemoryNotes; redacted: boolean }> {
+  return invoke("save_memory", { global, text, base });
+}
+
+export function addMemory(
+  text: string,
+  global: boolean,
+): Promise<{ status: string; notes: MemoryNotes }> {
+  return invoke("add_memory", { text, global });
+}
+
+export function searchMemory(query: string): Promise<MemoryHit[]> {
+  return invoke<MemoryHit[]>("search_memory", { query });
+}
