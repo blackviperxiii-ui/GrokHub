@@ -578,6 +578,7 @@ impl Cabin {
             Slash::Why => self.run_why(false),
             Slash::WhyModels => self.run_why(true),
             Slash::WhyTable => self.run_why_table(),
+            Slash::WhyLocal => self.run_why_local(),
             Slash::Diagnose => self.run_diagnose(Vec::new(), true),
             Slash::Record(note) => self.start_screen_recording(note),
             Slash::RecordStop => self.stop_screen_recording(),

@@ -81,6 +81,9 @@ pub struct Step {
     pub rework: bool,
     pub cost_usd: f64,
     pub latency_ms: u64,
+    /// On-device steps: the governor level and hardware tier they ran at.
+    pub gov_state: String,
+    pub tier: String,
 }
 
 /// Pass, rework, cost and latency over a set of steps.
@@ -164,6 +167,11 @@ pub struct Scorecard {
     pub class: String,
     pub model: String,
     pub effort: Option<String>,
+    /// On-device cards split by governor level and hardware tier.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub gov_state: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub tier: String,
     #[serde(flatten)]
     pub snap: Snap,
 }
@@ -182,19 +190,28 @@ pub struct Scorecards {
 /// Scorecards from the last [`SCORECARD_DAYS`] of steps, one per (class, model, effort).
 pub fn scorecards(steps: &[Step], now_ms: u64) -> Scorecards {
     let since = now_ms.saturating_sub(SCORECARD_DAYS * DAY_MS);
-    let mut groups: BTreeMap<(String, String, Option<String>), Vec<&Step>> = BTreeMap::new();
+    type Key = (String, String, Option<String>, String, String);
+    let mut groups: BTreeMap<Key, Vec<&Step>> = BTreeMap::new();
     for s in steps.iter().filter(|s| s.at >= since && s.at <= now_ms) {
         groups
-            .entry((s.class.clone(), s.model.clone(), s.effort.clone()))
+            .entry((
+                s.class.clone(),
+                s.model.clone(),
+                s.effort.clone(),
+                s.gov_state.clone(),
+                s.tier.clone(),
+            ))
             .or_default()
             .push(s);
     }
     let cards = groups
         .into_iter()
-        .map(|((class, model, effort), v)| Scorecard {
+        .map(|((class, model, effort, gov_state, tier), v)| Scorecard {
             class,
             model,
             effort,
+            gov_state,
+            tier,
             snap: Snap::of(v),
         })
         .collect();

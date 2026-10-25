@@ -22,6 +22,18 @@ pub enum Level {
     RampUp,
 }
 
+impl Level {
+    /// The word the route log, scorecards and the governor log use.
+    pub fn label(self) -> &'static str {
+        match self {
+            Level::Unload => "unload",
+            Level::Throttle => "throttle",
+            Level::Normal => "normal",
+            Level::RampUp => "ramp_up",
+        }
+    }
+}
+
 /// Samples in a row before stepping down (to less load).
 pub const DOWN_SAMPLES: u32 = 5;
 /// Samples in a row before stepping up (to more load).

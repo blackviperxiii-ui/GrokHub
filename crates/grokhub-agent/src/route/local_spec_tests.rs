@@ -59,7 +59,23 @@ fn gemma_12b(tokenizer: Option<String>) -> GgufMeta {
     }
 }
 
-const E2B_MB: u64 = 3_100;
+/// Gemma-4-E2B-shaped: the drafter, with its own KV cache.
+fn gemma_e2b() -> GgufMeta {
+    GgufMeta {
+        arch: "gemma4".into(),
+        block_count: 35,
+        context_length: 131_072,
+        embedding_length: 1_536,
+        head_count: 8,
+        head_count_kv: 1,
+        key_length: 256,
+        value_length: 256,
+        expert_count: 0,
+        file_mb: 3_100,
+        tokenizer: None,
+        nextn_layers: 0,
+    }
+}
 
 fn args(p: &LocalProfile, meta: &GgufMeta, backend: Backend, state: GovState) -> LaunchArgs {
     autoconfig(p, meta, backend, state, &Overrides::default())
@@ -122,31 +138,38 @@ fn draft_flags_go_out_in_the_engines_own_names() {
 #[test]
 fn a_drafter_fits_only_beside_a_whole_model_or_on_the_cpu() {
     let meta = gemma_12b(None);
-    // 24 GB card: the 12B fits whole at 32k with room for E2B.
-    let big = machine(vec![nvidia(24_576, 23_000)], 65_536, 48_000);
+    let e2b = gemma_e2b();
+    // 24 GB card: the 12B fits whole at 32k with room for E2B and its cache.
+    let big = machine(vec![nvidia(24_576, 24_000)], 65_536, 48_000);
     let a = args(&big, &meta, Backend::Cuda, GovState::Normal);
     assert_eq!((a.ngl, a.ctx, a.kv), (49, 32_768, KvType::Q8));
-    assert_eq!(fits(&big, &meta, &a, GovState::Normal, E2B_MB), Some(true));
+    assert_eq!(autoconfig::kv_mb(&e2b, a.ctx, a.kv), 595);
+    assert_eq!(fits(&big, &meta, &a, GovState::Normal, &e2b), Some(true));
+    // With 1 GB less free, E2B's own 595 MB cache tips it over.
+    let busy = machine(vec![nvidia(24_576, 23_000)], 65_536, 48_000);
+    let b = args(&busy, &meta, Backend::Cuda, GovState::Normal);
+    assert_eq!((b.ngl, b.ctx), (49, 32_768));
+    assert_eq!(fits(&busy, &meta, &b, GovState::Normal, &e2b), None);
     // Throttle halves the budget: no room for both.
     let t = args(&big, &meta, Backend::Cuda, GovState::Throttle);
-    assert_eq!(fits(&big, &meta, &t, GovState::Throttle, E2B_MB), None);
+    assert_eq!(fits(&big, &meta, &t, GovState::Throttle, &e2b), None);
     // 12 GB laptop card: the 12B alone takes it.
     let laptop = machine(vec![nvidia(12_282, 11_500)], 32_768, 24_000);
     let l = args(&laptop, &meta, Backend::Cuda, GovState::Normal);
-    assert_eq!(fits(&laptop, &meta, &l, GovState::Normal, E2B_MB), None);
+    assert_eq!(fits(&laptop, &meta, &l, GovState::Normal, &e2b), None);
     // 6 GB card: part of the model runs on the CPU, so nothing to spare.
     let small = machine(vec![nvidia(6_144, 5_800)], 32_768, 24_000);
     let s = args(&small, &meta, Backend::Cuda, GovState::Normal);
     assert!(s.ngl < s.all_layers, "{s:?}");
-    assert_eq!(fits(&small, &meta, &s, GovState::Normal, E2B_MB), None);
+    assert_eq!(fits(&small, &meta, &s, GovState::Normal, &e2b), None);
     // CPU only with 64 GB: the drafter sits in RAM too.
     let cpu = machine(vec![], 65_536, 48_000);
     let c = args(&cpu, &meta, Backend::Cpu, GovState::Normal);
-    assert_eq!(fits(&cpu, &meta, &c, GovState::Normal, E2B_MB), Some(false));
+    assert_eq!(fits(&cpu, &meta, &c, GovState::Normal, &e2b), Some(false));
     // 8 GB, CPU only: no.
     let low = machine(vec![], 8_192, 5_000);
     let lo = args(&low, &meta, Backend::Cpu, GovState::Normal);
-    assert_eq!(fits(&low, &meta, &lo, GovState::Normal, E2B_MB), None);
+    assert_eq!(fits(&low, &meta, &lo, GovState::Normal, &e2b), None);
 }
 
 /// A GGUF header with a vocabulary, written to `path`.
@@ -275,6 +298,15 @@ fn a_matching_catalog_drafter_waits_for_the_speed_test_then_runs() {
         rig.plan(GovState::Throttle).decision,
         Decision::Off("the machine is busy, so the draft model is off")
     );
+    // The speed test skips the level check; Throttle's halved budget still
+    // leaves no room next to the 12B.
+    set_force(Some(true));
+    let forced = rig.plan(GovState::Throttle).decision;
+    set_force(None);
+    assert_eq!(
+        forced,
+        Decision::Off("there isn't room for the model and its draft model together")
+    );
     ld::save_verdict(
         &rig.dir,
         key,
@@ -301,6 +333,17 @@ fn a_drafter_with_another_vocabulary_is_refused() {
         rig.plan(GovState::Normal).decision,
         Decision::Off("the draft model's tokenizer doesn't match the model")
     );
+}
+
+#[test]
+fn a_catalog_drafter_with_an_unreadable_header_is_not_used() {
+    let rig = Rig::new("broken", G12B_FILE, None);
+    let drafters = rig.dir.join("drafters");
+    std::fs::create_dir_all(&drafters).unwrap();
+    std::fs::write(drafters.join(E2B_FILE), b"not a gguf").unwrap();
+    let p = rig.plan(GovState::Normal);
+    assert_eq!(p.decision, Decision::Off("no draft model is installed"));
+    assert_eq!(p.draft, None);
 }
 
 #[test]

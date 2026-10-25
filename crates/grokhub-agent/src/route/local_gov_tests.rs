@@ -103,3 +103,46 @@ fn the_breaker_stops_starting_a_server_that_keeps_dying_without_leaking_a_reques
     assert_eq!(crate::route::local_sidecar::global_pid(), None);
     reset_for_test();
 }
+
+#[test]
+fn the_governor_log_keeps_seven_days_of_level_changes() {
+    let dir = crate::harness::test_dir("gov-log");
+    let day = 24 * 60 * 60 * 1_000;
+    append_log(
+        &dir,
+        1_000,
+        Level::Normal,
+        Level::Throttle,
+        "a game is running",
+    )
+    .unwrap();
+    append_log(&dir, 3 * day, Level::Throttle, Level::Normal, "normal use").unwrap();
+    append_log(
+        &dir,
+        8 * day + 500,
+        Level::Normal,
+        Level::Unload,
+        "the battery is low",
+    )
+    .unwrap();
+    let text = std::fs::read_to_string(dir.join(LOG_FILE)).unwrap();
+    assert_eq!(
+        text,
+        format!(
+            "{}\n{}\n",
+            r#"{"at":259200000,"from":"throttle","reason":"normal use","to":"normal"}"#,
+            r#"{"at":691200500,"from":"normal","reason":"the battery is low","to":"unload"}"#
+        )
+    );
+    // Deleting it is fine: the next change starts a new file.
+    std::fs::remove_file(dir.join(LOG_FILE)).unwrap();
+    reset_for_test();
+    set_log_dir(dir.clone());
+    apply(Level::RampUp, "idle on AC power");
+    let line = std::fs::read_to_string(dir.join(LOG_FILE)).unwrap();
+    assert!(
+        line.ends_with("\"from\":\"normal\",\"reason\":\"idle on AC power\",\"to\":\"ramp_up\"}\n"),
+        "{line}"
+    );
+    reset_for_test();
+}

@@ -91,6 +91,8 @@ pub enum Slash {
     WhyModels,
     /// `/why table`: the routing table Auto picks models from (Router R2a).
     WhyTable,
+    /// `/why local`: the on-device model's state, governor level and queue.
+    WhyLocal,
     Hub,
     Inhabit(String),
     Rewind,
@@ -256,7 +258,7 @@ pub fn slash_kind(s: &Slash) -> &'static str {
         Slash::Record(_) => "record",
         Slash::RecordStop => "record_stop",
         Slash::AudioCheck(_) => "audiocheck",
-        Slash::Why | Slash::WhyModels | Slash::WhyTable => "why",
+        Slash::Why | Slash::WhyModels | Slash::WhyTable | Slash::WhyLocal => "why",
         Slash::Hub => "hub",
         Slash::Inhabit(_) => "inhabit",
         Slash::Rewind => "rewind",
@@ -977,7 +979,7 @@ pub fn slash_help() -> String {
         "/send <task> — task this box",
         "/sync — merge chats and memory with paired computers (asks first unless Settings → Permissions allows it)",
         "/privacy — your grants, learning scopes (all off), and what left this computer",
-        "/why — the last 10 reasons the router gave for a model and effort (Auto picks both; a model you pin stays yours); /why models lists each model's state; /why table shows how Auto picks",
+        "/why — the last 10 reasons the router gave for a model and effort (Auto picks both; a model you pin stays yours); /why models lists each model's state; /why table shows how Auto picks; /why local shows the on-device model",
         "/diagnose — check disk, memory, services, logs, network and updates, read only, and say what's wrong in plain words (needs System state in Settings → Permissions)",
         "/record — record the screen (up to 2:00) and diagnose it; /record stop ends it. Add what's wrong after it. Needs Screen recording in Settings → Cabin defaults",
         "/audiocheck — list outputs and inputs, listen to the default input (or /audiocheck yeti) for 5 seconds, and name what's wrong: muted, silent, clipping, too quiet, dropouts or crackle. Changes nothing",
@@ -1522,6 +1524,7 @@ mod tests {
         assert_eq!(parse_slash("/why"), Some(Slash::Why));
         assert_eq!(parse_slash("/WHY models"), Some(Slash::WhyModels));
         assert_eq!(parse_slash("/why table"), Some(Slash::WhyTable));
+        assert_eq!(parse_slash("/why local"), Some(Slash::WhyLocal));
         assert_eq!(parse_slash("/why not"), None);
         assert_eq!(parse_slash("/why").as_ref().map(slash_kind), Some("why"));
         assert!(slash_help()
