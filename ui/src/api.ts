@@ -292,6 +292,58 @@ export function pulseAct(id: string, act: PulseAct): Promise<PulsePage> {
   return invoke<PulsePage>("pulse_act", { id, act, day: localDay() });
 }
 
+/** One decision journal question (src-tauri/src/journal.rs). */
+export interface JournalQuestion {
+  id: string;
+  question: string;
+  /** "Open", "Investigating", "Ready to decide", "Deferred", … */
+  status: string;
+  active: boolean;
+  options: { id: string; label: string }[];
+  /** The id of the option it leans to. */
+  leaning: string | null;
+  /** The option label picked when decided. */
+  chosen: string | null;
+  /** The chat its mission runs in. */
+  mission: string | null;
+}
+
+export interface JournalPage {
+  active: JournalQuestion[];
+  history: JournalQuestion[];
+}
+
+export type JournalAct =
+  | { kind: "addOption"; label: string }
+  | { kind: "lean"; optionId: string }
+  | { kind: "defer" }
+  | { kind: "abandon" }
+  | { kind: "reopen" }
+  | { kind: "decide"; optionId: string | null };
+
+/** What To mission puts in the chat box, and the chat it goes to. */
+export interface JournalMission {
+  conversationId: string;
+  title: string;
+  prompt: string;
+}
+
+export function getJournal(): Promise<JournalPage> {
+  return invoke<JournalPage>("get_journal");
+}
+
+export function journalAdd(question: string): Promise<JournalPage> {
+  return invoke<JournalPage>("journal_add", { question });
+}
+
+export function journalAct(id: string, act: JournalAct): Promise<JournalPage> {
+  return invoke<JournalPage>("journal_act", { id, act });
+}
+
+export function journalToMission(id: string, conversationId: string): Promise<JournalMission> {
+  return invoke<JournalMission>("journal_to_mission", { id, conversationId });
+}
+
 /** Settings → Local AI (src-tauri/src/local_ai.rs). */
 export type LocalMode = "auto" | "manual";
 
