@@ -1111,7 +1111,7 @@ pub fn stream_routed(
     };
     let on_device = decision.on_device();
     let out = if on_device {
-        super::local::serve(class, &text)
+        super::local::serve(class, &text, cancel)
     } else if decision.on_provider() {
         // Not streamed: the whole answer arrives as one delta.
         let span_id = format!("{}:{now}", req.conversation_id);
