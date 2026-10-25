@@ -5,7 +5,10 @@ import type { Settings as Shape } from "./api";
 
 const api = vi.hoisted(() => ({
   getSettings: vi.fn<() => Promise<Shape>>(),
-  saveSettings: vi.fn<(model: string, closeToTray: boolean, workspace: string) => Promise<Shape>>(),
+  saveSettings:
+    vi.fn<
+      (model: string, closeToTray: boolean, workspace: string, approvals: string) => Promise<Shape>
+    >(),
   setApiKey: vi.fn<(key: string) => Promise<Shape>>(),
   clearApiKey: vi.fn<() => Promise<Shape>>(),
 }));
@@ -21,6 +24,7 @@ function shape(over: Partial<Shape>): Shape {
     hasApiKey: false,
     workspace: "",
     workspacePath: "/home/viper/GrokHub",
+    approvals: "ask",
     ...over,
   };
 }
@@ -46,10 +50,32 @@ describe("Settings", () => {
     await userEvent.click(screen.getByLabelText(/keeps GrokHub in the tray/));
     await userEvent.click(screen.getByRole("button", { name: "Save settings" }));
 
-    expect(api.saveSettings).toHaveBeenCalledWith("grok-5", false, "/work");
+    expect(api.saveSettings).toHaveBeenCalledWith("grok-5", false, "/work", "ask");
     expect(await screen.findByText("Settings saved.")).toBeInTheDocument();
     expect(screen.getByLabelText(/keeps GrokHub in the tray/)).not.toBeChecked();
     expect(screen.getByText("/work")).toBeInTheDocument();
+  });
+
+  it("approvals start at Ask and Always says what still asks", async () => {
+    api.saveSettings.mockResolvedValue(shape({ approvals: "always" }));
+    render(<Settings />);
+
+    const pick = await screen.findByLabelText("Approvals");
+    expect(pick).toHaveValue("ask");
+    expect(
+      screen.getByText("It asks before it changes a file or runs a command."),
+    ).toBeInTheDocument();
+    await userEvent.selectOptions(pick, "always");
+    expect(
+      screen.getByText(
+        "Files change and commands run without asking. Deleting, sending, paying and credentials still ask.",
+      ),
+    ).toHaveClass("warn");
+    await userEvent.click(screen.getByRole("button", { name: "Save settings" }));
+
+    expect(api.saveSettings).toHaveBeenCalledWith("grok-4.7", true, "", "always");
+    expect(await screen.findByText("Settings saved.")).toBeInTheDocument();
+    expect(screen.getByLabelText("Approvals")).toHaveValue("always");
   });
 
   it("saves a key without echoing it, then removes it", async () => {

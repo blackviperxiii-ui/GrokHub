@@ -2,6 +2,9 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
+/** How chat handles tools that change things (the cabin's permission mode). */
+export type Approvals = "ask" | "auto" | "always";
+
 export interface Settings {
   model: string;
   closeToTray: boolean;
@@ -10,6 +13,7 @@ export interface Settings {
   workspace: string;
   /** The folder the agent actually works in. */
   workspacePath: string;
+  approvals: Approvals;
 }
 
 export type Answer = "allow" | "always" | "deny";
@@ -37,8 +41,9 @@ export function saveSettings(
   model: string,
   closeToTray: boolean,
   workspace: string,
+  approvals: Approvals,
 ): Promise<Settings> {
-  return invoke<Settings>("save_settings", { model, closeToTray, workspace });
+  return invoke<Settings>("save_settings", { model, closeToTray, workspace, approvals });
 }
 
 export function setApiKey(key: string): Promise<Settings> {

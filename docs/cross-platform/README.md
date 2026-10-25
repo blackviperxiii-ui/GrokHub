@@ -187,6 +187,20 @@ config folder's `memory/MEMORY.md`, project notes in the work folder's
   test remembers a line through the UI, checks `MEMORY.md`, and finds it with
   search.
 
-Next slices: Pulse, MCP, computer-use, and the Auto and Always permission
-modes.
+**3d, approval modes.** Settings has an Approvals choice, saved as
+`approvals` in `shell.json`: Ask every time (the default), Auto, or Always
+approve, the cabin's three permission modes.
+
+- Chat builds its gate from it on every prompt (`shell_gate(mode)`), so a
+  change applies to the next message in an open chat.
+- Auto uses the cabin's judge (`auto_review`): routine steps run, the rest
+  ask, and a judge failure asks.
+- Always runs writes and commands without a card, but hard-class steps
+  (delete, send, money, credentials, irreversible OS changes) still park for
+  an OK in every mode. A test runs `rm notes.txt` under Always and checks it
+  waits and the file survives a Deny.
+- An unknown value in `shell.json` reads as Ask. Automations' Run now stays
+  read-only whatever the mode.
+
+Next slices: Pulse, MCP, computer-use.
 
