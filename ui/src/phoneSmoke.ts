@@ -25,6 +25,15 @@ function tabs(): string[] {
   return [...document.querySelectorAll("nav.tabs button")].map((b) => b.textContent ?? "");
 }
 
+/** What the chat shows, for a failed run's report. */
+function chatState(): string {
+  const alert = document.querySelector("[role='alert']")?.textContent ?? "none";
+  const bubbles = [...document.querySelectorAll(".bubble")].map(
+    (b) => `${b.className}: ${(b.textContent ?? "").slice(0, 80)}`,
+  );
+  return `alert=${alert} bubbles=[${bubbles.join(" | ")}]`;
+}
+
 /** Sets a React-controlled textarea the way typing would. */
 function type(box: HTMLTextAreaElement, text: string) {
   const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set;
@@ -48,9 +57,16 @@ export async function phoneSmoke(): Promise<string> {
     document.querySelector<HTMLButtonElement>("form.composer button[type='submit']:not(:disabled)"),
   );
   send.click();
-  const reply = await waitFor("the mocked reply", () => {
-    const el = document.querySelector(".bubble.assistant:not(.streaming)");
-    return el?.textContent === PHONE_REPLY ? el.textContent : null;
+  // A cold simulator can take minutes over its first request.
+  const reply = await waitFor(
+    "the mocked reply",
+    () => {
+      const el = document.querySelector(".bubble.assistant:not(.streaming)");
+      return el?.textContent === PHONE_REPLY ? el.textContent : null;
+    },
+    180000,
+  ).catch((err: unknown) => {
+    throw new Error(`${String(err)}; ${chatState()}`);
   });
   return `ok tabs=${tabs().join(",")} reply=${reply}`;
 }

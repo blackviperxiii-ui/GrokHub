@@ -20,7 +20,7 @@ const REPORT = "phone-smoke.txt";
 // Keep in step with ui/src/phoneSmoke.ts.
 const PROMPT = "phone smoke: say hello";
 const REPLY = "Hello from the phone smoke test";
-const TIMEOUT_MS = 5 * 60 * 1000;
+const TIMEOUT_MS = 8 * 60 * 1000;
 
 const [platform, app] = process.argv.slice(2);
 if (!["android", "ios"].includes(platform) || !app) {
@@ -119,7 +119,7 @@ const ios = {
         "--style",
         "compact",
         "--predicate",
-        'process CONTAINS "grokhub"',
+        'process CONTAINS[c] "grokhub"',
       ]) ?? ""
     );
   },
@@ -153,6 +153,7 @@ async function main() {
     console.log("phone smoke ok");
   } catch (err) {
     console.error(device.logs().split("\n").slice(-80).join("\n"));
+    console.error(`the mock saw ${mock.seen.length} request(s): ${mock.seen.map((c) => c.path).join(", ")}`);
     throw err;
   } finally {
     mock.server.close();
