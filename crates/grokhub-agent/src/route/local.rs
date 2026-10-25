@@ -38,7 +38,7 @@ use grokhub_core::model_registry::{CatalogSource, Listing, ModelMeta, Prices, So
 
 use super::ladder::PREPARE_HARD;
 use super::policy::class_row;
-use crate::client::{ClientError, TurnOutput, Usage};
+use crate::client::{CancelToken, ClientError, TurnOutput, Usage};
 
 pub const PROVIDER_LOCAL: &str = "local";
 pub const LOCAL_PREFIX: &str = "local:";
@@ -625,22 +625,26 @@ impl Drop for ForceOn {
 const CLASS_LABELS: &[&str] = &["routine", "needs_attention", "sensitive"];
 
 /// Answer one local call on the device. No network, no egress line. A heavy
-/// background step first waits (up to [`HEAVY_WAIT`]) for RampUp.
-pub fn serve(class: &str, text: &str) -> Result<TurnOutput, ClientError> {
-    serve_within(class, text, HEAVY_WAIT)
+/// background step first waits (up to [`HEAVY_WAIT`]) for RampUp; Stop ends the wait.
+pub fn serve(class: &str, text: &str, cancel: &CancelToken) -> Result<TurnOutput, ClientError> {
+    serve_within(class, text, HEAVY_WAIT, cancel)
 }
 
 pub(crate) fn serve_within(
     class: &str,
     text: &str,
     heavy_wait: std::time::Duration,
+    cancel: &CancelToken,
 ) -> Result<TurnOutput, ClientError> {
     let tokens = (text.len() as u64).div_ceil(4);
-    if heavy(class, tokens)
-        && super::local_gov::level() != Level::RampUp
-        && super::local_gov::wait_for_ramp_up(heavy_wait) == Level::Unload
-    {
-        return Err(ClientError::Protocol(LOCAL_PAUSED_MSG.into()));
+    if heavy(class, tokens) && super::local_gov::level() != Level::RampUp {
+        match super::local_gov::wait_for_ramp_up(heavy_wait, &|| cancel.is_cancelled()) {
+            None => return Err(ClientError::Cancelled),
+            Some(Level::Unload) => {
+                return Err(ClientError::Protocol(LOCAL_PAUSED_MSG.into()));
+            }
+            Some(_) => {}
+        }
     }
     let Some(rt) = runtime() else {
         return Err(ClientError::Protocol(NO_RUNTIME_MSG.into()));

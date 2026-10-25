@@ -236,6 +236,66 @@ async function connectors(s, config) {
   console.log("connector disconnected after the OK");
 }
 
+// Settings → Local AI: the Auto status line renders, Manual takes a model
+// file whose name says its safety training was removed only after the
+// notice is read, and Reset to Auto puts local_ai.json back.
+async function localAi(s, config) {
+  const settingsTab = await wd("POST", `${s}/element`, {
+    using: "xpath",
+    value: "//nav[contains(@class,'tabs')]/button[normalize-space()='Settings']",
+  });
+  await wd("POST", `${s}/element/${settingsTab[ELEMENT]}/click`, {});
+  const status = await waitFor("the local AI status line", async () => {
+    const t = await textOf(s, ".local-ai .local-status");
+    return /^T\d/.test(t) ? t : null;
+  });
+  console.log(`local AI status: ${JSON.stringify(status)}`);
+
+  const modelFile = join(config, "Llama-3-8B-abliterated.Q4_K_M.gguf");
+  writeFileSync(modelFile, "GGUF");
+  await click(s, ".local-ai button.mode-manual");
+  const input = await waitFor("the model file field", () =>
+    find(s, "input[aria-label='Model file path']"),
+  );
+  await wd("POST", `${s}/element/${input}/value`, { text: modelFile });
+  await click(s, ".local-ai button.use-file");
+  const notice = await waitFor("the model notice", async () => {
+    const t = await textOf(s, ".local-ai .notice");
+    return t.includes("safety training removed") ? t : null;
+  });
+  console.log(`notice shown: ${JSON.stringify(notice.split("\n")[0])}`);
+  await click(s, ".local-ai .notice button.accept");
+  await click(s, ".local-ai button.save-local");
+  await waitFor("the saved note", async () => {
+    const t = await textOf(s, ".local-ai .local-note");
+    return t === "Local AI saved." ? t : null;
+  });
+  const saved = JSON.parse(readFileSync(join(config, "local_ai.json"), "utf8"));
+  if (
+    saved.mode !== "manual" ||
+    saved.localModel?.selected !== modelFile ||
+    !saved.noticeSeen?.includes(modelFile)
+  ) {
+    throw new Error(`local_ai.json holds ${JSON.stringify(saved)}`);
+  }
+  const rules = JSON.parse(readFileSync(join(config, "local", "governor.json"), "utf8"));
+  if (rules.pauseForGames !== true || rules.useIdleTime !== true) {
+    throw new Error(`governor.json holds ${JSON.stringify(rules)}`);
+  }
+  console.log("model file picked after the notice");
+
+  await click(s, ".local-ai button.reset-local");
+  await waitFor("the reset note", async () => {
+    const t = await textOf(s, ".local-ai .local-note");
+    return t === "Back to Auto." ? t : null;
+  });
+  const reset = JSON.parse(readFileSync(join(config, "local_ai.json"), "utf8"));
+  if (reset.mode !== "auto" || reset.localModel?.selected !== "") {
+    throw new Error(`Reset to Auto left ${JSON.stringify(reset)}`);
+  }
+  console.log("reset to Auto");
+}
+
 async function main() {
   const mock = await startMock();
   const config = mkdtempSync(join(tmpdir(), "grokhub-shell-smoke-"));
@@ -339,6 +399,7 @@ async function main() {
     await automations(s, config);
     await memory(s, workspace);
     await connectors(s, config);
+    await localAi(s, config);
     console.log("smoke ok");
   } catch (err) {
     // What the window and the mock saw, for a failed CI run.

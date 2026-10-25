@@ -908,19 +908,22 @@ fn online_background_work_goes_local_only_in_ramp_up_and_normal() {
 
 #[test]
 fn a_heavy_background_step_waits_for_ramp_up_and_a_pause_refuses_it() {
+    use crate::client::{CancelToken, ClientError};
     use grokhub_core::local_governor::Level;
     use std::time::Duration;
     let _on = ForceOn::with(Some(Arc::new(FakeRt)));
     super::local_gov::reset_for_test();
+    let go = CancelToken::new();
     let long = "word ".repeat(2_000);
     // Light work never waits.
-    assert!(local::serve_within("background:summarize", "short", Duration::ZERO).is_ok());
+    assert!(local::serve_within("background:summarize", "short", Duration::ZERO, &go).is_ok());
     // Heavy work at Normal waits for RampUp; a level change wakes it.
     let waiter = std::thread::spawn({
         let long = long.clone();
         move || {
             let _on = ForceOn::with(Some(Arc::new(FakeRt)));
-            local::serve_within("background:summarize", &long, Duration::from_secs(30))
+            let go = CancelToken::new();
+            local::serve_within("background:summarize", &long, Duration::from_secs(30), &go)
                 .map(|o| o.text)
         }
     });
@@ -934,15 +937,47 @@ fn a_heavy_background_step_waits_for_ramp_up_and_a_pause_refuses_it() {
         Ok(r#"{"summary":"two lines"}"#.to_string())
     );
     assert_eq!(super::local_gov::queued(), 0);
-    // Out of time at Normal it runs anyway; at Unload it's refused.
+    // Stop ends the wait at once, with no level change.
     super::local_gov::apply(Level::Normal, "normal use");
-    assert!(local::serve_within("background:summarize", &long, Duration::ZERO).is_ok());
+    let stop = CancelToken::new();
+    let stopped = std::thread::spawn({
+        let long = long.clone();
+        let stop = stop.clone();
+        move || {
+            let _on = ForceOn::with(Some(Arc::new(FakeRt)));
+            local::serve_within(
+                "background:summarize",
+                &long,
+                Duration::from_secs(600),
+                &stop,
+            )
+            .map(|o| o.text)
+        }
+    });
+    while super::local_gov::queued() == 0 {
+        std::thread::yield_now();
+    }
+    let asked = std::time::Instant::now();
+    stop.cancel();
+    assert!(matches!(
+        stopped.join().unwrap(),
+        Err(ClientError::Cancelled)
+    ));
+    assert!(
+        asked.elapsed() < Duration::from_secs(5),
+        "{:?}",
+        asked.elapsed()
+    );
+    assert_eq!(super::local_gov::queued(), 0);
+    assert_eq!(super::local_gov::level(), Level::Normal);
+    // Out of time at Normal it runs anyway; at Unload it's refused.
+    assert!(local::serve_within("background:summarize", &long, Duration::ZERO, &go).is_ok());
     super::local_gov::apply(Level::Unload, "a game is running");
     assert_eq!(
-        local::serve_within("background:summarize", &long, Duration::ZERO)
+        local::serve_within("background:summarize", &long, Duration::ZERO, &go)
             .err()
             .map(|e| e.to_string()),
-        Some(crate::client::ClientError::Protocol(local::LOCAL_PAUSED_MSG.into()).to_string())
+        Some(ClientError::Protocol(local::LOCAL_PAUSED_MSG.into()).to_string())
     );
     super::local_gov::reset_for_test();
 }

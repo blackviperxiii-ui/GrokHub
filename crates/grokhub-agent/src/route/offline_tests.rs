@@ -152,7 +152,8 @@ fn online_keeps_chat_on_cloud_even_with_local_runtime() {
 #[test]
 fn offline_serve_chat_uses_chat_stream() {
     let _on = ForceOn::with(Some(Arc::new(FakeRt)));
-    let out = local::serve("chat:default", "hi").expect("serve");
+    let out =
+        local::serve("chat:default", "hi", &crate::client::CancelToken::new()).expect("serve");
     assert_eq!(out.text, "hello offline");
 }
 

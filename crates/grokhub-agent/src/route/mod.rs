@@ -230,7 +230,7 @@ pub fn call_model(
     let started = std::time::Instant::now();
     let on_device = decision.on_device();
     let out = if on_device {
-        local::serve(&call.class, &text)
+        local::serve(&call.class, &text, cancel)
     } else if decision.on_provider() {
         let span_id = format!(
             "{}:{now}",

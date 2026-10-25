@@ -14,6 +14,8 @@ const api = vi.hoisted(() => ({
 }));
 
 vi.mock("./api", () => api);
+// Local AI has its own tests (LocalAi.test.tsx).
+vi.mock("./LocalAi", () => ({ LocalAi: () => null }));
 
 import { Settings } from "./Settings";
 

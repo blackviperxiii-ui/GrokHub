@@ -143,27 +143,36 @@ pub fn queued() -> usize {
     gov().lock().map(|g| g.queued).unwrap_or(0)
 }
 
+/// How often a waiting step looks at its cancel flag.
+const CANCEL_POLL: Duration = Duration::from_millis(250);
+
 /// Hold a heavy background step until the machine is idle on AC (RampUp),
 /// for at most `limit`. Returns the level it left at: RampUp, Unload (the
-/// step can't run), or whatever held when `limit` ran out.
-pub fn wait_for_ramp_up(limit: Duration) -> Level {
+/// step can't run), or whatever held when `limit` ran out; `None` once
+/// `cancelled` says Stop was pressed.
+pub fn wait_for_ramp_up(limit: Duration, cancelled: &dyn Fn() -> bool) -> Option<Level> {
     let Ok(mut g) = gov().lock() else {
-        return Level::Normal;
+        return Some(Level::Normal);
     };
     let until = Instant::now() + limit;
     g.queued += 1;
+    let mut stopped = false;
     while !matches!(g.level, Level::RampUp | Level::Unload) {
+        if cancelled() {
+            stopped = true;
+            break;
+        }
         let left = until.saturating_duration_since(Instant::now());
         if left.is_zero() {
             break;
         }
-        g = match changed().wait_timeout(g, left) {
+        g = match changed().wait_timeout(g, left.min(CANCEL_POLL)) {
             Ok((g, _)) => g,
             Err(e) => e.into_inner().0,
         };
     }
     g.queued -= 1;
-    g.level
+    (!stopped).then_some(g.level)
 }
 
 pub fn level() -> Level {
