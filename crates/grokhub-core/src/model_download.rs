@@ -1,6 +1,6 @@
 //! Downloading an on-device model into the models folder: progress, pause,
 //! cancel, resume (after a restart too), and a SHA-256 check against the hash
-//! the publisher lists for the file. The network sits behind [`Fetch`], so the
+//! the catalog pins for the file (the publisher's listing must still agree). The network sits behind [`Fetch`], so the
 //! cabin plugs in HTTP and tests plug in a fake server.
 //!
 //! On disk, under the models folder:
@@ -151,12 +151,21 @@ pub fn download(
     if let Err(e) = fs::create_dir_all(dir) {
         return Outcome::Failed(format!("Couldn't create {}: {e}", dir.display()));
     }
-    let want = match fetch.sha256(m.repo, m.file) {
-        Ok(h) => h,
+    // A listing that drifted from the pin means the file was swapped upstream:
+    // stop before pulling gigabytes that would fail the check anyway.
+    match fetch.sha256(m.repo, m.file) {
+        Ok(h) if h == m.sha256 => {}
+        Ok(_) => {
+            return Outcome::Failed(format!(
+                "Hugging Face now lists a different file for {} than the one GrokHub pinned, so it wasn't downloaded.",
+                m.name
+            ))
+        }
         Err(e) => {
             return Outcome::Failed(format!("Couldn't read the checksum for {}: {e}", m.name))
         }
-    };
+    }
+    let want = m.sha256.to_string();
     let part = part_path(dir, m);
     let have = partial_bytes(dir, m).unwrap_or(0);
     let (mut body, start, total) = match fetch.open(&download_url(m), have) {
@@ -298,12 +307,24 @@ mod tests {
         LocalModel {
             id: "test-model",
             name: "Test Model",
-            download_mb: 1,
-            min_ram_mb: 0,
-            min_vram_mb: 0,
-            tier: "local:tiny",
             repo: "acme/test-GGUF",
             file: "test.gguf",
+            sha256: sha(BODY).leak(),
+            download_mb: 1,
+            quant: "Q4_K_M",
+            license: "Apache-2.0",
+            badges: &[],
+            tier: "T1",
+            route: "local:tiny",
+            ctx_default: 4_096,
+            run_mb: 1,
+            needs_avx2: false,
+            min_llama_build: None,
+            optional: false,
+            is_drafter: false,
+            drafter: None,
+            min_budget: Default::default(),
+            tok_s: Default::default(),
         }
     }
 
@@ -461,11 +482,28 @@ mod tests {
     fn a_bad_checksum_deletes_the_part_and_installs_nothing() {
         let dir = tmp("badsum");
         let mut srv = FakeServer::new();
-        srv.hash = sha(b"some other file");
+        srv.body = b"some other file".to_vec();
         let out = download(&dir, &model(), &srv, &Control::default(), &mut |_| {});
         assert_eq!(out, Outcome::BadChecksum);
         assert!(!dir.join("test.gguf").exists() && partial_bytes(&dir, &model()).is_none());
         assert_eq!(installed(&dir), None);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_listing_that_drifted_from_the_pin_downloads_nothing() {
+        let dir = tmp("drift");
+        let mut srv = FakeServer::new();
+        srv.hash = sha(b"some other file");
+        let out = download(&dir, &model(), &srv, &Control::default(), &mut |_| {});
+        assert_eq!(
+            out,
+            Outcome::Failed(
+                "Hugging Face now lists a different file for Test Model than the one GrokHub pinned, so it wasn't downloaded.".into()
+            )
+        );
+        assert!(srv.opens.lock().unwrap().is_empty());
+        assert!(partial_bytes(&dir, &model()).is_none());
         let _ = fs::remove_dir_all(dir);
     }
 
@@ -491,20 +529,20 @@ mod tests {
     #[test]
     fn the_tree_listing_gives_the_files_sha256_and_urls_point_at_hugging_face() {
         let tree = r#"[{"type":"file","path":"README.md","size":10},
-            {"type":"file","path":"Qwen2.5-3B-Instruct-Q4_K_M.gguf","size":1929903264,
-             "lfs":{"oid":"ABCDEF0123456789abcdef0123456789abcdef0123456789abcdef0123456789","size":1929903264}}]"#;
+            {"type":"file","path":"gemma-4-E4B-it-Q4_K_M.gguf","size":5335291936,
+             "lfs":{"oid":"ABCDEF0123456789abcdef0123456789abcdef0123456789abcdef0123456789","size":5335291936}}]"#;
         assert_eq!(
-            sha256_from_tree(tree, "Qwen2.5-3B-Instruct-Q4_K_M.gguf").as_deref(),
+            sha256_from_tree(tree, "gemma-4-E4B-it-Q4_K_M.gguf").as_deref(),
             Some("abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789")
         );
         assert_eq!(sha256_from_tree(tree, "README.md"), None, "no lfs entry");
         assert_eq!(sha256_from_tree(tree, "missing.gguf"), None);
         assert_eq!(sha256_from_tree("not json", "x"), None);
-        let m = crate::local_setup::model_by_id("qwen2.5-3b-instruct-q4_k_m").unwrap();
-        assert_eq!(download_url(m), "https://huggingface.co/bartowski/Qwen2.5-3B-Instruct-GGUF/resolve/main/Qwen2.5-3B-Instruct-Q4_K_M.gguf");
+        let m = crate::local_setup::model_by_id("gemma-4-e4b-it-q4_k_m").unwrap();
+        assert_eq!(download_url(m), "https://huggingface.co/lmstudio-community/gemma-4-E4B-it-GGUF/resolve/main/gemma-4-E4B-it-Q4_K_M.gguf");
         assert_eq!(
             tree_url(m.repo),
-            "https://huggingface.co/api/models/bartowski/Qwen2.5-3B-Instruct-GGUF/tree/main"
+            "https://huggingface.co/api/models/lmstudio-community/gemma-4-E4B-it-GGUF/tree/main"
         );
         assert_eq!(
             progress_line(2_202_009_600, Some(4_907_335_680)),
