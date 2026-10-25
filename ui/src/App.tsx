@@ -28,11 +28,14 @@ export function App() {
           Settings
         </button>
       </nav>
-      {/* Chat stays mounted so a reply keeps streaming while Settings is open. */}
+      {/* Chat and Automations stay mounted so a reply or a Run now in flight
+          is not lost when another tab opens. */}
       <div hidden={view !== "chat"}>
         <Chat onOpenSettings={() => setView("settings")} />
       </div>
-      {view === "automations" && <Automations />}
+      <div hidden={view !== "automations"}>
+        <Automations active={view === "automations"} />
+      </div>
       {view === "settings" && <Settings />}
     </div>
   );

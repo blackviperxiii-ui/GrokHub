@@ -87,7 +87,6 @@ export interface RunResult {
   text: string;
   error: string;
   stop: string;
-  refused: number;
 }
 
 /** The local wall clock, so next-run times read in the user's own zone. */

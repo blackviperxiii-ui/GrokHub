@@ -91,24 +91,36 @@ describe("Automations", () => {
     expect(await screen.findByText("No automations yet.")).toBeInTheDocument();
   });
 
-  it("Run now shows the reply and how many steps were refused", async () => {
+  it("Run now shows the reply and keeps Running… while the tab is hidden", async () => {
     api.listAutomations.mockResolvedValue([row({})]);
     let finish: (r: RunResult) => void = () => {};
     api.runAutomation.mockImplementation(() => new Promise((resolve) => (finish = resolve)));
-    render(<Automations />);
+    const view = render(<Automations />);
 
     await userEvent.click(await screen.findByRole("button", { name: "Run now" }));
     expect(api.runAutomation).toHaveBeenCalledWith("auto-1");
     expect(screen.getByRole("button", { name: "Running…" })).toBeDisabled();
+    view.rerender(<Automations active={false} />);
+    view.rerender(<Automations active />);
+    expect(screen.getByRole("button", { name: "Running…" })).toBeDisabled();
 
     api.listAutomations.mockResolvedValue([row({ summary: "weekdays at 09:00 · 1 run" })]);
-    finish({ text: "3 new mails.", error: "", stop: "end_turn", refused: 1 });
+    finish({ text: "3 new mails.", error: "", stop: "end_turn" });
 
-    expect(
-      await screen.findByText("3 new mails. 1 step that needed your OK did not run."),
-    ).toBeInTheDocument();
+    expect(await screen.findByText("3 new mails.")).toBeInTheDocument();
     expect(await screen.findByText("weekdays at 09:00 · 1 run")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Run now" })).toBeEnabled();
+  });
+
+  it("reloads the list each time the tab is shown, not while hidden", async () => {
+    api.listAutomations.mockResolvedValueOnce([]).mockResolvedValueOnce([row({})]);
+    const view = render(<Automations active />);
+    expect(await screen.findByText("No automations yet.")).toBeInTheDocument();
+    view.rerender(<Automations active={false} />);
+    expect(api.listAutomations).toHaveBeenCalledTimes(1);
+    view.rerender(<Automations active />);
+    expect(await screen.findByRole("listitem", { name: "summarize my inbox" })).toBeInTheDocument();
+    expect(api.listAutomations).toHaveBeenCalledTimes(2);
   });
 
   it("a failed run shows its error", async () => {
@@ -117,7 +129,6 @@ describe("Automations", () => {
       text: "",
       error: "Add an xAI API key in Settings first.",
       stop: "error",
-      refused: 0,
     });
     render(<Automations />);
     await userEvent.click(await screen.findByRole("button", { name: "Run now" }));

@@ -4,8 +4,9 @@
 //! scheduler. "Run now" runs one job unattended in Ask mode, so it can read
 //! but every tool that changes something is refused without a card.
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use grokhub_agent::{AuthKind, CancelToken, ModelClient, PermMode, UnattendedRun};
 use grokhub_core::{Automation, LocalClock};
@@ -66,9 +67,23 @@ pub fn path(config_dir: &Path) -> PathBuf {
     config_dir.join(FILE)
 }
 
+/// One read-change-write at a time, so a Run now that finishes while a row is
+/// paused cannot write back a list that misses the pause.
+static STORE: Mutex<()> = Mutex::new(());
+
+fn store() -> MutexGuard<'static, ()> {
+    STORE.lock().unwrap_or_else(|err| err.into_inner())
+}
+
 /// A missing file is an empty list. A broken one is an error, so a save can
-/// never replace jobs the shell failed to read.
+/// never replace jobs the shell failed to read. Rows with no id get one, and
+/// it is written back so the next command finds the same row.
 pub fn load(config_dir: &Path) -> Result<Vec<Automation>, String> {
+    let _store = store();
+    load_unlocked(config_dir)
+}
+
+fn load_unlocked(config_dir: &Path) -> Result<Vec<Automation>, String> {
     let path = path(config_dir);
     if !path.is_file() {
         return Ok(Vec::new());
@@ -83,19 +98,25 @@ pub fn load(config_dir: &Path) -> Result<Vec<Automation>, String> {
     }
     let mut list: Vec<Automation> =
         serde_json::from_str(&raw).map_err(|e| format!("{FILE}: {e}"))?;
+    let mut minted = false;
     for a in &mut list {
         if a.id.is_empty() {
             a.id = grokhub_core::uid("auto");
+            minted = true;
         }
+    }
+    if minted {
+        save(config_dir, &list)?;
     }
     Ok(list)
 }
 
-/// Writes through a temp file and a rename, like the cabin.
-pub fn save(config_dir: &Path, list: &[Automation]) -> Result<(), String> {
+/// Writes through a temp file and a rename, like the cabin. Callers hold
+/// [`STORE`]; the temp name is this process's own.
+fn save(config_dir: &Path, list: &[Automation]) -> Result<(), String> {
     std::fs::create_dir_all(config_dir).map_err(|e| e.to_string())?;
     let raw = serde_json::to_string_pretty(list).map_err(|e| e.to_string())?;
-    let tmp = config_dir.join(format!("{FILE}.shell.tmp"));
+    let tmp = config_dir.join(format!("{FILE}.shell-{}.tmp", std::process::id()));
     std::fs::write(&tmp, raw).map_err(|e| e.to_string())?;
     std::fs::rename(&tmp, path(config_dir)).map_err(|e| e.to_string())
 }
@@ -108,7 +129,8 @@ pub fn add(config_dir: &Path, text: &str, clock: LocalClock) -> Result<Vec<Autom
     if a.name.trim().is_empty() {
         return Err(ADD_HINT.into());
     }
-    let mut list = load(config_dir)?;
+    let _store = store();
+    let mut list = load_unlocked(config_dir)?;
     a.id = grokhub_core::uid("auto");
     list.push(grokhub_core::ensure_automation_schedule(a, clock));
     save(config_dir, &list)?;
@@ -120,7 +142,8 @@ fn change(
     id: &str,
     edit: impl FnOnce(&mut Vec<Automation>, usize),
 ) -> Result<Vec<Automation>, String> {
-    let mut list = load(config_dir)?;
+    let _store = store();
+    let mut list = load_unlocked(config_dir)?;
     let at = list.iter().position(|a| a.id == id).ok_or_else(|| {
         "That automation is gone. It may have been removed in the cabin.".to_string()
     })?;
@@ -154,11 +177,38 @@ pub struct RunResult {
     pub text: String,
     pub error: String,
     pub stop: String,
-    /// Tools that wanted an OK and were refused, since nobody is asked.
-    pub refused: u32,
+}
+
+/// Jobs a Run now is working on. A second Run now of the same job is refused.
+static RUNNING: Mutex<Option<HashSet<String>>> = Mutex::new(None);
+
+struct Running(String);
+
+impl Running {
+    fn claim(id: &str) -> Result<Self, String> {
+        let mut running = RUNNING.lock().unwrap_or_else(|err| err.into_inner());
+        if !running
+            .get_or_insert_with(HashSet::new)
+            .insert(id.to_string())
+        {
+            return Err("That automation is already running.".into());
+        }
+        Ok(Self(id.to_string()))
+    }
+}
+
+impl Drop for Running {
+    fn drop(&mut self) {
+        let mut running = RUNNING.lock().unwrap_or_else(|err| err.into_inner());
+        if let Some(set) = running.as_mut() {
+            set.remove(&self.0);
+        }
+    }
 }
 
 /// Runs one job now, unattended in Ask mode, and records the run on its row.
+/// The session is read-only, as the cabin's scheduled Ask jobs are, so an
+/// allow rule cannot turn a refused write into one that runs.
 pub fn run_now(
     config_dir: &Path,
     id: &str,
@@ -172,6 +222,7 @@ pub fn run_now(
         .ok_or_else(|| {
             "That automation is gone. It may have been removed in the cabin.".to_string()
         })?;
+    let _running = Running::claim(id)?;
     let _config = grokhub_agent::perm::ConfigGuard::set(config_dir);
     let started = grokhub_core::now_ms();
     let system = crate::agent::system_prompt(&workspace);
@@ -186,7 +237,7 @@ pub fn run_now(
         prompt: job.instructions.clone(),
         image: None,
         mode: PermMode::Ask,
-        readonly_session: false,
+        readonly_session: true,
         desktop: false,
         cancel: CancelToken::new(),
         halt: Box::new(crate::agent::NeverHalted),
@@ -207,7 +258,6 @@ pub fn run_now(
         text: done.text,
         error: done.error,
         stop: done.stop_reason,
-        refused: done.permission_cards,
     })
 }
 
@@ -217,7 +267,9 @@ mod tests {
     use grokhub_agent::{
         ClientError, FunctionCall, InputItem, ResponsesRequest, StreamEvent, TurnOutput,
     };
-    use std::sync::Mutex;
+
+    const REFUSED: &str =
+        "read-only in this phase: `write` is not available. Use read_file, list_dir, grep, or glob.";
 
     fn temp_dir(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
@@ -377,30 +429,82 @@ mod tests {
     }
 
     #[test]
-    fn run_now_refuses_writes_and_records_the_run() {
-        let (dir, workspace) = (temp_dir("run-cfg"), temp_dir("run-ws"));
+    fn a_row_without_an_id_keeps_the_one_it_is_given() {
+        let dir = temp_dir("noid");
+        std::fs::write(
+            path(&dir),
+            r#"[{"name":"board","schedule":"daily","time":"07:00","instructions":"summarize the workboard","enabled":true}]"#,
+        )
+        .expect("seed");
+        let first = load(&dir).expect("first")[0].id.clone();
+        assert!(first.starts_with("auto"), "{first}");
+        assert_eq!(load(&dir).expect("second")[0].id, first);
+        let paused = set_enabled(&dir, &first, false, tuesday_8am()).expect("pause");
+        assert_eq!(
+            (paused[0].id.as_str(), paused[0].enabled),
+            (first.as_str(), false)
+        );
+    }
+
+    #[test]
+    fn a_job_already_running_is_not_started_twice() {
+        let held = Running::claim("auto-held").expect("first claim");
+        assert_eq!(
+            Running::claim("auto-held").err().as_deref(),
+            Some("That automation is already running.")
+        );
+        assert!(Running::claim("auto-other").is_ok());
+        drop(held);
+        assert!(Running::claim("auto-held").is_ok());
+    }
+
+    fn run_wants_to_write(
+        name: &str,
+        rules: Option<&str>,
+    ) -> (PathBuf, PathBuf, String, Arc<WantsToWrite>, RunResult) {
+        let (dir, workspace) = (
+            temp_dir(&format!("{name}-cfg")),
+            temp_dir(&format!("{name}-ws")),
+        );
+        if let Some(rules) = rules {
+            std::fs::write(dir.join("permission-rules.json"), rules).expect("rules");
+        }
         let list = add(&dir, "every day at 7am write out.txt", tuesday_8am()).expect("a");
         let id = list[0].id.clone();
         let client = Arc::new(WantsToWrite {
             requests: Mutex::new(Vec::new()),
         });
-
         let result =
             run_now(&dir, &id, client.clone(), "grok-4.7", workspace.clone()).expect("ran");
+        (dir, workspace, id, client, result)
+    }
+
+    fn refusal(client: &WantsToWrite) -> Option<String> {
+        let requests = client.requests.lock().expect("requests");
+        requests[1].input.iter().find_map(|item| match item {
+            InputItem::FunctionCallOutput { output, .. } => Some(output.clone()),
+            _ => None,
+        })
+    }
+
+    #[test]
+    fn an_allow_rule_does_not_let_run_now_write() {
+        let (_dir, workspace, _id, client, result) =
+            run_wants_to_write("allow", Some(r#"{"allow":["Edit(**)","Write(**)"]}"#));
+        assert!(!workspace.join("out.txt").exists());
+        assert_eq!(result.stop, "end_turn");
+        assert_eq!(refusal(&client).as_deref(), Some(REFUSED));
+    }
+
+    #[test]
+    fn run_now_refuses_writes_and_records_the_run() {
+        let (dir, workspace, _id, client, result) = run_wants_to_write("run", None);
 
         assert!(!workspace.join("out.txt").exists());
         assert_eq!(result.stop, "end_turn");
         assert_eq!(result.error, "");
         assert!(result.text.contains("Could not write."), "{}", result.text);
-        let requests = client.requests.lock().expect("requests");
-        let refusal = requests[1].input.iter().find_map(|item| match item {
-            InputItem::FunctionCallOutput { output, .. } => Some(output.clone()),
-            _ => None,
-        });
-        assert_eq!(
-            refusal.as_deref(),
-            Some("Tool `write` was not executed: Denied by permission policy: deny rule on edit")
-        );
+        assert_eq!(refusal(&client).as_deref(), Some(REFUSED));
         let row = &load(&dir).expect("reload")[0];
         assert_eq!(row.run_count, 1);
         assert_eq!(row.health.outcome, grokhub_core::AutoOutcome::Ok);

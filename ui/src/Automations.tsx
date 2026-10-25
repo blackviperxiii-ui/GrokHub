@@ -11,14 +11,12 @@ import {
 
 function resultLine(result: RunResult): string {
   if (result.error) return result.error;
-  const refused =
-    result.refused > 0
-      ? ` ${result.refused} step${result.refused === 1 ? "" : "s"} that needed your OK did not run.`
-      : "";
-  return `${result.text.trim() || "Finished with no reply."}${refused}`;
+  return result.text.trim() || "Finished with no reply.";
 }
 
-export function Automations() {
+/** `active`: the tab is showing. The page stays mounted so a Run now in
+ * flight keeps its button and its reply; it reloads the list on each visit. */
+export function Automations({ active = true }: { active?: boolean }) {
   const [rows, setRows] = useState<AutomationRow[] | null>(null);
   const [draft, setDraft] = useState("");
   const [note, setNote] = useState<string | null>(null);
@@ -26,8 +24,8 @@ export function Automations() {
   const [results, setResults] = useState<Record<string, string>>({});
 
   useEffect(() => {
-    listAutomations().then(setRows, (err) => setNote(String(err)));
-  }, []);
+    if (active) listAutomations().then(setRows, (err) => setNote(String(err)));
+  }, [active]);
 
   async function act(step: () => Promise<AutomationRow[]>) {
     try {

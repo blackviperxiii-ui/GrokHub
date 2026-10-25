@@ -152,9 +152,13 @@ app shows in both.
   overwritten.
 - The UI sends its local weekday, hour and minute, so next-run times use the
   user's zone on every platform without a time-zone crate.
-- Run now runs the job with `run_unattended` in Ask mode. It can read, every
-  tool that needs an OK is refused, and the run is recorded on the row (run
-  count, health).
+- Run now runs the job with `run_unattended` in Ask mode on a read-only
+  session, as the cabin's scheduled Ask jobs do, so an allow rule cannot let a
+  write through. It can read, every tool that needs an OK is refused, and the
+  run is recorded on the row (run count, health). One job runs once at a time,
+  and the page stays mounted so a run in flight is not lost on a tab change.
+- Edits take a lock and reload the file first, and a cabin row with no id gets
+  one written back, so Pause or Remove always finds the row it showed.
 - The cabin's pulse still fires jobs on schedule. The shell runs no second
   scheduler, so a job never fires twice. Firing from the shell waits until
   the shell replaces the cabin.
