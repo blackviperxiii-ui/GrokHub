@@ -12,7 +12,7 @@
 - `crates/grokhub-core/src/desktop_entry.rs` and `crates/grokhub-core/src/update.rs`: more `include_str!` checks on `install.sh`, `install-windows.ps1`, and `sync-user-integration.sh`.
 ## Change recipe
 - Edit the script, then run the core tests above: they pin strings like `update-desktop-database`, `enable --now grokhub-hub.service`, `alsa-utils`, `Overlay-Locked`, and the absence of `build-hands.sh`, `ydotoold`, and `pgrep grokhub`.
-- Keep `install.sh` and `scripts/make-release-bundle.sh` in step; the tests check both. The release bundle script needs Jeremy's OK to edit (`CLAUDE.md`).
+- Keep `install.sh` and `scripts/make-release-bundle.sh` in step; the tests check both. Edit either in a normal PR; CI green, then squash-merge into `beta` (`CLAUDE.md`).
 ## What breaks it
 - A new step that can fail the overlay under `set -euo pipefail`: package installs and the systemd steps deliberately continue on failure.
 - Adding a Grok Build CLI install or update step: `crates/grokhub-core/tests/no_grok_cli.rs` fails when packaging or an install script installs or bundles the CLI, or a deleted CLI installer comes back.
