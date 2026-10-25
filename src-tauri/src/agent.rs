@@ -120,7 +120,7 @@ struct Job {
     done: Sender<Result<String, String>>,
 }
 
-struct NeverHalted;
+pub struct NeverHalted;
 
 impl HaltCheck for NeverHalted {
     fn halted(&self) -> bool {

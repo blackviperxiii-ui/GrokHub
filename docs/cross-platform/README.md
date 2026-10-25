@@ -141,6 +141,32 @@ the loop the egui cabin uses, on one worker thread per conversation
   test does the same through the built app: nothing is written and the model
   is not called again until Allow once is clicked.
 
-Next slices: Pulse, Automations, memory, MCP, computer-use, and the Auto
-and Always permission modes.
+**3b, Automations.** An Automations page edits the cabin's own
+`automations.json` (`src-tauri/src/automations.rs`), so a job made in either
+app shows in both.
+
+- Add takes plain text and uses the cabin's parser
+  (`parse_nl_automation`): "every weekday at 9am …", "every day at 7am …" or
+  "heartbeat every 30 min …". Pause, Resume and Remove work on one row and
+  keep the rest. A file the shell cannot read is an error and is never
+  overwritten.
+- The UI sends its local weekday, hour and minute, so next-run times use the
+  user's zone on every platform without a time-zone crate.
+- Run now runs the job with `run_unattended` in Ask mode on a read-only
+  session, as the cabin's scheduled Ask jobs do, so an allow rule cannot let a
+  write through. It can read, every tool that needs an OK is refused, and the
+  run is recorded on the row (run count, health). One job runs once at a time,
+  and the page stays mounted so a run in flight is not lost on a tab change.
+- Edits take a lock and reload the file first, and a cabin row with no id gets
+  one written back, so Pause or Remove always finds the row it showed.
+- The cabin's pulse still fires jobs on schedule. The shell runs no second
+  scheduler, so a job never fires twice. Firing from the shell waits until
+  the shell replaces the cabin.
+- Tests: Rust tests for add, refusing text with no time, pause, resume,
+  remove, a broken file, rows the cabin wrote, and a Run now whose write is
+  refused. vitest covers the page. The smoke test adds a job through the UI,
+  checks `automations.json`, runs it and waits for the reply.
+
+Next slices: Pulse, memory, MCP, computer-use, and the Auto and Always
+permission modes.
 
