@@ -5,62 +5,71 @@ import { Chat, type Prefill } from "./Chat";
 import { Connectors } from "./Connectors";
 import { Journal } from "./Journal";
 import { Memory } from "./Memory";
+import { Palette, VIEW_LABELS, views, type PaletteAction, type View } from "./Palette";
 import { Pulse } from "./Pulse";
+import type { Section } from "./sections";
 import { Settings } from "./Settings";
-
-type View = "chat" | "pulse" | "journal" | "automations" | "memory" | "connectors" | "settings";
 
 export function App() {
   const [view, setView] = useState<View>("chat");
   const [prefill, setPrefill] = useState<Prefill>();
   const [caps, setCaps] = useState<Capabilities>(CORE_ONLY);
+  const [palette, setPalette] = useState(false);
+  const [goTo, setGoTo] = useState<{ section: Section; n: number }>();
   useEffect(() => {
     getCapabilities()
       .catch(() => CORE_ONLY)
       .then(setCaps);
   }, []);
+  useEffect(() => {
+    function onKey(event: KeyboardEvent) {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        setPalette((open) => !open);
+      }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  function ask(text: string) {
+    setPrefill((now) => ({ text, n: (now?.n ?? 0) + 1 }));
+    setView("chat");
+  }
+
+  function run(action: PaletteAction) {
+    if (action.kind === "view") setView(action.view);
+    else if (action.kind === "ask") ask(action.text);
+    else {
+      setGoTo((now) => ({ section: action.section, n: (now?.n ?? 0) + 1 }));
+      setView("settings");
+    }
+  }
   return (
     <div className="app">
-      <nav className="tabs" aria-label="Views">
-        <button type="button" aria-pressed={view === "chat"} onClick={() => setView("chat")}>
-          Chat
-        </button>
-        {caps.pulse && (
-          <button type="button" aria-pressed={view === "pulse"} onClick={() => setView("pulse")}>
-            Pulse
-          </button>
-        )}
-        {/* The journal is this computer's file; the web app leaves it there. */}
-        {!caps.remote && (
-          <button type="button" aria-pressed={view === "journal"} onClick={() => setView("journal")}>
-            Journal
-          </button>
-        )}
+      <header className="topbar">
+        <nav className="tabs" aria-label="Views">
+          {views(caps).map((name) => (
+            <button
+              key={name}
+              type="button"
+              aria-pressed={view === name}
+              onClick={() => setView(name)}
+            >
+              {VIEW_LABELS[name]}
+            </button>
+          ))}
+        </nav>
         <button
           type="button"
-          aria-pressed={view === "automations"}
-          onClick={() => setView("automations")}
+          className="palette-open"
+          title="Command palette (Ctrl+K)"
+          onClick={() => setPalette(true)}
         >
-          Automations
+          Command
         </button>
-        <button type="button" aria-pressed={view === "memory"} onClick={() => setView("memory")}>
-          Memory
-        </button>
-        <button
-          type="button"
-          aria-pressed={view === "connectors"}
-          onClick={() => setView("connectors")}
-        >
-          Connectors
-        </button>
-        <button
-          type="button"
-          aria-pressed={view === "settings"}
-          onClick={() => setView("settings")}
-        >
-          Settings
-        </button>
-      </nav>
+      </header>
+      {palette && <Palette caps={caps} onPick={run} onClose={() => setPalette(false)} />}
       {/* Chat and Automations stay mounted so a reply or a Run now in flight
           is not lost when another tab opens. */}
       <div hidden={view !== "chat"}>
@@ -71,10 +80,7 @@ export function App() {
       </div>
       {view === "pulse" && caps.pulse && (
         <Pulse
-          onRun={(text) => {
-            setPrefill((now) => ({ text, n: (now?.n ?? 0) + 1 }));
-            setView("chat");
-          }}
+          onRun={ask}
         />
       )}
       {view === "journal" && !caps.remote && (
@@ -87,7 +93,7 @@ export function App() {
       )}
       {view === "memory" && <Memory />}
       {view === "connectors" && <Connectors />}
-      {view === "settings" && <Settings caps={caps} />}
+      {view === "settings" && <Settings caps={caps} goTo={goTo} />}
     </div>
   );
 }

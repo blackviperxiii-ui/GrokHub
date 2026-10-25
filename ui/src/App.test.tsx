@@ -1,5 +1,5 @@
 import "@testing-library/jest-dom/vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Capabilities } from "./api";
@@ -28,8 +28,11 @@ vi.mock("./Memory", () => ({ Memory: () => null }));
 vi.mock("./Connectors", () => ({ Connectors: () => null }));
 vi.mock("./Pulse", () => ({ Pulse: () => <p>Pulse page</p> }));
 vi.mock("./Settings", () => ({
-  Settings: ({ caps }: { caps: Capabilities }) => (
-    <p>Settings for {caps.desktopControl ? "a desktop" : "a phone"}</p>
+  Settings: ({ caps, goTo }: { caps: Capabilities; goTo?: { section: string } }) => (
+    <p>
+      Settings for {caps.desktopControl ? "a desktop" : "a phone"}
+      {goTo && ` at ${goTo.section}`}
+    </p>
   ),
 }));
 
@@ -38,7 +41,8 @@ import { App } from "./App";
 const DESKTOP: Capabilities = { desktopControl: true, pulse: true, localAi: true, tray: true, webAccess: true };
 
 function tabs() {
-  return screen.getAllByRole("button").map((tab) => tab.textContent);
+  const nav = screen.getByRole("navigation", { name: "Views" });
+  return within(nav).getAllByRole("button").map((tab) => tab.textContent);
 }
 
 describe("App", () => {
@@ -95,5 +99,28 @@ describe("App", () => {
     await userEvent.click(screen.getByRole("button", { name: "Settings" }));
     expect(await screen.findByText("Settings for a phone")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Pulse" })).toBeNull();
+  });
+
+  it("Ctrl+K opens the palette, and a pick opens its page", async () => {
+    api.getCapabilities.mockResolvedValue(DESKTOP);
+    render(<App />);
+    await screen.findByRole("button", { name: "Pulse" });
+    await userEvent.keyboard("{Control>}k{/Control}");
+    const dialog = screen.getByRole("dialog", { name: "Command palette" });
+    expect(within(dialog).getByLabelText("Search pages and commands")).toHaveFocus();
+    await userEvent.keyboard("local{Enter}");
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.getByText("Settings for a desktop at localAi")).toBeVisible();
+  });
+
+  it("the Command button opens it too, and Ask Grok fills the chat box", async () => {
+    api.getCapabilities.mockResolvedValue(DESKTOP);
+    render(<App />);
+    await userEvent.click(await screen.findByRole("button", { name: "Pulse" }));
+    await userEvent.click(screen.getByRole("button", { name: "Command" }));
+    await userEvent.keyboard("tidy the board");
+    await userEvent.click(screen.getByRole("option", { name: "Ask Grok: tidy the board" }));
+    expect(screen.getByText("Chat page: tidy the board in this chat")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Chat" })).toHaveAttribute("aria-pressed", "true");
   });
 });

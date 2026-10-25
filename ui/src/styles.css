@@ -98,9 +98,67 @@ textarea {
   display: flex;
 }
 
-.tabs {
+.topbar {
   display: flex;
   gap: 8px;
+  align-items: flex-start;
+}
+
+.tabs {
+  display: flex;
+  flex: 1;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.palette-open {
+  background: transparent;
+  color: var(--muted);
+  border-color: var(--border);
+}
+
+.palette-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgb(0 0 0 / 0.25);
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding: 48px 16px 0;
+  z-index: 10;
+}
+
+.palette {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 12px;
+  width: min(420px, 100%);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.palette ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 50vh;
+  overflow-y: auto;
+}
+
+.palette li {
+  padding: 8px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.palette li[aria-selected="true"] {
+  background: var(--user);
+}
+
+.palette > button {
+  align-self: flex-end;
 }
 
 .chat {

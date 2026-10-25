@@ -382,6 +382,39 @@ async function journal(s, config) {
   await wd("POST", `${s}/element/${box}/clear`, {});
 }
 
+// Command palette: Ctrl+K opens it over any page, typing filters it, and
+// Enter opens the pick; the Command button opens it too, for touch.
+async function palette(s) {
+  await wd("POST", `${s}/actions`, {
+    actions: [
+      {
+        type: "key",
+        id: "keyboard",
+        actions: [
+          { type: "keyDown", value: "\uE009" },
+          { type: "keyDown", value: "k" },
+          { type: "keyUp", value: "k" },
+          { type: "keyUp", value: "\uE009" },
+        ],
+      },
+    ],
+  });
+  const search = await waitFor("the palette", () =>
+    find(s, "[aria-label='Command palette'] input"),
+  );
+  await wd("POST", `${s}/element/${search}/value`, { text: "web access\uE007" });
+  await waitFor("Settings at Web access", () => find(s, "section.settings[aria-label='Web access']"));
+  console.log("Ctrl+K opened Settings: Web access");
+
+  await click(s, "button.palette-open");
+  const again = await waitFor("the palette again", () =>
+    find(s, "[aria-label='Command palette'] input"),
+  );
+  await wd("POST", `${s}/element/${again}/value`, { text: "journ\uE007" });
+  await waitFor("the Journal page", () => find(s, "section.journal"));
+  console.log("the Command button opened the Journal");
+}
+
 // Settings → Local AI: the Auto status line renders, Manual takes a model
 // file whose name says its safety training was removed only after the
 // notice is read, and Reset to Auto puts local_ai.json back.
@@ -548,6 +581,7 @@ async function main() {
     await connectors(s, config);
     await pulse(s, config);
     await journal(s, config);
+    await palette(s);
     await localAi(s, config);
     await desktop(s, config);
     if (process.env.SMOKE_WEB === "1") await web(s);
