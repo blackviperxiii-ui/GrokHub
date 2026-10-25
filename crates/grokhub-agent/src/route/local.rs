@@ -390,19 +390,31 @@ pub fn runtime() -> Option<Arc<dyn LocalRuntime>> {
     if let Some(rt) = test_runtime() {
         return Some(rt);
     }
-    ensure_production_runtime();
-    super::local_http::from_global_sidecar()
+    let busy = ensure_production_runtime()?;
+    super::local_http::from_global_sidecar(busy)
 }
 
-fn ensure_production_runtime() {
-    let Some(dir) = config_dir() else {
-        return;
-    };
-    match super::local_sidecar::ensure_global(&dir) {
-        Ok(()) => set_bootstrap_error(None),
-        // A governor pause isn't a broken install; it lifts on its own.
-        Err(_) if super::local_gov::paused() => {}
-        Err(e) => set_bootstrap_error(Some(e)),
+/// Start the sidecar if needed; the guard marks this caller's request in
+/// flight for as long as it holds the runtime.
+fn ensure_production_runtime() -> Option<super::local_sidecar::Busy> {
+    let dir = config_dir()?;
+    match super::local_sidecar::acquire(&dir) {
+        Ok(busy) => {
+            set_bootstrap_error(None);
+            Some(busy)
+        }
+        // A governor pause or the crash breaker isn't a broken install; both
+        // lift on their own.
+        Err(_)
+            if super::local_gov::paused()
+                || super::local_gov::may_start(super::local_sidecar::unix_ms()).is_err() =>
+        {
+            None
+        }
+        Err(e) => {
+            set_bootstrap_error(Some(e));
+            None
+        }
     }
 }
 
