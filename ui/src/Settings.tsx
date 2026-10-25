@@ -1,11 +1,34 @@
 import { useEffect, useState, type FormEvent } from "react";
-import { clearApiKey, getSettings, saveSettings, setApiKey, type Settings as Shape } from "./api";
+import {
+  clearApiKey,
+  getSettings,
+  saveSettings,
+  setApiKey,
+  type Approvals,
+  type Settings as Shape,
+} from "./api";
+
+const APPROVALS: Record<Approvals, { label: string; note: string }> = {
+  ask: {
+    label: "Ask every time",
+    note: "It asks before it changes a file or runs a command.",
+  },
+  auto: {
+    label: "Auto",
+    note: "A quick check approves routine steps and asks you about the rest.",
+  },
+  always: {
+    label: "Always approve",
+    note: "Files change and commands run without asking. Deleting, sending, paying and credentials still ask.",
+  },
+};
 
 export function Settings() {
   const [settings, setSettings] = useState<Shape | null>(null);
   const [model, setModel] = useState("");
   const [closeToTray, setCloseToTray] = useState(true);
   const [workspace, setWorkspace] = useState("");
+  const [approvals, setApprovals] = useState<Approvals>("ask");
   const [key, setKey] = useState("");
   const [note, setNote] = useState<string | null>(null);
 
@@ -14,6 +37,7 @@ export function Settings() {
     setModel(next.model);
     setCloseToTray(next.closeToTray);
     setWorkspace(next.workspace);
+    setApprovals(next.approvals);
   }
 
   useEffect(() => {
@@ -23,7 +47,7 @@ export function Settings() {
   async function save(event: FormEvent) {
     event.preventDefault();
     try {
-      show(await saveSettings(model.trim(), closeToTray, workspace.trim()));
+      show(await saveSettings(model.trim(), closeToTray, workspace.trim(), approvals));
       setNote("Settings saved.");
     } catch (err) {
       setNote(String(err));
@@ -70,8 +94,20 @@ export function Settings() {
           />
         </label>
         <p className="note">
-          GrokHub works in <code>{settings.workspacePath}</code>. It asks before it changes a
-          file or runs a command.
+          GrokHub works in <code>{settings.workspacePath}</code>.
+        </p>
+        <label>
+          Approvals
+          <select value={approvals} onChange={(e) => setApprovals(e.target.value as Approvals)}>
+            {(Object.keys(APPROVALS) as Approvals[]).map((value) => (
+              <option key={value} value={value}>
+                {APPROVALS[value].label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <p className={approvals === "always" ? "note warn" : "note"}>
+          {APPROVALS[approvals].note}
         </p>
         <label className="check">
           <input

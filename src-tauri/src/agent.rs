@@ -14,11 +14,13 @@ use grokhub_agent::{
 use grokhub_core::wire::AcpEvent;
 use serde::Serialize;
 
-/// The cabin's attended chat gate: tools that change things ask first, and
-/// computer-use stays off until the shell has a desktop backend.
-pub fn shell_gate() -> Gate {
+/// The cabin's attended chat gate in the mode Settings picked. In Ask, tools
+/// that change things ask first; Auto and Always approve more, but hard-class
+/// steps (delete, send, money, credentials) still ask in every mode.
+/// Computer-use stays off until the shell has a desktop backend.
+pub fn shell_gate(mode: PermMode) -> Gate {
     Gate {
-        mode: PermMode::Ask,
+        mode,
         readonly_session: false,
         attended: true,
         desktop: false,
@@ -111,6 +113,9 @@ pub struct Route {
     pub auth_kind: AuthKind,
     pub model: String,
     pub workspace: PathBuf,
+    /// Settings' approvals. Read on every prompt, so a change applies to the
+    /// next message in an open chat.
+    pub mode: PermMode,
 }
 
 struct Job {
@@ -211,6 +216,7 @@ fn serve(
         let engine = match (&mut engine, inbox.take()) {
             (Some(engine), _) => {
                 engine.set_workspace(route.workspace);
+                engine.set_gate(shell_gate(route.mode));
                 engine.set_route(route.client, route.model, None, system, route.auth_kind);
                 engine
             }
@@ -231,7 +237,7 @@ fn serve(
                     cancel: cancel.clone(),
                     steer: SteerQueue::new(),
                     halt: Box::new(NeverHalted),
-                    gate: shell_gate(),
+                    gate: shell_gate(route.mode),
                     desktop: None,
                     permits: Arc::new(inbox),
                 }))
@@ -342,6 +348,15 @@ mod tests {
     }
 
     fn start(client: Arc<OneTool>, workspace: &std::path::Path, config: &std::path::Path) -> Run {
+        start_in(PermMode::Ask, client, workspace, config)
+    }
+
+    fn start_in(
+        mode: PermMode,
+        client: Arc<OneTool>,
+        workspace: &std::path::Path,
+        config: &std::path::Path,
+    ) -> Run {
         let session = Arc::new(Session::spawn("gate-test", config.to_path_buf()));
         let events = Arc::new(Mutex::new(Vec::new()));
         let sink = Arc::clone(&events);
@@ -350,6 +365,7 @@ mod tests {
             auth_kind: AuthKind::ApiKey,
             model: "grok-4.7".into(),
             workspace: workspace.to_path_buf(),
+            mode,
         };
         let runner = Arc::clone(&session);
         let result = std::thread::spawn(move || {
@@ -542,13 +558,66 @@ mod tests {
     #[test]
     fn the_gate_asks_and_keeps_computer_use_off() {
         assert_eq!(
-            shell_gate(),
+            shell_gate(PermMode::Ask),
             Gate {
                 mode: PermMode::Ask,
                 readonly_session: false,
                 attended: true,
                 desktop: false,
             }
+        );
+        assert_eq!(
+            shell_gate(PermMode::Always),
+            Gate {
+                mode: PermMode::Always,
+                readonly_session: false,
+                attended: true,
+                desktop: false,
+            }
+        );
+    }
+
+    #[test]
+    fn always_runs_a_write_without_a_card() {
+        let (workspace, config) = (temp_dir("always-ws"), temp_dir("always-cfg"));
+        let client = OneTool::new(
+            "write",
+            serde_json::json!({"path": "note.txt", "content": "hi"}),
+        );
+        let run = start_in(PermMode::Always, Arc::clone(&client), &workspace, &config);
+
+        assert_eq!(run.result.join().expect("join"), Ok("end_turn".to_string()));
+        assert_eq!(
+            std::fs::read_to_string(workspace.join("note.txt")).expect("written"),
+            "hi"
+        );
+        assert!(!run
+            .events
+            .lock()
+            .expect("events")
+            .iter()
+            .any(|event| matches!(event, UiEvent::Permission { .. })));
+    }
+
+    #[test]
+    fn always_still_waits_for_an_ok_to_delete() {
+        let (workspace, config) = (temp_dir("always-rm-ws"), temp_dir("always-rm-cfg"));
+        std::fs::write(workspace.join("notes.txt"), "keep me").expect("seed");
+        let client = OneTool::new(
+            "run_terminal_command",
+            serde_json::json!({"command": "rm notes.txt"}),
+        );
+        let run = start_in(PermMode::Always, Arc::clone(&client), &workspace, &config);
+
+        wait_for_permission(&run);
+        assert_parked(&run, &client);
+        assert!(workspace.join("notes.txt").exists());
+
+        run.session.answer("call-1", PermAnswer::Deny);
+        assert_eq!(run.result.join().expect("join"), Ok("end_turn".to_string()));
+        assert_eq!(
+            std::fs::read_to_string(workspace.join("notes.txt")).expect("kept"),
+            "keep me"
         );
     }
 }
