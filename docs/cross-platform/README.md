@@ -14,7 +14,6 @@ Phase 0 started from `beta` @ `f0a5c7a` (2026-10-23).
   Tauri." now describes only the egui cabin. Electron stays out.
 - **Repo rules win** over the Notion card where they differ. Since #832
   (2026-10-24; confirmed 2026-10-25) those rules are:
-  - pstack skills (vstack is retired).
   - Every PR targets `beta`. The agent squash-merges it once CI is green,
     with no review hold; only promoting `beta` → `main` (and tags/releases)
     needs Viper.
