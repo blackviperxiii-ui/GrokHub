@@ -44,6 +44,29 @@ const PLACEHOLDERS: Record<SessionMode, string> = {
   btw: "Ask on the side",
 };
 
+export const CHAT_EMPTY = "Ask Grok anything.";
+export const SIGNED_OUT =
+  "GrokHub chats with your xAI API key. It's kept in this device's keychain, never in a file.";
+export const SIGNED_OUT_KEY_HINT = "No key yet? Make one at console.x.ai.";
+export const SIGNED_OUT_REMOTE =
+  "GrokHub on your computer has no API key yet. Add one there, then chat here.";
+
+/** One primary sign-in button and one hint, on every platform. The web app
+ * signs in on the computer, so it only says so. */
+function SignedOut({ remote, onSignIn }: { remote: boolean; onSignIn: () => void }) {
+  if (remote) return <p className="empty">{SIGNED_OUT_REMOTE}</p>;
+  return (
+    <div className="signed-out" role="region" aria-label="Sign in">
+      <h2>Sign in to start</h2>
+      <p>{SIGNED_OUT}</p>
+      <button type="button" onClick={onSignIn}>
+        Add your API key
+      </button>
+      <p className="note">{SIGNED_OUT_KEY_HINT}</p>
+    </div>
+  );
+}
+
 export const MISSION_BUSY = "A reply is still running. Stop it or wait, then press To mission again.";
 
 export function newConversationId(): string {
@@ -134,11 +157,14 @@ function PermissionCard({
  * where the approvals stay the computer's. */
 export function Chat({
   onOpenSettings,
+  onSignIn = onOpenSettings,
   prefill,
   active = true,
   remote = false,
 }: {
   onOpenSettings: () => void;
+  /** The signed-out card's button: Settings → Account. */
+  onSignIn?: () => void;
   prefill?: Prefill;
   active?: boolean;
   remote?: boolean;
@@ -286,7 +312,11 @@ export function Chat({
   return (
     <section className="chat" aria-label="Chat">
       <div className="log" role="log" aria-live="polite">
-        {items.length === 0 && !busy && <p className="empty">Ask Grok anything.</p>}
+        {items.length === 0 && !busy && settings && !settings.hasApiKey ? (
+          <SignedOut remote={remote} onSignIn={onSignIn} />
+        ) : (
+          items.length === 0 && !busy && <p className="empty">{CHAT_EMPTY}</p>
+        )}
         {items.map((item, i) => {
           switch (item.kind) {
             case "user":

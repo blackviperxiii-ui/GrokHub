@@ -16,6 +16,9 @@ function resultLine(result: RunResult): string {
 
 /** `active`: the tab is showing. The page stays mounted so a Run now in
  * flight keeps its button and its reply; it reloads the list on each visit. */
+export const AUTOMATIONS_EMPTY =
+  "No automations yet. Describe one above in plain words and it runs on its own schedule.";
+
 export function Automations({ active = true }: { active?: boolean }) {
   const [rows, setRows] = useState<AutomationRow[] | null>(null);
   const [draft, setDraft] = useState("");
@@ -85,7 +88,7 @@ export function Automations({ active = true }: { active?: boolean }) {
         </p>
       )}
       {rows === null && !note && <p className="empty">Loading automations…</p>}
-      {rows?.length === 0 && <p className="empty">No automations yet.</p>}
+      {rows?.length === 0 && <p className="empty">{AUTOMATIONS_EMPTY}</p>}
       <ul className="rows">
         {rows?.map((row) => (
           <li key={row.id} className="card automation" aria-label={row.name}>

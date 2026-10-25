@@ -12,8 +12,19 @@ const api = vi.hoisted(() => ({
 vi.mock("./api", () => api);
 // Each page has its own tests; here only the tabs matter.
 vi.mock("./Chat", () => ({
-  Chat: ({ prefill }: { prefill?: { text: string; n: number; conversationId?: string } }) => (
-    <p>Chat page{prefill && `: ${prefill.text} in ${prefill.conversationId ?? "this chat"}`}</p>
+  Chat: ({
+    prefill,
+    onSignIn,
+  }: {
+    prefill?: { text: string; n: number; conversationId?: string };
+    onSignIn: () => void;
+  }) => (
+    <div>
+      <p>Chat page{prefill && `: ${prefill.text} in ${prefill.conversationId ?? "this chat"}`}</p>
+      <button type="button" onClick={onSignIn}>
+        Sign in
+      </button>
+    </div>
   ),
 }));
 vi.mock("./Journal", () => ({
@@ -122,5 +133,13 @@ describe("App", () => {
     await userEvent.click(screen.getByRole("option", { name: "Ask Grok: tidy the board" }));
     expect(screen.getByText("Chat page: tidy the board in this chat")).toBeVisible();
     expect(screen.getByRole("button", { name: "Chat" })).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("the chat's sign-in opens Settings at Account", async () => {
+    api.getCapabilities.mockResolvedValue(DESKTOP);
+    render(<App />);
+    await screen.findByRole("button", { name: "Pulse" });
+    await userEvent.click(screen.getByRole("button", { name: "Sign in" }));
+    expect(screen.getByText("Settings for a desktop at account")).toBeVisible();
   });
 });

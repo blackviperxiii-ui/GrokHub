@@ -59,7 +59,7 @@ describe("Automations", () => {
       .mockRejectedValueOnce('Say when, like "every weekday at 9am summarize my inbox".')
       .mockResolvedValueOnce([row({})]);
     render(<Automations />);
-    expect(await screen.findByText("No automations yet.")).toBeInTheDocument();
+    expect(await screen.findByText("No automations yet. Describe one above in plain words and it runs on its own schedule.")).toBeInTheDocument();
 
     await userEvent.type(screen.getByLabelText("New automation"), "summarize my inbox{Enter}");
     expect(await screen.findByRole("alert")).toHaveTextContent("Say when");
@@ -88,7 +88,7 @@ describe("Automations", () => {
 
     await userEvent.click(screen.getByRole("button", { name: "Remove" }));
     expect(api.removeAutomation).toHaveBeenCalledWith("auto-1");
-    expect(await screen.findByText("No automations yet.")).toBeInTheDocument();
+    expect(await screen.findByText("No automations yet. Describe one above in plain words and it runs on its own schedule.")).toBeInTheDocument();
   });
 
   it("Run now shows the reply and keeps Running… while the tab is hidden", async () => {
@@ -115,7 +115,7 @@ describe("Automations", () => {
   it("reloads the list each time the tab is shown, not while hidden", async () => {
     api.listAutomations.mockResolvedValueOnce([]).mockResolvedValueOnce([row({})]);
     const view = render(<Automations active />);
-    expect(await screen.findByText("No automations yet.")).toBeInTheDocument();
+    expect(await screen.findByText("No automations yet. Describe one above in plain words and it runs on its own schedule.")).toBeInTheDocument();
     view.rerender(<Automations active={false} />);
     expect(api.listAutomations).toHaveBeenCalledTimes(1);
     view.rerender(<Automations active />);

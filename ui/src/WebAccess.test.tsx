@@ -33,6 +33,11 @@ describe("WebAccess", () => {
     api.setWebAccess.mockImplementation(async (on) => (on ? ON : OFF));
     render(<WebAccess />);
     expect(screen.getByText(WEB_NOTE)).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Web access Preview" })).toBeInTheDocument();
+    expect(screen.getByText("Preview")).toHaveAttribute(
+      "title",
+      "A preview: it works, but it runs over plain HTTP and has no sign-in beyond the pairing code.",
+    );
 
     await userEvent.click(await screen.findByRole("button", { name: "Turn on web access" }));
     expect(api.setWebAccess).toHaveBeenLastCalledWith(true);
