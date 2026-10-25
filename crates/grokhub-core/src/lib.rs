@@ -62,6 +62,7 @@ pub mod interests;
 pub mod journal;
 pub mod learning;
 pub mod local_discover;
+pub mod local_governor;
 pub mod local_picker;
 pub mod local_profile;
 pub mod local_setup;

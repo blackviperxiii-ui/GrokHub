@@ -176,6 +176,7 @@ mod jobs;
 mod journal_ui;
 mod local_ai_ui;
 mod local_probe;
+mod local_signals;
 mod marketplace_ui;
 mod mission_ui;
 mod model_download_ui;
