@@ -252,7 +252,7 @@ impl X11Backend {
     }
 
     fn locked_now(&self) -> bool {
-        let titles = crate::desktop::lock_titles();
+        let titles = crate::host::lock_titles();
         let refs: Vec<&str> = titles.iter().map(String::as_str).collect();
         grokhub_core::hands_blocked_by_lock(&grokhub_core::ComputerOp::Move { x: 0, y: 0 }, &refs)
     }

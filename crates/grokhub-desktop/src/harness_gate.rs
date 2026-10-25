@@ -411,7 +411,7 @@ mod tests {
 
     #[test]
     fn park_waits_for_the_cabin_and_halt_denies() {
-        let dir = crate::config::test_config_root("desk-park");
+        let dir = crate::test_root("desk-park");
         let _ = std::fs::create_dir_all(&dir);
         let typed = line("type", json!({ "text": "rm -f disposable.txt" }));
         assert!(!park_and_wait(&dir, &typed, "delete", &mut || true));
@@ -629,7 +629,7 @@ mod tests {
 
     #[test]
     fn open_and_focus_are_soft_and_record_ui_changed() {
-        let dir = crate::config::test_config_root("desk-open");
+        let dir = crate::test_root("desk-open");
         turn(&dir, "supervised");
         let mut s = desk();
         let out = handle_desk_line(
@@ -696,7 +696,7 @@ mod tests {
 
     #[test]
     fn open_and_focus_are_refused_with_desktop_control_off() {
-        let dir = crate::config::test_config_root("desk-open-off");
+        let dir = crate::test_root("desk-open-off");
         turn(&dir, "readonly");
         let mut s = desk();
         let off = CallGate {
@@ -749,7 +749,7 @@ mod tests {
 
     #[test]
     fn typing_is_soft_keeps_only_the_length_and_the_pin_field_still_parks() {
-        let dir = crate::config::test_config_root("desk-type");
+        let dir = crate::test_root("desk-type");
         turn(&dir, "full");
         let mut s = desk();
         let out = handle_desk_line(
@@ -835,7 +835,7 @@ mod tests {
 
     #[test]
     fn delete_parks_hard_under_full_and_deny_or_halt_leaves_the_files() {
-        let dir = crate::config::test_config_root("desk-delete-deny");
+        let dir = crate::test_root("desk-delete-deny");
         turn(&dir, "full");
         let (a, b, _) = fixture(&dir);
         let mut s = desk();
@@ -891,7 +891,7 @@ mod tests {
 
     #[test]
     fn approve_deletes_exactly_the_listed_paths_once() {
-        let dir = crate::config::test_config_root("desk-delete-ok");
+        let dir = crate::test_root("desk-delete-ok");
         turn(&dir, "full");
         let (a, b, keep) = fixture(&dir);
         let mut s = desk();
@@ -926,7 +926,7 @@ mod tests {
 
     #[test]
     fn delete_key_parks_only_on_a_file_manager() {
-        let dir = crate::config::test_config_root("desk-delete-key");
+        let dir = crate::test_root("desk-delete-key");
         turn(&dir, "full");
         let mut s = desk();
         let del = rpc("key", json!({ "keys": "Delete" }));
@@ -999,7 +999,7 @@ mod tests {
 
     #[test]
     fn a_drag_that_lets_go_on_send_parks_like_a_click() {
-        let dir = crate::config::test_config_root("desk-drag-send");
+        let dir = crate::test_root("desk-drag-send");
         turn(&dir, "full");
         let mut s = shop();
         let drag = |x: i32, y: i32| {
@@ -1031,7 +1031,7 @@ mod tests {
 
     #[test]
     fn hermes_clicks_park_by_the_control_under_the_point_and_deny_never_clicks() {
-        let dir = crate::config::test_config_root("desk-hermes");
+        let dir = crate::test_root("desk-hermes");
         turn(&dir, "full");
         let mut s = shop();
         // #3: the typed fields are soft; Pay parks as money and Deny never clicks.
@@ -1144,7 +1144,7 @@ mod tests {
 
     #[test]
     fn an_unnamed_control_on_a_checkout_page_parks_and_deny_never_clicks() {
-        let dir = crate::config::test_config_root("desk-unnamed-checkout");
+        let dir = crate::test_root("desk-unnamed-checkout");
         turn(&dir, "full");
         let mut s = shop();
         s.backend_mut().slow = true;
@@ -1169,7 +1169,7 @@ mod tests {
 
     #[test]
     fn enter_parks_as_send_in_a_chat_app_and_stays_a_plain_key_elsewhere() {
-        let dir = crate::config::test_config_root("desk-enter-send");
+        let dir = crate::test_root("desk-enter-send");
         turn(&dir, "full");
         let mut s = desk();
         let enter = rpc("key", json!({ "keys": "Return" }));
@@ -1233,7 +1233,7 @@ mod tests {
 
     #[test]
     fn an_atspi_timeout_is_an_unknown_soft_click() {
-        let dir = crate::config::test_config_root("desk-hit-timeout");
+        let dir = crate::test_root("desk-hit-timeout");
         turn(&dir, "full");
         let mut s = shop();
         s.backend_mut().slow = true;
@@ -1260,8 +1260,6 @@ mod tests {
         if !cfg!(target_os = "linux") {
             assert_eq!(super::super::LiveBackend::new().target_at(5, 5), None);
         }
-        #[cfg(target_os = "linux")]
-        assert_eq!(crate::desktop::ATSPI_HIT_CAP, Duration::from_millis(300));
         let _ = std::fs::remove_dir_all(dir);
     }
 }

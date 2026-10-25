@@ -918,7 +918,7 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn desktop_ids_resolve_under_xdg_data_dirs() {
-        let root = crate::config::test_config_root("apps-xdg");
+        let root = crate::test_root("apps-xdg");
         let apps = root.join("share").join("applications");
         std::fs::create_dir_all(&apps).unwrap();
         std::fs::write(

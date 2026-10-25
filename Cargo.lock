@@ -2108,7 +2108,6 @@ dependencies = [
 name = "grokhub-app"
 version = "3.1.0"
 dependencies = [
- "ashpd",
  "clipboard-win",
  "eframe",
  "egui-notify",
@@ -2116,17 +2115,15 @@ dependencies = [
  "egui_dock",
  "egui_extras",
  "egui_plot",
- "evdev",
  "global-hotkey",
  "grokhub-agent",
  "grokhub-core",
+ "grokhub-desktop",
  "grokhub-hub",
  "image",
  "keyring",
  "ksni",
- "reis",
  "rfd",
- "rustix 1.1.5",
  "serde",
  "serde_json",
  "tokio",
@@ -2136,7 +2133,6 @@ dependencies = [
  "windows-sys 0.59.0",
  "winresource",
  "x11rb",
- "xcap",
  "zbus",
 ]
 
@@ -2161,6 +2157,26 @@ dependencies = [
  "windows 0.59.0",
  "windows-sys 0.59.0",
  "zip",
+]
+
+[[package]]
+name = "grokhub-desktop"
+version = "3.1.0"
+dependencies = [
+ "ashpd",
+ "evdev",
+ "grokhub-agent",
+ "grokhub-core",
+ "image",
+ "keyring",
+ "reis",
+ "rustix 1.1.5",
+ "serde_json",
+ "tokio",
+ "windows-sys 0.59.0",
+ "x11rb",
+ "xcap",
+ "zbus",
 ]
 
 [[package]]

@@ -644,7 +644,7 @@ fn serve_native(
             read: || None,
         }),
         gate: Gate::phase_readonly(),
-        desktop: Some(Box::new(crate::desktop_mcp::NativeDesktop::new())),
+        desktop: Some(Box::new(crate::desktop_mcp::native_desktop())),
         permits: std::sync::Arc::new(permit_inbox),
     });
     grokhub_agent::watch_cancel(&session_id, cancel.clone());

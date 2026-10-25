@@ -1,5 +1,7 @@
-//! Headless `grokhub --mcp-desktop` stdio server.
-//! Stdout is JSON-RPC only. Logs go to stderr.
+//! The desktop tools (screenshots, pointer, keys, windows) behind the hard
+//! gate, shared by the cabin and the Tauri shell. Also the headless
+//! `grokhub --mcp-desktop` stdio server: stdout is JSON-RPC only, logs go to
+//! stderr. The hosting app installs a [`host::Host`] first.
 
 mod apps;
 #[cfg(target_os = "linux")]
@@ -9,6 +11,7 @@ mod capture;
 #[cfg(target_os = "linux")]
 mod fallback;
 mod harness_gate;
+pub mod host;
 mod keys;
 #[cfg(target_os = "linux")]
 mod kwin_shot;
@@ -56,11 +59,11 @@ pub fn run_stdio() -> i32 {
             continue;
         }
         let gate = CallGate {
-            enabled: crate::config::load().desktop_control,
+            enabled: crate::host::settings().desktop_control,
             halted: read_halt_stamp().is_some_and(|ms| stamp_halts(ms, started)),
         };
         // Path A: the cabin pre-check runs before every desktop tool, on every OS.
-        let dir = crate::config::config_dir();
+        let dir = crate::host::config_dir();
         let mut halted = || read_halt_stamp().is_some_and(|ms| stamp_halts(ms, started));
         let outcome = harness_gate::handle_desk_line(&mut server, &line, gate, &dir, &mut halted);
         if let Some(reply) = outcome.reply {
@@ -80,7 +83,7 @@ pub fn run_stdio() -> i32 {
 pub fn run_cua_stdio() -> i32 {
     use grokhub_agent::harness as hx;
     let started = process_started_ms();
-    let dir = crate::config::config_dir();
+    let dir = crate::host::config_dir();
     let child_dir = dir.clone();
     let mut proxy: hx::CuaProxy<hx::StdioChild> =
         hx::CuaProxy::new(Box::new(move || start_cua_child(&child_dir)));
@@ -99,7 +102,7 @@ pub fn run_cua_stdio() -> i32 {
         if line.trim().is_empty() {
             continue;
         }
-        let cfg = crate::config::load();
+        let cfg = crate::host::settings();
         let mut halted = || read_halt_stamp().is_some_and(|ms| stamp_halts(ms, started));
         let gate = hx::CuaGate {
             enabled: cfg.desktop_control,
@@ -119,7 +122,7 @@ fn start_cua_child(dir: &std::path::Path) -> Result<grokhub_agent::harness::Stdi
     if !cfg!(target_os = "linux") {
         return Err(hx::CUA_LINUX_ONLY_MSG.into());
     }
-    let bin = hx::find_cua_driver(&crate::config::load().cua_driver_path)
+    let bin = hx::find_cua_driver(&crate::host::settings().cua_driver_path)
         .ok_or_else(|| hx::CUA_MISSING_MSG.to_string())?;
     hx::verify_cua_driver(&bin)?;
     hx::spawn_cua_child(&bin, dir)
@@ -127,7 +130,7 @@ fn start_cua_child(dir: &std::path::Path) -> Result<grokhub_agent::harness::Stdi
 
 /// The Cua proxy is registered only while desktop control and the `cuaDriver`
 /// flag are both on (and only on Linux).
-pub(crate) fn cua_wanted(desktop_control: bool, cua_flag: bool) -> bool {
+pub fn cua_wanted(desktop_control: bool, cua_flag: bool) -> bool {
     grokhub_agent::harness::ComputerUseBackend::selected(cua_flag, desktop_control)
         == grokhub_agent::harness::ComputerUseBackend::CuaDriver
 }
@@ -138,10 +141,7 @@ fn emit(line: &str) {
     let _ = out.flush();
 }
 
-pub(crate) fn read_line_capped(
-    reader: &mut impl BufRead,
-    cap: usize,
-) -> Result<Option<String>, String> {
+pub fn read_line_capped(reader: &mut impl BufRead, cap: usize) -> Result<Option<String>, String> {
     let mut buf = Vec::new();
     let mut byte = [0u8; 1];
     loop {
@@ -172,11 +172,7 @@ pub(crate) fn read_line_capped(
     Ok(Some(String::from_utf8_lossy(&buf).into_owned()))
 }
 
-pub(crate) fn encode_rgba(
-    rgba: &[u8],
-    w: u32,
-    h: u32,
-) -> Result<(Vec<u8>, String, u32, u32), String> {
+pub fn encode_rgba(rgba: &[u8], w: u32, h: u32) -> Result<(Vec<u8>, String, u32, u32), String> {
     if w == 0 || h == 0 {
         return Err("empty screenshot".into());
     }
@@ -209,45 +205,36 @@ pub(crate) fn encode_rgba(
     Ok((png, "image/png".into(), nw, nh))
 }
 
-pub(crate) fn write_halt_stamp() {
-    let path = crate::config::config_dir().join("desktop-halt.stamp");
+pub fn write_halt_stamp() {
+    let path = crate::host::config_dir().join("desktop-halt.stamp");
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
     let _ = std::fs::write(path, grokhub_core::now_ms().to_string());
 }
 
-pub(crate) fn read_halt_stamp() -> Option<u64> {
-    let path = crate::config::config_dir().join("desktop-halt.stamp");
+pub fn read_halt_stamp() -> Option<u64> {
+    let path = crate::host::config_dir().join("desktop-halt.stamp");
     let text = std::fs::read_to_string(path).ok()?;
     text.trim().parse().ok()
 }
 
-/// Status after the Settings desktop switch.
-pub(crate) fn desktop_switch_note(on: bool) -> &'static str {
-    if on {
-        "Desktop control is on."
-    } else {
-        "Desktop control is off."
-    }
+/// A program on PATH or in the usual install places.
+pub fn resolve_bin(name: &str) -> Option<std::path::PathBuf> {
+    grokhub_core::resolve_bin_in(
+        name,
+        std::env::var("PATH").ok().as_deref(),
+        grokhub_core::user_home().as_ref().and_then(|p| p.to_str()),
+    )
 }
 
-/// The native engine's Cua server follows the desktop switch and the
-/// `cuaDriver` flag (Linux only).
-pub(crate) fn sync_native_cua(cfg: &crate::config::AppConfig) {
-    let exe = native_cua_wanted(cfg)
-        .then(|| std::env::current_exe().ok())
-        .flatten();
-    grokhub_agent::mcp::set_cabin_cua(exe);
-}
-
-fn native_cua_wanted(cfg: &crate::config::AppConfig) -> bool {
-    cua_wanted(cfg.desktop_control, cfg.cua_driver)
+pub fn which(name: &str) -> bool {
+    resolve_bin(name).is_some()
 }
 
 static PROCESS_STARTED_MS: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
 
-pub(crate) fn process_started_ms() -> u64 {
+pub fn process_started_ms() -> u64 {
     *PROCESS_STARTED_MS.get_or_init(grokhub_core::now_ms)
 }
 
@@ -268,7 +255,7 @@ pub(crate) fn publish_capture_backend(label: &str) {
         .unwrap_or_else(|err| err.into_inner()) = Some(label.to_string());
 }
 
-pub(crate) fn desktop_panel_lines() -> String {
+pub fn desktop_panel_lines() -> String {
     grokhub_core::desktop_mcp::desktop_control_status(
         &active_input_label(),
         &active_capture_label(),
@@ -357,7 +344,7 @@ fn session_stack() -> grokhub_core::desktop_mcp::DesktopStack {
 
 static TEST_RX: Mutex<Option<mpsc::Receiver<String>>> = Mutex::new(None);
 
-pub(crate) fn request_desktop_test(enabled: bool) -> String {
+pub fn request_desktop_test(enabled: bool) -> String {
     if !enabled {
         set_desktop_enabled(false);
         return grokhub_core::desktop_mcp::OFF_MSG.to_string();
@@ -395,7 +382,7 @@ fn spawn_desktop_probe() -> String {
     "Testing each monitor...".into()
 }
 
-pub(crate) fn take_desktop_test_status() -> Option<String> {
+pub fn take_desktop_test_status() -> Option<String> {
     let mut guard = TEST_RX.lock().ok()?;
     let rx = guard.as_mut()?;
     match rx.try_recv() {
@@ -411,14 +398,14 @@ pub(crate) fn take_desktop_test_status() -> Option<String> {
     }
 }
 
-pub(crate) fn set_desktop_enabled(on: bool) {
+pub fn set_desktop_enabled(on: bool) {
     #[cfg(all(target_os = "linux", not(test)))]
     broker::set_enabled(on);
     #[cfg(not(all(target_os = "linux", not(test))))]
     let _ = on;
 }
 
-pub(crate) fn note_halt() {
+pub fn note_halt() {
     #[cfg(all(target_os = "linux", not(test)))]
     broker::note_halt();
 }
@@ -547,22 +534,28 @@ impl DesktopBackend for LiveBackend {
     // Spike-2b: AT-SPI on Linux. Windows keeps the default (unknown): no UIA reader (D3).
     #[cfg(target_os = "linux")]
     fn target_at(&mut self, x: i32, y: i32) -> Option<grokhub_core::desktop_mcp::ClickTarget> {
-        crate::desktop::atspi_target_at(x, y)
+        crate::host::target_at(x, y)
     }
 }
 
-pub(crate) struct NativeDesktop {
+pub struct NativeDesktop {
     inner: Mutex<DesktopServer<LiveBackend>>,
 }
 
 impl NativeDesktop {
-    pub(crate) fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             inner: Mutex::new(DesktopServer::new(
                 env!("CARGO_PKG_VERSION"),
                 LiveBackend::new(),
             )),
         }
+    }
+}
+
+impl Default for NativeDesktop {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -639,7 +632,7 @@ fn mcp_tool_output(body: serde_json::Value) -> grokhub_agent::ToolOutput {
 
 /// Full-screen stills for "Record my screen", one per call, as `(bytes, mime)`.
 /// Connects to the desktop backend on the first call and keeps it.
-pub(crate) fn screen_grabber() -> impl FnMut() -> Result<(Vec<u8>, String), String> {
+pub fn screen_grabber() -> impl FnMut() -> Result<(Vec<u8>, String), String> {
     let mut backend: Option<Box<dyn DesktopBackend>> = None;
     move || {
         if backend.is_none() {
@@ -729,7 +722,7 @@ pub(crate) fn drive_hands<B: DesktopBackend>(
 /// Windows Eyes: the primary monitor through xcap, the grabber the desktop
 /// tools' screenshot uses, since the Linux capture tools are not there.
 #[cfg(windows)]
-pub(crate) fn windows_primary_frame() -> Result<image::RgbaImage, String> {
+pub fn windows_primary_frame() -> Result<image::RgbaImage, String> {
     let monitors = xcap::Monitor::all().map_err(|e| e.to_string())?;
     let primary = monitors
         .iter()
@@ -742,10 +735,15 @@ pub(crate) fn windows_primary_frame() -> Result<image::RgbaImage, String> {
 /// Windows COMPUTER_CMD hands: SendInput through the desktop tools' own
 /// backend, since xdotool and ydotool are Linux tools.
 #[cfg(windows)]
-pub(crate) fn windows_hands(
-    op: &grokhub_core::recipe::ComputerOp,
-) -> Option<Result<String, String>> {
+pub fn windows_hands(op: &grokhub_core::recipe::ComputerOp) -> Option<Result<String, String>> {
     drive_hands(&mut windows::WindowsBackend::new(), op)
+}
+
+#[cfg(test)]
+pub(crate) fn test_root(label: &str) -> std::path::PathBuf {
+    static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    std::env::temp_dir().join(format!("grokhub-{label}-{}-{n}", std::process::id()))
 }
 
 #[cfg(test)]
@@ -761,8 +759,6 @@ mod tests {
         assert!(!cua_wanted(false, true), "switch off: not registered");
         assert!(!cua_wanted(false, false));
         assert_eq!(cua_wanted(true, true), cfg!(target_os = "linux"));
-        let cfg = crate::config::AppConfig::default();
-        assert!(!cua_wanted(true, cfg.cua_driver));
     }
 
     #[test]
@@ -784,10 +780,10 @@ mod tests {
 
     #[test]
     fn desktop_mcp_halt_stamp_round_trip() {
-        let root = crate::config::test_config_root("desktop-mcp-halt");
+        let root = test_root("desktop-mcp-halt");
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
-        let _pin = crate::config::TestConfigDir::set(root.clone());
+        let _pin = grokhub_agent::perm::ConfigGuard::set(&root);
         assert!(read_halt_stamp().is_none());
         write_halt_stamp();
         let ms = read_halt_stamp().expect("stamp");
@@ -812,7 +808,7 @@ mod tests {
 
     #[test]
     fn udev_rule_tags_uaccess() {
-        let text = include_str!("../../../../packaging/udev/60-grokhub-uinput.rules");
+        let text = include_str!("../../../packaging/udev/60-grokhub-uinput.rules");
         assert!(text.contains("KERNEL==\"uinput\""));
         assert!(text.contains("GROUP=\"input\""));
         assert!(text.contains("MODE=\"0660\""));
@@ -832,65 +828,14 @@ mod tests {
     }
 
     #[test]
-    fn settings_desktop_panel_reports_backends() {
-        let status = grokhub_core::desktop_mcp::desktop_control_status(
-            "RemoteDesktop portal (libei)",
-            "KWin ScreenShot2",
-        );
-        assert_eq!(
-            status,
-            "Input: RemoteDesktop portal (libei)\nCapture: KWin ScreenShot2"
-        );
-        let settings = include_str!("../app/settings.rs");
-        assert!(settings.contains("desktop_panel_lines"));
-        assert!(settings.contains("\"Test\""));
-        assert!(settings.contains("request_desktop_test"));
-    }
-
-    #[test]
     fn desktop_entry_allows_kwin_screenshot2() {
-        let text = include_str!("../../../../packaging/grokhub.desktop");
+        let text = include_str!("../../../packaging/grokhub.desktop");
         assert!(text.lines().any(|line| line == "Version=1.5"));
         assert!(text.lines().any(|line| line == "Exec=grokhub"));
         assert!(text
             .lines()
             .any(|line| line == "X-KDE-DBUS-Restricted-Interfaces=org.kde.KWin.ScreenShot2"));
     }
-    #[test]
-    fn the_native_engine_runs_cua_itself_and_registers_nothing_in_grok_build() {
-        let on = crate::config::AppConfig {
-            desktop_control: true,
-            cua_driver: true,
-            ..crate::config::AppConfig::default()
-        };
-        // Cua is a Linux-only spike; elsewhere the native engine never starts it.
-        assert_eq!(native_cua_wanted(&on), cfg!(target_os = "linux"));
-        let no_flag = crate::config::AppConfig {
-            cua_driver: false,
-            ..on.clone()
-        };
-        assert!(!native_cua_wanted(&no_flag));
-        let switch_off = crate::config::AppConfig {
-            desktop_control: false,
-            ..on.clone()
-        };
-        assert!(!native_cua_wanted(&switch_off));
-        assert_eq!(desktop_switch_note(true), "Desktop control is on.");
-        assert_eq!(desktop_switch_note(false), "Desktop control is off.");
-
-        let start = include_str!("../app/mod.rs").replace("\r\n", "\n");
-        assert!(
-            !start.contains("maybe_register_on_start("),
-            "nothing registers in Grok Build at startup"
-        );
-        let settings = include_str!("../app/settings.rs").replace("\r\n", "\n");
-        let switch = settings
-            .split("desktop_switch_note(on)")
-            .nth(1)
-            .expect("desktop switch");
-        assert!(switch.contains("sync_native_cua(&self.cfg)"));
-    }
-
     /// Records what COMPUTER_CMD hands sent to the backend.
     #[derive(Default)]
     struct Hands {
