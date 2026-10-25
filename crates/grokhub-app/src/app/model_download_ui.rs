@@ -3,12 +3,15 @@
 //! Cancel and Resume. A `.part` left by a pause, a dropped connection or a
 //! restart resumes from where it stopped. When the checksum matches, the
 //! on-device toggle turns on. This build has no runtime to run the file, so
-//! the route stays off and the rows say so.
+//! the route stays off and the rows say so. A model with a draft model
+//! (`local_draft`) offers it as a second download into `models/drafters/`;
+//! it is never fetched on its own and never replaces the model GrokHub runs.
 
 use std::io::Read;
 use std::path::Path;
 use std::sync::{mpsc, Arc};
 
+use grokhub_core::local_draft as ld;
 use grokhub_core::local_setup::{self as ls, LocalModel};
 use grokhub_core::model_download::{self as md, Control, Fetch, Installed, Outcome, Progress};
 
@@ -31,6 +34,29 @@ pub(super) struct ModelDl {
     pub(super) done: u64,
     pub(super) total: Option<u64>,
     pub(super) verifying: bool,
+    /// A draft model: it doesn't become the installed model.
+    drafter: bool,
+}
+
+/// Where draft models download.
+pub(super) fn drafters_dir() -> std::path::PathBuf {
+    models_dir().join(ld::DRAFTERS_DIR)
+}
+
+/// What the draft model offer says.
+pub(super) fn drafter_offer_line(d: &LocalModel) -> String {
+    format!(
+        "Optional: {} can draft replies for this model, which can make them faster on some machines. GrokHub only downloads it if you ask, and keeps it only if the speed test finds it helps.",
+        d.name
+    )
+}
+
+/// The status line for a finished draft model download.
+pub(super) fn drafter_done_status(m: &LocalModel) -> String {
+    format!(
+        "Downloaded {} as a draft model. Test speed in Settings checks whether it makes replies faster; it only stays on if it does.",
+        m.name
+    )
 }
 
 /// Hugging Face over HTTPS. A download carries none of your data.
@@ -166,6 +192,7 @@ impl Cabin {
         });
         let done = md::partial_bytes(&dir, m).unwrap_or(0);
         self.status = format!("Downloading {} to {}", m.name, dir.display());
+        let drafter = dir.ends_with(ld::DRAFTERS_DIR);
         self.setup.dl = Some(ModelDl {
             model: m,
             dir,
@@ -174,6 +201,7 @@ impl Cabin {
             done,
             total: Some(m.download_mb * MIB),
             verifying: false,
+            drafter,
         });
     }
 
@@ -226,11 +254,16 @@ impl Cabin {
             return;
         };
         let m = dl.model;
-        let status = outcome_status(m, &out, &dl.dir);
+        let drafter = dl.drafter;
+        let mut status = outcome_status(m, &out, &dl.dir);
         self.setup.dl = None;
-        if let Outcome::Done(rec) = out {
-            self.setup.installed = Some(rec);
-            self.set_local_model(true);
+        match out {
+            Outcome::Done(_) if drafter => status = drafter_done_status(m),
+            Outcome::Done(rec) => {
+                self.setup.installed = Some(rec);
+                self.set_local_model(true);
+            }
+            _ => {}
         }
         self.status = status;
     }
@@ -239,29 +272,10 @@ impl Cabin {
     pub(super) fn ui_model_download(&mut self, ui: &mut egui::Ui, m: &'static LocalModel) {
         if let Some(rec) = self.setup.installed.clone() {
             self.ui_installed_note(ui, &rec);
+            self.ui_drafter_offer(ui, &rec);
             return;
         }
-        if let Some(dl) = &self.setup.dl {
-            let line = if dl.verifying {
-                format!("Checking {}…", dl.model.name)
-            } else {
-                format!(
-                    "Downloading {}: {}",
-                    dl.model.name,
-                    md::progress_line(dl.done, dl.total)
-                )
-            };
-            crate::cards::settings_note(ui, &line);
-            crate::cards::settings_progress(ui, md::percent(dl.done, dl.total), crate::theme::fg());
-            let model = dl.model;
-            ui.horizontal(|ui| {
-                if crate::cards::ghost_pill(ui, "Pause") {
-                    self.pause_model_download();
-                }
-                if crate::cards::ghost_pill(ui, "Cancel") {
-                    self.cancel_model_download(model);
-                }
-            });
+        if self.ui_download_progress(ui) {
             return;
         }
         let part = md::partial_bytes(&models_dir(), m);
@@ -281,6 +295,56 @@ impl Cabin {
                 self.cancel_model_download(m);
             }
         });
+    }
+
+    /// Progress with Pause and Cancel while a download runs; `false` when none does.
+    fn ui_download_progress(&mut self, ui: &mut egui::Ui) -> bool {
+        let Some(dl) = &self.setup.dl else {
+            return false;
+        };
+        let line = if dl.verifying {
+            format!("Checking {}…", dl.model.name)
+        } else {
+            format!(
+                "Downloading {}: {}",
+                dl.model.name,
+                md::progress_line(dl.done, dl.total)
+            )
+        };
+        crate::cards::settings_note(ui, &line);
+        crate::cards::settings_progress(ui, md::percent(dl.done, dl.total), crate::theme::fg());
+        let model = dl.model;
+        ui.horizontal(|ui| {
+            if crate::cards::ghost_pill(ui, "Pause") {
+                self.pause_model_download();
+            }
+            if crate::cards::ghost_pill(ui, "Cancel") {
+                self.cancel_model_download(model);
+            }
+        });
+        true
+    }
+
+    /// The installed model's draft model, offered as its own download.
+    fn ui_drafter_offer(&mut self, ui: &mut egui::Ui, rec: &Installed) {
+        if self.ui_download_progress(ui) {
+            return;
+        }
+        let Some(d) = ld::offer(&rec.file, &drafters_dir()) else {
+            return;
+        };
+        crate::cards::settings_note(ui, &drafter_offer_line(d));
+        let label = match md::partial_bytes(&drafters_dir(), d) {
+            Some(b) => format!(
+                "Resume {} ({})",
+                d.name,
+                md::progress_line(b, Some(d.download_mb * MIB))
+            ),
+            None => format!("Download draft model ({})", ls::size_label(d.download_mb)),
+        };
+        if crate::cards::ghost_pill(ui, &label) {
+            self.start_model_download_with(d, drafters_dir(), Box::new(HfFetch));
+        }
     }
 
     fn ui_installed_note(&self, ui: &mut egui::Ui, rec: &Installed) {
@@ -384,6 +448,64 @@ mod tests {
             format!("test.gguf (0 MB) is in {}.", models_dir().display())
         );
         grokhub_agent::route::local::set_enabled(false);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_draft_model_downloads_beside_the_model_and_changes_nothing_else() {
+        let root = std::env::temp_dir().join(format!("grokhub-dl-draft-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let _pin = crate::config::TestConfigDir::set(root.join("cfg"));
+        let g12 = ls::model_by_id("gemma-4-12b-it-q4_k_m").expect("12B");
+        let e2b = ls::model_by_id("gemma-4-e2b-it-q4_k_m").expect("E2B");
+        let drafters = root.join("models").join(ld::DRAFTERS_DIR);
+        // Offered for the 12B until it's on disk; the line says it is optional.
+        assert_eq!(ld::offer(g12.file, &drafters).map(|d| d.id), Some(e2b.id));
+        assert_eq!(
+            drafter_offer_line(e2b),
+            "Optional: Gemma 4 E2B can draft replies for this model, which can make them faster on some machines. GrokHub only downloads it if you ask, and keeps it only if the speed test finds it helps."
+        );
+        let body = b"tiny fake drafter".to_vec();
+        // Pinned to the fake body, under the fake's repo and file.
+        let d: &'static LocalModel = Box::leak(Box::new(LocalModel {
+            repo: "acme/test-GGUF",
+            file: "test.gguf",
+            sha256: md::sha256_hex(&body).leak(),
+            ..*e2b
+        }));
+        let mut app = Cabin::quiet_for_test();
+        let installed = Installed {
+            id: g12.id.into(),
+            file: g12.file.into(),
+            sha256: g12.sha256.into(),
+            bytes: 7_039 * MIB,
+        };
+        app.setup.installed = Some(installed.clone());
+        app.cfg.local_model = false;
+        app.start_model_download_with(d, drafters.clone(), Box::new(FakeHf(body)));
+        for _ in 0..500 {
+            app.poll_model_download();
+            if app.setup.dl.is_none() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(app.setup.dl.is_none(), "the download never finished");
+        assert_eq!(
+            app.status,
+            "Downloaded Gemma 4 E2B as a draft model. Test speed in Settings checks whether it makes replies faster; it only stays on if it does."
+        );
+        assert_eq!(
+            app.setup.installed,
+            Some(installed),
+            "the model GrokHub runs is unchanged"
+        );
+        assert!(
+            !app.cfg.local_model,
+            "a draft model doesn't touch the toggle"
+        );
+        assert!(drafters.join("test.gguf").is_file());
+        assert_eq!(md::installed(&root.join("models")), None);
         let _ = std::fs::remove_dir_all(root);
     }
 

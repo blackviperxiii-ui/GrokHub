@@ -55,6 +55,8 @@ fn dense_12b() -> GgufMeta {
         value_length: 256,
         expert_count: 0,
         file_mb: 7_039,
+        tokenizer: None,
+        nextn_layers: 0,
     }
 }
 
@@ -126,6 +128,7 @@ fn a_12_gb_gpu_keeps_the_whole_12b_on_the_gpu_with_q4_kv() {
             flash_attn: true,
             mlock: true,
             tensor_split: None,
+            draft: None,
         }
     );
     assert_eq!(
