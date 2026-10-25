@@ -433,7 +433,9 @@ fn allow_and_deny_lists_win_over_the_screen() {
         Rules {
             allow: vec!["VLC.exe".into()],
             deny: vec!["blender".into()],
-            throttle_on_battery: false
+            throttle_on_battery: false,
+            pause_for_games: true,
+            use_idle_time: true,
         }
     );
     let vlc = desk(|s| {
@@ -451,6 +453,44 @@ fn allow_and_deny_lists_win_over_the_screen() {
     );
     assert_eq!(Rules::from_json("{broken"), Rules::default());
     assert!(Rules::default().throttle_on_battery);
+}
+
+#[test]
+fn games_and_idle_time_follow_the_users_two_switches() {
+    let off = Rules::from_json(r#"{"pauseForGames":false,"useIdleTime":false}"#);
+    assert_eq!(
+        off,
+        Rules {
+            pause_for_games: false,
+            use_idle_time: false,
+            ..Rules::default()
+        }
+    );
+    let game = desk(|s| {
+        s.game = Some(true);
+        s.fullscreen = Some(true);
+    });
+    assert_eq!(
+        reason(&game, &Rules::default()),
+        (Level::Throttle, "a game is running")
+    );
+    assert_eq!(reason(&game, &off), (Level::Normal, "normal use"));
+    // The deny list still throttles with games switched off.
+    let deny = Rules {
+        deny: vec!["blender".into()],
+        ..off.clone()
+    };
+    let blender = desk(|s| s.foreground = Some("blender".into()));
+    assert_eq!(
+        reason(&blender, &deny),
+        (Level::Throttle, "an app on your deny list is in front")
+    );
+    let idle = desk(|s| s.idle_secs = Some(IDLE_RAMP_SECS));
+    assert_eq!(
+        reason(&idle, &Rules::default()),
+        (Level::RampUp, "idle on AC power")
+    );
+    assert_eq!(reason(&idle, &off), (Level::Normal, "normal use"));
 }
 
 #[test]
