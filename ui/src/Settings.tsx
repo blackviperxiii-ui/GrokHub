@@ -11,6 +11,7 @@ import {
 import { APPROVALS } from "./approvals";
 import { Labs } from "./Labs";
 import { LocalAi } from "./LocalAi";
+import { Personality } from "./Personality";
 import { SECTION_LABELS, sections, type Section } from "./sections";
 import { WebAccess } from "./WebAccess";
 
@@ -118,6 +119,7 @@ export function Settings({
         {section === "general" && general()}
         {section === "account" && account()}
         {note && <p className="note">{note}</p>}
+        {section === "personality" && <Personality />}
         {section === "localAi" && caps.localAi && <LocalAi />}
         {section === "webAccess" && caps.webAccess && <WebAccess />}
         {section === "labs" && caps.plugins && <Labs />}

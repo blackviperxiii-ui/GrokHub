@@ -12,13 +12,14 @@ pub mod credential;
 pub mod journal;
 pub mod local_ai;
 pub mod memory;
+pub mod personality;
 pub mod plugins;
 pub mod pulse;
 pub mod remote;
 pub mod settings;
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -110,6 +111,7 @@ fn save_settings(
         workspace: workspace.trim().to_string(),
         approvals,
         desktop_control,
+        personality: current(&state).personality,
     };
     settings::save(&state.config_dir, &next)?;
     #[cfg(desktop)]
@@ -143,7 +145,11 @@ fn session(state: &ShellState, conversation_id: &str) -> Arc<agent::Session> {
     Arc::clone(session)
 }
 
-fn route(settings: &ShellSettings, session: agent::SessionMode) -> Result<agent::Route, String> {
+fn route(
+    settings: &ShellSettings,
+    session: agent::SessionMode,
+    config_dir: &Path,
+) -> Result<agent::Route, String> {
     let client = match credential::test_responses_url() {
         Some(url) => XaiClient::new(
             credential::LOOPBACK_TEST_BEARER,
@@ -165,6 +171,7 @@ fn route(settings: &ShellSettings, session: agent::SessionMode) -> Result<agent:
         mode: settings.approvals.mode(),
         desktop: settings.desktop_control && capabilities::current().desktop_control,
         session,
+        voice: personality::voice(config_dir, &settings.personality),
     })
 }
 
@@ -191,8 +198,9 @@ async fn chat_turn(
     settings: ShellSettings,
 ) -> Result<String, String> {
     let session = session(state, &conversation_id);
+    let config_dir = state.config_dir.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let route = route(&settings, mode)?;
+        let route = route(&settings, mode, &config_dir)?;
         let id = conversation_id.clone();
         session.prompt(
             &text,
@@ -335,7 +343,7 @@ async fn run_automation(
     let settings = current(&state);
     let config_dir = state.config_dir.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let route = route(&settings, agent::SessionMode::Chat)?;
+        let route = route(&settings, agent::SessionMode::Chat, &config_dir)?;
         automations::run_now(
             &config_dir,
             &id,
@@ -491,6 +499,64 @@ async fn journal_to_mission(
 ) -> Result<journal::Mission, String> {
     let dir = state.config_dir.clone();
     off_main(move || journal::to_mission(&dir, &id, &conversation_id)).await?
+}
+
+#[tauri::command]
+async fn get_personalities(state: State<'_, ShellState>) -> Result<personality::Page, String> {
+    let (dir, stored) = (state.config_dir.clone(), current(&state).personality);
+    off_main(move || personality::load(&dir, &stored)).await
+}
+
+/// The default voice for every chat; applies to the next message.
+#[tauri::command]
+fn set_personality(state: State<'_, ShellState>, id: String) -> Result<personality::Page, String> {
+    let picked = personality::pick(&state.config_dir, &id)?;
+    let next = ShellSettings {
+        personality: personality::stored_id(&picked.id),
+        ..current(&state)
+    };
+    settings::save(&state.config_dir, &next)?;
+    *state.settings.lock().unwrap_or_else(|e| e.into_inner()) = next.clone();
+    Ok(personality::load(&state.config_dir, &next.personality))
+}
+
+fn personalities(state: &ShellState) -> personality::Page {
+    personality::load(&state.config_dir, &current(state).personality)
+}
+
+/// Returns the copy's id with the page, so the editor can open it.
+#[tauri::command]
+fn duplicate_personality(
+    state: State<'_, ShellState>,
+    id: String,
+) -> Result<(String, personality::Page), String> {
+    let copy = personality::duplicate(&state.config_dir, &id)?;
+    Ok((copy, personalities(&state)))
+}
+
+#[tauri::command]
+fn save_personality(
+    state: State<'_, ShellState>,
+    edit: personality::Edit,
+) -> Result<personality::Page, String> {
+    personality::save(&state.config_dir, edit)?;
+    Ok(personalities(&state))
+}
+
+/// Deleting the default voice's preset puts chats back on the default voice.
+#[tauri::command]
+fn delete_personality(
+    state: State<'_, ShellState>,
+    id: String,
+) -> Result<personality::Page, String> {
+    personality::delete(&state.config_dir, &id)?;
+    let mut now = current(&state);
+    if personality::shown_id(&now.personality) == id.trim() {
+        now.personality = String::new();
+        settings::save(&state.config_dir, &now)?;
+        *state.settings.lock().unwrap_or_else(|e| e.into_inner()) = now.clone();
+    }
+    Ok(personality::load(&state.config_dir, &now.personality))
 }
 
 #[tauri::command]
@@ -965,6 +1031,11 @@ pub fn run() {
             journal_add,
             journal_act,
             journal_to_mission,
+            get_personalities,
+            set_personality,
+            duplicate_personality,
+            save_personality,
+            delete_personality,
             get_plugins,
             plugin_act,
             install_plugin,

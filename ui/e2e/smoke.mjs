@@ -432,6 +432,29 @@ async function palette(s) {
 
 // Plan chip: the turn is read-only, so a write is refused without a card;
 // the plan waits on its card until Approve plan, and the chip goes back to Chat.
+// Settings → Personality: Use makes a preset the default in shell.json, and
+// the next chat message's system prompt carries its voice after the rules.
+async function usePersonality(s, config, name) {
+  await tab(s, "Settings");
+  await section(s, "Personality");
+  const use = await waitFor(`${name}'s Use button`, async () => {
+    const el = await wd("POST", `${s}/element`, {
+      using: "xpath",
+      value: `//ul[@aria-label='Personalities']/li[@aria-label='${name}']//button[normalize-space()='Use']`,
+    });
+    return el[ELEMENT];
+  });
+  await wd("POST", `${s}/element/${use}/click`, {});
+  await waitFor(`${name} in use`, async () => {
+    const t = await textOf(s, `ul[aria-label='Personalities'] li[aria-label='${name}'] .card-status`);
+    return t === "In use" ? t : null;
+  });
+  const saved = JSON.parse(readFileSync(join(config, "shell.json"), "utf8"));
+  const id = name === "Default" ? "" : name.toLowerCase();
+  if (saved.personality !== id) throw new Error(`shell.json holds personality ${JSON.stringify(saved.personality)}`);
+  console.log(`personality: ${name} in use`);
+}
+
 async function plan(s, workspace) {
   await tab(s, "Chat");
   await click(s, "[aria-label='Session mode'] button[title^='Grok writes a plan']");
@@ -442,6 +465,9 @@ async function plan(s, workspace) {
   const shown = await wd("GET", `${s}/element/${card}/text`);
   if (!shown.includes(PLAN_TEXT)) throw new Error(`plan card said ${JSON.stringify(shown)}`);
   if (existsSync(join(workspace, "plan-note.txt"))) throw new Error("plan mode wrote a file");
+  const voiced = mockSeen.find((c) => c.body.includes(PLAN_PROMPT));
+  if (!voiced?.body.includes("Personality: Pirate.")) throw new Error("the plan turn's prompt had no Pirate voice");
+  console.log("the chat prompt carries the Pirate voice");
   const refused = mockSeen.find((c) => c.body.includes("smoke-plan-write") && c.body.includes("function_call_output"));
   if (!refused || !refused.body.includes("read-only")) throw new Error("the write was not refused as read-only");
   console.log("plan mode refused the write and showed the plan");
@@ -675,7 +701,9 @@ async function main() {
     await pulse(s, config);
     await journal(s, config);
     await palette(s);
+    await usePersonality(s, config, "Pirate");
     await plan(s, workspace);
+    await usePersonality(s, config, "Default");
     await localAi(s, config);
     await labs(s, config);
     await desktop(s, config);
