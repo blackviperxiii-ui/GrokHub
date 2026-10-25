@@ -477,7 +477,7 @@ mod tests {
             "Off. Background work uses your cloud model."
         );
         assert_eq!(
-            local_model_hint(false, true, true, Some("Qwen 2.5 7B")),
+            local_model_hint(false, true, true, Some("Gemma 4 E4B")),
             "Off. Background work uses your cloud model."
         );
         assert_eq!(
@@ -485,12 +485,12 @@ mod tests {
             "On. Dream, digests and summaries run on this device. Chat still uses your cloud model."
         );
         assert_eq!(
-            local_model_hint(true, false, false, Some("Qwen 2.5 7B")),
-            "On. Qwen 2.5 7B is downloaded, but the local engine is not installed yet. Use Get engine, then finish Set up."
+            local_model_hint(true, false, false, Some("Gemma 4 E4B")),
+            "On. Gemma 4 E4B is downloaded, but the local engine is not installed yet. Use Get engine, then finish Set up."
         );
         assert_eq!(
-            local_model_hint(true, false, true, Some("Qwen 2.5 7B")),
-            "On. The engine is ready; finish Set up to run Qwen 2.5 7B on this device."
+            local_model_hint(true, false, true, Some("Gemma 4 E4B")),
+            "On. The engine is ready; finish Set up to run Gemma 4 E4B on this device."
         );
         assert_eq!(
             local_model_hint(true, false, true, None),
