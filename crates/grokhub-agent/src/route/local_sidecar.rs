@@ -157,6 +157,11 @@ impl Sidecar {
         self.wait_healthy()
     }
 
+    /// This launch runs a draft model (speculative decoding).
+    pub fn drafting(&self) -> bool {
+        self.launch.as_ref().is_some_and(|l| l.draft.is_some())
+    }
+
     /// The child's process id, so the governor can leave its load out.
     pub fn pid(&self) -> u32 {
         self.child.lock().expect("sidecar lock").id()
