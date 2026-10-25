@@ -152,7 +152,8 @@ pub fn llama_perf_args(d: &RuntimeDefaults) -> Vec<String> {
         d.ctx.to_string(),
     ];
     if d.flash_attn {
-        args.push("--flash-attn".into());
+        // The pinned engine takes a value; a bare flag swallows the next one.
+        args.extend(["--flash-attn".into(), "on".into()]);
     }
     if d.kv_cache_q8 {
         args.extend([
@@ -231,7 +232,7 @@ mod tests {
         assert!(args.windows(2).any(|w| w == ["-ngl", "99"]));
         assert!(args.windows(2).any(|w| w == ["--threads", "8"]));
         assert!(args.windows(2).any(|w| w == ["-c", "8192"]));
-        assert!(args.iter().any(|a| a == "--flash-attn"));
+        assert!(args.windows(2).any(|w| w == ["--flash-attn", "on"]));
         assert!(args.windows(2).any(|w| w == ["--cache-type-k", "q8_0"]));
         assert!(args.iter().any(|a| a == "--cache-prompt"));
     }

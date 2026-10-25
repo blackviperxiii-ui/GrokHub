@@ -64,7 +64,7 @@ pub(super) const SETUP_DONE_STATUS: &str =
 pub(super) const SETUP_SKIPPED_STATUS: &str =
     "Setup skipped. Settings → Behavior → Setup opens it again.";
 
-fn run(cmd: &str, args: &[&str]) -> Option<String> {
+pub(super) fn run(cmd: &str, args: &[&str]) -> Option<String> {
     let mut c = std::process::Command::new(cmd);
     c.args(args)
         .stdin(std::process::Stdio::null())
@@ -175,17 +175,17 @@ fn drm_gpu_name(card_dir: &Path) -> Option<String> {
 }
 
 #[cfg(target_os = "linux")]
-fn ram_mb() -> Option<u64> {
+pub(super) fn ram_mb() -> Option<u64> {
     ls::parse_meminfo(&std::fs::read_to_string("/proc/meminfo").ok()?)
 }
 
 #[cfg(target_os = "macos")]
-fn ram_mb() -> Option<u64> {
+pub(super) fn ram_mb() -> Option<u64> {
     ls::parse_memsize_bytes(&run("sysctl", &["-n", "hw.memsize"])?)
 }
 
 #[cfg(windows)]
-fn ram_mb() -> Option<u64> {
+pub(super) fn ram_mb() -> Option<u64> {
     use windows_sys::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
     // SAFETY: a zeroed MEMORYSTATUSEX with dwLength set is what the call expects.
     let mut m: MEMORYSTATUSEX = unsafe { std::mem::zeroed() };
@@ -194,17 +194,17 @@ fn ram_mb() -> Option<u64> {
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
-fn ram_mb() -> Option<u64> {
+pub(super) fn ram_mb() -> Option<u64> {
     None
 }
 
 #[cfg(unix)]
-fn free_disk_mb(dir: &Path) -> Option<u64> {
+pub(super) fn free_disk_mb(dir: &Path) -> Option<u64> {
     ls::parse_df_avail_mb(&run("df", &["-Pk", &dir.to_string_lossy()])?)
 }
 
 #[cfg(windows)]
-fn free_disk_mb(dir: &Path) -> Option<u64> {
+pub(super) fn free_disk_mb(dir: &Path) -> Option<u64> {
     use std::os::windows::ffi::OsStrExt;
     use windows_sys::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
     let wide: Vec<u16> = dir.as_os_str().encode_wide().chain(Some(0)).collect();
@@ -222,7 +222,7 @@ fn free_disk_mb(dir: &Path) -> Option<u64> {
 }
 
 #[cfg(not(any(unix, windows)))]
-fn free_disk_mb(_dir: &Path) -> Option<u64> {
+pub(super) fn free_disk_mb(_dir: &Path) -> Option<u64> {
     None
 }
 
@@ -278,6 +278,11 @@ impl Cabin {
             std::thread::spawn(move || {
                 let home = grokhub_core::paths::user_home().unwrap_or_else(|| PathBuf::from("."));
                 let _ = tx.send(detect_hardware(&home));
+                // The full profile sizes each local-model launch (GPU layers, context, threads).
+                grokhub_agent::route::local_autoconfig::set_profile(
+                    super::local_probe::read_profile(&home),
+                    crate::config::config_dir().join("local"),
+                );
             });
         }
     }
