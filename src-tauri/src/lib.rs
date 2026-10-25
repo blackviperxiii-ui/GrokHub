@@ -337,19 +337,27 @@ fn search_memory(state: State<'_, ShellState>, query: String) -> Result<Vec<memo
     memory::search(&workspace(&state), &query)
 }
 
-#[tauri::command]
-fn list_connectors(state: State<'_, ShellState>) -> Vec<connectors::Row> {
-    connectors::list(&workspace(&state))
+/// Every connector call can wait on a server's slot while chat or a check
+/// holds it for up to the startup or tool timeout, so all of them run off
+/// the main thread.
+async fn off_main<T: Send + 'static>(
+    job: impl FnOnce() -> T + Send + 'static,
+) -> Result<T, String> {
+    tauri::async_runtime::spawn_blocking(job)
+        .await
+        .map_err(|e| e.to_string())
 }
 
-/// Starting a server can take its whole startup timeout, so these run off
-/// the main thread.
+#[tauri::command]
+async fn list_connectors(state: State<'_, ShellState>) -> Result<Vec<connectors::Row>, String> {
+    let workspace = workspace(&state);
+    off_main(move || connectors::list(&workspace)).await
+}
+
 #[tauri::command]
 async fn check_connectors(state: State<'_, ShellState>) -> Result<Vec<connectors::Row>, String> {
     let workspace = workspace(&state);
-    tauri::async_runtime::spawn_blocking(move || connectors::check(&workspace))
-        .await
-        .map_err(|e| e.to_string())
+    off_main(move || connectors::check(&workspace)).await
 }
 
 #[tauri::command]
@@ -358,23 +366,26 @@ async fn restart_connector(
     name: String,
 ) -> Result<connectors::Changed, String> {
     let workspace = workspace(&state);
-    tauri::async_runtime::spawn_blocking(move || connectors::restart(&workspace, &name))
-        .await
-        .map_err(|e| e.to_string())
+    off_main(move || connectors::restart(&workspace, &name)).await
 }
 
 #[tauri::command]
-fn sign_out_connector(state: State<'_, ShellState>, name: String) -> connectors::Changed {
-    connectors::sign_out(&workspace(&state), &name)
+async fn sign_out_connector(
+    state: State<'_, ShellState>,
+    name: String,
+) -> Result<connectors::Changed, String> {
+    let workspace = workspace(&state);
+    off_main(move || connectors::sign_out(&workspace, &name)).await
 }
 
 /// The page asks "Disconnect {name}?" first.
 #[tauri::command]
-fn disconnect_connector(
+async fn disconnect_connector(
     state: State<'_, ShellState>,
     name: String,
 ) -> Result<connectors::Changed, String> {
-    connectors::disconnect(&workspace(&state), &name)
+    let workspace = workspace(&state);
+    off_main(move || connectors::disconnect(&workspace, &name)).await?
 }
 
 fn show_main(app: &AppHandle) {
