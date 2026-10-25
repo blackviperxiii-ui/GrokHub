@@ -324,6 +324,23 @@ fn compositor_hints_from_hyprland_and_sway() {
         parse_hyprctl_active(r#"{"class":"firefox","fullscreen":false}"#),
         (Some(false), Some("firefox".into()))
     );
+    // Maximized is not fullscreen, in either format.
+    assert_eq!(
+        parse_hyprctl_active(r#"{"class":"kitty","fullscreen":1}"#),
+        (Some(false), Some("kitty".into()))
+    );
+    assert_eq!(
+        parse_hyprctl_active(r#"{"class":"mpv","fullscreen":3}"#).0,
+        Some(true)
+    );
+    assert_eq!(
+        parse_hyprctl_active(r#"{"class":"kitty","fullscreen":true,"fullscreenMode":1}"#).0,
+        Some(false)
+    );
+    assert_eq!(
+        parse_hyprctl_active(r#"{"class":"mpv","fullscreen":true,"fullscreenMode":0}"#).0,
+        Some(true)
+    );
     assert_eq!(parse_hyprctl_active("not json"), (None, None));
     let tree = r#"{"focused":false,"nodes":[{"focused":false,"nodes":[
         {"focused":false,"app_id":"foot","fullscreen_mode":0},

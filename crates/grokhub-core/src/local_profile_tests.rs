@@ -276,6 +276,29 @@ fn probes_fall_through_to_the_first_reader_that_finds_a_gpu() {
         thermal: &Fixed,
     });
     assert_eq!(p.gpus, vec![gpu(GpuVendor::Amd, "AMD Radeon GPU", 16_384)]);
+    // A hybrid laptop without `nvidia-smi`: DRM sees only the iGPU (it skips
+    // NVIDIA), so Vulkan's card wins; a software renderer never does.
+    let drm_igpu = Gpus(vec![igpu(GpuVendor::Intel, "Intel iGPU")]);
+    let vk_card = Gpus(vec![gpu(
+        GpuVendor::Nvidia,
+        "NVIDIA GeForce RTX 4060",
+        8_188,
+    )]);
+    let hybrid = |vk: &Gpus| {
+        profile(&Probes {
+            gpu: &[&nvml, &drm_igpu, vk],
+            cpu: &Fixed,
+            memory: &Fixed,
+            power: &Fixed,
+            thermal: &Fixed,
+        })
+        .gpus
+    };
+    assert_eq!(
+        hybrid(&vk_card),
+        vec![gpu(GpuVendor::Nvidia, "NVIDIA GeForce RTX 4060", 8_188)]
+    );
+    assert_eq!(hybrid(&vulkan), vec![igpu(GpuVendor::Intel, "Intel iGPU")]);
     assert_eq!((p.cpu.p_cores, p.cpu.e_cores), (8, 8));
     assert_eq!(p.ram_mb, 32_768);
     // Missing readings take the conservative defaults.
