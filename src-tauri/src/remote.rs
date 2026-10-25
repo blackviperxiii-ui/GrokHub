@@ -42,6 +42,7 @@ pub const WEB_COMMANDS: &[&str] = &[
     "get_settings",
     "send_chat",
     "answer_permission",
+    "answer_elicit",
     "cancel_chat",
     "close_chat",
     "list_automations",
@@ -520,6 +521,7 @@ mod tests {
         for name in [
             "send_chat",
             "answer_permission",
+            "answer_elicit",
             "get_settings",
             "get_memory",
             "list_connectors",

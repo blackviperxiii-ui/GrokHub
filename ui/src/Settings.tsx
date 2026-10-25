@@ -8,24 +8,10 @@ import {
   type Capabilities,
   type Settings as Shape,
 } from "./api";
+import { APPROVALS } from "./approvals";
 import { LocalAi } from "./LocalAi";
 import { SECTION_LABELS, sections, type Section } from "./sections";
 import { WebAccess } from "./WebAccess";
-
-const APPROVALS: Record<Approvals, { label: string; note: string }> = {
-  ask: {
-    label: "Ask every time",
-    note: "It asks before it changes a file or runs a command.",
-  },
-  auto: {
-    label: "Auto",
-    note: "A quick check approves routine steps and asks you about the rest.",
-  },
-  always: {
-    label: "Always approve",
-    note: "Files change and commands run without asking. Deleting, sending, paying and credentials still ask.",
-  },
-};
 
 export const DESKTOP_NOTE =
   "Grok can see your screen, click and type. Deleting, sending, paying and credentials always wait for your OK.";

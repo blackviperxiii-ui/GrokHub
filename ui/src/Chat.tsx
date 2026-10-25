@@ -1,13 +1,21 @@
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import {
+  answerElicit,
   answerPermission,
   cancelChat,
   closeChat,
+  getSettings,
   onChatEvent,
+  saveSettings,
   sendChat,
   type Answer,
+  type Approvals,
   type ChatEvent,
+  type ElicitAction,
+  type SessionMode,
+  type Settings,
 } from "./api";
+import { ElicitCard, ModeChips, type ElicitItem } from "./Modes";
 
 export type Item =
   | { kind: "user"; text: string }
@@ -21,13 +29,20 @@ export type Item =
       reason: string;
       /** "ended": the turn stopped before anyone answered, so nothing ran. */
       answer: Answer | "ended" | null;
-    };
+    }
+  | ElicitItem;
 
 export interface Prefill {
   text: string;
   n: number;
   conversationId?: string;
 }
+
+const PLACEHOLDERS: Record<SessionMode, string> = {
+  chat: "Message Grok",
+  plan: "Describe what to plan",
+  btw: "Ask on the side",
+};
 
 export const MISSION_BUSY = "A reply is still running. Stop it or wait, then press To mission again.";
 
@@ -53,6 +68,9 @@ export function applyEvent(items: Item[], event: ChatEvent): Item[] {
     }
     case "permission":
       return [...items, { ...event, answer: null }];
+    // The plan comes again on its approval card; one copy is enough.
+    case "elicit":
+      return [...items, { ...event, answer: null }];
     default:
       return items;
   }
@@ -63,6 +81,7 @@ function settle(items: Item[]): Item[] {
   return items.map((item) => {
     if (item.kind === "assistant" && item.streaming) return { ...item, streaming: false };
     if (item.kind === "permission" && item.answer === null) return { ...item, answer: "ended" };
+    if (item.kind === "elicit" && item.answer === null) return { ...item, answer: "ended" };
     return item;
   });
 }
@@ -110,13 +129,19 @@ function PermissionCard({
 /** `prefill`: text another page put in the box (Pulse's Run, Journal's To
  * mission). A new `n` replaces the draft; nothing is sent until the person
  * sends it. With `conversationId` the chat moves to that conversation first,
- * like Start over, unless it is already there. */
+ * like Start over, unless it is already there. `active`: the Chat tab is
+ * showing, so the approvals chips read Settings again. `remote`: the web app,
+ * where the approvals stay the computer's. */
 export function Chat({
   onOpenSettings,
   prefill,
+  active = true,
+  remote = false,
 }: {
   onOpenSettings: () => void;
   prefill?: Prefill;
+  active?: boolean;
+  remote?: boolean;
 }) {
   const [conversationId, setConversationId] = useState(newConversationId);
   const [items, setItems] = useState<Item[]>([]);
@@ -125,6 +150,29 @@ export function Chat({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const busyRef = useRef(false);
+  const [mode, setMode] = useState<SessionMode>("chat");
+  const [settings, setSettings] = useState<Settings | null>(null);
+
+  useEffect(() => {
+    if (active) getSettings().then(setSettings, () => {});
+  }, [active]);
+
+  async function setApprovals(approvals: Approvals) {
+    if (!settings) return;
+    try {
+      setSettings(
+        await saveSettings(
+          settings.model,
+          settings.closeToTray,
+          settings.workspace,
+          approvals,
+          settings.desktopControl,
+        ),
+      );
+    } catch (err) {
+      setError(String(err));
+    }
+  }
 
   useEffect(() => {
     if (!prefill) return;
@@ -177,7 +225,7 @@ export function Chat({
     busyRef.current = true;
     setBusy(true);
     try {
-      await sendChat(conversationId, text);
+      await sendChat(conversationId, text, mode);
     } catch (err) {
       setError(String(err));
     } finally {
@@ -195,6 +243,19 @@ export function Chat({
     );
     try {
       await answerPermission(conversationId, id, choice);
+    } catch (err) {
+      setError(String(err));
+    }
+  }
+
+  async function answerCard(item: ElicitItem, action: ElicitAction, value: string) {
+    setItems((now) =>
+      now.map((it) => (it.kind === "elicit" && it.id === item.id ? { ...it, answer: action } : it)),
+    );
+    // An approved plan leaves plan mode, as in the cabin.
+    if (item.server === "Plan" && action === "accept") setMode("chat");
+    try {
+      await answerElicit(conversationId, item.id, action, item.fieldName, value);
     } catch (err) {
       setError(String(err));
     }
@@ -219,7 +280,8 @@ export function Chat({
   const last = items[items.length - 1];
   const waiting =
     !(last?.kind === "assistant" && last.streaming) &&
-    !(last?.kind === "permission" && last.answer === null);
+    !(last?.kind === "permission" && last.answer === null) &&
+    !(last?.kind === "elicit" && last.answer === null);
 
   return (
     <section className="chat" aria-label="Chat">
@@ -255,6 +317,14 @@ export function Chat({
               return (
                 <PermissionCard key={i} item={item} onAnswer={(a) => void answer(item.id, a)} />
               );
+            case "elicit":
+              return (
+                <ElicitCard
+                  key={i}
+                  item={item}
+                  onAnswer={(action, value) => void answerCard(item, action, value)}
+                />
+              );
           }
         })}
         {busy && waiting && (
@@ -272,10 +342,18 @@ export function Chat({
           </button>
         </div>
       )}
+      <ModeChips
+        mode={mode}
+        onMode={setMode}
+        approvals={settings?.approvals ?? null}
+        onApprovals={(a) => void setApprovals(a)}
+        busy={busy}
+        remote={remote}
+      />
       <form className="composer" onSubmit={send}>
         <textarea
           aria-label="Message"
-          placeholder="Message Grok"
+          placeholder={PLACEHOLDERS[mode]}
           value={draft}
           rows={2}
           onChange={(e) => setDraft(e.target.value)}
