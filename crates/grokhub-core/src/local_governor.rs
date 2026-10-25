@@ -81,7 +81,7 @@ impl Signals {
 }
 
 /// The user's app lists and battery choice (`{config}/local/governor.json`).
-#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Rules {
     /// Apps that never count as a game, even fullscreen (a video player).
@@ -89,6 +89,10 @@ pub struct Rules {
     /// Apps that always count as a game.
     pub deny: Vec<String>,
     pub throttle_on_battery: bool,
+    /// A game or a fullscreen app throttles local AI. The deny list still does when off.
+    pub pause_for_games: bool,
+    /// Idle time on AC ramps local AI up.
+    pub use_idle_time: bool,
 }
 
 impl Default for Rules {
@@ -97,6 +101,8 @@ impl Default for Rules {
             allow: Vec::new(),
             deny: Vec::new(),
             throttle_on_battery: true,
+            pause_for_games: true,
+            use_idle_time: true,
         }
     }
 }
@@ -133,10 +139,10 @@ pub fn busy(s: &Signals, rules: &Rules) -> Option<&'static str> {
             return Some("an app on your deny list is in front");
         }
     }
-    if s.game == Some(true) {
+    if rules.pause_for_games && s.game == Some(true) {
         return Some("a game is running");
     }
-    if s.fullscreen == Some(true) {
+    if rules.pause_for_games && s.fullscreen == Some(true) {
         return Some("a fullscreen app is in front");
     }
     if s.external_gpu_pct.is_some_and(|p| p > GPU_BUSY_PCT) {
@@ -185,7 +191,7 @@ pub fn target(s: &Signals, rules: &Rules) -> Option<Want> {
             return want(Level::Throttle, "on battery");
         }
     }
-    let idle = s.idle_secs.is_some_and(|i| i >= IDLE_RAMP_SECS);
+    let idle = rules.use_idle_time && s.idle_secs.is_some_and(|i| i >= IDLE_RAMP_SECS);
     let on_ac = s.power.as_ref().is_none_or(|p| !on_battery(p));
     if idle && on_ac {
         return want(Level::RampUp, "idle on AC power");
