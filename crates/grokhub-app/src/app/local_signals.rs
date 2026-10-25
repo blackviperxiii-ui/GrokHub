@@ -47,7 +47,16 @@ pub(super) fn start(config_dir: PathBuf) {
     }
     let _ = std::thread::Builder::new()
         .name("local-governor".into())
-        .spawn(move || sample_loop(&config_dir));
+        .spawn(move || {
+            // Launch sizing needs the hardware profile, and the setup wizard
+            // only reads it on a first run.
+            let home = grokhub_core::paths::user_home().unwrap_or_else(|| PathBuf::from("."));
+            grokhub_agent::route::local_autoconfig::set_profile(
+                super::local_probe::read_profile(&home),
+                config_dir.join("local"),
+            );
+            sample_loop(&config_dir)
+        });
 }
 
 fn sample_loop(config_dir: &Path) {

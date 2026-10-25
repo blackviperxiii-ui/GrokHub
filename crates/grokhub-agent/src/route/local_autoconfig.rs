@@ -13,6 +13,8 @@ use grokhub_core::local_profile::{self, Backend, LocalProfile};
 use grokhub_core::local_setup::{self, LocalModel};
 use serde::{Deserialize, Serialize};
 
+use super::local_spec::{self, DraftArgs};
+
 /// What the governor allows right now. `Unload` never launches, so it isn't here.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum GovState {
@@ -90,6 +92,8 @@ pub struct LaunchArgs {
     pub flash_attn: bool,
     pub mlock: bool,
     pub tensor_split: Option<Vec<u64>>,
+    /// Speculative decoding, when [`local_spec::plan`] turned it on.
+    pub draft: Option<Box<DraftArgs>>,
 }
 
 impl LaunchArgs {
@@ -123,6 +127,9 @@ impl LaunchArgs {
             a.extend(["--split-mode".into(), "layer".into()]);
             a.extend(["--tensor-split".into(), s.join(",")]);
         }
+        if let Some(d) = &self.draft {
+            a.extend(d.to_args());
+        }
         a.push("--cache-prompt".into());
         a
     }
@@ -138,7 +145,7 @@ const EXPERT_SHARE_PCT: u64 = 80;
 const RAM_RESERVE_MB: u64 = 4_096;
 
 /// Compute buffers grow with context.
-fn overhead_mb(ctx: u32) -> u64 {
+pub fn overhead_mb(ctx: u32) -> u64 {
     512 + u64::from(ctx) / 128
 }
 
@@ -148,14 +155,23 @@ pub fn kv_mb(meta: &GgufMeta, ctx: u32, kv: KvType) -> u64 {
 }
 
 /// (GPU, RAM) memory a launch may plan for in `state`.
-fn budgets(p: &LocalProfile, backend: Backend, state: GovState) -> (u64, u64) {
+pub fn budgets(p: &LocalProfile, backend: Backend, state: GovState) -> (u64, u64) {
     let pct = state.budget_pct();
     let plan = p.device_plan();
     let ram_free = p
         .free_ram_mb
         .unwrap_or_else(|| p.ram_mb.saturating_sub(RAM_RESERVE_MB));
-    if backend == Backend::Cpu || plan.gpus.is_empty() {
+    if backend == Backend::Cpu {
         return (0, ram_free * pct / 100);
+    }
+    if plan.gpus.is_empty() {
+        // An iGPU (Vulkan or SYCL) offloads into shared RAM; give it half the
+        // budget so the driver's shared-memory cap still fits.
+        if !p.gpus.iter().any(|g| g.integrated) {
+            return (0, ram_free * pct / 100);
+        }
+        let half = ram_free * pct / 100 / 2;
+        return (half, half);
     }
     let gpu_free: u64 = plan
         .gpus
@@ -262,6 +278,7 @@ pub fn autoconfig(
         flash_attn: backend != Backend::Cpu,
         mlock: p.free_ram_mb.is_some_and(|free| free > 2 * meta.file_mb),
         tensor_split: p.device_plan().tensor_split,
+        draft: None,
     }
 }
 
@@ -358,9 +375,10 @@ pub struct Tuned {
 
 pub const AUTOTUNE_FILE: &str = "autotune.json";
 
-pub fn tune_key(model: &Path, model_bytes: u64, p: &LocalProfile, backend: Backend) -> String {
+/// The GPUs a launch runs on (`cpu` without one), for per-device records.
+pub fn device_label(p: &LocalProfile, backend: Backend) -> String {
     let plan = p.device_plan();
-    let device = if plan.gpus.is_empty() || backend == Backend::Cpu {
+    if plan.gpus.is_empty() || backend == Backend::Cpu {
         "cpu".to_string()
     } else {
         plan.gpus
@@ -368,7 +386,12 @@ pub fn tune_key(model: &Path, model_bytes: u64, p: &LocalProfile, backend: Backe
             .map(|g| g.name.as_str())
             .collect::<Vec<_>>()
             .join("+")
-    };
+    }
+}
+
+pub fn tune_key(model: &Path, model_bytes: u64, p: &LocalProfile, backend: Backend) -> String {
+    let plan = p.device_plan();
+    let device = device_label(p, backend);
     let driver = plan
         .gpus
         .first()
@@ -476,6 +499,20 @@ fn engine_files(binary: &Path) -> Vec<String> {
 /// `None` (the one-shot `local_perf` defaults) before that or when the GGUF
 /// header can't be read. Also returns the `autotune.json` key and folder.
 pub fn launch_for(binary: &Path, model: &Path) -> Option<(LaunchArgs, String, PathBuf)> {
+    planned(binary, model).map(|(args, _, key, dir)| (args, key, dir))
+}
+
+/// The draft half of [`launch_for`], for the speed test.
+pub fn draft_plan(binary: &Path, model: &Path) -> Option<local_spec::Plan> {
+    planned(binary, model).map(|(_, plan, _, _)| plan)
+}
+
+/// Where `autotune.json` and the draft verdicts live, once the profile is read.
+pub fn tune_dir() -> Option<PathBuf> {
+    live().lock().ok()?.tune_dir.clone()
+}
+
+fn planned(binary: &Path, model: &Path) -> Option<(LaunchArgs, local_spec::Plan, String, PathBuf)> {
     let (p, dir, state, o) = {
         let l = live().lock().ok()?;
         (
@@ -494,11 +531,24 @@ pub fn launch_for(binary: &Path, model: &Path) -> Option<(LaunchArgs, String, Pa
     let bytes = std::fs::metadata(model).map(|m| m.len()).unwrap_or(0);
     let key = tune_key(model, bytes, &p, backend);
     let args = autoconfig(&p, &meta, backend, state, &o);
-    let args = match load_tuned(&dir).get(&key) {
+    let mut args = match load_tuned(&dir).get(&key) {
         Some(t) => apply_tuned(args, t),
         None => args,
     };
-    Some((args, key, dir))
+    let flags = local_spec::help_flags(binary);
+    let device = device_label(&p, backend);
+    let plan = local_spec::plan(&local_spec::Launch {
+        flags: &flags,
+        model,
+        meta: &meta,
+        profile: &p,
+        state,
+        args: &args,
+        tune_dir: &dir,
+        device: &device,
+    });
+    args.draft = plan.draft.clone().map(Box::new);
+    Some((args, plan, key, dir))
 }
 
 /// The catalog row for a model file, for [`next_smaller`].

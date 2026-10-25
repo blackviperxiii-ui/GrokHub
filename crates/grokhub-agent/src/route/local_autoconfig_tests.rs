@@ -55,6 +55,8 @@ fn dense_12b() -> GgufMeta {
         value_length: 256,
         expert_count: 0,
         file_mb: 7_039,
+        tokenizer: None,
+        nextn_layers: 0,
     }
 }
 
@@ -126,6 +128,7 @@ fn a_12_gb_gpu_keeps_the_whole_12b_on_the_gpu_with_q4_kv() {
             flash_attn: true,
             mlock: true,
             tensor_split: None,
+            draft: None,
         }
     );
     assert_eq!(
@@ -419,4 +422,42 @@ fn launch_for_reads_the_header_the_engine_and_the_stored_profile() {
     std::fs::write(&model, b"not gguf").unwrap();
     assert_eq!(launch_for(&binary, &model), None);
     let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn an_igpu_only_machine_offloads_into_shared_ram_on_vulkan() {
+    let igpu = Gpu {
+        integrated: true,
+        ..gpu(GpuVendor::Intel, "Intel iGPU", 0, None)
+    };
+    let p = machine(
+        vec![igpu],
+        32_768,
+        Some(24_000),
+        CpuInfo::new(12, 6, 0, CpuSimd::Avx2),
+    );
+    assert_eq!(
+        budgets(&p, Backend::Vulkan, GovState::Normal),
+        (9_600, 9_600)
+    );
+    assert_eq!(budgets(&p, Backend::Cpu, GovState::Normal), (0, 19_200));
+    let a = autoconfig(
+        &p,
+        &dense_4b(),
+        Backend::Vulkan,
+        GovState::Normal,
+        &Overrides::default(),
+    );
+    assert_eq!(a.ngl, 37, "every layer fits in the iGPU's half");
+    // No GPU at all on a GPU backend still runs on the CPU.
+    let bare = machine(
+        vec![],
+        32_768,
+        Some(24_000),
+        CpuInfo::new(12, 6, 0, CpuSimd::Avx2),
+    );
+    assert_eq!(
+        budgets(&bare, Backend::Vulkan, GovState::Normal),
+        (0, 19_200)
+    );
 }

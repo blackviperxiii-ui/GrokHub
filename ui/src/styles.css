@@ -249,7 +249,8 @@ button.danger {
 }
 
 .automations,
-.memory {
+.memory,
+.connectors {
   flex: 1;
   display: flex;
   flex-direction: column;
@@ -315,6 +316,34 @@ button.danger {
 
 .card-health,
 .automations .error {
+  color: var(--danger);
+  margin: 0;
+}
+
+.connectors .rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.card.connector {
+  max-width: none;
+  flex-direction: column;
+  flex-wrap: nowrap;
+  align-items: stretch;
+}
+
+.card-detail-line {
+  color: var(--muted);
+  font-family: ui-monospace, monospace;
+  overflow-wrap: anywhere;
+}
+
+.connectors .error,
+.card.connector .card-health {
   color: var(--danger);
   margin: 0;
 }
