@@ -202,5 +202,24 @@ approve, the cabin's three permission modes.
 - An unknown value in `shell.json` reads as Ask. Automations' Run now stays
   read-only whatever the mode.
 
-Next slices: Pulse, MCP, computer-use.
+**3e, Connectors.** A Connectors page lists the MCP servers in the same
+`mcp.json` the cabin and chat use (`src-tauri/src/connectors.rs` over
+`grokhub_agent::mcp`).
+
+- Opening the page reads the entries without starting any. Check all starts
+  each enabled server and pings it, off the main thread, and shows connected
+  with its tool count or the error.
+- Reconnect restarts one server. Sign out forgets a server's sign-in.
+- Disconnect asks "Disconnect {name}?" on the row first. Only a yes takes the
+  entry out of `mcp.json`, through the same change ledger the cabin uses, and
+  deletes its sign-in and saved token. Computer-use servers can't be
+  disconnected here.
+- Not yet: signing in to an HTTP server and adding new connectors. The shell
+  has no browser opener, so the page points to the cabin for both.
+- Rust tests run a real stdio server (`ui/e2e/fake-mcp.mjs` under node) and a
+  missing command. The smoke test writes an entry for that server, checks it
+  connects with one tool, and checks the entry leaves `mcp.json` only after
+  the question is answered.
+
+Next slices: Pulse, computer-use.
 
