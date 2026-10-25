@@ -12,6 +12,9 @@ import {
 export const DISCONNECT_DETAIL =
   "Its entry leaves your connections, and its sign-in and saved token are deleted.";
 
+export const CONNECTORS_EMPTY =
+  "No connectors yet. Connectors you add in the GrokHub cabin show up here.";
+
 export const SIGN_IN_NOTE = "Needs a sign-in. Sign in from the GrokHub cabin for now.";
 
 export function statusLine(row: ConnectorRow): string {
@@ -83,7 +86,7 @@ export function Connectors() {
         </p>
       )}
       {rows === null && !note && <p className="empty">Loading connectors…</p>}
-      {rows?.length === 0 && <p className="empty">No connectors yet.</p>}
+      {rows?.length === 0 && <p className="empty">{CONNECTORS_EMPTY}</p>}
       <ul className="rows">
         {rows?.map((row) => (
           <li key={row.name} className="card connector" aria-label={row.name}>

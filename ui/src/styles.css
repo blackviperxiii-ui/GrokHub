@@ -733,3 +733,16 @@ span.chip.quiet {
 .card.elicit .card-buttons input {
   flex: 1 1 200px;
 }
+
+.signed-out {
+  margin: auto;
+  max-width: 420px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  align-items: flex-start;
+}
+
+.signed-out h2 {
+  margin: 0;
+}

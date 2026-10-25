@@ -1,6 +1,9 @@
 import { useEffect, useState } from "react";
 import { getWebAccess, setWebAccess, type WebAccess as Shape } from "./api";
 
+export const PREVIEW_TIP =
+  "A preview: it works, but it runs over plain HTTP and has no sign-in beyond the pairing code.";
+
 export const WEB_NOTE =
   "A browser on your network can use GrokHub here once it has the pairing code. Chats from the web can't control the desktop, and settings and the API key stay here. It's plain HTTP, so use it only on a network you trust.";
 export const WEB_OFF_NOTE = "Web access ends when you turn it off or quit GrokHub.";
@@ -25,7 +28,9 @@ export function WebAccess() {
 
   return (
     <div className="web-access" aria-label="Web access" role="group">
-      <h2>Web access</h2>
+      <h2>
+        Web access <span className="badge" title={PREVIEW_TIP}>Preview</span>
+      </h2>
       <p className="note">{WEB_NOTE}</p>
       {web?.on ? (
         <>
