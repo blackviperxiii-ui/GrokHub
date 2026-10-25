@@ -1,0 +1,1 @@
+- Cross-platform recode, Phase 6a: `cargo xtask bump` now keeps the Tauri shell's crate, bundle and lockfile versions in step with `VERSION`, and each release section in the changelog lists the shell's bundles. The shell now reports the same version as the cabin.

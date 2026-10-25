@@ -22,7 +22,9 @@ Phase 0 started from `beta` @ `f0a5c7a` (2026-10-23).
 - **Web backend (Viper, 2026-10-25):** the web app is a remote for GrokHub
   running on your own computer, not `grokhub-hub` as a hosted service. The
   desktop runs the chats and keeps the key.
-- **Still open:** AUR and Inno packaging (keep or replace), due before Phase 6.
+- **Packaging (Viper, 2026-10-25):** the shell ships as Tauri's own bundles
+  (.deb, .AppImage, NSIS setup .exe, .dmg). AUR, Inno and the cabin tarball
+  stay as they are, for the cabin only, until the shell reaches parity.
 
 ## Phases
 
@@ -378,3 +380,17 @@ report).
   it off stops the server.
 - Not yet: HTTPS. On the LAN the code and the chats travel as plain HTTP,
   as the Settings note says.
+
+## Phase 6 status
+
+- `cargo xtask bump` keeps the shell in step with `VERSION`: the
+  `grokhub-shell` crate in `src-tauri/Cargo.toml`, the bundle `version` in
+  `src-tauri/tauri.conf.json`, and every grokhub-* entry in
+  `src-tauri/Cargo.lock` (grokhub-desktop and grokhub-shell were missing).
+  `--check` fails when any copy drifts. The shell moved from 0.1.0 to the
+  cabin's 3.1.0 so the two report one version.
+- Each new `CHANGELOG.md` section gets a `Shell (Tauri)` artifact line:
+  `grokhub-shell-vX.Y.Z-linux-amd64.deb` and `.AppImage`,
+  `GrokHub-Shell-Setup-X.Y.Z.exe`, and `grokhub-shell-vX.Y.Z-macos-arm64.dmg`.
+- Publishing those bundles from `release.yml` waits on Viper's OK for the
+  `.github/` change.
