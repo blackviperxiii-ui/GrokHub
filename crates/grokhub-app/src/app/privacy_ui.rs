@@ -15,7 +15,7 @@ use grokhub_agent::harness::{self as hx, GateOutcome, Step};
 pub(super) const LEAVING_HEAD: &str = "Leaving this computer";
 pub(super) const RULES_HEAD: &str = "Command rules";
 /// Under "Leaving this computer" in Settings → Permissions.
-pub(super) const PRIVACY_NOTE: &str = "Nothing new leaves this computer without your OK. xAI model hosts stay allowed for chats and memory. Grok Build's own traffic is outside GrokHub. /privacy shows what left.";
+pub(super) const PRIVACY_NOTE: &str = "Nothing new leaves this computer without your OK. xAI model hosts stay allowed for chats and memory. The grok CLI's own traffic, when a Google connector runs through it, is outside GrokHub. /privacy shows what left.";
 pub(super) const HUB_ROW: &str = "Sync to paired computers";
 /// The one user-facing name for the hub sync data (SY-02). Logs and files keep
 /// the scope ids (`chat`, `personal`).
@@ -310,7 +310,7 @@ pub(super) fn privacy_report(
         ));
     }
     out.push(String::new());
-    out.push("Not watched here: Grok Build's own traffic (its model calls, connectors, and web tools) and the commands an Update runs. Everything else GrokHub sends is logged above: model calls, Imagine, Labs web fetch, MCP servers, Pulse previews, update checks, and sign-in.".into());
+    out.push("Not watched here: the grok CLI's own traffic (Google connectors that run through it) and the commands an Update runs. Everything else GrokHub sends is logged above: model calls, Imagine, Labs web fetch, MCP servers, Pulse previews, update checks, and sign-in.".into());
     out.join("\n")
 }
 
@@ -874,7 +874,7 @@ mod tests {
                 "Sent in the last 7 days (no content stored)",
                 "- Nothing logged yet.",
                 "",
-                "Not watched here: Grok Build's own traffic (its model calls, connectors, and web tools) and the commands an Update runs. Everything else GrokHub sends is logged above: model calls, Imagine, Labs web fetch, MCP servers, Pulse previews, update checks, and sign-in.",
+                "Not watched here: the grok CLI's own traffic (Google connectors that run through it) and the commands an Update runs. Everything else GrokHub sends is logged above: model calls, Imagine, Labs web fetch, MCP servers, Pulse previews, update checks, and sign-in.",
             ]
             .join("\n")
         );

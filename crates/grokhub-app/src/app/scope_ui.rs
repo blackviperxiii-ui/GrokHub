@@ -52,11 +52,12 @@ fn scope_reads(kind: &str) -> &'static str {
         "files" => "A folder you pick. Never your whole home folder, keys or logins.",
         "apps" => "Installed apps and how often you open them.",
         "browser_history" => "Pages you visited in one browser. Never cookies or saved logins.",
-        // Calendar and mail stay on Grok Build's connectors (decided 2026-10-09):
-        // GrokHub has no reader of its own and never reads Grok Build's config,
-        // so the line names the connector, not the account.
-        "calendar" => "Your calendar events, read through Grok Build's Google Calendar connector.",
-        "mail" => "Your mail, read through Grok Build's Gmail connector.",
+        // Nothing reads calendar or mail yet (`idx::has_reader`), so the row
+        // says so instead of promising a reader.
+        "calendar" => {
+            "Not read yet: GrokHub has no calendar reader, so allowing it reads nothing today."
+        }
+        "mail" => "Not read yet: GrokHub has no mail reader, so allowing it reads nothing today.",
         "system_state" => "Disk, services, logs and updates. Read only.",
         _ => "",
     }

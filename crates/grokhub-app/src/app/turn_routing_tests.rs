@@ -2175,7 +2175,7 @@ fn worktree_stays_off_a_send() {
     cabin.run_slash(super::Slash::Worktree);
     assert_eq!(
         cabin.status,
-        "Worktrees were a Grok Build CLI feature; chats run in the bound project folder"
+        "Worktrees were a grok CLI feature; chats run in the bound project folder"
     );
     assert!(!cabin.running);
     assert_eq!(
