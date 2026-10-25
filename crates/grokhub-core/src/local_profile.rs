@@ -165,8 +165,10 @@ pub trait ThermalProbe {
     fn thermal(&self) -> Thermal;
 }
 
-/// The readers for one machine. GPU readers run in order; the first that
-/// finds a GPU wins (NVML or `nvidia-smi`, then DRM / DXGI, then Vulkan).
+/// The readers for one machine. GPU readers run in order (NVML or
+/// `nvidia-smi`, then DRM / DXGI, then Vulkan); the first that finds a
+/// discrete GPU with VRAM wins, else the first that finds any. DRM skips NVIDIA, so a
+/// hybrid laptop without `nvidia-smi` still reaches Vulkan for its card.
 pub struct Probes<'a> {
     pub gpu: &'a [&'a dyn GpuProbe],
     pub cpu: &'a dyn CpuProbe,
@@ -176,12 +178,18 @@ pub struct Probes<'a> {
 }
 
 pub fn profile(p: &Probes) -> LocalProfile {
-    let gpus = p
-        .gpu
-        .iter()
-        .map(|g| g.gpus())
-        .find(|v| !v.is_empty())
-        .unwrap_or_default();
+    let mut first = Vec::new();
+    let mut gpus = None;
+    for found in p.gpu.iter().map(|g| g.gpus()) {
+        if found.iter().any(|g| g.discrete() && g.vram_mb > 0) {
+            gpus = Some(found);
+            break;
+        }
+        if first.is_empty() {
+            first = found;
+        }
+    }
+    let gpus = gpus.unwrap_or(first);
     LocalProfile {
         os: std::env::consts::OS,
         arch: std::env::consts::ARCH,

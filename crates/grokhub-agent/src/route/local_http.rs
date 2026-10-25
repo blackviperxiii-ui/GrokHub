@@ -17,6 +17,8 @@ pub struct HttpLocalRuntime {
     base_url: String,
     token: String,
     model: String,
+    /// Keeps the global sidecar's request count up while this runtime lives.
+    busy: Option<Arc<super::local_sidecar::Busy>>,
 }
 
 impl std::fmt::Debug for HttpLocalRuntime {
@@ -36,6 +38,7 @@ impl HttpLocalRuntime {
             base_url,
             token: token.into(),
             model: "local".into(),
+            busy: None,
         }
     }
 
@@ -228,9 +231,11 @@ fn read_sse(resp: ureq::Response, on_delta: &mut dyn FnMut(&str)) -> Result<Stri
 }
 
 /// Build a runtime from a running sidecar endpoint, if any.
-pub fn from_global_sidecar() -> Option<Arc<dyn LocalRuntime>> {
+pub fn from_global_sidecar(busy: super::local_sidecar::Busy) -> Option<Arc<dyn LocalRuntime>> {
     let (base, token) = super::local_sidecar::global_endpoint()?;
-    Some(Arc::new(HttpLocalRuntime::new(base, token)))
+    let mut rt = HttpLocalRuntime::new(base, token);
+    rt.busy = Some(Arc::new(busy));
+    Some(Arc::new(rt))
 }
 
 #[cfg(test)]

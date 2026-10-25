@@ -161,8 +161,17 @@ pub fn budgets(p: &LocalProfile, backend: Backend, state: GovState) -> (u64, u64
     let ram_free = p
         .free_ram_mb
         .unwrap_or_else(|| p.ram_mb.saturating_sub(RAM_RESERVE_MB));
-    if backend == Backend::Cpu || plan.gpus.is_empty() {
+    if backend == Backend::Cpu {
         return (0, ram_free * pct / 100);
+    }
+    if plan.gpus.is_empty() {
+        // An iGPU (Vulkan or SYCL) offloads into shared RAM; give it half the
+        // budget so the driver's shared-memory cap still fits.
+        if !p.gpus.iter().any(|g| g.integrated) {
+            return (0, ram_free * pct / 100);
+        }
+        let half = ram_free * pct / 100 / 2;
+        return (half, half);
     }
     let gpu_free: u64 = plan
         .gpus

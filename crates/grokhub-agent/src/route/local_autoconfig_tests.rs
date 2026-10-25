@@ -423,3 +423,41 @@ fn launch_for_reads_the_header_the_engine_and_the_stored_profile() {
     assert_eq!(launch_for(&binary, &model), None);
     let _ = std::fs::remove_dir_all(root);
 }
+
+#[test]
+fn an_igpu_only_machine_offloads_into_shared_ram_on_vulkan() {
+    let igpu = Gpu {
+        integrated: true,
+        ..gpu(GpuVendor::Intel, "Intel iGPU", 0, None)
+    };
+    let p = machine(
+        vec![igpu],
+        32_768,
+        Some(24_000),
+        CpuInfo::new(12, 6, 0, CpuSimd::Avx2),
+    );
+    assert_eq!(
+        budgets(&p, Backend::Vulkan, GovState::Normal),
+        (9_600, 9_600)
+    );
+    assert_eq!(budgets(&p, Backend::Cpu, GovState::Normal), (0, 19_200));
+    let a = autoconfig(
+        &p,
+        &dense_4b(),
+        Backend::Vulkan,
+        GovState::Normal,
+        &Overrides::default(),
+    );
+    assert_eq!(a.ngl, 37, "every layer fits in the iGPU's half");
+    // No GPU at all on a GPU backend still runs on the CPU.
+    let bare = machine(
+        vec![],
+        32_768,
+        Some(24_000),
+        CpuInfo::new(12, 6, 0, CpuSimd::Avx2),
+    );
+    assert_eq!(
+        budgets(&bare, Backend::Vulkan, GovState::Normal),
+        (0, 19_200)
+    );
+}

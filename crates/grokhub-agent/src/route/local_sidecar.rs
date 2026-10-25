@@ -65,7 +65,7 @@ fn unix_secs() -> u64 {
     unix_ms() / 1_000
 }
 
-fn unix_ms() -> u64 {
+pub(crate) fn unix_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
@@ -478,11 +478,19 @@ fn global_slot() -> &'static Mutex<Option<Sidecar>> {
 }
 
 /// Ensure a healthy global sidecar when assets exist under `config_dir`.
+pub fn ensure_global(config_dir: &Path) -> Result<(), String> {
+    acquire(config_dir).map(drop)
+}
+
+/// [`ensure_global`] for one request: the [`Busy`] guard is taken while the
+/// slot is still locked, so the governor can't stop the sidecar between the
+/// start and the request.
 ///
 /// While the governor is at Unload this stops nothing mid-request and starts
 /// nothing; a restart the governor asked for happens here when no other
-/// request is in flight; a crash-loop breaker refuses starts after 3 failures.
-pub fn ensure_global(config_dir: &Path) -> Result<(), String> {
+/// request is in flight; a crash-loop breaker refuses starts after 3 failures
+/// and drops a dead sidecar from the slot.
+pub fn acquire(config_dir: &Path) -> Result<Busy, String> {
     tick_idle_unload();
     if local_gov::paused() {
         tick_governor();
@@ -502,18 +510,23 @@ pub fn ensure_global(config_dir: &Path) -> Result<(), String> {
     }
     if let Some(side) = slot.as_ref() {
         if !side.alive() {
-            local_gov::may_start(unix_ms())?;
+            if let Err(e) = local_gov::may_start(unix_ms()) {
+                if let Some(dead) = slot.take() {
+                    dead.stop();
+                }
+                return Err(e);
+            }
             local_gov::start_failed(unix_ms());
         }
         side.ensure_alive()?;
         side.last_used_secs.store(unix_secs(), Ordering::SeqCst);
-        return Ok(());
+        return Ok(busy());
     }
     local_gov::may_start(unix_ms())?;
     match start(&paths) {
         Ok(side) => {
             *slot = Some(side);
-            Ok(())
+            Ok(busy())
         }
         Err(e) => {
             local_gov::start_failed(unix_ms());
@@ -530,6 +543,10 @@ pub fn tick_governor() {
         return;
     }
     let mut slot = global_slot().lock().expect("sidecar global");
+    // A request may have taken its guard while this waited for the lock.
+    if in_flight() > 0 {
+        return;
+    }
     if let Some(side) = slot.take() {
         side.stop();
     }
