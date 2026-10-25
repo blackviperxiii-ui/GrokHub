@@ -10,6 +10,7 @@ pub mod connectors;
 pub mod credential;
 pub mod local_ai;
 pub mod memory;
+pub mod pulse;
 pub mod settings;
 
 use std::collections::HashMap;
@@ -390,6 +391,23 @@ async fn disconnect_connector(
 }
 
 #[tauri::command]
+async fn get_pulse(state: State<'_, ShellState>) -> Result<pulse::Page, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || pulse::load(&dir, grokhub_core::now_ms())).await?
+}
+
+#[tauri::command]
+async fn pulse_act(
+    state: State<'_, ShellState>,
+    id: String,
+    act: pulse::Act,
+    day: pulse::Day,
+) -> Result<pulse::Page, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || pulse::act(&dir, &id, act, &day, grokhub_core::now_ms())).await?
+}
+
+#[tauri::command]
 async fn get_local_ai(state: State<'_, ShellState>) -> Result<local_ai::LocalAiView, String> {
     let dir = state.config_dir.clone();
     off_main(move || local_ai::refreshed(&dir)).await
@@ -577,6 +595,8 @@ pub fn run() {
             restart_connector,
             sign_out_connector,
             disconnect_connector,
+            get_pulse,
+            pulse_act,
             get_local_ai,
             save_local_ai,
             reset_local_ai,

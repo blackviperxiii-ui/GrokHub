@@ -99,10 +99,22 @@ function PermissionCard({
   );
 }
 
-export function Chat({ onOpenSettings }: { onOpenSettings: () => void }) {
+/** `prefill`: text another page put in the box (Pulse's Run). A new `n`
+ * replaces the draft; nothing is sent until the person sends it. */
+export function Chat({
+  onOpenSettings,
+  prefill,
+}: {
+  onOpenSettings: () => void;
+  prefill?: { text: string; n: number };
+}) {
   const [conversationId, setConversationId] = useState(newConversationId);
   const [items, setItems] = useState<Item[]>([]);
   const [draft, setDraft] = useState("");
+
+  useEffect(() => {
+    if (prefill) setDraft(prefill.text);
+  }, [prefill]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const busyRef = useRef(false);
