@@ -86,9 +86,15 @@ pub fn set_enabled(on: bool) {
     ENABLED.store(on, Ordering::SeqCst);
 }
 
+/// The Settings toggle alone, for the governor's sampler.
+pub fn switched_on() -> bool {
+    ENABLED.load(Ordering::SeqCst)
+}
+
 /// The route is live: the toggle is on and a runtime is [`installed`].
+/// The governor's Unload pauses it.
 pub fn enabled() -> bool {
-    (ENABLED.load(Ordering::SeqCst) && installed()) || test_on()
+    (ENABLED.load(Ordering::SeqCst) && installed() && !super::local_gov::paused()) || test_on()
 }
 
 /// Last `ensure_global` failure when production assets are present (cleared on success).
@@ -394,6 +400,8 @@ fn ensure_production_runtime() {
     };
     match super::local_sidecar::ensure_global(&dir) {
         Ok(()) => set_bootstrap_error(None),
+        // A governor pause isn't a broken install; it lifts on its own.
+        Err(_) if super::local_gov::paused() => {}
         Err(e) => set_bootstrap_error(Some(e)),
     }
 }
