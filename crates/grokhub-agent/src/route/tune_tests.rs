@@ -307,6 +307,8 @@ fn steps_for(
             rework: false,
             cost_usd: cost,
             latency_ms: latency,
+            gov_state: String::new(),
+            tier: String::new(),
         })
         .collect()
 }
