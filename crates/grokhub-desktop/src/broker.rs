@@ -210,7 +210,7 @@ fn handle_client(stream: UnixStream, hub: &Hub) {
 fn current_gate() -> CallGate {
     let started = super::process_started_ms();
     CallGate {
-        enabled: crate::config::load().desktop_control,
+        enabled: crate::host::settings().desktop_control,
         halted: super::read_halt_stamp().is_some_and(|ms| stamp_halts(ms, started)),
     }
 }

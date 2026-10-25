@@ -1,0 +1,41 @@
+[package]
+name = "grokhub-desktop"
+version.workspace = true
+rust-version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Desktop tools behind the hard gate, shared by the cabin and the Tauri shell"
+publish = false
+
+[dependencies]
+grokhub-core = { path = "../grokhub-core" }
+grokhub-agent = { path = "../grokhub-agent" }
+serde_json.workspace = true
+image = { workspace = true }
+keyring = { workspace = true }
+
+[target.'cfg(unix)'.dependencies]
+x11rb = { version = "0.13", default-features = false, features = ["randr", "xtest"] }
+
+# Wayland portal input (Phase 2a). tokio matches the zbus runtime already in
+# the tree. reis stays blocking on that same worker; do not enable its tokio
+# or async-io features.
+[target.'cfg(target_os = "linux")'.dependencies]
+ashpd = { version = "0.13", default-features = false, features = ["tokio", "remote_desktop", "screencast", "screenshot"] }
+reis = { version = "0.7", default-features = false }
+tokio = { version = "1", default-features = false, features = ["rt", "time"] }
+zbus = { version = "5.19", default-features = false, features = ["blocking-api"] }
+rustix = { version = "1", default-features = false, features = ["event", "time", "fs", "net"] }
+# Absolute uinput (Phase 2b). No tokio feature: the device is blocking evdev.
+evdev = { version = "0.13.2", default-features = false }
+
+[target.'cfg(windows)'.dependencies]
+xcap = "0.9.8"
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_UI_Shell",
+    "Win32_UI_HiDpi",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_System_StationsAndDesktops",
+] }

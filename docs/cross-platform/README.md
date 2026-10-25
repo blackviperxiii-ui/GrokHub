@@ -64,7 +64,7 @@ types-and-protocol crate with no I/O, which both `grokhub-hub` and the web build
 use.
 
 `target_os` cfgs: 113 across the workspace. Most are in
-`grokhub-app/src/desktop_mcp/` (wayland, mod, apps) and stay desktop-only.
+`grokhub-desktop` (wayland, lib, apps) and stay desktop-only.
 In `grokhub-agent` they sit in `sudo_pass.rs`, `tools/shell.rs`,
 `indexers/{power,paths}.rs`, `harness/{backend,at_rest}.rs`,
 `route/local_perf.rs` and `brain/playbook.rs`.

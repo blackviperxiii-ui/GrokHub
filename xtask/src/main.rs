@@ -152,10 +152,11 @@ fn check_reference_text(text: &str, version: &str) -> Result<(), String> {
     Ok(())
 }
 
-const LOCK_PACKAGES: [&str; 5] = [
+const LOCK_PACKAGES: [&str; 6] = [
     "grokhub-app",
     "grokhub-agent",
     "grokhub-core",
+    "grokhub-desktop",
     "grokhub-hub",
     "grokhub-proto",
 ];
