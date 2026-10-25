@@ -11,3 +11,8 @@ if (root) {
     </StrictMode>,
   );
 }
+
+// Phone smoke builds drive their own UI; other builds leave this out.
+if (import.meta.env.VITE_PHONE_SMOKE === "1") {
+  void import("./phoneSmoke").then((smoke) => smoke.runPhoneSmoke());
+}

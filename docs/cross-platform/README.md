@@ -285,6 +285,24 @@ connectors only.
 - The backend refuses those features too: the Pulse and Local AI commands
   answer "… isn't available on this device.", and the desktop and tray
   switches are saved as off and never reach the agent.
-- Next (4b): Android and iOS builds of the shell (mobile entry point, no tray
-  on mobile, the Android keyring store), and emulator and simulator smoke
-  tests in CI.
+
+**4b, phone builds.** The shell builds for Android and iOS.
+
+- `run()` is the mobile entry point. The tray, the window restore and
+  computer-use are `cfg(desktop)`, and phones never build `grokhub-desktop`.
+  A phone app has no usable home folder (Android sets none), so at startup
+  `HOME` and `GROKHUB_CONFIG` point into the app's data folder.
+- Smoke build: `VITE_PHONE_SMOKE=1`, `GROKHUB_PHONE_SMOKE_URL` (read at build
+  time, loopback only) and `--features phone-smoke`. WebDriver can't reach a
+  phone's webview, so the app drives itself (`ui/src/phoneSmoke.ts`). It
+  checks that the report hides the desktop features and Pulse isn't shown,
+  sends one chat, waits for the mock's reply, and writes `phone-smoke.txt`
+  in its data folder. `ui/e2e/phone.mjs` serves the mock, installs and
+  launches the app, and reads the report back with `adb run-as` or
+  `simctl get_app_container`. Normal builds leave the driver out, and their
+  `phone_smoke_report` command refuses.
+- CI jobs `phone (android)` (an API 34 x86_64 emulator) and `phone (ios)` (a
+  booted iPhone simulator) run this on every PR.
+- Not yet: saving an API key on Android, because keyring has no Android store
+  until the app enables `android-native-keyring-store`. Sign-in on phones is
+  only mocked so far.

@@ -13,8 +13,19 @@ pub const LOOPBACK_TEST_BEARER: &str = "loopback-test";
 pub fn test_responses_url() -> Option<String> {
     std::env::var(TEST_URL_ENV)
         .ok()
+        .or_else(phone_smoke_url)
         .map(|raw| raw.trim().to_string())
         .filter(|raw| !raw.is_empty())
+}
+
+/// A phone gets no environment from the test runner, so a phone smoke build
+/// carries the mock URL from build time. Still loopback-only, as above.
+fn phone_smoke_url() -> Option<String> {
+    if cfg!(feature = "phone-smoke") {
+        option_env!("GROKHUB_PHONE_SMOKE_URL").map(str::to_string)
+    } else {
+        None
+    }
 }
 
 fn entry() -> Result<keyring::Entry, String> {
@@ -59,5 +70,11 @@ mod tests {
     #[test]
     fn blank_key_is_refused_before_the_keychain() {
         assert_eq!(save_key("   "), Err("Paste an API key first.".to_string()));
+    }
+
+    #[cfg(not(feature = "phone-smoke"))]
+    #[test]
+    fn only_a_phone_smoke_build_carries_a_mock_url() {
+        assert_eq!(phone_smoke_url(), None);
     }
 }
