@@ -1,0 +1,1 @@
+- Cross-platform recode, Phase 4b: the Tauri shell builds for Android and iOS. CI runs a smoke build on an Android emulator and an iOS simulator, and each one completes a chat with a mock model.

@@ -9,7 +9,6 @@
 //! which the cabin's governor reads.
 
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
 
 use grokhub_agent::route::{local_autoconfig, local_gov, local_sidecar};
 use grokhub_core::local_discover::{self, FoundModel, Source};
@@ -778,7 +777,9 @@ pub fn refreshed(config_dir: &Path) -> LocalAiView {
     v
 }
 
-static TRAY_ITEM: OnceLock<tauri::menu::MenuItem<tauri::Wry>> = OnceLock::new();
+#[cfg(desktop)]
+static TRAY_ITEM: std::sync::OnceLock<tauri::menu::MenuItem<tauri::Wry>> =
+    std::sync::OnceLock::new();
 
 /// The tray chip's line.
 pub fn tray_label(status: &Status) -> String {
@@ -789,6 +790,7 @@ pub const TRAY_CHECKING: &str = "Local AI: checking…";
 
 /// Keeps the tray's state line so a save can update it, and fills it in off
 /// the main thread (the hardware read runs commands).
+#[cfg(desktop)]
 pub fn start_tray(item: tauri::menu::MenuItem<tauri::Wry>, config_dir: PathBuf) {
     if TRAY_ITEM.set(item).is_ok() {
         std::thread::spawn(move || {
@@ -797,11 +799,16 @@ pub fn start_tray(item: tauri::menu::MenuItem<tauri::Wry>, config_dir: PathBuf) 
     }
 }
 
+#[cfg(desktop)]
 fn refresh_tray(status: &Status) {
     if let Some(item) = TRAY_ITEM.get() {
         let _ = item.set_text(tray_label(status));
     }
 }
+
+/// Phones have no tray.
+#[cfg(mobile)]
+fn refresh_tray(_status: &Status) {}
 
 #[cfg(test)]
 #[path = "local_ai_tests.rs"]
