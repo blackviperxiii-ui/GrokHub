@@ -194,6 +194,10 @@ textarea {
   color: var(--muted);
 }
 
+.note.warn {
+  color: var(--danger);
+}
+
 .card {
   align-self: flex-start;
   max-width: 80%;
