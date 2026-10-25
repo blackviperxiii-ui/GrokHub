@@ -1,6 +1,7 @@
-// Typed wrappers over the Tauri commands in src-tauri/src/lib.rs.
-import { invoke } from "@tauri-apps/api/core";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+// Typed wrappers over the Tauri commands in src-tauri/src/lib.rs. In the web
+// app the same commands run on the paired desktop (./transport).
+import type { UnlistenFn } from "@tauri-apps/api/event";
+import { call as invoke, inShell, subscribe } from "./transport";
 
 /** How chat handles tools that change things (the cabin's permission mode). */
 export type Approvals = "ask" | "auto" | "always";
@@ -24,6 +25,8 @@ export interface Capabilities {
   pulse: boolean;
   localAi: boolean;
   tray: boolean;
+  /** The web app, a remote for the desktop: settings and the key stay there. */
+  remote?: boolean;
 }
 
 /** Until the report loads, or if it fails, only the core features show. */
@@ -34,7 +37,11 @@ export const CORE_ONLY: Capabilities = {
   tray: false,
 };
 
+/** The web app gets chat, memory, automations and connectors only. */
+export const WEB: Capabilities = { ...CORE_ONLY, remote: true };
+
 export function getCapabilities(): Promise<Capabilities> {
+  if (!inShell()) return Promise.resolve(WEB);
   return invoke<Capabilities>("get_capabilities");
 }
 
@@ -105,7 +112,7 @@ export function closeChat(conversationId: string): Promise<void> {
 }
 
 export function onChatEvent(handler: (envelope: ChatEnvelope) => void): Promise<UnlistenFn> {
-  return listen<ChatEnvelope>(CHAT_EVENT, (event) => handler(event.payload));
+  return subscribe<ChatEnvelope>(CHAT_EVENT, handler);
 }
 
 export interface AutomationRow {
