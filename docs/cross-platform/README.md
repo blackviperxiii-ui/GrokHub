@@ -351,6 +351,30 @@ The desktop answers only the web app's commands: chat (`send_chat`,
 automations, memory and connectors. Everything else gets `ok: false`: the
 key, settings changes, Pulse, Local AI and desktop control.
 
-**5b, the desktop side (next).** The shell gets Settings → Web access. That
-switch serves `ui/dist` and the API above on the LAN, behind a random pairing
-code and the command allowlist, and shows the pairing link.
+**5b, the desktop side.** Settings → Web access in the shell
+(`src-tauri/src/remote.rs`, desktops only: `webAccess` in the capability
+report).
+
+- Turning it on serves `ui/dist` (the shell's own embedded UI) and the API
+  above on port 4620 of every interface, with a fresh 48-character pairing
+  code. Settings shows the LAN and localhost pairing links. The code is never
+  saved, so turning web access off or quitting GrokHub ends every pairing,
+  and the next start needs a new code.
+- The code is compared in constant time. Only the commands listed above run;
+  the rest get `ok: false`. Pages carry a strict CSP (`connect-src 'self'`,
+  `frame-ancestors 'none'`), `nosniff` and `no-referrer`. Bodies are capped
+  at 1 MB, with 32 calls and 8 event streams at once.
+- Web chats run with desktop control off, even when the window has it on.
+  A browser sees the events of only the chats it started, and can answer,
+  stop or close only those, so a chat in the window stays in the window.
+- The event stream writes its own chunks and flushes each event, because
+  tiny_http's chunked writer holds 8 KB. Turning web access off ends the
+  stream, so a paired page drops back to the pairing screen.
+- `ui/e2e/smoke.mjs` gets a web step (`SMOKE_WEB=1`, on in the Linux CI
+  job). Settings turns web access on in the real shell, and Chromium pairs
+  from the localhost link and chats through the shell's engine and the mock
+  model. The step checks that the web chat got no desktop tools while
+  desktop control was on, that `set_api_key` is refused, and that turning
+  it off stops the server.
+- Not yet: HTTPS. On the LAN the code and the chats travel as plain HTTP,
+  as the Settings note says.

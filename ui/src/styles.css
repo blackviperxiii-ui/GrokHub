@@ -539,3 +539,21 @@ button.danger {
   margin: 0;
   overflow-wrap: anywhere;
 }
+
+.web-access {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: flex-start;
+}
+
+.web-access h2 {
+  font-size: 1rem;
+  margin: 0;
+}
+
+.web-access .links {
+  margin: 0;
+  padding-left: 18px;
+  overflow-wrap: anywhere;
+}

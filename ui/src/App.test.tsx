@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Capabilities } from "./api";
 
 const api = vi.hoisted(() => ({
-  CORE_ONLY: { desktopControl: false, pulse: false, localAi: false, tray: false },
+  CORE_ONLY: { desktopControl: false, pulse: false, localAi: false, tray: false, webAccess: false },
   getCapabilities: vi.fn<() => Promise<Capabilities>>(),
 }));
 
@@ -24,7 +24,7 @@ vi.mock("./Settings", () => ({
 
 import { App } from "./App";
 
-const DESKTOP: Capabilities = { desktopControl: true, pulse: true, localAi: true, tray: true };
+const DESKTOP: Capabilities = { desktopControl: true, pulse: true, localAi: true, tray: true, webAccess: true };
 
 function tabs() {
   return screen.getAllByRole("button").map((tab) => tab.textContent);

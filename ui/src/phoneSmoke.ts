@@ -43,7 +43,7 @@ function type(box: HTMLTextAreaElement, text: string) {
 
 export async function phoneSmoke(): Promise<string> {
   const caps = await getCapabilities();
-  if (caps.desktopControl || caps.pulse || caps.localAi || caps.tray) {
+  if (caps.desktopControl || caps.pulse || caps.localAi || caps.tray || caps.webAccess) {
     throw new Error(`a phone got desktop features: ${JSON.stringify(caps)}`);
   }
   const box = await waitFor("the message box", () =>
