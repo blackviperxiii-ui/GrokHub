@@ -14,6 +14,8 @@ use std::time::{Duration, Instant};
 
 use rand_token::random_token;
 
+use super::local_autoconfig::{self as autoconfig, LaunchArgs, Retry};
+
 /// How long [`Sidecar::wait_healthy`] waits for `/health`.
 pub const HEALTH_TIMEOUT: Duration = Duration::from_secs(30);
 /// Gap between health polls.
@@ -40,6 +42,8 @@ pub struct Sidecar {
     /// Unix seconds of the last successful use (idle unload).
     last_used_secs: AtomicU64,
     idle_unload_secs: u64,
+    /// The auto-configured flags; `None` runs the one-shot `local_perf` defaults.
+    launch: Option<LaunchArgs>,
 }
 
 impl std::fmt::Debug for Sidecar {
@@ -119,6 +123,7 @@ impl Sidecar {
             &self.host,
             self.port,
             &self.token,
+            self.launch.as_ref(),
         )?;
         *self.child.lock().expect("sidecar lock") = child;
         self.restarts.fetch_add(1, Ordering::SeqCst);
@@ -175,7 +180,13 @@ pub fn llama_args_with_perf(
     token: &str,
     perf: &super::local_perf::RuntimeDefaults,
 ) -> Vec<String> {
-    let mut args = vec![
+    let mut args = base_args(model, host, port, token);
+    args.extend(super::local_perf::llama_perf_args(perf));
+    args
+}
+
+fn base_args(model: &Path, host: &str, port: u16, token: &str) -> Vec<String> {
+    vec![
         "-m".into(),
         model.display().to_string(),
         "--host".into(),
@@ -184,9 +195,25 @@ pub fn llama_args_with_perf(
         port.to_string(),
         "--api-key".into(),
         token.into(),
-    ];
-    args.extend(super::local_perf::llama_perf_args(perf));
+    ]
+}
+
+/// Same as [`llama_args`] with auto-configured flags in place of the defaults.
+pub fn llama_args_with_launch(
+    model: &Path,
+    host: &str,
+    port: u16,
+    token: &str,
+    launch: &LaunchArgs,
+) -> Vec<String> {
+    let mut args = base_args(model, host, port, token);
+    args.extend(launch.to_args());
     args
+}
+
+/// Where the server's load log goes, next to the binary (read for out-of-memory).
+pub fn server_log_path(binary: &Path) -> PathBuf {
+    binary.with_file_name("llama-server.log")
 }
 
 fn spawn_llama(
@@ -195,6 +222,7 @@ fn spawn_llama(
     host: &str,
     port: u16,
     token: &str,
+    launch: Option<&LaunchArgs>,
 ) -> Result<Child, String> {
     if !is_loopback_host(host) {
         return Err(format!("local model server must bind loopback, not {host}"));
@@ -221,11 +249,19 @@ fn spawn_llama(
             ));
         }
     }
+    let args = match launch {
+        Some(l) => llama_args_with_launch(model, host, port, token, l),
+        None => llama_args(model, host, port, token),
+    };
+    // The load log names out-of-memory failures; without a file it is dropped.
+    let log = std::fs::File::create(server_log_path(binary))
+        .map(Stdio::from)
+        .unwrap_or_else(|_| Stdio::null());
     let mut cmd = Command::new(binary);
-    cmd.args(llama_args(model, host, port, token))
+    cmd.args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null());
+        .stderr(log);
     grokhub_core::proc_util::hide_windows_console(&mut cmd);
     cmd.spawn()
         .map_err(|e| format!("could not start local model server: {e}"))
@@ -246,23 +282,69 @@ pub fn start(paths: &SidecarPaths) -> Result<Sidecar, String> {
         ));
     }
     let host = "127.0.0.1".to_string();
-    let port = free_loopback_port()?;
-    let token = random_token();
-    let child = spawn_llama(&paths.binary, &paths.model, &host, port, &token)?;
+    let planned = autoconfig::launch_for(&paths.binary, &paths.model);
+    let mut launch = planned.as_ref().map(|(l, _, _)| l.clone());
     let idle = super::local_perf::current_defaults().idle_unload_secs;
-    let side = Sidecar {
-        child: Mutex::new(child),
-        host,
-        port,
-        token,
-        binary: paths.binary.clone(),
-        model: paths.model.clone(),
-        restarts: AtomicU64::new(0),
-        last_used_secs: AtomicU64::new(unix_secs()),
-        idle_unload_secs: idle,
-    };
-    side.wait_healthy()?;
-    Ok(side)
+    let mut attempt: u8 = 0;
+    loop {
+        let port = free_loopback_port()?;
+        let token = random_token();
+        let child = spawn_llama(
+            &paths.binary,
+            &paths.model,
+            &host,
+            port,
+            &token,
+            launch.as_ref(),
+        )?;
+        let side = Sidecar {
+            child: Mutex::new(child),
+            host: host.clone(),
+            port,
+            token,
+            binary: paths.binary.clone(),
+            model: paths.model.clone(),
+            restarts: AtomicU64::new(0),
+            last_used_secs: AtomicU64::new(unix_secs()),
+            idle_unload_secs: idle,
+            launch: launch.clone(),
+        };
+        let err = match side.wait_healthy() {
+            Ok(()) => {
+                if let (Some(l), Some((_, key, dir))) = (launch.as_ref(), planned.as_ref()) {
+                    if attempt > 0 {
+                        let tuned = autoconfig::Tuned {
+                            ngl: l.ngl,
+                            n_cpu_moe: l.n_cpu_moe,
+                            ctx: l.ctx,
+                            kv: l.kv,
+                        };
+                        let _ = autoconfig::save_tuned(dir, key, &tuned);
+                    }
+                }
+                return Ok(side);
+            }
+            Err(e) => e,
+        };
+        side.stop();
+        let log = std::fs::read_to_string(server_log_path(&paths.binary)).unwrap_or_default();
+        let Some(prev) = launch.as_ref().filter(|_| autoconfig::oom_in_log(&log)) else {
+            return Err(err);
+        };
+        attempt += 1;
+        match autoconfig::after_oom(prev, attempt) {
+            Retry::Again(next) => launch = Some(next),
+            Retry::SmallerModel => {
+                let smaller = autoconfig::catalog_model_for(&paths.model)
+                    .and_then(|m| autoconfig::next_smaller(m.id))
+                    .map(|m| format!(" Try {} in Settings → Local model.", m.name))
+                    .unwrap_or_default();
+                return Err(format!(
+                    "the local model ran out of memory even with fewer GPU layers.{smaller}"
+                ));
+            }
+        }
+    }
 }
 
 /// GET `/health` with `Authorization: Bearer <token>`.
@@ -683,7 +765,7 @@ mod tests {
         let args = llama_args_with_perf(Path::new("/m.gguf"), "127.0.0.1", 9, "tok", &perf);
         assert!(args.windows(2).any(|w| w == ["-ngl", "99"]));
         assert!(args.windows(2).any(|w| w == ["-c", "16384"]));
-        assert!(args.iter().any(|a| a == "--flash-attn"));
+        assert!(args.windows(2).any(|w| w == ["--flash-attn", "on"]));
     }
 
     #[test]
@@ -700,7 +782,8 @@ mod tests {
             p.set_mode(0o755);
             std::fs::set_permissions(&evil, p).unwrap();
         }
-        let err = spawn_llama(&evil, Path::new("/m.gguf"), "127.0.0.1", 9, "tok").unwrap_err();
+        let err =
+            spawn_llama(&evil, Path::new("/m.gguf"), "127.0.0.1", 9, "tok", None).unwrap_err();
         assert!(err.contains("must be named"), "{err}");
         let named = dir.join(llama_server_name());
         std::fs::write(&named, b"x").unwrap();
@@ -711,7 +794,7 @@ mod tests {
             p.set_mode(0o755);
             std::fs::set_permissions(&named, p).unwrap();
         }
-        let err = spawn_llama(&named, Path::new("/m.gguf"), "0.0.0.0", 9, "tok").unwrap_err();
+        let err = spawn_llama(&named, Path::new("/m.gguf"), "0.0.0.0", 9, "tok", None).unwrap_err();
         assert!(err.contains("loopback"), "{err}");
         let _ = std::fs::remove_dir_all(&dir);
     }

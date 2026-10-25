@@ -21,6 +21,7 @@ pub mod ladder;
 pub mod learn;
 pub mod live;
 pub mod local;
+pub mod local_autoconfig;
 pub mod local_bench;
 pub mod local_http;
 pub mod local_perf;
