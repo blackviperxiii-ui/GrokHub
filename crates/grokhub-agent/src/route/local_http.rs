@@ -75,6 +75,7 @@ impl HttpLocalRuntime {
     }
 
     fn chat_once(&self, messages: &[ChatMessage]) -> Result<String, String> {
+        let _busy = super::local_sidecar::busy();
         let resp = self.post_chat(messages, false)?;
         if resp.status() >= 400 {
             let status = resp.status();
@@ -130,6 +131,7 @@ impl LocalRuntime for HttpLocalRuntime {
         messages: &[ChatMessage],
         on_delta: &mut dyn FnMut(&str),
     ) -> Result<String, String> {
+        let _busy = super::local_sidecar::busy();
         let resp = self.post_chat(messages, true)?;
         if resp.status() >= 400 {
             let status = resp.status();

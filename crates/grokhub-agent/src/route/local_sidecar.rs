@@ -8,13 +8,14 @@
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use rand_token::random_token;
 
 use super::local_autoconfig::{self as autoconfig, LaunchArgs, Retry};
+use super::local_gov;
 
 /// How long [`Sidecar::wait_healthy`] waits for `/health`.
 pub const HEALTH_TIMEOUT: Duration = Duration::from_secs(30);
@@ -61,10 +62,36 @@ impl std::fmt::Debug for Sidecar {
 }
 
 fn unix_secs() -> u64 {
+    unix_ms() / 1_000
+}
+
+fn unix_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
+        .map(|d| d.as_millis() as u64)
         .unwrap_or(0)
+}
+
+/// Requests to the sidecar in flight; the governor restarts or stops it only at 0.
+static IN_FLIGHT: AtomicUsize = AtomicUsize::new(0);
+
+/// Held for the length of one request (see [`busy`]).
+pub struct Busy(());
+
+impl Drop for Busy {
+    fn drop(&mut self) {
+        IN_FLIGHT.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+/// Marks a request in flight until the guard drops.
+pub fn busy() -> Busy {
+    IN_FLIGHT.fetch_add(1, Ordering::SeqCst);
+    Busy(())
+}
+
+pub fn in_flight() -> usize {
+    IN_FLIGHT.load(Ordering::SeqCst)
 }
 
 impl Sidecar {
@@ -128,6 +155,11 @@ impl Sidecar {
         *self.child.lock().expect("sidecar lock") = child;
         self.restarts.fetch_add(1, Ordering::SeqCst);
         self.wait_healthy()
+    }
+
+    /// The child's process id, so the governor can leave its load out.
+    pub fn pid(&self) -> u32 {
+        self.child.lock().expect("sidecar lock").id()
     }
 
     /// Stop the child (best effort). Called from [`Drop`].
@@ -441,18 +473,68 @@ fn global_slot() -> &'static Mutex<Option<Sidecar>> {
 }
 
 /// Ensure a healthy global sidecar when assets exist under `config_dir`.
+///
+/// While the governor is at Unload this stops nothing mid-request and starts
+/// nothing; a restart the governor asked for happens here when no other
+/// request is in flight; a crash-loop breaker refuses starts after 3 failures.
 pub fn ensure_global(config_dir: &Path) -> Result<(), String> {
     tick_idle_unload();
+    if local_gov::paused() {
+        tick_governor();
+        return Err(format!(
+            "the on-device model is paused because {}",
+            local_gov::reason()
+        ));
+    }
     let paths = resolve_paths(config_dir)
         .ok_or_else(|| "local model binary or GGUF is not installed".to_string())?;
     let mut slot = global_slot().lock().expect("sidecar global");
+    if local_gov::restart_due() && in_flight() == 0 {
+        if let Some(side) = slot.take() {
+            side.stop();
+        }
+        local_gov::clear_restart();
+    }
     if let Some(side) = slot.as_ref() {
+        if !side.alive() {
+            local_gov::may_start(unix_ms())?;
+            local_gov::start_failed(unix_ms());
+        }
         side.ensure_alive()?;
         side.last_used_secs.store(unix_secs(), Ordering::SeqCst);
         return Ok(());
     }
-    *slot = Some(start(&paths)?);
-    Ok(())
+    local_gov::may_start(unix_ms())?;
+    match start(&paths) {
+        Ok(side) => {
+            *slot = Some(side);
+            Ok(())
+        }
+        Err(e) => {
+            local_gov::start_failed(unix_ms());
+            Err(e)
+        }
+    }
+}
+
+/// The governor's sample tick: between requests, stop the sidecar when the
+/// level is Unload or a restart is due (the next request starts it with the
+/// new launch args).
+pub fn tick_governor() {
+    if in_flight() > 0 || !(local_gov::paused() || local_gov::restart_due()) {
+        return;
+    }
+    let mut slot = global_slot().lock().expect("sidecar global");
+    if let Some(side) = slot.take() {
+        side.stop();
+    }
+    local_gov::clear_restart();
+}
+
+/// Process id of the running sidecar.
+pub fn global_pid() -> Option<u32> {
+    let slot = global_slot().lock().expect("sidecar global");
+    slot.as_ref().map(Sidecar::pid)
 }
 
 /// Base URL + token for the global sidecar, when running.
