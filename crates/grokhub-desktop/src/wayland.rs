@@ -144,7 +144,7 @@ impl WaylandBackend {
     }
 
     fn wl_monitors(&self) -> Result<Vec<MonitorGeom>, String> {
-        if crate::desktop::which("swaymsg") {
+        if crate::which("swaymsg") {
             if let Ok(out) = run_bin("swaymsg", &["-t".into(), "get_outputs".into()], 3000) {
                 let text = String::from_utf8_lossy(&out.stdout);
                 if let Some(mons) = parse_sway_outputs(&text) {
@@ -152,7 +152,7 @@ impl WaylandBackend {
                 }
             }
         }
-        if crate::desktop::which("wlr-randr") {
+        if crate::which("wlr-randr") {
             if let Ok(out) = run_bin("wlr-randr", &[], 3000) {
                 let mons = parse_wlr_randr(&String::from_utf8_lossy(&out.stdout));
                 if !mons.is_empty() {
@@ -187,7 +187,7 @@ impl WaylandBackend {
 
     #[cfg(target_os = "linux")]
     fn kscreen(&self) -> Result<Vec<MonitorGeom>, String> {
-        if !crate::desktop::which("kscreen-doctor") {
+        if !crate::which("kscreen-doctor") {
             return Err(format!(
                 "Wayland monitor list on KDE needs kscreen-doctor. {MISS}"
             ));
@@ -197,7 +197,7 @@ impl WaylandBackend {
     }
 
     fn locked_now(&self) -> bool {
-        let titles = crate::desktop::lock_titles();
+        let titles = crate::host::lock_titles();
         let refs: Vec<&str> = titles.iter().map(String::as_str).collect();
         grokhub_core::hands_blocked_by_lock(&grokhub_core::ComputerOp::Move { x: 0, y: 0 }, &refs)
     }
@@ -461,7 +461,7 @@ fn grim_shot(monitor: &str, mons: &[MonitorGeom]) -> Result<CapturedShot, String
 }
 
 fn grab_grim(output: Option<&str>) -> Result<(Vec<u8>, u32, u32), String> {
-    if !crate::desktop::which("grim") {
+    if !crate::which("grim") {
         return Err(format!("Wayland capture needs grim. {MISS}"));
     }
     let dest = std::env::temp_dir().join(format!(
@@ -504,7 +504,7 @@ fn linux_shots(stack: &DesktopStack) -> Option<super::capture::ShotChain> {
 
 #[cfg(target_os = "linux")]
 pub(crate) fn host_monitors() -> Result<Vec<MonitorGeom>, String> {
-    if !crate::desktop::which("kscreen-doctor") {
+    if !crate::which("kscreen-doctor") {
         return Err(format!(
             "Wayland monitor list on KDE needs kscreen-doctor. {MISS}"
         ));
@@ -532,7 +532,7 @@ fn finish(mon: &MonitorGeom, w: u32, h: u32, rgba: &[u8]) -> Result<CapturedShot
 }
 
 fn input_ready() -> Result<(), String> {
-    if !crate::desktop::which("ydotool") {
+    if !crate::which("ydotool") {
         return Err(format!(
             "Wayland input needs ydotool and ydotoold, and this user must be in the uinput group. {MISS}"
         ));
@@ -558,7 +558,7 @@ fn input_ready() -> Result<(), String> {
 }
 
 fn run_bin(bin: &str, args: &[String], ms: u64) -> Result<Output, String> {
-    let program = crate::desktop::resolve_bin(bin).unwrap_or_else(|| std::path::PathBuf::from(bin));
+    let program = crate::resolve_bin(bin).unwrap_or_else(|| std::path::PathBuf::from(bin));
     let mut cmd = Command::new(program);
     cmd.args(args).stdout(Stdio::piped()).stderr(Stdio::piped());
     let child = cmd.spawn().map_err(|err| format!("{bin}: {err}"))?;
@@ -596,7 +596,7 @@ fn stderr_line(bin: &str, out: &Output) -> String {
 #[cfg(all(test, target_os = "linux"))]
 mod route_tests {
     use super::*;
-    use crate::desktop_mcp::portal::doubles::{FakePortal, FakeReply, MemoryRestoreStore};
+    use crate::portal::doubles::{FakePortal, FakeReply, MemoryRestoreStore};
     use std::sync::{Arc, Mutex};
 
     struct RecordingInjector {

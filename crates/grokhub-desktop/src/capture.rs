@@ -390,7 +390,7 @@ fn command_text(bin: &str, args: &[String]) -> String {
 }
 
 fn run_bin(bin: &str, args: &[String], ms: u64) -> Result<std::process::Output, String> {
-    let program = crate::desktop::resolve_bin(bin).unwrap_or_else(|| std::path::PathBuf::from(bin));
+    let program = crate::resolve_bin(bin).unwrap_or_else(|| std::path::PathBuf::from(bin));
     let mut cmd = Command::new(program);
     cmd.args(args).stdout(Stdio::piped()).stderr(Stdio::piped());
     let child = cmd.spawn().map_err(|err| format!("{bin}: {err}"))?;

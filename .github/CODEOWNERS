@@ -22,7 +22,7 @@
 # Host rails + app gate adapters
 /crates/grokhub-core/src/host_safety.rs @blackviperxiii-ui
 /crates/grokhub-app/src/app/heartbeat_gate.rs @blackviperxiii-ui
-/crates/grokhub-app/src/desktop_mcp/harness_gate.rs @blackviperxiii-ui
+/crates/grokhub-desktop/src/harness_gate.rs @blackviperxiii-ui
 
 # This file
 /.github/CODEOWNERS @blackviperxiii-ui

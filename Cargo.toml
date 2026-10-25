@@ -6,6 +6,7 @@ members = [
     "crates/grokhub-hub",
     "crates/grokhub-app",
     "crates/grokhub-agent",
+    "crates/grokhub-desktop",
     "xtask",
 ]
 
