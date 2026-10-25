@@ -9,7 +9,7 @@ use grokhub_core::{
     parse_cdp_targets, parse_picker_stdout, parse_wmctrl_line, parse_xdotool_mouse,
     parse_xrandr_outputs, pick_browser_tab, pick_capture_output, pick_hands_backend,
     pick_named_row, picker_args, png_ihdr_size, pointer_slop_miss, relative_move_steps,
-    resolve_bin_in, session_is_wayland, tab_list_from_rows, take_text_body, virtual_desktop_size,
+    session_is_wayland, tab_list_from_rows, take_text_body, virtual_desktop_size,
     x11_grab_size, ydotool_socket_path, AtspiRow, BrowserTab, CaptureKind, ComputerDrive,
     ComputerOp, DisplayOutput, HandsBackend, HandsDown, TabAction, CDP_DOWN, CDP_PORTS,
     IMAGE_FILE_CAP, RECORDERS, TEXT_FILE_CAP, TRANSCRIBERS,
@@ -574,17 +574,7 @@ pub fn find_real_bash() -> Option<PathBuf> {
     cands.into_iter().find(|p| bash_probe_ok(p))
 }
 
-pub fn resolve_bin(name: &str) -> Option<PathBuf> {
-    resolve_bin_in(
-        name,
-        std::env::var("PATH").ok().as_deref(),
-        grokhub_core::user_home().as_ref().and_then(|p| p.to_str()),
-    )
-}
-
-pub fn which(name: &str) -> bool {
-    resolve_bin(name).is_some()
-}
+pub use grokhub_desktop::{resolve_bin, which};
 
 pub fn first_bin(names: &[&str]) -> Option<String> {
     names.iter().find(|n| which(n)).map(|s| (*s).to_string())
