@@ -44,6 +44,7 @@ pub struct SettingsView {
     /// The folder the agent actually works in.
     pub workspace_path: String,
     pub approvals: settings::Approvals,
+    pub desktop_control: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -63,6 +64,7 @@ fn view(settings: &ShellSettings) -> SettingsView {
             .display()
             .to_string(),
         approvals: settings.approvals,
+        desktop_control: settings.desktop_control,
     }
 }
 
@@ -86,14 +88,19 @@ fn save_settings(
     close_to_tray: bool,
     workspace: String,
     approvals: settings::Approvals,
+    desktop_control: bool,
 ) -> Result<SettingsView, String> {
     let next = ShellSettings {
         model: model.trim().to_string(),
         close_to_tray,
         workspace: workspace.trim().to_string(),
         approvals,
+        desktop_control,
     };
     settings::save(&state.config_dir, &next)?;
+    if current(&state).desktop_control != desktop_control {
+        grokhub_desktop::set_desktop_enabled(desktop_control);
+    }
     *state.settings.lock().unwrap_or_else(|e| e.into_inner()) = next.clone();
     Ok(view(&next))
 }
@@ -141,6 +148,7 @@ fn route(settings: &ShellSettings) -> Result<agent::Route, String> {
         model: settings.model.clone(),
         workspace: agent::workspace_for(&settings.workspace),
         mode: settings.approvals.mode(),
+        desktop: settings.desktop_control,
     })
 }
 
@@ -549,9 +557,31 @@ mod tests {
     }
 }
 
+/// The desktop tools' host: the shell's config folder and its switch. Cua is a
+/// cabin-only spike, so it stays off here.
+fn install_desktop_host() {
+    grokhub_desktop::host::install(grokhub_desktop::host::Host {
+        config_dir: grokhub_agent::perm::config_dir,
+        settings: || grokhub_desktop::host::Settings {
+            desktop_control: settings::load(&grokhub_agent::perm::config_dir()).desktop_control,
+            ..Default::default()
+        },
+        #[cfg(target_os = "linux")]
+        lock_titles: grokhub_desktop::screen::lock_titles,
+        #[cfg(not(target_os = "linux"))]
+        lock_titles: Vec::new,
+        #[cfg(target_os = "linux")]
+        target_at: grokhub_desktop::screen::atspi_target_at,
+    });
+}
+
 pub fn run() {
+    install_desktop_host();
     let config_dir = grokhub_agent::perm::config_dir();
     let loaded = settings::load(&config_dir);
+    if loaded.desktop_control {
+        grokhub_desktop::set_desktop_enabled(true);
+    }
     let built = tauri::Builder::default()
         .manage(ShellState {
             config_dir,

@@ -8,8 +8,8 @@ use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::Arc;
 
 use grokhub_agent::{
-    AuthKind, CancelToken, Engine, EngineParts, Gate, HaltCheck, ModelClient, NativeEngine,
-    PermAnswer, PermMode, PermitInbox, PermitNote, SteerQueue,
+    AuthKind, CancelToken, DesktopOps, Engine, EngineParts, Gate, HaltCheck, ModelClient,
+    NativeEngine, PermAnswer, PermMode, PermitInbox, PermitNote, StampHalt, SteerQueue,
 };
 use grokhub_core::wire::AcpEvent;
 use serde::Serialize;
@@ -17,20 +17,22 @@ use serde::Serialize;
 /// The cabin's attended chat gate in the mode Settings picked. In Ask, tools
 /// that change things ask first; Auto and Always approve more, but hard-class
 /// steps (delete, send, money, credentials) still ask in every mode.
-/// Computer-use stays off until the shell has a desktop backend.
-pub fn shell_gate(mode: PermMode) -> Gate {
+/// `desktop` is Settings → Let Grok control the desktop: off, the desktop
+/// tools are refused; on, they go through the same hard gate.
+pub fn shell_gate(mode: PermMode, desktop: bool) -> Gate {
     Gate {
         mode,
         readonly_session: false,
         attended: true,
-        desktop: false,
+        desktop,
     }
 }
 
-/// The system prompt the cabin's native chat uses, without the desktop line.
-pub fn system_prompt(workspace: &std::path::Path) -> String {
+/// The system prompt the cabin's native chat uses, with the desktop line
+/// only while desktop control is on.
+pub fn system_prompt(workspace: &std::path::Path, desktop: bool) -> String {
     grokhub_agent::system_prompt_parts(
-        &grokhub_core::cabin_rules::cabin_static_rules(false),
+        &grokhub_core::cabin_rules::cabin_static_rules(desktop),
         "",
         workspace,
     )
@@ -116,6 +118,8 @@ pub struct Route {
     /// Settings' approvals. Read on every prompt, so a change applies to the
     /// next message in an open chat.
     pub mode: PermMode,
+    /// Settings → Let Grok control the desktop, read the same way.
+    pub desktop: bool,
 }
 
 struct Job {
@@ -144,12 +148,21 @@ impl Session {
     /// `config_dir` pins the GrokHub config folder for the worker, where the
     /// engine keeps session files and the permission rules it learns.
     pub fn spawn(conversation_id: &str, config_dir: PathBuf) -> Self {
+        Self::spawn_with(conversation_id, config_dir, native_desktop)
+    }
+
+    /// [`Session::spawn`] with the desktop the worker builds; tests pass a fake.
+    pub fn spawn_with(
+        conversation_id: &str,
+        config_dir: PathBuf,
+        desktop: fn() -> Box<dyn DesktopOps>,
+    ) -> Self {
         let (jobs, rx) = channel::<Job>();
         let (permits, inbox) = PermitInbox::pair();
         let cancel = CancelToken::new();
         let worker_cancel = cancel.clone();
         let id = conversation_id.to_string();
-        std::thread::spawn(move || serve(id, config_dir, worker_cancel, inbox, rx));
+        std::thread::spawn(move || serve(id, config_dir, desktop, worker_cancel, inbox, rx));
         Self {
             jobs,
             permits,
@@ -195,9 +208,15 @@ impl Session {
     }
 }
 
+/// The real desktop tools behind the hard gate, with the shell as their host.
+fn native_desktop() -> Box<dyn DesktopOps> {
+    Box::new(grokhub_desktop::NativeDesktop::new())
+}
+
 fn serve(
     conversation_id: String,
     config_dir: PathBuf,
+    desktop: fn() -> Box<dyn DesktopOps>,
     cancel: CancelToken,
     inbox: PermitInbox,
     jobs: Receiver<Job>,
@@ -212,11 +231,12 @@ fn serve(
             mut emit,
             done,
         } = job;
-        let system = system_prompt(&route.workspace);
+        let system = system_prompt(&route.workspace, route.desktop);
+        let gate = shell_gate(route.mode, route.desktop);
         let engine = match (&mut engine, inbox.take()) {
             (Some(engine), _) => {
                 engine.set_workspace(route.workspace);
-                engine.set_gate(shell_gate(route.mode));
+                engine.set_gate(gate);
                 engine.set_route(route.client, route.model, None, system, route.auth_kind);
                 engine
             }
@@ -237,12 +257,17 @@ fn serve(
                     cancel: cancel.clone(),
                     steer: SteerQueue::new(),
                     halt: Box::new(NeverHalted),
-                    gate: shell_gate(route.mode),
-                    desktop: None,
+                    gate,
+                    desktop: Some(desktop()),
                     permits: Arc::new(inbox),
                 }))
             }
         };
+        // The desktop Halt (the cabin's hotkey or a halt stamp) stops this prompt too.
+        engine.set_halt(Box::new(StampHalt {
+            started_ms: grokhub_core::now_ms(),
+            read: grokhub_desktop::read_halt_stamp,
+        }));
         let mut stop = String::new();
         let mut error = None;
         let ran = engine.prompt(&text, None, &mut |event| {
@@ -357,7 +382,55 @@ mod tests {
         workspace: &std::path::Path,
         config: &std::path::Path,
     ) -> Run {
-        let session = Arc::new(Session::spawn("gate-test", config.to_path_buf()));
+        start_desk(mode, false, client, workspace, config)
+    }
+
+    /// Every desktop call the fake desktop got, as `tool text`.
+    static DESK_CALLS: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+    struct FakeDesktop;
+
+    impl DesktopOps for FakeDesktop {
+        fn halted(&self) -> bool {
+            false
+        }
+        fn locked(&self) -> bool {
+            false
+        }
+        fn call(&self, name: &str, args: &serde_json::Value) -> grokhub_agent::ToolOutput {
+            let text = args["text"].as_str().unwrap_or_default();
+            DESK_CALLS
+                .lock()
+                .expect("desk calls")
+                .push(format!("{name} {text}"));
+            grokhub_agent::ToolOutput::ok("typed")
+        }
+    }
+
+    fn fake_desktop() -> Box<dyn DesktopOps> {
+        Box::new(FakeDesktop)
+    }
+
+    fn desk_ran(entry: &str) -> bool {
+        DESK_CALLS
+            .lock()
+            .expect("desk calls")
+            .iter()
+            .any(|c| c == entry)
+    }
+
+    fn start_desk(
+        mode: PermMode,
+        desktop: bool,
+        client: Arc<OneTool>,
+        workspace: &std::path::Path,
+        config: &std::path::Path,
+    ) -> Run {
+        let session = Arc::new(Session::spawn_with(
+            "gate-test",
+            config.to_path_buf(),
+            fake_desktop,
+        ));
         let events = Arc::new(Mutex::new(Vec::new()));
         let sink = Arc::clone(&events);
         let route = Route {
@@ -366,6 +439,7 @@ mod tests {
             model: "grok-4.7".into(),
             workspace: workspace.to_path_buf(),
             mode,
+            desktop,
         };
         let runner = Arc::clone(&session);
         let result = std::thread::spawn(move || {
@@ -556,9 +630,9 @@ mod tests {
     }
 
     #[test]
-    fn the_gate_asks_and_keeps_computer_use_off() {
+    fn the_gate_asks_and_follows_the_desktop_switch() {
         assert_eq!(
-            shell_gate(PermMode::Ask),
+            shell_gate(PermMode::Ask, false),
             Gate {
                 mode: PermMode::Ask,
                 readonly_session: false,
@@ -567,14 +641,88 @@ mod tests {
             }
         );
         assert_eq!(
-            shell_gate(PermMode::Always),
+            shell_gate(PermMode::Always, true),
             Gate {
                 mode: PermMode::Always,
                 readonly_session: false,
                 attended: true,
-                desktop: false,
+                desktop: true,
             }
         );
+        let ws = std::path::Path::new("/tmp");
+        assert!(!system_prompt(ws, false).contains("grokhub-desktop"));
+        assert!(system_prompt(ws, true).contains("grokhub-desktop"));
+    }
+
+    #[test]
+    fn desktop_tools_are_refused_while_the_switch_is_off() {
+        let (workspace, config) = (temp_dir("desk-off-ws"), temp_dir("desk-off-cfg"));
+        let client = OneTool::new("type", serde_json::json!({"text": "hello from off"}));
+        let run = start_desk(
+            PermMode::Always,
+            false,
+            Arc::clone(&client),
+            &workspace,
+            &config,
+        );
+
+        assert_eq!(run.result.join().expect("join"), Ok("end_turn".to_string()));
+        assert_eq!(
+            client.tool_output().as_deref(),
+            Some(grokhub_core::desktop_mcp::OFF_MSG)
+        );
+        assert!(!desk_ran("type hello from off"));
+    }
+
+    #[test]
+    fn a_risky_desktop_step_waits_for_an_ok_even_in_always() {
+        let (workspace, config) = (temp_dir("desk-rm-ws"), temp_dir("desk-rm-cfg"));
+        let client = OneTool::new("type", serde_json::json!({"text": "rm -rf ~/old"}));
+        let run = start_desk(
+            PermMode::Always,
+            true,
+            Arc::clone(&client),
+            &workspace,
+            &config,
+        );
+
+        // Always skips the card for ordinary steps; a delete still asks.
+        match wait_for_permission(&run) {
+            UiEvent::Permission { title, action, .. } => {
+                assert_eq!((title.as_str(), action.as_str()), ("type", "rm -rf ~/old"));
+            }
+            other => panic!("{other:?}"),
+        }
+        assert_parked(&run, &client);
+        assert!(!desk_ran("type rm -rf ~/old"));
+
+        run.session.answer("call-1", PermAnswer::Deny);
+        assert_eq!(run.result.join().expect("join"), Ok("end_turn".to_string()));
+        assert!(!desk_ran("type rm -rf ~/old"));
+        assert_eq!(
+            client.tool_output().as_deref(),
+            Some("User rejected the execution for tool `type`")
+        );
+    }
+
+    #[test]
+    fn an_allowed_desktop_step_runs_on_the_desktop() {
+        let (workspace, config) = (temp_dir("desk-ok-ws"), temp_dir("desk-ok-cfg"));
+        let client = OneTool::new("type", serde_json::json!({"text": "hello desk"}));
+        let run = start_desk(
+            PermMode::Ask,
+            true,
+            Arc::clone(&client),
+            &workspace,
+            &config,
+        );
+
+        wait_for_permission(&run);
+        assert!(!desk_ran("type hello desk"));
+        run.session.answer("call-1", PermAnswer::Allow);
+        assert_eq!(run.result.join().expect("join"), Ok("end_turn".to_string()));
+        assert!(desk_ran("type hello desk"));
+        assert_eq!(client.tool_output().as_deref(), Some("typed"));
     }
 
     #[test]

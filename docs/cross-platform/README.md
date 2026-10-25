@@ -243,5 +243,26 @@ MEMORY.md ledger as input (`src-tauri/src/pulse.rs`).
   smoke test writes a post and an idea, checks Not this writes the ledger
   line, and checks Run fills the chat box without a model call.
 
-Next slice: computer-use.
+**3g, computer-use.** The desktop tools moved into a shared
+`crates/grokhub-desktop` crate (#859). The shell's chat now uses them through
+the same hard gate as the cabin (`src-tauri/src/agent.rs`).
+
+- Settings → Let Grok control the desktop is off by default. While it's off,
+  the desktop tools aren't offered, and a call is refused with the cabin's
+  off message. Turning it on also adds the cabin's desktop line to the
+  system prompt.
+- Risky steps (delete, send, money, credentials) wait for an OK in every
+  approvals mode, Always included. Ordinary steps follow the approvals
+  setting. A halt stamp (the cabin's Halt) stops a running prompt.
+- The shell is the crate's host: its config folder, its switch, and on Linux
+  the lock-screen and click-target readers in `grokhub-desktop/src/screen.rs`
+  (the AT-SPI walk now lives in `grokhub_core::ATSPI_PY` for both apps).
+- Not yet: desktop episodes (the cabin's observe, act, verify loop), the
+  Cua driver, and a Halt button in the shell. macOS has no desktop backend
+  yet, so desktop calls fail there with the no-display error.
+- Rust tests cover the switch, a refused call while it's off, a typed delete
+  that waits in Always and is denied, and an allowed step that runs. The
+  smoke test turns the switch on with approvals at Always, has the model
+  type a delete, and checks that the card waits, nothing runs, and Deny
+  reaches the model as a refusal.
 
