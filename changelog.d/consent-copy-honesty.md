@@ -1,0 +1,1 @@
+- Settings → Permissions: the Calendar and Mail rows now say they aren't read yet instead of promising a reader GrokHub doesn't have, and hard-action cards, the privacy note, the Marketplace Google steps, Plan mode and goal/chip prompts no longer name Grok Build (stage 8).

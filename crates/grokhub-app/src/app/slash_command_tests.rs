@@ -529,7 +529,7 @@ fn scratch_btw_worktree_and_plan() {
     cabin.run_slash_line("/worktree");
     assert_eq!(
         cabin.status,
-        "Worktrees were a Grok Build CLI feature; chats run in the bound project folder"
+        "Worktrees were a grok CLI feature; chats run in the bound project folder"
     );
     cabin.threads[cabin.thread_idx].grok_session = Some("sess-harbor".into());
     let (count, idx) = (cabin.threads.len(), cabin.thread_idx);
@@ -538,8 +538,7 @@ fn scratch_btw_worktree_and_plan() {
     assert_eq!(cabin.thread_idx, idx);
     assert!(!cabin.threads[idx].grok_fork);
     assert_eq!(
-        cabin.status,
-        "Worktrees were a Grok Build CLI feature; chats run in the bound project folder",
+        cabin.status, "Worktrees were a grok CLI feature; chats run in the bound project folder",
         "/fork leaves the status alone"
     );
     cabin.threads[cabin.thread_idx].plan_body = "harbor steps".into();
@@ -877,7 +876,7 @@ fn workflow_slashes_say_workflows_are_gone_and_never_touch_a_run() {
             cabin.status.clear();
             cabin.run_slash_line(line);
             assert_eq!(
-                cabin.status, "Workflows were a Grok Build CLI feature and are not in GrokHub",
+                cabin.status, "Workflows were a grok CLI feature and are not in GrokHub",
                 "{line} (thread: {with_thread})"
             );
             assert!(cabin.running, "{line} must not touch the live turn");
