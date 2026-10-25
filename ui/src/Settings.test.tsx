@@ -23,10 +23,11 @@ vi.mock("./api", () => api);
 // Local AI has its own tests (LocalAi.test.tsx).
 vi.mock("./LocalAi", () => ({ LocalAi: () => <p>Local AI panel</p> }));
 
-import { DESKTOP_NOTE, Settings } from "./Settings";
+import { DESKTOP_NOTE, REMOTE_NOTE, Settings } from "./Settings";
 
 const DESKTOP: Capabilities = { desktopControl: true, pulse: true, localAi: true, tray: true };
 const PHONE: Capabilities = { desktopControl: false, pulse: false, localAi: false, tray: false };
+const WEB: Capabilities = { ...PHONE, remote: true };
 
 function shape(over: Partial<Shape>): Shape {
   return {
@@ -150,5 +151,19 @@ describe("Settings", () => {
     expect(await screen.findByLabelText("Let Grok control the desktop")).toBeInTheDocument();
     expect(screen.getByLabelText(/keeps GrokHub in the tray/)).toBeInTheDocument();
     expect(screen.getByText("Local AI panel")).toBeInTheDocument();
+  });
+  it("shows the web app the desktop's settings but nothing to change them with", async () => {
+    api.getSettings.mockResolvedValue(shape({ hasApiKey: true, approvals: "auto" }));
+    render(<Settings caps={WEB} />);
+
+    expect(await screen.findByText(REMOTE_NOTE)).toBeInTheDocument();
+    expect(screen.getByText("grok-4.7")).toBeInTheDocument();
+    expect(screen.getByText("/home/user/GrokHub")).toBeInTheDocument();
+    expect(screen.getByText("Auto")).toBeInTheDocument();
+    expect(screen.getByText("Saved on your computer.")).toBeInTheDocument();
+    expect(screen.queryByLabelText("API key")).toBeNull();
+    expect(screen.queryByRole("button")).toBeNull();
+    expect(screen.queryByRole("textbox")).toBeNull();
+    expect(screen.queryByText("Local AI panel")).toBeNull();
   });
 });

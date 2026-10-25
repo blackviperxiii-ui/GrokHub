@@ -250,6 +250,7 @@ jobs:
   # its own Cargo workspace, so only this job needs the webview libraries.
   # Bundles build on all three OSes; the tauri-driver smoke test (a chat to a
   # mock model) runs where tauri-driver has a backend: Linux and Windows.
+  # The web app smoke test (Phase 5) runs on Linux.
   shell:
     needs: changes
     if: needs.changes.outputs.code == 'true'
@@ -286,6 +287,13 @@ jobs:
       - run: cargo fmt --manifest-path src-tauri/Cargo.toml --check
       # clippy and tests compile against ui/dist, so build the UI first.
       - run: npm run build --prefix ui
+      # The web app (Phase 5) in Chromium against a mocked desktop: pair,
+      # chat with one tool approval, and no pairing code in browser storage.
+      - name: Web smoke test
+        if: runner.os == 'Linux'
+        run: |
+          ui/node_modules/.bin/playwright install --with-deps chromium
+          node ui/e2e/web.mjs
       - run: cargo clippy --manifest-path src-tauri/Cargo.toml --locked --all-targets -- -D warnings
       - run: cargo test --manifest-path src-tauri/Cargo.toml --locked
       - name: Bundles
