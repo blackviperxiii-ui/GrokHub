@@ -6,6 +6,7 @@
 
 pub mod agent;
 pub mod automations;
+pub mod connectors;
 pub mod credential;
 pub mod memory;
 pub mod settings;
@@ -336,6 +337,46 @@ fn search_memory(state: State<'_, ShellState>, query: String) -> Result<Vec<memo
     memory::search(&workspace(&state), &query)
 }
 
+#[tauri::command]
+fn list_connectors(state: State<'_, ShellState>) -> Vec<connectors::Row> {
+    connectors::list(&workspace(&state))
+}
+
+/// Starting a server can take its whole startup timeout, so these run off
+/// the main thread.
+#[tauri::command]
+async fn check_connectors(state: State<'_, ShellState>) -> Result<Vec<connectors::Row>, String> {
+    let workspace = workspace(&state);
+    tauri::async_runtime::spawn_blocking(move || connectors::check(&workspace))
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn restart_connector(
+    state: State<'_, ShellState>,
+    name: String,
+) -> Result<connectors::Changed, String> {
+    let workspace = workspace(&state);
+    tauri::async_runtime::spawn_blocking(move || connectors::restart(&workspace, &name))
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn sign_out_connector(state: State<'_, ShellState>, name: String) -> connectors::Changed {
+    connectors::sign_out(&workspace(&state), &name)
+}
+
+/// The page asks "Disconnect {name}?" first.
+#[tauri::command]
+fn disconnect_connector(
+    state: State<'_, ShellState>,
+    name: String,
+) -> Result<connectors::Changed, String> {
+    connectors::disconnect(&workspace(&state), &name)
+}
+
 fn show_main(app: &AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.unminimize();
@@ -480,7 +521,12 @@ pub fn run() {
             get_memory,
             save_memory,
             add_memory,
-            search_memory
+            search_memory,
+            list_connectors,
+            check_connectors,
+            restart_connector,
+            sign_out_connector,
+            disconnect_connector
         ])
         .run(tauri::generate_context!());
     if let Err(err) = built {

@@ -156,3 +156,45 @@ export function addMemory(
 export function searchMemory(query: string): Promise<MemoryHit[]> {
   return invoke<MemoryHit[]>("search_memory", { query });
 }
+
+/** One MCP server from `mcp.json`, as the Connectors page shows it. */
+export interface ConnectorRow {
+  name: string;
+  /** "connected", "error", "stopped", "not checked" or "disabled". */
+  status: string;
+  tools: number;
+  error: string;
+  /** The command or URL the entry runs. */
+  detail: string;
+  /** "Signed in to … as …", empty when not signed in. */
+  account: string;
+  needsSignIn: boolean;
+  canDisconnect: boolean;
+}
+
+export interface ConnectorsChanged {
+  status: string;
+  rows: ConnectorRow[];
+}
+
+export function listConnectors(): Promise<ConnectorRow[]> {
+  return invoke<ConnectorRow[]>("list_connectors");
+}
+
+/** Starts each enabled server and pings it; can take a few seconds. */
+export function checkConnectors(): Promise<ConnectorRow[]> {
+  return invoke<ConnectorRow[]>("check_connectors");
+}
+
+export function restartConnector(name: string): Promise<ConnectorsChanged> {
+  return invoke<ConnectorsChanged>("restart_connector", { name });
+}
+
+export function signOutConnector(name: string): Promise<ConnectorsChanged> {
+  return invoke<ConnectorsChanged>("sign_out_connector", { name });
+}
+
+/** Only after the person confirmed it on the page. */
+export function disconnectConnector(name: string): Promise<ConnectorsChanged> {
+  return invoke<ConnectorsChanged>("disconnect_connector", { name });
+}
