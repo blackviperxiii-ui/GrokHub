@@ -524,7 +524,7 @@ mod tests {
             app.status,
             "On-device model for background tasks: on, no local model installed"
         );
-        assert!(!local::installed() && !local::enabled());
+        assert!(!local::installed() && !local::available());
         assert!(!app.harness.router.force_table);
         let mut saved = String::new();
         for _ in 0..200 {

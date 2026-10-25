@@ -440,7 +440,7 @@ mod tests {
             "a finished download turns the toggle on"
         );
         // No runtime in this build: the route stays off and the rows say why.
-        assert!(!grokhub_agent::route::local::enabled());
+        assert!(!grokhub_agent::route::local::available());
         // Not a catalog id, like an older Qwen 2.5 install: it goes by its file.
         assert_eq!(app.downloaded_model_name(), Some("test.gguf"));
         assert_eq!(
