@@ -1,0 +1,1 @@
+- Shell: with no API key, Chat opens on a sign-in card with one button (Add your API key, which opens Settings → Account) and a hint about where to get a key. The web app says to add the key on the computer. Automations and Connectors have clearer empty states, and Web access is labeled Preview.

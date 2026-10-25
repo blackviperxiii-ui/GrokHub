@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Answer, Approvals, ChatEnvelope, ChatEvent, ElicitAction, SessionMode, Settings } from "./api";
@@ -401,5 +401,35 @@ describe("applyEvent", () => {
     await waitFor(() =>
       expect(screen.getByText("Not answered: the turn ended.")).toBeInTheDocument(),
     );
+  });
+
+  it("signed out, it shows one sign-in button and a hint instead of the empty line", async () => {
+    api.getSettings.mockResolvedValue({ ...SETTINGS, hasApiKey: false });
+    const onSignIn = vi.fn();
+    render(<Chat onOpenSettings={() => {}} onSignIn={onSignIn} />);
+    const card = await screen.findByRole("region", { name: "Sign in" });
+    expect(within(card).getAllByRole("button").map((b) => b.textContent)).toEqual([
+      "Add your API key",
+    ]);
+    expect(card).toHaveTextContent(
+      "Sign in to start" +
+        "GrokHub chats with your xAI API key. It's kept in this device's keychain, never in a file." +
+        "Add your API key" +
+        "No key yet? Make one at console.x.ai.",
+    );
+    expect(screen.queryByText("Ask Grok anything.")).toBeNull();
+    await userEvent.click(within(card).getByRole("button", { name: "Add your API key" }));
+    expect(onSignIn).toHaveBeenCalledTimes(1);
+  });
+
+  it("signed out on the web app, it says to add the key on the computer", async () => {
+    api.getSettings.mockResolvedValue({ ...SETTINGS, hasApiKey: false });
+    render(<Chat onOpenSettings={() => {}} remote />);
+    expect(
+      await screen.findByText(
+        "GrokHub on your computer has no API key yet. Add one there, then chat here.",
+      ),
+    ).toBeVisible();
+    expect(screen.queryByRole("region", { name: "Sign in" })).toBeNull();
   });
 });
