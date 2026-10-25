@@ -9,6 +9,7 @@ pub mod automations;
 pub mod capabilities;
 pub mod connectors;
 pub mod credential;
+pub mod journal;
 pub mod local_ai;
 pub mod memory;
 pub mod pulse;
@@ -424,6 +425,41 @@ async fn disconnect_connector(
 #[tauri::command]
 fn get_capabilities() -> capabilities::Capabilities {
     capabilities::current()
+}
+
+#[tauri::command]
+async fn get_journal(state: State<'_, ShellState>) -> Result<journal::Page, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || journal::load(&dir)).await?
+}
+
+#[tauri::command]
+async fn journal_add(
+    state: State<'_, ShellState>,
+    question: String,
+) -> Result<journal::Page, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || journal::add(&dir, &question)).await?
+}
+
+#[tauri::command]
+async fn journal_act(
+    state: State<'_, ShellState>,
+    id: String,
+    act: journal::Act,
+) -> Result<journal::Page, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || journal::act(&dir, &id, act)).await?
+}
+
+#[tauri::command]
+async fn journal_to_mission(
+    state: State<'_, ShellState>,
+    id: String,
+    conversation_id: String,
+) -> Result<journal::Mission, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || journal::to_mission(&dir, &id, &conversation_id)).await?
 }
 
 #[tauri::command]
@@ -843,6 +879,10 @@ pub fn run() {
             restart_connector,
             sign_out_connector,
             disconnect_connector,
+            get_journal,
+            journal_add,
+            journal_act,
+            journal_to_mission,
             get_pulse,
             pulse_act,
             get_local_ai,
