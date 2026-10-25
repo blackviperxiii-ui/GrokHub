@@ -1,0 +1,1 @@
+- Tauri shell: Settings has a section nav (General, Account, Local AI, Web access, About), and About shows the version. Phones get General, Account and About; the nav wraps into a row on narrow screens.

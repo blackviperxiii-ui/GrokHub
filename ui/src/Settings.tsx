@@ -26,6 +26,27 @@ const APPROVALS: Record<Approvals, { label: string; note: string }> = {
   },
 };
 
+type Section = "general" | "account" | "localAi" | "webAccess" | "about";
+
+const SECTION_LABELS: Record<Section, string> = {
+  general: "General",
+  account: "Account",
+  localAi: "Local AI",
+  webAccess: "Web access",
+  about: "About",
+};
+
+/** The sections this platform has, in nav order. */
+export function sections(caps: Capabilities): Section[] {
+  return [
+    "general",
+    "account",
+    ...(caps.localAi ? (["localAi"] as const) : []),
+    ...(caps.webAccess ? (["webAccess"] as const) : []),
+    "about",
+  ];
+}
+
 export const DESKTOP_NOTE =
   "Grok can see your screen, click and type. Deleting, sending, paying and credentials always wait for your OK.";
 
@@ -38,6 +59,7 @@ export function Settings({ caps }: { caps: Capabilities }) {
   const [desktopControl, setDesktopControl] = useState(false);
   const [key, setKey] = useState("");
   const [note, setNote] = useState<string | null>(null);
+  const [section, setSection] = useState<Section>("general");
 
   function show(next: Shape) {
     setSettings(next);
@@ -90,8 +112,40 @@ export function Settings({ caps }: { caps: Capabilities }) {
 
   if (caps.remote) return <RemoteSettings settings={settings} />;
 
+  const loaded = settings;
+
+  function open(next: Section) {
+    setSection(next);
+    setNote(null);
+  }
+
   return (
-    <section className="settings" aria-label="Settings">
+    <div className="settings-page">
+      <nav className="settings-nav" aria-label="Settings sections">
+        {sections(caps).map((name) => (
+          <button
+            key={name}
+            type="button"
+            aria-pressed={section === name}
+            onClick={() => open(name)}
+          >
+            {SECTION_LABELS[name]}
+          </button>
+        ))}
+      </nav>
+      <section className="settings" aria-label={SECTION_LABELS[section]}>
+        {section === "general" && general()}
+        {section === "account" && account()}
+        {note && <p className="note">{note}</p>}
+        {section === "localAi" && caps.localAi && <LocalAi />}
+        {section === "webAccess" && caps.webAccess && <WebAccess />}
+        {section === "about" && <About version={loaded.version} />}
+      </section>
+    </div>
+  );
+
+  function general() {
+    return (
       <form onSubmit={save}>
         <label>
           Model
@@ -101,12 +155,12 @@ export function Settings({ caps }: { caps: Capabilities }) {
           Work folder
           <input
             value={workspace}
-            placeholder={settings.workspacePath}
+            placeholder={loaded.workspacePath}
             onChange={(e) => setWorkspace(e.target.value)}
           />
         </label>
         <p className="note">
-          GrokHub works in <code>{settings.workspacePath}</code>.
+          GrokHub works in <code>{loaded.workspacePath}</code>.
         </p>
         <label>
           Approvals
@@ -144,9 +198,14 @@ export function Settings({ caps }: { caps: Capabilities }) {
         )}
         <button type="submit">Save settings</button>
       </form>
+    );
+  }
+
+  function account() {
+    return (
       <div className="key">
         <h2>xAI API key</h2>
-        <p>{settings.hasApiKey ? "A key is saved." : "No key saved yet."}</p>
+        <p>{loaded.hasApiKey ? "A key is saved." : "No key saved yet."}</p>
         <input
           type="password"
           aria-label="API key"
@@ -158,16 +217,26 @@ export function Settings({ caps }: { caps: Capabilities }) {
         <button type="button" onClick={saveKey} disabled={!key.trim()}>
           Save key
         </button>
-        {settings.hasApiKey && (
+        {loaded.hasApiKey && (
           <button type="button" className="quiet" onClick={removeKey}>
             Remove key
           </button>
         )}
       </div>
-      {note && <p className="note">{note}</p>}
-      {caps.webAccess && <WebAccess />}
-      {caps.localAi && <LocalAi />}
-    </section>
+    );
+  }
+}
+
+export const ABOUT_NOTE =
+  "GrokHub Shell is the cross-platform app. The GrokHub cabin keeps working next to it until the shell has everything the cabin has.";
+
+function About({ version }: { version: string }) {
+  return (
+    <div className="about">
+      <h2>GrokHub Shell</h2>
+      <p>Version {version}</p>
+      <p className="note">{ABOUT_NOTE}</p>
+    </div>
   );
 }
 
