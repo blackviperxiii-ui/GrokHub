@@ -20,7 +20,7 @@
 - Work tree in `chat_ui.rs` (`paint_tool_cards` calls `paint_mission_header` before the episode header).
 ## Non-obvious
 - No persisted mission file: reopen re-projects from Brief, todos, episode, parks, outcomes.
-- Entry points: task/repair/research Brief, desktop episode, Continue/resume + hard-park approval.
+- Entry points: task/repair/research Brief, desktop episode, Continue/resume + hard-park approval, and a Journal promote (`journal_question`, from `mission_entry` on the chat). A promoted chat is a mission before its first turn; its title is the decision question.
 - Casual chat with no work returns `None` (no empty chrome).
 ## See also
 - [harness](harness.md), [self-improve](self-improve.md), [app-module](app-module.md), [grokhub-core](grokhub-core.md)

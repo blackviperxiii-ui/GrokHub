@@ -5,8 +5,8 @@
 use super::*;
 use grokhub_core::{
     abandon_entry, add_evidence, add_option, create_entry, decide_entry, defer_entry,
-    dismiss_nudge, due_nudges, edit_entry, promote_to_board, remove_evidence, remove_option,
-    search_entries, set_status, EvidenceKind, JournalEntry, JournalStatus,
+    dismiss_nudge, due_nudges, edit_entry, promote_to_board, promote_to_mission, remove_evidence,
+    remove_option, search_entries, set_status, EvidenceKind, JournalEntry, JournalStatus,
 };
 
 #[derive(Default)]
@@ -49,6 +49,55 @@ impl Cabin {
         }
     }
 
+    /// Start a decision's mission: back to its chat when that still exists,
+    /// otherwise a new chat named for the question. The chat opens with a
+    /// mission note (so it is never reused as an empty chat) and the first
+    /// message drafted in the composer. Nothing is sent until the user presses Send.
+    pub(super) fn promote_journal_to_mission(&mut self, id: &str) {
+        let linked = self
+            .journal
+            .iter()
+            .find(|e| e.id == id)
+            .and_then(|e| e.mission_thread.clone());
+        if let Some(idx) = linked.and_then(|tid| self.threads.iter().position(|t| t.id == tid)) {
+            if idx != self.thread_idx {
+                self.apply_switch_thread(idx);
+            }
+            self.nav = Nav::Chat;
+            self.status = "Back on this decision's mission".into();
+            return;
+        }
+        if !self
+            .journal
+            .iter()
+            .any(|e| e.id == id && e.status.is_active())
+        {
+            return;
+        }
+        self.new_thread(false);
+        let trace = self.trace_id();
+        let Some(start) = promote_to_mission(&mut self.journal, id, &trace) else {
+            return;
+        };
+        if let Some(t) = self.threads.get_mut(self.thread_idx) {
+            t.title = start.title.clone();
+            t.title_locked = true;
+            t.goal.label = start.title.clone();
+        }
+        let note = format!(
+            "Mission from the Journal: {}\nThe first message is drafted below. Press Send to run the next experiment.",
+            start.title
+        );
+        self.live_mut()
+            .push(("assistant".into(), grokhub_core::mark_slash_result(&note)));
+        self.stamp_current_access();
+        self.composer = start.prompt;
+        self.nav = Nav::Chat;
+        self.flush_journal();
+        self.persist();
+        self.status = "Mission ready: press Send to run the next experiment".into();
+    }
+
     pub(super) fn ui_journal(&mut self, ui: &mut egui::Ui) {
         egui::CentralPanel::default()
             .frame(
@@ -60,7 +109,7 @@ impl Cabin {
                 crate::cards::page_header(ui, "Journal", "");
                 ui.label(
                     RichText::new(
-                        "Open questions and experiments — not tasks. Promote to Workboards when you choose a next step.",
+                        "Open questions and experiments — not tasks. Start a mission to run the next experiment, or file it on Workboards.",
                     )
                     .size(12.0)
                     .color(crate::theme::subtle()),
@@ -377,6 +426,9 @@ impl Cabin {
                             abandon_entry(&mut self.journal, &id);
                             self.flush_journal();
                         }
+                    }
+                    if entry.status.is_active() && crate::cards::ghost_pill(ui, "To mission") {
+                        self.promote_journal_to_mission(&id);
                     }
                     if crate::cards::ghost_pill(ui, "To workboard")
                         && promote_to_board(&mut self.journal, &mut self.board, &id).is_some()

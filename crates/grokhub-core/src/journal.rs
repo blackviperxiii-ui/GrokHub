@@ -3,7 +3,8 @@
 //! A journal entry is not a workboard task. It captures what is uncertain,
 //! which options exist, what evidence would change the call, and the cheapest
 //! next experiment. Promote into a Workboard Todo when an experiment or
-//! implementation is chosen (Mission v1 exists; promote-to-mission is not wired).
+//! implementation is chosen, or into a mission: a chat linked by
+//! `mission_thread` whose first message drafts the next experiment.
 
 use serde::{Deserialize, Serialize};
 
@@ -188,9 +189,12 @@ pub struct JournalEntry {
     pub status: JournalStatus,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub outcome: Option<JournalOutcome>,
-    /// Workboard card filed when promoted (promote-to-mission is not wired).
+    /// Workboard card filed when promoted.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub board_id: Option<String>,
+    /// Chat the decision's mission runs in, set by [`promote_to_mission`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mission_thread: Option<String>,
     /// Optional chat that spawned this decision.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thread_id: Option<String>,
@@ -228,6 +232,7 @@ impl JournalEntry {
             status: JournalStatus::Open,
             outcome: None,
             board_id: None,
+            mission_thread: None,
             thread_id: None,
             history: vec![format!("created: {q}")],
             created_ms: now,
@@ -493,7 +498,6 @@ pub fn set_leaning(entries: &mut [JournalEntry], id: &str, option_id: &str, note
 }
 
 /// File a Workboard Todo from this decision and link `board_id`.
-/// Files a Workboard Todo; promote-to-mission is not wired.
 /// Uses the question as the card title (decision questions are not work-verbs,
 /// so `file_idea_todo` / `idea_todo_title` would fall back to a generic label).
 pub fn promote_to_board(
@@ -538,6 +542,89 @@ pub fn promote_to_board(
     e.note(format!("promoted to workboard {board_id}"));
     e.touch();
     Some(board_id)
+}
+
+/// What a mission started from a decision opens with: the chat title and the
+/// first message, drafted for the user to send.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MissionStart {
+    pub title: String,
+    pub prompt: String,
+}
+
+/// The mission opening for `entry`, without changing it.
+pub fn mission_start(entry: &JournalEntry) -> MissionStart {
+    let title: String = entry.question.chars().take(80).collect();
+    let mut prompt = format!(
+        "Mission from my decision journal: {}",
+        entry.question.trim()
+    );
+    if !entry.context.trim().is_empty() {
+        prompt.push_str(&format!("\n\nContext: {}", entry.context.trim()));
+    }
+    let options: Vec<&str> = entry
+        .options
+        .iter()
+        .map(|o| o.label.trim())
+        .filter(|l| !l.is_empty())
+        .collect();
+    if !options.is_empty() {
+        prompt.push_str(&format!("\nOptions: {}", options.join(" · ")));
+    }
+    let next = entry.next_experiment.trim();
+    if next.is_empty() {
+        prompt.push_str("\nNext experiment: pick the cheapest one that would change the call.");
+    } else {
+        prompt.push_str(&format!("\nNext experiment: {next}"));
+    }
+    prompt.push_str(
+        "\n\nRun that experiment, show the evidence, and say which option it supports. Leave the decision to me.",
+    );
+    MissionStart { title, prompt }
+}
+
+/// Start a mission for an active decision in chat `thread_id`: link
+/// `mission_thread`, move Open to Investigating, and return the opening.
+/// `None` for an unknown, decided or abandoned entry, or an empty thread id.
+pub fn promote_to_mission(
+    entries: &mut [JournalEntry],
+    id: &str,
+    thread_id: &str,
+) -> Option<MissionStart> {
+    let thread_id = thread_id.trim();
+    if thread_id.is_empty() {
+        return None;
+    }
+    let e = entries.iter_mut().find(|e| e.id == id)?;
+    if !e.status.is_active() {
+        return None;
+    }
+    e.mission_thread = Some(thread_id.to_string());
+    if e.status == JournalStatus::Open {
+        e.status = JournalStatus::Investigating;
+    }
+    e.note(format!("promoted to mission {thread_id}"));
+    e.touch();
+    Some(mission_start(e))
+}
+
+/// The decision whose mission runs in chat `thread_id`.
+pub fn mission_entry<'a>(entries: &'a [JournalEntry], thread_id: &str) -> Option<&'a JournalEntry> {
+    if thread_id.is_empty() {
+        return None;
+    }
+    entries
+        .iter()
+        .find(|e| e.mission_thread.as_deref() == Some(thread_id))
+}
+
+/// Questions still on the active list, newest first, for the systems brief.
+pub fn open_questions(entries: &[JournalEntry]) -> Vec<String> {
+    entries
+        .iter()
+        .filter(|e| e.status.is_active())
+        .map(|e| e.question.clone())
+        .collect()
 }
 
 /// Quiet due nudge: active entries whose trigger has passed and were not dismissed.
@@ -753,5 +840,75 @@ mod tests {
         let ev = entries[0].evidence.iter().find(|e| e.id == eid).unwrap();
         assert_eq!(ev.reference, "board:card_1");
         assert_eq!(ev.label, "done on beta");
+    }
+    #[test]
+    fn promote_to_mission_links_the_chat_and_drafts_the_next_experiment() {
+        let mut entries = Vec::new();
+        let id = create_entry(&mut entries, "Switch the cabin to Tauri?").unwrap();
+        entries[0].context = "egui is Linux-first".into();
+        entries[0].next_experiment = "Build the chat pane in Tauri".into();
+        let start = promote_to_mission(&mut entries, &id, "thr-1").expect("active entry");
+        assert_eq!(start.title, "Switch the cabin to Tauri?");
+        assert_eq!(
+            start.prompt,
+            "Mission from my decision journal: Switch the cabin to Tauri?\n\nContext: egui is Linux-first\nOptions: Do nothing · Try a small experiment\nNext experiment: Build the chat pane in Tauri\n\nRun that experiment, show the evidence, and say which option it supports. Leave the decision to me."
+        );
+        assert_eq!(entries[0].mission_thread.as_deref(), Some("thr-1"));
+        assert_eq!(entries[0].status, JournalStatus::Investigating);
+        assert_eq!(
+            entries[0].history.last().unwrap(),
+            "promoted to mission thr-1"
+        );
+        assert_eq!(
+            mission_entry(&entries, "thr-1").map(|e| e.id.as_str()),
+            Some(id.as_str())
+        );
+        assert!(mission_entry(&entries, "thr-2").is_none());
+        assert!(mission_entry(&entries, "").is_none());
+    }
+
+    #[test]
+    fn promote_to_mission_refuses_closed_entries_and_empty_threads() {
+        let mut entries = Vec::new();
+        let id = create_entry(&mut entries, "Keep the AUR package?").unwrap();
+        assert_eq!(promote_to_mission(&mut entries, &id, "  "), None);
+        assert_eq!(
+            promote_to_mission(&mut entries, "dec-missing", "thr-1"),
+            None
+        );
+        set_status(&mut entries, &id, JournalStatus::ReadyToDecide);
+        let start = promote_to_mission(&mut entries, &id, "thr-1").unwrap();
+        assert!(start
+            .prompt
+            .contains("Next experiment: pick the cheapest one that would change the call."));
+        assert_eq!(
+            entries[0].status,
+            JournalStatus::ReadyToDecide,
+            "only Open moves to Investigating"
+        );
+        abandon_entry(&mut entries, &id);
+        assert_eq!(promote_to_mission(&mut entries, &id, "thr-2"), None);
+        assert_eq!(entries[0].mission_thread.as_deref(), Some("thr-1"));
+    }
+
+    #[test]
+    fn open_questions_lists_active_entries_only() {
+        let mut entries = Vec::new();
+        let a = create_entry(&mut entries, "First?").unwrap();
+        create_entry(&mut entries, "Second?").unwrap();
+        abandon_entry(&mut entries, &a);
+        assert_eq!(open_questions(&entries), vec!["Second?".to_string()]);
+    }
+
+    #[test]
+    fn legacy_rows_load_without_a_mission_thread() {
+        let e = JournalEntry::new("Old row?");
+        let mut v = serde_json::to_value(&e).unwrap();
+        v.as_object_mut().unwrap().remove("missionThread");
+        let back: JournalEntry = serde_json::from_value(v).unwrap();
+        assert_eq!(back.mission_thread, None);
+        assert!(!serde_json::to_string(&back)
+            .unwrap()
+            .contains("missionThread"));
     }
 }
