@@ -9,6 +9,7 @@ pub mod automations;
 pub mod connectors;
 pub mod credential;
 pub mod memory;
+pub mod pulse;
 pub mod settings;
 
 use std::collections::HashMap;
@@ -388,6 +389,21 @@ async fn disconnect_connector(
     off_main(move || connectors::disconnect(&workspace, &name)).await?
 }
 
+#[tauri::command]
+fn get_pulse(state: State<'_, ShellState>) -> Result<pulse::Page, String> {
+    pulse::load(&state.config_dir, grokhub_core::now_ms())
+}
+
+#[tauri::command]
+fn pulse_act(
+    state: State<'_, ShellState>,
+    id: String,
+    act: pulse::Act,
+    day: pulse::Day,
+) -> Result<pulse::Page, String> {
+    pulse::act(&state.config_dir, &id, act, &day, grokhub_core::now_ms())
+}
+
 fn show_main(app: &AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.unminimize();
@@ -537,7 +553,9 @@ pub fn run() {
             check_connectors,
             restart_connector,
             sign_out_connector,
-            disconnect_connector
+            disconnect_connector,
+            get_pulse,
+            pulse_act
         ])
         .run(tauri::generate_context!());
     if let Err(err) = built {

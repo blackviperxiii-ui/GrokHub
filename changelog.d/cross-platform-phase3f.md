@@ -1,0 +1,1 @@
+- Cross-platform recode, Phase 3f: the Tauri shell has a Pulse page with the cabin's Feed and Ideas. Like, Snooze, Not this and Dismiss work and teach the ranking the same way the cabin does. Run puts an idea in the chat box for you to send.
