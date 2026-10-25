@@ -11,8 +11,8 @@ use grokhub_core::{
     pick_named_row, picker_args, png_ihdr_size, pointer_slop_miss, relative_move_steps,
     session_is_wayland, tab_list_from_rows, take_text_body, virtual_desktop_size, x11_grab_size,
     ydotool_socket_path, AtspiRow, BrowserTab, CaptureKind, ComputerDrive, ComputerOp,
-    DisplayOutput, HandsBackend, HandsDown, TabAction, CDP_DOWN, CDP_PORTS, IMAGE_FILE_CAP,
-    RECORDERS, TEXT_FILE_CAP, TRANSCRIBERS,
+    DisplayOutput, HandsBackend, HandsDown, TabAction, ATSPI_PY, CDP_DOWN, CDP_PORTS,
+    IMAGE_FILE_CAP, RECORDERS, TEXT_FILE_CAP, TRANSCRIBERS,
 };
 use image::GenericImageView;
 use std::io::Read;
@@ -22,36 +22,6 @@ use std::process::{Child, Command, Output, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-
-const ATSPI_PY: &str = r#"
-import sys
-try:
-    import pyatspi
-except Exception:
-    sys.exit(2)
-def walk(acc, n=0):
-    role = "object"
-    try:
-        name = (acc.name or "").replace(" ", "_")
-        role = (acc.getRoleName() or "object").replace(" ", "-")
-        ext = acc.queryComponent().getExtents(0)
-        w, h = int(ext.width), int(ext.height)
-        keep = n <= 8 or "tab" in role or "button" in role
-        if w > 0 and h > 0 and keep:
-            print(f"role={role} name={name} x={int(ext.x)} y={int(ext.y)} w={w} h={h}")
-    except Exception:
-        pass
-    if n > 12:
-        return
-    if n > 8 and "tab" not in role and "frame" not in role and "panel" not in role:
-        return
-    try:
-        for i in range(acc.childCount):
-            walk(acc.getChildAtIndex(i), n + 1)
-    except Exception:
-        pass
-walk(pyatspi.Registry.getDesktop(0))
-"#;
 
 struct LastDeskFrame {
     jpeg_w: u32,

@@ -2,11 +2,11 @@
 
 ## Owns
 - `grokhub --mcp-desktop`: a stdio JSON-RPC MCP server the native engine reaches as `grokhub-desktop` (tools appear as `grokhub-desktop__<tool>`): `list_monitors`, `screenshot`, `click`, `move`, `drag`, `scroll`, `type`, `key`, `open_app`, `focus_window`, `delete_files`.
-- Pure protocol, geometry, and key parsing in grokhub-core; the OS backends (X11, Wayland/KDE portal + libei, uinput, ydotool fallback, Windows SendInput + xcap) in grokhub-app.
+- Pure protocol, geometry, and key parsing in grokhub-core; the OS backends (X11, Wayland/KDE portal + libei, uinput, ydotool fallback, Windows SendInput + xcap) in grokhub-desktop. The app that hosts them installs a `host::Host` (config folder, switches, lock titles, click target): the cabin in `crates/grokhub-app/src/desktop_mcp.rs`, the Tauri shell in `src-tauri/src/lib.rs` with the readers in `crates/grokhub-desktop/src/screen.rs`.
 - Spike-2a: `grokhub --mcp-cua` (`run_cua_stdio`), registered as `grokhub-cua` only while desktop control and the `cuaDriver` flag in `app.json` are both on (Linux; `cua_wanted`). It starts the pinned `cua-driver mcp --socket <config>/cua/driver.sock` child in `bounded` mode with the cabin manifest, and gates every call in `crates/grokhub-agent/src/harness/cua.rs` before forwarding.
 ## Quick commands
 - `cargo test -p grokhub-core desktop_mcp` (pure JSON-RPC, geometry, key combos)
-- `cargo test -p grokhub-app desktop_mcp` (backend routes with fakes; never opens a portal or `/dev/uinput`)
+- `cargo test -p grokhub-desktop` (backend routes with fakes; never opens a portal or `/dev/uinput`)
 - `cargo test -p grokhub-agent cua` and `cargo test -p grokhub-agent --test cua_proxy` (fake Cua child `crates/grokhub-agent/src/bin/fake_cua.rs`; never a real `cua-driver`)
 ## Key files
 - `crates/grokhub-core/src/desktop_mcp.rs`: `DesktopServer`, `DesktopBackend`, `CallGate`, `DESKTOP_MCP_SERVER`, `DESKTOP_MCP_RULE`, `OFF_MSG` / `HALT_MSG` / `LOCK_MSG`.

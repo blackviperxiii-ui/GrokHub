@@ -7,7 +7,13 @@ const api = vi.hoisted(() => ({
   getSettings: vi.fn<() => Promise<Shape>>(),
   saveSettings:
     vi.fn<
-      (model: string, closeToTray: boolean, workspace: string, approvals: string) => Promise<Shape>
+      (
+        model: string,
+        closeToTray: boolean,
+        workspace: string,
+        approvals: string,
+        desktopControl: boolean,
+      ) => Promise<Shape>
     >(),
   setApiKey: vi.fn<(key: string) => Promise<Shape>>(),
   clearApiKey: vi.fn<() => Promise<Shape>>(),
@@ -17,7 +23,7 @@ vi.mock("./api", () => api);
 // Local AI has its own tests (LocalAi.test.tsx).
 vi.mock("./LocalAi", () => ({ LocalAi: () => null }));
 
-import { Settings } from "./Settings";
+import { DESKTOP_NOTE, Settings } from "./Settings";
 
 function shape(over: Partial<Shape>): Shape {
   return {
@@ -27,6 +33,7 @@ function shape(over: Partial<Shape>): Shape {
     workspace: "",
     workspacePath: "/home/user/GrokHub",
     approvals: "ask",
+    desktopControl: false,
     ...over,
   };
 }
@@ -52,7 +59,7 @@ describe("Settings", () => {
     await userEvent.click(screen.getByLabelText(/keeps GrokHub in the tray/));
     await userEvent.click(screen.getByRole("button", { name: "Save settings" }));
 
-    expect(api.saveSettings).toHaveBeenCalledWith("grok-5", false, "/work", "ask");
+    expect(api.saveSettings).toHaveBeenCalledWith("grok-5", false, "/work", "ask", false);
     expect(await screen.findByText("Settings saved.")).toBeInTheDocument();
     expect(screen.getByLabelText(/keeps GrokHub in the tray/)).not.toBeChecked();
     expect(screen.getByText("/work")).toBeInTheDocument();
@@ -75,9 +82,25 @@ describe("Settings", () => {
     ).toHaveClass("warn");
     await userEvent.click(screen.getByRole("button", { name: "Save settings" }));
 
-    expect(api.saveSettings).toHaveBeenCalledWith("grok-4.7", true, "", "always");
+    expect(api.saveSettings).toHaveBeenCalledWith("grok-4.7", true, "", "always", false);
     expect(await screen.findByText("Settings saved.")).toBeInTheDocument();
     expect(screen.getByLabelText("Approvals")).toHaveValue("always");
+  });
+
+  it("desktop control starts off, says what still asks, and saves", async () => {
+    api.saveSettings.mockResolvedValue(shape({ desktopControl: true }));
+    render(<Settings />);
+
+    const desk = await screen.findByLabelText("Let Grok control the desktop");
+    expect(desk).not.toBeChecked();
+    expect(screen.queryByText(DESKTOP_NOTE)).not.toBeInTheDocument();
+    await userEvent.click(desk);
+    expect(screen.getByText(DESKTOP_NOTE)).toHaveClass("warn");
+    await userEvent.click(screen.getByRole("button", { name: "Save settings" }));
+
+    expect(api.saveSettings).toHaveBeenCalledWith("grok-4.7", true, "", "ask", true);
+    expect(await screen.findByText("Settings saved.")).toBeInTheDocument();
+    expect(screen.getByLabelText("Let Grok control the desktop")).toBeChecked();
   });
 
   it("saves a key without echoing it, then removes it", async () => {
