@@ -69,7 +69,7 @@ pub struct BriefInputs {
     pub progress_wins: Vec<String>,
     /// Exact blocked / waiting lines (parked hard approvals, etc.).
     pub blocked: Vec<String>,
-    /// Open decision titles when a journal exists; empty in cabin today.
+    /// Questions still open in the Journal (`journal::open_questions`).
     pub open_decisions: Vec<String>,
 }
 
@@ -311,16 +311,10 @@ pub fn build_brief(input: &BriefInputs) -> SystemsBrief {
         }
     }
 
-    // Decisions (honest empty when no journal)
+    // Decisions: the Journal's open questions
     if input.open_decisions.is_empty() {
-        decisions.push(claim(
-            "No in-app decision journal yet; open decisions are not tracked locally.",
-            "decisions:unavailable",
-        ));
-        sources.push(claim(
-            "decision journal not in cabin",
-            "decisions:unavailable",
-        ));
+        decisions.push(claim("No open questions in the Journal.", "decisions:none"));
+        sources.push(claim("journal has no open questions", "decisions:none"));
     } else {
         for (i, d) in input.open_decisions.iter().enumerate() {
             let src = format!("decision:{i}");
@@ -557,7 +551,8 @@ mod tests {
         assert!(brief.progress[0].text.contains("No completed"));
         assert!(brief.reliability[0].text.contains("all 4 service"));
         assert!(brief.blocked[0].source == "blocked:none");
-        assert!(brief.decisions[0].source == "decisions:unavailable");
+        assert_eq!(brief.decisions[0].text, "No open questions in the Journal.");
+        assert_eq!(brief.decisions[0].source, "decisions:none");
         assert!(brief.next_actions.is_empty());
         assert!(brief.render().contains("## What changed"));
         assert!(brief.sources.iter().all(|s| !s.source.is_empty()));

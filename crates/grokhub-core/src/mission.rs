@@ -123,6 +123,9 @@ pub struct MissionSeed {
     pub outcome_span_ids: Vec<String>,
     pub uncertainty: String,
     pub next_action: String,
+    /// The Journal question when this chat is a decision's mission
+    /// (`journal::promote_to_mission`); empty otherwise.
+    pub journal_question: String,
 }
 
 /// Intents that promote a chat turn into a foreground mission.
@@ -145,7 +148,8 @@ impl MissionView {
             || !seed.goal_outcome.is_empty()
             || !seed.outcome_result.is_empty()
             || (!seed.id.is_empty() && seed.id.starts_with("ep-"))
-            || mission_worthy_intent(&seed.intent);
+            || mission_worthy_intent(&seed.intent)
+            || !seed.journal_question.is_empty();
         if !has_work {
             return None;
         }
@@ -490,5 +494,28 @@ mod tests {
         let a = MissionView::project(&s).expect("a");
         let b = MissionView::project(&s).expect("b");
         assert_eq!(a, b);
+    }
+    #[test]
+    fn a_journal_promotion_is_a_mission_before_any_turn() {
+        let s = MissionSeed {
+            id: "thr-1:0".into(),
+            title: "Switch the cabin to Tauri?".into(),
+            goal: "Switch the cabin to Tauri?".into(),
+            journal_question: "Switch the cabin to Tauri?".into(),
+            ..MissionSeed::default()
+        };
+        let m = MissionView::project(&s).expect("journal mission");
+        assert_eq!(m.title, "Switch the cabin to Tauri?");
+        assert_eq!(m.status, MissionStatus::Active);
+        assert!(m.checklist.is_empty());
+        let casual = MissionSeed {
+            title: "Switch the cabin to Tauri?".into(),
+            ..MissionSeed::default()
+        };
+        assert_eq!(
+            MissionView::project(&casual),
+            None,
+            "a title alone is not a mission"
+        );
     }
 }
