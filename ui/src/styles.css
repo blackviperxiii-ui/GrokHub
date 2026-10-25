@@ -53,14 +53,16 @@ button:disabled {
 
 button.quiet,
 .tabs button,
-.switch button {
+.switch button,
+.settings-nav button {
   background: transparent;
   color: var(--text);
   border-color: var(--border);
 }
 
 .tabs button[aria-pressed="true"],
-.switch button[aria-pressed="true"] {
+.switch button[aria-pressed="true"],
+.settings-nav button[aria-pressed="true"] {
   border-color: var(--accent);
 }
 
@@ -158,6 +160,37 @@ textarea {
 .composer textarea {
   flex: 1;
   resize: none;
+}
+
+.settings-page {
+  display: flex;
+  gap: 24px;
+  align-items: flex-start;
+}
+
+.settings-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 140px;
+}
+
+.settings-nav button {
+  text-align: left;
+}
+
+/* Phones: the sections become a row above the page. */
+@media (max-width: 600px) {
+  .settings-page {
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .settings-nav {
+    flex-direction: row;
+    flex-wrap: wrap;
+    min-width: 0;
+  }
 }
 
 .settings {
