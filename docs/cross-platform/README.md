@@ -266,3 +266,25 @@ the same hard gate as the cabin (`src-tauri/src/agent.rs`).
   type a delete, and checks that the card waits, nothing runs, and Deny
   reaches the model as a refusal.
 
+
+Phase 3 met its accept line: risky desktop steps wait for an OK in the Rust
+gate tests on all three desktop OSes, and the smoke test confirms it on
+Linux and Windows. tauri-driver has no macOS backend, so the smoke test
+doesn't run there.
+
+## Phase 4 status
+
+**4a, capability flags.** `src-tauri/src/capabilities.rs` reports what the
+running OS supports (`get_capabilities`). Linux, Windows and macOS get
+everything. Any other OS (Android, iOS) gets chat, memory, automations and
+connectors only.
+
+- The UI hides what the report leaves off: the Pulse tab, Settings → Local
+  AI, Let Grok control the desktop, and the tray setting. Until the report
+  loads, or if it fails, only the core features show.
+- The backend refuses those features too: the Pulse and Local AI commands
+  answer "… isn't available on this device.", and the desktop and tray
+  switches are saved as off and never reach the agent.
+- Next (4b): Android and iOS builds of the shell (mobile entry point, no tray
+  on mobile, the Android keyring store), and emulator and simulator smoke
+  tests in CI.
