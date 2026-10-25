@@ -18,14 +18,15 @@ pub fn test_responses_url() -> Option<String> {
         .filter(|raw| !raw.is_empty())
 }
 
-/// A phone gets no environment from the test runner, so a phone smoke build
-/// carries the mock URL from build time. Still loopback-only, as above.
+/// Where ui/e2e/phone.mjs serves its mock model (`adb reverse` maps it on
+/// Android; the iOS simulator shares the host's loopback).
+pub const PHONE_SMOKE_URL: &str = "http://127.0.0.1:4610/v1/responses";
+
+/// A phone gets no environment from the test runner, and Xcode's build drops
+/// the job's environment, so a phone smoke build carries the mock URL as a
+/// constant. Still loopback-only, as above.
 fn phone_smoke_url() -> Option<String> {
-    if cfg!(feature = "phone-smoke") {
-        option_env!("GROKHUB_PHONE_SMOKE_URL").map(str::to_string)
-    } else {
-        None
-    }
+    cfg!(feature = "phone-smoke").then(|| PHONE_SMOKE_URL.to_string())
 }
 
 fn entry() -> Result<keyring::Entry, String> {
@@ -76,5 +77,14 @@ mod tests {
     #[test]
     fn only_a_phone_smoke_build_carries_a_mock_url() {
         assert_eq!(phone_smoke_url(), None);
+    }
+
+    #[cfg(feature = "phone-smoke")]
+    #[test]
+    fn a_phone_smoke_build_points_chat_at_the_loopback_mock() {
+        assert_eq!(
+            phone_smoke_url(),
+            Some("http://127.0.0.1:4610/v1/responses".to_string())
+        );
     }
 }

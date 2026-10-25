@@ -292,8 +292,9 @@ connectors only.
   computer-use are `cfg(desktop)`, and phones never build `grokhub-desktop`.
   A phone app has no usable home folder (Android sets none), so at startup
   `HOME` and `GROKHUB_CONFIG` point into the app's data folder.
-- Smoke build: `VITE_PHONE_SMOKE=1`, `GROKHUB_PHONE_SMOKE_URL` (read at build
-  time, loopback only) and `--features phone-smoke`. WebDriver can't reach a
+- Smoke build: `VITE_PHONE_SMOKE=1` and `--features phone-smoke`, which points
+  chat at the loopback mock (`PHONE_SMOKE_URL`, a constant because Xcode's
+  build drops the job's environment). WebDriver can't reach a
   phone's webview, so the app drives itself (`ui/src/phoneSmoke.ts`). It
   checks that the report hides the desktop features and Pulse isn't shown,
   sends one chat, waits for the mock's reply, and writes `phone-smoke.txt`

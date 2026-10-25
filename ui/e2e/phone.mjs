@@ -7,8 +7,9 @@
 //   node e2e/phone.mjs android <app-debug.apk>
 //   node e2e/phone.mjs ios <GrokHub Shell.app>
 //
-// Build the app with VITE_PHONE_SMOKE=1, GROKHUB_PHONE_SMOKE_URL set to the
-// MOCK_URL below and `--features phone-smoke`. Android needs adb, iOS xcrun.
+// Build the app with VITE_PHONE_SMOKE=1 and `--features phone-smoke`, which
+// points chat at MOCK_URL below (PHONE_SMOKE_URL in src-tauri/src/credential.rs).
+// Android needs adb, iOS xcrun.
 
 import { execFileSync } from "node:child_process";
 import { createServer } from "node:http";

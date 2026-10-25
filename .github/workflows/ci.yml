@@ -329,7 +329,6 @@ jobs:
     timeout-minutes: 60
     env:
       VITE_PHONE_SMOKE: "1"
-      GROKHUB_PHONE_SMOKE_URL: http://127.0.0.1:4610/v1/responses
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -387,7 +386,6 @@ jobs:
     timeout-minutes: 60
     env:
       VITE_PHONE_SMOKE: "1"
-      GROKHUB_PHONE_SMOKE_URL: http://127.0.0.1:4610/v1/responses
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
