@@ -6,6 +6,31 @@ use std::path::{Path, PathBuf};
 
 pub const FILE: &str = "shell.json";
 
+/// How chat handles tools that change things, as the cabin's permission mode.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Approvals {
+    /// A short judge call approves routine steps and asks about the rest.
+    Auto,
+    /// Writes and commands run without a card. Hard-class steps still ask.
+    Always,
+    /// Every write and command waits for Allow or Deny. A value this build
+    /// does not know reads as Ask, the safe default (serde wants it last).
+    #[default]
+    #[serde(other)]
+    Ask,
+}
+
+impl Approvals {
+    pub fn mode(self) -> grokhub_agent::PermMode {
+        match self {
+            Self::Ask => grokhub_agent::PermMode::Ask,
+            Self::Auto => grokhub_agent::PermMode::Auto,
+            Self::Always => grokhub_agent::PermMode::Always,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct ShellSettings {
@@ -13,6 +38,7 @@ pub struct ShellSettings {
     pub close_to_tray: bool,
     /// The folder the agent works in. Empty means the cabin's default.
     pub workspace: String,
+    pub approvals: Approvals,
 }
 
 impl Default for ShellSettings {
@@ -21,6 +47,7 @@ impl Default for ShellSettings {
             model: grokhub_agent::DEFAULT_MODEL.to_string(),
             close_to_tray: true,
             workspace: String::new(),
+            approvals: Approvals::Ask,
         }
     }
 }
@@ -78,6 +105,7 @@ mod tests {
                 model: "grok-4.7".into(),
                 close_to_tray: true,
                 workspace: String::new(),
+                approvals: Approvals::Ask,
             }
         );
     }
@@ -89,12 +117,14 @@ mod tests {
             model: "grok-5".into(),
             close_to_tray: false,
             workspace: "/work/notes".into(),
+            approvals: Approvals::Always,
         };
         save(&dir, &wanted).expect("save");
         assert_eq!(load(&dir), wanted);
         let raw = std::fs::read_to_string(path(&dir)).expect("file");
         assert!(raw.contains("\"closeToTray\": false"), "{raw}");
         assert!(raw.contains("\"workspace\": \"/work/notes\""), "{raw}");
+        assert!(raw.contains("\"approvals\": \"always\""), "{raw}");
         assert!(!dir.join("shell.json.tmp").exists());
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -112,6 +142,7 @@ mod tests {
                 model: "grok-4.7".into(),
                 close_to_tray: false,
                 workspace: String::new(),
+                approvals: Approvals::Ask,
             }
         );
         let _ = std::fs::remove_dir_all(&dir);
@@ -124,8 +155,24 @@ mod tests {
             model: " ".into(),
             close_to_tray: true,
             workspace: String::new(),
+            approvals: Approvals::Ask,
         };
         assert_eq!(save(&dir, &blank), Err("Pick a model.".to_string()));
         assert!(!path(&dir).exists());
+    }
+
+    #[test]
+    fn an_unknown_approvals_value_reads_as_ask() {
+        let dir = temp_dir("approvals");
+        std::fs::create_dir_all(&dir).expect("dir");
+        std::fs::write(path(&dir), r#"{"model":"grok-5","approvals":"yolo"}"#).expect("write");
+        let loaded = load(&dir);
+        assert_eq!(
+            (loaded.model.as_str(), loaded.approvals),
+            ("grok-5", Approvals::Ask)
+        );
+        std::fs::write(path(&dir), r#"{"approvals":"auto"}"#).expect("write");
+        assert_eq!(load(&dir).approvals, Approvals::Auto);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
