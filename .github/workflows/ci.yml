@@ -351,12 +351,18 @@ jobs:
           cache-on-failure: true
           save-if: ${{ github.event_name == 'push' }}
       - run: npm ci --prefix ui
+      # The Gradle and Xcode projects call the CLI back while they build. The
+      # npm CLI records a path relative to where it ran, which they can't
+      # find, so the phone jobs use cargo's.
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: tauri-cli@2.12.4
       - name: Smoke build
         shell: bash
         run: |
           export NDK_HOME="$ANDROID_NDK_LATEST_HOME"
-          ui/node_modules/.bin/tauri android init --ci
-          ui/node_modules/.bin/tauri android build --ci --debug --apk --target x86_64 --features phone-smoke
+          cargo tauri android init --ci
+          cargo tauri android build --ci --debug --apk --target x86_64 --features phone-smoke
           apk=$(find src-tauri/gen/android -name '*.apk' -path '*debug*' | head -1)
           test -n "$apk"
           echo "APK=$apk" >> "$GITHUB_ENV"
@@ -399,11 +405,14 @@ jobs:
           cache-on-failure: true
           save-if: ${{ github.event_name == 'push' }}
       - run: npm ci --prefix ui
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: tauri-cli@2.12.4
       - name: Smoke build
         run: |
           brew list xcodegen >/dev/null 2>&1 || brew install xcodegen
-          ui/node_modules/.bin/tauri ios init --ci
-          ui/node_modules/.bin/tauri ios build --ci --debug --target aarch64-sim --features phone-smoke
+          cargo tauri ios init --ci
+          cargo tauri ios build --ci --debug --target aarch64-sim --features phone-smoke
           app=$(find src-tauri/gen/apple "$HOME/Library/Developer/Xcode/DerivedData" -name '*.app' -type d -path '*simulator*' 2>/dev/null | head -1)
           test -n "$app"
           echo "APP=$app" >> "$GITHUB_ENV"
