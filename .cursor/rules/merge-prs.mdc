@@ -5,12 +5,12 @@ alwaysApply: true
 
 # Merges, tags, releases
 
-Done and green is **not** a ship. Bots take a PR to **green and ready** and stop there:
+A green PR into `beta` is ready to land. Agents squash-merge it themselves; promoting to `main`, tagging, and releasing stay on Jeremy's say:
 
 - **Beta first:** every new feature and fix PR, from every bot (Cursor, Claude, GrokHub), targets `beta`. `beta` moves to `main` only on Jeremy's say, as one squash-merged `beta` → `main` PR. A hotfix goes to `main` only on his say, and `main` is then merged back into `beta` (merge commit, no force).
 
-- **Green and ready:** Linux and Windows CI pass (find the cause before at most one rerun), and the PR body carries the proof of work, the base branch and its starting SHA, and a Skipped / not verified section. Then report the PR link, the starting base SHA, the head SHA, and the CI run and its results.
-- **Merge into beta on green:** every agent squash-merges its own PR into `beta` as soon as CI is green; no human-review hold (Jeremy, 2026-10-24). **Never** promote `beta` to `main`, push to `main`, tag, or release without Jeremy's explicit say.
+- **Green and ready:** Linux and Windows CI pass (find the cause before at most one rerun), and the PR body carries the proof of work, the base branch and its starting SHA, and a Skipped / not verified section. Report the PR link, the starting base SHA, the head SHA, and the CI run and its results, then squash-merge into `beta` (next bullet).
+- **Merge into beta on green:** every agent squash-merges its own PR into `beta` as soon as CI is green; no human-review hold (Jeremy, 2026-10-24; confirmed 2026-10-25). **Never** promote `beta` to `main`, push to `main`, tag, or release without Jeremy's explicit say.
 - **Latest base branch:** the base is `beta` for feature and fix PRs and `main` for hotfixes and the promotion. Fetch origin and re-check that the branch holds the latest base before reporting it ready, right before merging, and again before a tag he asked for; merge the base in first when it doesn't, and get it green again. Name the base branch and its starting SHA in the PR body and the report.
 - **Merge:** squash and merge into `beta` on green, in stack order. Leave PRs he has parked open and untouched. Merges to `main` only on his say.
 - **Main CI** must pass after a merge before any tag he asked for (find the cause before at most one rerun).
