@@ -60,6 +60,7 @@ pub use grokhub_proto::inhabit;
 pub mod interests;
 pub mod journal;
 pub mod learning;
+pub mod local_picker;
 pub mod local_setup;
 pub mod mcp_catalog;
 pub mod mcp_oauth;

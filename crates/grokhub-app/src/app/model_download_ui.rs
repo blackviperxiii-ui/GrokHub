@@ -112,13 +112,14 @@ pub(super) fn outcome_status(m: &LocalModel, out: &Outcome, dir: &Path) -> Strin
 }
 
 impl Cabin {
-    /// The downloaded model's name, when one passed its check.
-    pub(super) fn downloaded_model_name(&self) -> Option<&'static str> {
-        self.setup
-            .installed
-            .as_ref()
-            .and_then(|r| ls::model_by_id(&r.id))
-            .map(|m| m.name)
+    /// The downloaded model's name, when one passed its check. An install the
+    /// catalog no longer lists (Qwen 2.5) still loads, so it goes by its file.
+    pub(super) fn downloaded_model_name(&self) -> Option<&str> {
+        self.setup.installed.as_ref().map(|r| {
+            ls::model_by_id(&r.id)
+                .map(|m| m.name)
+                .unwrap_or(r.file.as_str())
+        })
     }
 
     /// The Settings "Local model" row: the download in flight, what's on disk, or nothing.
@@ -313,7 +314,10 @@ mod tests {
 
     impl Fetch for FakeHf {
         fn open(&self, url: &str, offset: u64) -> Result<md::Opened, String> {
-            assert_eq!(url, "https://huggingface.co/bartowski/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/Qwen2.5-1.5B-Instruct-Q4_K_M.gguf");
+            assert_eq!(
+                url,
+                "https://huggingface.co/acme/test-GGUF/resolve/main/test.gguf"
+            );
             Ok((
                 Box::new(Cursor::new(self.0[offset as usize..].to_vec())),
                 offset,
@@ -332,15 +336,25 @@ mod tests {
         std::fs::create_dir_all(&root).expect("dir");
         let _pin = crate::config::TestConfigDir::set(root.join("cfg"));
         let dir = root.join("models");
-        let m = ls::model_by_id("qwen2.5-1.5b-instruct-q4_k_m").expect("1.5B");
+        let e2b = ls::model_by_id("gemma-4-e2b-it-q4_k_m").expect("E2B");
         // The real fetch carries no data, so the egress guard lets both Hugging Face calls through.
-        assert_eq!(crate::xai::egress_ok(&md::download_url(m), &[]), Ok(()));
-        assert_eq!(crate::xai::egress_ok(&md::tree_url(m.repo), &[]), Ok(()));
+        assert_eq!(crate::xai::egress_ok(&md::download_url(e2b), &[]), Ok(()));
+        assert_eq!(crate::xai::egress_ok(&md::tree_url(e2b.repo), &[]), Ok(()));
+        // A real GGUF can't be faked, so this model is pinned to the fake body.
+        let body = b"tiny fake gguf".to_vec();
+        let m: &'static LocalModel = Box::leak(Box::new(LocalModel {
+            id: "test-model",
+            name: "Test Model",
+            repo: "acme/test-GGUF",
+            file: "test.gguf",
+            sha256: md::sha256_hex(&body).leak(),
+            ..*e2b
+        }));
         let mut app = Cabin::quiet_for_test();
-        app.start_model_download_with(m, dir.clone(), Box::new(FakeHf(b"tiny fake gguf".to_vec())));
+        app.start_model_download_with(m, dir.clone(), Box::new(FakeHf(body)));
         assert_eq!(
             app.status,
-            format!("Downloading Qwen 2.5 1.5B to {}", dir.display())
+            format!("Downloading Test Model to {}", dir.display())
         );
         for _ in 0..500 {
             app.poll_model_download();
@@ -352,13 +366,10 @@ mod tests {
         assert!(app.setup.dl.is_none(), "the download never finished");
         assert_eq!(
             app.status,
-            format!("Downloaded Qwen 2.5 1.5B (0 MB) to {}", dir.display())
+            format!("Downloaded Test Model (0 MB) to {}", dir.display())
         );
         let rec = app.setup.installed.clone().expect("installed");
-        assert_eq!(
-            (rec.id.as_str(), rec.bytes),
-            ("qwen2.5-1.5b-instruct-q4_k_m", 14)
-        );
+        assert_eq!((rec.id.as_str(), rec.bytes), ("test-model", 14));
         assert_eq!(md::installed(&dir), Some(rec));
         assert!(
             app.cfg.local_model,
@@ -366,10 +377,11 @@ mod tests {
         );
         // No runtime in this build: the route stays off and the rows say why.
         assert!(!grokhub_agent::route::local::enabled());
-        assert_eq!(app.downloaded_model_name(), Some("Qwen 2.5 1.5B"));
+        // Not a catalog id, like an older Qwen 2.5 install: it goes by its file.
+        assert_eq!(app.downloaded_model_name(), Some("test.gguf"));
         assert_eq!(
             app.local_model_row_hint(),
-            format!("Qwen 2.5 1.5B (0 MB) is in {}.", models_dir().display())
+            format!("test.gguf (0 MB) is in {}.", models_dir().display())
         );
         grokhub_agent::route::local::set_enabled(false);
         let _ = std::fs::remove_dir_all(root);
@@ -377,37 +389,37 @@ mod tests {
 
     #[test]
     fn each_ending_reads_as_a_plain_status_line() {
-        let m = ls::model_by_id("qwen2.5-7b-instruct-q4_k_m").expect("7B");
+        let m = ls::model_by_id("gemma-4-e4b-it-q4_k_m").expect("E4B");
         let dir = Path::new("/home/v/GrokHub/models");
         assert_eq!(
             outcome_status(m, &Outcome::Paused { done: 2_100 * MIB }, dir),
-            "Paused Qwen 2.5 7B at 2.1 GB of 4.6 GB. Resume picks up where it stopped."
+            "Paused Gemma 4 E4B at 2.1 GB of 5 GB. Resume picks up where it stopped."
         );
         assert_eq!(
             outcome_status(m, &Outcome::Cancelled, dir),
-            "Cancelled the Qwen 2.5 7B download."
+            "Cancelled the Gemma 4 E4B download."
         );
         assert_eq!(
             outcome_status(m, &Outcome::BadChecksum, dir),
-            "Qwen 2.5 7B didn't match its published checksum, so it was deleted. Try the download again."
+            "Gemma 4 E4B didn't match its published checksum, so it was deleted. Try the download again."
         );
         assert_eq!(
             outcome_status(
                 m,
-                &Outcome::Failed("The download of Qwen 2.5 7B stopped: timed out".into()),
+                &Outcome::Failed("The download of Gemma 4 E4B stopped: timed out".into()),
                 dir
             ),
-            "The download of Qwen 2.5 7B stopped: timed out Resume picks up where it stopped."
+            "The download of Gemma 4 E4B stopped: timed out Resume picks up where it stopped."
         );
         let rec = Installed {
             id: m.id.into(),
             file: m.file.into(),
             sha256: "a".repeat(64),
-            bytes: 4_680 * MIB,
+            bytes: 5_089 * MIB,
         };
         assert_eq!(
             outcome_status(m, &Outcome::Done(rec), dir),
-            format!("Downloaded Qwen 2.5 7B (4.6 GB) to {}", dir.display())
+            format!("Downloaded Gemma 4 E4B (5 GB) to {}", dir.display())
         );
     }
 }
