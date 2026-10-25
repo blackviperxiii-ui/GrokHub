@@ -8,6 +8,7 @@ pub mod agent;
 pub mod automations;
 pub mod connectors;
 pub mod credential;
+pub mod local_ai;
 pub mod memory;
 pub mod pulse;
 pub mod settings;
@@ -390,18 +391,56 @@ async fn disconnect_connector(
 }
 
 #[tauri::command]
-fn get_pulse(state: State<'_, ShellState>) -> Result<pulse::Page, String> {
-    pulse::load(&state.config_dir, grokhub_core::now_ms())
+async fn get_pulse(state: State<'_, ShellState>) -> Result<pulse::Page, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || pulse::load(&dir, grokhub_core::now_ms())).await?
 }
 
 #[tauri::command]
-fn pulse_act(
+async fn pulse_act(
     state: State<'_, ShellState>,
     id: String,
     act: pulse::Act,
     day: pulse::Day,
 ) -> Result<pulse::Page, String> {
-    pulse::act(&state.config_dir, &id, act, &day, grokhub_core::now_ms())
+    let dir = state.config_dir.clone();
+    off_main(move || pulse::act(&dir, &id, act, &day, grokhub_core::now_ms())).await?
+}
+
+#[tauri::command]
+async fn get_local_ai(state: State<'_, ShellState>) -> Result<local_ai::LocalAiView, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || local_ai::refreshed(&dir)).await
+}
+
+#[tauri::command]
+async fn save_local_ai(
+    state: State<'_, ShellState>,
+    config: local_ai::LocalAiConfig,
+) -> Result<local_ai::LocalAiView, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || local_ai::save_view(&dir, config)).await?
+}
+
+#[tauri::command]
+async fn reset_local_ai(state: State<'_, ShellState>) -> Result<local_ai::LocalAiView, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || local_ai::reset(&dir)).await?
+}
+
+#[tauri::command]
+async fn check_model_file(
+    state: State<'_, ShellState>,
+    path: String,
+) -> Result<local_ai::FileRow, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || local_ai::check_file(&dir, &path)).await?
+}
+
+#[tauri::command]
+async fn run_local_speed_test(state: State<'_, ShellState>) -> Result<String, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || local_ai::speed_test(&dir)).await?
 }
 
 fn show_main(app: &AppHandle) {
@@ -415,7 +454,9 @@ fn show_main(app: &AppHandle) {
 fn build_tray(app: &tauri::App) -> tauri::Result<()> {
     let show = MenuItem::with_id(app, "show", "Show GrokHub", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&show, &quit])?;
+    let local = MenuItem::with_id(app, "local", local_ai::TRAY_CHECKING, false, None::<&str>)?;
+    let menu = Menu::with_items(app, &[&local, &show, &quit])?;
+    local_ai::start_tray(local, app.state::<ShellState>().config_dir.clone());
     let mut tray = TrayIconBuilder::with_id("main")
         .tooltip("GrokHub")
         .menu(&menu)
@@ -555,7 +596,12 @@ pub fn run() {
             sign_out_connector,
             disconnect_connector,
             get_pulse,
-            pulse_act
+            pulse_act,
+            get_local_ai,
+            save_local_ai,
+            reset_local_ai,
+            check_model_file,
+            run_local_speed_test
         ])
         .run(tauri::generate_context!());
     if let Err(err) = built {

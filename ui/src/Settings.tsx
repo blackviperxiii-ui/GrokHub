@@ -7,6 +7,7 @@ import {
   type Approvals,
   type Settings as Shape,
 } from "./api";
+import { LocalAi } from "./LocalAi";
 
 const APPROVALS: Record<Approvals, { label: string; note: string }> = {
   ask: {
@@ -140,6 +141,7 @@ export function Settings() {
         )}
       </div>
       {note && <p className="note">{note}</p>}
+      <LocalAi />
     </section>
   );
 }
