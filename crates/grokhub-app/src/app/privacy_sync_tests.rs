@@ -899,12 +899,12 @@ fn scope_rows_are_all_off_under_what_grokhub_can_read() {
     );
     assert!(!p.has("Revoke"), "nothing granted, nothing to revoke");
     assert!(
-        p.has("Off. Your calendar events, read through Grok Build's Google Calendar connector."),
+        p.has("Off. Not read yet: GrokHub has no calendar reader, so allowing it reads nothing today."),
         "plain hints"
     );
     assert!(
-        p.has("Off. Your mail, read through Grok Build's Gmail connector."),
-        "the hint names where mail is read"
+        p.has("Off. Not read yet: GrokHub has no mail reader, so allowing it reads nothing today."),
+        "the hint says mail is not read yet"
     );
     // SB-04: the folder row offers the native dialog next to the typed path.
     let choose = p.pill_by("Files in a folder", super::scope_ui::CHOOSE_FOLDER);
@@ -973,7 +973,9 @@ fn a_scope_is_granted_by_a_pointer_click_only_and_revoked_from_settings_or_priva
         .texts
         .iter()
         .any(|t| t.0.starts_with("On since ") && t.0.ends_with("how often you open them.")));
-    assert!(p.has("Off. Your mail, read through Grok Build's Gmail connector."));
+    assert!(
+        p.has("Off. Not read yet: GrokHub has no mail reader, so allowing it reads nothing today.")
+    );
 
     // A folder: typed, then clicked. Home itself is refused even with a click.
     let home = std::env::var("HOME").unwrap_or_default();

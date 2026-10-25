@@ -440,7 +440,7 @@ impl Cabin {
                     Err(mpsc::TryRecvError::Empty) => break,
                     Err(mpsc::TryRecvError::Disconnected) => {
                         run.end = Some(if run.say.trim().is_empty() {
-                            BgEnd::Failed("Grok Build session missing".into())
+                            BgEnd::Failed("Background session missing".into())
                         } else {
                             BgEnd::Done
                         });
