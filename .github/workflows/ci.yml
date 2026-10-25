@@ -405,12 +405,14 @@ jobs:
           cache-on-failure: true
           save-if: ${{ github.event_name == 'push' }}
       - run: npm ci --prefix ui
-      - uses: taiki-e/install-action@v2
-        with:
-          tool: tauri-cli@2.12.4
+      # Built here rather than fetched: the prebuilt macOS binary is x86_64,
+      # and under Rosetta it can't brew-install what `ios init` needs.
+      - name: cargo tauri
+        run: cargo install tauri-cli --version 2.12.4 --locked
       - name: Smoke build
         run: |
           brew list xcodegen >/dev/null 2>&1 || brew install xcodegen
+          brew list libimobiledevice >/dev/null 2>&1 || brew install libimobiledevice
           cargo tauri ios init --ci
           cargo tauri ios build --ci --debug --target aarch64-sim --features phone-smoke
           app=$(find src-tauri/gen/apple "$HOME/Library/Developer/Xcode/DerivedData" -name '*.app' -type d -path '*simulator*' 2>/dev/null | head -1)
