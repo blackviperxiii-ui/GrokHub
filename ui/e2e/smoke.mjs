@@ -527,6 +527,48 @@ async function localAi(s, config) {
   console.log("reset to Auto");
 }
 
+// Labs: a folder bundle installs off and untrusted into the config folder,
+// then Trust and Turn on land in the same plugin-state.json the cabin reads.
+async function labs(s, config) {
+  const bundle = join(config, "smoke-bundle");
+  mkdirSync(bundle, { recursive: true });
+  writeFileSync(
+    join(bundle, "plugin.json"),
+    JSON.stringify({ name: "smoke-kit", version: "0.1.0", description: "Smoke bundle" }),
+  );
+  await tab(s, "Settings");
+  await section(s, "Labs");
+  const input = await waitFor("the install box", () => find(s, ".labs-row input"));
+  await wd("POST", `${s}/element/${input}/value`, { text: bundle });
+  await click(s, ".labs-row button[type='submit']");
+  const step = async (label, state) => {
+    const button = await waitFor(`the ${label} button`, async () => {
+      const el = await wd("POST", `${s}/element`, {
+        using: "xpath",
+        value: `//li[@aria-label='smoke-kit']//button[normalize-space()='${label}']`,
+      });
+      return el[ELEMENT];
+    });
+    await wd("POST", `${s}/element/${button}/click`, {});
+    await waitFor(`smoke-kit ${state}`, async () => {
+      const t = await textOf(s, "li[aria-label='smoke-kit'] .card-status");
+      return t === state ? t : null;
+    });
+  };
+  await waitFor("the installed bundle", async () => {
+    const t = await textOf(s, "li[aria-label='smoke-kit'] .card-status");
+    return t === "Not trusted · off" ? t : null;
+  });
+  await step("Trust", "Trusted · off");
+  await step("Turn on", "Trusted · on");
+  const state = JSON.parse(readFileSync(join(config, "plugin-state.json"), "utf8"));
+  const entry = state.entries?.["smoke-kit"];
+  if (!entry?.enabled || !entry.hash) {
+    throw new Error(`plugin-state.json holds ${JSON.stringify(state)}`);
+  }
+  console.log("labs: bundle installed off, trusted, then turned on");
+}
+
 async function main() {
   const mock = await startMock();
   const config = mkdtempSync(join(tmpdir(), "grokhub-shell-smoke-"));
@@ -635,6 +677,7 @@ async function main() {
     await palette(s);
     await plan(s, workspace);
     await localAi(s, config);
+    await labs(s, config);
     await desktop(s, config);
     if (process.env.SMOKE_WEB === "1") await web(s);
     console.log("smoke ok");

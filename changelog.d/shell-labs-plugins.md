@@ -1,0 +1,1 @@
+- Shell: Settings has a Labs section with Plugins, labeled Preview. Install a bundle from a URL or folder, trust it, then turn it on or off, or fetch a marketplace list. It's the same plugin state as the cabin's Labs page.

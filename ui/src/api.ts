@@ -29,6 +29,8 @@ export interface Capabilities {
   tray: boolean;
   /** Settings → Web access: this computer serves the web app. */
   webAccess: boolean;
+  /** Settings → Labs → Plugins. */
+  plugins: boolean;
   /** The web app, a remote for the desktop: settings and the key stay there. */
   remote?: boolean;
 }
@@ -40,6 +42,7 @@ export const CORE_ONLY: Capabilities = {
   localAi: false,
   tray: false,
   webAccess: false,
+  plugins: false,
 };
 
 /** The web app gets chat, memory, automations and connectors only. */
@@ -495,4 +498,53 @@ export function getWebAccess(): Promise<WebAccess> {
 
 export function setWebAccess(on: boolean): Promise<WebAccess> {
   return invoke<WebAccess>("set_web_access", { on });
+}
+
+/** Settings → Labs → Plugins (src-tauri/src/plugins.rs). */
+export interface PluginRow {
+  name: string;
+  version: string;
+  /** What the bundle brings: skills, hooks, MCP servers, agents. */
+  summary: string;
+  trusted: boolean;
+  enabled: boolean;
+  /** Installed through GrokHub, so it can be removed here. */
+  installed: boolean;
+}
+
+export interface PluginPage {
+  rows: PluginRow[];
+  marketUrl: string;
+  /** What the last action did, or why it failed. */
+  note: string;
+}
+
+export interface PluginEntry {
+  name: string;
+  version: string;
+  description: string;
+  source: string;
+}
+
+export interface PluginMarket {
+  entries: PluginEntry[];
+  page: PluginPage;
+}
+
+export type PluginAct = "trust" | "enable" | "disable" | "remove";
+
+export function getPlugins(): Promise<PluginPage> {
+  return invoke<PluginPage>("get_plugins");
+}
+
+export function pluginAct(name: string, act: PluginAct): Promise<PluginPage> {
+  return invoke<PluginPage>("plugin_act", { name, act });
+}
+
+export function installPlugin(source: string): Promise<PluginPage> {
+  return invoke<PluginPage>("install_plugin", { source });
+}
+
+export function fetchPluginMarket(url: string): Promise<PluginMarket> {
+  return invoke<PluginMarket>("fetch_plugin_market", { url });
 }
