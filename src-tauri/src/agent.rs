@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use grokhub_agent::{
     AuthKind, CancelToken, DesktopOps, Engine, EngineParts, Gate, HaltCheck, ModelClient,
-    NativeEngine, PermAnswer, PermMode, PermitInbox, PermitNote, StampHalt, SteerQueue,
+    NativeEngine, PermAnswer, PermMode, PermitInbox, PermitNote, SteerQueue,
 };
 use grokhub_core::wire::AcpEvent;
 use serde::Serialize;
@@ -209,8 +209,28 @@ impl Session {
 }
 
 /// The real desktop tools behind the hard gate, with the shell as their host.
+#[cfg(desktop)]
 fn native_desktop() -> Box<dyn DesktopOps> {
     Box::new(grokhub_desktop::NativeDesktop::new())
+}
+
+/// Phones have no desktop tools; the capability report keeps them unoffered,
+/// and a call that slips through is refused.
+#[cfg(mobile)]
+fn native_desktop() -> Box<dyn DesktopOps> {
+    struct NoDesktop;
+    impl DesktopOps for NoDesktop {
+        fn halted(&self) -> bool {
+            false
+        }
+        fn locked(&self) -> bool {
+            false
+        }
+        fn call(&self, _name: &str, _args: &serde_json::Value) -> grokhub_agent::ToolOutput {
+            grokhub_agent::ToolOutput::err("Desktop control isn't available on this device.")
+        }
+    }
+    Box::new(NoDesktop)
 }
 
 fn serve(
@@ -264,7 +284,8 @@ fn serve(
             }
         };
         // The desktop Halt (the cabin's hotkey or a halt stamp) stops this prompt too.
-        engine.set_halt(Box::new(StampHalt {
+        #[cfg(desktop)]
+        engine.set_halt(Box::new(grokhub_agent::StampHalt {
             started_ms: grokhub_core::now_ms(),
             read: grokhub_desktop::read_halt_stamp,
         }));

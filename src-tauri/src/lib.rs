@@ -22,7 +22,9 @@ use std::time::Duration;
 use grokhub_agent::{AuthKind, XaiClient};
 use serde::Serialize;
 use settings::ShellSettings;
+#[cfg(desktop)]
 use tauri::menu::{Menu, MenuItem};
+#[cfg(desktop)]
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Emitter, Manager, State, WindowEvent};
 
@@ -102,6 +104,7 @@ fn save_settings(
         desktop_control,
     };
     settings::save(&state.config_dir, &next)?;
+    #[cfg(desktop)]
     if current(&state).desktop_control != desktop_control {
         grokhub_desktop::set_desktop_enabled(desktop_control);
     }
@@ -468,6 +471,7 @@ async fn run_local_speed_test(state: State<'_, ShellState>) -> Result<String, St
     off_main(move || local_ai::speed_test(&dir)).await?
 }
 
+#[cfg(desktop)]
 fn show_main(app: &AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.unminimize();
@@ -476,6 +480,7 @@ fn show_main(app: &AppHandle) {
     }
 }
 
+#[cfg(desktop)]
 fn build_tray(app: &tauri::App) -> tauri::Result<()> {
     let show = MenuItem::with_id(app, "show", "Show GrokHub", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
@@ -576,6 +581,7 @@ mod tests {
 
 /// The desktop tools' host: the shell's config folder and its switch. Cua is a
 /// cabin-only spike, so it stays off here.
+#[cfg(desktop)]
 fn install_desktop_host() {
     grokhub_desktop::host::install(grokhub_desktop::host::Host {
         config_dir: grokhub_agent::perm::config_dir,
@@ -593,21 +599,55 @@ fn install_desktop_host() {
     });
 }
 
-pub fn run() {
-    install_desktop_host();
-    let config_dir = grokhub_agent::perm::config_dir();
-    let loaded = settings::load(&config_dir);
-    if loaded.desktop_control && capabilities::current().desktop_control {
-        grokhub_desktop::set_desktop_enabled(true);
+/// A phone app has no usable home folder of its own (Android sets none), so
+/// the config and the default work folder live in the app's data folder.
+/// This runs before anything reads either.
+#[cfg(mobile)]
+fn phone_home(app: &tauri::App) -> tauri::Result<()> {
+    let data = app.path().app_data_dir()?;
+    std::fs::create_dir_all(&data)?;
+    std::env::set_var("HOME", &data);
+    std::env::set_var("GROKHUB_CONFIG", data.join("config"));
+    Ok(())
+}
+
+/// Phone smoke builds (`--features phone-smoke`) report the scripted chat
+/// round-trip here, and CI reads the file back from the device. Other builds
+/// refuse.
+#[tauri::command]
+fn phone_smoke_report(app: AppHandle, text: String) -> Result<(), String> {
+    if !cfg!(feature = "phone-smoke") {
+        return Err("This build has no smoke mode.".into());
     }
+    let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    std::fs::write(dir.join("phone-smoke.txt"), &text).map_err(|e| e.to_string())?;
+    println!("phone smoke: {text}");
+    Ok(())
+}
+
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
+pub fn run() {
     let built = tauri::Builder::default()
-        .manage(ShellState {
-            config_dir,
-            settings: Mutex::new(loaded),
-            chats: Mutex::new(HashMap::new()),
-        })
         .setup(|app| {
+            #[cfg(mobile)]
+            phone_home(app)?;
+            let config_dir = grokhub_agent::perm::config_dir();
+            let loaded = settings::load(&config_dir);
+            #[cfg(desktop)]
+            {
+                install_desktop_host();
+                if loaded.desktop_control && capabilities::current().desktop_control {
+                    grokhub_desktop::set_desktop_enabled(true);
+                }
+            }
+            app.manage(ShellState {
+                config_dir,
+                settings: Mutex::new(loaded),
+                chats: Mutex::new(HashMap::new()),
+            });
             build_main_window(app)?;
+            #[cfg(desktop)]
             build_tray(app)?;
             Ok(())
         })
@@ -621,6 +661,7 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            phone_smoke_report,
             get_capabilities,
             get_settings,
             save_settings,
