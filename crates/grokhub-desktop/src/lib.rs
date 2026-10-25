@@ -22,6 +22,8 @@ mod pixels;
 #[cfg(target_os = "linux")]
 mod portal;
 #[cfg(target_os = "linux")]
+pub mod screen;
+#[cfg(target_os = "linux")]
 mod uinput_dev;
 #[cfg(unix)]
 mod wayland;

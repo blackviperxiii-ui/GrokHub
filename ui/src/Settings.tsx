@@ -24,12 +24,16 @@ const APPROVALS: Record<Approvals, { label: string; note: string }> = {
   },
 };
 
+export const DESKTOP_NOTE =
+  "Grok can see your screen, click and type. Deleting, sending, paying and credentials always wait for your OK.";
+
 export function Settings() {
   const [settings, setSettings] = useState<Shape | null>(null);
   const [model, setModel] = useState("");
   const [closeToTray, setCloseToTray] = useState(true);
   const [workspace, setWorkspace] = useState("");
   const [approvals, setApprovals] = useState<Approvals>("ask");
+  const [desktopControl, setDesktopControl] = useState(false);
   const [key, setKey] = useState("");
   const [note, setNote] = useState<string | null>(null);
 
@@ -39,6 +43,7 @@ export function Settings() {
     setCloseToTray(next.closeToTray);
     setWorkspace(next.workspace);
     setApprovals(next.approvals);
+    setDesktopControl(next.desktopControl);
   }
 
   useEffect(() => {
@@ -48,7 +53,9 @@ export function Settings() {
   async function save(event: FormEvent) {
     event.preventDefault();
     try {
-      show(await saveSettings(model.trim(), closeToTray, workspace.trim(), approvals));
+      show(
+        await saveSettings(model.trim(), closeToTray, workspace.trim(), approvals, desktopControl),
+      );
       setNote("Settings saved.");
     } catch (err) {
       setNote(String(err));
@@ -110,6 +117,15 @@ export function Settings() {
         <p className={approvals === "always" ? "note warn" : "note"}>
           {APPROVALS[approvals].note}
         </p>
+        <label className="check">
+          <input
+            type="checkbox"
+            checked={desktopControl}
+            onChange={(e) => setDesktopControl(e.target.checked)}
+          />
+          Let Grok control the desktop
+        </label>
+        {desktopControl && <p className="note warn">{DESKTOP_NOTE}</p>}
         <label className="check">
           <input
             type="checkbox"

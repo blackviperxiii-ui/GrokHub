@@ -49,7 +49,11 @@ function toolCall(callId, name, args) {
 // The loop holds a change to its done list ("the asked change is made",
 // "result checked"), as with a real model: write the note, re-read it, tick
 // the checklist, then reply in two pieces.
-function mockReply(callNumber) {
+function mockReply(callNumber, body) {
+  if (body.includes(DESK_PROMPT)) {
+    if (!body.includes("smoke-desk")) return toolCall("smoke-desk", "type", { text: DESK_TEXT });
+    return textReply(DESK_REPLY);
+  }
   if (callNumber === 1) return toolCall("smoke-write", "write", { path: NOTE, content: NOTE_TEXT });
   if (callNumber === 2) return toolCall("smoke-read", "read_file", { target_file: NOTE });
   if (callNumber === 3) {
@@ -60,10 +64,14 @@ function mockReply(callNumber) {
       ],
     });
   }
-  const half = REPLY.length >> 1;
+  return textReply(REPLY);
+}
+
+function textReply(text) {
+  const half = text.length >> 1;
   return [
-    { type: "response.output_text.delta", delta: REPLY.slice(0, half) },
-    { type: "response.output_text.delta", delta: REPLY.slice(half) },
+    { type: "response.output_text.delta", delta: text.slice(0, half) },
+    { type: "response.output_text.delta", delta: text.slice(half) },
     {
       type: "response.completed",
       response: { usage: { input_tokens: 3, output_tokens: 5 }, output: [] },
@@ -86,7 +94,8 @@ function startMock() {
     req.on("data", (chunk) => (body += chunk));
     req.on("end", () => {
       seen.push({ path: req.url, auth: req.headers.authorization, body });
-      const payload = sse(mockReply(seen.filter((c) => c.path === "/v1/responses").length));
+      const calls = seen.filter((c) => c.path === "/v1/responses").length;
+      const payload = sse(mockReply(calls, body));
       res.writeHead(200, {
         "Content-Type": "text/event-stream",
         "Content-Length": Buffer.byteLength(payload),
@@ -130,6 +139,9 @@ const ELEMENT = "element-6066-11e4-a52e-4f735466cecf";
 const AUTOMATION = "every day at 7am say hello from the smoke test";
 const MEMORY_NOTE = "the smoke test likes kumquats";
 const PULSE_ACTION = "close every done card on the smoke workboard";
+const DESK_PROMPT = "clear out the old folder from the terminal";
+const DESK_TEXT = "rm -rf ~/old";
+const DESK_REPLY = "Left the old folder alone";
 
 async function find(s, css) {
   const el = await wd("POST", `${s}/element`, { using: "css selector", value: css });
@@ -480,6 +492,7 @@ async function main() {
     await connectors(s, config);
     await pulse(s, config);
     await localAi(s, config);
+    await desktop(s, config);
     console.log("smoke ok");
   } catch (err) {
     // What the window and the mock saw, for a failed CI run.
@@ -500,6 +513,73 @@ async function main() {
     mock.server.close();
     rmSync(config, { recursive: true, force: true });
   }
+}
+
+// Computer-use: desktop tools are off until Settings turns them on. With the
+// switch on and approvals at Always, the model types a delete into the
+// desktop: the card must wait with nothing typed and no further model call,
+// and Deny must reach the model as a refusal.
+async function desktop(s, config) {
+  const offered = (call) => (JSON.parse(call.body).tools ?? []).map((t) => t.name);
+  const before = mockSeen.find((c) => c.path === "/v1/responses");
+  if (offered(before).includes("type")) throw new Error("desktop tools were offered while off");
+
+  await tab(s, "Settings");
+  const desk = await waitFor("the desktop switch", () =>
+    wd("POST", `${s}/element`, {
+      using: "xpath",
+      value: "//label[contains(., 'Let Grok control the desktop')]/input",
+    }).then((el) => el[ELEMENT]),
+  );
+  await wd("POST", `${s}/element/${desk}/click`, {});
+  const approvals = await find(s, ".settings > form select");
+  const always = await wd("POST", `${s}/element/${approvals}/element`, {
+    using: "css selector",
+    value: "option[value='always']",
+  });
+  await wd("POST", `${s}/element/${always[ELEMENT]}/click`, {});
+  await click(s, ".settings > form button[type='submit']");
+  await waitFor("the saved switch", () => {
+    const saved = JSON.parse(readFileSync(join(config, "shell.json"), "utf8"));
+    return saved.desktopControl === true && saved.approvals === "always";
+  });
+  console.log("desktop control on, approvals at Always");
+
+  await tab(s, "Chat");
+  const box = await waitFor("the message box", () => find(s, "textarea[aria-label='Message']"));
+  await wd("POST", `${s}/element/${box}/value`, { text: DESK_PROMPT });
+  await click(s, "form.composer button[type='submit']");
+  const card = await waitFor("the desktop permission card", async () => {
+    const cards = await wd("POST", `${s}/elements`, {
+      using: "css selector",
+      value: ".card.permission",
+    });
+    for (const el of cards) {
+      const t = await wd("GET", `${s}/element/${el[ELEMENT]}/text`);
+      if (t.includes(DESK_TEXT)) return { el: el[ELEMENT], text: t };
+    }
+    return null;
+  });
+  console.log(`desktop card shown: ${JSON.stringify(card.text.split("\n").slice(0, 2).join(" "))}`);
+  const deskCalls = () => mockSeen.filter((c) => c.body.includes(DESK_PROMPT));
+  if (!offered(deskCalls()[0]).includes("type")) throw new Error("desktop tools were not offered");
+  await sleep(1500);
+  if (deskCalls().length !== 1) {
+    throw new Error(`the turn went on without an OK: ${deskCalls().length} model calls`);
+  }
+  console.log("nothing typed while the card waited, in Always mode");
+
+  const deny = await wd("POST", `${s}/element/${card.el}/element`, {
+    using: "xpath",
+    value: ".//button[normalize-space()='Deny']",
+  });
+  await wd("POST", `${s}/element/${deny[ELEMENT]}/click`, {});
+  await waitFor("the reply after Deny", () => deskCalls().length === 2);
+  const refused = deskCalls()[1].body;
+  if (!refused.includes("User rejected the execution for tool `type`")) {
+    throw new Error("Deny never reached the model as a refusal");
+  }
+  console.log("Deny reached the model as a refusal");
 }
 
 main().catch((err) => {

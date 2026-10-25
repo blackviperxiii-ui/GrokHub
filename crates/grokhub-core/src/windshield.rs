@@ -312,6 +312,38 @@ pub fn tab_list_from_rows(rows: &[AtspiRow]) -> String {
     s
 }
 
+/// The AT-SPI walk the desktop tools run with `python3 -c`: one
+/// [`parse_atspi_line`] row per visible control. Exit 2 means no pyatspi.
+pub const ATSPI_PY: &str = r#"
+import sys
+try:
+    import pyatspi
+except Exception:
+    sys.exit(2)
+def walk(acc, n=0):
+    role = "object"
+    try:
+        name = (acc.name or "").replace(" ", "_")
+        role = (acc.getRoleName() or "object").replace(" ", "-")
+        ext = acc.queryComponent().getExtents(0)
+        w, h = int(ext.width), int(ext.height)
+        keep = n <= 8 or "tab" in role or "button" in role
+        if w > 0 and h > 0 and keep:
+            print(f"role={role} name={name} x={int(ext.x)} y={int(ext.y)} w={w} h={h}")
+    except Exception:
+        pass
+    if n > 12:
+        return
+    if n > 8 and "tab" not in role and "frame" not in role and "panel" not in role:
+        return
+    try:
+        for i in range(acc.childCount):
+            walk(acc.getChildAtIndex(i), n + 1)
+    except Exception:
+        pass
+walk(pyatspi.Registry.getDesktop(0))
+"#;
+
 /// `role=push button name=Install x=10 y=20 w=80 h=24`
 pub fn parse_atspi_line(line: &str) -> Option<AtspiRow> {
     let line = line.trim();
