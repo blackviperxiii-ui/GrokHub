@@ -9,6 +9,7 @@ import { Palette, VIEW_LABELS, views, type PaletteAction, type View } from "./Pa
 import { Pulse } from "./Pulse";
 import type { Section } from "./sections";
 import { Settings } from "./Settings";
+import { useHidingBar } from "./tabBar";
 import { applyTheme } from "./theme";
 
 export function App() {
@@ -17,6 +18,7 @@ export function App() {
   const [caps, setCaps] = useState<Capabilities>(CORE_ONLY);
   const [palette, setPalette] = useState(false);
   const [goTo, setGoTo] = useState<{ section: Section; n: number }>();
+  const barAway = useHidingBar(palette);
   useEffect(() => {
     getCapabilities()
       .catch(() => CORE_ONLY)
@@ -51,7 +53,7 @@ export function App() {
     }
   }
   return (
-    <div className="app">
+    <div className={barAway ? "app bar-away" : "app"}>
       <header className="topbar">
         <nav className="tabs" aria-label="Views">
           {views(caps).map((name) => (
