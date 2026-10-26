@@ -9,6 +9,7 @@ pub mod automations;
 pub mod capabilities;
 pub mod connectors;
 pub mod credential;
+pub mod interests;
 pub mod journal;
 pub mod local_ai;
 pub mod memory;
@@ -631,6 +632,34 @@ async fn fetch_plugin_market(
 }
 
 #[tauri::command]
+async fn get_interests(state: State<'_, ShellState>) -> Result<interests::Page, String> {
+    capabilities::needs(capabilities::current().pulse, "Pulse")?;
+    let dir = state.config_dir.clone();
+    off_main(move || interests::load(&dir)).await
+}
+
+#[tauri::command]
+async fn add_interest(
+    state: State<'_, ShellState>,
+    text: String,
+) -> Result<interests::Page, String> {
+    capabilities::needs(capabilities::current().pulse, "Pulse")?;
+    let dir = state.config_dir.clone();
+    off_main(move || interests::add(&dir, &text)).await?
+}
+
+#[tauri::command]
+async fn interest_act(
+    state: State<'_, ShellState>,
+    topic: String,
+    act: interests::Act,
+) -> Result<interests::Page, String> {
+    capabilities::needs(capabilities::current().pulse, "Pulse")?;
+    let dir = state.config_dir.clone();
+    off_main(move || interests::act(&dir, &topic, act)).await?
+}
+
+#[tauri::command]
 async fn get_pulse(state: State<'_, ShellState>) -> Result<pulse::Page, String> {
     capabilities::needs(capabilities::current().pulse, "Pulse")?;
     let dir = state.config_dir.clone();
@@ -1077,6 +1106,9 @@ pub fn run() {
             plugin_act,
             install_plugin,
             fetch_plugin_market,
+            get_interests,
+            add_interest,
+            interest_act,
             get_pulse,
             pulse_act,
             get_local_ai,
