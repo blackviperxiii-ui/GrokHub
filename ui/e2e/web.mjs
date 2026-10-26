@@ -55,7 +55,7 @@ function pulsePage() {
         because: "",
         icon: "🚀",
         why: "You asked for GrokHub news.",
-        images: ["0123456789abcdef"],
+        images: ["0123456789abcdef.png"],
         createdAt: Date.now() - 60000,
         ago: "1m ago",
         link: "https://example.com/web",
@@ -137,7 +137,7 @@ const COMMANDS = {
     return { ok: true, value: pulsePage() };
   },
   pulse_image: ({ name }) =>
-    name === "0123456789abcdef" ? { ok: true, value: IMAGE } : { ok: false, error: "no such image" },
+    name === "0123456789abcdef.png" ? { ok: true, value: IMAGE } : { ok: false, error: "no such image" },
 };
 
 function json(res, status, body) {
