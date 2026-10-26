@@ -541,6 +541,7 @@ fn side_from(session: &str, ev: LoopEvent) -> Option<SideEvent> {
             field_name: view.field_name,
             field_title: view.field_title,
             secret: view.secret,
+            options: view.options,
         }),
         _ => return None,
     })

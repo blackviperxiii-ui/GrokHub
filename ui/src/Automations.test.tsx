@@ -134,6 +134,23 @@ describe("Automations", () => {
     await userEvent.click(await screen.findByRole("button", { name: "Run now" }));
     expect(await screen.findByText("Add an xAI API key in Settings first.")).toBeInTheDocument();
   });
+
+  it("tells chat when a run finishes or fails", async () => {
+    api.listAutomations.mockResolvedValue([row({})]);
+    api.runAutomation
+      .mockResolvedValueOnce({ text: "3 new mails, none urgent.", error: "", stop: "end_turn" })
+      .mockRejectedValueOnce("The chat worker stopped.");
+    const onFinished = vi.fn();
+    render(<Automations onFinished={onFinished} />);
+    await userEvent.click(await screen.findByRole("button", { name: "Run now" }));
+    await screen.findByText("3 new mails, none urgent.");
+    await userEvent.click(await screen.findByRole("button", { name: "Run now" }));
+    await screen.findByText("The chat worker stopped.");
+    expect(onFinished.mock.calls).toEqual([
+      [{ name: "summarize my inbox", ok: true, text: "3 new mails, none urgent." }],
+      [{ name: "summarize my inbox", ok: false, text: "The chat worker stopped." }],
+    ]);
+  });
 });
 
 describe("wallClock", () => {

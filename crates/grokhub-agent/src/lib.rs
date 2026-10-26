@@ -50,6 +50,7 @@ pub use client::{
     Usage, XaiClient, DEFAULT_MODEL, RESPONSES_URL, USER_AGENT,
 };
 pub use compact::{estimate_input_tokens, message_text};
+pub use eval::turn_endings::{generic_closing, last_sentence};
 pub use eval::{
     load_tasks, parse_args, reject_live, render_markdown, render_report, run_suite,
     run_technique_matrix, ItemResult, Opts, Recommendation, Technique, TechniqueArm,

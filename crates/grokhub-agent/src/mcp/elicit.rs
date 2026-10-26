@@ -21,6 +21,8 @@ pub struct ElicitView {
     pub field_name: Option<String>,
     pub field_title: String,
     pub secret: bool,
+    /// Answers to tap instead of typing; empty for MCP forms and plans.
+    pub options: Vec<grokhub_core::wire::ElicitChoice>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -288,6 +290,7 @@ fn view_for(server: &str, id: &Value, params: &Value) -> ElicitView {
         field_name: parsed.field_name,
         field_title: parsed.field_title,
         secret: parsed.secret,
+        options: parsed.options,
     }
 }
 

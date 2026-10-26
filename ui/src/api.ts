@@ -65,6 +65,8 @@ export type ChatEvent =
   | { kind: "error"; message: string }
   | { kind: "done"; stop: string }
   | { kind: "plan"; text: string }
+  /** One-tap follow-ups for the reply that just ended; most replies get none. */
+  | { kind: "suggestions"; items: Suggestion[] }
   | {
       kind: "elicit";
       id: string;
@@ -76,7 +78,15 @@ export type ChatEvent =
       fieldName: string | null;
       fieldTitle: string;
       secret: boolean;
+      /** Answers to tap for Grok's question, the recommended one first. */
+      options?: ElicitChoice[];
     };
+
+/** A follow-up to send with one tap: `prompt` becomes the next message. */
+export type Suggestion = { label: string; prompt: string };
+
+/** One answer on a question card; the label is what gets sent. */
+export type ElicitChoice = { label: string; description: string; recommended: boolean };
 
 /** The composer's chip: Chat, Plan (read-only until the plan is approved) or
  * btw (a look-only side ask). */
