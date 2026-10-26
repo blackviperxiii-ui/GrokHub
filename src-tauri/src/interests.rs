@@ -85,6 +85,23 @@ pub fn add(config_dir: &Path, text: &str) -> Result<Page, String> {
     Ok(page(&profile, note))
 }
 
+/// A Pulse idea's More like this or Not interested moves every topic its
+/// text names (a pinned topic never drops). Returns the topics that moved.
+pub fn feedback(
+    config_dir: &Path,
+    text: &str,
+    signal: interests::InterestSignal,
+    now_ms: u64,
+) -> Result<Vec<String>, String> {
+    let _held = STORE.lock().unwrap_or_else(|e| e.into_inner());
+    let mut profile = interests::load(&path(config_dir));
+    let moved = profile.feedback(text, signal, now_ms);
+    if !moved.is_empty() {
+        interests::save(&path(config_dir), &profile)?;
+    }
+    Ok(moved)
+}
+
 pub fn act(config_dir: &Path, topic: &str, act: Act) -> Result<Page, String> {
     let _held = STORE.lock().unwrap_or_else(|e| e.into_inner());
     let mut profile = interests::load(&path(config_dir));

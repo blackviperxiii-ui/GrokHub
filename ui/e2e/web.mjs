@@ -2,7 +2,8 @@
 // built UI (ui/dist) and the remote API on one origin, the way GrokHub on
 // your computer will. Chromium opens the pairing link, sends a chat, answers
 // the tool approval the mock asks for, and gets the reply. Pulse shows a post
-// with its image and takes a Love. Then it checks the pairing code is in no
+// with its image and takes a Love; an idea's menu holds its three actions and
+// a click on its row puts the action in the chat box. Then it checks the pairing code is in no
 // browser store and a reload asks to pair again.
 //
 //   npm run build --prefix ui && node ui/e2e/web.mjs
@@ -25,6 +26,8 @@ const PROMPT = "web smoke: say hello";
 const REPLY = "Hello from the web smoke test";
 const TOOL = "write_file";
 const POST_TITLE = "Web smoke: Pulse reaches the browser";
+const IDEA_TITLE = "Web smoke weekly digest";
+const IDEA_ACTION = "every Friday at 5, gather the week's web smoke news";
 // A 1x1 PNG, the cached image the desktop hands back as a data URL.
 const IMAGE =
   "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgYPj/HwADAgH/eL9GtQAAAABJRU5ErkJggg==";
@@ -42,6 +45,7 @@ const STATE = {
   streams: new Set(),
   permission: null,
   loved: false,
+  acts: [],
 };
 
 function pulsePage() {
@@ -62,7 +66,21 @@ function pulsePage() {
         loved: STATE.loved,
       },
     ],
-    ideas: [],
+    ideas: [
+      {
+        label: "",
+        ideas: [
+          {
+            id: "web-idea",
+            title: IDEA_TITLE,
+            icon: "🛠️",
+            summary: "I can gather the week's web smoke news into one digest.",
+            kind: "Automate",
+            action: IDEA_ACTION,
+          },
+        ],
+      },
+    ],
   };
 }
 
@@ -132,8 +150,9 @@ const COMMANDS = {
   list_connectors: () => ({ ok: true, value: [] }),
   get_pulse: () => ({ ok: true, value: pulsePage() }),
   pulse_act: ({ id, act }) => {
-    if (id !== "web-post" || act !== "love") return { ok: false, error: `unexpected act: ${act}` };
-    STATE.loved = true;
+    if (id === "web-post" && act === "love") STATE.loved = true;
+    else if (!(id === "web-idea" && act === "accept")) return { ok: false, error: `unexpected act: ${act}` };
+    STATE.acts.push(`${id}:${act}`);
     return { ok: true, value: pulsePage() };
   },
   pulse_image: ({ name }) =>
@@ -243,6 +262,22 @@ async function main() {
     await post.locator("button[aria-label='Love'][aria-pressed='true']").waitFor({ timeout: 30000 });
     check(STATE.loved, "Love never reached the desktop");
     console.log("pulse: post with its image shown, Love sent");
+
+    await page.getByRole("button", { name: "Ideas", exact: true }).click();
+    const idea = page.getByRole("listitem", { name: IDEA_TITLE });
+    await idea.getByRole("button", { name: "More" }).click();
+    const items = await idea.getByRole("menuitem").allTextContents();
+    check(
+      items.join("|") === "Let's do it|More like this|Not interested",
+      `the idea menu says ${JSON.stringify(items)}`,
+    );
+    await idea.getByRole("button", { name: "More" }).click();
+    await idea.getByRole("button", { name: new RegExp(IDEA_TITLE) }).click();
+    await page.getByRole("textbox", { name: "Message" }).waitFor({ timeout: 30000 });
+    const typed = await page.getByRole("textbox", { name: "Message" }).inputValue();
+    check(typed === IDEA_ACTION, `the chat box says ${JSON.stringify(typed)}`);
+    check(STATE.acts.includes("web-idea:accept"), "Let's do it never reached the desktop");
+    console.log(`pulse: idea menu ${items.join(", ")}; the row filled the chat box`);
 
     await page.getByRole("button", { name: "Settings" }).click();
     await page.getByText("Change settings and the API key there.").waitFor();

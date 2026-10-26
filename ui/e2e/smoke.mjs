@@ -60,6 +60,9 @@ function mockReply(callNumber, body) {
   if (body.includes("You write one post for a person's news feed")) {
     return textReply(JSON.stringify(PULSE_POST));
   }
+  if (body.includes("You suggest ideas for one person's Pulse")) {
+    return textReply(JSON.stringify([PULSE_IDEA]));
+  }
   if (body.includes(WEB_PROMPT)) return textReply(WEB_REPLY);
   if (body.includes(DESK_PROMPT)) {
     if (!body.includes("smoke-desk")) return toolCall("smoke-desk", "type", { text: DESK_TEXT });
@@ -140,6 +143,15 @@ const PULSE_POST = {
   snippet: `The shell now writes [its own feed posts](${PULSE_STORY}) from free sources.`,
   icon: "🚀",
   why: "You asked for smoke news.",
+};
+
+// The idea writer's one idea, after the feed run.
+const PULSE_IDEA = {
+  title: "Smoke news weekly digest",
+  description: "I can gather the week's smoke news into one Friday digest.",
+  emoji: "🛠️",
+  category: "productivity",
+  action: "every Friday at 5, gather the week's smoke news into a digest",
 };
 
 function pulseFixture(req, res) {
@@ -363,8 +375,10 @@ async function connectors(s, config) {
 // Ideas. Love on the post writes the ledger line to the global MEMORY.md.
 // Saving the feed instructions makes the writer post at once: it reads the
 // mocked sources, asks the mocked model, and caches the story's image, which
-// opens in the lightbox. Delete takes the first post away. Run on the idea
-// puts its action in the chat box, unsent.
+// opens in the lightbox. Delete takes the first post away. After the post
+// the idea writer adds one idea; its menu holds Let's do it, More like this
+// and Not interested, and More like this is kept for the next run. A click on
+// the seeded idea's row puts its action in the chat box, unsent.
 async function pulse(s, config) {
   const now = Date.now();
   const cards = [
@@ -469,10 +483,47 @@ async function pulse(s, config) {
     value: "//div[@aria-label='Pulse view']/button[normalize-space()='Ideas']",
   });
   await wd("POST", `${s}/element/${ideas[ELEMENT]}/click`, {});
-  const run = await waitFor("the idea's Run", async () => {
+  // The idea writer ran after the feed post: its idea leads, with no header.
+  const written = `//li[@aria-label=${JSON.stringify(PULSE_IDEA.title)}]`;
+  await waitFor(
+    "the written idea",
+    async () => {
+      await wd("POST", `${s}/element/${ideas[ELEMENT]}/click`, {});
+      const el = await wd("POST", `${s}/elements`, { using: "xpath", value: written });
+      return el.length === 1 ? true : null;
+    },
+    60000,
+  );
+  const ideaMenu = await wd("POST", `${s}/element`, {
+    using: "xpath",
+    value: `${written}//button[@aria-label='More']`,
+  });
+  await wd("POST", `${s}/element/${ideaMenu[ELEMENT]}/click`, {});
+  const items = await wd("POST", `${s}/elements`, {
+    using: "xpath",
+    value: `${written}//button[@role='menuitem']`,
+  });
+  const labels = [];
+  for (const item of items) labels.push(await wd("GET", `${s}/element/${item[ELEMENT]}/text`));
+  if (labels.join("|") !== "Let's do it|More like this|Not interested") {
+    throw new Error(`the idea menu says ${JSON.stringify(labels)}`);
+  }
+  await shot(s, "pulse-ideas");
+  await wd("POST", `${s}/element/${items[1][ELEMENT]}/click`, {});
+  await waitFor("More like this kept", async () => {
+    try {
+      const state = JSON.parse(readFileSync(join(config, "pulse-ideas.json"), "utf8"));
+      return state.moreLike?.[0] === PULSE_IDEA.title ? true : null;
+    } catch {
+      return null;
+    }
+  });
+  console.log(`idea menu: ${labels.join(", ")}; More like this kept for the next run`);
+
+  const run = await waitFor("the idea row", async () => {
     const el = await wd("POST", `${s}/element`, {
       using: "xpath",
-      value: "//li[contains(@class,'post')]//button[normalize-space()='Run']",
+      value: "//li[contains(@aria-label,'smoke workboard')]//button[contains(@class,'idea-main')]",
     });
     return el[ELEMENT];
   });
@@ -484,8 +535,8 @@ async function pulse(s, config) {
     return v === PULSE_ACTION ? v : null;
   });
   await sleep(1000);
-  if (mockSeen.length !== calls) throw new Error("Run sent the idea without the person");
-  console.log(`run filled the chat box: ${JSON.stringify(filled)}`);
+  if (mockSeen.length !== calls) throw new Error("Let's do it sent the idea without the person");
+  console.log(`let's do it filled the chat box: ${JSON.stringify(filled)}`);
 }
 
 // Journal: a question added here lands in the cabin's decisions.json, and To
