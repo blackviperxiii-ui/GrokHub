@@ -5,8 +5,11 @@ export const PREVIEW_TIP =
   "A preview: it works, but it runs over plain HTTP and has no sign-in beyond the pairing code.";
 
 export const WEB_NOTE =
-  "A browser on your network can use GrokHub here once it has the pairing code. Chats from the web can't control the desktop, and settings and the API key stay here. It's plain HTTP, so use it only on a network you trust.";
-export const WEB_OFF_NOTE = "Web access ends when you turn it off or quit GrokHub.";
+  "A browser on your network can use GrokHub here once it has the pairing code. Chats from the web can't control the desktop, and settings and the API key stay here. A paired browser can approve file changes and commands on this computer, and it's plain HTTP, so use it only on a network you trust.";
+export const WEB_OFF_NOTE =
+  "Web access ends when you turn it off or quit GrokHub. After 30 minutes with no browser using it, the code changes and browsers pair again.";
+/** How often Settings re-reads the code, so a renewed one shows here. */
+export const REFRESH_MS = 30_000;
 
 /** Settings → Web access: serve the web app on this computer's network. */
 export function WebAccess() {
@@ -16,6 +19,14 @@ export function WebAccess() {
   useEffect(() => {
     getWebAccess().then(setWeb, (err) => setNote(String(err)));
   }, []);
+
+  useEffect(() => {
+    if (!web?.on) return;
+    const timer = window.setInterval(() => {
+      getWebAccess().then(setWeb, () => {});
+    }, REFRESH_MS);
+    return () => window.clearInterval(timer);
+  }, [web?.on]);
 
   async function turn(on: boolean) {
     setNote(null);
