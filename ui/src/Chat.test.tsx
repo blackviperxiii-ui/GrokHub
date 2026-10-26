@@ -44,6 +44,7 @@ const SETTINGS: Settings = {
   workspacePath: "/home/me",
   approvals: "ask",
   desktopControl: false,
+  theme: "system",
   version: "3.1.0",
 };
 
