@@ -1,1 +1,0 @@
-- Journal: "To mission" starts a mission from an open decision. It opens a chat named for the question, with the next experiment drafted for you to send, and links the two so a second click goes back to that chat. The weekly systems brief now lists the Journal's open questions instead of saying no journal exists (stage 9).

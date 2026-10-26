@@ -5150,6 +5150,18 @@ https://xstack.grok.me/post ZEPHYRTAIL"
             crate::pulse_sources::item_card(&ranked, at),
             "Rust 1.99.0",
         ));
+        let written = crate::pulse_writer::Written {
+            title: "Async closures are stable in Rust 1.99".into(),
+            snippet: "Stable [now](https://blog.rust-lang.org/).".into(),
+            icon: "🦀".into(),
+            why: "You follow Rust.".into(),
+            cites: vec!["https://blog.rust-lang.org/".into()],
+        };
+        rows.push((
+            "post_card",
+            crate::pulse_writer::post_card(&written, &[], at),
+            "Async closures",
+        ));
         rows
     }
 

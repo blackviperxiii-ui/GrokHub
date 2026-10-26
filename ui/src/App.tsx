@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { CORE_ONLY, getCapabilities, getSettings, type Capabilities } from "./api";
-import { Automations } from "./Automations";
+import { Automations, type RunNotice } from "./Automations";
 import { Chat, type Prefill } from "./Chat";
 import { Connectors } from "./Connectors";
 import { Journal } from "./Journal";
@@ -9,6 +9,7 @@ import { Palette, VIEW_LABELS, views, type PaletteAction, type View } from "./Pa
 import { Pulse } from "./Pulse";
 import type { Section } from "./sections";
 import { Settings } from "./Settings";
+import { useHidingBar } from "./tabBar";
 import { applyTheme } from "./theme";
 
 export function App() {
@@ -17,6 +18,8 @@ export function App() {
   const [caps, setCaps] = useState<Capabilities>(CORE_ONLY);
   const [palette, setPalette] = useState(false);
   const [goTo, setGoTo] = useState<{ section: Section; n: number }>();
+  const [notice, setNotice] = useState<RunNotice & { n: number }>();
+  const barAway = useHidingBar(palette);
   useEffect(() => {
     getCapabilities()
       .catch(() => CORE_ONLY)
@@ -51,7 +54,7 @@ export function App() {
     }
   }
   return (
-    <div className="app">
+    <div className={barAway ? "app bar-away" : "app"}>
       <header className="topbar">
         <nav className="tabs" aria-label="Views">
           {views(caps).map((name) => (
@@ -81,13 +84,18 @@ export function App() {
         <Chat
           onOpenSettings={() => setView("settings")}
           onSignIn={() => run({ kind: "settings", section: "account" })}
+          onOpenAutomations={() => setView("automations")}
           prefill={prefill}
+          notice={notice}
           active={view === "chat"}
           remote={Boolean(caps.remote)}
         />
       </div>
       <div hidden={view !== "automations"}>
-        <Automations active={view === "automations"} />
+        <Automations
+          active={view === "automations"}
+          onFinished={(run) => setNotice((now) => ({ ...run, n: (now?.n ?? 0) + 1 }))}
+        />
       </div>
       {view === "pulse" && caps.pulse && (
         <Pulse

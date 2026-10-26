@@ -405,6 +405,42 @@ mod tests {
     }
 
     #[test]
+    fn no_voice_ends_its_turn_on_a_question() {
+        let all = builtins();
+        for p in &all {
+            assert!(
+                !p.sample.trim_end().ends_with('?'),
+                "{}: the sample leads with the result, not a question: {}",
+                p.id,
+                p.sample
+            );
+            let rules = p.tone_rules.to_ascii_lowercase();
+            for asks in [
+                "as a courteous question",
+                "offer the next step",
+                "every order is a real next step",
+                "offer to handle",
+            ] {
+                assert!(
+                    !rules.contains(asks),
+                    "{}: {asks:?} in {}",
+                    p.id,
+                    p.tone_rules
+                );
+            }
+        }
+        assert!(find(&all, "butler")
+            .tone_rules
+            .contains("see to it and say it is done"));
+        assert!(find(&all, "drill-sergeant")
+            .tone_rules
+            .contains("do it and report it done"));
+        assert!(find(&all, "viper")
+            .tone_rules
+            .starts_with("Viper mode: sarcastic, unhinged, vulgar and funny."));
+    }
+
+    #[test]
     fn the_default_voice_leaves_the_rules_byte_identical() {
         let rules = crate::cabin_rules::cabin_rules_for("", false);
         assert_eq!(layer(&find(&builtins(), DEFAULT_ID), &rules), rules);

@@ -1,1 +1,0 @@
-- Docs: agents squash-merge green PRs into beta; `.github/` and release-script edits no longer need a separate OK.

@@ -1,1 +1,0 @@
-- Cross-platform recode, Phase 3g: the Tauri shell's chat can control the desktop (screenshots, clicks, typing, apps) once you turn on Settings → Let Grok control the desktop. Deleting, sending, paying and credentials always wait for your OK, even when approvals are set to Always.

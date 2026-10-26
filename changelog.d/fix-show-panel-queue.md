@@ -1,1 +1,0 @@
-- Fix: deferred `show_panel` rows for deleted chats are dropped and the queue is capped, so it no longer grows without bound.

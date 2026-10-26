@@ -1,0 +1,4 @@
+- Pulse Feed (shell): posts are now short model-written briefings from the free sources, with inline cites checked against the pages fetched that run, a topic emoji, a "why you're seeing this" line and up to three images cached on this computer.
+- Pulse Feed: a system cadence replaces the "Check every" choice. Posts come every two hours, every 90 minutes after you open Pulse or love or discuss a post, and every four hours after three quiet days. Saving the feed prompt writes one post right away.
+- Pulse Feed: a short taste summary, rebuilt from what you love, discuss and say in chat, steers the writer. Reading a post never counts. Like is now Love, and Delete removes a post without teaching the feed anything.
+- Pulse Feed lists every post newest first, with no score cutoff.

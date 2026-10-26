@@ -65,6 +65,8 @@ export type ChatEvent =
   | { kind: "error"; message: string }
   | { kind: "done"; stop: string }
   | { kind: "plan"; text: string }
+  /** One-tap follow-ups for the reply that just ended; most replies get none. */
+  | { kind: "suggestions"; items: Suggestion[] }
   | {
       kind: "elicit";
       id: string;
@@ -76,7 +78,15 @@ export type ChatEvent =
       fieldName: string | null;
       fieldTitle: string;
       secret: boolean;
+      /** Answers to tap for Grok's question, the recommended one first. */
+      options?: ElicitChoice[];
     };
+
+/** A follow-up to send with one tap: `prompt` becomes the next message. */
+export type Suggestion = { label: string; prompt: string };
+
+/** One answer on a question card; the label is what gets sent. */
+export type ElicitChoice = { label: string; description: string; recommended: boolean };
 
 /** The composer's chip: Chat, Plan (read-only until the plan is approved) or
  * btw (a look-only side ask). */
@@ -292,11 +302,17 @@ export interface PulsePost {
   title: string;
   summary: string;
   because: string;
+  /** A written post's topic emoji. Empty on older posts. */
+  icon: string;
+  /** A written post's "why you're seeing this" line. */
+  why: string;
+  /** Cached gallery image names; read each with `pulseImage`. */
+  images: string[];
   /** "2h ago". */
   ago: string;
   /** The first source link, empty when there is none. */
   link: string;
-  liked: boolean;
+  loved: boolean;
 }
 
 /** One Ideas row: something GrokHub could do next. */
@@ -317,7 +333,7 @@ export interface PulsePage {
   ideas: { label: string; ideas: PulseIdea[] }[];
 }
 
-export type PulseAct = "dismiss" | "notThis" | "like" | "snooze" | "accept";
+export type PulseAct = "dismiss" | "notThis" | "love" | "delete" | "snooze" | "accept";
 
 /** Today's local date for the ledger line, and the time Snooze counts from. */
 export function localDay(now: Date = new Date()) {
@@ -329,12 +345,43 @@ export function localDay(now: Date = new Date()) {
   };
 }
 
+/** Opening Pulse also tells the Feed writer the local clock (quiet hours). */
 export function getPulse(): Promise<PulsePage> {
-  return invoke<PulsePage>("get_pulse");
+  return invoke<PulsePage>("get_pulse", { day: localDay() });
 }
 
 export function pulseAct(id: string, act: PulseAct): Promise<PulsePage> {
   return invoke<PulsePage>("pulse_act", { id, act, day: localDay() });
+}
+
+/** Discuss: the text a chat starts from, carrying the post. */
+export function pulseDiscuss(id: string): Promise<string> {
+  return invoke<string>("pulse_discuss", { id });
+}
+
+export function pulseWhy(id: string): Promise<string> {
+  return invoke<string>("pulse_why", { id });
+}
+
+/** The Feed prompt the writer follows, and what its last run did. */
+export interface FeedPrompt {
+  text: string;
+  isDefault: boolean;
+  note: string;
+}
+
+export function getFeedPrompt(): Promise<FeedPrompt> {
+  return invoke<FeedPrompt>("get_feed_prompt");
+}
+
+/** Saving writes one new post right away. */
+export function saveFeedPrompt(text: string): Promise<FeedPrompt> {
+  return invoke<FeedPrompt>("save_feed_prompt", { text });
+}
+
+/** A cached gallery image as a data URL; pages never load it from its site. */
+export function pulseImage(name: string): Promise<string> {
+  return invoke<string>("pulse_image", { name });
 }
 
 /** One decision journal question (src-tauri/src/journal.rs). */

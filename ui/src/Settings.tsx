@@ -17,6 +17,7 @@ import { Permissions } from "./Permissions";
 import { Personality } from "./Personality";
 import { Playbooks } from "./Playbooks";
 import { SECTION_LABELS, sections, type Section } from "./sections";
+import { Toggle } from "./Toggle";
 import { WebAccess } from "./WebAccess";
 
 export const DESKTOP_NOTE =
@@ -170,25 +171,15 @@ export function Settings({
           {APPROVALS[approvals].note}
         </p>
         {caps.desktopControl && (
-          <label className="check">
-            <input
-              type="checkbox"
-              checked={desktopControl}
-              onChange={(e) => setDesktopControl(e.target.checked)}
-            />
+          <Toggle checked={desktopControl} onChange={setDesktopControl}>
             Let Grok control the desktop
-          </label>
+          </Toggle>
         )}
         {caps.desktopControl && desktopControl && <p className="note warn">{DESKTOP_NOTE}</p>}
         {caps.tray && (
-          <label className="check">
-            <input
-              type="checkbox"
-              checked={closeToTray}
-              onChange={(e) => setCloseToTray(e.target.checked)}
-            />
+          <Toggle checked={closeToTray} onChange={setCloseToTray}>
             Closing the window keeps GrokHub in the tray
-          </label>
+          </Toggle>
         )}
         <button type="submit">Save settings</button>
       </form>

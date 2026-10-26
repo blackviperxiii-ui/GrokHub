@@ -1,1 +1,0 @@
-- Shell: Settings has a Personality section. Pick the default voice for every chat, duplicate a preset, and edit or delete your own. It uses the same presets and `personalities/` files as the cabin, and chats pick it up from the next message.

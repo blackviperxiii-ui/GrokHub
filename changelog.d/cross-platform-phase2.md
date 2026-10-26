@@ -1,1 +1,0 @@
-- Cross-platform recode, Phase 2: a Tauri 2 + React desktop shell (`src-tauri/`, `ui/`) next to the egui cabin. It has streaming chat, settings with the API key in the OS keychain, a tray, and a tauri-driver smoke test against a mock model. `cargo xtask bump` now also keeps the shell's lockfile in step.
