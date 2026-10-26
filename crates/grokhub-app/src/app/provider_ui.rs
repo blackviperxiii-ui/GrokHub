@@ -652,7 +652,7 @@ mod tests {
             hx::hard_card_key(false, true, false),
             Some(hx::HardAnswer::Deny)
         );
-        app.resolve_hard_park(false, "Viper denied (Esc)");
+        app.resolve_hard_park(false, "user denied (Esc)");
         assert!(app
             .consent()
             .destination_grant("openrouter.ai", CALL_DATA)
@@ -749,7 +749,7 @@ mod tests {
         app.add_provider_click();
         assert_eq!(app.status, "Answer the card for the key you added first.");
         assert_eq!(app.harness.queue.len(), 0, "no second card");
-        app.resolve_hard_park(false, "Viper denied (Esc)");
+        app.resolve_hard_park(false, "user denied (Esc)");
         assert_eq!(
             app.status,
             "Nothing saved. The key for claude-proxy.example.org was dropped."

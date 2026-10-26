@@ -107,7 +107,7 @@ fn every_path_sees_the_same_classes() {
     let delete = GateOutcome::Park {
         reason: "hard-class delete: Delete — Always cannot skip".into(),
         hard: Some(HardClass::Delete),
-        needs_viper: true,
+        needs_user: true,
     };
     for name in ["skill_delete", "connection_remove", "automation_delete"] {
         let args = json!({ "name": "x", "reason": "tidy" });
@@ -146,7 +146,7 @@ fn every_path_sees_the_same_classes() {
         GateOutcome::Park {
             reason: "hard-class credentials: Credentials / secrets — Always cannot skip".into(),
             hard: Some(HardClass::Credentials),
-            needs_viper: true,
+            needs_user: true,
         }
     );
     assert_eq!(native(&always, "connection_add", &cred), Decision::Ask);

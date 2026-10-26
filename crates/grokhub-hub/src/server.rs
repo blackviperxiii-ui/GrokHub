@@ -635,7 +635,7 @@ mod tests {
     #[test]
     fn a_phone_named_device_cannot_pair() {
         let (state, port) = hub();
-        for name in ["Pixel phone", "my-android", "Viper's iPhone"] {
+        for name in ["Pixel phone", "my-android", "user's iPhone"] {
             let (status, token) = pair_as(&state, port, "d-phone", name);
             assert_eq!((status, token), (403, None), "{name}");
         }

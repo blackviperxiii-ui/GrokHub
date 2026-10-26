@@ -174,7 +174,7 @@ pub(crate) fn check(
                 classes.join(", ")
             ),
             hard: Some(class),
-            needs_viper: true,
+            needs_user: true,
         },
         EgressBasis::NotGranted,
         String::new(),
@@ -640,7 +640,7 @@ mod tests {
                 "hard-class send: Send to {dest} ({classes}) with no grant — Always cannot skip"
             ),
             hard: Some(HardClass::Send),
-            needs_viper: true,
+            needs_user: true,
         }
     }
 

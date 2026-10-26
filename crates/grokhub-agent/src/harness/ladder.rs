@@ -373,7 +373,7 @@ mod tests {
 
     #[test]
     fn denied_or_timed_out_hard_step_waits_for_fresh_approval() {
-        for why in ["Viper denied", "timed out — fail-closed Deny"] {
+        for why in ["user denied", "timed out — fail-closed Deny"] {
             let mut deny = span(1, "hard_send_stub", "{}", "deny", "send", None, "denied");
             deny.result = why.into();
             let spans = vec![
@@ -384,7 +384,7 @@ mod tests {
                     "park",
                     "send",
                     None,
-                    "needs Viper approve (Send)",
+                    "needs user approve (Send)",
                 ),
                 deny,
                 span(2, "reply", "{}", "say", "soft", None, "I sent the email."),
