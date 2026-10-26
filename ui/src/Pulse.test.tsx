@@ -16,7 +16,14 @@ const api = vi.hoisted(() => ({
 vi.mock("./api", () => api);
 
 import { emojiImage, Snippet } from "./FeedCard";
-import { FEED_EMPTY, PAGE_SIZE, Pulse, SAVED_NOTE, snoozedLine } from "./Pulse";
+import {
+  FEED_EMPTY,
+  MORE_LIKE_NOTE,
+  NOT_INTERESTED_NOTE,
+  PAGE_SIZE,
+  Pulse,
+  SAVED_NOTE,
+} from "./Pulse";
 
 function post(over: Partial<PulsePost> = {}): PulsePost {
   return {
@@ -42,6 +49,7 @@ const TITLE = "Async closures are stable in Rust 1.99";
 const IDEA = {
   id: "idea-1",
   title: "I can tidy the workboard",
+  icon: "",
   summary: "Close the done cards",
   kind: "Do",
   action: "close every done card on the workboard",
@@ -230,7 +238,7 @@ describe("Pulse", () => {
     expect(container.querySelectorAll(".skeleton")).toHaveLength(0);
   });
 
-  it("Run notes the idea and hands its action to chat", async () => {
+  it("a click on the idea row is Let's do it: noted, then its action goes to chat", async () => {
     api.getPulse.mockResolvedValue(PAGE);
     api.pulseAct.mockResolvedValue(PAGE);
     const onRun = vi.fn();
@@ -238,13 +246,57 @@ describe("Pulse", () => {
 
     await userEvent.click(await screen.findByRole("button", { name: "Ideas" }));
     const idea = screen.getByRole("listitem", { name: "I can tidy the workboard" });
-    await userEvent.click(within(idea).getByRole("button", { name: "Run" }));
+    expect(idea).toHaveTextContent("Close the done cards");
+    // An idea with no emoji of its own gets the bulb.
+    expect(idea.querySelector("img.idea-icon")).toHaveAttribute("src", "/emoji3d/1f4a1.png");
+    await userEvent.click(within(idea).getByRole("button", { name: /I can tidy the workboard/ }));
     expect(api.pulseAct).toHaveBeenCalledWith("idea-1", "accept");
+    expect(onRun).toHaveBeenCalledWith("close every done card on the workboard");
+  });
+
+  it("the idea menu holds Let's do it, More like this and Not interested, and no Snooze", async () => {
+    const written = { ...IDEA, id: "idea-2", title: "Rust 1.99 upgrade plan", icon: "🦀" };
+    const page: PulsePage = {
+      feed: [],
+      ideas: [
+        { label: "", ideas: [written] },
+        { label: "Productivity", ideas: [IDEA] },
+      ],
+    };
+    api.getPulse.mockResolvedValue(page);
+    api.pulseAct.mockResolvedValue(page);
+    const onRun = vi.fn();
+    render(<Pulse onRun={onRun} />);
+
+    await userEvent.click(await screen.findByRole("button", { name: "Ideas" }));
+    expect(screen.getAllByRole("heading").map((h) => h.textContent)).toEqual(["Productivity"]);
+    const row = screen.getByRole("listitem", { name: "Rust 1.99 upgrade plan" });
+    expect(row.querySelector("img.idea-icon")).toHaveAttribute("src", "/emoji3d/1f980.png");
+    await userEvent.click(within(row).getByRole("button", { name: "More" }));
+    expect(within(row).getAllByRole("menuitem").map((b) => b.textContent)).toEqual([
+      "Let's do it",
+      "More like this",
+      "Not interested",
+    ]);
+    expect(screen.queryByRole("button", { name: "Snooze" })).toBeNull();
+    await userEvent.click(within(row).getByRole("menuitem", { name: "More like this" }));
+    expect(api.pulseAct).toHaveBeenLastCalledWith("idea-2", "moreLike");
+    expect(await screen.findByRole("status")).toHaveTextContent(MORE_LIKE_NOTE);
+
+    await userEvent.click(within(row).getByRole("button", { name: "More" }));
+    await userEvent.click(within(row).getByRole("menuitem", { name: "Not interested" }));
+    expect(api.pulseAct).toHaveBeenLastCalledWith("idea-2", "notInterested");
+    expect(await screen.findByRole("status")).toHaveTextContent(NOT_INTERESTED_NOTE);
+
+    await userEvent.click(within(row).getByRole("button", { name: "More" }));
+    await userEvent.click(within(row).getByRole("menuitem", { name: "Let's do it" }));
+    expect(api.pulseAct).toHaveBeenLastCalledWith("idea-2", "accept");
     expect(onRun).toHaveBeenCalledWith("close every done card on the workboard");
   });
 
   it("a failed act says why, reloads, and does not run", async () => {
     api.getPulse
+      .mockResolvedValueOnce(PAGE)
       .mockResolvedValueOnce(PAGE)
       .mockResolvedValueOnce({ feed: [], ideas: [] });
     api.pulseAct.mockRejectedValue("That card is gone. The page now shows what is left.");
@@ -252,7 +304,7 @@ describe("Pulse", () => {
     render(<Pulse onRun={onRun} />);
 
     await userEvent.click(await screen.findByRole("button", { name: "Ideas" }));
-    await userEvent.click(screen.getByRole("button", { name: "Run" }));
+    await userEvent.click(screen.getByRole("button", { name: /I can tidy the workboard/ }));
     expect(await screen.findByRole("status")).toHaveTextContent("That card is gone.");
     expect(onRun).not.toHaveBeenCalled();
     expect(
@@ -264,16 +316,19 @@ describe("Pulse", () => {
     let land: (page: PulsePage) => void = () => {};
     api.getPulse
       .mockResolvedValueOnce(PAGE)
+      .mockResolvedValueOnce(PAGE)
       .mockReturnValueOnce(new Promise<PulsePage>((resolve) => (land = resolve)));
     api.pulseAct.mockRejectedValue("MEMORY.md is too large to add to. Nothing was changed.");
     render(<Pulse onRun={vi.fn()} />);
 
     await userEvent.click(await screen.findByRole("button", { name: "Ideas" }));
-    await userEvent.click(screen.getByRole("button", { name: "Run" }));
+    await userEvent.click(screen.getByRole("button", { name: /I can tidy the workboard/ }));
     expect(await screen.findByRole("status")).toHaveTextContent("MEMORY.md is too large");
-    expect(screen.getByRole("button", { name: "Run" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /I can tidy the workboard/ })).toBeDisabled();
     land(PAGE);
-    await vi.waitFor(() => expect(screen.getByRole("button", { name: "Run" })).toBeEnabled());
+    await vi.waitFor(() =>
+      expect(screen.getByRole("button", { name: /I can tidy the workboard/ })).toBeEnabled(),
+    );
   });
 
   it("maps emoji to the bundled 3D set and renders only links and bold", () => {
@@ -284,10 +339,5 @@ describe("Pulse", () => {
     expect(screen.getByText(/<b>raw<\/b>/)).toBeInTheDocument();
     expect(screen.getAllByRole("link")).toHaveLength(1);
     expect(screen.getByRole("link", { name: "ok" })).toHaveAttribute("href", "https://a.example/x");
-  });
-
-  it("says where Snooze lands from the time of day", () => {
-    expect(snoozedLine(new Date(2026, 9, 25, 7, 0))).toBe("Snoozed until 9 AM.");
-    expect(snoozedLine(new Date(2026, 9, 25, 14, 30))).toBe("Snoozed until tomorrow 9 AM.");
   });
 });

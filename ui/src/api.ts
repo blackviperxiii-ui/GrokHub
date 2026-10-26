@@ -356,12 +356,14 @@ export interface PulsePost {
 /** One Ideas row: something GrokHub could do next. */
 export interface PulseIdea {
   id: string;
-  /** The bold "I can …" line. */
+  /** The bold line: a written idea's own title, else "I can …". */
   title: string;
+  /** A written idea's topic emoji; empty on older ideas. */
+  icon: string;
   summary: string;
   /** Do, Automate, Learn or Watch. */
   kind: string;
-  /** What Run puts in the chat box. */
+  /** What Let's do it puts in the chat box. */
   action: string;
 }
 
@@ -371,7 +373,15 @@ export interface PulsePage {
   ideas: { label: string; ideas: PulseIdea[] }[];
 }
 
-export type PulseAct = "dismiss" | "notThis" | "love" | "delete" | "snooze" | "accept";
+export type PulseAct =
+  | "dismiss"
+  | "notThis"
+  | "love"
+  | "delete"
+  | "snooze"
+  | "accept"
+  | "moreLike"
+  | "notInterested";
 
 /** Today's local date for the ledger line, and the time Snooze counts from. */
 export function localDay(now: Date = new Date()) {
