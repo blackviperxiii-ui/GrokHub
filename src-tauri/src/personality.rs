@@ -106,13 +106,23 @@ pub fn pick(config_dir: &Path, id: &str) -> Result<Personality, String> {
 
 /// The block a chat's system prompt carries for the stored id, with the
 /// closer that puts the safety rules back on top. Empty only when that
-/// preset's tone rules are empty.
+/// preset's tone rules are empty and there is no SOUL or USER text.
 pub fn voice(config_dir: &Path, stored: &str) -> String {
     let block = personality::lookup(&dir(config_dir), shown_id(stored)).prompt_block();
-    if block.is_empty() {
-        block
+    // SOUL.md, USER.md and approved user-model rows, as the cabin's chat has them.
+    let identity = grokhub_agent::identity_block(config_dir);
+    let parts: Vec<&str> = [block.as_str(), identity.as_str()]
+        .into_iter()
+        .filter(|p| !p.is_empty())
+        .collect();
+    if parts.is_empty() {
+        String::new()
     } else {
-        format!("{block}\n\n{}", grokhub_core::talk::VOLATILE_SAFETY_CLOSER)
+        format!(
+            "{}\n\n{}",
+            parts.join("\n\n"),
+            grokhub_core::talk::VOLATILE_SAFETY_CLOSER
+        )
     }
 }
 
@@ -195,6 +205,27 @@ mod tests {
             )
         );
         assert!(pirate.starts_with("Personality: "), "{pirate}");
+        let _ = std::fs::remove_dir_all(&cfg);
+    }
+
+    #[test]
+    fn soul_and_user_sit_between_the_voice_and_the_closer() {
+        let cfg = scratch("identity");
+        std::fs::create_dir_all(cfg.join("memory")).unwrap();
+        std::fs::write(cfg.join("memory/SOUL.md"), "# SOUL\nCalm and direct.\n").unwrap();
+        std::fs::write(cfg.join("memory/USER.md"), "- Prefers metric units\n").unwrap();
+        let pirate = voice(&cfg, "pirate");
+        assert_eq!(
+            pirate,
+            format!(
+                "{}\n\n{}\n\n{}",
+                personality::builtin("pirate").prompt_block(),
+                grokhub_agent::identity_block(&cfg),
+                grokhub_core::talk::VOLATILE_SAFETY_CLOSER
+            )
+        );
+        assert!(pirate.contains("<agent-self>\nCalm and direct.\n</agent-self>"));
+        assert!(pirate.contains("- Prefers metric units\n</user-profile>"));
         let _ = std::fs::remove_dir_all(&cfg);
     }
 

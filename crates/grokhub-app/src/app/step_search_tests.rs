@@ -40,10 +40,8 @@ fn step_search_finds_click_ok_off_the_ui_thread_and_enter_jumps_to_the_turn() {
     std::fs::create_dir_all(&root).unwrap();
     std::env::set_var("GROKHUB_CONFIG", &root);
     let mut cabin = Cabin::quiet_for_test();
-    assert!(
-        cabin.cfg.memory_backend.is_legacy(),
-        "search needs no memory repo"
-    );
+    // Search needs no memory repo.
+    cabin.cfg.memory_backend = grokhub_core::amr::MemoryBackend::Legacy;
     cabin.threads.clear();
     let harbor = crate::threads::ChatThread::new("Harbor", false);
     let pier = crate::threads::ChatThread::new("Pier", false);

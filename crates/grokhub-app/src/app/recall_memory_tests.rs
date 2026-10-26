@@ -80,10 +80,7 @@ fn recall_legacy_finds_memory_line_and_skips_amr() {
     let _ = std::fs::remove_dir_all(&root);
     std::env::set_var("GROKHUB_CONFIG", &root);
     let mut cabin = Cabin::quiet_for_test();
-    assert_eq!(
-        cabin.cfg.memory_backend,
-        grokhub_core::amr::MemoryBackend::Legacy
-    );
+    cabin.cfg.memory_backend = grokhub_core::amr::MemoryBackend::Legacy;
     cabin.mem_name = "MEMORY.md".into();
     cabin.mem_body = "harbor light\n".into();
     assert!(!root.join("amr").exists());
@@ -599,6 +596,7 @@ fn legacy_reflect_and_note_never_create_amr() {
     std::fs::create_dir_all(&root).unwrap();
     std::env::set_var("GROKHUB_CONFIG", &root);
     let mut cabin = Cabin::quiet_for_test();
+    cabin.cfg.memory_backend = grokhub_core::amr::MemoryBackend::Legacy;
     cabin.new_thread(false);
     cabin.mem_name = "MEMORY.md".into();
     cabin.live_mut().push((
@@ -872,6 +870,7 @@ fn amr_dream_halt_skips_the_night() {
 fn legacy_never_dreams_or_creates_amr() {
     let _g = crate::config::hold_test_config();
     let (root, mut cabin) = amr_dream_cabin("legacy-no-dream");
+    cabin.cfg.memory_backend = grokhub_core::amr::MemoryBackend::Legacy;
     let now = grokhub_core::now_ms();
     assert!(cabin
         .dream_tonight("2026-10-07", REVIEW_NIGHT_HOUR, now)

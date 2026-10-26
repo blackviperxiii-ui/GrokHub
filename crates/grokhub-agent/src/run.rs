@@ -335,6 +335,7 @@ pub fn run_loop(
         let volatile = crate::prefix_cache::TurnVolatile::assemble(
             input.workspace,
             user_text,
+            history,
             first_turn,
             style,
             playbook.as_deref(),
@@ -366,9 +367,11 @@ pub fn run_loop(
             if input.depth == 0 {
                 replaybook_history(history, playbook.as_deref());
             }
-            // Later turns: surface sealed installed-app learnings when the user
-            // asks about games / Steam / library (first turn was often "hi").
-            if let Some(block) = crate::memory::followup_injection(user_text) {
+            // Later turns: recall again, injecting only hits no earlier block
+            // carried (and the sealed library pack for games / Steam asks).
+            if let Some(block) =
+                crate::memory::followup_injection(input.workspace, user_text, history)
+            {
                 history.push(InputItem::Message {
                     role: "system".into(),
                     content: vec![ContentPart::InputText(block)],
