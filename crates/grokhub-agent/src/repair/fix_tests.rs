@@ -637,7 +637,7 @@ fn the_agent_never_types_into_an_elevation_prompt() {
             GateOutcome::Park {
                 reason: "hard-class credentials: Credentials / secrets — Always cannot skip".into(),
                 hard: Some(HardClass::Credentials),
-                needs_viper: true,
+                needs_user: true,
             }
         );
         assert!(!credential_action(args).contains("hunter2"));

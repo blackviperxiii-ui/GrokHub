@@ -50,7 +50,7 @@ pub(crate) fn handle_desk_line<B: DesktopBackend>(
             Precheck::Park { class, reason } => {
                 let approved = park_and_wait(dir, c, &class, halted);
                 parked = hx::HardClass::parse(&class).map(|h| (h, approved));
-                (!approved).then(|| format!("Denied: {reason}. Viper did not approve it."))
+                (!approved).then(|| format!("Denied: {reason}. user did not approve it."))
             }
         };
         if let Some(reason) = refused {
@@ -291,7 +291,7 @@ pub(crate) fn access_now(config_dir: &Path, enabled: bool) -> AccessMode {
     hx::desk_access(config_dir, enabled)
 }
 
-/// Post a park for the cabin and wait. True only on Viper's Approve.
+/// Post a park for the cabin and wait. True only on user's Approve.
 pub(crate) fn park_and_wait(
     config_dir: &Path,
     call: &DeskCallLine,
@@ -1037,7 +1037,7 @@ mod tests {
         // #3: the typed fields are soft; Pay parks as money and Deny never clicks.
         let out = handle_desk_line(
             &mut s,
-            &rpc("type", json!({ "text": "Viper Example" })),
+            &rpc("type", json!({ "text": "user Example" })),
             ON,
             &dir,
             &mut || false,
@@ -1130,7 +1130,7 @@ mod tests {
             "Upload screenshot",
             "Reset all settings",
             "Checkout",
-            "Viper Example",
+            "user Example",
         ] {
             assert!(!trace.contains(never), "{never} reached a span: {trace}");
         }

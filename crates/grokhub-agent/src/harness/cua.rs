@@ -612,7 +612,7 @@ impl<C: CuaChild> CuaProxy<C> {
                 }
                 if !approved {
                     return refuse(
-                        &format!("Denied: {reason}. Viper did not approve it."),
+                        &format!("Denied: {reason}. user did not approve it."),
                         Some((class, false)),
                     );
                 }
@@ -1321,7 +1321,7 @@ mod tests {
             (waiter.join().unwrap().expect("park posted"), text_of(&out))
         };
         // #3: typed fields are soft; Pay parks as money.
-        for (i, text) in [(1, "Viper Example"), (2, "1 Example Road")] {
+        for (i, text) in [(1, "user Example"), (2, "1 Example Road")] {
             let out = p
                 .handle_line(
                     &call("type_text", json!({"element_index": i, "text": text})),
@@ -1426,7 +1426,7 @@ mod tests {
             "Upload screenshot",
             "Reset all settings",
             "Checkout — Shop",
-            "Viper Example",
+            "user Example",
             "See you at 5",
         ] {
             assert!(!trace.contains(never), "{never} reached a span: {trace}");

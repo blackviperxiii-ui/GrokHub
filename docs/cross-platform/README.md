@@ -3,12 +3,12 @@
 Goal: GrokHub on Windows, macOS, Linux, iOS, Android and the web. The Rust
 crates (`grokhub-core`, `grokhub-agent`, `grokhub-hub`) stay and sit behind
 Tauri commands. Only the egui UI in `grokhub-app` is rewritten in React. The
-egui cabin keeps shipping until the new shell reaches parity, and Viper decides
+egui cabin keeps shipping until the new shell reaches parity, and user decides
 when it is dropped.
 
 Phase 0 started from `beta` @ `f0a5c7a` (2026-10-23).
 
-## Decisions (Viper, 2026-10-23)
+## Decisions (user, 2026-10-23)
 
 - **Tauri is approved** for the new cross-platform shell. "No Electron. No
   Tauri." now describes only the egui cabin. Electron stays out.
@@ -16,9 +16,9 @@ Phase 0 started from `beta` @ `f0a5c7a` (2026-10-23).
   (2026-10-24; confirmed 2026-10-25) those rules are:
   - Every PR targets `beta`. The agent squash-merges it once CI is green,
     with no review hold; only promoting `beta` → `main` (and tags/releases)
-    needs Viper.
+    needs user.
   - `.github/`, `clippy.toml` and release-script changes ship in the PR like
-    any other change. Notion card decisions need no OK from Viper.
+    any other change. Notion card decisions need no OK from user.
 - **Web backend (Viper, 2026-10-25):** the web app is a remote for GrokHub
   running on your own computer, not `grokhub-hub` as a hosted service. The
   desktop runs the chats and keeps the key.

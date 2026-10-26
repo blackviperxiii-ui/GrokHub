@@ -241,7 +241,7 @@ impl Cabin {
             }
             InboxKey::Ask(i) => self.answer_perm_at(i, approve, SOFT_DENY),
             InboxKey::Soft(i) => self.answer_soft_park(i, approve, SOFT_DENY),
-            InboxKey::Full => self.resolve_grant_full(approve, "Viper kept Supervised"),
+            InboxKey::Full => self.resolve_grant_full(approve, "user kept Supervised"),
             InboxKey::Elicit if approve => self.inbox_jump(key),
             InboxKey::Elicit => {
                 if let Some(p) = self.elicit_ask.take() {
@@ -659,7 +659,7 @@ mod tests {
         assert_eq!(
             logged[before..].to_vec(),
             vec![
-                row("B", "Run command", "deny", "Viper denied", "delete"),
+                row("B", "Run command", "deny", "user denied", "delete"),
                 row(
                     "B",
                     "grokhub-desktop__click",
@@ -667,7 +667,7 @@ mod tests {
                     "allowed once",
                     "soft"
                 ),
-                row("audit", hx::RECOVERY_TOOL, "deny", "Viper denied", "soft"),
+                row("audit", hx::RECOVERY_TOOL, "deny", "user denied", "soft"),
             ]
         );
         // The card's own answer writes the same span.

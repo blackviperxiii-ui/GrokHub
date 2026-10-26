@@ -147,7 +147,7 @@ fn sync_without_a_hub_grant_parks_a_hard_send_card_and_approve_sends_once() {
         Some(hx::HardAnswer::Deny)
     );
 
-    cabin.resolve_hard_park(false, "Viper denied (Esc)");
+    cabin.resolve_hard_park(false, "user denied (Esc)");
     assert!(cabin.sync_rx.is_none());
     assert!(cabin.harness.park.is_none());
     assert_eq!(cabin.status, "Denied · Send");

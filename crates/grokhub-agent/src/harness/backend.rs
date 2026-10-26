@@ -193,7 +193,7 @@ pub struct DeskCall<'a> {
     pub result: &'a str,
     pub access: AccessMode,
     pub ui_changed: Option<bool>,
-    /// Set when the call was parked: its hard class and whether Viper approved it.
+    /// Set when the call was parked: its hard class and whether user approved it.
     pub parked: Option<(HardClass, bool)>,
 }
 
@@ -291,7 +291,7 @@ fn typed_action(args: &serde_json::Value, class: &str) -> String {
     format!("type {} chars into {window}{enter}", text.chars().count())
 }
 
-/// Post a park for the cabin's hard card and wait. True only on Viper's
+/// Post a park for the cabin's hard card and wait. True only on user's
 /// Approve; TTL, a halt, or a closed cabin is Deny. `tool` and `args` are the
 /// `grokhub-desktop` shape (Cua calls are mapped first, `cua_as_desk`).
 pub fn park_desk_call(
@@ -534,7 +534,7 @@ mod tests {
             GateOutcome::Park {
                 reason: "hard-class delete: Delete — Always cannot skip".into(),
                 hard: Some(crate::harness::HardClass::Delete),
-                needs_viper: true,
+                needs_user: true,
             }
         );
         assert_eq!(

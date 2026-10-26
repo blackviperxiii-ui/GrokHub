@@ -226,7 +226,7 @@ fn delete_tools_park_a_hard_card_and_deny_leaves_files_byte_identical() {
         (ok, text.as_str()),
         (
             false,
-            "Denied: hard-class delete: Delete — Always cannot skip. Viper did not approve it."
+            "Denied: hard-class delete: Delete — Always cannot skip. user did not approve it."
         )
     );
     assert_eq!(io.parks.len(), 1);
@@ -515,7 +515,7 @@ fn connection_remove_and_automation_delete_park_and_deny_leaves_files_byte_ident
         json!({ "name": "files" }),
     );
     assert!(
-        !ok && text.ends_with("Viper did not approve it."),
+        !ok && text.ends_with("user did not approve it."),
         "{text}"
     );
     let (ok, text) = call(
@@ -525,7 +525,7 @@ fn connection_remove_and_automation_delete_park_and_deny_leaves_files_byte_ident
         json!({ "id": id }),
     );
     assert!(
-        !ok && text.ends_with("Viper did not approve it."),
+        !ok && text.ends_with("user did not approve it."),
         "{text}"
     );
     let parked: Vec<(&str, &str)> = io

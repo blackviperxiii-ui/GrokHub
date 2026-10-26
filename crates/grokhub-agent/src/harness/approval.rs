@@ -24,7 +24,7 @@ pub enum GateOutcome {
     Park {
         reason: String,
         hard: Option<HardClass>,
-        needs_viper: bool,
+        needs_user: bool,
     },
     Allow,
 }
@@ -34,11 +34,11 @@ impl GateOutcome {
         matches!(self, Self::Allow)
     }
 
-    pub fn needs_viper(&self) -> bool {
+    pub fn needs_user(&self) -> bool {
         matches!(
             self,
             Self::Park {
-                needs_viper: true,
+                needs_user: true,
                 ..
             }
         )
@@ -202,7 +202,7 @@ pub fn decide(step: Step<'_>) -> GateOutcome {
                     }
                 ),
                 hard: Some(class),
-                needs_viper: true,
+                needs_user: true,
             };
         }
         Step::Scope { scope, ledger } => {
@@ -239,7 +239,7 @@ pub fn decide(step: Step<'_>) -> GateOutcome {
                 class.label()
             ),
             hard: Some(class),
-            needs_viper: true,
+            needs_user: true,
         },
         HardHit::None => GateOutcome::Allow,
     }
@@ -274,7 +274,7 @@ pub fn decide_harness(
         Decision::Ask => GateOutcome::Park {
             reason: format!("permission ask for `{name}`"),
             hard: None,
-            needs_viper: false,
+            needs_user: false,
         },
         Decision::Refuse(reason) => GateOutcome::Refuse { reason },
     }
@@ -311,7 +311,7 @@ mod tests {
                 GateOutcome::Park {
                     reason: "hard-class delete: Delete — Always cannot skip".into(),
                     hard: Some(HardClass::Delete),
-                    needs_viper: true,
+                    needs_user: true,
                 }
             );
         }
@@ -400,7 +400,7 @@ mod tests {
             GateOutcome::Park {
                 reason: "hard-class send: Send — Always cannot skip".into(),
                 hard: Some(HardClass::Send),
-                needs_viper: true,
+                needs_user: true,
             }
         );
     }
@@ -479,7 +479,7 @@ mod tests {
         let money = GateOutcome::Park {
             reason: "hard-class money: Purchase / money — Always cannot skip".into(),
             hard: Some(HardClass::Money),
-            needs_viper: true,
+            needs_user: true,
         };
         let ledger = ConsentLedger::load(&dir);
         assert_eq!(

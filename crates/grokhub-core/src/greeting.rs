@@ -599,20 +599,20 @@ mod tests {
     #[test]
     fn greeting_name_prefers_user_md() {
         assert_eq!(
-            greeting_name("Name: Viper\neditor: nvim\n", "Viper"),
+            greeting_name("Name: Viper\neditor: nvim\n", "user"),
             "Viper"
         );
-        assert_eq!(greeting_name("# User\n", "Viper Xiii"), "Viper");
+        assert_eq!(greeting_name("# User\n", "user"), "user");
         assert_eq!(
             greeting_name("# User profile\nWho you are, preferred tools.\n", "Viper"),
-            "Viper",
+            "user",
             "the USER.md template heading must not become Hello, User"
         );
         assert_eq!(greeting_name("", "Viper"), "Viper");
         assert_eq!(greeting_name("", ""), "");
         assert_eq!(
-            greeting_name("Named: my project\n", "Viper"),
-            "Viper",
+            greeting_name("Named: my project\n", "user"),
+            "user",
             "nameplate-style lines must not steal the greeting"
         );
         assert_eq!(
@@ -636,7 +636,7 @@ mod tests {
             "Name: Viper\neditor: nvim\n",
             "Last night we painted the cabin wall.\n",
             &insights,
-            "Viper",
+            "user",
             21,
         );
         g_in.last_project = "Night cabin";
@@ -683,7 +683,7 @@ mod tests {
             "Name: Viper\n",
             "Paint the wall tonight.\n",
             &["likes the cabin quiet".into()],
-            "Viper",
+            "user",
             22,
         ));
         assert!(prompt.contains("Do not repeat"), "{prompt}");
@@ -706,7 +706,7 @@ mod tests {
             "Name: Viper\n",
             "Paint the wall tonight.\n",
             &insights,
-            "Viper",
+            "user",
             22,
         );
         with_night.last_night = "host snapshot failed";
@@ -741,7 +741,7 @@ mod tests {
             "\"Night, Viper. The wall still wants a second coat.\"\nAnother line.",
         )
         .expect("parse");
-        assert!(g.contains("Viper"), "{g}");
+        assert!(g.contains("user"), "{g}");
         assert!(!g.contains('"'), "{g}");
         assert!(g.chars().count() <= GREETING_MAX_CHARS, "{g}");
     }
@@ -829,10 +829,10 @@ mod tests {
         assert_eq!(g, "Good morning. Connect Grok and I'll be right here.");
 
         first.signed_in = true;
-        first.display_name = "Viper";
+        first.display_name = "user";
         assert_eq!(classify_greeting(&first), GreetingKind::FirstRunSigned);
         let g = local_greeting(&first);
-        assert!(g.contains("Viper"), "{g}");
+        assert!(g.contains("user"), "{g}");
         assert!(g.contains("I'm here"), "{g}");
         assert!(!g.contains('?'), "{g}");
 

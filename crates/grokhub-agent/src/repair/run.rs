@@ -150,11 +150,11 @@ mod tests {
         for i in 0..25 {
             log.push_str(&format!("Oct 07 10:00:{i:02} box app[1]: line {i}\n"));
         }
-        log.push_str("Oct 07 10:01:00 box sync[9]: auth failed for viper@example.com with key sk-abcdefghijklmnopqrstuv\n");
+        log.push_str("Oct 07 10:01:00 box sync[9]: auth failed for user@example.com with key sk-abcdefghijklmnopqrstuv\n");
         let out = redact_output(&log, true);
         assert_eq!(out.lines().count(), 20);
         assert!(!out.contains("sk-abcdefghijklmnopqrstuv"), "{out}");
-        assert!(!out.contains("viper@example.com"), "{out}");
+        assert!(!out.contains("user@example.com"), "{out}");
         assert!(
             out.ends_with("auth failed for [email] with key [redacted]"),
             "{out}"

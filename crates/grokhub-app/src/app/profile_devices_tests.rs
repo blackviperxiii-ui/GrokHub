@@ -7,9 +7,9 @@ use super::*;
 
 #[test]
 fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
-    let email = "viper@example.com";
+    let email = "user@example.com";
     let picture = "/home/user/.config/GrokHub/profile.png";
-    let menu = super::avatar_menu("Viper", picture, Some("OAuth Name"), "Name: Viper\n");
+    let menu = super::avatar_menu("Viper", picture, Some("OAuth Name"), "Name: user\n");
     assert_eq!(menu.name, "Viper");
     assert_eq!(menu.picture_path, picture);
     assert!(!menu.name.contains(email) && !menu.picture_path.contains(email));
@@ -19,8 +19,8 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
     assert_eq!(fallback.name, "OAuth Name");
     assert!(fallback.picture_path.is_empty());
 
-    let blank = super::avatar_menu("   ", "", Some("GrokHub"), "Name: Viper\n");
-    assert_eq!(blank.name, "Viper");
+    let blank = super::avatar_menu("   ", "", Some("GrokHub"), "Name: user\n");
+    assert_eq!(blank.name, "user");
     assert!(!blank.name.contains(email));
 
     let src = cabin_src();
