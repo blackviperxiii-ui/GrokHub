@@ -248,7 +248,11 @@ export function Memory() {
           Remember
         </button>
       </form>
-      {note && <p className="note">{note}</p>}
+      {note && (
+        <p className="note" role="status">
+          {note}
+        </p>
+      )}
       {editor("workspace", "Project notes", notes.workspacePath)}
       {editor("global", "Global notes", notes.globalPath)}
       <form className="add" onSubmit={search}>
