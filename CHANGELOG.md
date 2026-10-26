@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Release: add the minisign public key (`packaging/minisign.pub`); the updater now verifies `SHA256SUMS.minisig`.
+
 ## 3.1.0 — 2026-10-15
 
 - UI: optional egui_dock main-panel tabs behind Settings → Dockable panels (U7f; default off; layout in dock.json; egui 0.36, no egui/eframe bump).
