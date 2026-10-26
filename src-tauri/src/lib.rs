@@ -975,6 +975,18 @@ fn remote_call(app: &AppHandle, command: &str, args: &Value) -> Result<Value, St
         "restart_connector" => out(block_on(restart_connector(state, arg(args, "name")?))?),
         "sign_out_connector" => out(block_on(sign_out_connector(state, arg(args, "name")?))?),
         "disconnect_connector" => out(block_on(disconnect_connector(state, arg(args, "name")?))?),
+        "get_pulse" => out(block_on(get_pulse(state, arg(args, "day")?))?),
+        "pulse_act" => out(block_on(pulse_act(
+            state,
+            arg(args, "id")?,
+            arg(args, "act")?,
+            arg(args, "day")?,
+        ))?),
+        "pulse_discuss" => out(block_on(pulse_discuss(state, arg(args, "id")?))?),
+        "pulse_why" => out(block_on(pulse_why(state, arg(args, "id")?))?),
+        "get_feed_prompt" => out(block_on(get_feed_prompt(state))?),
+        "save_feed_prompt" => out(block_on(save_feed_prompt(state, arg(args, "text")?))?),
+        "pulse_image" => out(block_on(pulse_image(state, arg(args, "name")?))?),
         _ => Err(remote::REFUSED.into()),
     }
 }
