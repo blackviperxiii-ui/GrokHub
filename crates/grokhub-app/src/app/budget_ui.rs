@@ -493,7 +493,7 @@ mod tests {
             Some(hx::HardAnswer::Deny)
         );
         // Deny writes nothing.
-        app.resolve_hard_park(false, "Viper denied (Esc)");
+        app.resolve_hard_park(false, "user denied (Esc)");
         assert!(app.consent().premium_grant("premium:grok-heavy").is_none());
         // Approve (a click) writes exactly one grant for exactly this route.
         app.ask_premium("premium:grok-heavy");

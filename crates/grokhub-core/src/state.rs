@@ -793,7 +793,7 @@ mod tests {
   "pair": null,
   "peers": [
     { "id": "d-phone", "name": "Pixel phone", "token": "tok-phone", "lastSeen": 5 },
-    { "id": "d-laptop", "name": "Viper's laptop", "token": "tok-laptop", "lastSeen": 6 }
+    { "id": "d-laptop", "name": "user's laptop", "token": "tok-laptop", "lastSeen": 6 }
   ],
   "inbox": [
     {
@@ -831,7 +831,7 @@ mod tests {
         assert_eq!(st.device_id, "d-hub");
         // The phone row and its queued task go; its token no longer opens anything.
         assert_eq!(st.peers.len(), 1);
-        assert_eq!(st.peers[0].name, "Viper's laptop");
+        assert_eq!(st.peers[0].name, "user's laptop");
         assert!(st.peer_for_token("tok-phone").is_none());
         assert_eq!(
             st.peer_for_token("tok-laptop").map(|p| p.id.as_str()),

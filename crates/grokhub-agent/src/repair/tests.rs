@@ -25,7 +25,7 @@ fn linux_answer(spec: &ProbeSpec) -> ProbeRun {
         "df" => done("Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/sda2 1000 980 20 98% /\n"),
         "free" => done("Mem: 16000000000 4000000000 8000000000 100000000 4000000000 11000000000\n"),
         "systemctl" => done(""),
-        "journalctl" => done("Oct 07 10:01:00 box sync[9]: auth failed for viper@example.com key sk-abcdefghijklmnopqrstuv\n"),
+        "journalctl" => done("Oct 07 10:01:00 box sync[9]: auth failed for user@example.com key sk-abcdefghijklmnopqrstuv\n"),
         "ip" => done("lo UNKNOWN 127.0.0.1/8\nwlp2s0 DOWN\n"),
         "getent" => ProbeRun::Done { code: Some(2), stdout: String::new(), stderr: String::new() },
         "dpkg" => done(""),
@@ -156,7 +156,7 @@ fn journal_secrets_and_emails_never_reach_the_span_or_the_model() {
     let model = model_text(&r.report);
     for text in [&raw, &model] {
         assert!(!text.contains("sk-abcdefghijklmnopqrstuv"), "{text}");
-        assert!(!text.contains("viper@example.com"), "{text}");
+        assert!(!text.contains("user@example.com"), "{text}");
     }
     assert!(
         model.contains(

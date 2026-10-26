@@ -1660,7 +1660,7 @@ mod tests {
             "assistant",
             "grok-3-mini-fast — Grok 3 Mini Fast (chat)\ngrok-4.7 — Grok 4.7 (chat)"
         ));
-        assert!(!is_cabin_slash_turn("assistant", "Hello Viper"));
+        assert!(!is_cabin_slash_turn("assistant", "Hello Alex"));
         assert!(is_cabin_slash_turn("user", "/help"));
     }
 

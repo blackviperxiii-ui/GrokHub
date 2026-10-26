@@ -82,10 +82,10 @@ fn cabin_src_strips_crlf_so_windows_checkout_matches_lf_asserts() {
 
 #[test]
 fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
-    let email = "viper@example.com";
+    let email = "alex@example.com";
     let picture = "/home/user/.config/GrokHub/profile.png";
-    let menu = super::avatar_menu("Viper", picture, Some("OAuth Name"), "Name: Viper\n");
-    assert_eq!(menu.name, "Viper");
+    let menu = super::avatar_menu("Alex", picture, Some("OAuth Name"), "Name: Alex\n");
+    assert_eq!(menu.name, "Alex");
     assert_eq!(menu.picture_path, picture);
     assert!(!menu.name.contains(email) && !menu.picture_path.contains(email));
     assert!(!menu.name.contains('@') && !menu.picture_path.contains('@'));
@@ -94,8 +94,8 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
     assert_eq!(fallback.name, "OAuth Name");
     assert!(fallback.picture_path.is_empty());
 
-    let blank = super::avatar_menu("   ", "", Some("GrokHub"), "Name: Viper\n");
-    assert_eq!(blank.name, "Viper");
+    let blank = super::avatar_menu("   ", "", Some("GrokHub"), "Name: Alex\n");
+    assert_eq!(blank.name, "Alex");
     assert!(!blank.name.contains(email));
 
     let src = cabin_src();
@@ -232,17 +232,17 @@ fn stale_after_newer_publish(older: super::AppConfig, newer: super::AppConfig) -
 #[test]
 fn name_save_does_not_overwrite_a_newer_picture() {
     let name = super::AppConfig {
-        display_name: "Viper".into(),
+        display_name: "Alex".into(),
         api_key: "sk-secret".into(),
         ..super::AppConfig::default()
     };
     let picture = super::AppConfig {
-        display_name: "Viper".into(),
+        display_name: "Alex".into(),
         profile_picture: "/cfg/profile.png".into(),
         ..super::AppConfig::default()
     };
     let current = stale_after_newer_publish(name, picture);
-    assert_eq!(current.display_name, "Viper");
+    assert_eq!(current.display_name, "Alex");
     assert_eq!(current.profile_picture, "/cfg/profile.png");
     assert!(current.api_key.is_empty());
 
@@ -273,12 +273,12 @@ fn picture_save_does_not_overwrite_a_newer_name() {
         ..super::AppConfig::default()
     };
     let name = super::AppConfig {
-        display_name: "Viper".into(),
+        display_name: "Alex".into(),
         profile_picture: "/cfg/profile.png".into(),
         ..super::AppConfig::default()
     };
     let current = stale_after_newer_publish(picture, name);
-    assert_eq!(current.display_name, "Viper");
+    assert_eq!(current.display_name, "Alex");
     assert_eq!(current.profile_picture, "/cfg/profile.png");
 }
 
@@ -11383,7 +11383,7 @@ fn sync_without_a_hub_grant_parks_a_hard_send_card_and_approve_sends_once() {
         Some(hx::HardAnswer::Deny)
     );
 
-    cabin.resolve_hard_park(false, "Viper denied (Esc)");
+    cabin.resolve_hard_park(false, "Alex denied (Esc)");
     assert!(cabin.sync_rx.is_none());
     assert!(cabin.harness.park.is_none());
     assert_eq!(cabin.status, "Denied · Send");
@@ -20686,19 +20686,19 @@ fn greeting_poll_keeps_a_fresh_line() {
     assert_eq!(cabin.greeting, "Harbor is quiet tonight.");
 
     greet_tx
-        .send("Evening, Viper. The dock light is on.".into())
+        .send("Evening, Alex. The dock light is on.".into())
         .expect("send greeting");
     cabin.poll_greeting();
     assert!(cabin.greeting_rx.is_none());
     assert!(!cabin.greeting_busy);
-    assert_eq!(cabin.greeting, "Evening, Viper. The dock light is on.");
+    assert_eq!(cabin.greeting, "Evening, Alex. The dock light is on.");
 
     cabin.greeting = "Harbor is quiet tonight.".into();
     cabin.greeting_user_md = "the wall still wants a second coat tonight".into();
     let (echo_tx, echo_rx) = std::sync::mpsc::channel();
     cabin.greeting_rx = Some(echo_rx);
     echo_tx
-        .send("Evening, Viper. the wall still wants a second coat tonight.".into())
+        .send("Evening, Alex. the wall still wants a second coat tonight.".into())
         .expect("send echoed greeting");
     cabin.poll_greeting();
     assert!(cabin.greeting_rx.is_none());
@@ -21552,7 +21552,7 @@ fn chip_pairs_cap_a_long_reply() {
 #[test]
 fn greeting_hides_once_the_chat_has_text() {
     let mut cabin = Cabin::quiet_for_test();
-    cabin.greeting = "Evening, Viper.".into();
+    cabin.greeting = "Evening, Alex.".into();
     cabin.messages = Arc::new(vec![("user".into(), "Harbor".into())]);
     cabin.refresh_greeting();
     assert!(
@@ -21563,7 +21563,7 @@ fn greeting_hides_once_the_chat_has_text() {
     assert!(cabin.greeting_rx.is_none());
     assert!(!cabin.greeting_busy);
 
-    cabin.greeting = "Evening, Viper.".into();
+    cabin.greeting = "Evening, Alex.".into();
     cabin.messages = Arc::new(Vec::new());
     cabin.threads.push(ChatThread::new("Scratch", true));
     cabin.thread_idx = cabin.threads.len() - 1;
@@ -23344,9 +23344,9 @@ fn fallback_cabin_name_defaults_to_grok() {
     assert!(!blank.is_empty());
     assert_eq!(blank, "Grok");
 
-    let from_md = super::fallback_cabin_name("Name: Viper\n");
+    let from_md = super::fallback_cabin_name("Name: Alex\n");
     assert!(!from_md.is_empty());
-    assert_eq!(from_md, "Viper");
+    assert_eq!(from_md, "Alex");
 }
 
 // Folded from PR #417.

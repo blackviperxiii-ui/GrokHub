@@ -546,7 +546,7 @@ mod tests {
     },
     {
       "type": "key_value",
-      "pairs": [{ "key": "Host", "value": "beast" }]
+      "pairs": [{ "key": "Host", "value": "workstation" }]
     },
     { "type": "button", "label": "Approve cleanup", "action": "run-cleanup" },
     {

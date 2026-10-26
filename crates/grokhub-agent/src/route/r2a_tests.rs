@@ -935,7 +935,7 @@ impl ProbeTransport for Grader {
 fn evals_send_only_the_fixed_set_and_stop_at_the_token_cap() {
     let dir = crate::harness::test_dir("route-r2a-evals");
     // User data the evals must never carry.
-    std::fs::write(dir.join("memory.md"), "Viper's bank PIN is 4242").unwrap();
+    std::fs::write(dir.join("memory.md"), "Alex's bank PIN is 4242").unwrap();
     let (reg, profiles) = fleet();
     let inp = TableInputs {
         reg: &reg,
@@ -962,7 +962,7 @@ fn evals_send_only_the_fixed_set_and_stop_at_the_token_cap() {
     let texts = eval_texts();
     for c in &grader.0 {
         let body = c.body.to_string();
-        assert!(!body.contains("4242") && !body.contains("Viper"));
+        assert!(!body.contains("4242") && !body.contains("Alex"));
         assert!(texts.contains(&c.body["input"][0]["content"].as_str().unwrap()));
         assert_eq!(c.body["store"], serde_json::json!(false));
     }
