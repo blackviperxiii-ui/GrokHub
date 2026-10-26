@@ -79,6 +79,7 @@ impl TurnVolatile {
         first_turn: bool,
         style: Option<grokhub_core::talk::TalkStyle>,
         playbook: Option<&str>,
+        already: &[String],
     ) -> Self {
         let style = style.map(|s| s.block()).filter(|s| !s.is_empty());
         let playbook = playbook
@@ -88,7 +89,7 @@ impl TurnVolatile {
         let memory = if first_turn {
             crate::memory::first_turn_injection(workspace, user_text)
         } else {
-            crate::memory::followup_injection(user_text)
+            crate::memory::followup_injection(workspace, user_text, already)
         };
         Self {
             style,

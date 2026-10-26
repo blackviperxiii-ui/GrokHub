@@ -416,6 +416,11 @@ impl Cabin {
         if !learned.is_empty() {
             parts.push(learned);
         }
+        let identity = grokhub_agent::identity_blocks(&crate::config::config_dir());
+        if !identity.is_empty() {
+            parts.push(identity);
+            needs_safety_closer = true;
+        }
         if needs_safety_closer {
             parts.push(VOLATILE_SAFETY_CLOSER.to_string());
         }

@@ -68,7 +68,7 @@ Chat runs on the native engine on this desktop (full filesystem and shell; Grok 
 | `grokhub` | `crates/grokhub-app` | Cabin GUI and native chat engine |
 | `grokhub-hub` | `crates/grokhub-hub` | Standalone LAN `/v1` hub (port **18766**) |
 
-Config and memory: `~/.config/GrokHub` (`app.json`, `projects.json`, `updates.json`, `suggestions.json`, `secrets.json` mode 0600 / Windows user-only DACL, `memory/SOUL.md`, `USER.md`, `MEMORY.md`). `/recall` reads those memory files unless `app.json` sets `"memory_backend": "amr"`, which reads local `amr/nodes` instead.
+Config and memory: `~/.config/GrokHub` (`app.json`, `projects.json`, `updates.json`, `suggestions.json`, `secrets.json` mode 0600 / Windows user-only DACL, `memory/SOUL.md`, `USER.md`, `MEMORY.md`). `/recall` reads those memory files when `app.json` omits `memory_backend` or sets `"legacy"`. A new install with no `app.json` uses `"memory_backend": "amr"` and still reads legacy `MEMORY.md` alongside `amr/nodes`. Set `"memory_backend": "legacy"` to stay on the old files only.
 
 ## Channels: stable and beta
 
