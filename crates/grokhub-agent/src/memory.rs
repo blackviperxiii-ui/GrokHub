@@ -131,6 +131,9 @@ pub fn remember(workspace: &Path, text: &str) -> Result<String, String> {
     if stored.trim().is_empty() || !grokhub_core::is_plain_text(&stored) {
         return Err("Secrets never in markdown".into());
     }
+    if dream_model_enabled() {
+        return propose_core_line(stored.trim());
+    }
     let path = if global {
         global_memory_path()
     } else {
@@ -510,6 +513,52 @@ pub(crate) fn amr_enabled_at(dir: &Path) -> bool {
         return true;
     };
     value.get("memory_backend").and_then(|b| b.as_str()) == Some("amr")
+}
+
+/// Model dream is on only when `app.json` sets `"dream_model": true`.
+/// A missing file, a missing key, or any other value stays off.
+pub fn dream_model_enabled() -> bool {
+    dream_model_enabled_at(&crate::perm::config_dir())
+}
+
+pub(crate) fn dream_model_enabled_at(dir: &Path) -> bool {
+    let Some(value) = read_app_json_at(dir) else {
+        return false;
+    };
+    value.get("dream_model").and_then(|flag| flag.as_bool()) == Some(true)
+}
+
+fn propose_core_line(text: &str) -> Result<String, String> {
+    let store = amr_store();
+    let source = "turn:memory";
+    let write = grokhub_core::amr::LineWrite {
+        text,
+        source,
+        tags: Vec::new(),
+        confidence: 1.0,
+        revive: true,
+    };
+    match grokhub_core::amr::stage_core_line(
+        &store,
+        &write,
+        grokhub_core::now_ms(),
+        true,
+        grokhub_core::amr::CoreWriter::InTurn,
+    ) {
+        Ok(grokhub_core::amr::StagedCore::Proposed(grokhub_core::amr::Noted::New(_))) => {
+            Ok("Proposed for approval. Nothing was added to core memory.".into())
+        }
+        Ok(grokhub_core::amr::StagedCore::Proposed(grokhub_core::amr::Noted::Known(_))) => {
+            Ok("Already proposed.".into())
+        }
+        Ok(grokhub_core::amr::StagedCore::Proposed(grokhub_core::amr::Noted::Skipped(why))) => {
+            Ok(format!("Skipped: {why}"))
+        }
+        Ok(grokhub_core::amr::StagedCore::Remembered(_)) => {
+            Ok("Proposed for approval. Nothing was added to core memory.".into())
+        }
+        Err(err) => Err(err.to_string()),
+    }
 }
 
 /// `{config}/amr`, sealing personal nodes with the learned-tier key.
