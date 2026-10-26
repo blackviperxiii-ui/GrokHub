@@ -1,2 +1,0 @@
-- Web access: the pairing code changes after 30 minutes with no browser using it. That ends every web session, and browsers pair again with the new code, which Settings shows.
-- Web access: the Settings note says a paired browser can approve file changes and commands on this computer.
