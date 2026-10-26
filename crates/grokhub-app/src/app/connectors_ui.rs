@@ -239,6 +239,19 @@ fn paint_connector_row(ui: &mut egui::Ui, row: &ConnectorRow) -> Option<Connecto
     hit
 }
 
+/// What the model gets back when it asks for a connector GrokHub doesn't run
+/// (`CONNECTOR_CMD: slack …`): only GitHub runs that way, and the next step is
+/// Settings → Connectors.
+pub(super) fn unknown_connector_fact(id: &str, tool: &str) -> String {
+    format!(
+        "CONNECTOR_RESULT (facts only):\n{id} {tool}: GrokHub has no {id} connector. CONNECTOR_CMD runs GitHub only. Other services come from MCP servers the user adds in Settings → Connectors, and those show up as their own tools. Tell the user they can add one there."
+    )
+}
+
+/// The status line for the same miss.
+pub(super) fn unknown_connector_status(id: &str) -> String {
+    format!("No {id} connector. Add one in Settings → Connectors.")
+}
 impl Cabin {
     /// Open Settings on Connectors (sidebar, palette, `/connectors`, `/mcps`, …).
     pub(super) fn open_connectors(&mut self) {
@@ -569,5 +582,22 @@ mod tests {
             "a second open keeps the page behind Settings"
         );
         std::env::remove_var("GROKHUB_CONFIG");
+    }
+    #[test]
+    fn an_unknown_connector_points_at_settings_connectors() {
+        assert_eq!(
+            unknown_connector_fact("slack", "post_message"),
+            "CONNECTOR_RESULT (facts only):\nslack post_message: GrokHub has no slack connector. CONNECTOR_CMD runs GitHub only. Other services come from MCP servers the user adds in Settings → Connectors, and those show up as their own tools. Tell the user they can add one there."
+        );
+        assert_eq!(
+            unknown_connector_status("slack"),
+            "No slack connector. Add one in Settings → Connectors."
+        );
+        let jobs = include_str!("jobs.rs");
+        assert!(
+            !jobs.contains("GitHub is the only live connector"),
+            "old dead-end copy is gone"
+        );
+        assert!(jobs.contains("unknown_connector_fact(id, tool)"));
     }
 }

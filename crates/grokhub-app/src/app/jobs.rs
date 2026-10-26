@@ -464,10 +464,9 @@ impl Cabin {
         if id != "github" {
             self.push_bound_msg(
                 "user",
-                format!(
-                    "CONNECTOR_RESULT (facts only):\n{id} {tool} — not wired. GitHub is the only live connector."
-                ),
+                super::connectors_ui::unknown_connector_fact(id, tool),
             );
+            self.status = super::connectors_ui::unknown_connector_status(id);
             self.persist();
             self.kick_model(false);
             return;

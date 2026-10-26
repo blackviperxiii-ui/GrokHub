@@ -5,6 +5,8 @@
 #   3) a PR edits Cargo.lock without a Cargo.toml dep edit or the dependencies label
 #   4) VERSION copies disagree (cargo xtask bump --check)
 #   5) a non-release PR touches version lockstep files (needs `release` label)
+#   6) a persist path spawns a thread or writes a file outside PersistService
+#   7) a workflow uses an action by tag or branch instead of a full commit SHA
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -13,8 +15,13 @@ cd "$ROOT"
 fail=0
 
 # --- 1. Conflict markers (study: ^<<<<<<< / ^>>>>>>>) ---------------------------
-markers=$(git grep -nE '^(<<<<<<<|>>>>>>>)' -- . ':!.git/**' 2>/dev/null || true)
-if [[ -n "$markers" ]]; then
+# git grep exits 1 for "no match"; anything else is an error and must fail.
+grep_rc=0
+markers=$(git grep -nE '^(<<<<<<<|>>>>>>>)' -- . ':!.git/**' 2>/dev/null) || grep_rc=$?
+if (( grep_rc > 1 )); then
+  echo "ci-guards: git grep for conflict markers errored (rc=$grep_rc)" >&2
+  fail=1
+elif [[ -n "$markers" ]]; then
   echo "ci-guards: conflict markers found:" >&2
   echo "$markers" >&2
   fail=1
@@ -44,8 +51,8 @@ budget() {
 
 budget "crates/grokhub-app/src/app/mod.rs" 5900
 budget "crates/grokhub-app/src/cards.rs" 4400
-budget "crates/grokhub-core/src/slash.rs" 1900
-budget "crates/grokhub-app/src/app/tests.rs" 29500
+budget "crates/grokhub-core/src/slash/mod.rs" 1650
+budget "crates/grokhub-app/src/app/tests.rs" 2800
 
 # --- Shared PR helpers (labels + version fingerprints) -------------------------
 pr_labels_csv=""
@@ -122,19 +129,20 @@ grokhub_lock_versions() {
   python3 - "$file" <<'PY'
 import sys
 text = open(sys.argv[1], encoding="utf-8").read().splitlines()
-want = {"grokhub-app", "grokhub-agent", "grokhub-core", "grokhub-hub"}
+want = {"grokhub-app", "grokhub-agent", "grokhub-core", "grokhub-hub", "grokhub-proto"}
 out = []
 i = 0
 while i < len(text):
     line = text[i]
     if line.startswith("name = \"") and line[8:-1] in want:
-        name = line[8:-1]
         ver = ""
         if i + 1 < len(text) and text[i + 1].startswith("version = \""):
             ver = text[i + 1][11:-1]
-        out.append(f"{name}={ver}")
+        out.append(ver)
     i += 1
-print(",".join(sorted(out)))
+# Distinct versions only: a new workspace crate at the current version is
+# not a version change, while a bump of any grokhub-* entry still is.
+print(",".join(sorted(set(out))))
 PY
 }
 
@@ -168,7 +176,15 @@ if [[ "${GITHUB_EVENT_NAME:-}" == "pull_request" ]]; then
     echo "ci-guards: could not resolve merge-base against origin/${base_ref}; failing PR file rules" >&2
     fail=1
   else
-    mapfile -t pr_changed < <(git diff --name-only "$pr_merge_base"...HEAD)
+    # Capture first: mapfile < <(...) would swallow a git diff failure and
+    # leave an empty file list that skips every PR rule.
+    if ! changed_out=$(git diff --name-only "$pr_merge_base"...HEAD); then
+      echo "ci-guards: git diff against merge-base failed; failing PR file rules" >&2
+      fail=1
+      changed_out=""
+    fi
+    mapfile -t pr_changed <<<"$changed_out"
+    [[ -n "$changed_out" ]] || pr_changed=()
     fetch_pr_labels
     echo "ci-guards: PR labels=[${pr_labels_csv}]"
 
@@ -243,7 +259,10 @@ if [[ "${GITHUB_EVENT_NAME:-}" == "pull_request" ]]; then
       old_ver=$(workspace_package_version "$old_toml")
       new_ver=$(workspace_package_version "Cargo.toml")
       rm -f "$old_toml"
-      if [[ -n "$old_ver" && -n "$new_ver" && "$old_ver" != "$new_ver" ]]; then
+      if [[ -z "$old_ver" || -z "$new_ver" ]]; then
+        echo "ci-guards: could not parse Cargo.toml [workspace.package].version (old='${old_ver}' new='${new_ver}')" >&2
+        fail=1
+      elif [[ "$old_ver" != "$new_ver" ]]; then
         version_hits+=("Cargo.toml[workspace.package].version (${old_ver}->${new_ver})")
       fi
     fi
@@ -254,7 +273,10 @@ if [[ "${GITHUB_EVENT_NAME:-}" == "pull_request" ]]; then
       old_line=$(cabin_reports_version_line "$old_cli")
       new_line=$(cabin_reports_version_line "crates/grokhub-app/src/cli.rs")
       rm -f "$old_cli"
-      if [[ "$old_line" != "$new_line" ]]; then
+      if [[ -z "$old_line" || -z "$new_line" ]]; then
+        echo "ci-guards: could not find the cabin_reports_version line in cli.rs (old/new)" >&2
+        fail=1
+      elif [[ "$old_line" != "$new_line" ]]; then
         version_hits+=("crates/grokhub-app/src/cli.rs (cabin_reports_version)")
       fi
     fi
@@ -265,7 +287,10 @@ if [[ "${GITHUB_EVENT_NAME:-}" == "pull_request" ]]; then
       old_gv=$(grokhub_lock_versions "$old_lock")
       new_gv=$(grokhub_lock_versions "Cargo.lock")
       rm -f "$old_lock"
-      if [[ -n "$old_gv" && -n "$new_gv" && "$old_gv" != "$new_gv" ]]; then
+      if [[ -z "$old_gv" || -z "$new_gv" ]]; then
+        echo "ci-guards: could not read grokhub-* versions from Cargo.lock (old/new)" >&2
+        fail=1
+      elif [[ "$old_gv" != "$new_gv" ]]; then
         version_hits+=("Cargo.lock (grokhub-* version)")
       fi
     fi
@@ -310,6 +335,54 @@ if cargo xtask bump --check; then
 else
   echo "ci-guards: xtask bump --check failed (VERSION copies disagree)" >&2
   fail=1
+fi
+
+# --- 6. No raw spawn/write in app persist paths (rearch stage 6) ---------------
+# Persist writes go through PersistService (app/persist_service.rs). A raw
+# thread::spawn or fs::write in these files fails unless the line, or the line
+# right above it, carries `ci-guard: allow-raw-io <reason>`.
+raw_io_files=(
+  "crates/grokhub-app/src/app/persist.rs"
+  "crates/grokhub-app/src/app/projects.rs"
+  "crates/grokhub-app/src/app/dock_ui.rs"
+)
+raw_io_bad=0
+for path in "${raw_io_files[@]}"; do
+  if [[ ! -f "$path" ]]; then
+    echo "ci-guards: missing raw-io guarded file $path" >&2
+    fail=1
+    raw_io_bad=1
+    continue
+  fi
+  hits=$(awk '
+    /ci-guard: allow-raw-io [^ ]/ { allow = NR; next }
+    /(^|[^A-Za-z0-9_])(std::)?(thread::spawn|fs::write)([^A-Za-z0-9_]|$)/ {
+      if (allow != NR - 1) printf "%s:%d: %s\n", FILENAME, NR, $0
+    }
+  ' "$path")
+  if [[ -n "$hits" ]]; then
+    echo "ci-guards: raw thread::spawn / fs::write in a persist path (use PersistService or mark it \`// ci-guard: allow-raw-io <reason>\`):" >&2
+    echo "$hits" >&2
+    fail=1
+    raw_io_bad=1
+  fi
+done
+if (( raw_io_bad == 0 )); then
+  echo "ci-guards: persist paths have no unmarked raw spawn/write"
+fi
+
+# --- 7. Actions pinned to commit SHAs ------------------------------------------
+# A moved tag would run new code with the job's token (and, in release.yml,
+# next to the signing secrets). Pin `owner/repo@<40-hex sha> # <tag>`;
+# Dependabot (.github/dependabot.yml) bumps the pins. Local `./` actions are fine.
+unpinned=$(grep -nE '^[[:space:]]*(- )?uses:' .github/workflows/*.yml \
+  | grep -vE 'uses:[[:space:]]*(\./|[^@[:space:]]+@[0-9a-f]{40}([[:space:]]|$))' || true)
+if [[ -n "$unpinned" ]]; then
+  echo "ci-guards: actions not pinned to a full commit SHA:" >&2
+  echo "$unpinned" >&2
+  fail=1
+else
+  echo "ci-guards: every workflow action is pinned to a commit SHA"
 fi
 
 if (( fail != 0 )); then

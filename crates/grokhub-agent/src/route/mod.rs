@@ -21,10 +21,13 @@ pub mod ladder;
 pub mod learn;
 pub mod live;
 pub mod local;
+pub mod local_autoconfig;
 pub mod local_bench;
+pub mod local_gov;
 pub mod local_http;
 pub mod local_perf;
 pub mod local_sidecar;
+pub mod local_spec;
 pub mod log;
 pub mod policy;
 pub mod providers;
@@ -227,7 +230,7 @@ pub fn call_model(
     let started = std::time::Instant::now();
     let on_device = decision.on_device();
     let out = if on_device {
-        local::serve(&call.class, &text)
+        local::serve(&call.class, &text, cancel)
     } else if decision.on_provider() {
         let span_id = format!(
             "{}:{now}",
@@ -753,7 +756,24 @@ impl Router {
                 .iter()
                 .any(|r| r == "E2:next_model" || r == STEP_UP_RULE)
         });
-        let chosen = if local::privacy_only(&input.local) {
+        let local_paused = |rules: &mut Vec<String>| {
+            rules.push("local:paused".into());
+            ModelPick {
+                model: input.current_model.trim().to_string(),
+                no_route: true,
+                replaced: None,
+            }
+        };
+        let gov_paused = input.local.capacity.paused();
+        let chosen = if gov_paused && input.local.sensitive && !input.local.cloud_grant {
+            // Sensitive data stays on the device, and the device is paused.
+            local_paused(&mut rules)
+        } else if gov_paused
+            && input.local.offline
+            && local::eligible_if_running(&input.local, input.class, input.ctx_tokens)
+        {
+            local_paused(&mut rules)
+        } else if local::privacy_only(&input.local) {
             // Sensitive data and no cloud grant: the device or nothing.
             match ids.iter().find(|id| local::is_local(id)) {
                 Some(id) => {
@@ -831,7 +851,6 @@ impl Router {
             }
             pick
         } else {
-            let mut pick = Self::pick_model(input, reg, profiles, &ids, table, e2, &mut rules);
             let too_hard = local::too_hard_for_local(input.class, input.ctx_tokens, input.d);
             let elig = local::eligible(&input.local, input.class, input.ctx_tokens);
             let cloud_ids: Vec<&str> = ids
@@ -839,6 +858,14 @@ impl Router {
                 .copied()
                 .filter(|id| !local::is_local(id))
                 .collect();
+            // Grok stays primary: under Throttle, or for a heavy step before
+            // RampUp, online background work stays off the device.
+            let hold = local::online_hold(&input.local, input.class, input.ctx_tokens);
+            let pool = if hold.is_some() { &cloud_ids } else { &ids };
+            let mut pick = Self::pick_model(input, reg, profiles, pool, table, e2, &mut rules);
+            if let Some(rule) = hold {
+                rules.push(rule.into());
+            }
             // Cloud pool empty + local already won (cheapest/table): retag as cloud_down.
             // Do not fire when a healthy cloud id remains — local may win online on purpose.
             let cloud_pool_empty_local = !input.local.offline
@@ -864,6 +891,12 @@ impl Router {
                         replaced: Some(input.current_model.trim().to_string()),
                     };
                 }
+            } else if pick.no_route
+                && gov_paused
+                && local::eligible_if_running(&input.local, input.class, input.ctx_tokens)
+            {
+                // The cloud is down and the device is paused: say which.
+                rules.push("local:paused".into());
             }
             pick
         };
@@ -986,6 +1019,7 @@ impl Router {
             String::new()
         };
         let reason = match (&chosen.replaced, rules.iter().any(|r| r == "table")) {
+            _ if rules.iter().any(|r| r == "local:paused") => local::LOCAL_PAUSED_MSG.to_string(),
             _ if base.is_some() => format!(
                 "{tier_word} · {}: you're waiting, so the faster model is worth it.",
                 effort_word(effort.as_deref())

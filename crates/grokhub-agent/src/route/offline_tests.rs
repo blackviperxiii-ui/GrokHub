@@ -131,8 +131,8 @@ fn offline_routes_chat_and_background_to_local_and_queues_image() {
         "Waiting for the network: image generation needs the cloud."
     );
     assert_eq!(
-        connectivity::offline_chip("Qwen 2.5 3B"),
-        "Offline · on Qwen 2.5 3B (local)"
+        connectivity::offline_chip("Gemma 4 E2B"),
+        "Offline · on Gemma 4 E2B (local)"
     );
 }
 
@@ -152,6 +152,55 @@ fn online_keeps_chat_on_cloud_even_with_local_runtime() {
 #[test]
 fn offline_serve_chat_uses_chat_stream() {
     let _on = ForceOn::with(Some(Arc::new(FakeRt)));
-    let out = local::serve("chat:default", "hi").expect("serve");
+    let out =
+        local::serve("chat:default", "hi", &crate::client::CancelToken::new()).expect("serve");
     assert_eq!(out.text, "hello offline");
+}
+
+#[test]
+fn offline_work_goes_local_at_every_level_but_unload_which_pauses_with_a_chip() {
+    use grokhub_core::local_governor::Level;
+    let reg = fleet();
+    let profiles: BTreeMap<String, ModelProfile> = BTreeMap::new();
+    let table = RoutingTable::default();
+    for level in [Level::RampUp, Level::Normal, Level::Throttle, Level::Unload] {
+        let capacity = local::LocalCapacity { ready: true, level };
+        let gate = LocalGate {
+            enabled: capacity.available(),
+            tier: "local:small".into(),
+            offline: true,
+            capacity,
+            ..LocalGate::default()
+        };
+        for class in ["chat:default", "background:summarize"] {
+            let r = Router::choose(&ask(class, gate.clone()), &reg, &profiles, &table, 10);
+            if level == Level::Unload {
+                assert!(r.no_route, "{class}: {r:?}");
+                assert!(
+                    r.rule_ids.contains(&"local:paused".into()),
+                    "{:?}",
+                    r.rule_ids
+                );
+                assert_eq!(r.reason, local::LOCAL_PAUSED_MSG);
+            } else {
+                assert_eq!(
+                    (r.model.as_str(), r.no_route),
+                    ("local:small", false),
+                    "{level:?} {class}"
+                );
+                assert!(
+                    r.rule_ids.contains(&"offline:local".into()),
+                    "{:?}",
+                    r.rule_ids
+                );
+            }
+        }
+        // Cloud-only work still queues for the network, paused or not.
+        let r = Router::choose(&ask("media:image", gate), &reg, &profiles, &table, 10);
+        assert!(
+            r.rule_ids.contains(&"offline:cloud_queued".into()),
+            "{:?}",
+            r.rule_ids
+        );
+    }
 }

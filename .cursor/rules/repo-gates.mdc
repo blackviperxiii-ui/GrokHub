@@ -8,9 +8,9 @@ alwaysApply: true
 Native Rust cabin (`crates/`). These rules apply to every Cursor, Claude, and Grok chat working here. `CLAUDE.md` holds the same rules.
 
 ## Branches, merges, releases
-- **Beta first.** Every new feature and fix PR from every bot (Cursor, Claude, GrokHub) branches off `beta` and targets `beta`. `beta` moves to `main` only with the maintainer's approval, as one squash-merged `beta` → `main` PR. Hotfixes go to `main` only with the maintainer's approval, and then `main` is merged back into `beta` (a merge commit, no force). Never push straight to `main` or `beta`, never force-push, never delete branches unless Alex asks.
-- **Green and ready, then stop.** Bots get a PR green (Linux and Windows CI passing) and ready to merge, with proof of work, then report it. Never merge, tag, or release anything, Claude's and Cursor's PRs included, without Alex's explicit say. When merging, it's squash and merge. Steps: `.cursor/rules/merge-prs.mdc`.
-- No changes to `.github/`, `clippy.toml`, or release scripts (`scripts/make-*release*`, `packaging/windows/`, `packaging/aur/`) without his OK. Version-bump lines (below) are the exception.
+- **Beta first.** Every new feature and fix PR from every bot (Cursor, Claude, GrokHub) branches off `beta` and targets `beta`. `beta` moves to `main` only with the maintainer's approval, as one squash-merged `beta` → `main` PR. Hotfixes go to `main` only with the maintainer's approval, and then `main` is merged back into `beta` (a merge commit, no force). Never push straight to `main` or `beta`, never force-push, never delete branches unless user asks.
+- **Green, then merge into beta.** Every agent (Cursor, Claude, GrokHub, any bot) finishes its own work: get the PR into `beta` green (Linux and Windows CI passing), then squash-merge it into `beta` right away, with no human-review hold. The only steps that need the maintainer's approval are promoting `beta` to `main` and the tag/release that follows. Stop and ask only when CI can't go green or a product decision only the maintainer can make comes up. Steps: `.cursor/rules/merge-prs.mdc`.
+- `.github/`, `clippy.toml`, and release scripts (`scripts/make-*release*`, `packaging/windows/`, `packaging/aur/`) ship in PRs like any other change: CI green, then squash-merge into `beta`. Version bumps still only belong on a `release`-labeled promotion or hotfix (`cargo xtask bump`).
 
 ## Secrets
 - Never commit `.env*` (only `.env.example`), tokens, keys, certs, `auth.json`, `secrets.json`, or credential files. Tests use obvious fakes (`sk-abcdefghijklmnopqrstuv`).
@@ -39,11 +39,11 @@ cargo clippy --workspace --all-targets -- -D warnings
 - **Stacks:** order them so every PR ends green; one agent owns rebase and topology, others push only their own branch.
 - **Agent briefs** follow the template: intent, data shape, scope and non-goals, file boundaries, required evidence, file pointers, exact error plus at most 20 log lines.
 - **CI failures:** find and classify the cause before at most one rerun; a repeat failure is real.
-- **Latest base branch:** the base branch is `beta` for feature and fix PRs, and `main` for hotfixes and the `beta` → `main` promotion. Before touching a branch, fetch origin, confirm it is based on the latest base branch, and merge the base into it (a merge commit; no rebase or force-push). Fetch and re-check before reporting a PR ready, right before a merge he asked for, and again before a tag he asked for. Never render or screenshot from a stale checkout. Every PR body and report names the base branch and the SHA the work started from.
+- **Latest base branch:** the base branch is `beta` for feature and fix PRs, and `main` for hotfixes and the `beta` → `main` promotion. Before touching a branch, fetch origin, confirm it is based on the latest base branch, and merge the base into it (a merge commit; no rebase or force-push). Fetch and re-check before reporting a PR ready, right before merging into `beta`, and again before a tag the maintainer asked for. Never render or screenshot from a stale checkout. Every PR body and report names the base branch and the SHA the work started from.
 
 ## Commits, PRs, versions
 - Titles: a plain sentence for PRs into `beta`. A PR that bumps (a promotion or a hotfix) uses `Cabin X.Y.Z: <what changed>`, or a plain sentence ending in `(X.Y.Z)`. Add a short bullet body and the PR number when merged.
-- **Versions:** PRs into `beta` don't bump the version. Add a fragment under `changelog.d/<slug>.md` (see `changelog.d/README.md`); do not edit `CHANGELOG.md` or the version files. Semver (2026-10-09): **PATCH** (`x.y.Z`) is a fix or polish rollout; **MINOR** (`x.Y.0`, patch back to 0) is a promotion with at least one new user-facing feature; **MAJOR** (`X.0.0`) is a big milestone, only with the maintainer's approval. No cap on any part (`2.10.99` was followed by `2.11.0` because it added features, not because of a cap). Each `beta` → `main` promotion carries exactly one bump (PATCH or MINOR by that rule) and one release. A hotfix to `main` is a PATCH bump and is merged back into `beta`. Beta builds carry `-beta.N` (e.g. `2.11.0-beta.3`) so beta never burns release numbers: `VERSION` stays plain and `crates/grokhub-app/build.rs` labels `GrokHub X.Y.Z-beta.N (beta @ sha)` with N = commits since the newest stable `vX.Y.Z` tag; never edit the Cargo version for it.
+- **Versions:** PRs into `beta` don't bump the version. Add a fragment under `changelog.d/<slug>.md` (see `changelog.d/README.md`); do not edit `CHANGELOG.md` or the version files. Semver: **PATCH** (`x.y.Z`) is a fix or polish rollout; **MINOR** (`x.Y.0`, patch back to 0) is a promotion with at least one new user-facing feature; **MAJOR** (`X.0.0`) is a big milestone, only with the maintainer's approval. No cap on any part (`2.10.99` was followed by `2.11.0` because it added features, not because of a cap). Each `beta` → `main` promotion carries exactly one bump (PATCH or MINOR by that rule) and one release. A hotfix to `main` is a PATCH bump and is merged back into `beta`. Beta builds carry `-beta.N` (e.g. `2.11.0-beta.3`) so beta never burns release numbers: `VERSION` stays plain and `crates/grokhub-app/build.rs` labels `GrokHub X.Y.Z-beta.N (beta @ sha)` with N = commits since the newest stable `vX.Y.Z` tag; never edit the Cargo version for it.
 - A promotion or hotfix labels the PR `release` and runs `cargo xtask bump <X.Y.Z>`, which updates the same files as #453 (`VERSION`, `Cargo.toml` `[workspace.package] version`, the `grokhub-*` entries in `Cargo.lock`, `docs/REFERENCE.md` headline/Latest/`--version` examples; `README.md` has no version strings), `packaging/PKGBUILD`, `packaging/aur/PKGBUILD`, `packaging/windows/grokhub.iss`, and `cabin_reports_version` in `crates/grokhub-app/src/cli.rs`) and folds `changelog.d/*.md` plus any leftover `## Unreleased` bullets into a dated `CHANGELOG.md` section with Linux and Windows artifact lines. `scripts/ci-guards.sh` keeps copies in lockstep (`cargo xtask bump --check`) and fails a non-`release` PR that touches those version files.
 - Don't bump the Imagine `Quality (v2.0)`, specs marked `(do not bump)`, the diagnostics fixture, or `packaging/grokhub.desktop` `Version=`.
 
@@ -55,11 +55,11 @@ cargo clippy --workspace --all-targets -- -D warnings
 - Prefer Grok Build for coding/CI on this box; Cursor Cloud out until Oct 11. One bot per job.
 - Grok Build roles: explore, plan, implementer (no separate "build" role).
 
+## Cross-platform recode
+- Tauri 2 + React + TS approved for the cross-platform shell; "No Tauri" covers only the egui cabin. Plan: `docs/cross-platform/README.md`.
+
 ## Semgrep / dyl-review / Continual Learning
 - Semgrep before Ready; dyl-review quick only; Continual Learning → AGENTS.md. Never dyl-ready-pr merge/babysit.
-
-
-- **vstack:** Always load and follow the vstack skills in .cursor/skills (start with viper-mode); never use pstack.
 
 ## No personal info (hard rule)
 

@@ -1,0 +1,82 @@
+import { useEffect, useState, type FormEvent } from "react";
+import { App } from "./App";
+import { inShell, onPairChange, pair, paired } from "./transport";
+
+export const PAIR_HELP =
+  "Open GrokHub on your computer, turn on Settings → Web access, and enter the pairing code it shows.";
+
+/**
+ * Takes `#code=…` off the address (GrokHub's pairing link) so the code
+ * doesn't stay in the address bar or the history.
+ */
+export function takeCodeFromLink(): string {
+  const match = /(?:^#|&)code=([^&]*)/.exec(window.location.hash);
+  if (!match) return "";
+  const { pathname, search } = window.location;
+  window.history.replaceState(null, "", pathname + search);
+  return decodeURIComponent(match[1]);
+}
+
+/** The web app's first screen: pair this browser with the desktop. */
+export function Pair({ onPaired }: { onPaired: () => void }) {
+  const [code, setCode] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState<string | null>(null);
+
+  async function connect(value: string) {
+    setBusy(true);
+    setNote(null);
+    try {
+      await pair(value);
+      onPaired();
+    } catch (err) {
+      setNote(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  useEffect(() => {
+    const fromLink = takeCodeFromLink();
+    if (fromLink) void connect(fromLink);
+    // Only once, on the first render.
+  }, []);
+
+  function submit(event: FormEvent) {
+    event.preventDefault();
+    void connect(code);
+  }
+
+  return (
+    <section className="pair" aria-label="Pair">
+      <h1>GrokHub</h1>
+      <p>{PAIR_HELP}</p>
+      <form onSubmit={submit}>
+        <label>
+          Pairing code
+          <input
+            type="password"
+            autoComplete="off"
+            value={code}
+            onChange={(e) => setCode(e.target.value)}
+          />
+        </label>
+        <button type="submit" disabled={busy || !code.trim()}>
+          {busy ? "Connecting…" : "Connect"}
+        </button>
+      </form>
+      {note && (
+        <p className="error" role="alert">
+          {note}
+        </p>
+      )}
+    </section>
+  );
+}
+
+/** The shell opens the app; a browser pairs first, and again if dropped. */
+export function Root() {
+  const [linked, setLinked] = useState(() => inShell() || paired());
+  useEffect(() => (inShell() ? undefined : onPairChange(setLinked)), []);
+  return linked ? <App /> : <Pair onPaired={() => setLinked(true)} />;
+}

@@ -201,13 +201,7 @@ impl Cabin {
                     grokhub_core::PollStatus::Ready => {
                         if let Some(t) = r.tokens {
                             self.secrets.oauth = Some(t);
-                            let io = self.persist_io.clone();
-                            let secrets = self.secrets.clone();
-                            std::thread::spawn(move || {
-                                if let Ok(_g) = io.lock() {
-                                    let _ = secrets::save(&secrets);
-                                }
-                            });
+                            self.persist_oauth_secrets();
                             self.oauth_pending = None;
                             self.oauth_profile_tried = false;
                             self.oauth_photo = None;
@@ -272,13 +266,7 @@ impl Cabin {
         self.oauth_start_rx = None;
         self.oauth_poll_rx = None;
         self.clear_oauth_photo();
-        let io = self.persist_io.clone();
-        let secrets = self.secrets.clone();
-        std::thread::spawn(move || {
-            if let Ok(_g) = io.lock() {
-                let _ = secrets::save(&secrets);
-            }
-        });
+        self.persist_oauth_secrets();
         self.status = "Signed out".into();
     }
 
@@ -292,13 +280,7 @@ impl Cabin {
                         let changed = self.secrets.oauth.as_ref() != Some(&tokens);
                         self.secrets.oauth = Some(tokens);
                         if changed {
-                            let io = self.persist_io.clone();
-                            let secrets = self.secrets.clone();
-                            std::thread::spawn(move || {
-                                if let Ok(_g) = io.lock() {
-                                    let _ = secrets::save(&secrets);
-                                }
-                            });
+                            self.persist_oauth_secrets();
                         }
                     }
                     self.oauth_photo_key = out.url;

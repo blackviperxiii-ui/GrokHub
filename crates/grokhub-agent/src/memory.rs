@@ -340,8 +340,22 @@ pub fn library_intent(user_text: &str) -> bool {
     if PHRASES.iter().any(|n| q.contains(n)) {
         return true;
     }
-    // "is X installed" / "do I have X installed" without requiring "app".
+    // "is the app installed" / "do I have any games installed": needs an
+    // app/game noun so "is the patch installed" stays out. A named sealed app
+    // is covered by `named_sealed_app_ask` below.
+    const LIBRARY_NOUNS: &[&str] = &[
+        "app",
+        "apps",
+        "application",
+        "applications",
+        "game",
+        "games",
+        "program",
+        "programs",
+        "software",
+    ];
     if q.contains("installed")
+        && LIBRARY_NOUNS.iter().any(|n| library_word(&q, n))
         && (library_word(&q, "is")
             || library_word(&q, "are")
             || q.contains("do i have")
@@ -365,6 +379,7 @@ fn named_sealed_app_ask(q: &str) -> bool {
         || q.contains("have i")
         || library_word(q, "own")
         || library_word(q, "play")
+        || (q.contains("installed") && (library_word(q, "is") || library_word(q, "are")))
         || q.contains("on this machine")
         || q.contains("on my machine");
     if !framed {
@@ -632,6 +647,16 @@ pub fn recall(query: &str, now: i64, paths: &[String]) -> Result<Vec<Hit>, Strin
             .unwrap_or(std::cmp::Ordering::Equal)
     });
     Ok(hits)
+}
+
+/// Search the notes one workspace may recall from (global, this workspace's
+/// `MEMORY.md`, its flush file), best first. Stale files are reindexed first.
+pub fn search(workspace: &Path, query: &str) -> Result<Vec<Hit>, String> {
+    if !memory_files_present(workspace) {
+        return Ok(Vec::new());
+    }
+    rebuild_if_stale(workspace)?;
+    recall(query, now_secs(), &scope_paths(workspace))
 }
 
 pub fn global_memory_path() -> PathBuf {
@@ -1189,6 +1214,45 @@ mod tests {
     }
 
     #[test]
+    fn search_finds_notes_from_this_workspace_and_global_only() {
+        let (cfg, ws, _guard) = temp_pair("search");
+        let other = cfg.join("other-ws");
+        fs::create_dir_all(&other).unwrap();
+        remember(&ws, "the harbor gate code lives in the blue binder").unwrap();
+        remember(&ws, "global: harbor tours start at noon").unwrap();
+        remember(&other, "harbor parking is on level three").unwrap();
+        let mut bodies: Vec<String> = search(&ws, "harbor")
+            .unwrap()
+            .into_iter()
+            .map(|hit| format!("{}: {}", hit.scope, hit.body))
+            .collect();
+        bodies.sort();
+        assert_eq!(
+            bodies,
+            vec![
+                "global: harbor tours start at noon".to_string(),
+                "workspace: the harbor gate code lives in the blue binder".to_string(),
+            ]
+        );
+        // A hand edit is picked up without a restart.
+        fs::write(workspace_memory_path(&ws), "harbor lights stay on\n").unwrap();
+        let hits = search(&ws, "lights").unwrap();
+        assert_eq!(
+            hits.iter().map(|h| h.body.as_str()).collect::<Vec<_>>(),
+            vec!["harbor lights stay on"]
+        );
+        // Another folder still sees the global notes, never this one's.
+        let elsewhere = search(&cfg.join("empty-ws"), "harbor").unwrap();
+        assert_eq!(
+            elsewhere
+                .iter()
+                .map(|h| h.body.as_str())
+                .collect::<Vec<_>>(),
+            vec!["harbor tours start at noon"]
+        );
+    }
+
+    #[test]
     fn decay_at_equal_rank_prefers_newer() {
         let bm25 = -2.0;
         let newer = combine_score(bm25, 0.0, HALF_LIFE_SECS);
@@ -1412,6 +1476,10 @@ mod tests {
         assert!(!library_phrase("have i placed the order", "ace"));
         assert!(library_phrase("own steamlibreview", "steamlibreview"));
         assert!(!library_phrase("fix the upstream merge", "steam"));
+        assert!(!library_phrase("do i have to determine this", "term"));
+        assert!(!library_phrase("do i have my codebase", "code"));
+        assert!(library_phrase("do i have term", "term"));
+        assert!(library_phrase("do i have my code", "code"));
     }
 
     #[test]
@@ -1425,7 +1493,11 @@ mod tests {
         assert!(library_intent("what's on Steam?"));
         assert!(library_intent("look under ~/.steam/steamapps"));
         assert!(library_intent("what's installed on this machine"));
-        assert!(library_intent("is steamlibreview installed"));
+        assert!(library_intent("is the app installed"));
+        assert!(library_intent("do i have any games installed"));
+        assert!(!library_intent("is the patch installed"));
+        assert!(!library_intent("is the driver installed correctly"));
+        assert!(!library_intent("have i installed the update"));
         assert!(library_intent("any games on this machine"));
         assert!(!library_intent("what is 2+2"));
     }

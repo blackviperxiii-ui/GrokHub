@@ -49,3 +49,9 @@ windows-sys = { version = "0.59", features = [
     "Win32_System_Power",
     "Win32_System_Threading",
 ] }
+
+# keyring's `v1` feature only turns on the macOS `keychain` store, and
+# apple-native-keyring-store refuses to build on iOS without `protected`.
+# Naming it here adds that feature on iOS only (feature unification).
+[target.'cfg(target_os = "ios")'.dependencies]
+apple-native-keyring-store = { version = "1", features = ["protected"] }

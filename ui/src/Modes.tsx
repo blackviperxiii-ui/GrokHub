@@ -1,0 +1,178 @@
+import { useState, type FormEvent } from "react";
+import type { Approvals, ElicitAction, SessionMode } from "./api";
+import { APPROVALS } from "./approvals";
+
+/** The cabin's composer chips, each with its hover line. */
+export const SESSION_CHIPS: { mode: SessionMode; label: string; tip: string }[] = [
+  {
+    mode: "chat",
+    label: "Chat",
+    tip: "Normal chat. Grok can edit files and use tools in your work folder. Everyday work.",
+  },
+  {
+    mode: "plan",
+    label: "Plan",
+    tip: "Grok writes a plan before changing things, and changes nothing until you approve it. Use this for bigger or riskier work.",
+  },
+  {
+    mode: "btw",
+    label: "btw",
+    tip: "A look-only side ask. Grok can read and answer, but changes nothing.",
+  },
+];
+
+export const APPROVAL_CHIPS: { value: Approvals; label: string }[] = [
+  { value: "ask", label: "Ask" },
+  { value: "auto", label: "Auto" },
+  { value: "always", label: "Always" },
+];
+
+export const EFFORT_TIP = "Auto effort: GrokHub picks how hard Grok thinks for each step.";
+export const REMOTE_APPROVALS_TIP = "Set in GrokHub on your computer.";
+
+/** Chat / Plan / btw, Ask / Auto / Always, and the read-only effort chip.
+ * `approvals` is null until Settings loads. On the web app the approvals
+ * stay the computer's, so those chips only show it. */
+export function ModeChips({
+  mode,
+  onMode,
+  approvals,
+  onApprovals,
+  busy,
+  remote,
+}: {
+  mode: SessionMode;
+  onMode: (mode: SessionMode) => void;
+  approvals: Approvals | null;
+  onApprovals: (approvals: Approvals) => void;
+  busy: boolean;
+  remote: boolean;
+}) {
+  return (
+    <div className="chips">
+      <div className="chip-group" role="group" aria-label="Session mode">
+        {SESSION_CHIPS.map((chip) => (
+          <button
+            key={chip.mode}
+            type="button"
+            className="chip"
+            title={chip.tip}
+            aria-pressed={mode === chip.mode}
+            disabled={busy}
+            onClick={() => onMode(chip.mode)}
+          >
+            {chip.label}
+          </button>
+        ))}
+      </div>
+      <div className="chip-group" role="group" aria-label="Approvals">
+        {APPROVAL_CHIPS.map((chip) => (
+          <button
+            key={chip.value}
+            type="button"
+            className="chip"
+            title={remote ? REMOTE_APPROVALS_TIP : APPROVALS[chip.value].note}
+            aria-pressed={approvals === chip.value}
+            disabled={busy || remote || approvals === null}
+            onClick={() => onApprovals(chip.value)}
+          >
+            {chip.label}
+          </button>
+        ))}
+      </div>
+      <span className="chip quiet" title={EFFORT_TIP}>
+        Auto effort
+      </span>
+    </div>
+  );
+}
+
+export type ElicitItem = {
+  kind: "elicit";
+  id: string;
+  server: string;
+  message: string;
+  mode: "form" | "url";
+  url: string;
+  fieldName: string | null;
+  fieldTitle: string;
+  secret: boolean;
+  /** "ended": the turn stopped before anyone answered. */
+  answer: ElicitAction | "ended" | null;
+};
+
+const PLAN_ANSWERS: Record<ElicitAction | "ended", string> = {
+  accept: "Approved. Grok can make the changes now.",
+  decline: "Kept in plan mode.",
+  cancel: "Cancelled.",
+  ended: "Not answered: the turn ended.",
+};
+
+const ANSWERS: Record<ElicitAction | "ended", string> = {
+  accept: "Sent.",
+  decline: "Declined.",
+  cancel: "Cancelled.",
+  ended: "Not answered: the turn ended.",
+};
+
+/** A plan to approve, Grok's question, or a connector's form or link. */
+export function ElicitCard({
+  item,
+  onAnswer,
+}: {
+  item: ElicitItem;
+  onAnswer: (action: ElicitAction, value: string) => void;
+}) {
+  const [value, setValue] = useState("");
+  const plan = item.server === "Plan";
+  const title = plan
+    ? "Grok's plan"
+    : item.server === "Question"
+      ? "Grok asks"
+      : `${item.server} needs something from you`;
+
+  function send(event: FormEvent) {
+    event.preventDefault();
+    if (item.fieldName && !value.trim()) return;
+    onAnswer("accept", value);
+  }
+
+  return (
+    <div className="card elicit" role="group" aria-label={title}>
+      <div className="card-title">{title}</div>
+      <pre className="card-detail plain">{item.message}</pre>
+      {item.mode === "url" && item.url && <code className="card-detail-line">{item.url}</code>}
+      {item.answer ? (
+        <p className="card-answer">{(plan ? PLAN_ANSWERS : ANSWERS)[item.answer]}</p>
+      ) : plan ? (
+        <div className="card-buttons">
+          <button type="button" onClick={() => onAnswer("accept", "")}>
+            Approve plan
+          </button>
+          <button type="button" className="quiet" onClick={() => onAnswer("decline", "")}>
+            Keep planning
+          </button>
+        </div>
+      ) : (
+        <form className="card-buttons" onSubmit={send}>
+          {item.fieldName && (
+            <input
+              aria-label={item.fieldTitle || "Answer"}
+              placeholder={item.fieldTitle || "Answer"}
+              type={item.secret ? "password" : "text"}
+              autoComplete="off"
+              value={value}
+              onChange={(e) => setValue(e.target.value)}
+            />
+          )}
+          <button type="submit" disabled={Boolean(item.fieldName) && !value.trim()}>
+            {item.mode === "url" ? "I've finished" : "Send"}
+          </button>
+          <button type="button" className="quiet" onClick={() => onAnswer("decline", "")}>
+            Decline
+          </button>
+        </form>
+      )}
+    </div>
+  );
+}

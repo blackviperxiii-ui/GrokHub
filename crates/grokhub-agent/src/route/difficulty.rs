@@ -73,7 +73,7 @@ pub fn estimate(
     local: Option<&dyn super::local::LocalRuntime>,
 ) -> f64 {
     let model = local
-        .filter(|_| super::local::enabled())
+        .filter(|_| super::local::available())
         .and_then(|rt| rt.difficulty(input.text).ok())
         .and_then(|v| v.get("d").and_then(serde_json::Value::as_f64));
     match model {

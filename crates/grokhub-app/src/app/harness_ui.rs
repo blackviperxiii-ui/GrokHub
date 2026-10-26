@@ -27,10 +27,10 @@ const POLL: Duration = Duration::from_millis(250);
 
 const HARD_NOTE: &str = "Always can't skip this. Approve runs it once. Esc denies.";
 const HEADLESS_NOTE: &str =
-    "Grok Build's deny rule stopped this. Approve re-runs this one step with Grok's own Allow. Esc denies.";
+    "The agent's deny rule stopped this. Approve re-runs this one step with Grok's own Allow. Esc denies.";
 /// Path D: Grok Build's own computer use ran a hard step with no ask.
 const UNASKED_NOTE: &str =
-    "Grok Build did this without asking, so the turn was stopped. Approve re-runs this one step with Grok's own Allow. Esc denies.";
+    "The agent did this without asking, so the turn was stopped. Approve re-runs this one step with Grok's own Allow. Esc denies.";
 const HARD_EYEBROW: &str = "Hard action";
 /// Why a ladder pause or an ask was denied from a card or the inbox.
 pub(super) const SOFT_DENY: &str = "user denied";
@@ -1367,7 +1367,7 @@ impl Cabin {
                 name,
                 kept,
                 "ran",
-                "Grok Build computer use, no ask",
+                "agent computer use, no ask",
                 self.access_mode(),
                 "grok_build",
             )
@@ -1412,14 +1412,14 @@ impl Cabin {
                 name,
                 &kept,
                 "ran",
-                "Grok Build ran a hard step with no ask",
+                "the agent ran a hard step with no ask",
                 self.access_mode(),
                 "grok_build",
             );
             s.approval_class = class.as_str().into();
             self.write_span(s, "D");
         }
-        let why = "stopped: Grok Build tried a hard step without asking";
+        let why = "stopped: the agent tried a hard step without asking";
         self.write_span(
             hx::Span::deny(&trace, name, &kept, why, class.as_str()),
             "D",
@@ -1457,7 +1457,7 @@ impl Cabin {
                     &tool,
                     &args,
                     "ran",
-                    "Grok Build computer use, no ask",
+                    "agent computer use, no ask",
                     self.access_mode(),
                     "grok_build",
                 );
@@ -2610,7 +2610,7 @@ mod tests {
         assert!(HEADLESS_NOTE.ends_with(" Esc denies."));
         assert_eq!(
             HEADLESS_NOTE,
-            "Grok Build's deny rule stopped this. Approve re-runs this one step with Grok's own Allow. Esc denies."
+            "The agent's deny rule stopped this. Approve re-runs this one step with Grok's own Allow. Esc denies."
         );
         assert_eq!(HARD_EYEBROW, "Hard action");
         assert_eq!(FULL_EYEBROW, "Session access · Desktop control is on");
@@ -2862,7 +2862,7 @@ mod tests {
         );
         assert_eq!(
             spans[1].result,
-            "stopped: Grok Build tried a hard step without asking"
+            "stopped: the agent tried a hard step without asking"
         );
         let flagged = hx::approval_gate_violation(&spans);
         assert_eq!(
@@ -2947,7 +2947,7 @@ mod tests {
             .collect();
         assert_eq!(
             raw_runs,
-            vec!["Grok Build ran a hard step with no ask"; 2],
+            vec!["the agent ran a hard step with no ask"; 2],
             "each unapproved run keeps its raw span"
         );
         let _ = std::fs::remove_dir_all(root);
@@ -3030,7 +3030,7 @@ mod tests {
             ("computer_click", "deny")
         );
         let reason =
-            "Access is Readonly — Grok Build's own computer use ran with desktop control off";
+            "Access is Readonly — the agent's own computer use ran with desktop control off";
         assert_eq!(spans[0].result, reason);
         assert_eq!(cabin.status, format!("Stopped: {reason}"));
         let _ = std::fs::remove_dir_all(root);

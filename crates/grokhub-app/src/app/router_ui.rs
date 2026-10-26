@@ -400,6 +400,9 @@ impl Cabin {
     /// The live router keeps a pin while it answers; Auto is an empty pin.
     fn sync_router_pin(&mut self) {
         grokhub_agent::route::local::set_enabled(self.cfg.local_model);
+        if self.cfg.local_model {
+            super::local_signals::start(crate::config::config_dir());
+        }
         self.sync_provider_pick();
         let pin = self.cfg.model.trim();
         if self.harness.router.pin.as_deref() != Some(pin) {
@@ -498,6 +501,15 @@ impl Cabin {
             body.push('\n');
             body.push_str(&line);
         }
+        self.live_mut()
+            .push(("assistant".into(), mark_slash_result(&body)));
+        self.stamp_current_access();
+        self.persist();
+    }
+
+    /// `/why local`: the on-device model's state, governor level and queue.
+    pub(super) fn run_why_local(&mut self) {
+        let body = grokhub_agent::route::local::why_local_text(&crate::config::config_dir());
         self.live_mut()
             .push(("assistant".into(), mark_slash_result(&body)));
         self.stamp_current_access();

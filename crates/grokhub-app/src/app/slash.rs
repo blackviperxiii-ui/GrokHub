@@ -3,10 +3,10 @@
 use super::*;
 
 /// Workflows ran inside the Grok Build CLI, which GrokHub no longer uses.
-const WORKFLOWS_GONE: &str = "Workflows were a Grok Build CLI feature and are not in GrokHub";
+const WORKFLOWS_GONE: &str = "Workflows were a grok CLI feature and are not in GrokHub";
 /// `--worktree` was a Grok Build CLI flag; the engine works in the bound folder.
 const WORKTREE_GONE: &str =
-    "Worktrees were a Grok Build CLI feature; chats run in the bound project folder";
+    "Worktrees were a grok CLI feature; chats run in the bound project folder";
 /// Native sessions are append-only JSONL: dropping only the bubble would leave
 /// the reply in the model's history.
 const REWIND_NA: &str = "N/A on native threads: the session is append-only.";
@@ -453,7 +453,7 @@ impl Cabin {
                     t.grok_session = None;
                 }
                 self.persist_idle_key = self.persist_idle_now();
-                self.status = "Plan mode — Grok Build will plan first".into();
+                self.status = "Plan mode — Grok will plan first".into();
             }
             Slash::AlwaysApprove => {
                 if self.permission_mode == PermissionMode::AlwaysApprove {
@@ -578,6 +578,7 @@ impl Cabin {
             Slash::Why => self.run_why(false),
             Slash::WhyModels => self.run_why(true),
             Slash::WhyTable => self.run_why_table(),
+            Slash::WhyLocal => self.run_why_local(),
             Slash::Diagnose => self.run_diagnose(Vec::new(), true),
             Slash::Record(note) => self.start_screen_recording(note),
             Slash::RecordStop => self.stop_screen_recording(),

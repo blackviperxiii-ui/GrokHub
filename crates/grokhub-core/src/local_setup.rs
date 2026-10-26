@@ -2,6 +2,11 @@
 //! on-device model fits it. Pure: the cabin reads the hardware (memory, disk,
 //! `nvidia-smi`) and hands the text here.
 
+pub use crate::local_picker::CpuSimd;
+use crate::local_picker::{self, Profile};
+use serde::Deserialize;
+use std::sync::LazyLock;
+
 /// What the wizard found on this machine. Zero means unknown.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Hardware {
@@ -13,59 +18,131 @@ pub struct Hardware {
     pub free_disk_mb: u64,
 }
 
-/// One on-device model the wizard can suggest.
+/// Usable memory (MiB) a model needs to be Recommended on each kind of
+/// memory. `None`: never Recommended there.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+pub struct Budgets {
+    pub gpu: Option<u64>,
+    pub unified: Option<u64>,
+    pub cpu: Option<u64>,
+}
+
+/// Rough generation speed (tok/s) on each kind of memory.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+pub struct TokS {
+    pub gpu: u32,
+    pub unified: u32,
+    pub cpu: u32,
+}
+
+/// One on-device model in `data/local_catalog.toml`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LocalModel {
     pub id: &'static str,
     pub name: &'static str,
-    pub download_mb: u64,
-    /// Enough RAM to run it on the CPU.
-    pub min_ram_mb: u64,
-    /// Or enough VRAM to run it on the GPU.
-    pub min_vram_mb: u64,
-    /// The router tier it serves (`route::local::TIERS`).
-    pub tier: &'static str,
     /// The Hugging Face repo and GGUF file it downloads from.
     pub repo: &'static str,
     pub file: &'static str,
+    /// The file's pinned SHA-256 (its LFS oid).
+    pub sha256: &'static str,
+    pub download_mb: u64,
+    pub quant: &'static str,
+    pub license: &'static str,
+    pub badges: &'static [&'static str],
+    /// The hardware tier it is the default for (`T1`…`T4`).
+    pub tier: &'static str,
+    /// The router tier it serves (`route::local::TIERS`).
+    pub route: &'static str,
+    pub ctx_default: u32,
+    /// Weights + KV at `ctx_default` + overhead, in MiB.
+    pub run_mb: u64,
+    pub needs_avx2: bool,
+    pub min_llama_build: Option<u32>,
+    /// Offered, never picked for the user.
+    pub optional: bool,
+    /// A speculative-decoding drafter, not a model to chat with.
+    pub is_drafter: bool,
+    /// The id of its drafter, when it has one.
+    pub drafter: Option<&'static str>,
+    pub min_budget: Budgets,
+    pub tok_s: TokS,
 }
 
-/// Biggest first: the wizard suggests the first one that fits.
-pub const LOCAL_MODELS: &[LocalModel] = &[
-    LocalModel {
-        id: "qwen2.5-7b-instruct-q4_k_m",
-        name: "Qwen 2.5 7B",
-        download_mb: 4_680,
-        min_ram_mb: 16_384,
-        min_vram_mb: 6_144,
-        tier: "local:small",
-        repo: "bartowski/Qwen2.5-7B-Instruct-GGUF",
-        file: "Qwen2.5-7B-Instruct-Q4_K_M.gguf",
-    },
-    LocalModel {
-        id: "qwen2.5-3b-instruct-q4_k_m",
-        name: "Qwen 2.5 3B",
-        download_mb: 1_930,
-        min_ram_mb: 8_192,
-        min_vram_mb: 3_072,
-        tier: "local:small",
-        repo: "bartowski/Qwen2.5-3B-Instruct-GGUF",
-        file: "Qwen2.5-3B-Instruct-Q4_K_M.gguf",
-    },
-    LocalModel {
-        id: "qwen2.5-1.5b-instruct-q4_k_m",
-        name: "Qwen 2.5 1.5B",
-        download_mb: 1_120,
-        min_ram_mb: 4_096,
-        min_vram_mb: 2_048,
-        tier: "local:tiny",
-        repo: "bartowski/Qwen2.5-1.5B-Instruct-GGUF",
-        file: "Qwen2.5-1.5B-Instruct-Q4_K_M.gguf",
-    },
-];
+#[derive(Deserialize)]
+struct CatalogFile {
+    model: Vec<CatalogRow>,
+}
 
+#[derive(Deserialize)]
+struct CatalogRow {
+    id: String,
+    name: String,
+    repo: String,
+    file: String,
+    sha256: String,
+    download_mb: u64,
+    quant: String,
+    license: String,
+    badges: Vec<String>,
+    tier: String,
+    route: String,
+    ctx_default: u32,
+    run_mb: u64,
+    needs_avx2: bool,
+    min_llama_build: Option<u32>,
+    #[serde(default)]
+    optional: bool,
+    #[serde(default)]
+    role: Option<String>,
+    drafter: Option<String>,
+    min_budget: Budgets,
+    tok_s: TokS,
+}
+
+const CATALOG_TOML: &str = include_str!("../data/local_catalog.toml");
+
+fn leak(s: String) -> &'static str {
+    s.leak()
+}
+
+/// Every catalog row, biggest first. Parsed once; the strings live for the run.
+/// A catalog that fails to parse lists nothing (a test pins that it parses).
+pub fn local_models() -> &'static [LocalModel] {
+    static MODELS: LazyLock<Vec<LocalModel>> = LazyLock::new(|| {
+        toml::from_str::<CatalogFile>(CATALOG_TOML)
+            .map(|f| f.model)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|r| LocalModel {
+                id: leak(r.id),
+                name: leak(r.name),
+                repo: leak(r.repo),
+                file: leak(r.file),
+                sha256: leak(r.sha256),
+                download_mb: r.download_mb,
+                quant: leak(r.quant),
+                license: leak(r.license),
+                badges: r.badges.into_iter().map(leak).collect::<Vec<_>>().leak(),
+                tier: leak(r.tier),
+                route: leak(r.route),
+                ctx_default: r.ctx_default,
+                run_mb: r.run_mb,
+                needs_avx2: r.needs_avx2,
+                min_llama_build: r.min_llama_build,
+                optional: r.optional,
+                is_drafter: r.role.as_deref() == Some("drafter"),
+                drafter: r.drafter.map(leak),
+                min_budget: r.min_budget,
+                tok_s: r.tok_s,
+            })
+            .collect()
+    });
+    &MODELS
+}
+
+/// A catalog id; an older install (a Qwen 2.5 id) finds nothing and loads by file.
 pub fn model_by_id(id: &str) -> Option<&'static LocalModel> {
-    LOCAL_MODELS.iter().find(|m| m.id == id)
+    local_models().iter().find(|m| m.id == id)
 }
 
 /// Free disk kept spare after a download.
@@ -76,14 +153,14 @@ pub fn disk_needed_mb(m: &LocalModel) -> u64 {
     m.download_mb + DISK_HEADROOM_MB
 }
 
-pub fn fits(m: &LocalModel, hw: &Hardware) -> bool {
-    hw.free_disk_mb >= disk_needed_mb(m)
-        && (hw.ram_mb >= m.min_ram_mb || hw.vram_mb >= m.min_vram_mb)
+/// The tier default for this machine: the picker's pre-selected model, or none
+/// (T0, cloud only).
+pub fn suggest(hw: &Hardware) -> Option<&'static LocalModel> {
+    suggest_for(hw, CpuSimd::detect())
 }
 
-/// The biggest model that fits, or none.
-pub fn suggest(hw: &Hardware) -> Option<&'static LocalModel> {
-    LOCAL_MODELS.iter().find(|m| fits(m, hw))
+pub fn suggest_for(hw: &Hardware, simd: CpuSimd) -> Option<&'static LocalModel> {
+    local_picker::preselected(&Profile::from_hardware(hw, simd))
 }
 
 /// Under 8 GB of RAM and no 4 GB GPU: the router's downshift ladder runs one tier lower.
@@ -128,21 +205,28 @@ pub fn hardware_line(hw: &Hardware) -> String {
 
 /// What the wizard suggests, with the download size and the disk it needs.
 pub fn suggestion_line(hw: &Hardware) -> String {
-    match suggest(hw) {
+    suggestion_line_for(hw, CpuSimd::detect())
+}
+
+pub fn suggestion_line_for(hw: &Hardware, simd: CpuSimd) -> String {
+    if simd == CpuSimd::NoAvx {
+        return "This CPU has no AVX, so no on-device model can run here. GrokHub uses the cloud; you can skip this.".into();
+    }
+    match suggest_for(hw, simd) {
         Some(m) => format!(
             "{} fits this machine: a {} download that needs {} free.",
             m.name,
             size_label(m.download_mb),
             size_label(disk_needed_mb(m))
         ),
-        None => {
-            let small = LOCAL_MODELS[LOCAL_MODELS.len() - 1];
-            format!(
+        None => match local_picker::smallest() {
+            Some(small) => format!(
                 "No on-device model fits this machine. The smallest needs {} of RAM and {} free. You can skip this.",
-                size_label(small.min_ram_mb),
-                size_label(disk_needed_mb(&small))
-            )
-        }
+                size_label(small.min_budget.cpu.unwrap_or(0) + local_picker::SYSTEM_RESERVE_MB),
+                size_label(disk_needed_mb(small))
+            ),
+            None => "No on-device model fits this machine. You can skip this.".into(),
+        },
     }
 }
 
@@ -229,16 +313,16 @@ mod tests {
     }
 
     #[test]
-    fn the_biggest_model_that_fits_ram_or_vram_and_disk_is_suggested() {
-        let pick = |h: &Hardware| suggest(h).map(|m| m.name);
+    fn the_wizard_suggests_the_gemma_4_tier_default_for_its_reading() {
+        let pick = |h: &Hardware| suggest_for(h, CpuSimd::Avx2).map(|m| m.name);
         assert_eq!(
             pick(&hw("NVIDIA GeForce RTX 4070", 12_282, 32_768, 225_000)),
-            Some("Qwen 2.5 7B")
+            Some("Gemma 4 12B")
         );
-        assert_eq!(pick(&hw("", 0, 16_384, 6_728)), Some("Qwen 2.5 7B"));
-        // 1 MB short of the 7B's download plus headroom.
-        assert_eq!(pick(&hw("", 0, 16_384, 6_727)), Some("Qwen 2.5 3B"));
-        // A 6 GB GPU carries the 7B on a 4 GB laptop.
+        assert_eq!(pick(&hw("", 0, 16_384, 7_137)), Some("Gemma 4 E4B"));
+        // 1 MB short of the E4B's download plus headroom.
+        assert_eq!(pick(&hw("", 0, 16_384, 7_136)), Some("Gemma 4 E2B"));
+        // A 6 GB GPU carries the E4B on a 4 GB laptop.
         assert_eq!(
             pick(&hw(
                 "NVIDIA GeForce RTX 3060 Laptop GPU",
@@ -246,22 +330,29 @@ mod tests {
                 4_096,
                 100_000
             )),
-            Some("Qwen 2.5 7B")
+            Some("Gemma 4 E4B")
         );
-        assert_eq!(pick(&hw("", 0, 8_192, 100_000)), Some("Qwen 2.5 3B"));
-        assert_eq!(pick(&hw("", 0, 8_191, 100_000)), Some("Qwen 2.5 1.5B"));
-        assert_eq!(pick(&hw("", 0, 4_096, 3_168)), Some("Qwen 2.5 1.5B"));
-        assert_eq!(pick(&hw("", 0, 4_095, 100_000)), None);
-        assert_eq!(pick(&hw("", 0, 65_536, 3_167)), None, "no room on disk");
+        assert_eq!(pick(&hw("", 0, 8_192, 100_000)), Some("Gemma 4 E2B"));
+        // RAM minus the 4 GB the OS keeps must hold 3 GB.
+        assert_eq!(pick(&hw("", 0, 7_168, 100_000)), Some("Gemma 4 E2B"));
+        assert_eq!(pick(&hw("", 0, 7_167, 100_000)), None);
+        assert_eq!(pick(&hw("", 0, 65_536, 5_317)), None, "no room on disk");
         assert_eq!(pick(&Hardware::default()), None, "nothing read");
         assert_eq!(
-            suggest(&hw("", 0, 8_192, 100_000)).map(|m| (m.id, m.tier)),
-            Some(("qwen2.5-3b-instruct-q4_k_m", "local:small"))
+            suggest_for(&hw("", 0, 8_192, 100_000), CpuSimd::NoAvx),
+            None,
+            "no AVX: cloud only"
         );
         assert_eq!(
-            suggest(&hw("", 0, 4_096, 100_000)).map(|m| m.tier),
+            suggest_for(&hw("", 0, 16_384, 100_000), CpuSimd::Avx2).map(|m| (m.id, m.route)),
+            Some(("gemma-4-e4b-it-q4_k_m", "local:small"))
+        );
+        assert_eq!(
+            suggest_for(&hw("", 0, 8_192, 100_000), CpuSimd::Avx2).map(|m| m.route),
             Some("local:tiny")
         );
+        // An older Qwen 2.5 install isn't in the catalog any more.
+        assert_eq!(model_by_id("qwen2.5-7b-instruct-q4_k_m"), None);
     }
 
     #[test]
@@ -276,7 +367,7 @@ mod tests {
     fn sizes_hardware_and_suggestion_read_in_plain_words() {
         assert_eq!(size_label(512), "512 MB");
         assert_eq!(size_label(1_024), "1 GB");
-        assert_eq!(size_label(4_680), "4.6 GB");
+        assert_eq!(size_label(5_089), "5 GB");
         assert_eq!(size_label(6_728), "6.6 GB");
         assert_eq!(size_label(32_768), "32 GB");
         assert_eq!(
@@ -292,12 +383,16 @@ mod tests {
             "No GPU found, RAM unknown, free disk unknown"
         );
         assert_eq!(
-            suggestion_line(&hw("", 0, 32_768, 225_280)),
-            "Qwen 2.5 7B fits this machine: a 4.6 GB download that needs 6.6 GB free."
+            suggestion_line_for(&hw("", 0, 32_768, 225_280), CpuSimd::Avx2),
+            "Gemma 4 E4B fits this machine: a 5 GB download that needs 7 GB free."
         );
         assert_eq!(
-            suggestion_line(&hw("", 0, 2_048, 225_280)),
-            "No on-device model fits this machine. The smallest needs 4 GB of RAM and 3.1 GB free. You can skip this."
+            suggestion_line_for(&hw("", 0, 2_048, 225_280), CpuSimd::Avx2),
+            "No on-device model fits this machine. The smallest needs 7 GB of RAM and 5.2 GB free. You can skip this."
+        );
+        assert_eq!(
+            suggestion_line_for(&hw("", 0, 32_768, 225_280), CpuSimd::NoAvx),
+            "This CPU has no AVX, so no on-device model can run here. GrokHub uses the cloud; you can skip this."
         );
     }
 

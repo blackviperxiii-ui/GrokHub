@@ -10,7 +10,7 @@
 - `crates/grokhub-hub/src/server.rs`: routing, `bearer`, `MAX_BODY` (8 MiB), `MAX_IN_FLIGHT` (64), `serve` / `serve_background` / `serve_lan`.
 - `crates/grokhub-hub/src/lib.rs`: `parse_args`, `run` (load state, rotate the pair code, persist every 2 s).
 - `crates/grokhub-hub/src/main.rs`: port from `GROKHUB_HUB_PORT`, state path.
-- `crates/grokhub-core/src/state.rs` (`HubState`, `DEFAULT_PORT`, `HUB_KIND`, `state_for_disk`) and `crates/grokhub-core/src/pair.rs` (`PAIR_TTL_MS`, `PAIR_MAX_TRIES`).
+- `crates/grokhub-core/src/state.rs` (`HubState`, `DEFAULT_PORT`, `state_for_disk`; `HUB_KIND` lives in `crates/grokhub-proto/src/lib.rs`) and `crates/grokhub-core/src/pair.rs` (`PAIR_TTL_MS`, `PAIR_MAX_TRIES`).
 ## Change recipe
 - New route: add the `method` + `path` arm in `server.rs` after the token check (unless it must be public), keep hub-lock time short, and add a loopback test like `pair_frame_contract`.
 - New persisted field: add it to `HubState` and decide in `state_for_disk` whether it may reach `hub-state.json`.

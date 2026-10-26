@@ -8,11 +8,14 @@
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use rand_token::random_token;
+
+use super::local_autoconfig::{self as autoconfig, LaunchArgs, Retry};
+use super::local_gov;
 
 /// How long [`Sidecar::wait_healthy`] waits for `/health`.
 pub const HEALTH_TIMEOUT: Duration = Duration::from_secs(30);
@@ -40,6 +43,8 @@ pub struct Sidecar {
     /// Unix seconds of the last successful use (idle unload).
     last_used_secs: AtomicU64,
     idle_unload_secs: u64,
+    /// The auto-configured flags; `None` runs the one-shot `local_perf` defaults.
+    launch: Option<LaunchArgs>,
 }
 
 impl std::fmt::Debug for Sidecar {
@@ -57,10 +62,36 @@ impl std::fmt::Debug for Sidecar {
 }
 
 fn unix_secs() -> u64 {
+    unix_ms() / 1_000
+}
+
+pub(crate) fn unix_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
+        .map(|d| d.as_millis() as u64)
         .unwrap_or(0)
+}
+
+/// Requests to the sidecar in flight; the governor restarts or stops it only at 0.
+static IN_FLIGHT: AtomicUsize = AtomicUsize::new(0);
+
+/// Held for the length of one request (see [`busy`]).
+pub struct Busy(());
+
+impl Drop for Busy {
+    fn drop(&mut self) {
+        IN_FLIGHT.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+/// Marks a request in flight until the guard drops.
+pub fn busy() -> Busy {
+    IN_FLIGHT.fetch_add(1, Ordering::SeqCst);
+    Busy(())
+}
+
+pub fn in_flight() -> usize {
+    IN_FLIGHT.load(Ordering::SeqCst)
 }
 
 impl Sidecar {
@@ -119,10 +150,21 @@ impl Sidecar {
             &self.host,
             self.port,
             &self.token,
+            self.launch.as_ref(),
         )?;
         *self.child.lock().expect("sidecar lock") = child;
         self.restarts.fetch_add(1, Ordering::SeqCst);
         self.wait_healthy()
+    }
+
+    /// This launch runs a draft model (speculative decoding).
+    pub fn drafting(&self) -> bool {
+        self.launch.as_ref().is_some_and(|l| l.draft.is_some())
+    }
+
+    /// The child's process id, so the governor can leave its load out.
+    pub fn pid(&self) -> u32 {
+        self.child.lock().expect("sidecar lock").id()
     }
 
     /// Stop the child (best effort). Called from [`Drop`].
@@ -175,7 +217,13 @@ pub fn llama_args_with_perf(
     token: &str,
     perf: &super::local_perf::RuntimeDefaults,
 ) -> Vec<String> {
-    let mut args = vec![
+    let mut args = base_args(model, host, port, token);
+    args.extend(super::local_perf::llama_perf_args(perf));
+    args
+}
+
+fn base_args(model: &Path, host: &str, port: u16, token: &str) -> Vec<String> {
+    vec![
         "-m".into(),
         model.display().to_string(),
         "--host".into(),
@@ -184,9 +232,25 @@ pub fn llama_args_with_perf(
         port.to_string(),
         "--api-key".into(),
         token.into(),
-    ];
-    args.extend(super::local_perf::llama_perf_args(perf));
+    ]
+}
+
+/// Same as [`llama_args`] with auto-configured flags in place of the defaults.
+pub fn llama_args_with_launch(
+    model: &Path,
+    host: &str,
+    port: u16,
+    token: &str,
+    launch: &LaunchArgs,
+) -> Vec<String> {
+    let mut args = base_args(model, host, port, token);
+    args.extend(launch.to_args());
     args
+}
+
+/// Where the server's load log goes, next to the binary (read for out-of-memory).
+pub fn server_log_path(binary: &Path) -> PathBuf {
+    binary.with_file_name("llama-server.log")
 }
 
 fn spawn_llama(
@@ -195,6 +259,7 @@ fn spawn_llama(
     host: &str,
     port: u16,
     token: &str,
+    launch: Option<&LaunchArgs>,
 ) -> Result<Child, String> {
     if !is_loopback_host(host) {
         return Err(format!("local model server must bind loopback, not {host}"));
@@ -221,11 +286,19 @@ fn spawn_llama(
             ));
         }
     }
+    let args = match launch {
+        Some(l) => llama_args_with_launch(model, host, port, token, l),
+        None => llama_args(model, host, port, token),
+    };
+    // The load log names out-of-memory failures; without a file it is dropped.
+    let log = std::fs::File::create(server_log_path(binary))
+        .map(Stdio::from)
+        .unwrap_or_else(|_| Stdio::null());
     let mut cmd = Command::new(binary);
-    cmd.args(llama_args(model, host, port, token))
+    cmd.args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null());
+        .stderr(log);
     grokhub_core::proc_util::hide_windows_console(&mut cmd);
     cmd.spawn()
         .map_err(|e| format!("could not start local model server: {e}"))
@@ -246,23 +319,69 @@ pub fn start(paths: &SidecarPaths) -> Result<Sidecar, String> {
         ));
     }
     let host = "127.0.0.1".to_string();
-    let port = free_loopback_port()?;
-    let token = random_token();
-    let child = spawn_llama(&paths.binary, &paths.model, &host, port, &token)?;
+    let planned = autoconfig::launch_for(&paths.binary, &paths.model);
+    let mut launch = planned.as_ref().map(|(l, _, _)| l.clone());
     let idle = super::local_perf::current_defaults().idle_unload_secs;
-    let side = Sidecar {
-        child: Mutex::new(child),
-        host,
-        port,
-        token,
-        binary: paths.binary.clone(),
-        model: paths.model.clone(),
-        restarts: AtomicU64::new(0),
-        last_used_secs: AtomicU64::new(unix_secs()),
-        idle_unload_secs: idle,
-    };
-    side.wait_healthy()?;
-    Ok(side)
+    let mut attempt: u8 = 0;
+    loop {
+        let port = free_loopback_port()?;
+        let token = random_token();
+        let child = spawn_llama(
+            &paths.binary,
+            &paths.model,
+            &host,
+            port,
+            &token,
+            launch.as_ref(),
+        )?;
+        let side = Sidecar {
+            child: Mutex::new(child),
+            host: host.clone(),
+            port,
+            token,
+            binary: paths.binary.clone(),
+            model: paths.model.clone(),
+            restarts: AtomicU64::new(0),
+            last_used_secs: AtomicU64::new(unix_secs()),
+            idle_unload_secs: idle,
+            launch: launch.clone(),
+        };
+        let err = match side.wait_healthy() {
+            Ok(()) => {
+                if let (Some(l), Some((_, key, dir))) = (launch.as_ref(), planned.as_ref()) {
+                    if attempt > 0 {
+                        let tuned = autoconfig::Tuned {
+                            ngl: l.ngl,
+                            n_cpu_moe: l.n_cpu_moe,
+                            ctx: l.ctx,
+                            kv: l.kv,
+                        };
+                        let _ = autoconfig::save_tuned(dir, key, &tuned);
+                    }
+                }
+                return Ok(side);
+            }
+            Err(e) => e,
+        };
+        side.stop();
+        let log = std::fs::read_to_string(server_log_path(&paths.binary)).unwrap_or_default();
+        let Some(prev) = launch.as_ref().filter(|_| autoconfig::oom_in_log(&log)) else {
+            return Err(err);
+        };
+        attempt += 1;
+        match autoconfig::after_oom(prev, attempt) {
+            Retry::Again(next) => launch = Some(next),
+            Retry::SmallerModel => {
+                let smaller = autoconfig::catalog_model_for(&paths.model)
+                    .and_then(|m| autoconfig::next_smaller(m.id))
+                    .map(|m| format!(" Try {} in Settings → Local model.", m.name))
+                    .unwrap_or_default();
+                return Err(format!(
+                    "the local model ran out of memory even with fewer GPU layers.{smaller}"
+                ));
+            }
+        }
+    }
 }
 
 /// GET `/health` with `Authorization: Bearer <token>`.
@@ -360,17 +479,84 @@ fn global_slot() -> &'static Mutex<Option<Sidecar>> {
 
 /// Ensure a healthy global sidecar when assets exist under `config_dir`.
 pub fn ensure_global(config_dir: &Path) -> Result<(), String> {
+    acquire(config_dir).map(drop)
+}
+
+/// [`ensure_global`] for one request: the [`Busy`] guard is taken while the
+/// slot is still locked, so the governor can't stop the sidecar between the
+/// start and the request.
+///
+/// While the governor is at Unload this stops nothing mid-request and starts
+/// nothing; a restart the governor asked for happens here when no other
+/// request is in flight; a crash-loop breaker refuses starts after 3 failures
+/// and drops a dead sidecar from the slot.
+pub fn acquire(config_dir: &Path) -> Result<Busy, String> {
     tick_idle_unload();
+    if local_gov::paused() {
+        tick_governor();
+        return Err(format!(
+            "the on-device model is paused because {}",
+            local_gov::reason()
+        ));
+    }
     let paths = resolve_paths(config_dir)
         .ok_or_else(|| "local model binary or GGUF is not installed".to_string())?;
     let mut slot = global_slot().lock().expect("sidecar global");
+    if local_gov::restart_due() && in_flight() == 0 {
+        if let Some(side) = slot.take() {
+            side.stop();
+        }
+        local_gov::clear_restart();
+    }
     if let Some(side) = slot.as_ref() {
+        if !side.alive() {
+            if let Err(e) = local_gov::may_start(unix_ms()) {
+                if let Some(dead) = slot.take() {
+                    dead.stop();
+                }
+                return Err(e);
+            }
+            local_gov::start_failed(unix_ms());
+        }
         side.ensure_alive()?;
         side.last_used_secs.store(unix_secs(), Ordering::SeqCst);
-        return Ok(());
+        return Ok(busy());
     }
-    *slot = Some(start(&paths)?);
-    Ok(())
+    local_gov::may_start(unix_ms())?;
+    match start(&paths) {
+        Ok(side) => {
+            *slot = Some(side);
+            Ok(busy())
+        }
+        Err(e) => {
+            local_gov::start_failed(unix_ms());
+            Err(e)
+        }
+    }
+}
+
+/// The governor's sample tick: between requests, stop the sidecar when the
+/// level is Unload or a restart is due (the next request starts it with the
+/// new launch args).
+pub fn tick_governor() {
+    if in_flight() > 0 || !(local_gov::paused() || local_gov::restart_due()) {
+        return;
+    }
+    let mut slot = global_slot().lock().expect("sidecar global");
+    // A request may have taken its guard while this waited for the lock.
+    if in_flight() > 0 {
+        return;
+    }
+    if let Some(side) = slot.take() {
+        side.stop();
+    }
+    local_gov::clear_restart();
+}
+
+/// Process id of the running sidecar.
+pub fn global_pid() -> Option<u32> {
+    let slot = global_slot().lock().expect("sidecar global");
+    slot.as_ref().map(Sidecar::pid)
 }
 
 /// Base URL + token for the global sidecar, when running.
@@ -683,7 +869,7 @@ mod tests {
         let args = llama_args_with_perf(Path::new("/m.gguf"), "127.0.0.1", 9, "tok", &perf);
         assert!(args.windows(2).any(|w| w == ["-ngl", "99"]));
         assert!(args.windows(2).any(|w| w == ["-c", "16384"]));
-        assert!(args.iter().any(|a| a == "--flash-attn"));
+        assert!(args.windows(2).any(|w| w == ["--flash-attn", "on"]));
     }
 
     #[test]
@@ -700,7 +886,8 @@ mod tests {
             p.set_mode(0o755);
             std::fs::set_permissions(&evil, p).unwrap();
         }
-        let err = spawn_llama(&evil, Path::new("/m.gguf"), "127.0.0.1", 9, "tok").unwrap_err();
+        let err =
+            spawn_llama(&evil, Path::new("/m.gguf"), "127.0.0.1", 9, "tok", None).unwrap_err();
         assert!(err.contains("must be named"), "{err}");
         let named = dir.join(llama_server_name());
         std::fs::write(&named, b"x").unwrap();
@@ -711,7 +898,7 @@ mod tests {
             p.set_mode(0o755);
             std::fs::set_permissions(&named, p).unwrap();
         }
-        let err = spawn_llama(&named, Path::new("/m.gguf"), "0.0.0.0", 9, "tok").unwrap_err();
+        let err = spawn_llama(&named, Path::new("/m.gguf"), "0.0.0.0", 9, "tok", None).unwrap_err();
         assert!(err.contains("loopback"), "{err}");
         let _ = std::fs::remove_dir_all(&dir);
     }

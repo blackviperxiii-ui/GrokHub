@@ -1,0 +1,15 @@
+# Workflow actions are pinned to commit SHAs (scripts/ci-guards.sh check 7).
+# Dependabot opens PRs that move the pins and their tag comments together.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    target-branch: beta
+    labels:
+      - dependencies
+    groups:
+      actions:
+        patterns:
+          - "*"

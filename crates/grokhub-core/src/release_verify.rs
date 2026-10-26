@@ -25,10 +25,9 @@ pub fn releases_api(channel: Channel) -> &'static str {
 pub const SUMS_NAME: &str = "SHA256SUMS";
 pub const SIG_NAME: &str = "SHA256SUMS.minisig";
 
-/// The release signing public key (`packaging/minisign.pub`). `None` until
-/// the owner creates the key: until then updates check `SHA256SUMS` only.
+/// The release signing public key (`packaging/minisign.pub`).
 /// `the_shipped_key_matches_packaging` fails when the file and this differ.
-pub const RELEASE_PUBKEY: Option<&str> = None;
+pub const RELEASE_PUBKEY: Option<&str> = Some(include_str!("../../../packaging/minisign.pub"));
 
 /// The update plan step the cabin runs itself (download, verify, install)
 /// instead of handing it to a shell.

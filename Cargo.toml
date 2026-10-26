@@ -1,15 +1,17 @@
 [workspace]
 resolver = "2"
 members = [
+    "crates/grokhub-proto",
     "crates/grokhub-core",
     "crates/grokhub-hub",
     "crates/grokhub-app",
     "crates/grokhub-agent",
+    "crates/grokhub-desktop",
     "xtask",
 ]
 
 [workspace.package]
-version = "3.1.0"
+version = "3.2.0"
 rust-version = "1.95"
 edition = "2021"
 license = "MIT"

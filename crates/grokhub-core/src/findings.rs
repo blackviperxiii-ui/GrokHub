@@ -74,6 +74,17 @@ fn one_line(s: &str) -> String {
     s.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
+/// True when `needle` occurs in `hay` starting at a word boundary, so `load `
+/// does not match inside "download " and `steam` not inside "upstream".
+fn word_start(hay: &str, needle: &str) -> bool {
+    hay.match_indices(needle).any(|(i, _)| {
+        hay[..i]
+            .chars()
+            .next_back()
+            .is_none_or(|c| !c.is_alphanumeric())
+    })
+}
+
 /// One-tap pills that ask the agent to grant OS/workspace paths or "activate"
 /// a skill cannot succeed and doom-loop. Refuse them at card build time
 /// (`from_json`) and drop them when painting a stored card (`parse`) or when
@@ -102,10 +113,10 @@ Use Memory, sealed learnings, or a loadable skill instead of OS permission pills
     // Allow Steam reads, Load X from cabin skills).
     let skill_verb = ["activate ", "enable ", "load ", "allow "]
         .iter()
-        .any(|v| blob.contains(v));
+        .any(|v| word_start(&blob, v));
     if skill_verb
-        && (blob.contains("skill")
-            || blob.contains("steamlib")
+        && (word_start(&blob, "skill")
+            || word_start(&blob, "steamlib")
             || blob.contains("from cabin")
             || blob.contains("cabin skills"))
     {
@@ -114,13 +125,12 @@ Use Memory, sealed learnings, or a loadable skill instead of OS permission pills
 Use Memory, sealed learnings, or a loadable skill instead of OS permission pills."
         ));
     }
-    let host_verb = blob.contains("grant")
-        || blob.contains("allow ")
-        || blob.contains("enable ")
-        || blob.contains("unblock");
+    let host_verb = ["grant", "allow ", "enable ", "unblock"]
+        .iter()
+        .any(|v| word_start(&blob, v));
     if host_verb
-        && (blob.contains("steam")
-            || blob.contains("workspace")
+        && (word_start(&blob, "steam")
+            || word_start(&blob, "workspace")
             || blob.contains("~/.")
             || blob.contains("host path")
             || blob.contains("os path"))
@@ -349,6 +359,96 @@ mod tests {
             }]
         }));
         assert!(skill.contains("activate skill"), "{skill}");
+    }
+
+    #[test]
+    fn malformed_inputs_never_make_a_card() {
+        let err = |v: Value| Findings::from_json(&v).is_err();
+        assert!(err(json!(null)));
+        assert!(err(json!([])));
+        assert!(err(json!({})));
+        assert!(err(json!({"findings": "none"})));
+        assert!(err(json!({"findings": {"severity": "low", "text": "x"}})));
+        assert!(err(json!({"findings": [null]})));
+        assert!(err(json!({"findings": ["low: x"]})));
+        assert!(err(json!({"findings": [{"severity": 3, "text": "x"}]})));
+        assert!(err(json!({"findings": [{"severity": "low", "text": 7}]})));
+        assert!(err(json!({"findings": [{"text": "no severity"}]})));
+        assert!(err(
+            json!({"findings": [{"severity": "highest", "text": "x"}]})
+        ));
+        assert!(err(json!({"findings": [{"severity": "", "text": "x"}]})));
+        let too_many: Vec<Value> = (0..=MAX_FINDINGS)
+            .map(|n| json!({"severity": "info", "text": format!("f{n}")}))
+            .collect();
+        assert!(err(json!({"findings": too_many})));
+        let long = "x".repeat(LABEL_MAX + 1);
+        assert!(err(json!({
+            "findings": [{"severity": "low", "text": "x"}],
+            "fixes": [{"label": long, "goal": "g"}]
+        })));
+        assert!(err(json!({
+            "findings": [{"severity": "low", "text": "x"}],
+            "fixes": [{"label": "Go", "goal": "  "}]
+        })));
+        // a non-array fixes value is ignored, not a card of its own
+        let card = Findings::from_json(
+            &json!({"findings": [{"severity": "low", "text": "x"}], "fixes": "oops"}),
+        )
+        .unwrap();
+        assert!(card.fixes.is_empty());
+    }
+
+    #[test]
+    fn parse_refuses_bodies_that_are_not_cards() {
+        for body in [
+            "",
+            "\n",
+            "findings from this run\n- High: x",
+            "Findings from this runs\n- High: x",
+            "Findings from this run\n\nnothing here",
+            "Findings from this run\n- Urgent: not a severity",
+            "Findings from this run\n- High:no space after colon",
+            "Findings from this run\nHigh: no dash",
+            "Findings from this run\n\nOne-tap fixes\n\n- Fix nginx: Restart it.",
+        ] {
+            assert_eq!(Findings::parse(body), None, "{body:?}");
+        }
+        // fixes-section rows never become findings
+        let card = Findings::parse(
+            "Findings from this run\n- Low: x\n\nOne-tap fixes\n\n- High: not a finding",
+        )
+        .unwrap();
+        assert_eq!(card.items.len(), 1);
+        assert_eq!(card.fixes[0].label, "High");
+    }
+
+    #[test]
+    fn ordinary_fixes_are_not_mistaken_for_host_grants() {
+        // Substrings inside longer words must not trip the doom-loop guard.
+        for (label, goal) in [
+            (
+                "Unblock upstream DNS",
+                "Unblock the upstream resolver on port 53.",
+            ),
+            ("Download skill report", "Download the skills usage report."),
+            (
+                "Reload nginx",
+                "Reload nginx so the new workspacey config applies.",
+            ),
+            ("Restart bind", "Restart bind and confirm it answers."),
+            ("Fix upstream", "Enable upstream retries in nginx."),
+        ] {
+            assert!(
+                !is_impossible_one_tap(label, goal),
+                "{label}: {goal} should be allowed"
+            );
+        }
+        assert!(Findings::from_json(&json!({
+            "findings": [{"severity": "low", "text": "x"}],
+            "fixes": [{"label": "Unblock upstream DNS", "goal": "Unblock the upstream resolver."}]
+        }))
+        .is_ok());
     }
 
     #[test]
