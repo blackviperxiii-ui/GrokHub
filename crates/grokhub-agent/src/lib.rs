@@ -22,6 +22,7 @@ mod models;
 pub mod perm;
 pub mod plugins;
 mod prefix_cache;
+pub mod prefix_guard;
 mod prompt;
 mod recovery;
 pub mod repair;
