@@ -242,21 +242,35 @@ MEMORY.md ledger as input (`src-tauri/src/pulse.rs`).
   `grokhub_core::pulse_writer`). `GROKHUB_SHELL_PULSE_NET` points its source,
   page and image fetches at a loopback mock for the smoke tests; any other
   host is ignored.
-- Ideas groups rows under the cabin's category headers. Run notes the idea
-  as accepted and puts its action in the chat box; nothing is sent until the
-  person sends it, so the chat's approvals still apply.
+- Ideas are rows, not cards: a 44 px icon (the same bundled emoji set),
+  the title, a grey "I can …" line, and a menu. The first three, by rank,
+  lead with no header; the rest sit under Productivity, Financial
+  Management, Shopping, Relationships and Health & Fitness, in that order
+  (older cards whose words match none go under More ideas last).
+- A click on the row is Let's do it: it notes the idea as accepted and puts
+  its action in the chat box; nothing is sent until the person sends it, so
+  the chat's approvals still apply. The menu also holds More like this (the
+  next idea run writes more in its spirit, and the topics it names gain
+  weight) and Not interested (the idea goes, its topics lose weight, and it
+  is kept as turned down so it does not come back).
+- The shell writes its own ideas (`grokhub_core::pulse_ideas`, run from
+  `pulse_feed.rs` after a feed run, at most once every six hours) from the
+  open journal questions, interest topics, recent chats and recent feed
+  posts. A written idea retires after 14 days unless it was edited.
 - Dismiss, Not this, Love and Accept write the cabin's one-line ledger entry
   to the global MEMORY.md, so the next ranking learns from them. Snooze hides
   a card until the next 9 AM local.
-- Not yet: generating new ideas and Undo on done-for-you posts. The cabin still makes the cards. A dismissed
+- Not yet: Undo on done-for-you posts. The cabin still makes the cards. A dismissed
   idea is not added to the cabin's turned-down list (that lives in its
   `config.json`, which the shell does not write), so the cabin's next idea
   pass can offer a reworded copy.
 - Rust tests cover the split, each act, the ledger lines and snooze. The
   smoke test writes a post and an idea, checks Love writes the ledger line,
   saves the feed instructions and waits for the writer's post with its
-  cached image, opens the lightbox, deletes a post, and checks Run fills the
-  chat box without a model call. The web smoke shows a post and sends Love.
+  cached image, opens the lightbox, and deletes a post. The idea writer then
+  adds one idea; the smoke checks its menu, that More like this is kept, and
+  that a row click fills the chat box without a model call. The web smoke
+  shows a post, sends Love, checks the idea menu and a row click.
 
 **3g, computer-use.** The desktop tools moved into a shared
 `crates/grokhub-desktop` crate (#859). The shell's chat now uses them through

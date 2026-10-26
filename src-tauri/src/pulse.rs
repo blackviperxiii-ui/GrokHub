@@ -3,10 +3,14 @@
 //! Dismiss, Not this, Love and Accept write the same MEMORY.md ledger line
 //! the cabin writes, so the next ranking learns from them. Love and Discuss
 //! also feed the writer's taste summary (`pulse_feed`); Delete only removes.
+//! Ideas take Let's do it (Accept), More like this and Not interested; the
+//! last two move the interest topics the idea names and steer the next idea
+//! run.
 
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
 
+use grokhub_core::interests::InterestSignal;
 use grokhub_core::pulse::{self as pc, LedgerReason};
 use grokhub_core::pulse_writer::TasteKind;
 use grokhub_core::{CardReaction, UpdateCard, UpdateKind};
@@ -59,12 +63,14 @@ pub struct Post {
 #[serde(rename_all = "camelCase")]
 pub struct Idea {
     pub id: String,
-    /// The bold "I can …" line.
+    /// The bold line: a written idea's own title, else "I can …".
     pub title: String,
+    /// A written idea's topic emoji. Empty on older ideas.
+    pub icon: String,
     pub summary: String,
     /// Do, Automate, Learn or Watch.
     pub kind: String,
-    /// What Run puts in the chat box.
+    /// What Let's do it puts in the chat box.
     pub action: String,
 }
 
@@ -94,8 +100,12 @@ pub enum Act {
     /// Takes the post away. Not a taste signal: nothing is noted.
     Delete,
     Snooze,
-    /// Run took the idea to chat.
+    /// Let's do it (or Run) took the idea to chat.
     Accept,
+    /// More like this: the next idea run writes more in its spirit.
+    MoreLike,
+    /// Not interested: the idea goes, and so does some of its topics' weight.
+    NotInterested,
 }
 
 /// The local wall clock from the page: today's date for the ledger line and
@@ -187,6 +197,21 @@ pub fn add_post(config_dir: &Path, card: UpdateCard) -> Result<bool, String> {
     Ok(added)
 }
 
+/// Add one idea run's ideas. Returns how many landed.
+pub fn add_ideas(
+    config_dir: &Path,
+    ideas: &[grokhub_core::pulse_ideas::MuseIdea],
+    now_ms: u64,
+) -> Result<usize, String> {
+    let _store = store();
+    let mut cards = load_unlocked(config_dir)?;
+    let added = grokhub_core::pulse_ideas::post_ideas(&mut cards, ideas, now_ms);
+    if added > 0 {
+        save(config_dir, &cards)?;
+    }
+    Ok(added)
+}
+
 fn post(config_dir: &Path, card: &UpdateCard, now_ms: u64) -> Post {
     let images = pulse_feed::images_dir(config_dir);
     let source = card
@@ -226,6 +251,7 @@ fn idea(card: &UpdateCard) -> Idea {
     Idea {
         id: card.id.clone(),
         title: pc::i_can_title(card),
+        icon: card.pulse.icon.clone().unwrap_or_default(),
         summary: card.body.clone().unwrap_or_default().trim().to_string(),
         kind: pc::pulse_type(card).label().to_string(),
         action: if action.is_empty() {
@@ -272,7 +298,8 @@ pub fn load(config_dir: &Path, day: Option<&Day>, now_ms: u64) -> Result<Page, S
     })?;
     let _store = store();
     let mut cards = load_unlocked(config_dir)?;
-    if grokhub_core::collapse_feed(&mut cards) {
+    let collapsed = grokhub_core::collapse_feed(&mut cards);
+    if grokhub_core::expire_ideas(&mut cards, now_ms) > 0 || collapsed {
         save(config_dir, &cards)?;
     }
     Ok(page(config_dir, &cards, now_ms))
@@ -331,11 +358,39 @@ pub fn act(config_dir: &Path, id: &str, act: Act, day: &Day, now_ms: u64) -> Res
             note(&card.title, LedgerReason::Accepted, &day.date)?;
             grokhub_core::mark_update_opened(&mut cards, id)
         }
+        Act::MoreLike => {
+            note(&card.title, LedgerReason::Liked, &day.date)?;
+            idea_feedback(config_dir, &card, InterestSignal::MoreLikeThis, now_ms)?;
+            pulse_feed::with_ideas_state(config_dir, |s| s.note_more_like(&card.title))?;
+            false
+        }
+        Act::NotInterested => {
+            note(&card.title, LedgerReason::NotThis, &day.date)?;
+            idea_feedback(config_dir, &card, InterestSignal::NotInterested, now_ms)?;
+            pulse_feed::with_ideas_state(config_dir, |s| s.note_not_interested(&card.title))?;
+            remove(&mut cards)
+        }
     };
     if changed {
         save(config_dir, &cards)?;
     }
     Ok(page(config_dir, &cards, now_ms))
+}
+
+/// Move the interest topics an idea's text names.
+fn idea_feedback(
+    config_dir: &Path,
+    card: &UpdateCard,
+    signal: InterestSignal,
+    now_ms: u64,
+) -> Result<(), String> {
+    let text = format!(
+        "{} {} {}",
+        card.title,
+        card.body.as_deref().unwrap_or(""),
+        card.idea_action()
+    );
+    crate::interests::feedback(config_dir, &text, signal, now_ms).map(|_| ())
 }
 
 fn find(config_dir: &Path, id: &str) -> Result<UpdateCard, String> {
@@ -495,7 +550,62 @@ mod tests {
         assert_eq!(ideas[0].id, "idea-1");
         assert!(ideas[0].title.starts_with("I can "), "{:?}", ideas[0]);
         assert_eq!(ideas[0].action, "close every done card on the workboard");
-        assert_eq!(page.ideas[0].label, "Productivity");
+        assert_eq!(
+            page.ideas[0].label, "",
+            "the first three ideas lead with no header"
+        );
+    }
+
+    fn rust_topic(config: &Path) {
+        let mut profile = grokhub_core::interests::InterestProfile::default();
+        profile.add(
+            "workboard",
+            grokhub_core::interests::InterestSource::Explicit,
+            NOW,
+        );
+        grokhub_core::interests::save(&config.join(grokhub_core::interests::FILE_NAME), &profile)
+            .expect("interests");
+    }
+
+    fn weight(config: &Path) -> u8 {
+        grokhub_core::interests::load(&config.join(grokhub_core::interests::FILE_NAME))
+            .find("workboard")
+            .expect("topic")
+            .weight
+    }
+
+    #[test]
+    fn not_interested_removes_the_idea_and_lowers_its_topic() {
+        let d = dirs("not-interested", &sample());
+        rust_topic(&d.config);
+        let before = weight(&d.config);
+        let page = act(&d.config, "idea-1", Act::NotInterested, &day(), NOW).expect("act");
+        assert!(page.ideas.is_empty(), "{page:?}");
+        assert_eq!(weight(&d.config), before - 15);
+        assert!(memory().contains("pulse: dismissed \"Tidy the workboard\" reason=not-this"));
+        let state = pulse_feed::with_ideas_state(&d.config, |s| s.clone()).expect("state");
+        assert_eq!(state.turned_down, vec!["Tidy the workboard"]);
+    }
+
+    #[test]
+    fn more_like_this_keeps_the_idea_and_is_kept_for_the_next_run() {
+        let d = dirs("more-like", &sample());
+        rust_topic(&d.config);
+        let before = weight(&d.config);
+        let page = act(&d.config, "idea-1", Act::MoreLike, &day(), NOW).expect("act");
+        assert_eq!(
+            page.ideas.iter().flat_map(|g| &g.ideas).count(),
+            1,
+            "{page:?}"
+        );
+        assert_eq!(weight(&d.config), before + 12);
+        let state = pulse_feed::with_ideas_state(&d.config, |s| s.clone()).expect("state");
+        assert_eq!(state.more_like, vec!["Tidy the workboard"]);
+        let acts: Vec<Act> = ["\"moreLike\"", "\"notInterested\"", "\"accept\""]
+            .iter()
+            .map(|raw| serde_json::from_str(raw).expect("act"))
+            .collect();
+        assert_eq!(acts, vec![Act::MoreLike, Act::NotInterested, Act::Accept]);
     }
 
     #[test]
