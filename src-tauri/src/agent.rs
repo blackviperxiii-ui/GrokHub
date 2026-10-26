@@ -45,7 +45,7 @@ pub enum SessionMode {
 
 /// The system prompt the cabin's native chat uses, with the desktop line
 /// only while desktop control is on. `voice` is the personality's block
-/// (crate::personality::voice), empty for the default voice.
+/// (`crate::personality::voice`). The default voice carries its values rules.
 pub fn system_prompt(workspace: &std::path::Path, desktop: bool, voice: &str) -> String {
     grokhub_agent::system_prompt_parts(
         &grokhub_core::cabin_rules::cabin_static_rules(desktop),

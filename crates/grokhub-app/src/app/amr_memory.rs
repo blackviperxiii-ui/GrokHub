@@ -68,6 +68,7 @@ pub(super) fn remembered_status(result: &Result<Remembered, AmrError>) -> String
         Ok(Remembered::New(_)) => "Remembered in the memory repo".into(),
         Ok(Remembered::Known(_)) => "Already in the memory repo".into(),
         Err(AmrError::Scratch) => "Scratch — no memory writes".into(),
+        Err(AmrError::WritesOff) => "Memory is off. Nothing was written.".into(),
         Err(AmrError::Paused(why)) => format!("Learning paused: {why}. Nothing was written."),
         Err(err) => format!("Memory repo: {err}"),
     }
@@ -179,6 +180,7 @@ impl Cabin {
                 }
             }
         }
+        store.set_memory_writes(self.cfg.memory_writes);
         store.set_scratch(scratch);
         store
     }
@@ -547,6 +549,10 @@ mod amr_tests {
         assert_eq!(
             remembered_status(&Err(AmrError::Paused("Private data is locked".into()))),
             "Learning paused: Private data is locked. Nothing was written."
+        );
+        assert_eq!(
+            remembered_status(&Err(AmrError::WritesOff)),
+            "Memory is off. Nothing was written."
         );
     }
 }

@@ -487,6 +487,18 @@ pub struct AppConfig {
         skip_serializing_if = "grokhub_core::amr::MemoryBackend::is_legacy"
     )]
     pub memory_backend: grokhub_core::amr::MemoryBackend,
+    /// Learned-memory writes. Omitted from `app.json` while this stays on.
+    /// `"memory_writes": false` stops notes, proposals and edits. Forget still works.
+    #[serde(
+        default = "default_host_on",
+        rename = "memory_writes",
+        skip_serializing_if = "is_true"
+    )]
+    pub memory_writes: bool,
+}
+
+fn is_true(v: &bool) -> bool {
+    *v
 }
 
 fn default_yolo() -> bool {
@@ -671,6 +683,7 @@ impl Default for AppConfig {
             pulse_sources: Default::default(),
             daily_drop: DailyDropSettings::default(),
             memory_backend: grokhub_core::amr::MemoryBackend::Legacy,
+            memory_writes: true,
         }
     }
 }
@@ -1053,6 +1066,29 @@ mod tests {
             saved.contains("\"memory_backend\":\"amr\""),
             "amr opt-in must keep the snake_case key: {saved}"
         );
+    }
+
+    #[test]
+    fn memory_writes_defaults_on_and_round_trips_off() {
+        let json = serde_json::to_string(&AppConfig::default()).unwrap();
+        assert!(
+            !json.contains("memory_writes"),
+            "default config must omit memory_writes: {json}"
+        );
+        let missing: AppConfig = serde_json::from_str("{}").unwrap();
+        assert!(missing.memory_writes);
+        let off: AppConfig = serde_json::from_str(r#"{"memory_writes":false}"#).unwrap();
+        assert!(!off.memory_writes);
+        let saved = serde_json::to_string(&off).unwrap();
+        assert!(
+            saved.contains("\"memory_writes\":false"),
+            "off must keep the snake_case key: {saved}"
+        );
+        let on: AppConfig = serde_json::from_str(r#"{"memory_writes":true}"#).unwrap();
+        assert!(on.memory_writes);
+        assert!(!serde_json::to_string(&on)
+            .unwrap()
+            .contains("memory_writes"));
     }
 
     #[test]
