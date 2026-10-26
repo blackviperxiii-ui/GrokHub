@@ -173,16 +173,20 @@ fn pulse_ideas_group_by_category_in_a_fixed_order() {
     assert_eq!(
         groups,
         vec![
-            (None, vec!["idea-bill".to_string()]),
             (
-                Some("Productivity"),
-                vec!["idea-standup".to_string(), "idea-auto".to_string()]
+                None,
+                vec![
+                    "idea-bill".to_string(),
+                    "idea-standup".to_string(),
+                    "idea-dinner".to_string()
+                ]
             ),
-            (Some("Relationships"), vec!["idea-dinner".to_string()]),
-            (Some("Health & Fitness"), vec!["idea-gym".to_string()]),
+            (Some("Productivity"), vec!["idea-auto".to_string()]),
             (Some("Shopping"), vec!["idea-stand".to_string()]),
+            (Some("Health & Fitness"), vec!["idea-gym".to_string()]),
             (Some("More ideas"), vec!["idea-photos".to_string()]),
-        ]
+        ],
+        "the three strongest lead, then the categories in their fixed order"
     );
     cabin.pulse_view.tab = super::pulse_ui::PulseTab::Ideas;
     let texts = pulse_texts(cabin, 2400.0);
@@ -195,13 +199,12 @@ fn pulse_ideas_group_by_category_in_a_fixed_order() {
     let order = [
         at("Up next"),
         at("I can pay your TXU bill before Friday"),
-        at("Productivity"),
         at("I can draft your standup"),
-        at("I can summarize the workboard automatically"),
-        at("Relationships"),
         at("I can plan a dinner with family"),
-        at("Health & Fitness"),
+        at("Productivity"),
+        at("I can summarize the workboard automatically"),
         at("Shopping"),
+        at("Health & Fitness"),
         at("More ideas"),
         at("I can sort the vacation photos"),
     ];

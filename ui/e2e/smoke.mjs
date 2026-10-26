@@ -53,6 +53,16 @@ function toolCall(callId, name, args) {
 // "result checked"), as with a real model: write the note, re-read it, tick
 // the checklist, then reply in two pieces.
 function mockReply(callNumber, body) {
+  // The Pulse writer's two calls: the taste note, then one post.
+  if (body.includes("You keep a short note on what one person likes")) {
+    return textReply("They like smoke tests and shell news.");
+  }
+  if (body.includes("You write one post for a person's news feed")) {
+    return textReply(JSON.stringify(PULSE_POST));
+  }
+  if (body.includes("You suggest ideas for one person's Pulse")) {
+    return textReply(JSON.stringify([PULSE_IDEA]));
+  }
   if (body.includes(WEB_PROMPT)) return textReply(WEB_REPLY);
   if (body.includes(DESK_PROMPT)) {
     if (!body.includes("smoke-desk")) return toolCall("smoke-desk", "type", { text: DESK_TEXT });
@@ -102,6 +112,7 @@ function startMock() {
   const seen = [];
   mockSeen = seen;
   const server = createServer((req, res) => {
+    if (req.url.startsWith("/pulse/")) return pulseFixture(req, res);
     let body = "";
     req.on("data", (chunk) => (body += chunk));
     req.on("end", () => {
@@ -119,6 +130,62 @@ function startMock() {
   return new Promise((ok) =>
     server.listen(0, "127.0.0.1", () => ok({ server, seen, port: server.address().port })),
   );
+}
+
+// The Pulse writer's network (GROKHUB_SHELL_PULSE_NET): a Hacker News search
+// with one story about the smoke topic, the story's page, and its image.
+const PULSE_TOPIC = "smoke news";
+const PULSE_STORY = "https://smoke.example.com/story";
+const PULSE_IMAGE = "https://smoke.example.com/hero.jpg";
+const PULSE_TITLE = "Smoke news: the shell writes its own feed";
+const PULSE_POST = {
+  title: PULSE_TITLE,
+  snippet: `The shell now writes [its own feed posts](${PULSE_STORY}) from free sources.`,
+  icon: "🚀",
+  why: "You asked for smoke news.",
+};
+
+// The idea writer's one idea, after the feed run.
+const PULSE_IDEA = {
+  title: "Smoke news weekly digest",
+  description: "I can gather the week's smoke news into one Friday digest.",
+  emoji: "🛠️",
+  category: "productivity",
+  action: "every Friday at 5, gather the week's smoke news into a digest",
+};
+
+function pulseFixture(req, res) {
+  const url = new URL(req.url, "http://127.0.0.1");
+  const asked = url.searchParams.get("url") ?? "";
+  const kind = url.pathname.slice("/pulse/".length);
+  let type = "text/html";
+  let body = null;
+  if (kind === "source" && asked.includes("hn.algolia.com")) {
+    type = "application/json";
+    body = JSON.stringify({
+      hits: [
+        {
+          title: "Smoke news: a shell that writes its own feed",
+          url: PULSE_STORY,
+          points: 99,
+          num_comments: 3,
+          created_at_i: Math.floor(Date.now() / 1000) - 600,
+          objectID: "1",
+        },
+      ],
+    });
+  } else if (kind === "page" && asked === PULSE_STORY) {
+    body = `<html><head><meta property="og:image" content="${PULSE_IMAGE}"></head><body><p>Smoke news.</p></body></html>`;
+  } else if (kind === "image" && asked === PULSE_IMAGE) {
+    type = "image/jpeg";
+    body = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "fixtures", "smoke-hero.jpg"));
+  }
+  if (body === null) {
+    res.writeHead(404, { Connection: "close" });
+    return res.end();
+  }
+  res.writeHead(200, { "Content-Type": type, Connection: "close" });
+  res.end(body);
 }
 
 async function wd(method, path, body) {
@@ -246,8 +313,9 @@ async function memory(s, workspace) {
   const input = await waitFor("the memory page", () => find(s, "input[aria-label='New note']"));
   await wd("POST", `${s}/element/${input}/value`, { text: MEMORY_NOTE });
   await click(s, ".memory form.add button[type='submit']");
+  // Status is role=status; AMR-on installs also show a banner in p.note.
   await waitFor("the remembered note", async () => {
-    const t = await textOf(s, ".memory p.note");
+    const t = await textOf(s, ".memory [role='status']");
     return t.startsWith("Remembered in workspace") ? t : null;
   });
   const file = readFileSync(join(workspace, "MEMORY.md"), "utf8");
@@ -304,8 +372,13 @@ async function connectors(s, config) {
 }
 
 // Pulse: a post and an idea in the cabin's updates.json show on Feed and
-// Ideas. Not this on the post writes the ledger line to the global MEMORY.md
-// and takes it off; Run on the idea puts its action in the chat box, unsent.
+// Ideas. Love on the post writes the ledger line to the global MEMORY.md.
+// Saving the feed instructions makes the writer post at once: it reads the
+// mocked sources, asks the mocked model, and caches the story's image, which
+// opens in the lightbox. Delete takes the first post away. After the post
+// the idea writer adds one idea; its menu holds Let's do it, More like this
+// and Not interested, and More like this is kept for the next run. A click on
+// the seeded idea's row puts its action in the chat box, unsent.
 async function pulse(s, config) {
   const now = Date.now();
   const cards = [
@@ -328,36 +401,129 @@ async function pulse(s, config) {
     },
   ];
   writeFileSync(join(config, "updates.json"), JSON.stringify(cards));
+  writeFileSync(
+    join(config, "interests.json"),
+    JSON.stringify({ topics: [{ topic: PULSE_TOPIC, source: "explicit", weight: 60 }], seeded: true }),
+  );
   await tab(s, "Pulse");
   await waitFor("the feed post", async () => {
-    const t = await textOf(s, ".pulse .card.post .card-title");
+    const t = await textOf(s, ".pulse .feed-card .feed-title");
     return t === "Smoke board summary" ? t : null;
   });
-  const notThis = await wd("POST", `${s}/element`, {
-    using: "xpath",
-    value: "//li[contains(@class,'post')]//button[normalize-space()='Not this']",
-  });
-  await wd("POST", `${s}/element/${notThis[ELEMENT]}/click`, {});
-  await waitFor("the not-this status", async () => {
-    const t = await textOf(s, ".pulse p.status");
-    return t === "Got it. Less like this." ? t : null;
+  const post = "//li[@aria-label='Smoke board summary']";
+  await click(s, ".pulse .feed-card .feed-foot button[aria-label='Love']");
+  await waitFor("the loved post", async () => {
+    const el = await find(s, ".pulse .feed-card .feed-foot button[aria-label='Love']");
+    return (await wd("GET", `${s}/element/${el}/attribute/aria-pressed`)) === "true";
   });
   const ledger = readFileSync(join(config, "memory", "MEMORY.md"), "utf8");
-  if (!ledger.includes('pulse: dismissed "Smoke board summary" reason=not-this')) {
+  if (!ledger.includes('pulse: liked "Smoke board summary" reason=liked')) {
     throw new Error(`MEMORY.md says ${JSON.stringify(ledger)}`);
   }
-  await shot(s, "pulse");
   console.log(`ledger line: ${JSON.stringify(ledger.trim())}`);
+
+  await click(s, ".pulse button[aria-label='Edit feed instructions']");
+  const prompt = await waitFor("the instructions box", () => find(s, "#feed-prompt"));
+  await waitFor("the default instructions", async () =>
+    (await wd("GET", `${s}/element/${prompt}/property/value`)) ? true : null,
+  );
+  await wd("POST", `${s}/element/${prompt}/clear`, {});
+  await wd("POST", `${s}/element/${prompt}/value`, { text: "Smoke news, please." });
+  await shot(s, "pulse-instructions");
+  const save = await wd("POST", `${s}/element`, {
+    using: "xpath",
+    value: "//div[@aria-label='Edit feed instructions']//button[normalize-space()='Save']",
+  });
+  await wd("POST", `${s}/element/${save[ELEMENT]}/click`, {});
+  await waitFor(
+    "the written post",
+    async () => {
+      const el = await wd("POST", `${s}/element`, {
+        using: "xpath",
+        value: `//li[@aria-label=${JSON.stringify(PULSE_TITLE)}]//button[@aria-label='Open image 1']`,
+      });
+      return el[ELEMENT];
+    },
+    60000,
+  );
+  const state = JSON.parse(readFileSync(join(config, "pulse-writer.json"), "utf8"));
+  if (state.prompt !== "Smoke news, please." || state.queued) {
+    throw new Error(`pulse-writer.json says ${JSON.stringify(state)}`);
+  }
+  console.log(`writer posted ${JSON.stringify(PULSE_TITLE)} after the save`);
+  await shot(s, "pulse");
+
+  await click(s, ".pulse .media-item");
+  await waitFor("the lightbox", () => find(s, ".lightbox img"));
+  await shot(s, "pulse-lightbox");
+  const close = await wd("POST", `${s}/element`, {
+    using: "xpath",
+    value: "//div[contains(@class,'lightbox')]//button[normalize-space()='Close']",
+  });
+  await wd("POST", `${s}/element/${close[ELEMENT]}/click`, {});
+
+  const more = await wd("POST", `${s}/element`, {
+    using: "xpath",
+    value: `${post}//button[@aria-label='More']`,
+  });
+  await wd("POST", `${s}/element/${more[ELEMENT]}/click`, {});
+  const del = await wd("POST", `${s}/element`, {
+    using: "xpath",
+    value: `${post}//button[normalize-space()='Delete']`,
+  });
+  await wd("POST", `${s}/element/${del[ELEMENT]}/click`, {});
+  await waitFor("the deleted post", async () => {
+    const left = await wd("POST", `${s}/elements`, { using: "xpath", value: post });
+    return left.length === 0;
+  });
+  console.log("delete took the post away");
 
   const ideas = await wd("POST", `${s}/element`, {
     using: "xpath",
     value: "//div[@aria-label='Pulse view']/button[normalize-space()='Ideas']",
   });
   await wd("POST", `${s}/element/${ideas[ELEMENT]}/click`, {});
-  const run = await waitFor("the idea's Run", async () => {
+  // The idea writer ran after the feed post: its idea leads, with no header.
+  const written = `//li[@aria-label=${JSON.stringify(PULSE_IDEA.title)}]`;
+  await waitFor(
+    "the written idea",
+    async () => {
+      await wd("POST", `${s}/element/${ideas[ELEMENT]}/click`, {});
+      const el = await wd("POST", `${s}/elements`, { using: "xpath", value: written });
+      return el.length === 1 ? true : null;
+    },
+    60000,
+  );
+  const ideaMenu = await wd("POST", `${s}/element`, {
+    using: "xpath",
+    value: `${written}//button[@aria-label='More']`,
+  });
+  await wd("POST", `${s}/element/${ideaMenu[ELEMENT]}/click`, {});
+  const items = await wd("POST", `${s}/elements`, {
+    using: "xpath",
+    value: `${written}//button[@role='menuitem']`,
+  });
+  const labels = [];
+  for (const item of items) labels.push(await wd("GET", `${s}/element/${item[ELEMENT]}/text`));
+  if (labels.join("|") !== "Let's do it|More like this|Not interested") {
+    throw new Error(`the idea menu says ${JSON.stringify(labels)}`);
+  }
+  await shot(s, "pulse-ideas");
+  await wd("POST", `${s}/element/${items[1][ELEMENT]}/click`, {});
+  await waitFor("More like this kept", async () => {
+    try {
+      const state = JSON.parse(readFileSync(join(config, "pulse-ideas.json"), "utf8"));
+      return state.moreLike?.[0] === PULSE_IDEA.title ? true : null;
+    } catch {
+      return null;
+    }
+  });
+  console.log(`idea menu: ${labels.join(", ")}; More like this kept for the next run`);
+
+  const run = await waitFor("the idea row", async () => {
     const el = await wd("POST", `${s}/element`, {
       using: "xpath",
-      value: "//li[contains(@class,'post')]//button[normalize-space()='Run']",
+      value: "//li[contains(@aria-label,'smoke workboard')]//button[contains(@class,'idea-main')]",
     });
     return el[ELEMENT];
   });
@@ -369,8 +535,8 @@ async function pulse(s, config) {
     return v === PULSE_ACTION ? v : null;
   });
   await sleep(1000);
-  if (mockSeen.length !== calls) throw new Error("Run sent the idea without the person");
-  console.log(`run filled the chat box: ${JSON.stringify(filled)}`);
+  if (mockSeen.length !== calls) throw new Error("Let's do it sent the idea without the person");
+  console.log(`let's do it filled the chat box: ${JSON.stringify(filled)}`);
 }
 
 // Journal: a question added here lands in the cabin's decisions.json, and To
@@ -759,6 +925,7 @@ async function main() {
       ...process.env,
       GROKHUB_CONFIG: config,
       GROKHUB_SHELL_RESPONSES_URL: `http://127.0.0.1:${mock.port}/v1/responses`,
+      GROKHUB_SHELL_PULSE_NET: `http://127.0.0.1:${mock.port}`,
     },
   });
   let session;

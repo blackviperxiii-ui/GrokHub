@@ -416,6 +416,11 @@ impl Cabin {
         if !learned.is_empty() {
             parts.push(learned);
         }
+        let identity = grokhub_agent::identity_blocks(&crate::config::config_dir());
+        if !identity.is_empty() {
+            parts.push(identity);
+            needs_safety_closer = true;
+        }
         if needs_safety_closer {
             parts.push(VOLATILE_SAFETY_CLOSER.to_string());
         }
@@ -547,13 +552,7 @@ impl Cabin {
             }
             ui.data_mut(|data| data.insert_temp(checked_id, sid));
         }
-        let label = grokhub_agent::usage_label(
-            self.grok_usage.input_tokens,
-            self.grok_usage.output_tokens,
-            self.grok_usage.reasoning_tokens,
-            self.grok_usage.cost_in_usd_ticks,
-            &self.grok_usage.meter,
-        );
+        let label = native_usage_label(&self.grok_usage);
         let text = if label.is_empty() {
             "Native".to_string()
         } else {
@@ -564,6 +563,22 @@ impl Cabin {
                 .size(crate::theme::FONT_TIP)
                 .color(crate::theme::muted()),
         );
+    }
+}
+
+/// The native usage line: tokens, cost, meter, and the last turn's prompt-cache
+/// share ("cache N%") when the engine reported one.
+pub(super) fn native_usage_label(u: &GrokUsage) -> String {
+    let label = grokhub_agent::usage_label(
+        u.input_tokens,
+        u.output_tokens,
+        u.reasoning_tokens,
+        u.cost_in_usd_ticks,
+        &u.meter,
+    );
+    match u.cache_note() {
+        Some(note) if !label.is_empty() => format!("{label} · {note}"),
+        _ => label,
     }
 }
 
@@ -728,4 +743,40 @@ pub(super) fn set_responses_url_for_test(url: Option<&str>) {
     *TEST_RESPONSES_URL
         .lock()
         .unwrap_or_else(|err| err.into_inner()) = url.map(str::to_string);
+}
+
+#[cfg(test)]
+mod usage_label_tests {
+    use super::*;
+
+    fn usage(pct: Option<u8>) -> GrokUsage {
+        GrokUsage {
+            input_tokens: 1200,
+            output_tokens: 80,
+            meter: "API credits".into(),
+            turn_cache_pct: pct,
+            ..GrokUsage::default()
+        }
+    }
+
+    #[test]
+    fn native_usage_shows_the_turn_cache_share_when_reported() {
+        assert_eq!(
+            native_usage_label(&usage(Some(87))),
+            "1200 in · 80 out · API credits · cache 87%"
+        );
+    }
+
+    #[test]
+    fn native_usage_hides_cache_when_absent_or_empty() {
+        assert_eq!(
+            native_usage_label(&usage(None)),
+            "1200 in · 80 out · API credits"
+        );
+        let empty = GrokUsage {
+            turn_cache_pct: Some(0),
+            ..GrokUsage::default()
+        };
+        assert_eq!(native_usage_label(&empty), "");
+    }
 }

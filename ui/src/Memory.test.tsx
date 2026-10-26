@@ -16,6 +16,11 @@ const api = vi.hoisted(() => ({
     (text: string, global: boolean) => Promise<{ status: string; notes: MemoryNotes }>
   >(),
   searchMemory: vi.fn<(query: string) => Promise<MemoryHit[]>>(),
+  editMemoryRow: vi.fn<(id: string, text: string) => Promise<MemoryNotes>>(),
+  forgetMemoryRow: vi.fn<(id: string) => Promise<MemoryNotes>>(),
+  approveMemoryRow: vi.fn<(id: string) => Promise<MemoryNotes>>(),
+  rejectMemoryRow: vi.fn<(id: string) => Promise<MemoryNotes>>(),
+  setMemoryWrites: vi.fn<(on: boolean) => Promise<MemoryNotes>>(),
 }));
 
 vi.mock("./api", () => api);
@@ -29,9 +34,20 @@ function notes(over: Partial<MemoryNotes> = {}): MemoryNotes {
     globalPath: "/cfg/memory/MEMORY.md",
     workspacePath: "/ws/MEMORY.md",
     amr: false,
+    writesOn: true,
+    rows: [],
     ...over,
   };
 }
+
+const LUNCH = {
+  id: "mem-lunch",
+  text: "Lunch is at noon on Friday",
+  source: "you said it in chat (turn 2)",
+  updated: "2026-10-07T00:00:00Z",
+  proposed: true,
+  corrects: "Lunch is at noon on Monday",
+};
 
 describe("Memory", () => {
   beforeEach(() => {
@@ -110,6 +126,21 @@ describe("Memory", () => {
     expect(screen.getByLabelText("New note")).toHaveValue("");
   });
 
+  it("Remember status stays distinct from the AMR banner", async () => {
+    api.getMemory.mockResolvedValue(notes({ amr: true }));
+    api.addMemory.mockResolvedValue({
+      status: "Remembered in workspace MEMORY.md",
+      notes: notes({ amr: true, workspace: "the smoke test likes kumquats\n" }),
+    });
+    render(<Memory />);
+    expect(await screen.findByText(/AMR store/)).toBeInTheDocument();
+    await userEvent.type(screen.getByLabelText("New note"), "the smoke test likes kumquats");
+    await userEvent.click(screen.getByRole("button", { name: "Remember" }));
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "Remembered in workspace MEMORY.md.",
+    );
+  });
+
   it("Remember keeps an unsaved edit in the other editor", async () => {
     api.getMemory.mockResolvedValue(notes());
     api.addMemory.mockResolvedValue({
@@ -177,5 +208,43 @@ describe("Memory", () => {
     render(<Memory />);
     expect(await screen.findByText("notes.md is too large to edit here.")).toBeInTheDocument();
     expect(screen.queryByLabelText("Project notes")).toBeNull();
+  });
+
+  it("shows a learned line's source and date and can edit, delete, approve, or reject it", async () => {
+    const learned = notes({ rows: [LUNCH] });
+    api.getMemory.mockResolvedValue(learned);
+    api.approveMemoryRow.mockResolvedValue(learned);
+    api.rejectMemoryRow.mockResolvedValue(learned);
+    api.editMemoryRow.mockResolvedValue(learned);
+    api.forgetMemoryRow.mockResolvedValue(notes());
+    api.setMemoryWrites.mockResolvedValue(notes({ writesOn: false }));
+    render(<Memory />);
+    const list = await screen.findByRole("list", { name: "Learned lines" });
+    expect(list).toHaveTextContent("Lunch is at noon on Friday");
+    expect(list).toHaveTextContent("you said it in chat (turn 2)");
+    expect(list).toHaveTextContent("2026-10-07T00:00:00Z");
+    expect(list).toHaveTextContent("Corrects: Lunch is at noon on Monday");
+    expect(list).toHaveTextContent("Waiting for approval");
+
+    await userEvent.click(screen.getByRole("button", { name: "Approve" }));
+    expect(api.approveMemoryRow).toHaveBeenCalledWith("mem-lunch");
+    expect(await screen.findByText("Approved the line.")).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Edit Lunch is at noon on Friday" }));
+    const box = screen.getByLabelText("Edit text for Lunch is at noon on Friday");
+    await userEvent.clear(box);
+    await userEvent.type(box, "Lunch is at 1");
+    await userEvent.click(screen.getByRole("button", { name: "Save line" }));
+    expect(api.editMemoryRow).toHaveBeenCalledWith("mem-lunch", "Lunch is at 1");
+
+    await userEvent.click(screen.getByRole("button", { name: "Reject" }));
+    expect(api.rejectMemoryRow).toHaveBeenCalledWith("mem-lunch");
+
+    await userEvent.click(screen.getByRole("button", { name: "Delete Lunch is at noon on Friday" }));
+    expect(api.forgetMemoryRow).toHaveBeenCalledWith("mem-lunch");
+
+    await userEvent.click(screen.getByRole("checkbox", { name: "Remember new lines" }));
+    expect(api.setMemoryWrites).toHaveBeenCalledWith(false);
+    expect(await screen.findByText("Memory is off. Nothing new is written.")).toBeInTheDocument();
   });
 });

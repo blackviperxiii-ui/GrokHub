@@ -775,9 +775,53 @@ mod tests {
             "default voice keeps the same stable prefix"
         );
         assert!(
-            !plain_volatile.contains("earlier in this prompt always win"),
-            "no closer when there is no voice or notes: {plain_volatile}"
+            plain_volatile.contains("Personality: Default."),
+            "the default voice carries its values: {plain_volatile}"
         );
+        assert!(
+            plain_volatile.contains("not sycophantic"),
+            "{plain_volatile}"
+        );
+        assert!(
+            plain_volatile.contains("earlier in this prompt always win"),
+            "the values voice still closes under the cabin rules: {plain_volatile}"
+        );
+    }
+
+    #[test]
+    fn chat_prompt_parts_put_soul_and_user_before_the_closer() {
+        let (_lock, _pin, mut cabin) = cabin_with_chat();
+        let root = crate::config::config_dir();
+        std::fs::create_dir_all(root.join("memory")).unwrap();
+        std::fs::write(
+            root.join("memory").join("SOUL.md"),
+            "HARBOR_SOUL_MARK speaks plainly\n",
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("memory").join("USER.md"),
+            "HARBOR_USER_MARK keeps a paper chart\n",
+        )
+        .unwrap();
+        cabin.set_chat_personality("pirate");
+        let (stable, volatile) = cabin.chat_prompt_parts();
+        assert_eq!(
+            stable,
+            grokhub_core::cabin_rules::cabin_static_rules(cabin.cfg.desktop_control),
+            "SOUL and USER stay out of the stable prefix"
+        );
+        assert!(!stable.contains("HARBOR_SOUL_MARK"), "{stable}");
+        assert!(!stable.contains("HARBOR_USER_MARK"), "{stable}");
+        let voice = volatile.find("Personality: Pirate").expect("voice");
+        let soul = volatile.find("HARBOR_SOUL_MARK").expect("soul");
+        let user = volatile.find("HARBOR_USER_MARK").expect("user");
+        let closer = volatile
+            .find("earlier in this prompt always win")
+            .expect("closer");
+        assert!(voice < soul && soul < user && user < closer, "{volatile}");
+        cabin.set_chat_personality("butler");
+        let (again, _) = cabin.chat_prompt_parts();
+        assert_eq!(again, stable);
     }
 
     #[test]

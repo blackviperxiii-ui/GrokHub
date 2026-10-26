@@ -22,7 +22,8 @@
 ## What depends on it
 - Every page in `crates/grokhub-app/src/app/`, the desktop MCP (reads `desktop_control` on each call), threads, secrets, update, and the AMR `/recall` switch.
 ## Non-obvious
-- `AppConfig` is camelCase on disk; `memory_backend` is the one snake_case key.
+- `AppConfig` is camelCase on disk; `memory_backend` and `memory_migrated` are snake_case keys.
+- `load` of a missing `app.json` sets `memory_backend` to amr and `memory_migrated`. An existing file that omits the key stays legacy, and `AppConfig::default` still omits both keys.
 - `load()` forces `host_on = true` and `yolo = false`, and `persistable_permission_mode` never lets Always survive a relaunch.
 - `save_in` clears `api_key` before writing: the console key lives in `secrets.json` only.
 - `config_dir()`: a test-thread pin (`TestConfigDir`), then `GROKHUB_CONFIG`, then `%APPDATA%\GrokHub` on Windows, then `~/.config/GrokHub`, then `.grokhub` in the cwd. Workers capture the dir at schedule time so a later env change cannot move the file.

@@ -1045,13 +1045,7 @@ impl Cabin {
                 grokhub_core::budget_line(&self.usage, self.cfg.daily_token_budget)
             );
         }
-        let native = grokhub_agent::usage_label(
-            self.grok_usage.input_tokens,
-            self.grok_usage.output_tokens,
-            self.grok_usage.reasoning_tokens,
-            self.grok_usage.cost_in_usd_ticks,
-            &self.grok_usage.meter,
-        );
+        let native = super::native_engine::native_usage_label(&self.grok_usage);
         if native.is_empty() {
             cabin
         } else {

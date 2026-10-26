@@ -105,7 +105,8 @@ pub fn pick(config_dir: &Path, id: &str) -> Result<Personality, String> {
 }
 
 /// The block a chat's system prompt carries for the stored id, with the
-/// closer that puts the safety rules back on top. Empty for the default voice.
+/// closer that puts the safety rules back on top. Empty only when that
+/// preset's tone rules are empty.
 pub fn voice(config_dir: &Path, stored: &str) -> String {
     let block = personality::lookup(&dir(config_dir), shown_id(stored)).prompt_block();
     if block.is_empty() {
@@ -177,10 +178,13 @@ mod tests {
     }
 
     #[test]
-    fn the_default_voice_adds_nothing_and_a_preset_adds_its_block_and_the_closer() {
+    fn the_default_voice_adds_its_values_and_a_preset_adds_its_block_and_the_closer() {
         let cfg = scratch("voice");
-        assert_eq!(voice(&cfg, ""), "");
-        assert_eq!(voice(&cfg, "default"), "");
+        let default_voice = voice(&cfg, "");
+        assert!(default_voice.starts_with("Personality: Default. "));
+        assert!(default_voice.contains("not sycophantic"));
+        assert!(default_voice.contains(grokhub_core::talk::VOLATILE_SAFETY_CLOSER));
+        assert_eq!(voice(&cfg, "default"), default_voice);
         let pirate = voice(&cfg, "pirate");
         assert_eq!(
             pirate,

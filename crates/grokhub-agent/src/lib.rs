@@ -13,6 +13,7 @@ mod file_checkpoint;
 mod gate;
 pub mod harness;
 mod hooks;
+pub mod identity;
 mod image_budget;
 pub mod indexers;
 mod loopback;
@@ -22,6 +23,7 @@ mod models;
 pub mod perm;
 pub mod plugins;
 mod prefix_cache;
+pub mod prefix_guard;
 mod prompt;
 mod recovery;
 pub mod repair;
@@ -68,6 +70,7 @@ pub use hooks::{
     discover_hooks, folder_trusted, on_subagent_start, on_subagent_stop, set_folder_trust,
     HookInfo, HookOrigin,
 };
+pub use identity::{identity_blocks, SOUL_BYTE_CAP, USER_BYTE_CAP};
 pub use mcp::{
     alias_elicit, attach_elicit, configured, detach_elicit, doctor, import_documents, import_paths,
     restart, set_workspace, shutdown_all, unalias_elicit, DoctorRow, ElicitInbox, ElicitNote,
@@ -75,9 +78,9 @@ pub use mcp::{
 };
 pub use memory::{
     amr_enabled, amr_store, dream, first_turn_injection, flush_pending, global_memory_path,
-    is_dream_command, is_flush_command, queue_memory_status, remember, remember_note_text,
-    search as search_memory, take_memory_status, workspace_memory_path, Hit as MemoryHit,
-    INJECT_BYTE_CAP, INJECT_TOKEN_CAP,
+    is_dream_command, is_flush_command, memory_writes_enabled, queue_memory_status, remember,
+    remember_note_text, search as search_memory, set_memory_writes, take_memory_status,
+    workspace_memory_path, Hit as MemoryHit, INJECT_BYTE_CAP, INJECT_TOKEN_CAP,
 };
 pub use models::{
     context_length_for, parse_listed_models, parse_xai_models, pick_model, ListedModel,

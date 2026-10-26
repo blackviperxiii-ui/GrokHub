@@ -47,8 +47,8 @@ export const CORE_ONLY: Capabilities = {
   plugins: false,
 };
 
-/** The web app gets chat, memory, automations and connectors only. */
-export const WEB: Capabilities = { ...CORE_ONLY, remote: true };
+/** The web app gets chat, memory, automations, connectors and Pulse. */
+export const WEB: Capabilities = { ...CORE_ONLY, pulse: true, remote: true };
 
 export function getCapabilities(): Promise<Capabilities> {
   if (!inShell()) return Promise.resolve(WEB);
@@ -215,6 +215,18 @@ export function runAutomation(id: string): Promise<RunResult> {
   return invoke<RunResult>("run_automation", { id });
 }
 
+export interface MemoryRow {
+  id: string;
+  text: string;
+  /** Why this line is here, including the chat turn when it has one. */
+  source: string;
+  /** When the line was written or last changed. */
+  updated: string;
+  proposed: boolean;
+  /** Claims this line corrects, joined for the panel. */
+  corrects: string;
+}
+
 export interface MemoryNotes {
   global: string;
   workspace: string;
@@ -222,6 +234,10 @@ export interface MemoryNotes {
   workspacePath: string;
   /** The cabin's AMR store is on, so recall does not read these files. */
   amr: boolean;
+  /** Learned-memory writes. Off stops notes, proposals and edits. */
+  writesOn: boolean;
+  /** User-model rows, proposed ones included. */
+  rows: MemoryRow[];
 }
 
 export interface MemoryHit {
@@ -251,6 +267,26 @@ export function addMemory(
 
 export function searchMemory(query: string): Promise<MemoryHit[]> {
   return invoke<MemoryHit[]>("search_memory", { query });
+}
+
+export function editMemoryRow(id: string, text: string): Promise<MemoryNotes> {
+  return invoke<MemoryNotes>("edit_memory_row", { id, text });
+}
+
+export function forgetMemoryRow(id: string): Promise<MemoryNotes> {
+  return invoke<MemoryNotes>("forget_memory_row", { id });
+}
+
+export function approveMemoryRow(id: string): Promise<MemoryNotes> {
+  return invoke<MemoryNotes>("approve_memory_row", { id });
+}
+
+export function rejectMemoryRow(id: string): Promise<MemoryNotes> {
+  return invoke<MemoryNotes>("reject_memory_row", { id });
+}
+
+export function setMemoryWrites(on: boolean): Promise<MemoryNotes> {
+  return invoke<MemoryNotes>("set_memory_writes", { on });
 }
 
 /** One MCP server from `mcp.json`, as the Connectors page shows it. */
@@ -308,6 +344,8 @@ export interface PulsePost {
   why: string;
   /** Cached gallery image names; read each with `pulseImage`. */
   images: string[];
+  /** Unix ms, for the menu's full date. */
+  createdAt: number;
   /** "2h ago". */
   ago: string;
   /** The first source link, empty when there is none. */
@@ -318,12 +356,14 @@ export interface PulsePost {
 /** One Ideas row: something GrokHub could do next. */
 export interface PulseIdea {
   id: string;
-  /** The bold "I can …" line. */
+  /** The bold line: a written idea's own title, else "I can …". */
   title: string;
+  /** A written idea's topic emoji; empty on older ideas. */
+  icon: string;
   summary: string;
   /** Do, Automate, Learn or Watch. */
   kind: string;
-  /** What Run puts in the chat box. */
+  /** What Let's do it puts in the chat box. */
   action: string;
 }
 
@@ -333,7 +373,15 @@ export interface PulsePage {
   ideas: { label: string; ideas: PulseIdea[] }[];
 }
 
-export type PulseAct = "dismiss" | "notThis" | "love" | "delete" | "snooze" | "accept";
+export type PulseAct =
+  | "dismiss"
+  | "notThis"
+  | "love"
+  | "delete"
+  | "snooze"
+  | "accept"
+  | "moreLike"
+  | "notInterested";
 
 /** Today's local date for the ledger line, and the time Snooze counts from. */
 export function localDay(now: Date = new Date()) {

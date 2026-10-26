@@ -5162,6 +5162,21 @@ https://xstack.grok.me/post ZEPHYRTAIL"
             crate::pulse_writer::post_card(&written, &[], at),
             "Async closures",
         ));
+        let idea = crate::pulse_ideas::MuseIdea {
+            title: "Cheaper groceries this week".into(),
+            description: "I can plan meals around this week's grocery sales.".into(),
+            emoji: "🛒".into(),
+            category: crate::pulse::PulseCategory::Shopping,
+            action: "plan a week of meals from this week's grocery sales".into(),
+        };
+        rows.push((
+            "muse_idea_card",
+            crate::pulse_ideas::muse_idea_card(&idea, at),
+            "Cheaper groceries",
+        ));
+        let mut posted = Vec::new();
+        crate::pulse_ideas::post_ideas(&mut posted, std::slice::from_ref(&idea), at);
+        rows.push(("post_ideas", posted.remove(0), "Cheaper groceries"));
         rows
     }
 

@@ -670,9 +670,10 @@ mod tests {
         let (rows, _) = grokhub_core::amr::memory_rows(&store);
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].node_type, NodeType::MindPrior);
+        let stamp = grokhub_core::oauth::unix_ms_to_rfc3339(T0);
         assert_eq!(
             rows[0].line(),
-            format!("- Ask first before proactive:tidy_downloads. · why: [from what you approved, denied or undid](span:s1:{T0})")
+            format!("- Ask first before proactive:tidy_downloads. · why: [from what you approved, denied or undid](span:s1:{T0}) · {stamp}")
         );
         let _ = std::fs::remove_dir_all(dir);
     }
