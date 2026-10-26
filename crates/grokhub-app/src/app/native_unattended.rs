@@ -1212,13 +1212,25 @@ mod tests {
     }
 
     /// A chat reply takes the chosen personality's tone ahead of the cabin rules; a
-    /// night job stays in the plain voice.
+    /// night job stays in the plain voice. The default voice carries honesty rules, so
+    /// chat always has a Personality line; night jobs still omit it.
     #[test]
     fn personality_reaches_chat_replies_but_not_night_jobs() {
         let (_lock, root, _env) = isolated("personality-rules");
         let mut cabin = Cabin::quiet_for_test();
+        let cabin_only = grokhub_core::cabin_rules::cabin_rules_for(
+            &grokhub_core::brief_for(&cabin.learning, "chat"),
+            cabin.cfg.desktop_control,
+        );
         let plain = cabin.chat_rules();
-        assert!(!plain.contains("Personality:"), "{plain}");
+        assert!(
+            plain.starts_with("Personality: Default."),
+            "default voice is layered: {plain}"
+        );
+        assert!(
+            plain.ends_with(&cabin_only),
+            "the cabin rules still come last: {plain}"
+        );
         cabin.cfg.personality = "pirate".into();
         let chat = cabin.chat_rules();
         assert!(
@@ -1226,7 +1238,7 @@ mod tests {
             "{chat}"
         );
         assert!(
-            chat.ends_with(&plain),
+            chat.ends_with(&cabin_only),
             "the cabin rules still come last: {chat}"
         );
         let night = native_rules(&cabin, &root, "");
