@@ -327,6 +327,9 @@ pub fn run_loop(
         .then(|| crate::checkpoint::turn_playbook(input.conversation_id))
         .flatten();
     let config_dir = crate::perm::config_dir();
+    let intention_block = (input.depth == 0)
+        .then(|| crate::close_check::prompt_block(input.conversation_id))
+        .filter(|block| !block.is_empty());
     tools::begin_deferred_turn(input.conversation_id);
     if crate::prefix_cache::enabled(&config_dir) {
         if first_turn {
@@ -340,6 +343,7 @@ pub fn run_loop(
             style,
             playbook.as_deref(),
             &already,
+            intention_block.clone(),
         );
         crate::prefix_cache::push_user_turn(history, &volatile, user_text, image);
     } else {
@@ -379,6 +383,9 @@ pub fn run_loop(
                 });
             }
         }
+        if let Some(block) = intention_block {
+            push_intention_block(history, &block);
+        }
         history.push(user_message(user_text, image));
     }
     // Spike-4c: a tool call that carries a recalled line is personal egress.
@@ -403,6 +410,9 @@ pub fn run_loop(
     let mut drive = (input.depth == 0 && !plan_at_start && !input.conversation_id.is_empty())
         .then(|| crate::drive::Drive::new(&crate::session_tools::todos_for(input.conversation_id)));
     let mut evidence = 0usize;
+    let mut close_continued = false;
+    let mut close_steps: Vec<String> = Vec::new();
+    let mut close_surfaced = false;
     // Brain 2: the turn's Brief and the changes still waiting on a check.
     let brief = drive
         .as_ref()
@@ -568,6 +578,8 @@ pub fn run_loop(
         turns_since_compact = turns_since_compact.saturating_add(1);
         usage.add(&turn.usage);
         emit_usage(on_event, &usage, history, input.context_length);
+        // Close-check reads this after the reply is stored on the history.
+        let last_assistant = turn.text.clone();
         if !turn.text.is_empty() {
             history.push(InputItem::Message {
                 role: "assistant".into(),
@@ -607,6 +619,7 @@ pub fn run_loop(
         if turn.calls.is_empty() {
             let notes = input.steer.drain();
             if notes.is_empty() {
+                let mut drive_blocked = false;
                 if let Some(drive) = drive
                     .as_mut()
                     .filter(|_| !crate::session_tools::plan_on(input.conversation_id))
@@ -620,6 +633,7 @@ pub fn run_loop(
                             continue;
                         }
                         crate::drive::Verdict::Blocked(text) => {
+                            drive_blocked = true;
                             on_event(LoopEvent::Text(format!("\n\n{text}")));
                             history.push(InputItem::Message {
                                 role: "assistant".into(),
@@ -635,6 +649,54 @@ pub fn run_loop(
                             }
                         }
                         crate::drive::Verdict::End => {}
+                    }
+                }
+                if close_continued {
+                    if !close_surfaced
+                        && crate::close_check::lists_still_open(input.conversation_id)
+                    {
+                        if let Some(body) = crate::close_check::steps_card(&close_steps) {
+                            on_event(LoopEvent::Findings(body));
+                        }
+                    }
+                    close_surfaced = true;
+                } else {
+                    // The check borrows usage. finish needs that borrow ended.
+                    let close = {
+                        let mut close_in = crate::close_check::CloseIn {
+                            depth: input.depth,
+                            blocked: drive_blocked,
+                            conversation_id: input.conversation_id,
+                            model: input.model,
+                            client: input.client,
+                            cancel: input.cancel,
+                            drive: drive.as_ref(),
+                            last_assistant: &last_assistant,
+                            usage: &mut usage,
+                        };
+                        crate::close_check::before_end(&mut close_in)
+                    };
+                    match close {
+                        crate::close_check::CloseGate::Cancelled => {
+                            return finish(
+                                input,
+                                StopReason::Cancelled,
+                                usage,
+                                compacted_once,
+                                true,
+                            );
+                        }
+                        crate::close_check::CloseGate::Continue { note, steps } => {
+                            close_continued = true;
+                            close_steps = steps;
+                            history.push(user_message(&note, None));
+                            continue;
+                        }
+                        crate::close_check::CloseGate::Proceed(notice) => {
+                            if let Some(body) = notice {
+                                on_event(LoopEvent::Findings(body));
+                            }
+                        }
                     }
                 }
                 if !stop_hook_active {
@@ -1034,6 +1096,25 @@ fn emit_usage(
         limit,
     });
     on_event(LoopEvent::Usage(usage.clone()));
+}
+
+fn push_intention_block(history: &mut Vec<InputItem>, block: &str) {
+    if block.is_empty() || history_has_text(history, block) {
+        return;
+    }
+    history.push(InputItem::Message {
+        role: "system".into(),
+        content: vec![ContentPart::InputText(block.to_string())],
+    });
+}
+
+fn history_has_text(history: &[InputItem], needle: &str) -> bool {
+    history.iter().any(|item| match item {
+        InputItem::Message { content, .. } => content
+            .iter()
+            .any(|part| matches!(part, ContentPart::InputText(text) if text.contains(needle))),
+        _ => false,
+    })
 }
 
 fn user_message(text: &str, image: Option<&str>) -> InputItem {
