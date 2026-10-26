@@ -15,7 +15,7 @@
 - `CHANGELOG.md`: dated sections; leftover `## Unreleased` is folded by `xtask bump`.
 ## Change recipe
 - PR into beta: no bump. Add `changelog.d/<slug>.md` and stop (do not edit `CHANGELOG.md` or version files). CI fails version-file edits without the `release` label (`scripts/ci-guards.sh`).
-- Promotion or hotfix only, on user's say: label `release`, then `cargo xtask bump <X.Y.Z>` updates `VERSION`, `Cargo.toml`, `Cargo.lock` `grokhub-*`, `docs/REFERENCE.md`, both PKGBUILDs, `packaging/windows/grokhub.iss`, and `cabin_reports_version` in `crates/grokhub-app/src/cli.rs`, then folds fragments (`CLAUDE.md`).
+- Promotion or hotfix only, with the maintainer's approval: label `release`, then `cargo xtask bump <X.Y.Z>` updates `VERSION`, `Cargo.toml`, `Cargo.lock` `grokhub-*`, `docs/REFERENCE.md`, both PKGBUILDs, `packaging/windows/grokhub.iss`, and `cabin_reports_version` in `crates/grokhub-app/src/cli.rs`, then folds fragments (`CLAUDE.md`).
 ## What breaks it
 - Editing the Cargo version to get a beta label: build.rs derives `-beta.N` from the branch or `GROKHUB_CHANNEL` plus commit count since the newest `vX.Y.Z` tag.
 - Bumping things that must not move: Imagine `Quality (v2.0)`, specs marked `(do not bump)`, the diagnostics fixture, and `Version=` in `packaging/grokhub.desktop`.

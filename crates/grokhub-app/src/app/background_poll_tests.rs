@@ -165,19 +165,19 @@ fn greeting_poll_keeps_a_fresh_line() {
     assert_eq!(cabin.greeting, "Harbor is quiet tonight.");
 
     greet_tx
-        .send("Evening, Viper. The dock light is on.".into())
+        .send("Evening, Alex. The dock light is on.".into())
         .expect("send greeting");
     cabin.poll_greeting();
     assert!(cabin.greeting_rx.is_none());
     assert!(!cabin.greeting_busy);
-    assert_eq!(cabin.greeting, "Evening, Viper. The dock light is on.");
+    assert_eq!(cabin.greeting, "Evening, Alex. The dock light is on.");
 
     cabin.greeting = "Harbor is quiet tonight.".into();
     cabin.greeting_user_md = "the wall still wants a second coat tonight".into();
     let (echo_tx, echo_rx) = std::sync::mpsc::channel();
     cabin.greeting_rx = Some(echo_rx);
     echo_tx
-        .send("Evening, Viper. the wall still wants a second coat tonight.".into())
+        .send("Evening, Alex. the wall still wants a second coat tonight.".into())
         .expect("send echoed greeting");
     cabin.poll_greeting();
     assert!(cabin.greeting_rx.is_none());

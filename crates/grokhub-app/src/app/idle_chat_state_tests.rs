@@ -73,7 +73,7 @@ fn chip_pairs_cap_a_long_reply() {
 #[test]
 fn greeting_hides_once_the_chat_has_text() {
     let mut cabin = Cabin::quiet_for_test();
-    cabin.greeting = "Evening, Viper.".into();
+    cabin.greeting = "Evening, Alex.".into();
     cabin.messages = Arc::new(vec![("user".into(), "Harbor".into())]);
     cabin.refresh_greeting();
     assert!(
@@ -84,7 +84,7 @@ fn greeting_hides_once_the_chat_has_text() {
     assert!(cabin.greeting_rx.is_none());
     assert!(!cabin.greeting_busy);
 
-    cabin.greeting = "Evening, Viper.".into();
+    cabin.greeting = "Evening, Alex.".into();
     cabin.messages = Arc::new(Vec::new());
     cabin.threads.push(ChatThread::new("Scratch", true));
     cabin.thread_idx = cabin.threads.len() - 1;

@@ -62,7 +62,7 @@ pub fn chat_shows_thinking(
     }
 }
 
-/// Glanceable phase for an in-flight turn. Grok Bot keeps idle / thinking /
+/// Glanceable phase for an in-flight turn. The UI keeps idle / thinking /
 /// working / waiting distinct so a pulse is not the only cue.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ChatRunPhase {

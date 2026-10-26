@@ -3524,17 +3524,17 @@ mod tests {
     #[test]
     fn a_prompt_typed_once_or_twice_is_not_a_chip() {
         let mut mem = ChipMemory::default();
-        remember_typed_prompt(&mut mem, "update grok bot, and fix the tray", 10, 8);
+        remember_typed_prompt(&mut mem, "update the app, and fix the tray", 10, 8);
         assert!(
             learned_chips_from_memory(&mem, 20).is_empty(),
             "typed once is not a habit"
         );
-        remember_typed_prompt(&mut mem, "update grok bot, and fix the tray", 30, 8);
+        remember_typed_prompt(&mut mem, "update the app, and fix the tray", 30, 8);
         assert!(
             learned_chips_from_memory(&mem, 40).is_empty(),
             "typed twice is not a habit"
         );
-        remember_typed_prompt(&mut mem, "update grok bot, and fix the tray", 50, 8);
+        remember_typed_prompt(&mut mem, "update the app, and fix the tray", 50, 8);
         assert_eq!(
             learned_chips_from_memory(&mem, 60).len(),
             1,

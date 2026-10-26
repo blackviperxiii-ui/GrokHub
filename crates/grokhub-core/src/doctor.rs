@@ -113,7 +113,7 @@ mod tests {
         )));
         assert_eq!(
             hub_kind_from_health(Some(
-                r#"{"ok":true,"kind":"grokhub-hub-v1","name":"Beast"}"#
+                r#"{"ok":true,"kind":"grokhub-hub-v1","name":"workstation"}"#
             )),
             HUB_KIND
         );
