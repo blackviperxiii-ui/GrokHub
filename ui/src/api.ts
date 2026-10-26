@@ -47,8 +47,8 @@ export const CORE_ONLY: Capabilities = {
   plugins: false,
 };
 
-/** The web app gets chat, memory, automations and connectors only. */
-export const WEB: Capabilities = { ...CORE_ONLY, remote: true };
+/** The web app gets chat, memory, automations, connectors and Pulse. */
+export const WEB: Capabilities = { ...CORE_ONLY, pulse: true, remote: true };
 
 export function getCapabilities(): Promise<Capabilities> {
   if (!inShell()) return Promise.resolve(WEB);
@@ -344,6 +344,8 @@ export interface PulsePost {
   why: string;
   /** Cached gallery image names; read each with `pulseImage`. */
   images: string[];
+  /** Unix ms, for the menu's full date. */
+  createdAt: number;
   /** "2h ago". */
   ago: string;
   /** The first source link, empty when there is none. */

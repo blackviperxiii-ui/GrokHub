@@ -25,6 +25,10 @@ const REDIRECTS_MAX: usize = 4;
 const PAGE_CAP: u64 = 2 * 1024 * 1024;
 const SOURCE_CAP: u64 = 4 * 1024 * 1024;
 
+/// Points the writer's network at a local mock (the shell smoke test). Only a
+/// plain-http loopback URL is accepted, so it can never move real traffic.
+pub const NET_ENV: &str = "GROKHUB_SHELL_PULSE_NET";
+
 pub const NOTHING_TO_READ: &str =
     "Nothing to look into yet. Add an interest in Settings → Pulse → Interests.";
 pub const BUDGET_USED: &str = "Today's post budget is used. The feed picks up tomorrow.";
@@ -344,8 +348,71 @@ fn tick(
     if RUNNING.swap(true, Ordering::SeqCst) {
         return;
     }
-    let _ = run_once(config_dir, &model, client.as_ref(), &LiveNet, now);
+    let _ = run_once(config_dir, &model, client.as_ref(), net().as_ref(), now);
     RUNNING.store(false, Ordering::SeqCst);
+}
+
+/// The live network, or the loopback mock when [`NET_ENV`] names one.
+fn net() -> Box<dyn Net> {
+    match std::env::var(NET_ENV)
+        .ok()
+        .and_then(|raw| LoopbackNet::new(&raw))
+    {
+        Some(mock) => Box::new(mock),
+        None => Box::new(LiveNet),
+    }
+}
+
+/// Every fetch goes to `{base}/pulse/{source|page|image}?url=…` on a
+/// loopback server instead of the internet.
+pub struct LoopbackNet {
+    base: String,
+}
+
+impl LoopbackNet {
+    pub fn new(raw: &str) -> Option<Self> {
+        let base = raw.trim().trim_end_matches('/');
+        let host = base.strip_prefix("http://")?.split(['/', ':']).next()?;
+        matches!(host, "127.0.0.1" | "localhost").then(|| Self {
+            base: base.to_string(),
+        })
+    }
+
+    fn get(&self, kind: &str, url: &str) -> Result<Vec<u8>, String> {
+        let at = format!("{}/pulse/{kind}?url={}", self.base, ps::query_value(url));
+        let resp = ureq::get(&at)
+            .timeout(FETCH_TIMEOUT)
+            .call()
+            .map_err(|e| e.to_string())?;
+        let mut buf = Vec::new();
+        resp.into_reader()
+            .take(SOURCE_CAP)
+            .read_to_end(&mut buf)
+            .map_err(|e| e.to_string())?;
+        Ok(buf)
+    }
+}
+
+impl Net for LoopbackNet {
+    fn source(&self, req: &SourceReq, _have: Option<&CacheEntry>) -> Fetched {
+        match self.get("source", &req.url) {
+            Ok(body) => Fetched::Body {
+                body: String::from_utf8_lossy(&body).into_owned(),
+                etag: None,
+                last_modified: None,
+            },
+            Err(why) => Fetched::Failed(why),
+        }
+    }
+
+    fn page(&self, url: &str) -> Result<String, String> {
+        self.get("page", url)
+            .map(|body| String::from_utf8_lossy(&body).into_owned())
+    }
+
+    fn image(&self, url: &str) -> Result<Vec<u8>, String> {
+        self.get("image", url)
+    }
 }
 
 /// One fetched body: status, bytes, ETag and Last-Modified.
@@ -686,6 +753,18 @@ mod tests {
             run_once(&d.config, "grok-test", &client, &FakeNet, NOW),
             Ok(Outcome::Nothing(NOTHING_TO_READ.into()))
         );
+    }
+
+    #[test]
+    fn the_mock_network_is_loopback_only() {
+        assert!(LoopbackNet::new("http://127.0.0.1:4711").is_some());
+        assert_eq!(
+            LoopbackNet::new("http://localhost:9/").map(|n| n.base),
+            Some("http://localhost:9".to_string())
+        );
+        assert!(LoopbackNet::new("https://127.0.0.1:4711").is_none());
+        assert!(LoopbackNet::new("http://example.com").is_none());
+        assert!(LoopbackNet::new("http://127.0.0.1.example.com").is_none());
     }
 
     #[test]
