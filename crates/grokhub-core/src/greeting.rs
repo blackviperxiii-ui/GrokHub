@@ -598,18 +598,21 @@ mod tests {
 
     #[test]
     fn greeting_name_prefers_user_md() {
-        assert_eq!(greeting_name("Name: User\neditor: nvim\n", "User"), "User");
-        assert_eq!(greeting_name("# User\n", "User Doe"), "User");
         assert_eq!(
-            greeting_name("# User profile\nWho you are, preferred tools.\n", "User"),
-            "User",
+            greeting_name("Name: Tester\neditor: nvim\n", "Tester"),
+            "Tester"
+        );
+        assert_eq!(greeting_name("# User\n", "Tester Doe"), "Tester");
+        assert_eq!(
+            greeting_name("# User profile\nWho you are, preferred tools.\n", "Tester"),
+            "Tester",
             "the USER.md template heading must not become Hello, User"
         );
-        assert_eq!(greeting_name("", "User"), "User");
+        assert_eq!(greeting_name("", "Tester"), "Tester");
         assert_eq!(greeting_name("", ""), "");
         assert_eq!(
-            greeting_name("Named: my project\n", "User"),
-            "User",
+            greeting_name("Named: my project\n", "Tester"),
+            "Tester",
             "nameplate-style lines must not steal the greeting"
         );
         assert_eq!(
@@ -619,27 +622,27 @@ mod tests {
         );
         assert_eq!(greeting_name("", "This computer"), "");
         assert_eq!(greeting_name("", "cachyos-x8664"), "");
-        assert_eq!(greeting_name("Name: CachyOS\n", "User"), "User");
+        assert_eq!(greeting_name("Name: CachyOS\n", "Tester"), "Tester");
         assert_eq!(greeting_name("", "CachyOS"), "");
         assert!(parse_llm_greeting("Hello, CachyOS.").is_none());
         assert!(parse_llm_greeting("Hello, Grok.").is_none());
-        assert!(parse_llm_greeting("Evening, User. The cabin is ready.").is_some());
+        assert!(parse_llm_greeting("Evening, Tester. The cabin is ready.").is_some());
     }
 
     #[test]
     fn local_greeting_uses_name_not_memory_dump() {
         let insights = ["prefers nvim".into()];
         let mut g_in = input(
-            "Name: User\neditor: nvim\n",
+            "Name: Tester\neditor: nvim\n",
             "Last night we painted the cabin wall.\n",
             &insights,
-            "User",
+            "Tester",
             21,
         );
         g_in.last_project = "Night cabin";
         let g = local_greeting(&g_in);
         assert_eq!(classify_greeting(&g_in), GreetingKind::ReturningProject);
-        assert!(g.to_ascii_lowercase().contains("user"), "{g}");
+        assert!(g.to_ascii_lowercase().contains("tester"), "{g}");
         assert!(g.to_ascii_lowercase().contains("night cabin"), "{g}");
         assert!(
             !g.to_ascii_lowercase().contains("painted") && !g.to_ascii_lowercase().contains("nvim"),
@@ -666,9 +669,9 @@ mod tests {
             !host.to_ascii_lowercase().contains("cachy"),
             "hostname must not paint as the hero: {host}"
         );
-        let distro = local_greeting(&input("Name: CachyOS\n", "", &[], "User", 8));
+        let distro = local_greeting(&input("Name: CachyOS\n", "", &[], "Tester", 8));
         assert!(
-            distro.to_ascii_lowercase().contains("user"),
+            distro.to_ascii_lowercase().contains("tester"),
             "distro Name: must fall through: {distro}"
         );
         assert!(!distro.to_ascii_lowercase().contains("cachy"), "{distro}");
@@ -826,14 +829,14 @@ mod tests {
         assert_eq!(g, "Good morning. Connect Grok and I'll be right here.");
 
         first.signed_in = true;
-        first.display_name = "User";
+        first.display_name = "Tester";
         assert_eq!(classify_greeting(&first), GreetingKind::FirstRunSigned);
         let g = local_greeting(&first);
-        assert!(g.contains("User"), "{g}");
+        assert!(g.contains("Tester"), "{g}");
         assert!(g.contains("I'm here"), "{g}");
         assert!(!g.contains('?'), "{g}");
 
-        let mut back = input("Name: User\n", "", &[], "User", 21);
+        let mut back = input("Name: Tester\n", "", &[], "Tester", 21);
         back.signed_in = false;
         assert_eq!(classify_greeting(&back), GreetingKind::ReturningUnsigned);
         assert_eq!(
@@ -846,12 +849,12 @@ mod tests {
         assert_eq!(clean_project_title(back.last_project), "Night cabin");
         assert_eq!(classify_greeting(&back), GreetingKind::ReturningProject);
         let g = local_greeting(&back);
-        assert!(g.starts_with("Good evening, User."), "{g}");
+        assert!(g.starts_with("Good evening, Tester."), "{g}");
         assert!(g.contains("Night cabin is still open"), "{g}");
 
         back.last_project = "failed: host snapshot";
         assert_eq!(classify_greeting(&back), GreetingKind::ReturningQuiet);
-        assert_eq!(local_greeting(&back), "Good evening, User. I'm here.");
+        assert_eq!(local_greeting(&back), "Good evening, Tester. I'm here.");
 
         assert_eq!(
             project_title_from_hint("Continue Night cabin"),
