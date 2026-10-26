@@ -2,13 +2,14 @@
 // them without loading Settings.
 import type { Capabilities } from "./api";
 
-export type Section = "general" | "account" | "localAi" | "webAccess" | "about";
+export type Section = "general" | "account" | "localAi" | "webAccess" | "labs" | "about";
 
 export const SECTION_LABELS: Record<Section, string> = {
   general: "General",
   account: "Account",
   localAi: "Local AI",
   webAccess: "Web access",
+  labs: "Labs",
   about: "About",
 };
 
@@ -19,6 +20,7 @@ export function sections(caps: Capabilities): Section[] {
     "account",
     ...(caps.localAi ? (["localAi"] as const) : []),
     ...(caps.webAccess ? (["webAccess"] as const) : []),
+    ...(caps.plugins ? (["labs"] as const) : []),
     "about",
   ];
 }
