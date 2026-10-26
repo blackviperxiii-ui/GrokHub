@@ -1,0 +1,3 @@
+- Pulse Feed (shell): posts are cards in one centered column with a 3D topic emoji, cited snippet, and a hero image or a square gallery that opens a lightbox with Download. Love and Discuss sit under each post; a menu holds the full date, "Why I created this" and Delete. More posts load as you scroll.
+- Pulse Feed (shell): Edit feed instructions saves what your feed should cover and writes a new post right away.
+- Web app: Pulse is now available in the browser.
