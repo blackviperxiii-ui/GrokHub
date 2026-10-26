@@ -748,7 +748,12 @@ pub fn speed_test(config_dir: &Path) -> Result<String, String> {
 
 /// Saves the page's choices, clamped, and reads the page again.
 pub fn save_view(config_dir: &Path, config: LocalAiConfig) -> Result<LocalAiView, String> {
+    let before = local_sidecar::picked_model(config_dir);
     save(config_dir, &config.clamped(max_threads()))?;
+    // A new pick loads on the next request, not after a restart.
+    if local_sidecar::picked_model(config_dir) != before {
+        local_sidecar::stop_global();
+    }
     Ok(refreshed(config_dir))
 }
 

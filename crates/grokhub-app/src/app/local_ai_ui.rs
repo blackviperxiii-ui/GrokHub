@@ -227,12 +227,16 @@ impl Cabin {
         if !installed
             && crate::cards::settings_action(
                 ui,
-                "Local model",
+                "Local model setup",
                 &self.local_model_row_hint(),
                 "Set up",
             )
         {
             self.open_local_setup();
+        }
+        let dl_model = self.setup.dl.as_ref().map(|d| d.model);
+        if let Some(m) = self.ui_model_choice(ui) {
+            self.ui_model_pick_rows(ui, dl_model.unwrap_or(m));
         }
         if installed
             && crate::cards::settings_action(
