@@ -1057,6 +1057,7 @@ fn empty_grok_usage() -> GrokUsage {
         stop_reason: String::new(),
         cost_in_usd_ticks: 0,
         meter: String::new(),
+        turn_cache_pct: None,
     }
 }
 
