@@ -1254,7 +1254,7 @@ fn a_code_idea_is_saved_or_copied_redacted_never_applied_and_nothing_leaves() {
         &["click"],
     );
     let calls = fake(
-        "CODE_IDEA: Wait for the Save dialog | The save click lands before the dialog opens on /home/user/Documents/report.md | 1 of 1 weekly-report runs failed; alex@example.com saw it\n\
+        "CODE_IDEA: Wait for the Save dialog | The save click lands before the dialog opens on /home/user/Documents/report.md | 1 of 1 weekly-report runs failed; user@example.com saw it\n\
          CODE_IDEA: Retry rate limits | A 429 ends the run (key sk-abcdefghijklmnopqrstuv) | 1 run\n\
          CODE_IDEA: A third idea | p | e\n",
     );
@@ -1307,7 +1307,7 @@ fn a_code_idea_is_saved_or_copied_redacted_never_applied_and_nothing_leaves() {
         (saved[0].title.as_str(), saved[0].text.as_str()),
         (
             "Wait for the Save dialog",
-            "Problem: The save click lands before the dialog opens on /home/user/Documents/report.md\n\nEvidence: 1 of 1 weekly-report runs failed; alex@example.com saw it"
+            "Problem: The save click lands before the dialog opens on /home/user/Documents/report.md\n\nEvidence: 1 of 1 weekly-report runs failed; user@example.com saw it"
         )
     );
     assert!(cabin

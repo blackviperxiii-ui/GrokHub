@@ -569,7 +569,7 @@ mod tests {
 
     fn ctx<'a>(asks: &'a [String], autos: &'a [String]) -> IdeaContext<'a> {
         IdeaContext {
-            user_md: "Name: Alex. Builds GrokHub, a Rust desktop app. Streams on Fridays.",
+            user_md: "Name: User. Builds GrokHub, a Rust desktop app. Streams on Fridays.",
             memory_md: "Uses Arch Linux. Releases go out through AUR.",
             recent_asks: asks,
             automations: autos,
