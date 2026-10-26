@@ -127,9 +127,9 @@ mod tests {
         let old_home = std::env::var_os("HOME");
         let old_up = std::env::var_os("USERPROFILE");
         std::env::remove_var("HOME");
-        std::env::set_var("USERPROFILE", r"C:\Users\viper");
+        std::env::set_var("USERPROFILE", r"C:\Users\alex");
         let got = user_home().expect("USERPROFILE");
-        assert!(got.ends_with("viper") || got.to_string_lossy().contains("viper"));
+        assert!(got.ends_with("alex") || got.to_string_lossy().contains("alex"));
         std::env::remove_var("USERPROFILE");
         assert!(user_home().is_none() || old_home.is_some());
         match old_home {
@@ -144,40 +144,40 @@ mod tests {
 
     #[test]
     fn windows_dialogue_session_stays_in_history() {
-        let home = Some(r"C:\Users\viper\AppData\Local");
-        let profile = Some(r"C:\Users\viper");
+        let home = Some(r"C:\Users\alex\AppData\Local");
+        let profile = Some(r"C:\Users\alex");
         let list = cabin_session_cwd("", true, home, profile);
-        assert_eq!(list, r"C:\Users\viper\GrokHub-Work");
+        assert_eq!(list, r"C:\Users\alex\GrokHub-Work");
         assert!(!list.contains("AppData"));
         assert!(!list.contains("Programs"));
         assert!(chat_appears_in_history(
             &list,
-            Some(r"C:\Users\viper\GrokHub-Work"),
+            Some(r"C:\Users\alex\GrokHub-Work"),
             true
         ));
         assert!(
-            !chat_appears_in_history(&list, Some(r"C:\Users\viper\GrokHub-Work"), false),
+            !chat_appears_in_history(&list, Some(r"C:\Users\alex\GrokHub-Work"), false),
             "an empty draft is not a saved session"
         );
         assert!(
             !chat_appears_in_history(
-                r"C:\Users\viper\AppData\Local",
-                Some(r"C:\Users\viper\GrokHub-Work"),
+                r"C:\Users\alex\AppData\Local",
+                Some(r"C:\Users\alex\GrokHub-Work"),
                 true
             ),
             "listing HOME or %LOCALAPPDATA% drops the dialogue session"
         );
         assert!(
             !chat_appears_in_history(
-                r"C:\Users\viper\AppData\Local\Programs\GrokHub",
+                r"C:\Users\alex\AppData\Local\Programs\GrokHub",
                 Some(&list),
                 true
             ),
             "the install directory is not the session cwd"
         );
         assert!(chat_appears_in_history(
-            r"C:\Users\viper/GrokHub-Work",
-            Some(r"\\?\C:\Users\viper\GrokHub-Work\"),
+            r"C:\Users\alex/GrokHub-Work",
+            Some(r"\\?\C:\Users\alex\GrokHub-Work\"),
             true
         ));
         let bound = cabin_session_cwd(r"D:\src\app", true, home, profile);
@@ -193,7 +193,7 @@ mod tests {
 
     #[test]
     fn unix_session_cwd_stays_under_home() {
-        let list = cabin_session_cwd("", false, Some("/home/user"), Some(r"C:\Users\viper"));
+        let list = cabin_session_cwd("", false, Some("/home/user"), Some(r"C:\Users\alex"));
         assert_eq!(list, "/home/user/GrokHub-Work");
         assert!(chat_appears_in_history(
             &list,

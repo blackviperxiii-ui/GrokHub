@@ -21,7 +21,7 @@ pub use ops::{run, skill_creates_today, SelfCtx};
 /// The MCP server name Grok Build registers (tools show as `grokhub-self__<tool>`).
 pub use grokhub_core::SELF_MCP_SERVER;
 
-/// At most this many new skills a day from these tools (flagged for Viper).
+/// At most this many new skills a day from these tools (flagged for user).
 pub const SKILL_CREATE_DAY_CAP: usize = 5;
 
 /// How a self-manage tool is gated.

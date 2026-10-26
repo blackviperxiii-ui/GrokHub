@@ -419,7 +419,7 @@ mod tests {
         String::from_utf8_lossy(&out.stdout).trim().to_string()
     }
 
-    /// Viper's case: a cargo run rewrote Cargo.lock in the source folder. The
+    /// user's case: a cargo run rewrote Cargo.lock in the source folder. The
     /// switch sets that one file aside in a named stash and goes on to beta.
     #[cfg(unix)]
     #[test]

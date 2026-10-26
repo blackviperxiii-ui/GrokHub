@@ -1,0 +1,21 @@
+name: pii-guard
+on:
+  pull_request:
+  push:
+    branches: [main, beta]
+permissions:
+  contents: read
+jobs:
+  pii-guard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Block personal info
+        run: |
+          if [ -n "${{ github.base_ref }}" ]; then
+            python3 scripts/pii-guard/pii_guard.py "origin/${{ github.base_ref }}"
+          else
+            python3 scripts/pii-guard/pii_guard.py
+          fi

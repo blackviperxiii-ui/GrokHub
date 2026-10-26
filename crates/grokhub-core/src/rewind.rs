@@ -190,17 +190,11 @@ mod tests {
         assert!(rewind_allowed("/home/user/GrokHub-Work", "/home/user"));
         assert!(rewind_allowed("/tmp/lab", "/home/user"));
         assert!(!rewind_allowed("/home/user/.ssh", "/home/user"));
-        assert!(!rewind_allowed(
-            "/home/user/.ssh/id_ed25519",
-            "/home/user"
-        ));
+        assert!(!rewind_allowed("/home/user/.ssh/id_ed25519", "/home/user"));
         assert!(!rewind_allowed("/home/user/.gnupg", "/home/user"));
         assert!(!rewind_allowed("/home/user/.aws", "/home/user"));
         assert!(!rewind_allowed("/home/user/.kube/config", "/home/user"));
-        assert!(!rewind_allowed(
-            "/home/user/.config/GrokHub",
-            "/home/user"
-        ));
+        assert!(!rewind_allowed("/home/user/.config/GrokHub", "/home/user"));
         assert_eq!(
             rewind_dest("/home/user/.config/GrokHub/", "job-1"),
             "/home/user/.config/GrokHub/rewind/job-1"

@@ -2052,7 +2052,7 @@ impl Cabin {
                     &p.title,
                     &args,
                     "allowed once",
-                    "Viper allowed it once",
+                    "user allowed it once",
                     self.access_mode(),
                     "none",
                 );

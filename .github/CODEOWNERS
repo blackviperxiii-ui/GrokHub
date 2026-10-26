@@ -1,6 +1,6 @@
 # Safety surfaces (rearch stage 3b). Keep APIs and locations stable; changes
 # should go through a dedicated review. Paths from the rearch study §3.7.
-# Owner: repo admin (Viper). Label needs-human-review — not merged on green.
+# Owner: repo admin (user). Label needs-human-review — not merged on green.
 
 # Gate + permissions
 /crates/grokhub-agent/src/gate.rs @blackviperxiii-ui

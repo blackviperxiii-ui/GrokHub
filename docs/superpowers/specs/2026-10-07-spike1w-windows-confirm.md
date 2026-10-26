@@ -1,35 +1,35 @@
-# Spike-1W: Windows confirm (Surface)
+# Spike-1W: Windows confirm
 
 Run date 2026-10-07. Roadmap row Spike-1W, owner decision D3 (Windows uses the
 same `harness::decide` gate as Linux, on the shipped `grokhub-desktop` MCP:
 xcap + SendInput in `crates/grokhub-app/src/desktop_mcp/windows.rs`; no UIA
 backend).
 
-> **Not verified on the Surface.** This run happened in a Linux cloud box with
+> **Not verified on a Windows test machine.** This run happened in a Linux cloud box with
 > no Windows machine attached. Every live checklist item and U1–U3 below is
-> "not verified, needs the Surface". What this run did: a code review of the
+> "not verified, needs a Windows test machine". What this run did: a code review of the
 > Windows gate paths, OS-neutral fixes with unit tests, and Windows CI as the
-> only Windows evidence. Re-run the live checklist on the Surface before
+> only Windows evidence. Re-run the live checklist on a Windows test machine before
 > calling Spike-1W done.
 
 ## Live checklist
 
 | # | Item | Result | Evidence |
 |---|------|--------|----------|
-| 1 | Build from source on the Surface (`cargo build --release -p grokhub-app`, scratch `GROKHUB_CONFIG`) | Not verified, needs the Surface | Windows CI builds and tests the workspace at the PR head |
-| 2 | Path A soft click on a disposable window: span `path:"A"`, `ui_changed:true` | Not verified, needs the Surface | — |
-| 3 | Path A hard park on a typed delete of a scratch file: Enter leaves it pending, Esc denies, file byte-identical | Not verified, needs the Surface | Unit: `desk_typing_is_checked_like_a_shell`, harness_gate delete tests (OS-neutral, run on Windows CI) |
-| 4 | Path B hard card shape | Not verified, needs the Surface | — |
-| 5 | Path C: real Windows `grok` headless, `--deny` beats `--always-approve` | Not verified, needs the Surface | See gap G1 (rule case on Windows) |
-| 6 | Path D (1c): deny rules in argv, watchdog on an unasked CU frame | Not verified, needs the Surface | — |
-| 7 | Spike-1b on Windows: ShellExecute + SetForegroundWindow, typing length-only in spans, PIN parks as credentials, Recycle Bin delete parks hard | Not verified, needs the Surface | Code read of `desktop_mcp/apps.rs` `win` module; see gaps G2, G3 |
-| 8 | Halt from Ctrl+Alt+H, Ctrl+Shift+Esc and the tray denies every parked card | Not verified, needs the Surface | — |
+| 1 | Build from source on a Windows test machine (`cargo build --release -p grokhub-app`, scratch `GROKHUB_CONFIG`) | Not verified, needs a Windows test machine | Windows CI builds and tests the workspace at the PR head |
+| 2 | Path A soft click on a disposable window: span `path:"A"`, `ui_changed:true` | Not verified, needs a Windows test machine | — |
+| 3 | Path A hard park on a typed delete of a scratch file: Enter leaves it pending, Esc denies, file byte-identical | Not verified, needs a Windows test machine | Unit: `desk_typing_is_checked_like_a_shell`, harness_gate delete tests (OS-neutral, run on Windows CI) |
+| 4 | Path B hard card shape | Not verified, needs a Windows test machine | — |
+| 5 | Path C: real Windows `grok` headless, `--deny` beats `--always-approve` | Not verified, needs a Windows test machine | See gap G1 (rule case on Windows) |
+| 6 | Path D (1c): deny rules in argv, watchdog on an unasked CU frame | Not verified, needs a Windows test machine | — |
+| 7 | Spike-1b on Windows: ShellExecute + SetForegroundWindow, typing length-only in spans, PIN parks as credentials, Recycle Bin delete parks hard | Not verified, needs a Windows test machine | Code read of `desktop_mcp/apps.rs` `win` module; see gaps G2, G3 |
+| 8 | Halt from Ctrl+Alt+H, Ctrl+Shift+Esc and the tray denies every parked card | Not verified, needs a Windows test machine | — |
 
 ## U1–U3
 
 | Claim | Answer | Confidence | Why |
 |-------|--------|------------|-----|
-| U1: Grok Build ships or calls a .NET UI helper on Windows | Not verified | — | Needs `Get-Process grok*`, `.Modules` / `tasklist /m` on the Surface, idle and during one GB CU click |
+| U1: Grok Build ships or calls a .NET UI helper on Windows | Not verified | — | Needs `Get-Process grok*`, `.Modules` / `tasklist /m` on a Windows test machine, idle and during one GB CU click |
 | U2: that helper is mainly UI Automation | Not verified | — | Needs the module list (`UIAutomationCore.dll`, `clr.dll` / `coreclr.dll` / `hostfxr.dll`) and one ACP tool-name sequence |
 | U3: accessibility/native actions are 2–4× faster and cheaper than screenshot loops | Not verified (hypothesis) | — | Needs the 10 + 10 run comparison below |
 
@@ -70,8 +70,8 @@ backend).
   case-sensitive. Rules list lowercase and PascalCase forms for cmdlets, but
   `REMOVE-ITEM x` or `Del x` would not match. The cabin classifier lowercases,
   so paths A, B and E still park; path C relies on
-  `approval_gate_violation` after the fact. Confirm GB's matching on the
-  Surface before adding more forms.
+  `approval_gate_violation` after the fact. Confirm GB's matching on a
+  Windows test machine before adding more forms.
 - **G2: Recycle Bin on a volume with no bin.** `SHFileOperationW` with
   `FOF_ALLOWUNDO | FOF_NOCONFIRMATION` deletes permanently on network shares
   and some removable drives, while the hard card says "move to the trash".
@@ -81,7 +81,7 @@ backend).
   spike's scope.
 - **G3: forward-slash paths to the Recycle Bin.** `C:/scratch/x.txt` passes
   the absolute-path check, but `SHFileOperationW` wants backslashes. Expected
-  to fail closed (error, nothing deleted). Confirm on the Surface.
+  to fail closed (error, nothing deleted). Confirm on a Windows test machine.
 - **G4: `powershell -EncodedCommand`.** A base64 command body is opaque to
   the classifier and to GB rules. Not a hard class by the design's
   definition; listed so Spike-2 can decide.

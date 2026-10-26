@@ -721,14 +721,14 @@ mod tests {
     #[test]
     fn id_token_picture_claim() {
         let jwt = jwt_from_payload(
-            r#"{"email":"viper@x.ai","name":"Viper","picture":"https://assets.grok.com/users/viper.png"}"#,
+            r#"{"email":"alex@x.ai","name":"Alex","picture":"https://assets.grok.com/users/alex.png"}"#,
         );
         let t = parse_token_json(&json!({"access_token":"tok","id_token": jwt}), 1).unwrap();
-        assert_eq!(t.email.as_deref(), Some("viper@x.ai"));
-        assert_eq!(t.name.as_deref(), Some("Viper"));
+        assert_eq!(t.email.as_deref(), Some("alex@x.ai"));
+        assert_eq!(t.name.as_deref(), Some("Alex"));
         assert_eq!(
             t.picture.as_deref(),
-            Some("https://assets.grok.com/users/viper.png")
+            Some("https://assets.grok.com/users/alex.png")
         );
     }
 
@@ -736,22 +736,22 @@ mod tests {
     fn userinfo_profile_picture() {
         let p = parse_userinfo_profile(&json!({
             "sub": "u1",
-            "name": "Viper",
-            "email": "viper@x.ai",
-            "picture": "https://pbs.twimg.com/profile_images/viper.jpg"
+            "name": "Alex",
+            "email": "alex@x.ai",
+            "picture": "https://pbs.twimg.com/profile_images/alex.jpg"
         }));
-        assert_eq!(p.name.as_deref(), Some("Viper"));
-        assert_eq!(p.email.as_deref(), Some("viper@x.ai"));
+        assert_eq!(p.name.as_deref(), Some("Alex"));
+        assert_eq!(p.email.as_deref(), Some("alex@x.ai"));
         assert_eq!(
             p.picture.as_deref(),
-            Some("https://pbs.twimg.com/profile_images/viper.jpg")
+            Some("https://pbs.twimg.com/profile_images/alex.jpg")
         );
         let avatar = parse_userinfo_profile(&json!({
-            "avatar_url": "https://x.com/users/viper.png"
+            "avatar_url": "https://x.com/users/alex.png"
         }));
         assert_eq!(
             avatar.picture.as_deref(),
-            Some("https://x.com/users/viper.png")
+            Some("https://x.com/users/alex.png")
         );
     }
 
@@ -765,15 +765,13 @@ mod tests {
 
     #[test]
     fn trusted_profile_photo_hosts() {
-        assert!(trusted_profile_photo_url("https://assets.grok.com/users/viper.png").is_ok());
-        assert!(trusted_profile_photo_url("https://auth.x.ai/avatar/viper.png").is_ok());
-        assert!(
-            trusted_profile_photo_url("https://pbs.twimg.com/profile_images/viper.jpg").is_ok()
-        );
-        assert!(trusted_profile_photo_url("https://lh3.googleusercontent.com/a/viper").is_ok());
-        assert!(trusted_profile_photo_url("https://x.com/users/viper.png").is_ok());
+        assert!(trusted_profile_photo_url("https://assets.grok.com/users/alex.png").is_ok());
+        assert!(trusted_profile_photo_url("https://auth.x.ai/avatar/alex.png").is_ok());
+        assert!(trusted_profile_photo_url("https://pbs.twimg.com/profile_images/alex.jpg").is_ok());
+        assert!(trusted_profile_photo_url("https://lh3.googleusercontent.com/a/alex").is_ok());
+        assert!(trusted_profile_photo_url("https://x.com/users/alex.png").is_ok());
         assert!(trusted_profile_photo_url("https://evil.com/x.png").is_err());
-        assert!(trusted_profile_photo_url("http://assets.grok.com/users/viper.png").is_err());
+        assert!(trusted_profile_photo_url("http://assets.grok.com/users/alex.png").is_err());
     }
 
     #[test]
@@ -781,9 +779,9 @@ mod tests {
         let prev = XaiOAuthTokens {
             access_token: "old".into(),
             refresh_token: Some("ref".into()),
-            email: Some("viper@x.ai".into()),
-            name: Some("Viper".into()),
-            picture: Some("https://assets.grok.com/users/viper.png".into()),
+            email: Some("alex@x.ai".into()),
+            name: Some("Alex".into()),
+            picture: Some("https://assets.grok.com/users/alex.png".into()),
             connected_at: 9,
             ..Default::default()
         };
@@ -798,10 +796,10 @@ mod tests {
         assert_eq!(merged.refresh_token.as_deref(), Some("ref2"));
         assert_eq!(
             merged.picture.as_deref(),
-            Some("https://assets.grok.com/users/viper.png")
+            Some("https://assets.grok.com/users/alex.png")
         );
-        assert_eq!(merged.name.as_deref(), Some("Viper"));
-        assert_eq!(merged.email.as_deref(), Some("viper@x.ai"));
+        assert_eq!(merged.name.as_deref(), Some("Alex"));
+        assert_eq!(merged.email.as_deref(), Some("alex@x.ai"));
     }
 
     #[test]
@@ -813,15 +811,15 @@ mod tests {
         apply_profile(
             &mut t,
             &OAuthProfile {
-                name: Some("Viper".into()),
-                email: Some("viper@x.ai".into()),
-                picture: Some("https://assets.grok.com/users/viper.png".into()),
+                name: Some("Alex".into()),
+                email: Some("alex@x.ai".into()),
+                picture: Some("https://assets.grok.com/users/alex.png".into()),
             },
         );
-        assert_eq!(t.name.as_deref(), Some("Viper"));
+        assert_eq!(t.name.as_deref(), Some("Alex"));
         assert_eq!(
             t.picture.as_deref(),
-            Some("https://assets.grok.com/users/viper.png")
+            Some("https://assets.grok.com/users/alex.png")
         );
     }
 

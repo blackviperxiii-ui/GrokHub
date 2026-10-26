@@ -352,7 +352,7 @@ pub(crate) fn proactive_outcome(name: &str, key: &str, mind: &MindCheck) -> Gate
                 mind.mind_prior(key)
             ),
             hard: None,
-            needs_viper: false,
+            needs_user: false,
         },
     }
 }
@@ -419,7 +419,7 @@ mod tests {
             GateOutcome::Park {
                 reason: "ask first: tidy_downloads (proactive:tidy_downloads, p_mind 0.60)".into(),
                 hard: None,
-                needs_viper: false,
+                needs_user: false,
             }
         );
     }
@@ -604,7 +604,7 @@ mod tests {
             GateOutcome::Park {
                 reason: "hard-class send: Send — Always cannot skip".into(),
                 hard: Some(HardClass::Send),
-                needs_viper: true,
+                needs_user: true,
             }
         );
         assert_eq!(
@@ -637,7 +637,7 @@ mod tests {
             GateOutcome::Park {
                 reason: "hard-class delete: Delete — Always cannot skip".into(),
                 hard: Some(HardClass::Delete),
-                needs_viper: true,
+                needs_user: true,
             }
         );
         assert_eq!(hard_card_key(true, false, false), None);

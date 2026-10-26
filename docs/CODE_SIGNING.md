@@ -15,8 +15,8 @@ Artifact layout and SignPath XML: [`.signpath/windows-release.xml`](../.signpath
 
 ## Team roles
 
-- **Committers and reviewers:** Viper / [blackviperxiii-ui](https://github.com/blackviperxiii-ui)
-- **Approvers:** Viper / [blackviperxiii-ui](https://github.com/blackviperxiii-ui)
+- **Committers and reviewers:** user / [blackviperxiii-ui](https://github.com/blackviperxiii-ui)
+- **Approvers:** user / [blackviperxiii-ui](https://github.com/blackviperxiii-ui)
 
 ## Privacy
 

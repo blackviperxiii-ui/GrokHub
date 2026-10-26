@@ -5,21 +5,21 @@ These rules apply to every contributor and every bot (Cursor, Claude, GrokHub). 
 ## Beta first
 
 - Every new feature and fix PR branches off `beta` and targets `beta`.
-- `beta` moves to `main` only when Viper says so, as one squash-merged `beta` → `main` PR.
-- Hotfixes go to `main` only when Viper says so. Afterward, `main` is merged back into `beta` with a merge commit, never a force-push.
-- Never push straight to `main` or `beta`, never force-push, and never delete branches unless Viper asks.
+- `beta` moves to `main` only when the maintainer approves, as one squash-merged `beta` → `main` PR.
+- Hotfixes go to `main` only when the maintainer approves. Afterward, `main` is merged back into `beta` with a merge commit, never a force-push.
+- Never push straight to `main` or `beta`, never force-push, and never delete branches unless user asks.
 
 ## Green and ready, then stop
 
 - Bots take a PR to green (Linux and Windows CI passing) and ready to merge, with proof of work, then stop and report it.
-- Nobody merges, tags, or releases anything without Viper's explicit say. When he says merge, it's squash and merge.
+- Nobody merges, tags, or releases anything without the maintainer's explicit approval. When merging, it's squash and merge.
 - **Latest base branch:** the base is `beta` for feature and fix PRs, and `main` for hotfixes and the promotion. Fetch origin and merge the latest base into your branch (a merge commit, no rebase or force-push) before you start, before reporting the PR ready, and right before any merge or tag he asked for. Name the base branch and its starting SHA in the PR body.
 - Every PR body has the proof of work (the real run path exercised and what was seen) and a **Skipped / not verified** section.
 
 ## Versions
 
 - PRs into `beta` don't bump the version. They add their notes under `## Unreleased` in `CHANGELOG.md`.
-- Semver: PATCH (`x.y.Z`) for a fix or polish rollout, MINOR (`x.Y.0`) for a promotion with at least one new user-facing feature, MAJOR (`X.0.0`) only on Viper's say. No cap on any part.
+- Semver: PATCH (`x.y.Z`) for a fix or polish rollout, MINOR (`x.Y.0`) for a promotion with at least one new user-facing feature, MAJOR (`X.0.0`) only with the maintainer's approval. No cap on any part.
 - Beta builds carry `-beta.N` (e.g. `2.11.0-beta.3`): `GrokHub 2.11.0-beta.3 (beta @ abc1234)`. `crates/grokhub-app/build.rs` sets N from commits since the newest stable `vX.Y.Z` tag; never edit the Cargo version for them.
 - Each `beta` → `main` promotion carries exactly one bump (PATCH or MINOR) and one release.
 - A hotfix to `main` carries its own PATCH bump and is merged back into `beta`.
