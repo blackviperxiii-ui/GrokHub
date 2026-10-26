@@ -43,6 +43,7 @@
 //! [`ReflectDiff`]; nothing writes USER.md on its own.
 
 mod dream;
+mod dream_model;
 mod import;
 mod index;
 mod schema;
@@ -55,6 +56,11 @@ pub use dream::{
     dream_report_path, latest_dream, DreamMerge, DreamOpts, DreamReport, DreamRetire, PruneReport,
     DREAM_DUP_JACCARD, DREAM_PROPOSE_CONFIDENCE, DREAM_RECENT_DAYS, DREAM_STALE_BELOW,
     DREAM_TAG_JACCARD, DREAM_TTL_DAYS,
+};
+pub use dream_model::{
+    allows_direct_core_write, allows_lesson_write, morning_text, stage_core_line, CoreWriter,
+    DreamPhase, DreamPhaseError, DreamStep, ModelDreamOpts, ModelDreamReport, MorningNote,
+    StagedCore, MODEL_DREAM_OUTPUT_TOKEN_CAP,
 };
 pub use import::{
     durable_chip_prefs, import_legacy, write_import_report, ImportReport, ImportTally,
@@ -70,8 +76,9 @@ pub use signal::{
 };
 pub use store::{AmrStore, ForgetReport, RecallReport};
 pub use user_model::{
-    approve_node, edit_node, forget_node, memory_rows, memory_text, reflect_diff, reject_node,
-    strip_forgotten, supersede_same_topic, topic_slug, MemoryRow, ReflectDiff, SourceLink,
+    approval_samples, approve_node, calibrate_reflect_min, edit_node, forget_node, memory_rows,
+    memory_text, reflect_diff, reflect_threshold_log, reject_node, strip_forgotten,
+    supersede_same_topic, topic_slug, ApprovalSample, MemoryRow, ReflectDiff, SourceLink,
     UserForget, PROPOSED_TAG, REFLECT_MIN_CONFIDENCE,
 };
 pub use write::{
