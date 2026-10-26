@@ -1,0 +1,1 @@
+- The default voice keeps a values charter (honest, not sycophantic), learned memory rows show their source and date and wait for approval, and a sycophancy check blocks a skill patch that would agree with a wrong claim.

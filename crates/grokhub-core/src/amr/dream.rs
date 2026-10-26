@@ -409,6 +409,7 @@ impl AmrStore {
         }
         let mut nodes = self.load_live().nodes;
         nodes.retain(|n| !n.source.starts_with(super::SCOPE_SOURCE_PREFIX));
+        nodes.retain(|n| !n.tags.iter().any(|t| t == super::user_model::PROPOSED_TAG));
         let mut report = PruneReport {
             days,
             kept: nodes.len(),
@@ -471,7 +472,9 @@ impl AmrStore {
         let loaded = self.load_live();
         let mut nodes = loaded.nodes;
         // Spike-8a: indexer facts belong to their scope ("Forget these"), not the dream.
+        // A proposed line stays in the approval queue until a person approves it.
         nodes.retain(|n| !n.source.starts_with(super::SCOPE_SOURCE_PREFIX));
+        nodes.retain(|n| !n.tags.iter().any(|t| t == super::user_model::PROPOSED_TAG));
         nodes.sort_by(rank);
         let links = self.link_map()?;
         let link_of = |id: &str| links.get(id).copied().unwrap_or(Linked::None);

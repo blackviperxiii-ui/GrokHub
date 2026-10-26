@@ -491,10 +491,60 @@ pub fn amr_enabled() -> bool {
 }
 
 /// `{config}/amr`, sealing personal nodes with the learned-tier key.
+/// The memory off switch in `app.json` is applied here.
 pub fn amr_store() -> grokhub_core::amr::AmrStore {
     let dir = crate::perm::config_dir();
     let vault = crate::harness::LearnedVault::new(&dir);
-    grokhub_core::amr::AmrStore::at(dir.join("amr")).with_sealer(std::sync::Arc::new(vault))
+    let mut store =
+        grokhub_core::amr::AmrStore::at(dir.join("amr")).with_sealer(std::sync::Arc::new(vault));
+    store.set_memory_writes(memory_writes_enabled());
+    store
+}
+
+/// `"memory_writes"` in `{config}/app.json`. Missing, unreadable, or not a
+/// bool means writes stay on.
+pub fn memory_writes_enabled() -> bool {
+    let Some(value) = read_app_json() else {
+        return true;
+    };
+    value
+        .get("memory_writes")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true)
+}
+
+/// Patch `memory_writes` in `app.json` without dropping other keys.
+/// On removes the key so a default file stays unchanged.
+pub fn set_memory_writes(on: bool) -> Result<(), String> {
+    let path = crate::perm::config_dir().join("app.json");
+    let mut value = if path.is_file() {
+        let text = fs::read_to_string(&path).map_err(|e| e.to_string())?;
+        if text.trim().is_empty() {
+            serde_json::json!({})
+        } else {
+            serde_json::from_str(&text).map_err(|e| e.to_string())?
+        }
+    } else {
+        serde_json::json!({})
+    };
+    let obj = value
+        .as_object_mut()
+        .ok_or_else(|| "app.json is not an object".to_string())?;
+    if on {
+        obj.remove("memory_writes");
+    } else {
+        obj.insert("memory_writes".to_string(), serde_json::Value::Bool(false));
+    }
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    let pretty = serde_json::to_string_pretty(&value).map_err(|e| e.to_string())?;
+    fs::write(&path, format!("{pretty}\n")).map_err(|e| e.to_string())
+}
+
+fn read_app_json() -> Option<serde_json::Value> {
+    let text = fs::read_to_string(crate::perm::config_dir().join("app.json")).ok()?;
+    serde_json::from_str(&text).ok()
 }
 
 /// AMR lines for the words in the first message (4+ letters), at most 8.
@@ -1377,6 +1427,41 @@ mod tests {
         );
         assert_eq!(remember_note_text("--global keep it"), "keep it");
         assert_eq!(remember_note_text("plain"), "plain");
+    }
+
+    #[test]
+    fn memory_writes_off_stops_remember_and_keeps_other_settings() {
+        use grokhub_core::amr::{remember_line, AmrError, LineWrite};
+        let (cfg, _ws, _guard) = temp_pair("writes-off");
+        fs::write(cfg.join("app.json"), r#"{"memory_backend":"amr"}"#).unwrap();
+        assert!(memory_writes_enabled());
+        set_memory_writes(false).unwrap();
+        let text = fs::read_to_string(cfg.join("app.json")).unwrap();
+        assert!(text.contains("memory_backend"), "{text}");
+        assert!(text.contains("amr"), "{text}");
+        assert!(text.contains("\"memory_writes\": false"), "{text}");
+        assert!(!memory_writes_enabled());
+        let store = amr_store();
+        store.init().unwrap();
+        let err = remember_line(
+            &store,
+            &LineWrite {
+                text: "the harbor lamp is green",
+                source: "user",
+                tags: Vec::new(),
+                confidence: 0.9,
+                revive: false,
+            },
+            1,
+        )
+        .unwrap_err();
+        assert_eq!(err, AmrError::WritesOff);
+        assert_eq!(store.node_file_count(), 0);
+        set_memory_writes(true).unwrap();
+        let text = fs::read_to_string(cfg.join("app.json")).unwrap();
+        assert!(!text.contains("memory_writes"), "{text}");
+        assert!(text.contains("memory_backend"), "{text}");
+        assert!(memory_writes_enabled());
     }
 
     #[test]
