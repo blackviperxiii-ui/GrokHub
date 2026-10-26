@@ -126,7 +126,7 @@ impl<'a> SelfServer<'a> {
             GateOutcome::Park { reason, hard, .. } => {
                 let class = hard.unwrap_or(HardClass::Delete);
                 if !self.park(&mcp, args, class, io) {
-                    let why = format!("Denied: {reason}. Viper did not approve it.");
+                    let why = format!("Denied: {reason}. user did not approve it.");
                     self.span(hx::Span::deny("", &mcp, &span_args, &why, class.as_str()));
                     return (false, why);
                 }

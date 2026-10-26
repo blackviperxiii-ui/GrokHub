@@ -649,7 +649,7 @@ mod tests {
     #[test]
     fn probe_prompts_contain_no_user_data() {
         let seeded = [
-            "Viper's bank PIN is 4512",
+            "user's bank PIN is 4512",
             "sk-abcdefghijklmnopqrstuv",
             "meet Sam at 5pm",
             "MEMORY.md",

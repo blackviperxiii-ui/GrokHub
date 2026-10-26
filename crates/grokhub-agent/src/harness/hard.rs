@@ -23,7 +23,7 @@ pub const BUILTIN_CU_DENY: &[&str] = &[
     "MCPTool(*__keyboard_*)",
 ];
 
-/// Hard class: Always / Auto / Full cannot skip. Parks a Viper approval card.
+/// Hard class: Always / Auto / Full cannot skip. Parks a user approval card.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HardClass {
     Money,
@@ -3091,7 +3091,7 @@ mod tests {
             })
         );
         assert_eq!(
-            classify_ask("send_email", "to viper"),
+            classify_ask("send_email", "to user"),
             HardHit::Class(HardClass::Send)
         );
         assert_eq!(classify_ask("Run command", "ls -la"), HardHit::None);

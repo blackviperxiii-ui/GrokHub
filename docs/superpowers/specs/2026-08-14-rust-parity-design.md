@@ -7,7 +7,7 @@
 
 ## Why
 
-Electron is a Chromium tax. Tauri is still a webview wrapping the same TypeScript cabin. Viper asked for a full shift to Rust so Linux, Windows, and Android share one core and one cabin, not a JS UI with a Rust sidecar.
+Electron is a Chromium tax. Tauri is still a webview wrapping the same TypeScript cabin. user asked for a full shift to Rust so Linux, Windows, and Android share one core and one cabin, not a JS UI with a Rust sidecar.
 
 ## What ships
 

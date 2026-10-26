@@ -1065,7 +1065,7 @@ impl Run<'_, '_> {
             Decision::Ask => GateOutcome::Park {
                 reason: format!("permission ask for `{}`", call.name),
                 hard: None,
-                needs_viper: false,
+                needs_user: false,
             },
             Decision::Refuse(reason) => GateOutcome::Refuse { reason },
         }

@@ -235,7 +235,7 @@ mod tests {
                 class.label()
             ),
             hard: Some(class),
-            needs_viper: true,
+            needs_user: true,
         };
         let full = AccessMode::Full;
         assert_eq!(

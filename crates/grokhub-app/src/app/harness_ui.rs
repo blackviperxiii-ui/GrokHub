@@ -33,7 +33,7 @@ const UNASKED_NOTE: &str =
     "Grok Build did this without asking, so the turn was stopped. Approve re-runs this one step with Grok's own Allow. Esc denies.";
 const HARD_EYEBROW: &str = "Hard action";
 /// Why a ladder pause or an ask was denied from a card or the inbox.
-pub(super) const SOFT_DENY: &str = "Viper denied";
+pub(super) const SOFT_DENY: &str = "user denied";
 pub(super) const HALT_DENY: &str = "halted — fail-closed Deny";
 const SOFT_EYEBROW: &str = "Paused";
 const SOFT_NOTE: &str =
@@ -1507,7 +1507,7 @@ impl Cabin {
                 "grant_full",
                 "{}",
                 "granted",
-                "Viper granted Full for this session",
+                "user granted Full for this session",
                 AccessMode::Full,
                 "none",
             );
@@ -1626,7 +1626,7 @@ impl Cabin {
             };
             if key == Some(hx::HardAnswer::Deny) {
                 ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
-                self.resolve_hard_park(false, "Viper denied (Esc)");
+                self.resolve_hard_park(false, "user denied (Esc)");
             } else {
                 let top = ui.cursor().min.y;
                 let hit = harness_card(ui, id, text, running);
@@ -1669,7 +1669,7 @@ impl Cabin {
             let hit = harness_card(ui, ("grant-full", String::new()), text, running);
             self.scroll_if_jumped(ui, "full", top);
             if let Some(grant) = hit {
-                self.resolve_grant_full(grant, "Viper kept Supervised");
+                self.resolve_grant_full(grant, "user kept Supervised");
             }
         }
         // Router R2b: the week's budget and the upgrade nudge, click only.
@@ -2041,7 +2041,7 @@ mod tests {
         assert_eq!(park.path, "B");
         assert_eq!(cabin.perm_ask, None);
         assert_eq!(cabin.hard_waiting(), 1);
-        cabin.resolve_hard_park(false, "Viper denied");
+        cabin.resolve_hard_park(false, "user denied");
         assert!(cabin.harness.park.is_none());
         let spans = hx::read_spans(&root, "session").unwrap();
         let kinds: Vec<_> = spans.iter().map(|s| s.decision.as_str()).collect();
@@ -2500,7 +2500,7 @@ mod tests {
         cabin.permission_mode = PermissionMode::AlwaysApprove;
         let turn = cabin.turn_no();
         assert_eq!(cabin.harness_precheck(ask("send_email", "to sam")), None);
-        cabin.resolve_hard_park(false, "Viper denied");
+        cabin.resolve_hard_park(false, "user denied");
         cabin.harness_turn_end("I sent the email to Sam.", turn);
         assert_eq!(
             cabin.harness.repair, None,
@@ -2532,7 +2532,7 @@ mod tests {
         assert_eq!(park.class, HardClass::Credentials);
         assert_eq!(park.action, CREDENTIAL_ACTION);
         cabin.secret_hold = vec!["hunter2222".into()];
-        cabin.resolve_hard_park(false, "Viper denied");
+        cabin.resolve_hard_park(false, "user denied");
         cabin.harness_turn_end(
             "I typed hunter2222 into the field and logged in.",
             cabin.turn_no(),
@@ -3129,7 +3129,7 @@ mod tests {
         assert!(cabin.harness.park.is_none());
         let spans = hx::read_spans(&root, "session").unwrap();
         assert_eq!(spans.last().unwrap().decision, "deny");
-        assert_eq!(spans.last().unwrap().result, "Viper denied (Esc)");
+        assert_eq!(spans.last().unwrap().result, "user denied (Esc)");
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -3421,7 +3421,7 @@ mod tests {
         let mut cabin = Cabin::quiet_for_test();
         let step = |cabin: &mut Cabin| {
             let _ = cabin.harness_precheck(ask("send_email", "to someone"));
-            cabin.resolve_hard_park(false, "Viper denied");
+            cabin.resolve_hard_park(false, "user denied");
         };
         cabin.harness.next_origin = Some(hx::Origin::Proactive);
         cabin.begin_turn_origin();

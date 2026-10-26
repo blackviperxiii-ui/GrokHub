@@ -25,7 +25,7 @@ pub struct Span {
     /// "allow" | "deny" | "park" | "approve"
     pub decision: String,
     pub driver: String,
-    /// True when a hard-class action was approved by Viper.
+    /// True when a hard-class action was approved by user.
     #[serde(default)]
     pub hard_approved: bool,
     /// Engine path that checked the call: A desktop MCP, B ACP ask, C headless, E native.
@@ -160,7 +160,7 @@ impl Span {
             tool: tool.into(),
             args_redacted: redact_args(args),
             result: "parked".into(),
-            claim: format!("needs Viper approve ({})", class.label()),
+            claim: format!("needs user approve ({})", class.label()),
             access: String::new(),
             approval_class: class.as_str().into(),
             decision: "park".into(),
@@ -190,7 +190,7 @@ impl Span {
             tool: tool.into(),
             args_redacted: redact_args(args),
             result: "approved".into(),
-            claim: format!("Viper approved ({})", class.label()),
+            claim: format!("user approved ({})", class.label()),
             access: String::new(),
             approval_class: class.as_str().into(),
             decision: "approve".into(),

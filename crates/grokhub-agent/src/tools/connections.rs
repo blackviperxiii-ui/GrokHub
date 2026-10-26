@@ -456,7 +456,7 @@ mod tests {
             GateOutcome::Park {
                 reason: "hard-class credentials: Credentials / secrets — Always cannot skip".into(),
                 hard: Some(HardClass::Credentials),
-                needs_viper: true,
+                needs_user: true,
             }
         );
         let root = crate::harness::test_dir("conn-token");
@@ -521,7 +521,7 @@ mod tests {
                 GateOutcome::Park {
                     reason: "hard-class delete: Delete — Always cannot skip".into(),
                     hard: Some(HardClass::Delete),
-                    needs_viper: true,
+                    needs_user: true,
                 },
                 "{tool}"
             );
