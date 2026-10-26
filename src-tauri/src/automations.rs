@@ -225,7 +225,7 @@ pub fn run_now(
     let _running = Running::claim(id)?;
     let _config = grokhub_agent::perm::ConfigGuard::set(config_dir);
     let started = grokhub_core::now_ms();
-    let system = crate::agent::system_prompt(&workspace, false);
+    let system = crate::agent::system_prompt(&workspace, false, "");
     let done = grokhub_agent::run_unattended(UnattendedRun {
         client,
         workspace,

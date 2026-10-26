@@ -41,6 +41,8 @@ pub struct ShellSettings {
     pub approvals: Approvals,
     /// Settings → Let Grok control the desktop. Off until the person turns it on.
     pub desktop_control: bool,
+    /// Settings → Personality: the preset id. Empty is the default voice.
+    pub personality: String,
 }
 
 impl Default for ShellSettings {
@@ -51,6 +53,7 @@ impl Default for ShellSettings {
             workspace: String::new(),
             approvals: Approvals::Ask,
             desktop_control: false,
+            personality: String::new(),
         }
     }
 }
@@ -110,6 +113,7 @@ mod tests {
                 workspace: String::new(),
                 approvals: Approvals::Ask,
                 desktop_control: false,
+                personality: String::new(),
             }
         );
     }
@@ -123,6 +127,7 @@ mod tests {
             workspace: "/work/notes".into(),
             approvals: Approvals::Always,
             desktop_control: true,
+            personality: "pirate".into(),
         };
         save(&dir, &wanted).expect("save");
         assert_eq!(load(&dir), wanted);
@@ -131,6 +136,7 @@ mod tests {
         assert!(raw.contains("\"workspace\": \"/work/notes\""), "{raw}");
         assert!(raw.contains("\"approvals\": \"always\""), "{raw}");
         assert!(raw.contains("\"desktopControl\": true"), "{raw}");
+        assert!(raw.contains("\"personality\": \"pirate\""), "{raw}");
         assert!(!dir.join("shell.json.tmp").exists());
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -150,6 +156,7 @@ mod tests {
                 workspace: String::new(),
                 approvals: Approvals::Ask,
                 desktop_control: false,
+                personality: String::new(),
             }
         );
         let _ = std::fs::remove_dir_all(&dir);
@@ -164,6 +171,7 @@ mod tests {
             workspace: String::new(),
             approvals: Approvals::Ask,
             desktop_control: false,
+            personality: String::new(),
         };
         assert_eq!(save(&dir, &blank), Err("Pick a model.".to_string()));
         assert!(!path(&dir).exists());
