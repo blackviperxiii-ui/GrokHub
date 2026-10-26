@@ -680,6 +680,28 @@ button.danger {
   font-style: italic;
 }
 
+.playbooks,
+.playbook-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.playbooks .rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+textarea.code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.85rem;
+  width: 100%;
+}
+
 .labs {
   display: flex;
   flex-direction: column;

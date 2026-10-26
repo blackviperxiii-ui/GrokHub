@@ -604,3 +604,42 @@ export function savePersonality(edit: PersonalityEdit): Promise<PersonalityPage>
 export function deletePersonality(id: string): Promise<PersonalityPage> {
   return invoke<PersonalityPage>("delete_personality", { id });
 }
+
+/** Settings → Playbooks (src-tauri/src/playbooks.rs). */
+export interface PlaybookRow {
+  id: string;
+  name: string;
+  summary: string;
+  /** "edited": Reset puts the shipped one back. */
+  source: "shipped" | "edited" | "yours";
+  /** "Fits task · files", or "Fits any task". */
+  fits: string;
+  /** "6 steps, up to Risky, asks first". */
+  steps: string;
+  /** The TOML the editor shows. */
+  text: string;
+}
+
+export interface PlaybookPage {
+  rows: PlaybookRow[];
+  /** Files of yours that could not be used. */
+  problems: string[];
+}
+
+export function getPlaybooks(): Promise<PlaybookPage> {
+  return invoke<PlaybookPage>("get_playbooks");
+}
+
+/** The saved playbook's name, then the page. */
+export function savePlaybook(text: string): Promise<[string, PlaybookPage]> {
+  return invoke<[string, PlaybookPage]>("save_playbook", { text });
+}
+
+/** The copy's id, then the page. */
+export function duplicatePlaybook(id: string): Promise<[string, PlaybookPage]> {
+  return invoke<[string, PlaybookPage]>("duplicate_playbook", { id });
+}
+
+export function resetPlaybook(id: string): Promise<PlaybookPage> {
+  return invoke<PlaybookPage>("reset_playbook", { id });
+}

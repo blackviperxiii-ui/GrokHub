@@ -595,6 +595,35 @@ async function labs(s, config) {
   console.log("labs: bundle installed off, trusted, then turned on");
 }
 
+// Settings → Playbooks: Duplicate writes the copy to playbooks/ and opens it,
+// Save keeps an edit, and Remove deletes the file again.
+async function playbooks(s, config) {
+  await tab(s, "Settings");
+  await section(s, "Playbooks");
+  const button = async (card, label) => {
+    const el = await waitFor(`${card}'s ${label}`, async () => {
+      const found = await wd("POST", `${s}/element`, {
+        using: "xpath",
+        value: `//ul[@aria-label='All playbooks']/li[@aria-label='${card}']//button[normalize-space()='${label}']`,
+      });
+      return found[ELEMENT];
+    });
+    await wd("POST", `${s}/element/${el}/click`, {});
+  };
+  await button("Files", "Duplicate");
+  const file = join(config, "playbooks", "files-copy.toml");
+  const box = await waitFor("the playbook editor", () => find(s, "textarea[aria-label='Playbook TOML']"));
+  await wd("POST", `${s}/element/${box}/value`, { text: "\n# edited in the smoke test\n" });
+  await click(s, "form.playbook-editor button[type='submit']");
+  await waitFor("the saved copy", async () =>
+    existsSync(file) && readFileSync(file, "utf8").includes("# edited in the smoke test") ? true : null,
+  );
+  console.log("playbook duplicated and saved to playbooks/files-copy.toml");
+  await button("Files (copy)", "Remove");
+  await waitFor("the removed copy", async () => (existsSync(file) ? null : true));
+  console.log("playbook copy removed");
+}
+
 async function main() {
   const mock = await startMock();
   const config = mkdtempSync(join(tmpdir(), "grokhub-shell-smoke-"));
@@ -706,6 +735,7 @@ async function main() {
     await usePersonality(s, config, "Default");
     await localAi(s, config);
     await labs(s, config);
+    await playbooks(s, config);
     await desktop(s, config);
     if (process.env.SMOKE_WEB === "1") await web(s);
     console.log("smoke ok");

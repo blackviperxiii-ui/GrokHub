@@ -13,6 +13,7 @@ pub mod journal;
 pub mod local_ai;
 pub mod memory;
 pub mod personality;
+pub mod playbooks;
 pub mod plugins;
 pub mod pulse;
 pub mod remote;
@@ -560,6 +561,38 @@ fn delete_personality(
 }
 
 #[tauri::command]
+async fn get_playbooks(state: State<'_, ShellState>) -> Result<playbooks::Page, String> {
+    let dir = state.config_dir.clone();
+    off_main(move || playbooks::load(&dir)).await
+}
+
+/// Returns the saved playbook's name with the page.
+#[tauri::command]
+fn save_playbook(
+    state: State<'_, ShellState>,
+    text: String,
+) -> Result<(String, playbooks::Page), String> {
+    let name = playbooks::save(&state.config_dir, &text)?;
+    Ok((name, playbooks::load(&state.config_dir)))
+}
+
+/// Returns the copy's id with the page, so the editor can open it.
+#[tauri::command]
+fn duplicate_playbook(
+    state: State<'_, ShellState>,
+    id: String,
+) -> Result<(String, playbooks::Page), String> {
+    let copy = playbooks::duplicate(&state.config_dir, &id)?;
+    Ok((copy, playbooks::load(&state.config_dir)))
+}
+
+#[tauri::command]
+fn reset_playbook(state: State<'_, ShellState>, id: String) -> Result<playbooks::Page, String> {
+    playbooks::reset(&state.config_dir, &id)?;
+    Ok(playbooks::load(&state.config_dir))
+}
+
+#[tauri::command]
 async fn get_plugins(state: State<'_, ShellState>) -> Result<plugins::Page, String> {
     capabilities::needs(capabilities::current().plugins, "Plugins")?;
     let (dir, workspace) = (state.config_dir.clone(), workspace(&state));
@@ -1036,6 +1069,10 @@ pub fn run() {
             duplicate_personality,
             save_personality,
             delete_personality,
+            get_playbooks,
+            save_playbook,
+            duplicate_playbook,
+            reset_playbook,
             get_plugins,
             plugin_act,
             install_plugin,
