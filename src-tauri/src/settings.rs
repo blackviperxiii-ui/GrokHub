@@ -31,6 +31,18 @@ impl Approvals {
     }
 }
 
+/// Settings → Appearance. A value this build does not know reads as System.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Theme {
+    Dark,
+    Light,
+    /// Follows the OS (serde wants the fallback last).
+    #[default]
+    #[serde(other)]
+    System,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct ShellSettings {
@@ -43,6 +55,7 @@ pub struct ShellSettings {
     pub desktop_control: bool,
     /// Settings → Personality: the preset id. Empty is the default voice.
     pub personality: String,
+    pub theme: Theme,
 }
 
 impl Default for ShellSettings {
@@ -54,6 +67,7 @@ impl Default for ShellSettings {
             approvals: Approvals::Ask,
             desktop_control: false,
             personality: String::new(),
+            theme: Theme::System,
         }
     }
 }
@@ -114,6 +128,7 @@ mod tests {
                 approvals: Approvals::Ask,
                 desktop_control: false,
                 personality: String::new(),
+                theme: Theme::System,
             }
         );
     }
@@ -128,6 +143,7 @@ mod tests {
             approvals: Approvals::Always,
             desktop_control: true,
             personality: "pirate".into(),
+            theme: Theme::Dark,
         };
         save(&dir, &wanted).expect("save");
         assert_eq!(load(&dir), wanted);
@@ -137,6 +153,7 @@ mod tests {
         assert!(raw.contains("\"approvals\": \"always\""), "{raw}");
         assert!(raw.contains("\"desktopControl\": true"), "{raw}");
         assert!(raw.contains("\"personality\": \"pirate\""), "{raw}");
+        assert!(raw.contains("\"theme\": \"dark\""), "{raw}");
         assert!(!dir.join("shell.json.tmp").exists());
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -157,6 +174,7 @@ mod tests {
                 approvals: Approvals::Ask,
                 desktop_control: false,
                 personality: String::new(),
+                theme: Theme::System,
             }
         );
         let _ = std::fs::remove_dir_all(&dir);
@@ -172,6 +190,7 @@ mod tests {
             approvals: Approvals::Ask,
             desktop_control: false,
             personality: String::new(),
+            theme: Theme::System,
         };
         assert_eq!(save(&dir, &blank), Err("Pick a model.".to_string()));
         assert!(!path(&dir).exists());
@@ -189,6 +208,17 @@ mod tests {
         );
         std::fs::write(path(&dir), r#"{"approvals":"auto"}"#).expect("write");
         assert_eq!(load(&dir).approvals, Approvals::Auto);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_unknown_theme_reads_as_system() {
+        let dir = temp_dir("theme");
+        std::fs::create_dir_all(&dir).expect("dir");
+        std::fs::write(path(&dir), r#"{"theme":"sepia"}"#).expect("write");
+        assert_eq!(load(&dir).theme, Theme::System);
+        std::fs::write(path(&dir), r#"{"theme":"light"}"#).expect("write");
+        assert_eq!(load(&dir).theme, Theme::Light);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

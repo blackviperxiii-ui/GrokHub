@@ -7,6 +7,7 @@ import type { Capabilities } from "./api";
 const api = vi.hoisted(() => ({
   CORE_ONLY: { desktopControl: false, pulse: false, localAi: false, tray: false, webAccess: false, plugins: false },
   getCapabilities: vi.fn<() => Promise<Capabilities>>(),
+  getSettings: vi.fn(() => Promise.resolve({ theme: "light" })),
 }));
 
 vi.mock("./api", () => api);
@@ -75,6 +76,14 @@ describe("App", () => {
     ]);
     await userEvent.click(screen.getByRole("button", { name: "Settings" }));
     expect(screen.getByText("Settings for a desktop")).toBeInTheDocument();
+  });
+
+  it("puts the saved theme on the page at startup", async () => {
+    api.getCapabilities.mockResolvedValue(DESKTOP);
+    delete document.documentElement.dataset.theme;
+    render(<App />);
+    await waitFor(() => expect(document.documentElement.dataset.theme).toBe("light"));
+    delete document.documentElement.dataset.theme;
   });
 
   it("hides Pulse on a phone", async () => {

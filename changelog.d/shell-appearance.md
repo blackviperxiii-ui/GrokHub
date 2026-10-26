@@ -1,0 +1,1 @@
+- Shell: Settings has an Appearance section. Pick System, Dark or Light; it shows at once, is saved in `shell.json`, and is applied again at startup.

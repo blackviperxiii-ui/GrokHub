@@ -17,6 +17,8 @@ export interface Settings {
   approvals: Approvals;
   /** Settings → Let Grok control the desktop. */
   desktopControl: boolean;
+  /** Settings → Appearance. */
+  theme: Theme;
   /** Settings → About. */
   version: string;
 }
@@ -91,6 +93,12 @@ export const CHAT_EVENT = "chat://event";
 
 export function getSettings(): Promise<Settings> {
   return invoke<Settings>("get_settings");
+}
+
+export type Theme = "system" | "dark" | "light";
+
+export function setTheme(theme: Theme): Promise<Settings> {
+  return invoke<Settings>("set_theme", { theme });
 }
 
 export function saveSettings(

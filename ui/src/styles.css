@@ -12,8 +12,9 @@
   font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
 }
 
+/* Settings → Appearance sets data-theme; without it the OS decides. */
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme="light"]) {
     --bg: #141413;
     --panel: #1d1d1b;
     --text: #ececea;
@@ -24,6 +25,29 @@
     --border: #33332f;
     --danger: #ff8a7a;
   }
+}
+
+:root[data-theme="dark"] {
+  --bg: #141413;
+  --panel: #1d1d1b;
+  --text: #ececea;
+  --muted: #9a9a94;
+  --accent: #ececea;
+  --accent-text: #141413;
+  --user: #2a2a27;
+  --border: #33332f;
+  --danger: #ff8a7a;
+  color-scheme: dark;
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+}
+
+.appearance {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 
 * {

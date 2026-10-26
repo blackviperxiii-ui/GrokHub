@@ -57,6 +57,7 @@ pub struct SettingsView {
     pub workspace_path: String,
     pub approvals: settings::Approvals,
     pub desktop_control: bool,
+    pub theme: settings::Theme,
     /// Settings → About.
     pub version: String,
 }
@@ -79,6 +80,7 @@ fn view(settings: &ShellSettings) -> SettingsView {
             .to_string(),
         approvals: settings.approvals,
         desktop_control: settings.desktop_control,
+        theme: settings.theme,
         version: env!("CARGO_PKG_VERSION").to_string(),
     }
 }
@@ -114,13 +116,25 @@ fn save_settings(
         workspace: workspace.trim().to_string(),
         approvals,
         desktop_control,
-        personality: current(&state).personality,
+        ..current(&state)
     };
     settings::save(&state.config_dir, &next)?;
     #[cfg(desktop)]
     if current(&state).desktop_control != desktop_control {
         grokhub_desktop::set_desktop_enabled(desktop_control);
     }
+    *state.settings.lock().unwrap_or_else(|e| e.into_inner()) = next.clone();
+    Ok(view(&next))
+}
+
+/// Settings → Appearance; the page applies it at once.
+#[tauri::command]
+fn set_theme(state: State<'_, ShellState>, theme: settings::Theme) -> Result<SettingsView, String> {
+    let next = ShellSettings {
+        theme,
+        ..current(&state)
+    };
+    settings::save(&state.config_dir, &next)?;
     *state.settings.lock().unwrap_or_else(|e| e.into_inner()) = next.clone();
     Ok(view(&next))
 }
@@ -1113,6 +1127,7 @@ pub fn run() {
             get_capabilities,
             get_settings,
             save_settings,
+            set_theme,
             set_api_key,
             clear_api_key,
             send_chat,

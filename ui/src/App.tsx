@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { CORE_ONLY, getCapabilities, type Capabilities } from "./api";
+import { CORE_ONLY, getCapabilities, getSettings, type Capabilities } from "./api";
 import { Automations } from "./Automations";
 import { Chat, type Prefill } from "./Chat";
 import { Connectors } from "./Connectors";
@@ -9,6 +9,7 @@ import { Palette, VIEW_LABELS, views, type PaletteAction, type View } from "./Pa
 import { Pulse } from "./Pulse";
 import type { Section } from "./sections";
 import { Settings } from "./Settings";
+import { applyTheme } from "./theme";
 
 export function App() {
   const [view, setView] = useState<View>("chat");
@@ -20,6 +21,10 @@ export function App() {
     getCapabilities()
       .catch(() => CORE_ONLY)
       .then(setCaps);
+    getSettings().then(
+      (s) => applyTheme(s.theme),
+      () => {},
+    );
   }, []);
   useEffect(() => {
     function onKey(event: KeyboardEvent) {
