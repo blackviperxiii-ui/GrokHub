@@ -9,8 +9,10 @@ use super::{
     show_panel, web_fetch, write,
 };
 
-/// One row in the native catalog. `defer` tools ship as index lines until
-/// [`super::registry::load_tool_schema`] loads the full JSON schema into the volatile tail.
+/// One row in the native catalog. When deferred loading is on, `defer` tools ship as
+/// one index line each until `load_tool_schema` loads the full JSON schema into the
+/// volatile tail; the rest are sent eagerly. The three lists below only fix the
+/// legacy (deferred off) order, which must stay byte-identical.
 #[derive(Clone, Copy)]
 pub struct ToolDef {
     pub name: &'static str,
@@ -44,8 +46,8 @@ fn desktop_schema(i: usize) -> Value {
     desktop::schemas()[i].clone()
 }
 
-/// Read-only tools always sent with full schemas (even when deferred loading is on).
-pub fn eager_defs() -> &'static [ToolDef] {
+/// Read-only tools, sent first. All eager except `scheduler_list`.
+pub fn read_defs() -> &'static [ToolDef] {
     static DEFS: [ToolDef; 8] = [
         ToolDef {
             name: "read_file",
@@ -85,7 +87,7 @@ pub fn eager_defs() -> &'static [ToolDef] {
         ToolDef {
             name: "scheduler_list",
             blurb: "List scheduled automations",
-            defer: false,
+            defer: true,
             schema: control::scheduler_list_schema,
             visible: always,
         },
@@ -107,8 +109,9 @@ pub fn eager_defs() -> &'static [ToolDef] {
     &DEFS
 }
 
-/// Tools that may be deferred (full schema only after `load_tool_schema`).
-pub fn deferred_native_defs() -> &'static [ToolDef] {
+/// Mutating and gated tools. Edit and shell stay eager (the general coding set);
+/// scheduler, media, desktop, connection and the rest are deferred.
+pub fn action_defs() -> &'static [ToolDef] {
     static DEFS: [ToolDef; 19] = [
         ToolDef {
             name: "send_subagent_message",
@@ -120,21 +123,21 @@ pub fn deferred_native_defs() -> &'static [ToolDef] {
         ToolDef {
             name: "write",
             blurb: "Create or overwrite a workspace file",
-            defer: true,
+            defer: false,
             schema: write::schema,
             visible: not_readonly,
         },
         ToolDef {
             name: "search_replace",
             blurb: "Replace text in a workspace file",
-            defer: true,
+            defer: false,
             schema: search_replace::schema,
             visible: not_readonly,
         },
         ToolDef {
             name: "run_terminal_command",
             blurb: "Run a shell command in the workspace",
-            defer: true,
+            defer: false,
             schema: shell::schema,
             visible: not_readonly,
         },
@@ -248,7 +251,7 @@ pub fn deferred_native_defs() -> &'static [ToolDef] {
 }
 
 /// Remaining desktop tools (deferred as a group when desktop is on).
-pub fn deferred_desktop_tail() -> &'static [ToolDef] {
+pub fn desktop_tail_defs() -> &'static [ToolDef] {
     static DEFS: [ToolDef; 4] = [
         ToolDef {
             name: "drag",
@@ -282,11 +285,14 @@ pub fn deferred_desktop_tail() -> &'static [ToolDef] {
     &DEFS
 }
 
-pub fn find_def(name: &str) -> Option<ToolDef> {
-    eager_defs()
+/// Every native row in legacy order.
+pub fn all_defs() -> impl Iterator<Item = &'static ToolDef> {
+    read_defs()
         .iter()
-        .chain(deferred_native_defs())
-        .chain(deferred_desktop_tail())
-        .find(|d| d.name == name)
-        .copied()
+        .chain(action_defs())
+        .chain(desktop_tail_defs())
+}
+
+pub fn find_def(name: &str) -> Option<ToolDef> {
+    all_defs().find(|d| d.name == name).copied()
 }
