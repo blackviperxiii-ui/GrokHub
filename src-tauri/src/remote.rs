@@ -60,6 +60,11 @@ pub const WEB_COMMANDS: &[&str] = &[
     "save_memory",
     "add_memory",
     "search_memory",
+    "edit_memory_row",
+    "forget_memory_row",
+    "approve_memory_row",
+    "reject_memory_row",
+    "set_memory_writes",
     "list_connectors",
     "check_connectors",
     "restart_connector",
@@ -659,6 +664,11 @@ mod tests {
             "answer_elicit",
             "get_settings",
             "get_memory",
+            "edit_memory_row",
+            "forget_memory_row",
+            "approve_memory_row",
+            "reject_memory_row",
+            "set_memory_writes",
             "list_connectors",
         ] {
             assert!(web_command(name), "{name}");
