@@ -288,7 +288,7 @@ mod tests {
         let indices = vec![0usize, 1];
         let outs = run_parallel(&indices, Some("chat-a"), &|| false, |_slot| {
             crate::tools::registry::run_load_tool_schema(
-                &serde_json::json!({"name": if _slot == 0 { "write" } else { "run_terminal_command" }}),
+                &serde_json::json!({"name": if _slot == 0 { "web_fetch" } else { "monitor" }}),
             )
         });
         assert_eq!(outs.len(), 2);
@@ -296,8 +296,8 @@ mod tests {
         assert!(!outs[1].failed);
         let tools = crate::tools::schemas_for(&gate);
         let names: Vec<_> = tools.iter().filter_map(|s| s["name"].as_str()).collect();
-        assert!(names.contains(&"write"));
-        assert!(names.contains(&"run_terminal_command"));
+        assert!(names.contains(&"web_fetch"));
+        assert!(names.contains(&"monitor"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
