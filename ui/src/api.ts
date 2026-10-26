@@ -548,3 +548,59 @@ export function installPlugin(source: string): Promise<PluginPage> {
 export function fetchPluginMarket(url: string): Promise<PluginMarket> {
   return invoke<PluginMarket>("fetch_plugin_market", { url });
 }
+
+/** Settings → Personality (src-tauri/src/personality.rs). */
+export type Emoji = "none" | "light" | "heavy";
+export type Verbosity = "terse" | "normal" | "chatty";
+
+export interface Preset {
+  id: string;
+  name: string;
+  description: string;
+  /** A reply to "my build failed" in this voice. */
+  sample: string;
+  toneRules: string;
+  emoji: Emoji;
+  verbosity: Verbosity;
+  explicit: boolean;
+  /** The person's own, so it can be edited and deleted. */
+  custom: boolean;
+}
+
+export interface PersonalityPage {
+  presets: Preset[];
+  /** The default for every chat. */
+  current: string;
+  /** Custom files that could not be used. */
+  problems: string[];
+}
+
+export interface PersonalityEdit {
+  id: string;
+  name: string;
+  description: string;
+  toneRules: string;
+  emoji: Emoji;
+  verbosity: Verbosity;
+}
+
+export function getPersonalities(): Promise<PersonalityPage> {
+  return invoke<PersonalityPage>("get_personalities");
+}
+
+export function setPersonality(id: string): Promise<PersonalityPage> {
+  return invoke<PersonalityPage>("set_personality", { id });
+}
+
+/** The copy's id, then the page. */
+export function duplicatePersonality(id: string): Promise<[string, PersonalityPage]> {
+  return invoke<[string, PersonalityPage]>("duplicate_personality", { id });
+}
+
+export function savePersonality(edit: PersonalityEdit): Promise<PersonalityPage> {
+  return invoke<PersonalityPage>("save_personality", { edit });
+}
+
+export function deletePersonality(id: string): Promise<PersonalityPage> {
+  return invoke<PersonalityPage>("delete_personality", { id });
+}
