@@ -1,1 +1,0 @@
-- Shell: a command palette opens with Ctrl+K (⌘K on a Mac) or the Command button for touch. It lists this platform's pages and Settings sections, filters as you type, and ends with Ask Grok, which puts the typed text in the chat box. The tabs now wrap on a narrow window.

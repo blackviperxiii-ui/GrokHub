@@ -1,1 +1,0 @@
-- Shell: Settings has a Pulse section with Interests. Add a topic, then pin, mute or remove it, in the same `interests.json` the cabin's Pulse lookups read.

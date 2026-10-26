@@ -1,1 +1,0 @@
-- Internal: every slash command now lives in a `register_slash!` registry in grokhub-core instead of one big match, and every command that runs or unlocks something has a test proving it still goes through its confirm, consent or permission path (rearch stage 10).

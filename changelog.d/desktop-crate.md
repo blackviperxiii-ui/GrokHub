@@ -1,1 +1,0 @@
-- Moved the desktop-control tools (screenshots, clicks, typing, app launch, the hard gate's path A) out of the cabin into a new `grokhub-desktop` crate so the new shell can share them. The cabin behaves the same.

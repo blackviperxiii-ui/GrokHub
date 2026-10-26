@@ -1,1 +1,0 @@
-- Security: bump `zip` to 9 for the engine archive extractor (RUSTSEC-2026-0367/0368/0369) and update `ctutils`, `rustls-webpki` and `webpki-roots` (RUSTSEC-2026-0381/0382/0385).

@@ -1,1 +1,0 @@
-- Fix: panel tables no longer drop cells when a row has more cells than the header row.
