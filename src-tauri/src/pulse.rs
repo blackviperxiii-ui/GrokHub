@@ -47,6 +47,8 @@ pub struct Post {
     pub why: String,
     /// Cached image files for the gallery, read with `pulse_image`.
     pub images: Vec<String>,
+    /// Unix ms, for the menu's full date.
+    pub created_at: u64,
     pub ago: String,
     /// The first source link the research step returned.
     pub link: String,
@@ -207,6 +209,7 @@ fn post(config_dir: &Path, card: &UpdateCard, now_ms: u64) -> Post {
             .map(|url| pc::image_cache_name(url))
             .filter(|name| images.join(name).is_file())
             .collect(),
+        created_at: card.created_at,
         ago: pc::ago_label(card.created_at, now_ms),
         link: card
             .citations
