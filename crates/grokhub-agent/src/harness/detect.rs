@@ -477,7 +477,7 @@ pub fn fixture_hard_with_approve() -> Vec<Span> {
             tool: "hard_send_stub".into(),
             args_redacted: "{}".into(),
             result: "parked".into(),
-            claim: "needs Viper".into(),
+            claim: "needs user".into(),
             access: "full".into(),
             approval_class: "send".into(),
             decision: "park".into(),
@@ -504,7 +504,7 @@ pub fn fixture_hard_with_approve() -> Vec<Span> {
             tool: "hard_send_stub".into(),
             args_redacted: "{}".into(),
             result: "approved".into(),
-            claim: "Viper approved".into(),
+            claim: "user approved".into(),
             access: "full".into(),
             approval_class: "send".into(),
             decision: "approve".into(),
@@ -663,7 +663,7 @@ pub fn fixture_unsupported_assurance() -> Vec<Span> {
         "park",
         "parked",
         None,
-        "needs Viper approve (Send)",
+        "needs user approve (Send)",
     );
     park.approval_class = "send".into();
     let mut deny = fixture_span(
@@ -671,7 +671,7 @@ pub fn fixture_unsupported_assurance() -> Vec<Span> {
         "hard_send_stub",
         "{}",
         "deny",
-        "Viper denied",
+        "user denied",
         None,
         "denied",
     );
@@ -827,7 +827,7 @@ mod tests {
             s(&[
                 ("fx:3", "claim", "Done, I sent the email to Sam."),
                 ("fx:1", "decision", "park parked"),
-                ("fx:2", "decision", "deny Viper denied"),
+                ("fx:2", "decision", "deny user denied"),
             ])
         );
         // A step that ran backs the claim; a failed one does not.

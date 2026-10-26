@@ -3368,7 +3368,7 @@ https://xstack.grok.me/post ZEPHYRTAIL"
         assert!(!take.contains("ZEPHYRTAIL"));
         assert!(!take.contains("Streams are retried"));
 
-        // Viper's X Stack card: a long first news sentence still keeps the why.
+        // user's X Stack card: a long first news sentence still keeps the why.
         let xstack = "I'll look up what changed in the tools you use every day. Grok Build alpha 1.0.50 changes how a cancel hits a live turn: tool calls that were already running now finish and report instead of being cut off, and the session keeps its place. It also retries dropped streams instead of showing partial output, and sessions no longer drop when the conversation passes 4,000 lines.";
         let mut x = digest_card("xstack", "For you", xstack, 1);
         x.why = Some("You run Grok Build agents overnight.".into());

@@ -20,7 +20,7 @@
 ## What breaks it
 - Any `println!` on the server path: stdout is JSON-RPC only; logs go to stderr.
 - Skipping the pre-check: `run_stdio` calls `harness_gate::handle_desk_line` (pre-check, park, then `handle_line`) on every OS, even under Always.
-- Deleting before the park: `delete_files` is hard class Delete and only runs after Viper's click; it checks every path first and deletes none if one is bad.
+- Deleting before the park: `delete_files` is hard class Delete and only runs after user's click; it checks every path first and deletes none if one is bad.
 - Writing the Cua gate into user config: `set_cabin_cua` holds it as a native MCP slot that never lands in `mcp.json`. Handing the model the Cua socket, or running Cua in `standard` / `unrestricted` mode (`cua_spawn_env` sets `bounded` and strips `CUA_ENV_REMOVE`).
 ## What depends on it
 - Native engine computer use (`gate::is_desktop` names the `grokhub-desktop__*` tools), Settings → Let Grok control the desktop, and the harness spans and parked cards in the cabin.

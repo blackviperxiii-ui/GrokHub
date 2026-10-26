@@ -1,7 +1,7 @@
 # AGENTS.md — GrokHub cabin notes
 
 ## Base branch
-Feature/fix PRs → `beta`; every agent squash-merges its own PR into `beta` as soon as CI is green (no review hold). `.github/`, clippy, and release-script changes ship the same way. Only `beta` → `main` promotion, tags, and releases need Viper's say. Hotfixes → `main` only on Viper's say, then merge-back PR into beta (merge commit). No version bump on beta PRs — add `changelog.d/<slug>.md`; promotions run `cargo xtask bump`.
+Feature/fix PRs → `beta`; every agent squash-merges its own PR into `beta` as soon as CI is green (no review hold). `.github/`, clippy, and release-script changes ship the same way. Only `beta` → `main` promotion, tags, and releases need user's say. Hotfixes → `main` only on user's say, then merge-back PR into beta (merge commit). No version bump on beta PRs — add `changelog.d/<slug>.md`; promotions run `cargo xtask bump`.
 
 ## Bot
 Prefer Grok Build on the box (roles: explore, plan, implementer). Cursor Cloud paused until Oct 11. One bot per job.
@@ -22,3 +22,7 @@ Delete own head after merge/close; scratch ASAP; never main/beta. GitHub auto-de
 - Composer glow: white `#e7e9ea` (`composer_glow_rgb` / FG). Breath via `icons::composer_breath`. Idle α≈0.25; streaming 0.25↔0.55; settle to idle in `GLOW_SETTLE_SECS` (200ms). Skip when `motion_ok` is false.
 - Always permission: white ring on dark; settle fill α 0→1 and scale 0.98→1.0 over `ALWAYS_SETTLE_SECS` (140ms), then stop — no perpetual pulse.
 
+
+## No personal info (hard rule)
+
+Never put a real name, personal email, phone, address, employer, or real home-folder path in any file, commit message, PR, or issue. Anywhere a name is needed, write "user". Paths use `/home/user`. Commits use the GitHub no-reply email. `scripts/pii-guard/pii_guard.py` runs in CI (`pii-guard` check) and blocks violations; run it locally before pushing.

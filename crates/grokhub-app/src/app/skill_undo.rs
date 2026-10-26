@@ -633,7 +633,7 @@ mod tests {
             hx::GateOutcome::Park {
                 reason: "hard-class delete: Delete — Always cannot skip".into(),
                 hard: Some(hx::HardClass::Delete),
-                needs_viper: true,
+                needs_user: true,
             }
         );
         let soft = grokhub_core::fix_plan::classify_step("Open Settings", None, None);

@@ -334,7 +334,7 @@ mod tests {
             GateOutcome::Park {
                 reason: "hard-class send: Send — Always cannot skip".into(),
                 hard: Some(HardClass::Send),
-                needs_viper: true,
+                needs_user: true,
             }
         );
     }

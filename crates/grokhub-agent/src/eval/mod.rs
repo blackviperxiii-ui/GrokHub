@@ -312,7 +312,7 @@ cost/solved {} (offline ticks).",
         "Scripted offline replay does not yet attribute cache hits or token savings to \
 technique toggles (fixtures carry fixed usage). Every B arm therefore shows flat cost \
 with success within noise → **spike** each technique pending instrumented measurement; \
-do not flip defaults on without Viper's yes.\n",
+do not flip defaults on without user's yes.\n",
     );
     out
 }

@@ -1,4 +1,4 @@
-//! Router R3a self-tuning (Viper, Oct 7: "the router tunes itself"). Pure:
+//! Router R3a self-tuning (user, Oct 7: "the router tunes itself"). Pure:
 //! the steps, the live state and the clock are passed in, and nothing here
 //! reads or writes a file ([`super::learn`] does the I/O).
 //!
