@@ -1,0 +1,1 @@
+- Shell: pulling a page past its top or bottom on a touch screen now stretches it with iOS-style resistance and snaps back on release (Chat, Pulse, Automations, Memory, Connectors, Settings). Reduced motion turns the stretch off.
