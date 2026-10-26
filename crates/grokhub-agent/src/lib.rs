@@ -54,8 +54,8 @@ pub use compact::{estimate_input_tokens, message_text};
 pub use eval::turn_endings::{generic_closing, last_sentence};
 pub use eval::{
     load_tasks, parse_args, reject_live, render_markdown, render_report, run_suite,
-    run_technique_matrix, ItemResult, Opts, Recommendation, Technique, TechniqueMatrixReport,
-    SUITE_ITEMS,
+    run_technique_matrix, ItemResult, Opts, Recommendation, Technique, TechniqueArm,
+    TechniqueMatrixReport, SUITE_ITEMS,
 };
 pub use events::{Engine, EngineParts, EpisodeSeed, NativeEngine, StampHalt};
 pub use file_checkpoint::{
