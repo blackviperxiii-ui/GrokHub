@@ -28,6 +28,65 @@ pub const PROPOSED_TAG: &str = "proposed";
 /// Set when a person approves a proposed line.
 const APPROVED_TAG: &str = "approved";
 
+/// One approve or reject, with the confidence the line had.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ApprovalSample {
+    pub confidence: f32,
+    pub approved: bool,
+}
+
+/// Approved live rows, and rejected rows that are still tagged `proposed`.
+/// Forgetting a line that was already approved is not a rejection.
+pub fn approval_samples(store: &AmrStore) -> Vec<ApprovalSample> {
+    let mut out = Vec::new();
+    for node in store.load_live().nodes {
+        let approved = node.tags.iter().any(|tag| tag == APPROVED_TAG);
+        let proposed = node.tags.iter().any(|tag| tag == PROPOSED_TAG);
+        if approved && !proposed {
+            out.push(ApprovalSample {
+                confidence: node.confidence,
+                approved: true,
+            });
+        }
+    }
+    for node in store.load_forgotten().nodes {
+        if node.tags.iter().any(|tag| tag == PROPOSED_TAG) {
+            out.push(ApprovalSample {
+                confidence: node.confidence,
+                approved: false,
+            });
+        }
+    }
+    out
+}
+
+/// Lowest approved confidence that sits strictly above every rejection.
+/// No such approval, or no history, keeps [`REFLECT_MIN_CONFIDENCE`].
+pub fn calibrate_reflect_min(samples: &[ApprovalSample]) -> f32 {
+    let mut max_rejected = f32::NEG_INFINITY;
+    let mut approved = Vec::new();
+    for sample in samples {
+        if !sample.confidence.is_finite() {
+            continue;
+        }
+        if sample.approved {
+            approved.push(sample.confidence);
+        } else if sample.confidence > max_rejected {
+            max_rejected = sample.confidence;
+        }
+    }
+    approved.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    approved
+        .into_iter()
+        .find(|confidence| *confidence > max_rejected)
+        .unwrap_or(REFLECT_MIN_CONFIDENCE)
+}
+
+/// The morning-summary line for the threshold [`calibrate_reflect_min`] chose.
+pub fn reflect_threshold_log(threshold: f32) -> String {
+    format!("reflect_min_confidence {threshold:.2}")
+}
+
 /// Where a node came from, parsed from its `source`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SourceLink {
