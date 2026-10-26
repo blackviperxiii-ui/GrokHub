@@ -9,7 +9,15 @@
 # (money, send, delete, credentials, irreversible system actions) always ask.
 # A file that names an approval, permission or safety key is ignored whole.
 #
-# goal is one of speed, quality, cost, balanced.
+# goal is one of speed, quality, cost, balanced, care.
+#
+# care_first is the A/B switch. False keeps every row below.
+# True replaces the chat casual row at turn time with goal care,
+# stop "need met", and talk natural. Routing then holds chat:default
+# and the Brief picks effort. The offline dry-run had no live quality
+# judge, so this stays false.
+
+care_first = false
 
 [[row]]
 intent = "chat"

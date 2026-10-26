@@ -4174,6 +4174,7 @@ mod tests {
             TalkStyle::Summary,
             TalkStyle::Quiet,
             TalkStyle::Draft,
+            TalkStyle::Natural,
         ];
         let personalities = grokhub_core::personality::builtins();
         assert!(personalities.len() > 10);
