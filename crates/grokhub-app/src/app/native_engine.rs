@@ -344,7 +344,7 @@ impl Cabin {
         // The router picks each call's effort; this is only the fallback for an unlisted class.
         let effort =
             grokhub_agent::route::live::start_effort(grokhub_agent::route::live::DEFAULT_CLASS);
-        let (stable, volatile) = self.chat_prompt_parts();
+        let (stable, volatile) = self.chat_prompt_parts_for(session_id);
         let system = grokhub_agent::system_prompt_parts(&stable, &volatile, &workspace);
         // A side question stays read-only even in plan mode, so it never gets plan approval.
         grokhub_agent::set_plan_session(
@@ -396,6 +396,10 @@ impl Cabin {
     /// When voice or notes are present, a short closer reasserts that the earlier
     /// cabin safety rules win (so a rogue tone cannot outrank them by landing last).
     pub(super) fn chat_prompt_parts(&self) -> (String, String) {
+        self.chat_prompt_parts_for("")
+    }
+
+    fn chat_prompt_parts_for(&self, session_id: &str) -> (String, String) {
         let stable = grokhub_core::cabin_rules::cabin_static_rules(self.cfg.desktop_control);
         let mut parts: Vec<String> = Vec::new();
         let mut needs_safety_closer = false;
@@ -419,6 +423,14 @@ impl Cabin {
         let identity = grokhub_agent::identity_blocks(&crate::config::config_dir());
         if !identity.is_empty() {
             parts.push(identity);
+            needs_safety_closer = true;
+        }
+        let intentions = grokhub_core::intentions_block(&grokhub_core::load_intentions(
+            &crate::config::config_dir(),
+            session_id,
+        ));
+        if !intentions.is_empty() {
+            parts.push(intentions);
             needs_safety_closer = true;
         }
         if needs_safety_closer {

@@ -47,7 +47,16 @@ pub enum SessionMode {
 /// only while desktop control is on. `voice` is the personality's block
 /// (`crate::personality::voice`). The default voice carries its values rules.
 pub fn system_prompt(workspace: &std::path::Path, desktop: bool, voice: &str) -> String {
-    let volatile = volatile_tail(voice, &grokhub_agent::perm::config_dir());
+    system_prompt_for(workspace, desktop, voice, "")
+}
+
+pub fn system_prompt_for(
+    workspace: &std::path::Path,
+    desktop: bool,
+    voice: &str,
+    conversation_id: &str,
+) -> String {
+    let volatile = volatile_tail(voice, &grokhub_agent::perm::config_dir(), conversation_id);
     grokhub_agent::system_prompt_parts(
         &grokhub_core::cabin_rules::cabin_static_rules(desktop),
         &volatile,
@@ -55,9 +64,9 @@ pub fn system_prompt(workspace: &std::path::Path, desktop: bool, voice: &str) ->
     )
 }
 
-/// Voice, then the capped SOUL and USER blocks, then the safety closer.
-/// The closer is present only when that tail has something to outrank.
-fn volatile_tail(voice: &str, config_dir: &std::path::Path) -> String {
+/// Voice, then the capped SOUL and USER blocks, then open intentions, then the
+/// safety closer. The closer is present only when that tail has something to outrank.
+fn volatile_tail(voice: &str, config_dir: &std::path::Path, conversation_id: &str) -> String {
     let mut parts = Vec::new();
     if !voice.trim().is_empty() {
         parts.push(voice.to_string());
@@ -65,6 +74,11 @@ fn volatile_tail(voice: &str, config_dir: &std::path::Path) -> String {
     let identity = grokhub_agent::identity_blocks(config_dir);
     if !identity.is_empty() {
         parts.push(identity);
+    }
+    let intentions =
+        grokhub_core::intentions_block(&grokhub_core::load_intentions(config_dir, conversation_id));
+    if !intentions.is_empty() {
+        parts.push(intentions);
     }
     if parts.is_empty() {
         return String::new();
@@ -377,7 +391,12 @@ fn serve(
             mut emit,
             done,
         } = job;
-        let system = system_prompt(&route.workspace, route.desktop, &route.voice);
+        let system = system_prompt_for(
+            &route.workspace,
+            route.desktop,
+            &route.voice,
+            &conversation_id,
+        );
         let gate = shell_gate(route.mode, route.desktop, route.session);
         // Plan holds the turn read-only until its plan is approved; Chat and
         // btw clear a plan left from an earlier message.
