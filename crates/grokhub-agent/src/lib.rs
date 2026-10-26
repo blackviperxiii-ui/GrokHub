@@ -4,6 +4,7 @@ mod auto_review;
 pub mod brain;
 mod checkpoint;
 mod client;
+mod close_check;
 mod compact;
 mod drive;
 pub mod episode;

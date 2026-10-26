@@ -687,7 +687,8 @@ const INTENTION_LINES: usize = 12;
 const INTENTION_TEXT_CHARS: usize = 160;
 
 pub fn intentions_path(config_dir: &Path, conversation_id: &str) -> Result<PathBuf, String> {
-    let id = safe_conversation_id(conversation_id).ok_or_else(|| "bad conversation id".to_string())?;
+    let id =
+        safe_conversation_id(conversation_id).ok_or_else(|| "bad conversation id".to_string())?;
     Ok(config_dir.join("intentions").join(format!("{id}.json")))
 }
 

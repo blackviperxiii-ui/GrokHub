@@ -25,6 +25,7 @@
 ## Non-obvious
 - `cabin_static_rules` / `cabin_learned_tail` (`cabin_rules.rs`) split the prompt-cache prefix from the volatile brief; the app joins them via `system_prompt_parts`.
 - `now_ms`, `user_home`, `redact_secrets`, and `redact_recall` (secrets + PII, `crates/grokhub-core/src/pii.rs`) live here; reuse them instead of re-deriving HOME, time, or redaction.
+- `crates/grokhub-core/src/goal.rs` stores per-chat intentions next to `ThreadGoal`. `set_intention_status` changes status only.
 - `state_for_disk` strips the live frame before `hub-state.json` is written (`disk_omits_frame`); writes are 0600 / user-only DACL (`win_acl` on Windows).
 - Some modules assert on their own source with `include_str!` (`chips.rs`, `state.rs`, `update.rs`); a reworded string or moved fn can fail a test.
 - `crates/grokhub-core/src/imagine_auth.rs` only re-exports `xai_signin`; keychain storage for Imagine is `crates/grokhub-app/src/imagine_auth.rs`.
