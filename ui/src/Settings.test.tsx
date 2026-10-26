@@ -24,6 +24,7 @@ vi.mock("./api", () => api);
 vi.mock("./LocalAi", () => ({ LocalAi: () => <p>Local AI panel</p> }));
 vi.mock("./WebAccess", () => ({ WebAccess: () => <p>Web access panel</p> }));
 vi.mock("./Labs", () => ({ Labs: () => <p>Labs panel</p> }));
+vi.mock("./Personality", () => ({ Personality: () => <p>Personality panel</p> }));
 
 import { ABOUT_NOTE, DESKTOP_NOTE, REMOTE_NOTE, Settings } from "./Settings";
 
@@ -156,6 +157,7 @@ describe("Settings", () => {
     expect(Array.from(nav.querySelectorAll("button"), (b) => b.textContent)).toEqual([
       "General",
       "Account",
+      "Personality",
       "About",
     ]);
   });
@@ -168,6 +170,7 @@ describe("Settings", () => {
     expect(Array.from(nav.querySelectorAll("button"), (b) => b.textContent)).toEqual([
       "General",
       "Account",
+      "Personality",
       "Local AI",
       "Web access",
       "Labs",
@@ -186,9 +189,13 @@ describe("Settings", () => {
     expect(screen.getByRole("button", { name: "Account" })).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByRole("button", { name: "General" })).toHaveAttribute("aria-pressed", "false");
 
+    await openSection("Personality");
+    expect(screen.getByText("Personality panel")).toBeInTheDocument();
+    expect(screen.queryByLabelText("API key")).toBeNull();
+
     await openSection("Local AI");
     expect(screen.getByText("Local AI panel")).toBeInTheDocument();
-    expect(screen.queryByLabelText("API key")).toBeNull();
+    expect(screen.queryByText("Personality panel")).toBeNull();
 
     await openSection("Web access");
     expect(screen.getByText("Web access panel")).toBeInTheDocument();

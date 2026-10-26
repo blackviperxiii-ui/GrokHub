@@ -44,11 +44,12 @@ pub enum SessionMode {
 }
 
 /// The system prompt the cabin's native chat uses, with the desktop line
-/// only while desktop control is on.
-pub fn system_prompt(workspace: &std::path::Path, desktop: bool) -> String {
+/// only while desktop control is on. `voice` is the personality's block
+/// (crate::personality::voice), empty for the default voice.
+pub fn system_prompt(workspace: &std::path::Path, desktop: bool, voice: &str) -> String {
     grokhub_agent::system_prompt_parts(
         &grokhub_core::cabin_rules::cabin_static_rules(desktop),
-        "",
+        voice,
         workspace,
     )
 }
@@ -169,6 +170,8 @@ pub struct Route {
     pub desktop: bool,
     /// The composer's chip for this message.
     pub session: SessionMode,
+    /// Settings → Personality's block for the system prompt, or empty.
+    pub voice: String,
 }
 
 struct Job {
@@ -328,7 +331,7 @@ fn serve(
             mut emit,
             done,
         } = job;
-        let system = system_prompt(&route.workspace, route.desktop);
+        let system = system_prompt(&route.workspace, route.desktop, &route.voice);
         let gate = shell_gate(route.mode, route.desktop, route.session);
         // Plan holds the turn read-only until its plan is approved; Chat and
         // btw clear a plan left from an earlier message.
@@ -553,6 +556,7 @@ mod tests {
             mode,
             desktop,
             session: chip,
+            voice: String::new(),
         };
         let runner = Arc::clone(&session);
         let result = std::thread::spawn(move || {
@@ -944,8 +948,21 @@ mod tests {
             }
         );
         let ws = std::path::Path::new("/tmp");
-        assert!(!system_prompt(ws, false).contains("grokhub-desktop"));
-        assert!(system_prompt(ws, true).contains("grokhub-desktop"));
+        assert!(!system_prompt(ws, false, "").contains("grokhub-desktop"));
+        assert!(system_prompt(ws, true, "").contains("grokhub-desktop"));
+    }
+
+    #[test]
+    fn a_personality_rides_after_the_safety_rules() {
+        let ws = std::path::Path::new("/tmp");
+        let voice = "Personality: Pirate. Talk like a pirate.";
+        let plain = system_prompt(ws, false, "");
+        let with = system_prompt(ws, false, voice);
+        assert!(!plain.contains(voice));
+        let rules = grokhub_core::cabin_rules::cabin_static_rules(false);
+        let (at_rules, at_voice) = (with.find(rules.trim()), with.find(voice));
+        assert!(at_rules.is_some() && at_voice.is_some(), "{with}");
+        assert!(at_rules < at_voice, "the voice must come after the rules");
     }
 
     #[test]

@@ -649,6 +649,37 @@ button.danger {
   overflow-wrap: anywhere;
 }
 
+.personality {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.persona-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.persona-editor label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.persona-cards {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 8px;
+}
+
+.card-detail-line.sample {
+  font-style: italic;
+}
+
 .labs {
   display: flex;
   flex-direction: column;
