@@ -679,6 +679,11 @@ async function permissions(s, config) {
   await section(s, "Permissions");
   const rulesFile = join(config, "permission-rules.json");
   const input = await waitFor("the rule box", () => find(s, ".permissions input[placeholder^='Bash(git']"));
+  // The rule box, its chips and Add rule sit together, with no gap between them.
+  const box = await wd("GET", `${s}/element/${input}/rect`);
+  const add = await wd("GET", `${s}/element/${await find(s, ".permissions form:first-of-type button[type='submit']")}/rect`);
+  const gap = add.y - (box.y + box.height);
+  if (gap > 60) throw new Error(`Add rule sits ${Math.round(gap)}px below the rule box`);
   await click(s, "[aria-label='Rule action'] button:nth-child(3)");
   await wd("POST", `${s}/element/${input}/value`, { text: "WebFetch(domain:example.com)" });
   await click(s, ".permissions form:first-of-type button[type='submit']");

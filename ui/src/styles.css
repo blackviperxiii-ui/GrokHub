@@ -241,6 +241,8 @@ textarea {
 
 .composer textarea {
   flex: 1;
+  /* flex: 1 sizes it; its default width (cols) would hold the row wider than a phone. */
+  width: 0;
   resize: none;
 }
 
@@ -357,6 +359,7 @@ textarea {
 
 .card-buttons {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
 }
 
@@ -745,8 +748,10 @@ button.danger {
   gap: 6px;
 }
 
+/* A muted topic reads as set aside without fading its text below contrast. */
 .card.muted {
-  opacity: 0.7;
+  border-style: dashed;
+  color: var(--muted);
 }
 
 .playbooks,
@@ -783,8 +788,12 @@ textarea.code {
   margin: 0;
 }
 
-.labs-row {
+/* Also beats `.settings form`, whose column would stretch the label to its
+   240px basis. */
+.labs-row,
+.settings form.labs-row {
   display: flex;
+  flex-direction: row;
   gap: 8px;
   align-items: end;
   flex-wrap: wrap;
@@ -829,6 +838,7 @@ textarea.code {
 
 .journal-option input {
   flex: 1 1 160px;
+  min-width: 0;
 }
 
 .journal .rows {

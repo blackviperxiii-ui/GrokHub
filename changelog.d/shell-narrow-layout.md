@@ -1,0 +1,2 @@
+- Shell: Settings → Permissions, Pulse → Interests and Labs keep the text box, chips and button together instead of a 240px gap.
+- Shell and web app: the chat composer and Journal cards fit a phone-width screen, the conversation log takes keyboard focus, and muted interests keep readable contrast.
