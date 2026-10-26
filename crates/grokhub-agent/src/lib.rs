@@ -13,6 +13,7 @@ mod file_checkpoint;
 mod gate;
 pub mod harness;
 mod hooks;
+pub mod identity;
 mod image_budget;
 pub mod indexers;
 mod loopback;
@@ -69,6 +70,7 @@ pub use hooks::{
     discover_hooks, folder_trusted, on_subagent_start, on_subagent_stop, set_folder_trust,
     HookInfo, HookOrigin,
 };
+pub use identity::{identity_blocks, SOUL_BYTE_CAP, USER_BYTE_CAP};
 pub use mcp::{
     alias_elicit, attach_elicit, configured, detach_elicit, doctor, import_documents, import_paths,
     restart, set_workspace, shutdown_all, unalias_elicit, DoctorRow, ElicitInbox, ElicitNote,

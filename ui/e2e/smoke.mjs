@@ -313,8 +313,9 @@ async function memory(s, workspace) {
   const input = await waitFor("the memory page", () => find(s, "input[aria-label='New note']"));
   await wd("POST", `${s}/element/${input}/value`, { text: MEMORY_NOTE });
   await click(s, ".memory form.add button[type='submit']");
+  // Status is role=status; AMR-on installs also show a banner in p.note.
   await waitFor("the remembered note", async () => {
-    const t = await textOf(s, ".memory p.note");
+    const t = await textOf(s, ".memory [role='status']");
     return t.startsWith("Remembered in workspace") ? t : null;
   });
   const file = readFileSync(join(workspace, "MEMORY.md"), "utf8");
