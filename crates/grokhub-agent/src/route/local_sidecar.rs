@@ -8,7 +8,7 @@
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -308,7 +308,7 @@ fn spawn_llama(
 pub fn start(paths: &SidecarPaths) -> Result<Sidecar, String> {
     if !paths.binary.is_file() {
         return Err(format!(
-            "local model binary missing: {}. In Settings, use Get engine to download it.",
+            "local model binary missing: {}. In Settings, turn on Local AI or use Get engine to download it.",
             paths.binary.display()
         ));
     }
@@ -414,19 +414,84 @@ pub fn health_ok(host: &str, port: u16, token: &str, timeout: Duration) -> bool 
 ///   `model_download::installed` under `~/GrokHub/models` (or
 ///   `{config}/models`), then the first `*.gguf` in those folders
 pub fn resolve_paths(config_dir: &Path) -> Option<SidecarPaths> {
-    let binary = std::env::var_os("GROKHUB_LLAMA_SERVER")
+    let binary = find_binary(config_dir)?;
+    let model = find_model(config_dir)?;
+    Some(SidecarPaths { binary, model })
+}
+
+fn find_binary(config_dir: &Path) -> Option<PathBuf> {
+    std::env::var_os("GROKHUB_LLAMA_SERVER")
         .map(PathBuf::from)
         .filter(|p| p.is_file())
         .or_else(|| {
             let p = config_dir.join("bin").join(llama_server_name());
             p.is_file().then_some(p)
         })
-        .or_else(|| grokhub_core::runtime_download::find_on_path(llama_server_name()))?;
-    let model = std::env::var_os("GROKHUB_LOCAL_MODEL")
+        .or_else(|| grokhub_core::runtime_download::find_on_path(llama_server_name()))
+}
+
+fn find_model(config_dir: &Path) -> Option<PathBuf> {
+    std::env::var_os("GROKHUB_LOCAL_MODEL")
         .map(PathBuf::from)
         .filter(|p| p.is_file())
-        .or_else(|| resolve_model_file(config_dir))?;
-    Some(SidecarPaths { binary, model })
+        .or_else(|| resolve_model_file(config_dir))
+}
+
+/// The local engine's state, as Settings shows it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Runtime {
+    /// No `llama-server` in `GROKHUB_LLAMA_SERVER`, `{config}/bin` or `PATH`.
+    Missing,
+    /// The engine is there but no model file is.
+    NoModel,
+    Ready,
+    Loading,
+    Running,
+    /// The last start failed; cleared by a good start or a stop.
+    Error(String),
+}
+
+/// Settings' runtime line for `r`.
+pub fn runtime_label(r: &Runtime) -> String {
+    match r {
+        Runtime::Missing => {
+            "Runtime missing: llama-server isn't installed. Turning on Local AI downloads it."
+                .into()
+        }
+        Runtime::NoModel => "Runtime ready, no model yet: pick or download one below.".into(),
+        Runtime::Ready => "Runtime ready".into(),
+        Runtime::Loading => "Loading the local model…".into(),
+        Runtime::Running => "Runtime ready · running".into(),
+        Runtime::Error(why) => format!("Error: {why}"),
+    }
+}
+
+static STARTING: AtomicBool = AtomicBool::new(false);
+static LAST_ERROR: Mutex<Option<String>> = Mutex::new(None);
+
+fn set_last_error(e: Option<String>) {
+    *LAST_ERROR.lock().expect("sidecar error") = e;
+}
+
+/// Where the local engine stands now. Never waits on a starting sidecar.
+pub fn runtime(config_dir: &Path) -> Runtime {
+    if STARTING.load(Ordering::SeqCst) {
+        return Runtime::Loading;
+    }
+    if find_binary(config_dir).is_none() {
+        return Runtime::Missing;
+    }
+    if find_model(config_dir).is_none() {
+        return Runtime::NoModel;
+    }
+    if let Some(e) = LAST_ERROR.lock().expect("sidecar error").clone() {
+        return Runtime::Error(e);
+    }
+    match global_slot().try_lock() {
+        Ok(slot) if slot.is_some() => Runtime::Running,
+        Ok(_) => Runtime::Ready,
+        Err(_) => Runtime::Loading,
+    }
 }
 
 fn user_models_dir() -> Option<PathBuf> {
@@ -542,8 +607,10 @@ pub fn acquire(config_dir: &Path) -> Result<Busy, String> {
             local_gov::reason()
         ));
     }
-    let paths = resolve_paths(config_dir)
-        .ok_or_else(|| "local model binary or GGUF is not installed".to_string())?;
+    let paths = match runtime(config_dir) {
+        r @ (Runtime::Missing | Runtime::NoModel) => return Err(runtime_label(&r)),
+        _ => resolve_paths(config_dir).ok_or_else(|| runtime_label(&Runtime::Missing))?,
+    };
     let mut slot = global_slot().lock().expect("sidecar global");
     if local_gov::restart_due() && in_flight() == 0 {
         if let Some(side) = slot.take() {
@@ -566,13 +633,18 @@ pub fn acquire(config_dir: &Path) -> Result<Busy, String> {
         return Ok(busy());
     }
     local_gov::may_start(unix_ms())?;
-    match start(&paths) {
+    STARTING.store(true, Ordering::SeqCst);
+    let started = start(&paths);
+    STARTING.store(false, Ordering::SeqCst);
+    match started {
         Ok(side) => {
+            set_last_error(None);
             *slot = Some(side);
             Ok(busy())
         }
         Err(e) => {
             local_gov::start_failed(unix_ms());
+            set_last_error(Some(e.clone()));
             Err(e)
         }
     }
@@ -633,6 +705,7 @@ pub fn tick_idle_unload() {
 
 /// Stop the global sidecar (tests / quit).
 pub fn stop_global() {
+    set_last_error(None);
     let mut slot = global_slot().lock().expect("sidecar global");
     if let Some(side) = slot.take() {
         side.stop();
@@ -1007,6 +1080,48 @@ mod tests {
         let p = resolve_paths(&dir).expect("paths");
         assert!(p.binary.ends_with(llama_server_name()));
         assert!(p.model.ends_with("a.gguf"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_missing_engine_says_runtime_missing_instead_of_failing_blank() {
+        let dir = std::env::temp_dir().join(format!("gh-sidecar-rt-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("models")).unwrap();
+        std::fs::write(dir.join("models").join("a.gguf"), b"gguf").unwrap();
+        // PATH comes back even when an assert fails, or later shell tests break.
+        struct RestorePath(Option<std::ffi::OsString>);
+        impl Drop for RestorePath {
+            fn drop(&mut self) {
+                match self.0.take() {
+                    Some(v) => std::env::set_var("PATH", v),
+                    None => std::env::remove_var("PATH"),
+                }
+            }
+        }
+        let path = RestorePath(std::env::var_os("PATH"));
+        std::env::set_var("PATH", dir.join("empty"));
+        // No sidecar or start error left over from another test.
+        stop_global();
+        assert_eq!(runtime(&dir), Runtime::Missing);
+        let err = acquire(&dir).map(drop).unwrap_err();
+        assert_eq!(
+            err,
+            "Runtime missing: llama-server isn't installed. Turning on Local AI downloads it."
+        );
+        std::fs::create_dir_all(dir.join("bin")).unwrap();
+        std::fs::write(dir.join("bin").join(llama_server_name()), b"x").unwrap();
+        assert_eq!(runtime(&dir), Runtime::Ready);
+        assert_eq!(runtime_label(&Runtime::Ready), "Runtime ready");
+        std::fs::remove_file(dir.join("models").join("a.gguf")).unwrap();
+        if user_models_dir().is_none_or(|d| first_gguf(&d).is_none()) {
+            assert_eq!(runtime(&dir), Runtime::NoModel);
+        }
+        drop(path);
+        assert_eq!(
+            runtime_label(&Runtime::Error("the local model ran out of memory".into())),
+            "Error: the local model ran out of memory"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

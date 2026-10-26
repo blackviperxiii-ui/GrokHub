@@ -1,5 +1,8 @@
 //! Pinned llama.cpp `llama-server` download for this OS/arch into `{config}/bin`.
-//! User-initiated only: resumable `.part` files, SHA-256 check, safe archive extract.
+//! Starts when the user turns Local AI on (or presses Get engine): resumable
+//! `.part` files, SHA-256 check, safe archive extract. x86_64 gets the Vulkan
+//! build, which uses an AMD, Intel or NVIDIA GPU and falls back to the CPU
+//! backend when no Vulkan driver loads.
 
 use crate::model_download::{self, sha256_file, Control, Progress};
 use crate::ssrf::runtime_download_url_ok;
@@ -362,24 +365,64 @@ fn extract_archive(archive: &Path, fmt: ArchiveFormat, into: &Path) -> Result<()
     }
 }
 
+/// Linux builds ship `libllama.so.0 -> libllama.so.0.6.0` symlinks. Each
+/// link becomes a copy of its target (a bare name in the same folder), so
+/// nothing points outside the extract folder and the loader finds real files.
 fn extract_tar_gz(archive: &Path, into: &Path) -> Result<(), String> {
     let file = File::open(archive).map_err(|e| e.to_string())?;
     let decoder = GzDecoder::new(file);
     let mut tar = tar::Archive::new(decoder);
+    let mut links: Vec<(PathBuf, String)> = Vec::new();
     for entry in tar.entries().map_err(|e| e.to_string())? {
         let mut entry = entry.map_err(|e| e.to_string())?;
         let path = entry.path().map_err(|e| e.to_string())?;
         let Some(dest) = safe_join(into, path.as_ref()) else {
             return Err("engine archive path escapes the extract folder".into());
         };
-        if entry.header().entry_type().is_dir() {
+        let kind = entry.header().entry_type();
+        if kind.is_symlink() || kind.is_hard_link() {
+            let target = entry
+                .link_name()
+                .map_err(|e| e.to_string())?
+                .and_then(|t| t.file_name().map(|n| n.to_string_lossy().into_owned()));
+            if let Some(name) = target {
+                links.push((dest, name));
+            }
+        } else if kind.is_dir() {
             fs::create_dir_all(&dest).map_err(|e| e.to_string())?;
+        } else if !kind.is_file() {
+            continue;
         } else {
             if let Some(parent) = dest.parent() {
                 fs::create_dir_all(parent).map_err(|e| e.to_string())?;
             }
             let mut out = File::create(&dest).map_err(|e| e.to_string())?;
             std::io::copy(&mut entry, &mut out).map_err(|e| e.to_string())?;
+        }
+    }
+    copy_links(&links)
+}
+
+/// Copy each link's target over it; a chain resolves over a few passes.
+fn copy_links(links: &[(PathBuf, String)]) -> Result<(), String> {
+    let mut left: Vec<&(PathBuf, String)> = links.iter().collect();
+    while !left.is_empty() {
+        let before = left.len();
+        left.retain(|(dest, name)| {
+            let Some(src) = dest.parent().map(|d| d.join(name)) else {
+                return false;
+            };
+            if !src.is_file() {
+                return true;
+            }
+            fs::copy(&src, dest).is_err()
+        });
+        if left.len() == before {
+            let names: Vec<String> = left.iter().map(|(_, n)| n.clone()).collect();
+            return Err(format!(
+                "the engine archive links to files it doesn't contain: {}",
+                names.join(", ")
+            ));
         }
     }
     Ok(())
@@ -431,7 +474,18 @@ mod tests {
         let m = manifest_for_key("linux-x86_64").expect("linux asset");
         assert_eq!(m.version, "b11602");
         assert!(m.asset.url.starts_with("https://github.com/"));
-        assert_eq!(m.asset.size, 17_734_896);
+        assert_eq!(m.asset.size, 30_359_972);
+        // x86_64 gets the Vulkan build (GPU when a driver loads, CPU otherwise).
+        assert_eq!(
+            m.asset.archive_file_name(),
+            "llama-b11602-bin-ubuntu-vulkan-x64.tar.gz"
+        );
+        let w = manifest_for_key("windows-x86_64").expect("windows asset");
+        assert_eq!(
+            w.asset.archive_file_name(),
+            "llama-b11602-bin-win-vulkan-x64.zip"
+        );
+        assert_eq!(w.asset.size, 32_127_294);
     }
 
     struct FakeServer {
@@ -507,6 +561,84 @@ mod tests {
             gz.finish().unwrap();
         }
         enc
+    }
+
+    fn tgz_with_lib_links() -> Vec<u8> {
+        let mut inner = Vec::new();
+        {
+            let mut builder = tar::Builder::new(&mut inner);
+            let mut file = |name: &str, data: &[u8]| {
+                let mut h = tar::Header::new_gnu();
+                h.set_size(data.len() as u64);
+                h.set_mode(0o755);
+                h.set_cksum();
+                builder
+                    .append_data(&mut h, format!("llama-b0/{name}"), data)
+                    .unwrap();
+            };
+            file(server_binary_name(), b"fake-server");
+            file("libllama.so.0.6.0", b"real-lib");
+            // Links listed before and after their targets, as release tarballs do.
+            for (link, target) in [
+                ("libllama.so", "libllama.so.0"),
+                ("libllama.so.0", "libllama.so.0.6.0"),
+            ] {
+                let mut h = tar::Header::new_gnu();
+                h.set_entry_type(tar::EntryType::Symlink);
+                h.set_size(0);
+                h.set_cksum();
+                builder
+                    .append_link(&mut h, format!("llama-b0/{link}"), target)
+                    .unwrap();
+            }
+            builder.finish().unwrap();
+        }
+        let mut enc = Vec::new();
+        {
+            use std::io::Write;
+            let mut gz = flate2::write::GzEncoder::new(&mut enc, flate2::Compression::default());
+            gz.write_all(&inner).unwrap();
+            gz.finish().unwrap();
+        }
+        enc
+    }
+
+    #[test]
+    fn linked_libraries_install_as_real_files_not_empty_ones() {
+        let body = tgz_with_lib_links();
+        let dir = tmp("links");
+        let cfg = dir.join("cfg");
+        let manifest = test_manifest(&body, ArchiveFormat::TarGz);
+        let out = download_engine(
+            &cfg,
+            &manifest,
+            &FakeServer::new(&body),
+            &Control::default(),
+            &mut |_| {},
+        );
+        assert!(matches!(out, Outcome::Done { .. }), "{out:?}");
+        if !cfg!(windows) {
+            for name in ["libllama.so", "libllama.so.0", "libllama.so.0.6.0"] {
+                assert_eq!(
+                    fs::read(bin_dir(&cfg).join(name)).unwrap(),
+                    b"real-lib",
+                    "{name}"
+                );
+            }
+        }
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_link_to_a_missing_file_fails_the_install() {
+        let dir = tmp("deadlink");
+        fs::create_dir_all(&dir).unwrap();
+        let err = copy_links(&[(dir.join("libx.so.0"), "libx.so.0.1".into())]).unwrap_err();
+        assert_eq!(
+            err,
+            "the engine archive links to files it doesn't contain: libx.so.0.1"
+        );
+        let _ = fs::remove_dir_all(&dir);
     }
 
     fn test_manifest(body: &[u8], fmt: ArchiveFormat) -> Manifest {

@@ -1,0 +1,3 @@
+- Local AI now gets its engine on its own: turning it on, or launching with it on, downloads the pinned llama.cpp `llama-server` when none is in `GROKHUB_LLAMA_SERVER`, `{config}/bin` or `PATH`. On x86_64 Linux and Windows it is now the Vulkan build, which uses an AMD, Intel or NVIDIA GPU and falls back to the CPU.
+- Settings → Local engine shows Runtime ready, Runtime missing, Loading or Error with the reason, and offline requests say "Runtime missing" instead of failing silently.
+- Fixed: the Linux engine install wrote its shared-library links as empty files, so `llama-server` couldn't start. CPU-only launches no longer pair a q8_0 KV cache with flash attention off, which llama-server refused.
