@@ -1,6 +1,10 @@
 //! Goal pin survives compact. Incomplete turns stay open.
 //! Fast mode names the chat tab from the current topics.
 
+use std::fs::{self, OpenOptions};
+use std::io::Write;
+use std::path::{Path, PathBuf};
+
 use crate::attach::bound_scan;
 use crate::chat_view::{assistant_prose, is_workload_user};
 use crate::recipe::{user_asks_desktop_hands, user_asks_gui_help};
@@ -640,9 +644,204 @@ pub fn flush_visible_goal(goal: &mut ThreadGoal, step: u32, pin: &str) {
     }
 }
 
+/// Open work for one chat. Status is the only field that changes after create.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum IntentionStatus {
+    Open,
+    Waiting,
+    Done,
+}
+
+impl IntentionStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Open => "open",
+            Self::Waiting => "waiting",
+            Self::Done => "done",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Intention {
+    pub id: String,
+    pub text: String,
+    pub status: IntentionStatus,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Intentions {
+    #[serde(default)]
+    pub items: Vec<Intention>,
+}
+
+/// A status change parsed from model JSON. Extra keys (`text`, a replacement id) are dropped.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct StatusUpdate {
+    pub id: String,
+    pub status: IntentionStatus,
+}
+
+const INTENTION_LINES: usize = 12;
+const INTENTION_TEXT_CHARS: usize = 160;
+
+pub fn intentions_path(config_dir: &Path, conversation_id: &str) -> Result<PathBuf, String> {
+    let id = safe_conversation_id(conversation_id).ok_or_else(|| "bad conversation id".to_string())?;
+    Ok(config_dir.join("intentions").join(format!("{id}.json")))
+}
+
+pub fn load_intentions(config_dir: &Path, conversation_id: &str) -> Intentions {
+    let Ok(path) = intentions_path(config_dir, conversation_id) else {
+        return Intentions::default();
+    };
+    let Ok(text) = fs::read_to_string(path) else {
+        return Intentions::default();
+    };
+    serde_json::from_str(&text).unwrap_or_default()
+}
+
+pub fn save_intentions(
+    config_dir: &Path,
+    conversation_id: &str,
+    list: &Intentions,
+) -> Result<(), String> {
+    validate_intentions(list)?;
+    let path = intentions_path(config_dir, conversation_id)?;
+    let text = serde_json::to_string_pretty(list).map_err(|err| err.to_string())?;
+    write_intentions(&path, text.as_bytes())
+}
+
+/// Set `status` on `id`. Text and id stay as stored. Missing ids are left out.
+pub fn set_intention_status(list: &mut Intentions, id: &str, status: IntentionStatus) -> bool {
+    let id = id.trim();
+    if id.is_empty() {
+        return false;
+    }
+    let Some(item) = list.items.iter_mut().find(|item| item.id == id) else {
+        return false;
+    };
+    item.status = status;
+    true
+}
+
+/// Apply status changes from untrusted JSON. A `text` field or any other key is ignored.
+pub fn apply_status_updates(list: &mut Intentions, raw: &[serde_json::Value]) -> usize {
+    let mut applied = 0;
+    for value in raw {
+        let Ok(update) = StatusUpdate::deserialize(value) else {
+            continue;
+        };
+        if set_intention_status(list, &update.id, update.status) {
+            applied += 1;
+        }
+    }
+    applied
+}
+
+/// Short block for the volatile prompt tail. Empty when every item is done.
+pub fn intentions_block(list: &Intentions) -> String {
+    let open: Vec<&Intention> = list
+        .items
+        .iter()
+        .filter(|item| item.status != IntentionStatus::Done)
+        .take(INTENTION_LINES)
+        .collect();
+    if open.is_empty() {
+        return String::new();
+    }
+    let mut lines = vec![
+        "<intentions>".to_string(),
+        "Open intentions for this chat. Change status only.".to_string(),
+    ];
+    for item in open {
+        lines.push(format!(
+            "- [{}] {}: {}",
+            item.status.as_str(),
+            item.id,
+            clip_chars(&one_line(&item.text), INTENTION_TEXT_CHARS)
+        ));
+    }
+    lines.push("</intentions>".to_string());
+    let (text, _) = crate::redact_recall(&lines.join("\n"));
+    text
+}
+
+fn validate_intentions(list: &Intentions) -> Result<(), String> {
+    let mut seen = Vec::new();
+    for item in &list.items {
+        let id = item.id.trim();
+        if id.is_empty() {
+            return Err("intention id is required".into());
+        }
+        if item.id != id {
+            return Err("intention id must not have surrounding space".into());
+        }
+        if seen.iter().any(|existing: &String| existing == id) {
+            return Err(format!("duplicate intention id `{id}`"));
+        }
+        seen.push(id.to_string());
+    }
+    Ok(())
+}
+
+fn safe_conversation_id(id: &str) -> Option<&str> {
+    let id = id.trim();
+    if id.is_empty()
+        || id.len() > 200
+        || id.contains('/')
+        || id.contains('\\')
+        || id.contains("..")
+        || id.contains('\0')
+    {
+        return None;
+    }
+    if !id
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.')
+    {
+        return None;
+    }
+    Some(id)
+}
+
+fn one_line(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn clip_chars(text: &str, max_chars: usize) -> String {
+    text.chars().take(max_chars).collect()
+}
+
+fn write_intentions(path: &Path, bytes: &[u8]) -> Result<(), String> {
+    if let Some(dir) = path.parent() {
+        fs::create_dir_all(dir).map_err(|err| err.to_string())?;
+    }
+    let tmp = path.with_extension("json.tmp");
+    {
+        let mut opts = OpenOptions::new();
+        opts.write(true).create(true).truncate(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            opts.mode(0o600);
+        }
+        let mut file = opts.open(&tmp).map_err(|err| err.to_string())?;
+        file.write_all(bytes).map_err(|err| err.to_string())?;
+    }
+    // Windows rename does not replace an existing file. One writer owns this path.
+    let _ = fs::remove_file(path);
+    fs::rename(&tmp, path).map_err(|err| {
+        let _ = fs::remove_file(&tmp);
+        err.to_string()
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+    use std::path::{Path, PathBuf};
 
     #[test]
     fn thread_goal_prompt_skips_host_results() {
@@ -962,5 +1161,110 @@ If this fails, tell me your distro.";
         let mut blocked = "b".repeat(crate::attach::TEXT_FILE_CAP + 8);
         blocked.push_str("\nGOAL_BLOCKED: need serial\n");
         assert_eq!(parse_goal_outcome(&blocked), "blocked");
+    }
+
+    fn intention_dir(tag: &str) -> PathBuf {
+        let n = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let dir = std::env::temp_dir().join(format!("gh-intent-{tag}-{}-{n}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn sample_list() -> Intentions {
+        Intentions {
+            items: vec![
+                Intention {
+                    id: "ship".into(),
+                    text: "ship the notes".into(),
+                    status: IntentionStatus::Open,
+                },
+                Intention {
+                    id: "wait".into(),
+                    text: "ask which port".into(),
+                    status: IntentionStatus::Waiting,
+                },
+                Intention {
+                    id: "old".into(),
+                    text: "rename the tab".into(),
+                    status: IntentionStatus::Done,
+                },
+            ],
+        }
+    }
+
+    #[test]
+    fn status_updates_keep_text_and_id_and_a_reload_keeps_the_list() {
+        let dir = intention_dir("status");
+        let list = sample_list();
+        save_intentions(&dir, "chat-1", &list).unwrap();
+        let path = intentions_path(&dir, "chat-1").unwrap();
+        let mut loaded = load_intentions(&dir, "chat-1");
+        assert_eq!(loaded, list);
+        let raw = serde_json::json!({
+            "id": "ship",
+            "status": "done",
+            "text": "stolen text",
+            "rename": "other"
+        });
+        assert_eq!(apply_status_updates(&mut loaded, &[raw]), 1);
+        assert_eq!(loaded.items[0].id, "ship");
+        assert_eq!(loaded.items[0].text, "ship the notes");
+        assert_eq!(loaded.items[0].status, IntentionStatus::Done);
+        let missing = serde_json::json!({"id": "nope", "status": "done", "text": "new row"});
+        let bad = serde_json::json!({"id": "wait", "status": "cancelled", "text": "nope"});
+        assert_eq!(apply_status_updates(&mut loaded, &[missing, bad]), 0);
+        assert_eq!(loaded.items.len(), 3);
+        assert_eq!(loaded.items[1].text, "ask which port");
+        assert_eq!(loaded.items[1].status, IntentionStatus::Waiting);
+        assert!(!set_intention_status(
+            &mut loaded,
+            "brand-new",
+            IntentionStatus::Open
+        ));
+        assert!(set_intention_status(
+            &mut loaded,
+            "wait",
+            IntentionStatus::Open
+        ));
+        assert_eq!(loaded.items[1].id, "wait");
+        assert_eq!(loaded.items[1].text, "ask which port");
+        assert_eq!(loaded.items[1].status, IntentionStatus::Open);
+        save_intentions(&dir, "chat-1", &loaded).unwrap();
+        drop(loaded);
+        let again = load_intentions(&dir, "chat-1");
+        assert_eq!(again.items[0].text, "ship the notes");
+        assert_eq!(again.items[0].status, IntentionStatus::Done);
+        assert_eq!(again.items[1].text, "ask which port");
+        assert_eq!(again.items[1].status, IntentionStatus::Open);
+        let on_disk = fs::read_to_string(&path).unwrap();
+        assert!(on_disk.contains("ship the notes"), "{on_disk}");
+        assert!(!on_disk.contains("stolen"), "{on_disk}");
+        assert!(save_intentions(&dir, "../escape", &again).is_err());
+        assert!(!dir.join("escape.json").exists());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_prompt_block_names_open_and_waiting_items_only() {
+        let block = intentions_block(&sample_list());
+        assert!(block.contains("<intentions>"), "{block}");
+        assert!(block.contains("[open] ship: ship the notes"), "{block}");
+        assert!(block.contains("[waiting] wait: ask which port"), "{block}");
+        assert!(!block.contains("rename the tab"), "{block}");
+        let done = Intentions {
+            items: vec![Intention {
+                id: "old".into(),
+                text: "rename the tab".into(),
+                status: IntentionStatus::Done,
+            }],
+        };
+        assert_eq!(intentions_block(&done), "");
+        assert!(load_intentions(Path::new("/no/such/config"), "chat-1")
+            .items
+            .is_empty());
     }
 }
