@@ -405,7 +405,7 @@ fn edit_writes_a_user_node_that_supersedes() {
 fn no_keyring_pauses_a_personal_note_and_writes_no_file() {
     let tmp = Tmp::new("paused");
     let store = tmp.store();
-    let got = note_chat(&store, &chat("Email me at alex@example.com", 1), NOW);
+    let got = note_chat(&store, &chat("Email me at user@example.com", 1), NOW);
     assert_eq!(
         got,
         Err(AmrError::Paused("private memory has no key store".into()))
@@ -418,15 +418,15 @@ fn no_keyring_pauses_a_personal_note_and_writes_no_file() {
 fn sealed_nodes_index_in_memory_only() {
     let tmp = Tmp::new("sealed-index");
     let store = tmp.store().with_sealer(Arc::new(HexSealer));
-    let private = note_chat(&store, &chat("Email me at alex@example.com", 1), NOW).unwrap();
+    let private = note_chat(&store, &chat("Email me at user@example.com", 1), NOW).unwrap();
     note_chat(&store, &chat("I like dark roast coffee", 2), NOW).unwrap();
     let disk = store.rebuild_index().unwrap();
-    assert_eq!(disk.search("alex").unwrap(), Vec::<String>::new());
+    assert_eq!(disk.search("user").unwrap(), Vec::<String>::new());
     let raw = fs::read(store.index_path()).unwrap();
     assert!(!String::from_utf8_lossy(&raw).contains("example.com"));
     let unlocked = store.sealed_index().unwrap();
     assert_eq!(
-        unlocked.search("alex").unwrap(),
+        unlocked.search("user").unwrap(),
         vec![private.id().unwrap().to_string()]
     );
     let (rows, _) = memory_rows(&store);
