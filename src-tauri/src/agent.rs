@@ -12,7 +12,7 @@ use grokhub_agent::{
     HaltCheck, ModelClient, NativeEngine, PermAnswer, PermMode, PermitInbox, PermitNote,
     SteerQueue,
 };
-use grokhub_core::wire::AcpEvent;
+use grokhub_core::wire::{AcpEvent, ElicitChoice};
 use serde::Serialize;
 
 /// The cabin's attended chat gate in the mode Settings picked. In Ask, tools
@@ -96,6 +96,11 @@ pub enum UiEvent {
     Done {
         stop: String,
     },
+    /// One-tap follow-ups for the reply that just ended; sent only when one
+    /// names a real action (grokhub_core::chips::reply_suggestions).
+    Suggestions {
+        items: Vec<Suggestion>,
+    },
     /// The plan Grok wrote, before it asks to leave plan mode.
     Plan {
         text: String,
@@ -112,7 +117,28 @@ pub enum UiEvent {
         field_name: Option<String>,
         field_title: String,
         secret: bool,
+        /// Answers to tap for a question from Grok; the recommended one first.
+        options: Vec<ElicitChoice>,
     },
+}
+
+/// A follow-up the user can send with one tap: `prompt` goes in as the next message.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Suggestion {
+    pub label: String,
+    pub prompt: String,
+}
+
+/// The suggestions card for a finished reply, if this turn earns one.
+pub fn suggestions_for(said: &str, reply: &str, failed: bool) -> Option<UiEvent> {
+    let items: Vec<Suggestion> = grokhub_core::chips::reply_suggestions(said, reply, failed)
+        .into_iter()
+        .map(|chip| Suggestion {
+            label: chip.label,
+            prompt: chip.value,
+        })
+        .collect();
+    (!items.is_empty()).then_some(UiEvent::Suggestions { items })
 }
 
 pub fn ui_event(event: AcpEvent) -> Option<UiEvent> {
@@ -142,6 +168,7 @@ pub fn ui_event(event: AcpEvent) -> Option<UiEvent> {
             field_name: ask.field_name,
             field_title: ask.field_title,
             secret: ask.secret,
+            options: ask.options,
         },
         _ => return None,
     })
@@ -374,12 +401,23 @@ fn serve(
         }));
         let mut stop = String::new();
         let mut error = None;
+        let mut reply = String::new();
         let ran = engine.prompt(&text, None, &mut |event| {
             let Some(ui) = ui_event(event) else {
                 return;
             };
             match &ui {
-                UiEvent::Done { stop: s } => stop = s.clone(),
+                UiEvent::Text { text } => reply.push_str(text),
+                UiEvent::Done { stop: s } => {
+                    stop = s.clone();
+                    // Btw asks only look, so they get no follow-ups.
+                    if route.session != SessionMode::Btw && s != "cancelled" {
+                        let failed = s == "error" || error.is_some();
+                        if let Some(card) = suggestions_for(&text, &reply, failed) {
+                            emit(card);
+                        }
+                    }
+                }
                 UiEvent::Error { message } => error = Some(message.clone()),
                 _ => {}
             }
@@ -751,6 +789,7 @@ mod tests {
                 field_name: None,
                 field_title: String::new(),
                 secret: false,
+                options: Vec::new(),
             }
         );
         assert!(run.events.lock().expect("events").contains(&UiEvent::Plan {
@@ -789,6 +828,45 @@ mod tests {
             .answer_elicit(&elicit_id(&card), "accept", Some("answer"), "  blue ");
         assert_eq!(run.result.join().expect("join"), Ok("end_turn".into()));
         assert_eq!(client.tool_output().as_deref(), Some("answer: blue"));
+    }
+
+    #[test]
+    fn a_question_with_options_offers_them_recommended_first() {
+        let (workspace, config) = (temp_dir("pick-ws"), temp_dir("pick-cfg"));
+        let client = OneTool::new(
+            "ask_user_question",
+            serde_json::json!({"questions": [{"question": "Which fix?", "options": [
+                {"label": "Upgrade everything"},
+                {"label": "Pin the crate", "description": "smallest change", "recommended": true}
+            ]}]}),
+        );
+        let run = start(Arc::clone(&client), &workspace, &config);
+        let card = wait_for_elicit(&run);
+        let UiEvent::Elicit { options, .. } = &card else {
+            panic!("{card:?}");
+        };
+        assert_eq!(
+            options,
+            &vec![
+                ElicitChoice {
+                    label: "Pin the crate".into(),
+                    description: "smallest change".into(),
+                    recommended: true,
+                },
+                ElicitChoice {
+                    label: "Upgrade everything".into(),
+                    description: String::new(),
+                    recommended: false,
+                },
+            ]
+        );
+        run.session
+            .answer_elicit(&elicit_id(&card), "accept", Some("answer"), "Pin the crate");
+        assert_eq!(run.result.join().expect("join"), Ok("end_turn".into()));
+        assert_eq!(
+            client.tool_output().as_deref(),
+            Some("answer: Pin the crate")
+        );
     }
 
     #[test]
@@ -890,6 +968,11 @@ mod tests {
             field_name: Some("answer".into()),
             field_title: "Your answer".into(),
             secret: false,
+            options: vec![ElicitChoice {
+                label: "Blue".into(),
+                description: "calm".into(),
+                recommended: true,
+            }],
         })
         .expect("json");
         assert_eq!(
@@ -897,7 +980,8 @@ mod tests {
             serde_json::json!({
                 "kind": "elicit", "id": "ask-1", "server": "Question", "message": "Which color?",
                 "mode": "form", "url": "", "fieldName": "answer", "fieldTitle": "Your answer",
-                "secret": false
+                "secret": false,
+                "options": [{"label": "Blue", "description": "calm", "recommended": true}]
             })
         );
         let chip: SessionMode = serde_json::from_str("\"btw\"").expect("chip");

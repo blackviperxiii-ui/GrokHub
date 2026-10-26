@@ -134,6 +134,90 @@ describe("Chat", () => {
     await waitFor(() => expect(api.sendChat).toHaveBeenCalledWith(id, "hello", "chat"));
   });
 
+  it("shows at most three suggestions under a reply, and a tap sends one", async () => {
+    let finish = holdTurn();
+    render(<Chat onOpenSettings={() => {}} />);
+    const id = await startTurn("the build failed");
+    emit(id, { kind: "text", text: "TypeError in parse_row." });
+    emit(id, {
+      kind: "suggestions",
+      items: [
+        { label: "Fix the cause", prompt: "Fix the root cause in parse_row." },
+        { label: "Root cause + fix", prompt: "Diagnose the error." },
+        { label: "Add a test", prompt: "Add a test for parse_row." },
+        { label: "Fourth", prompt: "Never shown." },
+      ],
+    });
+    emit(id, { kind: "done", stop: "end_turn" });
+    finish();
+    const card = await screen.findByRole("group", { name: "Suggestions" });
+    expect(within(card).getAllByRole("button").map((b) => b.textContent)).toEqual([
+      "Fix the cause",
+      "Root cause + fix",
+      "Add a test",
+    ]);
+    await waitFor(() => expect(within(card).getByRole("button", { name: "Fix the cause" })).toBeEnabled());
+    await userEvent.type(screen.getByLabelText("Message"), "half typed");
+    finish = holdTurn();
+    await userEvent.click(within(card).getByRole("button", { name: "Fix the cause" }));
+    await waitFor(() =>
+      expect(api.sendChat).toHaveBeenLastCalledWith(id, "Fix the root cause in parse_row.", "chat"),
+    );
+    expect(screen.getByText("Fix the root cause in parse_row.")).toHaveAttribute("data-role", "user");
+    expect(screen.queryByRole("group", { name: "Suggestions" })).toBeNull();
+    expect(screen.getByLabelText("Message")).toHaveValue("half typed");
+    finish();
+  });
+
+  it("posts a notice when an automation finishes, with a one-tap follow-up", async () => {
+    const onOpenAutomations = vi.fn();
+    const long = `${"x".repeat(300)} tail`;
+    const view = render(<Chat onOpenSettings={() => {}} onOpenAutomations={onOpenAutomations} />);
+    view.rerender(
+      <Chat
+        onOpenSettings={() => {}}
+        onOpenAutomations={onOpenAutomations}
+        notice={{ name: "summarize my inbox", ok: true, text: "3 new mails, none urgent.", n: 1 }}
+      />,
+    );
+    const done = screen.getByRole("status", { name: "summarize my inbox finished" });
+    expect(within(done).getByText("Finished")).toBeVisible();
+    expect(within(done).getByText("3 new mails, none urgent.")).toBeVisible();
+    await userEvent.click(within(done).getByRole("button", { name: "Ask about it" }));
+    expect(screen.getByLabelText("Message")).toHaveValue('About the "summarize my inbox" automation run: ');
+    await userEvent.click(within(done).getByRole("button", { name: "Open Automations" }));
+    expect(onOpenAutomations).toHaveBeenCalledTimes(1);
+
+    view.rerender(
+      <Chat
+        onOpenSettings={() => {}}
+        onOpenAutomations={onOpenAutomations}
+        notice={{ name: "board", ok: false, text: long, n: 2 }}
+      />,
+    );
+    const failed = screen.getByRole("status", { name: "board finished" });
+    expect(within(failed).getByText("Failed")).toBeVisible();
+    expect(within(failed).getByText(`${"x".repeat(280)}…`)).toBeVisible();
+    await userEvent.click(within(failed).getByRole("button", { name: "Find the cause" }));
+    expect(screen.getByLabelText("Message")).toHaveValue(
+      `The "board" automation failed: ${long}. What went wrong and how do I fix it?`,
+    );
+    expect(api.sendChat).not.toHaveBeenCalled();
+  });
+
+  it("a reply without suggestions shows no suggestion card", async () => {
+    const finish = holdTurn();
+    render(<Chat onOpenSettings={() => {}} />);
+    const id = await startTurn("list the files");
+    emit(id, { kind: "text", text: "There are 12 files." });
+    emit(id, { kind: "suggestions", items: [] });
+    emit(id, { kind: "done", stop: "end_turn" });
+    finish();
+    await waitFor(() => expect(screen.getByLabelText("Message")).toBeEnabled());
+    expect(screen.getByText("There are 12 files.")).toBeVisible();
+    expect(screen.queryByRole("group", { name: "Suggestions" })).toBeNull();
+  });
+
   it("sends the text and streams its own conversation's reply", async () => {
     const finish = holdTurn();
     render(<Chat onOpenSettings={() => {}} />);

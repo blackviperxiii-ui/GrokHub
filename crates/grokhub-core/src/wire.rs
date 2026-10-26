@@ -148,6 +148,16 @@ pub struct ElicitAsk {
     pub field_title: String,
     /// Password, token, or other secret. The value stays out of the transcript.
     pub secret: bool,
+    /// Options to tap instead of typing (Grok's ask_user_question); empty for a form.
+    pub options: Vec<ElicitChoice>,
+}
+
+/// One tappable answer on a question card. The label is the answer sent back.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ElicitChoice {
+    pub label: String,
+    pub description: String,
+    pub recommended: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1195,6 +1205,7 @@ pub fn parse_elicit(id: Value, params: &Value) -> ElicitAsk {
         field_name,
         field_title,
         secret,
+        options: Vec::new(),
     }
 }
 

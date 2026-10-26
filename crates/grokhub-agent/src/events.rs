@@ -750,6 +750,7 @@ fn to_acp(ev: LoopEvent, kind: AuthKind, session: &str, used: u64, limit: u64) -
             field_name: view.field_name,
             field_title: view.field_title,
             secret: view.secret,
+            options: view.options,
         }),
     })
 }
