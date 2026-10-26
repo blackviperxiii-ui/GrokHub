@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from "react";
-import type { Approvals, ElicitAction, SessionMode } from "./api";
+import type { Approvals, ElicitAction, ElicitChoice, SessionMode } from "./api";
 import { APPROVALS } from "./approvals";
 
 /** The cabin's composer chips, each with its hover line. */
@@ -97,6 +97,7 @@ export type ElicitItem = {
   fieldName: string | null;
   fieldTitle: string;
   secret: boolean;
+  options?: ElicitChoice[];
   /** "ended": the turn stopped before anyone answered. */
   answer: ElicitAction | "ended" | null;
 };
@@ -124,7 +125,17 @@ export function ElicitCard({
   onAnswer: (action: ElicitAction, value: string) => void;
 }) {
   const [value, setValue] = useState("");
+  const [picked, setPicked] = useState<string | null>(null);
   const plan = item.server === "Plan";
+  const options = item.options ?? [];
+  // The message lists the options as text for the cabin; here they are buttons.
+  const message = options.length
+    ? item.message
+        .split("\n")
+        .filter((line) => !line.startsWith("- ") && line !== "Reply with the option label.")
+        .join("\n")
+        .trim()
+    : item.message;
   const title = plan
     ? "Grok's plan"
     : item.server === "Question"
@@ -140,10 +151,14 @@ export function ElicitCard({
   return (
     <div className="card elicit" role="group" aria-label={title}>
       <div className="card-title">{title}</div>
-      <pre className="card-detail plain">{item.message}</pre>
+      <pre className="card-detail plain">{message}</pre>
       {item.mode === "url" && item.url && <code className="card-detail-line">{item.url}</code>}
       {item.answer ? (
-        <p className="card-answer">{(plan ? PLAN_ANSWERS : ANSWERS)[item.answer]}</p>
+        <p className="card-answer">
+          {item.answer === "accept" && picked
+            ? `You chose: ${picked}`
+            : (plan ? PLAN_ANSWERS : ANSWERS)[item.answer]}
+        </p>
       ) : plan ? (
         <div className="card-buttons">
           <button type="button" onClick={() => onAnswer("accept", "")}>
@@ -154,24 +169,54 @@ export function ElicitCard({
           </button>
         </div>
       ) : (
-        <form className="card-buttons" onSubmit={send}>
-          {item.fieldName && (
-            <input
-              aria-label={item.fieldTitle || "Answer"}
-              placeholder={item.fieldTitle || "Answer"}
-              type={item.secret ? "password" : "text"}
-              autoComplete="off"
-              value={value}
-              onChange={(e) => setValue(e.target.value)}
-            />
+        <>
+          {options.length > 0 && (
+            <div className="choices" role="group" aria-label="Options">
+              {options.map((option) => (
+                <button
+                  key={option.label}
+                  type="button"
+                  className={option.recommended ? "choice" : "choice quiet"}
+                  onClick={() => {
+                    setPicked(option.label);
+                    onAnswer("accept", option.label);
+                  }}
+                >
+                  <span className="choice-label">
+                    {option.label}
+                    {option.recommended && (
+                      <>
+                        {" "}
+                        <span className="badge">Recommended</span>
+                      </>
+                    )}
+                  </span>
+                  {option.description && (
+                    <span className="choice-detail">{option.description}</span>
+                  )}
+                </button>
+              ))}
+            </div>
           )}
-          <button type="submit" disabled={Boolean(item.fieldName) && !value.trim()}>
-            {item.mode === "url" ? "I've finished" : "Send"}
-          </button>
-          <button type="button" className="quiet" onClick={() => onAnswer("decline", "")}>
-            Decline
-          </button>
-        </form>
+          <form className="card-buttons" onSubmit={send}>
+            {item.fieldName && (
+              <input
+                aria-label={item.fieldTitle || "Answer"}
+                placeholder={options.length ? "Or type your own answer" : item.fieldTitle || "Answer"}
+                type={item.secret ? "password" : "text"}
+                autoComplete="off"
+                value={value}
+                onChange={(e) => setValue(e.target.value)}
+              />
+            )}
+            <button type="submit" disabled={Boolean(item.fieldName) && !value.trim()}>
+              {item.mode === "url" ? "I've finished" : "Send"}
+            </button>
+            <button type="button" className="quiet" onClick={() => onAnswer("decline", "")}>
+              Decline
+            </button>
+          </form>
+        </>
       )}
     </div>
   );

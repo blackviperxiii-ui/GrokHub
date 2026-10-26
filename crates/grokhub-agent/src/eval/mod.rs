@@ -27,6 +27,7 @@ mod scan;
 
 pub mod ab;
 pub mod metrics;
+pub mod turn_endings;
 
 pub use ab::{load_tasks, run_technique_matrix, Technique, TechniqueMatrixReport};
 pub use metrics::Recommendation;

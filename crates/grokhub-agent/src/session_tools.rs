@@ -9,6 +9,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 
+use grokhub_core::wire::ElicitChoice;
 use serde_json::{json, Value};
 
 use crate::gate::Gate;
@@ -384,6 +385,7 @@ fn ask(call: SessionCall<'_>) -> ToolOutput {
         Ok(message) => message,
         Err(err) => return ToolOutput::err(err),
     };
+    let options = question_choices(&value);
     let id = next_id("ask");
     let view = ElicitView {
         id: id.clone(),
@@ -395,6 +397,7 @@ fn ask(call: SessionCall<'_>) -> ToolOutput {
         field_name: Some("answer".into()),
         field_title: "Your answer".into(),
         secret: false,
+        options,
     };
     (call.on_event)(LoopEvent::Elicit(view));
     match mcp::wait_elicit(call.session, &id, call.cancel, call.halted) {
@@ -414,6 +417,50 @@ fn ask(call: SessionCall<'_>) -> ToolOutput {
         mcp::ElicitAnswer::Decline => ToolOutput::err("User declined the question"),
         mcp::ElicitAnswer::Cancel => ToolOutput::err("User cancelled the question"),
     }
+}
+
+/// Tappable answers for a card that asks one single-choice question.
+/// The recommended option comes first; only the first one marked counts.
+fn question_choices(value: &Value) -> Vec<ElicitChoice> {
+    let rows = match value.get("questions").and_then(|item| item.as_array()) {
+        Some(rows) if rows.len() == 1 => rows,
+        _ => return Vec::new(),
+    };
+    let row = &rows[0];
+    if row.get("multi_select").and_then(|item| item.as_bool()) == Some(true) {
+        return Vec::new();
+    }
+    let mut picked = false;
+    let mut choices: Vec<ElicitChoice> = row
+        .get("options")
+        .and_then(|item| item.as_array())
+        .into_iter()
+        .flatten()
+        .filter_map(|option| {
+            let text = |key: &str| {
+                option
+                    .get(key)
+                    .and_then(|item| item.as_str())
+                    .unwrap_or("")
+                    .trim()
+                    .to_string()
+            };
+            let label = text("label");
+            if label.is_empty() {
+                return None;
+            }
+            let marked = option.get("recommended").and_then(|item| item.as_bool()) == Some(true);
+            let recommended = marked && !picked;
+            picked |= recommended;
+            Some(ElicitChoice {
+                label,
+                description: text("description"),
+                recommended,
+            })
+        })
+        .collect();
+    choices.sort_by_key(|choice| !choice.recommended);
+    choices
 }
 
 fn question_message(value: &Value) -> Result<String, String> {
@@ -522,6 +569,7 @@ fn exit_plan(call: SessionCall<'_>) -> ToolOutput {
         field_name: None,
         field_title: String::new(),
         secret: false,
+        options: Vec::new(),
     };
     (call.on_event)(LoopEvent::Elicit(view));
     match mcp::wait_elicit(call.session, &id, call.cancel, call.halted) {
@@ -800,6 +848,31 @@ mod tests {
             question_message(&value).expect("message"),
             "1. Which fix?\n- Pin the crate (Recommended): smallest change\n- Upgrade everything\n\nReply with the option label."
         );
+        assert_eq!(
+            question_choices(&value),
+            vec![
+                ElicitChoice {
+                    label: "Pin the crate".into(),
+                    description: "smallest change".into(),
+                    recommended: true,
+                },
+                ElicitChoice {
+                    label: "Upgrade everything".into(),
+                    description: String::new(),
+                    recommended: false,
+                },
+            ]
+        );
+        let two =
+            json!({"questions":[{"question":"A?","options":[{"label":"x"}]},{"question":"B?"}]});
+        assert_eq!(
+            question_choices(&two),
+            Vec::new(),
+            "several questions are typed"
+        );
+        let many =
+            json!({"questions":[{"question":"A?","multi_select":true,"options":[{"label":"x"}]}]});
+        assert_eq!(question_choices(&many), Vec::new(), "multi-select is typed");
         let schema = schemas()
             .into_iter()
             .find(|tool| tool["name"] == "ask_user_question")

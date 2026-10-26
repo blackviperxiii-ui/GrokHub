@@ -2646,6 +2646,46 @@ pub fn build_quick_chips(input: ChipInput<'_>) -> Vec<QuickChip> {
     picked
 }
 
+/// Up to three one-tap follow-ups for the reply that just finished, or none.
+/// Only a failed turn or a move that names an action ("Fix the cause") earns
+/// them, so most replies end with no suggestions at all.
+pub fn reply_suggestions(said: &str, heard: &str, failed: bool) -> Vec<QuickChip> {
+    let chat = [
+        ("user".to_string(), said.to_string()),
+        ("assistant".to_string(), heard.to_string()),
+    ];
+    let mut out = vec![];
+    if let Some(learned) = crate::situation::learn_from_turns(said, heard)
+        .filter(|l| l.kind != crate::situation::MoveKind::Next)
+        .filter(|l| {
+            !crate::situation::echoes_source(&l.chip_value, said)
+                && !crate::situation::echoes_source(&l.chip_label, said)
+        })
+    {
+        out.push(chip(
+            &format!("learn-{}", learned.kind.as_str()),
+            &learned.chip_label,
+            &learned.chip_value,
+            ChipKind::Chat,
+            94.0,
+            &learned.chip_hint,
+        ));
+    }
+    if detect_chip_stage(&chat, failed) == ChipStage::Error {
+        out.extend(stage_chips(ChipStage::Error, ""));
+    }
+    let mut seen = std::collections::HashSet::new();
+    out.retain(|c| {
+        c.kind == ChipKind::Chat
+            && !c.value.starts_with('/')
+            && !c.value.starts_with("__")
+            && !generic_follow_up(&c.label)
+            && seen.insert(c.label.to_ascii_lowercase())
+    });
+    out.truncate(3);
+    out
+}
+
 pub fn chip_suggest_prompt(
     chat: &[(String, String)],
     thread_title: &str,
@@ -4207,6 +4247,39 @@ mod tests {
         assert_eq!(
             parse_llm_chips("What’s next | What should we do next?"),
             Vec::<QuickChip>::new()
+        );
+    }
+
+    #[test]
+    fn reply_suggestions_only_follow_a_failure_or_a_named_move() {
+        let labels = |chips: Vec<QuickChip>| chips.into_iter().map(|c| c.label).collect::<Vec<_>>();
+        assert_eq!(
+            labels(reply_suggestions(
+                "list the files in src",
+                "There are 12 files.",
+                false
+            )),
+            Vec::<String>::new(),
+            "a plain hand-off gets no card"
+        );
+        assert_eq!(
+            labels(reply_suggestions("hi", "Hello.", false)),
+            Vec::<String>::new()
+        );
+        assert_eq!(
+            labels(reply_suggestions(
+                "the build failed after the last change",
+                "TypeError: foo is not a function.",
+                false
+            )),
+            vec!["Fix the cause".to_string(), "Root cause + fix".to_string()]
+        );
+        let failed = reply_suggestions("run the tests", "Done.", true);
+        assert_eq!(labels(failed.clone()), vec!["Root cause + fix".to_string()]);
+        assert!(failed.iter().all(|c| c.kind == ChipKind::Chat));
+        assert!(
+            failed.iter().all(|c| !c.value.starts_with('/')),
+            "no /retry in the shell"
         );
     }
 

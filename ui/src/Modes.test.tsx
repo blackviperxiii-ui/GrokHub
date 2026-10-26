@@ -107,6 +107,39 @@ describe("ElicitCard", () => {
     ]);
   });
 
+  it("a question with options is tappable and sends the chosen label", async () => {
+    const onAnswer = vi.fn();
+    const item = card({
+      message: "1. Which fix?\n- Pin the crate (Recommended): smallest change\n- Upgrade everything\n\nReply with the option label.",
+      options: [
+        { label: "Pin the crate", description: "smallest change", recommended: true },
+        { label: "Upgrade everything", description: "", recommended: false },
+      ],
+    });
+    const view = render(<ElicitCard item={item} onAnswer={onAnswer} />);
+    expect(screen.getByText("1. Which fix?")).toBeVisible();
+    expect(screen.queryByText(/Reply with the option label/)).toBeNull();
+    const choices = screen.getAllByRole("button").filter((b) => b.closest(".choices"));
+    expect(choices.map((b) => b.textContent)).toEqual([
+      "Pin the crate Recommendedsmallest change",
+      "Upgrade everything",
+    ]);
+    expect(screen.getAllByText("Recommended")).toHaveLength(1);
+    expect(screen.getByPlaceholderText("Or type your own answer")).toBeVisible();
+    await userEvent.click(screen.getByRole("button", { name: /Upgrade everything/ }));
+    expect(onAnswer.mock.calls).toEqual([["accept", "Upgrade everything"]]);
+    view.rerender(<ElicitCard item={{ ...item, answer: "accept" }} onAnswer={onAnswer} />);
+    expect(screen.getByText("You chose: Upgrade everything")).toBeVisible();
+    expect(screen.queryByRole("group", { name: "Options" })).toBeNull();
+  });
+
+  it("a question without options shows no option buttons", () => {
+    render(<ElicitCard item={card()} onAnswer={() => {}} />);
+    expect(screen.queryByRole("group", { name: "Options" })).toBeNull();
+    expect(screen.getByText("Which color?")).toBeVisible();
+    expect(screen.getByPlaceholderText("Your answer")).toBeVisible();
+  });
+
   it("a declined plan says it stays in plan mode", () => {
     render(<ElicitCard item={card({ server: "Plan", fieldName: null, answer: "decline" })} onAnswer={() => {}} />);
     expect(screen.getByText("Kept in plan mode.")).toBeVisible();
