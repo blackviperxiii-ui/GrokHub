@@ -18,6 +18,7 @@ pub mod personality;
 pub mod playbooks;
 pub mod plugins;
 pub mod pulse;
+pub mod pulse_feed;
 pub mod remote;
 pub mod settings;
 
@@ -162,12 +163,9 @@ fn session(state: &ShellState, conversation_id: &str) -> Arc<agent::Session> {
     Arc::clone(session)
 }
 
-fn route(
-    settings: &ShellSettings,
-    session: agent::SessionMode,
-    config_dir: &Path,
-) -> Result<agent::Route, String> {
-    let client = match credential::test_responses_url() {
+/// The model client for the signed-in key, or the loopback mock in tests.
+fn model_client() -> Result<XaiClient, String> {
+    Ok(match credential::test_responses_url() {
         Some(url) => XaiClient::new(
             credential::LOOPBACK_TEST_BEARER,
             AuthKind::ApiKey,
@@ -179,7 +177,15 @@ fn route(
             AuthKind::ApiKey,
             Duration::from_secs(120),
         ),
-    };
+    })
+}
+
+fn route(
+    settings: &ShellSettings,
+    session: agent::SessionMode,
+    config_dir: &Path,
+) -> Result<agent::Route, String> {
+    let client = model_client()?;
     Ok(agent::Route {
         client: Arc::new(client),
         auth_kind: AuthKind::ApiKey,
@@ -216,6 +222,10 @@ async fn chat_turn(
 ) -> Result<String, String> {
     let session = session(state, &conversation_id);
     let config_dir = state.config_dir.clone();
+    if capabilities::current().pulse {
+        // What the person says in chat steers the Feed writer's taste note.
+        pulse_feed::note_chat(&config_dir, &text, grokhub_core::now_ms());
+    }
     tauri::async_runtime::spawn_blocking(move || {
         let route = route(&settings, mode, &config_dir)?;
         let id = conversation_id.clone();
@@ -748,10 +758,53 @@ async fn interest_act(
 }
 
 #[tauri::command]
-async fn get_pulse(state: State<'_, ShellState>) -> Result<pulse::Page, String> {
+async fn get_pulse(
+    state: State<'_, ShellState>,
+    day: Option<pulse::Day>,
+) -> Result<pulse::Page, String> {
     capabilities::needs(capabilities::current().pulse, "Pulse")?;
     let dir = state.config_dir.clone();
-    off_main(move || pulse::load(&dir, grokhub_core::now_ms())).await?
+    off_main(move || pulse::load(&dir, day.as_ref(), grokhub_core::now_ms())).await?
+}
+
+/// Discuss: the text the chat starts from, carrying the post.
+#[tauri::command]
+async fn pulse_discuss(state: State<'_, ShellState>, id: String) -> Result<String, String> {
+    capabilities::needs(capabilities::current().pulse, "Pulse")?;
+    let dir = state.config_dir.clone();
+    off_main(move || pulse::discuss(&dir, &id, grokhub_core::now_ms())).await?
+}
+
+#[tauri::command]
+async fn pulse_why(state: State<'_, ShellState>, id: String) -> Result<String, String> {
+    capabilities::needs(capabilities::current().pulse, "Pulse")?;
+    let dir = state.config_dir.clone();
+    off_main(move || pulse::why(&dir, &id)).await?
+}
+
+#[tauri::command]
+async fn get_feed_prompt(state: State<'_, ShellState>) -> Result<pulse::Prompt, String> {
+    capabilities::needs(capabilities::current().pulse, "Pulse")?;
+    let dir = state.config_dir.clone();
+    off_main(move || pulse::get_prompt(&dir)).await
+}
+
+/// Saving the feed prompt writes one new post right away.
+#[tauri::command]
+async fn save_feed_prompt(
+    state: State<'_, ShellState>,
+    text: String,
+) -> Result<pulse::Prompt, String> {
+    capabilities::needs(capabilities::current().pulse, "Pulse")?;
+    let dir = state.config_dir.clone();
+    off_main(move || pulse::save_prompt(&dir, &text)).await?
+}
+
+#[tauri::command]
+async fn pulse_image(state: State<'_, ShellState>, name: String) -> Result<String, String> {
+    capabilities::needs(capabilities::current().pulse, "Pulse")?;
+    let dir = state.config_dir.clone();
+    off_main(move || pulse::image(&dir, &name)).await?
 }
 
 #[tauri::command]
@@ -1134,6 +1187,13 @@ pub fn run() {
                     grokhub_desktop::set_desktop_enabled(true);
                 }
             }
+            pulse_feed::start(config_dir.clone(), {
+                let config_dir = config_dir.clone();
+                move || {
+                    let client: Box<dyn grokhub_agent::ModelClient> = Box::new(model_client()?);
+                    Ok((client, settings::load(&config_dir).model))
+                }
+            });
             app.manage(ShellState {
                 config_dir,
                 settings: Mutex::new(loaded),
@@ -1219,6 +1279,11 @@ pub fn run() {
             interest_act,
             get_pulse,
             pulse_act,
+            pulse_discuss,
+            pulse_why,
+            get_feed_prompt,
+            save_feed_prompt,
+            pulse_image,
             get_local_ai,
             save_local_ai,
             reset_local_ai,
