@@ -1,0 +1,1 @@
+- Local AI keeps a small log at `models/local_health.jsonl`: engine starts with their load time, stops, missing engine or model, out-of-memory, GPU backend and other start failures, network changes (online, offline, degraded), and where each offline turn went. No prompts, answers or keys, and the home folder is written as `~`.

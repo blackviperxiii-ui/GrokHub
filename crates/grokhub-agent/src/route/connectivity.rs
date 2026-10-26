@@ -61,8 +61,11 @@ pub fn state() -> NetState {
 }
 
 /// Cabin / probe writes the live state (tests and [`on_core_state_changed`]).
+/// A change is logged to `models/local_health.jsonl` (`net`).
 pub fn set_state(s: NetState) {
-    STATE.store(s as u8, Ordering::SeqCst);
+    if STATE.swap(s as u8, Ordering::SeqCst) != s as u8 {
+        super::local_health::log("net", Some(s.as_str()));
+    }
 }
 
 /// Mirror [`grokhub_core::connectivity::state`] into the router atom.
