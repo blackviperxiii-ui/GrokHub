@@ -2337,9 +2337,16 @@ mod channel_tip_tests {
             "#!/bin/sh\necho SUDO \"$*\" >>\"$GROKHUB_PKG_LOG\"\nexec \"$@\"\n",
         )
         .unwrap();
+        // Shim id -u: as root the block installs without asking, but this
+        // case is a normal user, also when the tests run as root.
+        std::fs::write(
+            bin.join("id"),
+            "#!/bin/sh\nif [ \"$1\" = -u ]; then echo 1000; else exec /usr/bin/id \"$@\"; fi\n",
+        )
+        .unwrap();
         {
             use std::os::unix::fs::PermissionsExt;
-            for name in ["pacman", "sudo"] {
+            for name in ["pacman", "sudo", "id"] {
                 let mut perms = std::fs::metadata(bin.join(name)).unwrap().permissions();
                 perms.set_mode(0o755);
                 std::fs::set_permissions(bin.join(name), perms).unwrap();
