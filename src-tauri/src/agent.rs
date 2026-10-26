@@ -47,11 +47,30 @@ pub enum SessionMode {
 /// only while desktop control is on. `voice` is the personality's block
 /// (`crate::personality::voice`). The default voice carries its values rules.
 pub fn system_prompt(workspace: &std::path::Path, desktop: bool, voice: &str) -> String {
+    let volatile = volatile_tail(voice, &grokhub_agent::perm::config_dir());
     grokhub_agent::system_prompt_parts(
         &grokhub_core::cabin_rules::cabin_static_rules(desktop),
-        voice,
+        &volatile,
         workspace,
     )
+}
+
+/// Voice, then the capped SOUL and USER blocks, then the safety closer.
+/// The closer is present only when that tail has something to outrank.
+fn volatile_tail(voice: &str, config_dir: &std::path::Path) -> String {
+    let mut parts = Vec::new();
+    if !voice.trim().is_empty() {
+        parts.push(voice.to_string());
+    }
+    let identity = grokhub_agent::identity_blocks(config_dir);
+    if !identity.is_empty() {
+        parts.push(identity);
+    }
+    if parts.is_empty() {
+        return String::new();
+    }
+    parts.push(grokhub_core::talk::VOLATILE_SAFETY_CLOSER.to_string());
+    parts.join("\n\n")
 }
 
 /// The folder the agent works in: the one picked in Settings, or the
@@ -1047,6 +1066,39 @@ mod tests {
         let (at_rules, at_voice) = (with.find(rules.trim()), with.find(voice));
         assert!(at_rules.is_some() && at_voice.is_some(), "{with}");
         assert!(at_rules < at_voice, "the voice must come after the rules");
+    }
+
+    #[test]
+    fn soul_and_user_ride_before_the_safety_closer() {
+        let cfg = temp_dir("soul-cfg");
+        let _guard = grokhub_agent::perm::ConfigGuard::set(&cfg);
+        std::fs::create_dir_all(cfg.join("memory")).unwrap();
+        std::fs::write(cfg.join("app.json"), "{}\n").unwrap();
+        std::fs::write(
+            cfg.join("memory").join("SOUL.md"),
+            "HARBOR_SOUL_MARK speaks plainly\n",
+        )
+        .unwrap();
+        std::fs::write(
+            cfg.join("memory").join("USER.md"),
+            "HARBOR_USER_MARK keeps a paper chart\n",
+        )
+        .unwrap();
+        let voice = "Personality: Pirate. Talk like a pirate.";
+        let prompt = system_prompt(std::path::Path::new("/tmp"), false, voice);
+        let rules = grokhub_core::cabin_rules::cabin_static_rules(false);
+        let at_rules = prompt.find(rules.trim()).expect("rules");
+        let at_voice = prompt.find(voice).expect("voice");
+        let at_soul = prompt.find("HARBOR_SOUL_MARK").expect("soul");
+        let at_user = prompt.find("HARBOR_USER_MARK").expect("user");
+        let at_closer = prompt
+            .find("earlier in this prompt always win")
+            .expect("closer");
+        assert!(
+            at_rules < at_voice && at_voice < at_soul && at_soul < at_user && at_user < at_closer,
+            "{prompt}"
+        );
+        assert!(!rules.contains("HARBOR_SOUL_MARK"));
     }
 
     #[test]

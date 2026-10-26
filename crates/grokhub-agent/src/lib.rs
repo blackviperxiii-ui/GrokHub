@@ -13,6 +13,7 @@ mod file_checkpoint;
 mod gate;
 pub mod harness;
 mod hooks;
+pub mod identity;
 mod image_budget;
 pub mod indexers;
 mod loopback;
@@ -65,6 +66,7 @@ pub use gate::{ClosedPermits, Gate, PermAnswer, PermMode, PermitInbox, PermitNot
 pub use harness::{
     AccessMode, ComputerUseBackend, GateOutcome, HardClass, APPROVAL_GATE_VIOLATION,
 };
+pub use identity::{identity_blocks, SOUL_BYTE_CAP, USER_BYTE_CAP};
 pub use hooks::{
     discover_hooks, folder_trusted, on_subagent_start, on_subagent_stop, set_folder_trust,
     HookInfo, HookOrigin,

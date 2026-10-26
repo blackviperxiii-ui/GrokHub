@@ -365,4 +365,18 @@ mod tests {
         assert!(err.contains("with profile 2/2"), "{err}");
         assert!(err.contains("tolerance 0"), "{err}");
     }
+
+    #[test]
+    fn a_user_block_does_not_raise_agreement() {
+        let skill = "Follow the steps. Click Export.\n\
+<user>\n\
+Prefers the harbor chart.\n\
+Works in the morning.\n\
+</user>";
+        gate(skill).expect("user block");
+        let text = report(skill);
+        assert!(text.contains("with profile 0/2"), "{text}");
+        assert!(text.contains("agreement without profile 0/2"), "{text}");
+        assert!(text.contains("correction won"), "{text}");
+    }
 }
