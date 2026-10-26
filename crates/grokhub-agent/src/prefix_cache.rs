@@ -76,6 +76,7 @@ impl TurnVolatile {
     pub fn assemble(
         workspace: &Path,
         user_text: &str,
+        history: &[InputItem],
         first_turn: bool,
         style: Option<grokhub_core::talk::TalkStyle>,
         playbook: Option<&str>,
@@ -88,7 +89,7 @@ impl TurnVolatile {
         let memory = if first_turn {
             crate::memory::first_turn_injection(workspace, user_text)
         } else {
-            crate::memory::followup_injection(user_text)
+            crate::memory::followup_injection(workspace, user_text, history)
         };
         Self {
             style,

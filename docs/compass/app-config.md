@@ -13,7 +13,7 @@
 - `crates/grokhub-app/src/app/settings.rs`: the Settings page that edits most fields.
 ## Change recipe
 - New setting: add a field to `AppConfig` with `#[serde(default)]` (or `default = "fn"`), set it in `impl Default for AppConfig`, and add `skip_serializing_if` when an old file should not grow a key.
-- Add a test that parses `{}` and a pre-change file, like `memory_backend_defaults_legacy_and_parses_amr`.
+- Add a test that parses `{}` and a pre-change file, like `memory_backend_defaults_amr_and_keeps_the_legacy_flag`.
 - A nested group follows `feed_pulse` / `heartbeat`: a core struct with per-field serde defaults and an `is_default` skip (`heartbeat_pace_defaults_omitted_and_overrides_parse`).
 ## What breaks it
 - A field without a serde default: every existing `app.json` fails to parse and is quarantined (the user loses settings).

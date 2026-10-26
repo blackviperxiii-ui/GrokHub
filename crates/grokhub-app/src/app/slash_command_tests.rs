@@ -334,6 +334,7 @@ fn remember_appends_memory_and_refuses_a_secret() {
     let root = crate::config::test_config_root("remember-write");
     std::env::set_var("GROKHUB_CONFIG", &root);
     let mut cabin = Cabin::quiet_for_test();
+    cabin.cfg.memory_backend = grokhub_core::amr::MemoryBackend::Legacy;
     cabin.mem_name = "MEMORY.md".into();
     cabin.mem_body.clear();
     cabin.run_slash_line("/remember harbor light");
@@ -357,6 +358,7 @@ fn memory_goal_model_loop_forget_and_empty_imagine() {
     let root = crate::config::test_config_root("memory-goal");
     std::env::set_var("GROKHUB_CONFIG", &root);
     let mut cabin = Cabin::quiet_for_test();
+    cabin.cfg.memory_backend = grokhub_core::amr::MemoryBackend::Legacy;
     cabin.mem_name = "MEMORY.md".into();
     cabin.mem_body = "harbor light\nkeep the dock\n".into();
     cabin.run_slash_line("/memory");

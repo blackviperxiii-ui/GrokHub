@@ -477,14 +477,15 @@ pub struct AppConfig {
     /// Settings → Pulse → Daily drop: overnight ranked source posts (off by default).
     #[serde(default)]
     pub daily_drop: DailyDropSettings,
-    /// Where `/recall` reads memory. Omitted from `app.json` while this stays
-    /// legacy, so an old file and a default save do not grow a new key.
-    /// Opt in with `"memory_backend": "amr"` (snake_case, not camelCase).
-    /// There is no Settings control for it.
+    /// Where `/recall` reads memory and learned facts go. AMR by default, with
+    /// the legacy files still read beside it; omitted from `app.json` while it
+    /// stays the default. `"memory_backend": "legacy"` (snake_case) is the
+    /// migration flag that keeps the old files only. There is no Settings
+    /// control for it.
     #[serde(
         default,
         rename = "memory_backend",
-        skip_serializing_if = "grokhub_core::amr::MemoryBackend::is_legacy"
+        skip_serializing_if = "grokhub_core::amr::MemoryBackend::is_default"
     )]
     pub memory_backend: grokhub_core::amr::MemoryBackend,
     /// Learned-memory writes. Omitted from `app.json` while this stays on.
@@ -682,7 +683,7 @@ impl Default for AppConfig {
             feed_instructions: String::new(),
             pulse_sources: Default::default(),
             daily_drop: DailyDropSettings::default(),
-            memory_backend: grokhub_core::amr::MemoryBackend::Legacy,
+            memory_backend: grokhub_core::amr::MemoryBackend::Amr,
             memory_writes: true,
         }
     }
@@ -1038,33 +1039,31 @@ mod tests {
     use super::*;
 
     #[test]
-    fn memory_backend_defaults_legacy_and_parses_amr() {
+    fn memory_backend_defaults_amr_and_keeps_the_legacy_flag() {
         let json = serde_json::to_string(&AppConfig::default()).unwrap();
         assert!(
             !json.contains("memory_backend"),
             "default config must omit memory_backend: {json}"
         );
-        let pretty = serde_json::to_string_pretty(&AppConfig::default()).unwrap();
-        assert!(
-            !pretty.contains("memory_backend"),
-            "default save must omit memory_backend: {pretty}"
-        );
         let missing: AppConfig = serde_json::from_str("{}").unwrap();
         assert_eq!(
             missing.memory_backend,
-            grokhub_core::amr::MemoryBackend::Legacy
+            grokhub_core::amr::MemoryBackend::Amr
         );
+        let amr: AppConfig = serde_json::from_str(r#"{"memory_backend":"amr"}"#).unwrap();
+        assert_eq!(amr.memory_backend, grokhub_core::amr::MemoryBackend::Amr);
+        assert!(!serde_json::to_string(&amr)
+            .unwrap()
+            .contains("memory_backend"));
         let legacy: AppConfig = serde_json::from_str(r#"{"memory_backend":"legacy"}"#).unwrap();
         assert_eq!(
             legacy.memory_backend,
             grokhub_core::amr::MemoryBackend::Legacy
         );
-        let amr: AppConfig = serde_json::from_str(r#"{"memory_backend":"amr"}"#).unwrap();
-        assert_eq!(amr.memory_backend, grokhub_core::amr::MemoryBackend::Amr);
-        let saved = serde_json::to_string(&amr).unwrap();
+        let saved = serde_json::to_string(&legacy).unwrap();
         assert!(
-            saved.contains("\"memory_backend\":\"amr\""),
-            "amr opt-in must keep the snake_case key: {saved}"
+            saved.contains("\"memory_backend\":\"legacy\""),
+            "the legacy migration flag must survive a save: {saved}"
         );
     }
 

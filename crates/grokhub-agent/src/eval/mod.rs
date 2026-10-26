@@ -27,6 +27,8 @@ mod scan;
 
 pub mod ab;
 pub mod metrics;
+#[cfg(test)]
+pub mod recall;
 pub mod sycophancy;
 pub mod turn_endings;
 

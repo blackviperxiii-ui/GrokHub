@@ -49,11 +49,20 @@ use crate::tokens::{self, estimate_tokens};
 /// Hard cap on one memory file, matching the cabin memory editor.
 const FILE_CAP: usize = 1024 * 1024;
 
-/// Injected recall stays under this many bytes.
+/// Injected recall stays under this many bytes at the default token cap.
 pub const INJECT_BYTE_CAP: usize = 4_096;
 
-/// Injected recall stays under this many estimated tokens (bytes / 4).
+/// Injected recall stays under this many estimated tokens (bytes / 4) by
+/// default. `"recall_token_cap"` in `app.json` changes it within
+/// [`RECALL_TOKEN_CAP_RANGE`].
 pub const INJECT_TOKEN_CAP: u64 = 1_024;
+
+/// Allowed values for `"recall_token_cap"`; others are clamped into it.
+pub const RECALL_TOKEN_CAP_RANGE: (u64, u64) = (128, 4_096);
+
+/// Later turns recall only when the message has at least this many characters,
+/// so "ok thanks" does not pull the generic project query.
+const FOLLOWUP_MIN_CHARS: usize = 20;
 
 /// Temporal half-life. The score halves every 30 days at equal FTS rank.
 pub const HALF_LIFE_SECS: f64 = 30.0 * 24.0 * 60.0 * 60.0;
@@ -258,20 +267,49 @@ pub fn first_turn_injection(workspace: &Path, user_text: &str) -> Option<String>
     inject_snippets(workspace, user_text, true)
 }
 
-/// Later-turn recall for library / installed-app asks. Empty history already
-/// got [`first_turn_injection`]; follow-ups that name games, Steam, or the
-/// library still need the sealed pack, or the model honestly claims none.
-pub fn followup_injection(user_text: &str) -> Option<String> {
-    if !library_intent(user_text) {
-        return None;
-    }
-    let scope = scope_library_lines(user_text);
-    if scope.is_empty() {
-        return None;
-    }
+/// Later-turn recall. Runs the same AMR and index search as
+/// [`first_turn_injection`] (for messages of [`FOLLOWUP_MIN_CHARS`] or more),
+/// plus the sealed library pack for games / Steam / library asks, and injects
+/// only hits that no earlier memory block in `history` already carried.
+/// `None` when nothing new turned up.
+pub fn followup_injection(
+    workspace: &Path,
+    user_text: &str,
+    history: &[InputItem],
+) -> Option<String> {
+    let scope = if library_intent(user_text) {
+        scope_library_lines(user_text)
+    } else {
+        Vec::new()
+    };
+    let general = user_text.trim().chars().count() >= FOLLOWUP_MIN_CHARS;
+    let amr = if general && amr_enabled() {
+        amr_injection_lines(user_text)
+    } else {
+        Vec::new()
+    };
+    let legacy = if general {
+        legacy_injection_bodies(workspace, user_text).unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    let shown: std::collections::HashSet<String> = injected_lines(history)
+        .into_iter()
+        .map(|line| line.to_lowercase())
+        .collect();
+    let mut seen = std::collections::HashSet::new();
     let snippets: Vec<String> = scope
         .into_iter()
+        .chain(amr)
+        .chain(legacy)
+        .filter(|body| seen.insert(body.trim().to_lowercase()))
         .map(|body| grokhub_core::redact_recall(&body).0)
+        .filter(|body| {
+            !fence_body(body.trim())
+                .lines()
+                .filter(|line| !line.trim().is_empty())
+                .all(|line| shown.contains(&line.trim().to_lowercase()))
+        })
         .collect();
     format_injection(&snippets)
 }
@@ -475,26 +513,45 @@ fn legacy_injection_bodies(workspace: &Path, user_text: &str) -> Option<Vec<Stri
     Some(hits.into_iter().map(|hit| hit.body).collect())
 }
 
-/// `"memory_backend": "amr"` in `{config}/app.json`. Missing or unreadable is legacy.
+/// Recall reads the AMR store beside the legacy index (dual-read) unless
+/// `{config}/app.json` says `"memory_backend": "legacy"`. That key is the
+/// migration flag for keeping the index-only recall; a missing key, a missing
+/// file or any other value reads both.
 pub fn amr_enabled() -> bool {
-    let Ok(text) = fs::read_to_string(crate::perm::config_dir().join("app.json")) else {
-        return false;
+    amr_enabled_in(&crate::perm::config_dir())
+}
+
+pub(crate) fn amr_enabled_in(config_dir: &Path) -> bool {
+    let Ok(text) = fs::read_to_string(config_dir.join("app.json")) else {
+        return true;
     };
     serde_json::from_str::<serde_json::Value>(&text)
         .ok()
         .and_then(|v| {
             v.get("memory_backend")
                 .and_then(|b| b.as_str())
-                .map(|b| b == "amr")
+                .map(|b| b != "legacy")
         })
-        .unwrap_or(false)
+        .unwrap_or(true)
+}
+
+/// `"recall_token_cap"` in `{config}/app.json`, clamped to
+/// [`RECALL_TOKEN_CAP_RANGE`]. Missing or not a number is [`INJECT_TOKEN_CAP`].
+pub fn recall_token_cap() -> u64 {
+    read_app_json()
+        .and_then(|v| v.get("recall_token_cap").and_then(|c| c.as_u64()))
+        .map(|cap| cap.clamp(RECALL_TOKEN_CAP_RANGE.0, RECALL_TOKEN_CAP_RANGE.1))
+        .unwrap_or(INJECT_TOKEN_CAP)
 }
 
 /// `{config}/amr`, sealing personal nodes with the learned-tier key.
 /// The memory off switch in `app.json` is applied here.
 pub fn amr_store() -> grokhub_core::amr::AmrStore {
-    let dir = crate::perm::config_dir();
-    let vault = crate::harness::LearnedVault::new(&dir);
+    amr_store_in(&crate::perm::config_dir())
+}
+
+pub(crate) fn amr_store_in(dir: &Path) -> grokhub_core::amr::AmrStore {
+    let vault = crate::harness::LearnedVault::new(dir);
     let mut store =
         grokhub_core::amr::AmrStore::at(dir.join("amr")).with_sealer(std::sync::Arc::new(vault));
     store.set_memory_writes(memory_writes_enabled());
@@ -574,12 +631,22 @@ fn amr_injection_lines(user_text: &str) -> Vec<String> {
 /// The recalled lines in a history's memory block (Spike-4c), so egress can
 /// tell when a call carries one. Text outside the fences is the preamble.
 pub fn recall_lines(history: &[crate::InputItem]) -> Vec<String> {
+    fenced_recall_lines(history, true)
+}
+
+/// Every recalled line any memory block in `history` carried, including the
+/// ones the prefix cache puts in the user turn. Later-turn recall skips these.
+fn injected_lines(history: &[crate::InputItem]) -> Vec<String> {
+    fenced_recall_lines(history, false)
+}
+
+fn fenced_recall_lines(history: &[crate::InputItem], system_only: bool) -> Vec<String> {
     let mut out = Vec::new();
     for item in history {
         let crate::InputItem::Message { role, content } = item else {
             continue;
         };
-        if role != "system" {
+        if system_only && role != "system" {
             continue;
         }
         for part in content {
@@ -815,15 +882,14 @@ fn format_injection(snippets: &[String]) -> Option<String> {
         return None;
     }
     out.push_str(&close);
-    if out.len() > max_bytes || estimate_tokens(&out) > INJECT_TOKEN_CAP {
+    if out.len() > max_bytes || estimate_tokens(&out) > recall_token_cap() {
         return None;
     }
     Some(out)
 }
 
 fn inject_byte_budget() -> usize {
-    let from_tokens = (INJECT_TOKEN_CAP as usize).saturating_mul(tokens::BYTES_PER_TOKEN as usize);
-    INJECT_BYTE_CAP.min(from_tokens)
+    (recall_token_cap() as usize).saturating_mul(tokens::BYTES_PER_TOKEN as usize)
 }
 
 fn fence_body(text: &str) -> String {
@@ -1375,6 +1441,63 @@ mod tests {
         assert!(block.contains("harbor"));
     }
 
+    fn system_block(text: String) -> InputItem {
+        InputItem::Message {
+            role: "system".into(),
+            content: vec![ContentPart::InputText(text)],
+        }
+    }
+
+    #[test]
+    fn later_turns_recall_only_hits_no_earlier_block_carried() {
+        let (_cfg, ws, _guard) = temp_pair("followup-new");
+        fs::write(
+            workspace_memory_path(&ws),
+            "harbor ferry leaves at nine\n\nlighthouse keeper: Ines\n",
+        )
+        .unwrap();
+        let first = first_turn_injection(&ws, "when does the harbor ferry leave today").unwrap();
+        assert!(first.contains("harbor ferry leaves at nine"), "{first}");
+        assert!(!first.contains("Ines"), "{first}");
+        let history = vec![system_block(first.clone())];
+        assert_eq!(
+            followup_injection(&ws, "and the harbor ferry, when does it leave", &history),
+            None,
+            "a hit the first block carried is not injected again"
+        );
+        let later =
+            followup_injection(&ws, "who is the lighthouse keeper these days", &history).unwrap();
+        assert!(later.contains("lighthouse keeper: Ines"), "{later}");
+        assert!(!later.contains("ferry"), "{later}");
+        assert_eq!(followup_injection(&ws, "ok thanks", &history), None);
+        // The prefix cache puts the block in the user turn; it still counts.
+        let in_user = vec![InputItem::Message {
+            role: "user".into(),
+            content: vec![ContentPart::InputText(first)],
+        }];
+        assert_eq!(
+            followup_injection(&ws, "and the harbor ferry, when does it leave", &in_user),
+            None
+        );
+    }
+
+    #[test]
+    fn recall_token_cap_is_configurable_and_clamped() {
+        let (cfg, ws, _guard) = temp_pair("recall-cap");
+        assert_eq!(recall_token_cap(), INJECT_TOKEN_CAP);
+        fs::write(cfg.join("app.json"), r#"{"recall_token_cap":256}"#).unwrap();
+        assert_eq!(recall_token_cap(), 256);
+        let huge = format!("harbor {}\n", "light ".repeat(4_000));
+        fs::write(workspace_memory_path(&ws), &huge).unwrap();
+        let block = first_turn_injection(&ws, "tell me about the harbor lights please").unwrap();
+        assert!(block.len() <= 1_024, "{}", block.len());
+        assert!(estimate_tokens(&block) <= 256);
+        fs::write(cfg.join("app.json"), r#"{"recall_token_cap":99999}"#).unwrap();
+        assert_eq!(recall_token_cap(), 4_096);
+        fs::write(cfg.join("app.json"), r#"{"recall_token_cap":1}"#).unwrap();
+        assert_eq!(recall_token_cap(), 128);
+    }
+
     #[test]
     fn amr_first_turn_reads_both_stores_and_skips_tombstones() {
         use grokhub_core::amr::{remember_line, LineWrite};
@@ -1396,7 +1519,9 @@ mod tests {
         remember_line(&store, &line("the harbor ferry leaves at nine"), 1).unwrap();
         let ask = "when does the harbor ferry leave today";
 
-        // Legacy: app.json has no backend key, so AMR is not read.
+        // The migration flag keeps recall on the legacy index only.
+        fs::write(cfg.join("app.json"), r#"{"memory_backend":"legacy"}"#).unwrap();
+        assert!(!amr_enabled());
         let legacy = first_turn_injection(&ws, ask).unwrap();
         assert!(
             legacy.contains("the harbor ferry leaves at nine"),
@@ -1404,7 +1529,8 @@ mod tests {
         );
         assert!(!legacy.contains("harbor lamp"), "{legacy}");
 
-        fs::write(cfg.join("app.json"), r#"{"memory_backend":"amr"}"#).unwrap();
+        // No backend key: AMR is on by default and the index is still read.
+        fs::remove_file(cfg.join("app.json")).unwrap();
         assert!(amr_enabled());
         let both = first_turn_injection(&ws, ask).unwrap();
         assert!(both.contains("the harbor lamp is green"), "{both}");
@@ -1488,7 +1614,7 @@ mod tests {
     }
 
     /// Sealed Installed-app facts must reach the model on a gaming/library ask
-    /// even when `memory_backend` is still the default (legacy).
+    /// even when `memory_backend` is set to legacy.
     #[test]
     fn gaming_library_ask_injects_sealed_installed_apps_on_legacy_backend() {
         use grokhub_core::amr::{NodeDraft, NodeType, Sensitivity};
@@ -1497,7 +1623,8 @@ mod tests {
         let (cfg, ws, _guard) = temp_pair("apps-inject");
         let keys = Arc::new(crate::harness::MemoryKeyStore::new());
         crate::harness::use_key_store_for(&cfg, keys);
-        // No memory_backend key → legacy. Scope facts still live in AMR.
+        // The legacy flag turns AMR recall off. Scope facts still live in AMR.
+        fs::write(cfg.join("app.json"), r#"{"memory_backend":"legacy"}"#).unwrap();
         assert!(!amr_enabled());
 
         let store = amr_store();
@@ -1545,10 +1672,10 @@ mod tests {
             "affordance line: {block}"
         );
 
-        let follow =
-            followup_injection("scan my steam library").expect("follow-up library ask injects");
+        let follow = followup_injection(&ws, "scan my steam library", &[])
+            .expect("follow-up library ask injects");
         assert!(follow.contains("Installed app: ARC Raiders"), "{follow}");
-        assert!(followup_injection("what is 2+2").is_none());
+        assert!(followup_injection(&ws, "what is 2+2", &[]).is_none());
     }
 
     #[test]

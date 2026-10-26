@@ -142,21 +142,28 @@ impl std::fmt::Display for AmrError {
 
 impl std::error::Error for AmrError {}
 
-/// Which store `/recall` reads. Missing settings stay [`Legacy`](Self::Legacy).
+/// Which store `/recall` reads and learned facts go to. Missing settings are
+/// [`Amr`](Self::Amr); recall still reads the legacy files beside it
+/// (dual-read). `"memory_backend": "legacy"` is the migration flag that keeps
+/// the old files only.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum MemoryBackend {
     /// SOUL.md, USER.md, MEMORY.md, and learned insights.
-    #[default]
     Legacy,
     /// `{config}/amr` nodes.
+    #[default]
     Amr,
 }
 
 impl MemoryBackend {
-    /// Default saves skip the settings key when this is true.
     pub fn is_legacy(&self) -> bool {
         matches!(self, Self::Legacy)
+    }
+
+    /// Default saves skip the settings key when this is true.
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
     }
 }
 

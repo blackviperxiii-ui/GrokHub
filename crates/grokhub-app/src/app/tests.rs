@@ -1898,6 +1898,7 @@ fn forget_topic_stays_off_a_run() {
     std::env::set_var("GROKHUB_CONFIG", &root);
 
     let mut cabin = super::Cabin::quiet_for_test();
+    cabin.cfg.memory_backend = grokhub_core::amr::MemoryBackend::Legacy;
     cabin.new_thread(false);
     cabin.mem_name = "MEMORY.md".into();
     let note = "harbor light at dusk".to_string();

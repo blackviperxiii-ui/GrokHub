@@ -741,6 +741,33 @@ mod tests {
     }
 
     #[test]
+    fn soul_and_user_ride_the_volatile_tail_under_the_closer() {
+        let (_lock, _root, mut cabin) = cabin_with_chat();
+        cabin.set_chat_personality("pirate");
+        let (stable_before, _) = cabin.chat_prompt_parts();
+        let mem = crate::config::memory_dir();
+        std::fs::create_dir_all(&mem).unwrap();
+        std::fs::write(mem.join("SOUL.md"), "# SOUL\nCalm and direct.\n").unwrap();
+        std::fs::write(mem.join("USER.md"), "- Prefers metric units\n").unwrap();
+        let (stable, volatile) = cabin.chat_prompt_parts();
+        assert_eq!(
+            stable, stable_before,
+            "SOUL/USER never touch the stable prefix"
+        );
+        let soul = volatile
+            .find("<agent-self>\nCalm and direct.\n</agent-self>")
+            .unwrap();
+        let user = volatile
+            .find("- Prefers metric units\n</user-profile>")
+            .unwrap();
+        let voice = volatile.find("Personality: Pirate").unwrap();
+        let closer = volatile.find("earlier in this prompt always win").unwrap();
+        assert!(voice < soul && soul < user && user < closer, "{volatile}");
+        let (_, again) = cabin.chat_prompt_parts();
+        assert_eq!(again, volatile, "same files, same bytes turn to turn");
+    }
+
+    #[test]
     fn live_prompt_parts_put_safety_first_and_close_the_voice_tail() {
         let (_lock, _root, mut cabin) = cabin_with_chat();
         cabin.set_chat_personality("pirate");
