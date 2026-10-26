@@ -1,1 +1,0 @@
-- Shell: Settings has a Playbooks section. View or edit a playbook's TOML, duplicate one into your own, and reset an edited one or remove your copy. It uses the same `playbooks/` files as the cabin and the agent, and a refused save says why.

@@ -1,1 +1,0 @@
-- Cross-platform recode, Phase 5a: the shell's UI also runs in a browser, as a remote for GrokHub on your computer. You pair it with a code (kept in memory only, never in browser storage). It offers chat with tool approvals, automations, memory and connectors, and shows Settings read-only. A Chromium smoke test against a mocked desktop runs in CI.

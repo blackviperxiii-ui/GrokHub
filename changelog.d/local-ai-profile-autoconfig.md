@@ -1,4 +1,0 @@
-- Local AI: GrokHub now reads every GPU (NVIDIA, AMD, Intel Arc and iGPUs, Apple), CPU performance cores and SIMD, battery and thermal state, and sizes each on-device model launch to fit: partial GPU offload, MoE experts kept in RAM on smaller cards, context and KV cache that fit, threads from the performance cores, and a VRAM split across two or more GPUs.
-- Local AI: when the model server runs out of memory, GrokHub retries with fewer GPU layers (up to three times), remembers what worked for that model and GPU, and otherwise names the next smaller model to try.
-- Local AI: fixed the local model server failing to start on GPU machines: the pinned llama.cpp needs `--flash-attn on`, not a bare `--flash-attn`.
-- Local AI: models already downloaded with LM Studio or Ollama, or in a folder you pick, can be found in place without copying them.

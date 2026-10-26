@@ -1,1 +1,0 @@
-- Shell: Settings has a Permissions section. Add Allow, Ask or Deny command rules for every project, see a project's `.claude/settings.json` rules read only, and remember or forget Allow-always commands for this project. It uses the same files the cabin and the agent's approvals read.

@@ -1,1 +1,0 @@
-- Tests: the Settings run-count plot's bar mapping, axis labels, empty series and bounds are now covered.
