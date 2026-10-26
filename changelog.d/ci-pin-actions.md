@@ -1,0 +1,1 @@
+- CI: every GitHub Action in `ci.yml`, `release.yml` and `pii-guard.yml` is pinned to a full commit SHA with its tag in a comment. Dependabot moves the pins each week, and `scripts/ci-guards.sh` fails a workflow that uses a tag or branch.

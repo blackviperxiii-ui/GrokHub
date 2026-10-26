@@ -817,7 +817,12 @@ mod tests {
         let plain = r#"{"id":"g-1","destination":"hub","by":"user"}"#;
         let line = seal_with(&key, AAD_CONSENT, plain.as_bytes()).unwrap();
         assert!(line.starts_with("gh-sealed:v1:"), "{line}");
-        assert!(!line.contains("hub") && !line.contains("g-1"), "{line}");
+        // Quotes and dashes never occur in base64, so random ciphertext can't
+        // spell these (a bare `hub` once showed up by chance).
+        assert!(
+            !line.contains(r#""hub""#) && !line.contains("g-1"),
+            "{line}"
+        );
         // nonce 12 + text + tag 16, base64.
         let raw = base64::engine::general_purpose::STANDARD
             .decode(&line["gh-sealed:v1:".len()..])
