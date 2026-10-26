@@ -9,6 +9,7 @@
 // driver: WebKitWebDriver on Linux, msedgedriver on Windows. macOS has none.
 // Set SMOKE_NATIVE_DRIVER to that driver's path when it is not on PATH, and
 // SMOKE_SCREENSHOT=<file.png> to keep a screenshot of the rendered reply.
+// SMOKE_SHOTS=<folder> to keep one screenshot per page the run walks through.
 // SMOKE_WEB=1 adds the web access step, which needs Playwright's Chromium.
 
 import { spawn } from "node:child_process";
@@ -196,6 +197,16 @@ async function textOf(s, css) {
   return wd("GET", `${s}/element/${await find(s, css)}/text`);
 }
 
+/** With SMOKE_SHOTS set, a screenshot of the window as it is now. */
+async function shot(s, name) {
+  const dir = process.env.SMOKE_SHOTS;
+  if (!dir) return;
+  await sleep(400);
+  mkdirSync(dir, { recursive: true });
+  const png = await wd("GET", `${s}/screenshot`);
+  writeFileSync(join(dir, `${name}.png`), Buffer.from(png, "base64"));
+}
+
 // Automations: add one from plain text, check it lands in the cabin's
 // automations.json, then Run now and wait for the mocked reply on its row.
 async function automations(s, config) {
@@ -218,6 +229,7 @@ async function automations(s, config) {
     const t = await textOf(s, ".card.automation .card-detail");
     return t.includes(REPLY) ? t : null;
   });
+  await shot(s, "automations");
   console.log(`run now replied: ${JSON.stringify(result)}`);
   const after = JSON.parse(readFileSync(join(config, "automations.json"), "utf8"));
   if (after[0].runCount !== 1 || after[0].health?.outcome !== "ok") {
@@ -249,6 +261,7 @@ async function memory(s, workspace) {
     const t = await textOf(s, ".card.hit .card-detail");
     return t === MEMORY_NOTE ? t : null;
   });
+  await shot(s, "memory");
   console.log(`search found: ${JSON.stringify(hit)}`);
 }
 
@@ -272,6 +285,7 @@ async function connectors(s, config) {
     const t = await textOf(s, ".card.connector .card-status");
     return t === "Connected · 1 tool" ? t : null;
   });
+  await shot(s, "connectors");
   console.log(`connector checked: ${JSON.stringify(status)}`);
 
   await click(s, ".card.connector button.quiet.danger");
@@ -332,6 +346,7 @@ async function pulse(s, config) {
   if (!ledger.includes('pulse: dismissed "Smoke board summary" reason=not-this')) {
     throw new Error(`MEMORY.md says ${JSON.stringify(ledger)}`);
   }
+  await shot(s, "pulse");
   console.log(`ledger line: ${JSON.stringify(ledger.trim())}`);
 
   const ideas = await wd("POST", `${s}/element`, {
@@ -390,6 +405,7 @@ async function journal(s, config) {
   });
   await sleep(1000);
   if (mockSeen.length !== calls) throw new Error("To mission sent the prompt without the person");
+  await shot(s, "journal-to-mission");
   console.log(`journal mission in ${saved.missionThread}: ${JSON.stringify(filled.split("\n")[0])}`);
   await wd("POST", `${s}/element/${box}/value`, { text: "\uE009a\uE000\uE003" });
   await waitFor("the emptied chat box", async () =>
@@ -417,6 +433,7 @@ async function palette(s) {
   const search = await waitFor("the palette", () =>
     find(s, "[aria-label='Command palette'] input"),
   );
+  await shot(s, "palette");
   await wd("POST", `${s}/element/${search}/value`, { text: "web access\uE007" });
   await waitFor("Settings at Web access", () => find(s, "section.settings[aria-label='Web access']"));
   console.log("Ctrl+K opened Settings: Web access");
@@ -452,6 +469,7 @@ async function usePersonality(s, config, name) {
   const saved = JSON.parse(readFileSync(join(config, "shell.json"), "utf8"));
   const id = name === "Default" ? "" : name.toLowerCase();
   if (saved.personality !== id) throw new Error(`shell.json holds personality ${JSON.stringify(saved.personality)}`);
+  await shot(s, `settings-personality-${name.toLowerCase()}`);
   console.log(`personality: ${name} in use`);
 }
 
@@ -470,6 +488,7 @@ async function plan(s, workspace) {
   console.log("the chat prompt carries the Pirate voice");
   const refused = mockSeen.find((c) => c.body.includes("smoke-plan-write") && c.body.includes("function_call_output"));
   if (!refused || !refused.body.includes("read-only")) throw new Error("the write was not refused as read-only");
+  await shot(s, "plan-card");
   console.log("plan mode refused the write and showed the plan");
   const approve = await wd("POST", `${s}/element/${card}/element`, {
     using: "xpath",
@@ -539,6 +558,7 @@ async function localAi(s, config) {
   if (rules.pauseForGames !== true || rules.useIdleTime !== true) {
     throw new Error(`governor.json holds ${JSON.stringify(rules)}`);
   }
+  await shot(s, "settings-local-ai");
   console.log("model file picked after the notice");
 
   await click(s, ".local-ai button.reset-local");
@@ -592,6 +612,7 @@ async function labs(s, config) {
   if (!entry?.enabled || !entry.hash) {
     throw new Error(`plugin-state.json holds ${JSON.stringify(state)}`);
   }
+  await shot(s, "settings-labs");
   console.log("labs: bundle installed off, trusted, then turned on");
 }
 
@@ -613,6 +634,7 @@ async function playbooks(s, config) {
   await button("Files", "Duplicate");
   const file = join(config, "playbooks", "files-copy.toml");
   const box = await waitFor("the playbook editor", () => find(s, "textarea[aria-label='Playbook TOML']"));
+  await shot(s, "settings-playbooks-editor");
   await wd("POST", `${s}/element/${box}/value`, { text: "\n# edited in the smoke test\n" });
   await click(s, "form.playbook-editor button[type='submit']");
   await waitFor("the saved copy", async () =>
@@ -646,6 +668,7 @@ async function interests(s, config) {
     const t = profile.topics?.find((x) => x.topic === "air compressors");
     return t?.pinned && t.source === "explicit" ? t : null;
   });
+  await shot(s, "settings-pulse");
   console.log(`interest saved: ${JSON.stringify(saved.topic)}, pinned`);
 }
 
@@ -664,6 +687,7 @@ async function permissions(s, config) {
     const raw = readFileSync(rulesFile, "utf8");
     return raw.includes("WebFetch(domain:example.com)") && raw.includes("deny") ? true : null;
   });
+  await shot(s, "settings-permissions");
   console.log("permissions: deny rule saved to permission-rules.json");
   const remove = await waitFor("the rule's Remove", async () => {
     const el = await wd("POST", `${s}/element`, {
@@ -710,6 +734,7 @@ async function appearance(s, config) {
     const t = JSON.parse(readFileSync(join(config, "shell.json"), "utf8")).theme;
     return t === "dark" ? t : null;
   });
+  await shot(s, "settings-appearance-dark");
   console.log(`appearance: ${theme} on the page (${bg}), ${saved} in shell.json`);
   await pick("System");
   await waitFor("the system theme", async () => ((await look())[0] === "" ? true : null));
@@ -763,6 +788,7 @@ async function main() {
     if (!asked.includes("write") || !asked.includes(NOTE)) {
       throw new Error(`permission card said ${JSON.stringify(asked)}`);
     }
+    await shot(s, "chat-permission-card");
     console.log(`permission card shown: ${JSON.stringify(asked.split("\n")[0])}`);
 
     // Without an answer the write must not run and the turn must not go on.
@@ -788,6 +814,7 @@ async function main() {
       const t = await wd("GET", `${s}/element/${el[ELEMENT]}/text`);
       return t === REPLY ? t : null;
     });
+    await shot(s, "chat-reply");
     console.log(`reply rendered: ${JSON.stringify(text)}`);
     if (process.env.SMOKE_SCREENSHOT) {
       await sleep(1000);
@@ -900,6 +927,7 @@ async function desktop(s, config) {
     }
     return null;
   });
+  await shot(s, "desktop-card");
   console.log(`desktop card shown: ${JSON.stringify(card.text.split("\n").slice(0, 2).join(" "))}`);
   const deskCalls = () => mockSeen.filter((c) => c.body.includes(DESK_PROMPT));
   if (!offered(deskCalls()[0]).includes("type")) throw new Error("desktop tools were not offered");
