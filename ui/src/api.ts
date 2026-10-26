@@ -643,3 +643,32 @@ export function duplicatePlaybook(id: string): Promise<[string, PlaybookPage]> {
 export function resetPlaybook(id: string): Promise<PlaybookPage> {
   return invoke<PlaybookPage>("reset_playbook", { id });
 }
+
+/** Settings → Pulse → Interests (src-tauri/src/interests.rs). */
+export interface InterestTopic {
+  topic: string;
+  pinned: boolean;
+  muted: boolean;
+  /** "From memory", "From chats", "From saved" or "Added by you". */
+  source: string;
+}
+
+export interface InterestPage {
+  /** Pinned, then by weight, then muted. */
+  topics: InterestTopic[];
+  note: string;
+}
+
+export type InterestAct = { kind: "pin"; on: boolean } | { kind: "mute"; on: boolean } | { kind: "remove" };
+
+export function getInterests(): Promise<InterestPage> {
+  return invoke<InterestPage>("get_interests");
+}
+
+export function addInterest(text: string): Promise<InterestPage> {
+  return invoke<InterestPage>("add_interest", { text });
+}
+
+export function interestAct(topic: string, act: InterestAct): Promise<InterestPage> {
+  return invoke<InterestPage>("interest_act", { topic, act });
+}

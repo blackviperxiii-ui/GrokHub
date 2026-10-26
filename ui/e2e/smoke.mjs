@@ -624,6 +624,31 @@ async function playbooks(s, config) {
   console.log("playbook copy removed");
 }
 
+// Settings → Pulse: a topic added here and pinned lands in the cabin's
+// interests.json, the file every Pulse lookup reads.
+async function interests(s, config) {
+  await tab(s, "Settings");
+  await section(s, "Pulse");
+  const input = await waitFor("the topic box", () => find(s, ".interests input"));
+  await wd("POST", `${s}/element/${input}/value`, { text: "air compressors" });
+  await click(s, ".interests button[type='submit']");
+  const pin = await waitFor("the topic's Pin", async () => {
+    const el = await wd("POST", `${s}/element`, {
+      using: "xpath",
+      value: "//li[@aria-label='air compressors']//button[normalize-space()='Pin']",
+    });
+    return el[ELEMENT];
+  });
+  await wd("POST", `${s}/element/${pin}/click`, {});
+  const saved = await waitFor("the pinned topic", async () => {
+    if (!existsSync(join(config, "interests.json"))) return null;
+    const profile = JSON.parse(readFileSync(join(config, "interests.json"), "utf8"));
+    const t = profile.topics?.find((x) => x.topic === "air compressors");
+    return t?.pinned && t.source === "explicit" ? t : null;
+  });
+  console.log(`interest saved: ${JSON.stringify(saved.topic)}, pinned`);
+}
+
 async function main() {
   const mock = await startMock();
   const config = mkdtempSync(join(tmpdir(), "grokhub-shell-smoke-"));
@@ -736,6 +761,7 @@ async function main() {
     await localAi(s, config);
     await labs(s, config);
     await playbooks(s, config);
+    await interests(s, config);
     await desktop(s, config);
     if (process.env.SMOKE_WEB === "1") await web(s);
     console.log("smoke ok");
