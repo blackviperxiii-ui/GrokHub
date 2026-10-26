@@ -34,6 +34,7 @@ describe("paletteRows", () => {
       "Settings: Account",
       "Settings: Personality",
       "Settings: Playbooks",
+      "Settings: Pulse",
       "Settings: Local AI",
       "Settings: Web access",
       "Settings: Labs",
