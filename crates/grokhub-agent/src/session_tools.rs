@@ -85,7 +85,8 @@ pub fn schemas() -> Vec<Value> {
                                         "type": "object",
                                         "properties": {
                                             "label": {"type": "string"},
-                                            "description": {"type": "string"}
+                                            "description": {"type": "string"},
+                                            "recommended": {"type": "boolean"}
                                         },
                                         "required": ["label"],
                                         "additionalProperties": false
@@ -457,6 +458,15 @@ fn question_message(value: &Value) -> Result<String, String> {
                     .and_then(|item| item.as_str())
                     .unwrap_or("")
                     .trim();
+                let recommended = option
+                    .get("recommended")
+                    .and_then(|item| item.as_bool())
+                    .unwrap_or(false);
+                let label = if recommended {
+                    format!("{label} (Recommended)")
+                } else {
+                    label.to_string()
+                };
                 if description.is_empty() {
                     block.push_str(&format!("\n- {label}"));
                 } else {
@@ -778,6 +788,27 @@ mod tests {
         assert_eq!(todos_for(&session), loaded);
         let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::remove_dir_all(&cfg);
+    }
+
+    #[test]
+    fn a_question_marks_the_recommended_option() {
+        let value = json!({"questions":[{"question":"Which fix?","options":[
+            {"label":"Pin the crate","description":"smallest change","recommended":true},
+            {"label":"Upgrade everything"}
+        ]}]});
+        assert_eq!(
+            question_message(&value).expect("message"),
+            "1. Which fix?\n- Pin the crate (Recommended): smallest change\n- Upgrade everything\n\nReply with the option label."
+        );
+        let schema = schemas()
+            .into_iter()
+            .find(|tool| tool["name"] == "ask_user_question")
+            .expect("ask tool");
+        assert_eq!(
+            schema["parameters"]["properties"]["questions"]["items"]["properties"]["options"]
+                ["items"]["properties"]["recommended"],
+            json!({"type": "boolean"})
+        );
     }
 
     #[test]

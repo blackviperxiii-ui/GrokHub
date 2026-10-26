@@ -1637,16 +1637,6 @@ fn home_signal_chips(input: &ChipInput<'_>) -> Vec<QuickChip> {
             "Skills you have",
         ));
     }
-    if input.first_run && input.grok_connected {
-        out.push(chip(
-            "home-first-next",
-            "What's next",
-            "What should we do next in this cabin? One concrete step.",
-            ChipKind::Chat,
-            86.0,
-            "First run",
-        ));
-    }
     out
 }
 
@@ -1685,9 +1675,6 @@ fn apply_home_signal_boost(chips: &mut [QuickChip], input: &ChipInput<'_>) {
             c.score += 16.0;
         }
         if input.first_run {
-            if id.contains("empty-next") || label == "what's next" {
-                c.score += 24.0;
-            }
             if val.contains("__nav:imagine") || label.contains("imagine") {
                 c.score += 18.0;
             }
@@ -1697,9 +1684,6 @@ fn apply_home_signal_boost(chips: &mut [QuickChip], input: &ChipInput<'_>) {
             if id.contains("night") || label.contains("night job") || id.contains("github") {
                 c.score -= 40.0;
             }
-        }
-        if session == "ask" && (label.contains("what's next") || id.contains("empty-next")) {
-            c.score += 10.0;
         }
         if session == "plan" && val == "/plan" {
             c.score += 8.0;
@@ -2100,14 +2084,6 @@ fn stage_chips(stage: ChipStage, mode: &str) -> Vec<QuickChip> {
                 64.0,
                 "New chat",
             ),
-            chip(
-                "empty-next",
-                "What's next",
-                "What should we do next in this cabin? One concrete step.",
-                ChipKind::Chat,
-                62.0,
-                "New chat",
-            ),
         ],
         ChipStage::Error => vec![
             chip(
@@ -2135,14 +2111,6 @@ fn stage_chips(stage: ChipStage, mode: &str) -> Vec<QuickChip> {
                 ChipKind::Chat,
                 88.0,
                 "After tools",
-            ),
-            chip(
-                "tools-next",
-                "Next step",
-                "Given the last tool result, take the next safe step with your tools.",
-                ChipKind::Chat,
-                84.0,
-                "Continue tools",
             ),
         ],
         ChipStage::Long => vec![
@@ -2381,7 +2349,10 @@ pub fn build_quick_chips(input: ChipInput<'_>) -> Vec<QuickChip> {
     let said = last_of(input.chat, "user");
     let heard = last_of(input.chat, "assistant");
     let mut chips = vec![];
-    if let Some(learned) = crate::situation::learn_from_turns(&said, &heard) {
+    // A plain hand-off ("Take the next step") names no action, so it is not a chip.
+    if let Some(learned) = crate::situation::learn_from_turns(&said, &heard)
+        .filter(|l| l.kind != crate::situation::MoveKind::Next)
+    {
         if !crate::situation::echoes_source(&learned.chip_value, &said)
             && !crate::situation::echoes_source(&learned.chip_label, &said)
         {
@@ -2747,9 +2718,11 @@ pub fn chip_suggest_prompt(
         r#"[{"label":"≤28 chars","value":"full prompt to send","kind":"chat","hint":"why useful"}]"#.into(),
         String::new(),
         "Rules:".into(),
-        "- label: short, action-first (e.g. Fix this bug, Add tests, Next step, Think Harder)".into(),
+        "- label: short, action-first, naming the thing (e.g. Fix the login test, Add tests for parse_row, Think Harder)".into(),
         "- value: a concrete instruction the user would send (1–2 sentences max)".into(),
-        "- Prefer next steps grounded in the transcript (not generic tips)".into(),
+        "- Every chip names a specific action grounded in the transcript (a file, error, task or result in it), never a generic tip".into(),
+        "- Never a generic follow-up: no What's next, Next step, Take the next step, or Anything else".into(),
+        "- If nothing specific fits, return []".into(),
         "- Predict what the user will want NEXT, not a recap of what already happened".into(),
         "- Do not copy the user's words or a sentence from the transcript.".into(),
         "- Each chip is the action that would have helped in this situation.".into(),
@@ -2937,8 +2910,38 @@ pub fn parse_llm_chips(raw: &str) -> Vec<QuickChip> {
     out
 }
 
+/// A follow-up that names no action ("What's next", "Next step", "Anything else").
+/// Replies lead with the result, so these are never shown as chips.
+fn generic_follow_up(label: &str) -> bool {
+    let words: String = label
+        .to_ascii_lowercase()
+        .replace('\u{2019}', "'")
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == ' ' || *c == '\'')
+        .collect();
+    matches!(
+        words
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+            .as_str(),
+        "what's next"
+            | "whats next"
+            | "what next"
+            | "next step"
+            | "next steps"
+            | "the next step"
+            | "take the next step"
+            | "anything else"
+            | "what now"
+    )
+}
+
 fn cabin_chip_copy_ok(label: &str, value: &str, hint: &str) -> bool {
     if retired_host_copy("", label, value) || retired_host_copy("", hint, "") {
+        return false;
+    }
+    if generic_follow_up(label) {
         return false;
     }
     let blob = format!("{label} {value} {hint}").to_ascii_lowercase();
@@ -3768,8 +3771,8 @@ mod tests {
             "chips must not quote the ask: {blob}"
         );
         assert!(
-            chips.iter().any(|c| c.id == "learn-next"),
-            "the turn should offer the next-step chip: {:?}",
+            chips.iter().all(|c| c.id != "learn-next"),
+            "a plain hand-off gets no generic next-step chip: {:?}",
             labels(&chips)
         );
     }
@@ -4155,5 +4158,97 @@ mod tests {
         );
         assert_eq!(patched.name, "flash-pi");
         assert!(patched.instructions.contains("newer"));
+    }
+
+    #[test]
+    fn no_generic_next_chip_in_any_stage() {
+        let mem = ChipMemory::default();
+        let tools = [
+            msg("user", "list the repo"),
+            msg("assistant", "HOST_RESULT: 12 files"),
+        ];
+        let mid = [msg("user", "hi"), msg("assistant", "Hello there.")];
+        let failed = [
+            msg("user", "build it"),
+            msg("assistant", "The build hit an error."),
+        ];
+        let chats: [&[(String, String)]; 4] = [&[], &tools, &mid, &failed];
+        for chat in chats {
+            for (first_run, session) in [(false, "chat"), (true, "ask"), (false, "ask")] {
+                let mut i = input(chat, "", &mem, &[], &[]);
+                i.first_run = first_run;
+                i.session_mode = session;
+                let chips = build_quick_chips(i);
+                assert!(!chips.is_empty(), "stage still offers chips");
+                for c in &chips {
+                    assert!(
+                        !generic_follow_up(&c.label),
+                        "generic chip {:?} for chat {:?} first_run={first_run} session={session}",
+                        c.label,
+                        chat
+                    );
+                    assert!(!c.id.ends_with("-next"), "retired chip id {}", c.id);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn llm_chips_drop_generic_follow_ups_and_may_be_empty() {
+        let raw = r#"[
+            {"label":"What's next","value":"What should we do next?","kind":"chat"},
+            {"label":"Next step","value":"Take the next step.","kind":"chat"},
+            {"label":"Anything else?","value":"Is there anything else?","kind":"chat"},
+            {"label":"Add tests for parse_row","value":"Add unit tests for parse_row in rows.rs.","kind":"chat"}
+        ]"#;
+        let labels: Vec<_> = parse_llm_chips(raw).into_iter().map(|c| c.label).collect();
+        assert_eq!(labels, vec!["Add tests for parse_row".to_string()]);
+        assert_eq!(parse_llm_chips("[]"), Vec::<QuickChip>::new());
+        assert_eq!(
+            parse_llm_chips("What’s next | What should we do next?"),
+            Vec::<QuickChip>::new()
+        );
+    }
+
+    #[test]
+    fn generic_follow_up_matches_only_empty_labels() {
+        for label in [
+            "What's next",
+            "whats next?",
+            "Next step",
+            "Take the next step",
+            "Anything else?",
+            "What now?",
+        ] {
+            assert!(generic_follow_up(label), "{label}");
+        }
+        for label in [
+            "Continue GrokHub",
+            "Fix the next-step test",
+            "Add tests",
+            "Try Again",
+        ] {
+            assert!(!generic_follow_up(label), "{label}");
+        }
+    }
+
+    #[test]
+    fn chip_prompt_bans_generic_labels_and_allows_none() {
+        let prompt = chip_suggest_prompt(
+            &[msg("user", "fix the login test")],
+            "Chat",
+            "",
+            &[],
+            &[],
+            &[],
+        );
+        assert!(
+            !prompt.contains("Add tests, Next step, Think Harder"),
+            "{prompt}"
+        );
+        assert!(prompt.contains(
+            "- Never a generic follow-up: no What's next, Next step, Take the next step, or Anything else"
+        ));
+        assert!(prompt.contains("- If nothing specific fits, return []"));
     }
 }

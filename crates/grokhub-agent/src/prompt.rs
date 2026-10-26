@@ -539,6 +539,31 @@ mod tests {
     }
 
     #[test]
+    fn prompt_says_how_a_turn_ends() {
+        let text = system_prompt("Cabin rule line.", &std::env::temp_dir());
+        let start = text.find("<turn_endings>").expect("turn endings section");
+        let end = text.find("</turn_endings>").expect("closed");
+        let rules = &text[start..end];
+        assert!(
+            rules.contains("- Lead with the answer or the result."),
+            "{rules}"
+        );
+        assert!(rules
+            .contains("no generic closing question such as \"What's next?\", \"Anything else?\""));
+        assert!(rules.contains("When the next step is obvious, reversible and inside what the user asked, do it in this turn"));
+        assert!(rules.contains("call ask_user_question with 2 to 4 concrete options and mark exactly one `recommended`"));
+        assert!(rules.contains("A suggestion or a chosen option never replaces it."));
+        // No line anywhere asks the model to close on an offer or a question.
+        for line in text.lines() {
+            let low = line.to_ascii_lowercase();
+            assert!(
+                !low.contains("end with a question") && !low.contains("offer the next step"),
+                "{line}"
+            );
+        }
+    }
+
+    #[test]
     fn rules_layer_global_then_root_then_cwd_and_cap() {
         let root = std::env::temp_dir().join(format!(
             "gh-rules-{}-{}",

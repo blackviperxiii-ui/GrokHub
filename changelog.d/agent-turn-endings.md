@@ -1,0 +1,2 @@
+Chat: replies lead with the result instead of ending on a generic "What's next?". The "What's next", "Next step" and "Take the next step" chips are gone, suggested chips must name a specific action (or there are none), and the agent does an obvious, reversible next step itself.
+Chat: when the agent needs a decision it asks with 2 to 4 options and marks the one it recommends. The Butler, Drill Sergeant and Friendly Neighbor voices no longer close on a question.
