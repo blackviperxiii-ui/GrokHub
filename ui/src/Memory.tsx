@@ -143,8 +143,8 @@ export function Memory() {
   return (
     <section className="memory" aria-label="Memory">
       {notes.amr && (
-        <p className="note">
-          The cabin keeps memory in its AMR store, so chat recall does not read these files.
+        <p className="memory-amr">
+          Learned lines live in the AMR store; chat recall reads it first, then these files.
         </p>
       )}
       <label className="check">

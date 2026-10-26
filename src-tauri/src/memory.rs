@@ -16,7 +16,7 @@ pub struct Notes {
     pub workspace: String,
     pub global_path: String,
     pub workspace_path: String,
-    /// The cabin's AMR store is on, so these files are not what recall reads.
+    /// The AMR store is on (the default); recall reads it before these files.
     pub amr: bool,
     /// Learned-memory writes. Off stops notes, proposals and edits.
     pub writes_on: bool,

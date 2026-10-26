@@ -232,7 +232,7 @@ export interface MemoryNotes {
   workspace: string;
   globalPath: string;
   workspacePath: string;
-  /** The cabin's AMR store is on, so recall does not read these files. */
+  /** The AMR store is on (the default); recall reads it before these files. */
   amr: boolean;
   /** Learned-memory writes. Off stops notes, proposals and edits. */
   writesOn: boolean;
