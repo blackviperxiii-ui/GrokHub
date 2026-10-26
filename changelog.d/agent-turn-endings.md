@@ -1,0 +1,3 @@
+Chat: replies lead with the result instead of ending on a generic "What's next?". The "What's next", "Next step" and "Take the next step" chips are gone, suggested chips must name a specific action (or there are none), and the agent does an obvious, reversible next step itself.
+Chat: when the agent needs a decision it asks with 2 to 4 options and marks the one it recommends. The Butler, Drill Sergeant and Friendly Neighbor voices no longer close on a question.
+Shell chat: Grok's questions show their options as buttons, recommended first; a reply that hit an error or named a fix gets up to three one-tap follow-ups (most replies get none); and an automation's Run now posts a Finished or Failed notice in chat with a one-tap follow-up.

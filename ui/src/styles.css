@@ -423,6 +423,27 @@ textarea {
   gap: 8px;
 }
 
+/* Grok's question with options: one tappable row each, recommended first. */
+.answer-options {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.choice {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  text-align: left;
+}
+
+.choice-detail {
+  font-size: 0.9em;
+  opacity: 0.8;
+}
+
 button.danger {
   color: var(--danger);
   border-color: var(--danger);
@@ -972,6 +993,10 @@ span.chip.quiet {
 
 .signed-out h2 {
   margin: 0;
+}
+
+.card.notice.warn .card-status {
+  color: var(--danger);
 }
 
 /* On/off settings: a slider switch on the right of its label. */

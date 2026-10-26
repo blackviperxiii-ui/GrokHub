@@ -990,7 +990,7 @@ Think through the conversation in your private reasoning before writing; do NOT 
 6. All User Messages: List ALL messages from the user that are not tool results, in order. These are critical for understanding intent and how it evolved. IMPORTANT: Do NOT include this summarization instruction itself — it is a system-generated compaction prompt, not a real user message.
 7. Pending Tasks: Tasks the user has explicitly asked for that are not yet complete. Do not invent tasks the user never requested.
 8. Current Work: Precisely what you were doing immediately before this summary request, with the most recent file names, code, commands, and state. Be specific enough that work can resume mid-stream.
-9. Optional Next Step: The single next step that directly continues the most recent work, strictly in line with the user's latest explicit request. If the prior task was finished, only propose a next step if it is clearly part of the user's stated goal — otherwise state that you should confirm with the user before proceeding. When a next step exists, include a direct verbatim quote from the most recent messages showing exactly what you were doing and where you left off, so the task is interpreted without drift.
+9. Work in Progress: The step that was under way when the conversation was cut, strictly in line with the user's latest explicit request, with a direct verbatim quote from the most recent messages showing exactly what you were doing and where you left off, so the task is interpreted without drift. If the prior task was finished, write "None": do not invent a next step or a question for the user.
 
 IMPORTANT: Do NOT call or use any tools. Respond with ONLY the <summary>...</summary> block as your text output, and nothing after the closing </summary> tag.
 
@@ -1186,7 +1186,10 @@ mod tests {
         let prompt = build_compaction_prompt(None, false);
         assert!(prompt.contains("Primary Request and Intent"));
         assert!(prompt.contains("Do NOT call or use any tools"));
-        assert!(prompt.contains("9. Optional Next Step"));
+        assert!(prompt.contains("9. Work in Progress: The step that was under way"));
+        assert!(prompt.contains("If the prior task was finished, write \"None\""));
+        assert!(!prompt.contains("Optional Next Step"));
+        assert!(!prompt.contains("confirm with the user before proceeding"));
     }
 
     #[test]

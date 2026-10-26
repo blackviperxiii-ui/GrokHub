@@ -14,12 +14,22 @@ function resultLine(result: RunResult): string {
   return result.text.trim() || "Finished with no reply.";
 }
 
-/** `active`: the tab is showing. The page stays mounted so a Run now in
- * flight keeps its button and its reply; it reloads the list on each visit. */
 export const AUTOMATIONS_EMPTY =
   "No automations yet. Describe one above in plain words and it runs on its own schedule.";
 
-export function Automations({ active = true }: { active?: boolean }) {
+/** A finished run, for the notice in chat. */
+export type RunNotice = { name: string; ok: boolean; text: string };
+
+/** `active`: the tab is showing. The page stays mounted so a Run now in
+ * flight keeps its button and its reply; it reloads the list on each visit.
+ * `onFinished` hears about each run that ends, so chat can say so. */
+export function Automations({
+  active = true,
+  onFinished,
+}: {
+  active?: boolean;
+  onFinished?: (notice: RunNotice) => void;
+}) {
   const [rows, setRows] = useState<AutomationRow[] | null>(null);
   const [draft, setDraft] = useState("");
   const [note, setNote] = useState<string | null>(null);
@@ -53,13 +63,16 @@ export function Automations({ active = true }: { active?: boolean }) {
   }
 
   async function run(id: string) {
+    const name = rows?.find((row) => row.id === id)?.name ?? "Automation";
     setRunning(id);
     try {
       const result = await runAutomation(id);
       setResults((now) => ({ ...now, [id]: resultLine(result) }));
+      onFinished?.({ name, ok: !result.error, text: resultLine(result) });
       setRows(await listAutomations());
     } catch (err) {
       setResults((now) => ({ ...now, [id]: String(err) }));
+      onFinished?.({ name, ok: false, text: String(err) });
     } finally {
       setRunning(null);
     }
