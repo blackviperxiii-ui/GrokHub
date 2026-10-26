@@ -640,6 +640,7 @@ impl ScriptedTask {
 pub fn capture_request(req: &ResponsesRequest, workspace: &Path) -> CapturedRequest {
     let mut body = crate::responses_body(req);
     scrub_workspace(&mut body, &workspace_spellings(workspace));
+    mask_shell_outputs(&mut body["input"]);
     let tools = serde_json::to_string(&body["tools"]).unwrap_or_default();
     let input = body["input"].as_array().cloned().unwrap_or_default();
     let lead = input
@@ -661,6 +662,33 @@ pub fn capture_request(req: &ResponsesRequest, workspace: &Path) -> CapturedRequ
 }
 
 const WORKSPACE_MARK: &str = "<workspace>";
+const SHELL_OUTPUT_MARK: &str = "<shell output>";
+const TERMINAL_TOOL: &str = "run_terminal_command";
+
+/// A terminal command's output is the host shell's (sh or PowerShell), not the
+/// harness's, so it is measured as a fixed placeholder on every platform.
+fn mask_shell_outputs(input: &mut Value) {
+    let Some(items) = input.as_array_mut() else {
+        return;
+    };
+    let mut shell_calls = std::collections::BTreeSet::new();
+    for item in items {
+        let call_id = item["call_id"].as_str().unwrap_or_default().to_string();
+        match item["type"].as_str() {
+            Some("function_call") => {
+                if item["name"] == TERMINAL_TOOL {
+                    shell_calls.insert(call_id);
+                } else {
+                    shell_calls.remove(&call_id);
+                }
+            }
+            Some("function_call_output") if shell_calls.contains(&call_id) => {
+                item["output"] = Value::String(SHELL_OUTPUT_MARK.into());
+            }
+            _ => {}
+        }
+    }
+}
 
 /// Every way a tool output may spell the scratch workspace: as given, resolved
 /// (on Windows that expands short `RUNNER~1` names and adds `\\?\`), and with
@@ -864,6 +892,19 @@ mod tests {
         assert!(lines[2].contains(r#""text":"hi""#), "{}", lines[2]);
         assert_eq!(got.schema_bytes, 22);
         assert!(!got.body.contains("gh-eval-ab-x"));
+    }
+
+    #[test]
+    fn mask_shell_outputs_hides_only_terminal_results() {
+        let mut input = serde_json::json!([
+            {"type": "function_call", "call_id": "eval", "name": "run_terminal_command", "arguments": "{}"},
+            {"type": "function_call_output", "call_id": "eval", "output": "hi\nPS C:\\> "},
+            {"type": "function_call", "call_id": "eval", "name": "read_file", "arguments": "{}"},
+            {"type": "function_call_output", "call_id": "eval", "output": "A"}
+        ]);
+        mask_shell_outputs(&mut input);
+        assert_eq!(input[1]["output"], "<shell output>");
+        assert_eq!(input[3]["output"], "A");
     }
 
     #[test]

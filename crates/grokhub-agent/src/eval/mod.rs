@@ -223,8 +223,9 @@ them) and estimates tokens as bytes / 4. The part of a request that repeats the 
 the previous request in the same task counts as cached, the way a provider prefix cache \
 would hit; the rest is billable. Output and reasoning tokens still come from the fixtures. \
 Cost uses the offline tick model in `metrics::offline_cost_ticks` (1 tick / billable input \
-+ 4 / output + 4 / reasoning). The scratch workspace path is replaced before measuring and \
-wall time is omitted, so the report is byte-stable.\n\n",
++ 4 / output + 4 / reasoning). The scratch workspace path is replaced, terminal output (sh or \
+PowerShell, so it differs by platform) counts as a fixed placeholder, and wall time is \
+omitted, so the report is byte-stable.\n\n",
     );
     out.push_str(
         "Columns: **Prefix-stable** = bytes shared with the previous request / bytes of every \
