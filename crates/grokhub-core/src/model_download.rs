@@ -88,6 +88,51 @@ pub fn installed(dir: &Path) -> Option<Installed> {
     (len == rec.bytes).then_some(rec)
 }
 
+/// Catalog models whose finished file is in `dir`, in catalog order.
+pub fn downloaded(dir: &Path) -> Vec<&'static LocalModel> {
+    crate::local_setup::local_models()
+        .iter()
+        .filter(|m| !m.is_drafter && final_path(dir, m).is_file())
+        .collect()
+}
+
+/// Switch to `m`, already downloaded into `dir`: it becomes the installed
+/// model with no new download. The file passed its check when it finished,
+/// so the record carries the catalog's pinned hash.
+pub fn activate(dir: &Path, m: &LocalModel) -> Result<Installed, String> {
+    let path = final_path(dir, m);
+    let bytes = fs::metadata(&path)
+        .map_err(|_| format!("{} isn't downloaded.", m.name))?
+        .len();
+    let rec = Installed {
+        id: m.id.into(),
+        file: m.file.into(),
+        sha256: m.sha256.into(),
+        bytes,
+    };
+    let json = serde_json::to_string_pretty(&rec).map_err(|e| e.to_string())?;
+    fs::write(dir.join(INSTALLED_FILE), json)
+        .map_err(|e| format!("Couldn't record {}: {e}", m.name))?;
+    Ok(rec)
+}
+
+/// Delete `m`'s file (and any `.part`) from `dir`. The installed model is
+/// refused: switch to another one first.
+pub fn remove(dir: &Path, m: &LocalModel) -> Result<(), String> {
+    if installed(dir).is_some_and(|rec| rec.file == m.file) {
+        return Err(format!(
+            "{} is the model GrokHub runs. Switch to another one first.",
+            m.name
+        ));
+    }
+    let _ = fs::remove_file(part_path(dir, m));
+    match fs::remove_file(final_path(dir, m)) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(format!("Couldn't remove {}: {e}", m.name)),
+    }
+}
+
 /// Run (the default), pause or cancel, set from the UI while a download runs.
 #[derive(Debug, Default)]
 pub struct Control(AtomicU8);
@@ -560,5 +605,39 @@ mod tests {
         assert_eq!(content_range_total("bytes 20-49/50"), Some(50));
         assert_eq!(content_range_total("bytes 0-0/*"), None);
         assert_eq!(content_range_total("50"), None);
+    }
+
+    #[test]
+    fn a_downloaded_model_can_be_switched_to_and_an_unused_one_removed() {
+        let dir = tmp("switch");
+        fs::create_dir_all(&dir).unwrap();
+        let ids = |d: &Path| downloaded(d).iter().map(|m| m.id).collect::<Vec<_>>();
+        let all: Vec<&LocalModel> = crate::local_setup::local_models()
+            .iter()
+            .filter(|m| !m.is_drafter)
+            .collect();
+        let (a, b) = (all[0], all[1]);
+        assert_eq!(ids(&dir), Vec::<&str>::new());
+        fs::write(final_path(&dir, a), b"aaaa").unwrap();
+        fs::write(final_path(&dir, b), b"bbbbbb").unwrap();
+        assert_eq!(ids(&dir), vec![a.id, b.id]);
+
+        let rec = activate(&dir, b).unwrap();
+        assert_eq!((rec.id.as_str(), rec.bytes), (b.id, 6));
+        assert_eq!(installed(&dir).map(|r| r.id), Some(b.id.to_string()));
+        assert_eq!(
+            remove(&dir, b),
+            Err(format!(
+                "{} is the model GrokHub runs. Switch to another one first.",
+                b.name
+            ))
+        );
+        remove(&dir, a).unwrap();
+        assert_eq!(ids(&dir), vec![b.id]);
+        assert_eq!(
+            activate(&dir, a),
+            Err(format!("{} isn't downloaded.", a.name))
+        );
+        let _ = fs::remove_dir_all(&dir);
     }
 }

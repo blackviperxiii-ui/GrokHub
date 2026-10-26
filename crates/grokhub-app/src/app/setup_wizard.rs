@@ -32,6 +32,8 @@ pub(super) struct SetupWizard {
     pub(super) dl: Option<super::model_download_ui::ModelDl>,
     /// The model that finished downloading and passed its check.
     pub(super) installed: Option<grokhub_core::model_download::Installed>,
+    /// The catalog id picked in the model dropdown this session.
+    pub(super) choice: Option<String>,
     /// The llama-server engine download in flight.
     pub(super) runtime_dl: Option<super::local_ai_ui::RuntimeDl>,
     /// Last engine download failure (cleared by the user).
@@ -392,7 +394,7 @@ impl Cabin {
                     &format!("This machine: {}.", ls::hardware_line(hw)),
                 );
                 crate::cards::settings_note(ui, &ls::suggestion_line(hw));
-                pick = ls::suggest(hw);
+                pick = self.ui_model_choice(ui);
             }
             None => crate::cards::settings_note(
                 ui,
@@ -402,7 +404,7 @@ impl Cabin {
         crate::cards::settings_note(ui, &format!("Models go to {}.", models_dir().display()));
         let dl_model = self.setup.dl.as_ref().map(|d| d.model);
         if let Some(m) = dl_model.or(pick) {
-            self.ui_model_download(ui, m);
+            self.ui_model_pick_rows(ui, m);
         }
         let installed = local::installed();
         let mut on = self.cfg.local_model;

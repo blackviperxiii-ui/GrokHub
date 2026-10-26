@@ -175,6 +175,7 @@ mod interests_ui;
 mod jobs;
 mod journal_ui;
 mod local_ai_ui;
+mod local_pick_ui;
 mod local_probe;
 mod local_signals;
 mod marketplace_ui;

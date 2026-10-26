@@ -259,10 +259,7 @@ impl Cabin {
         self.setup.dl = None;
         match out {
             Outcome::Done(_) if drafter => status = drafter_done_status(m),
-            Outcome::Done(rec) => {
-                self.setup.installed = Some(rec);
-                self.set_local_model(true);
-            }
+            Outcome::Done(rec) => self.adopt_local_model(rec),
             _ => {}
         }
         self.status = status;
@@ -278,6 +275,11 @@ impl Cabin {
         if self.ui_download_progress(ui) {
             return;
         }
+        self.ui_download_button(ui, m);
+    }
+
+    /// Download or Resume `m`, with Discard for a paused `.part`.
+    pub(super) fn ui_download_button(&mut self, ui: &mut egui::Ui, m: &'static LocalModel) {
         let part = md::partial_bytes(&models_dir(), m);
         let label = match part {
             Some(b) => format!(
@@ -298,7 +300,7 @@ impl Cabin {
     }
 
     /// Progress with Pause and Cancel while a download runs; `false` when none does.
-    fn ui_download_progress(&mut self, ui: &mut egui::Ui) -> bool {
+    pub(super) fn ui_download_progress(&mut self, ui: &mut egui::Ui) -> bool {
         let Some(dl) = &self.setup.dl else {
             return false;
         };

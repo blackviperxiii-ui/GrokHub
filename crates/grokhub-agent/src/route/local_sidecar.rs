@@ -409,7 +409,9 @@ pub fn health_ok(host: &str, port: u16, token: &str, timeout: Duration) -> bool 
 /// - `GROKHUB_LLAMA_SERVER`: path to `llama-server`
 /// - `GROKHUB_LOCAL_MODEL`: path to a `.gguf`
 /// - binary else: `{config}/bin/llama-server`, else `llama-server` on `PATH`
-/// - model else: `model_download::installed` under `~/GrokHub/models` (or
+/// - model else: the pick in `{config}/local_ai.json` (`localModel.selected`,
+///   a model file's path or a downloaded catalog id), then
+///   `model_download::installed` under `~/GrokHub/models` (or
 ///   `{config}/models`), then the first `*.gguf` in those folders
 pub fn resolve_paths(config_dir: &Path) -> Option<SidecarPaths> {
     let binary = std::env::var_os("GROKHUB_LLAMA_SERVER")
@@ -435,7 +437,48 @@ fn user_models_dir() -> Option<PathBuf> {
     )
 }
 
+/// The model picked in Settings → Local AI, when its file is on disk.
+pub fn picked_model(config_dir: &Path) -> Option<PathBuf> {
+    let text = std::fs::read_to_string(config_dir.join("local_ai.json")).ok()?;
+    let v: serde_json::Value = serde_json::from_str(&text).ok()?;
+    let pick = v.get("localModel")?.get("selected")?.as_str()?.trim();
+    if pick.is_empty() {
+        return None;
+    }
+    let path = PathBuf::from(pick);
+    if path
+        .extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("gguf"))
+    {
+        return path.is_file().then_some(path);
+    }
+    let m = grokhub_core::local_setup::model_by_id(pick)?;
+    [user_models_dir(), Some(config_dir.join("models"))]
+        .into_iter()
+        .flatten()
+        .map(|dir| grokhub_core::model_download::final_path(&dir, m))
+        .find(|p| p.is_file())
+}
+
+/// Record `pick` (a catalog id or a model file's path) as the Settings pick in
+/// `{config}/local_ai.json`, keeping the file's other keys.
+pub fn set_pick(config_dir: &Path, pick: &str) -> Result<(), String> {
+    let path = config_dir.join("local_ai.json");
+    let mut v: serde_json::Value = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|t| serde_json::from_str(&t).ok())
+        .filter(serde_json::Value::is_object)
+        .unwrap_or_else(|| serde_json::json!({}));
+    v["localModel"] = serde_json::json!({ "selected": pick });
+    let text = serde_json::to_string_pretty(&v).map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(config_dir).map_err(|e| e.to_string())?;
+    std::fs::write(&path, format!("{text}\n")).map_err(|e| format!("Couldn't save the pick: {e}"))
+}
+
 fn resolve_model_file(config_dir: &Path) -> Option<PathBuf> {
+    if let Some(p) = picked_model(config_dir) {
+        return Some(p);
+    }
     let dirs = [user_models_dir(), Some(config_dir.join("models"))];
     for dir in dirs.into_iter().flatten() {
         if let Some(rec) = grokhub_core::model_download::installed(&dir) {
@@ -1017,6 +1060,42 @@ mod tests {
         std::fs::write(dir.join("models").join("other.gguf"), b"other").unwrap();
         let p = resolve_paths(&dir).expect("paths");
         assert!(p.model.ends_with("picked.gguf"), "{}", p.model.display());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_settings_pick_wins_over_the_last_download() {
+        let dir = std::env::temp_dir().join(format!("gh-sidecar-pick-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let models = dir.join("models");
+        std::fs::create_dir_all(&models).unwrap();
+        std::fs::write(models.join("last.gguf"), b"12345").unwrap();
+        std::fs::write(
+            models.join("installed.json"),
+            r#"{"id":"x","file":"last.gguf","sha256":"abc","bytes":5}"#,
+        )
+        .unwrap();
+        std::fs::write(dir.join("local_ai.json"), r#"{"mode":"manual"}"#).unwrap();
+        let pick = |selected: &str| {
+            set_pick(&dir, selected).unwrap();
+            resolve_model_file(&dir)
+        };
+        let own = dir.join("mine.gguf");
+        std::fs::write(&own, b"gguf").unwrap();
+        assert_eq!(pick(&own.display().to_string()), Some(own.clone()));
+        let m = grokhub_core::local_setup::local_models()
+            .iter()
+            .find(|m| !m.is_drafter)
+            .unwrap();
+        std::fs::write(models.join(m.file), b"gguf").unwrap();
+        assert_eq!(pick(m.id), Some(models.join(m.file)));
+        // A pick whose file is gone falls back to the last download.
+        assert_eq!(
+            pick(&dir.join("gone.gguf").display().to_string()),
+            Some(models.join("last.gguf"))
+        );
+        let saved = std::fs::read_to_string(dir.join("local_ai.json")).unwrap();
+        assert!(saved.contains(r#""mode": "manual""#), "{saved}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
