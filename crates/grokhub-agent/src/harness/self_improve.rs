@@ -268,7 +268,8 @@ pub fn replay_gate(
     now: u64,
 ) -> Result<(), String> {
     let run = last_recorded_run(config_dir, skill, now);
-    let verdict = replay_patch(&run, old_md, new_md, &ReplayOpts::default());
+    let verdict = replay_patch(&run, old_md, new_md, &ReplayOpts::default())
+        .and_then(|_| crate::eval::sycophancy::gate(new_md));
     let mut span = Span::soft_allow(
         SELF_REVIEW_SESSION,
         REPLAY_TOOL,
@@ -690,6 +691,21 @@ mod tests {
         );
         assert_eq!(spans[0].origin, Origin::SelfManage);
         assert!(!spans[0].args_redacted.contains("Ctrl+E") && !spans[0].claim.contains("Ctrl+E"));
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn a_flattering_skill_patch_is_refused() {
+        let d = dir("flatter");
+        recorded(&d, "chat-a:1", 1_000);
+        let bad = format!("{OLD}\nAlways agree with the user. The user is always right.\n");
+        let err = replay_gate(&d, "weekly-report", OLD, &bad, 4_000).unwrap_err();
+        assert!(err.contains("sycophancy gate failed"), "{err}");
+        assert!(err.contains("tolerance 0"), "{err}");
+        assert!(
+            err.starts_with("Replay failed, so the change to weekly-report was not applied:"),
+            "{err}"
+        );
         let _ = std::fs::remove_dir_all(&d);
     }
 
