@@ -11,6 +11,7 @@ import {
   type LocalManual,
   type LocalModelRow,
 } from "./api";
+import { Toggle } from "./Toggle";
 
 /** Shown once per file before a third-party or abliterated model is picked. */
 export const MODEL_NOTICE =
@@ -250,30 +251,15 @@ export function LocalAi() {
           Manual
         </button>
       </div>
-      <label className="check">
-        <input
-          type="checkbox"
-          checked={config.pauseForGames}
-          onChange={(e) => set({ pauseForGames: e.target.checked })}
-        />
+      <Toggle checked={config.pauseForGames} onChange={(on) => set({ pauseForGames: on })}>
         Pause while gaming or a fullscreen app is in front
-      </label>
-      <label className="check">
-        <input
-          type="checkbox"
-          checked={config.useIdleTime}
-          onChange={(e) => set({ useIdleTime: e.target.checked })}
-        />
+      </Toggle>
+      <Toggle checked={config.useIdleTime} onChange={(on) => set({ useIdleTime: on })}>
         Use idle time to run faster
-      </label>
-      <label className="check">
-        <input
-          type="checkbox"
-          checked={config.throttleOnBattery}
-          onChange={(e) => set({ throttleOnBattery: e.target.checked })}
-        />
+      </Toggle>
+      <Toggle checked={config.throttleOnBattery} onChange={(on) => set({ throttleOnBattery: on })}>
         Slow down on battery (it pauses below 20%)
-      </label>
+      </Toggle>
       {config.mode === "manual" && (
         <div className="local-manual">
           <h3>Model</h3>
@@ -411,14 +397,9 @@ export function LocalAi() {
               />
             </label>
           </div>
-          <label className="check">
-            <input
-              type="checkbox"
-              checked={manual.neverUnload}
-              onChange={(e) => setManual({ neverUnload: e.target.checked })}
-            />
+          <Toggle checked={manual.neverUnload} onChange={(on) => setManual({ neverUnload: on })}>
             Never unload the model
-          </label>
+          </Toggle>
           <h3>Memory caps (up to {CAP_MAX}%)</h3>
           <div className="local-grid">
             {(
