@@ -17,6 +17,8 @@ pub struct Capabilities {
     pub tray: bool,
     /// Settings → Web access: this computer serves the web app (Phase 5).
     pub web_access: bool,
+    /// Settings → Labs → Plugins: bundles install from git or a folder here.
+    pub plugins: bool,
 }
 
 /// The report for an OS name as `std::env::consts::OS` spells it. Linux,
@@ -30,6 +32,7 @@ pub fn for_os(os: &str) -> Capabilities {
         local_ai: desktop,
         tray: desktop,
         web_access: desktop,
+        plugins: desktop,
     }
 }
 
@@ -60,6 +63,7 @@ mod tests {
             local_ai: true,
             tray: true,
             web_access: true,
+            plugins: true,
         };
         assert_eq!(for_os("linux"), all);
         assert_eq!(for_os("windows"), all);
@@ -74,6 +78,7 @@ mod tests {
             local_ai: false,
             tray: false,
             web_access: false,
+            plugins: false,
         };
         assert_eq!(for_os("android"), none);
         assert_eq!(for_os("ios"), none);
@@ -99,6 +104,7 @@ mod tests {
                 "localAi": false,
                 "tray": false,
                 "webAccess": false,
+                "plugins": false,
             })
         );
     }

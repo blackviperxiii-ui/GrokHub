@@ -13,8 +13,9 @@ const DESKTOP: Capabilities = {
   localAi: true,
   tray: true,
   webAccess: true,
+  plugins: true,
 };
-const PHONE: Capabilities = { ...DESKTOP, desktopControl: false, pulse: false, localAi: false, tray: false, webAccess: false };
+const PHONE: Capabilities = { ...DESKTOP, desktopControl: false, pulse: false, localAi: false, tray: false, webAccess: false, plugins: false };
 const WEB: Capabilities = { ...PHONE, remote: true };
 
 const labels = (caps: Capabilities, q: string) => paletteRows(caps, q).map((r) => r.label);
@@ -33,6 +34,7 @@ describe("paletteRows", () => {
       "Settings: Account",
       "Settings: Local AI",
       "Settings: Web access",
+      "Settings: Labs",
       "Settings: About",
     ]);
     expect(labels(PHONE, "")).toEqual([
