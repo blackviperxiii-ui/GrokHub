@@ -2,12 +2,12 @@
 
 Native Rust cabin. No Electron. No Tauri in the egui cabin; the cross-platform Tauri shell is planned in [`docs/cross-platform/README.md`](cross-platform/README.md). One repo, one `main`, one version — two ship artifacts.
 
-**v3.1.0** — Patch on Cabin 3.0: MCP/provider/marketplace SSRF harden, Mission/Journal/Evidence/Recovery, Pulse free web search and interest graph, Auto built-in routing, Imagine UI finish.
+**v3.2.0** — The Tauri shell's preview builds ship next to the cabin, with chat and tool approvals, Automations, Memory, Connectors, Pulse, Journal and a web remote. Also: the Gemma 4 local AI catalog with a resource governor, minisign-verified updates, and CI actions pinned to commit SHAs.
 
 | Platform | Artifact | Latest |
 |----------|----------|--------|
-| **Linux** (Arch / CachyOS) | `grokhub-linux-v3.1.0.tar.gz`, AUR | **v3.1.0** |
-| **Windows** (x86_64) | `GrokHub-Setup-3.1.0.exe`, `grokhub-windows-v3.1.0.zip` | **v3.1.0** |
+| **Linux** (Arch / CachyOS) | `grokhub-linux-v3.2.0.tar.gz`, AUR | **v3.2.0** |
+| **Windows** (x86_64) | `GrokHub-Setup-3.2.0.exe`, `grokhub-windows-v3.2.0.zip` | **v3.2.0** |
 
 Windows vs Linux in the cabin is `cfg(windows)` / `cfg(unix)`. The older [GrokHub-Windows](https://github.com/blackviperxiii-ui/GrokHub-Windows) fork is an archive source — new cabin work lands here.
 
@@ -81,14 +81,14 @@ There are two channels. **Stable** is `main`, where releases are cut. **Beta** i
 ```bash
 ./scripts/install.sh --user --channel beta     # fetch origin, check out beta, build, install
 ./scripts/install.sh --user --channel stable   # back to main
-grokhub --version                              # GrokHub 3.1.0-beta.3 (beta @ abc1234) or GrokHub 3.1.0 (main @ f7dcf9a)
+grokhub --version                              # GrokHub 3.2.0-beta.3 (beta @ abc1234) or GrokHub 3.2.0 (main @ f7dcf9a)
 ```
 
 `--channel` fetches `origin`, checks out the branch (creating a local tracking branch the first time, and fast-forwarding it after that), then builds and installs. Stable follows `main`, not the latest release tag, because the in-app Update already pulls `main`. The switch refuses to run over uncommitted changes, and it stops instead of resetting when your local branch has commits that aren't on `origin`.
 
 The channel is saved to `~/.config/GrokHub/channel` (or `$GROKHUB_CONFIG/channel`), next to the `source` receipt. A plain `./scripts/install.sh --user` keeps the saved channel and builds whatever is checked out; it doesn't move git. Settings → **Update**, `/update`, and `grokhub --update` read the receipt: a beta install pulls `origin beta` and never `origin main`. If the clone isn't on the channel's branch, Update stops and says which command to run. `./scripts/install.sh --dry-run` prints the channel, branch, and receipt it would use, and exits.
 
-`--version` comes from `crates/grokhub-app/build.rs`, which reads the branch, short SHA, and beta N from git at build time. A beta build is labeled `X.Y.Z-beta.N`, where N is the commit count since the newest stable `vX.Y.Z` tag (`git rev-list --count <tag>..HEAD`). Shallow clones without tags fall back to `beta.0` until you `git fetch --tags`. The Cargo version itself never changes for a beta label. A build made without git shows just `GrokHub 3.1.0`.
+`--version` comes from `crates/grokhub-app/build.rs`, which reads the branch, short SHA, and beta N from git at build time. A beta build is labeled `X.Y.Z-beta.N`, where N is the commit count since the newest stable `vX.Y.Z` tag (`git rev-list --count <tag>..HEAD`). Shallow clones without tags fall back to `beta.0` until you `git fetch --tags`. The Cargo version itself never changes for a beta label. A build made without git shows just `GrokHub 3.2.0`.
 
 Limits: building beta from a clone is Linux-only (`scripts/install-windows.ps1` has no `-Channel`); Windows gets Beta from the signed pre-releases. Beta turns itself off when beta catches up to main only on a Linux clone, because that check reads the clone's branches; elsewhere, turn it off in Labs. The Update chip still only notices new stable releases, so on beta, use Settings → **Update** to take the newest beta build.
 
