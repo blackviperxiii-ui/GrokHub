@@ -1,5 +1,4 @@
-//! Single ordered worker for threads / projects / settings disk writes.
-//! Secrets and OAuth refresh stay on their own spawn + `persist_io` (Stage 7).
+//! Single ordered worker for threads / projects / settings / secrets disk writes.
 
 use super::*;
 use std::path::PathBuf;
@@ -28,6 +27,13 @@ enum PersistMsg {
         cfg: Box<AppConfig>,
         err: Arc<Mutex<Option<String>>>,
     },
+    /// secrets.json; `err: None` keeps an OAuth refresh write quiet like before.
+    Secrets {
+        dir: PathBuf,
+        secrets: Box<secrets::Secrets>,
+        gen: u64,
+        err: Option<Arc<Mutex<Option<String>>>>,
+    },
     Flush(mpsc::Sender<()>),
 }
 
@@ -36,14 +42,25 @@ enum PersistMsg {
 #[derive(Clone)]
 pub(super) struct PersistService {
     tx: mpsc::Sender<PersistMsg>,
+    // Kept so a dead worker still lets `send` write the job on the caller.
+    io: Arc<Mutex<()>>,
+    mark: Arc<Mutex<PersistMark>>,
 }
 
 impl PersistService {
     pub(super) fn start(io: Arc<Mutex<()>>, mark: Arc<Mutex<PersistMark>>) -> Self {
         let (tx, rx) = mpsc::channel();
-        // The only persist spawn for threads/projects/settings (Stage 6).
-        std::thread::spawn(move || persist_service_worker(rx, io, mark));
-        Self { tx }
+        let (wio, wmark) = (io.clone(), mark.clone());
+        // The only persist spawn for threads/projects/settings/secrets (Stage 6, 7).
+        std::thread::spawn(move || persist_service_worker(rx, wio, wmark));
+        Self { tx, io, mark }
+    }
+
+    /// Queue a job; if the worker is gone, write it directly so data is not lost.
+    fn send(&self, msg: PersistMsg) {
+        if let Err(mpsc::SendError(msg)) = self.tx.send(msg) {
+            run_persist_msg(msg, &self.io, &self.mark);
+        }
     }
 
     pub(super) fn submit_full(
@@ -54,19 +71,13 @@ impl PersistService {
         done: Option<mpsc::Sender<()>>,
         err: Arc<Mutex<Option<String>>>,
     ) {
-        if self
-            .tx
-            .send(PersistMsg::FullSnap {
-                dir,
-                snap: Box::new(snap),
-                gen,
-                done,
-                err: err.clone(),
-            })
-            .is_err()
-        {
-            note_persist_err(&err, Err("persist worker stopped".into()), "chats");
-        }
+        self.send(PersistMsg::FullSnap {
+            dir,
+            snap: Box::new(snap),
+            gen,
+            done,
+            err,
+        });
     }
 
     pub(super) fn submit_settings(
@@ -76,18 +87,12 @@ impl PersistService {
         gen: u64,
         err: Arc<Mutex<Option<String>>>,
     ) {
-        if self
-            .tx
-            .send(PersistMsg::Settings {
-                dir,
-                slot,
-                gen,
-                err: err.clone(),
-            })
-            .is_err()
-        {
-            note_persist_err(&err, Err("persist worker stopped".into()), "settings");
-        }
+        self.send(PersistMsg::Settings {
+            dir,
+            slot,
+            gen,
+            err,
+        });
     }
 
     pub(super) fn submit_projects(
@@ -96,17 +101,7 @@ impl PersistService {
         nodes: Vec<ProjectNode>,
         err: Arc<Mutex<Option<String>>>,
     ) {
-        if self
-            .tx
-            .send(PersistMsg::Projects {
-                dir,
-                nodes,
-                err: err.clone(),
-            })
-            .is_err()
-        {
-            note_persist_err(&err, Err("persist worker stopped".into()), "projects");
-        }
+        self.send(PersistMsg::Projects { dir, nodes, err });
     }
 
     pub(super) fn submit_window_cfg(
@@ -115,17 +110,28 @@ impl PersistService {
         cfg: AppConfig,
         err: Arc<Mutex<Option<String>>>,
     ) {
-        if self
-            .tx
-            .send(PersistMsg::WindowCfg {
-                dir,
-                cfg: Box::new(cfg),
-                err: err.clone(),
-            })
-            .is_err()
-        {
-            note_persist_err(&err, Err("persist worker stopped".into()), "window");
-        }
+        self.send(PersistMsg::WindowCfg {
+            dir,
+            cfg: Box::new(cfg),
+            err,
+        });
+    }
+
+    /// Write secrets.json unless a newer generation already reached the disk, so
+    /// an older OAuth refresh can never overwrite a newer token.
+    pub(super) fn submit_secrets(
+        &self,
+        dir: PathBuf,
+        secrets: secrets::Secrets,
+        gen: u64,
+        err: Option<Arc<Mutex<Option<String>>>>,
+    ) {
+        self.send(PersistMsg::Secrets {
+            dir,
+            secrets: Box::new(secrets),
+            gen,
+            err,
+        });
     }
 
     /// Drain every message queued before this call. Used by tests and `on_exit`.
@@ -143,6 +149,7 @@ fn persist_msg_err(msg: &PersistMsg) -> Option<Arc<Mutex<Option<String>>>> {
         | PersistMsg::Settings { err, .. }
         | PersistMsg::Projects { err, .. }
         | PersistMsg::WindowCfg { err, .. } => Some(err.clone()),
+        PersistMsg::Secrets { err, .. } => err.clone(),
         PersistMsg::Flush(_) => None,
     }
 }
@@ -153,6 +160,7 @@ fn persist_msg_what(msg: &PersistMsg) -> &'static str {
         PersistMsg::Settings { .. } => "settings",
         PersistMsg::Projects { .. } => "projects",
         PersistMsg::WindowCfg { .. } => "window",
+        PersistMsg::Secrets { .. } => "keys",
         PersistMsg::Flush(_) => "persist",
     }
 }
@@ -163,16 +171,20 @@ fn persist_service_worker(
     mark: Arc<Mutex<PersistMark>>,
 ) {
     while let Ok(msg) = rx.recv() {
-        let err = persist_msg_err(&msg);
-        let what = persist_msg_what(&msg);
-        // One panicked write must not kill the worker; later jobs still run.
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            handle_persist_msg(msg, &io, &mark);
-        }));
-        if result.is_err() {
-            if let Some(err) = err {
-                note_persist_err(&err, Err("persist worker panicked".into()), what);
-            }
+        run_persist_msg(msg, &io, &mark);
+    }
+}
+
+/// One panicked write must not kill the worker (or the caller on fallback).
+fn run_persist_msg(msg: PersistMsg, io: &Arc<Mutex<()>>, mark: &Arc<Mutex<PersistMark>>) {
+    let err = persist_msg_err(&msg);
+    let what = persist_msg_what(&msg);
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        handle_persist_msg(msg, io, mark);
+    }));
+    if result.is_err() {
+        if let Some(err) = err {
+            note_persist_err(&err, Err("persist worker panicked".into()), what);
         }
     }
 }
@@ -225,10 +237,17 @@ fn handle_persist_msg(msg: PersistMsg, io: &Arc<Mutex<()>>, mark: &Arc<Mutex<Per
             }
         }
         PersistMsg::Projects { dir, nodes, err } => {
-            let _pin = pin_scheduled_dir(dir);
+            let _pin = pin_scheduled_dir(dir.clone());
             match io.lock() {
                 Ok(_g) => {
-                    note_persist_err(&err, crate::store::save_projects(&nodes), "projects");
+                    // Write into the dir the job was queued for, not whatever
+                    // `config_dir()` says by the time the worker runs.
+                    let saved = serde_json::to_string(&nodes)
+                        .map_err(|e| e.to_string())
+                        .and_then(|body| {
+                            config::atomic_write(&dir.join("projects.json"), body.as_bytes())
+                        });
+                    note_persist_err(&err, saved, "projects");
                 }
                 Err(_) => {
                     note_persist_err(&err, Err("persist lock poisoned".into()), "projects");
@@ -244,6 +263,28 @@ fn handle_persist_msg(msg: PersistMsg, io: &Arc<Mutex<()>>, mark: &Arc<Mutex<Per
                 Err(_) => {
                     note_persist_err(&err, Err("persist lock poisoned".into()), "window");
                 }
+            }
+        }
+        PersistMsg::Secrets {
+            dir,
+            secrets,
+            gen,
+            err,
+        } => {
+            let _pin = pin_scheduled_dir(dir);
+            let Ok(_disk) = io.lock() else {
+                if let Some(err) = &err {
+                    note_persist_err(err, Err("persist lock poisoned".into()), "keys");
+                }
+                return;
+            };
+            let mut mark = mark.lock().unwrap_or_else(|e| e.into_inner());
+            if !mark.take_secrets(gen) {
+                return;
+            }
+            let saved = secrets::save(&secrets);
+            if let Some(err) = &err {
+                note_persist_err(err, saved, "keys");
             }
         }
         PersistMsg::Flush(done) => {
@@ -266,4 +307,32 @@ fn maybe_panic_for_test() {
     if PANIC_NEXT.swap(false, std::sync::atomic::Ordering::SeqCst) {
         panic!("persist test panic");
     }
+}
+
+#[cfg(test)]
+#[test]
+fn projects_job_writes_into_its_own_dir() {
+    let dir = std::env::temp_dir().join(format!("gh-persist-proj-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let svc = PersistService::start(
+        Arc::new(Mutex::new(())),
+        Arc::new(Mutex::new(PersistMark::default())),
+    );
+    let err = Arc::new(Mutex::new(None));
+    svc.submit_projects(dir.clone(), Vec::new(), err.clone());
+    svc.flush();
+    assert!(dir.join("projects.json").exists());
+    assert!(err.lock().unwrap().is_none());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A service whose worker already exited, to exercise the direct-write fallback.
+#[cfg(test)]
+pub(super) fn dead_persist_service(
+    io: Arc<Mutex<()>>,
+    mark: Arc<Mutex<PersistMark>>,
+) -> PersistService {
+    let (tx, rx) = mpsc::channel();
+    drop(rx);
+    PersistService { tx, io, mark }
 }

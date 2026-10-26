@@ -1106,9 +1106,10 @@ mod tests {
             .unwrap();
         assert_eq!(text_of(&out), "type_text done");
         let waiter = cabin_answers(&dir, false);
+        // The PIN has a letter so a span's ts_ms digits can never contain it.
         let pin = call(
             "type_text",
-            json!({"text":"4821","element":{"role":"AXSecureTextField","label":"PIN"}}),
+            json!({"text":"48z1","element":{"role":"AXSecureTextField","label":"PIN"}}),
         );
         let out = p.handle_line(&pin, ON, &dir, &mut || false).unwrap();
         let req = waiter.join().unwrap().expect("credential park posted");
@@ -1116,7 +1117,7 @@ mod tests {
             (req.class.as_str(), req.path.as_str(), req.tool.as_str()),
             ("credentials", "A", "type")
         );
-        assert!(!req.action.contains("4821"), "{}", req.action);
+        assert!(!req.action.contains("48z1"), "{}", req.action);
         assert!(
             text_of(&out).starts_with("Denied: hard-class credentials"),
             "{}",
@@ -1149,7 +1150,7 @@ mod tests {
         );
         let trace = std::fs::read_to_string(span_path(&dir, "chat-c")).unwrap();
         assert!(
-            !trace.contains("quarterly") && !trace.contains("4821"),
+            !trace.contains("quarterly") && !trace.contains("48z1"),
             "{trace}"
         );
         let _ = std::fs::remove_dir_all(dir);

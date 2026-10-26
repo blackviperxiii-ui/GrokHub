@@ -133,6 +133,14 @@ pub(super) fn paint_connectivity_status_chip(ui: &mut egui::Ui) {
         ConnectivityUiPhase::OfflineLocal => BadgeTone::Warning,
     };
     badge(ui, phase.label(), tone);
+    // The governor paused the on-device model (a game, low battery, heat).
+    if grokhub_agent::route::local::switched_on() && grokhub_agent::route::local_gov::paused() {
+        badge(
+            ui,
+            grokhub_agent::route::local::LOCAL_PAUSED_MSG,
+            BadgeTone::Warning,
+        );
+    }
 }
 
 /// Compact, Copy session, Export. Same gates the composer pills used.

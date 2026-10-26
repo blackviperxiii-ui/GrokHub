@@ -1,0 +1,166 @@
+# On-device model catalog: the compatibility matrix the setup wizard and the
+# picker (`local_picker.rs`) read. Biggest first. Every file is SHA-256 pinned
+# to the Hugging Face LFS oid; a download that hashes differently is deleted.
+#
+# Sizes are MiB. `min_budget` is the usable memory a model needs to be
+# Recommended on each kind of memory (dedicated GPU VRAM, Apple unified memory
+# at 70% of RAM, or system RAM minus 4 GB); a missing key means never
+# Recommended there. `run_mb` is weights + KV at `ctx_default` + overhead: below
+# that in RAM + VRAM the model is hidden. `tok_s` is a rough Q4_K_M generation
+# speed from public llama.cpp benchmarks; the speed test replaces it.
+#
+# `drafter` pairs a model with a speculative-decoding draft model
+# (`local_draft.rs`): it is only used when the tokenizers hash the same, the
+# engine has the flags, both fit, and the speed test finds it faster.
+#
+# Gemma 4 comes from lmstudio-community's straight Q4_K_M quants of Google's
+# weights (ggml-org publishes Q4_0 only). Community fine-tunes and abliterated
+# builds are never listed here.
+
+[[model]]
+id = "gemma-4-31b-it-q4_k_m"
+name = "Gemma 4 31B"
+repo = "lmstudio-community/gemma-4-31B-it-GGUF"
+file = "gemma-4-31B-it-Q4_K_M.gguf"
+sha256 = "8f3479643461601703f717931e399cc440dbd5ada598c025d6296c8165d94be9"
+download_mb = 17_822
+quant = "Q4_K_M"
+license = "Apache-2.0"
+badges = ["tools", "vision"]
+tier = "T4"
+route = "local:small"
+ctx_default = 32_768
+run_mb = 19_800
+needs_avx2 = true
+# Speculative decoding with E2B (same family; the tokenizer gate checks it).
+drafter = "gemma-4-e2b-it-q4_k_m"
+min_budget = { gpu = 20_480, unified = 40_960 }
+tok_s = { gpu = 35, unified = 25, cpu = 2 }
+
+[[model]]
+id = "muse-glimmer-30b-q4_k_m"
+name = "Muse Glimmer 30B"
+repo = "meta-models/Muse-Glimmer-30B-GGUF"
+file = "Muse-Glimmer-30B-KQuant-17GB-Q4_K_M.gguf"
+sha256 = "4cc57c0f51040a226e5a72cc47b7613f7772950e460a665f7083de89f183f60e"
+download_mb = 15_981
+quant = "Q4_K_M"
+license = "Apache-2.0"
+badges = ["tools", "vision"]
+tier = "T3"
+route = "local:small"
+ctx_default = 32_768
+run_mb = 17_600
+needs_avx2 = true
+# The `muse-glimmer` architecture landed in llama.cpp b10353.
+min_llama_build = 10_353
+# Offered, never picked for the user.
+optional = true
+drafter = "muse-glimmer-30b-dflash-q4_k_m"
+min_budget = { gpu = 22_528, unified = 32_768 }
+tok_s = { gpu = 40, unified = 30, cpu = 3 }
+
+[[model]]
+id = "gemma-4-26b-a4b-it-q4_k_m"
+name = "Gemma 4 26B-A4B"
+repo = "lmstudio-community/gemma-4-26B-A4B-it-GGUF"
+file = "gemma-4-26B-A4B-it-Q4_K_M.gguf"
+sha256 = "e19514d9541344001cb7c8eaf88704b8bf2e5d8f4e9aac12402eed360cffdfc4"
+download_mb = 16_018
+quant = "Q4_K_M"
+license = "Apache-2.0"
+badges = ["tools", "vision", "moe"]
+tier = "T3"
+route = "local:small"
+ctx_default = 16_384
+run_mb = 17_400
+needs_avx2 = true
+# Mixture of experts (about 4B active): on a 16 GB GPU the experts that don't
+# fit run from RAM and it stays fast.
+# Speculative decoding with E2B (same family; the tokenizer gate checks it).
+drafter = "gemma-4-e2b-it-q4_k_m"
+min_budget = { gpu = 15_360, unified = 20_480 }
+tok_s = { gpu = 60, unified = 50, cpu = 6 }
+
+[[model]]
+id = "gemma-4-12b-it-q4_k_m"
+name = "Gemma 4 12B"
+repo = "lmstudio-community/gemma-4-12B-it-GGUF"
+file = "gemma-4-12B-it-Q4_K_M.gguf"
+sha256 = "95d83ba36642b1f385fb906b5962a71763361be3bac930a709945f72d97473f8"
+download_mb = 7_040
+quant = "Q4_K_M"
+license = "Apache-2.0"
+badges = ["tools", "vision"]
+tier = "T3"
+route = "local:small"
+ctx_default = 16_384
+run_mb = 8_400
+needs_avx2 = true
+# Speculative decoding with E2B (same family; the tokenizer gate checks it).
+drafter = "gemma-4-e2b-it-q4_k_m"
+min_budget = { gpu = 10_240, unified = 14_336 }
+tok_s = { gpu = 35, unified = 20, cpu = 3 }
+
+[[model]]
+id = "gemma-4-e4b-it-q4_k_m"
+name = "Gemma 4 E4B"
+repo = "lmstudio-community/gemma-4-E4B-it-GGUF"
+file = "gemma-4-E4B-it-Q4_K_M.gguf"
+sha256 = "0ffb122c8b6921f13cbc34186e052524d0b5803b17f4867b7197a561400b3770"
+download_mb = 5_089
+quant = "Q4_K_M"
+license = "Apache-2.0"
+badges = ["tools", "vision"]
+tier = "T2"
+route = "local:small"
+ctx_default = 8_192
+run_mb = 5_900
+needs_avx2 = true
+# Speculative decoding with E2B (same family; the tokenizer gate checks it).
+drafter = "gemma-4-e2b-it-q4_k_m"
+min_budget = { gpu = 6_144, unified = 8_192, cpu = 6_144 }
+tok_s = { gpu = 40, unified = 30, cpu = 5 }
+
+[[model]]
+id = "gemma-4-e2b-it-q4_k_m"
+name = "Gemma 4 E2B"
+repo = "lmstudio-community/gemma-4-E2B-it-GGUF"
+file = "gemma-4-E2B-it-Q4_K_M.gguf"
+sha256 = "71e6e8cb64a76da1a734fb8f6ba389d2784950d9902f5e87244fca0a15190c94"
+download_mb = 3_270
+quant = "Q4_K_M"
+license = "Apache-2.0"
+badges = ["tools", "vision"]
+tier = "T1"
+route = "local:tiny"
+ctx_default = 8_192
+run_mb = 3_900
+# Runs on the AVX-only CPU build (the pinned llama.cpp ships sandybridge and
+# ivybridge CPU variants and loads the best one at start).
+needs_avx2 = false
+min_budget = { gpu = 3_072, unified = 3_072, cpu = 3_072 }
+tok_s = { gpu = 60, unified = 35, cpu = 7 }
+
+# Speculative-decoding drafter for Muse Glimmer: listed so it can be pinned and
+# offered next to its model, never scored on its own.
+[[model]]
+id = "muse-glimmer-30b-dflash-q4_k_m"
+name = "Muse Glimmer DFlash drafter"
+repo = "meta-models/Muse-Glimmer-30B-GGUF"
+file = "dflash-Muse-Glimmer-30B-Q4_K_M.gguf"
+sha256 = "b2e808bf656086fe86bd0d0bd990f01d33e377537a07c02d45371517c8b264ef"
+download_mb = 1_556
+quant = "Q4_K_M"
+license = "Apache-2.0"
+badges = []
+tier = "T3"
+route = "local:small"
+ctx_default = 32_768
+run_mb = 1_800
+needs_avx2 = true
+min_llama_build = 10_353
+optional = true
+role = "drafter"
+min_budget = {}
+tok_s = { gpu = 0, unified = 0, cpu = 0 }

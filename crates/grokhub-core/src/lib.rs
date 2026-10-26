@@ -39,6 +39,7 @@ pub mod file_watch;
 pub mod findings;
 pub mod fix_plan;
 pub mod frame;
+pub mod gguf;
 pub mod goal;
 pub mod governor;
 pub mod greeting;
@@ -51,15 +52,20 @@ pub mod history;
 pub mod host_cite;
 pub mod host_plan;
 pub mod host_safety;
-pub mod hub_sync;
+pub use grokhub_proto::hub_sync;
 pub mod hygiene;
 pub mod ideas;
 pub mod imagine;
 pub mod imagine_auth;
-pub mod inhabit;
+pub use grokhub_proto::inhabit;
 pub mod interests;
 pub mod journal;
 pub mod learning;
+pub mod local_discover;
+pub mod local_draft;
+pub mod local_governor;
+pub mod local_picker;
+pub mod local_profile;
 pub mod local_setup;
 pub mod mcp_catalog;
 pub mod mcp_oauth;
@@ -367,9 +373,10 @@ pub use imagine_auth::{
 pub use inhabit::{can_inhabit, inhabit_bundle_usable, inhabit_ready, InhabitBundle};
 pub use journal::{
     abandon_entry, add_evidence, add_option, create_entry, decide_entry, defer_entry,
-    dismiss_nudge, due_nudges, edit_entry, link_board_evidence, promote_to_board, remove_evidence,
-    remove_option, search_entries, set_leaning, set_status, EvidenceKind, EvidenceLink,
-    JournalEntry, JournalLeaning, JournalOption, JournalOutcome, JournalStatus,
+    dismiss_nudge, due_nudges, edit_entry, link_board_evidence, mission_entry, mission_start,
+    open_questions, promote_to_board, promote_to_mission, remove_evidence, remove_option,
+    search_entries, set_leaning, set_status, EvidenceKind, EvidenceLink, JournalEntry,
+    JournalLeaning, JournalOption, JournalOutcome, JournalStatus, MissionStart,
 };
 pub use learning::{
     apply_local_lessons, extract_insights, insight_key_for_fact, insight_pin, is_actionable_need,
@@ -474,9 +481,9 @@ pub use skill::{
 };
 pub use slash::{
     filter_slash_commands, filter_slash_hits, grok_command_hits, is_cabin_slash_turn,
-    mark_slash_result, parse_slash, resolve_mode_arg, slash_help, slash_kind, strip_slash_result,
-    unknown_cabin_slash, Slash, SlashDef, SlashHit, WorkflowVerb, EFFORT_AUTO_MSG, SLASH_COMMANDS,
-    SLASH_RESULT_PREFIX,
+    mark_slash_result, parse_slash, resolve_mode_arg, slash_effect, slash_help, slash_kind,
+    strip_slash_result, unknown_cabin_slash, Slash, SlashDef, SlashEffect, SlashHit, WorkflowVerb,
+    EFFORT_AUTO_MSG, SLASH_COMMANDS, SLASH_RESULT_PREFIX, SLASH_SAMPLES,
 };
 pub use ssrf::{
     guard_mcp_registry_url, host_name_blocked, ip_blocked, public_only_resolve, MCP_REGISTRY_HOST,
@@ -579,7 +586,7 @@ pub use windshield::{
     lock_check_titles, parse_atspi_line, parse_wmctrl_line, parse_xdotool_mouse, pick_named_row,
     rank_atspi_rows, refused_lock, tab_list_from_rows, window_name_from_atspi,
     window_name_from_wmctrl, windshield_browser_line, windshield_prompt, AtspiRow, PendingStep,
-    WindshieldFrame,
+    WindshieldFrame, ATSPI_PY,
 };
 pub use workboard::{
     abandon_inflight_card, apply_assistant_work_marks, apply_work_update,

@@ -223,8 +223,11 @@ mod tests {
 
     #[test]
     fn parallel_honours_stop_before_start() {
+        // The first wave of workers checks the stop flag side by side, so which of
+        // jobs 0..MAX_PARALLEL run is up to the scheduler. A worker claims a later job
+        // only after its first one ran or was cancelled, so the flag is up by then.
         let started = AtomicUsize::new(0);
-        let indices: Vec<usize> = (0..4).collect();
+        let indices: Vec<usize> = (0..MAX_PARALLEL * 2).collect();
         let outs = run_parallel(
             &indices,
             None,
@@ -235,10 +238,32 @@ mod tests {
                 ToolOutput::ok(format!("ran{i}"))
             },
         );
-        assert_eq!(started.load(Ordering::SeqCst), 1);
+        assert_eq!(outs.len(), 8);
+        let ran = started.load(Ordering::SeqCst);
+        assert!((1..=MAX_PARALLEL).contains(&ran), "ran {ran} jobs");
+        for (i, o) in outs[..MAX_PARALLEL].iter().enumerate() {
+            if !o.failed {
+                assert_eq!(o.text, format!("ran{i}"));
+            }
+        }
+        assert_eq!(outs.iter().filter(|o| !o.failed).count(), ran);
+        for o in &outs[MAX_PARALLEL..] {
+            assert!(o.failed);
+            assert!(o.text.contains("cancelled"));
+        }
+    }
+
+    #[test]
+    fn parallel_stop_already_set_runs_nothing() {
+        let started = AtomicUsize::new(0);
+        let indices: Vec<usize> = (0..4).collect();
+        let outs = run_parallel(&indices, None, &|| true, |_| {
+            started.fetch_add(1, Ordering::SeqCst);
+            ToolOutput::ok("ran")
+        });
+        assert_eq!(started.load(Ordering::SeqCst), 0);
         assert_eq!(outs.len(), 4);
-        assert!(!outs[0].failed);
-        for o in &outs[1..] {
+        for o in &outs {
             assert!(o.failed);
             assert!(o.text.contains("cancelled"));
         }

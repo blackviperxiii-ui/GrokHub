@@ -134,14 +134,14 @@ fn grok_cli_found() -> bool {
     crate::google_mcp_via_cli::cli_installed()
 }
 
-pub(super) const USES_GROK_CLI: &str = "Uses your Grok Build CLI";
+pub(super) const USES_GROK_CLI: &str = "Uses your installed grok CLI";
 
 /// Signing in to a Google entry through Grok Build.
 pub(super) fn grok_google_steps(name: &str) -> [String; 3] {
     [
         "Run grok in a terminal and open /mcps.".to_string(),
         format!("Press i on {name} and sign in with your Google account."),
-        "Grok Build can use it then.".to_string(),
+        "GrokHub can use it then.".to_string(),
     ]
 }
 
@@ -552,12 +552,12 @@ mod tests {
     fn google_uses_the_grok_cli_when_found_and_manual_steps_when_not() {
         assert_eq!(google_via(true), GoogleVia::GrokBuild);
         assert_eq!(google_via(false), GoogleVia::Manual);
-        assert_eq!(USES_GROK_CLI, "Uses your Grok Build CLI");
+        assert_eq!(USES_GROK_CLI, "Uses your installed grok CLI");
         assert_eq!(
             grok_google_steps("Gmail")[1],
             "Press i on Gmail and sign in with your Google account."
         );
-        assert_eq!(grok_google_steps("Gmail")[2], "Grok Build can use it then.");
+        assert_eq!(grok_google_steps("Gmail")[2], "GrokHub can use it then.");
     }
 
     #[test]

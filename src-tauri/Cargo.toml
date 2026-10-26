@@ -1,0 +1,48 @@
+# The Tauri desktop shell (cross-platform recode, Phase 2). It is its own Cargo
+# workspace so the main workspace's Linux and Windows jobs never need the
+# webview system libraries. See docs/cross-platform/README.md.
+[package]
+name = "grokhub-shell"
+version = "3.2.0"
+edition = "2021"
+rust-version = "1.95"
+license = "MIT"
+publish = false
+
+[workspace]
+
+[lib]
+name = "grokhub_shell"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[[bin]]
+name = "grokhub-shell"
+path = "src/main.rs"
+
+[features]
+# A debug build for the phone smoke test: chat talks to a mock model at the
+# loopback URL `credential::PHONE_SMOKE_URL`, and the UI reports the
+# round-trip through `phone_smoke_report`.
+phone-smoke = []
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+grokhub-core = { path = "../crates/grokhub-core" }
+grokhub-agent = { path = "../crates/grokhub-agent" }
+tauri = { version = "2", features = ["tray-icon"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+keyring = { version = "4", default-features = false, features = ["v1"] }
+# Settings → Web access serves the UI and the remote API (Phase 5b).
+tiny_http = "0.12"
+
+# Computer-use runs on the desktop OSes only; phones never build it.
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+grokhub-desktop = { path = "../crates/grokhub-desktop" }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"

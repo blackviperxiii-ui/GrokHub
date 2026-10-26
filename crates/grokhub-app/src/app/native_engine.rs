@@ -40,6 +40,9 @@ fn pending_show_panels() -> &'static Mutex<Vec<(String, String, String)>> {
     Q.get_or_init(|| Mutex::new(Vec::new()))
 }
 
+/// Backstop on queued rows; the oldest are dropped first.
+const PENDING_SHOW_PANELS_MAX: usize = 64;
+
 fn maybe_queue_show_panel(cabin_thread_id: &str, card: &ToolCard) {
     if !card.status.eq_ignore_ascii_case("completed") {
         return;
@@ -85,15 +88,18 @@ impl Cabin {
         for (thread_id, call_id, detail) in queued {
             if thread_id == visible {
                 let _ = self.panels.upsert_from_tool_result(&call_id, &detail);
-            } else {
+            } else if self.threads.iter().any(|t| t.id == thread_id) {
+                // Archived chats stay in `threads`, so they can still become visible.
                 deferred.push((thread_id, call_id, detail));
             }
         }
         if !deferred.is_empty() {
-            pending_show_panels()
+            let mut q = pending_show_panels()
                 .lock()
-                .unwrap_or_else(|err| err.into_inner())
-                .extend(deferred);
+                .unwrap_or_else(|err| err.into_inner());
+            q.extend(deferred);
+            let over = q.len().saturating_sub(PENDING_SHOW_PANELS_MAX);
+            q.drain(..over);
         }
     }
 
@@ -124,6 +130,15 @@ impl Cabin {
                 raw_input: String::new(),
             },
         );
+    }
+
+    /// Test helper: queued `(call_id)`s plus total queue length.
+    #[cfg(test)]
+    pub(super) fn pending_show_panel_snapshot_for_test() -> (Vec<String>, usize) {
+        let q = pending_show_panels()
+            .lock()
+            .unwrap_or_else(|err| err.into_inner());
+        (q.iter().map(|r| r.1.clone()).collect(), q.len())
     }
 
     /// Queue panel button intents as user-visible follow-ups (approval-gated).
@@ -503,13 +518,7 @@ impl Cabin {
 
     fn keep_account_tokens(&mut self, next: grokhub_core::XaiOAuthTokens) {
         self.secrets.oauth = Some(next);
-        let io = self.persist_io.clone();
-        let secrets = self.secrets.clone();
-        std::thread::spawn(move || {
-            if let Ok(_g) = io.lock() {
-                let _ = secrets::save(&secrets);
-            }
-        });
+        self.persist_oauth_secrets();
     }
 
     pub(super) fn paint_native_badge(&mut self, ui: &mut egui::Ui) {
@@ -635,7 +644,7 @@ fn serve_native(
             read: || None,
         }),
         gate: Gate::phase_readonly(),
-        desktop: Some(Box::new(crate::desktop_mcp::NativeDesktop::new())),
+        desktop: Some(Box::new(crate::desktop_mcp::native_desktop())),
         permits: std::sync::Arc::new(permit_inbox),
     });
     grokhub_agent::watch_cancel(&session_id, cancel.clone());

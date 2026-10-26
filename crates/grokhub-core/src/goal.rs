@@ -450,7 +450,7 @@ where
 }
 
 pub const FOLLOWUP_PROMPT: &str =
-    "FOLLOWUP: Finish the incomplete work from your last reply. Act now with Grok Build tools or computer-use if needed. End with status.";
+    "FOLLOWUP: Finish the incomplete work from your last reply. Act now with your tools or computer-use if needed. End with status.";
 
 fn reply_has_work_lines(assistant: &str) -> bool {
     assistant.lines().any(|line| {
@@ -625,7 +625,7 @@ pub fn next_goal_prompt(pin: &str, prior: &str, step: u32) -> Option<String> {
         return None;
     }
     Some(format!(
-        "[Goal step {}]\nTask: {}\nLast progress:\n{}\n\nContinue autonomously. Use Grok Build tools and computer-use as needed.\nWhen fully finished, say clearly: GOAL_COMPLETE\nIf blocked on the user, say: GOAL_BLOCKED: <reason>",
+        "[Goal step {}]\nTask: {}\nLast progress:\n{}\n\nContinue autonomously. Use your tools and computer-use as needed.\nWhen fully finished, say clearly: GOAL_COMPLETE\nIf blocked on the user, say: GOAL_BLOCKED: <reason>",
         step + 1,
         pin.trim(),
         prior.chars().take(1500).collect::<String>()

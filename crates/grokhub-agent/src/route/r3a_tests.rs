@@ -518,7 +518,7 @@ impl LocalRuntime for FakeRt {
 
 #[test]
 fn the_local_flag_is_off_by_default_and_no_route_picks_local_in_1000_random_inputs() {
-    assert!(!local::enabled());
+    assert!(!local::available());
     assert!(
         LocalSource.fetch().is_err(),
         "the source lists nothing while off"
@@ -547,13 +547,14 @@ fn the_local_flag_is_off_by_default_and_no_route_picks_local_in_1000_random_inpu
             .wrapping_add(1_442_695_040_888_963_407);
         let class = classes[(x >> 33) as usize % classes.len()];
         let gate = LocalGate {
-            enabled: local::enabled(),
+            enabled: local::available(),
             tier: local::live_tier().into(),
             sensitive: x & 1 == 1,
             cloud_grant: x & 2 == 2,
             hard_tool: x & 4 == 4,
             offline: false,
             local_verify_failed: false,
+            capacity: local::LocalCapacity::now(),
         };
         let mut input = ask(class, gate);
         input.ctx_tokens = (x >> 40) % 8_000;
@@ -715,19 +716,19 @@ fn the_settings_toggle_routes_local_only_while_a_runtime_is_installed() {
     };
     // Toggle on with nothing installed (this build): the route stays off and background work stays in the cloud.
     local::set_enabled(true);
-    assert!(!local::installed() && !local::enabled());
+    assert!(!local::installed() && !local::available());
     assert!(LocalSource.fetch().is_err());
     assert_eq!(pick("background:summarize"), "grok-4.7");
     // A runtime installed: the toggle goes live for background work only, never for chat.
     let rt = Installed::with(Arc::new(FakeRt));
-    assert!(local::installed() && local::enabled());
+    assert!(local::installed() && local::available());
     assert_eq!(LocalSource.fetch().map(|l| l.models.len()), Ok(2));
     assert_eq!(pick("background:summarize"), "local:small");
     assert_eq!(pick("background:triage"), "local:small");
     assert_eq!(pick("chat:default"), "grok-4.7");
     // Toggle off: back to the cloud on the next call.
     local::set_enabled(false);
-    assert!(local::installed() && !local::enabled());
+    assert!(local::installed() && !local::available());
     assert_eq!(pick("background:summarize"), "grok-4.7");
     drop(rt);
     assert!(!local::installed());
@@ -794,4 +795,189 @@ fn cargo_lock_has_no_local_runtime_crate() {
     ] {
         assert!(!names.contains(&banned), "{banned} is in Cargo.lock");
     }
+}
+
+/// A gate at one governor level (the runtime is there; Unload pauses it).
+fn gate_at(level: grokhub_core::local_governor::Level, sensitive: bool) -> LocalGate {
+    let capacity = local::LocalCapacity { ready: true, level };
+    LocalGate {
+        enabled: capacity.available(),
+        tier: "local:small".into(),
+        sensitive,
+        offline: false,
+        capacity,
+        ..LocalGate::default()
+    }
+}
+
+#[test]
+fn online_background_work_goes_local_only_in_ramp_up_and_normal() {
+    use grokhub_core::local_governor::Level;
+    use grokhub_core::model_registry::ModelState;
+    let profiles: BTreeMap<String, ModelProfile> = BTreeMap::new();
+    let table = RoutingTable::default();
+    let up = fleet();
+    let pick = |reg: &Registry, class: &str, gate: LocalGate, ctx: u64| {
+        let mut input = ask(class, gate);
+        input.ctx_tokens = ctx;
+        let r = Router::choose(&input, reg, &profiles, &table, 10);
+        let rule = r
+            .rule_ids
+            .iter()
+            .rev()
+            .find(|x| x.starts_with("local:"))
+            .cloned()
+            .unwrap_or_default();
+        (r.model, r.no_route, rule)
+    };
+    let s = |m: &str, no: bool, rule: &str| (m.to_string(), no, rule.to_string());
+    let small = 500;
+    let heavy = local::ctx_cap() / 2 + 1;
+    // (level, light step, heavy step, light step with the cloud down)
+    let mut down = fleet();
+    down.models.get_mut("grok-4.7").unwrap().state = ModelState::Quarantined;
+    for (level, light, big, outage) in [
+        (
+            Level::RampUp,
+            s("local:small", false, ""),
+            s("local:small", false, ""),
+            s("local:small", false, "local:cloud_down"),
+        ),
+        (
+            Level::Normal,
+            s("local:small", false, ""),
+            s("grok-4.7", false, "local:heavy_waits"),
+            s("local:small", false, "local:cloud_down"),
+        ),
+        (
+            Level::Throttle,
+            s("grok-4.7", false, "local:throttled"),
+            s("grok-4.7", false, "local:throttled"),
+            s("local:small", false, "local:cloud_down"),
+        ),
+        (
+            Level::Unload,
+            s("grok-4.7", false, ""),
+            s("grok-4.7", false, ""),
+            s("grok-4.7", true, "local:paused"),
+        ),
+    ] {
+        let g = || gate_at(level, false);
+        assert_eq!(
+            pick(&up, "background:summarize", g(), small),
+            light,
+            "{level:?}"
+        );
+        assert_eq!(
+            pick(&up, "background:summarize", g(), heavy),
+            big,
+            "{level:?}"
+        );
+        assert_eq!(
+            pick(&down, "background:summarize", g(), small),
+            outage,
+            "{level:?}"
+        );
+        // Grok stays primary for user-facing work at every level.
+        assert_eq!(
+            pick(&up, "chat:default", g(), small),
+            s("grok-4.7", false, "")
+        );
+    }
+    // Sensitive data with no cloud grant: the device, or a named pause.
+    assert_eq!(
+        pick(
+            &up,
+            "background:triage",
+            gate_at(Level::Throttle, true),
+            small
+        )
+        .0,
+        "local:small"
+    );
+    let mut input = ask("background:triage", gate_at(Level::Unload, true));
+    input.ctx_tokens = small;
+    let r = Router::choose(&input, &up, &profiles, &table, 10);
+    assert!(
+        r.no_route && r.rule_ids.contains(&"local:paused".to_string()),
+        "{:?}",
+        r.rule_ids
+    );
+    assert_eq!(r.reason, "Local paused: game or low power");
+}
+
+#[test]
+fn a_heavy_background_step_waits_for_ramp_up_and_a_pause_refuses_it() {
+    use crate::client::{CancelToken, ClientError};
+    use grokhub_core::local_governor::Level;
+    use std::time::Duration;
+    let _on = ForceOn::with(Some(Arc::new(FakeRt)));
+    super::local_gov::reset_for_test();
+    let go = CancelToken::new();
+    let long = "word ".repeat(2_000);
+    // Light work never waits.
+    assert!(local::serve_within("background:summarize", "short", Duration::ZERO, &go).is_ok());
+    // Heavy work at Normal waits for RampUp; a level change wakes it.
+    let waiter = std::thread::spawn({
+        let long = long.clone();
+        move || {
+            let _on = ForceOn::with(Some(Arc::new(FakeRt)));
+            let go = CancelToken::new();
+            local::serve_within("background:summarize", &long, Duration::from_secs(30), &go)
+                .map(|o| o.text)
+        }
+    });
+    while super::local_gov::queued() == 0 {
+        std::thread::yield_now();
+    }
+    assert_eq!(super::local_gov::queued(), 1);
+    super::local_gov::apply(Level::RampUp, "idle on AC power");
+    assert_eq!(
+        waiter.join().unwrap(),
+        Ok(r#"{"summary":"two lines"}"#.to_string())
+    );
+    assert_eq!(super::local_gov::queued(), 0);
+    // Stop ends the wait at once, with no level change.
+    super::local_gov::apply(Level::Normal, "normal use");
+    let stop = CancelToken::new();
+    let stopped = std::thread::spawn({
+        let long = long.clone();
+        let stop = stop.clone();
+        move || {
+            let _on = ForceOn::with(Some(Arc::new(FakeRt)));
+            local::serve_within(
+                "background:summarize",
+                &long,
+                Duration::from_secs(600),
+                &stop,
+            )
+            .map(|o| o.text)
+        }
+    });
+    while super::local_gov::queued() == 0 {
+        std::thread::yield_now();
+    }
+    let asked = std::time::Instant::now();
+    stop.cancel();
+    assert!(matches!(
+        stopped.join().unwrap(),
+        Err(ClientError::Cancelled)
+    ));
+    assert!(
+        asked.elapsed() < Duration::from_secs(5),
+        "{:?}",
+        asked.elapsed()
+    );
+    assert_eq!(super::local_gov::queued(), 0);
+    assert_eq!(super::local_gov::level(), Level::Normal);
+    // Out of time at Normal it runs anyway; at Unload it's refused.
+    assert!(local::serve_within("background:summarize", &long, Duration::ZERO, &go).is_ok());
+    super::local_gov::apply(Level::Unload, "a game is running");
+    assert_eq!(
+        local::serve_within("background:summarize", &long, Duration::ZERO, &go)
+            .err()
+            .map(|e| e.to_string()),
+        Some(ClientError::Protocol(local::LOCAL_PAUSED_MSG.into()).to_string())
+    );
+    super::local_gov::reset_for_test();
 }

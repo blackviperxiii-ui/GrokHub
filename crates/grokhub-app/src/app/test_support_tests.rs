@@ -268,6 +268,265 @@ pub(super) fn join_persist(svc: &PersistService) {
     svc.flush();
 }
 
+/// An Auto (unattended) cabin with one native chat. Native `/bg` runs talk to
+/// the in-process `BgFake` model under test: one write, then "bg finished".
+#[cfg(unix)]
+pub(super) fn bg_cabin(label: &str) -> (std::path::PathBuf, Cabin) {
+    let (root, mut cabin) = isolated_cabin(label);
+    let _ = std::fs::create_dir_all(&root);
+    cabin.permission_mode = grokhub_core::wire::PermissionMode::Auto;
+    cabin.session_mode = grokhub_core::wire::SessionMode::Chat;
+    cabin.cfg.project_dir = root.display().to_string();
+    let mut thread = crate::threads::ChatThread::new("Chat", false);
+    thread.native = true;
+    thread.grok_cwd = Some(root.display().to_string());
+    cabin.threads = vec![thread];
+    cabin.thread_idx = 0;
+    cabin.messages = cabin.threads[0].messages.clone();
+    (root, cabin)
+}
+
+/// A chat reply in flight on the open tab. The test holds the sender.
+#[cfg(unix)]
+pub(super) fn live_reply(
+    cabin: &mut Cabin,
+    ask: &str,
+    said: &str,
+) -> std::sync::mpsc::Sender<grokhub_core::wire::GrokPEvent> {
+    cabin.live_mut().push(("user".into(), ask.into()));
+    cabin.live_mut().push(("assistant".into(), said.into()));
+    let (tx, rx) = std::sync::mpsc::channel();
+    cabin.grok_p_rx = Some(rx);
+    cabin.running = true;
+    cabin.chat_job_thread = Some(cabin.visible_thread_id());
+    tx
+}
+
+/// Poll the live turn and the background runs until `done` or `secs` pass.
+#[cfg(unix)]
+pub(super) fn poll_until(cabin: &mut Cabin, secs: u64, done: impl Fn(&Cabin) -> bool) -> bool {
+    let start = std::time::Instant::now();
+    while start.elapsed() < std::time::Duration::from_secs(secs) {
+        cabin.poll_single();
+        cabin.poll_bg_runs();
+        if done(cabin) {
+            return true;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    false
+}
+
+#[cfg(unix)]
+pub(super) fn end_bg_test(root: std::path::PathBuf, mut cabin: Cabin) {
+    cabin.stop_all_bg_runs();
+    cabin.halt_in_flight();
+    cabin.kill_bg_runs();
+    release_isolated(&root, cabin);
+}
+
+pub(super) fn test_automation(
+    id: &str,
+    name: &str,
+    instructions: &str,
+) -> grokhub_core::Automation {
+    serde_json::from_value(serde_json::json!({
+        "id": id,
+        "name": name,
+        "schedule": "daily",
+        "time": "09:00",
+        "instructions": instructions,
+    }))
+    .expect("automation")
+}
+
+/// One config root for both this thread (`TestConfigDir`) and the skill-write
+/// threads (`GROKHUB_CONFIG`), with one skill saved the way the cabin saves it.
+pub(super) fn pin_skill_config(label: &str) -> (crate::config::TestConfigDir, std::path::PathBuf) {
+    let root = crate::config::test_config_root(label);
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("config root");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    (crate::config::TestConfigDir::set(root.clone()), root)
+}
+
+pub(super) fn last_chat_text(cabin: &Cabin) -> String {
+    cabin
+        .messages
+        .last()
+        .map(|m| m.1.clone())
+        .unwrap_or_default()
+}
+
+// Spike-4b: Settings → Permissions paints the scope rows under "What GrokHub
+// can read". Texts with their centers, and which rects are filled.
+pub(super) struct ScopePaint {
+    pub(super) texts: Vec<(String, eframe::egui::Pos2)>,
+    pub(super) filled: Vec<eframe::egui::Rect>,
+}
+
+impl ScopePaint {
+    pub(super) fn has(&self, want: &str) -> bool {
+        self.texts.iter().any(|t| t.0 == want)
+    }
+    pub(super) fn at(&self, want: &str) -> eframe::egui::Pos2 {
+        self.texts
+            .iter()
+            .find(|t| t.0 == want)
+            .unwrap_or_else(|| {
+                panic!(
+                    "{want} not painted: {:?}",
+                    self.texts.iter().map(|t| &t.0).collect::<Vec<_>>()
+                )
+            })
+            .1
+    }
+    /// The pill (`Allow` / `Revoke`) on the same row as `title`.
+    pub(super) fn pill_by(&self, title: &str, pill: &str) -> eframe::egui::Pos2 {
+        let y = self.at(title).y;
+        self.texts
+            .iter()
+            .filter(|t| t.0 == pill)
+            .min_by(|a, b| (a.1.y - y).abs().total_cmp(&(b.1.y - y).abs()))
+            .map(|t| t.1)
+            .unwrap_or_else(|| panic!("no {pill} by {title}"))
+    }
+}
+
+pub(super) fn paint_permissions(
+    ctx: &eframe::egui::Context,
+    cabin: &mut Cabin,
+    events: Vec<eframe::egui::Event>,
+) -> ScopePaint {
+    fn walk(shape: &eframe::egui::Shape, p: &mut ScopePaint) {
+        match shape {
+            eframe::egui::Shape::Text(t) => p.texts.push((
+                t.galley.text().to_string(),
+                t.pos + t.galley.rect.center().to_vec2(),
+            )),
+            eframe::egui::Shape::Rect(r) if r.fill == crate::theme::fg() => p.filled.push(r.rect),
+            eframe::egui::Shape::Vec(v) => v.iter().for_each(|c| walk(c, p)),
+            _ => {}
+        }
+    }
+    let input = eframe::egui::RawInput {
+        screen_rect: Some(eframe::egui::Rect::from_min_size(
+            eframe::egui::Pos2::ZERO,
+            eframe::egui::vec2(900.0, 2400.0),
+        )),
+        events,
+        ..Default::default()
+    };
+    let out = crate::theme::test_pass(ctx, input, |ui| {
+        eframe::egui::CentralPanel::default().show(ui, |ui| cabin.ui_permission_editor(ui));
+    });
+    let mut p = ScopePaint {
+        texts: Vec::new(),
+        filled: Vec::new(),
+    };
+    for clipped in &out.shapes {
+        walk(&clipped.shape, &mut p);
+    }
+    p
+}
+
+pub(super) fn click_at(ctx: &eframe::egui::Context, cabin: &mut Cabin, at: eframe::egui::Pos2) {
+    let press = |pressed| eframe::egui::Event::PointerButton {
+        pos: at,
+        button: eframe::egui::PointerButton::Primary,
+        pressed,
+        modifiers: eframe::egui::Modifiers::NONE,
+    };
+    let _ = paint_permissions(ctx, cabin, vec![eframe::egui::Event::PointerMoved(at)]);
+    let _ = paint_permissions(ctx, cabin, vec![press(true)]);
+    let _ = paint_permissions(ctx, cabin, vec![press(false)]);
+}
+
+pub(super) fn key(key: eframe::egui::Key) -> eframe::egui::Event {
+    eframe::egui::Event::Key {
+        key,
+        physical_key: None,
+        pressed: true,
+        repeat: false,
+        modifiers: eframe::egui::Modifiers::NONE,
+    }
+}
+
+pub(super) fn health_job(id: &str) -> grokhub_core::Automation {
+    grokhub_core::Automation {
+        id: id.into(),
+        name: "Board summary".into(),
+        schedule: "daily".into(),
+        time: "09:00".into(),
+        times: Vec::new(),
+        instructions: "summarize the board".into(),
+        heartbeat_every_min: 0,
+        check_command: String::new(),
+        enabled: true,
+        last_run: None,
+        next_run: None,
+        run_count: 0,
+        health: Default::default(),
+    }
+}
+
+pub(super) fn with_fonts_ui(mut add: impl FnMut(&mut eframe::egui::Ui)) {
+    let ctx = eframe::egui::Context::default();
+    let _ = crate::theme::test_pass(&ctx, Default::default(), |ui| {
+        eframe::egui::CentralPanel::default().show(ui, |ui| add(ui));
+    });
+}
+
+pub(super) fn feed_card(
+    id: &str,
+    kind: grokhub_core::UpdateKind,
+    held: bool,
+) -> grokhub_core::UpdateCard {
+    grokhub_core::UpdateCard {
+        id: id.to_string(),
+        kind,
+        title: id.to_string(),
+        body: None,
+        created_at: 1,
+        status: grokhub_core::UpdateStatus::Unread,
+        action: None,
+        expires_at: None,
+        held,
+        citations: Vec::new(),
+        reaction: None,
+        discuss_thread: None,
+        built: false,
+        board_id: None,
+        why: None,
+        feed_pin: false,
+        feed_kept: false,
+        prompt: None,
+        idea_kind: None,
+        details: None,
+        draft: None,
+        modified: false,
+        source_id: String::new(),
+        skill: None,
+        runs: 1,
+        dismissed_at: 0,
+        done_for_you: None,
+        pulse: Default::default(),
+    }
+}
+
+// Landed from PR #162.
+pub(super) fn collect_shape_text(shape: &eframe::egui::Shape, out: &mut Vec<String>) {
+    match shape {
+        eframe::egui::Shape::Text(text) => out.push(text.galley.job.text.clone()),
+        eframe::egui::Shape::Vec(shapes) => {
+            for shape in shapes {
+                collect_shape_text(shape, out);
+            }
+        }
+        _ => {}
+    }
+}
+
 #[test]
 fn wait_until_returns_when_ready() {
     let mut n = 0;

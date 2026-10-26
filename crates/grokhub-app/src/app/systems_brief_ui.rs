@@ -107,7 +107,7 @@ impl Cabin {
             last_dream,
             progress_wins,
             blocked,
-            open_decisions: Vec::new(),
+            open_decisions: grokhub_core::open_questions(&self.journal),
         };
         sb::build_brief(&input)
     }

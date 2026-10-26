@@ -361,7 +361,14 @@ pub fn run_for_ui() -> Result<String, String> {
     let bench = run_bench(rt.as_ref(), &hw, load_ms, "llama-server")?;
     let eval = run_eval(rt.as_ref());
     apply_caps(&bench, &eval);
-    Ok(format_full_report(&bench, &eval))
+    let report = format_full_report(&bench, &eval);
+    // Then the draft model, when there is one: with and without it.
+    Ok(
+        match super::local_spec::run_bench(&crate::perm::config_dir()) {
+            Some(line) => format!("{report}\n\n{line}"),
+            None => report,
+        },
+    )
 }
 
 #[cfg(test)]

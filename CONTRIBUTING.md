@@ -13,7 +13,7 @@ These rules apply to every contributor and every bot (Cursor, Claude, GrokHub). 
 
 - Bots take a PR to green (Linux and Windows CI passing) and ready to merge, with proof of work, then stop and report it.
 - Nobody merges, tags, or releases anything without the maintainer's explicit approval. When merging, it's squash and merge.
-- **Latest base branch:** the base is `beta` for feature and fix PRs, and `main` for hotfixes and the promotion. Fetch origin and merge the latest base into your branch (a merge commit, no rebase or force-push) before you start, before reporting the PR ready, and right before any merge or tag he asked for. Name the base branch and its starting SHA in the PR body.
+- **Latest base branch:** the base is `beta` for feature and fix PRs, and `main` for hotfixes and the promotion. Fetch origin and merge the latest base into your branch (a merge commit, no rebase or force-push) before you start, before reporting the PR ready, and right before any merge or tag the maintainer asked for. Name the base branch and its starting SHA in the PR body.
 - Every PR body has the proof of work (the real run path exercised and what was seen) and a **Skipped / not verified** section.
 
 ## Versions

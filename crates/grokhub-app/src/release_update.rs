@@ -163,7 +163,7 @@ pub(crate) fn install_release(channel: Channel, windows: bool) -> Result<String,
     let dest = install_dir(windows).map_err(|e| refusal_note("", &Refusal::Download(e)))?;
     let work = std::env::temp_dir().join("grokhub-release-update");
     let mut get = |url: &str, cap: u64, secs: u64| fetch(url, cap, Duration::from_secs(secs));
-    install_release_with(channel, windows, &mut get, &dest, &work)
+    install_release_with(RELEASE_PUBKEY, channel, windows, &mut get, &dest, &work)
 }
 
 /// `(url, byte cap, timeout seconds)` → body.
@@ -175,8 +175,10 @@ fn fetch_text(get: Fetch, url: &str) -> Result<String, Refusal> {
 }
 
 /// [`install_release`] with the network, install folder and scratch folder
-/// passed in. Nothing is written to `dest` until the asset verifies.
+/// passed in (and the trusted key, so tests can exercise unsigned flows).
+/// Nothing is written to `dest` until the asset verifies.
 fn install_release_with(
+    pubkey: Option<&str>,
     channel: Channel,
     windows: bool,
     get: Fetch,
@@ -202,13 +204,7 @@ fn install_release_with(
             None => None,
         };
         let bytes = get(&asset.url, ASSET_CAP, 600).map_err(Refusal::Download)?;
-        verify_asset(
-            RELEASE_PUBKEY,
-            &sums_text,
-            sig_text.as_deref(),
-            &asset.name,
-            &bytes,
-        )?;
+        verify_asset(pubkey, &sums_text, sig_text.as_deref(), &asset.name, &bytes)?;
         let _ = std::fs::remove_dir_all(work);
         std::fs::create_dir_all(work).map_err(|e| Refusal::Download(e.to_string()))?;
         let archive = work.join(&asset.name);
@@ -431,7 +427,7 @@ mod tests {
             (new_url.clone(), old),
         ]);
         assert_eq!(
-            install_release_with(Channel::Beta, false, &mut bad, &dest, &d.join("work")),
+            install_release_with(None, Channel::Beta, false, &mut bad, &dest, &d.join("work")),
             Err(
                 "Update 2.13.1-beta (29e8ac5) not installed: the download's checksum didn't match"
                     .into()
@@ -450,7 +446,8 @@ mod tests {
             (new_url, good),
         ]);
         let line =
-            install_release_with(Channel::Beta, false, &mut ok, &dest, &d.join("work")).unwrap();
+            install_release_with(None, Channel::Beta, false, &mut ok, &dest, &d.join("work"))
+                .unwrap();
         assert_eq!(
             line,
             format!(
@@ -490,6 +487,7 @@ mod tests {
         };
         assert_eq!(
             install_release_with(
+                None,
                 Channel::Stable,
                 false,
                 &mut get,

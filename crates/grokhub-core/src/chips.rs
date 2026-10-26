@@ -886,9 +886,9 @@ fn last_user_wants_gui(chat: &[(String, String)]) -> bool {
 
 fn finish_tools_prompt(chat: &[(String, String)]) -> &'static str {
     if last_user_wants_gui(chat) {
-        "Don't just plan — drive the desktop now with Grok Build computer-use. Summarize when done."
+        "Don't just plan — drive the desktop now with computer-use. Summarize when done."
     } else {
-        "Don't just plan — actually investigate my machine now with Grok Build tools. Summarize when done."
+        "Don't just plan — actually investigate my machine now with your tools. Summarize when done."
     }
 }
 
@@ -896,7 +896,7 @@ fn finish_job_prompt(chat: &[(String, String)]) -> &'static str {
     if last_user_wants_gui(chat) {
         "Finish the incomplete work from your last reply. Act now (computer-use if needed). End with status."
     } else {
-        "Finish the incomplete work from your last reply. Act now with Grok Build tools if needed. End with status."
+        "Finish the incomplete work from your last reply. Act now with your tools if needed. End with status."
     }
 }
 
@@ -1107,7 +1107,7 @@ fn draft_prediction_chips(draft_raw: &str) -> Vec<QuickChip> {
             "fix",
             "Debug with evidence",
             |d| {
-                (format!("{d}. Investigate with Grok Build tools for real evidence. Root cause, fix, verify."), ChipKind::Chat)
+                (format!("{d}. Investigate with your tools for real evidence. Root cause, fix, verify."), ChipKind::Chat)
             },
             125.0,
         ),
@@ -1115,7 +1115,7 @@ fn draft_prediction_chips(draft_raw: &str) -> Vec<QuickChip> {
             "debug",
             "Debug with evidence",
             |d| {
-                (format!("{d}. Investigate with Grok Build tools for real evidence. Root cause, fix, verify."), ChipKind::Chat)
+                (format!("{d}. Investigate with your tools for real evidence. Root cause, fix, verify."), ChipKind::Chat)
             },
             125.0,
         ),
@@ -1279,7 +1279,7 @@ fn draft_prediction_chips(draft_raw: &str) -> Vec<QuickChip> {
         out.push(chip(
             "pred-expand-draft",
             "Expand & send",
-            &format!("{draft}. Be concrete and complete the goal. Use Grok Build tools if you need machine data."),
+            &format!("{draft}. Be concrete and complete the goal. Use your tools if you need machine data."),
             ChipKind::Chat,
             100.0,
             "Predicted expansion of your draft",
@@ -2139,7 +2139,7 @@ fn stage_chips(stage: ChipStage, mode: &str) -> Vec<QuickChip> {
             chip(
                 "tools-next",
                 "Next step",
-                "Given the last tool result, take the next safe step with Grok Build tools.",
+                "Given the last tool result, take the next safe step with your tools.",
                 ChipKind::Chat,
                 84.0,
                 "Continue tools",
