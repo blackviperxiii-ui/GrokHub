@@ -436,6 +436,35 @@ fn search_memory(state: State<'_, ShellState>, query: String) -> Result<Vec<memo
     memory::search(&workspace(&state), &query)
 }
 
+#[tauri::command]
+fn edit_memory_row(
+    state: State<'_, ShellState>,
+    id: String,
+    text: String,
+) -> Result<memory::Notes, String> {
+    memory::edit_row(&workspace(&state), &id, &text)
+}
+
+#[tauri::command]
+fn forget_memory_row(state: State<'_, ShellState>, id: String) -> Result<memory::Notes, String> {
+    memory::forget_row(&workspace(&state), &id)
+}
+
+#[tauri::command]
+fn approve_memory_row(state: State<'_, ShellState>, id: String) -> Result<memory::Notes, String> {
+    memory::approve_row(&workspace(&state), &id)
+}
+
+#[tauri::command]
+fn reject_memory_row(state: State<'_, ShellState>, id: String) -> Result<memory::Notes, String> {
+    memory::reject_row(&workspace(&state), &id)
+}
+
+#[tauri::command]
+fn set_memory_writes(state: State<'_, ShellState>, on: bool) -> Result<memory::Notes, String> {
+    memory::set_writes(&workspace(&state), on)
+}
+
 /// Every connector call can wait on a server's slot while chat or a check
 /// holds it for up to the startup or tool timeout, so all of them run off
 /// the main thread.
@@ -970,6 +999,15 @@ fn remote_call(app: &AppHandle, command: &str, args: &Value) -> Result<Value, St
         )?),
         "add_memory" => out(add_memory(state, arg(args, "text")?, arg(args, "global")?)?),
         "search_memory" => out(search_memory(state, arg(args, "query")?)?),
+        "edit_memory_row" => out(edit_memory_row(
+            state,
+            arg(args, "id")?,
+            arg(args, "text")?,
+        )?),
+        "forget_memory_row" => out(forget_memory_row(state, arg(args, "id")?)?),
+        "approve_memory_row" => out(approve_memory_row(state, arg(args, "id")?)?),
+        "reject_memory_row" => out(reject_memory_row(state, arg(args, "id")?)?),
+        "set_memory_writes" => out(set_memory_writes(state, arg(args, "on")?)?),
         "list_connectors" => out(block_on(list_connectors(state))?),
         "check_connectors" => out(block_on(check_connectors(state))?),
         "restart_connector" => out(block_on(restart_connector(state, arg(args, "name")?))?),
@@ -1216,6 +1254,11 @@ pub fn run() {
             save_memory,
             add_memory,
             search_memory,
+            edit_memory_row,
+            forget_memory_row,
+            approve_memory_row,
+            reject_memory_row,
+            set_memory_writes,
             list_connectors,
             check_connectors,
             restart_connector,

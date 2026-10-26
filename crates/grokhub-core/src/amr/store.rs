@@ -37,6 +37,9 @@ fn node_aad(id: &str) -> String {
 pub struct AmrStore {
     root: PathBuf,
     scratch: bool,
+    /// When false, [`Self::remember`], [`Self::link`] and [`Self::resave`]
+    /// return [`AmrError::WritesOff`]. Forget still works.
+    writes: bool,
     sealer: Option<Arc<dyn Sealer>>,
 }
 
@@ -45,6 +48,7 @@ impl std::fmt::Debug for AmrStore {
         f.debug_struct("AmrStore")
             .field("root", &self.root)
             .field("scratch", &self.scratch)
+            .field("writes", &self.writes)
             .field("sealer", &self.sealer.is_some())
             .finish()
     }
@@ -82,6 +86,7 @@ impl AmrStore {
         Self {
             root: root.into(),
             scratch: false,
+            writes: true,
             sealer: None,
         }
     }
@@ -105,6 +110,18 @@ impl AmrStore {
     /// Incognito. Later writes return [`AmrError::Scratch`] and touch nothing.
     pub fn set_scratch(&mut self, scratch: bool) {
         self.scratch = scratch;
+    }
+
+    /// Whether notes, edits and edges may be written. On by default.
+    pub fn memory_writes(&self) -> bool {
+        self.writes
+    }
+
+    /// The memory off switch. Later [`Self::remember`] and [`Self::link`]
+    /// calls return [`AmrError::WritesOff`] and touch nothing. Forget still
+    /// works, so a person can delete a row while learning is off.
+    pub fn set_memory_writes(&mut self, on: bool) {
+        self.writes = on;
     }
 
     /// Create `nodes/`, `edges/`, `dreams/`, and `README.md` if they are missing.
@@ -159,7 +176,11 @@ impl AmrStore {
         report.why = loaded.why;
         let superseded = self.superseded_ids();
         let mut hits = Vec::new();
-        for node in loaded.nodes.iter().filter(|n| !superseded.contains(&n.id)) {
+        for node in loaded
+            .nodes
+            .iter()
+            .filter(|n| !superseded.contains(&n.id) && !is_proposed(n))
+        {
             hits.extend(match_lines(node, &query));
         }
         hits.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
@@ -388,7 +409,7 @@ impl AmrStore {
         let nodes = loaded
             .nodes
             .into_iter()
-            .filter(|n| !superseded.contains(&n.id))
+            .filter(|n| !superseded.contains(&n.id) && !is_proposed(n))
             .collect();
         (nodes, loaded.locked)
     }
@@ -438,6 +459,9 @@ impl AmrStore {
     pub fn remember(&self, draft: &NodeDraft) -> Result<NodeId, AmrError> {
         if self.scratch {
             return Err(AmrError::Scratch);
+        }
+        if !self.writes {
+            return Err(AmrError::WritesOff);
         }
         let id = NodeId::parse(&draft.id)?;
         check_confidence(draft.confidence)?;
@@ -523,16 +547,47 @@ impl AmrStore {
         publish_new_node(&tmp, &path).inspect_err(|_| {
             let _ = fs::remove_file(&tmp);
         })?;
-        if !draft.sensitivity.sealed() && self.index_path().is_file() {
+        if !draft.sensitivity.sealed() && self.index_path().is_file() && !is_proposed(&node) {
             AmrIndex::open(&self.index_path())?.add(&node)?;
         }
         Ok(id)
+    }
+
+    /// Rewrite a plain node that is already on disk. Used when a proposed
+    /// line is approved and only its tags change.
+    pub(super) fn resave(&self, node: &Node) -> Result<(), AmrError> {
+        if self.scratch {
+            return Err(AmrError::Scratch);
+        }
+        if !self.writes {
+            return Err(AmrError::WritesOff);
+        }
+        let id = NodeId::parse(&node.id)?;
+        let path = self.node_path(&id)?;
+        if !path.is_file() {
+            return Err(AmrError::MissingNode(id.as_str().to_string()));
+        }
+        if node.sensitivity.sealed() || self.is_sealed(&id) {
+            return Err(AmrError::Paused(
+                "a sealed note is not rewritten in place".into(),
+            ));
+        }
+        let tmp = path.with_extension("md.tmp");
+        fs::write(&tmp, node.to_markdown()).map_err(io_err)?;
+        replace_file(&tmp, &path)?;
+        if self.index_path().is_file() && !is_proposed(node) {
+            AmrIndex::open(&self.index_path())?.add(node)?;
+        }
+        Ok(())
     }
 
     /// Append one edge. Both node files must already exist.
     pub fn link(&self, from: &str, to: &str, rel: EdgeRel) -> Result<(), AmrError> {
         if self.scratch {
             return Err(AmrError::Scratch);
+        }
+        if !self.writes {
+            return Err(AmrError::WritesOff);
         }
         let from_id = NodeId::parse(from)?;
         let to_id = NodeId::parse(to)?;
@@ -639,6 +694,29 @@ impl AmrStore {
 /// `remember` publishes via temp+rename/hard_link, so a visible node is complete; settle
 /// still guards against a torn write from an older cabin or a crash mid-index.
 const NODE_SETTLE: std::time::Duration = std::time::Duration::from_secs(10);
+
+fn is_proposed(node: &Node) -> bool {
+    node.tags.iter().any(|tag| tag == "proposed")
+}
+
+/// Replace `path` with `tmp`. Unix rename replaces. Windows cannot, so the
+/// destination is removed first.
+fn replace_file(tmp: &Path, path: &Path) -> Result<(), AmrError> {
+    #[cfg(unix)]
+    {
+        fs::rename(tmp, path).map_err(io_err)
+    }
+    #[cfg(windows)]
+    {
+        fs::remove_file(path).map_err(io_err)?;
+        fs::rename(tmp, path).map_err(io_err)
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = (tmp, path);
+        Err(AmrError::Io("amr resave needs unix or windows".into()))
+    }
+}
 
 /// Publish `tmp` as `path` only when `path` does not already exist.
 fn publish_new_node(tmp: &Path, path: &Path) -> Result<(), AmrError> {

@@ -18,6 +18,25 @@ pub struct Notes {
     pub workspace_path: String,
     /// The cabin's AMR store is on, so these files are not what recall reads.
     pub amr: bool,
+    /// Learned-memory writes. Off stops notes, proposals and edits.
+    pub writes_on: bool,
+    /// User-model rows, proposed ones included, newest first.
+    pub rows: Vec<Row>,
+}
+
+/// One learned line for the memory panel.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Row {
+    pub id: String,
+    pub text: String,
+    /// Why this line is here, including the chat turn when it has one.
+    pub source: String,
+    /// When the line was written or last changed.
+    pub updated: String,
+    pub proposed: bool,
+    /// Claims this line corrects, joined for the panel.
+    pub corrects: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -51,7 +70,78 @@ pub fn load(workspace: &Path) -> Result<Notes, String> {
         global_path: global.display().to_string(),
         workspace_path: local.display().to_string(),
         amr: grokhub_agent::amr_enabled(),
+        writes_on: grokhub_agent::memory_writes_enabled(),
+        rows: learned_rows(),
     })
+}
+
+fn learned_rows() -> Vec<Row> {
+    let store = grokhub_agent::amr_store();
+    let (rows, _) = grokhub_core::amr::memory_rows(&store);
+    rows.into_iter()
+        .map(|row| Row {
+            id: row.id,
+            text: row.text,
+            source: row.source.label(),
+            updated: row.updated,
+            proposed: row.proposed,
+            corrects: row.beside.join("; "),
+        })
+        .collect()
+}
+
+fn open_store() -> Result<grokhub_core::amr::AmrStore, String> {
+    let store = grokhub_agent::amr_store();
+    store.init().map_err(|err| err.to_string())?;
+    Ok(store)
+}
+
+/// Replace a learned line with the user's words.
+pub fn edit_row(workspace: &Path, id: &str, text: &str) -> Result<Notes, String> {
+    let store = open_store()?;
+    grokhub_core::amr::edit_node(&store, id, text, grokhub_core::now_ms())
+        .map_err(|err| err.to_string())?;
+    load(workspace)
+}
+
+/// Forget a learned line because the user asked.
+pub fn forget_row(workspace: &Path, id: &str) -> Result<Notes, String> {
+    let store = open_store()?;
+    grokhub_core::amr::forget_node(
+        &store,
+        id,
+        grokhub_core::amr::UserForget::from_click(),
+        grokhub_core::now_ms(),
+    )
+    .map_err(|err| err.to_string())?;
+    load(workspace)
+}
+
+/// Activate a proposed line.
+pub fn approve_row(workspace: &Path, id: &str) -> Result<Notes, String> {
+    let store = open_store()?;
+    grokhub_core::amr::approve_node(&store, id, grokhub_core::now_ms())
+        .map_err(|err| err.to_string())?;
+    load(workspace)
+}
+
+/// Drop a proposed line.
+pub fn reject_row(workspace: &Path, id: &str) -> Result<Notes, String> {
+    let store = open_store()?;
+    grokhub_core::amr::reject_node(
+        &store,
+        id,
+        grokhub_core::amr::UserForget::from_click(),
+        grokhub_core::now_ms(),
+    )
+    .map_err(|err| err.to_string())?;
+    load(workspace)
+}
+
+/// The memory off switch. On removes the key. Returns the notes as they read now.
+pub fn set_writes(workspace: &Path, on: bool) -> Result<Notes, String> {
+    grokhub_agent::set_memory_writes(on)?;
+    load(workspace)
 }
 
 pub const CHANGED: &str =
@@ -226,6 +316,46 @@ mod tests {
             Some("Notes are limited to 1 MB. Nothing was saved.")
         );
         assert!(!grokhub_agent::workspace_memory_path(&d.workspace).exists());
+    }
+
+    #[test]
+    fn a_learned_row_shows_source_and_date_and_approve_activates_it() {
+        let d = dirs("rows");
+        let store = grokhub_agent::amr_store();
+        store.init().unwrap();
+        let noted = grokhub_core::amr::propose_line(
+            &store,
+            "Lunch is at noon on Friday",
+            "chat:t-standup#2",
+            1_791_374_400_000,
+        )
+        .unwrap();
+        let id = noted.id().unwrap().to_string();
+        let notes = load(&d.workspace).unwrap();
+        assert!(notes.writes_on);
+        assert_eq!(notes.rows.len(), 1);
+        assert_eq!(notes.rows[0].text, "Lunch is at noon on Friday");
+        assert_eq!(notes.rows[0].source, "you said it in chat (turn 2)");
+        assert_eq!(
+            notes.rows[0].updated,
+            grokhub_core::oauth::unix_ms_to_rfc3339(1_791_374_400_000)
+        );
+        assert!(notes.rows[0].proposed);
+        let notes = approve_row(&d.workspace, &id).unwrap();
+        assert_eq!(notes.rows.len(), 1);
+        assert!(!notes.rows[0].proposed);
+        assert_eq!(notes.rows[0].text, "Lunch is at noon on Friday");
+        let notes = set_writes(&d.workspace, false).unwrap();
+        assert!(!notes.writes_on);
+        assert_eq!(
+            edit_row(&d.workspace, &id, "Lunch is at 1")
+                .unwrap_err()
+                .as_str(),
+            "memory writes are off"
+        );
+        let notes = forget_row(&d.workspace, &id).unwrap();
+        assert!(notes.rows.is_empty());
+        assert!(!notes.writes_on);
     }
 
     #[cfg(unix)]

@@ -64,13 +64,14 @@ pub use schema::{
 };
 pub use signal::{
     detect_correction, import_pulse_ledger, note_card_signal, note_chat, note_usage,
-    note_user_edit, pulse_ledger_dual, unsafe_to_learn, user_model_type, ChatLine, Correction,
-    Noted, Usage,
+    note_user_edit, propose_line, pulse_ledger_dual, skip_remember_line, unsafe_to_learn,
+    user_model_type, ChatLine, Correction, Noted, Usage,
 };
 pub use store::{AmrStore, ForgetReport, RecallReport};
 pub use user_model::{
-    edit_node, forget_node, memory_rows, memory_text, reflect_diff, strip_forgotten, MemoryRow,
-    ReflectDiff, SourceLink, UserForget, REFLECT_MIN_CONFIDENCE,
+    approve_node, edit_node, forget_node, memory_rows, memory_text, reflect_diff, reject_node,
+    strip_forgotten, supersede_same_topic, topic_slug, MemoryRow, ReflectDiff, SourceLink,
+    UserForget, PROPOSED_TAG, REFLECT_MIN_CONFIDENCE,
 };
 pub use write::{
     line_id, node_type_for, remember_line, sensitivity_for, trail_id, LineWrite, Remembered,
@@ -115,6 +116,8 @@ pub enum AmrError {
     /// A personal or sensitive node can't be sealed right now (no keyring,
     /// missing key). Learning pauses; nothing was written.
     Paused(String),
+    /// Memory writes are off. Nothing was written.
+    WritesOff,
 }
 
 impl std::fmt::Display for AmrError {
@@ -132,6 +135,7 @@ impl std::fmt::Display for AmrError {
             Self::Io(detail) => write!(f, "amr io: {detail}"),
             Self::BadEdge(detail) => write!(f, "bad amr edge: {detail}"),
             Self::Paused(why) => write!(f, "learning paused: {why}"),
+            Self::WritesOff => write!(f, "memory writes are off"),
         }
     }
 }
