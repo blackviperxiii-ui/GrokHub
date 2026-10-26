@@ -900,7 +900,7 @@ async function desktop(s, config) {
   const desk = await waitFor("the desktop switch", () =>
     wd("POST", `${s}/element`, {
       using: "xpath",
-      value: "//label[contains(., 'Let Grok control the desktop')]/input",
+      value: "//label[contains(., 'Let Grok control the desktop')]//button[@role='switch']",
     }).then((el) => el[ELEMENT]),
   );
   await wd("POST", `${s}/element/${desk}/click`, {});
