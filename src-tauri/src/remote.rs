@@ -5,7 +5,9 @@
 //!
 //! - Every API call and the event stream need the pairing code, a fresh
 //!   random one each time web access turns on. It's never saved, so quitting
-//!   GrokHub or turning web access off ends every pairing.
+//!   GrokHub or turning web access off ends every pairing. After [`IDLE`]
+//!   with no paired browser using it, the code is swapped for a new one and
+//!   every browser has to pair again.
 //! - Only [`WEB_COMMANDS`] run. The API key, settings, Pulse, Local AI and
 //!   desktop control stay on this computer, and web chats never get the
 //!   desktop tools.
@@ -15,8 +17,8 @@ use std::io::{Read, Write};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError, Sender};
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::sync::{Arc, Mutex, MutexGuard};
+use std::time::{Duration, Instant};
 
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -32,6 +34,10 @@ const MAX_IN_FLIGHT: usize = 32;
 /// Open event streams; one per browser tab is plenty.
 const MAX_STREAMS: usize = 8;
 const PING: Duration = Duration::from_secs(15);
+/// How long the pairing code lasts with no paired browser calling, opening a
+/// stream or getting a chat event. Keep in step with `WEB_OFF_NOTE` in
+/// ui/src/WebAccess.tsx.
+pub const IDLE: Duration = Duration::from_secs(30 * 60);
 
 pub const REFUSED: &str = "The web app can't do that. Use GrokHub on your computer.";
 pub const NOT_YOURS: &str = "That chat isn't open in this browser.";
@@ -148,12 +154,63 @@ pub type Dispatch = Arc<dyn Fn(&str, Value) -> Result<Value, String> + Send + Sy
 pub type Assets = Arc<dyn Fn(&str) -> Option<(Vec<u8>, String)> + Send + Sync>;
 
 struct Running {
-    code: String,
+    pairing: Shared,
     port: u16,
     server: Arc<Server>,
 }
 
 type Streams = Arc<Mutex<Vec<Sender<String>>>>;
+type Chats = Arc<Mutex<HashSet<String>>>;
+type Shared = Arc<Mutex<Pairing>>;
+
+/// The pairing code and when a paired browser last used it.
+struct Pairing {
+    code: String,
+    used: Instant,
+}
+
+impl Pairing {
+    fn new(now: Instant) -> Self {
+        Self {
+            code: grokhub_core::new_token(),
+            used: now,
+        }
+    }
+
+    /// Swaps in a fresh code once this one went unused for [`IDLE`]. True when it did.
+    fn renew_if_idle(&mut self, now: Instant) -> bool {
+        if now.saturating_duration_since(self.used) < IDLE {
+            return false;
+        }
+        *self = Self::new(now);
+        true
+    }
+
+    /// Whether `header` carries the live code; a match counts as use.
+    fn admit(&mut self, header: Option<&str>, now: Instant) -> bool {
+        let ok = authorized(header, &self.code);
+        if ok {
+            self.used = now;
+        }
+        ok
+    }
+}
+
+/// Locks the pairing, first renewing an idle code. A renewal also ends every
+/// open stream and forgets the browsers' chats, as turning web access off does.
+fn live<'a>(
+    pairing: &'a Shared,
+    streams: &Streams,
+    chats: &Chats,
+    now: Instant,
+) -> MutexGuard<'a, Pairing> {
+    let mut live = pairing.lock().unwrap_or_else(|e| e.into_inner());
+    if live.renew_if_idle(now) {
+        streams.lock().unwrap_or_else(|e| e.into_inner()).clear();
+        chats.lock().unwrap_or_else(|e| e.into_inner()).clear();
+    }
+    live
+}
 
 #[derive(Default)]
 pub struct WebAccess {
@@ -161,7 +218,7 @@ pub struct WebAccess {
     streams: Streams,
     /// The conversations a browser started. Only their events go out, so a
     /// chat in the window stays in the window.
-    chats: Mutex<HashSet<String>>,
+    chats: Chats,
 }
 
 impl WebAccess {
@@ -174,14 +231,17 @@ impl WebAccess {
                 links: Vec::new(),
             },
             Some(run) => {
+                let code = live(&run.pairing, &self.streams, &self.chats, Instant::now())
+                    .code
+                    .clone();
                 let mut links: Vec<String> = lan_ip()
-                    .map(|ip| link(ip, run.port, &run.code))
+                    .map(|ip| link(ip, run.port, &code))
                     .into_iter()
                     .collect();
-                links.push(link(IpAddr::V4(Ipv4Addr::LOCALHOST), run.port, &run.code));
+                links.push(link(IpAddr::V4(Ipv4Addr::LOCALHOST), run.port, &code));
                 WebAccessView {
                     on: true,
-                    code: run.code.clone(),
+                    code,
                     links,
                 }
             }
@@ -207,16 +267,21 @@ impl WebAccess {
                     .map(|addr| addr.port())
                     .unwrap_or(port);
                 let server = Arc::new(server);
-                let code = grokhub_core::new_token();
+                let pairing = Arc::new(Mutex::new(Pairing::new(Instant::now())));
                 let job = Job {
-                    code: code.clone(),
+                    pairing: Arc::clone(&pairing),
                     streams: Arc::clone(&self.streams),
+                    chats: Arc::clone(&self.chats),
                     dispatch,
                     assets,
                 };
                 let accept = Arc::clone(&server);
                 std::thread::spawn(move || accept_loop(&accept, &job));
-                *running = Some(Running { code, port, server });
+                *running = Some(Running {
+                    pairing,
+                    port,
+                    server,
+                });
             }
         }
         Ok(self.view())
@@ -257,6 +322,19 @@ impl WebAccess {
         }
         let text = frame(event, &payload);
         streams.retain(|tx| tx.send(text.clone()).is_ok());
+        let delivered = !streams.is_empty();
+        drop(streams);
+        // A browser getting its chat's events is using the pairing.
+        if delivered {
+            if let Some(run) = self
+                .running
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .as_ref()
+            {
+                run.pairing.lock().unwrap_or_else(|e| e.into_inner()).used = Instant::now();
+            }
+        }
     }
 
     /// A conversation a browser started.
@@ -277,8 +355,9 @@ impl WebAccess {
 }
 
 struct Job {
-    code: String,
+    pairing: Shared,
     streams: Streams,
+    chats: Chats,
     dispatch: Dispatch,
     assets: Assets,
 }
@@ -297,8 +376,9 @@ fn accept_loop(server: &Server, job: &Job) {
         }
         let slot = Slot(Arc::clone(&in_flight));
         let job = Job {
-            code: job.code.clone(),
+            pairing: Arc::clone(&job.pairing),
             streams: Arc::clone(&job.streams),
+            chats: Arc::clone(&job.chats),
             dispatch: Arc::clone(&job.dispatch),
             assets: Arc::clone(&job.assets),
         };
@@ -321,7 +401,8 @@ fn handle(mut req: Request, job: &Job, slot: Slot) {
         .iter()
         .find(|h| h.field.equiv("Authorization"))
         .map(|h| h.value.as_str().to_string());
-    let paired = authorized(auth.as_deref(), &job.code);
+    let now = Instant::now();
+    let paired = live(&job.pairing, &job.streams, &job.chats, now).admit(auth.as_deref(), now);
     match route(req.method(), req.url()) {
         Route::Hello => send_json(req, 200, &json!({ "kind": KIND, "version": VERSION })),
         Route::Events if !paired => refuse(req),
@@ -514,6 +595,60 @@ mod tests {
         assert!(!authorized(Some("0123456789abcdef"), code));
         assert!(!authorized(Some("Bearer "), code));
         assert!(!authorized(None, code));
+    }
+
+    #[test]
+    fn an_unused_code_is_swapped_after_idle() {
+        let start = Instant::now();
+        let minute = Duration::from_secs(60);
+        let mut pairing = Pairing::new(start);
+        let first = pairing.code.clone();
+        let bearer = format!("Bearer {first}");
+        assert_eq!(first.len(), 48);
+
+        assert!(!pairing.renew_if_idle(start + 29 * minute));
+        assert!(pairing.admit(Some(&bearer), start + 29 * minute));
+        // That use restarts the clock: 58 minutes in is only 29 idle.
+        assert!(!pairing.renew_if_idle(start + 58 * minute));
+        assert!(!pairing.admit(Some("Bearer wrong"), start + 58 * minute));
+        // A refused code isn't use, so 59 minutes in is 30 idle.
+        assert!(pairing.renew_if_idle(start + 59 * minute));
+        assert_ne!(pairing.code, first);
+        assert_eq!(pairing.code.len(), 48);
+        assert!(!pairing.admit(Some(&bearer), start + 59 * minute));
+        let fresh = format!("Bearer {}", pairing.code);
+        assert!(pairing.admit(Some(&fresh), start + 59 * minute));
+    }
+
+    #[test]
+    fn a_renewed_code_ends_streams_and_forgets_web_chats() {
+        let start = Instant::now();
+        let pairing: Shared = Arc::new(Mutex::new(Pairing::new(start)));
+        let streams: Streams = Arc::default();
+        let chats: Chats = Arc::default();
+        let (tx, rx) = mpsc::channel::<String>();
+        streams.lock().unwrap().push(tx);
+        chats.lock().unwrap().insert("web-chat".into());
+
+        let old = live(
+            &pairing,
+            &streams,
+            &chats,
+            start + IDLE - Duration::from_secs(1),
+        )
+        .code
+        .clone();
+        assert_eq!(streams.lock().unwrap().len(), 1);
+        assert!(chats.lock().unwrap().contains("web-chat"));
+
+        let new = live(&pairing, &streams, &chats, start + IDLE).code.clone();
+        assert_ne!(new, old);
+        assert!(streams.lock().unwrap().is_empty());
+        assert!(chats.lock().unwrap().is_empty());
+        assert_eq!(
+            rx.recv_timeout(Duration::from_secs(1)),
+            Err(RecvTimeoutError::Disconnected)
+        );
     }
 
     #[test]
