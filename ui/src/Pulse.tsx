@@ -79,11 +79,11 @@ export function Pulse({ onRun }: { onRun: (text: string) => void }) {
                   <button
                     type="button"
                     className="quiet"
-                    aria-pressed={post.liked}
-                    disabled={busy || post.liked}
-                    onClick={() => void act(post.id, "like")}
+                    aria-pressed={post.loved}
+                    disabled={busy || post.loved}
+                    onClick={() => void act(post.id, "love")}
                   >
-                    {post.liked ? "Liked" : "Like"}
+                    {post.loved ? "Loved" : "Love"}
                   </button>
                   <button
                     type="button"

@@ -184,15 +184,6 @@ fn plural(n: usize) -> &'static str {
     }
 }
 
-/// "1 h", "90 min", for the Check every buttons.
-fn every_label(mins: u32) -> String {
-    if mins.is_multiple_of(60) {
-        format!("{} h", mins / 60)
-    } else {
-        format!("{mins} min")
-    }
-}
-
 /// "just now", "12 min ago", "3 h ago", for the Settings note.
 fn ago_label(ms: u64, now: u64) -> String {
     let mins = now.saturating_sub(ms) / 60_000;
@@ -218,14 +209,16 @@ impl Cabin {
         at
     }
 
-    /// Housekeeping: run the sources every 90 minutes (Settings: 1–4 hours) and once
+    /// Housekeeping: run the sources on the system cadence (every two hours) and once
     /// when the app opens, never in quiet hours.
     pub(super) fn follow_source_fetch(&mut self) {
         let just_opened = !std::mem::replace(&mut self.sources.opened, true);
         if self.sources_busy() || !self.cfg.feed_pulse.digest_on || self.quiet_now() {
             return;
         }
-        let every = self.cfg.pulse_sources.every_ms();
+        // The system cadence (base 120 minutes); the cabin keeps no
+        // engagement clock, so it never speeds up or slows down.
+        let every = u64::from(grokhub_core::pulse_writer::cadence_mins(0, now_ms())) * 60_000;
         if !ps::check_due(self.sources_last_run(), now_ms(), every, just_opened) {
             return;
         }
@@ -754,28 +747,9 @@ impl Cabin {
         });
         ui.add_space(6.0);
         ui.add_space(4.0);
-        ui.horizontal(|ui| {
-            ui.label(
-                RichText::new("Check every")
-                    .size(crate::theme::FONT_BODY)
-                    .color(crate::theme::fg()),
-            );
-            for mins in ps::EVERY_CHOICES {
-                let label = every_label(mins);
-                let picked = if self.cfg.pulse_sources.every_mins == mins {
-                    crate::cards::white_pill(ui, &label)
-                } else {
-                    crate::cards::ghost_pill(ui, &label)
-                };
-                if picked && self.cfg.pulse_sources.every_mins != mins {
-                    self.cfg.pulse_sources.every_mins = mins;
-                    changed = true;
-                }
-            }
-        });
         crate::cards::help_text(
             ui,
-            "Also once when GrokHub opens, and never in quiet hours. Sources are fetched and ranked on this computer; only each check's top five new posts go to Grok's fast model, in one call, for short summaries.",
+            "Checks run every two hours, once when GrokHub opens, and never in quiet hours. Sources are fetched and ranked on this computer; only each check's top five new posts go to Grok's fast model, in one call, for short summaries.",
         );
         let today = self.summary_calls_today(now_ms());
         ui.label(
@@ -1146,12 +1120,15 @@ mod tests {
             cabin.sources.note,
             "Nothing to check yet. Add an interest or a source."
         );
-        // Not again until 90 minutes pass.
+        // Not again until two hours pass.
         cabin.sources.note.clear();
         cabin.sources.last_run_ms = Some(now - 20 * 60_000);
         cabin.follow_source_fetch();
         assert_eq!(cabin.sources.note, "");
         cabin.sources.last_run_ms = Some(now - 91 * 60_000);
+        cabin.follow_source_fetch();
+        assert_eq!(cabin.sources.note, "");
+        cabin.sources.last_run_ms = Some(now - 121 * 60_000);
         cabin.follow_source_fetch();
         assert_eq!(
             cabin.sources.note,

@@ -19,9 +19,12 @@ function post(over: Partial<PulsePost> = {}): PulsePost {
     title: "Board",
     summary: "summarized 3 cards",
     because: "",
+    icon: "",
+    why: "",
+    images: [],
     ago: "2h ago",
     link: "https://example.com/board",
-    liked: false,
+    loved: false,
     ...over,
   };
 }
@@ -77,15 +80,15 @@ describe("Pulse", () => {
     ).toBeInTheDocument();
   });
 
-  it("Like marks the post and is not offered twice", async () => {
+  it("Love marks the post and is not offered twice", async () => {
     api.getPulse.mockResolvedValue(PAGE);
-    api.pulseAct.mockResolvedValue({ ...PAGE, feed: [post({ liked: true })] });
+    api.pulseAct.mockResolvedValue({ ...PAGE, feed: [post({ loved: true })] });
     render(<Pulse onRun={() => {}} />);
 
     const board = await screen.findByRole("listitem", { name: "Board" });
-    await userEvent.click(within(board).getByRole("button", { name: "Like" }));
-    expect(api.pulseAct).toHaveBeenCalledWith("post-1", "like");
-    expect(await within(board).findByRole("button", { name: "Liked" })).toBeDisabled();
+    await userEvent.click(within(board).getByRole("button", { name: "Love" }));
+    expect(api.pulseAct).toHaveBeenCalledWith("post-1", "love");
+    expect(await within(board).findByRole("button", { name: "Loved" })).toBeDisabled();
   });
 
   it("Run notes the idea and hands its action to chat", async () => {
