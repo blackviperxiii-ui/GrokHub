@@ -175,10 +175,10 @@ pub use proactive::{
     DECISION_NEVER, DECISION_UNDO, PROACTIVE_TRACE,
 };
 pub use self_improve::{
-    guard_span, last_recorded_run, outcome_from_spans, patch_marks, reject_live_replay,
-    replay_gate, replay_patch, run_metrics_from_spans, run_weekly, spans_for, BrainTweak,
-    ReplayOpts, WeeklyPass, GUARD_TOOL, REPLAY_LIVE_REFUSED, REPLAY_TOOL, SELF_REVIEW_SESSION,
-    SELF_REVIEW_TOOL,
+    guard_span, last_recorded_run, lesson_checks, outcome_from_spans, patch_marks,
+    reject_live_replay, replay_gate, replay_patch, run_metrics_from_spans, run_weekly, spans_for,
+    BrainTweak, ReplayOpts, WeeklyPass, GUARD_TOOL, REPLAY_LIVE_REFUSED, REPLAY_TOOL,
+    SELF_REVIEW_SESSION, SELF_REVIEW_TOOL,
 };
 pub use self_manage::{
     automation_cap_refusal, open_connection_token, tool_origin, undo_connection, AutomationsFile,
