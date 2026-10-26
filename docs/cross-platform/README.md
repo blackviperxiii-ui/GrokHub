@@ -8,21 +8,21 @@ when it is dropped.
 
 Phase 0 started from `beta` @ `f0a5c7a` (2026-10-23).
 
-## Decisions (user, 2026-10-23)
+## Decisions
 
 - **Tauri is approved** for the new cross-platform shell. "No Electron. No
   Tauri." now describes only the egui cabin. Electron stays out.
-- **Repo rules win** over the Notion card where they differ. Since #832
+- **Repo rules win** over any planning notes where they differ. Since #832
   (2026-10-24; confirmed 2026-10-25) those rules are:
   - Every PR targets `beta`. The agent squash-merges it once CI is green,
     with no review hold; only promoting `beta` → `main` (and tags/releases)
-    needs user.
+    needs the maintainer's approval.
   - `.github/`, `clippy.toml` and release-script changes ship in the PR like
-    any other change. Notion card decisions need no OK from user.
-- **Web backend (Viper, 2026-10-25):** the web app is a remote for GrokHub
+    any other change.
+- **Web backend (2026-10-25):** the web app is a remote for GrokHub
   running on your own computer, not `grokhub-hub` as a hosted service. The
   desktop runs the chats and keeps the key.
-- **Packaging (Viper, 2026-10-25):** the shell ships as Tauri's own bundles
+- **Packaging (2026-10-25):** the shell ships as Tauri's own bundles
   (.deb, .AppImage, NSIS setup .exe, .dmg). AUR, Inno and the cabin tarball
   stay as they are, for the cabin only, until the shell reaches parity.
 
@@ -39,7 +39,7 @@ Each phase is one PR into `beta`, or smaller.
 | 4 | Android and iOS | Emulator and simulator smoke tests (sign-in mocked, chat round-trip) pass. Capability flags hide desktop-only features |
 | 5 | Web, using the chosen backend | `vite build` passes, a Playwright chat round-trip against the mocked backend passes, and no secret is kept in browser storage |
 | 6 | Release: `cargo xtask bump` and CHANGELOG artifact lines for the new platforms | A tag dry-run produces every artifact, signed where secrets exist |
-| 7 | Rework the open GrokHub Notion cards for the new app | Each open GrokHub card has a decision (rewrite, merge or close) recorded on the card. The egui QA cards were triaged on 2026-10-24 and folded into the recode card |
+| 7 | Rework the open backlog items for the new app | Each open item has a decision (rewrite, merge or close) recorded. The egui QA items were triaged on 2026-10-24 and folded into the recode item |
 
 Desktop-only features (computer-use, screen capture, the indexers, local MCP
 stdio servers, D-Bus and systemd) sit behind a per-platform `Capabilities`
@@ -392,7 +392,7 @@ report).
 - Each new `CHANGELOG.md` section gets a `Shell (Tauri)` artifact line:
   `grokhub-shell-vX.Y.Z-linux-amd64.deb` and `.AppImage`,
   `GrokHub-Shell-Setup-X.Y.Z.exe`, and `grokhub-shell-vX.Y.Z-macos-arm64.dmg`.
-- `release.yml` (Viper OK'd, 2026-10-25) builds the bundles on Linux, Windows
+- `release.yml` (approved 2026-10-25) builds the bundles on Linux, Windows
   and macOS in `shell-bundles`, renames them with
   `scripts/name-shell-bundles.sh`, and `publish` adds them to `SHA256SUMS`
   (minisign-signed) and to every release and beta pre-release. The .dmg and
