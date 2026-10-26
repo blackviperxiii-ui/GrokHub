@@ -420,7 +420,8 @@ pub fn resolve_paths(config_dir: &Path) -> Option<SidecarPaths> {
     Some(SidecarPaths { binary, model })
 }
 
-fn find_binary(config_dir: &Path) -> Option<PathBuf> {
+/// `llama-server` from `GROKHUB_LLAMA_SERVER`, `{config}/bin`, then `PATH`.
+pub fn find_binary(config_dir: &Path) -> Option<PathBuf> {
     std::env::var_os("GROKHUB_LLAMA_SERVER")
         .map(PathBuf::from)
         .filter(|p| p.is_file())
@@ -431,7 +432,8 @@ fn find_binary(config_dir: &Path) -> Option<PathBuf> {
         .or_else(|| grokhub_core::runtime_download::find_on_path(llama_server_name()))
 }
 
-fn find_model(config_dir: &Path) -> Option<PathBuf> {
+/// The model file the runtime would load (see [`resolve_paths`]).
+pub fn find_model(config_dir: &Path) -> Option<PathBuf> {
     std::env::var_os("GROKHUB_LOCAL_MODEL")
         .map(PathBuf::from)
         .filter(|p| p.is_file())
