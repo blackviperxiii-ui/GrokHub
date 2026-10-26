@@ -20,7 +20,10 @@
 
 use super::*;
 
-use grokhub_core::amr::{AmrError, AmrStore, LineWrite, PruneReport, Remembered};
+use grokhub_core::amr::{
+    stage_core_line, AmrError, AmrStore, CoreWriter, LineWrite, Noted, PruneReport, Remembered,
+    StagedCore,
+};
 
 /// A retention pass in flight: the chat that asked, and its answer.
 type PruneLive = (
@@ -192,17 +195,26 @@ impl Cabin {
         let text = redact_held_secrets(text.trim(), &self.secret_hold);
         let source = format!("chat:{}", self.visible_thread_id());
         let store = self.amr_store(scratch);
-        let result = grokhub_core::amr::remember_line(
-            &store,
-            &LineWrite {
-                text: &text,
-                source: &source,
-                tags: vec![tag.to_string()],
-                confidence: 1.0,
-                revive: true,
-            },
-            now_ms(),
-        );
+        let write = LineWrite {
+            text: &text,
+            source: &source,
+            tags: vec![tag.to_string()],
+            confidence: 1.0,
+            revive: true,
+        };
+        if self.cfg.dream_model {
+            let staged = stage_core_line(&store, &write, now_ms(), true, CoreWriter::InTurn);
+            return match staged {
+                Ok(StagedCore::Proposed(Noted::New(_))) => {
+                    "Proposed for approval. Nothing was added to core memory.".into()
+                }
+                Ok(StagedCore::Proposed(Noted::Known(_))) => "Already proposed.".into(),
+                Ok(StagedCore::Proposed(Noted::Skipped(why))) => format!("Skipped: {why}"),
+                Ok(StagedCore::Remembered(remembered)) => remembered_status(&Ok(remembered)),
+                Err(err) => remembered_status(&Err(err)),
+            };
+        }
+        let result = grokhub_core::amr::remember_line(&store, &write, now_ms());
         remembered_status(&result)
     }
 
@@ -227,6 +239,7 @@ impl Cabin {
             .filter(|f| !f.is_empty() && is_plain_text(f))
             .collect();
         let store = self.amr_store(scratch);
+        let dream_model = self.cfg.dream_model;
         // The turn of the chat the reply ran in, not of the chat on screen.
         let turn = if thread == self.visible_thread_id() {
             self.turn_no()
@@ -240,21 +253,26 @@ impl Cabin {
             let source = format!("chat:{thread}");
             let mut added = Vec::new();
             for fact in &facts {
-                let result = grokhub_core::amr::remember_line(
-                    &store,
-                    &LineWrite {
-                        text: fact,
-                        source: &source,
-                        tags: vec![tag.to_string()],
-                        confidence: 0.7,
-                        revive: false,
-                    },
-                    now_ms(),
-                );
-                if let Ok(Remembered::New(id)) = &result {
-                    // M4: a fact learned after this turn's trail points back at it.
-                    let _ = grokhub_agent::harness::link_learned(&store, id, &thread, turn);
-                    added.push(format!("+ {fact}"));
+                let write = LineWrite {
+                    text: fact,
+                    source: &source,
+                    tags: vec![tag.to_string()],
+                    confidence: 0.7,
+                    revive: false,
+                };
+                if dream_model {
+                    let staged =
+                        stage_core_line(&store, &write, now_ms(), true, CoreWriter::InTurn);
+                    if let Ok(StagedCore::Proposed(Noted::New(_))) = staged {
+                        added.push(format!("+ {fact} (proposed)"));
+                    }
+                } else {
+                    let result = grokhub_core::amr::remember_line(&store, &write, now_ms());
+                    if let Ok(Remembered::New(id)) = &result {
+                        // M4: a fact learned after this turn's trail points back at it.
+                        let _ = grokhub_agent::harness::link_learned(&store, id, &thread, turn);
+                        added.push(format!("+ {fact}"));
+                    }
                 }
             }
             let _ = tx.send(added);
@@ -382,6 +400,15 @@ impl Cabin {
         let store = self.amr_store(false);
         let today = today.to_string();
         let ttl_days = retention_ttl_days(self.cfg.amr_retention_days);
+        let dream_model = self.cfg.dream_model;
+        let client = if dream_model {
+            self.native_cred().ok().map(|(bearer, kind)| {
+                grokhub_agent::XaiClient::new(bearer, kind, std::time::Duration::from_secs(120))
+            })
+        } else {
+            None
+        };
+        let card_dir = dir.clone();
         Some(std::thread::spawn(move || {
             let opts = grokhub_core::amr::DreamOpts {
                 date: Some(today),
@@ -389,8 +416,41 @@ impl Cabin {
                 user_md: Some(config::read_memory("USER.md")),
                 ..Default::default()
             };
-            let _ = store.dream_once(now, &opts);
+            if let Some(client) = client {
+                let model_opts = grokhub_core::amr::ModelDreamOpts {
+                    enabled: true,
+                    output_token_cap: grokhub_core::amr::MODEL_DREAM_OUTPUT_TOKEN_CAP,
+                };
+                match grokhub_agent::sleep_dream(
+                    &client,
+                    &grokhub_agent::CancelToken::new(),
+                    grokhub_agent::DEFAULT_MODEL,
+                    &card_dir,
+                    &store,
+                    now,
+                    &opts,
+                    &model_opts,
+                ) {
+                    Ok(out) => post_dream_card(&card_dir, out.card),
+                    Err(_) => {
+                        let _ = store.dream_once(now, &opts);
+                    }
+                }
+            } else {
+                let _ = store.dream_once(now, &opts);
+            }
         }))
+    }
+}
+
+fn post_dream_card(dir: &std::path::Path, card: grokhub_core::UpdateCard) {
+    let path = dir.join("updates.json");
+    let mut cards: Vec<grokhub_core::UpdateCard> =
+        crate::config::load_json(&path, crate::config::JSON_STORE_CAP);
+    if grokhub_core::post_update(&mut cards, card) {
+        if let Ok(text) = serde_json::to_string_pretty(&cards) {
+            let _ = crate::config::atomic_write(&path, text.as_bytes());
+        }
     }
 }
 

@@ -6,6 +6,7 @@ mod checkpoint;
 mod client;
 mod close_check;
 mod compact;
+mod dream_model;
 mod drive;
 pub mod episode;
 mod eval;
@@ -53,6 +54,7 @@ pub use client::{
     Usage, XaiClient, DEFAULT_MODEL, RESPONSES_URL, USER_AGENT,
 };
 pub use compact::{estimate_input_tokens, message_text};
+pub use dream_model::sleep_dream;
 pub use eval::turn_endings::{generic_closing, last_sentence};
 pub use eval::{
     load_tasks, parse_args, reject_live, render_markdown, render_report, run_suite,
@@ -78,10 +80,10 @@ pub use mcp::{
     ElicitView,
 };
 pub use memory::{
-    amr_enabled, amr_store, dream, first_turn_injection, flush_pending, global_memory_path,
-    is_dream_command, is_flush_command, memory_writes_enabled, queue_memory_status, remember,
-    remember_note_text, search as search_memory, set_memory_writes, take_memory_status,
-    workspace_memory_path, Hit as MemoryHit, INJECT_BYTE_CAP, INJECT_TOKEN_CAP,
+    amr_enabled, amr_store, dream, dream_model_enabled, first_turn_injection, flush_pending,
+    global_memory_path, is_dream_command, is_flush_command, memory_writes_enabled,
+    queue_memory_status, remember, remember_note_text, search as search_memory, set_memory_writes,
+    take_memory_status, workspace_memory_path, Hit as MemoryHit, INJECT_BYTE_CAP, INJECT_TOKEN_CAP,
 };
 pub use models::{
     context_length_for, parse_listed_models, parse_xai_models, pick_model, ListedModel,

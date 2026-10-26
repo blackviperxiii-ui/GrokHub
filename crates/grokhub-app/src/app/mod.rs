@@ -4374,7 +4374,19 @@ impl Cabin {
         }
         let mem_name = self.mem_name.clone();
         let mem_body = self.mem_body.clone();
-        let writes_user = self.policy().writes_user_md();
+        let writes_user = self.policy().writes_user_md() && !self.cfg.dream_model;
+        let propose_user = self.policy().writes_user_md() && self.cfg.dream_model;
+        let prefs = if propose_user {
+            user_pref_facts(&facts)
+        } else {
+            Vec::new()
+        };
+        let propose_store = if propose_user && !prefs.is_empty() {
+            Some(self.amr_store(false))
+        } else {
+            None
+        };
+        let chat_source = format!("chat:{vis}");
         let (tx, rx) = mpsc::channel();
         self.reflect_rx = Some(rx);
         self.status = "Reflecting…".into();
@@ -4388,6 +4400,23 @@ impl Cabin {
             if !edit.diff.is_empty() {
                 let next = edit.next.clone();
                 let _ = config::write_memory("MEMORY.md", &next);
+            }
+            if let Some(store) = propose_store {
+                for pref in &prefs {
+                    let _ = grokhub_core::amr::stage_core_line(
+                        &store,
+                        &grokhub_core::amr::LineWrite {
+                            text: pref,
+                            source: &chat_source,
+                            tags: Vec::new(),
+                            confidence: 0.7,
+                            revive: false,
+                        },
+                        grokhub_core::now_ms(),
+                        true,
+                        grokhub_core::amr::CoreWriter::InTurn,
+                    );
+                }
             }
             let user_edit = if writes_user {
                 let prefs = user_pref_facts(&facts);
