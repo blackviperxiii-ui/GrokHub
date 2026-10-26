@@ -639,7 +639,7 @@ impl ScriptedTask {
 /// platforms) render the same bytes.
 pub fn capture_request(req: &ResponsesRequest, workspace: &Path) -> CapturedRequest {
     let mut body = crate::responses_body(req);
-    scrub_workspace(&mut body, &workspace.display().to_string());
+    scrub_workspace(&mut body, &workspace_spellings(workspace));
     let tools = serde_json::to_string(&body["tools"]).unwrap_or_default();
     let input = body["input"].as_array().cloned().unwrap_or_default();
     let lead = input
@@ -662,19 +662,45 @@ pub fn capture_request(req: &ResponsesRequest, workspace: &Path) -> CapturedRequ
 
 const WORKSPACE_MARK: &str = "<workspace>";
 
-fn scrub_workspace(value: &mut Value, workspace: &str) {
+/// Every way a tool output may spell the scratch workspace: as given, resolved
+/// (on Windows that expands short `RUNNER~1` names and adds `\\?\`), and with
+/// forward slashes. Longest first so a longer spelling is replaced whole.
+fn workspace_spellings(workspace: &Path) -> Vec<String> {
+    let mut out = vec![workspace.display().to_string()];
+    if let Ok(real) = workspace.canonicalize() {
+        let real = real.display().to_string();
+        if let Some(plain) = real.strip_prefix(r"\\?\") {
+            out.push(plain.to_string());
+        }
+        out.push(real);
+    }
+    let slashed: Vec<String> = out.iter().map(|s| s.replace('\\', "/")).collect();
+    out.extend(slashed);
+    out.sort_by_key(|s| std::cmp::Reverse(s.len()));
+    out.dedup();
+    out
+}
+
+/// Replace the workspace, then fold CRLF and backslashes, so a request renders
+/// the same bytes on every run and platform.
+fn scrub_workspace(value: &mut Value, spellings: &[String]) {
     match value {
-        Value::String(text) if text.contains(workspace) || text.contains('\r') => {
-            *text = text
-                .replace(workspace, WORKSPACE_MARK)
-                .replace("\r\n", "\n");
+        Value::String(text) => {
+            for spelling in spellings {
+                if text.contains(spelling.as_str()) {
+                    *text = text.replace(spelling.as_str(), WORKSPACE_MARK);
+                }
+            }
+            if text.contains(['\r', '\\']) {
+                *text = text.replace("\r\n", "\n").replace('\\', "/");
+            }
         }
         Value::Array(items) => items
             .iter_mut()
-            .for_each(|item| scrub_workspace(item, workspace)),
+            .for_each(|item| scrub_workspace(item, spellings)),
         Value::Object(map) => map
             .values_mut()
-            .for_each(|item| scrub_workspace(item, workspace)),
+            .for_each(|item| scrub_workspace(item, spellings)),
         _ => {}
     }
 }

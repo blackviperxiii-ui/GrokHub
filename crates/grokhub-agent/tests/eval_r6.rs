@@ -126,8 +126,15 @@ fn r6_technique_matrix_matches_golden_and_measures_requests() {
     });
     // Git on Windows may check out the golden with CRLF; compare on LF.
     let golden = golden.replace("\r\n", "\n");
+    let per_task: Vec<String> = baseline
+        .tasks
+        .iter()
+        .map(|t| format!("{}={}", t.task_id, t.input_tokens))
+        .collect();
     assert_eq!(
-        rendered, golden,
-        "docs/eval/r6-technique-ab.md must match render_markdown output"
+        rendered,
+        golden,
+        "docs/eval/r6-technique-ab.md must match render_markdown output; baseline input per task: {}",
+        per_task.join(" ")
     );
 }
