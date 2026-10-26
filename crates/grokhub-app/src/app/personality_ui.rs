@@ -818,10 +818,7 @@ mod tests {
         let closer = volatile
             .find("earlier in this prompt always win")
             .expect("closer");
-        assert!(
-            voice < soul && soul < user && user < closer,
-            "{volatile}"
-        );
+        assert!(voice < soul && soul < user && user < closer, "{volatile}");
         cabin.set_chat_personality("butler");
         let (again, _) = cabin.chat_prompt_parts();
         assert_eq!(again, stable);

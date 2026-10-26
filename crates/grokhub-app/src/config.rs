@@ -490,11 +490,7 @@ pub struct AppConfig {
     pub memory_backend: grokhub_core::amr::MemoryBackend,
     /// Set by [`load`] on a new install. An omitted key does not switch an
     /// existing file, and the agent does not read this flag.
-    #[serde(
-        default,
-        rename = "memory_migrated",
-        skip_serializing_if = "is_false"
-    )]
+    #[serde(default, rename = "memory_migrated", skip_serializing_if = "is_false")]
     pub memory_migrated: bool,
     /// Learned-memory writes. Omitted from `app.json` while this stays on.
     /// `"memory_writes": false` stops notes, proposals and edits. Forget still works.

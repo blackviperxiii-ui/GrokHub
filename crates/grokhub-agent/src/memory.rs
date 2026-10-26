@@ -284,9 +284,11 @@ fn already_has(already: &[String], body: &str) -> bool {
         .filter(|line| !line.is_empty())
         .collect();
     !lines.is_empty()
-        && lines
-            .iter()
-            .all(|line| already.iter().any(|old| normalize_hit(old) == normalize_hit(line)))
+        && lines.iter().all(|line| {
+            already
+                .iter()
+                .any(|old| normalize_hit(old) == normalize_hit(line))
+        })
 }
 
 fn normalize_hit(text: &str) -> String {
@@ -1790,7 +1792,9 @@ mod tests {
         assert!(first.contains("the harbor ferry leaves at nine"), "{first}");
         let already = injected_lines(&history_with(&first));
         assert!(
-            already.iter().any(|line| line.contains("ferry leaves at nine")),
+            already
+                .iter()
+                .any(|line| line.contains("ferry leaves at nine")),
             "{already:?}"
         );
         assert!(followup_injection(&ws, ask, &already).is_none());
@@ -1863,7 +1867,11 @@ mod tests {
         let ask = "tell me about the harbor lights please";
         assert_eq!(inject_token_cap(), INJECT_TOKEN_CAP);
         let wide = first_turn_injection(&ws, ask).unwrap();
-        assert!(estimate_tokens(&wide) <= INJECT_TOKEN_CAP, "{}", estimate_tokens(&wide));
+        assert!(
+            estimate_tokens(&wide) <= INJECT_TOKEN_CAP,
+            "{}",
+            estimate_tokens(&wide)
+        );
         fs::write(cfg.join("app.json"), r#"{"recall_token_cap":0}"#).unwrap();
         assert_eq!(inject_token_cap(), INJECT_TOKEN_CAP);
         fs::write(cfg.join("app.json"), r#"{"recall_token_cap":9000}"#).unwrap();
@@ -1873,7 +1881,12 @@ mod tests {
         let tight = first_turn_injection(&ws, ask).unwrap();
         let tight_tokens = estimate_tokens(&tight);
         assert!(tight_tokens <= 80, "{tight_tokens}");
-        assert!(tight.len() < wide.len(), "tight {} wide {}", tight.len(), wide.len());
+        assert!(
+            tight.len() < wide.len(),
+            "tight {} wide {}",
+            tight.len(),
+            wide.len()
+        );
     }
 
     #[test]

@@ -26,8 +26,8 @@ use crate::{
 mod scan;
 
 pub mod ab;
-pub mod metrics;
 pub mod longmem;
+pub mod metrics;
 pub mod sycophancy;
 pub mod turn_endings;
 
