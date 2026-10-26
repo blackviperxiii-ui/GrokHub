@@ -598,10 +598,7 @@ mod tests {
 
     #[test]
     fn greeting_name_prefers_user_md() {
-        assert_eq!(
-            greeting_name("Name: Alex\neditor: nvim\n", "Alex"),
-            "Alex"
-        );
+        assert_eq!(greeting_name("Name: Alex\neditor: nvim\n", "Alex"), "Alex");
         assert_eq!(greeting_name("# User\n", "Alex Doe"), "Alex");
         assert_eq!(
             greeting_name("# User profile\nWho you are, preferred tools.\n", "Alex"),
