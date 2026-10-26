@@ -480,6 +480,7 @@ pub struct AppConfig {
     /// Where `/recall` reads memory. Omitted from `app.json` while this stays
     /// legacy, so an old file and a default save do not grow a new key.
     /// Opt in with `"memory_backend": "amr"` (snake_case, not camelCase).
+    /// A missing `app.json` is a new install: [`load`] sets this to `amr`.
     /// There is no Settings control for it.
     #[serde(
         default,
@@ -487,6 +488,14 @@ pub struct AppConfig {
         skip_serializing_if = "grokhub_core::amr::MemoryBackend::is_legacy"
     )]
     pub memory_backend: grokhub_core::amr::MemoryBackend,
+    /// Set by [`load`] on a new install. An omitted key does not switch an
+    /// existing file, and the agent does not read this flag.
+    #[serde(
+        default,
+        rename = "memory_migrated",
+        skip_serializing_if = "is_false"
+    )]
+    pub memory_migrated: bool,
     /// Learned-memory writes. Omitted from `app.json` while this stays on.
     /// `"memory_writes": false` stops notes, proposals and edits. Forget still works.
     #[serde(
@@ -683,6 +692,7 @@ impl Default for AppConfig {
             pulse_sources: Default::default(),
             daily_drop: DailyDropSettings::default(),
             memory_backend: grokhub_core::amr::MemoryBackend::Legacy,
+            memory_migrated: false,
             memory_writes: true,
         }
     }
@@ -812,7 +822,13 @@ pub fn drop_saved_effort(cfg: &mut AppConfig, dir: &std::path::Path) {
 
 pub fn load() -> AppConfig {
     let path = config_dir().join("app.json");
+    // A missing file is a new install. An existing file, even `{}`, keeps its backend.
+    let fresh = !path.is_file();
     let mut cfg: AppConfig = load_json(&path, JSON_STORE_CAP);
+    if fresh {
+        cfg.memory_backend = grokhub_core::amr::MemoryBackend::Amr;
+        cfg.memory_migrated = true;
+    }
     cfg.host_on = true;
     // Leftover `"yolo": true` from older cabins must not disable the bound-tree jail.
     cfg.yolo = false;
@@ -1066,6 +1082,49 @@ mod tests {
             saved.contains("\"memory_backend\":\"amr\""),
             "amr opt-in must keep the snake_case key: {saved}"
         );
+        assert!(
+            !json.contains("memory_migrated"),
+            "default config must omit memory_migrated: {json}"
+        );
+    }
+
+    #[test]
+    fn memory_backend_new_install_is_amr_and_an_existing_file_stays_legacy() {
+        let _g = hold_test_config();
+        let root = test_config_root("amr-default");
+        let _ = fs::remove_dir_all(&root);
+        let _pin = TestConfigDir::set(root.clone());
+        fs::create_dir_all(&root).unwrap();
+        let fresh = load();
+        assert_eq!(fresh.memory_backend, grokhub_core::amr::MemoryBackend::Amr);
+        assert!(fresh.memory_migrated);
+        assert!(!root.join("app.json").is_file());
+        save(&fresh).unwrap();
+        let body = fs::read_to_string(root.join("app.json")).unwrap();
+        assert!(body.contains("\"memory_backend\": \"amr\""), "{body}");
+        assert!(body.contains("\"memory_migrated\": true"), "{body}");
+        let again = load();
+        assert_eq!(again.memory_backend, grokhub_core::amr::MemoryBackend::Amr);
+        assert!(again.memory_migrated);
+
+        fs::write(root.join("app.json"), "{}\n").unwrap();
+        let existing = load();
+        assert_eq!(
+            existing.memory_backend,
+            grokhub_core::amr::MemoryBackend::Legacy
+        );
+        assert!(!existing.memory_migrated);
+
+        fs::write(root.join("app.json"), "{\"memory_backend\":\"legacy\"}\n").unwrap();
+        let legacy = load();
+        assert!(legacy.memory_backend.is_legacy());
+        assert!(!legacy.memory_migrated);
+
+        fs::write(root.join("app.json"), "{\"memory_migrated\":true}\n").unwrap();
+        let flagged = load();
+        assert!(flagged.memory_backend.is_legacy());
+        assert!(flagged.memory_migrated);
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]
