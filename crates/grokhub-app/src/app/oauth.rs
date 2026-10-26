@@ -533,8 +533,8 @@ mod tests {
         assert_eq!(c.action, "Sign out");
         assert_eq!(c.hint, "GrokHub QA · grokhub-qa@agentmail.to");
         assert_eq!(
-            account_connected_hint(&tok("x", Some("Alex"), None)),
-            "Alex"
+            account_connected_hint(&tok("x", Some("User"), None)),
+            "User"
         );
         assert_eq!(
             account_connected_hint(&tok("x", None, Some("a@b.co"))),

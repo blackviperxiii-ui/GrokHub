@@ -7,10 +7,10 @@ use super::*;
 
 #[test]
 fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
-    let email = "alex@example.com";
+    let email = "user@example.com";
     let picture = "/home/user/.config/GrokHub/profile.png";
-    let menu = super::avatar_menu("Alex", picture, Some("OAuth Name"), "Name: Alex\n");
-    assert_eq!(menu.name, "Alex");
+    let menu = super::avatar_menu("User", picture, Some("OAuth Name"), "Name: User\n");
+    assert_eq!(menu.name, "User");
     assert_eq!(menu.picture_path, picture);
     assert!(!menu.name.contains(email) && !menu.picture_path.contains(email));
     assert!(!menu.name.contains('@') && !menu.picture_path.contains('@'));
@@ -19,8 +19,8 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
     assert_eq!(fallback.name, "OAuth Name");
     assert!(fallback.picture_path.is_empty());
 
-    let blank = super::avatar_menu("   ", "", Some("GrokHub"), "Name: Alex\n");
-    assert_eq!(blank.name, "Alex");
+    let blank = super::avatar_menu("   ", "", Some("GrokHub"), "Name: User\n");
+    assert_eq!(blank.name, "User");
     assert!(!blank.name.contains(email));
 
     let src = cabin_src();
@@ -157,17 +157,17 @@ fn stale_after_newer_publish(older: super::AppConfig, newer: super::AppConfig) -
 #[test]
 fn name_save_does_not_overwrite_a_newer_picture() {
     let name = super::AppConfig {
-        display_name: "Alex".into(),
+        display_name: "User".into(),
         api_key: "sk-secret".into(),
         ..super::AppConfig::default()
     };
     let picture = super::AppConfig {
-        display_name: "Alex".into(),
+        display_name: "User".into(),
         profile_picture: "/cfg/profile.png".into(),
         ..super::AppConfig::default()
     };
     let current = stale_after_newer_publish(name, picture);
-    assert_eq!(current.display_name, "Alex");
+    assert_eq!(current.display_name, "User");
     assert_eq!(current.profile_picture, "/cfg/profile.png");
     assert!(current.api_key.is_empty());
 
@@ -198,12 +198,12 @@ fn picture_save_does_not_overwrite_a_newer_name() {
         ..super::AppConfig::default()
     };
     let name = super::AppConfig {
-        display_name: "Alex".into(),
+        display_name: "User".into(),
         profile_picture: "/cfg/profile.png".into(),
         ..super::AppConfig::default()
     };
     let current = stale_after_newer_publish(picture, name);
-    assert_eq!(current.display_name, "Alex");
+    assert_eq!(current.display_name, "User");
     assert_eq!(current.profile_picture, "/cfg/profile.png");
 }
 

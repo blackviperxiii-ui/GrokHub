@@ -1688,13 +1688,13 @@ mod tests {
         assert!(parsed.display_name.is_empty());
         assert!(parsed.profile_picture.is_empty());
         let named = AppConfig {
-            display_name: "Alex".into(),
+            display_name: "User".into(),
             profile_picture: "/cfg/profile.png".into(),
             ..Default::default()
         };
         save(&named).expect("profile save");
         let loaded = load();
-        assert_eq!(loaded.display_name, "Alex");
+        assert_eq!(loaded.display_name, "User");
         assert_eq!(loaded.profile_picture, "/cfg/profile.png");
         let _ = fs::remove_dir_all(&root);
         std::env::remove_var("GROKHUB_CONFIG");

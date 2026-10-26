@@ -1125,7 +1125,7 @@ mod tests {
             ("assistant".into(), "CONNECTOR_CMD: github user\n".into()),
             (
                 "user".into(),
-                "CONNECTOR_RESULT (facts only):\ngithub user\nlogin: alex".into(),
+                "CONNECTOR_RESULT (facts only):\ngithub user\nlogin: user".into(),
             ),
         ];
         let v = visible_chat(&msgs);

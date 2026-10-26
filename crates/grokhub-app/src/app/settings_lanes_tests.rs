@@ -442,9 +442,9 @@ fn fallback_cabin_name_defaults_to_grok() {
     assert!(!blank.is_empty());
     assert_eq!(blank, "Grok");
 
-    let from_md = super::fallback_cabin_name("Name: Alex\n");
+    let from_md = super::fallback_cabin_name("Name: User\n");
     assert!(!from_md.is_empty());
-    assert_eq!(from_md, "Alex");
+    assert_eq!(from_md, "User");
 }
 
 // Folded from PR #417.
