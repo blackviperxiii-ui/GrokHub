@@ -514,20 +514,14 @@ fn connection_remove_and_automation_delete_park_and_deny_leaves_files_byte_ident
         "connection_remove",
         json!({ "name": "files" }),
     );
-    assert!(
-        !ok && text.ends_with("user did not approve it."),
-        "{text}"
-    );
+    assert!(!ok && text.ends_with("user did not approve it."), "{text}");
     let (ok, text) = call(
         &mut server,
         &mut io,
         "automation_delete",
         json!({ "id": id }),
     );
-    assert!(
-        !ok && text.ends_with("user did not approve it."),
-        "{text}"
-    );
+    assert!(!ok && text.ends_with("user did not approve it."), "{text}");
     let parked: Vec<(&str, &str)> = io
         .parks
         .iter()
