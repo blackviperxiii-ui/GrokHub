@@ -28,7 +28,7 @@ mod scan;
 pub mod ab;
 pub mod metrics;
 
-pub use ab::{load_tasks, run_technique_matrix, Technique, TechniqueMatrixReport};
+pub use ab::{load_tasks, run_technique_matrix, Technique, TechniqueArm, TechniqueMatrixReport};
 pub use metrics::Recommendation;
 
 pub const SUITE_ITEMS: [&str; 9] = [
@@ -208,13 +208,28 @@ pub fn render_markdown(report: &TechniqueMatrixReport) -> String {
         report.model
     );
     out.push_str("## Method\n\n");
-    out.push_str(
+    let tasks = report.arms.first().map_or(0, |arm| arm.metrics.tasks);
+    let _ = writeln!(
+        out,
         "A = all cost techniques off. Each B arm enables exactly one technique via a temp \
 config dir (`prefix_cache.toml`, `tool_output_compact.toml`, `deferred_tools.toml`, \
-`batched_tools.toml`), then an all-on arm. Same 20 fixture tasks and scripted model \
-replies as R1. No network, no paid runs. Cost uses the offline tick model in \
-`metrics::offline_cost_ticks` (1 tick / billable input + 4 / output + 4 / reasoning). \
-Wall time is omitted so the report is byte-stable.\n\n",
+`batched_tools.toml`), then an all-on arm. Same {tasks} fixture tasks and scripted model \
+replies in every arm. No network, no paid runs.\n"
+    );
+    out.push_str(
+        "Input usage is measured, not scripted: the replay captures every outbound request \
+(system messages, then the tools array, then the other input items, as the wire body sends \
+them) and estimates tokens as bytes / 4. The part of a request that repeats the start of \
+the previous request in the same task counts as cached, the way a provider prefix cache \
+would hit; the rest is billable. Output and reasoning tokens still come from the fixtures. \
+Cost uses the offline tick model in `metrics::offline_cost_ticks` (1 tick / billable input \
++ 4 / output + 4 / reasoning). The scratch workspace path is replaced before measuring and \
+wall time is omitted, so the report is byte-stable.\n\n",
+    );
+    out.push_str(
+        "Columns: **Prefix-stable** = bytes shared with the previous request / bytes of every \
+request after a task's first. **Schema B/req** = tools-array bytes per model call. \
+**Calls/task** = model calls per task. **Tools/call** = tool calls per model call.\n\n",
     );
     out.push_str(
         "Recommendation rule: **adopt** only if cost per solved task falls and success \
@@ -224,9 +239,9 @@ before flipping any default).\n\n",
     );
     out.push_str("## Arms\n\n");
     out.push_str(
-        "| Arm | Success | Cost/task | Cost/solved | Cache hit | In tokens | Out tokens | Δ success | Δ cost/solved | Noise | Rec |\n",
+        "| Arm | Success | Cost/solved | Δ cost/solved | In tokens | Cached | Prefix-stable | Schema B/req | Calls/task | Tools/call | Noise | Rec |\n",
     );
-    out.push_str("|---|---|---|---|---|---|---|---|---|---|---|\n");
+    out.push_str("|---|---|---|---|---|---|---|---|---|---|---|---|\n");
     let baseline = report
         .arms
         .iter()
@@ -234,87 +249,130 @@ before flipping any default).\n\n",
         .map(|arm| &arm.metrics);
     for arm in &report.arms {
         let m = &arm.metrics;
-        let cps = format_cost(m.cost_per_solved_task());
-        let cpt = format_cost(m.cost_per_task());
-        let rec = if arm.technique == Technique::Baseline {
-            "—"
-        } else {
-            arm.recommendation.as_str()
-        };
-        let noise = if arm.technique == Technique::Baseline {
-            "—"
-        } else if arm.success_within_noise {
+        let is_base = arm.technique == Technique::Baseline;
+        let dash = |v: String| if is_base { "—".to_string() } else { v };
+        let noise = if arm.success_within_noise {
             "yes"
         } else {
             "no"
         };
-        let d_success = if arm.technique == Technique::Baseline {
-            "—".into()
-        } else {
-            format!("{:+.2}%", arm.delta.success_rate * 100.0)
-        };
-        let d_cps = if arm.technique == Technique::Baseline {
-            "—".into()
-        } else {
-            format_cost_delta(arm.delta.cost_per_solved_task)
-        };
         let _ = writeln!(
             out,
-            "| {} | {:.2}% ({}/{}) | {} | {} | {:.2}% | {} | {} | {} | {} | {} | {} |",
+            "| {} | {:.2}% ({}/{}) | {} | {} | {} | {} | {:.2}% | {:.0} | {:.2} | {:.2} | {} | {} |",
             arm.technique.label(),
             m.success_rate() * 100.0,
             m.successes,
             m.tasks,
-            cpt,
-            cps,
-            m.cache_hit_rate() * 100.0,
+            format_cost(m.cost_per_solved_task()),
+            dash(cost_delta_with_pct(arm.delta.cost_per_solved_task, baseline)),
             m.input_tokens,
-            m.output_tokens,
-            d_success,
-            d_cps,
-            noise,
-            rec
+            m.cached_tokens,
+            m.prefix_stable_ratio() * 100.0,
+            m.schema_bytes_per_request(),
+            m.model_calls_per_task(),
+            m.tool_calls_per_model_call(),
+            dash(noise.into()),
+            dash(arm.recommendation.as_str().into()),
         );
     }
     out.push_str("\n## Per-technique notes\n\n");
     for arm in &report.arms {
-        if arm.technique == Technique::Baseline {
-            if let Some(base) = baseline {
-                let _ = writeln!(
-                    out,
-                    "- **{}**: R1 baseline — {}/{} success, {} input / {} output tokens, \
-cost/solved {} (offline ticks).",
-                    arm.technique.label(),
-                    base.successes,
-                    base.tasks,
-                    base.input_tokens,
-                    base.output_tokens,
-                    format_cost(base.cost_per_solved_task())
-                );
-            }
-            continue;
-        }
-        let _ = writeln!(
-            out,
-            "- **{}**: recommendation **{}** (success within noise: {}; Δ cost/solved {}).",
-            arm.technique.label(),
-            arm.recommendation.as_str(),
-            if arm.success_within_noise {
-                "yes"
-            } else {
-                "no"
-            },
-            format_cost_delta(arm.delta.cost_per_solved_task)
-        );
+        let Some(base) = baseline else { break };
+        let _ = writeln!(out, "- {}", technique_note(arm, base));
     }
     out.push_str("\n## Verdict\n\n");
     out.push_str(
-        "Scripted offline replay does not yet attribute cache hits or token savings to \
-technique toggles (fixtures carry fixed usage). Every B arm therefore shows flat cost \
-with success within noise → **spike** each technique pending instrumented measurement; \
-do not flip defaults on without user's yes.\n",
+        "Recommendations above follow the rule mechanically from the measured requests. \
+They price prompt bytes only: the replay cannot see output quality, real tokenizer \
+counts, provider cache pricing (cached input is billed at 0 here), or wall time. \
+No default is flipped by this report; the user decides which settings to turn on.\n",
     );
     out
+}
+
+/// One line per arm: what moved against the baseline, and why when it did not.
+fn technique_note(arm: &ab::TechniqueArm, base: &metrics::ArmMetrics) -> String {
+    let m = &arm.metrics;
+    let label = arm.technique.label();
+    if arm.technique == Technique::Baseline {
+        return format!(
+            "**{label}**: {}/{} success, {} model calls, {} input tokens of which {} cached \
+({:.2}% prefix-stable), {:.0} schema bytes per request, cost/solved {}.",
+            m.successes,
+            m.tasks,
+            m.model_calls,
+            m.input_tokens,
+            m.cached_tokens,
+            m.prefix_stable_ratio() * 100.0,
+            m.schema_bytes_per_request(),
+            format_cost(m.cost_per_solved_task())
+        );
+    }
+    let mut moved = Vec::new();
+    if m.input_tokens != base.input_tokens {
+        moved.push(format!(
+            "input tokens {} → {}",
+            base.input_tokens, m.input_tokens
+        ));
+    }
+    if m.prefix_stable_bytes != base.prefix_stable_bytes || m.followup_bytes != base.followup_bytes
+    {
+        moved.push(format!(
+            "prefix-stable {:.2}% → {:.2}%",
+            base.prefix_stable_ratio() * 100.0,
+            m.prefix_stable_ratio() * 100.0
+        ));
+    }
+    if m.schema_bytes != base.schema_bytes {
+        moved.push(format!(
+            "schema bytes/request {:.0} → {:.0}",
+            base.schema_bytes_per_request(),
+            m.schema_bytes_per_request()
+        ));
+    }
+    if m.model_calls != base.model_calls {
+        moved.push(format!(
+            "model calls {} → {}",
+            base.model_calls, m.model_calls
+        ));
+    }
+    let moved = if moved.is_empty() {
+        format!(
+            "no request byte, call or schema change on this fixture set. {}",
+            flat_reason(arm.technique)
+        )
+    } else {
+        moved.join("; ")
+    };
+    format!(
+        "**{label}**: **{}** (Δ cost/solved {}). {moved}",
+        arm.recommendation.as_str(),
+        cost_delta_with_pct(arm.delta.cost_per_solved_task, Some(base))
+    )
+}
+
+/// Why a technique can leave the offline requests unchanged.
+fn flat_reason(technique: Technique) -> &'static str {
+    match technique {
+        Technique::ToolOutputSummaries => {
+            "Fixture tool outputs are a few bytes, below the size that triggers a summary."
+        }
+        Technique::BatchedReadOnly => {
+            "R5 runs consecutive read-only calls from one reply in parallel; the model still \
+decides how many calls a reply holds, so requests and model calls stay the same and only \
+wall time (not measured here) can move."
+        }
+        _ => "",
+    }
+}
+
+fn cost_delta_with_pct(delta: f64, baseline: Option<&metrics::ArmMetrics>) -> String {
+    let base = baseline.map_or(f64::NAN, |b| b.cost_per_solved_task());
+    let abs = format_cost_delta(delta);
+    if !delta.is_finite() || !base.is_finite() || base == 0.0 || delta.abs() < 1e-12 {
+        return abs;
+    }
+    format!("{abs} ({:+.2}%)", delta / base * 100.0)
 }
 
 fn format_cost(v: f64) -> String {

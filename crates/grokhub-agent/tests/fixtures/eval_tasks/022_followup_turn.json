@@ -1,0 +1,30 @@
+{
+  "id": "022_followup_turn",
+  "prompt": "hello",
+  "followups": ["Fix the typo in notes.txt: change teh to the."],
+  "mode": "always",
+  "files": [{ "path": "notes.txt", "content": "teh cat\n" }],
+  "script": [
+    {
+      "type": "text",
+      "content": "Hi.",
+      "usage": { "output_tokens": 2 }
+    },
+    {
+      "type": "tool",
+      "name": "search_replace",
+      "arguments": { "file_path": "notes.txt", "old_string": "teh", "new_string": "the" },
+      "usage": { "output_tokens": 12 }
+    },
+    {
+      "type": "text",
+      "content": "Fixed the typo.",
+      "usage": { "output_tokens": 4 }
+    }
+  ],
+  "checks": [
+    { "type": "stop_reason", "value": "end_turn" },
+    { "type": "assistant_contains", "value": "Fixed" },
+    { "type": "file_contains", "path": "notes.txt", "value": "the cat" }
+  ]
+}
