@@ -14,11 +14,12 @@
 //!   dreams/            reports, such as the one-time import-<date>.md
 //! ```
 //!
-//! `/recall` stays on SOUL/USER/MEMORY unless `app.json` sets
-//! `"memory_backend": "amr"`. That file is the cabin settings file. The default
-//! backend is legacy, and a default save omits the key. M0 does not migrate old
-//! files, does not dream, and does not take writes from `/learn`, `/memory`, or
-//! the Pulse ledger.
+//! `/recall` stays on SOUL/USER/MEMORY when `app.json` omits `memory_backend`
+//! or sets `"legacy"`. A missing `app.json` is a new install: `load` picks
+//! `"memory_backend": "amr"` and still reads the legacy files. A default
+//! `AppConfig` save omits the key. `memory_migrated` records that choice and
+//! does not override an omitted key. M0 does not migrate old files, does not
+//! dream, and does not take writes from `/learn`, `/memory`, or the Pulse ledger.
 //!
 //! M1–M2 (only when the backend is `amr`): new remembers go here instead of
 //! MEMORY.md ([`remember_line`]), `/recall` reads this store and the legacy
