@@ -649,6 +649,36 @@ async function interests(s, config) {
   console.log(`interest saved: ${JSON.stringify(saved.topic)}, pinned`);
 }
 
+// Settings → Permissions: a deny rule added here lands in the
+// permission-rules.json the agent's gate reads, and Remove takes it out.
+async function permissions(s, config) {
+  await tab(s, "Settings");
+  await section(s, "Permissions");
+  const rulesFile = join(config, "permission-rules.json");
+  const input = await waitFor("the rule box", () => find(s, ".permissions input[placeholder^='Bash(git']"));
+  await click(s, "[aria-label='Rule action'] button:nth-child(3)");
+  await wd("POST", `${s}/element/${input}/value`, { text: "WebFetch(domain:example.com)" });
+  await click(s, ".permissions form:first-of-type button[type='submit']");
+  await waitFor("the saved deny rule", async () => {
+    if (!existsSync(rulesFile)) return null;
+    const raw = readFileSync(rulesFile, "utf8");
+    return raw.includes("WebFetch(domain:example.com)") && raw.includes("deny") ? true : null;
+  });
+  console.log("permissions: deny rule saved to permission-rules.json");
+  const remove = await waitFor("the rule's Remove", async () => {
+    const el = await wd("POST", `${s}/element`, {
+      using: "xpath",
+      value: "//ul[@aria-label='Saved rules']/li[@aria-label='Deny WebFetch(domain:example.com)']//button[normalize-space()='Remove']",
+    });
+    return el[ELEMENT];
+  });
+  await wd("POST", `${s}/element/${remove}/click`, {});
+  await waitFor("the removed rule", async () =>
+    readFileSync(rulesFile, "utf8").includes("WebFetch(domain:example.com)") ? null : true,
+  );
+  console.log("permissions: rule removed");
+}
+
 async function main() {
   const mock = await startMock();
   const config = mkdtempSync(join(tmpdir(), "grokhub-shell-smoke-"));
@@ -762,6 +792,7 @@ async function main() {
     await labs(s, config);
     await playbooks(s, config);
     await interests(s, config);
+    await permissions(s, config);
     await desktop(s, config);
     if (process.env.SMOKE_WEB === "1") await web(s);
     console.log("smoke ok");

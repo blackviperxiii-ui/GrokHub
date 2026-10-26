@@ -13,6 +13,7 @@ pub mod interests;
 pub mod journal;
 pub mod local_ai;
 pub mod memory;
+pub mod permissions;
 pub mod personality;
 pub mod playbooks;
 pub mod plugins;
@@ -501,6 +502,50 @@ async fn journal_to_mission(
 ) -> Result<journal::Mission, String> {
     let dir = state.config_dir.clone();
     off_main(move || journal::to_mission(&dir, &id, &conversation_id)).await?
+}
+
+#[tauri::command]
+async fn get_permissions(state: State<'_, ShellState>) -> Result<permissions::Page, String> {
+    let (dir, workspace) = (state.config_dir.clone(), workspace(&state));
+    off_main(move || permissions::load(&dir, &workspace)).await
+}
+
+#[tauri::command]
+async fn add_permission_rule(
+    state: State<'_, ShellState>,
+    rule: String,
+    kind: permissions::Kind,
+) -> Result<permissions::Page, String> {
+    let (dir, workspace) = (state.config_dir.clone(), workspace(&state));
+    off_main(move || permissions::add_rule(&dir, &workspace, &rule, kind)).await?
+}
+
+#[tauri::command]
+async fn remove_permission_rule(
+    state: State<'_, ShellState>,
+    index: usize,
+    rule: String,
+) -> Result<permissions::Page, String> {
+    let (dir, workspace) = (state.config_dir.clone(), workspace(&state));
+    off_main(move || permissions::remove_rule(&dir, &workspace, index, &rule)).await?
+}
+
+#[tauri::command]
+async fn remember_grant(
+    state: State<'_, ShellState>,
+    command: String,
+) -> Result<permissions::Page, String> {
+    let (dir, workspace) = (state.config_dir.clone(), workspace(&state));
+    off_main(move || permissions::remember(&dir, &workspace, &command)).await?
+}
+
+#[tauri::command]
+async fn forget_grant(
+    state: State<'_, ShellState>,
+    command: String,
+) -> Result<permissions::Page, String> {
+    let (dir, workspace) = (state.config_dir.clone(), workspace(&state));
+    off_main(move || permissions::forget(&dir, &workspace, &command)).await?
 }
 
 #[tauri::command]
@@ -1093,6 +1138,11 @@ pub fn run() {
             journal_add,
             journal_act,
             journal_to_mission,
+            get_permissions,
+            add_permission_rule,
+            remove_permission_rule,
+            remember_grant,
+            forget_grant,
             get_personalities,
             set_personality,
             duplicate_personality,
