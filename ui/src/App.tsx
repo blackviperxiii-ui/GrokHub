@@ -8,6 +8,7 @@ import { Memory } from "./Memory";
 import { Palette, VIEW_LABELS, views, type PaletteAction, type View } from "./Palette";
 import { Pulse } from "./Pulse";
 import type { Section } from "./sections";
+import { useOverscroll } from "./rubberBand";
 import { Settings } from "./Settings";
 import { useHidingBar } from "./tabBar";
 import { applyTheme } from "./theme";
@@ -20,6 +21,7 @@ export function App() {
   const [goTo, setGoTo] = useState<{ section: Section; n: number }>();
   const [notice, setNotice] = useState<RunNotice & { n: number }>();
   const barAway = useHidingBar(palette);
+  useOverscroll();
   useEffect(() => {
     getCapabilities()
       .catch(() => CORE_ONLY)
