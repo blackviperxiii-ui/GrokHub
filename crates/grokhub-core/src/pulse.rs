@@ -41,6 +41,9 @@ pub struct PulseMeta {
     /// Closed on the main window's deck. Pulse still shows it.
     #[serde(default, skip_serializing_if = "is_false")]
     pub off_home: bool,
+    /// A written post's topic emoji.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
     /// A Spike-6a proactive offer: its help score, route and topic.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub proactive: Option<crate::proactive::ProactiveMeta>,
@@ -820,12 +823,12 @@ pub fn group_ideas(
     groups
 }
 
-/// The Feed view: posts newest first. Quiet ones are left out.
+/// The Feed view: every visible post, newest first. No score gate: the
+/// writer already chose what is worth posting, and Delete takes one away.
 pub fn feed_posts(cards: &[UpdateCard], inputs: &PulseInputs) -> Vec<UpdateCard> {
     let mut posts: Vec<UpdateCard> = cards
         .iter()
         .filter(|c| is_feed_card(c) && pulse_visible(c, inputs.now_ms))
-        .filter(|c| pulse_score(c, inputs) >= PULSE_THRESHOLD)
         .cloned()
         .collect();
     posts.sort_by(|a, b| b.created_at.cmp(&a.created_at).then(a.id.cmp(&b.id)));
@@ -1047,6 +1050,79 @@ pub fn og_image(html: &str, page_url: &str) -> Option<String> {
         }
     }
     None
+}
+
+/// Images a post's gallery may show: the page's own preview image, then up
+/// to two more large in-page images. Logos, icons, avatars, tracking pixels
+/// and anything marked smaller than `GALLERY_MIN_PX` are skipped.
+pub fn gallery_images(html: &str, page_url: &str) -> Vec<String> {
+    let mut out: Vec<String> = og_image(html, page_url).into_iter().collect();
+    let lower = html.to_ascii_lowercase();
+    let mut from = 0;
+    while out.len() < GALLERY_MAX {
+        let Some(pos) = lower[from..].find("<img") else {
+            break;
+        };
+        let start = from + pos;
+        let end = lower[start..]
+            .find('>')
+            .map(|e| start + e)
+            .unwrap_or(lower.len());
+        let (tag, tag_lower) = (&html[start..end], &lower[start..end]);
+        from = end;
+        let Some(src) = attr(tag, tag_lower, "src") else {
+            continue;
+        };
+        let small = ["width", "height"].iter().any(|k| {
+            attr(tag, tag_lower, k)
+                .and_then(|v| v.trim().trim_end_matches("px").parse::<u32>().ok())
+                .is_some_and(|px| px < GALLERY_MIN_PX)
+        });
+        let alt = attr(tag, tag_lower, "alt")
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        let class = attr(tag, tag_lower, "class")
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        let path = src.to_ascii_lowercase();
+        let junk = small
+            || path.ends_with(".svg")
+            || path.ends_with(".gif")
+            || path.starts_with("data:")
+            || GALLERY_SKIP
+                .iter()
+                .any(|w| path.contains(w) || alt.contains(w) || class.contains(w));
+        if junk {
+            continue;
+        }
+        let Some(url) = resolve_url(src.trim(), page_url).filter(|u| public_http_url(u)) else {
+            continue;
+        };
+        if !out.contains(&url) {
+            out.push(url);
+        }
+    }
+    out
+}
+
+/// Most images on one post.
+pub const GALLERY_MAX: usize = 3;
+/// An image marked narrower or shorter than this is not a content image.
+pub const GALLERY_MIN_PX: u32 = 200;
+/// Smallest image file worth keeping: tiny files are icons or spacers.
+pub const IMAGE_MIN_BYTES: usize = 8 * 1024;
+/// Largest image file kept in the local cache.
+pub const IMAGE_MAX_BYTES: usize = 4 * 1024 * 1024;
+const GALLERY_SKIP: &[&str] = &[
+    "logo", "icon", "avatar", "sprite", "badge", "pixel", "spacer", "emoji", "favicon", "button",
+];
+
+/// A downloaded image worth caching: a real JPEG, PNG or WebP, not tiny, not huge.
+pub fn image_bytes_ok(bytes: &[u8]) -> bool {
+    let real = bytes.starts_with(&[0xFF, 0xD8, 0xFF])
+        || bytes.starts_with(&[0x89, b'P', b'N', b'G'])
+        || (bytes.len() > 12 && &bytes[..4] == b"RIFF" && &bytes[8..12] == b"WEBP");
+    real && (IMAGE_MIN_BYTES..=IMAGE_MAX_BYTES).contains(&bytes.len())
 }
 
 fn attr<'a>(tag: &'a str, tag_lower: &str, name: &str) -> Option<&'a str> {
@@ -1866,5 +1942,49 @@ mod tests {
         );
         assert_eq!(IDEAS_LOADING, "Looking for ideas in your recent work…");
         assert_eq!(IDEAS_SIGN_IN, "Sign in to Grok to get ideas.");
+    }
+
+    #[test]
+    fn the_gallery_takes_the_preview_and_two_large_images_and_skips_logos() {
+        let html = r#"<head><meta property="og:image" content="/img/hero.jpg"></head>
+<body><img src="/static/logo.png" width="600">
+<img src="https://cdn.example.com/a/team.jpg" alt="The team" width="1200" height="800">
+<img src="/icons/share.png">
+<img src="/img/tiny.jpg" width="40" height="40">
+<img src="/img/chart.webp" class="figure">
+<img src="data:image/png;base64,AAAA">
+<img src="/img/third.jpg" width="900"></body>"#;
+        assert_eq!(
+            gallery_images(html, "https://news.example.com/2026/story"),
+            vec![
+                "https://news.example.com/img/hero.jpg".to_string(),
+                "https://cdn.example.com/a/team.jpg".to_string(),
+                "https://news.example.com/img/chart.webp".to_string(),
+            ]
+        );
+        // No preview: in-page images only, still at most three.
+        let plain = r#"<img src="/1.jpg"><img src="/2.jpg"><img src="/3.jpg"><img src="/4.jpg">"#;
+        assert_eq!(
+            gallery_images(plain, "https://a.example.com/x").len(),
+            GALLERY_MAX
+        );
+        assert!(gallery_images("<p>text</p>", "https://a.example.com/").is_empty());
+    }
+
+    #[test]
+    fn only_real_mid_sized_image_files_are_cached() {
+        let mut jpg = vec![0xFF, 0xD8, 0xFF, 0xE0];
+        jpg.resize(IMAGE_MIN_BYTES, 0);
+        assert!(image_bytes_ok(&jpg));
+        assert!(!image_bytes_ok(&jpg[..IMAGE_MIN_BYTES - 1]), "tiny");
+        let mut webp = b"RIFF\0\0\0\0WEBPVP8 ".to_vec();
+        webp.resize(IMAGE_MIN_BYTES, 0);
+        assert!(image_bytes_ok(&webp));
+        let mut html = b"<!doctype html>".to_vec();
+        html.resize(IMAGE_MIN_BYTES, b' ');
+        assert!(!image_bytes_ok(&html));
+        let mut huge = vec![0x89, b'P', b'N', b'G'];
+        huge.resize(IMAGE_MAX_BYTES + 1, 0);
+        assert!(!image_bytes_ok(&huge));
     }
 }

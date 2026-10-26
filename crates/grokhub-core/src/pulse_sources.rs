@@ -57,10 +57,6 @@ fn yes() -> bool {
     true
 }
 
-fn every_default() -> u32 {
-    EVERY_DEFAULT_MINS
-}
-
 /// Settings → Pulse → Sources. Each source can be off; the lists are what to follow.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -90,9 +86,6 @@ pub struct SourceSettings {
     /// YouTube channel ids (`UC…`).
     #[serde(default)]
     pub channels: Vec<String>,
-    /// Minutes between background checks, one of `EVERY_CHOICES`.
-    #[serde(default = "every_default")]
-    pub every_mins: u32,
 }
 
 impl Default for SourceSettings {
@@ -108,19 +101,11 @@ impl Default for SourceSettings {
             repos: Vec::new(),
             subreddits: Vec::new(),
             channels: Vec::new(),
-            every_mins: EVERY_DEFAULT_MINS,
         }
     }
 }
 
 impl SourceSettings {
-    /// How often the background check runs, held to 1–4 hours.
-    pub fn every_ms(&self) -> u64 {
-        let lo = EVERY_CHOICES[0];
-        let hi = EVERY_CHOICES[EVERY_CHOICES.len() - 1];
-        u64::from(self.every_mins.clamp(lo, hi)) * 60 * 1000
-    }
-
     pub fn on(&self, kind: SourceKind) -> bool {
         match kind {
             SourceKind::HackerNews => self.hacker_news,
@@ -174,13 +159,10 @@ impl SourceSettings {
     }
 }
 
-/// Settings → Pulse → Check every, in minutes.
-pub const EVERY_CHOICES: [u32; 5] = [60, 90, 120, 180, 240];
-pub const EVERY_DEFAULT_MINS: u32 = 90;
 /// When the app opens, a check runs if the last one is at least this old.
 pub const OPEN_DEBOUNCE_MS: u64 = 10 * 60 * 1000;
 /// Fast-model calls a day for post summaries. One call covers a whole run, so the
-/// default 90-minute clock (16 runs a day) never runs out.
+/// fastest system cadence (90 minutes, 16 runs a day) never runs out.
 pub const SUMMARY_CALLS_PER_DAY: u32 = 16;
 /// What a model summary may hold: two or three short sentences.
 pub const MODEL_SUMMARY_CHARS: usize = 300;
@@ -2425,22 +2407,17 @@ mod tests {
 
     #[test]
     fn the_clock_runs_every_interval_and_once_on_open() {
-        let s = SourceSettings::default();
-        assert_eq!(s.every_ms(), 90 * 60_000);
-        let mut far = s.clone();
-        far.every_mins = 999;
-        assert_eq!(far.every_ms(), 240 * 60_000);
-        far.every_mins = 5;
-        assert_eq!(far.every_ms(), 60 * 60_000);
-        let every = s.every_ms();
+        let every = 90 * 60_000;
         assert!(check_due(0, NOW, every, false));
         assert!(!check_due(NOW - 89 * 60_000, NOW, every, false));
         assert!(check_due(NOW - 90 * 60_000, NOW, every, false));
         // Opening the app runs a check unless one ran in the last ten minutes.
         assert!(check_due(NOW - 11 * 60_000, NOW, every, true));
         assert!(!check_due(NOW - 9 * 60_000, NOW, every, true));
-        let old: SourceSettings = serde_json::from_str("{}").unwrap();
-        assert_eq!(old.every_mins, 90);
+        // An older file's "Check every" choice loads and is ignored: the
+        // system cadence decides now.
+        let old: SourceSettings = serde_json::from_str(r#"{"everyMins":60}"#).unwrap();
+        assert_eq!(old, SourceSettings::default());
     }
 
     #[test]

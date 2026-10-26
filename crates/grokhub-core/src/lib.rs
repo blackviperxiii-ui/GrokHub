@@ -92,6 +92,7 @@ pub mod project;
 pub mod protected_surface;
 pub mod pulse;
 pub mod pulse_sources;
+pub mod pulse_writer;
 pub mod recipe;
 pub mod recovered;
 pub mod redact;
