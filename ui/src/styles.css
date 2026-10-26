@@ -141,6 +141,66 @@ textarea {
   border-color: var(--border);
 }
 
+/* Phones: the views bar sits at the bottom in one row and slides away while
+   the user scrolls down (tabBar.ts). Its space is released with it, so
+   nothing stays hidden behind it. */
+@media (max-width: 600px) {
+  .app {
+    --tabbar: 52px;
+    padding-bottom: calc(12px + var(--tabbar) + env(safe-area-inset-bottom));
+    transition: padding-bottom 200ms ease;
+  }
+
+  .app.bar-away {
+    padding-bottom: 12px;
+  }
+
+  .topbar {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 5;
+    box-sizing: border-box;
+    height: calc(var(--tabbar) + env(safe-area-inset-bottom));
+    align-items: center;
+    padding: 0 12px env(safe-area-inset-bottom);
+    background: var(--panel);
+    border-top: 1px solid var(--border);
+    transition: transform 200ms ease;
+  }
+
+  .bar-away .topbar {
+    transform: translateY(100%);
+  }
+
+  .tabs {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+  }
+
+  .tabs button,
+  .palette-open {
+    flex: none;
+  }
+
+  /* These scroll the window on wider screens; here they scroll inside the
+     page so their end clears the bar. */
+  .journal,
+  .settings-page {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+  }
+}
+
+@media (max-width: 600px) and (prefers-reduced-motion: reduce) {
+  .app,
+  .topbar {
+    transition: none;
+  }
+}
+
 .palette-backdrop {
   position: fixed;
   inset: 0;
