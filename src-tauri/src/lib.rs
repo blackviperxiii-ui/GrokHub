@@ -12,6 +12,7 @@ pub mod credential;
 pub mod journal;
 pub mod local_ai;
 pub mod memory;
+pub mod plugins;
 pub mod pulse;
 pub mod remote;
 pub mod settings;
@@ -493,6 +494,44 @@ async fn journal_to_mission(
 }
 
 #[tauri::command]
+async fn get_plugins(state: State<'_, ShellState>) -> Result<plugins::Page, String> {
+    capabilities::needs(capabilities::current().plugins, "Plugins")?;
+    let (dir, workspace) = (state.config_dir.clone(), workspace(&state));
+    off_main(move || plugins::load(&dir, &workspace)).await
+}
+
+#[tauri::command]
+async fn plugin_act(
+    state: State<'_, ShellState>,
+    name: String,
+    act: plugins::Act,
+) -> Result<plugins::Page, String> {
+    capabilities::needs(capabilities::current().plugins, "Plugins")?;
+    let (dir, workspace) = (state.config_dir.clone(), workspace(&state));
+    off_main(move || plugins::act(&dir, &workspace, &name, act)).await
+}
+
+#[tauri::command]
+async fn install_plugin(
+    state: State<'_, ShellState>,
+    source: String,
+) -> Result<plugins::Page, String> {
+    capabilities::needs(capabilities::current().plugins, "Plugins")?;
+    let (dir, workspace) = (state.config_dir.clone(), workspace(&state));
+    off_main(move || plugins::install(&dir, &workspace, &source)).await
+}
+
+#[tauri::command]
+async fn fetch_plugin_market(
+    state: State<'_, ShellState>,
+    url: String,
+) -> Result<plugins::Market, String> {
+    capabilities::needs(capabilities::current().plugins, "Plugins")?;
+    let (dir, workspace) = (state.config_dir.clone(), workspace(&state));
+    off_main(move || plugins::fetch_market(&dir, &workspace, &url)).await
+}
+
+#[tauri::command]
 async fn get_pulse(state: State<'_, ShellState>) -> Result<pulse::Page, String> {
     capabilities::needs(capabilities::current().pulse, "Pulse")?;
     let dir = state.config_dir.clone();
@@ -926,6 +965,10 @@ pub fn run() {
             journal_add,
             journal_act,
             journal_to_mission,
+            get_plugins,
+            plugin_act,
+            install_plugin,
+            fetch_plugin_market,
             get_pulse,
             pulse_act,
             get_local_ai,

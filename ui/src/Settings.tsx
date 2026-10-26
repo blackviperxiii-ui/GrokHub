@@ -9,6 +9,7 @@ import {
   type Settings as Shape,
 } from "./api";
 import { APPROVALS } from "./approvals";
+import { Labs } from "./Labs";
 import { LocalAi } from "./LocalAi";
 import { SECTION_LABELS, sections, type Section } from "./sections";
 import { WebAccess } from "./WebAccess";
@@ -119,6 +120,7 @@ export function Settings({
         {note && <p className="note">{note}</p>}
         {section === "localAi" && caps.localAi && <LocalAi />}
         {section === "webAccess" && caps.webAccess && <WebAccess />}
+        {section === "labs" && caps.plugins && <Labs />}
         {section === "about" && <About version={loaded.version} />}
       </section>
     </div>

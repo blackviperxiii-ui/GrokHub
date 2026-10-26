@@ -23,6 +23,7 @@ vi.mock("./api", () => api);
 // Local AI has its own tests (LocalAi.test.tsx).
 vi.mock("./LocalAi", () => ({ LocalAi: () => <p>Local AI panel</p> }));
 vi.mock("./WebAccess", () => ({ WebAccess: () => <p>Web access panel</p> }));
+vi.mock("./Labs", () => ({ Labs: () => <p>Labs panel</p> }));
 
 import { ABOUT_NOTE, DESKTOP_NOTE, REMOTE_NOTE, Settings } from "./Settings";
 
@@ -30,8 +31,8 @@ async function openSection(name: string) {
   await userEvent.click(await screen.findByRole("button", { name }));
 }
 
-const DESKTOP: Capabilities = { desktopControl: true, pulse: true, localAi: true, tray: true, webAccess: true };
-const PHONE: Capabilities = { desktopControl: false, pulse: false, localAi: false, tray: false, webAccess: false };
+const DESKTOP: Capabilities = { desktopControl: true, pulse: true, localAi: true, tray: true, webAccess: true, plugins: true };
+const PHONE: Capabilities = { desktopControl: false, pulse: false, localAi: false, tray: false, webAccess: false, plugins: false };
 const WEB: Capabilities = { ...PHONE, remote: true };
 
 function shape(over: Partial<Shape>): Shape {
@@ -169,6 +170,7 @@ describe("Settings", () => {
       "Account",
       "Local AI",
       "Web access",
+      "Labs",
       "About",
     ]);
   });
@@ -192,10 +194,14 @@ describe("Settings", () => {
     expect(screen.getByText("Web access panel")).toBeInTheDocument();
     expect(screen.queryByText("Local AI panel")).toBeNull();
 
+    await openSection("Labs");
+    expect(screen.getByText("Labs panel")).toBeInTheDocument();
+    expect(screen.queryByText("Web access panel")).toBeNull();
+
     await openSection("About");
     expect(screen.getByText("Version 3.1.0")).toBeInTheDocument();
     expect(screen.getByText(ABOUT_NOTE)).toBeInTheDocument();
-    expect(screen.queryByText("Web access panel")).toBeNull();
+    expect(screen.queryByText("Labs panel")).toBeNull();
   });
 
   it("shows the web app the desktop's settings but nothing to change them with", async () => {
