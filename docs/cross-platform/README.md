@@ -362,6 +362,10 @@ report).
   code. Settings shows the LAN and localhost pairing links. The code is never
   saved, so turning web access off or quitting GrokHub ends every pairing,
   and the next start needs a new code.
+- After 30 minutes with no paired browser calling, opening a stream or
+  getting a chat event, the code is swapped for a new one. That ends every
+  stream and forgets the browsers' chats, so each browser pairs again with
+  the new code, which Settings shows (it re-reads every 30 seconds).
 - The code is compared in constant time. Only the commands listed above run;
   the rest get `ok: false`. Pages carry a strict CSP (`connect-src 'self'`,
   `frame-ancestors 'none'`), `nosniff` and `no-referrer`. Bodies are capped
@@ -379,7 +383,8 @@ report).
   desktop control was on, that `set_api_key` is refused, and that turning
   it off stops the server.
 - Not yet: HTTPS. On the LAN the code and the chats travel as plain HTTP,
-  as the Settings note says.
+  as the Settings note says, and a paired browser can approve file changes
+  and commands. Web access stays a Preview until it has HTTPS.
 
 ## Phase 6 status
 

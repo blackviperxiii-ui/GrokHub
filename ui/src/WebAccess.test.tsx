@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { WebAccess as Shape } from "./api";
@@ -10,7 +10,7 @@ const api = vi.hoisted(() => ({
 
 vi.mock("./api", () => api);
 
-import { WEB_NOTE, WebAccess } from "./WebAccess";
+import { REFRESH_MS, WEB_NOTE, WebAccess } from "./WebAccess";
 
 const OFF: Shape = { on: false, code: "", links: [] };
 const ON: Shape = {
@@ -44,11 +44,61 @@ describe("WebAccess", () => {
     expect(await screen.findByText(ON.links[0])).toBeInTheDocument();
     expect(screen.getByText(ON.links[1])).toBeInTheDocument();
     expect(screen.getByLabelText("Pairing code")).toHaveTextContent(ON.code);
+    expect(
+      screen.getByText(
+        "Web access ends when you turn it off or quit GrokHub. After 30 minutes with no browser using it, the code changes and browsers pair again.",
+      ),
+    ).toBeInTheDocument();
 
     await userEvent.click(screen.getByRole("button", { name: "Turn off web access" }));
     expect(api.setWebAccess).toHaveBeenLastCalledWith(false);
     expect(await screen.findByRole("button", { name: "Turn on web access" })).toBeInTheDocument();
     expect(screen.queryByText(ON.links[0])).toBeNull();
+  });
+
+  it("warns that a paired browser can approve changes here", () => {
+    api.getWebAccess.mockResolvedValue(OFF);
+    render(<WebAccess />);
+    expect(WEB_NOTE).toContain(
+      "A paired browser can approve file changes and commands on this computer",
+    );
+    expect(screen.getByText(WEB_NOTE)).toBeInTheDocument();
+  });
+
+  it("shows a renewed code while web access is on", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const renewed: Shape = {
+        on: true,
+        code: "fedcba9876543210fedcba9876543210fedcba9876543210",
+        links: ["http://127.0.0.1:4620/#code=fedcba9876543210fedcba9876543210fedcba9876543210"],
+      };
+      api.getWebAccess.mockResolvedValueOnce(ON).mockResolvedValue(renewed);
+      render(<WebAccess />);
+      expect(await screen.findByLabelText("Pairing code")).toHaveTextContent(ON.code);
+      expect(api.getWebAccess).toHaveBeenCalledTimes(1);
+
+      await act(() => vi.advanceTimersByTimeAsync(REFRESH_MS));
+      expect(api.getWebAccess).toHaveBeenCalledTimes(2);
+      expect(screen.getByLabelText("Pairing code")).toHaveTextContent(renewed.code);
+      expect(screen.getByText(renewed.links[0])).toBeInTheDocument();
+      expect(screen.queryByText(ON.links[0])).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("stops re-reading the code once web access is off", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      api.getWebAccess.mockResolvedValue(OFF);
+      render(<WebAccess />);
+      await screen.findByRole("button", { name: "Turn on web access" });
+      await act(() => vi.advanceTimersByTimeAsync(REFRESH_MS * 3));
+      expect(api.getWebAccess).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("says why web access didn't start", async () => {
