@@ -7,7 +7,9 @@ use serde::{Deserialize, Serialize};
 
 const BUILTIN: &str = include_str!("../assets/personalities.toml");
 
-/// The preset that leaves the system prompt exactly as it was before personalities.
+/// The shipped default voice. Its tone rules state the values the charter also
+/// carries. An id this build does not know stays an unstyled preset with empty
+/// tone rules.
 pub const DEFAULT_ID: &str = "default";
 /// Longest `tone_rules` a preset may carry.
 pub const TONE_RULES_MAX: usize = 600;
@@ -110,7 +112,7 @@ impl Personality {
     }
 
     /// The block this preset adds to the system prompt, ending in [`SAFETY_LINE`].
-    /// Empty for the default preset.
+    /// Empty when the tone rules are empty.
     pub fn prompt_block(&self) -> String {
         let rules = self.tone_rules.trim();
         if rules.is_empty() {
@@ -314,8 +316,8 @@ pub fn find(presets: &[Personality], id: &str) -> Personality {
 }
 
 /// The cabin rules with this personality's block in front of them. The rules, which carry
-/// the safety and approval lines, always come last. The default voice returns `rules`
-/// unchanged, byte for byte.
+/// the safety and approval lines, always come last. Empty tone rules return `rules`
+/// unchanged.
 pub fn layer(personality: &Personality, rules: &str) -> String {
     let block = personality.prompt_block();
     if block.is_empty() {
@@ -350,7 +352,13 @@ mod tests {
         let all = parse(BUILTIN).expect("assets/personalities.toml parses");
         assert_eq!(all.len(), 21);
         assert_eq!(all[0].id, DEFAULT_ID);
-        assert_eq!(all[0].tone_rules, "");
+        assert!(
+            all[0].tone_rules.contains("not sycophantic"),
+            "{}",
+            all[0].tone_rules
+        );
+        assert!(all[0].tone_rules.to_ascii_lowercase().contains("adult"));
+        assert!(all[0].prompt_block().contains("not sycophantic"));
         let names: Vec<&str> = all.iter().map(|p| p.name.as_str()).collect();
         assert_eq!(
             names,
@@ -441,13 +449,17 @@ mod tests {
     }
 
     #[test]
-    fn the_default_voice_leaves_the_rules_byte_identical() {
+    fn the_default_voice_layers_its_values_and_an_unknown_id_stays_unstyled() {
         let rules = crate::cabin_rules::cabin_rules_for("", false);
-        assert_eq!(layer(&find(&builtins(), DEFAULT_ID), &rules), rules);
+        let layered = layer(&find(&builtins(), DEFAULT_ID), &rules);
+        assert!(layered.starts_with("Personality: Default. "));
+        assert!(layered.contains("not sycophantic"));
+        assert!(layered.ends_with(&rules));
+        assert!(layered.find("not sycophantic").unwrap() < layered.find(SAFETY_LINE).unwrap());
         assert_eq!(
             layer(&find(&builtins(), "no-such-preset"), &rules),
             rules,
-            "an unknown id is the default voice"
+            "an unknown id stays the unstyled voice"
         );
     }
 
@@ -560,7 +572,11 @@ mod tests {
         );
         assert_eq!(msgs[1], ("user".to_string(), TRY_IT_PROMPT.to_string()));
         let plain = try_it_messages(&builtin(DEFAULT_ID));
-        assert_eq!(plain[0], ("system".to_string(), TRY_IT_RULES.to_string()));
+        assert!(plain[0].1.starts_with("Personality: Default. "));
+        assert!(plain[0].1.contains("not sycophantic"));
+        assert!(plain[0]
+            .1
+            .ends_with(&format!("{SAFETY_LINE}\n\n{TRY_IT_RULES}")));
     }
 
     fn scratch(label: &str) -> std::path::PathBuf {
