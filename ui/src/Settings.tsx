@@ -10,6 +10,7 @@ import {
 } from "./api";
 import { APPROVALS } from "./approvals";
 import { Labs } from "./Labs";
+import { Interests } from "./Interests";
 import { LocalAi } from "./LocalAi";
 import { Personality } from "./Personality";
 import { Playbooks } from "./Playbooks";
@@ -122,6 +123,7 @@ export function Settings({
         {note && <p className="note">{note}</p>}
         {section === "personality" && <Personality />}
         {section === "playbooks" && <Playbooks />}
+        {section === "pulse" && caps.pulse && <Interests />}
         {section === "localAi" && caps.localAi && <LocalAi />}
         {section === "webAccess" && caps.webAccess && <WebAccess />}
         {section === "labs" && caps.plugins && <Labs />}
