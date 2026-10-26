@@ -273,6 +273,12 @@ describe("Chat", () => {
     expect(screen.getByLabelText("Message")).toHaveValue("a\nb");
     expect(api.sendChat).not.toHaveBeenCalled();
   });
+
+  it("the conversation log takes keyboard focus, so a long one can be scrolled", async () => {
+    render(<Chat onOpenSettings={() => {}} />);
+    await userEvent.tab();
+    expect(screen.getByRole("log")).toHaveFocus();
+  });
 });
 
 describe("applyEvent", () => {

@@ -311,7 +311,8 @@ export function Chat({
 
   return (
     <section className="chat" aria-label="Chat">
-      <div className="log" role="log" aria-live="polite">
+      {/* Focusable so the keyboard can scroll a long conversation. */}
+      <div className="log" role="log" aria-live="polite" tabIndex={0}>
         {items.length === 0 && !busy && settings && !settings.hasApiKey ? (
           <SignedOut remote={remote} onSignIn={onSignIn} />
         ) : (

@@ -191,6 +191,15 @@ async function main() {
     await reply.filter({ hasText: REPLY }).waitFor({ timeout: 30000 });
     console.log(`reply: ${await reply.first().textContent()}`);
 
+    // A phone-width browser: the conversation and the composer fit the screen.
+    await page.setViewportSize({ width: 360, height: 740 });
+    const wide = await page.evaluate(() => ({
+      page: document.documentElement.scrollWidth,
+      screen: document.documentElement.clientWidth,
+    }));
+    check(wide.page <= wide.screen, `the chat is wider than a phone: ${JSON.stringify(wide)}`);
+    await page.setViewportSize({ width: 1280, height: 720 });
+
     await page.getByRole("button", { name: "Settings" }).click();
     await page.getByText("Change settings and the API key there.").waitFor();
     check((await page.getByLabel("API key").count()) === 0, "the web app offered to set the key");
