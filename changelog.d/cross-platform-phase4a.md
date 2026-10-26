@@ -1,1 +1,0 @@
-- Cross-platform recode, Phase 4a: the Tauri shell reports what each platform can run. On a phone it hides Pulse, Local AI, desktop control and the tray setting, and the backend refuses them too. Desktops keep every feature.

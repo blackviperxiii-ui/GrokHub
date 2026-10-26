@@ -1,1 +1,0 @@
-- Cross-platform recode, Phase 3d: the Tauri shell's Settings has an Approvals choice (Ask every time, Auto, Always approve), the cabin's three permission modes. Ask stays the default. In every mode, deleting, sending, paying and credential steps still wait for your OK.

@@ -1,1 +1,0 @@
-- xtask: `cargo xtask bump --dry-run <X.Y.Z>` lists the planned edits without writing; `bump` now computes every edit in memory first so a failure cannot leave a half-bumped tree, and is covered by temp-dir fixture tests.
