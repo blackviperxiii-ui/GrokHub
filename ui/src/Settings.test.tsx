@@ -27,6 +27,7 @@ vi.mock("./Labs", () => ({ Labs: () => <p>Labs panel</p> }));
 vi.mock("./Personality", () => ({ Personality: () => <p>Personality panel</p> }));
 vi.mock("./Playbooks", () => ({ Playbooks: () => <p>Playbooks panel</p> }));
 vi.mock("./Interests", () => ({ Interests: () => <p>Interests panel</p> }));
+vi.mock("./Permissions", () => ({ Permissions: () => <p>Permissions panel</p> }));
 
 import { ABOUT_NOTE, DESKTOP_NOTE, REMOTE_NOTE, Settings } from "./Settings";
 
@@ -161,6 +162,7 @@ describe("Settings", () => {
       "Account",
       "Personality",
       "Playbooks",
+      "Permissions",
       "About",
     ]);
   });
@@ -175,6 +177,7 @@ describe("Settings", () => {
       "Account",
       "Personality",
       "Playbooks",
+      "Permissions",
       "Pulse",
       "Local AI",
       "Web access",
@@ -202,9 +205,13 @@ describe("Settings", () => {
     expect(screen.getByText("Playbooks panel")).toBeInTheDocument();
     expect(screen.queryByText("Personality panel")).toBeNull();
 
+    await openSection("Permissions");
+    expect(screen.getByText("Permissions panel")).toBeInTheDocument();
+    expect(screen.queryByText("Playbooks panel")).toBeNull();
+
     await openSection("Pulse");
     expect(screen.getByText("Interests panel")).toBeInTheDocument();
-    expect(screen.queryByText("Playbooks panel")).toBeNull();
+    expect(screen.queryByText("Permissions panel")).toBeNull();
 
     await openSection("Local AI");
     expect(screen.getByText("Local AI panel")).toBeInTheDocument();
