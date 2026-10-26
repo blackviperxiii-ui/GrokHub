@@ -672,3 +672,41 @@ export function addInterest(text: string): Promise<InterestPage> {
 export function interestAct(topic: string, act: InterestAct): Promise<InterestPage> {
   return invoke<InterestPage>("interest_act", { topic, act });
 }
+
+/** Settings → Permissions (src-tauri/src/permissions.rs). */
+export type RuleKind = "allow" | "ask" | "deny";
+
+export interface PermissionRule {
+  action: RuleKind;
+  /** As typed, like Bash(git *). */
+  rule: string;
+}
+
+export interface PermissionPage {
+  /** Saved for every project, in order. */
+  rules: PermissionRule[];
+  /** From this project's .claude/settings.json; read only. */
+  imported: PermissionRule[];
+  /** Commands remembered with Allow always for this project. */
+  grants: string[];
+}
+
+export function getPermissions(): Promise<PermissionPage> {
+  return invoke<PermissionPage>("get_permissions");
+}
+
+export function addPermissionRule(rule: string, kind: RuleKind): Promise<PermissionPage> {
+  return invoke<PermissionPage>("add_permission_rule", { rule, kind });
+}
+
+export function removePermissionRule(index: number, rule: string): Promise<PermissionPage> {
+  return invoke<PermissionPage>("remove_permission_rule", { index, rule });
+}
+
+export function rememberGrant(command: string): Promise<PermissionPage> {
+  return invoke<PermissionPage>("remember_grant", { command });
+}
+
+export function forgetGrant(command: string): Promise<PermissionPage> {
+  return invoke<PermissionPage>("forget_grant", { command });
+}
