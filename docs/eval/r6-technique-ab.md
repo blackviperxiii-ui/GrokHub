@@ -19,18 +19,18 @@ Recommendation rule: **adopt** only if cost per solved task falls and success de
 | baseline (all off) | 100.00% (22/22) | 6896.09 | — | 350933 | 199959 | 96.35% | 19474 | 2.41 | 0.32 | — | — |
 | R2 prefix cache | 100.00% (22/22) | 6648.05 | -248.05 (-3.60%) | 349706 | 204189 | 98.72% | 19474 | 2.41 | 0.32 | yes | adopt |
 | R3 tool-output summaries | 100.00% (22/22) | 6896.09 | 0 | 350933 | 199959 | 96.35% | 19474 | 2.41 | 0.32 | yes | spike |
-| R4 deferred tools | 100.00% (22/22) | 5407.36 | -1488.73 (-21.59%) | 275461 | 157239 | 96.23% | 13778 | 2.41 | 0.32 | yes | adopt |
+| R4 deferred tools | 100.00% (22/22) | 4462.86 | -2433.23 (-35.28%) | 227587 | 130144 | 96.12% | 10165 | 2.41 | 0.32 | yes | adopt |
 | R5 batched read-only | 100.00% (22/22) | 6896.09 | 0 | 350933 | 199959 | 96.35% | 19474 | 2.41 | 0.32 | yes | spike |
-| all on | 100.00% (22/22) | 5224.05 | -1672.05 (-24.25%) | 274234 | 160045 | 98.37% | 13778 | 2.41 | 0.32 | yes | adopt |
+| all on | 100.00% (22/22) | 4320.82 | -2575.27 (-37.34%) | 226362 | 132044 | 98.03% | 10165 | 2.41 | 0.32 | yes | adopt |
 
 ## Per-technique notes
 
 - **baseline (all off)**: 22/22 success, 53 model calls, 350933 input tokens of which 199959 cached (96.35% prefix-stable), 19474 schema bytes per request, cost/solved 6896.09.
 - **R2 prefix cache**: **adopt** (Δ cost/solved -248.05 (-3.60%)). input tokens 350933 → 349706; prefix-stable 96.35% → 98.72%
 - **R3 tool-output summaries**: **spike** (Δ cost/solved 0). no request byte, call or schema change on this fixture set. Fixture tool outputs are a few bytes, below the size that triggers a summary.
-- **R4 deferred tools**: **adopt** (Δ cost/solved -1488.73 (-21.59%)). input tokens 350933 → 275461; prefix-stable 96.35% → 96.23%; schema bytes/request 19474 → 13778
+- **R4 deferred tools**: **adopt** (Δ cost/solved -2433.23 (-35.28%)). input tokens 350933 → 227587; prefix-stable 96.35% → 96.12%; schema bytes/request 19474 → 10165
 - **R5 batched read-only**: **spike** (Δ cost/solved 0). no request byte, call or schema change on this fixture set. R5 runs consecutive read-only calls from one reply in parallel; the model still decides how many calls a reply holds, so requests and model calls stay the same and only wall time (not measured here) can move.
-- **all on**: **adopt** (Δ cost/solved -1672.05 (-24.25%)). input tokens 350933 → 274234; prefix-stable 96.35% → 98.37%; schema bytes/request 19474 → 13778
+- **all on**: **adopt** (Δ cost/solved -2575.27 (-37.34%)). input tokens 350933 → 226362; prefix-stable 96.35% → 98.03%; schema bytes/request 19474 → 10165
 
 ## Verdict
 
