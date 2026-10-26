@@ -6,6 +6,7 @@
 #   4) VERSION copies disagree (cargo xtask bump --check)
 #   5) a non-release PR touches version lockstep files (needs `release` label)
 #   6) a persist path spawns a thread or writes a file outside PersistService
+#   7) a workflow uses an action by tag or branch instead of a full commit SHA
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -368,6 +369,20 @@ for path in "${raw_io_files[@]}"; do
 done
 if (( raw_io_bad == 0 )); then
   echo "ci-guards: persist paths have no unmarked raw spawn/write"
+fi
+
+# --- 7. Actions pinned to commit SHAs ------------------------------------------
+# A moved tag would run new code with the job's token (and, in release.yml,
+# next to the signing secrets). Pin `owner/repo@<40-hex sha> # <tag>`;
+# Dependabot (.github/dependabot.yml) bumps the pins. Local `./` actions are fine.
+unpinned=$(grep -nE '^[[:space:]]*(- )?uses:' .github/workflows/*.yml \
+  | grep -vE 'uses:[[:space:]]*(\./|[^@[:space:]]+@[0-9a-f]{40}([[:space:]]|$))' || true)
+if [[ -n "$unpinned" ]]; then
+  echo "ci-guards: actions not pinned to a full commit SHA:" >&2
+  echo "$unpinned" >&2
+  fail=1
+else
+  echo "ci-guards: every workflow action is pinned to a commit SHA"
 fi
 
 if (( fail != 0 )); then

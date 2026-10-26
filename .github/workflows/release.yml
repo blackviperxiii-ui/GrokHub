@@ -31,8 +31,10 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: stable
       - name: Native GUI build deps
         run: |
           sudo apt-get update
@@ -41,7 +43,7 @@ jobs:
             libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
             libgl1-mesa-dev libwayland-dev libasound2-dev
       - run: ./scripts/make-release-bundle.sh
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: linux
           path: dist-release/grokhub-linux-*.tar.gz
@@ -55,8 +57,10 @@ jobs:
       contents: read
       actions: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: stable
       - name: Inno Setup
         run: choco install innosetup --no-progress
       - name: Package
@@ -103,7 +107,7 @@ jobs:
       - name: Upload unsigned Windows artifacts for SignPath
         if: steps.signpath-config.outputs.enabled == 'true'
         id: signpath-unsigned
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: windows-signpath-unsigned
           path: |
@@ -115,7 +119,7 @@ jobs:
       - name: Submit SignPath signing request
         if: steps.signpath-config.outputs.enabled == 'true'
         id: signpath
-        uses: signpath/github-action-submit-signing-request@v3
+        uses: signpath/github-action-submit-signing-request@f6d04783b4569d051e0c80105fe66e82819d0092 # v3
         with:
           api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
           organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
@@ -145,7 +149,7 @@ jobs:
           Copy-Item $zip.FullName (Join-Path $outDir $zip.Name) -Force
           Write-Host "Replaced dist-release Windows artifacts with SignPath-signed outputs."
           Write-Host "Signing request: ${{ steps.signpath.outputs.signing-request-web-url }}"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: windows
           path: |
@@ -166,13 +170,15 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
           cache: npm
           cache-dependency-path: ui/package-lock.json
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: stable
       - name: Linux webview libraries
         if: runner.os == 'Linux'
         run: |
@@ -185,7 +191,7 @@ jobs:
       - name: Release names
         shell: bash
         run: ./scripts/name-shell-bundles.sh "$RUNNER_OS"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: shell-${{ runner.os }}
           path: dist-release/*
@@ -196,8 +202,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           path: dist-release
           merge-multiple: true
@@ -251,7 +257,7 @@ jobs:
             echo "::warning::packaging/minisign.pub is missing, so the signature was not checked against the shipped key."
           fi
       - name: Publish
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           tag_name: ${{ steps.name.outputs.tag }}
           target_commitish: ${{ github.sha }}
