@@ -69,6 +69,19 @@ impl Drive {
         self.check_with(now, evidence, &Gaps::default())
     }
 
+    /// Pending or in-progress ids this run changed. An untouched list is empty,
+    /// the same rule [`Drive::check_with`] uses so an earlier checklist cannot
+    /// take over the next ask.
+    pub fn open_ids(&self, now: &[TodoItem]) -> Vec<String> {
+        if now == self.start.as_slice() {
+            return Vec::new();
+        }
+        now.iter()
+            .filter(|item| matches!(item.status.as_str(), "pending" | "in_progress"))
+            .map(|item| item.id.clone())
+            .collect()
+    }
+
     /// [`Drive::check`] plus what the run still owes beyond its checklist
     /// ([`crate::checkpoint`]): an unchecked change, the Brief's done items, a backup.
     pub fn check_with(&mut self, now: &[TodoItem], evidence: usize, gaps: &Gaps) -> Verdict {
