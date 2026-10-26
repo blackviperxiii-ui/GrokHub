@@ -112,13 +112,14 @@ pub enum PulseCategory {
 }
 
 impl PulseCategory {
-    /// Header order on the Ideas view.
+    /// Header order on the Ideas view. More holds older cards whose words
+    /// match no category; written ideas always take one of the first five.
     pub const ORDER: [PulseCategory; 6] = [
-        Self::Financial,
         Self::Productivity,
+        Self::Financial,
+        Self::Shopping,
         Self::Relationships,
         Self::Health,
-        Self::Shopping,
         Self::More,
     ];
 
@@ -392,6 +393,10 @@ pub fn is_idea_card(card: &UpdateCard) -> bool {
 /// Automate "I can {action} {cadence}", Learn "I can learn how you {action}".
 pub fn i_can_title(card: &UpdateCard) -> String {
     let title = card.title.trim();
+    // A written idea has its own short title; its "I can" line is the body.
+    if crate::pulse_ideas::is_muse_idea(card) {
+        return title.to_string();
+    }
     let lower = title.to_ascii_lowercase();
     if lower.starts_with("i can ") && title.chars().count() <= I_CAN_MAX {
         return title.to_string();
@@ -651,9 +656,11 @@ pub const PENALTY_NOT_THIS: i64 = 400;
 pub const PENALTY_DISMISS: i64 = 200;
 /// A card below this is Quiet: nothing is shown for it.
 pub const PULSE_THRESHOLD: i64 = 100;
-/// The unlabeled top group on the Ideas view needs at least one real rule hit.
-pub const TOP_GROUP_MIN: i64 = 250;
-pub const TOP_GROUP_MAX: usize = 4;
+/// The Ideas view opens with this many ideas under no header: the most
+/// personal ones, by rank.
+pub const IDEAS_LEAD: usize = 3;
+/// An idea retires this long after it was posted, unless it was edited.
+pub const IDEA_TTL_MS: u64 = 14 * 24 * 60 * 60 * 1000;
 pub const DUE_WINDOW_MS: u64 = 24 * 60 * 60 * 1000;
 
 /// Starting score per type, before any rule. Every type clears the threshold
@@ -788,9 +795,15 @@ pub fn rank_pulse(cards: &[UpdateCard], inputs: &PulseInputs) -> Vec<Ranked> {
     out.into_iter().map(|(r, _)| r).collect()
 }
 
-/// The Ideas view: an unlabeled top group (`None`) of the strongest cards, then
-/// one group per category in `PulseCategory::ORDER`. Quiet cards and empty
-/// groups are left out.
+/// A written idea retires at its `expires_at`, two weeks after it was
+/// posted (`IDEA_TTL_MS`). One the person edited stays.
+pub fn idea_retired(card: &UpdateCard, now_ms: u64) -> bool {
+    card.kind == UpdateKind::Idea && !card.modified && card.expires_at.is_some_and(|at| now_ms >= at)
+}
+
+/// The Ideas view: the first `IDEAS_LEAD` ideas by rank under no header
+/// (`None`), then one group per category in `PulseCategory::ORDER`. Quiet
+/// and retired cards and empty groups are left out.
 pub fn group_ideas(
     cards: &[UpdateCard],
     inputs: &PulseInputs,
@@ -798,14 +811,13 @@ pub fn group_ideas(
     let ranked: Vec<Ranked> = rank_pulse(cards, inputs)
         .into_iter()
         .filter(|r| r.kind != PulseType::Quiet)
-        .filter(|r| cards.iter().any(|c| c.id == r.id && is_idea_card(c)))
+        .filter(|r| {
+            cards
+                .iter()
+                .any(|c| c.id == r.id && is_idea_card(c) && !idea_retired(c, inputs.now_ms))
+        })
         .collect();
-    let top: Vec<Ranked> = ranked
-        .iter()
-        .filter(|r| r.score >= TOP_GROUP_MIN)
-        .take(TOP_GROUP_MAX)
-        .cloned()
-        .collect();
+    let top: Vec<Ranked> = ranked.iter().take(IDEAS_LEAD).cloned().collect();
     let mut groups = Vec::new();
     if !top.is_empty() {
         groups.push((None, top.clone()));
@@ -1301,11 +1313,11 @@ mod tests {
         assert_eq!(
             labels,
             vec![
-                "Financial Management",
                 "Productivity",
+                "Financial Management",
+                "Shopping",
                 "Relationships",
                 "Health & Fitness",
-                "Shopping",
                 "More ideas"
             ]
         );
@@ -1543,16 +1555,26 @@ mod tests {
     }
 
     #[test]
-    fn ideas_group_under_a_top_group_then_categories_in_order() {
-        let now = 9_000;
-        let mut bill = idea("bill", "I can stage your power bill", "", 1);
+    fn ideas_lead_with_three_then_the_five_categories_in_order() {
+        let now = 30 * 24 * 60 * 60 * 1000;
+        let at = |id: &str, title: &str, cat: &str, ago: u64| {
+            let mut c = idea(id, title, "", now - ago);
+            c.pulse.category = Some(cat.into());
+            c
+        };
+        let mut bill = at("bill", "I can stage your power bill", "financial", 90);
         bill.modified = true;
-        let subs = idea("subs", "I can cancel subscriptions you forgot", "", 2);
-        let resume = idea("resume", "I can tailor your resume", "", 3);
-        let gym = idea("gym", "I can plan a workout around your gear", "", 4);
-        let witcher = idea("witcher", "I can map a path through Witcher 3", "", 5);
-        let post = automation_done_card("a", "Nightly backup", "ok", 6);
-        let cards = vec![bill, subs, resume, gym, witcher, post];
+        let cards = vec![
+            bill,
+            at("groc", "I can plan groceries", "shopping", 80),
+            at("subs", "I can cancel subscriptions", "financial", 70),
+            at("resume", "I can tailor your resume", "productivity", 60),
+            at("gym", "I can plan a workout", "health", 50),
+            at("trivia", "I can plan a trivia night", "relationships", 40),
+            at("deals", "I can watch for deals", "shopping", 30),
+            at("route", "I can map a route", "productivity", 20),
+            automation_done_card("a", "Nightly backup", "ok", now - 10),
+        ];
         let groups: Vec<(Option<&str>, Vec<String>)> = group_ideas(
             &cards,
             &PulseInputs {
@@ -1568,16 +1590,46 @@ mod tests {
             )
         })
         .collect();
+        let ids = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
         assert_eq!(
             groups,
             vec![
-                (None, vec!["bill".to_string()]),
-                (Some("Financial Management"), vec!["subs".to_string()]),
-                (Some("Productivity"), vec!["resume".to_string()]),
-                (Some("Health & Fitness"), vec!["gym".to_string()]),
-                (Some("More ideas"), vec!["witcher".to_string()]),
-            ]
+                (None, ids(&["bill", "route", "deals"])),
+                (Some("Productivity"), ids(&["resume"])),
+                (Some("Financial Management"), ids(&["subs"])),
+                (Some("Shopping"), ids(&["groc"])),
+                (Some("Relationships"), ids(&["trivia"])),
+                (Some("Health & Fitness"), ids(&["gym"])),
+            ],
+            "the edited idea and the two newest lead, with no header"
         );
+    }
+
+    #[test]
+    fn ideas_retire_after_two_weeks_unless_edited() {
+        let posted = 1_000_000;
+        let idea = crate::pulse_ideas::MuseIdea {
+            title: "Cheaper groceries".into(),
+            description: "I can plan meals around the sales.".into(),
+            emoji: "🛒".into(),
+            category: PulseCategory::Shopping,
+            action: "plan meals from this week's sales".into(),
+        };
+        let mut old = crate::pulse_ideas::muse_idea_card(&idea, posted);
+        assert!(!idea_retired(&old, posted + IDEA_TTL_MS - 1));
+        assert!(idea_retired(&old, posted + IDEA_TTL_MS));
+        assert_eq!(IDEA_TTL_MS, 1_209_600_000, "14 days");
+        let mut post = automation_done_card("a", "Nightly backup", "ok", posted);
+        post.expires_at = old.expires_at;
+        assert!(!idea_retired(&post, posted + IDEA_TTL_MS), "only ideas retire");
+        let inputs = PulseInputs {
+            now_ms: posted + IDEA_TTL_MS,
+            ..Default::default()
+        };
+        assert!(group_ideas(std::slice::from_ref(&old), &inputs).is_empty());
+        old.modified = true;
+        assert!(!idea_retired(&old, posted + IDEA_TTL_MS));
+        assert_eq!(group_ideas(&[old], &inputs).len(), 1);
     }
 
     #[test]

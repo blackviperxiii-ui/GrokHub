@@ -4,6 +4,11 @@
 //! images locally, and adds the post to the same `updates.json` the page
 //! reads. The taste summary is rebuilt first when the person loved,
 //! discussed or chatted since the last rebuild.
+//!
+//! The same clock runs the idea writer (`grokhub_core::pulse_ideas`) after a
+//! feed run, at most once every six hours: Muse-style ideas from the
+//! person's open journal questions, interest topics, recent chats and feed
+//! posts.
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -14,6 +19,7 @@ use std::time::Duration;
 use grokhub_agent::harness as hx;
 use grokhub_agent::{CancelToken, ContentPart, InputItem, ModelClient, ResponsesRequest};
 use grokhub_core::pulse::{self as pc};
+use grokhub_core::pulse_ideas::{self as pi, IdeasState};
 use grokhub_core::pulse_sources::{self as ps, CacheEntry, Fetched, SourceReq};
 use grokhub_core::pulse_writer::{self as pw, TasteKind, WriterState};
 
@@ -35,6 +41,8 @@ pub const BUDGET_USED: &str = "Today's post budget is used. The feed picks up to
 
 /// One read-change-write of the writer state at a time.
 static STATE: Mutex<()> = Mutex::new(());
+/// One read-change-write of the idea state at a time.
+static IDEAS: Mutex<()> = Mutex::new(());
 /// One run at a time.
 static RUNNING: AtomicBool = AtomicBool::new(false);
 /// Wakes the clock early (a saved prompt owes a post now).
@@ -68,6 +76,19 @@ pub fn with_state<T>(
 pub fn state(config_dir: &Path) -> WriterState {
     let _lock = state_lock();
     pw::load_state(&state_path(config_dir))
+}
+
+/// Read, change and write the idea writer's state under its lock.
+pub fn with_ideas_state<T>(
+    config_dir: &Path,
+    f: impl FnOnce(&mut IdeasState) -> T,
+) -> Result<T, String> {
+    let _lock = IDEAS.lock().unwrap_or_else(|e| e.into_inner());
+    let path = config_dir.join(pi::STATE_FILE);
+    let mut state = pi::load_state(&path);
+    let out = f(&mut state);
+    pi::save_state(&path, &state)?;
+    Ok(out)
 }
 
 /// The page's local clock, so quiet hours land on the person's own night.
@@ -125,6 +146,60 @@ pub fn run_once(
     };
     with_state(config_dir, |s| s.note = note)?;
     outcome
+}
+
+/// One idea run behind its six-hour gate. The run counts even when it posts
+/// nothing. More like this is spent once a reply comes back. Returns how
+/// many ideas posted.
+pub fn run_ideas(
+    config_dir: &Path,
+    model: &str,
+    client: &dyn ModelClient,
+    now_ms: u64,
+) -> Result<usize, String> {
+    let Some(ideas) = with_ideas_state(config_dir, |s| {
+        s.due(now_ms).then(|| {
+            s.last_run_ms = now_ms;
+            s.clone()
+        })
+    })?
+    else {
+        return Ok(0);
+    };
+    let cards = crate::pulse::cards(config_dir)?;
+    let goals: Vec<String> = crate::journal::load(config_dir)
+        .map(|page| page.active.into_iter().map(|q| q.question).collect())
+        .unwrap_or_default();
+    let profile =
+        grokhub_core::interests::load(&config_dir.join(grokhub_core::interests::FILE_NAME));
+    let chats: Vec<String> = state(config_dir)
+        .taste_events
+        .into_iter()
+        .rev()
+        .filter(|e| e.kind == TasteKind::Chat)
+        .map(|e| e.text)
+        .collect();
+    let posts = pw::recent_titles(&cards);
+    let existing: Vec<String> = cards
+        .iter()
+        .filter(|c| c.kind == grokhub_core::UpdateKind::Idea)
+        .map(|c| c.title.clone())
+        .collect();
+    let Some(messages) = pi::idea_messages(&pi::IdeaInput {
+        goals: &goals,
+        topics: &profile.prompt_section(),
+        chats: &chats,
+        posts: &posts,
+        more_like: &ideas.more_like,
+        turned_down: &ideas.turned_down,
+        existing: &existing,
+    }) else {
+        return Ok(0);
+    };
+    let reply = ask(client, model, &messages)?;
+    with_ideas_state(config_dir, |s| s.more_like.clear())?;
+    let written = pi::parse_ideas(&reply, &existing, &ideas.turned_down);
+    crate::pulse::add_ideas(config_dir, &written, now_ms)
 }
 
 /// The current taste note, rebuilt first when new taste events landed.
@@ -349,6 +424,7 @@ fn tick(
         return;
     }
     let _ = run_once(config_dir, &model, client.as_ref(), net().as_ref(), now);
+    let _ = run_ideas(config_dir, &model, client.as_ref(), now);
     RUNNING.store(false, Ordering::SeqCst);
 }
 
@@ -752,6 +828,73 @@ mod tests {
         assert_eq!(
             run_once(&d.config, "grok-test", &client, &FakeNet, NOW),
             Ok(Outcome::Nothing(NOTHING_TO_READ.into()))
+        );
+    }
+
+    const IDEAS: &str = r#"[{"title":"Rust 1.99 upgrade plan","description":"I can check which of your crates need changes for Rust 1.99.","emoji":"🦀","category":"productivity","action":"check my crates for Rust 1.99 upgrade work"},{"title":"Cheap flights","description":"Here are flights.","emoji":"✈️","category":"shopping","action":"find cheap flights"}]"#;
+
+    #[test]
+    fn the_idea_run_posts_written_ideas_once_per_six_hours() {
+        let d = dirs("ideas");
+        with_state(&d.config, |s| {
+            s.note_taste(
+                TasteKind::Chat,
+                "help me move my crates to Rust 1.99",
+                NOW - 5,
+            )
+        })
+        .expect("state");
+        with_ideas_state(&d.config, |s| s.note_more_like("Rust release notes"))
+            .expect("ideas state");
+        let client = Script::new(&[IDEAS]);
+        assert_eq!(run_ideas(&d.config, "grok-test", &client, NOW), Ok(1));
+        let seen = client.seen.lock().unwrap().join("\n");
+        assert!(
+            seen.contains("You suggest ideas for one person's Pulse"),
+            "{seen}"
+        );
+        assert!(
+            seen.contains("- help me move my crates to Rust 1.99"),
+            "{seen}"
+        );
+        assert!(
+            seen.contains("More like this:\n- Rust release notes"),
+            "{seen}"
+        );
+        assert!(
+            with_ideas_state(&d.config, |s| s.more_like.clone())
+                .expect("state")
+                .is_empty(),
+            "More like this is spent"
+        );
+
+        let page = crate::pulse::load(&d.config, None, NOW).expect("page");
+        let ideas: Vec<(&str, &str, &str)> = page
+            .ideas
+            .iter()
+            .flat_map(|g| {
+                g.ideas
+                    .iter()
+                    .map(move |i| (g.label.as_str(), i.title.as_str(), i.icon.as_str()))
+            })
+            .collect();
+        assert_eq!(
+            ideas,
+            vec![("", "Rust 1.99 upgrade plan", "🦀")],
+            "the one with no \"I can\" line is dropped"
+        );
+
+        let client = Script::new(&[]);
+        assert_eq!(
+            run_ideas(&d.config, "grok-test", &client, NOW + pi::EVERY_MS - 1),
+            Ok(0),
+            "no call inside six hours"
+        );
+        let page = crate::pulse::load(&d.config, None, NOW + pc::IDEA_TTL_MS).expect("page");
+        assert!(page.ideas.is_empty(), "retired after two weeks: {page:?}");
+        assert!(
+            crate::pulse::cards(&d.config).expect("cards").is_empty(),
+            "and gone from the store"
         );
     }
 
