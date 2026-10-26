@@ -54,6 +54,18 @@ impl Noted {
     }
 }
 
+/// The person asked not to store this line.
+pub fn skip_remember_line(text: &str) -> bool {
+    let lower = text.to_ascii_lowercase();
+    [
+        "don't remember this",
+        "dont remember this",
+        "do not remember this",
+    ]
+    .iter()
+    .any(|phrase| lower.contains(phrase))
+}
+
 /// Why a line must never become a node, or `None` when it may.
 pub fn unsafe_to_learn(text: &str) -> Option<&'static str> {
     if redact_secrets(text) != text {
@@ -194,7 +206,32 @@ pub fn note_chat(store: &AmrStore, line: &ChatLine<'_>, now_ms: u64) -> Result<N
     if let Some(correction) = detect_correction(text) {
         return note_correction(store, &line.source(), &correction, now_ms);
     }
-    write_line(store, text, &line.source(), &["chat"], 0.7, now_ms)
+    let noted = write_line(store, text, &line.source(), &["chat"], 0.7, now_ms)?;
+    if let Noted::New(id) = &noted {
+        super::user_model::supersede_same_topic(store, id)?;
+    }
+    Ok(noted)
+}
+
+/// A background guess. Tagged `proposed` and left out of recall until
+/// [`super::user_model::approve_node`].
+pub fn propose_line(
+    store: &AmrStore,
+    text: &str,
+    source: &str,
+    now_ms: u64,
+) -> Result<Noted, AmrError> {
+    if store.is_scratch() {
+        return Err(AmrError::Scratch);
+    }
+    write_line(
+        store,
+        text.trim(),
+        source,
+        &[super::user_model::PROPOSED_TAG],
+        0.4,
+        now_ms,
+    )
 }
 
 /// The user edited agent output from `before` to `after`. The edit is a new
@@ -359,6 +396,9 @@ fn write_node(
     if text.is_empty() || text.contains(['\n', '\r']) {
         return Ok(Noted::Skipped("not one line"));
     }
+    if skip_remember_line(text) {
+        return Ok(Noted::Skipped("don't remember this"));
+    }
     let stamp = crate::oauth::unix_ms_to_rfc3339(now_ms);
     let draft = NodeDraft {
         id,
@@ -375,6 +415,7 @@ fn write_node(
     match store.remember(&draft) {
         Ok(id) => Ok(Noted::New(id.as_str().to_string())),
         Err(AmrError::DuplicateId(id)) => Ok(Noted::Known(id)),
+        Err(AmrError::WritesOff) => Ok(Noted::Skipped("memory off")),
         Err(err) => Err(err),
     }
 }

@@ -775,8 +775,16 @@ mod tests {
             "default voice keeps the same stable prefix"
         );
         assert!(
-            !plain_volatile.contains("earlier in this prompt always win"),
-            "no closer when there is no voice or notes: {plain_volatile}"
+            plain_volatile.contains("Personality: Default."),
+            "the default voice carries its values: {plain_volatile}"
+        );
+        assert!(
+            plain_volatile.contains("not sycophantic"),
+            "{plain_volatile}"
+        );
+        assert!(
+            plain_volatile.contains("earlier in this prompt always win"),
+            "the values voice still closes under the cabin rules: {plain_volatile}"
         );
     }
 

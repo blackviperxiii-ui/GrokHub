@@ -22,6 +22,12 @@ use super::AmrError;
 /// Lowest confidence reflect proposes for USER.md.
 pub const REFLECT_MIN_CONFIDENCE: f32 = 0.7;
 
+/// A background guess. Recall skips it until [`approve_node`].
+pub const PROPOSED_TAG: &str = "proposed";
+
+/// Set when a person approves a proposed line.
+const APPROVED_TAG: &str = "approved";
+
 /// Where a node came from, parsed from its `source`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SourceLink {
@@ -118,17 +124,31 @@ pub struct MemoryRow {
     pub confidence: f32,
     pub sensitivity: Sensitivity,
     pub updated: String,
+    /// Waiting in the approval queue. Recall skips it.
+    pub proposed: bool,
+    /// Claims this row corrects or contradicts, in edge order.
+    pub beside: Vec<String>,
 }
 
 impl MemoryRow {
-    /// `- <text> · why: [<label>](<target>)`.
+    /// `- <text> · why: [<label>](<target>) · <updated>`.
+    /// A correction adds `· corrects: …`. A proposal adds `· waiting for approval`.
     pub fn line(&self) -> String {
-        format!(
-            "- {} · why: [{}]({})",
+        let mut out = format!(
+            "- {} · why: [{}]({}) · {}",
             self.text,
             self.source.label(),
-            self.source.target()
-        )
+            self.source.target(),
+            self.updated
+        );
+        if !self.beside.is_empty() {
+            out.push_str(" · corrects: ");
+            out.push_str(&self.beside.join("; "));
+        }
+        if self.proposed {
+            out.push_str(" · waiting for approval");
+        }
+        out
     }
 }
 
@@ -136,28 +156,46 @@ impl MemoryRow {
 /// newest first. Forgotten and superseded nodes are left out; sealed ones
 /// show only while they open. The count is sealed nodes that stayed shut.
 pub fn memory_rows(store: &AmrStore) -> (Vec<MemoryRow>, usize) {
-    let (nodes, locked) = store.recallable();
-    let mut rows: Vec<MemoryRow> = nodes
-        .into_iter()
-        .filter(|n| n.node_type.is_user_model())
-        .map(|n| MemoryRow {
-            text: n
-                .body
-                .lines()
-                .map(str::trim)
-                .find(|l| !l.is_empty())
-                .unwrap_or("")
-                .to_string(),
-            source: SourceLink::parse(&n.source),
-            id: n.id,
-            node_type: n.node_type,
-            confidence: n.confidence,
-            sensitivity: n.sensitivity,
-            updated: n.updated,
+    let loaded = store.load_live();
+    let superseded = store.superseded_ids();
+    let edges = store.edges().unwrap_or_default();
+    let text_of = |id: &str| -> String {
+        loaded
+            .nodes
+            .iter()
+            .find(|n| n.id == id)
+            .map(|n| first_line(&n.body))
+            .unwrap_or_default()
+    };
+    let mut rows: Vec<MemoryRow> = loaded
+        .nodes
+        .iter()
+        .filter(|n| n.node_type.is_user_model() && !superseded.contains(&n.id))
+        .map(|n| {
+            let mut beside = Vec::new();
+            for edge in edges.iter().filter(|e| {
+                e.from == n.id && matches!(e.rel, EdgeRel::Supersedes | EdgeRel::Contradicts)
+            }) {
+                let line = text_of(&edge.to);
+                if !line.is_empty() && !beside.contains(&line) {
+                    beside.push(line);
+                }
+            }
+            MemoryRow {
+                text: first_line(&n.body),
+                source: SourceLink::parse(&n.source),
+                id: n.id.clone(),
+                node_type: n.node_type,
+                confidence: n.confidence,
+                sensitivity: n.sensitivity,
+                updated: n.updated.clone(),
+                proposed: n.tags.iter().any(|t| t == PROPOSED_TAG),
+                beside,
+            }
         })
         .collect();
     rows.sort_by(|a, b| b.updated.cmp(&a.updated).then(a.id.cmp(&b.id)));
-    (rows, locked)
+    (rows, loaded.locked)
 }
 
 /// `/memory` in chat: one line per row, or a plain empty line.
@@ -199,10 +237,12 @@ pub fn edit_node(store: &AmrStore, id: &str, text: &str, now_ms: u64) -> Result<
     if text.is_empty() || text.contains(['\n', '\r']) {
         return Err(AmrError::BadFrontmatter("body".into()));
     }
-    let (nodes, _) = store.recallable();
-    let old = nodes
-        .iter()
-        .find(|n| n.id == id)
+    let loaded = store.load_live();
+    let superseded = store.superseded_ids();
+    let old = loaded
+        .nodes
+        .into_iter()
+        .find(|n| n.id == id && !superseded.contains(&n.id))
         .ok_or_else(|| AmrError::MissingNode(id.to_string()))?;
     let stamp = crate::oauth::unix_ms_to_rfc3339(now_ms);
     let draft = NodeDraft {
@@ -232,7 +272,137 @@ pub fn edit_node(store: &AmrStore, id: &str, text: &str, now_ms: u64) -> Result<
     if new_id != id {
         store.link(&new_id, id, EdgeRel::Supersedes)?;
     }
+    supersede_same_topic(store, &new_id)?;
     Ok(new_id)
+}
+
+/// Approve a proposed row. It becomes active, and any other active line on
+/// the same topic is superseded. Approving twice leaves the row as it is.
+pub fn approve_node(store: &AmrStore, id: &str, now_ms: u64) -> Result<String, AmrError> {
+    if store.is_scratch() {
+        return Err(AmrError::Scratch);
+    }
+    let loaded = store.load_live();
+    let Some(old) = loaded.nodes.into_iter().find(|n| n.id == id) else {
+        return Err(AmrError::MissingNode(id.to_string()));
+    };
+    if !old.tags.iter().any(|t| t == PROPOSED_TAG) {
+        return Ok(id.to_string());
+    }
+    if !store.memory_writes() {
+        return Err(AmrError::WritesOff);
+    }
+    let mut node = old;
+    node.tags.retain(|t| t != PROPOSED_TAG);
+    if !node.tags.iter().any(|t| t == APPROVED_TAG) {
+        node.tags.push(APPROVED_TAG.to_string());
+    }
+    node.updated = crate::oauth::unix_ms_to_rfc3339(now_ms);
+    if node.confidence < REFLECT_MIN_CONFIDENCE {
+        node.confidence = REFLECT_MIN_CONFIDENCE;
+    }
+    store.resave(&node)?;
+    supersede_same_topic(store, id)?;
+    Ok(id.to_string())
+}
+
+/// Drop a proposed row. A row that is not proposed is left as it is.
+pub fn reject_node(
+    store: &AmrStore,
+    id: &str,
+    ask: UserForget,
+    now_ms: u64,
+) -> Result<(), AmrError> {
+    let loaded = store.load_live();
+    let Some(node) = loaded.nodes.iter().find(|n| n.id == id) else {
+        return Err(AmrError::MissingNode(id.to_string()));
+    };
+    if !node.tags.iter().any(|t| t == PROPOSED_TAG) {
+        return Ok(());
+    }
+    forget_node(store, id, ask, now_ms)
+}
+
+/// One active user-model line per topic. `new_id` supersedes every other
+/// active line whose [`topic_slug`] matches and whose text differs.
+/// Returns the ids it superseded.
+pub fn supersede_same_topic(store: &AmrStore, new_id: &str) -> Result<Vec<String>, AmrError> {
+    let (nodes, _) = store.recallable();
+    let Some(new_node) = nodes.iter().find(|n| n.id == new_id) else {
+        return Ok(Vec::new());
+    };
+    let topic = topic_slug(&new_node.body);
+    if topic.is_empty() {
+        return Ok(Vec::new());
+    }
+    let new_body = norm_line(&new_node.body);
+    let edges = store.edges().unwrap_or_default();
+    let mut out = Vec::new();
+    for other in nodes
+        .iter()
+        .filter(|n| n.id != new_id && n.node_type.is_user_model() && topic_slug(&n.body) == topic)
+    {
+        if norm_line(&other.body) == new_body {
+            continue;
+        }
+        let already = edges
+            .iter()
+            .any(|e| e.from == new_id && e.to == other.id && e.rel == EdgeRel::Supersedes);
+        if already {
+            continue;
+        }
+        store.link(new_id, &other.id, EdgeRel::Supersedes)?;
+        out.push(other.id.clone());
+    }
+    Ok(out)
+}
+
+/// Topic key for a line. Times, weekdays and stopwords drop out, so
+/// "lunch on Monday" and "lunch on Friday" share `lunch`.
+pub fn topic_slug(text: &str) -> String {
+    const STOP: &[&str] = &[
+        "the", "and", "not", "but", "you", "your", "are", "was", "for", "with", "that", "this",
+        "its", "it's", "is", "at", "on", "a", "an", "my", "to", "of", "in", "it", "be", "do", "me",
+        "we",
+    ];
+    const WHEN: &[&str] = &[
+        "monday",
+        "tuesday",
+        "wednesday",
+        "thursday",
+        "friday",
+        "saturday",
+        "sunday",
+        "noon",
+        "midnight",
+        "today",
+        "tomorrow",
+        "am",
+        "pm",
+    ];
+    let mut kept = Vec::new();
+    for word in text
+        .to_lowercase()
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| !w.is_empty())
+    {
+        if word.len() <= 2 || STOP.contains(&word) || WHEN.contains(&word) {
+            continue;
+        }
+        if word.bytes().all(|b| b.is_ascii_digit()) {
+            continue;
+        }
+        kept.push(word.to_string());
+    }
+    kept.join("-")
+}
+
+fn first_line(body: &str) -> String {
+    body.lines()
+        .map(str::trim)
+        .find(|l| !l.is_empty())
+        .unwrap_or("")
+        .to_string()
 }
 
 /// Forget one node because the user asked: tombstone, out of

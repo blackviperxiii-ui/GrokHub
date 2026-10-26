@@ -1,9 +1,14 @@
 import { useEffect, useState, type FormEvent } from "react";
 import {
   addMemory,
+  approveMemoryRow,
+  editMemoryRow,
+  forgetMemoryRow,
   getMemory,
+  rejectMemoryRow,
   saveMemory,
   searchMemory,
+  setMemoryWrites,
   type MemoryHit,
   type MemoryNotes,
 } from "./api";
@@ -26,6 +31,8 @@ export function Memory() {
   const [query, setQuery] = useState("");
   const [hits, setHits] = useState<MemoryHit[] | null>(null);
   const [note, setNote] = useState<string | null>(null);
+  const [editId, setEditId] = useState<string | null>(null);
+  const [draft, setDraft] = useState("");
 
   /** Shows what the files hold now. An editor with unsaved changes keeps
    * them (and its old base, so its save is checked) unless it is in `replace`. */
@@ -84,6 +91,16 @@ export function Memory() {
     }
   }
 
+  async function apply(next: Promise<MemoryNotes>, done: string) {
+    try {
+      show(await next, []);
+      setEditId(null);
+      setNote(done);
+    } catch (err) {
+      setNote(String(err));
+    }
+  }
+
   async function search(event: FormEvent) {
     event.preventDefault();
     try {
@@ -129,6 +146,88 @@ export function Memory() {
         <p className="note">
           The cabin keeps memory in its AMR store, so chat recall does not read these files.
         </p>
+      )}
+      <label className="check">
+        <input
+          type="checkbox"
+          aria-label="Remember new lines"
+          checked={notes.writesOn}
+          onChange={(e) =>
+            void apply(
+              setMemoryWrites(e.target.checked),
+              e.target.checked
+                ? "Memory is on."
+                : "Memory is off. Nothing new is written.",
+            )
+          }
+        />
+        Remember new lines
+      </label>
+      {notes.rows.length > 0 && (
+        <ul className="rows" aria-label="Learned lines">
+          {notes.rows.map((row) => (
+            <li key={row.id} className="card">
+              {editId === row.id ? (
+                <input
+                  aria-label={`Edit text for ${row.text}`}
+                  value={draft}
+                  onChange={(e) => setDraft(e.target.value)}
+                />
+              ) : (
+                <p>{row.text}</p>
+              )}
+              <p>{row.source}</p>
+              <p>{row.updated}</p>
+              {row.corrects && <p>Corrects: {row.corrects}</p>}
+              {row.proposed && <p>Waiting for approval</p>}
+              <div className="memory-row-actions">
+                {editId === row.id ? (
+                  <button
+                    type="button"
+                    disabled={!notes.writesOn || !draft.trim()}
+                    onClick={() => void apply(editMemoryRow(row.id, draft.trim()), "Saved the line.")}
+                  >
+                    Save line
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    disabled={!notes.writesOn}
+                    onClick={() => {
+                      setEditId(row.id);
+                      setDraft(row.text);
+                    }}
+                  >
+                    Edit {row.text}
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => void apply(forgetMemoryRow(row.id), "Forgot the line.")}
+                >
+                  Delete {row.text}
+                </button>
+                {row.proposed && (
+                  <>
+                    <button
+                      type="button"
+                      disabled={!notes.writesOn}
+                      onClick={() => void apply(approveMemoryRow(row.id), "Approved the line.")}
+                    >
+                      Approve
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void apply(rejectMemoryRow(row.id), "Rejected the line.")}
+                    >
+                      Reject
+                    </button>
+                  </>
+                )}
+              </div>
+            </li>
+          ))}
+        </ul>
       )}
       <form className="add" onSubmit={add}>
         <input

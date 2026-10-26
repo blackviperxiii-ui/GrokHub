@@ -277,6 +277,11 @@ fn run_compact_pass(
     crate::hooks::on_compact(input.conversation_id, input.workspace, false);
     match compact_result {
         Ok(extra) => {
+            crate::prefix_guard::note_compaction(&crate::prefix_guard::run_key(
+                input.conversation_id,
+                input.depth,
+                input.agent_id,
+            ));
             usage.add(&extra);
             on_event(LoopEvent::Compact {
                 started: false,
@@ -432,6 +437,8 @@ pub fn run_loop(
     }
     let mut step_ended: Option<std::time::Instant> = None;
     let mut turns = 0u32;
+    let guard_key =
+        crate::prefix_guard::run_key(input.conversation_id, input.depth, input.agent_id);
     loop {
         if input.max_turns != 0 && turns >= input.max_turns {
             return finish(input, StopReason::MaxTurns, usage, compacted_once, true);
@@ -488,6 +495,8 @@ pub fn run_loop(
             hosted_search: true,
             call_timeout: None,
         };
+        // Each request should extend the last one; a rewrite logs its first changed segment.
+        crate::prefix_guard::observe(&guard_key, &req);
         let class = crate::route::live::current_class();
         drop(turn_top);
         if let Some(t) = step_ended {
@@ -3854,7 +3863,7 @@ mod tests {
         let short = format!(
             "CABIN RULES\n\n{voice}\n\n\
              Talk style for this turn: casual chat. Reply in one to three short sentences, under 60 words, with no headings, lists or preamble.\n\
-             Talk style sets length and shape, and its length wins over a personality's; a personality sets tone only. Approval questions, security warnings and error facts stay plain, and the cabin safety rules win.\n\n\
+             Talk style sets length and shape, and its length wins over a personality's; a personality sets tone only. Accuracy and care beat those word caps, so say what is true and what is careful even when that runs past the cap. Approval questions, security warnings and error facts stay plain, and the cabin safety rules win.\n\n\
              {VOLATILE_SAFETY_CLOSER}"
         );
         let seen = script.seen.lock().unwrap()[0].clone();
@@ -3888,6 +3897,58 @@ mod tests {
         assert_eq!(system_text(&script.seen.lock().unwrap()[1]), repair);
         crate::checkpoint::set_turn_style(&conv, None);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Two turns whose talk style changes in between, through the real loop.
+    fn two_styled_turns(tag: &str, prefix_cache: bool) -> String {
+        use grokhub_core::talk::TalkStyle;
+        let dir = workspace(tag);
+        let conv = format!("{tag}-{}", std::process::id());
+        crate::prefix_cache::set_enabled_for_tests(Some(prefix_cache));
+        crate::checkpoint::set_turn_style(&conv, Some(TalkStyle::Short));
+        let script = scripted(vec![turn("Hi.", Vec::new()), turn("Fixed.", Vec::new())]);
+        let mut history = Vec::new();
+        for (text, style) in [
+            ("hi", TalkStyle::Short),
+            ("wifi broke", TalkStyle::Findings),
+        ] {
+            crate::checkpoint::set_turn_style(&conv, Some(style));
+            let (out, _) = talk_turn(
+                &script,
+                &dir,
+                &conv,
+                "CABIN RULES",
+                Gate::phase_readonly(),
+                &gate::ClosedPermits,
+                &mut history,
+                text,
+            );
+            assert_eq!(out.stop, StopReason::EndTurn);
+        }
+        crate::checkpoint::set_turn_style(&conv, None);
+        crate::prefix_cache::set_enabled_for_tests(None);
+        let _ = std::fs::remove_dir_all(&dir);
+        crate::prefix_guard::run_key(&conv, 0, None)
+    }
+
+    #[test]
+    fn with_prefix_cache_a_style_change_keeps_the_prefix_append_only() {
+        let key = two_styled_turns("guard-cache-on", true);
+        crate::prefix_guard::assert_no_unexpected_break(&key);
+        assert_eq!(crate::prefix_guard::breaks(&key), Vec::new());
+    }
+
+    #[test]
+    fn without_prefix_cache_a_style_change_is_reported_as_a_system_rewrite() {
+        let key = two_styled_turns("guard-cache-off", false);
+        assert_eq!(
+            crate::prefix_guard::breaks(&key),
+            vec![crate::prefix_guard::PrefixBreak {
+                index: 0,
+                part: crate::prefix_guard::Part::System,
+                reason: crate::prefix_guard::Reason::Unexpected,
+            }]
+        );
     }
 
     #[test]
