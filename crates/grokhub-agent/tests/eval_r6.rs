@@ -1,73 +1,115 @@
-//! R6: offline technique A/B matrix on the R1 fixture set (golden markdown).
+//! R6: offline technique A/B matrix on the eval fixture set (golden markdown).
 
 use std::path::PathBuf;
 
 use grokhub_agent::{
-    load_tasks, render_markdown, run_technique_matrix, Recommendation, Technique, DEFAULT_MODEL,
+    load_tasks, render_markdown, run_technique_matrix, Technique, TechniqueMatrixReport,
+    DEFAULT_MODEL,
 };
 
 fn golden_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../docs/eval/r6-technique-ab.md")
 }
 
+/// The system prompt layers in `~/.grok` / `~/.claude` notes and skills. Point
+/// home at an empty folder so the measured request bytes do not depend on the
+/// machine (this binary holds only this test).
+fn empty_home() -> PathBuf {
+    let home = std::env::temp_dir().join(format!("gh-eval-r6-home-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&home);
+    std::fs::create_dir_all(&home).expect("home");
+    std::env::set_var("HOME", &home);
+    std::env::set_var("USERPROFILE", &home);
+    home
+}
+
+fn arm(report: &TechniqueMatrixReport, technique: Technique) -> &grokhub_agent::TechniqueArm {
+    report
+        .arms
+        .iter()
+        .find(|arm| arm.technique == technique)
+        .expect("arm")
+}
+
 #[test]
-fn r6_technique_matrix_matches_golden_and_baseline() {
+fn r6_technique_matrix_matches_golden_and_measures_requests() {
+    let home = empty_home();
     let fixtures = load_tasks().expect("fixtures");
-    assert_eq!(fixtures.len(), 20, "R1 fixture set is 20 tasks");
+    assert_eq!(fixtures.len(), 22, "R1 set plus multi-read and follow-up");
 
     let report = run_technique_matrix(DEFAULT_MODEL, &fixtures).expect("matrix");
     assert_eq!(report.arms.len(), Technique::ALL.len());
     assert_eq!(report.model, DEFAULT_MODEL);
 
-    let baseline = report
-        .arms
-        .iter()
-        .find(|arm| arm.technique == Technique::Baseline)
-        .expect("baseline arm");
-    assert_eq!(baseline.metrics.tasks, 20);
-    assert_eq!(baseline.metrics.successes, 20);
-    assert_eq!(baseline.metrics.input_tokens, 738);
-    assert_eq!(baseline.metrics.output_tokens, 140);
-    assert_eq!(baseline.metrics.reasoning_tokens, 25);
-    assert!(
-        baseline.metrics.cost_ticks > 0,
-        "baseline cost must be non-zero"
-    );
-    assert!(
-        baseline.metrics.cost_per_task().is_finite(),
-        "cost per task finite"
-    );
-    assert!(
-        baseline.metrics.cost_per_solved_task().is_finite(),
-        "cost per solved finite"
-    );
+    let baseline = arm(&report, Technique::Baseline);
+    let base = &baseline.metrics;
+    assert_eq!(base.tasks, 22);
+    assert_eq!(base.successes, 22);
+    // Output and reasoning still come from the fixtures.
+    assert_eq!(base.output_tokens, 160);
+    assert_eq!(base.reasoning_tokens, 25);
+    // 22 tasks: 2 model calls for the multi-read task, 6 for the follow-up task.
+    assert_eq!(base.model_calls, 53);
+    assert_eq!(base.tool_calls, 17);
+    // Input is measured from the requests: every call re-sends the system prompt
+    // and tools, so input dwarfs the old scripted 738 tokens.
+    assert!(base.input_tokens > 100_000, "{}", base.input_tokens);
+    assert!(base.cached_tokens > 0 && base.cached_tokens < base.input_tokens);
 
     for arm in &report.arms {
-        assert_eq!(arm.metrics.tasks, 20);
+        assert_eq!(arm.metrics.tasks, 22);
         assert!(arm.tasks.iter().all(|t| t.success), "{:?}", arm.technique);
-        assert!(arm.metrics.cost_per_task().is_finite());
-        assert!(arm.metrics.cost_per_solved_task().is_finite());
-        if arm.technique == Technique::Baseline {
-            continue;
-        }
-        assert!(
-            arm.success_within_noise,
-            "{:?} success should stay within noise",
-            arm.technique
-        );
-        // Offline scripted usage is identical across arms → flat cost → spike.
-        assert_eq!(
-            arm.recommendation,
-            Recommendation::Spike,
-            "{:?} should spike until instrumented cost wins land",
-            arm.technique
-        );
-        assert_eq!(arm.metrics.input_tokens, baseline.metrics.input_tokens);
-        assert_eq!(arm.metrics.output_tokens, baseline.metrics.output_tokens);
-        assert_eq!(arm.metrics.cost_ticks, baseline.metrics.cost_ticks);
+        assert!(arm.success_within_noise, "{:?}", arm.technique);
+        // The multi-read fixture sends three reads in one reply in every arm.
+        let multi = arm
+            .tasks
+            .iter()
+            .find(|t| t.task_id == "021_multi_read")
+            .expect("multi-read task");
+        assert_eq!(multi.requests.model_calls, 2, "{:?}", arm.technique);
+        assert_eq!(multi.tool_calls, 3, "{:?}", arm.technique);
     }
 
+    // R4 deferred tools: a smaller tools array on every request.
+    let deferred = &arm(&report, Technique::DeferredTools).metrics;
+    assert!(
+        deferred.schema_bytes_per_request() < base.schema_bytes_per_request(),
+        "deferred {} vs baseline {}",
+        deferred.schema_bytes_per_request(),
+        base.schema_bytes_per_request()
+    );
+    assert!(deferred.input_tokens < base.input_tokens);
+    assert!(deferred.cost_ticks < base.cost_ticks);
+
+    // R5 batched read-only runs a reply's reads in parallel; the requests and the
+    // number of model calls are the model's choice and do not change.
+    let batched = &arm(&report, Technique::BatchedReadOnly).metrics;
+    assert_eq!(batched.model_calls, base.model_calls);
+    assert_eq!(batched.input_tokens, base.input_tokens);
+
+    // R3 summaries never trigger on the fixtures' few-byte tool outputs.
+    let summaries = &arm(&report, Technique::ToolOutputSummaries).metrics;
+    assert_eq!(summaries.input_tokens, base.input_tokens);
+    assert_eq!(summaries.cost_ticks, base.cost_ticks);
+
+    // R2 prefix cache: the follow-up fixture's second turn carries the volatile
+    // block in the user message, so the system prompt is not rewritten mid-session.
+    let prefix = &arm(&report, Technique::PrefixCache).metrics;
+    assert_eq!(prefix.model_calls, base.model_calls);
+    assert!(
+        prefix.prefix_stable_ratio() > base.prefix_stable_ratio(),
+        "prefix cache {} vs baseline {}",
+        prefix.prefix_stable_ratio(),
+        base.prefix_stable_ratio()
+    );
+    assert!(prefix.cached_tokens > base.cached_tokens);
+
+    // Byte-stable: a second run renders the same report.
     let rendered = render_markdown(&report);
+    let again = render_markdown(&run_technique_matrix(DEFAULT_MODEL, &fixtures).expect("rerun"));
+    assert_eq!(rendered, again, "report must be byte-stable across runs");
+    let _ = std::fs::remove_dir_all(&home);
+
     let path = golden_path();
     if std::env::var_os("WRITE_R6_GOLDEN").is_some() {
         if let Some(parent) = path.parent() {
@@ -84,8 +126,15 @@ fn r6_technique_matrix_matches_golden_and_baseline() {
     });
     // Git on Windows may check out the golden with CRLF; compare on LF.
     let golden = golden.replace("\r\n", "\n");
+    let per_task: Vec<String> = baseline
+        .tasks
+        .iter()
+        .map(|t| format!("{}={}", t.task_id, t.input_tokens))
+        .collect();
     assert_eq!(
-        rendered, golden,
-        "docs/eval/r6-technique-ab.md must match render_markdown output"
+        rendered,
+        golden,
+        "docs/eval/r6-technique-ab.md must match render_markdown output; baseline input per task: {}",
+        per_task.join(" ")
     );
 }
