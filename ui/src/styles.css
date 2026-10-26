@@ -364,7 +364,7 @@ textarea {
 }
 
 /* Grok's question with options: one tappable row each, recommended first. */
-.choices {
+.answer-options {
   display: flex;
   flex-direction: column;
   gap: 8px;

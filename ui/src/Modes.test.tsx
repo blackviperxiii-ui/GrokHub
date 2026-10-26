@@ -119,7 +119,7 @@ describe("ElicitCard", () => {
     const view = render(<ElicitCard item={item} onAnswer={onAnswer} />);
     expect(screen.getByText("1. Which fix?")).toBeVisible();
     expect(screen.queryByText(/Reply with the option label/)).toBeNull();
-    const choices = screen.getAllByRole("button").filter((b) => b.closest(".choices"));
+    const choices = screen.getAllByRole("button").filter((b) => b.closest(".answer-options"));
     expect(choices.map((b) => b.textContent)).toEqual([
       "Pin the crate Recommendedsmallest change",
       "Upgrade everything",

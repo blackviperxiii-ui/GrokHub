@@ -171,7 +171,7 @@ export function ElicitCard({
       ) : (
         <>
           {options.length > 0 && (
-            <div className="choices" role="group" aria-label="Options">
+            <div className="answer-options" role="group" aria-label="Options">
               {options.map((option) => (
                 <button
                   key={option.label}
