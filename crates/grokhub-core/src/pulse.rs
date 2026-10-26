@@ -798,7 +798,9 @@ pub fn rank_pulse(cards: &[UpdateCard], inputs: &PulseInputs) -> Vec<Ranked> {
 /// A written idea retires at its `expires_at`, two weeks after it was
 /// posted (`IDEA_TTL_MS`). One the person edited stays.
 pub fn idea_retired(card: &UpdateCard, now_ms: u64) -> bool {
-    card.kind == UpdateKind::Idea && !card.modified && card.expires_at.is_some_and(|at| now_ms >= at)
+    card.kind == UpdateKind::Idea
+        && !card.modified
+        && card.expires_at.is_some_and(|at| now_ms >= at)
 }
 
 /// The Ideas view: the first `IDEAS_LEAD` ideas by rank under no header
@@ -1621,7 +1623,10 @@ mod tests {
         assert_eq!(IDEA_TTL_MS, 1_209_600_000, "14 days");
         let mut post = automation_done_card("a", "Nightly backup", "ok", posted);
         post.expires_at = old.expires_at;
-        assert!(!idea_retired(&post, posted + IDEA_TTL_MS), "only ideas retire");
+        assert!(
+            !idea_retired(&post, posted + IDEA_TTL_MS),
+            "only ideas retire"
+        );
         let inputs = PulseInputs {
             now_ms: posted + IDEA_TTL_MS,
             ..Default::default()

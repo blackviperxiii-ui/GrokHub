@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { pulseImage, type PulsePost } from "./api";
+import { pulseImage, type PulseIdea, type PulsePost } from "./api";
 
 /** Topic emoji with a bundled 3D picture (Fluent Emoji 3D, MIT, see
  * public/emoji3d/LICENSE), by code point without variation selectors. */
@@ -25,17 +25,22 @@ export function emojiImage(icon: string): string | null {
   return EMOJI_3D.has(code) ? `${import.meta.env.BASE_URL}emoji3d/${code}.png` : null;
 }
 
-function TopicIcon({ icon }: { icon: string }) {
-  const emoji = icon.trim() || DEFAULT_ICON;
+/** An idea with no emoji of its own. */
+export const IDEA_ICON = "💡";
+
+function TopicIcon({ icon, fallback = DEFAULT_ICON, className = "topic-icon" }: {
+  icon: string;
+  fallback?: string;
+  className?: string;
+}) {
+  const emoji = icon.trim() || fallback;
   const src = emojiImage(emoji);
   const [broken, setBroken] = useState(false);
   if (src && !broken) {
-    return (
-      <img className="topic-icon" src={src} alt="" aria-hidden="true" onError={() => setBroken(true)} />
-    );
+    return <img className={className} src={src} alt="" aria-hidden="true" onError={() => setBroken(true)} />;
   }
   return (
-    <span className="topic-icon plain" aria-hidden="true">
+    <span className={`${className} plain`} aria-hidden="true">
       {emoji}
     </span>
   );
@@ -224,6 +229,61 @@ export function FeedCard({ post, busy, onLove, onDiscuss, onDelete, onWhy }: Fee
         <button type="button" className="quiet" disabled={busy} onClick={onDiscuss}>
           Discuss
         </button>
+      </div>
+    </li>
+  );
+}
+
+export interface IdeaRowProps {
+  idea: PulseIdea;
+  busy: boolean;
+  onDo: () => void;
+  onMoreLike: () => void;
+  onNotInterested: () => void;
+}
+
+/** One Ideas row: a clay icon, the title and its grey "I can …" line. A
+ * click on the row is Let's do it; the menu also holds More like this and
+ * Not interested. */
+export function IdeaRow({ idea, busy, onDo, onMoreLike, onNotInterested }: IdeaRowProps) {
+  const [menu, setMenu] = useState(false);
+  const pick = (f: () => void) => () => {
+    setMenu(false);
+    f();
+  };
+  return (
+    <li className="idea-row" aria-label={idea.title}>
+      <button type="button" className="idea-main" disabled={busy} onClick={onDo}>
+        <TopicIcon icon={idea.icon} fallback={IDEA_ICON} className="idea-icon" />
+        <span className="idea-text">
+          <span className="idea-title">{idea.title}</span>
+          {idea.summary && <span className="idea-summary">{idea.summary}</span>}
+        </span>
+      </button>
+      <div className="feed-corner">
+        <button
+          type="button"
+          className="quiet icon-button"
+          aria-label="More"
+          aria-haspopup="menu"
+          aria-expanded={menu}
+          onClick={() => setMenu((m) => !m)}
+        >
+          ⋯
+        </button>
+        {menu && (
+          <div className="feed-menu" role="menu">
+            <button type="button" role="menuitem" disabled={busy} onClick={pick(onDo)}>
+              Let's do it
+            </button>
+            <button type="button" role="menuitem" disabled={busy} onClick={pick(onMoreLike)}>
+              More like this
+            </button>
+            <button type="button" role="menuitem" disabled={busy} onClick={pick(onNotInterested)}>
+              Not interested
+            </button>
+          </div>
+        )}
       </div>
     </li>
   );

@@ -70,7 +70,7 @@ pub struct Idea {
     pub summary: String,
     /// Do, Automate, Learn or Watch.
     pub kind: String,
-    /// What Run puts in the chat box.
+    /// What Let's do it puts in the chat box.
     pub action: String,
 }
 

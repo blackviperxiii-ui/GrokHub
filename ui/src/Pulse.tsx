@@ -10,12 +10,14 @@ import {
   type PulseIdea,
   type PulsePage,
 } from "./api";
-import { FeedCard, SkeletonRows } from "./FeedCard";
+import { FeedCard, IdeaRow, SkeletonRows } from "./FeedCard";
 
 export const FEED_EMPTY = "No posts yet. Tell me what your feed should cover with Edit feed instructions.";
 export const IDEAS_EMPTY = "No ideas yet. I'll add one when I spot something worth doing.";
 export const PROMPT_LABEL = "What should your feed cover?";
 export const SAVED_NOTE = "Saved. A new post is on its way.";
+export const MORE_LIKE_NOTE = "Got it. More ideas like this next time.";
+export const NOT_INTERESTED_NOTE = "Got it. Fewer ideas like this.";
 /** Posts shown at first, and added each time the list's end scrolls into view. */
 export const PAGE_SIZE = 10;
 /** After a save, how often and how many times to look for the new post. */
@@ -23,11 +25,6 @@ const POLL_MS = 4000;
 const POLL_TRIES = 8;
 
 type Tab = "feed" | "ideas";
-
-/** Snooze hides a card until the next 9 AM: later today before nine. */
-export function snoozedLine(now: Date = new Date()): string {
-  return now.getHours() < 9 ? "Snoozed until 9 AM." : "Snoozed until tomorrow 9 AM.";
-}
 
 /** The Feed instructions sheet: one free-text box, Cancel and Save. */
 function Instructions({ onClose, onSaved }: { onClose: () => void; onSaved: () => void }) {
@@ -138,6 +135,13 @@ export function Pulse({ onRun }: { onRun: (text: string) => void }) {
     if (await act(idea.id, "accept")) onRun(idea.action);
   }
 
+  /** Ideas are written in the background, so the tab reads the page again. */
+  function openIdeas() {
+    setTab("ideas");
+    setNote(null);
+    getPulse().then(setPage, () => {});
+  }
+
   async function discuss(id: string) {
     try {
       onRun(await pulseDiscuss(id));
@@ -174,10 +178,14 @@ export function Pulse({ onRun }: { onRun: (text: string) => void }) {
     <section className="pulse" aria-label="Pulse">
       <div className="pulse-head">
         <div className="switch" role="group" aria-label="Pulse view">
-          <button type="button" aria-pressed={tab === "feed"} onClick={() => setTab("feed")}>
+          <button type="button" aria-pressed={tab === "feed"} onClick={() => {
+              setTab("feed");
+              setNote(null);
+            }}
+          >
             Feed
           </button>
-          <button type="button" aria-pressed={tab === "ideas"} onClick={() => setTab("ideas")}>
+          <button type="button" aria-pressed={tab === "ideas"} onClick={openIdeas}>
             Ideas
           </button>
         </div>
@@ -249,44 +257,16 @@ export function Pulse({ onRun }: { onRun: (text: string) => void }) {
           {page.ideas.map((group) => (
             <div key={group.label || "top"} className="idea-group">
               {group.label && <h3>{group.label}</h3>}
-              <ul className="rows">
+              <ul className="idea-rows">
                 {group.ideas.map((idea) => (
-                  <li key={idea.id} className="card post" aria-label={idea.title}>
-                    <div className="card-title">{idea.title}</div>
-                    {idea.summary && (
-                      <div className="card-detail-line plain">{idea.summary}</div>
-                    )}
-                    <div className="card-status">{idea.kind}</div>
-                    <div className="card-buttons">
-                      <button type="button" disabled={busy} onClick={() => void run(idea)}>
-                        Run
-                      </button>
-                      <button
-                        type="button"
-                        className="quiet"
-                        disabled={busy}
-                        onClick={() => void act(idea.id, "snooze", snoozedLine())}
-                      >
-                        Snooze
-                      </button>
-                      <button
-                        type="button"
-                        className="quiet"
-                        disabled={busy}
-                        onClick={() => void act(idea.id, "notThis", "Got it. Less like this.")}
-                      >
-                        Not this
-                      </button>
-                      <button
-                        type="button"
-                        className="quiet danger"
-                        disabled={busy}
-                        onClick={() => void act(idea.id, "dismiss")}
-                      >
-                        Dismiss
-                      </button>
-                    </div>
-                  </li>
+                  <IdeaRow
+                    key={idea.id}
+                    idea={idea}
+                    busy={busy}
+                    onDo={() => void run(idea)}
+                    onMoreLike={() => void act(idea.id, "moreLike", MORE_LIKE_NOTE)}
+                    onNotInterested={() => void act(idea.id, "notInterested", NOT_INTERESTED_NOTE)}
+                  />
                 ))}
               </ul>
             </div>

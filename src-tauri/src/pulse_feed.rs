@@ -148,24 +148,20 @@ pub fn run_once(
     outcome
 }
 
-/// One idea run behind its six-hour gate. The run counts even when it posts
-/// nothing. More like this is spent once a reply comes back. Returns how
-/// many ideas posted.
+/// One idea run behind its six-hour gate. With nothing personal to go on
+/// there is no call and the gate stays open; once asked, the run counts even
+/// when it posts nothing. More like this is spent once a reply comes back.
+/// Returns how many ideas posted.
 pub fn run_ideas(
     config_dir: &Path,
     model: &str,
     client: &dyn ModelClient,
     now_ms: u64,
 ) -> Result<usize, String> {
-    let Some(ideas) = with_ideas_state(config_dir, |s| {
-        s.due(now_ms).then(|| {
-            s.last_run_ms = now_ms;
-            s.clone()
-        })
-    })?
-    else {
+    let ideas = with_ideas_state(config_dir, |s| s.clone())?;
+    if !ideas.due(now_ms) {
         return Ok(0);
-    };
+    }
     let cards = crate::pulse::cards(config_dir)?;
     let goals: Vec<String> = crate::journal::load(config_dir)
         .map(|page| page.active.into_iter().map(|q| q.question).collect())
@@ -196,6 +192,7 @@ pub fn run_ideas(
     }) else {
         return Ok(0);
     };
+    with_ideas_state(config_dir, |s| s.last_run_ms = now_ms)?;
     let reply = ask(client, model, &messages)?;
     with_ideas_state(config_dir, |s| s.more_like.clear())?;
     let written = pi::parse_ideas(&reply, &existing, &ideas.turned_down);
@@ -895,6 +892,19 @@ mod tests {
         assert!(
             crate::pulse::cards(&d.config).expect("cards").is_empty(),
             "and gone from the store"
+        );
+    }
+
+    #[test]
+    fn an_idea_run_with_nothing_personal_makes_no_call_and_keeps_the_gate_open() {
+        let d = dirs("ideas-empty");
+        std::fs::remove_file(d.config.join(grokhub_core::interests::FILE_NAME)).expect("rm");
+        let client = Script::new(&[]);
+        assert_eq!(run_ideas(&d.config, "grok-test", &client, NOW), Ok(0));
+        assert_eq!(
+            with_ideas_state(&d.config, |s| s.last_run_ms).expect("state"),
+            0,
+            "the first real run is not held back six hours"
         );
     }
 
