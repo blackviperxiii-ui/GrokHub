@@ -1,0 +1,2 @@
+- Lockfile: `clipboard-win` 5.4.1 (yanked) moves to 5.4.3.
+- Tests: the install.sh package test no longer fails when the suite runs as root.
