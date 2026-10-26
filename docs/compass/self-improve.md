@@ -9,7 +9,7 @@
 ## Key files
 - `crates/grokhub-core/src/outcome.rs`: `TaskOutcome`, `classify`, `append_outcome`, `undo_supersedes`, `is_correction`.
 - `crates/grokhub-core/src/self_review.rs` / `systems_brief.rs`: weekly ranking vs state-of-systems aggregation (`build_brief`).
-- `crates/grokhub-agent/src/harness/self_improve.rs`: `outcome_from_spans`, `replay_gate`, `run_weekly` (`background:review`).
+- `crates/grokhub-agent/src/harness/self_improve.rs`: `outcome_from_spans`, `replay_gate`, `lesson_checks`, `run_weekly` (`background:review`).
 - `crates/grokhub-app/src/app/self_review_ui.rs` + `systems_brief_ui.rs`: `night_passes`, Pulse cards, `/brief`.
 ## Change recipe
 - New outcome signal: add it to `OutcomeSignals` and `classify` (failures first), set it where the cabin learns it, and add a literal test. Never put reply text or args on a record.
