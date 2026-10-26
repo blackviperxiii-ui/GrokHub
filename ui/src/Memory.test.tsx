@@ -126,6 +126,21 @@ describe("Memory", () => {
     expect(screen.getByLabelText("New note")).toHaveValue("");
   });
 
+  it("Remember status stays distinct from the AMR banner", async () => {
+    api.getMemory.mockResolvedValue(notes({ amr: true }));
+    api.addMemory.mockResolvedValue({
+      status: "Remembered in workspace MEMORY.md",
+      notes: notes({ amr: true, workspace: "the smoke test likes kumquats\n" }),
+    });
+    render(<Memory />);
+    expect(await screen.findByText(/AMR store/)).toBeInTheDocument();
+    await userEvent.type(screen.getByLabelText("New note"), "the smoke test likes kumquats");
+    await userEvent.click(screen.getByRole("button", { name: "Remember" }));
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "Remembered in workspace MEMORY.md.",
+    );
+  });
+
   it("Remember keeps an unsaved edit in the other editor", async () => {
     api.getMemory.mockResolvedValue(notes());
     api.addMemory.mockResolvedValue({

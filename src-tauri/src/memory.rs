@@ -247,7 +247,8 @@ mod tests {
         assert_eq!(notes.workspace, "the build needs node 22\n");
         assert_eq!(notes.global, "I like short answers\n");
         assert!(notes.global_path.ends_with("MEMORY.md"));
-        assert!(!notes.amr);
+        // Empty config dir (no app.json) is a new install: AMR on by default.
+        assert!(notes.amr);
 
         let hits = search(&d.workspace, "node").expect("search");
         assert_eq!(

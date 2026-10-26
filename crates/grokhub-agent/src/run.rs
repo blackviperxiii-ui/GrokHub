@@ -332,12 +332,14 @@ pub fn run_loop(
         if first_turn {
             crate::prefix_cache::push_stable_system(history, input.system);
         }
+        let already = crate::memory::injected_lines(history);
         let volatile = crate::prefix_cache::TurnVolatile::assemble(
             input.workspace,
             user_text,
             first_turn,
             style,
             playbook.as_deref(),
+            &already,
         );
         crate::prefix_cache::push_user_turn(history, &volatile, user_text, image);
     } else {
@@ -366,9 +368,11 @@ pub fn run_loop(
             if input.depth == 0 {
                 replaybook_history(history, playbook.as_deref());
             }
-            // Later turns: surface sealed installed-app learnings when the user
-            // asks about games / Steam / library (first turn was often "hi").
-            if let Some(block) = crate::memory::followup_injection(user_text) {
+            // Later turns add recall only for lines this history has not seen.
+            let already = crate::memory::injected_lines(history);
+            if let Some(block) =
+                crate::memory::followup_injection(input.workspace, user_text, &already)
+            {
                 history.push(InputItem::Message {
                     role: "system".into(),
                     content: vec![ContentPart::InputText(block)],
