@@ -247,7 +247,11 @@ mod tests {
         assert_eq!(notes.workspace, "the build needs node 22\n");
         assert_eq!(notes.global, "I like short answers\n");
         assert!(notes.global_path.ends_with("MEMORY.md"));
-        assert!(!notes.amr);
+        // AMR is the default; the legacy flag in app.json turns it off.
+        assert!(notes.amr);
+        let config = grokhub_agent::perm::config_dir();
+        std::fs::write(config.join("app.json"), r#"{"memory_backend":"legacy"}"#).expect("flag");
+        assert!(!load(&d.workspace).expect("load legacy").amr);
 
         let hits = search(&d.workspace, "node").expect("search");
         assert_eq!(
