@@ -679,6 +679,42 @@ async function permissions(s, config) {
   console.log("permissions: rule removed");
 }
 
+// Settings → Appearance: Dark pins the dark colors on the page right away
+// and saves in shell.json; System hands them back to the OS.
+async function appearance(s, config) {
+  await tab(s, "Settings");
+  await section(s, "Appearance");
+  const pick = async (label) => {
+    const el = await waitFor(`the ${label} theme`, async () => {
+      const found = await wd("POST", `${s}/element`, {
+        using: "xpath",
+        value: `//div[@aria-label='Theme']/button[normalize-space()='${label}']`,
+      });
+      return found[ELEMENT];
+    });
+    await wd("POST", `${s}/element/${el}/click`, {});
+  };
+  const look = () =>
+    wd("POST", `${s}/execute/sync`, {
+      script:
+        "return [document.documentElement.dataset.theme || '', getComputedStyle(document.body).backgroundColor];",
+      args: [],
+    });
+  await pick("Dark");
+  const [theme, bg] = await waitFor("the dark page", async () => {
+    const seen = await look();
+    return seen[0] === "dark" ? seen : null;
+  });
+  if (bg !== "rgb(20, 20, 19)") throw new Error(`dark theme painted ${bg}`);
+  const saved = await waitFor("the saved theme", async () => {
+    const t = JSON.parse(readFileSync(join(config, "shell.json"), "utf8")).theme;
+    return t === "dark" ? t : null;
+  });
+  console.log(`appearance: ${theme} on the page (${bg}), ${saved} in shell.json`);
+  await pick("System");
+  await waitFor("the system theme", async () => ((await look())[0] === "" ? true : null));
+}
+
 async function main() {
   const mock = await startMock();
   const config = mkdtempSync(join(tmpdir(), "grokhub-shell-smoke-"));
@@ -793,6 +829,7 @@ async function main() {
     await playbooks(s, config);
     await interests(s, config);
     await permissions(s, config);
+    await appearance(s, config);
     await desktop(s, config);
     if (process.env.SMOKE_WEB === "1") await web(s);
     console.log("smoke ok");

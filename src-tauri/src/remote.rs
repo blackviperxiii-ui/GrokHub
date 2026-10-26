@@ -530,6 +530,7 @@ mod tests {
         }
         for name in [
             "save_settings",
+            "set_theme",
             "set_api_key",
             "clear_api_key",
             "get_pulse",

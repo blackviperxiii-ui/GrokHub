@@ -17,6 +17,7 @@ const api = vi.hoisted(() => ({
     >(),
   setApiKey: vi.fn<(key: string) => Promise<Shape>>(),
   clearApiKey: vi.fn<() => Promise<Shape>>(),
+  setTheme: vi.fn<(theme: string) => Promise<Shape>>(),
 }));
 
 vi.mock("./api", () => api);
@@ -48,6 +49,7 @@ function shape(over: Partial<Shape>): Shape {
     workspacePath: "/home/user/GrokHub",
     approvals: "ask",
     desktopControl: false,
+    theme: "system",
     version: "3.1.0",
     ...over,
   };
@@ -160,6 +162,7 @@ describe("Settings", () => {
     expect(Array.from(nav.querySelectorAll("button"), (b) => b.textContent)).toEqual([
       "General",
       "Account",
+      "Appearance",
       "Personality",
       "Playbooks",
       "Permissions",
@@ -175,6 +178,7 @@ describe("Settings", () => {
     expect(Array.from(nav.querySelectorAll("button"), (b) => b.textContent)).toEqual([
       "General",
       "Account",
+      "Appearance",
       "Personality",
       "Playbooks",
       "Permissions",
@@ -197,9 +201,13 @@ describe("Settings", () => {
     expect(screen.getByRole("button", { name: "Account" })).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByRole("button", { name: "General" })).toHaveAttribute("aria-pressed", "false");
 
+    await openSection("Appearance");
+    expect(screen.getByRole("button", { name: "System" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.queryByLabelText("API key")).toBeNull();
+
     await openSection("Personality");
     expect(screen.getByText("Personality panel")).toBeInTheDocument();
-    expect(screen.queryByLabelText("API key")).toBeNull();
+    expect(screen.queryByRole("button", { name: "System" })).toBeNull();
 
     await openSection("Playbooks");
     expect(screen.getByText("Playbooks panel")).toBeInTheDocument();
@@ -245,5 +253,30 @@ describe("Settings", () => {
     expect(screen.queryByRole("textbox")).toBeNull();
     expect(screen.queryByText("Local AI panel")).toBeNull();
     expect(screen.queryByText("Web access panel")).toBeNull();
+  });
+
+  it("applies a theme at once and saves it", async () => {
+    api.setTheme.mockResolvedValue(shape({ theme: "dark" }));
+    render(<Settings caps={DESKTOP} />);
+    await openSection("Appearance");
+    await userEvent.click(screen.getByRole("button", { name: "Dark" }));
+    expect(api.setTheme).toHaveBeenCalledWith("dark");
+    expect(document.documentElement.dataset.theme).toBe("dark");
+    expect(screen.getByRole("button", { name: "Dark" })).toHaveAttribute("aria-pressed", "true");
+
+    api.setTheme.mockResolvedValue(shape({ theme: "system" }));
+    await userEvent.click(screen.getByRole("button", { name: "System" }));
+    expect(document.documentElement.dataset.theme).toBeUndefined();
+    expect(screen.getByRole("button", { name: "System" })).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("puts the theme back when saving it fails", async () => {
+    api.setTheme.mockRejectedValue("disk full");
+    render(<Settings caps={DESKTOP} />);
+    await openSection("Appearance");
+    await userEvent.click(screen.getByRole("button", { name: "Light" }));
+    expect(await screen.findByText("disk full")).toBeVisible();
+    expect(document.documentElement.dataset.theme).toBeUndefined();
+    expect(screen.getByRole("button", { name: "System" })).toHaveAttribute("aria-pressed", "true");
   });
 });

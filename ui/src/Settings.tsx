@@ -8,6 +8,7 @@ import {
   type Capabilities,
   type Settings as Shape,
 } from "./api";
+import { Appearance } from "./Appearance";
 import { APPROVALS } from "./approvals";
 import { Labs } from "./Labs";
 import { Interests } from "./Interests";
@@ -122,6 +123,9 @@ export function Settings({
         {section === "general" && general()}
         {section === "account" && account()}
         {note && <p className="note">{note}</p>}
+        {section === "appearance" && (
+          <Appearance theme={loaded.theme} onSaved={(theme) => setSettings({ ...loaded, theme })} />
+        )}
         {section === "personality" && <Personality />}
         {section === "playbooks" && <Playbooks />}
         {section === "permissions" && <Permissions />}
