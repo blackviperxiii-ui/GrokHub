@@ -1,0 +1,30 @@
+{
+  "id": "021_multi_read",
+  "prompt": "Read a.txt, b.txt and c.txt and reply with their letters joined.",
+  "mode": "always",
+  "files": [
+    { "path": "a.txt", "content": "A" },
+    { "path": "b.txt", "content": "B" },
+    { "path": "c.txt", "content": "C" }
+  ],
+  "script": [
+    {
+      "type": "tools",
+      "calls": [
+        { "name": "read_file", "arguments": { "target_file": "a.txt" } },
+        { "name": "read_file", "arguments": { "target_file": "b.txt" } },
+        { "name": "read_file", "arguments": { "target_file": "c.txt" } }
+      ],
+      "usage": { "output_tokens": 0 }
+    },
+    {
+      "type": "text",
+      "content": "ABC",
+      "usage": { "output_tokens": 2 }
+    }
+  ],
+  "checks": [
+    { "type": "stop_reason", "value": "end_turn" },
+    { "type": "assistant_contains", "value": "ABC" }
+  ]
+}
