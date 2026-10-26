@@ -1,13 +1,17 @@
 //! Pulse (cross-platform recode, Phase 3f): the cabin's Feed and Ideas from
 //! the same `updates.json`, ranked by the same rules in `grokhub_core::pulse`.
-//! Dismiss, Not this, Like and Accept write the same MEMORY.md ledger line
-//! the cabin writes, so the next ranking learns from them.
+//! Dismiss, Not this, Love and Accept write the same MEMORY.md ledger line
+//! the cabin writes, so the next ranking learns from them. Love and Discuss
+//! also feed the writer's taste summary (`pulse_feed`); Delete only removes.
 
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
 
 use grokhub_core::pulse::{self as pc, LedgerReason};
+use grokhub_core::pulse_writer::TasteKind;
 use grokhub_core::{CardReaction, UpdateCard, UpdateKind};
+
+use crate::pulse_feed;
 use serde::{Deserialize, Serialize};
 
 const FILE: &str = "updates.json";
@@ -37,10 +41,18 @@ pub struct Post {
     pub summary: String,
     /// "Why: …" when a source post matched an interest.
     pub because: String,
+    /// A written post's topic emoji. Empty on older posts.
+    pub icon: String,
+    /// A written post's "why you're seeing this" line, to the reader.
+    pub why: String,
+    /// Cached image files for the gallery, read with `pulse_image`.
+    pub images: Vec<String>,
+    /// Unix ms, for the menu's full date.
+    pub created_at: u64,
     pub ago: String,
     /// The first source link the research step returned.
     pub link: String,
-    pub liked: bool,
+    pub loved: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -76,7 +88,11 @@ pub struct Page {
 pub enum Act {
     Dismiss,
     NotThis,
-    Like,
+    /// Older pages still send "like".
+    #[serde(alias = "like")]
+    Love,
+    /// Takes the post away. Not a taste signal: nothing is noted.
+    Delete,
     Snooze,
     /// Run took the idea to chat.
     Accept,
@@ -154,7 +170,25 @@ fn note(title: &str, reason: LedgerReason, date: &str) -> Result<(), String> {
     })
 }
 
-fn post(card: &UpdateCard, now_ms: u64) -> Post {
+/// Every card in the store, for the writer's repeat and seen checks.
+pub fn cards(config_dir: &Path) -> Result<Vec<UpdateCard>, String> {
+    let _store = store();
+    load_unlocked(config_dir)
+}
+
+/// Add one written post.
+pub fn add_post(config_dir: &Path, card: UpdateCard) -> Result<bool, String> {
+    let _store = store();
+    let mut cards = load_unlocked(config_dir)?;
+    let added = grokhub_core::post_update(&mut cards, card);
+    if added {
+        save(config_dir, &cards)?;
+    }
+    Ok(added)
+}
+
+fn post(config_dir: &Path, card: &UpdateCard, now_ms: u64) -> Post {
+    let images = pulse_feed::images_dir(config_dir);
     let source = card
         .pulse
         .source_name
@@ -166,6 +200,16 @@ fn post(card: &UpdateCard, now_ms: u64) -> Post {
         title: card.title.trim().to_string(),
         summary: card.body.clone().unwrap_or_default().trim().to_string(),
         because: card.pulse.because.clone().unwrap_or_default(),
+        icon: card.pulse.icon.clone().unwrap_or_default(),
+        why: card.why.clone().unwrap_or_default(),
+        images: card
+            .pulse
+            .image_urls
+            .iter()
+            .map(|url| pc::image_cache_name(url))
+            .filter(|name| images.join(name).is_file())
+            .collect(),
+        created_at: card.created_at,
         ago: pc::ago_label(card.created_at, now_ms),
         link: card
             .citations
@@ -173,7 +217,7 @@ fn post(card: &UpdateCard, now_ms: u64) -> Post {
             .find(|url| grokhub_core::public_http_url(url))
             .cloned()
             .unwrap_or_default(),
-        liked: card.reaction == Some(CardReaction::Up),
+        loved: card.reaction == Some(CardReaction::Up),
     }
 }
 
@@ -192,7 +236,7 @@ fn idea(card: &UpdateCard) -> Idea {
     }
 }
 
-fn page(cards: &[UpdateCard], now_ms: u64) -> Page {
+fn page(config_dir: &Path, cards: &[UpdateCard], now_ms: u64) -> Page {
     let ledger = ledger();
     let inputs = pc::PulseInputs {
         ledger: &ledger,
@@ -203,7 +247,7 @@ fn page(cards: &[UpdateCard], now_ms: u64) -> Page {
     Page {
         feed: pc::feed_posts(cards, &inputs)
             .iter()
-            .map(|c| post(c, now_ms))
+            .map(|c| post(config_dir, c, now_ms))
             .collect(),
         ideas: pc::group_ideas(cards, &inputs)
             .into_iter()
@@ -215,13 +259,23 @@ fn page(cards: &[UpdateCard], now_ms: u64) -> Page {
     }
 }
 
-pub fn load(config_dir: &Path, now_ms: u64) -> Result<Page, String> {
+/// Opening Pulse counts as engagement for the writer's cadence; the page's
+/// clock, when it sends one, places quiet hours.
+pub fn load(config_dir: &Path, day: Option<&Day>, now_ms: u64) -> Result<Page, String> {
+    pulse_feed::with_state(config_dir, |s| {
+        s.note_engaged(now_ms);
+        if let Some(day) = day {
+            s.utc_offset_min = Some(grokhub_core::pulse_writer::utc_offset_min(
+                day.hour, day.minute, now_ms,
+            ));
+        }
+    })?;
     let _store = store();
     let mut cards = load_unlocked(config_dir)?;
     if grokhub_core::collapse_feed(&mut cards) {
         save(config_dir, &cards)?;
     }
-    Ok(page(&cards, now_ms))
+    Ok(page(config_dir, &cards, now_ms))
 }
 
 /// Dismiss and Not this take the card off the page (an idea leaves the
@@ -249,16 +303,25 @@ pub fn act(config_dir: &Path, id: &str, act: Act, day: &Day, now_ms: u64) -> Res
             note(&card.title, LedgerReason::NotThis, &day.date)?;
             remove(&mut cards)
         }
-        Act::Like => {
+        Act::Love => {
             if card.reaction == Some(CardReaction::Up) {
                 false
             } else {
                 note(&card.title, LedgerReason::Liked, &day.date)?;
+                pulse_feed::with_state(config_dir, |s| {
+                    s.note_engaged(now_ms);
+                    s.note_taste(TasteKind::Love, &card.title, now_ms);
+                })?;
                 if let Some(saved) = cards.iter_mut().find(|c| c.id == id) {
                     saved.reaction = Some(CardReaction::Up);
                 }
                 true
             }
+        }
+        Act::Delete => {
+            let before = cards.len();
+            cards.retain(|c| c.id != id);
+            cards.len() != before
         }
         Act::Snooze => {
             let until = pc::snooze_until(now_ms, day.hour, day.minute);
@@ -272,7 +335,87 @@ pub fn act(config_dir: &Path, id: &str, act: Act, day: &Day, now_ms: u64) -> Res
     if changed {
         save(config_dir, &cards)?;
     }
-    Ok(page(&cards, now_ms))
+    Ok(page(config_dir, &cards, now_ms))
+}
+
+fn find(config_dir: &Path, id: &str) -> Result<UpdateCard, String> {
+    cards(config_dir)?
+        .into_iter()
+        .find(|c| c.id == id)
+        .ok_or_else(|| "That card is gone. The page now shows what is left.".to_string())
+}
+
+/// Discuss: the chat seed carrying the post. Counts as engagement and taste.
+pub fn discuss(config_dir: &Path, id: &str, now_ms: u64) -> Result<String, String> {
+    let card = find(config_dir, id)?;
+    pulse_feed::with_state(config_dir, |s| {
+        s.note_engaged(now_ms);
+        s.note_taste(TasteKind::Discuss, &card.title, now_ms);
+    })?;
+    Ok(grokhub_core::pulse_writer::discuss_seed(&card))
+}
+
+/// Why this post is in the feed: the writer's line, else the interest it matched.
+pub fn why(config_dir: &Path, id: &str) -> Result<String, String> {
+    let card = find(config_dir, id)?;
+    Ok(card
+        .why
+        .clone()
+        .or_else(|| {
+            card.pulse
+                .because
+                .clone()
+                .map(|b| format!("It matched your interest in {b}."))
+        })
+        .unwrap_or_else(|| "It came from your Pulse sources.".into()))
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Prompt {
+    pub text: String,
+    /// True while the person has not written their own.
+    pub is_default: bool,
+    /// What the writer's last run did.
+    pub note: String,
+}
+
+pub fn get_prompt(config_dir: &Path) -> Prompt {
+    let state = pulse_feed::state(config_dir);
+    Prompt {
+        text: state.prompt_or_default().to_string(),
+        is_default: state.prompt.trim().is_empty(),
+        note: state.note,
+    }
+}
+
+/// Save the feed prompt and owe one new post right away.
+pub fn save_prompt(config_dir: &Path, text: &str) -> Result<Prompt, String> {
+    pulse_feed::with_state(config_dir, |s| s.save_prompt(text))?;
+    pulse_feed::wake();
+    Ok(get_prompt(config_dir))
+}
+
+/// A cached gallery image as a data URL, so no page (desktop or web) ever
+/// loads it from the source site. Only names the writer made are read.
+pub fn image(config_dir: &Path, name: &str) -> Result<String, String> {
+    let (stem, ext) = name.split_once('.').ok_or("Not a Pulse image.")?;
+    let mime = match ext {
+        "jpg" => "image/jpeg",
+        "png" => "image/png",
+        "webp" => "image/webp",
+        _ => return Err("Not a Pulse image.".into()),
+    };
+    if stem.len() != 16 || !stem.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err("Not a Pulse image.".into());
+    }
+    let bytes = std::fs::read(pulse_feed::images_dir(config_dir).join(name))
+        .map_err(|_| "That image is no longer cached.".to_string())?;
+    use base64::Engine as _;
+    Ok(format!(
+        "data:{mime};base64,{}",
+        base64::engine::general_purpose::STANDARD.encode(bytes)
+    ))
 }
 
 #[cfg(test)]
@@ -338,14 +481,14 @@ mod tests {
     #[test]
     fn the_page_splits_feed_and_ideas_like_the_cabin() {
         let d = dirs("page", &sample());
-        let page = load(&d.config, NOW).expect("load");
+        let page = load(&d.config, None, NOW).expect("load");
         assert_eq!(page.feed.len(), 1, "{page:?}");
         let post = &page.feed[0];
         assert_eq!(post.id, "post-1");
         assert_eq!(post.source, "Automation");
         assert_eq!(post.ago, "2h ago");
         assert_eq!(post.link, "https://example.com/board");
-        assert!(!post.liked);
+        assert!(!post.loved);
 
         let ideas: Vec<&Idea> = page.ideas.iter().flat_map(|g| &g.ideas).collect();
         assert_eq!(ideas.len(), 1, "{page:?}");
@@ -372,10 +515,10 @@ mod tests {
     #[test]
     fn dismiss_like_and_snooze_change_the_post() {
         let d = dirs("post", &sample());
-        let liked = act(&d.config, "post-1", Act::Like, &day(), NOW).expect("like");
-        assert!(liked.feed[0].liked);
-        // A second Like adds no second line.
-        act(&d.config, "post-1", Act::Like, &day(), NOW).expect("like again");
+        let loved = act(&d.config, "post-1", Act::Love, &day(), NOW).expect("love");
+        assert!(loved.feed[0].loved);
+        // A second Love adds no second line.
+        act(&d.config, "post-1", Act::Love, &day(), NOW).expect("love again");
         assert_eq!(
             memory(),
             "- [2026-10-25] pulse: liked \"Board\" reason=liked\n"
@@ -385,7 +528,7 @@ mod tests {
         assert!(snoozed.feed.is_empty(), "{snoozed:?}");
         // Back the next morning at nine.
         let tomorrow = pc::snooze_until(NOW, 14, 30);
-        assert_eq!(load(&d.config, tomorrow).expect("load").feed.len(), 1);
+        assert_eq!(load(&d.config, None, tomorrow).expect("load").feed.len(), 1);
 
         let gone = act(&d.config, "post-1", Act::Dismiss, &day(), tomorrow).expect("dismiss");
         assert!(gone.feed.is_empty());
@@ -441,11 +584,122 @@ mod tests {
         let d = dirs("empty", &[]);
         std::fs::remove_file(d.config.join(FILE)).expect("rm");
         assert_eq!(
-            load(&d.config, NOW),
+            load(&d.config, None, NOW),
             Ok(Page {
                 feed: Vec::new(),
                 ideas: Vec::new()
             })
         );
+    }
+
+    #[test]
+    fn love_and_discuss_feed_the_taste_summary_and_delete_does_not() {
+        let d = dirs("taste", &sample());
+        let page = act(&d.config, "post-1", Act::Love, &day(), NOW).expect("love");
+        assert!(page.feed[0].loved);
+        let seed = discuss(&d.config, "post-1", NOW + 1).expect("discuss");
+        assert_eq!(
+            seed,
+            "Let's talk about this post from my Pulse feed.\n\n**Board**\nsummarized 3 cards\n\nSource: https://example.com/board\n"
+        );
+        let state = pulse_feed::state(&d.config);
+        let kinds: Vec<(TasteKind, &str)> = state
+            .taste_events
+            .iter()
+            .map(|e| (e.kind, e.text.as_str()))
+            .collect();
+        assert_eq!(
+            kinds,
+            vec![(TasteKind::Love, "Board"), (TasteKind::Discuss, "Board")]
+        );
+        assert_eq!(state.last_engaged_ms, NOW + 1);
+
+        let before = memory();
+        let page = act(&d.config, "post-1", Act::Delete, &day(), NOW + 2).expect("delete");
+        assert!(page.feed.is_empty(), "{page:?}");
+        assert_eq!(memory(), before, "Delete writes no ledger line");
+        assert_eq!(pulse_feed::state(&d.config).taste_events.len(), 2);
+        let saved = std::fs::read_to_string(d.config.join(FILE)).expect("read");
+        assert!(!saved.contains("post-1"), "{saved}");
+        assert_eq!(
+            discuss(&d.config, "post-1", NOW),
+            Err("That card is gone. The page now shows what is left.".to_string())
+        );
+    }
+
+    #[test]
+    fn opening_pulse_counts_as_engagement_and_sets_the_clock() {
+        let d = dirs("open", &sample());
+        let noon = NOW - NOW % 86_400_000 + 12 * 3_600_000;
+        load(&d.config, Some(&day()), noon).expect("load");
+        let state = pulse_feed::state(&d.config);
+        assert_eq!(state.last_engaged_ms, noon);
+        // The page said 14:30 at 12:00 UTC.
+        assert_eq!(state.utc_offset_min, Some(150));
+    }
+
+    #[test]
+    fn the_prompt_saves_once_and_owes_one_post() {
+        let d = dirs("prompt", &[]);
+        let first = get_prompt(&d.config);
+        assert!(first.is_default);
+        assert_eq!(first.text, pc::DEFAULT_FEED_INSTRUCTIONS);
+        let saved = save_prompt(&d.config, "  Only Rust news.  ").expect("save");
+        assert_eq!(
+            saved,
+            Prompt {
+                text: "Only Rust news.".into(),
+                is_default: false,
+                note: String::new()
+            }
+        );
+        let state = pulse_feed::state(&d.config);
+        assert!(state.queued);
+    }
+
+    #[test]
+    fn why_prefers_the_writers_line() {
+        let mut cards = sample();
+        cards[1].why = Some("You run this board every day.".into());
+        let d = dirs("why", &cards);
+        assert_eq!(
+            why(&d.config, "post-1"),
+            Ok("You run this board every day.".to_string())
+        );
+        // An automation post keeps its own line.
+        let d = dirs("why-run", &sample());
+        assert_eq!(
+            why(&d.config, "post-1"),
+            Ok("Your automation “Board” finished.".to_string())
+        );
+        // A source post with neither line names the interest it matched.
+        let mut cards = sample();
+        cards[1].why = None;
+        cards[1].pulse.because = Some("rust".into());
+        let d = dirs("why-source", &cards);
+        assert_eq!(
+            why(&d.config, "post-1"),
+            Ok("It matched your interest in rust.".to_string())
+        );
+    }
+
+    #[test]
+    fn images_are_read_from_the_cache_by_their_own_names_only() {
+        let mut cards = sample();
+        let url = "https://example.com/hero.jpg";
+        cards[1].pulse.image_urls = vec![url.into(), "https://example.com/missing.png".into()];
+        let d = dirs("images", &cards);
+        let name = pc::image_cache_name(url);
+        let dir = pulse_feed::images_dir(&d.config);
+        std::fs::create_dir_all(&dir).expect("dir");
+        std::fs::write(dir.join(&name), [0xFF, 0xD8, 0xFF]).expect("img");
+        let page = load(&d.config, None, NOW).expect("load");
+        assert_eq!(page.feed[0].images, vec![name.clone()], "only cached ones");
+        assert_eq!(
+            image(&d.config, &name),
+            Ok("data:image/jpeg;base64,/9j/".to_string())
+        );
+        assert!(image(&d.config, "../updates.json").is_err());
+        assert!(image(&d.config, "0123456789abcdef.svg").is_err());
     }
 }

@@ -8,9 +8,10 @@
 //!   GrokHub or turning web access off ends every pairing. After [`IDLE`]
 //!   with no paired browser using it, the code is swapped for a new one and
 //!   every browser has to pair again.
-//! - Only [`WEB_COMMANDS`] run. The API key, settings, Pulse, Local AI and
-//!   desktop control stay on this computer, and web chats never get the
-//!   desktop tools.
+//! - Only [`WEB_COMMANDS`] run. The API key, settings, Local AI and desktop
+//!   control stay on this computer, and web chats never get the desktop
+//!   tools. Pulse works the same as on the desktop; its images come from
+//!   this computer's cache, never from the source sites.
 
 use std::collections::HashSet;
 use std::io::{Read, Write};
@@ -42,8 +43,8 @@ pub const IDLE: Duration = Duration::from_secs(30 * 60);
 pub const REFUSED: &str = "The web app can't do that. Use GrokHub on your computer.";
 pub const NOT_YOURS: &str = "That chat isn't open in this browser.";
 
-/// The web app's commands: chat with approvals, automations, memory and
-/// connectors, and reading the settings.
+/// The web app's commands: chat with approvals, automations, memory,
+/// connectors and Pulse, and reading the settings.
 pub const WEB_COMMANDS: &[&str] = &[
     "get_settings",
     "send_chat",
@@ -65,6 +66,13 @@ pub const WEB_COMMANDS: &[&str] = &[
     "restart_connector",
     "sign_out_connector",
     "disconnect_connector",
+    "get_pulse",
+    "pulse_act",
+    "pulse_discuss",
+    "pulse_why",
+    "get_feed_prompt",
+    "save_feed_prompt",
+    "pulse_image",
 ];
 
 pub fn web_command(name: &str) -> bool {
@@ -652,7 +660,7 @@ mod tests {
     }
 
     #[test]
-    fn the_web_gets_chat_memory_automations_and_connectors_only() {
+    fn the_web_gets_chat_memory_automations_connectors_and_pulse_only() {
         for name in [
             "send_chat",
             "answer_permission",
@@ -660,6 +668,13 @@ mod tests {
             "get_settings",
             "get_memory",
             "list_connectors",
+            "get_pulse",
+            "pulse_act",
+            "pulse_discuss",
+            "pulse_why",
+            "get_feed_prompt",
+            "save_feed_prompt",
+            "pulse_image",
         ] {
             assert!(web_command(name), "{name}");
         }
@@ -668,8 +683,6 @@ mod tests {
             "set_theme",
             "set_api_key",
             "clear_api_key",
-            "get_pulse",
-            "pulse_act",
             "get_interests",
             "add_interest",
             "interest_act",
