@@ -1079,7 +1079,7 @@ fn always_allow_stops_only_for_hard_classes() {
         "echo x > /boot/test",
         "rm -rf ~/Documents",
         "shred -u notes.txt",
-        "sendmail alex@example.com < report.txt",
+        "sendmail user@example.com < report.txt",
         "secret-tool lookup service nextdns",
         "cat ~/.local/share/keyrings/login.keyring",
     ] {

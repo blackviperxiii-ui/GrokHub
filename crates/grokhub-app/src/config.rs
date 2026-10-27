@@ -424,6 +424,10 @@ pub struct AppConfig {
     /// default voice. Tone only; approvals and safety rules never change.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub personality: String,
+    /// Settings → Personality → Adults-only personalities. Off hides the explicit presets
+    /// in every picker, and a chat set to one speaks in the default voice.
+    #[serde(default)]
+    pub explicit_personalities: bool,
     /// Settings → Memory retention: unsure, unlinked AMR notes not updated in
     /// this many days are retired once a day, apart from dream. 0 keeps all.
     #[serde(
@@ -480,6 +484,7 @@ pub struct AppConfig {
     /// Where `/recall` reads memory. Omitted from `app.json` while this stays
     /// legacy, so an old file and a default save do not grow a new key.
     /// Opt in with `"memory_backend": "amr"` (snake_case, not camelCase).
+    /// A missing `app.json` is a new install: [`load`] sets this to `amr`.
     /// There is no Settings control for it.
     #[serde(
         default,
@@ -487,6 +492,26 @@ pub struct AppConfig {
         skip_serializing_if = "grokhub_core::amr::MemoryBackend::is_legacy"
     )]
     pub memory_backend: grokhub_core::amr::MemoryBackend,
+    /// Set by [`load`] on a new install. An omitted key does not switch an
+    /// existing file, and the agent does not read this flag.
+    #[serde(default, rename = "memory_migrated", skip_serializing_if = "is_false")]
+    pub memory_migrated: bool,
+    /// Learned-memory writes. Omitted from `app.json` while this stays on.
+    /// `"memory_writes": false` stops notes, proposals and edits. Forget still works.
+    #[serde(
+        default = "default_host_on",
+        rename = "memory_writes",
+        skip_serializing_if = "is_true"
+    )]
+    pub memory_writes: bool,
+    /// Optional model dream after the deterministic nightly tidy.
+    /// Omitted from `app.json` while this stays off. `"dream_model": true` turns it on.
+    #[serde(default, rename = "dream_model", skip_serializing_if = "is_false")]
+    pub dream_model: bool,
+}
+
+fn is_true(v: &bool) -> bool {
+    *v
 }
 
 fn default_yolo() -> bool {
@@ -655,6 +680,7 @@ impl Default for AppConfig {
             screen_record: false,
             self_improve_quiet: false,
             personality: String::new(),
+            explicit_personalities: false,
             amr_retention_days: default_amr_retention_days(),
             chat_archive_days: default_chat_archive_days(),
             cua_driver: false,
@@ -671,6 +697,9 @@ impl Default for AppConfig {
             pulse_sources: Default::default(),
             daily_drop: DailyDropSettings::default(),
             memory_backend: grokhub_core::amr::MemoryBackend::Legacy,
+            memory_migrated: false,
+            memory_writes: true,
+            dream_model: false,
         }
     }
 }
@@ -799,7 +828,13 @@ pub fn drop_saved_effort(cfg: &mut AppConfig, dir: &std::path::Path) {
 
 pub fn load() -> AppConfig {
     let path = config_dir().join("app.json");
+    // A missing file is a new install. An existing file, even `{}`, keeps its backend.
+    let fresh = !path.is_file();
     let mut cfg: AppConfig = load_json(&path, JSON_STORE_CAP);
+    if fresh {
+        cfg.memory_backend = grokhub_core::amr::MemoryBackend::Amr;
+        cfg.memory_migrated = true;
+    }
     cfg.host_on = true;
     // Leftover `"yolo": true` from older cabins must not disable the bound-tree jail.
     cfg.yolo = false;
@@ -1025,6 +1060,21 @@ mod tests {
     use super::*;
 
     #[test]
+    fn dream_model_defaults_off_and_omits_the_key() {
+        let missing: AppConfig = serde_json::from_str("{}").unwrap();
+        assert!(!missing.dream_model);
+        let json = serde_json::to_string(&AppConfig::default()).unwrap();
+        assert!(
+            !json.contains("dream_model"),
+            "default config must omit dream_model: {json}"
+        );
+        let on: AppConfig = serde_json::from_str(r#"{"dream_model":true}"#).unwrap();
+        assert!(on.dream_model);
+        let saved = serde_json::to_string(&on).unwrap();
+        assert!(saved.contains("\"dream_model\":true"), "{saved}");
+    }
+
+    #[test]
     fn memory_backend_defaults_legacy_and_parses_amr() {
         let json = serde_json::to_string(&AppConfig::default()).unwrap();
         assert!(
@@ -1053,6 +1103,72 @@ mod tests {
             saved.contains("\"memory_backend\":\"amr\""),
             "amr opt-in must keep the snake_case key: {saved}"
         );
+        assert!(
+            !json.contains("memory_migrated"),
+            "default config must omit memory_migrated: {json}"
+        );
+    }
+
+    #[test]
+    fn memory_backend_new_install_is_amr_and_an_existing_file_stays_legacy() {
+        let _g = hold_test_config();
+        let root = test_config_root("amr-default");
+        let _ = fs::remove_dir_all(&root);
+        let _pin = TestConfigDir::set(root.clone());
+        fs::create_dir_all(&root).unwrap();
+        let fresh = load();
+        assert_eq!(fresh.memory_backend, grokhub_core::amr::MemoryBackend::Amr);
+        assert!(fresh.memory_migrated);
+        assert!(!root.join("app.json").is_file());
+        save(&fresh).unwrap();
+        let body = fs::read_to_string(root.join("app.json")).unwrap();
+        assert!(body.contains("\"memory_backend\": \"amr\""), "{body}");
+        assert!(body.contains("\"memory_migrated\": true"), "{body}");
+        let again = load();
+        assert_eq!(again.memory_backend, grokhub_core::amr::MemoryBackend::Amr);
+        assert!(again.memory_migrated);
+
+        fs::write(root.join("app.json"), "{}\n").unwrap();
+        let existing = load();
+        assert_eq!(
+            existing.memory_backend,
+            grokhub_core::amr::MemoryBackend::Legacy
+        );
+        assert!(!existing.memory_migrated);
+
+        fs::write(root.join("app.json"), "{\"memory_backend\":\"legacy\"}\n").unwrap();
+        let legacy = load();
+        assert!(legacy.memory_backend.is_legacy());
+        assert!(!legacy.memory_migrated);
+
+        fs::write(root.join("app.json"), "{\"memory_migrated\":true}\n").unwrap();
+        let flagged = load();
+        assert!(flagged.memory_backend.is_legacy());
+        assert!(flagged.memory_migrated);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn memory_writes_defaults_on_and_round_trips_off() {
+        let json = serde_json::to_string(&AppConfig::default()).unwrap();
+        assert!(
+            !json.contains("memory_writes"),
+            "default config must omit memory_writes: {json}"
+        );
+        let missing: AppConfig = serde_json::from_str("{}").unwrap();
+        assert!(missing.memory_writes);
+        let off: AppConfig = serde_json::from_str(r#"{"memory_writes":false}"#).unwrap();
+        assert!(!off.memory_writes);
+        let saved = serde_json::to_string(&off).unwrap();
+        assert!(
+            saved.contains("\"memory_writes\":false"),
+            "off must keep the snake_case key: {saved}"
+        );
+        let on: AppConfig = serde_json::from_str(r#"{"memory_writes":true}"#).unwrap();
+        assert!(on.memory_writes);
+        assert!(!serde_json::to_string(&on)
+            .unwrap()
+            .contains("memory_writes"));
     }
 
     #[test]
@@ -1688,13 +1804,13 @@ mod tests {
         assert!(parsed.display_name.is_empty());
         assert!(parsed.profile_picture.is_empty());
         let named = AppConfig {
-            display_name: "Alex".into(),
+            display_name: "User".into(),
             profile_picture: "/cfg/profile.png".into(),
             ..Default::default()
         };
         save(&named).expect("profile save");
         let loaded = load();
-        assert_eq!(loaded.display_name, "Alex");
+        assert_eq!(loaded.display_name, "User");
         assert_eq!(loaded.profile_picture, "/cfg/profile.png");
         let _ = fs::remove_dir_all(&root);
         std::env::remove_var("GROKHUB_CONFIG");

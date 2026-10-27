@@ -9,6 +9,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 
+use grokhub_core::wire::ElicitChoice;
 use serde_json::{json, Value};
 
 use crate::gate::Gate;
@@ -85,7 +86,8 @@ pub fn schemas() -> Vec<Value> {
                                         "type": "object",
                                         "properties": {
                                             "label": {"type": "string"},
-                                            "description": {"type": "string"}
+                                            "description": {"type": "string"},
+                                            "recommended": {"type": "boolean"}
                                         },
                                         "required": ["label"],
                                         "additionalProperties": false
@@ -344,15 +346,26 @@ fn apply_todos(todos: &mut Vec<TodoItem>, value: &Value) -> Result<(), String> {
 fn report_findings(arguments: &str, on_event: &mut dyn FnMut(LoopEvent)) -> ToolOutput {
     let card = serde_json::from_str::<Value>(arguments)
         .map_err(|_| "report_findings arguments must be a JSON object".to_string())
-        .and_then(|value| grokhub_core::findings::Findings::from_json(&value));
+        .and_then(|value| grokhub_core::findings::Findings::from_json_dropping(&value));
     match card {
-        Ok(card) => {
+        Ok((card, dropped)) => {
             on_event(LoopEvent::Findings(card.to_body()));
-            ToolOutput::ok(format!(
+            let mut out = format!(
                 "Findings card posted: {} findings, {} one-tap fixes. It shows after your reply.",
                 card.items.len(),
                 card.fixes.len()
-            ))
+            );
+            if !dropped.is_empty() {
+                out.push_str(&format!(
+                    " Left out {} that no follow-up run can carry out. Don't post the card again.",
+                    dropped
+                        .iter()
+                        .map(|l| format!("\"{l}\""))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ));
+            }
+            ToolOutput::ok(out)
         }
         Err(err) => ToolOutput::err(err),
     }
@@ -383,6 +396,7 @@ fn ask(call: SessionCall<'_>) -> ToolOutput {
         Ok(message) => message,
         Err(err) => return ToolOutput::err(err),
     };
+    let options = question_choices(&value);
     let id = next_id("ask");
     let view = ElicitView {
         id: id.clone(),
@@ -394,6 +408,7 @@ fn ask(call: SessionCall<'_>) -> ToolOutput {
         field_name: Some("answer".into()),
         field_title: "Your answer".into(),
         secret: false,
+        options,
     };
     (call.on_event)(LoopEvent::Elicit(view));
     match mcp::wait_elicit(call.session, &id, call.cancel, call.halted) {
@@ -413,6 +428,50 @@ fn ask(call: SessionCall<'_>) -> ToolOutput {
         mcp::ElicitAnswer::Decline => ToolOutput::err("User declined the question"),
         mcp::ElicitAnswer::Cancel => ToolOutput::err("User cancelled the question"),
     }
+}
+
+/// Tappable answers for a card that asks one single-choice question.
+/// The recommended option comes first; only the first one marked counts.
+fn question_choices(value: &Value) -> Vec<ElicitChoice> {
+    let rows = match value.get("questions").and_then(|item| item.as_array()) {
+        Some(rows) if rows.len() == 1 => rows,
+        _ => return Vec::new(),
+    };
+    let row = &rows[0];
+    if row.get("multi_select").and_then(|item| item.as_bool()) == Some(true) {
+        return Vec::new();
+    }
+    let mut picked = false;
+    let mut choices: Vec<ElicitChoice> = row
+        .get("options")
+        .and_then(|item| item.as_array())
+        .into_iter()
+        .flatten()
+        .filter_map(|option| {
+            let text = |key: &str| {
+                option
+                    .get(key)
+                    .and_then(|item| item.as_str())
+                    .unwrap_or("")
+                    .trim()
+                    .to_string()
+            };
+            let label = text("label");
+            if label.is_empty() {
+                return None;
+            }
+            let marked = option.get("recommended").and_then(|item| item.as_bool()) == Some(true);
+            let recommended = marked && !picked;
+            picked |= recommended;
+            Some(ElicitChoice {
+                label,
+                description: text("description"),
+                recommended,
+            })
+        })
+        .collect();
+    choices.sort_by_key(|choice| !choice.recommended);
+    choices
 }
 
 fn question_message(value: &Value) -> Result<String, String> {
@@ -457,6 +516,15 @@ fn question_message(value: &Value) -> Result<String, String> {
                     .and_then(|item| item.as_str())
                     .unwrap_or("")
                     .trim();
+                let recommended = option
+                    .get("recommended")
+                    .and_then(|item| item.as_bool())
+                    .unwrap_or(false);
+                let label = if recommended {
+                    format!("{label} (Recommended)")
+                } else {
+                    label.to_string()
+                };
                 if description.is_empty() {
                     block.push_str(&format!("\n- {label}"));
                 } else {
@@ -512,6 +580,7 @@ fn exit_plan(call: SessionCall<'_>) -> ToolOutput {
         field_name: None,
         field_title: String::new(),
         secret: false,
+        options: Vec::new(),
     };
     (call.on_event)(LoopEvent::Elicit(view));
     match mcp::wait_elicit(call.session, &id, call.cancel, call.halted) {
@@ -781,6 +850,52 @@ mod tests {
     }
 
     #[test]
+    fn a_question_marks_the_recommended_option() {
+        let value = json!({"questions":[{"question":"Which fix?","options":[
+            {"label":"Pin the crate","description":"smallest change","recommended":true},
+            {"label":"Upgrade everything"}
+        ]}]});
+        assert_eq!(
+            question_message(&value).expect("message"),
+            "1. Which fix?\n- Pin the crate (Recommended): smallest change\n- Upgrade everything\n\nReply with the option label."
+        );
+        assert_eq!(
+            question_choices(&value),
+            vec![
+                ElicitChoice {
+                    label: "Pin the crate".into(),
+                    description: "smallest change".into(),
+                    recommended: true,
+                },
+                ElicitChoice {
+                    label: "Upgrade everything".into(),
+                    description: String::new(),
+                    recommended: false,
+                },
+            ]
+        );
+        let two =
+            json!({"questions":[{"question":"A?","options":[{"label":"x"}]},{"question":"B?"}]});
+        assert_eq!(
+            question_choices(&two),
+            Vec::new(),
+            "several questions are typed"
+        );
+        let many =
+            json!({"questions":[{"question":"A?","multi_select":true,"options":[{"label":"x"}]}]});
+        assert_eq!(question_choices(&many), Vec::new(), "multi-select is typed");
+        let schema = schemas()
+            .into_iter()
+            .find(|tool| tool["name"] == "ask_user_question")
+            .expect("ask tool");
+        assert_eq!(
+            schema["parameters"]["properties"]["questions"]["items"]["properties"]["options"]
+                ["items"]["properties"]["recommended"],
+            json!({"type": "boolean"})
+        );
+    }
+
+    #[test]
     fn ask_user_question_waits_when_attended_and_errors_when_unattended() {
         let session = sid("ask");
         let mut gate = chat(true, false);
@@ -965,5 +1080,30 @@ mod tests {
         assert!(!dir.join("ask.txt").exists());
         assert!(!plan_on(&ask_mode));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_findings_card_with_a_made_up_fix_posts_once_without_it() {
+        let mut cards = Vec::new();
+        let out = report_findings(
+            r#"{"findings":[{"severity":"medium","text":"Pulse can't read the Steam library yet"}],
+                "fixes":[{"label":"Reference Memory in pulse logic","goal":"Reference memory in pulse logic"},
+                         {"label":"Explain all","goal":"Explain each finding in plain words."}]}"#,
+            &mut |ev| cards.push(ev),
+        );
+        assert!(!out.failed);
+        assert_eq!(
+            out.text,
+            "Findings card posted: 1 findings, 1 one-tap fixes. It shows after your reply. \
+             Left out \"Reference Memory in pulse logic\" that no follow-up run can carry out. Don't post the card again."
+        );
+        assert_eq!(
+            cards,
+            [LoopEvent::Findings(
+                "Findings from this run\n\n- Medium: Pulse can't read the Steam library yet\n\n\
+                 One-tap fixes\n\n- Explain all: Explain each finding in plain words."
+                    .into()
+            )]
+        );
     }
 }

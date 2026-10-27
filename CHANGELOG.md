@@ -2,6 +2,53 @@
 
 ## Unreleased
 
+## 3.3.0 — 2026-10-27
+
+- Personalities: an adults-only switch in Settings → Personality (cabin and shell), off by default. Off hides explicit presets such as Viper in every picker, and a chat set to one speaks in the default voice; the quick picker tags explicit presets.
+- Care-first routing stays off. The brain policy `care_first` switch can hold `chat:default` effort, let the Brief pick the goal, and soften the 60, 150 and 120 word targets. The offline dry-run had no live quality judge, so the shipped file keeps the switch false.
+- The default voice keeps a values charter (honest, not sycophantic), learned memory rows show their source and date and wait for approval, and a sycophancy check blocks a skill patch that would agree with a wrong claim.
+- A multi-step chat checks once before it stops, and that chat's open intentions stay on disk.
+- Agent: a feature ask like "use X for Y" no longer runs the repair checklist, a checklist item only counts as done after a new tool result, a blocked item can't flip back to done without one, adding new items without finishing any counts toward the 3 re-plan cap, a "done" reply with no tool run gets an honest line, and made-up one-tap fixes are dropped from the findings card instead of refused and re-posted.
+- Model dream stays off until `app.json` sets `"dream_model": true`.
+- After the deterministic dream, one nightly `background:dream` call asks for medium effort. That route starts at low and its ceiling is medium. The reply is capped at 4096 output tokens.
+- Lessons pass `lesson_checks` and the change ledger. Undo restores the previous skill file.
+- USER and SOUL lines stay proposed until you approve them.
+- While the flag is on, a turn's reflect or remember proposes those lines instead of writing them into core memory.
+- Chat keeps a capped SOUL block and the approved USER block in the volatile prompt tail, recalls only new memory hits on later turns (1,024-token cap, override with recall_token_cap in app.json), and starts new installs on the AMR backend with legacy dual-read. An existing app.json that omits memory_backend stays on legacy; set "memory_backend": "amr" to opt in (memory_migrated is set on a new install).
+- Chat: replies lead with the result instead of ending on a generic "What's next?". The "What's next", "Next step" and "Take the next step" chips are gone, suggested chips must name a specific action (or there are none), and the agent does an obvious, reversible next step itself.
+- Chat: when the agent needs a decision it asks with 2 to 4 options and marks the one it recommends. The Butler, Drill Sergeant and Friendly Neighbor voices no longer close on a question.
+- Shell chat: Grok's questions show their options as buttons, recommended first; a reply that hit an error or named a fix gets up to three one-tap follow-ups (most replies get none); and an automation's Run now posts a Finished or Failed notice in chat with a one-tap follow-up.
+- Native agent: with deferred tools on, the eager tool list is now the general coding set (read, list, grep, glob, edit, write, shell) plus the self-manage list tools; scheduler, media, desktop, connection and self-manage write tools load on demand from a sorted one-line-per-tool index. A per-profile schema byte budget test keeps it from growing back. Technique from the Reason Agent 1.1 post, reimplemented.
+- The agent can check Local AI itself: `local_ai_status` reports whether it's on, the engine and model paths, loaded or idle, the network state, recent health lines and the last offline event. `local_ai_selftest` asks the on-device model one short question without the network, only when called and after your OK.
+- Local AI now gets its engine on its own: turning it on, or launching with it on, downloads the pinned llama.cpp `llama-server` when none is in `GROKHUB_LLAMA_SERVER`, `{config}/bin` or `PATH`. On x86_64 Linux and Windows it is now the Vulkan build, which uses an AMD, Intel or NVIDIA GPU and falls back to the CPU.
+- Settings → Local engine shows Runtime ready, Runtime missing, Loading or Error with the reason, and offline requests say "Runtime missing" instead of failing silently.
+- Fixed: the Linux engine install wrote its shared-library links as empty files, so `llama-server` couldn't start. CPU-only launches no longer pair a q8_0 KV cache with flash attention off, which llama-server refused.
+- Fixed: the on-device route only looked for its engine and model when `GROKHUB_CONFIG` was set, so in a normal launch Local AI never ran. It now reads the cabin's own config folder.
+- Local AI keeps a small log at `models/local_health.jsonl`: engine starts with their load time, stops, missing engine or model, out-of-memory, GPU backend and other start failures, network changes (online, offline, degraded), and where each offline turn went. No prompts, answers or keys, and the home folder is written as `~`.
+- Local AI: first-run setup and Settings now let you pick which on-device model to download from a short list (the one that fits your machine is marked recommended), switch to another downloaded model without reinstalling, and remove models you no longer use. A switch takes effect on the next request, and the model picked in the desktop shell's Settings → Local AI is the one that runs.
+- Offline with no working on-device model, a chat turn no longer fails silently. The chat says "Offline, local model unavailable" and why (runtime missing, no model, Local AI off, or the start error), keeps your message, and answers it once the network is back with a note: "answered after reconnect".
+- Personalities: a new adults-only "Whore" preset, tagged Explicit like Viper and never picked by default; it keeps hard limits (adults only, consent, no real people) and drops the act when told to stop.
+- Native agent: an append-only prefix guard logs any request whose cached prefix (system, tools, earlier turns) changed for an unexpected reason, and the native usage line now shows each turn's cache hit share ("cache N%"). Technique from the Reason Agent 1.1 post, reimplemented.
+- Pulse Feed (shell): posts are cards in one centered column with a 3D topic emoji, cited snippet, and a hero image or a square gallery that opens a lightbox with Download. Love and Discuss sit under each post; a menu holds the full date, "Why I created this" and Delete. More posts load as you scroll.
+- Pulse Feed (shell): Edit feed instructions saves what your feed should cover and writes a new post right away.
+- Web app: Pulse is now available in the browser.
+- Pulse Feed (shell): posts are now short model-written briefings from the free sources, with inline cites checked against the pages fetched that run, a topic emoji, a "why you're seeing this" line and up to three images cached on this computer.
+- Pulse Feed: a system cadence replaces the "Check every" choice. Posts come every two hours, every 90 minutes after you open Pulse or love or discuss a post, and every four hours after three quiet days. Saving the feed prompt writes one post right away.
+- Pulse Feed: a short taste summary, rebuilt from what you love, discuss and say in chat, steers the writer. Reading a post never counts. Like is now Love, and Delete removes a post without teaching the feed anything.
+- Pulse Feed lists every post newest first, with no score cutoff.
+- Pulse Ideas are written for you in the background (at most every six hours) from your journal questions, interests, recent chats and feed posts. Each has an emoji, a short title and an "I can …" line, and retires after two weeks unless you edit it.
+- Pulse Ideas: the first three ideas lead with no header, then Productivity, Financial Management, Shopping, Relationships and Health & Fitness. This order applies to the cabin too.
+- Pulse Ideas (shell): rows with a clay icon. A click is Let's do it; the menu adds More like this and Not interested. Snooze is gone from ideas.
+- Eval: the R6 technique A/B now measures each arm from the requests it actually sends (prefix shared with the previous request, tool-schema bytes per request, model calls per task, tool calls per model call) instead of fixed fixture usage, and the report gives a per-arm verdict from those numbers. Measurement idea from the Reason Agent 1.1 post (reasonmachines.com/blog/introducing-reason-agent-1-1). No defaults change.
+- Shell on phones: the views bar sits at the bottom and slides away while you scroll down, then comes back when you scroll up, reach the top, or tap into a field.
+- Shell: pulling a page past its top or bottom on a touch screen now stretches it with iOS-style resistance and snaps back on release (Chat, Pulse, Automations, Memory, Connectors, Settings). Reduced motion turns the stretch off.
+- Shell Settings: on/off options (desktop control, close to tray, and the Local AI rules) are slider switches again instead of round checkmark bubbles.
+- Docs: skill cues in AGENTS.md and CLAUDE.md for when to reach for coding skills.
+
+- Linux: `grokhub-linux-v3.3.0.tar.gz` and AUR `pkgver=3.3.0`.
+- Windows: `GrokHub-Setup-3.3.0.exe` and `grokhub-windows-v3.3.0.zip`.
+- Shell (Tauri): `grokhub-shell-v3.3.0-linux-amd64.deb`, `grokhub-shell-v3.3.0-linux-amd64.AppImage`, `GrokHub-Shell-Setup-3.3.0.exe` and `grokhub-shell-v3.3.0-macos-arm64.dmg`.
+
 ## 3.2.0 — 2026-10-26
 
 - Release: add the minisign public key (`packaging/minisign.pub`); the updater now verifies `SHA256SUMS.minisig`.

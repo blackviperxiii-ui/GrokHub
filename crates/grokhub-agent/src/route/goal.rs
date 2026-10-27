@@ -16,6 +16,8 @@ pub enum Goal {
     Quality,
     Cost,
     Balanced,
+    /// Hold the class start. Care-first chat uses this instead of speed.
+    Care,
 }
 
 impl Goal {
@@ -25,6 +27,7 @@ impl Goal {
             "quality" => Some(Self::Quality),
             "cost" => Some(Self::Cost),
             "balanced" => Some(Self::Balanced),
+            "care" => Some(Self::Care),
             _ => None,
         }
     }
@@ -35,6 +38,7 @@ impl Goal {
             Self::Quality => "quality",
             Self::Cost => "cost",
             Self::Balanced => "balanced",
+            Self::Care => "care",
         }
     }
 }
@@ -136,7 +140,7 @@ pub fn goal_start(
         Goal::Quality => rung.max((band.start + 1).min(band.ceiling.min(high()).max(band.start))),
         Goal::Speed => rung.min(band.start.saturating_sub(1).max(band.floor)),
         Goal::Cost => band.floor,
-        Goal::Balanced => rung,
+        Goal::Balanced | Goal::Care => rung,
     };
     if moved != rung {
         rules.push(format!("goal:{}", g.goal.as_str()));
@@ -179,6 +183,11 @@ mod tests {
             goal_start(b, (3, vec![]), Steer::None, Some(&goal("balanced"))),
             (3, vec![])
         );
+        assert_eq!(
+            goal_start(b, (3, vec![]), Steer::None, Some(&goal("care"))),
+            (3, vec![])
+        );
+        assert_eq!(goal("care").goal, Goal::Care);
         assert_eq!(goal_start(b, (3, vec![]), Steer::None, None), (3, vec![]));
         // d>0.7 already raised it: quality doesn't stack a second rung.
         assert_eq!(

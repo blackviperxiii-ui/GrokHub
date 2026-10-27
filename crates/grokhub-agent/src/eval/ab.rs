@@ -13,9 +13,11 @@ use crate::gate::PermMode;
 use crate::prompt::{system_prompt_with, PromptNeed, PromptProfile};
 use crate::{run_unattended, AuthKind, CancelToken, HaltCheck, ModelClient, UnattendedRun, Usage};
 
+pub use super::care_first::{care_first_default_on, run_care_first_ab, CARE_FIRST_SHIPS_ON};
 use super::metrics::{
-    format_report, gate, offline_cost_ticks, recommend, success_within_noise, AbComparison,
-    AbGateFailure, ArmMetrics, Recommendation, TechniqueDelta,
+    derive_usage, format_report, gate, offline_cost_ticks, recommend, success_within_noise,
+    AbComparison, AbGateFailure, ArmMetrics, CapturedRequest, Recommendation, RequestTotals,
+    TechniqueDelta,
 };
 use crate::compact::TOOL_OUTPUT_COMPACT_CONFIG;
 use crate::perm::ConfigGuard;
@@ -29,6 +31,9 @@ pub const AB_EVAL_CLASS: &str = "eval:ab";
 pub struct TaskFixture {
     pub id: String,
     pub prompt: String,
+    /// Later user turns in the same session (each resumes the saved transcript).
+    #[serde(default)]
+    pub followups: Vec<String>,
     #[serde(default = "default_mode")]
     pub mode: String,
     #[serde(default)]
@@ -61,6 +66,18 @@ pub enum ScriptStep {
         #[serde(default)]
         usage: StepUsage,
     },
+    /// Several tool calls in one model reply.
+    Tools {
+        calls: Vec<ToolSeed>,
+        #[serde(default)]
+        usage: StepUsage,
+    },
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ToolSeed {
+    pub name: String,
+    pub arguments: Value,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -204,6 +221,8 @@ pub struct TaskRun {
     pub tool_calls: u64,
     pub cached_tokens: u64,
     pub cost_ticks: i64,
+    /// Shape of the task's outbound requests (model calls, prefix, schema bytes).
+    pub requests: RequestTotals,
 }
 
 #[derive(Debug, Clone)]
@@ -289,6 +308,7 @@ pub fn run_ab(model: &str, variant: &dyn VariantSystem) -> Result<AbReport, Stri
                 run.cached_tokens,
                 run.cost_ticks,
             );
+            metrics.record_requests(&run.requests);
             runs.push(run);
         }
     }
@@ -375,6 +395,7 @@ fn run_technique_arm(
             run.cached_tokens,
             run.cost_ticks,
         );
+        metrics.record_requests(&run.requests);
         tasks.push(run);
     }
     let _ = std::fs::remove_dir_all(&cfg);
@@ -422,45 +443,54 @@ fn run_one_task(
         ArmKind::Variant => variant.system(&dir),
     };
     let mode = perm_mode(&task.mode)?;
-    let client = Arc::new(ScriptedTask::new(task.script.clone()));
+    let client = Arc::new(ScriptedTask::new(task.script.clone(), &dir));
     let shared: Arc<dyn ModelClient + Send + Sync> = client.clone();
     let session = format!("eval-ab-{}-{}", task.id, arm_label(arm));
+    drop_session_file(&session);
     let start = Instant::now();
-    let done = run_unattended(UnattendedRun {
-        client: shared,
-        workspace: dir.clone(),
-        model: model.to_string(),
-        effort: Some("high".into()),
-        system,
-        session_id: session.clone(),
-        auth_kind: AuthKind::ApiKey,
-        prompt: task.prompt.clone(),
-        image: None,
-        mode,
-        readonly_session: false,
-        desktop: false,
-        cancel: CancelToken::new(),
-        halt: Box::new(NoHalt),
-        desktop_ops: None,
-        imagine_bearer: String::new(),
-        resume: false,
-    });
+    let prompts = std::iter::once(&task.prompt).chain(&task.followups);
+    let mut done = None;
+    let mut output_tokens = 0u64;
+    let mut reasoning_tokens = 0u64;
+    for (turn, prompt) in prompts.enumerate() {
+        let run = run_unattended(UnattendedRun {
+            client: shared.clone(),
+            workspace: dir.clone(),
+            model: model.to_string(),
+            effort: Some("high".into()),
+            system: system.clone(),
+            session_id: session.clone(),
+            auth_kind: AuthKind::ApiKey,
+            prompt: prompt.clone(),
+            image: None,
+            mode,
+            readonly_session: false,
+            desktop: false,
+            cancel: CancelToken::new(),
+            halt: Box::new(NoHalt),
+            desktop_ops: None,
+            imagine_bearer: String::new(),
+            resume: turn > 0,
+        });
+        // A resumed turn reports the session's running total; keep the last one.
+        output_tokens = run.usage.output_tokens;
+        reasoning_tokens = run.usage.reasoning_tokens;
+        done = Some(run);
+    }
+    let done = done.expect("a task has at least one prompt");
     let wall_ms = start.elapsed().as_millis();
     crate::tasks::forget_session(&session);
+    drop_session_file(&session);
     let (success, detail) = evaluate_checks(&task.checks, &done, &dir);
     let tool_calls = client.tool_calls();
-    let usage = done.usage;
-    let cached_tokens = usage.cached_tokens;
-    let cost_ticks = if usage.cost_in_usd_ticks != 0 {
-        usage.cost_in_usd_ticks
-    } else {
-        offline_cost_ticks(
-            usage.input_tokens,
-            usage.output_tokens,
-            usage.reasoning_tokens,
-            cached_tokens,
-        )
-    };
+    // Input and cache come from the captured requests, not the fixture's numbers.
+    let requests = derive_usage(&client.requests());
+    let cost_ticks = offline_cost_ticks(
+        requests.input_tokens,
+        output_tokens,
+        reasoning_tokens,
+        requests.cached_tokens,
+    );
     let _ = std::fs::remove_dir_all(&dir);
     Ok(TaskRun {
         task_id: task.id.clone(),
@@ -468,13 +498,21 @@ fn run_one_task(
         success,
         detail,
         wall_ms,
-        input_tokens: usage.input_tokens,
-        output_tokens: usage.output_tokens,
-        reasoning_tokens: usage.reasoning_tokens,
+        input_tokens: requests.input_tokens,
+        output_tokens,
+        reasoning_tokens,
         tool_calls,
-        cached_tokens,
+        cached_tokens: requests.cached_tokens,
         cost_ticks,
+        requests,
     })
+}
+
+/// Remove the saved transcript so a later arm starts fresh (follow-up turns resume it).
+fn drop_session_file(session: &str) {
+    if let Ok(path) = crate::session::session_file(session) {
+        let _ = std::fs::remove_file(path);
+    }
 }
 
 fn arm_label(arm: ArmKind) -> &'static str {
@@ -569,26 +607,137 @@ struct ScriptedTask {
     steps: Mutex<Vec<ScriptStep>>,
     turns: AtomicUsize,
     tool_calls: AtomicUsize,
+    requests: Mutex<Vec<CapturedRequest>>,
+    workspace: PathBuf,
 }
 
 impl ScriptedTask {
-    fn new(steps: Vec<ScriptStep>) -> Self {
+    fn new(steps: Vec<ScriptStep>, workspace: &Path) -> Self {
         Self {
+            workspace: workspace.to_path_buf(),
             steps: Mutex::new(steps),
             turns: AtomicUsize::new(0),
             tool_calls: AtomicUsize::new(0),
+            requests: Mutex::new(Vec::new()),
         }
     }
 
     fn tool_calls(&self) -> u64 {
         u64::try_from(self.tool_calls.load(Ordering::SeqCst)).unwrap_or(u64::MAX)
     }
+
+    fn requests(&self) -> Vec<CapturedRequest> {
+        self.requests
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .clone()
+    }
+}
+
+/// Render a request in prompt-cache order: leading system messages, the tools
+/// array, then the rest of the input. Uses the real wire body, with the scratch
+/// workspace path replaced and line endings folded to LF, so two runs (and two
+/// platforms) render the same bytes.
+pub fn capture_request(req: &ResponsesRequest, workspace: &Path) -> CapturedRequest {
+    let mut body = crate::responses_body(req);
+    scrub_workspace(&mut body, &workspace_spellings(workspace));
+    mask_shell_outputs(&mut body["input"]);
+    let tools = serde_json::to_string(&body["tools"]).unwrap_or_default();
+    let input = body["input"].as_array().cloned().unwrap_or_default();
+    let lead = input
+        .iter()
+        .take_while(|item| item["role"] == "system")
+        .count();
+    let mut parts = Vec::with_capacity(input.len() + 1);
+    for item in &input[..lead] {
+        parts.push(item.to_string());
+    }
+    parts.push(tools.clone());
+    for item in &input[lead..] {
+        parts.push(item.to_string());
+    }
+    CapturedRequest {
+        body: parts.join("\n"),
+        schema_bytes: tools.len() as u64,
+    }
+}
+
+const WORKSPACE_MARK: &str = "<workspace>";
+const SHELL_OUTPUT_MARK: &str = "<shell output>";
+const TERMINAL_TOOL: &str = "run_terminal_command";
+
+/// A terminal command's output is the host shell's (sh or PowerShell), not the
+/// harness's, so it is measured as a fixed placeholder on every platform.
+fn mask_shell_outputs(input: &mut Value) {
+    let Some(items) = input.as_array_mut() else {
+        return;
+    };
+    let mut shell_calls = std::collections::BTreeSet::new();
+    for item in items {
+        let call_id = item["call_id"].as_str().unwrap_or_default().to_string();
+        match item["type"].as_str() {
+            Some("function_call") => {
+                if item["name"] == TERMINAL_TOOL {
+                    shell_calls.insert(call_id);
+                } else {
+                    shell_calls.remove(&call_id);
+                }
+            }
+            Some("function_call_output") if shell_calls.contains(&call_id) => {
+                item["output"] = Value::String(SHELL_OUTPUT_MARK.into());
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Every way a tool output may spell the scratch workspace: as given, resolved
+/// (on Windows that expands short `RUNNER~1` names and adds `\\?\`), and with
+/// forward slashes. Longest first so a longer spelling is replaced whole.
+fn workspace_spellings(workspace: &Path) -> Vec<String> {
+    let mut out = vec![workspace.display().to_string()];
+    if let Ok(real) = workspace.canonicalize() {
+        let real = real.display().to_string();
+        if let Some(plain) = real.strip_prefix(r"\\?\") {
+            out.push(plain.to_string());
+        }
+        out.push(real);
+    }
+    let slashed: Vec<String> = out.iter().map(|s| s.replace('\\', "/")).collect();
+    out.extend(slashed);
+    out.sort_by_key(|s| std::cmp::Reverse(s.len()));
+    out.dedup();
+    out
+}
+
+/// Replace the workspace, then fold CRLF and backslashes, so a request renders
+/// the same bytes on every run and platform.
+fn scrub_workspace(value: &mut Value, spellings: &[String]) {
+    match value {
+        Value::String(text) => {
+            for spelling in spellings {
+                if text.contains(spelling.as_str()) {
+                    *text = text.replace(spelling.as_str(), WORKSPACE_MARK);
+                }
+            }
+            if text.contains(['\r', '\\']) {
+                *text = text.replace("\r\n", "\n").replace('\\', "/");
+            }
+        }
+        Value::Array(items) => items
+            .iter_mut()
+            .for_each(|item| scrub_workspace(item, spellings)),
+        Value::Object(map) => map
+            .values_mut()
+            .for_each(|item| scrub_workspace(item, spellings)),
+        _ => {}
+    }
 }
 
 impl ModelClient for ScriptedTask {
     fn stream(
         &self,
-        _req: &ResponsesRequest,
+        req: &ResponsesRequest,
         cancel: &CancelToken,
         sink: &mut dyn FnMut(StreamEvent),
     ) -> Result<TurnOutput, ClientError> {
@@ -596,6 +745,10 @@ impl ModelClient for ScriptedTask {
             return Err(ClientError::Cancelled);
         }
         self.turns.fetch_add(1, Ordering::SeqCst);
+        self.requests
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .push(capture_request(req, &self.workspace));
         let step = {
             let mut steps = self.steps.lock().unwrap_or_else(|err| err.into_inner());
             if steps.is_empty() {
@@ -632,6 +785,24 @@ impl ModelClient for ScriptedTask {
                         name,
                         arguments: arguments.to_string(),
                     }],
+                    usage: usage_from(&usage),
+                    ..Default::default()
+                })
+            }
+            ScriptStep::Tools { calls, usage } => {
+                self.tool_calls.fetch_add(calls.len(), Ordering::SeqCst);
+                Ok(TurnOutput {
+                    text: String::new(),
+                    reasoning: String::new(),
+                    calls: calls
+                        .into_iter()
+                        .enumerate()
+                        .map(|(i, call)| FunctionCall {
+                            call_id: format!("eval-{i}"),
+                            name: call.name,
+                            arguments: call.arguments.to_string(),
+                        })
+                        .collect(),
                     usage: usage_from(&usage),
                     ..Default::default()
                 })
@@ -689,10 +860,52 @@ mod tests {
     fn fixture_count_is_about_twenty() {
         let tasks = load_tasks().expect("fixtures");
         assert!(
-            (18..=22).contains(&tasks.len()),
+            (18..=24).contains(&tasks.len()),
             "expected ~20 tasks, got {}",
             tasks.len()
         );
+    }
+
+    #[test]
+    fn capture_request_puts_system_then_tools_then_turns_and_scrubs_workspace() {
+        let ws = Path::new("/tmp/gh-eval-ab-x-1-2");
+        let msg = |role: &str, text: &str| crate::client::InputItem::Message {
+            role: role.into(),
+            content: vec![crate::client::ContentPart::InputText(text.into())],
+        };
+        let req = ResponsesRequest {
+            model: DEFAULT_MODEL.into(),
+            effort: None,
+            input: vec![
+                msg("system", "rules for /tmp/gh-eval-ab-x-1-2"),
+                msg("user", "hi"),
+            ],
+            conversation_id: String::new(),
+            tools: vec![serde_json::json!({"name": "read_file"})],
+            hosted_search: false,
+            call_timeout: None,
+        };
+        let got = capture_request(&req, ws);
+        let lines: Vec<&str> = got.body.split('\n').collect();
+        assert_eq!(lines.len(), 3, "{}", got.body);
+        assert!(lines[0].contains("rules for <workspace>"), "{}", lines[0]);
+        assert_eq!(lines[1], r#"[{"name":"read_file"}]"#);
+        assert!(lines[2].contains(r#""text":"hi""#), "{}", lines[2]);
+        assert_eq!(got.schema_bytes, 22);
+        assert!(!got.body.contains("gh-eval-ab-x"));
+    }
+
+    #[test]
+    fn mask_shell_outputs_hides_only_terminal_results() {
+        let mut input = serde_json::json!([
+            {"type": "function_call", "call_id": "eval", "name": "run_terminal_command", "arguments": "{}"},
+            {"type": "function_call_output", "call_id": "eval", "output": "hi\nPS C:\\> "},
+            {"type": "function_call", "call_id": "eval", "name": "read_file", "arguments": "{}"},
+            {"type": "function_call_output", "call_id": "eval", "output": "A"}
+        ]);
+        mask_shell_outputs(&mut input);
+        assert_eq!(input[1]["output"], "<shell output>");
+        assert_eq!(input[3]["output"], "A");
     }
 
     #[test]
@@ -710,5 +923,25 @@ mod tests {
         assert!(read("deferred_tools.toml").contains("enabled = true"));
         assert!(read("batched_tools.toml").contains("enabled = true"));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn care_first_arm_stays_off_on_the_fixed_set() {
+        let report = run_care_first_ab().expect("care-first");
+        assert!(!report.ships_on);
+        assert_eq!(report.ships_on, CARE_FIRST_SHIPS_ON);
+        assert!(report.quality_judge.is_none());
+        assert!(report.turns.iter().any(|turn| turn.kind == "emotional"));
+        assert!(report.turns.iter().any(|turn| turn.kind == "open"));
+        assert!(report.why.contains("Skipped: live quality judge"));
+        assert_eq!(
+            care_first_default_on(
+                false,
+                report.cost_ratio,
+                report.p95_ratio,
+                report.words_ratio
+            ),
+            report.ships_on
+        );
     }
 }

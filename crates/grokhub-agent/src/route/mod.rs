@@ -24,6 +24,7 @@ pub mod local;
 pub mod local_autoconfig;
 pub mod local_bench;
 pub mod local_gov;
+pub mod local_health;
 pub mod local_http;
 pub mod local_perf;
 pub mod local_sidecar;
@@ -222,7 +223,7 @@ pub fn call_model(
     let decision = live::decide(&dir, &rc, now);
     if decision.paused() {
         route_log(&dir, &rc, &decision, &RouteDone::unseen());
-        return Err(ClientError::Protocol(decision.pause_msg().into()));
+        return Err(ClientError::Protocol(decision.pause_text()));
     }
     let mut sent = call.clone();
     sent.effort = decision.send_effort(call.effort.as_deref());
@@ -316,6 +317,8 @@ pub struct RouteInput<'a> {
     pub escalate_bias: i8,
     /// This episode already escalated (stronger model mid-flow).
     pub prior_escalated: bool,
+    /// Care-first holds `chat:default` and the caller has already dropped keyword steer.
+    pub care_first: bool,
 }
 
 /// The pick: provider, model, effort, one plain sentence, and the rules that fired.
@@ -714,13 +717,14 @@ impl Router {
         let mut pick = match (row, band) {
             (Some(row), Some(band)) => Some(input.pick.clone().unwrap_or_else(|| {
                 let user = ladder::user_facing(row.class);
+                let hold = ladder::hold_chat_drops(row.class, input.care_first);
                 let start = goal::goal_start(
                     band,
-                    ladder::start_rung(band, input.d, input.steer, user),
+                    ladder::start_holding(band, input.d, input.steer, user, hold),
                     input.steer,
                     input.goal.as_ref().filter(|_| user),
                 );
-                ladder::advance(
+                ladder::advance_holding(
                     None,
                     row.class,
                     band,
@@ -730,6 +734,7 @@ impl Router {
                         routine: input.routine,
                         ..ladder::Obs::default()
                     },
+                    hold,
                 )
                 .1
             })),
@@ -796,6 +801,14 @@ impl Router {
         } else if connectivity::is_cloud_only(input.class) && input.local.offline {
             // Image / web / hard prepare wait for the cloud (named queue note in the cabin).
             rules.push("offline:cloud_queued".into());
+            ModelPick {
+                model: input.current_model.trim().to_string(),
+                no_route: true,
+                replaced: None,
+            }
+        } else if local::offline_unavailable(&input.local, input.class, input.ctx_tokens) {
+            // Offline and no on-device runtime: wait for the network, say why.
+            rules.push("offline:local_unavailable".into());
             ModelPick {
                 model: input.current_model.trim().to_string(),
                 no_route: true,

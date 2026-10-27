@@ -4,7 +4,9 @@ mod auto_review;
 pub mod brain;
 mod checkpoint;
 mod client;
+mod close_check;
 mod compact;
+mod dream_model;
 mod drive;
 pub mod episode;
 mod eval;
@@ -13,6 +15,7 @@ mod file_checkpoint;
 mod gate;
 pub mod harness;
 mod hooks;
+pub mod identity;
 mod image_budget;
 pub mod indexers;
 mod loopback;
@@ -22,6 +25,7 @@ mod models;
 pub mod perm;
 pub mod plugins;
 mod prefix_cache;
+pub mod prefix_guard;
 mod prompt;
 mod recovery;
 pub mod repair;
@@ -50,10 +54,12 @@ pub use client::{
     Usage, XaiClient, DEFAULT_MODEL, RESPONSES_URL, USER_AGENT,
 };
 pub use compact::{estimate_input_tokens, message_text};
+pub use dream_model::sleep_dream;
+pub use eval::turn_endings::{generic_closing, last_sentence};
 pub use eval::{
     load_tasks, parse_args, reject_live, render_markdown, render_report, run_suite,
-    run_technique_matrix, ItemResult, Opts, Recommendation, Technique, TechniqueMatrixReport,
-    SUITE_ITEMS,
+    run_technique_matrix, ItemResult, Opts, Recommendation, Technique, TechniqueArm,
+    TechniqueMatrixReport, SUITE_ITEMS,
 };
 pub use events::{Engine, EngineParts, EpisodeSeed, NativeEngine, StampHalt};
 pub use file_checkpoint::{
@@ -67,16 +73,17 @@ pub use hooks::{
     discover_hooks, folder_trusted, on_subagent_start, on_subagent_stop, set_folder_trust,
     HookInfo, HookOrigin,
 };
+pub use identity::{identity_blocks, SOUL_BYTE_CAP, USER_BYTE_CAP};
 pub use mcp::{
     alias_elicit, attach_elicit, configured, detach_elicit, doctor, import_documents, import_paths,
     restart, set_workspace, shutdown_all, unalias_elicit, DoctorRow, ElicitInbox, ElicitNote,
     ElicitView,
 };
 pub use memory::{
-    amr_enabled, amr_store, dream, first_turn_injection, flush_pending, global_memory_path,
-    is_dream_command, is_flush_command, queue_memory_status, remember, remember_note_text,
-    search as search_memory, take_memory_status, workspace_memory_path, Hit as MemoryHit,
-    INJECT_BYTE_CAP, INJECT_TOKEN_CAP,
+    amr_enabled, amr_store, dream, dream_model_enabled, first_turn_injection, flush_pending,
+    global_memory_path, is_dream_command, is_flush_command, memory_writes_enabled,
+    queue_memory_status, remember, remember_note_text, search as search_memory, set_memory_writes,
+    take_memory_status, workspace_memory_path, Hit as MemoryHit, INJECT_BYTE_CAP, INJECT_TOKEN_CAP,
 };
 pub use models::{
     context_length_for, parse_listed_models, parse_xai_models, pick_model, ListedModel,

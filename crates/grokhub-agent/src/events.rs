@@ -207,7 +207,9 @@ impl NativeEngine {
         let mut ask = |t: &str| -> Result<String, String> {
             let call = crate::route::ModelCall::xai(
                 &self.model,
-                Some(grokhub_core::BACKGROUND_EFFORT),
+                Some(crate::brain::classify_effort(
+                    crate::brain::care_first_enabled(&crate::perm::config_dir()),
+                )),
                 crate::brain::BRIEF_CLASS,
                 &self.conversation_id,
                 vec![
@@ -244,7 +246,7 @@ impl NativeEngine {
                 (ctx.chat_id, ctx.turn)
             }
         };
-        let policy = crate::brain::pick_policy(&crate::brain::load_policy(&dir).0, &brief);
+        let policy = crate::brain::pick_policy(&crate::brain::effective_rows(&dir).0, &brief);
         // Brain 2: the row's goal steers this turn's routing (inside each class's band).
         // Desktop episode steps route with the chat id as their session, so it gets the goal too.
         let goal = policy
@@ -392,6 +394,16 @@ impl Engine for NativeEngine {
                     error,
                 });
             }
+            LoopEvent::Usage(total) => {
+                let turn = total.saturating_delta(&before_usage);
+                emit(turn_usage_event(
+                    &total,
+                    &turn,
+                    kind,
+                    meter_used,
+                    meter_limit,
+                ));
+            }
             other => {
                 if let Some(acp) = to_acp(other, kind, &session, meter_used, meter_limit) {
                     emit(acp);
@@ -425,8 +437,9 @@ impl Engine for NativeEngine {
             }
         };
         let used = crate::compact::estimate_input_tokens(&self.history);
-        emit(grok_usage_event(
+        emit(turn_usage_event(
             &self.usage,
+            &delta,
             self.auth_kind,
             used,
             self.context_length,
@@ -597,6 +610,13 @@ impl NativeEngine {
             &[],
         );
         crate::hooks::on_compact(&self.conversation_id, &self.workspace, false);
+        if compact_result.is_ok() {
+            crate::prefix_guard::note_compaction(&crate::prefix_guard::run_key(
+                &self.conversation_id,
+                0,
+                None,
+            ));
+        }
         match compact_result {
             Ok(extra) => {
                 self.usage.add(&extra);
@@ -750,6 +770,7 @@ fn to_acp(ev: LoopEvent, kind: AuthKind, session: &str, used: u64, limit: u64) -
             field_name: view.field_name,
             field_title: view.field_title,
             secret: view.secret,
+            options: view.options,
         }),
     })
 }
@@ -774,6 +795,22 @@ fn grok_usage(usage: &Usage, kind: AuthKind, used: u64, limit: u64) -> GrokUsage
 
 fn grok_usage_event(usage: &Usage, kind: AuthKind, used: u64, limit: u64) -> AcpEvent {
     AcpEvent::Usage(grok_usage(usage, kind, used, limit))
+}
+
+/// Session totals plus the share of this turn's input the prompt cache served.
+fn turn_usage_event(
+    total: &Usage,
+    turn: &Usage,
+    kind: AuthKind,
+    used: u64,
+    limit: u64,
+) -> AcpEvent {
+    let mut usage = grok_usage(total, kind, used, limit);
+    usage.turn_cache_pct = Some(grokhub_core::wire::cache_pct(
+        turn.cached_tokens,
+        turn.input_tokens,
+    ));
+    AcpEvent::Usage(usage)
 }
 
 /// Halt when a stamp written after `started_ms` is visible to `read`.
@@ -821,6 +858,94 @@ mod tests {
                 ..Default::default()
             })
         }
+    }
+
+    /// First call misses the prompt cache, every later call hits 900 of 1000.
+    struct CacheWarm(AtomicUsize);
+    impl ModelClient for CacheWarm {
+        fn stream(
+            &self,
+            _req: &crate::ResponsesRequest,
+            _cancel: &CancelToken,
+            _sink: &mut dyn FnMut(crate::StreamEvent),
+        ) -> Result<crate::TurnOutput, crate::ClientError> {
+            let n = self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(crate::TurnOutput {
+                text: "ok".into(),
+                usage: Usage {
+                    input_tokens: 1000,
+                    output_tokens: 1,
+                    cached_tokens: if n == 0 { 0 } else { 900 },
+                    ..Usage::default()
+                },
+                ..Default::default()
+            })
+        }
+    }
+
+    #[test]
+    fn turn_usage_event_carries_the_turn_cache_share() {
+        let total = Usage {
+            input_tokens: 3000,
+            cached_tokens: 2000,
+            ..Usage::default()
+        };
+        let turn = Usage {
+            input_tokens: 1000,
+            cached_tokens: 870,
+            ..Usage::default()
+        };
+        match turn_usage_event(&total, &turn, AuthKind::ApiKey, 0, 0) {
+            AcpEvent::Usage(u) => {
+                assert_eq!(u.turn_cache_pct, Some(87));
+                assert_eq!(u.cache_read_input_tokens, 2000);
+                assert_eq!(u.input_tokens, 3000);
+            }
+            other => panic!("{other:?}"),
+        }
+        match turn_usage_event(&Usage::default(), &Usage::default(), AuthKind::ApiKey, 0, 0) {
+            AcpEvent::Usage(u) => assert_eq!(u.turn_cache_pct, Some(0), "0 input is 0%, not NaN"),
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn each_prompt_reports_its_own_cache_share_not_the_session_average() {
+        let dir = std::env::temp_dir().join(format!("gh-eng-cache-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let _guard = crate::perm::ConfigGuard::set(&dir);
+        let mut engine = NativeEngine::new(EngineParts {
+            client: Arc::new(CacheWarm(AtomicUsize::new(0))),
+            workspace: dir.clone(),
+            model: "grok-4.7".into(),
+            effort: None,
+            system: "sys".into(),
+            conversation_id: format!("cache-share-{}", std::process::id()),
+            auth_kind: AuthKind::ApiKey,
+            max_turns: 1,
+            cancel: CancelToken::new(),
+            steer: SteerQueue::new(),
+            halt: Box::new(NoHalt),
+            gate: crate::Gate::phase_readonly(),
+            desktop: None,
+            permits: Arc::new(crate::gate::ClosedPermits),
+        });
+        let last_pct = |engine: &mut NativeEngine, text: &str| {
+            let mut pct = None;
+            engine
+                .prompt(text, None, &mut |ev| {
+                    if let AcpEvent::Usage(u) = ev {
+                        pct = u.turn_cache_pct;
+                    }
+                })
+                .unwrap();
+            pct
+        };
+        assert_eq!(last_pct(&mut engine, "one"), Some(0));
+        // Session average would be 45%; the second turn alone hit 90%.
+        assert_eq!(last_pct(&mut engine, "two"), Some(90));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     struct NoHalt;

@@ -16,6 +16,14 @@ pub struct ArmMetrics {
     pub cached_tokens: u64,
     /// Cost in usd-ticks (live) or [`offline_cost_ticks`] for scripted runs.
     pub cost_ticks: i64,
+    /// Model calls (outbound requests) across all tasks.
+    pub model_calls: u64,
+    /// Tool-schema bytes summed over every request.
+    pub schema_bytes: u64,
+    /// Bytes of every request after the first in its task.
+    pub followup_bytes: u64,
+    /// Of [`Self::followup_bytes`], bytes shared with the previous request's start.
+    pub prefix_stable_bytes: u64,
 }
 
 impl ArmMetrics {
@@ -56,6 +64,33 @@ impl ArmMetrics {
         } else {
             (self.cached_tokens.min(self.input_tokens) as f64) / self.input_tokens as f64
         }
+    }
+
+    /// Share of follow-up request bytes that repeat the previous request's start.
+    pub fn prefix_stable_ratio(&self) -> f64 {
+        ratio(self.prefix_stable_bytes, self.followup_bytes)
+    }
+
+    pub fn schema_bytes_per_request(&self) -> f64 {
+        ratio(self.schema_bytes, self.model_calls)
+    }
+
+    pub fn model_calls_per_task(&self) -> f64 {
+        ratio(self.model_calls, u64::from(self.tasks))
+    }
+
+    pub fn tool_calls_per_model_call(&self) -> f64 {
+        ratio(self.tool_calls, self.model_calls)
+    }
+
+    /// Add one task's request shape (see [`derive_usage`]).
+    pub fn record_requests(&mut self, shape: &RequestTotals) {
+        self.model_calls = self.model_calls.saturating_add(shape.model_calls);
+        self.schema_bytes = self.schema_bytes.saturating_add(shape.schema_bytes);
+        self.followup_bytes = self.followup_bytes.saturating_add(shape.followup_bytes);
+        self.prefix_stable_bytes = self
+            .prefix_stable_bytes
+            .saturating_add(shape.prefix_stable_bytes);
     }
 
     pub fn record_task(
@@ -112,6 +147,70 @@ pub fn offline_cost_ticks(input: u64, output: u64, reasoning: u64, cached: u64) 
     billable
         .saturating_add(output.saturating_mul(4))
         .saturating_add(reasoning.saturating_mul(4)) as i64
+}
+
+fn ratio(num: u64, den: u64) -> f64 {
+    if den == 0 {
+        0.0
+    } else {
+        num as f64 / den as f64
+    }
+}
+
+/// Offline token estimate: bytes per token (no tokenizer in the replay).
+pub const BYTES_PER_TOKEN: u64 = 4;
+
+/// Tokens for `bytes` of request text, rounded up.
+pub fn estimate_tokens(bytes: u64) -> u64 {
+    bytes.div_ceil(BYTES_PER_TOKEN)
+}
+
+/// Length of the shared start of `a` and `b`, in bytes.
+pub fn common_prefix_len(a: &[u8], b: &[u8]) -> usize {
+    a.iter().zip(b).take_while(|(x, y)| x == y).count()
+}
+
+/// One outbound model request as the replay saw it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CapturedRequest {
+    /// Rendered prompt bytes in cache order: system, tools, then the other input items.
+    pub body: String,
+    /// Bytes of the tools array alone.
+    pub schema_bytes: u64,
+}
+
+/// Input usage derived from one task's requests instead of fixture numbers.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RequestTotals {
+    pub model_calls: u64,
+    pub input_tokens: u64,
+    /// Tokens inside the prefix shared with the previous request (rounded down).
+    pub cached_tokens: u64,
+    pub schema_bytes: u64,
+    pub followup_bytes: u64,
+    pub prefix_stable_bytes: u64,
+}
+
+/// Each request bills its bytes; the prefix it shares with the previous request in
+/// the same task counts as cached (a provider prefix cache would hit there).
+pub fn derive_usage(requests: &[CapturedRequest]) -> RequestTotals {
+    let mut out = RequestTotals::default();
+    let mut prev: Option<&[u8]> = None;
+    for req in requests {
+        let body = req.body.as_bytes();
+        let len = body.len() as u64;
+        out.model_calls += 1;
+        out.input_tokens += estimate_tokens(len);
+        out.schema_bytes += req.schema_bytes;
+        if let Some(prev) = prev {
+            let shared = common_prefix_len(prev, body) as u64;
+            out.followup_bytes += len;
+            out.prefix_stable_bytes += shared;
+            out.cached_tokens += shared / BYTES_PER_TOKEN;
+        }
+        prev = Some(body);
+    }
+    out
 }
 
 /// Side-by-side arm numbers plus the gate outcome.
@@ -400,6 +499,85 @@ mod tests {
             ..ArmMetrics::default()
         };
         assert_eq!(recommend(&base, &drop), Recommendation::Reject);
+    }
+
+    #[test]
+    fn common_prefix_len_counts_shared_start() {
+        assert_eq!(common_prefix_len(b"system tools a", b"system tools b"), 13);
+        assert_eq!(common_prefix_len(b"abc", b"abcdef"), 3);
+        assert_eq!(common_prefix_len(b"xbc", b"abc"), 0);
+        assert_eq!(common_prefix_len(b"", b"abc"), 0);
+    }
+
+    #[test]
+    fn estimate_tokens_rounds_up_by_four_bytes() {
+        assert_eq!(estimate_tokens(0), 0);
+        assert_eq!(estimate_tokens(1), 1);
+        assert_eq!(estimate_tokens(8), 2);
+        assert_eq!(estimate_tokens(9), 3);
+    }
+
+    fn req(body: &str, schema_bytes: u64) -> CapturedRequest {
+        CapturedRequest {
+            body: body.into(),
+            schema_bytes,
+        }
+    }
+
+    #[test]
+    fn derive_usage_bills_only_bytes_after_the_shared_prefix() {
+        // 16 bytes, then 24 bytes that repeat the first 16 (append-only),
+        // then 20 bytes that diverge after 8 (the system text changed).
+        let totals = derive_usage(&[
+            req("SYSTEMxxTOOLSxxx", 5),
+            req("SYSTEMxxTOOLSxxxUSER-ONE", 5),
+            req("SYSTEMxxEDITEDxxUSER", 7),
+        ]);
+        assert_eq!(
+            totals,
+            RequestTotals {
+                model_calls: 3,
+                input_tokens: 4 + 6 + 5,
+                cached_tokens: 4 + 2,
+                schema_bytes: 17,
+                followup_bytes: 44,
+                prefix_stable_bytes: 24,
+            }
+        );
+        let billable = totals.input_tokens - totals.cached_tokens;
+        assert_eq!(billable, 9);
+    }
+
+    #[test]
+    fn derive_usage_of_one_request_has_no_cache() {
+        let totals = derive_usage(&[req("abcdefgh", 3)]);
+        assert_eq!(totals.input_tokens, 2);
+        assert_eq!(totals.cached_tokens, 0);
+        assert_eq!(totals.followup_bytes, 0);
+        let mut arm = ArmMetrics::default();
+        arm.record_requests(&totals);
+        assert_eq!(arm.prefix_stable_ratio(), 0.0);
+        assert_eq!(arm.schema_bytes_per_request(), 3.0);
+    }
+
+    #[test]
+    fn arm_ratios_from_recorded_requests() {
+        let mut arm = ArmMetrics {
+            tasks: 2,
+            tool_calls: 3,
+            ..ArmMetrics::default()
+        };
+        arm.record_requests(&RequestTotals {
+            model_calls: 4,
+            schema_bytes: 400,
+            followup_bytes: 200,
+            prefix_stable_bytes: 150,
+            ..RequestTotals::default()
+        });
+        assert_eq!(arm.model_calls_per_task(), 2.0);
+        assert_eq!(arm.tool_calls_per_model_call(), 0.75);
+        assert_eq!(arm.schema_bytes_per_request(), 100.0);
+        assert_eq!(arm.prefix_stable_ratio(), 0.75);
     }
 
     #[test]

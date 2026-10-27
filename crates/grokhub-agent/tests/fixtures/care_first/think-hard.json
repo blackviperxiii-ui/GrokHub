@@ -1,0 +1,6 @@
+{
+  "id": "think-hard",
+  "kind": "open",
+  "prompt": "please think hard about what I should say",
+  "reply": "Say the true thing in one sentence, then the reason, then stop."
+}

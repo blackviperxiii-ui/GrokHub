@@ -10,6 +10,7 @@ use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use grokhub_agent::route::live::NO_ROUTE_MSG;
+use grokhub_agent::route::local::OFFLINE_NO_LOCAL_MSG;
 use grokhub_agent::route::wait::{self, NoRouteWait};
 use grokhub_agent::AuthKind;
 use grokhub_core::model_registry::ModelMeta;
@@ -37,7 +38,7 @@ pub(super) struct ModelWaitUi {
 impl Cabin {
     /// A job failed: remember the chat when it was a no-route pause.
     pub(super) fn note_no_route_turn(&mut self, err: &str) {
-        if err.contains(NO_ROUTE_MSG) {
+        if is_waiting_turn(err) {
             self.harness.router.wait.paused_turn = Some(
                 self.chat_job_thread
                     .clone()
@@ -190,14 +191,18 @@ impl Cabin {
         }
         self.harness.router.wait.resume = None;
         self.harness.router.wait.paused_turn = None;
-        let paused = self
-            .messages
-            .last()
-            .is_some_and(|m| m.0 == "assistant" && m.1.contains(NO_ROUTE_MSG));
+        let last = self.messages.last().filter(|m| m.0 == "assistant");
+        let paused = last.is_some_and(|m| is_waiting_turn(&m.1));
+        let offline = last.is_some_and(|m| m.1.contains(OFFLINE_NO_LOCAL_MSG));
         let ask = self.last_ask_in(None);
         if paused && !ask.is_empty() {
             self.kick_model_retry(ask);
-            self.quiet_router_note(wait::back_note(&model, &step, true));
+            let note = if offline {
+                reconnect_note(&model, &step)
+            } else {
+                wait::back_note(&model, &step, true)
+            };
+            self.quiet_router_note(note);
         } else {
             // You moved on in that chat: nothing to resume.
             self.quiet_router_note(wait::back_note(&model, &step, false));
@@ -212,6 +217,16 @@ impl Cabin {
         rows.truncate(super::router_ui::ROUTER_ROWS_MAX);
         self.status = note;
     }
+}
+
+/// A turn that waits for a model (or the network) and resumes on its own.
+fn is_waiting_turn(text: &str) -> bool {
+    text.contains(NO_ROUTE_MSG) || text.contains(OFFLINE_NO_LOCAL_MSG)
+}
+
+/// The note when a turn kept while offline gets its answer.
+pub(super) fn reconnect_note(model: &str, step: &str) -> String {
+    format!("Back online: answered after reconnect on {model} ({step})")
 }
 
 /// The waiting card for `model`'s wait.
@@ -240,6 +255,39 @@ mod tests {
             .iter()
             .filter(|c| grokhub_core::is_model_wait_card(c))
             .collect()
+    }
+
+    #[test]
+    fn an_offline_turn_with_no_local_model_is_kept_and_answered_after_reconnect() {
+        let _g = crate::config::hold_test_config();
+        let root = crate::config::test_config_root("router-offline-wait");
+        std::fs::create_dir_all(&root).unwrap();
+        let _pin = crate::config::TestConfigDir::set(root.clone());
+        let mut app = Cabin::quiet_for_test();
+        app.live_mut().push(("user".into(), "test".into()));
+        app.chat_job_thread = Some(app.visible_thread_id());
+        let why = grokhub_agent::route::local::offline_pause_text("runtime missing");
+        app.apply_job_fail(&format!("protocol error: {why}"));
+        assert_eq!(
+            app.harness.router.wait.paused_turn,
+            Some(app.visible_thread_id())
+        );
+        let shown = app.messages.last().map(|m| m.1.clone()).unwrap_or_default();
+        assert!(
+            shown.contains("Offline, local model unavailable: runtime missing."),
+            "{shown}"
+        );
+        app.start_model_wait("chat:default", "grok-4.7", 1_000);
+        app.end_model_wait("grok-4.7");
+        assert_eq!(app.harness.router.wait.paused_turn, None);
+        assert_eq!(
+            app.harness.router.rows.first(),
+            Some(&(
+                "model-back".to_string(),
+                "Back online: answered after reconnect on grok-4.7 (test)".to_string()
+            ))
+        );
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

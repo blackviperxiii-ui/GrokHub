@@ -1449,8 +1449,8 @@ mod tests {
 
     #[test]
     fn an_issue_copy_drops_home_paths_emails_and_keys() {
-        let text = "Problem: /home/user/.config/GrokHub/skills/inbox failed for alex.x+gh@mail.example.com\n\n\
-                    Evidence: C:\\Users\\Alex\\AppData\\GrokHub and /Users/jo/notes; key sk-abcdefghijklmnopqrstuv; \
+        let text = "Problem: /home/user/.config/GrokHub/skills/inbox failed for user.x+gh@mail.example.com\n\n\
+                    Evidence: C:\\Users\\User\\AppData\\GrokHub and /Users/jo/notes; key sk-abcdefghijklmnopqrstuv; \
                     at @home and a@b stay";
         let out = issue_text(
             "Wait for the Save dialog",
@@ -1467,7 +1467,7 @@ mod tests {
                 redact_secrets("sk-abcdefghijklmnopqrstuv")
             )
         );
-        assert!(!out.contains("alex"));
+        assert!(!out.contains("user"));
         assert!(!out.contains("sk-abcdefghijklmnopqrstuv"));
     }
 

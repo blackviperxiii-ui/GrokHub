@@ -130,6 +130,18 @@ fn correction_supersedes_and_recall_returns_the_fix() {
     assert_eq!(fix.node_type, NodeType::Routine);
     assert_eq!(fix.source, "chat:t-standup#2");
     assert_eq!(fix.tags, vec!["correction".to_string()]);
+    let (rows, _) = memory_rows(&store);
+    let row = rows.iter().find(|r| r.id == new_id).unwrap();
+    assert_eq!(row.beside, vec!["My standup is at 9".to_string()]);
+    assert!(row.line().contains("· corrects: My standup is at 9"));
+    assert_eq!(
+        row.source,
+        SourceLink::Chat {
+            thread: "t-standup".into(),
+            turn: Some(2)
+        }
+    );
+    assert_eq!(row.updated, crate::oauth::unix_ms_to_rfc3339(NOW + 1));
 }
 
 #[test]
@@ -162,8 +174,8 @@ fn correction_rules_read_the_usual_phrasings() {
 fn a_correction_two_nodes_fit_equally_contradicts_both() {
     let tmp = Tmp::new("contradict");
     let store = tmp.store();
-    let a = note_chat(&store, &chat("Lunch is at noon on Monday", 1), NOW).unwrap();
-    let b = note_chat(&store, &chat("Lunch is at noon on Friday", 2), NOW).unwrap();
+    let a = note_chat(&store, &chat("Team lunch is at noon", 1), NOW).unwrap();
+    let b = note_chat(&store, &chat("Guest lunch is at noon", 2), NOW).unwrap();
     let fixed = note_chat(&store, &chat("lunch is at 1pm, not noon", 3), NOW).unwrap();
     let new_id = fixed.id().unwrap().to_string();
     let mut edges = store.edges().unwrap();
@@ -351,11 +363,17 @@ fn every_learned_row_has_a_source_link() {
     assert_eq!(locked, 0);
     assert_eq!(rows.len(), 3);
     assert!(rows.iter().all(|r| !r.source.target().is_empty()));
+    assert!(rows.iter().all(|r| !r.updated.is_empty()));
+    let usage = crate::oauth::unix_ms_to_rfc3339(NOW + 2_000);
+    let pulse = crate::oauth::unix_ms_to_rfc3339(NOW + 1_000);
+    let said = crate::oauth::unix_ms_to_rfc3339(NOW);
     assert_eq!(
         memory_text(&store),
-        "- You use the inbox-zero skill. · why: [from what you approved, denied or undid](span:s1:42)\n\
-         - [2026-10-04] pulse: dismissed \"tidy downloads\" reason=not-this · why: [from a card you reacted to](pulse:2026-10-04)\n\
-         - My standup is at 9 · why: [you said it in chat (turn 1)](chat:t-standup#1)"
+        format!(
+            "- You use the inbox-zero skill. · why: [from what you approved, denied or undid](span:s1:42) · {usage}\n\
+             - [2026-10-04] pulse: dismissed \"tidy downloads\" reason=not-this · why: [from a card you reacted to](pulse:2026-10-04) · {pulse}\n\
+             - My standup is at 9 · why: [you said it in chat (turn 1)](chat:t-standup#1) · {said}"
+        )
     );
     let empty = NodeDraft {
         id: "fact-x".into(),
@@ -395,9 +413,12 @@ fn edit_writes_a_user_node_that_supersedes() {
     assert_eq!(rows[0].text, "I drink green tea");
     assert_eq!(rows[0].source, SourceLink::User);
     assert_eq!(rows[0].confidence, 1.0);
+    let stamp = crate::oauth::unix_ms_to_rfc3339(NOW + 5);
     assert_eq!(
         rows[0].line(),
-        "- I drink green tea · why: [you wrote it](user)"
+        format!(
+            "- I drink green tea · why: [you wrote it](user) · {stamp} · corrects: I drink black tea"
+        )
     );
 }
 
@@ -405,7 +426,7 @@ fn edit_writes_a_user_node_that_supersedes() {
 fn no_keyring_pauses_a_personal_note_and_writes_no_file() {
     let tmp = Tmp::new("paused");
     let store = tmp.store();
-    let got = note_chat(&store, &chat("Email me at alex@example.com", 1), NOW);
+    let got = note_chat(&store, &chat("Email me at user@example.com", 1), NOW);
     assert_eq!(
         got,
         Err(AmrError::Paused("private memory has no key store".into()))
@@ -418,15 +439,15 @@ fn no_keyring_pauses_a_personal_note_and_writes_no_file() {
 fn sealed_nodes_index_in_memory_only() {
     let tmp = Tmp::new("sealed-index");
     let store = tmp.store().with_sealer(Arc::new(HexSealer));
-    let private = note_chat(&store, &chat("Email me at alex@example.com", 1), NOW).unwrap();
+    let private = note_chat(&store, &chat("Email me at user@example.com", 1), NOW).unwrap();
     note_chat(&store, &chat("I like dark roast coffee", 2), NOW).unwrap();
     let disk = store.rebuild_index().unwrap();
-    assert_eq!(disk.search("alex").unwrap(), Vec::<String>::new());
+    assert_eq!(disk.search("user").unwrap(), Vec::<String>::new());
     let raw = fs::read(store.index_path()).unwrap();
     assert!(!String::from_utf8_lossy(&raw).contains("example.com"));
     let unlocked = store.sealed_index().unwrap();
     assert_eq!(
-        unlocked.search("alex").unwrap(),
+        unlocked.search("user").unwrap(),
         vec![private.id().unwrap().to_string()]
     );
     let (rows, _) = memory_rows(&store);
@@ -560,4 +581,214 @@ fn a_line_a_live_node_still_holds_is_not_stripped_or_proposed_for_removal() {
         reflect_diff(&store, user_md).remove,
         vec!["- Prefers short commit titles".to_string()]
     );
+}
+
+#[test]
+fn one_active_line_per_topic_and_a_later_note_supersedes() {
+    assert_eq!(topic_slug("Lunch is at noon on Monday"), "lunch");
+    assert_eq!(topic_slug("Lunch is at noon on Friday"), "lunch");
+    assert_eq!(topic_slug("Team lunch is at noon"), "team-lunch");
+    assert_eq!(topic_slug("Guest lunch is at noon"), "guest-lunch");
+    let tmp = Tmp::new("topic");
+    let store = tmp.store();
+    let monday = note_chat(&store, &chat("Lunch is at noon on Monday", 1), NOW).unwrap();
+    let friday = note_chat(&store, &chat("Lunch is at noon on Friday", 2), NOW + 1).unwrap();
+    let monday = monday.id().unwrap().to_string();
+    let friday = friday.id().unwrap().to_string();
+    assert_eq!(
+        store.edges().unwrap(),
+        vec![Edge {
+            from: friday.clone(),
+            to: monday.clone(),
+            rel: EdgeRel::Supersedes
+        }]
+    );
+    assert_eq!(store.recall("lunch").len(), 1);
+    assert_eq!(store.recall("lunch")[0].line, "Lunch is at noon on Friday");
+    let (rows, _) = memory_rows(&store);
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].id, friday);
+    assert!(store.superseded_ids().contains(&monday));
+}
+
+#[test]
+fn a_proposed_line_stays_inactive_until_approve_and_then_supersedes() {
+    let tmp = Tmp::new("propose");
+    let store = tmp.store();
+    let monday = note_chat(&store, &chat("Lunch is at noon on Monday", 1), NOW).unwrap();
+    let monday = monday.id().unwrap().to_string();
+    let proposed = propose_line(
+        &store,
+        "Lunch is at noon on Friday",
+        "chat:t-standup#4",
+        NOW + 1,
+    )
+    .unwrap();
+    let friday = proposed.id().unwrap().to_string();
+    assert_eq!(store.recall("lunch").len(), 1);
+    assert_eq!(store.recall("lunch")[0].id, monday);
+    let (rows, _) = memory_rows(&store);
+    let waiting = rows.iter().find(|r| r.id == friday).unwrap();
+    assert!(waiting.proposed);
+    assert!(waiting.line().contains("waiting for approval"));
+    assert_eq!(waiting.source.target(), "chat:t-standup#4");
+    let index = store.rebuild_index().unwrap();
+    assert_eq!(index.search("friday").unwrap(), Vec::<String>::new());
+    drop(index);
+    approve_node(&store, &friday, NOW + 2).unwrap();
+    assert_eq!(store.recall("lunch").len(), 1);
+    assert_eq!(store.recall("lunch")[0].line, "Lunch is at noon on Friday");
+    assert!(store.superseded_ids().contains(&monday));
+    let (rows, _) = memory_rows(&store);
+    assert_eq!(rows.len(), 1);
+    assert!(!rows[0].proposed);
+    assert_eq!(rows[0].confidence, REFLECT_MIN_CONFIDENCE);
+    let again = approve_node(&store, &friday, NOW + 3).unwrap();
+    assert_eq!(again, friday);
+    assert_eq!(store.edges().unwrap().len(), 1);
+}
+
+#[test]
+fn reject_drops_a_proposal_and_leaves_an_active_line() {
+    let tmp = Tmp::new("reject");
+    let store = tmp.store();
+    let kept = note_chat(&store, &chat("I like dark roast coffee", 1), NOW).unwrap();
+    let kept = kept.id().unwrap().to_string();
+    let proposed = propose_line(&store, "I like green tea", "chat:t-standup#2", NOW).unwrap();
+    let proposed = proposed.id().unwrap().to_string();
+    reject_node(&store, &kept, UserForget::from_click(), NOW).unwrap();
+    assert_eq!(store.recall("coffee").len(), 1);
+    reject_node(&store, &proposed, UserForget::from_click(), NOW).unwrap();
+    assert_eq!(store.recall("tea"), Vec::new());
+    let (rows, _) = memory_rows(&store);
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].id, kept);
+}
+
+#[test]
+fn memory_off_stops_notes_and_forget_still_deletes() {
+    let tmp = Tmp::new("off");
+    let mut store = tmp.store();
+    let kept = note_chat(&store, &chat("I like dark roast coffee", 1), NOW).unwrap();
+    let kept = kept.id().unwrap().to_string();
+    store.set_memory_writes(false);
+    assert_eq!(
+        note_chat(&store, &chat("My standup is at 9", 2), NOW),
+        Ok(Noted::Skipped("memory off"))
+    );
+    assert_eq!(
+        propose_line(&store, "I like green tea", "chat:t-standup#3", NOW),
+        Ok(Noted::Skipped("memory off"))
+    );
+    assert_eq!(
+        note_chat(
+            &store,
+            &chat("Please don't remember this preference", 4),
+            NOW
+        ),
+        Ok(Noted::Skipped("don't remember this"))
+    );
+    let draft = NodeDraft {
+        id: "fact-off".into(),
+        node_type: NodeType::Fact,
+        created: "2026-10-07T00:00:00Z".into(),
+        updated: "2026-10-07T00:00:00Z".into(),
+        source: "user".into(),
+        confidence: 0.9,
+        tags: vec![],
+        body: "A new fact\n".into(),
+        sensitivity: Sensitivity::Plain,
+        consent_ref: String::new(),
+    };
+    assert_eq!(store.remember(&draft), Err(AmrError::WritesOff));
+    assert_eq!(
+        store.link(&kept, &kept, EdgeRel::References),
+        Err(AmrError::WritesOff)
+    );
+    assert_eq!(store.node_file_count(), 1);
+    assert_eq!(store.edges().unwrap(), Vec::new());
+    forget_node(&store, &kept, UserForget::from_click(), NOW).unwrap();
+    assert_eq!(store.recall("coffee"), Vec::new());
+    store.set_memory_writes(true);
+    assert!(matches!(
+        note_chat(&store, &chat("My standup is at 9", 5), NOW),
+        Ok(Noted::New(_))
+    ));
+}
+
+#[test]
+fn dont_remember_this_skips_the_line() {
+    assert!(skip_remember_line("Please don't remember this"));
+    assert!(skip_remember_line("Dont remember this detail"));
+    assert!(skip_remember_line("Do not remember this"));
+    assert!(!skip_remember_line("Remember the standup is at 9"));
+    let tmp = Tmp::new("skip-line");
+    let store = tmp.store();
+    assert_eq!(
+        note_chat(
+            &store,
+            &chat("I like oat milk. Don't remember this.", 1),
+            NOW
+        ),
+        Ok(Noted::Skipped("don't remember this"))
+    );
+    assert_eq!(store.node_file_count(), 0);
+}
+
+#[test]
+fn calibration_picks_the_lowest_approval_above_every_rejection() {
+    let samples = [
+        ApprovalSample {
+            confidence: 0.25,
+            approved: false,
+        },
+        ApprovalSample {
+            confidence: 0.5,
+            approved: false,
+        },
+        ApprovalSample {
+            confidence: 0.75,
+            approved: true,
+        },
+        ApprovalSample {
+            confidence: 1.0,
+            approved: true,
+        },
+    ];
+    assert_eq!(calibrate_reflect_min(&samples), 0.75);
+    assert_eq!(reflect_threshold_log(0.75), "reflect_min_confidence 0.75");
+    assert_eq!(calibrate_reflect_min(&[]), REFLECT_MIN_CONFIDENCE);
+    assert_eq!(
+        reflect_threshold_log(REFLECT_MIN_CONFIDENCE),
+        "reflect_min_confidence 0.70"
+    );
+
+    let tmp = Tmp::new("calibrate");
+    let store = tmp.store();
+    remember_line(
+        &store,
+        &LineWrite {
+            text: "prefers the high mark",
+            source: "user",
+            tags: vec!["approved".into()],
+            confidence: 0.75,
+            revive: false,
+        },
+        NOW,
+    )
+    .unwrap();
+    let low = remember_line(
+        &store,
+        &LineWrite {
+            text: "prefers the low mark",
+            source: "user",
+            tags: vec![PROPOSED_TAG.into()],
+            confidence: 0.5,
+            revive: false,
+        },
+        NOW,
+    )
+    .unwrap();
+    reject_node(&store, low.id(), UserForget::from_click(), NOW).unwrap();
+    assert_eq!(calibrate_reflect_min(&approval_samples(&store)), 0.75);
 }

@@ -41,6 +41,9 @@ pub struct PulseMeta {
     /// Closed on the main window's deck. Pulse still shows it.
     #[serde(default, skip_serializing_if = "is_false")]
     pub off_home: bool,
+    /// A written post's topic emoji.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
     /// A Spike-6a proactive offer: its help score, route and topic.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub proactive: Option<crate::proactive::ProactiveMeta>,
@@ -109,13 +112,14 @@ pub enum PulseCategory {
 }
 
 impl PulseCategory {
-    /// Header order on the Ideas view.
+    /// Header order on the Ideas view. More holds older cards whose words
+    /// match no category; written ideas always take one of the first five.
     pub const ORDER: [PulseCategory; 6] = [
-        Self::Financial,
         Self::Productivity,
+        Self::Financial,
+        Self::Shopping,
         Self::Relationships,
         Self::Health,
-        Self::Shopping,
         Self::More,
     ];
 
@@ -389,6 +393,10 @@ pub fn is_idea_card(card: &UpdateCard) -> bool {
 /// Automate "I can {action} {cadence}", Learn "I can learn how you {action}".
 pub fn i_can_title(card: &UpdateCard) -> String {
     let title = card.title.trim();
+    // A written idea has its own short title; its "I can" line is the body.
+    if crate::pulse_ideas::is_muse_idea(card) {
+        return title.to_string();
+    }
     let lower = title.to_ascii_lowercase();
     if lower.starts_with("i can ") && title.chars().count() <= I_CAN_MAX {
         return title.to_string();
@@ -648,9 +656,11 @@ pub const PENALTY_NOT_THIS: i64 = 400;
 pub const PENALTY_DISMISS: i64 = 200;
 /// A card below this is Quiet: nothing is shown for it.
 pub const PULSE_THRESHOLD: i64 = 100;
-/// The unlabeled top group on the Ideas view needs at least one real rule hit.
-pub const TOP_GROUP_MIN: i64 = 250;
-pub const TOP_GROUP_MAX: usize = 4;
+/// The Ideas view opens with this many ideas under no header: the most
+/// personal ones, by rank.
+pub const IDEAS_LEAD: usize = 3;
+/// An idea retires this long after it was posted, unless it was edited.
+pub const IDEA_TTL_MS: u64 = 14 * 24 * 60 * 60 * 1000;
 pub const DUE_WINDOW_MS: u64 = 24 * 60 * 60 * 1000;
 
 /// Starting score per type, before any rule. Every type clears the threshold
@@ -785,9 +795,17 @@ pub fn rank_pulse(cards: &[UpdateCard], inputs: &PulseInputs) -> Vec<Ranked> {
     out.into_iter().map(|(r, _)| r).collect()
 }
 
-/// The Ideas view: an unlabeled top group (`None`) of the strongest cards, then
-/// one group per category in `PulseCategory::ORDER`. Quiet cards and empty
-/// groups are left out.
+/// A written idea retires at its `expires_at`, two weeks after it was
+/// posted (`IDEA_TTL_MS`). One the person edited stays.
+pub fn idea_retired(card: &UpdateCard, now_ms: u64) -> bool {
+    card.kind == UpdateKind::Idea
+        && !card.modified
+        && card.expires_at.is_some_and(|at| now_ms >= at)
+}
+
+/// The Ideas view: the first `IDEAS_LEAD` ideas by rank under no header
+/// (`None`), then one group per category in `PulseCategory::ORDER`. Quiet
+/// and retired cards and empty groups are left out.
 pub fn group_ideas(
     cards: &[UpdateCard],
     inputs: &PulseInputs,
@@ -795,14 +813,13 @@ pub fn group_ideas(
     let ranked: Vec<Ranked> = rank_pulse(cards, inputs)
         .into_iter()
         .filter(|r| r.kind != PulseType::Quiet)
-        .filter(|r| cards.iter().any(|c| c.id == r.id && is_idea_card(c)))
+        .filter(|r| {
+            cards
+                .iter()
+                .any(|c| c.id == r.id && is_idea_card(c) && !idea_retired(c, inputs.now_ms))
+        })
         .collect();
-    let top: Vec<Ranked> = ranked
-        .iter()
-        .filter(|r| r.score >= TOP_GROUP_MIN)
-        .take(TOP_GROUP_MAX)
-        .cloned()
-        .collect();
+    let top: Vec<Ranked> = ranked.iter().take(IDEAS_LEAD).cloned().collect();
     let mut groups = Vec::new();
     if !top.is_empty() {
         groups.push((None, top.clone()));
@@ -820,12 +837,12 @@ pub fn group_ideas(
     groups
 }
 
-/// The Feed view: posts newest first. Quiet ones are left out.
+/// The Feed view: every visible post, newest first. No score gate: the
+/// writer already chose what is worth posting, and Delete takes one away.
 pub fn feed_posts(cards: &[UpdateCard], inputs: &PulseInputs) -> Vec<UpdateCard> {
     let mut posts: Vec<UpdateCard> = cards
         .iter()
         .filter(|c| is_feed_card(c) && pulse_visible(c, inputs.now_ms))
-        .filter(|c| pulse_score(c, inputs) >= PULSE_THRESHOLD)
         .cloned()
         .collect();
     posts.sort_by(|a, b| b.created_at.cmp(&a.created_at).then(a.id.cmp(&b.id)));
@@ -1049,6 +1066,79 @@ pub fn og_image(html: &str, page_url: &str) -> Option<String> {
     None
 }
 
+/// Images a post's gallery may show: the page's own preview image, then up
+/// to two more large in-page images. Logos, icons, avatars, tracking pixels
+/// and anything marked smaller than `GALLERY_MIN_PX` are skipped.
+pub fn gallery_images(html: &str, page_url: &str) -> Vec<String> {
+    let mut out: Vec<String> = og_image(html, page_url).into_iter().collect();
+    let lower = html.to_ascii_lowercase();
+    let mut from = 0;
+    while out.len() < GALLERY_MAX {
+        let Some(pos) = lower[from..].find("<img") else {
+            break;
+        };
+        let start = from + pos;
+        let end = lower[start..]
+            .find('>')
+            .map(|e| start + e)
+            .unwrap_or(lower.len());
+        let (tag, tag_lower) = (&html[start..end], &lower[start..end]);
+        from = end;
+        let Some(src) = attr(tag, tag_lower, "src") else {
+            continue;
+        };
+        let small = ["width", "height"].iter().any(|k| {
+            attr(tag, tag_lower, k)
+                .and_then(|v| v.trim().trim_end_matches("px").parse::<u32>().ok())
+                .is_some_and(|px| px < GALLERY_MIN_PX)
+        });
+        let alt = attr(tag, tag_lower, "alt")
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        let class = attr(tag, tag_lower, "class")
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        let path = src.to_ascii_lowercase();
+        let junk = small
+            || path.ends_with(".svg")
+            || path.ends_with(".gif")
+            || path.starts_with("data:")
+            || GALLERY_SKIP
+                .iter()
+                .any(|w| path.contains(w) || alt.contains(w) || class.contains(w));
+        if junk {
+            continue;
+        }
+        let Some(url) = resolve_url(src.trim(), page_url).filter(|u| public_http_url(u)) else {
+            continue;
+        };
+        if !out.contains(&url) {
+            out.push(url);
+        }
+    }
+    out
+}
+
+/// Most images on one post.
+pub const GALLERY_MAX: usize = 3;
+/// An image marked narrower or shorter than this is not a content image.
+pub const GALLERY_MIN_PX: u32 = 200;
+/// Smallest image file worth keeping: tiny files are icons or spacers.
+pub const IMAGE_MIN_BYTES: usize = 8 * 1024;
+/// Largest image file kept in the local cache.
+pub const IMAGE_MAX_BYTES: usize = 4 * 1024 * 1024;
+const GALLERY_SKIP: &[&str] = &[
+    "logo", "icon", "avatar", "sprite", "badge", "pixel", "spacer", "emoji", "favicon", "button",
+];
+
+/// A downloaded image worth caching: a real JPEG, PNG or WebP, not tiny, not huge.
+pub fn image_bytes_ok(bytes: &[u8]) -> bool {
+    let real = bytes.starts_with(&[0xFF, 0xD8, 0xFF])
+        || bytes.starts_with(&[0x89, b'P', b'N', b'G'])
+        || (bytes.len() > 12 && &bytes[..4] == b"RIFF" && &bytes[8..12] == b"WEBP");
+    real && (IMAGE_MIN_BYTES..=IMAGE_MAX_BYTES).contains(&bytes.len())
+}
+
 fn attr<'a>(tag: &'a str, tag_lower: &str, name: &str) -> Option<&'a str> {
     let mut from = 0;
     while let Some(pos) = tag_lower[from..].find(name) {
@@ -1225,11 +1315,11 @@ mod tests {
         assert_eq!(
             labels,
             vec![
-                "Financial Management",
                 "Productivity",
+                "Financial Management",
+                "Shopping",
                 "Relationships",
                 "Health & Fitness",
-                "Shopping",
                 "More ideas"
             ]
         );
@@ -1467,16 +1557,26 @@ mod tests {
     }
 
     #[test]
-    fn ideas_group_under_a_top_group_then_categories_in_order() {
-        let now = 9_000;
-        let mut bill = idea("bill", "I can stage your power bill", "", 1);
+    fn ideas_lead_with_three_then_the_five_categories_in_order() {
+        let now = 30 * 24 * 60 * 60 * 1000;
+        let at = |id: &str, title: &str, cat: &str, ago: u64| {
+            let mut c = idea(id, title, "", now - ago);
+            c.pulse.category = Some(cat.into());
+            c
+        };
+        let mut bill = at("bill", "I can stage your power bill", "financial", 90);
         bill.modified = true;
-        let subs = idea("subs", "I can cancel subscriptions you forgot", "", 2);
-        let resume = idea("resume", "I can tailor your resume", "", 3);
-        let gym = idea("gym", "I can plan a workout around your gear", "", 4);
-        let witcher = idea("witcher", "I can map a path through Witcher 3", "", 5);
-        let post = automation_done_card("a", "Nightly backup", "ok", 6);
-        let cards = vec![bill, subs, resume, gym, witcher, post];
+        let cards = vec![
+            bill,
+            at("groc", "I can plan groceries", "shopping", 80),
+            at("subs", "I can cancel subscriptions", "financial", 70),
+            at("resume", "I can tailor your resume", "productivity", 60),
+            at("gym", "I can plan a workout", "health", 50),
+            at("trivia", "I can plan a trivia night", "relationships", 40),
+            at("deals", "I can watch for deals", "shopping", 30),
+            at("route", "I can map a route", "productivity", 20),
+            automation_done_card("a", "Nightly backup", "ok", now - 10),
+        ];
         let groups: Vec<(Option<&str>, Vec<String>)> = group_ideas(
             &cards,
             &PulseInputs {
@@ -1492,16 +1592,49 @@ mod tests {
             )
         })
         .collect();
+        let ids = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
         assert_eq!(
             groups,
             vec![
-                (None, vec!["bill".to_string()]),
-                (Some("Financial Management"), vec!["subs".to_string()]),
-                (Some("Productivity"), vec!["resume".to_string()]),
-                (Some("Health & Fitness"), vec!["gym".to_string()]),
-                (Some("More ideas"), vec!["witcher".to_string()]),
-            ]
+                (None, ids(&["bill", "route", "deals"])),
+                (Some("Productivity"), ids(&["resume"])),
+                (Some("Financial Management"), ids(&["subs"])),
+                (Some("Shopping"), ids(&["groc"])),
+                (Some("Relationships"), ids(&["trivia"])),
+                (Some("Health & Fitness"), ids(&["gym"])),
+            ],
+            "the edited idea and the two newest lead, with no header"
         );
+    }
+
+    #[test]
+    fn ideas_retire_after_two_weeks_unless_edited() {
+        let posted = 1_000_000;
+        let idea = crate::pulse_ideas::MuseIdea {
+            title: "Cheaper groceries".into(),
+            description: "I can plan meals around the sales.".into(),
+            emoji: "🛒".into(),
+            category: PulseCategory::Shopping,
+            action: "plan meals from this week's sales".into(),
+        };
+        let mut old = crate::pulse_ideas::muse_idea_card(&idea, posted);
+        assert!(!idea_retired(&old, posted + IDEA_TTL_MS - 1));
+        assert!(idea_retired(&old, posted + IDEA_TTL_MS));
+        assert_eq!(IDEA_TTL_MS, 1_209_600_000, "14 days");
+        let mut post = automation_done_card("a", "Nightly backup", "ok", posted);
+        post.expires_at = old.expires_at;
+        assert!(
+            !idea_retired(&post, posted + IDEA_TTL_MS),
+            "only ideas retire"
+        );
+        let inputs = PulseInputs {
+            now_ms: posted + IDEA_TTL_MS,
+            ..Default::default()
+        };
+        assert!(group_ideas(std::slice::from_ref(&old), &inputs).is_empty());
+        old.modified = true;
+        assert!(!idea_retired(&old, posted + IDEA_TTL_MS));
+        assert_eq!(group_ideas(&[old], &inputs).len(), 1);
     }
 
     #[test]
@@ -1866,5 +1999,49 @@ mod tests {
         );
         assert_eq!(IDEAS_LOADING, "Looking for ideas in your recent work…");
         assert_eq!(IDEAS_SIGN_IN, "Sign in to Grok to get ideas.");
+    }
+
+    #[test]
+    fn the_gallery_takes_the_preview_and_two_large_images_and_skips_logos() {
+        let html = r#"<head><meta property="og:image" content="/img/hero.jpg"></head>
+<body><img src="/static/logo.png" width="600">
+<img src="https://cdn.example.com/a/team.jpg" alt="The team" width="1200" height="800">
+<img src="/icons/share.png">
+<img src="/img/tiny.jpg" width="40" height="40">
+<img src="/img/chart.webp" class="figure">
+<img src="data:image/png;base64,AAAA">
+<img src="/img/third.jpg" width="900"></body>"#;
+        assert_eq!(
+            gallery_images(html, "https://news.example.com/2026/story"),
+            vec![
+                "https://news.example.com/img/hero.jpg".to_string(),
+                "https://cdn.example.com/a/team.jpg".to_string(),
+                "https://news.example.com/img/chart.webp".to_string(),
+            ]
+        );
+        // No preview: in-page images only, still at most three.
+        let plain = r#"<img src="/1.jpg"><img src="/2.jpg"><img src="/3.jpg"><img src="/4.jpg">"#;
+        assert_eq!(
+            gallery_images(plain, "https://a.example.com/x").len(),
+            GALLERY_MAX
+        );
+        assert!(gallery_images("<p>text</p>", "https://a.example.com/").is_empty());
+    }
+
+    #[test]
+    fn only_real_mid_sized_image_files_are_cached() {
+        let mut jpg = vec![0xFF, 0xD8, 0xFF, 0xE0];
+        jpg.resize(IMAGE_MIN_BYTES, 0);
+        assert!(image_bytes_ok(&jpg));
+        assert!(!image_bytes_ok(&jpg[..IMAGE_MIN_BYTES - 1]), "tiny");
+        let mut webp = b"RIFF\0\0\0\0WEBPVP8 ".to_vec();
+        webp.resize(IMAGE_MIN_BYTES, 0);
+        assert!(image_bytes_ok(&webp));
+        let mut html = b"<!doctype html>".to_vec();
+        html.resize(IMAGE_MIN_BYTES, b' ');
+        assert!(!image_bytes_ok(&html));
+        let mut huge = vec![0x89, b'P', b'N', b'G'];
+        huge.resize(IMAGE_MAX_BYTES + 1, 0);
+        assert!(!image_bytes_ok(&huge));
     }
 }

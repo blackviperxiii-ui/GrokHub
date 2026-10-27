@@ -7,7 +7,9 @@ use serde::{Deserialize, Serialize};
 
 const BUILTIN: &str = include_str!("../assets/personalities.toml");
 
-/// The preset that leaves the system prompt exactly as it was before personalities.
+/// The shipped default voice. Its tone rules state the values the charter also
+/// carries. An id this build does not know stays an unstyled preset with empty
+/// tone rules.
 pub const DEFAULT_ID: &str = "default";
 /// Longest `tone_rules` a preset may carry.
 pub const TONE_RULES_MAX: usize = 600;
@@ -110,7 +112,7 @@ impl Personality {
     }
 
     /// The block this preset adds to the system prompt, ending in [`SAFETY_LINE`].
-    /// Empty for the default preset.
+    /// Empty when the tone rules are empty.
     pub fn prompt_block(&self) -> String {
         let rules = self.tone_rules.trim();
         if rules.is_empty() {
@@ -157,7 +159,7 @@ pub fn parse(text: &str) -> Result<Vec<Personality>, String> {
     Ok(file.preset)
 }
 
-/// The presets shipped with this build: `default` first, then the 20 styles. A test pins
+/// The presets shipped with this build: `default` first, then the 21 styles. A test pins
 /// that they parse; if they ever didn't, only the default voice is offered.
 pub fn builtins() -> Vec<Personality> {
     parse(BUILTIN).unwrap_or_else(|_| vec![neutral()])
@@ -313,9 +315,30 @@ pub fn find(presets: &[Personality], id: &str) -> Personality {
         .unwrap_or_else(neutral)
 }
 
+/// The presets a picker offers: every one when adults-only personalities are on,
+/// else all but the explicit ones (built-in or the user's own).
+pub fn visible(presets: &[Personality], explicit_on: bool) -> Vec<Personality> {
+    presets
+        .iter()
+        .filter(|p| explicit_on || !p.explicit)
+        .cloned()
+        .collect()
+}
+
+/// `p`, or the default voice when it is explicit and adults-only personalities are off.
+/// A chat or default still set to an explicit preset speaks as the default until the
+/// switch goes back on.
+pub fn gated(p: Personality, explicit_on: bool) -> Personality {
+    if p.explicit && !explicit_on {
+        builtin(DEFAULT_ID)
+    } else {
+        p
+    }
+}
+
 /// The cabin rules with this personality's block in front of them. The rules, which carry
-/// the safety and approval lines, always come last. The default voice returns `rules`
-/// unchanged, byte for byte.
+/// the safety and approval lines, always come last. Empty tone rules return `rules`
+/// unchanged.
 pub fn layer(personality: &Personality, rules: &str) -> String {
     let block = personality.prompt_block();
     if block.is_empty() {
@@ -346,11 +369,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_builtins_are_default_plus_twenty_valid_presets() {
+    fn the_builtins_are_default_plus_twenty_one_valid_presets() {
         let all = parse(BUILTIN).expect("assets/personalities.toml parses");
-        assert_eq!(all.len(), 21);
+        assert_eq!(all.len(), 22);
         assert_eq!(all[0].id, DEFAULT_ID);
-        assert_eq!(all[0].tone_rules, "");
+        assert!(
+            all[0].tone_rules.contains("not sycophantic"),
+            "{}",
+            all[0].tone_rules
+        );
+        assert!(all[0].tone_rules.to_ascii_lowercase().contains("adult"));
+        assert!(all[0].prompt_block().contains("not sycophantic"));
         let names: Vec<&str> = all.iter().map(|p| p.name.as_str()).collect();
         assert_eq!(
             names,
@@ -376,6 +405,7 @@ mod tests {
                 "Retro 80s Hacker",
                 "Gentle Listener",
                 "Viper",
+                "Whore",
             ]
         );
         for p in &all {
@@ -385,7 +415,7 @@ mod tests {
                 p.id
             );
         }
-        // Only Sarcastic Sidekick and Viper may roast; only Viper is explicit.
+        // Only Sarcastic Sidekick and Viper may roast; only Viper and Whore are explicit.
         let roasts: Vec<&str> = all
             .iter()
             .filter(|p| p.roast)
@@ -397,7 +427,7 @@ mod tests {
             .filter(|p| p.explicit)
             .map(|p| p.id.as_str())
             .collect();
-        assert_eq!(explicit, ["viper"]);
+        assert_eq!(explicit, ["viper", "whore"]);
         assert_eq!(find(&all, "butler").address.as_deref(), Some("sir"));
         assert_eq!(builtins(), all);
         assert_eq!(builtin("viper").name, "Viper");
@@ -405,13 +435,109 @@ mod tests {
     }
 
     #[test]
-    fn the_default_voice_leaves_the_rules_byte_identical() {
+    fn no_voice_ends_its_turn_on_a_question() {
+        let all = builtins();
+        for p in &all {
+            assert!(
+                !p.sample.trim_end().ends_with('?'),
+                "{}: the sample leads with the result, not a question: {}",
+                p.id,
+                p.sample
+            );
+            let rules = p.tone_rules.to_ascii_lowercase();
+            for asks in [
+                "as a courteous question",
+                "offer the next step",
+                "every order is a real next step",
+                "offer to handle",
+            ] {
+                assert!(
+                    !rules.contains(asks),
+                    "{}: {asks:?} in {}",
+                    p.id,
+                    p.tone_rules
+                );
+            }
+        }
+        assert!(find(&all, "butler")
+            .tone_rules
+            .contains("see to it and say it is done"));
+        assert!(find(&all, "drill-sergeant")
+            .tone_rules
+            .contains("do it and report it done"));
+        assert!(find(&all, "viper")
+            .tone_rules
+            .starts_with("Viper mode: sarcastic, unhinged, vulgar and funny."));
+    }
+
+    #[test]
+    fn the_whore_voice_is_explicit_opt_in_and_names_its_hard_limits() {
+        let whore = builtin("whore");
+        assert_eq!(whore.name, "Whore");
+        assert!(whore.explicit && !whore.roast && !whore.custom);
+        // Never picked for an unset or unknown choice.
+        assert_eq!(builtin("").id, DEFAULT_ID);
+        assert_eq!(find(&builtins(), "no-such-preset").id, DEFAULT_ID);
+        for limit in [
+            "adults only, no minors or age-play",
+            "nothing non-consensual",
+            "no real or identifiable people",
+            "If the user says stop, drop the act at once.",
+            "every reply still does the real task",
+        ] {
+            assert!(whore.tone_rules.contains(limit), "{limit}");
+        }
+        // Picking it puts its voice ahead of the rules; switching back drops it.
         let rules = crate::cabin_rules::cabin_rules_for("", false);
-        assert_eq!(layer(&find(&builtins(), DEFAULT_ID), &rules), rules);
+        let on = layer(&whore, &rules);
+        assert!(
+            on.starts_with(
+                "Personality: Whore. Whore mode: an adults-only, flirty, crude and raunchy voice."
+            ),
+            "{on}"
+        );
+        assert!(on.find("Whore mode").unwrap() < on.find(SAFETY_LINE).unwrap());
+        assert!(on.ends_with(&rules));
+        let back = layer(&builtin(DEFAULT_ID), &rules);
+        assert!(back.starts_with("Personality: Default. "));
+        assert!(!back.contains("Whore mode"));
+    }
+
+    #[test]
+    fn explicit_presets_stay_hidden_and_silent_until_adults_only_is_on() {
+        let all = builtins();
+        let names = |list: &[Personality]| {
+            list.iter()
+                .filter(|p| p.explicit)
+                .map(|p| p.id.clone())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(names(&visible(&all, false)), Vec::<String>::new());
+        assert_eq!(visible(&all, false).len(), all.len() - 2);
+        assert_eq!(names(&visible(&all, true)), ["viper", "whore"]);
+        assert_eq!(visible(&all, true), all);
+        assert_eq!(gated(builtin("whore"), false).id, DEFAULT_ID);
+        assert_eq!(gated(builtin("viper"), false).id, DEFAULT_ID);
+        assert_eq!(gated(builtin("whore"), true).id, "whore");
+        assert_eq!(gated(builtin("pirate"), false).id, "pirate");
+        // A user's own copy of an explicit preset is explicit too.
+        let copy = duplicate(&builtin("whore"), &all);
+        assert!(copy.explicit);
+        assert_eq!(gated(copy, false).id, DEFAULT_ID);
+    }
+
+    #[test]
+    fn the_default_voice_layers_its_values_and_an_unknown_id_stays_unstyled() {
+        let rules = crate::cabin_rules::cabin_rules_for("", false);
+        let layered = layer(&find(&builtins(), DEFAULT_ID), &rules);
+        assert!(layered.starts_with("Personality: Default. "));
+        assert!(layered.contains("not sycophantic"));
+        assert!(layered.ends_with(&rules));
+        assert!(layered.find("not sycophantic").unwrap() < layered.find(SAFETY_LINE).unwrap());
         assert_eq!(
             layer(&find(&builtins(), "no-such-preset"), &rules),
             rules,
-            "an unknown id is the default voice"
+            "an unknown id stays the unstyled voice"
         );
     }
 
@@ -524,7 +650,11 @@ mod tests {
         );
         assert_eq!(msgs[1], ("user".to_string(), TRY_IT_PROMPT.to_string()));
         let plain = try_it_messages(&builtin(DEFAULT_ID));
-        assert_eq!(plain[0], ("system".to_string(), TRY_IT_RULES.to_string()));
+        assert!(plain[0].1.starts_with("Personality: Default. "));
+        assert!(plain[0].1.contains("not sycophantic"));
+        assert!(plain[0]
+            .1
+            .ends_with(&format!("{SAFETY_LINE}\n\n{TRY_IT_RULES}")));
     }
 
     fn scratch(label: &str) -> std::path::PathBuf {
@@ -542,7 +672,7 @@ mod tests {
         let (all, problems) = load_all(&dir);
         assert_eq!(
             (all.len(), problems.len()),
-            (21, 0),
+            (22, 0),
             "no folder yet: built-ins only"
         );
         let mut mine = duplicate(&builtin("butler"), &all);
@@ -559,7 +689,7 @@ mod tests {
 
         let (all, problems) = load_all(&dir);
         assert!(problems.is_empty(), "{problems:?}");
-        assert_eq!(all.len(), 22);
+        assert_eq!(all.len(), 23);
         let back = find(&all, "butler-copy");
         assert_eq!(back, mine, "the saved file reads back field for field");
         assert_eq!(lookup(&dir, "butler-copy").name, "Jeeves");
@@ -569,7 +699,7 @@ mod tests {
         assert_eq!(duplicate(&builtin("butler"), &all).id, "butler-copy-2");
 
         delete_custom(&dir, "butler-copy").expect("deletes");
-        assert_eq!(load_all(&dir).0.len(), 21);
+        assert_eq!(load_all(&dir).0.len(), 22);
         assert_eq!(
             lookup(&dir, "butler-copy").id,
             DEFAULT_ID,
@@ -589,7 +719,7 @@ mod tests {
         std::fs::write(dir.join("a.toml"), "[[preset]]\nid = \"genie\"\nname = \"G\"\ndescription = \"d\"\ntone_rules = \"x\"\nemoji = \"none\"\nverbosity = \"terse\"\n").unwrap();
         std::fs::write(dir.join("b.toml"), "not toml [").unwrap();
         let (all, problems) = load_all(&dir);
-        assert_eq!(all.len(), 21);
+        assert_eq!(all.len(), 22);
         assert_eq!(problems.len(), 2, "{problems:?}");
         assert_eq!(problems[0], "a.toml: the id genie is already taken.");
         assert!(
