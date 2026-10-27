@@ -275,7 +275,9 @@ pub fn autoconfig(
         kv,
         threads,
         threads_batch: (state == GovState::RampUp).then_some(p.cpu.logical.max(1)),
-        flash_attn: backend != Backend::Cpu,
+        // llama.cpp refuses a quantized V cache without flash attention, and
+        // the CPU backend runs it too.
+        flash_attn: true,
         mlock: p.free_ram_mb.is_some_and(|free| free > 2 * meta.file_mb),
         tensor_split: p.device_plan().tensor_split,
         draft: None,

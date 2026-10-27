@@ -161,9 +161,10 @@ fn cpu_only_runs_no_gpu_layers_and_keeps_context_short() {
     );
     assert_eq!(
         (a.ngl, a.ctx, a.kv, a.threads, a.flash_attn, a.mlock),
-        (0, 8_192, KvType::Q8, 2, false, false)
+        (0, 8_192, KvType::Q8, 2, true, false)
     );
-    assert!(a.to_args().contains(&"off".to_string()));
+    // A q8_0 V cache needs flash attention on, or llama-server won't load.
+    assert!(a.to_args().windows(2).any(|w| w == ["--flash-attn", "on"]));
 }
 
 #[test]
