@@ -85,10 +85,10 @@ fn word_start(hay: &str, needle: &str) -> bool {
     })
 }
 
-/// One-tap pills that ask the agent to grant OS/workspace paths or "activate"
-/// a skill cannot succeed and doom-loop. Refuse them at card build time
-/// (`from_json`) and drop them when painting a stored card (`parse`) or when
-/// a stalled run builds a fallback card (`is_impossible_one_tap`).
+/// One-tap pills that ask the agent to grant OS/workspace paths, "activate"
+/// or invent a skill, or just "reference memory" cannot succeed and doom-loop.
+/// Drop them at card build time (`from_json`), when painting a stored card
+/// (`parse`) and when a stalled run builds a fallback card (`is_impossible_one_tap`).
 fn impossible_host_fix_reason(label: &str, goal: &str) -> Option<String> {
     let blob = format!("{label} {goal}").to_ascii_lowercase();
     const NEEDLES: &[&str] = &[
@@ -106,7 +106,7 @@ fn impossible_host_fix_reason(label: &str, goal: &str) -> Option<String> {
     if let Some(n) = NEEDLES.iter().find(|n| blob.contains(*n)) {
         return Some(format!(
             "fix `{label}` is not a one-tap the agent can do (`{n}`). \
-Use Memory, sealed learnings, or a loadable skill instead of OS permission pills."
+Only list fixes a follow-up run can actually carry out."
         ));
     }
     // Paraphrases that skip the exact needles still doom-loop (Activate steamlibreview,
@@ -122,7 +122,26 @@ Use Memory, sealed learnings, or a loadable skill instead of OS permission pills
     {
         return Some(format!(
             "fix `{label}` is not a one-tap the agent can do (skill activate family). \
-Use Memory, sealed learnings, or a loadable skill instead of OS permission pills."
+Only list fixes a follow-up run can actually carry out."
+        ));
+    }
+    // Memory is context, not an action, and a run can't conjure a skill.
+    let memory_only = [
+        "reference memory",
+        "use memory",
+        "sealed learning",
+        "memory in ",
+    ]
+    .iter()
+    .any(|n| blob.contains(n));
+    let invent_skill = ["create ", "make ", "write "]
+        .iter()
+        .any(|v| word_start(&blob, v))
+        && word_start(&blob, "skill");
+    if memory_only || invent_skill {
+        return Some(format!(
+            "fix `{label}` is not a one-tap the agent can do (memory or new-skill family). \
+Only list fixes a follow-up run can actually carry out."
         ));
     }
     let host_verb = ["grant", "allow ", "enable ", "unblock"]
@@ -137,7 +156,7 @@ Use Memory, sealed learnings, or a loadable skill instead of OS permission pills
     {
         return Some(format!(
             "fix `{label}` is not a one-tap the agent can do (host/workspace grant family). \
-Use Memory, sealed learnings, or a loadable skill instead of OS permission pills."
+Only list fixes a follow-up run can actually carry out."
         ));
     }
     None
@@ -152,7 +171,14 @@ pub fn is_impossible_one_tap(label: &str, goal: &str) -> bool {
 impl Findings {
     /// From the tool's arguments: `{"findings":[{"severity","text"}],
     /// "fixes":[{"label","goal"}]}`. Findings come out most severe first.
+    /// Fixes that aren't a real action are left out; see [`Self::from_json_dropping`].
     pub fn from_json(value: &Value) -> Result<Self, String> {
+        Self::from_json_dropping(value).map(|(card, _)| card)
+    }
+
+    /// [`Self::from_json`] plus the labels of the fixes it left out because no
+    /// follow-up run could carry them out.
+    pub fn from_json_dropping(value: &Value) -> Result<(Self, Vec<String>), String> {
         let rows = value
             .get("findings")
             .and_then(Value::as_array)
@@ -181,7 +207,7 @@ impl Findings {
         if fixes_in.len() > MAX_FIXES {
             return Err(format!("give at most {MAX_FIXES} fixes"));
         }
-        let mut fixes = Vec::new();
+        let (mut fixes, mut dropped) = (Vec::new(), Vec::new());
         for row in &fixes_in {
             let label = one_line(row.get("label").and_then(Value::as_str).unwrap_or(""));
             let goal = one_line(row.get("goal").and_then(Value::as_str).unwrap_or(""));
@@ -193,12 +219,13 @@ impl Findings {
                     "fix label `{label}` must be at most {LABEL_MAX} characters with no colon"
                 ));
             }
-            if let Some(why) = impossible_host_fix_reason(&label, &goal) {
-                return Err(why);
+            if impossible_host_fix_reason(&label, &goal).is_some() {
+                dropped.push(label);
+                continue;
             }
             fixes.push(Fix { label, goal });
         }
-        Ok(Self { items, fixes })
+        Ok((Self { items, fixes }, dropped))
     }
 
     /// The bubble text. It reads as a plain report, and [`Self::parse`]
@@ -340,25 +367,41 @@ mod tests {
             err(json!({"findings": [{"severity": "low", "text": "x"}], "fixes": seven})),
             "give at most 6 fixes"
         );
-        let steam = err(json!({
-            "findings": [{"severity": "medium", "text": "path escapes the workspace"}],
-            "fixes": [{
-                "label": "Fix path restriction",
-                "goal": "Grant workspace access to ~/.steam path"
-            }]
-        }));
-        assert!(
-            steam.contains("not a one-tap") && steam.contains("grant workspace"),
-            "{steam}"
+    }
+
+    #[test]
+    fn fixes_that_are_not_real_actions_are_dropped_not_refused() {
+        let (card, dropped) = Findings::from_json_dropping(&json!({
+            "findings": [{"severity": "medium", "text": "Pulse can't read the Steam library"}],
+            "fixes": [
+                {"label": "Fix path restriction", "goal": "Grant workspace access to ~/.steam path"},
+                {"label": "Activate steamlibreview", "goal": "Activate skill steamlibreview so it loads"},
+                {"label": "Reference Memory in pulse logic", "goal": "Reference memory in pulse logic so it uses the library"},
+                {"label": "Create pulse skill for library", "goal": "Create a pulse skill that reads the library"},
+                {"label": "Restart Pulse", "goal": "Restart the Pulse feed and confirm it refreshes."}
+            ]
+        }))
+        .unwrap();
+        assert_eq!(
+            dropped,
+            [
+                "Fix path restriction",
+                "Activate steamlibreview",
+                "Reference Memory in pulse logic",
+                "Create pulse skill for library"
+            ]
         );
-        let skill = err(json!({
-            "findings": [{"severity": "low", "text": "unknown skill"}],
-            "fixes": [{
-                "label": "Activate steamlibreview",
-                "goal": "Activate skill steamlibreview so it loads"
-            }]
-        }));
-        assert!(skill.contains("activate skill"), "{skill}");
+        assert_eq!(
+            card.to_body(),
+            "Findings from this run\n\n\
+             - Medium: Pulse can't read the Steam library\n\n\
+             One-tap fixes\n\n\
+             - Restart Pulse: Restart the Pulse feed and confirm it refreshes."
+        );
+        assert_eq!(
+            impossible_host_fix_reason("Make pulse skill", "Make a skill for Pulse").unwrap(),
+            "fix `Make pulse skill` is not a one-tap the agent can do (memory or new-skill family). Only list fixes a follow-up run can actually carry out."
+        );
     }
 
     #[test]

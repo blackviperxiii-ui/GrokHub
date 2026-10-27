@@ -346,15 +346,26 @@ fn apply_todos(todos: &mut Vec<TodoItem>, value: &Value) -> Result<(), String> {
 fn report_findings(arguments: &str, on_event: &mut dyn FnMut(LoopEvent)) -> ToolOutput {
     let card = serde_json::from_str::<Value>(arguments)
         .map_err(|_| "report_findings arguments must be a JSON object".to_string())
-        .and_then(|value| grokhub_core::findings::Findings::from_json(&value));
+        .and_then(|value| grokhub_core::findings::Findings::from_json_dropping(&value));
     match card {
-        Ok(card) => {
+        Ok((card, dropped)) => {
             on_event(LoopEvent::Findings(card.to_body()));
-            ToolOutput::ok(format!(
+            let mut out = format!(
                 "Findings card posted: {} findings, {} one-tap fixes. It shows after your reply.",
                 card.items.len(),
                 card.fixes.len()
-            ))
+            );
+            if !dropped.is_empty() {
+                out.push_str(&format!(
+                    " Left out {} that no follow-up run can carry out. Don't post the card again.",
+                    dropped
+                        .iter()
+                        .map(|l| format!("\"{l}\""))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ));
+            }
+            ToolOutput::ok(out)
         }
         Err(err) => ToolOutput::err(err),
     }
@@ -1069,5 +1080,30 @@ mod tests {
         assert!(!dir.join("ask.txt").exists());
         assert!(!plan_on(&ask_mode));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_findings_card_with_a_made_up_fix_posts_once_without_it() {
+        let mut cards = Vec::new();
+        let out = report_findings(
+            r#"{"findings":[{"severity":"medium","text":"Pulse can't read the Steam library yet"}],
+                "fixes":[{"label":"Reference Memory in pulse logic","goal":"Reference memory in pulse logic"},
+                         {"label":"Explain all","goal":"Explain each finding in plain words."}]}"#,
+            &mut |ev| cards.push(ev),
+        );
+        assert!(!out.failed);
+        assert_eq!(
+            out.text,
+            "Findings card posted: 1 findings, 1 one-tap fixes. It shows after your reply. \
+             Left out \"Reference Memory in pulse logic\" that no follow-up run can carry out. Don't post the card again."
+        );
+        assert_eq!(
+            cards,
+            [LoopEvent::Findings(
+                "Findings from this run\n\n- Medium: Pulse can't read the Steam library yet\n\n\
+                 One-tap fixes\n\n- Explain all: Explain each finding in plain words."
+                    .into()
+            )]
+        );
     }
 }

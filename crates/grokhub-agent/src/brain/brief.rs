@@ -192,6 +192,16 @@ const REPAIR_PHRASES: &[&str] = &[
 ];
 /// Diagnostics is repair work: the design's "repair/diagnostics" intent.
 const DIAGNOSE_WORDS: &[&str] = &["scan", "diagnose", "diagnostics", "troubleshoot", "checkup"];
+/// A feature or config ask ("use X for Y", "you should ..."): new work, never a
+/// repair, even when it says "scan". Repair is for something reported broken.
+const FEATURE_PHRASES: &[&str] = &[
+    "you should",
+    "it should",
+    "it would be nice",
+    "i want it to",
+    "add support",
+    "feature",
+];
 /// The machine as a whole: the system domain, without being a change to it.
 const MACHINE_WORDS: &[&str] = &[
     "computer", "pc", "laptop", "machine", "os", "windows", "linux",
@@ -395,13 +405,20 @@ pub fn rules(input: &BriefInput<'_>) -> Option<Brief> {
         rest = rest.strip_prefix(p).map(str::trim_start).unwrap_or(rest);
     }
     let first = words(rest).first().copied().unwrap_or_default();
-    let repair = any_word(&ws, REPAIR_WORDS)
-        || any_word(&ws, DIAGNOSE_WORDS)
-        || any_phrase(&t, REPAIR_PHRASES);
+    // "use X for Y", with X up to four words.
+    let use_for = ws
+        .iter()
+        .enumerate()
+        .any(|(i, w)| *w == "use" && ws.iter().skip(i + 1).take(5).any(|n| *n == "for"));
+    let feature = use_for || any_phrase(&t, FEATURE_PHRASES);
+    let broken = any_word(&ws, REPAIR_WORDS) || any_phrase(&t, REPAIR_PHRASES);
+    let repair = broken || (any_word(&ws, DIAGNOSE_WORDS) && !feature);
     let intent = if input.background {
         Intent::Background
     } else if repair {
         Intent::Repair
+    } else if feature {
+        Intent::Task
     } else if any_word(&ws, CREATIVE_WORDS) {
         Intent::Creative
     } else if any_word(&ws, RESEARCH_WORDS) || any_phrase(&t, RESEARCH_PHRASES) {
@@ -737,12 +754,43 @@ mod tests {
                 "desktop",
                 "calm",
             ),
+            // A feature ask that says "scan" is new work, not a repair.
+            (
+                "you should scan my steam library and use that for pulse",
+                Intent::Task,
+                Care::Careful,
+                "general",
+                "calm",
+            ),
+            (
+                "use my notes folder for the daily digest",
+                Intent::Task,
+                Care::Careful,
+                "files",
+                "calm",
+            ),
+            // Something reported broken stays a repair even in feature words.
+            (
+                "you should fix the crash in the pulse feed",
+                Intent::Repair,
+                Care::Critical,
+                "general",
+                "calm",
+            ),
         ];
         for (text, intent, care, domain, mood) in cases {
             let b = rules(&input(text)).unwrap_or_else(|| panic!("{text}: rules gave no brief"));
             assert_eq!(short(&b), (*intent, *care, *domain, *mood), "{text}");
             assert_eq!(b.by, "rules", "{text}");
         }
+        assert_eq!(
+            rules(&input(
+                "you should scan my steam library and use that for pulse"
+            ))
+            .unwrap()
+            .label(),
+            "task × careful, done = the asked change is made, result checked"
+        );
         let repair = rules(&input("the printer service won't start after the update")).unwrap();
         assert_eq!(
             repair.label(),
