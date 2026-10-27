@@ -462,6 +462,12 @@ pub fn parse(req: &SourceReq, body: &str) -> Vec<SourceItem> {
         SourceKind::GithubReleases | SourceKind::YouTube | SourceKind::Rss => parse_feed(req, body),
     };
     items.retain(|i| !i.title.is_empty() && http_url(&i.url));
+    // Steam news rarely carries art; the game's store header stands in.
+    if let Some(art) = crate::steam::header_image(&req.url) {
+        for item in items.iter_mut().filter(|i| i.image.is_none()) {
+            item.image = Some(art.clone());
+        }
+    }
     items
 }
 
@@ -860,6 +866,8 @@ fn finish(req: &SourceReq, feed_title: &str, e: Entry) -> SourceItem {
     };
     let source_name = match req.kind {
         SourceKind::GithubReleases => req.name.clone(),
+        // A game's Steam news says which game it is ("<game> on Steam").
+        _ if crate::steam::is_news_feed(&req.url) => req.name.clone(),
         _ => {
             let t = one_line(&decode_entities(feed_title), 40);
             if t.is_empty() {

@@ -39,6 +39,8 @@ pub(super) struct SourcesState {
     pub last_run_ms: Option<u64>,
     /// More like this started a check; Feed shows Looking… until it finishes.
     pub looking_more: bool,
+    /// The Steam library and its Pulse prefs.
+    pub steam: super::steam_ui::SteamState,
 }
 
 /// A run, its picks, and the fast model's reply.
@@ -261,6 +263,7 @@ impl Cabin {
         let path = sources_cache_path();
         let mut cache = ps::load_cache(&path);
         let mut reqs = ps::requests_for(&self.cfg.pulse_sources, &topics, cache.runs, now);
+        reqs.extend(self.steam_requests(now));
         // Graph probes + More like this asks run on this check.
         let mut related = cache.related.clone();
         for p in probes {
@@ -729,6 +732,7 @@ impl Cabin {
             }
             ui.add_space(6.0);
         }
+        self.ui_steam_source(ui);
         // The paid search extension point, shown off and not clickable.
         let mut paid = ps::PAID_SEARCH_ENABLED;
         ui.add_enabled(

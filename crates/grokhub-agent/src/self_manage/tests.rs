@@ -30,7 +30,7 @@ fn native(g: &Gate, name: &str, args: &serde_json::Value) -> Decision {
 #[test]
 fn class_table_names_every_tool_once() {
     let names: Vec<&str> = SELF_TOOLS.iter().map(|(n, _)| *n).collect();
-    assert_eq!(names.len(), 16);
+    assert_eq!(names.len(), 17);
     let schema_names: Vec<String> = mcp_tools()
         .iter()
         .map(|t| t["name"].as_str().unwrap().to_string())
@@ -56,6 +56,7 @@ fn class_table_names_every_tool_once() {
             ("automation_modify", "soft"),
             ("automation_disable", "soft"),
             ("automation_delete", "delete"),
+            ("pulse_steam", "soft"),
         ]
     );
     for t in native_schemas() {
@@ -613,5 +614,51 @@ fn automation_tools_use_the_scheduler_writer_and_its_weekly_cap() {
     assert!(run_with(&ctx, "automation_modify", &json!({ "id": "auto-none" })).failed);
     let _ = crate::tools::control::take_automation_changes();
     let _ = crate::harness::take_self_changes(&root);
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn pulse_steam_saves_the_toggle_and_mutes_and_reports_them() {
+    let root = dir("pulse-steam");
+    let steam = root.join("Steam");
+    let apps = steam.join("steamapps");
+    std::fs::create_dir_all(&apps).unwrap();
+    std::fs::write(
+        apps.join("libraryfolders.vdf"),
+        "\"libraryfolders\" { \"0\" { \"path\" \"/home/user/missing\" } }",
+    )
+    .unwrap();
+    for (id, name) in [(10, "Current Main"), (20, "Old Save")] {
+        std::fs::write(
+            apps.join(format!("appmanifest_{id}.acf")),
+            format!(
+                "\"AppState\" {{ \"appid\" \"{id}\" \"name\" \"{name}\" \"LastPlayed\" \"{id}\" }}"
+            ),
+        )
+        .unwrap();
+    }
+    let ctx = SelfCtx::new(&root);
+    let call = |args: serde_json::Value, found: bool| {
+        ops::pulse_steam(&ctx, &args, found.then(|| steam.clone()))
+    };
+    assert_eq!(
+        call(json!({ "on": true, "mute": ["old save"] }), true),
+        Ok("Steam library: on, 1 game feeds Pulse, 1 muted. Checked first: Current Main.".into())
+    );
+    let saved = grokhub_core::steam::load_prefs(&root);
+    assert_eq!((saved.on, saved.muted), (Some(true), vec![20]));
+    assert_eq!(
+        call(json!({ "mute": ["Nope"] }), true),
+        Err("`Nope` is not in the Steam library.".into())
+    );
+    assert_eq!(
+        call(json!({ "unmute": ["Old Save"], "on": false }), true),
+        Ok("Steam library: off (2 games found).".into())
+    );
+    assert_eq!(
+        call(json!({ "on": true }), false),
+        Err("Steam is not installed on this computer, so there is no library to use.".into())
+    );
+    assert_eq!(grokhub_core::steam::load_prefs(&root).on, Some(false));
     let _ = std::fs::remove_dir_all(root);
 }

@@ -10,7 +10,7 @@
 //! ([`scope_guard`]).
 //!
 //! Rule 4: the agent never widens its own permissions. These tools reach
-//! skills, connections, automations, and nothing else.
+//! skills, connections, automations, Pulse's Steam source, and nothing else.
 
 mod ops;
 
@@ -77,6 +77,7 @@ pub const SELF_TOOLS: &[(&str, SelfClass)] = &[
     ("automation_modify", SelfClass::Soft),
     ("automation_disable", SelfClass::Soft),
     ("automation_delete", SelfClass::Delete),
+    ("pulse_steam", SelfClass::Soft),
 ];
 
 /// The table name for a native name (`skill_create`) or a Grok Build MCP name
@@ -265,6 +266,12 @@ pub fn mcp_tools() -> Vec<Value> {
         tool("automation_modify", "Change a GrokHub automation. Logged with Undo.", obj(with_id(auto_body), &["id", "reason"])),
         tool("automation_disable", "Turn a GrokHub automation off. Logged with Undo.", obj(with_id(json!({})), &["id", "reason"])),
         tool("automation_delete", "Delete a GrokHub automation. Needs the user's click.", obj(with_id(json!({})), &["id", "reason"])),
+        tool("pulse_steam", "Steam games in Pulse: on, off, mute. Turns the user's Steam library source on or off and mutes or unmutes games by name. With no changes, reports which games feed Pulse. The result is what is saved; quote it instead of claiming from memory.", obj(json!({
+            "on": { "type": "boolean", "description": "true uses the Steam library in Pulse, false stops it." },
+            "mute": { "type": "array", "items": { "type": "string" }, "description": "Game names to keep out of Pulse." },
+            "unmute": { "type": "array", "items": { "type": "string" }, "description": "Game names to let back in." },
+            "reason": reason,
+        }), &[])),
     ]
 }
 
