@@ -1,1 +1,0 @@
-- Native agent: an append-only prefix guard logs any request whose cached prefix (system, tools, earlier turns) changed for an unexpected reason, and the native usage line now shows each turn's cache hit share ("cache N%"). Technique from the Reason Agent 1.1 post, reimplemented.

@@ -1,1 +1,0 @@
-- Personalities: a new adults-only "Whore" preset, tagged Explicit like Viper and never picked by default; it keeps hard limits (adults only, consent, no real people) and drops the act when told to stop.
