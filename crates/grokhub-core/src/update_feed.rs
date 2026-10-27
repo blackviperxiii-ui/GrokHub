@@ -377,6 +377,10 @@ pub struct TasteNote {
 pub struct PulseNow {
     pub now_ms: u64,
     pub quiet: bool,
+    /// The brief's hour gate (`crate::rhythm::Rhythm::brief_gate`). `None`:
+    /// the digest's own interval decides. `Some(true)`: post now.
+    /// `Some(false)`: wait for the brief hour.
+    pub brief: Option<bool>,
 }
 
 /// Memory, the brief, returned links, and explicit taste. No transcript dump.
@@ -1406,8 +1410,11 @@ pub fn tick_feed_pulse(
             }
         }
     }
-    let digest_due = pulse.digest_on
-        && (pulse.digest_held || due(pulse.last_digest_ms, pulse.digest_ms, now.now_ms));
+    let on_clock = match now.brief {
+        None => due(pulse.last_digest_ms, pulse.digest_ms, now.now_ms),
+        Some(at_brief_hour) => at_brief_hour,
+    };
+    let digest_due = pulse.digest_on && (pulse.digest_held || on_clock);
     if digest_due && now.quiet {
         if !pulse.digest_held {
             pulse.digest_held = true;
@@ -3905,6 +3912,7 @@ https://xstack.grok.me/post ZEPHYRTAIL"
             PulseNow {
                 now_ms: 1_000,
                 quiet: true,
+                brief: None,
             },
             material("", &[], &[]),
         );
@@ -3918,6 +3926,7 @@ https://xstack.grok.me/post ZEPHYRTAIL"
             PulseNow {
                 now_ms: 1_000 + DEFAULT_QUIET_RELEASE_MS,
                 quiet: false,
+                brief: None,
             },
             material("", &[], &[]),
         );
@@ -3950,6 +3959,7 @@ https://xstack.grok.me/post ZEPHYRTAIL"
             PulseNow {
                 now_ms: 100,
                 quiet: true,
+                brief: None,
             },
             material("more F1", &[], &[]),
         );
@@ -3964,6 +3974,7 @@ https://xstack.grok.me/post ZEPHYRTAIL"
             PulseNow {
                 now_ms: 200,
                 quiet: false,
+                brief: None,
             },
             material("more F1", &[], &[]),
         );
@@ -3986,6 +3997,7 @@ https://xstack.grok.me/post ZEPHYRTAIL"
             PulseNow {
                 now_ms: 300,
                 quiet: false,
+                brief: None,
             },
             with_edition(material("more F1", &links, &[]), edition),
         );
@@ -3998,6 +4010,46 @@ https://xstack.grok.me/post ZEPHYRTAIL"
             "the digest no longer posts a template idea beside it"
         );
         assert!(visible_updates(&cards).is_empty());
+    }
+
+    #[test]
+    fn a_brief_hour_holds_the_digest_until_that_hour() {
+        let links = links_from_research("see https://news.example/f1 today");
+        let edition = DigestEdition {
+            found: true,
+            refused: false,
+            title: "Race weekend",
+            body: "Qualifying is on Saturday. https://news.example/f1",
+        };
+        let mut cards = Vec::new();
+        let mut pulse = FeedPulse {
+            last_expiry_ms: 1,
+            expiry_ms: 10_000,
+            last_quiet_release_ms: 1,
+            quiet_release_ms: 10_000,
+            ..FeedPulse::default()
+        };
+        let at = |brief| PulseNow {
+            now_ms: 50,
+            quiet: false,
+            brief: Some(brief),
+        };
+        let waiting = tick_feed_pulse(
+            &mut cards,
+            &mut pulse,
+            at(false),
+            with_edition(material("F1", &links, &[]), edition),
+        );
+        assert!(!waiting.digest_posted && !waiting.digest_needs_lookup);
+        assert_eq!(pulse.last_digest_ms, 0);
+        let posted = tick_feed_pulse(
+            &mut cards,
+            &mut pulse,
+            at(true),
+            with_edition(material("F1", &links, &[]), edition),
+        );
+        assert!(posted.digest_posted);
+        assert_eq!(pulse.last_digest_ms, 50);
     }
 
     #[test]
@@ -4024,6 +4076,7 @@ https://xstack.grok.me/post ZEPHYRTAIL"
             PulseNow {
                 now_ms: 50,
                 quiet: false,
+                brief: None,
             },
             with_edition(
                 material("more F1 https://evil.example/phish", &links, &[]),
@@ -4050,6 +4103,7 @@ https://xstack.grok.me/post ZEPHYRTAIL"
             PulseNow {
                 now_ms: 50,
                 quiet: false,
+                brief: None,
             },
             material("pay the invoice for me", &[], &[]),
         );
@@ -4394,6 +4448,7 @@ https://xstack.grok.me/post ZEPHYRTAIL"
             PulseNow {
                 now_ms: 80,
                 quiet: false,
+                brief: None,
             },
             material("more F1", &[], &[]),
         );
@@ -4416,6 +4471,7 @@ https://xstack.grok.me/post ZEPHYRTAIL"
             PulseNow {
                 now_ms: 20,
                 quiet: false,
+                brief: None,
             },
             material("more F1", &[], &[]),
         );
@@ -4446,6 +4502,7 @@ https://xstack.grok.me/post ZEPHYRTAIL"
             PulseNow {
                 now_ms: 30,
                 quiet: false,
+                brief: None,
             },
             with_edition(material("more F1", &links, &taste), edition),
         );
@@ -4478,6 +4535,7 @@ https://xstack.grok.me/post ZEPHYRTAIL"
             PulseNow {
                 now_ms: 5_000,
                 quiet: false,
+                brief: None,
             },
             material("more F1", &[], &[]),
         );
@@ -5515,6 +5573,7 @@ https://xstack.grok.me/post ZEPHYRTAIL"
             PulseNow {
                 now_ms: 10,
                 quiet: false,
+                brief: None,
             },
             with_edition(material("the harbor", &[], &[]), edition),
         );

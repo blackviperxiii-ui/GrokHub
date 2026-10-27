@@ -104,6 +104,7 @@ pub mod reflect;
 pub mod release_verify;
 pub mod review;
 pub mod rewind;
+pub mod rhythm;
 pub mod run_metrics;
 pub mod runtime_download;
 pub mod screen_record;
