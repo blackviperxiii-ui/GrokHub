@@ -500,6 +500,10 @@ pub struct AppConfig {
         skip_serializing_if = "is_true"
     )]
     pub memory_writes: bool,
+    /// Optional model dream after the deterministic nightly tidy.
+    /// Omitted from `app.json` while this stays off. `"dream_model": true` turns it on.
+    #[serde(default, rename = "dream_model", skip_serializing_if = "is_false")]
+    pub dream_model: bool,
 }
 
 fn is_true(v: &bool) -> bool {
@@ -690,6 +694,7 @@ impl Default for AppConfig {
             memory_backend: grokhub_core::amr::MemoryBackend::Legacy,
             memory_migrated: false,
             memory_writes: true,
+            dream_model: false,
         }
     }
 }
@@ -1048,6 +1053,21 @@ pub fn test_config_root(label: &str) -> std::path::PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dream_model_defaults_off_and_omits_the_key() {
+        let missing: AppConfig = serde_json::from_str("{}").unwrap();
+        assert!(!missing.dream_model);
+        let json = serde_json::to_string(&AppConfig::default()).unwrap();
+        assert!(
+            !json.contains("dream_model"),
+            "default config must omit dream_model: {json}"
+        );
+        let on: AppConfig = serde_json::from_str(r#"{"dream_model":true}"#).unwrap();
+        assert!(on.dream_model);
+        let saved = serde_json::to_string(&on).unwrap();
+        assert!(saved.contains("\"dream_model\":true"), "{saved}");
+    }
 
     #[test]
     fn memory_backend_defaults_legacy_and_parses_amr() {

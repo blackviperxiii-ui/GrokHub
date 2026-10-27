@@ -1,0 +1,5 @@
+- Model dream stays off until `app.json` sets `"dream_model": true`.
+- After the deterministic dream, one nightly `background:dream` call asks for medium effort. That route starts at low and its ceiling is medium. The reply is capped at 4096 output tokens.
+- Lessons pass `lesson_checks` and the change ledger. Undo restores the previous skill file.
+- USER and SOUL lines stay proposed until you approve them.
+- While the flag is on, a turn's reflect or remember proposes those lines instead of writing them into core memory.
