@@ -834,6 +834,8 @@ pub fn load() -> AppConfig {
     if fresh {
         cfg.memory_backend = grokhub_core::amr::MemoryBackend::Amr;
         cfg.memory_migrated = true;
+        // An existing file keeps its pick; a missing field is the default voice.
+        cfg.personality = grokhub_core::personality::NEW_INSTALL_ID.into();
     }
     cfg.host_on = true;
     // Leftover `"yolo": true` from older cabins must not disable the bound-tree jail.
@@ -1145,6 +1147,34 @@ mod tests {
         let flagged = load();
         assert!(flagged.memory_backend.is_legacy());
         assert!(flagged.memory_migrated);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn new_install_starts_on_nyx_and_existing_picks_stay() {
+        let _g = hold_test_config();
+        let root = test_config_root("nyx-default");
+        let _ = fs::remove_dir_all(&root);
+        let _pin = TestConfigDir::set(root.clone());
+        fs::create_dir_all(&root).unwrap();
+        let fresh = load();
+        assert_eq!(fresh.personality, "nyx");
+        save(&fresh).unwrap();
+        let body = fs::read_to_string(root.join("app.json")).unwrap();
+        assert!(body.contains("\"personality\": \"nyx\""), "{body}");
+        assert_eq!(load().personality, "nyx");
+
+        // Picking the default voice stores an empty field, and it stays the default.
+        let mut picked_default = load();
+        picked_default.personality = String::new();
+        save(&picked_default).unwrap();
+        assert_eq!(load().personality, "");
+
+        // Existing installs: no field is the default voice, a pick is kept.
+        fs::write(root.join("app.json"), "{}\n").unwrap();
+        assert_eq!(load().personality, "");
+        fs::write(root.join("app.json"), "{\"personality\":\"pirate\"}\n").unwrap();
+        assert_eq!(load().personality, "pirate");
         let _ = fs::remove_dir_all(&root);
     }
 

@@ -1323,8 +1323,9 @@ mod tests {
                 }
             }
         }
+        // config.rs only seeds a new install's pick (Nyx); it never reads it into a prompt.
         let want: std::collections::BTreeSet<String> =
-            ["app/native_engine.rs", "app/personality_ui.rs"]
+            ["app/native_engine.rs", "app/personality_ui.rs", "config.rs"]
                 .iter()
                 .map(|s| s.to_string())
                 .collect();

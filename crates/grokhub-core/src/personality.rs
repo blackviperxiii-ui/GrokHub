@@ -11,6 +11,9 @@ const BUILTIN: &str = include_str!("../assets/personalities.toml");
 /// carries. An id this build does not know stays an unstyled preset with empty
 /// tone rules.
 pub const DEFAULT_ID: &str = "default";
+/// The companion's voice: what a new install starts on. An existing install keeps
+/// its pick, including an empty one, which stays the default voice.
+pub const NEW_INSTALL_ID: &str = "nyx";
 /// Longest `tone_rules` a preset may carry.
 pub const TONE_RULES_MAX: usize = 600;
 /// Longest one-line description.
@@ -159,10 +162,15 @@ pub fn parse(text: &str) -> Result<Vec<Personality>, String> {
     Ok(file.preset)
 }
 
-/// The presets shipped with this build: `default` first, then the 21 styles. A test pins
-/// that they parse; if they ever didn't, only the default voice is offered.
+/// The presets shipped with this build: `default` first, then Nyx, then the 21 styles.
+/// A test pins that they parse; if they ever didn't, only the default voice is offered.
+/// Nyx shows under the companion's name from `brand/brand.json`.
 pub fn builtins() -> Vec<Personality> {
-    parse(BUILTIN).unwrap_or_else(|_| vec![neutral()])
+    let mut all = parse(BUILTIN).unwrap_or_else(|_| vec![neutral()]);
+    if let Some(nyx) = all.iter_mut().find(|p| p.id == NEW_INSTALL_ID) {
+        nyx.name = crate::brand::companion_name().to_string();
+    }
+    all
 }
 
 fn neutral() -> Personality {
@@ -369,9 +377,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_builtins_are_default_plus_twenty_one_valid_presets() {
+    fn the_builtins_are_default_nyx_and_the_twenty_one_styles() {
         let all = parse(BUILTIN).expect("assets/personalities.toml parses");
-        assert_eq!(all.len(), 22);
+        assert_eq!(all.len(), 23);
         assert_eq!(all[0].id, DEFAULT_ID);
         assert!(
             all[0].tone_rules.contains("not sycophantic"),
@@ -385,6 +393,7 @@ mod tests {
             names,
             [
                 "Default",
+                "Nyx",
                 "Genie",
                 "Pirate",
                 "Hype Coach",
@@ -415,13 +424,13 @@ mod tests {
                 p.id
             );
         }
-        // Only Sarcastic Sidekick and Viper may roast; only Viper and Whore are explicit.
+        // Only Nyx, Sarcastic Sidekick and Viper may roast; only Viper and Whore are explicit.
         let roasts: Vec<&str> = all
             .iter()
             .filter(|p| p.roast)
             .map(|p| p.id.as_str())
             .collect();
-        assert_eq!(roasts, ["sarcastic-sidekick", "viper"]);
+        assert_eq!(roasts, ["nyx", "sarcastic-sidekick", "viper"]);
         let explicit: Vec<&str> = all
             .iter()
             .filter(|p| p.explicit)
@@ -672,7 +681,7 @@ mod tests {
         let (all, problems) = load_all(&dir);
         assert_eq!(
             (all.len(), problems.len()),
-            (22, 0),
+            (23, 0),
             "no folder yet: built-ins only"
         );
         let mut mine = duplicate(&builtin("butler"), &all);
@@ -689,7 +698,7 @@ mod tests {
 
         let (all, problems) = load_all(&dir);
         assert!(problems.is_empty(), "{problems:?}");
-        assert_eq!(all.len(), 23);
+        assert_eq!(all.len(), 24);
         let back = find(&all, "butler-copy");
         assert_eq!(back, mine, "the saved file reads back field for field");
         assert_eq!(lookup(&dir, "butler-copy").name, "Jeeves");
@@ -699,7 +708,7 @@ mod tests {
         assert_eq!(duplicate(&builtin("butler"), &all).id, "butler-copy-2");
 
         delete_custom(&dir, "butler-copy").expect("deletes");
-        assert_eq!(load_all(&dir).0.len(), 22);
+        assert_eq!(load_all(&dir).0.len(), 23);
         assert_eq!(
             lookup(&dir, "butler-copy").id,
             DEFAULT_ID,
@@ -719,7 +728,7 @@ mod tests {
         std::fs::write(dir.join("a.toml"), "[[preset]]\nid = \"genie\"\nname = \"G\"\ndescription = \"d\"\ntone_rules = \"x\"\nemoji = \"none\"\nverbosity = \"terse\"\n").unwrap();
         std::fs::write(dir.join("b.toml"), "not toml [").unwrap();
         let (all, problems) = load_all(&dir);
-        assert_eq!(all.len(), 22);
+        assert_eq!(all.len(), 23);
         assert_eq!(problems.len(), 2, "{problems:?}");
         assert_eq!(problems[0], "a.toml: the id genie is already taken.");
         assert!(
@@ -746,5 +755,33 @@ mod tests {
             default_copy.check().is_ok(),
             "a copy of the default has tone rules to edit"
         );
+    }
+
+    #[test]
+    fn nyx_is_the_companion_voice_clean_and_room_reading() {
+        let nyx = builtin(NEW_INSTALL_ID);
+        assert_eq!(nyx.id, "nyx");
+        assert_eq!(nyx.name, crate::brand::companion_name());
+        assert_eq!(nyx.name, "Nyx");
+        assert!(nyx.roast);
+        assert!(
+            !nyx.explicit,
+            "Nyx stays clean; explicit voices sit behind the adults-only switch"
+        );
+        assert_eq!(gated(nyx.clone(), false).id, "nyx");
+        let block = nyx.prompt_block();
+        assert!(
+            block.starts_with("Personality: Nyx. Be a nerdy, techie gamer friend"),
+            "{block}"
+        );
+        for must in [
+            "Read the room.",
+            "never mean or cruel",
+            "drop the jokes and help straight",
+            "no profanity or explicit content",
+        ] {
+            assert!(block.contains(must), "missing {must:?}: {block}");
+        }
+        assert!(block.ends_with(SAFETY_LINE));
     }
 }
