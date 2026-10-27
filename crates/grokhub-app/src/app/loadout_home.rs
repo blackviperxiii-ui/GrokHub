@@ -19,12 +19,90 @@ const COMPANION_PNG: &[u8] = include_bytes!("../../../../brand/companion.png");
 /// The default 1100 px window leaves about 840 px beside the rail, so the
 /// dock shows there in its compact width.
 const DOCK_MIN_PAGE_W: f32 = 780.0;
+/// Companion art height: the compact dock keeps 196, wider docks grow to 260.
 const ART_H: f32 = 196.0;
+const ART_MAX_H: f32 = 260.0;
 const MISSION_REFRESH: Duration = Duration::from_secs(2);
 const PROFILE_REFRESH: Duration = Duration::from_secs(120);
+const XP_REFRESH: Duration = Duration::from_secs(30);
 const PULSE_LINES: usize = 2;
-/// Static Listening waveform, bar heights as a share of the row.
+/// Listening waveform at rest, bar heights as a share of the row.
 const WAVE: [f32; 9] = [0.35, 0.7, 1.0, 0.5, 0.85, 0.4, 0.95, 0.6, 0.3];
+/// XP for each finished task in the outcome log and each checked step.
+const XP_PER_TASK: u32 = 100;
+const XP_PER_STEP: u32 = 25;
+const XP_PER_LEVEL: u32 = 500;
+
+/// Art height for the companion card's inner width.
+pub(super) fn art_height(inner_w: f32) -> f32 {
+    (inner_w * 0.78).clamp(ART_H, ART_MAX_H)
+}
+
+/// Bar heights at `t` seconds. The bars move only while voice is on and
+/// motion isn't reduced; otherwise they rest at [`WAVE`].
+pub(super) fn wave_heights(t: f64, live: bool, still: bool) -> [f32; 9] {
+    if !live || still {
+        return WAVE;
+    }
+    let mut out = WAVE;
+    for (i, h) in out.iter_mut().enumerate() {
+        let swing = (t * 7.0 + i as f64 * 0.8).sin().abs() as f32;
+        *h = (*h * (0.35 + 0.65 * swing)).max(0.15);
+    }
+    out
+}
+
+/// Level, total XP and progress into the level, from finished tasks and the
+/// open mission's checked steps.
+pub(super) fn level_xp(finished: usize, checked: usize) -> (u32, u32, f32) {
+    let xp = finished as u32 * XP_PER_TASK + checked as u32 * XP_PER_STEP;
+    let level = xp / XP_PER_LEVEL + 1;
+    let frac = (xp % XP_PER_LEVEL) as f32 / XP_PER_LEVEL as f32;
+    (level, xp, frac)
+}
+
+/// `2340` as `2,340`.
+fn grouped(n: u32) -> String {
+    let s = n.to_string();
+    let mut out = String::new();
+    for (i, c) in s.chars().enumerate() {
+        if i > 0 && (s.len() - i).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(c);
+    }
+    out
+}
+
+/// A 0-100 health score from what the probes read: heat, free memory and
+/// free disk. `None` until anything has been read.
+pub(super) fn pc_score(p: &LocalProfile) -> Option<u8> {
+    if p.ram_mb == 0 && p.gpus.is_empty() && p.thermal == Thermal::Unknown {
+        return None;
+    }
+    let mut score: i32 = 100;
+    score -= match p.thermal {
+        Thermal::Unknown | Thermal::Nominal => 0,
+        Thermal::Fair => 10,
+        Thermal::Serious => 30,
+        Thermal::Critical => 50,
+    };
+    if let Some(free) = p.free_ram_mb.filter(|_| p.ram_mb > 0) {
+        if free * 100 < p.ram_mb * 10 {
+            score -= 15;
+        } else if free * 100 < p.ram_mb * 25 {
+            score -= 8;
+        }
+    }
+    if p.free_disk_mb > 0 {
+        if p.free_disk_mb < 10 * 1024 {
+            score -= 25;
+        } else if p.free_disk_mb < 50 * 1024 {
+            score -= 10;
+        }
+    }
+    Some(score.clamp(0, 100) as u8)
+}
 
 /// Dock width for the page width beside the rail, or `None` when it hides.
 pub(super) fn dock_width(page_w: f32) -> Option<f32> {
@@ -195,19 +273,64 @@ fn caption(text: &str) -> egui::RichText {
         .color(crate::theme::muted())
 }
 
-fn header(ui: &mut egui::Ui, title: &str, right: &str) {
+/// Amber diamond before a dock card title, as on the deck.
+fn diamond(ui: &mut egui::Ui, filled: bool) {
+    let (mark, _) = ui.allocate_exact_size(egui::vec2(10.0, 10.0), egui::Sense::hover());
+    let c = mark.center();
+    let points = vec![
+        egui::pos2(c.x, c.y - 5.0),
+        egui::pos2(c.x + 5.0, c.y),
+        egui::pos2(c.x, c.y + 5.0),
+        egui::pos2(c.x - 5.0, c.y),
+    ];
+    let (fill, stroke) = if filled {
+        (crate::theme::amber(), egui::Stroke::NONE)
+    } else {
+        (
+            egui::Color32::TRANSPARENT,
+            egui::Stroke::new(1.0, crate::theme::amber()),
+        )
+    };
+    ui.painter()
+        .add(egui::Shape::convex_polygon(points, fill, stroke));
+}
+
+/// Card title on the left, after an amber diamond when `mark` is set, and a
+/// count or score on the right in `right_color`.
+fn header(ui: &mut egui::Ui, mark: bool, title: &str, right: &str, right_color: egui::Color32) {
     ui.horizontal(|ui| {
+        if mark {
+            ui.spacing_mut().item_spacing.x = 6.0;
+            diamond(ui, true);
+        }
         ui.label(caption(title));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.label(
                 egui::RichText::new(right.to_uppercase())
                     .size(crate::theme::TYPE_CAPTION)
+                    .extra_letter_spacing(1.5)
                     .strong()
-                    .color(crate::theme::amber()),
+                    .color(right_color),
             );
         });
     });
     ui.add_space(crate::theme::SPACING_8);
+}
+
+/// Amber corner brackets inside `rect`, the docked frame on slide 02.
+fn paint_brackets(painter: &egui::Painter, rect: egui::Rect) {
+    let r = rect.shrink(6.0);
+    let arm = 18.0;
+    let stroke = egui::Stroke::new(1.5, crate::theme::amber());
+    for (corner, dx, dy) in [
+        (r.left_top(), 1.0, 1.0),
+        (r.right_top(), -1.0, 1.0),
+        (r.left_bottom(), 1.0, -1.0),
+        (r.right_bottom(), -1.0, -1.0),
+    ] {
+        painter.line_segment([corner, corner + egui::vec2(arm * dx, 0.0)], stroke);
+        painter.line_segment([corner, corner + egui::vec2(0.0, arm * dy)], stroke);
+    }
 }
 
 fn companion_texture(ctx: &egui::Context) -> Option<egui::TextureHandle> {
@@ -233,8 +356,13 @@ fn paint_wave(ui: &mut egui::Ui, live: bool) {
     } else {
         crate::theme::muted()
     };
-    let step = rect.width() / WAVE.len() as f32;
-    for (i, h) in WAVE.iter().enumerate() {
+    let still = crate::motion::reduced_motion(ui);
+    let bars = wave_heights(ui.input(|i| i.time), live, still);
+    if live && !still {
+        ui.ctx().request_repaint_after(Duration::from_millis(50));
+    }
+    let step = rect.width() / bars.len() as f32;
+    for (i, h) in bars.iter().enumerate() {
         let x = rect.left() + step * (i as f32 + 0.5);
         let half = rect.height() * h / 2.0;
         ui.painter().line_segment(
@@ -279,10 +407,15 @@ impl Cabin {
         let name = grokhub_core::brand::companion_name();
         let live = self.voice_is_on();
         let resp = card(ui, |ui| {
-            ui.label(caption(&format!("{name} · docked")));
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 6.0;
+                diamond(ui, true);
+                ui.label(caption("Companion · docked"));
+            });
             ui.add_space(crate::theme::SPACING_4);
             let w = ui.available_width();
-            let (art, _) = ui.allocate_exact_size(egui::vec2(w, ART_H), egui::Sense::hover());
+            let (art, _) =
+                ui.allocate_exact_size(egui::vec2(w, art_height(w)), egui::Sense::hover());
             ui.painter()
                 .rect_filled(art, crate::theme::RADIUS_SM, crate::theme::void_bg());
             // A soft red glow behind the pedestal, as on the deck.
@@ -329,6 +462,7 @@ impl Cabin {
                 });
             });
         });
+        paint_brackets(ui.painter(), resp.rect);
         let click = ui
             .interact(
                 resp.rect,
@@ -356,8 +490,27 @@ impl Cabin {
         view
     }
 
+    /// Finished tasks in the outcome log, re-read every [`XP_REFRESH`].
+    fn dock_finished_tasks(&self, ctx: &egui::Context) -> usize {
+        type Cached = (Instant, usize);
+        let id = egui::Id::new("loadout-finished-tasks");
+        if let Some((at, n)) = ctx.data(|d| d.get_temp::<Cached>(id)) {
+            if at.elapsed() < XP_REFRESH {
+                return n;
+            }
+        }
+        let now = now_ms();
+        let n = grokhub_core::outcome::read_outcomes(&crate::config::config_dir())
+            .iter()
+            .filter(|o| o.effective(now) == grokhub_core::outcome::OutcomeResult::Success)
+            .count();
+        ctx.data_mut(|d| d.insert_temp::<Cached>(id, (Instant::now(), n)));
+        n
+    }
+
     fn dock_objectives(&self, ui: &mut egui::Ui) {
         let mission = self.dock_mission(ui.ctx());
+        let finished = self.dock_finished_tasks(ui.ctx());
         card(ui, |ui| {
             let items = mission.as_ref().map_or(&[][..], |m| &m.checklist[..]);
             let (done, total) = objective_progress(items);
@@ -366,68 +519,66 @@ impl Cabin {
             } else {
                 String::new()
             };
-            header(ui, "Objectives", &right);
-            let Some(m) = mission.as_ref().filter(|_| total > 0) else {
-                ui.label(
-                    egui::RichText::new(format!(
-                        "Nothing on the list yet. Ask {} to plan something.",
-                        grokhub_core::brand::companion_name()
-                    ))
-                    .size(crate::theme::TYPE_BODY)
-                    .color(crate::theme::muted()),
-                );
-                return;
-            };
-            if !m.title.trim().is_empty() {
-                ui.label(
-                    egui::RichText::new(m.title.trim())
+            header(ui, true, "Objectives", &right, crate::theme::amber());
+            match mission.as_ref().filter(|_| total > 0) {
+                None => {
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "Nothing on the list yet. Ask {} to plan something.",
+                            grokhub_core::brand::companion_name()
+                        ))
                         .size(crate::theme::TYPE_BODY)
-                        .strong()
-                        .color(crate::theme::fg()),
-                );
-            }
-            for item in m
-                .checklist
-                .iter()
-                .filter(|i| i.status != MissionCheckStatus::Cancelled)
-                .take(4)
-            {
-                let verified = item.status == MissionCheckStatus::Verified;
-                ui.horizontal(|ui| {
-                    let (mark, _) =
-                        ui.allocate_exact_size(egui::vec2(10.0, 10.0), egui::Sense::hover());
-                    let c = mark.center();
-                    let diamond = vec![
-                        egui::pos2(c.x, c.y - 5.0),
-                        egui::pos2(c.x + 5.0, c.y),
-                        egui::pos2(c.x, c.y + 5.0),
-                        egui::pos2(c.x - 5.0, c.y),
-                    ];
-                    let (fill, stroke) = if verified {
-                        (crate::theme::amber(), egui::Stroke::NONE)
-                    } else {
-                        (
-                            egui::Color32::TRANSPARENT,
-                            egui::Stroke::new(1.0, crate::theme::amber()),
-                        )
-                    };
-                    ui.painter()
-                        .add(egui::Shape::convex_polygon(diamond, fill, stroke));
-                    ui.add(
-                        egui::Label::new(
-                            egui::RichText::new(&item.text)
+                        .color(crate::theme::muted()),
+                    );
+                }
+                Some(m) => {
+                    if !m.title.trim().is_empty() {
+                        ui.label(
+                            egui::RichText::new(m.title.trim())
                                 .size(crate::theme::TYPE_BODY)
-                                .color(if verified {
-                                    crate::theme::muted()
-                                } else {
-                                    crate::theme::fg()
-                                }),
-                        )
-                        .truncate(),
+                                .strong()
+                                .color(crate::theme::fg()),
+                        );
+                    }
+                    for item in m
+                        .checklist
+                        .iter()
+                        .filter(|i| i.status != MissionCheckStatus::Cancelled)
+                        .take(4)
+                    {
+                        let verified = item.status == MissionCheckStatus::Verified;
+                        ui.horizontal(|ui| {
+                            diamond(ui, verified);
+                            ui.add(
+                                egui::Label::new(
+                                    egui::RichText::new(&item.text)
+                                        .size(crate::theme::TYPE_BODY)
+                                        .color(if verified {
+                                            crate::theme::muted()
+                                        } else {
+                                            crate::theme::fg()
+                                        }),
+                                )
+                                .truncate(),
+                            );
+                        });
+                    }
+                }
+            }
+            let (level, xp, frac) = level_xp(finished, done);
+            ui.add_space(crate::theme::SPACING_4);
+            ui.horizontal(|ui| {
+                ui.label(caption(&format!("Lvl {level}")));
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.label(
+                        egui::RichText::new(format!("{} XP", grouped(xp)))
+                            .size(crate::theme::TYPE_CAPTION)
+                            .extra_letter_spacing(1.0)
+                            .strong()
+                            .color(crate::theme::amber()),
                     );
                 });
-            }
-            let frac = done as f32 / total as f32;
+            });
             let (bar, _) =
                 ui.allocate_exact_size(egui::vec2(ui.available_width(), 6.0), egui::Sense::hover());
             ui.painter().rect_filled(bar, 3.0, crate::theme::selected());
@@ -445,7 +596,7 @@ impl Cabin {
             } else {
                 String::new()
             };
-            header(ui, "From Pulse", &right);
+            header(ui, false, "From Pulse", &right, crate::theme::amber());
             if lines.is_empty() {
                 ui.label(
                     egui::RichText::new("All quiet. New finds land here.")
@@ -488,9 +639,15 @@ impl Cabin {
 }
 
 fn dock_pc(ui: &mut egui::Ui) {
+    use crate::ui_kit::recipe;
     let profile = pc_profile();
     card(ui, |ui| {
-        header(ui, "PC loadout", "");
+        let score = profile
+            .as_ref()
+            .and_then(pc_score)
+            .map(|n| format!("{n}%"))
+            .unwrap_or_default();
+        header(ui, false, "PC loadout", &score, crate::theme::fg());
         let Some(p) = profile else {
             ui.label(
                 egui::RichText::new("Reading this PC…")
@@ -506,19 +663,27 @@ fn dock_pc(ui: &mut egui::Ui) {
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = gap;
                 for (i, t) in row.iter().enumerate() {
-                    let stroke = if i == 0 && t.label == "GPU" {
-                        crate::theme::amber()
+                    // The GPU tile is the selected one: amber rim and value.
+                    let picked = i == 0 && t.label == "GPU";
+                    let (stroke, ink) = if picked {
+                        (
+                            recipe::look(recipe::Part::Card, recipe::State::Accent).stroke,
+                            crate::theme::amber(),
+                        )
                     } else {
-                        crate::theme::border()
+                        (
+                            egui::Stroke::new(1.0, crate::theme::border()),
+                            crate::theme::fg(),
+                        )
                     };
                     egui::Frame::NONE
                         .fill(crate::theme::void_bg())
-                        .stroke(egui::Stroke::new(1.0, stroke))
-                        .corner_radius(crate::theme::RADIUS_SM)
+                        .stroke(stroke)
+                        .corner_radius(recipe::BUTTON_RADIUS)
                         .inner_margin(egui::Margin::same(8))
                         .show(ui, |ui| {
-                            // Inner margin 8 and a 1 px stroke on each side.
-                            ui.set_width(w - 18.0);
+                            // Inner margin 8 and the rim on each side.
+                            ui.set_width(w - 16.0 - stroke.width * 2.0);
                             ui.vertical(|ui| {
                                 ui.spacing_mut().item_spacing.y = 2.0;
                                 ui.label(caption(t.label));
@@ -527,7 +692,7 @@ fn dock_pc(ui: &mut egui::Ui) {
                                         egui::RichText::new(&t.value)
                                             .size(crate::theme::TYPE_LABEL)
                                             .strong()
-                                            .color(crate::theme::fg()),
+                                            .color(ink),
                                     )
                                     .truncate(),
                                 )
@@ -683,5 +848,60 @@ mod tests {
     fn companion_art_decodes() {
         let img = image::load_from_memory(COMPANION_PNG).expect("brand/companion.png decodes");
         assert!(img.width() > 100 && img.height() > 100);
+    }
+
+    #[test]
+    fn companion_art_grows_with_the_dock_between_196_and_260() {
+        // Compact 240 px dock: 216 px inside the card.
+        assert_eq!(art_height(216.0), 196.0);
+        // 300 px dock: 276 px inside.
+        assert_eq!(art_height(276.0), 215.28);
+        assert_eq!(art_height(316.0), 246.48);
+        assert_eq!(art_height(400.0), 260.0);
+    }
+
+    #[test]
+    fn the_wave_moves_only_while_listening_and_motion_is_on() {
+        assert_eq!(wave_heights(1.3, false, false), WAVE);
+        assert_eq!(wave_heights(1.3, true, true), WAVE);
+        let a = wave_heights(0.0, true, false);
+        let b = wave_heights(0.2, true, false);
+        assert_ne!(a, b);
+        // t = 0: bar 0 swings sin(0) = 0, so 0.35 x 0.35 drops to the 0.15 floor.
+        assert_eq!(a[0], 0.15);
+        assert!(a.iter().chain(b.iter()).all(|h| (0.15..=1.0).contains(h)));
+    }
+
+    #[test]
+    fn level_and_xp_come_from_finished_tasks_and_checked_steps() {
+        assert_eq!(level_xp(0, 0), (1, 0, 0.0));
+        // 23 finished tasks and 2 checked steps: 2,350 XP, level 5, 70% in.
+        assert_eq!(level_xp(23, 2), (5, 2350, 0.7));
+        assert_eq!(level_xp(5, 0), (2, 500, 0.0));
+        assert_eq!(grouped(2350), "2,350");
+        assert_eq!(grouped(999), "999");
+        assert_eq!(grouped(1_000_000), "1,000,000");
+    }
+
+    #[test]
+    fn pc_score_takes_off_for_heat_low_memory_and_a_full_disk() {
+        let mut p = profile(vec![gpu("RTX 4070", 12 * 1024, false, "560")]);
+        p.thermal = Thermal::Nominal;
+        assert_eq!(pc_score(&p), Some(100));
+        p.thermal = Thermal::Fair;
+        assert_eq!(pc_score(&p), Some(90));
+        p.free_ram_mb = Some(6 * 1024);
+        assert_eq!(pc_score(&p), Some(82));
+        p.free_ram_mb = Some(2 * 1024);
+        p.free_disk_mb = 30 * 1024;
+        assert_eq!(pc_score(&p), Some(65));
+        p.thermal = Thermal::Critical;
+        p.free_disk_mb = 4 * 1024;
+        assert_eq!(pc_score(&p), Some(10));
+
+        let mut bare = profile(vec![]);
+        bare.thermal = Thermal::Unknown;
+        bare.ram_mb = 0;
+        assert_eq!(pc_score(&bare), None);
     }
 }
