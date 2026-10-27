@@ -1379,6 +1379,23 @@ fn every_home_card_the_cabin_posts_names_its_item() {
         "Rust 1.99",
     ));
     rows.push((
+        "finish_wishlist",
+        grokhub_core::steam_wishlist::Alert {
+            app_id: 4242,
+            name: "Fake Quest".into(),
+            price: grokhub_core::steam_wishlist::Price {
+                initial: 1999,
+                final_price: 999,
+                discount: 50,
+                initial_text: "$19.99".into(),
+                final_text: "$9.99".into(),
+            },
+            new_low: true,
+        }
+        .card(now),
+        "Fake Quest",
+    ));
+    rows.push((
         "tick_daily_drop",
         grokhub_core::pulse_sources::item_card(
             &grokhub_core::pulse_sources::Ranked {

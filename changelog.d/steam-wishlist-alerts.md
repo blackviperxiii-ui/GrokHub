@@ -1,0 +1,1 @@
+- Pulse can alert you when games on your public Steam wishlist go on sale (opt-in under Settings → Pulse → Sources). Pick any sale, 25% or 50% off, or the lowest price seen; each sale alerts once, and Not interested lowers how many show per day. The SteamID is sealed on this PC and only sent to Steam.
