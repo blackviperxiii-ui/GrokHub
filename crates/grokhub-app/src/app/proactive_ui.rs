@@ -163,7 +163,10 @@ impl Cabin {
             };
             let card = pro::proactive_card(c, route, now);
             if pro::notify_os(c, now, self.cfg.proactive_reminders) && !self.quiet_now() {
-                crate::notify::ping("GrokHub", &grokhub_core::pulse::i_can_title(&card));
+                crate::notify::ping(
+                    grokhub_core::brand::product_name(),
+                    &grokhub_core::pulse::i_can_title(&card),
+                );
             }
             grokhub_core::post_update(&mut self.updates, card);
             posted += 1;

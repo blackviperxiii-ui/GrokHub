@@ -6,6 +6,8 @@
 
 pub mod agent;
 pub mod automations;
+#[cfg(test)]
+mod brand_guard;
 pub mod capabilities;
 pub mod connectors;
 pub mod credential;
@@ -1053,7 +1055,7 @@ fn remote_call(app: &AppHandle, command: &str, args: &Value) -> Result<Value, St
         "get_feed_prompt" => out(block_on(get_feed_prompt(state))?),
         "save_feed_prompt" => out(block_on(save_feed_prompt(state, arg(args, "text")?))?),
         "pulse_image" => out(block_on(pulse_image(state, arg(args, "name")?))?),
-        _ => Err(remote::REFUSED.into()),
+        _ => Err(remote::refused()),
     }
 }
 
@@ -1068,13 +1070,14 @@ fn show_main(app: &AppHandle) {
 
 #[cfg(desktop)]
 fn build_tray(app: &tauri::App) -> tauri::Result<()> {
-    let show = MenuItem::with_id(app, "show", "Show GrokHub", true, None::<&str>)?;
+    let show_label = format!("Show {}", grokhub_core::brand::product_name());
+    let show = MenuItem::with_id(app, "show", show_label, true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
     let local = MenuItem::with_id(app, "local", local_ai::TRAY_CHECKING, false, None::<&str>)?;
     let menu = Menu::with_items(app, &[&local, &show, &quit])?;
     local_ai::start_tray(local, app.state::<ShellState>().config_dir.clone());
     let mut tray = TrayIconBuilder::with_id("main")
-        .tooltip("GrokHub")
+        .tooltip(grokhub_core::brand::product_name())
         .menu(&menu)
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id.as_ref() {
@@ -1140,7 +1143,8 @@ fn build_main_window(app: &tauri::App) -> tauri::Result<()> {
     else {
         return Ok(());
     };
-    let builder = tauri::WebviewWindowBuilder::from_config(app.handle(), &config)?;
+    let builder = tauri::WebviewWindowBuilder::from_config(app.handle(), &config)?
+        .title(grokhub_core::brand::product_name());
     #[cfg(windows)]
     let builder = webview2_driver_overrides(builder);
     builder.build()?;
@@ -1335,7 +1339,10 @@ pub fn run() {
         ])
         .run(tauri::generate_context!());
     if let Err(err) = built {
-        eprintln!("GrokHub shell failed to start: {err}");
+        eprintln!(
+            "{} failed to start: {err}",
+            grokhub_core::brand::product_name()
+        );
         std::process::exit(1);
     }
 }

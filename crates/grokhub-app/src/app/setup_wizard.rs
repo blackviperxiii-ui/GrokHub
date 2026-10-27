@@ -51,7 +51,7 @@ pub(super) fn should_open_setup(setup_done: bool, has_history: bool) -> bool {
 pub(super) fn models_dir() -> PathBuf {
     grokhub_core::paths::user_home()
         .unwrap_or_else(|| PathBuf::from("."))
-        .join("GrokHub")
+        .join(grokhub_core::brand::INTERNAL_ID)
         .join("models")
 }
 
@@ -335,9 +335,10 @@ impl Cabin {
             )
             .show(ctx, |ui| {
                 ui.set_width(560.0_f32.min(ctx.content_rect().width() - 80.0));
+                let welcome = format!("Welcome to {}", grokhub_core::brand::product_name());
                 let (title, body) = match step {
                     SetupStep::Welcome => (
-                        "Welcome to GrokHub",
+                        welcome.as_str(),
                         "A quick setup: two app settings, then an optional on-device model for background work. You can skip any step.",
                     ),
                     SetupStep::App => ("App setup", "Change either of these later in Settings → Behavior."),

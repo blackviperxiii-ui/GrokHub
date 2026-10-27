@@ -9,10 +9,11 @@ import {
   type PluginPage,
   type PluginRow,
 } from "./api";
+import { PRODUCT_NAME } from "./brand";
 
 export const LABS_NOTE = "Early features. They work, but they may change.";
 export const CHANNEL_NOTE =
-  "The beta channel switch is in the GrokHub cabin. This app updates from its release downloads.";
+  `The beta channel switch is in the ${PRODUCT_NAME} cabin. This app updates from its release downloads.`;
 export const PLUGINS_TIP =
   "A preview: the same plugins as the cabin's Labs page, with fewer details on each bundle.";
 export const PLUGINS_NOTE =

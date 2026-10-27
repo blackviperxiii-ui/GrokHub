@@ -308,11 +308,11 @@ pub fn limits(m: &Machine, os: &str, env: &dyn Fn(&str) -> Option<String>) -> Ve
     let wayland = env("XDG_SESSION_TYPE").is_some_and(|s| s.eq_ignore_ascii_case("wayland"));
     let compositor = env("HYPRLAND_INSTANCE_SIGNATURE").is_some() || env("SWAYSOCK").is_some();
     if os == "linux" && wayland && !compositor {
-        out.push(
-            "On Wayland GrokHub can't see which app is fullscreen, so Pause while gaming only \
-             sees games it can detect."
-                .into(),
-        );
+        out.push(format!(
+            "On Wayland {} can't see which app is fullscreen, so Pause while gaming only \
+             sees games it can detect.",
+            grokhub_core::brand::product_name()
+        ));
     }
     out
 }
@@ -634,7 +634,7 @@ fn free_disk_mb(_dir: &Path) -> Option<u64> {
 fn models_dir() -> Option<PathBuf> {
     Some(
         grokhub_core::paths::user_home()?
-            .join("GrokHub")
+            .join(grokhub_core::brand::INTERNAL_ID)
             .join("models"),
     )
 }

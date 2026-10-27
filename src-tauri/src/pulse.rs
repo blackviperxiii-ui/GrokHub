@@ -159,7 +159,10 @@ fn note(title: &str, reason: LedgerReason, date: &str) -> Result<(), String> {
     }
     let path = grokhub_agent::global_memory_path();
     if std::fs::symlink_metadata(&path).is_ok_and(|m| m.file_type().is_symlink()) {
-        return Err("MEMORY.md is a link to another file. GrokHub does not follow it.".into());
+        return Err(format!(
+            "MEMORY.md is a link to another file. {} does not follow it.",
+            grokhub_core::brand::product_name()
+        ));
     }
     if std::fs::metadata(&path).is_ok_and(|m| m.len() > NOTES_CAP) {
         return Err("MEMORY.md is too large to add to. Nothing was changed.".into());

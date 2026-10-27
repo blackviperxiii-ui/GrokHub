@@ -417,7 +417,7 @@ fn run_cabin(hidden: bool) -> eframe::Result<()> {
     let mut viewport = egui::ViewportBuilder::default()
         .with_inner_size(window::launch_size(&geom))
         .with_min_inner_size([window::WIN_MIN_W, window::WIN_MIN_H])
-        .with_title("GrokHub")
+        .with_title(grokhub_core::brand::product_name())
         .with_app_id("grokhub")
         .with_decorations(false)
         .with_maximized(geom.maximized)
@@ -441,7 +441,7 @@ fn run_cabin(hidden: bool) -> eframe::Result<()> {
             ..Default::default()
         };
         let result = eframe::run_native(
-            "GrokHub",
+            grokhub_core::brand::INTERNAL_ID,
             opts,
             Box::new(move |cc| {
                 startup::mark("startup:window");
@@ -472,7 +472,7 @@ fn run_cabin_with_fx(hidden: bool, viewport: egui::ViewportBuilder) -> eframe::R
             ..Default::default()
         };
         let result = eframe::run_native(
-            "GrokHub",
+            grokhub_core::brand::INTERNAL_ID,
             opts,
             Box::new(move |cc| {
                 if want_wgpu {

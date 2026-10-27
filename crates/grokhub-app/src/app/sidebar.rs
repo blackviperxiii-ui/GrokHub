@@ -51,7 +51,7 @@ impl Cabin {
                 ui.horizontal_centered(|ui| {
                     ui.add_space(12.0);
                     ui.label(
-                        RichText::new("GrokHub")
+                        RichText::new(grokhub_core::brand::product_name())
                             .font(crate::theme::title_font(crate::theme::FONT_CHROME))
                             .color(crate::theme::fg()),
                     );

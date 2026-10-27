@@ -1,9 +1,10 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { App } from "./App";
 import { inShell, onPairChange, pair, paired } from "./transport";
+import { LOGO_MARK_URL, PRODUCT_NAME } from "./brand";
 
 export const PAIR_HELP =
-  "Open GrokHub on your computer, turn on Settings → Web access, and enter the pairing code it shows.";
+  `Open ${PRODUCT_NAME} on your computer, turn on Settings → Web access, and enter the pairing code it shows.`;
 
 /**
  * Takes `#code=…` off the address (GrokHub's pairing link) so the code
@@ -49,7 +50,10 @@ export function Pair({ onPaired }: { onPaired: () => void }) {
 
   return (
     <section className="pair" aria-label="Pair">
-      <h1>GrokHub</h1>
+      <h1 className="brand-lockup">
+        <img src={LOGO_MARK_URL} alt="" />
+        {PRODUCT_NAME}
+      </h1>
       <p>{PAIR_HELP}</p>
       <form onSubmit={submit}>
         <label>
