@@ -1,1 +1,0 @@
-- Long lists show part of the next item so you can tell there is more: the command palette (shell and cabin), the phone Settings sections row, and the next-step chips under a reply. Arrow keys scroll one item ahead of the selection, instantly when the system asks for reduced motion.

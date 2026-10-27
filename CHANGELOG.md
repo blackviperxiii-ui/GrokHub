@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+## 3.4.0 — 2026-10-27
+
+- Activity Dock in the app shell's views bar: one place on every page that shows the chat turn that's running (with its latest step and how many are done), an approval or plan waiting on you, and Run now automations as they run and finish. Review and Open chat go to the chat with the approval card; Open result goes to Automations. On phones it's a dot and a count, and the list opens above the bar.
+- Loadout rebrand, foundation 1 of 6: the product name, tagline and companion name now come from one file, `brand/brand.json`, and the logo mark and app icon load from `brand/logo-mark.svg` and `brand/app-icon.svg`. The app now shows the working name "Loadout" in the shell, the web app, and the cabin's window title, tray, title bar, welcome screen, About and notifications. Config folders, the keychain entry, app ids and installer names stay `GrokHub`, so settings and sign-ins carry over.
+- Loadout foundation 3 of 6: the cabin's chat home now has a dock on the right. The companion (named from `brand/brand.json`) sits at the top as a still picture with "Here · tap to talk"; tapping it starts voice. Below it are Objectives (the open mission's checklist), PC loadout (GPU, driver, thermal, RAM and free disk as this PC reads them) and From Pulse (the newest home cards; tap to open Pulse). The dock hides on windows narrower than about 1240 px so the chat keeps its column.
+- New "Nyx" personality, the companion's own voice: a nerdy gamer and techie who is warm and fun, roasts and trash-talks when the moment's right, and drops the jokes for straight help when you're frustrated or it's serious. Never explicit. New installs start on Nyx; existing installs keep whatever personality they picked, and the 21 other presets are unchanged. Its name comes from `brand/brand.json`.
+- Appearance: Ops Dark (default for new installs), OLED Black, and Soft Charcoal Loadout theme tokens, with classic Dark / Light / System kept.
+- Long lists show part of the next item so you can tell there is more: the command palette (shell and cabin), the phone Settings sections row, and the next-step chips under a reply. Arrow keys scroll one item ahead of the selection, instantly when the system asks for reduced motion.
+- Pulse in the Loadout look: Ideas and Feed side by side on wide windows (about 60/40, narrower on laptops, cards tile 2-up when there's room), one stacked column on small windows, and the Feed | Ideas switch on narrow ones, where Run stays on every idea and Snooze and Dismiss sit in the ··· menu. Cards use the theme's raised fill and red rims; every Pulse action is unchanged.
+- Pulse: your local Steam library feeds the Feed with each game's Steam news, most recently played first, with store art. Settings → Pulse → Sources shows "Use my Steam library in Pulse" when Steam is found, lists the games feeding Pulse, and mutes any of them. The agent's `pulse_steam` tool turns it on or off and mutes games, and reports what it saved.
+- Settings > About: a quiet "Support the developer" link (label in `brand/brand.json`). It shows only once `supportUrl` in `app.json` holds a web address and opens it in the browser. No payments, tiers or prompts.
+
+- Linux: `grokhub-linux-v3.4.0.tar.gz` and AUR `pkgver=3.4.0`.
+- Windows: `GrokHub-Setup-3.4.0.exe` and `grokhub-windows-v3.4.0.zip`.
+- Shell (Tauri): `grokhub-shell-v3.4.0-linux-amd64.deb`, `grokhub-shell-v3.4.0-linux-amd64.AppImage`, `GrokHub-Shell-Setup-3.4.0.exe` and `grokhub-shell-v3.4.0-macos-arm64.dmg`.
+
 ## 3.3.0 — 2026-10-27
 
 - Personalities: an adults-only switch in Settings → Personality (cabin and shell), off by default. Off hides explicit presets such as Viper in every picker, and a chat set to one speaks in the default voice; the quick picker tags explicit presets.
