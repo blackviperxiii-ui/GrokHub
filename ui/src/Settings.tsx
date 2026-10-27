@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import {
   clearApiKey,
   getSettings,
@@ -11,6 +11,7 @@ import {
 import { Appearance } from "./Appearance";
 import { APPROVALS } from "./approvals";
 import { Labs } from "./Labs";
+import { onArrowFocus, usePeek } from "./peek";
 import { Interests } from "./Interests";
 import { LocalAi } from "./LocalAi";
 import { Permissions } from "./Permissions";
@@ -41,6 +42,9 @@ export function Settings({
   const [key, setKey] = useState("");
   const [note, setNote] = useState<string | null>(null);
   const [section, setSection] = useState<Section>(goTo?.section ?? "general");
+  const nav = useRef<HTMLElement>(null);
+  // On a phone the sections are one row that scrolls; the next one peeks in.
+  usePeek(nav, "x", settings !== null && sections(caps).length);
 
   useEffect(() => {
     if (goTo) {
@@ -109,7 +113,12 @@ export function Settings({
 
   return (
     <div className="settings-page">
-      <nav className="settings-nav" aria-label="Settings sections">
+      <nav
+        ref={nav}
+        className="settings-nav"
+        aria-label="Settings sections"
+        onKeyDown={(e) => onArrowFocus(e)}
+      >
         {sections(caps).map((name) => (
           <button
             key={name}
