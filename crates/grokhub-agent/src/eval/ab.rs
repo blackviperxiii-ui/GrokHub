@@ -13,6 +13,7 @@ use crate::gate::PermMode;
 use crate::prompt::{system_prompt_with, PromptNeed, PromptProfile};
 use crate::{run_unattended, AuthKind, CancelToken, HaltCheck, ModelClient, UnattendedRun, Usage};
 
+pub use super::care_first::{care_first_default_on, run_care_first_ab, CARE_FIRST_SHIPS_ON};
 use super::metrics::{
     derive_usage, format_report, gate, offline_cost_ticks, recommend, success_within_noise,
     AbComparison, AbGateFailure, ArmMetrics, CapturedRequest, Recommendation, RequestTotals,
@@ -922,5 +923,25 @@ mod tests {
         assert!(read("deferred_tools.toml").contains("enabled = true"));
         assert!(read("batched_tools.toml").contains("enabled = true"));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn care_first_arm_stays_off_on_the_fixed_set() {
+        let report = run_care_first_ab().expect("care-first");
+        assert!(!report.ships_on);
+        assert_eq!(report.ships_on, CARE_FIRST_SHIPS_ON);
+        assert!(report.quality_judge.is_none());
+        assert!(report.turns.iter().any(|turn| turn.kind == "emotional"));
+        assert!(report.turns.iter().any(|turn| turn.kind == "open"));
+        assert!(report.why.contains("Skipped: live quality judge"));
+        assert_eq!(
+            care_first_default_on(
+                false,
+                report.cost_ratio,
+                report.p95_ratio,
+                report.words_ratio
+            ),
+            report.ships_on
+        );
     }
 }

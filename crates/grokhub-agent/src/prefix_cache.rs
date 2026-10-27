@@ -79,11 +79,14 @@ impl TurnVolatile {
         user_text: &str,
         first_turn: bool,
         style: Option<grokhub_core::talk::TalkStyle>,
+        soft_caps: bool,
         playbook: Option<&str>,
         already: &[String],
         intentions: Option<String>,
     ) -> Self {
-        let style = style.map(|s| s.block()).filter(|s| !s.is_empty());
+        let style = style
+            .map(|s| s.prompt_block(soft_caps))
+            .filter(|s| !s.is_empty());
         let playbook = playbook
             .map(|block| block.trim())
             .filter(|s| !s.is_empty())

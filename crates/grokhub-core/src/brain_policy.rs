@@ -20,7 +20,7 @@ pub const INTENTS: &[&str] = &[
     "background",
 ];
 pub const CARES: &[&str] = &["casual", "careful", "critical"];
-pub const GOALS: &[&str] = &["speed", "quality", "cost", "balanced"];
+pub const GOALS: &[&str] = &["speed", "quality", "cost", "balanced", "care"];
 /// Longest text a row field may hold.
 pub const FIELD_MAX: usize = 120;
 
@@ -74,9 +74,16 @@ impl PolicyRow {
     }
 }
 
+fn is_false(v: &bool) -> bool {
+    !*v
+}
+
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct PolicyFile {
+    /// A/B switch. Off keeps the shipped rows. On is applied at turn time.
+    #[serde(default, skip_serializing_if = "is_false")]
+    care_first: bool,
     #[serde(default)]
     row: Vec<PolicyRow>,
 }
@@ -159,9 +166,52 @@ pub fn parse_policy(text: &str) -> Result<Vec<PolicyRow>, String> {
 
 /// Rows as a policy file's text, checked the way a user file is.
 pub fn policy_text(rows: &[PolicyRow]) -> Result<String, String> {
-    let text = toml::to_string(&PolicyFile { row: rows.to_vec() }).map_err(|e| e.to_string())?;
-    parse_policy(&text)?;
+    policy_text_with(rows, false)
+}
+
+/// [`policy_text`] that keeps a `care_first` switch on the same file.
+pub fn policy_text_with(rows: &[PolicyRow], care_first: bool) -> Result<String, String> {
+    let text = toml::to_string(&PolicyFile {
+        care_first,
+        row: rows.to_vec(),
+    })
+    .map_err(|e| e.to_string())?;
+    let parsed = parse_policy(&text)?;
+    if parsed.len() != rows.len() || care_first_flag(&text) != care_first {
+        return Err("policy text did not round-trip".into());
+    }
     Ok(text)
+}
+
+/// The `care_first` switch in one policy file. Missing or unreadable is off.
+pub fn care_first_flag(text: &str) -> bool {
+    toml::from_str::<PolicyFile>(text)
+        .map(|file| file.care_first)
+        .unwrap_or(false)
+}
+
+/// The shipped file's switch. It is off.
+pub fn builtin_care_first() -> bool {
+    care_first_flag(BUILTIN)
+}
+
+/// The chat casual row the care-first arm uses instead of the speed row.
+pub fn care_first_chat_row() -> PolicyRow {
+    PolicyRow {
+        intent: "chat".into(),
+        care: "casual".into(),
+        goal: "care".into(),
+        reason: "a careful reply matters more than speed".into(),
+        depth: "none".into(),
+        ask: "act".into(),
+        stop: "need met".into(),
+        talk: "natural".into(),
+    }
+}
+
+/// Replace the chat casual row. Other rows stay.
+pub fn apply_care_first(rows: Vec<PolicyRow>) -> Vec<PolicyRow> {
+    merge_policy(rows, vec![care_first_chat_row()])
 }
 
 /// The shipped rows.
@@ -268,7 +318,7 @@ mod tests {
             .contains("unknown field `colour`"));
         assert_eq!(
             parse_policy(&row("", "act").replace("speed", "fastest")).unwrap_err(),
-            "chat × casual: goal must be one of speed, quality, cost, balanced"
+            "chat × casual: goal must be one of speed, quality, cost, balanced, care"
         );
         assert_eq!(
             parse_policy(&row("", "act").replace("\"chat\"", "\"gossip\"")).unwrap_err(),
@@ -309,5 +359,30 @@ mod tests {
             pick_row(&rows, "creative", "casual").unwrap().key(),
             "creative × any"
         );
+    }
+
+    #[test]
+    fn care_first_ships_off_and_the_chat_row_changes_only_when_applied() {
+        assert!(!builtin_care_first());
+        let shipped = builtin_policy();
+        let chat = pick_row(&shipped, "chat", "casual").unwrap();
+        assert_eq!(
+            (chat.goal.as_str(), chat.stop.as_str(), chat.talk.as_str()),
+            ("speed", "answered", "brief, personality on")
+        );
+        let on = apply_care_first(shipped);
+        let chat = pick_row(&on, "chat", "casual").unwrap();
+        assert_eq!(chat, &care_first_chat_row());
+        assert_eq!(
+            (chat.goal.as_str(), chat.stop.as_str(), chat.talk.as_str()),
+            ("care", "need met", "natural")
+        );
+        check_row(chat).unwrap();
+        let repair = pick_row(&on, "repair", "critical").unwrap();
+        assert_eq!(repair.goal, "quality");
+        let text = policy_text_with(&on, true).unwrap();
+        assert!(text.contains("care_first = true"));
+        assert!(care_first_flag(&text));
+        assert!(!care_first_flag(&policy_text_with(&on, false).unwrap()));
     }
 }

@@ -8,7 +8,9 @@ pub mod playbook;
 mod policy;
 
 pub use brief::{
-    brief_for_turn, classify, read_briefs, record_brief, rules, why_lines, AskModel, Brief,
-    BriefInput, BriefLine, Care, Intent, BRIEF_CLASS, BRIEF_PROMPT,
+    brief_for_turn, classify, classify_effort, effort_word, read_briefs, record_brief, rules,
+    why_lines, AskModel, Brief, BriefInput, BriefLine, Care, Intent, BRIEF_CLASS, BRIEF_PROMPT,
 };
-pub use policy::{load_policy, pick_policy, policy_path, PolicyPick};
+pub use policy::{
+    care_first_enabled, effective_rows, load_policy, pick_policy, policy_path, PolicyPick,
+};
