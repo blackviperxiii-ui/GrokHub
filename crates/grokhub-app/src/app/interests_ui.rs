@@ -260,6 +260,7 @@ impl Cabin {
         self.ui_pulse_sources(ui);
         self.ui_reactions(ui);
         self.ui_daily_drop(ui);
+        self.ui_nudge_watchers(ui);
     }
 }
 

@@ -1551,6 +1551,21 @@ fn every_home_card_the_cabin_posts_names_its_item() {
         proactive_card(&notes, ProactiveRoute::ICan, now),
         "notes connection",
     ));
+    let gpu_snap = grokhub_core::nudge_watchers::WatcherSnapshot {
+        gpu: Some(grokhub_core::nudge_watchers::GpuDriverSnap {
+            gpu_name: "Test GPU".into(),
+            installed: "1.0".into(),
+            offered: "2.0".into(),
+            download_url: "https://example.com/driver".into(),
+        }),
+        ..Default::default()
+    };
+    let nudge = grokhub_core::nudge_watchers::detect_gpu_driver(&gpu_snap).expect("gpu nudge");
+    rows.push((
+        "tick_nudge_watchers",
+        grokhub_core::nudge_watcher_card(&nudge, now),
+        "Test GPU",
+    ));
 
     for (site, card, name) in &rows {
         let text = format!("{} {}", card.title, card.body.as_deref().unwrap_or(""));

@@ -272,6 +272,7 @@ impl Cabin {
         if tick.pulse_changed || help_changed {
             self.persist_cfg();
         }
+        self.tick_nudge_watchers();
     }
 
     fn digest_taste(&self) -> Vec<TasteNote> {
