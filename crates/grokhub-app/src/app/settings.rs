@@ -1357,7 +1357,8 @@ mod tests {
 
     #[test]
     fn about_shows_the_support_link_quietly() {
-        let src = include_str!("settings.rs");
+        // Windows checkouts carry CRLF; the body split below looks for "\n    }\n".
+        let src = include_str!("settings.rs").replace("\r\n", "\n");
         // Split markers are built with concat! so this test's own text never
         // matches the source scans other tests run on this file.
         let about = src
