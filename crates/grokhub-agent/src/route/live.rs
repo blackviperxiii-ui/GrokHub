@@ -722,6 +722,11 @@ pub fn decide(config_dir: &Path, call: &RouteCall<'_>, now_ms: u64) -> Decision 
     if let Some(ask) = &route.premium_ask {
         *PREMIUM_ASK.lock().unwrap_or_else(|e| e.into_inner()) = Some(ask.clone());
     }
+    // An offline turn leaves a line: where it went (local, kept, cloud queue).
+    if let Some(rule) = route.rule_ids.iter().find(|r| r.starts_with("offline:")) {
+        let what = format!("{} → {rule}", call.class);
+        super::local_health::log_to(config_dir, "offline_turn", Some(&what), None);
+    }
     // A governor pause lifts on its own; it isn't a model to wait for.
     if live && route.no_route && !route.rule_ids.iter().any(|r| r == "local:paused") {
         let failed = reg
