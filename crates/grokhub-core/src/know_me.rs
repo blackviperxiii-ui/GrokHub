@@ -470,6 +470,59 @@ fn count_types(home: &Path) -> (usize, BTreeMap<String, usize>) {
     (seen, by_ext)
 }
 
+/// A tag as other readers see it: the label and the topic it feeds.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KnowMeTag {
+    pub label: String,
+    #[serde(default)]
+    pub topic: String,
+}
+
+/// Know me's tags from `{config_dir}/know-me.json`; empty when Know me is
+/// off, never ran, or the file is unreadable.
+pub fn load_tags(config_dir: &Path) -> Vec<KnowMeTag> {
+    let state = load(&config_dir.join(FILE_NAME));
+    if !state.on {
+        return Vec::new();
+    }
+    state
+        .tags
+        .into_iter()
+        .map(|t| KnowMeTag {
+            label: t.tag,
+            topic: t.topic.unwrap_or_default(),
+        })
+        .collect()
+}
+
+/// Lowercase topics, or the label when a tag has no topic.
+pub fn tag_topics(tags: &[KnowMeTag]) -> Vec<String> {
+    tags.iter()
+        .map(|t| {
+            let topic = t.topic.trim();
+            if topic.is_empty() {
+                t.label.trim()
+            } else {
+                topic
+            }
+        })
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_ascii_lowercase())
+        .collect()
+}
+
+/// True when any tag's topic mentions one of the words.
+pub fn tags_mention(tags: &[KnowMeTag], words: &[&str]) -> bool {
+    let topics = tag_topics(tags);
+    words.iter().any(|w| {
+        let w = w.to_ascii_lowercase();
+        !w.is_empty()
+            && topics
+                .iter()
+                .any(|t| t.contains(&w) || w.contains(t.as_str()))
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -665,6 +718,48 @@ mod tests {
         );
         save(&path, &state).unwrap();
         assert_eq!(load(&path), state);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn readers_get_labels_and_topics_only_while_on() {
+        let dir = temp("readers");
+        assert!(load_tags(&dir).is_empty(), "no file");
+        let mut state = all_on();
+        state.tags = vec![
+            Tag {
+                tag: "plays: Hades".into(),
+                signal: Signal::Games,
+                topic: Some("Hades".into()),
+            },
+            Tag {
+                tag: "pc: NVIDIA GPU".into(),
+                signal: Signal::Hardware,
+                topic: None,
+            },
+        ];
+        save(&dir.join(FILE_NAME), &state).unwrap();
+        let tags = load_tags(&dir);
+        assert_eq!(
+            tags,
+            vec![
+                KnowMeTag {
+                    label: "plays: Hades".into(),
+                    topic: "Hades".into(),
+                },
+                KnowMeTag {
+                    label: "pc: NVIDIA GPU".into(),
+                    topic: String::new(),
+                },
+            ]
+        );
+        assert_eq!(tag_topics(&tags), vec!["hades", "pc: nvidia gpu"]);
+        assert!(tags_mention(&tags, &["nvidia"]));
+        assert!(tags_mention(&tags, &["Hades"]));
+        assert!(!tags_mention(&tags, &["amd", ""]));
+        state.on = false;
+        save(&dir.join(FILE_NAME), &state).unwrap();
+        assert!(load_tags(&dir).is_empty(), "off shares nothing");
         let _ = std::fs::remove_dir_all(dir);
     }
 }
