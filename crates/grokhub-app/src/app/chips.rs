@@ -540,6 +540,10 @@ impl Cabin {
         }
         bias_chips_for_lane(&mut chips, cabin_lane(&self.cfg.cabin_lane));
         polish_chip_hints(&mut chips, &self.composer);
+        if let Some(c) = self.focus_chip() {
+            chips.retain(|x| x.id != c.id);
+            chips.insert(0, c);
+        }
         chips
     }
 

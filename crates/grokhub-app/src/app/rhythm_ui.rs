@@ -44,6 +44,12 @@ pub(super) fn active_ranges(r: &Rhythm) -> String {
 }
 
 impl Cabin {
+    /// The user typed or clicked in the cabin.
+    pub(super) fn touch(&mut self) {
+        self.last_activity = Instant::now();
+        self.reflected_idle = false;
+    }
+
     /// Read from disk the first time anything needs it.
     pub(super) fn rhythm_now(&mut self) -> &mut Rhythm {
         self.sources

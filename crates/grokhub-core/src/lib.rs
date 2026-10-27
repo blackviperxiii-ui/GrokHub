@@ -39,6 +39,7 @@ pub mod feel;
 pub mod file_watch;
 pub mod findings;
 pub mod fix_plan;
+pub mod focus_app;
 pub mod frame;
 pub mod gguf;
 pub mod goal;
