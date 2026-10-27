@@ -226,6 +226,7 @@ mod systems_brief_ui;
 mod tests;
 mod threads_nav;
 mod voice;
+mod wishlist_ui;
 
 use background::BgWork;
 use chat_ui::*;

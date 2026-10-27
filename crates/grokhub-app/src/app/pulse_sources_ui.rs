@@ -47,6 +47,8 @@ pub(super) struct SourcesState {
     pub reactions: Option<grokhub_core::reactions::Reactions>,
     /// The learned daily rhythm, read from disk when first needed.
     pub rhythm: Option<grokhub_core::rhythm::Rhythm>,
+    /// Steam wishlist sale alerts and their daily check.
+    pub wish: super::wishlist_ui::WishState,
 }
 
 /// A run, its picks, and the fast model's reply.
@@ -105,7 +107,7 @@ fn redirect_target(from: &str, location: &str) -> String {
 
 /// One source over HTTP. A topic search carries the person's topic, so it goes as
 /// chat text; a followed feed URL carries nothing of theirs.
-fn fetch_source(req: &SourceReq, have: Option<&ps::CacheEntry>) -> Fetched {
+pub(super) fn fetch_source(req: &SourceReq, have: Option<&ps::CacheEntry>) -> Fetched {
     let data: &[DataClass] = if req.topic.is_some() {
         &[DataClass::Chat]
     } else {
@@ -257,6 +259,7 @@ impl Cabin {
         }
         let now = now_ms();
         self.kick_know_me(false);
+        self.kick_wishlist(now);
         if !self.interests_now().seeded {
             let user_md = crate::config::read_memory("USER.md");
             let memory_md = crate::config::read_memory("MEMORY.md");
@@ -323,6 +326,7 @@ impl Cabin {
     pub(super) fn poll_source_fetch(&mut self) {
         self.poll_source_summaries();
         self.poll_know_me();
+        self.poll_wishlist();
         let Some(rx) = self.sources.rx.take() else {
             return;
         };
@@ -741,6 +745,7 @@ impl Cabin {
             ui.add_space(6.0);
         }
         self.ui_steam_source(ui);
+        self.ui_wishlist_source(ui);
         // The paid search extension point, shown off and not clickable.
         let mut paid = ps::PAID_SEARCH_ENABLED;
         ui.add_enabled(
