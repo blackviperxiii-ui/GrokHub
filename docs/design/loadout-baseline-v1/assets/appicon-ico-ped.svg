@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><defs><linearGradient id="tileg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#1C1D21"/><stop offset="1" stop-color="#0B0B0D"/></linearGradient></defs>
+<rect x="3" y="3" width="94" height="94" rx="21" fill="url(#tileg)" stroke="#D7263D" stroke-width="2.5"/><g transform="translate(12 12) scale(.76)"><defs><linearGradient id="cone" x1="0" y1="1" x2="0" y2="0"><stop offset="0" stop-color="#FFB000" stop-opacity=".75"/><stop offset="1" stop-color="#FFB000" stop-opacity="0"/></linearGradient></defs>
+<path d="M36 72L26 20h48L64 72z" fill="url(#cone)"/>
+<path d="M50 30l8 8-8 8-8-8z" fill="#FFB000"/>
+<ellipse cx="50" cy="76" rx="32" ry="10" fill="#1A1B1F" stroke="#D7263D" stroke-width="3.5"/>
+<ellipse cx="50" cy="74" rx="17" ry="5" fill="none" stroke="#FFB000" stroke-width="2.5"/>
+<path d="M30 56h40M33 46h34" stroke="#FFB000" stroke-opacity=".35" stroke-width="1.5"/></g></svg>
