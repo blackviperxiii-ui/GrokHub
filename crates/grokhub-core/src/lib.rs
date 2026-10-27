@@ -104,6 +104,7 @@ pub mod recipe;
 pub mod recovered;
 pub mod redact;
 pub mod reflect;
+pub mod release_radar;
 pub mod release_verify;
 pub mod review;
 pub mod rewind;

@@ -5254,6 +5254,28 @@ https://xstack.grok.me/post ZEPHYRTAIL"
         let mut posted = Vec::new();
         crate::pulse_ideas::post_ideas(&mut posted, std::slice::from_ref(&idea), at);
         rows.push(("post_ideas", posted.remove(0), "Cheaper groceries"));
+        let upcoming = crate::release_radar::Upcoming {
+            app_id: 9,
+            name: "Fake Quest: Frontier".into(),
+            base: "Fake Quest".into(),
+            kind: crate::release_radar::Kind::Dlc,
+            date_text: "14 Nov, 2026".into(),
+            date_ms: Some(1),
+        };
+        rows.push((
+            "radar_card",
+            upcoming.radar_card(at),
+            "Fake Quest: Frontier",
+        ));
+        let reminder = crate::release_radar::Reminder {
+            name: "Fake Quest: Frontier".into(),
+            date_ms: 1,
+        };
+        rows.push((
+            "out_today_card",
+            crate::release_radar::out_today_card(9, &reminder, at),
+            "Fake Quest: Frontier",
+        ));
         rows
     }
 

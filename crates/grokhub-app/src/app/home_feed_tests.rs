@@ -1396,6 +1396,31 @@ fn every_home_card_the_cabin_posts_names_its_item() {
         "Fake Quest",
     ));
     rows.push((
+        "finish_release_radar",
+        grokhub_core::release_radar::Upcoming {
+            app_id: 9,
+            name: "Fake Quest: Frontier".into(),
+            base: "Fake Quest".into(),
+            kind: grokhub_core::release_radar::Kind::Dlc,
+            date_text: "14 Nov, 2026".into(),
+            date_ms: Some(1),
+        }
+        .radar_card(now),
+        "Fake Quest: Frontier",
+    ));
+    rows.push((
+        "post_due_reminders",
+        grokhub_core::release_radar::out_today_card(
+            9,
+            &grokhub_core::release_radar::Reminder {
+                name: "Fake Quest: Frontier".into(),
+                date_ms: 1,
+            },
+            now,
+        ),
+        "Fake Quest: Frontier",
+    ));
+    rows.push((
         "tick_daily_drop",
         grokhub_core::pulse_sources::item_card(
             &grokhub_core::pulse_sources::Ranked {

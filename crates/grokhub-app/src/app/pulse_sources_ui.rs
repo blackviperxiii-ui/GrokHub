@@ -49,6 +49,8 @@ pub(super) struct SourcesState {
     pub rhythm: Option<grokhub_core::rhythm::Rhythm>,
     /// Steam wishlist sale alerts and their daily check.
     pub wish: super::wishlist_ui::WishState,
+    /// Upcoming DLC and sequels, and release-day reminders.
+    pub radar: super::release_radar_ui::RadarState,
 }
 
 /// A run, its picks, and the fast model's reply.
@@ -260,6 +262,7 @@ impl Cabin {
         let now = now_ms();
         self.kick_know_me(false);
         self.kick_wishlist(now);
+        self.kick_release_radar(now);
         if !self.interests_now().seeded {
             let user_md = crate::config::read_memory("USER.md");
             let memory_md = crate::config::read_memory("MEMORY.md");
@@ -327,6 +330,7 @@ impl Cabin {
         self.poll_source_summaries();
         self.poll_know_me();
         self.poll_wishlist();
+        self.poll_release_radar();
         let Some(rx) = self.sources.rx.take() else {
             return;
         };
@@ -746,6 +750,7 @@ impl Cabin {
         }
         self.ui_steam_source(ui);
         self.ui_wishlist_source(ui);
+        self.ui_release_radar_source(ui);
         // The paid search extension point, shown off and not clickable.
         let mut paid = ps::PAID_SEARCH_ENABLED;
         ui.add_enabled(
