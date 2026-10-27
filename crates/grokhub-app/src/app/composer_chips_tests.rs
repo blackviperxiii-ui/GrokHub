@@ -1258,6 +1258,7 @@ fn leaving_a_chat_clears_attach_and_asks() {
         field_name: Some("name".into()),
         field_title: "Name".into(),
         secret: false,
+        options: Vec::new(),
     });
 
     cabin.drop_leaving_thread_chrome();

@@ -12,7 +12,7 @@ use grokhub_agent::{
     HaltCheck, ModelClient, NativeEngine, PermAnswer, PermMode, PermitInbox, PermitNote,
     SteerQueue,
 };
-use grokhub_core::wire::AcpEvent;
+use grokhub_core::wire::{AcpEvent, ElicitChoice};
 use serde::Serialize;
 
 /// The cabin's attended chat gate in the mode Settings picked. In Ask, tools
@@ -45,13 +45,46 @@ pub enum SessionMode {
 
 /// The system prompt the cabin's native chat uses, with the desktop line
 /// only while desktop control is on. `voice` is the personality's block
-/// (crate::personality::voice), empty for the default voice.
+/// (`crate::personality::voice`). The default voice carries its values rules.
 pub fn system_prompt(workspace: &std::path::Path, desktop: bool, voice: &str) -> String {
+    system_prompt_for(workspace, desktop, voice, "")
+}
+
+pub fn system_prompt_for(
+    workspace: &std::path::Path,
+    desktop: bool,
+    voice: &str,
+    conversation_id: &str,
+) -> String {
+    let volatile = volatile_tail(voice, &grokhub_agent::perm::config_dir(), conversation_id);
     grokhub_agent::system_prompt_parts(
         &grokhub_core::cabin_rules::cabin_static_rules(desktop),
-        voice,
+        &volatile,
         workspace,
     )
+}
+
+/// Voice, then the capped SOUL and USER blocks, then open intentions, then the
+/// safety closer. The closer is present only when that tail has something to outrank.
+fn volatile_tail(voice: &str, config_dir: &std::path::Path, conversation_id: &str) -> String {
+    let mut parts = Vec::new();
+    if !voice.trim().is_empty() {
+        parts.push(voice.to_string());
+    }
+    let identity = grokhub_agent::identity_blocks(config_dir);
+    if !identity.is_empty() {
+        parts.push(identity);
+    }
+    let intentions =
+        grokhub_core::intentions_block(&grokhub_core::load_intentions(config_dir, conversation_id));
+    if !intentions.is_empty() {
+        parts.push(intentions);
+    }
+    if parts.is_empty() {
+        return String::new();
+    }
+    parts.push(grokhub_core::talk::VOLATILE_SAFETY_CLOSER.to_string());
+    parts.join("\n\n")
 }
 
 /// The folder the agent works in: the one picked in Settings, or the
@@ -96,6 +129,11 @@ pub enum UiEvent {
     Done {
         stop: String,
     },
+    /// One-tap follow-ups for the reply that just ended; sent only when one
+    /// names a real action (grokhub_core::chips::reply_suggestions).
+    Suggestions {
+        items: Vec<Suggestion>,
+    },
     /// The plan Grok wrote, before it asks to leave plan mode.
     Plan {
         text: String,
@@ -112,7 +150,28 @@ pub enum UiEvent {
         field_name: Option<String>,
         field_title: String,
         secret: bool,
+        /// Answers to tap for a question from Grok; the recommended one first.
+        options: Vec<ElicitChoice>,
     },
+}
+
+/// A follow-up the user can send with one tap: `prompt` goes in as the next message.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Suggestion {
+    pub label: String,
+    pub prompt: String,
+}
+
+/// The suggestions card for a finished reply, if this turn earns one.
+pub fn suggestions_for(said: &str, reply: &str, failed: bool) -> Option<UiEvent> {
+    let items: Vec<Suggestion> = grokhub_core::chips::reply_suggestions(said, reply, failed)
+        .into_iter()
+        .map(|chip| Suggestion {
+            label: chip.label,
+            prompt: chip.value,
+        })
+        .collect();
+    (!items.is_empty()).then_some(UiEvent::Suggestions { items })
 }
 
 pub fn ui_event(event: AcpEvent) -> Option<UiEvent> {
@@ -142,6 +201,7 @@ pub fn ui_event(event: AcpEvent) -> Option<UiEvent> {
             field_name: ask.field_name,
             field_title: ask.field_title,
             secret: ask.secret,
+            options: ask.options,
         },
         _ => return None,
     })
@@ -331,7 +391,12 @@ fn serve(
             mut emit,
             done,
         } = job;
-        let system = system_prompt(&route.workspace, route.desktop, &route.voice);
+        let system = system_prompt_for(
+            &route.workspace,
+            route.desktop,
+            &route.voice,
+            &conversation_id,
+        );
         let gate = shell_gate(route.mode, route.desktop, route.session);
         // Plan holds the turn read-only until its plan is approved; Chat and
         // btw clear a plan left from an earlier message.
@@ -374,12 +439,23 @@ fn serve(
         }));
         let mut stop = String::new();
         let mut error = None;
+        let mut reply = String::new();
         let ran = engine.prompt(&text, None, &mut |event| {
             let Some(ui) = ui_event(event) else {
                 return;
             };
             match &ui {
-                UiEvent::Done { stop: s } => stop = s.clone(),
+                UiEvent::Text { text } => reply.push_str(text),
+                UiEvent::Done { stop: s } => {
+                    stop = s.clone();
+                    // Btw asks only look, so they get no follow-ups.
+                    if route.session != SessionMode::Btw && s != "cancelled" {
+                        let failed = s == "error" || error.is_some();
+                        if let Some(card) = suggestions_for(&text, &reply, failed) {
+                            emit(card);
+                        }
+                    }
+                }
                 UiEvent::Error { message } => error = Some(message.clone()),
                 _ => {}
             }
@@ -751,6 +827,7 @@ mod tests {
                 field_name: None,
                 field_title: String::new(),
                 secret: false,
+                options: Vec::new(),
             }
         );
         assert!(run.events.lock().expect("events").contains(&UiEvent::Plan {
@@ -789,6 +866,45 @@ mod tests {
             .answer_elicit(&elicit_id(&card), "accept", Some("answer"), "  blue ");
         assert_eq!(run.result.join().expect("join"), Ok("end_turn".into()));
         assert_eq!(client.tool_output().as_deref(), Some("answer: blue"));
+    }
+
+    #[test]
+    fn a_question_with_options_offers_them_recommended_first() {
+        let (workspace, config) = (temp_dir("pick-ws"), temp_dir("pick-cfg"));
+        let client = OneTool::new(
+            "ask_user_question",
+            serde_json::json!({"questions": [{"question": "Which fix?", "options": [
+                {"label": "Upgrade everything"},
+                {"label": "Pin the crate", "description": "smallest change", "recommended": true}
+            ]}]}),
+        );
+        let run = start(Arc::clone(&client), &workspace, &config);
+        let card = wait_for_elicit(&run);
+        let UiEvent::Elicit { options, .. } = &card else {
+            panic!("{card:?}");
+        };
+        assert_eq!(
+            options,
+            &vec![
+                ElicitChoice {
+                    label: "Pin the crate".into(),
+                    description: "smallest change".into(),
+                    recommended: true,
+                },
+                ElicitChoice {
+                    label: "Upgrade everything".into(),
+                    description: String::new(),
+                    recommended: false,
+                },
+            ]
+        );
+        run.session
+            .answer_elicit(&elicit_id(&card), "accept", Some("answer"), "Pin the crate");
+        assert_eq!(run.result.join().expect("join"), Ok("end_turn".into()));
+        assert_eq!(
+            client.tool_output().as_deref(),
+            Some("answer: Pin the crate")
+        );
     }
 
     #[test]
@@ -890,6 +1006,11 @@ mod tests {
             field_name: Some("answer".into()),
             field_title: "Your answer".into(),
             secret: false,
+            options: vec![ElicitChoice {
+                label: "Blue".into(),
+                description: "calm".into(),
+                recommended: true,
+            }],
         })
         .expect("json");
         assert_eq!(
@@ -897,7 +1018,8 @@ mod tests {
             serde_json::json!({
                 "kind": "elicit", "id": "ask-1", "server": "Question", "message": "Which color?",
                 "mode": "form", "url": "", "fieldName": "answer", "fieldTitle": "Your answer",
-                "secret": false
+                "secret": false,
+                "options": [{"label": "Blue", "description": "calm", "recommended": true}]
             })
         );
         let chip: SessionMode = serde_json::from_str("\"btw\"").expect("chip");
@@ -963,6 +1085,39 @@ mod tests {
         let (at_rules, at_voice) = (with.find(rules.trim()), with.find(voice));
         assert!(at_rules.is_some() && at_voice.is_some(), "{with}");
         assert!(at_rules < at_voice, "the voice must come after the rules");
+    }
+
+    #[test]
+    fn soul_and_user_ride_before_the_safety_closer() {
+        let cfg = temp_dir("soul-cfg");
+        let _guard = grokhub_agent::perm::ConfigGuard::set(&cfg);
+        std::fs::create_dir_all(cfg.join("memory")).unwrap();
+        std::fs::write(cfg.join("app.json"), "{}\n").unwrap();
+        std::fs::write(
+            cfg.join("memory").join("SOUL.md"),
+            "HARBOR_SOUL_MARK speaks plainly\n",
+        )
+        .unwrap();
+        std::fs::write(
+            cfg.join("memory").join("USER.md"),
+            "HARBOR_USER_MARK keeps a paper chart\n",
+        )
+        .unwrap();
+        let voice = "Personality: Pirate. Talk like a pirate.";
+        let prompt = system_prompt(std::path::Path::new("/tmp"), false, voice);
+        let rules = grokhub_core::cabin_rules::cabin_static_rules(false);
+        let at_rules = prompt.find(rules.trim()).expect("rules");
+        let at_voice = prompt.find(voice).expect("voice");
+        let at_soul = prompt.find("HARBOR_SOUL_MARK").expect("soul");
+        let at_user = prompt.find("HARBOR_USER_MARK").expect("user");
+        let at_closer = prompt
+            .find("earlier in this prompt always win")
+            .expect("closer");
+        assert!(
+            at_rules < at_voice && at_voice < at_soul && at_soul < at_user && at_user < at_closer,
+            "{prompt}"
+        );
+        assert!(!rules.contains("HARBOR_SOUL_MARK"));
     }
 
     #[test]

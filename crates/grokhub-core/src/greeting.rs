@@ -464,7 +464,7 @@ pub fn is_model_planning(line: &str) -> bool {
     INSIDE.iter().any(|p| t.contains(p))
 }
 
-/// "Greeting: Evening, Alex." → "Evening, Alex."
+/// "Greeting: Evening, User." → "Evening, User."
 fn strip_answer_label(line: &str) -> &str {
     for label in ["greeting:", "answer:", "line:", "final:", "output:"] {
         // `get`: `label.len()` can sit inside a multibyte char ("line:" into 👋 / ß).
@@ -598,18 +598,21 @@ mod tests {
 
     #[test]
     fn greeting_name_prefers_user_md() {
-        assert_eq!(greeting_name("Name: Alex\neditor: nvim\n", "Alex"), "Alex");
-        assert_eq!(greeting_name("# User\n", "Alex Doe"), "Alex");
         assert_eq!(
-            greeting_name("# User profile\nWho you are, preferred tools.\n", "Alex"),
-            "Alex",
+            greeting_name("Name: Tester\neditor: nvim\n", "Tester"),
+            "Tester"
+        );
+        assert_eq!(greeting_name("# User\n", "Tester Doe"), "Tester");
+        assert_eq!(
+            greeting_name("# User profile\nWho you are, preferred tools.\n", "Tester"),
+            "Tester",
             "the USER.md template heading must not become Hello, User"
         );
-        assert_eq!(greeting_name("", "Alex"), "Alex");
+        assert_eq!(greeting_name("", "Tester"), "Tester");
         assert_eq!(greeting_name("", ""), "");
         assert_eq!(
-            greeting_name("Named: my project\n", "Alex"),
-            "Alex",
+            greeting_name("Named: my project\n", "Tester"),
+            "Tester",
             "nameplate-style lines must not steal the greeting"
         );
         assert_eq!(
@@ -619,27 +622,27 @@ mod tests {
         );
         assert_eq!(greeting_name("", "This computer"), "");
         assert_eq!(greeting_name("", "cachyos-x8664"), "");
-        assert_eq!(greeting_name("Name: CachyOS\n", "Alex"), "Alex");
+        assert_eq!(greeting_name("Name: CachyOS\n", "Tester"), "Tester");
         assert_eq!(greeting_name("", "CachyOS"), "");
         assert!(parse_llm_greeting("Hello, CachyOS.").is_none());
         assert!(parse_llm_greeting("Hello, Grok.").is_none());
-        assert!(parse_llm_greeting("Evening, Alex. The cabin is ready.").is_some());
+        assert!(parse_llm_greeting("Evening, Tester. The cabin is ready.").is_some());
     }
 
     #[test]
     fn local_greeting_uses_name_not_memory_dump() {
         let insights = ["prefers nvim".into()];
         let mut g_in = input(
-            "Name: Alex\neditor: nvim\n",
+            "Name: Tester\neditor: nvim\n",
             "Last night we painted the cabin wall.\n",
             &insights,
-            "Alex",
+            "Tester",
             21,
         );
         g_in.last_project = "Night cabin";
         let g = local_greeting(&g_in);
         assert_eq!(classify_greeting(&g_in), GreetingKind::ReturningProject);
-        assert!(g.to_ascii_lowercase().contains("alex"), "{g}");
+        assert!(g.to_ascii_lowercase().contains("tester"), "{g}");
         assert!(g.to_ascii_lowercase().contains("night cabin"), "{g}");
         assert!(
             !g.to_ascii_lowercase().contains("painted") && !g.to_ascii_lowercase().contains("nvim"),
@@ -666,9 +669,9 @@ mod tests {
             !host.to_ascii_lowercase().contains("cachy"),
             "hostname must not paint as the hero: {host}"
         );
-        let distro = local_greeting(&input("Name: CachyOS\n", "", &[], "Alex", 8));
+        let distro = local_greeting(&input("Name: CachyOS\n", "", &[], "Tester", 8));
         assert!(
-            distro.to_ascii_lowercase().contains("alex"),
+            distro.to_ascii_lowercase().contains("tester"),
             "distro Name: must fall through: {distro}"
         );
         assert!(!distro.to_ascii_lowercase().contains("cachy"), "{distro}");
@@ -677,14 +680,14 @@ mod tests {
     #[test]
     fn greeting_prompt_grounds_in_user_memory() {
         let prompt = greeting_prompt(&input(
-            "Name: Alex\n",
+            "Name: User\n",
             "Paint the wall tonight.\n",
             &["likes the cabin quiet".into()],
-            "Alex",
+            "User",
             22,
         ));
         assert!(prompt.contains("Do not repeat"), "{prompt}");
-        assert!(prompt.contains("Alex"), "{prompt}");
+        assert!(prompt.contains("User"), "{prompt}");
         assert!(prompt.contains("Paint the wall"), "{prompt}");
         assert!(
             prompt.contains("cabin quiet") || prompt.contains("USER.md"),
@@ -700,10 +703,10 @@ mod tests {
         assert_eq!(GREETING_LLM_MODE, "fast");
         let insights = ["likes the cabin quiet".into()];
         let mut with_night = input(
-            "Name: Alex\n",
+            "Name: User\n",
             "Paint the wall tonight.\n",
             &insights,
-            "Alex",
+            "User",
             22,
         );
         with_night.last_night = "host snapshot failed";
@@ -735,10 +738,10 @@ mod tests {
     #[test]
     fn parse_llm_greeting_keeps_a_short_line() {
         let g = parse_llm_greeting(
-            "\"Night, Alex. The wall still wants a second coat.\"\nAnother line.",
+            "\"Night, User. The wall still wants a second coat.\"\nAnother line.",
         )
         .expect("parse");
-        assert!(g.contains("Alex"), "{g}");
+        assert!(g.contains("User"), "{g}");
         assert!(!g.contains('"'), "{g}");
         assert!(g.chars().count() <= GREETING_MAX_CHARS, "{g}");
     }
@@ -752,7 +755,7 @@ mod tests {
     #[test]
     fn parse_llm_greeting_strips_thinking() {
         let g = parse_llm_greeting(
-            "THINKING:\nplan a quiet line\n\nAfternoon, Alex. The cabin is ready.",
+            "THINKING:\nplan a quiet line\n\nAfternoon, User. The cabin is ready.",
         )
         .expect("body after thought");
         assert!(g.to_ascii_lowercase().contains("afternoon"), "{g}");
@@ -762,22 +765,22 @@ mod tests {
             "a thought-only Fast reply must not paint THINKING:"
         );
         assert_eq!(
-            pick_greeting("Afternoon, Alex.", Some("THINKING:")),
-            "Afternoon, Alex."
+            pick_greeting("Afternoon, User.", Some("THINKING:")),
+            "Afternoon, User."
         );
     }
 
     #[test]
     fn pick_greeting_prefers_fast_when_clean() {
-        let local = "Evening, Alex.";
-        let llm = "Evening, Alex. nvim is still on the desk.";
+        let local = "Evening, User.";
+        let llm = "Evening, User. nvim is still on the desk.";
         assert_eq!(pick_greeting(local, Some(llm)), llm);
         assert_eq!(pick_greeting(local, None), local);
         assert_eq!(
             pick_greeting(local, Some("token sk-abcdefghijklmnopqrstuv")),
             local
         );
-        let quoted = "Evening, Alex. Paint the wall tonight before you stop.";
+        let quoted = "Evening, User. Paint the wall tonight before you stop.";
         assert_eq!(
             pick_greeting_against(
                 local,
@@ -799,15 +802,15 @@ mod tests {
 
     #[test]
     fn fingerprint_moves_with_memory_and_hour() {
-        let a = greeting_fingerprint(&input("Name: Alex\n", "wall\n", &[], "Alex", 21));
-        let b = greeting_fingerprint(&input("Name: Alex\n", "nvim\n", &[], "Alex", 21));
-        let c = greeting_fingerprint(&input("Name: Alex\n", "wall\n", &[], "Alex", 8));
+        let a = greeting_fingerprint(&input("Name: User\n", "wall\n", &[], "User", 21));
+        let b = greeting_fingerprint(&input("Name: User\n", "nvim\n", &[], "User", 21));
+        let c = greeting_fingerprint(&input("Name: User\n", "wall\n", &[], "User", 8));
         assert_ne!(a, b);
         assert_ne!(a, c);
-        let mut d = input("Name: Alex\n", "wall\n", &[], "Alex", 21);
+        let mut d = input("Name: User\n", "wall\n", &[], "User", 21);
         d.last_project = "Night cabin";
         assert_ne!(a, greeting_fingerprint(&d));
-        let mut e = input("Name: Alex\n", "wall\n", &[], "Alex", 21);
+        let mut e = input("Name: User\n", "wall\n", &[], "User", 21);
         e.first_run = true;
         assert_ne!(a, greeting_fingerprint(&e));
     }
@@ -826,14 +829,14 @@ mod tests {
         assert_eq!(g, "Good morning. Connect Grok and I'll be right here.");
 
         first.signed_in = true;
-        first.display_name = "Alex";
+        first.display_name = "Tester";
         assert_eq!(classify_greeting(&first), GreetingKind::FirstRunSigned);
         let g = local_greeting(&first);
-        assert!(g.contains("Alex"), "{g}");
+        assert!(g.contains("Tester"), "{g}");
         assert!(g.contains("I'm here"), "{g}");
         assert!(!g.contains('?'), "{g}");
 
-        let mut back = input("Name: Alex\n", "", &[], "Alex", 21);
+        let mut back = input("Name: Tester\n", "", &[], "Tester", 21);
         back.signed_in = false;
         assert_eq!(classify_greeting(&back), GreetingKind::ReturningUnsigned);
         assert_eq!(
@@ -846,12 +849,12 @@ mod tests {
         assert_eq!(clean_project_title(back.last_project), "Night cabin");
         assert_eq!(classify_greeting(&back), GreetingKind::ReturningProject);
         let g = local_greeting(&back);
-        assert!(g.starts_with("Good evening, Alex."), "{g}");
+        assert!(g.starts_with("Good evening, Tester."), "{g}");
         assert!(g.contains("Night cabin is still open"), "{g}");
 
         back.last_project = "failed: host snapshot";
         assert_eq!(classify_greeting(&back), GreetingKind::ReturningQuiet);
-        assert_eq!(local_greeting(&back), "Good evening, Alex. I'm here.");
+        assert_eq!(local_greeting(&back), "Good evening, Tester. I'm here.");
 
         assert_eq!(
             project_title_from_hint("Continue Night cabin"),
@@ -871,20 +874,20 @@ mod tests {
             "planning alone must fall back to the local line"
         );
         let g = parse_llm_greeting(&format!(
-            "{leaked}\nLet me keep it short.\n\nEvening, Alex. Back to the wall?"
+            "{leaked}\nLet me keep it short.\n\nEvening, User. Back to the wall?"
         ))
         .expect("the answer after the planning");
-        assert!(g.starts_with("Evening, Alex"), "{g}");
+        assert!(g.starts_with("Evening, User"), "{g}");
         assert_eq!(
             parse_llm_greeting("Greeting: Morning, Sam.").as_deref(),
             Some("Morning, Sam.")
         );
         assert_eq!(
-            pick_greeting("Evening, Alex.", Some(leaked)),
-            "Evening, Alex."
+            pick_greeting("Evening, User.", Some(leaked)),
+            "Evening, User."
         );
         for ok in [
-            "Evening, Alex.",
+            "Evening, User.",
             "Morning, Sam. The deploy notes are where you left them.",
             "Back again, Ana.",
         ] {

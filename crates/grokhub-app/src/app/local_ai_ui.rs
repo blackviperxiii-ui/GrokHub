@@ -2,13 +2,15 @@
 //! (`localModel`). The tick hands the flag to `route::local::set_enabled`, so
 //! a flip takes effect without a restart. The route goes live only with a
 //! runtime installed, and then only for background classes; chat never goes
-//! local. Users download the pinned llama.cpp engine with **Get engine**; models
-//! still come from the setup wizard.
+//! local. Turning it on (or launching with it on) downloads the pinned
+//! llama.cpp engine when no `llama-server` is found; **Get engine** does the
+//! same by hand. Settings shows the runtime's state. Models come from the
+//! model picker.
 
 use std::sync::{mpsc, Arc};
 use std::time::Duration;
 
-use grokhub_agent::route::local;
+use grokhub_agent::route::{local, local_sidecar};
 use grokhub_core::model_download::{self as md, Control, Progress};
 use grokhub_core::runtime_download::{
     self as rd, Fetch as RuntimeFetch, Manifest, Outcome as RuntimeOutcome,
@@ -183,7 +185,51 @@ pub(super) fn runtime_outcome_status(
     }
 }
 
+/// What Local AI being on does about the engine.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum EngineStep {
+    Ready,
+    Downloading,
+    Download,
+    /// No pinned build for this OS/arch; the user installs llama-server.
+    NoBuild,
+}
+
+pub(super) fn engine_step(ready: bool, downloading: bool, has_build: bool) -> EngineStep {
+    match (ready, downloading, has_build) {
+        (true, _, _) => EngineStep::Ready,
+        (false, true, _) => EngineStep::Downloading,
+        (false, false, true) => EngineStep::Download,
+        (false, false, false) => EngineStep::NoBuild,
+    }
+}
+
+const NO_BUILD: &str = "Runtime missing: there's no llama.cpp build for this computer. Install llama-server and put it on PATH, or set GROKHUB_LLAMA_SERVER to its path.";
+
 impl Cabin {
+    /// Local AI is on: get llama-server when none is found, so offline
+    /// answers don't fail silently.
+    pub(super) fn ensure_local_engine(&mut self) {
+        let manifest = rd::manifest_for_host();
+        match engine_step(
+            self.engine_ready(),
+            self.setup.runtime_dl.is_some(),
+            manifest.is_some(),
+        ) {
+            EngineStep::Download => {
+                let Some(m) = manifest else { return };
+                let version = m.version.clone();
+                self.start_runtime_download(m);
+                self.status = format!(
+                    "Local AI is on, so GrokHub is downloading its engine (llama.cpp {version}) to {}.",
+                    rd::bin_dir(&self.config_dir()).display()
+                );
+            }
+            EngineStep::NoBuild => self.setup.runtime_dl_error = Some(NO_BUILD.into()),
+            EngineStep::Ready | EngineStep::Downloading => {}
+        }
+    }
+
     fn config_dir(&self) -> std::path::PathBuf {
         crate::config::config_dir()
     }
@@ -200,6 +246,9 @@ impl Cabin {
             return;
         }
         self.cfg.local_model = on;
+        if on {
+            self.setup.engine_checked = false;
+        }
         self.persist_cfg();
         local::set_enabled(on);
         let installed = local::installed();
@@ -227,12 +276,16 @@ impl Cabin {
         if !installed
             && crate::cards::settings_action(
                 ui,
-                "Local model",
+                "Local model setup",
                 &self.local_model_row_hint(),
                 "Set up",
             )
         {
             self.open_local_setup();
+        }
+        let dl_model = self.setup.dl.as_ref().map(|d| d.model);
+        if let Some(m) = self.ui_model_choice(ui) {
+            self.ui_model_pick_rows(ui, dl_model.unwrap_or(m));
         }
         if installed
             && crate::cards::settings_action(
@@ -257,24 +310,18 @@ impl Cabin {
     }
 
     fn ui_runtime_engine_rows(&mut self, ui: &mut egui::Ui) {
-        if self.engine_ready() {
-            crate::cards::settings_note(
-                ui,
-                &format!(
-                    "Local engine: {} is installed under {}.",
-                    rd::server_binary_name(),
-                    rd::bin_dir(&self.config_dir()).display()
-                ),
-            );
+        let runtime = local_sidecar::runtime(&self.config_dir());
+        crate::cards::settings_note(
+            ui,
+            &format!("Local engine: {}", local_sidecar::runtime_label(&runtime)),
+        );
+        if runtime != local_sidecar::Runtime::Missing {
             return;
         }
         let manifest = match rd::manifest_for_host() {
             Some(m) => m,
             None => {
-                crate::cards::settings_note(
-                    ui,
-                    "Local engine: this computer has no pinned llama.cpp build yet.",
-                );
+                crate::cards::settings_note(ui, NO_BUILD);
                 return;
             }
         };
@@ -438,7 +485,7 @@ impl Cabin {
             }
             RuntimeOutcome::Done { .. } => {
                 self.status = status;
-                grokhub_agent::route::local_sidecar::stop_global();
+                local_sidecar::stop_global();
             }
             _ => self.status = status,
         }
@@ -508,6 +555,21 @@ mod tests {
             local_model_status(true, false, "local:small"),
             "On-device model for background tasks: on, no local model installed"
         );
+    }
+
+    #[test]
+    fn turning_local_ai_on_downloads_a_missing_engine_once() {
+        assert_eq!(engine_step(true, false, true), EngineStep::Ready);
+        assert_eq!(engine_step(false, true, true), EngineStep::Downloading);
+        assert_eq!(engine_step(false, false, true), EngineStep::Download);
+        assert_eq!(engine_step(false, false, false), EngineStep::NoBuild);
+        let mut app = Cabin::quiet_for_test();
+        app.setup.engine_checked = true;
+        app.cfg.local_model = false;
+        app.set_local_model(true);
+        // The next tick checks the engine again.
+        assert!(!app.setup.engine_checked);
+        local::set_enabled(false);
     }
 
     #[test]

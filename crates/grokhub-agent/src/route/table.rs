@@ -247,7 +247,7 @@ pub const EVAL_SET: &[EvalItem] = &[
     item("background:triage", "Reply with high, medium or low only. Priority of: a button is two pixels off on one page.", Exact("low")),
     item("background:triage", "Reply with yes or no only. Does this need a human today: the disk is 99% full on the build server.", Exact("yes")),
     item("background:triage", "Reply with the number of items in this list only: apples, pears, plums, figs.", Exact("4")),
-    item("background:redact", "Replace the email address with [EMAIL] and reply with the line only: Write to alex.sample@example.com for access.", Exact("Write to [EMAIL] for access")),
+    item("background:redact", "Replace the email address with [EMAIL] and reply with the line only: Write to user.sample@example.com for access.", Exact("Write to [EMAIL] for access")),
     item("background:redact", "Replace the phone number with [PHONE] and reply with the line only: Call 555-0100 after noon.", Exact("Call [PHONE] after noon")),
     item("background:redact", "Replace the card number with [CARD] and reply with the line only: Card 4111 1111 1111 1111 expires soon.", Exact("Card [CARD] expires soon")),
     item("background:redact", "Replace the name Taylor Example with [NAME] and reply with the line only: Taylor Example joined the call.", Exact("[NAME] joined the call")),

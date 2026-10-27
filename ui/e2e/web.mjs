@@ -1,8 +1,10 @@
 // Web app smoke test (cross-platform Phase 5): a mocked desktop serves the
 // built UI (ui/dist) and the remote API on one origin, the way GrokHub on
 // your computer will. Chromium opens the pairing link, sends a chat, answers
-// the tool approval the mock asks for, and gets the reply. Then it checks the
-// pairing code is in no browser store and a reload asks to pair again.
+// the tool approval the mock asks for, and gets the reply. Pulse shows a post
+// with its image and takes a Love; an idea's menu holds its three actions and
+// a click on its row puts the action in the chat box. Then it checks the pairing code is in no
+// browser store and a reload asks to pair again.
 //
 //   npm run build --prefix ui && node ui/e2e/web.mjs
 //
@@ -23,6 +25,12 @@ const CODE = "pair-abcdefghijklmnop";
 const PROMPT = "web smoke: say hello";
 const REPLY = "Hello from the web smoke test";
 const TOOL = "write_file";
+const POST_TITLE = "Web smoke: Pulse reaches the browser";
+const IDEA_TITLE = "Web smoke weekly digest";
+const IDEA_ACTION = "every Friday at 5, gather the week's web smoke news";
+// A 1x1 PNG, the cached image the desktop hands back as a data URL.
+const IMAGE =
+  "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgYPj/HwADAgH/eL9GtQAAAABJRU5ErkJggg==";
 const DIST = resolve(fileURLToPath(new URL("../dist", import.meta.url)));
 const TYPES = {
   ".html": "text/html; charset=utf-8",
@@ -36,7 +44,45 @@ const STATE = {
   calls: [],
   streams: new Set(),
   permission: null,
+  loved: false,
+  acts: [],
 };
+
+function pulsePage() {
+  return {
+    feed: [
+      {
+        id: "web-post",
+        source: "pulse:writer",
+        title: POST_TITLE,
+        summary: "Pulse now works from [the browser](https://example.com/web).",
+        because: "",
+        icon: "🚀",
+        why: "You asked for GrokHub news.",
+        images: ["0123456789abcdef.png"],
+        createdAt: Date.now() - 60000,
+        ago: "1m ago",
+        link: "https://example.com/web",
+        loved: STATE.loved,
+      },
+    ],
+    ideas: [
+      {
+        label: "",
+        ideas: [
+          {
+            id: "web-idea",
+            title: IDEA_TITLE,
+            icon: "🛠️",
+            summary: "I can gather the week's web smoke news into one digest.",
+            kind: "Automate",
+            action: IDEA_ACTION,
+          },
+        ],
+      },
+    ],
+  };
+}
 
 function settings() {
   return {
@@ -102,6 +148,15 @@ const COMMANDS = {
     value: { global: "", workspace: "", globalPath: "", workspacePath: "", amr: false },
   }),
   list_connectors: () => ({ ok: true, value: [] }),
+  get_pulse: () => ({ ok: true, value: pulsePage() }),
+  pulse_act: ({ id, act }) => {
+    if (id === "web-post" && act === "love") STATE.loved = true;
+    else if (!(id === "web-idea" && act === "accept")) return { ok: false, error: `unexpected act: ${act}` };
+    STATE.acts.push(`${id}:${act}`);
+    return { ok: true, value: pulsePage() };
+  },
+  pulse_image: ({ name }) =>
+    name === "0123456789abcdef.png" ? { ok: true, value: IMAGE } : { ok: false, error: "no such image" },
 };
 
 function json(res, status, body) {
@@ -180,7 +235,7 @@ async function main() {
     check(!page.url().includes("code="), `the pairing code stayed in the address: ${page.url()}`);
     const tabs = await page.locator("nav.tabs button").allTextContents();
     console.log(`paired; tabs=${tabs.join(",")}`);
-    check(!tabs.includes("Pulse"), "the web app showed Pulse");
+    check(tabs.includes("Pulse"), "the web app hid Pulse");
 
     await box.fill(PROMPT);
     await page.locator("form.composer button[type='submit']").click();
@@ -200,6 +255,30 @@ async function main() {
     check(wide.page <= wide.screen, `the chat is wider than a phone: ${JSON.stringify(wide)}`);
     await page.setViewportSize({ width: 1280, height: 720 });
 
+    await page.locator("nav.tabs button", { hasText: "Pulse" }).click();
+    const post = page.getByRole("listitem", { name: POST_TITLE });
+    await post.getByRole("button", { name: "Open image 1" }).waitFor({ timeout: 30000 });
+    await post.getByRole("button", { name: "Love" }).click();
+    await post.locator("button[aria-label='Love'][aria-pressed='true']").waitFor({ timeout: 30000 });
+    check(STATE.loved, "Love never reached the desktop");
+    console.log("pulse: post with its image shown, Love sent");
+
+    await page.getByRole("button", { name: "Ideas", exact: true }).click();
+    const idea = page.getByRole("listitem", { name: IDEA_TITLE });
+    await idea.getByRole("button", { name: "More" }).click();
+    const items = await idea.getByRole("menuitem").allTextContents();
+    check(
+      items.join("|") === "Let's do it|More like this|Not interested",
+      `the idea menu says ${JSON.stringify(items)}`,
+    );
+    await idea.getByRole("button", { name: "More" }).click();
+    await idea.getByRole("button", { name: new RegExp(IDEA_TITLE) }).click();
+    await page.getByRole("textbox", { name: "Message" }).waitFor({ timeout: 30000 });
+    const typed = await page.getByRole("textbox", { name: "Message" }).inputValue();
+    check(typed === IDEA_ACTION, `the chat box says ${JSON.stringify(typed)}`);
+    check(STATE.acts.includes("web-idea:accept"), "Let's do it never reached the desktop");
+    console.log(`pulse: idea menu ${items.join(", ")}; the row filled the chat box`);
+
     await page.getByRole("button", { name: "Settings" }).click();
     await page.getByText("Change settings and the API key there.").waitFor();
     check((await page.getByLabel("API key").count()) === 0, "the web app offered to set the key");
@@ -218,7 +297,7 @@ async function main() {
     check((await context.cookies()).length === 0, "the web app set a cookie");
 
     const commands = STATE.calls.map((c) => c.command);
-    for (const want of ["get_settings", "send_chat", "answer_permission"]) {
+    for (const want of ["get_settings", "send_chat", "answer_permission", "get_pulse", "pulse_act", "pulse_image"]) {
       check(commands.includes(want), `the desktop never got ${want} (${commands.join(", ")})`);
     }
     check(

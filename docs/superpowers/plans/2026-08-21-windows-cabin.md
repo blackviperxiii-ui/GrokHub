@@ -114,9 +114,9 @@ mod tests {
         let old_home = std::env::var_os("HOME");
         let old_up = std::env::var_os("USERPROFILE");
         std::env::remove_var("HOME");
-        std::env::set_var("USERPROFILE", r"C:\Users\alex");
+        std::env::set_var("USERPROFILE", r"C:\Users\user");
         let got = user_home().expect("USERPROFILE");
-        assert!(got.ends_with("alex") || got.to_string_lossy().contains("alex"));
+        assert!(got.ends_with("user") || got.to_string_lossy().contains("user"));
         std::env::remove_var("USERPROFILE");
         assert!(user_home().is_none() || old_home.is_some());
         match old_home {
@@ -136,7 +136,7 @@ Also add in `project.rs` tests (same module that tests `expand_project_root`):
 ```rust
 #[test]
 fn expand_project_root_keeps_windows_drive_paths() {
-    let p = expand_project_root(r"C:\Users\alex\proj", Some(r"C:\Users\alex"));
+    let p = expand_project_root(r"C:\Users\user\proj", Some(r"C:\Users\user"));
     assert!(p.starts_with("C:") || p.contains("Users"), "{p}");
 }
 ```
@@ -145,7 +145,7 @@ fn expand_project_root_keeps_windows_drive_paths() {
 
 Run: `cargo test --locked -p grokhub-core -- user_home_prefers_home_then_userprofile expand_project_root_keeps_windows_drive_paths`
 
-Expected: FAIL compiling `user_home` not found / assertion on `C:\` currently rewritten or rejected because `starts_with('/')` is false and `~` rules do not apply — `expand_host_path_token_in` returns `None` so `expand_project_root` returns the token unchanged. If it already returns `C:\Users\alex\proj` unchanged, the test PASSES early; then keep it as a regression lock and still add `user_home`.
+Expected: FAIL compiling `user_home` not found / assertion on `C:\` currently rewritten or rejected because `starts_with('/')` is false and `~` rules do not apply — `expand_host_path_token_in` returns `None` so `expand_project_root` returns the token unchanged. If it already returns `C:\Users\user\proj` unchanged, the test PASSES early; then keep it as a regression lock and still add `user_home`.
 
 - [ ] **Step 3: Implement**
 

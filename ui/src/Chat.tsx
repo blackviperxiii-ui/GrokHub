@@ -14,7 +14,9 @@ import {
   type ElicitAction,
   type SessionMode,
   type Settings,
+  type Suggestion,
 } from "./api";
+import type { RunNotice } from "./Automations";
 import { ElicitCard, ModeChips, type ElicitItem } from "./Modes";
 
 export type Item =
@@ -30,7 +32,15 @@ export type Item =
       /** "ended": the turn stopped before anyone answered, so nothing ran. */
       answer: Answer | "ended" | null;
     }
+  | { kind: "suggest"; items: Suggestion[] }
+  | ({ kind: "notice" } & RunNotice)
   | ElicitItem;
+
+/** How much of a run's reply its notice shows; Automations has the rest. */
+export const NOTICE_CHARS = 280;
+
+/** At most this many follow-ups show under a reply. */
+export const SUGGESTIONS_MAX = 3;
 
 export interface Prefill {
   text: string;
@@ -94,6 +104,9 @@ export function applyEvent(items: Item[], event: ChatEvent): Item[] {
     // The plan comes again on its approval card; one copy is enough.
     case "elicit":
       return [...items, { ...event, answer: null }];
+    case "suggestions":
+      if (event.items.length === 0) return items;
+      return [...items, { kind: "suggest", items: event.items.slice(0, SUGGESTIONS_MAX) }];
     default:
       return items;
   }
@@ -154,18 +167,23 @@ function PermissionCard({
  * sends it. With `conversationId` the chat moves to that conversation first,
  * like Start over, unless it is already there. `active`: the Chat tab is
  * showing, so the approvals chips read Settings again. `remote`: the web app,
- * where the approvals stay the computer's. */
+ * where the approvals stay the computer's. `notice`: an automation run that
+ * ended; a new `n` posts it in this chat. */
 export function Chat({
   onOpenSettings,
   onSignIn = onOpenSettings,
+  onOpenAutomations,
   prefill,
+  notice,
   active = true,
   remote = false,
 }: {
   onOpenSettings: () => void;
   /** The signed-out card's button: Settings → Account. */
   onSignIn?: () => void;
+  onOpenAutomations?: () => void;
   prefill?: Prefill;
+  notice?: RunNotice & { n: number };
   active?: boolean;
   remote?: boolean;
 }) {
@@ -216,6 +234,11 @@ export function Chat({
     setDraft(prefill.text);
     // Only a new prefill acts; switching conversations must not re-run it.
   }, [prefill]);
+  useEffect(() => {
+    if (!notice) return;
+    const { n: _n, ...run } = notice;
+    setItems((now) => [...now, { kind: "notice", ...run }]);
+  }, [notice]);
   const endRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -241,12 +264,14 @@ export function Chat({
     endRef.current?.scrollIntoView?.({ block: "end" });
   }, [items]);
 
-  async function send(event?: FormEvent) {
+  /** Sends the draft, or `picked` from a suggestion (the draft stays). */
+  async function send(event?: FormEvent, picked?: string) {
     event?.preventDefault();
-    const text = draft.trim();
+    const text = (picked ?? draft).trim();
     if (!text || busy) return;
-    setItems((now) => [...now, { kind: "user", text }]);
-    setDraft("");
+    // Suggestions belong to the reply they followed.
+    setItems((now) => [...now.filter((item) => item.kind !== "suggest"), { kind: "user", text }]);
+    if (picked === undefined) setDraft("");
     setError(null);
     busyRef.current = true;
     setBusy(true);
@@ -355,6 +380,62 @@ export function Chat({
                   item={item}
                   onAnswer={(action, value) => void answerCard(item, action, value)}
                 />
+              );
+            case "notice":
+              return (
+                <div
+                  key={i}
+                  className={item.ok ? "card notice" : "card notice warn"}
+                  role="status"
+                  aria-label={`${item.name} finished`}
+                >
+                  <span className="card-title">{item.name}</span>
+                  <span className="card-status">{item.ok ? "Finished" : "Failed"}</span>
+                  <p className="card-detail-line">
+                    {item.text.length > NOTICE_CHARS
+                      ? `${item.text.slice(0, NOTICE_CHARS).trimEnd()}…`
+                      : item.text}
+                  </p>
+                  <div className="card-buttons">
+                    <button
+                      type="button"
+                      className="quiet"
+                      onClick={() =>
+                        setDraft(
+                          item.ok
+                            ? `About the "${item.name}" automation run: `
+                            : `The "${item.name}" automation failed: ${item.text}. What went wrong and how do I fix it?`,
+                        )
+                      }
+                    >
+                      {item.ok ? "Ask about it" : "Find the cause"}
+                    </button>
+                    {onOpenAutomations && (
+                      <button type="button" className="link" onClick={onOpenAutomations}>
+                        Open Automations
+                      </button>
+                    )}
+                  </div>
+                </div>
+              );
+            case "suggest":
+              return (
+                <div key={i} className="card suggest" role="group" aria-label="Suggestions">
+                  <div className="card-buttons">
+                    {item.items.map((s) => (
+                      <button
+                        key={s.label}
+                        type="button"
+                        className="quiet"
+                        title={s.prompt}
+                        disabled={busy}
+                        onClick={() => void send(undefined, s.prompt)}
+                      >
+                        {s.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
               );
           }
         })}

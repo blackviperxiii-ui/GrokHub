@@ -228,23 +228,49 @@ approve, the cabin's three permission modes.
 `updates.json`, ranked by the same rules (`grokhub_core::pulse`), with the
 MEMORY.md ledger as input (`src-tauri/src/pulse.rs`).
 
-- Feed opens first: source, time, headline, summary, the source link as
-  text (the shell has no browser opener yet), and Like, Snooze, Not this,
-  Dismiss.
-- Ideas groups rows under the cabin's category headers. Run notes the idea
-  as accepted and puts its action in the chat box; nothing is sent until the
-  person sends it, so the chat's approvals still apply.
-- Dismiss, Not this, Like and Accept write the cabin's one-line ledger entry
+- Feed opens first, one column of cards, newest first, ten at a time with
+  more as you scroll (`ui/src/FeedCard.tsx`). A card shows the topic emoji
+  (a bundled Fluent Emoji 3D picture when there is one, MIT, in
+  `ui/public/emoji3d/`), the title, the snippet with its cites as links, and
+  the cached images: one as a hero, two or three as a square gallery, each
+  opening a lightbox with Download. Love and Discuss sit under it; the time
+  and a menu (full date, Why I created this, Delete) sit top right.
+- Edit feed instructions (the sliders button on the Feed tab) saves the
+  writer's prompt. The writer posts at once, and the page checks for the new
+  post every few seconds for half a minute.
+- The shell writes its own posts (`src-tauri/src/pulse_feed.rs`, the rules in
+  `grokhub_core::pulse_writer`). `GROKHUB_SHELL_PULSE_NET` points its source,
+  page and image fetches at a loopback mock for the smoke tests; any other
+  host is ignored.
+- Ideas are rows, not cards: a 44 px icon (the same bundled emoji set),
+  the title, a grey "I can …" line, and a menu. The first three, by rank,
+  lead with no header; the rest sit under Productivity, Financial
+  Management, Shopping, Relationships and Health & Fitness, in that order
+  (older cards whose words match none go under More ideas last).
+- A click on the row is Let's do it: it notes the idea as accepted and puts
+  its action in the chat box; nothing is sent until the person sends it, so
+  the chat's approvals still apply. The menu also holds More like this (the
+  next idea run writes more in its spirit, and the topics it names gain
+  weight) and Not interested (the idea goes, its topics lose weight, and it
+  is kept as turned down so it does not come back).
+- The shell writes its own ideas (`grokhub_core::pulse_ideas`, run from
+  `pulse_feed.rs` after a feed run, at most once every six hours) from the
+  open journal questions, interest topics, recent chats and recent feed
+  posts. A written idea retires after 14 days unless it was edited.
+- Dismiss, Not this, Love and Accept write the cabin's one-line ledger entry
   to the global MEMORY.md, so the next ranking learns from them. Snooze hides
   a card until the next 9 AM local.
-- Not yet: generating new ideas, Feed instructions, Undo on done-for-you
-  posts, and source images. The cabin still makes the cards. A dismissed
+- Not yet: Undo on done-for-you posts. The cabin still makes the cards. A dismissed
   idea is not added to the cabin's turned-down list (that lives in its
   `config.json`, which the shell does not write), so the cabin's next idea
   pass can offer a reworded copy.
 - Rust tests cover the split, each act, the ledger lines and snooze. The
-  smoke test writes a post and an idea, checks Not this writes the ledger
-  line, and checks Run fills the chat box without a model call.
+  smoke test writes a post and an idea, checks Love writes the ledger line,
+  saves the feed instructions and waits for the writer's post with its
+  cached image, opens the lightbox, and deletes a post. The idea writer then
+  adds one idea; the smoke checks its menu, that More like this is kept, and
+  that a row click fills the chat box without a model call. The web smoke
+  shows a post, sends Love, checks the idea menu and a row click.
 
 **3g, computer-use.** The desktop tools moved into a shared
 `crates/grokhub-desktop` crate (#859). The shell's chat now uses them through
@@ -350,8 +376,10 @@ origin, so there's no CORS.
 
 The desktop answers only the web app's commands: chat (`send_chat`,
 `answer_permission`, `cancel_chat`, `close_chat`), `get_settings`,
-automations, memory and connectors. Everything else gets `ok: false`: the
-key, settings changes, Pulse, Local AI and desktop control.
+automations, memory, connectors and Pulse (`get_pulse`, `pulse_act`,
+`pulse_discuss`, `pulse_why`, `get_feed_prompt`, `save_feed_prompt`,
+`pulse_image`). Everything else gets `ok: false`: the key, settings changes,
+Local AI and desktop control.
 
 **5b, the desktop side.** Settings → Web access in the shell
 (`src-tauri/src/remote.rs`, desktops only: `webAccess` in the capability

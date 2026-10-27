@@ -131,6 +131,9 @@ pub fn remember(workspace: &Path, text: &str) -> Result<String, String> {
     if stored.trim().is_empty() || !grokhub_core::is_plain_text(&stored) {
         return Err("Secrets never in markdown".into());
     }
+    if dream_model_enabled() {
+        return propose_core_line(stored.trim());
+    }
     let path = if global {
         global_memory_path()
     } else {
@@ -246,9 +249,10 @@ pub fn dream(
 /// First-turn recall, fenced and capped. `None` when there is nothing to say.
 /// Failure to open the index returns `None` so a turn still runs.
 ///
-/// With `"memory_backend": "amr"` in `app.json` this also reads the agent
-/// memory repo (dual-read): AMR lines lead, identical lines are dropped, and
-/// tombstoned or locked nodes never appear. Legacy reads only the index.
+/// A missing `app.json` (new install) also reads the agent memory repo.
+/// An existing file that omits `memory_backend` stays on the index.
+/// When AMR is on, dual-read leads with AMR lines, drops identical lines, and
+/// never shows a tombstoned or locked node. Legacy reads only the index.
 ///
 /// Sealed indexer facts (`Installed app: …` and other `scope:` nodes) are
 /// always dual-read when the user's text asks about a library, games, Steam,
@@ -258,25 +262,47 @@ pub fn first_turn_injection(workspace: &Path, user_text: &str) -> Option<String>
     inject_snippets(workspace, user_text, true)
 }
 
-/// Later-turn recall for library / installed-app asks. Empty history already
-/// got [`first_turn_injection`]; follow-ups that name games, Steam, or the
-/// library still need the sealed pack, or the model honestly claims none.
-pub fn followup_injection(user_text: &str) -> Option<String> {
-    if !library_intent(user_text) {
-        return None;
-    }
-    let scope = scope_library_lines(user_text);
-    if scope.is_empty() {
-        return None;
-    }
-    let snippets: Vec<String> = scope
+/// Later-turn recall. Same pack as the first turn, minus lines already in
+/// `already` (the fenced bodies from earlier turns). `None` when nothing new
+/// matched. Library asks still include sealed installed-app lines.
+pub fn followup_injection(workspace: &Path, user_text: &str, already: &[String]) -> Option<String> {
+    let fresh: Vec<String> = collect_snippets(workspace, user_text, true)
         .into_iter()
-        .map(|body| grokhub_core::redact_recall(&body).0)
+        .filter(|body| !already_has(already, body))
         .collect();
-    format_injection(&snippets)
+    format_injection(&fresh)
+}
+
+fn already_has(already: &[String], body: &str) -> bool {
+    let key = normalize_hit(body);
+    if key.is_empty() {
+        return true;
+    }
+    if already.iter().any(|line| normalize_hit(line) == key) {
+        return true;
+    }
+    let lines: Vec<&str> = body
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect();
+    !lines.is_empty()
+        && lines.iter().all(|line| {
+            already
+                .iter()
+                .any(|old| normalize_hit(old) == normalize_hit(line))
+        })
+}
+
+fn normalize_hit(text: &str) -> String {
+    text.trim().to_lowercase()
 }
 
 fn inject_snippets(workspace: &Path, user_text: &str, include_legacy: bool) -> Option<String> {
+    format_injection(&collect_snippets(workspace, user_text, include_legacy))
+}
+
+fn collect_snippets(workspace: &Path, user_text: &str, include_legacy: bool) -> Vec<String> {
     let amr = if amr_enabled() {
         amr_injection_lines(user_text)
     } else {
@@ -288,24 +314,24 @@ fn inject_snippets(workspace: &Path, user_text: &str, include_legacy: bool) -> O
     } else {
         None
     };
-    if amr.is_empty() && scope.is_empty() {
-        let hits = legacy?;
-        // Spike-4b: the recall pack is masked (secrets + PII) before the model sees it.
-        let snippets: Vec<String> = hits
-            .into_iter()
-            .map(|body| grokhub_core::redact_recall(&body).0)
-            .collect();
-        return format_injection(&snippets);
-    }
     let mut seen = std::collections::HashSet::new();
-    let snippets: Vec<String> = scope
+    let source: Vec<String> = if amr.is_empty() && scope.is_empty() {
+        match legacy {
+            Some(hits) => hits,
+            None => return Vec::new(),
+        }
+    } else {
+        scope
+            .into_iter()
+            .chain(amr)
+            .chain(legacy.unwrap_or_default())
+            .collect()
+    };
+    source
         .into_iter()
-        .chain(amr)
-        .chain(legacy.unwrap_or_default())
-        .filter(|body| seen.insert(body.trim().to_lowercase()))
+        .filter(|body| seen.insert(normalize_hit(body)))
         .map(|body| grokhub_core::redact_recall(&body).0)
-        .collect();
-    format_injection(&snippets)
+        .collect()
 }
 
 /// True when the user is asking about games, Steam, installed apps, or a
@@ -475,26 +501,145 @@ fn legacy_injection_bodies(workspace: &Path, user_text: &str) -> Option<Vec<Stri
     Some(hits.into_iter().map(|hit| hit.body).collect())
 }
 
-/// `"memory_backend": "amr"` in `{config}/app.json`. Missing or unreadable is legacy.
+/// AMR is on when `app.json` is missing (a new install) or sets
+/// `"memory_backend": "amr"`. An existing file that omits the key stays legacy.
+/// `memory_migrated` does not override that omission.
 pub fn amr_enabled() -> bool {
-    let Ok(text) = fs::read_to_string(crate::perm::config_dir().join("app.json")) else {
+    amr_enabled_at(&crate::perm::config_dir())
+}
+
+pub(crate) fn amr_enabled_at(dir: &Path) -> bool {
+    let Some(value) = read_app_json_at(dir) else {
+        return true;
+    };
+    value.get("memory_backend").and_then(|b| b.as_str()) == Some("amr")
+}
+
+/// Model dream is on only when `app.json` sets `"dream_model": true`.
+/// A missing file, a missing key, or any other value stays off.
+pub fn dream_model_enabled() -> bool {
+    dream_model_enabled_at(&crate::perm::config_dir())
+}
+
+pub(crate) fn dream_model_enabled_at(dir: &Path) -> bool {
+    let Some(value) = read_app_json_at(dir) else {
         return false;
     };
-    serde_json::from_str::<serde_json::Value>(&text)
-        .ok()
-        .and_then(|v| {
-            v.get("memory_backend")
-                .and_then(|b| b.as_str())
-                .map(|b| b == "amr")
-        })
-        .unwrap_or(false)
+    value.get("dream_model").and_then(|flag| flag.as_bool()) == Some(true)
+}
+
+fn propose_core_line(text: &str) -> Result<String, String> {
+    let store = amr_store();
+    let source = "turn:memory";
+    let write = grokhub_core::amr::LineWrite {
+        text,
+        source,
+        tags: Vec::new(),
+        confidence: 1.0,
+        revive: true,
+    };
+    match grokhub_core::amr::stage_core_line(
+        &store,
+        &write,
+        grokhub_core::now_ms(),
+        true,
+        grokhub_core::amr::CoreWriter::InTurn,
+    ) {
+        Ok(grokhub_core::amr::StagedCore::Proposed(grokhub_core::amr::Noted::New(_))) => {
+            Ok("Proposed for approval. Nothing was added to core memory.".into())
+        }
+        Ok(grokhub_core::amr::StagedCore::Proposed(grokhub_core::amr::Noted::Known(_))) => {
+            Ok("Already proposed.".into())
+        }
+        Ok(grokhub_core::amr::StagedCore::Proposed(grokhub_core::amr::Noted::Skipped(why))) => {
+            Ok(format!("Skipped: {why}"))
+        }
+        Ok(grokhub_core::amr::StagedCore::Remembered(_)) => {
+            Ok("Proposed for approval. Nothing was added to core memory.".into())
+        }
+        Err(err) => Err(err.to_string()),
+    }
 }
 
 /// `{config}/amr`, sealing personal nodes with the learned-tier key.
+/// The memory off switch in `app.json` is applied here.
 pub fn amr_store() -> grokhub_core::amr::AmrStore {
-    let dir = crate::perm::config_dir();
-    let vault = crate::harness::LearnedVault::new(&dir);
-    grokhub_core::amr::AmrStore::at(dir.join("amr")).with_sealer(std::sync::Arc::new(vault))
+    amr_store_at(&crate::perm::config_dir())
+}
+
+pub(crate) fn amr_store_at(dir: &Path) -> grokhub_core::amr::AmrStore {
+    let vault = crate::harness::LearnedVault::new(dir);
+    let mut store =
+        grokhub_core::amr::AmrStore::at(dir.join("amr")).with_sealer(std::sync::Arc::new(vault));
+    store.set_memory_writes(memory_writes_at(dir));
+    store
+}
+
+/// `"memory_writes"` in `{config}/app.json`. Missing, unreadable, or not a
+/// bool means writes stay on.
+pub fn memory_writes_enabled() -> bool {
+    memory_writes_at(&crate::perm::config_dir())
+}
+
+pub(crate) fn memory_writes_at(dir: &Path) -> bool {
+    let Some(value) = read_app_json_at(dir) else {
+        return true;
+    };
+    value
+        .get("memory_writes")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true)
+}
+
+/// Patch `memory_writes` in `app.json` without dropping other keys.
+/// On removes the key so a default file stays unchanged.
+pub fn set_memory_writes(on: bool) -> Result<(), String> {
+    let path = crate::perm::config_dir().join("app.json");
+    let mut value = if path.is_file() {
+        let text = fs::read_to_string(&path).map_err(|e| e.to_string())?;
+        if text.trim().is_empty() {
+            serde_json::json!({})
+        } else {
+            serde_json::from_str(&text).map_err(|e| e.to_string())?
+        }
+    } else {
+        serde_json::json!({})
+    };
+    let obj = value
+        .as_object_mut()
+        .ok_or_else(|| "app.json is not an object".to_string())?;
+    if on {
+        obj.remove("memory_writes");
+    } else {
+        obj.insert("memory_writes".to_string(), serde_json::Value::Bool(false));
+    }
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    let pretty = serde_json::to_string_pretty(&value).map_err(|e| e.to_string())?;
+    fs::write(&path, format!("{pretty}\n")).map_err(|e| e.to_string())
+}
+
+fn read_app_json_at(dir: &Path) -> Option<serde_json::Value> {
+    let text = fs::read_to_string(dir.join("app.json")).ok()?;
+    serde_json::from_str(&text).ok()
+}
+
+/// Recall token cap. `recall_token_cap` in `app.json` overrides [`INJECT_TOKEN_CAP`]
+/// when it is a whole number from 1 through 8,192.
+pub fn inject_token_cap() -> u64 {
+    inject_token_cap_at(&crate::perm::config_dir())
+}
+
+pub(crate) fn inject_token_cap_at(dir: &Path) -> u64 {
+    let Some(value) = read_app_json_at(dir) else {
+        return INJECT_TOKEN_CAP;
+    };
+    value
+        .get("recall_token_cap")
+        .and_then(|n| n.as_u64())
+        .filter(|n| (1..=8_192).contains(n))
+        .unwrap_or(INJECT_TOKEN_CAP)
 }
 
 /// AMR lines for the words in the first message (4+ letters), at most 8.
@@ -523,32 +668,41 @@ fn amr_injection_lines(user_text: &str) -> Vec<String> {
 
 /// The recalled lines in a history's memory block (Spike-4c), so egress can
 /// tell when a call carries one. Text outside the fences is the preamble.
+/// Only system rows count: a user message that quotes the fence is not egress.
 pub fn recall_lines(history: &[crate::InputItem]) -> Vec<String> {
+    fenced_lines(history, true)
+}
+
+/// Lines already injected on any turn, including a prefix-cache user row
+/// whose `<cabin-volatile>` wrapper holds the memory fence.
+pub fn injected_lines(history: &[crate::InputItem]) -> Vec<String> {
+    fenced_lines(history, false)
+}
+
+fn fenced_lines(history: &[crate::InputItem], system_only: bool) -> Vec<String> {
     let mut out = Vec::new();
     for item in history {
         let crate::InputItem::Message { role, content } = item else {
             continue;
         };
-        if role != "system" {
+        if system_only && role != "system" {
             continue;
         }
         for part in content {
             let crate::ContentPart::InputText(text) = part else {
                 continue;
             };
-            let Some(block) = text
-                .split(OPEN_TAG)
-                .nth(1)
-                .and_then(|b| b.split(CLOSE_TAG).next())
-            else {
-                continue;
-            };
-            let mut inside = false;
-            for line in block.lines() {
-                if line.trim() == "```" {
-                    inside = !inside;
-                } else if inside && !line.trim().is_empty() {
-                    out.push(line.trim().to_string());
+            for block in text.split(OPEN_TAG).skip(1) {
+                let Some(block) = block.split(CLOSE_TAG).next() else {
+                    continue;
+                };
+                let mut inside = false;
+                for line in block.lines() {
+                    if line.trim() == "```" {
+                        inside = !inside;
+                    } else if inside && !line.trim().is_empty() {
+                        out.push(line.trim().to_string());
+                    }
                 }
             }
         }
@@ -765,14 +919,15 @@ fn format_injection(snippets: &[String]) -> Option<String> {
         return None;
     }
     out.push_str(&close);
-    if out.len() > max_bytes || estimate_tokens(&out) > INJECT_TOKEN_CAP {
+    if out.len() > max_bytes || estimate_tokens(&out) > inject_token_cap() {
         return None;
     }
     Some(out)
 }
 
 fn inject_byte_budget() -> usize {
-    let from_tokens = (INJECT_TOKEN_CAP as usize).saturating_mul(tokens::BYTES_PER_TOKEN as usize);
+    let cap = inject_token_cap();
+    let from_tokens = (cap as usize).saturating_mul(tokens::BYTES_PER_TOKEN as usize);
     INJECT_BYTE_CAP.min(from_tokens)
 }
 
@@ -1346,7 +1501,9 @@ mod tests {
         remember_line(&store, &line("the harbor ferry leaves at nine"), 1).unwrap();
         let ask = "when does the harbor ferry leave today";
 
-        // Legacy: app.json has no backend key, so AMR is not read.
+        // An omitted key is an existing install: AMR is not read.
+        fs::write(cfg.join("app.json"), "{}\n").unwrap();
+        assert!(!amr_enabled());
         let legacy = first_turn_injection(&ws, ask).unwrap();
         assert!(
             legacy.contains("the harbor ferry leaves at nine"),
@@ -1377,6 +1534,41 @@ mod tests {
         );
         assert_eq!(remember_note_text("--global keep it"), "keep it");
         assert_eq!(remember_note_text("plain"), "plain");
+    }
+
+    #[test]
+    fn memory_writes_off_stops_remember_and_keeps_other_settings() {
+        use grokhub_core::amr::{remember_line, AmrError, LineWrite};
+        let (cfg, _ws, _guard) = temp_pair("writes-off");
+        fs::write(cfg.join("app.json"), r#"{"memory_backend":"amr"}"#).unwrap();
+        assert!(memory_writes_enabled());
+        set_memory_writes(false).unwrap();
+        let text = fs::read_to_string(cfg.join("app.json")).unwrap();
+        assert!(text.contains("memory_backend"), "{text}");
+        assert!(text.contains("amr"), "{text}");
+        assert!(text.contains("\"memory_writes\": false"), "{text}");
+        assert!(!memory_writes_enabled());
+        let store = amr_store();
+        store.init().unwrap();
+        let err = remember_line(
+            &store,
+            &LineWrite {
+                text: "the harbor lamp is green",
+                source: "user",
+                tags: Vec::new(),
+                confidence: 0.9,
+                revive: false,
+            },
+            1,
+        )
+        .unwrap_err();
+        assert_eq!(err, AmrError::WritesOff);
+        assert_eq!(store.node_file_count(), 0);
+        set_memory_writes(true).unwrap();
+        let text = fs::read_to_string(cfg.join("app.json")).unwrap();
+        assert!(!text.contains("memory_writes"), "{text}");
+        assert!(text.contains("memory_backend"), "{text}");
+        assert!(memory_writes_enabled());
     }
 
     #[test]
@@ -1412,7 +1604,8 @@ mod tests {
         let (cfg, ws, _guard) = temp_pair("apps-inject");
         let keys = Arc::new(crate::harness::MemoryKeyStore::new());
         crate::harness::use_key_store_for(&cfg, keys);
-        // No memory_backend key → legacy. Scope facts still live in AMR.
+        // Omitted key: existing install, legacy. Scope facts still live in AMR.
+        fs::write(cfg.join("app.json"), "{}\n").unwrap();
         assert!(!amr_enabled());
 
         let store = amr_store();
@@ -1460,10 +1653,10 @@ mod tests {
             "affordance line: {block}"
         );
 
-        let follow =
-            followup_injection("scan my steam library").expect("follow-up library ask injects");
+        let follow = followup_injection(&ws, "scan my steam library", &[])
+            .expect("follow-up library ask injects");
         assert!(follow.contains("Installed app: ARC Raiders"), "{follow}");
-        assert!(followup_injection("what is 2+2").is_none());
+        assert!(followup_injection(&ws, "what is 2+2", &[]).is_none());
     }
 
     #[test]
@@ -1625,5 +1818,138 @@ mod tests {
         assert!(!flush_pending(&ws, &history).unwrap());
         let block = first_turn_injection(&ws, "where is the quay lantern kept again").unwrap();
         assert!(block.contains("quay lantern"), "{block}");
+    }
+
+    fn history_with(block: &str) -> Vec<InputItem> {
+        vec![InputItem::Message {
+            role: "system".into(),
+            content: vec![ContentPart::InputText(block.to_string())],
+        }]
+    }
+
+    #[test]
+    fn later_turn_recall_injects_only_new_hits() {
+        let (cfg, ws, _guard) = temp_pair("later");
+        fs::write(cfg.join("app.json"), "{}\n").unwrap();
+        fs::write(
+            workspace_memory_path(&ws),
+            "the harbor ferry leaves at nine\n",
+        )
+        .unwrap();
+        let ask = "when does the harbor ferry leave today";
+        let first = first_turn_injection(&ws, ask).unwrap();
+        assert!(first.contains("the harbor ferry leaves at nine"), "{first}");
+        let already = injected_lines(&history_with(&first));
+        assert!(
+            already
+                .iter()
+                .any(|line| line.contains("ferry leaves at nine")),
+            "{already:?}"
+        );
+        assert!(followup_injection(&ws, ask, &already).is_none());
+        fs::write(
+            workspace_memory_path(&ws),
+            "the harbor ferry leaves at nine\n\nthe harbor bell rings at dusk\n",
+        )
+        .unwrap();
+        let next = followup_injection(
+            &ws,
+            "when does the harbor ferry leave and when does the harbor bell ring",
+            &already,
+        )
+        .unwrap();
+        assert!(next.contains("harbor bell rings at dusk"), "{next}");
+        assert!(!next.contains("ferry leaves at nine"), "{next}");
+    }
+
+    #[test]
+    fn later_turn_dual_read_includes_a_new_legacy_fact() {
+        use grokhub_core::amr::{remember_line, LineWrite};
+        let (cfg, ws, _guard) = temp_pair("later-dual");
+        fs::write(cfg.join("app.json"), r#"{"memory_backend":"amr"}"#).unwrap();
+        let store = amr_store();
+        store.init().unwrap();
+        remember_line(
+            &store,
+            &LineWrite {
+                text: "the harbor lamp is green",
+                source: "user",
+                tags: Vec::new(),
+                confidence: 0.9,
+                revive: false,
+            },
+            1,
+        )
+        .unwrap();
+        fs::write(
+            workspace_memory_path(&ws),
+            "the harbor ferry leaves at nine\n",
+        )
+        .unwrap();
+        let ask = "when does the harbor ferry leave and is the harbor lamp green";
+        let first = first_turn_injection(&ws, ask).unwrap();
+        assert!(first.contains("the harbor lamp is green"), "{first}");
+        assert!(first.contains("the harbor ferry leaves at nine"), "{first}");
+        let already = injected_lines(&history_with(&first));
+        fs::write(
+            workspace_memory_path(&ws),
+            "the harbor ferry leaves at nine\n\nthe harbor bell rings at dusk\n",
+        )
+        .unwrap();
+        let next = followup_injection(
+            &ws,
+            "when does the harbor ferry leave and when does the harbor bell ring",
+            &already,
+        )
+        .unwrap();
+        assert!(next.contains("harbor bell rings at dusk"), "{next}");
+        assert!(!next.contains("ferry leaves at nine"), "{next}");
+        assert!(!next.contains("harbor lamp is green"), "{next}");
+    }
+
+    #[test]
+    fn recall_token_cap_is_configurable() {
+        let (cfg, ws, _guard) = temp_pair("cap");
+        fs::write(cfg.join("app.json"), "{}\n").unwrap();
+        let huge = format!("harbor {}\n", "light ".repeat(4_000));
+        fs::write(workspace_memory_path(&ws), &huge).unwrap();
+        let ask = "tell me about the harbor lights please";
+        assert_eq!(inject_token_cap(), INJECT_TOKEN_CAP);
+        let wide = first_turn_injection(&ws, ask).unwrap();
+        assert!(
+            estimate_tokens(&wide) <= INJECT_TOKEN_CAP,
+            "{}",
+            estimate_tokens(&wide)
+        );
+        fs::write(cfg.join("app.json"), r#"{"recall_token_cap":0}"#).unwrap();
+        assert_eq!(inject_token_cap(), INJECT_TOKEN_CAP);
+        fs::write(cfg.join("app.json"), r#"{"recall_token_cap":9000}"#).unwrap();
+        assert_eq!(inject_token_cap(), INJECT_TOKEN_CAP);
+        fs::write(cfg.join("app.json"), r#"{"recall_token_cap":80}"#).unwrap();
+        assert_eq!(inject_token_cap(), 80);
+        let tight = first_turn_injection(&ws, ask).unwrap();
+        let tight_tokens = estimate_tokens(&tight);
+        assert!(tight_tokens <= 80, "{tight_tokens}");
+        assert!(
+            tight.len() < wide.len(),
+            "tight {} wide {}",
+            tight.len(),
+            wide.len()
+        );
+    }
+
+    #[test]
+    fn a_missing_app_json_reads_amr_and_an_omitted_key_stays_legacy() {
+        let (cfg, _ws, _guard) = temp_pair("backend");
+        assert!(!cfg.join("app.json").exists());
+        assert!(amr_enabled());
+        fs::write(cfg.join("app.json"), "{}\n").unwrap();
+        assert!(!amr_enabled());
+        fs::write(cfg.join("app.json"), "{\"memory_backend\":\"legacy\"}\n").unwrap();
+        assert!(!amr_enabled());
+        fs::write(cfg.join("app.json"), "{\"memory_backend\":\"amr\"}\n").unwrap();
+        assert!(amr_enabled());
+        fs::write(cfg.join("app.json"), "{\"memory_migrated\":true}\n").unwrap();
+        assert!(!amr_enabled());
     }
 }

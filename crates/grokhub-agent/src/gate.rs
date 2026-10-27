@@ -29,6 +29,7 @@ const READONLY: &[&str] = &[
     "enter_plan_mode",
     "exit_plan_mode",
     "diagnose",
+    "local_ai_status",
 ];
 const EDIT: &[&str] = &["write", "search_replace"];
 const SHELL: &[&str] = &["run_terminal_command"];
@@ -40,6 +41,7 @@ const CONTROL: &[&str] = &[
     "connection_add",
     "connection_disable",
     "connection_delete",
+    "local_ai_selftest",
     "spawn_subagent",
     "send_subagent_message",
 ];

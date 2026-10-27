@@ -148,6 +148,16 @@ pub struct ElicitAsk {
     pub field_title: String,
     /// Password, token, or other secret. The value stays out of the transcript.
     pub secret: bool,
+    /// Options to tap instead of typing (Grok's ask_user_question); empty for a form.
+    pub options: Vec<ElicitChoice>,
+}
+
+/// One tappable answer on a question card. The label is the answer sent back.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ElicitChoice {
+    pub label: String,
+    pub description: String,
+    pub recommended: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1195,6 +1205,7 @@ pub fn parse_elicit(id: Value, params: &Value) -> ElicitAsk {
         field_name,
         field_title,
         secret,
+        options: Vec::new(),
     }
 }
 
@@ -1403,9 +1414,26 @@ pub struct GrokUsage {
     pub cost_in_usd_ticks: i64,
     /// "SuperGrok pool" or "API credits" from the native engine. Empty on the CLI path.
     pub meter: String,
+    /// Share of this turn's input served from the provider's prompt cache, 0-100.
+    /// Set by the native engine; `None` when the turn reported no usage.
+    pub turn_cache_pct: Option<u8>,
+}
+
+/// Cached input as a whole percent of input. No input is 0%, never NaN.
+pub fn cache_pct(cached: u64, input: u64) -> u8 {
+    if input == 0 {
+        return 0;
+    }
+    let pct = (u128::from(cached.min(input)) * 100 + u128::from(input) / 2) / u128::from(input);
+    pct.min(100) as u8
 }
 
 impl GrokUsage {
+    /// "cache N%" for the usage line, when the turn carried a cache share.
+    pub fn cache_note(&self) -> Option<String> {
+        self.turn_cache_pct.map(|pct| format!("cache {pct}%"))
+    }
+
     pub fn is_empty(&self) -> bool {
         self.input_tokens == 0
             && self.output_tokens == 0
@@ -1457,6 +1485,9 @@ impl GrokUsage {
         }
         if other.cache_creation_input_tokens > 0 {
             self.cache_creation_input_tokens = other.cache_creation_input_tokens;
+        }
+        if other.turn_cache_pct.is_some() {
+            self.turn_cache_pct = other.turn_cache_pct;
         }
         if other.total_tokens > 0 {
             self.total_tokens = other.total_tokens;
@@ -1676,6 +1707,8 @@ pub fn parse_usage(v: &Value) -> GrokUsage {
         stop_reason: json_str(v, &["stopReason", "stop_reason"]),
         cost_in_usd_ticks: json_i64(body, &["cost_in_usd_ticks", "costInUsdTicks"]),
         meter: json_str(body, &["meter"]),
+        // The CLI reports cache reads but no per-turn share.
+        turn_cache_pct: None,
     };
     if u.num_turns == 0 {
         u.num_turns =
@@ -1762,6 +1795,37 @@ fn json_str(v: &Value, keys: &[&str]) -> String {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn cache_pct_rounds_and_never_divides_by_zero() {
+        assert_eq!(cache_pct(0, 0), 0);
+        assert_eq!(cache_pct(50, 0), 0);
+        assert_eq!(cache_pct(870, 1000), 87);
+        assert_eq!(cache_pct(2, 3), 67);
+        assert_eq!(cache_pct(1000, 1000), 100);
+        assert_eq!(cache_pct(5000, 1000), 100, "cached never exceeds input");
+    }
+
+    #[test]
+    fn merge_keeps_the_latest_turn_cache_share() {
+        let mut u = GrokUsage::default();
+        assert_eq!(u.cache_note(), None);
+        u.merge(&GrokUsage {
+            turn_cache_pct: Some(91),
+            ..GrokUsage::default()
+        });
+        assert_eq!(u.cache_note().as_deref(), Some("cache 91%"));
+        u.merge(&GrokUsage {
+            input_tokens: 10,
+            ..GrokUsage::default()
+        });
+        assert_eq!(
+            u.turn_cache_pct,
+            Some(91),
+            "an event without a share keeps the last one"
+        );
+    }
+
     use super::*;
 
     #[test]

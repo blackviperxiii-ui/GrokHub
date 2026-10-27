@@ -18,6 +18,7 @@ pub mod personality;
 pub mod playbooks;
 pub mod plugins;
 pub mod pulse;
+pub mod pulse_feed;
 pub mod remote;
 pub mod settings;
 
@@ -162,12 +163,9 @@ fn session(state: &ShellState, conversation_id: &str) -> Arc<agent::Session> {
     Arc::clone(session)
 }
 
-fn route(
-    settings: &ShellSettings,
-    session: agent::SessionMode,
-    config_dir: &Path,
-) -> Result<agent::Route, String> {
-    let client = match credential::test_responses_url() {
+/// The model client for the signed-in key, or the loopback mock in tests.
+fn model_client() -> Result<XaiClient, String> {
+    Ok(match credential::test_responses_url() {
         Some(url) => XaiClient::new(
             credential::LOOPBACK_TEST_BEARER,
             AuthKind::ApiKey,
@@ -179,7 +177,15 @@ fn route(
             AuthKind::ApiKey,
             Duration::from_secs(120),
         ),
-    };
+    })
+}
+
+fn route(
+    settings: &ShellSettings,
+    session: agent::SessionMode,
+    config_dir: &Path,
+) -> Result<agent::Route, String> {
+    let client = model_client()?;
     Ok(agent::Route {
         client: Arc::new(client),
         auth_kind: AuthKind::ApiKey,
@@ -188,7 +194,11 @@ fn route(
         mode: settings.approvals.mode(),
         desktop: settings.desktop_control && capabilities::current().desktop_control,
         session,
-        voice: personality::voice(config_dir, &settings.personality),
+        voice: personality::voice(
+            config_dir,
+            &settings.personality,
+            settings.explicit_personalities,
+        ),
     })
 }
 
@@ -216,6 +226,10 @@ async fn chat_turn(
 ) -> Result<String, String> {
     let session = session(state, &conversation_id);
     let config_dir = state.config_dir.clone();
+    if capabilities::current().pulse {
+        // What the person says in chat steers the Feed writer's taste note.
+        pulse_feed::note_chat(&config_dir, &text, grokhub_core::now_ms());
+    }
     tauri::async_runtime::spawn_blocking(move || {
         let route = route(&settings, mode, &config_dir)?;
         let id = conversation_id.clone();
@@ -426,6 +440,35 @@ fn search_memory(state: State<'_, ShellState>, query: String) -> Result<Vec<memo
     memory::search(&workspace(&state), &query)
 }
 
+#[tauri::command]
+fn edit_memory_row(
+    state: State<'_, ShellState>,
+    id: String,
+    text: String,
+) -> Result<memory::Notes, String> {
+    memory::edit_row(&workspace(&state), &id, &text)
+}
+
+#[tauri::command]
+fn forget_memory_row(state: State<'_, ShellState>, id: String) -> Result<memory::Notes, String> {
+    memory::forget_row(&workspace(&state), &id)
+}
+
+#[tauri::command]
+fn approve_memory_row(state: State<'_, ShellState>, id: String) -> Result<memory::Notes, String> {
+    memory::approve_row(&workspace(&state), &id)
+}
+
+#[tauri::command]
+fn reject_memory_row(state: State<'_, ShellState>, id: String) -> Result<memory::Notes, String> {
+    memory::reject_row(&workspace(&state), &id)
+}
+
+#[tauri::command]
+fn set_memory_writes(state: State<'_, ShellState>, on: bool) -> Result<memory::Notes, String> {
+    memory::set_writes(&workspace(&state), on)
+}
+
 /// Every connector call can wait on a server's slot while chat or a check
 /// holds it for up to the startup or tool timeout, so all of them run off
 /// the main thread.
@@ -564,25 +607,49 @@ async fn forget_grant(
 
 #[tauri::command]
 async fn get_personalities(state: State<'_, ShellState>) -> Result<personality::Page, String> {
-    let (dir, stored) = (state.config_dir.clone(), current(&state).personality);
-    off_main(move || personality::load(&dir, &stored)).await
+    let (dir, now) = (state.config_dir.clone(), current(&state));
+    off_main(move || personality::load(&dir, &now.personality, now.explicit_personalities)).await
 }
 
 /// The default voice for every chat; applies to the next message.
 #[tauri::command]
 fn set_personality(state: State<'_, ShellState>, id: String) -> Result<personality::Page, String> {
-    let picked = personality::pick(&state.config_dir, &id)?;
+    let now = current(&state);
+    let picked = personality::allowed(
+        personality::pick(&state.config_dir, &id)?,
+        now.explicit_personalities,
+    )?;
     let next = ShellSettings {
         personality: personality::stored_id(&picked.id),
-        ..current(&state)
+        ..now
     };
     settings::save(&state.config_dir, &next)?;
     *state.settings.lock().unwrap_or_else(|e| e.into_inner()) = next.clone();
-    Ok(personality::load(&state.config_dir, &next.personality))
+    Ok(personalities(&state))
+}
+
+/// Settings → Personality → Adults-only personalities.
+#[tauri::command]
+fn set_explicit_personalities(
+    state: State<'_, ShellState>,
+    on: bool,
+) -> Result<personality::Page, String> {
+    let next = ShellSettings {
+        explicit_personalities: on,
+        ..current(&state)
+    };
+    settings::save(&state.config_dir, &next)?;
+    *state.settings.lock().unwrap_or_else(|e| e.into_inner()) = next;
+    Ok(personalities(&state))
 }
 
 fn personalities(state: &ShellState) -> personality::Page {
-    personality::load(&state.config_dir, &current(state).personality)
+    let now = current(state);
+    personality::load(
+        &state.config_dir,
+        &now.personality,
+        now.explicit_personalities,
+    )
 }
 
 /// Returns the copy's id with the page, so the editor can open it.
@@ -617,7 +684,7 @@ fn delete_personality(
         settings::save(&state.config_dir, &now)?;
         *state.settings.lock().unwrap_or_else(|e| e.into_inner()) = now.clone();
     }
-    Ok(personality::load(&state.config_dir, &now.personality))
+    Ok(personalities(&state))
 }
 
 #[tauri::command]
@@ -719,10 +786,53 @@ async fn interest_act(
 }
 
 #[tauri::command]
-async fn get_pulse(state: State<'_, ShellState>) -> Result<pulse::Page, String> {
+async fn get_pulse(
+    state: State<'_, ShellState>,
+    day: Option<pulse::Day>,
+) -> Result<pulse::Page, String> {
     capabilities::needs(capabilities::current().pulse, "Pulse")?;
     let dir = state.config_dir.clone();
-    off_main(move || pulse::load(&dir, grokhub_core::now_ms())).await?
+    off_main(move || pulse::load(&dir, day.as_ref(), grokhub_core::now_ms())).await?
+}
+
+/// Discuss: the text the chat starts from, carrying the post.
+#[tauri::command]
+async fn pulse_discuss(state: State<'_, ShellState>, id: String) -> Result<String, String> {
+    capabilities::needs(capabilities::current().pulse, "Pulse")?;
+    let dir = state.config_dir.clone();
+    off_main(move || pulse::discuss(&dir, &id, grokhub_core::now_ms())).await?
+}
+
+#[tauri::command]
+async fn pulse_why(state: State<'_, ShellState>, id: String) -> Result<String, String> {
+    capabilities::needs(capabilities::current().pulse, "Pulse")?;
+    let dir = state.config_dir.clone();
+    off_main(move || pulse::why(&dir, &id)).await?
+}
+
+#[tauri::command]
+async fn get_feed_prompt(state: State<'_, ShellState>) -> Result<pulse::Prompt, String> {
+    capabilities::needs(capabilities::current().pulse, "Pulse")?;
+    let dir = state.config_dir.clone();
+    off_main(move || pulse::get_prompt(&dir)).await
+}
+
+/// Saving the feed prompt writes one new post right away.
+#[tauri::command]
+async fn save_feed_prompt(
+    state: State<'_, ShellState>,
+    text: String,
+) -> Result<pulse::Prompt, String> {
+    capabilities::needs(capabilities::current().pulse, "Pulse")?;
+    let dir = state.config_dir.clone();
+    off_main(move || pulse::save_prompt(&dir, &text)).await?
+}
+
+#[tauri::command]
+async fn pulse_image(state: State<'_, ShellState>, name: String) -> Result<String, String> {
+    capabilities::needs(capabilities::current().pulse, "Pulse")?;
+    let dir = state.config_dir.clone();
+    off_main(move || pulse::image(&dir, &name)).await?
 }
 
 #[tauri::command]
@@ -917,11 +1027,32 @@ fn remote_call(app: &AppHandle, command: &str, args: &Value) -> Result<Value, St
         )?),
         "add_memory" => out(add_memory(state, arg(args, "text")?, arg(args, "global")?)?),
         "search_memory" => out(search_memory(state, arg(args, "query")?)?),
+        "edit_memory_row" => out(edit_memory_row(
+            state,
+            arg(args, "id")?,
+            arg(args, "text")?,
+        )?),
+        "forget_memory_row" => out(forget_memory_row(state, arg(args, "id")?)?),
+        "approve_memory_row" => out(approve_memory_row(state, arg(args, "id")?)?),
+        "reject_memory_row" => out(reject_memory_row(state, arg(args, "id")?)?),
+        "set_memory_writes" => out(set_memory_writes(state, arg(args, "on")?)?),
         "list_connectors" => out(block_on(list_connectors(state))?),
         "check_connectors" => out(block_on(check_connectors(state))?),
         "restart_connector" => out(block_on(restart_connector(state, arg(args, "name")?))?),
         "sign_out_connector" => out(block_on(sign_out_connector(state, arg(args, "name")?))?),
         "disconnect_connector" => out(block_on(disconnect_connector(state, arg(args, "name")?))?),
+        "get_pulse" => out(block_on(get_pulse(state, arg(args, "day")?))?),
+        "pulse_act" => out(block_on(pulse_act(
+            state,
+            arg(args, "id")?,
+            arg(args, "act")?,
+            arg(args, "day")?,
+        ))?),
+        "pulse_discuss" => out(block_on(pulse_discuss(state, arg(args, "id")?))?),
+        "pulse_why" => out(block_on(pulse_why(state, arg(args, "id")?))?),
+        "get_feed_prompt" => out(block_on(get_feed_prompt(state))?),
+        "save_feed_prompt" => out(block_on(save_feed_prompt(state, arg(args, "text")?))?),
+        "pulse_image" => out(block_on(pulse_image(state, arg(args, "name")?))?),
         _ => Err(remote::REFUSED.into()),
     }
 }
@@ -1096,6 +1227,13 @@ pub fn run() {
                     grokhub_desktop::set_desktop_enabled(true);
                 }
             }
+            pulse_feed::start(config_dir.clone(), {
+                let config_dir = config_dir.clone();
+                move || {
+                    let client: Box<dyn grokhub_agent::ModelClient> = Box::new(model_client()?);
+                    Ok((client, settings::load(&config_dir).model))
+                }
+            });
             app.manage(ShellState {
                 config_dir,
                 settings: Mutex::new(loaded),
@@ -1144,6 +1282,11 @@ pub fn run() {
             save_memory,
             add_memory,
             search_memory,
+            edit_memory_row,
+            forget_memory_row,
+            approve_memory_row,
+            reject_memory_row,
+            set_memory_writes,
             list_connectors,
             check_connectors,
             restart_connector,
@@ -1160,6 +1303,7 @@ pub fn run() {
             forget_grant,
             get_personalities,
             set_personality,
+            set_explicit_personalities,
             duplicate_personality,
             save_personality,
             delete_personality,
@@ -1176,6 +1320,11 @@ pub fn run() {
             interest_act,
             get_pulse,
             pulse_act,
+            pulse_discuss,
+            pulse_why,
+            get_feed_prompt,
+            save_feed_prompt,
+            pulse_image,
             get_local_ai,
             save_local_ai,
             reset_local_ai,

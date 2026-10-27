@@ -344,7 +344,7 @@ impl Cabin {
         // The router picks each call's effort; this is only the fallback for an unlisted class.
         let effort =
             grokhub_agent::route::live::start_effort(grokhub_agent::route::live::DEFAULT_CLASS);
-        let (stable, volatile) = self.chat_prompt_parts();
+        let (stable, volatile) = self.chat_prompt_parts_for(session_id);
         let system = grokhub_agent::system_prompt_parts(&stable, &volatile, &workspace);
         // A side question stays read-only even in plan mode, so it never gets plan approval.
         grokhub_agent::set_plan_session(
@@ -396,6 +396,10 @@ impl Cabin {
     /// When voice or notes are present, a short closer reasserts that the earlier
     /// cabin safety rules win (so a rogue tone cannot outrank them by landing last).
     pub(super) fn chat_prompt_parts(&self) -> (String, String) {
+        self.chat_prompt_parts_for("")
+    }
+
+    fn chat_prompt_parts_for(&self, session_id: &str) -> (String, String) {
         let stable = grokhub_core::cabin_rules::cabin_static_rules(self.cfg.desktop_control);
         let mut parts: Vec<String> = Vec::new();
         let mut needs_safety_closer = false;
@@ -415,6 +419,19 @@ impl Cabin {
         ));
         if !learned.is_empty() {
             parts.push(learned);
+        }
+        let identity = grokhub_agent::identity_blocks(&crate::config::config_dir());
+        if !identity.is_empty() {
+            parts.push(identity);
+            needs_safety_closer = true;
+        }
+        let intentions = grokhub_core::intentions_block(&grokhub_core::load_intentions(
+            &crate::config::config_dir(),
+            session_id,
+        ));
+        if !intentions.is_empty() {
+            parts.push(intentions);
+            needs_safety_closer = true;
         }
         if needs_safety_closer {
             parts.push(VOLATILE_SAFETY_CLOSER.to_string());
@@ -547,13 +564,7 @@ impl Cabin {
             }
             ui.data_mut(|data| data.insert_temp(checked_id, sid));
         }
-        let label = grokhub_agent::usage_label(
-            self.grok_usage.input_tokens,
-            self.grok_usage.output_tokens,
-            self.grok_usage.reasoning_tokens,
-            self.grok_usage.cost_in_usd_ticks,
-            &self.grok_usage.meter,
-        );
+        let label = native_usage_label(&self.grok_usage);
         let text = if label.is_empty() {
             "Native".to_string()
         } else {
@@ -564,6 +575,22 @@ impl Cabin {
                 .size(crate::theme::FONT_TIP)
                 .color(crate::theme::muted()),
         );
+    }
+}
+
+/// The native usage line: tokens, cost, meter, and the last turn's prompt-cache
+/// share ("cache N%") when the engine reported one.
+pub(super) fn native_usage_label(u: &GrokUsage) -> String {
+    let label = grokhub_agent::usage_label(
+        u.input_tokens,
+        u.output_tokens,
+        u.reasoning_tokens,
+        u.cost_in_usd_ticks,
+        &u.meter,
+    );
+    match u.cache_note() {
+        Some(note) if !label.is_empty() => format!("{label} · {note}"),
+        _ => label,
     }
 }
 
@@ -728,4 +755,40 @@ pub(super) fn set_responses_url_for_test(url: Option<&str>) {
     *TEST_RESPONSES_URL
         .lock()
         .unwrap_or_else(|err| err.into_inner()) = url.map(str::to_string);
+}
+
+#[cfg(test)]
+mod usage_label_tests {
+    use super::*;
+
+    fn usage(pct: Option<u8>) -> GrokUsage {
+        GrokUsage {
+            input_tokens: 1200,
+            output_tokens: 80,
+            meter: "API credits".into(),
+            turn_cache_pct: pct,
+            ..GrokUsage::default()
+        }
+    }
+
+    #[test]
+    fn native_usage_shows_the_turn_cache_share_when_reported() {
+        assert_eq!(
+            native_usage_label(&usage(Some(87))),
+            "1200 in · 80 out · API credits · cache 87%"
+        );
+    }
+
+    #[test]
+    fn native_usage_hides_cache_when_absent_or_empty() {
+        assert_eq!(
+            native_usage_label(&usage(None)),
+            "1200 in · 80 out · API credits"
+        );
+        let empty = GrokUsage {
+            turn_cache_pct: Some(0),
+            ..GrokUsage::default()
+        };
+        assert_eq!(native_usage_label(&empty), "");
+    }
 }

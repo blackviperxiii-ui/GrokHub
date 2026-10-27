@@ -379,7 +379,24 @@ fn compose(
     out
 }
 
-fn template_body() -> String {
+/// Template body length on `beta` before the values charter (`ad5df3e5`, the
+/// turn-endings prompt). Growth is measured against this, plus the default
+/// voice block, and kept inside [`PROMPT_GROWTH_BUDGET`].
+pub(crate) const TEMPLATE_BYTES_BEFORE: usize = 5609;
+
+/// Cap on this change's stable-prefix plus default-voice growth.
+pub(crate) const PROMPT_GROWTH_BUDGET: usize = 1536;
+
+/// Bytes this charter and the default voice add over [`TEMPLATE_BYTES_BEFORE`].
+pub(crate) fn prompt_prefix_growth() -> usize {
+    let template = template_body().len().saturating_sub(TEMPLATE_BYTES_BEFORE);
+    let voice = grokhub_core::personality::builtin("default")
+        .prompt_block()
+        .len();
+    template + voice
+}
+
+pub(crate) fn template_body() -> String {
     let text = TEMPLATE.trim_start();
     let text = text
         .strip_prefix("<!--")
@@ -536,6 +553,46 @@ mod tests {
         assert!(text.contains("sealed Installed-app learnings"));
         assert!(!text.contains("You are Grok, a read-only coding assistant"));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn prompt_says_how_a_turn_ends() {
+        let text = system_prompt("Cabin rule line.", &std::env::temp_dir());
+        let start = text.find("<turn_endings>").expect("turn endings section");
+        let end = text.find("</turn_endings>").expect("closed");
+        let rules = &text[start..end];
+        assert!(
+            rules.contains("- Lead with the answer or the result."),
+            "{rules}"
+        );
+        assert!(rules
+            .contains("no generic closing question such as \"What's next?\", \"Anything else?\""));
+        assert!(rules.contains("When the next step is obvious, reversible and inside what the user asked, do it in this turn"));
+        assert!(rules.contains("call ask_user_question with 2 to 4 concrete options and mark exactly one `recommended`"));
+        assert!(rules.contains("A suggestion or a chosen option never replaces it."));
+        assert!(
+            text.contains("Don't be sycophantic"),
+            "the charter keeps the honesty line"
+        );
+        assert!(text.contains("intelligent adult"));
+        assert!(text.contains("real goal"));
+        assert!(
+            template_body().len() >= TEMPLATE_BYTES_BEFORE,
+            "template shrank below the charter baseline"
+        );
+        let growth = prompt_prefix_growth();
+        assert!(
+            growth <= PROMPT_GROWTH_BUDGET,
+            "prompt grew by {growth} bytes (template plus default voice)"
+        );
+        // No line anywhere asks the model to close on an offer or a question.
+        for line in text.lines() {
+            let low = line.to_ascii_lowercase();
+            assert!(
+                !low.contains("end with a question") && !low.contains("offer the next step"),
+                "{line}"
+            );
+        }
     }
 
     #[test]

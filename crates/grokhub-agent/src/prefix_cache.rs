@@ -70,6 +70,7 @@ pub struct TurnVolatile {
     pub style: Option<String>,
     pub playbook: Option<String>,
     pub memory: Option<String>,
+    pub intentions: Option<String>,
 }
 
 impl TurnVolatile {
@@ -78,9 +79,14 @@ impl TurnVolatile {
         user_text: &str,
         first_turn: bool,
         style: Option<grokhub_core::talk::TalkStyle>,
+        soft_caps: bool,
         playbook: Option<&str>,
+        already: &[String],
+        intentions: Option<String>,
     ) -> Self {
-        let style = style.map(|s| s.block()).filter(|s| !s.is_empty());
+        let style = style
+            .map(|s| s.prompt_block(soft_caps))
+            .filter(|s| !s.is_empty());
         let playbook = playbook
             .map(|block| block.trim())
             .filter(|s| !s.is_empty())
@@ -88,12 +94,14 @@ impl TurnVolatile {
         let memory = if first_turn {
             crate::memory::first_turn_injection(workspace, user_text)
         } else {
-            crate::memory::followup_injection(user_text)
+            crate::memory::followup_injection(workspace, user_text, already)
         };
+        let intentions = intentions.filter(|block| !block.trim().is_empty());
         Self {
             style,
             playbook,
             memory,
+            intentions,
         }
     }
 
@@ -107,6 +115,9 @@ impl TurnVolatile {
         }
         if let Some(m) = &self.memory {
             parts.push(m.clone());
+        }
+        if let Some(block) = &self.intentions {
+            parts.push(block.clone());
         }
         parts.join("\n\n")
     }
@@ -221,11 +232,13 @@ mod tests {
             style: Some("Talk style for this turn: short.".into()),
             playbook: None,
             memory: None,
+            intentions: None,
         };
         let v_b = TurnVolatile {
             style: Some("Talk style for this turn: concise.".into()),
             playbook: Some("Playbook for this turn: files.".into()),
             memory: None,
+            intentions: None,
         };
         let mut history_a: Vec<InputItem> = Vec::new();
         push_stable_system(&mut history_a, "STABLE_RULES");
@@ -261,6 +274,7 @@ mod tests {
                 style: Some("Talk style for this turn: quiet.".into()),
                 playbook: None,
                 memory: None,
+                intentions: None,
             },
             "turn two",
             None,

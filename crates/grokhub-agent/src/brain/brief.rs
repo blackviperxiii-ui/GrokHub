@@ -192,6 +192,16 @@ const REPAIR_PHRASES: &[&str] = &[
 ];
 /// Diagnostics is repair work: the design's "repair/diagnostics" intent.
 const DIAGNOSE_WORDS: &[&str] = &["scan", "diagnose", "diagnostics", "troubleshoot", "checkup"];
+/// A feature or config ask ("use X for Y", "you should ..."): new work, never a
+/// repair, even when it says "scan". Repair is for something reported broken.
+const FEATURE_PHRASES: &[&str] = &[
+    "you should",
+    "it should",
+    "it would be nice",
+    "i want it to",
+    "add support",
+    "feature",
+];
 /// The machine as a whole: the system domain, without being a change to it.
 const MACHINE_WORDS: &[&str] = &[
     "computer", "pc", "laptop", "machine", "os", "windows", "linux",
@@ -395,13 +405,20 @@ pub fn rules(input: &BriefInput<'_>) -> Option<Brief> {
         rest = rest.strip_prefix(p).map(str::trim_start).unwrap_or(rest);
     }
     let first = words(rest).first().copied().unwrap_or_default();
-    let repair = any_word(&ws, REPAIR_WORDS)
-        || any_word(&ws, DIAGNOSE_WORDS)
-        || any_phrase(&t, REPAIR_PHRASES);
+    // "use X for Y", with X up to four words.
+    let use_for = ws
+        .iter()
+        .enumerate()
+        .any(|(i, w)| *w == "use" && ws.iter().skip(i + 1).take(5).any(|n| *n == "for"));
+    let feature = use_for || any_phrase(&t, FEATURE_PHRASES);
+    let broken = any_word(&ws, REPAIR_WORDS) || any_phrase(&t, REPAIR_PHRASES);
+    let repair = broken || (any_word(&ws, DIAGNOSE_WORDS) && !feature);
     let intent = if input.background {
         Intent::Background
     } else if repair {
         Intent::Repair
+    } else if feature {
+        Intent::Task
     } else if any_word(&ws, CREATIVE_WORDS) {
         Intent::Creative
     } else if any_word(&ws, RESEARCH_WORDS) || any_phrase(&t, RESEARCH_PHRASES) {
@@ -487,6 +504,22 @@ pub fn classify(input: &BriefInput<'_>, ask: Option<AskModel<'_>>) -> Brief {
 
 /// The one fallback call: the ask's text in, the model's reply out.
 pub type AskModel<'a> = &'a mut dyn FnMut(&str) -> Result<String, String>;
+
+/// The policy goal this Brief names. Callers pass care-first rows when the
+/// flag is on, and they do not also read keyword steer.
+pub fn effort_word(brief: &Brief, rows: &[grokhub_core::brain_policy::PolicyRow]) -> String {
+    grokhub_core::brain_policy::pick_row(rows, brief.intent.as_str(), brief.care.as_str())
+        .map(|row| row.goal.clone())
+        .unwrap_or_else(|| "balanced".into())
+}
+
+/// Classify stays on the cheap background effort. The care-first dry-run did
+/// not show a quality gain that would pay for a higher rung.
+pub fn classify_effort(care_first: bool) -> &'static str {
+    match care_first {
+        true | false => grokhub_core::BACKGROUND_EFFORT,
+    }
+}
 
 /// One stored Brief: who it was for, never the ask's text.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -721,12 +754,43 @@ mod tests {
                 "desktop",
                 "calm",
             ),
+            // A feature ask that says "scan" is new work, not a repair.
+            (
+                "you should scan my steam library and use that for pulse",
+                Intent::Task,
+                Care::Careful,
+                "general",
+                "calm",
+            ),
+            (
+                "use my notes folder for the daily digest",
+                Intent::Task,
+                Care::Careful,
+                "files",
+                "calm",
+            ),
+            // Something reported broken stays a repair even in feature words.
+            (
+                "you should fix the crash in the pulse feed",
+                Intent::Repair,
+                Care::Critical,
+                "general",
+                "calm",
+            ),
         ];
         for (text, intent, care, domain, mood) in cases {
             let b = rules(&input(text)).unwrap_or_else(|| panic!("{text}: rules gave no brief"));
             assert_eq!(short(&b), (*intent, *care, *domain, *mood), "{text}");
             assert_eq!(b.by, "rules", "{text}");
         }
+        assert_eq!(
+            rules(&input(
+                "you should scan my steam library and use that for pulse"
+            ))
+            .unwrap()
+            .label(),
+            "task × careful, done = the asked change is made, result checked"
+        );
         let repair = rules(&input("the printer service won't start after the update")).unwrap();
         assert_eq!(
             repair.label(),
@@ -845,6 +909,25 @@ mod tests {
             (Care::Critical, "system", "rules")
         );
         assert_eq!(asked.get(), 0);
+    }
+
+    #[test]
+    fn care_first_effort_comes_from_the_brief_and_classify_stays_low() {
+        let hi = rules(&input("hey")).unwrap();
+        assert_eq!((hi.intent, hi.care), (Intent::Chat, Care::Casual));
+        let shipped = grokhub_core::brain_policy::builtin_policy();
+        assert_eq!(effort_word(&hi, &shipped), "speed");
+        let on = grokhub_core::brain_policy::apply_care_first(shipped);
+        assert_eq!(effort_word(&hi, &on), "care");
+        let question = rules(&input("what time is it?")).unwrap();
+        assert_eq!(question.intent, Intent::Question);
+        assert_eq!(effort_word(&question, &on), "speed");
+        assert_eq!(classify_effort(false), "low");
+        assert_eq!(classify_effort(true), grokhub_core::BACKGROUND_EFFORT);
+        assert_eq!(
+            crate::route::policy::class_row(BRIEF_CLASS).unwrap().start,
+            "low"
+        );
     }
 
     #[test]

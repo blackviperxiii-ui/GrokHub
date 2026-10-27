@@ -47,8 +47,8 @@ export const CORE_ONLY: Capabilities = {
   plugins: false,
 };
 
-/** The web app gets chat, memory, automations and connectors only. */
-export const WEB: Capabilities = { ...CORE_ONLY, remote: true };
+/** The web app gets chat, memory, automations, connectors and Pulse. */
+export const WEB: Capabilities = { ...CORE_ONLY, pulse: true, remote: true };
 
 export function getCapabilities(): Promise<Capabilities> {
   if (!inShell()) return Promise.resolve(WEB);
@@ -65,6 +65,8 @@ export type ChatEvent =
   | { kind: "error"; message: string }
   | { kind: "done"; stop: string }
   | { kind: "plan"; text: string }
+  /** One-tap follow-ups for the reply that just ended; most replies get none. */
+  | { kind: "suggestions"; items: Suggestion[] }
   | {
       kind: "elicit";
       id: string;
@@ -76,7 +78,15 @@ export type ChatEvent =
       fieldName: string | null;
       fieldTitle: string;
       secret: boolean;
+      /** Answers to tap for Grok's question, the recommended one first. */
+      options?: ElicitChoice[];
     };
+
+/** A follow-up to send with one tap: `prompt` becomes the next message. */
+export type Suggestion = { label: string; prompt: string };
+
+/** One answer on a question card; the label is what gets sent. */
+export type ElicitChoice = { label: string; description: string; recommended: boolean };
 
 /** The composer's chip: Chat, Plan (read-only until the plan is approved) or
  * btw (a look-only side ask). */
@@ -205,6 +215,18 @@ export function runAutomation(id: string): Promise<RunResult> {
   return invoke<RunResult>("run_automation", { id });
 }
 
+export interface MemoryRow {
+  id: string;
+  text: string;
+  /** Why this line is here, including the chat turn when it has one. */
+  source: string;
+  /** When the line was written or last changed. */
+  updated: string;
+  proposed: boolean;
+  /** Claims this line corrects, joined for the panel. */
+  corrects: string;
+}
+
 export interface MemoryNotes {
   global: string;
   workspace: string;
@@ -212,6 +234,10 @@ export interface MemoryNotes {
   workspacePath: string;
   /** The cabin's AMR store is on, so recall does not read these files. */
   amr: boolean;
+  /** Learned-memory writes. Off stops notes, proposals and edits. */
+  writesOn: boolean;
+  /** User-model rows, proposed ones included. */
+  rows: MemoryRow[];
 }
 
 export interface MemoryHit {
@@ -241,6 +267,26 @@ export function addMemory(
 
 export function searchMemory(query: string): Promise<MemoryHit[]> {
   return invoke<MemoryHit[]>("search_memory", { query });
+}
+
+export function editMemoryRow(id: string, text: string): Promise<MemoryNotes> {
+  return invoke<MemoryNotes>("edit_memory_row", { id, text });
+}
+
+export function forgetMemoryRow(id: string): Promise<MemoryNotes> {
+  return invoke<MemoryNotes>("forget_memory_row", { id });
+}
+
+export function approveMemoryRow(id: string): Promise<MemoryNotes> {
+  return invoke<MemoryNotes>("approve_memory_row", { id });
+}
+
+export function rejectMemoryRow(id: string): Promise<MemoryNotes> {
+  return invoke<MemoryNotes>("reject_memory_row", { id });
+}
+
+export function setMemoryWrites(on: boolean): Promise<MemoryNotes> {
+  return invoke<MemoryNotes>("set_memory_writes", { on });
 }
 
 /** One MCP server from `mcp.json`, as the Connectors page shows it. */
@@ -292,22 +338,32 @@ export interface PulsePost {
   title: string;
   summary: string;
   because: string;
+  /** A written post's topic emoji. Empty on older posts. */
+  icon: string;
+  /** A written post's "why you're seeing this" line. */
+  why: string;
+  /** Cached gallery image names; read each with `pulseImage`. */
+  images: string[];
+  /** Unix ms, for the menu's full date. */
+  createdAt: number;
   /** "2h ago". */
   ago: string;
   /** The first source link, empty when there is none. */
   link: string;
-  liked: boolean;
+  loved: boolean;
 }
 
 /** One Ideas row: something GrokHub could do next. */
 export interface PulseIdea {
   id: string;
-  /** The bold "I can …" line. */
+  /** The bold line: a written idea's own title, else "I can …". */
   title: string;
+  /** A written idea's topic emoji; empty on older ideas. */
+  icon: string;
   summary: string;
   /** Do, Automate, Learn or Watch. */
   kind: string;
-  /** What Run puts in the chat box. */
+  /** What Let's do it puts in the chat box. */
   action: string;
 }
 
@@ -317,7 +373,15 @@ export interface PulsePage {
   ideas: { label: string; ideas: PulseIdea[] }[];
 }
 
-export type PulseAct = "dismiss" | "notThis" | "like" | "snooze" | "accept";
+export type PulseAct =
+  | "dismiss"
+  | "notThis"
+  | "love"
+  | "delete"
+  | "snooze"
+  | "accept"
+  | "moreLike"
+  | "notInterested";
 
 /** Today's local date for the ledger line, and the time Snooze counts from. */
 export function localDay(now: Date = new Date()) {
@@ -329,12 +393,43 @@ export function localDay(now: Date = new Date()) {
   };
 }
 
+/** Opening Pulse also tells the Feed writer the local clock (quiet hours). */
 export function getPulse(): Promise<PulsePage> {
-  return invoke<PulsePage>("get_pulse");
+  return invoke<PulsePage>("get_pulse", { day: localDay() });
 }
 
 export function pulseAct(id: string, act: PulseAct): Promise<PulsePage> {
   return invoke<PulsePage>("pulse_act", { id, act, day: localDay() });
+}
+
+/** Discuss: the text a chat starts from, carrying the post. */
+export function pulseDiscuss(id: string): Promise<string> {
+  return invoke<string>("pulse_discuss", { id });
+}
+
+export function pulseWhy(id: string): Promise<string> {
+  return invoke<string>("pulse_why", { id });
+}
+
+/** The Feed prompt the writer follows, and what its last run did. */
+export interface FeedPrompt {
+  text: string;
+  isDefault: boolean;
+  note: string;
+}
+
+export function getFeedPrompt(): Promise<FeedPrompt> {
+  return invoke<FeedPrompt>("get_feed_prompt");
+}
+
+/** Saving writes one new post right away. */
+export function saveFeedPrompt(text: string): Promise<FeedPrompt> {
+  return invoke<FeedPrompt>("save_feed_prompt", { text });
+}
+
+/** A cached gallery image as a data URL; pages never load it from its site. */
+export function pulseImage(name: string): Promise<string> {
+  return invoke<string>("pulse_image", { name });
 }
 
 /** One decision journal question (src-tauri/src/journal.rs). */
@@ -581,6 +676,8 @@ export interface PersonalityPage {
   current: string;
   /** Custom files that could not be used. */
   problems: string[];
+  /** Adults-only personalities: off leaves the explicit presets out. */
+  explicit: boolean;
 }
 
 export interface PersonalityEdit {
@@ -598,6 +695,10 @@ export function getPersonalities(): Promise<PersonalityPage> {
 
 export function setPersonality(id: string): Promise<PersonalityPage> {
   return invoke<PersonalityPage>("set_personality", { id });
+}
+
+export function setExplicitPersonalities(on: boolean): Promise<PersonalityPage> {
+  return invoke<PersonalityPage>("set_explicit_personalities", { on });
 }
 
 /** The copy's id, then the page. */

@@ -16,7 +16,7 @@ pub const VOLATILE_SAFETY_CLOSER: &str =
     "The cabin safety, approval, honesty and no-fabrication rules earlier in this prompt always win over notes and personality tone.";
 
 /// Closes every style block, the same layering rule as a personality's.
-pub const STYLE_LINE: &str = "Talk style sets length and shape, and its length wins over a personality's; a personality sets tone only. Approval questions, security warnings and error facts stay plain, and the cabin safety rules win.";
+pub const STYLE_LINE: &str = "Talk style sets length and shape, and its length wins over a personality's; a personality sets tone only. Accuracy and care beat those word caps, so say what is true and what is careful even when that runs past the cap. Approval questions, security warnings and error facts stay plain, and the cabin safety rules win.";
 
 /// Longest casual-chat reply, in words.
 pub const SHORT_REPLY_WORDS: usize = 60;
@@ -47,6 +47,8 @@ pub enum TalkStyle {
     Quiet,
     /// Creative: the draft, then one line.
     Draft,
+    /// Care-first casual chat. The length is a target, not a hard stop.
+    Natural,
 }
 
 impl TalkStyle {
@@ -64,6 +66,8 @@ impl TalkStyle {
             Self::Draft
         } else if has("summary") {
             Self::Summary
+        } else if has("natural") {
+            Self::Natural
         } else if has("brief") || has("one line") {
             Self::Short
         } else {
@@ -86,6 +90,7 @@ impl TalkStyle {
             Self::Summary => Some(SUMMARY_WORDS),
             Self::Quiet => Some(QUIET_WORDS),
             Self::Draft => None,
+            Self::Natural => Some(SHORT_REPLY_WORDS),
         }
     }
 
@@ -99,6 +104,7 @@ impl TalkStyle {
             Self::Summary => ("summary with links", "under"),
             Self::Quiet => ("quiet", "under"),
             Self::Draft => ("draft", ""),
+            Self::Natural => ("natural", "about"),
         };
         match self.reply_cap_words() {
             Some(words) => format!("{name}, {cap} {words} words"),
@@ -108,12 +114,27 @@ impl TalkStyle {
 
     /// The instruction for the system prompt, ending in [`STYLE_LINE`].
     pub fn block(self) -> String {
+        self.prompt_block(false)
+    }
+
+    /// [`block`] with soft length targets on the 60, 150 and 120 styles.
+    /// Natural always uses the soft casual target. Other styles stay exact.
+    pub fn prompt_block(self, soft: bool) -> String {
         let body = match self {
+            Self::Short if soft => format!(
+                "casual chat. Reply in one to three short sentences, about {SHORT_REPLY_WORDS} words, and go longer when care needs it. No headings, lists or preamble."
+            ),
             Self::Short => format!(
                 "casual chat. Reply in one to three short sentences, under {SHORT_REPLY_WORDS} words, with no headings, lists or preamble."
             ),
+            Self::Concise if soft => format!(
+                "answer first, in a few sentences, about {CONCISE_REPLY_WORDS} words, and go longer when care needs it. Add detail only when it changes the answer, and name the sources of facts you looked up."
+            ),
             Self::Concise => format!(
                 "answer first, in a few sentences, under {CONCISE_REPLY_WORDS} words. Add detail only when it changes the answer, and name the sources of facts you looked up."
+            ),
+            Self::Progress if soft => format!(
+                "a longer task. Work through the checklist without narrating each step; the cabin shows a short progress note between phases. End with what changed and how it was checked, about {WRAP_UP_WORDS} words, and go longer when care needs it."
             ),
             Self::Progress => format!(
                 "a longer task. Work through the checklist without narrating each step; the cabin shows a short progress note between phases. End with what changed and how it was checked, under {WRAP_UP_WORDS} words."
@@ -128,6 +149,9 @@ impl TalkStyle {
                 "background work. Say only what the person needs, under {QUIET_WORDS} words; leave suggestions as one-tap cards."
             ),
             Self::Draft => "creative. Deliver the draft itself, then at most one line about it.".into(),
+            Self::Natural => format!(
+                "natural conversation. Aim for about {SHORT_REPLY_WORDS} words, and go longer when care needs it. No headings, lists or preamble."
+            ),
         };
         format!("{STYLE_HEAD} {body}\n{STYLE_LINE}")
     }
@@ -135,14 +159,34 @@ impl TalkStyle {
 
 /// Whether a reply fits the style's length cap (always, for a style with none).
 /// Links are not counted, so a research summary can cite what it used.
+fn reply_words(reply: &str) -> usize {
+    reply
+        .split_whitespace()
+        .filter(|w| !w.trim_start_matches(['(', '<', '[']).starts_with("http"))
+        .count()
+}
+
+/// Words a soft cap allows past the hard target. Two fifths is forty percent,
+/// the same room the care-first length budget allows a reply to grow.
+pub fn soft_cap_words(style: TalkStyle) -> Option<usize> {
+    let hard = style.reply_cap_words()?;
+    let slack = matches!(
+        style,
+        TalkStyle::Short | TalkStyle::Concise | TalkStyle::Progress | TalkStyle::Natural
+    );
+    Some(if slack { hard + hard / 5 * 2 } else { hard })
+}
+
 pub fn fits_cap(style: TalkStyle, reply: &str) -> bool {
-    style.reply_cap_words().is_none_or(|cap| {
-        reply
-            .split_whitespace()
-            .filter(|w| !w.trim_start_matches(['(', '<', '[']).starts_with("http"))
-            .count()
-            <= cap
-    })
+    style
+        .reply_cap_words()
+        .is_none_or(|cap| reply_words(reply) <= cap)
+}
+
+/// The care-first check. Short, concise, progress and natural may run past
+/// the hard target up to [`soft_cap_words`].
+pub fn fits_soft_cap(style: TalkStyle, reply: &str) -> bool {
+    soft_cap_words(style).is_none_or(|cap| reply_words(reply) <= cap)
 }
 
 /// The system prompt with this turn's style block: an earlier style block is
@@ -150,13 +194,18 @@ pub fn fits_cap(style: TalkStyle, reply: &str) -> bool {
 /// added when the prompt has none. Paragraphs are split on blank lines, so the
 /// rest of the prompt is kept byte for byte.
 pub fn restyle(system: &str, style: TalkStyle) -> String {
+    restyle_caps(system, style, false)
+}
+
+/// [`restyle`] that softens the 60, 150 and 120 targets when `soft` is set.
+pub fn restyle_caps(system: &str, style: TalkStyle, soft: bool) -> String {
     let mut paras: Vec<&str> = if system.is_empty() {
         Vec::new()
     } else {
         system.split("\n\n").collect()
     };
     paras.retain(|p| !p.starts_with(STYLE_HEAD));
-    let block = style.block();
+    let block = style.prompt_block(soft);
     match paras.iter().rposition(|p| *p == VOLATILE_SAFETY_CLOSER) {
         Some(at) => paras.insert(at, &block),
         None => {
@@ -192,6 +241,47 @@ mod tests {
         // A user's own words map too.
         assert_eq!(TalkStyle::of("one line"), TalkStyle::Short);
         assert_eq!(TalkStyle::of("whatever"), TalkStyle::Concise);
+        assert_eq!(TalkStyle::of("natural"), TalkStyle::Natural);
+    }
+
+    #[test]
+    fn soft_caps_are_60_150_120_and_the_hard_block_stays_under() {
+        assert_eq!(
+            (
+                soft_cap_words(TalkStyle::Short),
+                soft_cap_words(TalkStyle::Concise),
+                soft_cap_words(TalkStyle::Progress),
+                soft_cap_words(TalkStyle::Natural),
+            ),
+            (Some(84), Some(210), Some(168), Some(84))
+        );
+        assert_eq!(TalkStyle::Short.reply_cap_words(), Some(60));
+        assert_eq!(TalkStyle::Concise.reply_cap_words(), Some(150));
+        assert_eq!(TalkStyle::Progress.reply_cap_words(), Some(120));
+        assert!(TalkStyle::Short.block().contains("under 60 words"));
+        assert!(!TalkStyle::Short.block().contains("about 60 words"));
+        assert!(TalkStyle::Short
+            .prompt_block(true)
+            .contains("about 60 words"));
+        assert!(TalkStyle::Concise
+            .prompt_block(true)
+            .contains("about 150 words"));
+        assert!(TalkStyle::Progress
+            .prompt_block(true)
+            .contains("about 120 words"));
+        assert!(TalkStyle::Natural.block().contains("about 60 words"));
+        assert!(TalkStyle::Natural
+            .block()
+            .contains("go longer when care needs it"));
+        let past_hard = "word ".repeat(61);
+        let past_soft = "word ".repeat(85);
+        assert!(!fits_cap(TalkStyle::Natural, &past_hard));
+        assert!(fits_soft_cap(TalkStyle::Natural, &past_hard));
+        assert!(!fits_soft_cap(TalkStyle::Natural, &past_soft));
+        assert!(fits_soft_cap(TalkStyle::Short, &"word ".repeat(84)));
+        assert!(!fits_soft_cap(TalkStyle::Short, &past_soft));
+        assert_eq!(soft_cap_words(TalkStyle::Findings), Some(80));
+        assert!(!fits_soft_cap(TalkStyle::Findings, &"word ".repeat(81)));
     }
 
     #[test]
@@ -199,7 +289,7 @@ mod tests {
         assert_eq!(
             TalkStyle::Short.block(),
             "Talk style for this turn: casual chat. Reply in one to three short sentences, under 60 words, with no headings, lists or preamble.\n\
-             Talk style sets length and shape, and its length wins over a personality's; a personality sets tone only. Approval questions, security warnings and error facts stay plain, and the cabin safety rules win."
+             Talk style sets length and shape, and its length wins over a personality's; a personality sets tone only. Accuracy and care beat those word caps, so say what is true and what is careful even when that runs past the cap. Approval questions, security warnings and error facts stay plain, and the cabin safety rules win."
         );
         assert_eq!(TalkStyle::Short.reply_cap_words(), Some(60));
         assert_eq!(TalkStyle::Draft.reply_cap_words(), None);
@@ -249,7 +339,7 @@ mod tests {
         );
     }
 
-    const ALL: [TalkStyle; 7] = [
+    const ALL: [TalkStyle; 8] = [
         TalkStyle::Short,
         TalkStyle::Concise,
         TalkStyle::Progress,
@@ -257,6 +347,7 @@ mod tests {
         TalkStyle::Summary,
         TalkStyle::Quiet,
         TalkStyle::Draft,
+        TalkStyle::Natural,
     ];
 
     /// A reply each row should produce, written to the row's shape. Each must
@@ -301,6 +392,7 @@ mod tests {
                 ("summary with links, under 200 words".to_string(), Some(200)),
                 ("quiet, under 40 words".to_string(), Some(40)),
                 ("draft, no length cap".to_string(), None),
+                ("natural, about 60 words".to_string(), Some(60)),
             ]
         );
         for (style, reply) in GOLDEN {

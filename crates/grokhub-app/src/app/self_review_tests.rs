@@ -1135,6 +1135,10 @@ fn a_chat_note_runs_on_one_chat_in_five_is_kept_on_fewer_steps_and_protected_tar
         ]
     );
     let plain = cabin.chat_rules();
+    let cabin_only = grokhub_core::cabin_rules::cabin_rules_for(
+        &grokhub_core::brief_for(&cabin.learning, "chat"),
+        cabin.cfg.desktop_control,
+    );
     assert!(
         !plain.contains(super::canary_ui::NOTES_HEAD),
         "nothing applied before Apply"
@@ -1178,11 +1182,16 @@ fn a_chat_note_runs_on_one_chat_in_five_is_kept_on_fewer_steps_and_protected_tar
                 rules.contains("- Lead with the answer, then one line of why."),
                 "{rules}"
             );
+            let note_at = rules
+                .find(super::canary_ui::NOTES_HEAD)
+                .expect("the note sits in the chat rules");
+            // Default voice layers ahead of notes; notes still beat cabin rules.
+            let cabin_at = rules.find(&cabin_only).expect("cabin rules still present");
+            assert!(note_at < cabin_at, "the note sits before the cabin rules");
             assert!(
-                rules.starts_with(super::canary_ui::NOTES_HEAD),
-                "the note sits before the cabin rules"
+                rules.ends_with(&cabin_only),
+                "the cabin rules follow, unchanged"
             );
-            assert!(rules.ends_with(&plain), "the cabin rules follow, unchanged");
             canary += 1;
             2
         } else {
@@ -1254,7 +1263,7 @@ fn a_code_idea_is_saved_or_copied_redacted_never_applied_and_nothing_leaves() {
         &["click"],
     );
     let calls = fake(
-        "CODE_IDEA: Wait for the Save dialog | The save click lands before the dialog opens on /home/user/Documents/report.md | 1 of 1 weekly-report runs failed; alex@example.com saw it\n\
+        "CODE_IDEA: Wait for the Save dialog | The save click lands before the dialog opens on /home/user/Documents/report.md | 1 of 1 weekly-report runs failed; user@example.com saw it\n\
          CODE_IDEA: Retry rate limits | A 429 ends the run (key sk-abcdefghijklmnopqrstuv) | 1 run\n\
          CODE_IDEA: A third idea | p | e\n",
     );
@@ -1307,7 +1316,7 @@ fn a_code_idea_is_saved_or_copied_redacted_never_applied_and_nothing_leaves() {
         (saved[0].title.as_str(), saved[0].text.as_str()),
         (
             "Wait for the Save dialog",
-            "Problem: The save click lands before the dialog opens on /home/user/Documents/report.md\n\nEvidence: 1 of 1 weekly-report runs failed; alex@example.com saw it"
+            "Problem: The save click lands before the dialog opens on /home/user/Documents/report.md\n\nEvidence: 1 of 1 weekly-report runs failed; user@example.com saw it"
         )
     );
     assert!(cabin

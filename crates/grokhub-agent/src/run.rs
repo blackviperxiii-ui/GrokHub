@@ -277,6 +277,11 @@ fn run_compact_pass(
     crate::hooks::on_compact(input.conversation_id, input.workspace, false);
     match compact_result {
         Ok(extra) => {
+            crate::prefix_guard::note_compaction(&crate::prefix_guard::run_key(
+                input.conversation_id,
+                input.depth,
+                input.agent_id,
+            ));
             usage.add(&extra);
             on_event(LoopEvent::Compact {
                 started: false,
@@ -322,22 +327,30 @@ pub fn run_loop(
         .then(|| crate::checkpoint::turn_playbook(input.conversation_id))
         .flatten();
     let config_dir = crate::perm::config_dir();
+    let soft_caps = crate::brain::care_first_enabled(&config_dir);
+    let intention_block = (input.depth == 0)
+        .then(|| crate::close_check::prompt_block(input.conversation_id))
+        .filter(|block| !block.is_empty());
     tools::begin_deferred_turn(input.conversation_id);
     if crate::prefix_cache::enabled(&config_dir) {
         if first_turn {
             crate::prefix_cache::push_stable_system(history, input.system);
         }
+        let already = crate::memory::injected_lines(history);
         let volatile = crate::prefix_cache::TurnVolatile::assemble(
             input.workspace,
             user_text,
             first_turn,
             style,
+            soft_caps,
             playbook.as_deref(),
+            &already,
+            intention_block.clone(),
         );
         crate::prefix_cache::push_user_turn(history, &volatile, user_text, image);
     } else {
         if first_turn {
-            let base = style.map(|s| grokhub_core::talk::restyle(input.system, s));
+            let base = style.map(|s| grokhub_core::talk::restyle_caps(input.system, s, soft_caps));
             let base = base.as_deref().unwrap_or(input.system);
             let base = match &playbook {
                 Some(block) => grokhub_core::playbook::with_playbook(base, Some(block)),
@@ -356,19 +369,24 @@ pub fn run_loop(
             }
         } else {
             if let Some(style) = style {
-                restyle_history(history, style);
+                restyle_history(history, style, soft_caps);
             }
             if input.depth == 0 {
                 replaybook_history(history, playbook.as_deref());
             }
-            // Later turns: surface sealed installed-app learnings when the user
-            // asks about games / Steam / library (first turn was often "hi").
-            if let Some(block) = crate::memory::followup_injection(user_text) {
+            // Later turns add recall only for lines this history has not seen.
+            let already = crate::memory::injected_lines(history);
+            if let Some(block) =
+                crate::memory::followup_injection(input.workspace, user_text, &already)
+            {
                 history.push(InputItem::Message {
                     role: "system".into(),
                     content: vec![ContentPart::InputText(block)],
                 });
             }
+        }
+        if let Some(block) = intention_block {
+            push_intention_block(history, &block);
         }
         history.push(user_message(user_text, image));
     }
@@ -394,6 +412,9 @@ pub fn run_loop(
     let mut drive = (input.depth == 0 && !plan_at_start && !input.conversation_id.is_empty())
         .then(|| crate::drive::Drive::new(&crate::session_tools::todos_for(input.conversation_id)));
     let mut evidence = 0usize;
+    let mut close_continued = false;
+    let mut close_steps: Vec<String> = Vec::new();
+    let mut close_surfaced = false;
     // Brain 2: the turn's Brief and the changes still waiting on a check.
     let brief = drive
         .as_ref()
@@ -432,6 +453,8 @@ pub fn run_loop(
     }
     let mut step_ended: Option<std::time::Instant> = None;
     let mut turns = 0u32;
+    let guard_key =
+        crate::prefix_guard::run_key(input.conversation_id, input.depth, input.agent_id);
     loop {
         if input.max_turns != 0 && turns >= input.max_turns {
             return finish(input, StopReason::MaxTurns, usage, compacted_once, true);
@@ -488,6 +511,8 @@ pub fn run_loop(
             hosted_search: true,
             call_timeout: None,
         };
+        // Each request should extend the last one; a rewrite logs its first changed segment.
+        crate::prefix_guard::observe(&guard_key, &req);
         let class = crate::route::live::current_class();
         drop(turn_top);
         if let Some(t) = step_ended {
@@ -555,6 +580,8 @@ pub fn run_loop(
         turns_since_compact = turns_since_compact.saturating_add(1);
         usage.add(&turn.usage);
         emit_usage(on_event, &usage, history, input.context_length);
+        // Close-check reads this after the reply is stored on the history.
+        let last_assistant = turn.text.clone();
         if !turn.text.is_empty() {
             history.push(InputItem::Message {
                 role: "assistant".into(),
@@ -594,6 +621,7 @@ pub fn run_loop(
         if turn.calls.is_empty() {
             let notes = input.steer.drain();
             if notes.is_empty() {
+                let mut drive_blocked = false;
                 if let Some(drive) = drive
                     .as_mut()
                     .filter(|_| !crate::session_tools::plan_on(input.conversation_id))
@@ -607,6 +635,7 @@ pub fn run_loop(
                             continue;
                         }
                         crate::drive::Verdict::Blocked(text) => {
+                            drive_blocked = true;
                             on_event(LoopEvent::Text(format!("\n\n{text}")));
                             history.push(InputItem::Message {
                                 role: "assistant".into(),
@@ -621,7 +650,72 @@ pub fn run_loop(
                                 on_event(LoopEvent::Findings(card.to_body()));
                             }
                         }
-                        crate::drive::Verdict::End => {}
+                        crate::drive::Verdict::End => {
+                            let change = brief.as_ref().is_some_and(|b| {
+                                matches!(
+                                    b.intent,
+                                    crate::brain::Intent::Task | crate::brain::Intent::Repair
+                                )
+                            });
+                            if let Some(text) = change
+                                .then(|| crate::drive::unbacked_done(&last_assistant, evidence))
+                                .flatten()
+                            {
+                                on_event(LoopEvent::Text(format!("\n\n{text}")));
+                                history.push(InputItem::Message {
+                                    role: "assistant".into(),
+                                    content: vec![ContentPart::InputText(text.into())],
+                                });
+                            }
+                        }
+                    }
+                }
+                if close_continued {
+                    if !close_surfaced
+                        && crate::close_check::lists_still_open(input.conversation_id)
+                    {
+                        if let Some(body) = crate::close_check::steps_card(&close_steps) {
+                            on_event(LoopEvent::Findings(body));
+                        }
+                    }
+                    close_surfaced = true;
+                } else {
+                    // The check borrows usage. finish needs that borrow ended.
+                    let close = {
+                        let mut close_in = crate::close_check::CloseIn {
+                            depth: input.depth,
+                            blocked: drive_blocked,
+                            conversation_id: input.conversation_id,
+                            model: input.model,
+                            client: input.client,
+                            cancel: input.cancel,
+                            drive: drive.as_ref(),
+                            last_assistant: &last_assistant,
+                            usage: &mut usage,
+                        };
+                        crate::close_check::before_end(&mut close_in)
+                    };
+                    match close {
+                        crate::close_check::CloseGate::Cancelled => {
+                            return finish(
+                                input,
+                                StopReason::Cancelled,
+                                usage,
+                                compacted_once,
+                                true,
+                            );
+                        }
+                        crate::close_check::CloseGate::Continue { note, steps } => {
+                            close_continued = true;
+                            close_steps = steps;
+                            history.push(user_message(&note, None));
+                            continue;
+                        }
+                        crate::close_check::CloseGate::Proceed(notice) => {
+                            if let Some(body) = notice {
+                                on_event(LoopEvent::Findings(body));
+                            }
+                        }
                     }
                 }
                 if !stop_hook_active {
@@ -966,11 +1060,15 @@ pub fn run_loop(
 
 /// A later turn's talk style replaces the earlier one in the stored system
 /// message; the stable prefix before it stays cached.
-fn restyle_history(history: &mut [InputItem], style: grokhub_core::talk::TalkStyle) {
+fn restyle_history(
+    history: &mut [InputItem],
+    style: grokhub_core::talk::TalkStyle,
+    soft_caps: bool,
+) {
     if let Some(InputItem::Message { role, content }) = history.first_mut() {
         if let Some(ContentPart::InputText(text)) = content.first_mut().filter(|_| role == "system")
         {
-            *text = grokhub_core::talk::restyle(text, style);
+            *text = grokhub_core::talk::restyle_caps(text, style, soft_caps);
         }
     }
 }
@@ -1021,6 +1119,25 @@ fn emit_usage(
         limit,
     });
     on_event(LoopEvent::Usage(usage.clone()));
+}
+
+fn push_intention_block(history: &mut Vec<InputItem>, block: &str) {
+    if block.is_empty() || history_has_text(history, block) {
+        return;
+    }
+    history.push(InputItem::Message {
+        role: "system".into(),
+        content: vec![ContentPart::InputText(block.to_string())],
+    });
+}
+
+fn history_has_text(history: &[InputItem], needle: &str) -> bool {
+    history.iter().any(|item| match item {
+        InputItem::Message { content, .. } => content
+            .iter()
+            .any(|part| matches!(part, ContentPart::InputText(text) if text.contains(needle))),
+        _ => false,
+    })
 }
 
 fn user_message(text: &str, image: Option<&str>) -> InputItem {
@@ -3502,7 +3619,7 @@ mod tests {
         let (out, history, events) = run_drive(&script, &dir, &conv);
         assert_eq!(out.stop, StopReason::EndTurn);
         assert_eq!(script.seen.lock().unwrap().len(), 5);
-        let said = "Stopped with these still open: \"bluetooth errors\". No approach worked after 3 re-plans.";
+        let said = "Not done: \"bluetooth errors\" is still open. I stopped after 3 re-plans without progress, so none of it is marked done. If this needs something GrokHub can't do yet, I can note it as a feature request instead.";
         assert!(events
             .iter()
             .any(|ev| matches!(ev, LoopEvent::Text(t) if t == &format!("\n\n{said}"))));
@@ -3763,7 +3880,7 @@ mod tests {
         let (out, history, events) = run_drive(&script, &dir, &conv);
         assert_eq!(out.stop, StopReason::EndTurn);
         assert_eq!(script.seen.lock().unwrap().len(), 5);
-        let said = "Stopped with these still open: \"the error is gone\", \"it works again\", the findings card. No approach worked after 3 re-plans.";
+        let said = "Not done: \"the error is gone\", \"it works again\", the findings card are still open. I stopped after 3 re-plans without progress, so none of it is marked done. If this needs something GrokHub can't do yet, I can note it as a feature request instead.";
         assert!(
             matches!(history.last(), Some(InputItem::Message { role, content }) if role == "assistant" && content.first() == Some(&ContentPart::InputText(said.into())))
         );
@@ -3772,6 +3889,123 @@ mod tests {
                     One-tap fixes\n\n- Finish the rest: Finish what the last run left open: the error is gone; it works again.";
         assert_eq!(events.last(), Some(&LoopEvent::Findings(card.into())));
         crate::session_tools::invalidate_todos(&conv);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Replay of a real feature ask that faked "Done" and then looped: the run
+    /// must not end on a done claim, must end once, after at most 3 re-plans.
+    #[test]
+    fn replay_a_feature_ask_that_faked_done_ends_blocked_once() {
+        let dir = workspace("fake-done");
+        let conv = format!("fake-done-{}", std::process::id());
+        crate::checkpoint::set_turn_brief(
+            &conv,
+            brief(crate::brain::Intent::Task, crate::brain::Care::Careful, &[]),
+        );
+        let list = |extra: &str| {
+            format!(
+                r#"{{"todos":[{{"id":"scan","content":"Scan the Steam library","status":"completed"}},{{"id":"wire","content":"Use it for Pulse","status":"completed"}}{extra}]}}"#
+            )
+        };
+        let probe = |id: &str, content: &str| {
+            format!(r#",{{"id":"{id}","content":"{content}","status":"pending"}}"#)
+        };
+        let mut turns = vec![
+            turn(
+                "",
+                vec![call(
+                    "t0",
+                    "todo_write",
+                    r#"{"todos":[{"id":"scan","content":"Scan the Steam library","status":"pending"},{"id":"wire","content":"Use it for Pulse","status":"pending"}]}"#,
+                )],
+            ),
+            turn("", vec![call("t1", "todo_write", &list(""))]),
+            turn("Pulse feed updated. <b>Done.</b> ✨", Vec::new()),
+        ];
+        for (n, (id, content, said)) in [
+            ("p1", "Check skill_list", "Error gone."),
+            ("p2", "Check scheduler_list", "Blocked permanently."),
+            ("p3", "Check automation_list", "Error gone."),
+            ("p4", "Diagnose image folders", "Blocked permanently."),
+        ]
+        .iter()
+        .enumerate()
+        {
+            turns.push(turn(
+                "",
+                vec![
+                    call(&format!("l{n}"), "list_dir", "{}"),
+                    call(&format!("w{n}"), "todo_write", &list(&probe(id, content))),
+                ],
+            ));
+            turns.push(turn(said, Vec::new()));
+        }
+        turns.push(turn("unused", Vec::new()));
+        let script = scripted(turns);
+        let (out, history, events) = run_drive(&script, &dir, &conv);
+        assert_eq!(out.stop, StopReason::EndTurn);
+        assert_eq!(script.seen.lock().unwrap().len(), 11);
+        // The ask, then one push per stop before the last: the fake Done, then 3 re-plans.
+        assert_eq!(user_texts(&history).len(), 5);
+        assert_eq!(
+            user_texts(&history)[1],
+            "Marked completed without any check this run: \"Scan the Steam library\", \"Use it for Pulse\". Run a check that shows each one before you finish."
+        );
+        let said = "Not done: \"Diagnose image folders\" is still open. I stopped after 3 re-plans without progress, so none of it is marked done. If this needs something GrokHub can't do yet, I can note it as a feature request instead.";
+        assert!(
+            matches!(history.last(), Some(InputItem::Message { role, content }) if role == "assistant" && content.first() == Some(&ContentPart::InputText(said.into())))
+        );
+        let status_lines = events
+            .iter()
+            .filter(|ev| matches!(ev, LoopEvent::Text(t) if t.starts_with("\n\nNot done:")))
+            .count();
+        assert_eq!(status_lines, 1);
+        crate::session_tools::invalidate_todos(&conv);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_change_request_that_claims_done_with_no_tool_run_says_it_is_not_done() {
+        let dir = workspace("claim-done");
+        let conv = format!("claim-done-{}", std::process::id());
+        crate::checkpoint::set_turn_brief(
+            &conv,
+            brief(crate::brain::Intent::Task, crate::brain::Care::Careful, &[]),
+        );
+        let script = scripted(vec![
+            turn("Pulse feed updated. Done. ✨", Vec::new()),
+            turn("unused", Vec::new()),
+        ]);
+        let (out, history, events) = run_drive(&script, &dir, &conv);
+        assert_eq!(out.stop, StopReason::EndTurn);
+        assert_eq!(script.seen.lock().unwrap().len(), 1);
+        let line = "That isn't done yet: nothing ran this turn to make or check the change.";
+        assert_eq!(
+            events
+                .iter()
+                .filter(|ev| matches!(ev, LoopEvent::Text(t) if t == &format!("\n\n{line}")))
+                .count(),
+            1
+        );
+        assert!(
+            matches!(history.last(), Some(InputItem::Message { role, content }) if role == "assistant" && content.first() == Some(&ContentPart::InputText(line.into())))
+        );
+        crate::session_tools::invalidate_todos(&conv);
+        // A plain question with the same words gets no extra line.
+        let conv = format!("claim-done-q-{}", std::process::id());
+        crate::checkpoint::set_turn_brief(
+            &conv,
+            brief(
+                crate::brain::Intent::Question,
+                crate::brain::Care::Casual,
+                &[],
+            ),
+        );
+        let script = scripted(vec![turn("Done: it is 4 pm.", Vec::new())]);
+        let (_, _, events) = run_drive(&script, &dir, &conv);
+        assert!(!events
+            .iter()
+            .any(|ev| matches!(ev, LoopEvent::Text(t) if t.contains("isn't done yet"))));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -3854,7 +4088,7 @@ mod tests {
         let short = format!(
             "CABIN RULES\n\n{voice}\n\n\
              Talk style for this turn: casual chat. Reply in one to three short sentences, under 60 words, with no headings, lists or preamble.\n\
-             Talk style sets length and shape, and its length wins over a personality's; a personality sets tone only. Approval questions, security warnings and error facts stay plain, and the cabin safety rules win.\n\n\
+             Talk style sets length and shape, and its length wins over a personality's; a personality sets tone only. Accuracy and care beat those word caps, so say what is true and what is careful even when that runs past the cap. Approval questions, security warnings and error facts stay plain, and the cabin safety rules win.\n\n\
              {VOLATILE_SAFETY_CLOSER}"
         );
         let seen = script.seen.lock().unwrap()[0].clone();
@@ -3888,6 +4122,58 @@ mod tests {
         assert_eq!(system_text(&script.seen.lock().unwrap()[1]), repair);
         crate::checkpoint::set_turn_style(&conv, None);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Two turns whose talk style changes in between, through the real loop.
+    fn two_styled_turns(tag: &str, prefix_cache: bool) -> String {
+        use grokhub_core::talk::TalkStyle;
+        let dir = workspace(tag);
+        let conv = format!("{tag}-{}", std::process::id());
+        crate::prefix_cache::set_enabled_for_tests(Some(prefix_cache));
+        crate::checkpoint::set_turn_style(&conv, Some(TalkStyle::Short));
+        let script = scripted(vec![turn("Hi.", Vec::new()), turn("Fixed.", Vec::new())]);
+        let mut history = Vec::new();
+        for (text, style) in [
+            ("hi", TalkStyle::Short),
+            ("wifi broke", TalkStyle::Findings),
+        ] {
+            crate::checkpoint::set_turn_style(&conv, Some(style));
+            let (out, _) = talk_turn(
+                &script,
+                &dir,
+                &conv,
+                "CABIN RULES",
+                Gate::phase_readonly(),
+                &gate::ClosedPermits,
+                &mut history,
+                text,
+            );
+            assert_eq!(out.stop, StopReason::EndTurn);
+        }
+        crate::checkpoint::set_turn_style(&conv, None);
+        crate::prefix_cache::set_enabled_for_tests(None);
+        let _ = std::fs::remove_dir_all(&dir);
+        crate::prefix_guard::run_key(&conv, 0, None)
+    }
+
+    #[test]
+    fn with_prefix_cache_a_style_change_keeps_the_prefix_append_only() {
+        let key = two_styled_turns("guard-cache-on", true);
+        crate::prefix_guard::assert_no_unexpected_break(&key);
+        assert_eq!(crate::prefix_guard::breaks(&key), Vec::new());
+    }
+
+    #[test]
+    fn without_prefix_cache_a_style_change_is_reported_as_a_system_rewrite() {
+        let key = two_styled_turns("guard-cache-off", false);
+        assert_eq!(
+            crate::prefix_guard::breaks(&key),
+            vec![crate::prefix_guard::PrefixBreak {
+                index: 0,
+                part: crate::prefix_guard::Part::System,
+                reason: crate::prefix_guard::Reason::Unexpected,
+            }]
+        );
     }
 
     #[test]
@@ -4028,6 +4314,7 @@ mod tests {
             TalkStyle::Summary,
             TalkStyle::Quiet,
             TalkStyle::Draft,
+            TalkStyle::Natural,
         ];
         let personalities = grokhub_core::personality::builtins();
         assert!(personalities.len() > 10);

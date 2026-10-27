@@ -5,12 +5,17 @@
 //! A model that stops again and again without progress ends with the open
 //! items named as blocked. A checklist left open by an earlier run drives
 //! nothing until this run changes it, so it can't take over an unrelated ask.
+//! An item seen open or cancelled at one stop counts as completed at a later
+//! stop only when a tool result ran in between, so a run can't flip a blocked
+//! item to done on its say-so. Swapping in new items without finishing any
+//! counts as a re-plan, the same as stopping with nothing new.
 
 use crate::checkpoint::Gaps;
 use crate::session_tools::TodoItem;
 
-/// Stops in a row with no new tool result and the same open items before the
-/// run ends with them named as blocked.
+/// Re-plans in a row (a stop with no new tool result and the same open items,
+/// or new items added with none finished) before the run ends with the open
+/// items named as blocked.
 pub const STALL_LIMIT: u32 = 3;
 
 /// Tools that change the checklist or the session, not the task.
@@ -45,6 +50,11 @@ pub struct Drive {
     last_left: Vec<String>,
     evidence_at_push: usize,
     stalls: u32,
+    /// Ids seen pending, in progress or cancelled at an earlier stop, with the
+    /// evidence count then. Completing one needs a tool result after that.
+    unresolved_at: Vec<(String, usize)>,
+    /// Ids completed (with proof) or cancelled at the last stop.
+    resolved: Vec<String>,
 }
 
 impl Drive {
@@ -59,6 +69,8 @@ impl Drive {
             last_left: Vec::new(),
             evidence_at_push: 0,
             stalls: 0,
+            unresolved_at: Vec::new(),
+            resolved: Vec::new(),
         }
     }
 
@@ -67,6 +79,19 @@ impl Drive {
     #[cfg(test)]
     pub fn check(&mut self, now: &[TodoItem], evidence: usize) -> Verdict {
         self.check_with(now, evidence, &Gaps::default())
+    }
+
+    /// Pending or in-progress ids this run changed. An untouched list is empty,
+    /// the same rule [`Drive::check_with`] uses so an earlier checklist cannot
+    /// take over the next ask.
+    pub fn open_ids(&self, now: &[TodoItem]) -> Vec<String> {
+        if now == self.start.as_slice() {
+            return Vec::new();
+        }
+        now.iter()
+            .filter(|item| matches!(item.status.as_str(), "pending" | "in_progress"))
+            .map(|item| item.id.clone())
+            .collect()
     }
 
     /// [`Drive::check`] plus what the run still owes beyond its checklist
@@ -80,7 +105,9 @@ impl Drive {
                 .filter(|t| matches!(t.status.as_str(), "pending" | "in_progress"))
                 .collect()
         };
-        let unproven: Vec<&TodoItem> = if evidence == 0 && !untouched {
+        let unproven: Vec<&TodoItem> = if untouched {
+            Vec::new()
+        } else {
             now.iter()
                 .filter(|t| {
                     t.status == "completed"
@@ -88,11 +115,35 @@ impl Drive {
                             .done_at_start
                             .iter()
                             .any(|(id, content)| *id == t.id && *content == t.content)
+                        && (evidence == 0
+                            || self
+                                .unresolved_at
+                                .iter()
+                                .any(|(id, seen)| *id == t.id && evidence <= *seen))
                 })
                 .collect()
-        } else {
-            Vec::new()
         };
+        if !untouched {
+            // A completion pushed back as unproven also needs a result after this stop.
+            for t in now
+                .iter()
+                .filter(|t| matches!(t.status.as_str(), "pending" | "in_progress" | "cancelled"))
+                .chain(unproven.iter().copied())
+            {
+                match self.unresolved_at.iter_mut().find(|(id, _)| *id == t.id) {
+                    Some(row) => row.1 = evidence,
+                    None => self.unresolved_at.push((t.id.clone(), evidence)),
+                }
+            }
+        }
+        let resolved: Vec<String> = now
+            .iter()
+            .filter(|t| matches!(t.status.as_str(), "completed" | "cancelled"))
+            .filter(|t| !unproven.iter().any(|u| u.id == t.id))
+            .map(|t| t.id.clone())
+            .collect();
+        let finished_any = resolved.iter().any(|id| !self.resolved.contains(id));
+        self.resolved = resolved;
         if open.is_empty() && unproven.is_empty() && gaps.is_empty() {
             return Verdict::End;
         }
@@ -102,7 +153,12 @@ impl Drive {
             .map(|t| t.id.clone())
             .collect();
         left.extend(gaps.keys());
-        if left == self.last_left && evidence == self.evidence_at_push {
+        let stalled = left == self.last_left && evidence == self.evidence_at_push;
+        // New items with none finished since the last stop: the plan churned.
+        let churned = !self.last_left.is_empty()
+            && !finished_any
+            && left.iter().any(|id| !self.last_left.contains(id));
+        if stalled || churned {
             self.stalls += 1;
         } else {
             self.stalls = 0;
@@ -117,8 +173,10 @@ impl Drive {
                 .collect();
             names.extend(gaps.names());
             return Verdict::Blocked(format!(
-                "Stopped with these still open: {}. No approach worked after {STALL_LIMIT} re-plans.",
-                names.join(", ")
+                "Not done: {} {} still open. I stopped after {STALL_LIMIT} re-plans without progress, so none of it is marked done. \
+If this needs something GrokHub can't do yet, I can note it as a feature request instead.",
+                names.join(", "),
+                if names.len() == 1 { "is" } else { "are" }
             ));
         }
         let mut note = String::new();
@@ -131,7 +189,8 @@ impl Drive {
                 .unwrap_or_default();
             let first = first.trim_matches('"');
             note.push_str(&format!(
-                "You stopped again without progress. Take a different approach for \"{first}\" (another tool, another route or a smaller sub-step), or mark it cancelled with the reason. "
+                "You stopped again without progress. Take a different approach for \"{first}\" (another tool, another route or a smaller sub-step), or mark it cancelled with the reason. \
+If GrokHub has no way to do it, mark it cancelled, say so once in plain words and offer a next step. Don't add checklist items for tools the ask doesn't need. "
             ));
         }
         if !open.is_empty() {
@@ -157,6 +216,32 @@ impl Drive {
         }
         Verdict::Push(note)
     }
+}
+
+/// The line a change request's reply gets when it claims the work is done
+/// but no tool ran this run: nothing backs the claim, so the turn says so.
+pub fn unbacked_done(reply: &str, evidence: usize) -> Option<&'static str> {
+    if evidence > 0 {
+        return None;
+    }
+    let text = reply.to_lowercase();
+    let words: Vec<&str> = text
+        .split(|c: char| !(c.is_alphanumeric() || c == '\''))
+        .filter(|w| !w.is_empty())
+        .collect();
+    let claims = words
+        .iter()
+        .any(|w| ["done", "updated", "fixed", "completed", "finished"].contains(w))
+        || [
+            "all set",
+            "error gone",
+            "error is gone",
+            "works again",
+            "it works now",
+        ]
+        .iter()
+        .any(|p| text.contains(p));
+    claims.then_some("That isn't done yet: nothing ran this turn to make or check the change.")
 }
 
 fn list<'a>(items: impl Iterator<Item = &'a TodoItem>) -> String {
@@ -249,8 +334,98 @@ mod tests {
         }
         assert_eq!(
             drive.check(&now, 1),
-            Verdict::Blocked("Stopped with these still open: \"check ports\". No approach worked after 3 re-plans.".into())
+            Verdict::Blocked("Not done: \"check ports\" is still open. I stopped after 3 re-plans without progress, so none of it is marked done. If this needs something GrokHub can't do yet, I can note it as a feature request instead.".into())
         );
+    }
+
+    #[test]
+    fn an_item_seen_open_needs_a_new_tool_result_to_count_as_completed() {
+        let mut drive = Drive::new(&[]);
+        assert!(matches!(
+            drive.check(&[item("pulse", "pending")], 2),
+            Verdict::Push(_)
+        ));
+        // Earlier tool work doesn't back a completion made with no new result.
+        assert!(matches!(
+            drive.check(&[item("pulse", "completed")], 2),
+            Verdict::Push(n) if n.ends_with("Marked completed without any check this run: \"check pulse\". Run a check that shows each one before you finish.")
+        ));
+        assert_eq!(drive.check(&[item("pulse", "completed")], 3), Verdict::End);
+    }
+
+    #[test]
+    fn a_cancelled_item_cannot_flip_to_completed_without_a_new_tool_result() {
+        let mut drive = Drive::new(&[]);
+        let blocked = [item("a", "completed"), item("pulse", "cancelled")];
+        assert!(matches!(
+            drive.check(&[item("a", "pending"), item("pulse", "pending")], 1),
+            Verdict::Push(_)
+        ));
+        assert_eq!(drive.check(&blocked, 2), Verdict::End);
+        // Said blocked, then "error gone" with nothing new run: pushed back.
+        let flipped = [item("a", "completed"), item("pulse", "completed")];
+        assert_eq!(
+            drive.check(&flipped, 2),
+            Verdict::Push("Marked completed without any check this run: \"check pulse\". Run a check that shows each one before you finish.".into())
+        );
+    }
+
+    #[test]
+    fn adding_new_items_without_finishing_any_counts_as_a_re_plan() {
+        let mut drive = Drive::new(&[]);
+        let mut verdicts = Vec::new();
+        // Each stop swaps in a new probe and runs one tool: busy, but nothing finishes.
+        for (n, probe) in [
+            "skill_list",
+            "scheduler_list",
+            "automation_list",
+            "diagnose",
+        ]
+        .iter()
+        .enumerate()
+        {
+            let now = [item("pulse", "pending"), item(probe, "pending")];
+            verdicts.push(drive.check(&now, n + 1));
+        }
+        assert!(matches!(&verdicts[0], Verdict::Push(n) if n.starts_with("Not done yet")));
+        assert!(
+            matches!(&verdicts[1], Verdict::Push(n) if n.contains("Don't add checklist items for tools the ask doesn't need."))
+        );
+        assert!(matches!(&verdicts[2], Verdict::Push(n) if n.starts_with("You stopped again")));
+        assert_eq!(
+            verdicts[3],
+            Verdict::Blocked("Not done: \"check pulse\", \"check diagnose\" are still open. I stopped after 3 re-plans without progress, so none of it is marked done. If this needs something GrokHub can't do yet, I can note it as a feature request instead.".into())
+        );
+        // Finishing one item while adding another is progress, not churn.
+        let mut drive = Drive::new(&[]);
+        assert!(matches!(
+            drive.check(&[item("a", "pending")], 1),
+            Verdict::Push(_)
+        ));
+        assert!(matches!(
+            drive.check(&[item("a", "completed"), item("b", "pending")], 2),
+            Verdict::Push(n) if n.starts_with("Not done yet")
+        ));
+    }
+
+    #[test]
+    fn a_done_claim_with_no_tool_run_gets_an_honest_line() {
+        let line = "That isn't done yet: nothing ran this turn to make or check the change.";
+        assert_eq!(
+            unbacked_done("Pulse feed updated. <b>Done.</b> ✨", 0),
+            Some(line)
+        );
+        assert_eq!(unbacked_done("Error gone, all good.", 0), Some(line));
+        assert_eq!(unbacked_done("Pulse feed updated. Done.", 1), None);
+        assert_eq!(
+            unbacked_done(
+                "Pulse can't read your Steam library yet. Want me to note it as a feature?",
+                0
+            ),
+            None
+        );
+        // "undone" is not "done".
+        assert_eq!(unbacked_done("That change is undone.", 0), None);
     }
 
     #[test]
