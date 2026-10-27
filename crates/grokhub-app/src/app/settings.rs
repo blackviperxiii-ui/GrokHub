@@ -1358,10 +1358,12 @@ mod tests {
     #[test]
     fn about_shows_the_support_link_quietly() {
         let src = include_str!("settings.rs");
+        // Split markers are built with concat! so this test's own text never
+        // matches the source scans other tests run on this file.
         let about = src
-            .split("SettingsSec::About => {")
+            .split(concat!("SettingsSec::", "About => {"))
             .nth(1)
-            .and_then(|s| s.split("SettingsSec::Defaults => {").next())
+            .and_then(|s| s.split(concat!("SettingsSec::", "Defaults => {")).next())
             .expect("About arm");
         assert!(about.contains("self.ui_support_link(ui);"), "{about}");
         let body = src
