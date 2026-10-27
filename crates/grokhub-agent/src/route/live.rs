@@ -29,9 +29,7 @@ use grokhub_core::outcome::is_correction;
 use super::budget::{self, Budget, BudgetNotes};
 use super::difficulty::{estimate, DifficultyInput};
 use super::guard::{holdout_eligible, in_holdout, load_overrides, HOLDOUT_EFFORT};
-use super::ladder::{
-    self, rung, start_rung, take_tool_errors, turn_hash, user_facing, Band, Obs, Pick, Steer,
-};
+use super::ladder::{self, rung, take_tool_errors, turn_hash, user_facing, Band, Obs, Pick};
 use super::learn;
 use super::local::LocalGate;
 use super::log::{Chosen, RouteOutcome, RouteRecord, RouteSignals, RouteTokens};
@@ -494,7 +492,8 @@ pub fn decide(config_dir: &Path, call: &RouteCall<'_>, now_ms: u64) -> Decision 
         },
         rt.as_deref(),
     );
-    let steer = Steer::from_text(call.text);
+    let care_first = crate::brain::care_first_enabled(config_dir);
+    let steer = ladder::steer_for_turn(call.text, care_first);
     laps.mark("route:difficulty");
     let row = class_row(call.class);
     let bump = row
@@ -567,13 +566,14 @@ pub fn decide(config_dir: &Path, call: &RouteCall<'_>, now_ms: u64) -> Decision 
                 routine,
                 ..Obs::default()
             };
+            let hold = ladder::hold_chat_drops(r.class, care_first);
             let start = super::goal::goal_start(
                 band,
-                start_rung(band, d, steer, true),
+                ladder::start_holding(band, d, steer, true, hold),
                 steer,
                 goal.as_ref(),
             );
-            let mut pick = ladder::step(key, r.class, turn, band, start, obs);
+            let mut pick = ladder::step_holding(key, r.class, turn, band, start, obs, hold);
             if call.step_up {
                 // Only this call: the saved state keeps its rung, so the episode drops back after.
                 pick.rung = (pick.rung + 1).min(band.ceiling.max(band.floor));
@@ -668,6 +668,7 @@ pub fn decide(config_dir: &Path, call: &RouteCall<'_>, now_ms: u64) -> Decision 
         text: call.text,
         escalate_bias,
         prior_escalated,
+        care_first,
     };
     let route = Router::choose(&input, &reg, &profiles, &table, now_ms);
     laps.mark("route:choose");

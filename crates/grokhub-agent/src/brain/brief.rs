@@ -488,6 +488,22 @@ pub fn classify(input: &BriefInput<'_>, ask: Option<AskModel<'_>>) -> Brief {
 /// The one fallback call: the ask's text in, the model's reply out.
 pub type AskModel<'a> = &'a mut dyn FnMut(&str) -> Result<String, String>;
 
+/// The policy goal this Brief names. Callers pass care-first rows when the
+/// flag is on, and they do not also read keyword steer.
+pub fn effort_word(brief: &Brief, rows: &[grokhub_core::brain_policy::PolicyRow]) -> String {
+    grokhub_core::brain_policy::pick_row(rows, brief.intent.as_str(), brief.care.as_str())
+        .map(|row| row.goal.clone())
+        .unwrap_or_else(|| "balanced".into())
+}
+
+/// Classify stays on the cheap background effort. The care-first dry-run did
+/// not show a quality gain that would pay for a higher rung.
+pub fn classify_effort(care_first: bool) -> &'static str {
+    match care_first {
+        true | false => grokhub_core::BACKGROUND_EFFORT,
+    }
+}
+
 /// One stored Brief: who it was for, never the ask's text.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BriefLine {
@@ -845,6 +861,25 @@ mod tests {
             (Care::Critical, "system", "rules")
         );
         assert_eq!(asked.get(), 0);
+    }
+
+    #[test]
+    fn care_first_effort_comes_from_the_brief_and_classify_stays_low() {
+        let hi = rules(&input("hey")).unwrap();
+        assert_eq!((hi.intent, hi.care), (Intent::Chat, Care::Casual));
+        let shipped = grokhub_core::brain_policy::builtin_policy();
+        assert_eq!(effort_word(&hi, &shipped), "speed");
+        let on = grokhub_core::brain_policy::apply_care_first(shipped);
+        assert_eq!(effort_word(&hi, &on), "care");
+        let question = rules(&input("what time is it?")).unwrap();
+        assert_eq!(question.intent, Intent::Question);
+        assert_eq!(effort_word(&question, &on), "speed");
+        assert_eq!(classify_effort(false), "low");
+        assert_eq!(classify_effort(true), grokhub_core::BACKGROUND_EFFORT);
+        assert_eq!(
+            crate::route::policy::class_row(BRIEF_CLASS).unwrap().start,
+            "low"
+        );
     }
 
     #[test]

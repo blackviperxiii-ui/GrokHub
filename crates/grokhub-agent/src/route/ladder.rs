@@ -73,6 +73,20 @@ impl Steer {
     }
 }
 
+/// Keyword steer, unless care-first is on. Then the Brief's row picks effort.
+pub fn steer_for_turn(text: &str, care_first: bool) -> Steer {
+    if care_first {
+        Steer::None
+    } else {
+        Steer::from_text(text)
+    }
+}
+
+/// Care-first holds `chat:default` so a low difficulty score does not drop a rung.
+pub fn hold_chat_drops(class: &str, care_first: bool) -> bool {
+    care_first && class.trim() == "chat:default"
+}
+
 /// A class's rungs, after any accuracy-guard revert.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Band {
@@ -113,6 +127,17 @@ impl Band {
 /// Where a step starts: the class start, moved by the user's words or by difficulty.
 /// xhigh and max come only from escalation or an explicit "think hard".
 pub fn start_rung(band: Band, d: f64, steer: Steer, user: bool) -> (usize, Vec<String>) {
+    start_holding(band, d, steer, user, false)
+}
+
+/// [`start_rung`]. `hold_drops` skips the low-difficulty drop.
+pub fn start_holding(
+    band: Band,
+    d: f64,
+    steer: Steer,
+    user: bool,
+    hold_drops: bool,
+) -> (usize, Vec<String>) {
     if !user {
         return (band.start, Vec::new());
     }
@@ -121,7 +146,7 @@ pub fn start_rung(band: Band, d: f64, steer: Steer, user: bool) -> (usize, Vec<S
         Steer::Quicker => return (band.floor, vec!["steer:quicker".into()]),
         Steer::None => {}
     }
-    if d < 0.3 && band.start > band.floor {
+    if d < 0.3 && band.start > band.floor && !hold_drops {
         (band.start - 1, vec!["d<0.3".into()])
     } else if d > 0.7 && band.start < band.ceiling.min(high()) {
         (band.start + 1, vec!["d>0.7".into()])
@@ -228,6 +253,18 @@ pub fn advance(
     start: (usize, Vec<String>),
     obs: &Obs,
 ) -> (EffortState, Pick) {
+    advance_holding(prev, class, band, start, obs, false)
+}
+
+/// [`advance`]. `hold_drops` skips DE1 and DE2. A budget drop (DE3) still runs.
+pub fn advance_holding(
+    prev: Option<&EffortState>,
+    class: &str,
+    band: Band,
+    start: (usize, Vec<String>),
+    obs: &Obs,
+    hold_drops: bool,
+) -> (EffortState, Pick) {
     let hard = class.trim() == PREPARE_HARD;
     let user = user_facing(class);
     let fresh = prev.is_none() || obs.new_turn;
@@ -263,7 +300,7 @@ pub fn advance(
     let steered = rules.iter().any(|r| r.starts_with("steer:"));
     if let Some(r) = obs
         .routine
-        .filter(|r| fresh && user && !hard && !st.hold && !steered && *r < st.rung)
+        .filter(|r| fresh && user && !hard && !st.hold && !steered && !hold_drops && *r < st.rung)
     {
         st.rung = r.max(band.floor);
         st.moved = Move::Down;
@@ -309,7 +346,7 @@ pub fn advance(
         st.moved = Move::Up;
         rules.push("E5".into());
     }
-    if user && !hard && !st.hold && st.clean >= 3 && st.rung > band.floor {
+    if user && !hard && !st.hold && !hold_drops && st.clean >= 3 && st.rung > band.floor {
         st.rung -= 1;
         st.clean = 0;
         st.moved = Move::Down;
@@ -398,13 +435,25 @@ pub fn step(
     turn: u64,
     band: Band,
     start: (usize, Vec<String>),
+    obs: Obs,
+) -> Pick {
+    step_holding(episode, class, turn, band, start, obs, false)
+}
+
+pub fn step_holding(
+    episode: &str,
+    class: &str,
+    turn: u64,
+    band: Band,
+    start: (usize, Vec<String>),
     mut obs: Obs,
+    hold_drops: bool,
 ) -> Pick {
     let k = key(episode, class);
     let mut states = STATES.lock().unwrap_or_else(|e| e.into_inner());
     let prev = states.get(&k).cloned();
     obs.new_turn = prev.as_ref().is_none_or(|p| p.turn != turn);
-    let (mut st, pick) = advance(prev.as_ref(), class, band, start, &obs);
+    let (mut st, pick) = advance_holding(prev.as_ref(), class, band, start, &obs, hold_drops);
     st.turn = turn;
     st.last_ok = false;
     if states.len() >= STATES_CAP && !states.contains_key(&k) {
@@ -485,6 +534,90 @@ mod tests {
             Steer::Quicker
         );
         assert_eq!(Steer::from_text("rename the file"), Steer::None);
+    }
+
+    #[test]
+    fn care_first_holds_chat_default_and_ignores_keyword_steer() {
+        let chat = band("chat:default");
+        let words = "please think hard about this";
+        assert!(!hold_chat_drops("chat:default", false));
+        assert!(hold_chat_drops("chat:default", true));
+        assert!(!hold_chat_drops("chat:quick", true));
+        assert!(!hold_chat_drops("plan", true));
+        assert_eq!(steer_for_turn(words, false), Steer::Harder);
+        assert_eq!(steer_for_turn(words, true), Steer::None);
+        assert_eq!(
+            name(start_rung(chat, 0.1, Steer::None, true).0),
+            "low"
+        );
+        assert_eq!(
+            name(start_holding(chat, 0.1, Steer::None, true, true).0),
+            "medium"
+        );
+        assert!(start_holding(chat, 0.1, Steer::None, true, true)
+            .1
+            .is_empty());
+        assert_eq!(
+            name(start_holding(chat, 0.9, Steer::None, true, true).0),
+            "high"
+        );
+        let start = start_holding(chat, 0.5, Steer::None, true, true);
+        let (mut state, first) = advance_holding(
+            None,
+            "chat:default",
+            chat,
+            start.clone(),
+            &Obs {
+                new_turn: true,
+                ..Obs::default()
+            },
+            true,
+        );
+        assert_eq!(name(first.rung), "medium");
+        for _ in 0..5 {
+            state.last_ok = true;
+            let (next, pick) = advance_holding(
+                Some(&state),
+                "chat:default",
+                chat,
+                start.clone(),
+                &step_obs(),
+                true,
+            );
+            state = next;
+            assert_eq!(name(pick.rung), "medium");
+            assert!(!pick.rules.iter().any(|rule| rule == "DE1"));
+        }
+        let (raised, up) = advance_holding(
+            Some(&state),
+            "chat:default",
+            chat,
+            start.clone(),
+            &Obs {
+                low_check: Some(true),
+                ..step_obs()
+            },
+            true,
+        );
+        assert_eq!(name(up.rung), "high");
+        let (_, budget) = advance_holding(
+            Some(&raised),
+            "chat:default",
+            chat,
+            start,
+            &Obs {
+                budget_pct: Some(80),
+                ..step_obs()
+            },
+            true,
+        );
+        assert_eq!(name(budget.rung), "medium");
+        assert!(budget.rules.iter().any(|rule| rule == "DE3"));
+        let plan = band("plan");
+        assert_eq!(
+            name(start_holding(plan, 0.0, Steer::None, true, false).0),
+            name(start_rung(plan, 0.0, Steer::None, true).0)
+        );
     }
 
     #[test]

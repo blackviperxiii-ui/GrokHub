@@ -20,7 +20,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use grokhub_core::brain_policy::{parse_policy, policy_text, PolicyRow};
+use grokhub_core::brain_policy::{parse_policy, policy_text, policy_text_with, PolicyRow};
 use grokhub_core::protected_surface::{ProtectedSurface, TuneTarget};
 use grokhub_core::run_metrics::RunMetrics;
 use grokhub_core::self_review::{
@@ -242,7 +242,10 @@ fn propose_row(config_dir: &Path, key: &str, tweak: &Tweak, now: u64) -> Result<
         Some(r) => *r = new,
         None => user.push(new),
     }
-    let after = policy_text(&user)?;
+    let after = policy_text_with(
+        &user,
+        grokhub_core::brain_policy::care_first_flag(&before),
+    )?;
     write_and_try(
         config_dir,
         &target,

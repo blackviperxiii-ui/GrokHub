@@ -316,6 +316,8 @@ pub struct RouteInput<'a> {
     pub escalate_bias: i8,
     /// This episode already escalated (stronger model mid-flow).
     pub prior_escalated: bool,
+    /// Care-first holds `chat:default` and the caller has already dropped keyword steer.
+    pub care_first: bool,
 }
 
 /// The pick: provider, model, effort, one plain sentence, and the rules that fired.
@@ -714,13 +716,14 @@ impl Router {
         let mut pick = match (row, band) {
             (Some(row), Some(band)) => Some(input.pick.clone().unwrap_or_else(|| {
                 let user = ladder::user_facing(row.class);
+                let hold = ladder::hold_chat_drops(row.class, input.care_first);
                 let start = goal::goal_start(
                     band,
-                    ladder::start_rung(band, input.d, input.steer, user),
+                    ladder::start_holding(band, input.d, input.steer, user, hold),
                     input.steer,
                     input.goal.as_ref().filter(|_| user),
                 );
-                ladder::advance(
+                ladder::advance_holding(
                     None,
                     row.class,
                     band,
@@ -730,6 +733,7 @@ impl Router {
                         routine: input.routine,
                         ..ladder::Obs::default()
                     },
+                    hold,
                 )
                 .1
             })),

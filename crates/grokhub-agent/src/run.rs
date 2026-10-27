@@ -327,6 +327,7 @@ pub fn run_loop(
         .then(|| crate::checkpoint::turn_playbook(input.conversation_id))
         .flatten();
     let config_dir = crate::perm::config_dir();
+    let soft_caps = crate::brain::care_first_enabled(&config_dir);
     let intention_block = (input.depth == 0)
         .then(|| crate::close_check::prompt_block(input.conversation_id))
         .filter(|block| !block.is_empty());
@@ -341,6 +342,7 @@ pub fn run_loop(
             user_text,
             first_turn,
             style,
+            soft_caps,
             playbook.as_deref(),
             &already,
             intention_block.clone(),
@@ -348,7 +350,7 @@ pub fn run_loop(
         crate::prefix_cache::push_user_turn(history, &volatile, user_text, image);
     } else {
         if first_turn {
-            let base = style.map(|s| grokhub_core::talk::restyle(input.system, s));
+            let base = style.map(|s| grokhub_core::talk::restyle_caps(input.system, s, soft_caps));
             let base = base.as_deref().unwrap_or(input.system);
             let base = match &playbook {
                 Some(block) => grokhub_core::playbook::with_playbook(base, Some(block)),
@@ -367,7 +369,7 @@ pub fn run_loop(
             }
         } else {
             if let Some(style) = style {
-                restyle_history(history, style);
+                restyle_history(history, style, soft_caps);
             }
             if input.depth == 0 {
                 replaybook_history(history, playbook.as_deref());
@@ -1041,11 +1043,11 @@ pub fn run_loop(
 
 /// A later turn's talk style replaces the earlier one in the stored system
 /// message; the stable prefix before it stays cached.
-fn restyle_history(history: &mut [InputItem], style: grokhub_core::talk::TalkStyle) {
+fn restyle_history(history: &mut [InputItem], style: grokhub_core::talk::TalkStyle, soft_caps: bool) {
     if let Some(InputItem::Message { role, content }) = history.first_mut() {
         if let Some(ContentPart::InputText(text)) = content.first_mut().filter(|_| role == "system")
         {
-            *text = grokhub_core::talk::restyle(text, style);
+            *text = grokhub_core::talk::restyle_caps(text, style, soft_caps);
         }
     }
 }
