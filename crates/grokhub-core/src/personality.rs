@@ -315,6 +315,27 @@ pub fn find(presets: &[Personality], id: &str) -> Personality {
         .unwrap_or_else(neutral)
 }
 
+/// The presets a picker offers: every one when adults-only personalities are on,
+/// else all but the explicit ones (built-in or the user's own).
+pub fn visible(presets: &[Personality], explicit_on: bool) -> Vec<Personality> {
+    presets
+        .iter()
+        .filter(|p| explicit_on || !p.explicit)
+        .cloned()
+        .collect()
+}
+
+/// `p`, or the default voice when it is explicit and adults-only personalities are off.
+/// A chat or default still set to an explicit preset speaks as the default until the
+/// switch goes back on.
+pub fn gated(p: Personality, explicit_on: bool) -> Personality {
+    if p.explicit && !explicit_on {
+        builtin(DEFAULT_ID)
+    } else {
+        p
+    }
+}
+
 /// The cabin rules with this personality's block in front of them. The rules, which carry
 /// the safety and approval lines, always come last. Empty tone rules return `rules`
 /// unchanged.
@@ -480,6 +501,29 @@ mod tests {
         let back = layer(&builtin(DEFAULT_ID), &rules);
         assert!(back.starts_with("Personality: Default. "));
         assert!(!back.contains("Whore mode"));
+    }
+
+    #[test]
+    fn explicit_presets_stay_hidden_and_silent_until_adults_only_is_on() {
+        let all = builtins();
+        let names = |list: &[Personality]| {
+            list.iter()
+                .filter(|p| p.explicit)
+                .map(|p| p.id.clone())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(names(&visible(&all, false)), Vec::<String>::new());
+        assert_eq!(visible(&all, false).len(), all.len() - 2);
+        assert_eq!(names(&visible(&all, true)), ["viper", "whore"]);
+        assert_eq!(visible(&all, true), all);
+        assert_eq!(gated(builtin("whore"), false).id, DEFAULT_ID);
+        assert_eq!(gated(builtin("viper"), false).id, DEFAULT_ID);
+        assert_eq!(gated(builtin("whore"), true).id, "whore");
+        assert_eq!(gated(builtin("pirate"), false).id, "pirate");
+        // A user's own copy of an explicit preset is explicit too.
+        let copy = duplicate(&builtin("whore"), &all);
+        assert!(copy.explicit);
+        assert_eq!(gated(copy, false).id, DEFAULT_ID);
     }
 
     #[test]

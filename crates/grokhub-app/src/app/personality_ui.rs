@@ -6,6 +6,10 @@
 use super::*;
 use grokhub_core::personality::{self, Personality};
 
+const ADULTS_ONLY: &str = "Adults-only personalities";
+const ADULTS_ONLY_HINT: &str =
+    "Show explicit presets like Viper. Off hides them, and a chat set to one uses Default.";
+
 /// What a "Try it" preview shows under its card.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum TryState {
@@ -93,12 +97,24 @@ impl Cabin {
         } else {
             own
         };
-        shown_id(id).to_string()
+        self.allowed_id(shown_id(id))
+    }
+
+    /// `id`, or the default voice's when it names an explicit preset and adults-only
+    /// personalities are off.
+    fn allowed_id(&self, id: &str) -> String {
+        match personality::lookup(&presets_dir(), id) {
+            p if p.explicit && !self.cfg.explicit_personalities => personality::DEFAULT_ID.into(),
+            _ => id.to_string(),
+        }
     }
 
     /// The preset the chat being answered uses, custom ones included.
     pub(super) fn chat_personality(&self) -> Personality {
-        personality::lookup(&presets_dir(), &self.personality_id())
+        personality::gated(
+            personality::lookup(&presets_dir(), &self.personality_id()),
+            self.cfg.explicit_personalities,
+        )
     }
 
     /// The TTS voice for spoken replies: the chat's personality's voice hint when it names
@@ -114,11 +130,12 @@ impl Cabin {
         self.picker.loaded = true;
     }
 
+    /// What the pickers offer: explicit presets only with adults-only personalities on.
     fn presets_now(&mut self) -> Vec<Personality> {
         if !self.picker.loaded {
             self.reload_presets();
         }
-        self.picker.presets.clone()
+        personality::visible(&self.picker.presets, self.cfg.explicit_personalities)
     }
 
     /// The personality the open chat shows in its header.
@@ -128,17 +145,19 @@ impl Cabin {
             .get(self.thread_idx)
             .map(|t| t.personality.trim())
             .unwrap_or("");
-        shown_id(if own.is_empty() {
+        self.allowed_id(shown_id(if own.is_empty() {
             self.cfg.personality.trim()
         } else {
             own
-        })
-        .to_string()
+        }))
     }
 
     /// Settings: the default for every chat that has not picked its own.
     pub(super) fn set_default_personality(&mut self, id: &str) {
-        let p = personality::lookup(&presets_dir(), id);
+        let p = personality::gated(
+            personality::lookup(&presets_dir(), id),
+            self.cfg.explicit_personalities,
+        );
         self.cfg.personality = stored_id(&p.id);
         self.persist_cfg();
         self.status = default_note(&p);
@@ -146,7 +165,10 @@ impl Cabin {
 
     /// Chat header: this chat only. Picking the default's own voice clears the override.
     pub(super) fn set_chat_personality(&mut self, id: &str) {
-        let p = personality::lookup(&presets_dir(), id);
+        let p = personality::gated(
+            personality::lookup(&presets_dir(), id),
+            self.cfg.explicit_personalities,
+        );
         let own = if stored_id(&p.id) == self.cfg.personality.trim() {
             String::new()
         } else {
@@ -158,6 +180,18 @@ impl Cabin {
         thread.personality = own;
         self.persist();
         self.status = chat_note(&p);
+    }
+
+    /// Settings → Adults-only personalities. Turning it off hides the explicit presets;
+    /// the stored picks stay, and speak in the default voice until it is back on.
+    pub(super) fn set_explicit_personalities(&mut self, on: bool) {
+        self.cfg.explicit_personalities = on;
+        self.persist_cfg();
+        self.status = if on {
+            "Adults-only personalities on".into()
+        } else {
+            "Adults-only personalities off".into()
+        };
     }
 
     /// Chat header → Make default: the open chat's pick becomes everyone's default.
@@ -321,6 +355,11 @@ impl Cabin {
             ui,
             "How replies sound in chat. Tone only: approvals, warnings and facts stay plain in every personality. A chat can pick its own from the chat header.",
         );
+        ui.add_space(10.0);
+        let mut adults = self.cfg.explicit_personalities;
+        if crate::cards::settings_toggle(ui, ADULTS_ONLY, ADULTS_ONLY_HINT, &mut adults) {
+            self.set_explicit_personalities(adults);
+        }
         ui.add_space(10.0);
         if self.picker.draft.is_some() {
             self.ui_personality_editor(ui);
@@ -521,6 +560,9 @@ impl Cabin {
                             if p.id == default && p.id != personality::DEFAULT_ID {
                                 label.push_str(" (default)");
                             }
+                            if p.explicit {
+                                label.push_str(" · Explicit");
+                            }
                             if ui.selectable_label(p.id == open, label).clicked() {
                                 pick = Some(p.id.clone());
                             }
@@ -682,6 +724,48 @@ mod tests {
         cabin.thread_idx = 0;
         cabin.chat_job_thread = None;
         (lock, pin, cabin)
+    }
+
+    #[test]
+    fn adults_only_off_hides_explicit_presets_and_mutes_a_stored_pick() {
+        let (_lock, _root, mut cabin) = cabin_with_chat();
+        assert!(!cabin.cfg.explicit_personalities, "off by default");
+        let ids = |c: &mut Cabin| {
+            c.presets_now()
+                .into_iter()
+                .map(|p| p.id)
+                .collect::<Vec<_>>()
+        };
+        assert!(!ids(&mut cabin)
+            .iter()
+            .any(|id| id == "viper" || id == "whore"));
+        // Picking an explicit preset while off picks the default voice instead.
+        cabin.set_chat_personality("whore");
+        assert_eq!(cabin.threads[0].personality, "");
+        assert_eq!(cabin.chat_personality().id, "default");
+
+        cabin.set_explicit_personalities(true);
+        assert!(cabin.cfg.explicit_personalities);
+        crate::config::save(&cabin.cfg).unwrap();
+        assert!(
+            crate::config::load().explicit_personalities,
+            "round-trips in app.json"
+        );
+        assert!(ids(&mut cabin).ends_with(&["viper".to_string(), "whore".to_string()]));
+        cabin.set_chat_personality("whore");
+        assert_eq!(cabin.threads[0].personality, "whore");
+        assert_eq!(cabin.chat_personality().id, "whore");
+        assert!(cabin
+            .chat_personality()
+            .prompt_block()
+            .starts_with("Personality: Whore. Whore mode:"));
+
+        // Off again: the pick stays stored but the chat speaks as Default.
+        cabin.set_explicit_personalities(false);
+        assert_eq!(cabin.threads[0].personality, "whore");
+        assert_eq!(cabin.personality_id(), "default");
+        assert_eq!(cabin.chat_personality().id, "default");
+        assert_eq!(cabin.open_chat_personality(), "default");
     }
 
     #[test]

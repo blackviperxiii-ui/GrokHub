@@ -676,6 +676,8 @@ export interface PersonalityPage {
   current: string;
   /** Custom files that could not be used. */
   problems: string[];
+  /** Adults-only personalities: off leaves the explicit presets out. */
+  explicit: boolean;
 }
 
 export interface PersonalityEdit {
@@ -693,6 +695,10 @@ export function getPersonalities(): Promise<PersonalityPage> {
 
 export function setPersonality(id: string): Promise<PersonalityPage> {
   return invoke<PersonalityPage>("set_personality", { id });
+}
+
+export function setExplicitPersonalities(on: boolean): Promise<PersonalityPage> {
+  return invoke<PersonalityPage>("set_explicit_personalities", { on });
 }
 
 /** The copy's id, then the page. */
