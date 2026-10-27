@@ -1458,6 +1458,25 @@ pub fn settings_progress(ui: &mut egui::Ui, pct: u8, fill: Color32) {
 
 pub fn settings_nav(ui: &mut egui::Ui, label: &str, active: bool) -> bool {
     let (_rect, resp) = ui.allocate_exact_size(egui::vec2(188.0, 36.0), Sense::click());
+    if crate::theme::is_loadout_paint() {
+        use crate::ui_kit::recipe::{look, paint, state, Part, State};
+        let (resp, rect, _) = crate::theme::feel_button(ui, resp, Color32::TRANSPARENT);
+        let st = state(resp.hovered(), active, false);
+        let mut look = look(Part::Nav, st);
+        // A text list: the resting tile rim is for icon tiles only.
+        if st == State::Default {
+            look.stroke = Stroke::NONE;
+        }
+        paint(ui.painter(), rect, &look);
+        ui.painter().text(
+            rect.left_center() + egui::vec2(12.0, 0.0),
+            Align2::LEFT_CENTER,
+            label,
+            FontId::proportional(crate::theme::FONT_CHROME),
+            look.ink,
+        );
+        return resp.clicked();
+    }
     let on_t = crate::theme::animate_selection(ui, resp.id.with("nav"), active);
     let base_fill =
         crate::theme::blend_color(Color32::TRANSPARENT, crate::theme::nav_active(), on_t);

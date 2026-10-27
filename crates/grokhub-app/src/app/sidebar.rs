@@ -243,12 +243,8 @@ impl Cabin {
             && crate::theme::is_loadout_paint()
             && crate::theme::glide_selected_is(ui, "rail", rect)
         {
-            let w = crate::ui_kit::recipe::MARK_W;
-            let bar = egui::Rect::from_min_max(
-                egui::pos2(slot.left(), slot.center().y - 10.0),
-                egui::pos2(slot.left() + w, slot.center().y + 10.0),
-            );
-            ui.painter().rect_filled(bar, 1.5, crate::theme::amber());
+            use crate::ui_kit::recipe::{look, paint_mark, Part, State};
+            paint_mark(ui.painter(), slot, look(Part::Nav, State::Selected).mark);
         }
         // The hover scale grows the highlight only. Icon and label stay on the resting
         // slot, or a 1.035 scale on a full-width row slides them ~4px left.

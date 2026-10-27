@@ -111,23 +111,23 @@ pub fn paint(painter: &egui::Painter, rect: egui::Rect, look: &Look) {
     if look.stroke.width > 0.0 {
         painter.rect_stroke(rect, look.radius, look.stroke, egui::StrokeKind::Inside);
     }
-    match look.mark {
-        Mark::None => {}
-        Mark::Underline => {
-            let bar = egui::Rect::from_min_max(
-                egui::pos2(rect.left() + 2.0, rect.bottom() - MARK_W),
-                egui::pos2(rect.right() - 2.0, rect.bottom()),
-            );
-            painter.rect_filled(bar, 1.5, crate::theme::amber());
-        }
-        Mark::LeftBar => {
-            let bar = egui::Rect::from_min_max(
-                egui::pos2(rect.left() - MARK_W - 3.0, rect.center().y - 10.0),
-                egui::pos2(rect.left() - 3.0, rect.center().y + 10.0),
-            );
-            painter.rect_filled(bar, 1.5, crate::theme::amber());
-        }
-    }
+    paint_mark(painter, rect, look.mark);
+}
+
+/// The amber marker alone, for rows that paint their own fill.
+pub fn paint_mark(painter: &egui::Painter, rect: egui::Rect, mark: Mark) {
+    let bar = match mark {
+        Mark::None => return,
+        Mark::Underline => egui::Rect::from_min_max(
+            egui::pos2(rect.left() + 2.0, rect.bottom() - MARK_W),
+            egui::pos2(rect.right() - 2.0, rect.bottom()),
+        ),
+        Mark::LeftBar => egui::Rect::from_min_max(
+            egui::pos2(rect.left() - MARK_W - 3.0, rect.center().y - 10.0),
+            egui::pos2(rect.left() - 3.0, rect.center().y + 10.0),
+        ),
+    };
+    painter.rect_filled(bar, 1.5, crate::theme::amber());
 }
 
 /// A labelled button in the slide 07 recipe. Same size, id and hover feel
