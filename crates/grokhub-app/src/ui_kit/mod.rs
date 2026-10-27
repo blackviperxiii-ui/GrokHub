@@ -3,6 +3,7 @@
 
 mod card;
 mod chip;
+pub mod recipe;
 mod row;
 
 pub use card::{card_frame, CardVariant};
