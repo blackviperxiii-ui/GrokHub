@@ -7,6 +7,7 @@ import type { PersonalityEdit, PersonalityPage, Preset } from "./api";
 const api = vi.hoisted(() => ({
   getPersonalities: vi.fn<() => Promise<PersonalityPage>>(),
   setPersonality: vi.fn<(id: string) => Promise<PersonalityPage>>(),
+  setExplicitPersonalities: vi.fn<(on: boolean) => Promise<PersonalityPage>>(),
   duplicatePersonality:
     vi.fn<(id: string) => Promise<[string, PersonalityPage]>>(),
   savePersonality: vi.fn<(edit: PersonalityEdit) => Promise<PersonalityPage>>(),
@@ -15,7 +16,7 @@ const api = vi.hoisted(() => ({
 
 vi.mock("./api", () => api);
 
-import { PERSONALITY_NOTE, Personality } from "./Personality";
+import { ADULTS_ONLY, PERSONALITY_NOTE, Personality } from "./Personality";
 
 function preset(over: Partial<Preset> = {}): Preset {
   return {
@@ -51,9 +52,18 @@ function page(
   current: string,
   presets: Preset[],
   problems: string[] = [],
+  explicit = false,
 ): PersonalityPage {
-  return { current, presets, problems };
+  return { current, presets, problems, explicit };
 }
+
+const VIPER = preset({
+  id: "viper",
+  name: "Viper",
+  description: "Vulgar.",
+  toneRules: "Swear.",
+  explicit: true,
+});
 
 function card(name: string) {
   const list = within(screen.getByRole("list", { name: "Personalities" }));
@@ -63,6 +73,25 @@ function card(name: string) {
 describe("Personality", () => {
   beforeEach(() => {
     for (const fn of Object.values(api)) fn.mockReset();
+  });
+
+  it("turns adults-only personalities on and shows the explicit presets", async () => {
+    api.getPersonalities.mockResolvedValue(page("default", [preset(), PIRATE]));
+    api.setExplicitPersonalities.mockResolvedValue(
+      page("default", [preset(), PIRATE, VIPER], [], true),
+    );
+    render(<Personality />);
+    const toggle = await screen.findByRole("switch", { name: ADULTS_ONLY });
+    expect(toggle).toHaveAttribute("aria-checked", "false");
+    expect(screen.queryByRole("listitem", { name: "Viper" })).toBeNull();
+
+    await userEvent.click(toggle);
+    expect(api.setExplicitPersonalities).toHaveBeenCalledWith(true);
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "Adults-only personalities on.",
+    );
+    expect(toggle).toHaveAttribute("aria-checked", "true");
+    expect(card("Viper").getByText("Explicit")).toBeVisible();
   });
 
   it("marks the default in use and makes another the default", async () => {

@@ -55,6 +55,9 @@ pub struct ShellSettings {
     pub desktop_control: bool,
     /// Settings → Personality: the preset id. Empty is the default voice.
     pub personality: String,
+    /// Settings → Personality → Adults-only personalities. Off hides the
+    /// explicit presets, and a stored pick of one speaks in the default voice.
+    pub explicit_personalities: bool,
     pub theme: Theme,
 }
 
@@ -67,6 +70,7 @@ impl Default for ShellSettings {
             approvals: Approvals::Ask,
             desktop_control: false,
             personality: String::new(),
+            explicit_personalities: false,
             theme: Theme::System,
         }
     }
@@ -128,6 +132,7 @@ mod tests {
                 approvals: Approvals::Ask,
                 desktop_control: false,
                 personality: String::new(),
+                explicit_personalities: false,
                 theme: Theme::System,
             }
         );
@@ -143,6 +148,7 @@ mod tests {
             approvals: Approvals::Always,
             desktop_control: true,
             personality: "pirate".into(),
+            explicit_personalities: true,
             theme: Theme::Dark,
         };
         save(&dir, &wanted).expect("save");
@@ -153,6 +159,7 @@ mod tests {
         assert!(raw.contains("\"approvals\": \"always\""), "{raw}");
         assert!(raw.contains("\"desktopControl\": true"), "{raw}");
         assert!(raw.contains("\"personality\": \"pirate\""), "{raw}");
+        assert!(raw.contains("\"explicitPersonalities\": true"), "{raw}");
         assert!(raw.contains("\"theme\": \"dark\""), "{raw}");
         assert!(!dir.join("shell.json.tmp").exists());
         let _ = std::fs::remove_dir_all(&dir);
@@ -174,6 +181,7 @@ mod tests {
                 approvals: Approvals::Ask,
                 desktop_control: false,
                 personality: String::new(),
+                explicit_personalities: false,
                 theme: Theme::System,
             }
         );
@@ -190,6 +198,7 @@ mod tests {
             approvals: Approvals::Ask,
             desktop_control: false,
             personality: String::new(),
+            explicit_personalities: false,
             theme: Theme::System,
         };
         assert_eq!(save(&dir, &blank), Err("Pick a model.".to_string()));

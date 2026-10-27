@@ -194,7 +194,11 @@ fn route(
         mode: settings.approvals.mode(),
         desktop: settings.desktop_control && capabilities::current().desktop_control,
         session,
-        voice: personality::voice(config_dir, &settings.personality),
+        voice: personality::voice(
+            config_dir,
+            &settings.personality,
+            settings.explicit_personalities,
+        ),
     })
 }
 
@@ -603,25 +607,49 @@ async fn forget_grant(
 
 #[tauri::command]
 async fn get_personalities(state: State<'_, ShellState>) -> Result<personality::Page, String> {
-    let (dir, stored) = (state.config_dir.clone(), current(&state).personality);
-    off_main(move || personality::load(&dir, &stored)).await
+    let (dir, now) = (state.config_dir.clone(), current(&state));
+    off_main(move || personality::load(&dir, &now.personality, now.explicit_personalities)).await
 }
 
 /// The default voice for every chat; applies to the next message.
 #[tauri::command]
 fn set_personality(state: State<'_, ShellState>, id: String) -> Result<personality::Page, String> {
-    let picked = personality::pick(&state.config_dir, &id)?;
+    let now = current(&state);
+    let picked = personality::allowed(
+        personality::pick(&state.config_dir, &id)?,
+        now.explicit_personalities,
+    )?;
     let next = ShellSettings {
         personality: personality::stored_id(&picked.id),
-        ..current(&state)
+        ..now
     };
     settings::save(&state.config_dir, &next)?;
     *state.settings.lock().unwrap_or_else(|e| e.into_inner()) = next.clone();
-    Ok(personality::load(&state.config_dir, &next.personality))
+    Ok(personalities(&state))
+}
+
+/// Settings → Personality → Adults-only personalities.
+#[tauri::command]
+fn set_explicit_personalities(
+    state: State<'_, ShellState>,
+    on: bool,
+) -> Result<personality::Page, String> {
+    let next = ShellSettings {
+        explicit_personalities: on,
+        ..current(&state)
+    };
+    settings::save(&state.config_dir, &next)?;
+    *state.settings.lock().unwrap_or_else(|e| e.into_inner()) = next;
+    Ok(personalities(&state))
 }
 
 fn personalities(state: &ShellState) -> personality::Page {
-    personality::load(&state.config_dir, &current(state).personality)
+    let now = current(state);
+    personality::load(
+        &state.config_dir,
+        &now.personality,
+        now.explicit_personalities,
+    )
 }
 
 /// Returns the copy's id with the page, so the editor can open it.
@@ -656,7 +684,7 @@ fn delete_personality(
         settings::save(&state.config_dir, &now)?;
         *state.settings.lock().unwrap_or_else(|e| e.into_inner()) = now.clone();
     }
-    Ok(personality::load(&state.config_dir, &now.personality))
+    Ok(personalities(&state))
 }
 
 #[tauri::command]
@@ -1275,6 +1303,7 @@ pub fn run() {
             forget_grant,
             get_personalities,
             set_personality,
+            set_explicit_personalities,
             duplicate_personality,
             save_personality,
             delete_personality,

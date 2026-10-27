@@ -32,6 +32,8 @@ pub struct Page {
     pub current: String,
     /// Custom files that could not be used, each naming the file and why.
     pub problems: Vec<String>,
+    /// Adults-only personalities: off leaves the explicit presets out of `presets`.
+    pub explicit: bool,
 }
 
 /// The editor's fields for one custom preset.
@@ -80,19 +82,34 @@ fn preset(p: Personality) -> Preset {
     }
 }
 
-pub fn load(config_dir: &Path, stored: &str) -> Page {
+pub fn load(config_dir: &Path, stored: &str, explicit_on: bool) -> Page {
     let (all, problems) = personality::load_all(&dir(config_dir));
+    let shown = personality::visible(&all, explicit_on);
     let current = shown_id(stored);
-    // A default whose file was deleted in the cabin falls back to the default voice.
-    let current = if all.iter().any(|p| p.id == current) {
+    // A default whose file was deleted in the cabin, or an explicit one while
+    // adults-only personalities are off, falls back to the default voice.
+    let current = if shown.iter().any(|p| p.id == current) {
         current.to_string()
     } else {
         personality::DEFAULT_ID.to_string()
     };
     Page {
-        presets: all.into_iter().map(preset).collect(),
+        presets: shown.into_iter().map(preset).collect(),
         current,
         problems,
+        explicit: explicit_on,
+    }
+}
+
+/// Refuses an explicit preset while adults-only personalities are off.
+pub fn allowed(p: Personality, explicit_on: bool) -> Result<Personality, String> {
+    if p.explicit && !explicit_on {
+        Err(format!(
+            "Turn on Adults-only personalities to use {}.",
+            p.name
+        ))
+    } else {
+        Ok(p)
     }
 }
 
@@ -107,8 +124,9 @@ pub fn pick(config_dir: &Path, id: &str) -> Result<Personality, String> {
 /// The block a chat's system prompt carries for the stored id, with the
 /// closer that puts the safety rules back on top. Empty only when that
 /// preset's tone rules are empty.
-pub fn voice(config_dir: &Path, stored: &str) -> String {
-    let block = personality::lookup(&dir(config_dir), shown_id(stored)).prompt_block();
+pub fn voice(config_dir: &Path, stored: &str, explicit_on: bool) -> String {
+    let p = personality::lookup(&dir(config_dir), shown_id(stored));
+    let block = personality::gated(p, explicit_on).prompt_block();
     if block.is_empty() {
         block
     } else {
@@ -166,26 +184,59 @@ mod tests {
     #[test]
     fn the_page_lists_the_builtins_with_the_default_first_and_current() {
         let cfg = scratch("page");
-        let page = load(&cfg, "");
+        let page = load(&cfg, "", false);
         assert_eq!(page.current, "default");
         assert_eq!(page.presets[0].id, "default");
         assert_eq!(page.presets[0].name, "Default");
         assert!(page.presets.iter().any(|p| p.id == "pirate" && !p.custom));
         assert_eq!(page.problems, Vec::<String>::new());
-        assert_eq!(load(&cfg, "pirate").current, "pirate");
-        assert_eq!(load(&cfg, "gone-voice").current, "default");
+        assert_eq!(load(&cfg, "pirate", false).current, "pirate");
+        assert_eq!(load(&cfg, "gone-voice", false).current, "default");
+        let _ = std::fs::remove_dir_all(&cfg);
+    }
+
+    #[test]
+    fn adults_only_off_leaves_explicit_presets_out_and_mutes_a_stored_pick() {
+        let cfg = scratch("adults");
+        let explicit = |page: &Page| {
+            page.presets
+                .iter()
+                .filter(|p| p.explicit)
+                .map(|p| p.id.clone())
+                .collect::<Vec<_>>()
+        };
+        let off = load(&cfg, "whore", false);
+        assert!(!off.explicit);
+        assert_eq!(explicit(&off), Vec::<String>::new());
+        assert_eq!(off.current, "default");
+        let on = load(&cfg, "whore", true);
+        assert!(on.explicit);
+        assert_eq!(explicit(&on), ["viper", "whore"]);
+        assert_eq!(on.current, "whore");
+        assert_eq!(voice(&cfg, "whore", false), voice(&cfg, "", false));
+        assert!(voice(&cfg, "whore", true).starts_with("Personality: Whore. Whore mode:"));
+        let whore = pick(&cfg, "whore").unwrap();
+        assert_eq!(
+            allowed(whore.clone(), false).unwrap_err(),
+            "Turn on Adults-only personalities to use Whore."
+        );
+        assert_eq!(allowed(whore, true).unwrap().id, "whore");
+        assert_eq!(
+            allowed(pick(&cfg, "pirate").unwrap(), false).unwrap().id,
+            "pirate"
+        );
         let _ = std::fs::remove_dir_all(&cfg);
     }
 
     #[test]
     fn the_default_voice_adds_its_values_and_a_preset_adds_its_block_and_the_closer() {
         let cfg = scratch("voice");
-        let default_voice = voice(&cfg, "");
+        let default_voice = voice(&cfg, "", false);
         assert!(default_voice.starts_with("Personality: Default. "));
         assert!(default_voice.contains("not sycophantic"));
         assert!(default_voice.contains(grokhub_core::talk::VOLATILE_SAFETY_CLOSER));
-        assert_eq!(voice(&cfg, "default"), default_voice);
-        let pirate = voice(&cfg, "pirate");
+        assert_eq!(voice(&cfg, "default", false), default_voice);
+        let pirate = voice(&cfg, "pirate", false);
         assert_eq!(
             pirate,
             format!(
@@ -204,7 +255,7 @@ mod tests {
         let id = duplicate(&cfg, "pirate").expect("duplicate");
         assert_eq!(id, "pirate-copy");
         assert!(dir(&cfg).join("pirate-copy.toml").exists());
-        let page = load(&cfg, "");
+        let page = load(&cfg, "", false);
         let copy = page.presets.iter().find(|p| p.id == id).expect("listed");
         assert!(copy.custom);
         assert_eq!(
@@ -239,11 +290,11 @@ mod tests {
                 Verbosity::Terse
             )
         );
-        assert!(voice(&cfg, &id).starts_with("Personality: Deckhand. Talk like a deckhand."));
+        assert!(voice(&cfg, &id, false).starts_with("Personality: Deckhand. Talk like a deckhand."));
 
         delete(&cfg, &id).expect("delete");
         assert!(!dir(&cfg).join("pirate-copy.toml").exists());
-        assert_eq!(load(&cfg, &id).current, "default");
+        assert_eq!(load(&cfg, &id, false).current, "default");
         let _ = std::fs::remove_dir_all(&cfg);
     }
 
