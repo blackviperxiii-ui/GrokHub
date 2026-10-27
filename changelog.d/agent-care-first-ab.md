@@ -1,0 +1,1 @@
+- Care-first routing stays off. The brain policy `care_first` switch can hold `chat:default` effort, let the Brief pick the goal, and soften the 60, 150 and 120 word targets. The offline dry-run had no live quality judge, so the shipped file keeps the switch false.
