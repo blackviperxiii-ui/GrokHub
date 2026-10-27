@@ -198,7 +198,7 @@ pub fn observe(key: &str, req: &ResponsesRequest) -> Option<PrefixBreak> {
     if let Some(b) = &found {
         if !b.reason.expected() {
             eprintln!(
-                "grokhub prefix_break run={key} index={} part={} reason={}",
+                "grokhub prefix_break index={} part={} reason={}",
                 b.index,
                 b.part.as_str(),
                 b.reason.as_str()
