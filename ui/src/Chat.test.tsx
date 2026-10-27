@@ -177,7 +177,7 @@ describe("Chat", () => {
       <Chat
         onOpenSettings={() => {}}
         onOpenAutomations={onOpenAutomations}
-        notice={{ name: "summarize my inbox", ok: true, text: "3 new mails, none urgent.", n: 1 }}
+        notice={{ id: "auto-1", name: "summarize my inbox", ok: true, text: "3 new mails, none urgent.", n: 1 }}
       />,
     );
     const done = screen.getByRole("status", { name: "summarize my inbox finished" });
@@ -192,7 +192,7 @@ describe("Chat", () => {
       <Chat
         onOpenSettings={() => {}}
         onOpenAutomations={onOpenAutomations}
-        notice={{ name: "board", ok: false, text: long, n: 2 }}
+        notice={{ id: "auto-2", name: "board", ok: false, text: long, n: 2 }}
       />,
     );
     const failed = screen.getByRole("status", { name: "board finished" });

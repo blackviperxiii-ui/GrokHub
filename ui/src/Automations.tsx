@@ -18,17 +18,20 @@ function resultLine(result: RunResult): string {
 export const AUTOMATIONS_EMPTY =
   "No automations yet. Describe one above in plain words and it runs on its own schedule.";
 
-/** A finished run, for the notice in chat. */
-export type RunNotice = { name: string; ok: boolean; text: string };
+/** A finished run, for the notice in chat and the Activity Dock. */
+export type RunNotice = { id: string; name: string; ok: boolean; text: string };
 
 /** `active`: the tab is showing. The page stays mounted so a Run now in
  * flight keeps its button and its reply; it reloads the list on each visit.
- * `onFinished` hears about each run that ends, so chat can say so. */
+ * `onStarted` and `onFinished` hear about each run, so chat and the
+ * Activity Dock can say so. */
 export function Automations({
   active = true,
+  onStarted,
   onFinished,
 }: {
   active?: boolean;
+  onStarted?: (id: string, name: string) => void;
   onFinished?: (notice: RunNotice) => void;
 }) {
   const [rows, setRows] = useState<AutomationRow[] | null>(null);
@@ -66,14 +69,15 @@ export function Automations({
   async function run(id: string) {
     const name = rows?.find((row) => row.id === id)?.name ?? "Automation";
     setRunning(id);
+    onStarted?.(id, name);
     try {
       const result = await runAutomation(id);
       setResults((now) => ({ ...now, [id]: resultLine(result) }));
-      onFinished?.({ name, ok: !result.error, text: resultLine(result) });
+      onFinished?.({ id, name, ok: !result.error, text: resultLine(result) });
       setRows(await listAutomations());
     } catch (err) {
       setResults((now) => ({ ...now, [id]: String(err) }));
-      onFinished?.({ name, ok: false, text: String(err) });
+      onFinished?.({ id, name, ok: false, text: String(err) });
     } finally {
       setRunning(null);
     }
