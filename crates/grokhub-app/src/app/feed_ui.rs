@@ -1007,18 +1007,29 @@ impl Cabin {
 
 // --- Pulse / Feed paint (ui kit) ---
 
-/// Ideas row chrome on Pulse → Ideas.
+/// Ideas row chrome on Pulse → Ideas, in the Loadout look: a raised card
+/// with a dim red rim, lifted with a signal-red rim and an amber tab while
+/// hovered or focused (deck slide 15).
 pub(super) fn kit_pulse_ideas_row(
     ui: &mut eframe::egui::Ui,
     active: bool,
     contents: impl FnOnce(&mut eframe::egui::Ui),
 ) -> eframe::egui::Response {
     let variant = if active {
-        CardVariant::Interactive
+        CardVariant::SignalHot
     } else {
-        CardVariant::Subtle
+        CardVariant::Signal
     };
-    card_frame(ui, variant, true, contents)
+    let resp = card_frame(ui, variant, true, contents);
+    if active {
+        let r = resp.rect;
+        let tab = egui::Rect::from_min_size(
+            egui::pos2(r.left() + 1.0, r.top() + 14.0),
+            egui::vec2(3.0, 24.0_f32.min(r.height() - 16.0).max(0.0)),
+        );
+        ui.painter().rect_filled(tab, 1.5, crate::theme::amber());
+    }
+    resp
 }
 
 /// One Feed post on Pulse (includes D3 daily-drop rows).
@@ -1026,7 +1037,7 @@ pub(super) fn kit_pulse_feed_post(
     ui: &mut eframe::egui::Ui,
     contents: impl FnOnce(&mut eframe::egui::Ui),
 ) -> eframe::egui::Response {
-    card_frame(ui, CardVariant::Outlined, true, contents)
+    card_frame(ui, CardVariant::Signal, true, contents)
 }
 
 pub(super) fn kit_daily_drop_badge(ui: &mut eframe::egui::Ui) {

@@ -16,14 +16,21 @@ fn pulse_idea(id: &str, title: &str, prompt: &str, created_at: u64) -> grokhub_c
     c
 }
 
+/// A window narrow enough for the compact page (one view behind the switch).
+const COMPACT_W: f32 = 640.0;
+
 fn pulse_texts(cabin: &mut super::Cabin, h: f32) -> Vec<String> {
+    pulse_texts_w(cabin, 1400.0, h)
+}
+
+fn pulse_texts_w(cabin: &mut super::Cabin, w: f32, h: f32) -> Vec<String> {
     let _paint = crate::theme::hold_paint_test();
     let ctx = egui::Context::default();
     crate::theme::install_fonts_on(&ctx);
     let raw = egui::RawInput {
         screen_rect: Some(egui::Rect::from_min_size(
             egui::Pos2::ZERO,
-            egui::vec2(1400.0, h),
+            egui::vec2(w, h),
         )),
         ..Default::default()
     };
@@ -197,15 +204,15 @@ fn pulse_ideas_group_by_category_in_a_fixed_order() {
             .unwrap_or_else(|| panic!("missing {needle:?} in {texts:?}"))
     };
     let order = [
-        at("Up next"),
+        at("UP NEXT"),
         at("I can pay your TXU bill before Friday"),
         at("I can draft your standup"),
         at("I can plan a dinner with family"),
-        at("Productivity"),
+        at("PRODUCTIVITY"),
         at("I can summarize the workboard automatically"),
-        at("Shopping"),
-        at("Health & Fitness"),
-        at("More ideas"),
+        at("SHOPPING"),
+        at("HEALTH & FITNESS"),
+        at("MORE IDEAS"),
         at("I can sort the vacation photos"),
     ];
     assert!(
@@ -213,7 +220,7 @@ fn pulse_ideas_group_by_category_in_a_fixed_order() {
         "{order:?} in {texts:?}"
     );
     assert!(
-        !texts.iter().any(|t| t == "Financial Management"),
+        !texts.iter().any(|t| t == "FINANCIAL MANAGEMENT"),
         "the bill sits in the top group: {texts:?}"
     );
     assert!(
@@ -590,12 +597,21 @@ fn pulse_feed_instructions_sheet_edits_the_prompt_for_future_posts() {
 
 /// Text shapes with their left edge, for "which comes first" checks.
 fn pulse_text_at(cabin: &mut super::Cabin, h: f32, events: Vec<egui::Event>) -> Vec<(String, f32)> {
+    pulse_text_at_w(cabin, 1400.0, h, events)
+}
+
+fn pulse_text_at_w(
+    cabin: &mut super::Cabin,
+    w: f32,
+    h: f32,
+    events: Vec<egui::Event>,
+) -> Vec<(String, f32)> {
     let _paint = crate::theme::hold_paint_test();
     let ctx = egui::Context::default();
     crate::theme::install_fonts_on(&ctx);
     let screen = Some(egui::Rect::from_min_size(
         egui::Pos2::ZERO,
-        egui::vec2(1400.0, h),
+        egui::vec2(w, h),
     ));
     let mut out = Vec::new();
     // First pass carries the keys; the second paints what they did.
@@ -646,13 +662,13 @@ fn pulse_opens_on_feed_and_the_tabs_read_feed_then_ideas() {
             .map(|(_, x)| *x)
             .unwrap_or_else(|| panic!("missing {needle:?} in {texts:?}"))
     };
-    let feed = pulse_text_at(cabin, 900.0, Vec::new());
+    let feed = pulse_text_at_w(cabin, COMPACT_W, 900.0, Vec::new());
     let (feed_x, ideas_x) = (x(&feed, "Feed"), x(&feed, "Ideas"));
     assert!(feed_x < ideas_x, "Feed sits left of Ideas: {feed:?}");
     assert!(feed.iter().any(|(t, _)| t == "Feed instructions"));
     // The switch stays put when the tab's action changes (one fixed slot).
     cabin.pulse_view.tab = super::pulse_ui::PulseTab::Ideas;
-    let ideas = pulse_text_at(cabin, 900.0, Vec::new());
+    let ideas = pulse_text_at_w(cabin, COMPACT_W, 900.0, Vec::new());
     assert_eq!(
         (x(&ideas, "Feed"), x(&ideas, "Ideas")),
         (feed_x, ideas_x),
@@ -771,7 +787,7 @@ fn pulse_suggest_signed_out_says_how_to_sign_in_and_loading_shows_placeholder_ro
     cabin.updates.clear();
     cabin.board.clear();
     cabin.pulse_view.tab = super::pulse_ui::PulseTab::Ideas;
-    let empty = pulse_texts(cabin, 900.0);
+    let empty = pulse_texts_w(cabin, COMPACT_W, 900.0);
     assert!(
         empty
             .iter()
@@ -791,7 +807,7 @@ fn pulse_suggest_signed_out_says_how_to_sign_in_and_loading_shows_placeholder_ro
     cabin.suggest_ideas_with(false);
     assert!(cabin.pulse_view.signin_note);
     assert_eq!(cabin.status, "Connect Grok in Settings to get ideas");
-    let signed_out = pulse_texts(cabin, 900.0);
+    let signed_out = pulse_texts_w(cabin, COMPACT_W, 900.0);
     assert!(
         cabin.pulse_view.signin_note,
         "note stays until Account/native signs in"
@@ -804,12 +820,12 @@ fn pulse_suggest_signed_out_says_how_to_sign_in_and_loading_shows_placeholder_ro
     }
     // PI-05: once signed in, the amber line clears without another press.
     cabin.secrets.api_key = "sk-abcdefghijklmnopqrstuv".into();
-    let _ = pulse_texts(cabin, 900.0);
+    let _ = pulse_texts_w(cabin, COMPACT_W, 900.0);
     assert!(!cabin.pulse_view.signin_note);
     // While a suggestion call runs: placeholder rows, and no empty line beside them.
     let (_tx, rx) = mpsc::channel::<String>();
     cabin.ideas_rx = Some((rx, Default::default()));
-    let loading = pulse_texts(cabin, 900.0);
+    let loading = pulse_texts_w(cabin, COMPACT_W, 900.0);
     assert!(
         loading
             .iter()
@@ -827,7 +843,7 @@ fn pulse_suggest_signed_out_says_how_to_sign_in_and_loading_shows_placeholder_ro
 
     // Feed empty: lead + clickable "Feed instructions" + silence line.
     cabin.pulse_view.tab = super::pulse_ui::PulseTab::Feed;
-    let feed = pulse_texts(cabin, 900.0);
+    let feed = pulse_texts_w(cabin, COMPACT_W, 900.0);
     assert!(
         feed.iter()
             .any(|t| t == "No posts yet. Tell me what to watch in "),
@@ -879,5 +895,149 @@ fn pulse_opened_idea_heading_matches_row_type() {
     assert!(
         loading.contains("theme::elevated()") && !loading.to_ascii_lowercase().contains("icon"),
         "loading image is a plain #16181c skeleton with no icon: {loading}"
+    );
+}
+
+#[test]
+fn pulse_layout_reflows_like_the_deck_breakpoints() {
+    use super::pulse_ui::{post_thumb_count, pulse_layout, PulseFit};
+    let near = |a: f32, b: f32| (a - b).abs() < 0.05;
+    // Ultra-wide: Ideas 3fr, Feed 2fr, both tile 2-up.
+    let wide = pulse_layout(2440.0);
+    assert_eq!(wide.fit, PulseFit::Split);
+    assert!(near(wide.gap, 30.0) && near(wide.ideas_w, 1446.0) && near(wide.feed_w, 964.0));
+    assert_eq!((wide.ideas_cols, wide.feed_cols), (2, 2));
+    // The 60/40 split starts at 1500.
+    let edge = pulse_layout(1500.0);
+    assert!(near(edge.gap, 19.5) && near(edge.ideas_w, 888.3) && near(edge.feed_w, 592.2));
+    assert_eq!((edge.ideas_cols, edge.feed_cols), (1, 1));
+    // Laptop: 1.35fr to 1fr, one card across.
+    let laptop = pulse_layout(1300.0);
+    assert_eq!(laptop.fit, PulseFit::Split);
+    assert!(near(laptop.ideas_w, 737.1) && near(laptop.feed_w, 546.0));
+    assert_eq!((laptop.ideas_cols, laptop.feed_cols), (1, 1));
+    // The split starts at 1100 with the 16 px minimum gap.
+    let tight = pulse_layout(1100.0);
+    assert_eq!(tight.fit, PulseFit::Split);
+    assert!(near(tight.gap, 16.0) && near(tight.feed_w, 461.3) && near(tight.ideas_w, 622.7));
+    assert_eq!(pulse_layout(1099.0).fit, PulseFit::Stacked);
+    // Small window: one column, the feed 2-up underneath.
+    let small = pulse_layout(900.0);
+    assert_eq!(small.fit, PulseFit::Stacked);
+    assert_eq!((small.ideas_w, small.feed_cols), (900.0, 2));
+    assert_eq!(pulse_layout(720.0).fit, PulseFit::Stacked);
+    // Below 720: the switch, one centered column up to 680.
+    let phone = pulse_layout(719.0);
+    assert_eq!(phone.fit, PulseFit::Compact);
+    assert_eq!(phone.ideas_w, 680.0);
+    assert_eq!(pulse_layout(552.0).ideas_w, 552.0);
+    // Posts under 560 show two source images, not three.
+    assert_eq!(post_thumb_count(559.0), 2);
+    assert_eq!(post_thumb_count(560.0), 3);
+}
+
+/// Text shapes with their top-left corner.
+fn pulse_text_pos(cabin: &mut super::Cabin, w: f32) -> Vec<(String, egui::Pos2)> {
+    let _paint = crate::theme::hold_paint_test();
+    let ctx = egui::Context::default();
+    crate::theme::install_fonts_on(&ctx);
+    let raw = egui::RawInput {
+        screen_rect: Some(egui::Rect::from_min_size(
+            egui::Pos2::ZERO,
+            egui::vec2(w, 1200.0),
+        )),
+        ..Default::default()
+    };
+    let mut out = Vec::new();
+    for _ in 0..2 {
+        out.clear();
+        let shapes = crate::theme::test_pass(&ctx, raw.clone(), |ui| cabin.ui_pulse(ui)).shapes;
+        for clipped in &shapes {
+            if let egui::Shape::Text(t) = &clipped.shape {
+                out.push((t.galley.job.text.clone(), t.pos));
+            }
+        }
+    }
+    out
+}
+
+#[test]
+fn pulse_shows_ideas_beside_or_above_the_feed_and_compact_rows_keep_run() {
+    let mut quiet = QuietCabin::boot("pulse-fluid");
+    let cabin = &mut quiet.cabin;
+    cabin.updates.clear();
+    cabin.board.clear();
+    cabin.skill_list.clear();
+    cabin.updates.push(pulse_idea(
+        "idea-trail",
+        "Trail map",
+        "print the trail map",
+        10,
+    ));
+    cabin.updates.push(pulse_idea(
+        "idea-beach",
+        "Beach photos",
+        "sort the beach photos",
+        11,
+    ));
+    let at = |texts: &[(String, egui::Pos2)], needle: &str| {
+        texts
+            .iter()
+            .find(|(t, _)| t == needle)
+            .map(|(_, p)| *p)
+            .unwrap_or_else(|| panic!("missing {needle:?} in {texts:?}"))
+    };
+    let count = |texts: &[(String, egui::Pos2)], needle: &str| {
+        texts.iter().filter(|(t, _)| t == needle).count()
+    };
+
+    // Laptop window: Ideas on the left, the feed column on the right, and
+    // each column keeps its own action. Rows rest without inline actions.
+    let split = pulse_text_pos(cabin, 1400.0);
+    assert_eq!(cabin.pulse_view.fit, super::pulse_ui::PulseFit::Split);
+    let (ideas, feed) = (at(&split, "UP NEXT"), at(&split, "FROM YOUR FEED"));
+    assert!(
+        ideas.x + 500.0 < feed.x,
+        "feed sits right of ideas: {split:?}"
+    );
+    assert_eq!(count(&split, "Suggest ideas"), 1, "{split:?}");
+    assert_eq!(
+        count(&split, "Feed instructions"),
+        2,
+        "pill and empty-feed link: {split:?}"
+    );
+    assert_eq!((count(&split, "Run"), count(&split, "Snooze")), (0, 0));
+    assert_eq!(count(&split, "···"), 2);
+
+    // Small window: one column, the feed below the ideas.
+    let stacked = pulse_text_pos(cabin, 900.0);
+    assert_eq!(cabin.pulse_view.fit, super::pulse_ui::PulseFit::Stacked);
+    let (ideas, feed) = (at(&stacked, "UP NEXT"), at(&stacked, "FROM YOUR FEED"));
+    assert!(ideas.y < feed.y && feed.x < ideas.x, "{stacked:?}");
+    assert!(at(&stacked, "I can sort the beach photos").y < feed.y);
+
+    // Compact: one view behind the switch. Run stays on every row; Snooze
+    // and Dismiss wait in ···.
+    cabin.pulse_view.tab = super::pulse_ui::PulseTab::Ideas;
+    let compact = pulse_text_pos(cabin, COMPACT_W);
+    assert_eq!(cabin.pulse_view.fit, super::pulse_ui::PulseFit::Compact);
+    assert_eq!(count(&compact, "FROM YOUR FEED"), 0, "{compact:?}");
+    assert_eq!(
+        (
+            count(&compact, "Run"),
+            count(&compact, "Snooze"),
+            count(&compact, "Dismiss"),
+            count(&compact, "···")
+        ),
+        (2, 0, 0, 2),
+        "{compact:?}"
+    );
+    cabin.pulse_view.tab = super::pulse_ui::PulseTab::Feed;
+    let compact_feed = pulse_text_pos(cabin, COMPACT_W);
+    assert_eq!(count(&compact_feed, "UP NEXT"), 0, "{compact_feed:?}");
+    assert_eq!(
+        count(&compact_feed, "Feed instructions"),
+        2,
+        "{compact_feed:?}"
     );
 }

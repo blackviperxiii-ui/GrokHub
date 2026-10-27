@@ -1,0 +1,1 @@
+- Pulse in the Loadout look: Ideas and Feed side by side on wide windows (about 60/40, narrower on laptops, cards tile 2-up when there's room), one stacked column on small windows, and the Feed | Ideas switch on narrow ones, where Run stays on every idea and Snooze and Dismiss sit in the ··· menu. Cards use the theme's raised fill and red rims; every Pulse action is unchanged.

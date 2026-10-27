@@ -5,12 +5,44 @@
 
 use super::*;
 use crate::ui_kit::{card_frame, CardVariant};
+use grokhub_core::pulse::Ranked;
 use grokhub_core::{
     dismiss_idea, idea_chat_open_line, mark_idea_modified, set_idea_draft, take_card_action,
     UpdateCard, UpdateKind, UpdateStatus, CARD_ACTION_TAG,
 };
 
 const IDEA_GAP: f32 = 8.0;
+
+/// One frame of the Ideas list: what was pressed and hovered, and how many
+/// rows have entered so far (for the staggered enter motion).
+struct IdeasPass {
+    pulse_act: Option<super::pulse_ui::PulseAct>,
+    act: Option<IdeaAct>,
+    hover: Option<String>,
+    title_hover: Option<String>,
+    row_i: usize,
+    tab_t: f32,
+    reduced: bool,
+}
+
+/// The group mark: an amber diamond on Up next, a hollow one on categories.
+fn paint_group_diamond(ui: &mut egui::Ui, filled: bool) {
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(10.0, 10.0), egui::Sense::hover());
+    let c = rect.center();
+    let r = 4.5;
+    let pts = vec![
+        c + egui::vec2(0.0, -r),
+        c + egui::vec2(r, 0.0),
+        c + egui::vec2(0.0, r),
+        c + egui::vec2(-r, 0.0),
+    ];
+    let shape = if filled {
+        egui::Shape::convex_polygon(pts, crate::theme::amber(), egui::Stroke::NONE)
+    } else {
+        egui::Shape::closed_line(pts, egui::Stroke::new(1.5_f32, crate::theme::muted()))
+    };
+    ui.painter().add(shape);
+}
 
 /// What the Ideas board remembers between frames. Drafts and chats live on the
 /// card itself; this holds the open card and what you are typing to the agent.
@@ -73,7 +105,9 @@ impl Cabin {
     /// Pulse → Ideas: rows under an unlabeled top group, then one header per
     /// category. A click on the bold line (or Open in ···) opens the card in
     /// place with its details, the action, and its chat.
-    pub(super) fn ui_ideas(&mut self, ui: &mut egui::Ui) {
+    /// The Ideas groups: "Up next", then one per category. Rows tile `cols`
+    /// across (filled left to right) when the column is wide.
+    pub(super) fn ui_ideas(&mut self, ui: &mut egui::Ui, cols: usize) {
         self.ensure_useful_ideas();
         let groups = self.pulse_groups(now_ms());
         if groups.is_empty() {
@@ -84,76 +118,88 @@ impl Cabin {
             .iter()
             .flat_map(|(_, rows)| rows.iter().map(|r| r.id.clone()))
             .collect();
-        let mut pulse_act = self.pulse_keys(ui.ctx(), &rows);
-        let mut act = None;
-        let mut hover = None;
-        let mut title_hover = None;
-        let tab_t = self.pulse_view.tab_t;
-        let reduced = crate::motion::reduced_motion(ui);
-        let mut row_i = 0usize;
+        let mut pass = IdeasPass {
+            pulse_act: self.pulse_keys(ui.ctx(), &rows),
+            act: None,
+            hover: None,
+            title_hover: None,
+            row_i: 0,
+            tab_t: self.pulse_view.tab_t,
+            reduced: crate::motion::reduced_motion(ui),
+        };
         for (cat, rows) in groups {
             ui.add_space(if cat.is_some() { 18.0 } else { 4.0 });
             // The top group is a ranking, not a category: it says so.
-            ui.label(
-                RichText::new(cat.map_or("Up next", |c| c.label()))
-                    .size(if cat.is_some() {
-                        crate::theme::FONT_SECTION
-                    } else {
-                        crate::theme::FONT_TIP
-                    })
-                    .strong()
-                    .color(if cat.is_some() {
-                        crate::theme::fg()
-                    } else {
-                        crate::theme::subtle()
-                    }),
-            );
-            ui.add_space(if cat.is_some() { 8.0 } else { 4.0 });
-            for row in rows {
-                let Some(card) = self.updates.iter().find(|c| c.id == row.id).cloned() else {
-                    continue;
-                };
-                let enter = crate::motion::ideas_row_enter(tab_t, row_i, reduced);
-                row_i = row_i.saturating_add(1);
-                if enter <= 0.001 {
-                    continue;
-                }
-                let avail = ui.available_rect_before_wrap();
-                let y_off = (1.0 - enter) * 6.0;
-                let rect_slot = avail.translate(egui::vec2(0.0, y_off));
-                ui.scope_builder(egui::UiBuilder::new().max_rect(rect_slot), |ui| {
-                    ui.set_min_width(avail.width());
-                    ui.multiply_opacity(enter.clamp(0.0, 1.0));
-                    if self.idea_board.open.as_deref() == Some(card.id.as_str())
-                        && card.kind == UpdateKind::Idea
-                    {
-                        self.paint_idea_open(ui, &card, &mut act);
-                    } else {
-                        let st = self.pulse_row_state(&card.id);
-                        let (a, rect, on_title) =
-                            super::pulse_ui::paint_pulse_row(ui, &card, row.kind, st);
-                        if a.is_some() {
-                            pulse_act = a;
-                        }
-                        if ui.rect_contains_pointer(rect) {
-                            hover = Some(card.id.clone());
-                            if on_title {
-                                title_hover = Some(card.id.clone());
-                            }
-                        }
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 8.0;
+                paint_group_diamond(ui, cat.is_none());
+                ui.label(
+                    RichText::new(cat.map_or("Up next", |c| c.label()).to_uppercase())
+                        .size(crate::theme::TYPE_CAPTION)
+                        .strong()
+                        .extra_letter_spacing(1.5)
+                        .color(crate::theme::muted()),
+                );
+            });
+            ui.add_space(8.0);
+            if cols > 1 {
+                ui.spacing_mut().item_spacing.x = IDEA_GAP;
+                ui.columns(cols, |columns| {
+                    for (i, row) in rows.iter().enumerate() {
+                        self.paint_idea_slot(&mut columns[i % cols], row, &mut pass);
                     }
                 });
-                ui.add_space(IDEA_GAP);
+            } else {
+                for row in &rows {
+                    self.paint_idea_slot(ui, row, &mut pass);
+                }
             }
         }
-        if self.pulse_row_state_changed(&hover, &title_hover) {
+        if self.pulse_row_state_changed(&pass.hover, &pass.title_hover) {
             ui.ctx().request_repaint();
         }
-        self.set_pulse_hover(hover, title_hover);
-        self.apply_idea_act(act);
-        if let Some(a) = pulse_act {
+        self.set_pulse_hover(pass.hover, pass.title_hover);
+        self.apply_idea_act(pass.act);
+        if let Some(a) = pass.pulse_act {
             self.apply_pulse_act(a);
         }
+    }
+
+    /// One Ideas row (or the opened idea) with its enter motion, then the gap.
+    fn paint_idea_slot(&mut self, ui: &mut egui::Ui, row: &Ranked, pass: &mut IdeasPass) {
+        let Some(card) = self.updates.iter().find(|c| c.id == row.id).cloned() else {
+            return;
+        };
+        let enter = crate::motion::ideas_row_enter(pass.tab_t, pass.row_i, pass.reduced);
+        pass.row_i = pass.row_i.saturating_add(1);
+        if enter <= 0.001 {
+            return;
+        }
+        let avail = ui.available_rect_before_wrap();
+        let y_off = (1.0 - enter) * 6.0;
+        let rect_slot = avail.translate(egui::vec2(0.0, y_off));
+        ui.scope_builder(egui::UiBuilder::new().max_rect(rect_slot), |ui| {
+            ui.set_min_width(avail.width());
+            ui.multiply_opacity(enter.clamp(0.0, 1.0));
+            if self.idea_board.open.as_deref() == Some(card.id.as_str())
+                && card.kind == UpdateKind::Idea
+            {
+                self.paint_idea_open(ui, &card, &mut pass.act);
+            } else {
+                let st = self.pulse_row_state(&card.id);
+                let (a, rect, on_title) = super::pulse_ui::paint_pulse_row(ui, &card, row.kind, st);
+                if a.is_some() {
+                    pass.pulse_act = a;
+                }
+                if ui.rect_contains_pointer(rect) {
+                    pass.hover = Some(card.id.clone());
+                    if on_title {
+                        pass.title_hover = Some(card.id.clone());
+                    }
+                }
+            }
+        });
+        ui.add_space(IDEA_GAP);
     }
 
     /// "Suggest ideas" in the header: ask the model now, or say how to sign in.
