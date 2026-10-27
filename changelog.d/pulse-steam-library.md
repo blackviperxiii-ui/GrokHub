@@ -1,1 +1,0 @@
-- Pulse: your local Steam library feeds the Feed with each game's Steam news, most recently played first, with store art. Settings → Pulse → Sources shows "Use my Steam library in Pulse" when Steam is found, lists the games feeding Pulse, and mutes any of them. The agent's `pulse_steam` tool turns it on or off and mutes games, and reports what it saved.
