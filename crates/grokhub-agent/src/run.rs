@@ -650,7 +650,24 @@ pub fn run_loop(
                                 on_event(LoopEvent::Findings(card.to_body()));
                             }
                         }
-                        crate::drive::Verdict::End => {}
+                        crate::drive::Verdict::End => {
+                            let change = brief.as_ref().is_some_and(|b| {
+                                matches!(
+                                    b.intent,
+                                    crate::brain::Intent::Task | crate::brain::Intent::Repair
+                                )
+                            });
+                            if let Some(text) = change
+                                .then(|| crate::drive::unbacked_done(&last_assistant, evidence))
+                                .flatten()
+                            {
+                                on_event(LoopEvent::Text(format!("\n\n{text}")));
+                                history.push(InputItem::Message {
+                                    role: "assistant".into(),
+                                    content: vec![ContentPart::InputText(text.into())],
+                                });
+                            }
+                        }
                     }
                 }
                 if close_continued {
@@ -3602,7 +3619,7 @@ mod tests {
         let (out, history, events) = run_drive(&script, &dir, &conv);
         assert_eq!(out.stop, StopReason::EndTurn);
         assert_eq!(script.seen.lock().unwrap().len(), 5);
-        let said = "Stopped with these still open: \"bluetooth errors\". No approach worked after 3 re-plans.";
+        let said = "Not done: \"bluetooth errors\" is still open. I stopped after 3 re-plans without progress, so none of it is marked done. If this needs something GrokHub can't do yet, I can note it as a feature request instead.";
         assert!(events
             .iter()
             .any(|ev| matches!(ev, LoopEvent::Text(t) if t == &format!("\n\n{said}"))));
@@ -3863,7 +3880,7 @@ mod tests {
         let (out, history, events) = run_drive(&script, &dir, &conv);
         assert_eq!(out.stop, StopReason::EndTurn);
         assert_eq!(script.seen.lock().unwrap().len(), 5);
-        let said = "Stopped with these still open: \"the error is gone\", \"it works again\", the findings card. No approach worked after 3 re-plans.";
+        let said = "Not done: \"the error is gone\", \"it works again\", the findings card are still open. I stopped after 3 re-plans without progress, so none of it is marked done. If this needs something GrokHub can't do yet, I can note it as a feature request instead.";
         assert!(
             matches!(history.last(), Some(InputItem::Message { role, content }) if role == "assistant" && content.first() == Some(&ContentPart::InputText(said.into())))
         );
@@ -3872,6 +3889,123 @@ mod tests {
                     One-tap fixes\n\n- Finish the rest: Finish what the last run left open: the error is gone; it works again.";
         assert_eq!(events.last(), Some(&LoopEvent::Findings(card.into())));
         crate::session_tools::invalidate_todos(&conv);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Replay of a real feature ask that faked "Done" and then looped: the run
+    /// must not end on a done claim, must end once, after at most 3 re-plans.
+    #[test]
+    fn replay_a_feature_ask_that_faked_done_ends_blocked_once() {
+        let dir = workspace("fake-done");
+        let conv = format!("fake-done-{}", std::process::id());
+        crate::checkpoint::set_turn_brief(
+            &conv,
+            brief(crate::brain::Intent::Task, crate::brain::Care::Careful, &[]),
+        );
+        let list = |extra: &str| {
+            format!(
+                r#"{{"todos":[{{"id":"scan","content":"Scan the Steam library","status":"completed"}},{{"id":"wire","content":"Use it for Pulse","status":"completed"}}{extra}]}}"#
+            )
+        };
+        let probe = |id: &str, content: &str| {
+            format!(r#",{{"id":"{id}","content":"{content}","status":"pending"}}"#)
+        };
+        let mut turns = vec![
+            turn(
+                "",
+                vec![call(
+                    "t0",
+                    "todo_write",
+                    r#"{"todos":[{"id":"scan","content":"Scan the Steam library","status":"pending"},{"id":"wire","content":"Use it for Pulse","status":"pending"}]}"#,
+                )],
+            ),
+            turn("", vec![call("t1", "todo_write", &list(""))]),
+            turn("Pulse feed updated. <b>Done.</b> ✨", Vec::new()),
+        ];
+        for (n, (id, content, said)) in [
+            ("p1", "Check skill_list", "Error gone."),
+            ("p2", "Check scheduler_list", "Blocked permanently."),
+            ("p3", "Check automation_list", "Error gone."),
+            ("p4", "Diagnose image folders", "Blocked permanently."),
+        ]
+        .iter()
+        .enumerate()
+        {
+            turns.push(turn(
+                "",
+                vec![
+                    call(&format!("l{n}"), "list_dir", "{}"),
+                    call(&format!("w{n}"), "todo_write", &list(&probe(id, content))),
+                ],
+            ));
+            turns.push(turn(said, Vec::new()));
+        }
+        turns.push(turn("unused", Vec::new()));
+        let script = scripted(turns);
+        let (out, history, events) = run_drive(&script, &dir, &conv);
+        assert_eq!(out.stop, StopReason::EndTurn);
+        assert_eq!(script.seen.lock().unwrap().len(), 11);
+        // The ask, then one push per stop before the last: the fake Done, then 3 re-plans.
+        assert_eq!(user_texts(&history).len(), 5);
+        assert_eq!(
+            user_texts(&history)[1],
+            "Marked completed without any check this run: \"Scan the Steam library\", \"Use it for Pulse\". Run a check that shows each one before you finish."
+        );
+        let said = "Not done: \"Diagnose image folders\" is still open. I stopped after 3 re-plans without progress, so none of it is marked done. If this needs something GrokHub can't do yet, I can note it as a feature request instead.";
+        assert!(
+            matches!(history.last(), Some(InputItem::Message { role, content }) if role == "assistant" && content.first() == Some(&ContentPart::InputText(said.into())))
+        );
+        let status_lines = events
+            .iter()
+            .filter(|ev| matches!(ev, LoopEvent::Text(t) if t.starts_with("\n\nNot done:")))
+            .count();
+        assert_eq!(status_lines, 1);
+        crate::session_tools::invalidate_todos(&conv);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_change_request_that_claims_done_with_no_tool_run_says_it_is_not_done() {
+        let dir = workspace("claim-done");
+        let conv = format!("claim-done-{}", std::process::id());
+        crate::checkpoint::set_turn_brief(
+            &conv,
+            brief(crate::brain::Intent::Task, crate::brain::Care::Careful, &[]),
+        );
+        let script = scripted(vec![
+            turn("Pulse feed updated. Done. ✨", Vec::new()),
+            turn("unused", Vec::new()),
+        ]);
+        let (out, history, events) = run_drive(&script, &dir, &conv);
+        assert_eq!(out.stop, StopReason::EndTurn);
+        assert_eq!(script.seen.lock().unwrap().len(), 1);
+        let line = "That isn't done yet: nothing ran this turn to make or check the change.";
+        assert_eq!(
+            events
+                .iter()
+                .filter(|ev| matches!(ev, LoopEvent::Text(t) if t == &format!("\n\n{line}")))
+                .count(),
+            1
+        );
+        assert!(
+            matches!(history.last(), Some(InputItem::Message { role, content }) if role == "assistant" && content.first() == Some(&ContentPart::InputText(line.into())))
+        );
+        crate::session_tools::invalidate_todos(&conv);
+        // A plain question with the same words gets no extra line.
+        let conv = format!("claim-done-q-{}", std::process::id());
+        crate::checkpoint::set_turn_brief(
+            &conv,
+            brief(
+                crate::brain::Intent::Question,
+                crate::brain::Care::Casual,
+                &[],
+            ),
+        );
+        let script = scripted(vec![turn("Done: it is 4 pm.", Vec::new())]);
+        let (_, _, events) = run_drive(&script, &dir, &conv);
+        assert!(!events
+            .iter()
+            .any(|ev| matches!(ev, LoopEvent::Text(t) if t.contains("isn't done yet"))));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
