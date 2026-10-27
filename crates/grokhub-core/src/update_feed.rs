@@ -5044,6 +5044,25 @@ https://xstack.grok.me/post ZEPHYRTAIL"
                 proactive_card(&standup, ProactiveRoute::Prepare, at),
                 "standup prep",
             ),
+            (
+                "nudge_watcher_card",
+                crate::nudge_watchers::nudge_watcher_card(
+                    &crate::nudge_watchers::detect_gpu_driver(
+                        &crate::nudge_watchers::WatcherSnapshot {
+                            gpu: Some(crate::nudge_watchers::GpuDriverSnap {
+                                gpu_name: "Test GPU".into(),
+                                installed: "1.0".into(),
+                                offered: "2.0".into(),
+                                download_url: "https://example.com/driver".into(),
+                            }),
+                            ..Default::default()
+                        },
+                    )
+                    .expect("gpu fixture"),
+                    at,
+                ),
+                "Test GPU",
+            ),
         ];
         let links = [CitedLink {
             url: "https://blog.rust-lang.org/1.99".into(),
