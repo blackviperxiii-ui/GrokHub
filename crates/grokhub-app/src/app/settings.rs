@@ -549,17 +549,15 @@ impl Cabin {
                                                                 ui,
                                                                 appearance_hint(),
                                                             );
-                                                            ui.horizontal(|ui| {
+                                                            ui.horizontal_wrapped(|ui| {
                                                                 let current = parse_theme(&self.cfg.theme);
                                                                 let os_dark = crate::theme::desktop_prefers_dark();
                                                                 for choice in appearance_choices() {
                                                                     let on = current == *choice;
-                                                                    let preview = if resolve_dark(*choice, os_dark)
-                                                                    {
-                                                                        crate::theme::BG
-                                                                    } else {
-                                                                        crate::theme::LIGHT_BG
-                                                                    };
+                                                                    let preview = crate::theme::preview_swatch(
+                                                                        *choice,
+                                                                        os_dark,
+                                                                    );
                                                                     if crate::cards::appearance_card(
                                                                         ui,
                                                                         theme_label(*choice),
@@ -571,6 +569,15 @@ impl Cabin {
                                                                     ui.add_space(10.0);
                                                                 }
                                                             });
+                                                            if crate::theme::is_loadout_paint() {
+                                                                ui.add_space(8.0);
+                                                                crate::ui_kit::section_header(
+                                                                    ui,
+                                                                    "Loadout tokens",
+                                                                    Some("Void, base, surface, raised, signal red, hover, selected, steel, amber, bright"),
+                                                                );
+                                                                crate::theme::paint_loadout_token_strip(ui);
+                                                            }
                                                         }
                                                         SettingsSec::Behavior => {
                                                             crate::ui_kit::section_header(

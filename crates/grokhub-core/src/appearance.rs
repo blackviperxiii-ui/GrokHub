@@ -1,22 +1,50 @@
-//! Cabin appearance: Dark, Light, or System (follow the desktop).
+//! Cabin appearance: Loadout dark themes, classic Dark/Light, or System.
 
+/// Settings → Appearance choices. New installs default to [`ThemeChoice::OpsDark`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ThemeChoice {
+    /// Loadout primary dark (`#0B0B0D` base). Default for new installs.
+    OpsDark,
+    /// Loadout OLED variant (`#000000` base).
+    OledBlack,
+    /// Loadout softer charcoal variant (`#17181B` base).
+    SoftCharcoal,
+    /// Classic Grok cabin dark (true black canvas). Kept for existing users.
     Dark,
     Light,
     System,
 }
 
+/// Which dark token set to paint when the cabin is not in light mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DarkPalette {
+    /// Classic Grok OLED black tokens.
+    Classic,
+    OpsDark,
+    OledBlack,
+    SoftCharcoal,
+}
+
 pub fn appearance_choices() -> &'static [ThemeChoice] {
-    &[ThemeChoice::Dark, ThemeChoice::Light, ThemeChoice::System]
+    &[
+        ThemeChoice::OpsDark,
+        ThemeChoice::OledBlack,
+        ThemeChoice::SoftCharcoal,
+        ThemeChoice::Dark,
+        ThemeChoice::Light,
+        ThemeChoice::System,
+    ]
 }
 
 pub fn appearance_hint() -> &'static str {
-    "Dark, Light, or System. System follows the desktop."
+    "Ops Dark is the Loadout default. OLED Black and Soft Charcoal are variants. Dark, Light, and System keep the classic cabin look. System follows the desktop."
 }
 
 pub fn theme_id(choice: ThemeChoice) -> &'static str {
     match choice {
+        ThemeChoice::OpsDark => "ops-dark",
+        ThemeChoice::OledBlack => "oled-black",
+        ThemeChoice::SoftCharcoal => "soft-charcoal",
         ThemeChoice::Dark => "dark",
         ThemeChoice::Light => "light",
         ThemeChoice::System => "system",
@@ -25,25 +53,59 @@ pub fn theme_id(choice: ThemeChoice) -> &'static str {
 
 pub fn theme_label(choice: ThemeChoice) -> &'static str {
     match choice {
+        ThemeChoice::OpsDark => "Ops Dark",
+        ThemeChoice::OledBlack => "OLED Black",
+        ThemeChoice::SoftCharcoal => "Soft Charcoal",
         ThemeChoice::Dark => "Dark",
         ThemeChoice::Light => "Light",
         ThemeChoice::System => "System",
     }
 }
 
+/// Parse a stored theme id. Empty or unknown values become Ops Dark (new-install default).
+/// Existing `"dark"` / `"light"` / `"system"` strings keep their classic meaning.
 pub fn parse_theme(raw: &str) -> ThemeChoice {
     match raw.trim().to_ascii_lowercase().as_str() {
+        "ops-dark" | "ops_dark" | "opsdark" => ThemeChoice::OpsDark,
+        "oled-black" | "oled_black" | "oledblack" | "oled" => ThemeChoice::OledBlack,
+        "soft-charcoal" | "soft_charcoal" | "softcharcoal" | "charcoal" => {
+            ThemeChoice::SoftCharcoal
+        }
         "light" => ThemeChoice::Light,
         "system" => ThemeChoice::System,
-        _ => ThemeChoice::Dark,
+        "dark" => ThemeChoice::Dark,
+        _ => ThemeChoice::OpsDark,
     }
 }
 
 pub fn resolve_dark(choice: ThemeChoice, os_dark: bool) -> bool {
     match choice {
-        ThemeChoice::Dark => true,
         ThemeChoice::Light => false,
         ThemeChoice::System => os_dark,
+        ThemeChoice::OpsDark
+        | ThemeChoice::OledBlack
+        | ThemeChoice::SoftCharcoal
+        | ThemeChoice::Dark => true,
+    }
+}
+
+/// Dark token set for a choice, or `None` when light paint should run.
+/// System + dark desktop keeps the classic Grok dark set so existing System
+/// users do not jump to Loadout chrome.
+pub fn resolve_palette(choice: ThemeChoice, os_dark: bool) -> Option<DarkPalette> {
+    match choice {
+        ThemeChoice::Light => None,
+        ThemeChoice::System => {
+            if os_dark {
+                Some(DarkPalette::Classic)
+            } else {
+                None
+            }
+        }
+        ThemeChoice::Dark => Some(DarkPalette::Classic),
+        ThemeChoice::OpsDark => Some(DarkPalette::OpsDark),
+        ThemeChoice::OledBlack => Some(DarkPalette::OledBlack),
+        ThemeChoice::SoftCharcoal => Some(DarkPalette::SoftCharcoal),
     }
 }
 
@@ -121,29 +183,47 @@ mod tests {
     use super::*;
 
     #[test]
-    fn cabin_offers_dark_light_and_system() {
+    fn cabin_offers_loadout_and_classic_themes() {
         let ids: Vec<&str> = appearance_choices().iter().copied().map(theme_id).collect();
-        assert_eq!(ids, vec!["dark", "light", "system"]);
+        assert_eq!(
+            ids,
+            vec![
+                "ops-dark",
+                "oled-black",
+                "soft-charcoal",
+                "dark",
+                "light",
+                "system"
+            ]
+        );
+        assert_eq!(theme_label(ThemeChoice::OpsDark), "Ops Dark");
+        assert_eq!(theme_label(ThemeChoice::OledBlack), "OLED Black");
+        assert_eq!(theme_label(ThemeChoice::SoftCharcoal), "Soft Charcoal");
         assert_eq!(theme_label(ThemeChoice::Dark), "Dark");
         assert_eq!(theme_label(ThemeChoice::Light), "Light");
         assert_eq!(theme_label(ThemeChoice::System), "System");
-        assert_eq!(
-            appearance_hint(),
-            "Dark, Light, or System. System follows the desktop."
-        );
+        assert!(appearance_hint().contains("Ops Dark"));
+        assert!(appearance_hint().contains("System follows the desktop"));
     }
 
     #[test]
-    fn light_config_is_light() {
+    fn loadout_and_classic_config_ids_round_trip() {
+        assert_eq!(parse_theme("ops-dark"), ThemeChoice::OpsDark);
+        assert_eq!(parse_theme("oled-black"), ThemeChoice::OledBlack);
+        assert_eq!(parse_theme("soft-charcoal"), ThemeChoice::SoftCharcoal);
         assert_eq!(parse_theme("system"), ThemeChoice::System);
         assert_eq!(parse_theme("dark"), ThemeChoice::Dark);
         assert_eq!(parse_theme("light"), ThemeChoice::Light);
         assert_eq!(parse_theme("LIGHT"), ThemeChoice::Light);
-        assert_eq!(parse_theme(""), ThemeChoice::Dark);
+        assert_eq!(parse_theme(""), ThemeChoice::OpsDark);
+        assert_eq!(parse_theme("sepia"), ThemeChoice::OpsDark);
     }
 
     #[test]
-    fn dark_and_light_ignore_the_desktop_system_follows_it() {
+    fn dark_themes_ignore_the_desktop_system_follows_it() {
+        assert!(resolve_dark(ThemeChoice::OpsDark, false));
+        assert!(resolve_dark(ThemeChoice::OledBlack, false));
+        assert!(resolve_dark(ThemeChoice::SoftCharcoal, true));
         assert!(resolve_dark(ThemeChoice::Dark, false));
         assert!(resolve_dark(ThemeChoice::Dark, true));
         assert!(!resolve_dark(ThemeChoice::Light, false));
@@ -155,6 +235,36 @@ mod tests {
             Some(ThemeChoice::Light)
         );
         assert!(pick_theme(ThemeChoice::Light, ThemeChoice::Light).is_none());
+        assert_eq!(
+            pick_theme(ThemeChoice::OpsDark, ThemeChoice::OledBlack),
+            Some(ThemeChoice::OledBlack)
+        );
+    }
+
+    #[test]
+    fn resolve_palette_keeps_system_on_classic_dark() {
+        assert_eq!(
+            resolve_palette(ThemeChoice::OpsDark, false),
+            Some(DarkPalette::OpsDark)
+        );
+        assert_eq!(
+            resolve_palette(ThemeChoice::OledBlack, true),
+            Some(DarkPalette::OledBlack)
+        );
+        assert_eq!(
+            resolve_palette(ThemeChoice::SoftCharcoal, false),
+            Some(DarkPalette::SoftCharcoal)
+        );
+        assert_eq!(
+            resolve_palette(ThemeChoice::Dark, false),
+            Some(DarkPalette::Classic)
+        );
+        assert_eq!(resolve_palette(ThemeChoice::Light, true), None);
+        assert_eq!(
+            resolve_palette(ThemeChoice::System, true),
+            Some(DarkPalette::Classic)
+        );
+        assert_eq!(resolve_palette(ThemeChoice::System, false), None);
     }
 
     #[test]

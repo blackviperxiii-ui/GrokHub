@@ -1,6 +1,6 @@
-//! Official Grok dark tokens (grok.com, 2026-09).
+//! Cabin theme tokens: classic Grok dark/light plus Loadout Ops Dark variants.
 //! Recreated in egui — no grok.com JS, no webview.
-//! Dark-first: OLED canvas, quiet chrome. Composer stays a Grok column; chat text is fluid.
+//! Tokens only here; later Loadout cards restyle layout and Pulse on top of them.
 
 use eframe::egui::{
     self, Color32, ColorImage, FontData, FontDefinitions, FontFamily, FontId, Stroke, TextStyle,
@@ -8,8 +8,8 @@ use eframe::egui::{
 };
 use grokhub_core::{
     clamp_rect_to_slot, feel_lift, feel_scale, felt_rect, hover_alpha, hover_mix, lift_rgb,
-    mix_channel, os_prefers_dark, HOVER_EXPANSION, HOVER_SECS, HOVER_WASH, PRESS_EXPANSION,
-    PRESS_SECS, SELECT_SECS,
+    mix_channel, os_prefers_dark, resolve_palette, DarkPalette, ThemeChoice, HOVER_EXPANSION,
+    HOVER_SECS, HOVER_WASH, PRESS_EXPANSION, PRESS_SECS, SELECT_SECS,
 };
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -17,6 +17,17 @@ use std::time::{Duration, Instant};
 
 pub fn title_font(size: f32) -> FontId {
     FontId::new(size, FontFamily::Name("inter-bold".into()))
+}
+
+/// Active paint set. Classic dark is the pre-Loadout Grok OLED look.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum PaintPalette {
+    ClassicDark = 0,
+    OpsDark = 1,
+    OledBlack = 2,
+    SoftCharcoal = 3,
+    Light = 4,
 }
 
 /// Official Grok canvas — true black, not elevated IDE gray.
@@ -82,7 +93,207 @@ pub const LIGHT_HOVER: Color32 = Color32::from_rgb(0xda, 0xda, 0xdd);
 pub const SELECTION: Color32 = Color32::from_rgb(0x2a, 0x3a, 0x4d);
 pub const LIGHT_SELECTION: Color32 = Color32::from_rgb(0xcf, 0xdf, 0xf2);
 
-static USE_LIGHT: AtomicBool = AtomicBool::new(false);
+// --- Loadout baseline v1 (slides 07–08 / pulse-live.html) -------------------
+
+/// Ops Dark void / OLED base `#0A0A0B`.
+pub const OPS_VOID: Color32 = Color32::from_rgb(0x0a, 0x0a, 0x0b);
+/// Ops Dark base / app background `#0B0B0D`.
+pub const OPS_BG: Color32 = Color32::from_rgb(0x0b, 0x0b, 0x0d);
+/// Ops Dark surface / panels `#121215`.
+pub const OPS_SURFACE: Color32 = Color32::from_rgb(0x12, 0x12, 0x15);
+/// Ops Dark raised / cards `#18191C`.
+pub const OPS_RAISED: Color32 = Color32::from_rgb(0x18, 0x19, 0x1c);
+/// Signal Red outlines `#D7263D`.
+pub const OPS_SIGNAL_RED: Color32 = Color32::from_rgb(0xd7, 0x26, 0x3d);
+/// Soft Charcoal signal red `#C8304A`.
+pub const CHARCOAL_SIGNAL_RED: Color32 = Color32::from_rgb(0xc8, 0x30, 0x4a);
+/// Ops Dark hover `#2A2B2F`.
+pub const OPS_HOVER: Color32 = Color32::from_rgb(0x2a, 0x2b, 0x2f);
+/// Ops Dark selected `#3A3B40`.
+pub const OPS_SELECTED: Color32 = Color32::from_rgb(0x3a, 0x3b, 0x40);
+/// Steel / gray text `#C9CBD1`.
+pub const OPS_STEEL: Color32 = Color32::from_rgb(0xc9, 0xcb, 0xd1);
+/// Amber CTA `#FFB000`.
+pub const OPS_AMBER: Color32 = Color32::from_rgb(0xff, 0xb0, 0x00);
+/// Bright / primary text `#F2F2F4`.
+pub const OPS_BRIGHT: Color32 = Color32::from_rgb(0xf2, 0xf2, 0xf4);
+/// Quiet muted labels `#8A8C94`.
+pub const OPS_MUTED: Color32 = Color32::from_rgb(0x8a, 0x8c, 0x94);
+/// Ops Dark hairline `#232428`.
+pub const OPS_LINE: Color32 = Color32::from_rgb(0x23, 0x24, 0x28);
+/// Dimmed red `#5E1A25`.
+pub const OPS_RED_DIM: Color32 = Color32::from_rgb(0x5e, 0x1a, 0x25);
+
+/// OLED Black base `#000000`.
+pub const OLED_BG: Color32 = Color32::from_rgb(0x00, 0x00, 0x00);
+pub const OLED_SURFACE: Color32 = Color32::from_rgb(0x05, 0x05, 0x06);
+pub const OLED_RAISED: Color32 = Color32::from_rgb(0x0a, 0x0a, 0x0b);
+pub const OLED_LINE: Color32 = Color32::from_rgb(0x15, 0x16, 0x19);
+pub const OLED_HOVER: Color32 = Color32::from_rgb(0x25, 0x26, 0x2a);
+pub const OLED_SELECTED: Color32 = Color32::from_rgb(0x34, 0x35, 0x3a);
+
+/// Soft Charcoal base `#17181B`.
+pub const CHARCOAL_BG: Color32 = Color32::from_rgb(0x17, 0x18, 0x1b);
+pub const CHARCOAL_SURFACE: Color32 = Color32::from_rgb(0x1d, 0x1e, 0x22);
+pub const CHARCOAL_RAISED: Color32 = Color32::from_rgb(0x23, 0x24, 0x28);
+pub const CHARCOAL_LINE: Color32 = Color32::from_rgb(0x2e, 0x2f, 0x34);
+pub const CHARCOAL_HOVER: Color32 = Color32::from_rgb(0x2f, 0x30, 0x35);
+pub const CHARCOAL_SELECTED: Color32 = Color32::from_rgb(0x3f, 0x40, 0x46);
+pub const CHARCOAL_RED_DIM: Color32 = Color32::from_rgb(0x5a, 0x25, 0x30);
+
+#[derive(Clone, Copy)]
+struct TokenSet {
+    bg: Color32,
+    void: Color32,
+    surface: Color32,
+    raised: Color32,
+    panel: Color32,
+    elevated: Color32,
+    hover: Color32,
+    selected: Color32,
+    fg: Color32,
+    muted: Color32,
+    subtle: Color32,
+    steel: Color32,
+    border: Color32,
+    border_strong: Color32,
+    nav_active: Color32,
+    bubble_user: Color32,
+    selection: Color32,
+    surface_hover: Color32,
+    signal_red: Color32,
+    red_dim: Color32,
+    amber: Color32,
+    always_ring: Color32,
+}
+
+const CLASSIC_DARK_TOKENS: TokenSet = TokenSet {
+    bg: BG,
+    void: BG,
+    surface: SURFACE,
+    raised: PANEL,
+    panel: PANEL,
+    elevated: ELEVATED,
+    hover: HOVER,
+    selected: NAV_ACTIVE,
+    fg: FG,
+    muted: MUTED,
+    subtle: SUBTLE,
+    steel: MUTED,
+    border: BORDER,
+    border_strong: BORDER_STRONG,
+    nav_active: NAV_ACTIVE,
+    bubble_user: BUBBLE_USER,
+    selection: SELECTION,
+    surface_hover: SURFACE_HOVER,
+    signal_red: OFFLINE,
+    red_dim: Color32::from_rgb(0x7f, 0x1d, 0x1d),
+    amber: SETUP,
+    always_ring: ALWAYS_AMBER_DARK,
+};
+
+const OPS_DARK_TOKENS: TokenSet = TokenSet {
+    bg: OPS_BG,
+    void: OPS_VOID,
+    surface: OPS_SURFACE,
+    raised: OPS_RAISED,
+    panel: OPS_RAISED,
+    elevated: OPS_RAISED,
+    hover: OPS_HOVER,
+    selected: OPS_SELECTED,
+    fg: OPS_BRIGHT,
+    muted: OPS_MUTED,
+    subtle: OPS_MUTED,
+    steel: OPS_STEEL,
+    border: OPS_LINE,
+    border_strong: OPS_SELECTED,
+    nav_active: OPS_SELECTED,
+    bubble_user: OPS_RAISED,
+    selection: OPS_SELECTED,
+    surface_hover: OPS_HOVER,
+    signal_red: OPS_SIGNAL_RED,
+    red_dim: OPS_RED_DIM,
+    amber: OPS_AMBER,
+    always_ring: OPS_BRIGHT,
+};
+
+const OLED_BLACK_TOKENS: TokenSet = TokenSet {
+    bg: OLED_BG,
+    void: OLED_BG,
+    surface: OLED_SURFACE,
+    raised: OLED_RAISED,
+    panel: OLED_RAISED,
+    elevated: OLED_RAISED,
+    hover: OLED_HOVER,
+    selected: OLED_SELECTED,
+    fg: OPS_BRIGHT,
+    muted: OPS_MUTED,
+    subtle: OPS_MUTED,
+    steel: OPS_STEEL,
+    border: OLED_LINE,
+    border_strong: OLED_SELECTED,
+    nav_active: OLED_SELECTED,
+    bubble_user: OLED_RAISED,
+    selection: OLED_SELECTED,
+    surface_hover: OLED_HOVER,
+    signal_red: OPS_SIGNAL_RED,
+    red_dim: OPS_RED_DIM,
+    amber: OPS_AMBER,
+    always_ring: OPS_BRIGHT,
+};
+
+const SOFT_CHARCOAL_TOKENS: TokenSet = TokenSet {
+    bg: CHARCOAL_BG,
+    void: CHARCOAL_BG,
+    surface: CHARCOAL_SURFACE,
+    raised: CHARCOAL_RAISED,
+    panel: CHARCOAL_RAISED,
+    elevated: CHARCOAL_RAISED,
+    hover: CHARCOAL_HOVER,
+    selected: CHARCOAL_SELECTED,
+    fg: OPS_BRIGHT,
+    muted: OPS_MUTED,
+    subtle: OPS_MUTED,
+    steel: OPS_STEEL,
+    border: CHARCOAL_LINE,
+    border_strong: CHARCOAL_SELECTED,
+    nav_active: CHARCOAL_SELECTED,
+    bubble_user: CHARCOAL_RAISED,
+    selection: CHARCOAL_SELECTED,
+    surface_hover: CHARCOAL_HOVER,
+    signal_red: CHARCOAL_SIGNAL_RED,
+    red_dim: CHARCOAL_RED_DIM,
+    amber: OPS_AMBER,
+    always_ring: OPS_BRIGHT,
+};
+
+const LIGHT_TOKENS: TokenSet = TokenSet {
+    bg: LIGHT_BG,
+    void: LIGHT_BG,
+    surface: LIGHT_SURFACE,
+    raised: LIGHT_ELEVATED,
+    panel: LIGHT_PANEL,
+    elevated: LIGHT_ELEVATED,
+    hover: LIGHT_HOVER,
+    selected: LIGHT_NAV_ACTIVE,
+    fg: LIGHT_FG,
+    muted: LIGHT_MUTED,
+    subtle: LIGHT_SUBTLE,
+    steel: LIGHT_MUTED,
+    border: LIGHT_BORDER,
+    border_strong: LIGHT_BORDER_STRONG,
+    nav_active: LIGHT_NAV_ACTIVE,
+    bubble_user: LIGHT_BUBBLE_USER,
+    selection: LIGHT_SELECTION,
+    surface_hover: LIGHT_HOVER,
+    signal_red: OFFLINE,
+    red_dim: Color32::from_rgb(0x7f, 0x1d, 0x1d),
+    amber: SETUP,
+    always_ring: ALWAYS_AMBER_LIGHT,
+};
+
+/// Classic dark by default so tests that only flip light still match Grok tokens.
+static PAINT: AtomicU8 = AtomicU8::new(PaintPalette::ClassicDark as u8);
 static LAST_PAINT: AtomicU8 = AtomicU8::new(255);
 
 struct OsDarkCache {
@@ -93,87 +304,148 @@ struct OsDarkCache {
 
 static OS_DARK: Mutex<Option<OsDarkCache>> = Mutex::new(None);
 
-fn tok(dark: Color32, light: Color32) -> Color32 {
-    if USE_LIGHT.load(Ordering::Relaxed) {
+fn paint_palette() -> PaintPalette {
+    match PAINT.load(Ordering::Relaxed) {
+        1 => PaintPalette::OpsDark,
+        2 => PaintPalette::OledBlack,
+        3 => PaintPalette::SoftCharcoal,
+        4 => PaintPalette::Light,
+        _ => PaintPalette::ClassicDark,
+    }
+}
+
+fn tokens() -> TokenSet {
+    match paint_palette() {
+        PaintPalette::ClassicDark => CLASSIC_DARK_TOKENS,
+        PaintPalette::OpsDark => OPS_DARK_TOKENS,
+        PaintPalette::OledBlack => OLED_BLACK_TOKENS,
+        PaintPalette::SoftCharcoal => SOFT_CHARCOAL_TOKENS,
+        PaintPalette::Light => LIGHT_TOKENS,
+    }
+}
+
+fn is_light_paint() -> bool {
+    paint_palette() == PaintPalette::Light
+}
+
+/// Pick a dark/light pair for the active paint mode (workboard chips, etc.).
+/// Loadout dark palettes use the dark side so callers stay binary-safe.
+pub fn tok_pair(dark: Color32, light: Color32) -> Color32 {
+    if is_light_paint() {
         light
     } else {
         dark
     }
 }
 
-/// Pick a dark/light pair for the active paint mode (workboard chips, etc.).
-pub fn tok_pair(dark: Color32, light: Color32) -> Color32 {
-    tok(dark, light)
-}
-
 pub fn bg() -> Color32 {
-    tok(BG, LIGHT_BG)
+    tokens().bg
 }
 pub fn surface() -> Color32 {
-    tok(SURFACE, LIGHT_SURFACE)
+    tokens().surface
 }
 pub fn panel() -> Color32 {
-    tok(PANEL, LIGHT_PANEL)
+    tokens().panel
 }
 pub fn elevated() -> Color32 {
-    tok(ELEVATED, LIGHT_ELEVATED)
+    tokens().elevated
 }
 pub fn hover() -> Color32 {
-    tok(HOVER, LIGHT_HOVER)
+    tokens().hover
 }
 pub fn fg() -> Color32 {
-    tok(FG, LIGHT_FG)
+    tokens().fg
 }
 pub fn muted() -> Color32 {
-    tok(MUTED, LIGHT_MUTED)
+    tokens().muted
 }
 pub fn subtle() -> Color32 {
-    tok(SUBTLE, LIGHT_SUBTLE)
+    tokens().subtle
 }
 pub fn border() -> Color32 {
-    tok(BORDER, LIGHT_BORDER)
+    tokens().border
 }
 pub fn border_strong() -> Color32 {
-    tok(BORDER_STRONG, LIGHT_BORDER_STRONG)
+    tokens().border_strong
 }
 pub fn nav_active() -> Color32 {
-    tok(NAV_ACTIVE, LIGHT_NAV_ACTIVE)
+    tokens().nav_active
 }
 pub fn bubble_user() -> Color32 {
-    tok(BUBBLE_USER, LIGHT_BUBBLE_USER)
+    tokens().bubble_user
 }
 pub fn bubble_assistant() -> Color32 {
     bubble_user()
 }
 pub fn selection() -> Color32 {
-    tok(SELECTION, LIGHT_SELECTION)
+    tokens().selection
 }
 pub fn surface_hover() -> Color32 {
-    tok(SURFACE_HOVER, LIGHT_HOVER)
+    tokens().surface_hover
+}
+/// Loadout void / deepest black plane.
+pub fn void_bg() -> Color32 {
+    tokens().void
+}
+/// Loadout raised / card plane.
+pub fn raised() -> Color32 {
+    tokens().raised
+}
+/// Loadout selected fill.
+pub fn selected() -> Color32 {
+    tokens().selected
+}
+/// Loadout Signal Red outline token (classic dark falls back to offline red).
+pub fn signal_red() -> Color32 {
+    tokens().signal_red
+}
+/// Dimmed red for dashed / secondary strokes.
+pub fn red_dim() -> Color32 {
+    tokens().red_dim
+}
+/// Loadout Amber CTA / objective accent.
+pub fn amber() -> Color32 {
+    tokens().amber
+}
+/// Steel gray text (secondary on gray fills).
+pub fn steel() -> Color32 {
+    tokens().steel
 }
 pub fn link() -> Color32 {
-    tok(LINK, LINK)
+    LINK
 }
 pub fn send_on() -> Color32 {
-    tok(SEND_ON, LIGHT_FG)
+    if is_light_paint() {
+        LIGHT_FG
+    } else {
+        SEND_ON
+    }
 }
 pub fn send_on_ink() -> Color32 {
-    tok(SEND_ON_INK, LIGHT_ELEVATED)
+    if is_light_paint() {
+        LIGHT_ELEVATED
+    } else {
+        SEND_ON_INK
+    }
 }
 pub fn live() -> Color32 {
-    tok(LIVE, LIGHT_LIVE)
+    if is_light_paint() {
+        LIGHT_LIVE
+    } else {
+        LIVE
+    }
 }
 pub fn setup() -> Color32 {
     SETUP
 }
 /// Selected Always ring (white on dark / near-black on light). Idle Always never uses this.
 pub fn always_amber() -> Color32 {
-    tok(ALWAYS_AMBER_DARK, ALWAYS_AMBER_LIGHT)
+    tokens().always_ring
 }
 
 /// Composer streaming glow: white on dark / near-black on light (was live green).
 pub fn composer_glow_rgb() -> Color32 {
-    tok(FG, LIGHT_FG)
+    fg()
 }
 pub fn offline() -> Color32 {
     OFFLINE
@@ -181,19 +453,19 @@ pub fn offline() -> Color32 {
 
 /// Code keyword. Muted blue-violet so a reply does not read as a rainbow.
 pub fn code_keyword() -> Color32 {
-    tok(
+    tok_pair(
         Color32::from_rgb(0xc6, 0x92, 0xf0),
         Color32::from_rgb(0x7c, 0x3a, 0xb8),
     )
 }
 pub fn code_string() -> Color32 {
-    tok(
+    tok_pair(
         Color32::from_rgb(0x9e, 0xce, 0x86),
         Color32::from_rgb(0x2f, 0x7d, 0x32),
     )
 }
 pub fn code_number() -> Color32 {
-    tok(
+    tok_pair(
         Color32::from_rgb(0xe8, 0xb0, 0x74),
         Color32::from_rgb(0xa6, 0x55, 0x00),
     )
@@ -203,12 +475,16 @@ pub fn code_comment() -> Color32 {
 }
 /// Code block well. Sits one step below the bubble fill.
 pub fn code_well() -> Color32 {
-    tok(BG, LIGHT_ELEVATED)
+    if is_light_paint() {
+        LIGHT_ELEVATED
+    } else {
+        bg()
+    }
 }
 
 /// Quiet sheet elevation. Light is a soft drop; dark is a faint lift on OLED `#000`.
 pub fn sheet_shadow() -> egui::Shadow {
-    if USE_LIGHT.load(Ordering::Relaxed) {
+    if is_light_paint() {
         egui::Shadow {
             offset: [0, 2],
             blur: 8,
@@ -225,6 +501,27 @@ pub fn sheet_shadow() -> egui::Shadow {
     }
 }
 
+/// Settings swatch for a theme choice (base fill).
+pub fn preview_swatch(choice: ThemeChoice, os_dark: bool) -> Color32 {
+    match resolve_palette(choice, os_dark) {
+        None => LIGHT_BG,
+        Some(DarkPalette::Classic) => BG,
+        Some(DarkPalette::OpsDark) => OPS_BG,
+        Some(DarkPalette::OledBlack) => OLED_BG,
+        Some(DarkPalette::SoftCharcoal) => CHARCOAL_BG,
+    }
+}
+
+pub fn paint_from_choice(choice: ThemeChoice, os_dark: bool) -> PaintPalette {
+    match resolve_palette(choice, os_dark) {
+        None => PaintPalette::Light,
+        Some(DarkPalette::Classic) => PaintPalette::ClassicDark,
+        Some(DarkPalette::OpsDark) => PaintPalette::OpsDark,
+        Some(DarkPalette::OledBlack) => PaintPalette::OledBlack,
+        Some(DarkPalette::SoftCharcoal) => PaintPalette::SoftCharcoal,
+    }
+}
+
 /// Agent / catalog card title — Inter SemiBold 16.
 pub fn card_title_font() -> FontId {
     title_font(FONT_SECTION)
@@ -238,8 +535,8 @@ pub fn composer_chrome_stroke(focused: bool) -> Stroke {
 #[cfg(test)]
 pub static PAINT_TEST_LOCK: Mutex<()> = Mutex::new(());
 
-/// Tests that flip `USE_LIGHT` must hold this across set + assert so parallel
-/// `apply` / `set_paint_dark` cannot restore dark between the two.
+/// Tests that flip paint palette must hold this across set + assert so parallel
+/// `apply` / `set_paint_dark` cannot restore classic dark between the two.
 #[cfg(test)]
 pub fn hold_paint_test() -> std::sync::MutexGuard<'static, ()> {
     PAINT_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner())
@@ -260,7 +557,16 @@ pub fn test_pass(
 
 #[cfg(test)]
 pub fn set_paint_dark(dark: bool) {
-    USE_LIGHT.store(!dark, Ordering::Relaxed);
+    set_paint_palette(if dark {
+        PaintPalette::ClassicDark
+    } else {
+        PaintPalette::Light
+    });
+}
+
+#[cfg(test)]
+pub fn set_paint_palette(palette: PaintPalette) {
+    PAINT.store(palette as u8, Ordering::Relaxed);
     LAST_PAINT.store(255, Ordering::SeqCst);
 }
 
@@ -617,15 +923,75 @@ pub fn install_fonts_on(ctx: &egui::Context) {
     install_inter(ctx);
 }
 
+/// Classic dark/light only. Prefer [`apply_choice`] for Settings themes.
 pub fn apply(ctx: &egui::Context, dark: bool) {
+    apply_palette(
+        ctx,
+        if dark {
+            PaintPalette::ClassicDark
+        } else {
+            PaintPalette::Light
+        },
+    );
+}
+
+/// Apply the paint set for a Settings → Appearance choice.
+pub fn apply_choice(ctx: &egui::Context, choice: ThemeChoice, os_dark: bool) {
+    let palette = paint_from_choice(choice, os_dark);
+    // Keep the classic entry point hot so dark/light helpers stay linked.
+    if palette == PaintPalette::ClassicDark || palette == PaintPalette::Light {
+        apply(ctx, palette == PaintPalette::ClassicDark);
+        return;
+    }
+    apply_palette(ctx, palette);
+}
+
+/// True when the active paint set is a Loadout dark theme.
+pub fn is_loadout_paint() -> bool {
+    matches!(
+        paint_palette(),
+        PaintPalette::OpsDark | PaintPalette::OledBlack | PaintPalette::SoftCharcoal
+    )
+}
+
+/// Paint the Loadout token strip (void → amber) used under Appearance.
+pub fn paint_loadout_token_strip(ui: &mut egui::Ui) {
+    let chips = [
+        void_bg(),
+        bg(),
+        surface(),
+        raised(),
+        signal_red(),
+        red_dim(),
+        hover(),
+        selected(),
+        steel(),
+        amber(),
+        fg(),
+    ];
+    let h = 18.0_f32;
+    let w = 22.0_f32;
+    let (rect, _resp) =
+        ui.allocate_exact_size(egui::vec2(chips.len() as f32 * w, h), egui::Sense::hover());
+    for (i, color) in chips.iter().enumerate() {
+        let cell = egui::Rect::from_min_size(
+            egui::pos2(rect.min.x + i as f32 * w, rect.min.y),
+            egui::vec2(w, h),
+        );
+        ui.painter().rect_filled(cell, 0.0, *color);
+    }
+}
+
+pub fn apply_palette(ctx: &egui::Context, palette: PaintPalette) {
     install_fonts(ctx);
     #[cfg(test)]
     let _paint = hold_paint_test();
-    USE_LIGHT.store(!dark, Ordering::Relaxed);
-    let flag = if dark { 1 } else { 0 };
+    PAINT.store(palette as u8, Ordering::Relaxed);
+    let flag = palette as u8;
     if LAST_PAINT.swap(flag, Ordering::SeqCst) == flag {
         return;
     }
+    let dark = palette != PaintPalette::Light;
     let mut visuals = if dark {
         egui::Visuals::dark()
     } else {
@@ -652,11 +1018,7 @@ pub fn apply(ctx: &egui::Context, dark: bool) {
     visuals.widgets.inactive.weak_bg_fill = surface();
     visuals.widgets.inactive.fg_stroke = Stroke::new(1.0_f32, fg());
     visuals.widgets.inactive.bg_stroke = Stroke::new(1.0_f32, border());
-    let press = if dark {
-        SURFACE_HOVER
-    } else {
-        Color32::from_rgb(0xc8, 0xc8, 0xcc)
-    };
+    let press = surface_hover();
     visuals.interact_cursor = Some(egui::CursorIcon::PointingHand);
     visuals.widgets.hovered.bg_fill = hover;
     visuals.widgets.hovered.weak_bg_fill = hover;
@@ -1048,7 +1410,7 @@ pub fn felt_icon_hit(
 }
 
 pub fn lift_fill(fill: Color32, mix: f32) -> Color32 {
-    let light = USE_LIGHT.load(Ordering::Relaxed);
+    let light = is_light_paint();
     if fill.a() == 0 {
         if mix <= 0.0 {
             return Color32::TRANSPARENT;
@@ -1057,21 +1419,18 @@ pub fn lift_fill(fill: Color32, mix: f32) -> Color32 {
             return Color32::from_black_alpha(hover_alpha(0, mix));
         }
         let t = (mix / HOVER_WASH).clamp(0.0, 1.0);
-        return Color32::from_rgba_unmultiplied(
-            HOVER.r(),
-            HOVER.g(),
-            HOVER.b(),
-            mix_channel(0, 255, t),
-        );
+        let h = hover();
+        return Color32::from_rgba_unmultiplied(h.r(), h.g(), h.b(), mix_channel(0, 255, t));
     }
     if light {
         let (r, g, b) = lift_rgb(fill.r(), fill.g(), fill.b(), mix, false);
         return Color32::from_rgba_unmultiplied(r, g, b, fill.a());
     }
+    let h = hover();
     Color32::from_rgba_unmultiplied(
-        mix_channel(fill.r(), HOVER.r(), mix),
-        mix_channel(fill.g(), HOVER.g(), mix),
-        mix_channel(fill.b(), HOVER.b(), mix),
+        mix_channel(fill.r(), h.r(), mix),
+        mix_channel(fill.g(), h.g(), mix),
+        mix_channel(fill.b(), h.b(), mix),
         fill.a(),
     )
 }
@@ -1683,6 +2042,92 @@ mod tests {
         assert_eq!(
             copy_button_label(Some(t0), t0 + Duration::from_secs(2)),
             "Copy"
+        );
+    }
+
+    #[test]
+    fn loadout_ops_dark_tokens_match_baseline() {
+        assert_eq!(OPS_BG, Color32::from_rgb(0x0b, 0x0b, 0x0d));
+        assert_eq!(OPS_VOID, Color32::from_rgb(0x0a, 0x0a, 0x0b));
+        assert_eq!(OPS_SURFACE, Color32::from_rgb(0x12, 0x12, 0x15));
+        assert_eq!(OPS_RAISED, Color32::from_rgb(0x18, 0x19, 0x1c));
+        assert_eq!(OPS_SIGNAL_RED, Color32::from_rgb(0xd7, 0x26, 0x3d));
+        assert_eq!(OPS_HOVER, Color32::from_rgb(0x2a, 0x2b, 0x2f));
+        assert_eq!(OPS_SELECTED, Color32::from_rgb(0x3a, 0x3b, 0x40));
+        assert_eq!(OPS_STEEL, Color32::from_rgb(0xc9, 0xcb, 0xd1));
+        assert_eq!(OPS_AMBER, Color32::from_rgb(0xff, 0xb0, 0x00));
+        assert_eq!(OPS_BRIGHT, Color32::from_rgb(0xf2, 0xf2, 0xf4));
+        assert_eq!(OLED_BG, Color32::from_rgb(0x00, 0x00, 0x00));
+        assert_eq!(OLED_SURFACE, Color32::from_rgb(0x05, 0x05, 0x06));
+        assert_eq!(OLED_RAISED, Color32::from_rgb(0x0a, 0x0a, 0x0b));
+        assert_eq!(CHARCOAL_BG, Color32::from_rgb(0x17, 0x18, 0x1b));
+        assert_eq!(CHARCOAL_SURFACE, Color32::from_rgb(0x1d, 0x1e, 0x22));
+        assert_eq!(CHARCOAL_RAISED, Color32::from_rgb(0x23, 0x24, 0x28));
+        assert_eq!(CHARCOAL_SIGNAL_RED, Color32::from_rgb(0xc8, 0x30, 0x4a));
+    }
+
+    #[test]
+    fn paint_palette_switches_loadout_and_classic() {
+        let _paint = hold_paint_test();
+        set_paint_palette(PaintPalette::OpsDark);
+        assert_eq!(bg(), OPS_BG);
+        assert_eq!(surface(), OPS_SURFACE);
+        assert_eq!(raised(), OPS_RAISED);
+        assert_eq!(hover(), OPS_HOVER);
+        assert_eq!(selected(), OPS_SELECTED);
+        assert_eq!(fg(), OPS_BRIGHT);
+        assert_eq!(steel(), OPS_STEEL);
+        assert_eq!(signal_red(), OPS_SIGNAL_RED);
+        assert_eq!(red_dim(), OPS_RED_DIM);
+        assert_eq!(amber(), OPS_AMBER);
+        assert_eq!(void_bg(), OPS_VOID);
+
+        set_paint_palette(PaintPalette::OledBlack);
+        assert_eq!(bg(), OLED_BG);
+        assert_eq!(surface(), OLED_SURFACE);
+        assert_eq!(raised(), OLED_RAISED);
+        assert_eq!(signal_red(), OPS_SIGNAL_RED);
+        assert_eq!(red_dim(), OPS_RED_DIM);
+        assert_eq!(amber(), OPS_AMBER);
+
+        set_paint_palette(PaintPalette::SoftCharcoal);
+        assert_eq!(bg(), CHARCOAL_BG);
+        assert_eq!(surface(), CHARCOAL_SURFACE);
+        assert_eq!(raised(), CHARCOAL_RAISED);
+        assert_eq!(signal_red(), CHARCOAL_SIGNAL_RED);
+        assert_eq!(red_dim(), CHARCOAL_RED_DIM);
+
+        set_paint_palette(PaintPalette::ClassicDark);
+        assert_eq!(bg(), BG);
+        assert_eq!(surface(), SURFACE);
+        assert_eq!(hover(), HOVER);
+        assert_eq!(selection(), SELECTION);
+
+        set_paint_palette(PaintPalette::Light);
+        assert_eq!(bg(), LIGHT_BG);
+        assert_eq!(fg(), LIGHT_FG);
+        set_paint_dark(true);
+    }
+
+    #[test]
+    fn preview_swatch_follows_choice() {
+        assert_eq!(preview_swatch(ThemeChoice::OpsDark, false), OPS_BG);
+        assert_eq!(preview_swatch(ThemeChoice::OledBlack, true), OLED_BG);
+        assert_eq!(
+            preview_swatch(ThemeChoice::SoftCharcoal, false),
+            CHARCOAL_BG
+        );
+        assert_eq!(preview_swatch(ThemeChoice::Dark, false), BG);
+        assert_eq!(preview_swatch(ThemeChoice::Light, true), LIGHT_BG);
+        assert_eq!(preview_swatch(ThemeChoice::System, true), BG);
+        assert_eq!(preview_swatch(ThemeChoice::System, false), LIGHT_BG);
+        assert_eq!(
+            paint_from_choice(ThemeChoice::OpsDark, false),
+            PaintPalette::OpsDark
+        );
+        assert_eq!(
+            paint_from_choice(ThemeChoice::System, true),
+            PaintPalette::ClassicDark
         );
     }
 }

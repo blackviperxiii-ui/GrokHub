@@ -82,7 +82,7 @@ use grokhub_core::{
     redact_secrets, redirect_prompt, refresh_last_stretch, refund_host_reserved,
     release_inflight_card, remember_chip_click, remember_chip_dismiss, remember_chip_outcome,
     remember_home_slash, remember_home_surface, remember_typed_prompt, rename_node,
-    replay_automation_target, replay_ops, resolve_bind_path, resolve_chat_model, resolve_dark,
+    replay_automation_target, replay_ops, resolve_bind_path, resolve_chat_model,
     restore_bound_path, retain_held_plan, reuse_empty_thread_idx, review_due, rewind_allowed,
     rewind_blocked_reason, rewind_copy_cmd, rewind_dest, rewind_restore_matches,
     rewind_snapshot_ready, roll_usage_day, route_schedule, save_hub_state, screen_from_extents,
@@ -5342,12 +5342,10 @@ impl eframe::App for Cabin {
             HIDDEN_HEARTBEAT_MS,
         )));
 
-        crate::theme::apply(
+        crate::theme::apply_choice(
             ctx,
-            resolve_dark(
-                parse_theme(&self.cfg.theme),
-                crate::theme::desktop_prefers_dark(),
-            ),
+            parse_theme(&self.cfg.theme),
+            crate::theme::desktop_prefers_dark(),
         );
         self.drain_queued_update();
         // eframe 0.34+ runs only `logic` while the window is hidden, minimized or
