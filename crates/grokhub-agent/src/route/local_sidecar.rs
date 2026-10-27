@@ -16,6 +16,7 @@ use rand_token::random_token;
 
 use super::local_autoconfig::{self as autoconfig, LaunchArgs, Retry};
 use super::local_gov;
+use super::local_health as health;
 
 /// How long [`Sidecar::wait_healthy`] waits for `/health`.
 pub const HEALTH_TIMEOUT: Duration = Duration::from_secs(30);
@@ -608,7 +609,11 @@ pub fn acquire(config_dir: &Path) -> Result<Busy, String> {
         ));
     }
     let paths = match runtime(config_dir) {
-        r @ (Runtime::Missing | Runtime::NoModel) => return Err(runtime_label(&r)),
+        r @ (Runtime::Missing | Runtime::NoModel) => {
+            let why = runtime_label(&r);
+            health::log_to(config_dir, health::start_failure(&why), Some(&why), None);
+            return Err(why);
+        }
         _ => resolve_paths(config_dir).ok_or_else(|| runtime_label(&Runtime::Missing))?,
     };
     let mut slot = global_slot().lock().expect("sidecar global");
@@ -634,16 +639,21 @@ pub fn acquire(config_dir: &Path) -> Result<Busy, String> {
     }
     local_gov::may_start(unix_ms())?;
     STARTING.store(true, Ordering::SeqCst);
+    let began = Instant::now();
     let started = start(&paths);
     STARTING.store(false, Ordering::SeqCst);
     match started {
         Ok(side) => {
+            let name = paths.model.file_name().map(|n| n.to_string_lossy());
+            let ms = u64::try_from(began.elapsed().as_millis()).unwrap_or(u64::MAX);
+            health::log_to(config_dir, "start", name.as_deref(), Some(ms));
             set_last_error(None);
             *slot = Some(side);
             Ok(busy())
         }
         Err(e) => {
             local_gov::start_failed(unix_ms());
+            health::log_to(config_dir, health::start_failure(&e), Some(&e), None);
             set_last_error(Some(e.clone()));
             Err(e)
         }
@@ -664,6 +674,7 @@ pub fn tick_governor() {
     }
     if let Some(side) = slot.take() {
         side.stop();
+        health::log("stop", Some("the governor paused or restarted it"));
     }
     local_gov::clear_restart();
 }
@@ -699,6 +710,7 @@ pub fn tick_idle_unload() {
     if super::local_perf::idle_unload_due(last, unix_secs(), side.idle_unload_secs) {
         if let Some(side) = slot.take() {
             side.stop();
+            health::log("stop", Some("idle"));
         }
     }
 }
@@ -709,6 +721,7 @@ pub fn stop_global() {
     let mut slot = global_slot().lock().expect("sidecar global");
     if let Some(side) = slot.take() {
         side.stop();
+        health::log("stop", Some("switched model, new engine or quit"));
     }
 }
 
@@ -1109,6 +1122,10 @@ mod tests {
             err,
             "Runtime missing: llama-server isn't installed. Turning on Local AI downloads it."
         );
+        // The health log names it once, however often it's asked.
+        let _ = acquire(&dir).map(drop);
+        let logged: Vec<String> = health::read(&dir).into_iter().map(|e| e.event).collect();
+        assert_eq!(logged, vec!["missing_binary".to_string()]);
         std::fs::create_dir_all(dir.join("bin")).unwrap();
         std::fs::write(dir.join("bin").join(llama_server_name()), b"x").unwrap();
         assert_eq!(runtime(&dir), Runtime::Ready);

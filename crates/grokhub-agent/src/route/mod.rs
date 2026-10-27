@@ -24,6 +24,7 @@ pub mod local;
 pub mod local_autoconfig;
 pub mod local_bench;
 pub mod local_gov;
+pub mod local_health;
 pub mod local_http;
 pub mod local_perf;
 pub mod local_sidecar;
