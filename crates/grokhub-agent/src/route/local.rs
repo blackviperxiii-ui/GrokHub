@@ -196,6 +196,43 @@ pub fn why_local_text(config_dir: &std::path::Path) -> String {
 /// The chip and pause message while the governor holds the local route.
 pub const LOCAL_PAUSED_MSG: &str = "Local paused: game or low power";
 
+/// The chip that leads an offline turn the on-device model can't take.
+pub const OFFLINE_NO_LOCAL_MSG: &str = "Offline, local model unavailable";
+
+/// Offline, and the on-device model would take this step if it were there.
+pub fn offline_unavailable(gate: &LocalGate, class: &str, ctx_tokens: u64) -> bool {
+    let running = LocalGate {
+        enabled: true,
+        ..gate.clone()
+    };
+    gate.offline && !gate.capacity.ready && eligible(&running, class, ctx_tokens)
+}
+
+/// Why the on-device model can't answer: off, runtime missing, no model, or
+/// the last start error.
+pub fn unavailable_reason() -> String {
+    use super::local_sidecar::Runtime;
+    if !switched_on() {
+        return "Local AI is off in Settings".into();
+    }
+    match config_dir().map(|d| super::local_sidecar::runtime(&d)) {
+        Some(Runtime::Missing) | None => "runtime missing".into(),
+        Some(Runtime::NoModel) => "no model downloaded".into(),
+        Some(Runtime::Error(e)) => e,
+        Some(Runtime::Loading) => "still loading".into(),
+        Some(Runtime::Ready | Runtime::Running) => {
+            bootstrap_error().unwrap_or_else(|| "it isn't running".into())
+        }
+    }
+}
+
+/// The chat line for an offline turn that waits for the network.
+pub fn offline_pause_text(reason: &str) -> String {
+    format!(
+        "{OFFLINE_NO_LOCAL_MSG}: {reason}. GrokHub keeps your message and answers it once you're back online."
+    )
+}
+
 /// A background step this long (over half the context cap) is heavy: it
 /// goes local only in RampUp and otherwise waits for it.
 pub fn heavy(class: &str, ctx_tokens: u64) -> bool {
