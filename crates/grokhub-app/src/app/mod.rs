@@ -304,21 +304,9 @@ enum SettingsGroup {
 
 const HIDDEN_HEARTBEAT_MS: u64 = 400;
 
-fn mode_status_line(mode: &str, pinned_model: &str) -> String {
-    if matches!(mode, "auto" | "adaptive" | "smart") && !settings_pin_blocks_auto(pinned_model) {
-        return "Mode auto — routes Fast / Balance / Think / Max".into();
-    }
-    let model = resolve_chat_model(mode, pinned_model);
-    match grokhub_core::reasoning_effort_for_mode(mode) {
-        Some(effort) => format!("Mode {mode} → {model} · {effort}"),
-        None => format!("Mode {mode} → {model}"),
-    }
-}
-
 /// How long a History query sits still before it runs. Every keystroke walks every
 /// thread, so the cabin waits for the typing to settle.
 const HISTORY_TYPE_DELAY: Duration = Duration::from_millis(250);
-const RAIL_FOOTER_H: f32 = 52.0;
 const PALETTE_LIST_H: f32 = 280.0;
 const PROFILE_NAME_MAX: usize = 64;
 
@@ -692,6 +680,7 @@ pub struct Cabin {
     board_link: bool,
     settings_menu_open: bool,
     settings_menu_ignore: bool,
+    rail_chat_drawer_open: bool,
     win_max: bool,
     geom_dirty: bool,
     geom_applied: bool,
@@ -1296,6 +1285,7 @@ impl Cabin {
             board_link: false,
             settings_menu_open: false,
             settings_menu_ignore: false,
+            rail_chat_drawer_open: false,
             win_max,
             geom_dirty: false,
             geom_applied: false,
@@ -1756,6 +1746,7 @@ impl Cabin {
             board_link: false,
             settings_menu_open: false,
             settings_menu_ignore: false,
+            rail_chat_drawer_open: false,
             win_max: false,
             geom_dirty: false,
             geom_applied: false,
@@ -5369,6 +5360,7 @@ impl eframe::App for Cabin {
         let ctx = ui.ctx().clone();
         self.paint_drop_hint(&ctx);
         self.ui_titlebar(ui);
+        Self::paint_loadout_window_border(ui);
         // First-run wait / Get Started takes CentralPanel — a Foreground Area over chat does not paint on Windows.
         if !self.ui_get_started(ui) {
             self.ui_sidebar(ui);

@@ -952,7 +952,7 @@ fn chip_apply_mode_and_help_stay_off_a_run() {
     assert_eq!(mode.cfg.mode, "fast");
     assert_eq!(
         mode.status,
-        super::mode_status_line("fast", &mode.cfg.model)
+        super::slash::mode_status_line("fast", &mode.cfg.model)
     );
     assert!(!mode.running);
 

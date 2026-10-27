@@ -521,12 +521,13 @@ jobs:
         run: |
           if (-not (Test-Path target/release/grokhub.exe)) { throw 'missing grokhub.exe' }
           if (-not (Test-Path target/release/grokhub-hub.exe)) { throw 'missing grokhub-hub.exe' }
-      # Deck-match evidence: the running grokhub.exe at 1600x900 and 1100x720
-      # beside a deck slide. Evidence only, so it never fails the check.
+      # Deck-match evidence: grokhub.exe beside deck slides 02 and 20 (chrome)
+      # plus settings/upgrade captures from the widget recipe work. Evidence
+      # only, so it never fails the check.
       - name: Deck shots
         continue-on-error: true
         shell: pwsh
-        run: ./scripts/deck-shots.ps1
+        run: ./scripts/deck-shots.ps1 -Slide 02
       - name: Upload deck shots
         if: always()
         continue-on-error: true

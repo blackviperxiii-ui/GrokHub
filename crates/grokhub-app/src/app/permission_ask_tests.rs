@@ -295,27 +295,27 @@ fn always_permission_keeps_the_acp_session() {
 #[test]
 fn mode_status_does_not_treat_ladder_default_as_auto_pin() {
     assert_eq!(
-        super::mode_status_line("auto", "grok-3-mini-fast"),
+        super::slash::mode_status_line("auto", "grok-3-mini-fast"),
         "Mode auto — routes Fast / Balance / Think / Max"
     );
     assert_eq!(
-        super::mode_status_line("auto", "grok-4.6"),
+        super::slash::mode_status_line("auto", "grok-4.6"),
         "Mode auto — routes Fast / Balance / Think / Max"
     );
     assert_eq!(
-        super::mode_status_line("auto", "grok-4.7"),
+        super::slash::mode_status_line("auto", "grok-4.7"),
         "Mode auto — routes Fast / Balance / Think / Max"
     );
     assert_eq!(
-        super::mode_status_line("auto", "grok-3"),
+        super::slash::mode_status_line("auto", "grok-3"),
         "Mode auto → grok-3"
     );
     assert_eq!(
-        super::mode_status_line("think", "grok-3"),
+        super::slash::mode_status_line("think", "grok-3"),
         "Mode think → grok-4.7 · high"
     );
     assert_eq!(
-        super::mode_status_line("max", ""),
+        super::slash::mode_status_line("max", ""),
         "Mode max → grok-4.7 · xhigh"
     );
 }

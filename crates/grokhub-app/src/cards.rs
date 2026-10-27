@@ -4010,8 +4010,8 @@ mod tests {
         );
         assert_eq!(
             composer_pill_w(900.0),
-            600.0,
-            "900-wide cabin minus rail and central margins"
+            crate::theme::CHAT_COL_W,
+            "900-wide cabin minus the 40px rail hits the Grok column cap"
         );
         assert_eq!(
             composer_pill_w(1400.0),
@@ -4146,7 +4146,12 @@ mod tests {
 
     #[test]
     fn composer_pill_tracks_the_monitor() {
-        assert_eq!(composer_pill_w(900.0), 600.0);
+        assert_eq!(
+            composer_pill_w(700.0),
+            620.0,
+            "narrow cabin minus 40px rail"
+        );
+        assert_eq!(composer_pill_w(900.0), crate::theme::CHAT_COL_W);
         assert_eq!(composer_pill_w(1400.0), crate::theme::CHAT_COL_W);
         assert_eq!(
             composer_pill_w(3440.0),
@@ -4155,7 +4160,7 @@ mod tests {
             composer_pill_w(3440.0)
         );
         assert_eq!(composer_pill_w(3440.0), composer_pill_w(1920.0));
-        assert!(composer_pill_w(1400.0) > composer_pill_w(900.0));
+        assert!(composer_pill_w(900.0) > composer_pill_w(700.0));
     }
 
     #[test]
