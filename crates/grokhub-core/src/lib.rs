@@ -61,6 +61,7 @@ pub mod imagine_auth;
 pub use grokhub_proto::inhabit;
 pub mod interests;
 pub mod journal;
+pub mod know_me;
 pub mod learning;
 pub mod local_discover;
 pub mod local_draft;
@@ -72,6 +73,7 @@ pub mod mcp_catalog;
 pub mod mcp_oauth;
 pub mod md;
 pub mod mission;
+pub mod nudge_watchers;
 pub mod model_download;
 pub mod model_registry;
 pub mod models;
@@ -377,6 +379,12 @@ pub use imagine_auth::{
     XAI_OAUTH_ACCOUNT, XAI_OAUTH_LEGACY_ACCOUNT,
 };
 pub use inhabit::{can_inhabit, inhabit_bundle_usable, inhabit_ready, InhabitBundle};
+pub use know_me::{load_tags, tag_topics, tags_mention, KnowMeTag};
+pub use nudge_watchers::{
+    dismiss_snooze, is_nudge_watcher_card, nudge_watcher_card, tick, NudgeLedger,
+    NudgeWatcherMeta, NudgeWatcherSettings, TickInput, TickOutput, WatcherId, WatcherSnapshot,
+    COOLDOWN_MS, DEFAULT_DAILY_MAX, DISMISS_SNOOZE_MS, LEDGER_FILE, SOURCE_PREFIX, TICK_EVERY_MS,
+};
 pub use journal::{
     abandon_entry, add_evidence, add_option, create_entry, decide_entry, defer_entry,
     dismiss_nudge, due_nudges, edit_entry, link_board_evidence, mission_entry, mission_start,

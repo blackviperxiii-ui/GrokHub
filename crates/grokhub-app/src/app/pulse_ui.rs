@@ -1871,6 +1871,7 @@ impl Cabin {
             return;
         };
         self.pulse_note(&card.title, LedgerReason::Dismiss, day);
+        self.nudge_watcher_dismissed(&card);
         self.pulse_remove(&card);
         self.heartbeat_card_dismissed();
         self.proactive_dismissed(&card);

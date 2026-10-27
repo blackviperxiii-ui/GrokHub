@@ -41,6 +41,15 @@ impl SteamState {
         self.found == Some(true)
     }
 
+    /// Most recently played library title, if any.
+    pub(super) fn top_game_name(&self) -> Option<String> {
+        self.games
+            .iter()
+            .max_by_key(|g| g.last_played)
+            .map(|g| g.name.clone())
+            .filter(|n| !n.is_empty())
+    }
+
     /// This check's Steam news fetches; none when Steam is missing or off.
     fn requests(&self) -> Vec<SourceReq> {
         if !self.found() {
@@ -61,8 +70,12 @@ impl SteamState {
 }
 
 impl Cabin {
-    pub(super) fn steam_requests(&mut self, now: u64) -> Vec<SourceReq> {
+    pub(super) fn steam_refresh_library(&mut self, now: u64) {
         self.sources.steam.refresh(now, steam::detect_root);
+    }
+
+    pub(super) fn steam_requests(&mut self, now: u64) -> Vec<SourceReq> {
+        self.steam_refresh_library(now);
         self.sources.steam.requests()
     }
 
