@@ -23,6 +23,16 @@ pub(super) struct SteamState {
 }
 
 impl SteamState {
+    #[cfg(test)]
+    pub(super) fn for_test(games: Vec<SteamGame>, read_ms: u64) -> Self {
+        Self {
+            found: Some(true),
+            games,
+            read_ms,
+            ..Self::default()
+        }
+    }
+
     /// The library and prefs, read again when they are stale.
     fn refresh(&mut self, now: u64, root: impl FnOnce() -> Option<std::path::PathBuf>) {
         if self.found.is_none() || now.saturating_sub(self.read_ms) >= LIBRARY_TTL_MS {

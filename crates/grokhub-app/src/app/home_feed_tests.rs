@@ -1396,6 +1396,21 @@ fn every_home_card_the_cabin_posts_names_its_item() {
         "Fake Quest",
     ));
     rows.push((
+        "post_companion",
+        grokhub_core::game_companion::Companion {
+            game: grokhub_core::steam::SteamGame {
+                app_id: 7,
+                name: "Fake Quest".into(),
+                last_played: 1,
+                playtime_min: 60,
+            },
+            news: Some(Vec::new()),
+            note: None,
+        }
+        .companion_card(now),
+        "Fake Quest",
+    ));
+    rows.push((
         "tick_daily_drop",
         grokhub_core::pulse_sources::item_card(
             &grokhub_core::pulse_sources::Ranked {
