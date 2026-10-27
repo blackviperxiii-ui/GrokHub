@@ -246,6 +246,7 @@ impl Cabin {
         out
     }
 
+    #[cfg(target_os = "linux")]
     fn last_played_game_hint(&self) -> Option<String> {
         self.sources.steam.top_game_name()
     }

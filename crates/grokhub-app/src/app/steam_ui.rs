@@ -41,7 +41,8 @@ impl SteamState {
         self.found == Some(true)
     }
 
-    /// Most recently played library title, if any.
+    /// Most recently played library title, if any (Linux controller nudges).
+    #[cfg(target_os = "linux")]
     pub(super) fn top_game_name(&self) -> Option<String> {
         self.games
             .iter()
