@@ -19,6 +19,8 @@ public static class DeckWin {
     [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
     [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out RECT r);
     [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
+    [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
+    [DllImport("user32.dll")] public static extern void mouse_event(uint f, int dx, int dy, int data, UIntPtr extra);
     [StructLayout(LayoutKind.Sequential)] public struct RECT { public int L, T, R, B; }
 }
 '@
@@ -80,8 +82,10 @@ function Seed-Dock([string]$cfg, [hashtable]$app) {
 # $upgrade the file has no themeMigrated, as a pre-3.4 install leaves it.
 # With $keys, those keystrokes go to the window once it has drawn (for
 # example '^,' opens Settings) and the shot waits for the new screen. With
-# $dock the config is seeded first (Seed-Dock).
-function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlide, [switch]$upgrade, [string]$keys = '', [switch]$dock) {
+# $dock the config is seeded first (Seed-Dock) and the shot waits for the
+# hardware read behind PC loadout; $wheel scrolls the dock down that many
+# notches first, for the cards below the fold of a short window.
+function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlide, [switch]$upgrade, [string]$keys = '', [switch]$dock, [int]$wheel = 0) {
     $root = Join-Path $env:RUNNER_TEMP "deck-$name"
     Remove-Item -Recurse -Force $root -ErrorAction SilentlyContinue
     $cfg = Join-Path $root 'cfg'
@@ -111,7 +115,7 @@ function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlid
         throw "no $($brand.productName) window at ${w}x${h}"
     }
     [void][DeckWin]::SetForegroundWindow($hwnd)
-    Start-Sleep -Seconds 12
+    Start-Sleep -Seconds $(if ($dock) { 40 } else { 12 })
     if ($keys) {
         Add-Type -AssemblyName System.Windows.Forms
         [void][DeckWin]::SetForegroundWindow($hwnd)
@@ -120,6 +124,15 @@ function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlid
     }
     $r = New-Object DeckWin+RECT
     [void][DeckWin]::GetWindowRect($hwnd, [ref]$r)
+    if ($wheel -gt 0) {
+        # The dock is the right-hand column; 0x0800 is MOUSEEVENTF_WHEEL.
+        [void][DeckWin]::SetCursorPos($r.R - 120, $r.T + [int](($r.B - $r.T) / 2))
+        for ($n = 0; $n -lt $wheel; $n++) {
+            [DeckWin]::mouse_event(0x0800, 0, 0, -120, [UIntPtr]::Zero)
+            Start-Sleep -Milliseconds 150
+        }
+        Start-Sleep -Seconds 2
+    }
     $cw = $r.R - $r.L; $ch = $r.B - $r.T
     Write-Host "window ${w}x${h}: rect $($r.L),$($r.T) ${cw}x${ch}"
     $bmp = New-Object System.Drawing.Bitmap $cw, $ch
@@ -164,4 +177,5 @@ Shot 1600 900 'settings-1600x900' 'ops-dark' '07' -keys '^,'
 Shot 1100 720 'settings-1100x720' 'ops-dark' '07' -keys '^,'
 Shot 1600 900 'dock-1600x900' 'ops-dark' '02' -dock
 Shot 1100 720 'dock-1100x720' 'ops-dark' '02' -dock
+Shot 1100 720 'dock-1100x720-scrolled' 'ops-dark' '02' -dock -wheel 10
 Get-ChildItem $Out | Format-Table Name, Length
