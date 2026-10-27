@@ -791,6 +791,27 @@ impl Os {
     }
 }
 
+/// The foreground app's process name, read once for focus help. `None`
+/// where no reader sees it (macOS, and Wayland compositors other than
+/// Hyprland and Sway). Never a window title.
+pub(super) fn foreground_process() -> Option<String> {
+    #[cfg(target_os = "linux")]
+    {
+        if wayland() {
+            return compositor_hint().1;
+        }
+        X11::connect()?.front()?.1
+    }
+    #[cfg(windows)]
+    {
+        win_foreground().1
+    }
+    #[cfg(not(any(target_os = "linux", windows)))]
+    {
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

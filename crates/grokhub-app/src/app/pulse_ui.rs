@@ -1286,6 +1286,7 @@ impl Cabin {
                 }
             });
         }
+        self.paint_brief_offer(ui);
         ui.add_space(14.0);
     }
 

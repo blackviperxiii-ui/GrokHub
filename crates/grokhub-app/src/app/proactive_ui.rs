@@ -123,6 +123,10 @@ impl Cabin {
         }
         self.sweep_reactions(now);
         let ranked = self.proactive_candidates(now);
+        // Quiet hours the user set come first; a learned away hour holds
+        // only low-priority nudges, for the next hour the user is usually on.
+        let quiet = quiet
+            || (self.rhythm_now().enough() && self.rhythm_holds(&ranked, Self::local_clock().hour));
         if quiet {
             self.last_proactive_ms = now;
             self.proactive.surface(ranked, now, true, false);

@@ -199,11 +199,13 @@ impl Cabin {
     pub(super) fn tick_feed_pulse(&mut self) {
         let now = now_ms();
         let quiet = self.quiet_now();
+        let brief = self.brief_gate(Self::local_clock().hour, now);
         let pulse = self.cfg.feed_pulse.clone();
-        let want_digest = pulse.digest_on
-            && (pulse.digest_held
-                || pulse.last_digest_ms == 0
-                || now.saturating_sub(pulse.last_digest_ms) >= pulse.digest_ms);
+        let on_clock = brief.unwrap_or(
+            pulse.last_digest_ms == 0
+                || now.saturating_sub(pulse.last_digest_ms) >= pulse.digest_ms,
+        );
+        let want_digest = pulse.digest_on && (pulse.digest_held || on_clock);
         let (user_md, memory_md, soul_md, taste) = if want_digest && !quiet {
             (
                 crate::config::read_memory("USER.md"),
@@ -247,7 +249,11 @@ impl Cabin {
         let tick = tick_feed_pulse(
             &mut self.updates,
             &mut self.cfg.feed_pulse,
-            PulseNow { now_ms: now, quiet },
+            PulseNow {
+                now_ms: now,
+                quiet,
+                brief,
+            },
             material,
         );
         if fed_edition && tick.digest_consumed {

@@ -163,6 +163,7 @@ mod evidence_ui;
 mod feed_ui;
 mod findings_ui;
 mod fix_it;
+mod focus_ui;
 mod ghost;
 mod glance;
 mod harness_ui;
@@ -206,6 +207,7 @@ mod reactions_ui;
 #[cfg(test)]
 mod repaint_timer_tests;
 mod repair_ui;
+mod rhythm_ui;
 mod router_ui;
 mod scope_ui;
 mod screen_record_ui;
@@ -582,6 +584,8 @@ pub struct Cabin {
     situation_ping: Option<(String, String)>,
     /// True until a frame reports the cabin window is away. Tests stay silent.
     window_focused: bool,
+    /// Focus help: the app the user was just in (opt-in).
+    focus: focus_ui::FocusState,
     /// With and Quiet paces may offer a repeated action. Guide does not.
     offer_repeated: bool,
     usage: UsageDay,
@@ -1197,6 +1201,7 @@ impl Cabin {
             digest_interests: String::new(),
             situation_ping: None,
             window_focused: true,
+            focus: Default::default(),
             offer_repeated: false,
             usage: crate::store::load_usage(),
             palette_open: false,
@@ -1656,6 +1661,7 @@ impl Cabin {
             digest_interests: String::new(),
             situation_ping: None,
             window_focused: true,
+            focus: Default::default(),
             offer_repeated: false,
             usage: Default::default(),
             palette_open: false,
@@ -3507,6 +3513,7 @@ impl Cabin {
                 HeartbeatAct::Housekeep => {
                     self.roll_today();
                     self.release_situation_ping();
+                    self.note_rhythm();
                     if self.last_persist.elapsed() > Duration::from_secs(2) {
                         self.persist_bg();
                     }
@@ -4326,11 +4333,6 @@ impl Cabin {
             return;
         };
         self.start_overlay_update(cmds);
-    }
-
-    fn touch(&mut self) {
-        self.last_activity = Instant::now();
-        self.reflected_idle = false;
     }
 
     fn run_reflect(&mut self) {
@@ -5153,7 +5155,7 @@ impl eframe::App for Cabin {
         }
         self.poll_digest_lookup();
         self.poll_source_fetch();
-        self.window_focused = ctx.input(|i| i.viewport().focused.unwrap_or(false));
+        self.read_window_focus(ctx);
         self.poll_greeting();
         self.poll_ideas();
         self.poll_pulse_rewrite();

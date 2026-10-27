@@ -411,6 +411,10 @@ pub struct AppConfig {
     /// Inline sentence autocomplete in the chat composer (ghost text). Off by default.
     #[serde(default)]
     pub composer_autocomplete: bool,
+    /// Settings → Behavior: suggest help for the app the user was just in,
+    /// from its process name only. Off by default.
+    #[serde(default)]
+    pub focus_help: bool,
     /// Settings → Behavior: dockable main panels (egui_dock). Off by default; layout in dock.json.
     #[serde(default)]
     pub dock_panels: bool,
@@ -683,6 +687,7 @@ impl Default for AppConfig {
             imagine_wall: default_imagine_wall(),
             composer_glow: false,
             composer_autocomplete: false,
+            focus_help: false,
             dock_panels: false,
             desktop_control: false,
             screen_record: false,

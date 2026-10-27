@@ -188,7 +188,10 @@ impl Cabin {
             self.fail_turn_start(&err);
             return true;
         }
-        let (carried, carry_idx) = self.native_carry(last_user);
+        let (mut carried, carry_idx) = self.native_carry(last_user);
+        if let Some(line) = self.take_focus_context() {
+            carried = format!("{line}\n{carried}");
+        }
         let prompted = self
             .acp
             .as_ref()
