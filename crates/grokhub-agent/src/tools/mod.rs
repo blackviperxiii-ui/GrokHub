@@ -10,6 +10,7 @@ mod glob;
 mod grep;
 mod html_md;
 mod list_dir;
+pub(crate) mod local_ai;
 mod lock;
 mod media;
 pub(crate) mod ports;
@@ -188,6 +189,7 @@ pub fn dispatch_for_job(
         "scheduler_create" => control::scheduler_create(&args),
         "scheduler_delete" => control::scheduler_delete(&args),
         "connection_delete" => connections::delete(&args),
+        local_ai::SELFTEST => local_ai::selftest(&args),
         "web_fetch" => web_fetch::run_with_ports(&args, ctx.stop),
         "image_generate" | "image_edit" | "video_generate" | "video_edit" | "video_extend" => {
             media::run_with_ports(name, &args, ctx.stop)
@@ -257,6 +259,7 @@ fn dispatch_readonly(ctx: &ToolCtx<'_>, name: &str, args: &Value) -> ToolOutput 
         registry::LOAD_TOOL_SCHEMA => registry::run_load_tool_schema(args),
         "skill" => crate::skills::tool_run(ctx.workspace, args),
         "diagnose" => crate::repair::tool_run(args),
+        local_ai::STATUS => local_ai::status(args),
         other => ToolOutput::err(format!("{READ_ONLY_PHASE}: `{other}` is not available.")),
     }
 }
