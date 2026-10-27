@@ -1383,6 +1383,7 @@ impl Cabin {
         let mut posts: Vec<UpdateCard> = pc::feed_posts(&self.updates, &inputs)
             .into_iter()
             .filter(|c| c.source_id.is_empty() || !muted.iter().any(|m| m == &c.source_id))
+            .filter(|c| !self.steam_muted(c))
             .collect();
         if self.cfg.daily_drop.active() {
             use grokhub_core::daily_drop::{day_index, is_daily_drop_card};

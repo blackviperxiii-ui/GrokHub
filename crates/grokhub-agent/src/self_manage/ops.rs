@@ -1,6 +1,8 @@
 //! What each self-manage tool does once `harness::decide` let it through.
-//! Every write goes through the ChangeLedger writers, so each one keeps the
-//! version it replaced and shows as a Work-tree row with Undo.
+//! Every skill, connection and automation write goes through the ChangeLedger
+//! writers, so each one keeps the version it replaced and shows as a Work-tree
+//! row with Undo. `pulse_steam` only flips a Pulse preference the Settings
+//! toggle and Mute buttons undo.
 
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -77,12 +79,58 @@ pub fn run(
             control::disable_automation(&arg(args, "id"), &reason_of(args, "turned off by Grok"))
         }
         "automation_delete" => control::delete_automation(&arg(args, "id")),
+        "pulse_steam" => pulse_steam(ctx, args, grokhub_core::steam::detect_root()),
         other => Err(format!("unknown self-manage tool `{other}`")),
     };
     match out {
         Ok(text) => ToolOutput::ok(text),
         Err(e) => ToolOutput::err(e),
     }
+}
+
+/// `pulse_steam`: saves the toggle and mutes in `pulse-steam.json`, then
+/// reports what feeds Pulse. A name not in the library changes nothing.
+pub(super) fn pulse_steam(
+    ctx: &SelfCtx<'_>,
+    args: &Value,
+    root: Option<PathBuf>,
+) -> Result<String, String> {
+    use grokhub_core::steam;
+    let games = root.as_deref().map(steam::read_library).unwrap_or_default();
+    let mut prefs = steam::load_prefs(ctx.config_dir);
+    let on = args.get("on").and_then(Value::as_bool);
+    if on == Some(true) && root.is_none() {
+        return Err(
+            "Steam is not installed on this computer, so there is no library to use.".into(),
+        );
+    }
+    let names = |key: &str| -> Vec<String> {
+        args.get(key)
+            .and_then(Value::as_array)
+            .map(|a| {
+                a.iter()
+                    .filter_map(Value::as_str)
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    let mut changed = on.is_some();
+    for (key, mute) in [("mute", true), ("unmute", false)] {
+        for name in names(key) {
+            let game = steam::find_game(&games, &name)
+                .ok_or_else(|| format!("`{}` is not in the Steam library.", line(&name)))?;
+            prefs.set_muted(game.app_id, mute);
+            changed = true;
+        }
+    }
+    if let Some(on) = on {
+        prefs.on = Some(on);
+    }
+    if changed {
+        steam::save_prefs(ctx.config_dir, &prefs)?;
+    }
+    Ok(steam::status_line(&games, &prefs, root.is_some()))
 }
 
 /// `automation_create` / `automation_modify`: Spike-5b's scheduler writer

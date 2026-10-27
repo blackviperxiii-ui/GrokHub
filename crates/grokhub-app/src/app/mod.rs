@@ -215,6 +215,7 @@ mod sidebar;
 mod skill_undo;
 mod slash;
 mod status_toasts;
+mod steam_ui;
 mod systems_brief_ui;
 #[cfg(test)]
 mod tests;
