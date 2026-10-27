@@ -78,6 +78,20 @@ impl Cabin {
             .collect()
     }
 
+    /// Game names from the library while the Steam source is on.
+    pub(super) fn steam_game_names(&mut self) -> Vec<String> {
+        self.sources.steam.refresh(now_ms(), steam::detect_root);
+        if !self.sources.steam.found() || !self.sources.steam.prefs.enabled() {
+            return Vec::new();
+        }
+        self.sources
+            .steam
+            .games
+            .iter()
+            .map(|g| g.name.clone())
+            .collect()
+    }
+
     pub(super) fn steam_muted(&self, card: &grokhub_core::update_feed::UpdateCard) -> bool {
         card.pulse
             .source_name

@@ -2067,6 +2067,7 @@ fn quiet_cabin() -> Cabin {
         digest_interests: String::new(),
         situation_ping: None,
         window_focused: true,
+        focus: Default::default(),
         offer_repeated: false,
         usage: grokhub_core::UsageDay::default(),
         palette_open: false,
