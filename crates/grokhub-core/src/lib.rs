@@ -76,6 +76,7 @@ pub mod mcp_oauth;
 pub mod md;
 pub mod mission;
 pub mod model_download;
+pub mod model_drop;
 pub mod model_registry;
 pub mod models;
 pub mod nudge_watchers;

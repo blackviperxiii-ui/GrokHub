@@ -428,6 +428,13 @@ pub struct AppConfig {
     pub resume_code: bool,
     #[serde(default)]
     pub code_folders: Vec<String>,
+    /// Settings → Behavior: offer next steps for new 3D models in Downloads.
+    /// Off by default.
+    #[serde(default)]
+    pub model_drop: bool,
+    /// Where "Move to models" puts a model; empty means `~/Models`.
+    #[serde(default)]
+    pub models_folder: String,
     /// Settings → Behavior: dockable main panels (egui_dock). Off by default; layout in dock.json.
     #[serde(default)]
     pub dock_panels: bool,
@@ -712,6 +719,8 @@ impl Default for AppConfig {
             focus_help: false,
             resume_code: false,
             code_folders: Vec::new(),
+            model_drop: false,
+            models_folder: String::new(),
             dock_panels: false,
             chat_objectives: false,
             desktop_control: false,

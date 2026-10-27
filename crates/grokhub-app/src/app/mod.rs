@@ -186,6 +186,7 @@ mod marketplace_ui;
 mod mission_page;
 mod mission_ui;
 mod model_download_ui;
+mod model_drop_ui;
 mod model_wait_ui;
 #[cfg(test)]
 mod native_signin_tests;
@@ -234,21 +235,6 @@ mod wishlist_ui;
 use background::BgWork;
 use chat_ui::*;
 
-/// Title and body for a token budget warning.
-pub(super) fn token_budget_notice(
-    level: grokhub_core::BudgetLevel,
-    line: &str,
-    pauses: bool,
-) -> (&'static str, String) {
-    match level {
-        grokhub_core::BudgetLevel::Over if pauses => (
-            "Token budget used up",
-            format!("{line}. Scheduled work waits until tomorrow."),
-        ),
-        grokhub_core::BudgetLevel::Over => ("Token budget used up", format!("{line}.")),
-        _ => ("Token budget at 80%", format!("{line}.")),
-    }
-}
 use confirm::*;
 #[cfg(test)]
 use feed_ui::*;
@@ -3334,7 +3320,8 @@ impl Cabin {
             return;
         };
         let line = grokhub_core::budget_line(&self.usage, cap);
-        let (title, body) = token_budget_notice(level, &line, self.cfg.budget_pauses_scheduled);
+        let (title, body) =
+            budget_ui::token_budget_notice(level, &line, self.cfg.budget_pauses_scheduled);
         self.status = format!("{title} — {body}");
         if crate::notify::allow_ping(self.quiet_now()) {
             crate::notify::ping(title, &body);
