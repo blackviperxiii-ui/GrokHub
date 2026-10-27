@@ -38,6 +38,8 @@ pub(super) struct SetupWizard {
     pub(super) runtime_dl: Option<super::local_ai_ui::RuntimeDl>,
     /// Last engine download failure (cleared by the user).
     pub(super) runtime_dl_error: Option<String>,
+    /// Checked this launch (or since Local AI was turned on) that llama-server is here.
+    pub(super) engine_checked: bool,
 }
 
 /// Open on its own only on a fresh profile that hasn't finished or skipped it.
@@ -260,6 +262,10 @@ impl Cabin {
         }
         self.poll_model_download();
         self.poll_runtime_download();
+        if self.cfg.local_model && !self.setup.engine_checked {
+            self.setup.engine_checked = true;
+            self.ensure_local_engine();
+        }
         let Some(rx) = self.setup.hw_rx.take() else {
             return;
         };
