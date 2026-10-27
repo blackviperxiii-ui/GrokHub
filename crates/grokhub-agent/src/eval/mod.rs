@@ -26,6 +26,7 @@ use crate::{
 mod scan;
 
 pub mod ab;
+pub mod care_first;
 pub mod close_check;
 pub mod longmem;
 pub mod metrics;
@@ -195,6 +196,12 @@ pub fn run_suite(opts: &Opts) -> Vec<ItemResult> {
             let _ = report.tasks.len();
             let _ = report.report_markdown.len();
             let _ = report.gate();
+        }
+        if let Ok(care) = ab::run_care_first_ab() {
+            let _ = care_first::status_line(&care);
+            let _ =
+                ab::care_first_default_on(false, care.cost_ratio, care.p95_ratio, care.words_ratio);
+            let _ = ab::CARE_FIRST_SHIPS_ON;
         }
     }
     cleanup_sessions();

@@ -207,7 +207,9 @@ impl NativeEngine {
         let mut ask = |t: &str| -> Result<String, String> {
             let call = crate::route::ModelCall::xai(
                 &self.model,
-                Some(grokhub_core::BACKGROUND_EFFORT),
+                Some(crate::brain::classify_effort(
+                    crate::brain::care_first_enabled(&crate::perm::config_dir()),
+                )),
                 crate::brain::BRIEF_CLASS,
                 &self.conversation_id,
                 vec![
@@ -244,7 +246,7 @@ impl NativeEngine {
                 (ctx.chat_id, ctx.turn)
             }
         };
-        let policy = crate::brain::pick_policy(&crate::brain::load_policy(&dir).0, &brief);
+        let policy = crate::brain::pick_policy(&crate::brain::effective_rows(&dir).0, &brief);
         // Brain 2: the row's goal steers this turn's routing (inside each class's band).
         // Desktop episode steps route with the chat id as their session, so it gets the goal too.
         let goal = policy

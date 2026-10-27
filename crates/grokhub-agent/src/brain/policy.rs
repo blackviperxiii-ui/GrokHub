@@ -40,7 +40,7 @@ pub fn policy_path(config_dir: &Path) -> PathBuf {
 }
 
 /// The shipped rows with the user's file on top, and why the user's file was
-/// ignored when it was.
+/// ignored when it was. This is the file, not the care-first overlay.
 pub fn load_policy(config_dir: &Path) -> (Vec<PolicyRow>, Option<String>) {
     let Ok(text) = std::fs::read_to_string(policy_path(config_dir)) else {
         return (builtin_policy(), None);
@@ -48,6 +48,26 @@ pub fn load_policy(config_dir: &Path) -> (Vec<PolicyRow>, Option<String>) {
     match parse_policy(&text) {
         Ok(user) => (merge_policy(builtin_policy(), user), None),
         Err(e) => (builtin_policy(), Some(e)),
+    }
+}
+
+/// `care_first` in the user's policy file. A missing or refused file is off.
+pub fn care_first_enabled(config_dir: &Path) -> bool {
+    let Ok(text) = std::fs::read_to_string(policy_path(config_dir)) else {
+        return false;
+    };
+    parse_policy(&text)
+        .ok()
+        .is_some_and(|_| grokhub_core::brain_policy::care_first_flag(&text))
+}
+
+/// Rows for a turn. Care-first replaces chat casual after the user's file merges.
+pub fn effective_rows(config_dir: &Path) -> (Vec<PolicyRow>, Option<String>) {
+    let (rows, note) = load_policy(config_dir);
+    if care_first_enabled(config_dir) {
+        (grokhub_core::brain_policy::apply_care_first(rows), note)
+    } else {
+        (rows, note)
     }
 }
 
@@ -102,9 +122,32 @@ mod tests {
         let (rows, note) = load_policy(&dir);
         assert_eq!(pick_policy(&rows, &brief), Some(shipped));
         assert_eq!(note.as_deref(), Some("`require_approval` is a safety key; safety and approval rules aren't in the policy table"));
+        assert!(!care_first_enabled(&dir));
         assert_eq!(
             super::super::why_lines(&dir),
             vec!["Policy file ignored (`require_approval` is a safety key; safety and approval rules aren't in the policy table); using the shipped rows.".to_string()]
+        );
+        std::fs::write(
+            policy_path(&dir),
+            "care_first = true\n[[row]]\nintent = \"chat\"\ncare = \"casual\"\ngoal = \"cost\"\nreason = \"keep it cheap\"\ndepth = \"none\"\nask = \"act\"\nstop = \"answered\"\ntalk = \"one line\"\n",
+        )
+        .unwrap();
+        assert!(care_first_enabled(&dir));
+        let (rows, note) = effective_rows(&dir);
+        assert_eq!(note, None);
+        let picked = pick_policy(&rows, &brief).unwrap();
+        assert_eq!(
+            (picked.goal.as_str(), picked.talk.as_str(), picked.style()),
+            ("care", "natural", grokhub_core::talk::TalkStyle::Natural)
+        );
+        assert_eq!(
+            load_policy(&dir)
+                .0
+                .iter()
+                .find(|r| r.key() == "chat × casual")
+                .unwrap()
+                .goal,
+            "cost"
         );
         let _ = std::fs::remove_dir_all(dir);
     }
