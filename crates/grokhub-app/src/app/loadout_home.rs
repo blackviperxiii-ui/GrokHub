@@ -13,8 +13,11 @@ use grokhub_core::{UpdateCard, UpdateStatus};
 
 use super::*;
 
-/// The companion art slot. Swap the file to change the picture.
+/// The companion art slots, one per mood (slide 17). Swap a file to change
+/// that picture. `companion.png` is the hanging-out pose.
 const COMPANION_PNG: &[u8] = include_bytes!("../../../../brand/companion.png");
+const COMPANION_HELLO_PNG: &[u8] = include_bytes!("../../../../brand/companion-hello.png");
+const COMPANION_HELPING_PNG: &[u8] = include_bytes!("../../../../brand/companion-helping.png");
 /// Below this page width the dock hides and the chat gets the whole page.
 /// The default 1100 px window leaves about 840 px beside the rail, so the
 /// dock shows there in its compact width.
@@ -32,6 +35,66 @@ const WAVE: [f32; 9] = [0.35, 0.7, 1.0, 0.5, 0.85, 0.4, 0.95, 0.6, 0.3];
 const XP_PER_TASK: u32 = 100;
 const XP_PER_STEP: u32 = 25;
 const XP_PER_LEVEL: u32 = 500;
+
+/// The companion's pose on slide 17: Hello waves you in, Helping holds the
+/// checklist while a tool runs, Hanging out is just talking.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Mood {
+    Hello,
+    Helping,
+    HangingOut,
+}
+
+impl Mood {
+    fn png(self) -> &'static [u8] {
+        match self {
+            Mood::Hello => COMPANION_HELLO_PNG,
+            Mood::Helping => COMPANION_HELPING_PNG,
+            Mood::HangingOut => COMPANION_PNG,
+        }
+    }
+
+    fn key(self) -> &'static str {
+        match self {
+            Mood::Hello => "loadout-companion-hello",
+            Mood::Helping => "loadout-companion-helping",
+            Mood::HangingOut => "loadout-companion-art",
+        }
+    }
+}
+
+/// `GROKHUB_DECK_MOOD` (`hello`, `helping`, `hanging-out`) pins the pose for
+/// the deck screenshots (`scripts/deck-shots.ps1`), where no turn can run.
+pub(super) fn parse_mood(raw: &str) -> Option<Mood> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "hello" => Some(Mood::Hello),
+        "helping" => Some(Mood::Helping),
+        "hanging-out" => Some(Mood::HangingOut),
+        _ => None,
+    }
+}
+
+fn pinned_mood() -> Option<Mood> {
+    static PIN: OnceLock<Option<Mood>> = OnceLock::new();
+    *PIN.get_or_init(|| {
+        std::env::var("GROKHUB_DECK_MOOD")
+            .ok()
+            .as_deref()
+            .and_then(parse_mood)
+    })
+}
+
+/// A tool running in this chat's turn wins; an empty chat says hello;
+/// anything else is hanging out.
+pub(super) fn mood_for(tool_running: bool, chat_empty: bool) -> Mood {
+    if tool_running {
+        Mood::Helping
+    } else if chat_empty {
+        Mood::Hello
+    } else {
+        Mood::HangingOut
+    }
+}
 
 /// Art height for the companion card's inner width.
 pub(super) fn art_height(inner_w: f32) -> f32 {
@@ -333,15 +396,15 @@ fn paint_brackets(painter: &egui::Painter, rect: egui::Rect) {
     }
 }
 
-fn companion_texture(ctx: &egui::Context) -> Option<egui::TextureHandle> {
-    let id = egui::Id::new("loadout-companion-art");
+fn companion_texture(ctx: &egui::Context, mood: Mood) -> Option<egui::TextureHandle> {
+    let id = egui::Id::new(mood.key());
     if let Some(tex) = ctx.data(|d| d.get_temp::<egui::TextureHandle>(id)) {
         return Some(tex);
     }
-    let rgba = image::load_from_memory(COMPANION_PNG).ok()?.to_rgba8();
+    let rgba = image::load_from_memory(mood.png()).ok()?.to_rgba8();
     let size = [rgba.width() as usize, rgba.height() as usize];
     let tex = ctx.load_texture(
-        "loadout-companion-art",
+        mood.key(),
         egui::ColorImage::from_rgba_unmultiplied(size, rgba.as_raw()),
         egui::TextureOptions::LINEAR,
     );
@@ -406,6 +469,7 @@ impl Cabin {
     fn dock_companion(&mut self, ui: &mut egui::Ui) {
         let name = grokhub_core::brand::companion_name();
         let live = self.voice_is_on();
+        let mood = self.companion_mood();
         let resp = card(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 6.0;
@@ -433,7 +497,7 @@ impl Cabin {
                     crate::theme::red_dim().gamma_multiply(a),
                 );
             }
-            if let Some(tex) = companion_texture(ui.ctx()) {
+            if let Some(tex) = companion_texture(ui.ctx(), mood) {
                 let [tw, th] = tex.size().map(|v| v as f32);
                 let scale = (art.height() / th).min(art.width() / tw);
                 let fit = egui::Rect::from_center_size(art.center(), egui::vec2(tw, th) * scale);
@@ -474,6 +538,20 @@ impl Cabin {
         if click.clicked() {
             self.listen_voice();
         }
+    }
+
+    /// The dock's pose for what this chat is doing right now.
+    pub(super) fn companion_mood(&self) -> Mood {
+        if let Some(mood) = pinned_mood() {
+            return mood;
+        }
+        let tool_running = self.thinking_here()
+            && (self.perm_ask.is_some()
+                || self
+                    .live_blocks
+                    .last()
+                    .is_some_and(|b| b.kind == LiveKind::Tool));
+        mood_for(tool_running, self.messages.is_empty())
     }
 
     fn dock_mission(&self, ctx: &egui::Context) -> Option<MissionView> {
@@ -848,6 +926,63 @@ mod tests {
     fn companion_art_decodes() {
         let img = image::load_from_memory(COMPANION_PNG).expect("brand/companion.png decodes");
         assert!(img.width() > 100 && img.height() > 100);
+    }
+
+    #[test]
+    fn every_mood_has_its_own_art_that_decodes() {
+        let mut sizes = Vec::new();
+        for mood in [Mood::Hello, Mood::Helping, Mood::HangingOut] {
+            let img = image::load_from_memory(mood.png()).expect("mood art decodes");
+            assert_eq!(img.height(), 440, "{mood:?} art is 440 px tall");
+            sizes.push(img.width());
+        }
+        assert_eq!(sizes, vec![236, 393, 351]);
+    }
+
+    #[test]
+    fn the_screenshot_pin_names_each_mood_and_nothing_else() {
+        assert_eq!(parse_mood("hello"), Some(Mood::Hello));
+        assert_eq!(parse_mood(" Helping "), Some(Mood::Helping));
+        assert_eq!(parse_mood("hanging-out"), Some(Mood::HangingOut));
+        assert_eq!(parse_mood(""), None);
+        assert_eq!(parse_mood("angry"), None);
+    }
+
+    #[test]
+    fn mood_follows_the_chat_state() {
+        assert_eq!(mood_for(false, true), Mood::Hello);
+        assert_eq!(mood_for(false, false), Mood::HangingOut);
+        assert_eq!(mood_for(true, false), Mood::Helping);
+        assert_eq!(mood_for(true, true), Mood::Helping);
+    }
+
+    #[test]
+    fn the_dock_says_hello_then_helps_then_hangs_out() {
+        let mut cabin = Cabin::quiet_for_test();
+        cabin.threads = vec![crate::threads::ChatThread::new("Chat", false)];
+        cabin.thread_idx = 0;
+        cabin.messages = Arc::new(Vec::new());
+        assert_eq!(cabin.companion_mood(), Mood::Hello);
+
+        cabin.messages = Arc::new(vec![("user".into(), "tidy my fans".into())]);
+        cabin.running = true;
+        cabin.chat_job_thread = Some(cabin.threads[0].id.clone());
+        assert_eq!(cabin.companion_mood(), Mood::HangingOut);
+
+        cabin.live_blocks.push(grokhub_core::LiveBlock {
+            kind: LiveKind::Tool,
+            body: String::new(),
+            tool_id: "t1".into(),
+            tool_title: "Read fan curve".into(),
+            tool_status: "in_progress".into(),
+            tool_detail: String::new(),
+            fold_slot: 0,
+        });
+        assert_eq!(cabin.companion_mood(), Mood::Helping);
+
+        cabin.running = false;
+        cabin.chat_job_thread = None;
+        assert_eq!(cabin.companion_mood(), Mood::HangingOut);
     }
 
     #[test]

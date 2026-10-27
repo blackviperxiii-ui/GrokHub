@@ -124,8 +124,9 @@ function Seed-Pulse([string]$cfg) {
 # hardware read behind PC loadout; $wheel scrolls the dock down that many
 # notches first, for the cards below the fold of a short window. With $pulse
 # the config holds Pulse cards and the shot clicks Pulse in the rail; $clickAt
-# (x, y in the window) clicks once more after that.
-function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlide, [switch]$upgrade, [string]$keys = '', [switch]$dock, [int]$wheel = 0, [switch]$pulse, [int[]]$clickAt = @()) {
+# (x, y in the window) clicks once more after that. $mood pins the
+# companion's pose (GROKHUB_DECK_MOOD), since no turn runs here.
+function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlide, [switch]$upgrade, [string]$keys = '', [switch]$dock, [int]$wheel = 0, [switch]$pulse, [int[]]$clickAt = @(), [string]$mood = '') {
     $root = Join-Path $env:RUNNER_TEMP "deck-$name"
     Remove-Item -Recurse -Force $root -ErrorAction SilentlyContinue
     $cfg = Join-Path $root 'cfg'
@@ -142,6 +143,7 @@ function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlid
     $env:APPDATA = Join-Path $root 'AppData'
     $env:LOCALAPPDATA = Join-Path $root 'LocalAppData'
     $env:GROKHUB_RENDERER = 'wgpu'
+    $env:GROKHUB_DECK_MOOD = $mood
     $p = Start-Process -FilePath $exe -WorkingDirectory $root -PassThru `
         -RedirectStandardError (Join-Path $root 'err.txt') -RedirectStandardOutput (Join-Path $root 'out.txt')
     $hwnd = [IntPtr]::Zero
@@ -253,4 +255,8 @@ Shot 1024 720 'pulse-1024x720' 'ops-dark' '14' -pulse
 Shot 1024 720 'pulse-1024x720-scrolled' 'ops-dark' '14' -pulse -wheel 10
 Shot 720 720 'pulse-720x720' 'ops-dark' '14' -pulse
 Shot 720 720 'pulse-720x720-ideas' 'ops-dark' '14' -pulse -clickAt 505, 81
+foreach ($m in 'hello', 'helping', 'hanging-out') {
+    Shot 1600 900 "mood-$m-1600x900" 'ops-dark' '17' -dock -mood $m
+    Shot 1100 720 "mood-$m-1100x720" 'ops-dark' '17' -dock -mood $m
+}
 Get-ChildItem $Out | Format-Table Name, Length
