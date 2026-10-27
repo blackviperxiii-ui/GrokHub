@@ -46,7 +46,7 @@ describe("WebAccess", () => {
     expect(screen.getByLabelText("Pairing code")).toHaveTextContent(ON.code);
     expect(
       screen.getByText(
-        "Web access ends when you turn it off or quit GrokHub. After 30 minutes with no browser using it, the code changes and browsers pair again.",
+        "Web access ends when you turn it off or quit Loadout. After 30 minutes with no browser using it, the code changes and browsers pair again.",
       ),
     ).toBeInTheDocument();
 

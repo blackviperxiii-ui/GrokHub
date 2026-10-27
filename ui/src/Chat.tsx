@@ -18,6 +18,7 @@ import {
 } from "./api";
 import type { RunNotice } from "./Automations";
 import { ElicitCard, ModeChips, type ElicitItem } from "./Modes";
+import { PRODUCT_NAME } from "./brand";
 
 export type Item =
   | { kind: "user"; text: string }
@@ -56,10 +57,10 @@ const PLACEHOLDERS: Record<SessionMode, string> = {
 
 export const CHAT_EMPTY = "Ask Grok anything.";
 export const SIGNED_OUT =
-  "GrokHub chats with your xAI API key. It's kept in this device's keychain, never in a file.";
+  `${PRODUCT_NAME} chats with your xAI API key. It's kept in this device's keychain, never in a file.`;
 export const SIGNED_OUT_KEY_HINT = "No key yet? Make one at console.x.ai.";
 export const SIGNED_OUT_REMOTE =
-  "GrokHub on your computer has no API key yet. Add one there, then chat here.";
+  `${PRODUCT_NAME} on your computer has no API key yet. Add one there, then chat here.`;
 
 /** One primary sign-in button and one hint, on every platform. The web app
  * signs in on the computer, so it only says so. */
@@ -139,7 +140,7 @@ function PermissionCard({
   return (
     <div className="card permission" role="group" aria-label={`Approve ${item.title}`}>
       <div className="card-title">
-        GrokHub wants to run <code>{item.title}</code>
+        {PRODUCT_NAME} wants to run <code>{item.title}</code>
       </div>
       {item.action && <pre className="card-action">{item.action}</pre>}
       {item.reason && <p className="card-reason">{item.reason}</p>}

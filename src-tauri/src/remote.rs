@@ -40,7 +40,12 @@ const PING: Duration = Duration::from_secs(15);
 /// ui/src/WebAccess.tsx.
 pub const IDLE: Duration = Duration::from_secs(30 * 60);
 
-pub const REFUSED: &str = "The web app can't do that. Use GrokHub on your computer.";
+pub fn refused() -> String {
+    format!(
+        "The web app can't do that. Use {} on your computer.",
+        grokhub_core::brand::product_name()
+    )
+}
 pub const NOT_YOURS: &str = "That chat isn't open in this browser.";
 
 /// The web app's commands: chat with approvals, automations, memory,
@@ -383,7 +388,10 @@ fn accept_loop(server: &Server, job: &Job) {
             send_json(
                 req,
                 503,
-                &json!({ "ok": false, "error": "GrokHub is busy. Try again." }),
+                &json!({
+                    "ok": false,
+                    "error": format!("{} is busy. Try again.", grokhub_core::brand::product_name())
+                }),
             );
             continue;
         }
@@ -445,7 +453,7 @@ fn handle(mut req: Request, job: &Job, slot: Slot) {
             };
             let reply = match args {
                 Err(err) => json!({ "ok": false, "error": format!("Bad arguments: {err}") }),
-                Ok(_) if !web_command(&command) => json!({ "ok": false, "error": REFUSED }),
+                Ok(_) if !web_command(&command) => json!({ "ok": false, "error": refused() }),
                 Ok(args) => match (job.dispatch)(&command, args) {
                     Ok(value) => json!({ "ok": true, "value": value }),
                     Err(error) => json!({ "ok": false, "error": error }),
@@ -867,7 +875,7 @@ mod tests {
             Some(&code),
             key,
         );
-        assert_eq!(parse(&body), json!({ "ok": false, "error": REFUSED }));
+        assert_eq!(parse(&body), json!({ "ok": false, "error": refused() }));
         let (_, _, body) = http(port, "POST", call, Some(&code), "{not json");
         let error = parse(&body)["error"]
             .as_str()

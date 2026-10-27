@@ -353,7 +353,7 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
         ping.contains("notify::ping")
             && ping.contains("quiet_now")
             && ping.contains("window_focused")
-            && ping.contains("GrokHub"),
+            && ping.contains("brand::product_name()"),
         "only the situation card pings, and only when the window is away and quiet hours are off: {ping}"
     );
     assert!(

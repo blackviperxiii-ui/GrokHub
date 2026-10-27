@@ -7,11 +7,12 @@ import {
   type PlaybookPage,
   type PlaybookRow,
 } from "./api";
+import { PRODUCT_NAME } from "./brand";
 
 export const PLAYBOOKS_NOTE =
   "How the agent works through a task: look first, then safe steps, then risky ones, with a backup, a check and a way back. Risky steps still ask you first; a playbook never changes an approval.";
 export const EDITOR_NOTE =
-  "Saved as playbooks/<id>.toml in GrokHub's settings folder. Steps go look-only, then safe, then risky. A step that deletes, sends, pays, touches sign-ins or can't be undone must be risky, and commands GrokHub never runs are refused.";
+  `Saved as playbooks/<id>.toml in ${PRODUCT_NAME}'s settings folder. Steps go look-only, then safe, then risky. A step that deletes, sends, pays, touches sign-ins or can't be undone must be risky, and commands ${PRODUCT_NAME} never runs are refused.`;
 
 const SOURCE_LABEL: Record<PlaybookRow["source"], string> = {
   shipped: "Built in",

@@ -1,7 +1,7 @@
 //! The shell's xAI API key, kept in the OS keychain under the cabin's
 //! `GrokHub` service. The Grok CLI's own login files are never read.
 
-pub const SERVICE: &str = "GrokHub";
+pub const SERVICE: &str = grokhub_core::brand::INTERNAL_ID;
 pub const ACCOUNT: &str = "shell-console-key";
 
 /// Points chat at a local mock model server. Only plain-http loopback URLs are

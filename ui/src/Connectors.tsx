@@ -8,14 +8,15 @@ import {
   type ConnectorRow,
   type ConnectorsChanged,
 } from "./api";
+import { PRODUCT_NAME } from "./brand";
 
 export const DISCONNECT_DETAIL =
   "Its entry leaves your connections, and its sign-in and saved token are deleted.";
 
 export const CONNECTORS_EMPTY =
-  "No connectors yet. Connectors you add in the GrokHub cabin show up here.";
+  `No connectors yet. Connectors you add in the ${PRODUCT_NAME} cabin show up here.`;
 
-export const SIGN_IN_NOTE = "Needs a sign-in. Sign in from the GrokHub cabin for now.";
+export const SIGN_IN_NOTE = `Needs a sign-in. Sign in from the ${PRODUCT_NAME} cabin for now.`;
 
 export function statusLine(row: ConnectorRow): string {
   switch (row.status) {

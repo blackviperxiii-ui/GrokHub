@@ -252,7 +252,7 @@ describe("Chat", () => {
       reason: "",
     });
     const card = screen.getByRole("group", { name: "Approve write" });
-    expect(card).toHaveTextContent("GrokHub wants to run write");
+    expect(card).toHaveTextContent("Loadout wants to run write");
     expect(card).toHaveTextContent("note.txt");
 
     await userEvent.click(screen.getByRole("button", { name: "Allow once" }));
@@ -430,7 +430,7 @@ describe("applyEvent", () => {
       expect(screen.getByRole("button", { name })).toBeDisabled();
       expect(screen.getByRole("button", { name })).toHaveAttribute(
         "title",
-        "Set in GrokHub on your computer.",
+        "Set in Loadout on your computer.",
       );
     }
   });
@@ -504,7 +504,7 @@ describe("applyEvent", () => {
     ]);
     expect(card).toHaveTextContent(
       "Sign in to start" +
-        "GrokHub chats with your xAI API key. It's kept in this device's keychain, never in a file." +
+        "Loadout chats with your xAI API key. It's kept in this device's keychain, never in a file." +
         "Add your API key" +
         "No key yet? Make one at console.x.ai.",
     );
@@ -518,7 +518,7 @@ describe("applyEvent", () => {
     render(<Chat onOpenSettings={() => {}} remote />);
     expect(
       await screen.findByText(
-        "GrokHub on your computer has no API key yet. Add one there, then chat here.",
+        "Loadout on your computer has no API key yet. Add one there, then chat here.",
       ),
     ).toBeVisible();
     expect(screen.queryByRole("region", { name: "Sign in" })).toBeNull();

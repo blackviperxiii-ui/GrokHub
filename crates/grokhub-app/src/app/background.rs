@@ -544,7 +544,10 @@ impl Cabin {
             if end != BgEnd::Stopped && (!self.window_focused || run.thread_id != vis) {
                 let clock = Self::local_clock();
                 if !quiet_hours_active(&clock.hm(), &self.cfg.quiet_start, &self.cfg.quiet_end) {
-                    crate::notify::ping("GrokHub", &format!("{head} · {}", run.title));
+                    crate::notify::ping(
+                        grokhub_core::brand::product_name(),
+                        &format!("{head} · {}", run.title),
+                    );
                 }
             }
         }

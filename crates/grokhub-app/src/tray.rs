@@ -495,7 +495,7 @@ impl ksni::Tray for GrokTray {
     }
 
     fn title(&self) -> String {
-        "GrokHub".into()
+        grokhub_core::brand::product_name().into()
     }
 
     fn icon_name(&self) -> String {
@@ -510,7 +510,7 @@ impl ksni::Tray for GrokTray {
         ksni::ToolTip {
             icon_name: "grokhub".into(),
             icon_pixmap: vec![cabin_icon()],
-            title: "GrokHub".into(),
+            title: grokhub_core::brand::product_name().into(),
             description: "Cabin — close stays in the tray".into(),
         }
     }
@@ -636,7 +636,7 @@ fn windows_tray_attach() -> Option<TrayHost> {
     let icon = windows_tray_icon()?;
     let tray = TrayIconBuilder::new()
         .with_menu(Box::new(menu))
-        .with_tooltip("GrokHub")
+        .with_tooltip(grokhub_core::brand::product_name())
         .with_icon(icon)
         .build()
         .ok()?;
@@ -1348,5 +1348,40 @@ DBUS_SESSION_BUS_PID=1330
                 "/home/user/.dbus/session-bus/44cb5599dcc24b78a2ed9dac18a9b2a5-1"
             ))
         );
+    }
+
+    /// Window title, tray, title bar, welcome, About and notifications take
+    /// the name from brand/brand.json, so a rename there reaches them all.
+    #[test]
+    fn cabin_chrome_names_come_from_brand_json() {
+        let chrome = [
+            ("main.rs", include_str!("main.rs")),
+            ("tray.rs", include_str!("tray.rs")),
+            ("notify.rs", include_str!("notify.rs")),
+            ("app/sidebar.rs", include_str!("app/sidebar.rs")),
+            ("app/setup_wizard.rs", include_str!("app/setup_wizard.rs")),
+        ];
+        let bare = ["\"GrokHub\"", "\"Loadout\"", "Welcome to GrokHub"];
+        for (file, src) in chrome {
+            let body = src.split("#[cfg(test)]").next().unwrap_or(src);
+            for word in bare {
+                assert!(
+                    !body.contains(word),
+                    "{file} hardcodes {word}; use grokhub_core::brand"
+                );
+            }
+        }
+        assert!(
+            include_str!("main.rs").contains(".with_title(grokhub_core::brand::product_name())")
+        );
+        let about = include_str!("app/settings.rs")
+            .split("SettingsSec::About => {")
+            .nth(1)
+            .expect("About section");
+        assert!(
+            about[..400].contains("grokhub_core::brand::product_name()"),
+            "{about}"
+        );
+        assert_eq!(grokhub_core::brand::product_name(), "Loadout");
     }
 }

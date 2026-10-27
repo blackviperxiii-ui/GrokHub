@@ -433,7 +433,7 @@ impl Cabin {
         } else {
             format!("{title} {body}")
         };
-        crate::notify::ping("GrokHub", &line);
+        crate::notify::ping(grokhub_core::brand::product_name(), &line);
     }
 
     #[cfg(test)]
