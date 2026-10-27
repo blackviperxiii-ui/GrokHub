@@ -201,6 +201,7 @@ mod provider_ui;
 mod pulse;
 mod pulse_sources_ui;
 mod pulse_ui;
+mod reactions_ui;
 #[cfg(test)]
 mod repaint_timer_tests;
 mod repair_ui;
