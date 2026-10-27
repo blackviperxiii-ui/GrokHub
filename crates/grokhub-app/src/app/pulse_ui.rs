@@ -24,6 +24,8 @@ pub(super) const FOCUS_RING: egui::Color32 = egui::Color32::from_rgb(0x4a, 0x90,
 /// The sign-in line under Suggest ideas.
 const NOTE_AMBER: egui::Color32 = egui::Color32::from_rgb(0xf4, 0xb7, 0x40);
 const COL_MAX_W: f32 = 680.0;
+/// Left and right padding of the Pulse page.
+const PAGE_PAD_X: f32 = 24.0;
 /// Page widths where Pulse changes shape (deck slide 14, pulse-live.html):
 /// two columns from 1100, the 60/40 split from 1500, one column from 720,
 /// and the Feed | Ideas switch below that.
@@ -98,13 +100,27 @@ fn tiles(width: f32, min: f32, gap: f32) -> usize {
     }
 }
 
+/// [`layout_at`] for a column with no padding around it.
+#[cfg(test)]
+pub(super) fn pulse_layout(page_w: f32) -> PulseLayout {
+    layout_at(page_w, page_w)
+}
+
+/// Pulse inside its page: the breakpoints read the page beside the rail,
+/// padding included, as the deck's container queries do; the columns fill
+/// what's left inside the padding.
+pub(super) fn pulse_page_layout(page_w: f32) -> PulseLayout {
+    layout_at(page_w, page_w - PAGE_PAD_X * 2.0)
+}
+
 /// The fluid Pulse grid, like the reference CSS: Ideas 3fr and Feed 2fr when
 /// wide, 1.35fr and 1fr on laptops, one stacked column on small windows, and
 /// the switch below 720.
-pub(super) fn pulse_layout(page_w: f32) -> PulseLayout {
-    let w = page_w.max(0.0);
+fn layout_at(container_w: f32, content_w: f32) -> PulseLayout {
+    let fit_w = container_w.max(0.0);
+    let w = content_w.max(0.0);
     let gap = (w * 0.013).clamp(16.0, 30.0);
-    if w < STACK_MIN_W {
+    if fit_w < STACK_MIN_W {
         let col = w.min(COL_MAX_W);
         return PulseLayout {
             fit: PulseFit::Compact,
@@ -115,7 +131,7 @@ pub(super) fn pulse_layout(page_w: f32) -> PulseLayout {
             feed_cols: 1,
         };
     }
-    if w < SPLIT_MIN_W {
+    if fit_w < SPLIT_MIN_W {
         return PulseLayout {
             fit: PulseFit::Stacked,
             ideas_w: w,
@@ -125,7 +141,11 @@ pub(super) fn pulse_layout(page_w: f32) -> PulseLayout {
             feed_cols: tiles(w, STACKED_POST_MIN_W, POST_TILE_GAP),
         };
     }
-    let share = if w >= WIDE_MIN_W { 0.6 } else { 1.35 / 2.35 };
+    let share = if fit_w >= WIDE_MIN_W {
+        0.6
+    } else {
+        1.35 / 2.35
+    };
     let inner = w - gap;
     let ideas_w = inner * share;
     let feed_w = inner - ideas_w;
@@ -136,6 +156,16 @@ pub(super) fn pulse_layout(page_w: f32) -> PulseLayout {
         gap,
         ideas_cols: tiles(ideas_w, IDEA_TILE_MIN_W, IDEA_TILE_GAP),
         feed_cols: tiles(feed_w, POST_TILE_MIN_W, POST_TILE_GAP),
+    }
+}
+
+/// The header's Suggest control. The one-column page (720-1100) shortens it
+/// to "Suggest", as on deck slide 14.
+pub(super) fn suggest_label(busy: bool, fit: PulseFit) -> &'static str {
+    match (busy, fit) {
+        (true, _) => "Suggesting…",
+        (false, PulseFit::Stacked) => "Suggest",
+        (false, _) => "Suggest ideas",
     }
 }
 
@@ -1066,9 +1096,9 @@ impl Cabin {
         self.poll_pulse_images();
         let frame = egui::Frame::NONE
             .fill(crate::theme::bg())
-            .inner_margin(egui::Margin::symmetric(24, 20));
+            .inner_margin(egui::Margin::symmetric(PAGE_PAD_X as i8, 20));
         let _ = super::dock_ui::page_panel(ui, self.cfg.dock_panels, frame, |ui| {
-            let lay = pulse_layout(ui.available_width());
+            let lay = pulse_page_layout(ui.available_width() + PAGE_PAD_X * 2.0);
             self.pulse_view.fit = lay.fit;
             egui::ScrollArea::vertical()
                 .id_salt("pulse-scroll")
@@ -1240,11 +1270,7 @@ impl Cabin {
                         let busy = self.ideas_rx.is_some();
                         let empty = self.pulse_groups(now_ms()).is_empty();
                         if busy || !empty {
-                            let label = if busy {
-                                "Suggesting…"
-                            } else {
-                                "Suggest ideas"
-                            };
+                            let label = suggest_label(busy, self.pulse_view.fit);
                             if crate::cards::ghost_pill(&mut cell, label) && !busy {
                                 self.suggest_ideas_pressed();
                             }

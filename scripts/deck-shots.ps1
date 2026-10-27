@@ -21,11 +21,19 @@ public static class DeckWin {
     [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
     [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
     [DllImport("user32.dll")] public static extern void mouse_event(uint f, int dx, int dy, int data, UIntPtr extra);
+    [DllImport("user32.dll")] public static extern bool PrintWindow(IntPtr h, IntPtr dc, uint flags);
+    [DllImport("user32.dll")] public static extern int GetSystemMetrics(int i);
     [StructLayout(LayoutKind.Sequential)] public struct RECT { public int L, T, R, B; }
 }
 '@
 [void][DeckWin]::SetProcessDPIAware()
-try { Set-DisplayResolution -Width 1920 -Height 1080 -Force } catch { Write-Host "display: $_" }
+# The 2560 Pulse shot wants a wide screen; fall back to 1920x1080.
+try { Set-DisplayResolution -Width 2560 -Height 1440 -Force } catch {
+    Write-Host "display 2560: $_"
+    try { Set-DisplayResolution -Width 1920 -Height 1080 -Force } catch { Write-Host "display: $_" }
+}
+$screenW = [DeckWin]::GetSystemMetrics(0); $screenH = [DeckWin]::GetSystemMetrics(1)
+Write-Host "screen ${screenW}x${screenH}"
 
 New-Item -ItemType Directory -Force -Path $Out | Out-Null
 $repo = (Resolve-Path .).Path
@@ -78,14 +86,46 @@ function Seed-Dock([string]$cfg, [hashtable]$app) {
     $app.currentThread = $id
 }
 
+# Pulse with real cards: four ideas (Up next) and three feed cards, so the
+# columns, tiling and the Feed | Ideas switch have something to reflow.
+function Seed-Pulse([string]$cfg) {
+    $now = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+    $ideas = @(
+        @('gpu', 'I can update your GPU driver tonight after you log off', 'A new driver fixes the stutter you hit in two of your games.', 'try'),
+        @('aim', 'I can set up a 20-minute aim routine before ranked', 'You win more first matches after a warm-up.', 'automation'),
+        @('bill', 'I can remind you about the electric bill on Friday', 'It is due Friday. Nothing goes out until you say so.', 'reminder'),
+        @('cache', 'I can clear 38 GB of old shader caches and installers', 'Your game drive is 91% full.', 'try')
+    )
+    $cards = @()
+    for ($i = 0; $i -lt $ideas.Count; $i++) {
+        $at = $now - ($i + 1) * 600000
+        $cards += @{ id = "idea-$($ideas[$i][0])-$at"; kind = 'idea'; title = $ideas[$i][1]; body = $ideas[$i][2];
+                     createdAt = $at; status = 'unread'; action = @{ type = 'open_workboard' };
+                     prompt = $ideas[$i][1]; ideaKind = $ideas[$i][3]; sourceId = $ideas[$i][0] }
+    }
+    $feed = @(
+        @('gpu-news', 'New GPU driver fixes stutter in three big shooters', 'Shader compile hitches are gone in the games you play most.', 2520000),
+        @('patch', 'Season patch: your main got a buff', 'Faster reload and a smaller recoil kick.', 10800000),
+        @('quiet', 'While you were in quiet hours', 'Driver check ran, backup done, prices checked.', 21600000)
+    )
+    foreach ($f in $feed) {
+        $at = $now - $f[3]
+        $cards += @{ id = "done-$($f[0])"; kind = 'automation_done'; title = $f[1]; body = $f[2];
+                     createdAt = $at; status = 'unread'; action = @{ type = 'open_automations' }; sourceId = $f[0] }
+    }
+    Write-Utf8 (Join-Path $cfg 'updates.json') (ConvertTo-Json -InputObject $cards -Depth 4)
+}
+
 # One launch at $w x $h. $theme is what app.json holds before launch; with
 # $upgrade the file has no themeMigrated, as a pre-3.4 install leaves it.
 # With $keys, those keystrokes go to the window once it has drawn (for
 # example '^,' opens Settings) and the shot waits for the new screen. With
 # $dock the config is seeded first (Seed-Dock) and the shot waits for the
 # hardware read behind PC loadout; $wheel scrolls the dock down that many
-# notches first, for the cards below the fold of a short window.
-function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlide, [switch]$upgrade, [string]$keys = '', [switch]$dock, [int]$wheel = 0) {
+# notches first, for the cards below the fold of a short window. With $pulse
+# the config holds Pulse cards and the shot clicks Pulse in the rail; $clickAt
+# (x, y in the window) clicks once more after that.
+function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlide, [switch]$upgrade, [string]$keys = '', [switch]$dock, [int]$wheel = 0, [switch]$pulse, [int[]]$clickAt = @()) {
     $root = Join-Path $env:RUNNER_TEMP "deck-$name"
     Remove-Item -Recurse -Force $root -ErrorAction SilentlyContinue
     $cfg = Join-Path $root 'cfg'
@@ -94,6 +134,7 @@ function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlid
               window = @{ x = 0; y = 0; w = $w; h = $h; maximized = $false } }
     if (-not $upgrade) { $app.themeMigrated = $true }
     if ($dock) { Seed-Dock $cfg $app }
+    if ($pulse) { Seed-Pulse $cfg }
     $app | ConvertTo-Json -Depth 4 | Set-Content -Encoding utf8 (Join-Path $cfg 'app.json')
     $env:GROKHUB_CONFIG = $cfg
     $env:HOME = $root
@@ -124,6 +165,22 @@ function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlid
     }
     $r = New-Object DeckWin+RECT
     [void][DeckWin]::GetWindowRect($hwnd, [ref]$r)
+    if ($pulse) {
+        # Pulse is the fourth icon on the 40 px rail, at every window size.
+        [void][DeckWin]::SetForegroundWindow($hwnd)
+        [void][DeckWin]::SetCursorPos($r.L + 20, $r.T + 181)
+        [DeckWin]::mouse_event(0x0002, 0, 0, 0, [UIntPtr]::Zero)
+        [DeckWin]::mouse_event(0x0004, 0, 0, 0, [UIntPtr]::Zero)
+        [void][DeckWin]::SetCursorPos($r.L + 200, $r.T + 10)
+        Start-Sleep -Seconds 4
+    }
+    if ($clickAt.Count -eq 2) {
+        [void][DeckWin]::SetCursorPos($r.L + $clickAt[0], $r.T + $clickAt[1])
+        [DeckWin]::mouse_event(0x0002, 0, 0, 0, [UIntPtr]::Zero)
+        [DeckWin]::mouse_event(0x0004, 0, 0, 0, [UIntPtr]::Zero)
+        [void][DeckWin]::SetCursorPos($r.L + 200, $r.T + 10)
+        Start-Sleep -Seconds 3
+    }
     if ($wheel -gt 0) {
         # The dock is the right-hand column; 0x0800 is MOUSEEVENTF_WHEEL.
         [void][DeckWin]::SetCursorPos($r.R - 120, $r.T + [int](($r.B - $r.T) / 2))
@@ -137,7 +194,15 @@ function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlid
     Write-Host "window ${w}x${h}: rect $($r.L),$($r.T) ${cw}x${ch}"
     $bmp = New-Object System.Drawing.Bitmap $cw, $ch
     $g = [System.Drawing.Graphics]::FromImage($bmp)
-    $g.CopyFromScreen($r.L, $r.T, 0, 0, $bmp.Size)
+    if ($r.R -le $screenW -and $r.B -le $screenH) {
+        $g.CopyFromScreen($r.L, $r.T, 0, 0, $bmp.Size)
+    } else {
+        # Wider than the screen: ask the window to render itself
+        # (PW_RENDERFULLCONTENT).
+        $dc = $g.GetHdc()
+        Write-Host "PrintWindow ${name}: $([DeckWin]::PrintWindow($hwnd, $dc, 2))"
+        $g.ReleaseHdc($dc)
+    }
     $g.Dispose()
     Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
     $saved = Get-Content (Join-Path $cfg 'app.json') -Raw | ConvertFrom-Json
@@ -180,4 +245,12 @@ Shot 1100 720 'settings-1100x720' 'ops-dark' '07' -keys '^,'
 Shot 1600 900 'dock-1600x900' 'ops-dark' '02' -dock
 Shot 1100 720 'dock-1100x720' 'ops-dark' '02' -dock
 Shot 1100 720 'dock-1100x720-scrolled' 'ops-dark' '02' -dock -wheel 10
+Shot 1600 900 'pulse-1600x900' 'ops-dark' '14' -pulse
+Shot 1100 720 'pulse-1100x720' 'ops-dark' '14' -pulse
+Shot 2560 1440 'pulse-2560x1440' 'ops-dark' '14' -pulse
+Shot 1440 900 'pulse-1440x900' 'ops-dark' '14' -pulse
+Shot 1024 720 'pulse-1024x720' 'ops-dark' '14' -pulse
+Shot 1024 720 'pulse-1024x720-scrolled' 'ops-dark' '14' -pulse -wheel 10
+Shot 720 720 'pulse-720x720' 'ops-dark' '14' -pulse
+Shot 720 720 'pulse-720x720-ideas' 'ops-dark' '14' -pulse -clickAt 505, 81
 Get-ChildItem $Out | Format-Table Name, Length
