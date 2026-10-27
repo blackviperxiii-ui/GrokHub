@@ -37,11 +37,51 @@ function Save-Jpeg($bmp, $path) {
     $bmp.Save($path, $codec, $params)
 }
 
+function Write-Utf8($path, [string]$text) {
+    New-Item -ItemType Directory -Force -Path (Split-Path $path) | Out-Null
+    [IO.File]::WriteAllText($path, $text, (New-Object System.Text.UTF8Encoding $false))
+}
+
+# Real dock data in the throwaway config: a chat whose saved session holds a
+# five-step todo list (Objectives), 23 finished tasks in the outcome log
+# (LVL and XP) and two unread home cards (From Pulse). The chat has no
+# transcript, so launch keeps it open instead of starting a fresh one.
+function Seed-Dock([string]$cfg, [hashtable]$app) {
+    $now = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+    $id = 'deck-hangout'
+    $steps = @('Diamond, 3 wins left', 'Aim routine 12/20', 'Warm up in the range', 'Review last match', 'Pick a duo for tonight')
+    $todos = @{ todos = @(for ($i = 0; $i -lt $steps.Count; $i++) {
+        @{ id = "$($i + 1)"; content = $steps[$i]; status = $(if ($i -eq 0) { 'in_progress' } else { 'pending' }) }
+    }) } | ConvertTo-Json -Depth 4 -Compress
+    $session = @(
+        (@{ id = $id; title = 'Hangout'; created = $now; cwd = '.'; model = 'grok'; engine = 'native'; renamed = $false } | ConvertTo-Json -Compress),
+        (@{ type = 'function_call'; call_id = 'c1'; name = 'todo_write'; arguments = $todos } | ConvertTo-Json -Compress)
+    ) -join "`n"
+    Write-Utf8 (Join-Path $cfg "sessions/$id.jsonl") "$session`n"
+    $thread = @{ id = $id; title = 'Hangout'; native = $true; grokSession = $id; accessedMs = $now; lastActiveMs = $now; messages = @() }
+    Write-Utf8 (Join-Path $cfg 'threads.json') (ConvertTo-Json -InputObject @($thread) -Depth 4)
+    Write-Utf8 (Join-Path $cfg 'projects.json') '[]'
+    $cards = @(
+        @{ id = 'done-drv'; kind = 'automation_done'; title = 'I can update your GPU driver tonight'; body = 'Restore point first';
+           createdAt = $now - 3600000; status = 'unread'; action = @{ type = 'open_automations' }; sourceId = 'drv' },
+        @{ id = 'done-patch'; kind = 'automation_done'; title = 'Season patch: your main got a buff'; body = 'Patch notes';
+           createdAt = $now - 10800000; status = 'unread'; action = @{ type = 'open_automations' }; sourceId = 'patch' }
+    )
+    Write-Utf8 (Join-Path $cfg 'updates.json') (ConvertTo-Json -InputObject $cards -Depth 4)
+    $lines = for ($i = 0; $i -lt 23; $i++) {
+        $at = $now - 172800000 - $i * 60000
+        @{ task = "task $i"; signature = 'topic:deck'; result = 'success'; reasons = @('verify_ok', 'accepted'); finished_at = $at; at = $at } | ConvertTo-Json -Compress
+    }
+    Write-Utf8 (Join-Path $cfg 'outcomes.jsonl') (($lines -join "`n") + "`n")
+    $app.currentThread = $id
+}
+
 # One launch at $w x $h. $theme is what app.json holds before launch; with
 # $upgrade the file has no themeMigrated, as a pre-3.4 install leaves it.
 # With $keys, those keystrokes go to the window once it has drawn (for
-# example '^,' opens Settings) and the shot waits for the new screen.
-function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlide, [switch]$upgrade, [string]$keys = '') {
+# example '^,' opens Settings) and the shot waits for the new screen. With
+# $dock the config is seeded first (Seed-Dock).
+function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlide, [switch]$upgrade, [string]$keys = '', [switch]$dock) {
     $root = Join-Path $env:RUNNER_TEMP "deck-$name"
     Remove-Item -Recurse -Force $root -ErrorAction SilentlyContinue
     $cfg = Join-Path $root 'cfg'
@@ -49,6 +89,7 @@ function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlid
     $app = @{ getStartedDone = $true; setupDone = $true; theme = $theme; deviceName = 'my-pc';
               window = @{ x = 0; y = 0; w = $w; h = $h; maximized = $false } }
     if (-not $upgrade) { $app.themeMigrated = $true }
+    if ($dock) { Seed-Dock $cfg $app }
     $app | ConvertTo-Json -Depth 4 | Set-Content -Encoding utf8 (Join-Path $cfg 'app.json')
     $env:GROKHUB_CONFIG = $cfg
     $env:HOME = $root
@@ -121,4 +162,6 @@ Shot 1100 720 '1100x720' 'ops-dark' $Slide
 Shot 1600 900 'upgrade-1600x900' 'dark' $UpgradeSlide -upgrade
 Shot 1600 900 'settings-1600x900' 'ops-dark' '07' -keys '^,'
 Shot 1100 720 'settings-1100x720' 'ops-dark' '07' -keys '^,'
+Shot 1600 900 'dock-1600x900' 'ops-dark' '02' -dock
+Shot 1100 720 'dock-1100x720' 'ops-dark' '02' -dock
 Get-ChildItem $Out | Format-Table Name, Length
