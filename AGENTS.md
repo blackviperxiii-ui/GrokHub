@@ -4,7 +4,7 @@
 Feature/fix PRs → `beta`; every agent squash-merges its own PR into `beta` as soon as CI is green (no review hold). `.github/`, clippy, and release-script changes ship the same way. Only `beta` → `main` promotion, tags, and releases need the maintainer's approval. Hotfixes → `main` only with the maintainer's approval, then merge-back PR into beta (merge commit). No version bump on beta PRs — add `changelog.d/<slug>.md`; promotions run `cargo xtask bump`.
 
 ## Bot
-Prefer Grok Build on the box (roles: explore, plan, implementer). Cursor Cloud and Claude both take cards; one card per tool at a time.
+Prefer Grok Build on the box (roles: explore, plan, implementer). Cursor Cloud paused until Oct 11. One bot per job.
 
 ## Compass files
 Read the compass file before editing a module: `docs/compass/README.md` lists one short map per crate and hot module (owns, change recipe, what breaks, gotchas). Fix it in the same PR when you move code; `compass_paths` fails on stale paths.
@@ -18,13 +18,6 @@ Semgrep before Ready. dyl-review quick for draft asks — never dyl-ready-pr mer
 ## Skill cues
 Reach for these coding skills at the matching moment (same practice by hand if a skill is not installed). Cues only — do not vendor plugin or skill files into the repo.
 
-**vstack** ships as a plugin (Cursor team marketplace; Claude Code via the `blackviperxiii-ui/vstack` marketplace in `.claude/settings.json`). Use its skills from the plugin only — never copy vstack files into this repo.
-
-- **viper-mode** (vstack) as the default playbook for nontrivial work
-- **follow-through** (vstack) on every card: keep the task ledger, flag stalls, report status without being asked
-- **qa-walkthrough** (vstack) before `beta` → `main` promotion or after big features
-- **av-qa-walkthrough** (vstack) when changing audio/video playback, capture, streaming, codecs, or devices
-- **create-verification-skill** / **maintain-verification-skill** (vstack) to build or maintain this app's verify skill before marking work Done
 - **check-compiler-errors** after Rust or TypeScript edits, before pushing
 - **loop-on-ci** or **fix-ci** once a PR is open, until it is green
 - **fix-merge-conflicts** when a PR is behind `beta`
