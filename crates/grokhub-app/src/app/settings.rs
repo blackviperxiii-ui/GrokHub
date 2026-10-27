@@ -753,7 +753,8 @@ impl Cabin {
                                                         SettingsSec::About => {
                                                             ui.label(
                                                                 RichText::new(format!(
-                                                                    "GrokHub {}",
+                                                                    "{} {}",
+                                                                    grokhub_core::brand::product_name(),
                                                                     env!("CARGO_PKG_VERSION")
                                                                 ))
                                                                 .size(crate::theme::FONT_HEADING)

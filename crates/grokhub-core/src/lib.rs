@@ -10,6 +10,7 @@ pub mod automation;
 pub mod autonomy;
 pub mod bg_task;
 pub mod brain_policy;
+pub mod brand;
 pub mod browser;
 pub mod cabin_engine;
 pub mod cabin_rules;

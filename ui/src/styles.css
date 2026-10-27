@@ -1395,3 +1395,18 @@ label.toggle-row {
 .idea-row .feed-corner {
   padding-right: 8px;
 }
+
+/* The logo mark next to the product name (brand/logo-mark.svg). */
+.brand-lockup {
+  display: flex;
+  align-items: center;
+  gap: 0.4em;
+}
+
+/* The mark's white L needs a dark tile to show on light themes. */
+.brand-lockup img {
+  width: 1.3em;
+  height: 1.3em;
+  background: #0b0b0d;
+  border-radius: 0.2em;
+}

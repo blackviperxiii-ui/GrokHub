@@ -1,6 +1,7 @@
 import { useState, type FormEvent } from "react";
 import type { Approvals, ElicitAction, ElicitChoice, SessionMode } from "./api";
 import { APPROVALS } from "./approvals";
+import { PRODUCT_NAME } from "./brand";
 
 /** The cabin's composer chips, each with its hover line. */
 export const SESSION_CHIPS: { mode: SessionMode; label: string; tip: string }[] = [
@@ -27,8 +28,8 @@ export const APPROVAL_CHIPS: { value: Approvals; label: string }[] = [
   { value: "always", label: "Always" },
 ];
 
-export const EFFORT_TIP = "Auto effort: GrokHub picks how hard Grok thinks for each step.";
-export const REMOTE_APPROVALS_TIP = "Set in GrokHub on your computer.";
+export const EFFORT_TIP = `Auto effort: ${PRODUCT_NAME} picks how hard Grok thinks for each step.`;
+export const REMOTE_APPROVALS_TIP = `Set in ${PRODUCT_NAME} on your computer.`;
 
 /** Chat / Plan / btw, Ask / Auto / Always, and the read-only effort chip.
  * `approvals` is null until Settings loads. On the web app the approvals

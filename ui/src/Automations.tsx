@@ -8,6 +8,7 @@ import {
   type AutomationRow,
   type RunResult,
 } from "./api";
+import { PRODUCT_NAME } from "./brand";
 
 function resultLine(result: RunResult): string {
   if (result.error) return result.error;
@@ -92,7 +93,7 @@ export function Automations({
         </button>
       </form>
       <p className="note">
-        The GrokHub cabin runs these on schedule. Run now works here: it can read, and anything
+        The {PRODUCT_NAME} cabin runs these on schedule. Run now works here: it can read, and anything
         that would need your OK is skipped.
       </p>
       {note && (

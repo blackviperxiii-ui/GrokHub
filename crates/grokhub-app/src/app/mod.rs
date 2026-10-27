@@ -4853,7 +4853,10 @@ impl Cabin {
                 // Mark seen only when the toast is actually shown, and do it
                 // before unmap so the hide persist writes the flag.
                 if tip.show {
-                    crate::notify::ping("GrokHub", "Still running in the tray");
+                    crate::notify::ping(
+                        grokhub_core::brand::product_name(),
+                        "Still running in the tray",
+                    );
                 }
                 if tip.mark_seen {
                     self.told_tray = true;

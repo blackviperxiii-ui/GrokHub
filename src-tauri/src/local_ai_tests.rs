@@ -444,7 +444,7 @@ fn limited_detection_is_named() {
         limits(&machine(Vec::new(), 8_192), "linux", &wayland),
         [
             "No GPU reader found (nvidia-smi or vulkaninfo), so models are sized for RAM.",
-            "On Wayland GrokHub can't see which app is fullscreen, so Pause while gaming only sees games it can detect.",
+            "On Wayland Loadout can't see which app is fullscreen, so Pause while gaming only sees games it can detect.",
         ]
     );
     let hypr = |k: &str| match k {

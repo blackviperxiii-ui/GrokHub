@@ -452,7 +452,7 @@ impl Cabin {
             crate::notify::ping_if_long_quiet(
                 started.elapsed(),
                 quiet,
-                "GrokHub",
+                grokhub_core::brand::product_name(),
                 "Host job finished",
             );
             let _ = tx.send(JobOut::HostDone(block));

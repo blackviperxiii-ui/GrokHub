@@ -14,7 +14,7 @@ pub fn should_ping_long(elapsed: Duration) -> bool {
 pub fn ping_args<'a>(title: &'a str, body: &'a str) -> Vec<&'a str> {
     vec![
         "-a",
-        "GrokHub",
+        grokhub_core::brand::product_name(),
         "-u",
         "low",
         "-t",
@@ -87,9 +87,12 @@ mod tests {
 
     #[test]
     fn ping_replaces_and_expires() {
-        let args = ping_args("GrokHub", "Still running in the tray");
-        assert!(args.contains(&"-a"));
-        assert!(args.contains(&"GrokHub"));
+        let args = ping_args("Pulse", "Still running in the tray");
+        assert_eq!(
+            &args[..2],
+            ["-a", "Loadout"],
+            "the app name comes from brand.json"
+        );
         assert!(args.contains(&"-u"));
         assert!(args.contains(&"low"));
         assert!(args.contains(&"-t"));
@@ -97,7 +100,7 @@ mod tests {
         assert!(args
             .iter()
             .any(|a| a.contains("x-canonical-private-synchronous:grokhub")));
-        assert_eq!(args[args.len() - 2], "GrokHub");
+        assert_eq!(args[args.len() - 2], "Pulse");
         assert_eq!(args[args.len() - 1], "Still running in the tray");
     }
 

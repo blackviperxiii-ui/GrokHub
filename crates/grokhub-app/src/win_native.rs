@@ -61,7 +61,7 @@ unsafe extern "system" fn enum_cabin(hwnd: HWND, lparam: LPARAM) -> BOOL {
         return TRUE;
     }
     let title = String::from_utf16_lossy(&buf[..n as usize]);
-    if title == "GrokHub" {
+    if title == grokhub_core::brand::product_name() {
         state.hwnd = hwnd;
         return 0; // stop
     }
