@@ -12,6 +12,13 @@ struct PermDraft {
     grant: String,
 }
 
+/// The support URL to link from About, or `None` to hide the link: unset,
+/// blank, or anything the browser opener would refuse.
+pub(super) fn support_link(url: &str) -> Option<&str> {
+    let url = url.trim();
+    crate::desktop::url_safe_to_open(url).then_some(url)
+}
+
 pub(super) fn settings_group_home(group: SettingsGroup) -> SettingsSec {
     match group {
         SettingsGroup::General => SettingsSec::Account,
@@ -766,6 +773,7 @@ impl Cabin {
                                                             if crate::cards::settings_action(ui, "Diagnostics", "Copy a redacted bundle. No secrets.", "Copy") {
                                                                 copy_diag = true;
                                                             }
+                                                            self.ui_support_link(ui);
                                                         }
                                                         SettingsSec::Defaults => {
                                                             crate::ui_kit::section_header(
@@ -1093,6 +1101,19 @@ impl Cabin {
 
     /// Settings → Copy diagnostics and the palette row: the bundle goes to the
     /// clipboard, and the status line only says so.
+    /// Settings → About: a quiet text link, only while `app.json` has a support URL.
+    fn ui_support_link(&self, ui: &mut egui::Ui) {
+        let Some(url) = support_link(&self.cfg.support_url) else {
+            return;
+        };
+        ui.add_space(6.0);
+        let label =
+            RichText::new(grokhub_core::brand::support_label()).size(crate::theme::FONT_META);
+        if ui.link(label).on_hover_text(url).clicked() {
+            let _ = crate::desktop::open_url(url);
+        }
+    }
+
     pub(super) fn copy_diagnostics(&mut self, ctx: &egui::Context) {
         let version = crate::update::build_version_line();
         let bundle = diagnostics_bundle(
@@ -1315,6 +1336,55 @@ impl Cabin {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn support_link_shows_only_for_a_web_url() {
+        assert_eq!(support_link(""), None);
+        assert_eq!(support_link("   "), None);
+        assert_eq!(
+            support_link("https://donate.example/my-app"),
+            Some("https://donate.example/my-app")
+        );
+        assert_eq!(
+            support_link("  https://donate.example/my-app \n"),
+            Some("https://donate.example/my-app")
+        );
+        assert_eq!(support_link("donate.example/my-app"), None);
+        assert_eq!(support_link("javascript:alert(1)"), None);
+        assert_eq!(support_link("file:///etc/passwd"), None);
+        assert_eq!(support_link("https://donate.example/a|calc"), None);
+    }
+
+    #[test]
+    fn about_shows_the_support_link_quietly() {
+        // Windows checkouts carry CRLF; the body split below looks for "\n    }\n".
+        let src = include_str!("settings.rs").replace("\r\n", "\n");
+        // Split markers are built with concat! so this test's own text never
+        // matches the source scans other tests run on this file.
+        let about = src
+            .split(concat!("SettingsSec::", "About => {"))
+            .nth(1)
+            .and_then(|s| s.split(concat!("SettingsSec::", "Defaults => {")).next())
+            .expect("About arm");
+        assert!(about.contains("self.ui_support_link(ui);"), "{about}");
+        let body = src
+            .split("fn ui_support_link(")
+            .nth(1)
+            .and_then(|s| s.split("\n    }\n").next())
+            .expect("ui_support_link");
+        assert!(body.contains("brand::support_label()"), "{body}");
+        assert!(
+            body.contains("support_link(&self.cfg.support_url)"),
+            "{body}"
+        );
+        assert!(body.contains("crate::desktop::open_url(url)"), "{body}");
+        for loud in ["Window::new", "Modal", "toast", "notify", "settings_action"] {
+            assert!(
+                !body.contains(loud),
+                "the support link stays a plain link: {loud}"
+            );
+        }
+    }
 
     #[test]
     fn cabin_default_choices_match_the_headless_pins() {

@@ -396,6 +396,10 @@ pub struct AppConfig {
     /// Off unless you opt in (`app.json` only).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub proactive_reminders: bool,
+    /// `app.json` only for now. A donation page for Settings → About's quiet
+    /// "Support the developer" link. Empty (the default) hides the link.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub support_url: String,
     #[serde(default)]
     pub goal_pin: String,
     /// Cabin paints a new Imagine cover every few hours.
@@ -671,6 +675,7 @@ impl Default for AppConfig {
             weekly_spend_cap_usd: 0,
             price_ceiling_usd_per_m: default_price_ceiling(),
             proactive_reminders: false,
+            support_url: String::new(),
             goal_pin: String::new(),
             imagine_wall: default_imagine_wall(),
             composer_glow: false,
@@ -1770,6 +1775,26 @@ mod tests {
         assert!(text.contains("\"dreamHour\":6"), "{text}");
         let back: AppConfig = serde_json::from_str(&text).unwrap();
         assert_eq!(back.dream_hour, 6);
+    }
+
+    #[test]
+    fn support_url_is_unset_by_default_and_round_trips() {
+        assert_eq!(AppConfig::default().support_url, "");
+        let old: AppConfig = serde_json::from_str("{}").unwrap();
+        assert_eq!(old.support_url, "");
+        let blank = serde_json::to_string(&AppConfig::default()).unwrap();
+        assert!(!blank.contains("supportUrl"), "{blank}");
+        let cfg = AppConfig {
+            support_url: "https://donate.example/my-app".into(),
+            ..AppConfig::default()
+        };
+        let text = serde_json::to_string(&cfg).unwrap();
+        assert!(
+            text.contains("\"supportUrl\":\"https://donate.example/my-app\""),
+            "{text}"
+        );
+        let back: AppConfig = serde_json::from_str(&text).unwrap();
+        assert_eq!(back.support_url, "https://donate.example/my-app");
     }
 
     #[test]

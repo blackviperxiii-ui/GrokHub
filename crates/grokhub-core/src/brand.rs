@@ -1,4 +1,4 @@
-//! The product's name, tagline and companion name, read from
+//! The product's name, tagline, companion name and About link label, read from
 //! `brand/brand.json` at the repo root. The cabin, the shell and the web UI
 //! (`ui/src/brand.ts`) all read that one file, so a rename is one line there.
 
@@ -17,13 +17,19 @@ pub struct Brand {
     pub product_name: String,
     pub tagline: String,
     pub companion_name: String,
+    pub support_label: String,
 }
 
 fn parse(raw: &str) -> Option<Brand> {
     let brand: Brand = serde_json::from_str(raw).ok()?;
-    let filled = [&brand.product_name, &brand.tagline, &brand.companion_name]
-        .iter()
-        .all(|s| !s.trim().is_empty());
+    let filled = [
+        &brand.product_name,
+        &brand.tagline,
+        &brand.companion_name,
+        &brand.support_label,
+    ]
+    .iter()
+    .all(|s| !s.trim().is_empty());
     filled.then_some(brand)
 }
 
@@ -34,6 +40,7 @@ static BRAND: LazyLock<Brand> = LazyLock::new(|| {
         product_name: INTERNAL_ID.to_string(),
         tagline: String::new(),
         companion_name: String::new(),
+        support_label: "Support the developer".to_string(),
     })
 });
 
@@ -51,6 +58,11 @@ pub fn companion_name() -> &'static str {
     &BRAND.companion_name
 }
 
+/// The quiet link in Settings → About, shown only once a support URL is set.
+pub fn support_label() -> &'static str {
+    &BRAND.support_label
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -63,11 +75,13 @@ mod tests {
                 product_name: "Loadout".into(),
                 tagline: "Gear up. Level up.".into(),
                 companion_name: "Nyx".into(),
+                support_label: "Support the developer".into(),
             })
         );
         assert_eq!(product_name(), "Loadout");
         assert_eq!(tagline(), "Gear up. Level up.");
         assert_eq!(companion_name(), "Nyx");
+        assert_eq!(support_label(), "Support the developer");
     }
 
     #[test]
@@ -84,7 +98,11 @@ mod tests {
         assert_eq!(parse("{}"), None);
         assert_eq!(parse("not json"), None);
         assert_eq!(
-            parse(r#"{"productName":" ","tagline":"t","companionName":"c"}"#),
+            parse(r#"{"productName":" ","tagline":"t","companionName":"c","supportLabel":"s"}"#),
+            None
+        );
+        assert_eq!(
+            parse(r#"{"productName":"p","tagline":"t","companionName":"c","supportLabel":""}"#),
             None
         );
     }
