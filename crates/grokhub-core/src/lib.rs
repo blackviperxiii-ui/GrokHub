@@ -141,7 +141,7 @@ pub use amr::{
 };
 pub use appearance::{
     appearance_choices, appearance_hint, kde_prefers_dark, os_prefers_dark, parse_theme,
-    pick_theme, resolve_dark, theme_id, theme_label, ThemeChoice,
+    pick_theme, resolve_dark, resolve_palette, theme_id, theme_label, DarkPalette, ThemeChoice,
 };
 pub use attach::{
     append_composer, attach_chip_label, attach_kind, attach_name, attach_prompt_line,

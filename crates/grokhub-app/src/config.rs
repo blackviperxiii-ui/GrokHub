@@ -608,7 +608,7 @@ fn is_zero_u64(n: &u64) -> bool {
 }
 
 fn default_theme() -> String {
-    "dark".into()
+    "ops-dark".into()
 }
 
 fn default_session_mode() -> String {
@@ -1805,7 +1805,7 @@ mod tests {
             "Ask is the default — leftover yolo true disables the bound-tree jail"
         );
         assert!(loaded.imagine_wall);
-        assert_eq!(loaded.theme, "dark");
+        assert_eq!(loaded.theme, "ops-dark");
         let mut placed = AppConfig::default();
         placed.window.x = Some(80.0);
         placed.window.y = Some(40.0);
