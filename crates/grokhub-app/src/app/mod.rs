@@ -174,6 +174,7 @@ mod indexer_ui;
 mod interests_ui;
 mod jobs;
 mod journal_ui;
+mod loadout_home;
 mod local_ai_ui;
 mod local_pick_ui;
 mod local_probe;
@@ -5372,6 +5373,7 @@ impl eframe::App for Cabin {
                 match self.page_nav() {
                     Nav::Chat => {
                         self.paint_native_badge(ui);
+                        self.ui_loadout_dock(ui);
                         self.ui_chat(ui);
                     }
                     Nav::Devices => self.ui_devices(ui),
