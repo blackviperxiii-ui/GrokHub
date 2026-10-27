@@ -1,0 +1,1 @@
+- Docs: wire vstack plugin cues in AGENTS.md and Claude Code `.claude/settings.json` (no vendored skill files).

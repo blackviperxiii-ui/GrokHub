@@ -1,0 +1,1 @@
+- Docs: AGENTS.md fallback to read vstack skills from GitHub when the plugin is not installed (cloud agents).

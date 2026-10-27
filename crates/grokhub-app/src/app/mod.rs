@@ -130,7 +130,6 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
-
 mod acp;
 mod amr_memory;
 mod chat_kick;
@@ -189,6 +188,7 @@ mod model_wait_ui;
 #[cfg(test)]
 mod native_signin_tests;
 mod night;
+mod nudge_watchers_ui;
 mod oauth;
 mod pages;
 pub mod panels;

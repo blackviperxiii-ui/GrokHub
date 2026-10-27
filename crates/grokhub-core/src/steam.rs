@@ -179,13 +179,17 @@ pub fn is_news_feed(url: &str) -> bool {
     header_image(url).is_some()
 }
 
-/// The store header art for a Steam news feed's game.
-pub fn header_image(feed_url: &str) -> Option<String> {
-    let id: u32 = feed_url
-        .strip_prefix("https://store.steampowered.com/feeds/news/app/")?
+/// App id from a [`SteamGame::news_feed`] URL.
+pub fn app_id_from_news_feed(url: &str) -> Option<u32> {
+    url.strip_prefix("https://store.steampowered.com/feeds/news/app/")?
         .trim_end_matches('/')
         .parse()
-        .ok()?;
+        .ok()
+}
+
+/// The store header art for a Steam news feed's game.
+pub fn header_image(feed_url: &str) -> Option<String> {
+    let id: u32 = app_id_from_news_feed(feed_url)?;
     Some(format!(
         "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/{id}/header.jpg"
     ))

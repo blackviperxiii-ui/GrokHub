@@ -47,6 +47,9 @@ pub struct PulseMeta {
     /// A Spike-6a proactive offer: its help score, route and topic.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub proactive: Option<crate::proactive::ProactiveMeta>,
+    /// Command Centre nudge watcher that posted this card (card 42).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nudge_watcher: Option<crate::nudge_watchers::NudgeWatcherMeta>,
 }
 
 fn is_zero(n: &u64) -> bool {
