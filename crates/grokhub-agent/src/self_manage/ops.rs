@@ -80,6 +80,10 @@ pub fn run(
         }
         "automation_delete" => control::delete_automation(&arg(args, "id")),
         "pulse_steam" => pulse_steam(ctx, args, grokhub_core::steam::detect_root()),
+        "know_me_tags" => Ok(grokhub_core::know_me::load(
+            &ctx.config_dir.join(grokhub_core::know_me::FILE_NAME),
+        )
+        .report()),
         other => Err(format!("unknown self-manage tool `{other}`")),
     };
     match out {
