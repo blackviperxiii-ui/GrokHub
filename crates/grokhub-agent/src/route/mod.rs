@@ -222,7 +222,7 @@ pub fn call_model(
     let decision = live::decide(&dir, &rc, now);
     if decision.paused() {
         route_log(&dir, &rc, &decision, &RouteDone::unseen());
-        return Err(ClientError::Protocol(decision.pause_msg().into()));
+        return Err(ClientError::Protocol(decision.pause_text()));
     }
     let mut sent = call.clone();
     sent.effort = decision.send_effort(call.effort.as_deref());
@@ -800,6 +800,14 @@ impl Router {
         } else if connectivity::is_cloud_only(input.class) && input.local.offline {
             // Image / web / hard prepare wait for the cloud (named queue note in the cabin).
             rules.push("offline:cloud_queued".into());
+            ModelPick {
+                model: input.current_model.trim().to_string(),
+                no_route: true,
+                replaced: None,
+            }
+        } else if local::offline_unavailable(&input.local, input.class, input.ctx_tokens) {
+            // Offline and no on-device runtime: wait for the network, say why.
+            rules.push("offline:local_unavailable".into());
             ModelPick {
                 model: input.current_model.trim().to_string(),
                 no_route: true,

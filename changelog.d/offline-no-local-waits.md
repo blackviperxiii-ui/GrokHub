@@ -1,0 +1,1 @@
+- Offline with no working on-device model, a chat turn no longer fails silently. The chat says "Offline, local model unavailable" and why (runtime missing, no model, Local AI off, or the start error), keeps your message, and answers it once the network is back with a note: "answered after reconnect".
