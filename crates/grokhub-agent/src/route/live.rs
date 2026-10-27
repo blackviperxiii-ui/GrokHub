@@ -436,6 +436,20 @@ impl Decision {
         }
     }
 
+    /// What a paused call returns, with the reason the device can't take an offline turn.
+    pub fn pause_text(&self) -> String {
+        if self.budget_pause.is_none()
+            && self
+                .route
+                .rule_ids
+                .iter()
+                .any(|r| r == "offline:local_unavailable")
+        {
+            return super::local::offline_pause_text(&super::local::unavailable_reason());
+        }
+        self.pause_msg().to_string()
+    }
+
     /// The effort to send: the router's for a listed class, the call's own otherwise.
     pub fn send_effort(&self, call_effort: Option<&str>) -> Option<String> {
         if self.live {
@@ -1085,7 +1099,7 @@ pub fn stream_routed(
     let decision = decide(&dir, &call, now);
     if decision.paused() {
         route_log(&dir, &call, &decision, &RouteDone::unseen());
-        return Err(ClientError::Protocol(decision.pause_msg().into()));
+        return Err(ClientError::Protocol(decision.pause_text()));
     }
     let effort = decision.send_effort(req.effort.as_deref());
     let model = decision.send_model(&req.model);

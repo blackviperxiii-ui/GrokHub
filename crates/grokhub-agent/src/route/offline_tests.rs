@@ -204,3 +204,51 @@ fn offline_work_goes_local_at_every_level_but_unload_which_pauses_with_a_chip() 
         );
     }
 }
+
+#[test]
+fn offline_with_no_local_runtime_waits_and_says_why_instead_of_trying_the_cloud() {
+    let reg = fleet();
+    let _off = ForceOffline::on();
+    let profiles: BTreeMap<String, ModelProfile> = BTreeMap::new();
+    let table = RoutingTable::default();
+    // The toggle is on but no runtime is installed (no fake, no files).
+    let gate = LocalGate {
+        offline: true,
+        ..LocalGate::default()
+    };
+    let r = Router::choose(
+        &ask("chat:default", gate.clone()),
+        &reg,
+        &profiles,
+        &table,
+        10,
+    );
+    assert!(r.no_route, "{r:?}");
+    assert!(
+        r.rule_ids.contains(&"offline:local_unavailable".into()),
+        "{:?}",
+        r.rule_ids
+    );
+    // Cloud-only work keeps its own named queue note.
+    let r = Router::choose(
+        &ask("media:image", gate.clone()),
+        &reg,
+        &profiles,
+        &table,
+        10,
+    );
+    assert!(r.rule_ids.contains(&"offline:cloud_queued".into()));
+    // Online, the same gate goes to the cloud as before.
+    let online = LocalGate {
+        offline: false,
+        ..gate
+    };
+    let r = Router::choose(&ask("chat:default", online), &reg, &profiles, &table, 10);
+    assert_eq!((r.no_route, r.model.as_str()), (false, "grok-4.7"));
+    assert_eq!(
+        local::offline_pause_text("runtime missing"),
+        "Offline, local model unavailable: runtime missing. GrokHub keeps your message and answers it once you're back online."
+    );
+    local::set_enabled(false);
+    assert_eq!(local::unavailable_reason(), "Local AI is off in Settings");
+}
