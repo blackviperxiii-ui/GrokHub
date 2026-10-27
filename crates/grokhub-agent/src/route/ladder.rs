@@ -546,10 +546,7 @@ mod tests {
         assert!(!hold_chat_drops("plan", true));
         assert_eq!(steer_for_turn(words, false), Steer::Harder);
         assert_eq!(steer_for_turn(words, true), Steer::None);
-        assert_eq!(
-            name(start_rung(chat, 0.1, Steer::None, true).0),
-            "low"
-        );
+        assert_eq!(name(start_rung(chat, 0.1, Steer::None, true).0), "low");
         assert_eq!(
             name(start_holding(chat, 0.1, Steer::None, true, true).0),
             "medium"

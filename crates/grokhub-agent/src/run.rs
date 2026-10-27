@@ -1043,7 +1043,11 @@ pub fn run_loop(
 
 /// A later turn's talk style replaces the earlier one in the stored system
 /// message; the stable prefix before it stays cached.
-fn restyle_history(history: &mut [InputItem], style: grokhub_core::talk::TalkStyle, soft_caps: bool) {
+fn restyle_history(
+    history: &mut [InputItem],
+    style: grokhub_core::talk::TalkStyle,
+    soft_caps: bool,
+) {
     if let Some(InputItem::Message { role, content }) = history.first_mut() {
         if let Some(ContentPart::InputText(text)) = content.first_mut().filter(|_| role == "system")
         {

@@ -207,9 +207,9 @@ impl NativeEngine {
         let mut ask = |t: &str| -> Result<String, String> {
             let call = crate::route::ModelCall::xai(
                 &self.model,
-                Some(crate::brain::classify_effort(crate::brain::care_first_enabled(
-                    &crate::perm::config_dir(),
-                ))),
+                Some(crate::brain::classify_effort(
+                    crate::brain::care_first_enabled(&crate::perm::config_dir()),
+                )),
                 crate::brain::BRIEF_CLASS,
                 &self.conversation_id,
                 vec![

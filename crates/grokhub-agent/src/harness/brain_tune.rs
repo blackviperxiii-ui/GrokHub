@@ -242,10 +242,7 @@ fn propose_row(config_dir: &Path, key: &str, tweak: &Tweak, now: u64) -> Result<
         Some(r) => *r = new,
         None => user.push(new),
     }
-    let after = policy_text_with(
-        &user,
-        grokhub_core::brain_policy::care_first_flag(&before),
-    )?;
+    let after = policy_text_with(&user, grokhub_core::brain_policy::care_first_flag(&before))?;
     write_and_try(
         config_dir,
         &target,

@@ -65,10 +65,7 @@ pub fn care_first_enabled(config_dir: &Path) -> bool {
 pub fn effective_rows(config_dir: &Path) -> (Vec<PolicyRow>, Option<String>) {
     let (rows, note) = load_policy(config_dir);
     if care_first_enabled(config_dir) {
-        (
-            grokhub_core::brain_policy::apply_care_first(rows),
-            note,
-        )
+        (grokhub_core::brain_policy::apply_care_first(rows), note)
     } else {
         (rows, note)
     }
@@ -141,13 +138,17 @@ mod tests {
         let picked = pick_policy(&rows, &brief).unwrap();
         assert_eq!(
             (picked.goal.as_str(), picked.talk.as_str(), picked.style()),
-            (
-                "care",
-                "natural",
-                grokhub_core::talk::TalkStyle::Natural
-            )
+            ("care", "natural", grokhub_core::talk::TalkStyle::Natural)
         );
-        assert_eq!(load_policy(&dir).0.iter().find(|r| r.key() == "chat × casual").unwrap().goal, "cost");
+        assert_eq!(
+            load_policy(&dir)
+                .0
+                .iter()
+                .find(|r| r.key() == "chat × casual")
+                .unwrap()
+                .goal,
+            "cost"
+        );
         let _ = std::fs::remove_dir_all(dir);
     }
 }

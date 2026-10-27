@@ -174,11 +174,7 @@ pub fn soft_cap_words(style: TalkStyle) -> Option<usize> {
         style,
         TalkStyle::Short | TalkStyle::Concise | TalkStyle::Progress | TalkStyle::Natural
     );
-    Some(if slack {
-        hard + hard / 5 * 2
-    } else {
-        hard
-    })
+    Some(if slack { hard + hard / 5 * 2 } else { hard })
 }
 
 pub fn fits_cap(style: TalkStyle, reply: &str) -> bool {
