@@ -186,6 +186,7 @@ mod model_wait_ui;
 #[cfg(test)]
 mod native_signin_tests;
 mod night;
+mod nudge_watchers_ui;
 mod oauth;
 mod pages;
 pub mod panels;
@@ -216,7 +217,6 @@ mod skill_undo;
 mod slash;
 mod status_toasts;
 mod steam_ui;
-mod nudge_watchers_ui;
 mod systems_brief_ui;
 #[cfg(test)]
 mod tests;

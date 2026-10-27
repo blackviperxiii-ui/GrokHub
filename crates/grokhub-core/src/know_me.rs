@@ -46,6 +46,8 @@ pub fn tags_mention(tags: &[KnowMeTag], words: &[&str]) -> bool {
     let topics = tag_topics(tags);
     words.iter().any(|w| {
         let w = w.to_ascii_lowercase();
-        topics.iter().any(|t| t.contains(&w) || w.contains(t.as_str()))
+        topics
+            .iter()
+            .any(|t| t.contains(&w) || w.contains(t.as_str()))
     })
 }

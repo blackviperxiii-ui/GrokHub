@@ -73,10 +73,10 @@ pub mod mcp_catalog;
 pub mod mcp_oauth;
 pub mod md;
 pub mod mission;
-pub mod nudge_watchers;
 pub mod model_download;
 pub mod model_registry;
 pub mod models;
+pub mod nudge_watchers;
 pub mod oauth;
 pub mod openclaw;
 pub mod organs;
@@ -379,12 +379,6 @@ pub use imagine_auth::{
     XAI_OAUTH_ACCOUNT, XAI_OAUTH_LEGACY_ACCOUNT,
 };
 pub use inhabit::{can_inhabit, inhabit_bundle_usable, inhabit_ready, InhabitBundle};
-pub use know_me::{load_tags, tag_topics, tags_mention, KnowMeTag};
-pub use nudge_watchers::{
-    dismiss_snooze, is_nudge_watcher_card, nudge_watcher_card, tick, NudgeLedger,
-    NudgeWatcherMeta, NudgeWatcherSettings, TickInput, TickOutput, WatcherId, WatcherSnapshot,
-    COOLDOWN_MS, DEFAULT_DAILY_MAX, DISMISS_SNOOZE_MS, LEDGER_FILE, SOURCE_PREFIX, TICK_EVERY_MS,
-};
 pub use journal::{
     abandon_entry, add_evidence, add_option, create_entry, decide_entry, defer_entry,
     dismiss_nudge, due_nudges, edit_entry, link_board_evidence, mission_entry, mission_start,
@@ -392,6 +386,7 @@ pub use journal::{
     search_entries, set_leaning, set_status, EvidenceKind, EvidenceLink, JournalEntry,
     JournalLeaning, JournalOption, JournalOutcome, JournalStatus, MissionStart,
 };
+pub use know_me::{load_tags, tag_topics, tags_mention, KnowMeTag};
 pub use learning::{
     apply_local_lessons, extract_insights, insight_key_for_fact, insight_pin, is_actionable_need,
     is_durable_fact, is_greeting_chitchat, looks_like_user_pref, prune_ephemeral_insights,
@@ -407,6 +402,11 @@ pub use mission::{
     MissionStatus, MissionView,
 };
 pub use models::{catalog_line, sanitize_chat_model, MODEL_CATALOG};
+pub use nudge_watchers::{
+    dismiss_snooze, is_nudge_watcher_card, nudge_watcher_card, tick, NudgeLedger, NudgeWatcherMeta,
+    NudgeWatcherSettings, TickInput, TickOutput, WatcherId, WatcherSnapshot, COOLDOWN_MS,
+    DEFAULT_DAILY_MAX, DISMISS_SNOOZE_MS, LEDGER_FILE, SOURCE_PREFIX, TICK_EVERY_MS,
+};
 pub use oauth::{
     apply_profile, auth_bearer, chat_bearer, get_started_oauth_error, has_auth, jwt_exp_ms,
     merge_refreshed, next_oauth_poll_secs, oauth_access_live, oauth_error_status,

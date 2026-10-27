@@ -311,13 +311,15 @@ fn on_cooldown(ledger: &NudgeLedger, key: &str, now_ms: u64) -> bool {
 }
 
 fn snoozed(ledger: &NudgeLedger, key: &str, now_ms: u64) -> bool {
-    ledger
-        .snoozed_until
-        .get(key)
-        .is_some_and(|t| now_ms < *t)
+    ledger.snoozed_until.get(key).is_some_and(|t| now_ms < *t)
 }
 
-fn may_post(ledger: &NudgeLedger, _settings: &NudgeWatcherSettings, key: &str, now_ms: u64) -> bool {
+fn may_post(
+    ledger: &NudgeLedger,
+    _settings: &NudgeWatcherSettings,
+    key: &str,
+    now_ms: u64,
+) -> bool {
     !on_cooldown(ledger, key, now_ms) && !snoozed(ledger, key, now_ms)
 }
 
@@ -474,13 +476,11 @@ pub fn detect_os_updates(snap: &WatcherSnapshot) -> Option<WatcherResult> {
             dedupe_key: format!("os:failed:{}", names),
             title: "Some package updates failed".into(),
             body: format!("Failed packages: {}.", names),
-            evidence: u
-                .failed
-                .iter()
-                .map(|p| format!("failed={}", p))
-                .collect(),
+            evidence: u.failed.iter().map(|p| format!("failed={}", p)).collect(),
             action: None,
-            prompt: Some("List failed OS package updates and what to try next (package names only).".into()),
+            prompt: Some(
+                "List failed OS package updates and what to try next (package names only).".into(),
+            ),
         });
     }
     if u.pending.is_empty() {
@@ -492,11 +492,7 @@ pub fn detect_os_updates(snap: &WatcherSnapshot) -> Option<WatcherResult> {
         dedupe_key: format!("os:pending:{}", u.pending.len()),
         title: "OS updates are waiting".into(),
         body: format!("Pending packages: {}.", names),
-        evidence: u
-            .pending
-            .iter()
-            .map(|p| format!("pending={}", p))
-            .collect(),
+        evidence: u.pending.iter().map(|p| format!("pending={}", p)).collect(),
         action: None,
         prompt: Some("Summarize pending OS updates (package names only).".into()),
     })
@@ -509,10 +505,7 @@ pub fn detect_peripheral(snap: &WatcherSnapshot, know_me: &[KnowMeTag]) -> Optio
                 let game = last_game.as_deref().filter(|g| !g.is_empty());
                 let evidence = vec![
                     format!("device={}", name.trim()),
-                    format!(
-                        "last_game={}",
-                        game.unwrap_or("(none)")
-                    ),
+                    format!("last_game={}", game.unwrap_or("(none)")),
                 ];
                 let (title, body, prompt) = if let Some(g) = game {
                     (
@@ -548,10 +541,7 @@ pub fn detect_peripheral(snap: &WatcherSnapshot, know_me: &[KnowMeTag]) -> Optio
                 };
                 return Some(WatcherResult {
                     id: WatcherId::Peripheral,
-                    dedupe_key: format!(
-                        "periph:pr:{}",
-                        name.trim().to_ascii_lowercase()
-                    ),
+                    dedupe_key: format!("periph:pr:{}", name.trim().to_ascii_lowercase()),
                     title: format!("{} is online", name.trim()),
                     body: format!("{} came online on this machine.", kind),
                     evidence: vec![format!("device={}", name.trim())],
@@ -708,7 +698,10 @@ mod tests {
             now_ms: 2,
         });
         assert_eq!(out.posted, 1);
-        assert!(out.cards[0].why.as_ref().is_some_and(|w| w.contains("news_gid=101")));
+        assert!(out.cards[0]
+            .why
+            .as_ref()
+            .is_some_and(|w| w.contains("news_gid=101")));
     }
 
     #[test]
@@ -809,7 +802,10 @@ mod tests {
         };
         let r = detect_gpu_driver(&snap).expect("driver");
         let card = nudge_watcher_card(&r, 1);
-        assert!(card.body.as_ref().is_some_and(|b| b.contains("will not install")));
+        assert!(card
+            .body
+            .as_ref()
+            .is_some_and(|b| b.contains("will not install")));
         assert!(matches!(
             card.action,
             Some(UpdateAction::DeepLink { href })

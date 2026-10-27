@@ -125,7 +125,10 @@ fn crash_counts_linux() -> Vec<CrashCount> {
                 if app.is_empty() || app.eq_ignore_ascii_case("grokhub") {
                     continue;
                 }
-                counts.entry(app.to_string()).and_modify(|c| *c += 1).or_insert(1);
+                counts
+                    .entry(app.to_string())
+                    .and_modify(|c| *c += 1)
+                    .or_insert(1);
             }
         }
     }
@@ -136,7 +139,8 @@ fn crash_counts_linux() -> Vec<CrashCount> {
 }
 
 fn gpu_driver_snap(_cabin: &Cabin) -> Option<GpuDriverSnap> {
-    let home = grokhub_core::paths::user_home().unwrap_or_else(|| std::path::PathBuf::from("/home/user"));
+    let home =
+        grokhub_core::paths::user_home().unwrap_or_else(|| std::path::PathBuf::from("/home/user"));
     let profile = super::local_probe::read_profile(&home);
     let gpu = profile
         .gpus
@@ -170,7 +174,8 @@ fn gpu_driver_snap(_cabin: &Cabin) -> Option<GpuDriverSnap> {
 
 impl Cabin {
     pub(super) fn collect_nudge_snapshot(&mut self, now: u64) -> WatcherSnapshot {
-        let home = grokhub_core::paths::user_home().unwrap_or_else(|| std::path::PathBuf::from("/home/user"));
+        let home = grokhub_core::paths::user_home()
+            .unwrap_or_else(|| std::path::PathBuf::from("/home/user"));
         let free = super::setup_wizard::free_disk_mb(&home).map(|mb| mb * 1024 * 1024);
         let disk = free.map(|free_bytes| DiskSnap {
             free_bytes,
@@ -191,9 +196,8 @@ impl Cabin {
     fn steam_news_hits(&self, _now: u64) -> Vec<SteamNewsHit> {
         // News items are parsed on the Pulse source check; reuse the newest
         // cached Steam posts when present (metadata only).
-        let cache = grokhub_core::pulse_sources::load_cache(
-            &super::pulse_sources_ui::sources_cache_path(),
-        );
+        let cache =
+            grokhub_core::pulse_sources::load_cache(&super::pulse_sources_ui::sources_cache_path());
         let mut out = Vec::new();
         for entry in cache.entries.values() {
             for item in &entry.items {
@@ -303,11 +307,7 @@ impl Cabin {
                     .color(crate::theme::fg()),
             );
             if ui
-                .add(
-                    egui::DragValue::new(&mut daily)
-                        .range(1..=12)
-                        .speed(0.2),
-                )
+                .add(egui::DragValue::new(&mut daily).range(1..=12).speed(0.2))
                 .changed()
             {
                 self.cfg.nudge_watchers.daily_max = daily;
