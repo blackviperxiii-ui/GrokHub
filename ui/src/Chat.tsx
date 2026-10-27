@@ -19,6 +19,7 @@ import {
 import type { RunNotice } from "./Automations";
 import { ElicitCard, ModeChips, type ElicitItem } from "./Modes";
 import { PRODUCT_NAME } from "./brand";
+import { onArrowFocus, usePeek } from "./peek";
 
 export type Item =
   | { kind: "user"; text: string }
@@ -42,6 +43,39 @@ export const NOTICE_CHARS = 280;
 
 /** At most this many follow-ups show under a reply. */
 export const SUGGESTIONS_MAX = 3;
+
+/** The next steps under a reply: one row that scrolls sideways when it runs
+ * out of room, with the next chip peeking in. Left and Right move along it. */
+function SuggestRow({
+  items,
+  busy,
+  onPick,
+}: {
+  items: Suggestion[];
+  busy: boolean;
+  onPick: (prompt: string) => void;
+}) {
+  const row = useRef<HTMLDivElement>(null);
+  usePeek(row, "x", items.length);
+  return (
+    <div className="card suggest" role="group" aria-label="Suggestions">
+      <div ref={row} className="card-buttons" onKeyDown={(e) => onArrowFocus(e, "x")}>
+        {items.map((s) => (
+          <button
+            key={s.label}
+            type="button"
+            className="quiet"
+            title={s.prompt}
+            disabled={busy}
+            onClick={() => onPick(s.prompt)}
+          >
+            {s.label}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
 
 export interface Prefill {
   text: string;
@@ -421,22 +455,12 @@ export function Chat({
               );
             case "suggest":
               return (
-                <div key={i} className="card suggest" role="group" aria-label="Suggestions">
-                  <div className="card-buttons">
-                    {item.items.map((s) => (
-                      <button
-                        key={s.label}
-                        type="button"
-                        className="quiet"
-                        title={s.prompt}
-                        disabled={busy}
-                        onClick={() => void send(undefined, s.prompt)}
-                      >
-                        {s.label}
-                      </button>
-                    ))}
-                  </div>
-                </div>
+                <SuggestRow
+                  key={i}
+                  items={item.items}
+                  busy={busy}
+                  onPick={(prompt) => void send(undefined, prompt)}
+                />
               );
           }
         })}

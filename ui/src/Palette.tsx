@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import type { Capabilities } from "./api";
+import { revealItem, usePeek } from "./peek";
 import { SECTION_LABELS, sections, type Section } from "./sections";
 
 export type View = "chat" | "pulse" | "journal" | "automations" | "memory" | "connectors" | "settings";
@@ -59,6 +60,9 @@ export function paletteRows(caps: Capabilities, query: string): PaletteRow[] {
   return [...hits, { label: `Ask Grok: ${query.trim()}`, action: { kind: "ask", text: query.trim() } }];
 }
 
+/** The list may take half the window, as in the stylesheet. */
+const paletteRoom = () => window.innerHeight * 0.5;
+
 /** Ctrl+K (⌘K on a Mac) or the Command button opens it; Escape, a click
  * outside or a pick closes it. */
 export function Palette({
@@ -73,12 +77,22 @@ export function Palette({
   const [query, setQuery] = useState("");
   const [pick, setPick] = useState(0);
   const input = useRef<HTMLInputElement>(null);
+  const list = useRef<HTMLUListElement>(null);
+  // The way the last arrow key moved, so only key moves (not hovers) scroll.
+  const moved = useRef<1 | -1 | null>(null);
   const rows = paletteRows(caps, query);
   const at = Math.min(pick, rows.length - 1);
+  usePeek(list, "y", rows.length, paletteRoom);
 
   useEffect(() => {
     input.current?.focus();
   }, []);
+
+  useEffect(() => {
+    const dir = moved.current;
+    moved.current = null;
+    if (dir && list.current) revealItem(list.current, at, dir);
+  }, [at]);
 
   function choose(row: PaletteRow | undefined) {
     if (!row) return;
@@ -92,9 +106,11 @@ export function Palette({
       onClose();
     } else if (event.key === "ArrowDown") {
       event.preventDefault();
+      moved.current = 1;
       setPick((at + 1) % rows.length);
     } else if (event.key === "ArrowUp") {
       event.preventDefault();
+      moved.current = -1;
       setPick((at - 1 + rows.length) % rows.length);
     } else if (event.key === "Enter") {
       event.preventDefault();
@@ -123,10 +139,11 @@ export function Palette({
           aria-activedescendant={`palette-row-${at}`}
           onChange={(e) => {
             setQuery(e.target.value);
+            moved.current = null;
             setPick(0);
           }}
         />
-        <ul id="palette-rows" role="listbox" aria-label="Pages and commands">
+        <ul ref={list} id="palette-rows" role="listbox" aria-label="Pages and commands">
           {rows.map((row, i) => (
             <li
               key={row.label}

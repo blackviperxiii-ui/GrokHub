@@ -223,12 +223,15 @@ textarea {
   gap: 8px;
 }
 
+/* The script trims max-height so the next row peeks in (peek.ts); rows are
+ * measured from the list, so it is their offset parent. */
 .palette ul {
   list-style: none;
   margin: 0;
   padding: 0;
   max-height: 50vh;
   overflow-y: auto;
+  position: relative;
 }
 
 .palette li {
@@ -317,6 +320,7 @@ textarea {
   flex-direction: column;
   gap: 4px;
   min-width: 140px;
+  position: relative;
 }
 
 .settings-nav button {
@@ -330,10 +334,18 @@ textarea {
     gap: 12px;
   }
 
+  /* One row that scrolls sideways; the next section peeks in (peek.ts). */
   .settings-nav {
     flex-direction: row;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    max-width: 100%;
     min-width: 0;
+  }
+
+  .settings-nav button {
+    flex: none;
+    white-space: nowrap;
   }
 }
 
@@ -982,6 +994,18 @@ textarea.code {
 span.chip.quiet {
   color: var(--muted);
   cursor: default;
+}
+
+/* Next steps stay one row that scrolls sideways; the next chip peeks in. */
+.card.suggest .card-buttons {
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  position: relative;
+}
+
+.card.suggest .card-buttons button {
+  flex: none;
+  white-space: nowrap;
 }
 
 .card.elicit .card-buttons input {

@@ -105,19 +105,26 @@ impl Cabin {
                     self.palette_focus = false;
                 }
                 self.palette_pick = slash_pick_step(self.palette_pick, n, 0);
+                // Only a key move scrolls; a click or a new query leaves the list be.
+                let mut moved = false;
                 if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown)) {
                     self.palette_pick = slash_pick_step(self.palette_pick, n, 1);
+                    moved = true;
                 } else if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp))
                 {
                     self.palette_pick = slash_pick_step(self.palette_pick, n, -1);
+                    moved = true;
                 } else if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter)) {
                     picked = palette_pick(&cmds, &files, &root, &steps, self.palette_pick);
                 }
+                let gap = ui.spacing().item_spacing.y;
                 egui::ScrollArea::vertical()
-                    .max_height(PALETTE_LIST_H)
+                    .max_height(peek_height(n, PALETTE_ROW_H, gap, PALETTE_LIST_H))
                     .auto_shrink([false, true])
                     .show(ui, |ui| {
                         ui.set_min_width(360.0);
+                        let ahead = lookahead(self.palette_pick, n);
+                        let mut reveal: Option<egui::Rect> = None;
                         for i in 0..n {
                             let label = if i < cmds.len() {
                                 cmds[i].0.to_string()
@@ -135,9 +142,23 @@ impl Cabin {
                                         .size(crate::theme::FONT_TIP)
                                         .color(crate::theme::muted()),
                                 );
-                            if ui.add_sized([ui.available_width(), 28.0], row).clicked() {
+                            let resp = ui.add_sized([ui.available_width(), PALETTE_ROW_H], row);
+                            if ahead.contains(&i) {
+                                reveal = Some(reveal.map_or(resp.rect, |r| r.union(resp.rect)));
+                            }
+                            if resp.clicked() {
                                 picked = palette_pick(&cmds, &files, &root, &steps, i);
                             }
+                        }
+                        // Keep a row of lookahead in view, so the next pick shows
+                        // before the selection reaches the edge.
+                        if let Some(rect) = reveal.filter(|_| moved) {
+                            let anim = if crate::motion::reduced_motion(ui) {
+                                egui::style::ScrollAnimation::none()
+                            } else {
+                                ui.style().scroll_animation
+                            };
+                            ui.scroll_to_rect_animation(rect, None, anim);
                         }
                     });
                 if crate::cards::ghost_pill(ui, "Close") {
@@ -285,6 +306,30 @@ pub(super) fn palette_pick(
     }
 }
 
+/// Palette row height; rows sit one item spacing apart.
+const PALETTE_ROW_H: f32 = 28.0;
+/// How much of the next row a cut-off list shows, at least and at most: a hint
+/// that there is more. The same band as the shell (`ui/src/peek.ts`).
+const PEEK_MIN: f32 = 0.3;
+const PEEK_MAX: f32 = 0.5;
+
+/// The most height `n` rows of `row` px, `gap` apart, may take within `max`.
+/// A list that runs past `max` stops partway into a row, so the next one
+/// shows; a list that fits keeps `max` and shrinks to its rows.
+pub(super) fn peek_height(n: usize, row: f32, gap: f32, max: f32) -> f32 {
+    let full = n as f32 * (row + gap) - gap;
+    if n == 0 || full <= max {
+        return max;
+    }
+    let rows = ((max - PEEK_MIN * row) / (row + gap)).floor().max(0.0);
+    (rows * (row + gap) + PEEK_MAX * row).min(max)
+}
+
+/// The rows to keep in view around pick `pick` of `n`: it and one each side.
+pub(super) fn lookahead(pick: usize, n: usize) -> std::ops::RangeInclusive<usize> {
+    pick.saturating_sub(1)..=(pick + 1).min(n.saturating_sub(1))
+}
+
 /// Contiguous scope runs, in sheet order. A scope that comes back later is a new group.
 #[cfg(test)]
 pub fn group_shortcut_scopes<'a>(
@@ -345,7 +390,26 @@ fn shortcut_key_chip(ui: &mut egui::Ui, keys: &str) {
 
 #[cfg(test)]
 mod tests {
-    use super::group_shortcut_scopes;
+    use super::{group_shortcut_scopes, lookahead, peek_height};
+
+    #[test]
+    fn a_long_palette_list_stops_partway_into_a_row() {
+        // 28 px rows 8 px apart in 280 px: seven rows, then half the eighth.
+        assert!((peek_height(20, 28.0, 8.0, 280.0) - 266.0).abs() < 1e-3);
+        // 264 px already cuts the eighth row 43% in: the list keeps it all.
+        assert_eq!(peek_height(20, 28.0, 8.0, 264.0), 264.0);
+        // Seven rows fit in 244 px: the list keeps its room and shrinks to them.
+        assert_eq!(peek_height(7, 28.0, 8.0, 280.0), 280.0);
+        assert_eq!(peek_height(0, 28.0, 8.0, 280.0), 280.0);
+    }
+
+    #[test]
+    fn the_lookahead_is_the_pick_and_one_row_each_side() {
+        assert_eq!(lookahead(0, 10), 0..=1);
+        assert_eq!(lookahead(4, 10), 3..=5);
+        assert_eq!(lookahead(9, 10), 8..=9);
+        assert_eq!(lookahead(0, 1), 0..=0);
+    }
 
     #[test]
     fn shortcut_sheet_keeps_each_scope_together() {
