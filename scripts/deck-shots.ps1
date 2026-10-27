@@ -7,6 +7,7 @@
 param(
     [string]$Exe = 'target/release/grokhub.exe',
     [string]$Slide = '02',
+    [string]$UpgradeSlide = '08',
     [string]$Out = 'target/deck-shots'
 )
 $ErrorActionPreference = 'Stop'
@@ -28,7 +29,6 @@ New-Item -ItemType Directory -Force -Path $Out | Out-Null
 $repo = (Resolve-Path .).Path
 $exe = (Resolve-Path $Exe).Path
 $brand = Get-Content (Join-Path $repo 'brand/brand.json') -Raw | ConvertFrom-Json
-$slidePath = Join-Path $repo "docs/design/loadout-baseline-v1/slide-$Slide.png"
 
 function Save-Jpeg($bmp, $path) {
     $codec = [System.Drawing.Imaging.ImageCodecInfo]::GetImageEncoders() | Where-Object { $_.MimeType -eq 'image/jpeg' }
@@ -37,13 +37,16 @@ function Save-Jpeg($bmp, $path) {
     $bmp.Save($path, $codec, $params)
 }
 
-function Shot([int]$w, [int]$h) {
-    $root = Join-Path $env:RUNNER_TEMP "deck-$w"
+# One launch at $w x $h. $theme is what app.json holds before launch; with
+# $upgrade the file has no themeMigrated, as a pre-3.4 install leaves it.
+function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlide, [switch]$upgrade) {
+    $root = Join-Path $env:RUNNER_TEMP "deck-$name"
     Remove-Item -Recurse -Force $root -ErrorAction SilentlyContinue
     $cfg = Join-Path $root 'cfg'
     New-Item -ItemType Directory -Force -Path $cfg | Out-Null
-    $app = @{ getStartedDone = $true; setupDone = $true; theme = 'ops-dark'; deviceName = 'my-pc';
+    $app = @{ getStartedDone = $true; setupDone = $true; theme = $theme; deviceName = 'my-pc';
               window = @{ x = 0; y = 0; w = $w; h = $h; maximized = $false } }
+    if (-not $upgrade) { $app.themeMigrated = $true }
     $app | ConvertTo-Json -Depth 4 | Set-Content -Encoding utf8 (Join-Path $cfg 'app.json')
     $env:GROKHUB_CONFIG = $cfg
     $env:HOME = $root
@@ -75,32 +78,37 @@ function Shot([int]$w, [int]$h) {
     $g.CopyFromScreen($r.L, $r.T, 0, 0, $bmp.Size)
     $g.Dispose()
     Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
-    $png = Join-Path $Out "app-${w}x${h}.png"
+    $saved = Get-Content (Join-Path $cfg 'app.json') -Raw | ConvertFrom-Json
+    Write-Host "app.json after ${name}: theme=$($saved.theme) themeMigrated=$($saved.themeMigrated)"
+    $png = Join-Path $Out "app-$name.png"
     $bmp.Save($png, [System.Drawing.Imaging.ImageFormat]::Png)
-    $jpg = Join-Path $Out "app-${w}x${h}.jpg"
+    $jpg = Join-Path $Out "app-$name.jpg"
     Save-Jpeg $bmp $jpg
     $b64 = [Convert]::ToBase64String([IO.File]::ReadAllBytes($jpg))
-    Write-Host "DECK-SHOT-BEGIN app-${w}x${h}.jpg"
+    Write-Host "DECK-SHOT-BEGIN app-$name.jpg"
     for ($k = 0; $k -lt $b64.Length; $k += 4000) {
         Write-Host $b64.Substring($k, [Math]::Min(4000, $b64.Length - $k))
     }
-    Write-Host "DECK-SHOT-END app-${w}x${h}.jpg"
+    Write-Host "DECK-SHOT-END app-$name.jpg"
+    # Not $slide: PowerShell names are case-insensitive, so it would be $Slide.
+    $slidePath = Join-Path $repo "docs/design/loadout-baseline-v1/slide-$deckSlide.png"
     if (Test-Path $slidePath) {
-        $slide = [System.Drawing.Image]::FromFile($slidePath)
-        $sw = [int]($slide.Width * $ch / $slide.Height)
+        $deckImg = [System.Drawing.Image]::FromFile($slidePath)
+        $sw = [int]($deckImg.Width * $ch / $deckImg.Height)
         $pair = New-Object System.Drawing.Bitmap ($cw + 16 + $sw), $ch
         $pg = [System.Drawing.Graphics]::FromImage($pair)
         $pg.Clear([System.Drawing.Color]::FromArgb(11, 11, 13))
         $pg.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
         $pg.DrawImage($bmp, 0, 0, $cw, $ch)
-        $pg.DrawImage($slide, $cw + 16, 0, $sw, $ch)
+        $pg.DrawImage($deckImg, $cw + 16, 0, $sw, $ch)
         $pg.Dispose()
-        $pair.Save((Join-Path $Out "pair-${w}x${h}-slide$Slide.png"), [System.Drawing.Imaging.ImageFormat]::Png)
-        $slide.Dispose(); $pair.Dispose()
+        $pair.Save((Join-Path $Out "pair-$name-slide$deckSlide.png"), [System.Drawing.Imaging.ImageFormat]::Png)
+        $deckImg.Dispose(); $pair.Dispose()
     }
     $bmp.Dispose()
 }
 
-Shot 1600 900
-Shot 1100 720
+Shot 1600 900 '1600x900' 'ops-dark' $Slide
+Shot 1100 720 '1100x720' 'ops-dark' $Slide
+Shot 1600 900 'upgrade-1600x900' 'dark' $UpgradeSlide -upgrade
 Get-ChildItem $Out | Format-Table Name, Length
