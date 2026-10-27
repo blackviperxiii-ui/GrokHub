@@ -26,6 +26,7 @@ use crate::{
 mod scan;
 
 pub mod ab;
+pub mod close_check;
 pub mod longmem;
 pub mod metrics;
 pub mod sycophancy;
@@ -34,7 +35,7 @@ pub mod turn_endings;
 pub use ab::{load_tasks, run_technique_matrix, Technique, TechniqueArm, TechniqueMatrixReport};
 pub use metrics::Recommendation;
 
-pub const SUITE_ITEMS: [&str; 9] = [
+pub const SUITE_ITEMS: [&str; 10] = [
     "xvfb-desktop",
     "repo-bugfix",
     "ask-refusal",
@@ -44,6 +45,7 @@ pub const SUITE_ITEMS: [&str; 9] = [
     "tool-output-compact",
     "imagine",
     "system-scan",
+    "close-check",
 ];
 
 const SKIP_XVFB: &str = "skipped: no Xvfb";
@@ -186,6 +188,7 @@ pub fn run_suite(opts: &Opts) -> Vec<ItemResult> {
     ));
     items.push(measure("imagine", "native", imagine_native));
     items.push(measure("system-scan", "native", system_scan_native));
+    items.push(measure("close-check", "native", close_check::run_fixtures));
     if !opts.live {
         if let Ok(report) = ab::run_ab(ab::DEFAULT_MODEL, &ab::CandidateSuffix) {
             let _ = &report.comparison;
@@ -427,8 +430,9 @@ is set to a non-empty value and `--budget-usd` is set with `0 < amount <= 0.20`.
     out.push_str(
         "Suite items: an Xvfb desktop probe, a temp repo bugfix with a test, an Ask-mode \
 refusal, background plus Halt, an MCP tool call through a fake stdio server, compaction \
-of a long transcript, large tool-output compaction with a spooled re-read path, and an \
-Imagine call that only builds the request.\n\n",
+of a long transcript, large tool-output compaction with a spooled re-read path, an \
+Imagine call that only builds the request, and a close-check that skips a single \
+reply and runs once when an intention is still open.\n\n",
     );
     out.push_str("This report does not switch the default engine.\n\n");
     out.push_str("## Results\n\n");
@@ -569,6 +573,7 @@ fn success_of(status: &str) -> bool {
             | "scripted tool"
             | "probe ok"
             | "covered"
+            | "checked"
     )
 }
 

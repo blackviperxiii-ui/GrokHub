@@ -734,3 +734,61 @@ fn dont_remember_this_skips_the_line() {
     );
     assert_eq!(store.node_file_count(), 0);
 }
+
+#[test]
+fn calibration_picks_the_lowest_approval_above_every_rejection() {
+    let samples = [
+        ApprovalSample {
+            confidence: 0.25,
+            approved: false,
+        },
+        ApprovalSample {
+            confidence: 0.5,
+            approved: false,
+        },
+        ApprovalSample {
+            confidence: 0.75,
+            approved: true,
+        },
+        ApprovalSample {
+            confidence: 1.0,
+            approved: true,
+        },
+    ];
+    assert_eq!(calibrate_reflect_min(&samples), 0.75);
+    assert_eq!(reflect_threshold_log(0.75), "reflect_min_confidence 0.75");
+    assert_eq!(calibrate_reflect_min(&[]), REFLECT_MIN_CONFIDENCE);
+    assert_eq!(
+        reflect_threshold_log(REFLECT_MIN_CONFIDENCE),
+        "reflect_min_confidence 0.70"
+    );
+
+    let tmp = Tmp::new("calibrate");
+    let store = tmp.store();
+    remember_line(
+        &store,
+        &LineWrite {
+            text: "prefers the high mark",
+            source: "user",
+            tags: vec!["approved".into()],
+            confidence: 0.75,
+            revive: false,
+        },
+        NOW,
+    )
+    .unwrap();
+    let low = remember_line(
+        &store,
+        &LineWrite {
+            text: "prefers the low mark",
+            source: "user",
+            tags: vec![PROPOSED_TAG.into()],
+            confidence: 0.5,
+            revive: false,
+        },
+        NOW,
+    )
+    .unwrap();
+    reject_node(&store, low.id(), UserForget::from_click(), NOW).unwrap();
+    assert_eq!(calibrate_reflect_min(&approval_samples(&store)), 0.75);
+}
