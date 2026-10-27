@@ -13,6 +13,7 @@ use std::sync::{Mutex, MutexGuard};
 use grokhub_core::interests::InterestSignal;
 use grokhub_core::pulse::{self as pc, LedgerReason};
 use grokhub_core::pulse_writer::TasteKind;
+use grokhub_core::reactions::{self, Outcome};
 use grokhub_core::{CardReaction, UpdateCard, UpdateKind};
 
 use crate::pulse_feed;
@@ -265,11 +266,43 @@ fn idea(card: &UpdateCard) -> Idea {
     }
 }
 
+fn reactions_path(config_dir: &Path) -> PathBuf {
+    config_dir.join(reactions::FILE_NAME)
+}
+
+/// Note what the person did with a card in what Pulse learned. `shift` is
+/// More (`Some(true)`) or Less (`Some(false)`) like this on top of the outcome.
+fn react(config_dir: &Path, card: &UpdateCard, outcome: Outcome, shift: Option<bool>, now_ms: u64) {
+    let Some((category, tag)) = reactions::card_category_tag(card) else {
+        return;
+    };
+    let path = reactions_path(config_dir);
+    let mut learned = reactions::load(&path);
+    learned.record(outcome, &category, &tag, now_ms);
+    match shift {
+        Some(true) => learned.more(&category),
+        Some(false) => learned.less(&category),
+        None => {}
+    }
+    if let Err(e) = reactions::save(&path, &learned) {
+        eprintln!("pulse: {e}");
+    }
+}
+
 fn page(config_dir: &Path, cards: &[UpdateCard], now_ms: u64) -> Page {
     let ledger = ledger();
+    let mut learned = reactions::load(&reactions_path(config_dir));
+    let before = learned.clone();
+    learned.sweep_ignored(cards, now_ms);
+    if learned != before {
+        if let Err(e) = reactions::save(&reactions_path(config_dir), &learned) {
+            eprintln!("pulse: {e}");
+        }
+    }
     let inputs = pc::PulseInputs {
         ledger: &ledger,
         now_ms,
+        reactions: Some(&learned),
         ..Default::default()
     };
     let by_id = |id: &str| cards.iter().find(|c| c.id == id);
@@ -317,6 +350,14 @@ pub fn act(config_dir: &Path, id: &str, act: Act, day: &Day, now_ms: u64) -> Res
     let Some(card) = cards.iter().find(|c| c.id == id).cloned() else {
         return Err("That card is gone. The page now shows what is left.".into());
     };
+    let (outcome, shift) = match act {
+        Act::Dismiss | Act::Delete => (Outcome::Dismissed, None),
+        Act::NotThis | Act::NotInterested => (Outcome::Dismissed, Some(false)),
+        Act::Love | Act::Accept => (Outcome::Accepted, None),
+        Act::MoreLike => (Outcome::Accepted, Some(true)),
+        Act::Snooze => (Outcome::Snoozed, None),
+    };
+    react(config_dir, &card, outcome, shift, now_ms);
     let remove = |cards: &mut Vec<UpdateCard>| {
         if card.kind == UpdateKind::Idea {
             grokhub_core::dismiss_idea(cards, id)
@@ -406,6 +447,7 @@ fn find(config_dir: &Path, id: &str) -> Result<UpdateCard, String> {
 /// Discuss: the chat seed carrying the post. Counts as engagement and taste.
 pub fn discuss(config_dir: &Path, id: &str, now_ms: u64) -> Result<String, String> {
     let card = find(config_dir, id)?;
+    react(config_dir, &card, Outcome::Tapped, None, now_ms);
     pulse_feed::with_state(config_dir, |s| {
         s.note_engaged(now_ms);
         s.note_taste(TasteKind::Discuss, &card.title, now_ms);
@@ -413,10 +455,15 @@ pub fn discuss(config_dir: &Path, id: &str, now_ms: u64) -> Result<String, Strin
     Ok(grokhub_core::pulse_writer::discuss_seed(&card))
 }
 
-/// Why this post is in the feed: the writer's line, else the interest it matched.
+/// Why this post is in the feed: the writer's line, else the interest it
+/// matched, then what Pulse learned about its kind.
 pub fn why(config_dir: &Path, id: &str) -> Result<String, String> {
     let card = find(config_dir, id)?;
-    Ok(card
+    let learned = reactions::card_category_tag(&card).map(|(category, tag)| {
+        let state = reactions::load(&reactions_path(config_dir));
+        reactions::why_line(&state, &category, &tag)
+    });
+    let because = card
         .why
         .clone()
         .or_else(|| {
@@ -425,7 +472,11 @@ pub fn why(config_dir: &Path, id: &str) -> Result<String, String> {
                 .clone()
                 .map(|b| format!("It matched your interest in {b}."))
         })
-        .unwrap_or_else(|| "It came from your Pulse sources.".into()))
+        .unwrap_or_else(|| "It came from your Pulse sources.".into());
+    Ok(match learned {
+        Some(line) => format!("{because} {line}."),
+        None => because,
+    })
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -609,6 +660,26 @@ mod tests {
             .map(|raw| serde_json::from_str(raw).expect("act"))
             .collect();
         assert_eq!(acts, vec![Act::MoreLike, Act::NotInterested, Act::Accept]);
+    }
+
+    #[test]
+    fn acts_teach_pulse_and_why_says_what_it_learned() {
+        let d = dirs("learn", &sample());
+        act(&d.config, "idea-1", Act::MoreLike, &day(), NOW).expect("more");
+        let learned = reactions::load(&d.config.join(reactions::FILE_NAME));
+        // Accepted (+2) and More like this (+3).
+        assert_eq!(learned.score("productivity ideas"), 5, "{learned:?}");
+        assert_eq!(
+            why(&d.config, "idea-1").expect("why"),
+            "It came from your Pulse sources. From Pulse ideas · productivity ideas +5."
+        );
+        act(&d.config, "idea-1", Act::Snooze, &day(), NOW).expect("snooze");
+        let learned = reactions::load(&d.config.join(reactions::FILE_NAME));
+        assert_eq!(learned.score("productivity ideas"), 4);
+        // A post Pulse has no category for leaves nothing behind.
+        act(&d.config, "post-1", Act::Love, &day(), NOW).expect("love");
+        let learned = reactions::load(&d.config.join(reactions::FILE_NAME));
+        assert_eq!(learned.log.len(), 2);
     }
 
     #[test]

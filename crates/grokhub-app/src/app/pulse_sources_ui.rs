@@ -43,6 +43,8 @@ pub(super) struct SourcesState {
     pub steam: super::steam_ui::SteamState,
     /// Know me's saved tags and its running scan.
     pub know_me: super::knowme_ui::KnowMeState,
+    /// Learned reactions per card category, read from disk when first needed.
+    pub reactions: Option<grokhub_core::reactions::Reactions>,
 }
 
 /// A run, its picks, and the fast model's reply.
