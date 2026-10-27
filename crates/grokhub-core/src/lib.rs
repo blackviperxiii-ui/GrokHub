@@ -279,12 +279,14 @@ pub use feel::{
 };
 pub use frame::{encode_b64, frame_bytes, jpeg_data_url, store_frame, PresenceFrame, FRAME_CAP};
 pub use goal::{
-    blend_thread_goal, compact_keep_pin, compact_keep_start_from, flush_visible_goal,
-    goal_continue_pin, goal_pin_for_job, goal_step_after_outcome, hub_dispatch_ok,
-    is_auto_continue_prompt, looks_incomplete, next_goal_prompt, parse_fast_topics,
-    parse_goal_outcome, reply_needs_followup, should_auto_continue_goal, should_name_thread,
-    thread_goal_prompt, topics_from_turns, visible_goal_step_on_continue, ThreadGoal,
-    FOLLOWUP_PROMPT, GOAL_DROP_AFTER,
+    apply_status_updates, blend_thread_goal, compact_keep_pin, compact_keep_start_from,
+    flush_visible_goal, goal_continue_pin, goal_pin_for_job, goal_step_after_outcome,
+    hub_dispatch_ok, intentions_block, intentions_path, is_auto_continue_prompt, load_intentions,
+    looks_incomplete, next_goal_prompt, parse_fast_topics, parse_goal_outcome,
+    reply_needs_followup, save_intentions, set_intention_status, should_auto_continue_goal,
+    should_name_thread, thread_goal_prompt, topics_from_turns, visible_goal_step_on_continue,
+    Intention, IntentionStatus, Intentions, StatusUpdate, ThreadGoal, FOLLOWUP_PROMPT,
+    GOAL_DROP_AFTER,
 };
 pub use governor::{
     cabin_jobs, runs_cheap, user_active, BackgroundBudgets, BudgetClass, Governor, GovernorNote,

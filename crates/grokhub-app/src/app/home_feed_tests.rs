@@ -1488,6 +1488,17 @@ fn every_home_card_the_cabin_posts_names_its_item() {
         grokhub_core::self_change_card("skill", "inbox-zero", "added", "", now),
         "inbox-zero",
     ));
+    // Model dream morning notice (amr_memory::post_dream_card).
+    rows.push((
+        "post_dream_card",
+        grokhub_core::automation_done_card(
+            "dream-model",
+            "Memory dream",
+            "Proposed 1 USER line.",
+            now,
+        ),
+        "Memory dream",
+    ));
     let done = grokhub_core::DoneForYou {
         kind: "connection".into(),
         target: "notes".into(),
