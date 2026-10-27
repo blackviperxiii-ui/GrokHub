@@ -1,1 +1,0 @@
-- The agent can check Local AI itself: `local_ai_status` reports whether it's on, the engine and model paths, loaded or idle, the network state, recent health lines and the last offline event. `local_ai_selftest` asks the on-device model one short question without the network, only when called and after your OK.

@@ -1,3 +1,0 @@
-- Pulse Ideas are written for you in the background (at most every six hours) from your journal questions, interests, recent chats and feed posts. Each has an emoji, a short title and an "I can …" line, and retires after two weeks unless you edit it.
-- Pulse Ideas: the first three ideas lead with no header, then Productivity, Financial Management, Shopping, Relationships and Health & Fitness. This order applies to the cabin too.
-- Pulse Ideas (shell): rows with a clay icon. A click is Let's do it; the menu adds More like this and Not interested. Snooze is gone from ideas.
