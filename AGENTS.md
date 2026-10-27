@@ -18,7 +18,7 @@ Semgrep before Ready. dyl-review quick for draft asks — never dyl-ready-pr mer
 ## Skill cues
 Reach for these coding skills at the matching moment (same practice by hand if a skill is not installed). Cues only — do not vendor plugin or skill files into the repo.
 
-**vstack** ships as a plugin (Claude Code via the `blackviperxiii-ui/vstack` marketplace in `.claude/settings.json`; there is no Cursor team marketplace here, so cloud agents do not get vstack automatically). Use its skills from the plugin when installed. If the vstack skills are not installed in your tool, read the named skill straight from `https://github.com/blackviperxiii-ui/vstack/tree/main/skills/<skill-name>/SKILL.md` (raw: `https://raw.githubusercontent.com/blackviperxiii-ui/vstack/main/skills/<skill-name>/SKILL.md`) and follow it. Never copy vstack files into this repo.
+**vstack** ships as a plugin (Cursor team marketplace; Claude Code via the `blackviperxiii-ui/vstack` marketplace in `.claude/settings.json`). Use its skills from the plugin only — never copy vstack files into this repo.
 
 - **viper-mode** (vstack) as the default playbook for nontrivial work
 - **follow-through** (vstack) on every card: keep the task ledger, flag stalls, report status without being asked
