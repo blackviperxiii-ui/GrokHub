@@ -170,10 +170,12 @@ fn pc_profile() -> Option<LocalProfile> {
 }
 
 fn card(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui)) -> egui::Response {
+    use crate::ui_kit::recipe::{look, Part, State};
+    let l = look(Part::Card, State::Default);
     egui::Frame::NONE
-        .fill(crate::theme::raised())
-        .stroke(egui::Stroke::new(1.0, crate::theme::signal_red()))
-        .corner_radius(crate::theme::RADIUS_SM)
+        .fill(l.fill)
+        .stroke(l.stroke)
+        .corner_radius(l.radius)
         .inner_margin(egui::Margin::same(12))
         .show(ui, |ui| {
             ui.set_width(ui.available_width());

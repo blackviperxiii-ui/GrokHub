@@ -419,6 +419,11 @@ pub fn felt_pill_at(
     label: &str,
     style: PillStyle,
 ) -> egui::Response {
+    // Loadout themes paint the slide 07 button: red outline, amber primary.
+    if crate::theme::is_loadout_paint() && style != PillStyle::Danger {
+        let solid = style == PillStyle::Solid;
+        return crate::ui_kit::recipe::button(ui, id, label, solid, egui::vec2(0.0, 28.0), solid);
+    }
     let (base_fill, text_color, rounding, min_size, stroke, strong) = match style {
         PillStyle::Solid => (
             crate::theme::fg(),
@@ -591,6 +596,22 @@ pub fn felt_tab(ui: &mut egui::Ui, label: &str, active: bool) -> bool {
     let size = egui::vec2((galley.size().x + pad.x * 2.0).max(32.0), 32.0);
     let (_rect, resp) = ui.allocate_exact_size(size, Sense::click());
     let on_t = crate::theme::animate_selection(ui, resp.id.with("tab"), active);
+    if crate::theme::is_loadout_paint() {
+        use crate::ui_kit::recipe::{look, paint, state, Part};
+        let (resp, rect, _) = crate::theme::feel_button(ui, resp, Color32::TRANSPARENT);
+        let look = look(Part::Tab, state(resp.hovered(), active, false));
+        paint(ui.painter(), rect, &look);
+        ui.painter().galley(
+            egui::pos2(rect.min.x + pad.x, rect.center().y - galley.size().y * 0.5),
+            galley,
+            look.ink,
+        );
+        let enabled = resp.enabled();
+        resp.widget_info(|| {
+            egui::WidgetInfo::selected(egui::WidgetType::Button, enabled, active, label)
+        });
+        return resp.clicked();
+    }
     let base_fill = crate::theme::blend_color(Color32::TRANSPARENT, crate::theme::fg(), on_t);
     let text_color = crate::theme::blend_color(crate::theme::muted(), crate::theme::bg(), on_t);
     let stroke_color = crate::theme::blend_color(crate::theme::border(), crate::theme::fg(), on_t);
@@ -1459,29 +1480,37 @@ pub fn settings_note(ui: &mut egui::Ui, text: &str) {
 }
 
 pub fn appearance_card(ui: &mut egui::Ui, label: &str, selected: bool, preview: Color32) -> bool {
-    let fill = if selected {
-        crate::theme::nav_active()
-    } else {
-        crate::theme::surface()
-    };
-    let stroke = if selected {
-        if crate::theme::is_loadout_paint() {
-            crate::theme::signal_red()
-        } else {
-            crate::theme::fg()
-        }
-    } else {
-        crate::theme::border()
-    };
     let (_rect, resp) = ui.allocate_exact_size(egui::vec2(108.0, 96.0), Sense::click_and_drag());
-    let (resp, rect, fill) = crate::theme::feel_button(ui, resp, fill);
-    ui.painter().rect_filled(rect, 12.0, fill);
-    ui.painter().rect_stroke(
-        rect,
-        12.0,
-        Stroke::new(1.0_f32, stroke),
-        egui::StrokeKind::Middle,
-    );
+    let (resp, rect) = if crate::theme::is_loadout_paint() {
+        use crate::ui_kit::recipe::{look, paint, state, Part};
+        let (resp, rect, _) = crate::theme::feel_button(ui, resp, Color32::TRANSPARENT);
+        paint(
+            ui.painter(),
+            rect,
+            &look(Part::Card, state(resp.hovered(), selected, false)),
+        );
+        (resp, rect)
+    } else {
+        let fill = if selected {
+            crate::theme::nav_active()
+        } else {
+            crate::theme::surface()
+        };
+        let stroke = if selected {
+            crate::theme::fg()
+        } else {
+            crate::theme::border()
+        };
+        let (resp, rect, fill) = crate::theme::feel_button(ui, resp, fill);
+        ui.painter().rect_filled(rect, 12.0, fill);
+        ui.painter().rect_stroke(
+            rect,
+            12.0,
+            Stroke::new(1.0_f32, stroke),
+            egui::StrokeKind::Middle,
+        );
+        (resp, rect)
+    };
     let preview_rect =
         egui::Rect::from_min_size(rect.min + egui::vec2(10.0, 10.0), egui::vec2(88.0, 56.0));
     ui.painter().rect_filled(preview_rect, 6.0, preview);

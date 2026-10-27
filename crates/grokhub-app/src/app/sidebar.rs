@@ -237,6 +237,19 @@ impl Cabin {
                 egui::StrokeKind::Middle,
             );
         }
+        // Slide 07 nav: the selected item carries an amber bar on its left edge.
+        // Only the row the glide highlights, so a second active row stays plain.
+        if active
+            && crate::theme::is_loadout_paint()
+            && crate::theme::glide_selected_is(ui, "rail", rect)
+        {
+            let w = crate::ui_kit::recipe::MARK_W;
+            let bar = egui::Rect::from_min_max(
+                egui::pos2(slot.left(), slot.center().y - 10.0),
+                egui::pos2(slot.left() + w, slot.center().y + 10.0),
+            );
+            ui.painter().rect_filled(bar, 1.5, crate::theme::amber());
+        }
         // The hover scale grows the highlight only. Icon and label stay on the resting
         // slot, or a 1.035 scale on a full-width row slides them ~4px left.
         let icon_c = egui::pos2(slot.left() + 20.0, slot.center().y);

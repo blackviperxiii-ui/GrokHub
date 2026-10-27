@@ -603,17 +603,27 @@ fn quick_button(ui: &mut egui::Ui, label: &str, style: Quick) -> bool {
         .size(crate::theme::FONT_TIP)
         .strong()
         .extra_letter_spacing(0.8);
+    use crate::ui_kit::recipe::{look, Part, State, BUTTON_RADIUS};
     let button = match style {
-        Quick::Primary => egui::Button::new(text.color(crate::theme::send_on_ink()))
-            .fill(crate::theme::amber())
-            .stroke(egui::Stroke::new(1.0_f32, crate::theme::amber())),
-        Quick::Outline => egui::Button::new(text.color(crate::theme::fg()))
-            .fill(egui::Color32::TRANSPARENT)
-            .stroke(egui::Stroke::new(1.0_f32, crate::theme::signal_red())),
+        Quick::Primary | Quick::Outline => {
+            let state = if style == Quick::Primary {
+                State::Accent
+            } else {
+                State::Default
+            };
+            let l = look(Part::Button, state);
+            egui::Button::new(text.color(l.ink))
+                .fill(l.fill)
+                .stroke(l.stroke)
+        }
         Quick::Quiet => egui::Button::new(text.color(crate::theme::muted())).frame(false),
     };
-    ui.add(button.corner_radius(6.0).min_size(egui::vec2(0.0, 22.0)))
-        .clicked()
+    ui.add(
+        button
+            .corner_radius(BUTTON_RADIUS)
+            .min_size(egui::vec2(0.0, 22.0)),
+    )
+    .clicked()
 }
 
 /// One Ideas row: icon, bold "I can …" line, two or three lines of detail, the
