@@ -22,6 +22,8 @@ pub(super) struct FocusState {
     pub app: Option<FocusApp>,
     /// The next turn carries the app's context line once.
     context_pending: bool,
+    /// "Pick up where you left off" for code, the other what-you-were-doing help.
+    pub resume: super::code_resume_ui::ResumeState,
 }
 
 impl Cabin {
@@ -29,6 +31,7 @@ impl Cabin {
     pub(super) fn read_window_focus(&mut self, ctx: &egui::Context) {
         self.window_focused = ctx.input(|i| i.viewport().focused.unwrap_or(false));
         self.tick_focus(self.window_focused);
+        self.tick_code_resume();
     }
 
     /// Each frame with the window's focus. Only transitions do anything.

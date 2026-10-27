@@ -153,6 +153,7 @@ mod change_history_ui;
 mod change_undo;
 mod chat_ui;
 pub(crate) mod chips;
+mod code_resume_ui;
 mod confirm;
 mod connectivity_ui;
 mod connectors_ui;

@@ -540,6 +540,14 @@ impl Cabin {
         }
         bias_chips_for_lane(&mut chips, cabin_lane(&self.cfg.cabin_lane));
         polish_chip_hints(&mut chips, &self.composer);
+        let resume = self.resume_chips();
+        // A clicked resume chip is remembered and can come back as a plain chip.
+        chips.retain(|x| {
+            resume
+                .iter()
+                .all(|r| r.id != x.id && r.value != x.value && r.label != x.label)
+        });
+        chips.splice(0..0, resume);
         if let Some(c) = self.focus_chip() {
             chips.retain(|x| x.id != c.id);
             chips.insert(0, c);

@@ -415,6 +415,12 @@ pub struct AppConfig {
     /// from its process name only. Off by default.
     #[serde(default)]
     pub focus_help: bool,
+    /// Settings → Behavior: offer to resume work in the repos under
+    /// `code_folders`, from git metadata only. Off by default.
+    #[serde(default)]
+    pub resume_code: bool,
+    #[serde(default)]
+    pub code_folders: Vec<String>,
     /// Settings → Behavior: dockable main panels (egui_dock). Off by default; layout in dock.json.
     #[serde(default)]
     pub dock_panels: bool,
@@ -688,6 +694,8 @@ impl Default for AppConfig {
             composer_glow: false,
             composer_autocomplete: false,
             focus_help: false,
+            resume_code: false,
+            code_folders: Vec::new(),
             dock_panels: false,
             desktop_control: false,
             screen_record: false,
