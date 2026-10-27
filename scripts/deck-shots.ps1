@@ -172,6 +172,8 @@ function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlid
 
 Shot 1600 900 '1600x900' 'ops-dark' $Slide
 Shot 1100 720 '1100x720' 'ops-dark' $Slide
+Shot 1600 900 '1600x900-slide20' 'ops-dark' '20'
+Shot 1100 720 '1100x720-slide20' 'ops-dark' '20'
 Shot 1600 900 'upgrade-1600x900' 'dark' $UpgradeSlide -upgrade
 Shot 1600 900 'settings-1600x900' 'ops-dark' '07' -keys '^,'
 Shot 1100 720 'settings-1100x720' 'ops-dark' '07' -keys '^,'

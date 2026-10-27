@@ -1064,3 +1064,14 @@ fn one_line(text: &str, max_chars: usize) -> String {
     out.push('…');
     out
 }
+
+pub(super) fn mode_status_line(mode: &str, pinned_model: &str) -> String {
+    if matches!(mode, "auto" | "adaptive" | "smart") && !settings_pin_blocks_auto(pinned_model) {
+        return "Mode auto — routes Fast / Balance / Think / Max".into();
+    }
+    let model = resolve_chat_model(mode, pinned_model);
+    match grokhub_core::reasoning_effort_for_mode(mode) {
+        Some(effort) => format!("Mode {mode} → {model} · {effort}"),
+        None => format!("Mode {mode} → {model}"),
+    }
+}
