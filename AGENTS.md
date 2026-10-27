@@ -15,6 +15,18 @@ Tauri 2 + React + TS shell approved (2026-10-23); egui cabin ships until parity.
 ## Quality gates
 Semgrep before Ready. dyl-review quick for draft asks — never dyl-ready-pr merge/babysit. Continual Learning keeps this file current.
 
+## Skill cues
+Reach for these coding skills at the matching moment (same practice by hand if a skill is not installed). Cues only — do not vendor plugin or skill files into the repo.
+
+- **check-compiler-errors** after Rust or TypeScript edits, before pushing
+- **loop-on-ci** or **fix-ci** once a PR is open, until it is green
+- **fix-merge-conflicts** when a PR is behind `beta`
+- **verify-this** or **run-smoke-tests** before marking work Done
+- **blast-radius** before changing shared code (router, agent loop, memory, local model launcher)
+- **tdd** for logic with clear behavior
+- **statechart** for multi-state flows (online/offline/degraded, intentions)
+- **make-pr-easy-to-review** when opening a PR
+
 ## Branch cleanup
 Delete own head after merge/close; scratch ASAP; never main/beta. GitHub auto-delete head branches is on.
 
