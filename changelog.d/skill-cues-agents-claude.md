@@ -1,0 +1,1 @@
+- Docs: skill cues in AGENTS.md and CLAUDE.md for when to reach for coding skills.
