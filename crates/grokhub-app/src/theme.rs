@@ -65,9 +65,9 @@ pub const NAV_ACTIVE: Color32 = Color32::from_rgb(0x1c, 0x1f, 0x23);
 pub const BUBBLE_USER: Color32 = Color32::from_rgb(0x16, 0x18, 0x1c);
 /// Citation / link only. Never chrome.
 pub const LINK: Color32 = Color32::from_rgb(0x1d, 0x9b, 0xf0);
-/// Send/on inverse fill.
-pub const SEND_ON: Color32 = Color32::WHITE;
-pub const SEND_ON_INK: Color32 = Color32::BLACK;
+/// Send/on fill: the deck's amber CTA (slide 07), with dark ink.
+pub const SEND_ON: Color32 = OPS_AMBER;
+pub const SEND_ON_INK: Color32 = OPS_VOID;
 pub const LIVE: Color32 = Color32::from_rgb(0x22, 0xc5, 0x5e);
 /// Live on a light surface: `#22C55E` is ~2.3:1 on white; green-700 is ~5:1.
 pub const LIGHT_LIVE: Color32 = Color32::from_rgb(0x15, 0x80, 0x3d);
@@ -1203,6 +1203,15 @@ pub fn glide_paint(ui: &egui::Ui, group: &str) {
     ui.painter().rect_filled(rect, 8.0, fill);
 }
 
+/// True when `rect` is the row the glide treats as selected this frame (the
+/// first selected candidate in `group`).
+pub fn glide_selected_is(ui: &egui::Ui, group: &str, rect: egui::Rect) -> bool {
+    let id = glide_id(group).with("pick");
+    ui.data(|d| d.get_temp::<GlidePick>(id))
+        .and_then(|p| p.selected)
+        == Some(rect)
+}
+
 /// Remember a row item. Hover wins over the resting selection.
 pub fn glide_candidate(
     ui: &egui::Ui,
@@ -1844,7 +1853,8 @@ mod tests {
         assert_eq!(MUTED, Color32::from_rgb(0x71, 0x76, 0x7b));
         assert_eq!(BORDER, Color32::from_rgb(0x2f, 0x33, 0x36));
         assert_eq!(LINK, Color32::from_rgb(0x1d, 0x9b, 0xf0));
-        assert_eq!(SEND_ON, Color32::WHITE);
+        assert_eq!(SEND_ON, OPS_AMBER);
+        assert_eq!(SEND_ON_INK, OPS_VOID);
         assert_eq!(GREET_HERO, 28.0);
         assert!(GREET_HERO > FONT_HEADING);
         assert!(GREET_HERO <= 28.0);

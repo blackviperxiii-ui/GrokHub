@@ -465,6 +465,10 @@ pub struct AppConfig {
     pub cua_driver_path: String,
     #[serde(default = "default_theme")]
     pub theme: String,
+    /// Set by [`load`] once a pre-3.4 `"dark"` has moved to Ops Dark, so a
+    /// later pick of Dark in Settings sticks. Omitted while false.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub theme_migrated: bool,
     #[serde(default)]
     pub window: crate::window::WindowGeom,
     /// First-run Get Started completed (Super Grok OAuth succeeded once).
@@ -707,6 +711,7 @@ impl Default for AppConfig {
             cua_driver: false,
             cua_driver_path: String::new(),
             theme: default_theme(),
+            theme_migrated: false,
             window: crate::window::WindowGeom::default(),
             get_started_done: false,
             setup_done: false,
@@ -848,6 +853,18 @@ pub fn drop_saved_effort(cfg: &mut AppConfig, dir: &std::path::Path) {
     }
 }
 
+/// Cabins before 3.4 saved `"dark"` as the default theme, so upgraders never
+/// saw Ops Dark. Move that once; the flag keeps a later manual pick of Dark.
+pub fn migrate_theme(cfg: &mut AppConfig) {
+    if cfg.theme_migrated {
+        return;
+    }
+    if cfg.theme.trim().eq_ignore_ascii_case("dark") {
+        cfg.theme = default_theme();
+    }
+    cfg.theme_migrated = true;
+}
+
 pub fn load() -> AppConfig {
     let path = config_dir().join("app.json");
     // A missing file is a new install. An existing file, even `{}`, keeps its backend.
@@ -866,6 +883,7 @@ pub fn load() -> AppConfig {
         cfg.device_name = default_device_name();
     }
     drop_saved_effort(&mut cfg, &config_dir());
+    migrate_theme(&mut cfg);
     cfg.session_mode = grokhub_core::wire::SessionMode::parse(&cfg.session_mode)
         .unwrap_or(grokhub_core::wire::SessionMode::Chat)
         .as_str()
@@ -1131,6 +1149,44 @@ mod tests {
             !json.contains("memory_migrated"),
             "default config must omit memory_migrated: {json}"
         );
+    }
+
+    #[test]
+    fn pre_3_4_dark_moves_to_ops_dark_once_and_a_later_dark_pick_sticks() {
+        let _g = hold_test_config();
+        let root = test_config_root("theme-migrate");
+        let _ = fs::remove_dir_all(&root);
+        let _pin = TestConfigDir::set(root.clone());
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("app.json"), "{\"theme\":\"dark\"}\n").unwrap();
+        let upgraded = load();
+        assert_eq!(upgraded.theme, "ops-dark");
+        assert!(upgraded.theme_migrated);
+        save(&upgraded).unwrap();
+        let body = fs::read_to_string(root.join("app.json")).unwrap();
+        assert!(body.contains("\"theme\": \"ops-dark\""), "{body}");
+        assert!(body.contains("\"themeMigrated\": true"), "{body}");
+
+        let mut picked = load();
+        picked.theme = "dark".into();
+        save(&picked).unwrap();
+        let kept = load();
+        assert_eq!(kept.theme, "dark", "a Dark pick after the move stays Dark");
+
+        for other in ["light", "system", "oled-black", "soft-charcoal"] {
+            fs::write(
+                root.join("app.json"),
+                format!("{{\"theme\":\"{other}\"}}\n"),
+            )
+            .unwrap();
+            let cfg = load();
+            assert_eq!(cfg.theme, other, "only the old Dark default moves");
+            assert!(cfg.theme_migrated);
+        }
+        assert!(!serde_json::to_string(&AppConfig::default())
+            .unwrap()
+            .contains("themeMigrated"));
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]

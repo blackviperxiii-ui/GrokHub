@@ -309,7 +309,32 @@ impl Cabin {
             egui::vec2(crate::theme::ICON_ACTION, crate::theme::ICON_ACTION),
         );
         let tile_rect = egui::Rect::from_center_size(center, egui::vec2(tile, tile));
-        if active {
+        let color = if crate::theme::is_loadout_paint() {
+            use crate::ui_kit::recipe::{look, paint_mark, Part, State, Mark};
+            let st = if active {
+                State::Selected
+            } else if resp.hovered() {
+                State::Hover
+            } else {
+                State::Default
+            };
+            let lk = look(Part::Nav, st);
+            if st == State::Selected {
+                ui.painter().rect_filled(tile_rect, lk.radius, lk.fill);
+                let inner = slot.with_min_x(slot.left() + crate::ui_kit::recipe::MARK_W + 4.0);
+                paint_mark(ui.painter(), inner, Mark::LeftBar);
+            } else if st == State::Hover {
+                ui.painter().rect_filled(tile_rect, lk.radius, lk.fill);
+            } else if lk.stroke.width > 0.0 {
+                ui.painter().rect_stroke(
+                    tile_rect,
+                    lk.radius,
+                    lk.stroke,
+                    egui::StrokeKind::Inside,
+                );
+            }
+            lk.ink
+        } else if active {
             ui.painter()
                 .rect_filled(tile_rect, 8.0, crate::theme::selected());
             let tick = egui::Rect::from_min_max(
@@ -317,12 +342,11 @@ impl Cabin {
                 egui::pos2(slot.left() + crate::theme::RAIL_TICK_W, slot.bottom() - 6.0),
             );
             ui.painter().rect_filled(tick, 2.0, crate::theme::amber());
+            crate::theme::steel()
         } else if resp.hovered() {
             ui.painter()
                 .rect_filled(tile_rect, 8.0, crate::theme::hover());
-        }
-        let color = if active {
-            crate::theme::steel()
+            crate::theme::muted()
         } else {
             crate::theme::muted()
         };
@@ -360,6 +384,18 @@ impl Cabin {
                 egui::Stroke::new(1.0_f32, crate::theme::border_strong()),
                 egui::StrokeKind::Middle,
             );
+        }
+        // Slide 07 nav: the selected item carries an amber bar on its left edge.
+        // Only the row the glide highlights, so a second active row stays plain.
+        if active
+            && crate::theme::is_loadout_paint()
+            && crate::theme::glide_selected_is(ui, "rail", rect)
+        {
+            use crate::ui_kit::recipe::{look, paint_mark, Part, State};
+            // The mark sits just left of the rect it is given; shift it inside
+            // the slot so the rail's clip doesn't cut it off.
+            let inner = slot.with_min_x(slot.left() + crate::ui_kit::recipe::MARK_W + 4.0);
+            paint_mark(ui.painter(), inner, look(Part::Nav, State::Selected).mark);
         }
         // The hover scale grows the highlight only. Icon and label stay on the resting
         // slot, or a 1.035 scale on a full-width row slides them ~4px left.

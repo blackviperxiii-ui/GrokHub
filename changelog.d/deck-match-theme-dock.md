@@ -1,0 +1,2 @@
+- Upgrading from a cabin before 3.4 now moves the old Dark default to Ops Dark once; picking Dark again in Settings afterwards sticks.
+- The companion dock now shows at the default 1100 x 720 window in a compact width, and the composer column no longer slides under the rail when the dock is open.

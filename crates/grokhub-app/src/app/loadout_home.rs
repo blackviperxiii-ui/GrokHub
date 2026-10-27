@@ -16,7 +16,9 @@ use super::*;
 /// The companion art slot. Swap the file to change the picture.
 const COMPANION_PNG: &[u8] = include_bytes!("../../../../brand/companion.png");
 /// Below this page width the dock hides and the chat gets the whole page.
-const DOCK_MIN_PAGE_W: f32 = 980.0;
+/// The default 1100 px window leaves about 840 px beside the rail, so the
+/// dock shows there in its compact width.
+const DOCK_MIN_PAGE_W: f32 = 780.0;
 const ART_H: f32 = 196.0;
 const MISSION_REFRESH: Duration = Duration::from_secs(2);
 const PROFILE_REFRESH: Duration = Duration::from_secs(120);
@@ -28,6 +30,8 @@ const WAVE: [f32; 9] = [0.35, 0.7, 1.0, 0.5, 0.85, 0.4, 0.95, 0.6, 0.3];
 pub(super) fn dock_width(page_w: f32) -> Option<f32> {
     if page_w < DOCK_MIN_PAGE_W {
         None
+    } else if page_w < 980.0 {
+        Some(240.0)
     } else if page_w < 1300.0 {
         Some(280.0)
     } else if page_w < 1700.0 {
@@ -170,10 +174,12 @@ fn pc_profile() -> Option<LocalProfile> {
 }
 
 fn card(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui)) -> egui::Response {
+    use crate::ui_kit::recipe::{look, Part, State};
+    let l = look(Part::Card, State::Default);
     egui::Frame::NONE
-        .fill(crate::theme::raised())
-        .stroke(egui::Stroke::new(1.0, crate::theme::signal_red()))
-        .corner_radius(crate::theme::RADIUS_SM)
+        .fill(l.fill)
+        .stroke(l.stroke)
+        .corner_radius(l.radius)
         .inner_margin(egui::Margin::same(12))
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
@@ -575,8 +581,12 @@ mod tests {
 
     #[test]
     fn dock_hides_on_narrow_pages_and_grows_on_wide_ones() {
-        assert_eq!(dock_width(900.0), None);
-        assert_eq!(dock_width(979.0), None);
+        assert_eq!(dock_width(700.0), None);
+        assert_eq!(dock_width(779.0), None);
+        assert_eq!(dock_width(780.0), Some(240.0));
+        // The default 1100 x 720 window leaves about 840 px beside the rail.
+        assert_eq!(dock_width(840.0), Some(240.0));
+        assert_eq!(dock_width(979.0), Some(240.0));
         assert_eq!(dock_width(980.0), Some(280.0));
         // A 1366 px laptop leaves about 1106 px beside the rail.
         assert_eq!(dock_width(1106.0), Some(280.0));
