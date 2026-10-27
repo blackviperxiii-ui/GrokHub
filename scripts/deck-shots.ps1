@@ -39,7 +39,9 @@ function Save-Jpeg($bmp, $path) {
 
 # One launch at $w x $h. $theme is what app.json holds before launch; with
 # $upgrade the file has no themeMigrated, as a pre-3.4 install leaves it.
-function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlide, [switch]$upgrade) {
+# With $keys, those keystrokes go to the window once it has drawn (for
+# example '^,' opens Settings) and the shot waits for the new screen.
+function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlide, [switch]$upgrade, [string]$keys = '') {
     $root = Join-Path $env:RUNNER_TEMP "deck-$name"
     Remove-Item -Recurse -Force $root -ErrorAction SilentlyContinue
     $cfg = Join-Path $root 'cfg'
@@ -69,6 +71,12 @@ function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlid
     }
     [void][DeckWin]::SetForegroundWindow($hwnd)
     Start-Sleep -Seconds 12
+    if ($keys) {
+        Add-Type -AssemblyName System.Windows.Forms
+        [void][DeckWin]::SetForegroundWindow($hwnd)
+        [System.Windows.Forms.SendKeys]::SendWait($keys)
+        Start-Sleep -Seconds 3
+    }
     $r = New-Object DeckWin+RECT
     [void][DeckWin]::GetWindowRect($hwnd, [ref]$r)
     $cw = $r.R - $r.L; $ch = $r.B - $r.T
@@ -111,4 +119,6 @@ function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlid
 Shot 1600 900 '1600x900' 'ops-dark' $Slide
 Shot 1100 720 '1100x720' 'ops-dark' $Slide
 Shot 1600 900 'upgrade-1600x900' 'dark' $UpgradeSlide -upgrade
+Shot 1600 900 'settings-1600x900' 'ops-dark' '07' -keys '^,'
+Shot 1100 720 'settings-1100x720' 'ops-dark' '07' -keys '^,'
 Get-ChildItem $Out | Format-Table Name, Length
