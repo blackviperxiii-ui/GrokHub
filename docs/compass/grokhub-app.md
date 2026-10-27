@@ -10,7 +10,7 @@
 ## Key files
 - `crates/grokhub-app/src/main.rs`: `main`, the `Launch` dispatch, `run_cabin`, `run_hub`, Windows console handling.
 - `crates/grokhub-app/build.rs`: channel, branch, and short SHA for `--version`, and the Windows icon.
-- `crates/grokhub-app/src/theme.rs` (dark tokens, `composer_glow_rgb`, `motion_ok`) and `crates/grokhub-app/src/cards.rs` (catalog chrome).
+- `crates/grokhub-app/src/theme.rs` (classic Grok + Loadout Ops Dark / OLED Black / Soft Charcoal tokens, `composer_glow_rgb`, `motion_ok`) and `crates/grokhub-app/src/cards.rs` (catalog chrome). New installs default to Ops Dark (`ops-dark` in `app.json`); existing `dark` / `light` / `system` keep the classic look.
 - `crates/grokhub-app/src/threads.rs` (`threads.json`) and `crates/grokhub-app/src/secrets.rs` (`secrets.json`).
 ## Change recipe
 - UI change: find the page in `crates/grokhub-app/src/app/` (read [app-module](app-module.md)), keep logic pure in grokhub-core, and add a cabin test.

@@ -799,7 +799,7 @@ fn appearance_theme_tray_and_wall_save() {
     let root = crate::config::test_config_root("appearance");
     std::env::set_var("GROKHUB_CONFIG", &root);
     let mut cabin = Cabin::quiet_for_test();
-    assert_eq!(cabin.cfg.theme, "dark");
+    assert_eq!(cabin.cfg.theme, "ops-dark");
     assert!(cabin.cfg.close_to_tray);
     assert!(cabin.cfg.imagine_wall);
     cabin.choose_theme(grokhub_core::ThemeChoice::Light);

@@ -1465,7 +1465,11 @@ pub fn appearance_card(ui: &mut egui::Ui, label: &str, selected: bool, preview: 
         crate::theme::surface()
     };
     let stroke = if selected {
-        crate::theme::fg()
+        if crate::theme::is_loadout_paint() {
+            crate::theme::signal_red()
+        } else {
+            crate::theme::fg()
+        }
     } else {
         crate::theme::border()
     };
