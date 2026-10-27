@@ -141,14 +141,19 @@ describe("Automations", () => {
       .mockResolvedValueOnce({ text: "3 new mails, none urgent.", error: "", stop: "end_turn" })
       .mockRejectedValueOnce("The chat worker stopped.");
     const onFinished = vi.fn();
-    render(<Automations onFinished={onFinished} />);
+    const onStarted = vi.fn();
+    render(<Automations onStarted={onStarted} onFinished={onFinished} />);
     await userEvent.click(await screen.findByRole("button", { name: "Run now" }));
     await screen.findByText("3 new mails, none urgent.");
     await userEvent.click(await screen.findByRole("button", { name: "Run now" }));
     await screen.findByText("The chat worker stopped.");
     expect(onFinished.mock.calls).toEqual([
-      [{ name: "summarize my inbox", ok: true, text: "3 new mails, none urgent." }],
-      [{ name: "summarize my inbox", ok: false, text: "The chat worker stopped." }],
+      [{ id: "auto-1", name: "summarize my inbox", ok: true, text: "3 new mails, none urgent." }],
+      [{ id: "auto-1", name: "summarize my inbox", ok: false, text: "The chat worker stopped." }],
+    ]);
+    expect(onStarted.mock.calls).toEqual([
+      ["auto-1", "summarize my inbox"],
+      ["auto-1", "summarize my inbox"],
     ]);
   });
 });

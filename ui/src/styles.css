@@ -1434,3 +1434,173 @@ label.toggle-row {
   background: #0b0b0d;
   border-radius: 0.2em;
 }
+
+/* Activity Dock: what the agent is running, what waits on the user, and
+   what just finished. It sits in the views bar, so every view shows it; the
+   list drops down from it. */
+.activity-dock {
+  position: relative;
+  flex: none;
+  margin-left: auto;
+}
+
+.activity-dock + .palette-open {
+  margin-left: 8px;
+}
+
+.activity-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: transparent;
+  color: var(--text);
+  border-color: var(--border);
+}
+
+.activity-dock.waiting .activity-toggle {
+  border-color: var(--danger);
+}
+
+.activity-summary {
+  color: var(--muted);
+  font-size: 0.85em;
+}
+
+.activity-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--muted);
+  flex: none;
+}
+
+.activity-dot.waiting,
+.activity-dot.failed {
+  background: var(--danger);
+}
+
+.activity-dot.running {
+  background: var(--accent);
+}
+
+.activity-list {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 6px);
+  z-index: 6;
+  width: min(340px, calc(100vw - 32px));
+  list-style: none;
+  margin: 0;
+  padding: 4px 12px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 60vh;
+  overflow-y: auto;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.18);
+}
+
+.activity-item,
+.activity-more {
+  padding-top: 8px;
+}
+
+.activity-item + .activity-item,
+.activity-item + .activity-more {
+  border-top: 1px solid var(--border);
+}
+
+.activity-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.activity-item button {
+  align-self: flex-start;
+}
+
+.activity-head {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+}
+
+.activity-title {
+  font-weight: 600;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.activity-status {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 0.8em;
+  flex: none;
+}
+
+.activity-item.waiting .activity-status,
+.activity-item.failed .activity-status {
+  color: var(--danger);
+}
+
+.activity-detail,
+.activity-steps,
+.activity-more {
+  color: var(--muted);
+  font-size: 0.85em;
+}
+
+.activity-progress {
+  height: 3px;
+  border-radius: 2px;
+  background: var(--border);
+  overflow: hidden;
+}
+
+.activity-progress i {
+  display: block;
+  width: 40%;
+  height: 100%;
+  background: var(--accent);
+  animation: activity-slide 1.4s ease-in-out infinite;
+}
+
+@keyframes activity-slide {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(250%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .activity-progress i {
+    animation: none;
+    width: 100%;
+    opacity: 0.5;
+  }
+}
+
+/* Phones: the bar is at the bottom, so the dock is a dot and a count and its
+   list opens upward across the screen. */
+@media (max-width: 600px) {
+  .activity-label {
+    display: none;
+  }
+
+  .activity-list {
+    position: fixed;
+    left: 8px;
+    right: 8px;
+    top: auto;
+    bottom: calc(var(--tabbar) + env(safe-area-inset-bottom) + 8px);
+    width: auto;
+  }
+}
