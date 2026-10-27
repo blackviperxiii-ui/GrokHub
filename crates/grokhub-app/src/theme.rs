@@ -19,6 +19,11 @@ pub fn title_font(size: f32) -> FontId {
     FontId::new(size, FontFamily::Name("inter-bold".into()))
 }
 
+/// Loadout wordmark and titlebar pills (Chakra Petch, deck baseline).
+pub fn loadout_font(size: f32) -> FontId {
+    FontId::new(size, FontFamily::Name("chakra-bold".into()))
+}
+
 /// Active paint set. Classic dark is the pre-Loadout Grok OLED look.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
@@ -670,7 +675,10 @@ fn cmd_stdout(bin: &str, args: &[&str]) -> String {
         .to_string()
 }
 
-pub const SIDEBAR_W: f32 = 260.0;
+/// Icon-only Loadout rail (deck slide 02 / 20).
+pub const SIDEBAR_W: f32 = 40.0;
+pub const RAIL_TILE: f32 = 32.0;
+pub const RAIL_TICK_W: f32 = 3.0;
 /// Centered composer / empty-home column (official Grok ~720–800). Chat text uses the pane.
 pub const CHAT_COL_W: f32 = 768.0;
 /// Soft chat-bubble radius. User and assistant share it. Thought has none.
@@ -834,7 +842,8 @@ pub const IMAGINE_TILE_TALL: f32 = 345.0;
 /// Cover GIF cycle — two stills crossfade like grok.com inspiration MP4s.
 pub const IMAGINE_FRAME_MS: u64 = 1600;
 
-/// Live grok.com primary rail. Settings is an avatar menu, not a row.
+/// Live grok.com primary rail (dock tabs). Settings is an avatar menu, not a row.
+#[allow(dead_code)]
 pub const GROK_NAV: &[(&str, &str)] = &[
     ("chat", "Chat"),
     ("imagine", "Imagine"),
@@ -842,6 +851,17 @@ pub const GROK_NAV: &[(&str, &str)] = &[
     ("skills", "Skills"),
     ("workboard", "Workboards"),
     ("pulse", "Pulse"),
+];
+
+/// Loadout deck icon rail (slide 02). Settings sits in the footer row.
+pub const LOADOUT_NAV: &[(&str, &str)] = &[
+    ("home", "Home"),
+    ("chat", "Chat"),
+    ("workboard", "Objectives"),
+    ("pulse", "Pulse"),
+    ("skills", "Library"),
+    ("devices", "PC"),
+    ("profile", "Profile"),
 ];
 
 /// Avatar-menu destinations besides Help / Sign in / Sign out.
@@ -867,6 +887,35 @@ fn install_inter(ctx: &egui::Context) {
         Arc::new(FontData::from_static(include_bytes!(
             "../assets/fonts/Inter-SemiBold.ttf"
         ))),
+    );
+    fonts.font_data.insert(
+        "chakra-bold".into(),
+        Arc::new(FontData::from_static(include_bytes!(
+            "../assets/fonts/ChakraPetch-Bold.ttf"
+        ))),
+    );
+    fonts.font_data.insert(
+        "chakra-medium".into(),
+        Arc::new(FontData::from_static(include_bytes!(
+            "../assets/fonts/ChakraPetch-Medium.ttf"
+        ))),
+    );
+    fonts.font_data.insert(
+        "chakra-semibold".into(),
+        Arc::new(FontData::from_static(include_bytes!(
+            "../assets/fonts/ChakraPetch-SemiBold.ttf"
+        ))),
+    );
+    fonts
+        .families
+        .insert(FontFamily::Name("chakra-bold".into()), vec!["chakra-bold".into()]);
+    fonts.families.insert(
+        FontFamily::Name("chakra-medium".into()),
+        vec!["chakra-medium".into()],
+    );
+    fonts.families.insert(
+        FontFamily::Name("chakra-semibold".into()),
+        vec!["chakra-semibold".into()],
     );
     // The latin statics are subset (no →, ✓, ≥, Cyrillic). The full face backs them.
     fonts.font_data.insert(
@@ -1032,7 +1081,12 @@ pub fn apply_palette(ctx: &egui::Context, palette: PaintPalette) {
     visuals.widgets.active.expansion = PRESS_EXPANSION;
     visuals.widgets.open.bg_fill = panel();
     visuals.widgets.open.fg_stroke = Stroke::new(1.0_f32, fg());
-    visuals.window_stroke = Stroke::new(1.0_f32, border());
+    let frame_stroke = if is_loadout_paint() {
+        signal_red()
+    } else {
+        border()
+    };
+    visuals.window_stroke = Stroke::new(1.0_f32, frame_stroke);
     visuals.window_corner_radius = MENU_RADIUS.into();
     visuals.menu_corner_radius = MENU_RADIUS.into();
     visuals.window_shadow = sheet_shadow();
@@ -1568,6 +1622,20 @@ pub fn veil_over(base: Color32, veil: Color32) -> Color32 {
     )
 }
 
+fn loadout_mark_image() -> &'static ColorImage {
+    static IMG: OnceLock<ColorImage> = OnceLock::new();
+    IMG.get_or_init(|| decode_mark_png(include_bytes!("../assets/loadout-mark-32.png")))
+}
+
+fn decode_mark_png(bytes: &'static [u8]) -> ColorImage {
+    let Ok(img) = image::load_from_memory(bytes) else {
+        return ColorImage::new([1, 1], vec![Color32::TRANSPARENT]);
+    };
+    let rgba = img.to_rgba8();
+    let size = [rgba.width() as usize, rgba.height() as usize];
+    ColorImage::from_rgba_unmultiplied(size, rgba.as_raw())
+}
+
 fn mark_image() -> &'static ColorImage {
     static IMG: OnceLock<ColorImage> = OnceLock::new();
     IMG.get_or_init(|| {
@@ -1590,6 +1658,32 @@ pub fn mark(ctx: &egui::Context) -> TextureHandle {
     let tex = ctx.load_texture("grokhub-mark", mark_image().clone(), TextureOptions::LINEAR);
     ctx.data_mut(|d| d.insert_temp(id, tex.clone()));
     tex
+}
+
+pub fn loadout_mark(ctx: &egui::Context) -> TextureHandle {
+    let id = egui::Id::new("loadout-mark");
+    if let Some(tex) = ctx.data(|d| d.get_temp::<TextureHandle>(id)) {
+        return tex;
+    }
+    let tex = ctx.load_texture(
+        "loadout-mark",
+        loadout_mark_image().clone(),
+        TextureOptions::LINEAR,
+    );
+    ctx.data_mut(|d| d.insert_temp(id, tex.clone()));
+    tex
+}
+
+/// Titlebar trust chip: off-device bytes this week (egress log has no payload sizes).
+pub fn titlebar_sent_label(bytes: u64) -> String {
+    let b = if bytes < 1024 {
+        format!("{bytes} B")
+    } else if bytes < 1024 * 1024 {
+        format!("{} KB", bytes / 1024)
+    } else {
+        format!("{} MB", bytes / (1024 * 1024))
+    };
+    format!("LOCAL · {} SENT", b.to_ascii_uppercase())
 }
 
 #[cfg(test)]

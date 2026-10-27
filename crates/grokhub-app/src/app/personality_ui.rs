@@ -138,6 +138,16 @@ impl Cabin {
         personality::visible(&self.picker.presets, self.cfg.explicit_personalities)
     }
 
+    pub(super) fn titlebar_personality_label(&mut self) -> String {
+        let presets = self.presets_now();
+        let id = if self.nav == Nav::Chat {
+            self.open_chat_personality()
+        } else {
+            self.allowed_id(shown_id(self.cfg.personality.trim())).to_string()
+        };
+        personality::find(&presets, &id).name
+    }
+
     /// The personality the open chat shows in its header.
     fn open_chat_personality(&self) -> String {
         let own = self

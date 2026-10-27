@@ -2161,6 +2161,7 @@ fn quiet_cabin() -> Cabin {
         board_link: false,
         settings_menu_open: false,
         settings_menu_ignore: false,
+        rail_chat_drawer_open: false,
         win_max: false,
         geom_dirty: false,
         geom_applied: false,

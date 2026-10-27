@@ -521,6 +521,21 @@ jobs:
         run: |
           if (-not (Test-Path target/release/grokhub.exe)) { throw 'missing grokhub.exe' }
           if (-not (Test-Path target/release/grokhub-hub.exe)) { throw 'missing grokhub-hub.exe' }
+      - name: Deck shots (Loadout chrome)
+        shell: pwsh
+        run: |
+          ./scripts/deck-shots.ps1 -Slide 02
+          ./scripts/deck-shots.ps1 -Slide 20
+          New-Item -ItemType Directory -Force -Path docs/design/deck-match | Out-Null
+          Copy-Item target/deck-shots/pair-1600x900-slide02.png docs/design/deck-match/dm2-1600-vs-slide02.png
+          Copy-Item target/deck-shots/pair-1100x720-slide02.png docs/design/deck-match/dm2-1100-vs-slide02.png
+          Copy-Item target/deck-shots/pair-1600x900-slide20.png docs/design/deck-match/dm2-1600-vs-slide20.png
+          Copy-Item target/deck-shots/pair-1100x720-slide20.png docs/design/deck-match/dm2-1100-vs-slide20.png
+      - name: Upload deck shots
+        uses: actions/upload-artifact@b7c566a716909f0ab4bd5e6306c6c4b21466a3a4 # v6.0.0
+        with:
+          name: deck-shots
+          path: target/deck-shots/
       - name: Pack script locks
         shell: pwsh
         run: ./scripts/make-windows-release.tests.ps1

@@ -167,7 +167,7 @@ fn history_rail_uses_session_names_and_can_delete() {
 #[test]
 #[allow(clippy::assertions_on_constants)] // pins design constants
 fn rail_footer_is_reserved() {
-    assert_eq!(super::RAIL_FOOTER_H, 52.0);
+    assert_eq!(super::RAIL_FOOTER_H, 40.0);
     assert!(super::PALETTE_LIST_H < 400.0);
 }
 
@@ -191,11 +191,14 @@ fn rail_chat_title_stays_short() {
 fn chat_rail_reuses_empty_draft() {
     let src = cabin_src();
     let theme = include_str!("../theme.rs");
-    let chat = theme.find("(\"chat\", \"Chat\")").expect("chat rail");
-    let imagine = theme
-        .find("(\"imagine\", \"Imagine\")")
-        .expect("imagine rail");
-    assert!(chat < imagine, "Chat sits above Imagine on the rail");
+    let loadout = theme
+        .split("pub const LOADOUT_NAV")
+        .nth(1)
+        .and_then(|s| s.split("pub const CABIN_MENU").next())
+        .expect("LOADOUT_NAV");
+    let home = loadout.find("(\"home\", \"Home\")").expect("home rail");
+    let chat = loadout.find("(\"chat\", \"Chat\")").expect("chat rail");
+    assert!(home < chat, "Home sits above Chat on the Loadout rail");
     let set_nav = fn_src(&src, "set_nav_id");
     let chat_arm = set_nav
         .split("\"chat\" =>")
@@ -228,9 +231,10 @@ fn chat_rail_reuses_empty_draft() {
         !side.contains("\"New chat\"") && !side.contains("RailIcon::Compose"),
         "sidebar must not keep a separate New chat button: {side}"
     );
+    let drawer = fn_src(&src, "ui_rail_projects_and_history");
     assert!(
-        side.contains("apply_tab_act"),
-        "sidebar History clicks go through the shared chat-row action: {side}"
+        drawer.contains("apply_tab_act") && side.contains("ui_rail_chat_drawer"),
+        "Projects and History live in the chat flyout and share chat-row actions"
     );
     let tab_act = fn_src(&src, "apply_tab_act");
     assert!(
