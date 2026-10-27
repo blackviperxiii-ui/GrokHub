@@ -936,6 +936,40 @@ fn pulse_layout_reflows_like_the_deck_breakpoints() {
     assert_eq!(post_thumb_count(560.0), 3);
 }
 
+#[test]
+fn the_deck_frames_land_on_their_layouts_beside_the_rail() {
+    use super::pulse_ui::{post_thumb_count, pulse_page_layout, PulseFit};
+    let rail = crate::theme::SIDEBAR_W;
+    // 2560: the 60/40 split, 24 px padding each side, both columns 2-up.
+    let wide = pulse_page_layout(2560.0 - rail);
+    assert_eq!(wide.fit, PulseFit::Split);
+    assert_eq!((wide.ideas_cols, wide.feed_cols), (2, 2));
+    assert!((wide.ideas_w + wide.gap + wide.feed_w - 2252.0).abs() < 0.05);
+    // 1440: the laptop split, posts show two images.
+    let laptop = pulse_page_layout(1440.0 - rail);
+    assert_eq!(laptop.fit, PulseFit::Split);
+    assert_eq!(post_thumb_count(laptop.feed_w), 2);
+    // 1024: one column with the feed 2-up below, though 716 px is left
+    // inside the padding.
+    let tablet = pulse_page_layout(1024.0 - rail);
+    assert_eq!(
+        (tablet.fit, tablet.ideas_w, tablet.feed_cols),
+        (PulseFit::Stacked, 716.0, 2)
+    );
+    // The narrowest window (720) leaves a 460 px page: the switch.
+    let narrow = pulse_page_layout(720.0 - rail);
+    assert_eq!((narrow.fit, narrow.ideas_w), (PulseFit::Compact, 412.0));
+}
+
+#[test]
+fn suggest_goes_short_on_the_one_column_page() {
+    use super::pulse_ui::{suggest_label, PulseFit};
+    assert_eq!(suggest_label(false, PulseFit::Split), "Suggest ideas");
+    assert_eq!(suggest_label(false, PulseFit::Stacked), "Suggest");
+    assert_eq!(suggest_label(false, PulseFit::Compact), "Suggest ideas");
+    assert_eq!(suggest_label(true, PulseFit::Stacked), "Suggesting…");
+}
+
 /// Text shapes with their top-left corner.
 fn pulse_text_pos(cabin: &mut super::Cabin, w: f32) -> Vec<(String, egui::Pos2)> {
     let _paint = crate::theme::hold_paint_test();
