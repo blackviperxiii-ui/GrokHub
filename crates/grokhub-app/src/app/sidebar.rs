@@ -310,7 +310,7 @@ impl Cabin {
         );
         let tile_rect = egui::Rect::from_center_size(center, egui::vec2(tile, tile));
         let color = if crate::theme::is_loadout_paint() {
-            use crate::ui_kit::recipe::{look, paint_mark, Part, State, Mark};
+            use crate::ui_kit::recipe::{look, paint_mark, Mark, Part, State};
             let st = if active {
                 State::Selected
             } else if resp.hovered() {
@@ -326,12 +326,8 @@ impl Cabin {
             } else if st == State::Hover {
                 ui.painter().rect_filled(tile_rect, lk.radius, lk.fill);
             } else if lk.stroke.width > 0.0 {
-                ui.painter().rect_stroke(
-                    tile_rect,
-                    lk.radius,
-                    lk.stroke,
-                    egui::StrokeKind::Inside,
-                );
+                ui.painter()
+                    .rect_stroke(tile_rect, lk.radius, lk.stroke, egui::StrokeKind::Inside);
             }
             lk.ink
         } else if active {
