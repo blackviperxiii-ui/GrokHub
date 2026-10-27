@@ -64,6 +64,18 @@ Grok Build 1.0.49+ ships explore / plan / implementer (and reviewer, test-writer
 - **dyl-review** (quick): draft review asks for the human; do not use dyl-ready-pr to merge or babysit. Agents still squash-merge their own green PRs into `beta`.
 - **Continual Learning**: when mining chats, update `AGENTS.md` via the continual-learning skill / agents-memory-updater. Keep AGENTS.md short and factual.
 
+## Skill cues
+Reach for these coding skills at the matching moment (same practice by hand if a skill is not installed). Cues only — do not vendor plugin or skill files into the repo.
+
+- **check-compiler-errors** after Rust or TypeScript edits, before pushing
+- **loop-on-ci** or **fix-ci** once a PR is open, until it is green
+- **fix-merge-conflicts** when a PR is behind `beta`
+- **verify-this** or **run-smoke-tests** before marking work Done
+- **blast-radius** before changing shared code (router, agent loop, memory, local model launcher)
+- **tdd** for logic with clear behavior
+- **statechart** for multi-state flows (online/offline/degraded, intentions)
+- **make-pr-easy-to-review** when opening a PR
+
 ## No personal info (hard rule)
 
 This is open-source work meant for anyone to use. Keep every file, commit, PR and issue generic.
