@@ -8,7 +8,7 @@ vi.mock("./transport", () => ({
   onPairChange: vi.fn(() => () => {}),
 }));
 
-import { APP_ICON_URL, COMPANION_NAME, LOGO_MARK_URL, PRODUCT_NAME, TAGLINE } from "./brand";
+import { APP_ICON_URL, COMPANION_NAME, LOGO_MARK_URL, PRODUCT_NAME, SUPPORT_LABEL, TAGLINE } from "./brand";
 import { Pair } from "./Pair";
 import indexHtml from "../index.html?raw";
 
@@ -33,6 +33,7 @@ describe("brand", () => {
     expect(PRODUCT_NAME).toBe("Loadout");
     expect(TAGLINE).toBe("Gear up. Level up.");
     expect(COMPANION_NAME).toBe("Nyx");
+    expect(SUPPORT_LABEL).toBe("Support the developer");
     expect(LOGO_MARK_URL).toMatch(/logo-mark\.svg|^data:image\/svg\+xml/);
     expect(APP_ICON_URL).toMatch(/app-icon\.svg|^data:image\/svg\+xml/);
   });

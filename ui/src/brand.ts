@@ -8,6 +8,8 @@ import appIcon from "../../brand/app-icon.svg";
 export const PRODUCT_NAME: string = brand.productName;
 export const TAGLINE: string = brand.tagline;
 export const COMPANION_NAME: string = brand.companionName;
+/** Settings → About: the quiet link shown once a support URL is set. */
+export const SUPPORT_LABEL: string = brand.supportLabel;
 
 /** Image URLs for the logo mark and the app icon tile. */
 export const LOGO_MARK_URL: string = logoMark;
