@@ -1,1 +1,0 @@
-- Appearance: Ops Dark (default for new installs), OLED Black, and Soft Charcoal Loadout theme tokens, with classic Dark / Light / System kept.

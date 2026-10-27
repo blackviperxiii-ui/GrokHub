@@ -174,6 +174,7 @@ mod indexer_ui;
 mod interests_ui;
 mod jobs;
 mod journal_ui;
+mod knowme_ui;
 mod loadout_home;
 mod local_ai_ui;
 mod local_pick_ui;

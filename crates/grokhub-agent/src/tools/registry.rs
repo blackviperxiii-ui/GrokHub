@@ -488,7 +488,8 @@ mod tests {
     /// `defs.rs`, rerun this test, and put the new size and the reason in the PR.
     /// The deferred `local_ai_status` / `local_ai_selftest` index lines added
     /// 143 bytes to Chat/Agent and background, and 74 to Plan/Ask. The deferred
-    /// `pulse_steam` index line added 53 to Chat/Agent and background.
+    /// `pulse_steam` index line added 53 to Chat/Agent and background, and the
+    /// eager read `know_me_tags` (the agent's only view of Know me) 184.
     #[test]
     fn eager_schema_payload_stays_within_budget_per_profile() {
         use super::super::set::ToolSet;
@@ -498,20 +499,20 @@ mod tests {
                 "chat",
                 profile(PermMode::Ask, false, true),
                 full.clone(),
-                10_319,
+                10_503,
             ),
             (
                 "agent",
                 profile(PermMode::Always, false, true),
                 full.clone(),
-                10_319,
+                10_503,
             ),
             ("plan/ask", profile(PermMode::Ask, true, true), full, 6_824),
             (
                 "background",
                 profile(PermMode::Auto, false, false),
                 ToolSet::background(),
-                9_139,
+                9_323,
             ),
         ];
         for (label, gate, set, budget) in cases {
@@ -553,6 +554,7 @@ mod tests {
                 "skill_list",
                 "connection_list",
                 "automation_list",
+                "know_me_tags",
                 LOAD_TOOL_SCHEMA,
             ]
         );

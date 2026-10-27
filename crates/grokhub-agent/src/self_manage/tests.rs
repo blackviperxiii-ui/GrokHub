@@ -30,7 +30,7 @@ fn native(g: &Gate, name: &str, args: &serde_json::Value) -> Decision {
 #[test]
 fn class_table_names_every_tool_once() {
     let names: Vec<&str> = SELF_TOOLS.iter().map(|(n, _)| *n).collect();
-    assert_eq!(names.len(), 17);
+    assert_eq!(names.len(), 18);
     let schema_names: Vec<String> = mcp_tools()
         .iter()
         .map(|t| t["name"].as_str().unwrap().to_string())
@@ -57,6 +57,7 @@ fn class_table_names_every_tool_once() {
             ("automation_disable", "soft"),
             ("automation_delete", "delete"),
             ("pulse_steam", "soft"),
+            ("know_me_tags", "read"),
         ]
     );
     for t in native_schemas() {
@@ -660,5 +661,34 @@ fn pulse_steam_saves_the_toggle_and_mutes_and_reports_them() {
         Err("Steam is not installed on this computer, so there is no library to use.".into())
     );
     assert_eq!(grokhub_core::steam::load_prefs(&root).on, Some(false));
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn know_me_tags_reports_the_saved_tags_with_their_source() {
+    use grokhub_core::know_me::{self, KnowMe, Signal, Tag};
+    let root = dir("know-me");
+    let ctx = SelfCtx::new(&root);
+    let off = run_with(&ctx, "know_me_tags", &json!({}));
+    assert_eq!(
+        (off.failed, off.text.as_str()),
+        (
+            false,
+            "Know me is off. The user can turn it on in Settings → Pulse."
+        )
+    );
+    let state = KnowMe {
+        on: true,
+        tags: vec![Tag {
+            tag: "dev: Rust".into(),
+            signal: Signal::Dev,
+            topic: Some("Rust".into()),
+        }],
+        ..Default::default()
+    };
+    know_me::save(&root.join(know_me::FILE_NAME), &state).unwrap();
+    let on = run_with(&ctx, "grokhub-self__know_me_tags", &json!({}));
+    assert_eq!(on.text, "Know me tags:\n- dev: Rust (from Dev tools)");
+    assert!(is_read("know_me_tags"));
     let _ = std::fs::remove_dir_all(root);
 }

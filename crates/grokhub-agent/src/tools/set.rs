@@ -189,6 +189,7 @@ const BACKGROUND_TOOLS: &[&str] = &[
     "skill_list",
     "connection_list",
     "automation_list",
+    "know_me_tags",
 ];
 
 #[cfg(test)]

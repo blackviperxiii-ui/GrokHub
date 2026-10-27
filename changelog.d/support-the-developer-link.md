@@ -1,1 +1,0 @@
-- Settings > About: a quiet "Support the developer" link (label in `brand/brand.json`). It shows only once `supportUrl` in `app.json` holds a web address and opens it in the browser. No payments, tiers or prompts.
