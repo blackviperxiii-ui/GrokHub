@@ -2528,7 +2528,10 @@ impl Cabin {
     pub(super) fn ui_composer_stack(&mut self, ui: &mut egui::Ui) {
         ui.add_space(6.0);
         ui.vertical_centered_justified(|ui| {
-            let col_w = crate::cards::composer_pill_w(ui.ctx().content_rect().width());
+            // The dock can leave less than the window-based column; centring
+            // a wider column would push it under the rail.
+            let col_w = crate::cards::composer_pill_w(ui.ctx().content_rect().width())
+                .min(ui.available_width());
             ui.set_max_width(col_w);
             for slot in composer_stack_order() {
                 match slot {
