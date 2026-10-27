@@ -240,10 +240,10 @@ fn production_assets_present() -> bool {
         .unwrap_or(false)
 }
 
+/// The cabin's config folder: `GROKHUB_CONFIG`, else the platform default.
+/// Reading only the env var left the route off in every normal launch.
 fn config_dir() -> Option<PathBuf> {
-    std::env::var_os("GROKHUB_CONFIG")
-        .map(PathBuf::from)
-        .filter(|p| !p.as_os_str().is_empty())
+    Some(crate::perm::config_dir())
 }
 
 pub fn is_local(id: &str) -> bool {

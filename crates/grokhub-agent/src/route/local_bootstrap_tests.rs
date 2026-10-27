@@ -48,3 +48,27 @@ fn bootstrap_error_surfaces_when_sidecar_wont_start() {
     }
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn a_normal_launch_finds_the_runtime_without_grokhub_config_set() {
+    let dir = std::env::temp_dir().join(format!("gh-l2-noenv-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("bin")).expect("bin dir");
+    std::fs::create_dir_all(dir.join("models")).expect("models dir");
+    std::fs::write(dir.join("bin").join(llama_server_name()), b"x").expect("binary");
+    std::fs::write(dir.join("models").join("tiny.gguf"), b"gguf").expect("gguf");
+    let prev = std::env::var_os("GROKHUB_CONFIG");
+    std::env::remove_var("GROKHUB_CONFIG");
+    // The cabin's config folder, as the platform default resolves it.
+    let pin = crate::perm::ConfigGuard::set(&dir);
+    stop_global();
+    assert!(
+        local::installed(),
+        "the route reads the cabin's config folder, not only GROKHUB_CONFIG"
+    );
+    drop(pin);
+    if let Some(p) = prev {
+        std::env::set_var("GROKHUB_CONFIG", p);
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
