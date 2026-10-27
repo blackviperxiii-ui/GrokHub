@@ -45,6 +45,8 @@ pub(super) struct SourcesState {
     pub know_me: super::knowme_ui::KnowMeState,
     /// Learned reactions per card category, read from disk when first needed.
     pub reactions: Option<grokhub_core::reactions::Reactions>,
+    /// The learned daily rhythm, read from disk when first needed.
+    pub rhythm: Option<grokhub_core::rhythm::Rhythm>,
 }
 
 /// A run, its picks, and the fast model's reply.

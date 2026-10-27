@@ -205,6 +205,7 @@ mod reactions_ui;
 #[cfg(test)]
 mod repaint_timer_tests;
 mod repair_ui;
+mod rhythm_ui;
 mod router_ui;
 mod scope_ui;
 mod screen_record_ui;
@@ -3506,6 +3507,7 @@ impl Cabin {
                 HeartbeatAct::Housekeep => {
                     self.roll_today();
                     self.release_situation_ping();
+                    self.note_rhythm();
                     if self.last_persist.elapsed() > Duration::from_secs(2) {
                         self.persist_bg();
                     }

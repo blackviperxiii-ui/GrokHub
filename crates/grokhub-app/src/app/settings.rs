@@ -669,6 +669,7 @@ impl Cabin {
                                                                     self.status = "Saved".into();
                                                                 }
                                                             }
+                                                            self.ui_rhythm_rows(ui);
                                                             self.ui_dream_time_row(ui);
                                                             self.ui_quiet_self_review_rows(ui);
                                                             self.ui_self_change_history(ui);

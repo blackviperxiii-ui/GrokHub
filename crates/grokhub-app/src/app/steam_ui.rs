@@ -66,6 +66,18 @@ impl Cabin {
         self.sources.steam.requests()
     }
 
+    /// Each game's last-played time in ms, for the daily rhythm.
+    pub(super) fn steam_last_played(&mut self, now: u64) -> Vec<(String, u64)> {
+        self.sources.steam.refresh(now, steam::detect_root);
+        self.sources
+            .steam
+            .games
+            .iter()
+            .filter(|g| g.last_played > 0)
+            .map(|g| (g.app_id.to_string(), g.last_played * 1000))
+            .collect()
+    }
+
     pub(super) fn steam_muted(&self, card: &grokhub_core::update_feed::UpdateCard) -> bool {
         card.pulse
             .source_name
