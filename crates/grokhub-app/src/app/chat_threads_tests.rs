@@ -167,7 +167,7 @@ fn history_rail_uses_session_names_and_can_delete() {
 #[test]
 #[allow(clippy::assertions_on_constants)] // pins design constants
 fn rail_footer_is_reserved() {
-    assert_eq!(super::RAIL_FOOTER_H, 40.0);
+    assert_eq!(super::sidebar::RAIL_FOOTER_H, 40.0);
     assert!(super::PALETTE_LIST_H < 400.0);
 }
 

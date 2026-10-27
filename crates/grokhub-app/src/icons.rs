@@ -9,7 +9,7 @@ egui_phosphor::subset! {
         use regular::{
             ARROW_DOWN, ARROW_UP, BRAIN, CHAT, CHECK_CIRCLE, CLOCK, CLOCK_COUNTER_CLOCKWISE,
             DESKTOP, FILE, FOLDER, GEAR, GITHUB_LOGO, HOUSE, IMAGE, KANBAN, LIGHTNING, LIST,
-            MAGNIFYING_GLASS, MOON, NOTE_PENCIL, PAPER_PLANE_TILT, PLUGS, PUSH_PIN, PULSE,
+            BOOKS, MAGNIFYING_GLASS, MOON, NOTE_PENCIL, PAPER_PLANE_TILT, PLUGS, PUSH_PIN, PULSE,
             QUESTION, SQUARES_FOUR, SUN, TARGET, USER,
         };
     }
@@ -64,7 +64,7 @@ fn rail_phosphor(icon: RailIcon) -> &'static str {
         RailIcon::Home => ph::regular::HOUSE,
         RailIcon::Objectives => ph::regular::TARGET,
         RailIcon::Pulse => ph::regular::PULSE,
-        RailIcon::Library => ph::regular::SQUARES_FOUR,
+        RailIcon::Library => ph::regular::BOOKS,
         RailIcon::Pc => ph::regular::DESKTOP,
         RailIcon::Profile => ph::regular::USER,
         RailIcon::Settings => ph::regular::GEAR,
@@ -143,8 +143,10 @@ pub fn rail_icon_for(id: &str) -> RailIcon {
         "chat" => RailIcon::Chat,
         "imagine" => RailIcon::Imagine,
         "automations" => RailIcon::Clock,
-        "skills" | "connectors" | "library" => RailIcon::Library,
-        "workboard" | "objectives" => RailIcon::Objectives,
+        "skills" | "connectors" => RailIcon::Grid,
+        "library" => RailIcon::Library,
+        "objectives" => RailIcon::Objectives,
+        "workboard" => RailIcon::Folder,
         "pulse" | "ideas" => RailIcon::Pulse,
         "devices" | "pc" => RailIcon::Pc,
         "profile" => RailIcon::Profile,

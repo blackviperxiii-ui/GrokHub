@@ -304,21 +304,9 @@ enum SettingsGroup {
 
 const HIDDEN_HEARTBEAT_MS: u64 = 400;
 
-fn mode_status_line(mode: &str, pinned_model: &str) -> String {
-    if matches!(mode, "auto" | "adaptive" | "smart") && !settings_pin_blocks_auto(pinned_model) {
-        return "Mode auto — routes Fast / Balance / Think / Max".into();
-    }
-    let model = resolve_chat_model(mode, pinned_model);
-    match grokhub_core::reasoning_effort_for_mode(mode) {
-        Some(effort) => format!("Mode {mode} → {model} · {effort}"),
-        None => format!("Mode {mode} → {model}"),
-    }
-}
-
 /// How long a History query sits still before it runs. Every keystroke walks every
 /// thread, so the cabin waits for the typing to settle.
 const HISTORY_TYPE_DELAY: Duration = Duration::from_millis(250);
-const RAIL_FOOTER_H: f32 = 40.0;
 const PALETTE_LIST_H: f32 = 280.0;
 const PROFILE_NAME_MAX: usize = 64;
 
@@ -5372,15 +5360,7 @@ impl eframe::App for Cabin {
         let ctx = ui.ctx().clone();
         self.paint_drop_hint(&ctx);
         self.ui_titlebar(ui);
-        if crate::theme::is_loadout_paint() {
-            let rect = ui.max_rect();
-            ui.painter().rect_stroke(
-                rect,
-                0.0,
-                egui::Stroke::new(1.0, crate::theme::signal_red()),
-                egui::StrokeKind::Inside,
-            );
-        }
+        Self::paint_loadout_window_border(ui);
         // First-run wait / Get Started takes CentralPanel — a Foreground Area over chat does not paint on Windows.
         if !self.ui_get_started(ui) {
             self.ui_sidebar(ui);

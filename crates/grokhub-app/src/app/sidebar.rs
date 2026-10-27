@@ -1,6 +1,8 @@
 //! Rail, titlebar, and avatar.
 
 use super::*;
+
+pub(super) const RAIL_FOOTER_H: f32 = 40.0;
 use crate::ui_kit::{card_frame, chip, empty_state, CardVariant};
 
 /// Shown at the right of the chat flyout Search row: the key that opens the palette.
@@ -40,6 +42,19 @@ pub(super) fn fit_rail_label(ui: &egui::Ui, label: &str, max_w: f32) -> String {
 }
 
 impl Cabin {
+    pub(super) fn paint_loadout_window_border(ui: &mut egui::Ui) {
+        if !crate::theme::is_loadout_paint() {
+            return;
+        }
+        let rect = ui.max_rect();
+        ui.painter().rect_stroke(
+            rect,
+            0.0,
+            egui::Stroke::new(1.0, crate::theme::signal_red()),
+            egui::StrokeKind::Inside,
+        );
+    }
+
     pub(super) fn ui_titlebar(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
         let mut run_pending_update = false;
@@ -281,24 +296,30 @@ impl Cabin {
         tip: &str,
     ) -> egui::Response {
         let tile = crate::theme::RAIL_TILE;
-        let (slot, resp) =
-            ui.allocate_exact_size(egui::vec2(crate::theme::SIDEBAR_W, tile), egui::Sense::click());
+        let (slot, resp) = ui.allocate_exact_size(
+            egui::vec2(crate::theme::SIDEBAR_W, tile),
+            egui::Sense::click(),
+        );
         if !ui.is_rect_visible(slot) {
             return resp;
         }
         let center = slot.center();
-        let icon_rect =
-            egui::Rect::from_center_size(center, egui::vec2(crate::theme::ICON_ACTION, crate::theme::ICON_ACTION));
+        let icon_rect = egui::Rect::from_center_size(
+            center,
+            egui::vec2(crate::theme::ICON_ACTION, crate::theme::ICON_ACTION),
+        );
         let tile_rect = egui::Rect::from_center_size(center, egui::vec2(tile, tile));
         if active {
-            ui.painter().rect_filled(tile_rect, 8.0, crate::theme::selected());
+            ui.painter()
+                .rect_filled(tile_rect, 8.0, crate::theme::selected());
             let tick = egui::Rect::from_min_max(
                 egui::pos2(slot.left(), slot.top() + 6.0),
                 egui::pos2(slot.left() + crate::theme::RAIL_TICK_W, slot.bottom() - 6.0),
             );
             ui.painter().rect_filled(tick, 2.0, crate::theme::amber());
         } else if resp.hovered() {
-            ui.painter().rect_filled(tile_rect, 8.0, crate::theme::hover());
+            ui.painter()
+                .rect_filled(tile_rect, 8.0, crate::theme::hover());
         }
         let color = if active {
             crate::theme::steel()
@@ -457,12 +478,8 @@ impl Cabin {
                 let cur = self.nav_id();
                 for (id, label) in crate::theme::LOADOUT_NAV {
                     let active = cur == *id;
-                    let resp = Self::icon_nav_row(
-                        ui,
-                        active,
-                        crate::icons::rail_icon_for(id),
-                        label,
-                    );
+                    let resp =
+                        Self::icon_nav_row(ui, active, crate::icons::rail_icon_for(id), label);
                     if *id == "chat" {
                         chat_icon = Some(resp.clone());
                     }
@@ -498,9 +515,9 @@ impl Cabin {
     }
 
     fn ui_rail_chat_drawer(&mut self, ctx: &egui::Context, anchor: Option<egui::Response>) {
-        let anchor = anchor
-            .map(|r| r.rect)
-            .unwrap_or_else(|| egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(1.0, 1.0)));
+        let anchor = anchor.map(|r| r.rect).unwrap_or_else(|| {
+            egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(1.0, 1.0))
+        });
         let w = 260.0_f32;
         egui::Area::new(egui::Id::new("rail-chat-drawer"))
             .order(egui::Order::Foreground)
@@ -521,28 +538,37 @@ impl Cabin {
                                     .font(crate::theme::title_font(crate::theme::FONT_SECTION))
                                     .color(crate::theme::fg()),
                             );
-                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                if crate::theme::felt_icon_hit(
-                                    ui,
-                                    "×",
-                                    22.0,
-                                    crate::theme::muted(),
-                                    16.0,
-                                )
-                                .clicked()
-                                {
-                                    self.rail_chat_drawer_open = false;
-                                }
-                            });
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    if crate::theme::felt_icon_hit(
+                                        ui,
+                                        "×",
+                                        22.0,
+                                        crate::theme::muted(),
+                                        16.0,
+                                    )
+                                    .clicked()
+                                    {
+                                        self.rail_chat_drawer_open = false;
+                                    }
+                                },
+                            );
                         });
-                        let search =
-                            Self::nav_row(ui, false, crate::icons::RailIcon::Search, "Search", false);
+                        let search = Self::nav_row(
+                            ui,
+                            false,
+                            crate::icons::RailIcon::Search,
+                            "Search",
+                            false,
+                        );
                         {
                             let pad = egui::vec2(crate::theme::SPACING_8, crate::theme::SPACING_4);
                             let font = egui::FontId::proportional(crate::theme::TYPE_CAPTION);
                             let text_c = crate::theme::fg();
-                            let galley = ui
-                                .fonts_mut(|f| f.layout_no_wrap(SEARCH_KEY_HINT.to_owned(), font, text_c));
+                            let galley = ui.fonts_mut(|f| {
+                                f.layout_no_wrap(SEARCH_KEY_HINT.to_owned(), font, text_c)
+                            });
                             let size = galley.size() + pad * 2.0;
                             let rect = egui::Rect::from_center_size(
                                 egui::pos2(
@@ -557,7 +583,10 @@ impl Cabin {
                                 crate::theme::surface(),
                             );
                             ui.painter().galley(
-                                egui::pos2(rect.min.x + pad.x, rect.center().y - galley.size().y * 0.5),
+                                egui::pos2(
+                                    rect.min.x + pad.x,
+                                    rect.center().y - galley.size().y * 0.5,
+                                ),
                                 galley,
                                 text_c,
                             );
@@ -568,19 +597,22 @@ impl Cabin {
                         ui.add_space(crate::theme::SPACING_8);
                         ui.horizontal(|ui| {
                             rail_section_caption(ui, RichText::new("Projects"));
-                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                let plus = crate::theme::felt_icon_hit(
-                                    ui,
-                                    "+",
-                                    22.0,
-                                    crate::theme::muted(),
-                                    16.0,
-                                )
-                                .on_hover_text("New folder");
-                                if plus.clicked() {
-                                    self.stage_new_folder();
-                                }
-                            });
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    let plus = crate::theme::felt_icon_hit(
+                                        ui,
+                                        "+",
+                                        22.0,
+                                        crate::theme::muted(),
+                                        16.0,
+                                    )
+                                    .on_hover_text("New folder");
+                                    if plus.clicked() {
+                                        self.stage_new_folder();
+                                    }
+                                },
+                            );
                         });
                         self.ui_rail_projects_and_history(ui, w);
                     });
@@ -596,8 +628,7 @@ impl Cabin {
         let row_gap = ui.spacing().item_spacing.y;
         let pitch = crate::theme::NAV_ROW_H + row_gap;
         let raw_h = 200.0_f32;
-        let proj_h =
-            (((raw_h + row_gap) / pitch).floor().max(1.0) * pitch - row_gap).max(40.0);
+        let proj_h = (((raw_h + row_gap) / pitch).floor().max(1.0) * pitch - row_gap).max(40.0);
         egui::ScrollArea::vertical()
             .id_salt("rail-projects")
             .auto_shrink([false, true])
@@ -629,7 +660,10 @@ impl Cabin {
                                             egui::Frame::NONE
                                                 .fill(crate::theme::elevated())
                                                 .corner_radius(15.0)
-                                                .stroke(egui::Stroke::new(2.0_f32, crate::theme::fg()))
+                                                .stroke(egui::Stroke::new(
+                                                    2.0_f32,
+                                                    crate::theme::fg(),
+                                                ))
                                                 .inner_margin(egui::Margin::symmetric(10, 6)),
                                         )
                                         .hint_text(crate::theme::hint("Name"))
@@ -775,10 +809,7 @@ impl Cabin {
                         .into_iter()
                         .filter(|&i| {
                             q.is_empty()
-                                || self
-                                    .thread_rail_title(i)
-                                    .to_ascii_lowercase()
-                                    .contains(&q)
+                                || self.thread_rail_title(i).to_ascii_lowercase().contains(&q)
                         })
                         .collect();
                     if listed.is_empty() {

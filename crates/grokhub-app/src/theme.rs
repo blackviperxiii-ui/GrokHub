@@ -906,9 +906,10 @@ fn install_inter(ctx: &egui::Context) {
             "../assets/fonts/ChakraPetch-SemiBold.ttf"
         ))),
     );
-    fonts
-        .families
-        .insert(FontFamily::Name("chakra-bold".into()), vec!["chakra-bold".into()]);
+    fonts.families.insert(
+        FontFamily::Name("chakra-bold".into()),
+        vec!["chakra-bold".into()],
+    );
     fonts.families.insert(
         FontFamily::Name("chakra-medium".into()),
         vec!["chakra-medium".into()],

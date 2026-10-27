@@ -143,7 +143,8 @@ impl Cabin {
         let id = if self.nav == Nav::Chat {
             self.open_chat_personality()
         } else {
-            self.allowed_id(shown_id(self.cfg.personality.trim())).to_string()
+            self.allowed_id(shown_id(self.cfg.personality.trim()))
+                .to_string()
         };
         personality::find(&presets, &id).name
     }
