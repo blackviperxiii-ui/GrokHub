@@ -4,6 +4,7 @@ import {
   duplicatePersonality,
   getPersonalities,
   savePersonality,
+  setExplicitPersonalities,
   setPersonality,
   type Emoji,
   type PersonalityEdit,
@@ -11,10 +12,13 @@ import {
   type Preset,
   type Verbosity,
 } from "./api";
+import { Toggle } from "./Toggle";
 
 export const PERSONALITY_NOTE =
   "How replies sound in chat. Tone only: approvals, warnings and facts stay plain in every personality.";
 export const TONE_RULES_MAX = 600;
+export const ADULTS_ONLY =
+  "Adults-only personalities: show explicit presets like Viper. Off hides them, and a chat set to one uses Default.";
 
 const EMOJI: { value: Emoji; label: string }[] = [
   { value: "none", label: "None" },
@@ -109,6 +113,20 @@ export function Personality() {
   return (
     <div className="personality" role="group" aria-label="Personality">
       <p className="note">{PERSONALITY_NOTE}</p>
+      {page && (
+        <Toggle
+          checked={page.explicit}
+          disabled={busy}
+          onChange={(on) =>
+            void run(
+              () => setExplicitPersonalities(on),
+              on ? "Adults-only personalities on." : "Adults-only personalities off.",
+            )
+          }
+        >
+          {ADULTS_ONLY}
+        </Toggle>
+      )}
       {note && (
         <p className="note" role="status">
           {note}

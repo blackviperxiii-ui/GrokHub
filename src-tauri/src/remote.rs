@@ -707,6 +707,7 @@ mod tests {
             "forget_grant",
             "get_personalities",
             "set_personality",
+            "set_explicit_personalities",
             "duplicate_personality",
             "save_personality",
             "delete_personality",

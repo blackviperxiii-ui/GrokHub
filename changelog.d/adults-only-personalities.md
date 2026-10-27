@@ -1,0 +1,1 @@
+- Personalities: an adults-only switch in Settings → Personality (cabin and shell), off by default. Off hides explicit presets such as Viper in every picker, and a chat set to one speaks in the default voice; the quick picker tags explicit presets.

@@ -424,6 +424,10 @@ pub struct AppConfig {
     /// default voice. Tone only; approvals and safety rules never change.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub personality: String,
+    /// Settings → Personality → Adults-only personalities. Off hides the explicit presets
+    /// in every picker, and a chat set to one speaks in the default voice.
+    #[serde(default)]
+    pub explicit_personalities: bool,
     /// Settings → Memory retention: unsure, unlinked AMR notes not updated in
     /// this many days are retired once a day, apart from dream. 0 keeps all.
     #[serde(
@@ -676,6 +680,7 @@ impl Default for AppConfig {
             screen_record: false,
             self_improve_quiet: false,
             personality: String::new(),
+            explicit_personalities: false,
             amr_retention_days: default_amr_retention_days(),
             chat_archive_days: default_chat_archive_days(),
             cua_driver: false,
