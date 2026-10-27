@@ -30,6 +30,8 @@ pub struct RepoStatus {
     /// [`STALE_DAYS`].
     pub stale_merged: Vec<String>,
     pub base: String,
+    /// Unix seconds of the oldest commit not on the upstream; 0 when none.
+    pub oldest_unpushed_s: u64,
 }
 
 /// The git calls, every one with optional locks and fsmonitor off so a read
@@ -50,6 +52,7 @@ pub fn git_args<'a>(repo: &'a str, args: &[&'a str]) -> Vec<&'a str> {
 
 pub const STATUS: &[&str] = &["status", "--porcelain=v2", "--branch"];
 pub const LAST_COMMIT: &[&str] = &["log", "-1", "--format=%ct"];
+pub const UNPUSHED_TIMES: &[&str] = &["log", "@{upstream}..HEAD", "--format=%ct"];
 pub const DEFAULT_BRANCH: &[&str] = &["symbolic-ref", "--short", "refs/remotes/origin/HEAD"];
 pub const BRANCHES: &[&str] = &[
     "for-each-ref",
@@ -167,6 +170,14 @@ pub fn read_repo(
         .unwrap_or(0);
     let branches = parse_branches(&run(&git_args(&repo, BRANCHES)).unwrap_or_default());
     status.base = base_branch(run(&git_args(&repo, DEFAULT_BRANCH)).as_deref(), &branches);
+    if status.ahead > 0 && status.has_upstream {
+        status.oldest_unpushed_s = run(&git_args(&repo, UNPUSHED_TIMES))
+            .unwrap_or_default()
+            .lines()
+            .filter_map(|l| l.trim().parse().ok())
+            .min()
+            .unwrap_or(0);
+    }
     if branches.iter().any(|(b, _)| *b == status.base) {
         let base = status.base.clone();
         let merged_args = [
@@ -487,6 +498,7 @@ mod tests {
             ("feat-x", 3, 1, 2, true)
         );
         assert_eq!(got.base, "main");
+        assert!(got.oldest_unpushed_s > 0 && got.oldest_unpushed_s <= got.last_commit_s);
         assert_eq!(got.stale_merged, vec!["old-fix".to_string()]);
         assert!(got.last_commit_s > 0);
         assert!(!format!("{got:?}").contains("secret"));

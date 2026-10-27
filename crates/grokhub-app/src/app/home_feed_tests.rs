@@ -1396,6 +1396,16 @@ fn every_home_card_the_cabin_posts_names_its_item() {
         "Fake Quest",
     ));
     rows.push((
+        "show_backup_reminder",
+        grokhub_core::backup_nudge::Reminder {
+            lines: vec!["my-app has 2 commits on feat-x not pushed for 4 days.".into()],
+            push: None,
+            tool: None,
+        }
+        .card(now),
+        "my-app",
+    ));
+    rows.push((
         "tick_daily_drop",
         grokhub_core::pulse_sources::item_card(
             &grokhub_core::pulse_sources::Ranked {

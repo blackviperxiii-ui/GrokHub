@@ -22,7 +22,7 @@ pub(super) struct ResumeState {
     editor: Option<String>,
 }
 
-fn scan(folders: &[String], now_s: u64) -> Vec<RepoStatus> {
+pub(super) fn scan(folders: &[String], now_s: u64) -> Vec<RepoStatus> {
     let mut out = Vec::new();
     for folder in folders {
         for repo in cr::repo_dirs(&PathBuf::from(folder)) {
