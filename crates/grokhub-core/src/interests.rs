@@ -50,6 +50,8 @@ pub enum InterestSource {
     Saved,
     /// Typed in Settings.
     Explicit,
+    /// A Know me tag from this computer (`know_me`).
+    KnowMe,
 }
 
 impl InterestSource {
@@ -59,6 +61,7 @@ impl InterestSource {
             Self::Chats => "From chats",
             Self::Saved => "From saved",
             Self::Explicit => "Added by you",
+            Self::KnowMe => "From your PC",
         }
     }
 
@@ -69,6 +72,7 @@ impl InterestSource {
             Self::Memory => 60,
             Self::Saved => 55,
             Self::Chats => 40,
+            Self::KnowMe => 45,
         }
     }
 }

@@ -61,6 +61,7 @@ pub mod imagine_auth;
 pub use grokhub_proto::inhabit;
 pub mod interests;
 pub mod journal;
+pub mod know_me;
 pub mod learning;
 pub mod local_discover;
 pub mod local_draft;

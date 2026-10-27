@@ -41,6 +41,8 @@ pub(super) struct SourcesState {
     pub looking_more: bool,
     /// The Steam library and its Pulse prefs.
     pub steam: super::steam_ui::SteamState,
+    /// Know me's saved tags and its running scan.
+    pub know_me: super::knowme_ui::KnowMeState,
 }
 
 /// A run, its picks, and the fast model's reply.
@@ -187,7 +189,7 @@ fn plural(n: usize) -> &'static str {
 }
 
 /// "just now", "12 min ago", "3 h ago", for the Settings note.
-fn ago_label(ms: u64, now: u64) -> String {
+pub(super) fn ago_label(ms: u64, now: u64) -> String {
     let mins = now.saturating_sub(ms) / 60_000;
     match mins {
         0 => "just now".into(),
@@ -250,6 +252,7 @@ impl Cabin {
             return;
         }
         let now = now_ms();
+        self.kick_know_me(false);
         if !self.interests_now().seeded {
             let user_md = crate::config::read_memory("USER.md");
             let memory_md = crate::config::read_memory("MEMORY.md");
@@ -315,6 +318,7 @@ impl Cabin {
 
     pub(super) fn poll_source_fetch(&mut self) {
         self.poll_source_summaries();
+        self.poll_know_me();
         let Some(rx) = self.sources.rx.take() else {
             return;
         };
