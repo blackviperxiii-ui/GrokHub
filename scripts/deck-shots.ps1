@@ -166,9 +166,9 @@ function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlid
     $r = New-Object DeckWin+RECT
     [void][DeckWin]::GetWindowRect($hwnd, [ref]$r)
     if ($pulse) {
-        # Pulse is the sixth rail row, 369 px down at every window size.
+        # Pulse is the fourth icon on the 40 px rail, at every window size.
         [void][DeckWin]::SetForegroundWindow($hwnd)
-        [void][DeckWin]::SetCursorPos($r.L + 64, $r.T + 369)
+        [void][DeckWin]::SetCursorPos($r.L + 20, $r.T + 181)
         [DeckWin]::mouse_event(0x0002, 0, 0, 0, [UIntPtr]::Zero)
         [DeckWin]::mouse_event(0x0004, 0, 0, 0, [UIntPtr]::Zero)
         [void][DeckWin]::SetCursorPos($r.L + 200, $r.T + 10)

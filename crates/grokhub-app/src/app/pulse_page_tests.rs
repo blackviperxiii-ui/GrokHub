@@ -944,21 +944,22 @@ fn the_deck_frames_land_on_their_layouts_beside_the_rail() {
     let wide = pulse_page_layout(2560.0 - rail);
     assert_eq!(wide.fit, PulseFit::Split);
     assert_eq!((wide.ideas_cols, wide.feed_cols), (2, 2));
-    assert!((wide.ideas_w + wide.gap + wide.feed_w - 2252.0).abs() < 0.05);
-    // 1440: the laptop split, posts show two images.
+    assert!((wide.ideas_w + wide.gap + wide.feed_w - 2472.0).abs() < 0.05);
+    // 1440: the laptop split. The Feed column is 568 px, over the 560 px
+    // line, so posts keep all three images.
     let laptop = pulse_page_layout(1440.0 - rail);
     assert_eq!(laptop.fit, PulseFit::Split);
-    assert_eq!(post_thumb_count(laptop.feed_w), 2);
-    // 1024: one column with the feed 2-up below, though 716 px is left
-    // inside the padding.
+    assert!((laptop.feed_w - 567.8).abs() < 0.1, "{}", laptop.feed_w);
+    assert_eq!(post_thumb_count(laptop.feed_w), 3);
+    // 1024: one column with the feed 2-up below, 936 px inside the padding.
     let tablet = pulse_page_layout(1024.0 - rail);
     assert_eq!(
         (tablet.fit, tablet.ideas_w, tablet.feed_cols),
-        (PulseFit::Stacked, 716.0, 2)
+        (PulseFit::Stacked, 936.0, 2)
     );
-    // The narrowest window (720) leaves a 460 px page: the switch.
+    // The narrowest window (720) leaves a 680 px page: the switch.
     let narrow = pulse_page_layout(720.0 - rail);
-    assert_eq!((narrow.fit, narrow.ideas_w), (PulseFit::Compact, 412.0));
+    assert_eq!((narrow.fit, narrow.ideas_w), (PulseFit::Compact, 632.0));
 }
 
 #[test]
