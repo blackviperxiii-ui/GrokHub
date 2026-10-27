@@ -220,9 +220,9 @@ impl Cabin {
     }
 
     fn peripheral_events(&self) -> Vec<PeripheralEvent> {
-        let mut out = Vec::new();
         #[cfg(target_os = "linux")]
         {
+            let mut out = Vec::new();
             if let Ok(entries) = std::fs::read_dir("/dev/input") {
                 for ent in entries.flatten() {
                     let name = ent.file_name().to_string_lossy().into_owned();
@@ -242,8 +242,12 @@ impl Cabin {
                     name: "USB printer".into(),
                 });
             }
+            out
         }
-        out
+        #[cfg(not(target_os = "linux"))]
+        {
+            Vec::new()
+        }
     }
 
     #[cfg(target_os = "linux")]
