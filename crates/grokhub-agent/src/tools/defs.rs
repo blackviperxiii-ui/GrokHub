@@ -5,8 +5,8 @@ use serde_json::Value;
 use crate::gate::Gate;
 
 use super::{
-    connections, control, desktop, glob, grep, list_dir, media, read_file, search_replace, shell,
-    show_panel, web_fetch, write,
+    connections, control, desktop, glob, grep, list_dir, local_ai, media, read_file,
+    search_replace, shell, show_panel, web_fetch, write,
 };
 
 /// One row in the native catalog. When deferred loading is on, `defer` tools ship as
@@ -48,7 +48,7 @@ fn desktop_schema(i: usize) -> Value {
 
 /// Read-only tools, sent first. All eager except `scheduler_list`.
 pub fn read_defs() -> &'static [ToolDef] {
-    static DEFS: [ToolDef; 8] = [
+    static DEFS: [ToolDef; 9] = [
         ToolDef {
             name: "read_file",
             blurb: "Read a workspace file",
@@ -105,6 +105,13 @@ pub fn read_defs() -> &'static [ToolDef] {
             schema: || crate::repair::schema(),
             visible: always,
         },
+        ToolDef {
+            name: local_ai::STATUS,
+            blurb: "Report the on-device model's state and recent health",
+            defer: true,
+            schema: local_ai::status_schema,
+            visible: always,
+        },
     ];
     &DEFS
 }
@@ -112,7 +119,7 @@ pub fn read_defs() -> &'static [ToolDef] {
 /// Mutating and gated tools. Edit and shell stay eager (the general coding set);
 /// scheduler, media, desktop, connection and the rest are deferred.
 pub fn action_defs() -> &'static [ToolDef] {
-    static DEFS: [ToolDef; 19] = [
+    static DEFS: [ToolDef; 20] = [
         ToolDef {
             name: "send_subagent_message",
             blurb: "Send a message to a spawned subagent",
@@ -216,6 +223,13 @@ pub fn action_defs() -> &'static [ToolDef] {
             blurb: "Remove an MCP connection entry",
             defer: true,
             schema: connections::delete_schema,
+            visible: not_readonly,
+        },
+        ToolDef {
+            name: local_ai::SELFTEST,
+            blurb: "Ask the on-device model one question, offline",
+            defer: true,
+            schema: local_ai::selftest_schema,
             visible: not_readonly,
         },
         ToolDef {
