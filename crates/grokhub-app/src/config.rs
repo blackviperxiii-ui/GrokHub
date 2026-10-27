@@ -396,6 +396,10 @@ pub struct AppConfig {
     /// Off unless you opt in (`app.json` only).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub proactive_reminders: bool,
+    /// `app.json` only for now. A donation page for Settings → About's quiet
+    /// "Support the developer" link. Empty (the default) hides the link.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub support_url: String,
     #[serde(default)]
     pub goal_pin: String,
     /// Cabin paints a new Imagine cover every few hours.
@@ -608,7 +612,7 @@ fn is_zero_u64(n: &u64) -> bool {
 }
 
 fn default_theme() -> String {
-    "dark".into()
+    "ops-dark".into()
 }
 
 fn default_session_mode() -> String {
@@ -671,6 +675,7 @@ impl Default for AppConfig {
             weekly_spend_cap_usd: 0,
             price_ceiling_usd_per_m: default_price_ceiling(),
             proactive_reminders: false,
+            support_url: String::new(),
             goal_pin: String::new(),
             imagine_wall: default_imagine_wall(),
             composer_glow: false,
@@ -834,6 +839,8 @@ pub fn load() -> AppConfig {
     if fresh {
         cfg.memory_backend = grokhub_core::amr::MemoryBackend::Amr;
         cfg.memory_migrated = true;
+        // An existing file keeps its pick; a missing field is the default voice.
+        cfg.personality = grokhub_core::personality::NEW_INSTALL_ID.into();
     }
     cfg.host_on = true;
     // Leftover `"yolo": true` from older cabins must not disable the bound-tree jail.
@@ -1145,6 +1152,34 @@ mod tests {
         let flagged = load();
         assert!(flagged.memory_backend.is_legacy());
         assert!(flagged.memory_migrated);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn new_install_starts_on_nyx_and_existing_picks_stay() {
+        let _g = hold_test_config();
+        let root = test_config_root("nyx-default");
+        let _ = fs::remove_dir_all(&root);
+        let _pin = TestConfigDir::set(root.clone());
+        fs::create_dir_all(&root).unwrap();
+        let fresh = load();
+        assert_eq!(fresh.personality, "nyx");
+        save(&fresh).unwrap();
+        let body = fs::read_to_string(root.join("app.json")).unwrap();
+        assert!(body.contains("\"personality\": \"nyx\""), "{body}");
+        assert_eq!(load().personality, "nyx");
+
+        // Picking the default voice stores an empty field, and it stays the default.
+        let mut picked_default = load();
+        picked_default.personality = String::new();
+        save(&picked_default).unwrap();
+        assert_eq!(load().personality, "");
+
+        // Existing installs: no field is the default voice, a pick is kept.
+        fs::write(root.join("app.json"), "{}\n").unwrap();
+        assert_eq!(load().personality, "");
+        fs::write(root.join("app.json"), "{\"personality\":\"pirate\"}\n").unwrap();
+        assert_eq!(load().personality, "pirate");
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -1743,6 +1778,26 @@ mod tests {
     }
 
     #[test]
+    fn support_url_is_unset_by_default_and_round_trips() {
+        assert_eq!(AppConfig::default().support_url, "");
+        let old: AppConfig = serde_json::from_str("{}").unwrap();
+        assert_eq!(old.support_url, "");
+        let blank = serde_json::to_string(&AppConfig::default()).unwrap();
+        assert!(!blank.contains("supportUrl"), "{blank}");
+        let cfg = AppConfig {
+            support_url: "https://donate.example/my-app".into(),
+            ..AppConfig::default()
+        };
+        let text = serde_json::to_string(&cfg).unwrap();
+        assert!(
+            text.contains("\"supportUrl\":\"https://donate.example/my-app\""),
+            "{text}"
+        );
+        let back: AppConfig = serde_json::from_str(&text).unwrap();
+        assert_eq!(back.support_url, "https://donate.example/my-app");
+    }
+
+    #[test]
     fn default_close_to_tray_is_on() {
         assert!(
             AppConfig::default().close_to_tray,
@@ -1775,7 +1830,7 @@ mod tests {
             "Ask is the default — leftover yolo true disables the bound-tree jail"
         );
         assert!(loaded.imagine_wall);
-        assert_eq!(loaded.theme, "dark");
+        assert_eq!(loaded.theme, "ops-dark");
         let mut placed = AppConfig::default();
         placed.window.x = Some(80.0);
         placed.window.y = Some(40.0);

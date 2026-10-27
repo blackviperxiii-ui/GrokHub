@@ -46,14 +46,19 @@ pub struct Hit {
     pub body: String,
 }
 
-const LINKED: &str = "This MEMORY.md is a link to another file. GrokHub does not follow it.";
+fn linked() -> String {
+    format!(
+        "This MEMORY.md is a link to another file. {} does not follow it.",
+        grokhub_core::brand::product_name()
+    )
+}
 
 /// A link is refused both ways, as `remember` refuses to write through one,
 /// so the editor never shows or replaces the file it points at.
 fn read(path: &Path) -> Result<String, String> {
     match std::fs::symlink_metadata(path) {
         Err(_) => Ok(String::new()),
-        Ok(meta) if meta.file_type().is_symlink() => Err(LINKED.into()),
+        Ok(meta) if meta.file_type().is_symlink() => Err(linked()),
         Ok(meta) if meta.len() > NOTES_CAP => {
             Err(format!("{} is too large to edit here.", path.display()))
         }
@@ -367,12 +372,12 @@ mod tests {
         std::fs::write(&target, "{\"token\":\"fake\"}").expect("target");
         std::os::unix::fs::symlink(&target, grokhub_agent::workspace_memory_path(&d.workspace))
             .expect("link");
-        assert_eq!(load(&d.workspace).err().as_deref(), Some(LINKED));
+        assert_eq!(load(&d.workspace).err().as_deref(), Some(linked().as_str()));
         assert_eq!(
             save(&d.workspace, false, "overwritten\n", "")
                 .err()
                 .as_deref(),
-            Some(LINKED)
+            Some(linked().as_str())
         );
         assert_eq!(
             std::fs::read_to_string(&target).expect("target"),

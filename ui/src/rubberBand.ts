@@ -24,7 +24,7 @@ export function overscroll(dy: number, top: number, max: number): number {
   return 0;
 }
 
-function reducedMotion(): boolean {
+export function reducedMotion(): boolean {
   return window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
 }
 

@@ -24,6 +24,20 @@ pub(super) const FOCUS_RING: egui::Color32 = egui::Color32::from_rgb(0x4a, 0x90,
 /// The sign-in line under Suggest ideas.
 const NOTE_AMBER: egui::Color32 = egui::Color32::from_rgb(0xf4, 0xb7, 0x40);
 const COL_MAX_W: f32 = 680.0;
+/// Page widths where Pulse changes shape (deck slide 14, pulse-live.html):
+/// two columns from 1100, the 60/40 split from 1500, one column from 720,
+/// and the Feed | Ideas switch below that.
+const STACK_MIN_W: f32 = 720.0;
+const SPLIT_MIN_W: f32 = 1100.0;
+const WIDE_MIN_W: f32 = 1500.0;
+/// A column tiles its cards 2-up once two of these fit side by side.
+const IDEA_TILE_MIN_W: f32 = 560.0;
+const POST_TILE_MIN_W: f32 = 420.0;
+const STACKED_POST_MIN_W: f32 = 340.0;
+const IDEA_TILE_GAP: f32 = 10.0;
+const POST_TILE_GAP: f32 = 12.0;
+/// Posts narrower than this show two source images, not three.
+const POST_THREE_THUMBS_W: f32 = 560.0;
 const THUMB_H: f32 = 96.0;
 const THUMB_MAX: usize = 3;
 /// A source page is read up to this much looking for its preview image.
@@ -52,10 +66,96 @@ impl PulseTab {
     }
 }
 
+/// Pulse's shape at a page width.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) enum PulseFit {
+    /// Ideas and Feed side by side.
+    Split,
+    /// One column: Ideas, then Feed below.
+    Stacked,
+    /// One view at a time behind the Feed | Ideas switch. Run stays on each
+    /// Ideas row; Snooze and Dismiss live in its ··· menu.
+    #[default]
+    Compact,
+}
+
+/// Column widths and tiling for one frame of the Pulse page.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct PulseLayout {
+    pub fit: PulseFit,
+    pub ideas_w: f32,
+    pub feed_w: f32,
+    pub gap: f32,
+    pub ideas_cols: usize,
+    pub feed_cols: usize,
+}
+
+fn tiles(width: f32, min: f32, gap: f32) -> usize {
+    if width >= 2.0 * min + gap {
+        2
+    } else {
+        1
+    }
+}
+
+/// The fluid Pulse grid, like the reference CSS: Ideas 3fr and Feed 2fr when
+/// wide, 1.35fr and 1fr on laptops, one stacked column on small windows, and
+/// the switch below 720.
+pub(super) fn pulse_layout(page_w: f32) -> PulseLayout {
+    let w = page_w.max(0.0);
+    let gap = (w * 0.013).clamp(16.0, 30.0);
+    if w < STACK_MIN_W {
+        let col = w.min(COL_MAX_W);
+        return PulseLayout {
+            fit: PulseFit::Compact,
+            ideas_w: col,
+            feed_w: col,
+            gap,
+            ideas_cols: 1,
+            feed_cols: 1,
+        };
+    }
+    if w < SPLIT_MIN_W {
+        return PulseLayout {
+            fit: PulseFit::Stacked,
+            ideas_w: w,
+            feed_w: w,
+            gap,
+            ideas_cols: 1,
+            feed_cols: tiles(w, STACKED_POST_MIN_W, POST_TILE_GAP),
+        };
+    }
+    let share = if w >= WIDE_MIN_W { 0.6 } else { 1.35 / 2.35 };
+    let inner = w - gap;
+    let ideas_w = inner * share;
+    let feed_w = inner - ideas_w;
+    PulseLayout {
+        fit: PulseFit::Split,
+        ideas_w,
+        feed_w,
+        gap,
+        ideas_cols: tiles(ideas_w, IDEA_TILE_MIN_W, IDEA_TILE_GAP),
+        feed_cols: tiles(feed_w, POST_TILE_MIN_W, POST_TILE_GAP),
+    }
+}
+
+/// Source images a post shows at its width.
+pub(super) fn post_thumb_count(post_w: f32) -> usize {
+    if post_w < POST_THREE_THUMBS_W {
+        2
+    } else {
+        THUMB_MAX
+    }
+}
+
 /// What the Pulse page keeps between frames.
 #[derive(Default)]
 pub(super) struct PulseView {
     pub tab: PulseTab,
+    /// The shape painted last frame (set in ui_pulse from the page width).
+    pub fit: PulseFit,
+    /// The switch was pressed on the stacked page: scroll to that section.
+    scroll_to: Option<PulseTab>,
     /// Crossfade progress Feed(0)→Ideas(1); set each frame in ui_pulse.
     pub tab_t: f32,
     /// The Feed instructions sheet is open with this draft.
@@ -83,6 +183,8 @@ pub(super) struct RowState {
     pub hovered: bool,
     pub focused: bool,
     pub title_hot: bool,
+    /// Compact page: Run shows at rest, Snooze and Dismiss stay in ···.
+    pub compact: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -324,9 +426,17 @@ fn paint_glyph(painter: &egui::Painter, rect: egui::Rect, glyph: Glyph, tint: eg
     }
 }
 
+/// The glyph on a dark tile with a dim red rim (deck slide 15).
 fn icon(ui: &mut egui::Ui, glyph: Glyph, tint: egui::Color32) {
     let (rect, _) = ui.allocate_exact_size(egui::vec2(ICON, ICON), egui::Sense::hover());
-    paint_glyph(ui.painter(), rect, glyph, tint);
+    ui.painter().rect(
+        rect,
+        8.0,
+        crate::theme::void_bg(),
+        egui::Stroke::new(1.0_f32, crate::theme::red_dim()),
+        egui::StrokeKind::Inside,
+    );
+    paint_glyph(ui.painter(), rect.shrink(5.0), glyph, tint);
 }
 
 /// Up to `rows` lines, then an ellipsis.
@@ -453,18 +563,37 @@ pub(super) fn run_label(card: &UpdateCard) -> &'static str {
     }
 }
 
-/// A small frameless text button for the row's inline actions.
-fn quick_button(ui: &mut egui::Ui, label: &str) -> bool {
-    ui.add(
-        egui::Button::new(RichText::new(label).size(crate::theme::FONT_TIP))
-            .frame(false)
-            .min_size(egui::vec2(0.0, 18.0)),
-    )
-    .clicked()
+/// How an inline row action is drawn: Run is the amber CTA, Snooze is
+/// outlined in signal red, Dismiss is quiet text.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Quick {
+    Primary,
+    Outline,
+    Quiet,
+}
+
+/// One of the row's inline actions, in the Loadout button style.
+fn quick_button(ui: &mut egui::Ui, label: &str, style: Quick) -> bool {
+    let text = RichText::new(label)
+        .size(crate::theme::FONT_TIP)
+        .strong()
+        .extra_letter_spacing(0.8);
+    let button = match style {
+        Quick::Primary => egui::Button::new(text.color(crate::theme::send_on_ink()))
+            .fill(crate::theme::amber())
+            .stroke(egui::Stroke::new(1.0_f32, crate::theme::amber())),
+        Quick::Outline => egui::Button::new(text.color(crate::theme::fg()))
+            .fill(egui::Color32::TRANSPARENT)
+            .stroke(egui::Stroke::new(1.0_f32, crate::theme::signal_red())),
+        Quick::Quiet => egui::Button::new(text.color(crate::theme::muted())).frame(false),
+    };
+    ui.add(button.corner_radius(6.0).min_size(egui::vec2(0.0, 22.0)))
+        .clicked()
 }
 
 /// One Ideas row: icon, bold "I can …" line, two or three lines of detail, the
 /// type word, and ···. Hovered or focused, Run · Snooze · Dismiss show inline.
+/// On the compact page Run always shows and Snooze and Dismiss stay in ···.
 /// Returns the action, the row's rect, and whether the bold line is hovered.
 pub(super) fn paint_pulse_row(
     ui: &mut egui::Ui,
@@ -523,25 +652,18 @@ pub(super) fn paint_pulse_row(
                             .strong()
                             .color(type_color(kind)),
                     );
-                    if active {
+                    if active || st.compact {
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            ui.spacing_mut().item_spacing.x = 2.0;
-                            let dot = |ui: &mut egui::Ui| {
-                                ui.label(
-                                    RichText::new("·")
-                                        .size(crate::theme::FONT_TIP)
-                                        .color(crate::theme::subtle()),
-                                );
-                            };
-                            if quick_button(ui, "Dismiss") {
-                                act = Some(PulseAct::Dismiss(card.id.clone()));
+                            ui.spacing_mut().item_spacing.x = 6.0;
+                            if !st.compact {
+                                if quick_button(ui, "Dismiss", Quick::Quiet) {
+                                    act = Some(PulseAct::Dismiss(card.id.clone()));
+                                }
+                                if quick_button(ui, "Snooze", Quick::Outline) {
+                                    act = Some(PulseAct::Snooze(card.id.clone()));
+                                }
                             }
-                            dot(ui);
-                            if quick_button(ui, "Snooze") {
-                                act = Some(PulseAct::Snooze(card.id.clone()));
-                            }
-                            dot(ui);
-                            if quick_button(ui, run_label(card)) {
+                            if quick_button(ui, run_label(card), Quick::Primary) {
                                 act = Some(PulseAct::Run(card.id.clone()));
                             }
                         });
@@ -900,7 +1022,9 @@ fn paint_heart_button(ui: &mut egui::Ui, on: bool) -> bool {
 }
 
 impl Cabin {
-    /// The Pulse page: header with the Ideas | Feed switch, then the view.
+    /// The Pulse page. Its shape follows the page width (`pulse_layout`):
+    /// Ideas and Feed side by side, stacked, or one at a time behind the
+    /// Feed | Ideas switch.
     pub(super) fn ui_pulse(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
         self.poll_pulse_images();
@@ -908,53 +1032,136 @@ impl Cabin {
             .fill(crate::theme::bg())
             .inner_margin(egui::Margin::symmetric(24, 20));
         let _ = super::dock_ui::page_panel(ui, self.cfg.dock_panels, frame, |ui| {
-            let full = ui.available_width();
-            let col = full.min(COL_MAX_W);
-            let pad = ((full - col) * 0.5).max(0.0);
+            let lay = pulse_layout(ui.available_width());
+            self.pulse_view.fit = lay.fit;
             egui::ScrollArea::vertical()
                 .id_salt("pulse-scroll")
                 .auto_shrink([false, false])
-                .show(ui, |ui| {
-                    ui.horizontal_top(|ui| {
-                        ui.add_space(pad);
-                        ui.vertical(|ui| {
-                            ui.set_width(col);
-                            self.paint_pulse_header(ui);
-                            // Wave 2E: Feed↔Ideas crossfade 180ms + shared-axis ±8px.
-                            // Only the active tab paints (avoids stacked layout); opacity+x carry the feel.
-                            // Header Feed|Ideas control stays put (painted above).
-                            let ideas_on = self.pulse_view.tab == PulseTab::Ideas;
-                            let tab_t = crate::motion::pulse_tab_t(ui.ctx(), ideas_on);
-                            self.pulse_view.tab_t = tab_t;
-                            let (opacity, x) = if ideas_on {
-                                (tab_t.clamp(0.0, 1.0), crate::motion::ideas_axis_x(tab_t))
-                            } else {
-                                (
-                                    (1.0 - tab_t).clamp(0.0, 1.0),
-                                    crate::motion::feed_axis_x(tab_t),
-                                )
-                            };
-                            let avail = ui.available_rect_before_wrap();
-                            let rect = avail.translate(egui::vec2(x, 0.0));
-                            ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
-                                ui.set_min_width(avail.width());
-                                ui.multiply_opacity(opacity.max(0.001));
-                                match self.pulse_view.tab {
-                                    PulseTab::Ideas => self.ui_ideas(ui),
-                                    PulseTab::Feed => self.ui_pulse_feed(ui),
+                .show(ui, |ui| match lay.fit {
+                    PulseFit::Split => self.paint_pulse_split(ui, lay),
+                    PulseFit::Stacked => self.paint_pulse_stacked(ui, lay),
+                    PulseFit::Compact => {
+                        let full = ui.available_width();
+                        let pad = ((full - lay.ideas_w) * 0.5).max(0.0);
+                        ui.horizontal_top(|ui| {
+                            ui.add_space(pad);
+                            ui.vertical(|ui| {
+                                ui.set_width(lay.ideas_w);
+                                self.paint_pulse_header(ui);
+                                // Wave 2E: Feed↔Ideas crossfade 180ms + shared-axis ±8px.
+                                // Only the active tab paints (avoids stacked layout); opacity+x carry the feel.
+                                // Header Feed|Ideas control stays put (painted above).
+                                let ideas_on = self.pulse_view.tab == PulseTab::Ideas;
+                                let tab_t = crate::motion::pulse_tab_t(ui.ctx(), ideas_on);
+                                self.pulse_view.tab_t = tab_t;
+                                let (opacity, x) = if ideas_on {
+                                    (tab_t.clamp(0.0, 1.0), crate::motion::ideas_axis_x(tab_t))
+                                } else {
+                                    (
+                                        (1.0 - tab_t).clamp(0.0, 1.0),
+                                        crate::motion::feed_axis_x(tab_t),
+                                    )
+                                };
+                                let avail = ui.available_rect_before_wrap();
+                                let rect = avail.translate(egui::vec2(x, 0.0));
+                                ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
+                                    ui.set_min_width(avail.width());
+                                    ui.multiply_opacity(opacity.max(0.001));
+                                    match self.pulse_view.tab {
+                                        PulseTab::Ideas => self.ui_ideas(ui, 1),
+                                        PulseTab::Feed => self.ui_pulse_feed(ui, 1),
+                                    }
+                                });
+                                // Crossfade only: settled tabs and reduced motion stay idle.
+                                if crate::theme::motion_ok(ui) && 0.001 < tab_t && tab_t < 0.999 {
+                                    ui.ctx().request_repaint_after(
+                                        std::time::Duration::from_millis(16),
+                                    );
                                 }
+                                ui.add_space(24.0);
                             });
-                            // Crossfade only: settled tabs and reduced motion stay idle.
-                            if crate::theme::motion_ok(ui) && 0.001 < tab_t && tab_t < 0.999 {
-                                ui.ctx()
-                                    .request_repaint_after(std::time::Duration::from_millis(16));
-                            }
-                            ui.add_space(24.0);
                         });
-                    });
+                    }
                 });
         });
         self.paint_feed_instructions_sheet(&ctx);
+    }
+
+    /// Wide and laptop pages: Ideas on the left under the header, Feed on the
+    /// right behind a hairline, each tiling 2-up when it has room.
+    fn paint_pulse_split(&mut self, ui: &mut egui::Ui, lay: PulseLayout) {
+        // Both views are on screen, so rows don't wait on the tab crossfade.
+        self.pulse_view.tab_t = 1.0;
+        let top = ui.cursor().top();
+        ui.horizontal_top(|ui| {
+            ui.spacing_mut().item_spacing.x = 0.0;
+            ui.vertical(|ui| {
+                ui.set_width(lay.ideas_w);
+                self.paint_pulse_header(ui);
+                self.ui_ideas(ui, lay.ideas_cols);
+            });
+            let (gap, _) = ui.allocate_exact_size(egui::vec2(lay.gap, 0.0), egui::Sense::hover());
+            ui.vertical(|ui| {
+                ui.set_width(lay.feed_w);
+                ui.add_space(4.0);
+                self.paint_feed_heading(ui);
+                self.ui_pulse_feed(ui, lay.feed_cols);
+            });
+            let bottom = ui.min_rect().bottom();
+            ui.painter().vline(
+                gap.center().x,
+                top..=bottom,
+                egui::Stroke::new(1.0_f32, crate::theme::border()),
+            );
+        });
+        ui.add_space(24.0);
+    }
+
+    /// Small windows: one column, Ideas first, then the Feed below a hairline.
+    /// The switch scrolls to its section.
+    fn paint_pulse_stacked(&mut self, ui: &mut egui::Ui, lay: PulseLayout) {
+        self.pulse_view.tab_t = 1.0;
+        let jump = self.pulse_view.scroll_to.take();
+        let ideas_top = ui.cursor();
+        self.paint_pulse_header(ui);
+        self.ui_ideas(ui, lay.ideas_cols);
+        ui.add_space(18.0);
+        let line = ui.cursor().top();
+        ui.painter().hline(
+            ui.max_rect().x_range(),
+            line,
+            egui::Stroke::new(1.0_f32, crate::theme::border()),
+        );
+        ui.add_space(14.0);
+        let feed_top = ui.cursor();
+        self.paint_feed_heading(ui);
+        self.ui_pulse_feed(ui, lay.feed_cols);
+        ui.add_space(24.0);
+        match jump {
+            Some(PulseTab::Ideas) => ui.scroll_to_rect(ideas_top, Some(egui::Align::TOP)),
+            Some(PulseTab::Feed) => ui.scroll_to_rect(feed_top, Some(egui::Align::TOP)),
+            None => {}
+        }
+    }
+
+    /// "From your feed" over the Feed column, with Feed instructions.
+    fn paint_feed_heading(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            ui.set_min_height(32.0);
+            ui.label(
+                RichText::new(pc::FEED_HEADING.to_uppercase())
+                    .size(crate::theme::TYPE_CAPTION)
+                    .strong()
+                    .extra_letter_spacing(1.5)
+                    .color(crate::theme::muted()),
+            );
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if crate::cards::ghost_pill(ui, "Feed instructions") {
+                    self.open_feed_instructions();
+                }
+            });
+        });
+        ui.add_space(10.0);
     }
 
     fn paint_pulse_header(&mut self, ui: &mut egui::Ui) {
@@ -975,7 +1182,14 @@ impl Cabin {
                         .max_rect(slot)
                         .layout(egui::Layout::right_to_left(egui::Align::Center)),
                 );
-                match self.pulse_view.tab {
+                // With both views on the page the Feed column has its own
+                // Feed instructions, so the slot keeps Suggest ideas.
+                let slot_tab = if self.pulse_view.fit == PulseFit::Compact {
+                    self.pulse_view.tab
+                } else {
+                    PulseTab::Ideas
+                };
+                match slot_tab {
                     PulseTab::Feed => {
                         if crate::cards::ghost_pill(&mut cell, "Feed instructions") {
                             self.open_feed_instructions();
@@ -1006,6 +1220,7 @@ impl Cabin {
                     let on = self.pulse_view.tab == *tab;
                     if crate::cards::felt_segment(ui, tab.label(), on).clicked() {
                         self.pulse_view.tab = *tab;
+                        self.pulse_view.scroll_to = Some(*tab);
                     }
                 }
             });
@@ -1168,6 +1383,7 @@ impl Cabin {
         let mut posts: Vec<UpdateCard> = pc::feed_posts(&self.updates, &inputs)
             .into_iter()
             .filter(|c| c.source_id.is_empty() || !muted.iter().any(|m| m == &c.source_id))
+            .filter(|c| !self.steam_muted(c))
             .collect();
         if self.cfg.daily_drop.active() {
             use grokhub_core::daily_drop::{day_index, is_daily_drop_card};
@@ -1198,7 +1414,8 @@ impl Cabin {
 
     // feed view
 
-    pub(super) fn ui_pulse_feed(&mut self, ui: &mut egui::Ui) {
+    /// The Feed's posts, newest first, `cols` across (filled left to right).
+    pub(super) fn ui_pulse_feed(&mut self, ui: &mut egui::Ui, cols: usize) {
         let now = now_ms();
         let posts = self.pulse_feed_posts(now);
         self.kick_pulse_images(&posts);
@@ -1215,11 +1432,24 @@ impl Cabin {
             return;
         }
         let mut act = None;
-        for card in &posts {
-            if let Some(a) = self.paint_pulse_post(ui, card, now) {
-                act = Some(a);
+        if cols > 1 {
+            ui.spacing_mut().item_spacing.x = POST_TILE_GAP;
+            ui.columns(cols, |columns| {
+                for (i, card) in posts.iter().enumerate() {
+                    let col = &mut columns[i % cols];
+                    if let Some(a) = self.paint_pulse_post(col, card, now) {
+                        act = Some(a);
+                    }
+                    col.add_space(POST_TILE_GAP);
+                }
+            });
+        } else {
+            for card in &posts {
+                if let Some(a) = self.paint_pulse_post(ui, card, now) {
+                    act = Some(a);
+                }
+                ui.add_space(crate::theme::SPACING_8);
             }
-            ui.add_space(crate::theme::SPACING_8);
         }
         if let Some(a) = act {
             self.apply_pulse_act(a);
@@ -1241,7 +1471,7 @@ impl Cabin {
             .pulse
             .image_urls
             .iter()
-            .take(THUMB_MAX)
+            .take(post_thumb_count(ui.available_width()))
             .filter_map(|url| self.pulse_thumb(ui.ctx(), url))
             .collect();
         super::feed_ui::kit_pulse_feed_post(ui, |ui| {
@@ -1523,6 +1753,7 @@ impl Cabin {
             hovered: self.pulse_view.hover.as_deref() == Some(id),
             focused: self.pulse_view.focus.as_deref() == Some(id),
             title_hot: self.pulse_view.title_hover.as_deref() == Some(id),
+            compact: self.pulse_view.fit == PulseFit::Compact,
         }
     }
 

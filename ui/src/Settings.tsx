@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import {
   clearApiKey,
   getSettings,
@@ -11,6 +11,7 @@ import {
 import { Appearance } from "./Appearance";
 import { APPROVALS } from "./approvals";
 import { Labs } from "./Labs";
+import { onArrowFocus, usePeek } from "./peek";
 import { Interests } from "./Interests";
 import { LocalAi } from "./LocalAi";
 import { Permissions } from "./Permissions";
@@ -19,6 +20,7 @@ import { Playbooks } from "./Playbooks";
 import { SECTION_LABELS, sections, type Section } from "./sections";
 import { Toggle } from "./Toggle";
 import { WebAccess } from "./WebAccess";
+import { LOGO_MARK_URL, PRODUCT_NAME, TAGLINE } from "./brand";
 
 export const DESKTOP_NOTE =
   "Grok can see your screen, click and type. Deleting, sending, paying and credentials always wait for your OK.";
@@ -40,6 +42,9 @@ export function Settings({
   const [key, setKey] = useState("");
   const [note, setNote] = useState<string | null>(null);
   const [section, setSection] = useState<Section>(goTo?.section ?? "general");
+  const nav = useRef<HTMLElement>(null);
+  // On a phone the sections are one row that scrolls; the next one peeks in.
+  usePeek(nav, "x", settings !== null && sections(caps).length);
 
   useEffect(() => {
     if (goTo) {
@@ -108,7 +113,12 @@ export function Settings({
 
   return (
     <div className="settings-page">
-      <nav className="settings-nav" aria-label="Settings sections">
+      <nav
+        ref={nav}
+        className="settings-nav"
+        aria-label="Settings sections"
+        onKeyDown={(e) => onArrowFocus(e)}
+      >
         {sections(caps).map((name) => (
           <button
             key={name}
@@ -155,7 +165,7 @@ export function Settings({
           />
         </label>
         <p className="note">
-          GrokHub works in <code>{loaded.workspacePath}</code>.
+          {PRODUCT_NAME} works in <code>{loaded.workspacePath}</code>.
         </p>
         <label>
           Approvals
@@ -178,7 +188,7 @@ export function Settings({
         {caps.desktopControl && desktopControl && <p className="note warn">{DESKTOP_NOTE}</p>}
         {caps.tray && (
           <Toggle checked={closeToTray} onChange={setCloseToTray}>
-            Closing the window keeps GrokHub in the tray
+            Closing the window keeps {PRODUCT_NAME} in the tray
           </Toggle>
         )}
         <button type="submit">Save settings</button>
@@ -213,12 +223,16 @@ export function Settings({
 }
 
 export const ABOUT_NOTE =
-  "GrokHub Shell is the cross-platform app. The GrokHub cabin keeps working next to it until the shell has everything the cabin has.";
+  `This is the cross-platform app. The ${PRODUCT_NAME} cabin keeps working next to it until this app has everything the cabin has.`;
 
 function About({ version }: { version: string }) {
   return (
     <div className="about">
-      <h2>GrokHub Shell</h2>
+      <h2 className="brand-lockup">
+        <img src={LOGO_MARK_URL} alt="" />
+        {PRODUCT_NAME}
+      </h2>
+      <p className="note">{TAGLINE}</p>
       <p>Version {version}</p>
       <p className="note">{ABOUT_NOTE}</p>
     </div>
@@ -226,7 +240,7 @@ function About({ version }: { version: string }) {
 }
 
 export const REMOTE_NOTE =
-  "You're using GrokHub on your computer from this browser. Change settings and the API key there.";
+  `You're using ${PRODUCT_NAME} on your computer from this browser. Change settings and the API key there.`;
 
 /** The web app shows the desktop's settings but can't change them. */
 function RemoteSettings({ settings }: { settings: Shape }) {

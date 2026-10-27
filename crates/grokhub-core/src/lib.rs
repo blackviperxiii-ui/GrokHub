@@ -10,6 +10,7 @@ pub mod automation;
 pub mod autonomy;
 pub mod bg_task;
 pub mod brain_policy;
+pub mod brand;
 pub mod browser;
 pub mod cabin_engine;
 pub mod cabin_rules;
@@ -112,6 +113,7 @@ pub mod skill;
 pub mod slash;
 pub mod ssrf;
 pub mod state;
+pub mod steam;
 pub mod stream;
 pub mod systems_brief;
 pub mod talk;
@@ -140,7 +142,7 @@ pub use amr::{
 };
 pub use appearance::{
     appearance_choices, appearance_hint, kde_prefers_dark, os_prefers_dark, parse_theme,
-    pick_theme, resolve_dark, theme_id, theme_label, ThemeChoice,
+    pick_theme, resolve_dark, resolve_palette, theme_id, theme_label, DarkPalette, ThemeChoice,
 };
 pub use attach::{
     append_composer, attach_chip_label, attach_kind, attach_name, attach_prompt_line,

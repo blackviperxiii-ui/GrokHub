@@ -110,7 +110,7 @@ describe("Connectors", () => {
     render(<Connectors />);
 
     const notion = await screen.findByRole("listitem", { name: "notion" });
-    expect(notion).toHaveTextContent("Sign in from the GrokHub cabin for now.");
+    expect(notion).toHaveTextContent("Sign in from the Loadout cabin for now.");
     const desktop = screen.getByRole("listitem", { name: "computer-use" });
     expect(within(desktop).queryByRole("button", { name: "Disconnect…" })).not.toBeInTheDocument();
     const off = screen.getByRole("listitem", { name: "off" });
@@ -127,7 +127,7 @@ describe("Connectors", () => {
   it("says when there are none and keeps Check all off", async () => {
     api.listConnectors.mockResolvedValue([]);
     render(<Connectors />);
-    expect(await screen.findByText("No connectors yet. Connectors you add in the GrokHub cabin show up here.")).toBeInTheDocument();
+    expect(await screen.findByText("No connectors yet. Connectors you add in the Loadout cabin show up here.")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Check all" })).toBeDisabled();
   });
 });

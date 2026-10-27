@@ -102,7 +102,7 @@ describe("transport (web app)", () => {
     stop();
   });
 
-  it("says when the code is wrong, the address isn't GrokHub, or it can't be reached", async () => {
+  it("says when the code is wrong, the address isn't Loadout, or it can't be reached", async () => {
     desktop({});
     await expect(pair("wrong-code", BASE)).rejects.toThrow(CODE_REFUSED);
     expect(paired()).toBe(false);
@@ -117,7 +117,7 @@ describe("transport (web app)", () => {
       }),
     );
     await expect(pair(CODE, BASE)).rejects.toThrow(UNREACHABLE);
-    await expect(pair("  ", BASE)).rejects.toThrow("Enter the pairing code GrokHub shows.");
+    await expect(pair("  ", BASE)).rejects.toThrow("Enter the pairing code Loadout shows.");
   });
 
   it("hands each event on the stream to its listeners", async () => {

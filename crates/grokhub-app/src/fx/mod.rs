@@ -128,7 +128,7 @@ pub(crate) fn on_frame() -> Option<&'static str> {
     };
     if let Some(line) = line {
         #[cfg(not(test))]
-        crate::notify::ping("GrokHub", line);
+        crate::notify::ping(grokhub_core::brand::product_name(), line);
         return Some(line);
     }
     None

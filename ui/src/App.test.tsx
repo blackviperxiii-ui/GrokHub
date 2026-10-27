@@ -1,13 +1,19 @@
 import "@testing-library/jest-dom/vitest";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Capabilities } from "./api";
 
+// The App's own chat listener (the Activity Dock); tests push events through it.
+const chatHandlers = vi.hoisted(() => [] as ((envelope: unknown) => void)[]);
 const api = vi.hoisted(() => ({
   CORE_ONLY: { desktopControl: false, pulse: false, localAi: false, tray: false, webAccess: false, plugins: false },
   getCapabilities: vi.fn<() => Promise<Capabilities>>(),
   getSettings: vi.fn(() => Promise.resolve({ theme: "light" })),
+  onChatEvent: vi.fn((handler: (envelope: unknown) => void) => {
+    chatHandlers.push(handler);
+    return Promise.resolve(() => {});
+  }),
 }));
 
 vi.mock("./api", () => api);
@@ -150,5 +156,27 @@ describe("App", () => {
     await screen.findByRole("button", { name: "Pulse" });
     await userEvent.click(screen.getByRole("button", { name: "Sign in" }));
     expect(screen.getByText("Settings for a desktop at account")).toBeVisible();
+  });
+
+  it("the Activity Dock shows an approval waiting from any page and opens the chat", async () => {
+    api.getCapabilities.mockResolvedValue(DESKTOP);
+    chatHandlers.length = 0;
+    render(<App />);
+    await userEvent.click(await screen.findByRole("button", { name: "Settings" }));
+    expect(screen.queryByRole("complementary", { name: "Activity" })).toBeNull();
+    await waitFor(() => expect(chatHandlers.length).toBe(1));
+    act(() => {
+      chatHandlers[0]({
+        conversationId: "shell-1",
+        event: { kind: "permission", id: "p1", title: "Run npm test", action: "run", reason: "" },
+      });
+    });
+    const dock = screen.getByRole("complementary", { name: "Activity" });
+    await userEvent.click(within(dock).getByRole("button", { name: /Activity/ }));
+    expect(within(dock).getByRole("listitem", { name: "Chat reply" })).toHaveTextContent(
+      "Needs your OK: Run npm test",
+    );
+    await userEvent.click(within(dock).getByRole("button", { name: "Review" }));
+    expect(screen.getByRole("button", { name: "Chat" })).toHaveAttribute("aria-pressed", "true");
   });
 });

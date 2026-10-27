@@ -59,6 +59,8 @@ fn is_false(v: &bool) -> bool {
 
 pub const PULSE_TITLE: &str = "Pulse";
 pub const PULSE_SUBTITLE: &str = "What I'd do next, from how you use the cabin.";
+/// The Feed's caption when Ideas and Feed share the page.
+pub const FEED_HEADING: &str = "From your feed";
 /// Ideas with nothing to show and nothing running.
 pub const IDEAS_EMPTY: &str = "No ideas yet. I'll add one when I spot something worth doing.";
 /// Feed with nothing to show.

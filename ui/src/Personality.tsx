@@ -13,6 +13,7 @@ import {
   type Verbosity,
 } from "./api";
 import { Toggle } from "./Toggle";
+import { PRODUCT_NAME } from "./brand";
 
 export const PERSONALITY_NOTE =
   "How replies sound in chat. Tone only: approvals, warnings and facts stay plain in every personality.";
@@ -140,7 +141,7 @@ export function Personality() {
         >
           <div className="card-title">Edit {saved?.name ?? draft.name}</div>
           <p className="note">
-            Saved as personalities/{draft.id}.toml in GrokHub's settings folder.
+            Saved as personalities/{draft.id}.toml in {PRODUCT_NAME}'s settings folder.
             Tone only: approvals and safety rules still come after it.
           </p>
           <label>

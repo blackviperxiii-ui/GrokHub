@@ -1021,16 +1021,30 @@ fn live_room_captures_off_the_ui_thread() {
 }
 
 #[test]
-fn appearance_tab_offers_light() {
+fn appearance_tab_offers_loadout_and_classic() {
     let ids: Vec<&str> = grokhub_core::appearance_choices()
         .iter()
         .copied()
         .map(grokhub_core::theme_id)
         .collect();
-    assert_eq!(ids, vec!["dark", "light", "system"]);
+    assert_eq!(
+        ids,
+        vec![
+            "ops-dark",
+            "oled-black",
+            "soft-charcoal",
+            "dark",
+            "light",
+            "system"
+        ]
+    );
     assert_eq!(
         grokhub_core::parse_theme("light"),
         grokhub_core::ThemeChoice::Light
+    );
+    assert_eq!(
+        grokhub_core::parse_theme("ops-dark"),
+        grokhub_core::ThemeChoice::OpsDark
     );
     assert!(!grokhub_core::resolve_dark(
         grokhub_core::ThemeChoice::Light,
@@ -1038,6 +1052,10 @@ fn appearance_tab_offers_light() {
     ));
     assert!(grokhub_core::resolve_dark(
         grokhub_core::ThemeChoice::Dark,
+        false
+    ));
+    assert!(grokhub_core::resolve_dark(
+        grokhub_core::ThemeChoice::OpsDark,
         false
     ));
     assert!(!grokhub_core::resolve_dark(

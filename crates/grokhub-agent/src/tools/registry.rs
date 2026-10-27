@@ -487,7 +487,8 @@ mod tests {
     /// background 6954). To raise one, add the tool to the right list in
     /// `defs.rs`, rerun this test, and put the new size and the reason in the PR.
     /// The deferred `local_ai_status` / `local_ai_selftest` index lines added
-    /// 143 bytes to Chat/Agent and background, and 74 to Plan/Ask.
+    /// 143 bytes to Chat/Agent and background, and 74 to Plan/Ask. The deferred
+    /// `pulse_steam` index line added 53 to Chat/Agent and background.
     #[test]
     fn eager_schema_payload_stays_within_budget_per_profile() {
         use super::super::set::ToolSet;
@@ -497,20 +498,20 @@ mod tests {
                 "chat",
                 profile(PermMode::Ask, false, true),
                 full.clone(),
-                10_266,
+                10_319,
             ),
             (
                 "agent",
                 profile(PermMode::Always, false, true),
                 full.clone(),
-                10_266,
+                10_319,
             ),
             ("plan/ask", profile(PermMode::Ask, true, true), full, 6_824),
             (
                 "background",
                 profile(PermMode::Auto, false, false),
                 ToolSet::background(),
-                9_086,
+                9_139,
             ),
         ];
         for (label, gate, set, budget) in cases {

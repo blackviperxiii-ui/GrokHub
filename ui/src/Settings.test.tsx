@@ -73,12 +73,12 @@ describe("Settings", () => {
     await userEvent.type(model, " grok-5 ");
     expect(screen.getByText("/home/user/GrokHub")).toBeInTheDocument();
     await userEvent.type(screen.getByLabelText("Work folder"), " /work ");
-    await userEvent.click(screen.getByLabelText(/keeps GrokHub in the tray/));
+    await userEvent.click(screen.getByLabelText(/keeps Loadout in the tray/));
     await userEvent.click(screen.getByRole("button", { name: "Save settings" }));
 
     expect(api.saveSettings).toHaveBeenCalledWith("grok-5", false, "/work", "ask", false);
     expect(await screen.findByText("Settings saved.")).toBeInTheDocument();
-    expect(screen.getByLabelText(/keeps GrokHub in the tray/)).not.toBeChecked();
+    expect(screen.getByLabelText(/keeps Loadout in the tray/)).not.toBeChecked();
     expect(screen.getByText("/work")).toBeInTheDocument();
   });
 
@@ -157,7 +157,7 @@ describe("Settings", () => {
     expect(await screen.findByLabelText("Model")).toBeInTheDocument();
     expect(screen.queryByLabelText("Let Grok control the desktop")).toBeNull();
     expect(screen.queryByText(DESKTOP_NOTE)).toBeNull();
-    expect(screen.queryByLabelText(/keeps GrokHub in the tray/)).toBeNull();
+    expect(screen.queryByLabelText(/keeps Loadout in the tray/)).toBeNull();
     const nav = screen.getByRole("navigation", { name: "Settings sections" });
     expect(Array.from(nav.querySelectorAll("button"), (b) => b.textContent)).toEqual([
       "General",
@@ -173,7 +173,7 @@ describe("Settings", () => {
   it("shows them on a desktop", async () => {
     render(<Settings caps={DESKTOP} />);
     expect(await screen.findByLabelText("Let Grok control the desktop")).toBeInTheDocument();
-    expect(screen.getByLabelText(/keeps GrokHub in the tray/)).toBeInTheDocument();
+    expect(screen.getByLabelText(/keeps Loadout in the tray/)).toBeInTheDocument();
     const nav = screen.getByRole("navigation", { name: "Settings sections" });
     expect(Array.from(nav.querySelectorAll("button"), (b) => b.textContent)).toEqual([
       "General",

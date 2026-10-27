@@ -9,14 +9,15 @@
 // it again.
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { PRODUCT_NAME } from "./brand";
 
 export const REMOTE_PREFIX = "/remote/v1";
 export const REMOTE_KIND = "grokhub-remote";
 
-export const NOT_PAIRED = "Pair this browser with GrokHub on your computer first.";
-export const CODE_REFUSED = "GrokHub on your computer refused that pairing code. Pair again.";
-export const NOT_GROKHUB = "That address isn't GrokHub on your computer.";
-export const UNREACHABLE = "Can't reach GrokHub on your computer. Is it open?";
+export const NOT_PAIRED = `Pair this browser with ${PRODUCT_NAME} on your computer first.`;
+export const CODE_REFUSED = `${PRODUCT_NAME} on your computer refused that pairing code. Pair again.`;
+export const NOT_GROKHUB = `That address isn't ${PRODUCT_NAME} on your computer.`;
+export const UNREACHABLE = `Can't reach ${PRODUCT_NAME} on your computer. Is it open?`;
 
 /** True inside the Tauri shell; false in a plain browser. */
 export function inShell(): boolean {
@@ -63,7 +64,7 @@ function auth(code: string): HeadersInit {
  */
 export async function pair(code: string, base: string = window.location.origin): Promise<void> {
   const trimmed = code.trim();
-  if (!trimmed) throw new Error("Enter the pairing code GrokHub shows.");
+  if (!trimmed) throw new Error(`Enter the pairing code ${PRODUCT_NAME} shows.`);
   const root = base.replace(/\/+$/, "");
   let hello: Response;
   try {

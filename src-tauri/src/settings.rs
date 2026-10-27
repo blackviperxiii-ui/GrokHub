@@ -81,7 +81,15 @@ pub fn path(config_dir: &Path) -> PathBuf {
 }
 
 /// A missing or unreadable file gives the defaults, so a bad edit never blocks startup.
+/// A new install (no shell.json and no cabin app.json) starts on the companion's voice;
+/// anyone who already has either keeps their pick.
 pub fn load(config_dir: &Path) -> ShellSettings {
+    if !path(config_dir).exists() && !config_dir.join("app.json").exists() {
+        return ShellSettings {
+            personality: grokhub_core::personality::NEW_INSTALL_ID.to_string(),
+            ..ShellSettings::default()
+        };
+    }
     std::fs::read_to_string(path(config_dir))
         .ok()
         .and_then(|raw| serde_json::from_str::<ShellSettings>(&raw).ok())
@@ -131,11 +139,34 @@ mod tests {
                 workspace: String::new(),
                 approvals: Approvals::Ask,
                 desktop_control: false,
-                personality: String::new(),
+                personality: "nyx".into(),
                 explicit_personalities: false,
                 theme: Theme::System,
             }
         );
+    }
+
+    #[test]
+    fn only_a_new_install_starts_on_nyx() {
+        let dir = temp_dir("nyx");
+        assert_eq!(load(&dir).personality, "nyx");
+        // A cabin user opening the shell for the first time keeps the default voice.
+        std::fs::create_dir_all(&dir).expect("dir");
+        std::fs::write(dir.join("app.json"), "{}").expect("write");
+        assert_eq!(load(&dir).personality, "");
+        std::fs::remove_file(dir.join("app.json")).expect("rm");
+        // A saved pick, including the default voice, is kept.
+        std::fs::write(path(&dir), r#"{"model":"grok-5"}"#).expect("write");
+        assert_eq!(load(&dir).personality, "");
+        std::fs::write(path(&dir), r#"{"personality":"pirate"}"#).expect("write");
+        assert_eq!(load(&dir).personality, "pirate");
+        let fresh = ShellSettings {
+            personality: "nyx".into(),
+            ..ShellSettings::default()
+        };
+        save(&dir, &fresh).expect("save");
+        assert_eq!(load(&dir).personality, "nyx");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

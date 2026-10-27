@@ -9,6 +9,20 @@ pub enum CardVariant {
     Subtle,
     Outlined,
     Interactive,
+    /// Loadout card: raised fill with a dim red rim.
+    Signal,
+    /// Loadout card, hovered or focused: lifted fill with a signal-red rim.
+    SignalHot,
+}
+
+/// The rim each variant paints.
+fn card_stroke(variant: CardVariant) -> Stroke {
+    match variant {
+        CardVariant::Outlined => Stroke::new(1.0, crate::theme::border()),
+        CardVariant::Signal => Stroke::new(1.0, crate::theme::red_dim()),
+        CardVariant::SignalHot => Stroke::new(1.5, crate::theme::signal_red()),
+        CardVariant::Default | CardVariant::Subtle | CardVariant::Interactive => Stroke::NONE,
+    }
 }
 
 /// Paint a rounded card with kit spacing, shadow, and interaction states.
@@ -19,17 +33,14 @@ pub fn card_frame(
     add_contents: impl FnOnce(&mut Ui),
 ) -> Response {
     let base_fill = card_fill(variant, enabled);
-    let stroke = if variant == CardVariant::Outlined {
-        Stroke::new(1.0, crate::theme::border())
-    } else {
-        Stroke::NONE
-    };
+    let stroke = card_stroke(variant);
     let shadow = match variant {
         CardVariant::Default => crate::theme::kit_shadow(crate::theme::ShadowLevel::Lift),
         CardVariant::Interactive => crate::theme::kit_shadow(crate::theme::ShadowLevel::Soft),
-        CardVariant::Subtle | CardVariant::Outlined => {
-            crate::theme::kit_shadow(crate::theme::ShadowLevel::None)
-        }
+        CardVariant::Subtle
+        | CardVariant::Outlined
+        | CardVariant::Signal
+        | CardVariant::SignalHot => crate::theme::kit_shadow(crate::theme::ShadowLevel::None),
     };
     let radius = crate::theme::RADIUS_LG;
     let mut prepared = Frame {
@@ -64,11 +75,7 @@ pub fn card_frame(
     } else {
         disabled_fill(resting)
     };
-    if variant == CardVariant::Outlined {
-        prepared.frame.stroke = Stroke::new(1.0, crate::theme::border());
-    } else {
-        prepared.frame.stroke = Stroke::NONE;
-    }
+    prepared.frame.stroke = card_stroke(variant);
     prepared.paint(ui);
     crate::theme::paint_focus_ring(ui, slot, radius, &resp);
     resp
@@ -79,6 +86,8 @@ fn card_fill(variant: CardVariant, enabled: bool) -> Color32 {
         CardVariant::Default | CardVariant::Interactive => crate::theme::elevated(),
         CardVariant::Subtle => crate::theme::surface(),
         CardVariant::Outlined => crate::theme::elevated(),
+        CardVariant::Signal => crate::theme::raised(),
+        CardVariant::SignalHot => crate::theme::hover(),
     };
     if enabled {
         base
@@ -103,6 +112,8 @@ mod tests {
             CardVariant::Subtle,
             CardVariant::Outlined,
             CardVariant::Interactive,
+            CardVariant::Signal,
+            CardVariant::SignalHot,
         ] {
             let ctx = crate::ui_kit::test_ctx(true);
             let input = egui::RawInput {
@@ -125,6 +136,29 @@ mod tests {
                 "{variant:?} height {max_h}"
             );
         }
+    }
+
+    #[test]
+    fn signal_cards_paint_the_loadout_rims() {
+        let _paint = crate::theme::hold_paint_test();
+        crate::theme::set_paint_palette(crate::theme::PaintPalette::OpsDark);
+        assert_eq!(
+            card_stroke(CardVariant::Signal),
+            Stroke::new(1.0, crate::theme::OPS_RED_DIM)
+        );
+        assert_eq!(
+            card_stroke(CardVariant::SignalHot),
+            Stroke::new(1.5, crate::theme::OPS_SIGNAL_RED)
+        );
+        assert_eq!(
+            card_fill(CardVariant::Signal, true),
+            crate::theme::OPS_RAISED
+        );
+        assert_eq!(
+            card_fill(CardVariant::SignalHot, true),
+            crate::theme::OPS_HOVER
+        );
+        assert_eq!(card_stroke(CardVariant::Default), Stroke::NONE);
     }
 
     #[test]

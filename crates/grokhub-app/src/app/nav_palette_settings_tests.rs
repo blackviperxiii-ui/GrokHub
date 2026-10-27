@@ -752,6 +752,65 @@ fn the_palette_closes_on_navigation_and_uses_the_sidebar_names() {
 }
 
 #[test]
+fn palette_arrow_down_reveals_the_next_row_before_the_edge() {
+    let mut quiet = QuietCabin::boot("palette-peek");
+    let cabin = &mut quiet.cabin;
+    let _paint = crate::theme::hold_paint_test();
+    let ctx = egui::Context::default();
+    crate::theme::install_fonts_on(&ctx);
+    // Reduced motion: the scroll lands at once.
+    ctx.all_styles_mut(|s| s.animation_time = 0.0);
+    let raw = egui::RawInput {
+        screen_rect: Some(egui::Rect::from_min_size(
+            egui::Pos2::ZERO,
+            egui::vec2(1400.0, 900.0),
+        )),
+        ..Default::default()
+    };
+    let cmds = grokhub_core::filter_palette("");
+    assert!(cmds.len() > 9, "{}", cmds.len());
+    cabin.nav = super::Nav::Chat;
+    cabin.open_palette();
+    let painted = |cabin: &mut Cabin, raw: egui::RawInput| {
+        let mut texts = Vec::new();
+        let out = crate::theme::test_pass(&ctx, raw, |ui| cabin.ui_palette(ui.ctx()));
+        for clipped in &out.shapes {
+            collect_shape_text(&clipped.shape, &mut texts);
+        }
+        texts
+    };
+    // A new window sizes itself on its first pass and paints on the next.
+    let _ = painted(cabin, raw.clone());
+    let first = painted(cabin, raw.clone());
+    // Eight rows and half the ninth show (default 3 px spacing); the tenth is
+    // below the cut.
+    assert!(first.iter().any(|t| t == cmds[0].0), "{first:?}");
+    assert!(first.iter().any(|t| t == cmds[8].0), "{first:?}");
+    assert!(!first.iter().any(|t| t == cmds[9].0), "{first:?}");
+    let down = egui::RawInput {
+        events: vec![egui::Event::Key {
+            key: egui::Key::ArrowDown,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        }],
+        ..raw.clone()
+    };
+    for _ in 0..8 {
+        let _ = painted(cabin, down.clone());
+    }
+    assert_eq!(cabin.palette_pick, 8);
+    let mut texts = Vec::new();
+    for _ in 0..2 {
+        texts = painted(cabin, raw.clone());
+    }
+    // Row 8 is picked, and row 9 already shows; the top row scrolled away.
+    assert!(texts.iter().any(|t| t == cmds[9].0), "{texts:?}");
+    assert!(!texts.iter().any(|t| t == cmds[0].0), "{texts:?}");
+}
+
+#[test]
 fn motion_wave2e_pulse_header_control_unmoved() {
     let pulse = include_str!("pulse_ui.rs");
     assert!(
