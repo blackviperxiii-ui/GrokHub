@@ -187,7 +187,9 @@ impl Cabin {
                 self.paint_idea_open(ui, &card, &mut pass.act);
             } else {
                 let st = self.pulse_row_state(&card.id);
-                let (a, rect, on_title) = super::pulse_ui::paint_pulse_row(ui, &card, row.kind, st);
+                let why = self.reaction_why(&card);
+                let (a, rect, on_title) =
+                    super::pulse_ui::paint_pulse_row(ui, &card, row.kind, st, why.as_deref());
                 if a.is_some() {
                     pass.pulse_act = a;
                 }

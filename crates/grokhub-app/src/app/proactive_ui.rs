@@ -105,7 +105,12 @@ impl Cabin {
             failed: &[],
             needs: &[],
         };
-        pro::ProactiveEngine::new(std::sync::Arc::new(move || now)).gather(&watch, &[], &granted)
+        let ranked = pro::ProactiveEngine::new(std::sync::Arc::new(move || now)).gather(
+            &watch,
+            &[],
+            &granted,
+        );
+        self.weigh_candidates(ranked)
     }
 
     /// From `tick_anticipate`. Busy: nothing. Quiet hours: candidates queue for
@@ -116,6 +121,7 @@ impl Cabin {
         if busy || now.saturating_sub(self.last_proactive_ms) < PROACTIVE_EVERY_MS {
             return;
         }
+        self.sweep_reactions(now);
         let ranked = self.proactive_candidates(now);
         if quiet {
             self.last_proactive_ms = now;

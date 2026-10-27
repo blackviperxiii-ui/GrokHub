@@ -661,6 +661,8 @@ pub const PENALTY_NOT_THIS: i64 = 400;
 pub const PENALTY_DISMISS: i64 = 200;
 /// A card below this is Quiet: nothing is shown for it.
 pub const PULSE_THRESHOLD: i64 = 100;
+/// How far under the threshold a quieted category's card lands.
+pub const REACTIONS_QUIET_PENALTY: i64 = 1000;
 /// The Ideas view opens with this many ideas under no header: the most
 /// personal ones, by rank.
 pub const IDEAS_LEAD: usize = 3;
@@ -689,6 +691,8 @@ pub struct PulseInputs<'a> {
     /// Titles of open workboard cards.
     pub open_work: &'a [String],
     pub now_ms: u64,
+    /// Learned reactions per category; None leaves every score as it was.
+    pub reactions: Option<&'a crate::reactions::Reactions>,
 }
 
 fn asks_explicitly(text: &str) -> bool {
@@ -756,7 +760,24 @@ pub fn pulse_score(card: &UpdateCard, inputs: &PulseInputs) -> i64 {
     if let Some(p) = &card.pulse.proactive {
         score += i64::from(p.help);
     }
+    // 8. How you react to this kind of card: a quiet category drops under
+    // the threshold, the rest move by their learned score.
+    if let Some(reactions) = inputs.reactions {
+        if let Some((category, _)) = crate::reactions::card_category_tag(card) {
+            if reactions.quiet(&category) {
+                return score.min(PULSE_THRESHOLD - 1) - REACTIONS_QUIET_PENALTY;
+            }
+            score += reactions.rank_boost(&category);
+        }
+    }
     score
+}
+
+/// A card whose category learned reactions have quieted.
+fn reaction_quiet(card: &UpdateCard, inputs: &PulseInputs) -> bool {
+    inputs.reactions.is_some_and(|r| {
+        crate::reactions::card_category_tag(card).is_some_and(|(cat, _)| r.quiet(&cat))
+    })
 }
 
 /// On the page now: not dismissed, not held by quiet hours, not snoozed.
@@ -848,6 +869,7 @@ pub fn feed_posts(cards: &[UpdateCard], inputs: &PulseInputs) -> Vec<UpdateCard>
     let mut posts: Vec<UpdateCard> = cards
         .iter()
         .filter(|c| is_feed_card(c) && pulse_visible(c, inputs.now_ms))
+        .filter(|c| !reaction_quiet(c, inputs))
         .cloned()
         .collect();
     posts.sort_by(|a, b| b.created_at.cmp(&a.created_at).then(a.id.cmp(&b.id)));
@@ -1432,6 +1454,7 @@ mod tests {
             skills: &skills,
             open_work: &[],
             now_ms: now,
+            reactions: None,
         };
         assert_eq!(pulse_score(&bill, &inputs), 150 + 1000 + 500);
         assert_eq!(pulse_score(&started, &inputs), 150 + 250);

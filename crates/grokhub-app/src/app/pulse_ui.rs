@@ -209,6 +209,9 @@ pub(super) enum PulseAct {
     CopyIssue(String),
     RetryNow,
     Source(String, SourceAct),
+    /// More or fewer cards of this one's kind, from the ··· menu.
+    MoreKind(String),
+    LessKind(String),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -470,6 +473,7 @@ fn pulse_menu(
     card: &UpdateCard,
     kind: PulseType,
     feed: bool,
+    why: Option<&str>,
     act: &mut Option<PulseAct>,
 ) {
     let id = card.id.clone();
@@ -550,7 +554,28 @@ fn pulse_menu(
     pick(ui, "Open", "Enter", PulseAct::Open(id.clone()), act);
     ui.separator();
     pick(ui, "Not this", "N", PulseAct::NotThis(id.clone()), act);
-    pick(ui, "Dismiss", "D", PulseAct::Dismiss(id), act);
+    pick(ui, "Dismiss", "D", PulseAct::Dismiss(id.clone()), act);
+    if let Some(why) = why {
+        ui.separator();
+        ui.label(
+            RichText::new("Why am I seeing this?")
+                .size(crate::theme::FONT_TIP)
+                .color(crate::theme::muted()),
+        );
+        ui.label(
+            RichText::new(why)
+                .size(crate::theme::FONT_TIP)
+                .color(crate::theme::subtle()),
+        );
+        pick(
+            ui,
+            "More like this",
+            "",
+            PulseAct::MoreKind(id.clone()),
+            act,
+        );
+        pick(ui, "Less like this", "", PulseAct::LessKind(id), act);
+    }
 }
 
 /// The inline Run button's word: Send… on a prepared draft (it parks the hard
@@ -600,6 +625,7 @@ pub(super) fn paint_pulse_row(
     card: &UpdateCard,
     kind: PulseType,
     st: RowState,
+    why: Option<&str>,
 ) -> (Option<PulseAct>, egui::Rect, bool) {
     let mut act = None;
     let mut title_hover = false;
@@ -672,7 +698,7 @@ pub(super) fn paint_pulse_row(
             });
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
                 crate::cards::dots_menu(ui, active, |ui| {
-                    pulse_menu(ui, card, kind, false, &mut act)
+                    pulse_menu(ui, card, kind, false, why, &mut act)
                 });
             });
         });
@@ -1347,11 +1373,13 @@ impl Cabin {
         let ledger = self.pulse_ledger();
         let skills = self.pulse_skills();
         let work = self.pulse_open_work();
+        let reactions = self.reactions_now().clone();
         let inputs = pc::PulseInputs {
             ledger: &ledger,
             skills: &skills,
             open_work: &work,
             now_ms: now,
+            reactions: Some(&reactions),
         };
         pc::rank_pulse(&self.updates, &inputs)
     }
@@ -1361,11 +1389,13 @@ impl Cabin {
         let ledger = self.pulse_ledger();
         let skills = self.pulse_skills();
         let work = self.pulse_open_work();
+        let reactions = self.reactions_now().clone();
         let inputs = pc::PulseInputs {
             ledger: &ledger,
             skills: &skills,
             open_work: &work,
             now_ms: now,
+            reactions: Some(&reactions),
         };
         pc::group_ideas(&self.updates, &inputs)
     }
@@ -1373,11 +1403,13 @@ impl Cabin {
     /// The Feed view: posts newest first; muted sources stay off.
     pub(super) fn pulse_feed_posts(&mut self, now: u64) -> Vec<UpdateCard> {
         let ledger = self.pulse_ledger();
+        let reactions = self.reactions_now().clone();
         let inputs = pc::PulseInputs {
             ledger: &ledger,
             skills: &[],
             open_work: &[],
             now_ms: now,
+            reactions: Some(&reactions),
         };
         let muted = &self.cfg.feed_pulse.muted_sources;
         let mut posts: Vec<UpdateCard> = pc::feed_posts(&self.updates, &inputs)
@@ -1467,6 +1499,7 @@ impl Cabin {
         let mut act = None;
         let kind = pc::pulse_type(card);
         let daily_drop = grokhub_core::daily_drop::is_daily_drop_card(card, &self.cfg.daily_drop);
+        let why = self.reaction_why(card);
         let thumbs: Vec<Thumb> = card
             .pulse
             .image_urls
@@ -1493,7 +1526,7 @@ impl Cabin {
                         );
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             crate::cards::dots_menu(ui, false, |ui| {
-                                pulse_menu(ui, card, kind, true, &mut act)
+                                pulse_menu(ui, card, kind, true, why.as_deref(), &mut act)
                             });
                         });
                     });
@@ -1773,6 +1806,7 @@ impl Cabin {
     // buttons
 
     pub(super) fn apply_pulse_act(&mut self, act: PulseAct) {
+        self.react_to_act(&act);
         match act {
             PulseAct::Run(id) => {
                 self.pulse_run(&id);
@@ -1797,6 +1831,8 @@ impl Cabin {
             PulseAct::CopyIssue(id) => self.copy_code_idea(&id),
             PulseAct::RetryNow => self.retry_model_wait_now(),
             PulseAct::Source(id, did) => self.source_post_act(&id, did),
+            // Recorded by react_to_act; nothing else to do.
+            PulseAct::MoreKind(_) | PulseAct::LessKind(_) => {}
             PulseAct::Link(url) => {
                 self.follow_update_action(Some(UpdateAction::DeepLink { href: url }))
             }
