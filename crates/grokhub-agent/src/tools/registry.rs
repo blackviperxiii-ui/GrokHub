@@ -645,8 +645,8 @@ mod tests {
         };
         begin_turn("conv-dispatch");
         let loaded = crate::tools::dispatch(&ctx, LOAD_TOOL_SCHEMA, r#"{"name":"scheduler_list"}"#);
-        assert!(!loaded.failed, "{}", loaded.text);
+        assert!(!loaded.failed);
         let listed = crate::tools::dispatch(&ctx, "scheduler_list", "{}");
-        assert!(!listed.failed, "{}", listed.text);
+        assert!(!listed.failed);
     }
 }
