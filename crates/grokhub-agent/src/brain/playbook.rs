@@ -569,6 +569,33 @@ mod tests {
             pick_id("tune Cyberpunk 2077 graphics for this PC").as_deref(),
             Some("game-tuning")
         );
+        // Cabin app name "Loadout" and bare Steam repairs must not steal specialists.
+        assert_ne!(
+            pick_id("open Loadout settings").as_deref(),
+            Some("build-loadout")
+        );
+        assert_ne!(
+            pick_id("Loadout won't start").as_deref(),
+            Some("build-loadout")
+        );
+        let loadout_wont = crate::brain::rules(&crate::brain::BriefInput {
+            text: "Loadout won't start",
+            ..Default::default()
+        })
+        .unwrap();
+        assert_eq!(loadout_wont.intent, crate::brain::Intent::Repair);
+        assert_ne!(loadout_wont.domain.as_str(), "loadout");
+        assert_ne!(
+            pick_id("Steam won't launch").as_deref(),
+            Some("game-news-library")
+        );
+        let steam_wont = crate::brain::rules(&crate::brain::BriefInput {
+            text: "Steam won't launch",
+            ..Default::default()
+        })
+        .unwrap();
+        assert_eq!(steam_wont.intent, crate::brain::Intent::Repair);
+        assert_ne!(steam_wont.domain.as_str(), "library");
         assert_eq!(pick_id("hi there"), None);
     }
 

@@ -355,7 +355,7 @@ const GAME_HELP_PHRASES: &[&str] = &[
     "current season",
 ];
 /// PC parts or in-game loadout compare — dated prices, 2–3 options.
-const LOADOUT_WORDS: &[&str] = &["loadout", "loadouts"];
+/// Phrases only: bare "loadout" is the cabin app name, not this playbook.
 const LOADOUT_PHRASES: &[&str] = &[
     "pc build",
     "pc parts",
@@ -375,7 +375,7 @@ const LOADOUT_PHRASES: &[&str] = &[
     "motherboard and",
 ];
 /// Steam library, sales, patch notes — read-only; buys still ask.
-const LIBRARY_WORDS: &[&str] = &["wishlist", "sale", "sales", "dlc", "steam"];
+/// Phrases only: bare "steam" is a launcher repair, not the library playbook.
 const LIBRARY_PHRASES: &[&str] = &[
     "steam library",
     "my library",
@@ -399,16 +399,16 @@ fn is_game_help(t: &str, ws: &[&str]) -> bool {
     any_word(ws, GAME_HELP_WORDS) || any_phrase(t, GAME_HELP_PHRASES)
 }
 
-fn is_loadout(t: &str, ws: &[&str]) -> bool {
-    any_word(ws, LOADOUT_WORDS) || any_phrase(t, LOADOUT_PHRASES)
+fn is_loadout(t: &str) -> bool {
+    any_phrase(t, LOADOUT_PHRASES)
 }
 
 fn is_library(t: &str, ws: &[&str]) -> bool {
+    // Skip when the ask is a repair ("Steam won't launch") so library never steals it.
+    if any_word(ws, REPAIR_WORDS) || any_phrase(t, REPAIR_PHRASES) {
+        return false;
+    }
     any_phrase(t, LIBRARY_PHRASES)
-        || (any_word(ws, LIBRARY_WORDS)
-            && (is_gaming(t, ws)
-                || any_word(ws, &["steam", "wishlist", "dlc"])
-                || any_phrase(t, &["patch notes", "patch note"])))
 }
 
 fn words(t: &str) -> Vec<&str> {
@@ -531,7 +531,7 @@ fn domain_of(
     };
     if is_library(t, ws) && !feature_ask {
         "library"
-    } else if is_loadout(t, ws) {
+    } else if is_loadout(t) {
         "loadout"
     } else if is_gaming(t, ws) && is_game_help(t, ws) && !any_word(ws, GAMING_TASK_WORDS) {
         "game-help"
@@ -587,7 +587,7 @@ pub fn rules(input: &BriefInput<'_>) -> Option<Brief> {
     let broken = any_word(&ws, REPAIR_WORDS) || any_phrase(&t, REPAIR_PHRASES);
     let gaming = is_gaming(&t, &ws);
     let game_help = gaming && is_game_help(&t, &ws);
-    let loadout = is_loadout(&t, &ws);
+    let loadout = is_loadout(&t);
     let library = is_library(&t, &ws);
     let gaming_lag = gaming
         && (any_phrase(&t, &["low fps", "dropping frames", "stutter", "stuttering"])
@@ -1036,6 +1036,29 @@ mod tests {
                 Intent::Question,
                 Care::Casual,
                 "library",
+                "calm",
+            ),
+            // Cabin app name "Loadout" must not steal the PC/parts playbook.
+            (
+                "open Loadout settings",
+                Intent::Task,
+                Care::Careful,
+                "general",
+                "calm",
+            ),
+            (
+                "Loadout won't start",
+                Intent::Repair,
+                Care::Critical,
+                "general",
+                "calm",
+            ),
+            // Bare Steam is a launcher repair, not the library playbook.
+            (
+                "Steam won't launch",
+                Intent::Repair,
+                Care::Critical,
+                "general",
                 "calm",
             ),
         ];
