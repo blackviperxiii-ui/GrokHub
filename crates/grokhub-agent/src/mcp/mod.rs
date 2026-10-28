@@ -1,6 +1,7 @@
 //! MCP client. Sync JSON-RPC over stdio, streamable HTTP, and legacy SSE.
 //! One worker thread per stdio child or HTTP read. No tokio.
 
+mod browser;
 mod config;
 mod elicit;
 mod http;

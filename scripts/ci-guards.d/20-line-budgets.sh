@@ -19,7 +19,7 @@ budget() {
   fi
 }
 
-budget "crates/grokhub-app/src/app/mod.rs" 5930 # home_layout (Order -38) + web_search_ui (#974)
+budget "crates/grokhub-app/src/app/mod.rs" 5950 # Nav::Home + home_layout (Order -38) + web_search_ui (#974)
 budget "crates/grokhub-app/src/cards.rs" 4400
 budget "crates/grokhub-core/src/slash/mod.rs" 1650
 budget "crates/grokhub-app/src/app/tests.rs" 2800
