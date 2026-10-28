@@ -176,8 +176,10 @@ fn offer_for(config_dir: &Path, m: &LocalModel) -> Option<DraftOffer> {
         name: d.name.into(),
         size_label: ls::size_label(d.download_mb),
         line: format!(
-            "Optional: {} can draft replies for {}, which can make them faster on some machines. GrokHub only downloads it if you ask, and keeps it only if the speed test finds it helps.",
-            d.name, m.name
+            "Optional: {} can draft replies for {}, which can make them faster on some machines. {} only downloads it if you ask, and keeps it only if the speed test finds it helps.",
+            d.name,
+            m.name,
+            grokhub_core::brand::product_name()
         ),
         button,
         target_id: m.id.into(),
@@ -351,7 +353,9 @@ impl rd::Fetch for HttpEngineFetch {
         let mut url = self.url.clone();
         for hop in 0..=REDIRECTS_MAX {
             runtime_download_url_ok(&url)?;
-            let mut req = runtime_agent().get(&url).set("user-agent", "GrokHub");
+            let mut req = runtime_agent()
+                .get(&url)
+                .set("user-agent", grokhub_agent::USER_AGENT);
             if hop == 0 && offset > 0 {
                 req = req.set("range", &format!("bytes={offset}-"));
             }
@@ -405,7 +409,9 @@ fn hf_agent() -> ureq::Agent {
 
 impl md::Fetch for HfFetch {
     fn open(&self, url: &str, offset: u64) -> Result<md::Opened, String> {
-        let mut req = hf_agent().get(url).set("user-agent", "GrokHub");
+        let mut req = hf_agent()
+            .get(url)
+            .set("user-agent", grokhub_agent::USER_AGENT);
         if offset > 0 {
             req = req.set("range", &format!("bytes={offset}-"));
         }
@@ -430,7 +436,7 @@ impl md::Fetch for HfFetch {
         let url = md::tree_url(repo);
         let resp = hf_agent()
             .get(&url)
-            .set("user-agent", "GrokHub")
+            .set("user-agent", grokhub_agent::USER_AGENT)
             .call()
             .map_err(|e| e.to_string())?;
         let mut body = String::new();
