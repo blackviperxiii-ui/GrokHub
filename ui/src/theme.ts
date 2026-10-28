@@ -1,9 +1,11 @@
 import type { Theme } from "./api";
 
-/** Puts Settings → Appearance on the page: dark or light pins the colors,
- * system leaves them to the OS (styles.css). */
+/** Themes that pin colors on <html data-theme>. System leaves it to the OS. */
+const PINNED: Theme[] = ["dark", "ops-dark", "oled-black", "soft-charcoal", "light"];
+
+/** Puts Settings → Appearance on the page. Dark maps to Ops Dark tokens. */
 export function applyTheme(theme: Theme | undefined) {
   const root = document.documentElement;
-  if (theme === "dark" || theme === "light") root.dataset.theme = theme;
+  if (theme && PINNED.includes(theme)) root.dataset.theme = theme;
   else delete root.dataset.theme;
 }
