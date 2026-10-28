@@ -20,7 +20,7 @@
 - Moving a fn between files or renaming it: `fn_src` finds `fn name(` in `cabin_src()` (a fixed list of submodules) and ends at the next same-indent fn, and many tests assert on that slice.
 - Reordering `paint_approval_stack` / `paint_perm_ask` / `paint_elicit_ask` in `chat_ui.rs`: `needs_attention_summary_is_only_on_the_stack` slices between those signatures.
 - Blocking the frame on disk, network, or a model call.
-- Letting a pill act while private data is locked: Settings grant rows go through `settings_grant_row` with `lock_hover` (disabled look, hover), Try again calls `retry_keyring`, and the `/privacy` Revoke and `/skills changes` Undo rows start at `RESULT_TEXT_INSET`.
+- Letting a pill act while private data is locked: Settings grant rows go through `settings_grant_row` with `lock_hover` (disabled look, hover), Try again calls `retry_keyring`, and the `/privacy` Revoke and `/skills changes` Undo rows start at `result_text_inset()`.
 ## What depends on it
 - `crates/grokhub-app/src/main.rs` launches it for the window and `--agent` (tray) modes.
 ## Non-obvious

@@ -24,7 +24,7 @@
 ## Non-obvious
 - `AppConfig` is camelCase on disk; `memory_backend`, `memory_migrated`, and `dream_model` are snake_case keys.
 - `load` of a missing `app.json` sets `memory_backend` to amr and `memory_migrated`. An existing file that omits the key stays legacy, and `AppConfig::default` still omits both keys.
-- `load()` forces `host_on = true` and `yolo = false`. `persistable_permission_mode` keeps Ask, Auto, and Always; `always_confirmed` skips the Always sheet after the first confirm.
+- `load()` forces `host_on = true` and `yolo = false`, and rewrites a saved `personality` of `default` to Nyx on disk. `persistable_permission_mode` keeps Ask, Auto, and Always; `always_confirmed` skips the Always sheet after the first confirm.
 - `save_in` clears `api_key` before writing: the console key lives in `secrets.json` only.
 - `config_dir()`: a test-thread pin (`TestConfigDir`), then `GROKHUB_CONFIG`, then `%APPDATA%\GrokHub` on Windows, then `~/.config/GrokHub`, then `.grokhub` in the cwd. Workers capture the dir at schedule time so a later env change cannot move the file.
 - `GROKHUB_CONFIG` is process-global: tests take `hold_test_config` and a `test_config_root`; CI runs `--test-threads=1`.

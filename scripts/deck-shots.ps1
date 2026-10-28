@@ -198,8 +198,9 @@ function Seed-Pulse([string]$cfg) {
 # selected, for slide 19 shots. $mood pins Nyx's corner box picture
 # (GROKHUB_DECK_MOOD: working, gaming, doctor, reading, hanging-out, viper),
 # since no turn or game runs here; every shot defaults to hanging-out.
-# selected, for slide 19 shots. $mood pins the companion's pose
-# (GROKHUB_DECK_MOOD), since no turn runs here.
+# $nav opens that rail page at launch (GROKHUB_DECK_NAV, any rail id such as
+# home, pulse or library) instead of a rail click; the cabin closes the
+# seeded Activity list over every pinned page.
 function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlide, [switch]$upgrade, [string]$keys = '', [switch]$dock, [int]$wheel = 0, [switch]$pulse, [int[]]$clickAt = @(), [string]$mood = '', [switch]$library, [switch]$chatFirst, [string]$personality = '', [switch]$pinPersonality, [string]$openSettings = '', [int]$tabs = 0, [switch]$overflow, [string]$lastChat = '', [string]$libraryPick = '', [string]$nav = '') {
     $root = Join-Path $env:RUNNER_TEMP "deck-$name"
     Remove-Item -Recurse -Force $root -ErrorAction SilentlyContinue
@@ -243,7 +244,7 @@ function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlid
     # $openSettings / $pinPersonality open Settings on that section at launch, with no click.
     $env:GROKHUB_DECK_OPEN_SETTINGS = $(if ($openSettings -or $pinPersonality) { '1' } else { '' })
     # The Activity popover would cover the Library tiles and the Settings page.
-    # Home-mc also keeps it off (cabin forces closed when GROKHUB_DECK_NAV=home).
+    # A pinned $nav page keeps it off too (the cabin closes it on every GROKHUB_DECK_NAV).
     $env:GROKHUB_DECK_ACTIVITY = $(if ($library -or $openSettings -or $pinPersonality -or $nav -eq 'home') { '0' } else { '' })
     $p = Start-Process -FilePath $exe -WorkingDirectory $root -PassThru `
         -RedirectStandardError (Join-Path $root 'err.txt') -RedirectStandardOutput (Join-Path $root 'out.txt')
@@ -268,7 +269,7 @@ function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlid
     }
     $r = New-Object DeckWin+RECT
     [void][DeckWin]::GetWindowRect($hwnd, [ref]$r)
-    if ($pulse) {
+    if ($pulse -and -not $nav) {
         # Pulse is the fourth icon on the 40 px rail, at every window size. The chat
         # tab strip under the titlebar pushes the rail down 37 px.
         [void][DeckWin]::SetForegroundWindow($hwnd)
