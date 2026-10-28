@@ -306,7 +306,13 @@ mod tests {
 
     #[test]
     fn watch_dirs_linux_includes_pictures_screenshots() {
-        let home = PathBuf::from("/home/user");
+        // Home must be host-absolute: Windows treats "/home/…" as relative, so
+        // watch_dirs would skip it under the is_absolute guard.
+        let home = if cfg!(windows) {
+            PathBuf::from(r"C:\Users\user")
+        } else {
+            PathBuf::from("/home/user")
+        };
         let dirs = watch_dirs(&home, "linux");
         assert!(dirs.contains(&home.join("Pictures").join("Screenshots")));
     }
