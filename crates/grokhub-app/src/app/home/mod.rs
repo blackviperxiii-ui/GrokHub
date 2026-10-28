@@ -1,13 +1,19 @@
 //! Cabin glue for modular Home / Mission Control.
 //!
 //! Catalog, slot grid, and `HomeLayout` schema live in `grokhub_core::home`.
-//! This module loads and saves `{config}/home_layout.json`.
+//! This module loads/saves `{config}/home_layout.json` and paints Home.
+
+mod edit;
+mod page;
+mod paint;
 
 use std::path::{Path, PathBuf};
 
 use grokhub_core::home::{HomeLayout, HOME_LAYOUT_FILE, HOME_LAYOUT_VERSION};
 
 use crate::config::{atomic_write, load_json_or, peek_json, JSON_STORE_CAP};
+
+pub(in crate::app) use edit::HomeEditDraft;
 
 pub fn home_layout_path(dir: &Path) -> PathBuf {
     dir.join(HOME_LAYOUT_FILE)
@@ -93,7 +99,8 @@ mod tests {
         assert_eq!(loaded, HomeLayout::default());
         assert!(home_layout_path(&dir).is_file());
         let placed = place_slots((0.0, 0.0, 1600.0, 470.0), &loaded);
-        assert_eq!(placed.len(), 7);
+        // Mission Control / slide 09: Objectives | PC Loadout | Up Next.
+        assert_eq!(placed.len(), 3);
         let _ = fs::remove_dir_all(&dir);
     }
 }
