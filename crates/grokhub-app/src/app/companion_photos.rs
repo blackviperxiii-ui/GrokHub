@@ -99,7 +99,8 @@ pub(super) fn default_still(personality_id: &str, slot: u8) -> Option<CompanionS
     png_for_default(id, slot)
         .or_else(|| png_for_default(grokhub_core::personality::DEFAULT_ID, slot))
         .or_else(|| {
-            (1..=PHOTO_SLOTS).find_map(|s| png_for_default(grokhub_core::personality::DEFAULT_ID, s))
+            (1..=PHOTO_SLOTS)
+                .find_map(|s| png_for_default(grokhub_core::personality::DEFAULT_ID, s))
         })
         .map(|png| CompanionStill { png })
 }
@@ -196,19 +197,37 @@ mod tests {
 
     #[test]
     fn tool_name_maps_to_action() {
-        assert_eq!(CompanionAction::from_tool("web_search"), CompanionAction::Reading);
-        assert_eq!(CompanionAction::from_tool("apply_patch"), CompanionAction::Writing);
+        assert_eq!(
+            CompanionAction::from_tool("web_search"),
+            CompanionAction::Reading
+        );
+        assert_eq!(
+            CompanionAction::from_tool("apply_patch"),
+            CompanionAction::Writing
+        );
         assert_eq!(CompanionAction::from_tool("shell"), CompanionAction::Coding);
-        assert_eq!(CompanionAction::from_tool("doctor"), CompanionAction::Fixing);
-        assert_eq!(CompanionAction::from_tool("todo_write"), CompanionAction::Writing);
-        assert_eq!(CompanionAction::from_tool("open_url"), CompanionAction::Working);
+        assert_eq!(
+            CompanionAction::from_tool("doctor"),
+            CompanionAction::Fixing
+        );
+        assert_eq!(
+            CompanionAction::from_tool("todo_write"),
+            CompanionAction::Writing
+        );
+        assert_eq!(
+            CompanionAction::from_tool("open_url"),
+            CompanionAction::Working
+        );
     }
 
     #[test]
     fn rotating_slot_advances_after_hold() {
         let t0 = Instant::now();
         assert_eq!(rotating_slot("test-rotate", t0), 1);
-        assert_eq!(rotating_slot("test-rotate", t0 + Duration::from_millis(100)), 1);
+        assert_eq!(
+            rotating_slot("test-rotate", t0 + Duration::from_millis(100)),
+            1
+        );
         assert_eq!(
             rotating_slot("test-rotate", t0 + PHOTO_HOLD + Duration::from_millis(1)),
             2
