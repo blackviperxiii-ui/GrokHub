@@ -1098,6 +1098,17 @@ impl Cabin {
                 }
             }
         }
+        // Scratch proof: two grants and a `/privacy` bubble so the Revoke rows paint.
+        if std::env::var("GROKHUB_DECK_PRIVACY").is_ok_and(|v| v.trim() == "1") {
+            use grokhub_agent::harness as hx;
+            let dir = crate::config::config_dir();
+            let a = hx::grant_destination(&dir, hx::HUB_DEST, hx::HUB_SYNC_DATA, hx::UserClick::from_click());
+            let b = hx::grant_destination(&dir, "notes.example.com", &[hx::DataClass::Chat], hx::UserClick::from_click());
+            eprintln!("deck privacy grants: {:?} {:?}", a.map(|g| g.id), b.map(|g| g.id));
+            self.activity.open = false;
+            self.nav = Nav::Chat;
+            self.run_slash_line("/privacy");
+        }
         // Open Settings when a section is pinned (`GROKHUB_DECK_SETTINGS_SEC`,
         // including `-pinPersonality` slide 19) or `GROKHUB_DECK_OPEN_SETTINGS=1`
         // (privacy / full-page proofs). No rail click or Ctrl+, — a miss left
