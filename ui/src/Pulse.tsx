@@ -13,11 +13,12 @@ import {
 import { FeedCard, IdeaRow, SkeletonRows } from "./FeedCard";
 
 export const FEED_EMPTY = "No posts yet. Tell me what your feed should cover with Edit feed instructions.";
-export const IDEAS_EMPTY = "No ideas yet. I'll add one when I spot something worth doing.";
+export const IDEAS_EMPTY = "Nothing for you yet. I'll add one when I spot something worth doing.";
 export const PROMPT_LABEL = "What should your feed cover?";
 export const SAVED_NOTE = "Saved. A new post is on its way.";
 export const MORE_LIKE_NOTE = "Got it. More ideas like this next time.";
 export const NOT_INTERESTED_NOTE = "Got it. Fewer ideas like this.";
+export const FOR_YOU_LABEL = "For You";
 /** Posts shown at first, and added each time the list's end scrolls into view. */
 export const PAGE_SIZE = 10;
 /** After a save, how often and how many times to look for the new post. */
@@ -186,7 +187,7 @@ export function Pulse({ onRun }: { onRun: (text: string) => void }) {
             Feed
           </button>
           <button type="button" aria-pressed={tab === "ideas"} onClick={openIdeas}>
-            Ideas
+            {FOR_YOU_LABEL}
           </button>
         </div>
         {tab === "feed" && (
