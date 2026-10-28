@@ -369,7 +369,7 @@ pub fn build_offer_card(cluster: &AskCluster, now_ms: u64) -> UpdateCard {
             card.prompt = Some(preview.clone());
             card.draft = None;
             card.body = Some(format!(
-                "Preview: {preview}. Edit it, then Accept to schedule."
+                "Preview: {preview}. Open it to edit first, or Accept to schedule it."
             ));
             card.why = Some(format!(
                 "Asked about this {} times around {}.",

@@ -1,0 +1,1 @@
+- The repeated-ask Automate offer now says Open edits its schedule line first and Accept schedules it as is.

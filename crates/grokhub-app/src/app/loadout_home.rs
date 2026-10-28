@@ -1072,6 +1072,9 @@ impl Cabin {
             }
             _ => {}
         }
+        // A seeded `ask-offers.json` posts its Automate offer now instead of on
+        // the next Pulse refresh, so the shot shows the real card.
+        self.tick_ask_offers();
         // `GROKHUB_DECK_NAV` opens that rail page at launch (any `set_nav_id`
         // id), so a shot never depends on a rail click landing. Applied after
         // last-chat so home-mc wins over the Hangout seed. Every pinned page
