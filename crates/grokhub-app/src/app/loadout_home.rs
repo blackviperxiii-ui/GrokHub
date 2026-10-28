@@ -314,7 +314,7 @@ fn pc_profile() -> Option<LocalProfile> {
     slot.profile.clone()
 }
 
-fn card(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui)) -> egui::Response {
+pub(super) fn card(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui)) -> egui::Response {
     use crate::ui_kit::recipe::{look, Part, State};
     let l = look(Part::Card, State::Default);
     egui::Frame::NONE
@@ -329,7 +329,7 @@ fn card(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui)) -> egui::Response {
         .response
 }
 
-fn caption(text: &str) -> egui::RichText {
+pub(super) fn caption(text: &str) -> egui::RichText {
     egui::RichText::new(text.to_uppercase())
         .size(crate::theme::TYPE_CAPTION)
         .extra_letter_spacing(1.5)
@@ -337,7 +337,7 @@ fn caption(text: &str) -> egui::RichText {
 }
 
 /// Amber diamond before a dock card title, as on the deck.
-fn diamond(ui: &mut egui::Ui, filled: bool) {
+pub(super) fn diamond(ui: &mut egui::Ui, filled: bool) {
     let (mark, _) = ui.allocate_exact_size(egui::vec2(10.0, 10.0), egui::Sense::hover());
     let c = mark.center();
     let points = vec![
@@ -554,7 +554,7 @@ impl Cabin {
         mood_for(tool_running, self.messages.is_empty())
     }
 
-    fn dock_mission(&self, ctx: &egui::Context) -> Option<MissionView> {
+    pub(super) fn dock_mission(&self, ctx: &egui::Context) -> Option<MissionView> {
         type Cached = (Instant, String, Option<MissionView>);
         let id = egui::Id::new("loadout-mission");
         let trace = self.trace_id();

@@ -80,6 +80,12 @@ impl Cabin {
         self.sources.steam.requests()
     }
 
+    /// The whole library for the Library page, and whether Steam was found.
+    pub(super) fn steam_library(&mut self, now: u64) -> (bool, &[SteamGame]) {
+        self.sources.steam.refresh(now, steam::detect_root);
+        (self.sources.steam.found(), &self.sources.steam.games)
+    }
+
     /// Each game's last-played time in ms, for the daily rhythm.
     pub(super) fn steam_last_played(&mut self, now: u64) -> Vec<(String, u64)> {
         self.sources.steam.refresh(now, steam::detect_root);

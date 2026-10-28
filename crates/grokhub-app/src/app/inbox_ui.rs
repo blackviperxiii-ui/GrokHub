@@ -882,6 +882,7 @@ mod tests {
                 Nav::Pulse => "pulse",
                 Nav::Imagine => "imagine",
                 Nav::Skills => "skills",
+                Nav::Library => "library",
                 Nav::Night => "night",
                 Nav::History => "history",
                 Nav::Journal => "journal",
@@ -898,6 +899,7 @@ mod tests {
             Nav::Pulse,
             Nav::Imagine,
             Nav::Skills,
+            Nav::Library,
             Nav::Night,
             Nav::History,
             Nav::Journal,
@@ -905,7 +907,7 @@ mod tests {
             Nav::Agents,
             Nav::Settings,
         ];
-        assert_eq!(all.len(), 13);
+        assert_eq!(all.len(), 14);
         assert!(all.iter().all(|n| !page(*n).contains("inbox")));
         let cards: Vec<_> = [
             InboxKey::Hard(0),

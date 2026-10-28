@@ -56,10 +56,10 @@ function Write-Utf8($path, [string]$text) {
 # five-step todo list (Objectives), 23 finished tasks in the outcome log
 # (LVL and XP) and two unread home cards (From Pulse). The chat has no
 # transcript, so launch keeps it open instead of starting a fresh one.
-function Seed-Dock([string]$cfg, [hashtable]$app) {
+function Seed-Dock([string]$cfg, [hashtable]$app, [string]$first = 'Diamond, 3 wins left') {
     $now = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
     $id = 'deck-hangout'
-    $steps = @('Diamond, 3 wins left', 'Aim routine 12/20', 'Warm up in the range', 'Review last match', 'Pick a duo for tonight')
+    $steps = @($first, 'Aim routine 12/20', 'Warm up in the range', 'Review last match', 'Pick a duo for tonight')
     $todos = @{ todos = @(for ($i = 0; $i -lt $steps.Count; $i++) {
         @{ id = "$($i + 1)"; content = $steps[$i]; status = $(if ($i -eq 0) { 'in_progress' } else { 'pending' }) }
     }) } | ConvertTo-Json -Depth 4 -Compress
@@ -88,6 +88,25 @@ function Seed-Dock([string]$cfg, [hashtable]$app) {
 
 # Pulse with real cards: four ideas (Up next) and three feed cards, so the
 # columns, tiling and the Feed | Ideas switch have something to reflow.
+# A Steam library under the throwaway home (HOME is the shot's root): ten
+# installed games with play time and last-played dates for the Library page.
+function Seed-Library([string]$root) {
+    $steam = Join-Path $root '.steam/steam'
+    $secs = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+    $games = @(
+        @(1001, 'Rift Circuit', 5160, 1), @(1006, 'Hollow Peak', 1800, 3), @(1011, 'Starfall Ops', 900, 6),
+        @(1015, 'Iron Tide', 600, 9), @(1020, 'Glass Orbit', 300, 14), @(1025, 'Dustline', 120, 20),
+        @(1030, 'Night Vault', 0, 0), @(1035, 'Echo Front', 0, 0), @(1036, 'Emberfall', 45, 40), @(1041, 'Null Sector', 0, 0)
+    )
+    $apps = ''
+    foreach ($g in $games) {
+        $last = if ($g[3] -gt 0) { $secs - $g[3] * 86400 } else { 0 }
+        Write-Utf8 (Join-Path $steam "steamapps/appmanifest_$($g[0]).acf") "`"AppState`"`n{`n`"appid`" `"$($g[0])`"`n`"name`" `"$($g[1])`"`n`"LastPlayed`" `"$last`"`n}`n"
+        $apps += "`"$($g[0])`"`n{`n`"LastPlayed`" `"$last`"`n`"Playtime`" `"$($g[2])`"`n}`n"
+    }
+    Write-Utf8 (Join-Path $steam 'userdata/1/config/localconfig.vdf') "`"UserLocalConfigStore`"`n{`n`"Software`"`n{`n`"Valve`"`n{`n`"Steam`"`n{`n`"apps`"`n{`n$apps}`n}`n}`n}`n}`n"
+}
+
 function Seed-Pulse([string]$cfg) {
     $now = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
     $ideas = @(
@@ -124,9 +143,10 @@ function Seed-Pulse([string]$cfg) {
 # hardware read behind PC loadout; $wheel scrolls the dock down that many
 # notches first, for the cards below the fold of a short window. With $pulse
 # the config holds Pulse cards and the shot clicks Pulse in the rail; $clickAt
-# (x, y in the window) clicks once more after that. $mood pins the
-# companion's pose (GROKHUB_DECK_MOOD), since no turn runs here.
-function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlide, [switch]$upgrade, [string]$keys = '', [switch]$dock, [int]$wheel = 0, [switch]$pulse, [int[]]$clickAt = @(), [string]$mood = '') {
+# (x, y in the window) clicks once more after that. $library seeds the dock
+# and a Steam library; the shot clicks Library on the rail with $clickAt.
+# $mood pins the companion's pose (GROKHUB_DECK_MOOD), since no turn runs here.
+function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlide, [switch]$upgrade, [string]$keys = '', [switch]$dock, [int]$wheel = 0, [switch]$pulse, [int[]]$clickAt = @(), [string]$mood = '', [switch]$library) {
     $root = Join-Path $env:RUNNER_TEMP "deck-$name"
     Remove-Item -Recurse -Force $root -ErrorAction SilentlyContinue
     $cfg = Join-Path $root 'cfg'
@@ -134,7 +154,10 @@ function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlid
     $app = @{ getStartedDone = $true; setupDone = $true; theme = $theme; deviceName = 'my-pc';
               window = @{ x = 0; y = 0; w = $w; h = $h; maximized = $false } }
     if (-not $upgrade) { $app.themeMigrated = $true }
-    if ($dock) { Seed-Dock $cfg $app }
+    if ($library) {
+        Seed-Dock $cfg $app 'Rift Circuit: Diamond by Sunday'
+        Seed-Library $root
+    } elseif ($dock) { Seed-Dock $cfg $app }
     if ($pulse) { Seed-Pulse $cfg }
     $app | ConvertTo-Json -Depth 4 | Set-Content -Encoding utf8 (Join-Path $cfg 'app.json')
     $env:GROKHUB_CONFIG = $cfg
@@ -158,7 +181,7 @@ function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlid
         throw "no $($brand.productName) window at ${w}x${h}"
     }
     [void][DeckWin]::SetForegroundWindow($hwnd)
-    Start-Sleep -Seconds $(if ($dock) { 40 } else { 12 })
+    Start-Sleep -Seconds $(if ($dock -or $library) { 40 } else { 12 })
     if ($keys) {
         Add-Type -AssemblyName System.Windows.Forms
         [void][DeckWin]::SetForegroundWindow($hwnd)
@@ -255,6 +278,9 @@ Shot 1024 720 'pulse-1024x720' 'ops-dark' '14' -pulse
 Shot 1024 720 'pulse-1024x720-scrolled' 'ops-dark' '14' -pulse -wheel 10
 Shot 720 720 'pulse-720x720' 'ops-dark' '14' -pulse
 Shot 720 720 'pulse-720x720-ideas' 'ops-dark' '14' -pulse -clickAt 505, 81
+# Library is the fifth icon on the 40 px rail.
+Shot 1600 900 'library-1600x900' 'ops-dark' '11' -library -clickAt 20, 221
+Shot 1100 720 'library-1100x720' 'ops-dark' '11' -library -clickAt 20, 221
 foreach ($m in 'hello', 'helping', 'hanging-out') {
     Shot 1600 900 "mood-$m-1600x900" 'ops-dark' '17' -dock -mood $m
     Shot 1100 720 "mood-$m-1100x720" 'ops-dark' '17' -dock -mood $m

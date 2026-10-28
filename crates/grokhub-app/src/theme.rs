@@ -859,7 +859,7 @@ pub const LOADOUT_NAV: &[(&str, &str)] = &[
     ("chat", "Chat"),
     ("workboard", "Objectives"),
     ("pulse", "Pulse"),
-    ("skills", "Library"),
+    ("library", "Library"),
     ("devices", "PC"),
     ("profile", "Profile"),
 ];
