@@ -787,11 +787,13 @@ async function labs(s, config) {
 async function playbooks(s, config) {
   await tab(s, "Settings");
   await section(s, "Playbooks");
+  // Prefer an enabled button: Save writes the file before React clears
+  // `busy`, and a disabled Remove click is a no-op on Windows EdgeDriver.
   const button = async (card, label) => {
     const el = await waitFor(`${card}'s ${label}`, async () => {
       const found = await wd("POST", `${s}/element`, {
         using: "xpath",
-        value: `//ul[@aria-label='All playbooks']/li[@aria-label='${card}']//button[normalize-space()='${label}']`,
+        value: `//ul[@aria-label='All playbooks']/li[@aria-label='${card}']//button[normalize-space()='${label}' and not(@disabled)]`,
       });
       return found[ELEMENT];
     });
