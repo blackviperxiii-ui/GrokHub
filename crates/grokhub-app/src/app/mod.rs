@@ -229,6 +229,7 @@ mod systems_brief_ui;
 mod tests;
 mod threads_nav;
 mod voice;
+mod web_search_ui;
 mod wind_down_ui;
 mod wishlist_ui;
 
@@ -432,6 +433,8 @@ pub struct Cabin {
     /// Bumped by `live_mut` but not `live_tail_mut`: an edit before the last message.
     messages_body_rev: u64,
     status: String,
+    /// Draft Brave Search API key for Settings → Web search (never persisted).
+    web_search_key_draft: String,
     running: bool,
     /// One SIGTERM retry per user send. kick_model sets Thinking, so the
     /// status text cannot be the guard or the cabin retries forever.
@@ -1070,6 +1073,7 @@ impl Cabin {
             messages_rev: 0,
             messages_body_rev: 0,
             status: String::new(),
+            web_search_key_draft: String::new(),
             running: false,
             turn_retried: false,
             host_halt: Arc::new(AtomicBool::new(false)),
@@ -1468,6 +1472,7 @@ impl Cabin {
             c.update_probe_rx = Some(crate::update::begin_update_probe());
             c.open_fresh_home();
             c.apply_deck_shot_seed();
+            c.apply_web_search_shot_seed();
             #[cfg(not(test))]
             crate::desktop_mcp::set_desktop_enabled(c.cfg.desktop_control);
             steps.mark("startup:new:home");
@@ -1541,6 +1546,7 @@ impl Cabin {
             messages_rev: 0,
             messages_body_rev: 0,
             status: String::new(),
+            web_search_key_draft: String::new(),
             running: false,
             turn_retried: false,
             host_halt: Arc::new(AtomicBool::new(false)),

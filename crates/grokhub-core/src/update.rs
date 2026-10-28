@@ -180,7 +180,9 @@ pub fn fetch_channel_tips(source: &Path) -> Result<ChannelTips, String> {
     if !is_grokhub_source(source) {
         return Err("not a GrokHub source tree".into());
     }
-    let (ok, _) = git_stdout(
+    // Tip fetch is not a Settings probe — allow longer than git_probe_timeout
+    // so a busy Windows nextest / Defender pass does not flake the check.
+    let (ok, _) = git_stdout_within(
         source,
         &[
             "fetch",
@@ -190,6 +192,7 @@ pub fn fetch_channel_tips(source: &Path) -> Result<ChannelTips, String> {
             "+refs/heads/beta:refs/remotes/origin/beta",
             "+refs/heads/main:refs/remotes/origin/main",
         ],
+        Duration::from_secs(30),
     )?;
     if !ok {
         return Err("git fetch origin beta main failed".into());
