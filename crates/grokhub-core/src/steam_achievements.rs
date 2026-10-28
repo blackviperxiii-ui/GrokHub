@@ -278,7 +278,7 @@ pub fn pick(
         .collect();
     // Commonest first, unknown rates last: the easy wins lead.
     left.sort_by(|a, b| {
-        let key = |l: &Left| l.percent.map_or(-1.0, |p| p);
+        let key = |l: &Left| l.percent.unwrap_or(-1.0);
         key(b).total_cmp(&key(a))
     });
     let nudge = |kind, left| Nudge {
