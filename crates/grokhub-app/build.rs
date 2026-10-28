@@ -152,8 +152,8 @@ fn embed_personality_photos(manifest: &Path) {
             }
         }
     }
-    // Empty arms: no match (avoids clippy::match_single_binding). The fn stays
-    // for tests + when PNGs land; Selected still paints the letter icon until then.
+    // No PNGs yet: plain `None` (avoid clippy::match_single_binding on `_ => None`).
+    // personality_ui keeps the symbols referenced until the Selected strip ships.
     let body = if count == 0 {
         "    let _ = (id, slot);\n    None\n".to_string()
     } else {
