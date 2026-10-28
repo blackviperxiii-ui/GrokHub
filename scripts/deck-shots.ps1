@@ -56,7 +56,7 @@ function Write-Utf8($path, [string]$text) {
 # five-step todo list (Objectives), 23 finished tasks in the outcome log
 # (LVL and XP) and two unread home cards (From Pulse). The chat has no
 # transcript, so launch keeps it open instead of starting a fresh one.
-function Seed-Dock([string]$cfg, [hashtable]$app, [string]$first = 'Diamond, 3 wins left') {
+function Seed-Dock([string]$cfg, [hashtable]$app, [string]$first = 'Diamond, 3 wins left', [bool]$transcript = $true) {
     $now = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
     $id = 'deck-hangout'
     $steps = @($first, 'Aim routine 12/20', 'Warm up in the range', 'Review last match', 'Pick a duo for tonight')
@@ -76,6 +76,9 @@ function Seed-Dock([string]$cfg, [hashtable]$app, [string]$first = 'Diamond, 3 w
         @('user', 'queue the duo and fix my stutter first'),
         @('assistant', "On it. I'll clear the shader cache, then find you a Diamond duo for tonight.")
     )
+    # A thread with a transcript reopens as a fresh chat, so the session's
+    # checklist never loads; mission shots seed it empty.
+    if (-not $transcript) { $messages = @() }
     $thread = @{ id = $id; title = 'Hangout'; native = $true; grokSession = $id; accessedMs = $now; lastActiveMs = $now; messages = $messages }
     Write-Utf8 (Join-Path $cfg 'threads.json') (ConvertTo-Json -InputObject @($thread) -Depth 4)
     Write-Utf8 (Join-Path $cfg 'projects.json') '[]'
@@ -163,7 +166,7 @@ function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlid
               window = @{ x = 0; y = 0; w = $w; h = $h; maximized = $false } }
     if (-not $upgrade) { $app.themeMigrated = $true }
     if ($library) {
-        Seed-Dock $cfg $app 'Rift Circuit: Diamond by Sunday'
+        Seed-Dock $cfg $app 'Rift Circuit: Diamond by Sunday' $false
         Seed-Library $root
     } elseif ($dock) { Seed-Dock $cfg $app }
     if ($pulse) { Seed-Pulse $cfg }
