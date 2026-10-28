@@ -4978,7 +4978,7 @@ impl Cabin {
             .input(|i| i.modifiers.command && i.key_pressed(egui::Key::Comma) && !i.modifiers.shift)
         {
             self.palette_open = false;
-            self.nav = Nav::Settings;
+            self.set_nav_id("settings");
         }
         if ctx.input(|i| {
             i.modifiers.command

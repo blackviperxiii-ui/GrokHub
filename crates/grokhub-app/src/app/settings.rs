@@ -45,6 +45,35 @@ pub(super) fn settings_sec_title(sec: SettingsSec) -> &'static str {
     }
 }
 
+/// `GROKHUB_DECK_SETTINGS_SEC` pins the Settings section for deck screenshots
+/// (`scripts/deck-shots.ps1`), so Ctrl+, lands on Personality without a fragile click.
+pub(super) fn pinned_settings_sec() -> Option<SettingsSec> {
+    static PIN: std::sync::OnceLock<Option<SettingsSec>> = std::sync::OnceLock::new();
+    *PIN.get_or_init(|| {
+        match std::env::var("GROKHUB_DECK_SETTINGS_SEC")
+            .ok()
+            .as_deref()
+            .map(str::trim)
+            .map(|s| s.to_ascii_lowercase())
+            .as_deref()
+        {
+            Some("personality") => Some(SettingsSec::Personality),
+            Some("privacy") => Some(SettingsSec::Privacy),
+            _ => None,
+        }
+    })
+}
+
+/// Settings modal size: Personality needs room for the slide 19 grid + detail panel.
+pub(super) fn settings_modal_size(sec: SettingsSec, screen: egui::Vec2) -> egui::Vec2 {
+    let want = if sec == SettingsSec::Personality && crate::theme::is_loadout_paint() {
+        egui::vec2(1180.0, 720.0)
+    } else {
+        egui::vec2(920.0, 620.0)
+    };
+    want.min(screen - egui::vec2(48.0, 48.0))
+}
+
 /// Chat catalog ids plus Auto. Auto persists an empty model pin.
 pub(super) fn cabin_default_models() -> Vec<(&'static str, &'static str)> {
     let mut out = vec![("", "Auto")];
@@ -409,7 +438,7 @@ impl Cabin {
                     .rect_filled(screen, 0.0, Color32::from_black_alpha(180));
                 let modal = egui::Rect::from_center_size(
                     screen.center(),
-                    egui::vec2(920.0, 620.0).min(screen.size() - egui::vec2(48.0, 48.0)),
+                    settings_modal_size(sec, screen.size()),
                 );
                 ui.scope_builder(egui::UiBuilder::new().max_rect(modal), |ui| {
                     egui::Frame::NONE
