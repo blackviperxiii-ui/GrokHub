@@ -388,6 +388,8 @@ Shot 1100 720 'library-1100x720' 'ops-dark' '11' -library -clickAt 20, 221
 # Downloads tidy: the suggestion card on Pulse, then the review with its approval.
 Shot 1600 900 'tidy-1600x900' 'ops-dark' '14' -tidy 'card' -nav 'pulse'
 Shot 1100 720 'tidy-1100x720' 'ops-dark' '14' -tidy 'card' -nav 'pulse'
+# At 1100x720 the feed sits under Up next; scroll down to the post.
+Shot 1100 720 'tidy-1100x720-scrolled' 'ops-dark' '14' -tidy 'card' -nav 'pulse' -wheel 12
 Shot 1600 900 'tidy-approve-1600x900' 'ops-dark' '14' -tidy 'approve' -nav 'pulse'
 Shot 1100 720 'tidy-approve-1100x720' 'ops-dark' '14' -tidy 'approve' -nav 'pulse'
 # Layout B: the chat with objectives and recent chats left, snapshot right.
