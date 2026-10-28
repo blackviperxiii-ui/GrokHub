@@ -95,9 +95,20 @@ pub(super) fn parse_mood(raw: &str) -> Option<Mood> {
     }
 }
 
+/// Launch pins are read once per run. Tests flip them inside one process,
+/// so there every call reads the variable again; a cached value made the
+/// result depend on which test ran first.
+pub(super) fn launch_pin<T: Copy + Send + Sync>(cell: &'static OnceLock<T>, read: fn() -> T) -> T {
+    if cfg!(test) {
+        read()
+    } else {
+        *cell.get_or_init(read)
+    }
+}
+
 fn pinned_mood() -> Option<Mood> {
     static PIN: OnceLock<Option<Mood>> = OnceLock::new();
-    *PIN.get_or_init(|| {
+    launch_pin(&PIN, || {
         std::env::var("GROKHUB_DECK_MOOD")
             .ok()
             .as_deref()
@@ -272,10 +283,19 @@ pub(super) fn objective_progress(items: &[MissionCheckItem]) -> (usize, usize) {
 }
 
 /// One PC loadout tile: a caption and its value.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub(super) struct PcTile {
     pub label: &'static str,
     pub value: String,
+}
+
+/// Mission-control PC panel tile (slide 09): optional meter bar and warn rim.
+#[derive(Debug, Clone, PartialEq)]
+pub(super) struct LoadoutStatTile {
+    pub label: &'static str,
+    pub value: String,
+    pub meter: Option<f32>,
+    pub warn: bool,
 }
 
 fn gb(mb: u64) -> String {
@@ -342,6 +362,154 @@ pub(super) fn pc_tile_list(p: &LocalProfile) -> Vec<PcTile> {
     tiles
 }
 
+/// Six-tile PC loadout for Mission Control (deck slide 09).
+pub(super) fn pc_mission_loadout_tiles(p: &LocalProfile) -> Vec<LoadoutStatTile> {
+    if deck_home_mc_shot() {
+        return vec![
+            LoadoutStatTile {
+                label: "GPU driver",
+                value: "Update".into(),
+                meter: None,
+                warn: true,
+            },
+            LoadoutStatTile {
+                label: "GPU temp",
+                value: "68°".into(),
+                meter: Some(0.62),
+                warn: false,
+            },
+            LoadoutStatTile {
+                label: "CPU temp",
+                value: "61°".into(),
+                meter: Some(0.55),
+                warn: false,
+            },
+            LoadoutStatTile {
+                label: "Storage",
+                value: "1.2 TB".into(),
+                meter: Some(0.40),
+                warn: false,
+            },
+            LoadoutStatTile {
+                label: "RAM",
+                value: "32 GB".into(),
+                meter: Some(0.34),
+                warn: false,
+            },
+            LoadoutStatTile {
+                label: "Startup apps",
+                value: "4 trimmed".into(),
+                meter: None,
+                warn: false,
+            },
+        ];
+    }
+    let gpu = p
+        .gpus
+        .iter()
+        .find(|g| !g.integrated)
+        .or_else(|| p.gpus.first());
+    let driver = gpu
+        .map(|g| g.driver.trim())
+        .filter(|d| !d.is_empty())
+        .map(str::to_string);
+    let (gpu_temp, gpu_meter) = thermal_degree(p.thermal, 68);
+    let (cpu_temp, cpu_meter) = thermal_degree(p.thermal, 61);
+    let storage = if p.ram_mb > 0 && p.free_disk_mb > 0 {
+        gb(p.ram_mb.saturating_add(p.free_disk_mb))
+    } else if p.free_disk_mb > 0 {
+        gb(p.free_disk_mb)
+    } else {
+        "—".into()
+    };
+    let storage_meter = if p.free_disk_mb > 0 && p.ram_mb > 0 {
+        Some((p.free_disk_mb as f32 / (p.ram_mb + p.free_disk_mb) as f32).clamp(0.05, 0.95))
+    } else {
+        None
+    };
+    let ram = if p.ram_mb > 0 {
+        gb(p.ram_mb)
+    } else {
+        "—".into()
+    };
+    let ram_meter = p
+        .free_ram_mb
+        .filter(|_| p.ram_mb > 0)
+        .map(|f| 1.0 - (f as f32 / p.ram_mb as f32).clamp(0.05, 0.95));
+    vec![
+        LoadoutStatTile {
+            label: "GPU driver",
+            value: driver.clone().unwrap_or_else(|| "Update".into()),
+            meter: None,
+            warn: driver.is_none(),
+        },
+        LoadoutStatTile {
+            label: "GPU temp",
+            value: gpu_temp,
+            meter: gpu_meter,
+            warn: false,
+        },
+        LoadoutStatTile {
+            label: "CPU temp",
+            value: cpu_temp,
+            meter: cpu_meter,
+            warn: false,
+        },
+        LoadoutStatTile {
+            label: "Storage",
+            value: storage,
+            meter: storage_meter,
+            warn: false,
+        },
+        LoadoutStatTile {
+            label: "RAM",
+            value: ram,
+            meter: ram_meter,
+            warn: false,
+        },
+        LoadoutStatTile {
+            label: "Startup apps",
+            value: "—".into(),
+            meter: None,
+            warn: false,
+        },
+    ]
+}
+
+fn thermal_degree(t: Thermal, nominal_c: u8) -> (String, Option<f32>) {
+    let (label, meter) = match t {
+        Thermal::Unknown => ("—".to_string(), None),
+        Thermal::Nominal => (format!("{nominal_c}°"), Some(0.45)),
+        Thermal::Fair => (format!("{}", nominal_c.saturating_add(4)), Some(0.62)),
+        Thermal::Serious => (format!("{}", nominal_c.saturating_add(12)), Some(0.78)),
+        Thermal::Critical => (format!("{}", nominal_c.saturating_add(20)), Some(0.92)),
+    };
+    (label, meter)
+}
+
+fn deck_mission_control_profile() -> LocalProfile {
+    use grokhub_core::local_profile::{CpuInfo, Gpu, GpuVendor, PowerInfo};
+    LocalProfile {
+        os: std::env::consts::OS,
+        arch: std::env::consts::ARCH,
+        gpus: vec![Gpu {
+            name: "Discrete GPU".into(),
+            vendor: GpuVendor::Nvidia,
+            vram_mb: 12 * 1024,
+            free_vram_mb: None,
+            unified: false,
+            integrated: false,
+            driver: "561.09".into(),
+        }],
+        cpu: CpuInfo::default(),
+        ram_mb: 32 * 1024,
+        free_ram_mb: Some(21 * 1024),
+        power: PowerInfo::default(),
+        thermal: Thermal::Fair,
+        free_disk_mb: 480 * 1024,
+    }
+}
+
 /// From Pulse: the newest home cards as (title, kind · age), plus the unread count.
 pub(super) fn pulse_lines(
     cards: &[UpdateCard],
@@ -378,6 +546,9 @@ fn profile_slot() -> &'static Mutex<ProfileSlot> {
 
 /// The last hardware read; starts a background re-read when it's stale.
 pub(super) fn pc_profile() -> Option<LocalProfile> {
+    if deck_home_mc_shot() {
+        return Some(deck_mission_control_profile());
+    }
     let mut slot = profile_slot().lock().unwrap_or_else(|e| e.into_inner());
     let stale = slot.read_at.is_none_or(|t| t.elapsed() >= PROFILE_REFRESH);
     if stale && !slot.reading {
@@ -622,16 +793,36 @@ pub(super) fn proof_shot_requested() -> bool {
 
 fn deck_shot_env() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
-    *ON.get_or_init(|| {
+    launch_pin(&ON, || {
         std::env::var("GROKHUB_DECK_SHOT")
             .ok()
             .is_some_and(|v| v.trim() == "1")
     })
 }
 
+/// Rail page a deck shot opens at launch (`GROKHUB_DECK_NAV`, e.g. `pulse`),
+/// trimmed and lowercased. Home→Chat last-used proof: `home` parks on Home;
+/// `chat` restores Hangout.
+fn deck_nav() -> Option<String> {
+    std::env::var("GROKHUB_DECK_NAV")
+        .ok()
+        .map(|v| v.trim().to_ascii_lowercase())
+        .filter(|v| !v.is_empty())
+}
+
+/// `GROKHUB_DECK_NAV=home` — Mission Control Home beside deck slide 09.
+pub(super) fn deck_nav_home_pinned() -> bool {
+    deck_shot_env() && deck_nav().as_deref() == Some("home")
+}
+
+/// Windows home-mc deck pairs must match slide 09 (layout A), not the modular grid.
+pub(super) fn deck_home_mc_shot() -> bool {
+    deck_nav_home_pinned()
+}
+
 fn web_search_shot_env() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
-    *ON.get_or_init(|| {
+    launch_pin(&ON, || {
         std::env::var("GROKHUB_WEB_SEARCH_SHOT")
             .ok()
             .is_some_and(|v| v.trim() == "1")
@@ -658,16 +849,6 @@ pub(super) fn deck_overflow_open() -> bool {
     std::env::var("GROKHUB_DECK_OVERFLOW")
         .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
         .unwrap_or(false)
-}
-
-/// Home→Chat last-used proof: `home` parks on Home; `chat` restores Hangout.
-/// Rail page a deck shot opens at launch (`GROKHUB_DECK_NAV`, e.g. `pulse`),
-/// so the shot never depends on a synthetic click landing on the rail.
-fn deck_nav() -> Option<String> {
-    std::env::var("GROKHUB_DECK_NAV")
-        .ok()
-        .map(|v| v.trim().to_ascii_lowercase())
-        .filter(|v| !v.is_empty())
 }
 
 pub(super) fn deck_last_chat_mode() -> Option<String> {
@@ -785,7 +966,12 @@ impl Cabin {
             return;
         }
         ensure_deck_session_file();
-        let transcript = Arc::new(deck_transcript());
+        let home_mc = deck_nav_home_pinned();
+        let transcript = if home_mc {
+            Arc::new(vec![])
+        } else {
+            Arc::new(deck_transcript())
+        };
         let now = now_ms();
         if let Some(i) = self.threads.iter().position(|t| t.id == DECK_THREAD_ID) {
             self.thread_idx = i;
@@ -806,50 +992,52 @@ impl Cabin {
             t.accessed_ms = now;
             t.last_active_ms = now;
         }
-        // Extra titled chats so the titlebar tab strip has several tabs in HARD DONE shots.
-        self.ensure_deck_extra_tab(
-            "deck-weekend",
-            "Weekend plan",
-            true,
-            now.saturating_sub(60_000),
-        );
-        self.ensure_deck_extra_tab(
-            "deck-driver",
-            "Driver update",
-            false,
-            now.saturating_sub(30_000),
-        );
-        // GROKHUB_DECK_TABS=N seeds N total chats (Hangout + extras) for overflow proof.
-        let want = deck_tab_count().unwrap_or(3).max(3);
-        let extras = [
-            ("deck-duo", "Duo finder"),
-            ("deck-stutter", "Fix stutter"),
-            ("deck-fans", "Fan curve"),
-            ("deck-shaders", "Shader cache"),
-            ("deck-rank", "Rank climb"),
-            ("deck-patch", "Season patch"),
-            ("deck-aim", "Aim routine"),
-            ("deck-warmup", "Warm up range"),
-            ("deck-build", "Roast build"),
-            ("deck-backlog", "Backlog sort"),
-            ("deck-gpu", "GPU drivers"),
-            ("deck-queue", "Queue night"),
-            ("deck-voip", "Voip check"),
-            ("deck-map", "Map pool"),
-            ("deck-scrim", "Scrim notes"),
-            ("deck-perk", "Perk loadout"),
-        ];
-        for (n, (id, title)) in extras.iter().enumerate() {
-            // Hangout + Weekend + Driver already planted → total so far is 3.
-            if 3 + n >= want {
-                break;
-            }
+        if !home_mc {
+            // Extra titled chats so the titlebar tab strip has several tabs in HARD DONE shots.
             self.ensure_deck_extra_tab(
-                id,
-                title,
-                false,
-                now.saturating_sub(90_000 + n as u64 * 1_000),
+                "deck-weekend",
+                "Weekend plan",
+                true,
+                now.saturating_sub(60_000),
             );
+            self.ensure_deck_extra_tab(
+                "deck-driver",
+                "Driver update",
+                false,
+                now.saturating_sub(30_000),
+            );
+            // GROKHUB_DECK_TABS=N seeds N total chats (Hangout + extras) for overflow proof.
+            let want = deck_tab_count().unwrap_or(3).max(3);
+            let extras = [
+                ("deck-duo", "Duo finder"),
+                ("deck-stutter", "Fix stutter"),
+                ("deck-fans", "Fan curve"),
+                ("deck-shaders", "Shader cache"),
+                ("deck-rank", "Rank climb"),
+                ("deck-patch", "Season patch"),
+                ("deck-aim", "Aim routine"),
+                ("deck-warmup", "Warm up range"),
+                ("deck-build", "Roast build"),
+                ("deck-backlog", "Backlog sort"),
+                ("deck-gpu", "GPU drivers"),
+                ("deck-queue", "Queue night"),
+                ("deck-voip", "Voip check"),
+                ("deck-map", "Map pool"),
+                ("deck-scrim", "Scrim notes"),
+                ("deck-perk", "Perk loadout"),
+            ];
+            for (n, (id, title)) in extras.iter().enumerate() {
+                // Hangout + Weekend + Driver already planted → total so far is 3.
+                if 3 + n >= want {
+                    break;
+                }
+                self.ensure_deck_extra_tab(
+                    id,
+                    title,
+                    false,
+                    now.saturating_sub(90_000 + n as u64 * 1_000),
+                );
+            }
         }
         self.messages = transcript;
         self.cfg.current_thread = DECK_THREAD_ID.to_string();
@@ -861,6 +1049,12 @@ impl Cabin {
         self.cfg.personality = "viper".into();
         self.persist_cfg();
         self.pin_chat_tail();
+        if home_mc {
+            self.home_layout = grokhub_core::home::HomeLayout::default();
+            if let Some(i) = self.threads.iter().position(|t| t.id == DECK_THREAD_ID) {
+                self.thread_idx = i;
+            }
+        }
         // Slide 10's chat-first layout has no Activity popover or pending Ask
         // over the snapshot column.
         // `GROKHUB_DECK_ACTIVITY=0` keeps it off a shot whose page it would cover.
@@ -878,15 +1072,27 @@ impl Cabin {
             }
             _ => {}
         }
+        // `GROKHUB_DECK_NAV` opens that rail page at launch (any `set_nav_id`
+        // id), so a shot never depends on a rail click landing. Applied after
+        // last-chat so home-mc wins over the Hangout seed. Every pinned page
+        // closes the seeded Activity list, which would cover its top right.
         if let Some(id) = deck_nav() {
-            // The seeded Activity list would cover the page's top right.
             self.activity.open = false;
             self.set_nav_id(&id);
+            if id == "home" {
+                // Empty Hangout thread so dock mission todos load for Objectives.
+                if let Some(i) = self.threads.iter().position(|t| t.id == DECK_THREAD_ID) {
+                    self.thread_idx = i;
+                    if let Some(t) = self.threads.get(i) {
+                        self.messages = t.messages.clone();
+                    }
+                }
+            }
         }
         // Open Settings when a section is pinned (`GROKHUB_DECK_SETTINGS_SEC`,
         // including `-pinPersonality` slide 19) or `GROKHUB_DECK_OPEN_SETTINGS=1`
         // (privacy / full-page proofs). No rail click or Ctrl+, — a miss left
-        // Hangout on screen in #958. After last-chat mode so Personality wins.
+        // Hangout on screen in #958. After last-chat / nav pin so Personality wins.
         if super::settings::pinned_settings_sec().is_some()
             || std::env::var("GROKHUB_DECK_OPEN_SETTINGS").is_ok_and(|v| v.trim() == "1")
         {
@@ -1332,6 +1538,63 @@ pub(super) fn pc_tile_grid(ui: &mut egui::Ui, tiles: &[PcTile]) {
     }
 }
 
+/// Mission-control PC grid (slide 09): six tiles with optional meters; driver tile can warn.
+pub(super) fn pc_mission_tile_grid(ui: &mut egui::Ui, tiles: &[LoadoutStatTile]) {
+    use crate::ui_kit::recipe;
+    let gap = crate::theme::SPACING_8;
+    let w = (ui.available_width() - gap) / 2.0;
+    for row in tiles.chunks(2) {
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = gap;
+            for t in row {
+                let (stroke, ink) = if t.warn {
+                    (
+                        recipe::look(recipe::Part::Card, recipe::State::Accent).stroke,
+                        crate::theme::amber(),
+                    )
+                } else {
+                    (
+                        egui::Stroke::new(1.0, crate::theme::border()),
+                        crate::theme::fg(),
+                    )
+                };
+                egui::Frame::NONE
+                    .fill(crate::theme::void_bg())
+                    .stroke(stroke)
+                    .corner_radius(recipe::BUTTON_RADIUS)
+                    .inner_margin(egui::Margin::same(8))
+                    .show(ui, |ui| {
+                        ui.set_width(w - 16.0 - stroke.width * 2.0);
+                        ui.vertical(|ui| {
+                            ui.spacing_mut().item_spacing.y = 2.0;
+                            ui.label(caption(t.label));
+                            ui.add(
+                                egui::Label::new(
+                                    egui::RichText::new(&t.value)
+                                        .size(crate::theme::TYPE_LABEL)
+                                        .strong()
+                                        .color(ink),
+                                )
+                                .truncate(),
+                            )
+                            .on_hover_text(&t.value);
+                            if let Some(frac) = t.meter {
+                                let (bar, _) = ui.allocate_exact_size(
+                                    egui::vec2(ui.available_width(), 6.0),
+                                    egui::Sense::hover(),
+                                );
+                                ui.painter().rect_filled(bar, 2.0, crate::theme::selected());
+                                let mut fill = bar;
+                                fill.set_width(bar.width() * frac.clamp(0.0, 1.0));
+                                ui.painter().rect_filled(fill, 2.0, crate::theme::amber());
+                            }
+                        });
+                    });
+            }
+        });
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1427,6 +1690,28 @@ mod tests {
             .map(|t| (t.label, t.value))
             .collect();
         assert_eq!(tiles, vec![("Disk free", "420 GB".to_string())]);
+    }
+
+    #[test]
+    fn pc_mission_loadout_deck_shows_six_slide_nine_tiles() {
+        let prev = std::env::var("GROKHUB_DECK_SHOT").ok();
+        let prev_nav = std::env::var("GROKHUB_DECK_NAV").ok();
+        std::env::set_var("GROKHUB_DECK_SHOT", "1");
+        std::env::set_var("GROKHUB_DECK_NAV", "home");
+        let p = deck_mission_control_profile();
+        let tiles = pc_mission_loadout_tiles(&p);
+        assert_eq!(tiles.len(), 6);
+        assert_eq!(tiles[0].label, "GPU driver");
+        assert_eq!(tiles[0].value, "Update");
+        assert!(tiles[0].warn);
+        match prev {
+            Some(v) => std::env::set_var("GROKHUB_DECK_SHOT", v),
+            None => std::env::remove_var("GROKHUB_DECK_SHOT"),
+        }
+        match prev_nav {
+            Some(v) => std::env::set_var("GROKHUB_DECK_NAV", v),
+            None => std::env::remove_var("GROKHUB_DECK_NAV"),
+        }
     }
 
     #[test]
@@ -1657,9 +1942,11 @@ mod tests {
         crate::theme::set_paint_palette(crate::theme::PaintPalette::OpsDark);
         let prev_shot = std::env::var("GROKHUB_DECK_SHOT").ok();
         let prev_mood = std::env::var("GROKHUB_DECK_MOOD").ok();
+        let prev_nav = std::env::var("GROKHUB_DECK_NAV").ok();
         let prev_last = std::env::var("GROKHUB_DECK_LAST_CHAT").ok();
         std::env::set_var("GROKHUB_DECK_SHOT", "1");
         std::env::remove_var("GROKHUB_DECK_MOOD");
+        std::env::remove_var("GROKHUB_DECK_NAV");
         std::env::remove_var("GROKHUB_DECK_LAST_CHAT");
         let transcript = deck_transcript();
         let mut seeded = ChatThread::new("Hangout", false);
@@ -1745,6 +2032,45 @@ mod tests {
             Some(v) => std::env::set_var("GROKHUB_DECK_MOOD", v),
             None => std::env::remove_var("GROKHUB_DECK_MOOD"),
         }
+        match prev_nav {
+            Some(v) => std::env::set_var("GROKHUB_DECK_NAV", v),
+            None => std::env::remove_var("GROKHUB_DECK_NAV"),
+        }
+        match prev_last {
+            Some(v) => std::env::set_var("GROKHUB_DECK_LAST_CHAT", v),
+            None => std::env::remove_var("GROKHUB_DECK_LAST_CHAT"),
+        }
+    }
+
+    #[test]
+    fn deck_shot_nav_home_opens_mission_control() {
+        let _g = crate::config::hold_test_config();
+        let prev_shot = std::env::var("GROKHUB_DECK_SHOT").ok();
+        let prev_nav = std::env::var("GROKHUB_DECK_NAV").ok();
+        let prev_last = std::env::var("GROKHUB_DECK_LAST_CHAT").ok();
+        std::env::set_var("GROKHUB_DECK_SHOT", "1");
+        std::env::remove_var("GROKHUB_DECK_LAST_CHAT");
+        std::env::set_var("GROKHUB_DECK_NAV", "home");
+        let mut cabin = Cabin::quiet_for_test();
+        cabin.nav = Nav::Chat;
+        cabin.apply_deck_shot_seed();
+        assert_eq!(
+            cabin.nav,
+            Nav::Home,
+            "GROKHUB_DECK_NAV=home must leave Mission Control Home, not Hangout"
+        );
+        assert!(
+            !cabin.activity.open,
+            "Home Mission Control deck shots must not open the Activity popover"
+        );
+        match prev_shot {
+            Some(v) => std::env::set_var("GROKHUB_DECK_SHOT", v),
+            None => std::env::remove_var("GROKHUB_DECK_SHOT"),
+        }
+        match prev_nav {
+            Some(v) => std::env::set_var("GROKHUB_DECK_NAV", v),
+            None => std::env::remove_var("GROKHUB_DECK_NAV"),
+        }
         match prev_last {
             Some(v) => std::env::set_var("GROKHUB_DECK_LAST_CHAT", v),
             None => std::env::remove_var("GROKHUB_DECK_LAST_CHAT"),
@@ -1758,7 +2084,9 @@ mod tests {
         crate::theme::set_paint_palette(crate::theme::PaintPalette::OpsDark);
         let prev_shot = std::env::var("GROKHUB_DECK_SHOT").ok();
         let prev_last = std::env::var("GROKHUB_DECK_LAST_CHAT").ok();
+        let prev_nav = std::env::var("GROKHUB_DECK_NAV").ok();
         std::env::set_var("GROKHUB_DECK_SHOT", "1");
+        std::env::remove_var("GROKHUB_DECK_NAV");
         std::env::set_var("GROKHUB_DECK_LAST_CHAT", "home");
         let mut cabin = Cabin::quiet_for_test();
         cabin.apply_deck_shot_seed();
@@ -1780,6 +2108,10 @@ mod tests {
             Some(v) => std::env::set_var("GROKHUB_DECK_LAST_CHAT", v),
             None => std::env::remove_var("GROKHUB_DECK_LAST_CHAT"),
         }
+        match prev_nav {
+            Some(v) => std::env::set_var("GROKHUB_DECK_NAV", v),
+            None => std::env::remove_var("GROKHUB_DECK_NAV"),
+        }
     }
 
     #[test]
@@ -1788,12 +2120,20 @@ mod tests {
         let prev_shot = std::env::var("GROKHUB_DECK_SHOT").ok();
         let prev_nav = std::env::var("GROKHUB_DECK_NAV").ok();
         std::env::set_var("GROKHUB_DECK_SHOT", "1");
-        std::env::set_var("GROKHUB_DECK_NAV", " Pulse ");
         let mut cabin = Cabin::quiet_for_test();
-        cabin.apply_deck_shot_seed();
-        assert_eq!(cabin.nav, Nav::Pulse);
-        assert_eq!(cabin.nav_id(), "pulse");
-        assert!(!cabin.activity.open);
+        for (pinned, nav, id) in [
+            (" Pulse ", Nav::Pulse, "pulse"),
+            ("library", Nav::Library, "library"),
+            ("mission", Nav::Objectives, "objectives"),
+            ("workboard", Nav::Workboard, "workboard"),
+        ] {
+            std::env::set_var("GROKHUB_DECK_NAV", pinned);
+            cabin.activity.open = true;
+            cabin.apply_deck_shot_seed();
+            assert_eq!(cabin.nav, nav, "{pinned}");
+            assert_eq!(cabin.nav_id(), id, "{pinned}");
+            assert!(!cabin.activity.open, "{pinned} closes the Activity list");
+        }
         std::env::remove_var("GROKHUB_DECK_NAV");
         cabin.apply_deck_shot_seed();
         assert!(
@@ -1804,8 +2144,9 @@ mod tests {
             Some(v) => std::env::set_var("GROKHUB_DECK_SHOT", v),
             None => std::env::remove_var("GROKHUB_DECK_SHOT"),
         }
-        if let Some(v) = prev_nav {
-            std::env::set_var("GROKHUB_DECK_NAV", v);
+        match prev_nav {
+            Some(v) => std::env::set_var("GROKHUB_DECK_NAV", v),
+            None => std::env::remove_var("GROKHUB_DECK_NAV"),
         }
     }
 
