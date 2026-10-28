@@ -14,6 +14,7 @@ pub mod credential;
 pub mod interests;
 pub mod journal;
 pub mod local_ai;
+pub mod local_engine;
 pub mod memory;
 pub mod permissions;
 pub mod personality;
@@ -891,6 +892,37 @@ async fn run_local_speed_test(state: State<'_, ShellState>) -> Result<String, St
 }
 
 #[tauri::command]
+fn start_local_engine_download(
+    app: AppHandle,
+    state: State<'_, ShellState>,
+) -> Result<local_engine::EngineInfo, String> {
+    capabilities::needs(capabilities::current().local_ai, "Local AI")?;
+    local_engine::start_engine(app, state.config_dir.clone())
+}
+
+#[tauri::command]
+fn cancel_local_engine_download() -> Result<(), String> {
+    capabilities::needs(capabilities::current().local_ai, "Local AI")?;
+    local_engine::cancel_engine()
+}
+
+#[tauri::command]
+fn start_local_drafter_download(
+    app: AppHandle,
+    state: State<'_, ShellState>,
+    target_id: String,
+) -> Result<Option<local_engine::DraftOffer>, String> {
+    capabilities::needs(capabilities::current().local_ai, "Local AI")?;
+    local_engine::start_drafter(app, state.config_dir.clone(), target_id)
+}
+
+#[tauri::command]
+fn cancel_local_drafter_download() -> Result<(), String> {
+    capabilities::needs(capabilities::current().local_ai, "Local AI")?;
+    local_engine::cancel_drafter()
+}
+
+#[tauri::command]
 fn get_web_access(web: State<'_, Arc<remote::WebAccess>>) -> remote::WebAccessView {
     web.view()
 }
@@ -1331,6 +1363,10 @@ pub fn run() {
             pulse_image,
             get_local_ai,
             save_local_ai,
+            start_local_engine_download,
+            cancel_local_engine_download,
+            start_local_drafter_download,
+            cancel_local_drafter_download,
             reset_local_ai,
             check_model_file,
             run_local_speed_test,
