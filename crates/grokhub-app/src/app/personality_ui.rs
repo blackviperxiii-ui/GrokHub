@@ -444,22 +444,19 @@ impl Cabin {
         let mut hover_id: Option<String> = None;
         let avail = ui.available_width().max(1.0);
         ui.set_max_width(avail);
-        let side_by_side = avail >= TWO_COL_MIN_W;
-        let detail_w = if side_by_side {
-            DETAIL_W.min(avail * 0.38).clamp(200.0, DETAIL_W)
-        } else {
-            avail
-        };
-        let grid_w = if side_by_side {
-            (avail - detail_w - GRID_GAP).max(CARD_MIN_W)
-        } else {
-            avail
-        };
+        // Finite row height from the visible body clip — never rely on
+        // ScrollArea's unbounded available_height for the two-column row.
+        let clip = ui.clip_rect();
+        let arect = ui.available_rect_before_wrap();
+        let row_h = arect.intersect(clip).height().max(200.0);
+        let cols_widths = two_col_widths(avail);
+        let (grid_w, detail_w) = cols_widths.unwrap_or((avail, avail));
         let cols = grid_cols(grid_w);
         let card_w = ((grid_w - GRID_GAP * (cols.saturating_sub(1) as f32)) / cols as f32)
             .clamp(96.0, grid_w);
         let paint_grid =
             |ui: &mut egui::Ui, act_on: &mut Option<CardAct>, hover_id: &mut Option<String>| {
+                ui.set_width(grid_w);
                 ui.set_max_width(grid_w);
                 for row in presets.chunks(cols) {
                     ui.horizontal_top(|ui| {
@@ -493,48 +490,49 @@ impl Cabin {
                     *act_on = Some(act);
                 }
             };
-        if side_by_side {
-            let row_h = ui.available_height().max(200.0);
-            ui.horizontal_top(|ui| {
-                ui.spacing_mut().item_spacing.x = GRID_GAP;
-                ui.set_max_width(avail);
-                ui.allocate_ui_with_layout(
-                    egui::vec2(grid_w, row_h),
-                    egui::Layout::top_down(egui::Align::Min),
-                    |ui| {
+        if let Some((grid_w, detail_w)) = cols_widths {
+            // Reserve the Selected panel on the right first via absolute rects so
+            // an expanding grid cannot push TALK AS past the clip rect.
+            let row = egui::Rect::from_min_size(arect.min, egui::vec2(avail, row_h));
+            let detail_rect = egui::Rect::from_min_size(
+                egui::pos2(row.max.x - detail_w, row.min.y),
+                egui::vec2(detail_w, row_h),
+            );
+            let grid_rect = egui::Rect::from_min_size(
+                row.min,
+                egui::vec2((detail_rect.min.x - GRID_GAP - row.min.x).max(0.0), row_h),
+            );
+            ui.scope_builder(egui::UiBuilder::new().max_rect(grid_rect), |ui| {
+                ui.set_clip_rect(grid_rect.intersect(clip));
+                ui.set_max_size(grid_rect.size());
+                egui::ScrollArea::vertical()
+                    .id_salt("personality-grid")
+                    .auto_shrink([false, false])
+                    .max_height(row_h)
+                    .show(ui, |ui| {
+                        ui.set_width(grid_w);
                         ui.set_max_width(grid_w);
-                        egui::ScrollArea::vertical()
-                            .id_salt("personality-grid")
-                            .auto_shrink([false, false])
-                            .max_height(row_h)
-                            .show(ui, |ui| {
-                                ui.set_width(grid_w);
-                                ui.set_max_width(grid_w);
-                                paint_grid(ui, &mut act_on, &mut hover_id);
-                            });
-                    },
-                );
-                ui.allocate_ui_with_layout(
-                    egui::vec2(detail_w, row_h),
-                    egui::Layout::top_down(egui::Align::Min),
-                    |ui| {
-                        ui.set_max_width(detail_w);
-                        egui::ScrollArea::vertical()
-                            .id_salt("personality-detail")
-                            .auto_shrink([false, false])
-                            .max_height(row_h)
-                            .show(ui, |ui| {
-                                ui.set_width(detail_w);
-                                ui.set_max_width(detail_w);
-                                paint_detail(ui, &mut act_on, &mut self.picker);
-                            });
-                    },
-                );
+                        paint_grid(ui, &mut act_on, &mut hover_id);
+                    });
             });
+            ui.scope_builder(egui::UiBuilder::new().max_rect(detail_rect), |ui| {
+                ui.set_clip_rect(detail_rect.intersect(clip));
+                ui.set_max_size(detail_rect.size());
+                egui::ScrollArea::vertical()
+                    .id_salt("personality-detail")
+                    .auto_shrink([false, false])
+                    .max_height(row_h)
+                    .show(ui, |ui| {
+                        ui.set_width(detail_w);
+                        ui.set_max_width(detail_w);
+                        paint_detail(ui, &mut act_on, &mut self.picker);
+                    });
+            });
+            ui.advance_cursor_after_rect(row);
         } else {
             paint_detail(ui, &mut act_on, &mut self.picker);
             ui.add_space(12.0);
-            let grid_h = ui.available_height().max(160.0);
+            let grid_h = row_h.max(160.0);
             egui::ScrollArea::vertical()
                 .id_salt("personality-grid-stack")
                 .auto_shrink([false, false])
@@ -758,6 +756,21 @@ fn grid_cols(width: f32) -> usize {
     n.clamp(1, 4)
 }
 
+/// Two-column widths for the picker row. `None` means stack (detail above grid).
+/// Always keeps `grid_w + GRID_GAP + detail_w <= avail` so the Selected panel
+/// cannot be pushed past the Settings clip rect.
+fn two_col_widths(avail: f32) -> Option<(f32, f32)> {
+    if avail < TWO_COL_MIN_W {
+        return None;
+    }
+    let detail_w = DETAIL_W.min(avail * 0.38).clamp(200.0, DETAIL_W);
+    let grid_w = (avail - detail_w - GRID_GAP).max(0.0);
+    if grid_w < CARD_MIN_W {
+        return None;
+    }
+    Some((grid_w, detail_w))
+}
+
 /// The detail panel's preset: a still-visible focus, else the current default.
 fn focus_id(focus: &Option<String>, current: &str, presets: &[Personality]) -> String {
     if let Some(id) = focus.as_deref() {
@@ -911,38 +924,49 @@ fn paint_grid_card(
         )
     };
     let inner_w = (width - 24.0).max(64.0);
-    let resp = egui::Frame::NONE
-        .fill(fill)
-        .corner_radius(if loadout {
-            crate::ui_kit::recipe::CARD_RADIUS
-        } else {
-            12.0
-        })
-        .stroke(stroke)
-        .inner_margin(egui::Margin::symmetric(12, 10))
-        .show(ui, |ui| {
-            ui.set_width(inner_w);
-            ui.set_max_width(inner_w);
-            ui.set_min_height(88.0);
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = 8.0;
-                paint_letter_tile(ui, initial_letter(&p.name), 28.0, selected);
-                ui.vertical(|ui| {
-                    ui.label(
-                        RichText::new(&p.name)
-                            .size(crate::theme::FONT_BODY)
-                            .strong()
-                            .color(crate::theme::fg()),
+    // Pin the card to `width` before the Frame measures content — otherwise a
+    // long unwrapped description expands the row and pushes the detail panel off-screen.
+    let resp = ui
+        .scope(|ui| {
+            ui.set_width(width);
+            ui.set_max_width(width);
+            egui::Frame::NONE
+                .fill(fill)
+                .corner_radius(if loadout {
+                    crate::ui_kit::recipe::CARD_RADIUS
+                } else {
+                    12.0
+                })
+                .stroke(stroke)
+                .inner_margin(egui::Margin::symmetric(12, 10))
+                .show(ui, |ui| {
+                    ui.set_width(inner_w);
+                    ui.set_max_width(inner_w);
+                    ui.set_min_height(88.0);
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 8.0;
+                        paint_letter_tile(ui, initial_letter(&p.name), 28.0, selected);
+                        ui.vertical(|ui| {
+                            ui.set_max_width((inner_w - 36.0).max(40.0));
+                            ui.label(
+                                RichText::new(&p.name)
+                                    .size(crate::theme::FONT_BODY)
+                                    .strong()
+                                    .color(crate::theme::fg()),
+                            );
+                            paint_preset_tags(ui, p, false);
+                        });
+                    });
+                    ui.add_space(8.0);
+                    ui.add(
+                        egui::Label::new(
+                            RichText::new(&p.description)
+                                .size(crate::theme::FONT_META)
+                                .color(crate::theme::muted()),
+                        )
+                        .wrap(),
                     );
-                    paint_preset_tags(ui, p, false);
                 });
-            });
-            ui.add_space(8.0);
-            ui.label(
-                RichText::new(&p.description)
-                    .size(crate::theme::FONT_META)
-                    .color(crate::theme::muted()),
-            );
         })
         .response
         .interact(egui::Sense::click());
@@ -1622,6 +1646,25 @@ mod tests {
     }
 
     #[test]
+    fn two_col_widths_reserve_detail_inside_avail() {
+        assert!(two_col_widths(639.0).is_none(), "below TWO_COL_MIN_W stacks");
+        for avail in [640.0_f32, 782.0, 1100.0, 1282.0, 1602.0] {
+            let (grid_w, detail_w) = two_col_widths(avail).expect("side-by-side");
+            assert!(
+                grid_w + GRID_GAP + detail_w <= avail + 0.01,
+                "detail must stay inside avail={avail}: grid={grid_w} detail={detail_w}"
+            );
+            assert!((200.0..=DETAIL_W).contains(&detail_w));
+            assert!(grid_w >= CARD_MIN_W);
+            assert_eq!(
+                grid_w,
+                avail - detail_w - GRID_GAP,
+                "grid takes only what remains after detail"
+            );
+        }
+    }
+
+    #[test]
     fn focus_falls_back_when_the_id_is_hidden_or_missing() {
         let presets = personality::builtins();
         let visible = personality::visible(&presets, false);
@@ -1654,6 +1697,8 @@ mod tests {
             "paint_photo_showcase",
             "DETAIL_W",
             "PHOTO_SLOTS",
+            "two_col_widths",
+            "advance_cursor_after_rect",
         ] {
             assert!(src.contains(want), "missing {want}");
         }
@@ -1665,6 +1710,75 @@ mod tests {
             src.contains("CardAct::Duplicate") && src.contains("CardAct::Edit"),
             "Duplicate and Edit stay reachable"
         );
+        assert!(
+            src.contains("max_rect(detail_rect)") && src.contains("max_rect(grid_rect)"),
+            "side-by-side must reserve absolute column rects"
+        );
+    }
+
+    /// Deck sizes must keep the Selected panel (and amber TALK AS) on-screen.
+    /// Catches the bug where the grid expands past grid_w and pushes detail
+    /// past the Settings clip rect inside the body ScrollArea.
+    #[test]
+    fn personality_detail_panel_stays_on_screen_at_deck_sizes() {
+        let _paint = crate::theme::hold_paint_test();
+        crate::theme::set_paint_palette(crate::theme::PaintPalette::OpsDark);
+        let (_lock, _root, mut cabin) = cabin_with_chat();
+        cabin.cfg.explicit_personalities = true;
+        cabin.cfg.personality = "viper".into();
+        cabin.nav = Nav::Settings;
+        cabin.settings_sec = SettingsSec::Personality;
+        for (w, h) in [(1100.0_f32, 720.0_f32), (1600.0, 900.0), (1920.0, 1080.0)] {
+            let ctx = egui::Context::default();
+            crate::theme::install_fonts_on(&ctx);
+            let raw = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(w, h),
+                )),
+                ..Default::default()
+            };
+            let mut texts: Vec<(String, egui::Pos2, egui::Rect)> = Vec::new();
+            for _ in 0..2 {
+                texts.clear();
+                let shapes = crate::theme::test_pass(&ctx, raw.clone(), |ui| {
+                    cabin.ui_settings(ui.ctx());
+                })
+                .shapes;
+                for clipped in &shapes {
+                    if let egui::Shape::Text(t) = &clipped.shape {
+                        texts.push((
+                            t.galley.job.text.clone(),
+                            t.pos,
+                            clipped.clip_rect,
+                        ));
+                    }
+                }
+            }
+            let selected = texts.iter().find(|(t, _, _)| t == "SELECTED");
+            let talk = texts
+                .iter()
+                .find(|(t, _, _)| t.starts_with("TALK AS "));
+            let (sel_text, sel_pos, sel_clip) = selected.unwrap_or_else(|| {
+                panic!("SELECTED missing at {w}x{h}; texts={texts:?}")
+            });
+            assert_eq!(sel_text, "SELECTED");
+            assert!(
+                sel_clip.contains(*sel_pos) && sel_pos.x < w && sel_pos.x > w * 0.45,
+                "SELECTED should sit in the right half on-screen at {w}x{h}: pos={sel_pos:?} clip={sel_clip:?}"
+            );
+            let (talk_text, talk_pos, talk_clip) = talk.unwrap_or_else(|| {
+                panic!("TALK AS missing at {w}x{h}")
+            });
+            assert!(
+                talk_text.starts_with("TALK AS "),
+                "unexpected talk label {talk_text}"
+            );
+            assert!(
+                talk_clip.contains(*talk_pos) && talk_pos.x < w && talk_pos.x > w * 0.45,
+                "TALK AS should sit in the right half on-screen at {w}x{h}: pos={talk_pos:?} clip={talk_clip:?}"
+            );
+        }
     }
 
     #[test]
