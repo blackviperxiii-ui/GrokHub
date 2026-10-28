@@ -428,6 +428,13 @@ pub struct AppConfig {
     pub resume_code: bool,
     #[serde(default)]
     pub code_folders: Vec<String>,
+    /// Settings → Behavior: offer next steps for new 3D models in Downloads.
+    /// Off by default.
+    #[serde(default)]
+    pub model_drop: bool,
+    /// Where "Move to models" puts a model; empty means `~/Models`.
+    #[serde(default)]
+    pub models_folder: String,
     /// Settings → Behavior: dockable main panels (egui_dock). Off by default; layout in dock.json.
     #[serde(default)]
     pub dock_panels: bool,
@@ -514,6 +521,12 @@ pub struct AppConfig {
     /// Settings → Pulse → Proactive nudges (Command Centre card 42).
     #[serde(default)]
     pub nudge_watchers: grokhub_core::NudgeWatcherSettings,
+    /// Settings → Pulse: LAN 3D printer finish/fail alerts (opt-in).
+    #[serde(
+        default,
+        skip_serializing_if = "grokhub_core::PrintAlertsSettings::is_default"
+    )]
+    pub print_alerts: grokhub_core::PrintAlertsSettings,
     /// Settings → Pulse → Learning paths (Know me hobbies, opt-in per hobby).
     #[serde(default)]
     pub hobby_paths: grokhub_core::HobbyPathSettings,
@@ -750,6 +763,8 @@ impl Default for AppConfig {
             focus_help: false,
             resume_code: false,
             code_folders: Vec::new(),
+            model_drop: false,
+            models_folder: String::new(),
             dock_panels: false,
             chat_objectives: false,
             desktop_control: false,
@@ -774,6 +789,7 @@ impl Default for AppConfig {
             pulse_sources: Default::default(),
             daily_drop: DailyDropSettings::default(),
             nudge_watchers: grokhub_core::NudgeWatcherSettings::default(),
+            print_alerts: grokhub_core::PrintAlertsSettings::default(),
             hobby_paths: grokhub_core::HobbyPathSettings::default(),
             memory_backend: grokhub_core::amr::MemoryBackend::Legacy,
             memory_migrated: false,
@@ -1162,6 +1178,25 @@ pub fn test_config_root(label: &str) -> std::path::PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn print_alerts_defaults_off_and_parses_enabled() {
+        let json = serde_json::to_string(&AppConfig::default()).unwrap();
+        assert!(
+            !json.contains("printAlerts") && !json.contains("print_alerts"),
+            "default config must omit print_alerts: {json}"
+        );
+        let missing: AppConfig = serde_json::from_str("{}").unwrap();
+        assert!(!missing.print_alerts.enabled && !missing.print_alerts.camera);
+        let on: AppConfig =
+            serde_json::from_str(r#"{"printAlerts":{"enabled":true,"camera":true}}"#).unwrap();
+        assert!(on.print_alerts.enabled && on.print_alerts.camera);
+        let saved = serde_json::to_string(&on).unwrap();
+        assert!(
+            saved.contains("\"printAlerts\"") && saved.contains("\"enabled\":true"),
+            "enabled opt-in must keep camelCase: {saved}"
+        );
+    }
 
     #[test]
     fn dream_model_defaults_off_and_omits_the_key() {

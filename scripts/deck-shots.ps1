@@ -192,6 +192,21 @@ function Seed-Radar([string]$cfg) {
     Write-Utf8 (Join-Path $cfg 'release-radar.json') ($radar | ConvertTo-Json -Depth 4)
 }
 
+# 3D model drop: a 60 x 20 x 40 mm box as ASCII STL, saved into Downloads
+# after launch, since the first scan only marks what is already there.
+function Write-ModelDrop([string]$root) {
+    $v = @(@(0,0,0), @(60,0,0), @(60,20,0), @(0,20,0), @(0,0,40), @(60,0,40), @(60,20,40), @(0,20,40))
+    $faces = @(@(0,2,1), @(0,3,2), @(4,5,6), @(4,6,7), @(0,1,5), @(0,5,4), @(2,3,7), @(2,7,6), @(1,2,6), @(1,6,5), @(0,4,7), @(0,7,3))
+    $lines = @('solid bracket')
+    foreach ($f in $faces) {
+        $lines += '  facet normal 0 0 0', '    outer loop'
+        foreach ($i in $f) { $lines += "      vertex $($v[$i][0]) $($v[$i][1]) $($v[$i][2])" }
+        $lines += '    endloop', '  endfacet'
+    }
+    $lines += 'endsolid bracket'
+    Write-Utf8 (Join-Path $root 'Downloads\bracket.stl') ($lines -join "`n")
+}
+
 # One launch at $w x $h. $theme is what app.json holds before launch; with
 # $upgrade the file has no themeMigrated, as a pre-3.4 install leaves it.
 # With $keys, those keystrokes go to the window once it has drawn (for
@@ -211,7 +226,7 @@ function Seed-Radar([string]$cfg) {
 # $nav opens that rail page at launch (GROKHUB_DECK_NAV, any rail id such as
 # home, pulse or library) instead of a rail click; the cabin closes the
 # seeded Activity list over every pinned page.
-function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlide, [switch]$upgrade, [string]$keys = '', [switch]$dock, [int]$wheel = 0, [switch]$pulse, [int[]]$clickAt = @(), [string]$mood = '', [switch]$library, [switch]$chatFirst, [string]$personality = '', [switch]$pinPersonality, [string]$openSettings = '', [int]$tabs = 0, [switch]$overflow, [string]$lastChat = '', [string]$libraryPick = '', [switch]$radar, [string]$nav = '') {
+function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlide, [switch]$upgrade, [string]$keys = '', [switch]$dock, [int]$wheel = 0, [switch]$pulse, [int[]]$clickAt = @(), [string]$mood = '', [switch]$library, [switch]$chatFirst, [string]$personality = '', [switch]$pinPersonality, [string]$openSettings = '', [int]$tabs = 0, [switch]$overflow, [string]$lastChat = '', [string]$libraryPick = '', [switch]$radar, [switch]$modelDrop, [string]$nav = '') {
     $root = Join-Path $env:RUNNER_TEMP "deck-$name"
     Remove-Item -Recurse -Force $root -ErrorAction SilentlyContinue
     $cfg = Join-Path $root 'cfg'
@@ -234,6 +249,10 @@ function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlid
         Seed-Radar $cfg
         # The launch source check (and so the reminder) skips quiet hours.
         $app.quietStart = '00:00'; $app.quietEnd = '00:00'
+    }
+    if ($modelDrop) {
+        $app.modelDrop = $true
+        New-Item -ItemType Directory -Force -Path (Join-Path $root 'Downloads') | Out-Null
     }
     if (-not $app.personality) { $app.personality = 'viper' }
     # Viper is adults-only; without this the titlebar falls back to Nyx.
@@ -259,7 +278,8 @@ function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlid
     # $openSettings / $pinPersonality open Settings on that section at launch, with no click.
     $env:GROKHUB_DECK_OPEN_SETTINGS = $(if ($openSettings -or $pinPersonality) { '1' } else { '' })
     # The Activity popover would cover the Library tiles and the Settings page.
-    # A pinned $nav page keeps it off too (the cabin closes it on every GROKHUB_DECK_NAV).
+    # Home is never seeded. Other pinned $nav pages keep the seeded list (its
+    # titlebar count) and the cabin closes the popover over them.
     $env:GROKHUB_DECK_ACTIVITY = $(if ($library -or $openSettings -or $pinPersonality -or $nav -eq 'home') { '0' } else { '' })
     $p = Start-Process -FilePath $exe -WorkingDirectory $root -PassThru `
         -RedirectStandardError (Join-Path $root 'err.txt') -RedirectStandardOutput (Join-Path $root 'out.txt')
@@ -276,6 +296,11 @@ function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlid
     }
     [void][DeckWin]::SetForegroundWindow($hwnd)
     Start-Sleep -Seconds $(if ($dock -or $library) { 40 } else { 12 })
+    if ($modelDrop) {
+        # Downloads is listed every 20 s; the next scan finds the new file.
+        Write-ModelDrop $root
+        Start-Sleep -Seconds 28
+    }
     if ($keys) {
         Add-Type -AssemblyName System.Windows.Forms
         [void][DeckWin]::SetForegroundWindow($hwnd)
@@ -404,6 +429,12 @@ Shot 1600 900 'radar-1600x900' 'ops-dark' '14' -library -radar -nav 'pulse'
 Shot 1100 720 'radar-1100x720' 'ops-dark' '14' -library -radar -nav 'pulse'
 # At 1100x720 the feed sits under Up next; scroll down to the post.
 Shot 1100 720 'radar-1100x720-scrolled' 'ops-dark' '14' -library -radar -nav 'pulse' -wheel 12
+
+# 3D model drop: the new-model post with its preview on top of Pulse.
+Shot 1600 900 'model-drop-1600x900' 'ops-dark' '14' -pulse -modelDrop -nav 'pulse'
+Shot 1100 720 'model-drop-1100x720' 'ops-dark' '14' -pulse -modelDrop -nav 'pulse'
+# At 1100x720 the feed sits under Up next; scroll down to the post.
+Shot 1100 720 'model-drop-1100x720-scrolled' 'ops-dark' '14' -pulse -modelDrop -nav 'pulse' -wheel 12
 # Library is the fifth icon on the 40 px rail, below the chat tab strip.
 Shot 1600 900 'library-1600x900' 'ops-dark' '11' -library -clickAt 20, 258
 Shot 1100 720 'library-1100x720' 'ops-dark' '11' -library -clickAt 20, 258

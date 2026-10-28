@@ -1,8 +1,12 @@
 name: CI
 
 on:
+  # Push to beta runs only the light gate (changes, fmt, guards, linux,
+  # windows; pii-guard lives in pii-guard.yml). Heavy jobs run on push to main,
+  # v* tags, the nightly schedule (which checks out beta) and manual runs.
   push:
     branches: [main, beta]
+    tags: ["v*"]
   pull_request:
     branches: [main, beta]
     # labeled/unlabeled so the Cargo.lock → dependencies escape hatch retriggers
@@ -10,19 +14,21 @@ on:
     types: [opened, synchronize, reopened, ready_for_review, labeled, unlabeled]
   workflow_dispatch:
   merge_group:
-  # Nightly full run: everything PRs skip (cross-check, macOS shell,
-  # phone-ios, windows-release, deny) still runs once a day.
+  # Nightly full run on beta (~3 AM America/Chicago): everything PRs and beta
+  # pushes skip (cross-check, shell, phones, windows-release, deny). Schedules
+  # fire from the default branch (main), so every checkout below uses
+  # SOURCE_REF to build beta instead.
   schedule:
-    - cron: "17 8 * * *"
+    - cron: "0 8 * * *"
 
 permissions:
   contents: read
 
-# A newer push to the same PR cancels the run it replaces. Pushes to beta and
-# main always finish.
+# A newer push to the same PR, or a newer push to beta (light gate only),
+# cancels the run it replaces. Main, tags, nightly and manual runs finish.
 concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: ci-${{ github.event_name == 'schedule' && 'nightly-beta' || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/beta') }}
 
 # CI profile: no incremental artifacts, line tables instead of full debug
 # info (less to link and write, most of all on Windows). The release build
@@ -31,12 +37,14 @@ env:
   CARGO_INCREMENTAL: 0
   CARGO_PROFILE_DEV_DEBUG: line-tables-only
   CARGO_TERM_COLOR: always
+  # Nightly builds beta; every other event checks out its own ref.
+  SOURCE_REF: ${{ github.event_name == 'schedule' && 'beta' || '' }}
 
 # PRs run the fast gate: fmt, guards, changes, linux (clippy + tests in one
 # build) and windows (same), plus path-filtered shell and phone-android. The
 # slow jobs (cross-check, macOS shell, phone-ios, windows-release, and deny
-# unless Cargo.lock or deny.toml changed) run on push to beta/main, nightly
-# and on manual runs. Every gate is a job-level `if:`, never a workflow-level
+# unless Cargo.lock or deny.toml changed) run on push to main, v* tags,
+# nightly (on beta) and on manual runs. Push to beta runs only the gate. Every gate is a job-level `if:`, never a workflow-level
 # path filter, so a skipped job still reports and required checks never hang.
 # Each job restores its own build cache; caches save only from pushes to beta
 # and main, so PRs start warm from their base branch.
@@ -56,14 +64,17 @@ jobs:
     # so it counts as code=true; schedule and workflow_dispatch run everything.
     outputs:
       code: ${{ github.event_name != 'pull_request' || steps.filter.outputs.code == 'true' }}
-      deny: ${{ github.event_name != 'pull_request' || steps.paths.outputs.deny == 'true' }}
-      cross: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') || (github.event_name == 'push' && steps.paths.outputs.cross == 'true') }}
-      phone_android: ${{ (github.event_name != 'pull_request' && github.event_name != 'push') || steps.paths.outputs.phone == 'true' }}
-      phone_ios: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') || (github.event_name == 'push' && steps.paths.outputs.phone == 'true') }}
-      release: ${{ github.event_name != 'pull_request' && github.event_name != 'merge_group' }}
+      # Heavy outputs are false on push to beta; nightly covers beta instead.
+      deny: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/')) || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && steps.paths.outputs.deny == 'true') }}
+      cross: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/')) || ((github.event_name == 'push' && github.ref == 'refs/heads/main') && steps.paths.outputs.cross == 'true') }}
+      phone_android: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/')) || github.event_name == 'merge_group' || ((github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main')) && steps.paths.outputs.phone == 'true') }}
+      phone_ios: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/')) || ((github.event_name == 'push' && github.ref == 'refs/heads/main') && steps.paths.outputs.phone == 'true') }}
+      release: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/')) || (github.event_name == 'push' && github.ref == 'refs/heads/main') }}
       shell_os: ${{ steps.shell.outputs.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.SOURCE_REF }}
       - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
         id: filter
         if: github.event_name == 'pull_request'
@@ -78,7 +89,7 @@ jobs:
               - '!research/**'
       - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
         id: paths
-        if: github.event_name == 'pull_request' || github.event_name == 'push'
+        if: github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
         with:
           filters: |
             deny:
@@ -106,15 +117,19 @@ jobs:
               - 'crates/grokhub-proto/**'
               - '.github/workflows/ci.yml'
       # Shell matrix: PRs run ubuntu + windows only when shell/UI paths change;
-      # merge_group runs ubuntu + windows; push, nightly and manual add macOS.
+      # merge_group runs ubuntu + windows; push to beta runs none (nightly covers
+      # it); push to main, tags, nightly and manual add macOS.
       - name: Shell matrix
         id: shell
         env:
           EVENT: ${{ github.event_name }}
+          REF: ${{ github.ref }}
           SHELL_PATHS: ${{ steps.paths.outputs.shell }}
         run: |
           if [ "$EVENT" = pull_request ]; then
             if [ "$SHELL_PATHS" = true ]; then os='["ubuntu-latest","windows-latest"]'; else os='[]'; fi
+          elif [ "$EVENT" = push ] && [ "$REF" = refs/heads/beta ]; then
+            os='[]'
           elif [ "$EVENT" = merge_group ]; then
             os='["ubuntu-latest","windows-latest"]'
           else
@@ -147,6 +162,8 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.SOURCE_REF }}
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           toolchain: stable
@@ -167,6 +184,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ env.SOURCE_REF }}
           fetch-depth: 0
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
@@ -175,7 +193,7 @@ jobs:
         with:
           shared-key: guards-xtask
           cache-on-failure: true
-          save-if: ${{ github.event_name == 'push' }}
+          save-if: ${{ github.event_name == 'push' || github.event_name == 'schedule' }}
           workspaces: ". -> target"
       - name: Guard fail-closed tests
         run: bash scripts/test-ci-guards.sh
@@ -194,6 +212,8 @@ jobs:
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.SOURCE_REF }}
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           toolchain: stable
@@ -203,7 +223,7 @@ jobs:
         with:
           shared-key: linux-test
           cache-on-failure: true
-          save-if: ${{ github.event_name == 'push' }}
+          save-if: ${{ github.event_name == 'push' || github.event_name == 'schedule' }}
       - name: Native GUI build deps
         run: |
           sudo apt-get update
@@ -233,6 +253,8 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.SOURCE_REF }}
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           toolchain: stable
@@ -273,6 +295,8 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.SOURCE_REF }}
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           toolchain: stable
@@ -282,7 +306,7 @@ jobs:
         with:
           shared-key: cross-${{ matrix.target }}
           cache-on-failure: true
-          save-if: ${{ github.event_name == 'push' }}
+          save-if: ${{ github.event_name == 'push' || github.event_name == 'schedule' }}
       - name: Android NDK compiler
         if: matrix.target == 'aarch64-linux-android'
         shell: bash
@@ -310,6 +334,8 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.SOURCE_REF }}
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
@@ -324,7 +350,7 @@ jobs:
           workspaces: src-tauri
           shared-key: shell-${{ matrix.os }}
           cache-on-failure: true
-          save-if: ${{ github.event_name == 'push' }}
+          save-if: ${{ github.event_name == 'push' || github.event_name == 'schedule' }}
       - name: Linux webview libraries
         if: runner.os == 'Linux'
         run: |
@@ -402,6 +428,8 @@ jobs:
       VITE_PHONE_SMOKE: "1"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.SOURCE_REF }}
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
@@ -420,7 +448,7 @@ jobs:
           workspaces: src-tauri
           shared-key: phone-android
           cache-on-failure: true
-          save-if: ${{ github.event_name == 'push' }}
+          save-if: ${{ github.event_name == 'push' || github.event_name == 'schedule' }}
       - run: npm ci --prefix ui
       # The Gradle and Xcode projects call the CLI back while they build. The
       # npm CLI records a path relative to where it ran, which they can't
@@ -460,6 +488,8 @@ jobs:
       VITE_PHONE_SMOKE: "1"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.SOURCE_REF }}
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
@@ -474,7 +504,7 @@ jobs:
           workspaces: src-tauri
           shared-key: phone-ios
           cache-on-failure: true
-          save-if: ${{ github.event_name == 'push' }}
+          save-if: ${{ github.event_name == 'push' || github.event_name == 'schedule' }}
       - run: npm ci --prefix ui
       # Built here rather than fetched: the prebuilt macOS binary is x86_64,
       # and under Rosetta it can't brew-install what `ios init` needs.
@@ -505,6 +535,8 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.SOURCE_REF }}
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           toolchain: stable
@@ -513,7 +545,7 @@ jobs:
         with:
           shared-key: windows-test
           cache-on-failure: true
-          save-if: ${{ github.event_name == 'push' }}
+          save-if: ${{ github.event_name == 'push' || github.event_name == 'schedule' }}
       # Carcass: deny dead_code workspace-wide. Retired direct-xAI helpers
       # must be deleted, not allowed.
       - run: cargo clippy --workspace --all-targets -- -D warnings
@@ -530,6 +562,8 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.SOURCE_REF }}
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           toolchain: stable
@@ -537,7 +571,7 @@ jobs:
         with:
           shared-key: windows-release
           cache-on-failure: true
-          save-if: ${{ github.event_name == 'push' }}
+          save-if: ${{ github.event_name == 'push' || github.event_name == 'schedule' }}
       - run: cargo build --release --locked -p grokhub-app -p grokhub-hub
       - name: Cabin binaries exist
         shell: pwsh
