@@ -437,8 +437,16 @@ fn hangout_mode_btn(ui: &mut egui::Ui, label: &str, on: bool) -> bool {
 
 /// Where a result bubble's text starts, from the row's left edge: mark, gap,
 /// then the bubble's own padding. The `/privacy` Revoke rows (SB-11) and the
-/// `/skills changes` Undo rows (SU-06) line up here.
-pub(super) const RESULT_TEXT_INSET: f32 = REPLY_MARK_W + REPLY_MARK_GAP + BUBBLE_PAD_X;
+/// `/skills changes` Undo rows (SU-06) line up here. Loadout's outlined
+/// assistant bubble pushes its text in by the outline too.
+pub(super) fn result_text_inset() -> f32 {
+    let outline = if crate::theme::is_loadout_paint() {
+        crate::ui_kit::recipe::STROKE_W
+    } else {
+        0.0
+    };
+    REPLY_MARK_W + REPLY_MARK_GAP + BUBBLE_PAD_X + outline
+}
 /// Label size of the action rows under a result bubble.
 pub(super) const RESULT_ROW_LABEL_SIZE: f32 = 13.0;
 

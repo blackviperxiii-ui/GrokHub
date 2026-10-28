@@ -49,7 +49,7 @@ pub(super) fn settings_sec_title(sec: SettingsSec) -> &'static str {
 /// (`scripts/deck-shots.ps1`), so Ctrl+, lands on Personality without a fragile click.
 pub(super) fn pinned_settings_sec() -> Option<SettingsSec> {
     static PIN: std::sync::OnceLock<Option<SettingsSec>> = std::sync::OnceLock::new();
-    *PIN.get_or_init(|| {
+    super::loadout_home::launch_pin(&PIN, || {
         match std::env::var("GROKHUB_DECK_SETTINGS_SEC")
             .ok()
             .as_deref()

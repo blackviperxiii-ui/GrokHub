@@ -39,6 +39,12 @@ Side-by-side captures of the running Windows cabin (`grokhub.exe`) next to the l
 | `lastchat-home-win-1100x720-slide02.png` | 1100×720 | 02 |
 | `lastchat-chat-win-1600x900-slide02.png` | 1600×900 | 02 Chat rail restores Hangout |
 | `lastchat-chat-win-1100x720-slide02.png` | 1100×720 | 02 |
+| `pair-home-mc-1600x900-slide09.png` | 1600×900 | 09 Mission Control Home (Wide) |
+| `pair-home-mc-1100x720-slide09.png` | 1100×720 | 09 Mission Control Home (Medium) |
+| `pair-home-mc-900x700-slide09.png` | 900×700 | 09 Mission Control Home (Narrow) |
+| `app-home-mc-1600x900.png` | 1600×900 | 09 cabin solo |
+| `app-home-mc-1100x720.png` | 1100×720 | 09 cabin solo |
+| `app-home-mc-900x700.png` | 900×700 | 09 cabin solo |
 | `nyx-working-win-1600x900-picture.png` | 1600×900 | Nyx working mode beside `nyx-modes/working-coding.png` |
 | `nyx-working-win-1100x720-picture.png` | 1100×720 | Nyx working |
 | `nyx-gaming-win-1600x900-picture.png` | 1600×900 | Nyx gaming mode beside `nyx-modes/gaming.png` |

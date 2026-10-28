@@ -39,7 +39,7 @@ pub(super) fn newest_findings_row(
 pub(super) fn paint_findings_fixes(ui: &mut egui::Ui, card: &Findings) -> Option<FindingsAct> {
     let mut hit = None;
     ui.horizontal_wrapped(|ui| {
-        ui.add_space(super::chat_ui::RESULT_TEXT_INSET);
+        ui.add_space(super::chat_ui::result_text_inset());
         for (n, fix) in card.fixes.iter().enumerate() {
             let id = ui.id().with(("findings-fix", n));
             if crate::cards::felt_pill_at(ui, Some(id), &fix.label, crate::cards::PillStyle::Solid)
