@@ -1396,6 +1396,20 @@ fn every_home_card_the_cabin_posts_names_its_item() {
         "Fake Quest",
     ));
     rows.push((
+        "post_model_offer",
+        grokhub_core::model_drop::ModelOffer {
+            file: grokhub_core::model_drop::ModelFile {
+                path: "/home/user/Downloads/bracket.stl".into(),
+                name: "bracket.stl".into(),
+                bytes: 2048,
+            },
+            dims: Some([60.0, 20.0, 40.0]),
+            thumb: None,
+        }
+        .card(None, now),
+        "bracket.stl",
+    ));
+    rows.push((
         "tick_daily_drop",
         grokhub_core::pulse_sources::item_card(
             &grokhub_core::pulse_sources::Ranked {
