@@ -23,4 +23,4 @@ They stay `GrokHub` (`grokhub_core::brand::INTERNAL_ID`) so a rename never
 moves anyone's settings, sign-ins or installed copy.
 
 The starting art is the bracket-L mark and the slot-grid app icon from
-`docs/design/loadout-baseline-v1/` (slides 3 to 5). The companion pictures are the deck's three poses (slide 17): `companion-hero`, `companion-pose2` and `companion-chill`, trimmed to their outline.
+`docs/design/loadout-baseline-v1/` (slides 3 to 5). The companion pictures are the deck's three poses (slide 17): `companion-hero`, `companion-pose2` and `companion-chill`, trimmed to their outline. Per-personality DEFAULT and ACTION photo sets for the dock live under `crates/grokhub-app/assets/companion-photos/` (design source: `docs/design/loadout-baseline-v1/nyx-modes/`).

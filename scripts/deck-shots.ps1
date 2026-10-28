@@ -166,11 +166,11 @@ function Seed-Pulse([string]$cfg) {
 # x, y pair in $clickAt (in the window) is one more click after that. $library seeds the dock
 # and a Steam library; the shot clicks Library on the rail with $clickAt.
 # $personality is the stored pick in app.json ('default' is the preset older
-# builds shipped). $pinPersonality opens Settings → Personality
-# (GROKHUB_DECK_SETTINGS_SEC) with adults-only on and an explicit preset
-# selected, for slide 19 shots. $mood pins the companion's pose
-# (GROKHUB_DECK_MOOD), since no turn runs here.
-function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlide, [switch]$upgrade, [string]$keys = '', [switch]$dock, [int]$wheel = 0, [switch]$pulse, [int[]]$clickAt = @(), [string]$mood = '', [switch]$library, [switch]$chatFirst, [string]$personality = '', [switch]$pinPersonality, [int]$tabs = 0, [switch]$overflow, [string]$lastChat = '') {
+# builds shipped; load rewrites it to Nyx). $pinPersonality opens Settings →
+# Personality (GROKHUB_DECK_SETTINGS_SEC) with adults-only on and an explicit
+# preset selected, for slide 19 shots. $mood pins the companion's pose
+# (GROKHUB_DECK_MOOD); $action pins an ACTION photo set (GROKHUB_DECK_ACTION).
+function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlide, [switch]$upgrade, [string]$keys = '', [switch]$dock, [int]$wheel = 0, [switch]$pulse, [int[]]$clickAt = @(), [string]$mood = '', [switch]$library, [switch]$chatFirst, [string]$personality = '', [switch]$pinPersonality, [int]$tabs = 0, [switch]$overflow, [string]$lastChat = '', [string]$action = '') {
     $root = Join-Path $env:RUNNER_TEMP "deck-$name"
     Remove-Item -Recurse -Force $root -ErrorAction SilentlyContinue
     $cfg = Join-Path $root 'cfg'
@@ -203,8 +203,9 @@ function Shot([int]$w, [int]$h, [string]$name, [string]$theme, [string]$deckSlid
     if ($tabs -gt 0) { $env:GROKHUB_DECK_TABS = "$tabs" } else { Remove-Item Env:GROKHUB_DECK_TABS -ErrorAction SilentlyContinue }
     if ($overflow) { $env:GROKHUB_DECK_OVERFLOW = '1' } else { Remove-Item Env:GROKHUB_DECK_OVERFLOW -ErrorAction SilentlyContinue }
     if ($lastChat) { $env:GROKHUB_DECK_LAST_CHAT = $lastChat } else { Remove-Item Env:GROKHUB_DECK_LAST_CHAT -ErrorAction SilentlyContinue }
-    if ($dock -and -not $mood) { $mood = 'hanging-out' }
+    if ($dock -and -not $mood -and -not $action) { $mood = 'hanging-out' }
     $env:GROKHUB_DECK_MOOD = $mood
+    if ($action) { $env:GROKHUB_DECK_ACTION = $action } else { Remove-Item Env:GROKHUB_DECK_ACTION -ErrorAction SilentlyContinue }
     if ($pinPersonality) { $env:GROKHUB_DECK_SETTINGS_SEC = 'personality' } else { Remove-Item Env:GROKHUB_DECK_SETTINGS_SEC -ErrorAction SilentlyContinue }
     $p = Start-Process -FilePath $exe -WorkingDirectory $root -PassThru `
         -RedirectStandardError (Join-Path $root 'err.txt') -RedirectStandardOutput (Join-Path $root 'out.txt')
@@ -357,15 +358,20 @@ Shot 1100 720 'objectives-1100x720' 'ops-dark' '09' -library -clickAt 20, 141
 # missed the 1100x720 window.
 Shot 1600 900 'privacy-1600x900' 'ops-dark' '12' -clickAt 20, 875, 410, 246
 Shot 1100 720 'privacy-1100x720' 'ops-dark' '12' -clickAt 20, 695, 160, 156
-# Nyx is the default personality: Settings -> Personality on a profile with no
-# pick, and on one still saved on the retired 'default' preset.
-Shot 1600 900 'personality-fresh-1600x900' 'ops-dark' '07' -clickAt 20, 875, 410, 334
-Shot 1100 720 'personality-fresh-1100x720' 'ops-dark' '07' -clickAt 20, 695, 160, 244
+# Nyx is the default personality: Settings -> Personality on a fresh Nyx
+# profile, and on one still saved on the retired 'default' preset (rewritten).
+Shot 1600 900 'personality-fresh-1600x900' 'ops-dark' '07' -personality 'nyx' -clickAt 20, 875, 410, 334
+Shot 1100 720 'personality-fresh-1100x720' 'ops-dark' '07' -personality 'nyx' -clickAt 20, 695, 160, 244
 Shot 1600 900 'personality-upgrade-1600x900' 'ops-dark' '07' -personality 'default' -clickAt 20, 875, 410, 334
 Shot 1100 720 'personality-upgrade-1100x720' 'ops-dark' '07' -personality 'default' -clickAt 20, 695, 160, 244
 # Personality picker beside slide 19; section pinned via GROKHUB_DECK_SETTINGS_SEC.
 Shot 1600 900 'personality-1600x900' 'ops-dark' '19' -pinPersonality -clickAt 20, 875
 Shot 1100 720 'personality-1100x720' 'ops-dark' '19' -pinPersonality -clickAt 20, 695
+# Companion corner-box: DEFAULT rotation (Nyx deck poses) and an ACTION photo.
+Shot 1600 900 'companion-default-1600x900' 'ops-dark' '17' -dock -personality 'nyx' -mood 'hanging-out'
+Shot 1100 720 'companion-default-1100x720' 'ops-dark' '17' -dock -personality 'nyx' -mood 'hanging-out'
+Shot 1600 900 'companion-action-1600x900' 'ops-dark' '17' -dock -personality 'nyx' -action 'coding'
+Shot 1100 720 'companion-action-1100x720' 'ops-dark' '17' -dock -personality 'nyx' -action 'coding'
 foreach ($m in 'hello', 'helping', 'hanging-out') {
     Shot 1600 900 "mood-$m-1600x900" 'ops-dark' '17' -dock -mood $m
     Shot 1100 720 "mood-$m-1100x720" 'ops-dark' '17' -dock -mood $m

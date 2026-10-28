@@ -890,8 +890,11 @@ pub fn load() -> AppConfig {
         cfg.personality = grokhub_core::personality::DEFAULT_ID.into();
     }
     // The plain "Default" preset is gone; a profile still on it speaks as Nyx.
+    // Rewrite on disk so the next launch no longer carries the retired id.
+    let mut rewrite_personality = false;
     if cfg.personality.trim() == grokhub_core::personality::LEGACY_DEFAULT_ID {
         cfg.personality = grokhub_core::personality::DEFAULT_ID.into();
+        rewrite_personality = true;
     }
     cfg.host_on = true;
     // Leftover `"yolo": true` from older cabins must not disable the bound-tree jail.
@@ -911,6 +914,9 @@ pub fn load() -> AppConfig {
         "life" => "life".into(),
         _ => "coding".into(),
     };
+    if rewrite_personality {
+        let _ = save_in(&config_dir(), &cfg);
+    }
     cfg
 }
 
@@ -1269,9 +1275,16 @@ mod tests {
         assert_eq!(load().personality, "");
         fs::write(root.join("app.json"), "{\"personality\":\"pirate\"}\n").unwrap();
         assert_eq!(load().personality, "pirate");
-        // An install still on the retired "default" preset upgrades to Nyx.
+        // An install still on the retired "default" preset upgrades to Nyx
+        // and rewrites app.json so the retired id does not linger on disk.
         fs::write(root.join("app.json"), "{\"personality\":\"default\"}\n").unwrap();
         assert_eq!(load().personality, "nyx");
+        let body = fs::read_to_string(root.join("app.json")).unwrap();
+        assert!(
+            body.contains("\"personality\": \"nyx\""),
+            "upgrade must persist Nyx, got {body}"
+        );
+        assert!(!body.contains("\"default\""), "{body}");
         let _ = fs::remove_dir_all(&root);
     }
 

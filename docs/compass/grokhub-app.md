@@ -9,9 +9,9 @@
 - `cargo build -p grokhub-app -p grokhub-hub` (Linux CI builds both binaries)
 ## Key files
 - `crates/grokhub-app/src/main.rs`: `main`, the `Launch` dispatch, `run_cabin`, `run_hub`, Windows console handling.
-- `crates/grokhub-app/build.rs`: channel, branch, and short SHA for `--version`, and the Windows icon.
-- `crates/grokhub-app/src/theme.rs` (classic Grok + Loadout Ops Dark / OLED Black / Soft Charcoal tokens, `composer_glow_rgb`, `motion_ok`) and `crates/grokhub-app/src/cards.rs` (catalog chrome). New installs default to Ops Dark (`ops-dark` in `app.json`); existing `dark` / `light` / `system` keep the classic look.
-- `crates/grokhub-app/src/threads.rs` (`threads.json`) and `crates/grokhub-app/src/secrets.rs` (`secrets.json`).
+- `crates/grokhub-app/build.rs`: channel/SHA label, Windows icon, and companion photo embeds from `assets/companion-photos/`.
+- `crates/grokhub-app/src/app/loadout_home.rs` + `companion_photos.rs`: dock DEFAULT rotation and ACTION stills (clip-ready).
+- `crates/grokhub-app/src/theme.rs` (Ops Dark tokens, `composer_glow_rgb`, `motion_ok`) and `crates/grokhub-app/src/cards.rs`. New installs default to Ops Dark; classic `dark` / `light` / `system` stay.
 ## Change recipe
 - UI change: find the page in `crates/grokhub-app/src/app/` (read [app-module](app-module.md)), keep logic pure in grokhub-core, and add a cabin test.
 - New CLI flag: add a `Launch` variant and arm in `parse_args`, dispatch it in `main`, update both help strings (Windows and non-Windows), and add a `cli.rs` test.

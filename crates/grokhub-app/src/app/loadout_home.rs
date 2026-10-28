@@ -426,6 +426,26 @@ fn companion_texture(ctx: &egui::Context, mood: Mood) -> Option<egui::TextureHan
     Some(tex)
 }
 
+fn companion_still_texture(
+    ctx: &egui::Context,
+    cache_key: &str,
+    png: &'static [u8],
+) -> Option<egui::TextureHandle> {
+    let id = egui::Id::new(cache_key);
+    if let Some(tex) = ctx.data(|d| d.get_temp::<egui::TextureHandle>(id)) {
+        return Some(tex);
+    }
+    let rgba = image::load_from_memory(png).ok()?.to_rgba8();
+    let size = [rgba.width() as usize, rgba.height() as usize];
+    let tex = ctx.load_texture(
+        cache_key,
+        egui::ColorImage::from_rgba_unmultiplied(size, rgba.as_raw()),
+        egui::TextureOptions::LINEAR,
+    );
+    ctx.data_mut(|d| d.insert_temp(id, tex.clone()));
+    Some(tex)
+}
+
 /// Circular face crop of the companion for Hangout bubbles and the chat header.
 pub(super) fn companion_face(ctx: &egui::Context) -> Option<egui::TextureHandle> {
     let id = egui::Id::new("loadout-companion-face");
@@ -803,6 +823,11 @@ impl Cabin {
         let name = grokhub_core::brand::companion_name();
         let live = self.voice_is_on();
         let mood = self.companion_mood();
+        let (tex, rotate) = self.companion_dock_texture(ui.ctx(), mood);
+        if rotate {
+            ui.ctx()
+                .request_repaint_after(super::companion_photos::PHOTO_HOLD);
+        }
         let resp = card(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 6.0;
@@ -830,7 +855,7 @@ impl Cabin {
                     crate::theme::red_dim().gamma_multiply(a),
                 );
             }
-            if let Some(tex) = companion_texture(ui.ctx(), mood) {
+            if let Some(tex) = tex {
                 let [tw, th] = tex.size().map(|v| v as f32);
                 let scale = (art.height() / th).min(art.width() / tw);
                 let fit = egui::Rect::from_center_size(art.center(), egui::vec2(tw, th) * scale);
@@ -873,8 +898,65 @@ impl Cabin {
         }
     }
 
+    /// DEFAULT rotation for the selected personality, or an ACTION still while
+    /// a tool runs / a deck action is pinned. Falls back to the three mood
+    /// brand PNGs when a set is missing.
+    fn companion_dock_texture(
+        &self,
+        ctx: &egui::Context,
+        mood: Mood,
+    ) -> (Option<egui::TextureHandle>, bool) {
+        use super::companion_photos::{
+            action_still, default_still, pinned_action, rotating_slot, CompanionAction,
+        };
+        // Slide-17 hello / helping mood pins keep the brand poses. A
+        // hanging-out pin, live idle, and GROKHUB_DECK_ACTION use the
+        // DEFAULT / ACTION photo sets (Nyx deck poses + action slots).
+        if matches!(pinned_mood(), Some(Mood::Hello) | Some(Mood::Helping))
+            && pinned_action().is_none()
+        {
+            return (companion_texture(ctx, mood), false);
+        }
+        let now = Instant::now();
+        let action = pinned_action().or_else(|| {
+            if mood != Mood::Helping {
+                return None;
+            }
+            let tool = self
+                .live_blocks
+                .last()
+                .filter(|b| b.kind == LiveKind::Tool)
+                .map(|b| b.tool_title.as_str())
+                .unwrap_or("");
+            Some(if tool.is_empty() {
+                CompanionAction::Working
+            } else {
+                CompanionAction::from_tool(tool)
+            })
+        });
+        if let Some(action) = action {
+            let key = format!("action:{}", action.id());
+            let slot = rotating_slot(&key, now);
+            if let Some(still) = action_still(action, slot) {
+                let cache = format!("companion-action-{}-{slot}", action.id());
+                return (companion_still_texture(ctx, &cache, still.png), true);
+            }
+        }
+        let personality = super::personality_ui::shown_id(self.cfg.personality.trim());
+        let key = format!("default:{personality}");
+        let slot = rotating_slot(&key, now);
+        if let Some(still) = default_still(personality, slot) {
+            let cache = format!("companion-default-{personality}-{slot}");
+            return (companion_still_texture(ctx, &cache, still.png), true);
+        }
+        (companion_texture(ctx, mood), false)
+    }
+
     /// The dock's pose for what this chat is doing right now.
     pub(super) fn companion_mood(&self) -> Mood {
+        if super::companion_photos::pinned_action().is_some() {
+            return Mood::Helping;
+        }
         if let Some(mood) = pinned_mood() {
             return mood;
         }

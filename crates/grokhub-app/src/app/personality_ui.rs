@@ -71,7 +71,7 @@ pub(super) fn stored_id(id: &str) -> String {
 }
 
 /// The id a stored field stands for. The retired "default" preset is Nyx.
-fn shown_id(stored: &str) -> &str {
+pub(super) fn shown_id(stored: &str) -> &str {
     match stored.trim() {
         "" | personality::LEGACY_DEFAULT_ID => personality::DEFAULT_ID,
         id => id,

@@ -177,6 +177,7 @@ mod jobs;
 mod journal_ui;
 mod knowme_ui;
 mod library_ui;
+mod companion_photos;
 mod loadout_home;
 mod local_ai_ui;
 mod local_pick_ui;
