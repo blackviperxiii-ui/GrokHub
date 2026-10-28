@@ -514,7 +514,7 @@ impl Cabin {
                         Self::icon_nav_row(ui, active, crate::icons::rail_icon_for(id), label);
                     if resp.clicked() {
                         match *id {
-                            "home" => self.open_fresh_home(),
+                            "home" => self.open_mission_home(),
                             "profile" => {
                                 self.settings_menu_open = !self.settings_menu_open;
                                 self.settings_menu_ignore = true;
@@ -527,10 +527,6 @@ impl Cabin {
                 }
                 crate::theme::glide_aim(ui, "rail");
             });
-    }
-
-    fn rail_home_active(&self) -> bool {
-        self.nav == Nav::Chat && self.messages.is_empty() && !self.running
     }
 
     pub(super) fn page_nav(&self) -> Nav {
@@ -548,10 +544,8 @@ impl Cabin {
         if self.settings_menu_open {
             return "profile";
         }
-        if self.page_nav() == Nav::Chat && self.rail_home_active() {
-            return "home";
-        }
         match self.page_nav() {
+            Nav::Home => "home",
             Nav::Chat => "chat",
             Nav::History => "history",
             Nav::Journal => "journal",
@@ -584,7 +578,8 @@ impl Cabin {
             "objectives" | "mission" => Nav::Objectives,
             "automations" => Nav::Night,
             "devices" => Nav::Devices,
-            "chat" | "home" => Nav::Chat,
+            "home" => Nav::Home,
+            "chat" => Nav::Chat,
             _ => return,
         };
     }
@@ -623,7 +618,7 @@ impl Cabin {
                 Nav::Settings
             }
             "home" => {
-                self.open_fresh_home();
+                self.open_mission_home();
                 return;
             }
             "profile" => {

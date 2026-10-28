@@ -1,0 +1,1 @@
+- Home rail opens modular Mission Control (no chat tabs); Edit Home dialog; Send and chips jump to a new Chat tab.

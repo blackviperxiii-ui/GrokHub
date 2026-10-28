@@ -2310,6 +2310,7 @@ fn quiet_cabin() -> Cabin {
         status_toasted: Default::default(),
         activity: Default::default(),
         home_layout: grokhub_core::home::HomeLayout::default(),
+        home_edit: None,
     }
 }
 

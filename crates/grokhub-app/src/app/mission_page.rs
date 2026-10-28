@@ -307,7 +307,7 @@ impl Cabin {
     }
 
     /// Days of the last week that finished a task, re-read every [`STREAK_REFRESH`].
-    fn mission_streak(&self, ctx: &egui::Context, now: u64) -> [bool; 7] {
+    pub(super) fn mission_streak(&self, ctx: &egui::Context, now: u64) -> [bool; 7] {
         type Cached = (Instant, [bool; 7]);
         let id = egui::Id::new("mission-control-streak");
         if let Some((at, days)) = ctx.data(|d| d.get_temp::<Cached>(id)) {
@@ -441,8 +441,7 @@ impl Cabin {
         let text = draft.trim().to_string();
         if send && !text.is_empty() {
             draft.clear();
-            self.open_fresh_home();
-            self.send_from_composer(text);
+            self.send_home_to_chat(text);
         }
         ui.ctx().data_mut(|d| d.insert_temp(id, draft));
     }
@@ -522,7 +521,7 @@ fn objective_rows(ui: &mut egui::Ui, m: &MissionView) {
 
 /// Seven boxes, today last: amber for a day that finished a task, grey for
 /// one that didn't, and a dashed outline for today until it does.
-fn paint_streak(ui: &mut egui::Ui, days: &[bool; 7]) {
+pub(super) fn paint_streak(ui: &mut egui::Ui, days: &[bool; 7]) {
     let w = ui.available_width();
     let gap = 8.0;
     let box_w = (w - gap * 6.0) / 7.0;

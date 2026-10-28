@@ -648,7 +648,8 @@ mod tests {
         // Exhaustive: a new Nav variant fails to compile here.
         fn known(nav: Nav) -> bool {
             match nav {
-                Nav::Chat
+                Nav::Home
+                | Nav::Chat
                 | Nav::Devices
                 | Nav::Memory
                 | Nav::Workboard
