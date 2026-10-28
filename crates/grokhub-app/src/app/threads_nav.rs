@@ -82,6 +82,7 @@ impl Cabin {
             }
         }
         self.composer_want_focus = true;
+        self.remember_last_chat_tab();
     }
 
     /// One hidden thread for night, loops-via-chat, inbox, and anticipate.
@@ -107,6 +108,53 @@ impl Cabin {
             t.accessed_ms = now;
             t.last_active_ms = now;
         }
+    }
+
+    /// Persist the open tab for Chat-rail restore (Home parking must not clear it).
+    /// Kept after `stamp_current_access` so source scans of apply_switch_thread stay clean.
+    pub(super) fn remember_last_chat_tab(&mut self) {
+        let Some(t) = self.threads.get(self.thread_idx) else {
+            return;
+        };
+        if !threads::is_live_chat_tab(t) {
+            return;
+        }
+        if self.cfg.last_chat_tab != t.id {
+            self.cfg.last_chat_tab = t.id.clone();
+        }
+    }
+
+    /// Chat rail / palette: last used tab, else next live, else a fresh draft.
+    pub(super) fn open_last_chat_tab(&mut self) {
+        self.pin_chat_tail();
+        let remembered = self.cfg.last_chat_tab.clone();
+        if !remembered.is_empty() {
+            if let Some(idx) = self
+                .threads
+                .iter()
+                .position(|t| t.id == remembered && threads::is_live_chat_tab(t))
+            {
+                if idx != self.thread_idx {
+                    self.switch_thread(idx);
+                } else {
+                    self.stamp_current_access();
+                    self.composer_want_focus = true;
+                    self.remember_last_chat_tab();
+                }
+                return;
+            }
+        }
+        if let Some(idx) = threads::last_used_live_chat_index(&self.threads) {
+            if idx != self.thread_idx {
+                self.switch_thread(idx);
+            } else {
+                self.stamp_current_access();
+                self.composer_want_focus = true;
+                self.remember_last_chat_tab();
+            }
+            return;
+        }
+        self.new_thread(false);
     }
 
     /// Opening a chat counts as activity for auto-archive without moving History order.
@@ -427,18 +475,23 @@ impl Cabin {
                 .threads
                 .iter()
                 .enumerate()
-                .map(|(i, t)| ThreadReuseView {
-                    title: t.title.as_str(),
-                    scratch: t.scratch,
-                    empty: if i == self.thread_idx {
-                        self.messages.is_empty()
-                    } else {
-                        t.messages.is_empty()
-                    },
-                    has_session: t
-                        .grok_session
-                        .as_deref()
-                        .is_some_and(|s| !s.trim().is_empty()),
+                .map(|(i, t)| {
+                    let buried = threads::is_deleted(t) || threads::is_archived(t);
+                    ThreadReuseView {
+                        title: t.title.as_str(),
+                        scratch: t.scratch,
+                        // Trash / archive must not be reused as a fresh draft.
+                        empty: !buried
+                            && if i == self.thread_idx {
+                                self.messages.is_empty()
+                            } else {
+                                t.messages.is_empty()
+                            },
+                        has_session: buried
+                            || t.grok_session
+                                .as_deref()
+                                .is_some_and(|s| !s.trim().is_empty()),
+                    }
                 })
                 .collect();
             reuse_empty_thread_idx(&views, self.thread_idx, scratch).filter(|&idx| {
@@ -466,6 +519,7 @@ impl Cabin {
                 "New chat".into()
             };
             self.composer_want_focus = true;
+            self.remember_last_chat_tab();
             return;
         }
         if let Some(t) = self.threads.get_mut(self.thread_idx) {
@@ -491,12 +545,15 @@ impl Cabin {
         self.stamp_current_access();
         self.persist();
         self.composer_want_focus = true;
+        self.remember_last_chat_tab();
     }
 
     /// Minimize, tray show, and the next launch land on an empty chat so the feed is first.
     /// The previous transcript and pin stay on that thread in History.
     /// A reply that is still running stays on the thread that started it.
     pub(super) fn open_fresh_home(&mut self) {
+        // Home's empty draft becomes current_thread; keep the last real Chat tab.
+        let keep = self.cfg.last_chat_tab.clone();
         if grokhub_core::resume_needs_fresh_chat(self.messages.len(), self.scratch()) {
             if self.running && self.chat_job_thread.is_some() {
                 self.park_fresh_chat();
@@ -504,6 +561,7 @@ impl Cabin {
                 self.new_thread(false);
             }
         }
+        self.cfg.last_chat_tab = keep;
         self.nav = Nav::Chat;
     }
 
@@ -515,18 +573,22 @@ impl Cabin {
                 .threads
                 .iter()
                 .enumerate()
-                .map(|(i, t)| ThreadReuseView {
-                    title: t.title.as_str(),
-                    scratch: t.scratch,
-                    empty: if i == self.thread_idx {
-                        self.messages.is_empty()
-                    } else {
-                        t.messages.is_empty()
-                    },
-                    has_session: t
-                        .grok_session
-                        .as_deref()
-                        .is_some_and(|s| !s.trim().is_empty()),
+                .map(|(i, t)| {
+                    let buried = threads::is_deleted(t) || threads::is_archived(t);
+                    ThreadReuseView {
+                        title: t.title.as_str(),
+                        scratch: t.scratch,
+                        empty: !buried
+                            && if i == self.thread_idx {
+                                self.messages.is_empty()
+                            } else {
+                                t.messages.is_empty()
+                            },
+                        has_session: buried
+                            || t.grok_session
+                                .as_deref()
+                                .is_some_and(|s| !s.trim().is_empty()),
+                    }
                 })
                 .collect();
             reuse_empty_thread_idx(&views, self.thread_idx, false).filter(|&idx| {
